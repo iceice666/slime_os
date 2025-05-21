@@ -1,0 +1,8 @@
+[private]
+default:
+    @just --list --unsorted
+
+alias b := build
+
+build:
+    cargo build --target x86_64-slime_os.json

@@ -1,0 +1,15 @@
+[package]
+name = "slime_os"       
+version = "0.1.0"
+
+[build-dependencies]
+bootloader = "0.11"
+slime_os-kernel = { path = "kernel", artifact = "bin"}
+
+[dependencies]
+# used for UEFI booting in QEMU
+ovmf-prebuilt = "0.1.0-alpha.1"
+
+
+[workspace]
+members = ["kernel"]
