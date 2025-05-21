@@ -1,15 +1,21 @@
 [package]
-name = "slime_os"       
+name = "slime_os"
 version = "0.1.0"
+edition = "2024"
 
 [build-dependencies]
 bootloader = "0.11"
-slime_os-kernel = { path = "kernel", artifact = "bin"}
+slime_os-kernel = { path = "kernel", artifact = "bin", target = "x86_64-unknown-none" }
 
 [dependencies]
 # used for UEFI booting in QEMU
 ovmf-prebuilt = "0.1.0-alpha.1"
 
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
 
 [workspace]
 members = ["kernel"]

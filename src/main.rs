@@ -1,4 +1,3 @@
-
 fn main() {
     // read env variables that were set in build script
     let uefi_path = env!("UEFI_PATH");
@@ -14,6 +13,12 @@ fn main() {
     } else {
         cmd.arg("-drive").arg(format!("format=raw,file={bios_path}"));
     }
+
+    // Prevent QEMU from initialize GTK
+    cmd.arg("-display").arg("none");
+    cmd.arg("-serial").arg("stdio");
+    cmd.arg("-no-reboot"); // Add this line to prevent QEMU from rebooting on guest error
+    
     let mut child = cmd.spawn().unwrap();
     child.wait().unwrap();
 }
