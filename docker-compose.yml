@@ -1,0 +1,18 @@
+version: '3'
+
+services:
+  rust-os-dev:
+    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - .:/usr/src/project
+      - cargo-cache:/usr/local/cargo/registry
+    ports:
+      - "1234:1234"  # For GDB debugging
+    tty: true
+    privileged: true  # May be needed for QEMU
+
+volumes:
+  cargo-cache:
