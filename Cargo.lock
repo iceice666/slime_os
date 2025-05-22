@@ -106,6 +106,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19d374276b40fb8bbdee95aef7c7fa6b5316ec764510eb64b8dd0e2ed0d7e7f5"
 
 [[package]]
+name = "entry_point"
+version = "0.1.0"
+dependencies = [
+ "bootloader",
+ "ovmf-prebuilt",
+ "slime_os-kernel",
+]
+
+[[package]]
 name = "errno"
 version = "0.3.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -336,15 +345,6 @@ dependencies = [
  "memchr",
  "ryu",
  "serde",
-]
-
-[[package]]
-name = "slime_os"
-version = "0.1.0"
-dependencies = [
- "bootloader",
- "ovmf-prebuilt",
- "slime_os-kernel",
 ]
 
 [[package]]
