@@ -1,10 +1,11 @@
-FROM rust:1.87-bookworm
+FROM debian:bookworm-slim
 
-# Install essential tools for OS development
+# Install base dependencies
 RUN apt-get update && apt-get install -y \
     build-essential \
     curl \
     git \
+    wget \
     llvm \
     lld \
     nasm \
@@ -12,13 +13,25 @@ RUN apt-get update && apt-get install -y \
     gcc-x86-64-linux-gnu \
     binutils-x86-64-linux-gnu \
     gdb \
+    pkg-config \
+    libssl-dev \
+    ca-certificates \
+    xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
-# Install rust components needed for OS dev
-RUN rustup component add rust-src rustfmt clippy llvm-tools-preview && \
-    rustup target add x86_64-unknown-none
+# Install Rust with rustup
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:$PATH
 
-# Install just the task runner
+RUN curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain nightly
+
+# Add rust target and components for bare metal dev
+RUN rustup target add x86_64-unknown-none \
+    && rustup component add llvm-tools-preview \
+    && cargo install cargo-binutils
+
+# Install just task runner
 RUN curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to /usr/bin
 
 # Install lazygit
@@ -28,7 +41,7 @@ RUN wget https://github.com/jesseduffield/lazygit/releases/download/v0.50.0/lazy
     chmod +x /usr/bin/lazygit && \
     rm lazygit_0.50.0_Linux_x86_64.tar.gz README.md LICENSE
 
-# Set up working directory
+# Set working directory
 WORKDIR /usr/src/project
 
 # Set environment variables

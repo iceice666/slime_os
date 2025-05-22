@@ -8,4 +8,4 @@ build_kernel:
     cd kernel && cargo build 
 
 run:
-    cargo +nightly run
+    cargo run

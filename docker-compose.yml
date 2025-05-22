@@ -6,8 +6,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    environment:
+      - DISPLAY=host.docker.internal:0
     volumes:
       - .:/usr/src/project
+      - /tmp/.X11-unix:/tmp/.X11-unix
       - cargo-cache:/usr/local/cargo/registry
     ports:
       - "1234:1234"  # For GDB debugging
