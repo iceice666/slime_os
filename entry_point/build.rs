@@ -19,6 +19,19 @@ fn main() {
         .create_disk_image(&bios_path)
         .unwrap();
 
+    let kernel_path = kernel.display().to_string();
+    let kernel_path = kernel_path.strip_prefix("/workspaces/slime_os/").unwrap();
+    let content = format!(
+        r#"#!/bin/bash
+lldb \
+-o "target create {kernel_path}" \
+-o "target modules load --file $PWD/{kernel_path} --slide 0x8000000000" \
+-o "gdb-remote localhost:1234" \
+-o "b kernel_main" \
+-o "c""#
+    );
+    std::fs::write("../debug.sh", content).expect("unable to create debug file");
+
     // pass the disk image paths as env variables to the `main.rs`
     println!("cargo:rustc-env=UEFI_PATH={}", uefi_path.display());
     println!("cargo:rustc-env=BIOS_PATH={}", bios_path.display());

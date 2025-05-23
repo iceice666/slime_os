@@ -24,6 +24,12 @@ bootloader_api::entry_point!(kernel_main);
 
 #[unsafe(no_mangle)]
 fn kernel_main(boot_info: &'static mut bootloader_api::BootInfo) -> ! {
+    // Debug: Add a loop here to make it easier to attach debugger
+    // You can set a breakpoint here or use this to pause execution
+    unsafe {
+        core::arch::asm!("nop", options(nomem, nostack));
+    }
+
     #[cfg(test)]
     test_main();
 
@@ -34,7 +40,7 @@ fn kernel_main(boot_info: &'static mut bootloader_api::BootInfo) -> ! {
 
     println!("Hello World{}", "!");
 
-   
+
 
     loop {}
 }

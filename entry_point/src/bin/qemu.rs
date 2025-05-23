@@ -19,6 +19,9 @@ fn main() {
     // Prevent QEMU from rebooting on guest error
     cmd.arg("-no-reboot");
 
+    // For Debugging
+    cmd.args(["-s", "-S"]);
+
     println!(
         "Full command: {} {}",
         cmd.get_program().to_string_lossy(),

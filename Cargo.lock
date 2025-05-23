@@ -117,6 +117,7 @@ version = "0.1.0"
 dependencies = [
  "bootloader",
  "ovmf-prebuilt",
+ "serde_json",
  "slime_os-kernel",
 ]
 
