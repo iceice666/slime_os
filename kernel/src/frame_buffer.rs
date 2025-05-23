@@ -1,7 +1,6 @@
 use alloc::vec::Vec;
 use bootloader_api::{info::FrameBuffer, info::FrameBufferInfo};
 use core::fmt::{self, Write};
-use core::ptr::NonNull;
 use fontdue::layout::{CoordinateSystem, GlyphPosition, Layout, LayoutSettings, TextStyle};
 use fontdue::{Font, FontSettings};
 use spin::{Lazy, Mutex};
@@ -76,8 +75,8 @@ impl FrameBufferWriter {
 
     /// Fill the entire screen with a specific color
     pub fn fill_screen(&mut self, color: u32) {
-        let bytes_per_pixel = self.info.bytes_per_pixel;
         let total_pixels = self.info.width * self.info.height;
+        let bytes_per_pixel = self.info.bytes_per_pixel;
 
         for pixel_idx in 0..total_pixels {
             let buffer_offset = pixel_idx * bytes_per_pixel;

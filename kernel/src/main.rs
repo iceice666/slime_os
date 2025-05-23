@@ -4,19 +4,18 @@
 #![test_runner(crate::test_runner)]
 #![reexport_test_harness_main = "test_main"]
 
-mod frame_buffer;
+// NEED FIX: Panic on heap allocation
+// mod frame_buffer;
+// use frame_buffer::init_framebuffer;
 
-extern crate alloc;
+mod vga_buffer;
+
 use core::panic::PanicInfo;
-use frame_buffer::init_framebuffer;
-use linked_list_allocator::LockedHeap;
-
-#[global_allocator]
-static ALLOCATOR: LockedHeap = LockedHeap::empty();
 
 /// This function is called on panic.
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
+    // Don't use println! in panic handler to avoid recursive panic
     loop {}
 }
 
@@ -24,8 +23,6 @@ bootloader_api::entry_point!(kernel_main);
 
 #[unsafe(no_mangle)]
 fn kernel_main(boot_info: &'static mut bootloader_api::BootInfo) -> ! {
-    // Debug: Add a loop here to make it easier to attach debugger
-    // You can set a breakpoint here or use this to pause execution
     unsafe {
         core::arch::asm!("nop", options(nomem, nostack));
     }
@@ -33,13 +30,15 @@ fn kernel_main(boot_info: &'static mut bootloader_api::BootInfo) -> ! {
     #[cfg(test)]
     test_main();
 
-    if let Some(framebuffer) = boot_info.framebuffer.as_mut() {
-        init_framebuffer(framebuffer);
-    }
+    // if let Some(framebuffer) = boot_info.framebuffer.as_mut() {
+    //     init_framebuffer(framebuffer);
+    // }
 
     println!("Hello World{}", "!");
 
-
+    unsafe {
+        core::arch::asm!("nop", options(nomem, nostack));
+    }
 
     loop {}
 }
