@@ -33,7 +33,6 @@ fn kernel_main(boot_info: &'static mut bootloader_api::BootInfo) -> ! {
     #[cfg(test)]
     test_main();
 
-    let  bootloader_api::BootInfo { framebuffer, .. } = boot_info;
     if let Some(framebuffer) = boot_info.framebuffer.as_mut() {
         init_framebuffer(framebuffer);
     }
