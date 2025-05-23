@@ -6,7 +6,13 @@
 
 mod frame_buffer;
 
+extern crate alloc;
 use core::panic::PanicInfo;
+use frame_buffer::init_framebuffer;
+use linked_list_allocator::LockedHeap;
+
+#[global_allocator]
+static ALLOCATOR: LockedHeap = LockedHeap::empty();
 
 /// This function is called on panic.
 #[panic_handler]
@@ -16,9 +22,19 @@ fn panic(info: &PanicInfo) -> ! {
 
 bootloader_api::entry_point!(kernel_main);
 
-fn kernel_main(_boot_info: &'static mut bootloader_api::BootInfo) -> ! {
+#[unsafe(no_mangle)]
+fn kernel_main(boot_info: &'static mut bootloader_api::BootInfo) -> ! {
     #[cfg(test)]
     test_main();
+
+    let  bootloader_api::BootInfo { framebuffer, .. } = boot_info;
+    if let Some(framebuffer) = boot_info.framebuffer.as_mut() {
+        init_framebuffer(framebuffer);
+    }
+
+    println!("Hello World{}", "!");
+
+   
 
     loop {}
 }
