@@ -30,21 +30,11 @@ fn build_disk_images(out_dir: &Path, kernel: &Path) -> Result<()> {
     fs::create_dir_all(out_dir)?;
 
     let uefi_path = out_dir.join("uefi.img");
-    let bios_path = out_dir.join("bios.img");
-
-    // Build disk image
-
     bootloader::UefiBoot::new(kernel)
         .create_disk_image(&uefi_path)
         .map_err(|e| format!("Failed to create UEFI disk image: {}", e))?;
-
-    bootloader::BiosBoot::new(kernel)
-        .create_disk_image(&bios_path)
-        .map_err(|e| format!("Failed to create BIOS disk image: {}", e))?;
-
-    // Export paths for runtime use
     println!("cargo:rustc-env=UEFI_PATH={}", uefi_path.display());
-    println!("cargo:rustc-env=BIOS_PATH={}", bios_path.display());
+
 
     println!(
         "cargo:warning=Created disk images under {}",
@@ -79,12 +69,6 @@ fn build_debug_script(kernel: &Path) -> Result<()> {
 
 fn generate_debug_script_content(kernel: &Path) -> String {
     let kernel_path = kernel.display();
-
-    #[cfg(feature = "uefi")]
-    let slide_option = "-o \"target modules load --file {} --slide 0x8000000000\"";
-    #[cfg(not(feature = "uefi"))]
-    let slide_option = "-o \"target modules load --file {}\"";
-
     format!(
         r#"#!/bin/bash
 # Auto-generated debug script for SlimeOS kernel
@@ -106,7 +90,7 @@ echo "GDB remote port: 1234"
 
 "$LLDB_CMD" \
     -o "target create $KERNEL_PATH" \
-    {slide_option} {kernel_path} \
+    -o "target modules load --file $KERNEL_PATH --slide 0x8000000000" \
     -o "gdb-remote localhost:1234" \
     -o "b kernel_main" \
     -o "c"

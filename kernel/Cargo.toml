@@ -8,9 +8,5 @@ bootloader_api = "0.11"
 volatile = { version = "0.6.1", features = ["unstable"] }
 spin = "0.10"
 fontdue = { version = "0.9.3", default-features = false, features = ["hashbrown"]} # Disable SIMD
-linked_list_allocator = "0.10.5"
+noto-sans-mono-bitmap = { version = "0.3.1", features = ["unicode-specials","size_32"] }
 
-[features]
-default = ["bios"]
-bios = []
-uefi = []
