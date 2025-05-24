@@ -5,16 +5,19 @@
 #![reexport_test_harness_main = "test_main"]
 
 // NEED FIX: Panic on heap allocation
-// mod frame_buffer;
-// use frame_buffer::init_framebuffer;
+#[cfg(feature="uefi")]
+mod frame_buffer;
+#[cfg(feature="uefi")]
+use frame_buffer::init_framebuffer;
 
+#[cfg(feature="bios")]
 mod vga_buffer;
 
 use core::panic::PanicInfo;
 
 /// This function is called on panic.
 #[panic_handler]
-fn panic(info: &PanicInfo) -> ! {
+fn panic(_info: &PanicInfo) -> ! {
     // Don't use println! in panic handler to avoid recursive panic
     loop {}
 }
@@ -22,7 +25,7 @@ fn panic(info: &PanicInfo) -> ! {
 bootloader_api::entry_point!(kernel_main);
 
 #[unsafe(no_mangle)]
-fn kernel_main(boot_info: &'static mut bootloader_api::BootInfo) -> ! {
+fn kernel_main(_boot_info: &'static mut bootloader_api::BootInfo) -> ! {
     unsafe {
         core::arch::asm!("nop", options(nomem, nostack));
     }

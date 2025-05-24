@@ -2,14 +2,24 @@
 default:
     @just --list --unsorted
 
-alias bk:= build_kernel
+# Run QEMU with optional feature (bios by default)
+qemu feature="bios":
+    #!/usr/bin/env bash
+    if [ "{{feature}}" = "bios" ]; then
+        cargo run --bin qemu
+    elif [ "{{feature}}" = "uefi" ]; then
+        cargo run --bin qemu --features uefi --no-default-features
+    else
+        echo "Invalid feature: {{feature}}. Use 'bios' or 'uefi'"
+        exit 1
+    fi
 
-build_kernel:
-    cd kernel && cargo build 
+# Separate recipes for convenience
+qemu-bios:
+    just qemu bios
 
+qemu-uefi:
+    just qemu uefi
 
-qemu:
-    cargo run --bin qemu
-
-debug:
-    lldb -s debug.lldb
+debug feature="bios":
+    ./debug.sh
