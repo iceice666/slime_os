@@ -6,13 +6,11 @@ edition = "2024"
 [build-dependencies]
 bootloader = "0.11"
 
-# Conditional dependency based on features
 [build-dependencies.slime_os-kernel]
 path = "../kernel"
 artifact = "bin"
 target = "x86_64-unknown-none"
-default-features = false
-optional = false
+
 
 
 [dependencies]
@@ -23,8 +21,3 @@ serde_json = "1.0"
 [[bin]]
 name = "qemu"
 path = "src/bin/qemu.rs"
-
-[features]
-default = ["bios"]
-bios = ["slime_os-kernel/bios"]
-uefi = ["slime_os-kernel/uefi"]
