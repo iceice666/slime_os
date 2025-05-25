@@ -6,4 +6,6 @@ target = "x86_64-unknown-none"
 rustflags = [
     "-C",
     "link-args=--entry=_start", # Specify entry point explicitly
+    "-C",
+    "link-args=-z nostart-stop-gc", # Prevent garbage collection of linkme symbols
 ]
