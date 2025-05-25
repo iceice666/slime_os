@@ -8,8 +8,8 @@ pub type TestResult = Result<(), &'static str>;
 #[distributed_slice]
 pub static KERNEL_TESTS: [fn() -> TestResult];
 
-#[unsafe(no_mangle)]
-pub fn kernel_main(boot_info: &'static mut bootloader_api::BootInfo) -> ! {
+
+pub fn kernel_test_main(_boot_info: &'static mut bootloader_api::BootInfo) -> ! {
     serial_println!("Running {} test(s)", KERNEL_TESTS.len());
     let mut success_counter = 0;
     let mut fail_counter = 0;

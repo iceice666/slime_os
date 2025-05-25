@@ -3,7 +3,6 @@ use crate::println;
 use core::panic::PanicInfo;
 
 #[cfg(not(feature = "kernel_test"))]
-#[unsafe(no_mangle)]
 pub fn kernel_main(boot_info: &'static mut bootloader_api::BootInfo) -> ! {
     unsafe {
         core::arch::asm!("nop", options(nomem, nostack));

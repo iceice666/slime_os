@@ -1,4 +1,4 @@
-use crate::run::{KERNEL_TESTS, TestResult};
+use crate::run::test::{KERNEL_TESTS, TestResult};
 use crate::{print, println};
 use linkme::distributed_slice;
 

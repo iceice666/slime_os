@@ -14,8 +14,6 @@ mod run;
 #[cfg(feature = "kernel_test")]
 mod testing;
 
-use run::*;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
 pub enum QemuExitCode {
@@ -31,5 +29,8 @@ pub fn exit_qemu(exit_code: QemuExitCode) {
         port.write(exit_code as u32);
     }
 }
+#[cfg(not(feature = "kernel_test"))]
+bootloader_api::entry_point!(run::main::kernel_main);
 
-bootloader_api::entry_point!(kernel_main);
+#[cfg(feature = "kernel_test")]
+bootloader_api::entry_point!(run::test::kernel_test_main);
