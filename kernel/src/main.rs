@@ -1,49 +1,35 @@
 #![no_std]
 #![no_main]
+// Suppress compiler complain about "can't find crate for `test`"
+// We will build our own test process
 #![feature(custom_test_frameworks)]
 #![test_runner(crate::test_runner)]
-#![reexport_test_harness_main = "test_main"]
-
+#[cfg(test)]
+pub fn test_runner(_: &[&dyn Fn()]) {}
+/////////////////////////////////////////////
 mod frame_buffer;
-use frame_buffer::init_framebuffer;
+mod serial;
 
-use core::panic::PanicInfo;
+mod run;
+#[cfg(feature = "kernel_test")]
+mod testing;
 
-/// This function is called on panic.
-#[panic_handler]
-fn panic(info: &PanicInfo) -> ! {
-    println!("{}", info);
-    loop {}
+use run::*;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub enum QemuExitCode {
+    Success = 0x10,
+    Failed = 0x11,
+}
+
+pub fn exit_qemu(exit_code: QemuExitCode) {
+    use x86_64::instructions::port::Port;
+
+    unsafe {
+        let mut port = Port::new(0xf4);
+        port.write(exit_code as u32);
+    }
 }
 
 bootloader_api::entry_point!(kernel_main);
-
-#[unsafe(no_mangle)]
-fn kernel_main(boot_info: &'static mut bootloader_api::BootInfo) -> ! {
-    unsafe {
-        core::arch::asm!("nop", options(nomem, nostack));
-    }
-
-    #[cfg(test)]
-    test_main();
-
-    if let Some(framebuffer) = boot_info.framebuffer.as_mut() {
-        init_framebuffer(framebuffer);
-    }
-
-    println!("Hello World{}", "!");
-
-    unsafe {
-        core::arch::asm!("nop", options(nomem, nostack));
-    }
-
-    loop {}
-}
-
-#[cfg(test)]
-pub fn test_runner(tests: &[&dyn Fn()]) {
-    // println!("Running {} tests", tests.len());
-    for test in tests {
-        test();
-    }
-}

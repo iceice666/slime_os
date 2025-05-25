@@ -9,4 +9,21 @@ volatile = { version = "0.6.1", features = ["unstable"] }
 spin = "0.10"
 fontdue = { version = "0.9.3", default-features = false, features = ["hashbrown"]} # Disable SIMD
 noto-sans-mono-bitmap = { version = "0.3.1", features = ["unicode-specials","size_32"] }
+x86_64 = "0.15.2"
+uart_16550 = "0.3.2"
 
+[dependencies.linkme]
+version = "0.3"
+optional = true
+
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+
+
+[features]
+default=[]
+kernel_test=["linkme"]

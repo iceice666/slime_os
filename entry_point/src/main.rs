@@ -9,7 +9,12 @@ fn main() {
     println!("BIOS: {}", ovmf_prebuilt::ovmf_pure_efi().display());
     println!("DRIVE: {uefi_path}");
 
-    cmd.arg("-no-reboot");
+    cmd.args([
+        "-device",
+        "isa-debug-exit,iobase=0xf4,iosize=0x04",
+        "-serial",
+        "stdio",
+    ]);
 
     // For Debugging
     #[cfg(debug_assertions)]

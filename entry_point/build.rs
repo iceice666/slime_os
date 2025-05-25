@@ -2,10 +2,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+const KERNEL_BINARY: &str = "../kernel/target/x86_64-unknown-none/debug/slime_os-kernel";
 
 fn main() -> Result<()> {
+    cargo_emit::rerun_if_changed!(KERNEL_BINARY);
+
     let out_dir = get_out_dir()?;
-    let kernel = get_kernel_path()?;
+    let kernel = PathBuf::from(KERNEL_BINARY);
 
     build_disk_images(&out_dir, &kernel)?;
     build_debug_script(&kernel)?;
@@ -19,12 +22,6 @@ fn get_out_dir() -> Result<PathBuf> {
         .ok_or("OUT_DIR environment variable not set".into())
 }
 
-fn get_kernel_path() -> Result<PathBuf> {
-    std::env::var_os("CARGO_BIN_FILE_SLIME_OS_KERNEL")
-        .map(PathBuf::from)
-        .ok_or("CARGO_BIN_FILE_SLIME_OS_KERNEL environment variable not set".into())
-}
-
 fn build_disk_images(out_dir: &Path, kernel: &Path) -> Result<()> {
     // Ensure output directory exists
     fs::create_dir_all(out_dir)?;
@@ -33,13 +30,9 @@ fn build_disk_images(out_dir: &Path, kernel: &Path) -> Result<()> {
     bootloader::UefiBoot::new(kernel)
         .create_disk_image(&uefi_path)
         .map_err(|e| format!("Failed to create UEFI disk image: {}", e))?;
-    println!("cargo:rustc-env=UEFI_PATH={}", uefi_path.display());
 
-
-    println!(
-        "cargo:warning=Created disk images under {}",
-        out_dir.display()
-    );
+    cargo_emit::rustc_env!("UEFI_PATH", "{}", uefi_path.display().to_string());
+    cargo_emit::warning!("Created disk images under {}", out_dir.display());
     Ok(())
 }
 
