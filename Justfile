@@ -39,27 +39,35 @@ build_kernel_test:
         echo "❌ Failed to extract test executable path"
         exit 1
     fi
+
+# Build with maximum optimizations for performance testing
+build_perf:
+    @echo "🏎️ Building with performance optimizations..."
+    cd kernel && RUSTFLAGS="-C target-cpu=native -C opt-level=3 -C lto=fat" cargo build --release
+    @echo "✅ Performance build complete"
+
 # === Run Targets ===
 
 # Run kernel in release mode
 run: build_kernel_release
     @echo "🚀 Starting SlimeOS (release)..."
-    cd entry_point &&cargo run --release -- {{KERNEL_LN_PATH}}
+    cd entry_point &&cargo run --release -- {{KERNEL_LN_PATH}} -a="-serial stdio"
 
 # Run kernel tests
-run_test: build_kernel_test
+test: build_kernel_test
     @echo "🧪 Starting SlimeOS (test mode)..."
-    cd entry_point && cargo run --release -- {{KERNEL_TEST_LN_PATH}} -a="-display none"
+    cd entry_point && cargo run --release -- {{KERNEL_TEST_LN_PATH}} -a="-serial stdio -display none"
 
-# Run kernel in debug mode
-run_debug: build_kernel_debug
-    @echo "🐛 Starting SlimeOS (debug)..."
-    cd entry_point && cargo run --release -- {{KERNEL_LN_PATH}}
 
 # Run with QEMU monitor enabled for debugging
-run_monitor: build_kernel_debug
+monitor: build_kernel_debug
     @echo "🖥️ Starting SlimeOS with QEMU monitor..."
     cd entry_point && cargo run --release -- {{KERNEL_LN_PATH}} -a="-monitor stdio"
+
+# Run with performance monitoring
+run_perf: build_perf
+    @echo "📈 Running with performance monitoring..."
+    cd entry_point && cargo run --release -- {{KERNEL_LN_PATH}} -a="-serial stdio"
 
 # === Debug Targets ===
 
@@ -130,28 +138,4 @@ objdump:
 objdump_test:
     nm {{KERNEL_TEST_LN_PATH}} | rustfilt
 
-# === Testing ===
 
-# Run all tests
-test:
-    @echo "🧪 Running tests..."
-    cd kernel && cargo test --features kernel_test
-    @echo "✅ Tests complete"
-
-# Run tests with output
-test_verbose:
-    @echo "🧪 Running tests (verbose)..."
-    cd kernel && cargo test --features kernel_test -- --nocapture
-
-# === Benchmarking & Performance ===
-
-# Build with maximum optimizations for performance testing
-build_perf:
-    @echo "🏎️ Building with performance optimizations..."
-    cd kernel && RUSTFLAGS="-C target-cpu=native -C opt-level=3 -C lto=fat" cargo build --release
-    @echo "✅ Performance build complete"
-
-# Run with performance monitoring
-run_perf: build_perf
-    @echo "📈 Running with performance monitoring..."
-    cd entry_point && KERNEL_PATH={{KERNEL_RELEASE_PATH}} cargo run --release
