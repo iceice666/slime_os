@@ -1,17 +1,14 @@
 #![no_std]
 #![no_main]
-// Suppress compiler complain about "can't find crate for `test`"
-// We will build our own test process
 #![feature(custom_test_frameworks)]
 #![test_runner(crate::test_runner)]
-#[cfg(test)]
-pub fn test_runner(_: &[&dyn Fn()]) {}
-/////////////////////////////////////////////
+#![reexport_test_harness_main = "test_main"]
+
+use core::panic::PanicInfo;
+use frame_buffer::init_framebuffer;
+
 mod frame_buffer;
 mod serial;
-
-mod run;
-#[cfg(feature = "kernel_test")]
 mod testing;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,8 +26,43 @@ pub fn exit_qemu(exit_code: QemuExitCode) {
         port.write(exit_code as u32);
     }
 }
-#[cfg(not(feature = "kernel_test"))]
-bootloader_api::entry_point!(run::main::kernel_main);
 
-#[cfg(feature = "kernel_test")]
-bootloader_api::entry_point!(run::test::kernel_test_main);
+/////////////////////////////////////////////////////
+
+bootloader_api::entry_point!(kernel_main);
+
+pub fn kernel_main(boot_info: &'static mut bootloader_api::BootInfo) -> ! {
+    if let Some(framebuffer) = boot_info.framebuffer.as_mut() {
+        init_framebuffer(framebuffer);
+    }
+
+    #[cfg(not(test))]
+    println!("Hello World{}", "!");
+
+    #[cfg(test)]
+    test_main();
+
+    exit_qemu(QemuExitCode::Success);
+    loop {}
+}
+
+/// This function is called on panic.
+#[cfg(not(test))]
+#[panic_handler]
+fn panic(info: &PanicInfo) -> ! {
+    println!("{}", info);
+    loop {}
+}
+
+#[cfg(test)]
+#[panic_handler]
+fn panic(info: &PanicInfo) -> ! {
+    serial_println!("Panic: {}", info);
+    exit_qemu(QemuExitCode::Failed);
+    loop {}
+}
+
+#[cfg(test)]
+pub fn test_runner(tests: &[&dyn Fn()]) {
+    serial_println!("Running {} test(s)", tests.len())
+}

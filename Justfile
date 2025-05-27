@@ -1,4 +1,3 @@
-
 [private]
 help:
     @just --choose
@@ -6,7 +5,8 @@ help:
 CWD := `pwd`
 KERNEL_DEBUG_PATH := CWD + "/kernel/target/x86_64-unknown-none/debug/slime_os-kernel"
 KERNEL_RELEASE_PATH := CWD + "/kernel/target/x86_64-unknown-none/release/slime_os-kernel"
-KERNEL_LN_PATH := "kernel/target/slime_os-kernel"
+KERNEL_LN_PATH := CWD + "/kernel/target/slime_os-kernel"
+KERNEL_TEST_LN_PATH := CWD + "/kernel/target/slime_os-kernel_test"
 
 # === Core Build Targets ===
 
@@ -26,33 +26,40 @@ build_kernel_debug:
 
 # Build kernel with test features enabled
 build_kernel_test:
-    @echo "🧪 Building kernel with test..."
-    cd kernel && cargo build --release --features kernel_test
-    ln -sf {{KERNEL_RELEASE_PATH}} {{KERNEL_LN_PATH}}
-    @echo "✅ Test kernel build complete"
-
-
+    #!/usr/bin/env bash
+    echo "🧪 Building kernel with test..."
+    cd kernel
+    TEST_OUTPUT=$(cargo test --no-run 2>&1)
+    echo "$TEST_OUTPUT"
+    TEST_EXEC=$(echo "$TEST_OUTPUT" | grep "Executable unittests" | sed 's/.*(\(.*\))/\1/')
+    if [ -n "$TEST_EXEC" ]; then
+        ln -sf "{{CWD}}/kernel/$TEST_EXEC" ../{{KERNEL_TEST_LN_PATH}}
+        echo "✅ Test kernel build complete - linked to {{KERNEL_TEST_LN_PATH}}"
+    else
+        echo "❌ Failed to extract test executable path"
+        exit 1
+    fi
 # === Run Targets ===
 
 # Run kernel in release mode
 run: build_kernel_release
     @echo "🚀 Starting SlimeOS (release)..."
-    cd entry_point &&cargo run --release
+    cd entry_point &&cargo run --release -- {{KERNEL_LN_PATH}}
 
 # Run kernel tests
 run_test: build_kernel_test
     @echo "🧪 Starting SlimeOS (test mode)..."
-    cd entry_point && cargo run --release
+    cd entry_point && cargo run --release -- {{KERNEL_TEST_LN_PATH}} -a="-display none"
 
 # Run kernel in debug mode
 run_debug: build_kernel_debug
     @echo "🐛 Starting SlimeOS (debug)..."
-    cd entry_point && cargo run --release
+    cd entry_point && cargo run --release -- {{KERNEL_LN_PATH}}
 
 # Run with QEMU monitor enabled for debugging
 run_monitor: build_kernel_debug
     @echo "🖥️ Starting SlimeOS with QEMU monitor..."
-    cd entry_point && cargo run --release -- -monitor stdio
+    cd entry_point && cargo run --release -- {{KERNEL_LN_PATH}} -a="-monitor stdio"
 
 # === Debug Targets ===
 
@@ -65,7 +72,7 @@ debug_client: build_kernel_debug
 debug_server: build_kernel_debug
     @echo "🌐 Starting QEMU debug server on port 1234..."
     @echo "Connect with 'just debug_client' in another terminal"
-    cd entry_point && cargo run -- -s -S
+    cd entry_point && cargo run -- {{KERNEL_LN_PATH}} -d
 
 # === Clean Targets ===
 
@@ -120,6 +127,8 @@ lint_fix:
 objdump:
     nm {{KERNEL_LN_PATH}} | rustfilt
 
+objdump_test:
+    nm {{KERNEL_TEST_LN_PATH}} | rustfilt
 
 # === Testing ===
 

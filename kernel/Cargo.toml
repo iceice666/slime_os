@@ -12,10 +12,6 @@ noto-sans-mono-bitmap = { version = "0.3.1", features = ["unicode-specials","siz
 x86_64 = "0.15.2"
 uart_16550 = "0.3.2"
 
-[dependencies.linkme]
-version = "0.3"
-optional = true
-
 
 [profile.dev]
 panic = "abort"
@@ -24,6 +20,3 @@ panic = "abort"
 panic = "abort"
 
 
-[features]
-default=[]
-kernel_test=["linkme"]
