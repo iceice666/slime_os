@@ -55,7 +55,7 @@ impl Config {
             .map(|args| args.split_whitespace().map(String::from).collect())
             .unwrap_or_default();
 
-        println!("{:?}",qemu_args);
+        println!("{:?}", qemu_args);
 
         Ok(Self {
             kernel_path,
@@ -280,10 +280,7 @@ impl<'a> QemuRunner<'a> {
         ]);
 
         // Standard arguments
-        cmd.args([
-            "-device",
-            "isa-debug-exit,iobase=0xf4,iosize=0x04",
-        ]);
+        cmd.args(["-device", "isa-debug-exit,iobase=0xf4,iosize=0x04"]);
 
         // Debug support
         if self.config.enable_debug {
@@ -325,10 +322,15 @@ impl<'a> QemuRunner<'a> {
         if exit_status.success() {
             Ok(())
         } else {
-            Err(anyhow!(
-                "QEMU exited with error code: {:?}",
-                exit_status.code()
-            ))
+            let err_code = exit_status.code();
+
+            match err_code {
+                Some(33 /* (0x10 << 1) | 1 */) => Ok(()),
+                Some(35 /* (0x11 << 1) | 1 */) => Err(anyhow!("Kernel exit unexpectedly!")),
+                Some(37 /* (0x12 << 1) | 1 */) => Err(anyhow!("Some kernel tests failed!")),
+                _ => Err(anyhow!("QEMU exited with error code: {:?}", err_code))
+            }
+
         }
     }
 }

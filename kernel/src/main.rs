@@ -16,6 +16,7 @@ mod testing;
 pub enum QemuExitCode {
     Success = 0x10,
     Failed = 0x11,
+    TestFailed = 0x12,
 }
 
 pub fn exit_qemu(exit_code: QemuExitCode) {
@@ -57,12 +58,33 @@ fn panic(info: &PanicInfo) -> ! {
 #[cfg(test)]
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
+    serial_println!("[Failed]");
     serial_println!("Panic: {}", info);
-    exit_qemu(QemuExitCode::Failed);
+    exit_qemu(QemuExitCode::TestFailed);
     loop {}
 }
 
+/////////////////////////////////////////////////////
+pub trait Testable {
+    fn run(&self) -> ();
+}
+
+impl<T> Testable for T
+where
+    T: Fn(),
+{
+    fn run(&self) {
+        serial_print!("{}...\t", core::any::type_name::<T>());
+        self();
+        serial_println!("[Passed]");
+    }
+}
+
 #[cfg(test)]
-pub fn test_runner(tests: &[&dyn Fn()]) {
-    serial_println!("Running {} test(s)", tests.len())
+pub fn test_runner(tests: &[&dyn Testable]) {
+    serial_println!("Running {} test(s)", tests.len());
+    for test in tests {
+        test.run()
+    }
+    exit_qemu(QemuExitCode::Success);
 }
