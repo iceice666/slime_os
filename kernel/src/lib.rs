@@ -73,4 +73,12 @@ macro_rules! setup_test_entry {
             $crate::test_panic_handler(info)
         }
     };
+
+    (main: $main:ident) => {
+        bootloader_api::entry_point!($main);
+        #[panic_handler]
+        fn panic(info: &core::panic::PanicInfo) -> ! {
+            $crate::test_panic_handler(info)
+        }
+    }
 }
