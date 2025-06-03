@@ -9,3 +9,4 @@ rustflags = [
     "-C",
     "link-args=-z nostart-stop-gc", # Prevent garbage collection of linkme symbols
 ]
+runner = "../entry_point/target/release/entry_point"
