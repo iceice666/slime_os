@@ -98,6 +98,8 @@ fn kernel_main() {
             time::ticks(),
             time::uptime_ms(),
         );
+
+        slime_os_kernel::bootstrap::start();
     }
 
     #[cfg(test)]

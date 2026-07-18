@@ -14,7 +14,7 @@ use crate::memory::vmm::{MapError, PTE_NO_EXECUTE, PTE_PRESENT, PTE_USER, PTE_WR
 use crate::memory::{PAGE_SIZE, VirtAddr};
 use crate::trap::UserFrame;
 
-pub const KERNEL_STACK_SIZE: usize = 16 * 1024;
+pub const KERNEL_STACK_SIZE: usize = 64 * 1024;
 pub const USER_STACK_PAGES: usize = 4;
 pub const ENTRY_VA: u64 = 0x0000_0000_0040_0000;
 pub const USER_STACK_TOP: u64 = 0x0000_7fff_ffff_f000;
@@ -121,6 +121,52 @@ unsafe extern "C" {
 
 pub fn spawn_user(code: &'static [u8]) -> Result<TaskId, MapError> {
     spawn_with_caps(code, Vec::new())
+}
+
+pub fn spawn_from_cap(executable_slot: u32, cap_slots: &[u32]) -> Result<TaskId, SpawnError> {
+    let (code, caps) = with_current_mut(|task| {
+        let executable = task
+            .caps
+            .get(executable_slot)
+            .filter(|cap| cap.rights & crate::capability::RIGHT_EXEC != 0)
+            .and_then(|cap| match cap.object {
+                KernelObject::Executable(bytes) => Some(bytes),
+                KernelObject::Endpoint(_) => None,
+            })
+            .ok_or(SpawnError::BadExecutable)?;
+        for (index, slot) in cap_slots.iter().enumerate() {
+            if *slot == executable_slot
+                || cap_slots[..index].contains(slot)
+                || task.caps.get(*slot).is_none()
+            {
+                return Err(SpawnError::BadCapability);
+            }
+        }
+        let caps = cap_slots
+            .iter()
+            .map(|slot| {
+                task.caps
+                    .get(*slot)
+                    .expect("capability changed after preflight")
+                    .clone()
+            })
+            .collect();
+        Ok((executable, caps))
+    })?;
+    let id = spawn_with_caps(code, caps).map_err(SpawnError::Map)?;
+    with_current_mut(|task| {
+        for slot in cap_slots {
+            let _ = task.caps.take(*slot);
+        }
+    });
+    Ok(id)
+}
+
+#[derive(Debug)]
+pub enum SpawnError {
+    BadExecutable,
+    BadCapability,
+    Map(MapError),
 }
 
 pub fn spawn_with_caps(code: &'static [u8], caps: Vec<Capability>) -> Result<TaskId, MapError> {
@@ -261,8 +307,8 @@ pub fn terminate(frame: &mut UserFrame, reason: TermReason) {
             sched.tasks[idx].saved = *frame;
             let drained = sched.tasks[idx].caps.drain();
             for cap in drained {
-                match cap.object {
-                    KernelObject::Endpoint(ep) => ep.owner_alive.store(false, Ordering::Release),
+                if let KernelObject::Endpoint(ep) = cap.object {
+                    ep.owner_alive.store(false, Ordering::Release);
                 }
             }
             sched.terminated.push((id, reason));

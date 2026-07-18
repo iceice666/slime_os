@@ -6,6 +6,7 @@ pub const MAX_CAPS: usize = 64;
 pub const RIGHT_SEND: u32 = 1;
 pub const RIGHT_RECV: u32 = 2;
 pub const RIGHT_TRANSFER: u32 = 4;
+pub const RIGHT_EXEC: u32 = 8;
 
 #[derive(Clone)]
 pub struct Capability {
@@ -16,6 +17,7 @@ pub struct Capability {
 #[derive(Clone)]
 pub enum KernelObject {
     Endpoint(Endpoint),
+    Executable(&'static [u8]),
 }
 
 pub struct CapabilityTable {

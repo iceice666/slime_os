@@ -12,7 +12,7 @@
 
 use limine::{
     BaseRevision, RequestsEndMarker, RequestsStartMarker,
-    request::{FramebufferRequest, HhdmRequest, MemmapRequest, RsdpRequest},
+    request::{FramebufferRequest, HhdmRequest, MemmapRequest, ModulesRequest, RsdpRequest},
 };
 
 /// Marks the start of the Limine request block. Must appear before any
@@ -53,6 +53,11 @@ pub static HHDM: HhdmRequest = HhdmRequest::new();
 #[unsafe(link_section = ".requests")]
 pub static RSDP: RsdpRequest = RsdpRequest::new();
 
+/// Generation manifest and immutable component objects, packaged as one module.
+#[used]
+#[unsafe(link_section = ".requests")]
+pub static MODULES: ModulesRequest = ModulesRequest::new();
+
 /// Marks the end of the request block.
 #[used]
 #[unsafe(link_section = ".requests_end")]
@@ -72,4 +77,16 @@ pub static REQUESTS_END: RequestsEndMarker = RequestsEndMarker::new();
 #[inline(never)]
 pub fn ensure_linked() {
     let _ = BASE_REVISION.is_supported();
+}
+
+pub fn generation_module() -> &'static [u8] {
+    let modules = MODULES
+        .response()
+        .expect("Limine did not provide module response")
+        .modules();
+    let module = modules
+        .iter()
+        .find(|module| module.path().ends_with("generation.bin"))
+        .expect("generation module missing");
+    module.data()
 }

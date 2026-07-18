@@ -215,7 +215,7 @@ Exit condition: invalid mappings and faults are reported deterministically rathe
 
 Exit condition: two userspace components communicate, and one may fault without corrupting the other or the kernel.
 
-### 3. Bootstrap component graph
+### 3. Bootstrap component graph — core exit complete
 
 - boot object loading;
 - versioned manifest decoding;

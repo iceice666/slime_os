@@ -10,6 +10,7 @@
 #   EFI/BOOT/BOOTX64.EFI     Limine UEFI loader (firmware jumps here)
 #   boot/limine.conf         Limine boot config
 #   boot/slime_os-kernel     the kernel ELF
+#   boot/generation.bin      verified manifest + immutable component objects
 set -euo pipefail
 
 print_usage() {
@@ -26,6 +27,9 @@ OUTPUT="$2"
 SIZE_MIB="${3:-64}"
 
 [[ -f "$KERNEL" ]] || { echo "kernel not found: $KERNEL" >&2; exit 1; }
+GEN_DIR="$(mktemp -d -t slime-os-generation.XXXXXX)"
+trap 'rm -rf "$GEN_DIR"' EXIT
+"$(dirname "$0")/../../scripts/build-generation.py" "$KERNEL" "$GEN_DIR" >/dev/null
 
 # Locate Limine's datadir (BOOTX64.EFI lives there).
 LIMINE_DATADIR="$(limine --print-datadir 2>/dev/null || true)"
@@ -49,5 +53,6 @@ MTOOLS_SKIP_CHECK=1 mmd -i "$OUTPUT" ::/EFI ::/EFI/BOOT ::/boot
 MTOOLS_SKIP_CHECK=1 mcopy -i "$OUTPUT" "$LIMINE_DATADIR/BOOTX64.EFI" ::/EFI/BOOT/BOOTX64.EFI
 MTOOLS_SKIP_CHECK=1 mcopy -i "$OUTPUT" "$(dirname "$0")/../limine.conf" ::/boot/limine.conf
 MTOOLS_SKIP_CHECK=1 mcopy -i "$OUTPUT" "$KERNEL" ::/boot/slime_os-kernel
+MTOOLS_SKIP_CHECK=1 mcopy -i "$OUTPUT" "$GEN_DIR/generation.bin" ::/boot/generation.bin
 
 echo "Built $OUTPUT ($(stat -c%s "$OUTPUT") bytes)"

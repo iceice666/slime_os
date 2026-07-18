@@ -59,6 +59,13 @@ fmt_check:
 contracts_check:
     python3 scripts/check-contracts.py
 
+# Build and validate the deterministic boot generation binary.
+generation_check:
+    cd kernel && cargo build
+    rm -rf /tmp/slime-os-generation-check
+    ./scripts/build-generation.py kernel/target/x86_64-unknown-none/debug/slime_os-kernel /tmp/slime-os-generation-check
+    ./scripts/check-generation.py /tmp/slime-os-generation-check/generation.bin
+
 lint:
     cd kernel && cargo clippy --all-features -- -D warnings
 

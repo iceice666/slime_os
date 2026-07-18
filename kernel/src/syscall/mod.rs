@@ -7,6 +7,7 @@ pub const SYS_YIELD: u64 = 0;
 pub const SYS_SEND: u64 = 1;
 pub const SYS_RECV: u64 = 2;
 pub const SYS_EXIT: u64 = 3;
+pub const SYS_SPAWN: u64 = 4;
 pub const SYS_DEBUG_WRITE: u64 = 5;
 
 const USER_TOP: u64 = 0x0000_8000_0000_0000;
@@ -32,6 +33,7 @@ pub fn dispatch(frame: &mut UserFrame) {
             let status = frame.rdi as i64;
             task::terminate(frame, TermReason::Exit(status));
         }
+        SYS_SPAWN => sys_spawn(frame),
         SYS_DEBUG_WRITE => sys_debug_write(frame),
         _ => frame.rax = ipc::ERR_INVALID_ARG as u64,
     }
@@ -72,7 +74,9 @@ fn sys_send(frame: &mut UserFrame) {
         if cap.rights & RIGHT_SEND == 0 {
             return ipc::ERR_BAD_CAP;
         }
-        let KernelObject::Endpoint(endpoint) = &cap.object;
+        let KernelObject::Endpoint(endpoint) = &cap.object else {
+            return ipc::ERR_BAD_CAP;
+        };
         let endpoint = endpoint.clone();
         let mut moved_caps = core::array::from_fn(|_| None);
 
@@ -133,7 +137,9 @@ fn sys_recv(frame: &mut UserFrame) {
         if cap.rights & RIGHT_RECV == 0 {
             return ipc::ERR_BAD_CAP;
         }
-        let KernelObject::Endpoint(endpoint) = &cap.object;
+        let KernelObject::Endpoint(endpoint) = &cap.object else {
+            return ipc::ERR_BAD_CAP;
+        };
         let endpoint = endpoint.clone();
         ipc::recv(&endpoint, &mut kbuf, &mut cap_handles, &mut task.caps)
     });
@@ -147,6 +153,45 @@ fn sys_recv(frame: &mut UserFrame) {
         }
     }
     frame.rax = ret as u64;
+}
+
+fn sys_spawn(frame: &mut UserFrame) {
+    let executable_slot = frame.rdi as u32;
+    let cap_slots = frame.rsi as *const u32;
+    let cap_count = frame.rdx as usize;
+    let component_name = frame.r10;
+    if cap_count > crate::capability::MAX_CAPS
+        || (cap_count > 0
+            && !current_user_range(frame.rsi, cap_count * core::mem::size_of::<u32>(), false))
+    {
+        frame.rax = ipc::ERR_INVALID_ARG as u64;
+        return;
+    }
+    let slots = if cap_count == 0 {
+        &[]
+    } else {
+        // SAFETY: the current task's complete user range was validated as mapped.
+        unsafe { core::slice::from_raw_parts(cap_slots, cap_count) }
+    };
+    match task::spawn_from_cap(executable_slot, slots) {
+        Ok(id) => {
+            if let Some(name) = component_name_from_id(component_name) {
+                crate::bootstrap::record_spawn(name, id);
+            }
+            frame.rax = id;
+        }
+        Err(_) => frame.rax = ipc::ERR_BAD_CAP as u64,
+    }
+}
+
+fn component_name_from_id(id: u64) -> Option<&'static str> {
+    match id {
+        1 => Some("console"),
+        2 => Some("dango"),
+        3 => Some("sysinfo"),
+        4 => Some("echo-agent"),
+        _ => None,
+    }
 }
 
 fn sys_debug_write(frame: &mut UserFrame) {
