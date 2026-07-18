@@ -29,7 +29,15 @@
               lldb
               qemu
               rustup
+              limine
+              xorriso
+              OVMF
+              mtools
+              dosfstools
             ];
+
+            OVMF_CODE = "${pkgs.OVMF.fd}/FV/OVMF_CODE.fd";
+            OVMF_VARS = "${pkgs.OVMF.fd}/FV/OVMF_VARS.fd";
 
             RUSTUP_TOOLCHAIN = rustToolchain;
 

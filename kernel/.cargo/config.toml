@@ -1,12 +1,11 @@
 [build]
 target = "x86_64-unknown-none"
 
-
 [target.x86_64-unknown-none]
 rustflags = [
-    "-C",
-    "link-args=--entry=_start", # Specify entry point explicitly
-    "-C",
-    "link-args=-z nostart-stop-gc", # Prevent garbage collection of linkme symbols
+    "-C", "force-frame-pointers",
+    "-C", "link-arg=-Tlinker.ld",
+    "-C", "link-arg=--gc-sections",
+    "-C", "codegen-units=1",
 ]
-runner = "../entry_point/target/release/entry_point"
+runner = "scripts/run-kernel.sh"

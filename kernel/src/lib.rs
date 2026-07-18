@@ -4,13 +4,12 @@
 #![test_runner(crate::test_runner)]
 #![reexport_test_harness_main = "test_main"]
 
+pub mod crt;
 pub mod frame_buffer;
+pub mod limine;
 pub mod serial;
 
 use core::panic::PanicInfo;
-
-#[cfg(test)]
-setup_test_entry!();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
@@ -75,13 +74,16 @@ pub fn test_expected_panic_handler(info: &PanicInfo) -> ! {
     exit_qemu(QemuExitCode::Success);
     hlt_loop()
 }
-
 #[macro_export]
 macro_rules! setup_test_entry {
     () => {
-        bootloader_api::entry_point!(kernel_test_main);
-
-        pub fn kernel_test_main(_: &'static mut bootloader_api::BootInfo) -> ! {
+        // Limine entry point for the default test harness. We do not touch
+        // the framebuffer in tests (keeps output deterministic over serial
+        // only), but we must still pull in the Limine request block so the
+        // bootloader honors it.
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn _start() -> ! {
+            $crate::limine::ensure_linked();
             test_main();
             $crate::hlt_loop()
         }
@@ -90,12 +92,24 @@ macro_rules! setup_test_entry {
             $crate::test_panic_handler(info)
         }
     };
-
     (expected_panic: $main:ident) => {
-        bootloader_api::entry_point!($main);
+        #[allow(unreachable_code)]
+        // Variant for `should_panic`-style tests: the user supplies the
+        // main function that is expected to panic; we just provide the
+        // Limine entry shell around it and a panic handler that treats
+        // the panic as success.
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn _start() -> ! {
+            $crate::limine::ensure_linked();
+            $main(());
+            $crate::hlt_loop()
+        }
         #[panic_handler]
         fn panic(info: &core::panic::PanicInfo) -> ! {
             $crate::test_expected_panic_handler(info)
         }
     };
 }
+
+#[cfg(test)]
+setup_test_entry!();

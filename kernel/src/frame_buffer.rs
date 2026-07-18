@@ -1,33 +1,41 @@
-use bootloader_api::info::{FrameBuffer, FrameBufferInfo, PixelFormat};
+//! Framebuffer text console.
+//!
+//! Reads the linear framebuffer Limine set up (via the
+//! [`crate::limine::FRAMEBUFFER`] request) and rasterizes text into it
+//! using `noto-sans-mono-bitmap`. The framebuffer `address` from Limine is
+//! already a virtual address — Limine mapped it for us, so we do not need
+//! to add the HHDM offset here.
+
 use core::{fmt, ptr};
 use font_constants::BACKUP_CHAR;
+use limine::framebuffer::{FRAMEBUFFER_RGB, Framebuffer};
 use noto_sans_mono_bitmap::{
     FontWeight, RasterHeight, RasterizedChar, get_raster, get_raster_width,
 };
 use spin::Mutex;
 
-/// Additional vertical space between lines
+/// Additional vertical space between lines.
 const LINE_SPACING: usize = 2;
 /// Additional horizontal space between characters.
 const LETTER_SPACING: usize = 0;
-
-/// Padding from the border. Prevent that font is too close to border.
+/// Padding from the border so the font does not touch the edges.
 const BORDER_PADDING: usize = 1;
 
 /// Constants for the usage of the [`noto_sans_mono_bitmap`] crate.
 mod font_constants {
     use super::*;
 
-    /// Height of each char raster. The font size is ~0.84% of this. Thus, this is the line height that
-    /// enables multiple characters to be side-by-side and appear optically in one line in a natural way.
+    /// Height of each char raster. The font size is ~0.84% of this. Thus,
+    /// this is the line height that enables multiple characters to be
+    /// side-by-side and appear optically in one line in a natural way.
     pub const CHAR_RASTER_HEIGHT: RasterHeight = RasterHeight::Size32;
 
     /// The width of each single symbol of the mono space font.
     pub const CHAR_RASTER_WIDTH: usize = get_raster_width(FontWeight::Regular, CHAR_RASTER_HEIGHT);
 
     /// Backup character if a desired symbol is not available by the font.
-    /// The '�' character requires the feature "unicode-specials".
-    pub const BACKUP_CHAR: char = '�';
+    /// The '' character requires the feature "unicode-specials".
+    pub const BACKUP_CHAR: char = '\u{FFFD}';
 
     pub const FONT_WEIGHT: FontWeight = FontWeight::Regular;
 }
@@ -42,6 +50,57 @@ fn get_char_raster(c: char) -> RasterizedChar {
         )
     }
     get(c).unwrap_or_else(|| get(BACKUP_CHAR).expect("Should get raster of backup char."))
+}
+
+/// Byte order of a framebuffer pixel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PixelFormat {
+    /// Bytes in memory: R, G, B, (X).
+    Rgb,
+    /// Bytes in memory: B, G, R, (X).
+    Bgr,
+    /// Grayscale, one byte per pixel packed into a u8 cell.
+    U8,
+}
+
+/// Decoded geometry of a framebuffer, independent of the bootloader.
+#[derive(Debug, Clone, Copy)]
+pub struct FrameBufferInfo {
+    pub width: usize,
+    pub height: usize,
+    /// Pixels per row (= `pitch / bytes_per_pixel`).
+    pub stride: usize,
+    pub bytes_per_pixel: usize,
+    pub pixel_format: PixelFormat,
+}
+
+impl FrameBufferInfo {
+    /// Build from a Limine `Framebuffer`. `pitch` is bytes-per-row, `bpp`
+    /// is bits-per-pixel; everything else is a direct field.
+    fn from_limine(fb: &Framebuffer) -> Self {
+        let bytes_per_pixel = (fb.bpp / 8) as usize;
+        let pixel_format = if fb.memory_model == FRAMEBUFFER_RGB {
+            // Limine RGB model: red sits at the lowest byte in memory.
+            // UEFI/QEMU virtio-gpu typically hands us BGR; check the red
+            // mask shift to be sure.
+            if fb.red_mask_shift == 0 {
+                PixelFormat::Rgb
+            } else {
+                PixelFormat::Bgr
+            }
+        } else {
+            // Unknown model; default to RGB and let the colors come out
+            // wrong-but-visible rather than panicking in the logger.
+            PixelFormat::Rgb
+        };
+        Self {
+            width: fb.width as usize,
+            height: fb.height as usize,
+            stride: (fb.pitch as usize) / bytes_per_pixel,
+            bytes_per_pixel,
+            pixel_format,
+        }
+    }
 }
 
 /// Allows logging text to a pixel-based framebuffer.
@@ -127,12 +186,6 @@ impl FrameBufferWriter {
             PixelFormat::Rgb => [intensity, intensity, intensity / 2, 0],
             PixelFormat::Bgr => [intensity / 2, intensity, intensity, 0],
             PixelFormat::U8 => [if intensity > 200 { 0xf } else { 0 }, 0, 0, 0],
-            other => {
-                // set a supported (but invalid) pixel format before panicking to avoid a double
-                // panic; it might not be readable though
-                self.info.pixel_format = PixelFormat::Rgb;
-                panic!("pixel format {:?} not supported in logger", other)
-            }
         };
         let bytes_per_pixel = self.info.bytes_per_pixel;
         let byte_offset = pixel_offset * bytes_per_pixel;
@@ -155,18 +208,36 @@ impl fmt::Write for FrameBufferWriter {
 }
 
 pub static WRITER: Mutex<Option<FrameBufferWriter>> = Mutex::new(None);
-pub fn init_framebuffer(fb: &'static mut FrameBuffer) {
-    let info = fb.info();
-    let framebuffer = fb.buffer_mut();
+
+/// Initialize the framebuffer console from the Limine framebuffer request.
+///
+/// Panics if Limine did not provide a framebuffer — at this stage of
+/// bring-up we have no fallback console, so hanging silently would be
+/// worse than a visible panic over serial.
+pub fn init_framebuffer() {
+    let fb = crate::limine::FRAMEBUFFER
+        .response()
+        .expect("limine: no framebuffer response")
+        .framebuffers()
+        .first()
+        .copied()
+        .expect("limine: no framebuffer in response");
+
+    let info = FrameBufferInfo::from_limine(fb);
+    // Limine (base rev >= 3) hands us a virtual address for the
+    // framebuffer, already mapped. Safe to turn into a slice directly.
+    let len = (fb.pitch as usize) * (fb.height as usize);
+    let framebuffer = unsafe { core::slice::from_raw_parts_mut(fb.address() as *mut u8, len) };
+
     let writer = FrameBufferWriter::new(framebuffer, info);
-    *WRITER.lock() = Some(writer)
+    *WRITER.lock() = Some(writer);
 }
+
 #[doc(hidden)]
 pub fn _print(args: fmt::Arguments) {
     use core::fmt::Write;
-    let mut writer_guard = WRITER.lock();
-    if let Some(writer) = writer_guard.as_mut() {
-        writer.write_fmt(args).unwrap();
+    if let Some(writer) = WRITER.lock().as_mut() {
+        let _ = writer.write_fmt(args);
     }
 }
 
@@ -178,5 +249,7 @@ macro_rules! print {
 #[macro_export]
 macro_rules! println {
     () => ($crate::print!("\n"));
-    ($($arg:tt)*) => ($crate::print!("{}\n", format_args!($($arg)*)));
+    ($fmt:expr) => ($crate::print!(concat!($fmt, "\n")));
+    ($fmt:expr, $($arg:tt)*) => ($crate::print!(
+        concat!($fmt, "\n"), $($arg)*));
 }

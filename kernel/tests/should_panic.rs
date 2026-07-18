@@ -7,7 +7,7 @@ use slime_os_kernel::QemuExitCode;
 use slime_os_kernel::exit_qemu;
 use slime_os_kernel::serial_println;
 
-pub fn _main(_: &'static mut bootloader_api::BootInfo) -> ! {
+pub fn _main(_boot_info: ()) -> ! {
     should_fail();
     serial_println!("[test did not panic]");
     exit_qemu(QemuExitCode::Failed);
