@@ -206,7 +206,7 @@ This slice defines the minimum useful contracts: userspace entry, address-space 
 
 Exit condition: invalid mappings and faults are reported deterministically rather than silently hanging.
 
-### 2. Isolation and IPC
+### 2. Isolation and IPC — core exit complete
 
 - userspace mode and independent address spaces;
 - preemptible tasks;

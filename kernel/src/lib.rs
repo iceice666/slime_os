@@ -6,14 +6,19 @@
 
 extern crate alloc;
 
+pub mod capability;
 pub mod crt;
 pub mod frame_buffer;
 pub mod gdt;
 pub mod interrupts;
+pub mod ipc;
 pub mod limine;
 pub mod memory;
 pub mod serial;
+pub mod syscall;
+pub mod task;
 pub mod time;
+pub mod trap;
 
 use core::panic::PanicInfo;
 

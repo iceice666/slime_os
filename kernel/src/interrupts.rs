@@ -44,7 +44,7 @@ const TRAP_GATE_FLAGS: u8 = FLAG_PRESENT | FLAG_DPL0 | FLAG_TRAP_GATE;
 /// reference, which keeps the packed-struct hazards away.
 #[repr(C, packed)]
 #[derive(Clone, Copy)]
-struct GateDescriptor {
+pub(crate) struct GateDescriptor {
     offset_low: u16,
     selector: u16,
     ist: u8,
@@ -76,22 +76,13 @@ impl GateDescriptor {
         self.set_handler_raw(handler as usize, INTERRUPT_GATE_FLAGS);
     }
 
-    /// Install a handler that the CPU pushes an error code for
-    /// (vectors 8, 10, 11, 12, 13, 14, 17, 21, 28, 29, 30).
-    fn set_interrupt_handler_err(
-        &mut self,
-        handler: unsafe extern "x86-interrupt" fn(InterruptStackFrame, u64),
-    ) {
-        self.set_handler_raw(handler as usize, INTERRUPT_GATE_FLAGS);
-    }
-
     /// Install a trap-gate handler (same shape, but does not clear IF on
     /// entry). Used for `int3` so breakpoints do not mask interrupts.
     fn set_trap_handler(&mut self, handler: unsafe extern "x86-interrupt" fn(InterruptStackFrame)) {
         self.set_handler_raw(handler as usize, TRAP_GATE_FLAGS);
     }
 
-    fn set_handler_raw(&mut self, addr: usize, flags: u8) {
+    pub(crate) fn set_handler_raw(&mut self, addr: usize, flags: u8) {
         self.set_handler_raw_ist(addr, flags, 0);
     }
 
@@ -198,7 +189,7 @@ impl InterruptDescriptorTable {
     }
 
     // --- entry accessors by vector, for init code ---
-    fn entry(&mut self, vector: u8) -> &mut GateDescriptor {
+    pub(crate) fn entry(&mut self, vector: u8) -> &mut GateDescriptor {
         &mut self.entries[vector as usize]
     }
 }
@@ -215,55 +206,6 @@ fn breakpoint_handler(frame: &InterruptStackFrame) {
     // reliable in early bring-up.
 }
 
-/// Page fault (#PF, vector 14). Reads CR2 for the faulting virtual
-/// address. Aborts: there is no recovery policy yet.
-fn page_fault_handler(frame: &InterruptStackFrame, error_code: u64) {
-    let cr2: u64;
-    // SAFETY: `mov cr2, rax` is a ring-0 privileged read; we are in ring 0.
-    unsafe {
-        core::arch::asm!(
-            "mov {}, cr2",
-            out(reg) cr2,
-            options(nomem, nostack, preserves_flags),
-        );
-    }
-    serial_println!(
-        "[#PF] page fault\n  CR2={:#018x} err={:#x}\n  {}",
-        cr2,
-        error_code,
-        frame,
-    );
-    // Print to the framebuffer too so it is visible on screen.
-    println!(
-        "[#PF] page fault at {:#018x} (CR2={:#018x} err={:#x})",
-        frame.instruction_pointer, cr2, error_code,
-    );
-    crate::hlt_loop()
-}
-
-/// General protection fault (#GP, vector 13). The catch-all for
-/// "something is wrong but not a page fault" — bad selector, non-canonical
-/// access, privilege violation, ...
-fn general_protection_handler(frame: &InterruptStackFrame, error_code: u64) {
-    serial_println!(
-        "[#GP] general protection fault\n  err={:#x}\n  {}",
-        error_code,
-        frame,
-    );
-    println!(
-        "[#GP] general protection fault at {:#018x} (err={:#x})",
-        frame.instruction_pointer, error_code,
-    );
-    crate::hlt_loop()
-}
-
-/// Divide error (#DE, vector 0). Division by zero or overflow of `div`/`idiv`.
-fn divide_error_handler(frame: &InterruptStackFrame) {
-    serial_println!("[#DE] divide error\n  {}", frame);
-    println!("[#DE] divide error at {:#018x}", frame.instruction_pointer);
-    crate::hlt_loop()
-}
-
 /// Double fault (#DF, vector 8). Raised when a fault occurs while the CPU is
 /// trying to deliver an earlier fault (e.g. a fault on an unusable stack).
 /// Runs on the dedicated IST stack (see [`crate::gdt`]) so it reports rather
@@ -278,6 +220,7 @@ fn double_fault_handler(frame: &InterruptStackFrame, error_code: u64) -> ! {
 /// Vector the Local APIC timer is programmed to raise. First free vector
 /// above the 0..=31 CPU-reserved exception range.
 pub const TIMER_VECTOR: u8 = 0x20;
+pub const SYSCALL_VECTOR: u8 = 0x80;
 
 /// Local APIC timer interrupt. Advances the monotonic tick counter and
 /// acknowledges the interrupt so the APIC can deliver the next one.
@@ -307,15 +250,6 @@ fn spurious_handler(_frame: &InterruptStackFrame) {}
 unsafe extern "x86-interrupt" fn breakpoint(frame: InterruptStackFrame) {
     breakpoint_handler(&frame)
 }
-unsafe extern "x86-interrupt" fn page_fault(frame: InterruptStackFrame, error_code: u64) {
-    page_fault_handler(&frame, error_code)
-}
-unsafe extern "x86-interrupt" fn general_protection(frame: InterruptStackFrame, error_code: u64) {
-    general_protection_handler(&frame, error_code)
-}
-unsafe extern "x86-interrupt" fn divide_error(frame: InterruptStackFrame) {
-    divide_error_handler(&frame)
-}
 unsafe extern "x86-interrupt" fn double_fault(frame: InterruptStackFrame, error_code: u64) -> ! {
     double_fault_handler(&frame, error_code)
 }
@@ -331,18 +265,14 @@ unsafe extern "x86-interrupt" fn spurious(frame: InterruptStackFrame) {
 static IDT: LazyLock<InterruptDescriptorTable> = LazyLock::new(|| {
     let mut idt = InterruptDescriptorTable::new_empty();
 
-    // #DE — divide by zero.
-    idt.entry(0).set_interrupt_handler(divide_error);
+    // User/kernel trap stubs for #DE, #UD, #GP, #PF and int 0x80.
+    crate::trap::install(&mut idt);
     // #BP — breakpoint. Trap gate: do not mask interrupts.
     idt.entry(3).set_trap_handler(breakpoint);
     // #DF — double fault. Runs on the IST stack so a corrupt kernel stack
     // still delivers a reported fault instead of a triple fault.
     idt.entry(8)
         .set_interrupt_handler_err_ist(double_fault, crate::gdt::DOUBLE_FAULT_IST_INDEX);
-    // #GP — general protection fault.
-    idt.entry(13).set_interrupt_handler_err(general_protection);
-    // #PF — page fault.
-    idt.entry(14).set_interrupt_handler_err(page_fault);
     // LAPIC timer.
     idt.entry(TIMER_VECTOR).set_interrupt_handler(timer);
     // LAPIC spurious interrupt.

@@ -26,6 +26,8 @@ pub const DOUBLE_FAULT_IST_INDEX: u8 = 1;
 pub const KERNEL_CODE_SELECTOR: u16 = 0x08;
 pub const KERNEL_DATA_SELECTOR: u16 = 0x10;
 pub const TSS_SELECTOR: u16 = 0x18;
+pub const USER_CODE_SELECTOR: u16 = 0x28;
+pub const USER_DATA_SELECTOR: u16 = 0x30;
 
 /// Size of the dedicated Double Fault stack: 5 pages. Never used for anything
 /// else, so it stays intact even when the normal kernel stack is corrupt.
@@ -62,21 +64,23 @@ impl TaskStateSegment {
     }
 }
 
-/// GDT: null + kernel code + kernel data + a 16-byte TSS descriptor, as raw
-/// `u64`s laid out `[null, code, data, tss_low, tss_high]`.
+/// GDT: null + kernel code + kernel data + a 16-byte TSS descriptor, plus
+/// ring-3 code/data descriptors as raw `u64`s laid out
+/// `[null, kcode, kdata, tss_low, tss_high, ucode, udata]`.
 #[repr(C, align(16))]
 struct GlobalDescriptorTable {
-    entries: [u64; 5],
+    entries: [u64; 7],
 }
 
 static mut TSS: TaskStateSegment = TaskStateSegment::new();
 static mut GDT: GlobalDescriptorTable = GlobalDescriptorTable {
-    entries: [0, KERNEL_CODE, KERNEL_DATA, 0, 0],
+    entries: [0, KERNEL_CODE, KERNEL_DATA, 0, 0, USER_CODE, USER_DATA],
 };
 
 // Access-byte / flag constants for the 64-bit code and data descriptors.
 const ACCESS_PRESENT: u64 = 1 << 47;
 const ACCESS_DPL0: u64 = 0 << 45;
+const ACCESS_DPL3: u64 = 3 << 45;
 const ACCESS_TYPE_SEGMENT: u64 = 1 << 44; // S=1 (code/data, not system)
 const ACCESS_EXECUTABLE: u64 = 1 << 43; // code segment
 const ACCESS_READ_WRITE: u64 = 1 << 41; // readable code / writable data
@@ -92,6 +96,17 @@ const KERNEL_CODE: u64 = ACCESS_PRESENT
 
 /// Kernel data segment descriptor.
 const KERNEL_DATA: u64 = ACCESS_PRESENT | ACCESS_DPL0 | ACCESS_TYPE_SEGMENT | ACCESS_READ_WRITE;
+
+/// User 64-bit code segment descriptor.
+const USER_CODE: u64 = ACCESS_PRESENT
+    | ACCESS_DPL3
+    | ACCESS_TYPE_SEGMENT
+    | ACCESS_EXECUTABLE
+    | ACCESS_READ_WRITE
+    | FLAG_LONG_MODE;
+
+/// User data segment descriptor.
+const USER_DATA: u64 = ACCESS_PRESENT | ACCESS_DPL3 | ACCESS_TYPE_SEGMENT | ACCESS_READ_WRITE;
 
 /// Build the two 64-bit halves of a TSS system descriptor for the TSS at `base`.
 fn tss_descriptor(base: u64) -> (u64, u64) {
@@ -138,6 +153,8 @@ pub fn init() {
     unsafe {
         addr_of_mut!(GDT.entries[3]).write(low);
         addr_of_mut!(GDT.entries[4]).write(high);
+        addr_of_mut!(GDT.entries[5]).write(USER_CODE);
+        addr_of_mut!(GDT.entries[6]).write(USER_DATA);
     }
 
     // SAFETY: taking the address of the mutable static; no reference formed.
@@ -183,5 +200,14 @@ pub fn init() {
             sel = in(reg) TSS_SELECTOR,
             options(nostack, preserves_flags),
         );
+    }
+}
+
+/// Set the ring-0 stack pointer used when the CPU enters the kernel from ring 3.
+pub fn set_rsp0(sp: u64) {
+    // SAFETY: task switching is serialized by the scheduler; this writes the
+    // TSS RSP0 slot without forming a reference to the mutable static.
+    unsafe {
+        addr_of_mut!(TSS.privilege_stack_table[0]).write(sp);
     }
 }

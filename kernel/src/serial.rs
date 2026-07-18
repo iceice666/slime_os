@@ -16,6 +16,17 @@ pub fn _print(args: ::core::fmt::Arguments) {
         .expect("Printing to serial failed");
 }
 
+pub fn write_bytes(bytes: &[u8]) {
+    use core::fmt::Write;
+
+    let mut serial = SERIAL1.lock();
+    for byte in bytes {
+        serial
+            .write_char(*byte as char)
+            .expect("Writing byte to serial failed");
+    }
+}
+
 /// Prints to the host through the serial interface.
 #[macro_export]
 macro_rules! serial_print {

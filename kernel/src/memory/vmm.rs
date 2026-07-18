@@ -64,7 +64,7 @@ fn index(virt: VirtAddr, level: u8) -> usize {
 }
 
 /// Physical address of the active top-level (PML4) table, read from CR3.
-fn active_pml4() -> PhysAddr {
+pub(crate) fn active_pml4() -> PhysAddr {
     let cr3: u64;
     // SAFETY: reading CR3 is a privileged but side-effect-free ring-0 read.
     unsafe {
@@ -120,9 +120,14 @@ unsafe fn next_table(table: &mut PageTable, i: usize) -> Result<&'static mut Pag
 ///
 /// Installing a mapping aliases physical memory into the address space; the
 /// caller must ensure `phys` is safe to expose at `virt` with `flags`.
-pub unsafe fn map_page(virt: VirtAddr, phys: PhysAddr, flags: u64) -> Result<(), MapError> {
-    // SAFETY: CR3 names the live PML4, reachable through the HHDM.
-    let pml4 = unsafe { PageTable::at(active_pml4()) };
+pub(crate) unsafe fn map_page_in(
+    root: PhysAddr,
+    virt: VirtAddr,
+    phys: PhysAddr,
+    flags: u64,
+) -> Result<(), MapError> {
+    // SAFETY: `root` names a live PML4, reachable through the HHDM.
+    let pml4 = unsafe { PageTable::at(root) };
     // SAFETY: each descent borrows a live table reached through the HHDM.
     let pdpt = unsafe { next_table(pml4, index(virt, 4))? };
     let pd = unsafe { next_table(pdpt, index(virt, 3))? };
@@ -137,10 +142,38 @@ pub unsafe fn map_page(virt: VirtAddr, phys: PhysAddr, flags: u64) -> Result<(),
     Ok(())
 }
 
+/// Map 4 KiB virtual page `virt` in the active address space.
+///
+/// # Safety
+///
+/// Installing a mapping aliases physical memory into the address space; the
+/// caller must ensure `phys` is safe to expose at `virt` with `flags`.
+pub unsafe fn map_page(virt: VirtAddr, phys: PhysAddr, flags: u64) -> Result<(), MapError> {
+    // SAFETY: CR3 names the live PML4, reachable through the HHDM.
+    unsafe { map_page_in(active_pml4(), virt, phys, flags) }
+}
+
+/// Return the leaf page-table flags for `virt` in `root`, or `None` if unmapped.
+pub(crate) fn page_flags_in(root: PhysAddr, virt: VirtAddr) -> Option<u64> {
+    // SAFETY: `root` names a live PML4; every descent stops at a present entry.
+    let pml4 = unsafe { PageTable::at(root) };
+    let mut table: &PageTable = pml4;
+    for level in (2..=4).rev() {
+        let entry = table.entries[index(virt, level)];
+        if entry & PTE_PRESENT == 0 || entry & PTE_USER == 0 {
+            return None;
+        }
+        // SAFETY: present entry points at a live lower-level table via HHDM.
+        table = unsafe { PageTable::at(PhysAddr(entry & ADDR_MASK)) };
+    }
+    let leaf = table.entries[index(virt, 1)];
+    (leaf & PTE_PRESENT != 0 && leaf & PTE_USER != 0).then_some(leaf)
+}
+
 /// Translate a virtual address to its physical address, or `None` if unmapped.
-pub fn translate(virt: VirtAddr) -> Option<PhysAddr> {
-    // SAFETY: CR3 names the live PML4; every descent stops at a present entry.
-    let pml4 = unsafe { PageTable::at(active_pml4()) };
+pub(crate) fn translate_in(root: PhysAddr, virt: VirtAddr) -> Option<PhysAddr> {
+    // SAFETY: `root` names a live PML4; every descent stops at a present entry.
+    let pml4 = unsafe { PageTable::at(root) };
     let mut table: &PageTable = pml4;
     for level in (2..=4).rev() {
         let entry = table.entries[index(virt, level)];
@@ -156,4 +189,8 @@ pub fn translate(virt: VirtAddr) -> Option<PhysAddr> {
     }
     let page = leaf & ADDR_MASK;
     Some(PhysAddr(page + (virt.0 & 0xfff)))
+}
+
+pub fn translate(virt: VirtAddr) -> Option<PhysAddr> {
+    translate_in(active_pml4(), virt)
 }

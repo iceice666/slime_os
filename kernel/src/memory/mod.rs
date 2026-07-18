@@ -10,6 +10,7 @@
 //! `pa + HHDM_OFFSET`. We never touch a physical address directly; we go
 //! through [`PhysAddr::to_virt`].
 
+pub mod address_space;
 pub mod heap;
 pub mod pmm;
 pub mod vmm;
