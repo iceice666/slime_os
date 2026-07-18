@@ -11,6 +11,7 @@
     { id = "sha256:console"; kind = "component"; size = 65536; };
     { id = "sha256:dango"; kind = "component"; size = 131072; };
     { id = "sha256:sysinfo"; kind = "component"; size = 32768; };
+    { id = "sha256:echo-agent"; kind = "component"; size = 32768; };
   ];
 
   components = [
@@ -38,8 +39,13 @@
       role = "application";
       dependencies = [];
     };
+    {
+      name = "echo-agent";
+      object = "sha256:echo-agent";
+      role = "application";
+      dependencies = [];
+    };
   ];
-
   grants = [
     {
       name = "console-output";
@@ -55,6 +61,20 @@
       rights = ["read";];
       transferable = false;
     };
+    {
+      name = "echo-request";
+      source = "echo-agent";
+      target = "dango";
+      rights = ["write";];
+      transferable = false;
+    };
+    {
+      name = "echo-reply";
+      source = "dango";
+      target = "echo-agent";
+      rights = ["write";];
+      transferable = false;
+    };
   ];
 
   state = [
@@ -64,10 +84,16 @@
       schemaVersion = 1;
       policy = "preserve";
     };
+    {
+      name = "echo-agent-session";
+      owner = "echo-agent";
+      schemaVersion = 1;
+      policy = "ephemeral";
+    };
   ];
 
   health = {
     bootAttempts = 3;
-    requiredComponents = ["init"; "console"; "dango";];
+    requiredComponents = ["init"; "console"; "dango"; "echo-agent";];
   };
 }

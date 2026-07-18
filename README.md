@@ -175,12 +175,12 @@ Zutai configuration
     -> minimal Dango runtime
     -> command resolver
     -> sysinfo component
+    -> echo-agent stub component (tool-call round-trip with no language model)
     -> streamed output back to the console
 ```
 
 Acceptance criteria:
-
-1. A host-side Zutai configuration describes `init`, `console`, `dango`, and `sysinfo` components.
+1. A host-side Zutai configuration describes `init`, `console`, `dango`, `sysinfo`, and `echo-agent` components.
 2. The build produces immutable component objects and one deterministic generation manifest.
 3. The kernel starts an isolated bootstrap/init component rather than implementing userspace policy itself.
 4. Init grants each component only the capabilities declared by the generation.
@@ -190,8 +190,9 @@ Acceptance criteria:
 8. Crashing `sysinfo` does not terminate Dango, the console service, init, or the kernel.
 9. The same component and IPC contracts run under QEMU and from removable media on the Framework target.
 10. The Framework run performs no write to the internal NVMe device.
+11. An `echo-agent` stub component receives a tool-call message over a channel and replies with a structured response, with no language model involved. This pins the agent abstraction to the same component, capability, channel, and structured-termination contracts as `sysinfo`.
 
-This slice defines the minimum useful contracts: userspace entry, address-space isolation, capability IPC, executable identity, command resolution, spawning, streams, termination notification, manifest decoding, and fault containment.
+This slice defines the minimum useful contracts: userspace entry, address-space isolation, capability IPC, executable identity, command resolution, spawning, streams, termination notification, manifest decoding, fault containment, and the agent abstraction as a non-special case of the above.
 
 ## Milestone order
 
@@ -219,8 +220,7 @@ Exit condition: two userspace components communicate, and one may fault without 
 - boot object loading;
 - versioned manifest decoding;
 - init/service manager;
-- explicit initial capability graph;
-- console and `sysinfo` components.
+- console, `sysinfo`, and `echo-agent` stub components.
 
 Exit condition: the first vertical slice works under QEMU.
 

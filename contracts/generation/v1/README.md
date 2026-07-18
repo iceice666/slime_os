@@ -49,7 +49,7 @@ These checks belong to the builder because successful structural decoding must n
 
 ## Fixtures
 
-- `fixtures/valid.zti` is the minimal vertical-slice generation: init, console, Dango, and sysinfo.
+- `fixtures/valid.zti` is the minimal vertical-slice generation: init, console, Dango, sysinfo, and an `echo-agent` stub that pins the agent abstraction to the same channel, capability, and structured-termination contracts without a language model.
 - `fixtures/invalid.zti` uses text where `formatVersion` requires an integer.
 - `check-valid.zt` must evaluate to `#valid`.
 - `check-invalid.zt` must evaluate to `#invalid` with a `formatVersion` decode path.
