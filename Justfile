@@ -66,6 +66,16 @@ generation_check:
     ./scripts/build-generation.py kernel/target/x86_64-unknown-none/debug/slime_os-kernel /tmp/slime-os-generation-check
     ./scripts/check-generation.py /tmp/slime-os-generation-check/generation.bin
 
+# Build a removable-media UEFI image for Framework safe bring-up.
+framework_usb_image output="/tmp/slime-os-framework.img":
+    cd kernel && cargo build --release
+    kernel/scripts/build-iso.sh kernel/target/x86_64-unknown-none/release/slime_os-kernel {{output}} 128
+
+# Destructively write a Slime OS image to a removable disk only.
+framework_usb_write device output="/tmp/slime-os-framework.img":
+    just framework_usb_image {{output}}
+    sudo env "PATH=$PATH" scripts/write-removable-image.py {{output}} {{device}}
+
 lint:
     cd kernel && cargo clippy --all-features -- -D warnings
 

@@ -5,3 +5,4 @@ target
 debug.sh
 /.direnv/bin
 /.direnv
+/scripts/__pycache__

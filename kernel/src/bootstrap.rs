@@ -3,7 +3,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::capability::{Capability, KernelObject, RIGHT_EXEC, RIGHT_RECV, RIGHT_SEND};
 use crate::generation::{self, Generation};
-use crate::{ipc, serial_println, task};
+use crate::{ipc, println, serial_println, task};
 
 static INIT_ID: AtomicU64 = AtomicU64::new(0);
 static CONSOLE_ID: AtomicU64 = AtomicU64::new(0);
@@ -121,8 +121,10 @@ extern "C" fn on_idle() {
     }
     if healthy {
         serial_println!("[generation] vertical slice healthy");
+        println!("[generation] vertical slice healthy");
         crate::exit_qemu(crate::QemuExitCode::Success);
     } else {
+        println!("[generation] vertical slice failed");
         crate::exit_qemu(crate::QemuExitCode::Failed);
     }
     crate::hlt_loop()

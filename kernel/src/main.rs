@@ -37,18 +37,20 @@ pub unsafe extern "C" fn _start() -> ! {
 fn kernel_main() {
     // Console first: every subsequent diagnostic is visible.
     init_framebuffer();
-    println!("Hello World{}", "!");
+    println!("Slime OS Framework bring-up image");
     serial_println!("[serial] Hello World{}!", "");
 
     // GDT/TSS before the IDT: the IDT gates read our code selector, and the
     // Double Fault gate needs the TSS's IST stack to exist.
     gdt::init();
     serial_println!("[serial] GDT+TSS loaded");
+    println!("[bringup] GDT+TSS loaded");
 
     // Load the IDT so exceptions route to our handlers instead of
     // triple-faulting QEMU into a silent reset.
     interrupts::init();
     serial_println!("[serial] IDT loaded");
+    println!("[bringup] IDT loaded");
 
     // Physical + virtual memory and the kernel heap. After this, `alloc`
     // works and page faults are reported deterministically.
@@ -62,6 +64,7 @@ fn kernel_main() {
         );
     }
     serial_println!("[serial] heap online");
+    println!("[bringup] heap online");
 
     // Prove the heap really works before relying on it.
     {
@@ -79,6 +82,7 @@ fn kernel_main() {
         "[serial] APIC timer online (count={})",
         time::apic::timer_count()
     );
+    println!("[bringup] APIC timer online");
 
     #[cfg(not(test))]
     {
@@ -88,6 +92,7 @@ fn kernel_main() {
             core::arch::asm!("int3", options(nostack, preserves_flags));
         }
         serial_println!("[serial] survived int3");
+        println!("[bringup] survived int3");
 
         // Prove the timer is ticking: wait ~50 ms and confirm uptime advanced.
         let before = time::ticks();
@@ -98,6 +103,7 @@ fn kernel_main() {
             time::ticks(),
             time::uptime_ms(),
         );
+        println!("[bringup] timer ticks {} -> {}", before, time::ticks(),);
 
         slime_os_kernel::bootstrap::start();
     }

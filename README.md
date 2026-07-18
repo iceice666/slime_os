@@ -233,7 +233,7 @@ Exit condition: two userspace components communicate, and one may fault without 
 
 Exit condition: the first vertical slice works under QEMU.
 
-### 4. Framework safe bring-up — not yet verified
+### 4. Framework safe bring-up — verified
 
 - UEFI/GOP console;
 - ACPI discovery;

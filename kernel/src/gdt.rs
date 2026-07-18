@@ -146,6 +146,7 @@ pub fn init() {
         addr_of_mut!(TSS.interrupt_stack_table[(DOUBLE_FAULT_IST_INDEX - 1) as usize])
             .write(df_stack_top);
     }
+    crate::println!("[gdt] TSS stack set");
 
     let tss_base = addr_of_mut!(TSS) as u64;
     let (low, high) = tss_descriptor(tss_base);
@@ -156,6 +157,7 @@ pub fn init() {
         addr_of_mut!(GDT.entries[5]).write(USER_CODE);
         addr_of_mut!(GDT.entries[6]).write(USER_DATA);
     }
+    crate::println!("[gdt] descriptors built");
 
     // SAFETY: taking the address of the mutable static; no reference formed.
     let gdt_base = unsafe { addr_of_mut!(GDT.entries) as u64 };
@@ -163,6 +165,7 @@ pub fn init() {
         limit: (size_of::<GlobalDescriptorTable>() - 1) as u16,
         base: gdt_base,
     };
+    crate::println!("[gdt] GDTR ready");
 
     // SAFETY: `gdtr` describes the valid, live GDT we just built. We reload CS
     // via a far return and the data segments directly, then load the task
@@ -173,6 +176,7 @@ pub fn init() {
             gdtr = in(reg) core::ptr::addr_of!(gdtr),
             options(readonly, nostack, preserves_flags),
         );
+        crate::println!("[gdt] lgdt loaded");
         // Reload CS with a far return: push new selector + return target.
         core::arch::asm!(
             "push {sel}",
@@ -184,6 +188,7 @@ pub fn init() {
             tmp = lateout(reg) _,
             options(preserves_flags),
         );
+        crate::println!("[gdt] CS reloaded");
         // Reload data segment registers.
         core::arch::asm!(
             "mov ds, {sel:x}",
@@ -194,12 +199,14 @@ pub fn init() {
             sel = in(reg) KERNEL_DATA_SELECTOR,
             options(nostack, preserves_flags),
         );
+        crate::println!("[gdt] data segments reloaded");
         // Load the task register with the TSS selector.
         core::arch::asm!(
             "ltr {sel:x}",
             sel = in(reg) TSS_SELECTOR,
             options(nostack, preserves_flags),
         );
+        crate::println!("[gdt] TSS loaded");
     }
 }
 
