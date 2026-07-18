@@ -1,13 +1,19 @@
 #![no_std]
 #![cfg_attr(test, no_main)]
-#![feature(custom_test_frameworks)]
+#![feature(abi_x86_interrupt, custom_test_frameworks)]
 #![test_runner(crate::test_runner)]
 #![reexport_test_harness_main = "test_main"]
 
+extern crate alloc;
+
 pub mod crt;
 pub mod frame_buffer;
+pub mod gdt;
+pub mod interrupts;
 pub mod limine;
+pub mod memory;
 pub mod serial;
+pub mod time;
 
 use core::panic::PanicInfo;
 
@@ -81,6 +87,10 @@ macro_rules! setup_test_entry {
         // the framebuffer in tests (keeps output deterministic over serial
         // only), but we must still pull in the Limine request block so the
         // bootloader honors it.
+        ///
+        /// # Safety
+        ///
+        /// Must only be called by the Limine bootloader.
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn _start() -> ! {
             $crate::limine::ensure_linked();
@@ -98,6 +108,11 @@ macro_rules! setup_test_entry {
         // main function that is expected to panic; we just provide the
         // Limine entry shell around it and a panic handler that treats
         // the panic as success.
+        ///
+        /// # Safety
+        ///
+        /// Must only be called by the Limine bootloader.
+        #[allow(unreachable_code)]
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn _start() -> ! {
             $crate::limine::ensure_linked();

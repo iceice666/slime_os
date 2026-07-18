@@ -4,11 +4,12 @@
 #![test_runner(slime_os_kernel::test_runner)]
 #![reexport_test_harness_main = "test_main"]
 
+extern crate alloc;
+
 use core::panic::PanicInfo;
 
 use slime_os_kernel::frame_buffer::init_framebuffer;
-use slime_os_kernel::println;
-use slime_os_kernel::serial_println;
+use slime_os_kernel::{gdt, interrupts, memory, println, serial_println, time};
 #[cfg(test)]
 mod testing;
 
@@ -38,6 +39,66 @@ fn kernel_main() {
     init_framebuffer();
     println!("Hello World{}", "!");
     serial_println!("[serial] Hello World{}!", "");
+
+    // GDT/TSS before the IDT: the IDT gates read our code selector, and the
+    // Double Fault gate needs the TSS's IST stack to exist.
+    gdt::init();
+    serial_println!("[serial] GDT+TSS loaded");
+
+    // Load the IDT so exceptions route to our handlers instead of
+    // triple-faulting QEMU into a silent reset.
+    interrupts::init();
+    serial_println!("[serial] IDT loaded");
+
+    // Physical + virtual memory and the kernel heap. After this, `alloc`
+    // works and page faults are reported deterministically.
+    memory::init();
+    {
+        let fa = memory::pmm::FRAME_ALLOCATOR.lock();
+        serial_println!(
+            "[serial] PMM: {} / {} frames free",
+            fa.free_frames(),
+            fa.total_frames(),
+        );
+    }
+    serial_println!("[serial] heap online");
+
+    // Prove the heap really works before relying on it.
+    {
+        use alloc::vec::Vec;
+        let mut v = Vec::new();
+        for i in 0..256 {
+            v.push(i * i);
+        }
+        serial_println!("[serial] heap check: sum={}", v.iter().sum::<u64>());
+    }
+
+    // APIC timer: interrupt-driven monotonic clock. Enables interrupts.
+    time::init();
+    serial_println!(
+        "[serial] APIC timer online (count={})",
+        time::apic::timer_count()
+    );
+
+    #[cfg(not(test))]
+    {
+        // #BP: trigger a breakpoint and prove we come back.
+        // SAFETY: `int3` is a trap; our #BP handler returns normally.
+        unsafe {
+            core::arch::asm!("int3", options(nostack, preserves_flags));
+        }
+        serial_println!("[serial] survived int3");
+
+        // Prove the timer is ticking: wait ~50 ms and confirm uptime advanced.
+        let before = time::ticks();
+        time::sleep_ms(50);
+        serial_println!(
+            "[serial] timer ticks: {} -> {} (uptime {} ms)",
+            before,
+            time::ticks(),
+            time::uptime_ms(),
+        );
+    }
 
     #[cfg(test)]
     test_main();
