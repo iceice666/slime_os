@@ -1,0 +1,73 @@
+{
+  formatVersion = 1;
+  generation = 1;
+  target = "x86_64-qemu-virtio";
+  kernelObject = "sha256:kernel";
+  bootstrapComponent = "init";
+
+  objects = [
+    { id = "sha256:kernel"; kind = "kernel"; size = 1048576; };
+    { id = "sha256:init"; kind = "bootstrap"; size = 65536; };
+    { id = "sha256:console"; kind = "component"; size = 65536; };
+    { id = "sha256:dango"; kind = "component"; size = 131072; };
+    { id = "sha256:sysinfo"; kind = "component"; size = 32768; };
+  ];
+
+  components = [
+    {
+      name = "init";
+      object = "sha256:init";
+      role = "init";
+      dependencies = [];
+    };
+    {
+      name = "console";
+      object = "sha256:console";
+      role = "service";
+      dependencies = ["init";];
+    };
+    {
+      name = "dango";
+      object = "sha256:dango";
+      role = "application";
+      dependencies = ["console";];
+    };
+    {
+      name = "sysinfo";
+      object = "sha256:sysinfo";
+      role = "application";
+      dependencies = [];
+    };
+  ];
+
+  grants = [
+    {
+      name = "console-output";
+      source = "console";
+      target = "dango";
+      rights = ["write";];
+      transferable = false;
+    };
+    {
+      name = "system-information";
+      source = "init";
+      target = "sysinfo";
+      rights = ["read";];
+      transferable = false;
+    };
+  ];
+
+  state = [
+    {
+      name = "dango-history";
+      owner = "dango";
+      schemaVersion = 1;
+      policy = "preserve";
+    };
+  ];
+
+  health = {
+    bootAttempts = 3;
+    requiredComponents = ["init"; "console"; "dango";];
+  };
+}

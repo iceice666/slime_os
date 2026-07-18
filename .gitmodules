@@ -1,0 +1,6 @@
+[submodule "deps/zutai"]
+	path = deps/zutai
+	url = https://github.com/iceice666/zutai.git
+[submodule "deps/dango"]
+	path = deps/dango
+	url = https://github.com/iceice666/dango.git

@@ -1,0 +1,6 @@
+schema ::= import "schema.zt";
+
+main :: Load -> Validation DecodeIssue schema.GenerationManifest ! { load.zti : Path -> Data; }
+  = load => schema.decodeManifest (loadZti "contracts/generation/v1/fixtures/valid.zti");
+
+main

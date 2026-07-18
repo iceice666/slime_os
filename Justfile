@@ -79,6 +79,11 @@ fmt_check:
     cd entry_point && cargo fmt -- --check
     @echo "✅ Format check complete"
 
+# Validate the pinned generation manifest schema and fixtures
+contracts_check:
+    @echo "Checking generation manifest contracts..."
+    python3 scripts/check-contracts.py
+
 # Run clippy linter
 lint:
     @echo "🔍 Running clippy linter..."

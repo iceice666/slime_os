@@ -1,0 +1,74 @@
+-- Slime OS generation manifest schema, format version 1.
+--
+-- This module owns the typed host-side validation boundary. The boot-time binary
+-- encoding is deliberately not frozen by this source schema.
+
+-- Enumerated identifiers remain Text at the serialization boundary in format 1.
+-- The builder validates the closed value sets documented with this contract.
+
+Object :: type {
+  id : Text;
+  kind : Text;
+  size : Int;
+};
+
+Component :: type {
+  name : Text;
+  object : Text;
+  role : Text;
+  dependencies : List Text;
+};
+
+CapabilityGrant :: type {
+  name : Text;
+  source : Text;
+  target : Text;
+  rights : List Text;
+  transferable : Bool;
+};
+
+StateBinding :: type {
+  name : Text;
+  owner : Text;
+  schemaVersion : Int;
+  policy : Text;
+};
+
+HealthPolicy :: type {
+  bootAttempts : Int;
+  requiredComponents : List Text;
+};
+
+GenerationManifest :: type {
+  formatVersion : Int;
+  generation : Int;
+  target : Text;
+  parent? : Int;
+  kernelObject : Text;
+  bootstrapComponent : Text;
+  objects : List Object;
+  components : List Component;
+  grants : List CapabilityGrant;
+  state : List StateBinding;
+  health : HealthPolicy;
+};
+
+FromData @Object :: derive
+FromData @Component :: derive
+FromData @CapabilityGrant :: derive
+FromData @StateBinding :: derive
+FromData @HealthPolicy :: derive
+FromData @GenerationManifest :: derive
+
+decodeManifest :: Data -> Validation DecodeIssue GenerationManifest
+  = data => decode data;
+
+{
+  Object = Object;
+  Component = Component;
+  CapabilityGrant = CapabilityGrant;
+  StateBinding = StateBinding;
+  HealthPolicy = HealthPolicy;
+  GenerationManifest = GenerationManifest;
+  decodeManifest = decodeManifest;
+}
