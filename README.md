@@ -146,6 +146,22 @@ The kernel must not parse Zutai source or own system policy. It starts a small b
 
 Manifest encoding is not yet frozen. It must be deterministic, bounded, versioned, safe to decode before the full userspace environment exists, and independent of JSON-specific tagged-union conventions.
 
+## Agentic direction
+
+The five first-class concepts are also the natural primitives for running autonomous agents safely, and no new authority model is required for it.
+
+- **Agent = Component.** An agent is an isolated component with an address space and explicit dependencies. Agent fault containment is component fault containment: a crashing agent does not terminate its peers, services, or the kernel.
+- **Tool call = Channel.** A tool invocation is a typed IPC message to a service endpoint, not an arbitrary function call. The endpoint's schema defines the message; capability transfer along the channel is the only way authority crosses the boundary.
+- **Agent authority = Capability grant.** Spawn supplies no implicit environment, working directory, streams, or other authority. An agent receives only the grants declared by the generation, and unforgeable capabilities mean authority cannot be ambient, guessed, or widened at runtime.
+- **Agent memory = State binding.** Long-term agent state is a `StateBinding` with an owner, schema version, and policy. `snapshotBeforeUpgrade` and `discardOnRollback` give agent memory the same upgrade and rollback discipline as the rest of the system.
+- **Agent update = Generation.** Changing an agent's model, prompt, or tool set produces a new generation. Health checking applies to agent behavior as well as to boot: a pending generation becomes known-good only after userspace confirmation, and a regressing agent rolls back with the same mechanism as a regressing kernel.
+
+The kernel does not treat agents or language models as special. A language model is a userspace service component that agents address over channels; the scheduler, context, and memory concerns of agent runtimes live in userspace services, not in the kernel. This keeps the kernel policy-free for agents as it is for every other subsystem, and lets model choice, provider, and placement change as a generation without touching the kernel ABI.
+
+External agent protocols such as MCP may be bridged by a dedicated component that exposes protocol servers as Slime capability endpoints. The bridge cannot grant authority the agent does not already hold, so prompt injection success at the model layer is still bounded by the generation's declared grants.
+
+Atomicity and agentic operation reinforce each other: agent memory and authority are versioned, verified, and rollbackable by the same mechanisms as the boot graph, and the boot graph can include agent components without a separate agent deployment track.
+
 ## First vertical slice
 
 The first end-to-end system milestone connects Slime OS, Zutai, and Dango without requiring a full filesystem or desktop:
@@ -277,6 +293,9 @@ just lint
 - writing a desktop environment before isolation and service recovery work;
 - requiring the Slime kernel to run existing Linux binaries directly;
 - inventing another configuration language or shell;
+- embedding a language model, agent runtime, or agent scheduler in the kernel;
+- granting agents authority to switch generations, format storage, or grant kernel capabilities;
+- running agents outside the capability and generation model;
 - treating a framebuffer demo as completion of an OS architecture milestone.
 
 Linux remains useful as the development host and may later run as an isolated guest for compatibility. It does not define Slime OS's kernel, native ABI, authority model, or deployment architecture.
