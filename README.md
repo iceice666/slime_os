@@ -2,7 +2,16 @@
 
 Slime OS is an experimental atomic personal operating system built from a new kernel and userspace rather than on Linux. Its purpose is to explore capability-based isolation, component-oriented system services, explicit resource authority, and generation-based deployment while progressing toward a system usable on one real daily-driver laptop.
 
-The project is currently an early Rust `no_std` kernel. It can build a UEFI image, boot under QEMU, print through the framebuffer and serial port, and run kernel tests. The architecture and daily-use goals below are committed design direction, not claims of current implementation.
+The project is currently a QEMU-bootable Rust `no_std` kernel with a minimal userspace component graph. It can build a UEFI image, boot under QEMU, print through the framebuffer and serial port, run kernel tests, decode a deterministic generation manifest, launch `init`, `console`, `dango`, `sysinfo`, and `echo-agent` components, pass IPC capabilities between them, and report a healthy vertical slice. The architecture and daily-use goals below remain committed design direction, not claims of current physical-machine support.
+
+## Current status
+
+- QEMU is the only verified runtime target.
+- Kernel foundation work is in place: GDT/TSS, IDT exception reporting, physical and virtual memory management, heap allocation, and APIC timer support.
+- Core isolation is exercised by tests: independent userspace components can communicate over IPC, and a faulting component does not corrupt or terminate its peer or the kernel.
+- Generation format 1 has a pinned Zutai-side contract, fixtures, a deterministic host builder, and a kernel decoder.
+- The first QEMU vertical slice is healthy: `init` launches `console`, `dango`, `sysinfo`, and `echo-agent`; Dango resolves executable authority through capabilities; `sysinfo` and `echo-agent` stream structured output; every component exits successfully.
+- Framework laptop bring-up, storage, rollbackable generations, native interactive Dango, and daily-driver hardware support are not complete.
 
 ## Vision
 
@@ -196,7 +205,7 @@ This slice defines the minimum useful contracts: userspace entry, address-space 
 
 ## Milestone order
 
-### 1. Kernel foundation
+### 1. Kernel foundation — QEMU tests passing
 
 - exception and crash reporting;
 - physical and virtual memory management;
@@ -206,7 +215,7 @@ This slice defines the minimum useful contracts: userspace entry, address-space 
 
 Exit condition: invalid mappings and faults are reported deterministically rather than silently hanging.
 
-### 2. Isolation and IPC — core exit complete
+### 2. Isolation and IPC — core QEMU exit passing
 
 - userspace mode and independent address spaces;
 - preemptible tasks;
@@ -215,7 +224,7 @@ Exit condition: invalid mappings and faults are reported deterministically rathe
 
 Exit condition: two userspace components communicate, and one may fault without corrupting the other or the kernel.
 
-### 3. Bootstrap component graph — core exit complete
+### 3. Bootstrap component graph — QEMU vertical slice passing
 
 - boot object loading;
 - versioned manifest decoding;
@@ -224,7 +233,7 @@ Exit condition: two userspace components communicate, and one may fault without 
 
 Exit condition: the first vertical slice works under QEMU.
 
-### 4. Framework safe bring-up
+### 4. Framework safe bring-up — not yet verified
 
 - UEFI/GOP console;
 - ACPI discovery;
@@ -234,7 +243,7 @@ Exit condition: the first vertical slice works under QEMU.
 
 Exit condition: the same isolated userspace slice runs on the Framework without modifying internal storage.
 
-### 5. Storage and generations
+### 5. Storage and generations — not yet implemented
 
 - virtio block, then Framework NVMe;
 - GPT and an integrity-checked object store;
@@ -245,7 +254,7 @@ Exit condition: the same isolated userspace slice runs on the Framework without 
 
 Exit condition: a failed pending generation automatically leaves or restores a bootable known-good generation.
 
-### 6. Native interactive environment
+### 6. Native interactive environment — minimal stub only
 
 - minimal Dango implementation and core runtime;
 - command profile/resolver and spawn service;
@@ -254,7 +263,7 @@ Exit condition: a failed pending generation automatically leaves or restores a b
 
 Exit condition: the system can inspect, build/stage, select, and roll back generations through native components.
 
-### 7. Daily-driver hardware
+### 7. Daily-driver hardware — not yet implemented
 
 Bring hardware up in risk order rather than feature visibility:
 
@@ -271,10 +280,13 @@ GPU acceleration, Wi-Fi, and audio do not block the first native userspace miles
 ## Current repository layout
 
 ```text
-kernel/       Rust no_std kernel and kernel tests
-entry_point/  host-side UEFI image builder and QEMU runner
-assets/       boot/runtime assets
-Justfile      build, run, test, format, lint, and debug commands
+kernel/       Rust no_std kernel, boot path, generation decoder, scheduler, IPC, and tests
+components/   Minimal assembly userspace components for the QEMU vertical slice
+contracts/    Generation manifest v1 contract, Zutai fixtures, and validation entrypoints
+scripts/      Host-side generation build/check and contract validation helpers
+assets/       Boot/runtime assets
+deps/         Pinned Zutai and Dango submodules
+Justfile      Build, run, test, format, lint, generation, contract, and debug commands
 ```
 
 Common development commands:
