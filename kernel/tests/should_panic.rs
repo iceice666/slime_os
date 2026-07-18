@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 
-slime_os_kernel::setup_test_entry!(main: _main);
+slime_os_kernel::setup_test_entry!(expected_panic: _main);
 
 use slime_os_kernel::QemuExitCode;
 use slime_os_kernel::exit_qemu;
@@ -11,7 +11,7 @@ pub fn _main(_: &'static mut bootloader_api::BootInfo) -> ! {
     should_fail();
     serial_println!("[test did not panic]");
     exit_qemu(QemuExitCode::Failed);
-    loop {}
+    slime_os_kernel::hlt_loop()
 }
 
 fn should_fail() {

@@ -328,9 +328,8 @@ impl<'a> QemuRunner<'a> {
                 Some(33 /* (0x10 << 1) | 1 */) => Ok(()),
                 Some(35 /* (0x11 << 1) | 1 */) => Err(anyhow!("Kernel exit unexpectedly!")),
                 Some(37 /* (0x12 << 1) | 1 */) => Err(anyhow!("Some kernel tests failed!")),
-                _ => Err(anyhow!("QEMU exited with error code: {:?}", err_code))
+                _ => Err(anyhow!("QEMU exited with error code: {:?}", err_code)),
             }
-
         }
     }
 }

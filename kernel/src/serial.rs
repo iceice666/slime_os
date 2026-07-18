@@ -1,7 +1,7 @@
-use spin::{Lazy, Mutex};
+use spin::{LazyLock, Mutex};
 use uart_16550::SerialPort;
 
-static SERIAL1: Lazy<Mutex<SerialPort>> = Lazy::new(|| {
+static SERIAL1: LazyLock<Mutex<SerialPort>> = LazyLock::new(|| {
     let mut serial_port = unsafe { SerialPort::new(0x3F8) };
     serial_port.init();
     Mutex::new(serial_port)

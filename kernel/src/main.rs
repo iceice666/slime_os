@@ -24,8 +24,7 @@ pub fn kernel_main(boot_info: &'static mut bootloader_api::BootInfo) -> ! {
     #[cfg(test)]
     test_main();
 
-
-    loop {}
+    slime_os_kernel::hlt_loop()
 }
 
 /// This function is called on panic.
@@ -33,7 +32,7 @@ pub fn kernel_main(boot_info: &'static mut bootloader_api::BootInfo) -> ! {
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     println!("{}", info);
-    loop {}
+    slime_os_kernel::hlt_loop()
 }
 
 #[cfg(test)]
@@ -41,4 +40,3 @@ fn panic(info: &PanicInfo) -> ! {
 fn panic(info: &PanicInfo) -> ! {
     slime_os_kernel::test_panic_handler(info)
 }
-

@@ -21,11 +21,21 @@ pub enum QemuExitCode {
 }
 
 pub fn exit_qemu(exit_code: QemuExitCode) {
-    use x86_64::instructions::port::Port;
-
     unsafe {
-        let mut port = Port::new(0xf4);
-        port.write(exit_code as u32);
+        core::arch::asm!(
+            "out dx, eax",
+            in("dx") 0xf4_u16,
+            in("eax") exit_code as u32,
+            options(nomem, nostack, preserves_flags),
+        );
+    }
+}
+
+pub fn hlt_loop() -> ! {
+    loop {
+        unsafe {
+            core::arch::asm!("hlt", options(nomem, nostack, preserves_flags));
+        }
     }
 }
 
@@ -56,7 +66,14 @@ pub fn test_panic_handler(info: &PanicInfo) -> ! {
     serial_println!("[Failed]");
     serial_println!("Panic: {}", info);
     exit_qemu(QemuExitCode::TestFailed);
-    loop {}
+    hlt_loop()
+}
+
+pub fn test_expected_panic_handler(info: &PanicInfo) -> ! {
+    serial_println!("[Passed]");
+    serial_println!("Expected panic: {}", info);
+    exit_qemu(QemuExitCode::Success);
+    hlt_loop()
 }
 
 #[macro_export]
@@ -66,7 +83,7 @@ macro_rules! setup_test_entry {
 
         pub fn kernel_test_main(_: &'static mut bootloader_api::BootInfo) -> ! {
             test_main();
-            loop {}
+            $crate::hlt_loop()
         }
         #[panic_handler]
         fn panic(info: &core::panic::PanicInfo) -> ! {
@@ -74,11 +91,11 @@ macro_rules! setup_test_entry {
         }
     };
 
-    (main: $main:ident) => {
+    (expected_panic: $main:ident) => {
         bootloader_api::entry_point!($main);
         #[panic_handler]
         fn panic(info: &core::panic::PanicInfo) -> ! {
-            $crate::test_panic_handler(info)
+            $crate::test_expected_panic_handler(info)
         }
-    }
+    };
 }

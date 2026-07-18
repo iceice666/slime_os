@@ -2,15 +2,18 @@
 name = "slime_os-kernel"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.96"
 
 [dependencies]
-bootloader_api = "0.11"
+bootloader_api = "0.11.15"
 volatile = { version = "0.6.1", features = ["unstable"] }
-spin = "0.10"
-fontdue = { version = "0.9.3", default-features = false, features = ["hashbrown"]} # Disable SIMD
-noto-sans-mono-bitmap = { version = "0.3.1", features = ["unicode-specials","size_32"] }
-x86_64 = "0.15.2"
+spin = "0.12.2"
+fontdue = { version = "0.9.3", default-features = false, features = ["hashbrown"] } # Disable SIMD
+noto-sans-mono-bitmap = { version = "0.3.2", features = ["unicode-specials", "size_32"] }
 uart_16550 = "0.3.2"
+
+[lib]
+doctest = false
 
 
 [profile.dev]

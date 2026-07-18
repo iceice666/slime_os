@@ -3,3 +3,5 @@ target
 .vscode
 .idea
 debug.sh
+/.direnv/bin
+/.direnv
