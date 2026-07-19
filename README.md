@@ -2,16 +2,16 @@
 
 Slime OS is an experimental atomic personal operating system built from a new kernel and userspace rather than on Linux. Its purpose is to explore capability-based isolation, component-oriented system services, explicit resource authority, and generation-based deployment while progressing toward a system usable on one real daily-driver laptop.
 
-The project is currently a QEMU-bootable Rust `no_std` kernel with a minimal userspace component graph. It can build a UEFI image, boot under QEMU, print through the framebuffer and serial port, run kernel tests, decode a deterministic generation manifest, launch `init`, `console`, `dango`, `sysinfo`, and `echo-agent` components, pass IPC capabilities between them, and report a healthy vertical slice. The architecture and daily-use goals below remain committed design direction, not claims of current physical-machine support.
+The project is currently a QEMU-verified Rust `no_std` kernel with a minimal userspace component graph, plus an observed removable-media boot on the Framework 13 AMD AI 300 target. It can build a UEFI image, print through GOP and serial, run kernel tests, decode a deterministic generation manifest, launch `init`, `console`, `dango`, `sysinfo`, and `echo-agent` components, pass IPC capabilities between them, and report a healthy vertical slice. Storage, rollbackable generations, native interactive Dango, and daily-driver hardware remain unfinished.
 
 ## Current status
 
-- QEMU is the only verified runtime target.
+- QEMU is the automated verification target; the same vertical slice has also reached `[generation] vertical slice healthy` from removable media on the Framework target.
 - Kernel foundation work is in place: GDT/TSS, IDT exception reporting, physical and virtual memory management, heap allocation, and APIC timer support.
 - Core isolation is exercised by tests: independent userspace components can communicate over IPC, and a faulting component does not corrupt or terminate its peer or the kernel.
 - Generation format 1 has a pinned Zutai-side contract, fixtures, a deterministic host builder, and a kernel decoder.
 - The first QEMU vertical slice is healthy: `init` launches `console`, `dango`, `sysinfo`, and `echo-agent`; Dango resolves executable authority through capabilities; `sysinfo` and `echo-agent` stream structured output; every component exits successfully.
-- Framework laptop bring-up, storage, rollbackable generations, native interactive Dango, and daily-driver hardware support are not complete.
+- Framework safe bring-up is verified with storage authority absent; storage, rollbackable generations, native interactive Dango, and daily-driver hardware support are not complete.
 
 ## Vision
 
@@ -233,7 +233,7 @@ Exit condition: two userspace components communicate, and one may fault without 
 
 Exit condition: the first vertical slice works under QEMU.
 
-### 4. Framework safe bring-up — physical verification pending
+### 4. Framework safe bring-up — verified
 
 - UEFI/GOP console;
 - ACPI discovery;
