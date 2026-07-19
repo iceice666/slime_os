@@ -138,8 +138,7 @@ The kernel enforces capability rights, mappings, DMA-buffer lifetime, and interr
 
 Before IOMMU enforcement exists, DMA-capable driver components remain part of the trusted computing base. This interim path is acceptable only for deterministic QEMU images and dedicated test devices; it does not authorize writes to the Framework's internal NVMe.
 
-### M5.1: Storage capability foundation
-
+### M5.1: Storage capability foundation — done (QEMU `storage_cap_check` passing)
 Deliverables:
 
 - parse ACPI MCFG and enumerate bounded PCI segment/bus/device/function ranges;

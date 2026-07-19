@@ -142,6 +142,31 @@ pub(crate) unsafe fn map_page_in(
     Ok(())
 }
 
+/// Remap 4 KiB virtual page `virt` to a new physical frame `phys`, overwriting
+/// any existing leaf mapping. Used only for the single PCI ECAM scratch page,
+/// which is reused across functions during single-threaded boot enumeration.
+///
+/// # Safety
+///
+/// The caller must ensure the old mapping (if any) is safe to invalidate and
+/// the new `phys` is safe to expose at `virt` with `flags`.
+pub(crate) unsafe fn remap_page_in(
+    root: PhysAddr,
+    virt: VirtAddr,
+    phys: PhysAddr,
+    flags: u64,
+) -> Result<(), MapError> {
+    // SAFETY: same HHDM-walk discipline as `map_page_in`.
+    let pml4 = unsafe { PageTable::at(root) };
+    let pdpt = unsafe { next_table(pml4, index(virt, 4))? };
+    let pd = unsafe { next_table(pdpt, index(virt, 3))? };
+    let pt = unsafe { next_table(pd, index(virt, 2))? };
+    let i = index(virt, 1);
+    pt.entries[i] = (phys.0 & ADDR_MASK) | flags | PTE_PRESENT;
+    flush(virt);
+    Ok(())
+}
+
 /// Map 4 KiB virtual page `virt` in the active address space.
 ///
 /// # Safety
@@ -168,6 +193,25 @@ pub(crate) fn page_flags_in(root: PhysAddr, virt: VirtAddr) -> Option<u64> {
     }
     let leaf = table.entries[index(virt, 1)];
     (leaf & PTE_PRESENT != 0 && leaf & PTE_USER != 0).then_some(leaf)
+}
+
+/// Like [`page_flags_in`] but does not require the `PTE_USER` bit. Used for
+/// kernel-space mappings such as the PCI ECAM scratch page, where intermediate
+/// entries are still created with `PTE_USER` (per `next_table`) but the leaf
+/// intentionally omits it.
+pub(crate) fn leaf_flags_in(root: PhysAddr, virt: VirtAddr) -> Option<u64> {
+    // SAFETY: same HHDM-walk discipline as `page_flags_in`.
+    let pml4 = unsafe { PageTable::at(root) };
+    let mut table: &PageTable = pml4;
+    for level in (2..=4).rev() {
+        let entry = table.entries[index(virt, level)];
+        if entry & PTE_PRESENT == 0 {
+            return None;
+        }
+        table = unsafe { PageTable::at(PhysAddr(entry & ADDR_MASK)) };
+    }
+    let leaf = table.entries[index(virt, 1)];
+    (leaf & PTE_PRESENT != 0).then_some(leaf)
 }
 
 /// Translate a virtual address to its physical address, or `None` if unmapped.

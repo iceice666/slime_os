@@ -156,6 +156,9 @@ pub struct AcpiInfo {
     pub madt: MadtInfo,
     pub power: PowerInfo,
     pub i8042_present: bool,
+    /// The raw MCFG table, if firmware provided one. PCI ECAM parsing lives
+    /// in [`crate::pci`]; ACPI only surfaces the validated table bytes.
+    pub mcfg: Option<&'static [u8]>,
 }
 
 #[derive(Clone, Copy)]
@@ -317,6 +320,7 @@ fn discover() -> Result<AcpiInfo, AcpiError> {
 
     let mut madt = None;
     let mut fadt = None;
+    let mut mcfg = None;
     for index in 0..entries {
         let offset = SDT_HEADER_LEN + index * entry_size;
         let address = if entry_size == 8 {
@@ -331,6 +335,7 @@ fn discover() -> Result<AcpiInfo, AcpiError> {
         match table.get(..4) {
             Some(b"APIC") if madt.is_none() => madt = Some(parse_madt(table)?),
             Some(b"FACP") if fadt.is_none() => fadt = Some(parse_fadt(table)?),
+            Some(b"MCFG") if mcfg.is_none() => mcfg = Some(table),
             _ => {}
         }
     }
@@ -361,6 +366,7 @@ fn discover() -> Result<AcpiInfo, AcpiError> {
             s5_type_b,
         },
         i8042_present: fadt.i8042_present,
+        mcfg,
     })
 }
 

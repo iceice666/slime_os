@@ -20,6 +20,12 @@ run_gui:
 test:
     cd kernel && cargo test -- -display none
 
+
+# M5.1: exercise the storage-capability foundation (PCI/DMA/cap/block-proto)
+# under QEMU. Proves an unprivileged component cannot acquire device rights.
+storage_cap_check:
+    cd kernel && cargo test --test storage_capability -- -display none
+
 # Run with QEMU monitor on stdin.
 monitor:
     cd kernel && cargo run -- -monitor stdio -serial null

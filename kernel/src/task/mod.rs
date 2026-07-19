@@ -131,7 +131,7 @@ pub fn spawn_from_cap(executable_slot: u32, cap_slots: &[u32]) -> Result<TaskId,
             .filter(|cap| cap.rights & crate::capability::RIGHT_EXEC != 0)
             .and_then(|cap| match cap.object {
                 KernelObject::Executable(bytes) => Some(bytes),
-                KernelObject::Endpoint(_) => None,
+                _ => None,
             })
             .ok_or(SpawnError::BadExecutable)?;
         for (index, slot) in cap_slots.iter().enumerate() {

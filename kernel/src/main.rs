@@ -9,7 +9,7 @@ extern crate alloc;
 use core::panic::PanicInfo;
 
 use slime_os_kernel::frame_buffer::init_framebuffer;
-use slime_os_kernel::{acpi, gdt, input, interrupts, memory, println, serial_println, time};
+use slime_os_kernel::{acpi, gdt, input, interrupts, memory, pci, println, serial_println, time};
 #[cfg(test)]
 mod testing;
 
@@ -80,6 +80,35 @@ fn kernel_main() {
         "[bringup] ACPI {:?}: {} tables",
         platform.root_kind, platform.table_count
     );
+
+    // PCI ECAM discovery (M5.1). Best-effort: enumerate and report the
+    // bounded function set; an absent MCFG is non-fatal for the existing
+    // component vertical slice.
+    match pci::init() {
+        Ok(segments) => {
+            let functions = pci::enumerate().unwrap_or_default();
+            serial_println!(
+                "[pci] {} segment(s), {} function(s)",
+                segments.len(),
+                functions.len(),
+            );
+            for f in functions.iter().take(8) {
+                serial_println!(
+                    "[pci] seg{} {:#04x}:{:02x}.{} vendor={:#06x} device={:#06x} class={:#06x}",
+                    f.segment,
+                    f.bus,
+                    f.device,
+                    f.function,
+                    f.vendor_id,
+                    f.device_id,
+                    f.class_code,
+                );
+            }
+        }
+        Err(error) => {
+            serial_println!("[pci] MCFG/ECAM unavailable: {:?}", error);
+        }
+    }
 
     // Prove the heap really works before relying on it.
     {
