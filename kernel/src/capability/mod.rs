@@ -31,6 +31,9 @@ pub const RIGHT_BUFFER_WRITE: u32 = 1 << 8;
 pub const RIGHT_MAP: u32 = 1 << 9;
 pub const RIGHT_BLOCK_READ: u32 = 1 << 10;
 pub const RIGHT_BLOCK_WRITE: u32 = 1 << 11;
+// M5.4 object-store rights. Each gate lives in `SYS_STORE_TRANSACT`.
+pub const RIGHT_STORE_READ: u32 = 1 << 12;
+pub const RIGHT_STORE_WRITE: u32 = 1 << 13;
 
 /// All rights a capability may ever carry. Used to reject unknown bits.
 pub const RIGHT_ALL: u32 = RIGHT_SEND
@@ -44,7 +47,9 @@ pub const RIGHT_ALL: u32 = RIGHT_SEND
     | RIGHT_BUFFER_WRITE
     | RIGHT_MAP
     | RIGHT_BLOCK_READ
-    | RIGHT_BLOCK_WRITE;
+    | RIGHT_BLOCK_WRITE
+    | RIGHT_STORE_READ
+    | RIGHT_STORE_WRITE;
 
 #[derive(Clone)]
 pub struct Capability {
@@ -78,6 +83,10 @@ pub enum KernelObject {
     Irq(IrqLine),
     SharedBuffer(SharedRegion),
     BlockDevice,
+    /// Authority over the GPT-validated, content-addressed object store
+    /// partition (M5.4). Created by the kernel bootstrap; the store service
+    /// resolves and bounds the partition through GPT validation.
+    ObjectStore,
 }
 
 impl KernelObject {
@@ -94,6 +103,7 @@ impl KernelObject {
             KernelObject::Irq(_) => RIGHT_IRQ_ACK,
             KernelObject::SharedBuffer(_) => RIGHT_BUFFER_WRITE | RIGHT_MAP,
             KernelObject::BlockDevice => RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE,
+            KernelObject::ObjectStore => RIGHT_STORE_READ | RIGHT_STORE_WRITE,
         };
         object_rights | RIGHT_TRANSFER
     }

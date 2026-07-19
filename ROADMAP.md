@@ -12,7 +12,7 @@ Completion requires observable behavior, not only compiled code or framebuffer o
 | 2. Isolation and IPC | Core QEMU exit passing | Two userspace components communicate, and one may fault without corrupting the other or the kernel. |
 | 3. Bootstrap component graph | QEMU vertical slice passing | The first isolated userspace vertical slice works under QEMU. |
 | 4. Framework safe bring-up | Verified | The same isolated userspace slice runs from removable media without modifying internal storage. |
-| 5. Storage and generations | In progress — M5.1 through M5.3 complete | A failed pending generation automatically leaves or restores a bootable known-good generation. |
+| 5. Storage and generations | In progress — M5.1 through M5.4 complete | A failed pending generation automatically leaves or restores a bootable known-good generation. |
 | 6. Native interactive environment | Minimal stub only | Native components can inspect, build or stage, select, and roll back generations. |
 | 7. Daily-driver hardware | Not yet implemented | The Framework target supports the hardware and lifecycle needed for daily use. |
 
@@ -85,7 +85,7 @@ Exit condition: the same isolated userspace slice runs on the Framework without 
 
 ## Milestone 5: Storage and generations
 
-**Status:** In progress. M5.1 through M5.3 are complete; GPT and the integrity-checked object store (M5.4) are next. The checked BootState transition model (M5.6a) has no code dependency and may run in parallel with M5.4 and M5.5.
+**Status:** In progress. M5.1 through M5.4 are complete; generation format and boot-state records (M5.5) are next. The checked BootState transition model (M5.6a) has no code dependency and may run in parallel with M5.5.
 
 Top-level scope:
 
@@ -119,7 +119,7 @@ The repository already provides:
 The remaining gaps include:
 
 - no virtio transport or device backend behind the block protocol;
-- no GPT or persistent object store;
+- no GPT or persistent object store beyond the QEMU object-store slice (M5.4): the store is not yet wired into generation loading, staging, or boot-state selection;
 - no persistent boot-state record;
 - no pending/known-good selection, health promotion, rollback, or GC implementation;
 - generation source fields such as `parent`, state policy, health policy, and component dependencies are not represented in the current boot-time binary;
@@ -255,6 +255,8 @@ Exit condition: disposable QEMU block images support durable, bounded, explicitl
 Follow-up (not an M5.3 exit requirement): the fault-injection recording added here is the hand-written instance of a schema-generated interposition membrane and IPC flight recorder (directions register entries 7 and 11); generalizing it consumes only the M5.2a contract tooling.
 
 ### M5.4: GPT and integrity-checked object store
+
+**Status:** Complete. `storage_store_check` boots disposable GPT fixtures through the capability-gated `store-probe`: it resolves the object-store partition, retrieves the seeded content-addressed object with full-payload SHA-256 verification, appends and seals a new object durably across a fresh boot, falls back to the older superblock root when the newest is damaged, and rejects conflicting GPT copies and a no-valid-superblock store. GPT copy-recovery, overlap/overflow/CRC rejection, duplicate-identity conflicts, and interruption at every append/commit boundary are pinned by `kernel/tests/object_store.rs` (UEFI firmware auto-repairs a damaged primary GPT before the kernel runs, so damaged-header recovery is unit-tested rather than in QEMU).
 
 Deliverables:
 

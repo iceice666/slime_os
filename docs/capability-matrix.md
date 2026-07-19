@@ -32,7 +32,7 @@ Every new object or right must satisfy these rules before it ships:
 
 ## Current matrix
 
-Rights are a flat `u32`; bits 12–31 are free.
+Rights are a flat `u32`; bits 14–31 are free.
 
 | Object | Right (bit) | Gated operation | Creation authority | Gate status |
 | --- | --- | --- | --- | --- |
@@ -48,6 +48,8 @@ Rights are a flat `u32`; bits 12–31 are free.
 | SharedBuffer | MAP (9) | future map-into-address-space operation | same | **ungated** |
 | BlockDevice | BLOCK_READ (10) | read requests in `SYS_BLOCK_TRANSACT` | kernel | gated |
 | BlockDevice | BLOCK_WRITE (11) | write and flush requests in `SYS_BLOCK_TRANSACT` | kernel | gated (M5.3) |
+| ObjectStore | STORE_READ (12) | stat/get requests in `SYS_STORE_TRANSACT` | kernel bootstrap | gated (M5.4) |
+| ObjectStore | STORE_WRITE (13) | put requests in `SYS_STORE_TRANSACT` | kernel bootstrap | gated (M5.4) |
 
 Semantics not visible in the table:
 

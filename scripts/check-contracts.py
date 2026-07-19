@@ -16,6 +16,8 @@ BLOCK_CONTRACT = ROOT / "contracts" / "block" / "v1"
 BLOCK_BINDING_GENERATOR = ROOT / "scripts" / "generate-block-bindings.py"
 COMPONENT_CONTRACT = ROOT / "contracts" / "component" / "v1"
 COMPONENT_BINDING_GENERATOR = ROOT / "scripts" / "generate-component-bindings.py"
+STORE_CONTRACT = ROOT / "contracts" / "store" / "v1"
+STORE_BINDING_GENERATOR = ROOT / "scripts" / "generate-store-bindings.py"
 
 
 def run(*arguments: str) -> str:
@@ -101,4 +103,40 @@ subprocess.run(
     check=True,
 )
 
-print("Generation manifest, block protocol, and component image contracts passed")
+run("check", str(STORE_CONTRACT / "schema.zt"))
+run("check", str(STORE_CONTRACT / "gen_rust.zt"))
+subprocess.run(
+    [sys.executable, str(STORE_BINDING_GENERATOR), "--check"],
+    cwd=ROOT,
+    check=True,
+)
+
+with tempfile.TemporaryDirectory(prefix="slime-store-contract-") as temporary:
+    source = Path(temporary) / "store-binding-check.S"
+    obj = Path(temporary) / "store-binding-check.o"
+    source.write_text(
+        ".intel_syntax noprefix\n"
+        '.include "store_proto.inc"\n'
+        ".section .text\n"
+        ".global _start\n"
+        "_start:\n"
+        "    STORE_VALIDATE_REQUEST rdi, rsi, invalid\n"
+        "    STORE_VALIDATE_REPLY rdi, rsi, invalid\n"
+        "invalid:\n"
+        "    ret\n",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            "as",
+            "--64",
+            "-I",
+            str(ROOT / "components" / "include"),
+            "-o",
+            str(obj),
+            str(source),
+        ],
+        check=True,
+    )
+
+print("Generation manifest, block protocol, component image, and store contracts passed")

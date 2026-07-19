@@ -1,5 +1,6 @@
 use crate::capability::{
-    KernelObject, RIGHT_BLOCK_READ, RIGHT_BLOCK_WRITE, RIGHT_RECV, RIGHT_SEND, RIGHT_TRANSFER,
+    KernelObject, RIGHT_BLOCK_READ, RIGHT_BLOCK_WRITE, RIGHT_RECV, RIGHT_SEND, RIGHT_STORE_READ,
+    RIGHT_STORE_WRITE, RIGHT_TRANSFER,
 };
 use crate::ipc::{self, MAX_CAPS_PER_MSG, MAX_MSG};
 use crate::task::{self, TermReason};
@@ -12,6 +13,7 @@ pub const SYS_EXIT: u64 = 3;
 pub const SYS_SPAWN: u64 = 4;
 pub const SYS_DEBUG_WRITE: u64 = 5;
 pub const SYS_BLOCK_TRANSACT: u64 = 6;
+pub const SYS_STORE_TRANSACT: u64 = 7;
 
 const USER_TOP: u64 = 0x0000_8000_0000_0000;
 
@@ -39,6 +41,7 @@ pub fn dispatch(frame: &mut UserFrame) {
         SYS_SPAWN => sys_spawn(frame),
         SYS_DEBUG_WRITE => sys_debug_write(frame),
         SYS_BLOCK_TRANSACT => sys_block_transact(frame),
+        SYS_STORE_TRANSACT => sys_store_transact(frame),
         _ => frame.rax = ipc::ERR_INVALID_ARG as u64,
     }
 }
@@ -192,6 +195,85 @@ fn sys_block_transact(frame: &mut UserFrame) {
 
     let mut reply = [0u8; crate::block_proto::REPLY_LEN];
     crate::block_service::transact(&request, &mut reply);
+    unsafe {
+        core::ptr::copy_nonoverlapping(reply.as_ptr(), reply_address as *mut u8, reply.len())
+    };
+    frame.rax = ipc::ERR_SUCCESS as u64;
+}
+
+fn sys_store_transact(frame: &mut UserFrame) {
+    let slot = frame.rdi as u32;
+    let request_address = frame.rsi;
+    let reply_address = frame.rdx;
+    if !current_user_range(request_address, crate::store_proto::REQUEST_LEN, false)
+        || !current_user_range(reply_address, crate::store_proto::REPLY_LEN, true)
+    {
+        frame.rax = ipc::ERR_INVALID_ARG as u64;
+        return;
+    }
+    let rights = task::with_current_mut(|task| {
+        task.caps
+            .get(slot)
+            .and_then(|cap| matches!(cap.object, KernelObject::ObjectStore).then_some(cap.rights))
+    });
+    let Some(rights) = rights else {
+        frame.rax = ipc::ERR_BAD_CAP as u64;
+        return;
+    };
+
+    let mut request = [0u8; crate::store_proto::REQUEST_LEN];
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            request_address as *const u8,
+            request.as_mut_ptr(),
+            request.len(),
+        )
+    };
+    let decoded = match crate::store_proto::decode_request(&request) {
+        Ok(decoded) => decoded,
+        Err(_) => {
+            // Let the service encode the structured protocol error reply.
+            let mut reply = [0u8; crate::store_proto::REPLY_LEN];
+            crate::store_service::transact(&request, &mut reply);
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    reply.as_ptr(),
+                    reply_address as *mut u8,
+                    reply.len(),
+                )
+            };
+            frame.rax = ipc::ERR_SUCCESS as u64;
+            return;
+        }
+    };
+    let required_right = match decoded.op {
+        crate::store_proto::OP_STAT | crate::store_proto::OP_GET => RIGHT_STORE_READ,
+        crate::store_proto::OP_PUT => RIGHT_STORE_WRITE,
+        _ => 0,
+    };
+    if rights & required_right == 0 {
+        frame.rax = ipc::ERR_BAD_CAP as u64;
+        return;
+    }
+    let payload_valid = match decoded.op {
+        crate::store_proto::OP_STAT => true,
+        crate::store_proto::OP_GET => {
+            decoded.payload_len == 0
+                || current_user_range(decoded.buffer_addr, decoded.payload_len as usize, true)
+        }
+        crate::store_proto::OP_PUT => {
+            decoded.payload_len == 0
+                || current_user_range(decoded.buffer_addr, decoded.payload_len as usize, false)
+        }
+        _ => false,
+    };
+    if !payload_valid {
+        frame.rax = ipc::ERR_INVALID_ARG as u64;
+        return;
+    }
+
+    let mut reply = [0u8; crate::store_proto::REPLY_LEN];
+    crate::store_service::transact(&request, &mut reply);
     unsafe {
         core::ptr::copy_nonoverlapping(reply.as_ptr(), reply_address as *mut u8, reply.len())
     };

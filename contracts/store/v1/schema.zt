@@ -1,0 +1,116 @@
+-- Slime OS object store protocol schema, format version 1.
+--
+-- The typed host-side contract for the object store request/reply protocol
+-- introduced in M5.4 and consumed by the GPT + integrity-checked object
+-- store slice. Concrete reflection stays beside `StoreRequest`/`StoreReply`,
+-- then the pure renderer in `gen_rust.zt` validates field order against the
+-- explicit wire layouts. This module owns the effectful write entry so
+-- reflection folds before host filesystem effects lower.
+--
+-- Logical fields use Zutai `Int`; the parallel layout list gives each field
+-- a fixed width (1, 2, 4, or 8 bytes), signedness, and declaration order.
+-- The renderer assigns packed little-endian offsets and cross-checks
+-- reflected schema names against layout names before writing Rust and
+-- assembly bindings. A 32-byte content hash travels as four u64 fields
+-- (hash0..hash3, little-endian chunks) because layouts carry scalars only.
+
+env ::= import stdlib.env;
+fs ::= import stdlib.fs;
+gen ::= import "gen_rust.zt";
+t ::= import stdlib.text;
+
+formatVersion :: Int = 1;
+requestLen :: Int = 64;
+replyLen :: Int = 64;
+
+-- Protocol constants. The generator emits these as Rust consts.
+-- "SLST" as a little-endian u32.
+storeMagic :: Int = 1414745171;
+opStat :: Int = 1;
+opGet :: Int = 2;
+opPut :: Int = 3;
+
+WireField :: type { name : Text; width : Int; signed : Bool; };
+
+StoreRequest :: type {
+  magic : Int;
+  version : Int;
+  op : Int;
+  flags : Int;
+  reserved : Int;
+  buffer_addr : Int;
+  obj_type : Int;
+  payload_len : Int;
+  hash0 : Int;
+  hash1 : Int;
+  hash2 : Int;
+  hash3 : Int;
+};
+
+StoreReply :: type {
+  magic : Int;
+  version : Int;
+  status : Int;
+  obj_type : Int;
+  payload_len : Int;
+  hash0 : Int;
+  hash1 : Int;
+  hash2 : Int;
+  hash3 : Int;
+};
+
+requestSchema ::= schema StoreRequest;
+replySchema ::= schema StoreReply;
+
+requestLayout :: List WireField = {
+  { name = "magic"; width = 4; signed = false; };
+  { name = "version"; width = 4; signed = false; };
+  { name = "op"; width = 1; signed = false; };
+  { name = "flags"; width = 1; signed = false; };
+  { name = "reserved"; width = 2; signed = false; };
+  { name = "buffer_addr"; width = 8; signed = false; };
+  { name = "obj_type"; width = 4; signed = false; };
+  { name = "payload_len"; width = 4; signed = false; };
+  { name = "hash0"; width = 8; signed = false; };
+  { name = "hash1"; width = 8; signed = false; };
+  { name = "hash2"; width = 8; signed = false; };
+  { name = "hash3"; width = 8; signed = false; };
+};
+
+replyLayout :: List WireField = {
+  { name = "magic"; width = 4; signed = false; };
+  { name = "version"; width = 4; signed = false; };
+  { name = "status"; width = 4; signed = true; };
+  { name = "obj_type"; width = 4; signed = false; };
+  { name = "payload_len"; width = 4; signed = false; };
+  { name = "hash0"; width = 8; signed = false; };
+  { name = "hash1"; width = 8; signed = false; };
+  { name = "hash2"; width = 8; signed = false; };
+  { name = "hash3"; width = 8; signed = false; };
+};
+
+protocol ::= {
+  formatVersion = formatVersion;
+  requestLen = requestLen;
+  replyLen = replyLen;
+  storeMagic = storeMagic;
+  opStat = opStat;
+  opGet = opGet;
+  opPut = opPut;
+  requestFields = requestSchema.fields ?? {;};
+  replyFields = replySchema.fields ?? {;};
+  requestLayout = requestLayout;
+  replyLayout = replyLayout;
+};
+
+main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }
+  = caps => [
+    root := env.get caps.env "SLIME_STORE_BINDINGS_ROOT" ?? ".";
+    bindings := gen.render protocol;
+    rustPath := t.join "" { root; "/kernel/src/store_proto/gen.rs"; };
+    componentPath := t.join "" { root; "/components/include/store_proto.inc"; };
+    fs.writeAll caps.write rustPath bindings.rust;
+    fs.writeAll caps.write componentPath bindings.component
+  ];
+
+main

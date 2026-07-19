@@ -106,6 +106,26 @@ pub fn transact(request: &[u8], reply: &mut [u8; REPLY_LEN]) {
     encode_reply(reply, BLOCK_E_OK, decoded.sector_count);
 }
 
+/// Run `f` against the lazily initialized block device, reinitializing on
+/// transport-fatal errors. Internal kernel services (M5.4 object store)
+/// share the single virtio-blk instance this module owns; there is no
+/// second path to the device.
+pub fn with_device<R>(
+    f: impl FnOnce(&mut VirtioBlock) -> Result<R, VirtioBlkError>,
+) -> Result<R, VirtioBlkError> {
+    let mut device = DEVICE.lock();
+    if device.is_none() {
+        *device = Some(VirtioBlock::find_and_init()?);
+    }
+    let result = f(device.as_mut().expect("block device initialized"));
+    if let Err(error) = &result
+        && error.requires_reinitialize()
+    {
+        *device = None;
+    }
+    result
+}
+
 fn execute(device: &mut VirtioBlock, request: BlockRequest) -> Result<(), VirtioBlkError> {
     match request.flags {
         FLAG_INJECT_REQUEST_FAILURE => return device.inject_failure(),

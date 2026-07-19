@@ -1,0 +1,252 @@
+-- Pure renderer for Slime OS object store protocol bindings.
+-- schema.zt owns concrete reflection and effectful output.
+
+refl ::= import stdlib.reflect;
+t ::= import stdlib.text;
+
+WireField :: type { name : Text; width : Int; signed : Bool; };
+
+Protocol :: type {
+  formatVersion : Int;
+  requestLen : Int;
+  replyLen : Int;
+  storeMagic : Int;
+  opStat : Int;
+  opGet : Int;
+  opPut : Int;
+  requestFields : List refl.SchemaField;
+  replyFields : List refl.SchemaField;
+  requestLayout : List WireField;
+  replyLayout : List WireField;
+};
+
+
+join :: List Text -> Text
+  = parts => t.join "" parts;
+
+digit :: Int -> Text
+  = value => match value {
+    | 0 => "0";
+    | 1 => "1";
+    | 2 => "2";
+    | 3 => "3";
+    | 4 => "4";
+    | 5 => "5";
+    | 6 => "6";
+    | 7 => "7";
+    | 8 => "8";
+    | 9 => "9";
+    | _ => "?";
+  };
+
+natText :: Int -> Text
+  = value => if value < 10
+    then digit value
+    else join { natText (value / 10); digit (value % 10); };
+
+
+validWidth :: WireField -> Bool
+  = field =>
+    (field.width == 1 || field.width == 2 || field.width == 4 || field.width == 8)
+      && (not field.signed || field.width == 4);
+
+allValidWidths :: List WireField -> Bool
+  = fields => match fields {
+    | {;} => true;
+    | { field; ...rest } => validWidth field && allValidWidths rest;
+  };
+
+addWidth :: Int -> WireField -> Int
+  = total field => total + field.width;
+
+wireBytes :: List WireField -> Int
+  = fields => fold addWidth 0 fields;
+
+schemaNames :: List refl.SchemaField -> List Text
+  = fields => map _.name fields;
+
+layoutNames :: List WireField -> List Text
+  = fields => map _.name fields;
+
+schemaFieldsValid :: List refl.SchemaField -> Bool
+  = fields => match fields {
+    | {;} => true;
+    | { field; ...rest } =>
+      field.type == "Int" && not field.optional && schemaFieldsValid rest;
+  };
+
+rustType :: WireField -> Text
+  = field => if field.signed
+    then "i32"
+    else match field.width {
+      | 1 => "u8";
+      | 2 => "u16";
+      | 4 => "u32";
+      | 8 => "u64";
+      | _ => "INVALID_WIDTH";
+    };
+
+constName :: Text -> Text -> Text
+  = prefix fieldName => join { "OFF_"; prefix; "_"; t.toUpper fieldName; };
+
+offsetConsts :: Text -> Int -> List WireField -> Text
+  = prefix offset fields => match fields {
+    | {;} => "";
+    | { field; ...rest } => join {
+      "pub const "; constName prefix field.name; ": usize = "; natText offset; ";\n";
+      offsetConsts prefix (offset + field.width) rest;
+    };
+  };
+
+asmOffsetConsts :: Text -> Int -> List WireField -> Text
+  = prefix offset fields => match fields {
+    | {;} => "";
+    | { field; ...rest } => join {
+      ".equ "; constName prefix field.name; ", "; natText offset; "\n";
+      asmOffsetConsts prefix (offset + field.width) rest;
+    };
+  };
+
+fieldDecls :: List WireField -> Text
+  = fields => match fields {
+    | {;} => "";
+    | { field; ...rest } => join {
+      "    pub "; field.name; ": "; rustType field; ",\n";
+      fieldDecls rest;
+    };
+  };
+
+decodeExpr :: Text -> WireField -> Text
+  = prefix field => if field.width == 1
+    then join { "buf["; constName prefix field.name; "]"; }
+    else join {
+      rustType field; "::from_le_bytes(buf["; constName prefix field.name;
+      ".."; constName prefix field.name; " + "; natText field.width;
+      "].try_into().expect(\"generated store layout\"))";
+    };
+
+decodeFields :: Text -> List WireField -> Text
+  = prefix fields => match fields {
+    | {;} => "";
+    | { field; ...rest } => join {
+      "            "; field.name; ": "; decodeExpr prefix field; ",\n";
+      decodeFields prefix rest;
+    };
+  };
+
+encodeField :: Text -> WireField -> Text
+  = prefix field => if field.width == 1
+    then join { "        buf["; constName prefix field.name; "] = self."; field.name; ";\n"; }
+    else join {
+      "        buf["; constName prefix field.name; ".."; constName prefix field.name;
+      " + "; natText field.width; "].copy_from_slice(&self."; field.name;
+      ".to_le_bytes());\n";
+    };
+
+encodeFields :: Text -> List WireField -> Text
+  = prefix fields => match fields {
+    | {;} => "";
+    | { field; ...rest } => join { encodeField prefix field; encodeFields prefix rest; };
+  };
+
+wireStruct :: Text -> Text -> Text -> List WireField -> Text
+  = name prefix lengthName fields => join {
+    "#[derive(Debug, Clone, Copy, PartialEq, Eq)]\n";
+    "pub struct "; name; " {\n";
+    fieldDecls fields;
+    "}\n\n";
+    "impl "; name; " {\n";
+    "    pub fn decode(buf: &[u8]) -> Option<Self> {\n";
+    "        if buf.len() < "; lengthName; " {\n";
+    "            return None;\n";
+    "        }\n";
+    "        Some(Self {\n";
+    decodeFields prefix fields;
+    "        })\n";
+    "    }\n\n";
+    "    pub fn encode(self) -> [u8; "; lengthName; "] {\n";
+    "        let mut buf = [0u8; "; lengthName; "];\n";
+    encodeFields prefix fields;
+    "        buf\n";
+    "    }\n";
+    "}\n";
+  };
+
+rustBindings :: Protocol -> Text
+  = protocol => join {
+    "// @generated by contracts/store/v1/gen_rust.zt; do not edit.\n";
+    "// Source contract: contracts/store/v1/schema.zt\n\n";
+    "pub const FORMAT_VERSION: u32 = "; natText protocol.formatVersion; ";\n";
+    "pub const STORE_MAGIC: u32 = "; natText protocol.storeMagic; ";\n";
+    "pub const STORE_MAGIC_BYTES: [u8; 4] = STORE_MAGIC.to_le_bytes();\n";
+    "pub const OP_STAT: u8 = "; natText protocol.opStat; ";\n";
+    "pub const OP_GET: u8 = "; natText protocol.opGet; ";\n";
+    "pub const OP_PUT: u8 = "; natText protocol.opPut; ";\n";
+    "pub const REQUEST_LEN: usize = "; natText protocol.requestLen; ";\n";
+    "pub const REPLY_LEN: usize = "; natText protocol.replyLen; ";\n\n";
+    offsetConsts "REQUEST" 0 protocol.requestLayout;
+    "\n";
+    offsetConsts "REPLY" 0 protocol.replyLayout;
+    "\n";
+    wireStruct "WireStoreRequest" "REQUEST" "REQUEST_LEN" protocol.requestLayout;
+    "\n";
+    wireStruct "WireStoreReply" "REPLY" "REPLY_LEN" protocol.replyLayout;
+  };
+
+componentBindings :: Protocol -> Text
+  = protocol => join {
+    "# @generated by contracts/store/v1/gen_rust.zt; do not edit.\n";
+    ".intel_syntax noprefix\n\n";
+    "# Source contract: contracts/store/v1/schema.zt\n\n";
+    ".equ STORE_FORMAT_VERSION, "; natText protocol.formatVersion; "\n";
+    ".equ STORE_MAGIC, "; natText protocol.storeMagic; "\n";
+    ".equ STORE_OP_STAT, "; natText protocol.opStat; "\n";
+    ".equ STORE_OP_GET, "; natText protocol.opGet; "\n";
+    ".equ STORE_OP_PUT, "; natText protocol.opPut; "\n";
+    ".equ STORE_REQUEST_LEN, "; natText protocol.requestLen; "\n";
+    ".equ STORE_REPLY_LEN, "; natText protocol.replyLen; "\n\n";
+    asmOffsetConsts "REQUEST" 0 protocol.requestLayout;
+    "\n";
+    asmOffsetConsts "REPLY" 0 protocol.replyLayout;
+    "\n";
+    ".macro STORE_VALIDATE_REQUEST base, length, invalid\n";
+    "    cmp \\length, STORE_REQUEST_LEN\n";
+    "    jb \\invalid\n";
+    "    cmp DWORD PTR [\\base + OFF_REQUEST_MAGIC], STORE_MAGIC\n";
+    "    jne \\invalid\n";
+    "    cmp DWORD PTR [\\base + OFF_REQUEST_VERSION], STORE_FORMAT_VERSION\n";
+    "    jne \\invalid\n";
+    ".endm\n\n";
+    ".macro STORE_VALIDATE_REPLY base, length, invalid\n";
+    "    cmp \\length, STORE_REPLY_LEN\n";
+    "    jb \\invalid\n";
+    "    cmp DWORD PTR [\\base + OFF_REPLY_MAGIC], STORE_MAGIC\n";
+    "    jne \\invalid\n";
+    "    cmp DWORD PTR [\\base + OFF_REPLY_VERSION], STORE_FORMAT_VERSION\n";
+    "    jne \\invalid\n";
+    ".endm\n";
+  };
+
+valid :: Protocol -> Bool
+  = protocol =>
+    schemaFieldsValid protocol.requestFields
+      && schemaFieldsValid protocol.replyFields
+      && schemaNames protocol.requestFields == layoutNames protocol.requestLayout
+      && schemaNames protocol.replyFields == layoutNames protocol.replyLayout
+      && allValidWidths protocol.requestLayout
+      && allValidWidths protocol.replyLayout
+      && wireBytes protocol.requestLayout <= protocol.requestLen
+      && wireBytes protocol.replyLayout <= protocol.replyLen;
+
+render :: Protocol -> { rust : Text; component : Text; }
+  = protocol => if valid protocol
+    then {
+      rust = rustBindings protocol;
+      component = componentBindings protocol;
+    }
+    else {
+      rust = "INVALID_STORE_SCHEMA";
+      component = "INVALID_STORE_SCHEMA";
+    };
+
+{ render = render; }

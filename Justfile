@@ -44,6 +44,12 @@ storage_write_check:
 storage_fault_check:
     ./scripts/check-storage.py fault /tmp/slime-os-storage-fault.img
 
+# M5.4: GPT + integrity-checked object store: partition recovery, content-
+# addressed retrieval, append/seal durability, and malformed-metadata
+# rejection against disposable fixture images.
+storage_store_check:
+    ./scripts/check-storage.py store /tmp/slime-os-storage-store.img
+
 # Run with QEMU monitor on stdin.
 monitor:
     cd kernel && cargo run -- -monitor stdio -serial null
@@ -86,6 +92,10 @@ block_gen:
 # Regenerate Rust component image bindings from the Zutai schema.
 component_gen:
     python3 scripts/generate-component-bindings.py
+
+# Regenerate Rust + component store protocol bindings from the Zutai schema.
+store_gen:
+    python3 scripts/generate-store-bindings.py
 
 # Validate the pinned generation manifest schema and fixtures.
 contracts_check:

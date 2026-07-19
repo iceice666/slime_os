@@ -2,9 +2,10 @@
 # Storage-authority allowlist for the Framework-safe image.
 #
 # M5.3 introduces one explicit block-write right for disposable QEMU storage
-# checks. This checker proves that authority is neither ambient nor granted to
-# the normal storage probe, and that the Framework boot path cannot enable the
-# test-only write or fault-probe components.
+# checks; M5.4 adds one explicit object-store right for the disposable QEMU
+# store probe. This checker proves that authority is neither ambient nor
+# granted to the normal storage probe, and that the Framework boot path
+# cannot enable the test-only write or fault-probe components.
 
 from __future__ import annotations
 
@@ -25,6 +26,7 @@ ALLOWED_SYSCALLS = {
     "SYS_SPAWN",
     "SYS_DEBUG_WRITE",
     "SYS_BLOCK_TRANSACT",
+    "SYS_STORE_TRANSACT",
 }
 ALLOWED_KERNEL_OBJECTS = {
     "Endpoint",
@@ -34,6 +36,7 @@ ALLOWED_KERNEL_OBJECTS = {
     "Irq",
     "SharedBuffer",
     "BlockDevice",
+    "ObjectStore",
 }
 ALLOWED_RIGHTS = {
     "RIGHT_SEND",
@@ -48,6 +51,8 @@ ALLOWED_RIGHTS = {
     "RIGHT_MAP",
     "RIGHT_BLOCK_READ",
     "RIGHT_BLOCK_WRITE",
+    "RIGHT_STORE_READ",
+    "RIGHT_STORE_WRITE",
     "RIGHT_ALL",
 }
 
@@ -105,6 +110,7 @@ def check_explicit_grants() -> None:
     for name, target in [
         ("block-write-check", "storage-writer"),
         ("block-fault-check", "storage-fault-probe"),
+        ("store-access", "storage-store-probe"),
     ]:
         block = grant_block(manifest, name)
         if f'target = "{target}";' not in block or 'rights = ["read"; "write";];' not in block:

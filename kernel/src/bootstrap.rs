@@ -3,7 +3,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::capability::{
     Capability, KernelObject, RIGHT_BLOCK_READ, RIGHT_BLOCK_WRITE, RIGHT_EXEC, RIGHT_RECV,
-    RIGHT_SEND, RIGHT_TRANSFER,
+    RIGHT_SEND, RIGHT_STORE_READ, RIGHT_STORE_WRITE, RIGHT_TRANSFER,
 };
 use crate::generation::{self, Generation};
 use crate::{ipc, println, serial_println, task};
@@ -16,6 +16,7 @@ static ECHO_ID: AtomicU64 = AtomicU64::new(0);
 static STORAGE_PROBE_ID: AtomicU64 = AtomicU64::new(0);
 static STORAGE_WRITER_ID: AtomicU64 = AtomicU64::new(0);
 static STORAGE_FAULT_ID: AtomicU64 = AtomicU64::new(0);
+static STORAGE_STORE_ID: AtomicU64 = AtomicU64::new(0);
 
 pub fn start() -> ! {
     let bytes = crate::limine::generation_module();
@@ -58,6 +59,9 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
     let storage_fault_probe = generation
         .component_bytes("storage-fault-probe")
         .expect("storage-fault-probe object missing");
+    let storage_store_probe = generation
+        .component_bytes("storage-store-probe")
+        .expect("storage-store-probe object missing");
 
     require_grant(generation, "console-output", "console", "dango");
     require_grant(generation, "system-information", "init", "sysinfo");
@@ -71,10 +75,36 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         "init",
         "storage-fault-probe",
     );
-    let (storage_component, storage_rights) = match generation.number {
-        2 => (storage_writer, RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE),
-        3 => (storage_fault_probe, RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE),
-        _ => (storage_probe, RIGHT_BLOCK_READ),
+    require_grant(generation, "store-access", "init", "storage-store-probe");
+    let (storage_component, storage_capability) = match generation.number {
+        2 => (
+            storage_writer,
+            Capability {
+                object: KernelObject::BlockDevice,
+                rights: RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE | RIGHT_TRANSFER,
+            },
+        ),
+        3 => (
+            storage_fault_probe,
+            Capability {
+                object: KernelObject::BlockDevice,
+                rights: RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE | RIGHT_TRANSFER,
+            },
+        ),
+        4 => (
+            storage_store_probe,
+            Capability {
+                object: KernelObject::ObjectStore,
+                rights: RIGHT_STORE_READ | RIGHT_STORE_WRITE | RIGHT_TRANSFER,
+            },
+        ),
+        _ => (
+            storage_probe,
+            Capability {
+                object: KernelObject::BlockDevice,
+                rights: RIGHT_BLOCK_READ | RIGHT_TRANSFER,
+            },
+        ),
     };
 
     let (dango_sysinfo, sysinfo_output) = ipc::channel();
@@ -93,10 +123,7 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         executable(echo),
         endpoint(echo_output, RIGHT_SEND),
         executable(storage_component),
-        Capability {
-            object: KernelObject::BlockDevice,
-            rights: storage_rights | RIGHT_TRANSFER,
-        },
+        storage_capability,
     ];
 
     task::spawn_with_caps(init, caps).expect("failed to launch init")
@@ -145,6 +172,7 @@ pub fn record_spawn(component: &'static str, id: task::TaskId) {
         "storage-probe" => &STORAGE_PROBE_ID,
         "storage-writer" => &STORAGE_WRITER_ID,
         "storage-fault-probe" => &STORAGE_FAULT_ID,
+        "storage-store-probe" => &STORAGE_STORE_ID,
         _ => return,
     };
     slot.store(id, Ordering::Relaxed);
@@ -162,6 +190,10 @@ extern "C" fn on_idle() {
         (
             "storage-fault-probe",
             STORAGE_FAULT_ID.load(Ordering::Relaxed),
+        ),
+        (
+            "storage-store-probe",
+            STORAGE_STORE_ID.load(Ordering::Relaxed),
         ),
     ];
     let mut healthy = true;

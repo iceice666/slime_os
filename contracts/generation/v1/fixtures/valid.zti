@@ -15,6 +15,7 @@
     { id = "sha256:storage-probe"; kind = "component"; size = 32768; };
     { id = "sha256:storage-writer"; kind = "component"; size = 32768; };
     { id = "sha256:storage-fault-probe"; kind = "component"; size = 32768; };
+    { id = "sha256:storage-store-probe"; kind = "component"; size = 65536; };
   ];
 
   components = [
@@ -66,6 +67,12 @@
       role = "application";
       dependencies = [];
     };
+    {
+      name = "storage-store-probe";
+      object = "sha256:storage-store-probe";
+      role = "application";
+      dependencies = [];
+    };
   ];
   grants = [
     {
@@ -114,6 +121,13 @@
       name = "block-fault-check";
       source = "init";
       target = "storage-fault-probe";
+      rights = ["read"; "write";];
+      transferable = false;
+    };
+    {
+      name = "store-access";
+      source = "init";
+      target = "storage-store-probe";
       rights = ["read"; "write";];
       transferable = false;
     };
