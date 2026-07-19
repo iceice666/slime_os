@@ -12,6 +12,7 @@
     { id = "sha256:dango"; kind = "component"; size = 131072; };
     { id = "sha256:sysinfo"; kind = "component"; size = 32768; };
     { id = "sha256:echo-agent"; kind = "component"; size = 32768; };
+    { id = "sha256:storage-probe"; kind = "component"; size = 32768; };
   ];
 
   components = [
@@ -45,6 +46,12 @@
       role = "application";
       dependencies = [];
     };
+    {
+      name = "storage-probe";
+      object = "sha256:storage-probe";
+      role = "application";
+      dependencies = [];
+    };
   ];
   grants = [
     {
@@ -75,6 +82,13 @@
       rights = ["write";];
       transferable = false;
     };
+    {
+      name = "block-read";
+      source = "init";
+      target = "storage-probe";
+      rights = ["read";];
+      transferable = false;
+    };
   ];
 
   state = [
@@ -94,6 +108,6 @@
 
   health = {
     bootAttempts = 3;
-    requiredComponents = ["init"; "console"; "dango"; "echo-agent";];
+    requiredComponents = ["init"; "console"; "dango"; "echo-agent"; "storage-probe";];
   };
 }

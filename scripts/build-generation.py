@@ -52,7 +52,10 @@ def build_component(name: str, output: Path) -> bytes:
     source = COMPONENT_SOURCES / f"{name}.S"
     obj = output / f"{name}.o"
     binary = output / f"{name}.bin"
-    subprocess.run(["as", "--64", "-o", obj, source], check=True)
+    subprocess.run(
+        ["as", "--64", "-I", str(ROOT / "components" / "include"), "-o", obj, source],
+        check=True,
+    )
     subprocess.run(["objcopy", "-O", "binary", "-j", ".text", obj, binary], check=True)
     return binary.read_bytes()
 

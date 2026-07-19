@@ -8,6 +8,7 @@ extern crate alloc;
 
 pub mod acpi;
 pub mod block_proto;
+pub mod block_service;
 pub mod bootstrap;
 pub mod capability;
 pub mod crt;
@@ -28,6 +29,7 @@ pub mod syscall;
 pub mod task;
 pub mod time;
 pub mod trap;
+pub mod virtio_blk;
 
 use core::panic::PanicInfo;
 

@@ -1,7 +1,9 @@
 use alloc::vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use crate::capability::{Capability, KernelObject, RIGHT_EXEC, RIGHT_RECV, RIGHT_SEND};
+use crate::capability::{
+    Capability, KernelObject, RIGHT_BLOCK_READ, RIGHT_EXEC, RIGHT_RECV, RIGHT_SEND,
+};
 use crate::generation::{self, Generation};
 use crate::{ipc, println, serial_println, task};
 
@@ -10,6 +12,7 @@ static CONSOLE_ID: AtomicU64 = AtomicU64::new(0);
 static DANGO_ID: AtomicU64 = AtomicU64::new(0);
 static SYSINFO_ID: AtomicU64 = AtomicU64::new(0);
 static ECHO_ID: AtomicU64 = AtomicU64::new(0);
+static STORAGE_PROBE_ID: AtomicU64 = AtomicU64::new(0);
 
 pub fn start() -> ! {
     let bytes = crate::limine::generation_module();
@@ -43,11 +46,15 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
     let echo = generation
         .component_bytes("echo-agent")
         .expect("echo-agent object missing");
+    let storage_probe = generation
+        .component_bytes("storage-probe")
+        .expect("storage-probe object missing");
 
     require_grant(generation, "console-output", "console", "dango");
     require_grant(generation, "system-information", "init", "sysinfo");
     require_grant(generation, "echo-request", "echo-agent", "dango");
     require_grant(generation, "echo-reply", "dango", "echo-agent");
+    require_grant(generation, "block-read", "init", "storage-probe");
 
     let (dango_sysinfo, sysinfo_output) = ipc::channel();
     let (dango_echo, echo_output) = ipc::channel();
@@ -64,6 +71,11 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         endpoint(sysinfo_output, RIGHT_SEND),
         executable(echo),
         endpoint(echo_output, RIGHT_SEND),
+        executable(storage_probe),
+        Capability {
+            object: KernelObject::BlockDevice,
+            rights: RIGHT_BLOCK_READ,
+        },
     ];
 
     task::spawn_with_caps(init, caps).expect("failed to launch init")
@@ -100,6 +112,7 @@ pub fn record_spawn(component: &'static str, id: task::TaskId) {
         "dango" => &DANGO_ID,
         "sysinfo" => &SYSINFO_ID,
         "echo-agent" => &ECHO_ID,
+        "storage-probe" => &STORAGE_PROBE_ID,
         _ => return,
     };
     slot.store(id, Ordering::Relaxed);
@@ -112,6 +125,7 @@ extern "C" fn on_idle() {
         ("dango", DANGO_ID.load(Ordering::Relaxed)),
         ("sysinfo", SYSINFO_ID.load(Ordering::Relaxed)),
         ("echo-agent", ECHO_ID.load(Ordering::Relaxed)),
+        ("storage-probe", STORAGE_PROBE_ID.load(Ordering::Relaxed)),
     ];
     let mut healthy = true;
     for (name, id) in checks {

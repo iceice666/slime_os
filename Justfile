@@ -26,6 +26,16 @@ test:
 storage_cap_check:
     cd kernel && cargo test --test storage_capability -- -display none
 
+# M5.2: attach a disposable read-only virtio block fixture and require the
+# storage-probe component to read and verify sector zero through its capability.
+storage_read_check:
+    rm -f /tmp/slime-os-storage-read.img
+    ./scripts/build-storage-fixture.py /tmp/slime-os-storage-read.img
+    cd kernel && cargo run -- \
+        -display none \
+        -drive if=none,id=slime-storage,format=raw,readonly=on,file=/tmp/slime-os-storage-read.img \
+        -device virtio-blk-pci,drive=slime-storage,disable-legacy=on,queue-size=8
+
 # Run with QEMU monitor on stdin.
 monitor:
     cd kernel && cargo run -- -monitor stdio -serial null

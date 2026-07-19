@@ -28,7 +28,7 @@ extern crate alloc;
 use core::sync::atomic::Ordering;
 
 use slime_os_kernel::block_proto::{
-    BLOCK_MAGIC, FORMAT_VERSION, MAX_SECTORS_PER_REQUEST, OP_FLUSH, OP_READ, ProtoError,
+    BLOCK_MAGIC, FORMAT_VERSION, MAX_SECTORS_PER_REQUEST, OP_FLUSH, OP_READ, OP_WRITE, ProtoError,
     WireBlockRequest, decode_request,
 };
 use slime_os_kernel::capability::{
@@ -168,6 +168,12 @@ fn block_proto_rejects_out_of_range() {
 fn block_proto_rejects_flush_with_payload() {
     let request = block_request(OP_FLUSH, 1);
     assert_eq!(decode_request(&request.encode()), Err(ProtoError::BadOp));
+}
+
+#[test_case]
+fn read_only_slice_identifies_write_requests() {
+    let request = decode_request(&block_request(OP_WRITE, 1).encode()).unwrap();
+    assert!(request.is_write());
 }
 
 #[test_case]

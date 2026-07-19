@@ -2,7 +2,7 @@
 
 Slime OS is an experimental atomic personal operating system built from a new kernel and userspace rather than on Linux. Its purpose is to explore capability-based isolation, component-oriented system services, explicit resource authority, and generation-based deployment while progressing toward a system usable on one real daily-driver laptop.
 
-The project is currently a QEMU-verified Rust `no_std` kernel with a minimal userspace component graph, plus an observed removable-media boot on the Framework 13 AMD AI 300 target. It can build a UEFI image, print through GOP and serial, run kernel tests, decode a deterministic generation manifest, launch `init`, `console`, `dango`, `sysinfo`, and `echo-agent` components, pass IPC capabilities between them, and report a healthy vertical slice. The storage capability foundation is in place, but block I/O, rollbackable generations, native interactive Dango, and daily-driver hardware remain unfinished.
+The project is currently a QEMU-verified Rust `no_std` kernel with a minimal userspace component graph, plus an observed removable-media boot on the Framework 13 AMD AI 300 target. It can build a UEFI image, print through GOP and serial, run kernel tests, decode a deterministic generation manifest, launch `init`, `console`, `dango`, `sysinfo`, `echo-agent`, and `storage-probe` components, pass IPC capabilities between them, read and SHA-256 verify a sector from a read-only virtio block device, and report a healthy vertical slice. Durable writes, rollbackable generations, native interactive Dango, and daily-driver hardware remain unfinished.
 
 ## Current status
 
@@ -13,7 +13,8 @@ The project is currently a QEMU-verified Rust `no_std` kernel with a minimal use
 - The first QEMU vertical slice is healthy: `init` launches `console`, `dango`, `sysinfo`, and `echo-agent`; Dango resolves executable authority through capabilities; `sysinfo` and `echo-agent` stream structured output; every component exits successfully.
 - The storage capability foundation (M5.1) is complete: ACPI MCFG parsing, bounded PCI enumeration, rights-checked capabilities for PCI functions, DMA memory, interrupts, and shared memory, DMA pinning guarded against reclamation while requests are outstanding, and a bounded block request/reply IPC protocol, verified by the `storage_cap_check` QEMU target.
 - Typed IPC schemas (M5.2a) are complete: the versioned Zutai block contract generates kernel Rust and component GNU assembler bindings, with stale-output, assembler, round-trip, bounds, and version checks.
-- Framework safe bring-up is verified with storage authority absent; virtio block I/O, durable writes, rollbackable generations, native interactive Dango, and daily-driver hardware support are not complete.
+- The read-only virtio block vertical slice (M5.2) is complete: a capability-gated userspace probe reads a fixed QEMU sector, verifies its SHA-256 digest, and confirms structured rejection of writes, short buffers, and out-of-range LBAs through `storage_read_check`.
+- Framework safe bring-up is verified with storage authority absent; durable writes, rollbackable generations, native interactive Dango, and daily-driver hardware support are not complete.
 
 ## Vision
 
@@ -233,11 +234,11 @@ Current sequence:
 2. Isolation and IPC — core QEMU exit passing.
 3. Bootstrap component graph — QEMU vertical slice passing.
 4. Framework safe bring-up — verified.
-5. Storage and generations — in progress; capability foundation (M5.1) complete.
+5. Storage and generations — in progress; M5.1, M5.2a, and M5.2 complete.
 6. Native interactive environment — minimal stub only.
 7. Daily-driver hardware — not yet implemented.
 
-The current milestone is storage and rollbackable generations. Its exit condition is that a failed pending generation automatically leaves or restores a bootable known-good generation. The capability foundation (M5.1) is complete; the next slice is read-only virtio block I/O. `ROADMAP.md` decomposes the remaining work into typed IPC schemas, virtio block I/O, durable writes, GPT and the object store, boot-state records, rollback and GC, and Framework NVMe safety promotion.
+The current milestone is storage and rollbackable generations. Its exit condition is that a failed pending generation automatically leaves or restores a bootable known-good generation. The capability foundation (M5.1), typed IPC schemas (M5.2a), and read-only virtio block I/O (M5.2) are complete; durable virtio writes and fault handling (M5.3) are next. `ROADMAP.md` decomposes the remaining work into durable writes, GPT and the object store, boot-state records, rollback and GC, and Framework NVMe safety promotion.
 
 ## Current repository layout
 

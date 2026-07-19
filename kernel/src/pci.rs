@@ -48,9 +48,9 @@ const MAX_CAPABILITIES: usize = 48;
 const CAP_LIST_END: u8 = 0;
 
 const BAR_COUNT: usize = 6;
-const BAR_TYPE_MASK: u32 = 0b11;
-const BAR_TYPE_IO: u32 = 0b01;
-const BAR_TYPE_MEM64: u32 = 0b10;
+const BAR_TYPE_MASK: u32 = 0b111;
+const BAR_TYPE_IO: u32 = 0b001;
+const BAR_TYPE_MEM64: u32 = 0b100;
 const BAR_PREFETCHABLE: u32 = 1 << 3;
 const BAR_IO_MASK: u32 = 0xffff_fffc;
 const BAR_MEM_MASK: u32 = 0xffff_fff0;
@@ -270,6 +270,60 @@ fn read_config_dword(offset: usize) -> u32 {
     b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)
 }
 
+/// Read one byte from an explicitly selected function's conventional PCI
+/// configuration space.
+pub fn config_read_u8(info: &PciFunctionInfo, offset: usize) -> Result<u8, PciError> {
+    if offset >= CONFIG_SPACE_SIZE {
+        return Err(PciError::BadCapabilityChain);
+    }
+    let segment = find_segment(info.segment)?;
+    map_config_page(segment, info.bus, info.device, info.function)?;
+    Ok(read_config_byte(offset))
+}
+
+/// Read one little-endian word from conventional PCI configuration space.
+pub fn config_read_u16(info: &PciFunctionInfo, offset: usize) -> Result<u16, PciError> {
+    if offset
+        .checked_add(2)
+        .is_none_or(|end| end > CONFIG_SPACE_SIZE)
+    {
+        return Err(PciError::BadCapabilityChain);
+    }
+    let segment = find_segment(info.segment)?;
+    map_config_page(segment, info.bus, info.device, info.function)?;
+    Ok(read_config_word(offset))
+}
+
+/// Read one little-endian dword from conventional PCI configuration space.
+pub fn config_read_u32(info: &PciFunctionInfo, offset: usize) -> Result<u32, PciError> {
+    if offset
+        .checked_add(4)
+        .is_none_or(|end| end > CONFIG_SPACE_SIZE)
+    {
+        return Err(PciError::BadCapabilityChain);
+    }
+    let segment = find_segment(info.segment)?;
+    map_config_page(segment, info.bus, info.device, info.function)?;
+    Ok(read_config_dword(offset))
+}
+
+/// Update the PCI command register for one explicitly selected function.
+pub fn enable_memory_and_bus_master(info: &PciFunctionInfo) -> Result<(), PciError> {
+    const COMMAND: usize = 0x04;
+    const MEMORY_SPACE: u16 = 1 << 1;
+    const BUS_MASTER: u16 = 1 << 2;
+
+    let segment = find_segment(info.segment)?;
+    map_config_page(segment, info.bus, info.device, info.function)?;
+    let value = read_config_word(COMMAND) | MEMORY_SPACE | BUS_MASTER;
+    // SAFETY: the ECAM page for `info` is mapped writable and the command
+    // register is a naturally aligned 16-bit configuration register.
+    unsafe {
+        core::ptr::write_volatile((CONFIG_SCRATCH_VA + COMMAND as u64) as *mut u16, value);
+    }
+    Ok(())
+}
+
 /// Copy the full 256-byte config space of the currently mapped function into a
 /// buffer, so the pure parsers can run against a stable image.
 fn read_config_space(buf: &mut [u8; CONFIG_SPACE_SIZE]) {
@@ -282,11 +336,138 @@ fn read_config_space(buf: &mut [u8; CONFIG_SPACE_SIZE]) {
 /// rejects 64-bit BARs missing their high word, IO BARs with bad encoding, or
 /// any BAR whose probed size is zero or non-power-of-two for memory regions.
 pub fn probe_bars(info: &PciFunctionInfo) -> Result<[BarInfo; BAR_COUNT], PciError> {
+    const COMMAND: usize = 0x04;
+
     let segment = find_segment(info.segment)?;
     map_config_page(segment, info.bus, info.device, info.function)?;
-    let mut config = [0u8; CONFIG_SPACE_SIZE];
-    read_config_space(&mut config);
-    parse_bars(&config)
+    let command = read_config_word(COMMAND);
+    // Disable IO and memory decoding while probing BAR sizes, as required by
+    // PCI. Bus mastering is left unchanged.
+    unsafe {
+        core::ptr::write_volatile(
+            (CONFIG_SCRATCH_VA + COMMAND as u64) as *mut u16,
+            command & !0b11,
+        );
+    }
+
+    let mut bars = [BarInfo {
+        index: 0,
+        kind: BarKind::Memory32,
+        prefetchable: false,
+        size: 0,
+        base: 0,
+    }; BAR_COUNT];
+    let mut slot = 0usize;
+    while slot < BAR_COUNT {
+        let offset = CONFIG_BARS + slot * 4;
+        let original_low = read_config_dword(offset);
+        if original_low == 0 {
+            bars[slot].index = slot as u8;
+            slot += 1;
+            continue;
+        }
+
+        let kind = match original_low & BAR_TYPE_MASK {
+            BAR_TYPE_IO => BarKind::Io,
+            BAR_TYPE_MEM64 => BarKind::Memory64,
+            _ => BarKind::Memory32,
+        };
+        let prefetchable = original_low & BAR_PREFETCHABLE != 0 && kind != BarKind::Io;
+        match kind {
+            BarKind::Io | BarKind::Memory32 => {
+                unsafe {
+                    core::ptr::write_volatile(
+                        (CONFIG_SCRATCH_VA + offset as u64) as *mut u32,
+                        u32::MAX,
+                    );
+                }
+                let size_mask = read_config_dword(offset);
+                unsafe {
+                    core::ptr::write_volatile(
+                        (CONFIG_SCRATCH_VA + offset as u64) as *mut u32,
+                        original_low,
+                    );
+                }
+                let (mask, base) = if kind == BarKind::Io {
+                    (BAR_IO_MASK, (original_low & BAR_IO_MASK) as u64)
+                } else {
+                    (BAR_MEM_MASK, (original_low & BAR_MEM_MASK) as u64)
+                };
+                let size = (!(size_mask & mask)).wrapping_add(1) & mask;
+                if size == 0 || !size.is_power_of_two() {
+                    restore_command(command);
+                    return Err(PciError::BadBar);
+                }
+                bars[slot] = BarInfo {
+                    index: slot as u8,
+                    kind,
+                    prefetchable,
+                    size: size as u64,
+                    base,
+                };
+                slot += 1;
+            }
+            BarKind::Memory64 => {
+                if slot + 1 >= BAR_COUNT {
+                    restore_command(command);
+                    return Err(PciError::BadBar);
+                }
+                let original_high = read_config_dword(offset + 4);
+                unsafe {
+                    core::ptr::write_volatile(
+                        (CONFIG_SCRATCH_VA + offset as u64) as *mut u32,
+                        u32::MAX,
+                    );
+                    core::ptr::write_volatile(
+                        (CONFIG_SCRATCH_VA + offset as u64 + 4) as *mut u32,
+                        u32::MAX,
+                    );
+                }
+                let size_low = read_config_dword(offset);
+                let size_high = read_config_dword(offset + 4);
+                unsafe {
+                    core::ptr::write_volatile(
+                        (CONFIG_SCRATCH_VA + offset as u64) as *mut u32,
+                        original_low,
+                    );
+                    core::ptr::write_volatile(
+                        (CONFIG_SCRATCH_VA + offset as u64 + 4) as *mut u32,
+                        original_high,
+                    );
+                }
+                let size_mask = ((size_high as u64) << 32) | size_low as u64;
+                let size = (!(size_mask & BAR_MEM_MASK64)).wrapping_add(1) & BAR_MEM_MASK64;
+                if size == 0 || !size.is_power_of_two() {
+                    restore_command(command);
+                    return Err(PciError::BadBar);
+                }
+                bars[slot] = BarInfo {
+                    index: slot as u8,
+                    kind,
+                    prefetchable,
+                    size,
+                    base: (((original_high as u64) << 32) | original_low as u64) & BAR_MEM_MASK64,
+                };
+                bars[slot + 1] = BarInfo {
+                    index: (slot + 1) as u8,
+                    kind,
+                    prefetchable,
+                    size: 0,
+                    base: 0,
+                };
+                slot += 2;
+            }
+        }
+    }
+    restore_command(command);
+    Ok(bars)
+}
+
+fn restore_command(command: u16) {
+    // SAFETY: the current function's ECAM page remains mapped writable.
+    unsafe {
+        core::ptr::write_volatile((CONFIG_SCRATCH_VA + 0x04) as *mut u16, command);
+    }
 }
 
 /// Find a segment by id.

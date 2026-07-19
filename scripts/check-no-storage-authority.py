@@ -46,6 +46,7 @@ FORBIDDEN = re.compile(
 )
 ALLOWED_FILES = {
     KERNEL / "main.rs",  # Runtime diagnostic states that the authority is absent.
+    KERNEL / "virtio_blk.rs",  # M5.2 transport defines only read requests.
 }
 
 # The exact syscall surface the kernel is allowed to expose. M5.1 keeps the
@@ -59,6 +60,7 @@ ALLOWED_SYSCALLS = {
     "SYS_EXIT",
     "SYS_SPAWN",
     "SYS_DEBUG_WRITE",
+    "SYS_BLOCK_TRANSACT",
 }
 
 # The exact kernel-object surface the kernel is allowed to expose. M5.1 adds
@@ -72,6 +74,7 @@ ALLOWED_KERNEL_OBJECTS = {
     "DmaMemory",
     "Irq",
     "SharedBuffer",
+    "BlockDevice",
 }
 
 # Rights bit names the kernel is allowed to define. Notably absent:
@@ -87,6 +90,7 @@ ALLOWED_RIGHTS = {
     "RIGHT_IRQ_ACK",
     "RIGHT_BUFFER_WRITE",
     "RIGHT_MAP",
+    "RIGHT_BLOCK_READ",
     # Composite mask, not a grantable right. Must never include a
     # storage-write bit (forbidden by the forbidden-token check).
     "RIGHT_ALL",

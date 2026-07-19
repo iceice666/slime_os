@@ -12,7 +12,7 @@ Completion requires observable behavior, not only compiled code or framebuffer o
 | 2. Isolation and IPC | Core QEMU exit passing | Two userspace components communicate, and one may fault without corrupting the other or the kernel. |
 | 3. Bootstrap component graph | QEMU vertical slice passing | The first isolated userspace vertical slice works under QEMU. |
 | 4. Framework safe bring-up | Verified | The same isolated userspace slice runs from removable media without modifying internal storage. |
-| 5. Storage and generations | In progress — M5.1 and M5.2a complete | A failed pending generation automatically leaves or restores a bootable known-good generation. |
+| 5. Storage and generations | In progress — M5.1, M5.2a, and M5.2 complete | A failed pending generation automatically leaves or restores a bootable known-good generation. |
 | 6. Native interactive environment | Minimal stub only | Native components can inspect, build or stage, select, and roll back generations. |
 | 7. Daily-driver hardware | Not yet implemented | The Framework target supports the hardware and lifecycle needed for daily use. |
 
@@ -84,7 +84,7 @@ Exit condition: the same isolated userspace slice runs on the Framework without 
 
 ## Milestone 5: Storage and generations
 
-**Status:** In progress. M5.1 (storage capability foundation) is complete; the read-only virtio block slice (M5.2) is next.
+**Status:** In progress. M5.1, M5.2a, and the read-only virtio block slice (M5.2) are complete; durable virtio writes and fault handling (M5.3) are next.
 
 Top-level scope:
 
@@ -189,6 +189,8 @@ Exit condition: the block protocol used by M5.2 is defined by a versioned schema
 
 ### M5.2: Read-only virtio block vertical slice
 
+**Status:** Complete. `storage_read_check` boots a disposable read-only virtio fixture; the capability-gated userspace probe verifies the known sector SHA-256 and structured write, short-buffer, and out-of-range rejection while the generation remains healthy.
+
 Deliverables:
 
 - implement the modern virtio PCI transport needed by `virtio-blk-pci`;
@@ -207,7 +209,7 @@ Required checks:
 - driver failure does not terminate unrelated components or the kernel;
 - the existing generation vertical slice remains healthy.
 
-Planned verification target:
+Verification target:
 
 ```sh
 just storage_read_check

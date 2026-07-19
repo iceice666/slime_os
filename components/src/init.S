@@ -43,6 +43,15 @@ _start:
     test rax, rax
     js fail
 
+    lea rsi, [rip + storage_probe_caps]
+    mov rdi, 10
+    mov rdx, 1
+    mov r10, 5
+    mov rax, 4
+    int 0x80
+    test rax, rax
+    js fail
+
     xor rdi, rdi
     mov rax, 3
     int 0x80
@@ -61,3 +70,5 @@ sysinfo_caps:
     .long 7
 echo_caps:
     .long 9
+storage_probe_caps:
+    .long 11

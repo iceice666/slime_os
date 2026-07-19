@@ -276,6 +276,46 @@ pub fn with_current_mut<R>(f: impl FnOnce(&mut Task) -> R) -> R {
     f(&mut sched.tasks[idx])
 }
 
+/// Copy bytes from the current task's mapped user address without switching
+/// address spaces or holding the scheduler lock during the copy.
+pub fn copy_from_current(addr: u64, destination: &mut [u8]) -> bool {
+    if destination.is_empty() {
+        return true;
+    }
+    let mut physical = [crate::memory::PhysAddr(0); crate::capability::MAX_CAPS];
+    if destination.len() > physical.len() {
+        return false;
+    }
+    let copied = {
+        let sched = SCHEDULER.lock();
+        let Some(id) = sched.current else {
+            return false;
+        };
+        let Some(index) = sched.index_of(id) else {
+            return false;
+        };
+        for (offset, slot) in physical.iter_mut().take(destination.len()).enumerate() {
+            let Some(address) = addr.checked_add(offset as u64) else {
+                return false;
+            };
+            let Some(translated) = crate::memory::vmm::translate_in(
+                sched.tasks[index].address_space.pml4(),
+                crate::memory::VirtAddr(address),
+            ) else {
+                return false;
+            };
+            *slot = translated;
+        }
+        destination.len()
+    };
+    for (destination, physical) in destination.iter_mut().zip(physical).take(copied) {
+        // SAFETY: the scheduler lookup proved this physical byte is mapped by
+        // the current task; HHDM provides a stable kernel alias.
+        *destination = unsafe { physical.to_virt().as_mut_ptr::<u8>().read() };
+    }
+    true
+}
+
 enum ScheduleResult {
     Selected,
     Idle(extern "C" fn()),

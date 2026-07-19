@@ -22,13 +22,14 @@ pub const RIGHT_SEND: u32 = 1;
 pub const RIGHT_RECV: u32 = 2;
 pub const RIGHT_TRANSFER: u32 = 4;
 pub const RIGHT_EXEC: u32 = 8;
-// M5.1 device-resource rights. Each gate (syscall) checks the relevant bit.
+// M5.1/M5.2 device-resource rights. Each kernel gate checks its relevant bit.
 pub const RIGHT_MAP_MMIO: u32 = 1 << 4;
 pub const RIGHT_DMA_PIN: u32 = 1 << 5;
 pub const RIGHT_DMA_RELEASE: u32 = 1 << 6;
 pub const RIGHT_IRQ_ACK: u32 = 1 << 7;
 pub const RIGHT_BUFFER_WRITE: u32 = 1 << 8;
 pub const RIGHT_MAP: u32 = 1 << 9;
+pub const RIGHT_BLOCK_READ: u32 = 1 << 10;
 
 /// All rights a capability may ever carry. Used to reject unknown bits.
 pub const RIGHT_ALL: u32 = RIGHT_SEND
@@ -40,7 +41,8 @@ pub const RIGHT_ALL: u32 = RIGHT_SEND
     | RIGHT_DMA_RELEASE
     | RIGHT_IRQ_ACK
     | RIGHT_BUFFER_WRITE
-    | RIGHT_MAP;
+    | RIGHT_MAP
+    | RIGHT_BLOCK_READ;
 
 #[derive(Clone)]
 pub struct Capability {
@@ -73,6 +75,7 @@ pub enum KernelObject {
     DmaMemory(DmaRegion),
     Irq(IrqLine),
     SharedBuffer(SharedRegion),
+    BlockDevice,
 }
 
 /// A bounded PCI segment/bus/device/function resource.

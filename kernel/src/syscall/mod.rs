@@ -1,4 +1,4 @@
-use crate::capability::{KernelObject, RIGHT_RECV, RIGHT_SEND, RIGHT_TRANSFER};
+use crate::capability::{KernelObject, RIGHT_BLOCK_READ, RIGHT_RECV, RIGHT_SEND, RIGHT_TRANSFER};
 use crate::ipc::{self, MAX_CAPS_PER_MSG, MAX_MSG};
 use crate::task::{self, TermReason};
 use crate::trap::UserFrame;
@@ -9,6 +9,7 @@ pub const SYS_RECV: u64 = 2;
 pub const SYS_EXIT: u64 = 3;
 pub const SYS_SPAWN: u64 = 4;
 pub const SYS_DEBUG_WRITE: u64 = 5;
+pub const SYS_BLOCK_TRANSACT: u64 = 6;
 
 const USER_TOP: u64 = 0x0000_8000_0000_0000;
 
@@ -35,6 +36,7 @@ pub fn dispatch(frame: &mut UserFrame) {
         }
         SYS_SPAWN => sys_spawn(frame),
         SYS_DEBUG_WRITE => sys_debug_write(frame),
+        SYS_BLOCK_TRANSACT => sys_block_transact(frame),
         _ => frame.rax = ipc::ERR_INVALID_ARG as u64,
     }
 }
@@ -112,6 +114,66 @@ fn sys_send(frame: &mut UserFrame) {
     frame.rax = ret as u64;
 }
 
+fn sys_block_transact(frame: &mut UserFrame) {
+    let slot = frame.rdi as u32;
+    let request_address = frame.rsi;
+    let reply_address = frame.rdx;
+    if !current_user_range(request_address, crate::block_proto::REQUEST_LEN, false)
+        || !current_user_range(reply_address, crate::block_proto::REPLY_LEN, true)
+    {
+        frame.rax = ipc::ERR_INVALID_ARG as u64;
+        return;
+    }
+    let authorized = task::with_current_mut(|task| {
+        task.caps.get(slot).is_some_and(|cap| {
+            cap.rights & RIGHT_BLOCK_READ != 0 && matches!(cap.object, KernelObject::BlockDevice)
+        })
+    });
+    if !authorized {
+        frame.rax = ipc::ERR_BAD_CAP as u64;
+        return;
+    }
+
+    let mut request = [0u8; crate::block_proto::REQUEST_LEN];
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            request_address as *const u8,
+            request.as_mut_ptr(),
+            request.len(),
+        )
+    };
+    let decoded = match crate::block_proto::decode_request(&request) {
+        Ok(decoded) => decoded,
+        Err(_) => {
+            let mut reply = [0u8; crate::block_proto::REPLY_LEN];
+            crate::block_service::transact(&request, &mut reply);
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    reply.as_ptr(),
+                    reply_address as *mut u8,
+                    reply.len(),
+                )
+            };
+            frame.rax = ipc::ERR_SUCCESS as u64;
+            return;
+        }
+    };
+    let payload_len = decoded.sector_count as usize * crate::block_proto::SECTOR_SIZE;
+    if decoded.op == crate::block_proto::OP_READ
+        && !current_user_range(decoded.buffer_phys, payload_len, true)
+    {
+        frame.rax = ipc::ERR_INVALID_ARG as u64;
+        return;
+    }
+
+    let mut reply = [0u8; crate::block_proto::REPLY_LEN];
+    crate::block_service::transact(&request, &mut reply);
+    unsafe {
+        core::ptr::copy_nonoverlapping(reply.as_ptr(), reply_address as *mut u8, reply.len())
+    };
+    frame.rax = ipc::ERR_SUCCESS as u64;
+}
+
 fn sys_recv(frame: &mut UserFrame) {
     let slot = frame.rdi as u32;
     let buf = frame.rsi as *mut u8;
@@ -157,7 +219,6 @@ fn sys_recv(frame: &mut UserFrame) {
 
 fn sys_spawn(frame: &mut UserFrame) {
     let executable_slot = frame.rdi as u32;
-    let cap_slots = frame.rsi as *const u32;
     let cap_count = frame.rdx as usize;
     let component_name = frame.r10;
     if cap_count > crate::capability::MAX_CAPS
@@ -167,12 +228,18 @@ fn sys_spawn(frame: &mut UserFrame) {
         frame.rax = ipc::ERR_INVALID_ARG as u64;
         return;
     }
-    let slots = if cap_count == 0 {
-        &[]
-    } else {
-        // SAFETY: the current task's complete user range was validated as mapped.
-        unsafe { core::slice::from_raw_parts(cap_slots, cap_count) }
+    let mut slot_buffer = [0u32; crate::capability::MAX_CAPS];
+    let slot_bytes = unsafe {
+        core::slice::from_raw_parts_mut(
+            slot_buffer.as_mut_ptr().cast::<u8>(),
+            cap_count * core::mem::size_of::<u32>(),
+        )
     };
+    if !task::copy_from_current(frame.rsi, slot_bytes) {
+        frame.rax = ipc::ERR_INVALID_ARG as u64;
+        return;
+    }
+    let slots = &slot_buffer[..cap_count];
     match task::spawn_from_cap(executable_slot, slots) {
         Ok(id) => {
             if let Some(name) = component_name_from_id(component_name) {
@@ -190,6 +257,7 @@ fn component_name_from_id(id: u64) -> Option<&'static str> {
         2 => Some("dango"),
         3 => Some("sysinfo"),
         4 => Some("echo-agent"),
+        5 => Some("storage-probe"),
         _ => None,
     }
 }
