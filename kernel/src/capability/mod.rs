@@ -80,6 +80,25 @@ pub enum KernelObject {
     BlockDevice,
 }
 
+impl KernelObject {
+    /// Rights bits meaningful for this object kind. `RIGHT_TRANSFER` is a
+    /// meta-right valid on every capability; every other bit names the
+    /// operation it gates on the specific object. The authoritative
+    /// object-by-rights matrix lives in `docs/capability-matrix.md`.
+    pub fn valid_rights(&self) -> u32 {
+        let object_rights = match self {
+            KernelObject::Endpoint(_) => RIGHT_SEND | RIGHT_RECV,
+            KernelObject::Executable(_) => RIGHT_EXEC,
+            KernelObject::PciFunction(_) => RIGHT_MAP_MMIO | RIGHT_DMA_PIN | RIGHT_DMA_RELEASE,
+            KernelObject::DmaMemory(_) => RIGHT_DMA_RELEASE,
+            KernelObject::Irq(_) => RIGHT_IRQ_ACK,
+            KernelObject::SharedBuffer(_) => RIGHT_BUFFER_WRITE | RIGHT_MAP,
+            KernelObject::BlockDevice => RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE,
+        };
+        object_rights | RIGHT_TRANSFER
+    }
+}
+
 /// A bounded PCI segment/bus/device/function resource.
 ///
 /// Created by the kernel PCI enumerator and granted to a driver component.
@@ -220,7 +239,7 @@ impl CapabilityTable {
     }
 
     pub fn insert(&mut self, cap: Capability) -> Result<u32, CapError> {
-        if cap.rights & !RIGHT_ALL != 0 {
+        if cap.rights & !cap.object.valid_rights() != 0 {
             return Err(CapError::BadRights);
         }
         for (i, slot) in self.slots.iter_mut().enumerate() {

@@ -15,6 +15,10 @@ use crate::memory::{PAGE_SIZE, VirtAddr};
 use crate::trap::UserFrame;
 
 pub const KERNEL_STACK_SIZE: usize = 64 * 1024;
+/// Hard bound on simultaneously live tasks. Sized against the kernel heap:
+/// every task eagerly allocates a [`KERNEL_STACK_SIZE`] stack, and
+/// `MAX_TASKS * KERNEL_STACK_SIZE` must stay well within the heap budget.
+pub const MAX_TASKS: usize = 16;
 pub const USER_STACK_PAGES: usize = 4;
 pub const ENTRY_VA: u64 = 0x0000_0000_0040_0000;
 pub const USER_STACK_TOP: u64 = 0x0000_7fff_ffff_f000;
@@ -119,41 +123,55 @@ unsafe extern "C" {
     fn switch_to_user(frame: *const UserFrame) -> !;
 }
 
-pub fn spawn_user(code: &'static [u8]) -> Result<TaskId, MapError> {
+pub fn spawn_user(code: &'static [u8]) -> Result<TaskId, SpawnError> {
     spawn_with_caps(code, Vec::new())
 }
 
-pub fn spawn_from_cap(executable_slot: u32, cap_slots: &[u32]) -> Result<TaskId, SpawnError> {
-    let (code, caps) = with_current_mut(|task| {
-        let executable = task
-            .caps
-            .get(executable_slot)
-            .filter(|cap| cap.rights & crate::capability::RIGHT_EXEC != 0)
-            .and_then(|cap| match cap.object {
-                KernelObject::Executable(bytes) => Some(bytes),
-                _ => None,
-            })
-            .ok_or(SpawnError::BadExecutable)?;
-        for (index, slot) in cap_slots.iter().enumerate() {
-            if *slot == executable_slot
-                || cap_slots[..index].contains(slot)
-                || task.caps.get(*slot).is_none()
-            {
-                return Err(SpawnError::BadCapability);
-            }
+/// Validate a spawn grant list against a capability table. The executable
+/// slot must name an `Executable` carrying `RIGHT_EXEC`; every granted slot
+/// must exist, be unique, differ from the executable slot, and carry
+/// `RIGHT_TRANSFER` — the same condition IPC sends enforce, so a capability
+/// received without transfer rights cannot be laundered into a spawned
+/// component. Pure: takes no scheduler lock and is directly unit-testable.
+pub fn preflight_spawn_grant(
+    caps: &CapabilityTable,
+    executable_slot: u32,
+    cap_slots: &[u32],
+) -> Result<(&'static [u8], Vec<Capability>), SpawnError> {
+    let executable = caps
+        .get(executable_slot)
+        .filter(|cap| cap.rights & crate::capability::RIGHT_EXEC != 0)
+        .and_then(|cap| match cap.object {
+            KernelObject::Executable(bytes) => Some(bytes),
+            _ => None,
+        })
+        .ok_or(SpawnError::BadExecutable)?;
+    for (index, slot) in cap_slots.iter().enumerate() {
+        if *slot == executable_slot || cap_slots[..index].contains(slot) {
+            return Err(SpawnError::BadCapability);
         }
-        let caps = cap_slots
-            .iter()
-            .map(|slot| {
-                task.caps
-                    .get(*slot)
-                    .expect("capability changed after preflight")
-                    .clone()
-            })
-            .collect();
-        Ok((executable, caps))
-    })?;
-    let id = spawn_with_caps(code, caps).map_err(SpawnError::Map)?;
+        let Some(cap) = caps.get(*slot) else {
+            return Err(SpawnError::BadCapability);
+        };
+        if cap.rights & crate::capability::RIGHT_TRANSFER == 0 {
+            return Err(SpawnError::BadCapability);
+        }
+    }
+    let granted = cap_slots
+        .iter()
+        .map(|slot| {
+            caps.get(*slot)
+                .expect("capability changed after preflight")
+                .clone()
+        })
+        .collect();
+    Ok((executable, granted))
+}
+
+pub fn spawn_from_cap(executable_slot: u32, cap_slots: &[u32]) -> Result<TaskId, SpawnError> {
+    let (code, caps) =
+        with_current_mut(|task| preflight_spawn_grant(&task.caps, executable_slot, cap_slots))?;
+    let id = spawn_with_caps(code, caps)?;
     with_current_mut(|task| {
         for slot in cap_slots {
             let _ = task.caps.take(*slot);
@@ -166,10 +184,30 @@ pub fn spawn_from_cap(executable_slot: u32, cap_slots: &[u32]) -> Result<TaskId,
 pub enum SpawnError {
     BadExecutable,
     BadCapability,
+    /// The live task table is at [`MAX_TASKS`]; no new task may be spawned.
+    TooManyTasks,
     Map(MapError),
 }
 
-pub fn spawn_with_caps(code: &'static [u8], caps: Vec<Capability>) -> Result<TaskId, MapError> {
+impl From<MapError> for SpawnError {
+    fn from(error: MapError) -> Self {
+        SpawnError::Map(error)
+    }
+}
+
+pub fn spawn_with_caps(code: &'static [u8], caps: Vec<Capability>) -> Result<TaskId, SpawnError> {
+    {
+        let sched = SCHEDULER.lock();
+        let live = sched
+            .tasks
+            .iter()
+            .filter(|task| !matches!(task.state, TaskState::Terminated(_)))
+            .count();
+        if live >= MAX_TASKS {
+            return Err(SpawnError::TooManyTasks);
+        }
+    }
+
     let mut address_space = AddressSpace::new()?;
 
     let pages = code.len().div_ceil(PAGE_SIZE);
@@ -212,7 +250,9 @@ pub fn spawn_with_caps(code: &'static [u8], caps: Vec<Capability>) -> Result<Tas
 
     let mut cap_table = CapabilityTable::new();
     for cap in caps {
-        let _ = cap_table.insert(cap);
+        cap_table
+            .insert(cap)
+            .map_err(|_| SpawnError::BadCapability)?;
     }
 
     let mut sched = SCHEDULER.lock();

@@ -271,6 +271,7 @@ fn sys_spawn(frame: &mut UserFrame) {
             }
             frame.rax = id;
         }
+        Err(task::SpawnError::TooManyTasks) => frame.rax = ipc::ERR_OUT_OF_MEMORY as u64,
         Err(_) => frame.rax = ipc::ERR_BAD_CAP as u64,
     }
 }

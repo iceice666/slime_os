@@ -3,7 +3,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::capability::{
     Capability, KernelObject, RIGHT_BLOCK_READ, RIGHT_BLOCK_WRITE, RIGHT_EXEC, RIGHT_RECV,
-    RIGHT_SEND,
+    RIGHT_SEND, RIGHT_TRANSFER,
 };
 use crate::generation::{self, Generation};
 use crate::{ipc, println, serial_println, task};
@@ -95,7 +95,7 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         executable(storage_component),
         Capability {
             object: KernelObject::BlockDevice,
-            rights: storage_rights,
+            rights: storage_rights | RIGHT_TRANSFER,
         },
     ];
 
@@ -109,10 +109,13 @@ fn executable(bytes: &'static [u8]) -> Capability {
     }
 }
 
+// Every endpoint held by init is delegated to a spawned component, so each
+// carries RIGHT_TRANSFER: spawn grants enforce the same transfer-right
+// condition as IPC sends.
 fn endpoint(endpoint: ipc::Endpoint, rights: u32) -> Capability {
     Capability {
         object: KernelObject::Endpoint(endpoint),
-        rights,
+        rights: rights | RIGHT_TRANSFER,
     }
 }
 
