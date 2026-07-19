@@ -28,7 +28,8 @@ extern crate alloc;
 use core::sync::atomic::Ordering;
 
 use slime_os_kernel::block_proto::{
-    MAX_SECTORS_PER_REQUEST, OP_FLUSH, OP_READ, ProtoError, decode_request,
+    BLOCK_MAGIC, FORMAT_VERSION, MAX_SECTORS_PER_REQUEST, OP_FLUSH, OP_READ, ProtoError,
+    WireBlockRequest, decode_request,
 };
 use slime_os_kernel::capability::{
     CapError, Capability, DmaRegion, KernelObject, RIGHT_ALL, RIGHT_DMA_PIN, RIGHT_DMA_RELEASE,
@@ -123,33 +124,50 @@ fn dma_release_refused_while_outstanding() {
     assert!(!region.outstanding());
 }
 
+fn block_request(op: u8, sectors: u32) -> WireBlockRequest {
+    WireBlockRequest {
+        magic: BLOCK_MAGIC,
+        version: FORMAT_VERSION,
+        op,
+        flags: 0,
+        reserved: 0,
+        lba: 0,
+        sector_count: sectors,
+        buffer_pages: 512,
+        buffer_phys: 0x1000,
+    }
+}
+
 #[test_case]
 fn block_proto_rejects_bad_magic() {
-    let mut buf = [0u8; 64];
-    buf[4] = OP_READ;
-    // magic bytes are zero -> not BLOCK_MAGIC
-    assert_eq!(decode_request(&buf), Err(ProtoError::BadMagic));
+    let mut request = block_request(OP_READ, 1);
+    request.magic = 0;
+    assert_eq!(decode_request(&request.encode()), Err(ProtoError::BadMagic));
+}
+
+#[test_case]
+fn block_proto_rejects_unknown_version() {
+    let mut request = block_request(OP_READ, 1);
+    request.version = FORMAT_VERSION + 1;
+    assert_eq!(
+        decode_request(&request.encode()),
+        Err(ProtoError::UnsupportedVersion)
+    );
 }
 
 #[test_case]
 fn block_proto_rejects_out_of_range() {
-    let mut buf = [0u8; 64];
-    buf[0..4].copy_from_slice(&u32::from_le_bytes(*b"BLKE").to_le_bytes());
-    buf[4] = OP_READ;
-    buf[12..20].copy_from_slice(&0u64.to_le_bytes());
-    buf[20..24].copy_from_slice(&(MAX_SECTORS_PER_REQUEST + 1).to_le_bytes());
-    buf[24..28].copy_from_slice(&512u32.to_le_bytes());
-    buf[28..36].copy_from_slice(&0x1000u64.to_le_bytes());
-    assert_eq!(decode_request(&buf), Err(ProtoError::OutOfRange));
+    let request = block_request(OP_READ, MAX_SECTORS_PER_REQUEST + 1);
+    assert_eq!(
+        decode_request(&request.encode()),
+        Err(ProtoError::OutOfRange)
+    );
 }
 
 #[test_case]
 fn block_proto_rejects_flush_with_payload() {
-    let mut buf = [0u8; 64];
-    buf[0..4].copy_from_slice(&u32::from_le_bytes(*b"BLKE").to_le_bytes());
-    buf[4] = OP_FLUSH;
-    buf[20..24].copy_from_slice(&1u32.to_le_bytes()); // sector_count != 0
-    assert_eq!(decode_request(&buf), Err(ProtoError::BadOp));
+    let request = block_request(OP_FLUSH, 1);
+    assert_eq!(decode_request(&request.encode()), Err(ProtoError::BadOp));
 }
 
 #[test_case]

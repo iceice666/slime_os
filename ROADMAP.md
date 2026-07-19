@@ -12,7 +12,7 @@ Completion requires observable behavior, not only compiled code or framebuffer o
 | 2. Isolation and IPC | Core QEMU exit passing | Two userspace components communicate, and one may fault without corrupting the other or the kernel. |
 | 3. Bootstrap component graph | QEMU vertical slice passing | The first isolated userspace vertical slice works under QEMU. |
 | 4. Framework safe bring-up | Verified | The same isolated userspace slice runs from removable media without modifying internal storage. |
-| 5. Storage and generations | In progress — M5.1 complete | A failed pending generation automatically leaves or restores a bootable known-good generation. |
+| 5. Storage and generations | In progress — M5.1 and M5.2a complete | A failed pending generation automatically leaves or restores a bootable known-good generation. |
 | 6. Native interactive environment | Minimal stub only | Native components can inspect, build or stage, select, and roll back generations. |
 | 7. Daily-driver hardware | Not yet implemented | The Framework target supports the hardware and lifecycle needed for daily use. |
 
@@ -167,6 +167,8 @@ Exit condition: an isolated driver service can receive only explicitly granted g
 Follow-up (not an M5.1 exit requirement): capability transfers should eventually record a provenance link (granting component, transferred rights, originating grant) so that authority chains can be reconstructed for auditing. The capability table introduced here is the natural place to attach it.
 
 ### M5.2a: Typed IPC schemas
+
+**Status:** Complete. The versioned Zutai block schema generates both kernel Rust and component GNU assembler bindings; `contracts_check` rejects stale or invalid bindings, and QEMU tests cover byte-identical round trips, bounds, and unknown versions.
 
 This slice precedes or runs in parallel with M5.2. It is deliberately early: every later protocol, interposition tool, and agent tool-call surface gets cheaper once message contracts are schema-first.
 

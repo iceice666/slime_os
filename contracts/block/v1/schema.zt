@@ -1,0 +1,78 @@
+-- Slime OS block protocol schema, format version 1.
+--
+-- The typed host-side contract for the IPC block request/reply protocol
+-- introduced in M5.1 and consumed by the M5.2 virtio block slice. The
+-- companion generator (`gen_rust.zt`) reflects over `BlockRequest`/
+-- `BlockReply` with `schema` for field order and reads `requestLayout`/
+-- `replyLayout` for wire widths, then emits Rust bindings. The kernel's
+-- wire layout is derived from this schema, not hand-written.
+--
+-- Logical fields use Zutai `Int`; the parallel layout list gives each field a
+-- fixed width (1, 2, 4, or 8 bytes), signedness, and declaration order. The
+-- generator assigns packed little-endian offsets and cross-checks reflected
+-- schema names against layout names before writing Rust.
+
+formatVersion :: Int = 1;
+requestLen :: Int = 64;
+replyLen :: Int = 64;
+
+-- Protocol constants. The generator emits these as Rust consts.
+blockMagic :: Int = 1162562626;
+opRead :: Int = 1;
+opWrite :: Int = 2;
+opFlush :: Int = 3;
+
+WireField :: type { name : Text; width : Int; signed : Bool; };
+
+BlockRequest :: type {
+  magic : Int;
+  version : Int;
+  op : Int;
+  flags : Int;
+  reserved : Int;
+  lba : Int;
+  sector_count : Int;
+  buffer_pages : Int;
+  buffer_phys : Int;
+};
+
+BlockReply :: type {
+  magic : Int;
+  version : Int;
+  status : Int;
+  sectors_done : Int;
+};
+
+requestLayout :: List WireField = {
+  { name = "magic"; width = 4; signed = false; };
+  { name = "version"; width = 4; signed = false; };
+  { name = "op"; width = 1; signed = false; };
+  { name = "flags"; width = 1; signed = false; };
+  { name = "reserved"; width = 2; signed = false; };
+  { name = "lba"; width = 8; signed = false; };
+  { name = "sector_count"; width = 4; signed = false; };
+  { name = "buffer_pages"; width = 4; signed = false; };
+  { name = "buffer_phys"; width = 8; signed = false; };
+};
+
+replyLayout :: List WireField = {
+  { name = "magic"; width = 4; signed = false; };
+  { name = "version"; width = 4; signed = false; };
+  { name = "status"; width = 4; signed = true; };
+  { name = "sectors_done"; width = 4; signed = false; };
+};
+
+{
+  formatVersion = formatVersion;
+  requestLen = requestLen;
+  replyLen = replyLen;
+  blockMagic = blockMagic;
+  opRead = opRead;
+  opWrite = opWrite;
+  opFlush = opFlush;
+  WireField = WireField;
+  BlockRequest = BlockRequest;
+  BlockReply = BlockReply;
+  requestLayout = requestLayout;
+  replyLayout = replyLayout;
+}

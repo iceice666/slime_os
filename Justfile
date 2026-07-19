@@ -61,6 +61,10 @@ fmt:
 fmt_check:
     cd kernel && cargo fmt -- --check
 
+# Regenerate Rust block protocol bindings from the Zutai schema.
+block_gen:
+    python3 scripts/generate-block-bindings.py
+
 # Validate the pinned generation manifest schema and fixtures.
 contracts_check:
     python3 scripts/check-contracts.py

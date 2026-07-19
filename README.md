@@ -12,6 +12,7 @@ The project is currently a QEMU-verified Rust `no_std` kernel with a minimal use
 - Generation format 1 has a pinned Zutai-side contract, fixtures, a deterministic host builder, and a kernel decoder.
 - The first QEMU vertical slice is healthy: `init` launches `console`, `dango`, `sysinfo`, and `echo-agent`; Dango resolves executable authority through capabilities; `sysinfo` and `echo-agent` stream structured output; every component exits successfully.
 - The storage capability foundation (M5.1) is complete: ACPI MCFG parsing, bounded PCI enumeration, rights-checked capabilities for PCI functions, DMA memory, interrupts, and shared memory, DMA pinning guarded against reclamation while requests are outstanding, and a bounded block request/reply IPC protocol, verified by the `storage_cap_check` QEMU target.
+- Typed IPC schemas (M5.2a) are complete: the versioned Zutai block contract generates kernel Rust and component GNU assembler bindings, with stale-output, assembler, round-trip, bounds, and version checks.
 - Framework safe bring-up is verified with storage authority absent; virtio block I/O, durable writes, rollbackable generations, native interactive Dango, and daily-driver hardware support are not complete.
 
 ## Vision
@@ -49,7 +50,7 @@ Userspace services should own policy and most complex subsystems:
 - display, input, and audio;
 - generation construction, activation, health checking, and rollback.
 
-IPC message contracts are intended to become schema-first: channel message types are declared as Zutai types, and endpoint bindings are generated rather than hand-written. This makes "tool call = channel" literal — an agent tool schema and a system IPC schema are the same artifact — and gives interposition tooling (auditing, recording, replay) typed messages instead of opaque bytes.
+New IPC protocols must be schema-first: channel message types are declared as versioned Zutai types under `contracts/`, and endpoint bindings are generated from or deterministically validated against those contracts. Kernel and component code must not introduce independent hand-written field offsets. This makes "tool call = channel" literal — an agent tool schema and a system IPC schema are the same artifact — and gives interposition tooling (auditing, recording, replay) typed messages instead of opaque bytes.
 
 POSIX and Linux compatibility may exist later as userspace personalities or isolated virtual machines. They are compatibility facilities, not the native kernel ABI or authority model.
 
