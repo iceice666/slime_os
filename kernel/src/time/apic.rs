@@ -14,11 +14,48 @@ use crate::memory::{PhysAddr, VirtAddr};
 
 // --- Local APIC register offsets (bytes from the LAPIC base) ---
 const REG_SPURIOUS: usize = 0xF0;
+const REG_ID: usize = 0x20;
 const REG_EOI: usize = 0xB0;
 const REG_LVT_TIMER: usize = 0x320;
 const REG_TIMER_INITIAL: usize = 0x380;
 const REG_TIMER_CURRENT: usize = 0x390;
 const REG_TIMER_DIVIDE: usize = 0x3E0;
+
+// --- I/O APIC register indices ---
+const IOAPIC_REG_ID: u8 = 0x00;
+const IOAPIC_REG_VERSION: u8 = 0x01;
+const IOAPIC_REG_REDIR_BASE: u8 = 0x10;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RouteError {
+    MissingIoApic,
+    GsiOutOfRange,
+    Map(MapError),
+}
+
+struct IoApic {
+    base: VirtAddr,
+}
+
+impl IoApic {
+    fn read(&self, register: u8) -> u32 {
+        unsafe {
+            core::ptr::write_volatile(self.base.as_mut_ptr::<u32>(), register as u32);
+            core::ptr::read_volatile((self.base.as_u64() + 0x10) as *const u32)
+        }
+    }
+
+    fn write(&self, register: u8, value: u32) {
+        unsafe {
+            core::ptr::write_volatile(self.base.as_mut_ptr::<u32>(), register as u32);
+            core::ptr::write_volatile((self.base.as_u64() + 0x10) as *mut u32, value);
+        }
+    }
+
+    fn maximum_redirection_entry(&self) -> u32 {
+        (self.read(IOAPIC_REG_VERSION) >> 16) & 0xff
+    }
+}
 
 /// SVR bit 8: software-enable the APIC.
 const SVR_ENABLE: u32 = 1 << 8;
@@ -200,6 +237,59 @@ pub fn init(hz: u64) {
     );
     lapic_write(REG_TIMER_DIVIDE, TIMER_DIVIDE_16);
     lapic_write(REG_TIMER_INITIAL, count);
+}
+
+/// Route one legacy ISA IRQ through the ACPI-described I/O APIC.
+pub fn route_external_irq(
+    madt: &crate::acpi::MadtInfo,
+    isa_irq: u8,
+    vector: u8,
+) -> Result<(), RouteError> {
+    let route = madt.route_for_isa_irq(isa_irq);
+    let descriptor = madt
+        .io_apics
+        .iter()
+        .flatten()
+        .filter(|io_apic| io_apic.gsi_base <= route.gsi)
+        .max_by_key(|io_apic| io_apic.gsi_base)
+        .copied()
+        .ok_or(RouteError::MissingIoApic)?;
+    let phys = PhysAddr(descriptor.address as u64);
+    let virt = phys.to_virt();
+    let mapped = unsafe {
+        vmm::map_page(
+            virt,
+            phys,
+            PTE_WRITABLE | PTE_CACHE_DISABLE | PTE_NO_EXECUTE,
+        )
+    };
+    match mapped {
+        Ok(()) | Err(MapError::AlreadyMapped) => {}
+        Err(error) => return Err(RouteError::Map(error)),
+    }
+
+    let io_apic = IoApic { base: virt };
+    let _id = io_apic.read(IOAPIC_REG_ID) >> 24;
+    let redirection = route.gsi - descriptor.gsi_base;
+    if redirection > io_apic.maximum_redirection_entry() {
+        return Err(RouteError::GsiOutOfRange);
+    }
+
+    let mut low = vector as u32;
+    if route.active_low {
+        low |= 1 << 13;
+    }
+    if route.level_triggered {
+        low |= 1 << 15;
+    }
+    let register = (redirection as u8)
+        .checked_mul(2)
+        .and_then(|offset| IOAPIC_REG_REDIR_BASE.checked_add(offset))
+        .ok_or(RouteError::GsiOutOfRange)?;
+    // Route to the bootstrap processor instead of assuming APIC ID zero.
+    io_apic.write(register + 1, lapic_read(REG_ID) & 0xff00_0000);
+    io_apic.write(register, low);
+    Ok(())
 }
 
 /// The calibrated per-tick count (for diagnostics/tests). Zero before [`init`].

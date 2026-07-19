@@ -217,15 +217,21 @@ fn double_fault_handler(frame: &InterruptStackFrame, error_code: u64) -> ! {
     crate::hlt_loop()
 }
 
-/// Vector the Local APIC timer is programmed to raise. First free vector
-/// above the 0..=31 CPU-reserved exception range.
+/// Vectors used by the Local APIC timer, i8042 keyboard, and userspace traps.
 pub const TIMER_VECTOR: u8 = 0x20;
+pub const KEYBOARD_VECTOR: u8 = 0x21;
 pub const SYSCALL_VECTOR: u8 = 0x80;
 
 /// Local APIC timer interrupt. Advances the monotonic tick counter and
 /// acknowledges the interrupt so the APIC can deliver the next one.
 fn timer_handler(_frame: &InterruptStackFrame) {
     crate::time::on_tick();
+    crate::time::apic::end_of_interrupt();
+}
+
+/// i8042 keyboard interrupt. Drain one scan code, then acknowledge the LAPIC.
+fn keyboard_handler(_frame: &InterruptStackFrame) {
+    crate::input::on_interrupt();
     crate::time::apic::end_of_interrupt();
 }
 
@@ -256,6 +262,9 @@ unsafe extern "x86-interrupt" fn double_fault(frame: InterruptStackFrame, error_
 unsafe extern "x86-interrupt" fn timer(frame: InterruptStackFrame) {
     timer_handler(&frame)
 }
+unsafe extern "x86-interrupt" fn keyboard(frame: InterruptStackFrame) {
+    keyboard_handler(&frame)
+}
 unsafe extern "x86-interrupt" fn spurious(frame: InterruptStackFrame) {
     spurious_handler(&frame)
 }
@@ -275,6 +284,8 @@ static IDT: LazyLock<InterruptDescriptorTable> = LazyLock::new(|| {
         .set_interrupt_handler_err_ist(double_fault, crate::gdt::DOUBLE_FAULT_IST_INDEX);
     // LAPIC timer.
     idt.entry(TIMER_VECTOR).set_interrupt_handler(timer);
+    // i8042 keyboard routed through the ACPI-described I/O APIC.
+    idt.entry(KEYBOARD_VECTOR).set_interrupt_handler(keyboard);
     // LAPIC spurious interrupt.
     idt.entry(SPURIOUS_VECTOR).set_interrupt_handler(spurious);
 

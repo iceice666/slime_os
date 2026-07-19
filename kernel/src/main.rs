@@ -9,7 +9,7 @@ extern crate alloc;
 use core::panic::PanicInfo;
 
 use slime_os_kernel::frame_buffer::init_framebuffer;
-use slime_os_kernel::{gdt, interrupts, memory, println, serial_println, time};
+use slime_os_kernel::{acpi, gdt, input, interrupts, memory, println, serial_println, time};
 #[cfg(test)]
 mod testing;
 
@@ -66,6 +66,21 @@ fn kernel_main() {
     serial_println!("[serial] heap online");
     println!("[bringup] heap online");
 
+    let platform = acpi::init().expect("ACPI discovery failed");
+    let io_apics = platform.madt.io_apics.iter().flatten().count();
+    serial_println!(
+        "[acpi] revision={} root={:?} tables={} ioapics={} i8042={}",
+        platform.revision,
+        platform.root_kind,
+        platform.table_count,
+        io_apics,
+        platform.i8042_present,
+    );
+    println!(
+        "[bringup] ACPI {:?}: {} tables",
+        platform.root_kind, platform.table_count
+    );
+
     // Prove the heap really works before relying on it.
     {
         use alloc::vec::Vec;
@@ -83,6 +98,16 @@ fn kernel_main() {
         time::apic::timer_count()
     );
     println!("[bringup] APIC timer online");
+
+    match input::init(&platform.madt, platform.i8042_present) {
+        Ok(()) => println!("[bringup] keyboard online"),
+        Err(error) => {
+            serial_println!("[input] keyboard unavailable: {:?}", error);
+            println!("[bringup] keyboard unavailable: {:?}", error);
+        }
+    }
+    serial_println!("[platform] ACPI shutdown/reset mechanisms discovered");
+    serial_println!("[policy] no block or NVMe write capability exists");
 
     #[cfg(not(test))]
     {

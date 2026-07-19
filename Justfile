@@ -66,8 +66,12 @@ generation_check:
     ./scripts/build-generation.py kernel/target/x86_64-unknown-none/debug/slime_os-kernel /tmp/slime-os-generation-check
     ./scripts/check-generation.py /tmp/slime-os-generation-check/generation.bin
 
+# Prove that the current capability, syscall, and driver surfaces expose no storage writes.
+framework_safety_check:
+    python3 scripts/check-no-storage-authority.py
+
 # Build a removable-media UEFI image for Framework safe bring-up.
-framework_usb_image output="/tmp/slime-os-framework.img":
+framework_usb_image output="/tmp/slime-os-framework.img": framework_safety_check
     cd kernel && cargo build --release
     kernel/scripts/build-iso.sh kernel/target/x86_64-unknown-none/release/slime_os-kernel {{output}} 128
 

@@ -122,7 +122,7 @@ def confirm_destructive_write(device: Path, summary: str, assume_yes: bool) -> N
         fail("confirmation did not match target device")
 
 
-def assert_safe_disk(name: str, assume_yes: bool) -> Path:
+def assert_safe_disk(name: str, assume_yes: bool, *, confirm: bool = True) -> Path:
     sysfs = sysfs_block(name)
     device = Path("/dev") / name
     if (sysfs / "partition").exists():
@@ -141,7 +141,8 @@ def assert_safe_disk(name: str, assume_yes: bool) -> Path:
     if blocked:
         fail(f"refusing mounted device(s): {', '.join(blocked)}")
 
-    confirm_destructive_write(device, disk_summary(sysfs), assume_yes)
+    if confirm:
+        confirm_destructive_write(device, disk_summary(sysfs), assume_yes)
     return device
 
 
@@ -194,12 +195,25 @@ def main() -> None:
     parser.add_argument("image", type=Path)
     parser.add_argument("device", type=Path)
     parser.add_argument("--yes", action="store_true", help="confirm the destructive removable-disk write")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="validate the image and removable target without writing",
+    )
     args = parser.parse_args()
 
     if not args.image.is_file():
         fail(f"image not found: {args.image}")
     name = block_name(args.device)
-    device = assert_safe_disk(name, args.yes)
+    device = assert_safe_disk(name, args.yes, confirm=not args.dry_run)
+    if args.image.stat().st_size > int(read_sys(sysfs_block(name) / "size")) * 512:
+        fail(f"image is larger than target device: {args.image} -> {device}")
+    if args.dry_run:
+        print(
+            f"Safe removable target: {disk_summary(sysfs_block(name))}; "
+            f"image {args.image} ({args.image.stat().st_size} bytes, sha256:{file_sha256(args.image)})"
+        )
+        return
 
     expected = file_sha256(args.image)
     write_image(args.image, device)

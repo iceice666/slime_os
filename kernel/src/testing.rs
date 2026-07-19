@@ -1,4 +1,4 @@
-use slime_os_kernel::{generation, limine, sha256};
+use slime_os_kernel::{acpi, generation, limine, sha256};
 
 #[test_case]
 fn trivial_assertion() {
@@ -39,4 +39,41 @@ fn sha256_matches_standard_vector() {
             0xf2, 0x00, 0x15, 0xad,
         ],
     );
+}
+
+#[test_case]
+fn acpi_rsdp_v2_checksums_and_addresses() {
+    let mut rsdp = [0u8; 36];
+    rsdp[..8].copy_from_slice(b"RSD PTR ");
+    rsdp[9..15].copy_from_slice(b"SLIME ");
+    rsdp[15] = 2;
+    rsdp[16..20].copy_from_slice(&0x1234_5000u32.to_le_bytes());
+    let rsdp_len = rsdp.len() as u32;
+    rsdp[20..24].copy_from_slice(&rsdp_len.to_le_bytes());
+    rsdp[24..32].copy_from_slice(&0x1234_5678_9000u64.to_le_bytes());
+    let legacy_sum = rsdp[..20]
+        .iter()
+        .fold(0u8, |sum, byte| sum.wrapping_add(*byte));
+    rsdp[8] = 0u8.wrapping_sub(legacy_sum);
+    let extended_sum = rsdp.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte));
+    rsdp[32] = 0u8.wrapping_sub(extended_sum);
+
+    let parsed = acpi::parse_rsdp(&rsdp).expect("valid RSDP must parse");
+    assert_eq!(parsed.revision, 2);
+    assert_eq!(parsed.rsdt_address, 0x1234_5000);
+    assert_eq!(parsed.xsdt_address, 0x1234_5678_9000);
+
+    rsdp[24] ^= 1;
+    assert_eq!(
+        acpi::parse_rsdp(&rsdp),
+        Err(acpi::AcpiError::InvalidChecksum)
+    );
+}
+
+#[test_case]
+fn acpi_s5_package_decodes() {
+    let aml = [
+        0x08, b'\\', b'_', b'S', b'5', b'_', 0x12, 0x06, 0x02, 0x0a, 0x05, 0x0a, 0x05,
+    ];
+    assert_eq!(acpi::parse_s5_aml(&aml), Some((5, 5)));
 }

@@ -6,16 +6,19 @@
 
 extern crate alloc;
 
+pub mod acpi;
 pub mod bootstrap;
 pub mod capability;
 pub mod crt;
 pub mod frame_buffer;
 pub mod gdt;
 pub mod generation;
+pub mod input;
 pub mod interrupts;
 pub mod ipc;
 pub mod limine;
 pub mod memory;
+pub mod platform;
 pub mod serial;
 pub mod sha256;
 pub mod syscall;
