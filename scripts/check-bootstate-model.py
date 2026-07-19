@@ -12,8 +12,27 @@ ROOT = Path(__file__).resolve().parent.parent
 MODEL_DIR = ROOT / "contracts" / "bootstate" / "model"
 MODULE = "BootState.tla"
 MAIN_CONFIG = MODEL_DIR / "BootState.cfg"
-MUTATION_CONFIG = MODEL_DIR / "BootStateSkipAttempt.cfg"
-SUCCESS = "BootState model passed: safety invariants, 9 cut witnesses, skip-attempt mutation rejected"
+MUTATION_CONFIGS = (
+    (
+        MODEL_DIR / "BootStateSkipAttempt.cfg",
+        "PendingAttemptConsumedBeforeTransfer",
+        "skip-attempt mutation",
+    ),
+    (
+        MODEL_DIR / "BootStateOmitRoot.cfg",
+        "ProtectedRootsPresent",
+        "omitted-root mutation",
+    ),
+    (
+        MODEL_DIR / "BootStateMixedEpoch.cfg",
+        "RetainedGraphsConsistent",
+        "mixed-epoch mutation",
+    ),
+)
+SUCCESS = (
+    "BootState model passed: transaction/state/GC invariants, 9 cut witnesses, "
+    "and attempt/root/epoch mutations rejected"
+)
 CUT_OPERATORS = (
     "CutBeforePending",
     "CutSlotA",
@@ -87,14 +106,15 @@ def main() -> None:
             run(tlc_command(tlc, MAIN_CONFIG, temporary_root / "positive"))
         )
 
-        mutation = run(
-            tlc_command(tlc, MUTATION_CONFIG, temporary_root / "mutation")
-        )
-        require_invariant_failure(
-            mutation,
-            "PendingAttemptConsumedBeforeTransfer",
-            "skip-attempt mutation",
-        )
+        for config, invariant, label in MUTATION_CONFIGS:
+            mutation = run(
+                tlc_command(
+                    tlc,
+                    config,
+                    temporary_root / config.stem,
+                )
+            )
+            require_invariant_failure(mutation, invariant, label)
 
         for operator in CUT_OPERATORS:
             witness_config = temporary_root / f"{operator}.cfg"

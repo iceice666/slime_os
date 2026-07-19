@@ -12,7 +12,7 @@ Completion requires observable behavior, not only compiled code or framebuffer o
 | 2. Isolation and IPC | Core QEMU exit passing | Two userspace components communicate, and one may fault without corrupting the other or the kernel. |
 | 3. Bootstrap component graph | QEMU vertical slice passing | The first isolated userspace vertical slice works under QEMU. |
 | 4. Framework safe bring-up | Verified | The same isolated userspace slice runs from removable media without modifying internal storage. |
-| 5. Storage and generations | In progress — M5.1 through M5.5 complete | A failed pending generation automatically leaves or restores a bootable known-good generation. |
+| 5. Storage and generations | In progress — M5.1 through M5.6b complete | A failed pending generation automatically leaves or restores a bootable known-good generation. |
 | 6. Native interactive environment | Minimal stub only | Native components can inspect, build or stage, select, and roll back generations. |
 | 7. Daily-driver hardware | Not yet implemented | The Framework target supports the hardware and lifecycle needed for daily use. |
 
@@ -85,7 +85,7 @@ Exit condition: the same isolated userspace slice runs on the Framework without 
 
 ## Milestone 5: Storage and generations
 
-**Status:** In progress. M5.1 through M5.5 are complete; the checked BootState transition model (M5.6a) is next and has no code dependency on the generation/state/GC model (M5.6b), which follows before M5.6 implementation semantics freeze.
+**Status:** In progress. M5.1 through M5.6b are complete; M5.6 pending/known-good rollback implementation is next, with M5.6c conformance following once implementation traces exist.
 
 Top-level scope:
 
@@ -333,7 +333,7 @@ Exit condition: a checked model of the M5.6 transition rules lives in `contracts
 
 ### M5.6b: Checked generation, state, and GC transaction model
 
-**Status:** Not started. Promoted from the directions register (entry 4). This slice follows M5.6a and must complete before M5.6 state-policy and GC semantics freeze; it extends the checked contract without producing kernel code.
+**Status:** Complete. `contracts/bootstate/model/` now pairs generations with complete graph-level state snapshot epochs, encodes all five state policies, protects known-good/pending/running/rollback/staged/persistent GC roots, explores interruption and repeated recovery transitions, and rejects omitted-root and mixed-epoch mutations through `just bootstate_model_check`.
 
 Deliverables:
 
