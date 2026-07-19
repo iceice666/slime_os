@@ -1,16 +1,21 @@
 -- Slime OS block protocol schema, format version 1.
 --
 -- The typed host-side contract for the IPC block request/reply protocol
--- introduced in M5.1 and consumed by the M5.2 virtio block slice. The
--- companion generator (`gen_rust.zt`) reflects over `BlockRequest`/
--- `BlockReply` with `schema` for field order and reads `requestLayout`/
--- `replyLayout` for wire widths, then emits Rust bindings. The kernel's
--- wire layout is derived from this schema, not hand-written.
+-- introduced in M5.1 and consumed by the M5.2 virtio block slice. Concrete
+-- reflection stays beside `BlockRequest`/`BlockReply`, then the pure renderer
+-- in `gen_rust.zt` validates field order against the explicit wire layouts.
+-- This module owns the effectful write entry so reflection folds before host
+-- filesystem effects lower.
 --
 -- Logical fields use Zutai `Int`; the parallel layout list gives each field a
 -- fixed width (1, 2, 4, or 8 bytes), signedness, and declaration order. The
--- generator assigns packed little-endian offsets and cross-checks reflected
--- schema names against layout names before writing Rust.
+-- renderer assigns packed little-endian offsets and cross-checks reflected
+-- schema names against layout names before writing Rust and assembly bindings.
+
+env ::= import stdlib.env;
+fs ::= import stdlib.fs;
+gen ::= import "gen_rust.zt";
+t ::= import stdlib.text;
 
 formatVersion :: Int = 1;
 requestLen :: Int = 64;
@@ -43,6 +48,9 @@ BlockReply :: type {
   sectors_done : Int;
 };
 
+requestSchema ::= schema BlockRequest;
+replySchema ::= schema BlockReply;
+
 requestLayout :: List WireField = {
   { name = "magic"; width = 4; signed = false; };
   { name = "version"; width = 4; signed = false; };
@@ -62,7 +70,7 @@ replyLayout :: List WireField = {
   { name = "sectors_done"; width = 4; signed = false; };
 };
 
-{
+protocol ::= {
   formatVersion = formatVersion;
   requestLen = requestLen;
   replyLen = replyLen;
@@ -70,9 +78,20 @@ replyLayout :: List WireField = {
   opRead = opRead;
   opWrite = opWrite;
   opFlush = opFlush;
-  WireField = WireField;
-  BlockRequest = BlockRequest;
-  BlockReply = BlockReply;
+  requestFields = requestSchema.fields ?? {;};
+  replyFields = replySchema.fields ?? {;};
   requestLayout = requestLayout;
   replyLayout = replyLayout;
-}
+};
+
+main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }
+  = caps => [
+    root := env.get caps.env "SLIME_BLOCK_BINDINGS_ROOT" ?? ".";
+    bindings := gen.render protocol;
+    rustPath := t.join "" { root; "/kernel/src/block_proto/gen.rs"; };
+    componentPath := t.join "" { root; "/components/include/block_proto.inc"; };
+    fs.writeAll caps.write rustPath bindings.rust;
+    fs.writeAll caps.write componentPath bindings.component
+  ];
+
+main
