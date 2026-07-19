@@ -85,7 +85,7 @@ Exit condition: the same isolated userspace slice runs on the Framework without 
 
 ## Milestone 5: Storage and generations
 
-**Status:** In progress. M5.1 through M5.3 are complete; GPT and the integrity-checked object store (M5.4) are next.
+**Status:** In progress. M5.1 through M5.3 are complete; GPT and the integrity-checked object store (M5.4) are next. The checked BootState transition model (M5.6a) has no code dependency and may run in parallel with M5.4 and M5.5.
 
 Top-level scope:
 
@@ -252,6 +252,8 @@ just storage_fault_check
 
 Exit condition: disposable QEMU block images support durable, bounded, explicitly authorized writes with deterministic recovery from injected device failures.
 
+Follow-up (not an M5.3 exit requirement): the fault-injection recording added here is the hand-written instance of a schema-generated interposition membrane and IPC flight recorder (directions register entries 7 and 11); generalizing it consumes only the M5.2a contract tooling.
+
 ### M5.4: GPT and integrity-checked object store
 
 Deliverables:
@@ -303,7 +305,29 @@ Required checks:
 
 Exit condition: the boot path can deterministically select and verify one complete generation, including its kernel, from redundant persistent boot metadata.
 
+Follow-ups enabled by this milestone (not exit requirements): an authority diff between two generations as a build-pipeline gate, and manifest grant-graph queries such as "which components can reach block-write" (directions register entries 1 and 9). Both are host-side tooling over the machine-readable grants introduced here.
+
+### M5.6a: Checked BootState transition model
+
+**Status:** Not started. Promoted from the directions register (entry 6). This slice may proceed in parallel with M5.4 and M5.5: it consumes only the transition rules and power-cut matrix already written in M5.6 below, and produces no kernel code.
+
+Deliverables:
+
+- encode the six M5.6 boot-state transition rules and the eight-point power-cut matrix as a TLA+ or Alloy specification under `contracts/`;
+- model both fixed-size `BootState` slots, the older-slot-first update rule, and interruption at every commit boundary;
+- check that no modeled interleaving leaves zero bootable roots, and that a pending boot attempt is always persistently consumed before control transfer;
+- run the model check from a repository target (planned: `just bootstate_model_check`) so the spec is a maintained contract artifact rather than a one-off proof.
+
+Required checks:
+
+- the checker explores the full interleaving set implied by the power-cut matrix over both slots;
+- deliberately breaking a transition rule in the model (for example, skipping the attempt decrement) makes the check fail.
+
+Exit condition: a checked model of the M5.6 transition rules lives in `contracts/` and is validated by CI; M5.6's implementation must not change a transition rule without updating the model in the same change.
+
 ### M5.6: Pending, known-good, rollback, state policy, and GC
+
+Prerequisite: the cross-component state-snapshot design note (directions register entry 4, the current probe) must land before the state policies below are finalized, so that upgrade and rollback can be made consistent across components without a later breaking change.
 
 Boot-state transition rules:
 
@@ -345,7 +369,7 @@ just rollback_check
 
 Exit condition: a deliberately failing pending generation automatically returns to a verified known-good generation, with persistent state and GC roots matching their declared policies.
 
-Follow-ups enabled by this milestone (not exit requirements): generation bisect (automated boot-and-health-check search over the parent chain) and shadow boot (health-checking a pending generation in a constrained environment before consuming a real boot attempt). Both consume only mechanisms this milestone already requires.
+Follow-ups enabled by this milestone (not exit requirements): generation bisect (automated boot-and-health-check search over the parent chain) and shadow boot (health-checking a pending generation in a constrained environment before consuming a real boot attempt), tracked as directions register entries 12 and 13. Both consume only mechanisms this milestone already requires.
 
 ### M5.7: Framework NVMe transport and safety promotion
 

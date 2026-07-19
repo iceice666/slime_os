@@ -1,7 +1,9 @@
 # Exploratory directions register
 
 Parking lot for every direction that follows from the Slime OS vision but is
-not committed work. Entries 11–19 were originally README's "Differentiating
+not committed work. Entries are grouped by status; each keeps its stable
+number so cross-references (ROADMAP follow-up notes, the sequencing table)
+stay valid. Entries 11–19 were originally README's "Differentiating
 directions" section, moved here so README carries a single pointer.
 
 ## Rules
@@ -24,7 +26,35 @@ directions" section, moved here so README carries a single pointer.
 `promoted` — moved into ROADMAP.md; this register keeps only a pointer.
 `rejected` — decided against, with reason.
 
-## Directions
+## Probing
+
+### 4. Generation-consistent state snapshots
+
+StateBindings are per-component, but rollback restores a whole generation.
+Uncoordinated policies leave component A's state at schema v3 and B's at v2.
+Explore graph-level snapshot points so upgrade and rollback are consistent
+across components.
+
+- Depends on: M5.6 state policies. Must be designed before M5.6 finalizes
+  those policies or it becomes a breaking change.
+- Exit-condition sketch: after two components write state and a fault is
+  injected mid-upgrade, rollback restores a consistent cross-component pair.
+- Status: probing. Occupies the single probe slot; time-boxed to a design
+  note, which ROADMAP lists as an M5.6 prerequisite that must land before
+  the state policies freeze.
+
+## Promoted
+
+### 6. Formal model of BootState transitions
+
+Promoted to `ROADMAP.md` as M5.6a (checked BootState transition model): a
+TLA+ or Alloy spec of the six transition rules and the power-cut matrix,
+checked in CI, proving no interleaving leaves zero bootable roots. See
+ROADMAP for deliverables and the exit condition.
+
+- Status: promoted.
+
+## Parked
 
 ### 1. Authority diff as a build-pipeline gate
 
@@ -35,7 +65,7 @@ CI requires an explicit sign-off artifact when any component's rights grow.
 - Depends on: M5.5 (manifest v2 with 1:1 rights strings). Host-side only.
 - Exit-condition sketch: `just generation_diff A B` prints per-component
   grant changes; a build that widens rights without the sign-off file fails.
-- Status: parked.
+- Status: parked. Named as an M5.5 follow-up in ROADMAP.
 
 ### 2. Revocable and time-bounded grants
 
@@ -65,19 +95,6 @@ directions all implicitly need.
   inputs.
 - Status: parked.
 
-### 4. Generation-consistent state snapshots
-
-StateBindings are per-component, but rollback restores a whole generation.
-Uncoordinated policies leave component A's state at schema v3 and B's at v2.
-Explore graph-level snapshot points so upgrade and rollback are consistent
-across components.
-
-- Depends on: M5.6 state policies. Must be designed before M5.6 finalizes
-  those policies or it becomes a breaking change.
-- Exit-condition sketch: after two components write state and a fault is
-  injected mid-upgrade, rollback restores a consistent cross-component pair.
-- Status: parked. Design-timing-sensitive.
-
 ### 5. TPM-bound boot state and attestation
 
 Generations are content-addressed; the Framework target has a TPM. Seal the
@@ -91,20 +108,6 @@ attestation of "this machine runs generation hash X".
   generation image fails stage-0 verification against TPM-held counters.
 - Status: parked.
 
-### 6. Formal model of BootState transitions
-
-ROADMAP M5.6 already specifies six transition rules and an eight-point
-power-cut matrix — ready-made model-checker input. A TLA+ or Alloy spec can
-prove "no interleaving leaves zero bootable roots" far more exhaustively
-than QEMU fault injection, and the spec becomes a contract artifact.
-
-- Depends on: nothing unwritten; the rules exist in ROADMAP.md today.
-  Zero kernel code.
-- Exit-condition sketch: a checked model of the six rules over the full
-  power-cut interleaving set lives in `contracts/`; CI validates the spec.
-- Status: parked. Cheapest direction in this register; a probe here directly
-  de-risks M5.6.
-
 ### 7. Schema-driven interposition toolchain
 
 Membranes and dry-run proxies are already claimed in README's agentic
@@ -117,7 +120,7 @@ fault injection is the hand-written instance of this general mechanism.
 - Exit-condition sketch: a generated membrane records and replays the block
   protocol; replay reproduces a `storage_fault_check` failure
   deterministically.
-- Status: parked.
+- Status: parked. Named as an M5.3 follow-up in ROADMAP.
 
 ### 8. Declarative supervision and restart policy
 
@@ -149,7 +152,7 @@ could happen".
 - Exit-condition sketch: `just authority_query` answers "which components
   can reach BlockDevice write" from the manifest alone, matching runtime
   provenance on a test graph.
-- Status: parked.
+- Status: parked. Named as an M5.5 follow-up in ROADMAP.
 
 ### 10. Distributed capabilities
 
@@ -176,7 +179,7 @@ report becomes a generation hash plus an IPC trace.
 - Exit-condition sketch: a recorded trace of a non-driver component
   re-executes byte-identically; a failure report consists of a generation
   hash plus a trace artifact.
-- Status: parked.
+- Status: parked. Named as an M5.3 follow-up in ROADMAP.
 
 ### 12. Generation bisect
 
@@ -279,11 +282,15 @@ available on the target CPU.
   the other.
 - Status: parked.
 
+## Rejected
+
+None yet.
+
 ## Sequencing
 
 | Wave | Directions | Why then |
 | --- | --- | --- |
-| 0 — now, alongside M5.4 | 6, 4 (design note only) | 6 de-risks M5.6 for free; 4 must influence M5.6 state policy before it freezes. |
+| 0 — now, alongside M5.4 | 6 (promoted to M5.6a), 4 (probing, design note) | 6 de-risks M5.6 for free; 4 must influence M5.6 state policy before it freezes. |
 | 1 — after M5.5/M5.6 | 1, 9, 7, 11 (recording), 12, 13 | All consume machine-readable manifests, boot-state machinery, or existing contract tooling; host-side only. |
 | 2 — M6 era | 8, 3, 14, 15, 16, 11 (replay) | Spawn-service prerequisites land; M6 already scopes 14 and 16; replay wants 3's determinism grants. |
 | 3 — M7 and beyond | 5, 2, 10, 17, 18, 19 | Physical TPM, provenance maturity, cross-machine sync, and daily-driver hardware respectively. |
