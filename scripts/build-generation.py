@@ -74,6 +74,7 @@ def main() -> None:
     output = Path(sys.argv[2]).resolve()
     output.mkdir(parents=True, exist_ok=True)
     manifest = load_manifest()
+    generation_number = int(os.environ.get("SLIME_GENERATION_NUMBER") or manifest["generation"])
 
     if manifest["formatVersion"] != 1:
         fail("unsupported formatVersion")
@@ -140,7 +141,7 @@ def main() -> None:
         MAGIC,
         1,
         HEADER.size,
-        manifest["generation"],
+        generation_number,
         bytes(32),
         len(objects),
         len(components),
@@ -154,7 +155,7 @@ def main() -> None:
         MAGIC,
         1,
         HEADER.size,
-        manifest["generation"],
+        generation_number,
         digest,
         len(objects),
         len(components),
@@ -164,7 +165,10 @@ def main() -> None:
     )
     generation = header + body
     (output / "generation.bin").write_bytes(generation)
-    print(f"Built generation {manifest['generation']} ({len(generation)} bytes, sha256:{digest.hex()})")
+    print(
+        f"Built generation {generation_number} "
+        f"({len(generation)} bytes, sha256:{digest.hex()})"
+    )
 
 
 if __name__ == "__main__":

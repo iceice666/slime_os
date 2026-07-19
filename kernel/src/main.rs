@@ -136,7 +136,7 @@ fn kernel_main() {
         }
     }
     serial_println!("[platform] ACPI shutdown/reset mechanisms discovered");
-    serial_println!("[policy] no block or NVMe write capability exists");
+    serial_println!("[policy] storage writes require an explicit disposable-QEMU generation grant");
 
     #[cfg(not(test))]
     {

@@ -14,6 +14,12 @@ Protocol :: type {
   opRead : Int;
   opWrite : Int;
   opFlush : Int;
+  flagInjectRequestFailure : Int;
+  flagInjectTimeout : Int;
+  flagInjectReset : Int;
+  flagInjectFlushFailure : Int;
+  flagInjectInterrupted : Int;
+  flagReplayLast : Int;
   requestFields : List refl.SchemaField;
   replyFields : List refl.SchemaField;
   requestLayout : List WireField;
@@ -182,6 +188,12 @@ rustBindings :: Protocol -> Text
     "pub const OP_READ: u8 = "; natText protocol.opRead; ";\n";
     "pub const OP_WRITE: u8 = "; natText protocol.opWrite; ";\n";
     "pub const OP_FLUSH: u8 = "; natText protocol.opFlush; ";\n";
+    "pub const FLAG_INJECT_REQUEST_FAILURE: u8 = "; natText protocol.flagInjectRequestFailure; ";\n";
+    "pub const FLAG_INJECT_TIMEOUT: u8 = "; natText protocol.flagInjectTimeout; ";\n";
+    "pub const FLAG_INJECT_RESET: u8 = "; natText protocol.flagInjectReset; ";\n";
+    "pub const FLAG_INJECT_FLUSH_FAILURE: u8 = "; natText protocol.flagInjectFlushFailure; ";\n";
+    "pub const FLAG_INJECT_INTERRUPTED: u8 = "; natText protocol.flagInjectInterrupted; ";\n";
+    "pub const FLAG_REPLAY_LAST: u8 = "; natText protocol.flagReplayLast; ";\n";
     "pub const REQUEST_LEN: usize = "; natText protocol.requestLen; ";\n";
     "pub const REPLY_LEN: usize = "; natText protocol.replyLen; ";\n\n";
     offsetConsts "REQUEST" 0 protocol.requestLayout;
@@ -203,6 +215,12 @@ componentBindings :: Protocol -> Text
     ".equ BLOCK_OP_READ, "; natText protocol.opRead; "\n";
     ".equ BLOCK_OP_WRITE, "; natText protocol.opWrite; "\n";
     ".equ BLOCK_OP_FLUSH, "; natText protocol.opFlush; "\n";
+    ".equ BLOCK_FLAG_INJECT_REQUEST_FAILURE, "; natText protocol.flagInjectRequestFailure; "\n";
+    ".equ BLOCK_FLAG_INJECT_TIMEOUT, "; natText protocol.flagInjectTimeout; "\n";
+    ".equ BLOCK_FLAG_INJECT_RESET, "; natText protocol.flagInjectReset; "\n";
+    ".equ BLOCK_FLAG_INJECT_FLUSH_FAILURE, "; natText protocol.flagInjectFlushFailure; "\n";
+    ".equ BLOCK_FLAG_INJECT_INTERRUPTED, "; natText protocol.flagInjectInterrupted; "\n";
+    ".equ BLOCK_FLAG_REPLAY_LAST, "; natText protocol.flagReplayLast; "\n";
     ".equ BLOCK_REQUEST_LEN, "; natText protocol.requestLen; "\n";
     ".equ BLOCK_REPLY_LEN, "; natText protocol.replyLen; "\n\n";
     asmOffsetConsts "REQUEST" 0 protocol.requestLayout;

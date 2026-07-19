@@ -36,8 +36,10 @@
 mod generated;
 
 pub use generated::{
-    BLOCK_MAGIC, BLOCK_MAGIC_BYTES, FORMAT_VERSION, OP_FLUSH, OP_READ, OP_WRITE, REPLY_LEN,
-    REQUEST_LEN, WireBlockReply, WireBlockRequest,
+    BLOCK_MAGIC, BLOCK_MAGIC_BYTES, FLAG_INJECT_FLUSH_FAILURE, FLAG_INJECT_INTERRUPTED,
+    FLAG_INJECT_REQUEST_FAILURE, FLAG_INJECT_RESET, FLAG_INJECT_TIMEOUT, FLAG_REPLAY_LAST,
+    FORMAT_VERSION, OP_FLUSH, OP_READ, OP_WRITE, REPLY_LEN, REQUEST_LEN, WireBlockReply,
+    WireBlockRequest,
 };
 
 pub const BLOCK_E_OK: i32 = 0;
@@ -55,6 +57,12 @@ pub const BLOCK_E_TIMEOUT: i32 = -8;
 pub const MAX_SECTORS_PER_REQUEST: u32 = 256;
 pub const SECTOR_SIZE: usize = 512;
 pub const MAX_BUFFER_PAGES: u32 = 512;
+pub const FAULT_FLAGS: u8 = FLAG_INJECT_REQUEST_FAILURE
+    | FLAG_INJECT_TIMEOUT
+    | FLAG_INJECT_RESET
+    | FLAG_INJECT_FLUSH_FAILURE
+    | FLAG_INJECT_INTERRUPTED;
+pub const ALL_FLAGS: u8 = FAULT_FLAGS | FLAG_REPLAY_LAST;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProtoError {
@@ -80,6 +88,15 @@ pub fn decode_request(buf: &[u8]) -> Result<BlockRequest, ProtoError> {
     if !matches!(wire.op, OP_READ | OP_WRITE | OP_FLUSH) {
         return Err(ProtoError::BadOp);
     }
+    if wire.flags & !ALL_FLAGS != 0
+        || (wire.flags & FAULT_FLAGS).count_ones() > 1
+        || wire.flags & FLAG_REPLAY_LAST != 0 && wire.flags != FLAG_REPLAY_LAST
+        || wire.flags & FLAG_INJECT_FLUSH_FAILURE != 0 && wire.op != OP_FLUSH
+        || wire.flags & FLAG_INJECT_INTERRUPTED != 0 && wire.op != OP_WRITE
+        || wire.flags != 0 && wire.op != OP_FLUSH && wire.sector_count != 1
+    {
+        return Err(ProtoError::BadOp);
+    }
 
     if wire.op == OP_FLUSH {
         // Flush carries no payload; lba/sector_count/buffer must be zero.
@@ -92,6 +109,7 @@ pub fn decode_request(buf: &[u8]) -> Result<BlockRequest, ProtoError> {
         }
         return Ok(BlockRequest {
             op: wire.op,
+            flags: wire.flags,
             lba: 0,
             sector_count: 0,
             buffer_pages: 0,
@@ -114,6 +132,7 @@ pub fn decode_request(buf: &[u8]) -> Result<BlockRequest, ProtoError> {
     }
     Ok(BlockRequest {
         op: wire.op,
+        flags: wire.flags,
         lba: wire.lba,
         sector_count: wire.sector_count,
         buffer_pages: wire.buffer_pages,
@@ -124,6 +143,7 @@ pub fn decode_request(buf: &[u8]) -> Result<BlockRequest, ProtoError> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BlockRequest {
     pub op: u8,
+    pub flags: u8,
     pub lba: u64,
     pub sector_count: u32,
     pub buffer_pages: u32,
@@ -182,7 +202,7 @@ mod tests {
             magic: BLOCK_MAGIC,
             version: FORMAT_VERSION,
             op: OP_WRITE,
-            flags: 0x5a,
+            flags: FLAG_INJECT_RESET,
             reserved: 0x1234,
             lba: 0x0102_0304_0506_0708,
             sector_count: 16,

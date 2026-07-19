@@ -7,6 +7,12 @@ pub const BLOCK_MAGIC_BYTES: [u8; 4] = BLOCK_MAGIC.to_le_bytes();
 pub const OP_READ: u8 = 1;
 pub const OP_WRITE: u8 = 2;
 pub const OP_FLUSH: u8 = 3;
+pub const FLAG_INJECT_REQUEST_FAILURE: u8 = 1;
+pub const FLAG_INJECT_TIMEOUT: u8 = 2;
+pub const FLAG_INJECT_RESET: u8 = 4;
+pub const FLAG_INJECT_FLUSH_FAILURE: u8 = 8;
+pub const FLAG_INJECT_INTERRUPTED: u8 = 16;
+pub const FLAG_REPLAY_LAST: u8 = 32;
 pub const REQUEST_LEN: usize = 64;
 pub const REPLY_LEN: usize = 64;
 

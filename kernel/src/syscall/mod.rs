@@ -1,4 +1,6 @@
-use crate::capability::{KernelObject, RIGHT_BLOCK_READ, RIGHT_RECV, RIGHT_SEND, RIGHT_TRANSFER};
+use crate::capability::{
+    KernelObject, RIGHT_BLOCK_READ, RIGHT_BLOCK_WRITE, RIGHT_RECV, RIGHT_SEND, RIGHT_TRANSFER,
+};
 use crate::ipc::{self, MAX_CAPS_PER_MSG, MAX_MSG};
 use crate::task::{self, TermReason};
 use crate::trap::UserFrame;
@@ -124,15 +126,15 @@ fn sys_block_transact(frame: &mut UserFrame) {
         frame.rax = ipc::ERR_INVALID_ARG as u64;
         return;
     }
-    let authorized = task::with_current_mut(|task| {
-        task.caps.get(slot).is_some_and(|cap| {
-            cap.rights & RIGHT_BLOCK_READ != 0 && matches!(cap.object, KernelObject::BlockDevice)
-        })
+    let rights = task::with_current_mut(|task| {
+        task.caps
+            .get(slot)
+            .and_then(|cap| matches!(cap.object, KernelObject::BlockDevice).then_some(cap.rights))
     });
-    if !authorized {
+    let Some(rights) = rights else {
         frame.rax = ipc::ERR_BAD_CAP as u64;
         return;
-    }
+    };
 
     let mut request = [0u8; crate::block_proto::REQUEST_LEN];
     unsafe {
@@ -158,10 +160,32 @@ fn sys_block_transact(frame: &mut UserFrame) {
             return;
         }
     };
+    let replay = decoded.flags == crate::block_proto::FLAG_REPLAY_LAST;
+    let required_right = match decoded.op {
+        crate::block_proto::OP_READ => RIGHT_BLOCK_READ,
+        crate::block_proto::OP_WRITE | crate::block_proto::OP_FLUSH => RIGHT_BLOCK_WRITE,
+        _ => 0,
+    };
+    if rights & required_right == 0 {
+        frame.rax = ipc::ERR_BAD_CAP as u64;
+        return;
+    }
     let payload_len = decoded.sector_count as usize * crate::block_proto::SECTOR_SIZE;
-    if decoded.op == crate::block_proto::OP_READ
-        && !current_user_range(decoded.buffer_phys, payload_len, true)
-    {
+    let invalid_payload = if replay {
+        false
+    } else {
+        match decoded.op {
+            crate::block_proto::OP_READ => {
+                !current_user_range(decoded.buffer_phys, payload_len, true)
+            }
+            crate::block_proto::OP_WRITE => {
+                !current_user_range(decoded.buffer_phys, payload_len, false)
+            }
+            crate::block_proto::OP_FLUSH => false,
+            _ => true,
+        }
+    };
+    if invalid_payload {
         frame.rax = ipc::ERR_INVALID_ARG as u64;
         return;
     }
@@ -258,6 +282,8 @@ fn component_name_from_id(id: u64) -> Option<&'static str> {
         3 => Some("sysinfo"),
         4 => Some("echo-agent"),
         5 => Some("storage-probe"),
+        6 => Some("storage-writer"),
+        7 => Some("storage-fault-probe"),
         _ => None,
     }
 }

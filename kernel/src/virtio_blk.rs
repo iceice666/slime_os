@@ -1,8 +1,8 @@
-//! Modern virtio PCI block transport for the M5.2 read-only vertical slice.
+//! Modern virtio PCI block transport for bounded durable I/O.
 //!
-//! The transport deliberately negotiates no optional feature bits and uses one
+//! The transport negotiates a deliberately small feature set and uses one
 //! bounded split virtqueue. Requests are synchronous and polled with a timeout;
-//! interrupts are not required for the first deterministic QEMU slice.
+//! every failure resets the device before request DMA is reclaimed.
 
 use core::mem::{align_of, size_of};
 use core::ptr::{read_volatile, write_volatile};
@@ -34,6 +34,8 @@ const QUEUE_INDEX: u16 = 0;
 const QUEUE_SIZE: u16 = 8;
 
 const VIRTIO_BLK_T_IN: u32 = 0;
+const VIRTIO_BLK_T_OUT: u32 = 1;
+const VIRTIO_BLK_T_FLUSH: u32 = 4;
 const VIRTIO_BLK_S_OK: u8 = 0;
 
 const COMMON_DEVICE_FEATURE_SELECT: usize = 0x00;
@@ -73,6 +75,28 @@ pub enum VirtioBlkError {
     Timeout,
     ResetTimeout,
     DeviceStatus(u8),
+    InjectedFailure,
+}
+impl VirtioBlkError {
+    pub fn requires_reinitialize(self) -> bool {
+        matches!(
+            self,
+            Self::Pci(_)
+                | Self::Map(_)
+                | Self::BadCapability
+                | Self::MissingCommonConfig
+                | Self::MissingNotifyConfig
+                | Self::MissingDeviceConfig
+                | Self::UnsupportedFeatures
+                | Self::QueueUnavailable
+                | Self::QueueTooSmall
+                | Self::QueueAddress
+                | Self::Capacity
+                | Self::Dma(_)
+                | Self::ResetTimeout
+                | Self::DeviceStatus(_)
+        )
+    }
 }
 
 impl From<PciError> for VirtioBlkError {
@@ -266,6 +290,58 @@ impl VirtioBlock {
         self.capacity_sectors
     }
 
+    pub fn write_sector(&mut self, lba: u64, input: &[u8]) -> Result<(), VirtioBlkError> {
+        if input.len() != SECTOR_SIZE {
+            return Err(VirtioBlkError::BufferSize);
+        }
+        if lba >= self.capacity_sectors {
+            return Err(VirtioBlkError::OutOfRange);
+        }
+
+        let data_dma = DMA_TABLE.lock().pin(1)?;
+        zero_region(data_dma.phys(), data_dma.pages());
+        let destination = data_dma.phys().to_virt().as_mut_ptr::<u8>();
+        // SAFETY: `data_dma` is one writable pinned page and `input` is one sector.
+        unsafe { core::ptr::copy_nonoverlapping(input.as_ptr(), destination, input.len()) };
+        let result = self.execute_request(VIRTIO_BLK_T_OUT, lba, Some(&data_dma), false, None);
+        DMA_TABLE.lock().release(&data_dma)?;
+        result
+    }
+
+    pub fn flush(&mut self) -> Result<(), VirtioBlkError> {
+        self.execute_request(VIRTIO_BLK_T_FLUSH, 0, None, false, None)
+    }
+
+    pub fn inject_failure(&mut self) -> Result<(), VirtioBlkError> {
+        Err(VirtioBlkError::InjectedFailure)
+    }
+
+    pub fn inject_timeout(&mut self) -> Result<(), VirtioBlkError> {
+        Err(VirtioBlkError::Timeout)
+    }
+
+    pub fn inject_reset(&mut self) -> Result<(), VirtioBlkError> {
+        Err(VirtioBlkError::InjectedFailure)
+    }
+
+    pub fn inject_flush_failure(&mut self) -> Result<(), VirtioBlkError> {
+        Err(VirtioBlkError::InjectedFailure)
+    }
+
+    pub fn inject_interrupted_write(
+        &mut self,
+        lba: u64,
+        input: &[u8],
+    ) -> Result<(), VirtioBlkError> {
+        if input.len() != SECTOR_SIZE {
+            return Err(VirtioBlkError::BufferSize);
+        }
+        if lba >= self.capacity_sectors {
+            return Err(VirtioBlkError::OutOfRange);
+        }
+        Err(VirtioBlkError::InjectedFailure)
+    }
+
     pub fn read_sector(&mut self, lba: u64, output: &mut [u8]) -> Result<(), VirtioBlkError> {
         if output.len() != SECTOR_SIZE {
             return Err(VirtioBlkError::BufferSize);
@@ -276,27 +352,12 @@ impl VirtioBlock {
 
         let data_dma = DMA_TABLE.lock().pin(1)?;
         zero_region(data_dma.phys(), data_dma.pages());
-        data_dma.set_outstanding(true);
-        self.queue_dma.set_outstanding(true);
-
-        let result = self.submit_read(lba, &data_dma);
-        if result.is_err() {
-            // A failed or timed-out request may still be visible to the device.
-            // Reset first so no DMA write can race with page reclamation.
-            if self.reset().is_err() {
-                // Preserve the pins if reset cannot be confirmed; reclaiming
-                // them could expose unrelated future allocations to DMA.
-                return Err(VirtioBlkError::ResetTimeout);
-            }
-        }
+        let result = self.execute_request(VIRTIO_BLK_T_IN, lba, Some(&data_dma), true, None);
         if result.is_ok() {
             let source = data_dma.phys().to_virt().as_mut_ptr::<u8>();
             // SAFETY: the device completed the request before this copy.
             unsafe { core::ptr::copy_nonoverlapping(source, output.as_mut_ptr(), output.len()) };
         }
-
-        data_dma.set_outstanding(false);
-        self.queue_dma.set_outstanding(false);
         DMA_TABLE.lock().release(&data_dma)?;
         result
     }
@@ -313,14 +374,44 @@ impl VirtioBlock {
         Err(VirtioBlkError::ResetTimeout)
     }
 
-    fn submit_read(
+    fn execute_request(
         &mut self,
+        request_type: u32,
         lba: u64,
-        data_dma: &crate::capability::DmaRegion,
+        data_dma: Option<&crate::capability::DmaRegion>,
+        device_writes_data: bool,
+        spin_limit: Option<u32>,
+    ) -> Result<(), VirtioBlkError> {
+        if let Some(data_dma) = data_dma {
+            data_dma.set_outstanding(true);
+        }
+        self.queue_dma.set_outstanding(true);
+        let result = self.submit(request_type, lba, data_dma, device_writes_data, spin_limit);
+        if result.is_err() && self.reset().is_err() {
+            if let Some(data_dma) = data_dma {
+                data_dma.set_outstanding(false);
+            }
+            self.queue_dma.set_outstanding(false);
+            return Err(VirtioBlkError::ResetTimeout);
+        }
+        if let Some(data_dma) = data_dma {
+            data_dma.set_outstanding(false);
+        }
+        self.queue_dma.set_outstanding(false);
+        result
+    }
+
+    fn submit(
+        &mut self,
+        request_type: u32,
+        lba: u64,
+        data_dma: Option<&crate::capability::DmaRegion>,
+        device_writes_data: bool,
+        spin_limit: Option<u32>,
     ) -> Result<(), VirtioBlkError> {
         let queue = queue_memory(&self.queue_dma);
         queue.header = VirtioBlkRequestHeader {
-            request_type: VIRTIO_BLK_T_IN,
+            request_type,
             reserved: 0,
             sector: lba,
         };
@@ -333,14 +424,21 @@ impl VirtioBlock {
             addr: header_address,
             len: size_of::<VirtioBlkRequestHeader>() as u32,
             flags: VIRTQ_DESC_F_NEXT,
-            next: 1,
+            next: if data_dma.is_some() { 1 } else { 2 },
         };
-        queue.descriptors[1] = VirtqDescriptor {
-            addr: data_dma.phys().as_u64(),
-            len: SECTOR_SIZE as u32,
-            flags: VIRTQ_DESC_F_NEXT | VIRTQ_DESC_F_WRITE,
-            next: 2,
-        };
+        if let Some(data_dma) = data_dma {
+            queue.descriptors[1] = VirtqDescriptor {
+                addr: data_dma.phys().as_u64(),
+                len: SECTOR_SIZE as u32,
+                flags: VIRTQ_DESC_F_NEXT
+                    | if device_writes_data {
+                        VIRTQ_DESC_F_WRITE
+                    } else {
+                        0
+                    },
+                next: 2,
+            };
+        }
         queue.descriptors[2] = VirtqDescriptor {
             addr: status_address,
             len: 1,
@@ -348,8 +446,6 @@ impl VirtioBlock {
             next: 0,
         };
 
-        // SAFETY: virtqueue metadata is device-visible DMA memory. Volatile
-        // accesses prevent compiler caching while the device updates it.
         let avail_index = unsafe { read_volatile(&queue.avail.idx) };
         unsafe {
             write_volatile(
@@ -362,18 +458,16 @@ impl VirtioBlock {
         let notify_offset = self.queue_notify_offset as usize * self.notify_multiplier as usize;
         self.notify.write_u16(notify_offset, QUEUE_INDEX);
 
+        let spin_limit = spin_limit.unwrap_or(10_000_000);
         let mut spins = 0u32;
         loop {
             core::sync::atomic::fence(core::sync::atomic::Ordering::Acquire);
-            // SAFETY: `idx` is written asynchronously by the device.
             let used_index = unsafe { read_volatile(&queue.used.idx) };
             if used_index != self.last_used {
-                // SAFETY: the device completed this used-ring element and
-                // status byte before incrementing used.idx.
                 let used = unsafe {
                     read_volatile(&queue.used.ring[(self.last_used as usize) % QUEUE_SIZE as usize])
                 };
-                if used.id >= QUEUE_SIZE as u32 || used.id != 0 {
+                if used.id != 0 {
                     return Err(VirtioBlkError::DeviceStatus(0xfe));
                 }
                 self.last_used = self.last_used.wrapping_add(1);
@@ -384,7 +478,7 @@ impl VirtioBlock {
                 return Ok(());
             }
             spins = spins.wrapping_add(1);
-            if spins == 10_000_000 {
+            if spins == spin_limit {
                 return Err(VirtioBlkError::Timeout);
             }
             core::hint::spin_loop();

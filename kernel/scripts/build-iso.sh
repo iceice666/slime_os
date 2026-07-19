@@ -29,7 +29,8 @@ SIZE_MIB="${3:-64}"
 [[ -f "$KERNEL" ]] || { echo "kernel not found: $KERNEL" >&2; exit 1; }
 GEN_DIR="$(mktemp -d -t slime-os-generation.XXXXXX)"
 trap 'rm -rf "$GEN_DIR"' EXIT
-"$(dirname "$0")/../../scripts/build-generation.py" "$KERNEL" "$GEN_DIR" >/dev/null
+SLIME_GENERATION_NUMBER="${SLIME_GENERATION_NUMBER:-}" \
+    "$(dirname "$0")/../../scripts/build-generation.py" "$KERNEL" "$GEN_DIR" >/dev/null
 
 # Locate Limine's datadir (BOOTX64.EFI lives there).
 LIMINE_DATADIR="$(limine --print-datadir 2>/dev/null || true)"

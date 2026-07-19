@@ -62,11 +62,9 @@ _start:
     cmp rax, rbx
     jne fail
 
-    # Writes are structurally rejected by the read-only service.
+    # The read-only capability cannot authorize a write request.
     mov BYTE PTR [r12 + OFF_REQUEST_OP], BLOCK_OP_WRITE
-    call block_call
-    cmp DWORD PTR [r13 + OFF_REPLY_STATUS], -6
-    jne fail
+    call block_call_expect_bad_cap
 
     # A buffer declaration smaller than the payload is rejected before I/O.
     mov BYTE PTR [r12 + OFF_REQUEST_OP], BLOCK_OP_READ
@@ -99,6 +97,15 @@ fail:
     mov rdi, 1
     mov rax, 3
     int 0x80
+block_call_expect_bad_cap:
+    xor rdi, rdi
+    mov rsi, r12
+    mov rdx, r13
+    mov rax, 6
+    int 0x80
+    cmp rax, -1
+    jne fail
+    ret
 block_call:
     xor rdi, rdi
     mov rsi, r12

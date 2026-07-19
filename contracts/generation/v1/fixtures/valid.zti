@@ -13,6 +13,8 @@
     { id = "sha256:sysinfo"; kind = "component"; size = 32768; };
     { id = "sha256:echo-agent"; kind = "component"; size = 32768; };
     { id = "sha256:storage-probe"; kind = "component"; size = 32768; };
+    { id = "sha256:storage-writer"; kind = "component"; size = 32768; };
+    { id = "sha256:storage-fault-probe"; kind = "component"; size = 32768; };
   ];
 
   components = [
@@ -52,6 +54,18 @@
       role = "application";
       dependencies = [];
     };
+    {
+      name = "storage-writer";
+      object = "sha256:storage-writer";
+      role = "application";
+      dependencies = [];
+    };
+    {
+      name = "storage-fault-probe";
+      object = "sha256:storage-fault-probe";
+      role = "application";
+      dependencies = [];
+    };
   ];
   grants = [
     {
@@ -87,6 +101,20 @@
       source = "init";
       target = "storage-probe";
       rights = ["read";];
+      transferable = false;
+    };
+    {
+      name = "block-write-check";
+      source = "init";
+      target = "storage-writer";
+      rights = ["read"; "write";];
+      transferable = false;
+    };
+    {
+      name = "block-fault-check";
+      source = "init";
+      target = "storage-fault-probe";
+      rights = ["read"; "write";];
       transferable = false;
     };
   ];

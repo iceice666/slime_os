@@ -1,19 +1,25 @@
-//! Capability-gated read-only block service.
+//! Capability-gated block service with deterministic request recording.
 //!
-//! The service is invoked through `SYS_BLOCK_TRANSACT` on a `BlockDevice`
-//! capability. Request and reply layouts remain the schema-generated block
-//! protocol, while sector payloads are copied only into a validated user buffer.
+//! `SYS_BLOCK_TRANSACT` validates operation-specific capability rights and user
+//! mappings. This service owns bounded device dispatch, durability ordering,
+//! transport recovery, and the M5.3 single-entry IPC flight recorder.
 
 use spin::{LazyLock, Mutex};
 
 use crate::block_proto::{
     BLOCK_E_BAD_MAGIC, BLOCK_E_BAD_OP, BLOCK_E_BUFFER_TOO_SMALL, BLOCK_E_DEVICE, BLOCK_E_NO_BUFFER,
-    BLOCK_E_NOT_AUTHORIZED, BLOCK_E_OK, BLOCK_E_OUT_OF_RANGE, BLOCK_E_TIMEOUT, OP_READ, ProtoError,
-    REPLY_LEN, decode_request, encode_reply,
+    BLOCK_E_NOT_AUTHORIZED, BLOCK_E_OK, BLOCK_E_OUT_OF_RANGE, BLOCK_E_TIMEOUT, BlockRequest,
+    FLAG_INJECT_FLUSH_FAILURE, FLAG_INJECT_INTERRUPTED, FLAG_INJECT_REQUEST_FAILURE,
+    FLAG_INJECT_RESET, FLAG_INJECT_TIMEOUT, FLAG_REPLAY_LAST, OP_FLUSH, OP_READ, OP_WRITE,
+    ProtoError, REPLY_LEN, SECTOR_SIZE, decode_request, encode_reply,
 };
+use crate::serial_println;
 use crate::virtio_blk::{VirtioBlkError, VirtioBlock};
 
 static DEVICE: LazyLock<Mutex<Option<VirtioBlock>>> = LazyLock::new(|| Mutex::new(None));
+static LAST_PAYLOAD: LazyLock<Mutex<[u8; SECTOR_SIZE]>> =
+    LazyLock::new(|| Mutex::new([0; SECTOR_SIZE]));
+static LAST_REQUEST: LazyLock<Mutex<Option<BlockRequest>>> = LazyLock::new(|| Mutex::new(None));
 
 pub fn transact(request: &[u8], reply: &mut [u8; REPLY_LEN]) {
     let decoded = match decode_request(request) {
@@ -23,45 +29,130 @@ pub fn transact(request: &[u8], reply: &mut [u8; REPLY_LEN]) {
             return;
         }
     };
-    if decoded.op != OP_READ {
-        encode_reply(reply, BLOCK_E_NOT_AUTHORIZED, 0);
-        return;
-    }
+    let decoded = if decoded.flags == FLAG_REPLAY_LAST {
+        let Some(mut recorded) = *LAST_REQUEST.lock() else {
+            encode_reply(reply, BLOCK_E_DEVICE, 0);
+            return;
+        };
+        if recorded.op != OP_FLUSH {
+            recorded.buffer_phys = LAST_PAYLOAD.lock().as_ptr() as u64;
+        }
+        serial_println!(
+            "[block-flight] replay op={} flags={} lba={} sectors={}",
+            recorded.op,
+            recorded.flags,
+            recorded.lba,
+            recorded.sector_count
+        );
+        recorded
+    } else {
+        let mut recorded = decoded;
+        if decoded.op == OP_WRITE {
+            let bytes = decoded.sector_count as usize * SECTOR_SIZE;
+            let snapshot_len = bytes.min(SECTOR_SIZE);
+            let mut payload = LAST_PAYLOAD.lock();
+            let source = decoded.buffer_phys as *const u8;
+            unsafe { core::ptr::copy_nonoverlapping(source, payload.as_mut_ptr(), snapshot_len) };
+            recorded.buffer_phys = payload.as_ptr() as u64;
+        }
+        serial_println!(
+            "[block-flight] record op={} flags={} lba={} sectors={}",
+            decoded.op,
+            decoded.flags,
+            decoded.lba,
+            decoded.sector_count
+        );
+        *LAST_REQUEST.lock() = Some(recorded);
+        decoded
+    };
 
-    let bytes = decoded.sector_count as usize * crate::block_proto::SECTOR_SIZE;
-    // `decode_request` checked arithmetic bounds and payload size. The syscall
-    // gate validated that this user range is writable in the current task.
-    let output = unsafe { core::slice::from_raw_parts_mut(decoded.buffer_phys as *mut u8, bytes) };
     let mut device = DEVICE.lock();
     if device.is_none() {
         match VirtioBlock::find_and_init() {
             Ok(found) => *device = Some(found),
             Err(error) => {
                 encode_reply(reply, device_status(error), 0);
+                serial_println!("[block-flight] init error {:?}", error);
                 return;
             }
         }
     }
-    for sector in 0..decoded.sector_count {
-        let start = sector as usize * crate::block_proto::SECTOR_SIZE;
-        let end = start + crate::block_proto::SECTOR_SIZE;
-        let Some(lba) = decoded.lba.checked_add(sector as u64) else {
-            encode_reply(reply, BLOCK_E_OUT_OF_RANGE, sector);
-            return;
+    let result = execute(device.as_mut().expect("block device initialized"), decoded);
+    if result.is_ok() && decoded.op == OP_READ {
+        let mut payload = LAST_PAYLOAD.lock();
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                decoded.buffer_phys as *const u8,
+                payload.as_mut_ptr(),
+                SECTOR_SIZE,
+            )
         };
-        let result = device
-            .as_mut()
-            .expect("block device initialized")
-            .read_sector(lba, &mut output[start..end]);
-        if let Err(error) = result {
-            // Any transport error resets the device. Drop it so a later call
-            // performs a clean initialization instead of reusing dead queues.
+        let mut recorded = decoded;
+        recorded.buffer_phys = payload.as_ptr() as u64;
+        *LAST_REQUEST.lock() = Some(recorded);
+    }
+    if let Err(error) = result {
+        if error.requires_reinitialize() {
             *device = None;
-            encode_reply(reply, device_status(error), sector);
-            return;
         }
+        encode_reply(reply, device_status(error), 0);
+        serial_println!(
+            "[block-flight] error {:?} status={}",
+            error,
+            device_status(error)
+        );
+        return;
     }
     encode_reply(reply, BLOCK_E_OK, decoded.sector_count);
+}
+
+fn execute(device: &mut VirtioBlock, request: BlockRequest) -> Result<(), VirtioBlkError> {
+    match request.flags {
+        FLAG_INJECT_REQUEST_FAILURE => return device.inject_failure(),
+        FLAG_INJECT_TIMEOUT => return device.inject_timeout(),
+        FLAG_INJECT_RESET => return device.inject_reset(),
+        FLAG_INJECT_FLUSH_FAILURE => return device.inject_flush_failure(),
+        _ => {}
+    }
+
+    match request.op {
+        OP_READ => {
+            let bytes = request.sector_count as usize * SECTOR_SIZE;
+            // SAFETY: the syscall gate validated the entire writable user range.
+            let output =
+                unsafe { core::slice::from_raw_parts_mut(request.buffer_phys as *mut u8, bytes) };
+            for sector in 0..request.sector_count {
+                let start = sector as usize * SECTOR_SIZE;
+                let end = start + SECTOR_SIZE;
+                let lba = request
+                    .lba
+                    .checked_add(sector as u64)
+                    .ok_or(VirtioBlkError::OutOfRange)?;
+                device.read_sector(lba, &mut output[start..end])?;
+            }
+        }
+        OP_WRITE => {
+            let bytes = request.sector_count as usize * SECTOR_SIZE;
+            // SAFETY: the syscall gate validated the entire readable user range.
+            let input =
+                unsafe { core::slice::from_raw_parts(request.buffer_phys as *const u8, bytes) };
+            if request.flags == FLAG_INJECT_INTERRUPTED {
+                return device.inject_interrupted_write(request.lba, &input[..SECTOR_SIZE]);
+            }
+            for sector in 0..request.sector_count {
+                let start = sector as usize * SECTOR_SIZE;
+                let end = start + SECTOR_SIZE;
+                let lba = request
+                    .lba
+                    .checked_add(sector as u64)
+                    .ok_or(VirtioBlkError::OutOfRange)?;
+                device.write_sector(lba, &input[start..end])?;
+            }
+        }
+        OP_FLUSH => device.flush()?,
+        _ => return Err(VirtioBlkError::InjectedFailure),
+    }
+    Ok(())
 }
 
 fn protocol_status(error: ProtoError) -> i32 {
@@ -81,7 +172,7 @@ fn device_status(error: VirtioBlkError) -> i32 {
     match error {
         VirtioBlkError::OutOfRange => BLOCK_E_OUT_OF_RANGE,
         VirtioBlkError::BufferSize => BLOCK_E_BUFFER_TOO_SMALL,
-        VirtioBlkError::Timeout => BLOCK_E_TIMEOUT,
+        VirtioBlkError::Timeout | VirtioBlkError::ResetTimeout => BLOCK_E_TIMEOUT,
         _ => BLOCK_E_DEVICE,
     }
 }

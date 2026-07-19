@@ -26,6 +26,14 @@ blockMagic :: Int = 1162562626;
 opRead :: Int = 1;
 opWrite :: Int = 2;
 opFlush :: Int = 3;
+-- Test-only deterministic fault injection and flight-recorder replay flags.
+-- Production callers leave flags zero; combinations are rejected.
+flagInjectRequestFailure :: Int = 1;
+flagInjectTimeout :: Int = 2;
+flagInjectReset :: Int = 4;
+flagInjectFlushFailure :: Int = 8;
+flagInjectInterrupted :: Int = 16;
+flagReplayLast :: Int = 32;
 
 WireField :: type { name : Text; width : Int; signed : Bool; };
 
@@ -78,6 +86,12 @@ protocol ::= {
   opRead = opRead;
   opWrite = opWrite;
   opFlush = opFlush;
+  flagInjectRequestFailure = flagInjectRequestFailure;
+  flagInjectTimeout = flagInjectTimeout;
+  flagInjectReset = flagInjectReset;
+  flagInjectFlushFailure = flagInjectFlushFailure;
+  flagInjectInterrupted = flagInjectInterrupted;
+  flagReplayLast = flagReplayLast;
   requestFields = requestSchema.fields ?? {;};
   replyFields = replySchema.fields ?? {;};
   requestLayout = requestLayout;

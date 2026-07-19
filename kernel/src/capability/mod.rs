@@ -30,6 +30,7 @@ pub const RIGHT_IRQ_ACK: u32 = 1 << 7;
 pub const RIGHT_BUFFER_WRITE: u32 = 1 << 8;
 pub const RIGHT_MAP: u32 = 1 << 9;
 pub const RIGHT_BLOCK_READ: u32 = 1 << 10;
+pub const RIGHT_BLOCK_WRITE: u32 = 1 << 11;
 
 /// All rights a capability may ever carry. Used to reject unknown bits.
 pub const RIGHT_ALL: u32 = RIGHT_SEND
@@ -42,7 +43,8 @@ pub const RIGHT_ALL: u32 = RIGHT_SEND
     | RIGHT_IRQ_ACK
     | RIGHT_BUFFER_WRITE
     | RIGHT_MAP
-    | RIGHT_BLOCK_READ;
+    | RIGHT_BLOCK_READ
+    | RIGHT_BLOCK_WRITE;
 
 #[derive(Clone)]
 pub struct Capability {

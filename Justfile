@@ -36,6 +36,14 @@ storage_read_check:
         -drive if=none,id=slime-storage,format=raw,readonly=on,file=/tmp/slime-os-storage-read.img \
         -device virtio-blk-pci,drive=slime-storage,disable-legacy=on,queue-size=8
 
+# M5.3: persist a bounded write, flush it, and verify it after a fresh boot.
+storage_write_check:
+    ./scripts/check-storage.py write /tmp/slime-os-storage-write.img
+
+# M5.3: inject deterministic block failures and replay the recorded request.
+storage_fault_check:
+    ./scripts/check-storage.py fault /tmp/slime-os-storage-fault.img
+
 # Run with QEMU monitor on stdin.
 monitor:
     cd kernel && cargo run -- -monitor stdio -serial null
@@ -86,7 +94,8 @@ generation_check:
     ./scripts/build-generation.py kernel/target/x86_64-unknown-none/debug/slime_os-kernel /tmp/slime-os-generation-check
     ./scripts/check-generation.py /tmp/slime-os-generation-check/generation.bin
 
-# Prove that the current capability, syscall, and driver surfaces expose no storage writes.
+# Prove Framework images grant no storage-write authority and contain no
+# storage-write path even though disposable QEMU generations may opt in.
 framework_safety_check:
     python3 scripts/check-no-storage-authority.py
 
