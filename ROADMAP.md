@@ -23,6 +23,7 @@ Every milestone must preserve these project invariants:
 - The kernel owns only privileged mechanisms: scheduling, address spaces, memory objects, capability enforcement, IPC, interrupts, timers, and minimal platform control.
 - Device, filesystem, generation, health, activation, and rollback policy belongs in userspace services.
 - Authority is carried by explicit capabilities. There are no ambient executable paths, storage handles, working directories, streams, or environment state.
+- The kernel object-by-rights surface, the rules for extending it, and the planned authority horizon are fixed in `docs/capability-matrix.md`; a new object or right updates the matrix in the same change.
 - Generation and storage formats are deterministic, versioned, bounded, integrity checked, and explicitly rejected when malformed or unsupported.
 - Activation never overwrites the running generation in place.
 - No physical-machine support claim is complete without observed hardware behavior.
@@ -112,6 +113,7 @@ The repository already provides:
 - rights-checked capabilities for PCI functions, DMA memory, interrupts, and shared memory, with DMA pinning guarded against reclamation while a request is outstanding;
 - a bounded block request/reply IPC protocol with payloads in shared memory;
 - an allowlist-based `scripts/check-no-storage-authority.py` proving no component receives ambient disk-write authority;
+- a bounded live-task table, spawn grants that enforce the same transfer-right condition as IPC sends, and capability tables that reject rights meaningless for the object kind (`kernel/tests/spawn_authority.rs`);
 - the `storage_cap_check` QEMU target (`kernel/tests/storage_capability.rs`).
 
 The remaining gaps include:
@@ -420,6 +422,7 @@ Scope:
 
 - minimal Dango implementation and core runtime;
 - command profile/resolver and spawn service;
+- kernel prerequisites the spawn service consumes, none of which exist yet: userspace endpoint minting, a non-consuming derive-copy grant path, per-spawner resource accounting, and supervision handles (tracked in `docs/capability-matrix.md`);
 - filesystem service and directory capabilities;
 - generation inspection and update commands;
 - a powerbox-style file dialog service where the user's selection gesture mints a single-object capability;
