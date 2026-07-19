@@ -2,7 +2,7 @@
 
 Slime OS is an experimental atomic personal operating system built from a new kernel and userspace rather than on Linux. Its purpose is to explore capability-based isolation, component-oriented system services, explicit resource authority, and generation-based deployment while progressing toward a system usable on one real daily-driver laptop.
 
-The project is currently a QEMU-verified Rust `no_std` kernel with a minimal userspace component graph, plus an observed removable-media boot on the Framework 13 AMD AI 300 target. It can build a UEFI image, print through GOP and serial, run kernel tests, decode a deterministic generation manifest, launch `init`, `console`, `dango`, `sysinfo`, and `echo-agent` components, pass IPC capabilities between them, and report a healthy vertical slice. Storage, rollbackable generations, native interactive Dango, and daily-driver hardware remain unfinished.
+The project is currently a QEMU-verified Rust `no_std` kernel with a minimal userspace component graph, plus an observed removable-media boot on the Framework 13 AMD AI 300 target. It can build a UEFI image, print through GOP and serial, run kernel tests, decode a deterministic generation manifest, launch `init`, `console`, `dango`, `sysinfo`, and `echo-agent` components, pass IPC capabilities between them, and report a healthy vertical slice. The storage capability foundation is in place, but block I/O, rollbackable generations, native interactive Dango, and daily-driver hardware remain unfinished.
 
 ## Current status
 
@@ -11,7 +11,8 @@ The project is currently a QEMU-verified Rust `no_std` kernel with a minimal use
 - Core isolation is exercised by tests: independent userspace components can communicate over IPC, and a faulting component does not corrupt or terminate its peer or the kernel.
 - Generation format 1 has a pinned Zutai-side contract, fixtures, a deterministic host builder, and a kernel decoder.
 - The first QEMU vertical slice is healthy: `init` launches `console`, `dango`, `sysinfo`, and `echo-agent`; Dango resolves executable authority through capabilities; `sysinfo` and `echo-agent` stream structured output; every component exits successfully.
-- Framework safe bring-up is verified with storage authority absent; storage, rollbackable generations, native interactive Dango, and daily-driver hardware support are not complete.
+- The storage capability foundation (M5.1) is complete: ACPI MCFG parsing, bounded PCI enumeration, rights-checked capabilities for PCI functions, DMA memory, interrupts, and shared memory, DMA pinning guarded against reclamation while requests are outstanding, and a bounded block request/reply IPC protocol, verified by the `storage_cap_check` QEMU target.
+- Framework safe bring-up is verified with storage authority absent; virtio block I/O, durable writes, rollbackable generations, native interactive Dango, and daily-driver hardware support are not complete.
 
 ## Vision
 
@@ -47,6 +48,8 @@ Userspace services should own policy and most complex subsystems:
 - networking;
 - display, input, and audio;
 - generation construction, activation, health checking, and rollback.
+
+IPC message contracts are intended to become schema-first: channel message types are declared as Zutai types, and endpoint bindings are generated rather than hand-written. This makes "tool call = channel" literal — an agent tool schema and a system IPC schema are the same artifact — and gives interposition tooling (auditing, recording, replay) typed messages instead of opaque bytes.
 
 POSIX and Linux compatibility may exist later as userspace personalities or isolated virtual machines. They are compatibility facilities, not the native kernel ABI or authority model.
 
@@ -169,7 +172,23 @@ The kernel does not treat agents or language models as special. A language model
 
 External agent protocols such as MCP may be bridged by a dedicated component that exposes protocol servers as Slime capability endpoints. The bridge cannot grant authority the agent does not already hold, so prompt injection success at the model layer is still bounded by the generation's declared grants.
 
+Because no component holds ambient authority, every capability can be transparently interposed by a user-chosen proxy component (a membrane). This enables agent dry-runs: an agent can be executed against virtualized capabilities to preview the effects it *would* have, before any real authority is granted. Capability transfers can also record provenance, so the system can answer "why is this component allowed to do X" as an explicit grant chain rooted in the generation manifest.
+
 Atomicity and agentic operation reinforce each other: agent memory and authority are versioned, verified, and rollbackable by the same mechanisms as the boot graph, and the boot graph can include agent components without a separate agent deployment track.
+
+## Differentiating directions
+
+These are exploratory directions enabled by the capability and generation model. None of them is a committed milestone; each becomes real only when promoted into ROADMAP.md with an observable exit condition.
+
+- **IPC flight recorder and deterministic replay.** All component input crosses channel boundaries, so recording at that boundary yields deterministic re-execution of a single component. A bug report becomes a generation hash plus an IPC trace.
+- **Generation bisect.** Generations form a content-addressed parent chain, so "which update regressed this" is automatable as safe boot-and-health-check bisection.
+- **Shadow boot.** A pending generation can be health-checked in a constrained sub-graph or guest VM before real activation consumes a boot attempt.
+- **Cross-machine generation sync.** A generation is a manifest plus content-addressed objects; moving a system to a new machine is object transfer plus activation, including capability grants and state policy — not dotfile reconstruction.
+- **Zutai-defined state migrations.** State schema upgrades expressed as pure Zutai transformations are deterministic, dry-runnable before activation, and covered by the same rollback contract as the boot graph.
+- **Powerbox UI.** Applications never hold an ambient "open file" right; the file dialog is a system component, and the user's selection gesture itself mints a single-object capability. Authorization and intent are the same gesture.
+- **Per-component energy accounting.** Scheduler-attributed energy per component and per channel activity, with policy such as background power budgets carried as grants.
+- **Per-destination network authority.** Network access is a capability to explicit endpoints declared by the generation, making exfiltration surface auditable in the manifest — particularly relevant for agent components.
+- **MPK/PKU lightweight compartments.** A third isolation tier between full components and same-address-space code for latency-sensitive boundaries, using user-space protection keys available on the target CPU.
 
 ## First vertical slice
 
@@ -213,11 +232,11 @@ Current sequence:
 2. Isolation and IPC — core QEMU exit passing.
 3. Bootstrap component graph — QEMU vertical slice passing.
 4. Framework safe bring-up — verified.
-5. Storage and generations — next; not yet implemented.
+5. Storage and generations — in progress; capability foundation (M5.1) complete.
 6. Native interactive environment — minimal stub only.
 7. Daily-driver hardware — not yet implemented.
 
-The next milestone is storage and rollbackable generations. Its exit condition is that a failed pending generation automatically leaves or restores a bootable known-good generation. `ROADMAP.md` decomposes this work into capability foundations, virtio block I/O, durable writes, GPT and the object store, boot-state records, rollback and GC, and Framework NVMe safety promotion.
+The current milestone is storage and rollbackable generations. Its exit condition is that a failed pending generation automatically leaves or restores a bootable known-good generation. The capability foundation (M5.1) is complete; the next slice is read-only virtio block I/O. `ROADMAP.md` decomposes the remaining work into typed IPC schemas, virtio block I/O, durable writes, GPT and the object store, boot-state records, rollback and GC, and Framework NVMe safety promotion.
 
 ## Current repository layout
 

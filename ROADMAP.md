@@ -12,7 +12,7 @@ Completion requires observable behavior, not only compiled code or framebuffer o
 | 2. Isolation and IPC | Core QEMU exit passing | Two userspace components communicate, and one may fault without corrupting the other or the kernel. |
 | 3. Bootstrap component graph | QEMU vertical slice passing | The first isolated userspace vertical slice works under QEMU. |
 | 4. Framework safe bring-up | Verified | The same isolated userspace slice runs from removable media without modifying internal storage. |
-| 5. Storage and generations | Next; not yet implemented | A failed pending generation automatically leaves or restores a bootable known-good generation. |
+| 5. Storage and generations | In progress — M5.1 complete | A failed pending generation automatically leaves or restores a bootable known-good generation. |
 | 6. Native interactive environment | Minimal stub only | Native components can inspect, build or stage, select, and roll back generations. |
 | 7. Daily-driver hardware | Not yet implemented | The Framework target supports the hardware and lifecycle needed for daily use. |
 
@@ -84,7 +84,7 @@ Exit condition: the same isolated userspace slice runs on the Framework without 
 
 ## Milestone 5: Storage and generations
 
-**Status:** Next milestone; not yet implemented.
+**Status:** In progress. M5.1 (storage capability foundation) is complete; the read-only virtio block slice (M5.2) is next.
 
 Top-level scope:
 
@@ -107,14 +107,16 @@ The repository already provides:
 - one Limine-loaded generation module;
 - isolated userspace components, IPC endpoints, capability transfer, and structured termination;
 - QEMU test execution through `kernel/scripts/run-kernel.sh`;
-- Framework removable-media image and write-safety tooling.
+- Framework removable-media image and write-safety tooling;
+- ACPI MCFG parsing and bounded PCI enumeration with capability-chain and BAR validation;
+- rights-checked capabilities for PCI functions, DMA memory, interrupts, and shared memory, with DMA pinning guarded against reclamation while a request is outstanding;
+- a bounded block request/reply IPC protocol with payloads in shared memory;
+- an allowlist-based `scripts/check-no-storage-authority.py` proving no component receives ambient disk-write authority;
+- the `storage_cap_check` QEMU target (`kernel/tests/storage_capability.rs`).
 
 The remaining gaps include:
 
-- no PCI enumeration or ACPI MCFG/ECAM support;
-- no DMA-memory lifecycle or device interrupt capability;
-- no virtio transport or block protocol;
-- no shared data object suitable for sector-sized I/O;
+- no virtio transport or device backend behind the block protocol;
 - no GPT or persistent object store;
 - no persistent boot-state record;
 - no pending/known-good selection, health promotion, rollback, or GC implementation;
@@ -138,7 +140,10 @@ The kernel enforces capability rights, mappings, DMA-buffer lifetime, and interr
 
 Before IOMMU enforcement exists, DMA-capable driver components remain part of the trusted computing base. This interim path is acceptable only for deterministic QEMU images and dedicated test devices; it does not authorize writes to the Framework's internal NVMe.
 
-### M5.1: Storage capability foundation — done (QEMU `storage_cap_check` passing)
+### M5.1: Storage capability foundation
+
+**Status:** Complete. The exit condition is observed by the `storage_cap_check` QEMU target (`kernel/tests/storage_capability.rs`): an unprivileged component cannot acquire device rights.
+
 Deliverables:
 
 - parse ACPI MCFG and enumerate bounded PCI segment/bus/device/function ranges;
@@ -158,6 +163,27 @@ Required checks:
 - malformed PCI capability chains and BAR declarations are rejected without hanging.
 
 Exit condition: an isolated driver service can receive only explicitly granted generic device resources, while an unprivileged component cannot access them.
+
+Follow-up (not an M5.1 exit requirement): capability transfers should eventually record a provenance link (granting component, transferred rights, originating grant) so that authority chains can be reconstructed for auditing. The capability table introduced here is the natural place to attach it.
+
+### M5.2a: Typed IPC schemas
+
+This slice precedes or runs in parallel with M5.2. It is deliberately early: every later protocol, interposition tool, and agent tool-call surface gets cheaper once message contracts are schema-first.
+
+Deliverables:
+
+- declare the block request/reply protocol (M5.1) as Zutai types in `contracts/`;
+- generate kernel-side and component-side bindings from the schema, or validate hand-written bindings against it deterministically;
+- version the schema; unknown versions and out-of-bounds fields are rejected structurally;
+- document that new IPC protocols must be schema-first from this point on.
+
+Required checks:
+
+- the generated/validated bindings round-trip every message type byte-identically;
+- a message violating declared bounds is rejected on both ends;
+- `just contracts_check` covers the IPC schemas.
+
+Exit condition: the block protocol used by M5.2 is defined by a versioned schema in `contracts/`, and no hand-written message layout disagrees with it.
 
 ### M5.2: Read-only virtio block vertical slice
 
@@ -197,7 +223,8 @@ Deliverables:
 - implement bounded writes, flush, completion, timeout, and device reset;
 - ensure descriptor and DMA-buffer ownership is recovered after every success or failure path;
 - persist a write to a disposable QEMU image and verify it after a fresh boot;
-- add deterministic fault injection for request failure, timeout, reset, flush failure, and interrupted updates.
+- add deterministic fault injection for request failure, timeout, reset, flush failure, and interrupted updates;
+- record the IPC messages of the driver component during fault-injection runs, so a failing run can be re-executed deterministically from its recorded inputs (foundation for a general IPC flight recorder; replay of arbitrary components is out of scope here).
 
 Required checks:
 
@@ -310,6 +337,8 @@ just rollback_check
 
 Exit condition: a deliberately failing pending generation automatically returns to a verified known-good generation, with persistent state and GC roots matching their declared policies.
 
+Follow-ups enabled by this milestone (not exit requirements): generation bisect (automated boot-and-health-check search over the parent chain) and shadow boot (health-checking a pending generation in a constrained environment before consuming a real boot attempt). Both consume only mechanisms this milestone already requires.
+
 ### M5.7: Framework NVMe transport and safety promotion
 
 Deliverables:
@@ -348,9 +377,10 @@ just fmt_check
 just lint
 ```
 
-Storage slices additionally require their planned scenario targets once those targets exist:
+Storage slices additionally require their scenario targets. `storage_cap_check` exists today; the others are planned:
 
 ```sh
+just storage_cap_check
 just storage_read_check
 just storage_write_check
 just storage_fault_check
@@ -385,7 +415,9 @@ Scope:
 - minimal Dango implementation and core runtime;
 - command profile/resolver and spawn service;
 - filesystem service and directory capabilities;
-- generation inspection and update commands.
+- generation inspection and update commands;
+- a powerbox-style file dialog service where the user's selection gesture mints a single-object capability;
+- generation sync/transfer between machines (object transfer plus staged activation).
 
 This milestone consumes the storage, object-store, state, and rollback mechanisms from Milestone 5. Dango commands must resolve executable and directory authority through capabilities rather than global paths or an implicit working directory.
 
@@ -406,5 +438,7 @@ Bring hardware up in risk order rather than feature visibility:
 7. Radeon display control and hardware acceleration.
 
 GPU acceleration, Wi-Fi, and audio do not block the first native userspace milestone, but they are required before the Framework target can be called a daily-use system.
+
+Daily-driver quality goals for this milestone also include per-component energy accounting and per-destination network authority declared in the generation. MPK/PKU lightweight compartments are an optional optimization and do not block the exit condition.
 
 Exit condition: the Framework target supports the hardware, DMA containment, power lifecycle, input, networking, audio, and display behavior required for daily use without bypassing the capability or generation model.
