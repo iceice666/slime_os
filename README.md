@@ -180,17 +180,7 @@ Atomicity and agentic operation reinforce each other: agent memory and authority
 
 ## Differentiating directions
 
-These are exploratory directions enabled by the capability and generation model. None of them is a committed milestone; each becomes real only when promoted into ROADMAP.md with an observable exit condition.
-
-- **IPC flight recorder and deterministic replay.** All component input crosses channel boundaries, so recording at that boundary yields deterministic re-execution of a single component. A bug report becomes a generation hash plus an IPC trace.
-- **Generation bisect.** Generations form a content-addressed parent chain, so "which update regressed this" is automatable as safe boot-and-health-check bisection.
-- **Shadow boot.** A pending generation can be health-checked in a constrained sub-graph or guest VM before real activation consumes a boot attempt.
-- **Cross-machine generation sync.** A generation is a manifest plus content-addressed objects; moving a system to a new machine is object transfer plus activation, including capability grants and state policy — not dotfile reconstruction.
-- **Zutai-defined state migrations.** State schema upgrades expressed as pure Zutai transformations are deterministic, dry-runnable before activation, and covered by the same rollback contract as the boot graph.
-- **Powerbox UI.** Applications never hold an ambient "open file" right; the file dialog is a system component, and the user's selection gesture itself mints a single-object capability. Authorization and intent are the same gesture.
-- **Per-component energy accounting.** Scheduler-attributed energy per component and per channel activity, with policy such as background power budgets carried as grants.
-- **Per-destination network authority.** Network access is a capability to explicit endpoints declared by the generation, making exfiltration surface auditable in the manifest — particularly relevant for agent components.
-- **MPK/PKU lightweight compartments.** A third isolation tier between full components and same-address-space code for latency-sensitive boundaries, using user-space protection keys available on the target CPU.
+Exploratory directions enabled by the capability and generation model — descriptions, dependencies, exit-condition sketches, and promotion status — are registered in [`docs/directions.md`](docs/directions.md). None of them is a committed milestone; each becomes real only when promoted into ROADMAP.md with an observable exit condition.
 
 ## First vertical slice
 
