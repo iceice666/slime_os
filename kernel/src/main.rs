@@ -8,29 +8,33 @@ extern crate alloc;
 
 use core::panic::PanicInfo;
 
+#[cfg(not(test))]
+use boot_contracts::handoff::KernelHandoffV1;
 use slime_os_kernel::frame_buffer::init_framebuffer;
 use slime_os_kernel::{acpi, gdt, input, interrupts, memory, pci, println, serial_println, time};
 #[cfg(test)]
 mod testing;
 
-/// Limine-compatible entry point.
-///
-/// On x86-64 Limine enters with a valid stack and following the SysV AMD64
-/// ABI. We mark it `extern "C"`, `no_mangle`, and `-> !` so the linker can
-/// use it as the ELF entry (see `ENTRY(_start)` in `linker.ld`) and so the
-/// compiler emits no prologue that depends on a frame we do not have.
-/// `unsafe`: the body touches machine state (framebuffer memory, the test
-/// harness) that Rust cannot prove is safe.
+/// Kernel entry point.
 ///
 /// # Safety
 ///
-/// Must only be called by the Limine bootloader, which sets up the stack,
-/// paging, and GDT before jumping here. Calling it from any other context
-/// is undefined behavior.
+/// Production stage-0 supplies a verified `KernelHandoffV1`; the Cargo test
+/// runner uses Limine and initializes the legacy test boot context instead.
+#[cfg(not(test))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn _start(handoff: *const KernelHandoffV1) -> ! {
+    unsafe { slime_os_kernel::boot::init_from_handoff(handoff) };
+    kernel_main();
+    slime_os_kernel::hlt_loop()
+}
+
+#[cfg(test)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn _start() -> ! {
+    slime_os_kernel::limine::ensure_linked();
+    unsafe { slime_os_kernel::boot::init_from_limine() };
     kernel_main();
-
     slime_os_kernel::hlt_loop()
 }
 

@@ -7,7 +7,6 @@
 
 use core::slice;
 
-use limine::memmap::MEMMAP_BAD_MEMORY;
 use spin::Once;
 
 use crate::memory::PhysAddr;
@@ -261,28 +260,13 @@ pub fn parse_s5_aml(aml: &[u8]) -> Option<(u8, u8)> {
 }
 
 fn discover() -> Result<AcpiInfo, AcpiError> {
-    let response = crate::limine::RSDP
-        .response()
-        .ok_or(AcpiError::MissingRsdp)?;
-    let raw = response.address as u64;
-    let base_revision = if crate::limine::BASE_REVISION.is_supported() {
-        limine::BaseRevision::MAX_SUPPORTED
-    } else {
-        crate::limine::BASE_REVISION
-            .actual_revision()
-            .ok_or(AcpiError::UnsupportedLimineRevision)?
-    };
-    let rsdp_virt = if base_revision == 3 {
-        PhysAddr(raw).to_virt().as_u64()
-    } else {
-        raw
-    };
-
-    // SAFETY: Limine guarantees that its RSDP response points at the complete
-    // ACPI 1.0 prefix. Read exactly that prefix before inspecting revision.
+    let raw = crate::boot::rsdp_address();
+    if raw == 0 {
+        return Err(AcpiError::MissingRsdp);
+    }
+    let rsdp_virt = PhysAddr(raw).to_virt().as_u64();
     let legacy = unsafe { slice::from_raw_parts(rsdp_virt as *const u8, RSDP_V1_LEN) };
     let rsdp_len = if legacy[15] >= 2 {
-        // ACPI 2.0 guarantees the extended length field through byte 23.
         let extended_prefix = unsafe { slice::from_raw_parts(rsdp_virt as *const u8, 24) };
         read_u32(extended_prefix, 20).ok_or(AcpiError::InvalidRsdpLength)? as usize
     } else {
@@ -291,8 +275,6 @@ fn discover() -> Result<AcpiInfo, AcpiError> {
     if !(RSDP_V1_LEN..=MAX_RSDP_LEN).contains(&rsdp_len) {
         return Err(AcpiError::InvalidRsdpLength);
     }
-    // SAFETY: the validated RSDP length is bounded to one page. Limine owns and
-    // maps the complete firmware structure for the duration of kernel boot.
     let rsdp_bytes = unsafe { slice::from_raw_parts(rsdp_virt as *const u8, rsdp_len) };
     let rsdp = parse_rsdp(rsdp_bytes)?;
 
@@ -488,13 +470,9 @@ fn physical_range_valid(address: u64, length: usize) -> bool {
     let Some(end) = address.checked_add(length as u64) else {
         return false;
     };
-    crate::limine::MEMMAP.response().is_some_and(|memmap| {
-        memmap.entries().iter().any(|entry| {
-            entry.type_ != MEMMAP_BAD_MEMORY
-                && address >= entry.base
-                && end <= entry.base.saturating_add(entry.length)
-        })
-    })
+    crate::boot::memory_map()
+        .iter()
+        .any(|entry| address >= entry.base && end <= entry.base.saturating_add(entry.length))
 }
 
 fn parse_gas(bytes: &[u8], offset: usize) -> Option<GenericAddress> {

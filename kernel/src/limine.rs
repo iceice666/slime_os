@@ -79,14 +79,16 @@ pub fn ensure_linked() {
     let _ = BASE_REVISION.is_supported();
 }
 
-pub fn generation_module() -> &'static [u8] {
-    let modules = MODULES
-        .response()
-        .expect("Limine did not provide module response")
-        .modules();
-    let module = modules
+pub fn generation_module_optional() -> Option<&'static [u8]> {
+    let modules = MODULES.response()?.modules();
+    modules
         .iter()
-        .find(|module| module.path().ends_with("generation.bin"))
-        .expect("generation module missing");
-    module.data()
+        .find(|module| {
+            module.cmdline() == "slime-generation-v2" || module.path().ends_with("generation-2.bin")
+        })
+        .map(|module| module.data())
+}
+
+pub fn generation_module() -> &'static [u8] {
+    generation_module_optional().expect("generation module missing")
 }

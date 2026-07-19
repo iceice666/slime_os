@@ -10,6 +10,7 @@ volatile = { version = "0.6.1", features = ["unstable"] }
 spin = "0.12.2"
 noto-sans-mono-bitmap = { version = "0.3.2", features = ["unicode-specials", "size_32"] }
 uart_16550 = "0.3.2"
+boot-contracts = { path = "../boot-contracts" }
 
 [lib]
 doctest = false

@@ -9,6 +9,7 @@ extern crate alloc;
 pub mod acpi;
 pub mod block_proto;
 pub mod block_service;
+pub mod boot;
 pub mod bootstrap;
 pub mod capability;
 pub mod component;
@@ -116,6 +117,7 @@ macro_rules! setup_test_entry {
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn _start() -> ! {
             $crate::limine::ensure_linked();
+            unsafe { $crate::boot::init_from_limine() };
             test_main();
             $crate::hlt_loop()
         }
@@ -138,6 +140,7 @@ macro_rules! setup_test_entry {
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn _start() -> ! {
             $crate::limine::ensure_linked();
+            unsafe { $crate::boot::init_from_limine() };
             $main(());
             $crate::hlt_loop()
         }

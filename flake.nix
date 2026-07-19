@@ -44,7 +44,7 @@
             shellHook = ''
               rustup toolchain install ${rustToolchain} \
                 --profile minimal \
-                --target x86_64-unknown-none \
+                --target x86_64-unknown-none,x86_64-unknown-uefi \
                 --component clippy,rustfmt,llvm-tools-preview,rust-src \
                 --no-self-update
             '';

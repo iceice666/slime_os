@@ -19,14 +19,25 @@ static STORAGE_FAULT_ID: AtomicU64 = AtomicU64::new(0);
 static STORAGE_STORE_ID: AtomicU64 = AtomicU64::new(0);
 
 pub fn start() -> ! {
-    let bytes = crate::limine::generation_module();
+    let bytes = crate::boot::generation();
     let generation = generation::decode(bytes).expect("invalid generation manifest");
+    assert_eq!(
+        generation.identity,
+        crate::boot::generation_identity(),
+        "handoff generation identity mismatch"
+    );
+    serial_println!(
+        "[generation] selected {:02x?} parent={:02x?} target={}",
+        generation.identity,
+        generation.parent,
+        generation.target,
+    );
     serial_println!(
         "[generation] decoded generation {}: {} objects, {} components, {} grants",
         generation.number,
-        generation.objects.len(),
-        generation.components.len(),
-        generation.grants.len(),
+        generation.object_count(),
+        generation.component_count(),
+        generation.grant_count(),
     );
     let init_id = launch_init(&generation);
     INIT_ID.store(init_id, Ordering::Relaxed);
@@ -147,20 +158,36 @@ fn endpoint(endpoint: ipc::Endpoint, rights: u32) -> Capability {
 }
 
 fn require_grant<'a>(
-    generation: &'a Generation<'_>,
+    generation: &Generation<'a>,
     name: &str,
     source: &str,
     target: &str,
-) -> &'a crate::generation::Grant<'a> {
-    let grant = generation.grant(name).expect("required grant missing");
-    let source_name = generation.components[grant.source].name;
-    let target_name = generation.components[grant.target].name;
+) -> crate::generation::Grant<'a> {
+    let grant = generation
+        .grant_named(name)
+        .expect("required grant missing");
+    let source_name = generation
+        .component(grant.source)
+        .expect("grant source")
+        .name;
+    let target_name = generation
+        .component(grant.target)
+        .expect("grant target")
+        .name;
     assert_eq!(
         (source_name, target_name),
         (source, target),
         "grant endpoints changed"
     );
     grant
+}
+
+fn storage_probe_required() -> bool {
+    crate::pci::enumerate().is_ok_and(|functions| {
+        functions.iter().any(|function| {
+            function.vendor_id == 0x1af4 && matches!(function.device_id, 0x1001 | 0x1042)
+        })
+    })
 }
 
 pub fn record_spawn(component: &'static str, id: task::TaskId) {
@@ -203,7 +230,10 @@ extern "C" fn on_idle() {
         }
         let reason = task::termination_summary(id);
         serial_println!("[generation] {} terminated: {:?}", name, reason);
-        healthy &= matches!(reason, Some(task::TermReason::Exit(0)));
+        let optional_storage_absent = name == "storage-probe"
+            && !storage_probe_required()
+            && matches!(reason, Some(task::TermReason::Exit(1)));
+        healthy &= matches!(reason, Some(task::TermReason::Exit(0))) || optional_storage_absent;
     }
     if healthy {
         serial_println!("[generation] vertical slice healthy");

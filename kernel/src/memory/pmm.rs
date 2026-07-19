@@ -8,7 +8,7 @@
 //! Physical frame 0 is never handed out: address 0 doubles as the list's null
 //! terminator. Firmware reserves low memory anyway, so no usable frame is lost.
 
-use limine::memmap::{Entry, MEMMAP_USABLE};
+use boot_contracts::handoff::MEMORY_USABLE;
 use spin::Mutex;
 
 use super::{PAGE_SIZE, PhysAddr, align_down, align_up};
@@ -83,13 +83,13 @@ impl FrameAllocator {
     }
 }
 
-/// Seed the frame allocator from the Limine memory map.
-pub fn init(entries: &[&Entry]) {
+/// Seed the frame allocator from the boot handoff memory map.
+pub fn init(entries: &[crate::boot::MemoryEntry]) {
     let mut fa = FRAME_ALLOCATOR.lock();
     let page = PAGE_SIZE as u64;
 
     for entry in entries {
-        if entry.type_ != MEMMAP_USABLE {
+        if entry.kind != MEMORY_USABLE {
             continue;
         }
         let start = align_up(entry.base, page);
@@ -97,7 +97,6 @@ pub fn init(entries: &[&Entry]) {
         let mut addr = start;
         while addr + page <= end {
             if addr != 0 {
-                // SAFETY: usable, page-aligned, currently unused, non-zero.
                 unsafe { fa.push(PhysAddr(addr)) };
             }
             addr += page;

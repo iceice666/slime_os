@@ -23,7 +23,8 @@ impl AddressSpace {
         unsafe {
             let dst = frame.to_virt().as_mut_ptr::<u64>();
             let src = cur.to_virt().as_mut_ptr::<u64>();
-            core::ptr::copy_nonoverlapping(src.add(256), dst.add(256), 256);
+            core::ptr::copy_nonoverlapping(src.add(256), dst.add(256), 255);
+            dst.add(511).write(src.add(511).read());
         }
 
         Ok(Self { pml4: frame })

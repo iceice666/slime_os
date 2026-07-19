@@ -1,0 +1,86 @@
+-- Slime OS boot-time generation binary format, version 2.
+--
+-- The source manifest remains contracts/generation/v1. This contract freezes
+-- the bounded canonical wire representation consumed by stage-0 and the kernel.
+
+formatVersion :: Int = 2;
+headerLen :: Int = 256;
+objectLen :: Int = 64;
+componentLen :: Int = 32;
+dependencyLen :: Int = 4;
+grantLen :: Int = 32;
+stateLen :: Int = 24;
+healthLen :: Int = 4;
+maxGenerationBytes :: Int = 16777216;
+maxObjects :: Int = 64;
+maxComponents :: Int = 32;
+maxGrants :: Int = 128;
+maxStates :: Int = 32;
+maxDependencies :: Int = 128;
+maxHealthComponents :: Int = 32;
+maxStringBytes :: Int = 255;
+maxStringTableBytes :: Int = 65536;
+maxObjectPayloadBytes :: Int = 8388608;
+
+GenerationHeader :: type {
+  magic : Int;
+  format_version : Int;
+  header_size : Int;
+  required_flags : Int;
+  generation_number : Int;
+  target_offset : Int;
+  kernel_object : Int;
+  bootstrap_component : Int;
+  boot_attempts : Int;
+  object_count : Int;
+  component_count : Int;
+  dependency_count : Int;
+  grant_count : Int;
+  state_count : Int;
+  health_count : Int;
+  total_len : Int;
+};
+
+ObjectRecord :: type {
+  id_offset : Int;
+  kind : Int;
+  payload_offset : Int;
+  payload_len : Int;
+};
+
+ComponentRecord :: type {
+  name_offset : Int;
+  object_index : Int;
+  role : Int;
+  dependency_start : Int;
+  dependency_count : Int;
+};
+
+CapabilityGrantRecord :: type {
+  name_offset : Int;
+  source : Int;
+  target : Int;
+  rights : Int;
+  transferable : Int;
+};
+
+StateBindingRecord :: type {
+  name_offset : Int;
+  owner : Int;
+  schema_version : Int;
+  policy : Int;
+};
+
+generationHeaderSchema ::= schema GenerationHeader;
+objectRecordSchema ::= schema ObjectRecord;
+componentRecordSchema ::= schema ComponentRecord;
+capabilityGrantRecordSchema ::= schema CapabilityGrantRecord;
+stateBindingRecordSchema ::= schema StateBindingRecord;
+
+{
+  generationHeaderSchema = generationHeaderSchema;
+  objectRecordSchema = objectRecordSchema;
+  componentRecordSchema = componentRecordSchema;
+  capabilityGrantRecordSchema = capabilityGrantRecordSchema;
+  stateBindingRecordSchema = stateBindingRecordSchema;
+}

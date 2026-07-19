@@ -21,6 +21,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b588b76d00fde79687d7646a9b5bdf3cc0f655e0bbd080335a95d7e96f3587da"
 
 [[package]]
+name = "boot-contracts"
+version = "0.1.0"
+
+[[package]]
 name = "limine"
 version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -66,6 +70,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 name = "slime_os-kernel"
 version = "0.1.0"
 dependencies = [
+ "boot-contracts",
  "limine",
  "noto-sans-mono-bitmap",
  "spin",

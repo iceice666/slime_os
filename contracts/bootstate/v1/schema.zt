@@ -1,0 +1,20 @@
+-- Slime OS redundant BootState slot format, version 1.
+
+formatVersion :: Int = 1;
+slotBytes :: Int = 512;
+slotCount :: Int = 2;
+requiredFlags :: Int = 0;
+
+BootStateHeader :: type {
+  magic : Int;
+  format_version : Int;
+  header_size : Int;
+  required_flags : Int;
+  sequence : Int;
+  remaining_attempts : Int;
+  reserved : Int;
+};
+
+bootStateHeaderSchema ::= schema BootStateHeader;
+
+{ bootStateHeaderSchema = bootStateHeaderSchema; }

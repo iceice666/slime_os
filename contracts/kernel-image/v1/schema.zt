@@ -1,0 +1,48 @@
+-- Slime OS relocatable kernel image format, version 1.
+
+formatVersion :: Int = 1;
+kernelAbiVersion :: Int = 2;
+headerLen :: Int = 64;
+segmentLen :: Int = 40;
+relocationLen :: Int = 16;
+maxImageBytes :: Int = 8388608;
+maxSegments :: Int = 8;
+maxRelocations :: Int = 16384;
+
+KernelImageHeader :: type {
+  magic : Int;
+  format_version : Int;
+  header_size : Int;
+  kernel_abi : Int;
+  required_flags : Int;
+  preferred_base : Int;
+  entry_offset : Int;
+  segment_count : Int;
+  relocation_count : Int;
+  payload_offset : Int;
+  total_len : Int;
+};
+
+KernelSegmentRecord :: type {
+  vaddr_offset : Int;
+  mem_len : Int;
+  file_offset : Int;
+  file_len : Int;
+  flags : Int;
+  reserved : Int;
+};
+
+KernelRelocationRecord :: type {
+  target_offset : Int;
+  addend : Int;
+};
+
+kernelImageHeaderSchema ::= schema KernelImageHeader;
+kernelSegmentRecordSchema ::= schema KernelSegmentRecord;
+kernelRelocationRecordSchema ::= schema KernelRelocationRecord;
+
+{
+  kernelImageHeaderSchema = kernelImageHeaderSchema;
+  kernelSegmentRecordSchema = kernelSegmentRecordSchema;
+  kernelRelocationRecordSchema = kernelRelocationRecordSchema;
+}

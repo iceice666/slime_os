@@ -94,32 +94,74 @@ global_asm!(
     r#"
     .global switch_to_user
     switch_to_user:
-        mov rax, [rdi+0]
-        mov rbx, [rdi+8]
-        mov rcx, [rdi+16]
-        mov rdx, [rdi+24]
-        mov rsi, [rdi+32]
-        mov rbp, [rdi+48]
-        mov r8,  [rdi+56]
-        mov r9,  [rdi+64]
-        mov r10, [rdi+72]
-        mov r11, [rdi+80]
-        mov r12, [rdi+88]
-        mov r13, [rdi+96]
-        mov r14, [rdi+104]
-        mov r15, [rdi+112]
-        push qword ptr [rdi+152]
-        push qword ptr [rdi+144]
-        push qword ptr [rdi+136]
-        push qword ptr [rdi+128]
-        push qword ptr [rdi+120]
-        mov rdi, [rdi+40]
+        mov rdx, rdi
+        mov rax, [rdx+0]
+        mov rbx, [rdx+8]
+        mov rcx, [rdx+16]
+        mov rsi, [rdx+32]
+        mov rbp, [rdx+48]
+        mov r8,  [rdx+56]
+        mov r9,  [rdx+64]
+        mov r10, [rdx+72]
+        mov r11, [rdx+80]
+        mov r12, [rdx+88]
+        mov r13, [rdx+96]
+        mov r14, [rdx+104]
+        mov r15, [rdx+112]
+        push qword ptr [rdx+152]
+        push qword ptr [rdx+144]
+        push qword ptr [rdx+136]
+        push qword ptr [rdx+128]
+        push qword ptr [rdx+120]
+        mov rdi, [rdx+40]
+        mov rdx, [rdx+24]
+        iretq
+
+    .global switch_address_space_and_user
+    switch_address_space_and_user:
+        mov r11, rdi
+        mov r10, rsi
+        push r11
+        push r10
+        call {tss_rsp0}
+        pop r10
+        pop r11
+        sub rax, 160
+        mov rdi, rax
+        mov rsi, r10
+        mov rcx, 20
+        rep movsq
+        mov r10, rax
+        mov cr3, r11
+        mov rsp, rax
+        add rsp, 160
+        push qword ptr [r10+152]
+        push qword ptr [r10+144]
+        push qword ptr [r10+136]
+        push qword ptr [r10+128]
+        push qword ptr [r10+120]
+        mov rax, [r10+0]
+        mov rbx, [r10+8]
+        mov rcx, [r10+16]
+        mov rdx, [r10+24]
+        mov rsi, [r10+32]
+        mov rdi, [r10+40]
+        mov rbp, [r10+48]
+        mov r8,  [r10+56]
+        mov r9,  [r10+64]
+        mov r11, [r10+80]
+        mov r12, [r10+88]
+        mov r13, [r10+96]
+        mov r14, [r10+104]
+        mov r15, [r10+112]
+        mov r10, [r10+72]
         iretq
     "#,
+    tss_rsp0 = sym crate::gdt::rsp0,
 );
 
 unsafe extern "C" {
-    fn switch_to_user(frame: *const UserFrame) -> !;
+    fn switch_address_space_and_user(pml4: u64, frame: *const UserFrame) -> !;
 }
 
 pub fn spawn_user(image: &[u8]) -> Result<TaskId, SpawnError> {
@@ -303,7 +345,7 @@ pub fn spawn_with_caps(image: &[u8], caps: Vec<Capability>) -> Result<TaskId, Sp
             rip: ENTRY_VA + decoded.entry_offset as u64,
             cs: USER_CODE_SELECTOR as u64 | 3,
             rflags: 0x200,
-            rsp: USER_STACK_TOP,
+            rsp: USER_STACK_TOP - 16,
             ss: USER_DATA_SELECTOR as u64 | 3,
         },
         caps: cap_table,
@@ -384,7 +426,7 @@ enum ScheduleResult {
 }
 
 pub fn yield_now(frame: &mut UserFrame) {
-    let result = {
+    let (result, pml4) = {
         let mut sched = SCHEDULER.lock();
         if let Some(id) = sched.current
             && let Some(idx) = sched.index_of(id)
@@ -393,13 +435,15 @@ pub fn yield_now(frame: &mut UserFrame) {
             sched.tasks[idx].state = TaskState::Ready;
             sched.ready.push_back(id);
         }
-        schedule_next(&mut sched, frame)
+        let result = schedule_next(&mut sched, frame);
+        let pml4 = selected_pml4(&sched, &result);
+        (result, pml4)
     };
-    finish_schedule(result);
+    finish_schedule(result, pml4, frame);
 }
 
 pub fn terminate(frame: &mut UserFrame, reason: TermReason) {
-    let result = {
+    let (result, pml4) = {
         let mut sched = SCHEDULER.lock();
         if let Some(id) = sched.current
             && let Some(idx) = sched.index_of(id)
@@ -414,14 +458,27 @@ pub fn terminate(frame: &mut UserFrame, reason: TermReason) {
             }
             sched.terminated.push((id, reason));
         }
-        schedule_next(&mut sched, frame)
+        let result = schedule_next(&mut sched, frame);
+        let pml4 = selected_pml4(&sched, &result);
+        (result, pml4)
     };
-    finish_schedule(result);
+    finish_schedule(result, pml4, frame);
 }
 
-fn finish_schedule(result: ScheduleResult) {
+fn selected_pml4(sched: &Scheduler, result: &ScheduleResult) -> Option<u64> {
+    if !matches!(result, ScheduleResult::Selected) {
+        return None;
+    }
+    let id = sched.current.expect("selected task missing");
+    let index = sched.index_of(id).expect("selected task absent");
+    Some(sched.tasks[index].address_space.pml4().0)
+}
+
+fn finish_schedule(result: ScheduleResult, pml4: Option<u64>, frame: &UserFrame) {
     match result {
-        ScheduleResult::Selected => {}
+        ScheduleResult::Selected => unsafe {
+            switch_address_space_and_user(pml4.expect("selected address space missing"), frame)
+        },
         ScheduleResult::Idle(on_idle) => on_idle(),
         ScheduleResult::Halt => crate::hlt_loop(),
     }
@@ -438,7 +495,6 @@ fn schedule_next(sched: &mut Scheduler, frame: &mut UserFrame) -> ScheduleResult
         sched.tasks[idx].state = TaskState::Running;
         sched.current = Some(id);
         crate::gdt::set_rsp0(sched.tasks[idx].kernel_stack_top());
-        sched.tasks[idx].address_space.switch();
         *frame = sched.tasks[idx].saved;
         return ScheduleResult::Selected;
     }
@@ -449,7 +505,7 @@ fn schedule_next(sched: &mut Scheduler, frame: &mut UserFrame) -> ScheduleResult
 }
 
 pub fn run() -> ! {
-    let frame = {
+    let (frame, pml4) = {
         let mut sched = SCHEDULER.lock();
         let mut frame = UserFrame {
             rax: 0,
@@ -482,9 +538,10 @@ pub fn run() -> ! {
             }
             ScheduleResult::Halt => crate::hlt_loop(),
         }
-        frame
+        let id = sched.current.expect("selected task missing");
+        let index = sched.index_of(id).expect("selected task absent");
+        (frame, sched.tasks[index].address_space.pml4())
     };
 
-    // SAFETY: `frame` contains a valid ring-3 iret frame for the selected task.
-    unsafe { switch_to_user(&frame) }
+    unsafe { switch_address_space_and_user(pml4.0, &frame) }
 }

@@ -1,0 +1,6 @@
+KernelImageBinding :: type { formatVersion : Int; headerLen : Int; };
+render :: KernelImageBinding -> Text
+  = format => if format.formatVersion == 1 && format.headerLen == 64
+    then "kernel-image-v1"
+    else "INVALID_KERNEL_IMAGE_SCHEMA";
+{ render = render; }

@@ -12,7 +12,7 @@ Completion requires observable behavior, not only compiled code or framebuffer o
 | 2. Isolation and IPC | Core QEMU exit passing | Two userspace components communicate, and one may fault without corrupting the other or the kernel. |
 | 3. Bootstrap component graph | QEMU vertical slice passing | The first isolated userspace vertical slice works under QEMU. |
 | 4. Framework safe bring-up | Verified | The same isolated userspace slice runs from removable media without modifying internal storage. |
-| 5. Storage and generations | In progress — M5.1 through M5.4 complete | A failed pending generation automatically leaves or restores a bootable known-good generation. |
+| 5. Storage and generations | In progress — M5.1 through M5.5 complete | A failed pending generation automatically leaves or restores a bootable known-good generation. |
 | 6. Native interactive environment | Minimal stub only | Native components can inspect, build or stage, select, and roll back generations. |
 | 7. Daily-driver hardware | Not yet implemented | The Framework target supports the hardware and lifecycle needed for daily use. |
 
@@ -85,7 +85,7 @@ Exit condition: the same isolated userspace slice runs on the Framework without 
 
 ## Milestone 5: Storage and generations
 
-**Status:** In progress. M5.1 through M5.4 are complete; generation format and boot-state records (M5.5) are next. The checked BootState transition model (M5.6a) has no code dependency and may run in parallel with M5.5; the generation/state/GC model (M5.6b) follows before M5.6 implementation semantics freeze.
+**Status:** In progress. M5.1 through M5.5 are complete; the checked BootState transition model (M5.6a) is next and has no code dependency on the generation/state/GC model (M5.6b), which follows before M5.6 implementation semantics freeze.
 
 Top-level scope:
 
@@ -281,6 +281,8 @@ Required checks:
 Exit condition: QEMU can open a bounded GPT partition and retrieve immutable, content-addressed objects while rejecting malformed or partially committed metadata.
 
 ### M5.5: Generation format and boot-state records
+
+**Status:** Complete. `generation_check` proves canonical byte-identical generation and redundant BootState artifacts; host and QEMU checks reject malformed metadata; immutable stage-0 selects and hash-verifies the complete kernel-bearing generation before transfer; production and read-only-storage boots reach a healthy isolated userspace slice.
 
 Deliverables:
 

@@ -218,3 +218,7 @@ pub fn set_rsp0(sp: u64) {
         addr_of_mut!(TSS.privilege_stack_table[0]).write(sp);
     }
 }
+
+pub fn rsp0() -> u64 {
+    unsafe { core::ptr::addr_of!(TSS.privilege_stack_table[0]).read_unaligned() }
+}

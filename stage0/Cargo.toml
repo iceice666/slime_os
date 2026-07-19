@@ -1,0 +1,23 @@
+[package]
+name = "slime-stage0"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+boot-contracts = { path = "../boot-contracts" }
+uefi = { version = "0.39.0", features = ["alloc", "global_allocator", "panic_handler", "qemu"] }
+
+[lib]
+doctest = false
+
+[[bin]]
+name = "slime-stage0"
+path = "src/main.rs"
+test = false
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"

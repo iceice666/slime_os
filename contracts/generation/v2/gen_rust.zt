@@ -1,0 +1,16 @@
+-- The checked-in Rust/Python binding surfaces are rendered by
+-- scripts/generate-boot-bindings.py after this schema type-checks.
+-- Keeping this module pure makes the schema a pinned Zutai contract.
+
+GenerationBinding :: type {
+  formatVersion : Int;
+  headerLen : Int;
+  maxGenerationBytes : Int;
+};
+
+render :: GenerationBinding -> Text
+  = format => if format.formatVersion == 2 && format.headerLen == 256
+    then "generation-v2"
+    else "INVALID_GENERATION_SCHEMA";
+
+{ render = render; }

@@ -1,14 +1,10 @@
 //! Framebuffer text console.
 //!
-//! Reads the linear framebuffer Limine set up (via the
-//! [`crate::limine::FRAMEBUFFER`] request) and rasterizes text into it
-//! using `noto-sans-mono-bitmap`. The framebuffer `address` from Limine is
-//! already a virtual address — Limine mapped it for us, so we do not need
-//! to add the HHDM offset here.
+//! Reads the boot handoff framebuffer and rasterizes text into it using
+//! `noto-sans-mono-bitmap`.
 
 use core::{fmt, ptr};
 use font_constants::BACKUP_CHAR;
-use limine::framebuffer::{FRAMEBUFFER_RGB, Framebuffer};
 use noto_sans_mono_bitmap::{
     FontWeight, RasterHeight, RasterizedChar, get_raster, get_raster_width,
 };
@@ -75,22 +71,15 @@ pub struct FrameBufferInfo {
 }
 
 impl FrameBufferInfo {
-    /// Build from a Limine `Framebuffer`. `pitch` is bytes-per-row, `bpp`
-    /// is bits-per-pixel; everything else is a direct field.
-    fn from_limine(fb: &Framebuffer) -> Self {
+    fn from_boot(fb: crate::boot::Framebuffer) -> Self {
         let bytes_per_pixel = (fb.bpp / 8) as usize;
-        let pixel_format = if fb.memory_model == FRAMEBUFFER_RGB {
-            // Limine RGB model: red sits at the lowest byte in memory.
-            // UEFI/QEMU virtio-gpu typically hands us BGR; check the red
-            // mask shift to be sure.
+        let pixel_format = if fb.memory_model == 1 {
             if fb.red_mask_shift == 0 {
                 PixelFormat::Rgb
             } else {
                 PixelFormat::Bgr
             }
         } else {
-            // Unknown model; default to RGB and let the colors come out
-            // wrong-but-visible rather than panicking in the logger.
             PixelFormat::Rgb
         };
         Self {
@@ -209,26 +198,12 @@ impl fmt::Write for FrameBufferWriter {
 
 pub static WRITER: Mutex<Option<FrameBufferWriter>> = Mutex::new(None);
 
-/// Initialize the framebuffer console from the Limine framebuffer request.
-///
-/// Panics if Limine did not provide a framebuffer — at this stage of
-/// bring-up we have no fallback console, so hanging silently would be
-/// worse than a visible panic over serial.
+/// Initialize the framebuffer console from the boot handoff.
 pub fn init_framebuffer() {
-    let fb = crate::limine::FRAMEBUFFER
-        .response()
-        .expect("limine: no framebuffer response")
-        .framebuffers()
-        .first()
-        .copied()
-        .expect("limine: no framebuffer in response");
-
-    let info = FrameBufferInfo::from_limine(fb);
-    // Limine (base rev >= 3) hands us a virtual address for the
-    // framebuffer, already mapped. Safe to turn into a slice directly.
+    let fb = crate::boot::framebuffer();
+    let info = FrameBufferInfo::from_boot(fb);
     let len = (fb.pitch as usize) * (fb.height as usize);
-    let framebuffer = unsafe { core::slice::from_raw_parts_mut(fb.address() as *mut u8, len) };
-
+    let framebuffer = unsafe { core::slice::from_raw_parts_mut(fb.address as *mut u8, len) };
     let writer = FrameBufferWriter::new(framebuffer, info);
     *WRITER.lock() = Some(writer);
 }

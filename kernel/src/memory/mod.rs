@@ -36,7 +36,7 @@ pub struct VirtAddr(pub u64);
 impl PhysAddr {
     /// The HHDM virtual address that maps this physical address.
     pub fn to_virt(self) -> VirtAddr {
-        VirtAddr(self.0 + hhdm_offset())
+        VirtAddr(self.0.wrapping_add(hhdm_offset()))
     }
 
     pub fn as_u64(self) -> u64 {
@@ -75,16 +75,7 @@ pub const fn align_down(addr: u64, align: u64) -> u64 {
 /// surfaces as a reported page fault rather than a triple fault) and before
 /// any heap allocation.
 pub fn init() {
-    let hhdm = crate::limine::HHDM
-        .response()
-        .expect("limine: no HHDM response")
-        .offset;
-    HHDM_OFFSET.store(hhdm, Ordering::Relaxed);
-
-    let memmap = crate::limine::MEMMAP
-        .response()
-        .expect("limine: no memory-map response");
-
-    pmm::init(memmap.entries());
+    HHDM_OFFSET.store(crate::boot::direct_map_offset(), Ordering::Relaxed);
+    pmm::init(crate::boot::memory_map());
     heap::init().expect("kernel heap init failed");
 }

@@ -140,7 +140,10 @@ pub fn decode(blob: &[u8]) -> Result<Image<'_>, ImageError> {
     let records_end = HEADER_LEN
         .checked_add(count as usize * SEGMENT_LEN)
         .ok_or(ImageError::Truncated)?;
-    let data = blob.get(records_end..).ok_or(ImageError::Truncated)?;
+    if records_end > blob.len() {
+        return Err(ImageError::Truncated);
+    }
+    let data = &blob[records_end..];
 
     let mut segments = Vec::with_capacity(count as usize);
     let mut previous_end: u64 = 0;

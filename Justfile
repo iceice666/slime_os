@@ -16,9 +16,9 @@ run_release:
 run_gui:
     cd kernel && cargo run
 
-# Run kernel tests under QEMU; exit code reflects test pass/fail.
+# Run kernel tests under QEMU; optimized code keeps boot-time integrity hashing bounded.
 test:
-    cd kernel && cargo test -- -display none
+    cd kernel && cargo test --release -- -display none
 
 
 # M5.1: exercise the storage-capability foundation (PCI/DMA/cap/block-proto)
@@ -31,7 +31,7 @@ storage_cap_check:
 storage_read_check:
     rm -f /tmp/slime-os-storage-read.img
     ./scripts/build-storage-fixture.py /tmp/slime-os-storage-read.img
-    cd kernel && cargo run -- \
+    cd kernel && cargo run --release -- \
         -display none \
         -drive if=none,id=slime-storage,format=raw,readonly=on,file=/tmp/slime-os-storage-read.img \
         -device virtio-blk-pci,drive=slime-storage,disable-legacy=on,queue-size=8
@@ -103,16 +103,30 @@ component_gen:
 store_gen:
     python3 scripts/generate-store-bindings.py
 
+# Regenerate host constants for generation v2, kernel image, and BootState.
+boot_gen:
+    python3 scripts/generate-boot-bindings.py
+
+generation_gen: boot_gen
+
+kernel_image_gen: boot_gen
+
+bootstate_gen: boot_gen
+
 # Validate the pinned generation manifest schema and fixtures.
 contracts_check:
     python3 scripts/check-contracts.py
 
-# Build and validate the deterministic boot generation binary.
+# Build and validate deterministic generation and redundant boot metadata.
 generation_check:
     cd kernel && cargo build
-    rm -rf /tmp/slime-os-generation-check
-    ./scripts/build-generation.py kernel/target/x86_64-unknown-none/debug/slime_os-kernel /tmp/slime-os-generation-check
-    ./scripts/check-generation.py /tmp/slime-os-generation-check/generation.bin
+    rm -rf /tmp/slime-os-generation-check-a /tmp/slime-os-generation-check-b
+    ./scripts/build-generation.py kernel/target/x86_64-unknown-none/debug/slime_os-kernel /tmp/slime-os-generation-check-a
+    ./scripts/build-generation.py kernel/target/x86_64-unknown-none/debug/slime_os-kernel /tmp/slime-os-generation-check-b
+    cmp /tmp/slime-os-generation-check-a/generation-1.bin /tmp/slime-os-generation-check-b/generation-1.bin
+    cmp /tmp/slime-os-generation-check-a/generation-2.bin /tmp/slime-os-generation-check-b/generation-2.bin
+    cmp /tmp/slime-os-generation-check-a/boot-store.bin /tmp/slime-os-generation-check-b/boot-store.bin
+    ./scripts/check-generation.py /tmp/slime-os-generation-check-a/boot-store.bin
 
 # Prove Framework images grant no storage-write authority and contain no
 # storage-write path even though disposable QEMU generations may opt in.

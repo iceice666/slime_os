@@ -42,6 +42,7 @@ use slime_os_kernel::{acpi, gdt, interrupts, memory, serial_println, time};
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn _start() -> ! {
     slime_os_kernel::limine::ensure_linked();
+    unsafe { slime_os_kernel::boot::init_from_limine() };
     gdt::init();
     interrupts::init();
     memory::init();

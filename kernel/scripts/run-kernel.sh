@@ -37,7 +37,11 @@ cp "$OVMF_VARS_SRC" "$VARS"
 chmod +w "$VARS"
 
 IMG="$WORK/slime_os.img"
-"$(dirname "$0")/build-iso.sh" "$BIN" "$IMG" 64 >/dev/null
+if [[ "$(basename "$BIN")" == "slime_os-kernel" ]]; then
+    "$(dirname "$0")/build-iso.sh" "$BIN" "$IMG" 64 >/dev/null
+else
+    SLIME_BOOT_LOADER=limine "$(dirname "$0")/build-iso.sh" "$BIN" "$IMG" 64 >/dev/null
+fi
 
 # Boot and wait. `isa-debug-exit` makes QEMU exit with (code<<1)|1 when the
 # guest writes to port 0xf4.

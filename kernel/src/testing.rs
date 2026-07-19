@@ -1,4 +1,4 @@
-use slime_os_kernel::{acpi, generation, limine, sha256};
+use slime_os_kernel::{acpi, boot, generation, sha256};
 
 #[test_case]
 fn trivial_assertion() {
@@ -12,10 +12,12 @@ fn nonzero_assertion() {
 
 #[test_case]
 fn generation_decodes_and_resolves_vertical_slice() {
-    let bytes = limine::generation_module();
+    let bytes = boot::generation();
     let decoded = generation::decode(bytes).expect("generation must decode");
     assert_eq!(decoded.number, 1);
-    assert_eq!(decoded.components[decoded.bootstrap].name, "init");
+    assert_eq!(decoded.target, "x86_64-qemu-virtio");
+    assert!(decoded.parent.is_some());
+    assert_eq!(decoded.component(decoded.bootstrap).unwrap().name, "init");
     for name in ["init", "console", "dango", "sysinfo", "echo-agent"] {
         assert!(decoded.component_bytes(name).is_some());
     }
@@ -25,8 +27,11 @@ fn generation_decodes_and_resolves_vertical_slice() {
         "echo-request",
         "echo-reply",
     ] {
-        assert!(decoded.grant(name).is_some());
+        assert!(decoded.grant_named(name).is_some());
     }
+    assert_eq!(decoded.state_count(), 2);
+    assert_eq!(decoded.boot_attempts, 3);
+    assert_eq!(decoded.health_count(), 5);
 }
 
 #[test_case]
