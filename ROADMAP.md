@@ -85,7 +85,7 @@ Exit condition: the same isolated userspace slice runs on the Framework without 
 
 ## Milestone 5: Storage and generations
 
-**Status:** In progress. M5.1 through M5.4 are complete; generation format and boot-state records (M5.5) are next. The checked BootState transition model (M5.6a) has no code dependency and may run in parallel with M5.5.
+**Status:** In progress. M5.1 through M5.4 are complete; generation format and boot-state records (M5.5) are next. The checked BootState transition model (M5.6a) has no code dependency and may run in parallel with M5.5; the generation/state/GC model (M5.6b) follows before M5.6 implementation semantics freeze.
 
 Top-level scope:
 
@@ -94,9 +94,11 @@ Top-level scope:
 - immutable generations;
 - pending and known-good boot state;
 - rollback and garbage-collection roots;
-- explicit persistent-state policy.
+- explicit persistent-state policy;
+- checked conformance between boot-state models and implementation traces;
+- signed generation release trust and bounded recovery.
 
-Exit condition: a failed pending generation automatically leaves or restores a bootable known-good generation.
+Exit condition: a failed pending generation automatically leaves or restores a bootable known-good generation, while selection, state roots, garbage collection, release authorization, and recovery remain verifiable across interruptions.
 
 ### Current baseline
 
@@ -327,9 +329,30 @@ Required checks:
 
 Exit condition: a checked model of the M5.6 transition rules lives in `contracts/` and is validated by CI; M5.6's implementation must not change a transition rule without updating the model in the same change.
 
+### M5.6b: Checked generation, state, and GC transaction model
+
+**Status:** Not started. Promoted from the directions register (entry 4). This slice follows M5.6a and must complete before M5.6 state-policy and GC semantics freeze; it extends the checked contract without producing kernel code.
+
+Deliverables:
+
+- extend the M5.6a model with graph-level snapshot epochs that pair one generation root with one complete set of state roots;
+- encode `immutable`, `ephemeral`, `preserve`, `snapshotBeforeUpgrade`, and `discardOnRollback` as explicit transition semantics rather than implementation conventions;
+- model known-good, pending, running, rollback, staged-transaction, and persistent-state roots as the complete GC root set;
+- model interruption during snapshot creation, health promotion, rollback, and object or generation collection;
+- require rollback, restart after interrupted transactions, and repeated GC transitions to be idempotent.
+
+Required checks:
+
+- every bootable generation references a complete, schema-consistent state set from one snapshot epoch;
+- no modeled interruption can pair a generation with partially upgraded or mixed-epoch state;
+- GC cannot collect a sealed object reachable from any retained root, including a staged transaction;
+- deliberately omitting a root or allowing a mixed snapshot epoch makes the checker fail.
+
+Exit condition: the checked model proves that every bounded upgrade, snapshot, promotion, rollback, and GC interleaving retains a bootable generation with a consistent state set and never collects a reachable object.
+
 ### M5.6: Pending, known-good, rollback, state policy, and GC
 
-Prerequisite: the cross-component state-snapshot design note (directions register entry 4, the current probe) must land before the state policies below are finalized, so that upgrade and rollback can be made consistent across components without a later breaking change.
+Prerequisites: M5.6a and M5.6b must land before implementation. Their checked transition, snapshot, state-policy, and GC semantics are the contract for this slice and must change in the same commit as any implementation-semantic change.
 
 Boot-state transition rules:
 
@@ -373,6 +396,32 @@ Exit condition: a deliberately failing pending generation automatically returns 
 
 Follow-ups enabled by this milestone (not exit requirements): generation bisect (automated boot-and-health-check search over the parent chain) and shadow boot (health-checking a pending generation in a constrained environment before consuming a real boot attempt), tracked as directions register entries 12 and 13. Both consume only mechanisms this milestone already requires.
 
+### M5.6c: BootState model-implementation conformance
+
+**Status:** Not started. Promoted from the directions register (entry 20). This slice closes the gap between the checked M5.6a/M5.6b state machines and the Rust/QEMU implementation; model checking alone does not prove that implementation transitions use the same durable linearization points.
+
+Deliverables:
+
+- define a versioned, bounded transition-trace contract containing the selected slot, durable sequence, known-good and pending identities, attempts before and after, generation and state roots, action identity, and commit boundary;
+- instrument stage-0 and the generation-management service only at durable state changes that correspond to model actions;
+- emit traces from the rollback power-cut scenarios and validate each finite trace against the M5.6a/M5.6b state machines;
+- keep trace validation in CI so model and implementation changes cannot drift independently.
+
+Required checks:
+
+- every `rollback_check` scenario produces a trace accepted by the checked models;
+- a trace that transfers control before the attempt decrement is durable is rejected;
+- traces that promote or collect against the wrong state root are rejected;
+- trace instrumentation remains bounded and cannot become a new unbounded boot dependency.
+
+Planned verification target:
+
+```sh
+just bootstate_trace_check
+```
+
+Exit condition: all durable BootState transitions observed in QEMU fault scenarios conform to M5.6a/M5.6b, and deliberately invalid implementation traces fail validation.
+
 ### M5.7: Framework NVMe transport and safety promotion
 
 Deliverables:
@@ -399,6 +448,64 @@ Milestone 5 may establish the Framework NVMe transport and read-only path, but p
 
 Exit condition: the Framework can run the storage-aware isolated userspace slice through the common block protocol, while internal NVMe writes remain disabled unless every physical safety promotion gate has been observed.
 
+### M5.8: Signed generation release metadata
+
+**Status:** Not started. Promoted from the directions register (entry 21). Content hashes prove object identity and integrity, but do not identify who authorized a generation for staging or boot. This slice must land before M6 permits generation transfer from another machine.
+
+Deliverables:
+
+- define a deterministic, bounded, versioned detached release object naming the generation identity, target identity, parent, release sequence, kernel identity, and authority-manifest identity;
+- pin an initial repository trust root independently from generation content and require threshold signatures for release metadata;
+- pin one mandatory signature algorithm and canonical key/signature encoding for stage-0 verification;
+- support bounded root-key rotation in which each new trust-root version is authorized by the required thresholds of both the previous and replacement trust sets;
+- reject internally hash-consistent generations that lack valid release authorization;
+- distinguish remote release replay protection from local safety rollback: staging does not advance the accepted release sequence, and promotion advances it only after userspace health confirmation while the retained known-good generation remains locally bootable.
+
+Required checks:
+
+- fewer than the configured threshold of compromised keys cannot authorize a release;
+- missing, duplicate-key, malformed, excessive, wrong-target, and stale release metadata are rejected before staging;
+- key rotation cannot skip a version or remove continuity with the previously trusted root;
+- a failed pending generation returns to the retained known-good generation without advancing the accepted release sequence;
+- advancing the sequence after promotion does not invalidate the explicitly retained local rollback root;
+- this milestone does not claim trusted-time freeze protection, UEFI Secure Boot, TPM sealing, or resistance to rollback of the entire physical disk image.
+
+Planned verification target:
+
+```sh
+just release_trust_check
+```
+
+Exit condition: stage-0 and generation-management code accept only correctly authorized releases while preserving automatic local rollback to the retained known-good generation.
+
+### M5.9: Recovery, scrub, and BootState reconstruction
+
+**Status:** Not started. Promoted from the directions register (entry 22). This slice consumes M5.8 release trust. M5.6 covers interrupted valid transitions; this slice covers the separate case where boot metadata or stored objects are already corrupt and no normal transition can repair them.
+
+Deliverables:
+
+- fail closed without executing generation objects when neither `BootState` slot is valid;
+- boot a signed recovery generation from removable media without granting ambient access to internal storage;
+- scrub object records, superblocks, generation closure, state-root closure, and release authorization before offering repair;
+- reconstruct redundant `BootState` slots only from complete, verified generation and state roots;
+- give the recovery component explicit `GenerationControl` and block-device capabilities for the selected repair target, with internal NVMe write authority absent by default;
+- make interrupted reconstruction idempotent and preserve the last valid repair result.
+
+Required checks:
+
+- corrupting both `BootState` slots never causes execution of an unverified object;
+- QEMU recovery media can reconstruct a bootable `BootState` from verified roots on one disposable disk while a second attached disk remains byte-identical;
+- missing state objects, broken generation closure, unauthorized release metadata, and interrupted reconstruction fail without manufacturing a bootable root;
+- the Framework removable-media safety checker proves that recovery images cannot write internal NVMe by default.
+
+Planned verification target:
+
+```sh
+just recovery_check
+```
+
+Exit condition: a machine with unusable boot metadata can fail closed, boot signed removable recovery, and reconstruct a verified bootable root without modifying any storage device not named by an explicit capability.
+
 ### Milestone 5 verification stack
 
 Each permanent change should run the narrowest QEMU scenario that exercises its new behavior. Before a Milestone 5 slice is accepted, the existing repository gates must remain clean:
@@ -411,14 +518,18 @@ just fmt_check
 just lint
 ```
 
-Storage slices additionally require their scenario targets. `storage_cap_check` exists today; the others are planned:
+Storage, model-conformance, release-trust, and recovery slices additionally require their scenario targets. Existing targets remain mandatory where applicable; the later targets are planned:
 
 ```sh
 just storage_cap_check
+just bootstate_model_check
 just storage_read_check
 just storage_write_check
 just storage_fault_check
 just rollback_check
+just bootstate_trace_check
+just release_trust_check
+just recovery_check
 ```
 
 Physical-machine evidence is separate from QEMU evidence. QEMU can prove deterministic logic and fault handling; it cannot prove actual Framework firmware behavior, DMA containment, device identity, power-loss behavior, or absence of writes to internal hardware.
@@ -432,11 +543,14 @@ Milestone 5 is complete only when all of the following are observed:
 - a pending boot attempt is persistently consumed before control transfers to it;
 - userspace health confirmation atomically promotes only the running pending generation;
 - interruption at every metadata commit boundary leaves at least one valid `BootState` slot;
+- implementation traces from every rollback fault scenario conform to the checked BootState and state/GC models;
 - exhausted or failed pending generations automatically boot the known-good generation;
 - GC never removes known-good, pending, running, rollback, staged, or persistent-state roots;
 - every persistent-state policy has an upgrade and rollback test;
 - storage read and write authority is granted only through explicit generation capabilities;
 - malformed storage and generation metadata is rejected before out-of-bounds I/O or execution;
+- staged and selected generations carry valid release authorization without preventing local known-good rollback;
+- invalid boot metadata fails closed and removable recovery cannot write storage absent an explicit capability;
 - the existing isolated component graph remains healthy under QEMU;
 - the Framework storage-aware slice is observed without unauthorized internal NVMe writes.
 
@@ -452,9 +566,9 @@ Scope:
 - filesystem service and directory capabilities;
 - generation inspection and update commands;
 - a powerbox-style file dialog service where the user's selection gesture mints a single-object capability;
-- generation sync/transfer between machines (object transfer plus staged activation).
+- generation sync/transfer between machines using authorized release metadata, object transfer, and staged activation.
 
-This milestone consumes the storage, object-store, state, and rollback mechanisms from Milestone 5. Dango commands must resolve executable and directory authority through capabilities rather than global paths or an implicit working directory.
+This milestone consumes the storage, object-store, state, rollback, release-trust, and recovery mechanisms from Milestone 5. Dango commands must resolve executable and directory authority through capabilities rather than global paths or an implicit working directory.
 
 Exit condition: the system can inspect, build or stage, select, and roll back generations through native components.
 

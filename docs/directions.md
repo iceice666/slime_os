@@ -28,22 +28,18 @@ directions" section, moved here so README carries a single pointer.
 
 ## Probing
 
-### 4. Generation-consistent state snapshots
-
-StateBindings are per-component, but rollback restores a whole generation.
-Uncoordinated policies leave component A's state at schema v3 and B's at v2.
-Explore graph-level snapshot points so upgrade and rollback are consistent
-across components.
-
-- Depends on: M5.6 state policies. Must be designed before M5.6 finalizes
-  those policies or it becomes a breaking change.
-- Exit-condition sketch: after two components write state and a fault is
-  injected mid-upgrade, rollback restores a consistent cross-component pair.
-- Status: probing. Occupies the single probe slot; time-boxed to a design
-  note, which ROADMAP lists as an M5.6 prerequisite that must land before
-  the state policies freeze.
+None. Entry 4 was promoted to M5.6b, so the single probing slot is open.
 
 ## Promoted
+
+### 4. Generation-consistent state snapshots
+
+Promoted to `ROADMAP.md` as M5.6b (checked generation, state, and GC
+transaction model). The checked contract assigns graph-level snapshot epochs,
+pairs each bootable generation with one complete state set, and includes every
+retained root in GC reachability before M5.6 implementation semantics freeze.
+
+- Status: promoted.
 
 ### 6. Formal model of BootState transitions
 
@@ -51,6 +47,33 @@ Promoted to `ROADMAP.md` as M5.6a (checked BootState transition model): a
 TLA+ or Alloy spec of the six transition rules and the power-cut matrix,
 checked in CI, proving no interleaving leaves zero bootable roots. See
 ROADMAP for deliverables and the exit condition.
+
+- Status: promoted.
+
+### 20. BootState model-implementation conformance
+
+Promoted to `ROADMAP.md` as M5.6c. QEMU fault scenarios emit bounded durable
+transition traces that are checked against M5.6a and M5.6b, closing the gap
+between a valid abstract model and an implementation that may choose different
+linearization points.
+
+- Status: promoted.
+
+### 21. Signed generation release metadata
+
+Promoted to `ROADMAP.md` as M5.8. Content hashes identify immutable bytes but
+do not authorize a publisher, so deterministic detached release metadata adds
+threshold signatures, bounded trust-root rotation, target binding, and replay
+ordering before M6 accepts generations transferred from another machine.
+
+- Status: promoted.
+
+### 22. Recovery, scrub, and BootState reconstruction
+
+Promoted to `ROADMAP.md` as M5.9. Signed removable recovery fails closed when
+both BootState slots are unusable, verifies generation and state closure before
+reconstruction, and receives write authority only for an explicitly selected
+repair target.
 
 - Status: promoted.
 
@@ -131,8 +154,8 @@ policy as manifest data: restart limits, backoff, and whether state is
 re-grant.
 
 - Depends on: M6 spawn-service prerequisites (supervision handles, endpoint
-  minting); interacts with direction 4's snapshot semantics and M5.6's
-  fault classification.
+  minting); interacts with M5.6b snapshot semantics and M5.6 fault
+  classification.
 - Exit-condition sketch: a manifest-declared policy restarts a killed
   component with fresh grants up to its limit, then reports a structured
   failed status through the health service.
@@ -209,12 +232,12 @@ A generation is a manifest plus content-addressed objects; moving a system
 to a new machine is object transfer plus activation, including capability
 grants and state policy — not dotfile reconstruction.
 
-- Depends on: M6 scope already lists "generation sync/transfer between
-  machines"; this entry tracks the general capability beyond that minimum.
-- Exit-condition sketch: a QEMU-built generation transfers to a second
-  machine and activates there with grants and state policy intact.
-- Status: parked. Partially scoped by M6; still needs its own exit
-  condition.
+- Depends on: M5.8 release authorization and the M6 transfer path. M6 scope
+  already lists "generation sync/transfer between machines"; this entry tracks
+  the general capability beyond that minimum.
+- Exit-condition sketch: an authorized QEMU-built generation transfers to a
+  second machine and activates there with grants and state policy intact.
+- Status: parked. Partially scoped by M6; still needs its own exit condition.
 
 ### 15. Zutai-defined state migrations
 
@@ -222,8 +245,8 @@ State schema upgrades expressed as pure Zutai transformations are
 deterministic, dry-runnable before activation, and covered by the same
 rollback contract as the boot graph.
 
-- Depends on: M5.6 state policies; Zutai evaluation in the build pipeline
-  (host-side is acceptable).
+- Depends on: M5.6b state-transaction semantics; Zutai evaluation in the
+  build pipeline (host-side is acceptable).
 - Exit-condition sketch: a schema v1→v2 migration written in Zutai dry-runs
   against a fixture state binding, then applies during activation; rollback
   restores the v1 binding per policy.
@@ -282,6 +305,23 @@ available on the target CPU.
   the other.
 - Status: parked.
 
+### 23. Generation build-provenance attestations
+
+Deterministic generation artifacts can carry a host-side attestation naming
+the source revision, builder identity and version, build type, normalized
+parameters, resolved dependency digests, and resulting generation identity.
+Release signatures answer who authorized deployment; provenance separately
+answers how the bytes were produced and supports rebuilding and incident
+response.
+
+- Depends on: M5.5 deterministic generation output; naturally accompanies the
+  M5.8 release pipeline but is not parsed by stage-0.
+- Exit-condition sketch: a verifier accepts provenance whose subject matches
+  the generation identity and rejects altered inputs, dependency digests,
+  builder identity, or output identity.
+- Status: parked. Host-side only; promote after the release pipeline has a
+  stable builder identity and attestation storage location.
+
 ## Rejected
 
 None yet.
@@ -290,7 +330,29 @@ None yet.
 
 | Wave | Directions | Why then |
 | --- | --- | --- |
-| 0 — now, alongside M5.4 | 6 (promoted to M5.6a), 4 (probing, design note) | 6 de-risks M5.6 for free; 4 must influence M5.6 state policy before it freezes. |
-| 1 — after M5.5/M5.6 | 1, 9, 7, 11 (recording), 12, 13 | All consume machine-readable manifests, boot-state machinery, or existing contract tooling; host-side only. |
-| 2 — M6 era | 8, 3, 14, 15, 16, 11 (replay) | Spawn-service prerequisites land; M6 already scopes 14 and 16; replay wants 3's determinism grants. |
-| 3 — M7 and beyond | 5, 2, 10, 17, 18, 19 | Physical TPM, provenance maturity, cross-machine sync, and daily-driver hardware respectively. |
+| 0 — before M5.6 implementation | 6 (M5.6a), 4 (M5.6b) | Both are promoted checked contracts; transition and state/GC semantics must freeze before implementation. |
+| 1 — with and after M5.6 | 20 (M5.6c), 1, 9, 12, 13 | Trace conformance closes the model/implementation gap; authority analysis, bisect, and shadow boot consume machine-readable manifests or rollback machinery. |
+| 2 — late M5 to M6 | 21 (M5.8), 22 (M5.9), 23, 7, 11 (recording), 8, 3, 14, 15, 16, 11 (replay) | Release trust and recovery must precede cross-machine activation; spawn prerequisites then unlock supervision, migration, powerbox, and general replay. |
+| 3 — M7 and beyond | 5, 2, 10, 17, 18, 19 | Physical TPM, revocation, distributed authority, and daily-driver hardware respectively. |
+
+## Research references
+
+These sources informed entries 4 and 20–23; the resulting contracts remain
+Slime-specific rather than adopting any external system wholesale.
+
+- [TLA+ implementation trace validation](https://arxiv.org/html/2404.16075v2)
+  motivates M5.6c's finite-trace conformance check and documents its limits.
+- [The Update Framework specification](https://theupdateframework.github.io/specification/latest/)
+  informs M5.8's threshold trust, versioned root rotation, and replay checks.
+- [Android A/B updates](https://source.android.com/docs/core/ota/ab) and
+  [Verified Boot flow](https://source.android.com/docs/security/features/verifiedboot/boot-flow)
+  motivate retaining a bootable fallback and advancing rollback protection
+  only after the pending system is confirmed successful.
+- [OSTree atomic upgrades](https://ostreedev.github.io/ostree/atomic-upgrades/),
+  [OSTree deployments](https://ostreedev.github.io/ostree/deployment/), and
+  [Nix GC roots](https://nix.dev/manual/nix/2.34/package-management/garbage-collector-roots)
+  inform M5.6b's deployment/state pairing and explicit reachability roots.
+- [seL4 capDL](https://docs.sel4.systems/projects/capdl/) informs the static
+  authority questions in entries 1 and 9.
+- [SLSA build provenance](https://slsa.dev/spec/v1.2/build-provenance) informs
+  entry 23's separation of build provenance from release authorization.
