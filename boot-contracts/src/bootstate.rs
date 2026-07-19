@@ -112,7 +112,7 @@ fn validate(state: &BootState) -> Result<(), BootStateError> {
         return Err(BootStateError::ZeroGenerationRoot);
     }
     match (state.pending, state.remaining_attempts) {
-        (None, 0) | (Some(_), 1..) => Ok(()),
+        (None, 0) | (Some(_), _) => Ok(()),
         _ => Err(BootStateError::BadPendingAttempts),
     }
 }
@@ -122,4 +122,40 @@ fn read_u32(bytes: &[u8], offset: usize) -> u32 {
 }
 fn read_u64(bytes: &[u8], offset: usize) -> u64 {
     u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const G1: [u8; 32] = [1; 32];
+    const G2: [u8; 32] = [2; 32];
+    const GENERATION_ROOT: [u8; 32] = [3; 32];
+
+    fn state(pending: Option<[u8; 32]>, remaining_attempts: u32) -> BootState {
+        BootState {
+            sequence: 1,
+            known_good: G1,
+            pending,
+            remaining_attempts,
+            generation_root: GENERATION_ROOT,
+            state_root: empty_state_root(),
+        }
+    }
+
+    #[test]
+    fn exhausted_pending_round_trips() {
+        let expected = state(Some(G2), 0);
+        let encoded = expected.encode().unwrap();
+
+        assert_eq!(BootState::decode(&encoded), Ok(expected));
+    }
+
+    #[test]
+    fn attempts_without_pending_are_rejected() {
+        assert_eq!(
+            state(None, 1).encode(),
+            Err(BootStateError::BadPendingAttempts)
+        );
+    }
 }

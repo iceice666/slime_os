@@ -113,8 +113,12 @@ kernel_image_gen: boot_gen
 
 bootstate_gen: boot_gen
 
+# Exhaustively check the bounded BootState transition and interruption model.
+bootstate_model_check:
+    python3 scripts/check-bootstate-model.py
+
 # Validate the pinned generation manifest schema and fixtures.
-contracts_check:
+contracts_check: bootstate_model_check
     python3 scripts/check-contracts.py
 
 # Build and validate deterministic generation and redundant boot metadata.

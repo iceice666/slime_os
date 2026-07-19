@@ -539,12 +539,12 @@ fn check_section(start: usize, count: usize, size: usize, next: usize) -> Result
     }
 }
 
-fn read_string<'a>(
-    bytes: &'a [u8],
+fn read_string(
+    bytes: &[u8],
     base: usize,
     table_len: usize,
     offset: usize,
-) -> Result<&'a str, DecodeError> {
+) -> Result<&str, DecodeError> {
     if offset >= table_len {
         return Err(DecodeError::BadBounds);
     }

@@ -11,6 +11,7 @@ BootStateHeader :: type {
   header_size : Int;
   required_flags : Int;
   sequence : Int;
+  -- Cross-field rule: no pending identity requires zero attempts; a pending identity permits any u32 value, including zero when exhausted.
   remaining_attempts : Int;
   reserved : Int;
 };

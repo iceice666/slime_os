@@ -151,7 +151,7 @@ def decode_bootstate(slot: bytes) -> dict:
     known_good = slot[32:64]; pending = slot[64:96]; attempts = int.from_bytes(slot[96:100], "little")
     generation_root = slot[104:136]; state_root = slot[136:168]
     require(known_good != bytes(32) and generation_root != bytes(32), "BadBootStateRoot")
-    require((pending == bytes(32) and attempts == 0) or (pending != bytes(32) and attempts > 0), "BadPendingAttempts")
+    require((pending == bytes(32) and attempts == 0) or pending != bytes(32), "BadPendingAttempts")
     return {"sequence": sequence, "known_good": known_good, "pending": None if pending == bytes(32) else pending, "generation_root": generation_root, "state_root": state_root}
 
 

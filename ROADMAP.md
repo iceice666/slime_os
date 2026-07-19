@@ -315,7 +315,7 @@ Follow-ups enabled by this milestone (not exit requirements): an authority diff 
 
 ### M5.6a: Checked BootState transition model
 
-**Status:** Not started. Promoted from the directions register (entry 6). This slice may proceed in parallel with M5.4 and M5.5: it consumes only the transition rules and power-cut matrix already written in M5.6 below, and produces no kernel code.
+**Status:** Complete. `contracts/bootstate/model/` is exhaustively checked by `just bootstate_model_check`: `SelectableBootRootExists` preserves a bootable root, `PendingAttemptConsumedBeforeTransfer` enforces durable decrement-before-transfer, all nine concrete cut witnesses pass (before pending metadata, slot write A, slot write B, after pending commit, after attempt commit, health promotion, rollback update, state snapshot, and garbage collection), and the skip-attempt mutation is rejected.
 
 Deliverables:
 

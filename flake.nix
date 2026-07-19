@@ -29,6 +29,7 @@
               lldb
               qemu
               rustup
+              tlaplus
               limine
               xorriso
               OVMF
