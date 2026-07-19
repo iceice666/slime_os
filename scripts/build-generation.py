@@ -17,6 +17,7 @@ SOURCE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "valid.zti"
 COMPONENT_SOURCES = ROOT / "components" / "src"
 
 TARGET = "x86_64-qemu-virtio"
+COMPONENT_LINKER = ROOT / "components" / "component.ld"
 MAGIC = b"SLIMEGEN"
 HEADER = struct.Struct("<8sIIQ32sHHHHH2x")
 OBJECT = struct.Struct("<32sQII")
@@ -28,6 +29,22 @@ RIGHT_TRANSFER = 4
 KIND = {"kernel": 1, "bootstrap": 2, "component": 3, "resource": 4}
 ROLE = {"init": 1, "service": 2, "driver": 3, "application": 4}
 RIGHT = {"read": RIGHT_READ, "write": RIGHT_WRITE}
+
+# Component image format constants (contracts/component/v1). Mirrored by the
+# kernel decoder and by scripts/check-generation.py; drift is caught by
+# `just generation_check`.
+IMAGE_MAGIC = b"SLIMECMP"
+IMAGE_FORMAT_VERSION = 1
+IMAGE_KERNEL_ABI = 1
+IMAGE_HEADER = struct.Struct("<8sIIIIHHI")
+IMAGE_SEGMENT = struct.Struct("<IIIIHH")
+IMAGE_BASE = 0x400000  # must match ENTRY_VA in kernel/src/task/mod.rs
+PAGE_SIZE = 4096
+MAX_IMAGE_BYTES = 16 * 1024 * 1024
+MAX_STACK_BYTES = 1024 * 1024
+DEFAULT_STACK_BYTES = 16384
+SEGMENT_WRITE = 1
+SEGMENT_EXEC = 2
 
 
 def fail(message: str) -> None:
@@ -48,16 +65,101 @@ def load_manifest() -> dict:
     return json.loads(output)
 
 
-def build_component(name: str, output: Path) -> bytes:
+def component_image(name: str, elf: Path, stack_bytes: int) -> bytes:
+    """Convert a statically linked component ELF into a component image.
+
+    Reads the ELF program headers directly (stdlib only) so the conversion is
+    deterministic and dependency-free. Enforces the same rules the kernel
+    decoder validates, so a built image can never be rejected at boot.
+    """
+    data = elf.read_bytes()
+    if len(data) < 64 or data[:4] != b"\x7fELF" or data[4] != 2 or data[5] != 1:
+        fail(f"{name}: not a 64-bit little-endian ELF")
+    elf_type, machine = struct.unpack_from("<HH", data, 16)
+    if elf_type != 2 or machine != 62:
+        fail(f"{name}: not a static x86-64 executable")
+    entry = struct.unpack_from("<Q", data, 24)[0]
+    phoff = struct.unpack_from("<Q", data, 32)[0]
+    _, phentsize, phnum = struct.unpack_from("<HHH", data, 52)
+
+    segments = []
+    for index in range(phnum):
+        p_type, p_flags = struct.unpack_from("<II", data, phoff + index * phentsize)
+        p_offset, p_vaddr, _, p_filesz, p_memsz = struct.unpack_from(
+            "<QQQQQ", data, phoff + index * phentsize + 8
+        )
+        if p_type != 1 or p_memsz == 0:  # PT_LOAD with content only
+            continue
+        segments.append((p_vaddr, p_offset, p_filesz, p_memsz, p_flags))
+    segments.sort()
+    if not 1 <= len(segments) <= 16:
+        fail(f"{name}: {len(segments)} loadable segments outside 1..=16")
+    if segments[0][0] != IMAGE_BASE:
+        fail(f"{name}: link base {segments[0][0]:#x} is not {IMAGE_BASE:#x}")
+    if entry < IMAGE_BASE:
+        fail(f"{name}: entry point below link base")
+    entry_offset = entry - IMAGE_BASE
+
+    records = bytearray()
+    payload = bytearray()
+    previous_end = 0
+    total_pages = 0
+    entry_ok = False
+    for vaddr, offset, filesz, memsz, elf_flags in segments:
+        if filesz > memsz or vaddr % PAGE_SIZE or vaddr < previous_end:
+            fail(f"{name}: invalid or overlapping segment at {vaddr:#x}")
+        # ELF PF_X=1 / PF_W=2 -> image EXEC/WRITE flag bits.
+        flags = (SEGMENT_EXEC if elf_flags & 1 else 0) | (SEGMENT_WRITE if elf_flags & 2 else 0)
+        if flags & (SEGMENT_WRITE | SEGMENT_EXEC) == (SEGMENT_WRITE | SEGMENT_EXEC):
+            fail(f"{name}: segment at {vaddr:#x} is both writable and executable")
+        relative = vaddr - IMAGE_BASE
+        if flags & SEGMENT_EXEC and relative <= entry_offset < relative + memsz:
+            entry_ok = True
+        records += IMAGE_SEGMENT.pack(relative, memsz, len(payload), filesz, flags, 0)
+        payload += data[offset : offset + filesz]
+        previous_end = vaddr + memsz
+        total_pages += -(-memsz // PAGE_SIZE)
+    if not entry_ok:
+        fail(f"{name}: entry point outside executable segments")
+    if total_pages * PAGE_SIZE > MAX_IMAGE_BYTES:
+        fail(f"{name}: image footprint exceeds {MAX_IMAGE_BYTES} bytes")
+
+    header = IMAGE_HEADER.pack(
+        IMAGE_MAGIC,
+        IMAGE_FORMAT_VERSION,
+        IMAGE_HEADER.size,
+        IMAGE_KERNEL_ABI,
+        entry_offset,
+        len(segments),
+        0,
+        stack_bytes,
+    )
+    return header + bytes(records) + bytes(payload)
+
+
+def build_component(name: str, output: Path, stack_bytes: int) -> bytes:
     source = COMPONENT_SOURCES / f"{name}.S"
     obj = output / f"{name}.o"
-    binary = output / f"{name}.bin"
+    elf = output / f"{name}.elf"
     subprocess.run(
         ["as", "--64", "-I", str(ROOT / "components" / "include"), "-o", obj, source],
         check=True,
     )
-    subprocess.run(["objcopy", "-O", "binary", "-j", ".text", obj, binary], check=True)
-    return binary.read_bytes()
+    subprocess.run(
+        [
+            "ld",
+            "-o",
+            elf,
+            "-T",
+            COMPONENT_LINKER,
+            "--build-id=none",
+            "-z",
+            "max-page-size=4096",
+            obj,
+        ],
+        check=True,
+    )
+    return component_image(name, elf, stack_bytes)
 
 
 def encode_string(value: str) -> bytes:
@@ -100,7 +202,17 @@ def main() -> None:
     for component in components:
         if component["object"] not in object_by_id:
             fail(f"missing object for component {component['name']}")
-        payloads[component["object"]] = build_component(component["name"], output)
+        stack_bytes = component.get("stackBytes", DEFAULT_STACK_BYTES)
+        if (
+            not isinstance(stack_bytes, int)
+            or stack_bytes <= 0
+            or stack_bytes % PAGE_SIZE
+            or stack_bytes > MAX_STACK_BYTES
+        ):
+            fail(f"component {component['name']}: invalid stackBytes {stack_bytes}")
+        payloads[component["object"]] = build_component(
+            component["name"], output, stack_bytes
+        )
 
     object_records = bytearray()
     blobs = bytearray()

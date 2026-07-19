@@ -1,0 +1,108 @@
+-- Slime OS component image format, version 1.
+--
+-- The typed host-side contract for the immutable component images carried as
+-- generation objects of kind `bootstrap` or `component`. Component images are
+-- the only executable encoding the kernel accepts; ELF exists only as a
+-- build-time intermediate on the host and never reaches the kernel.
+--
+-- An image is a bounded header, a segment table sorted by load offset, and
+-- concatenated segment payloads. All fields are packed little-endian. The
+-- format carries no relocations, no dynamic-linking metadata, no capability
+-- or authority declarations, and no integrity hash: authority lives in
+-- generation grants and integrity in the generation object digest.
+--
+-- Logical fields use Zutai `Int`; the parallel layout lists give each field a
+-- fixed width and declaration order. The renderer assigns packed offsets and
+-- cross-checks reflected schema names against layout names before writing
+-- Rust bindings.
+
+env ::= import stdlib.env;
+fs ::= import stdlib.fs;
+gen ::= import "gen_rust.zt";
+t ::= import stdlib.text;
+
+formatVersion :: Int = 1;
+kernelAbiVersion :: Int = 1;
+headerLen :: Int = 32;
+segmentLen :: Int = 20;
+maxSegments :: Int = 16;
+maxImageBytes :: Int = 16777216;
+maxStackBytes :: Int = 1048576;
+defaultStackBytes :: Int = 16384;
+segmentFlagWrite :: Int = 1;
+segmentFlagExec :: Int = 2;
+-- "SLIMECMP" as a little-endian u64.
+imageMagic :: Int = 5786355061169409107;
+
+WireField :: type { name : Text; width : Int; signed : Bool; };
+
+ImageHeader :: type {
+  magic : Int;
+  format_version : Int;
+  header_size : Int;
+  kernel_abi : Int;
+  entry_offset : Int;
+  segment_count : Int;
+  reserved : Int;
+  stack_bytes : Int;
+};
+
+SegmentRecord :: type {
+  vaddr_offset : Int;
+  mem_len : Int;
+  file_offset : Int;
+  file_len : Int;
+  flags : Int;
+  reserved : Int;
+};
+
+headerSchema ::= schema ImageHeader;
+segmentSchema ::= schema SegmentRecord;
+
+headerLayout :: List WireField = {
+  { name = "magic"; width = 8; signed = false; };
+  { name = "format_version"; width = 4; signed = false; };
+  { name = "header_size"; width = 4; signed = false; };
+  { name = "kernel_abi"; width = 4; signed = false; };
+  { name = "entry_offset"; width = 4; signed = false; };
+  { name = "segment_count"; width = 2; signed = false; };
+  { name = "reserved"; width = 2; signed = false; };
+  { name = "stack_bytes"; width = 4; signed = false; };
+};
+
+segmentLayout :: List WireField = {
+  { name = "vaddr_offset"; width = 4; signed = false; };
+  { name = "mem_len"; width = 4; signed = false; };
+  { name = "file_offset"; width = 4; signed = false; };
+  { name = "file_len"; width = 4; signed = false; };
+  { name = "flags"; width = 2; signed = false; };
+  { name = "reserved"; width = 2; signed = false; };
+};
+
+imageFormat ::= {
+  formatVersion = formatVersion;
+  kernelAbiVersion = kernelAbiVersion;
+  headerLen = headerLen;
+  segmentLen = segmentLen;
+  maxSegments = maxSegments;
+  maxImageBytes = maxImageBytes;
+  maxStackBytes = maxStackBytes;
+  defaultStackBytes = defaultStackBytes;
+  segmentFlagWrite = segmentFlagWrite;
+  segmentFlagExec = segmentFlagExec;
+  imageMagic = imageMagic;
+  headerFields = headerSchema.fields ?? {;};
+  segmentFields = segmentSchema.fields ?? {;};
+  headerLayout = headerLayout;
+  segmentLayout = segmentLayout;
+};
+
+main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }
+  = caps => [
+    root := env.get caps.env "SLIME_COMPONENT_BINDINGS_ROOT" ?? ".";
+    bindings := gen.render imageFormat;
+    rustPath := t.join "" { root; "/kernel/src/component/gen.rs"; };
+    fs.writeAll caps.write rustPath bindings.rust
+  ];
+
+main

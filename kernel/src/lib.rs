@@ -11,6 +11,7 @@ pub mod block_proto;
 pub mod block_service;
 pub mod bootstrap;
 pub mod capability;
+pub mod component;
 pub mod crt;
 pub mod dma;
 pub mod frame_buffer;

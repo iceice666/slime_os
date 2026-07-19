@@ -14,6 +14,8 @@ STDLIB = ROOT / "deps" / "zutai" / "stdlib"
 GENERATION_CONTRACT = ROOT / "contracts" / "generation" / "v1"
 BLOCK_CONTRACT = ROOT / "contracts" / "block" / "v1"
 BLOCK_BINDING_GENERATOR = ROOT / "scripts" / "generate-block-bindings.py"
+COMPONENT_CONTRACT = ROOT / "contracts" / "component" / "v1"
+COMPONENT_BINDING_GENERATOR = ROOT / "scripts" / "generate-component-bindings.py"
 
 
 def run(*arguments: str) -> str:
@@ -91,4 +93,12 @@ with tempfile.TemporaryDirectory(prefix="slime-block-contract-") as temporary:
         check=True,
     )
 
-print("Generation manifest and block protocol contracts passed")
+run("check", str(COMPONENT_CONTRACT / "schema.zt"))
+run("check", str(COMPONENT_CONTRACT / "gen_rust.zt"))
+subprocess.run(
+    [sys.executable, str(COMPONENT_BINDING_GENERATOR), "--check"],
+    cwd=ROOT,
+    check=True,
+)
+
+print("Generation manifest, block protocol, and component image contracts passed")

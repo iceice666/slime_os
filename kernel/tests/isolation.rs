@@ -7,6 +7,7 @@
 extern crate alloc;
 
 use alloc::vec;
+use alloc::vec::Vec;
 use core::arch::global_asm;
 use core::sync::atomic::{AtomicU64, Ordering};
 use slime_os_kernel::serial_println;
@@ -101,6 +102,39 @@ unsafe extern "C" {
 static SEND_ID: AtomicU64 = AtomicU64::new(0);
 static RECV_ID: AtomicU64 = AtomicU64::new(0);
 
+/// Wrap a position-independent code blob in a single-segment executable
+/// component image (`contracts/component/v1`).
+fn rx_image(code: &[u8]) -> Vec<u8> {
+    use slime_os_kernel::component::*;
+    let mut image = Vec::new();
+    image.extend_from_slice(
+        &WireImageHeader {
+            magic: IMAGE_MAGIC,
+            format_version: FORMAT_VERSION,
+            header_size: HEADER_LEN as u32,
+            kernel_abi: KERNEL_ABI_VERSION,
+            entry_offset: 0,
+            segment_count: 1,
+            reserved: 0,
+            stack_bytes: DEFAULT_STACK_BYTES,
+        }
+        .encode(),
+    );
+    image.extend_from_slice(
+        &WireSegmentRecord {
+            vaddr_offset: 0,
+            mem_len: code.len() as u32,
+            file_offset: 0,
+            file_len: code.len() as u32,
+            flags: SEGMENT_FLAG_EXEC,
+            reserved: 0,
+        }
+        .encode(),
+    );
+    image.extend_from_slice(code);
+    image
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn _start() -> ! {
     slime_os_kernel::limine::ensure_linked();
@@ -133,8 +167,11 @@ fn two_components_ipc_and_fault_isolation() {
         )
     };
 
+    let receiver_image = rx_image(receiver_code);
+    let sender_image = rx_image(sender_code);
+
     let recv_id = task::spawn_with_caps(
-        receiver_code,
+        &receiver_image,
         vec![capability::Capability {
             object: capability::KernelObject::Endpoint(recv_ep),
             rights: capability::RIGHT_RECV,
@@ -142,7 +179,7 @@ fn two_components_ipc_and_fault_isolation() {
     )
     .unwrap();
     let send_id = task::spawn_with_caps(
-        sender_code,
+        &sender_image,
         vec![capability::Capability {
             object: capability::KernelObject::Endpoint(send_ep),
             rights: capability::RIGHT_SEND,

@@ -17,6 +17,11 @@ Component :: type {
   object : Text;
   role : Text;
   dependencies : List Text;
+  -- Optional per-component stack size in bytes for the component image
+  -- header (contracts/component/v1). Must be a positive page multiple
+  -- within the component format's stack bound; the builder substitutes its
+  -- default when absent.
+  stackBytes? : Int;
 };
 
 CapabilityGrant :: type {

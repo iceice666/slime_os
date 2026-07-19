@@ -160,6 +160,8 @@ The kernel must not parse Zutai source or own system policy. It starts a small b
 
 Manifest encoding is not yet frozen. It must be deterministic, bounded, versioned, safe to decode before the full userspace environment exists, and independent of JSON-specific tagged-union conventions.
 
+Executable payloads inside the manifest use component image format 1 (`contracts/component/v1/`): a bounded header, a segment table with per-segment R/W/X flags, an entry point, and a stack requirement. Components link statically at a fixed base address on the host; the kernel maps images verbatim with no relocations, no dynamic linking, and no ELF parsing. Integrity comes from the generation object digest and authority from generation grants, so an image itself carries neither.
+
 ## Agentic direction
 
 The five first-class concepts are also the natural primitives for running autonomous agents safely, and no new authority model is required for it.
@@ -234,8 +236,8 @@ The current milestone is storage and rollbackable generations. Its exit conditio
 
 ```text
 kernel/       Rust no_std kernel, boot path, generation decoder, scheduler, IPC, and tests
-components/   Minimal assembly userspace components for the QEMU vertical slice
-contracts/    Generation manifest v1 contract, Zutai fixtures, and validation entrypoints
+components/   Minimal assembly userspace components for the QEMU vertical slice, linked by components/component.ld
+contracts/    Generation manifest v1, block protocol v1, and component image v1 contracts
 scripts/      Host-side generation build/check and contract validation helpers
 assets/       Boot/runtime assets
 deps/         Pinned Zutai and Dango submodules

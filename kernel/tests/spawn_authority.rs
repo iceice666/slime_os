@@ -19,6 +19,7 @@
 extern crate alloc;
 
 use alloc::vec;
+use alloc::vec::Vec;
 
 use slime_os_kernel::capability::{
     CapError, Capability, CapabilityTable, KernelObject, RIGHT_BLOCK_READ, RIGHT_BLOCK_WRITE,
@@ -55,6 +56,39 @@ fn executable_cap(rights: u32) -> Capability {
         object: KernelObject::Executable(&[0x90]),
         rights,
     }
+}
+
+/// Wrap a code blob in a single-segment executable component image
+/// (`contracts/component/v1`) so spawn accepts it.
+fn rx_image(code: &[u8]) -> Vec<u8> {
+    use slime_os_kernel::component::*;
+    let mut image = Vec::new();
+    image.extend_from_slice(
+        &WireImageHeader {
+            magic: IMAGE_MAGIC,
+            format_version: FORMAT_VERSION,
+            header_size: HEADER_LEN as u32,
+            kernel_abi: KERNEL_ABI_VERSION,
+            entry_offset: 0,
+            segment_count: 1,
+            reserved: 0,
+            stack_bytes: DEFAULT_STACK_BYTES,
+        }
+        .encode(),
+    );
+    image.extend_from_slice(
+        &WireSegmentRecord {
+            vaddr_offset: 0,
+            mem_len: code.len() as u32,
+            file_offset: 0,
+            file_len: code.len() as u32,
+            flags: SEGMENT_FLAG_EXEC,
+            reserved: 0,
+        }
+        .encode(),
+    );
+    image.extend_from_slice(code);
+    image
 }
 
 #[test_case]
@@ -145,9 +179,10 @@ fn preflight_rejects_bad_grant_slots() {
 
 #[test_case]
 fn spawn_fails_structured_when_task_table_full() {
+    let image = rx_image(&[0x90]);
     for _ in 0..MAX_TASKS {
-        task::spawn_with_caps(&[0x90], vec![]).unwrap();
+        task::spawn_with_caps(&image, vec![]).unwrap();
     }
-    let result = task::spawn_with_caps(&[0x90], vec![]);
+    let result = task::spawn_with_caps(&image, vec![]);
     assert!(matches!(result, Err(SpawnError::TooManyTasks)));
 }

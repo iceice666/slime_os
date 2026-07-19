@@ -8,6 +8,11 @@ const OBJECT_SIZE: usize = 48;
 const COMPONENT_SIZE: usize = 12;
 const GRANT_SIZE: usize = 16;
 
+// Object kinds carrying executable component images (contracts/component/v1).
+// Kept in sync with the builder's KIND table in scripts/build-generation.py.
+const KIND_BOOTSTRAP: u32 = 2;
+const KIND_COMPONENT: u32 = 3;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecodeError {
     Truncated,
@@ -19,6 +24,9 @@ pub enum DecodeError {
     BadObjectHash,
     DuplicateName,
     BadBootstrap,
+    /// An object of kind `bootstrap`/`component` is not a valid component
+    /// image (`contracts/component/v1`).
+    BadImage(crate::component::ImageError),
 }
 
 #[derive(Clone, Copy)]
@@ -130,6 +138,12 @@ pub fn decode(bytes: &[u8]) -> Result<Generation<'_>, DecodeError> {
         let blob = bytes.get(start..end).ok_or(DecodeError::Truncated)?;
         if sha256::digest(blob) != digest {
             return Err(DecodeError::BadObjectHash);
+        }
+        // Executable objects are validated eagerly: a generation that decodes
+        // never contains a malformed component image, so spawn can treat the
+        // image contract as already enforced.
+        if matches!(kind, KIND_BOOTSTRAP | KIND_COMPONENT) {
+            crate::component::decode(blob).map_err(DecodeError::BadImage)?;
         }
         objects.push(Object { kind, bytes: blob });
     }

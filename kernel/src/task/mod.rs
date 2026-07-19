@@ -19,7 +19,6 @@ pub const KERNEL_STACK_SIZE: usize = 64 * 1024;
 /// every task eagerly allocates a [`KERNEL_STACK_SIZE`] stack, and
 /// `MAX_TASKS * KERNEL_STACK_SIZE` must stay well within the heap budget.
 pub const MAX_TASKS: usize = 16;
-pub const USER_STACK_PAGES: usize = 4;
 pub const ENTRY_VA: u64 = 0x0000_0000_0040_0000;
 pub const USER_STACK_TOP: u64 = 0x0000_7fff_ffff_f000;
 
@@ -123,8 +122,8 @@ unsafe extern "C" {
     fn switch_to_user(frame: *const UserFrame) -> !;
 }
 
-pub fn spawn_user(code: &'static [u8]) -> Result<TaskId, SpawnError> {
-    spawn_with_caps(code, Vec::new())
+pub fn spawn_user(image: &[u8]) -> Result<TaskId, SpawnError> {
+    spawn_with_caps(image, Vec::new())
 }
 
 /// Validate a spawn grant list against a capability table. The executable
@@ -184,6 +183,11 @@ pub fn spawn_from_cap(executable_slot: u32, cap_slots: &[u32]) -> Result<TaskId,
 pub enum SpawnError {
     BadExecutable,
     BadCapability,
+    /// The executable bytes are not a valid component image
+    /// (`contracts/component/v1`). Generation decoding validates images
+    /// eagerly, so this can only fire for executables sourced outside a
+    /// decoded generation.
+    BadImage(crate::component::ImageError),
     /// The live task table is at [`MAX_TASKS`]; no new task may be spawned.
     TooManyTasks,
     Map(MapError),
@@ -195,7 +199,7 @@ impl From<MapError> for SpawnError {
     }
 }
 
-pub fn spawn_with_caps(code: &'static [u8], caps: Vec<Capability>) -> Result<TaskId, SpawnError> {
+pub fn spawn_with_caps(image: &[u8], caps: Vec<Capability>) -> Result<TaskId, SpawnError> {
     {
         let sched = SCHEDULER.lock();
         let live = sched
@@ -208,30 +212,47 @@ pub fn spawn_with_caps(code: &'static [u8], caps: Vec<Capability>) -> Result<Tas
         }
     }
 
+    let decoded = crate::component::decode(image).map_err(SpawnError::BadImage)?;
+
     let mut address_space = AddressSpace::new()?;
 
-    let pages = code.len().div_ceil(PAGE_SIZE);
-    for i in 0..pages {
-        let frame = FRAME_ALLOCATOR
-            .lock()
-            .alloc()
-            .ok_or(MapError::OutOfFrames)?;
-        // SAFETY: `frame` is fresh and HHDM mapped.
-        unsafe {
-            let dst = frame.to_virt().as_mut_ptr::<u8>();
-            core::ptr::write_bytes(dst, 0, PAGE_SIZE);
-            let start = i * PAGE_SIZE;
-            let end = (start + PAGE_SIZE).min(code.len());
-            core::ptr::copy_nonoverlapping(code[start..end].as_ptr(), dst, end - start);
+    for segment in &decoded.segments {
+        let bytes = decoded.segment_bytes(segment);
+        let mut flags = PTE_USER | PTE_PRESENT;
+        if segment.writable() {
+            flags |= PTE_WRITABLE;
         }
-        address_space.map_user(
-            VirtAddr(ENTRY_VA + (i * PAGE_SIZE) as u64),
-            frame,
-            PTE_USER | PTE_PRESENT,
-        )?;
+        if !segment.executable() {
+            flags |= PTE_NO_EXECUTE;
+        }
+        let pages = (segment.mem_len as usize).div_ceil(PAGE_SIZE);
+        for i in 0..pages {
+            let frame = FRAME_ALLOCATOR
+                .lock()
+                .alloc()
+                .ok_or(MapError::OutOfFrames)?;
+            // SAFETY: `frame` is fresh and HHDM mapped. The frame is zeroed
+            // first, so the `mem_len` tail beyond `file_len` reads as zero
+            // (`.bss`).
+            unsafe {
+                let dst = frame.to_virt().as_mut_ptr::<u8>();
+                core::ptr::write_bytes(dst, 0, PAGE_SIZE);
+                let start = i * PAGE_SIZE;
+                if start < bytes.len() {
+                    let end = (start + PAGE_SIZE).min(bytes.len());
+                    core::ptr::copy_nonoverlapping(bytes[start..end].as_ptr(), dst, end - start);
+                }
+            }
+            address_space.map_user(
+                VirtAddr(ENTRY_VA + segment.vaddr_offset as u64 + (i * PAGE_SIZE) as u64),
+                frame,
+                flags,
+            )?;
+        }
     }
 
-    for i in 0..USER_STACK_PAGES {
+    let stack_pages = decoded.stack_bytes as usize / PAGE_SIZE;
+    for i in 0..stack_pages {
         let frame = FRAME_ALLOCATOR
             .lock()
             .alloc()
@@ -279,7 +300,7 @@ pub fn spawn_with_caps(code: &'static [u8], caps: Vec<Capability>) -> Result<Tas
             r13: 0,
             r14: 0,
             r15: 0,
-            rip: ENTRY_VA,
+            rip: ENTRY_VA + decoded.entry_offset as u64,
             cs: USER_CODE_SELECTOR as u64 | 3,
             rflags: 0x200,
             rsp: USER_STACK_TOP,

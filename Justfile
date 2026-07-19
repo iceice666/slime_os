@@ -83,6 +83,10 @@ fmt_check:
 block_gen:
     python3 scripts/generate-block-bindings.py
 
+# Regenerate Rust component image bindings from the Zutai schema.
+component_gen:
+    python3 scripts/generate-component-bindings.py
+
 # Validate the pinned generation manifest schema and fixtures.
 contracts_check:
     python3 scripts/check-contracts.py
