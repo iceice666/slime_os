@@ -203,79 +203,21 @@ Acceptance criteria:
 
 This slice defines the minimum useful contracts: userspace entry, address-space isolation, capability IPC, executable identity, command resolution, spawning, streams, termination notification, manifest decoding, fault containment, and the agent abstraction as a non-special case of the above.
 
-## Milestone order
+## Roadmap
 
-### 1. Kernel foundation — QEMU tests passing
+The canonical milestone order, acceptance criteria, and detailed implementation plan live in [`ROADMAP.md`](ROADMAP.md).
 
-- exception and crash reporting;
-- physical and virtual memory management;
-- kernel allocation;
-- APIC/timer support;
-- architecture boundaries suitable for QEMU and Framework bring-up.
+Current sequence:
 
-Exit condition: invalid mappings and faults are reported deterministically rather than silently hanging.
+1. Kernel foundation — QEMU tests passing.
+2. Isolation and IPC — core QEMU exit passing.
+3. Bootstrap component graph — QEMU vertical slice passing.
+4. Framework safe bring-up — verified.
+5. Storage and generations — next; not yet implemented.
+6. Native interactive environment — minimal stub only.
+7. Daily-driver hardware — not yet implemented.
 
-### 2. Isolation and IPC — core QEMU exit passing
-
-- userspace mode and independent address spaces;
-- preemptible tasks;
-- kernel object and capability tables;
-- channels, shared-memory transfer, timeouts, cancellation, and peer-death notification.
-
-Exit condition: two userspace components communicate, and one may fault without corrupting the other or the kernel.
-
-### 3. Bootstrap component graph — QEMU vertical slice passing
-
-- boot object loading;
-- versioned manifest decoding;
-- init/service manager;
-- console, `sysinfo`, and `echo-agent` stub components.
-
-Exit condition: the first vertical slice works under QEMU.
-
-### 4. Framework safe bring-up — verified
-
-- UEFI/GOP console;
-- ACPI discovery;
-- keyboard input;
-- timer and shutdown/reboot paths;
-- removable-media boot with internal NVMe access disabled.
-
-Exit condition: the same isolated userspace slice runs on the Framework without modifying internal storage.
-
-### 5. Storage and generations — not yet implemented
-
-- virtio block, then Framework NVMe;
-- GPT and an integrity-checked object store;
-- immutable generations;
-- pending/known-good boot state;
-- rollback and garbage-collection roots;
-- explicit persistent-state policy.
-
-Exit condition: a failed pending generation automatically leaves or restores a bootable known-good generation.
-
-### 6. Native interactive environment — minimal stub only
-
-- minimal Dango implementation and core runtime;
-- command profile/resolver and spawn service;
-- filesystem service and directory capabilities;
-- generation inspection and update commands.
-
-Exit condition: the system can inspect, build/stage, select, and roll back generations through native components.
-
-### 7. Daily-driver hardware — not yet implemented
-
-Bring hardware up in risk order rather than feature visibility:
-
-1. xHCI, USB HID, mass storage, and USB Ethernet;
-2. native storage reliability and IOMMU-enforced DMA;
-3. software-rendered display/compositor over GOP;
-4. battery, charger, brightness, lid, thermal, and suspend/resume lifecycle;
-5. touchpad and audio;
-6. MT7925 Wi-Fi and Bluetooth;
-7. Radeon display control and hardware acceleration.
-
-GPU acceleration, Wi-Fi, and audio do not block the first native userspace milestone, but they are required before the Framework target can be called a daily-use system.
+The next milestone is storage and rollbackable generations. Its exit condition is that a failed pending generation automatically leaves or restores a bootable known-good generation. `ROADMAP.md` decomposes this work into capability foundations, virtio block I/O, durable writes, GPT and the object store, boot-state records, rollback and GC, and Framework NVMe safety promotion.
 
 ## Current repository layout
 
