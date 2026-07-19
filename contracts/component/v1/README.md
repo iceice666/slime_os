@@ -90,19 +90,23 @@ against the generated wire bindings.
 
 `scripts/build-generation.py` builds each component as:
 
-1. `as` assembles `components/src/<name>.S` (or a future compiler emits the
-   object — the pipeline from step 2 is language-agnostic);
-2. `ld -T components/component.ld --build-id=none -z max-page-size=4096`
-   links a static ELF at the component base VA;
-3. the converter reads the ELF program headers with Python stdlib only,
+1. `cargo build --release` in the `components/` workspace compiles every
+   component (Rust `no_std`, target `x86_64-unknown-none`) and links it via
+   `components/component.ld` at the fixed base VA (`--build-id=none`,
+   `-z max-page-size=4096`, `relocation-model=static`; see
+   `components/.cargo/config.toml` and `components/bins/build.rs`) — this
+   step is the only language-specific one; step 2 onward accepts any static
+   ELF built this way;
+2. the converter reads the ELF program headers with Python stdlib only,
    maps `PT_LOAD` segments to image segments (ELF `PF_X`/`PF_W` to the
    image flags), asserts the same rules the kernel validates, and emits the
    image;
-4. the image becomes the generation object payload, hashed by the existing
+3. the image becomes the generation object payload, hashed by the existing
    `SLIMEGEN` path.
 
-Determinism: `--build-id=none` and the fixed script make `ld` output
-reproducible; the converter emits segments in sorted order with zeroed
+Determinism: `--build-id=none`, a fixed link script, and a reproducible
+`cargo build --release` profile make the linked ELF byte-identical across
+clean builds; the converter emits segments in sorted order with zeroed
 reserved fields, so equivalent input produces identical bytes. The linked
 ELF stays in the build directory for host-side debugging; it is not part of
 the generation.

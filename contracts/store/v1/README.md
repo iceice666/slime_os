@@ -3,8 +3,9 @@
 This directory defines the request/reply protocol between userspace
 components and the kernel object store service (M5.4). `schema.zt` is the
 normative layout; `gen_rust.zt` renders the kernel Rust bindings
-(`kernel/src/store_proto/gen.rs`) and the component assembly bindings
-(`components/include/store_proto.inc`). Regenerate with `just store_gen` and
+(`kernel/src/store_proto/gen.rs`) and the identical no_std-compatible Rust
+bindings the `components/` workspace depends on
+(`components/proto/src/store.rs`). Regenerate with `just store_gen` and
 validate freshness with `just contracts_check`.
 
 The protocol transports operation envelopes only. Object payloads move
@@ -80,9 +81,8 @@ are enforced before any capability or device contact.
 
 ## Validation
 
-`scripts/check-contracts.py` checks both schemas, verifies the generated
-bindings are fresh, and assembles a smoke component against the generated
-macros. `kernel/tests/object_store.rs` pins protocol and store-format
+`scripts/check-contracts.py` checks both schemas and verifies the generated
+bindings are fresh. `kernel/tests/object_store.rs` pins protocol and store-format
 acceptance/rejection classes; `just storage_store_check` exercises the
 complete QEMU path (GPT recovery, content-addressed retrieval, append/seal
 durability, and malformed-metadata rejection).

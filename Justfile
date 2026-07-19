@@ -85,6 +85,12 @@ fmt:
 fmt_check:
     cd kernel && cargo fmt -- --check
 
+fmt_components:
+    cd components && cargo fmt
+
+fmt_check_components:
+    cd components && cargo fmt -- --check
+
 # Regenerate Rust block protocol bindings from the Zutai schema.
 block_gen:
     python3 scripts/generate-block-bindings.py
@@ -128,3 +134,13 @@ lint:
 
 lint_fix:
     cd kernel && cargo clippy --fix --all-features --allow-dirty
+
+# components/ is no_std bare-metal with no test harness (like the kernel, it
+# is QEMU-verified rather than cargo-test-verified), so --all-targets is
+# deliberately omitted: it would try to build a std test harness that does
+# not exist for this target.
+lint_components:
+    cd components && cargo clippy -- -D warnings
+
+lint_fix_components:
+    cd components && cargo clippy --fix --allow-dirty

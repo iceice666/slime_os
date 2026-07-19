@@ -103,9 +103,13 @@ main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * en
     root := env.get caps.env "SLIME_BLOCK_BINDINGS_ROOT" ?? ".";
     bindings := gen.render protocol;
     rustPath := t.join "" { root; "/kernel/src/block_proto/gen.rs"; };
-    componentPath := t.join "" { root; "/components/include/block_proto.inc"; };
+    -- bindings.rust is plain no_std-compatible Rust (no imports, no std
+    -- types), so the component-facing Rust surface is the same text as the
+    -- kernel surface, written to a second destination for the components/
+    -- workspace to depend on directly.
+    componentRustPath := t.join "" { root; "/components/proto/src/block.rs"; };
     fs.writeAll caps.write rustPath bindings.rust;
-    fs.writeAll caps.write componentPath bindings.component
+    fs.writeAll caps.write componentRustPath bindings.rust
   ];
 
 main

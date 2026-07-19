@@ -6,7 +6,6 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
 ZUTAI_MANIFEST = ROOT / "deps" / "zutai" / "Cargo.toml"
@@ -67,34 +66,6 @@ subprocess.run(
     check=True,
 )
 
-with tempfile.TemporaryDirectory(prefix="slime-block-contract-") as temporary:
-    source = Path(temporary) / "block-binding-check.S"
-    obj = Path(temporary) / "block-binding-check.o"
-    source.write_text(
-        ".intel_syntax noprefix\n"
-        '.include "block_proto.inc"\n'
-        ".section .text\n"
-        ".global _start\n"
-        "_start:\n"
-        "    BLOCK_VALIDATE_REQUEST rdi, rsi, invalid\n"
-        "    BLOCK_VALIDATE_REPLY rdi, rsi, invalid\n"
-        "invalid:\n"
-        "    ret\n",
-        encoding="utf-8",
-    )
-    subprocess.run(
-        [
-            "as",
-            "--64",
-            "-I",
-            str(ROOT / "components" / "include"),
-            "-o",
-            str(obj),
-            str(source),
-        ],
-        check=True,
-    )
-
 run("check", str(COMPONENT_CONTRACT / "schema.zt"))
 run("check", str(COMPONENT_CONTRACT / "gen_rust.zt"))
 subprocess.run(
@@ -110,33 +81,5 @@ subprocess.run(
     cwd=ROOT,
     check=True,
 )
-
-with tempfile.TemporaryDirectory(prefix="slime-store-contract-") as temporary:
-    source = Path(temporary) / "store-binding-check.S"
-    obj = Path(temporary) / "store-binding-check.o"
-    source.write_text(
-        ".intel_syntax noprefix\n"
-        '.include "store_proto.inc"\n'
-        ".section .text\n"
-        ".global _start\n"
-        "_start:\n"
-        "    STORE_VALIDATE_REQUEST rdi, rsi, invalid\n"
-        "    STORE_VALIDATE_REPLY rdi, rsi, invalid\n"
-        "invalid:\n"
-        "    ret\n",
-        encoding="utf-8",
-    )
-    subprocess.run(
-        [
-            "as",
-            "--64",
-            "-I",
-            str(ROOT / "components" / "include"),
-            "-o",
-            str(obj),
-            str(source),
-        ],
-        check=True,
-    )
 
 print("Generation manifest, block protocol, component image, and store contracts passed")

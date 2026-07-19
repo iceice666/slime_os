@@ -14,10 +14,10 @@ ROOT = Path(__file__).resolve().parent.parent
 ZUTAI = ROOT / "deps" / "zutai" / "Cargo.toml"
 STDLIB = ROOT / "deps" / "zutai" / "stdlib"
 SOURCE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "valid.zti"
-COMPONENT_SOURCES = ROOT / "components" / "src"
 
 TARGET = "x86_64-qemu-virtio"
-COMPONENT_LINKER = ROOT / "components" / "component.ld"
+COMPONENTS_WORKSPACE = ROOT / "components" / "Cargo.toml"
+COMPONENTS_ELF_DIR = ROOT / "components" / "target" / "x86_64-unknown-none" / "release"
 MAGIC = b"SLIMEGEN"
 HEADER = struct.Struct("<8sIIQ32sHHHHH2x")
 OBJECT = struct.Struct("<32sQII")
@@ -137,29 +137,20 @@ def component_image(name: str, elf: Path, stack_bytes: int) -> bytes:
     return header + bytes(records) + bytes(payload)
 
 
-def build_component(name: str, output: Path, stack_bytes: int) -> bytes:
-    source = COMPONENT_SOURCES / f"{name}.S"
-    obj = output / f"{name}.o"
-    elf = output / f"{name}.elf"
+def build_rust_components() -> None:
+    # cargo discovers .cargo/config.toml by walking up from the *current
+    # directory*, not from --manifest-path, so this must run with cwd inside
+    # components/ to pick up components/.cargo/config.toml (target and
+    # linker flags).
     subprocess.run(
-        ["as", "--64", "-I", str(ROOT / "components" / "include"), "-o", obj, source],
+        ["cargo", "build", "--release"],
+        cwd=COMPONENTS_WORKSPACE.parent,
         check=True,
     )
-    subprocess.run(
-        [
-            "ld",
-            "-o",
-            elf,
-            "-T",
-            COMPONENT_LINKER,
-            "--build-id=none",
-            "-z",
-            "max-page-size=4096",
-            obj,
-        ],
-        check=True,
-    )
-    return component_image(name, elf, stack_bytes)
+
+
+def build_component(name: str, stack_bytes: int) -> bytes:
+    return component_image(name, COMPONENTS_ELF_DIR / name, stack_bytes)
 
 
 def encode_string(value: str) -> bytes:
@@ -198,6 +189,8 @@ def main() -> None:
     if object_by_id.get(manifest["kernelObject"], {}).get("kind") != "kernel":
         fail("kernelObject must name a kernel object")
 
+    build_rust_components()
+
     payloads: dict[str, bytes] = {manifest["kernelObject"]: b""}
     for component in components:
         if component["object"] not in object_by_id:
@@ -210,9 +203,7 @@ def main() -> None:
             or stack_bytes > MAX_STACK_BYTES
         ):
             fail(f"component {component['name']}: invalid stackBytes {stack_bytes}")
-        payloads[component["object"]] = build_component(
-            component["name"], output, stack_bytes
-        )
+        payloads[component["object"]] = build_component(component["name"], stack_bytes)
 
     object_records = bytearray()
     blobs = bytearray()

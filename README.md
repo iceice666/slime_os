@@ -236,7 +236,7 @@ The current milestone is storage and rollbackable generations. Its exit conditio
 
 ```text
 kernel/       Rust no_std kernel, boot path, generation decoder, scheduler, IPC, and tests
-components/   Minimal assembly userspace components for the QEMU vertical slice, linked by components/component.ld
+components/   Rust no_std userspace components for the QEMU vertical slice, linked by components/component.ld
 contracts/    Generation manifest v1, block protocol v1, and component image v1 contracts
 scripts/      Host-side generation build/check and contract validation helpers
 assets/       Boot/runtime assets

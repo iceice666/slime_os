@@ -32,5 +32,5 @@ Use the Justfile targets from the repository root:
 
 - For kernel or userspace behavior changes, run the narrowest QEMU path that exercises the changed behavior.
 - For generation-format or builder changes, run `just contracts_check` and `just generation_check`.
-- For permanent Rust changes, run `just fmt_check` and `just lint` before finishing.
+- For permanent Rust changes, run `just fmt_check` and `just lint` before finishing (or the `_components` variants for changes under `components/`).
 - For documentation-only changes, state that no runtime tests were run.
