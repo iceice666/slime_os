@@ -122,6 +122,12 @@ bootstate_gen: boot_gen
 bootstate_model_check:
     python3 scripts/check-bootstate-model.py
 
+# M5.6c: validate durable BootState transition traces from the rollback
+# power-cut scenario against the checked M5.6a/M5.6b state machines.
+bootstate_trace_check:
+    cd kernel && cargo build
+    ./scripts/check-bootstate-trace.py /tmp/slime-os-bootstate-trace.img
+
 # Validate the pinned generation manifest schema and fixtures.
 contracts_check: bootstate_model_check
     python3 scripts/check-contracts.py

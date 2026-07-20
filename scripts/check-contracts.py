@@ -21,6 +21,7 @@ BOOT_BINDING_GENERATOR = ROOT / "scripts" / "generate-boot-bindings.py"
 GENERATION_V2_CONTRACT = ROOT / "contracts" / "generation" / "v2"
 KERNEL_IMAGE_CONTRACT = ROOT / "contracts" / "kernel-image" / "v1"
 BOOTSTATE_CONTRACT = ROOT / "contracts" / "bootstate" / "v1"
+BOOTSTATE_TRACE_CONTRACT = ROOT / "contracts" / "bootstate" / "trace" / "v1"
 
 
 def run(*arguments: str) -> str:
@@ -86,7 +87,12 @@ subprocess.run(
     check=True,
 )
 
-for contract in (GENERATION_V2_CONTRACT, KERNEL_IMAGE_CONTRACT, BOOTSTATE_CONTRACT):
+for contract in (
+    GENERATION_V2_CONTRACT,
+    KERNEL_IMAGE_CONTRACT,
+    BOOTSTATE_CONTRACT,
+    BOOTSTATE_TRACE_CONTRACT,
+):
     run("check", str(contract / "schema.zt"))
     run("check", str(contract / "gen_rust.zt"))
 subprocess.run(
@@ -95,4 +101,7 @@ subprocess.run(
     check=True,
 )
 
-print("Generation source/binary, kernel image, BootState, block, component, and store contracts passed")
+print(
+    "Generation source/binary, kernel image, BootState, BootState trace, block, "
+    "component, and store contracts passed"
+)

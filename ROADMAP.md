@@ -12,7 +12,7 @@ Completion requires observable behavior, not only compiled code or framebuffer o
 | 2. Isolation and IPC | Core QEMU exit passing | Two userspace components communicate, and one may fault without corrupting the other or the kernel. |
 | 3. Bootstrap component graph | QEMU vertical slice passing | The first isolated userspace vertical slice works under QEMU. |
 | 4. Framework safe bring-up | Verified | The same isolated userspace slice runs from removable media without modifying internal storage. |
-| 5. Storage and generations | In progress — M5.1 through M5.6 complete | A failed pending generation automatically leaves or restores a bootable known-good generation. |
+| 5. Storage and generations | In progress — M5.1 through M5.6c complete | A failed pending generation automatically leaves or restores a bootable known-good generation. |
 | 6. Native interactive environment | Minimal stub only | Native components can inspect, build or stage, select, and roll back generations. |
 | 7. Daily-driver hardware | Not yet implemented | The Framework target supports the hardware and lifecycle needed for daily use. |
 | 8. Foreign-workload authority foundations | Not yet implemented | Revocation, scheduling class, and secrets exist as non-ambient, auditable, rollbackable authority so foreign and agent workloads can be confined. |
@@ -90,7 +90,7 @@ Exit condition: the same isolated userspace slice runs on the Framework without 
 
 ## Milestone 5: Storage and generations
 
-**Status:** In progress. M5.1 through M5.6b are complete; M5.6 pending/known-good rollback implementation is next, with M5.6c conformance following once implementation traces exist.
+**Status:** In progress. M5.1 through M5.6c are complete; Framework NVMe safety promotion (M5.7), release trust (M5.8), and bounded recovery (M5.9) remain.
 
 Top-level scope:
 
@@ -407,7 +407,7 @@ Follow-ups enabled by this milestone (not exit requirements): generation bisect 
 
 ### M5.6c: BootState model-implementation conformance
 
-**Status:** Not started. Promoted from the directions register (entry 20). This slice closes the gap between the checked M5.6a/M5.6b state machines and the Rust/QEMU implementation; model checking alone does not prove that implementation transitions use the same durable linearization points.
+**Status:** Complete. `just bootstate_trace_check` boots the failing-pending rollback scenario, captures bounded version-1 transition records at stage-0's durable attempt commits and exhausted-known-good selection, and validates every finite trace against the checked M5.6a/M5.6b state machines through the `TraceConformance.tla` model oracle. It rejects non-decremented transfers, mismatched action/commit or sequence boundaries, wrong-root promotions, and collection of observable retained roots; the fixed 640-byte line bound is schema-pinned and worst-case tested.
 
 Deliverables:
 

@@ -1,0 +1,6 @@
+TraceBinding :: type { formatVersion : Int; maxLineBytes : Int; };
+render :: TraceBinding -> Text
+  = format => if format.formatVersion == 1 && format.maxLineBytes == 640
+    then "bootstate-trace-v1"
+    else "INVALID_BOOTSTATE_TRACE_SCHEMA";
+{ render = render; }

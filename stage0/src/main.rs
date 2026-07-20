@@ -9,6 +9,7 @@ use boot_contracts::handoff::{
     MEMORY_USABLE,
 };
 use boot_contracts::kernel_image::{KernelImage, LOAD_BASE, SEGMENT_EXEC, SEGMENT_WRITE};
+use boot_contracts::trace;
 use slime_stage0::{
     BootError, Slot, decode_directory, select_bootstate, select_generation, verify_generation,
     verify_kernel,
@@ -62,9 +63,10 @@ fn boot() -> Result<(), BootError> {
     let slot_b: &[u8; 512] = store[512..1024].try_into().unwrap();
     let mut selected_state = select_bootstate(slot_a, slot_b)?;
     let selection_state = selected_state.state;
-    let running_pending = selected_state.state.pending.is_some()
-        && selected_state.state.remaining_attempts > 0;
+    let running_pending =
+        selected_state.state.pending.is_some() && selected_state.state.remaining_attempts > 0;
     if running_pending {
+        let before = selected_state.state;
         selected_state.state = selected_state
             .state
             .consume_pending_attempt()
@@ -74,8 +76,42 @@ fn boot() -> Result<(), BootError> {
             Slot::B => Slot::A,
         };
         persist_bootstate(target, selected_state.state)?;
+        emit_trace(&trace::Record {
+            action: trace::Action::ConsumeAttempt,
+            commit: trace::Commit::AfterAttemptCommit,
+            selected_slot: slot_index(selected_state.slot),
+            target_slot: Some(slot_index(target)),
+            sequence_before: before.sequence,
+            sequence_after: selected_state.state.sequence,
+            attempts_before: before.remaining_attempts,
+            attempts_after: selected_state.state.remaining_attempts,
+            known_good: selected_state.state.known_good,
+            pending: selected_state.state.pending,
+            generation_root: selected_state.state.generation_root,
+            state_root: selected_state.state.state_root,
+        });
         selected_state.slot = target;
         store = read_file(BOOT_STORE_PATH)?;
+    } else {
+        let state = selected_state.state;
+        emit_trace(&trace::Record {
+            action: if state.pending.is_some() {
+                trace::Action::BootExhaustedKnownGood
+            } else {
+                trace::Action::BootKnownGood
+            },
+            commit: trace::Commit::None,
+            selected_slot: slot_index(selected_state.slot),
+            target_slot: None,
+            sequence_before: state.sequence,
+            sequence_after: state.sequence,
+            attempts_before: state.remaining_attempts,
+            attempts_after: state.remaining_attempts,
+            known_good: state.known_good,
+            pending: state.pending,
+            generation_root: state.generation_root,
+            state_root: state.state_root,
+        });
     }
     let directory = decode_directory(&store)?;
     let selected = select_generation(&directory, &selection_state)?;
@@ -174,8 +210,8 @@ fn push_memory_entry(
 }
 
 fn open_regular(path: &str, mode: FileMode) -> Result<RegularFile, BootError> {
-    let mut fs = boot::get_image_file_system(boot::image_handle())
-        .map_err(|_| BootError::Truncated)?;
+    let mut fs =
+        boot::get_image_file_system(boot::image_handle()).map_err(|_| BootError::Truncated)?;
     let mut root = fs.open_volume().map_err(|_| BootError::Truncated)?;
     let path = CString16::try_from(path).map_err(|_| BootError::Truncated)?;
     let file = root
@@ -192,17 +228,32 @@ fn read_file(path: &str) -> Result<Vec<u8>, BootError> {
     read_regular(&mut file)
 }
 
-fn persist_bootstate(slot: Slot, state: boot_contracts::bootstate::BootState) -> Result<(), BootError> {
+fn persist_bootstate(
+    slot: Slot,
+    state: boot_contracts::bootstate::BootState,
+) -> Result<(), BootError> {
     let offset = match slot {
         Slot::A => 0,
         Slot::B => boot_contracts::bootstate::SLOT_BYTES as u64,
     };
     let encoded = state.encode().map_err(|_| BootError::NoValidBootState)?;
     let mut file = open_regular(BOOT_STORE_PATH, FileMode::ReadWrite)?;
-    file.set_position(offset).map_err(|_| BootError::Truncated)?;
+    file.set_position(offset)
+        .map_err(|_| BootError::Truncated)?;
     file.write(&encoded).map_err(|_| BootError::Truncated)?;
     file.flush().map_err(|_| BootError::Truncated)?;
     Ok(())
+}
+
+const fn slot_index(slot: Slot) -> u8 {
+    match slot {
+        Slot::A => 0,
+        Slot::B => 1,
+    }
+}
+
+fn emit_trace(record: &trace::Record) {
+    uefi::println!("{}", record.render().as_str());
 }
 
 fn read_regular(file: &mut RegularFile) -> Result<Vec<u8>, BootError> {

@@ -1,0 +1,44 @@
+-- Slime OS BootState transition-trace record, version 1 (M5.6c).
+--
+-- A trace record is emitted by stage-0 and the generation-management service
+-- at each durable BootState transition and validated against the checked
+-- M5.6a/M5.6b state machines in `contracts/bootstate/model`. The record is
+-- deliberately bounded and fixed-field so trace instrumentation cannot become
+-- a new unbounded boot dependency.
+
+formatVersion :: Int = 1;
+maxLineBytes :: Int = 640;
+-- Action identity vocabulary. Each token names exactly one model action.
+actionConsumeAttempt :: Int = 0;
+actionPromotion :: Int = 1;
+actionBootKnownGood :: Int = 2;
+actionBootExhaustedKnownGood :: Int = 3;
+
+-- Commit-boundary vocabulary. Each token names the durable linearization
+-- point at which the transition became persistent (or `none` for a pure boot
+-- selection that performs no slot write).
+commitNone :: Int = 0;
+commitAfterAttemptCommit :: Int = 1;
+commitHealthPromotion :: Int = 2;
+
+TraceRecord :: type {
+  format_version : Int;
+  -- Model action this durable transition corresponds to.
+  action : Int;
+  -- Durable commit boundary at which the transition became persistent.
+  commit : Int;
+  -- Slot selected for boot: 0 = A, 1 = B.
+  selected_slot : Int;
+  -- Slot the durable write targeted, or absent for a pure boot selection.
+  target_slot : Int;
+  -- Durable sequence numbers spanning the transition.
+  sequence_before : Int;
+  sequence_after : Int;
+  -- Pending attempt counts spanning the transition.
+  attempts_before : Int;
+  attempts_after : Int;
+};
+
+traceRecordSchema ::= schema TraceRecord;
+
+{ traceRecordSchema = traceRecordSchema; }
