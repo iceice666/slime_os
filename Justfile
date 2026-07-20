@@ -36,6 +36,16 @@ storage_read_check:
         -drive if=none,id=slime-storage,format=raw,readonly=on,file=/tmp/slime-os-storage-read.img \
         -device virtio-blk-pci,drive=slime-storage,disable-legacy=on,queue-size=8
 
+# M5.7: attach a disposable read-only NVMe namespace and require the existing
+# capability-gated storage probe to verify it through the common block service.
+storage_nvme_read_check:
+    rm -f /tmp/slime-os-nvme-read.img
+    ./scripts/build-storage-fixture.py /tmp/slime-os-nvme-read.img
+    cd kernel && cargo run --release -- \
+        -display none \
+        -drive if=none,id=slime-nvme,format=raw,readonly=on,file=/tmp/slime-os-nvme-read.img \
+        -device nvme,serial=slime-nvme,drive=slime-nvme
+
 # M5.3: persist a bounded write, flush it, and verify it after a fresh boot.
 storage_write_check:
     ./scripts/check-storage.py write /tmp/slime-os-storage-write.img

@@ -6,6 +6,7 @@
 
 use spin::{LazyLock, Mutex};
 
+use crate::block_device::{BlockDevice, BlockError};
 use crate::block_proto::{
     BLOCK_E_BAD_MAGIC, BLOCK_E_BAD_OP, BLOCK_E_BUFFER_TOO_SMALL, BLOCK_E_DEVICE, BLOCK_E_NO_BUFFER,
     BLOCK_E_NOT_AUTHORIZED, BLOCK_E_OK, BLOCK_E_OUT_OF_RANGE, BLOCK_E_TIMEOUT, BlockRequest,
@@ -14,9 +15,8 @@ use crate::block_proto::{
     ProtoError, REPLY_LEN, SECTOR_SIZE, decode_request, encode_reply,
 };
 use crate::serial_println;
-use crate::virtio_blk::{VirtioBlkError, VirtioBlock};
 
-static DEVICE: LazyLock<Mutex<Option<VirtioBlock>>> = LazyLock::new(|| Mutex::new(None));
+static DEVICE: LazyLock<Mutex<Option<BlockDevice>>> = LazyLock::new(|| Mutex::new(None));
 static LAST_PAYLOAD: LazyLock<Mutex<[u8; SECTOR_SIZE]>> =
     LazyLock::new(|| Mutex::new([0; SECTOR_SIZE]));
 static LAST_REQUEST: LazyLock<Mutex<Option<BlockRequest>>> = LazyLock::new(|| Mutex::new(None));
@@ -68,7 +68,7 @@ pub fn transact(request: &[u8], reply: &mut [u8; REPLY_LEN]) {
 
     let mut device = DEVICE.lock();
     if device.is_none() {
-        match VirtioBlock::find_and_init() {
+        match BlockDevice::find_and_init() {
             Ok(found) => *device = Some(found),
             Err(error) => {
                 encode_reply(reply, device_status(error), 0);
@@ -107,15 +107,14 @@ pub fn transact(request: &[u8], reply: &mut [u8; REPLY_LEN]) {
 }
 
 /// Run `f` against the lazily initialized block device, reinitializing on
-/// transport-fatal errors. Internal kernel services (M5.4 object store)
-/// share the single virtio-blk instance this module owns; there is no
-/// second path to the device.
+/// transport-fatal errors. Internal services and capability-gated clients
+/// share this one backend; transport selection does not create a second path.
 pub fn with_device<R>(
-    f: impl FnOnce(&mut VirtioBlock) -> Result<R, VirtioBlkError>,
-) -> Result<R, VirtioBlkError> {
+    f: impl FnOnce(&mut BlockDevice) -> Result<R, BlockError>,
+) -> Result<R, BlockError> {
     let mut device = DEVICE.lock();
     if device.is_none() {
-        *device = Some(VirtioBlock::find_and_init()?);
+        *device = Some(BlockDevice::find_and_init()?);
     }
     let result = f(device.as_mut().expect("block device initialized"));
     if let Err(error) = &result
@@ -126,7 +125,7 @@ pub fn with_device<R>(
     result
 }
 
-fn execute(device: &mut VirtioBlock, request: BlockRequest) -> Result<(), VirtioBlkError> {
+fn execute(device: &mut BlockDevice, request: BlockRequest) -> Result<(), BlockError> {
     match request.flags {
         FLAG_INJECT_REQUEST_FAILURE => return device.inject_failure(),
         FLAG_INJECT_TIMEOUT => return device.inject_timeout(),
@@ -147,7 +146,7 @@ fn execute(device: &mut VirtioBlock, request: BlockRequest) -> Result<(), Virtio
                 let lba = request
                     .lba
                     .checked_add(sector as u64)
-                    .ok_or(VirtioBlkError::OutOfRange)?;
+                    .ok_or(BlockError::OutOfRange)?;
                 device.read_sector(lba, &mut output[start..end])?;
             }
         }
@@ -165,12 +164,12 @@ fn execute(device: &mut VirtioBlock, request: BlockRequest) -> Result<(), Virtio
                 let lba = request
                     .lba
                     .checked_add(sector as u64)
-                    .ok_or(VirtioBlkError::OutOfRange)?;
+                    .ok_or(BlockError::OutOfRange)?;
                 device.write_sector(lba, &input[start..end])?;
             }
         }
         OP_FLUSH => device.flush()?,
-        _ => return Err(VirtioBlkError::InjectedFailure),
+        _ => return Err(BlockError::Device),
     }
     Ok(())
 }
@@ -188,11 +187,12 @@ fn protocol_status(error: ProtoError) -> i32 {
     }
 }
 
-fn device_status(error: VirtioBlkError) -> i32 {
+fn device_status(error: BlockError) -> i32 {
     match error {
-        VirtioBlkError::OutOfRange => BLOCK_E_OUT_OF_RANGE,
-        VirtioBlkError::BufferSize => BLOCK_E_BUFFER_TOO_SMALL,
-        VirtioBlkError::Timeout | VirtioBlkError::ResetTimeout => BLOCK_E_TIMEOUT,
+        BlockError::OutOfRange => BLOCK_E_OUT_OF_RANGE,
+        BlockError::BufferSize => BLOCK_E_BUFFER_TOO_SMALL,
+        BlockError::Timeout => BLOCK_E_TIMEOUT,
+        BlockError::ReadOnly => BLOCK_E_NOT_AUTHORIZED,
         _ => BLOCK_E_DEVICE,
     }
 }

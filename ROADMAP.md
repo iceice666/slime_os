@@ -433,6 +433,8 @@ Exit condition: all durable BootState transitions observed in QEMU fault scenari
 
 ### M5.7: Framework NVMe transport and safety promotion
 
+**Status:** Implementation complete; physical verification pending. `just storage_nvme_read_check` exercises bounded controller/namespace discovery and read-only I/O through the common block protocol under QEMU, while `just framework_safety_check` proves the removable image has no internal-NVMe write path. Completion still requires an observed removable-media Framework boot of the storage-aware slice without internal NVMe modification.
+
 Deliverables:
 
 - enumerate the target Framework NVMe controller through the same bounded PCI resource model;

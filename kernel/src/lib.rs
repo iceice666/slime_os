@@ -7,6 +7,7 @@
 extern crate alloc;
 
 pub mod acpi;
+pub mod block_device;
 pub mod block_proto;
 pub mod block_service;
 pub mod boot;
@@ -26,6 +27,7 @@ pub mod interrupts;
 pub mod ipc;
 pub mod limine;
 pub mod memory;
+pub mod nvme;
 pub mod object_store;
 pub mod pci;
 pub mod platform;

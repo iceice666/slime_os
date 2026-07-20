@@ -3,9 +3,9 @@
 #
 # M5.3 introduces one explicit block-write right for disposable QEMU storage
 # checks; M5.4 adds one explicit object-store right for the disposable QEMU
-# store probe. This checker proves that authority is neither ambient nor
-# granted to the normal storage probe, and that the Framework boot path
-# cannot enable the test-only write or fault-probe components.
+# store probe. M5.7 adds a common read-only NVMe backend. This checker proves
+# that authority is neither ambient nor granted to the normal storage probe,
+# and that the Framework boot path cannot enable test-only writes.
 
 from __future__ import annotations
 
@@ -27,6 +27,8 @@ ALLOWED_SYSCALLS = {
     "SYS_DEBUG_WRITE",
     "SYS_BLOCK_TRANSACT",
     "SYS_STORE_TRANSACT",
+    "SYS_HEALTH_CONFIRM",
+    "SYS_UNHEALTHY",
 }
 ALLOWED_KERNEL_OBJECTS = {
     "Endpoint",
@@ -37,6 +39,7 @@ ALLOWED_KERNEL_OBJECTS = {
     "SharedBuffer",
     "BlockDevice",
     "ObjectStore",
+    "GenerationControl",
 }
 ALLOWED_RIGHTS = {
     "RIGHT_SEND",
@@ -53,6 +56,7 @@ ALLOWED_RIGHTS = {
     "RIGHT_BLOCK_WRITE",
     "RIGHT_STORE_READ",
     "RIGHT_STORE_WRITE",
+    "RIGHT_HEALTH_CONFIRM",
     "RIGHT_ALL",
 }
 
@@ -133,6 +137,16 @@ def check_framework_path() -> None:
     body = framework.group("body")
     if "SLIME_GENERATION_NUMBER" in body or "virtio-blk" in body:
         fail("Framework image recipe enables disposable-QEMU storage writes")
+    nvme = (KERNEL / "nvme.rs").read_text(encoding="utf-8")
+    block_device = (KERNEL / "block_device.rs").read_text(encoding="utf-8")
+    if "NVM_WRITE" in nvme or "pub fn write_sector" not in nvme or "NvmeError::ReadOnly" not in nvme:
+        fail("Framework NVMe backend is not structurally read-only")
+    nvme_write_arm = re.search(
+        r"Self::Nvme\(device\)\s*=>\s*device\.write_sector",
+        block_device,
+    )
+    if nvme_write_arm is None:
+        fail("common block service no longer delegates NVMe write rejection")
 
 
 def main() -> None:

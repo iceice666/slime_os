@@ -14,6 +14,7 @@ use alloc::vec::Vec;
 
 use spin::{LazyLock, Mutex};
 
+use crate::block_device::{BlockDevice, BlockError};
 use crate::block_proto::SECTOR_SIZE;
 use crate::block_service;
 use crate::gpt::{self, GptError, Recovery};
@@ -24,7 +25,6 @@ use crate::store_proto::{
     STORE_E_BUFFER_TOO_SMALL, STORE_E_CONFLICT, STORE_E_CORRUPT, STORE_E_DEVICE, STORE_E_FULL,
     STORE_E_NOT_FOUND, STORE_E_OK, STORE_E_TIMEOUT, decode_request, encode_reply,
 };
-use crate::virtio_blk::{VirtioBlkError, VirtioBlock};
 
 const ZERO_HASH: [u8; 32] = [0u8; 32];
 
@@ -34,9 +34,9 @@ static STORE: LazyLock<Mutex<Option<ObjectStore>>> = LazyLock::new(|| Mutex::new
 static STAGING: LazyLock<Mutex<Vec<u8>>> =
     LazyLock::new(|| Mutex::new(vec![0; MAX_OBJECT_PAYLOAD]));
 
-/// Device adapter lending `VirtioBlock` to the store core. Error mapping
-/// keeps timeout distinct so the protocol can report it.
-struct DeviceIo<'a>(&'a mut VirtioBlock);
+/// Device adapter lending the selected common block backend to the store core.
+/// Error mapping keeps timeout distinct so the protocol can report it.
+struct DeviceIo<'a>(&'a mut BlockDevice);
 
 impl BlockIo for DeviceIo<'_> {
     fn read_sector(&mut self, lba: u64, out: &mut [u8; SECTOR_SIZE]) -> Result<(), IoError> {
@@ -52,9 +52,9 @@ impl BlockIo for DeviceIo<'_> {
     }
 }
 
-fn io_status(error: VirtioBlkError) -> IoError {
+fn io_status(error: BlockError) -> IoError {
     match error {
-        VirtioBlkError::Timeout | VirtioBlkError::ResetTimeout => IoError::Timeout,
+        BlockError::Timeout => IoError::Timeout,
         _ => IoError::Device,
     }
 }
@@ -184,7 +184,7 @@ fn ensure_open() -> Result<(), i32> {
     }
 }
 
-fn open_from(device: &mut VirtioBlock) -> Result<ObjectStore, i32> {
+fn open_from(device: &mut BlockDevice) -> Result<ObjectStore, i32> {
     let capacity = device.capacity_sectors();
     let mut reader = |lba: u64, out: &mut [u8; SECTOR_SIZE]| {
         device.read_sector(lba, out).map_err(|_| GptError::Device)
@@ -236,9 +236,9 @@ fn gpt_status(error: GptError) -> i32 {
     }
 }
 
-fn device_status(error: VirtioBlkError) -> i32 {
+fn device_status(error: BlockError) -> i32 {
     match error {
-        VirtioBlkError::Timeout | VirtioBlkError::ResetTimeout => STORE_E_TIMEOUT,
+        BlockError::Timeout => STORE_E_TIMEOUT,
         _ => STORE_E_DEVICE,
     }
 }
