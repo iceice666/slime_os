@@ -567,7 +567,7 @@ Milestone 5 is complete only when all of the following are observed:
 
 ## Milestone 6: Native interactive environment
 
-**Status:** Minimal stub only.
+**Status:** Minimal stub only. Slices M6.1 through M6.7 are planned below; none has started.
 
 Scope:
 
@@ -582,6 +582,231 @@ Scope:
 This milestone consumes the storage, object-store, state, rollback, release-trust, and recovery mechanisms from Milestone 5. Dango commands must resolve executable and directory authority through capabilities rather than global paths or an implicit working directory.
 
 Exit condition: the system can inspect, build or stage, select, and roll back generations through native components.
+
+Sequencing: M6.1 gates every other slice; M6.2 and M6.3 are independent once M6.1 lands; M6.4 consumes both; M6.5 and M6.6 are independent; M6.7 consumes M6.5 and the completed M5.8. M5.7 physical verification and M5.9 recovery proceed independently of this milestone. M6 development and acceptance run under QEMU and removable media, since internal NVMe writes remain disabled until the Milestone 7 reliability gate.
+
+### M6.1: Kernel spawn prerequisites and generation format v2
+
+**Status:** Not started.
+
+This slice lands the four kernel mechanisms the spawn service consumes — none exist today (`docs/capability-matrix.md` records them so the milestone does not discover them mid-flight) — and makes grant and bootstrap wiring data-driven.
+
+Deliverables:
+
+- userspace endpoint minting through a named factory capability, with creation authority recorded in the capability matrix; no unprivileged or unbounded mint;
+- a non-consuming derive-copy grant path so a spawner retains its own capabilities while gifting narrowed copies (narrow-only, never widening, per the matrix grammar);
+- per-spawner resource accounting replacing reliance on the single global `MAX_TASKS` bound; the heap coupling noted in the matrix (`MAX_TASKS * 64 KiB` kernel stacks against the 2 MiB heap) is re-budgeted in the same change;
+- supervision handles letting a spawner distinguish child exit, fault, timeout, and peer loss;
+- generation format v2 as a new version rather than changed v1 field meanings: manifest grant rights strings map 1:1 to rights bits, `transferable` maps to `RIGHT_TRANSFER`, and bootstrap wiring derives from manifest data; remove the hardcoded `component_name_from_id` debt-register entry and land the deferred `RIGHT_SPAWN` gate in the same change.
+
+Required checks:
+
+- a spawner cannot gift rights it does not hold, and derive-copy never widens;
+- a spawner exhausting its per-spawner budget receives a structured error while other spawners continue;
+- endpoint minting is bounded and cannot exhaust kernel object tables;
+- supervision handles distinguish exit, fault, timeout, and peer loss;
+- two builds from identical normalized input produce byte-identical v2 artifacts; unknown versions are rejected;
+- bootstrap grants in tests come only from manifest data, not from hardcoded component identity.
+
+Exit condition: a userspace spawner holding a factory capability can mint bounded endpoints, gift narrowed non-consuming copies of its grants, and supervise children within a per-spawner budget, with all wiring derived from a deterministic v2 manifest.
+
+### M6.2: Spawn service and command profile
+
+**Status:** Not started.
+
+Deliverables:
+
+- declare the spawn request/reply protocol as a versioned schema in `contracts/spawn/v1` (executable capability, arguments, explicit environment, optional working-directory capability, stream endpoints, grant list) following the dango host boundary in `deps/dango/README.md`;
+- implement a userspace spawn service holding the generation-declared executable capabilities and the M6.1 factory capability, spawning on behalf of clients within their declared budgets;
+- implement a command profile/resolver mapping command names to executable capabilities from manifest data — no global paths, no implicit working directory;
+- enforce per-client accounting through the M6.1 mechanisms.
+
+Required checks:
+
+- generated/validated bindings round-trip every message type byte-identically; out-of-bounds fields and unknown versions are rejected on both ends (M5.2a rule);
+- a client cannot launch an executable its profile does not name, cannot exceed its budget, and cannot inject code (spawn composes known hash-verified components only);
+- resolver output is deterministic for a fixed manifest;
+- spawn-service failure does not terminate unrelated components or the kernel.
+
+Planned verification target:
+
+```sh
+just spawn_service_check
+```
+
+Exit condition: a client component resolves a command name through its profile and launches the component through the spawn service with exactly the declared grants.
+
+### M6.3: Filesystem service and directory capabilities
+
+**Status:** Not started.
+
+Deliverables:
+
+- introduce a Directory object kind with explicit rights in the same change as its `docs/capability-matrix.md` entry; the READ/WRITE/LIST granularity question tracked in the matrix horizon is decided there, and powerbox minting must need no more than `derive`;
+- implement a userspace filesystem service over the M5.4 object store presenting a bounded, versioned directory namespace with immutable directory snapshots and explicit root transitions;
+- declare directory operations as a versioned schema in `contracts/fs/v1`; malformed requests are rejected structurally before any object-store I/O;
+- directory capabilities derive and transfer per the matrix grammar.
+
+Required checks:
+
+- a component without a directory capability cannot resolve or mutate names under it;
+- derive narrows only (subdirectory scope, fewer rights) and never widens;
+- an interrupted namespace transition preserves the previous committed root;
+- bounds on path length, entry counts, and depth are enforced before object-store requests.
+
+Planned verification target:
+
+```sh
+just directory_check
+```
+
+Exit condition: components browse and mutate a namespace only through explicit directory capabilities, with all metadata integrity-checked by the store.
+
+### M6.4: Minimal Dango implementation and core runtime
+
+**Status:** Not started. `deps/dango` currently contains the language design notes, semantics, and grammar only; there is no implementation scaffold.
+
+Scope boundary: this slice delivers the interactive command subset — REPL, `$(...)` launch, explicit command context, and structured termination. The full Hindley-Milner, row-polymorphism, and effect-inference machinery from `deps/dango/docs/semantics.md` is not M6 scope.
+
+Deliverables:
+
+- implement a minimal Dango interpreter as a native component: parser for the command subset plus the arity and shape checks needed for launch;
+- launch `$(...)` external commands through the M6.2 spawn service, resolving names through the active command profile;
+- implement explicit command context (`with-env`, `with-cwd`, `with-stdin`) with no ambient inheritance of environment, working directory, or streams;
+- map structured component termination (exit, fault, timeout, peer loss, revocation) to command results and the `IO.Exit` behavior;
+- provide an interactive REPL over the console with keyboard input, plus deterministic scripted-input fixtures so sessions reproduce under QEMU.
+
+Required checks:
+
+- every command launch traces to a profile resolution and a spawn-service request; the interpreter holds no direct spawn authority beyond its own grant;
+- child components receive only the constructed context; nothing ambient leaks;
+- termination reasons remain distinguishable at the language boundary;
+- scripted REPL sessions reproduce deterministically under QEMU.
+
+Planned verification target:
+
+```sh
+just dango_check
+```
+
+Exit condition: a user at the console runs native commands through Dango with capability-resolved authority and structured failure behavior.
+
+### M6.5: Generation inspection and update commands
+
+**Status:** Not started.
+
+Deliverables:
+
+- implement native generation commands — list, inspect, stage, select, roll back — as components talking to the declared generation-management service;
+- land the matrix horizon's BootState update authority beyond confirmation (candidate `BOOT_UPDATE` right) in the same change as the staging service and its capability-matrix entry, granted only to the declared generation-management service;
+- stage generations from object closure plus a v2 manifest; staged generations require valid M5.8 release authorization, staging never advances the accepted release sequence, and activation never overwrites the running generation;
+- extend the generation-management protocol under `contracts/` as a versioned schema.
+
+Required checks:
+
+- inspect output matches the deterministic manifest and store contents;
+- staging with missing objects or invalid release authorization fails closed before any BootState change;
+- select and rollback transitions conform to the checked M5.6a/M5.6b models, with implementation traces validated as in M5.6c;
+- unprivileged components cannot reach BootState update operations.
+
+Planned verification target:
+
+```sh
+just generation_cmd_check
+```
+
+Exit condition: generations are inspected, staged, selected, and rolled back entirely through native components, with all authority manifest-declared.
+
+### M6.6: Powerbox file dialog service
+
+**Status:** Not started.
+
+No UI stack exists until Milestone 7; the chooser is a console-based selection component. This slice implements the directions register entry 16 exit-condition sketch, not the general pattern beyond it.
+
+Deliverables:
+
+- implement a chooser component holding directory authority the requester lacks;
+- declare the request/response schema in `contracts/powerbox/v1`: object kind, requested rights, purpose string;
+- mint the user's selection gesture as a single-object capability via narrow-only derive from the chooser's own grant, transferred back over the request channel;
+- record the gesture as a provenance event.
+
+Required checks:
+
+- a component with no directory grants receives exactly the selected single object with the declared rights — nothing more;
+- minted capabilities cannot exceed the chooser's own grant (derive closure);
+- cancelling the dialog mints nothing;
+- the requesting component cannot bypass the chooser to reach the same objects.
+
+Planned verification target:
+
+```sh
+just powerbox_check
+```
+
+Exit condition: a component with no directory grants opens the chooser, the user selects a file, and the component receives a single-object capability it could not have obtained from the manifest or any peer.
+
+### M6.7: Generation sync and transfer
+
+**Status:** Not started.
+
+This slice implements the directions register entry 14 exit-condition sketch and consumes M5.8 release authorization. In QEMU the transfer medium is a second attachable virtio-blk disk; virtio networking is Milestone 7 scope.
+
+Deliverables:
+
+- implement the host-side closure algorithm (manifest to required object set per state policy: `preserve` and `snapshotBeforeUpgrade` state travels, `ephemeral` does not, `immutable` travels read-only) and a deterministic, versioned transfer-manifest format;
+- transfer objects as set-difference over content identities against the receiver's store;
+- verify complete closure and M5.8 release authorization on the receiver before staging; both failure modes fail closed before any boot attempt is consumed;
+- activate on the receiver through the ordinary M5.6 path: stage as pending, consume attempts, health-confirm.
+
+Required checks:
+
+- the transfer manifest is byte-identical for a fixed generation;
+- incomplete closure or authorization mismatch fails closed before transfer of control and consumes no boot attempt;
+- the receiving machine boots the transferred generation as pending and promotes it only after health confirmation;
+- storage devices not named by an explicit capability remain byte-identical.
+
+Planned verification target:
+
+```sh
+just transfer_check
+```
+
+Exit condition: an authorized QEMU-built generation transfers to a second machine and activates there with grants and state policy intact.
+
+### Milestone 6 verification stack
+
+Each permanent change runs the narrowest QEMU scenario exercising its new behavior. New IPC protocols are schema-first under `contracts/` (M5.2a rule); new objects or rights land with their `docs/capability-matrix.md` entries in the same change. The existing repository gates must remain clean:
+
+```sh
+just contracts_check
+just generation_check
+just test
+just fmt_check
+just lint
+```
+
+Slice targets (planned):
+
+```sh
+just spawn_service_check
+just directory_check
+just dango_check
+just generation_cmd_check
+just powerbox_check
+just transfer_check
+```
+
+### Milestone 6 definition of done
+
+Milestone 6 is complete only when all of the following are observed:
+
+- spawn, filesystem, powerbox, generation-management, and transfer protocols are versioned schemas under `contracts/` and covered by `contracts_check`;
+- the four kernel prerequisites (endpoint minting, derive-copy grants, per-spawner accounting, supervision handles) exist, are bounded, and are gated per the capability matrix;
+- executable and directory authority resolves only through capabilities — no global paths, no implicit working directory;
+- generation inspect, stage, select, and rollback run through native components under QEMU, conforming to the checked BootState models;
+- a powerbox selection gesture mints a single-object capability a requester could not otherwise obtain;
+- an authorized generation transfers between machines and activates with its grant set and state policy intact;
+- the existing isolated component graph and every Milestone 5 target remain healthy.
 
 ## Milestone 7: Daily-driver hardware
 
