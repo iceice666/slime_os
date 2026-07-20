@@ -1,0 +1,9 @@
+{
+  formatVersion = 1;
+  name = "slime_contracts";
+  compilerCompatibility = "0.1.0";
+  modules = [];
+  dependencies = [
+    { alias = "wire"; path = "_shared"; };
+  ];
+}

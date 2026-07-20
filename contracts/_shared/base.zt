@@ -1,0 +1,21 @@
+-- Target-independent wire-layout helpers shared by the Slime OS contract
+-- renderers. Concrete stable types only: text concatenation, reflected
+-- field-name projection, and non-optional-Int schema validation.
+
+refl ::= import stdlib.reflect;
+t ::= import stdlib.text;
+
+join :: List Text -> Text
+  = parts => t.join "" parts;
+
+schemaNames :: List refl.SchemaField -> List Text
+  = fields => map _.name fields;
+
+schemaFieldsValid :: List refl.SchemaField -> Bool
+  = fields => match fields {
+    | {;} => true;
+    | { field; ...rest } =>
+      field.type == "Int" && not field.optional && schemaFieldsValid rest;
+  };
+
+{ join = join; schemaNames = schemaNames; schemaFieldsValid = schemaFieldsValid; }
