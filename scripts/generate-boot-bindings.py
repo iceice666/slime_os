@@ -8,11 +8,10 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from zutai_cli import STDLIB, binary
 
 ROOT = Path(__file__).resolve().parent.parent
 OUTPUT = ROOT / "scripts" / "boot_contracts.py"
-ZUTAI_MANIFEST = ROOT / "deps" / "zutai" / "Cargo.toml"
-STDLIB = ROOT / "deps" / "zutai" / "stdlib"
 GENERATORS = (
     (ROOT / "contracts" / "generation" / "v2" / "schema.zt", "generation.py"),
     (ROOT / "contracts" / "kernel-image" / "v1" / "schema.zt", "kernel_image.py"),
@@ -63,18 +62,7 @@ def run_generator(generator: Path, staging: Path) -> None:
     environment["ZUTAI_STDLIB_ROOT"] = str(STDLIB)
     environment["SLIME_BOOT_BINDINGS_ROOT"] = str(staging)
     process = subprocess.run(
-        [
-            "cargo",
-            "run",
-            "--manifest-path",
-            str(ZUTAI_MANIFEST),
-            "-q",
-            "-p",
-            "zutai-cli",
-            "--",
-            "run",
-            str(generator),
-        ],
+        [str(binary()), "run", str(generator)],
         cwd=ROOT,
         env=environment,
         check=False,

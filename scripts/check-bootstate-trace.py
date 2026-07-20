@@ -38,6 +38,7 @@ from boot_contracts import (
     BOOTSTORE_CAPACITY,
     sha256,
 )
+from zutai_cli import STDLIB, binary
 
 ROOT = Path(__file__).resolve().parent.parent
 MODEL_DIR = ROOT / "contracts" / "bootstate" / "model"
@@ -208,22 +209,10 @@ class Oracle:
                 '{ scenarios = { { name = "trace"; model = model; expect = #safe; }; }; }\n'
             )
             environment = os.environ.copy()
-            environment["ZUTAI_STDLIB_ROOT"] = str(ROOT / "deps" / "zutai" / "stdlib")
+            environment["ZUTAI_STDLIB_ROOT"] = str(STDLIB)
             try:
                 process = subprocess.run(
-                    [
-                        "cargo",
-                        "run",
-                        "--release",
-                        "--manifest-path",
-                        "deps/zutai/Cargo.toml",
-                        "-q",
-                        "-p",
-                        "zutai-cli",
-                        "--",
-                        "model-check",
-                        str(query_dir / "query.zt"),
-                    ],
+                    [str(binary()), "model-check", str(query_dir / "query.zt")],
                     cwd=ROOT,
                     env=environment,
                     check=False,

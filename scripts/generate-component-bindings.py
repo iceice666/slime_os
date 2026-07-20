@@ -8,10 +8,9 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from zutai_cli import STDLIB, binary
 
 ROOT = Path(__file__).resolve().parent.parent
-ZUTAI_MANIFEST = ROOT / "deps" / "zutai" / "Cargo.toml"
-STDLIB = ROOT / "deps" / "zutai" / "stdlib"
 GENERATOR = ROOT / "contracts" / "component" / "v1" / "schema.zt"
 RUST_OUTPUT = ROOT / "kernel" / "src" / "component" / "gen.rs"
 INVALID_SCHEMA = "INVALID_COMPONENT_SCHEMA"
@@ -27,18 +26,7 @@ def render() -> str:
         environment["ZUTAI_STDLIB_ROOT"] = str(STDLIB)
         environment["SLIME_COMPONENT_BINDINGS_ROOT"] = str(staging)
         process = subprocess.run(
-            [
-                "cargo",
-                "run",
-                "--manifest-path",
-                str(ZUTAI_MANIFEST),
-                "-q",
-                "-p",
-                "zutai-cli",
-                "--",
-                "run",
-                str(GENERATOR),
-            ],
+            [str(binary()), "run", str(GENERATOR)],
             cwd=ROOT,
             env=environment,
             check=False,

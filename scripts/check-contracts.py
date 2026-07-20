@@ -6,10 +6,9 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from zutai_cli import STDLIB, binary
 
 ROOT = Path(__file__).resolve().parent.parent
-ZUTAI_MANIFEST = ROOT / "deps" / "zutai" / "Cargo.toml"
-STDLIB = ROOT / "deps" / "zutai" / "stdlib"
 GENERATION_CONTRACT = ROOT / "contracts" / "generation" / "v1"
 BLOCK_CONTRACT = ROOT / "contracts" / "block" / "v1"
 BLOCK_BINDING_GENERATOR = ROOT / "scripts" / "generate-block-bindings.py"
@@ -28,17 +27,7 @@ def run(*arguments: str) -> str:
     environment = os.environ.copy()
     environment["ZUTAI_STDLIB_ROOT"] = str(STDLIB)
     process = subprocess.run(
-        [
-            "cargo",
-            "run",
-            "--manifest-path",
-            str(ZUTAI_MANIFEST),
-            "-q",
-            "-p",
-            "zutai-cli",
-            "--",
-            *arguments,
-        ],
+        [str(binary()), *arguments],
         cwd=ROOT,
         env=environment,
         check=False,

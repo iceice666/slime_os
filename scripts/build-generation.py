@@ -71,10 +71,9 @@ from boot_contracts import (
     sha256,
 )
 from release_trust import RELEASE_BYTES, build_release
+from zutai_cli import STDLIB, binary
 
 ROOT = Path(__file__).resolve().parent.parent
-ZUTAI = ROOT / "deps" / "zutai" / "Cargo.toml"
-STDLIB = ROOT / "deps" / "zutai" / "stdlib"
 SOURCE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "valid.zti"
 TARGET = "x86_64-qemu-virtio"
 COMPONENTS_WORKSPACE = ROOT / "components" / "Cargo.toml"
@@ -114,7 +113,7 @@ def load_manifest() -> dict:
     environment = os.environ.copy()
     environment["ZUTAI_STDLIB_ROOT"] = str(STDLIB)
     output = subprocess.run(
-        ["cargo", "run", "--manifest-path", str(ZUTAI), "-q", "-p", "zutai-cli", "--", "json", str(SOURCE)],
+        [str(binary()), "json", str(SOURCE)],
         cwd=ROOT,
         env=environment,
         check=True,
