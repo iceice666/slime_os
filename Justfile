@@ -120,7 +120,7 @@ bootstate_gen: boot_gen
 
 # Exhaustively check the bounded BootState transition and interruption model.
 bootstate_model_check:
-    python3 scripts/check-bootstate-model.py
+    ZUTAI_STDLIB_ROOT=deps/zutai/stdlib cargo run --release --manifest-path deps/zutai/Cargo.toml -q -p zutai-cli -- model-check contracts/bootstate/model/bootstate.zt
 
 # M5.6c: validate durable BootState transition traces from the rollback
 # power-cut scenario against the checked M5.6a/M5.6b state machines.

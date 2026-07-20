@@ -6,3 +6,4 @@ debug.sh
 /.direnv/bin
 /.direnv
 /scripts/__pycache__
+/contracts/bootstate/model/.trace-query-*/

@@ -1,0 +1,614 @@
+l ::= import stdlib.list;
+
+Generation :: type { #g1; #g2; };
+Slot :: type { #a; #b; };
+Policy :: type { #immutable; #ephemeral; #preserve; #snapshotBeforeUpgrade; #discardOnRollback; };
+Phase :: type { #boot; #running; #attemptCommitted; #pendingCommitted; #snapshot; #gc; };
+WriteKind :: type { #none; #stagePending; #consumeAttempt; #promotion; #rollback; };
+WriteStage :: type { #idle; #prepared; #invalidated; #payloadWritten; #flushed; };
+Cut :: type { #none; #beforePendingMetadata; #slotWriteA; #slotWriteB; #afterPendingCommit; #afterAttemptCommit; #healthPromotion; #rollbackUpdate; #stateSnapshot; #garbageCollection; };
+GraphRoot :: type { generation : Generation; epoch : Int; };
+StateObject :: type {
+  #shared : { policy : Policy; };
+  #scoped : { policy : Policy; generation : Generation; epoch : Int; };
+  #persistentJournal;
+};
+Identity :: type {
+  #generation : { value : Generation; };
+  #graphRoot : { value : GraphRoot; };
+  #stateObject : { value : StateObject; };
+};
+BootRecord :: type {
+  valid : Bool;
+  sequence : Int;
+  knownGood : Generation?;
+  knownGoodRoot : GraphRoot?;
+  pending : Generation?;
+  pendingRoot : GraphRoot?;
+  remainingAttempts : Int;
+};
+Slots :: type { a : BootRecord; b : BootRecord; };
+GraphBinding :: type { root : GraphRoot; objects : List StateObject; };
+State :: type {
+  slots : Slots;
+  durableGenerations : List Generation;
+  durableGraphRoots : List GraphRoot;
+  durableStateObjects : List StateObject;
+  graphBindings : List GraphBinding;
+  rollbackRoots : List GraphRoot;
+  persistentStateRoots : List StateObject;
+  phase : Phase;
+  running : Generation?;
+  runningRoot : GraphRoot?;
+  runningPending : Bool;
+  writeTarget : Slot?;
+  writeValue : BootRecord;
+  writeKind : WriteKind;
+  writeStage : WriteStage;
+  attemptsBeforeTransfer : Int;
+  lastCut : Cut;
+  stagedCandidate : Generation?;
+  stagedRoot : GraphRoot?;
+  snapshotBaseRoot : GraphRoot?;
+  snapshotProgress : Int;
+  gcCandidate : Identity?;
+};
+Transition :: type { action : Text; state : State; };
+Safety :: type { name : Text; holds : State -> Bool; };
+Reachability :: type { name : Text; reached : State -> Bool; };
+Model :: type {
+  initial : List State;
+  next : State -> List Transition;
+  safety : List Safety;
+  reachability : List Reachability;
+};
+Expectation :: type { #safe; #violates : { property : Text; }; };
+Scenario :: type { name : Text; model : Model; expect : Expectation; };
+Faults :: type { skipAttempt : Bool; omitPersistentRoot : Bool; mixedEpochSnapshot : Bool; };
+Observation :: type {
+  action : Text;
+  commit : Text;
+  attemptsBefore : Int;
+  attemptsAfter : Int;
+};
+
+maxAttempts :: Int = 2;
+maxSequence :: Int = 5;
+maxEpoch :: Int = 1;
+generations :: List Generation = { #g1; #g2; };
+slotsOrder :: List Slot = { #a; #b; };
+policyOrder :: List Policy = { #immutable; #ephemeral; #preserve; #snapshotBeforeUpgrade; #discardOnRollback; };
+epochs :: List Int = l.range 0 (maxEpoch + 1);
+graphRoots :: List GraphRoot = l.flatten (l.map (\generation. l.map (\epoch. { generation = generation; epoch = epoch; }) epochs) generations);
+persistentJournal :: StateObject = #persistentJournal;
+
+member :: <A> A -> List A -> Bool
+  = value xs => l.any (\candidate. candidate == value) xs;
+insert :: <A> A -> List A -> List A
+  = value xs => if member value xs then xs else l.append xs (l.singleton value);
+union :: <A> List A -> List A -> List A
+  = xs ys => l.fold (\acc value. insert value acc) xs ys;
+difference :: <A> List A -> List A -> List A
+  = xs ys => l.filter (\value. not (member value ys)) xs;
+intersect :: <A> List A -> List A -> List A
+  = xs ys => l.filter (\value. member value ys) xs;
+subset :: <A> List A -> List A -> Bool
+  = xs ys => l.all (\value. member value ys) xs;
+sameSet :: <A> List A -> List A -> Bool
+  = xs ys => subset xs ys && subset ys xs;
+dedup :: <A> List A -> List A
+  = xs => l.fold (\acc value. insert value acc) (l.empty ()) xs;
+unique :: <A> List A -> Bool
+  = xs => l.length (dedup xs) == l.length xs;
+nonEmpty :: <A> List A -> Bool
+  = xs => l.length xs > 0;
+optionalToList :: <A> A? -> List A
+  = value => match value { | #none => l.empty (); | #some (item) => l.singleton item; };
+
+someGeneration :: Generation -> Generation?
+  = generation => #some (generation);
+someRoot :: GraphRoot -> GraphRoot?
+  = root => #some (root);
+someSlot :: Slot -> Slot?
+  = slot => #some (slot);
+someIdentity :: Identity -> Identity?
+  = identity => #some (identity);
+
+emptyRecord :: BootRecord = {
+  valid = false;
+  sequence = 0;
+  knownGood = #none;
+  knownGoodRoot = #none;
+  pending = #none;
+  pendingRoot = #none;
+  remainingAttempts = 0;
+};
+
+rootGeneration :: GraphRoot -> Generation
+  = root => root.generation;
+rootEpoch :: GraphRoot -> Int
+  = root => root.epoch;
+graphRoot :: Generation -> Int -> GraphRoot
+  = generation epoch => { generation = generation; epoch = epoch; };
+stateObject :: Policy -> GraphRoot -> StateObject
+  = policy root => match policy {
+      | #immutable => #shared { policy = policy; };
+      | #preserve => #shared { policy = policy; };
+      | _ => #scoped { policy = policy; generation = root.generation; epoch = root.epoch; };
+    };
+canonicalBindings :: GraphRoot -> List StateObject
+  = root => l.map (\policy. stateObject policy root) policyOrder;
+stateObjectUniverse :: List StateObject
+  = insert persistentJournal (l.flatten (l.map canonicalBindings graphRoots));
+snapshotObject :: Policy -> GraphRoot -> GraphRoot -> StateObject
+  = policy targetRoot baseRoot => match policy {
+      | #immutable => stateObject policy baseRoot;
+      | #preserve => stateObject policy baseRoot;
+      | _ => stateObject policy targetRoot;
+    };
+snapshotObjectForCommit :: Faults -> Policy -> GraphRoot -> GraphRoot -> StateObject
+  = faults policy targetRoot baseRoot => if faults.mixedEpochSnapshot then mixedEpochSnapshotObject policy targetRoot baseRoot else snapshotObject policy targetRoot baseRoot;
+mixedEpochSnapshotObject :: Policy -> GraphRoot -> GraphRoot -> StateObject
+  = policy targetRoot baseRoot => match policy {
+      | #snapshotBeforeUpgrade => stateObject policy baseRoot;
+      | #ephemeral => persistentJournal;
+      | _ => snapshotObject policy targetRoot baseRoot;
+    };
+snapshotBindings :: Faults -> GraphRoot -> GraphRoot -> List StateObject
+  = faults targetRoot baseRoot => l.map (\policy. snapshotObjectForCommit faults policy targetRoot baseRoot) policyOrder;
+
+slotRecord :: Slot -> Slots -> BootRecord
+  = slot slots => match slot { | #a => slots.a; | #b => slots.b; };
+replaceSlot :: Slot -> BootRecord -> Slots -> Slots
+  = slot record slots => match slot {
+      | #a => slots with { a = record; };
+      | #b => slots with { b = record; };
+    };
+otherSlot :: Slot -> Slot
+  = slot => match slot { | #a => #b; | #b => #a; };
+selectedSlot :: State -> Slot?
+  = state => [
+      a := state.slots.a;
+      b := state.slots.b;
+      cond {
+        a.valid && b.valid && a.sequence > b.sequence => #some (#a);
+        a.valid && b.valid && b.sequence > a.sequence => #some (#b);
+        a.valid && b.valid && a == b => #some (#a);
+        a.valid && not b.valid => #some (#a);
+        b.valid && not a.valid => #some (#b);
+        _ => #none;
+      }
+    ];
+selectedState :: State -> BootRecord
+  = state => match selectedSlot state { | #some (#a) => state.slots.a; | #some (#b) => state.slots.b; | #none => emptyRecord; };
+olderSlot :: State -> Slot?
+  = state => [
+      a := state.slots.a;
+      b := state.slots.b;
+      cond {
+        a.valid && not b.valid => #some (#b);
+        b.valid && not a.valid => #some (#a);
+        a.valid && b.valid && a.sequence < b.sequence => #some (#a);
+        a.valid && b.valid => #some (#b);
+        _ => #none;
+      }
+    ];
+
+bindingMatchesRoot :: GraphRoot -> GraphBinding -> Bool
+  = root binding => binding.root == root;
+bindingObjectsValid :: GraphBinding -> Bool
+  = binding => subset binding.objects stateObjectUniverse && unique binding.objects;
+bindingObjects :: GraphRoot -> List GraphBinding -> List StateObject
+  = root bindings => match l.find (bindingMatchesRoot root) bindings {
+      | #some (binding) => binding.objects;
+      | #none => l.empty ();
+    };
+replaceOneBinding :: GraphRoot -> List StateObject -> GraphBinding -> GraphBinding
+  = root objects binding => if binding.root == root then { root = root; objects = objects; } else binding;
+replaceBinding :: GraphRoot -> List StateObject -> List GraphBinding -> List GraphBinding
+  = root objects bindings => l.map (replaceOneBinding root objects) bindings;
+initialGraphBinding :: GraphRoot -> GraphRoot -> GraphBinding
+  = initialRoot root => { root = root; objects = if root == initialRoot then canonicalBindings initialRoot else l.empty (); };
+initialGraphBindings :: GraphRoot -> List GraphBinding
+  = initialRoot => l.map (initialGraphBinding initialRoot) graphRoots;
+
+graphComplete :: State -> GraphRoot -> Bool
+  = state root => member root state.durableGraphRoots && sameSet (bindingObjects root state.graphBindings) (canonicalBindings root) && subset (bindingObjects root state.graphBindings) state.durableStateObjects;
+recordType :: BootRecord -> Bool
+  = record => record.sequence >= 0 && record.sequence <= maxSequence && record.remainingAttempts >= 0 && record.remainingAttempts <= maxAttempts;
+recordConsistent :: BootRecord -> Bool
+  = record => recordType record && match record.knownGood {
+      | #none => false;
+      | #some (knownGood) => match record.knownGoodRoot {
+          | #none => false;
+          | #some (knownGoodRoot) => knownGoodRoot.generation == knownGood && match record.pending {
+              | #none => record.pendingRoot == #none && record.remainingAttempts == 0;
+              | #some (pending) => match record.pendingRoot {
+                  | #none => false;
+                  | #some (pendingRoot) => pendingRoot.generation == pending && record.remainingAttempts >= 0 && record.remainingAttempts <= maxAttempts;
+                };
+            };
+        };
+    };
+bootableRecord :: State -> BootRecord -> Bool
+  = state record => record.valid && recordConsistent record && match record.knownGood {
+      | #none => false;
+      | #some (knownGood) => member knownGood state.durableGenerations && match record.knownGoodRoot {
+          | #none => false;
+          | #some (knownGoodRoot) => graphComplete state knownGoodRoot && match record.pending {
+              | #none => true;
+              | #some (pending) => member pending state.durableGenerations && match record.pendingRoot {
+                  | #none => false;
+                  | #some (pendingRoot) => graphComplete state pendingRoot;
+                };
+            };
+        };
+    };
+
+validSlots :: State -> List Slot
+  = state => l.filter (\slot. (slotRecord slot state.slots).valid) slotsOrder;
+validGenerationRoots :: State -> List Generation
+  = state => [
+      known := l.flatten (l.map (\slot. optionalToList ((slotRecord slot state.slots).knownGood)) (validSlots state));
+      pending := l.flatten (l.map (\slot. optionalToList ((slotRecord slot state.slots).pending)) (validSlots state));
+      union known pending
+    ];
+validGraphRoots :: State -> List GraphRoot
+  = state => [
+      known := l.flatten (l.map (\slot. optionalToList ((slotRecord slot state.slots).knownGoodRoot)) (validSlots state));
+      pending := l.flatten (l.map (\slot. optionalToList ((slotRecord slot state.slots).pendingRoot)) (validSlots state));
+      union known pending
+    ];
+runningGraphRoots :: State -> List GraphRoot
+  = state => optionalToList state.runningRoot;
+stagedGraphRoots :: State -> List GraphRoot
+  = state => optionalToList state.stagedRoot;
+retainedGraphRoots :: State -> List GraphRoot
+  = state => union (validGraphRoots state) (union (runningGraphRoots state) state.rollbackRoots);
+stagedTransactionRoots :: State -> List GraphRoot
+  = state => stagedGraphRoots state;
+checkedGraphRoots :: State -> List GraphRoot
+  = state => union (retainedGraphRoots state) (intersect (stagedTransactionRoots state) state.durableGraphRoots);
+retainedGenerations :: State -> List Generation
+  = state => union (validGenerationRoots state) (union (l.map rootGeneration state.rollbackRoots) (union (optionalToList state.running) (optionalToList state.stagedCandidate)));
+retainedStateObjects :: State -> List StateObject
+  = state => union state.persistentStateRoots (union (l.flatten (l.map (\root. bindingObjects root state.graphBindings) (retainedGraphRoots state))) (l.flatten (l.map (\root. intersect (canonicalBindings root) state.durableStateObjects) (stagedTransactionRoots state))));
+identityGeneration :: Generation -> Identity
+  = value => #generation { value = value; };
+identityGraphRoot :: GraphRoot -> Identity
+  = value => #graphRoot { value = value; };
+identityStateObject :: StateObject -> Identity
+  = value => #stateObject { value = value; };
+identityGenerations :: List Generation -> List Identity
+  = values => l.map identityGeneration values;
+identityGraphRoots :: List GraphRoot -> List Identity
+  = values => l.map identityGraphRoot values;
+identityStateObjects :: List StateObject -> List Identity
+  = values => l.map identityStateObject values;
+protectedIdentities :: State -> List Identity
+  = state => union (identityGenerations (retainedGenerations state)) (union (identityGraphRoots (union (retainedGraphRoots state) (stagedTransactionRoots state))) (identityStateObjects (retainedStateObjects state)));
+omitPersistentRootProtection :: State -> List Identity
+  = state => difference (protectedIdentities state) (identityStateObjects state.persistentStateRoots);
+gcProtectedIdentities :: Faults -> State -> List Identity
+  = faults state => if faults.omitPersistentRoot then omitPersistentRootProtection state else protectedIdentities state;
+durableIdentities :: State -> List Identity
+  = state => union (identityGenerations state.durableGenerations) (union (identityGraphRoots state.durableGraphRoots) (identityStateObjects state.durableStateObjects));
+chooseGcCandidate :: List Identity -> Identity?
+  = candidates => match candidates { | {;} => #none; | {first; ...rest} => #some (first); };
+choosePersistentCandidate :: List Identity -> Identity?
+  = candidates => [ persistent : Identity = #stateObject { value = persistentJournal; }; if member persistent candidates then #some (persistent) else chooseGcCandidate candidates ];
+chooseCandidate :: Faults -> List Identity -> Identity?
+  = faults candidates => if faults.omitPersistentRoot then choosePersistentCandidate candidates else chooseGcCandidate candidates;
+
+phaseCutText :: Cut -> Text
+  = cut => match cut {
+      | #none => "none";
+      | #beforePendingMetadata => "before-pending-metadata";
+      | #slotWriteA => "slot-write-A";
+      | #slotWriteB => "slot-write-B";
+      | #afterPendingCommit => "after-pending-commit";
+      | #afterAttemptCommit => "after-attempt-commit";
+      | #healthPromotion => "health-promotion";
+      | #rollbackUpdate => "rollback-update";
+      | #stateSnapshot => "state-snapshot";
+      | #garbageCollection => "garbage-collection";
+    };
+
+initialState :: State = [
+  initialGeneration : Generation = #g1;
+  initialRoot : GraphRoot = graphRoot initialGeneration 0;
+  initialBindings : List StateObject = canonicalBindings initialRoot;
+  initialRecord : BootRecord = {
+    valid = true;
+    sequence = 1;
+    knownGood = #some (initialGeneration);
+    knownGoodRoot = #some (initialRoot);
+    pending = #none;
+    pendingRoot = #none;
+    remainingAttempts = 0;
+  };
+  {
+    slots = { a = initialRecord with { sequence = 2; }; b = initialRecord; };
+    durableGenerations = generations;
+    durableGraphRoots = { initialRoot; };
+    durableStateObjects = insert persistentJournal initialBindings;
+    graphBindings = initialGraphBindings initialRoot;
+    rollbackRoots = l.empty ();
+    persistentStateRoots = { persistentJournal; };
+    phase = #boot;
+    running = #none;
+    runningRoot = #none;
+    runningPending = false;
+    writeTarget = #none;
+    writeValue = emptyRecord;
+    writeKind = #none;
+    writeStage = #idle;
+    attemptsBeforeTransfer = 0;
+    lastCut = #none;
+    stagedCandidate = #none;
+    stagedRoot = #none;
+    snapshotBaseRoot = #none;
+    snapshotProgress = 0;
+    gcCandidate = #none;
+  }
+];
+
+transition :: Text -> State -> Transition
+  = action state => { action = action; state = state; };
+one :: Text -> State -> List Transition
+  = action state => l.singleton (transition action state);
+noneTransitions :: List Transition = l.empty ();
+writeStageInFlight :: WriteStage -> Bool
+  = stage => stage == #invalidated || stage == #payloadWritten || stage == #flushed;
+
+bootKnownGood :: State -> List Transition
+  = state => [ selected := selectedState state; if state.phase == #boot && state.writeStage == #idle && selectedSlot state != #none && bootableRecord state selected && selected.pending == #none then one "BootKnownGood" (state with { phase = #running; running = selected.knownGood; runningRoot = selected.knownGoodRoot; runningPending = false; attemptsBeforeTransfer = 0; }) else noneTransitions ];
+bootExhaustedKnownGood :: State -> List Transition
+  = state => [ selected := selectedState state; if state.phase == #boot && state.writeStage == #idle && selectedSlot state != #none && bootableRecord state selected && selected.pending != #none && selected.remainingAttempts == 0 then one "BootExhaustedKnownGood" (state with { phase = #running; running = selected.knownGood; runningRoot = selected.knownGoodRoot; runningPending = false; attemptsBeforeTransfer = 0; }) else noneTransitions ];
+beginStagePending :: State -> List Transition
+  = state => [
+      selected := selectedState state;
+      candidates : List Generation = difference state.durableGenerations (optionalToList selected.knownGood);
+      if state.phase == #running && not state.runningPending && selectedSlot state != #none && state.running == selected.knownGood && state.runningRoot == selected.knownGoodRoot && selected.pending == #none && state.writeKind == #none && state.writeStage == #idle && state.stagedCandidate == #none then
+        l.map (\candidate. transition "BeginStagePending" (state with { stagedCandidate = #some (candidate); })) candidates
+      else noneTransitions
+    ];
+beginUpgradeSnapshot :: State -> List Transition
+  = state => match state.stagedCandidate {
+      | #none => noneTransitions;
+      | #some (candidate) => match state.stagedRoot {
+          | #some (_existing) => noneTransitions;
+          | #none => [
+              selected := selectedState state;
+              match selected.knownGoodRoot {
+                | #none => noneTransitions;
+                | #some (baseRoot) => [
+                    newRoot : GraphRoot = graphRoot candidate (baseRoot.epoch + 1);
+                    if state.phase == #running && member candidate state.durableGenerations && selectedSlot state != #none && baseRoot.epoch < maxEpoch && not (member newRoot state.durableGraphRoots) then one "BeginUpgradeSnapshot" (state with { stagedRoot = #some (newRoot); snapshotBaseRoot = #some (baseRoot); snapshotProgress = 0; phase = #snapshot; }) else noneTransitions
+                  ];
+              }
+            ];
+        };
+    };
+policyAt :: Int -> Policy
+  = index => cond { index == 0 => #immutable; index == 1 => #ephemeral; index == 2 => #preserve; index == 3 => #snapshotBeforeUpgrade; _ => #discardOnRollback; };
+writeSnapshotPolicy :: Faults -> State -> List Transition
+  = faults state => match state.stagedRoot {
+      | #none => noneTransitions;
+      | #some (targetRoot) => match state.snapshotBaseRoot {
+          | #none => noneTransitions;
+          | #some (baseRoot) => if state.phase == #snapshot && member baseRoot state.durableGraphRoots && state.snapshotProgress < l.length policyOrder then [ policy := policyAt state.snapshotProgress; object := snapshotObjectForCommit faults policy targetRoot baseRoot; one "WriteSnapshotPolicy" (state with { durableStateObjects = insert object state.durableStateObjects; snapshotProgress = state.snapshotProgress + 1; }) ] else noneTransitions;
+        };
+    };
+sealSnapshot :: Faults -> State -> List Transition
+  = faults state => match state.stagedRoot {
+      | #none => noneTransitions;
+      | #some (targetRoot) => match state.snapshotBaseRoot {
+          | #none => noneTransitions;
+          | #some (baseRoot) => [ bindings := snapshotBindings faults targetRoot baseRoot; if state.phase == #snapshot && member baseRoot state.durableGraphRoots && state.snapshotProgress == l.length policyOrder && subset bindings state.durableStateObjects then one "SealSnapshot" (state with { graphBindings = replaceBinding targetRoot bindings state.graphBindings; durableGraphRoots = insert targetRoot state.durableGraphRoots; snapshotBaseRoot = #none; snapshotProgress = 0; phase = #running; }) else noneTransitions ];
+        };
+    };
+startPendingMetadata :: State -> List Transition
+  = state => match state.stagedCandidate {
+      | #none => noneTransitions;
+      | #some (candidate) => match state.stagedRoot {
+          | #none => noneTransitions;
+          | #some (root) => [ selected := selectedState state; if state.phase == #running && not state.runningPending && selectedSlot state != #none && selected.pending == #none && member candidate state.durableGenerations && member root state.durableGraphRoots && root.generation == candidate && graphComplete state root && state.writeKind == #none && state.writeStage == #idle then one "StartPendingMetadata" (state with { writeValue = selected with { pending = #some (candidate); pendingRoot = #some (root); remainingAttempts = maxAttempts; }; writeKind = #stagePending; }) else noneTransitions ];
+        };
+    };
+attemptAfterConsume :: Faults -> BootRecord -> BootRecord
+  = faults record => if faults.skipAttempt then record else record with { remainingAttempts = record.remainingAttempts - 1; };
+preparePendingAttempt :: Faults -> State -> List Transition
+  = faults state => [ selected := selectedState state; if state.phase == #boot && selectedSlot state != #none && bootableRecord state selected && selected.pending != #none && selected.remainingAttempts > 0 && state.writeKind == #none && state.writeStage == #idle then one "PreparePendingAttempt" (state with { attemptsBeforeTransfer = selected.remainingAttempts; writeValue = attemptAfterConsume faults selected; writeKind = #consumeAttempt; }) else noneTransitions ];
+beginHealthPromotion :: State -> List Transition
+  = state => [ selected := selectedState state; if state.phase == #running && state.runningPending && selectedSlot state != #none && state.running == selected.pending && state.runningRoot == selected.pendingRoot && state.writeKind == #none && state.writeStage == #idle then one "BeginHealthPromotion" (state with { writeValue = selected with { knownGood = state.running; knownGoodRoot = state.runningRoot; pending = #none; pendingRoot = #none; remainingAttempts = 0; }; writeKind = #promotion; }) else noneTransitions ];
+beginRollback :: State -> List Transition
+  = state => [ selected := selectedState state; validRollback := state.runningPending || ((not state.runningPending) && state.running == selected.knownGood && state.runningRoot == selected.knownGoodRoot && selected.pending != #none && selected.remainingAttempts == 0); if state.phase == #running && selectedSlot state != #none && validRollback && state.writeKind == #none && state.writeStage == #idle then one "BeginRollback" (state with { writeValue = selected with { pending = #none; pendingRoot = #none; remainingAttempts = 0; }; writeKind = #rollback; }) else noneTransitions ];
+prepareWriteStep :: State -> List Transition
+  = state => match olderSlot state {
+      | #none => noneTransitions;
+      | #some (older) => match selectedSlot state {
+          | #none => noneTransitions;
+          | #some (selectedSlotValue) => [ selected := selectedState state; other := otherSlot older; if state.writeStage == #idle && state.writeKind != #none && other == selectedSlotValue && selected.sequence < maxSequence && recordConsistent state.writeValue && bootableRecord state (slotRecord other state.slots) then one "PrepareWriteStep" (state with { writeTarget = #some (older); writeStage = #prepared; }) else noneTransitions ];
+        };
+    };
+invalidateWriteTarget :: State -> List Transition
+  = state => match state.writeTarget {
+      | #none => noneTransitions;
+      | #some (target) => if state.writeStage == #prepared then [ record := slotRecord target state.slots; one "InvalidateWriteTarget" (state with { slots = replaceSlot target (record with { valid = false; }) state.slots; writeStage = #invalidated; }) ] else noneTransitions;
+    };
+writePayload :: State -> List Transition
+  = state => match state.writeTarget {
+      | #none => noneTransitions;
+      | #some (target) => if state.writeStage == #invalidated then one "WritePayload" (state with { slots = replaceSlot target (state.writeValue with { valid = false; }) state.slots; writeStage = #payloadWritten; }) else noneTransitions;
+    };
+flushPayload :: State -> List Transition
+  = state => if state.writeStage == #payloadWritten then one "FlushPayload" (state with { writeStage = #flushed; }) else noneTransitions;
+phaseAfterCommit :: WriteKind -> Phase
+  = kind => match kind { | #stagePending => #pendingCommitted; | #consumeAttempt => #attemptCommitted; | #promotion => #running; | #rollback => #boot; | #none => #running; };
+commitWrite :: State -> List Transition
+  = state => match state.writeTarget {
+      | #none => noneTransitions;
+      | #some (target) => match selectedSlot state {
+          | #none => noneTransitions;
+          | #some (selectedSlotValue) => [
+              selected := selectedState state;
+              committed := state.writeValue with { sequence = selected.sequence + 1; valid = true; };
+              rollbackRoots := if state.writeKind == #promotion then union state.rollbackRoots (optionalToList selected.knownGoodRoot) else state.rollbackRoots;
+              if state.writeStage == #flushed && selectedSlotValue == otherSlot target then one "CommitWrite" (state with { slots = replaceSlot target committed state.slots; rollbackRoots = rollbackRoots; phase = phaseAfterCommit state.writeKind; running = if state.writeKind == #rollback then #none else state.running; runningRoot = if state.writeKind == #rollback then #none else state.runningRoot; runningPending = if state.writeKind == #promotion || state.writeKind == #rollback then false else state.runningPending; stagedCandidate = if state.writeKind == #stagePending then #none else state.stagedCandidate; stagedRoot = if state.writeKind == #stagePending then #none else state.stagedRoot; writeTarget = #none; writeValue = emptyRecord; writeKind = #none; writeStage = #idle; }) else noneTransitions
+            ];
+        };
+    };
+rebootAfterPendingCommit :: State -> List Transition
+  = state => if state.phase == #pendingCommitted && state.writeStage == #idle then one "RebootAfterPendingCommit" (state with { phase = #boot; running = #none; runningRoot = #none; runningPending = false; }) else noneTransitions;
+transferPending :: State -> List Transition
+  = state => [ selected := selectedState state; if state.phase == #attemptCommitted && state.writeStage == #idle && selectedSlot state != #none && selected.pending != #none then one "TransferPending" (state with { phase = #running; running = selected.pending; runningRoot = selected.pendingRoot; runningPending = true; }) else noneTransitions ];
+beginGc :: Faults -> State -> List Transition
+  = faults state => [ candidates := difference (durableIdentities state) (gcProtectedIdentities faults state); match chooseCandidate faults candidates { | #none => noneTransitions; | #some (candidate) => if state.phase == #running && state.gcCandidate == #none && nonEmpty candidates then one "BeginGc" (state with { gcCandidate = #some (candidate); phase = #gc; }) else noneTransitions; } ];
+deleteGcCandidate :: State -> List Transition
+  = state => match state.gcCandidate {
+      | #none => noneTransitions;
+      | #some (candidate) => if state.phase == #gc then match candidate {
+          | #generation { value = generation; } => one "DeleteGcCandidate" (state with { durableGenerations = difference state.durableGenerations (l.singleton generation); });
+          | #graphRoot { value = root; } => one "DeleteGcCandidate" (state with { durableGraphRoots = difference state.durableGraphRoots (l.singleton root); });
+          | #stateObject { value = object; } => one "DeleteGcCandidate" (state with { durableStateObjects = difference state.durableStateObjects (l.singleton object); });
+        } else noneTransitions;
+    };
+finishGc :: State -> List Transition
+  = state => match state.gcCandidate { | #none => noneTransitions; | #some (candidate) => if state.phase == #gc && not (member candidate (durableIdentities state)) then one "FinishGc" (state with { gcCandidate = #none; phase = #running; }) else noneTransitions; };
+crash :: Cut -> State -> State
+  = cut state => state with { phase = #boot; running = #none; runningRoot = #none; runningPending = false; writeTarget = #none; writeValue = emptyRecord; writeKind = #none; writeStage = #idle; attemptsBeforeTransfer = 0; lastCut = cut; stagedCandidate = #none; stagedRoot = #none; snapshotBaseRoot = #none; snapshotProgress = 0; gcCandidate = #none; };
+cutBeforePendingAction :: State -> List Transition
+  = state => if state.phase == #running && state.stagedCandidate != #none && match state.stagedRoot { | #none => false; | #some (root) => member root state.durableGraphRoots; } && state.writeKind == #none then one "CutBeforePendingAction" (crash #beforePendingMetadata state) else noneTransitions;
+cutSlotWriteAction :: State -> List Transition
+  = state => match state.writeTarget { | #none => noneTransitions; | #some (target) => if writeStageInFlight state.writeStage then one "CutSlotWriteAction" (crash (match target { | #a => #slotWriteA; | #b => #slotWriteB; }) state) else noneTransitions; };
+cutAfterPendingAction :: State -> List Transition
+  = state => if state.phase == #pendingCommitted && state.writeStage == #idle then one "CutAfterPendingAction" (crash #afterPendingCommit state) else noneTransitions;
+cutAfterAttemptAction :: State -> List Transition
+  = state => if state.phase == #attemptCommitted && state.writeStage == #idle then one "CutAfterAttemptAction" (crash #afterAttemptCommit state) else noneTransitions;
+cutPromotionAction :: State -> List Transition
+  = state => if state.writeKind == #promotion && writeStageInFlight state.writeStage then one "CutPromotionAction" (crash #healthPromotion state) else noneTransitions;
+cutRollbackAction :: State -> List Transition
+  = state => if state.writeKind == #rollback && writeStageInFlight state.writeStage then one "CutRollbackAction" (crash #rollbackUpdate state) else noneTransitions;
+cutSnapshotAction :: State -> List Transition
+  = state => if state.phase == #snapshot && state.stagedRoot != #none then one "CutSnapshotAction" (crash #stateSnapshot state) else noneTransitions;
+cutGcAction :: State -> List Transition
+  = state => if state.phase == #gc && state.gcCandidate != #none then one "CutGcAction" (crash #garbageCollection state) else noneTransitions;
+stutterAtSequenceBound :: State -> List Transition
+  = state => [ selected := selectedState state; if selectedSlot state != #none && selected.sequence == maxSequence then one "StutterAtSequenceBound" state else noneTransitions ];
+
+nextFor :: Faults -> State -> List Transition
+  = faults state => l.flatten {
+      bootKnownGood state;
+      bootExhaustedKnownGood state;
+      beginStagePending state;
+      beginUpgradeSnapshot state;
+      writeSnapshotPolicy faults state;
+      sealSnapshot faults state;
+      startPendingMetadata state;
+      preparePendingAttempt faults state;
+      beginHealthPromotion state;
+      beginRollback state;
+      prepareWriteStep state;
+      invalidateWriteTarget state;
+      writePayload state;
+      flushPayload state;
+      commitWrite state;
+      rebootAfterPendingCommit state;
+      transferPending state;
+      beginGc faults state;
+      deleteGcCandidate state;
+      finishGc state;
+      cutBeforePendingAction state;
+      cutSlotWriteAction state;
+      cutAfterPendingAction state;
+      cutAfterAttemptAction state;
+      cutPromotionAction state;
+      cutRollbackAction state;
+      cutSnapshotAction state;
+      cutGcAction state;
+      stutterAtSequenceBound state;
+    };
+
+typeOk :: State -> Bool
+  = state => recordType state.slots.a && recordType state.slots.b && recordType state.writeValue
+      && subset state.durableGenerations generations && unique state.durableGenerations
+      && subset state.durableGraphRoots graphRoots && unique state.durableGraphRoots
+      && subset state.durableStateObjects stateObjectUniverse && unique state.durableStateObjects
+      && l.length state.graphBindings == l.length graphRoots && l.all (\root. l.length (l.filter (bindingMatchesRoot root) state.graphBindings) == 1) graphRoots && l.all bindingObjectsValid state.graphBindings
+      && subset state.rollbackRoots graphRoots && unique state.rollbackRoots
+      && subset state.persistentStateRoots stateObjectUniverse && unique state.persistentStateRoots
+      && state.attemptsBeforeTransfer >= 0 && state.attemptsBeforeTransfer <= maxAttempts
+      && state.snapshotProgress >= 0 && state.snapshotProgress <= l.length policyOrder;
+validRecordsConsistent :: State -> Bool
+  = state => l.all (\slot. [ record := slotRecord slot state.slots; not record.valid || recordConsistent record ]) slotsOrder;
+retainedGraphsConsistent :: State -> Bool
+  = state => l.all (\root. graphComplete state root) (checkedGraphRoots state);
+selectableBootRootExists :: State -> Bool
+  = state => selectedSlot state != #none && bootableRecord state (selectedState state);
+protectedRootsPresent :: State -> Bool
+  = state => subset (retainedGenerations state) state.durableGenerations && subset (retainedGraphRoots state) state.durableGraphRoots && subset (retainedStateObjects state) state.durableStateObjects;
+persistentRootsPresent :: State -> Bool
+  = state => subset state.persistentStateRoots state.durableStateObjects;
+pendingAttemptConsumedBeforeTransfer :: State -> Bool
+  = state => not state.runningPending || [ selected := selectedState state; selectedSlot state != #none && selected.pending == state.running && selected.pendingRoot == state.runningRoot && selected.remainingAttempts == state.attemptsBeforeTransfer - 1 ];
+confirmationOnlyForRunningPending :: State -> Bool
+  = state => state.writeKind != #promotion || (state.runningPending && state.running == state.writeValue.knownGood && state.runningRoot == state.writeValue.knownGoodRoot);
+writePreservesOtherSlot :: State -> Bool
+  = state => state.writeStage == #idle || match state.writeTarget { | #none => false; | #some (target) => [ other := otherSlot target; (slotRecord other state.slots).valid && bootableRecord state (slotRecord other state.slots) ]; };
+runningGraphConsistent :: State -> Bool
+  = state => match state.running { | #none => true; | #some (running) => match state.runningRoot { | #none => false; | #some (root) => root.generation == running && graphComplete state root; }; };
+snapshotEpochConsistent :: State -> Bool
+  = state => state.phase != #snapshot || match state.stagedRoot { | #none => false; | #some (staged) => match state.snapshotBaseRoot { | #none => false; | #some (base) => state.stagedCandidate == #some (staged.generation) && staged.epoch == base.epoch + 1; }; };
+
+safety :: List Safety = {
+  { name = "TypeOK"; holds = typeOk; };
+  { name = "ValidRecordsConsistent"; holds = validRecordsConsistent; };
+  { name = "RetainedGraphsConsistent"; holds = retainedGraphsConsistent; };
+  { name = "SelectableBootRootExists"; holds = selectableBootRootExists; };
+  { name = "ProtectedRootsPresent"; holds = protectedRootsPresent; };
+  { name = "PersistentRootsPresent"; holds = persistentRootsPresent; };
+  { name = "PendingAttemptConsumedBeforeTransfer"; holds = pendingAttemptConsumedBeforeTransfer; };
+  { name = "ConfirmationOnlyForRunningPending"; holds = confirmationOnlyForRunningPending; };
+  { name = "WritePreservesOtherSlot"; holds = writePreservesOtherSlot; };
+  { name = "RunningGraphConsistent"; holds = runningGraphConsistent; };
+  { name = "SnapshotEpochConsistent"; holds = snapshotEpochConsistent; };
+};
+cutReached :: Cut -> State -> Bool
+  = cut state => state.lastCut == cut;
+reachability :: List Reachability = {
+  { name = "before-pending-metadata"; reached = cutReached #beforePendingMetadata; };
+  { name = "slot-write-A"; reached = cutReached #slotWriteA; };
+  { name = "slot-write-B"; reached = cutReached #slotWriteB; };
+  { name = "after-pending-commit"; reached = cutReached #afterPendingCommit; };
+  { name = "after-attempt-commit"; reached = cutReached #afterAttemptCommit; };
+  { name = "health-promotion"; reached = cutReached #healthPromotion; };
+  { name = "rollback-update"; reached = cutReached #rollbackUpdate; };
+  { name = "state-snapshot"; reached = cutReached #stateSnapshot; };
+  { name = "garbage-collection"; reached = cutReached #garbageCollection; };
+};
+
+bootStateModel :: Faults -> Model
+  = faults => { initial = { initialState; }; next = nextFor faults; safety = safety; reachability = reachability; };
+noFaults :: Faults = { skipAttempt = false; omitPersistentRoot = false; mixedEpochSnapshot = false; };
+skipAttemptFaults :: Faults = { skipAttempt = true; omitPersistentRoot = false; mixedEpochSnapshot = false; };
+omittedRootFaults :: Faults = { skipAttempt = false; omitPersistentRoot = true; mixedEpochSnapshot = false; };
+mixedEpochFaults :: Faults = { skipAttempt = false; omitPersistentRoot = false; mixedEpochSnapshot = true; };
+
+observedReached :: Observation -> State -> Bool
+  = obs state => cond {
+      obs.action == "consume-attempt" => obs.commit == "after-attempt-commit" && state.phase == #attemptCommitted && state.writeStage == #idle && state.attemptsBeforeTransfer == obs.attemptsBefore && selectedSlot state != #none && (selectedState state).pending != #none && (selectedState state).remainingAttempts == obs.attemptsAfter;
+      obs.action == "promotion" => obs.commit == "health-promotion" && state.phase == #running && not state.runningPending && selectedSlot state != #none && (selectedState state).pending == #none && (selectedState state).remainingAttempts == obs.attemptsAfter && nonEmpty state.rollbackRoots;
+      obs.action == "boot-known-good" => obs.commit == "none" && state.phase == #running && not state.runningPending && selectedSlot state != #none && (selectedState state).pending == #none;
+      obs.action == "boot-exhausted-known-good" => obs.commit == "none" && state.phase == #running && not state.runningPending && selectedSlot state != #none && (selectedState state).pending != #none && (selectedState state).remainingAttempts == obs.attemptsAfter;
+      _ => false;
+    };
+
+scenarios :: List Scenario = {
+  { name = "main"; model = bootStateModel noFaults; expect = #safe; };
+  { name = "skip-attempt"; model = bootStateModel skipAttemptFaults; expect = #violates { property = "PendingAttemptConsumedBeforeTransfer"; }; };
+  { name = "omitted-root"; model = bootStateModel omittedRootFaults; expect = #violates { property = "ProtectedRootsPresent"; }; };
+  { name = "mixed-epoch"; model = bootStateModel mixedEpochFaults; expect = #violates { property = "RetainedGraphsConsistent"; }; };
+};
+
+{ scenarios = scenarios; bootStateModel = bootStateModel; observedReached = observedReached; noFaults = noFaults; }

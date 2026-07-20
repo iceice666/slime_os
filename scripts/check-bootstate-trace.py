@@ -8,11 +8,11 @@ validates each finite trace against the checked M5.6a/M5.6b state machines in
 
 Two conformance layers, neither a re-transcription of the model:
 
-  * Abstract legality is decided by TLC over the real `BootState.tla` actions
-    through the `TraceConformance` oracle. A record's durable post-state is
-    accepted only when it is reachable in the model; a record that transfers
-    control before the attempt decrement is durable has no reachable state and
-    is rejected.
+  * Abstract legality is decided by `zutai model-check` over the real typed
+    `bootstate.zt` transition system. A record's durable post-state is accepted
+    only when it is reachable in the model; a record that transfers control
+    before the attempt decrement is durable has no reachable state and is
+    rejected.
   * Concrete root binding maps the abstract roots the model does not carry onto
     the on-disk BootState identities. A promotion or collection against the
     wrong root is rejected here.
@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import importlib.util
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -42,13 +41,13 @@ from boot_contracts import (
 
 ROOT = Path(__file__).resolve().parent.parent
 MODEL_DIR = ROOT / "contracts" / "bootstate" / "model"
-ORACLE_MODULE = "TraceConformance"
 TRACE_PREFIX = "[bootstate-trace]"
 TRACE_VERSION = BOOTSTATE_TRACE_VERSION
 MAX_LINE = BOOTSTATE_TRACE_MAX_LINE
 # One durable transition per boot, plus generous headroom, keeps the trace a
 # bounded artifact rather than a new unbounded boot dependency.
 MAX_TRACE_LINES_PER_BOOT = 4
+ORACLE_TIMEOUT_SECONDS = 300
 
 CHECK_GENERATION_SPEC = importlib.util.spec_from_file_location(
     "check_generation", ROOT / "scripts" / "check-generation.py"
@@ -171,13 +170,9 @@ def parse_trace_line(line: str) -> dict:
 
 
 class Oracle:
-    """Runs TLC over the real BootState model to decide abstract legality."""
+    """Runs `zutai model-check` over bootstate.zt for abstract legality."""
 
     def __init__(self) -> None:
-        tlc = shutil.which("tlc")
-        if tlc is None:
-            raise SystemExit("TLA+ tools not found; run inside `nix develop`")
-        self.tlc = tlc
         self._cache: dict[tuple[str, str, int, int], bool] = {}
 
     def reachable(
@@ -186,49 +181,77 @@ class Oracle:
         key = (action, commit, attempts_before, attempts_after)
         if key in self._cache:
             return self._cache[key]
-        config = (
-            f'CONSTANT ObsAction = "{action}"\n'
-            f'CONSTANT ObsCommit = "{commit}"\n'
-            f"CONSTANT ObsAttemptsBefore = {attempts_before}\n"
-            f"CONSTANT ObsAttemptsAfter = {attempts_after}\n"
-            "SPECIFICATION Spec\n"
-            "CONSTANTS\n"
-            "    Generations = {gen_G1, gen_G2}\n"
-            "    NoGeneration = gen_None\n"
-            "    NoGraphRoot = graph_None\n"
-            "    MaxAttempts = 2\n"
-            "    MaxSequence = 5\n"
-            "    MaxEpoch = 1\n"
-            '    RequiredCut = "none"\n'
-            "CHECK_DEADLOCK FALSE\n"
-            "INVARIANT NoObservedReach\n"
-        )
-        with tempfile.TemporaryDirectory(prefix="slime-trace-tlc-") as temporary:
-            config_path = Path(temporary) / "oracle.cfg"
-            config_path.write_text(config)
-            process = subprocess.run(
-                [
-                    self.tlc,
-                    "-cleanup",
-                    "-workers",
-                    "1",
-                    "-metadir",
-                    str(Path(temporary) / "meta"),
-                    "-config",
-                    str(config_path),
-                    f"{ORACLE_MODULE}.tla",
-                ],
-                cwd=MODEL_DIR,
-                check=False,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
+
+        with tempfile.TemporaryDirectory(
+            prefix=".trace-query-", dir=MODEL_DIR
+        ) as temporary:
+            query_dir = Path(temporary)
+            (query_dir / "bootstate.zt").write_bytes(
+                (MODEL_DIR / "bootstate.zt").read_bytes()
             )
+            (query_dir / "observation.zti").write_text(
+                "{ "
+                f'action = "{action}"; '
+                f'commit = "{commit}"; '
+                f"attemptsBefore = {attempts_before}; "
+                f"attemptsAfter = {attempts_after}; "
+                "}\n"
+            )
+            (query_dir / "query.zt").write_text(
+                'm ::= import "bootstate.zt";\n'
+                'obs ::= import "observation.zti";\n'
+                "base ::= m.bootStateModel m.noFaults;\n"
+                "model ::= base with {\n"
+                "  safety = {;};\n"
+                '  reachability = { { name = "observed"; reached = m.observedReached obs; }; };\n'
+                "};\n"
+                '{ scenarios = { { name = "trace"; model = model; expect = #safe; }; }; }\n'
+            )
+            environment = os.environ.copy()
+            environment["ZUTAI_STDLIB_ROOT"] = str(ROOT / "deps" / "zutai" / "stdlib")
+            try:
+                process = subprocess.run(
+                    [
+                        "cargo",
+                        "run",
+                        "--release",
+                        "--manifest-path",
+                        "deps/zutai/Cargo.toml",
+                        "-q",
+                        "-p",
+                        "zutai-cli",
+                        "--",
+                        "model-check",
+                        str(query_dir / "query.zt"),
+                    ],
+                    cwd=ROOT,
+                    env=environment,
+                    check=False,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    timeout=ORACLE_TIMEOUT_SECONDS,
+                )
+            except subprocess.TimeoutExpired as error:
+                if error.stdout:
+                    output = error.stdout
+                    if isinstance(output, bytes):
+                        output = output.decode(errors="replace")
+                    sys.stdout.write(output)
+                raise SystemExit(
+                    "abstract oracle timed out after "
+                    f"{ORACLE_TIMEOUT_SECONDS}s for {key!r}"
+                ) from error
+
         combined = process.stdout
-        # The witness invariant is violated exactly when the observed
-        # post-state is reachable in the model.
-        reachable = "NoObservedReach is violated" in combined
-        if not reachable and "Error:" in combined and "Invariant" not in combined:
+        if process.returncode == 0:
+            reachable = True
+        elif (
+            process.returncode == 1
+            and 'reachability "observed" never reached' in combined
+        ):
+            reachable = False
+        else:
             sys.stdout.write(combined)
             raise SystemExit("oracle run failed unexpectedly")
         self._cache[key] = reachable

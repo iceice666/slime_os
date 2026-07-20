@@ -320,11 +320,11 @@ Follow-ups enabled by this milestone (not exit requirements): an authority diff 
 
 ### M5.6a: Checked BootState transition model
 
-**Status:** Complete. `contracts/bootstate/model/` is exhaustively checked by `just bootstate_model_check`: `SelectableBootRootExists` preserves a bootable root, `PendingAttemptConsumedBeforeTransfer` enforces durable decrement-before-transfer, all nine concrete cut witnesses pass (before pending metadata, slot write A, slot write B, after pending commit, after attempt commit, health promotion, rollback update, state snapshot, and garbage collection), and the skip-attempt mutation is rejected.
+**Status:** Complete. `contracts/bootstate/model/bootstate.zt` is exhaustively checked by `zutai model-check` through `just bootstate_model_check`: `SelectableBootRootExists` preserves a bootable root, `PendingAttemptConsumedBeforeTransfer` enforces durable decrement-before-transfer, all nine concrete cut witnesses pass (before pending metadata, slot write A, slot write B, after pending commit, after attempt commit, health promotion, rollback update, state snapshot, and garbage collection), and the skip-attempt mutation is rejected.
 
 Deliverables:
 
-- encode the six M5.6 boot-state transition rules and the eight-point power-cut matrix as a TLA+ or Alloy specification under `contracts/`;
+- encode the six M5.6 boot-state transition rules and the eight-point power-cut matrix as an ordinary pure, typed `.zt` model under `contracts/`;
 - model both fixed-size `BootState` slots, the older-slot-first update rule, and interruption at every commit boundary;
 - check that no modeled interleaving leaves zero bootable roots, and that a pending boot attempt is always persistently consumed before control transfer;
 - run the model check from a repository target (planned: `just bootstate_model_check`) so the spec is a maintained contract artifact rather than a one-off proof.
@@ -338,7 +338,7 @@ Exit condition: a checked model of the M5.6 transition rules lives in `contracts
 
 ### M5.6b: Checked generation, state, and GC transaction model
 
-**Status:** Complete. `contracts/bootstate/model/` now pairs generations with complete graph-level state snapshot epochs, encodes all five state policies, protects known-good/pending/running/rollback/staged/persistent GC roots, explores interruption and repeated recovery transitions, and rejects omitted-root and mixed-epoch mutations through `just bootstate_model_check`.
+**Status:** Complete. The typed `.zt` model now pairs generations with complete graph-level state snapshot epochs, encodes all five state policies, protects known-good/pending/running/rollback/staged/persistent GC roots, explores interruption and repeated recovery transitions, and rejects omitted-root and mixed-epoch mutations through `just bootstate_model_check`.
 
 Deliverables:
 
@@ -407,7 +407,7 @@ Follow-ups enabled by this milestone (not exit requirements): generation bisect 
 
 ### M5.6c: BootState model-implementation conformance
 
-**Status:** Complete. `just bootstate_trace_check` boots the failing-pending rollback scenario, captures bounded version-1 transition records at stage-0's durable attempt commits and exhausted-known-good selection, and validates every finite trace against the checked M5.6a/M5.6b state machines through the `TraceConformance.tla` model oracle. It rejects non-decremented transfers, mismatched action/commit or sequence boundaries, wrong-root promotions, and collection of observable retained roots; the fixed 640-byte line bound is schema-pinned and worst-case tested.
+**Status:** Complete. `just bootstate_trace_check` boots the failing-pending rollback scenario, captures bounded version-1 transition records at stage-0's durable attempt commits and exhausted-known-good selection, and validates every finite trace against the checked M5.6a/M5.6b `.zt` state machine through `zutai model-check`. It rejects non-decremented transfers, mismatched action/commit or sequence boundaries, wrong-root promotions, and collection of observable retained roots; the fixed 640-byte line bound is schema-pinned and worst-case tested.
 
 Deliverables:
 
