@@ -28,7 +28,25 @@ directions" section, moved here so README carries a single pointer.
 
 ## Probing
 
-None. Entry 4 was promoted to M5.6b, so the single probing slot is open.
+### 24. Checked model of the capability rights algebra
+
+M5.6a/M5.6b established the checked-contract methodology for BootState,
+state, and GC semantics, but the authority invariants are enforced only
+by Rust code reviewed against the matrix grammar in
+`docs/capability-matrix.md`. Model the rights algebra — derive narrows
+only, no transfer path widens rights, object-kind validity, and the
+format-v2 rights-string mapping — and check that no operation sequence
+lets a component exceed the closure of its initial grants.
+
+- Depends on: nothing; host-side contracts work consuming only the
+  capability matrix.
+- Exit-condition sketch: a checked model in `contracts/` validated by a
+  repository target passes the current matrix rules, and fails under a
+  narrow-only-derive-removal mutation and a transfer-widening mutation.
+- Status: probing. The probe output is the model plus a promotion
+  proposal naming the milestone that keeps model and implementation in
+  lockstep; if the rights grammar proves to change faster than a model
+  can track, record that finding and return to `parked`.
 
 ## Promoted
 
@@ -322,6 +340,118 @@ response.
 - Status: parked. Host-side only; promote after the release pipeline has a
   stable builder identity and attestation storage location.
 
+### 25. Resource accounts as capabilities
+
+The capability model governs what a component may do but not how much it
+may use: `MAX_TASKS`, `MAX_CAPS`, and `CHANNEL_QUEUE` are global
+constants, and the capability-matrix debt register already records
+unreaped task-table entries. The matrix horizon names per-spawner
+accounting and SharedBuffer creation quota without a unifying story.
+Introduce a `ResourceAccount` kernel object (memory pages, task slots,
+endpoint slots, queue depth) that spawn charges to the spawner's
+account; `derive` splits an account for a child, exhaustion is a
+structured error, and child exit returns quota to the parent.
+Whole-machine resource allocation becomes generation manifest data:
+declarative, auditable, and rollbackable like every other grant.
+
+- Depends on: M6 spawn prerequisites (endpoint minting, non-consuming
+  derive-copy, supervision handles); subsumes the matrix horizon rows
+  for per-spawner accounting and SharedBuffer creation quota.
+- Exit-condition sketch: a service holding a two-task account cannot
+  spawn a third; a child's quota returns to the parent account on exit;
+  the generation manifest declares the initial account distribution and
+  the builder bounds it.
+- Status: parked. Genode's resource trading is the reference design;
+  the delta here is that the account distribution is generation data
+  with rollback semantics.
+
+### 26. Hermetic generation testing
+
+Entries 3 (nondeterminism as capabilities) and 11 (flight recorder and
+replay) are independently parked, but their composition is the payoff: a
+test generation binds clock and entropy to virtual fixtures so the full
+boot-and-health-check run is byte-deterministic in CI. Flaky rollback
+and health scenarios become impossible, completing QEMU's tier-0 role
+as the deterministic verification platform.
+
+- Depends on: entry 3 (capability-matrix amendment for clock/entropy
+  objects); the M5.6 health-confirmation path.
+- Exit-condition sketch: two CI runs of the same test generation produce
+  byte-identical console and health-transition traces; a fixture clock
+  advance deterministically triggers a declared health timeout.
+- Status: parked.
+
+### 27. Policy-carrying generations
+
+Stage-0 verifies hashes and format versions; entries 1 and 9 analyze
+authority only at build time in CI. A generation can additionally carry
+a machine-checkable invariant section — for example, "no component
+outside the allowlist reaches `BLOCK_WRITE`" — computed by the builder
+from the manifest and re-verified by stage-0 or the health service
+before activation. The CI gate becomes a boot gate: hand-editing a
+manifest to widen grants without recomputing the invariant section
+makes the generation unbootable.
+
+- Depends on: M5.5 machine-readable grants (complete); the M5.6
+  activation path.
+- Exit-condition sketch: a generation whose grants violate its carried
+  invariant is rejected before control transfer; a valid generation
+  with a tampered invariant section fails verification.
+- Status: parked.
+
+### 28. Accelerator compute objects
+
+The agentic direction makes a language model a userspace service, but
+the Framework target's NPU and GPU have no corresponding authority
+story: entry 17 accounts energy, not compute. Introduce an
+`Accelerator` object kind with queue-submission rights and
+generation-declared compute budgets, so an agent component's inference
+authority and budget are manifest data like every other grant.
+
+- Depends on: M7 hardware bring-up and IOMMU-enforced DMA; a
+  capability-matrix row for the new object kind.
+- Exit-condition sketch: a component without the accelerator capability
+  cannot submit work; a component past its declared budget is rejected
+  or throttled with a structured error; the manifest lists every
+  component holding accelerator authority.
+- Status: parked.
+
+### 29. Schema-declared state merge
+
+Entry 14 moves objects between machines and entry 15 migrates state
+schemas, but neither answers what happens when the same state binding
+evolves independently on two machines. Attach a pure Zutai merge
+function to a state schema; sync performs a deterministic three-way
+merge whose result is byte-identical on both machines, and a
+non-mergeable conflict is a structured error that retains both roots.
+
+- Depends on: entries 14 and 15; Zutai evaluation in the sync path
+  (host-side acceptable initially).
+- Exit-condition sketch: a fixture state diverged on two machines merges
+  to byte-identical bytes on both; a schema without a merge function
+  rejects divergent sync rather than silently picking a winner.
+- Status: parked.
+
+### 30. Deterministic on-device builds
+
+M6 scope includes native components that inspect, build or stage
+generations, but build semantics are open. Define a build step as a
+manifest-declared deterministic component (consuming entry 3) whose
+inputs and outputs are content-addressed objects; the object store
+deduplicates build products naturally, and rebuilding the running
+system on-device reproduces the host build byte-identically. The
+"builds are pure functions" property becomes enforceable inside the OS,
+and stage-0 verification applies to locally built generations
+unchanged.
+
+- Depends on: entry 3 (deterministic components); the M6 builder; M5.8
+  so locally built generations still require release authorization.
+- Exit-condition sketch: an on-device build and the host build of the
+  same normalized source produce byte-identical generation objects; a
+  build component holding no clock or entropy grants cannot embed a
+  timestamp.
+- Status: parked.
+
 ## Rejected
 
 None yet.
@@ -331,14 +461,18 @@ None yet.
 | Wave | Directions | Why then |
 | --- | --- | --- |
 | 0 — before M5.6 implementation | 6 (M5.6a), 4 (M5.6b) | Both are promoted checked contracts; transition and state/GC semantics must freeze before implementation. |
-| 1 — with and after M5.6 | 20 (M5.6c), 1, 9, 12, 13 | Trace conformance closes the model/implementation gap; authority analysis, bisect, and shadow boot consume machine-readable manifests or rollback machinery. |
-| 2 — late M5 to M6 | 21 (M5.8), 22 (M5.9), 23, 7, 11 (recording), 8, 3, 14, 15, 16, 11 (replay) | Release trust and recovery must precede cross-machine activation; spawn prerequisites then unlock supervision, migration, powerbox, and general replay. |
-| 3 — M7 and beyond | 5, 2, 10, 17, 18, 19 | Physical TPM, revocation, distributed authority, and daily-driver hardware respectively. |
+| 1 — with and after M5.6 | 20 (M5.6c), 1, 9, 12, 13, 24 | Trace conformance closes the model/implementation gap; authority analysis, bisect, and shadow boot consume machine-readable manifests or rollback machinery. Entry 24 is dependency-free contracts work in the M5.6a methodology. |
+| 2 — late M5 to M6 | 21 (M5.8), 22 (M5.9), 23, 7, 11 (recording), 8, 3, 14, 15, 16, 11 (replay), 25, 26, 27, 29, 30 | Release trust and recovery must precede cross-machine activation; spawn prerequisites then unlock supervision, resource accounts, migration, powerbox, and general replay. Entries 26 and 30 consume entry 3, entry 27 consumes the M5.6 activation path, and entry 29 follows 14 and 15. |
+| 3 — M7 and beyond | 5, 2, 10, 17, 18, 19, 28 | Physical TPM, revocation, distributed authority, accelerator control, and daily-driver hardware respectively. |
 
 ## Research references
 
-These sources informed entries 4 and 20–23; the resulting contracts remain
+These sources informed entries 4 and 20–25; the resulting contracts remain
 Slime-specific rather than adopting any external system wholesale.
+
+- [Genode Foundations](https://genode.org/documentation/genode-foundations/)
+  informs entry 25's account-derived resource delegation; the Slime delta is
+  carrying the account distribution as rollbackable generation data.
 
 - [TLA+ implementation trace validation](https://arxiv.org/html/2404.16075v2)
   motivates M5.6c's finite-trace conformance check and documents its limits.
