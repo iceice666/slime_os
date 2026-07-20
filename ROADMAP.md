@@ -15,6 +15,11 @@ Completion requires observable behavior, not only compiled code or framebuffer o
 | 5. Storage and generations | In progress — M5.1 through M5.6 complete | A failed pending generation automatically leaves or restores a bootable known-good generation. |
 | 6. Native interactive environment | Minimal stub only | Native components can inspect, build or stage, select, and roll back generations. |
 | 7. Daily-driver hardware | Not yet implemented | The Framework target supports the hardware and lifecycle needed for daily use. |
+| 8. Foreign-workload authority foundations | Not yet implemented | Revocation, scheduling class, and secrets exist as non-ambient, auditable, rollbackable authority so foreign and agent workloads can be confined. |
+| 9. Compatibility route | Not yet implemented | A Linux binary declared as a container runs under the personality, confined to its declared grants and denied everything else with a normal errno. |
+| 10. Accelerator compute authority | Not yet implemented | Inference/compute submission is a rights-gated, budgeted, IOMMU-contained capability visible in the manifest. |
+| 11. Physical trust and attestation | Not yet implemented | Reflashing an older generation fails stage-0 verification against TPM-held counters; the running generation identity is remotely attestable. |
+| 12. Distributed capabilities | Not yet implemented | A grant proxied to a service on another machine stays unforgeable, non-ambient, and revocable across the wire. |
 
 ## Architectural constraints
 
@@ -595,3 +600,118 @@ GPU acceleration, Wi-Fi, and audio do not block the first native userspace miles
 Daily-driver quality goals for this milestone also include per-component energy accounting and per-destination network authority declared in the generation. MPK/PKU lightweight compartments are an optional optimization and do not block the exit condition.
 
 Exit condition: the Framework target supports the hardware, DMA containment, power lifecycle, input, networking, audio, and display behavior required for daily use without bypassing the capability or generation model.
+
+## Milestone 8: Foreign-workload authority foundations
+
+**Status:** Not yet implemented.
+
+Milestones 6 and 7 make the system self-hosting and daily-usable, but the authority model still cannot express three properties a machine running agents and foreign code needs: withdrawing a grant without killing its holder, bounding *when* a component runs, and handing over a credential that cannot be copied or leaked. This milestone adds those three as non-ambient, auditable, rollbackable authority before Milestone 9 runs untrusted foreign code against them. It promotes directions register entries 2, 32, and 33; each has a paper-legal design half today, and all three share the M6 spawn-service prerequisites.
+
+Scope:
+
+- **Revocation and leases (entry 2):** kernel-maintained capability derivation trees so a holder may revoke exactly its own subtree; use-after-revoke returns a structured error distinct from never-held; generation-declared grant lifetimes reclaimed by the health service. The lease clock model must resolve wall-clock-at-use versus durable health-service transition against rollback semantics, and revocation must preserve the entry-24 rights-algebra closure property (removing edges never creates reachability).
+- **Scheduling class and QoS authority (entry 32):** a manifest-declared scheduling class per component or supervision subtree (at minimum foreground / normal / best-effort). The kernel owns only the ordering mechanism; class assignment is generation policy and dynamic re-classification is a userspace policy decision. The authority-versus-telemetry question is resolved toward authority: a component cannot widen its own class beyond its grant. Composes with the entry-25 resource account (share quantity) as a separate ordering axis, and preserves class across supervision restart.
+- **Secrets as capabilities (entry 33):** a `Secret` object kind with a USE right (present the secret to a designated service) split from a narrower or absent READ, so a component can authenticate with material it can never exfiltrate as bytes. Secret capabilities and secret-bearing IPC are marked non-recordable: the flight recorder (entry 11) redacts to a handle/commitment and replay re-injects from the sealed store. At-rest storage rides M5.6b state bindings; `discardOnRollback` is the default so a rolled-back generation cannot resurrect a rotated credential.
+
+Required checks:
+
+- a proxy revokes a derived subtree; the original holder's further use fails structurally while sibling grants survive;
+- a lease expires and is reclaimed by the health service with rollback-consistent semantics;
+- a component cannot claim a scheduling class it was not granted;
+- a USE-only Secret authenticates to a declared service without the holder reading the secret bytes, and a recorded trace contains no secret material while remaining replayable;
+- capability-matrix amendments for the `Secret` object, revocation semantics, and scheduling-class authority land in the same change as the mechanism.
+
+Exit condition: revocation, scheduling class, and secrets are expressible as non-ambient, auditable, rollbackable authority; a derived grant can be withdrawn without killing its holder, a foreground component keeps declared ordering under contention, and a scoped credential is usable but neither readable nor recordable.
+
+## Milestone 9: Compatibility route
+
+**Status:** Not yet implemented.
+
+README names Linux/POSIX compatibility as a future userspace personality or isolated guest VM, but no earlier milestone turns that into a plan. This is the largest gap for the stated daily-driver-plus-containers target: everything before it refines the native model, while this milestone adds the ability to run foreign workloads at all — without smuggling in the ambient filesystem, environment, and network authority a Linux process assumes. It promotes directions register entry 31 and consumes M6 spawn/endpoint-minting/filesystem machinery plus M8's confinement primitives; the guest-VM half additionally requires an unscoped virtualization milestone and M7 IOMMU-enforced DMA.
+
+Scope (personality first):
+
+- a Linux personality component that loads a Linux binary and translates its syscalls into Slime IPC against declared service capabilities: `open`/`read`/`write` into object-store or filesystem-service transactions bounded by directory grants; `socket` traffic gated by entry-18 NetworkDestination grants; `clock_gettime`/`getrandom` as entry-3 clock/entropy capabilities;
+- a fixed, audited supported-syscall subset; anything ungranted returns the Linux errno for "not permitted" rather than widening authority;
+- the container image as a content-addressed M5.4 object so image identity and integrity reuse the generation verification path;
+- `fork`/`exec` mapped onto the spawn service such that a child never holds more than its parent;
+- the container plus its grant set as generation data — auditable by entry 9, diffable by entry 1, rollbackable like any component.
+
+Guest VM (later slice, not an M9 exit requirement): a full Linux kernel under AMD-V with virtio devices backed by Slime services, whose only authority is the virtio endpoints it is handed. It presents the same generation-level contract as the personality (foreign workload plus declared grant set) and differs only in fidelity and cost; it is gated on a scoped virtualization milestone and M7 IOMMU enforcement.
+
+Required checks:
+
+- a declared container reads and writes only the files its directory grant covers;
+- it reaches only its declared network destinations and is denied everything else with a normal Linux errno;
+- an ungranted syscall fails with the mapped errno rather than escalating;
+- the container's complete authority is visible in and diffable from the manifest.
+
+Exit condition: a Linux binary declared as a container in the generation runs under the personality, confined to its declared directory, network, and nondeterminism grants, denied everything else with a normal errno, with its complete authority visible in the manifest.
+
+## Milestone 10: Accelerator compute authority
+
+**Status:** Not yet implemented.
+
+The agentic direction makes a language model a userspace service, but the Framework NPU/GPU have no authority story — M7 energy accounting measures power, not compute submission. This milestone introduces compute submission as a first-class capability so an agent's inference authority and budget are manifest data answered statically, not discovered at runtime. It promotes directions register entry 28 and depends on M7 hardware bring-up and IOMMU-enforced DMA; the authority shape reuses the BlockDevice gating template proven by `storage_cap_check`.
+
+Scope:
+
+- an `Accelerator` object kind representing one compute device or queue class, with a SUBMIT right (place work on a queue) split from management rights (queue creation, firmware or mode control);
+- generation-declared compute budgets (tokens, work items, or queue-time per window), riding the entry-25 account pattern or declared as manifest scalars, with exhaustion surfaced as a structured error or throttling;
+- IOMMU-constrained accelerator memory access limited to buffers the submitting component holds, reusing the SharedBuffer handoff path rather than a parallel mechanism;
+- a capability-matrix row for the object and its rights, landing with the driver.
+
+Required checks:
+
+- a component without the accelerator capability cannot submit work;
+- a component past its declared budget is rejected or throttled with a structured error;
+- accelerator DMA cannot reach memory outside the submitting component's held buffers;
+- the manifest lists every component holding accelerator authority (entry-9 queryable).
+
+Exit condition: compute submission is a rights-gated, budgeted, IOMMU-contained capability; unprivileged components cannot submit, over-budget components are rejected or throttled, and every accelerator grant is visible in the manifest.
+
+## Milestone 11: Physical trust and attestation
+
+**Status:** Not yet implemented.
+
+Generations are content-addressed and the Framework has a TPM, but the BootState attempt counter and known-good identity live on disk, so reimaging the disk to an older state also rolls back the rollback protection — a known-bad generation becomes bootable again. This milestone binds the monotonic boot facts to hardware the disk cannot rewrite and exposes remote attestation of the running generation. It promotes directions register entry 5 and consumes M5.6 BootState semantics and M5.9 recovery; it requires a Framework-class TPM driver, which no earlier milestone scopes.
+
+Scope:
+
+- a bounded TPM driver sufficient for monotonic counters and NVRAM-sealed values;
+- seal the attempt counter (or its epoch) and the known-good generation hash so the on-disk BootState must agree with TPM-held values at the stage-0 pre-transfer gate;
+- a checked disk×TPM desync matrix with per-direction policy: disk newer than TPM routes to M5.9 recovery, TPM newer than disk (the resurrection case) fails closed, and a cleared TPM must never brick a healthy disk — preserving M5.6a's `SelectableBootRootExists`;
+- attestation as the read direction: the TPM quotes the bound generation identity so a remote verifier learns what the machine runs (scope limited to boot state, not general measured boot);
+- resolve whether QEMU verification gains a virtual TPM or this path is Framework-only, and how sealed counters interact with M5.9 reconstruction.
+
+Required checks:
+
+- reflashing an older generation image fails stage-0 verification against TPM-held counters;
+- a cleared or unavailable TPM fails open only through the explicit M5.9 recovery path and never bricks a healthy disk;
+- every desync-matrix cell resolves to its declared policy without leaving zero bootable roots;
+- a remote verifier can distinguish two different running generation identities from their attestations.
+
+Exit condition: on the Framework target, reflashing an older generation fails stage-0 verification against TPM-held counters, a cleared TPM cannot brick a healthy disk, and the running generation identity is remotely attestable — all without violating `SelectableBootRootExists`.
+
+## Milestone 12: Distributed capabilities
+
+**Status:** Not yet implemented.
+
+The local authority model is complete: channels are typed (M5.2a), capabilities are unforgeable and non-ambient, and membranes make a proxied endpoint indistinguishable from a local one. This milestone takes the step beyond a single machine — a channel endpoint that proxies to a service elsewhere, with grants serialized as unforgeable wire capabilities (CapTP-style) that map back onto local grants on each side. The component model does not change; a tool call is still a typed IPC message. It promotes directions register entry 10 and depends on cross-machine sync (entry 14, M6-era) and M8 revocation (entry 2), plus M7 networking.
+
+Scope:
+
+- a cryptographic wire form for a capability whose minting, transfer, and presentation map back onto the local grant on each side, with each kernel independently enforcing;
+- wire capabilities derived from the local grant so revoking the local subtree (M8 entry-2 trees) invalidates remote presentations; resolve whether derivation trees extend across machines or terminate at the wire with the sender retaining the backing grant;
+- binding a wire capability to a session/transport identity so a replayed presentation from another context fails;
+- explicit partition semantics: in-flight messages, replayed presentations after reconnect, and "endpoint unreachable" versus "capability revoked" all surface as structured errors in the existing channel vocabulary;
+- reuse of the entry-7 membrane machinery for the proxy endpoint so recording and dry-run semantics extend across machines unchanged.
+
+Required checks:
+
+- a grant proxied to a remote service is usable there and remains unforgeable and non-ambient;
+- revoking the local subtree invalidates the remote presentation;
+- a captured presentation replayed from a different session or transport fails;
+- partition, unreachable, and revoked conditions are distinguishable structured errors requiring no distributed-systems special case in components.
+
+Exit condition: a capability proxied to a service on another machine is usable, unforgeable, and non-ambient across the wire, is revocable from the granting side, and resists replay from a foreign session — with partition and revocation surfaced as ordinary structured channel errors.

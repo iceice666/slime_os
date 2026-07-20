@@ -37,15 +37,15 @@ owns their content from that point on.
 | # | Direction | Status | Route |
 | --- | --- | --- | --- |
 | 1 | [Authority diff as a build-pipeline gate](01-authority-diff-gate.md) | parked | authority |
-| 2 | [Revocable and time-bounded grants](02-revocable-leases.md) | parked | lifecycle |
+| 2 | [Revocable and time-bounded grants](02-revocable-leases.md) | promoted → M8 (design retained) | lifecycle |
 | 3 | [Nondeterminism sources as capabilities](03-nondeterminism-as-capabilities.md) | parked | determinism |
 | 4 | Generation-consistent state snapshots | promoted → M5.6b | — |
-| 5 | [TPM-bound boot state and attestation](05-tpm-bound-boot-state.md) | parked | hardware; updates |
+| 5 | [TPM-bound boot state and attestation](05-tpm-bound-boot-state.md) | promoted → M11 (design retained) | hardware; updates |
 | 6 | Formal model of BootState transitions | promoted → M5.6a | — |
 | 7 | [Schema-driven interposition toolchain](07-schema-interposition.md) | parked | determinism; interposition |
 | 8 | [Declarative supervision and restart policy](08-declarative-supervision.md) | parked | lifecycle |
 | 9 | [Manifest static analysis and grant-graph introspection](09-grant-graph-introspection.md) | parked | authority |
-| 10 | [Distributed capabilities](10-distributed-capabilities.md) | parked | sync |
+| 10 | [Distributed capabilities](10-distributed-capabilities.md) | promoted → M12 (design retained) | sync |
 | 11 | [IPC flight recorder and deterministic replay](11-flight-recorder-replay.md) | parked | determinism |
 | 12 | [Generation bisect](12-generation-bisect.md) | parked | updates |
 | 13 | [Shadow boot](13-shadow-boot.md) | parked | updates |
@@ -63,21 +63,25 @@ owns their content from that point on.
 | 25 | [Resource accounts as capabilities](25-resource-accounts.md) | parked | lifecycle |
 | 26 | [Hermetic generation testing](26-hermetic-testing.md) | parked | determinism |
 | 27 | [Policy-carrying generations](27-policy-carrying-generations.md) | parked | authority |
-| 28 | [Accelerator compute objects](28-accelerator-objects.md) | parked | hardware |
+| 28 | [Accelerator compute objects](28-accelerator-objects.md) | promoted → M10 (design retained) | hardware |
 | 29 | [Schema-declared state merge](29-schema-state-merge.md) | parked | sync |
 | 30 | [Deterministic on-device builds](30-deterministic-on-device-builds.md) | parked | determinism |
+| 31 | [Linux/container compatibility route](31-compat-personality.md) | promoted → M9 (design retained) | compat |
+| 32 | [Scheduling class and QoS authority](32-scheduling-authority.md) | promoted → M8 (design retained) | lifecycle |
+| 33 | [Secrets as capabilities](33-secrets-as-capabilities.md) | promoted → M8 (design retained) | authority |
 
 ## Routes
 
 Routes are a reading aid, not a status axis; entries may name a secondary
 route when they span clusters.
 
-- **authority** (1, 9, 24, 27): static authority analysis. Entry 24 models
+- **authority** (1, 9, 24, 27, 33): static authority analysis. Entry 24 models
   the rights algebra that defines widening; entry 9 builds the grant-graph
   query engine over machine-readable manifests; entry 1 is two graph
   snapshots plus a CI sign-off gate; entry 27 turns a graph predicate into
-  a generation-carried, boot-verified invariant. Later hardware-route
-  entries (18, 28) consume the same engine as audit queries.
+  a generation-carried, boot-verified invariant; entry 33 adds a Secret
+  object whose non-recordability rule is an authority property. Later
+  hardware-route entries (18, 28) consume the same engine as audit queries.
 - **determinism** (3, 7, 11, 26, 30): entry 3's capability-matrix amendment
   for clock/entropy objects is the linchpin; it unlocks general replay
   (11), byte-deterministic CI (26), and on-device builds as pure functions
@@ -87,10 +91,11 @@ route when they span clusters.
   (14) plus schema migration (15) compose into deterministic three-way
   state merge (29); distributed capabilities (10) sit beyond and
   additionally consume revocation (2).
-- **lifecycle** (2, 8, 16, 25): component lifetime semantics — revocation
-  and leases (2), supervision (8), resource accounts (25), and the
-  powerbox pattern (16). Entries 2, 8, and 25 share the M6 spawn-service
-  prerequisites.
+- **lifecycle** (2, 8, 16, 25, 32): component lifetime semantics — revocation
+  and leases (2), supervision (8), resource accounts (25), the powerbox
+  pattern (16), and scheduling-class authority (32). Entries 2, 8, 25, and
+  32 share the M6 spawn-service prerequisites; 32 additionally extends 25's
+  account model to CPU ordering.
 - **updates** (5, 12, 13, 23): machinery around the generation parent
   chain — bisect (12) and shadow boot (13) consume M5.6 rollback;
   build-provenance attestations (23) accompany the M5.8 release pipeline;
@@ -98,6 +103,12 @@ route when they span clusters.
 - **hardware** (17, 18, 19, 28): daily-driver and Framework-target work,
   all M7-bound at the kernel level; each has a capability-matrix amendment
   or design-note half that is legal today.
+- **compat** (31): running non-native workloads — "containers" — under the
+  generation and capability model. Entry 31 defines the personality-first,
+  guest-VM-later route; it consumes M6 spawn machinery and (for the VM
+  half) an unscoped virtualization milestone, and it is the primary
+  consumer of entries 18 (network), 32 (scheduling), and 33 (secrets) for
+  confining foreign code.
 
 ## What is unblocked now
 
@@ -113,10 +124,13 @@ without waiting for any milestone:
 | 12 | automated QEMU boot-and-health-check bisection | M5.6 rollback machinery complete |
 | 7 | generated-membrane prototype over `contracts/block/` | M5.2a contract tooling complete; `storage_fault_check` is the replay fixture |
 | 3 | capability-matrix amendment proposal for clock/entropy objects | explicitly an amendment proposal first |
-| 2, 8, 25, 29, 10 | design notes (paper) | kernel work blocked on M6 prerequisites or later entries |
+| 8, 25, 29 | design notes (paper) | kernel work blocked on M6 prerequisites or later entries |
 | 23 | attestation schema design (paper) | promotion awaits an M5.8 builder identity |
 | 13 | shadow sub-graph manifest design (paper) | execution plausibly needs M6 spawn machinery |
-| 5, 17, 18, 19, 28 | matrix amendments and design notes (paper) | kernel work M7-bound |
+| 17, 18, 19 | matrix amendments and design notes (paper) | kernel work M7-bound |
+| 31 | syscall-to-capability mapping table for a minimal workload (paper) | personality kernel work blocked on M6; guest-VM half needs an unscoped virtualization milestone |
+| 32 | scheduling-class schema and authority-vs-policy design note (paper) | kernel work blocked on M6 and entry 25's account object |
+| 33 | Secret matrix amendment + recorder/revocation interaction (paper) | at-rest sealing interim vs entry 5 TPM binding to resolve; kernel work blocked on M6 |
 
 ## Sequencing
 
@@ -125,7 +139,7 @@ without waiting for any milestone:
 | 0 — before M5.6 implementation (done) | 6 (M5.6a), 4 (M5.6b) | Both promoted checked contracts landed; transition and state/GC semantics froze before implementation. |
 | 1 — with and after M5.6 | 20 (M5.6c), 1, 9, 12, 13, 24 | Trace conformance closes the model/implementation gap; authority analysis, bisect, and shadow boot consume machine-readable manifests or rollback machinery. Entry 24 is dependency-free contracts work in the M5.6a methodology and is the current probe. |
 | 2 — late M5 to M6 | 21 (M5.8), 22 (M5.9), 23, 7, 11 (recording), 8, 3, 14, 15, 16, 11 (replay), 25, 26, 27, 29, 30 | Release trust and recovery must precede cross-machine activation; spawn prerequisites then unlock supervision, resource accounts, migration, powerbox, and general replay. Entries 26 and 30 consume entry 3, entry 27 consumes the M5.6 activation path, and entry 29 follows 14 and 15. |
-| 3 — M7 and beyond | 5, 2, 10, 17, 18, 19, 28 | Physical TPM, revocation, distributed authority, accelerator control, and daily-driver hardware respectively. |
+| 3 — M7 and beyond | 17, 18, 19; then 2 (M8), 32 (M8), 33 (M8), 31 (M9), 28 (M10), 5 (M11), 10 (M12) | Daily-driver hardware quality (energy 17, network 18, MPK 19) lands inside M7 itself. The rest are promoted: M8 supplies the foreign-workload authority foundations (revocation 2, scheduling class 32, secrets 33) that M9's compatibility route (31) confines untrusted code against; M10 adds accelerator authority (28) on M7's IOMMU; M11 binds boot state to the TPM (5); M12 extends capabilities across machines (10) on sync plus M8 revocation. |
 
 ## Research references
 
