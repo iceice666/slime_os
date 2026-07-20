@@ -1,0 +1,2 @@
+[target.x86_64-unknown-uefi]
+rustflags = ["--cfg", "curve25519_dalek_backend=\"serial\""]

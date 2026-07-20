@@ -1,6 +1,6 @@
 -- Slime OS redundant BootState slot format, version 1.
 
-formatVersion :: Int = 1;
+formatVersion :: Int = 2;
 slotBytes :: Int = 512;
 slotCount :: Int = 2;
 requiredFlags :: Int = 0;
@@ -13,6 +13,7 @@ BootStateHeader :: type {
   sequence : Int;
   -- Cross-field rule: no pending identity requires zero attempts; a pending identity permits any u32 value, including zero when exhausted.
   remaining_attempts : Int;
+  accepted_release_sequence : Int;
   reserved : Int;
 };
 

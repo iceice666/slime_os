@@ -350,6 +350,26 @@ impl<'a> Generation<'a> {
             .find_map(|index| self.grant(index).ok().filter(|grant| grant.name == name))
     }
 
+    pub fn authority_manifest_identity(&self) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(b"slime-authority-manifest-v1");
+        for index in 0..self.grant_count {
+            let grant = self.grant(index).expect("validated generation grant");
+            let source = self
+                .component(grant.source)
+                .expect("validated grant source");
+            let target = self
+                .component(grant.target)
+                .expect("validated grant target");
+            update_bounded_string(&mut hasher, grant.name);
+            update_bounded_string(&mut hasher, source.name);
+            update_bounded_string(&mut hasher, target.name);
+            hasher.update(&grant.rights.to_le_bytes());
+            hasher.update(&u32::from(grant.transferable).to_le_bytes());
+        }
+        hasher.finalize()
+    }
+
     pub fn state(&self, index: usize) -> Result<StateBinding<'a>, DecodeError> {
         if index >= self.state_count {
             return Err(DecodeError::BadIndex);
@@ -516,6 +536,11 @@ impl<'a> Generation<'a> {
                 .is_ok_and(|component| component.name == name)
         })
     }
+}
+
+fn update_bounded_string(hasher: &mut Sha256, value: &str) {
+    hasher.update(&(value.len() as u16).to_le_bytes());
+    hasher.update(value.as_bytes());
 }
 
 pub fn generation_identity(bytes: &[u8]) -> [u8; 32] {

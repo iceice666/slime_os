@@ -37,6 +37,8 @@ pub struct BootStateContext {
     pub remaining_attempts: u32,
     pub slot: u8,
     pub running_pending: bool,
+    pub accepted_release_sequence: u64,
+    pub running_release_sequence: u64,
     pub generation_root: [u8; 32],
     pub state_root: [u8; 32],
 }
@@ -84,16 +86,12 @@ pub unsafe fn init_from_handoff(handoff: *const KernelHandoffV1) {
         .checked_add(handoff.memory_map_ptr as u64)
         .expect("handoff memory map address overflow")
         as *const HandoffMemoryEntry;
-    let source = unsafe { slice::from_raw_parts(memory_map_ptr, handoff.memory_map_len as usize) };
-    let target = unsafe { &mut TEST_MEMORY_MAP[..source.len()] };
-    for (dst, src) in target.iter_mut().zip(source) {
-        *dst = MemoryEntry {
-            base: src.base,
-            length: src.length,
-            kind: src.kind,
-        };
-    }
-    let memory_map = unsafe { &TEST_MEMORY_MAP[..source.len()] };
+    let memory_map = unsafe {
+        slice::from_raw_parts(
+            memory_map_ptr.cast::<MemoryEntry>(),
+            handoff.memory_map_len as usize,
+        )
+    };
     let mut framebuffer = framebuffer_from_handoff(handoff.framebuffer);
     framebuffer.address = handoff
         .direct_map_offset
@@ -106,7 +104,7 @@ pub unsafe fn init_from_handoff(handoff: *const KernelHandoffV1) {
     let generation =
         unsafe { slice::from_raw_parts(generation_ptr, handoff.generation_len as usize) };
     let pending = (handoff.pending_identity != [0; 32]).then_some(handoff.pending_identity);
-    CONTEXT.call_once(|| BootContext {
+    let context = BootContext {
         direct_map_offset: handoff.direct_map_offset,
         memory_map,
         framebuffer,
@@ -120,10 +118,13 @@ pub unsafe fn init_from_handoff(handoff: *const KernelHandoffV1) {
             remaining_attempts: handoff.remaining_attempts,
             slot: handoff.bootstate_slot,
             running_pending: handoff.running_pending != 0,
+            accepted_release_sequence: handoff.accepted_release_sequence,
+            running_release_sequence: handoff.running_release_sequence,
             generation_root: handoff.generation_root,
             state_root: handoff.state_root,
         }),
-    });
+    };
+    CONTEXT.call_once(move || context);
 }
 
 /// Initialize the kernel boot context from Limine responses for test boots.

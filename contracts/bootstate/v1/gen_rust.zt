@@ -1,6 +1,6 @@
 BootStateBinding :: type { formatVersion : Int; slotBytes : Int; slotCount : Int; };
 render :: BootStateBinding -> Text
-  = format => if format.formatVersion == 1 && format.slotBytes == 512 && format.slotCount == 2
-    then "bootstate-v1"
+  = format => if format.formatVersion == 2 && format.slotBytes == 512 && format.slotCount == 2
+    then "bootstate-v2"
     else "INVALID_BOOTSTATE_SCHEMA";
 { render = render; }

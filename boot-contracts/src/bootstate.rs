@@ -1,12 +1,13 @@
 use crate::sha256::{Sha256, digest};
 
 pub const MAGIC: [u8; 8] = *b"SLIMEBS\0";
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 pub const SLOT_BYTES: usize = 512;
 pub const SLOT_COUNT: usize = 2;
 pub const REQUIRED_FLAGS: u64 = 0;
-pub const CHECKSUM_OFFSET: usize = 168;
-pub const CHECKSUM_END: usize = 200;
+pub const RELEASE_SEQUENCE_OFFSET: usize = 168;
+pub const CHECKSUM_OFFSET: usize = 176;
+pub const CHECKSUM_END: usize = 208;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BootState {
@@ -16,6 +17,7 @@ pub struct BootState {
     pub remaining_attempts: u32,
     pub generation_root: [u8; 32],
     pub state_root: [u8; 32],
+    pub accepted_release_sequence: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +39,7 @@ pub enum BootTransitionError {
     NoPending,
     AttemptsExhausted,
     WrongRunningGeneration,
+    StaleRelease,
     SequenceExhausted,
 }
 
@@ -56,6 +59,8 @@ impl BootState {
         out[96..100].copy_from_slice(&self.remaining_attempts.to_le_bytes());
         out[104..136].copy_from_slice(&self.generation_root);
         out[136..168].copy_from_slice(&self.state_root);
+        out[RELEASE_SEQUENCE_OFFSET..CHECKSUM_OFFSET]
+            .copy_from_slice(&self.accepted_release_sequence.to_le_bytes());
         let checksum = slot_checksum(&out);
         out[CHECKSUM_OFFSET..CHECKSUM_END].copy_from_slice(&checksum);
         Ok(out)
@@ -91,6 +96,7 @@ impl BootState {
             remaining_attempts: read_u32(bytes, 96),
             generation_root: bytes[104..136].try_into().unwrap(),
             state_root: bytes[136..168].try_into().unwrap(),
+            accepted_release_sequence: read_u64(bytes, RELEASE_SEQUENCE_OFFSET),
         };
         validate(&state)?;
         Ok(state)
@@ -113,6 +119,7 @@ impl BootState {
             remaining_attempts: attempts,
             generation_root,
             state_root,
+            accepted_release_sequence: self.accepted_release_sequence,
         })
     }
 
@@ -133,15 +140,20 @@ impl BootState {
     pub fn promote_pending(
         self,
         running: [u8; 32],
+        release_sequence: u64,
     ) -> Result<Self, BootTransitionError> {
         if self.pending != Some(running) {
             return Err(BootTransitionError::WrongRunningGeneration);
+        }
+        if release_sequence <= self.accepted_release_sequence {
+            return Err(BootTransitionError::StaleRelease);
         }
         Ok(Self {
             sequence: next_sequence(self.sequence)?,
             known_good: running,
             pending: None,
             remaining_attempts: 0,
+            accepted_release_sequence: release_sequence,
             ..self
         })
     }
@@ -217,6 +229,7 @@ mod tests {
             remaining_attempts,
             generation_root: GENERATION_ROOT,
             state_root: empty_state_root(),
+            accepted_release_sequence: 1,
         }
     }
 
@@ -251,13 +264,18 @@ mod tests {
         let pending = state(Some(G2), 1);
 
         assert_eq!(
-            pending.promote_pending(G1),
+            pending.promote_pending(G1, 2),
             Err(BootTransitionError::WrongRunningGeneration)
         );
-        let promoted = pending.promote_pending(G2).unwrap();
+        let promoted = pending.promote_pending(G2, 2).unwrap();
         assert_eq!(promoted.known_good, G2);
         assert_eq!(promoted.pending, None);
         assert_eq!(promoted.remaining_attempts, 0);
+        assert_eq!(promoted.accepted_release_sequence, 2);
+        assert_eq!(
+            pending.promote_pending(G2, 1),
+            Err(BootTransitionError::StaleRelease)
+        );
     }
 
     #[test]

@@ -5,12 +5,14 @@ use boot_contracts::generation::{Generation, generation_identity};
 use boot_contracts::kernel_image::{ImageError, KernelImage};
 use boot_contracts::sha256::Sha256;
 
+use boot_contracts::release::{INITIAL_TRUST_ROOT, RELEASE_BYTES, Release};
 pub const DIRECTORY_MAGIC: [u8; 8] = *b"SLIMEBT\0";
 pub const DIRECTORY_VERSION: u32 = 1;
 pub const DIRECTORY_HEADER: usize = 96;
-pub const DIRECTORY_ENTRY: usize = 64;
+pub const DIRECTORY_ENTRY: usize = 96;
 pub const DIRECTORY_OFFSET: usize = 4096;
-pub const GENERATIONS_OFFSET: usize = 8192;
+pub const RELEASES_OFFSET: usize = 8192;
+pub const GENERATIONS_OFFSET: usize = 16 * 1024;
 pub const BOOT_STORE_BYTES: usize = 32 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,6 +30,7 @@ pub enum BootError {
     BadGenerationHash,
     BadObjectHash,
     BadKernelImage,
+    BadRelease,
     KernelImage(ImageError),
     TooManyMemoryEntries,
     MissingFramebuffer,
@@ -40,6 +43,7 @@ pub enum BootError {
 pub struct DirectoryEntry<'a> {
     pub identity: [u8; 32],
     pub bytes: &'a [u8],
+    pub release_bytes: &'a [u8],
 }
 
 pub struct BootDirectory<'a> {
@@ -73,22 +77,41 @@ impl<'a> BootDirectory<'a> {
         let identity: [u8; 32] = self.bytes[offset..offset + 32].try_into().unwrap();
         let start = u64_at(self.bytes, offset + 32)? as usize;
         let len = u64_at(self.bytes, offset + 40)? as usize;
-        if self.bytes[offset + 48..offset + DIRECTORY_ENTRY]
+        let release_start = u64_at(self.bytes, offset + 48)? as usize;
+        let release_len = u64_at(self.bytes, offset + 56)? as usize;
+        if self.bytes[offset + 64..offset + DIRECTORY_ENTRY]
             .iter()
             .any(|byte| *byte != 0)
             || start < GENERATIONS_OFFSET
             || start % 4096 != 0
+            || release_start < RELEASES_OFFSET
+            || release_start % RELEASE_BYTES != 0
+            || release_len != RELEASE_BYTES
         {
             return Err(BootError::BadDirectoryBounds);
         }
         let end = start
             .checked_add(len)
             .ok_or(BootError::BadDirectoryBounds)?;
+        let release_end = release_start
+            .checked_add(release_len)
+            .ok_or(BootError::BadDirectoryBounds)?;
+        if release_end > GENERATIONS_OFFSET {
+            return Err(BootError::BadDirectoryBounds);
+        }
         let bytes = self
             .bytes
             .get(start..end)
             .ok_or(BootError::BadDirectoryBounds)?;
-        Ok(DirectoryEntry { identity, bytes })
+        let release_bytes = self
+            .bytes
+            .get(release_start..release_end)
+            .ok_or(BootError::BadDirectoryBounds)?;
+        Ok(DirectoryEntry {
+            identity,
+            bytes,
+            release_bytes,
+        })
     }
 }
 
@@ -210,6 +233,26 @@ pub fn verify_generation<'a>(
         boot_contracts::generation::DecodeError::BadObjectHash => BootError::BadObjectHash,
         _ => BootError::BadGenerationHash,
     })
+}
+
+pub fn verify_release(
+    entry: &DirectoryEntry<'_>,
+    generation: &Generation<'_>,
+    state: &BootState,
+    running_pending: bool,
+) -> Result<u64, BootError> {
+    let release = Release::decode(entry.release_bytes).map_err(|_| BootError::BadRelease)?;
+    release
+        .verify_generation(generation, &INITIAL_TRUST_ROOT)
+        .map_err(|_| BootError::BadRelease)?;
+    if running_pending {
+        if release.sequence <= state.accepted_release_sequence {
+            return Err(BootError::BadRelease);
+        }
+    } else if release.sequence > state.accepted_release_sequence {
+        return Err(BootError::BadRelease);
+    }
+    Ok(release.sequence)
 }
 
 pub fn verify_kernel<'a>(generation: &Generation<'a>) -> Result<KernelImage<'a>, BootError> {

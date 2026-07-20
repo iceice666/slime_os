@@ -54,4 +54,6 @@ pub struct KernelHandoffV1 {
     pub reserved1: [u8; 2],
     pub generation_root: [u8; 32],
     pub state_root: [u8; 32],
+    pub accepted_release_sequence: u64,
+    pub running_release_sequence: u64,
 }

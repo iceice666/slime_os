@@ -149,9 +149,9 @@ impl<'a> KernelImage<'a> {
             }
             let addend = relocation.addend as u64;
             let end = preferred_base
-                .checked_add(previous_end)
+                .checked_add(previous_end.next_multiple_of(4096))
                 .ok_or(ImageError::BadRelocation)?;
-            if addend < preferred_base || addend >= end {
+            if addend < preferred_base || addend > end {
                 return Err(ImageError::BadRelocation);
             }
         }

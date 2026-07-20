@@ -7,5 +7,6 @@ rustflags = [
     "-C", "link-arg=-Tlinker.ld",
     "-C", "link-arg=--gc-sections",
     "-C", "codegen-units=1",
+    "-C", "target-feature=+sse,+sse2",
 ]
 runner = "scripts/run-kernel.sh"

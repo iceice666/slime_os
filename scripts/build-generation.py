@@ -10,6 +10,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from release_trust import RELEASE_BYTES, build_release
 from boot_contracts import (
     BOOTSTATE_MAGIC,
     BOOTSTATE_SLOT_BYTES,
@@ -18,6 +19,7 @@ from boot_contracts import (
     BOOTSTORE_DIRECTORY_OFFSET,
     BOOTSTORE_ENTRY,
     BOOTSTORE_GENERATIONS_OFFSET,
+    BOOTSTORE_RELEASES_OFFSET,
     BOOTSTORE_HEADER,
     BOOTSTORE_MAGIC,
     BOOTSTORE_VERSION,
@@ -244,7 +246,7 @@ def kernel_image(path: Path) -> bytes:
         if not any(start <= relative and relative + 8 <= end for start, end in writable):
             fail("kernel: relocation target outside writable segment")
         absolute_addend = addend if addend >= KERNEL_PREFERRED_BASE else (1 << 64) + addend
-        if not KERNEL_PREFERRED_BASE <= absolute_addend < image_end:
+        if not KERNEL_PREFERRED_BASE <= absolute_addend <= align_up(image_end, PAGE_SIZE):
             fail("kernel: relocation addend outside image")
         signed_addend = absolute_addend - (1 << 64) if absolute_addend >= 1 << 63 else absolute_addend
         relocation_records += KERNEL_RELOCATION.pack(relative, signed_addend)
@@ -409,6 +411,7 @@ def encode_bootstate(
     known_good: bytes,
     generation_root: bytes,
     pending: bytes | None = None,
+    accepted_release_sequence: int = 0,
     remaining_attempts: int = 0,
     state_root: bytes | None = None,
 ) -> bytes:
@@ -421,16 +424,21 @@ def encode_bootstate(
     struct.pack_into("<II", slot, 96, remaining_attempts, 0)
     slot[104:136] = generation_root
     slot[136:168] = state_root or sha256(b"")
-    slot[168:200] = bootstate_checksum(slot)
+    struct.pack_into("<Q", slot, 168, accepted_release_sequence)
+    slot[176:208] = bootstate_checksum(slot)
     return bytes(slot)
 
 
 def build_bootstore(generations: list[bytes]) -> bytes:
+    release_sequences = [index + 1 for index in range(len(generations))]
+    pending_sequence = os.environ.get("SLIME_PENDING_RELEASE_SEQUENCE")
+    if pending_sequence is not None:
+        release_sequences[-1] = int(pending_sequence)
     entries = sorted(
-        ((generation[24:56], generation) for generation in generations),
+        ((generation[24:56], generation, build_release(generation, release_sequences[index])) for index, generation in enumerate(generations)),
         key=lambda item: item[0],
     )
-    generation_root = sha256(b"".join(identity for identity, _ in entries))
+    generation_root = sha256(b"".join(identity for identity, _, _ in entries))
     known_good = generations[-1][24:56]
     pending = None
     remaining_attempts = 0
@@ -439,20 +447,41 @@ def build_bootstore(generations: list[bytes]) -> bytes:
         pending = generations[-1][24:56]
         remaining_attempts = int(os.environ.get("SLIME_PENDING_ATTEMPTS") or "2")
     image = bytearray(BOOTSTORE_CAPACITY)
+    accepted_sequence = int(os.environ.get("SLIME_ACCEPTED_RELEASE_SEQUENCE") or (1 if pending is not None else len(generations)))
     image[:BOOTSTATE_SLOT_BYTES] = encode_bootstate(
-        2, known_good, generation_root, pending, remaining_attempts
+        2,
+        known_good,
+        generation_root,
+        pending=pending,
+        accepted_release_sequence=accepted_sequence,
+        remaining_attempts=remaining_attempts,
     )
     image[BOOTSTATE_SLOT_BYTES : BOOTSTATE_SLOT_BYTES * 2] = encode_bootstate(
-        1, known_good, generation_root, pending, remaining_attempts
+        1,
+        known_good,
+        generation_root,
+        pending=pending,
+        accepted_release_sequence=accepted_sequence,
+        remaining_attempts=remaining_attempts,
     )
     directory = bytearray()
-    cursor = BOOTSTORE_GENERATIONS_OFFSET
-    for identity, generation in entries:
-        cursor = align_up(cursor, PAGE_SIZE)
-        directory += BOOTSTORE_ENTRY.pack(identity, cursor, len(generation))
-        image[cursor : cursor + len(generation)] = generation
-        cursor += len(generation)
-    if cursor > BOOTSTORE_CAPACITY:
+    release_cursor = BOOTSTORE_RELEASES_OFFSET
+    generation_cursor = BOOTSTORE_GENERATIONS_OFFSET
+    for identity, generation, release in entries:
+        release_cursor = align_up(release_cursor, RELEASE_BYTES)
+        generation_cursor = align_up(generation_cursor, PAGE_SIZE)
+        directory += BOOTSTORE_ENTRY.pack(
+            identity,
+            generation_cursor,
+            len(generation),
+            release_cursor,
+            len(release),
+        )
+        image[release_cursor : release_cursor + len(release)] = release
+        image[generation_cursor : generation_cursor + len(generation)] = generation
+        release_cursor += len(release)
+        generation_cursor += len(generation)
+    if release_cursor > BOOTSTORE_GENERATIONS_OFFSET or generation_cursor > BOOTSTORE_CAPACITY:
         fail("boot store capacity exceeded")
     header = BOOTSTORE_HEADER.pack(
         BOOTSTORE_MAGIC,

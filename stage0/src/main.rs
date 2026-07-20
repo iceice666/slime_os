@@ -12,7 +12,7 @@ use boot_contracts::kernel_image::{KernelImage, LOAD_BASE, SEGMENT_EXEC, SEGMENT
 use boot_contracts::trace;
 use slime_stage0::{
     BootError, Slot, decode_directory, select_bootstate, select_generation, verify_generation,
-    verify_kernel,
+    verify_kernel, verify_release,
 };
 use uefi::boot::{self, AllocateType, MemoryType, PAGE_SIZE};
 use uefi::mem::memory_map::MemoryMap;
@@ -29,6 +29,7 @@ const DIRECT_MAP_BASE: u64 = 0xffff_8000_0000_0000;
 
 #[repr(align(4096))]
 struct Page([u64; 512]);
+const KERNEL_STACK_BYTES: usize = 64 * 1024;
 
 #[derive(Clone, Copy)]
 struct LoadedSegment {
@@ -116,11 +117,19 @@ fn boot() -> Result<(), BootError> {
     let directory = decode_directory(&store)?;
     let selected = select_generation(&directory, &selection_state)?;
     let generation = verify_generation(selected.bytes, &selected.identity)?;
+    let release_sequence = verify_release(
+        &selected,
+        &generation,
+        &selection_state,
+        selection_state.pending.is_some() && selection_state.remaining_attempts > 0,
+    )?;
     let kernel = verify_kernel(&generation)?;
 
     let generation_copy = allocate_bytes(selected.bytes)?;
     let framebuffer = framebuffer_info()?;
     let (segments, entry) = load_kernel(&kernel)?;
+    let stack = allocate_zeroed(KERNEL_STACK_BYTES, MemoryType::LOADER_DATA)?;
+    let stack_top = unsafe { stack.add(KERNEL_STACK_BYTES) } as u64;
     let mut tables = PageTables::new()?;
     let framebuffer_end = framebuffer
         .address
@@ -166,6 +175,8 @@ fn boot() -> Result<(), BootError> {
             reserved1: [0; 2],
             generation_root: selected_state.state.generation_root,
             state_root: selected_state.state.state_root,
+            accepted_release_sequence: selected_state.state.accepted_release_sequence,
+            running_release_sequence: release_sequence,
         });
     }
 
@@ -192,7 +203,7 @@ fn boot() -> Result<(), BootError> {
         (*handoff).memory_map_ptr = memory;
         (*handoff).memory_map_len = count as u32;
         tables.activate();
-        jump(entry, handoff)
+        jump(entry, handoff, stack_top)
     }
 }
 
@@ -537,12 +548,15 @@ fn rsdp_address() -> u64 {
     })
 }
 
-unsafe fn jump(entry: u64, handoff: *const KernelHandoffV1) -> ! {
+unsafe fn jump(entry: u64, handoff: *const KernelHandoffV1, stack_top: u64) -> ! {
     unsafe {
         core::arch::asm!(
+            "mov rsp, {stack}",
+            "and rsp, -16",
             "push {entry}",
             "ret",
             entry = in(reg) entry,
+            stack = in(reg) stack_top,
             in("rdi") handoff,
             options(noreturn)
         )

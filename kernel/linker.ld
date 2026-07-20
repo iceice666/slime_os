@@ -52,6 +52,7 @@ SECTIONS
 
     /* Zero-initialized memory last, to avoid padding the file. */
     .bss : {
+        __bss_start = .;
         *(.bss .bss.* .sbss .sbss.*)
         *(COMMON)
     } :data

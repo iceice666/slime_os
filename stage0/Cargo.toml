@@ -5,7 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
-boot-contracts = { path = "../boot-contracts" }
+boot-contracts = { path = "../boot-contracts", features = ["release-crypto"] }
 uefi = { version = "0.39.0", features = ["alloc", "global_allocator", "panic_handler", "qemu"] }
 
 [lib]

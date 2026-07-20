@@ -1,0 +1,12 @@
+ReleaseBinding :: type {
+  formatVersion : Int;
+  releaseBytes : Int;
+  maxSignatures : Int;
+};
+
+render :: ReleaseBinding -> Text
+  = format => if format.formatVersion == 1 && format.releaseBytes == 512 && format.maxSignatures == 3
+    then "release-v1"
+    else "INVALID_RELEASE_SCHEMA";
+
+{ render = render; }

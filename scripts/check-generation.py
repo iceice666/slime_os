@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import struct
 import sys
 from pathlib import Path
 
 from boot_contracts import *
-
+from release_trust import authority_manifest_identity, initial_public_keys, ssh_signed_payload
 
 class CheckError(ValueError):
     pass
@@ -56,7 +57,7 @@ def check_kernel_image(blob: bytes) -> None:
         target, addend = KERNEL_RELOCATION.unpack_from(blob, relocation_start + index * KERNEL_RELOCATION.size)
         require(target % 8 == 0 and any(start <= target and target + 8 <= end for start, end in writable), "BadRelocation")
         absolute_addend = addend if addend >= 0 else (1 << 64) + addend
-        require(KERNEL_PREFERRED_BASE <= absolute_addend < KERNEL_PREFERRED_BASE + image_end, "BadRelocationAddend")
+        require(KERNEL_PREFERRED_BASE <= absolute_addend <= KERNEL_PREFERRED_BASE + ((image_end + 4095) & ~4095), "BadRelocationAddend")
 
 
 def check_generation(data: bytes, expected_identity: bytes | None = None) -> dict:
@@ -146,21 +147,79 @@ def decode_bootstate(slot: bytes) -> dict:
     require(len(slot) == BOOTSTATE_SLOT_BYTES and slot[:8] == BOOTSTATE_MAGIC, "BadBootStateMagic")
     version, header, flags, sequence = __import__("struct").unpack_from("<IIQQ", slot, 8)
     require(version == BOOTSTATE_VERSION and header == BOOTSTATE_SLOT_BYTES and flags == 0, "BadBootStateVersion")
-    require(sequence != 2**64 - 1 and not any(slot[100:104]) and not any(slot[200:]), "BadBootStateReserved")
-    require(slot[168:200] == bootstate_checksum(slot), "BadBootStateChecksum")
+    require(sequence != 2**64 - 1 and not any(slot[100:104]) and not any(slot[208:]), "BadBootStateReserved")
+    require(slot[176:208] == bootstate_checksum(slot), "BadBootStateChecksum")
     known_good = slot[32:64]; pending = slot[64:96]; attempts = int.from_bytes(slot[96:100], "little")
     generation_root = slot[104:136]; state_root = slot[136:168]
+    accepted_release_sequence = int.from_bytes(slot[168:176], "little")
     require(known_good != bytes(32) and generation_root != bytes(32), "BadBootStateRoot")
     require((pending == bytes(32) and attempts == 0) or pending != bytes(32), "BadPendingAttempts")
-    return {"sequence": sequence, "known_good": known_good, "pending": None if pending == bytes(32) else pending, "remaining_attempts": attempts, "generation_root": generation_root, "state_root": state_root}
+    return {"sequence": sequence, "known_good": known_good, "pending": None if pending == bytes(32) else pending, "remaining_attempts": attempts, "generation_root": generation_root, "state_root": state_root, "accepted_release_sequence": accepted_release_sequence}
 
+
+def check_release(data: bytes, generation: bytes, accepted_sequence: int | None = None) -> int:
+    require(len(data) == RELEASE_BYTES and data[:8] == RELEASE_MAGIC, "BadReleaseMagic")
+    version, header, flags = struct.unpack_from("<IIQ", data, 8)
+    require(version == RELEASE_VERSION and header == RELEASE_HEADER_BYTES and flags == 0, "BadReleaseVersion")
+    sequence, target_len, trust_version = struct.unpack_from("<QII", data, 88)
+    signature_count = struct.unpack_from("<I", data, 200)[0]
+    require(1 <= target_len <= 32 and trust_version == 1, "BadReleaseBounds")
+    require(2 <= signature_count <= MAX_RELEASE_SIGNATURES and not any(data[204:RELEASE_HEADER_BYTES]), "BadReleaseSignatures")
+    generation_info = check_generation(generation)
+    require(data[24:56] == generation_info["identity"], "WrongReleaseGeneration")
+    parent = generation_info["parent"] or bytes(32)
+    require(data[56:88] == parent, "WrongReleaseParent")
+    target = data[104 : 104 + target_len].decode("utf-8")
+    require(target == generation_info["target"] and not any(data[104 + target_len : 136]), "WrongReleaseTarget")
+    fields = GENERATION_HEADER.unpack_from(generation)
+    object_offset = fields[17]
+    kernel_index = fields[8]
+    kernel_digest = GENERATION_OBJECT.unpack_from(generation, object_offset + kernel_index * GENERATION_OBJECT.size)[4]
+    require(data[136:168] == kernel_digest, "WrongReleaseKernel")
+    require(data[168:200] == authority_manifest_identity(generation), "WrongReleaseAuthority")
+    if accepted_sequence is not None:
+        require(sequence > accepted_sequence, "StaleRelease")
+    key_by_id = {sha256(key): key for key in initial_public_keys()}
+    previous = bytes(32)
+    signed = ssh_signed_payload(data[:RELEASE_HEADER_BYTES])
+    for index in range(signature_count):
+        offset = RELEASE_HEADER_BYTES + index * RELEASE_SIGNATURE_BYTES
+        key_id = data[offset : offset + 32]
+        signature = data[offset + 32 : offset + RELEASE_SIGNATURE_BYTES]
+        require(key_id > previous and key_id in key_by_id, "DuplicateOrUnknownReleaseKey")
+        public = key_by_id[key_id]
+        process = __import__("subprocess").run(
+            [
+                "cargo",
+                "run",
+                "--quiet",
+                "--manifest-path",
+                str(Path(__file__).resolve().parent.parent / "boot-contracts" / "Cargo.toml"),
+                "--features",
+                "release-crypto",
+                "--example",
+                "verify_release",
+                "--",
+                "signature",
+
+                public.hex(),
+                signed.hex(),
+                signature.hex(),
+            ],
+            stdout=__import__("subprocess").DEVNULL,
+            stderr=__import__("subprocess").DEVNULL,
+        )
+        require(process.returncode == 0, "BadReleaseSignature")
+        previous = key_id
+    require(not any(data[RELEASE_HEADER_BYTES + signature_count * RELEASE_SIGNATURE_BYTES :]), "TrailingReleaseBytes")
+    return sequence
 
 def check_bootstore(data: bytes) -> dict:
     require(len(data) == BOOTSTORE_CAPACITY, "BadBootStoreCapacity")
     header = BOOTSTORE_HEADER.unpack_from(data, BOOTSTORE_DIRECTORY_OFFSET)
     magic, version, header_size, flags, count, reserved, directory_len, capacity, checksum = header
     require(magic == BOOTSTORE_MAGIC and version == BOOTSTORE_VERSION and header_size == BOOTSTORE_HEADER.size, "BadBootStoreVersion")
-    require(flags == 0 and reserved == 0 and count == 2 and directory_len == count * BOOTSTORE_ENTRY.size and capacity == len(data), "BadBootStoreHeader")
+    require(flags == 0 and reserved == 0 and 1 <= count <= 64 and directory_len == count * BOOTSTORE_ENTRY.size and capacity == len(data), "BadBootStoreHeader")
     require(checksum == bootstore_checksum(data), "BadBootStoreChecksum")
     slots = []
     for label, offset in (("A", 0), ("B", BOOTSTATE_SLOT_BYTES)):
@@ -177,9 +236,12 @@ def check_bootstore(data: bytes) -> dict:
     directory_start = BOOTSTORE_DIRECTORY_OFFSET + BOOTSTORE_HEADER.size
     previous_identity = bytes(32)
     for index in range(count):
-        identity, offset, length = BOOTSTORE_ENTRY.unpack_from(data, directory_start + index * BOOTSTORE_ENTRY.size)
+        identity, offset, length, release_offset, release_length = BOOTSTORE_ENTRY.unpack_from(data, directory_start + index * BOOTSTORE_ENTRY.size)
         require(identity > previous_identity and offset % 4096 == 0 and offset >= BOOTSTORE_GENERATIONS_OFFSET and offset + length <= len(data), "BadBootDirectory")
+        require(release_offset >= BOOTSTORE_RELEASES_OFFSET and release_offset % RELEASE_BYTES == 0 and release_length == RELEASE_BYTES and release_offset + release_length <= BOOTSTORE_GENERATIONS_OFFSET, "BadReleaseDirectory")
         generation = check_generation(data[offset : offset + length], identity)
+        release = data[release_offset : release_offset + release_length]
+        generation["release_sequence"] = check_release(release, data[offset : offset + length])
         directory.append(generation)
         previous_identity = identity
     root = sha256(b"".join(generation["identity"] for generation in directory))
@@ -189,6 +251,12 @@ def check_bootstore(data: bytes) -> dict:
     for generation in directory:
         if generation["parent"] is not None:
             require(generation["parent"] in by_identity, "BrokenParent")
+    known_good_release = by_identity[selected_state["known_good"]]["release_sequence"]
+    require(known_good_release <= selected_state["accepted_release_sequence"], "UnacceptedKnownGoodRelease")
+    if selected_state["pending"] is not None:
+        require(selected_state["pending"] in by_identity, "MissingPending")
+        pending_release = by_identity[selected_state["pending"]]["release_sequence"]
+        require(pending_release > selected_state["accepted_release_sequence"], "StalePendingRelease")
     return {"slot": selected_label, "state": selected_state, "generations": directory, "selected": by_identity[selected_state["known_good"]]}
 
 def check_slot_recovery(data: bytes) -> None:

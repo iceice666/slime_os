@@ -81,6 +81,8 @@ struct Manager {
     rollback_roots: RootSet,
     staged_roots: RootSet,
     persistent_state_roots: RootSet,
+    accepted_release_sequence: u64,
+    running_release_sequence: u64,
 }
 
 impl Manager {
@@ -92,6 +94,8 @@ impl Manager {
             rollback_roots: RootSet::new(),
             staged_roots: RootSet::new(),
             persistent_state_roots: RootSet::new(),
+            accepted_release_sequence: 0,
+            running_release_sequence: 0,
         }
     }
 
@@ -129,7 +133,10 @@ pub fn init() {
             remaining_attempts: context.remaining_attempts,
             generation_root: context.generation_root,
             state_root: context.state_root,
+            accepted_release_sequence: context.accepted_release_sequence,
         });
+        manager.accepted_release_sequence = context.accepted_release_sequence;
+        manager.running_release_sequence = context.running_release_sequence;
         manager.health = if context.running_pending {
             HealthState::RunningPending
         } else {
@@ -148,7 +155,8 @@ pub fn confirm_running_pending() -> bool {
     let Some(state) = manager.bootstate else {
         return false;
     };
-    let Ok(promoted) = state.promote_pending(manager.running) else {
+    let Ok(promoted) = state.promote_pending(manager.running, manager.running_release_sequence)
+    else {
         return false;
     };
     let previous = state.known_good;
@@ -156,6 +164,7 @@ pub fn confirm_running_pending() -> bool {
         return false;
     }
     manager.bootstate = Some(promoted);
+    manager.accepted_release_sequence = promoted.accepted_release_sequence;
     manager.health = HealthState::Confirmed;
     true
 }
@@ -166,6 +175,10 @@ pub fn mark_unhealthy() {
 
 pub fn retain_staged(root: [u8; 32]) -> bool {
     MANAGER.lock().staged_roots.insert(root)
+}
+
+pub fn accepted_release_sequence() -> u64 {
+    MANAGER.lock().accepted_release_sequence
 }
 
 pub fn retain_persistent_state(root: [u8; 32]) -> bool {

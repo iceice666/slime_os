@@ -138,6 +138,12 @@ bootstate_trace_check:
     cd kernel && cargo build
     ./scripts/check-bootstate-trace.py /tmp/slime-os-bootstate-trace.img
 
+# M5.8: verify bounded threshold release authorization, replay protection,
+# dual-authorized root rotation, failed-pending rollback, and promotion.
+release_trust_check:
+    cd kernel && cargo build
+    ./scripts/check-release-trust.py
+
 # Validate the pinned generation manifest schema and fixtures.
 contracts_check: bootstate_model_check
     python3 scripts/check-contracts.py

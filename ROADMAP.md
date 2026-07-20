@@ -90,7 +90,7 @@ Exit condition: the same isolated userspace slice runs on the Framework without 
 
 ## Milestone 5: Storage and generations
 
-**Status:** In progress. M5.1 through M5.6c are complete; Framework NVMe safety promotion (M5.7), release trust (M5.8), and bounded recovery (M5.9) remain.
+**Status:** In progress. M5.1 through M5.6c and M5.8 are complete; Framework NVMe safety promotion (M5.7) and bounded recovery (M5.9) remain.
 
 Top-level scope:
 
@@ -461,7 +461,7 @@ Exit condition: the Framework can run the storage-aware isolated userspace slice
 
 ### M5.8: Signed generation release metadata
 
-**Status:** Not started. Promoted from the directions register (entry 21). Content hashes prove object identity and integrity, but do not identify who authorized a generation for staging or boot. This slice must land before M6 permits generation transfer from another machine.
+**Status:** Complete. `just release_trust_check` verifies bounded deterministic detached metadata, pinned 2-of-3 Ed25519 authorization, dual-threshold consecutive root rotation, malformed and stale release rejection, staging without sequence advancement, failed-pending local rollback, and health-confirmed promotion while retaining the prior known-good root. This does not claim trusted-time freeze protection, UEFI Secure Boot, TPM sealing, or resistance to rollback of the entire physical disk image.
 
 Deliverables:
 
