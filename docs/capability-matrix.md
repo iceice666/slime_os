@@ -32,7 +32,7 @@ Every new object or right must satisfy these rules before it ships:
 
 ## Current matrix
 
-Rights are a flat `u32`; bits 14–31 are free.
+Rights are a flat `u32`; bits 15–31 are free.
 
 | Object | Right (bit) | Gated operation | Creation authority | Gate status |
 | --- | --- | --- | --- | --- |
@@ -50,6 +50,7 @@ Rights are a flat `u32`; bits 14–31 are free.
 | BlockDevice | BLOCK_WRITE (11) | write and flush requests in `SYS_BLOCK_TRANSACT` | kernel | gated (M5.3) |
 | ObjectStore | STORE_READ (12) | stat/get requests in `SYS_STORE_TRANSACT` | kernel bootstrap | gated (M5.4) |
 | ObjectStore | STORE_WRITE (13) | put requests in `SYS_STORE_TRANSACT` | kernel bootstrap | gated (M5.4) |
+| GenerationControl | HEALTH_CONFIRM (14) | `SYS_HEALTH_CONFIRM` for the currently running pending generation | kernel bootstrap, only for the declared generation-management service | gated (M5.6) |
 
 Semantics not visible in the table:
 
@@ -82,7 +83,7 @@ in the same change.
 
 | Candidate object | Candidate rights | Trigger | Open questions |
 | --- | --- | --- | --- |
-| BootState / GenerationControl | HEALTH_CONFIRM; possibly BOOT_UPDATE | M5.6 | Confirm vs update split; boundary between userspace slot writes and the stage-0 selector |
+| BootState update authority beyond confirmation | possibly BOOT_UPDATE | post-M5.6 staging service | Boundary between userspace staging and immutable stage-0 slot writes |
 | Directory | READ / WRITE / LIST? | M6 | Granularity; whether powerbox minting needs more than `derive` |
 | Endpoint minting | *(no new object)* | M6 prerequisite | Unprivileged mint with quota vs a factory capability |
 | RIGHT_SPAWN on Executable | SPAWN | generation format v2 | Deferred until grants are data-driven |

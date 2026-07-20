@@ -21,6 +21,8 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 GEN_DIR="$(mktemp -d -t slime-os-generation.XXXXXX)"
 trap 'rm -rf "$GEN_DIR"' EXIT
 SLIME_GENERATION_NUMBER="${SLIME_GENERATION_NUMBER:-}" \
+SLIME_PENDING_GENERATION="${SLIME_PENDING_GENERATION:-}" \
+SLIME_PENDING_ATTEMPTS="${SLIME_PENDING_ATTEMPTS:-}" \
     "$ROOT/scripts/build-generation.py" "$KERNEL" "$GEN_DIR" >/dev/null
 
 if [[ "${SLIME_BOOT_LOADER:-stage0}" == "limine" ]]; then

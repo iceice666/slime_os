@@ -50,6 +50,11 @@ storage_fault_check:
 storage_store_check:
     ./scripts/check-storage.py store /tmp/slime-os-storage-store.img
 
+# M5.6: consume pending attempts durably and return to known-good after failure.
+rollback_check:
+    cd kernel && cargo build
+    ./scripts/check-rollback.py /tmp/slime-os-rollback.img
+
 # Run with QEMU monitor on stdin.
 monitor:
     cd kernel && cargo run -- -monitor stdio -serial null

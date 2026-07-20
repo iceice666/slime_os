@@ -45,4 +45,13 @@ pub struct KernelHandoffV1 {
     pub generation_ptr: *const u8,
     pub generation_len: u64,
     pub generation_identity: [u8; 32],
+    pub bootstate_sequence: u64,
+    pub known_good_identity: [u8; 32],
+    pub pending_identity: [u8; 32],
+    pub remaining_attempts: u32,
+    pub bootstate_slot: u8,
+    pub running_pending: u8,
+    pub reserved1: [u8; 2],
+    pub generation_root: [u8; 32],
+    pub state_root: [u8; 32],
 }

@@ -10,14 +10,13 @@ use boot_contracts::handoff::{
 };
 use boot_contracts::kernel_image::{KernelImage, LOAD_BASE, SEGMENT_EXEC, SEGMENT_WRITE};
 use slime_stage0::{
-    BootError, decode_directory, select_bootstate, select_generation, verify_generation,
+    BootError, Slot, decode_directory, select_bootstate, select_generation, verify_generation,
     verify_kernel,
 };
 use uefi::boot::{self, AllocateType, MemoryType, PAGE_SIZE};
 use uefi::mem::memory_map::MemoryMap;
 use uefi::proto::console::gop::{GraphicsOutput, PixelFormat};
 use uefi::proto::media::file::{File, FileAttribute, FileMode, FileType, RegularFile};
-use uefi::proto::media::fs::SimpleFileSystem;
 use uefi::{CString16, Status};
 
 const BOOT_STORE_PATH: &str = "\\boot\\boot-store.bin";
@@ -58,12 +57,28 @@ fn boot() -> Result<(), BootError> {
     uefi::helpers::init().map_err(|_| BootError::Truncated)?;
     uefi::println!("[stage0] immutable selector");
 
-    let store = read_file(BOOT_STORE_PATH)?;
-    let directory = decode_directory(&store)?;
+    let mut store = read_file(BOOT_STORE_PATH)?;
     let slot_a: &[u8; 512] = store[..512].try_into().unwrap();
     let slot_b: &[u8; 512] = store[512..1024].try_into().unwrap();
-    let selected_state = select_bootstate(slot_a, slot_b)?;
-    let selected = select_generation(&directory, &selected_state.state)?;
+    let mut selected_state = select_bootstate(slot_a, slot_b)?;
+    let selection_state = selected_state.state;
+    let running_pending = selected_state.state.pending.is_some()
+        && selected_state.state.remaining_attempts > 0;
+    if running_pending {
+        selected_state.state = selected_state
+            .state
+            .consume_pending_attempt()
+            .map_err(|_| BootError::NoValidBootState)?;
+        let target = match selected_state.slot {
+            Slot::A => Slot::B,
+            Slot::B => Slot::A,
+        };
+        persist_bootstate(target, selected_state.state)?;
+        selected_state.slot = target;
+        store = read_file(BOOT_STORE_PATH)?;
+    }
+    let directory = decode_directory(&store)?;
+    let selected = select_generation(&directory, &selection_state)?;
     let generation = verify_generation(selected.bytes, &selected.identity)?;
     let kernel = verify_kernel(&generation)?;
 
@@ -103,6 +118,18 @@ fn boot() -> Result<(), BootError> {
             generation_ptr: generation_copy,
             generation_len: selected.bytes.len() as u64,
             generation_identity: selected.identity,
+            bootstate_sequence: selected_state.state.sequence,
+            known_good_identity: selected_state.state.known_good,
+            pending_identity: selected_state.state.pending.unwrap_or([0; 32]),
+            remaining_attempts: selected_state.state.remaining_attempts,
+            bootstate_slot: match selected_state.slot {
+                Slot::A => 0,
+                Slot::B => 1,
+            },
+            running_pending: u8::from(running_pending),
+            reserved1: [0; 2],
+            generation_root: selected_state.state.generation_root,
+            state_root: selected_state.state.state_root,
         });
     }
 
@@ -146,21 +173,36 @@ fn push_memory_entry(
     Ok(())
 }
 
-fn read_file(path: &str) -> Result<Vec<u8>, BootError> {
-    let fs_handle =
-        boot::get_handle_for_protocol::<SimpleFileSystem>().map_err(|_| BootError::Truncated)?;
-    let mut fs = boot::open_protocol_exclusive::<SimpleFileSystem>(fs_handle)
+fn open_regular(path: &str, mode: FileMode) -> Result<RegularFile, BootError> {
+    let mut fs = boot::get_image_file_system(boot::image_handle())
         .map_err(|_| BootError::Truncated)?;
     let mut root = fs.open_volume().map_err(|_| BootError::Truncated)?;
     let path = CString16::try_from(path).map_err(|_| BootError::Truncated)?;
     let file = root
-        .open(&path, FileMode::Read, FileAttribute::empty())
+        .open(&path, mode, FileAttribute::empty())
         .map_err(|_| BootError::Truncated)?;
-    let mut file = match file.into_type().map_err(|_| BootError::Truncated)? {
-        FileType::Regular(file) => file,
-        _ => return Err(BootError::Truncated),
-    };
+    match file.into_type().map_err(|_| BootError::Truncated)? {
+        FileType::Regular(file) => Ok(file),
+        _ => Err(BootError::Truncated),
+    }
+}
+
+fn read_file(path: &str) -> Result<Vec<u8>, BootError> {
+    let mut file = open_regular(path, FileMode::Read)?;
     read_regular(&mut file)
+}
+
+fn persist_bootstate(slot: Slot, state: boot_contracts::bootstate::BootState) -> Result<(), BootError> {
+    let offset = match slot {
+        Slot::A => 0,
+        Slot::B => boot_contracts::bootstate::SLOT_BYTES as u64,
+    };
+    let encoded = state.encode().map_err(|_| BootError::NoValidBootState)?;
+    let mut file = open_regular(BOOT_STORE_PATH, FileMode::ReadWrite)?;
+    file.set_position(offset).map_err(|_| BootError::Truncated)?;
+    file.write(&encoded).map_err(|_| BootError::Truncated)?;
+    file.flush().map_err(|_| BootError::Truncated)?;
+    Ok(())
 }
 
 fn read_regular(file: &mut RegularFile) -> Result<Vec<u8>, BootError> {

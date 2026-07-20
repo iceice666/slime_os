@@ -2,8 +2,9 @@ use alloc::vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::capability::{
-    Capability, KernelObject, RIGHT_BLOCK_READ, RIGHT_BLOCK_WRITE, RIGHT_EXEC, RIGHT_RECV,
-    RIGHT_SEND, RIGHT_STORE_READ, RIGHT_STORE_WRITE, RIGHT_TRANSFER,
+    Capability, KernelObject, RIGHT_BLOCK_READ, RIGHT_BLOCK_WRITE, RIGHT_EXEC,
+    RIGHT_HEALTH_CONFIRM, RIGHT_RECV, RIGHT_SEND, RIGHT_STORE_READ, RIGHT_STORE_WRITE,
+    RIGHT_TRANSFER,
 };
 use crate::generation::{self, Generation};
 use crate::{ipc, println, serial_println, task};
@@ -17,6 +18,7 @@ static STORAGE_PROBE_ID: AtomicU64 = AtomicU64::new(0);
 static STORAGE_WRITER_ID: AtomicU64 = AtomicU64::new(0);
 static STORAGE_FAULT_ID: AtomicU64 = AtomicU64::new(0);
 static STORAGE_STORE_ID: AtomicU64 = AtomicU64::new(0);
+static GENERATION_MANAGER_ID: AtomicU64 = AtomicU64::new(0);
 
 pub fn start() -> ! {
     let bytes = crate::boot::generation();
@@ -26,6 +28,7 @@ pub fn start() -> ! {
         crate::boot::generation_identity(),
         "handoff generation identity mismatch"
     );
+    crate::generation_manager::init();
     serial_println!(
         "[generation] selected {:02x?} parent={:02x?} target={}",
         generation.identity,
@@ -73,6 +76,9 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
     let storage_store_probe = generation
         .component_bytes("storage-store-probe")
         .expect("storage-store-probe object missing");
+    let generation_manager = generation
+        .component_bytes("generation-manager")
+        .expect("generation-manager object missing");
 
     require_grant(generation, "console-output", "console", "dango");
     require_grant(generation, "system-information", "init", "sysinfo");
@@ -85,6 +91,12 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         "block-fault-check",
         "init",
         "storage-fault-probe",
+    );
+    require_grant(
+        generation,
+        "health-confirmation",
+        "init",
+        "generation-manager",
     );
     require_grant(generation, "store-access", "init", "storage-store-probe");
     let (storage_component, storage_capability) = match generation.number {
@@ -135,6 +147,11 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         endpoint(echo_output, RIGHT_SEND),
         executable(storage_component),
         storage_capability,
+        executable(generation_manager),
+        Capability {
+            object: KernelObject::GenerationControl,
+            rights: RIGHT_HEALTH_CONFIRM | RIGHT_TRANSFER,
+        },
     ];
 
     task::spawn_with_caps(init, caps).expect("failed to launch init")
@@ -199,6 +216,7 @@ pub fn record_spawn(component: &'static str, id: task::TaskId) {
         "storage-probe" => &STORAGE_PROBE_ID,
         "storage-writer" => &STORAGE_WRITER_ID,
         "storage-fault-probe" => &STORAGE_FAULT_ID,
+        "generation-manager" => &GENERATION_MANAGER_ID,
         "storage-store-probe" => &STORAGE_STORE_ID,
         _ => return,
     };
@@ -222,6 +240,10 @@ extern "C" fn on_idle() {
             "storage-store-probe",
             STORAGE_STORE_ID.load(Ordering::Relaxed),
         ),
+        (
+            "generation-manager",
+            GENERATION_MANAGER_ID.load(Ordering::Relaxed),
+        ),
     ];
     let mut healthy = true;
     for (name, id) in checks {
@@ -236,10 +258,15 @@ extern "C" fn on_idle() {
         healthy &= matches!(reason, Some(task::TermReason::Exit(0))) || optional_storage_absent;
     }
     if healthy {
-        serial_println!("[generation] vertical slice healthy");
-        println!("[generation] vertical slice healthy");
+        if crate::boot::bootstate().is_some_and(|state| state.running_pending) {
+            serial_println!("[generation] pending generation healthy; awaiting confirmation");
+        } else {
+            serial_println!("[generation] vertical slice healthy");
+            println!("[generation] vertical slice healthy");
+        }
         crate::exit_qemu(crate::QemuExitCode::Success);
     } else {
+        crate::generation_manager::mark_unhealthy();
         println!("[generation] vertical slice failed");
         crate::exit_qemu(crate::QemuExitCode::Failed);
     }

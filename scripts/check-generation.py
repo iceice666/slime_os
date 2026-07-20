@@ -131,7 +131,7 @@ def check_generation(data: bytes, expected_identity: bytes | None = None) -> dic
     for index in range(states):
         name_offset, owner, schema_version, policy = GENERATION_STATE.unpack_from(data, state_offset + index * GENERATION_STATE.size)
         name = read_string(data, strings_offset, strings_len, name_offset)
-        require(name > previous_state and owner < components and schema_version > 0 and policy in (1, 2, 3), "BadState")
+        require(name > previous_state and owner < components and schema_version > 0 and policy in (1, 2, 3, 4, 5), "BadState")
         previous_state = name
     require(boot_attempts > 0, "BadHealthPolicy")
     previous_health = -1
@@ -152,7 +152,7 @@ def decode_bootstate(slot: bytes) -> dict:
     generation_root = slot[104:136]; state_root = slot[136:168]
     require(known_good != bytes(32) and generation_root != bytes(32), "BadBootStateRoot")
     require((pending == bytes(32) and attempts == 0) or pending != bytes(32), "BadPendingAttempts")
-    return {"sequence": sequence, "known_good": known_good, "pending": None if pending == bytes(32) else pending, "generation_root": generation_root, "state_root": state_root}
+    return {"sequence": sequence, "known_good": known_good, "pending": None if pending == bytes(32) else pending, "remaining_attempts": attempts, "generation_root": generation_root, "state_root": state_root}
 
 
 def check_bootstore(data: bytes) -> dict:

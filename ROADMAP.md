@@ -12,7 +12,7 @@ Completion requires observable behavior, not only compiled code or framebuffer o
 | 2. Isolation and IPC | Core QEMU exit passing | Two userspace components communicate, and one may fault without corrupting the other or the kernel. |
 | 3. Bootstrap component graph | QEMU vertical slice passing | The first isolated userspace vertical slice works under QEMU. |
 | 4. Framework safe bring-up | Verified | The same isolated userspace slice runs from removable media without modifying internal storage. |
-| 5. Storage and generations | In progress — M5.1 through M5.6b complete | A failed pending generation automatically leaves or restores a bootable known-good generation. |
+| 5. Storage and generations | In progress — M5.1 through M5.6 complete | A failed pending generation automatically leaves or restores a bootable known-good generation. |
 | 6. Native interactive environment | Minimal stub only | Native components can inspect, build or stage, select, and roll back generations. |
 | 7. Daily-driver hardware | Not yet implemented | The Framework target supports the hardware and lifecycle needed for daily use. |
 
@@ -353,6 +353,8 @@ Required checks:
 Exit condition: the checked model proves that every bounded upgrade, snapshot, promotion, rollback, and GC interleaving retains a bootable generation with a consistent state set and never collects a reachable object.
 
 ### M5.6: Pending, known-good, rollback, state policy, and GC
+
+**Status:** Complete. `just rollback_check` boots a deliberately failing pending generation, durably consumes each attempt before transfer (2 → 1 → 0), and automatically returns to the verified known-good generation with unchanged known-good and pending identities. Health-confirmation authority is a `GenerationControl` capability minted only in the kernel bootstrap and transferred once to the declared generation-management service; unprivileged components cannot reach `SYS_HEALTH_CONFIRM`. State policies (`immutable`, `ephemeral`, `preserve`, `snapshotBeforeUpgrade`, `discardOnRollback`) and GC reachability over the known-good, pending, running, rollback, staged, and persistent-state roots are exercised under QEMU by `kernel/tests/generation_manager.rs`; `collect_unreachable` tests every retained root directly so no root is dropped and no reachable object is collected.
 
 Prerequisites: M5.6a and M5.6b must land before implementation. Their checked transition, snapshot, state-policy, and GC semantics are the contract for this slice and must change in the same commit as any implementation-semantic change.
 

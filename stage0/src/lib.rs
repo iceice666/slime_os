@@ -172,16 +172,24 @@ pub fn select_bootstate(
     }
 }
 
+pub fn selected_generation_identity(state: &BootState) -> [u8; 32] {
+    match (state.pending, state.remaining_attempts) {
+        (Some(pending), attempts) if attempts > 0 => pending,
+        _ => state.known_good,
+    }
+}
+
 pub fn select_generation<'a>(
     directory: &'a BootDirectory<'a>,
     state: &BootState,
 ) -> Result<DirectoryEntry<'a>, BootError> {
     let mut root = Sha256::new();
     let mut selected = None;
+    let selected_identity = selected_generation_identity(state);
     for index in 0..directory.count() {
         let entry = directory.entry(index)?;
         root.update(&entry.identity);
-        if entry.identity == state.known_good {
+        if entry.identity == selected_identity {
             selected = Some(entry);
         }
     }

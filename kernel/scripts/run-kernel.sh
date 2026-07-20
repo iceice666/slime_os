@@ -36,11 +36,13 @@ VARS="$WORK/OVMF_VARS.fd"
 cp "$OVMF_VARS_SRC" "$VARS"
 chmod +w "$VARS"
 
-IMG="$WORK/slime_os.img"
-if [[ "$(basename "$BIN")" == "slime_os-kernel" ]]; then
-    "$(dirname "$0")/build-iso.sh" "$BIN" "$IMG" 64 >/dev/null
-else
-    SLIME_BOOT_LOADER=limine "$(dirname "$0")/build-iso.sh" "$BIN" "$IMG" 64 >/dev/null
+IMG="${SLIME_BOOT_IMAGE:-$WORK/slime_os.img}"
+if [[ -z "${SLIME_REUSE_BOOT_IMAGE:-}" || ! -f "$IMG" ]]; then
+    if [[ "$(basename "$BIN")" == "slime_os-kernel" ]]; then
+        "$(dirname "$0")/build-iso.sh" "$BIN" "$IMG" 64 >/dev/null
+    else
+        SLIME_BOOT_LOADER=limine "$(dirname "$0")/build-iso.sh" "$BIN" "$IMG" 64 >/dev/null
+    fi
 fi
 
 # Boot and wait. `isa-debug-exit` makes QEMU exit with (code<<1)|1 when the

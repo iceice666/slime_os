@@ -1,6 +1,6 @@
 use crate::capability::{
-    KernelObject, RIGHT_BLOCK_READ, RIGHT_BLOCK_WRITE, RIGHT_RECV, RIGHT_SEND, RIGHT_STORE_READ,
-    RIGHT_STORE_WRITE, RIGHT_TRANSFER,
+    KernelObject, RIGHT_BLOCK_READ, RIGHT_BLOCK_WRITE, RIGHT_HEALTH_CONFIRM, RIGHT_RECV,
+    RIGHT_SEND, RIGHT_STORE_READ, RIGHT_STORE_WRITE, RIGHT_TRANSFER,
 };
 use crate::ipc::{self, MAX_CAPS_PER_MSG, MAX_MSG};
 use crate::task::{self, TermReason};
@@ -14,6 +14,8 @@ pub const SYS_SPAWN: u64 = 4;
 pub const SYS_DEBUG_WRITE: u64 = 5;
 pub const SYS_BLOCK_TRANSACT: u64 = 6;
 pub const SYS_STORE_TRANSACT: u64 = 7;
+pub const SYS_HEALTH_CONFIRM: u64 = 8;
+pub const SYS_UNHEALTHY: u64 = 9;
 
 const USER_TOP: u64 = 0x0000_8000_0000_0000;
 
@@ -42,6 +44,8 @@ pub fn dispatch(frame: &mut UserFrame) {
         SYS_DEBUG_WRITE => sys_debug_write(frame),
         SYS_BLOCK_TRANSACT => sys_block_transact(frame),
         SYS_STORE_TRANSACT => sys_store_transact(frame),
+        SYS_HEALTH_CONFIRM => sys_health_confirm(frame),
+        SYS_UNHEALTHY => task::terminate(frame, TermReason::Unhealthy),
         _ => frame.rax = ipc::ERR_INVALID_ARG as u64,
     }
 }
@@ -323,6 +327,25 @@ fn sys_recv(frame: &mut UserFrame) {
     frame.rax = ret as u64;
 }
 
+fn sys_health_confirm(frame: &mut UserFrame) {
+    let slot = frame.rdi as u32;
+    let authorized = task::with_current_mut(|task| {
+        task.caps.get(slot).is_some_and(|cap| {
+            matches!(cap.object, KernelObject::GenerationControl)
+                && cap.rights & RIGHT_HEALTH_CONFIRM != 0
+        })
+    });
+    if !authorized {
+        frame.rax = ipc::ERR_BAD_CAP as u64;
+        return;
+    }
+    frame.rax = if crate::generation_manager::confirm_running_pending() {
+        ipc::ERR_SUCCESS as u64
+    } else {
+        ipc::ERR_INVALID_ARG as u64
+    };
+}
+
 fn sys_spawn(frame: &mut UserFrame) {
     let executable_slot = frame.rdi as u32;
     let cap_count = frame.rdx as usize;
@@ -367,6 +390,7 @@ fn component_name_from_id(id: u64) -> Option<&'static str> {
         5 => Some("storage-probe"),
         6 => Some("storage-writer"),
         7 => Some("storage-fault-probe"),
+        8 => Some("generation-manager"),
         _ => None,
     }
 }

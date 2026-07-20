@@ -35,6 +35,9 @@ pub enum UserFaultReason {
 pub enum TermReason {
     Exit(i64),
     Fault(UserFaultReason),
+    Timeout,
+    PeerLoss,
+    Unhealthy,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

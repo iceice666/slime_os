@@ -32,6 +32,14 @@ pub enum BootStateError {
     BadChecksum,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BootTransitionError {
+    NoPending,
+    AttemptsExhausted,
+    WrongRunningGeneration,
+    SequenceExhausted,
+}
+
 impl BootState {
     pub fn encode(self) -> Result<[u8; SLOT_BYTES], BootStateError> {
         validate(&self)?;
@@ -87,6 +95,75 @@ impl BootState {
         validate(&state)?;
         Ok(state)
     }
+
+    pub fn stage_pending(
+        self,
+        pending: [u8; 32],
+        attempts: u32,
+        generation_root: [u8; 32],
+        state_root: [u8; 32],
+    ) -> Result<Self, BootTransitionError> {
+        if attempts == 0 {
+            return Err(BootTransitionError::AttemptsExhausted);
+        }
+        Ok(Self {
+            sequence: next_sequence(self.sequence)?,
+            known_good: self.known_good,
+            pending: Some(pending),
+            remaining_attempts: attempts,
+            generation_root,
+            state_root,
+        })
+    }
+
+    pub fn consume_pending_attempt(self) -> Result<Self, BootTransitionError> {
+        if self.pending.is_none() {
+            return Err(BootTransitionError::NoPending);
+        }
+        if self.remaining_attempts == 0 {
+            return Err(BootTransitionError::AttemptsExhausted);
+        }
+        Ok(Self {
+            sequence: next_sequence(self.sequence)?,
+            remaining_attempts: self.remaining_attempts - 1,
+            ..self
+        })
+    }
+
+    pub fn promote_pending(
+        self,
+        running: [u8; 32],
+    ) -> Result<Self, BootTransitionError> {
+        if self.pending != Some(running) {
+            return Err(BootTransitionError::WrongRunningGeneration);
+        }
+        Ok(Self {
+            sequence: next_sequence(self.sequence)?,
+            known_good: running,
+            pending: None,
+            remaining_attempts: 0,
+            ..self
+        })
+    }
+
+    pub fn rollback_pending(self) -> Result<Self, BootTransitionError> {
+        if self.pending.is_none() {
+            return Ok(self);
+        }
+        Ok(Self {
+            sequence: next_sequence(self.sequence)?,
+            pending: None,
+            remaining_attempts: 0,
+            ..self
+        })
+    }
+}
+
+fn next_sequence(sequence: u64) -> Result<u64, BootTransitionError> {
+    sequence
+        .checked_add(1)
+        .filter(|sequence| *sequence != u64::MAX)
+        .ok_or(BootTransitionError::SequenceExhausted)
 }
 
 pub fn slot_checksum(bytes: &[u8; SLOT_BYTES]) -> [u8; 32] {
@@ -157,5 +234,38 @@ mod tests {
             state(None, 1).encode(),
             Err(BootStateError::BadPendingAttempts)
         );
+    }
+
+    #[test]
+    fn pending_attempt_is_consumed_before_selection() {
+        let pending = state(Some(G2), 2).consume_pending_attempt().unwrap();
+
+        assert_eq!(pending.sequence, 2);
+        assert_eq!(pending.pending, Some(G2));
+        assert_eq!(pending.remaining_attempts, 1);
+        assert_eq!(pending.known_good, G1);
+    }
+
+    #[test]
+    fn promotion_requires_the_running_pending_generation() {
+        let pending = state(Some(G2), 1);
+
+        assert_eq!(
+            pending.promote_pending(G1),
+            Err(BootTransitionError::WrongRunningGeneration)
+        );
+        let promoted = pending.promote_pending(G2).unwrap();
+        assert_eq!(promoted.known_good, G2);
+        assert_eq!(promoted.pending, None);
+        assert_eq!(promoted.remaining_attempts, 0);
+    }
+
+    #[test]
+    fn rollback_is_idempotent_after_pending_is_cleared() {
+        let rolled_back = state(Some(G2), 0).rollback_pending().unwrap();
+
+        assert_eq!(rolled_back.pending, None);
+        assert_eq!(rolled_back.remaining_attempts, 0);
+        assert_eq!(rolled_back.rollback_pending(), Ok(rolled_back));
     }
 }

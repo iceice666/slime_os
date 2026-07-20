@@ -29,6 +29,18 @@ pub struct MemoryEntry {
     pub kind: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BootStateContext {
+    pub sequence: u64,
+    pub known_good: [u8; 32],
+    pub pending: Option<[u8; 32]>,
+    pub remaining_attempts: u32,
+    pub slot: u8,
+    pub running_pending: bool,
+    pub generation_root: [u8; 32],
+    pub state_root: [u8; 32],
+}
+
 struct BootContext {
     direct_map_offset: u64,
     memory_map: &'static [MemoryEntry],
@@ -36,6 +48,7 @@ struct BootContext {
     rsdp_address: u64,
     generation: &'static [u8],
     generation_identity: [u8; 32],
+    bootstate: Option<BootStateContext>,
 }
 
 static CONTEXT: Once<BootContext> = Once::new();
@@ -92,6 +105,7 @@ pub unsafe fn init_from_handoff(handoff: *const KernelHandoffV1) {
         .expect("handoff generation address overflow") as *const u8;
     let generation =
         unsafe { slice::from_raw_parts(generation_ptr, handoff.generation_len as usize) };
+    let pending = (handoff.pending_identity != [0; 32]).then_some(handoff.pending_identity);
     CONTEXT.call_once(|| BootContext {
         direct_map_offset: handoff.direct_map_offset,
         memory_map,
@@ -99,6 +113,16 @@ pub unsafe fn init_from_handoff(handoff: *const KernelHandoffV1) {
         rsdp_address: handoff.rsdp_address,
         generation,
         generation_identity: handoff.generation_identity,
+        bootstate: Some(BootStateContext {
+            sequence: handoff.bootstate_sequence,
+            known_good: handoff.known_good_identity,
+            pending,
+            remaining_attempts: handoff.remaining_attempts,
+            slot: handoff.bootstate_slot,
+            running_pending: handoff.running_pending != 0,
+            generation_root: handoff.generation_root,
+            state_root: handoff.state_root,
+        }),
     });
 }
 
@@ -178,6 +202,7 @@ pub unsafe fn init_from_limine() {
         rsdp_address,
         generation,
         generation_identity,
+        bootstate: None,
     });
 }
 
@@ -219,4 +244,8 @@ fn framebuffer_from_handoff(fb: HandoffFramebuffer) -> Framebuffer {
         blue_mask_size: fb.blue_mask_size,
         blue_mask_shift: fb.blue_mask_shift,
     }
+}
+
+pub fn bootstate() -> Option<BootStateContext> {
+    context().bootstate
 }

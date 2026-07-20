@@ -29,7 +29,20 @@ fn generation_decodes_and_resolves_vertical_slice() {
     ] {
         assert!(decoded.grant_named(name).is_some());
     }
-    assert_eq!(decoded.state_count(), 2);
+    assert_eq!(decoded.state_count(), 5);
+    let policies: alloc::vec::Vec<u32> = (0..decoded.state_count())
+        .map(|index| decoded.state(index).unwrap().policy)
+        .collect();
+    assert_eq!(
+        policies,
+        alloc::vec![
+            boot_contracts::generation::POLICY_PRESERVE,
+            boot_contracts::generation::POLICY_EPHEMERAL,
+            boot_contracts::generation::POLICY_IMMUTABLE,
+            boot_contracts::generation::POLICY_DISCARD_ON_ROLLBACK,
+            boot_contracts::generation::POLICY_SNAPSHOT_BEFORE_UPGRADE,
+        ],
+    );
     assert_eq!(decoded.boot_attempts, 3);
     assert_eq!(decoded.health_count(), 5);
 }

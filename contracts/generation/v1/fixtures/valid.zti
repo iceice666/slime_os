@@ -16,6 +16,7 @@
     { id = "sha256:storage-writer"; kind = "component"; size = 32768; };
     { id = "sha256:storage-fault-probe"; kind = "component"; size = 32768; };
     { id = "sha256:storage-store-probe"; kind = "component"; size = 65536; };
+    { id = "sha256:generation-manager"; kind = "component"; size = 32768; };
   ];
 
   components = [
@@ -72,6 +73,12 @@
       object = "sha256:storage-store-probe";
       role = "application";
       dependencies = [];
+    };
+    {
+      name = "generation-manager";
+      object = "sha256:generation-manager";
+      role = "service";
+      dependencies = ["init";];
     };
   ];
   grants = [
@@ -131,6 +138,13 @@
       rights = ["read"; "write";];
       transferable = false;
     };
+    {
+      name = "health-confirmation";
+      source = "init";
+      target = "generation-manager";
+      rights = ["write";];
+      transferable = false;
+    };
   ];
 
   state = [
@@ -145,6 +159,24 @@
       owner = "echo-agent";
       schemaVersion = 1;
       policy = "ephemeral";
+    };
+    {
+      name = "immutable-config";
+      owner = "generation-manager";
+      schemaVersion = 1;
+      policy = "immutable";
+    };
+    {
+      name = "upgrade-snapshot";
+      owner = "generation-manager";
+      schemaVersion = 1;
+      policy = "snapshotBeforeUpgrade";
+    };
+    {
+      name = "rollback-cache";
+      owner = "generation-manager";
+      schemaVersion = 1;
+      policy = "discardOnRollback";
     };
   ];
 

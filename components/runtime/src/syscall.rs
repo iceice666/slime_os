@@ -13,6 +13,8 @@ const SYS_SPAWN: u64 = 4;
 const SYS_DEBUG_WRITE: u64 = 5;
 const SYS_BLOCK_TRANSACT: u64 = 6;
 const SYS_STORE_TRANSACT: u64 = 7;
+const SYS_HEALTH_CONFIRM: u64 = 8;
+const SYS_UNHEALTHY: u64 = 9;
 
 pub const ERR_SUCCESS: i64 = 0;
 pub const ERR_BAD_CAP: i64 = -1;
@@ -151,5 +153,21 @@ pub fn store_transact(slot: u32, request: &[u8; 64], reply: &mut [u8; 64]) -> i6
             0,
             0,
         )
+    }
+}
+
+/// Confirms the currently running pending generation using the
+/// `GenerationControl` capability in `slot`.
+pub fn health_confirm(slot: u32) -> i64 {
+    unsafe { raw_syscall(SYS_HEALTH_CONFIRM, slot as u64, 0, 0, 0, 0) }
+}
+
+/// Terminates the current component with an explicit unhealthy status.
+pub fn unhealthy() -> ! {
+    unsafe {
+        raw_syscall(SYS_UNHEALTHY, 0, 0, 0, 0, 0);
+    }
+    loop {
+        core::hint::spin_loop();
     }
 }

@@ -30,6 +30,8 @@ pub const RIGHT_TRANSFER: u32 = 4;
 pub const POLICY_IMMUTABLE: u32 = 1;
 pub const POLICY_EPHEMERAL: u32 = 2;
 pub const POLICY_PRESERVE: u32 = 3;
+pub const POLICY_SNAPSHOT_BEFORE_UPGRADE: u32 = 4;
+pub const POLICY_DISCARD_ON_ROLLBACK: u32 = 5;
 
 const IDENTITY_OFFSET: usize = 24;
 const IDENTITY_END: usize = 56;
@@ -477,7 +479,11 @@ impl<'a> Generation<'a> {
                 || state.schema_version == 0
                 || !matches!(
                     state.policy,
-                    POLICY_IMMUTABLE | POLICY_EPHEMERAL | POLICY_PRESERVE
+                    POLICY_IMMUTABLE
+                        | POLICY_EPHEMERAL
+                        | POLICY_PRESERVE
+                        | POLICY_SNAPSHOT_BEFORE_UPGRADE
+                        | POLICY_DISCARD_ON_ROLLBACK
                 )
             {
                 return Err(DecodeError::BadState);

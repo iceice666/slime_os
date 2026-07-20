@@ -19,6 +19,7 @@ pub mod dma;
 pub mod frame_buffer;
 pub mod gdt;
 pub mod generation;
+pub mod generation_manager;
 pub mod gpt;
 pub mod input;
 pub mod interrupts;

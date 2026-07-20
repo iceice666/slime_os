@@ -69,7 +69,13 @@ PAGE_SIZE = 4096
 KIND = {"kernel": 1, "bootstrap": 2, "component": 3, "resource": 4}
 ROLE = {"init": 1, "service": 2, "driver": 3, "application": 4}
 RIGHT = {"read": 1, "write": 2}
-POLICY = {"immutable": 1, "ephemeral": 2, "preserve": 3}
+POLICY = {
+    "immutable": 1,
+    "ephemeral": 2,
+    "preserve": 3,
+    "snapshotBeforeUpgrade": 4,
+    "discardOnRollback": 5,
+}
 
 IMAGE_MAGIC = b"SLIMECMP"
 IMAGE_FORMAT_VERSION = 1
@@ -104,8 +110,15 @@ def load_manifest() -> dict:
     return json.loads(output)
 
 
-def build_rust_components() -> None:
-    subprocess.run(["cargo", "build", "--release"], cwd=COMPONENTS_WORKSPACE.parent, check=True)
+def build_rust_components(generation_number: int) -> None:
+    environment = os.environ.copy()
+    environment["SLIME_GENERATION_NUMBER"] = str(generation_number)
+    subprocess.run(
+        ["cargo", "build", "--release"],
+        cwd=COMPONENTS_WORKSPACE.parent,
+        env=environment,
+        check=True,
+    )
 
 
 def component_image(name: str, elf: Path, stack_bytes: int) -> bytes:
@@ -375,31 +388,63 @@ def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes |
         dependency_count, len(grants), len(states), len(required), object_offset, component_offset, dependency_offset,
         grant_offset, state_offset, health_offset, string_table_offset, len(strings), actual_payload_offset, total_len,
     )
-    generation = bytearray(header + object_records + component_records + dependency_records + grant_records + state_records + health_records + strings + blobs)
+    generation = bytearray(
+        header
+        + object_records
+        + component_records
+        + dependency_records
+        + grant_records
+        + state_records
+        + health_records
+        + strings
+        + blobs
+    )
     identity = generation_identity(generation)
     generation[24:56] = identity
     return bytes(generation)
 
 
-def encode_bootstate(sequence: int, known_good: bytes, generation_root: bytes) -> bytes:
+def encode_bootstate(
+    sequence: int,
+    known_good: bytes,
+    generation_root: bytes,
+    pending: bytes | None = None,
+    remaining_attempts: int = 0,
+    state_root: bytes | None = None,
+) -> bytes:
     slot = bytearray(BOOTSTATE_SLOT_BYTES)
     slot[:8] = BOOTSTATE_MAGIC
     struct.pack_into("<IIQQ", slot, 8, BOOTSTATE_VERSION, BOOTSTATE_SLOT_BYTES, 0, sequence)
     slot[32:64] = known_good
-    struct.pack_into("<II", slot, 96, 0, 0)
+    if pending is not None:
+        slot[64:96] = pending
+    struct.pack_into("<II", slot, 96, remaining_attempts, 0)
     slot[104:136] = generation_root
-    slot[136:168] = sha256(b"")
+    slot[136:168] = state_root or sha256(b"")
     slot[168:200] = bootstate_checksum(slot)
     return bytes(slot)
 
 
 def build_bootstore(generations: list[bytes]) -> bytes:
-    entries = sorted(((generation[24:56], generation) for generation in generations), key=lambda item: item[0])
+    entries = sorted(
+        ((generation[24:56], generation) for generation in generations),
+        key=lambda item: item[0],
+    )
     generation_root = sha256(b"".join(identity for identity, _ in entries))
     known_good = generations[-1][24:56]
+    pending = None
+    remaining_attempts = 0
+    if os.environ.get("SLIME_PENDING_GENERATION") == "1":
+        known_good = generations[0][24:56]
+        pending = generations[-1][24:56]
+        remaining_attempts = int(os.environ.get("SLIME_PENDING_ATTEMPTS") or "2")
     image = bytearray(BOOTSTORE_CAPACITY)
-    image[:BOOTSTATE_SLOT_BYTES] = encode_bootstate(2, known_good, generation_root)
-    image[BOOTSTATE_SLOT_BYTES : BOOTSTATE_SLOT_BYTES * 2] = encode_bootstate(1, known_good, generation_root)
+    image[:BOOTSTATE_SLOT_BYTES] = encode_bootstate(
+        2, known_good, generation_root, pending, remaining_attempts
+    )
+    image[BOOTSTATE_SLOT_BYTES : BOOTSTATE_SLOT_BYTES * 2] = encode_bootstate(
+        1, known_good, generation_root, pending, remaining_attempts
+    )
     directory = bytearray()
     cursor = BOOTSTORE_GENERATIONS_OFFSET
     for identity, generation in entries:
@@ -407,13 +452,26 @@ def build_bootstore(generations: list[bytes]) -> bytes:
         directory += BOOTSTORE_ENTRY.pack(identity, cursor, len(generation))
         image[cursor : cursor + len(generation)] = generation
         cursor += len(generation)
-    if cursor > BOOTSTORE_CAPACITY: fail("boot store capacity exceeded")
+    if cursor > BOOTSTORE_CAPACITY:
+        fail("boot store capacity exceeded")
     header = BOOTSTORE_HEADER.pack(
-        BOOTSTORE_MAGIC, BOOTSTORE_VERSION, BOOTSTORE_HEADER.size, 0, len(entries), 0,
-        len(directory), BOOTSTORE_CAPACITY, bytes(32),
+        BOOTSTORE_MAGIC,
+        BOOTSTORE_VERSION,
+        BOOTSTORE_HEADER.size,
+        0,
+        len(entries),
+        0,
+        len(directory),
+        BOOTSTORE_CAPACITY,
+        bytes(32),
     )
     image[BOOTSTORE_DIRECTORY_OFFSET : BOOTSTORE_DIRECTORY_OFFSET + len(header)] = header
-    image[BOOTSTORE_DIRECTORY_OFFSET + len(header) : BOOTSTORE_DIRECTORY_OFFSET + len(header) + len(directory)] = directory
+    image[
+        BOOTSTORE_DIRECTORY_OFFSET
+        + len(header) : BOOTSTORE_DIRECTORY_OFFSET
+        + len(header)
+        + len(directory)
+    ] = directory
     checksum = bootstore_checksum(image)
     image[BOOTSTORE_DIRECTORY_OFFSET + 48 : BOOTSTORE_DIRECTORY_OFFSET + 80] = checksum
     return bytes(image)
@@ -425,7 +483,7 @@ def main() -> None:
     manifest = load_manifest()
     if manifest["formatVersion"] != 1: fail("unsupported source formatVersion")
     policy_number = int(os.environ.get("SLIME_GENERATION_NUMBER") or manifest["generation"])
-    build_rust_components()
+    build_rust_components(1)
     payloads: dict[str, bytes] = {manifest["kernelObject"]: kernel_image(kernel)}
     object_by_id = {obj["id"]: obj for obj in manifest["objects"]}
     for component in manifest["components"]:
@@ -433,7 +491,11 @@ def main() -> None:
         if not isinstance(stack, int) or stack <= 0 or stack % PAGE_SIZE or stack > MAX_STACK_BYTES: fail(f"component {component['name']}: invalid stack")
         if component["object"] not in object_by_id: fail(f"component {component['name']}: missing object")
         payloads[component["object"]] = component_image(component["name"], COMPONENTS_ELF_DIR / component["name"], stack)
-    generation1 = build_generation(manifest, payloads, None, policy_number)
+    generation1 = build_generation(manifest, payloads, None, 1)
+    build_rust_components(policy_number)
+    for component in manifest["components"]:
+        stack = component.get("stackBytes", DEFAULT_STACK_BYTES)
+        payloads[component["object"]] = component_image(component["name"], COMPONENTS_ELF_DIR / component["name"], stack)
     generation2 = build_generation(manifest, payloads, generation1[24:56], policy_number)
     bootstore = build_bootstore([generation1, generation2])
     (output / "generation-1.bin").write_bytes(generation1)
