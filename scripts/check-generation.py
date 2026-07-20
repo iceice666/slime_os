@@ -144,14 +144,17 @@ def check_generation(data: bytes, expected_identity: bytes | None = None) -> dic
 
 
 def decode_bootstate(slot: bytes) -> dict:
-    require(len(slot) == BOOTSTATE_SLOT_BYTES and slot[:8] == BOOTSTATE_MAGIC, "BadBootStateMagic")
-    version, header, flags, sequence = __import__("struct").unpack_from("<IIQQ", slot, 8)
+    require(len(slot) == BOOTSTATE_SLOT_BYTES and slot[BOOTSTATE_MAGIC_OFFSET:BOOTSTATE_MAGIC_END] == BOOTSTATE_MAGIC, "BadBootStateMagic")
+    version, header, flags, sequence = __import__("struct").unpack_from("<IIQQ", slot, BOOTSTATE_FORMAT_VERSION_OFFSET)
     require(version == BOOTSTATE_VERSION and header == BOOTSTATE_SLOT_BYTES and flags == 0, "BadBootStateVersion")
-    require(sequence != 2**64 - 1 and not any(slot[100:104]) and not any(slot[208:]), "BadBootStateReserved")
-    require(slot[176:208] == bootstate_checksum(slot), "BadBootStateChecksum")
-    known_good = slot[32:64]; pending = slot[64:96]; attempts = int.from_bytes(slot[96:100], "little")
-    generation_root = slot[104:136]; state_root = slot[136:168]
-    accepted_release_sequence = int.from_bytes(slot[168:176], "little")
+    require(sequence != 2**64 - 1 and not any(slot[BOOTSTATE_RESERVED_OFFSET:BOOTSTATE_RESERVED_END]) and not any(slot[BOOTSTATE_CHECKSUM_END:]), "BadBootStateReserved")
+    require(slot[BOOTSTATE_CHECKSUM_OFFSET:BOOTSTATE_CHECKSUM_END] == bootstate_checksum(slot), "BadBootStateChecksum")
+    known_good = slot[BOOTSTATE_KNOWN_GOOD_OFFSET:BOOTSTATE_KNOWN_GOOD_END]
+    pending = slot[BOOTSTATE_PENDING_OFFSET:BOOTSTATE_PENDING_END]
+    attempts = int.from_bytes(slot[BOOTSTATE_REMAINING_ATTEMPTS_OFFSET:BOOTSTATE_REMAINING_ATTEMPTS_END], "little")
+    generation_root = slot[BOOTSTATE_GENERATION_ROOT_OFFSET:BOOTSTATE_GENERATION_ROOT_END]
+    state_root = slot[BOOTSTATE_STATE_ROOT_OFFSET:BOOTSTATE_STATE_ROOT_END]
+    accepted_release_sequence = int.from_bytes(slot[BOOTSTATE_ACCEPTED_RELEASE_SEQUENCE_OFFSET:BOOTSTATE_ACCEPTED_RELEASE_SEQUENCE_END], "little")
     require(known_good != bytes(32) and generation_root != bytes(32), "BadBootStateRoot")
     require((pending == bytes(32) and attempts == 0) or pending != bytes(32), "BadPendingAttempts")
     return {"sequence": sequence, "known_good": known_good, "pending": None if pending == bytes(32) else pending, "remaining_attempts": attempts, "generation_root": generation_root, "state_root": state_root, "accepted_release_sequence": accepted_release_sequence}
@@ -159,24 +162,24 @@ def decode_bootstate(slot: bytes) -> dict:
 
 def check_release(data: bytes, generation: bytes, accepted_sequence: int | None = None) -> int:
     require(len(data) == RELEASE_BYTES and data[:8] == RELEASE_MAGIC, "BadReleaseMagic")
-    version, header, flags = struct.unpack_from("<IIQ", data, 8)
+    version, header, flags = struct.unpack_from("<IIQ", data, RELEASE_HEADER_FORMAT_VERSION_OFFSET)
     require(version == RELEASE_VERSION and header == RELEASE_HEADER_BYTES and flags == 0, "BadReleaseVersion")
-    sequence, target_len, trust_version = struct.unpack_from("<QII", data, 88)
-    signature_count = struct.unpack_from("<I", data, 200)[0]
-    require(1 <= target_len <= 32 and trust_version == 1, "BadReleaseBounds")
-    require(2 <= signature_count <= MAX_RELEASE_SIGNATURES and not any(data[204:RELEASE_HEADER_BYTES]), "BadReleaseSignatures")
+    sequence, target_len, trust_version = struct.unpack_from("<QII", data, RELEASE_HEADER_RELEASE_SEQUENCE_OFFSET)
+    signature_count = struct.unpack_from("<I", data, RELEASE_HEADER_SIGNATURE_COUNT_OFFSET)[0]
+    require(1 <= target_len <= MAX_TARGET_BYTES and trust_version == 1, "BadReleaseBounds")
+    require(2 <= signature_count <= MAX_RELEASE_SIGNATURES and not any(data[RELEASE_HEADER_RESERVED_OFFSET:RELEASE_HEADER_RESERVED_END]), "BadReleaseSignatures")
     generation_info = check_generation(generation)
-    require(data[24:56] == generation_info["identity"], "WrongReleaseGeneration")
+    require(data[RELEASE_HEADER_GENERATION_IDENTITY_OFFSET:RELEASE_HEADER_GENERATION_IDENTITY_END] == generation_info["identity"], "WrongReleaseGeneration")
     parent = generation_info["parent"] or bytes(32)
-    require(data[56:88] == parent, "WrongReleaseParent")
-    target = data[104 : 104 + target_len].decode("utf-8")
-    require(target == generation_info["target"] and not any(data[104 + target_len : 136]), "WrongReleaseTarget")
+    require(data[RELEASE_HEADER_PARENT_IDENTITY_OFFSET:RELEASE_HEADER_PARENT_IDENTITY_END] == parent, "WrongReleaseParent")
+    target = data[RELEASE_HEADER_TARGET_OFFSET : RELEASE_HEADER_TARGET_OFFSET + target_len].decode("utf-8")
+    require(target == generation_info["target"] and not any(data[RELEASE_HEADER_TARGET_OFFSET + target_len : RELEASE_HEADER_TARGET_END]), "WrongReleaseTarget")
     fields = GENERATION_HEADER.unpack_from(generation)
     object_offset = fields[17]
     kernel_index = fields[8]
     kernel_digest = GENERATION_OBJECT.unpack_from(generation, object_offset + kernel_index * GENERATION_OBJECT.size)[4]
-    require(data[136:168] == kernel_digest, "WrongReleaseKernel")
-    require(data[168:200] == authority_manifest_identity(generation), "WrongReleaseAuthority")
+    require(data[RELEASE_HEADER_KERNEL_IDENTITY_OFFSET:RELEASE_HEADER_KERNEL_IDENTITY_END] == kernel_digest, "WrongReleaseKernel")
+    require(data[RELEASE_HEADER_AUTHORITY_MANIFEST_OFFSET:RELEASE_HEADER_AUTHORITY_MANIFEST_END] == authority_manifest_identity(generation), "WrongReleaseAuthority")
     if accepted_sequence is not None:
         require(sequence > accepted_sequence, "StaleRelease")
     key_by_id = {sha256(key): key for key in initial_public_keys()}
@@ -184,8 +187,8 @@ def check_release(data: bytes, generation: bytes, accepted_sequence: int | None 
     signed = ssh_signed_payload(data[:RELEASE_HEADER_BYTES])
     for index in range(signature_count):
         offset = RELEASE_HEADER_BYTES + index * RELEASE_SIGNATURE_BYTES
-        key_id = data[offset : offset + 32]
-        signature = data[offset + 32 : offset + RELEASE_SIGNATURE_BYTES]
+        key_id = data[offset + RELEASE_SIGNATURE_KEY_ID_OFFSET : offset + RELEASE_SIGNATURE_KEY_ID_END]
+        signature = data[offset + RELEASE_SIGNATURE_SIGNATURE_OFFSET : offset + RELEASE_SIGNATURE_SIGNATURE_END]
         require(key_id > previous and key_id in key_by_id, "DuplicateOrUnknownReleaseKey")
         public = key_by_id[key_id]
         process = __import__("subprocess").run(

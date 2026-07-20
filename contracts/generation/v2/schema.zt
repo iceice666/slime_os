@@ -1,7 +1,14 @@
 -- Slime OS boot-time generation binary format, version 2.
 --
--- The source manifest remains contracts/generation/v1. This contract freezes
--- the bounded canonical wire representation consumed by stage-0 and the kernel.
+-- Logical records and concrete packed little-endian layouts live together.
+-- The renderer reflects every record, checks field order against its layout,
+-- derives struct.Struct format strings and offsets, and writes the Python
+-- binding fragment consumed by the boot binding assembler.
+
+env ::= import stdlib.env;
+fs ::= import stdlib.fs;
+gen ::= import "gen_rust.zt";
+t ::= import stdlib.text;
 
 formatVersion :: Int = 2;
 headerLen :: Int = 256;
@@ -22,12 +29,16 @@ maxStringBytes :: Int = 255;
 maxStringTableBytes :: Int = 65536;
 maxObjectPayloadBytes :: Int = 8388608;
 
+WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
+
 GenerationHeader :: type {
   magic : Int;
   format_version : Int;
   header_size : Int;
   required_flags : Int;
+  identity : Int;
   generation_number : Int;
+  parent : Int;
   target_offset : Int;
   kernel_object : Int;
   bootstrap_component : Int;
@@ -38,6 +49,15 @@ GenerationHeader :: type {
   grant_count : Int;
   state_count : Int;
   health_count : Int;
+  object_offset : Int;
+  component_offset : Int;
+  dependency_offset : Int;
+  grant_offset : Int;
+  state_offset : Int;
+  health_offset : Int;
+  string_offset : Int;
+  string_len : Int;
+  payload_offset : Int;
   total_len : Int;
 };
 
@@ -46,6 +66,7 @@ ObjectRecord :: type {
   kind : Int;
   payload_offset : Int;
   payload_len : Int;
+  digest : Int;
 };
 
 ComponentRecord :: type {
@@ -55,6 +76,8 @@ ComponentRecord :: type {
   dependency_start : Int;
   dependency_count : Int;
 };
+
+DependencyRecord :: type { component : Int; };
 
 CapabilityGrantRecord :: type {
   name_offset : Int;
@@ -71,16 +94,126 @@ StateBindingRecord :: type {
   policy : Int;
 };
 
+HealthRecord :: type { component : Int; };
+
 generationHeaderSchema ::= schema GenerationHeader;
 objectRecordSchema ::= schema ObjectRecord;
 componentRecordSchema ::= schema ComponentRecord;
+dependencyRecordSchema ::= schema DependencyRecord;
 capabilityGrantRecordSchema ::= schema CapabilityGrantRecord;
 stateBindingRecordSchema ::= schema StateBindingRecord;
+healthRecordSchema ::= schema HealthRecord;
 
-{
-  generationHeaderSchema = generationHeaderSchema;
-  objectRecordSchema = objectRecordSchema;
-  componentRecordSchema = componentRecordSchema;
-  capabilityGrantRecordSchema = capabilityGrantRecordSchema;
-  stateBindingRecordSchema = stateBindingRecordSchema;
-}
+generationHeaderLayout :: List WireField = {
+  { name = "magic"; width = 8; signed = false; byteArray = true; };
+  { name = "format_version"; width = 4; signed = false; byteArray = false; };
+  { name = "header_size"; width = 4; signed = false; byteArray = false; };
+  { name = "required_flags"; width = 8; signed = false; byteArray = false; };
+  { name = "identity"; width = 32; signed = false; byteArray = true; };
+  { name = "generation_number"; width = 8; signed = false; byteArray = false; };
+  { name = "parent"; width = 32; signed = false; byteArray = true; };
+  { name = "target_offset"; width = 4; signed = false; byteArray = false; };
+  { name = "kernel_object"; width = 4; signed = false; byteArray = false; };
+  { name = "bootstrap_component"; width = 4; signed = false; byteArray = false; };
+  { name = "boot_attempts"; width = 4; signed = false; byteArray = false; };
+  { name = "object_count"; width = 4; signed = false; byteArray = false; };
+  { name = "component_count"; width = 4; signed = false; byteArray = false; };
+  { name = "dependency_count"; width = 4; signed = false; byteArray = false; };
+  { name = "grant_count"; width = 4; signed = false; byteArray = false; };
+  { name = "state_count"; width = 4; signed = false; byteArray = false; };
+  { name = "health_count"; width = 4; signed = false; byteArray = false; };
+  { name = "object_offset"; width = 8; signed = false; byteArray = false; };
+  { name = "component_offset"; width = 8; signed = false; byteArray = false; };
+  { name = "dependency_offset"; width = 8; signed = false; byteArray = false; };
+  { name = "grant_offset"; width = 8; signed = false; byteArray = false; };
+  { name = "state_offset"; width = 8; signed = false; byteArray = false; };
+  { name = "health_offset"; width = 8; signed = false; byteArray = false; };
+  { name = "string_offset"; width = 8; signed = false; byteArray = false; };
+  { name = "string_len"; width = 8; signed = false; byteArray = false; };
+  { name = "payload_offset"; width = 8; signed = false; byteArray = false; };
+  { name = "total_len"; width = 8; signed = false; byteArray = false; };
+};
+
+objectLayout :: List WireField = {
+  { name = "id_offset"; width = 4; signed = false; byteArray = false; };
+  { name = "kind"; width = 4; signed = false; byteArray = false; };
+  { name = "payload_offset"; width = 8; signed = false; byteArray = false; };
+  { name = "payload_len"; width = 8; signed = false; byteArray = false; };
+  { name = "digest"; width = 32; signed = false; byteArray = true; };
+};
+
+componentLayout :: List WireField = {
+  { name = "name_offset"; width = 4; signed = false; byteArray = false; };
+  { name = "object_index"; width = 4; signed = false; byteArray = false; };
+  { name = "role"; width = 4; signed = false; byteArray = false; };
+  { name = "dependency_start"; width = 4; signed = false; byteArray = false; };
+  { name = "dependency_count"; width = 4; signed = false; byteArray = false; };
+};
+
+dependencyLayout :: List WireField = {
+  { name = "component"; width = 4; signed = false; byteArray = false; };
+};
+
+grantLayout :: List WireField = {
+  { name = "name_offset"; width = 4; signed = false; byteArray = false; };
+  { name = "source"; width = 4; signed = false; byteArray = false; };
+  { name = "target"; width = 4; signed = false; byteArray = false; };
+  { name = "rights"; width = 4; signed = false; byteArray = false; };
+  { name = "transferable"; width = 4; signed = false; byteArray = false; };
+};
+
+stateLayout :: List WireField = {
+  { name = "name_offset"; width = 4; signed = false; byteArray = false; };
+  { name = "owner"; width = 4; signed = false; byteArray = false; };
+  { name = "schema_version"; width = 4; signed = false; byteArray = false; };
+  { name = "policy"; width = 4; signed = false; byteArray = false; };
+};
+
+healthLayout :: List WireField = {
+  { name = "component"; width = 4; signed = false; byteArray = false; };
+};
+
+format ::= {
+  formatVersion = formatVersion;
+  headerLen = headerLen;
+  objectLen = objectLen;
+  componentLen = componentLen;
+  dependencyLen = dependencyLen;
+  grantLen = grantLen;
+  stateLen = stateLen;
+  healthLen = healthLen;
+  maxGenerationBytes = maxGenerationBytes;
+  maxObjects = maxObjects;
+  maxComponents = maxComponents;
+  maxGrants = maxGrants;
+  maxStates = maxStates;
+  maxDependencies = maxDependencies;
+  maxHealthComponents = maxHealthComponents;
+  maxStringBytes = maxStringBytes;
+  maxStringTableBytes = maxStringTableBytes;
+  maxObjectPayloadBytes = maxObjectPayloadBytes;
+  headerFields = generationHeaderSchema.fields ?? {;};
+  objectFields = objectRecordSchema.fields ?? {;};
+  componentFields = componentRecordSchema.fields ?? {;};
+  dependencyFields = dependencyRecordSchema.fields ?? {;};
+  grantFields = capabilityGrantRecordSchema.fields ?? {;};
+  stateFields = stateBindingRecordSchema.fields ?? {;};
+  healthFields = healthRecordSchema.fields ?? {;};
+  headerLayout = generationHeaderLayout;
+  objectLayout = objectLayout;
+  componentLayout = componentLayout;
+  dependencyLayout = dependencyLayout;
+  grantLayout = grantLayout;
+  stateLayout = stateLayout;
+  healthLayout = healthLayout;
+};
+
+main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }
+  = caps => [
+    root := env.get caps.env "SLIME_BOOT_BINDINGS_ROOT" ?? ".";
+    bindings := gen.render format;
+    path := t.join "" { root; "/generation.py"; };
+    fs.writeAll caps.write path bindings.python
+  ];
+
+main

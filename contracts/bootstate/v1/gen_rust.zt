@@ -1,6 +1,47 @@
-BootStateBinding :: type { formatVersion : Int; slotBytes : Int; slotCount : Int; };
-render :: BootStateBinding -> Text
-  = format => if format.formatVersion == 2 && format.slotBytes == 512 && format.slotCount == 2
-    then "bootstate-v2"
-    else "INVALID_BOOTSTATE_SCHEMA";
+-- Schema-reflected Python renderer for BootState and boot-store layouts.
+
+refl ::= import stdlib.reflect;
+t ::= import stdlib.text;
+
+WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
+WireRecord :: type { pythonName : Text; constPrefix : Text; size : Int; trailingPadding : Int; fields : List refl.SchemaField; layout : List WireField; };
+Format :: type {
+  formatVersion : Int; slotBytes : Int; slotCount : Int; requiredFlags : Int;
+  bootStoreVersion : Int; bootStoreHeaderLen : Int; bootStoreEntryLen : Int; bootStoreCapacity : Int;
+  bootStoreDirectoryOffset : Int; bootStoreReleasesOffset : Int; bootStoreGenerationsOffset : Int;
+  slotFields : List refl.SchemaField; headerFields : List refl.SchemaField; entryFields : List refl.SchemaField;
+  slotLayout : List WireField; headerLayout : List WireField; entryLayout : List WireField;
+};
+
+join :: List Text -> Text = parts => t.join "" parts;
+digit :: Int -> Text = value => match value { | 0 => "0"; | 1 => "1"; | 2 => "2"; | 3 => "3"; | 4 => "4"; | 5 => "5"; | 6 => "6"; | 7 => "7"; | 8 => "8"; | 9 => "9"; | _ => "?"; };
+natText :: Int -> Text = value => if value < 10 then digit value else join { natText (value / 10); digit (value % 10); };
+validWidth :: WireField -> Bool = field => if field.byteArray then field.width > 0 && not field.signed else field.width == 1 || field.width == 2 || field.width == 4 || field.width == 8;
+allValidWidths :: List WireField -> Bool = fields => match fields { | {;} => true; | { field; ...rest } => validWidth field && allValidWidths rest; };
+addWidth :: Int -> WireField -> Int = total field => total + field.width;
+wireBytes :: List WireField -> Int = fields => fold addWidth 0 fields;
+schemaNames :: List refl.SchemaField -> List Text = fields => map _.name fields;
+layoutNames :: List WireField -> List Text = fields => map _.name fields;
+schemaFieldsValid :: List refl.SchemaField -> Bool = fields => match fields { | {;} => true; | { field; ...rest } => field.type == "Int" && not field.optional && schemaFieldsValid rest; };
+recordValid :: WireRecord -> Bool = record => record.trailingPadding >= 0 && schemaFieldsValid record.fields && schemaNames record.fields == layoutNames record.layout && allValidWidths record.layout && wireBytes record.layout + record.trailingPadding == record.size;
+recordsValid :: List WireRecord -> Bool = values => match values { | {;} => true; | { record; ...rest } => recordValid record && recordsValid rest; };
+integerCode :: WireField -> Text = field => if field.signed then match field.width { | 1 => "b"; | 2 => "h"; | 4 => "i"; | 8 => "q"; | _ => "INVALID_WIDTH"; } else match field.width { | 1 => "B"; | 2 => "H"; | 4 => "I"; | 8 => "Q"; | _ => "INVALID_WIDTH"; };
+fieldCode :: WireField -> Text = field => if field.byteArray then join { natText field.width; "s"; } else integerCode field;
+formatFields :: List WireField -> Text = fields => match fields { | {;} => ""; | { field; ...rest } => join { fieldCode field; formatFields rest; }; };
+paddingCode :: Int -> Text = width => if width == 0 then "" else if width == 1 then "x" else join { natText width; "x"; };
+offsetConsts :: Text -> Int -> List WireField -> Text = prefix offset fields => match fields { | {;} => ""; | { field; ...rest } => join { prefix; "_"; t.toUpper field.name; "_OFFSET = "; natText offset; "\n"; prefix; "_"; t.toUpper field.name; "_END = "; natText (offset + field.width); "\n"; offsetConsts prefix (offset + field.width) rest; }; };
+renderRecord :: WireRecord -> Text = record => join { record.pythonName; " = struct.Struct(\"<"; formatFields record.layout; paddingCode record.trailingPadding; "\")\n"; offsetConsts record.constPrefix 0 record.layout; };
+renderRecords :: List WireRecord -> Text = values => match values { | {;} => ""; | { record; ...rest } => join { renderRecord record; "\n"; renderRecords rest; }; };
+records :: Format -> List WireRecord = format => {
+  { pythonName = "BOOTSTATE_SLOT"; constPrefix = "BOOTSTATE"; size = format.slotBytes; trailingPadding = 304; fields = format.slotFields; layout = format.slotLayout; };
+  { pythonName = "BOOTSTORE_HEADER"; constPrefix = "BOOTSTORE_HEADER"; size = format.bootStoreHeaderLen; trailingPadding = 16; fields = format.headerFields; layout = format.headerLayout; };
+  { pythonName = "BOOTSTORE_ENTRY"; constPrefix = "BOOTSTORE_ENTRY"; size = format.bootStoreEntryLen; trailingPadding = 32; fields = format.entryFields; layout = format.entryLayout; };
+};
+pythonBindings :: Format -> Text = format => join {
+  "BOOTSTATE_MAGIC = b\"SLIMEBS\\0\"\n"; "BOOTSTATE_VERSION = "; natText format.formatVersion; "\n"; "BOOTSTATE_SLOT_BYTES = "; natText format.slotBytes; "\n"; "BOOTSTATE_SLOT_COUNT = "; natText format.slotCount; "\n"; "BOOTSTATE_REQUIRED_FLAGS = "; natText format.requiredFlags; "\n";
+  renderRecords (records format);
+  "BOOTSTATE_RELEASE_SEQUENCE_OFFSET = BOOTSTATE_ACCEPTED_RELEASE_SEQUENCE_OFFSET\n";
+  "BOOTSTORE_MAGIC = b\"SLIMEBT\\0\"\n"; "BOOTSTORE_VERSION = "; natText format.bootStoreVersion; "\n"; "BOOTSTORE_CAPACITY = "; natText format.bootStoreCapacity; "\n"; "BOOTSTORE_DIRECTORY_OFFSET = "; natText format.bootStoreDirectoryOffset; "\n"; "BOOTSTORE_RELEASES_OFFSET = "; natText format.bootStoreReleasesOffset; "\n"; "BOOTSTORE_GENERATIONS_OFFSET = "; natText format.bootStoreGenerationsOffset; "\n";
+};
+render :: Format -> { python : Text; } = format => if recordsValid (records format) then { python = pythonBindings format; } else { python = "INVALID_BOOTSTATE_SCHEMA"; };
 { render = render; }

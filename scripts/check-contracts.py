@@ -95,6 +95,10 @@ for contract in (
 ):
     run("check", str(contract / "schema.zt"))
     run("check", str(contract / "gen_rust.zt"))
+
+invalid_boot_layout = run("run", str(GENERATION_V2_CONTRACT / "check-invalid-layout.zt"))
+if "INVALID_GENERATION_SCHEMA" not in invalid_boot_layout:
+    raise SystemExit("generation wire-layout mismatch was not rejected")
 subprocess.run(
     [sys.executable, str(BOOT_BINDING_GENERATOR), "--check"],
     cwd=ROOT,

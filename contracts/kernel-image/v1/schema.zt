@@ -1,4 +1,10 @@
 -- Slime OS relocatable kernel image format, version 1.
+-- Concrete packed layouts are reflected and rendered into Python bindings.
+
+env ::= import stdlib.env;
+fs ::= import stdlib.fs;
+gen ::= import "gen_rust.zt";
+t ::= import stdlib.text;
 
 formatVersion :: Int = 1;
 kernelAbiVersion :: Int = 2;
@@ -8,6 +14,12 @@ relocationLen :: Int = 16;
 maxImageBytes :: Int = 8388608;
 maxSegments :: Int = 8;
 maxRelocations :: Int = 16384;
+preferredBaseText :: Text = "0xFFFF_FFFF_8000_0000";
+loadBaseText :: Text = "0xFFFF_FFFF_9000_0000";
+segmentWrite :: Int = 1;
+segmentExec :: Int = 2;
+
+WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
 
 KernelImageHeader :: type {
   magic : Int;
@@ -41,8 +53,50 @@ kernelImageHeaderSchema ::= schema KernelImageHeader;
 kernelSegmentRecordSchema ::= schema KernelSegmentRecord;
 kernelRelocationRecordSchema ::= schema KernelRelocationRecord;
 
-{
-  kernelImageHeaderSchema = kernelImageHeaderSchema;
-  kernelSegmentRecordSchema = kernelSegmentRecordSchema;
-  kernelRelocationRecordSchema = kernelRelocationRecordSchema;
-}
+headerLayout :: List WireField = {
+  { name = "magic"; width = 8; signed = false; byteArray = true; };
+  { name = "format_version"; width = 4; signed = false; byteArray = false; };
+  { name = "header_size"; width = 4; signed = false; byteArray = false; };
+  { name = "kernel_abi"; width = 4; signed = false; byteArray = false; };
+  { name = "required_flags"; width = 4; signed = false; byteArray = false; };
+  { name = "preferred_base"; width = 8; signed = false; byteArray = false; };
+  { name = "entry_offset"; width = 8; signed = false; byteArray = false; };
+  { name = "segment_count"; width = 4; signed = false; byteArray = false; };
+  { name = "relocation_count"; width = 4; signed = false; byteArray = false; };
+  { name = "payload_offset"; width = 8; signed = false; byteArray = false; };
+  { name = "total_len"; width = 8; signed = false; byteArray = false; };
+};
+
+segmentLayout :: List WireField = {
+  { name = "vaddr_offset"; width = 8; signed = false; byteArray = false; };
+  { name = "mem_len"; width = 8; signed = false; byteArray = false; };
+  { name = "file_offset"; width = 8; signed = false; byteArray = false; };
+  { name = "file_len"; width = 8; signed = false; byteArray = false; };
+  { name = "flags"; width = 4; signed = false; byteArray = false; };
+  { name = "reserved"; width = 4; signed = false; byteArray = false; };
+};
+
+relocationLayout :: List WireField = {
+  { name = "target_offset"; width = 8; signed = false; byteArray = false; };
+  { name = "addend"; width = 8; signed = true; byteArray = false; };
+};
+
+format ::= {
+  formatVersion = formatVersion; kernelAbiVersion = kernelAbiVersion;
+  headerLen = headerLen; segmentLen = segmentLen; relocationLen = relocationLen;
+  maxImageBytes = maxImageBytes; maxSegments = maxSegments; maxRelocations = maxRelocations;
+  preferredBaseText = preferredBaseText; loadBaseText = loadBaseText; segmentWrite = segmentWrite; segmentExec = segmentExec;
+  headerFields = kernelImageHeaderSchema.fields ?? {;};
+  segmentFields = kernelSegmentRecordSchema.fields ?? {;};
+  relocationFields = kernelRelocationRecordSchema.fields ?? {;};
+  headerLayout = headerLayout; segmentLayout = segmentLayout; relocationLayout = relocationLayout;
+};
+main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }
+  = caps => [
+    root := env.get caps.env "SLIME_BOOT_BINDINGS_ROOT" ?? ".";
+    bindings := gen.render format;
+    path := t.join "" { root; "/kernel_image.py"; };
+    fs.writeAll caps.write path bindings.python
+  ];
+
+main

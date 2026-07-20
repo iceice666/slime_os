@@ -1,12 +1,39 @@
-ReleaseBinding :: type {
-  formatVersion : Int;
-  releaseBytes : Int;
-  maxSignatures : Int;
+-- Schema-reflected Python renderer for release/v1.
+
+refl ::= import stdlib.reflect;
+t ::= import stdlib.text;
+
+WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
+WireRecord :: type { pythonName : Text; constPrefix : Text; size : Int; fields : List refl.SchemaField; layout : List WireField; };
+Format :: type {
+  formatVersion : Int; releaseBytes : Int; headerBytes : Int; signatureBytes : Int; maxSignatures : Int; maxTargetBytes : Int;
+  headerFields : List refl.SchemaField; signatureFields : List refl.SchemaField; headerLayout : List WireField; signatureLayout : List WireField;
 };
-
-render :: ReleaseBinding -> Text
-  = format => if format.formatVersion == 1 && format.releaseBytes == 512 && format.maxSignatures == 3
-    then "release-v1"
-    else "INVALID_RELEASE_SCHEMA";
-
+join :: List Text -> Text = parts => t.join "" parts;
+digit :: Int -> Text = value => match value { | 0 => "0"; | 1 => "1"; | 2 => "2"; | 3 => "3"; | 4 => "4"; | 5 => "5"; | 6 => "6"; | 7 => "7"; | 8 => "8"; | 9 => "9"; | _ => "?"; };
+natText :: Int -> Text = value => if value < 10 then digit value else join { natText (value / 10); digit (value % 10); };
+validWidth :: WireField -> Bool = field => if field.byteArray then field.width > 0 && not field.signed else field.width == 1 || field.width == 2 || field.width == 4 || field.width == 8;
+allValidWidths :: List WireField -> Bool = fields => match fields { | {;} => true; | { field; ...rest } => validWidth field && allValidWidths rest; };
+addWidth :: Int -> WireField -> Int = total field => total + field.width;
+wireBytes :: List WireField -> Int = fields => fold addWidth 0 fields;
+schemaNames :: List refl.SchemaField -> List Text = fields => map _.name fields;
+layoutNames :: List WireField -> List Text = fields => map _.name fields;
+schemaFieldsValid :: List refl.SchemaField -> Bool = fields => match fields { | {;} => true; | { field; ...rest } => field.type == "Int" && not field.optional && schemaFieldsValid rest; };
+recordValid :: WireRecord -> Bool = record => schemaFieldsValid record.fields && schemaNames record.fields == layoutNames record.layout && allValidWidths record.layout && wireBytes record.layout == record.size;
+recordsValid :: List WireRecord -> Bool = values => match values { | {;} => true; | { record; ...rest } => recordValid record && recordsValid rest; };
+integerCode :: WireField -> Text = field => if field.signed then match field.width { | 1 => "b"; | 2 => "h"; | 4 => "i"; | 8 => "q"; | _ => "INVALID_WIDTH"; } else match field.width { | 1 => "B"; | 2 => "H"; | 4 => "I"; | 8 => "Q"; | _ => "INVALID_WIDTH"; };
+fieldCode :: WireField -> Text = field => if field.byteArray then join { natText field.width; "s"; } else integerCode field;
+formatFields :: List WireField -> Text = fields => match fields { | {;} => ""; | { field; ...rest } => join { fieldCode field; formatFields rest; }; };
+offsetConsts :: Text -> Int -> List WireField -> Text = prefix offset fields => match fields { | {;} => ""; | { field; ...rest } => join { prefix; "_"; t.toUpper field.name; "_OFFSET = "; natText offset; "\n"; prefix; "_"; t.toUpper field.name; "_END = "; natText (offset + field.width); "\n"; offsetConsts prefix (offset + field.width) rest; }; };
+renderRecord :: WireRecord -> Text = record => join { record.pythonName; " = struct.Struct(\"<"; formatFields record.layout; "\")\n"; offsetConsts record.constPrefix 0 record.layout; };
+renderRecords :: List WireRecord -> Text = values => match values { | {;} => ""; | { record; ...rest } => join { renderRecord record; "\n"; renderRecords rest; }; };
+records :: Format -> List WireRecord = format => {
+  { pythonName = "RELEASE_HEADER"; constPrefix = "RELEASE_HEADER"; size = format.headerBytes; fields = format.headerFields; layout = format.headerLayout; };
+  { pythonName = "RELEASE_SIGNATURE"; constPrefix = "RELEASE_SIGNATURE"; size = format.signatureBytes; fields = format.signatureFields; layout = format.signatureLayout; };
+};
+pythonBindings :: Format -> Text = format => join {
+  "RELEASE_MAGIC = b\"SLIMERL\\0\"\n"; "RELEASE_VERSION = "; natText format.formatVersion; "\n"; "RELEASE_BYTES = "; natText format.releaseBytes; "\n"; "RELEASE_HEADER_BYTES = "; natText format.headerBytes; "\n"; "RELEASE_SIGNATURE_BYTES = "; natText format.signatureBytes; "\n"; "MAX_RELEASE_SIGNATURES = "; natText format.maxSignatures; "\n"; "MAX_TARGET_BYTES = "; natText format.maxTargetBytes; "\n";
+  renderRecords (records format);
+};
+render :: Format -> { python : Text; } = format => if recordsValid (records format) then { python = pythonBindings format; } else { python = "INVALID_RELEASE_SCHEMA"; };
 { render = render; }

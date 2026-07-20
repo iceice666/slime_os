@@ -6,13 +6,31 @@ import struct
 import subprocess
 from pathlib import Path
 
-RELEASE_MAGIC = b"SLIMERL\0"
-RELEASE_VERSION = 1
-RELEASE_BYTES = 512
-RELEASE_HEADER_BYTES = 208
-RELEASE_SIGNATURE_BYTES = 96
-MAX_RELEASE_SIGNATURES = 3
-MAX_TARGET_BYTES = 32
+from boot_contracts import (
+    MAX_RELEASE_SIGNATURES,
+    MAX_TARGET_BYTES,
+    RELEASE_BYTES,
+    RELEASE_HEADER_AUTHORITY_MANIFEST_END,
+    RELEASE_HEADER_AUTHORITY_MANIFEST_OFFSET,
+    RELEASE_HEADER_BYTES,
+    RELEASE_HEADER_GENERATION_IDENTITY_END,
+    RELEASE_HEADER_GENERATION_IDENTITY_OFFSET,
+    RELEASE_HEADER_KERNEL_IDENTITY_END,
+    RELEASE_HEADER_KERNEL_IDENTITY_OFFSET,
+    RELEASE_HEADER_PARENT_IDENTITY_END,
+    RELEASE_HEADER_PARENT_IDENTITY_OFFSET,
+    RELEASE_HEADER_RELEASE_SEQUENCE_OFFSET,
+    RELEASE_HEADER_SIGNATURE_COUNT_OFFSET,
+    RELEASE_HEADER_TARGET_OFFSET,
+    RELEASE_MAGIC,
+    RELEASE_SIGNATURE_BYTES,
+    RELEASE_SIGNATURE_KEY_ID_END,
+    RELEASE_SIGNATURE_KEY_ID_OFFSET,
+    RELEASE_SIGNATURE_SIGNATURE_END,
+    RELEASE_SIGNATURE_SIGNATURE_OFFSET,
+    RELEASE_VERSION,
+)
+
 ROTATION_MAGIC = b"SLIMERT\0"
 ROTATION_VERSION = 1
 ROTATION_BYTES = 1024
@@ -149,19 +167,19 @@ def build_release(generation: bytes, sequence: int, key_paths: tuple[Path, ...] 
     release = bytearray(RELEASE_BYTES)
     release[:8] = RELEASE_MAGIC
     struct.pack_into("<IIQ", release, 8, RELEASE_VERSION, RELEASE_HEADER_BYTES, 0)
-    release[24:56] = identity
-    release[56:88] = parent
-    struct.pack_into("<QII", release, 88, sequence, len(target_bytes), 1)
-    release[104 : 104 + len(target_bytes)] = target_bytes
-    release[136:168] = kernel
-    release[168:200] = authority
-    struct.pack_into("<I", release, 200, len(key_paths))
+    release[RELEASE_HEADER_GENERATION_IDENTITY_OFFSET:RELEASE_HEADER_GENERATION_IDENTITY_END] = identity
+    release[RELEASE_HEADER_PARENT_IDENTITY_OFFSET:RELEASE_HEADER_PARENT_IDENTITY_END] = parent
+    struct.pack_into("<QII", release, RELEASE_HEADER_RELEASE_SEQUENCE_OFFSET, sequence, len(target_bytes), 1)
+    release[RELEASE_HEADER_TARGET_OFFSET : RELEASE_HEADER_TARGET_OFFSET + len(target_bytes)] = target_bytes
+    release[RELEASE_HEADER_KERNEL_IDENTITY_OFFSET:RELEASE_HEADER_KERNEL_IDENTITY_END] = kernel
+    release[RELEASE_HEADER_AUTHORITY_MANIFEST_OFFSET:RELEASE_HEADER_AUTHORITY_MANIFEST_END] = authority
+    struct.pack_into("<I", release, RELEASE_HEADER_SIGNATURE_COUNT_OFFSET, len(key_paths))
     payload = bytes(release[:RELEASE_HEADER_BYTES])
     entries = sorted((sha256(ssh_public_key(path)), ssh_signature(path, payload)) for path in key_paths)
     for index, (key_id, signature) in enumerate(entries):
         offset = RELEASE_HEADER_BYTES + index * RELEASE_SIGNATURE_BYTES
-        release[offset : offset + 32] = key_id
-        release[offset + 32 : offset + RELEASE_SIGNATURE_BYTES] = signature
+        release[offset + RELEASE_SIGNATURE_KEY_ID_OFFSET : offset + RELEASE_SIGNATURE_KEY_ID_END] = key_id
+        release[offset + RELEASE_SIGNATURE_SIGNATURE_OFFSET : offset + RELEASE_SIGNATURE_SIGNATURE_END] = signature
     return bytes(release)
 
 

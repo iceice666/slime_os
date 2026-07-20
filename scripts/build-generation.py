@@ -10,10 +10,21 @@ import subprocess
 import sys
 from pathlib import Path
 
-from release_trust import RELEASE_BYTES, build_release
 from boot_contracts import (
+    BOOTSTATE_ACCEPTED_RELEASE_SEQUENCE_OFFSET,
+    BOOTSTATE_CHECKSUM_END,
+    BOOTSTATE_CHECKSUM_OFFSET,
+    BOOTSTATE_GENERATION_ROOT_END,
+    BOOTSTATE_GENERATION_ROOT_OFFSET,
+    BOOTSTATE_KNOWN_GOOD_END,
+    BOOTSTATE_KNOWN_GOOD_OFFSET,
     BOOTSTATE_MAGIC,
+    BOOTSTATE_PENDING_END,
+    BOOTSTATE_PENDING_OFFSET,
+    BOOTSTATE_REMAINING_ATTEMPTS_OFFSET,
     BOOTSTATE_SLOT_BYTES,
+    BOOTSTATE_STATE_ROOT_END,
+    BOOTSTATE_STATE_ROOT_OFFSET,
     BOOTSTATE_VERSION,
     BOOTSTORE_CAPACITY,
     BOOTSTORE_DIRECTORY_OFFSET,
@@ -59,6 +70,7 @@ from boot_contracts import (
     generation_identity,
     sha256,
 )
+from release_trust import RELEASE_BYTES, build_release
 
 ROOT = Path(__file__).resolve().parent.parent
 ZUTAI = ROOT / "deps" / "zutai" / "Cargo.toml"
@@ -418,14 +430,14 @@ def encode_bootstate(
     slot = bytearray(BOOTSTATE_SLOT_BYTES)
     slot[:8] = BOOTSTATE_MAGIC
     struct.pack_into("<IIQQ", slot, 8, BOOTSTATE_VERSION, BOOTSTATE_SLOT_BYTES, 0, sequence)
-    slot[32:64] = known_good
+    slot[BOOTSTATE_KNOWN_GOOD_OFFSET:BOOTSTATE_KNOWN_GOOD_END] = known_good
     if pending is not None:
-        slot[64:96] = pending
-    struct.pack_into("<II", slot, 96, remaining_attempts, 0)
-    slot[104:136] = generation_root
-    slot[136:168] = state_root or sha256(b"")
-    struct.pack_into("<Q", slot, 168, accepted_release_sequence)
-    slot[176:208] = bootstate_checksum(slot)
+        slot[BOOTSTATE_PENDING_OFFSET:BOOTSTATE_PENDING_END] = pending
+    struct.pack_into("<II", slot, BOOTSTATE_REMAINING_ATTEMPTS_OFFSET, remaining_attempts, 0)
+    slot[BOOTSTATE_GENERATION_ROOT_OFFSET:BOOTSTATE_GENERATION_ROOT_END] = generation_root
+    slot[BOOTSTATE_STATE_ROOT_OFFSET:BOOTSTATE_STATE_ROOT_END] = state_root or sha256(b"")
+    struct.pack_into("<Q", slot, BOOTSTATE_ACCEPTED_RELEASE_SEQUENCE_OFFSET, accepted_release_sequence)
+    slot[BOOTSTATE_CHECKSUM_OFFSET:BOOTSTATE_CHECKSUM_END] = bootstate_checksum(slot)
     return bytes(slot)
 
 
