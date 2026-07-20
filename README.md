@@ -182,7 +182,7 @@ Atomicity and agentic operation reinforce each other: agent memory and authority
 
 ## Differentiating directions
 
-Exploratory directions enabled by the capability and generation model — descriptions, dependencies, exit-condition sketches, and promotion status — are registered in [`docs/directions.md`](docs/directions.md). None of them is a committed milestone; each becomes real only when promoted into ROADMAP.md with an observable exit condition.
+Exploratory directions enabled by the capability and generation model — descriptions, dependencies, exit-condition sketches, and promotion status — are registered in [`docs/directions/`](docs/directions/README.md), one elaborated file per active entry. None of them is a committed milestone; each becomes real only when promoted into ROADMAP.md with an observable exit condition.
 
 ## First vertical slice
 
