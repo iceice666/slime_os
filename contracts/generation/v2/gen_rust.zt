@@ -44,7 +44,7 @@ records :: Format -> List w.WireRecord
   = format => {
     { pythonName = "GENERATION_HEADER"; constPrefix = "GENERATION_HEADER"; size = format.headerLen; trailingPadding = 40; fields = format.headerFields; layout = format.headerLayout; };
     { pythonName = "GENERATION_OBJECT"; constPrefix = "GENERATION_OBJECT"; size = format.objectLen; trailingPadding = 8; fields = format.objectFields; layout = format.objectLayout; };
-    { pythonName = "GENERATION_COMPONENT"; constPrefix = "GENERATION_COMPONENT"; size = format.componentLen; trailingPadding = 12; fields = format.componentFields; layout = format.componentLayout; };
+    { pythonName = "GENERATION_COMPONENT"; constPrefix = "GENERATION_COMPONENT"; size = format.componentLen; trailingPadding = 8; fields = format.componentFields; layout = format.componentLayout; };
     { pythonName = "GENERATION_DEPENDENCY"; constPrefix = "GENERATION_DEPENDENCY"; size = format.dependencyLen; trailingPadding = 0; fields = format.dependencyFields; layout = format.dependencyLayout; };
     { pythonName = "GENERATION_GRANT"; constPrefix = "GENERATION_GRANT"; size = format.grantLen; trailingPadding = 12; fields = format.grantFields; layout = format.grantLayout; };
     { pythonName = "GENERATION_STATE"; constPrefix = "GENERATION_STATE"; size = format.stateLen; trailingPadding = 8; fields = format.stateFields; layout = format.stateLayout; };

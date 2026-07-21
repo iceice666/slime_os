@@ -60,6 +60,11 @@ def check_kernel_image(blob: bytes) -> None:
         require(KERNEL_PREFERRED_BASE <= absolute_addend <= KERNEL_PREFERRED_BASE + ((image_end + 4095) & ~4095), "BadRelocationAddend")
 
 
+RIGHT_TRANSFER = 1 << 2
+RIGHT_ALL = (1 << 19) - 1
+MAX_SPAWN_BUDGET = 32
+
+
 def check_generation(data: bytes, expected_identity: bytes | None = None) -> dict:
     require(len(data) >= GENERATION_HEADER.size and len(data) <= MAX_GENERATION_BYTES, "TruncatedGeneration")
     fields = GENERATION_HEADER.unpack_from(data)
@@ -107,14 +112,15 @@ def check_generation(data: bytes, expected_identity: bytes | None = None) -> dic
     component_rows = []
     previous_name = ""
     for index in range(components):
-        name_offset, object_index, role, dependency_start, dependency_count = GENERATION_COMPONENT.unpack_from(data, component_offset + index * GENERATION_COMPONENT.size)
+        name_offset, object_index, role, dependency_start, dependency_count, spawn_budget = GENERATION_COMPONENT.unpack_from(data, component_offset + index * GENERATION_COMPONENT.size)
         name = read_string(data, strings_offset, strings_len, name_offset)
         require(name > previous_name and object_index < objects and 1 <= role <= 4, "BadComponent")
         require(dependency_start + dependency_count <= dependencies, "BadDependencyBounds")
-        component_rows.append((name, object_index, role, dependency_start, dependency_count))
+        require(0 <= spawn_budget <= MAX_SPAWN_BUDGET, "BadSpawnBudget")
+        component_rows.append((name, object_index, role, dependency_start, dependency_count, spawn_budget))
         previous_name = name
     require(bootstrap < components and component_rows[bootstrap][2] == 1 and object_rows[component_rows[bootstrap][1]][1] == 2, "BadBootstrap")
-    for index, (_, _, _, start, count) in enumerate(component_rows):
+    for index, (_, _, _, start, count, _) in enumerate(component_rows):
         previous_dependency = -1
         for dependency_index in range(start, start + count):
             dependency = GENERATION_DEPENDENCY.unpack_from(data, dependency_offset + dependency_index * GENERATION_DEPENDENCY.size)[0]
@@ -126,7 +132,7 @@ def check_generation(data: bytes, expected_identity: bytes | None = None) -> dic
         name = read_string(data, strings_offset, strings_len, name_offset)
         key = (name, source, destination)
         require(previous_grant is None or key > previous_grant, "NonCanonicalGrants")
-        require(source < components and destination < components and rights and not rights & ~7 and transferable in (0, 1), "BadGrant")
+        require(source < components and destination < components and rights and not rights & ~RIGHT_ALL and transferable in (0, 1) and bool(rights & RIGHT_TRANSFER) == bool(transferable), "BadGrant")
         previous_grant = key
     previous_state = ""
     for index in range(states):
@@ -140,7 +146,7 @@ def check_generation(data: bytes, expected_identity: bytes | None = None) -> dic
         component = GENERATION_HEALTH.unpack_from(data, health_offset + index * GENERATION_HEALTH.size)[0]
         require(component < components and component > previous_health, "BadHealthComponent")
         previous_health = component
-    return {"identity": identity, "number": number, "parent": None if parent == bytes(32) else parent, "target": target, "kernel_len": len(object_rows[kernel_index][2])}
+    return {"identity": identity, "number": number, "parent": None if parent == bytes(32) else parent, "target": target, "kernel_len": len(object_rows[kernel_index][2]), "total_len": total_len}
 
 
 def decode_bootstate(slot: bytes) -> dict:
@@ -245,6 +251,7 @@ def check_bootstore(data: bytes) -> dict:
         generation = check_generation(data[offset : offset + length], identity)
         release = data[release_offset : release_offset + release_length]
         generation["release_sequence"] = check_release(release, data[offset : offset + length])
+        generation.update({"offset": offset, "length": length})
         directory.append(generation)
         previous_identity = identity
     root = sha256(b"".join(generation["identity"] for generation in directory))
@@ -272,10 +279,24 @@ def check_slot_recovery(data: bytes) -> None:
 
 
 
+def check_unknown_generation_version(data: bytes) -> None:
+    generation = bytearray(data)
+    generation[8:12] = (GENERATION_VERSION + 1).to_bytes(4, "little")
+    try:
+        check_generation(bytes(generation))
+    except CheckError as error:
+        require(str(error) == "UnsupportedGenerationVersion", "UnknownVersionAccepted")
+    else:
+        raise CheckError("UnknownVersionAccepted")
+
+
 def main() -> None:
     try:
         data = Path(sys.argv[1]).read_bytes()
         result = check_bootstore(data)
+        selected = result["selected"]
+        offset = selected["offset"]
+        check_unknown_generation_version(data[offset : offset + selected["length"]])
         check_slot_recovery(data)
     except (IndexError, OSError, CheckError, ValueError) as error:
         raise SystemExit(str(error)) from error

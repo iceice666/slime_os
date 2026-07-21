@@ -36,10 +36,10 @@ Rights are a flat `u32`; bits 16–31 are free.
 
 | Object | Right (bit) | Gated operation | Creation authority | Gate status |
 | --- | --- | --- | --- | --- |
-| Endpoint | SEND (0) | `SYS_SEND` via this endpoint | kernel `ipc::channel()`; no userspace path | gated |
+| Endpoint | SEND (0) | `SYS_SEND` via this endpoint | kernel `ipc::channel()` or `SYS_ENDPOINT_CREATE` with factory cap | gated |
 | Endpoint | RECV (1) | `SYS_RECV` on this endpoint | same | gated |
-| *(meta, any cap)* | TRANSFER (2) | cap attachment in `SYS_SEND`; grants in `SYS_SPAWN` | — | gated on both paths |
-| Executable | EXEC (3) | executable slot of `SYS_SPAWN` | generation module only, hash-verified at boot | gated |
+| *(meta, any cap)* | TRANSFER (2) | cap attachment in `SYS_SEND`; transferable derived spawn grants | — | gated on both paths |
+| Executable | EXEC (3) | executable slot validation in `SYS_SPAWN` | generation module only, hash-verified at boot | gated |
 | PciFunction | MAP_MMIO (4) | future map-BAR operation (userspace driver path) | kernel PCI enumerator | **ungated** |
 | PciFunction / DmaMemory | DMA_PIN (5) | future pin operation | kernel DMA allocator on a driver's behalf | **ungated** |
 | DmaMemory | DMA_RELEASE (6) | future release/reclaim operation | same | **ungated** |
@@ -52,15 +52,19 @@ Rights are a flat `u32`; bits 16–31 are free.
 | ObjectStore | STORE_WRITE (13) | put requests in `SYS_STORE_TRANSACT` | kernel bootstrap | gated (M5.4) |
 | GenerationControl | HEALTH_CONFIRM (14) | `SYS_HEALTH_CONFIRM` for the currently running pending generation | kernel bootstrap, only for the declared generation-management service | gated (M5.6) |
 | GenerationControl | BOOT_UPDATE (15) | `SYS_RECOVERY_RECONSTRUCT` after signed-index, generation, state-closure, and release scrub | kernel bootstrap, only for the declared recovery service | gated (M5.9) |
+| Executable | SPAWN (16) | executable slot validation in `SYS_SPAWN` | generation manifest | gated (M6.1) |
+| EndpointFactory | ENDPOINT_CREATE (17) | `SYS_ENDPOINT_CREATE` | generation manifest | gated (M6.1) |
+| Supervision | SUPERVISE (18) | `SYS_SUPERVISION_STATUS` | returned by successful `SYS_SPAWN` | gated (M6.1) |
 
 Semantics not visible in the table:
 
 - Receiving a capability over IPC costs the receiver no rights bit; the cap
   arrives with exactly the rights the sender attached.
-- `derive` is ungated but narrow-only, so it cannot amplify authority.
-- Spawn consumes granted capabilities (move semantics) but retains the
-  Executable capability, so one EXEC grant can instantiate a component
-  repeatedly, subject to `MAX_TASKS`.
+- `derive` and spawn grants are non-consuming and narrow-only. A derived copy
+  that retains `TRANSFER` requires that meta-right on its source.
+- Spawn retains the executable and all grant sources. It returns one
+  supervision handle and is bounded independently per spawner by the
+  manifest's `spawnBudget`, plus the global live-task ceiling.
 - Spawned code cannot be injected: `Executable` objects reference only
   generation-module bytes verified at boot. Spawn composes known components
   with gifted authority; it cannot introduce new code.
@@ -72,13 +76,13 @@ Semantics not visible in the table:
 | Capabilities per task | `MAX_CAPS = 64` | `CapabilityTable::insert` |
 | Capabilities per IPC message | `MAX_CAPS_PER_MSG = 4` | `SYS_SEND`/`SYS_RECV` argument checks |
 | IPC queue depth | `CHANNEL_QUEUE = 16` | `ipc::send` |
-| Live tasks | `MAX_TASKS = 16` | `SpawnError::TooManyTasks` |
+| Live tasks | `MAX_TASKS = 32` | `SpawnError::TooManyTasks` |
+| Live children per spawner | manifest `spawnBudget <= 32` | `SpawnError::BudgetExhausted` |
 | Pinned DMA regions | `MAX_PINNED_REGIONS = 32` | DMA table |
 
-`MAX_TASKS` is coupled to the heap: each task eagerly allocates a 64 KiB
-kernel stack, so `MAX_TASKS * 64 KiB` must stay well within the 2 MiB heap.
-Raising the task bound means growing the heap or shrinking per-task stacks
-in the same change.
+`MAX_TASKS` is coupled to the heap: each task eagerly allocates a 32 KiB
+kernel stack, so the global ceiling reserves at most 1 MiB of the 24 MiB heap.
+Per-spawner budgets prevent one client from consuming that global allowance.
 
 ## Horizon (claimed directions, not decisions)
 
@@ -86,21 +90,18 @@ in the same change.
 | --- | --- | --- | --- |
 | BootState update authority beyond recovery | possibly STAGE_PENDING | M6 generation staging | Boundary between userspace staging and immutable stage-0 slot writes |
 | Directory | READ / WRITE / LIST? | M6 | Granularity; whether powerbox minting needs more than `derive` |
-| Endpoint minting | *(no new object)* | M6 prerequisite | Unprivileged mint with quota vs a factory capability |
-| RIGHT_SPAWN on Executable | SPAWN | generation format v2 | Deferred until grants are data-driven |
+| Endpoint minting | ENDPOINT_CREATE | M6.1 | Factory capability with bounded task cap-table slots |
+| RIGHT_SPAWN on Executable | SPAWN | M6.1 | Manifest-gated and enforced at `SYS_SPAWN` |
 | NetworkDestination | CONNECT / SEND / RECV / LISTEN | M7 | Object shape: (protocol, address, port) declared in the generation? |
 | EnergyAccount | READ? | M7 | Whether accounting is authority at all or read-only telemetry |
 | SharedBuffer creation | CREATE / quota | userspace driver path | Block payloads need userspace-created buffers; who may create, how much |
 
-M6's spawn service additionally needs kernel mechanisms that do not exist
-yet: userspace endpoint minting, a non-consuming (derive-copy) grant path,
-per-spawner resource accounting, and supervision handles. Record them here
-so the milestone does not discover them mid-flight.
+M6.1 landed userspace endpoint minting, non-consuming narrow derive-copy spawn
+grants, per-spawner accounting, and supervision handles. Future resource
+factories must follow the same named-capability and hard-bound rules.
 
 ## Debt register
 
-- `component_name_from_id` in `kernel/src/syscall/mod.rs` hardcodes component
-  names; spawn identity must come from the generation manifest in format v2.
 - `RIGHT_MAP` (bit 9) predates the naming rule; rename to
   `RIGHT_BUFFER_MAP` when convenient (touches `capability/mod.rs`, the
   storage-authority allowlist, and tests).

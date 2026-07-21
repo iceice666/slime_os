@@ -22,6 +22,9 @@ Component :: type {
   -- within the component format's stack bound; the builder substitutes its
   -- default when absent.
   stackBytes? : Int;
+  -- Maximum simultaneous children this component may spawn. Zero disables
+  -- spawning; the bootstrap component receives the declared graph budget.
+  spawnBudget : Int;
 };
 
 CapabilityGrant :: type {

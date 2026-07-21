@@ -23,7 +23,8 @@ use alloc::vec::Vec;
 
 use slime_os_kernel::capability::{
     CapError, Capability, CapabilityTable, KernelObject, PciFunctionInfo, RIGHT_BLOCK_READ,
-    RIGHT_BLOCK_WRITE, RIGHT_EXEC, RIGHT_MAP_MMIO, RIGHT_RECV, RIGHT_SEND, RIGHT_TRANSFER,
+    RIGHT_BLOCK_WRITE, RIGHT_ENDPOINT_CREATE, RIGHT_EXEC, RIGHT_MAP_MMIO, RIGHT_RECV, RIGHT_SEND,
+    RIGHT_SPAWN, RIGHT_SUPERVISE, RIGHT_TRANSFER,
 };
 use slime_os_kernel::task::{self, MAX_TASKS, SpawnError};
 use slime_os_kernel::{gdt, interrupts, ipc, memory};
@@ -54,7 +55,11 @@ fn endpoint_cap(rights: u32) -> Capability {
 
 fn executable_cap(rights: u32) -> Capability {
     Capability {
-        object: KernelObject::Executable(&[0x90]),
+        object: KernelObject::Executable {
+            name: None,
+            bytes: &[0x90],
+            spawn_budget: 1,
+        },
         rights,
     }
 }
@@ -111,7 +116,7 @@ fn table_accepts_rights_valid_for_object_kind() {
         .insert(endpoint_cap(RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER))
         .unwrap();
     table
-        .insert(executable_cap(RIGHT_EXEC | RIGHT_TRANSFER))
+        .insert(executable_cap(RIGHT_EXEC | RIGHT_SPAWN | RIGHT_TRANSFER))
         .unwrap();
     table
         .insert(Capability {
@@ -139,48 +144,121 @@ fn table_rejects_rights_foreign_to_object_kind() {
     }
 }
 
-#[test_case]
-fn preflight_rejects_grant_without_transfer() {
-    let mut table = CapabilityTable::new();
-    let executable = table.insert(executable_cap(RIGHT_EXEC)).unwrap();
-    let untransferable = table.insert(endpoint_cap(RIGHT_RECV)).unwrap();
-    let result = task::preflight_spawn_grant(&table, executable, &[untransferable]);
-    assert!(matches!(result, Err(SpawnError::BadCapability)));
+fn grant(slot: u32, rights: u32) -> task::SpawnGrant {
+    task::SpawnGrant { slot, rights }
 }
 
 #[test_case]
-fn preflight_accepts_transferable_grant() {
+fn preflight_requires_spawn_right_and_preserves_source() {
     let mut table = CapabilityTable::new();
     let executable = table.insert(executable_cap(RIGHT_EXEC)).unwrap();
+    assert!(matches!(
+        task::preflight_spawn_grant(&table, executable, &[]),
+        Err(SpawnError::BadExecutable)
+    ));
+
+    let mut table = CapabilityTable::new();
+    let executable = table
+        .insert(executable_cap(RIGHT_EXEC | RIGHT_SPAWN))
+        .unwrap();
     let endpoint = table
         .insert(endpoint_cap(RIGHT_RECV | RIGHT_TRANSFER))
         .unwrap();
-    let (code, granted) = task::preflight_spawn_grant(&table, executable, &[endpoint]).unwrap();
-    assert_eq!(code, &[0x90]);
-    assert_eq!(granted.len(), 1);
-    assert_eq!(granted[0].rights, RIGHT_RECV | RIGHT_TRANSFER);
+    let plan =
+        task::preflight_spawn_grant(&table, executable, &[grant(endpoint, RIGHT_RECV)]).unwrap();
+    assert_eq!(plan.image, &[0x90]);
+    assert_eq!(plan.caps.len(), 1);
+    assert_eq!(plan.caps[0].rights, RIGHT_RECV);
+    assert_eq!(
+        table.get(endpoint).unwrap().rights,
+        RIGHT_RECV | RIGHT_TRANSFER
+    );
+}
+
+#[test_case]
+fn preflight_rejects_widening_and_unheld_transfer() {
+    let mut table = CapabilityTable::new();
+    let executable = table
+        .insert(executable_cap(RIGHT_EXEC | RIGHT_SPAWN))
+        .unwrap();
+    let endpoint = table.insert(endpoint_cap(RIGHT_RECV)).unwrap();
+    assert!(matches!(
+        task::preflight_spawn_grant(&table, executable, &[grant(endpoint, RIGHT_SEND)]),
+        Err(SpawnError::BadCapability)
+    ));
+    assert!(matches!(
+        task::preflight_spawn_grant(
+            &table,
+            executable,
+            &[grant(endpoint, RIGHT_RECV | RIGHT_TRANSFER)]
+        ),
+        Err(SpawnError::BadCapability)
+    ));
+}
+
+#[test_case]
+fn factory_and_supervision_rights_are_object_specific() {
+    let mut table = CapabilityTable::new();
+    table
+        .insert(Capability {
+            object: KernelObject::EndpointFactory,
+            rights: RIGHT_ENDPOINT_CREATE,
+        })
+        .unwrap();
+    table
+        .insert(Capability {
+            object: KernelObject::Supervision(42),
+            rights: RIGHT_SUPERVISE,
+        })
+        .unwrap();
+    assert!(matches!(
+        table.insert(Capability {
+            object: KernelObject::EndpointFactory,
+            rights: RIGHT_SEND,
+        }),
+        Err(CapError::BadRights)
+    ));
+}
+
+#[test_case]
+fn supervision_reasons_remain_structured() {
+    let cases = [
+        task::TermReason::Exit(7),
+        task::TermReason::Fault(task::UserFaultReason::PageFault),
+        task::TermReason::Timeout,
+        task::TermReason::PeerLoss,
+    ];
+    assert_ne!(cases[0], cases[1]);
+    assert_ne!(cases[1], cases[2]);
+    assert_ne!(cases[2], cases[3]);
 }
 
 #[test_case]
 fn preflight_rejects_bad_grant_slots() {
     let mut table = CapabilityTable::new();
-    let executable = table.insert(executable_cap(RIGHT_EXEC)).unwrap();
+    let executable = table
+        .insert(executable_cap(RIGHT_EXEC | RIGHT_SPAWN))
+        .unwrap();
     let endpoint = table
         .insert(endpoint_cap(RIGHT_RECV | RIGHT_TRANSFER))
         .unwrap();
     // The executable slot itself is not a grant.
     assert!(matches!(
-        task::preflight_spawn_grant(&table, executable, &[executable]),
+        task::preflight_spawn_grant(&table, executable, &[grant(executable, RIGHT_EXEC)]),
         Err(SpawnError::BadCapability)
     ));
-    // Duplicate grants would move the same capability twice.
+    // Duplicate grants would copy the same source ambiguously.
     assert!(matches!(
-        task::preflight_spawn_grant(&table, executable, &[endpoint, endpoint]),
+        task::preflight_spawn_grant(
+            &table,
+            executable,
+            &[grant(endpoint, RIGHT_RECV), grant(endpoint, RIGHT_RECV)]
+        ),
         Err(SpawnError::BadCapability)
     ));
     // Missing slot.
     assert!(matches!(
-        task::preflight_spawn_grant(&table, executable, &[63]),
+        task::preflight_spawn_grant(&table, executable, &[grant(63, RIGHT_RECV)]),
         Err(SpawnError::BadCapability)
     ));
     // Missing executable slot.

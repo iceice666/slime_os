@@ -3,8 +3,8 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::capability::{
     Capability, KernelObject, PciFunctionInfo, RIGHT_BLOCK_READ, RIGHT_BLOCK_WRITE,
-    RIGHT_BOOT_UPDATE, RIGHT_EXEC, RIGHT_HEALTH_CONFIRM, RIGHT_RECV, RIGHT_SEND, RIGHT_STORE_READ,
-    RIGHT_STORE_WRITE, RIGHT_TRANSFER,
+    RIGHT_BOOT_UPDATE, RIGHT_EXEC, RIGHT_HEALTH_CONFIRM, RIGHT_RECV, RIGHT_SEND, RIGHT_SPAWN,
+    RIGHT_STORE_READ, RIGHT_STORE_WRITE, RIGHT_TRANSFER,
 };
 use crate::generation::{self, Generation};
 use crate::{ipc, println, serial_println, task};
@@ -84,25 +84,64 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         .component_bytes("generation-manager")
         .expect("generation-manager object missing");
 
-    require_grant(generation, "console-output", "console", "dango");
-    require_grant(generation, "system-information", "init", "sysinfo");
-    require_grant(generation, "echo-request", "echo-agent", "dango");
-    require_grant(generation, "echo-reply", "dango", "echo-agent");
-    require_grant(generation, "block-read", "init", "storage-probe");
-    require_grant(generation, "block-write-check", "init", "storage-writer");
+    require_grant(
+        generation,
+        "endpoint-factory",
+        "init",
+        "init",
+        crate::capability::RIGHT_ENDPOINT_CREATE,
+    );
+    require_grant(generation, "console-output", "console", "dango", RIGHT_SEND);
+    require_grant(
+        generation,
+        "system-information",
+        "init",
+        "sysinfo",
+        RIGHT_SEND,
+    );
+    require_grant(
+        generation,
+        "echo-request",
+        "echo-agent",
+        "dango",
+        RIGHT_SEND,
+    );
+    require_grant(generation, "echo-reply", "dango", "echo-agent", RIGHT_SEND);
+    require_grant(
+        generation,
+        "block-read",
+        "init",
+        "storage-probe",
+        RIGHT_BLOCK_READ,
+    );
+    require_grant(
+        generation,
+        "block-write-check",
+        "init",
+        "storage-writer",
+        RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE,
+    );
     require_grant(
         generation,
         "block-fault-check",
         "init",
         "storage-fault-probe",
+        RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE,
     );
     require_grant(
         generation,
         "health-confirmation",
         "init",
         "generation-manager",
+        RIGHT_HEALTH_CONFIRM,
     );
-    require_grant(generation, "store-access", "init", "storage-store-probe");
+    require_grant(
+        generation,
+        "store-access",
+        "init",
+        "storage-store-probe",
+        RIGHT_STORE_READ | RIGHT_STORE_WRITE,
+    );
     let (storage_component, storage_capability) = match generation.number {
         2 => (
             storage_writer,
@@ -139,26 +178,43 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
     let (console_output, dango_output) = ipc::channel();
 
     let caps = vec![
-        executable(console),
+        Capability {
+            object: KernelObject::EndpointFactory,
+            rights: crate::capability::RIGHT_ENDPOINT_CREATE,
+        },
+        executable(generation, "console", console),
         endpoint(console_output, RIGHT_RECV),
-        executable(dango),
+        executable(generation, "dango", dango),
         endpoint(dango_sysinfo, RIGHT_RECV),
         endpoint(dango_echo, RIGHT_RECV),
         endpoint(dango_output, RIGHT_SEND),
-        executable(sysinfo),
+        executable(generation, "sysinfo", sysinfo),
         endpoint(sysinfo_output, RIGHT_SEND),
-        executable(echo),
+        executable(generation, "echo-agent", echo),
         endpoint(echo_output, RIGHT_SEND),
-        executable(storage_component),
+        executable(
+            generation,
+            storage_component_name(generation.number),
+            storage_component,
+        ),
         storage_capability,
-        executable(generation_manager),
+        executable(generation, "generation-manager", generation_manager),
         Capability {
             object: KernelObject::GenerationControl,
             rights: RIGHT_HEALTH_CONFIRM | RIGHT_TRANSFER,
         },
     ];
 
-    task::spawn_with_caps(init, caps).expect("failed to launch init")
+    task::spawn_with_caps_for(
+        init,
+        caps,
+        None,
+        generation
+            .component_named("init")
+            .expect("init component missing")
+            .spawn_budget,
+    )
+    .expect("failed to launch init")
 }
 
 fn launch_recovery_init(generation: &Generation<'static>) -> task::TaskId {
@@ -166,14 +222,37 @@ fn launch_recovery_init(generation: &Generation<'static>) -> task::TaskId {
     let init = generation
         .component_bytes("init")
         .expect("init object missing");
+    require_grant(
+        generation,
+        "endpoint-factory",
+        "init",
+        "init",
+        crate::capability::RIGHT_ENDPOINT_CREATE,
+    );
     let recovery = generation
         .component_bytes("recovery")
         .expect("recovery object missing");
-    require_grant(generation, "recovery-control", "init", "recovery");
-    require_grant(generation, "recovery-target", "init", "recovery");
+    require_grant(
+        generation,
+        "recovery-control",
+        "init",
+        "recovery",
+        RIGHT_BOOT_UPDATE,
+    );
+    require_grant(
+        generation,
+        "recovery-target",
+        "init",
+        "recovery",
+        RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE,
+    );
     let function = recovery_block_function(&recovery_index);
     let caps = vec![
-        executable(recovery),
+        Capability {
+            object: KernelObject::EndpointFactory,
+            rights: crate::capability::RIGHT_ENDPOINT_CREATE,
+        },
+        executable(generation, "recovery", recovery),
         Capability {
             object: KernelObject::GenerationControl,
             rights: RIGHT_BOOT_UPDATE | RIGHT_TRANSFER,
@@ -183,7 +262,16 @@ fn launch_recovery_init(generation: &Generation<'static>) -> task::TaskId {
             rights: RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE | RIGHT_TRANSFER,
         },
     ];
-    task::spawn_with_caps(init, caps).expect("failed to launch recovery init")
+    task::spawn_with_caps_for(
+        init,
+        caps,
+        None,
+        generation
+            .component_named("init")
+            .expect("init component missing")
+            .spawn_budget,
+    )
+    .expect("failed to launch recovery init")
 }
 
 fn default_block_function() -> PciFunctionInfo {
@@ -220,10 +308,22 @@ fn recovery_block_function(index: &boot_contracts::recovery::RecoveryIndex<'_>) 
         .expect("signed recovery target missing")
 }
 
-fn executable(bytes: &'static [u8]) -> Capability {
+fn executable(
+    generation: &Generation<'static>,
+    name: &'static str,
+    bytes: &'static [u8],
+) -> Capability {
+    let spawn_budget = generation
+        .component_named(name)
+        .expect("executable component missing")
+        .spawn_budget;
     Capability {
-        object: KernelObject::Executable(bytes),
-        rights: RIGHT_EXEC,
+        object: KernelObject::Executable {
+            name: Some(name),
+            bytes,
+            spawn_budget,
+        },
+        rights: RIGHT_EXEC | RIGHT_SPAWN,
     }
 }
 
@@ -237,11 +337,21 @@ fn endpoint(endpoint: ipc::Endpoint, rights: u32) -> Capability {
     }
 }
 
+fn storage_component_name(generation: u64) -> &'static str {
+    match generation {
+        2 => "storage-writer",
+        3 => "storage-fault-probe",
+        4 => "storage-store-probe",
+        _ => "storage-probe",
+    }
+}
+
 fn require_grant<'a>(
     generation: &Generation<'a>,
     name: &str,
     source: &str,
     target: &str,
+    rights: u32,
 ) -> crate::generation::Grant<'a> {
     let grant = generation
         .grant_named(name)
@@ -250,24 +360,17 @@ fn require_grant<'a>(
         .component(grant.source)
         .expect("grant source")
         .name;
+
     let target_name = generation
         .component(grant.target)
         .expect("grant target")
         .name;
     assert_eq!(
-        (source_name, target_name),
-        (source, target),
-        "grant endpoints changed"
+        (source_name, target_name, grant.rights),
+        (source, target, rights),
+        "grant declaration changed"
     );
     grant
-}
-
-fn storage_probe_required() -> bool {
-    crate::pci::enumerate().is_ok_and(|functions| {
-        functions.iter().any(|function| {
-            function.vendor_id == 0x1af4 && matches!(function.device_id, 0x1001 | 0x1042)
-        })
-    })
 }
 
 pub fn record_spawn(component: &'static str, id: task::TaskId) {
@@ -279,12 +382,20 @@ pub fn record_spawn(component: &'static str, id: task::TaskId) {
         "storage-probe" => &STORAGE_PROBE_ID,
         "storage-writer" => &STORAGE_WRITER_ID,
         "storage-fault-probe" => &STORAGE_FAULT_ID,
-        "generation-manager" => &GENERATION_MANAGER_ID,
         "storage-store-probe" => &STORAGE_STORE_ID,
+        "generation-manager" => &GENERATION_MANAGER_ID,
         "recovery" => &RECOVERY_ID,
         _ => return,
     };
     slot.store(id, Ordering::Relaxed);
+}
+
+fn storage_probe_required() -> bool {
+    crate::pci::enumerate().is_ok_and(|functions| {
+        functions.iter().any(|function| {
+            function.vendor_id == 0x1af4 && matches!(function.device_id, 0x1001 | 0x1042)
+        })
+    })
 }
 
 extern "C" fn on_idle() {

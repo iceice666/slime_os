@@ -587,7 +587,7 @@ Sequencing: M6.1 gates every other slice; M6.2 and M6.3 are independent once M6.
 
 ### M6.1: Kernel spawn prerequisites and generation format v2
 
-**Status:** Not started.
+**Status:** Done.
 
 This slice lands the four kernel mechanisms the spawn service consumes — none exist today (`docs/capability-matrix.md` records them so the milestone does not discover them mid-flight) — and makes grant and bootstrap wiring data-driven.
 

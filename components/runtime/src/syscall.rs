@@ -16,6 +16,8 @@ const SYS_STORE_TRANSACT: u64 = 7;
 const SYS_HEALTH_CONFIRM: u64 = 8;
 const SYS_UNHEALTHY: u64 = 9;
 const SYS_RECOVERY_RECONSTRUCT: u64 = 10;
+const SYS_ENDPOINT_CREATE: u64 = 11;
+const SYS_SUPERVISION_STATUS: u64 = 12;
 
 pub const ERR_SUCCESS: i64 = 0;
 pub const ERR_BAD_CAP: i64 = -1;
@@ -26,6 +28,28 @@ pub const ERR_OUT_OF_MEMORY: i64 = -5;
 
 pub const MAX_MSG: usize = 64;
 pub const MAX_CAPS_PER_MSG: usize = 4;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct SpawnGrant {
+    pub slot: u32,
+    pub rights: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Spawned {
+    pub task_id: u64,
+    pub supervision_slot: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Termination {
+    Exit(i64),
+    Fault(u64),
+    Timeout,
+    PeerLoss,
+    Unhealthy,
+}
 
 #[inline(always)]
 unsafe fn raw_syscall(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> i64 {
@@ -43,6 +67,25 @@ unsafe fn raw_syscall(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> i
         );
     }
     ret
+}
+
+#[inline(always)]
+unsafe fn raw_syscall_pair(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> (i64, u64) {
+    let ret: i64;
+    let aux: u64;
+    unsafe {
+        core::arch::asm!(
+            "int 0x80",
+            inlateout("rax") nr => ret,
+            in("rdi") a1,
+            in("rsi") a2,
+            inlateout("rdx") a3 => aux,
+            in("r10") a4,
+            in("r8") a5,
+            options(nostack),
+        );
+    }
+    (ret, aux)
 }
 
 pub fn yield_now() {
@@ -92,20 +135,54 @@ pub fn exit(status: i64) -> ! {
     }
 }
 
-/// Spawns the executable held in capability slot `executable_slot`, granting
-/// it the capabilities in `cap_slots`, and records it under `name_id` (see
-/// `component_name_from_id` in `kernel/src/syscall/mod.rs`). Returns the new
-/// task id, or a negative error.
-pub fn spawn(executable_slot: u32, cap_slots: &[u32], name_id: u64) -> i64 {
-    unsafe {
-        raw_syscall(
+/// Spawns the executable in `executable_slot`. Each grant is a non-consuming
+/// narrow copy; the source capability remains in the spawner. Success returns
+/// both the child task id and a supervision capability slot.
+pub fn spawn(executable_slot: u32, grants: &[SpawnGrant]) -> Result<Spawned, i64> {
+    let (task_id, supervision_slot) = unsafe {
+        raw_syscall_pair(
             SYS_SPAWN,
             executable_slot as u64,
-            cap_slots.as_ptr() as u64,
-            cap_slots.len() as u64,
-            name_id,
+            grants.as_ptr() as u64,
+            grants.len() as u64,
+            0,
             0,
         )
+    };
+    if task_id < 0 {
+        Err(task_id)
+    } else {
+        Ok(Spawned {
+            task_id: task_id as u64,
+            supervision_slot: supervision_slot as u32,
+        })
+    }
+}
+
+/// Mint a bounded channel pair through an `EndpointFactory` capability.
+pub fn endpoint_create(factory_slot: u32) -> Result<(u32, u32), i64> {
+    let (first, second) =
+        unsafe { raw_syscall_pair(SYS_ENDPOINT_CREATE, factory_slot as u64, 0, 0, 0, 0) };
+    if first < 0 {
+        Err(first)
+    } else {
+        Ok((first as u32, second as u32))
+    }
+}
+
+/// Query a child supervision handle. `Ok(None)` means the child is live; a
+/// completed result consumes the handle slot so it can be reused.
+pub fn supervision_status(slot: u32) -> Result<Option<Termination>, i64> {
+    let (kind, detail) =
+        unsafe { raw_syscall_pair(SYS_SUPERVISION_STATUS, slot as u64, 0, 0, 0, 0) };
+    match kind {
+        ERR_WOULDBLOCK => Ok(None),
+        0 => Ok(Some(Termination::Exit(detail as i64))),
+        1 => Ok(Some(Termination::Fault(detail))),
+        2 => Ok(Some(Termination::Timeout)),
+        3 => Ok(Some(Termination::PeerLoss)),
+        4 => Ok(Some(Termination::Unhealthy)),
+        error => Err(error),
     }
 }
 

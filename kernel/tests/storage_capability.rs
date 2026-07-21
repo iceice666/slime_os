@@ -86,7 +86,11 @@ fn assert_bad_rights(result: Result<Capability, CapError>) {
 #[test_case]
 fn derive_rejects_widening() {
     let cap = Capability {
-        object: KernelObject::Executable(&[]),
+        object: KernelObject::Executable {
+            name: None,
+            bytes: &[],
+            spawn_budget: 0,
+        },
         rights: RIGHT_SEND,
     };
     // Asking for a right the source does not hold is refused.
@@ -96,7 +100,11 @@ fn derive_rejects_widening() {
 #[test_case]
 fn derive_rejects_unknown_bits() {
     let cap = Capability {
-        object: KernelObject::Executable(&[]),
+        object: KernelObject::Executable {
+            name: None,
+            bytes: &[],
+            spawn_budget: 0,
+        },
         rights: RIGHT_ALL,
     };
     // A bit outside RIGHT_ALL is refused even if all known bits are present.
@@ -106,7 +114,11 @@ fn derive_rejects_unknown_bits() {
 #[test_case]
 fn derive_narrows_to_subset() {
     let cap = Capability {
-        object: KernelObject::Executable(&[]),
+        object: KernelObject::Executable {
+            name: None,
+            bytes: &[],
+            spawn_budget: 0,
+        },
         rights: RIGHT_SEND | RIGHT_MAP_MMIO,
     };
     let child = cap.derive(RIGHT_SEND).unwrap();
@@ -236,7 +248,11 @@ fn pci_enumeration_is_bounded() {
 #[test_case]
 fn unprivileged_component_has_no_device_rights() {
     let unprivileged = Capability {
-        object: KernelObject::Executable(&[]),
+        object: KernelObject::Executable {
+            name: None,
+            bytes: &[],
+            spawn_budget: 0,
+        },
         rights: RIGHT_SEND, // IPC only, no device rights
     };
     assert_bad_rights(unprivileged.derive(RIGHT_MAP_MMIO));

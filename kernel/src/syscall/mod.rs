@@ -1,6 +1,7 @@
 use crate::capability::{
-    KernelObject, RIGHT_BLOCK_READ, RIGHT_BLOCK_WRITE, RIGHT_BOOT_UPDATE, RIGHT_HEALTH_CONFIRM,
-    RIGHT_RECV, RIGHT_SEND, RIGHT_STORE_READ, RIGHT_STORE_WRITE, RIGHT_TRANSFER,
+    Capability, KernelObject, RIGHT_BLOCK_READ, RIGHT_BLOCK_WRITE, RIGHT_BOOT_UPDATE,
+    RIGHT_ENDPOINT_CREATE, RIGHT_HEALTH_CONFIRM, RIGHT_RECV, RIGHT_SEND, RIGHT_STORE_READ,
+    RIGHT_STORE_WRITE, RIGHT_TRANSFER,
 };
 use crate::ipc::{self, MAX_CAPS_PER_MSG, MAX_MSG};
 use crate::task::{self, TermReason};
@@ -17,6 +18,8 @@ pub const SYS_STORE_TRANSACT: u64 = 7;
 pub const SYS_HEALTH_CONFIRM: u64 = 8;
 pub const SYS_UNHEALTHY: u64 = 9;
 pub const SYS_RECOVERY_RECONSTRUCT: u64 = 10;
+pub const SYS_ENDPOINT_CREATE: u64 = 11;
+pub const SYS_SUPERVISION_STATUS: u64 = 12;
 
 const USER_TOP: u64 = 0x0000_8000_0000_0000;
 
@@ -48,6 +51,8 @@ pub fn dispatch(frame: &mut UserFrame) {
         SYS_HEALTH_CONFIRM => sys_health_confirm(frame),
         SYS_UNHEALTHY => task::terminate(frame, TermReason::Unhealthy),
         SYS_RECOVERY_RECONSTRUCT => sys_recovery_reconstruct(frame),
+        SYS_ENDPOINT_CREATE => sys_endpoint_create(frame),
+        SYS_SUPERVISION_STATUS => sys_supervision_status(frame),
         _ => frame.rax = ipc::ERR_INVALID_ARG as u64,
     }
 }
@@ -392,51 +397,100 @@ fn sys_recovery_reconstruct(frame: &mut UserFrame) {
 
 fn sys_spawn(frame: &mut UserFrame) {
     let executable_slot = frame.rdi as u32;
-    let cap_count = frame.rdx as usize;
-    let component_name = frame.r10;
-    if cap_count > crate::capability::MAX_CAPS
-        || (cap_count > 0
-            && !current_user_range(frame.rsi, cap_count * core::mem::size_of::<u32>(), false))
+    let grant_count = frame.rdx as usize;
+    if grant_count > crate::capability::MAX_CAPS
+        || (grant_count > 0 && !current_user_range(frame.rsi, grant_count * 8, false))
     {
         frame.rax = ipc::ERR_INVALID_ARG as u64;
         return;
     }
-    let mut slot_buffer = [0u32; crate::capability::MAX_CAPS];
-    let slot_bytes = unsafe {
+    let mut grant_buffer = [task::SpawnGrant { slot: 0, rights: 0 }; crate::capability::MAX_CAPS];
+    let grant_bytes = unsafe {
         core::slice::from_raw_parts_mut(
-            slot_buffer.as_mut_ptr().cast::<u8>(),
-            cap_count * core::mem::size_of::<u32>(),
+            grant_buffer.as_mut_ptr().cast::<u8>(),
+            grant_count * core::mem::size_of::<task::SpawnGrant>(),
         )
     };
-    if !task::copy_from_current(frame.rsi, slot_bytes) {
+    if !task::copy_from_current(frame.rsi, grant_bytes) {
         frame.rax = ipc::ERR_INVALID_ARG as u64;
         return;
     }
-    let slots = &slot_buffer[..cap_count];
-    match task::spawn_from_cap(executable_slot, slots) {
-        Ok(id) => {
-            if let Some(name) = component_name_from_id(component_name) {
-                crate::bootstrap::record_spawn(name, id);
-            }
+    match task::spawn_from_cap(executable_slot, &grant_buffer[..grant_count]) {
+        Ok((id, handle)) => {
             frame.rax = id;
+            frame.rdx = handle as u64;
         }
-        Err(task::SpawnError::TooManyTasks) => frame.rax = ipc::ERR_OUT_OF_MEMORY as u64,
+        Err(task::SpawnError::TooManyTasks | task::SpawnError::BudgetExhausted) => {
+            frame.rax = ipc::ERR_OUT_OF_MEMORY as u64
+        }
         Err(_) => frame.rax = ipc::ERR_BAD_CAP as u64,
     }
 }
 
-fn component_name_from_id(id: u64) -> Option<&'static str> {
-    match id {
-        1 => Some("console"),
-        2 => Some("dango"),
-        3 => Some("sysinfo"),
-        4 => Some("echo-agent"),
-        5 => Some("storage-probe"),
-        6 => Some("storage-writer"),
-        7 => Some("storage-fault-probe"),
-        8 => Some("generation-manager"),
-        9 => Some("recovery"),
-        _ => None,
+fn sys_endpoint_create(frame: &mut UserFrame) {
+    let factory_slot = frame.rdi as u32;
+    let allowed = task::with_current_mut(|task| {
+        task.caps.get(factory_slot).is_some_and(|cap| {
+            matches!(cap.object, KernelObject::EndpointFactory)
+                && cap.rights & RIGHT_ENDPOINT_CREATE != 0
+        }) && task.caps.available_slots() >= 2
+    });
+    if !allowed {
+        frame.rax = ipc::ERR_BAD_CAP as u64;
+        return;
+    }
+    let (a, b) = ipc::channel();
+    let inserted = task::with_current_mut(|task| {
+        let a_slot = task.caps.insert(Capability {
+            object: KernelObject::Endpoint(a),
+            rights: RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
+        })?;
+        let b_slot = match task.caps.insert(Capability {
+            object: KernelObject::Endpoint(b),
+            rights: RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
+        }) {
+            Ok(slot) => slot,
+            Err(error) => {
+                let _ = task.caps.take(a_slot);
+                return Err(error);
+            }
+        };
+        Ok((a_slot, b_slot))
+    });
+    match inserted {
+        Ok((a, b)) => {
+            frame.rax = a as u64;
+            frame.rdx = b as u64;
+        }
+        Err(_) => frame.rax = ipc::ERR_OUT_OF_MEMORY as u64,
+    }
+}
+
+fn sys_supervision_status(frame: &mut UserFrame) {
+    match task::supervision_status(frame.rdi as u32) {
+        Ok(None) => frame.rax = ipc::ERR_WOULDBLOCK as u64,
+        Ok(Some(TermReason::Exit(status))) => {
+            frame.rax = 0;
+            frame.rdx = status as u64;
+        }
+        Ok(Some(TermReason::Fault(reason))) => {
+            frame.rax = 1;
+            frame.rdx = reason_code(reason);
+        }
+        Ok(Some(TermReason::Timeout)) => frame.rax = 2,
+        Ok(Some(TermReason::PeerLoss)) => frame.rax = 3,
+        Ok(Some(TermReason::Unhealthy)) => frame.rax = 4,
+        Err(_) => frame.rax = ipc::ERR_BAD_CAP as u64,
+    }
+}
+
+fn reason_code(reason: task::UserFaultReason) -> u64 {
+    match reason {
+        task::UserFaultReason::DivByZero => 1,
+        task::UserFaultReason::UndefinedOp => 2,
+        task::UserFaultReason::GeneralProt => 3,
+        task::UserFaultReason::PageFault => 4,
+        task::UserFaultReason::Unknown(vector) => 0x100 | vector as u64,
     }
 }
 

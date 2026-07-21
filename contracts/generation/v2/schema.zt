@@ -75,6 +75,7 @@ ComponentRecord :: type {
   role : Int;
   dependency_start : Int;
   dependency_count : Int;
+  spawn_budget : Int;
 };
 
 DependencyRecord :: type { component : Int; };
@@ -148,6 +149,7 @@ componentLayout :: List WireField = {
   { name = "role"; width = 4; signed = false; byteArray = false; };
   { name = "dependency_start"; width = 4; signed = false; byteArray = false; };
   { name = "dependency_count"; width = 4; signed = false; byteArray = false; };
+  { name = "spawn_budget"; width = 4; signed = false; byteArray = false; };
 };
 
 dependencyLayout :: List WireField = {

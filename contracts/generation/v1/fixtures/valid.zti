@@ -25,124 +25,141 @@
       object = "sha256:init";
       role = "init";
       dependencies = [];
+      spawnBudget = 10;
     };
     {
       name = "console";
       object = "sha256:console";
       role = "service";
       dependencies = ["init";];
+      spawnBudget = 0;
     };
     {
       name = "dango";
       object = "sha256:dango";
       role = "application";
       dependencies = ["console";];
+      spawnBudget = 0;
     };
     {
       name = "sysinfo";
       object = "sha256:sysinfo";
       role = "application";
       dependencies = [];
+      spawnBudget = 0;
     };
     {
       name = "echo-agent";
       object = "sha256:echo-agent";
       role = "application";
       dependencies = [];
+      spawnBudget = 0;
     };
     {
       name = "storage-probe";
       object = "sha256:storage-probe";
       role = "application";
       dependencies = [];
+      spawnBudget = 0;
     };
     {
       name = "storage-writer";
       object = "sha256:storage-writer";
       role = "application";
       dependencies = [];
+      spawnBudget = 0;
     };
     {
       name = "storage-fault-probe";
       object = "sha256:storage-fault-probe";
       role = "application";
       dependencies = [];
+      spawnBudget = 0;
     };
     {
       name = "storage-store-probe";
       object = "sha256:storage-store-probe";
       role = "application";
       dependencies = [];
+      spawnBudget = 0;
     };
     {
       name = "generation-manager";
       object = "sha256:generation-manager";
       role = "service";
       dependencies = ["init";];
+      spawnBudget = 0;
     };
   ];
   grants = [
     {
+      name = "endpoint-factory";
+      source = "init";
+      target = "init";
+      rights = ["endpointCreate";];
+      transferable = false;
+    };
+    {
       name = "console-output";
       source = "console";
       target = "dango";
-      rights = ["write";];
+      rights = ["send";];
       transferable = false;
     };
     {
       name = "system-information";
       source = "init";
       target = "sysinfo";
-      rights = ["read";];
+      rights = ["send";];
       transferable = false;
     };
     {
       name = "echo-request";
       source = "echo-agent";
       target = "dango";
-      rights = ["write";];
+      rights = ["send";];
       transferable = false;
     };
     {
       name = "echo-reply";
       source = "dango";
       target = "echo-agent";
-      rights = ["write";];
+      rights = ["send";];
       transferable = false;
     };
     {
       name = "block-read";
       source = "init";
       target = "storage-probe";
-      rights = ["read";];
+      rights = ["blockRead";];
       transferable = false;
     };
     {
       name = "block-write-check";
       source = "init";
       target = "storage-writer";
-      rights = ["read"; "write";];
+      rights = ["blockRead"; "blockWrite";];
       transferable = false;
     };
     {
       name = "block-fault-check";
       source = "init";
       target = "storage-fault-probe";
-      rights = ["read"; "write";];
+      rights = ["blockRead"; "blockWrite";];
       transferable = false;
     };
     {
       name = "store-access";
       source = "init";
       target = "storage-store-probe";
-      rights = ["read"; "write";];
+      rights = ["storeRead"; "storeWrite";];
       transferable = false;
     };
     {
       name = "health-confirmation";
       source = "init";
       target = "generation-manager";
-      rights = ["write";];
+      rights = ["healthConfirm";];
       transferable = false;
     };
   ];

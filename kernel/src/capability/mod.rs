@@ -17,7 +17,7 @@ use crate::memory::PhysAddr;
 pub const MAX_CAPS: usize = 64;
 
 // --- Rights bits ---------------------------------------------------------
-// IPC and executable rights (existing).
+// IPC, executable, and M6.1 factory/supervision rights.
 pub const RIGHT_SEND: u32 = 1;
 pub const RIGHT_RECV: u32 = 2;
 pub const RIGHT_TRANSFER: u32 = 4;
@@ -36,6 +36,9 @@ pub const RIGHT_STORE_READ: u32 = 1 << 12;
 pub const RIGHT_STORE_WRITE: u32 = 1 << 13;
 pub const RIGHT_HEALTH_CONFIRM: u32 = 1 << 14;
 pub const RIGHT_BOOT_UPDATE: u32 = 1 << 15;
+pub const RIGHT_SPAWN: u32 = 1 << 16;
+pub const RIGHT_ENDPOINT_CREATE: u32 = 1 << 17;
+pub const RIGHT_SUPERVISE: u32 = 1 << 18;
 
 /// All rights a capability may ever carry. Used to reject unknown bits.
 pub const RIGHT_ALL: u32 = RIGHT_SEND
@@ -53,7 +56,10 @@ pub const RIGHT_ALL: u32 = RIGHT_SEND
     | RIGHT_STORE_READ
     | RIGHT_STORE_WRITE
     | RIGHT_HEALTH_CONFIRM
-    | RIGHT_BOOT_UPDATE;
+    | RIGHT_BOOT_UPDATE
+    | RIGHT_SPAWN
+    | RIGHT_ENDPOINT_CREATE
+    | RIGHT_SUPERVISE;
 
 #[derive(Clone)]
 pub struct Capability {
@@ -81,7 +87,13 @@ impl Capability {
 #[derive(Clone)]
 pub enum KernelObject {
     Endpoint(Endpoint),
-    Executable(&'static [u8]),
+    EndpointFactory,
+    Executable {
+        name: Option<&'static str>,
+        bytes: &'static [u8],
+        spawn_budget: u16,
+    },
+    Supervision(crate::task::TaskId),
     PciFunction(PciFunctionInfo),
     DmaMemory(DmaRegion),
     Irq(IrqLine),
@@ -103,7 +115,9 @@ impl KernelObject {
     pub fn valid_rights(&self) -> u32 {
         let object_rights = match self {
             KernelObject::Endpoint(_) => RIGHT_SEND | RIGHT_RECV,
-            KernelObject::Executable(_) => RIGHT_EXEC,
+            KernelObject::EndpointFactory => RIGHT_ENDPOINT_CREATE,
+            KernelObject::Executable { .. } => RIGHT_EXEC | RIGHT_SPAWN,
+            KernelObject::Supervision(_) => RIGHT_SUPERVISE,
             KernelObject::PciFunction(_) => RIGHT_MAP_MMIO | RIGHT_DMA_PIN | RIGHT_DMA_RELEASE,
             KernelObject::DmaMemory(_) => RIGHT_DMA_RELEASE,
             KernelObject::Irq(_) => RIGHT_IRQ_ACK,
@@ -274,6 +288,10 @@ impl CapabilityTable {
 
     pub fn take(&mut self, slot: u32) -> Option<Capability> {
         self.slots.get_mut(slot as usize)?.take()
+    }
+
+    pub fn remove(&mut self, slot: u32) -> Result<Capability, CapError> {
+        self.take(slot).ok_or(CapError::BadSlot)
     }
     pub fn put(&mut self, slot: u32, cap: Capability) -> Result<(), CapError> {
         let Some(dst) = self.slots.get_mut(slot as usize) else {

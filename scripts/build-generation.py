@@ -87,7 +87,29 @@ COMPONENTS_TARGET_DIR = Path(os.environ.get("CARGO_TARGET_DIR") or ROOT / "compo
 PAGE_SIZE = 4096
 KIND = {"kernel": 1, "bootstrap": 2, "component": 3, "resource": 4}
 ROLE = {"init": 1, "service": 2, "driver": 3, "application": 4}
-RIGHT = {"read": 1, "write": 2}
+RIGHT = {
+    "send": 1 << 0,
+    "recv": 1 << 1,
+    "exec": 1 << 3,
+    "mapMmio": 1 << 4,
+    "dmaPin": 1 << 5,
+    "dmaRelease": 1 << 6,
+    "irqAck": 1 << 7,
+    "bufferWrite": 1 << 8,
+    "map": 1 << 9,
+    "blockRead": 1 << 10,
+    "blockWrite": 1 << 11,
+    "storeRead": 1 << 12,
+    "storeWrite": 1 << 13,
+    "healthConfirm": 1 << 14,
+    "bootUpdate": 1 << 15,
+    "spawn": 1 << 16,
+    "endpointCreate": 1 << 17,
+    "supervise": 1 << 18,
+}
+RIGHT_TRANSFER = 1 << 2
+RIGHT_ALL = RIGHT_TRANSFER | sum(RIGHT.values())
+MAX_SPAWN_BUDGET = 32
 POLICY = {
     "immutable": 1,
     "ephemeral": 2,
@@ -137,12 +159,13 @@ def recovery_manifest(manifest: dict) -> dict:
         {"id": "recovery-index", "kind": "resource", "size": 4096},
     ]
     recovery["components"] = [
-        {"name": "init", "object": "sha256:init", "role": "init", "dependencies": []},
-        {"name": "recovery", "object": "sha256:recovery", "role": "service", "dependencies": ["init"]},
+        {"name": "init", "object": "sha256:init", "role": "init", "dependencies": [], "spawnBudget": 1},
+        {"name": "recovery", "object": "sha256:recovery", "role": "service", "dependencies": ["init"], "spawnBudget": 0},
     ]
     recovery["grants"] = [
-        {"name": "recovery-control", "source": "init", "target": "recovery", "rights": ["write"], "transferable": False},
-        {"name": "recovery-target", "source": "init", "target": "recovery", "rights": ["read", "write"], "transferable": False},
+        {"name": "endpoint-factory", "source": "init", "target": "init", "rights": ["endpointCreate"], "transferable": False},
+        {"name": "recovery-control", "source": "init", "target": "recovery", "rights": ["bootUpdate"], "transferable": False},
+        {"name": "recovery-target", "source": "init", "target": "recovery", "rights": ["blockRead", "blockWrite"], "transferable": False},
     ]
     recovery["state"] = []
     recovery["health"] = {"bootAttempts": 1, "requiredComponents": ["init", "recovery"]}
@@ -435,12 +458,18 @@ def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes |
         obj = object_index.get(component["object"])
         if obj is None: fail(f"component {component['name']}: missing object")
         if component["role"] not in ROLE: fail("unsupported component role")
+        spawn_budget = component["spawnBudget"]
+        if not isinstance(spawn_budget, int) or not 0 <= spawn_budget <= MAX_SPAWN_BUDGET:
+            fail(f"component {component['name']}: invalid spawn budget")
         dependencies = sorted(component["dependencies"])
         start = dependency_count
         for dependency in dependencies:
             dependency_records += GENERATION_DEPENDENCY.pack(component_index[dependency])
             dependency_count += 1
-        component_records += GENERATION_COMPONENT.pack(string_offset(component["name"]), obj, ROLE[component["role"]], start, len(dependencies))
+        component_records += GENERATION_COMPONENT.pack(
+            string_offset(component["name"]), obj, ROLE[component["role"]], start,
+            len(dependencies), spawn_budget,
+        )
     if dependency_count > MAX_DEPENDENCIES: fail("dependency count exceeds bound")
     for grant in grants:
         source = component_index.get(grant["source"]); target = component_index.get(grant["target"])
@@ -449,7 +478,8 @@ def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes |
         for right in grant["rights"]:
             if right not in RIGHT: fail(f"unsupported right {right}")
             rights |= RIGHT[right]
-        transferable = int(bool(grant["transferable"])); rights |= 4 if transferable else 0
+        transferable = int(bool(grant["transferable"])); rights |= RIGHT_TRANSFER if transferable else 0
+        if rights == 0 or rights & ~RIGHT_ALL: fail(f"invalid rights for {grant['name']}")
         grant_records += GENERATION_GRANT.pack(string_offset(grant["name"]), source, target, rights, transferable)
     for state in states:
         owner = component_index.get(state["owner"])

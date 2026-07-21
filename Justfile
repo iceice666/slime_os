@@ -21,6 +21,11 @@ test:
     cd kernel && cargo test --release -- -display none
 
 
+
+# M6.1: capability factories, narrow derive-copy spawn grants, bounded task
+# accounting, supervision result shape, and generation-v2 determinism.
+spawn_prereq_check: contracts_check generation_check
+    cd kernel && cargo test --test spawn_authority -- -display none
 # M5.1: exercise the storage-capability foundation (PCI/DMA/cap/block-proto)
 # under QEMU. Proves an unprivileged component cannot acquire device rights.
 storage_cap_check:

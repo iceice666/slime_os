@@ -24,9 +24,9 @@ pub const KIND_BOOTSTRAP: u32 = 2;
 pub const KIND_COMPONENT: u32 = 3;
 pub const KIND_RESOURCE: u32 = 4;
 pub const ROLE_INIT: u32 = 1;
-pub const RIGHT_READ: u32 = 1;
-pub const RIGHT_WRITE: u32 = 2;
-pub const RIGHT_TRANSFER: u32 = 4;
+pub const RIGHT_TRANSFER: u32 = 1 << 2;
+pub const RIGHT_ALL: u32 = (1 << 19) - 1;
+pub const MAX_SPAWN_BUDGET: u16 = 32;
 pub const POLICY_IMMUTABLE: u32 = 1;
 pub const POLICY_EPHEMERAL: u32 = 2;
 pub const POLICY_PRESERVE: u32 = 3;
@@ -72,6 +72,7 @@ pub struct Component<'a> {
     pub name: &'a str,
     pub object: usize,
     pub role: u32,
+    pub spawn_budget: u16,
     dependency_start: usize,
     dependency_count: usize,
 }
@@ -274,7 +275,7 @@ impl<'a> Generation<'a> {
             return Err(DecodeError::BadIndex);
         }
         let offset = self.component_offset + index * COMPONENT_LEN;
-        if self.bytes[offset + 20..offset + COMPONENT_LEN]
+        if self.bytes[offset + 24..offset + COMPONENT_LEN]
             .iter()
             .any(|byte| *byte != 0)
         {
@@ -286,6 +287,9 @@ impl<'a> Generation<'a> {
             role: u32_at(self.bytes, offset + 8)?,
             dependency_start: u32_at(self.bytes, offset + 12)? as usize,
             dependency_count: u32_at(self.bytes, offset + 16)? as usize,
+            spawn_budget: u32_at(self.bytes, offset + 20)?
+                .try_into()
+                .map_err(|_| DecodeError::BadBounds)?,
         })
     }
 
@@ -341,7 +345,11 @@ impl<'a> Generation<'a> {
             source: u32_at(self.bytes, offset + 4)? as usize,
             target: u32_at(self.bytes, offset + 8)? as usize,
             rights: u32_at(self.bytes, offset + 12)?,
-            transferable: u32_at(self.bytes, offset + 16)? != 0,
+            transferable: match u32_at(self.bytes, offset + 16)? {
+                0 => false,
+                1 => true,
+                _ => return Err(DecodeError::UnknownEnum),
+            },
         })
     }
 
@@ -444,7 +452,10 @@ impl<'a> Generation<'a> {
         let mut previous_name: Option<&str> = None;
         for index in 0..self.component_count {
             let component = self.component(index)?;
-            if component.object >= self.object_count || !matches!(component.role, 1..=4) {
+            if component.object >= self.object_count
+                || !matches!(component.role, 1..=4)
+                || component.spawn_budget > MAX_SPAWN_BUDGET
+            {
                 return Err(DecodeError::BadIndex);
             }
             if previous_name.is_some_and(|previous| previous >= component.name) {
@@ -482,7 +493,8 @@ impl<'a> Generation<'a> {
             if grant.source >= self.component_count
                 || grant.target >= self.component_count
                 || grant.rights == 0
-                || grant.rights & !(RIGHT_READ | RIGHT_WRITE | RIGHT_TRANSFER) != 0
+                || grant.rights & !RIGHT_ALL != 0
+                || (grant.rights & RIGHT_TRANSFER != 0) != grant.transferable
             {
                 return Err(DecodeError::BadIndex);
             }

@@ -6,7 +6,7 @@ use core::arch::global_asm;
 use core::sync::atomic::Ordering;
 use spin::{LazyLock, Mutex};
 
-use crate::capability::{Capability, CapabilityTable, KernelObject};
+use crate::capability::{Capability, CapabilityTable, KernelObject, RIGHT_SPAWN, RIGHT_TRANSFER};
 use crate::gdt::{USER_CODE_SELECTOR, USER_DATA_SELECTOR};
 use crate::memory::address_space::AddressSpace;
 use crate::memory::pmm::FRAME_ALLOCATOR;
@@ -14,11 +14,13 @@ use crate::memory::vmm::{MapError, PTE_NO_EXECUTE, PTE_PRESENT, PTE_USER, PTE_WR
 use crate::memory::{PAGE_SIZE, VirtAddr};
 use crate::trap::UserFrame;
 
-pub const KERNEL_STACK_SIZE: usize = 64 * 1024;
-/// Hard bound on simultaneously live tasks. Sized against the kernel heap:
-/// every task eagerly allocates a [`KERNEL_STACK_SIZE`] stack, and
-/// `MAX_TASKS * KERNEL_STACK_SIZE` must stay well within the heap budget.
-pub const MAX_TASKS: usize = 16;
+pub const KERNEL_STACK_SIZE: usize = 32 * 1024;
+/// Hard global bound on simultaneously live tasks. The 24 MiB heap reserves
+/// at most 1 MiB for eager kernel stacks, leaving generation/object-store
+/// staging headroom. Per-spawner limits provide the finer M6.1 bound.
+pub const MAX_TASKS: usize = 32;
+pub const DEFAULT_SPAWN_BUDGET: u16 = 16;
+pub const MAX_SPAWN_BUDGET: u16 = 32;
 pub const ENTRY_VA: u64 = 0x0000_0000_0040_0000;
 pub const USER_STACK_TOP: u64 = 0x0000_7fff_ffff_f000;
 
@@ -56,6 +58,9 @@ pub struct Task {
     pub kernel_stack: Box<[u8]>,
     pub saved: UserFrame,
     pub caps: CapabilityTable,
+    pub spawner: Option<TaskId>,
+    pub spawn_budget: u16,
+    pub live_children: u16,
 }
 
 impl Task {
@@ -89,6 +94,13 @@ impl Scheduler {
     fn index_of(&self, id: TaskId) -> Option<usize> {
         self.tasks.iter().position(|task| task.id == id)
     }
+}
+
+fn remove_task(sched: &mut Scheduler, id: TaskId) {
+    if let Some(index) = sched.index_of(id) {
+        sched.tasks.remove(index);
+    }
+    sched.ready.retain(|ready| *ready != id);
 }
 
 static SCHEDULER: LazyLock<Mutex<Scheduler>> = LazyLock::new(|| Mutex::new(Scheduler::new()));
@@ -171,60 +183,110 @@ pub fn spawn_user(image: &[u8]) -> Result<TaskId, SpawnError> {
     spawn_with_caps(image, Vec::new())
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct SpawnGrant {
+    pub slot: u32,
+    pub rights: u32,
+}
+
+pub struct SpawnPlan {
+    pub image: &'static [u8],
+    pub name: Option<&'static str>,
+    pub spawn_budget: u16,
+    pub caps: Vec<Capability>,
+}
+
 /// Validate a spawn grant list against a capability table. The executable
-/// slot must name an `Executable` carrying `RIGHT_EXEC`; every granted slot
-/// must exist, be unique, differ from the executable slot, and carry
-/// `RIGHT_TRANSFER` — the same condition IPC sends enforce, so a capability
-/// received without transfer rights cannot be laundered into a spawned
-/// component. Pure: takes no scheduler lock and is directly unit-testable.
+/// slot must name an `Executable` carrying both `RIGHT_EXEC` and
+/// `RIGHT_SPAWN`; every grant is a non-consuming derived copy whose requested
+/// rights are narrow-only. Transferable derived copies additionally require
+/// `RIGHT_TRANSFER` on the source capability.
 pub fn preflight_spawn_grant(
     caps: &CapabilityTable,
     executable_slot: u32,
-    cap_slots: &[u32],
-) -> Result<(&'static [u8], Vec<Capability>), SpawnError> {
-    let executable = caps
+    grants: &[SpawnGrant],
+) -> Result<SpawnPlan, SpawnError> {
+    let (executable, name, spawn_budget) = caps
         .get(executable_slot)
-        .filter(|cap| cap.rights & crate::capability::RIGHT_EXEC != 0)
+        .filter(|cap| {
+            cap.rights & (crate::capability::RIGHT_EXEC | RIGHT_SPAWN)
+                == crate::capability::RIGHT_EXEC | RIGHT_SPAWN
+        })
         .and_then(|cap| match cap.object {
-            KernelObject::Executable(bytes) => Some(bytes),
+            KernelObject::Executable {
+                name,
+                bytes,
+                spawn_budget,
+            } => Some((bytes, name, spawn_budget)),
             _ => None,
         })
         .ok_or(SpawnError::BadExecutable)?;
-    for (index, slot) in cap_slots.iter().enumerate() {
-        if *slot == executable_slot || cap_slots[..index].contains(slot) {
+    let mut derived = Vec::with_capacity(grants.len());
+    for (index, grant) in grants.iter().enumerate() {
+        if grant.slot == executable_slot
+            || grants[..index].iter().any(|seen| seen.slot == grant.slot)
+        {
             return Err(SpawnError::BadCapability);
         }
-        let Some(cap) = caps.get(*slot) else {
+        let Some(cap) = caps.get(grant.slot) else {
             return Err(SpawnError::BadCapability);
         };
-        if cap.rights & crate::capability::RIGHT_TRANSFER == 0 {
+        if grant.rights & RIGHT_TRANSFER != 0 && cap.rights & RIGHT_TRANSFER == 0 {
             return Err(SpawnError::BadCapability);
         }
+        derived.push(
+            cap.derive(grant.rights)
+                .map_err(|_| SpawnError::BadCapability)?,
+        );
     }
-    let granted = cap_slots
-        .iter()
-        .map(|slot| {
-            caps.get(*slot)
-                .expect("capability changed after preflight")
-                .clone()
-        })
-        .collect();
-    Ok((executable, granted))
+    Ok(SpawnPlan {
+        image: executable,
+        name,
+        spawn_budget,
+        caps: derived,
+    })
 }
 
-pub fn spawn_from_cap(executable_slot: u32, cap_slots: &[u32]) -> Result<TaskId, SpawnError> {
-    let (code, caps) =
-        with_current_mut(|task| preflight_spawn_grant(&task.caps, executable_slot, cap_slots))?;
-    let id = spawn_with_caps(code, caps)?;
-    with_current_mut(|task| {
-        for slot in cap_slots {
-            let _ = task.caps.take(*slot);
+pub fn spawn_from_cap(
+    executable_slot: u32,
+    grants: &[SpawnGrant],
+) -> Result<(TaskId, u32), SpawnError> {
+    let (spawner, plan) = with_current_mut(|task| {
+        if task.live_children >= task.spawn_budget {
+            return Err(SpawnError::BudgetExhausted);
         }
+        if task.caps.available_slots() == 0 {
+            return Err(SpawnError::BadCapability);
+        }
+        let plan = preflight_spawn_grant(&task.caps, executable_slot, grants)?;
+        Ok((task.id, plan))
+    })?;
+    let id = spawn_with_caps_for(plan.image, plan.caps, Some(spawner), plan.spawn_budget)?;
+    let handle = with_current_mut(|task| {
+        task.caps
+            .insert(Capability {
+                object: KernelObject::Supervision(id),
+                rights: crate::capability::RIGHT_SUPERVISE,
+            })
+            .map_err(|_| SpawnError::BadCapability)
     });
-    Ok(id)
+    let handle = match handle {
+        Ok(handle) => handle,
+        Err(error) => {
+            let mut sched = SCHEDULER.lock();
+            remove_task(&mut sched, id);
+            return Err(error);
+        }
+    };
+    with_current_mut(|task| task.live_children += 1);
+    if let Some(name) = plan.name {
+        crate::bootstrap::record_spawn(name, id);
+    }
+    Ok((id, handle))
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpawnError {
     BadExecutable,
     BadCapability,
@@ -233,8 +295,10 @@ pub enum SpawnError {
     /// eagerly, so this can only fire for executables sourced outside a
     /// decoded generation.
     BadImage(crate::component::ImageError),
-    /// The live task table is at [`MAX_TASKS`]; no new task may be spawned.
+    /// The global live-task table is full.
     TooManyTasks,
+    /// This spawner has reached its manifest-declared live-child budget.
+    BudgetExhausted,
     Map(MapError),
 }
 
@@ -245,6 +309,15 @@ impl From<MapError> for SpawnError {
 }
 
 pub fn spawn_with_caps(image: &[u8], caps: Vec<Capability>) -> Result<TaskId, SpawnError> {
+    spawn_with_caps_for(image, caps, None, DEFAULT_SPAWN_BUDGET)
+}
+
+pub fn spawn_with_caps_for(
+    image: &[u8],
+    caps: Vec<Capability>,
+    spawner: Option<TaskId>,
+    spawn_budget: u16,
+) -> Result<TaskId, SpawnError> {
     {
         let sched = SCHEDULER.lock();
         let live = sched
@@ -352,6 +425,9 @@ pub fn spawn_with_caps(image: &[u8], caps: Vec<Capability>) -> Result<TaskId, Sp
             ss: USER_DATA_SELECTOR as u64 | 3,
         },
         caps: cap_table,
+        spawner,
+        spawn_budget: spawn_budget.min(MAX_SPAWN_BUDGET),
+        live_children: 0,
     };
     sched.tasks.push(task);
     sched.ready.push_back(id);
@@ -364,6 +440,30 @@ pub fn current_id() -> TaskId {
 
 pub fn set_on_idle(f: extern "C" fn()) {
     SCHEDULER.lock().on_idle = Some(f);
+}
+
+pub fn supervision_status(slot: u32) -> Result<Option<TermReason>, crate::capability::CapError> {
+    let child = with_current_mut(|task| {
+        task.caps.get(slot).and_then(|cap| {
+            (cap.rights & crate::capability::RIGHT_SUPERVISE != 0)
+                .then_some(&cap.object)
+                .and_then(|object| match object {
+                    KernelObject::Supervision(child) => Some(*child),
+                    _ => None,
+                })
+        })
+    })
+    .ok_or(crate::capability::CapError::WrongObject)?;
+    let reason = SCHEDULER
+        .lock()
+        .terminated
+        .iter()
+        .find(|(task_id, _)| *task_id == child)
+        .map(|(_, reason)| *reason);
+    if reason.is_some() {
+        with_current_mut(|task| task.caps.remove(slot).map(|_| ()))?;
+    }
+    Ok(reason)
 }
 
 pub fn termination_summary(id: TaskId) -> Option<TermReason> {
@@ -460,6 +560,13 @@ pub fn terminate(frame: &mut UserFrame, reason: TermReason) {
                 }
             }
             sched.terminated.push((id, reason));
+            let spawner = sched.tasks[idx].spawner;
+            if let Some(spawner) = spawner
+                && let Some(parent_idx) = sched.index_of(spawner)
+            {
+                sched.tasks[parent_idx].live_children =
+                    sched.tasks[parent_idx].live_children.saturating_sub(1);
+            }
         }
         let result = schedule_next(&mut sched, frame);
         let pml4 = selected_pml4(&sched, &result);
