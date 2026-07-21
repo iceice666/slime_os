@@ -7,30 +7,42 @@ use slime_rt::SpawnGrant;
 
 const RIGHT_SEND: u32 = 1;
 const RIGHT_RECV: u32 = 2;
+const RIGHT_TRANSFER: u32 = 4;
 const RIGHT_BLOCK_READ: u32 = 1 << 10;
 const RIGHT_BLOCK_WRITE: u32 = 1 << 11;
 const RIGHT_STORE_READ: u32 = 1 << 12;
 const RIGHT_STORE_WRITE: u32 = 1 << 13;
 const RIGHT_HEALTH_CONFIRM: u32 = 1 << 14;
 const RIGHT_BOOT_UPDATE: u32 = 1 << 15;
+const RIGHT_EXEC: u32 = 1 << 3;
+const RIGHT_SPAWN: u32 = 1 << 16;
+const RIGHT_ENDPOINT_CREATE: u32 = 1 << 17;
 
 // Manifest-derived bootstrap slot order is emitted by the host builder.
 const CONSOLE_CAPS: [SpawnGrant; 1] = [grant(2, RIGHT_RECV)];
-const DANGO_CAPS: [SpawnGrant; 3] = [
-    grant(4, RIGHT_RECV),
-    grant(5, RIGHT_RECV),
-    grant(6, RIGHT_SEND),
-];
-const SYSINFO_CAPS: [SpawnGrant; 1] = [grant(8, RIGHT_SEND)];
-const ECHO_CAPS: [SpawnGrant; 1] = [grant(10, RIGHT_SEND)];
-const STORAGE_PROBE_READ_CAPS: [SpawnGrant; 1] = [grant(12, RIGHT_BLOCK_READ)];
-const STORAGE_PROBE_WRITE_CAPS: [SpawnGrant; 1] = [grant(12, RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE)];
-const STORAGE_PROBE_STORE_CAPS: [SpawnGrant; 1] = [grant(12, RIGHT_STORE_READ | RIGHT_STORE_WRITE)];
-const GENERATION_MANAGER_CAPS: [SpawnGrant; 1] = [grant(14, RIGHT_HEALTH_CONFIRM)];
+const STORAGE_PROBE_READ_CAPS: [SpawnGrant; 1] = [grant(8, RIGHT_BLOCK_READ)];
+const STORAGE_PROBE_WRITE_CAPS: [SpawnGrant; 1] = [grant(8, RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE)];
+const STORAGE_PROBE_STORE_CAPS: [SpawnGrant; 1] = [grant(8, RIGHT_STORE_READ | RIGHT_STORE_WRITE)];
+const GENERATION_MANAGER_CAPS: [SpawnGrant; 1] = [grant(10, RIGHT_HEALTH_CONFIRM)];
 const RECOVERY_CAPS: [SpawnGrant; 2] = [
     grant(2, RIGHT_BOOT_UPDATE),
     grant(3, RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE),
 ];
+
+fn dango_caps() -> [SpawnGrant; 2] {
+    [
+        grant(11, RIGHT_SEND | RIGHT_RECV),
+        grant(4, RIGHT_SEND | RIGHT_TRANSFER),
+    ]
+}
+
+fn spawn_service_caps() -> [SpawnGrant; 3] {
+    [
+        grant(12, RIGHT_SEND | RIGHT_RECV),
+        grant(0, RIGHT_ENDPOINT_CREATE),
+        grant(6, RIGHT_EXEC | RIGHT_SPAWN),
+    ]
+}
 
 const fn grant(slot: u32, rights: u32) -> SpawnGrant {
     SpawnGrant { slot, rights }
@@ -53,11 +65,12 @@ fn main() {
     slime_rt::debug_write(b"[init] launching component graph\n");
 
     spawn_or_fail(1, &CONSOLE_CAPS);
-    spawn_or_fail(3, &DANGO_CAPS);
-    spawn_or_fail(7, &SYSINFO_CAPS);
-    spawn_or_fail(9, &ECHO_CAPS);
-    spawn_or_fail(11, storage_caps());
-    spawn_or_fail(13, &GENERATION_MANAGER_CAPS);
+    spawn_or_fail(3, &dango_caps());
+    spawn_or_fail(5, &spawn_service_caps());
+    spawn_or_fail(7, storage_caps());
+    spawn_or_fail(9, &GENERATION_MANAGER_CAPS);
+    slime_rt::debug_write(b"[init] spawn graph launched\n");
+    slime_rt::exit(0);
 }
 
 fn spawn_or_fail(executable_slot: u32, grants: &[SpawnGrant]) {

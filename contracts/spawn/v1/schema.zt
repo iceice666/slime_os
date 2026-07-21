@@ -1,0 +1,112 @@
+-- Slime OS spawn-service protocol, version 1.
+-- Requests and replies are fixed 64-byte IPC messages. The request carries a
+-- bounded command/profile key and explicit launch context; optional directory
+-- and stream capabilities are transferred in IPC capability order.
+
+env ::= import stdlib.env;
+fs ::= import stdlib.fs;
+gen ::= import "gen_rust.zt";
+t ::= import stdlib.text;
+
+formatVersion :: Int = 1;
+requestLen :: Int = 64;
+replyLen :: Int = 64;
+maxArguments :: Int = 8;
+maxArgumentBytes :: Int = 8;
+maxEnvironment :: Int = 8;
+maxEnvironmentBytes :: Int = 8;
+maxGrants :: Int = 1;
+maxCommandBytes :: Int = 16;
+capabilityRoleWorkingDirectory :: Int = 1;
+capabilityRoleStdin :: Int = 2;
+capabilityRoleStdout :: Int = 4;
+capabilityRoleStderr :: Int = 8;
+capabilityRoleGrant :: Int = 16;
+
+WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
+
+SpawnRequest :: type {
+  magic : Int;
+  version : Int;
+  flags : Int;
+  command_len : Int;
+  argument_count : Int;
+  environment_count : Int;
+  capability_roles : Int;
+  client_budget : Int;
+  command : Int;
+  arguments : Int;
+  environment : Int;
+  grant_rights : Int;
+  reserved : Int;
+};
+
+SpawnReply :: type {
+  magic : Int;
+  version : Int;
+  status : Int;
+  termination_kind : Int;
+  task_id : Int;
+  supervision_slot : Int;
+  detail : Int;
+};
+
+requestSchema ::= schema SpawnRequest;
+replySchema ::= schema SpawnReply;
+
+requestLayout :: List WireField = {
+  { name = "magic"; width = 4; signed = false; byteArray = false; };
+  { name = "version"; width = 4; signed = false; byteArray = false; };
+  { name = "flags"; width = 4; signed = false; byteArray = false; };
+  { name = "command_len"; width = 2; signed = false; byteArray = false; };
+  { name = "argument_count"; width = 1; signed = false; byteArray = false; };
+  { name = "environment_count"; width = 1; signed = false; byteArray = false; };
+  { name = "capability_roles"; width = 1; signed = false; byteArray = false; };
+  { name = "client_budget"; width = 1; signed = false; byteArray = false; };
+  { name = "command"; width = 16; signed = false; byteArray = true; };
+  { name = "arguments"; width = 8; signed = false; byteArray = true; };
+  { name = "environment"; width = 8; signed = false; byteArray = true; };
+  { name = "grant_rights"; width = 4; signed = false; byteArray = false; };
+  { name = "reserved"; width = 6; signed = false; byteArray = true; };
+};
+
+replyLayout :: List WireField = {
+  { name = "magic"; width = 4; signed = false; byteArray = false; };
+  { name = "version"; width = 4; signed = false; byteArray = false; };
+  { name = "status"; width = 4; signed = true; byteArray = false; };
+  { name = "termination_kind"; width = 4; signed = false; byteArray = false; };
+  { name = "task_id"; width = 8; signed = false; byteArray = false; };
+  { name = "supervision_slot"; width = 4; signed = false; byteArray = false; };
+  { name = "detail"; width = 8; signed = false; byteArray = false; };
+};
+
+format ::= {
+  formatVersion = formatVersion;
+  requestLen = requestLen;
+  replyLen = replyLen;
+  maxArguments = maxArguments;
+  maxArgumentBytes = maxArgumentBytes;
+  maxEnvironment = maxEnvironment;
+  maxEnvironmentBytes = maxEnvironmentBytes;
+  maxGrants = maxGrants;
+  maxCommandBytes = maxCommandBytes;
+  capabilityRoleWorkingDirectory = capabilityRoleWorkingDirectory;
+  capabilityRoleStdin = capabilityRoleStdin;
+  capabilityRoleStdout = capabilityRoleStdout;
+  capabilityRoleStderr = capabilityRoleStderr;
+  capabilityRoleGrant = capabilityRoleGrant;
+  requestFields = requestSchema.fields ?? {;};
+  replyFields = replySchema.fields ?? {;};
+  requestLayout = requestLayout;
+  replyLayout = replyLayout;
+};
+
+main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }
+  = caps => [
+    root := env.get caps.env "SLIME_SPAWN_BINDINGS_ROOT" ?? ".";
+    bindings := gen.render format;
+    path := t.join "" { root; "/components/proto/src/spawn.rs"; };
+    fs.writeAll caps.write path bindings.rust
+  ];
+
+main

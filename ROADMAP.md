@@ -567,7 +567,7 @@ Milestone 5 is complete only when all of the following are observed:
 
 ## Milestone 6: Native interactive environment
 
-**Status:** Minimal stub only. Slices M6.1 through M6.7 are planned below; none has started.
+**Status:** M6.1 and M6.2 done; M6.3 through M6.7 are planned below.
 
 Scope:
 
@@ -612,7 +612,7 @@ Exit condition: a userspace spawner holding a factory capability can mint bounde
 
 ### M6.2: Spawn service and command profile
 
-**Status:** Not started.
+**Status:** Done.
 
 Deliverables:
 

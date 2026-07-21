@@ -159,8 +159,8 @@ def recovery_manifest(manifest: dict) -> dict:
         {"id": "recovery-index", "kind": "resource", "size": 4096},
     ]
     recovery["components"] = [
-        {"name": "init", "object": "sha256:init", "role": "init", "dependencies": [], "spawnBudget": 1},
-        {"name": "recovery", "object": "sha256:recovery", "role": "service", "dependencies": ["init"], "spawnBudget": 0},
+        {"name": "init", "object": "sha256:init", "role": "init", "dependencies": [], "spawnBudget": 1, "commandProfile": []},
+        {"name": "recovery", "object": "sha256:recovery", "role": "service", "dependencies": ["init"], "spawnBudget": 0, "commandProfile": []},
     ]
     recovery["grants"] = [
         {"name": "endpoint-factory", "source": "init", "target": "init", "rights": ["endpointCreate"], "transferable": False},
@@ -637,13 +637,16 @@ def main() -> None:
     object_by_id = {obj["id"]: obj for obj in manifest["objects"]}
     for component in manifest["components"]:
         stack = component.get("stackBytes", DEFAULT_STACK_BYTES)
-        if not isinstance(stack, int) or stack <= 0 or stack % PAGE_SIZE or stack > MAX_STACK_BYTES: fail(f"component {component['name']}: invalid stack")
+        if not isinstance(stack, int) or stack <= 0 or stack % PAGE_SIZE or stack > MAX_STACK_BYTES:
+            fail(f"component {component['name']}: invalid stack")
         if component["object"] not in object_by_id: fail(f"component {component['name']}: missing object")
         payloads[component["object"]] = component_image(component["name"], generation1_components / component["name"], stack)
     generation1 = build_generation(manifest, payloads, None, 1)
     generation2_components = build_rust_components(policy_number)
     for component in manifest["components"]:
         stack = component.get("stackBytes", DEFAULT_STACK_BYTES)
+        if not isinstance(stack, int) or stack <= 0 or stack % PAGE_SIZE or stack > MAX_STACK_BYTES:
+            fail(f"component {component['name']}: invalid stack")
         payloads[component["object"]] = component_image(component["name"], generation2_components / component["name"], stack)
     generation2 = build_generation(manifest, payloads, generation1[24:56], policy_number)
     recovery_components = build_rust_components(5, recovery=True)

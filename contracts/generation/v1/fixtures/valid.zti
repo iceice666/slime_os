@@ -17,6 +17,7 @@
     { id = "sha256:storage-fault-probe"; kind = "component"; size = 32768; };
     { id = "sha256:storage-store-probe"; kind = "component"; size = 65536; };
     { id = "sha256:generation-manager"; kind = "component"; size = 32768; };
+    { id = "sha256:spawn-service"; kind = "component"; size = 65536; };
   ];
 
   components = [
@@ -26,6 +27,7 @@
       role = "init";
       dependencies = [];
       spawnBudget = 10;
+      commandProfile = [];
     };
     {
       name = "console";
@@ -33,13 +35,15 @@
       role = "service";
       dependencies = ["init";];
       spawnBudget = 0;
+      commandProfile = [];
     };
     {
       name = "dango";
       object = "sha256:dango";
       role = "application";
       dependencies = ["console";];
-      spawnBudget = 0;
+      spawnBudget = 1;
+      commandProfile = ["sysinfo";];
     };
     {
       name = "sysinfo";
@@ -47,6 +51,7 @@
       role = "application";
       dependencies = [];
       spawnBudget = 0;
+      commandProfile = [];
     };
     {
       name = "echo-agent";
@@ -54,6 +59,7 @@
       role = "application";
       dependencies = [];
       spawnBudget = 0;
+      commandProfile = [];
     };
     {
       name = "storage-probe";
@@ -61,6 +67,7 @@
       role = "application";
       dependencies = [];
       spawnBudget = 0;
+      commandProfile = [];
     };
     {
       name = "storage-writer";
@@ -68,6 +75,7 @@
       role = "application";
       dependencies = [];
       spawnBudget = 0;
+      commandProfile = [];
     };
     {
       name = "storage-fault-probe";
@@ -75,6 +83,7 @@
       role = "application";
       dependencies = [];
       spawnBudget = 0;
+      commandProfile = [];
     };
     {
       name = "storage-store-probe";
@@ -82,6 +91,7 @@
       role = "application";
       dependencies = [];
       spawnBudget = 0;
+      commandProfile = [];
     };
     {
       name = "generation-manager";
@@ -89,9 +99,32 @@
       role = "service";
       dependencies = ["init";];
       spawnBudget = 0;
+      commandProfile = [];
+    };
+    {
+      name = "spawn-service";
+      object = "sha256:spawn-service";
+      role = "service";
+      dependencies = ["init";];
+      spawnBudget = 8;
+      commandProfile = [];
     };
   ];
   grants = [
+    {
+      name = "spawn-service-rpc";
+      source = "dango";
+      target = "spawn-service";
+      rights = ["send"; "recv";];
+      transferable = false;
+    };
+    {
+      name = "spawn-service-sysinfo";
+      source = "init";
+      target = "spawn-service";
+      rights = ["exec"; "spawn";];
+      transferable = false;
+    };
     {
       name = "endpoint-factory";
       source = "init";
@@ -104,28 +137,7 @@
       source = "console";
       target = "dango";
       rights = ["send";];
-      transferable = false;
-    };
-    {
-      name = "system-information";
-      source = "init";
-      target = "sysinfo";
-      rights = ["send";];
-      transferable = false;
-    };
-    {
-      name = "echo-request";
-      source = "echo-agent";
-      target = "dango";
-      rights = ["send";];
-      transferable = false;
-    };
-    {
-      name = "echo-reply";
-      source = "dango";
-      target = "echo-agent";
-      rights = ["send";];
-      transferable = false;
+      transferable = true;
     };
     {
       name = "block-read";
@@ -199,6 +211,6 @@
 
   health = {
     bootAttempts = 3;
-    requiredComponents = ["init"; "console"; "dango"; "echo-agent"; "storage-probe";];
+    requiredComponents = ["init"; "console"; "dango"; "storage-probe";];
   };
 }

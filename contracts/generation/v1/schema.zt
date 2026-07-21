@@ -25,6 +25,8 @@ Component :: type {
   -- Maximum simultaneous children this component may spawn. Zero disables
   -- spawning; the bootstrap component receives the declared graph budget.
   spawnBudget : Int;
+  -- Command names this component may resolve through the spawn service.
+  commandProfile : List Text;
 };
 
 CapabilityGrant :: type {

@@ -1,6 +1,6 @@
 use alloc::collections::VecDeque;
 use alloc::sync::{Arc, Weak};
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::AtomicBool;
 use spin::Mutex;
 
 use crate::capability::{Capability, CapabilityTable};
@@ -30,7 +30,34 @@ pub struct EndpointInner {
     pub peer_owner_alive: Weak<AtomicBool>,
 }
 
-pub type Endpoint = Arc<EndpointInner>;
+pub struct Endpoint {
+    inner: Arc<EndpointInner>,
+    owner_alive: Arc<AtomicBool>,
+}
+
+impl Endpoint {
+    pub fn inner(&self) -> &EndpointInner {
+        &self.inner
+    }
+}
+
+impl Clone for Endpoint {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            owner_alive: self.owner_alive.clone(),
+        }
+    }
+}
+
+impl Drop for Endpoint {
+    fn drop(&mut self) {
+        if Arc::strong_count(&self.owner_alive) == 2 {
+            self.owner_alive
+                .store(false, core::sync::atomic::Ordering::Release);
+        }
+    }
+}
 
 pub fn channel() -> (Endpoint, Endpoint) {
     let a_alive = Arc::new(AtomicBool::new(true));
@@ -38,31 +65,30 @@ pub fn channel() -> (Endpoint, Endpoint) {
     let a_queue = Arc::new(Mutex::new(VecDeque::new()));
     let b_queue = Arc::new(Mutex::new(VecDeque::new()));
 
-    let a = Arc::new(EndpointInner {
-        queue: a_queue.clone(),
-        peer_queue: Arc::downgrade(&b_queue),
+    let a = Endpoint {
+        inner: Arc::new(EndpointInner {
+            queue: a_queue.clone(),
+            peer_queue: Arc::downgrade(&b_queue),
+            owner_alive: a_alive.clone(),
+            peer_owner_alive: Arc::downgrade(&b_alive),
+        }),
         owner_alive: a_alive.clone(),
-        peer_owner_alive: Arc::downgrade(&b_alive),
-    });
-    let b = Arc::new(EndpointInner {
-        queue: b_queue,
-        peer_queue: Arc::downgrade(&a_queue),
-        owner_alive: b_alive,
-        peer_owner_alive: Arc::downgrade(&a_alive),
-    });
-
+    };
+    let b = Endpoint {
+        inner: Arc::new(EndpointInner {
+            queue: b_queue,
+            peer_queue: Arc::downgrade(&a_queue),
+            owner_alive: b_alive.clone(),
+            peer_owner_alive: Arc::downgrade(&a_alive),
+        }),
+        owner_alive: b_alive.clone(),
+    };
     (a, b)
 }
 
-pub fn send(
-    ep: &EndpointInner,
-    bytes: &[u8],
-    caps: &mut [Option<Capability>; MAX_CAPS_PER_MSG],
-) -> i64 {
-    let Some(peer_alive) = ep.peer_owner_alive.upgrade() else {
-        return ERR_PEER_DEAD;
-    };
-    if !peer_alive.load(Ordering::Acquire) {
+pub fn send(ep: &Endpoint, bytes: &[u8], caps: &mut [Option<Capability>; MAX_CAPS_PER_MSG]) -> i64 {
+    let ep = ep.inner();
+    if ep.peer_owner_alive.upgrade().is_none() {
         return ERR_PEER_DEAD;
     }
     let Some(peer_queue) = ep.peer_queue.upgrade() else {
@@ -89,11 +115,12 @@ pub fn send(
 }
 
 pub fn recv(
-    ep: &EndpointInner,
+    ep: &Endpoint,
     buf: &mut [u8],
     cap_out: &mut [u64; MAX_CAPS_PER_MSG],
     caps: &mut CapabilityTable,
 ) -> i64 {
+    let ep = ep.inner();
     let mut queue = ep.queue.lock();
     if let Some(msg) = queue.front() {
         let cap_count = msg.caps.iter().filter(|cap| cap.is_some()).count();
@@ -117,10 +144,7 @@ pub fn recv(
     }
     drop(queue);
 
-    let Some(peer_alive) = ep.peer_owner_alive.upgrade() else {
-        return ERR_PEER_DEAD;
-    };
-    if !peer_alive.load(Ordering::Acquire) {
+    if ep.peer_owner_alive.upgrade().is_none() {
         ERR_PEER_DEAD
     } else {
         ERR_WOULDBLOCK

@@ -3,7 +3,6 @@ use alloc::collections::VecDeque;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::arch::global_asm;
-use core::sync::atomic::Ordering;
 use spin::{LazyLock, Mutex};
 
 use crate::capability::{Capability, CapabilityTable, KernelObject, RIGHT_SPAWN, RIGHT_TRANSFER};
@@ -443,27 +442,36 @@ pub fn set_on_idle(f: extern "C" fn()) {
 }
 
 pub fn supervision_status(slot: u32) -> Result<Option<TermReason>, crate::capability::CapError> {
-    let child = with_current_mut(|task| {
-        task.caps.get(slot).and_then(|cap| {
-            (cap.rights & crate::capability::RIGHT_SUPERVISE != 0)
-                .then_some(&cap.object)
-                .and_then(|object| match object {
-                    KernelObject::Supervision(child) => Some(*child),
-                    _ => None,
-                })
-        })
+    without_interrupts(|| {
+        let mut sched = SCHEDULER.lock();
+        let current = sched
+            .current
+            .ok_or(crate::capability::CapError::WrongObject)?;
+        let current_index = sched
+            .index_of(current)
+            .ok_or(crate::capability::CapError::WrongObject)?;
+        let child = sched.tasks[current_index]
+            .caps
+            .get(slot)
+            .and_then(|cap| {
+                (cap.rights & crate::capability::RIGHT_SUPERVISE != 0)
+                    .then_some(&cap.object)
+                    .and_then(|object| match object {
+                        KernelObject::Supervision(child) => Some(*child),
+                        _ => None,
+                    })
+            })
+            .ok_or(crate::capability::CapError::WrongObject)?;
+        let reason = sched
+            .terminated
+            .iter()
+            .find(|(task_id, _)| *task_id == child)
+            .map(|(_, reason)| *reason);
+        if reason.is_some() {
+            sched.tasks[current_index].caps.remove(slot).map(|_| ())?;
+        }
+        Ok(reason)
     })
-    .ok_or(crate::capability::CapError::WrongObject)?;
-    let reason = SCHEDULER
-        .lock()
-        .terminated
-        .iter()
-        .find(|(task_id, _)| *task_id == child)
-        .map(|(_, reason)| *reason);
-    if reason.is_some() {
-        with_current_mut(|task| task.caps.remove(slot).map(|_| ()))?;
-    }
-    Ok(reason)
 }
 
 pub fn termination_summary(id: TaskId) -> Option<TermReason> {
@@ -476,10 +484,25 @@ pub fn termination_summary(id: TaskId) -> Option<TermReason> {
 }
 
 pub fn with_current_mut<R>(f: impl FnOnce(&mut Task) -> R) -> R {
-    let mut sched = SCHEDULER.lock();
-    let id = sched.current.expect("no current task");
-    let idx = sched.index_of(id).expect("current task missing");
-    f(&mut sched.tasks[idx])
+    without_interrupts(|| {
+        let mut sched = SCHEDULER.lock();
+        let id = sched.current.expect("no current task");
+        let idx = sched.index_of(id).expect("current task missing");
+        f(&mut sched.tasks[idx])
+    })
+}
+
+fn without_interrupts<T>(f: impl FnOnce() -> T) -> T {
+    let flags: u64;
+    unsafe {
+        core::arch::asm!("pushfq", "pop {}", out(reg) flags, options(nomem, preserves_flags));
+        core::arch::asm!("cli", options(nomem, nostack, preserves_flags));
+    }
+    let result = f();
+    if flags & (1 << 9) != 0 {
+        unsafe { core::arch::asm!("sti", options(nomem, nostack, preserves_flags)) };
+    }
+    result
 }
 
 /// Copy bytes from the current task's mapped user address without switching
@@ -553,12 +576,8 @@ pub fn terminate(frame: &mut UserFrame, reason: TermReason) {
         {
             sched.tasks[idx].state = TaskState::Terminated(reason);
             sched.tasks[idx].saved = *frame;
-            let drained = sched.tasks[idx].caps.drain();
-            for cap in drained {
-                if let KernelObject::Endpoint(ep) = cap.object {
-                    ep.owner_alive.store(false, Ordering::Release);
-                }
-            }
+            let _drained = sched.tasks[idx].caps.drain();
+
             sched.terminated.push((id, reason));
             let spawner = sched.tasks[idx].spawner;
             if let Some(spawner) = spawner

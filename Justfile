@@ -26,6 +26,17 @@ test:
 # accounting, supervision result shape, and generation-v2 determinism.
 spawn_prereq_check: contracts_check generation_check
     cd kernel && cargo test --test spawn_authority -- -display none
+# M6.2: generated spawn protocol, deterministic command profile, bounded
+# userspace spawn service, profile rejection, and exact grant composition.
+spawn_service_check: contracts_check generation_check
+    python3 scripts/generate-spawn-bindings.py --check
+    cd components && cargo test --target x86_64-unknown-linux-gnu -p slime-proto --test spawn
+    ./scripts/build-storage-fixture.py /tmp/slime-os-spawn-service.img
+    cd kernel && cargo run --release -- \
+        -display none \
+        -drive if=none,id=slime-storage,format=raw,readonly=on,file=/tmp/slime-os-spawn-service.img \
+        -device virtio-blk-pci,drive=slime-storage,disable-legacy=on,queue-size=8
+
 # M5.1: exercise the storage-capability foundation (PCI/DMA/cap/block-proto)
 # under QEMU. Proves an unprivileged component cannot acquire device rights.
 storage_cap_check:
@@ -123,6 +134,10 @@ component_gen:
 store_gen:
     python3 scripts/generate-store-bindings.py
 
+# Regenerate userspace spawn-service protocol bindings.
+spawn_gen:
+    python3 scripts/generate-spawn-bindings.py
+
 # Regenerate host constants for generation v2, kernel image, and BootState.
 boot_gen:
     python3 scripts/generate-boot-bindings.py
@@ -159,6 +174,7 @@ recovery_check:
 # Validate the pinned generation manifest schema and fixtures.
 contracts_check: bootstate_model_check
     python3 scripts/check-contracts.py
+    python3 scripts/generate-spawn-bindings.py --check
 
 # Build and validate deterministic generation and redundant boot metadata.
 generation_check:

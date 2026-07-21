@@ -13,12 +13,12 @@ static INIT_ID: AtomicU64 = AtomicU64::new(0);
 static CONSOLE_ID: AtomicU64 = AtomicU64::new(0);
 static DANGO_ID: AtomicU64 = AtomicU64::new(0);
 static SYSINFO_ID: AtomicU64 = AtomicU64::new(0);
-static ECHO_ID: AtomicU64 = AtomicU64::new(0);
 static STORAGE_PROBE_ID: AtomicU64 = AtomicU64::new(0);
 static STORAGE_WRITER_ID: AtomicU64 = AtomicU64::new(0);
 static STORAGE_FAULT_ID: AtomicU64 = AtomicU64::new(0);
 static STORAGE_STORE_ID: AtomicU64 = AtomicU64::new(0);
 static GENERATION_MANAGER_ID: AtomicU64 = AtomicU64::new(0);
+static SPAWN_SERVICE_ID: AtomicU64 = AtomicU64::new(0);
 static RECOVERY_ID: AtomicU64 = AtomicU64::new(0);
 
 pub fn start() -> ! {
@@ -65,9 +65,6 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
     let sysinfo = generation
         .component_bytes("sysinfo")
         .expect("sysinfo object missing");
-    let echo = generation
-        .component_bytes("echo-agent")
-        .expect("echo-agent object missing");
     let storage_probe = generation
         .component_bytes("storage-probe")
         .expect("storage-probe object missing");
@@ -83,6 +80,10 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
     let generation_manager = generation
         .component_bytes("generation-manager")
         .expect("generation-manager object missing");
+    let spawn_service = generation
+        .component_bytes("spawn-service")
+        .expect("spawn-service object missing");
+    serial_println!("[generation] validating bootstrap grants");
 
     require_grant(
         generation,
@@ -91,22 +92,31 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         "init",
         crate::capability::RIGHT_ENDPOINT_CREATE,
     );
-    require_grant(generation, "console-output", "console", "dango", RIGHT_SEND);
+    serial_println!("[generation] endpoint grant valid");
     require_grant(
         generation,
-        "system-information",
-        "init",
-        "sysinfo",
-        RIGHT_SEND,
-    );
-    require_grant(
-        generation,
-        "echo-request",
-        "echo-agent",
+        "spawn-service-rpc",
         "dango",
-        RIGHT_SEND,
+        "spawn-service",
+        RIGHT_SEND | RIGHT_RECV,
     );
-    require_grant(generation, "echo-reply", "dango", "echo-agent", RIGHT_SEND);
+    serial_println!("[generation] rpc grant valid");
+    require_grant(
+        generation,
+        "spawn-service-sysinfo",
+        "init",
+        "spawn-service",
+        RIGHT_EXEC | RIGHT_SPAWN,
+    );
+    serial_println!("[generation] sysinfo executable grant valid");
+    require_grant(
+        generation,
+        "console-output",
+        "console",
+        "dango",
+        RIGHT_SEND | RIGHT_TRANSFER,
+    );
+    serial_println!("[generation] console grant valid");
     require_grant(
         generation,
         "block-read",
@@ -114,6 +124,7 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         "storage-probe",
         RIGHT_BLOCK_READ,
     );
+    serial_println!("[generation] block read grant valid");
     require_grant(
         generation,
         "block-write-check",
@@ -121,6 +132,7 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         "storage-writer",
         RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE,
     );
+    serial_println!("[generation] block write grant valid");
     require_grant(
         generation,
         "block-fault-check",
@@ -128,6 +140,7 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         "storage-fault-probe",
         RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE,
     );
+    serial_println!("[generation] block fault grant valid");
     require_grant(
         generation,
         "health-confirmation",
@@ -135,6 +148,7 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         "generation-manager",
         RIGHT_HEALTH_CONFIRM,
     );
+    serial_println!("[generation] health grant valid");
     require_grant(
         generation,
         "store-access",
@@ -142,6 +156,7 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         "storage-store-probe",
         RIGHT_STORE_READ | RIGHT_STORE_WRITE,
     );
+    serial_println!("[generation] store grant valid");
     let (storage_component, storage_capability) = match generation.number {
         2 => (
             storage_writer,
@@ -172,11 +187,10 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
             },
         ),
     };
+    serial_println!("[generation] bootstrap grants valid");
 
-    let (dango_sysinfo, sysinfo_output) = ipc::channel();
-    let (dango_echo, echo_output) = ipc::channel();
     let (console_output, dango_output) = ipc::channel();
-
+    let (dango_spawn, service_spawn) = ipc::channel();
     let caps = vec![
         Capability {
             object: KernelObject::EndpointFactory,
@@ -185,13 +199,9 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         executable(generation, "console", console),
         endpoint(console_output, RIGHT_RECV),
         executable(generation, "dango", dango),
-        endpoint(dango_sysinfo, RIGHT_RECV),
-        endpoint(dango_echo, RIGHT_RECV),
         endpoint(dango_output, RIGHT_SEND),
+        executable(generation, "spawn-service", spawn_service),
         executable(generation, "sysinfo", sysinfo),
-        endpoint(sysinfo_output, RIGHT_SEND),
-        executable(generation, "echo-agent", echo),
-        endpoint(echo_output, RIGHT_SEND),
         executable(
             generation,
             storage_component_name(generation.number),
@@ -203,18 +213,19 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
             object: KernelObject::GenerationControl,
             rights: RIGHT_HEALTH_CONFIRM | RIGHT_TRANSFER,
         },
+        endpoint(dango_spawn, RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER),
+        endpoint(service_spawn, RIGHT_SEND | RIGHT_RECV),
     ];
 
-    task::spawn_with_caps_for(
-        init,
-        caps,
-        None,
-        generation
-            .component_named("init")
-            .expect("init component missing")
-            .spawn_budget,
-    )
-    .expect("failed to launch init")
+    let spawn_budget = generation
+        .component_named("init")
+        .expect("init component missing")
+        .spawn_budget;
+    serial_println!(
+        "[generation] launching init with {} capabilities",
+        caps.len()
+    );
+    task::spawn_with_caps_for(init, caps, None, spawn_budget).expect("failed to launch init")
 }
 
 fn launch_recovery_init(generation: &Generation<'static>) -> task::TaskId {
@@ -378,12 +389,12 @@ pub fn record_spawn(component: &'static str, id: task::TaskId) {
         "console" => &CONSOLE_ID,
         "dango" => &DANGO_ID,
         "sysinfo" => &SYSINFO_ID,
-        "echo-agent" => &ECHO_ID,
         "storage-probe" => &STORAGE_PROBE_ID,
         "storage-writer" => &STORAGE_WRITER_ID,
         "storage-fault-probe" => &STORAGE_FAULT_ID,
         "storage-store-probe" => &STORAGE_STORE_ID,
         "generation-manager" => &GENERATION_MANAGER_ID,
+        "spawn-service" => &SPAWN_SERVICE_ID,
         "recovery" => &RECOVERY_ID,
         _ => return,
     };
@@ -404,7 +415,6 @@ extern "C" fn on_idle() {
         ("console", CONSOLE_ID.load(Ordering::Relaxed)),
         ("dango", DANGO_ID.load(Ordering::Relaxed)),
         ("sysinfo", SYSINFO_ID.load(Ordering::Relaxed)),
-        ("echo-agent", ECHO_ID.load(Ordering::Relaxed)),
         ("storage-probe", STORAGE_PROBE_ID.load(Ordering::Relaxed)),
         ("storage-writer", STORAGE_WRITER_ID.load(Ordering::Relaxed)),
         (
@@ -419,6 +429,7 @@ extern "C" fn on_idle() {
             "generation-manager",
             GENERATION_MANAGER_ID.load(Ordering::Relaxed),
         ),
+        ("spawn-service", SPAWN_SERVICE_ID.load(Ordering::Relaxed)),
         ("recovery", RECOVERY_ID.load(Ordering::Relaxed)),
     ];
     let mut healthy = true;

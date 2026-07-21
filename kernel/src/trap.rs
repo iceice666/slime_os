@@ -157,5 +157,5 @@ pub fn install(idt: &mut InterruptDescriptorTable) {
     idt.entry(6).set_handler_raw(stub_addr(6), 0x8E);
     idt.entry(13).set_handler_raw(stub_addr(13), 0x8E);
     idt.entry(14).set_handler_raw(stub_addr(14), 0x8E);
-    idt.entry(0x80).set_handler_raw(stub_addr(0x80), 0xEF);
+    idt.entry(0x80).set_handler_raw(stub_addr(0x80), 0xEE);
 }

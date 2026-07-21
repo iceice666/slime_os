@@ -78,7 +78,10 @@ impl Capability {
             return Err(CapError::BadRights);
         }
         Ok(Self {
-            object: self.object.clone(),
+            object: match &self.object {
+                KernelObject::Endpoint(endpoint) => KernelObject::Endpoint(endpoint.clone()),
+                object => object.clone(),
+            },
             rights: mask,
         })
     }

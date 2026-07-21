@@ -20,6 +20,7 @@ pub const SYS_UNHEALTHY: u64 = 9;
 pub const SYS_RECOVERY_RECONSTRUCT: u64 = 10;
 pub const SYS_ENDPOINT_CREATE: u64 = 11;
 pub const SYS_SUPERVISION_STATUS: u64 = 12;
+pub const SYS_CAP_DROP: u64 = 13;
 
 const USER_TOP: u64 = 0x0000_8000_0000_0000;
 
@@ -53,6 +54,7 @@ pub fn dispatch(frame: &mut UserFrame) {
         SYS_RECOVERY_RECONSTRUCT => sys_recovery_reconstruct(frame),
         SYS_ENDPOINT_CREATE => sys_endpoint_create(frame),
         SYS_SUPERVISION_STATUS => sys_supervision_status(frame),
+        SYS_CAP_DROP => sys_cap_drop(frame),
         _ => frame.rax = ipc::ERR_INVALID_ARG as u64,
     }
 }
@@ -61,13 +63,13 @@ fn sys_send(frame: &mut UserFrame) {
     let slot = frame.rdi as u32;
     let buf = frame.rsi as *const u8;
     let len = (frame.rdx as usize).min(MAX_MSG);
-    let cap_count = frame.r10 as usize;
-    let cap_handles = frame.r8 as *const u32;
+    let cap_handles = frame.r10 as *const u32;
+    let cap_count = frame.r8 as usize;
 
     if cap_count > MAX_CAPS_PER_MSG
         || !current_user_range(frame.rsi, len, false)
         || (cap_count > 0
-            && !current_user_range(frame.r8, cap_count * core::mem::size_of::<u32>(), false))
+            && !current_user_range(frame.r10, cap_count * core::mem::size_of::<u32>(), false))
     {
         frame.rax = ipc::ERR_INVALID_ARG as u64;
         return;
@@ -482,6 +484,14 @@ fn sys_supervision_status(frame: &mut UserFrame) {
         Ok(Some(TermReason::Unhealthy)) => frame.rax = 4,
         Err(_) => frame.rax = ipc::ERR_BAD_CAP as u64,
     }
+}
+
+fn sys_cap_drop(frame: &mut UserFrame) {
+    frame.rax = if task::with_current_mut(|task| task.caps.remove(frame.rdi as u32)).is_ok() {
+        ipc::ERR_SUCCESS as u64
+    } else {
+        ipc::ERR_BAD_CAP as u64
+    };
 }
 
 fn reason_code(reason: task::UserFaultReason) -> u64 {

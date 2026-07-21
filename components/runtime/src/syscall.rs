@@ -18,6 +18,7 @@ const SYS_UNHEALTHY: u64 = 9;
 const SYS_RECOVERY_RECONSTRUCT: u64 = 10;
 const SYS_ENDPOINT_CREATE: u64 = 11;
 const SYS_SUPERVISION_STATUS: u64 = 12;
+const SYS_CAP_DROP: u64 = 13;
 
 pub const ERR_SUCCESS: i64 = 0;
 pub const ERR_BAD_CAP: i64 = -1;
@@ -104,8 +105,8 @@ pub fn send(slot: u32, payload: &[u8], caps: &[u32]) -> i64 {
             slot as u64,
             payload.as_ptr() as u64,
             payload.len() as u64,
-            caps.len() as u64,
             caps.as_ptr() as u64,
+            caps.len() as u64,
         )
     }
 }
@@ -184,6 +185,11 @@ pub fn supervision_status(slot: u32) -> Result<Option<Termination>, i64> {
         4 => Ok(Some(Termination::Unhealthy)),
         error => Err(error),
     }
+}
+
+/// Releases the capability in `slot`, revoking this task's ownership of it.
+pub fn cap_drop(slot: u32) -> i64 {
+    unsafe { raw_syscall(SYS_CAP_DROP, slot as u64, 0, 0, 0, 0) }
 }
 
 /// Writes `bytes` to the kernel debug/serial log. Returns the byte count
