@@ -2,9 +2,9 @@ use alloc::vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::capability::{
-    Capability, KernelObject, RIGHT_BLOCK_READ, RIGHT_BLOCK_WRITE, RIGHT_EXEC,
-    RIGHT_HEALTH_CONFIRM, RIGHT_RECV, RIGHT_SEND, RIGHT_STORE_READ, RIGHT_STORE_WRITE,
-    RIGHT_TRANSFER,
+    Capability, KernelObject, PciFunctionInfo, RIGHT_BLOCK_READ, RIGHT_BLOCK_WRITE,
+    RIGHT_BOOT_UPDATE, RIGHT_EXEC, RIGHT_HEALTH_CONFIRM, RIGHT_RECV, RIGHT_SEND, RIGHT_STORE_READ,
+    RIGHT_STORE_WRITE, RIGHT_TRANSFER,
 };
 use crate::generation::{self, Generation};
 use crate::{ipc, println, serial_println, task};
@@ -19,6 +19,7 @@ static STORAGE_WRITER_ID: AtomicU64 = AtomicU64::new(0);
 static STORAGE_FAULT_ID: AtomicU64 = AtomicU64::new(0);
 static STORAGE_STORE_ID: AtomicU64 = AtomicU64::new(0);
 static GENERATION_MANAGER_ID: AtomicU64 = AtomicU64::new(0);
+static RECOVERY_ID: AtomicU64 = AtomicU64::new(0);
 
 pub fn start() -> ! {
     let bytes = crate::boot::generation();
@@ -49,6 +50,9 @@ pub fn start() -> ! {
 }
 
 fn launch_init(generation: &Generation<'static>) -> task::TaskId {
+    if generation.component_named("recovery").is_some() {
+        return launch_recovery_init(generation);
+    }
     let init = generation
         .component_bytes("init")
         .expect("init object missing");
@@ -103,14 +107,14 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         2 => (
             storage_writer,
             Capability {
-                object: KernelObject::BlockDevice,
+                object: KernelObject::BlockDevice(default_block_function()),
                 rights: RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE | RIGHT_TRANSFER,
             },
         ),
         3 => (
             storage_fault_probe,
             Capability {
-                object: KernelObject::BlockDevice,
+                object: KernelObject::BlockDevice(default_block_function()),
                 rights: RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE | RIGHT_TRANSFER,
             },
         ),
@@ -124,7 +128,7 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         _ => (
             storage_probe,
             Capability {
-                object: KernelObject::BlockDevice,
+                object: KernelObject::BlockDevice(default_block_function()),
                 rights: RIGHT_BLOCK_READ | RIGHT_TRANSFER,
             },
         ),
@@ -155,6 +159,65 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
     ];
 
     task::spawn_with_caps(init, caps).expect("failed to launch init")
+}
+
+fn launch_recovery_init(generation: &Generation<'static>) -> task::TaskId {
+    let recovery_index = recovery_index(generation);
+    let init = generation
+        .component_bytes("init")
+        .expect("init object missing");
+    let recovery = generation
+        .component_bytes("recovery")
+        .expect("recovery object missing");
+    require_grant(generation, "recovery-control", "init", "recovery");
+    require_grant(generation, "recovery-target", "init", "recovery");
+    let function = recovery_block_function(&recovery_index);
+    let caps = vec![
+        executable(recovery),
+        Capability {
+            object: KernelObject::GenerationControl,
+            rights: RIGHT_BOOT_UPDATE | RIGHT_TRANSFER,
+        },
+        Capability {
+            object: KernelObject::BlockDevice(function),
+            rights: RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE | RIGHT_TRANSFER,
+        },
+    ];
+    task::spawn_with_caps(init, caps).expect("failed to launch recovery init")
+}
+
+fn default_block_function() -> PciFunctionInfo {
+    crate::pci::enumerate()
+        .expect("block-device enumeration failed")
+        .into_iter()
+        .find(|function| {
+            (function.vendor_id == 0x1af4 && function.device_id == 0x1042)
+                || function.class_code & 0x00ff_ffff == 0x010802
+        })
+        .expect("block device missing")
+}
+
+fn recovery_index<'a>(
+    generation: &'a Generation<'a>,
+) -> boot_contracts::recovery::RecoveryIndex<'a> {
+    let object = (0..generation.object_count())
+        .find_map(|index| {
+            generation
+                .object(index)
+                .ok()
+                .filter(|object| object.id == "recovery-index")
+        })
+        .expect("signed recovery index missing");
+    boot_contracts::recovery::RecoveryIndex::decode(object.bytes)
+        .expect("signed recovery index invalid")
+}
+
+fn recovery_block_function(index: &boot_contracts::recovery::RecoveryIndex<'_>) -> PciFunctionInfo {
+    crate::pci::enumerate()
+        .expect("recovery target enumeration failed")
+        .into_iter()
+        .find(|function| crate::recovery::packed_bdf(*function) == index.target_pci_bdf)
+        .expect("signed recovery target missing")
 }
 
 fn executable(bytes: &'static [u8]) -> Capability {
@@ -218,6 +281,7 @@ pub fn record_spawn(component: &'static str, id: task::TaskId) {
         "storage-fault-probe" => &STORAGE_FAULT_ID,
         "generation-manager" => &GENERATION_MANAGER_ID,
         "storage-store-probe" => &STORAGE_STORE_ID,
+        "recovery" => &RECOVERY_ID,
         _ => return,
     };
     slot.store(id, Ordering::Relaxed);
@@ -244,6 +308,7 @@ extern "C" fn on_idle() {
             "generation-manager",
             GENERATION_MANAGER_ID.load(Ordering::Relaxed),
         ),
+        ("recovery", RECOVERY_ID.load(Ordering::Relaxed)),
     ];
     let mut healthy = true;
     for (name, id) in checks {

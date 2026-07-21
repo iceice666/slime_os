@@ -1,6 +1,6 @@
 use crate::capability::{
-    KernelObject, RIGHT_BLOCK_READ, RIGHT_BLOCK_WRITE, RIGHT_HEALTH_CONFIRM, RIGHT_RECV,
-    RIGHT_SEND, RIGHT_STORE_READ, RIGHT_STORE_WRITE, RIGHT_TRANSFER,
+    KernelObject, RIGHT_BLOCK_READ, RIGHT_BLOCK_WRITE, RIGHT_BOOT_UPDATE, RIGHT_HEALTH_CONFIRM,
+    RIGHT_RECV, RIGHT_SEND, RIGHT_STORE_READ, RIGHT_STORE_WRITE, RIGHT_TRANSFER,
 };
 use crate::ipc::{self, MAX_CAPS_PER_MSG, MAX_MSG};
 use crate::task::{self, TermReason};
@@ -16,6 +16,7 @@ pub const SYS_BLOCK_TRANSACT: u64 = 6;
 pub const SYS_STORE_TRANSACT: u64 = 7;
 pub const SYS_HEALTH_CONFIRM: u64 = 8;
 pub const SYS_UNHEALTHY: u64 = 9;
+pub const SYS_RECOVERY_RECONSTRUCT: u64 = 10;
 
 const USER_TOP: u64 = 0x0000_8000_0000_0000;
 
@@ -46,6 +47,7 @@ pub fn dispatch(frame: &mut UserFrame) {
         SYS_STORE_TRANSACT => sys_store_transact(frame),
         SYS_HEALTH_CONFIRM => sys_health_confirm(frame),
         SYS_UNHEALTHY => task::terminate(frame, TermReason::Unhealthy),
+        SYS_RECOVERY_RECONSTRUCT => sys_recovery_reconstruct(frame),
         _ => frame.rax = ipc::ERR_INVALID_ARG as u64,
     }
 }
@@ -133,12 +135,13 @@ fn sys_block_transact(frame: &mut UserFrame) {
         frame.rax = ipc::ERR_INVALID_ARG as u64;
         return;
     }
-    let rights = task::with_current_mut(|task| {
-        task.caps
-            .get(slot)
-            .and_then(|cap| matches!(cap.object, KernelObject::BlockDevice).then_some(cap.rights))
+    let capability = task::with_current_mut(|task| {
+        task.caps.get(slot).and_then(|cap| match cap.object {
+            KernelObject::BlockDevice(function) => Some((function, cap.rights)),
+            _ => None,
+        })
     });
-    let Some(rights) = rights else {
+    let Some((function, rights)) = capability else {
         frame.rax = ipc::ERR_BAD_CAP as u64;
         return;
     };
@@ -155,7 +158,7 @@ fn sys_block_transact(frame: &mut UserFrame) {
         Ok(decoded) => decoded,
         Err(_) => {
             let mut reply = [0u8; crate::block_proto::REPLY_LEN];
-            crate::block_service::transact(&request, &mut reply);
+            crate::block_service::transact(function, &request, &mut reply);
             unsafe {
                 core::ptr::copy_nonoverlapping(
                     reply.as_ptr(),
@@ -198,7 +201,7 @@ fn sys_block_transact(frame: &mut UserFrame) {
     }
 
     let mut reply = [0u8; crate::block_proto::REPLY_LEN];
-    crate::block_service::transact(&request, &mut reply);
+    crate::block_service::transact(function, &request, &mut reply);
     unsafe {
         core::ptr::copy_nonoverlapping(reply.as_ptr(), reply_address as *mut u8, reply.len())
     };
@@ -346,6 +349,47 @@ fn sys_health_confirm(frame: &mut UserFrame) {
     };
 }
 
+fn sys_recovery_reconstruct(frame: &mut UserFrame) {
+    let generation_control_slot = frame.rdi as u32;
+    let block_slot = frame.rsi as u32;
+    let flags = frame.rdx as u32;
+    let (control, block) = task::with_current_mut(|task| {
+        let control = task.caps.get(generation_control_slot).is_some_and(|cap| {
+            matches!(cap.object, KernelObject::GenerationControl)
+                && cap.rights & RIGHT_BOOT_UPDATE != 0
+        });
+        let block = task.caps.get(block_slot).and_then(|cap| match cap.object {
+            KernelObject::BlockDevice(function)
+                if cap.rights & (RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE)
+                    == RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE =>
+            {
+                Some(function)
+            }
+            _ => None,
+        });
+        (control, block)
+    });
+    let authorized = control.then_some(block).flatten();
+    let Some(function) = authorized else {
+        frame.rax = ipc::ERR_BAD_CAP as u64;
+        return;
+    };
+    frame.rax = match crate::recovery::reconstruct(function, flags) {
+        Ok(result) => {
+            crate::serial_println!(
+                "[recovery] reconstructed generation={:02x?} state_root={:02x?}",
+                result.generation,
+                result.state_root,
+            );
+            ipc::ERR_SUCCESS as u64
+        }
+        Err(error) => {
+            crate::serial_println!("[recovery] reconstruction rejected: {:?}", error);
+            ipc::ERR_INVALID_ARG as u64
+        }
+    };
+}
+
 fn sys_spawn(frame: &mut UserFrame) {
     let executable_slot = frame.rdi as u32;
     let cap_count = frame.rdx as usize;
@@ -391,6 +435,7 @@ fn component_name_from_id(id: u64) -> Option<&'static str> {
         6 => Some("storage-writer"),
         7 => Some("storage-fault-probe"),
         8 => Some("generation-manager"),
+        9 => Some("recovery"),
         _ => None,
     }
 }

@@ -29,8 +29,9 @@ use super::{PAGE_SIZE, VirtAddr, align_up};
 /// Virtual base of the kernel heap. Canonical higher-half, clear of Limine's
 /// HHDM (based near `0xffff_8000_…`) and the kernel image (`0xffffffff8000_…`).
 const HEAP_START: u64 = 0xffff_e000_0000_0000;
-/// Heap size: 2 MiB. Ample for early bring-up; grow when a real workload needs it.
-const HEAP_SIZE: usize = 2 * 1024 * 1024;
+/// Heap size covers one bounded 16 MiB generation during recovery scrub,
+/// component stacks, and the object-store staging buffer without overcommit.
+const HEAP_SIZE: usize = 24 * 1024 * 1024;
 
 /// Header at the front of every free block. Its size is the minimum block size.
 struct FreeNode {

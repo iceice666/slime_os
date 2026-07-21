@@ -3,8 +3,15 @@ fn main() {
     println!("cargo:rustc-link-arg=-T{manifest_dir}/../component.ld");
     println!("cargo:rerun-if-changed={manifest_dir}/../component.ld");
     println!("cargo:rerun-if-env-changed=SLIME_GENERATION_NUMBER");
+    println!("cargo:rerun-if-env-changed=SLIME_RECOVERY_INTERRUPT");
+    println!("cargo:rerun-if-env-changed=SLIME_RECOVERY_IMAGE");
     if let Ok(number) = std::env::var("SLIME_GENERATION_NUMBER") {
         println!("cargo:rustc-env=SLIME_GENERATION_NUMBER={number}");
     }
+    if let Ok(value) = std::env::var("SLIME_RECOVERY_IMAGE") {
+        println!("cargo:rustc-env=SLIME_RECOVERY_IMAGE={value}");
+    }
+    if let Ok(value) = std::env::var("SLIME_RECOVERY_INTERRUPT") {
+        println!("cargo:rustc-env=SLIME_RECOVERY_INTERRUPT={value}");
+    }
 }
-

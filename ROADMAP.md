@@ -491,7 +491,7 @@ Exit condition: stage-0 and generation-management code accept only correctly aut
 
 ### M5.9: Recovery, scrub, and BootState reconstruction
 
-**Status:** Not started. Promoted from the directions register (entry 22). This slice consumes M5.8 release trust. M5.6 covers interrupted valid transitions; this slice covers the separate case where boot metadata or stored objects are already corrupt and no normal transition can repair them.
+**Status:** Complete. `just recovery_check` boots a signed removable recovery generation, scrubs a capability-selected disposable target, reconstructs both redundant `BootState` slots from verified generation, state, and release roots, and proves a second ungranted disk remains byte-identical. Recovery images grant no internal NVMe write authority by default.
 
 Deliverables:
 

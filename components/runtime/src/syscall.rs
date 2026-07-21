@@ -15,6 +15,7 @@ const SYS_BLOCK_TRANSACT: u64 = 6;
 const SYS_STORE_TRANSACT: u64 = 7;
 const SYS_HEALTH_CONFIRM: u64 = 8;
 const SYS_UNHEALTHY: u64 = 9;
+const SYS_RECOVERY_RECONSTRUCT: u64 = 10;
 
 pub const ERR_SUCCESS: i64 = 0;
 pub const ERR_BAD_CAP: i64 = -1;
@@ -160,6 +161,20 @@ pub fn store_transact(slot: u32, request: &[u8; 64], reply: &mut [u8; 64]) -> i6
 /// `GenerationControl` capability in `slot`.
 pub fn health_confirm(slot: u32) -> i64 {
     unsafe { raw_syscall(SYS_HEALTH_CONFIRM, slot as u64, 0, 0, 0, 0) }
+}
+
+/// Scrubs and reconstructs BootState on the explicitly granted repair target.
+pub fn recovery_reconstruct(generation_control_slot: u32, block_slot: u32, flags: u32) -> i64 {
+    unsafe {
+        raw_syscall(
+            SYS_RECOVERY_RECONSTRUCT,
+            generation_control_slot as u64,
+            block_slot as u64,
+            flags as u64,
+            0,
+            0,
+        )
+    }
 }
 
 /// Terminates the current component with an explicit unhealthy status.

@@ -349,6 +349,19 @@ impl ObjectStore {
         Ok((entry.obj_type, len))
     }
 
+    /// Re-read and hash every committed object record. Opening validates the
+    /// superblock and record bounds; scrub additionally proves payload
+    /// integrity for objects outside the selected state closure.
+    pub fn scrub(&self, io: &mut impl BlockIo) -> Result<(), StoreError> {
+        for entry in &self.entries {
+            let payload = self.read_payload(io, entry)?;
+            if sha256::digest(&payload) != entry.hash {
+                return Err(StoreError::HashMismatch);
+            }
+        }
+        Ok(())
+    }
+
     /// Append and seal a new object. Identical content already present is an
     /// idempotent no-op returning the existing identity; the same identity
     /// with different payload bytes is rejected. Commit order is record

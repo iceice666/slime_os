@@ -14,14 +14,16 @@ use crate::block_proto::{
     FLAG_INJECT_RESET, FLAG_INJECT_TIMEOUT, FLAG_REPLAY_LAST, OP_FLUSH, OP_READ, OP_WRITE,
     ProtoError, REPLY_LEN, SECTOR_SIZE, decode_request, encode_reply,
 };
+use crate::capability::PciFunctionInfo;
 use crate::serial_println;
 
-static DEVICE: LazyLock<Mutex<Option<BlockDevice>>> = LazyLock::new(|| Mutex::new(None));
+static DEVICE: LazyLock<Mutex<Option<(PciFunctionInfo, BlockDevice)>>> =
+    LazyLock::new(|| Mutex::new(None));
 static LAST_PAYLOAD: LazyLock<Mutex<[u8; SECTOR_SIZE]>> =
     LazyLock::new(|| Mutex::new([0; SECTOR_SIZE]));
 static LAST_REQUEST: LazyLock<Mutex<Option<BlockRequest>>> = LazyLock::new(|| Mutex::new(None));
 
-pub fn transact(request: &[u8], reply: &mut [u8; REPLY_LEN]) {
+pub fn transact(function: PciFunctionInfo, request: &[u8], reply: &mut [u8; REPLY_LEN]) {
     let decoded = match decode_request(request) {
         Ok(decoded) => decoded,
         Err(error) => {
@@ -67,9 +69,12 @@ pub fn transact(request: &[u8], reply: &mut [u8; REPLY_LEN]) {
     };
 
     let mut device = DEVICE.lock();
-    if device.is_none() {
-        match BlockDevice::find_and_init() {
-            Ok(found) => *device = Some(found),
+    if device
+        .as_ref()
+        .is_none_or(|(current, _)| *current != function)
+    {
+        match BlockDevice::init(function) {
+            Ok(found) => *device = Some((function, found)),
             Err(error) => {
                 encode_reply(reply, device_status(error), 0);
                 serial_println!("[block-flight] init error {:?}", error);
@@ -77,7 +82,10 @@ pub fn transact(request: &[u8], reply: &mut [u8; REPLY_LEN]) {
             }
         }
     }
-    let result = execute(device.as_mut().expect("block device initialized"), decoded);
+    let result = execute(
+        &mut device.as_mut().expect("block device initialized").1,
+        decoded,
+    );
     if result.is_ok() && decoded.op == OP_READ {
         let mut payload = LAST_PAYLOAD.lock();
         unsafe {
@@ -116,7 +124,7 @@ pub fn with_device<R>(
     if device.is_none() {
         *device = Some(BlockDevice::find_and_init()?);
     }
-    let result = f(device.as_mut().expect("block device initialized"));
+    let result = f(&mut device.as_mut().expect("block device initialized").1);
     if let Err(error) = &result
         && error.requires_reinitialize()
     {

@@ -18,12 +18,21 @@ SIZE_MIB="${3:-64}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 [[ -f "$KERNEL" ]] || { echo "kernel not found: $KERNEL" >&2; exit 1; }
 
-GEN_DIR="$(mktemp -d -t slime-os-generation.XXXXXX)"
-trap 'rm -rf "$GEN_DIR"' EXIT
-SLIME_GENERATION_NUMBER="${SLIME_GENERATION_NUMBER:-}" \
-SLIME_PENDING_GENERATION="${SLIME_PENDING_GENERATION:-}" \
-SLIME_PENDING_ATTEMPTS="${SLIME_PENDING_ATTEMPTS:-}" \
-    "$ROOT/scripts/build-generation.py" "$KERNEL" "$GEN_DIR" >/dev/null
+if [[ -n "${SLIME_GENERATION_DIR:-}" ]]; then
+    GEN_DIR="$SLIME_GENERATION_DIR"
+    CLEAN_GEN_DIR=0
+else
+    GEN_DIR="$(mktemp -d -t slime-os-generation.XXXXXX)"
+    CLEAN_GEN_DIR=1
+fi
+
+trap 'if [[ "$CLEAN_GEN_DIR" == 1 ]]; then rm -rf "$GEN_DIR"; fi' EXIT
+if [[ "$CLEAN_GEN_DIR" == 1 ]]; then
+    SLIME_GENERATION_NUMBER="${SLIME_GENERATION_NUMBER:-}" \
+    SLIME_PENDING_GENERATION="${SLIME_PENDING_GENERATION:-}" \
+    SLIME_PENDING_ATTEMPTS="${SLIME_PENDING_ATTEMPTS:-}" \
+        "$ROOT/scripts/build-generation.py" "$KERNEL" "$GEN_DIR" >/dev/null
+fi
 
 if [[ "${SLIME_BOOT_LOADER:-stage0}" == "limine" ]]; then
     LIMINE_DATADIR="$(limine --print-datadir 2>/dev/null || true)"
@@ -50,6 +59,9 @@ if [[ "${SLIME_BOOT_LOADER:-stage0}" == "limine" ]]; then
 else
     MTOOLS_SKIP_CHECK=1 mcopy -i "$OUTPUT" "$STAGE0" ::/EFI/BOOT/BOOTX64.EFI
     MTOOLS_SKIP_CHECK=1 mcopy -i "$OUTPUT" "$GEN_DIR/boot-store.bin" ::/boot/boot-store.bin
+    if [[ "${SLIME_RECOVERY_IMAGE:-}" == "1" ]]; then
+        MTOOLS_SKIP_CHECK=1 mcopy -o -i "$OUTPUT" "$GEN_DIR/recovery-boot-store.bin" ::/boot/boot-store.bin
+    fi
 fi
 
 echo "Built $OUTPUT ($(stat -c%s "$OUTPUT") bytes)"

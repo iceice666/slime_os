@@ -32,7 +32,7 @@ Every new object or right must satisfy these rules before it ships:
 
 ## Current matrix
 
-Rights are a flat `u32`; bits 15–31 are free.
+Rights are a flat `u32`; bits 16–31 are free.
 
 | Object | Right (bit) | Gated operation | Creation authority | Gate status |
 | --- | --- | --- | --- | --- |
@@ -46,11 +46,12 @@ Rights are a flat `u32`; bits 15–31 are free.
 | Irq | IRQ_ACK (7) | future ack operation | kernel interrupt subsystem | **ungated** |
 | SharedBuffer | BUFFER_WRITE (8) | future write-into-region operation | kernel `SharedRegion::new`; no userspace path | **ungated** |
 | SharedBuffer | MAP (9) | future map-into-address-space operation | same | **ungated** |
-| BlockDevice | BLOCK_READ (10) | read requests in `SYS_BLOCK_TRANSACT` | kernel | gated |
-| BlockDevice | BLOCK_WRITE (11) | write and flush requests in `SYS_BLOCK_TRANSACT` | kernel | gated (M5.3) |
+| BlockDevice | BLOCK_READ (10) | read requests in `SYS_BLOCK_TRANSACT` for the capability's exact PCI function | kernel bootstrap | gated |
+| BlockDevice | BLOCK_WRITE (11) | write and flush requests in `SYS_BLOCK_TRANSACT` for the capability's exact PCI function | kernel bootstrap | gated (M5.3) |
 | ObjectStore | STORE_READ (12) | stat/get requests in `SYS_STORE_TRANSACT` | kernel bootstrap | gated (M5.4) |
 | ObjectStore | STORE_WRITE (13) | put requests in `SYS_STORE_TRANSACT` | kernel bootstrap | gated (M5.4) |
 | GenerationControl | HEALTH_CONFIRM (14) | `SYS_HEALTH_CONFIRM` for the currently running pending generation | kernel bootstrap, only for the declared generation-management service | gated (M5.6) |
+| GenerationControl | BOOT_UPDATE (15) | `SYS_RECOVERY_RECONSTRUCT` after signed-index, generation, state-closure, and release scrub | kernel bootstrap, only for the declared recovery service | gated (M5.9) |
 
 Semantics not visible in the table:
 
@@ -83,7 +84,7 @@ in the same change.
 
 | Candidate object | Candidate rights | Trigger | Open questions |
 | --- | --- | --- | --- |
-| BootState update authority beyond confirmation | possibly BOOT_UPDATE | post-M5.6 staging service | Boundary between userspace staging and immutable stage-0 slot writes |
+| BootState update authority beyond recovery | possibly STAGE_PENDING | M6 generation staging | Boundary between userspace staging and immutable stage-0 slot writes |
 | Directory | READ / WRITE / LIST? | M6 | Granularity; whether powerbox minting needs more than `derive` |
 | Endpoint minting | *(no new object)* | M6 prerequisite | Unprivileged mint with quota vs a factory capability |
 | RIGHT_SPAWN on Executable | SPAWN | generation format v2 | Deferred until grants are data-driven |

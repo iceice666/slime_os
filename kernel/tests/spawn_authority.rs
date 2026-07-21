@@ -22,8 +22,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use slime_os_kernel::capability::{
-    CapError, Capability, CapabilityTable, KernelObject, RIGHT_BLOCK_READ, RIGHT_BLOCK_WRITE,
-    RIGHT_EXEC, RIGHT_MAP_MMIO, RIGHT_RECV, RIGHT_SEND, RIGHT_TRANSFER,
+    CapError, Capability, CapabilityTable, KernelObject, PciFunctionInfo, RIGHT_BLOCK_READ,
+    RIGHT_BLOCK_WRITE, RIGHT_EXEC, RIGHT_MAP_MMIO, RIGHT_RECV, RIGHT_SEND, RIGHT_TRANSFER,
 };
 use slime_os_kernel::task::{self, MAX_TASKS, SpawnError};
 use slime_os_kernel::{gdt, interrupts, ipc, memory};
@@ -57,6 +57,18 @@ fn executable_cap(rights: u32) -> Capability {
         object: KernelObject::Executable(&[0x90]),
         rights,
     }
+}
+
+fn block_device() -> KernelObject {
+    KernelObject::BlockDevice(PciFunctionInfo {
+        segment: 0,
+        bus: 0,
+        device: 4,
+        function: 0,
+        vendor_id: 0x1af4,
+        device_id: 0x1042,
+        class_code: 0x010000,
+    })
 }
 
 /// Wrap a code blob in a single-segment executable component image
@@ -103,7 +115,7 @@ fn table_accepts_rights_valid_for_object_kind() {
         .unwrap();
     table
         .insert(Capability {
-            object: KernelObject::BlockDevice,
+            object: block_device(),
             rights: RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE | RIGHT_TRANSFER,
         })
         .unwrap();
@@ -115,7 +127,7 @@ fn table_rejects_rights_foreign_to_object_kind() {
         endpoint_cap(RIGHT_EXEC),
         executable_cap(RIGHT_SEND),
         Capability {
-            object: KernelObject::BlockDevice,
+            object: block_device(),
             rights: RIGHT_MAP_MMIO,
         },
         // Unknown bits are foreign to every object kind.

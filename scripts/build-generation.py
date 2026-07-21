@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
@@ -59,6 +60,11 @@ from boot_contracts import (
     MAX_KERNEL_RELOCATIONS,
     MAX_KERNEL_SEGMENTS,
     MAX_OBJECT_PAYLOAD_BYTES,
+    MAX_RECOVERY_STATE_OBJECTS,
+    RECOVERY_INDEX_HEADER,
+    RECOVERY_INDEX_MAGIC,
+    RECOVERY_INDEX_VERSION,
+    RECOVERY_STATE_ENTRY,
     MAX_OBJECTS,
     MAX_STATES,
     MAX_STRING_BYTES,
@@ -77,7 +83,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "valid.zti"
 TARGET = "x86_64-qemu-virtio"
 COMPONENTS_WORKSPACE = ROOT / "components" / "Cargo.toml"
-COMPONENTS_ELF_DIR = ROOT / "components" / "target" / "x86_64-unknown-none" / "release"
+COMPONENTS_TARGET_DIR = Path(os.environ.get("CARGO_TARGET_DIR") or ROOT / "components" / "target")
 PAGE_SIZE = 4096
 KIND = {"kernel": 1, "bootstrap": 2, "component": 3, "resource": 4}
 ROLE = {"init": 1, "service": 2, "driver": 3, "application": 4}
@@ -122,16 +128,89 @@ def load_manifest() -> dict:
     ).stdout
     return json.loads(output)
 
+def recovery_manifest(manifest: dict) -> dict:
+    recovery = copy.deepcopy(manifest)
+    recovery["objects"] = [
+        object_ for object_ in recovery["objects"] if object_["id"] in {manifest["kernelObject"], "sha256:init"}
+    ] + [
+        {"id": "sha256:recovery", "kind": "component", "size": 65536},
+        {"id": "recovery-index", "kind": "resource", "size": 4096},
+    ]
+    recovery["components"] = [
+        {"name": "init", "object": "sha256:init", "role": "init", "dependencies": []},
+        {"name": "recovery", "object": "sha256:recovery", "role": "service", "dependencies": ["init"]},
+    ]
+    recovery["grants"] = [
+        {"name": "recovery-control", "source": "init", "target": "recovery", "rights": ["write"], "transferable": False},
+        {"name": "recovery-target", "source": "init", "target": "recovery", "rights": ["read", "write"], "transferable": False},
+    ]
+    recovery["state"] = []
+    recovery["health"] = {"bootAttempts": 1, "requiredComponents": ["init", "recovery"]}
+    return recovery
 
-def build_rust_components(generation_number: int) -> None:
+
+def binding_identity(name: str) -> bytes:
+    encoded = name.encode("utf-8")
+    return sha256(b"slime-state-binding-v1" + struct.pack("<H", len(encoded)) + encoded)
+
+
+def build_recovery_index(
+    target_generation: bytes,
+    generation_root: bytes,
+    accepted_release_sequence: int,
+    target_pci_bdf: int,
+    state_entries: list[tuple[str, bytes, int]],
+    state_first_lba: int,
+    state_last_lba: int,
+) -> bytes:
+    if len(state_entries) > MAX_RECOVERY_STATE_OBJECTS:
+        fail("recovery state closure exceeds bound")
+    entries = sorted(
+        ((binding_identity(name), identity, schema) for name, identity, schema in state_entries),
+        key=lambda entry: entry[0],
+    )
+    if any(identity == bytes(32) or schema <= 0 for _, identity, schema in entries):
+        fail("invalid recovery state entry")
+    encoded = b"".join(
+        RECOVERY_STATE_ENTRY.pack(binding, identity, schema, bytes(4))
+        for binding, identity, schema in entries
+    )
+    state_root = sha256(
+        b"".join(binding + identity + struct.pack("<I", schema) for binding, identity, schema in entries)
+    )
+    header = RECOVERY_INDEX_HEADER.pack(
+        RECOVERY_INDEX_MAGIC,
+        RECOVERY_INDEX_VERSION,
+        RECOVERY_INDEX_HEADER.size,
+        0,
+        target_generation,
+        generation_root,
+        state_root,
+        accepted_release_sequence,
+        target_pci_bdf,
+        len(entries),
+        RECOVERY_INDEX_HEADER.size + len(encoded),
+        state_first_lba,
+        state_last_lba,
+        bytes(4),
+    )
+    return header + encoded
+
+
+def build_rust_components(generation_number: int, recovery: bool = False) -> Path:
     environment = os.environ.copy()
     environment["SLIME_GENERATION_NUMBER"] = str(generation_number)
+    if recovery:
+        environment["SLIME_RECOVERY_IMAGE"] = "1"
+    target_dir = COMPONENTS_TARGET_DIR / ("recovery" if recovery else f"generation-{generation_number}")
+    environment["CARGO_TARGET_DIR"] = str(target_dir)
     subprocess.run(
         ["cargo", "build", "--release"],
         cwd=COMPONENTS_WORKSPACE.parent,
         env=environment,
         check=True,
     )
+    return target_dir / "x86_64-unknown-none" / "release"
 
 
 def component_image(name: str, elf: Path, stack_bytes: int) -> bytes:
@@ -523,28 +602,54 @@ def main() -> None:
     manifest = load_manifest()
     if manifest["formatVersion"] != 1: fail("unsupported source formatVersion")
     policy_number = int(os.environ.get("SLIME_GENERATION_NUMBER") or manifest["generation"])
-    build_rust_components(1)
+    generation1_components = build_rust_components(1)
     payloads: dict[str, bytes] = {manifest["kernelObject"]: kernel_image(kernel)}
     object_by_id = {obj["id"]: obj for obj in manifest["objects"]}
     for component in manifest["components"]:
         stack = component.get("stackBytes", DEFAULT_STACK_BYTES)
         if not isinstance(stack, int) or stack <= 0 or stack % PAGE_SIZE or stack > MAX_STACK_BYTES: fail(f"component {component['name']}: invalid stack")
         if component["object"] not in object_by_id: fail(f"component {component['name']}: missing object")
-        payloads[component["object"]] = component_image(component["name"], COMPONENTS_ELF_DIR / component["name"], stack)
+        payloads[component["object"]] = component_image(component["name"], generation1_components / component["name"], stack)
     generation1 = build_generation(manifest, payloads, None, 1)
-    build_rust_components(policy_number)
+    generation2_components = build_rust_components(policy_number)
     for component in manifest["components"]:
         stack = component.get("stackBytes", DEFAULT_STACK_BYTES)
-        payloads[component["object"]] = component_image(component["name"], COMPONENTS_ELF_DIR / component["name"], stack)
+        payloads[component["object"]] = component_image(component["name"], generation2_components / component["name"], stack)
     generation2 = build_generation(manifest, payloads, generation1[24:56], policy_number)
+    recovery_components = build_rust_components(5, recovery=True)
+    recovery = recovery_manifest(manifest)
+    state_first_lba = int(os.environ.get("SLIME_RECOVERY_STATE_FIRST_LBA") or BOOTSTORE_CAPACITY // 512)
+    state_last_lba = int(os.environ.get("SLIME_RECOVERY_STATE_LAST_LBA") or state_first_lba + 127)
+    target_bdf = int(os.environ.get("SLIME_RECOVERY_TARGET_BDF") or "0x000018", 0)
+    state_entries: list[tuple[str, bytes, int]] = []
+    generation_root = sha256(b"".join(sorted((generation1[24:56], generation2[24:56]))))
+    recovery_payloads = {
+        manifest["kernelObject"]: payloads[manifest["kernelObject"]],
+        "sha256:init": component_image("init", recovery_components / "init", DEFAULT_STACK_BYTES),
+        "sha256:recovery": component_image("recovery", recovery_components / "recovery", DEFAULT_STACK_BYTES),
+        "recovery-index": build_recovery_index(
+            generation2[24:56],
+            generation_root,
+            2,
+            target_bdf,
+            state_entries,
+            state_first_lba,
+            state_last_lba,
+        ),
+    }
+    recovery_generation = build_generation(recovery, recovery_payloads, None, 5)
+    recovery_bootstore = build_bootstore([recovery_generation])
     bootstore = build_bootstore([generation1, generation2])
     (output / "generation-1.bin").write_bytes(generation1)
     (output / "generation-2.bin").write_bytes(generation2)
     (output / "generation.bin").write_bytes(generation2)
     (output / "boot-store.bin").write_bytes(bootstore)
+    (output / "recovery-generation.bin").write_bytes(recovery_generation)
+    (output / "recovery-boot-store.bin").write_bytes(recovery_bootstore)
     print(f"Built generation 1 {generation1[24:56].hex()}")
     print(f"Built generation 2 {generation2[24:56].hex()} parent={generation1[24:56].hex()}")
     print(f"Built boot-store.bin ({len(bootstore)} bytes)")
+    print(f"Built recovery generation {recovery_generation[24:56].hex()}")
 
 
 if __name__ == "__main__":

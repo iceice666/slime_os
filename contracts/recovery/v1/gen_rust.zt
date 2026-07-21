@@ -1,0 +1,33 @@
+-- Schema-reflected Python renderer for recovery/v1.
+
+refl ::= import stdlib.reflect;
+n ::= import stdlib.num;
+w ::= import wire.python;
+
+Format :: type {
+  formatVersion : Int;
+  headerBytes : Int;
+  stateEntryBytes : Int;
+  maxStateObjects : Int;
+  headerFields : List refl.SchemaField;
+  stateFields : List refl.SchemaField;
+  headerLayout : List w.WireField;
+  stateLayout : List w.WireField;
+};
+
+records :: Format -> List w.WireRecord = format => {
+  { pythonName = "RECOVERY_INDEX_HEADER"; constPrefix = "RECOVERY_INDEX"; size = format.headerBytes; trailingPadding = 0; fields = format.headerFields; layout = format.headerLayout; };
+  { pythonName = "RECOVERY_STATE_ENTRY"; constPrefix = "RECOVERY_STATE"; size = format.stateEntryBytes; trailingPadding = 0; fields = format.stateFields; layout = format.stateLayout; };
+};
+
+pythonBindings :: Format -> Text = format => w.join {
+  "RECOVERY_INDEX_MAGIC = b\"SLIMERC\\0\"\n";
+  "RECOVERY_INDEX_VERSION = "; n.toText format.formatVersion; "\n";
+  "RECOVERY_INDEX_HEADER_BYTES = "; n.toText format.headerBytes; "\n";
+  "RECOVERY_STATE_ENTRY_BYTES = "; n.toText format.stateEntryBytes; "\n";
+  "MAX_RECOVERY_STATE_OBJECTS = "; n.toText format.maxStateObjects; "\n";
+  w.renderRecords (records format);
+};
+
+render :: Format -> { python : Text; } = format => if w.recordsValid (records format) then { python = pythonBindings format; } else { python = "INVALID_RECOVERY_SCHEMA"; };
+{ render = render; }

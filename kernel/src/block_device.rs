@@ -4,6 +4,7 @@
 //! inside the trusted service: deterministic QEMU prefers virtio, while a
 //! Framework NVMe controller is admitted only through the read-only backend.
 
+use crate::capability::PciFunctionInfo;
 use crate::nvme::{NvmeBlock, NvmeError};
 use crate::virtio_blk::{VirtioBlkError, VirtioBlock};
 
@@ -54,14 +55,33 @@ pub enum BlockDevice {
 }
 
 impl BlockDevice {
-    pub fn find_and_init() -> Result<Self, BlockError> {
-        match VirtioBlock::find_and_init() {
-            Ok(device) => Ok(Self::Virtio(device)),
-            Err(VirtioBlkError::DeviceNotFound) => NvmeBlock::find_and_init()
-                .map(Self::Nvme)
-                .map_err(Into::into),
-            Err(error) => Err(error.into()),
+    pub fn find_and_init() -> Result<(PciFunctionInfo, Self), BlockError> {
+        let functions = crate::pci::enumerate().map_err(|_| BlockError::DeviceNotFound)?;
+        let function = functions
+            .iter()
+            .find(|function| function.vendor_id == 0x1af4 && function.device_id == 0x1042)
+            .or_else(|| {
+                functions
+                    .iter()
+                    .find(|function| function.class_code & 0x00ff_ffff == 0x010802)
+            })
+            .copied()
+            .ok_or(BlockError::DeviceNotFound)?;
+        Self::init(function).map(|device| (function, device))
+    }
+
+    pub fn init(function: PciFunctionInfo) -> Result<Self, BlockError> {
+        if function.vendor_id == 0x1af4 && function.device_id == 0x1042 {
+            return VirtioBlock::init(function)
+                .map(Self::Virtio)
+                .map_err(Into::into);
         }
+        if function.class_code & 0x00ff_ffff == 0x010802 {
+            return NvmeBlock::init(function)
+                .map(Self::Nvme)
+                .map_err(Into::into);
+        }
+        Err(BlockError::DeviceNotFound)
     }
 
     pub fn capacity_sectors(&self) -> u64 {

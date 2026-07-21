@@ -31,6 +31,7 @@ pub mod nvme;
 pub mod object_store;
 pub mod pci;
 pub mod platform;
+pub mod recovery;
 pub mod serial;
 pub mod sha256;
 pub mod store_proto;

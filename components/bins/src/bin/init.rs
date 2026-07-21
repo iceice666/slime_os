@@ -12,8 +12,14 @@ const SYSINFO_CAPS: [u32; 1] = [7];
 const ECHO_CAPS: [u32; 1] = [9];
 const STORAGE_PROBE_CAPS: [u32; 1] = [11];
 const GENERATION_MANAGER_CAPS: [u32; 1] = [13];
+const RECOVERY_CAPS: [u32; 2] = [1, 2];
 
 fn main() {
+    if option_env!("SLIME_RECOVERY_IMAGE") == Some("1") {
+        slime_rt::debug_write(b"[init] launching recovery graph\n");
+        spawn_or_fail(0, &RECOVERY_CAPS, 9);
+        return;
+    }
     slime_rt::debug_write(b"[init] launching component graph\n");
 
     spawn_or_fail(0, &CONSOLE_CAPS, 1);

@@ -145,6 +145,12 @@ release_trust_check:
     cd kernel && cargo build
     ./scripts/check-release-trust.py
 
+# M5.9: boot signed removable recovery, scrub a disposable repair target,
+# reconstruct both BootState slots, and prove an ungranted disk is unchanged.
+recovery_check:
+    cd kernel && cargo build --release
+    ./scripts/check-recovery.py
+
 # Validate the pinned generation manifest schema and fixtures.
 contracts_check: bootstate_model_check
     python3 scripts/check-contracts.py

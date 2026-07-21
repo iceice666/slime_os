@@ -51,6 +51,7 @@ struct BootContext {
     generation: &'static [u8],
     generation_identity: [u8; 32],
     bootstate: Option<BootStateContext>,
+    recovery_index: &'static [u8],
 }
 
 static CONTEXT: Once<BootContext> = Once::new();
@@ -59,6 +60,20 @@ static mut TEST_MEMORY_MAP: [MemoryEntry; 512] = [MemoryEntry {
     length: 0,
     kind: MEMORY_RESERVED,
 }; 512];
+fn find_recovery_index(generation: &'static [u8]) -> &'static [u8] {
+    let Ok(decoded) = boot_contracts::generation::Generation::decode(generation) else {
+        return &[];
+    };
+    for index in 0..decoded.object_count() {
+        if let Ok(object) = decoded.object(index)
+            && object.kind == boot_contracts::generation::KIND_RESOURCE
+            && object.id == "recovery-index"
+        {
+            return object.bytes;
+        }
+    }
+    &[]
+}
 
 /// Initialize the kernel boot context from the immutable stage-0 handoff.
 ///
@@ -103,6 +118,7 @@ pub unsafe fn init_from_handoff(handoff: *const KernelHandoffV1) {
         .expect("handoff generation address overflow") as *const u8;
     let generation =
         unsafe { slice::from_raw_parts(generation_ptr, handoff.generation_len as usize) };
+    let recovery_index = find_recovery_index(generation);
     let pending = (handoff.pending_identity != [0; 32]).then_some(handoff.pending_identity);
     let context = BootContext {
         direct_map_offset: handoff.direct_map_offset,
@@ -111,6 +127,7 @@ pub unsafe fn init_from_handoff(handoff: *const KernelHandoffV1) {
         rsdp_address: handoff.rsdp_address,
         generation,
         generation_identity: handoff.generation_identity,
+        recovery_index,
         bootstate: Some(BootStateContext {
             sequence: handoff.bootstate_sequence,
             known_good: handoff.known_good_identity,
@@ -196,6 +213,7 @@ pub unsafe fn init_from_limine() {
     } else {
         boot_contracts::generation::generation_identity(generation)
     };
+    let recovery_index = find_recovery_index(generation);
     CONTEXT.call_once(|| BootContext {
         direct_map_offset: hhdm,
         memory_map,
@@ -203,6 +221,7 @@ pub unsafe fn init_from_limine() {
         rsdp_address,
         generation,
         generation_identity,
+        recovery_index,
         bootstate: None,
     });
 }
@@ -245,6 +264,10 @@ fn framebuffer_from_handoff(fb: HandoffFramebuffer) -> Framebuffer {
         blue_mask_size: fb.blue_mask_size,
         blue_mask_shift: fb.blue_mask_shift,
     }
+}
+
+pub fn recovery_index() -> &'static [u8] {
+    context().recovery_index
 }
 
 pub fn bootstate() -> Option<BootStateContext> {

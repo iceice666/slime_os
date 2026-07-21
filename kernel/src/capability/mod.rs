@@ -35,6 +35,7 @@ pub const RIGHT_BLOCK_WRITE: u32 = 1 << 11;
 pub const RIGHT_STORE_READ: u32 = 1 << 12;
 pub const RIGHT_STORE_WRITE: u32 = 1 << 13;
 pub const RIGHT_HEALTH_CONFIRM: u32 = 1 << 14;
+pub const RIGHT_BOOT_UPDATE: u32 = 1 << 15;
 
 /// All rights a capability may ever carry. Used to reject unknown bits.
 pub const RIGHT_ALL: u32 = RIGHT_SEND
@@ -51,7 +52,8 @@ pub const RIGHT_ALL: u32 = RIGHT_SEND
     | RIGHT_BLOCK_WRITE
     | RIGHT_STORE_READ
     | RIGHT_STORE_WRITE
-    | RIGHT_HEALTH_CONFIRM;
+    | RIGHT_HEALTH_CONFIRM
+    | RIGHT_BOOT_UPDATE;
 
 #[derive(Clone)]
 pub struct Capability {
@@ -84,12 +86,12 @@ pub enum KernelObject {
     DmaMemory(DmaRegion),
     Irq(IrqLine),
     SharedBuffer(SharedRegion),
-    BlockDevice,
+    BlockDevice(PciFunctionInfo),
     /// Authority over the GPT-validated, content-addressed object store
     /// partition (M5.4). Created by the kernel bootstrap; the store service
     /// resolves and bounds the partition through GPT validation.
     ObjectStore,
-    /// Authority to confirm the currently running pending generation.
+    /// Authority over the running generation and bounded BootState updates.
     GenerationControl,
 }
 
@@ -106,9 +108,9 @@ impl KernelObject {
             KernelObject::DmaMemory(_) => RIGHT_DMA_RELEASE,
             KernelObject::Irq(_) => RIGHT_IRQ_ACK,
             KernelObject::SharedBuffer(_) => RIGHT_BUFFER_WRITE | RIGHT_MAP,
-            KernelObject::BlockDevice => RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE,
+            KernelObject::BlockDevice(_) => RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE,
             KernelObject::ObjectStore => RIGHT_STORE_READ | RIGHT_STORE_WRITE,
-            KernelObject::GenerationControl => RIGHT_HEALTH_CONFIRM,
+            KernelObject::GenerationControl => RIGHT_HEALTH_CONFIRM | RIGHT_BOOT_UPDATE,
         };
         object_rights | RIGHT_TRANSFER
     }

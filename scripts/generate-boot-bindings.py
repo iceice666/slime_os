@@ -17,6 +17,7 @@ GENERATORS = (
     (ROOT / "contracts" / "kernel-image" / "v1" / "schema.zt", "kernel_image.py"),
     (ROOT / "contracts" / "bootstate" / "v1" / "schema.zt", "bootstate.py"),
     (ROOT / "contracts" / "release" / "v1" / "schema.zt", "release.py"),
+    (ROOT / "contracts" / "recovery" / "v1" / "schema.zt", "recovery.py"),
 )
 INVALID_SCHEMA = "INVALID_"
 HEADER = """# @generated from boot contract schemas; do not edit.
