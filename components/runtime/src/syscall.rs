@@ -24,6 +24,7 @@ const SYS_DIRECTORY_DERIVE: u64 = 15;
 const SYS_DIRECTORY_COMMIT: u64 = 16;
 const SYS_INPUT_READ: u64 = 17;
 
+const SYS_GENERATION_TRANSACT: u64 = 18;
 pub const ERR_SUCCESS: i64 = 0;
 pub const ERR_BAD_CAP: i64 = -1;
 pub const ERR_PEER_DEAD: i64 = -2;
@@ -357,6 +358,21 @@ pub fn store_transact(slot: u32, request: &[u8; 64], reply: &mut [u8; 64]) -> i6
     unsafe {
         raw_syscall(
             SYS_STORE_TRANSACT,
+            slot as u64,
+            request.as_ptr() as u64,
+            reply.as_mut_ptr() as u64,
+            0,
+            0,
+        )
+    }
+}
+
+/// Issues a fixed generation-management request/reply pair through the
+/// `GenerationControl` capability in `slot`.
+pub fn generation_transact(slot: u32, request: &[u8; 64], reply: &mut [u8; 64]) -> i64 {
+    unsafe {
+        raw_syscall(
+            SYS_GENERATION_TRANSACT,
             slot as u64,
             request.as_ptr() as u64,
             reply.as_mut_ptr() as u64,

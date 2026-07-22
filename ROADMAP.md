@@ -693,7 +693,7 @@ Exit condition: a user at the console runs native commands through Dango with ca
 
 ### M6.5: Generation inspection and update commands
 
-**Status:** Not started.
+**Status:** Complete. Native list, inspect, stage, select, and rollback components use the versioned generation-management service; `BOOT_UPDATE` is manifest-scoped to that service; closure and release failures preserve BootState; and `just generation_cmd_check` validates deterministic inspection plus model-checked transition traces.
 
 Deliverables:
 

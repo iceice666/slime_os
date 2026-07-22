@@ -23,6 +23,11 @@ static GENERATION_MANAGER_ID: AtomicU64 = AtomicU64::new(0);
 static SPAWN_SERVICE_ID: AtomicU64 = AtomicU64::new(0);
 static FILESYSTEM_ID: AtomicU64 = AtomicU64::new(0);
 static DIRECTORY_PROBE_ID: AtomicU64 = AtomicU64::new(0);
+static GENERATION_LIST_ID: AtomicU64 = AtomicU64::new(0);
+static GENERATION_INSPECT_ID: AtomicU64 = AtomicU64::new(0);
+static GENERATION_STAGE_ID: AtomicU64 = AtomicU64::new(0);
+static GENERATION_SELECT_ID: AtomicU64 = AtomicU64::new(0);
+static GENERATION_ROLLBACK_ID: AtomicU64 = AtomicU64::new(0);
 static GENERATION_NUMBER: AtomicU64 = AtomicU64::new(0);
 static RECOVERY_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -36,6 +41,9 @@ pub fn start() -> ! {
     );
     crate::generation_manager::init();
     GENERATION_NUMBER.store(generation.number, Ordering::Relaxed);
+    if option_env!("SLIME_GENERATION_CMD_CHECK") == Some("1") && generation.number == 8 {
+        serial_println!("[generation-command] scripted check active");
+    }
     if option_env!("SLIME_DANGO_CHECK") == Some("1") && generation.number == 7 {
         crate::input::install_script(
             b"$(sysinfo)\n(with-env {MODE=ci} (with-cwd docs (with-stdin data $(echo ok))))\n$(inject)\n$(echo a b c)\n\x1b",
@@ -100,6 +108,21 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
     let directory_probe = generation
         .component_bytes("directory-probe")
         .expect("directory-probe object missing");
+    let generation_list = generation
+        .component_bytes("generation-list")
+        .expect("generation-list object missing");
+    let generation_inspect = generation
+        .component_bytes("generation-inspect")
+        .expect("generation-inspect object missing");
+    let generation_stage = generation
+        .component_bytes("generation-stage")
+        .expect("generation-stage object missing");
+    let generation_select = generation
+        .component_bytes("generation-select")
+        .expect("generation-select object missing");
+    let generation_rollback = generation
+        .component_bytes("generation-rollback")
+        .expect("generation-rollback object missing");
     serial_println!("[generation] validating bootstrap grants");
 
     require_grant(
@@ -205,6 +228,29 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
     serial_println!("[generation] health grant valid");
     require_grant(
         generation,
+        "generation-boot-update",
+        "init",
+        "generation-manager",
+        RIGHT_BOOT_UPDATE,
+    );
+    for client in [
+        "generation-list",
+        "generation-inspect",
+        "generation-stage",
+        "generation-select",
+        "generation-rollback",
+    ] {
+        require_grant(
+            generation,
+            "generation-management-rpc",
+            client,
+            "generation-manager",
+            RIGHT_SEND | RIGHT_RECV,
+        );
+    }
+    serial_println!("[generation] update grants valid");
+    require_grant(
+        generation,
         "store-access",
         "init",
         "storage-store-probe",
@@ -262,6 +308,11 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
     let (console_output, dango_output) = ipc::channel();
     let (dango_spawn, service_spawn) = ipc::channel();
     let (directory_client, directory_service) = ipc::channel();
+    let (generation_list_client, generation_list_service) = ipc::channel();
+    let (generation_inspect_client, generation_inspect_service) = ipc::channel();
+    let (generation_stage_client, generation_stage_service) = ipc::channel();
+    let (generation_select_client, generation_select_service) = ipc::channel();
+    let (generation_rollback_client, generation_rollback_service) = ipc::channel();
     let mut caps = vec![
         Capability {
             object: KernelObject::EndpointFactory,
@@ -294,7 +345,7 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         executable(generation, "generation-manager", generation_manager),
         Capability {
             object: KernelObject::GenerationControl,
-            rights: RIGHT_HEALTH_CONFIRM | RIGHT_TRANSFER,
+            rights: RIGHT_HEALTH_CONFIRM | RIGHT_BOOT_UPDATE | RIGHT_TRANSFER,
         },
         endpoint(dango_spawn, RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER),
         endpoint(service_spawn, RIGHT_SEND | RIGHT_RECV),
@@ -318,8 +369,37 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
             object: KernelObject::Input,
             rights: RIGHT_INPUT_READ | RIGHT_TRANSFER,
         },
+        executable(generation, "generation-list", generation_list),
+        executable(generation, "generation-inspect", generation_inspect),
+        executable(generation, "generation-stage", generation_stage),
+        executable(generation, "generation-select", generation_select),
+        executable(generation, "generation-rollback", generation_rollback),
+        endpoint(generation_list_client, RIGHT_SEND | RIGHT_RECV),
+        endpoint(generation_inspect_client, RIGHT_SEND | RIGHT_RECV),
+        endpoint(generation_stage_client, RIGHT_SEND | RIGHT_RECV),
+        endpoint(generation_select_client, RIGHT_SEND | RIGHT_RECV),
+        endpoint(generation_rollback_client, RIGHT_SEND | RIGHT_RECV),
+        endpoint(
+            generation_list_service,
+            RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
+        ),
+        endpoint(
+            generation_inspect_service,
+            RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
+        ),
+        endpoint(
+            generation_stage_service,
+            RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
+        ),
+        endpoint(
+            generation_select_service,
+            RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
+        ),
+        endpoint(
+            generation_rollback_service,
+            RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
+        ),
     ]);
-
     let spawn_budget = generation
         .component_named("init")
         .expect("init component missing")
@@ -472,24 +552,19 @@ fn require_grant<'a>(
     target: &str,
     rights: u32,
 ) -> crate::generation::Grant<'a> {
-    let grant = generation
-        .grant_named(name)
-        .expect("required grant missing");
-    let source_name = generation
-        .component(grant.source)
-        .expect("grant source")
-        .name;
-
-    let target_name = generation
-        .component(grant.target)
-        .expect("grant target")
-        .name;
-    assert_eq!(
-        (source_name, target_name, grant.rights),
-        (source, target, rights),
-        "grant declaration changed"
-    );
-    grant
+    (0..generation.grant_count())
+        .filter_map(|index| generation.grant(index).ok())
+        .find(|grant| {
+            grant.name == name
+                && generation
+                    .component(grant.source)
+                    .is_ok_and(|component| component.name == source)
+                && generation
+                    .component(grant.target)
+                    .is_ok_and(|component| component.name == target)
+                && grant.rights == rights
+        })
+        .expect("required grant missing or changed")
 }
 
 pub fn record_spawn(component: &'static str, id: task::TaskId) {
@@ -505,6 +580,11 @@ pub fn record_spawn(component: &'static str, id: task::TaskId) {
         "spawn-service" => &SPAWN_SERVICE_ID,
         "filesystem-service" => &FILESYSTEM_ID,
         "directory-probe" => &DIRECTORY_PROBE_ID,
+        "generation-list" => &GENERATION_LIST_ID,
+        "generation-inspect" => &GENERATION_INSPECT_ID,
+        "generation-stage" => &GENERATION_STAGE_ID,
+        "generation-select" => &GENERATION_SELECT_ID,
+        "generation-rollback" => &GENERATION_ROLLBACK_ID,
         "recovery" => &RECOVERY_ID,
         _ => return,
     };
@@ -546,6 +626,26 @@ extern "C" fn on_idle() {
             "directory-probe",
             DIRECTORY_PROBE_ID.load(Ordering::Relaxed),
         ),
+        (
+            "generation-list",
+            GENERATION_LIST_ID.load(Ordering::Relaxed),
+        ),
+        (
+            "generation-inspect",
+            GENERATION_INSPECT_ID.load(Ordering::Relaxed),
+        ),
+        (
+            "generation-stage",
+            GENERATION_STAGE_ID.load(Ordering::Relaxed),
+        ),
+        (
+            "generation-select",
+            GENERATION_SELECT_ID.load(Ordering::Relaxed),
+        ),
+        (
+            "generation-rollback",
+            GENERATION_ROLLBACK_ID.load(Ordering::Relaxed),
+        ),
         ("recovery", RECOVERY_ID.load(Ordering::Relaxed)),
     ];
     let mut healthy = true;
@@ -560,6 +660,14 @@ extern "C" fn on_idle() {
             && matches!(reason, Some(task::TermReason::Exit(1)));
         let dango_check = option_env!("SLIME_DANGO_CHECK") == Some("1")
             && GENERATION_NUMBER.load(Ordering::Relaxed) == 7;
+        let generation_command_check = option_env!("SLIME_GENERATION_CMD_CHECK") == Some("1")
+            && GENERATION_NUMBER.load(Ordering::Relaxed) == 8;
+        let optional_generation_command_component = generation_command_check
+            && matches!(name, "init" | "generation-manager")
+            && matches!(
+                reason,
+                Some(task::TermReason::Exit(0) | task::TermReason::PeerLoss)
+            );
         let optional_confirmation_absent = name == "generation-manager"
             && (directory_run || dango_check)
             && matches!(reason, Some(task::TermReason::Exit(1)));
@@ -579,7 +687,8 @@ extern "C" fn on_idle() {
             || optional_storage_absent
             || optional_confirmation_absent
             || optional_dango_check_service
-            || optional_dango_check_probe;
+            || optional_dango_check_probe
+            || optional_generation_command_component;
     }
     if healthy {
         if crate::boot::bootstate().is_some_and(|state| state.running_pending) {

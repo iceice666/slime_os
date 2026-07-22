@@ -72,7 +72,7 @@ Observation :: type {
   attemptsAfter : Int;
 };
 
-maxAttempts :: Int = 2;
+maxAttempts :: Int = 3;
 maxSequence :: Int = 5;
 maxEpoch :: Int = 1;
 generations :: List Generation = { #g1; #g2; };
@@ -423,7 +423,7 @@ preparePendingAttempt :: Faults -> State -> List Transition
 beginHealthPromotion :: State -> List Transition
   = state => [ selected := selectedState state; if state.phase == #running && state.runningPending && selectedSlot state != #none && state.running == selected.pending && state.runningRoot == selected.pendingRoot && state.writeKind == #none && state.writeStage == #idle then one "BeginHealthPromotion" (state with { writeValue = selected with { knownGood = state.running; knownGoodRoot = state.runningRoot; pending = #none; pendingRoot = #none; remainingAttempts = 0; }; writeKind = #promotion; }) else noneTransitions ];
 beginRollback :: State -> List Transition
-  = state => [ selected := selectedState state; validRollback := state.runningPending || ((not state.runningPending) && state.running == selected.knownGood && state.runningRoot == selected.knownGoodRoot && selected.pending != #none && selected.remainingAttempts == 0); if state.phase == #running && selectedSlot state != #none && validRollback && state.writeKind == #none && state.writeStage == #idle then one "BeginRollback" (state with { writeValue = selected with { pending = #none; pendingRoot = #none; remainingAttempts = 0; }; writeKind = #rollback; }) else noneTransitions ];
+  = state => [ selected := selectedState state; validRollback := state.runningPending || ((not state.runningPending) && state.running == selected.knownGood && state.runningRoot == selected.knownGoodRoot && selected.pending != #none); if state.phase == #running && selectedSlot state != #none && validRollback && state.writeKind == #none && state.writeStage == #idle then one "BeginRollback" (state with { writeValue = selected with { pending = #none; pendingRoot = #none; remainingAttempts = 0; }; writeKind = #rollback; }) else noneTransitions ];
 prepareWriteStep :: State -> List Transition
   = state => match olderSlot state {
       | #none => noneTransitions;
@@ -601,6 +601,8 @@ observedReached :: Observation -> State -> Bool
       obs.action == "promotion" => obs.commit == "health-promotion" && state.phase == #running && not state.runningPending && selectedSlot state != #none && (selectedState state).pending == #none && (selectedState state).remainingAttempts == obs.attemptsAfter && nonEmpty state.rollbackRoots;
       obs.action == "boot-known-good" => obs.commit == "none" && state.phase == #running && not state.runningPending && selectedSlot state != #none && (selectedState state).pending == #none;
       obs.action == "boot-exhausted-known-good" => obs.commit == "none" && state.phase == #running && not state.runningPending && selectedSlot state != #none && (selectedState state).pending != #none && (selectedState state).remainingAttempts == obs.attemptsAfter;
+      obs.action == "stage-pending" => obs.commit == "after-pending-commit" && state.phase == #pendingCommitted && state.writeStage == #idle && selectedSlot state != #none && (selectedState state).pending != #none && (selectedState state).remainingAttempts == obs.attemptsAfter;
+      obs.action == "rollback" => obs.commit == "rollback-update" && state.phase == #boot && state.writeStage == #idle && selectedSlot state != #none && (selectedState state).pending == #none && (selectedState state).remainingAttempts == obs.attemptsAfter;
       _ => false;
     };
 

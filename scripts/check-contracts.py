@@ -18,6 +18,8 @@ STORE_CONTRACT = ROOT / "contracts" / "store" / "v1"
 STORE_BINDING_GENERATOR = ROOT / "scripts" / "generate-store-bindings.py"
 FS_CONTRACT = ROOT / "contracts" / "fs" / "v1"
 FS_BINDING_GENERATOR = ROOT / "scripts" / "generate-fs-bindings.py"
+GENERATION_MANAGEMENT_CONTRACT = ROOT / "contracts" / "generation-management" / "v1"
+GENERATION_MANAGEMENT_BINDING_GENERATOR = ROOT / "scripts" / "generate-generation-management-bindings.py"
 BOOT_BINDING_GENERATOR = ROOT / "scripts" / "generate-boot-bindings.py"
 GENERATION_V2_CONTRACT = ROOT / "contracts" / "generation" / "v2"
 KERNEL_IMAGE_CONTRACT = ROOT / "contracts" / "kernel-image" / "v1"
@@ -87,6 +89,14 @@ subprocess.run(
     check=True,
 )
 
+run("check", str(GENERATION_MANAGEMENT_CONTRACT / "schema.zt"))
+run("check", str(GENERATION_MANAGEMENT_CONTRACT / "gen_rust.zt"))
+subprocess.run(
+    [sys.executable, str(GENERATION_MANAGEMENT_BINDING_GENERATOR), "--check"],
+    cwd=ROOT,
+    check=True,
+)
+
 for contract in (
     GENERATION_V2_CONTRACT,
     KERNEL_IMAGE_CONTRACT,
@@ -108,5 +118,5 @@ subprocess.run(
 
 print(
     "Generation source/binary, kernel image, BootState, BootState trace, recovery, "
-    "block, component, store, and filesystem contracts passed"
+    "block, component, store, spawn, filesystem, and generation-management contracts passed"
 )

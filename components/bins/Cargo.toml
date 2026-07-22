@@ -50,6 +50,31 @@ path = "src/bin/generation-manager.rs"
 test = false
 
 [[bin]]
+name = "generation-list"
+path = "src/bin/generation-list.rs"
+test = false
+
+[[bin]]
+name = "generation-inspect"
+path = "src/bin/generation-inspect.rs"
+test = false
+
+[[bin]]
+name = "generation-stage"
+path = "src/bin/generation-stage.rs"
+test = false
+
+[[bin]]
+name = "generation-select"
+path = "src/bin/generation-select.rs"
+test = false
+
+[[bin]]
+name = "generation-rollback"
+path = "src/bin/generation-rollback.rs"
+test = false
+
+[[bin]]
 name = "init"
 path = "src/bin/init.rs"
 test = false

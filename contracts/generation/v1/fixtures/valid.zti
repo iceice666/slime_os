@@ -20,6 +20,11 @@
     { id = "sha256:spawn-service"; kind = "component"; size = 65536; };
     { id = "sha256:filesystem-service"; kind = "component"; size = 131072; };
     { id = "sha256:directory-probe"; kind = "component"; size = 65536; };
+    { id = "sha256:generation-list"; kind = "component"; size = 32768; };
+    { id = "sha256:generation-inspect"; kind = "component"; size = 32768; };
+    { id = "sha256:generation-stage"; kind = "component"; size = 32768; };
+    { id = "sha256:generation-select"; kind = "component"; size = 32768; };
+    { id = "sha256:generation-rollback"; kind = "component"; size = 32768; };
   ];
 
   components = [
@@ -28,7 +33,7 @@
       object = "sha256:init";
       role = "init";
       dependencies = [];
-      spawnBudget = 10;
+      spawnBudget = 18;
       commandProfile = [];
     };
     {
@@ -124,6 +129,46 @@
       object = "sha256:directory-probe";
       role = "application";
       dependencies = ["filesystem-service";];
+      spawnBudget = 0;
+      commandProfile = [];
+    };
+    {
+      name = "generation-list";
+      object = "sha256:generation-list";
+      role = "application";
+      dependencies = ["generation-manager";];
+      spawnBudget = 0;
+      commandProfile = [];
+    };
+    {
+      name = "generation-inspect";
+      object = "sha256:generation-inspect";
+      role = "application";
+      dependencies = ["generation-manager";];
+      spawnBudget = 0;
+      commandProfile = [];
+    };
+    {
+      name = "generation-stage";
+      object = "sha256:generation-stage";
+      role = "application";
+      dependencies = ["generation-manager";];
+      spawnBudget = 0;
+      commandProfile = [];
+    };
+    {
+      name = "generation-select";
+      object = "sha256:generation-select";
+      role = "application";
+      dependencies = ["generation-manager";];
+      spawnBudget = 0;
+      commandProfile = [];
+    };
+    {
+      name = "generation-rollback";
+      object = "sha256:generation-rollback";
+      role = "application";
+      dependencies = ["generation-manager";];
       spawnBudget = 0;
       commandProfile = [];
     };
@@ -227,6 +272,48 @@
       source = "init";
       target = "generation-manager";
       rights = ["healthConfirm";];
+      transferable = false;
+    };
+    {
+      name = "generation-management-rpc";
+      source = "generation-list";
+      target = "generation-manager";
+      rights = ["send"; "recv";];
+      transferable = false;
+    };
+    {
+      name = "generation-management-rpc";
+      source = "generation-inspect";
+      target = "generation-manager";
+      rights = ["send"; "recv";];
+      transferable = false;
+    };
+    {
+      name = "generation-management-rpc";
+      source = "generation-stage";
+      target = "generation-manager";
+      rights = ["send"; "recv";];
+      transferable = false;
+    };
+    {
+      name = "generation-management-rpc";
+      source = "generation-select";
+      target = "generation-manager";
+      rights = ["send"; "recv";];
+      transferable = false;
+    };
+    {
+      name = "generation-management-rpc";
+      source = "generation-rollback";
+      target = "generation-manager";
+      rights = ["send"; "recv";];
+      transferable = false;
+    };
+    {
+      name = "generation-boot-update";
+      source = "init";
+      target = "generation-manager";
+      rights = ["bootUpdate";];
       transferable = false;
     };
     {

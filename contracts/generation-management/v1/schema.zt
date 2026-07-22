@@ -1,0 +1,117 @@
+-- Slime OS generation-management protocol, version 1.
+--
+-- Requests and replies are fixed 64-byte IPC messages. Generation identities
+-- travel as four little-endian u64 fields. Mutating operations are executed by
+-- the declared generation-management service through its GenerationControl
+-- capability; clients receive no BootState authority.
+
+env ::= import stdlib.env;
+fs ::= import stdlib.fs;
+gen ::= import "gen_rust.zt";
+t ::= import stdlib.text;
+
+formatVersion :: Int = 1;
+requestLen :: Int = 64;
+replyFlagKnownGood :: Int = 1;
+replyFlagPending :: Int = 2;
+replyFlagRunning :: Int = 4;
+replyFlagStaged :: Int = 8;
+replyLen :: Int = 64;
+maxEntries :: Int = 64;
+
+opList :: Int = 1;
+opInspect :: Int = 2;
+opStage :: Int = 3;
+opSelect :: Int = 4;
+opRollback :: Int = 5;
+
+WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
+
+GenerationRequest :: type {
+  magic : Int;
+  version : Int;
+  op : Int;
+  flags : Int;
+  reserved : Int;
+  generation0 : Int;
+  generation1 : Int;
+  generation2 : Int;
+  generation3 : Int;
+};
+
+GenerationReply :: type {
+  magic : Int;
+  version : Int;
+  status : Int;
+  flags : Int;
+  count : Int;
+  generation_number : Int;
+  release_sequence : Int;
+  remaining_attempts : Int;
+  generation0 : Int;
+  generation1 : Int;
+  generation2 : Int;
+  generation3 : Int;
+};
+
+requestSchema ::= schema GenerationRequest;
+replySchema ::= schema GenerationReply;
+
+requestLayout :: List WireField = {
+  { name = "magic"; width = 4; signed = false; byteArray = false; };
+  { name = "version"; width = 4; signed = false; byteArray = false; };
+  { name = "op"; width = 1; signed = false; byteArray = false; };
+  { name = "flags"; width = 1; signed = false; byteArray = false; };
+  { name = "reserved"; width = 6; signed = false; byteArray = true; };
+  { name = "generation0"; width = 8; signed = false; byteArray = false; };
+  { name = "generation1"; width = 8; signed = false; byteArray = false; };
+  { name = "generation2"; width = 8; signed = false; byteArray = false; };
+  { name = "generation3"; width = 8; signed = false; byteArray = false; };
+};
+
+replyLayout :: List WireField = {
+  { name = "magic"; width = 4; signed = false; byteArray = false; };
+  { name = "version"; width = 4; signed = false; byteArray = false; };
+  { name = "status"; width = 4; signed = true; byteArray = false; };
+  { name = "flags"; width = 4; signed = false; byteArray = false; };
+  { name = "count"; width = 4; signed = false; byteArray = false; };
+  { name = "generation_number"; width = 4; signed = false; byteArray = false; };
+  { name = "release_sequence"; width = 4; signed = false; byteArray = false; };
+  { name = "remaining_attempts"; width = 4; signed = false; byteArray = false; };
+  { name = "generation0"; width = 8; signed = false; byteArray = false; };
+  { name = "generation1"; width = 8; signed = false; byteArray = false; };
+  { name = "generation2"; width = 8; signed = false; byteArray = false; };
+  { name = "generation3"; width = 8; signed = false; byteArray = false; };
+};
+
+format ::= {
+  formatVersion = formatVersion;
+  requestLen = requestLen;
+  replyLen = replyLen;
+  maxEntries = maxEntries;
+  opList = opList;
+  opInspect = opInspect;
+  opStage = opStage;
+  opSelect = opSelect;
+  opRollback = opRollback;
+  requestFields = requestSchema.fields ?? {;};
+  replyFields = replySchema.fields ?? {;};
+  replyFlagKnownGood = replyFlagKnownGood;
+  replyFlagPending = replyFlagPending;
+  replyFlagRunning = replyFlagRunning;
+  replyFlagStaged = replyFlagStaged;
+  requestLayout = requestLayout;
+  replyLayout = replyLayout;
+};
+
+main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }
+  = caps => [
+    root := env.get caps.env "SLIME_GENERATION_MANAGEMENT_BINDINGS_ROOT" ?? ".";
+    bindings := gen.render format;
+    kernelPath := t.join "" { root; "/kernel/src/generation_proto/gen.rs"; };
+    componentPath := t.join "" { root; "/components/proto/src/generation.rs"; };
+    fs.writeAll caps.write kernelPath bindings.rust;
+    fs.writeAll caps.write componentPath bindings.rust
+  ];
+
+main

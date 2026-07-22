@@ -51,7 +51,7 @@ Rights are a flat `u32`; bits 24–31 are free.
 | ObjectStore | STORE_READ (12) | stat/get requests in `SYS_STORE_TRANSACT` | kernel bootstrap | gated (M5.4) |
 | ObjectStore | STORE_WRITE (13) | put requests in `SYS_STORE_TRANSACT` | kernel bootstrap | gated (M5.4) |
 | GenerationControl | HEALTH_CONFIRM (14) | `SYS_HEALTH_CONFIRM` for the currently running pending generation | kernel bootstrap, only for the declared generation-management service | gated (M5.6) |
-| GenerationControl | BOOT_UPDATE (15) | `SYS_RECOVERY_RECONSTRUCT` after signed-index, generation, state-closure, and release scrub | kernel bootstrap, only for the declared recovery service | gated (M5.9) |
+| GenerationControl | BOOT_UPDATE (15) | `SYS_GENERATION_TRANSACT` for validated staging/select/rollback and `SYS_RECOVERY_RECONSTRUCT` after signed-index, generation, state-closure, and release scrub | kernel bootstrap, only for the declared generation-management service or the declared recovery service | gated (M5.9/M6.5) |
 | Executable | SPAWN (16) | executable slot validation in `SYS_SPAWN` | generation manifest | gated (M6.1) |
 | EndpointFactory | ENDPOINT_CREATE (17) | `SYS_ENDPOINT_CREATE` | generation manifest | gated (M6.1) |
 | Supervision | SUPERVISE (18) | `SYS_SUPERVISION_STATUS` | returned by successful `SYS_SPAWN` | gated (M6.1) |

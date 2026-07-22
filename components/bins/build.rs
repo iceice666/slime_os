@@ -9,6 +9,9 @@ fn main() {
     println!("cargo:rerun-if-env-changed=SLIME_RECOVERY_INTERRUPT");
     println!("cargo:rerun-if-env-changed=SLIME_RECOVERY_IMAGE");
     println!("cargo:rerun-if-env-changed=SLIME_DANGO_CHECK");
+    println!("cargo:rerun-if-env-changed=SLIME_GENERATION_CMD_CHECK");
+    println!("cargo:rerun-if-env-changed=SLIME_GENERATION_CANDIDATE");
+    println!("cargo:rerun-if-env-changed=SLIME_GENERATION_CMD_SCENARIO");
     if let Ok(number) = std::env::var("SLIME_GENERATION_NUMBER") {
         println!("cargo:rustc-env=SLIME_GENERATION_NUMBER={number}");
     }
@@ -20,6 +23,15 @@ fn main() {
     }
     if let Ok(value) = std::env::var("SLIME_DANGO_CHECK") {
         println!("cargo:rustc-env=SLIME_DANGO_CHECK={value}");
+    }
+    if let Ok(value) = std::env::var("SLIME_GENERATION_CMD_CHECK") {
+        println!("cargo:rustc-env=SLIME_GENERATION_CMD_CHECK={value}");
+    }
+    if let Ok(value) = std::env::var("SLIME_GENERATION_CANDIDATE") {
+        println!("cargo:rustc-env=SLIME_GENERATION_CANDIDATE={value}");
+    }
+    if let Ok(value) = std::env::var("SLIME_GENERATION_CMD_SCENARIO") {
+        println!("cargo:rustc-env=SLIME_GENERATION_CMD_SCENARIO={value}");
     }
     generate_command_profile(manifest_dir);
 }

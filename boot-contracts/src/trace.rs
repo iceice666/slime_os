@@ -36,6 +36,10 @@ pub enum Action {
     BootKnownGood,
     /// Booted the known-good generation after pending attempts were exhausted.
     BootExhaustedKnownGood,
+    /// Generation service durably selected a validated staged generation.
+    StagePending,
+    /// Generation service durably cleared the pending generation.
+    Rollback,
 }
 
 impl Action {
@@ -46,6 +50,8 @@ impl Action {
             Action::Promotion => "promotion",
             Action::BootKnownGood => "boot-known-good",
             Action::BootExhaustedKnownGood => "boot-exhausted-known-good",
+            Action::StagePending => "stage-pending",
+            Action::Rollback => "rollback",
         }
     }
 }
@@ -60,6 +66,10 @@ pub enum Commit {
     AfterAttemptCommit,
     /// After the health-promotion slot commit.
     HealthPromotion,
+    /// After a staged generation became pending.
+    AfterPendingCommit,
+    /// After rollback cleared the pending generation.
+    RollbackUpdate,
 }
 
 impl Commit {
@@ -69,6 +79,8 @@ impl Commit {
             Commit::None => "none",
             Commit::AfterAttemptCommit => "after-attempt-commit",
             Commit::HealthPromotion => "health-promotion",
+            Commit::AfterPendingCommit => "after-pending-commit",
+            Commit::RollbackUpdate => "rollback-update",
         }
     }
 }

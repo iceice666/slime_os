@@ -8,8 +8,9 @@ pub use syscall::{
     ERR_BAD_CAP, ERR_INVALID_ARG, ERR_OUT_OF_MEMORY, ERR_PEER_DEAD, ERR_SUCCESS, ERR_WOULDBLOCK,
     InputEvent, InputKey, MAX_CAPS_PER_MSG, MAX_DIRECTORY_PATH, MAX_MSG, SpawnGrant, Spawned,
     Termination, block_transact, cap_drop, debug_write, directory_commit, directory_derive,
-    directory_inspect, endpoint_create, exit, health_confirm, input_read, recovery_reconstruct,
-    recv, send, spawn, store_transact, supervision_status, unhealthy, yield_now,
+    directory_inspect, endpoint_create, exit, generation_transact, health_confirm, input_read,
+    recovery_reconstruct, recv, send, spawn, store_transact, supervision_status, unhealthy,
+    yield_now,
 };
 
 use core::panic::PanicInfo;

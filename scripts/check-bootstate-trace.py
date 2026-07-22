@@ -64,12 +64,20 @@ ACTIONS = {
     "promotion",
     "boot-known-good",
     "boot-exhausted-known-good",
+    "stage-pending",
+    "rollback",
     # `collect` is an adversarial checker-only action. `generation_root` names
     # the candidate identity; it is validated against observable retained
     # roots instead of the BootState transition oracle.
     "collect",
 }
-COMMITS = {"none", "after-attempt-commit", "health-promotion"}
+COMMITS = {
+    "none",
+    "after-attempt-commit",
+    "health-promotion",
+    "after-pending-commit",
+    "rollback-update",
+}
 SLOTS = {"A", "B"}
 HEX32 = 64
 
@@ -320,6 +328,11 @@ def check_transition_shape(record: dict) -> None:
     elif action == "promotion":
         # Promotion traces are accepted only as adversarial checker inputs
         # until the kernel has a real durable slot-write path for confirmation.
+        if target is None or target == selected:
+            raise TraceError(f"{action} must target the other BootState slot")
+        if sequence_after != sequence_before + 1:
+            raise TraceError(f"{action} must advance the durable sequence by one")
+    elif action in {"stage-pending", "rollback"}:
         if target is None or target == selected:
             raise TraceError(f"{action} must target the other BootState slot")
         if sequence_after != sequence_before + 1:

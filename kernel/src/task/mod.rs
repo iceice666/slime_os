@@ -21,9 +21,9 @@ fn switch_stack_top() -> u64 {
     core::ptr::addr_of_mut!(SWITCH_STACK) as u64 + SWITCH_STACK_SIZE as u64
 }
 /// Hard global bound on simultaneously live tasks. The 24 MiB heap reserves
-/// at most 1 MiB for eager kernel stacks, leaving generation/object-store
+/// at most 2 MiB for eager kernel stacks, leaving generation/object-store
 /// staging headroom. Per-spawner limits provide the finer M6.1 bound.
-pub const MAX_TASKS: usize = 32;
+pub const MAX_TASKS: usize = 64;
 pub const DEFAULT_SPAWN_BUDGET: u16 = 16;
 pub const MAX_SPAWN_BUDGET: u16 = 32;
 pub const ENTRY_VA: u64 = 0x0000_0000_0040_0000;
@@ -228,6 +228,14 @@ pub fn preflight_spawn_grant(
     executable_slot: u32,
     grants: &[SpawnGrant],
 ) -> Result<SpawnPlan, SpawnError> {
+    crate::serial_println!(
+        "[spawn-debug] slot={} present={} executable={} rights={:#x}",
+        executable_slot,
+        caps.get(executable_slot).is_some(),
+        caps.get(executable_slot)
+            .is_some_and(|cap| matches!(cap.object, KernelObject::Executable { .. })),
+        caps.get(executable_slot).map_or(0, |cap| cap.rights),
+    );
     let (executable, name, spawn_budget) = caps
         .get(executable_slot)
         .filter(|cap| {

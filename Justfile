@@ -21,6 +21,10 @@ test:
     cd kernel && cargo test --release -- -display none
 
 
+# M6.5: native generation inspection, staging, selection, and rollback.
+generation_cmd_check: contracts_check generation_check
+    python3 scripts/check-generation-commands.py
+
 
 # M6.1: capability factories, narrow derive-copy spawn grants, bounded task
 # accounting, supervision result shape, and generation-v2 determinism.
@@ -148,6 +152,10 @@ store_gen:
 # Regenerate userspace spawn-service protocol bindings.
 spawn_gen:
     python3 scripts/generate-spawn-bindings.py
+
+# Regenerate kernel + component generation-management protocol bindings.
+generation_management_gen:
+    python3 scripts/generate-generation-management-bindings.py
 
 # Regenerate host constants for generation v2, kernel image, and BootState.
 boot_gen:

@@ -122,7 +122,13 @@ pub fn with_device<R>(
 ) -> Result<R, BlockError> {
     let mut device = DEVICE.lock();
     if device.is_none() {
-        *device = Some(BlockDevice::find_and_init()?);
+        match BlockDevice::find_and_init() {
+            Ok(found) => *device = Some(found),
+            Err(error) => {
+                crate::serial_println!("[block-service] init error {:?}", error);
+                return Err(error);
+            }
+        }
     }
     let result = f(&mut device.as_mut().expect("block device initialized").1);
     if let Err(error) = &result

@@ -21,6 +21,8 @@ pub mod frame_buffer;
 pub mod gdt;
 pub mod generation;
 pub mod generation_manager;
+pub mod generation_proto;
+pub mod generation_service;
 pub mod gpt;
 pub mod input;
 pub mod interrupts;

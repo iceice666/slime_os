@@ -26,6 +26,7 @@ pub const SYS_DIRECTORY_INSPECT: u64 = 14;
 pub const SYS_DIRECTORY_DERIVE: u64 = 15;
 pub const SYS_DIRECTORY_COMMIT: u64 = 16;
 pub const SYS_INPUT_READ: u64 = 17;
+pub const SYS_GENERATION_TRANSACT: u64 = 18;
 
 const USER_TOP: u64 = 0x0000_8000_0000_0000;
 
@@ -64,6 +65,7 @@ pub fn dispatch(frame: &mut UserFrame) {
         SYS_DIRECTORY_DERIVE => sys_directory_derive(frame),
         SYS_DIRECTORY_COMMIT => sys_directory_commit(frame),
         SYS_INPUT_READ => sys_input_read(frame),
+        SYS_GENERATION_TRANSACT => sys_generation_transact(frame),
         _ => frame.rax = ipc::ERR_INVALID_ARG as u64,
     }
 }
@@ -365,6 +367,42 @@ fn sys_health_confirm(frame: &mut UserFrame) {
     };
 }
 
+fn sys_generation_transact(frame: &mut UserFrame) {
+    let slot = frame.rdi as u32;
+    if !current_user_range(frame.rsi, crate::generation_proto::REQUEST_LEN, false)
+        || !current_user_range(frame.rdx, crate::generation_proto::REPLY_LEN, true)
+    {
+        frame.rax = ipc::ERR_INVALID_ARG as u64;
+        return;
+    }
+    let authorized = task::with_current_mut(|task| {
+        task.caps.get(slot).is_some_and(|cap| {
+            matches!(cap.object, KernelObject::GenerationControl)
+                && cap.rights & RIGHT_BOOT_UPDATE != 0
+        })
+    });
+    if !authorized {
+        frame.rax = ipc::ERR_BAD_CAP as u64;
+        return;
+    }
+    let mut request_bytes = [0u8; crate::generation_proto::REQUEST_LEN];
+    if !task::copy_from_current(frame.rsi, &mut request_bytes) {
+        frame.rax = ipc::ERR_INVALID_ARG as u64;
+        return;
+    }
+    let Some(request) = crate::generation_proto::WireGenerationRequest::decode(&request_bytes)
+    else {
+        frame.rax = ipc::ERR_INVALID_ARG as u64;
+        return;
+    };
+    let reply = crate::generation_service::transact(&request).encode();
+    // SAFETY: `current_user_range` validated the complete writable reply mapping.
+    unsafe {
+        core::ptr::copy_nonoverlapping(reply.as_ptr(), frame.rdx as *mut u8, reply.len());
+    }
+    frame.rax = ipc::ERR_SUCCESS as u64;
+}
+
 fn sys_recovery_reconstruct(frame: &mut UserFrame) {
     let generation_control_slot = frame.rdi as u32;
     let block_slot = frame.rsi as u32;
@@ -431,10 +469,15 @@ fn sys_spawn(frame: &mut UserFrame) {
             frame.rax = id;
             frame.rdx = handle as u64;
         }
-        Err(task::SpawnError::TooManyTasks | task::SpawnError::BudgetExhausted) => {
-            frame.rax = ipc::ERR_OUT_OF_MEMORY as u64
+        Err(error) => {
+            crate::serial_println!("[spawn] rejected {:?}", error);
+            frame.rax = match error {
+                task::SpawnError::TooManyTasks | task::SpawnError::BudgetExhausted => {
+                    ipc::ERR_OUT_OF_MEMORY as u64
+                }
+                _ => ipc::ERR_BAD_CAP as u64,
+            };
         }
-        Err(_) => frame.rax = ipc::ERR_BAD_CAP as u64,
     }
 }
 

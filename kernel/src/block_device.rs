@@ -59,7 +59,9 @@ impl BlockDevice {
         let functions = crate::pci::enumerate().map_err(|_| BlockError::DeviceNotFound)?;
         let function = functions
             .iter()
-            .find(|function| function.vendor_id == 0x1af4 && function.device_id == 0x1042)
+            .find(|function| {
+                function.vendor_id == 0x1af4 && matches!(function.device_id, 0x1001 | 0x1042)
+            })
             .or_else(|| {
                 functions
                     .iter()
@@ -71,7 +73,7 @@ impl BlockDevice {
     }
 
     pub fn init(function: PciFunctionInfo) -> Result<Self, BlockError> {
-        if function.vendor_id == 0x1af4 && function.device_id == 0x1042 {
+        if function.vendor_id == 0x1af4 && matches!(function.device_id, 0x1001 | 0x1042) {
             return VirtioBlock::init(function)
                 .map(Self::Virtio)
                 .map_err(Into::into);

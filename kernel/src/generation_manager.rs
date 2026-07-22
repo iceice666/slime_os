@@ -62,6 +62,19 @@ impl RootSet {
         self.roots[..self.len].contains(&root)
     }
 
+    pub fn remove(&mut self, root: [u8; 32]) -> bool {
+        let Some(index) = self.roots[..self.len]
+            .iter()
+            .position(|candidate| *candidate == root)
+        else {
+            return false;
+        };
+        self.len -= 1;
+        self.roots[index] = self.roots[self.len];
+        self.roots[self.len] = [0; 32];
+        true
+    }
+
     pub fn as_slice(&self) -> &[[u8; 32]] {
         &self.roots[..self.len]
     }
@@ -175,6 +188,20 @@ pub fn mark_unhealthy() {
 
 pub fn retain_staged(root: [u8; 32]) -> bool {
     MANAGER.lock().staged_roots.insert(root)
+}
+
+pub fn is_staged(root: [u8; 32]) -> bool {
+    MANAGER.lock().staged_roots.contains(root)
+}
+
+pub fn remove_staged(root: [u8; 32]) {
+    MANAGER.lock().staged_roots.remove(root);
+}
+
+pub fn record_bootstate(state: BootState) {
+    let mut manager = MANAGER.lock();
+    manager.bootstate = Some(state);
+    manager.accepted_release_sequence = state.accepted_release_sequence;
 }
 
 pub fn accepted_release_sequence() -> u64 {

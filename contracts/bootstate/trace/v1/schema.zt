@@ -13,6 +13,8 @@ actionConsumeAttempt :: Int = 0;
 actionPromotion :: Int = 1;
 actionBootKnownGood :: Int = 2;
 actionBootExhaustedKnownGood :: Int = 3;
+actionStagePending :: Int = 4;
+actionRollback :: Int = 5;
 
 -- Commit-boundary vocabulary. Each token names the durable linearization
 -- point at which the transition became persistent (or `none` for a pure boot
@@ -20,6 +22,8 @@ actionBootExhaustedKnownGood :: Int = 3;
 commitNone :: Int = 0;
 commitAfterAttemptCommit :: Int = 1;
 commitHealthPromotion :: Int = 2;
+commitAfterPendingCommit :: Int = 3;
+commitRollbackUpdate :: Int = 4;
 
 TraceRecord :: type {
   format_version : Int;

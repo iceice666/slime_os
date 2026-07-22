@@ -225,11 +225,17 @@ def build_recovery_index(
     return header + encoded
 
 
-def build_rust_components(generation_number: int, recovery: bool = False) -> Path:
+def build_rust_components(
+    generation_number: int,
+    recovery: bool = False,
+    candidate_identity: bytes | None = None,
+) -> Path:
     environment = os.environ.copy()
     environment["SLIME_GENERATION_NUMBER"] = str(generation_number)
     if recovery:
         environment["SLIME_RECOVERY_IMAGE"] = "1"
+    if environment.get("SLIME_GENERATION_CMD_CHECK") == "1" and candidate_identity is not None:
+        environment["SLIME_GENERATION_CANDIDATE"] = candidate_identity.hex()
     target_dir = COMPONENTS_TARGET_DIR / ("recovery" if recovery else f"generation-{generation_number}")
     environment["CARGO_TARGET_DIR"] = str(target_dir)
     subprocess.run(
@@ -410,7 +416,7 @@ def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes |
     components = unique_sorted(manifest["components"], "name", "component names")
     grants = sorted(manifest["grants"], key=lambda grant: (grant["name"], grant["source"], grant["target"]))
     states = unique_sorted(manifest["state"], "name", "state names")
-    if len({grant["name"] for grant in grants}) != len(grants): fail("grant names must be unique")
+    if len({(grant["name"], grant["source"], grant["target"]) for grant in grants}) != len(grants): fail("grant identities must be unique")
     if not 1 <= len(objects) <= MAX_OBJECTS or not 1 <= len(components) <= MAX_COMPONENTS or len(grants) > MAX_GRANTS or len(states) > MAX_STATES:
         fail("manifest count exceeds bound")
     validate_acyclic(components)
@@ -477,7 +483,8 @@ def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes |
         )
     if dependency_count > MAX_DEPENDENCIES: fail("dependency count exceeds bound")
     for grant in grants:
-        source = component_index.get(grant["source"]); target = component_index.get(grant["target"])
+        source = component_index.get(grant["source"])
+        target = component_index.get(grant["target"])
         if source is None or target is None: fail(f"grant endpoint missing: {grant['name']}")
         rights = 0
         for right in grant["rights"]:
@@ -567,12 +574,17 @@ def build_bootstore(generations: list[bytes]) -> bytes:
     known_good = generations[-1][24:56]
     pending = None
     remaining_attempts = 0
+    if os.environ.get("SLIME_KNOWN_GOOD_FIRST") == "1":
+        known_good = generations[0][24:56]
     if os.environ.get("SLIME_PENDING_GENERATION") == "1":
         known_good = generations[0][24:56]
         pending = generations[-1][24:56]
         remaining_attempts = int(os.environ.get("SLIME_PENDING_ATTEMPTS") or "2")
     image = bytearray(BOOTSTORE_CAPACITY)
-    accepted_sequence = int(os.environ.get("SLIME_ACCEPTED_RELEASE_SEQUENCE") or (1 if pending is not None else len(generations)))
+    accepted_sequence = int(
+        os.environ.get("SLIME_ACCEPTED_RELEASE_SEQUENCE")
+        or (1 if known_good == generations[0][24:56] else len(generations))
+    )
     image[:BOOTSTATE_SLOT_BYTES] = encode_bootstate(
         2,
         known_good,
@@ -647,7 +659,7 @@ def main() -> None:
         if component["object"] not in object_by_id: fail(f"component {component['name']}: missing object")
         payloads[component["object"]] = component_image(component["name"], generation1_components / component["name"], stack)
     generation1 = build_generation(manifest, payloads, None, 1)
-    generation2_components = build_rust_components(policy_number)
+    generation2_components = build_rust_components(policy_number, candidate_identity=generation1[24:56])
     for component in manifest["components"]:
         stack = component.get("stackBytes", DEFAULT_STACK_BYTES)
         if not isinstance(stack, int) or stack <= 0 or stack % PAGE_SIZE or stack > MAX_STACK_BYTES:
