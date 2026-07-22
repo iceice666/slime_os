@@ -27,6 +27,7 @@ pub const SYS_DIRECTORY_DERIVE: u64 = 15;
 pub const SYS_DIRECTORY_COMMIT: u64 = 16;
 pub const SYS_INPUT_READ: u64 = 17;
 pub const SYS_GENERATION_TRANSACT: u64 = 18;
+pub const SYS_GENERATION_RECEIVE: u64 = 19;
 
 const USER_TOP: u64 = 0x0000_8000_0000_0000;
 
@@ -66,6 +67,8 @@ pub fn dispatch(frame: &mut UserFrame) {
         SYS_DIRECTORY_COMMIT => sys_directory_commit(frame),
         SYS_INPUT_READ => sys_input_read(frame),
         SYS_GENERATION_TRANSACT => sys_generation_transact(frame),
+        SYS_GENERATION_RECEIVE => sys_generation_receive(frame),
+
         _ => frame.rax = ipc::ERR_INVALID_ARG as u64,
     }
 }
@@ -727,4 +730,51 @@ fn sys_debug_write(frame: &mut UserFrame) {
     let bytes = unsafe { core::slice::from_raw_parts(buf, len) };
     crate::serial::write_bytes(bytes);
     frame.rax = len as u64;
+}
+fn sys_generation_receive(frame: &mut UserFrame) {
+    let receiver_slot = frame.rdi as u32;
+    let transfer_slot = frame.rsi as u32;
+    let authorized = task::with_current_mut(|task| {
+        let receiver = task.caps.get(receiver_slot)?;
+        let transfer = task.caps.get(transfer_slot)?;
+        if receiver.rights & (RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE | RIGHT_BOOT_UPDATE)
+            != (RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE | RIGHT_BOOT_UPDATE)
+            || transfer.rights & (RIGHT_BLOCK_READ | RIGHT_TRANSFER)
+                != (RIGHT_BLOCK_READ | RIGHT_TRANSFER)
+        {
+            return None;
+        }
+        let KernelObject::BlockDevice(receiver) = receiver.object else {
+            return None;
+        };
+        let KernelObject::BlockDevice(transfer) = transfer.object else {
+            return None;
+        };
+        Some((receiver, transfer))
+    });
+    let Some((receiver, transfer)) = authorized else {
+        crate::serial_println!(
+            "[transfer] unauthorized receiver_slot={} transfer_slot={}",
+            receiver_slot,
+            transfer_slot
+        );
+        frame.rax = ipc::ERR_BAD_CAP as u64;
+        return;
+    };
+    frame.rax = match task::without_interrupts(|| crate::transfer::receive(receiver, transfer)) {
+        Ok(result) => {
+            crate::serial_println!(
+                "[transfer] generation received objects={} states={} release={} attempts={}",
+                result.copied_objects,
+                result.state_count,
+                result.release_sequence,
+                result.remaining_attempts
+            );
+            ipc::ERR_SUCCESS as u64
+        }
+        Err(error) => {
+            crate::serial_println!("[transfer] receive rejected: {:?}", error);
+            ipc::ERR_INVALID_ARG as u64
+        }
+    };
 }

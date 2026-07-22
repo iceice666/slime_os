@@ -47,11 +47,12 @@ Rights are a flat `u32`; bits 24–31 are free.
 | SharedBuffer | BUFFER_WRITE (8) | future write-into-region operation | kernel `SharedRegion::new`; no userspace path | **ungated** |
 | SharedBuffer | MAP (9) | future map-into-address-space operation | same | **ungated** |
 | BlockDevice | BLOCK_READ (10) | read requests in `SYS_BLOCK_TRANSACT` for the capability's exact PCI function | kernel bootstrap | gated |
-| BlockDevice | BLOCK_WRITE (11) | write and flush requests in `SYS_BLOCK_TRANSACT` for the capability's exact PCI function | kernel bootstrap | gated (M5.3) |
+| BlockDevice | BLOCK_WRITE (11) | write and flush requests in `SYS_BLOCK_TRANSACT`; receiver writes in `SYS_GENERATION_RECEIVE` require this together with BLOCK_READ and BOOT_UPDATE | kernel bootstrap | gated (M5.3/M6.7) |
 | ObjectStore | STORE_READ (12) | stat/get requests in `SYS_STORE_TRANSACT` | kernel bootstrap | gated (M5.4) |
 | ObjectStore | STORE_WRITE (13) | put requests in `SYS_STORE_TRANSACT` | kernel bootstrap | gated (M5.4) |
 | GenerationControl | HEALTH_CONFIRM (14) | `SYS_HEALTH_CONFIRM` for the currently running pending generation | kernel bootstrap, only for the declared generation-management service | gated (M5.6) |
-| GenerationControl | BOOT_UPDATE (15) | `SYS_GENERATION_TRANSACT` for validated staging/select/rollback and `SYS_RECOVERY_RECONSTRUCT` after signed-index, generation, state-closure, and release scrub | kernel bootstrap, only for the declared generation-management service or the declared recovery service | gated (M5.9/M6.5) |
+| GenerationControl / BlockDevice | BOOT_UPDATE (15) | `SYS_GENERATION_TRANSACT` for validated staging/select/rollback; `SYS_RECOVERY_RECONSTRUCT` after signed-index, generation, state-closure, and release scrub; receiver mutation in `SYS_GENERATION_RECEIVE` only with BLOCK_READ and BLOCK_WRITE | kernel bootstrap, only for the declared generation-management/recovery service or the generation-declared transfer receiver | gated (M5.9/M6.5/M6.7) |
+| BlockDevice | TRANSFER (2) | source reads in `SYS_GENERATION_RECEIVE`, together with BLOCK_READ; the receiver requires BLOCK_READ, BLOCK_WRITE, and BOOT_UPDATE and does not require TRANSFER | generation manifest names the exact source and receiver PCI functions | gated (M6.7) |
 | Executable | SPAWN (16) | executable slot validation in `SYS_SPAWN` | generation manifest | gated (M6.1) |
 | EndpointFactory | ENDPOINT_CREATE (17) | `SYS_ENDPOINT_CREATE` | generation manifest | gated (M6.1) |
 | Supervision | SUPERVISE (18) | `SYS_SUPERVISION_STATUS` | returned by successful `SYS_SPAWN` | gated (M6.1) |

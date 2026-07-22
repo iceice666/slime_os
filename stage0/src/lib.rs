@@ -195,6 +195,52 @@ pub fn select_bootstate(
     }
 }
 
+pub fn select_bootstate_for_directory(
+    a: &[u8; SLOT_BYTES],
+    b: &[u8; SLOT_BYTES],
+    directory: &BootDirectory<'_>,
+) -> Result<SelectedBootState, BootError> {
+    let root = directory_root(directory)?;
+    let a = BootState::decode(a)
+        .ok()
+        .filter(|state| state.generation_root == root);
+    let b = BootState::decode(b)
+        .ok()
+        .filter(|state| state.generation_root == root);
+    match (a, b) {
+        (Some(a), Some(b)) if a.sequence > b.sequence => Ok(SelectedBootState {
+            slot: Slot::A,
+            state: a,
+        }),
+        (Some(a), Some(b)) if b.sequence > a.sequence => Ok(SelectedBootState {
+            slot: Slot::B,
+            state: b,
+        }),
+        (Some(a), Some(b)) if a == b => Ok(SelectedBootState {
+            slot: Slot::A,
+            state: a,
+        }),
+        (Some(_), Some(_)) => Err(BootError::ConflictingSlots),
+        (Some(a), None) => Ok(SelectedBootState {
+            slot: Slot::A,
+            state: a,
+        }),
+        (None, Some(b)) => Ok(SelectedBootState {
+            slot: Slot::B,
+            state: b,
+        }),
+        (None, None) => Err(BootError::BadGenerationRoot),
+    }
+}
+
+fn directory_root(directory: &BootDirectory<'_>) -> Result<[u8; 32], BootError> {
+    let mut root = Sha256::new();
+    for index in 0..directory.count() {
+        root.update(&directory.entry(index)?.identity);
+    }
+    Ok(root.finalize())
+}
+
 pub fn selected_generation_identity(state: &BootState) -> [u8; 32] {
     match (state.pending, state.remaining_attempts) {
         (Some(pending), attempts) if attempts > 0 => pending,

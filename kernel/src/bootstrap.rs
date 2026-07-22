@@ -331,6 +331,16 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
             rights: RIGHT_BLOCK_READ | RIGHT_TRANSFER,
         }),
     };
+    let transfer_functions = block_functions();
+    let transfer_receiver = transfer_functions
+        .iter()
+        .find(|function| function.device == 5)
+        .copied();
+    let transfer_source = transfer_functions
+        .iter()
+        .find(|function| function.device == 6)
+        .copied();
+
     let storage_component = match generation.number {
         2 => storage_writer,
         3 => storage_fault_probe,
@@ -439,6 +449,19 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         endpoint(powerbox_client, RIGHT_SEND | RIGHT_RECV),
         endpoint(powerbox_service, RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER),
     ]);
+    if let (Some(receiver), Some(source)) = (transfer_receiver, transfer_source) {
+        caps.extend([
+            Capability {
+                object: KernelObject::BlockDevice(receiver),
+                rights: RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE | RIGHT_BOOT_UPDATE,
+            },
+            Capability {
+                object: KernelObject::BlockDevice(source),
+                rights: RIGHT_BLOCK_READ | RIGHT_TRANSFER,
+            },
+        ]);
+    }
+
     let spawn_budget = generation
         .component_named("init")
         .expect("init component missing")
@@ -506,6 +529,31 @@ fn launch_recovery_init(generation: &Generation<'static>) -> task::TaskId {
             .spawn_budget,
     )
     .expect("failed to launch recovery init")
+}
+
+fn boot_block_function() -> Option<PciFunctionInfo> {
+    crate::pci::enumerate()
+        .ok()?
+        .into_iter()
+        .find(|function| function.vendor_id == 0x8086 && function.device_id == 0x2922)
+}
+
+fn block_functions() -> alloc::vec::Vec<PciFunctionInfo> {
+    crate::pci::enumerate()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|function| {
+            (function.vendor_id == 0x1af4 && function.device_id == 0x1042)
+                || function.class_code & 0x00ff_ffff == 0x010802
+        })
+        .collect()
+}
+
+pub fn primary_block_function() -> Option<PciFunctionInfo> {
+    block_functions()
+        .into_iter()
+        .find(|function| function.device == 5)
+        .or_else(boot_block_function)
 }
 
 fn optional_block_function() -> Option<PciFunctionInfo> {

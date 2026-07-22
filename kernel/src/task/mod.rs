@@ -228,14 +228,6 @@ pub fn preflight_spawn_grant(
     executable_slot: u32,
     grants: &[SpawnGrant],
 ) -> Result<SpawnPlan, SpawnError> {
-    crate::serial_println!(
-        "[spawn-debug] slot={} present={} executable={} rights={:#x}",
-        executable_slot,
-        caps.get(executable_slot).is_some(),
-        caps.get(executable_slot)
-            .is_some_and(|cap| matches!(cap.object, KernelObject::Executable { .. })),
-        caps.get(executable_slot).map_or(0, |cap| cap.rights),
-    );
     let (executable, name, spawn_budget) = caps
         .get(executable_slot)
         .filter(|cap| {
@@ -522,7 +514,7 @@ pub fn with_current_mut<R>(f: impl FnOnce(&mut Task) -> R) -> R {
     })
 }
 
-fn without_interrupts<T>(f: impl FnOnce() -> T) -> T {
+pub(crate) fn without_interrupts<T>(f: impl FnOnce() -> T) -> T {
     let flags: u64;
     unsafe {
         core::arch::asm!("pushfq", "pop {}", out(reg) flags, options(nomem, preserves_flags));

@@ -11,8 +11,8 @@ use boot_contracts::handoff::{
 use boot_contracts::kernel_image::{KernelImage, LOAD_BASE, SEGMENT_EXEC, SEGMENT_WRITE};
 use boot_contracts::trace;
 use slime_stage0::{
-    BootError, Slot, decode_directory, select_bootstate, select_generation, verify_generation,
-    verify_kernel, verify_release,
+    BootError, Slot, decode_directory, select_bootstate_for_directory, select_generation,
+    verify_generation, verify_kernel, verify_release,
 };
 use uefi::boot::{self, AllocateType, MemoryType, PAGE_SIZE};
 use uefi::mem::memory_map::MemoryMap;
@@ -21,6 +21,7 @@ use uefi::proto::media::file::{File, FileAttribute, FileMode, FileType, RegularF
 use uefi::{CString16, Status};
 
 const BOOT_STORE_PATH: &str = "\\boot\\boot-store.bin";
+const HEALTH_CONFIRM_PATH: &str = "\\boot\\health-confirm.bin";
 const PAGE_PRESENT: u64 = 1;
 const PAGE_WRITE: u64 = 1 << 1;
 const PAGE_HUGE: u64 = 1 << 7;
@@ -59,10 +60,11 @@ fn boot() -> Result<(), BootError> {
     uefi::helpers::init().map_err(|_| BootError::Truncated)?;
     uefi::println!("[stage0] immutable selector");
 
-    let mut store = read_file(BOOT_STORE_PATH)?;
+    let store = read_file(BOOT_STORE_PATH)?;
+    let directory = decode_directory(&store)?;
     let slot_a: &[u8; 512] = store[..512].try_into().unwrap();
     let slot_b: &[u8; 512] = store[512..1024].try_into().unwrap();
-    let mut selected_state = select_bootstate(slot_a, slot_b)?;
+    let mut selected_state = select_bootstate_for_directory(slot_a, slot_b, &directory)?;
     let selection_state = selected_state.state;
     let running_pending =
         selected_state.state.pending.is_some() && selected_state.state.remaining_attempts > 0;
@@ -92,7 +94,6 @@ fn boot() -> Result<(), BootError> {
             state_root: selected_state.state.state_root,
         });
         selected_state.slot = target;
-        store = read_file(BOOT_STORE_PATH)?;
     } else {
         let state = selected_state.state;
         emit_trace(&trace::Record {
@@ -114,15 +115,48 @@ fn boot() -> Result<(), BootError> {
             state_root: state.state_root,
         });
     }
-    let directory = decode_directory(&store)?;
     let selected = select_generation(&directory, &selection_state)?;
+    let confirmation_pending =
+        selection_state.pending.is_some() && health_confirmation_matches(selection_state.pending);
+    if confirmation_pending {
+        verify_pending_for_promotion(&directory, &selection_state)?;
+    }
     let generation = verify_generation(selected.bytes, &selected.identity)?;
     let release_sequence = verify_release(
         &selected,
         &generation,
         &selection_state,
-        selection_state.pending.is_some() && selection_state.remaining_attempts > 0,
+        confirmation_pending
+            || (selection_state.pending.is_some() && selection_state.remaining_attempts > 0),
     )?;
+    if confirmation_pending {
+        let before = selected_state.state;
+        selected_state.state = selected_state
+            .state
+            .promote_pending(before.pending.unwrap(), release_sequence)
+            .map_err(|_| BootError::NoValidBootState)?;
+        let target = match selected_state.slot {
+            Slot::A => Slot::B,
+            Slot::B => Slot::A,
+        };
+        consume_health_confirmation()?;
+        persist_bootstate(target, selected_state.state)?;
+        emit_trace(&trace::Record {
+            action: trace::Action::Promotion,
+            commit: trace::Commit::HealthPromotion,
+            selected_slot: slot_index(selected_state.slot),
+            target_slot: Some(slot_index(target)),
+            sequence_before: before.sequence,
+            sequence_after: selected_state.state.sequence,
+            attempts_before: before.remaining_attempts,
+            attempts_after: selected_state.state.remaining_attempts,
+            known_good: selected_state.state.known_good,
+            pending: selected_state.state.pending,
+            generation_root: selected_state.state.generation_root,
+            state_root: selected_state.state.state_root,
+        });
+        selected_state.slot = target;
+    }
     let kernel = verify_kernel(&generation)?;
 
     let generation_copy = allocate_bytes(selected.bytes)?;
@@ -171,7 +205,7 @@ fn boot() -> Result<(), BootError> {
                 Slot::A => 0,
                 Slot::B => 1,
             },
-            running_pending: u8::from(running_pending),
+            running_pending: u8::from(running_pending && !confirmation_pending),
             reserved1: [0; 2],
             generation_root: selected_state.state.generation_root,
             state_root: selected_state.state.state_root,
@@ -237,6 +271,38 @@ fn open_regular(path: &str, mode: FileMode) -> Result<RegularFile, BootError> {
 fn read_file(path: &str) -> Result<Vec<u8>, BootError> {
     let mut file = open_regular(path, FileMode::Read)?;
     read_regular(&mut file)
+}
+
+fn verify_pending_for_promotion(
+    directory: &slime_stage0::BootDirectory<'_>,
+    state: &boot_contracts::bootstate::BootState,
+) -> Result<(), BootError> {
+    let pending = state.pending.ok_or(BootError::MissingGeneration)?;
+    for index in 0..directory.count() {
+        let entry = directory.entry(index)?;
+        if entry.identity == pending {
+            let generation = verify_generation(entry.bytes, &entry.identity)?;
+            verify_release(&entry, &generation, state, true)?;
+            return Ok(());
+        }
+    }
+    Err(BootError::MissingGeneration)
+}
+
+fn consume_health_confirmation() -> Result<(), BootError> {
+    open_regular(HEALTH_CONFIRM_PATH, FileMode::ReadWrite)?
+        .delete()
+        .map_err(|_| BootError::Truncated)
+}
+
+fn health_confirmation_matches(pending: Option<[u8; 32]>) -> bool {
+    let Some(pending) = pending else {
+        return false;
+    };
+    let Ok(bytes) = read_file(HEALTH_CONFIRM_PATH) else {
+        return false;
+    };
+    bytes.as_slice() == pending
 }
 
 fn persist_bootstate(

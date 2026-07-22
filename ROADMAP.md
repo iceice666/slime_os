@@ -567,7 +567,7 @@ Milestone 5 is complete only when all of the following are observed:
 
 ## Milestone 6: Native interactive environment
 
-**Status:** M6.1 through M6.6 done; M6.7 is planned below.
+**Status:** Done. Slices M6.1 through M6.7 are complete.
 
 Scope:
 
@@ -747,7 +747,7 @@ Exit condition: a component with no directory grants opens the chooser, the user
 
 ### M6.7: Generation sync and transfer
 
-**Status:** Not started.
+**Status:** Done.
 
 This slice implements the directions register entry 14 exit-condition sketch and consumes M5.8 release authorization. In QEMU the transfer medium is a second attachable virtio-blk disk; virtio networking is Milestone 7 scope.
 

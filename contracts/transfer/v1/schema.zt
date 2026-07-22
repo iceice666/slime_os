@@ -1,0 +1,71 @@
+-- Slime OS generation transfer manifest, format version 1.
+--
+-- The host builder emits this deterministic binary contract onto an explicit
+-- transfer BlockDevice. The receiver validates the complete object and state
+-- closure plus the signed release before changing its boot store.
+
+formatVersion :: Int = 1;
+headerBytes :: Int = 320;
+objectEntryBytes :: Int = 64;
+stateEntryBytes :: Int = 80;
+maxTransferBytes :: Int = 33554432;
+
+TransferObject :: type {
+  digest0 : Int;
+  digest1 : Int;
+  digest2 : Int;
+  digest3 : Int;
+  length : Int;
+  payloadOffset : Int;
+  kind : Int;
+  flags : Int;
+};
+
+TransferState :: type {
+  binding0 : Int;
+  binding1 : Int;
+  binding2 : Int;
+  binding3 : Int;
+  stateRoot0 : Int;
+  stateRoot1 : Int;
+  stateRoot2 : Int;
+  stateRoot3 : Int;
+  schemaVersion : Int;
+  policy : Int;
+  flags : Int;
+};
+
+TransferManifest :: type {
+  formatVersion : Int;
+  generation0 : Int;
+  generation1 : Int;
+  generation2 : Int;
+  generation3 : Int;
+  parent0 : Int;
+  parent1 : Int;
+  parent2 : Int;
+  parent3 : Int;
+  stateRoot0 : Int;
+  stateRoot1 : Int;
+  stateRoot2 : Int;
+  stateRoot3 : Int;
+  authority0 : Int;
+  authority1 : Int;
+  authority2 : Int;
+  authority3 : Int;
+  releaseSequence : Int;
+  generationBytes : Int;
+  metadataBytes : Int;
+  objectCount : Int;
+  stateCount : Int;
+  objects : List TransferObject;
+  states : List TransferState;
+};
+
+{
+  formatVersion = formatVersion;
+  headerBytes = headerBytes;
+  objectEntryBytes = objectEntryBytes;
+  stateEntryBytes = stateEntryBytes;
+  maxTransferBytes = maxTransferBytes;
+}

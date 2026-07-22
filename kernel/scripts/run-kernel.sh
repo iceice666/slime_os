@@ -27,6 +27,7 @@ OVMF_CODE="${OVMF_CODE:-/usr/share/OVMF/OVMF_CODE.fd}"
 OVMF_VARS_SRC="${OVMF_VARS:-/usr/share/OVMF/OVMF_VARS.fd}"
 QEMU_ACCEL="${SLIME_QEMU_ACCEL:-tcg}"
 QEMU_CPU="${SLIME_QEMU_CPU:-qemu64}"
+QEMU_SMP="${SLIME_QEMU_SMP:-1}"
 [[ -f "$OVMF_CODE" ]]      || { echo "OVMF_CODE not found: $OVMF_CODE"      >&2; exit 2; }
 [[ -f "$OVMF_VARS_SRC" ]]  || { echo "OVMF_VARS not found: $OVMF_VARS_SRC" >&2; exit 2; }
 # Per-run writable copy of OVMF vars so NVRAM changes don't leak between runs.
@@ -37,7 +38,6 @@ VARS="$WORK/OVMF_VARS.fd"
 # permission bits, but OVMF needs to write NVRAM here, so make it writable.
 cp "$OVMF_VARS_SRC" "$VARS"
 chmod +w "$VARS"
-
 IMG="${SLIME_BOOT_IMAGE:-$WORK/slime_os.img}"
 if [[ -z "${SLIME_REUSE_BOOT_IMAGE:-}" || ! -f "$IMG" ]]; then
     if [[ "$(basename "$BIN")" == "slime_os-kernel" ]]; then
@@ -53,6 +53,7 @@ set +e
 qemu-system-x86_64 \
     -machine "q35,accel=${QEMU_ACCEL}" \
     -cpu "$QEMU_CPU" \
+    -smp "$QEMU_SMP" \
     -m 256M \
     -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
     -drive if=pflash,format=raw,file="$VARS" \

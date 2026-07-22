@@ -58,6 +58,11 @@ directory_check: contracts_check generation_check
     cd components && cargo test --target x86_64-unknown-linux-gnu -p slime-proto --test fs
     ./scripts/check-directory.py /tmp/slime-os-directory.img
 
+# M6.7: explicit block-capability generation transfer, bounded closure,
+# durable pending selection, health promotion, and retained rollback root.
+transfer_check: contracts_check generation_check
+    python3 scripts/check-transfer.py
+
 # M5.1: exercise the storage-capability foundation (PCI/DMA/cap/block-proto)
 # under QEMU. Proves an unprivileged component cannot acquire device rights.
 storage_cap_check:

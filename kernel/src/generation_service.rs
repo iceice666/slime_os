@@ -40,6 +40,172 @@ struct DirectoryEntry {
     release_offset: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TransferDirectoryEntry {
+    pub identity: [u8; 32],
+    pub generation_offset: usize,
+    pub generation_len: usize,
+    pub release_offset: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TransferInstallResult {
+    pub remaining_attempts: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransferServiceError {
+    NotFound,
+    BadRelease,
+    BadClosure,
+    Conflict,
+    Device,
+}
+
+impl From<ServiceError> for TransferServiceError {
+    fn from(error: ServiceError) -> Self {
+        match error {
+            ServiceError::NotFound => Self::NotFound,
+            ServiceError::BadRelease => Self::BadRelease,
+            ServiceError::BadClosure | ServiceError::BadRequest => Self::BadClosure,
+            ServiceError::Conflict => Self::Conflict,
+            ServiceError::Device => Self::Device,
+        }
+    }
+}
+
+pub fn read_entries_for_transfer(
+    device: &mut BlockDevice,
+) -> Result<Vec<TransferDirectoryEntry>, TransferServiceError> {
+    let entries = read_directory(device)?;
+    read_bootstate_for_root(device, directory_root(&entries))?;
+    Ok(entries
+        .into_iter()
+        .map(|entry| TransferDirectoryEntry {
+            identity: entry.identity,
+            generation_offset: entry.generation_offset,
+            generation_len: entry.generation_len,
+            release_offset: entry.release_offset,
+        })
+        .collect())
+}
+
+pub fn read_state_for_transfer(
+    device: &mut BlockDevice,
+) -> Result<(u8, BootState), TransferServiceError> {
+    let entries = read_directory(device)?;
+    read_bootstate_for_root(device, directory_root(&entries)).map_err(Into::into)
+}
+
+pub fn read_object_by_digest_for_transfer(
+    device: &mut BlockDevice,
+    entries: &[TransferDirectoryEntry],
+    digest: [u8; 32],
+    length: usize,
+) -> Result<Vec<u8>, TransferServiceError> {
+    for entry in entries {
+        let bytes = read_range(device, entry.generation_offset, entry.generation_len)?;
+        let generation = Generation::decode(&bytes).map_err(|_| ServiceError::BadClosure)?;
+        for index in 0..generation.object_count() {
+            let object = generation
+                .object(index)
+                .map_err(|_| ServiceError::BadClosure)?;
+            if object.digest == digest && object.bytes.len() == length {
+                return Ok(object.bytes.to_vec());
+            }
+        }
+    }
+    Err(TransferServiceError::NotFound)
+}
+
+pub fn install_and_select_for_transfer(
+    device: &mut BlockDevice,
+    entries: &mut Vec<TransferDirectoryEntry>,
+    selected_slot: u8,
+    state: BootState,
+    generation_bytes: &[u8],
+    release_bytes: &[u8],
+    state_root: [u8; 32],
+) -> Result<TransferInstallResult, TransferServiceError> {
+    if release_bytes.len() != RELEASE_BYTES
+        || entries.len() >= MAX_ENTRIES
+        || DIRECTORY_OFFSET + DIRECTORY_HEADER + (entries.len() + 1) * DIRECTORY_ENTRY
+            > RELEASES_OFFSET
+        || state.pending.is_some()
+    {
+        return Err(TransferServiceError::Conflict);
+    }
+    let generation =
+        Generation::decode(generation_bytes).map_err(|_| TransferServiceError::BadClosure)?;
+    let release = Release::decode(release_bytes).map_err(|_| TransferServiceError::BadRelease)?;
+    release
+        .verify_for_staging(
+            &generation,
+            &INITIAL_TRUST_ROOT,
+            state.accepted_release_sequence,
+        )
+        .map_err(|_| TransferServiceError::BadRelease)?;
+    if entries
+        .iter()
+        .any(|entry| entry.identity == generation.identity)
+    {
+        return Err(TransferServiceError::Conflict);
+    }
+    if generation
+        .parent
+        .is_some_and(|parent| !entries.iter().any(|entry| entry.identity == parent))
+    {
+        return Err(TransferServiceError::BadClosure);
+    }
+    let release_offset = entries
+        .iter()
+        .map(|entry| entry.release_offset + RELEASE_BYTES)
+        .max()
+        .unwrap_or(RELEASES_OFFSET)
+        .next_multiple_of(RELEASE_BYTES);
+    let generation_offset = entries
+        .iter()
+        .map(|entry| entry.generation_offset + entry.generation_len)
+        .max()
+        .unwrap_or(GENERATIONS_OFFSET)
+        .next_multiple_of(4096);
+    if release_offset + RELEASE_BYTES > GENERATIONS_OFFSET
+        || generation_offset
+            .checked_add(generation_bytes.len())
+            .is_none_or(|end| end > BOOT_STORE_BYTES)
+    {
+        return Err(TransferServiceError::BadClosure);
+    }
+    entries.push(TransferDirectoryEntry {
+        identity: generation.identity,
+        generation_offset,
+        generation_len: generation_bytes.len(),
+        release_offset,
+    });
+    entries.sort_by_key(|entry| entry.identity);
+    let generation_root = transfer_generation_root(entries);
+    let after = state
+        .stage_pending(
+            generation.identity,
+            generation.boot_attempts,
+            generation_root,
+            state_root,
+        )
+        .map_err(|_| TransferServiceError::Conflict)?;
+    after
+        .encode()
+        .map_err(|_| TransferServiceError::BadClosure)?;
+
+    write_bytes(device, release_offset, release_bytes)?;
+    write_bytes(device, generation_offset, generation_bytes)?;
+    let transition = persist_transition(device, selected_slot, state, after)?;
+    persist_directory_for_transfer(device, entries)?;
+    emit_transition("stage-pending", "after-pending-commit", transition);
+    Ok(TransferInstallResult {
+        remaining_attempts: after.remaining_attempts,
+    })
+}
+
 pub fn transact(request: &WireGenerationRequest) -> WireGenerationReply {
     let mut reply = empty_reply();
     if !valid_request(request) {
@@ -64,7 +230,7 @@ fn execute(
     request: &WireGenerationRequest,
 ) -> Result<WireGenerationReply, ServiceError> {
     let entries = read_directory(device)?;
-    let (selected_slot, state) = read_bootstate(device)?;
+    let (selected_slot, state) = read_bootstate_for_root(device, directory_root(&entries))?;
     match request.op {
         OP_LIST => Ok(list_reply(&entries, state)),
         OP_INSPECT => inspect_reply(device, &entries, state, request_identity(request)),
@@ -211,6 +377,97 @@ fn select_reply(
     Ok(reply)
 }
 
+fn transfer_generation_root(entries: &[TransferDirectoryEntry]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    for entry in entries {
+        hasher.update(&entry.identity);
+    }
+    hasher.finalize()
+}
+
+fn bootstore_checksum(device: &mut BlockDevice) -> Result<[u8; 32], TransferServiceError> {
+    let mut hasher = Sha256::new();
+    let mut sector = [0u8; SECTOR_SIZE];
+    for lba in (SLOT_BYTES * 2 / SECTOR_SIZE)..(BOOT_STORE_BYTES / SECTOR_SIZE) {
+        device
+            .read_sector(lba as u64, &mut sector)
+            .map_err(|_| TransferServiceError::Device)?;
+        if lba == DIRECTORY_OFFSET / SECTOR_SIZE {
+            hasher.update(&sector[..48]);
+            hasher.update(&[0u8; 32]);
+            hasher.update(&sector[80..]);
+        } else {
+            hasher.update(&sector);
+        }
+    }
+    Ok(hasher.finalize())
+}
+
+fn persist_directory_for_transfer(
+    device: &mut BlockDevice,
+    entries: &[TransferDirectoryEntry],
+) -> Result<(), TransferServiceError> {
+    if entries.is_empty() || entries.len() > MAX_ENTRIES {
+        return Err(TransferServiceError::BadClosure);
+    }
+    let mut directory = vec![0u8; DIRECTORY_HEADER + entries.len() * DIRECTORY_ENTRY];
+    directory[..8].copy_from_slice(&DIRECTORY_MAGIC);
+    directory[8..12].copy_from_slice(&DIRECTORY_VERSION.to_le_bytes());
+    directory[12..16].copy_from_slice(&(DIRECTORY_HEADER as u32).to_le_bytes());
+    directory[24..28].copy_from_slice(&(entries.len() as u32).to_le_bytes());
+    directory[32..40].copy_from_slice(&((entries.len() * DIRECTORY_ENTRY) as u64).to_le_bytes());
+    directory[40..48].copy_from_slice(&(BOOT_STORE_BYTES as u64).to_le_bytes());
+    for (index, entry) in entries.iter().enumerate() {
+        let offset = DIRECTORY_HEADER + index * DIRECTORY_ENTRY;
+        directory[offset..offset + 32].copy_from_slice(&entry.identity);
+        directory[offset + 32..offset + 40]
+            .copy_from_slice(&(entry.generation_offset as u64).to_le_bytes());
+        directory[offset + 40..offset + 48]
+            .copy_from_slice(&(entry.generation_len as u64).to_le_bytes());
+        directory[offset + 48..offset + 56]
+            .copy_from_slice(&(entry.release_offset as u64).to_le_bytes());
+        directory[offset + 56..offset + 64].copy_from_slice(&(RELEASE_BYTES as u64).to_le_bytes());
+    }
+    let clear = vec![0u8; RELEASES_OFFSET - DIRECTORY_OFFSET];
+    write_bytes(device, DIRECTORY_OFFSET, &clear)?;
+    write_bytes(device, DIRECTORY_OFFSET, &directory)?;
+    device.flush().map_err(|_| TransferServiceError::Device)?;
+    let checksum = bootstore_checksum(device)?;
+    write_bytes(device, DIRECTORY_OFFSET + 48, &checksum)?;
+    device.flush().map_err(|_| TransferServiceError::Device)?;
+    Ok(())
+}
+
+fn write_bytes(
+    device: &mut BlockDevice,
+    offset: usize,
+    bytes: &[u8],
+) -> Result<(), TransferServiceError> {
+    let end = offset
+        .checked_add(bytes.len())
+        .filter(|end| *end <= BOOT_STORE_BYTES)
+        .ok_or(TransferServiceError::BadClosure)?;
+    let mut sector = [0u8; SECTOR_SIZE];
+    for lba in offset / SECTOR_SIZE..end.div_ceil(SECTOR_SIZE) {
+        let sector_start = lba * SECTOR_SIZE;
+        let copy_start = offset.max(sector_start);
+        let copy_end = end.min(sector_start + SECTOR_SIZE);
+        if copy_start != sector_start || copy_end != sector_start + SECTOR_SIZE {
+            device
+                .read_sector(lba as u64, &mut sector)
+                .map_err(|_| TransferServiceError::Device)?;
+        } else {
+            sector.fill(0);
+        }
+        sector[copy_start - sector_start..copy_end - sector_start]
+            .copy_from_slice(&bytes[copy_start - offset..copy_end - offset]);
+        device
+            .write_sector(lba as u64, &sector)
+            .map_err(|_| TransferServiceError::Device)?;
+    }
+    Ok(())
+}
+
 fn rollback_reply(
     device: &mut BlockDevice,
     selected_slot: u8,
@@ -251,19 +508,28 @@ fn persist_transition(
     })
 }
 
-fn read_bootstate(device: &mut BlockDevice) -> Result<(u8, BootState), ServiceError> {
+fn read_bootstate_for_root(
+    device: &mut BlockDevice,
+    generation_root: [u8; 32],
+) -> Result<(u8, BootState), ServiceError> {
     let a = read_range(device, 0, SLOT_BYTES)?;
     let b = read_range(device, SLOT_BYTES, SLOT_BYTES)?;
     let a: &[u8; SLOT_BYTES] = a.as_slice().try_into().unwrap();
     let b: &[u8; SLOT_BYTES] = b.as_slice().try_into().unwrap();
-    match (BootState::decode(a), BootState::decode(b)) {
-        (Ok(a), Ok(b)) if a.sequence > b.sequence => Ok((0, a)),
-        (Ok(a), Ok(b)) if b.sequence > a.sequence => Ok((1, b)),
-        (Ok(a), Ok(b)) if a == b => Ok((0, a)),
-        (Ok(_), Ok(_)) => Err(ServiceError::BadClosure),
-        (Ok(a), Err(_)) => Ok((0, a)),
-        (Err(_), Ok(b)) => Ok((1, b)),
-        (Err(_), Err(_)) => Err(ServiceError::BadClosure),
+    let a = BootState::decode(a)
+        .ok()
+        .filter(|state| state.generation_root == generation_root);
+    let b = BootState::decode(b)
+        .ok()
+        .filter(|state| state.generation_root == generation_root);
+    match (a, b) {
+        (Some(a), Some(b)) if a.sequence > b.sequence => Ok((0, a)),
+        (Some(a), Some(b)) if b.sequence > a.sequence => Ok((1, b)),
+        (Some(a), Some(b)) if a == b => Ok((0, a)),
+        (Some(_), Some(_)) => Err(ServiceError::BadClosure),
+        (Some(a), None) => Ok((0, a)),
+        (None, Some(b)) => Ok((1, b)),
+        (None, None) => Err(ServiceError::BadClosure),
     }
 }
 
@@ -291,7 +557,6 @@ fn read_directory(device: &mut BlockDevice) -> Result<Vec<DirectoryEntry>, Servi
     )?;
     let mut entries = Vec::with_capacity(count);
     let mut previous = [0u8; 32];
-    let mut root = Sha256::new();
     for index in 0..count {
         let record = &raw[index * DIRECTORY_ENTRY..(index + 1) * DIRECTORY_ENTRY];
         let identity: [u8; 32] = record[..32].try_into().unwrap();
@@ -314,20 +579,23 @@ fn read_directory(device: &mut BlockDevice) -> Result<Vec<DirectoryEntry>, Servi
         {
             return Err(ServiceError::BadClosure);
         }
-        root.update(&identity);
+        previous = identity;
         entries.push(DirectoryEntry {
             identity,
             generation_offset,
             generation_len,
             release_offset,
         });
-        previous = identity;
-    }
-    let (_, state) = read_bootstate(device)?;
-    if root.finalize() != state.generation_root {
-        return Err(ServiceError::BadClosure);
     }
     Ok(entries)
+}
+
+fn directory_root(entries: &[DirectoryEntry]) -> [u8; 32] {
+    let mut root = Sha256::new();
+    for entry in entries {
+        root.update(&entry.identity);
+    }
+    root.finalize()
 }
 
 fn verify_closure(

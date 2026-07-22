@@ -142,7 +142,9 @@ impl KernelObject {
             KernelObject::DmaMemory(_) => RIGHT_DMA_RELEASE,
             KernelObject::Irq(_) => RIGHT_IRQ_ACK,
             KernelObject::SharedBuffer(_) => RIGHT_BUFFER_WRITE | RIGHT_MAP,
-            KernelObject::BlockDevice(_) => RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE,
+            KernelObject::BlockDevice(_) => {
+                RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE | RIGHT_BOOT_UPDATE
+            }
             KernelObject::ObjectStore => RIGHT_STORE_READ | RIGHT_STORE_WRITE,
             KernelObject::Directory(_) => {
                 RIGHT_DIRECTORY_READ

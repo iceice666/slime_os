@@ -25,6 +25,8 @@ const SYS_DIRECTORY_COMMIT: u64 = 16;
 const SYS_INPUT_READ: u64 = 17;
 
 const SYS_GENERATION_TRANSACT: u64 = 18;
+pub const SYS_GENERATION_RECEIVE: u64 = 19;
+
 pub const ERR_SUCCESS: i64 = 0;
 pub const ERR_BAD_CAP: i64 = -1;
 pub const ERR_PEER_DEAD: i64 = -2;
@@ -396,6 +398,19 @@ pub fn recovery_reconstruct(generation_control_slot: u32, block_slot: u32, flags
             generation_control_slot as u64,
             block_slot as u64,
             flags as u64,
+            0,
+            0,
+        )
+    }
+}
+
+pub fn generation_receive(receiver_slot: u32, transfer_slot: u32) -> i64 {
+    unsafe {
+        raw_syscall(
+            SYS_GENERATION_RECEIVE,
+            receiver_slot as u64,
+            transfer_slot as u64,
+            0,
             0,
             0,
         )

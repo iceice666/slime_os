@@ -168,20 +168,21 @@ pub fn confirm_running_pending() -> bool {
     let Some(state) = manager.bootstate else {
         return false;
     };
-    let Ok(promoted) = state.promote_pending(manager.running, manager.running_release_sequence)
-    else {
-        return false;
-    };
-    let previous = state.known_good;
-    if !manager.rollback_roots.insert(previous) {
+    let running = crate::boot::generation_identity();
+    if state.pending != Some(running) || state.remaining_attempts == 0 {
         return false;
     }
+    let release_sequence = manager.running_release_sequence;
+    let Ok(promoted) = state.promote_pending(running, release_sequence) else {
+        return false;
+    };
+    let previous_known_good = state.known_good;
     manager.bootstate = Some(promoted);
-    manager.accepted_release_sequence = promoted.accepted_release_sequence;
+    manager.accepted_release_sequence = release_sequence;
     manager.health = HealthState::Confirmed;
+    let _ = manager.rollback_roots.insert(previous_known_good);
     true
 }
-
 pub fn mark_unhealthy() {
     MANAGER.lock().health = HealthState::Unhealthy;
 }

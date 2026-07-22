@@ -181,6 +181,7 @@ pub struct VirtioBlock {
     notify_multiplier: u32,
     queue_notify_offset: u16,
     queue_dma: crate::capability::DmaRegion,
+    data_dma: crate::capability::DmaRegion,
     last_used: u16,
     capacity_sectors: u64,
 }
@@ -210,9 +211,17 @@ impl VirtioBlock {
         let device_cap = find_capability(&capabilities, VIRTIO_PCI_CAP_DEVICE_CFG)
             .ok_or(VirtioBlkError::MissingDeviceConfig)?;
 
-        let common = map_capability(common_cap, &bars, 0)?;
-        let notify = map_capability(notify_cap, &bars, 1)?;
-        let device = map_capability(device_cap, &bars, 2)?;
+        let device_window = function.device as usize;
+        let common = map_capability(common_cap, &bars, device_window, 0)?;
+        let notify = map_capability(notify_cap, &bars, device_window, 1)?;
+        let device = map_capability(device_cap, &bars, device_window, 2)?;
+        crate::serial_println!(
+            "[virtio-blk] device={} common=0x{:x} notify=0x{:x} config=0x{:x}",
+            function.device,
+            common.base,
+            notify.base,
+            device.base
+        );
 
         common.write_u8(COMMON_DEVICE_STATUS, 0);
         common.write_u8(COMMON_DEVICE_STATUS, STATUS_ACKNOWLEDGE | STATUS_DRIVER);
@@ -236,7 +245,6 @@ impl VirtioBlock {
             common.write_u8(COMMON_DEVICE_STATUS, STATUS_FAILED);
             return Err(VirtioBlkError::UnsupportedFeatures);
         }
-
         common.write_u16(COMMON_QUEUE_SELECT, QUEUE_INDEX);
         let available = common.read_u16(COMMON_QUEUE_SIZE);
         if available == 0 {
@@ -250,10 +258,17 @@ impl VirtioBlock {
         let queue_pages = size_of::<QueueMemory>().div_ceil(PAGE_SIZE);
         let queue_dma = DMA_TABLE.lock().pin(queue_pages)?;
         zero_region(queue_dma.phys(), queue_dma.pages());
+        let data_dma = DMA_TABLE.lock().pin(1)?;
+        zero_region(data_dma.phys(), data_dma.pages());
         let base = queue_dma.phys().as_u64();
         let desc_offset = offset_of_queue_descriptors();
         let avail_offset = offset_of_queue_avail();
         let used_offset = offset_of_queue_used();
+        crate::serial_println!(
+            "[virtio-blk] device={} queue_phys=0x{:x}",
+            function.device,
+            base
+        );
         common.write_u64(COMMON_QUEUE_DESC, base + desc_offset as u64);
         common.write_u64(COMMON_QUEUE_DRIVER, base + avail_offset as u64);
         common.write_u64(COMMON_QUEUE_DEVICE, base + used_offset as u64);
@@ -275,13 +290,15 @@ impl VirtioBlock {
             COMMON_DEVICE_STATUS,
             STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_FEATURES_OK | STATUS_DRIVER_OK,
         );
+        let last_used = unsafe { read_volatile(&queue_memory(&queue_dma).used.idx) };
         Ok(Self {
             common,
             notify,
             notify_multiplier: notify_cap.notify_multiplier,
             queue_notify_offset,
             queue_dma,
-            last_used: 0,
+            data_dma,
+            last_used,
             capacity_sectors,
         })
     }
@@ -298,18 +315,15 @@ impl VirtioBlock {
             return Err(VirtioBlkError::OutOfRange);
         }
 
-        let data_dma = DMA_TABLE.lock().pin(1)?;
-        zero_region(data_dma.phys(), data_dma.pages());
-        let destination = data_dma.phys().to_virt().as_mut_ptr::<u8>();
+        zero_region(self.data_dma.phys(), self.data_dma.pages());
+        let destination = self.data_dma.phys().to_virt().as_mut_ptr::<u8>();
         // SAFETY: `data_dma` is one writable pinned page and `input` is one sector.
         unsafe { core::ptr::copy_nonoverlapping(input.as_ptr(), destination, input.len()) };
-        let result = self.execute_request(VIRTIO_BLK_T_OUT, lba, Some(&data_dma), false, None);
-        DMA_TABLE.lock().release(&data_dma)?;
-        result
+        self.execute_request(VIRTIO_BLK_T_OUT, lba, true, false, None)
     }
 
     pub fn flush(&mut self) -> Result<(), VirtioBlkError> {
-        self.execute_request(VIRTIO_BLK_T_FLUSH, 0, None, false, None)
+        self.execute_request(VIRTIO_BLK_T_FLUSH, 0, false, false, None)
     }
 
     pub fn inject_failure(&mut self) -> Result<(), VirtioBlkError> {
@@ -350,15 +364,13 @@ impl VirtioBlock {
             return Err(VirtioBlkError::OutOfRange);
         }
 
-        let data_dma = DMA_TABLE.lock().pin(1)?;
-        zero_region(data_dma.phys(), data_dma.pages());
-        let result = self.execute_request(VIRTIO_BLK_T_IN, lba, Some(&data_dma), true, None);
+        zero_region(self.data_dma.phys(), self.data_dma.pages());
+        let result = self.execute_request(VIRTIO_BLK_T_IN, lba, true, true, None);
         if result.is_ok() {
-            let source = data_dma.phys().to_virt().as_mut_ptr::<u8>();
+            let source = self.data_dma.phys().to_virt().as_mut_ptr::<u8>();
             // SAFETY: the device completed the request before this copy.
             unsafe { core::ptr::copy_nonoverlapping(source, output.as_mut_ptr(), output.len()) };
         }
-        DMA_TABLE.lock().release(&data_dma)?;
         result
     }
 
@@ -378,25 +390,19 @@ impl VirtioBlock {
         &mut self,
         request_type: u32,
         lba: u64,
-        data_dma: Option<&crate::capability::DmaRegion>,
+        has_data: bool,
         device_writes_data: bool,
         spin_limit: Option<u32>,
     ) -> Result<(), VirtioBlkError> {
-        if let Some(data_dma) = data_dma {
-            data_dma.set_outstanding(true);
-        }
         self.queue_dma.set_outstanding(true);
-        let result = self.submit(request_type, lba, data_dma, device_writes_data, spin_limit);
+        self.data_dma.set_outstanding(has_data);
+        let result = self.submit(request_type, lba, has_data, device_writes_data, spin_limit);
         if result.is_err() && self.reset().is_err() {
-            if let Some(data_dma) = data_dma {
-                data_dma.set_outstanding(false);
-            }
+            self.data_dma.set_outstanding(false);
             self.queue_dma.set_outstanding(false);
             return Err(VirtioBlkError::ResetTimeout);
         }
-        if let Some(data_dma) = data_dma {
-            data_dma.set_outstanding(false);
-        }
+        self.data_dma.set_outstanding(false);
         self.queue_dma.set_outstanding(false);
         result
     }
@@ -405,7 +411,7 @@ impl VirtioBlock {
         &mut self,
         request_type: u32,
         lba: u64,
-        data_dma: Option<&crate::capability::DmaRegion>,
+        has_data: bool,
         device_writes_data: bool,
         spin_limit: Option<u32>,
     ) -> Result<(), VirtioBlkError> {
@@ -424,11 +430,11 @@ impl VirtioBlock {
             addr: header_address,
             len: size_of::<VirtioBlkRequestHeader>() as u32,
             flags: VIRTQ_DESC_F_NEXT,
-            next: if data_dma.is_some() { 1 } else { 2 },
+            next: if has_data { 1 } else { 2 },
         };
-        if let Some(data_dma) = data_dma {
+        if has_data {
             queue.descriptors[1] = VirtqDescriptor {
-                addr: data_dma.phys().as_u64(),
+                addr: self.data_dma.phys().as_u64(),
                 len: SECTOR_SIZE as u32,
                 flags: VIRTQ_DESC_F_NEXT
                     | if device_writes_data {
@@ -488,10 +494,9 @@ impl VirtioBlock {
 
 impl Drop for VirtioBlock {
     fn drop(&mut self) {
-        if self.reset().is_ok() {
-            self.queue_dma.set_outstanding(false);
-            let _ = DMA_TABLE.lock().release(&self.queue_dma);
-        }
+        let _ = self.reset();
+        self.data_dma.set_outstanding(true);
+        self.queue_dma.set_outstanding(true);
     }
 }
 
@@ -635,7 +640,8 @@ fn read_virtio_capabilities(
 fn map_capability(
     capability: VirtioCapability,
     bars: &[BarInfo; 6],
-    window: usize,
+    device_window: usize,
+    capability_window: usize,
 ) -> Result<MmioRegion, VirtioBlkError> {
     let bar = bars
         .get(capability.bar as usize)
@@ -658,7 +664,8 @@ fn map_capability(
     if pages == 0 || pages > MAX_MMIO_PAGES {
         return Err(VirtioBlkError::BadCapability);
     }
-    let virtual_base = MMIO_SCRATCH_BASE + (window * MAX_MMIO_PAGES * PAGE_SIZE) as u64;
+    let virtual_base = MMIO_SCRATCH_BASE
+        + ((device_window * 3 + capability_window) * MAX_MMIO_PAGES * PAGE_SIZE) as u64;
     for page in 0..pages {
         // SAFETY: the validated BAR range is device MMIO. Each capability gets
         // a disjoint fixed virtual window, mapped cache-disabled and NX.

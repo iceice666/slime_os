@@ -232,11 +232,27 @@ def build_rust_components(
 ) -> Path:
     environment = os.environ.copy()
     environment["SLIME_GENERATION_NUMBER"] = str(generation_number)
+    if candidate_identity is None and os.environ.get("SLIME_TRANSFER_RECEIVER") == "1":
+        environment["SLIME_TRANSFER_RECEIVER"] = "1"
+    else:
+        environment.pop("SLIME_TRANSFER_RECEIVER", None)
+    if candidate_identity is not None and os.environ.get("SLIME_TRANSFER_ACTIVATE") == "1":
+        environment["SLIME_TRANSFER_ACTIVATE"] = "1"
+    else:
+        environment.pop("SLIME_TRANSFER_ACTIVATE", None)
     if recovery:
         environment["SLIME_RECOVERY_IMAGE"] = "1"
     if environment.get("SLIME_GENERATION_CMD_CHECK") == "1" and candidate_identity is not None:
         environment["SLIME_GENERATION_CANDIDATE"] = candidate_identity.hex()
-    target_dir = COMPONENTS_TARGET_DIR / ("recovery" if recovery else f"generation-{generation_number}")
+    if recovery:
+        target_name = "recovery"
+    elif candidate_identity is None and os.environ.get("SLIME_TRANSFER_RECEIVER") == "1":
+        target_name = f"generation-{generation_number}-transfer-receiver"
+    elif candidate_identity is not None and os.environ.get("SLIME_TRANSFER_ACTIVATE") == "1":
+        target_name = f"generation-{generation_number}-transfer-activate"
+    else:
+        target_name = f"generation-{generation_number}"
+    target_dir = COMPONENTS_TARGET_DIR / target_name
     environment["CARGO_TARGET_DIR"] = str(target_dir)
     subprocess.run(
         ["cargo", "build", "--release"],
@@ -649,7 +665,7 @@ def main() -> None:
     manifest = load_manifest()
     if manifest["formatVersion"] != 1: fail("unsupported source formatVersion")
     policy_number = int(os.environ.get("SLIME_GENERATION_NUMBER") or manifest["generation"])
-    generation1_components = build_rust_components(1)
+    generation1_components = build_rust_components(policy_number, candidate_identity=None)
     payloads: dict[str, bytes] = {manifest["kernelObject"]: kernel_image(kernel)}
     object_by_id = {obj["id"]: obj for obj in manifest["objects"]}
     for component in manifest["components"]:
@@ -665,7 +681,9 @@ def main() -> None:
         if not isinstance(stack, int) or stack <= 0 or stack % PAGE_SIZE or stack > MAX_STACK_BYTES:
             fail(f"component {component['name']}: invalid stack")
         payloads[component["object"]] = component_image(component["name"], generation2_components / component["name"], stack)
-    generation2 = build_generation(manifest, payloads, generation1[24:56], policy_number)
+    parent_override = os.environ.get("SLIME_GENERATION_PARENT")
+    generation2_parent = bytes.fromhex(parent_override) if parent_override else generation1[24:56]
+    generation2 = build_generation(manifest, payloads, generation2_parent, policy_number)
     recovery_components = build_rust_components(5, recovery=True)
     recovery = recovery_manifest(manifest)
     state_first_lba = int(os.environ.get("SLIME_RECOVERY_STATE_FIRST_LBA") or BOOTSTORE_CAPACITY // 512)

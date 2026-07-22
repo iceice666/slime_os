@@ -95,6 +95,9 @@ const POWERBOX_CHOOSER_CAPS: [SpawnGrant; 3] = [
     ),
     grant(20, RIGHT_INPUT_READ),
 ];
+const TRANSFER_RECEIVER_SLOT: u32 = 40;
+const TRANSFER_SOURCE_SLOT: u32 = 41;
+
 const POWERBOX_PROBE_CAPS: [SpawnGrant; 1] = [grant(38, RIGHT_SEND | RIGHT_RECV)];
 
 const fn grant(slot: u32, rights: u32) -> SpawnGrant {
@@ -116,6 +119,17 @@ fn main() {
         return;
     }
     slime_rt::debug_write(b"[init] launching component graph\n");
+    if option_env!("SLIME_TRANSFER_RECEIVER") == Some("1") {
+        if slime_rt::generation_receive(TRANSFER_RECEIVER_SLOT, TRANSFER_SOURCE_SLOT) == 0 {
+            slime_rt::debug_write(b"[init] generation transfer installed\n");
+            slime_rt::exit(0);
+        }
+        slime_rt::exit(1);
+    }
+    if option_env!("SLIME_TRANSFER_ACTIVATE") == Some("1") {
+        slime_rt::debug_write(b"[init] transferred generation healthy\n");
+        slime_rt::exit(0);
+    }
 
     if matches!(option_env!("SLIME_GENERATION_NUMBER"), Some("6" | "7")) {
         spawn_or_fail(14, &filesystem_caps());
@@ -134,7 +148,9 @@ fn main() {
         spawn_or_fail(1, &CONSOLE_CAPS);
         spawn_or_fail(3, &dango_caps());
         spawn_or_fail(5, &spawn_service_caps());
-        if option_env!("SLIME_DANGO_CHECK") != Some("1") {
+        if option_env!("SLIME_DANGO_CHECK") != Some("1")
+            && option_env!("SLIME_GENERATION_NUMBER") != Some("9")
+        {
             spawn_or_fail(8, storage_caps());
         }
     }

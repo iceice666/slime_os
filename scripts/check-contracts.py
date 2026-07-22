@@ -28,6 +28,7 @@ KERNEL_IMAGE_CONTRACT = ROOT / "contracts" / "kernel-image" / "v1"
 BOOTSTATE_CONTRACT = ROOT / "contracts" / "bootstate" / "v1"
 BOOTSTATE_TRACE_CONTRACT = ROOT / "contracts" / "bootstate" / "trace" / "v1"
 RECOVERY_CONTRACT = ROOT / "contracts" / "recovery" / "v1"
+TRANSFER_CONTRACT = ROOT / "contracts" / "transfer" / "v1"
 
 
 def run(*arguments: str) -> str:
@@ -107,6 +108,8 @@ subprocess.run(
     check=True,
 )
 
+run("check", str(TRANSFER_CONTRACT / "schema.zt"))
+
 for contract in (
     GENERATION_V2_CONTRACT,
     KERNEL_IMAGE_CONTRACT,
@@ -128,5 +131,6 @@ subprocess.run(
 
 print(
     "Generation source/binary, kernel image, BootState, BootState trace, recovery, "
-    "block, component, store, spawn, filesystem, powerbox, and generation-management contracts passed"
+    "block, component, store, spawn, filesystem, powerbox, generation-management, "
+    "and transfer contracts passed"
 )

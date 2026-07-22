@@ -41,6 +41,7 @@ pub mod store_service;
 pub mod syscall;
 pub mod task;
 pub mod time;
+pub mod transfer;
 pub mod trap;
 pub mod virtio_blk;
 

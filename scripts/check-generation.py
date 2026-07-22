@@ -236,11 +236,6 @@ def check_bootstore(data: bytes) -> dict:
             slots.append((label, decode_bootstate(data[offset : offset + BOOTSTATE_SLOT_BYTES])))
         except CheckError:
             pass
-    require(slots, "NoValidBootState")
-    if len(slots) == 2 and slots[0][1]["sequence"] == slots[1][1]["sequence"]:
-        require(slots[0][1] == slots[1][1], "ConflictingBootStateSlots")
-    slots.sort(key=lambda item: (item[1]["sequence"], item[0] == "A"), reverse=True)
-    selected_label, selected_state = slots[0]
     directory = []
     directory_start = BOOTSTORE_DIRECTORY_OFFSET + BOOTSTORE_HEADER.size
     previous_identity = bytes(32)
@@ -255,7 +250,12 @@ def check_bootstore(data: bytes) -> dict:
         directory.append(generation)
         previous_identity = identity
     root = sha256(b"".join(generation["identity"] for generation in directory))
-    require(root == selected_state["generation_root"], "BadGenerationRoot")
+    matching_slots = [item for item in slots if item[1]["generation_root"] == root]
+    require(matching_slots, "BadGenerationRoot")
+    if len(matching_slots) == 2 and matching_slots[0][1]["sequence"] == matching_slots[1][1]["sequence"]:
+        require(matching_slots[0][1] == matching_slots[1][1], "ConflictingBootStateSlots")
+    matching_slots.sort(key=lambda item: (item[1]["sequence"], item[0] == "A"), reverse=True)
+    selected_label, selected_state = matching_slots[0]
     by_identity = {generation["identity"]: generation for generation in directory}
     require(selected_state["known_good"] in by_identity, "MissingKnownGood")
     for generation in directory:

@@ -58,7 +58,7 @@ if [[ "${SLIME_BOOT_LOADER:-stage0}" == "limine" ]]; then
     MTOOLS_SKIP_CHECK=1 mcopy -i "$OUTPUT" "$GEN_DIR/generation.bin" ::/boot/generation.bin
 else
     MTOOLS_SKIP_CHECK=1 mcopy -i "$OUTPUT" "$STAGE0" ::/EFI/BOOT/BOOTX64.EFI
-    MTOOLS_SKIP_CHECK=1 mcopy -i "$OUTPUT" "$GEN_DIR/boot-store.bin" ::/boot/boot-store.bin
+    MTOOLS_SKIP_CHECK=1 mcopy -i "$OUTPUT" "${SLIME_BOOTSTORE_OVERRIDE:-$GEN_DIR/boot-store.bin}" ::/boot/boot-store.bin
     if [[ "${SLIME_RECOVERY_IMAGE:-}" == "1" ]]; then
         MTOOLS_SKIP_CHECK=1 mcopy -o -i "$OUTPUT" "$GEN_DIR/recovery-boot-store.bin" ::/boot/boot-store.bin
     fi
