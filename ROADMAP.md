@@ -567,7 +567,7 @@ Milestone 5 is complete only when all of the following are observed:
 
 ## Milestone 6: Native interactive environment
 
-**Status:** M6.1 through M6.3 done; M6.4 through M6.7 are planned below.
+**Status:** M6.1 through M6.6 done; M6.7 is planned below.
 
 Scope:
 
@@ -719,7 +719,7 @@ Exit condition: generations are inspected, staged, selected, and rolled back ent
 
 ### M6.6: Powerbox file dialog service
 
-**Status:** Not started.
+**Status:** Complete. The versioned powerbox protocol, console chooser, user-gesture mint, narrow-only single-object transfer, cancellation path, and provenance event are exercised by `just powerbox_check`.
 
 No UI stack exists until Milestone 7; the chooser is a console-based selection component. This slice implements the directions register entry 16 exit-condition sketch, not the general pattern beyond it.
 

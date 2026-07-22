@@ -75,6 +75,16 @@ path = "src/bin/generation-rollback.rs"
 test = false
 
 [[bin]]
+name = "powerbox-chooser"
+path = "src/bin/powerbox-chooser.rs"
+test = false
+
+[[bin]]
+name = "powerbox-probe"
+path = "src/bin/powerbox-probe.rs"
+test = false
+
+[[bin]]
 name = "init"
 path = "src/bin/init.rs"
 test = false

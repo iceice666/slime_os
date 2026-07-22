@@ -28,6 +28,8 @@ static GENERATION_INSPECT_ID: AtomicU64 = AtomicU64::new(0);
 static GENERATION_STAGE_ID: AtomicU64 = AtomicU64::new(0);
 static GENERATION_SELECT_ID: AtomicU64 = AtomicU64::new(0);
 static GENERATION_ROLLBACK_ID: AtomicU64 = AtomicU64::new(0);
+static POWERBOX_CHOOSER_ID: AtomicU64 = AtomicU64::new(0);
+static POWERBOX_PROBE_ID: AtomicU64 = AtomicU64::new(0);
 static GENERATION_NUMBER: AtomicU64 = AtomicU64::new(0);
 static RECOVERY_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -48,6 +50,10 @@ pub fn start() -> ! {
         crate::input::install_script(
             b"$(sysinfo)\n(with-env {MODE=ci} (with-cwd docs (with-stdin data $(echo ok))))\n$(inject)\n$(echo a b c)\n\x1b",
         );
+    }
+    if option_env!("SLIME_POWERBOX_CHECK") == Some("1") && generation.number == 9 {
+        crate::input::install_script(b"\n\x1b");
+        serial_println!("[powerbox] scripted check active");
     }
     serial_println!(
         "[generation] selected {:02x?} parent={:02x?} target={}",
@@ -123,6 +129,12 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
     let generation_rollback = generation
         .component_bytes("generation-rollback")
         .expect("generation-rollback object missing");
+    let powerbox_chooser = generation
+        .component_bytes("powerbox-chooser")
+        .expect("powerbox-chooser object missing");
+    let powerbox_probe = generation
+        .component_bytes("powerbox-probe")
+        .expect("powerbox-probe object missing");
     serial_println!("[generation] validating bootstrap grants");
 
     require_grant(
@@ -282,6 +294,28 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
             | RIGHT_DIRECTORY_LIST
             | RIGHT_DIRECTORY_DERIVE,
     );
+    require_grant(
+        generation,
+        "powerbox-rpc",
+        "powerbox-probe",
+        "powerbox-chooser",
+        RIGHT_SEND | RIGHT_RECV,
+    );
+    require_grant(
+        generation,
+        "powerbox-root",
+        "init",
+        "powerbox-chooser",
+        RIGHT_DIRECTORY_READ | RIGHT_DIRECTORY_DERIVE | RIGHT_TRANSFER,
+    );
+    require_grant(
+        generation,
+        "powerbox-input",
+        "init",
+        "powerbox-chooser",
+        RIGHT_INPUT_READ,
+    );
+    serial_println!("[generation] powerbox grants valid");
     serial_println!("[generation] filesystem grants valid");
     let storage_capability = match generation.number {
         2 | 3 => optional_block_function().map(|function| Capability {
@@ -313,6 +347,7 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
     let (generation_stage_client, generation_stage_service) = ipc::channel();
     let (generation_select_client, generation_select_service) = ipc::channel();
     let (generation_rollback_client, generation_rollback_service) = ipc::channel();
+    let (powerbox_client, powerbox_service) = ipc::channel();
     let mut caps = vec![
         Capability {
             object: KernelObject::EndpointFactory,
@@ -399,6 +434,10 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
             generation_rollback_service,
             RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
         ),
+        executable(generation, "powerbox-chooser", powerbox_chooser),
+        executable(generation, "powerbox-probe", powerbox_probe),
+        endpoint(powerbox_client, RIGHT_SEND | RIGHT_RECV),
+        endpoint(powerbox_service, RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER),
     ]);
     let spawn_budget = generation
         .component_named("init")
@@ -585,6 +624,8 @@ pub fn record_spawn(component: &'static str, id: task::TaskId) {
         "generation-stage" => &GENERATION_STAGE_ID,
         "generation-select" => &GENERATION_SELECT_ID,
         "generation-rollback" => &GENERATION_ROLLBACK_ID,
+        "powerbox-chooser" => &POWERBOX_CHOOSER_ID,
+        "powerbox-probe" => &POWERBOX_PROBE_ID,
         "recovery" => &RECOVERY_ID,
         _ => return,
     };
@@ -647,6 +688,11 @@ extern "C" fn on_idle() {
             GENERATION_ROLLBACK_ID.load(Ordering::Relaxed),
         ),
         ("recovery", RECOVERY_ID.load(Ordering::Relaxed)),
+        (
+            "powerbox-chooser",
+            POWERBOX_CHOOSER_ID.load(Ordering::Relaxed),
+        ),
+        ("powerbox-probe", POWERBOX_PROBE_ID.load(Ordering::Relaxed)),
     ];
     let mut healthy = true;
     for (name, id) in checks {
@@ -662,6 +708,8 @@ extern "C" fn on_idle() {
             && GENERATION_NUMBER.load(Ordering::Relaxed) == 7;
         let generation_command_check = option_env!("SLIME_GENERATION_CMD_CHECK") == Some("1")
             && GENERATION_NUMBER.load(Ordering::Relaxed) == 8;
+        let powerbox_check = option_env!("SLIME_POWERBOX_CHECK") == Some("1")
+            && GENERATION_NUMBER.load(Ordering::Relaxed) == 9;
         let optional_generation_command_component = generation_command_check
             && matches!(name, "init" | "generation-manager")
             && matches!(
@@ -683,12 +731,26 @@ extern "C" fn on_idle() {
         let optional_dango_check_probe = dango_check
             && name == "directory-probe"
             && matches!(reason, Some(task::TermReason::Exit(1)));
+        let optional_powerbox_component = powerbox_check
+            && matches!(
+                name,
+                "init" | "console" | "powerbox-chooser" | "powerbox-probe"
+            )
+            && matches!(
+                reason,
+                Some(task::TermReason::Exit(0) | task::TermReason::PeerLoss)
+            );
+        let optional_powerbox_manager = powerbox_check
+            && name == "generation-manager"
+            && matches!(reason, Some(task::TermReason::Exit(1)));
         healthy &= matches!(reason, Some(task::TermReason::Exit(0)))
             || optional_storage_absent
             || optional_confirmation_absent
             || optional_dango_check_service
             || optional_dango_check_probe
-            || optional_generation_command_component;
+            || optional_generation_command_component
+            || optional_powerbox_component
+            || optional_powerbox_manager;
     }
     if healthy {
         if crate::boot::bootstate().is_some_and(|state| state.running_pending) {

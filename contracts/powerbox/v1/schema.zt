@@ -1,0 +1,95 @@
+-- Slime OS powerbox protocol, version 1.
+-- Requests and replies are fixed 64-byte IPC messages. A successful reply
+-- transfers exactly one Directory capability; cancellation and failures transfer none.
+
+env ::= import stdlib.env;
+fs ::= import stdlib.fs;
+gen ::= import "gen_rust.zt";
+t ::= import stdlib.text;
+
+formatVersion :: Int = 1;
+requestLen :: Int = 64;
+replyLen :: Int = 64;
+maxPurposeBytes :: Int = 40;
+objectKindFile :: Int = 1;
+replyFlagSelected :: Int = 1;
+replyFlagCancelled :: Int = 2;
+
+WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
+
+PowerboxRequest :: type {
+  magic : Int;
+  version : Int;
+  object_kind : Int;
+  reserved0 : Int;
+  purpose_len : Int;
+  requested_rights : Int;
+  purpose : Int;
+  reserved : Int;
+};
+
+PowerboxReply :: type {
+  magic : Int;
+  version : Int;
+  status : Int;
+  flags : Int;
+  object_kind : Int;
+  purpose_len : Int;
+  reserved0 : Int;
+  granted_rights : Int;
+  event_id : Int;
+  selected_path : Int;
+  purpose : Int;
+};
+
+requestSchema ::= schema PowerboxRequest;
+replySchema ::= schema PowerboxReply;
+
+requestLayout :: List WireField = {
+  { name = "magic"; width = 4; signed = false; byteArray = false; };
+  { name = "version"; width = 4; signed = false; byteArray = false; };
+  { name = "object_kind"; width = 1; signed = false; byteArray = false; };
+  { name = "reserved0"; width = 1; signed = false; byteArray = false; };
+  { name = "purpose_len"; width = 2; signed = false; byteArray = false; };
+  { name = "requested_rights"; width = 4; signed = false; byteArray = false; };
+  { name = "purpose"; width = 40; signed = false; byteArray = true; };
+  { name = "reserved"; width = 8; signed = false; byteArray = true; };
+};
+
+replyLayout :: List WireField = {
+  { name = "magic"; width = 4; signed = false; byteArray = false; };
+  { name = "version"; width = 4; signed = false; byteArray = false; };
+  { name = "status"; width = 4; signed = true; byteArray = false; };
+  { name = "flags"; width = 1; signed = false; byteArray = false; };
+  { name = "object_kind"; width = 1; signed = false; byteArray = false; };
+  { name = "purpose_len"; width = 2; signed = false; byteArray = false; };
+  { name = "reserved0"; width = 4; signed = false; byteArray = false; };
+  { name = "granted_rights"; width = 4; signed = false; byteArray = false; };
+  { name = "event_id"; width = 8; signed = false; byteArray = false; };
+  { name = "selected_path"; width = 16; signed = false; byteArray = true; };
+  { name = "purpose"; width = 16; signed = false; byteArray = true; };
+};
+
+format ::= {
+  formatVersion = formatVersion;
+  requestLen = requestLen;
+  replyLen = replyLen;
+  maxPurposeBytes = maxPurposeBytes;
+  objectKindFile = objectKindFile;
+  replyFlagSelected = replyFlagSelected;
+  replyFlagCancelled = replyFlagCancelled;
+  requestFields = requestSchema.fields ?? {;};
+  replyFields = replySchema.fields ?? {;};
+  requestLayout = requestLayout;
+  replyLayout = replyLayout;
+};
+
+main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }
+  = caps => [
+    root := env.get caps.env "SLIME_POWERBOX_BINDINGS_ROOT" ?? ".";
+    bindings := gen.render format;
+    path := t.join "" { root; "/components/proto/src/powerbox.rs"; };
+    fs.writeAll caps.write path bindings.rust
+  ];
+
+main

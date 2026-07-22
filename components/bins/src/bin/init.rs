@@ -87,6 +87,15 @@ const GENERATION_INSPECT_CAPS: [SpawnGrant; 1] = [grant(27, RIGHT_SEND | RIGHT_R
 const GENERATION_STAGE_CAPS: [SpawnGrant; 1] = [grant(28, RIGHT_SEND | RIGHT_RECV)];
 const GENERATION_SELECT_CAPS: [SpawnGrant; 1] = [grant(29, RIGHT_SEND | RIGHT_RECV)];
 const GENERATION_ROLLBACK_CAPS: [SpawnGrant; 1] = [grant(30, RIGHT_SEND | RIGHT_RECV)];
+const POWERBOX_CHOOSER_CAPS: [SpawnGrant; 3] = [
+    grant(39, RIGHT_SEND | RIGHT_RECV),
+    grant(
+        19,
+        RIGHT_DIRECTORY_READ | RIGHT_DIRECTORY_DERIVE | RIGHT_TRANSFER,
+    ),
+    grant(20, RIGHT_INPUT_READ),
+];
+const POWERBOX_PROBE_CAPS: [SpawnGrant; 1] = [grant(38, RIGHT_SEND | RIGHT_RECV)];
 
 const fn grant(slot: u32, rights: u32) -> SpawnGrant {
     SpawnGrant { slot, rights }
@@ -112,7 +121,16 @@ fn main() {
         spawn_or_fail(14, &filesystem_caps());
         spawn_or_fail(15, &DIRECTORY_PROBE_CAPS);
     }
-    if option_env!("SLIME_GENERATION_CMD_CHECK") != Some("1") {
+    if option_env!("SLIME_POWERBOX_CHECK") == Some("1") {
+        spawn_or_fail(1, &CONSOLE_CAPS);
+        spawn_or_fail(36, &POWERBOX_CHOOSER_CAPS);
+        spawn_and_wait(37, &POWERBOX_PROBE_CAPS);
+        slime_rt::debug_write(b"[init] powerbox scenario complete\n");
+        slime_rt::exit(0);
+    }
+    if option_env!("SLIME_GENERATION_CMD_CHECK") != Some("1")
+        && option_env!("SLIME_POWERBOX_CHECK") != Some("1")
+    {
         spawn_or_fail(1, &CONSOLE_CAPS);
         spawn_or_fail(3, &dango_caps());
         spawn_or_fail(5, &spawn_service_caps());

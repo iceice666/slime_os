@@ -26,6 +26,12 @@ generation_cmd_check: contracts_check generation_check
     python3 scripts/check-generation-commands.py
 
 
+# M6.6: console chooser, user-gesture mint, narrow-only single-object grant,
+# cancellation, bypass denial, and provenance event.
+powerbox_check: contracts_check generation_check
+    cd components && cargo test --target x86_64-unknown-linux-gnu -p slime-proto --test powerbox
+    python3 scripts/check-powerbox.py
+
 # M6.1: capability factories, narrow derive-copy spawn grants, bounded task
 # accounting, supervision result shape, and generation-v2 determinism.
 spawn_prereq_check: contracts_check generation_check
@@ -156,6 +162,10 @@ spawn_gen:
 # Regenerate kernel + component generation-management protocol bindings.
 generation_management_gen:
     python3 scripts/generate-generation-management-bindings.py
+
+# Regenerate userspace powerbox protocol bindings.
+powerbox_gen:
+    python3 scripts/generate-powerbox-bindings.py
 
 # Regenerate host constants for generation v2, kernel image, and BootState.
 boot_gen:

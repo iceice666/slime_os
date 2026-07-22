@@ -4,6 +4,7 @@
 pub mod block;
 pub mod fs;
 pub mod generation;
+pub mod powerbox;
 pub mod spawn;
 pub mod store;
 
@@ -47,6 +48,45 @@ fn valid_name(name: &[u8], allow_empty: bool) -> bool {
         && name
             .iter()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'.' | b'_' | b'-'))
+}
+
+pub fn valid_powerbox_request(request: &powerbox::WirePowerboxRequest) -> bool {
+    let purpose_len = request.purpose_len as usize;
+    request.magic == powerbox::POWERBOX_MAGIC
+        && request.version == powerbox::FORMAT_VERSION
+        && request.object_kind == powerbox::OBJECT_KIND_FILE
+        && request.reserved0 == 0
+        && request.reserved.iter().all(|byte| *byte == 0)
+        && purpose_len > 0
+        && purpose_len <= powerbox::MAX_PURPOSE_BYTES
+        && request.purpose[purpose_len..].iter().all(|byte| *byte == 0)
+        && request.purpose[..purpose_len]
+            .iter()
+            .all(|byte| byte.is_ascii_graphic() || *byte == b' ')
+        && request.requested_rights != 0
+}
+
+pub fn valid_powerbox_reply(reply: &powerbox::WirePowerboxReply) -> bool {
+    if reply.magic != powerbox::POWERBOX_MAGIC
+        || reply.version != powerbox::FORMAT_VERSION
+        || reply.object_kind != powerbox::OBJECT_KIND_FILE
+        || reply.reserved0 != 0
+        || reply.purpose_len as usize > reply.purpose.len()
+        || reply.purpose[reply.purpose_len as usize..]
+            .iter()
+            .any(|byte| *byte != 0)
+    {
+        return false;
+    }
+    match reply.flags {
+        powerbox::REPLY_FLAG_SELECTED => {
+            reply.status == 0 && reply.granted_rights != 0 && reply.event_id != 0
+        }
+        powerbox::REPLY_FLAG_CANCELLED => {
+            reply.status == 0 && reply.granted_rights == 0 && reply.event_id == 0
+        }
+        _ => reply.status < 0 && reply.granted_rights == 0 && reply.event_id == 0,
+    }
 }
 
 pub fn valid_spawn_request(request: &spawn::WireSpawnRequest) -> bool {

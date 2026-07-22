@@ -25,6 +25,8 @@
     { id = "sha256:generation-stage"; kind = "component"; size = 32768; };
     { id = "sha256:generation-select"; kind = "component"; size = 32768; };
     { id = "sha256:generation-rollback"; kind = "component"; size = 32768; };
+    { id = "sha256:powerbox-chooser"; kind = "component"; size = 65536; };
+    { id = "sha256:powerbox-probe"; kind = "component"; size = 65536; };
   ];
 
   components = [
@@ -169,6 +171,22 @@
       object = "sha256:generation-rollback";
       role = "application";
       dependencies = ["generation-manager";];
+      spawnBudget = 0;
+      commandProfile = [];
+    };
+    {
+      name = "powerbox-chooser";
+      object = "sha256:powerbox-chooser";
+      role = "service";
+      dependencies = ["init";];
+      spawnBudget = 0;
+      commandProfile = [];
+    };
+    {
+      name = "powerbox-probe";
+      object = "sha256:powerbox-probe";
+      role = "application";
+      dependencies = ["powerbox-chooser";];
       spawnBudget = 0;
       commandProfile = [];
     };
@@ -336,6 +354,27 @@
       target = "directory-probe";
       rights = ["directoryRead"; "directoryWrite"; "directoryList"; "directoryDerive";];
       transferable = true;
+    };
+    {
+      name = "powerbox-rpc";
+      source = "powerbox-probe";
+      target = "powerbox-chooser";
+      rights = ["send"; "recv";];
+      transferable = false;
+    };
+    {
+      name = "powerbox-root";
+      source = "init";
+      target = "powerbox-chooser";
+      rights = ["directoryRead"; "directoryDerive";];
+      transferable = true;
+    };
+    {
+      name = "powerbox-input";
+      source = "init";
+      target = "powerbox-chooser";
+      rights = ["inputRead";];
+      transferable = false;
     };
   ];
 
