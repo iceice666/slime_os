@@ -49,12 +49,41 @@ fn valid_name(name: &[u8], allow_empty: bool) -> bool {
 }
 
 pub fn valid_spawn_request(request: &spawn::WireSpawnRequest) -> bool {
-    request.magic == spawn::SPAWN_MAGIC
-        && request.version == spawn::FORMAT_VERSION
+    if request.magic != spawn::SPAWN_MAGIC || request.version != spawn::FORMAT_VERSION {
+        return false;
+    }
+    if request.flags == spawn::REQUEST_FLAG_WAIT {
+        return request.command_len == 0
+            && request.argument_count == 0
+            && request.environment_count == 0
+            && request.capability_roles == 0
+            && request.command.iter().all(|byte| *byte == 0)
+            && request.environment.iter().all(|byte| *byte == 0)
+            && u64::from_le_bytes(request.arguments) != 0
+            && request.grant_rights == 0
+            && request.reserved.iter().all(|byte| *byte == 0);
+    }
+    request.flags == 0
         && request.command_len > 0
         && request.command_len as usize <= spawn::MAX_COMMAND_BYTES
         && request.argument_count as usize <= spawn::MAX_ARGUMENTS
         && request.environment_count as usize <= spawn::MAX_ENVIRONMENT
+        && packed_fields_valid(&request.arguments, request.argument_count as usize)
+        && packed_fields_valid(&request.environment, request.environment_count as usize)
+}
+
+fn packed_fields_valid<const N: usize>(bytes: &[u8; N], count: usize) -> bool {
+    let mut offset = 0;
+    for _ in 0..count {
+        let Some(length) = bytes.get(offset).copied().map(usize::from) else {
+            return false;
+        };
+        if length == 0 || offset + 1 + length > bytes.len() {
+            return false;
+        }
+        offset += 1 + length;
+    }
+    bytes[offset..].iter().all(|byte| *byte == 0)
 }
 
 pub fn valid_spawn_reply(reply: &spawn::WireSpawnReply) -> bool {

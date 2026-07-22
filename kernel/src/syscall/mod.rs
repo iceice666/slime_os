@@ -1,8 +1,8 @@
 use crate::capability::{
     Capability, KernelObject, RIGHT_BLOCK_READ, RIGHT_BLOCK_WRITE, RIGHT_BOOT_UPDATE,
     RIGHT_DIRECTORY_DERIVE, RIGHT_DIRECTORY_LIST, RIGHT_DIRECTORY_READ, RIGHT_DIRECTORY_WRITE,
-    RIGHT_ENDPOINT_CREATE, RIGHT_HEALTH_CONFIRM, RIGHT_RECV, RIGHT_SEND, RIGHT_STORE_READ,
-    RIGHT_STORE_WRITE, RIGHT_TRANSFER,
+    RIGHT_ENDPOINT_CREATE, RIGHT_HEALTH_CONFIRM, RIGHT_INPUT_READ, RIGHT_RECV, RIGHT_SEND,
+    RIGHT_STORE_READ, RIGHT_STORE_WRITE, RIGHT_TRANSFER,
 };
 use crate::ipc::{self, MAX_CAPS_PER_MSG, MAX_MSG};
 use crate::task::{self, TermReason};
@@ -25,6 +25,7 @@ pub const SYS_CAP_DROP: u64 = 13;
 pub const SYS_DIRECTORY_INSPECT: u64 = 14;
 pub const SYS_DIRECTORY_DERIVE: u64 = 15;
 pub const SYS_DIRECTORY_COMMIT: u64 = 16;
+pub const SYS_INPUT_READ: u64 = 17;
 
 const USER_TOP: u64 = 0x0000_8000_0000_0000;
 
@@ -62,6 +63,7 @@ pub fn dispatch(frame: &mut UserFrame) {
         SYS_DIRECTORY_INSPECT => sys_directory_inspect(frame),
         SYS_DIRECTORY_DERIVE => sys_directory_derive(frame),
         SYS_DIRECTORY_COMMIT => sys_directory_commit(frame),
+        SYS_INPUT_READ => sys_input_read(frame),
         _ => frame.rax = ipc::ERR_INVALID_ARG as u64,
     }
 }
@@ -619,6 +621,46 @@ fn sys_directory_commit(frame: &mut UserFrame) {
         Some(false) => ipc::ERR_WOULDBLOCK as u64,
         None => ipc::ERR_BAD_CAP as u64,
     };
+}
+
+fn sys_input_read(frame: &mut UserFrame) {
+    let authorized = task::with_current_mut(|task| {
+        task.caps.get(frame.rdi as u32).is_some_and(|cap| {
+            matches!(cap.object, KernelObject::Input) && cap.rights & RIGHT_INPUT_READ != 0
+        })
+    });
+    if !authorized {
+        frame.rax = ipc::ERR_BAD_CAP as u64;
+        return;
+    }
+    crate::input::pump_script();
+    let Some(event) = crate::input::pop_event() else {
+        frame.rax = ipc::ERR_WOULDBLOCK as u64;
+        return;
+    };
+    frame.rax = 0;
+    frame.rdx = encode_key_event(event);
+}
+
+fn encode_key_event(event: crate::input::KeyEvent) -> u64 {
+    let code = match event.code {
+        crate::input::KeyCode::Escape => 1,
+        crate::input::KeyCode::Backspace => 2,
+        crate::input::KeyCode::Tab => 3,
+        crate::input::KeyCode::Enter => 4,
+        crate::input::KeyCode::LeftControl => 5,
+        crate::input::KeyCode::LeftShift => 6,
+        crate::input::KeyCode::RightShift => 7,
+        crate::input::KeyCode::LeftAlt => 8,
+        crate::input::KeyCode::Space => 9,
+        crate::input::KeyCode::Up => 10,
+        crate::input::KeyCode::Down => 11,
+        crate::input::KeyCode::Left => 12,
+        crate::input::KeyCode::Right => 13,
+        crate::input::KeyCode::Character(character) => 0x100 | character as u32,
+        crate::input::KeyCode::Unknown(code) => 0x1_0000 | u32::from(code),
+    };
+    u64::from(code) | u64::from(event.pressed) << 32
 }
 
 fn reason_code(reason: task::UserFaultReason) -> u64 {

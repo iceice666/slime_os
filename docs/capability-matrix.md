@@ -32,7 +32,7 @@ Every new object or right must satisfy these rules before it ships:
 
 ## Current matrix
 
-Rights are a flat `u32`; bits 16–31 are free.
+Rights are a flat `u32`; bits 24–31 are free.
 
 | Object | Right (bit) | Gated operation | Creation authority | Gate status |
 | --- | --- | --- | --- | --- |
@@ -59,6 +59,7 @@ Rights are a flat `u32`; bits 16–31 are free.
 | Directory | DIRECTORY_WRITE (20) | `SYS_DIRECTORY_INSPECT` before mutation and `SYS_DIRECTORY_COMMIT` for atomic root swap | same | gated (M6.3) |
 | Directory | DIRECTORY_LIST (21) | `SYS_DIRECTORY_INSPECT` before bounded enumeration | same | gated (M6.3) |
 | Directory | DIRECTORY_DERIVE (22) | `SYS_DIRECTORY_DERIVE` for a subdirectory-scoped, narrow-rights copy | same; powerbox minting needs only this operation | gated (M6.3) |
+| Input | INPUT_READ (23) | `SYS_INPUT_READ` drains one decoded keyboard event | kernel bootstrap, only through a generation grant | gated (M6.4) |
 
 Semantics not visible in the table:
 
@@ -89,6 +90,7 @@ Semantics not visible in the table:
 | Directory path bytes | `MAX_DIRECTORY_PATH = 48` | `SYS_DIRECTORY_DERIVE`; filesystem schema |
 | Directory path depth | `MAX_DIRECTORY_DEPTH = 4` | `DirectoryAuthority::derive`; filesystem schema |
 | Directory entries per snapshot | `MAX_ENTRIES = 16` | filesystem protocol and snapshot decoder |
+| Decoded keyboard events | `QUEUE_CAPACITY = 128` | oldest event dropped by the kernel input queue |
 
 `MAX_TASKS` is coupled to the heap: each task eagerly allocates a 32 KiB
 kernel stack, so the global ceiling reserves at most 1 MiB of the 24 MiB heap.

@@ -4,8 +4,9 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use crate::capability::{
     Capability, DirectoryAuthority, KernelObject, PciFunctionInfo, RIGHT_BLOCK_READ,
     RIGHT_BLOCK_WRITE, RIGHT_BOOT_UPDATE, RIGHT_DIRECTORY_DERIVE, RIGHT_DIRECTORY_LIST,
-    RIGHT_DIRECTORY_READ, RIGHT_DIRECTORY_WRITE, RIGHT_EXEC, RIGHT_HEALTH_CONFIRM, RIGHT_RECV,
-    RIGHT_SEND, RIGHT_SPAWN, RIGHT_STORE_READ, RIGHT_STORE_WRITE, RIGHT_TRANSFER,
+    RIGHT_DIRECTORY_READ, RIGHT_DIRECTORY_WRITE, RIGHT_EXEC, RIGHT_HEALTH_CONFIRM,
+    RIGHT_INPUT_READ, RIGHT_RECV, RIGHT_SEND, RIGHT_SPAWN, RIGHT_STORE_READ, RIGHT_STORE_WRITE,
+    RIGHT_TRANSFER,
 };
 use crate::generation::{self, Generation};
 use crate::{ipc, println, serial_println, task};
@@ -35,6 +36,11 @@ pub fn start() -> ! {
     );
     crate::generation_manager::init();
     GENERATION_NUMBER.store(generation.number, Ordering::Relaxed);
+    if option_env!("SLIME_DANGO_CHECK") == Some("1") && generation.number == 7 {
+        crate::input::install_script(
+            b"$(sysinfo)\n(with-env {MODE=ci} (with-cwd docs (with-stdin data $(echo ok))))\n$(inject)\n$(echo a b c)\n\x1b",
+        );
+    }
     serial_println!(
         "[generation] selected {:02x?} parent={:02x?} target={}",
         generation.identity,
@@ -115,11 +121,18 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
     require_grant(
         generation,
         "spawn-service-sysinfo",
-        "init",
         "spawn-service",
+        "sysinfo",
         RIGHT_EXEC | RIGHT_SPAWN,
     );
-    serial_println!("[generation] sysinfo executable grant valid");
+    require_grant(
+        generation,
+        "spawn-service-echo",
+        "spawn-service",
+        "echo-agent",
+        RIGHT_EXEC | RIGHT_SPAWN,
+    );
+    serial_println!("[generation] command executable grants valid");
     require_grant(
         generation,
         "console-output",
@@ -128,6 +141,36 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         RIGHT_SEND | RIGHT_TRANSFER,
     );
     serial_println!("[generation] console grant valid");
+    require_grant(
+        generation,
+        "console-input",
+        "init",
+        "dango",
+        RIGHT_INPUT_READ,
+    );
+    serial_println!("[generation] input grant valid");
+    require_grant(
+        generation,
+        "dango-cwd-root",
+        "init",
+        "dango",
+        RIGHT_DIRECTORY_READ | RIGHT_DIRECTORY_DERIVE | RIGHT_TRANSFER,
+    );
+    require_grant(
+        generation,
+        "dango-endpoint-factory",
+        "init",
+        "dango",
+        crate::capability::RIGHT_ENDPOINT_CREATE,
+    );
+    require_grant(
+        generation,
+        "spawn-service-endpoint-factory",
+        "init",
+        "spawn-service",
+        crate::capability::RIGHT_ENDPOINT_CREATE,
+    );
+    serial_println!("[generation] Dango context grants valid");
     require_grant(
         generation,
         "block-read",
@@ -194,42 +237,32 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
             | RIGHT_DIRECTORY_DERIVE,
     );
     serial_println!("[generation] filesystem grants valid");
-    let (storage_component, storage_capability) = match generation.number {
-        2 => (
-            storage_writer,
-            Capability {
-                object: KernelObject::BlockDevice(default_block_function()),
-                rights: RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE | RIGHT_TRANSFER,
-            },
-        ),
-        3 => (
-            storage_fault_probe,
-            Capability {
-                object: KernelObject::BlockDevice(default_block_function()),
-                rights: RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE | RIGHT_TRANSFER,
-            },
-        ),
-        4 => (
-            storage_store_probe,
-            Capability {
-                object: KernelObject::ObjectStore,
-                rights: RIGHT_STORE_READ | RIGHT_STORE_WRITE | RIGHT_TRANSFER,
-            },
-        ),
-        _ => (
-            storage_probe,
-            Capability {
-                object: KernelObject::BlockDevice(default_block_function()),
-                rights: RIGHT_BLOCK_READ | RIGHT_TRANSFER,
-            },
-        ),
+    let storage_capability = match generation.number {
+        2 | 3 => optional_block_function().map(|function| Capability {
+            object: KernelObject::BlockDevice(function),
+            rights: RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE | RIGHT_TRANSFER,
+        }),
+        4 => Some(Capability {
+            object: KernelObject::ObjectStore,
+            rights: RIGHT_STORE_READ | RIGHT_STORE_WRITE | RIGHT_TRANSFER,
+        }),
+        _ => optional_block_function().map(|function| Capability {
+            object: KernelObject::BlockDevice(function),
+            rights: RIGHT_BLOCK_READ | RIGHT_TRANSFER,
+        }),
+    };
+    let storage_component = match generation.number {
+        2 => storage_writer,
+        3 => storage_fault_probe,
+        4 => storage_store_probe,
+        _ => storage_probe,
     };
     serial_println!("[generation] bootstrap grants valid");
 
     let (console_output, dango_output) = ipc::channel();
     let (dango_spawn, service_spawn) = ipc::channel();
     let (directory_client, directory_service) = ipc::channel();
-    let caps = vec![
+    let mut caps = vec![
         Capability {
             object: KernelObject::EndpointFactory,
             rights: crate::capability::RIGHT_ENDPOINT_CREATE,
@@ -242,10 +275,22 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         executable(generation, "sysinfo", sysinfo),
         executable(
             generation,
+            "echo-agent",
+            generation
+                .component_bytes("echo-agent")
+                .expect("echo-agent object missing"),
+        ),
+        executable(
+            generation,
             storage_component_name(generation.number),
             storage_component,
         ),
-        storage_capability,
+    ];
+    caps.push(storage_capability.unwrap_or(Capability {
+        object: KernelObject::ObjectStore,
+        rights: RIGHT_STORE_READ,
+    }));
+    caps.extend([
         executable(generation, "generation-manager", generation_manager),
         Capability {
             object: KernelObject::GenerationControl,
@@ -269,12 +314,17 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
                 | RIGHT_DIRECTORY_DERIVE
                 | RIGHT_TRANSFER,
         },
-    ];
+        Capability {
+            object: KernelObject::Input,
+            rights: RIGHT_INPUT_READ | RIGHT_TRANSFER,
+        },
+    ]);
 
     let spawn_budget = generation
         .component_named("init")
         .expect("init component missing")
         .spawn_budget;
+    serial_println!("[generation] spawning init");
     serial_println!(
         "[generation] launching init with {} capabilities",
         caps.len()
@@ -339,15 +389,11 @@ fn launch_recovery_init(generation: &Generation<'static>) -> task::TaskId {
     .expect("failed to launch recovery init")
 }
 
-fn default_block_function() -> PciFunctionInfo {
-    crate::pci::enumerate()
-        .expect("block-device enumeration failed")
-        .into_iter()
-        .find(|function| {
-            (function.vendor_id == 0x1af4 && function.device_id == 0x1042)
-                || function.class_code & 0x00ff_ffff == 0x010802
-        })
-        .expect("block device missing")
+fn optional_block_function() -> Option<PciFunctionInfo> {
+    crate::pci::enumerate().ok()?.into_iter().find(|function| {
+        (function.vendor_id == 0x1af4 && function.device_id == 0x1042)
+            || function.class_code & 0x00ff_ffff == 0x010802
+    })
 }
 
 fn recovery_index<'a>(
@@ -512,12 +558,28 @@ extern "C" fn on_idle() {
         let optional_storage_absent = name == "storage-probe"
             && (!storage_probe_required() || directory_run)
             && matches!(reason, Some(task::TermReason::Exit(1)));
+        let dango_check = option_env!("SLIME_DANGO_CHECK") == Some("1")
+            && GENERATION_NUMBER.load(Ordering::Relaxed) == 7;
         let optional_confirmation_absent = name == "generation-manager"
-            && directory_run
+            && (directory_run || dango_check)
+            && matches!(reason, Some(task::TermReason::Exit(1)));
+        let optional_dango_check_service = dango_check
+            && matches!(
+                name,
+                "init" | "console" | "dango" | "spawn-service" | "filesystem-service"
+            )
+            && matches!(
+                reason,
+                Some(task::TermReason::Exit(0) | task::TermReason::PeerLoss)
+            );
+        let optional_dango_check_probe = dango_check
+            && name == "directory-probe"
             && matches!(reason, Some(task::TermReason::Exit(1)));
         healthy &= matches!(reason, Some(task::TermReason::Exit(0)))
             || optional_storage_absent
-            || optional_confirmation_absent;
+            || optional_confirmation_absent
+            || optional_dango_check_service
+            || optional_dango_check_probe;
     }
     if healthy {
         if crate::boot::bootstate().is_some_and(|state| state.running_pending) {

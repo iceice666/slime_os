@@ -664,7 +664,7 @@ Exit condition: components browse and mutate a namespace only through explicit d
 
 ### M6.4: Minimal Dango implementation and core runtime
 
-**Status:** Not started. `deps/dango` currently contains the language design notes, semantics, and grammar only; there is no implementation scaffold.
+**Status:** Complete. Native Dango provides the bounded interactive command subset, capability-mediated launch contexts, structured termination, and deterministic scripted QEMU verification.
 
 Scope boundary: this slice delivers the interactive command subset — REPL, `$(...)` launch, explicit command context, and structured termination. The full Hindley-Milner, row-polymorphism, and effect-inference machinery from `deps/dango/docs/semantics.md` is not M6 scope.
 

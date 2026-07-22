@@ -21,6 +21,7 @@ const QUEUE_CAPACITY: usize = 128;
 static KEYBOARD_PRESENT: AtomicBool = AtomicBool::new(false);
 static QUEUE: Mutex<KeyQueue> = Mutex::new(KeyQueue::new());
 static DECODER: Mutex<ScanDecoder> = Mutex::new(ScanDecoder::new());
+static SCRIPT: Mutex<ScriptInput> = Mutex::new(ScriptInput::new());
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputError {
@@ -109,6 +110,51 @@ pub fn present() -> bool {
 
 pub fn pop_event() -> Option<KeyEvent> {
     without_interrupts(|| QUEUE.lock().pop())
+}
+
+pub fn install_script(input: &'static [u8]) {
+    *SCRIPT.lock() = ScriptInput { input, cursor: 0 };
+}
+
+pub fn pump_script() {
+    let next = {
+        let mut script = SCRIPT.lock();
+        let Some(byte) = script.input.get(script.cursor).copied() else {
+            return;
+        };
+        script.cursor += 1;
+        byte
+    };
+    let code = match next {
+        0x1b => KeyCode::Escape,
+        b' ' => KeyCode::Space,
+        b'\n' => KeyCode::Enter,
+        byte if byte.is_ascii() => KeyCode::Character(byte as char),
+        _ => return,
+    };
+    without_interrupts(|| {
+        let mut queue = QUEUE.lock();
+        if queue.len < QUEUE_CAPACITY {
+            queue.push(KeyEvent {
+                code,
+                pressed: true,
+            });
+        }
+    });
+}
+
+struct ScriptInput {
+    input: &'static [u8],
+    cursor: usize,
+}
+
+impl ScriptInput {
+    const fn new() -> Self {
+        Self {
+            input: &[],
+            cursor: 0,
+        }
+    }
 }
 
 pub(crate) fn on_interrupt() {

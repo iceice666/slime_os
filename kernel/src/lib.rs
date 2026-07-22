@@ -122,6 +122,9 @@ macro_rules! setup_test_entry {
         pub unsafe extern "C" fn _start() -> ! {
             $crate::limine::ensure_linked();
             unsafe { $crate::boot::init_from_limine() };
+            $crate::gdt::init();
+            $crate::interrupts::init();
+            $crate::memory::init();
             test_main();
             $crate::hlt_loop()
         }

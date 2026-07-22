@@ -22,6 +22,7 @@ const SYS_CAP_DROP: u64 = 13;
 const SYS_DIRECTORY_INSPECT: u64 = 14;
 const SYS_DIRECTORY_DERIVE: u64 = 15;
 const SYS_DIRECTORY_COMMIT: u64 = 16;
+const SYS_INPUT_READ: u64 = 17;
 
 pub const ERR_SUCCESS: i64 = 0;
 pub const ERR_BAD_CAP: i64 = -1;
@@ -53,6 +54,31 @@ pub enum Termination {
     Timeout,
     PeerLoss,
     Unhealthy,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InputKey {
+    Escape,
+    Backspace,
+    Tab,
+    Enter,
+    LeftControl,
+    LeftShift,
+    RightShift,
+    LeftAlt,
+    Space,
+    Up,
+    Down,
+    Left,
+    Right,
+    Character(char),
+    Unknown(u16),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InputEvent {
+    pub key: InputKey,
+    pub pressed: bool,
 }
 
 #[inline(always)]
@@ -253,6 +279,43 @@ pub fn directory_commit(slot: u32, expected: &[u8; 32], new: &[u8; 32]) -> i64 {
             0,
         )
     }
+}
+
+/// Reads one decoded keyboard event through an explicit input capability.
+pub fn input_read(slot: u32) -> Result<Option<InputEvent>, i64> {
+    let (result, encoded) = unsafe { raw_syscall_pair(SYS_INPUT_READ, slot as u64, 0, 0, 0, 0) };
+    if result == ERR_WOULDBLOCK {
+        return Ok(None);
+    }
+    if result < 0 {
+        return Err(result);
+    }
+    let code = encoded as u32;
+    let key = match code {
+        1 => InputKey::Escape,
+        2 => InputKey::Backspace,
+        3 => InputKey::Tab,
+        4 => InputKey::Enter,
+        5 => InputKey::LeftControl,
+        6 => InputKey::LeftShift,
+        7 => InputKey::RightShift,
+        8 => InputKey::LeftAlt,
+        9 => InputKey::Space,
+        10 => InputKey::Up,
+        11 => InputKey::Down,
+        12 => InputKey::Left,
+        13 => InputKey::Right,
+        value if value & 0x1_0000 != 0 => InputKey::Unknown(value as u16),
+        value if value & 0x100 != 0 => {
+            let character = char::from_u32(value & !0x100).ok_or(ERR_INVALID_ARG)?;
+            InputKey::Character(character)
+        }
+        _ => return Err(ERR_INVALID_ARG),
+    };
+    Ok(Some(InputEvent {
+        key,
+        pressed: encoded >> 32 != 0,
+    }))
 }
 
 /// Writes `bytes` to the kernel debug/serial log. Returns the byte count

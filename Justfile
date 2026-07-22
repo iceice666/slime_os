@@ -37,6 +37,11 @@ spawn_service_check: contracts_check generation_check
         -drive if=none,id=slime-storage,format=raw,readonly=on,file=/tmp/slime-os-spawn-service.img \
         -device virtio-blk-pci,drive=slime-storage,disable-legacy=on,queue-size=8
 
+# M6.4: native Dango command parser, explicit launch contexts, keyboard REPL,
+# profile-mediated spawn, and structured termination reporting.
+dango_check: contracts_check generation_check
+    python3 scripts/check-dango.py
+
 # M6.3: generated filesystem protocol, explicit transferable Directory
 # authority, bounded immutable snapshots, and atomic namespace root commits.
 directory_check: contracts_check generation_check

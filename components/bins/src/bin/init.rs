@@ -21,44 +21,52 @@ const RIGHT_DIRECTORY_READ: u32 = 1 << 19;
 const RIGHT_DIRECTORY_WRITE: u32 = 1 << 20;
 const RIGHT_DIRECTORY_LIST: u32 = 1 << 21;
 const RIGHT_DIRECTORY_DERIVE: u32 = 1 << 22;
+const RIGHT_INPUT_READ: u32 = 1 << 23;
 
 // Manifest-derived bootstrap slot order is emitted by the host builder.
 const CONSOLE_CAPS: [SpawnGrant; 1] = [grant(2, RIGHT_RECV)];
-const STORAGE_PROBE_READ_CAPS: [SpawnGrant; 1] = [grant(8, RIGHT_BLOCK_READ)];
-const STORAGE_PROBE_WRITE_CAPS: [SpawnGrant; 1] = [grant(8, RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE)];
-const STORAGE_PROBE_STORE_CAPS: [SpawnGrant; 1] = [grant(8, RIGHT_STORE_READ | RIGHT_STORE_WRITE)];
-const GENERATION_MANAGER_CAPS: [SpawnGrant; 1] = [grant(10, RIGHT_HEALTH_CONFIRM)];
+const STORAGE_PROBE_READ_CAPS: [SpawnGrant; 1] = [grant(9, RIGHT_BLOCK_READ)];
+const STORAGE_PROBE_WRITE_CAPS: [SpawnGrant; 1] = [grant(9, RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE)];
+const STORAGE_PROBE_STORE_CAPS: [SpawnGrant; 1] = [grant(9, RIGHT_STORE_READ | RIGHT_STORE_WRITE)];
+const GENERATION_MANAGER_CAPS: [SpawnGrant; 1] = [grant(11, RIGHT_HEALTH_CONFIRM)];
 const RECOVERY_CAPS: [SpawnGrant; 2] = [
     grant(2, RIGHT_BOOT_UPDATE),
     grant(3, RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE),
 ];
 
-fn dango_caps() -> [SpawnGrant; 2] {
+fn dango_caps() -> [SpawnGrant; 5] {
     [
-        grant(11, RIGHT_SEND | RIGHT_RECV),
+        grant(12, RIGHT_SEND | RIGHT_RECV),
         grant(4, RIGHT_SEND | RIGHT_TRANSFER),
+        grant(20, RIGHT_INPUT_READ),
+        grant(
+            19,
+            RIGHT_DIRECTORY_READ | RIGHT_DIRECTORY_DERIVE | RIGHT_TRANSFER,
+        ),
+        grant(0, RIGHT_ENDPOINT_CREATE),
     ]
 }
 
-fn spawn_service_caps() -> [SpawnGrant; 3] {
+fn spawn_service_caps() -> [SpawnGrant; 4] {
     [
-        grant(12, RIGHT_SEND | RIGHT_RECV),
-        grant(0, RIGHT_ENDPOINT_CREATE),
+        grant(13, RIGHT_SEND | RIGHT_RECV),
         grant(6, RIGHT_EXEC | RIGHT_SPAWN),
+        grant(7, RIGHT_EXEC | RIGHT_SPAWN),
+        grant(0, RIGHT_ENDPOINT_CREATE),
     ]
 }
 
 fn filesystem_caps() -> [SpawnGrant; 2] {
     [
-        grant(16, RIGHT_SEND | RIGHT_RECV),
-        grant(17, RIGHT_STORE_READ | RIGHT_STORE_WRITE),
+        grant(17, RIGHT_SEND | RIGHT_RECV),
+        grant(18, RIGHT_STORE_READ | RIGHT_STORE_WRITE),
     ]
 }
 
 const DIRECTORY_PROBE_CAPS: [SpawnGrant; 2] = [
-    grant(15, RIGHT_SEND | RIGHT_RECV),
+    grant(16, RIGHT_SEND | RIGHT_RECV),
     grant(
-        18,
+        19,
         RIGHT_TRANSFER
             | RIGHT_DIRECTORY_READ
             | RIGHT_DIRECTORY_WRITE
@@ -87,15 +95,17 @@ fn main() {
     }
     slime_rt::debug_write(b"[init] launching component graph\n");
 
-    if option_env!("SLIME_GENERATION_NUMBER") == Some("6") {
-        spawn_or_fail(13, &filesystem_caps());
-        spawn_or_fail(14, &DIRECTORY_PROBE_CAPS);
+    if matches!(option_env!("SLIME_GENERATION_NUMBER"), Some("6" | "7")) {
+        spawn_or_fail(14, &filesystem_caps());
+        spawn_or_fail(15, &DIRECTORY_PROBE_CAPS);
     }
     spawn_or_fail(1, &CONSOLE_CAPS);
     spawn_or_fail(3, &dango_caps());
     spawn_or_fail(5, &spawn_service_caps());
-    spawn_or_fail(7, storage_caps());
-    spawn_or_fail(9, &GENERATION_MANAGER_CAPS);
+    if option_env!("SLIME_DANGO_CHECK") != Some("1") {
+        spawn_or_fail(8, storage_caps());
+    }
+    spawn_or_fail(10, &GENERATION_MANAGER_CAPS);
     slime_rt::debug_write(b"[init] spawn graph launched\n");
     slime_rt::exit(0);
 }

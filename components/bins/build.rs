@@ -1,10 +1,14 @@
 fn main() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    println!("cargo:rustc-link-arg=-T{manifest_dir}/../component.ld");
-    println!("cargo:rerun-if-changed={manifest_dir}/../component.ld");
+    let target = std::env::var("TARGET").expect("TARGET");
+    if target == "x86_64-unknown-none" {
+        println!("cargo:rustc-link-arg=-T{manifest_dir}/../component.ld");
+        println!("cargo:rerun-if-changed={manifest_dir}/../component.ld");
+    }
     println!("cargo:rerun-if-env-changed=SLIME_GENERATION_NUMBER");
     println!("cargo:rerun-if-env-changed=SLIME_RECOVERY_INTERRUPT");
     println!("cargo:rerun-if-env-changed=SLIME_RECOVERY_IMAGE");
+    println!("cargo:rerun-if-env-changed=SLIME_DANGO_CHECK");
     if let Ok(number) = std::env::var("SLIME_GENERATION_NUMBER") {
         println!("cargo:rustc-env=SLIME_GENERATION_NUMBER={number}");
     }
@@ -13,6 +17,9 @@ fn main() {
     }
     if let Ok(value) = std::env::var("SLIME_RECOVERY_INTERRUPT") {
         println!("cargo:rustc-env=SLIME_RECOVERY_INTERRUPT={value}");
+    }
+    if let Ok(value) = std::env::var("SLIME_DANGO_CHECK") {
+        println!("cargo:rustc-env=SLIME_DANGO_CHECK={value}");
     }
     generate_command_profile(manifest_dir);
 }
@@ -33,17 +40,15 @@ fn generate_command_profile(manifest_dir: &str) {
             } else {
                 command
             };
+            let slot = component_slot(&manifest, target).expect("profile executable component");
             let block = component_block(&manifest, target).expect("profile executable component");
             let object = field(block, "object").expect("component object");
-            (*command, object)
+            (*command, object, slot)
         })
         .collect::<Vec<_>>();
     let generated = entries
         .iter()
-        .enumerate()
-        .map(|(index, (name, object))| {
-            format!("    (b\"{name}\", b\"{object}\", {}),\n", index + 2)
-        })
+        .map(|(name, object, slot)| format!("    (b\"{name}\", b\"{object}\", {slot}),\n"))
         .collect::<String>();
     let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR"));
     std::fs::write(
@@ -53,11 +58,33 @@ fn generate_command_profile(manifest_dir: &str) {
         ),
     )
     .expect("write command profile");
+    let generated_names = entries
+        .iter()
+        .map(|(name, _, _)| format!("    b\"{name}\",\n"))
+        .collect::<String>();
     std::fs::write(
         out.join("dango_profile.rs"),
-        format!("pub const CLIENT_BUDGET: u8 = {client_budget};\n"),
+        format!(
+            "pub const CLIENT_BUDGET: u8 = {client_budget};\npub const COMMAND_NAMES: &[&[u8]] = &[\n{generated_names}];\n"
+        ),
     )
     .expect("write dango profile");
+}
+
+fn component_slot(manifest: &str, wanted: &str) -> Option<usize> {
+    let present = manifest
+        .split("    {")
+        .skip(1)
+        .filter(|block| field(block, "name").is_some() && field(block, "object").is_some())
+        .any(|block| field(block, "name") == Some(wanted));
+    if !present {
+        return None;
+    }
+    match wanted {
+        "sysinfo" => Some(1),
+        "echo-agent" => Some(2),
+        _ => None,
+    }
 }
 
 fn component_block<'a>(manifest: &'a str, wanted: &str) -> Option<&'a str> {

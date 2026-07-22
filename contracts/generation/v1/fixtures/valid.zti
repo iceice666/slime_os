@@ -44,8 +44,8 @@
       object = "sha256:dango";
       role = "application";
       dependencies = ["console";];
-      spawnBudget = 1;
-      commandProfile = ["sysinfo";];
+      spawnBudget = 8;
+      commandProfile = ["echo"; "sysinfo";];
     };
     {
       name = "sysinfo";
@@ -138,11 +138,41 @@
     };
     {
       name = "spawn-service-sysinfo";
-      source = "init";
-      target = "spawn-service";
+      source = "spawn-service";
+      target = "sysinfo";
       rights = ["exec"; "spawn";];
       transferable = false;
     };
+    {
+      name = "spawn-service-echo";
+      source = "spawn-service";
+      target = "echo-agent";
+      rights = ["exec"; "spawn";];
+      transferable = false;
+    };
+
+    {
+      name = "dango-cwd-root";
+      source = "init";
+      target = "dango";
+      rights = ["directoryRead"; "directoryDerive";];
+      transferable = true;
+    };
+    {
+      name = "dango-endpoint-factory";
+      source = "init";
+      target = "dango";
+      rights = ["endpointCreate";];
+      transferable = false;
+    };
+    {
+      name = "spawn-service-endpoint-factory";
+      source = "init";
+      target = "spawn-service";
+      rights = ["endpointCreate";];
+      transferable = false;
+    };
+
     {
       name = "endpoint-factory";
       source = "init";
@@ -156,6 +186,13 @@
       target = "dango";
       rights = ["send";];
       transferable = true;
+    };
+    {
+      name = "console-input";
+      source = "init";
+      target = "dango";
+      rights = ["inputRead";];
+      transferable = false;
     };
     {
       name = "block-read";

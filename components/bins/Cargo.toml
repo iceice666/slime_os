@@ -4,7 +4,87 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.96"
 build = "build.rs"
+autobins = false
+
+[lib]
+name = "slime_components"
+path = "src/lib.rs"
+doctest = false
 
 [dependencies]
-slime-rt = { path = "../runtime" }
+slime-rt = { path = "../runtime", optional = true }
 slime-proto = { path = "../proto" }
+
+[features]
+default = ["component-runtime"]
+component-runtime = ["dep:slime-rt"]
+
+[[bin]]
+name = "console"
+path = "src/bin/console.rs"
+test = false
+
+[[bin]]
+name = "dango"
+path = "src/bin/dango.rs"
+test = false
+
+[[bin]]
+name = "directory-probe"
+path = "src/bin/directory-probe.rs"
+test = false
+
+[[bin]]
+name = "echo-agent"
+path = "src/bin/echo-agent.rs"
+test = false
+
+[[bin]]
+name = "filesystem-service"
+path = "src/bin/filesystem-service.rs"
+test = false
+
+[[bin]]
+name = "generation-manager"
+path = "src/bin/generation-manager.rs"
+test = false
+
+[[bin]]
+name = "init"
+path = "src/bin/init.rs"
+test = false
+
+[[bin]]
+name = "recovery"
+path = "src/bin/recovery.rs"
+test = false
+
+[[bin]]
+name = "spawn-service"
+path = "src/bin/spawn-service.rs"
+test = false
+
+[[bin]]
+name = "storage-fault-probe"
+path = "src/bin/storage-fault-probe.rs"
+test = false
+
+[[bin]]
+name = "storage-probe"
+path = "src/bin/storage-probe.rs"
+test = false
+
+[[bin]]
+name = "storage-store-probe"
+path = "src/bin/storage-store-probe.rs"
+test = false
+
+[[bin]]
+name = "storage-writer"
+path = "src/bin/storage-writer.rs"
+test = false
+
+[[bin]]
+name = "sysinfo"
+path = "src/bin/sysinfo.rs"
+test = false

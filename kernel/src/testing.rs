@@ -22,10 +22,11 @@ fn generation_decodes_and_resolves_vertical_slice() {
         assert!(decoded.component_bytes(name).is_some());
     }
     for name in [
+        "spawn-service-rpc",
+        "spawn-service-sysinfo",
+        "spawn-service-echo",
         "console-output",
-        "system-information",
-        "echo-request",
-        "echo-reply",
+        "console-input",
     ] {
         assert!(decoded.grant_named(name).is_some());
     }
@@ -44,7 +45,7 @@ fn generation_decodes_and_resolves_vertical_slice() {
         ],
     );
     assert_eq!(decoded.boot_attempts, 3);
-    assert_eq!(decoded.health_count(), 5);
+    assert_eq!(decoded.health_count(), 4);
 }
 
 #[test_case]

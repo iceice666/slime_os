@@ -44,6 +44,7 @@ pub const RIGHT_DIRECTORY_READ: u32 = 1 << 19;
 pub const RIGHT_DIRECTORY_WRITE: u32 = 1 << 20;
 pub const RIGHT_DIRECTORY_LIST: u32 = 1 << 21;
 pub const RIGHT_DIRECTORY_DERIVE: u32 = 1 << 22;
+pub const RIGHT_INPUT_READ: u32 = 1 << 23;
 
 /// All rights a capability may ever carry. Used to reject unknown bits.
 pub const RIGHT_ALL: u32 = RIGHT_SEND
@@ -68,7 +69,8 @@ pub const RIGHT_ALL: u32 = RIGHT_SEND
     | RIGHT_DIRECTORY_READ
     | RIGHT_DIRECTORY_WRITE
     | RIGHT_DIRECTORY_LIST
-    | RIGHT_DIRECTORY_DERIVE;
+    | RIGHT_DIRECTORY_DERIVE
+    | RIGHT_INPUT_READ;
 
 #[derive(Clone)]
 pub struct Capability {
@@ -100,6 +102,7 @@ impl Capability {
 pub enum KernelObject {
     Endpoint(Endpoint),
     EndpointFactory,
+    Input,
     Executable {
         name: Option<&'static str>,
         bytes: &'static [u8],
@@ -132,6 +135,7 @@ impl KernelObject {
         let object_rights = match self {
             KernelObject::Endpoint(_) => RIGHT_SEND | RIGHT_RECV,
             KernelObject::EndpointFactory => RIGHT_ENDPOINT_CREATE,
+            KernelObject::Input => RIGHT_INPUT_READ,
             KernelObject::Executable { .. } => RIGHT_EXEC | RIGHT_SPAWN,
             KernelObject::Supervision(_) => RIGHT_SUPERVISE,
             KernelObject::PciFunction(_) => RIGHT_MAP_MMIO | RIGHT_DMA_PIN | RIGHT_DMA_RELEASE,

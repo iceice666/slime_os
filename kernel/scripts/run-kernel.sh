@@ -25,6 +25,8 @@ EXTRA_ARGS=("$@")
 # Resolve OVMF firmware. Allow override via env; default to NixOS paths.
 OVMF_CODE="${OVMF_CODE:-/usr/share/OVMF/OVMF_CODE.fd}"
 OVMF_VARS_SRC="${OVMF_VARS:-/usr/share/OVMF/OVMF_VARS.fd}"
+QEMU_ACCEL="${SLIME_QEMU_ACCEL:-tcg}"
+QEMU_CPU="${SLIME_QEMU_CPU:-qemu64}"
 [[ -f "$OVMF_CODE" ]]      || { echo "OVMF_CODE not found: $OVMF_CODE"      >&2; exit 2; }
 [[ -f "$OVMF_VARS_SRC" ]]  || { echo "OVMF_VARS not found: $OVMF_VARS_SRC" >&2; exit 2; }
 # Per-run writable copy of OVMF vars so NVRAM changes don't leak between runs.
@@ -49,8 +51,8 @@ fi
 # guest writes to port 0xf4.
 set +e
 qemu-system-x86_64 \
-    -machine q35,accel=tcg \
-    -cpu qemu64 \
+    -machine "q35,accel=${QEMU_ACCEL}" \
+    -cpu "$QEMU_CPU" \
     -m 256M \
     -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
     -drive if=pflash,format=raw,file="$VARS" \

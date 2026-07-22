@@ -13,13 +13,13 @@ fn request_round_trips_byte_identically() {
         version: FORMAT_VERSION,
         flags: 0,
         command_len: 7,
-        argument_count: 0,
-        environment_count: 0,
+        argument_count: 1,
+        environment_count: 1,
         capability_roles: CAPABILITY_ROLE_STDOUT,
         client_budget: 1,
         command: *b"sysinfo\0\0\0\0\0\0\0\0\0",
-        arguments: [0; 8],
-        environment: [0; 8],
+        arguments: [3, b'-', b'v', b'v', 0, 0, 0, 0],
+        environment: [6, b'K', b'=', b'V', b'A', b'L', b'1', 0],
         grant_rights: 1,
         reserved: [0; 6],
     };
@@ -79,11 +79,21 @@ fn request_validation_rejects_unknown_versions_and_bounds() {
         ..base
     }));
     assert!(!valid_spawn_request(&WireSpawnRequest {
-        argument_count: 9,
+        argument_count: 3,
         ..base
     }));
     assert!(!valid_spawn_request(&WireSpawnRequest {
-        environment_count: 9,
+        environment_count: 2,
+        ..base
+    }));
+    assert!(!valid_spawn_request(&WireSpawnRequest {
+        argument_count: 1,
+        arguments: [8; 8],
+        ..base
+    }));
+    assert!(!valid_spawn_request(&WireSpawnRequest {
+        environment_count: 1,
+        environment: [6, b'K', b'=', b'V', 0, 0, 0, 1],
         ..base
     }));
 }
