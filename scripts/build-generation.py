@@ -106,6 +106,10 @@ RIGHT = {
     "spawn": 1 << 16,
     "endpointCreate": 1 << 17,
     "supervise": 1 << 18,
+    "directoryRead": 1 << 19,
+    "directoryWrite": 1 << 20,
+    "directoryList": 1 << 21,
+    "directoryDerive": 1 << 22,
 }
 RIGHT_TRANSFER = 1 << 2
 RIGHT_ALL = RIGHT_TRANSFER | sum(RIGHT.values())

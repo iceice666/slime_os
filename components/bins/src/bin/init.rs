@@ -17,6 +17,10 @@ const RIGHT_BOOT_UPDATE: u32 = 1 << 15;
 const RIGHT_EXEC: u32 = 1 << 3;
 const RIGHT_SPAWN: u32 = 1 << 16;
 const RIGHT_ENDPOINT_CREATE: u32 = 1 << 17;
+const RIGHT_DIRECTORY_READ: u32 = 1 << 19;
+const RIGHT_DIRECTORY_WRITE: u32 = 1 << 20;
+const RIGHT_DIRECTORY_LIST: u32 = 1 << 21;
+const RIGHT_DIRECTORY_DERIVE: u32 = 1 << 22;
 
 // Manifest-derived bootstrap slot order is emitted by the host builder.
 const CONSOLE_CAPS: [SpawnGrant; 1] = [grant(2, RIGHT_RECV)];
@@ -44,6 +48,25 @@ fn spawn_service_caps() -> [SpawnGrant; 3] {
     ]
 }
 
+fn filesystem_caps() -> [SpawnGrant; 2] {
+    [
+        grant(16, RIGHT_SEND | RIGHT_RECV),
+        grant(17, RIGHT_STORE_READ | RIGHT_STORE_WRITE),
+    ]
+}
+
+const DIRECTORY_PROBE_CAPS: [SpawnGrant; 2] = [
+    grant(15, RIGHT_SEND | RIGHT_RECV),
+    grant(
+        18,
+        RIGHT_TRANSFER
+            | RIGHT_DIRECTORY_READ
+            | RIGHT_DIRECTORY_WRITE
+            | RIGHT_DIRECTORY_LIST
+            | RIGHT_DIRECTORY_DERIVE,
+    ),
+];
+
 const fn grant(slot: u32, rights: u32) -> SpawnGrant {
     SpawnGrant { slot, rights }
 }
@@ -64,6 +87,10 @@ fn main() {
     }
     slime_rt::debug_write(b"[init] launching component graph\n");
 
+    if option_env!("SLIME_GENERATION_NUMBER") == Some("6") {
+        spawn_or_fail(13, &filesystem_caps());
+        spawn_or_fail(14, &DIRECTORY_PROBE_CAPS);
+    }
     spawn_or_fail(1, &CONSOLE_CAPS);
     spawn_or_fail(3, &dango_caps());
     spawn_or_fail(5, &spawn_service_caps());

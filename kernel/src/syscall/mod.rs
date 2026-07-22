@@ -1,5 +1,6 @@
 use crate::capability::{
     Capability, KernelObject, RIGHT_BLOCK_READ, RIGHT_BLOCK_WRITE, RIGHT_BOOT_UPDATE,
+    RIGHT_DIRECTORY_DERIVE, RIGHT_DIRECTORY_LIST, RIGHT_DIRECTORY_READ, RIGHT_DIRECTORY_WRITE,
     RIGHT_ENDPOINT_CREATE, RIGHT_HEALTH_CONFIRM, RIGHT_RECV, RIGHT_SEND, RIGHT_STORE_READ,
     RIGHT_STORE_WRITE, RIGHT_TRANSFER,
 };
@@ -21,6 +22,9 @@ pub const SYS_RECOVERY_RECONSTRUCT: u64 = 10;
 pub const SYS_ENDPOINT_CREATE: u64 = 11;
 pub const SYS_SUPERVISION_STATUS: u64 = 12;
 pub const SYS_CAP_DROP: u64 = 13;
+pub const SYS_DIRECTORY_INSPECT: u64 = 14;
+pub const SYS_DIRECTORY_DERIVE: u64 = 15;
+pub const SYS_DIRECTORY_COMMIT: u64 = 16;
 
 const USER_TOP: u64 = 0x0000_8000_0000_0000;
 
@@ -55,6 +59,9 @@ pub fn dispatch(frame: &mut UserFrame) {
         SYS_ENDPOINT_CREATE => sys_endpoint_create(frame),
         SYS_SUPERVISION_STATUS => sys_supervision_status(frame),
         SYS_CAP_DROP => sys_cap_drop(frame),
+        SYS_DIRECTORY_INSPECT => sys_directory_inspect(frame),
+        SYS_DIRECTORY_DERIVE => sys_directory_derive(frame),
+        SYS_DIRECTORY_COMMIT => sys_directory_commit(frame),
         _ => frame.rax = ipc::ERR_INVALID_ARG as u64,
     }
 }
@@ -491,6 +498,126 @@ fn sys_cap_drop(frame: &mut UserFrame) {
         ipc::ERR_SUCCESS as u64
     } else {
         ipc::ERR_BAD_CAP as u64
+    };
+}
+
+fn sys_directory_inspect(frame: &mut UserFrame) {
+    let slot = frame.rdi as u32;
+    let required = frame.rsi as u32;
+    if required == 0
+        || required
+            & !(RIGHT_DIRECTORY_READ
+                | RIGHT_DIRECTORY_LIST
+                | RIGHT_DIRECTORY_WRITE
+                | RIGHT_DIRECTORY_DERIVE)
+            != 0
+        || !current_user_range(frame.rdx, 32, true)
+        || !current_user_range(frame.r10, crate::capability::MAX_DIRECTORY_PATH, true)
+    {
+        frame.rax = ipc::ERR_INVALID_ARG as u64;
+        return;
+    }
+    let inspected = task::with_current_mut(|task| {
+        let cap = task.caps.get(slot)?;
+        if cap.rights & required != required {
+            return None;
+        }
+        let KernelObject::Directory(directory) = &cap.object else {
+            return None;
+        };
+        let mut scope = [0u8; crate::capability::MAX_DIRECTORY_PATH];
+        let scope_len = directory.scope().len();
+        scope[..scope_len].copy_from_slice(directory.scope());
+        Some((directory.root_identity(), scope, scope_len))
+    });
+    let Some((root, scope, scope_len)) = inspected else {
+        frame.rax = ipc::ERR_BAD_CAP as u64;
+        return;
+    };
+    unsafe {
+        core::ptr::copy_nonoverlapping(root.as_ptr(), frame.rdx as *mut u8, root.len());
+        core::ptr::copy_nonoverlapping(scope.as_ptr(), frame.r10 as *mut u8, scope.len());
+    }
+    frame.rax = scope_len as u64;
+}
+
+fn sys_directory_derive(frame: &mut UserFrame) {
+    let slot = frame.rdi as u32;
+    let path_len = frame.rdx as usize;
+    let rights = frame.r10 as u32;
+    let allowed_rights = RIGHT_DIRECTORY_READ
+        | RIGHT_DIRECTORY_WRITE
+        | RIGHT_DIRECTORY_LIST
+        | RIGHT_DIRECTORY_DERIVE
+        | RIGHT_TRANSFER;
+    if path_len > crate::capability::MAX_DIRECTORY_PATH
+        || (path_len > 0 && !current_user_range(frame.rsi, path_len, false))
+        || rights == 0
+        || rights & !allowed_rights != 0
+    {
+        frame.rax = ipc::ERR_INVALID_ARG as u64;
+        return;
+    }
+    let mut path = [0u8; crate::capability::MAX_DIRECTORY_PATH];
+    if path_len > 0 {
+        unsafe {
+            core::ptr::copy_nonoverlapping(frame.rsi as *const u8, path.as_mut_ptr(), path_len)
+        };
+    }
+    let derived = task::with_current_mut(|task| {
+        let source = task
+            .caps
+            .get(slot)
+            .ok_or(crate::capability::CapError::BadSlot)?;
+        if source.rights & RIGHT_DIRECTORY_DERIVE == 0
+            || rights & !source.rights != 0
+            || rights & RIGHT_TRANSFER != 0 && source.rights & RIGHT_TRANSFER == 0
+        {
+            return Err(crate::capability::CapError::BadRights);
+        }
+        let KernelObject::Directory(directory) = &source.object else {
+            return Err(crate::capability::CapError::WrongObject);
+        };
+        let object = KernelObject::Directory(directory.derive(&path[..path_len])?);
+        task.caps.insert(Capability { object, rights })
+    });
+    frame.rax = match derived {
+        Ok(slot) => slot as u64,
+        Err(crate::capability::CapError::TableFull) => ipc::ERR_OUT_OF_MEMORY as u64,
+        Err(_) => ipc::ERR_BAD_CAP as u64,
+    };
+}
+
+/// Atomically commits only through an unscoped directory writer. This prevents
+/// a subdirectory snapshot from replacing the namespace-wide root.
+fn sys_directory_commit(frame: &mut UserFrame) {
+    if !current_user_range(frame.rsi, 32, false) || !current_user_range(frame.rdx, 32, false) {
+        frame.rax = ipc::ERR_INVALID_ARG as u64;
+        return;
+    }
+    let mut expected = [0u8; 32];
+    let mut new = [0u8; 32];
+    unsafe {
+        core::ptr::copy_nonoverlapping(frame.rsi as *const u8, expected.as_mut_ptr(), 32);
+        core::ptr::copy_nonoverlapping(frame.rdx as *const u8, new.as_mut_ptr(), 32);
+    }
+    let committed = task::with_current_mut(|task| {
+        let cap = task.caps.get(frame.rdi as u32)?;
+        if cap.rights & RIGHT_DIRECTORY_WRITE == 0 {
+            return None;
+        }
+        let KernelObject::Directory(directory) = &cap.object else {
+            return None;
+        };
+        if !directory.scope().is_empty() {
+            return None;
+        }
+        Some(directory.commit_root(expected, new))
+    });
+    frame.rax = match committed {
+        Some(true) => ipc::ERR_SUCCESS as u64,
+        Some(false) => ipc::ERR_WOULDBLOCK as u64,
+        None => ipc::ERR_BAD_CAP as u64,
     };
 }
 

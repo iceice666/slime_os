@@ -10,6 +10,7 @@
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::AtomicBool;
+use spin::Mutex;
 
 use crate::ipc::Endpoint;
 use crate::memory::PhysAddr;
@@ -39,6 +40,10 @@ pub const RIGHT_BOOT_UPDATE: u32 = 1 << 15;
 pub const RIGHT_SPAWN: u32 = 1 << 16;
 pub const RIGHT_ENDPOINT_CREATE: u32 = 1 << 17;
 pub const RIGHT_SUPERVISE: u32 = 1 << 18;
+pub const RIGHT_DIRECTORY_READ: u32 = 1 << 19;
+pub const RIGHT_DIRECTORY_WRITE: u32 = 1 << 20;
+pub const RIGHT_DIRECTORY_LIST: u32 = 1 << 21;
+pub const RIGHT_DIRECTORY_DERIVE: u32 = 1 << 22;
 
 /// All rights a capability may ever carry. Used to reject unknown bits.
 pub const RIGHT_ALL: u32 = RIGHT_SEND
@@ -59,7 +64,11 @@ pub const RIGHT_ALL: u32 = RIGHT_SEND
     | RIGHT_BOOT_UPDATE
     | RIGHT_SPAWN
     | RIGHT_ENDPOINT_CREATE
-    | RIGHT_SUPERVISE;
+    | RIGHT_SUPERVISE
+    | RIGHT_DIRECTORY_READ
+    | RIGHT_DIRECTORY_WRITE
+    | RIGHT_DIRECTORY_LIST
+    | RIGHT_DIRECTORY_DERIVE;
 
 #[derive(Clone)]
 pub struct Capability {
@@ -106,6 +115,10 @@ pub enum KernelObject {
     /// partition (M5.4). Created by the kernel bootstrap; the store service
     /// resolves and bounds the partition through GPT validation.
     ObjectStore,
+    /// Unforgeable authority over one bounded namespace scope. The userspace
+    /// filesystem service owns snapshot policy; the kernel stores only the
+    /// current root identity and the scope enforced at operation gates.
+    Directory(DirectoryAuthority),
     /// Authority over the running generation and bounded BootState updates.
     GenerationControl,
 }
@@ -127,10 +140,118 @@ impl KernelObject {
             KernelObject::SharedBuffer(_) => RIGHT_BUFFER_WRITE | RIGHT_MAP,
             KernelObject::BlockDevice(_) => RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE,
             KernelObject::ObjectStore => RIGHT_STORE_READ | RIGHT_STORE_WRITE,
+            KernelObject::Directory(_) => {
+                RIGHT_DIRECTORY_READ
+                    | RIGHT_DIRECTORY_WRITE
+                    | RIGHT_DIRECTORY_LIST
+                    | RIGHT_DIRECTORY_DERIVE
+            }
             KernelObject::GenerationControl => RIGHT_HEALTH_CONFIRM | RIGHT_BOOT_UPDATE,
         };
         object_rights | RIGHT_TRANSFER
     }
+}
+
+pub const MAX_DIRECTORY_PATH: usize = 48;
+pub const MAX_DIRECTORY_DEPTH: usize = 4;
+
+#[derive(Clone)]
+pub struct DirectoryAuthority {
+    namespace: Arc<DirectoryNamespace>,
+    scope: [u8; MAX_DIRECTORY_PATH],
+    scope_len: u8,
+}
+
+struct DirectoryNamespace {
+    root: Mutex<[u8; 32]>,
+}
+
+impl DirectoryAuthority {
+    pub fn root(root: [u8; 32]) -> Self {
+        Self {
+            namespace: Arc::new(DirectoryNamespace {
+                root: Mutex::new(root),
+            }),
+            scope: [0; MAX_DIRECTORY_PATH],
+            scope_len: 0,
+        }
+    }
+
+    pub fn derive(&self, relative: &[u8]) -> Result<Self, CapError> {
+        if !valid_directory_path(relative, true) {
+            return Err(CapError::BadScope);
+        }
+        let scope_len = self.scope_len as usize;
+        let separator = usize::from(scope_len != 0 && !relative.is_empty());
+        let new_len = scope_len
+            .checked_add(separator)
+            .and_then(|len| len.checked_add(relative.len()))
+            .filter(|len| *len <= MAX_DIRECTORY_PATH)
+            .ok_or(CapError::BadScope)?;
+        let mut scope = [0; MAX_DIRECTORY_PATH];
+        scope[..scope_len].copy_from_slice(&self.scope[..scope_len]);
+        if separator != 0 {
+            scope[scope_len] = b'/';
+        }
+        scope[scope_len + separator..new_len].copy_from_slice(relative);
+        if !valid_directory_path(&scope[..new_len], true) {
+            return Err(CapError::BadScope);
+        }
+        Ok(Self {
+            namespace: self.namespace.clone(),
+            scope,
+            scope_len: new_len as u8,
+        })
+    }
+
+    pub fn scope(&self) -> &[u8] {
+        &self.scope[..self.scope_len as usize]
+    }
+
+    pub fn root_identity(&self) -> [u8; 32] {
+        *self.namespace.root.lock()
+    }
+
+    /// Atomically replace the namespace root. Scoped authorities are read-only
+    /// views for root-transition purposes; mutating a subtree requires rebuilding
+    /// and committing its parent chain through an unscoped writer.
+    pub fn commit_root(&self, expected: [u8; 32], new: [u8; 32]) -> bool {
+        if self.scope_len != 0 {
+            return false;
+        }
+        let mut root = self.namespace.root.lock();
+        if *root != expected {
+            return false;
+        }
+        *root = new;
+        true
+    }
+}
+
+pub fn valid_directory_path(path: &[u8], allow_empty: bool) -> bool {
+    if path.is_empty() {
+        return allow_empty;
+    }
+    if path.len() > MAX_DIRECTORY_PATH || path[0] == b'/' || path[path.len() - 1] == b'/' {
+        return false;
+    }
+    let mut depth = 0;
+    for segment in path.split(|byte| *byte == b'/') {
+        if segment.is_empty()
+            || segment == b"."
+            || segment == b".."
+            || !segment
+                .iter()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'.' | b'_' | b'-'))
+        {
+            return false;
+        }
+        depth += 1;
+        if depth > MAX_DIRECTORY_DEPTH {
+            return false;
+        }
+    }
+    true
 }
 
 /// A bounded PCI segment/bus/device/function resource.
@@ -328,6 +449,64 @@ impl Default for CapabilityTable {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test_case]
+    fn directory_derive_shares_root_and_narrows_scope() {
+        let root = [0x11; 32];
+        let authority = DirectoryAuthority::root(root);
+        let docs = authority.derive(b"docs").expect("derive docs");
+        let nested = docs.derive(b"manual").expect("derive nested");
+
+        assert_eq!(docs.scope(), b"docs");
+        assert_eq!(nested.scope(), b"docs/manual");
+        assert_eq!(nested.root_identity(), root);
+        let replacement = [0x22; 32];
+        assert!(authority.commit_root(root, replacement));
+        assert_eq!(nested.root_identity(), replacement);
+        assert!(!docs.commit_root(replacement, [0x33; 32]));
+        assert_eq!(authority.root_identity(), replacement);
+    }
+
+    #[test_case]
+    fn directory_paths_are_bounded_and_canonical() {
+        for path in [b"/docs".as_slice(), b"docs/", b"docs//manual", b".", b".."] {
+            assert!(matches!(
+                DirectoryAuthority::root([0; 32]).derive(path),
+                Err(CapError::BadScope)
+            ));
+        }
+        assert!(matches!(
+            DirectoryAuthority::root([0; 32]).derive(b"a/b/c/d/e"),
+            Err(CapError::BadScope)
+        ));
+    }
+
+    #[test_case]
+    fn directory_rights_are_object_specific_and_narrow_only() {
+        let cap = Capability {
+            object: KernelObject::Directory(DirectoryAuthority::root([0; 32])),
+            rights: RIGHT_DIRECTORY_READ | RIGHT_DIRECTORY_DERIVE | RIGHT_TRANSFER,
+        };
+        let narrowed = cap
+            .derive(RIGHT_DIRECTORY_READ)
+            .expect("narrow read capability");
+        assert_eq!(narrowed.rights, RIGHT_DIRECTORY_READ);
+        assert!(cap.derive(RIGHT_DIRECTORY_WRITE).is_err());
+        let mut table = CapabilityTable::new();
+        assert!(table.insert(cap).is_ok());
+        assert!(
+            table
+                .insert(Capability {
+                    object: KernelObject::Directory(DirectoryAuthority::root([0; 32])),
+                    rights: RIGHT_STORE_READ,
+                })
+                .is_err()
+        );
+    }
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CapError {
     TableFull,
@@ -336,6 +515,6 @@ pub enum CapError {
     BadRights,
     /// The capability is the wrong object kind for the requested operation.
     WrongObject,
-    /// The resource is busy (e.g. DMA outstanding) and cannot be reclaimed.
-    Busy,
+    /// A requested directory scope is malformed or not a subdirectory.
+    BadScope,
 }

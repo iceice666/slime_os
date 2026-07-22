@@ -72,6 +72,13 @@ pub(crate) fn active_pml4() -> PhysAddr {
     }
     PhysAddr(cr3 & ADDR_MASK)
 }
+pub(crate) fn copy_kernel_half(source: PhysAddr, destination: PhysAddr) {
+    unsafe {
+        let src = source.to_virt().as_mut_ptr::<u64>();
+        let dst = destination.to_virt().as_mut_ptr::<u64>();
+        core::ptr::copy_nonoverlapping(src.add(256), dst.add(256), 256);
+    }
+}
 
 /// Invalidate the TLB entry for `virt` after changing its mapping.
 fn flush(virt: VirtAddr) {
@@ -116,6 +123,9 @@ unsafe fn next_table(table: &mut PageTable, i: usize) -> Result<&'static mut Pag
 /// page is already mapped or the allocator is exhausted, never overwriting an
 /// existing mapping.
 ///
+/// Must not be called while holding the scheduler lock: successful mappings
+/// propagate the kernel half to all task address spaces under that lock.
+///
 /// # Safety
 ///
 /// Installing a mapping aliases physical memory into the address space; the
@@ -139,6 +149,7 @@ pub(crate) unsafe fn map_page_in(
     }
     pt.entries[i] = (phys.0 & ADDR_MASK) | flags | PTE_PRESENT;
     flush(virt);
+    crate::task::synchronize_kernel_mappings(root);
     Ok(())
 }
 
@@ -150,6 +161,9 @@ pub(crate) unsafe fn map_page_in(
 ///
 /// The caller must ensure the old mapping (if any) is safe to invalidate and
 /// the new `phys` is safe to expose at `virt` with `flags`.
+///
+/// Must not be called while holding the scheduler lock: successful remaps
+/// propagate the kernel half to all task address spaces under that lock.
 pub(crate) unsafe fn remap_page_in(
     root: PhysAddr,
     virt: VirtAddr,
@@ -164,6 +178,7 @@ pub(crate) unsafe fn remap_page_in(
     let i = index(virt, 1);
     pt.entries[i] = (phys.0 & ADDR_MASK) | flags | PTE_PRESENT;
     flush(virt);
+    crate::task::synchronize_kernel_mappings(root);
     Ok(())
 }
 

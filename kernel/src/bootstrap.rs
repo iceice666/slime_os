@@ -2,9 +2,10 @@ use alloc::vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::capability::{
-    Capability, KernelObject, PciFunctionInfo, RIGHT_BLOCK_READ, RIGHT_BLOCK_WRITE,
-    RIGHT_BOOT_UPDATE, RIGHT_EXEC, RIGHT_HEALTH_CONFIRM, RIGHT_RECV, RIGHT_SEND, RIGHT_SPAWN,
-    RIGHT_STORE_READ, RIGHT_STORE_WRITE, RIGHT_TRANSFER,
+    Capability, DirectoryAuthority, KernelObject, PciFunctionInfo, RIGHT_BLOCK_READ,
+    RIGHT_BLOCK_WRITE, RIGHT_BOOT_UPDATE, RIGHT_DIRECTORY_DERIVE, RIGHT_DIRECTORY_LIST,
+    RIGHT_DIRECTORY_READ, RIGHT_DIRECTORY_WRITE, RIGHT_EXEC, RIGHT_HEALTH_CONFIRM, RIGHT_RECV,
+    RIGHT_SEND, RIGHT_SPAWN, RIGHT_STORE_READ, RIGHT_STORE_WRITE, RIGHT_TRANSFER,
 };
 use crate::generation::{self, Generation};
 use crate::{ipc, println, serial_println, task};
@@ -19,6 +20,9 @@ static STORAGE_FAULT_ID: AtomicU64 = AtomicU64::new(0);
 static STORAGE_STORE_ID: AtomicU64 = AtomicU64::new(0);
 static GENERATION_MANAGER_ID: AtomicU64 = AtomicU64::new(0);
 static SPAWN_SERVICE_ID: AtomicU64 = AtomicU64::new(0);
+static FILESYSTEM_ID: AtomicU64 = AtomicU64::new(0);
+static DIRECTORY_PROBE_ID: AtomicU64 = AtomicU64::new(0);
+static GENERATION_NUMBER: AtomicU64 = AtomicU64::new(0);
 static RECOVERY_ID: AtomicU64 = AtomicU64::new(0);
 
 pub fn start() -> ! {
@@ -30,6 +34,7 @@ pub fn start() -> ! {
         "handoff generation identity mismatch"
     );
     crate::generation_manager::init();
+    GENERATION_NUMBER.store(generation.number, Ordering::Relaxed);
     serial_println!(
         "[generation] selected {:02x?} parent={:02x?} target={}",
         generation.identity,
@@ -83,6 +88,12 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
     let spawn_service = generation
         .component_bytes("spawn-service")
         .expect("spawn-service object missing");
+    let filesystem_service = generation
+        .component_bytes("filesystem-service")
+        .expect("filesystem-service object missing");
+    let directory_probe = generation
+        .component_bytes("directory-probe")
+        .expect("directory-probe object missing");
     serial_println!("[generation] validating bootstrap grants");
 
     require_grant(
@@ -157,6 +168,32 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         RIGHT_STORE_READ | RIGHT_STORE_WRITE,
     );
     serial_println!("[generation] store grant valid");
+    require_grant(
+        generation,
+        "filesystem-rpc",
+        "directory-probe",
+        "filesystem-service",
+        RIGHT_SEND | RIGHT_RECV,
+    );
+    require_grant(
+        generation,
+        "filesystem-store",
+        "init",
+        "filesystem-service",
+        RIGHT_STORE_READ | RIGHT_STORE_WRITE,
+    );
+    require_grant(
+        generation,
+        "filesystem-root",
+        "init",
+        "directory-probe",
+        RIGHT_TRANSFER
+            | RIGHT_DIRECTORY_READ
+            | RIGHT_DIRECTORY_WRITE
+            | RIGHT_DIRECTORY_LIST
+            | RIGHT_DIRECTORY_DERIVE,
+    );
+    serial_println!("[generation] filesystem grants valid");
     let (storage_component, storage_capability) = match generation.number {
         2 => (
             storage_writer,
@@ -191,6 +228,7 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
 
     let (console_output, dango_output) = ipc::channel();
     let (dango_spawn, service_spawn) = ipc::channel();
+    let (directory_client, directory_service) = ipc::channel();
     let caps = vec![
         Capability {
             object: KernelObject::EndpointFactory,
@@ -215,6 +253,22 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         },
         endpoint(dango_spawn, RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER),
         endpoint(service_spawn, RIGHT_SEND | RIGHT_RECV),
+        executable(generation, "filesystem-service", filesystem_service),
+        executable(generation, "directory-probe", directory_probe),
+        endpoint(directory_client, RIGHT_SEND | RIGHT_RECV),
+        endpoint(directory_service, RIGHT_SEND | RIGHT_RECV),
+        Capability {
+            object: KernelObject::ObjectStore,
+            rights: RIGHT_STORE_READ | RIGHT_STORE_WRITE | RIGHT_TRANSFER,
+        },
+        Capability {
+            object: KernelObject::Directory(DirectoryAuthority::root(directory_fixture_root())),
+            rights: RIGHT_DIRECTORY_READ
+                | RIGHT_DIRECTORY_WRITE
+                | RIGHT_DIRECTORY_LIST
+                | RIGHT_DIRECTORY_DERIVE
+                | RIGHT_TRANSFER,
+        },
     ];
 
     let spawn_budget = generation
@@ -348,6 +402,14 @@ fn endpoint(endpoint: ipc::Endpoint, rights: u32) -> Capability {
     }
 }
 
+fn directory_fixture_root() -> [u8; 32] {
+    [
+        0xe8, 0xcd, 0xd1, 0x45, 0x6f, 0xe5, 0x4e, 0x59, 0xe3, 0xb6, 0x1a, 0x65, 0x5a, 0x2f, 0xbb,
+        0xfa, 0xf1, 0x6d, 0x89, 0xa8, 0x77, 0x0a, 0xa1, 0x08, 0x05, 0x51, 0xbd, 0x84, 0xf6, 0x6b,
+        0x0f, 0xf2,
+    ]
+}
+
 fn storage_component_name(generation: u64) -> &'static str {
     match generation {
         2 => "storage-writer",
@@ -395,6 +457,8 @@ pub fn record_spawn(component: &'static str, id: task::TaskId) {
         "storage-store-probe" => &STORAGE_STORE_ID,
         "generation-manager" => &GENERATION_MANAGER_ID,
         "spawn-service" => &SPAWN_SERVICE_ID,
+        "filesystem-service" => &FILESYSTEM_ID,
+        "directory-probe" => &DIRECTORY_PROBE_ID,
         "recovery" => &RECOVERY_ID,
         _ => return,
     };
@@ -410,6 +474,7 @@ fn storage_probe_required() -> bool {
 }
 
 extern "C" fn on_idle() {
+    let directory_run = GENERATION_NUMBER.load(Ordering::Relaxed) == 6;
     let checks = [
         ("init", INIT_ID.load(Ordering::Relaxed)),
         ("console", CONSOLE_ID.load(Ordering::Relaxed)),
@@ -430,6 +495,11 @@ extern "C" fn on_idle() {
             GENERATION_MANAGER_ID.load(Ordering::Relaxed),
         ),
         ("spawn-service", SPAWN_SERVICE_ID.load(Ordering::Relaxed)),
+        ("filesystem-service", FILESYSTEM_ID.load(Ordering::Relaxed)),
+        (
+            "directory-probe",
+            DIRECTORY_PROBE_ID.load(Ordering::Relaxed),
+        ),
         ("recovery", RECOVERY_ID.load(Ordering::Relaxed)),
     ];
     let mut healthy = true;
@@ -440,9 +510,14 @@ extern "C" fn on_idle() {
         let reason = task::termination_summary(id);
         serial_println!("[generation] {} terminated: {:?}", name, reason);
         let optional_storage_absent = name == "storage-probe"
-            && !storage_probe_required()
+            && (!storage_probe_required() || directory_run)
             && matches!(reason, Some(task::TermReason::Exit(1)));
-        healthy &= matches!(reason, Some(task::TermReason::Exit(0))) || optional_storage_absent;
+        let optional_confirmation_absent = name == "generation-manager"
+            && directory_run
+            && matches!(reason, Some(task::TermReason::Exit(1)));
+        healthy &= matches!(reason, Some(task::TermReason::Exit(0)))
+            || optional_storage_absent
+            || optional_confirmation_absent;
     }
     if healthy {
         if crate::boot::bootstate().is_some_and(|state| state.running_pending) {

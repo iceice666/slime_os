@@ -2,8 +2,51 @@
 
 // Protocol modules are generated from contracts/*/v1 schemas.
 pub mod block;
+pub mod fs;
 pub mod spawn;
 pub mod store;
+
+pub fn valid_fs_request(request: &fs::WireFsRequest) -> bool {
+    let name_len = request.name_len as usize;
+    let base_valid = request.magic == fs::FS_MAGIC
+        && request.version == fs::FORMAT_VERSION
+        && matches!(
+            request.op,
+            fs::OP_LIST | fs::OP_READ | fs::OP_WRITE | fs::OP_DERIVE
+        )
+        && request.flags == 0
+        && request.reserved0 == 0
+        && name_len <= fs::MAX_NAME_BYTES
+        && request.name[name_len..].iter().all(|byte| *byte == 0)
+        && valid_name(&request.name[..name_len], request.op == fs::OP_LIST);
+    if !base_valid {
+        return false;
+    }
+    let zero_hash =
+        request.hash0 == 0 && request.hash1 == 0 && request.hash2 == 0 && request.hash3 == 0;
+    match request.op {
+        fs::OP_LIST | fs::OP_READ | fs::OP_DERIVE => request.payload_len == 0 && zero_hash,
+        fs::OP_WRITE => request.payload_len <= 32 * 1024 && !zero_hash,
+        _ => false,
+    }
+}
+
+pub fn valid_fs_reply(reply: &fs::WireFsReply) -> bool {
+    reply.magic == fs::FS_MAGIC
+        && reply.version == fs::FORMAT_VERSION
+        && reply.entry_count as usize <= fs::MAX_ENTRIES
+        && reply.reserved == 0
+}
+fn valid_name(name: &[u8], allow_empty: bool) -> bool {
+    if name.is_empty() {
+        return allow_empty;
+    }
+    name != b"."
+        && name != b".."
+        && name
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'.' | b'_' | b'-'))
+}
 
 pub fn valid_spawn_request(request: &spawn::WireSpawnRequest) -> bool {
     request.magic == spawn::SPAWN_MAGIC

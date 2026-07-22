@@ -1,0 +1,112 @@
+-- Slime OS filesystem-service protocol, version 1.
+-- Requests and replies are fixed 64-byte IPC messages. Names are single bounded
+-- path components; authority scope and immutable root identity arrive through
+-- the Directory capability, never through user-supplied absolute paths.
+
+env ::= import stdlib.env;
+fs ::= import stdlib.fs;
+gen ::= import "gen_rust.zt";
+t ::= import stdlib.text;
+
+formatVersion :: Int = 1;
+requestLen :: Int = 64;
+replyLen :: Int = 64;
+maxNameBytes :: Int = 16;
+maxEntries :: Int = 16;
+maxDepth :: Int = 4;
+maxPathBytes :: Int = 48;
+opList :: Int = 1;
+opRead :: Int = 2;
+opWrite :: Int = 3;
+opDerive :: Int = 4;
+
+WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
+
+FsRequest :: type {
+  magic : Int;
+  version : Int;
+  op : Int;
+  flags : Int;
+  name_len : Int;
+  reserved0 : Int;
+  name : Int;
+  payload_len : Int;
+  hash0 : Int;
+  hash1 : Int;
+  hash2 : Int;
+  hash3 : Int;
+};
+
+FsReply :: type {
+  magic : Int;
+  version : Int;
+  status : Int;
+  entry_count : Int;
+  object_type : Int;
+  payload_len : Int;
+  hash0 : Int;
+  hash1 : Int;
+  hash2 : Int;
+  hash3 : Int;
+  reserved : Int;
+};
+
+requestSchema ::= schema FsRequest;
+replySchema ::= schema FsReply;
+
+requestLayout :: List WireField = {
+  { name = "magic"; width = 4; signed = false; byteArray = false; };
+  { name = "version"; width = 4; signed = false; byteArray = false; };
+  { name = "op"; width = 1; signed = false; byteArray = false; };
+  { name = "flags"; width = 1; signed = false; byteArray = false; };
+  { name = "name_len"; width = 1; signed = false; byteArray = false; };
+  { name = "reserved0"; width = 1; signed = false; byteArray = false; };
+  { name = "name"; width = 16; signed = false; byteArray = true; };
+  { name = "payload_len"; width = 4; signed = false; byteArray = false; };
+  { name = "hash0"; width = 8; signed = false; byteArray = false; };
+  { name = "hash1"; width = 8; signed = false; byteArray = false; };
+  { name = "hash2"; width = 8; signed = false; byteArray = false; };
+  { name = "hash3"; width = 8; signed = false; byteArray = false; };
+};
+
+replyLayout :: List WireField = {
+  { name = "magic"; width = 4; signed = false; byteArray = false; };
+  { name = "version"; width = 4; signed = false; byteArray = false; };
+  { name = "status"; width = 4; signed = true; byteArray = false; };
+  { name = "entry_count"; width = 4; signed = false; byteArray = false; };
+  { name = "object_type"; width = 4; signed = false; byteArray = false; };
+  { name = "payload_len"; width = 4; signed = false; byteArray = false; };
+  { name = "hash0"; width = 8; signed = false; byteArray = false; };
+  { name = "hash1"; width = 8; signed = false; byteArray = false; };
+  { name = "hash2"; width = 8; signed = false; byteArray = false; };
+  { name = "hash3"; width = 8; signed = false; byteArray = false; };
+  { name = "reserved"; width = 4; signed = false; byteArray = false; };
+};
+
+format ::= {
+  formatVersion = formatVersion;
+  requestLen = requestLen;
+  replyLen = replyLen;
+  maxNameBytes = maxNameBytes;
+  maxEntries = maxEntries;
+  maxDepth = maxDepth;
+  maxPathBytes = maxPathBytes;
+  opList = opList;
+  opRead = opRead;
+  opWrite = opWrite;
+  opDerive = opDerive;
+  requestFields = requestSchema.fields ?? {;};
+  replyFields = replySchema.fields ?? {;};
+  requestLayout = requestLayout;
+  replyLayout = replyLayout;
+};
+
+main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }
+  = caps => [
+    root := env.get caps.env "SLIME_FS_BINDINGS_ROOT" ?? ".";
+    bindings := gen.render format;
+    path := t.join "" { root; "/components/proto/src/fs.rs"; };
+    fs.writeAll caps.write path bindings.rust
+  ];
+
+main

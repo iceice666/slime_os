@@ -14,6 +14,12 @@ use crate::memory::{PAGE_SIZE, VirtAddr};
 use crate::trap::UserFrame;
 
 pub const KERNEL_STACK_SIZE: usize = 32 * 1024;
+const SWITCH_STACK_SIZE: usize = 4096;
+static mut SWITCH_STACK: [u8; SWITCH_STACK_SIZE] = [0; SWITCH_STACK_SIZE];
+
+fn switch_stack_top() -> u64 {
+    core::ptr::addr_of_mut!(SWITCH_STACK) as u64 + SWITCH_STACK_SIZE as u64
+}
 /// Hard global bound on simultaneously live tasks. The 24 MiB heap reserves
 /// at most 1 MiB for eager kernel stacks, leaving generation/object-store
 /// staging headroom. Per-spawner limits provide the finer M6.1 bound.
@@ -102,6 +108,18 @@ fn remove_task(sched: &mut Scheduler, id: TaskId) {
     sched.ready.retain(|ready| *ready != id);
 }
 
+/// Propagates active kernel-half mappings to every task address space.
+/// Callers must not hold `SCHEDULER`; this function acquires that lock.
+pub(crate) fn synchronize_kernel_mappings(source: crate::memory::PhysAddr) {
+    let sched = SCHEDULER.lock();
+    for task in &sched.tasks {
+        let destination = task.address_space.pml4();
+        if destination != source {
+            crate::memory::vmm::copy_kernel_half(source, destination);
+        }
+    }
+}
+
 static SCHEDULER: LazyLock<Mutex<Scheduler>> = LazyLock::new(|| Mutex::new(Scheduler::new()));
 
 global_asm!(
@@ -133,20 +151,23 @@ global_asm!(
 
     .global switch_address_space_and_user
     switch_address_space_and_user:
-        mov r11, rdi
-        mov r10, rsi
-        push r11
-        push r10
+        cli
+        mov rbx, rdi
+        mov r12, rsi
+        call {switch_stack_top}
+        mov rsp, rax
+        push rbx
+        push r12
         call {tss_rsp0}
-        pop r10
-        pop r11
+        pop r12
+        pop rbx
         sub rax, 160
         mov rdi, rax
-        mov rsi, r10
+        mov rsi, r12
         mov rcx, 20
         rep movsq
         mov r10, rax
-        mov cr3, r11
+        mov cr3, rbx
         mov rsp, rax
         add rsp, 160
         push qword ptr [r10+152]
@@ -172,6 +193,7 @@ global_asm!(
         iretq
     "#,
     tss_rsp0 = sym crate::gdt::rsp0,
+    switch_stack_top = sym switch_stack_top,
 );
 
 unsafe extern "C" {

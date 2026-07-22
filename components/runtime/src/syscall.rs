@@ -19,6 +19,9 @@ const SYS_RECOVERY_RECONSTRUCT: u64 = 10;
 const SYS_ENDPOINT_CREATE: u64 = 11;
 const SYS_SUPERVISION_STATUS: u64 = 12;
 const SYS_CAP_DROP: u64 = 13;
+const SYS_DIRECTORY_INSPECT: u64 = 14;
+const SYS_DIRECTORY_DERIVE: u64 = 15;
+const SYS_DIRECTORY_COMMIT: u64 = 16;
 
 pub const ERR_SUCCESS: i64 = 0;
 pub const ERR_BAD_CAP: i64 = -1;
@@ -190,6 +193,66 @@ pub fn supervision_status(slot: u32) -> Result<Option<Termination>, i64> {
 /// Releases the capability in `slot`, revoking this task's ownership of it.
 pub fn cap_drop(slot: u32) -> i64 {
     unsafe { raw_syscall(SYS_CAP_DROP, slot as u64, 0, 0, 0, 0) }
+}
+
+pub const MAX_DIRECTORY_PATH: usize = 48;
+
+/// Returns the current immutable root and this capability's enforced scope.
+pub fn directory_inspect(
+    slot: u32,
+    required_rights: u32,
+    root: &mut [u8; 32],
+    scope: &mut [u8; MAX_DIRECTORY_PATH],
+) -> Result<usize, i64> {
+    let result = unsafe {
+        raw_syscall(
+            SYS_DIRECTORY_INSPECT,
+            slot as u64,
+            required_rights as u64,
+            root.as_mut_ptr() as u64,
+            scope.as_mut_ptr() as u64,
+            0,
+        )
+    };
+    if result < 0 {
+        Err(result)
+    } else {
+        Ok(result as usize)
+    }
+}
+
+/// Derives a capability scoped below `relative`, with a narrow rights mask.
+pub fn directory_derive(slot: u32, relative: &[u8], rights: u32) -> Result<u32, i64> {
+    let result = unsafe {
+        raw_syscall(
+            SYS_DIRECTORY_DERIVE,
+            slot as u64,
+            relative.as_ptr() as u64,
+            relative.len() as u64,
+            rights as u64,
+            0,
+        )
+    };
+    if result < 0 {
+        Err(result)
+    } else {
+        Ok(result as u32)
+    }
+}
+
+/// Atomically swaps a directory namespace root after the new snapshot object
+/// has been committed. A stale expected root returns `ERR_WOULDBLOCK`.
+pub fn directory_commit(slot: u32, expected: &[u8; 32], new: &[u8; 32]) -> i64 {
+    unsafe {
+        raw_syscall(
+            SYS_DIRECTORY_COMMIT,
+            slot as u64,
+            expected.as_ptr() as u64,
+            new.as_ptr() as u64,
+            0,
+            0,
+        )
+    }
 }
 
 /// Writes `bytes` to the kernel debug/serial log. Returns the byte count

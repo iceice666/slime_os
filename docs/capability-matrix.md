@@ -55,6 +55,10 @@ Rights are a flat `u32`; bits 16–31 are free.
 | Executable | SPAWN (16) | executable slot validation in `SYS_SPAWN` | generation manifest | gated (M6.1) |
 | EndpointFactory | ENDPOINT_CREATE (17) | `SYS_ENDPOINT_CREATE` | generation manifest | gated (M6.1) |
 | Supervision | SUPERVISE (18) | `SYS_SUPERVISION_STATUS` | returned by successful `SYS_SPAWN` | gated (M6.1) |
+| Directory | DIRECTORY_READ (19) | `SYS_DIRECTORY_INSPECT` before filesystem reads | kernel bootstrap from the generation's declared root | gated (M6.3) |
+| Directory | DIRECTORY_WRITE (20) | `SYS_DIRECTORY_INSPECT` before mutation and `SYS_DIRECTORY_COMMIT` for atomic root swap | same | gated (M6.3) |
+| Directory | DIRECTORY_LIST (21) | `SYS_DIRECTORY_INSPECT` before bounded enumeration | same | gated (M6.3) |
+| Directory | DIRECTORY_DERIVE (22) | `SYS_DIRECTORY_DERIVE` for a subdirectory-scoped, narrow-rights copy | same; powerbox minting needs only this operation | gated (M6.3) |
 
 Semantics not visible in the table:
 
@@ -62,6 +66,9 @@ Semantics not visible in the table:
   arrives with exactly the rights the sender attached.
 - `derive` and spawn grants are non-consuming and narrow-only. A derived copy
   that retains `TRANSFER` requires that meta-right on its source.
+- Subdirectory-scoped capabilities may browse and derive further, but cannot
+  commit the namespace root. Root transitions require an unscoped WRITE cap;
+  scoped writes are rejected before object-store I/O.
 - Spawn retains the executable and all grant sources. It returns one
   supervision handle and is bounded independently per spawner by the
   manifest's `spawnBudget`, plus the global live-task ceiling.
@@ -79,6 +86,9 @@ Semantics not visible in the table:
 | Live tasks | `MAX_TASKS = 32` | `SpawnError::TooManyTasks` |
 | Live children per spawner | manifest `spawnBudget <= 32` | `SpawnError::BudgetExhausted` |
 | Pinned DMA regions | `MAX_PINNED_REGIONS = 32` | DMA table |
+| Directory path bytes | `MAX_DIRECTORY_PATH = 48` | `SYS_DIRECTORY_DERIVE`; filesystem schema |
+| Directory path depth | `MAX_DIRECTORY_DEPTH = 4` | `DirectoryAuthority::derive`; filesystem schema |
+| Directory entries per snapshot | `MAX_ENTRIES = 16` | filesystem protocol and snapshot decoder |
 
 `MAX_TASKS` is coupled to the heap: each task eagerly allocates a 32 KiB
 kernel stack, so the global ceiling reserves at most 1 MiB of the 24 MiB heap.
@@ -89,9 +99,6 @@ Per-spawner budgets prevent one client from consuming that global allowance.
 | Candidate object | Candidate rights | Trigger | Open questions |
 | --- | --- | --- | --- |
 | BootState update authority beyond recovery | possibly STAGE_PENDING | M6 generation staging | Boundary between userspace staging and immutable stage-0 slot writes |
-| Directory | READ / WRITE / LIST? | M6 | Granularity; whether powerbox minting needs more than `derive` |
-| Endpoint minting | ENDPOINT_CREATE | M6.1 | Factory capability with bounded task cap-table slots |
-| RIGHT_SPAWN on Executable | SPAWN | M6.1 | Manifest-gated and enforced at `SYS_SPAWN` |
 | NetworkDestination | CONNECT / SEND / RECV / LISTEN | M7 | Object shape: (protocol, address, port) declared in the generation? |
 | EnergyAccount | READ? | M7 | Whether accounting is authority at all or read-only telemetry |
 | SharedBuffer creation | CREATE / quota | userspace driver path | Block payloads need userspace-created buffers; who may create, how much |

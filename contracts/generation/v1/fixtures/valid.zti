@@ -18,6 +18,8 @@
     { id = "sha256:storage-store-probe"; kind = "component"; size = 65536; };
     { id = "sha256:generation-manager"; kind = "component"; size = 32768; };
     { id = "sha256:spawn-service"; kind = "component"; size = 65536; };
+    { id = "sha256:filesystem-service"; kind = "component"; size = 131072; };
+    { id = "sha256:directory-probe"; kind = "component"; size = 65536; };
   ];
 
   components = [
@@ -109,6 +111,22 @@
       spawnBudget = 8;
       commandProfile = [];
     };
+    {
+      name = "filesystem-service";
+      object = "sha256:filesystem-service";
+      role = "service";
+      dependencies = ["init";];
+      spawnBudget = 0;
+      commandProfile = [];
+    };
+    {
+      name = "directory-probe";
+      object = "sha256:directory-probe";
+      role = "application";
+      dependencies = ["filesystem-service";];
+      spawnBudget = 0;
+      commandProfile = [];
+    };
   ];
   grants = [
     {
@@ -173,6 +191,27 @@
       target = "generation-manager";
       rights = ["healthConfirm";];
       transferable = false;
+    };
+    {
+      name = "filesystem-rpc";
+      source = "directory-probe";
+      target = "filesystem-service";
+      rights = ["send"; "recv";];
+      transferable = false;
+    };
+    {
+      name = "filesystem-store";
+      source = "init";
+      target = "filesystem-service";
+      rights = ["storeRead"; "storeWrite";];
+      transferable = false;
+    };
+    {
+      name = "filesystem-root";
+      source = "init";
+      target = "directory-probe";
+      rights = ["directoryRead"; "directoryWrite"; "directoryList"; "directoryDerive";];
+      transferable = true;
     };
   ];
 

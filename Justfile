@@ -37,6 +37,12 @@ spawn_service_check: contracts_check generation_check
         -drive if=none,id=slime-storage,format=raw,readonly=on,file=/tmp/slime-os-spawn-service.img \
         -device virtio-blk-pci,drive=slime-storage,disable-legacy=on,queue-size=8
 
+# M6.3: generated filesystem protocol, explicit transferable Directory
+# authority, bounded immutable snapshots, and atomic namespace root commits.
+directory_check: contracts_check generation_check
+    cd components && cargo test --target x86_64-unknown-linux-gnu -p slime-proto --test fs
+    ./scripts/check-directory.py /tmp/slime-os-directory.img
+
 # M5.1: exercise the storage-capability foundation (PCI/DMA/cap/block-proto)
 # under QEMU. Proves an unprivileged component cannot acquire device rights.
 storage_cap_check:

@@ -567,7 +567,7 @@ Milestone 5 is complete only when all of the following are observed:
 
 ## Milestone 6: Native interactive environment
 
-**Status:** M6.1 and M6.2 done; M6.3 through M6.7 are planned below.
+**Status:** M6.1 through M6.3 done; M6.4 through M6.7 are planned below.
 
 Scope:
 
@@ -638,7 +638,7 @@ Exit condition: a client component resolves a command name through its profile a
 
 ### M6.3: Filesystem service and directory capabilities
 
-**Status:** Not started.
+**Status:** Done. Verified by `just directory_check`.
 
 Deliverables:
 
