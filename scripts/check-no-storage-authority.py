@@ -27,19 +27,32 @@ ALLOWED_SYSCALLS = {
     "SYS_DEBUG_WRITE",
     "SYS_BLOCK_TRANSACT",
     "SYS_STORE_TRANSACT",
-    "SYS_RECOVERY_RECONSTRUCT",
     "SYS_HEALTH_CONFIRM",
     "SYS_UNHEALTHY",
+    "SYS_RECOVERY_RECONSTRUCT",
+    "SYS_ENDPOINT_CREATE",
+    "SYS_SUPERVISION_STATUS",
+    "SYS_CAP_DROP",
+    "SYS_DIRECTORY_INSPECT",
+    "SYS_DIRECTORY_DERIVE",
+    "SYS_DIRECTORY_COMMIT",
+    "SYS_INPUT_READ",
+    "SYS_GENERATION_TRANSACT",
+    "SYS_GENERATION_RECEIVE",
 }
 ALLOWED_KERNEL_OBJECTS = {
     "Endpoint",
+    "EndpointFactory",
+    "Input",
     "Executable",
+    "Supervision",
     "PciFunction",
     "DmaMemory",
     "Irq",
     "SharedBuffer",
     "BlockDevice",
     "ObjectStore",
+    "Directory",
     "GenerationControl",
 }
 ALLOWED_RIGHTS = {
@@ -59,6 +72,14 @@ ALLOWED_RIGHTS = {
     "RIGHT_STORE_WRITE",
     "RIGHT_HEALTH_CONFIRM",
     "RIGHT_BOOT_UPDATE",
+    "RIGHT_SPAWN",
+    "RIGHT_ENDPOINT_CREATE",
+    "RIGHT_SUPERVISE",
+    "RIGHT_DIRECTORY_READ",
+    "RIGHT_DIRECTORY_WRITE",
+    "RIGHT_DIRECTORY_LIST",
+    "RIGHT_DIRECTORY_DERIVE",
+    "RIGHT_INPUT_READ",
     "RIGHT_ALL",
 }
 
@@ -73,12 +94,13 @@ def enum_variants(text: str, enum_name: str) -> set[str]:
     )
     if match is None:
         fail(f"cannot locate enum {enum_name}")
-    variants: set[str] = set()
-    for line in match.group("body").splitlines():
-        candidate = line.strip().split("(", 1)[0].split("{", 1)[0].rstrip(",")
-        if candidate and not candidate.startswith("//"):
-            variants.add(candidate)
-    return variants
+    return set(
+        re.findall(
+            r"^    ([A-Za-z][A-Za-z0-9_]*)\s*(?:\([^\n]*\)|\{|,)",
+            match.group("body"),
+            re.MULTILINE,
+        )
+    )
 
 
 def check_surfaces() -> None:
@@ -110,7 +132,7 @@ def grant_block(text: str, name: str) -> str:
 def check_explicit_grants() -> None:
     manifest = MANIFEST.read_text(encoding="utf-8")
     normal = grant_block(manifest, "block-read")
-    if 'target = "storage-probe";' not in normal or 'rights = ["read";];' not in normal:
+    if 'target = "storage-probe";' not in normal or 'rights = ["blockRead";];' not in normal:
         fail("normal storage probe no longer has exactly read authority")
 
     for name, target in [
@@ -119,7 +141,8 @@ def check_explicit_grants() -> None:
         ("store-access", "storage-store-probe"),
     ]:
         block = grant_block(manifest, name)
-        if f'target = "{target}";' not in block or 'rights = ["read"; "write";];' not in block:
+        expected = '["storeRead"; "storeWrite";]' if name == "store-access" else '["blockRead"; "blockWrite";]'
+        if f'target = "{target}";' not in block or f"rights = {expected};" not in block:
             fail(f"{name} is not an explicit test-component write grant")
         if "transferable = false;" not in block:
             fail(f"{name} became transferable")
