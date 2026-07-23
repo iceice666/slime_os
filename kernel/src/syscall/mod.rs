@@ -729,6 +729,7 @@ fn sys_debug_write(frame: &mut UserFrame) {
     // SAFETY: the current task's complete user range was validated as mapped.
     let bytes = unsafe { core::slice::from_raw_parts(buf, len) };
     crate::serial::write_bytes(bytes);
+    crate::frame_buffer::write_bytes(bytes);
     frame.rax = len as u64;
 }
 fn sys_generation_receive(frame: &mut UserFrame) {

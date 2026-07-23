@@ -208,6 +208,39 @@ pub fn init_framebuffer() {
     *WRITER.lock() = Some(writer);
 }
 
+/// Write userspace console bytes to the visible framebuffer without allocating.
+/// Invalid UTF-8 is rendered one byte at a time using the fallback glyph path.
+pub fn write_bytes(bytes: &[u8]) {
+    use core::fmt::Write;
+    let mut writer = WRITER.lock();
+    let Some(writer) = writer.as_mut() else {
+        return;
+    };
+    let mut remaining = bytes;
+    while !remaining.is_empty() {
+        match core::str::from_utf8(remaining) {
+            Ok(text) => {
+                let _ = writer.write_str(text);
+                break;
+            }
+            Err(error) => {
+                let valid = error.valid_up_to();
+                if valid != 0 {
+                    // SAFETY: `valid_up_to` is guaranteed to end at a UTF-8 boundary.
+                    let text = unsafe { core::str::from_utf8_unchecked(&remaining[..valid]) };
+                    let _ = writer.write_str(text);
+                    remaining = &remaining[valid..];
+                }
+                if remaining.is_empty() {
+                    break;
+                }
+                writer.write_char(char::from(remaining[0]));
+                remaining = &remaining[1..];
+            }
+        }
+    }
+}
+
 #[doc(hidden)]
 pub fn _print(args: fmt::Arguments) {
     use core::fmt::Write;
