@@ -88,6 +88,19 @@ storage_nvme_read_check:
         -drive if=none,id=slime-nvme,format=raw,readonly=on,file=/tmp/slime-os-nvme-read.img \
         -device nvme,serial=slime-nvme,drive=slime-nvme
 
+# M7.1: bounded, versioned hardware inventory; deterministic two-boot QEMU
+# normalization; read-only NVMe identity; and safe Framework image build.
+framework_inventory_check: framework_safety_check
+    python3 scripts/check-framework-inventory.py
+
+# Capture pre-boot internal-storage hashes before booting the physical image.
+framework_inventory_prepare device output="/tmp/slime-os-framework-inventory.img":
+    python3 scripts/check-framework-inventory.py --image {{output}} --prepare --storage-device {{device}}
+
+# Append the physical serial report and verify the pre-boot hash is unchanged.
+framework_inventory_record serial evidence="evidence/framework-inventory.jsonl" pending="/tmp/slime-framework-inventory-pending.json":
+    python3 scripts/check-framework-inventory.py --record --pending {{pending}} --serial-log {{serial}} --evidence {{evidence}}
+
 # M5.3: persist a bounded write, flush it, and verify it after a fresh boot.
 storage_write_check:
     ./scripts/check-storage.py write /tmp/slime-os-storage-write.img

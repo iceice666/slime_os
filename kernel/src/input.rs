@@ -10,6 +10,7 @@ use spin::Mutex;
 
 use crate::acpi::MadtInfo;
 use crate::serial_println;
+use crate::time::apic::RouteError;
 
 const STATUS_PORT: u16 = 0x64;
 const DATA_PORT: u16 = 0x60;
@@ -22,14 +23,78 @@ static KEYBOARD_PRESENT: AtomicBool = AtomicBool::new(false);
 static QUEUE: Mutex<KeyQueue> = Mutex::new(KeyQueue::new());
 static DECODER: Mutex<ScanDecoder> = Mutex::new(ScanDecoder::new());
 static SCRIPT: Mutex<ScriptInput> = Mutex::new(ScriptInput::new());
+const MAX_INIT_STAGES: usize = 12;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputPath {
+    I8042,
+    UsbHid,
+    FirmwareOther,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputStage {
+    FirmwareHint,
+    PortsDisabled,
+    OutputDrained,
+    ConfigRead,
+    ControllerSelfTest,
+    FirstPortEnabled,
+    KeyboardResetAck,
+    KeyboardSelfTest,
+    ScanningEnabled,
+    InterruptRouted,
+    Online,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InputStageRecord {
+    pub stage: InputStage,
+    pub error: Option<InputError>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InputInitReport {
+    pub path: InputPath,
+    pub stages: [Option<InputStageRecord>; MAX_INIT_STAGES],
+    pub len: usize,
+}
+
+impl InputInitReport {
+    const fn new(path: InputPath) -> Self {
+        Self {
+            path,
+            stages: [None; MAX_INIT_STAGES],
+            len: 0,
+        }
+    }
+
+    fn push(&mut self, stage: InputStage, error: Option<InputError>) {
+        if let Some(slot) = self.stages.get_mut(self.len) {
+            *slot = Some(InputStageRecord { stage, error });
+            self.len += 1;
+        }
+    }
+
+    pub fn result(&self) -> Result<(), InputError> {
+        self.stages[..self.len]
+            .iter()
+            .flatten()
+            .find_map(|record| record.error)
+            .map_or(Ok(()), Err)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputError {
     ControllerTimeout,
     ControllerSelfTestFailed(u8),
     KeyboardResetFailed(u8),
-    MissingIoApic,
-    InterruptRouteUnavailable,
+    RouteMissingIoApic,
+    RouteGsiOutOfRange,
+    RouteMapFailed,
+    ControllerNotImplemented,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,50 +123,155 @@ pub struct KeyEvent {
 }
 
 pub fn init(madt: &MadtInfo, i8042_present: bool) -> Result<(), InputError> {
+    init_with_report(madt, i8042_present, false).result()
+}
+
+pub fn init_with_report(
+    madt: &MadtInfo,
+    i8042_present: bool,
+    usb_controller_present: bool,
+) -> InputInitReport {
+    let mut report = InputInitReport::new(if i8042_present {
+        InputPath::I8042
+    } else if usb_controller_present {
+        InputPath::UsbHid
+    } else {
+        InputPath::FirmwareOther
+    });
+    report.push(InputStage::FirmwareHint, None);
     if !i8042_present {
-        return Err(InputError::InterruptRouteUnavailable);
+        report.push(
+            InputStage::Failed,
+            Some(InputError::ControllerNotImplemented),
+        );
+        return report;
     }
 
     unsafe { outb(STATUS_PORT, 0xad) };
     unsafe { outb(STATUS_PORT, 0xa7) };
+    report.push(InputStage::PortsDisabled, None);
     drain_output();
+    report.push(InputStage::OutputDrained, None);
 
-    let mut config = read_controller_config()?;
-    config &= !0x43; // IRQ1 off while configuring; translation and port clock enabled below.
-    write_controller_config(config)?;
+    let mut config = match read_controller_config() {
+        Ok(config) => config,
+        Err(error) => {
+            report.push(InputStage::ConfigRead, Some(error));
+            return report;
+        }
+    };
+    config &= !0x43;
+    if let Err(error) = write_controller_config(config) {
+        report.push(InputStage::ConfigRead, Some(error));
+        return report;
+    }
+    report.push(InputStage::ConfigRead, None);
 
-    command(0xaa)?;
-    let self_test = read_data()?;
+    if let Err(error) = command(0xaa) {
+        report.push(InputStage::ControllerSelfTest, Some(error));
+        return report;
+    }
+    let self_test = match read_data() {
+        Ok(value) => value,
+        Err(error) => {
+            report.push(InputStage::ControllerSelfTest, Some(error));
+            return report;
+        }
+    };
     if self_test != 0x55 {
-        return Err(InputError::ControllerSelfTestFailed(self_test));
+        report.push(
+            InputStage::ControllerSelfTest,
+            Some(InputError::ControllerSelfTestFailed(self_test)),
+        );
+        return report;
     }
+    report.push(InputStage::ControllerSelfTest, None);
 
-    command(0xae)?;
-    config = read_controller_config()?;
-    config |= 0x41; // IRQ1 + set-1 translation.
-    config &= !0x10; // first port clock enabled.
-    write_controller_config(config)?;
+    let port_result = (|| {
+        command(0xae)?;
+        config = read_controller_config()?;
+        config |= 0x41;
+        config &= !0x10;
+        write_controller_config(config)
+    })();
+    if let Err(error) = port_result {
+        report.push(InputStage::FirstPortEnabled, Some(error));
+        return report;
+    }
+    report.push(InputStage::FirstPortEnabled, None);
 
-    write_data(0xff)?;
-    let ack = read_data()?;
+    let reset_ack = (|| {
+        write_data(0xff)?;
+        read_data()
+    })();
+    let ack = match reset_ack {
+        Ok(value) => value,
+        Err(error) => {
+            report.push(InputStage::KeyboardResetAck, Some(error));
+            return report;
+        }
+    };
     if ack != 0xfa {
-        return Err(InputError::KeyboardResetFailed(ack));
+        report.push(
+            InputStage::KeyboardResetAck,
+            Some(InputError::KeyboardResetFailed(ack)),
+        );
+        return report;
     }
-    let reset = read_data()?;
-    if reset != 0xaa {
-        return Err(InputError::KeyboardResetFailed(reset));
-    }
-    write_data(0xf4)?;
-    let enable = read_data()?;
-    if enable != 0xfa {
-        return Err(InputError::KeyboardResetFailed(enable));
-    }
+    report.push(InputStage::KeyboardResetAck, None);
 
-    crate::time::apic::route_external_irq(madt, 1, crate::interrupts::KEYBOARD_VECTOR)
-        .map_err(|_| InputError::MissingIoApic)?;
+    let reset = match read_data() {
+        Ok(value) => value,
+        Err(error) => {
+            report.push(InputStage::KeyboardSelfTest, Some(error));
+            return report;
+        }
+    };
+    if reset != 0xaa {
+        report.push(
+            InputStage::KeyboardSelfTest,
+            Some(InputError::KeyboardResetFailed(reset)),
+        );
+        return report;
+    }
+    report.push(InputStage::KeyboardSelfTest, None);
+
+    let enable_ack = (|| {
+        write_data(0xf4)?;
+        read_data()
+    })();
+    let enable = match enable_ack {
+        Ok(value) => value,
+        Err(error) => {
+            report.push(InputStage::ScanningEnabled, Some(error));
+            return report;
+        }
+    };
+    if enable != 0xfa {
+        report.push(
+            InputStage::ScanningEnabled,
+            Some(InputError::KeyboardResetFailed(enable)),
+        );
+        return report;
+    }
+    report.push(InputStage::ScanningEnabled, None);
+
+    if let Err(error) =
+        crate::time::apic::route_external_irq(madt, 1, crate::interrupts::KEYBOARD_VECTOR)
+    {
+        let error = match error {
+            RouteError::MissingIoApic => InputError::RouteMissingIoApic,
+            RouteError::GsiOutOfRange => InputError::RouteGsiOutOfRange,
+            RouteError::Map(_) => InputError::RouteMapFailed,
+        };
+        report.push(InputStage::InterruptRouted, Some(error));
+        return report;
+    }
+    report.push(InputStage::InterruptRouted, None);
     KEYBOARD_PRESENT.store(true, Ordering::Release);
+    report.push(InputStage::Online, None);
     serial_println!("[input] i8042 keyboard online");
-    Ok(())
+    report
 }
 
 pub fn present() -> bool {

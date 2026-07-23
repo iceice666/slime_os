@@ -105,10 +105,9 @@ static SEGMENTS: Once<Vec<McfgSegment>> = Once::new();
 /// Parse and install the PCI segment table from ACPI MCFG. Must run after
 /// [`acpi::init`] and before [`enumerate`].
 pub fn init() -> Result<&'static [McfgSegment], PciError> {
-    let segments: &'static [McfgSegment] = SEGMENTS
+    SEGMENTS
         .try_call_once(parse_mcfg)
-        .map_err(|_| PciError::MalformedMcfg)?;
-    Ok(segments)
+        .map(|segments| segments.as_slice())
 }
 
 pub fn segments() -> &'static [McfgSegment] {
@@ -330,6 +329,60 @@ fn read_config_space(buf: &mut [u8; CONFIG_SPACE_SIZE]) {
     for (i, slot) in buf.iter_mut().enumerate() {
         *slot = read_config_byte(i);
     }
+}
+
+/// Decode assigned BAR bases without writing PCI configuration space.
+/// Sizes are intentionally unavailable on this passive path and reported as
+/// zero; active size probing remains restricted to an explicitly selected
+/// driver-owned function.
+pub fn assigned_bars(info: &PciFunctionInfo) -> Result<[BarInfo; BAR_COUNT], PciError> {
+    let header_type = config_read_u8(info, CONFIG_HEADER_TYPE)? & 0x7f;
+    let slots = match header_type {
+        0 => 6,
+        1 => 2,
+        _ => 0,
+    };
+    let mut bars = [BarInfo {
+        index: 0,
+        kind: BarKind::Memory32,
+        prefetchable: false,
+        size: 0,
+        base: 0,
+    }; BAR_COUNT];
+    let mut slot = 0usize;
+    while slot < slots {
+        let raw = config_read_u32(info, CONFIG_BARS + slot * 4)?;
+        let kind = if raw & 1 != 0 {
+            BarKind::Io
+        } else {
+            match raw & 0b110 {
+                0 => BarKind::Memory32,
+                BAR_TYPE_MEM64 => BarKind::Memory64,
+                _ => return Err(PciError::BadBar),
+            }
+        };
+        let prefetchable = raw & BAR_PREFETCHABLE != 0 && kind != BarKind::Io;
+        let base = match kind {
+            BarKind::Io => (raw & BAR_IO_MASK) as u64,
+            BarKind::Memory32 => (raw & BAR_MEM_MASK) as u64,
+            BarKind::Memory64 => {
+                if slot + 1 >= slots {
+                    return Err(PciError::BadBar);
+                }
+                let high = config_read_u32(info, CONFIG_BARS + (slot + 1) * 4)?;
+                ((high as u64) << 32 | raw as u64) & BAR_MEM_MASK64
+            }
+        };
+        bars[slot] = BarInfo {
+            index: slot as u8,
+            kind,
+            prefetchable,
+            size: u64::from(base != 0),
+            base,
+        };
+        slot += if kind == BarKind::Memory64 { 2 } else { 1 };
+    }
+    Ok(bars)
 }
 
 /// Probe and validate all six BARs of a function. Returns the typed BAR table;

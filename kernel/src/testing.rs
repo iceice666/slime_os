@@ -96,3 +96,33 @@ fn acpi_s5_package_decodes() {
     ];
     assert_eq!(acpi::parse_s5_aml(&aml), Some((5, 5)));
 }
+
+#[test_case]
+fn acpi_table_identity_checks_length_checksum_and_fields() {
+    let mut table = [0u8; 36];
+    table[..4].copy_from_slice(b"IVRS");
+    table[4..8].copy_from_slice(&36u32.to_le_bytes());
+    table[8] = 2;
+    table[10..16].copy_from_slice(b"SLIME ");
+    table[16..24].copy_from_slice(b"INVENTRY");
+    let sum = table.iter().fold(0u8, |sum, byte| sum.wrapping_add(*byte));
+    table[9] = 0u8.wrapping_sub(sum);
+    let identity = acpi::parse_table_identity(&table).unwrap();
+    assert_eq!(identity.signature, *b"IVRS");
+    assert_eq!(identity.length, 36);
+    assert_eq!(identity.revision, 2);
+    assert_eq!(identity.oem_id, *b"SLIME ");
+    assert_eq!(identity.oem_table_id, *b"INVENTRY");
+
+    table[4..8].copy_from_slice(&35u32.to_le_bytes());
+    assert_eq!(
+        acpi::parse_table_identity(&table),
+        Err(acpi::AcpiError::InvalidTableLength)
+    );
+    table[4..8].copy_from_slice(&36u32.to_le_bytes());
+    table[0] ^= 1;
+    assert_eq!(
+        acpi::parse_table_identity(&table),
+        Err(acpi::AcpiError::InvalidChecksum)
+    );
+}

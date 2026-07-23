@@ -14,7 +14,7 @@ Completion requires observable behavior, not only compiled code or framebuffer o
 | 4. Framework safe bring-up | Verified | The same isolated userspace slice runs from removable media without modifying internal storage. |
 | 5. Storage and generations | In progress — M5.1 through M5.6c, M5.8, and M5.9 complete; M5.7 physical verification pending | A failed pending generation automatically leaves or restores a bootable known-good generation. |
 | 6. Native interactive environment | Done — M6.1 through M6.7 complete | Native components inspect, stage, select, roll back, and transfer generations through explicit capabilities. |
-| 7. Daily-driver hardware | Planned — M7.1 through M7.14 defined; physical keyboard unavailable | The Framework target supports the hardware and lifecycle needed for daily use. |
+| 7. Daily-driver hardware | In progress — M7.1 implementation complete; physical Framework evidence pending | The Framework target supports the hardware and lifecycle needed for daily use. |
 | 8. Foreign-workload authority foundations | Not yet implemented | Revocation, scheduling class, and secrets exist as non-ambient, auditable, rollbackable authority so foreign and agent workloads can be confined. |
 | 9. Compatibility route | Not yet implemented | A Linux binary declared as a container runs under the personality, confined to its declared grants and denied everything else with a normal errno. |
 | 10. Accelerator compute authority | Not yet implemented | Inference/compute submission is a rights-gated, budgeted, IOMMU-contained capability visible in the manifest. |
@@ -810,7 +810,7 @@ Milestone 6 is complete only when all of the following are observed:
 
 ## Milestone 7: Daily-driver hardware
 
-**Status:** Planned; implementation has not started. The current Framework removable image boots, but physical keyboard input has been observed unavailable. M7.1 captures that failure without requiring interactive input, and M7.4 is the first slice allowed to claim a working physical keyboard.
+**Status:** In progress. M7.1's bounded inventory and host evidence harness are implemented and QEMU-verified; the required physical Framework evidence record is pending. The current Framework removable image has previously reported no usable physical keyboard input, and M7.4 is the first slice allowed to claim a working physical keyboard.
 
 M7 promotes hardware in two distinct steps: deterministic mechanism and fault handling under QEMU first, then an observed Framework run with the exact generation-declared device grant. A QEMU pass never substitutes for physical evidence. DMA-capable physical drivers remain trusted and read-only until M7.4 installs IOMMU containment; internal NVMe writes remain disabled until M7.7 completes every promotion gate.
 
@@ -824,7 +824,7 @@ Sequencing:
 
 ### M7.1: Framework evidence harness and hardware inventory
 
-**Status:** Not started. First observed blocker: the current removable image reports no usable physical keyboard input.
+**Status:** Implementation complete; physical Framework verification pending. `just framework_inventory_check` passes, but the exit condition remains open until `evidence/framework-inventory.jsonl` records the target Framework topology, localized keyboard failure, and byte-identical internal-NVMe comparison region.
 
 Deliverables:
 

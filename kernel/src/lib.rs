@@ -24,6 +24,7 @@ pub mod generation_manager;
 pub mod generation_proto;
 pub mod generation_service;
 pub mod gpt;
+pub mod hardware_inventory;
 pub mod input;
 pub mod interrupts;
 pub mod ipc;

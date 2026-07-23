@@ -19,6 +19,7 @@ const MAX_TABLE_LEN: usize = 1024 * 1024;
 const MAX_ROOT_ENTRIES: usize = 256;
 const MAX_IO_APICS: usize = 8;
 const MAX_OVERRIDES: usize = 16;
+pub const MAX_ACPI_TABLES: usize = MAX_ROOT_ENTRIES + 2;
 
 static TABLES: Once<AcpiInfo> = Once::new();
 
@@ -135,6 +136,16 @@ impl MadtInfo {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AcpiTableIdentity {
+    pub signature: [u8; 4],
+    pub length: u32,
+    pub revision: u8,
+    pub checksum: u8,
+    pub oem_id: [u8; 6],
+    pub oem_table_id: [u8; 8],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PowerInfo {
     pub hardware_reduced: bool,
     pub reset_register: Option<GenericAddress>,
@@ -147,11 +158,14 @@ pub struct PowerInfo {
     pub s5_type_b: u8,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AcpiInfo {
     pub revision: u8,
     pub root_kind: RootKind,
     pub table_count: usize,
+    pub tables: [Option<AcpiTableIdentity>; MAX_ACPI_TABLES],
+    pub iommu_ivrs_present: bool,
+    pub iommu_dmar_present: bool,
     pub madt: MadtInfo,
     pub power: PowerInfo,
     pub i8042_present: bool,
@@ -259,6 +273,40 @@ pub fn parse_s5_aml(aml: &[u8]) -> Option<(u8, u8)> {
     None
 }
 
+pub fn parse_table_identity(table: &[u8]) -> Result<AcpiTableIdentity, AcpiError> {
+    if table.len() < SDT_HEADER_LEN {
+        return Err(AcpiError::InvalidTableLength);
+    }
+    let length = read_u32(table, 4).ok_or(AcpiError::InvalidTableLength)? as usize;
+    if !(SDT_HEADER_LEN..=MAX_TABLE_LEN).contains(&length) || table.len() != length {
+        return Err(AcpiError::InvalidTableLength);
+    }
+    if !checksum_valid(table) {
+        return Err(AcpiError::InvalidChecksum);
+    }
+    Ok(AcpiTableIdentity {
+        signature: table[0..4].try_into().unwrap(),
+        length: length as u32,
+        revision: table[8],
+        checksum: table[9],
+        oem_id: table[10..16].try_into().unwrap(),
+        oem_table_id: table[16..24].try_into().unwrap(),
+    })
+}
+
+fn push_table_identity(
+    tables: &mut [Option<AcpiTableIdentity>; MAX_ACPI_TABLES],
+    count: &mut usize,
+    table: &[u8],
+) -> Result<(), AcpiError> {
+    let slot = tables
+        .get_mut(*count)
+        .ok_or(AcpiError::TooManyRootEntries)?;
+    *slot = Some(parse_table_identity(table)?);
+    *count += 1;
+    Ok(())
+}
+
 fn discover() -> Result<AcpiInfo, AcpiError> {
     let raw = crate::boot::rsdp_address();
     if raw == 0 {
@@ -291,14 +339,23 @@ fn discover() -> Result<AcpiInfo, AcpiError> {
     if root.get(..4) != Some(expected) {
         return Err(AcpiError::InvalidRootSignature);
     }
-    let entries = root
+    let root_body_len = root
         .len()
         .checked_sub(SDT_HEADER_LEN)
-        .ok_or(AcpiError::InvalidTableLength)?
-        / entry_size;
+        .ok_or(AcpiError::InvalidTableLength)?;
+    if root_body_len % entry_size != 0 {
+        return Err(AcpiError::InvalidTableLength);
+    }
+    let entries = root_body_len / entry_size;
     if entries > MAX_ROOT_ENTRIES {
         return Err(AcpiError::TooManyRootEntries);
     }
+
+    let mut tables = [None; MAX_ACPI_TABLES];
+    let mut table_identity_count = 0;
+    push_table_identity(&mut tables, &mut table_identity_count, root)?;
+    let mut iommu_ivrs_present = false;
+    let mut iommu_dmar_present = false;
 
     let mut madt = None;
     let mut fadt = None;
@@ -314,10 +371,13 @@ fn discover() -> Result<AcpiInfo, AcpiError> {
             continue;
         }
         let table = read_sdt(address)?;
+        push_table_identity(&mut tables, &mut table_identity_count, table)?;
         match table.get(..4) {
             Some(b"APIC") if madt.is_none() => madt = Some(parse_madt(table)?),
             Some(b"FACP") if fadt.is_none() => fadt = Some(parse_fadt(table)?),
             Some(b"MCFG") if mcfg.is_none() => mcfg = Some(table),
+            Some(b"IVRS") => iommu_ivrs_present = true,
+            Some(b"DMAR") => iommu_dmar_present = true,
             _ => {}
         }
     }
@@ -328,13 +388,17 @@ fn discover() -> Result<AcpiInfo, AcpiError> {
     if dsdt.get(..4) != Some(b"DSDT") {
         return Err(AcpiError::MissingDsdt);
     }
+    push_table_identity(&mut tables, &mut table_identity_count, dsdt)?;
     let (s5_type_a, s5_type_b) =
         parse_s5_aml(&dsdt[SDT_HEADER_LEN..]).ok_or(AcpiError::MissingSleepState)?;
 
     Ok(AcpiInfo {
         revision: rsdp.revision,
         root_kind,
-        table_count: entries,
+        table_count: table_identity_count,
+        tables,
+        iommu_ivrs_present,
+        iommu_dmar_present,
         madt,
         power: PowerInfo {
             hardware_reduced: fadt.hardware_reduced,

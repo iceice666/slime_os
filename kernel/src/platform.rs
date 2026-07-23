@@ -52,6 +52,17 @@ pub fn reset() -> ! {
     }
 }
 
+pub fn shutdown_or_reset() -> ! {
+    match try_shutdown() {
+        Ok(()) => unreachable!("platform shutdown returned"),
+        Err(error) => {
+            serial_println!("[platform] shutdown unavailable: {:?}; resetting", error);
+            println!("[platform] shutdown failed: {:?}; resetting", error);
+            reset()
+        }
+    }
+}
+
 pub fn shutdown() -> ! {
     match try_shutdown() {
         Ok(()) => unreachable!("platform shutdown returned"),

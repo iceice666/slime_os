@@ -11,7 +11,9 @@ use core::panic::PanicInfo;
 #[cfg(not(test))]
 use boot_contracts::handoff::KernelHandoffV1;
 use slime_os_kernel::frame_buffer::init_framebuffer;
-use slime_os_kernel::{acpi, gdt, input, interrupts, memory, pci, println, serial_println, time};
+use slime_os_kernel::{
+    acpi, gdt, hardware_inventory, input, interrupts, memory, pci, println, serial_println, time,
+};
 #[cfg(test)]
 mod testing;
 
@@ -113,12 +115,10 @@ fn kernel_main() {
         platform.root_kind, platform.table_count
     );
 
-    // PCI ECAM discovery (M5.1). Best-effort: enumerate and report the
-    // bounded function set; an absent MCFG is non-fatal for the existing
-    // component vertical slice.
-    match pci::init() {
-        Ok(segments) => {
-            let functions = pci::enumerate().unwrap_or_default();
+    // PCI ECAM discovery (M5.1). Preserve typed failures; inventory mode needs
+    // to distinguish an unavailable MCFG from an empty topology.
+    let functions = pci::init().and_then(|segments| {
+        pci::enumerate().inspect(|functions| {
             serial_println!(
                 "[pci] {} segment(s), {} function(s)",
                 segments.len(),
@@ -136,10 +136,10 @@ fn kernel_main() {
                     f.class_code,
                 );
             }
-        }
-        Err(error) => {
-            serial_println!("[pci] MCFG/ECAM unavailable: {:?}", error);
-        }
+        })
+    });
+    if let Err(error) = &functions {
+        serial_println!("[pci] discovery failed: {:?}", error);
     }
 
     // Prove the heap really works before relying on it.
@@ -160,12 +160,48 @@ fn kernel_main() {
     );
     println!("[bringup] APIC timer online");
 
-    match input::init(&platform.madt, platform.i8042_present) {
+    let usb_controller_present = functions.as_ref().is_ok_and(|functions| {
+        functions
+            .iter()
+            .any(|function| function.class_code & 0x00ff_ffff == 0x0c_03_30)
+    });
+    let input_report = input::init_with_report(
+        &platform.madt,
+        platform.i8042_present,
+        usb_controller_present,
+    );
+    match input_report.result() {
         Ok(()) => println!("[bringup] keyboard online"),
         Err(error) => {
             serial_println!("[input] keyboard unavailable: {:?}", error);
             println!("[bringup] keyboard unavailable: {:?}", error);
         }
+    }
+    if option_env!("SLIME_FRAMEWORK_INVENTORY") == Some("1") {
+        let inventory_result = hardware_inventory::emit(
+            platform,
+            functions
+                .as_ref()
+                .map(|items| items.as_slice())
+                .map_err(|error| *error),
+            &input_report,
+        );
+        if let Err(error) = inventory_result {
+            serial_println!("[hw-report] failed error={:?}", error);
+            println!("[hw-report] failed error={:?}", error);
+        }
+        #[cfg(not(test))]
+        if option_env!("SLIME_FRAMEWORK_INVENTORY_QEMU") == Some("1") {
+            let code = if inventory_result.is_ok() {
+                slime_os_kernel::QemuExitCode::Success
+            } else {
+                slime_os_kernel::QemuExitCode::Failed
+            };
+            slime_os_kernel::exit_qemu(code);
+            slime_os_kernel::hlt_loop();
+        }
+        #[cfg(not(test))]
+        slime_os_kernel::platform::shutdown_or_reset();
     }
     serial_println!("[platform] ACPI shutdown/reset mechanisms discovered");
     serial_println!("[policy] storage writes require an explicit disposable-QEMU generation grant");

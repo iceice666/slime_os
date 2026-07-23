@@ -34,6 +34,34 @@ const QUEUE_DEPTH: usize = 8;
 const MMIO_BASE: u64 = 0xffff_c200_0000_0000;
 const MAX_MMIO_PAGES: usize = 64;
 const POLL_LIMIT: u32 = 20_000_000;
+const NVME_SERIAL_BYTES: usize = 20;
+const NVME_MODEL_BYTES: usize = 40;
+const NVME_FIRMWARE_BYTES: usize = 8;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NvmeIdentity {
+    pub serial: [u8; NVME_SERIAL_BYTES],
+    pub serial_len: u8,
+    pub model: [u8; NVME_MODEL_BYTES],
+    pub model_len: u8,
+    pub firmware: [u8; NVME_FIRMWARE_BYTES],
+    pub firmware_len: u8,
+    pub namespace_count: u32,
+}
+
+impl NvmeIdentity {
+    pub fn serial(&self) -> &[u8] {
+        &self.serial[..self.serial_len as usize]
+    }
+
+    pub fn model(&self) -> &[u8] {
+        &self.model[..self.model_len as usize]
+    }
+
+    pub fn firmware(&self) -> &[u8] {
+        &self.firmware[..self.firmware_len as usize]
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NvmeError {
@@ -173,6 +201,7 @@ pub struct NvmeBlock {
     io: Queue,
     namespace_id: u32,
     capacity_sectors: u64,
+    identity: NvmeIdentity,
 }
 
 impl NvmeBlock {
@@ -230,6 +259,15 @@ impl NvmeBlock {
             io,
             namespace_id: 1,
             capacity_sectors: 0,
+            identity: NvmeIdentity {
+                serial: [0; NVME_SERIAL_BYTES],
+                serial_len: 0,
+                model: [0; NVME_MODEL_BYTES],
+                model_len: 0,
+                firmware: [0; NVME_FIRMWARE_BYTES],
+                firmware_len: 0,
+                namespace_count: 0,
+            },
         };
         device.configure_admin()?;
         device.identify_controller()?;
@@ -240,6 +278,10 @@ impl NvmeBlock {
 
     pub fn capacity_sectors(&self) -> u64 {
         self.capacity_sectors
+    }
+
+    pub fn identity(&self) -> NvmeIdentity {
+        self.identity
     }
 
     pub fn read_sector(&mut self, lba: u64, output: &mut [u8]) -> Result<(), NvmeError> {
@@ -344,12 +386,9 @@ impl NvmeBlock {
         let result = self.submit_admin(command, Some(&data));
         match result {
             Ok(_) => {
-                let bytes = dma_bytes(&data);
-                let namespace_count = u32::from_le_bytes(bytes[516..520].try_into().unwrap());
+                let parsed = parse_controller_identity(dma_bytes(&data));
                 DMA_TABLE.lock().release(&data)?;
-                if namespace_count == 0 {
-                    return Err(NvmeError::NamespaceMissing);
-                }
+                self.identity = parsed?;
                 Ok(())
             }
             Err(NvmeError::Timeout) => {
@@ -550,6 +589,45 @@ fn parse_namespace(bytes: &[u8]) -> Result<(u64, usize), NvmeError> {
     Ok((capacity, SECTOR_SIZE))
 }
 
+fn normalized_ascii<const N: usize>(bytes: &[u8]) -> Result<([u8; N], u8), NvmeError> {
+    let source = bytes.get(..N).ok_or(NvmeError::Capacity)?;
+    let len = source
+        .iter()
+        .rposition(|byte| !matches!(*byte, b' ' | 0))
+        .map_or(0, |index| index + 1);
+    if source[..len]
+        .iter()
+        .any(|byte| !byte.is_ascii_graphic() && *byte != b' ')
+    {
+        return Err(NvmeError::UnsupportedController);
+    }
+    let mut output = [0; N];
+    output[..len].copy_from_slice(&source[..len]);
+    Ok((output, len as u8))
+}
+
+fn parse_controller_identity(bytes: &[u8]) -> Result<NvmeIdentity, NvmeError> {
+    if bytes.len() < 520 {
+        return Err(NvmeError::Capacity);
+    }
+    let (serial, serial_len) = normalized_ascii::<NVME_SERIAL_BYTES>(&bytes[4..24])?;
+    let (model, model_len) = normalized_ascii::<NVME_MODEL_BYTES>(&bytes[24..64])?;
+    let (firmware, firmware_len) = normalized_ascii::<NVME_FIRMWARE_BYTES>(&bytes[64..72])?;
+    let namespace_count = u32::from_le_bytes(bytes[516..520].try_into().unwrap());
+    if namespace_count == 0 {
+        return Err(NvmeError::NamespaceMissing);
+    }
+    Ok(NvmeIdentity {
+        serial,
+        serial_len,
+        model,
+        model_len,
+        firmware,
+        firmware_len,
+        namespace_count,
+    })
+}
+
 fn validate_doorbells(length: u64, stride: usize) -> Result<(), NvmeError> {
     let required = doorbell_offset(1, true, stride)
         .checked_add(size_of::<u32>())
@@ -686,6 +764,41 @@ mod tests {
         bytes[26] = 0;
         bytes[130] = 9;
         assert_eq!(parse_namespace(&bytes), Ok((32, 512)));
+    }
+
+    #[test_case]
+    fn controller_identity_is_bounded_and_normalized() {
+        let mut bytes = [b' '; PAGE_SIZE];
+        bytes[4..24].copy_from_slice(b"SERIAL-123          ");
+        bytes[24..64].copy_from_slice(b"SLIME NVME MODEL                        ");
+        bytes[64..72].copy_from_slice(b"FW1     ");
+        bytes[516..520].copy_from_slice(&1u32.to_le_bytes());
+        let identity = parse_controller_identity(&bytes).unwrap();
+        assert_eq!(identity.serial(), b"SERIAL-123");
+        assert_eq!(identity.model(), b"SLIME NVME MODEL");
+        assert_eq!(identity.firmware(), b"FW1");
+        assert_eq!(identity.namespace_count, 1);
+    }
+
+    #[test_case]
+    fn controller_identity_rejects_short_non_ascii_and_no_namespaces() {
+        assert_eq!(
+            parse_controller_identity(&[0u8; 64]),
+            Err(NvmeError::Capacity)
+        );
+        let mut bytes = [b' '; PAGE_SIZE];
+        bytes[4] = 0xff;
+        bytes[516..520].copy_from_slice(&1u32.to_le_bytes());
+        assert_eq!(
+            parse_controller_identity(&bytes),
+            Err(NvmeError::UnsupportedController)
+        );
+        bytes[4] = b' ';
+        bytes[516..520].fill(0);
+        assert_eq!(
+            parse_controller_identity(&bytes),
+            Err(NvmeError::NamespaceMissing)
+        );
     }
 
     #[test_case]
