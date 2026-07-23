@@ -1,10 +1,7 @@
 use crate::sha256::Sha256;
 
 pub const MAGIC: [u8; 8] = *b"SLIMERC\0";
-pub const FORMAT_VERSION: u32 = 1;
-pub const HEADER_BYTES: usize = 160;
-pub const STATE_ENTRY_BYTES: usize = 72;
-pub const MAX_STATE_OBJECTS: usize = 32;
+include!("generated/recovery.rs");
 pub const MAX_BYTES: usize = HEADER_BYTES + MAX_STATE_OBJECTS * STATE_ENTRY_BYTES;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

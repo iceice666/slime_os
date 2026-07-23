@@ -129,6 +129,26 @@ wireStruct :: Text -> Text -> Text -> Text -> List WireField -> Text
     "}\n";
   };
 
+-- Schema-owned scalar constant emitters. Each renders one `pub const` line so
+-- boot-family renderers emit Rust bindings the same way `wire.python` emits
+-- struct mechanics.
+usizeConst :: Text -> Int -> Text
+  = name value => join { "pub const "; name; ": usize = "; n.toText value; ";\n"; };
+
+u16Const :: Text -> Int -> Text
+  = name value => join { "pub const "; name; ": u16 = "; n.toText value; ";\n"; };
+
+u32Const :: Text -> Int -> Text
+  = name value => join { "pub const "; name; ": u32 = "; n.toText value; ";\n"; };
+
+u64Const :: Text -> Int -> Text
+  = name value => join { "pub const "; name; ": u64 = "; n.toText value; ";\n"; };
+
+-- Emits a `u64` const from a verbatim text value (e.g. a hex address literal
+-- pinned in the schema as Text).
+u64TextConst :: Text -> Text -> Text
+  = name value => join { "pub const "; name; ": u64 = "; value; ";\n"; };
+
 {
   WireField = WireField;
   join = join;
@@ -142,4 +162,9 @@ wireStruct :: Text -> Text -> Text -> Text -> List WireField -> Text
   rustType = rustType;
   offsetConsts = offsetConsts;
   wireStruct = wireStruct;
+  usizeConst = usizeConst;
+  u16Const = u16Const;
+  u32Const = u32Const;
+  u64Const = u64Const;
+  u64TextConst = u64TextConst;
 }

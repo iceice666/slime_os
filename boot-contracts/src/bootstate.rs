@@ -1,13 +1,7 @@
 use crate::sha256::{Sha256, digest};
 
 pub const MAGIC: [u8; 8] = *b"SLIMEBS\0";
-pub const FORMAT_VERSION: u32 = 2;
-pub const SLOT_BYTES: usize = 512;
-pub const SLOT_COUNT: usize = 2;
-pub const REQUIRED_FLAGS: u64 = 0;
-pub const RELEASE_SEQUENCE_OFFSET: usize = 168;
-pub const CHECKSUM_OFFSET: usize = 176;
-pub const CHECKSUM_END: usize = 208;
+include!("generated/bootstate.rs");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BootState {

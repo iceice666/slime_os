@@ -12,12 +12,13 @@ from zutai_cli import STDLIB, binary
 
 ROOT = Path(__file__).resolve().parent.parent
 OUTPUT = ROOT / "scripts" / "boot_contracts.py"
+RUST_OUTPUT_DIR = ROOT / "boot-contracts" / "src" / "generated"
 GENERATORS = (
-    (ROOT / "contracts" / "generation" / "v2" / "schema.zt", "generation.py"),
-    (ROOT / "contracts" / "kernel-image" / "v1" / "schema.zt", "kernel_image.py"),
-    (ROOT / "contracts" / "bootstate" / "v1" / "schema.zt", "bootstate.py"),
-    (ROOT / "contracts" / "release" / "v1" / "schema.zt", "release.py"),
-    (ROOT / "contracts" / "recovery" / "v1" / "schema.zt", "recovery.py"),
+    (ROOT / "contracts" / "generation" / "v2" / "schema.zt", "generation.py", "generation.rs"),
+    (ROOT / "contracts" / "kernel-image" / "v1" / "schema.zt", "kernel_image.py", "kernel_image.rs"),
+    (ROOT / "contracts" / "bootstate" / "v1" / "schema.zt", "bootstate.py", "bootstate.rs"),
+    (ROOT / "contracts" / "release" / "v1" / "schema.zt", "release.py", "release.rs"),
+    (ROOT / "contracts" / "recovery" / "v1" / "schema.zt", "recovery.py", "recovery.rs"),
 )
 INVALID_SCHEMA = "INVALID_"
 HEADER = """# @generated from boot contract schemas; do not edit.
@@ -77,25 +78,52 @@ def run_generator(generator: Path, staging: Path) -> None:
         raise SystemExit(process.returncode)
 
 
-def render() -> str:
+def format_rust(source: str) -> str:
+    process = subprocess.run(
+        ["rustfmt", "--edition", "2024", "--emit", "stdout"],
+        cwd=ROOT,
+        input=source,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if process.returncode != 0:
+        sys.stderr.write(process.stderr)
+        raise SystemExit(process.returncode)
+    return process.stdout
+
+
+def render() -> tuple[str, dict[Path, str]]:
     with tempfile.TemporaryDirectory(prefix="slime-boot-bindings-") as temporary:
         staging = Path(temporary)
-        for generator, _ in GENERATORS:
+        for generator, _, _ in GENERATORS:
             run_generator(generator, staging)
 
         fragments = []
-        for _, name in GENERATORS:
-            path = staging / name
+        rust_outputs: dict[Path, str] = {}
+        for _, python_name, rust_name in GENERATORS:
+            path = staging / python_name
             if not path.exists():
-                raise SystemExit(f"boot generator did not write {name}")
+                raise SystemExit(f"boot generator did not write {python_name}")
             fragment = path.read_text(encoding="utf-8")
             if INVALID_SCHEMA in fragment:
-                raise SystemExit(f"boot schema reflection/layout validation failed in {name}")
+                raise SystemExit(f"boot schema reflection/layout validation failed in {python_name}")
             fragments.append(fragment.rstrip() + "\n\n")
-        return HEADER + "".join(fragments) + TRACE + HELPERS
+
+            rust_path = staging / rust_name
+            if not rust_path.exists():
+                raise SystemExit(f"boot generator did not write {rust_name}")
+            rust_fragment = rust_path.read_text(encoding="utf-8")
+            if INVALID_SCHEMA in rust_fragment:
+                raise SystemExit(f"boot schema reflection/layout validation failed in {rust_name}")
+            rust_outputs[RUST_OUTPUT_DIR / rust_name] = format_rust(rust_fragment)
+
+        return HEADER + "".join(fragments) + TRACE + HELPERS, rust_outputs
 
 
 def write_atomic(path: Path, contents: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(contents, encoding="utf-8")
     temporary.replace(path)
@@ -106,17 +134,25 @@ def main() -> None:
     parser.add_argument(
         "--check",
         action="store_true",
-        help="fail when the checked-in Python bindings are stale",
+        help="fail when the checked-in bindings are stale",
     )
     arguments = parser.parse_args()
-    generated = render()
+    generated, rust_outputs = render()
     if arguments.check:
         if not OUTPUT.exists() or OUTPUT.read_text(encoding="utf-8") != generated:
             raise SystemExit("generated boot bindings are stale; run `just boot_gen`")
+        for path, contents in rust_outputs.items():
+            if not path.exists() or path.read_text(encoding="utf-8") != contents:
+                raise SystemExit(
+                    f"generated {path.relative_to(ROOT)} is stale; run `just boot_gen`"
+                )
         print("Boot contract bindings are current")
         return
     write_atomic(OUTPUT, generated)
     print(f"Generated {OUTPUT.relative_to(ROOT)}")
+    for path, contents in rust_outputs.items():
+        write_atomic(path, contents)
+        print(f"Generated {path.relative_to(ROOT)}")
 
 
 if __name__ == "__main__":

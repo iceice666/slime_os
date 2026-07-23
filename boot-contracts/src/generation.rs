@@ -1,24 +1,7 @@
 use crate::sha256::Sha256;
 
 pub const MAGIC: [u8; 8] = *b"SLIMEG2\0";
-pub const FORMAT_VERSION: u32 = 2;
-pub const HEADER_LEN: usize = 256;
-pub const OBJECT_LEN: usize = 64;
-pub const COMPONENT_LEN: usize = 32;
-pub const DEPENDENCY_LEN: usize = 4;
-pub const GRANT_LEN: usize = 32;
-pub const STATE_LEN: usize = 24;
-pub const HEALTH_LEN: usize = 4;
-pub const MAX_GENERATION_BYTES: usize = 16 * 1024 * 1024;
-pub const MAX_OBJECTS: usize = 64;
-pub const MAX_COMPONENTS: usize = 32;
-pub const MAX_GRANTS: usize = 128;
-pub const MAX_STATES: usize = 32;
-pub const MAX_DEPENDENCIES: usize = 128;
-pub const MAX_HEALTH_COMPONENTS: usize = 32;
-pub const MAX_STRING_BYTES: usize = 255;
-pub const MAX_STRING_TABLE_BYTES: usize = 64 * 1024;
-pub const MAX_OBJECT_PAYLOAD_BYTES: usize = 8 * 1024 * 1024;
+include!("generated/generation.rs");
 pub const KIND_KERNEL: u32 = 1;
 pub const KIND_BOOTSTRAP: u32 = 2;
 pub const KIND_COMPONENT: u32 = 3;

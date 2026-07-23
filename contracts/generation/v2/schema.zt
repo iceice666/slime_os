@@ -214,8 +214,10 @@ main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * en
   = caps => [
     root := env.get caps.env "SLIME_BOOT_BINDINGS_ROOT" ?? ".";
     bindings := gen.render format;
-    path := t.join "" { root; "/generation.py"; };
-    fs.writeAll caps.write path bindings.python
+    pythonPath := t.join "" { root; "/generation.py"; };
+    rustPath := t.join "" { root; "/generation.rs"; };
+    fs.writeAll caps.write pythonPath bindings.python;
+    fs.writeAll caps.write rustPath bindings.rust
   ];
 
 main

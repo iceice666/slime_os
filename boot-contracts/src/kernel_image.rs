@@ -1,16 +1,5 @@
 pub const MAGIC: [u8; 8] = *b"SLIMEKRN";
-pub const FORMAT_VERSION: u32 = 1;
-pub const KERNEL_ABI_VERSION: u32 = 2;
-pub const HEADER_LEN: usize = 64;
-pub const SEGMENT_LEN: usize = 40;
-pub const RELOCATION_LEN: usize = 16;
-pub const MAX_IMAGE_BYTES: u64 = 8 * 1024 * 1024;
-pub const MAX_SEGMENTS: usize = 8;
-pub const MAX_RELOCATIONS: usize = 16_384;
-pub const LOAD_BASE: u64 = 0xffff_ffff_9000_0000;
-pub const PREFERRED_BASE: u64 = 0xffff_ffff_8000_0000;
-pub const SEGMENT_WRITE: u32 = 1;
-pub const SEGMENT_EXEC: u32 = 2;
+include!("generated/kernel_image.rs");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImageError {

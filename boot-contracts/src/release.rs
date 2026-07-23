@@ -6,12 +6,7 @@ use crate::generation::Generation;
 use ed25519_dalek::{Signature, VerifyingKey};
 
 pub const RELEASE_MAGIC: [u8; 8] = *b"SLIMERL\0";
-pub const RELEASE_VERSION: u32 = 1;
-pub const RELEASE_BYTES: usize = 512;
-pub const RELEASE_HEADER_BYTES: usize = 208;
-pub const RELEASE_SIGNATURE_BYTES: usize = 96;
-pub const MAX_RELEASE_SIGNATURES: usize = 3;
-pub const MAX_TARGET_BYTES: usize = 32;
+include!("generated/release.rs");
 
 pub const ROTATION_MAGIC: [u8; 8] = *b"SLIMERT\0";
 pub const ROTATION_VERSION: u32 = 1;

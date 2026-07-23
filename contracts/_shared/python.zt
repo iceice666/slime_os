@@ -82,6 +82,15 @@ offsetConsts :: Text -> Int -> List WireField -> Text
     };
   };
 
+-- Start offset (in packed little-endian bytes) of a named layout field. Used
+-- by boot-family Rust renderers that pin a handful of layout-derived offsets.
+fieldOffset :: Text -> Int -> List WireField -> Int
+  = target offset fields => match fields {
+    | {;} => offset;
+    | { field; ...rest } =>
+      if field.name == target then offset else fieldOffset target (offset + field.width) rest;
+  };
+
 renderRecord :: WireRecord -> Text
   = record => join {
     record.pythonName; " = struct.Struct(\"<"; formatFields record.layout;
@@ -101,4 +110,5 @@ renderRecords :: List WireRecord -> Text
   join = join;
   recordsValid = recordsValid;
   renderRecords = renderRecords;
+  fieldOffset = fieldOffset;
 }
