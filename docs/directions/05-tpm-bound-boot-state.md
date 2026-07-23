@@ -4,9 +4,9 @@
 | --- | --- |
 | Status | parked |
 | Route | hardware; secondary: updates |
-| Depends on | M5.6 BootState (complete); M7-class physical hardware work (TPM driver is not currently in any milestone scope) |
+| Depends on | M5.6 BootState (complete); [Authority A4](../../roadmap/06-authority-trust.md) owns the TPM driver and attestation work, with physical evidence depending on the Hardware H track |
 | Enables | rollback resurrection resistance on physical media; remote attestation of running generation identity |
-| Now | Paper only: NVRAM layout, counter/sealed-data design, and the stage-0 verification flow are designable today; the TPM driver is unscoped. |
+| Now | Retained design: NVRAM layout, counter/sealed-data design, and the stage-0 verification flow feed Authority A4. |
 
 ## Motivation
 
@@ -28,10 +28,10 @@ hash X".
   (`SelectableBootRootExists`, `PendingAttemptConsumedBeforeTransfer`).
 - Stage-0 (M5.5, complete) already hash-verifies the generation before
   transfer — the TPM check slots into the same pre-transfer gate.
-- Missing: the TPM driver itself; the register notes it is not in any
-  milestone scope. M5.9 (not started) covers the adjacent case of
-  BootState reconstruction when slots are unusable, and must define how
-  reconstruction interacts with sealed counters.
+- [Authority A4](../../roadmap/06-authority-trust.md) owns the TPM driver and
+  attestation implementation. M5.9 (complete) covers the adjacent case of
+  BootState reconstruction when slots are unusable; A4 must preserve its
+  sealed-counter recovery semantics.
 
 ## Design sketch
 

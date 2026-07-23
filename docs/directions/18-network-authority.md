@@ -4,7 +4,7 @@
 | --- | --- |
 | Status | parked |
 | Route | hardware |
-| Depends on | M7 networking (not implemented); the capability-matrix horizon tracks the NetworkDestination object shape |
+| Depends on | [Hardware H6 networking](../../roadmap/04-platform-hardware.md) (not implemented); the capability-matrix horizon tracks the NetworkDestination object shape |
 | Enables | manifest-auditable exfiltration surface — particularly for agent components |
 | Now | Paper: the NetworkDestination object shape and rights strings are a matrix amendment exercise legal today. |
 
@@ -29,7 +29,7 @@ checkable answer — not a property of runtime socket calls.
 - [entry 9](09-grant-graph-introspection.md) makes the audit concrete:
   "which components can reach which destinations" becomes a grant-graph
   query over the manifest the day the row lands.
-- M7 (not implemented) owns networking; no stack exists to gate yet.
+- Hardware H6 owns networking; no stack exists to gate yet.
 
 ## Design sketch
 
@@ -77,4 +77,4 @@ Paper: the matrix amendment (object shape, rights strings, wildcard
 policy, DNS treatment) evaluated against the agent scenarios in
 README's agentic direction — does every realistic agent deployment keep
 a fully enumerable destination list? The answer sizes the wildcard
-escape hatch before M7 makes it concrete.
+escape hatch before Hardware H6 makes it concrete.

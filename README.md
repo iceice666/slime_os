@@ -2,19 +2,17 @@
 
 Slime OS is an experimental atomic personal operating system built from a new kernel and userspace rather than on Linux. Its purpose is to explore capability-based isolation, component-oriented system services, explicit resource authority, and generation-based deployment while progressing toward a system usable on one real daily-driver laptop.
 
-The project is currently a QEMU-verified Rust `no_std` kernel with a minimal userspace component graph, plus an observed removable-media boot on the Framework 13 AMD AI 300 target. It can build a UEFI image, print through GOP and serial, run kernel tests, decode a deterministic generation manifest, launch `init`, `console`, `dango`, `sysinfo`, `echo-agent`, and `storage-probe` components, pass IPC capabilities between them, read and SHA-256 verify a sector from a read-only virtio block device, and report a healthy vertical slice. Durable writes, rollbackable generations, native interactive Dango, and daily-driver hardware remain unfinished.
+The project is currently a QEMU-verified Rust `no_std` kernel and native userspace component system, plus an observed removable-media boot on the Framework 13 AMD AI 300 target. The QEMU paths cover isolation, typed capability IPC, durable virtio storage, an integrity-checked object store, rollbackable generations, signed release metadata, recovery, native Dango, generation management, powerbox selection, and generation transfer. Framework storage-aware physical evidence, daily-driver hardware, the native typed data fabric, and ROS 2 interoperability remain open.
 
 ## Current status
 
-- QEMU is the automated verification target; the same vertical slice has also reached `[generation] vertical slice healthy` from removable media on the Framework target.
-- Kernel foundation work is in place: GDT/TSS, IDT exception reporting, physical and virtual memory management, heap allocation, and APIC timer support.
-- Core isolation is exercised by tests: independent userspace components can communicate over IPC, and a faulting component does not corrupt or terminate its peer or the kernel.
-- Generation format 1 has a pinned Zutai-side contract, fixtures, a deterministic host builder, and a kernel decoder.
-- The first QEMU vertical slice is healthy: `init` launches `console`, `dango`, `sysinfo`, and `echo-agent`; Dango resolves executable authority through capabilities; `sysinfo` and `echo-agent` stream structured output; every component exits successfully.
-- The storage capability foundation (M5.1) is complete: ACPI MCFG parsing, bounded PCI enumeration, rights-checked capabilities for PCI functions, DMA memory, interrupts, and shared memory, DMA pinning guarded against reclamation while requests are outstanding, and a bounded block request/reply IPC protocol, verified by the `storage_cap_check` QEMU target.
-- Typed IPC schemas (M5.2a) are complete: the versioned Zutai block contract generates kernel Rust and component GNU assembler bindings, with stale-output, assembler, round-trip, bounds, and version checks.
-- The read-only virtio block vertical slice (M5.2) is complete: a capability-gated userspace probe reads a fixed QEMU sector, verifies its SHA-256 digest, and confirms structured rejection of writes, short buffers, and out-of-range LBAs through `storage_read_check`.
-- Framework safe bring-up is verified with storage authority absent; durable writes, rollbackable generations, native interactive Dango, and daily-driver hardware support are not complete.
+- QEMU is the automated architecture target; the M4 isolated vertical slice has also reached `[generation] vertical slice healthy` from removable media on the Framework target without internal-storage authority.
+- M1–M4 are complete: kernel foundation, userspace isolation and IPC, the bootstrap component graph, and the original Framework safe-bring-up evidence.
+- M5.1–M5.6c, M5.8, and M5.9 are complete under their named deterministic checks. Durable writes, the object store, BootState rollback/state/GC, signed releases, and removable recovery are implemented.
+- M5 remains open only on M5.7 physical evidence: its NVMe transport and QEMU checks pass, but the storage-aware removable-media slice has not yet been recorded on Framework. Internal-NVMe writes remain disabled.
+- M6.1–M6.7 are complete: manifest-driven spawn, directory capabilities, native Dango, generation commands, powerbox selection, and generation transfer run through explicit capabilities.
+- The Hardware H1 evidence harness is implemented and QEMU-verified; its physical Framework inventory record is pending. H2–H14 are not implemented.
+- Core C7–C9 and ROS R1–R3 are planned userspace/runtime tracks. ROS 2 is a bounded compatibility profile over native Slime contracts, not a kernel ABI.
 
 ## Vision
 
@@ -182,7 +180,7 @@ Atomicity and agentic operation reinforce each other: agent memory and authority
 
 ## Differentiating directions
 
-Exploratory directions enabled by the capability and generation model — descriptions, dependencies, exit-condition sketches, and promotion status — are registered in [`docs/directions/`](docs/directions/README.md), one elaborated file per active entry. None of them is a committed milestone; each becomes real only when promoted into ROADMAP.md with an observable exit condition.
+Exploratory directions enabled by the capability and generation model — descriptions, dependencies, exit-condition sketches, and promotion status — are registered in [`docs/directions/`](docs/directions/README.md), one elaborated file per active entry. None of them is a committed milestone; each becomes real only when promoted into the owning file under [`roadmap/`](roadmap/) with an observable exit condition.
 
 ## First vertical slice
 
@@ -218,27 +216,25 @@ This slice defines the minimum useful contracts: userspace entry, address-space 
 
 ## Roadmap
 
-The canonical milestone order, acceptance criteria, and detailed implementation plan live in [`ROADMAP.md`](ROADMAP.md).
+The canonical plan, acceptance criteria, status, and dependency graph live in [`roadmap/`](roadmap/README.md). Completed M1–M6 evidence is preserved separately from independent future tracks:
 
-Current sequence:
+- [Foundations and implemented history](roadmap/01-foundations.md)
+- [Core runtime C7–C9](roadmap/02-core-runtime.md)
+- [ROS 2 compatibility R1–R3](roadmap/03-ros2-compatibility.md)
+- [Platform hardware H1–H14](roadmap/04-platform-hardware.md)
+- [Foreign workloads X1–X2](roadmap/05-foreign-workloads.md)
+- [Authority and trust A1–A5](roadmap/06-authority-trust.md)
 
-1. Kernel foundation — QEMU tests passing.
-2. Isolation and IPC — core QEMU exit passing.
-3. Bootstrap component graph — QEMU vertical slice passing.
-4. Framework safe bring-up — verified.
-5. Storage and generations — in progress; M5.1, M5.2a, and M5.2 complete.
-6. Native interactive environment — minimal stub only.
-7. Daily-driver hardware — not yet implemented.
-
-The current milestone is storage and rollbackable generations. Its exit condition is that a failed pending generation automatically leaves or restores a bootable known-good generation. The capability foundation (M5.1), typed IPC schemas (M5.2a), and read-only virtio block I/O (M5.2) are complete; durable virtio writes and fault handling (M5.3) are next. `ROADMAP.md` decomposes the remaining work into durable writes, GPT and the object store, boot-state records, rollback and GC, and Framework NVMe safety promotion.
+The active work is not one false total order: M5.7/H1 physical evidence, C7's bounded shared-sample plane, and H2's userspace driver authority ABI can proceed as separate lanes. Their results compose only at the release gates defined by the roadmap index.
 
 ## Current repository layout
 
 ```text
 kernel/       Rust no_std kernel, boot path, generation decoder, scheduler, IPC, and tests
-components/   Rust no_std userspace components for the QEMU vertical slice, linked by components/component.ld
-contracts/    Generation manifest v1, block protocol v1, and component image v1 contracts
-scripts/      Host-side generation build/check and contract validation helpers
+components/   Rust no_std userspace components and typed service clients/servers
+contracts/    Versioned generation, storage, component, state, spawn, filesystem, and service contracts
+roadmap/      Canonical status, dependency graph, milestones, checks, and release gates
+scripts/      Host-side generation, contract, image, evidence, and safety tooling
 assets/       Boot/runtime assets
 deps/         Pinned Zutai and Dango submodules
 Justfile      Build, run, test, format, lint, generation, contract, and debug commands

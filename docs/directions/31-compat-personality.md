@@ -4,16 +4,16 @@
 | --- | --- |
 | Status | parked |
 | Route | compat |
-| Depends on | M6 spawn service and endpoint minting (stub); a userspace filesystem service (M6); guest-VM half additionally needs M7 IOMMU-enforced DMA and AMD-V enablement, which no milestone scopes |
+| Depends on | M6 spawn service, endpoint minting, and userspace filesystem service; [Foreign X2](../../roadmap/05-foreign-workloads.md) additionally needs [Hardware H4](../../roadmap/04-platform-hardware.md) IOMMU-enforced DMA and AMD-V enablement |
 | Enables | running non-native (Linux/POSIX) workloads — "containers" — under the same generation and capability model as native components; daily-driver mixed workloads |
-| Now | Paper: the syscall-to-capability mapping table and the personality component's authority contract are legal to design today; kernel/VM work waits on M6 and (for the VM half) an unscoped virtualization milestone. |
+| Now | Retained design: the syscall-to-capability mapping and personality authority contract feed Foreign X1; guest-VM work is owned by X2. |
 
 ## Motivation
 
 README states POSIX/Linux compatibility "may exist later as userspace
 personalities or isolated virtual machines" and that Linux "may later
-run as an isolated guest," but no milestone or direction turns those two
-sentences into a plan. A daily-driver that runs native Slime tools,
+run as an isolated guest." [Foreign X1 and X2](../../roadmap/05-foreign-workloads.md)
+now turn those routes into roadmap tracks. A daily-driver that runs native Slime tools,
 containers, and agents at once needs a concrete route for the
 non-native workloads, and that route must not smuggle in ambient
 authority: a Linux process is exactly the kind of code that assumes an
@@ -31,9 +31,8 @@ entry adds the ability to run foreign workloads at all.
 - README names the two forms (userspace personality, isolated guest VM)
   as compatibility facilities, explicitly not the native ABI or
   authority model.
-- The hardware reference table lists AMD-V, but [entry 13](13-shadow-boot.md)
-  records that no VM milestone exists in ROADMAP. [INFERENCE: from the
-  absence of any virtualization milestone.]
+- The hardware reference table lists AMD-V, and Foreign X2 now scopes
+  guest-VM support.
 - The non-goals forbid reproducing FHS, `fork`, signals, or ambient
   path authority as *native* primitives — a personality confines that
   emulation to one component rather than the kernel ABI.
@@ -68,8 +67,8 @@ VM's only authority is the virtio endpoints it is handed — a virtio-blk
 capability for one object-store-backed disk, a virtio-net capability
 bound to declared destinations — so even a completely opaque guest is
 confined to its granted devices. Higher fidelity, much larger
-dependency: it needs a hypervisor subsystem, and its DMA path needs
-M7's IOMMU enforcement before it can touch real hardware.
+dependency: it needs the Foreign X2 hypervisor subsystem, and its DMA
+path needs Hardware H4 IOMMU enforcement before it can touch real hardware.
 
 The upgrade relationship: personality and VM present the *same*
 generation-level contract (a foreign workload plus a declared grant
@@ -105,10 +104,9 @@ authority visible in the manifest.
 
 ## Probe guidance
 
-Paper until M6: write the syscall-to-capability mapping table for a
-minimal but real workload (a static busybox-class binary), naming for
-each syscall the Slime service, the required grant, and the errno on
-absence. The table's coverage decides how large the "not permitted"
-surface is, which sizes the personality-versus-VM boundary before any
-kernel work. The guest-VM half stays paper until a virtualization
-milestone is scoped.
+M6 now supplies spawn, filesystem, and explicit-context mechanisms. Write
+the syscall-to-capability mapping table for a minimal but real workload
+(a static busybox-class binary), naming for each syscall the Slime service,
+required grant, and errno on absence. Its coverage sizes Foreign X1's
+"not permitted" surface and the personality-versus-VM boundary. The
+guest-VM half stays paper until Foreign X2 and its Hardware H4 dependency land.

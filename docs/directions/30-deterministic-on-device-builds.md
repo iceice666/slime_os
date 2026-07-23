@@ -4,14 +4,14 @@
 | --- | --- |
 | Status | parked |
 | Route | determinism |
-| Depends on | [entry 3](03-nondeterminism-as-capabilities.md); the M6 builder (stub only); M5.8 (not started) so locally built generations still require release authorization |
+| Depends on | [entry 3](03-nondeterminism-as-capabilities.md); M6 spawn, generation inspection/staging, and object-store paths (complete); M5.8 release authorization (complete) still governs locally built generations |
 | Enables | self-hosting: rebuilding the running system on-device, byte-identical to the host build |
-| Now | Mostly paper: build-semantics design (what counts as a normalized build step and its content-addressed inputs) is legal today; execution waits on entry 3 and the M6 builder. |
+| Now | Mostly paper: normalized build-step semantics and content-addressed inputs are legal design work; execution waits on entry 3 and an on-device builder not delivered by M6. |
 
 ## Motivation
 
-M6 scope includes native components that inspect, build, or stage
-generations, but build semantics are open. Define a build step as a
+M6 completed native generation inspection/staging and the spawn mechanisms
+an on-device builder can consume, but build semantics remain open. Define a build step as a
 manifest-declared deterministic component (consuming
 [entry 3](03-nondeterminism-as-capabilities.md)) whose inputs and
 outputs are content-addressed objects; the object store deduplicates
@@ -29,10 +29,10 @@ generation by where it was built.
   output.
 - M5.4 (complete) provides the content-addressed object store that
   deduplicates build inputs and products.
-- M5.8 (not started) will define release authorization; the register
-  already fixes the principle that local builds do not bypass it.
-- Missing: deterministic components (entry 3), the M6 builder and its
-  spawn machinery (stub only).
+- M5.8 (complete) defines release authorization; local builds do not
+  bypass it.
+- Missing: deterministic-component authority semantics (entry 3) and an
+  on-device builder. M6's completed spawn machinery supplies its launch path.
 
 ## Design sketch
 

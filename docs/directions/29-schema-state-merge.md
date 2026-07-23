@@ -25,8 +25,8 @@ structured error that retains both roots — never a silent winner.
   descendant objects of a common ancestor identity.
 - Zutai purity for transformations is established by entry 15's
   migration design; merge adds a second input of the same schema.
-- Nothing in the sync path exists yet (14 is parked, M6 is a stub), so
-  the merge point's integration is open.
+- M6.7 provides deterministic one-way generation transfer and activation;
+  entry 14's general network sync and this merge point's integration remain open.
 
 ## Design sketch
 

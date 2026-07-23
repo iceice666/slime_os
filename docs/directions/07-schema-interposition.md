@@ -6,7 +6,7 @@
 | Route | determinism; secondary: interposition |
 | Depends on | M5.2a contract tooling (complete) |
 | Enables | [entry 11](11-flight-recorder-replay.md) (recording machinery), agent dry-runs claimed in README's agentic direction |
-| Now | Legal today as userspace/host tooling: a generated membrane over the existing block schema (`contracts/block/`). Named as an M5.3 follow-up in ROADMAP. |
+| Now | Legal today as userspace/host tooling: a generated membrane over the existing block schema (`contracts/block/`). Named as an M5.3 follow-up in the canonical [roadmap](../../roadmap/README.md). |
 
 ## Motivation
 

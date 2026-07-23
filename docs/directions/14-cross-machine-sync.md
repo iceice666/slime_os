@@ -4,9 +4,9 @@
 | --- | --- |
 | Status | parked |
 | Route | sync |
-| Depends on | M5.8 release authorization (not started) and the M6 transfer path (M6 is a minimal stub; its scope already lists "generation sync/transfer between machines") |
+| Depends on | M5.8 release authorization and M6.7 generation transfer (both complete); general network transport additionally depends on Hardware H6 |
 | Enables | [entry 29](29-schema-state-merge.md), [entry 10](10-distributed-capabilities.md) |
-| Now | Paper and host-side format work only: transfer manifests, object-set closure description, target binding design. Partially scoped by M6; still needs its own exit condition. |
+| Now | M6.7 delivers deterministic authorized transfer and activation through a second QEMU disk; general cross-machine transport and machine-identity binding remain open. |
 
 ## Motivation
 
@@ -27,11 +27,11 @@ of files.
 - Rollback semantics are defined (M5.6, complete): a transferred
   generation boots as pending and must be health-confirmed, giving
   first-boot-on-new-hardware the same safety story as an update.
-- M5.8 (not started) defines who may authorize a generation for staging
-  or boot; cross-machine transfer consumes that answer — an unsigned
-  generation from another machine must not activate.
-- M6 (stub only) lists the minimal transfer path in scope; this entry
-  tracks the general capability beyond that minimum.
+- M5.8 (complete) defines who may authorize a generation for staging
+  or boot; an unsigned generation from another machine cannot activate.
+- M6.7 (complete) delivers deterministic transfer manifests, closure
+  validation, set-difference transfer, and receiver-side activation via
+  a second QEMU disk; this entry tracks the general networked capability.
 
 ## Design sketch
 
@@ -74,7 +74,6 @@ activates there with grants and state policy intact.
 
 ## Probe guidance
 
-Host-side today: write the closure algorithm (manifest → required
-object set per state policy) and demonstrate it against the current
-QEMU fixture generations, producing the transfer manifest format.
-Authorization and machine-identity binding stay paper until M5.8 lands.
+The M6.7 QEMU fixture proves closure construction, authorization, and
+activation. A further probe should retain that format while adding
+machine-identity binding and a Hardware H6 network transport.

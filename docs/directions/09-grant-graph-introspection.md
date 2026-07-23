@@ -6,7 +6,7 @@
 | Route | authority |
 | Depends on | M5.5 (complete: machine-readable grants); provenance follow-up to M5.1 for the runtime half |
 | Enables | [entry 1](01-authority-diff-gate.md), [entry 27](27-policy-carrying-generations.md); audit queries for [entry 18](18-network-authority.md) and [entry 28](28-accelerator-objects.md) |
-| Now | The host-side half — a grant-graph query engine over manifests — is fully legal tooling today. Named as an M5.5 follow-up in ROADMAP. |
+| Now | The host-side half — a grant-graph query engine over manifests — is fully legal tooling today. Named as an M5.5 follow-up in the canonical [roadmap](../../roadmap/README.md). |
 
 ## Motivation
 

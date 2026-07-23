@@ -2,18 +2,18 @@
 
 Parking lot for every direction that follows from the Slime OS vision but is
 not committed work. Each entry keeps a stable number so cross-references
-(ROADMAP follow-up notes, the sequencing table) stay valid. Entries 11–19
+(roadmap follow-up notes, the sequencing table) stay valid. Entries 11–19
 were originally README's "Differentiating directions" section, moved here so
 README carries a single pointer.
 
 Active entries (parked or probing) live in one file each in this directory.
-Promoted entries collapse to a pointer row in the index below; ROADMAP.md
-owns their content from that point on.
+Promoted entries collapse to a pointer row in the index below; the canonical
+[roadmap](../../roadmap/README.md) owns their content from that point on.
 
 ## Rules
 
 - A direction here is not a commitment. It becomes real only when promoted
-  into `ROADMAP.md` with an observable exit condition.
+  into the canonical [roadmap](../../roadmap/README.md) with an observable exit condition.
 - At most one direction may be in `probing` status at a time. A probe is
   time-boxed work (design note or minimal experiment) that ends in either
   promotion to the roadmap or a return to `parked` with the reason recorded.
@@ -29,7 +29,7 @@ owns their content from that point on.
 
 `parked` — registered, no active work.
 `probing` — the single active exploration slot.
-`promoted` — moved into ROADMAP.md; this register keeps only a pointer.
+`promoted` — moved into the canonical [roadmap](../../roadmap/README.md); this register keeps only a pointer.
 `rejected` — decided against, with reason.
 
 ## Entry index
@@ -37,15 +37,15 @@ owns their content from that point on.
 | # | Direction | Status | Route |
 | --- | --- | --- | --- |
 | 1 | [Authority diff as a build-pipeline gate](01-authority-diff-gate.md) | parked | authority |
-| 2 | [Revocable and time-bounded grants](02-revocable-leases.md) | promoted → M8 (design retained) | lifecycle |
+| 2 | [Revocable and time-bounded grants](02-revocable-leases.md) | promoted → [Authority A1](../../roadmap/06-authority-trust.md) (design retained) | lifecycle |
 | 3 | [Nondeterminism sources as capabilities](03-nondeterminism-as-capabilities.md) | parked | determinism |
 | 4 | Generation-consistent state snapshots | promoted → M5.6b | — |
-| 5 | [TPM-bound boot state and attestation](05-tpm-bound-boot-state.md) | promoted → M11 (design retained) | hardware; updates |
+| 5 | [TPM-bound boot state and attestation](05-tpm-bound-boot-state.md) | promoted → [Authority A4](../../roadmap/06-authority-trust.md) (design retained) | hardware; updates |
 | 6 | Formal model of BootState transitions | promoted → M5.6a | — |
 | 7 | [Schema-driven interposition toolchain](07-schema-interposition.md) | parked | determinism; interposition |
 | 8 | [Declarative supervision and restart policy](08-declarative-supervision.md) | parked | lifecycle |
 | 9 | [Manifest static analysis and grant-graph introspection](09-grant-graph-introspection.md) | parked | authority |
-| 10 | [Distributed capabilities](10-distributed-capabilities.md) | promoted → M12 (design retained) | sync |
+| 10 | [Distributed capabilities](10-distributed-capabilities.md) | promoted → [Authority A5](../../roadmap/06-authority-trust.md) (design retained) | sync |
 | 11 | [IPC flight recorder and deterministic replay](11-flight-recorder-replay.md) | parked | determinism |
 | 12 | [Generation bisect](12-generation-bisect.md) | parked | updates |
 | 13 | [Shadow boot](13-shadow-boot.md) | parked | updates |
@@ -63,12 +63,12 @@ owns their content from that point on.
 | 25 | [Resource accounts as capabilities](25-resource-accounts.md) | parked | lifecycle |
 | 26 | [Hermetic generation testing](26-hermetic-testing.md) | parked | determinism |
 | 27 | [Policy-carrying generations](27-policy-carrying-generations.md) | parked | authority |
-| 28 | [Accelerator compute objects](28-accelerator-objects.md) | promoted → M10 (design retained) | hardware |
+| 28 | [Accelerator compute objects](28-accelerator-objects.md) | promoted → [Authority A3](../../roadmap/06-authority-trust.md) (design retained) | hardware |
 | 29 | [Schema-declared state merge](29-schema-state-merge.md) | parked | sync |
 | 30 | [Deterministic on-device builds](30-deterministic-on-device-builds.md) | parked | determinism |
-| 31 | [Linux/container compatibility route](31-compat-personality.md) | promoted → M9 (design retained) | compat |
-| 32 | [Scheduling class and QoS authority](32-scheduling-authority.md) | promoted → M8 (design retained) | lifecycle |
-| 33 | [Secrets as capabilities](33-secrets-as-capabilities.md) | promoted → M8 (design retained) | authority |
+| 31 | [Linux/container compatibility route](31-compat-personality.md) | promoted → [Foreign X1](../../roadmap/05-foreign-workloads.md) (design retained) | compat |
+| 32 | [Scheduling class and QoS authority](32-scheduling-authority.md) | promoted → [Core C9](../../roadmap/02-core-runtime.md) (design retained) | lifecycle |
+| 33 | [Secrets as capabilities](33-secrets-as-capabilities.md) | promoted → [Authority A2](../../roadmap/06-authority-trust.md) (design retained) | authority |
 
 ## Routes
 
@@ -101,12 +101,12 @@ route when they span clusters.
   build-provenance attestations (23) accompany the M5.8 release pipeline;
   TPM binding (5) hardens BootState on physical hardware.
 - **hardware** (17, 18, 19, 28): daily-driver and Framework-target work,
-  all M7-bound at the kernel level; each has a capability-matrix amendment
+  all bound to the Hardware H track at the kernel level; each has a capability-matrix amendment
   or design-note half that is legal today.
 - **compat** (31): running non-native workloads — "containers" — under the
   generation and capability model. Entry 31 defines the personality-first,
   guest-VM-later route; it consumes M6 spawn machinery and (for the VM
-  half) an unscoped virtualization milestone, and it is the primary
+  half) [Foreign X2](../../roadmap/05-foreign-workloads.md), and it is the primary
   consumer of entries 18 (network), 32 (scheduling), and 33 (secrets) for
   confining foreign code.
 
@@ -124,13 +124,13 @@ without waiting for any milestone:
 | 12 | automated QEMU boot-and-health-check bisection | M5.6 rollback machinery complete |
 | 7 | generated-membrane prototype over `contracts/block/` | M5.2a contract tooling complete; `storage_fault_check` is the replay fixture |
 | 3 | capability-matrix amendment proposal for clock/entropy objects | explicitly an amendment proposal first |
-| 8, 25, 29 | design notes (paper) | kernel work blocked on M6 prerequisites or later entries |
-| 23 | attestation schema design (paper) | promotion awaits an M5.8 builder identity |
-| 13 | shadow sub-graph manifest design (paper) | execution plausibly needs M6 spawn machinery |
-| 17, 18, 19 | matrix amendments and design notes (paper) | kernel work M7-bound |
-| 31 | syscall-to-capability mapping table for a minimal workload (paper) | personality kernel work blocked on M6; guest-VM half needs an unscoped virtualization milestone |
-| 32 | scheduling-class schema and authority-vs-policy design note (paper) | kernel work blocked on M6 and entry 25's account object |
-| 33 | Secret matrix amendment + recorder/revocation interaction (paper) | at-rest sealing interim vs entry 5 TPM binding to resolve; kernel work blocked on M6 |
+| 8, 25, 29 | design notes (paper) | M6 mechanisms are complete; general restart policy, conserved accounts, and merge integration remain open |
+| 23 | attestation schema and verifier (host-side) | M5.8 is complete; provenance-specific builder identity and storage remain open |
+| 13 | shadow sub-graph manifest design and execution probe | M6 spawn machinery is complete; the constrained environment remains open |
+| 17, 18, 19 | matrix amendments and design notes (paper) | kernel work bound to the [Hardware H track](../../roadmap/04-platform-hardware.md) |
+| 31 | syscall-to-capability mapping table for a minimal workload (paper) | M6 prerequisites are complete; Foreign X1 implementation remains future; guest-VM half needs [Foreign X2](../../roadmap/05-foreign-workloads.md) |
+| 32 | scheduling-class schema and authority-vs-policy design note (paper) | M6 prerequisites are complete; Core C9 also consumes entry 25's general account model |
+| 33 | Secret matrix amendment + recorder/revocation interaction (paper) | M6 prerequisites are complete; at-rest sealing interim vs Authority A4 TPM binding remains open |
 
 ## Sequencing
 
@@ -138,8 +138,8 @@ without waiting for any milestone:
 | --- | --- | --- |
 | 0 — before M5.6 implementation (done) | 6 (M5.6a), 4 (M5.6b) | Both promoted checked contracts landed; transition and state/GC semantics froze before implementation. |
 | 1 — with and after M5.6 | 20 (M5.6c), 1, 9, 12, 13, 24 | Trace conformance closes the model/implementation gap; authority analysis, bisect, and shadow boot consume machine-readable manifests or rollback machinery. Entry 24 is dependency-free contracts work in the M5.6a methodology and is the current probe. |
-| 2 — late M5 to M6 | 21 (M5.8), 22 (M5.9), 23, 7, 11 (recording), 8, 3, 14, 15, 16, 11 (replay), 25, 26, 27, 29, 30 | Release trust and recovery must precede cross-machine activation; spawn prerequisites then unlock supervision, resource accounts, migration, powerbox, and general replay. Entries 26 and 30 consume entry 3, entry 27 consumes the M5.6 activation path, and entry 29 follows 14 and 15. |
-| 3 — M7 and beyond | 17, 18, 19; then 2 (M8), 32 (M8), 33 (M8), 31 (M9), 28 (M10), 5 (M11), 10 (M12) | Daily-driver hardware quality (energy 17, network 18, MPK 19) lands inside M7 itself. The rest are promoted: M8 supplies the foreign-workload authority foundations (revocation 2, scheduling class 32, secrets 33) that M9's compatibility route (31) confines untrusted code against; M10 adds accelerator authority (28) on M7's IOMMU; M11 binds boot state to the TPM (5); M12 extends capabilities across machines (10) on sync plus M8 revocation. |
+| 2 — late M5 through M6 (foundation complete) | 21 (M5.8), 22 (M5.9), 23, 7, 11 (recording), 8, 3, 14, 15, 16, 11 (replay), 25, 26, 27, 29, 30 | Release trust, recovery, spawn, supervision, accounting, powerbox, and minimal transfer foundations have landed. The listed directions retain only their broader generalization work: provenance, replay, restart policy, sync transport, migration, conserved accounts, and merge/build semantics. |
+| 3 — independent future tracks | 17, 18, 19; 2 (A1), 32 (C9), 33 (A2), 31 (X1), 28 (A3), 5 (A4), 10 (A5) | Daily-driver hardware quality (energy 17, network 18, MPK 19) lands in the Hardware H track. The promoted work proceeds on independent tracks: Authority A1 adds revocation, Core C9 adds scheduling authority, and Authority A2 adds secrets; Foreign X1 supplies the compatibility personality; Authority A3 adds accelerator authority on Hardware H4 IOMMU containment; Authority A4 binds boot state to the TPM; Authority A5 extends capabilities across machines on sync plus A1 revocation. |
 
 ## Research references
 

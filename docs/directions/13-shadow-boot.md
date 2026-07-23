@@ -4,9 +4,9 @@
 | --- | --- |
 | Status | parked |
 | Route | updates |
-| Depends on | M5.6 (complete); ROADMAP names it a follow-up enabled by that milestone |
+| Depends on | M5.6 rollback and health semantics and M6 spawn machinery (complete); the canonical [roadmap](../../roadmap/README.md) names it a follow-up |
 | Enables | pre-activation health checking that never spends a real boot attempt |
-| Now | Paper: shadow sub-graph manifest design is legal today. Execution plausibly needs M6 spawn machinery to construct the constrained environment — the register's "constrained sub-graph or guest VM" does not exist yet. |
+| Now | Paper: shadow sub-graph manifest design is legal today. M6 supplies the spawn machinery, but the constrained shadow environment itself does not exist yet. |
 
 ## Motivation
 
@@ -26,11 +26,10 @@ real activations for candidates that pass rehearsal.
   shadow check should anticipate.
 - M5.5 (complete): generations are self-describing — a shadow manifest
   can be derived from the pending one mechanically.
-- Missing: the constrained environment itself. A sub-graph boot (a
-  reduced component set wired against virtualized devices) needs spawn
-  and endpoint-minting machinery (M6, stub); a guest VM needs
-  virtualization support that no milestone currently scopes. [INFERENCE:
-  no VM milestone exists in ROADMAP.]
+- Missing: the constrained environment itself. M6 (complete) supplies
+  spawn and endpoint-minting machinery for a reduced component graph; a
+  guest VM alternatively needs virtualization support from
+  [Foreign X2](../../roadmap/05-foreign-workloads.md).
 
 ## Design sketch
 
@@ -56,7 +55,7 @@ since the shadow environment is deliberately not the real one.
 ## Open questions
 
 - Sub-graph versus guest VM: which environment does the first
-  implementation target, given M6 machinery is required either way?
+  implementation target now that M6 machinery is available?
 - How is the shadow manifest derived from the pending one — declared
   reduction rules, or a per-generation shadow section?
 - Fidelity boundary: which health checks are meaningful in a shadow
@@ -75,4 +74,4 @@ check and is rejected with the real BootState attempt counter untouched.
 Paper today: define the shadow manifest derivation rules and the
 one-directional state rules (what the shadow may read, never write),
 and map which existing health checks survive the constrained
-environment. Execution probe waits on M6 spawn machinery.
+environment. An execution probe may build on M6's completed spawn machinery.

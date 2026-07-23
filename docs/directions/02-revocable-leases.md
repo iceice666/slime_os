@@ -4,9 +4,9 @@
 | --- | --- |
 | Status | parked |
 | Route | lifecycle |
-| Depends on | provenance follow-up to M5.1; touches capability-table design |
+| Depends on | provenance follow-up to M5.1; [Authority A1](../../roadmap/06-authority-trust.md) owns capability-table revocation |
 | Enables | [entry 10](10-distributed-capabilities.md) (wire revocation), leaseable agent authority |
-| Now | Research-heavy; design note before any kernel change. The note — derivation-tree semantics, lease expiry model, interaction with the rights algebra — is legal paper work today. |
+| Now | Retained design: derivation-tree semantics, lease expiry, and rights-algebra interaction feed Authority A1. |
 
 ## Motivation
 

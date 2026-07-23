@@ -4,17 +4,17 @@
 | --- | --- |
 | Status | parked |
 | Route | lifecycle |
-| Depends on | M6 spawn prerequisites (endpoint minting, non-consuming derive-copy, supervision handles); subsumes the matrix horizon rows for per-spawner accounting and SharedBuffer creation quota |
+| Depends on | M6.1 endpoint minting, derive-copy, supervision handles, and per-spawner accounting (complete); general SharedBuffer quotas move to Core C7 |
 | Enables | declarative whole-machine resource allocation; bounded spawn authority; restart-storm bounding for [entry 8](08-declarative-supervision.md) |
-| Now | Design note legal today; kernel work waits on M6 (minimal stub). |
+| Now | M6.1 landed bounded per-spawner accounting; the general conserved ResourceAccount object and whole-machine allocation policy remain design work. |
 
 ## Motivation
 
 The capability model governs what a component may do but not how much
 it may use: `MAX_TASKS`, `MAX_CAPS`, and `CHANNEL_QUEUE` are global
-constants, and the capability-matrix debt register already records
-unreaped task-table entries. The matrix horizon names per-spawner
-accounting and SharedBuffer creation quota without a unifying story.
+constants. M6.1 adds per-spawner accounting for spawn resources, but the
+capability matrix still names SharedBuffer creation quota without a
+unifying general-account story.
 Introduce a `ResourceAccount` kernel object (memory pages, task slots,
 endpoint slots, queue depth) that spawn charges to the spawner's
 account; `derive` splits an account for a child, exhaustion is a
@@ -29,13 +29,12 @@ declarative, auditable, and rollbackable like every other grant.
   `MAX_CAPS` / `CHANNEL_QUEUE` constants, and the debt register's
   unreaped task-table entries — table slots leak until reboot, so even
   global accounting is currently approximate.
-- The horizon lists exactly the rows this entry subsumes: per-spawner
-  resource accounting (an M6 spawn prerequisite) and SharedBuffer
-  creation with CREATE / quota.
+- M6.1 landed per-spawner accounting with structured exhaustion.
+  SharedBuffer creation and quota remain future Core C7 work.
 - Genode's resource trading is the reference design; the Slime delta is
   carrying the account distribution as rollbackable generation data.
-- M6 (stub) needs per-spawner accounting regardless; this entry is the
-  unifying design rather than an additional feature.
+- M6.1's completed per-spawner accounting is the concrete mechanism;
+  this entry generalizes it into conserved, manifest-distributed accounts.
 
 ## Design sketch
 

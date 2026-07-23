@@ -4,9 +4,9 @@
 | --- | --- |
 | Status | parked |
 | Route | authority |
-| Depends on | M5.6b state bindings (complete) for at-rest storage; interacts with [entry 2](02-revocable-leases.md) revocation and [entry 11](11-flight-recorder-replay.md) recording; guest/personality delivery consumes [entry 31](31-compat-personality.md) |
+| Depends on | M5.6b state bindings (complete) for at-rest storage; interacts with [Authority A1 revocation](../../roadmap/06-authority-trust.md) and [entry 11](11-flight-recorder-replay.md) recording; foreign-workload delivery consumes [Foreign X1](../../roadmap/05-foreign-workloads.md) |
 | Enables | scoped, revocable, non-recorded credentials for agents and containers without ambient environment secrets |
-| Now | Paper: the Secret object shape, its non-recordability rule, and the recorder interaction are a matrix amendment exercise legal today. |
+| Now | Retained design: the Secret object shape, non-recordability rule, and recorder interaction feed Authority A2. |
 
 ## Motivation
 
@@ -18,7 +18,7 @@ component a scoped, revocable secret that it cannot copy, widen, or leak
 into audit trails. Two existing directions collide here and neither
 resolves it: [entry 11](11-flight-recorder-replay.md) records IPC to
 make components replayable, but recording a secret defeats its
-confidentiality; [entry 2](02-revocable-leases.md) can revoke a grant,
+confidentiality; Authority A1 can revoke a grant,
 but a secret already copied into a trace or a log is beyond revocation.
 A `Secret` object kind that is capability-gated *and* non-recordable
 resolves both.
@@ -37,7 +37,7 @@ ever escape into an observable channel.
   `snapshotBeforeUpgrade` policies are the natural at-rest home for a
   sealed secret, with the same rollback discipline as other state.
 - [entry 11](11-flight-recorder-replay.md) plans to record IPC for
-  replay; [entry 2](02-revocable-leases.md) plans revocation. Their
+  replay; Authority A1 plans revocation. Their
   interaction with confidential material is unspecified — this entry is
   where that tension is designed. [INFERENCE: neither entry mentions
   secrets.]
@@ -66,18 +66,18 @@ the secret. The rule composes with
 [entry 3](03-nondeterminism-as-capabilities.md)'s treatment of entropy
 as similarly non-reproducible-from-trace input.
 
-Delivery to foreign workloads: for a container/personality
-([entry 31](31-compat-personality.md)) that genuinely needs the secret
+Delivery to foreign workloads: for a Foreign X1 container/personality
+that genuinely needs the secret
 value (a Linux program reading an env var), the personality is the
 trust boundary — it holds the Secret capability and materializes the
 value only inside the container's address space, never back across a
-recordable channel. Revocation ([entry 2](02-revocable-leases.md))
+recordable channel. Authority A1 revocation
 invalidates the Secret capability; because the value never entered a
 trace or a peer, revocation is actually effective.
 
 At rest, a secret is a state binding sealed under a key the generation
 does not carry in plaintext — the natural consumer of
-[entry 5](05-tpm-bound-boot-state.md) TPM sealing when that lands, so a
+[Authority A4](../../roadmap/06-authority-trust.md) TPM sealing when that lands, so a
 secret is bound to a known-good boot state.
 
 ## Open questions
@@ -88,7 +88,7 @@ secret is bound to a known-good boot state.
 - How does the recorder represent a redacted secret so replay stays
   deterministic — a stable handle, a commitment hash, or a fixture
   substitution?
-- At-rest sealing before [entry 5](05-tpm-bound-boot-state.md) exists:
+- At-rest sealing before Authority A4 TPM binding exists:
   is a generation-carried key acceptable as an interim, or must secrets
   wait for TPM binding?
 - Revocation timing: is a revoked Secret capability refused at next USE,

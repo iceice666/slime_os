@@ -4,9 +4,9 @@
 | --- | --- |
 | Status | parked |
 | Route | lifecycle |
-| Depends on | M6 spawn service and per-spawner resource accounting ([entry 25](25-resource-accounts.md)); shares the scheduler attribution point with [entry 17](17-energy-accounting.md) |
+| Depends on | M6 spawn service and per-spawner resource accounting ([entry 25](25-resource-accounts.md)); [Core C9](../../roadmap/02-core-runtime.md) owns scheduling authority and shares the scheduler attribution point with [entry 17](17-energy-accounting.md) |
 | Enables | interactive foreground responsiveness under mixed foreground/background load; latency isolation between daily-use tools, containers, and agents |
-| Now | Design note legal today; kernel work waits on M6 and the resource-account object. |
+| Now | Retained design: the scheduling-class schema and authority boundary feed Core C9. |
 
 ## Motivation
 
@@ -105,5 +105,5 @@ and specify the kernel mechanism (what ordering guarantee the class
 buys) versus the userspace policy surface (assignment and dynamic
 re-classification). Evaluate the class dimension against
 [entry 25](25-resource-accounts.md)'s account model so CPU quantity and
-CPU ordering compose rather than collide. Hardware validation waits for
-M7.
+CPU ordering compose rather than collide. Physical validation waits for
+the Hardware H track.

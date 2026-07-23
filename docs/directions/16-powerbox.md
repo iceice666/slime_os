@@ -4,9 +4,9 @@
 | --- | --- |
 | Status | parked |
 | Route | lifecycle |
-| Depends on | M6 scope (stub) already lists a powerbox-style file dialog service; the capability-matrix horizon tracks the Directory-rights question |
-| Enables | user-driven authority granting without ambient file access; the general pattern beyond M6's minimal dialog |
-| Now | Pattern and interaction design is paper work; implementation waits on M6's dialog service and the Directory-rights decision. |
+| Depends on | M6.3 Directory capabilities and M6.6 console powerbox (complete); [Hardware H8](../../roadmap/04-platform-hardware.md) supplies display/compositor/input for a graphical chooser |
+| Enables | user-driven authority granting without ambient access; graphical and non-file generalizations beyond M6.6 |
+| Now | M6.6 implements the bounded console file chooser and single-object grant transfer; graphical rendering and per-domain generalization remain open. |
 
 ## Motivation
 
@@ -26,14 +26,13 @@ chooser, and the user's gesture is the audit record.
 - The principle is already structural: spawn supplies no implicit
   environment, working directory, or streams, so components hold only
   manifest-declared grants (README's agentic direction).
-- The capability-matrix horizon carries the open question this entry
-  depends on: a Directory object kind with READ / WRITE / LIST rights,
-  and whether powerbox minting needs more than `derive`.
-- M6 (stub) lists a powerbox-style file dialog service as scope; this
-  entry covers the general pattern beyond that minimum.
-- No UI stack exists at any milestone yet; the chooser's rendering is
-  downstream of daily-driver work. [INFERENCE: M7 covers Framework
-  daily-driver bring-up; no display/compositor milestone exists.]
+- M6.3 defines Directory READ / WRITE / LIST rights and narrow-only
+  derivation/transfer.
+- M6.6 delivers a console chooser with a versioned request/reply contract,
+  cancellation, provenance, and narrow-only single-object capability transfer.
+  This entry covers graphical rendering through
+  [Hardware H8](../../roadmap/04-platform-hardware.md) and the general pattern
+  beyond files.
 
 ## Design sketch
 
@@ -83,7 +82,6 @@ could not have obtained otherwise.
 
 ## Probe guidance
 
-Paper until M6: define the request/response schema between requester
-and chooser, the minted grant's shape, and the per-domain
-generalization list. The note feeds the M6 dialog design and the
-horizon's Directory-rights decision simultaneously.
+M6.6 establishes the file-domain protocol and grant shape. Further design
+should generalize that proven pattern per domain and define the graphical
+interaction on Hardware H8 without widening chooser authority.

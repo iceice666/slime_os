@@ -6,7 +6,7 @@
 | Route | determinism |
 | Depends on | M5.3 (complete: driver IPC recording during fault injection, named there as the intended foundation); replay of arbitrary components additionally wants [entry 3](03-nondeterminism-as-capabilities.md) |
 | Enables | [entry 26](26-hermetic-testing.md); failure reports as generation hash + trace |
-| Now | Recording half exists for drivers; generalizing the trace format and the replay harness for non-driver components is design work legal today, blocked in practice only where components read nondeterminism (entry 3). Named as an M5.3 follow-up in ROADMAP. |
+| Now | Recording half exists for drivers; generalizing the trace format and the replay harness for non-driver components is design work legal today, blocked in practice only where components read nondeterminism (entry 3). Named as an M5.3 follow-up in the canonical [roadmap](../../roadmap/README.md). |
 
 ## Motivation
 

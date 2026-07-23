@@ -4,7 +4,7 @@
 | --- | --- |
 | Status | parked |
 | Route | hardware |
-| Depends on | M7 daily-driver quality goals; the capability-matrix horizon questions whether accounting is authority or read-only telemetry (EnergyAccount row) |
+| Depends on | [Hardware H track](../../roadmap/04-platform-hardware.md) daily-driver quality goals; the capability-matrix horizon questions whether accounting is authority or read-only telemetry (EnergyAccount row) |
 | Enables | background power budgets carried as grants; battery-policy as manifest data |
 | Now | Paper: the authority-vs-telemetry question the horizon poses is the design exercise, answerable without hardware. |
 
@@ -29,8 +29,8 @@ other resource decision.
 - [entry 25](25-resource-accounts.md) designs the general account
   mechanism; energy is a candidate quantity, or a deliberately
   separate axis — the split is part of the design.
-- M7 (not implemented) owns daily-driver hardware bring-up, including
-  the power telemetry this consumes.
+- The Hardware H track owns daily-driver bring-up, including the power
+  telemetry this consumes.
 
 ## Design sketch
 
@@ -72,4 +72,4 @@ readable per component.
 Paper: resolve the authority/telemetry boundary as a matrix amendment
 proposal, define the attribution rules (including the shared-service
 case), and sketch the budget schema in the manifest. Hardware
-validation waits for M7.
+validation waits for the Hardware H track.

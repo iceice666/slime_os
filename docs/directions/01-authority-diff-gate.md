@@ -6,7 +6,7 @@
 | Route | authority |
 | Depends on | M5.5 (complete: manifest format v2 with 1:1 rights strings) |
 | Enables | [entry 27](27-policy-carrying-generations.md) (its CI gate becomes a boot gate) |
-| Now | Fully legal host-side tooling: parse two manifests, diff grants, gate CI. No kernel involvement. Named as an M5.5 follow-up in ROADMAP. |
+| Now | Fully legal host-side tooling: parse two manifests, diff grants, gate CI. No kernel involvement. Named as an M5.5 follow-up in the canonical [roadmap](../../roadmap/README.md). |
 
 ## Motivation
 

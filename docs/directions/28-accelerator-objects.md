@@ -4,9 +4,9 @@
 | --- | --- |
 | Status | parked |
 | Route | hardware |
-| Depends on | M7 hardware bring-up and IOMMU-enforced DMA; a capability-matrix row for the new object kind |
+| Depends on | [Hardware H track](../../roadmap/04-platform-hardware.md) device bring-up and Hardware H4 IOMMU-enforced DMA; [Authority A3](../../roadmap/06-authority-trust.md) owns the Accelerator capability work |
 | Enables | agent inference authority and budget as manifest data |
-| Now | Paper: the Accelerator object shape, rights strings, and budget model are a matrix amendment exercise legal today. |
+| Now | Retained design: the Accelerator object shape, rights strings, and budget model feed Authority A3. |
 
 ## Motivation
 
@@ -30,10 +30,10 @@ statically, not discovered at runtime.
 - The audit consumer exists in design: [entry 9](09-grant-graph-introspection.md)
   answers "which components hold accelerator authority" from the
   manifest.
-- Missing: M7 hardware bring-up (no NPU/GPU drivers), and
-  IOMMU-enforced DMA — without it, an accelerator's memory access is
-  outside the capability model entirely, which is why the register
-  names it as a dependency rather than a detail.
+- Missing: Hardware H-track NPU/GPU drivers and H4 IOMMU-enforced DMA.
+  Without H4, an accelerator's memory access is outside the capability
+  model entirely, which is why A3 depends on it rather than treating it
+  as a driver detail.
 
 ## Design sketch
 
@@ -79,6 +79,6 @@ accelerator authority.
 ## Probe guidance
 
 Paper: the matrix amendment (object shape, rights strings, budget
-model) plus the IOMMU containment requirements list for M7 bring-up —
+model) plus the IOMMU containment requirements list for Hardware H4 —
 the driver work should discover zero authority questions mid-flight.
 Validation of the exit condition waits for hardware.

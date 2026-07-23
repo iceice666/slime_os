@@ -4,7 +4,7 @@
 | --- | --- |
 | Status | parked |
 | Route | sync |
-| Depends on | [entry 14](14-cross-machine-sync.md); [entry 2](02-revocable-leases.md) |
+| Depends on | [entry 14](14-cross-machine-sync.md); [Authority A1 revocation](../../roadmap/06-authority-trust.md); [Hardware H6 networking](../../roadmap/04-platform-hardware.md) |
 | Enables | services addressed across machines under the same authority model |
 | Now | Design note only, by register decree: it stays paper until sync exists. |
 
@@ -25,8 +25,8 @@ semantics.
   (M5.2a), capabilities are unforgeable and non-ambient, and membranes
   already make a proxied endpoint indistinguishable from a local one
   (README's agentic direction; [entry 7](07-schema-interposition.md)).
-- Nothing crosses machines yet: sync (14) is parked, revocation (2) is
-  parked, and M7 networking does not exist.
+- Nothing crosses machines yet: sync (14) is parked, Authority A1 revocation
+  is future work, and Hardware H6 networking has not landed.
 
 ## Design sketch
 
@@ -70,6 +70,6 @@ None yet; design note only.
 ## Probe guidance
 
 Paper: the design note itself, covering the wire form, the revocation
-mapping onto entry 2's trees, and the partition error vocabulary,
+mapping onto Authority A1's revocation trees, and the partition error vocabulary,
 evaluated against two or three concrete cross-machine agent scenarios.
-Promotion requires entries 14 and 2 to land first.
+Authority A5 depends on entry 14, A1, and Hardware H6.

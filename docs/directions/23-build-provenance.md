@@ -4,9 +4,9 @@
 | --- | --- |
 | Status | parked |
 | Route | updates |
-| Depends on | M5.5 deterministic generation output (complete); naturally accompanies the M5.8 release pipeline (not started) but is not parsed by stage-0 |
+| Depends on | M5.5 deterministic generation output and M5.8 release authorization (complete); provenance remains detached and is not parsed by stage-0 |
 | Enables | rebuild verification, incident response, supply-chain audit for host-built generations |
-| Now | Paper: attestation schema and verifier design are legal today. The register gates promotion on the release pipeline having a stable builder identity and attestation storage location — M5.8 is not started. |
+| Now | Paper and host-side implementation are legal today. M5.8 supplies release-signing identities and detached-metadata discipline; the provenance-specific builder identity and storage convention remain open. |
 
 ## Motivation
 
@@ -32,8 +32,9 @@ from the named inputs reproduce this identity?") and incident response
 - The SLSA build-provenance model is the reference; the register
   explicitly adopts its separation of build provenance from release
   authorization rather than the full framework.
-- Missing: a builder identity (who/what signs provenance) and a storage
-  location for attestations — both arrive with the M5.8 pipeline.
+- M5.8 (complete) supplies pinned release-signing identities and bounded
+  detached metadata, but provenance still needs its own builder identity
+  and attestation storage convention.
 
 ## Design sketch
 
@@ -58,8 +59,8 @@ actionable.
 
 ## Open questions
 
-- Builder identity before M5.8: is there an interim unsigned (or
-  developer-signed) provenance form, or does the entry wait entirely?
+- Should provenance reuse an M5.8 release signer identity or define a
+  distinct builder identity with separate authorization?
 - Storage location: alongside the generation as an object in the M5.4
   store, or host-side only?
 - Normalized parameters: what is the canonical form shared with
@@ -79,9 +80,8 @@ identity, or output identity.
 Paper/host-side today: define the attestation schema and implement the
 consistency verifier over the current deterministic artifacts (both
 accept and all four reject cases from the exit condition). The probe
-delivers the schema plus measured verification cost; promotion waits,
-per the register, for the M5.8 pipeline to fix builder identity and
-storage.
+delivers the schema plus measured verification cost and resolves the
+provenance-specific builder identity and storage convention.
 
 ## References
 

@@ -4,7 +4,7 @@
 | --- | --- |
 | Status | parked |
 | Route | updates |
-| Depends on | M5.6 (complete); ROADMAP names it a follow-up enabled by that milestone |
+| Depends on | M5.6 (complete); the canonical [roadmap](../../roadmap/README.md) names it a follow-up enabled by that milestone |
 | Enables | unattended regression localization over the update history |
 | Now | Fully unblocked: the parent chain, pending/known-good mechanics, attempt consumption, and QEMU health checks all exist. This is automation over landed machinery. |
 

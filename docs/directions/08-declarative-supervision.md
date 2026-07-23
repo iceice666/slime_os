@@ -4,14 +4,14 @@
 | --- | --- |
 | Status | parked |
 | Route | lifecycle |
-| Depends on | M6 spawn-service prerequisites (supervision handles, endpoint minting — listed in the capability-matrix horizon as not yet existing); interacts with M5.6b snapshot semantics and M5.6 fault classification (both complete) |
+| Depends on | M6 spawn service, supervision handles, and endpoint minting (complete); interacts with M5.6b snapshot semantics and M5.6 fault classification (both complete) |
 | Enables | "let it crash" component design; restart-budget policy as manifest data |
-| Now | Design note legal today; kernel and service work waits on the M6 spawn service (minimal stub). |
+| Now | Design note legal today; M6 supplies the spawn and supervision mechanisms, while general restart-policy semantics remain open. |
 
 ## Motivation
 
-The capability-matrix horizon already lists supervision handles as an M6
-prerequisite, but the semantics are open. Explore Erlang-style restart
+M6 already supplies supervision handles and structured outcomes, but the
+general restart-policy semantics remain open. Explore Erlang-style restart
 policy as manifest data: restart limits, backoff, and whether state is
 `preserve` or `ephemeral` across restarts. "Let it crash" plus
 capability re-grant — a component's recovery strategy is declared,
@@ -29,8 +29,8 @@ hard-coded per service.
   binding?
 - The health service already receives structured failure reports; a
   supervisor's "gave up" status has a defined place to land.
-- Missing: supervision handles, userspace endpoint minting, and the
-  spawn service itself (M6 is a minimal stub).
+- M6 (complete) supplies supervision handles, userspace endpoint minting,
+  per-client accounting, and the spawn service this policy builds on.
 
 ## Design sketch
 
@@ -80,5 +80,5 @@ health service.
 Paper: the policy schema (fields, defaults, escalation vocabulary) plus
 a walk-through of three failure scenarios (single crash, crash loop,
 dependency mid-restart) against the M5.6 fault classification. The note
-also decides which semantics the horizon's supervision handle must
-carry, feeding M6 rather than surprising it.
+also decides which semantics a general supervisor must carry on top of
+M6's completed supervision handles.
