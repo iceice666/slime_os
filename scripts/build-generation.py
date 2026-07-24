@@ -665,7 +665,15 @@ def main() -> None:
     manifest = load_manifest()
     if manifest["formatVersion"] != 1: fail("unsupported source formatVersion")
     policy_number = int(os.environ.get("SLIME_GENERATION_NUMBER") or manifest["generation"])
-    generation1_components = build_rust_components(policy_number, candidate_identity=None)
+    # Generation 1 is the known-good baseline: its components must carry their own
+    # generation number (1) so the generation-manager runs the known-good path,
+    # not the pending/failing path baked for `policy_number`. Booting the two
+    # generations from one build (rollback/bootstate) otherwise makes the
+    # known-good recovery boot report the pending generation's unhealthy status.
+    # The transfer receiver is the exception: there generation 1 *is* the
+    # policy-numbered receiver generation, built with the receiver flag.
+    generation1_number = policy_number if os.environ.get("SLIME_TRANSFER_RECEIVER") == "1" else 1
+    generation1_components = build_rust_components(generation1_number, candidate_identity=None)
     payloads: dict[str, bytes] = {manifest["kernelObject"]: kernel_image(kernel)}
     object_by_id = {obj["id"]: obj for obj in manifest["objects"]}
     for component in manifest["components"]:
