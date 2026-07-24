@@ -10,6 +10,8 @@ import subprocess
 from pathlib import Path
 
 from boot_contracts import (
+    BOOTSTATE_KNOWN_GOOD_END,
+    BOOTSTATE_KNOWN_GOOD_OFFSET,
     BOOTSTATE_SLOT_BYTES,
     BOOTSTORE_DIRECTORY_OFFSET,
     BOOTSTORE_ENTRY,
@@ -47,6 +49,11 @@ def bootstate_pending(image: bytes, slot: int) -> bytes:
     return image[offset + 64 : offset + 96]
 
 
+def bootstate_known_good(image: bytes, slot: int = 0) -> bytes:
+    offset = slot * BOOTSTATE_SLOT_BYTES
+    return image[offset + BOOTSTATE_KNOWN_GOOD_OFFSET : offset + BOOTSTATE_KNOWN_GOOD_END]
+
+
 def generation_entries(image: bytes) -> list[tuple[bytes, int, int, int, int]]:
     count = struct.unpack_from("<I", image, BOOTSTORE_DIRECTORY_OFFSET + 24)[0]
     entries = []
@@ -76,11 +83,22 @@ def build_fixture(scenario: str) -> Path:
     entries = generation_entries(image)
     if len(entries) != 2:
         raise SystemExit(f"{scenario}: expected two generation entries")
+    # Staging targets the candidate generation — the entry whose identity differs
+    # from the known-good baseline (SLIME_KNOWN_GOOD_FIRST=1 makes generation 1
+    # known-good). Directory order is identity-sorted and shifts whenever the
+    # component images change, so select the candidate by identity rather than a
+    # fixed directory index; otherwise the corruption can land on the untouched
+    # known-good generation and staging wrongly succeeds.
+    known_good = bootstate_known_good(image)
+    candidates = [entry for entry in entries if entry[0] != known_good]
+    if len(candidates) != 1:
+        raise SystemExit(f"{scenario}: expected exactly one candidate generation")
+    candidate = candidates[0]
     if scenario == "bad-closure":
-        _, generation_offset, generation_len, _, _ = entries[1]
+        _, generation_offset, generation_len, _, _ = candidate
         image[generation_offset + generation_len - 1] ^= 0x01
     elif scenario == "bad-release":
-        _, _, _, release_offset, release_len = entries[1]
+        _, _, _, release_offset, release_len = candidate
         if release_len != RELEASE_BYTES:
             raise SystemExit("unexpected release record size")
         # Signature payload corruption preserves directory/checksum validity but
