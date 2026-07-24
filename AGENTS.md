@@ -23,6 +23,10 @@ Use the Justfile targets from the repository root:
 
 `roadmap/00-backlog.md` tracks known defects, regressions, and latent bugs in implemented code. Resolve open backlog items before starting a new `roadmap/` track milestone. A green verification suite is a precondition for milestone work, not a milestone itself; if you cannot resolve an open backlog item, record why it is deferred rather than silently skipping it. When you fix a defect, move its entry to the backlog's resolved log with the observed exit condition rather than deleting it.
 
+## Development log
+
+`devlog/` is the curated, chronological record of investigations, regressions, design decisions, and verification results. Record an entry whenever you complete a roadmap milestone or land a non-trivial feature, make a design or architecture decision, fix a non-trivial regression, root-cause a defect, or run a verification campaign: a folder `devlog/YYYY-MM-DD-short-topic/` with a curated `index.md` written from `devlog/TEMPLATE.md`, keeping focused reports, raw transcripts, and other evidence as siblings in that folder. Register the entry in `devlog/README.md` and follow its evidence rules — prefer exact `just` targets and observed results, label inherited evidence and unobserved conclusions, and never rewrite a raw log. Roadmap completion stays authoritative in `roadmap/`; devlog entries explain how conclusions were reached. When a backlog item is resolved, link its devlog entry from the backlog's resolved log.
+
 ## Development rules
 
 - **Zutai is the only schema language.** Every serialized format that crosses a persistence, process, or boot boundary — on-disk formats, IPC/protocol messages, manifests, handoff structures — must be defined as a versioned Zutai schema under `contracts/` (`schema.zt`), with Rust/Python bindings generated from it (`scripts/generate-*-bindings.py`, `just *_gen`). Do not introduce hand-written field offsets, ad-hoc `#[repr(C)]` wire structs, `struct.pack` layouts, or any other schema language (JSON Schema, protobuf, etc.) as the source of truth for a format. Purely in-memory types are exempt.
