@@ -14,8 +14,11 @@ The initial conformance target is pinned rather than described as generic “ROS
 - DDSI-RTPS 2.5 wire framing and discovery subset;
 - XCDR1 serialized payloads for the admitted type subset;
 - exact generation-declared peers, domain, routes, directions, types, QoS, and bounds.
+- wire behavior is architecture-independent: the initial deterministic Slime endpoint is the x86-64 reference QEMU profile, and the same admitted corpus is replayed on AArch64 only after architecture milestone P2;
 
 A later ROS distribution or middleware vendor is a new conformance profile until the same corpus proves compatibility. Cross-vendor behavior is not assumed from one passing implementation.
+
+A physical Raspberry Pi used as the ROS peer is external interoperability evidence. It does not establish that Slime OS boots or supports Raspberry Pi hardware; that claim belongs to a named P4 target in [`07-architecture-portability.md`](07-architecture-portability.md).
 
 ## What “ROS 2 protocol” means here
 
@@ -85,19 +88,20 @@ KEEP_ALL, infinite result retention, unbounded retransmission, and unbounded dis
 
 ## Sequencing
 
-1. R1 depends on C8 and H6's deterministic network service and exact-destination authority.
+1. R1 depends on C8 and H6's deterministic network service and exact-destination authority. Its L0–L3 completion remains on the reference QEMU profile and does not wait for P2.
 2. R2 depends on R1 and consumes C8 operations plus the C9 lifecycle/time contracts where applicable.
-3. R3 depends on R2 and either X1 or X2 from [`05-foreign-workloads.md`](05-foreign-workloads.md).
-4. R1 and R2 do not depend on compositor, audio, Wi-Fi, GPU, local Linux/POSIX support, Python, or an on-device ROS build toolchain.
+3. R3 depends on R2 and either X1 or X2 from [`05-foreign-workloads.md`](05-foreign-workloads.md); every locally executed ROS artifact is built and admitted for the generation's exact architecture profile.
+4. After P2, the same R1/R2 peer image, packets, malformed corpus, bounds, and allowed/denied routes are replayed against `aarch64-qemu-virt` as heterogeneous architecture evidence, not as a second wire profile.
+5. R1 and R2 do not depend on compositor, audio, Wi-Fi, GPU, local Linux/POSIX support, Python, an on-device ROS build toolchain, or a non-x86 boot.
 
 ## Canonical conformance environment
 
-R1 and R2 use a pinned host container as the executable protocol oracle. A Raspberry Pi is later physical interoperability evidence; it does not replace or block the deterministic container checks.
+R1 and R2 use a pinned host container as the executable protocol oracle. The canonical L0–L3 gate runs against the x86-64 reference QEMU profile. A later AArch64 QEMU replay and physical Raspberry Pi fixture add heterogeneous evidence; neither replaces or blocks the deterministic container checks.
 
 ```mermaid
 flowchart LR
     Harness["Host test harness"]
-    QEMU["QEMU running Slime OS"]
+    QEMU["Reference x86-64 QEMU running Slime OS"]
     Gateway["R1/R2 ROS gateway"]
     Network["H6 virtio-net service"]
     TestNet["Isolated fixed-address test network"]
@@ -132,8 +136,9 @@ The isolated network uses fixed addresses from a documentation-only subnet, a fi
 | L1 | recorded RTPS packets plus malformed, loss, duplicate, reorder, and restart corpus | required |
 | L2 | QEMU Slime ↔ pinned Jazzy/Fast DDS container | required |
 | L3 | the same corpus with Cyclone DDS selected in the same image | required before closing the relevant profile |
-| L4 | Framework Slime ↔ wired Raspberry Pi Jazzy peer | physical evidence after R1/R2; not a substitute for L0–L3 |
-| L5 | Raspberry Pi sensor/actuator workload | later robot qualification, outside R1/R2 |
+| L4 | the same L0–L3 corpus against `aarch64-qemu-virt` after P2 | supplemental architecture evidence; not required to close R1/R2 |
+| L5 | Framework Slime ↔ wired Raspberry Pi Jazzy peer | physical protocol evidence after R1/R2; not a substitute for L0–L3 and not Raspberry Pi Slime support |
+| L6 | Raspberry Pi sensor/actuator workload | later robot qualification, outside R1/R2 |
 
 ### R1 topic matrix
 
@@ -147,7 +152,7 @@ The canonical fixture covers both service directions, concurrent request identit
 
 ### Physical interoperability evidence
 
-After R1 and R2 pass L0–L3, run a dedicated wired-Ethernet fixture between Framework Slime and a 64-bit Raspberry Pi 4 or 5 running the same pinned Jazzy probe packages. Record image/generation identity, Pi image/package identity, RMW selection, addresses, domain, packet capture, link unplug/replug, peer restart, exact allowed/denied destinations, and Framework storage-integrity evidence. Run Fast DDS and Cyclone DDS separately. Wi-Fi and real sensors are later fixtures so NIC, discovery, and protocol failures remain independently diagnosable.
+After R1 and R2 pass L0–L3, run a dedicated wired-Ethernet fixture between Framework Slime and a 64-bit Raspberry Pi 4 or 5 running the same pinned Jazzy probe packages. Record image/generation identity, Pi image/package identity, RMW selection, addresses, domain, packet capture, link unplug/replug, peer restart, exact allowed/denied destinations, and Framework storage-integrity evidence. Run Fast DDS and Cyclone DDS separately. This proves a heterogeneous external peer, not Slime support for the Pi. Separately, after P2, replay L0–L3 against AArch64 Slime under QEMU. Wi-Fi and real sensors remain later fixtures so NIC, discovery, protocol, and ISA failures remain independently diagnosable.
 
 ## R1: ROS 2 topic wire profile
 
@@ -224,6 +229,12 @@ just ros2_service_action_check
 
 The content-addressed Jazzy peer container and native Slime components call services and execute, observe, cancel, and retrieve actions bidirectionally under both Fast DDS and Cyclone DDS selections through declared graph and network authority; correlation and state transitions remain exact across retries and restarts, while every queue, retained sample, active goal, and result has a finite enforced bound. Raspberry Pi evidence is not required for R2 completion.
 
+## Embedded companion boundary
+
+MCU-class ROS devices without the admitted 64-bit MMU isolation baseline are external peers, not local R3 workloads and not reduced-security Slime ports. A future companion profile may admit micro-ROS/XRCE-DDS or a smaller Zutai protocol only through an exact serial, CAN, USB, or `NetworkDestination` capability.
+
+The generation must bound peer identity, admitted types, route direction, payload size, frequency, queue depth, timeout, reconnect/reset behavior, and actuator authority. Malformed traffic, resource exhaustion, disconnect, and MCU reboot become structured C8/C9 events. The companion receives no ambient discovery domain, graph creation, raw network, storage, or device authority.
+
 ## R3: Existing ROS workload route
 
 **Status:** Not started.
@@ -237,6 +248,8 @@ R3 runs existing ROS client-library workloads locally. It is explicitly not an R
 - X2 guest VM: run a higher-fidelity Linux ROS environment whose virtio devices are backed only by granted Slime services.
 
 The selected route is generation data. Moving a workload between routes cannot widen its grants.
+
+The selected route is also architecture-qualified. A package proven on x86-64 is not admitted on AArch64 or RV64 until its executable closure and route pass the corresponding target's artifact and workload checks; wire-level R1/R2 evidence alone does not prove local binary compatibility.
 
 ### Deliverables
 

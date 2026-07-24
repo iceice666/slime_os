@@ -4,14 +4,16 @@
 
 **Status:** In progress. H1's bounded inventory and host evidence harness are implemented and QEMU-verified; the required physical Framework evidence record is pending. The current Framework removable image has previously reported no usable physical keyboard input, and H4 is the first slice allowed to claim a working physical keyboard.
 
-**Dependencies:** [Foundations](01-foundations.md), especially the retained M5.7 storage-safety boundary; [Core runtime](02-core-runtime.md), especially C7 generation-v3 authority and C9 scheduling authority; [ROS 2 compatibility](03-ros2-compatibility.md) consumes H6 networking; [Authority and trust](06-authority-trust.md) owns A1 revocation, A2 secrets, and A3 general accelerator authority.
+**Dependencies:** [Foundations](01-foundations.md), especially the retained M5.7 storage-safety boundary; [Core runtime](02-core-runtime.md), especially C7 generation-v3 authority and C9 scheduling authority; [Architecture portability](07-architecture-portability.md), especially P1 before H2/C9 low-level contracts; [ROS 2 compatibility](03-ros2-compatibility.md) consumes H6 networking; [Authority and trust](06-authority-trust.md) owns A1 revocation, A2 secrets, and A3 general accelerator authority.
 
 The Hardware track promotes hardware in two distinct steps: deterministic mechanism and fault handling under QEMU first, then an observed Framework run with the exact generation-declared device grant. A QEMU pass never substitutes for physical evidence. DMA-capable physical drivers remain trusted and read-only until H4 installs IOMMU containment; internal NVMe writes remain disabled until H7 completes every promotion gate.
+
+This track qualifies the named x86-64 Framework platform. It does not own generic ARM or RISC-V support, and its ACPI, PCI, APIC, AMD-IOMMU, xHCI, NVMe, and firmware evidence must not become requirements for another architecture profile. Named non-x86 boards are admitted through P4 and qualify each peripheral through an explicit owning milestone.
 
 Sequencing:
 
 - H1 inventories the actual Framework firmware and device topology; later drivers consume that evidence rather than guessed BDFs, interrupt routes, or protocols.
-- H2 gates every userspace hardware driver. H3 proves xHCI, USB, and HID logic under QEMU; H4 adds AMD-IOMMU containment and promotes USB HID on the Framework.
+- P1 precedes H2 so x86 trap, page-table, interrupt, timer, and firmware details are already separated from shared capability semantics. H2 then gates every Framework userspace hardware driver. H3 proves xHCI, USB, and HID logic under QEMU; H4 adds AMD-IOMMU containment and promotes USB HID on the Framework.
 - H5 and H6 consume H4 and may proceed in parallel. H7 consumes H4 plus H5's disposable external-media path.
 - H8 may proceed after H2 because it uses the boot GOP framebuffer; H9 consumes the H1 ACPI inventory. H10 consumes every device service that must quiesce and resume.
 - H11 and H12 are independent once their buses, input/audio/network services, and resume hooks exist. H13 consumes H4, H8, and H10. H14 is the integrated acceptance slice and consumes all preceding slices.
@@ -46,7 +48,7 @@ Exit condition: the repository contains reproducible evidence for the target Fra
 
 **Status:** Not started.
 
-H2 consumes [C7's generation-v3 and shared-sample foundation](02-core-runtime.md#c7-bounded-resource-and-shared-sample-plane). C7 owns the deterministic v2-to-v3 migration, `u64` rights, retained-v2 decoding, and the general `SharedBufferFactory` create/map/release quotas; H2 owns the hardware-facing MMIO, DMA, IRQ, supervision, and rollback integration every later userspace driver consumes.
+H2 consumes [C7's generation-v3 and shared-sample foundation](02-core-runtime.md#c7-bounded-resource-and-shared-sample-plane) and [P1's x86-64 architecture boundary](07-architecture-portability.md#p1-x86-64-architecture-boundary-extraction). C7 owns the deterministic v2-to-v3 migration, `u64` rights, retained-v2 decoding, and the general `SharedBufferFactory` create/map/release quotas; P1 prevents trap, page-table, interrupt-controller, and timer details from leaking into this ABI; H2 owns the Framework/x86 PCI-facing MMIO, DMA, IRQ, supervision, and rollback integration every later driver in this track consumes.
 
 Deliverables:
 
@@ -55,6 +57,7 @@ Deliverables:
 - make DMA, IRQ, and MMIO explicit named capabilities with hard per-driver quotas in the generation, and apply C7's shared-buffer quotas to driver IPC; remove the six ungated device-right exceptions from the capability matrix as their gates land;
 - supervise driver components so timeout, fault, peer loss, and reset are reported without terminating unrelated services; driver restart receives fresh mappings and cannot reuse stale DMA or IRQ authority;
 - declare every new driver IPC protocol schema-first under `contracts/`; clients see typed device services, never ambient PCI enumeration or raw global MMIO.
+- keep shared driver-service semantics expressed as capabilities, bounded mappings, DMA accounts, interrupt events, and typed endpoints; PCI BDFs, ACPI routes, APIC vectors, and AMD-IOMMU identifiers remain fields of the Framework profile rather than universal architecture contracts.
 
 Required checks:
 
@@ -63,6 +66,7 @@ Required checks:
 - a driver cannot program DMA outside buffers in its account at the software boundary, and reclamation remains impossible while a request is outstanding;
 - C7 proves that v2 and v3 artifacts are byte-deterministic for fixed normalized input and rejects unknown versions and rights bits; H2 proves that rollback to a retained v2 generation still boots with hardware authority failing closed;
 - driver failure revokes its mappings and returns charged resources before a supervised restart.
+- the P1 source-boundary guard rejects new x86 privileged mechanisms outside admitted architecture/platform files, while H2 tests may explicitly exercise the Framework PCI profile;
 
 Planned verification target:
 
@@ -163,7 +167,7 @@ Exit condition: Slime OS has a capability-selected disposable physical storage t
 
 **Status:** Not started.
 
-H6 enables [ROS R1](03-ros2-compatibility.md#r1-ros-2-topic-wire-profile). ROS networking work may begin when H6 exits; it does not wait for unrelated compositor, platform UI, audio, wireless, or GPU slices H8-H13.
+H6 enables [ROS R1](03-ros2-compatibility.md#r1-ros-2-topic-wire-profile). Its deterministic virtio-net backend is initially the x86-64 reference QEMU profile. ROS networking work may begin when H6 exits; it does not wait for unrelated compositor, platform UI, audio, wireless, GPU slices H8-H13, or an AArch64 boot. A later P2 replay reuses the ROS corpus but does not retroactively turn this Framework hardware track into generic ARM support.
 
 Deliverables:
 
@@ -180,7 +184,7 @@ Required checks:
 - the manifest and authority-diff tooling enumerate every reachable destination;
 - QEMU transfers deterministic data to an allowed endpoint while a simultaneous denied endpoint receives no packet;
 - the Framework obtains a lease/address through USB Ethernet and reaches one declared endpoint after link unplug/replug and after a driver restart.
-- after R1/R2 deterministic container conformance passes, a dedicated wired Framework ↔ 64-bit Raspberry Pi 4/5 fixture runs the same pinned Jazzy probes under Fast DDS and Cyclone DDS separately, records packet capture and link/peer restart behavior, and preserves Framework storage integrity; this supplements but never replaces the R1/R2 QEMU gates.
+- after R1/R2 deterministic container conformance passes, a dedicated wired Framework ↔ 64-bit Raspberry Pi 4/5 fixture runs the same pinned Jazzy probes under Fast DDS and Cyclone DDS separately, records packet capture and link/peer restart behavior, and preserves Framework storage integrity; this supplements but never replaces the R1/R2 QEMU gates and proves the Pi only as an external peer, not as a Slime-supported board.
 
 Planned verification target:
 

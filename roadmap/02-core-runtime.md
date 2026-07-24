@@ -1,6 +1,6 @@
 # Core runtime track
 
-**Status:** Not started.
+**Status:** In progress; C7.1 is complete and C7.2 is the next open slice.
 
 This track turns the existing bounded channels, capabilities, components, and generations into a native typed communication runtime. It is local-first: C7 and C8 require no network or physical driver, and they do not wait for unrelated display, audio, wireless, or GPU work.
 
@@ -14,14 +14,16 @@ ROS 2 compatibility in [`03-ros2-compatibility.md`](03-ros2-compatibility.md) is
 - The generation declares which component may publish, subscribe, call, serve, inspect, or administer each graph edge.
 - `TransportQoS` controls message delivery. `SchedulingClass` controls CPU ordering. They are separate contracts and namespaces.
 - Slime capability transfer is native-only. A protocol gateway may retain and proxy a capability but may never serialize a kernel capability as application data.
+- Capability, IPC, shared-sample, schema, QoS, lifecycle, and scheduling-policy semantics are architecture-neutral. Trap registers, syscall entry, context switching, page tables, interrupt controllers, and timer mechanisms belong to [`07-architecture-portability.md`](07-architecture-portability.md).
+- C7 and B2 continue on the x86-64 reference path. New low-level work must not add uncontained x86 assumptions outside the architecture/platform boundary that P1 will enforce.
 
 ## Sequencing
 
 1. C7 consumes the M6 endpoint factory, spawn accounting, supervision, and generation machinery.
 2. C8 consumes C7's bounded sample plane.
-3. C9 consumes C8 plus the scheduler and time mechanisms from M1/M2.
-4. H2 consumes C7's generation-v3 and shared-buffer foundation for userspace drivers.
-5. ROS R1 consumes C8 and H6 networking; it does not block C9.
+3. C9 consumes C8 plus the scheduler and time mechanisms from M1/M2, after P1 has made their architecture boundary explicit.
+4. H2 consumes C7's generation-v3/shared-buffer foundation and P1's extracted architecture/platform boundary for userspace drivers.
+5. ROS R1 consumes C8 and H6 networking; it does not block C9 and its initial wire-conformance gate does not require a non-x86 boot.
 
 ## C7: Bounded resource and shared-sample plane
 
@@ -285,6 +287,8 @@ A generation-declared graph of isolated native publishers, subscribers, service 
 
 This slice supplies the timing, execution, lifecycle, and observation contracts needed by robot and mixed interactive workloads. It does not promise hard real-time behavior from QEMU; deterministic state-machine checks precede measured latency evidence on a named physical target.
 
+**Depends on:** C8 and architecture-portability milestone P1. C9 defines architecture-neutral timer, wait-set, scheduling-class, lifecycle, and observation semantics; each admitted ISA supplies the privileged timer, interrupt, context-switch, and idle mechanisms behind P1's boundary.
+
 ### Deliverables
 
 - expose monotonic time, optional wall time, timers, and simulated time as distinct explicit service capabilities; a component with no clock grant cannot observe time implicitly;
@@ -295,6 +299,7 @@ This slice supplies the timing, execution, lifecycle, and observation contracts 
 - define component lifecycle transitions, health dependencies, bounded restart/backoff policy, and parameter state as versioned userspace schemas rather than kernel policy;
 - add typed recording and replay for declared fabric routes; clock, entropy, device input, and other nondeterminism must be either capability-recorded or explicitly excluded from a deterministic claim;
 - build a simulated sensor → controller → actuator workload that exercises timer, stream, call, lifecycle, restart, and contention paths without special kernel treatment.
+- keep timer delivery, interrupt acknowledgement, context switching, CPU idle, and preemption behind the admitted architecture mechanism; no APIC vector, x86 register frame, CR3 operation, GIC identifier, or RISC-V trap field appears in the C9 userspace contracts;
 
 ### Required checks
 
@@ -304,6 +309,7 @@ This slice supplies the timing, execution, lifecycle, and observation contracts 
 - supervised restart preserves declared class and graph shape but cannot reuse stale buffers, endpoints, timers, or device mappings;
 - identical recorded typed inputs, clock events, and lifecycle transitions produce identical replayed component outputs for a manifest-declared deterministic component;
 - deadline misses, timer expiry, liveliness loss, process fault, peer loss, cancellation, and scheduling-budget exhaustion remain distinct at the userspace boundary.
+- the C9 semantic corpus can be replayed on later AArch64 and RV64 profiles without changing syscall meanings, event kinds, scheduling classes, bounds, or generated schemas; raw register and physical-address traces are not cross-architecture equality inputs;
 
 ### Planned verification target
 
@@ -328,4 +334,4 @@ just fmt_check_components
 just lint_components
 ```
 
-No core-runtime result by itself claims ROS wire interoperability or physical real-time performance.
+No core-runtime result by itself claims ROS wire interoperability, a non-x86 boot, or physical real-time performance. Architecture-qualified releases additionally satisfy the corresponding P1, P2, or P3 gate.

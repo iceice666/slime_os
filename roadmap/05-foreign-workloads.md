@@ -4,9 +4,11 @@
 | --- | --- |
 | **Purpose** | Run selected Linux workloads without changing Slime's native ABI or importing Linux's ambient authority model. |
 | **Status** | Not started. X1 is the first compatibility route; X2 is a later, separately gated route. |
-| **Dependencies** | X1 consumes the completed M5.4 content-addressed store and M6 spawn, endpoint-minting, and userspace-filesystem machinery in [Foundations](01-foundations.md), plus the H6 network-service contract in [Platform hardware](04-platform-hardware.md) for networked workloads. X2 additionally requires H4 AMD-IOMMU containment and an observed AMD-V virtualization-enablement gate. [ROS 2 compatibility](03-ros2-compatibility.md) R3 may consume either route. |
+| **Dependencies** | X1 consumes the completed M5.4 content-addressed store and M6 spawn, endpoint-minting, and userspace-filesystem machinery in [Foundations](01-foundations.md), plus the H6 network-service contract in [Platform hardware](04-platform-hardware.md) for networked workloads and P0/P1 target/artifact boundaries in [Architecture portability](07-architecture-portability.md). X2 is an x86-64-only AMD-V route and additionally requires H4 AMD-IOMMU containment and an observed AMD-V virtualization-enablement gate. [ROS 2 compatibility](03-ros2-compatibility.md) R3 may consume a route only on a target for which that route and executable closure are admitted. |
 
 Linux compatibility remains a userspace facility. Native Slime components continue to use the capability-based Slime ABI; neither track adds Linux syscalls, FHS paths, process-global environment state, or ambient filesystem and network lookup to that ABI. A foreign workload is still one generation-declared component contract: a content-addressed image, a selected compatibility backend, bounded configuration, and an explicit grant set.
+
+Foreign compatibility is architecture-qualified. X1's syscall-to-service semantics may be ported across admitted Slime targets, but each Linux executable, loader ABI, and personality build is validated for one exact architecture profile. X2 does not exist on AArch64 or RV64: a future hardware-virtualization route there would require a separately named milestone and target-specific containment evidence rather than reusing the AMD-V claim.
 
 ## X1: Linux userspace personality
 
@@ -15,6 +17,7 @@ Linux compatibility remains a userspace facility. Native Slime components contin
 ### Deliverables
 
 - Implement a userspace personality component that loads a selected Linux binary from a content-addressed M5.4 object. Image identity and integrity use the existing generation verification path; the personality never searches an executable path or global image registry.
+- validate the Linux executable architecture, ABI, endianness, loader profile, and complete dependency closure against the generation target before mapping it; wrong-target binaries fail closed rather than entering the personality;
 - Define a fixed, versioned, audited syscall-to-service table for a minimal real workload. Each admitted syscall names its Slime IPC service, required grant, argument and resource bounds, result mapping, and Linux errno when the grant or operation is unavailable. Unsupported or ungranted calls fail closed with the appropriate ordinary Linux error; they never widen the table or mint authority dynamically.
 - Translate `open`, `read`, and `write` into object-store or filesystem-service transactions bounded by explicit directory or object grants. There is no implicit root, current directory, home directory, descriptor, or path-search authority.
 - Translate socket operations through the H6 network service and exact `NetworkDestination` grants. Name resolution remains inside that service and does not imply arbitrary resolver, raw-packet, listen, or destination authority.
@@ -31,12 +34,15 @@ Linux compatibility remains a userspace facility. Native Slime components contin
 - A spawned child holds no grant absent from its explicit child grant set and no authority exceeding the parent.
 - Changing host filesystem state, process environment, working directory, or network configuration cannot add authority to an unchanged generation.
 - The manifest exposes the container's image identity, compatibility profile, bounded startup data, and complete grant set, and the existing authority-diff path reports changes to any of them.
+- replaying X1 on AArch64 or RV64 uses the same syscall/service/grant semantics but separately proves that target's loader, executable closure, signal/register translation if admitted, and error mapping;
 
 **Exit condition:** A Linux binary declared as a container in the generation runs under the personality, confined to its declared directory, network, time, randomness, process, and other service grants; everything else is denied with a normal Linux errno, and its complete authority is visible and diffable in the manifest.
 
 ## X2: Isolated AMD-V guest VM
 
 **Status:** Later. X2 does not block X1 and MUST NOT begin hardware-backed guest execution until H4 IOMMU containment and AMD-V enablement have been observed on the target.
+
+**Architecture boundary:** X2 applies only to the x86-64 Framework/AMD-V profile. It is not a generic `X2` release dependency for AArch64 or RV64.
 
 X2 reuses X1's generation-level foreign-workload contract rather than creating another authority model. The backend choice may change fidelity and cost, but never the workload's grants.
 
@@ -61,6 +67,6 @@ X2 reuses X1's generation-level foreign-workload contract rather than creating a
 
 ## ROS 2 relationship
 
-[R3](03-ros2-compatibility.md) may run an existing ROS workload through X1 when its required Linux syscall profile is supported, or through X2 when it needs a full guest kernel. In either case, its image, filesystem, network, discovery, time, randomness, process, device, and other authority remain generation-declared explicit grants.
+[R3](03-ros2-compatibility.md) may run an existing ROS workload through X1 when its required Linux syscall profile is supported on the exact generation target, or through X2 only on the admitted x86-64 AMD-V profile when it needs a full guest kernel. In either case, its image, filesystem, network, discovery, time, randomness, process, device, and other authority remain generation-declared explicit grants.
 
 R1 and R2 do not depend on X1, X2, Linux, or existing ROS binaries. They establish ROS 2 topic, service, and action interoperability as userspace protocol profiles over native Slime contracts; existing ROS binaries become a requirement only for R3's existing-workload checks.
