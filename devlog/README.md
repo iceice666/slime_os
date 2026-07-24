@@ -39,6 +39,13 @@ Every regression entry should identify:
 - **Monitoring** — resolved, but awaiting broader or physical evidence.
 - **Proposed** — design or tooling decision not yet implemented.
 
+## Entry immutability
+
+A published entry is a fixed record of what was observed, not a live tracker. Once an entry is committed:
+
+- **Frozen:** the curated `index.md` body — summary, investigation log, root cause, changes, verification results — and every evidence sibling (focused reports, `transcript.txt`, captures). Do not rewrite an observed result, a raw log, or the reasoning that led to it. Corrections go in a new dated note appended under a `## Corrections` heading (with the date and what changed), never by editing the original claim.
+- **Mutable:** the front-matter **Status** field as the situation evolves (e.g. `Verified` → `Monitoring` once physical evidence lands), and cross-links in **Open risks and follow-ups**. Keep the live truth in `roadmap/` and `roadmap/00-backlog.md`; the entry only points at those canonical homes, so downstream state changes never require editing the frozen body.
+
 ## Evidence rules
 
 - Prefer exact `just` targets and exit results over prose such as “tests passed.”
