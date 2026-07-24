@@ -25,11 +25,11 @@ ROS 2 compatibility in [`03-ros2-compatibility.md`](03-ros2-compatibility.md) is
 
 ## C7: Bounded resource and shared-sample plane
 
-**Status:** In progress. Decomposed into C7.1–C7.4 so each slice is an independently reviewable commit, mirroring the M5/M6 sub-slice convention. The C7 gate closes only when C7.4's exit condition is observed.
+**Status:** In progress. Decomposed into C7.1–C7.7 so each slice introduces one primary state surface and owns an independently reviewable QEMU check, mirroring the M5/M6 sub-slice convention. The C7 gate closes only when C7.7's exit condition is observed.
 
 **Depends on:** the M6 endpoint factory, spawn accounting, supervision, and generation machinery.
 
-**Sequencing:** C7.1 lands the v3 generation format and `u64` rights that every later slice consumes. C7.2 adds the `SharedBufferFactory` object, quotas, and supervision-subtree accounting on top of v3 rights. C7.3 adds the buffer lifecycle operations and the sample-descriptor contract over C7.2's object. C7.4 composes them into the two-component exit condition and owns `just sample_plane_check`.
+**Sequencing:** C7.1 lands the v3 generation format and `u64` rights that every later slice consumes. C7.2 introduces the shared-buffer capability objects and factory-authorized allocation under fixed kernel bounds. C7.3 adds generation-declared quotas and supervision-subtree accounting. C7.4 adds map, unmap, and irreversible read-only sealing. C7.5 adds loan/return ownership and fault reclamation. C7.6 defines and validates the sample-descriptor contract over that lifecycle. C7.7 composes the slices into the two-component exit condition and owns `just sample_plane_check`.
 
 ### C7.1 — Generation format v3 and u64 rights
 
@@ -60,78 +60,169 @@ just contracts_check
 
 A v3 generation built from normalized input is byte-identical across two builds, boots the existing vertical slice with `u64` rights, and a retained v2 known-good artifact still decodes and boots; an unsupported version and an unknown rights bit both fail closed.
 
-### C7.2 — SharedBufferFactory, quotas, and accounting
+### C7.2 — Shared-buffer authority and factory allocation
 
 **Status:** Not started.
 
-**Depends on:** C7.1 v3 rights; M6.1 supervision and per-spawner accounting.
+**Depends on:** C7.1 v3 rights and the M6.1 factory-capability pattern.
 
 ### Deliverables
 
-- add a named `SharedBufferFactory` capability with generation-declared per-holder byte, buffer-count, mapping-count, and outstanding-loan quotas;
-- expose bounded create and release operations; userspace cannot invent buffer identity or widen access while deriving or transferring it;
-- charge physical pages and mappings to the creating supervision subtree, retain them while any valid loan is outstanding, and reclaim them after return, peer death, supervised restart, or explicit revocation;
-- keep DMA buffers and ordinary shared samples as distinct authority even if they reuse memory-accounting machinery.
+- add a distinct `SharedBufferFactory` kernel object and formalize the existing `SharedBuffer` object with object-specific create, map, write, and transfer authority;
+- expose bounded create and release operations behind a named factory capability, with fixed kernel-wide byte and object ceilings returning structured exhaustion;
+- keep buffer identity kernel-created and unforgeable; derivation and transfer may only narrow rights, and release invalidates the releasing holder's capability;
+- keep DMA buffers and ordinary shared samples as distinct authority even if later slices reuse memory-accounting machinery.
 
 ### Required checks
 
-- a component without the factory capability cannot allocate a shared buffer, and a holder cannot exceed any manifest quota;
-- the creator cannot reclaim pages while a sample loan is outstanding; peer death and supervised restart reclaim every unreachable mapping and charge;
-- transferring or deriving a buffer checks `RIGHT_TRANSFER` and never widens buffer rights;
+- a component without the factory capability cannot allocate a shared buffer;
+- allocation cannot exceed fixed kernel byte or object bounds and exhaustion does not disturb an unrelated holder;
+- deriving or transferring a buffer checks `RIGHT_TRANSFER`, never widens rights, and cannot invent a buffer identity;
 - DMA authority and shared-sample authority remain distinct capability kinds.
 
 ### Verification target
 
 ```sh
-just sample_plane_check
+just shared_buffer_factory_check
 ```
 
 ### Exit condition
 
-A factory-authorized holder creates a quota-charged shared buffer whose pages bill the creating supervision subtree; an unauthorized component is denied, a manifest quota cannot be exceeded, and peer death reclaims every page and mapping.
+A factory-authorized holder creates and releases a kernel-identified shared buffer within fixed global bounds; an unauthorized component is denied, exhaustion is structured and isolated, and no derivation or transfer widens authority.
 
-### C7.3 — Buffer lifecycle and sample descriptor
+### C7.3 — Generation quotas and supervision accounting
 
 **Status:** Not started.
 
-**Depends on:** C7.2 `SharedBufferFactory` and accounting.
+**Depends on:** C7.2 factory allocation; M6.1 supervision and per-spawner accounting.
 
 ### Deliverables
 
-- expose bounded map, unmap, seal/read-only, loan, and return operations; userspace cannot invent buffer identity or widen access while deriving or transferring it;
-- define a versioned sample-descriptor contract that fits the existing channel control-message bound and references an exact shared-buffer capability, offset, length, type identity, sequence, and declared flags.
+- define a versioned Zutai shared-buffer budget contract stored as a generation resource object, with per-holder byte, buffer-count, mapping-count, and outstanding-loan quotas; generation v3 references and authenticates the resource through its existing object table rather than adding ad-hoc record fields;
+- validate every budget deterministically before component launch and reject missing, malformed, overflowing, or globally impossible limits;
+- charge allocated pages and resource counters to the creating supervision subtree rather than to an ambient global owner;
+- reclaim unloaned buffers and charges after explicit release, peer death, supervised restart, or explicit revocation; C7.5 extends the rule to outstanding loans.
 
 ### Required checks
 
-- a receiver cannot map bytes outside the granted buffer or widen read-only access to writable;
-- overflowed offset/length, unknown flags, stale loans, duplicate returns, wrong-buffer returns, and use-after-release fail with structured errors before mapping or allocation;
-- payloads larger than the kernel message bound traverse descriptor plus shared buffer without increasing `MAX_MSG` or copying payload bytes through the kernel queue.
+- a holder cannot exceed its manifest byte or buffer-count quota even while another holder remains below its own quota;
+- malformed or impossible generation budgets fail before allocation or component launch;
+- peer death, supervised restart, and revocation reclaim every unloaned page and charge in the affected subtree without changing another subtree's account;
+- mapping-count and outstanding-loan quotas are present and bounded before the operations that consume them land.
 
 ### Verification target
 
 ```sh
-just sample_plane_check
+just shared_buffer_accounting_check
 ```
 
 ### Exit condition
 
-A holder seals a buffer read-only, loans a sample described by a versioned descriptor within the control-message bound, and the receiver maps only the granted bytes; every malformed descriptor and lifecycle misuse fails with a structured error before mapping.
+Two holders receive distinct generation-declared budgets; one reaches byte or buffer-count exhaustion without affecting the other, and termination of its supervision subtree returns every unloaned page and charge.
 
-### C7.4 — Sample-plane exit condition
+### C7.4 — Mapping and read-only sealing
 
 **Status:** Not started.
 
-**Depends on:** C7.1, C7.2, and C7.3.
+**Depends on:** C7.2 shared-buffer objects and C7.3 accounting.
 
 ### Deliverables
 
-- compose the factory, quotas, lifecycle, and descriptor into two isolated components that exchange and return a payload larger than the kernel IPC message bound;
-- prove malformed descriptors, quota exhaustion, and peer death remain bounded and reclaim all resources without disturbing an unrelated channel or the retained v2 known-good boot path.
+- expose bounded map and unmap operations charged against the holder's mapping-count quota;
+- validate offset and length before page-table changes, map only pages belonging to the exact buffer capability, and require object-specific map/write rights;
+- make sealing an irreversible transition to read-only: existing writable mappings are removed or downgraded before the seal succeeds, and no later operation restores write access;
+- reclaim mappings and mapping charges on unmap, release, peer death, supervised restart, or revocation.
+
+### Required checks
+
+- a holder cannot map outside the granted buffer, overflow offset/length arithmetic, exceed its mapping quota, or widen read-only access to writable;
+- sealing fails safely or removes every writable mapping before publishing the sealed state;
+- map-after-seal can produce only read-only access, and use-after-unmap or use-after-release fails with a structured error;
+- mapping cleanup in one supervision subtree does not disturb an unrelated mapping.
+
+### Verification target
+
+```sh
+just shared_buffer_mapping_check
+```
+
+### Exit condition
+
+A holder maps only an in-bounds region charged to its manifest quota, seals the buffer read-only, and cannot recover write access; malformed ranges and lifecycle misuse fail before page-table changes.
+
+### C7.5 — Loan/return lifecycle and fault reclamation
+
+**Status:** Not started.
+
+**Depends on:** C7.3 accounting and C7.4 sealed mappings.
+
+### Deliverables
+
+- expose bounded loan and return operations for an exact sealed buffer region, charged against the lender's outstanding-loan quota;
+- retain pages and accounting while any valid loan is outstanding even if the creator releases its local capability;
+- make each loan identity unforgeable and single-return, with receiver authority restricted to the loaned region and granted rights;
+- settle or revoke loans and reclaim unreachable mappings, pages, and charges on receiver death, lender death, supervised restart, or explicit revocation.
+
+### Required checks
+
+- the creator cannot reclaim pages while a valid loan is outstanding and cannot exceed its outstanding-loan quota;
+- stale loans, duplicate returns, wrong-buffer returns, and use-after-return fail with structured errors without changing accounting;
+- receiver mappings cannot escape the loaned region or become writable after a read-only loan;
+- every peer-death, restart, and revocation path returns the loan and resource counters to their pre-loan values.
+
+### Verification target
+
+```sh
+just shared_buffer_loan_check
+```
+
+### Exit condition
+
+A lender loans one sealed region and cannot reclaim its pages until the receiver returns it; duplicate, stale, and wrong-buffer returns fail closed, while peer death deterministically settles the loan and restores every charge.
+
+### C7.6 — Versioned sample descriptor
+
+**Status:** Not started.
+
+**Depends on:** C7.4 sealed mappings and C7.5 loan/return lifecycle.
+
+### Deliverables
+
+- define a versioned Zutai sample-descriptor contract that fits the existing channel control-message bound and references an exact transferred shared-buffer capability, offset, length, type identity, sequence, and declared flags;
+- validate version, flags, capability kind, loan identity, offset, length, and type identity before mapping or allocating receiver state;
+- send descriptor control data through ordinary channels while payload bytes remain in the shared buffer, without increasing `MAX_MSG` or copying payload bytes through the kernel queue.
+
+### Required checks
+
+- byte-identical bindings round-trip every admitted descriptor and reject unsupported versions or unknown flags;
+- overflowed offset/length, stale loan identity, wrong capability kind, and mismatched type identity fail before mapping or allocation;
+- a payload larger than the kernel message bound traverses descriptor plus shared buffer without increasing `MAX_MSG` or copying payload bytes through the kernel queue.
+
+### Verification target
+
+```sh
+just sample_descriptor_check
+```
+
+### Exit condition
+
+A receiver validates a bounded versioned descriptor, maps only the exact loaned bytes, and observes a payload larger than the control-message bound; every malformed descriptor fails before mapping or allocation.
+
+### C7.7 — Sample-plane integration and isolation
+
+**Status:** Not started.
+
+**Depends on:** C7.1–C7.6.
+
+### Deliverables
+
+- compose the factory, quotas, mapping, sealing, loan lifecycle, and descriptor into two isolated components that exchange and return a payload larger than the kernel IPC message bound;
+- prove malformed descriptors, every quota class, and peer death remain bounded and reclaim all resources without disturbing an unrelated channel or the retained v2 known-good boot path.
 
 ### Required checks
 
 - two isolated components exchange and return a payload larger than `MAX_MSG` through a quota-charged shared buffer;
-- malformed descriptors, quota exhaustion, and peer death remain bounded, reclaim all resources, and do not disturb an unrelated channel;
+- malformed descriptors, byte/buffer/mapping/loan quota exhaustion, and peer death remain bounded, reclaim all resources, and do not disturb an unrelated channel;
 - the retained v2 known-good boot path is unaffected by the sample-plane exercise.
 
 ### Planned verification target
@@ -142,7 +233,7 @@ just sample_plane_check
 
 ### Exit condition
 
-Two isolated components exchange and return a payload larger than the kernel IPC message bound through a quota-charged shared buffer; malformed descriptors, quota exhaustion, and peer death remain bounded, reclaim all resources, and do not disturb an unrelated channel or the retained v2 known-good boot path.
+Two isolated components exchange and return a payload larger than the kernel IPC message bound through a quota-charged shared buffer; malformed descriptors, every quota class, and peer death remain bounded, reclaim all resources, and do not disturb an unrelated channel or the retained v2 known-good boot path.
 
 ## C8: Native typed data fabric
 
@@ -152,7 +243,7 @@ Two isolated components exchange and return a payload larger than the kernel IPC
 `Blocked` state / `SYS_WAIT` wait-set). C8's fabric service is the first
 long-lived component that no scripted keystroke can terminate, so B2 must land
 before this gate opens; otherwise C8's stalled-subscriber, peer-death, and
-graph-idle exit conditions cannot be observed under QEMU. C7.2–C7.4 do not
+graph-idle exit conditions cannot be observed under QEMU. C7.2–C7.7 do not
 depend on B2 and proceed first.
 
 ### Deliverables

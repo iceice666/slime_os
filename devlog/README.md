@@ -16,6 +16,7 @@ This directory is the curated, chronological record of investigations, regressio
 | 2026-07-24 | [Stage-0 boot-check hangs](2026-07-24-boot-check-hangs/index.md) | Verified | Stack guard, vmm walkers, dango termination, gen-99 init, bootstate model, generation build |
 | 2026-07-24 | [generation_cmd_check wrong target](2026-07-24-generation-cmd-check-wrong-target.md) | Verified | Generation staging fixture, `just generation_cmd_check` |
 | 2026-07-24 | [C7.1 generation v3 + u64 rights](2026-07-24-c7-1-generation-v3-u64-rights.md) | Verified | Generation format v3, capability rights, spawn-grant ABI, host builder/checkers |
+| 2026-07-24 | [C7 finer decomposition](2026-07-24-c7-finer-decomposition.md) | Proposed | C7.2–C7.7 state surfaces, dependencies, and verification gates |
 
 ## Entry format
 

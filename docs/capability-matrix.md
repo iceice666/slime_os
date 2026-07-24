@@ -106,7 +106,7 @@ Per-spawner budgets prevent one client from consuming that global allowance.
 | BootState update authority beyond recovery | possibly STAGE_PENDING | M6 generation staging | Boundary between userspace staging and immutable stage-0 slot writes |
 | NetworkDestination | CONNECT / SEND / RECV / LISTEN | [Hardware H6](../roadmap/04-platform-hardware.md) | Object shape: (protocol, address, port) declared in the generation? |
 | EnergyAccount | READ? | [Hardware H track](../roadmap/04-platform-hardware.md) | Whether accounting is authority at all or read-only telemetry |
-| SharedBuffer creation | CREATE / quota | userspace driver path | Block payloads need userspace-created buffers; who may create, how much |
+| SharedBufferFactory | CREATE with generation-resource quotas | [Core runtime C7.2–C7.3](../roadmap/02-core-runtime.md#c7-bounded-resource-and-shared-sample-plane) | Exact syscall surface and fixed global byte/object ceilings |
 
 M6.1 landed userspace endpoint minting, non-consuming narrow derive-copy spawn
 grants, per-spawner accounting, and supervision handles. Future resource

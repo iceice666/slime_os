@@ -91,7 +91,7 @@ bits, and existing meanings must not change within a format version.
 
 ## Open risks and follow-ups
 
-- [ ] C7.2 must add the `SharedBufferFactory` object and gate at least one of the shared-buffer rights (`RIGHT_BUFFER_MAP`/`RIGHT_BUFFER_WRITE`), which are still ungated per `docs/capability-matrix.md`.
+- [ ] C7.2 must add the `SharedBufferFactory` object and gate shared-buffer creation; C7.4 subsequently gates `RIGHT_BUFFER_MAP`/`RIGHT_BUFFER_WRITE`, which remain ungated per `docs/capability-matrix.md`.
 - [ ] The v2 rollback window is bounded but not yet time/generation-limited in code; retention is currently unconditional decode support.
 
 ## Artifacts and provenance

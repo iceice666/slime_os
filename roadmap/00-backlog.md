@@ -22,7 +22,7 @@ at the bottom rather than deleting it.
 the C8 native typed data fabric. C8's fabric service is a long-lived component
 that no scripted keystroke can drive to termination, so C8's exit condition
 (stalled subscriber, peer death, graph idle) cannot be observed under QEMU
-while the busy-poll pathology remains. C7.2–C7.4 do not depend on B2 (shared
+while the busy-poll pathology remains. C7.2–C7.7 do not depend on B2 (shared
 buffers complete synchronously), so they proceed first; B2 lands before C8
 opens.
 
