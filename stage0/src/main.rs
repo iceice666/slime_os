@@ -28,9 +28,21 @@ const PAGE_HUGE: u64 = 1 << 7;
 const PAGE_NX: u64 = 1 << 63;
 const DIRECT_MAP_BASE: u64 = 0xffff_8000_0000_0000;
 
+/// Top (exclusive) of the kernel boot stack's dedicated virtual window.
+///
+/// The stack is mapped with 4 KiB pages into an otherwise-unused higher-half
+/// PML4 slot (510 — the kernel uses 256/384/386/388/448/511), with the page
+/// directly below its base left unmapped as a guard. Overflow past the base
+/// faults deterministically at the guard instead of silently corrupting
+/// whatever physical RAM happens to sit below the stack (previously the kernel
+/// PML4 itself). Placing the stack at its own virtual address means the CPU
+/// reaches it through RSP's VA, so the guard hole catches the overflow even
+/// though the underlying frames stay aliased in the identity and direct maps.
+const KERNEL_STACK_TOP_VA: u64 = 0xffff_ff00_0010_0000;
+
 #[repr(align(4096))]
 struct Page([u64; 512]);
-const KERNEL_STACK_BYTES: usize = 64 * 1024;
+const KERNEL_STACK_BYTES: usize = 256 * 1024;
 
 #[derive(Clone, Copy)]
 struct LoadedSegment {
@@ -163,7 +175,6 @@ fn boot() -> Result<(), BootError> {
     let framebuffer = framebuffer_info()?;
     let (segments, entry) = load_kernel(&kernel)?;
     let stack = allocate_zeroed(KERNEL_STACK_BYTES, MemoryType::LOADER_DATA)?;
-    let stack_top = unsafe { stack.add(KERNEL_STACK_BYTES) } as u64;
     let mut tables = PageTables::new()?;
     let framebuffer_end = framebuffer
         .address
@@ -173,6 +184,10 @@ fn boot() -> Result<(), BootError> {
         core::cmp::max(max_physical_address()?, framebuffer_end).next_multiple_of(1 << 30);
     tables.map_identity(direct_map_end)?;
     tables.map_segments(&segments)?;
+    // Map the boot stack at its dedicated guarded virtual window (must run after
+    // the identity/direct maps so it lands in a fresh, huge-page-free slot) and
+    // hand the kernel that VA as its initial RSP.
+    let stack_top = tables.map_stack(stack as u64, KERNEL_STACK_BYTES)?;
     enable_nxe()?;
 
     let memory = allocate_zeroed(
@@ -503,6 +518,29 @@ impl PageTables {
             }
         }
         Ok(())
+    }
+
+    /// Map `bytes` of kernel boot stack, whose frames start at physical
+    /// `stack_phys`, into the dedicated virtual window ending at
+    /// [`KERNEL_STACK_TOP_VA`], leaving one unmapped guard page below the base.
+    /// Returns the top-of-stack virtual address to load into RSP.
+    fn map_stack(&mut self, stack_phys: u64, bytes: usize) -> Result<u64, BootError> {
+        let page = PAGE_SIZE as u64;
+        let bytes = bytes as u64;
+        let base_va = KERNEL_STACK_TOP_VA
+            .checked_sub(bytes)
+            .ok_or(BootError::AddressOverflow)?;
+        // The guard page sits at base_va - PAGE_SIZE and is intentionally never
+        // mapped, so a downward overflow past the stack base faults.
+        let pages = bytes / page;
+        for index in 0..pages {
+            self.map_4k(
+                base_va + index * page,
+                stack_phys + index * page,
+                PAGE_WRITE | PAGE_NX,
+            )?;
+        }
+        Ok(KERNEL_STACK_TOP_VA)
     }
 
     unsafe fn activate(&self) {

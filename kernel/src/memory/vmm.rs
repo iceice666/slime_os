@@ -27,8 +27,33 @@ pub const PTE_CACHE_DISABLE: u64 = 1 << 4;
 /// No-execute (requires EFER.NXE, which Limine enables).
 pub const PTE_NO_EXECUTE: u64 = 1 << 63;
 
+/// Page-size bit (bit 7). At the PDPT/PD levels a set bit means the entry maps a
+/// huge page directly rather than pointing at a lower-level table.
+const PTE_HUGE: u64 = 1 << 7;
+
 /// Physical-address field mask within a page-table entry (bits 12..=51).
 const ADDR_MASK: u64 = 0x000f_ffff_ffff_f000;
+
+/// Follow an intermediate (PML4/PDPT/PD) entry to the physical frame of its
+/// child table, or `None` if the entry cannot be safely descended.
+///
+/// Rejects entries that are absent, missing any bit in `required` (e.g.
+/// [`PTE_USER`]), map a huge page (no 4 KiB child table exists), or point
+/// outside physical RAM. The last case makes a corrupted table produce a typed
+/// `None` here instead of a wild HHDM dereference that faults deep inside the
+/// walker and misattributes the failure.
+fn child_table(entry: u64, required: u64) -> Option<PhysAddr> {
+    if entry & (PTE_PRESENT | required) != PTE_PRESENT | required || entry & PTE_HUGE != 0 {
+        return None;
+    }
+    let phys = PhysAddr(entry & ADDR_MASK);
+    let max = crate::memory::max_phys_addr();
+    // `max == 0` means the bound is not yet known (pre-`memory::init`); accept.
+    if max != 0 && phys.0 >= max {
+        return None;
+    }
+    Some(phys)
+}
 
 /// Why a mapping request failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,6 +121,11 @@ fn flush(virt: VirtAddr) {
 /// `table` must be a live table borrowed through the HHDM.
 unsafe fn next_table(table: &mut PageTable, i: usize) -> Result<&'static mut PageTable, MapError> {
     let entry = table.entries[i];
+    // A huge-page entry at this level already maps the whole region, so there is
+    // no lower table to descend into and no 4 KiB leaf can be installed here.
+    if entry & PTE_PRESENT != 0 && entry & PTE_HUGE != 0 {
+        return Err(MapError::AlreadyMapped);
+    }
     let phys = if entry & PTE_PRESENT == 0 {
         let frame = FRAME_ALLOCATOR
             .lock()
@@ -200,11 +230,10 @@ pub(crate) fn page_flags_in(root: PhysAddr, virt: VirtAddr) -> Option<u64> {
     let mut table: &PageTable = pml4;
     for level in (2..=4).rev() {
         let entry = table.entries[index(virt, level)];
-        if entry & PTE_PRESENT == 0 || entry & PTE_USER == 0 {
-            return None;
-        }
-        // SAFETY: present entry points at a live lower-level table via HHDM.
-        table = unsafe { PageTable::at(PhysAddr(entry & ADDR_MASK)) };
+        let child = child_table(entry, PTE_USER)?;
+        // SAFETY: `child_table` proved the entry present, non-huge, and within
+        // RAM, so it names a live lower-level table reachable via HHDM.
+        table = unsafe { PageTable::at(child) };
     }
     let leaf = table.entries[index(virt, 1)];
     (leaf & PTE_PRESENT != 0 && leaf & PTE_USER != 0).then_some(leaf)
@@ -220,10 +249,10 @@ pub(crate) fn leaf_flags_in(root: PhysAddr, virt: VirtAddr) -> Option<u64> {
     let mut table: &PageTable = pml4;
     for level in (2..=4).rev() {
         let entry = table.entries[index(virt, level)];
-        if entry & PTE_PRESENT == 0 {
-            return None;
-        }
-        table = unsafe { PageTable::at(PhysAddr(entry & ADDR_MASK)) };
+        let child = child_table(entry, 0)?;
+        // SAFETY: `child_table` proved the entry present, non-huge, and within
+        // RAM, so it names a live lower-level table reachable via HHDM.
+        table = unsafe { PageTable::at(child) };
     }
     let leaf = table.entries[index(virt, 1)];
     (leaf & PTE_PRESENT != 0).then_some(leaf)
@@ -236,11 +265,10 @@ pub(crate) fn translate_in(root: PhysAddr, virt: VirtAddr) -> Option<PhysAddr> {
     let mut table: &PageTable = pml4;
     for level in (2..=4).rev() {
         let entry = table.entries[index(virt, level)];
-        if entry & PTE_PRESENT == 0 {
-            return None;
-        }
-        // SAFETY: present entry points at a live lower-level table via HHDM.
-        table = unsafe { PageTable::at(PhysAddr(entry & ADDR_MASK)) };
+        let child = child_table(entry, 0)?;
+        // SAFETY: `child_table` proved the entry present, non-huge, and within
+        // RAM, so it names a live lower-level table reachable via HHDM.
+        table = unsafe { PageTable::at(child) };
     }
     let leaf = table.entries[index(virt, 1)];
     if leaf & PTE_PRESENT == 0 {

@@ -23,6 +23,12 @@ pub const PAGE_SIZE: usize = 4096;
 /// HHDM offset published by Limine, captured once in [`init`]. Zero until then.
 static HHDM_OFFSET: AtomicU64 = AtomicU64::new(0);
 
+/// One past the highest physical address in the boot memory map, captured once
+/// in [`init`]. Zero until then. Used by the page-table walkers to reject a
+/// table pointer that lands outside real RAM (a sign the table was corrupted),
+/// turning a wild HHDM dereference into a typed `None`.
+static MAX_PHYS_ADDR: AtomicU64 = AtomicU64::new(0);
+
 /// A physical address. Never dereference directly — go through [`Self::to_virt`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(transparent)]
@@ -59,6 +65,13 @@ pub fn hhdm_offset() -> u64 {
     HHDM_OFFSET.load(Ordering::Relaxed)
 }
 
+/// One past the highest physical address covered by the boot memory map, or 0
+/// before [`init`]. A value of 0 means "unknown", and bounds checks that rely
+/// on it treat every address as in-range.
+pub fn max_phys_addr() -> u64 {
+    MAX_PHYS_ADDR.load(Ordering::Relaxed)
+}
+
 /// Round `addr` up to the next multiple of `align` (a power of two).
 pub const fn align_up(addr: u64, align: u64) -> u64 {
     (addr + align - 1) & !(align - 1)
@@ -76,6 +89,12 @@ pub const fn align_down(addr: u64, align: u64) -> u64 {
 /// any heap allocation.
 pub fn init() {
     HHDM_OFFSET.store(crate::boot::direct_map_offset(), Ordering::Relaxed);
+    let max_phys = crate::boot::memory_map()
+        .iter()
+        .map(|entry| entry.base.saturating_add(entry.length))
+        .max()
+        .unwrap_or(0);
+    MAX_PHYS_ADDR.store(max_phys, Ordering::Relaxed);
     pmm::init(crate::boot::memory_map());
     heap::init().expect("kernel heap init failed");
 }
