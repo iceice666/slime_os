@@ -73,7 +73,7 @@ Observation :: type {
 };
 
 maxAttempts :: Int = 3;
-maxSequence :: Int = 5;
+maxSequence :: Int = 6;
 maxEpoch :: Int = 1;
 generations :: List Generation = { #g1; #g2; };
 slotsOrder :: List Slot = { #a; #b; };
