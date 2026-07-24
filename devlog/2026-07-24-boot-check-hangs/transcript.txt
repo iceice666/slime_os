@@ -1,0 +1,1516 @@
+
+❯  the memory::vmm::leaf_flags_in page-fault hang in
+  bootstate_trace_check/recovery_check/transfer_check/directory_check,
+  investigate and write a report
+
+● I'll investigate the leaf_flags_in page-fault hang. Let me start by exploring
+  the relevant code.
+
+  Searched for 7 patterns, read 5 files, listed 2 directories, ran 4 shell commands (ctrl+o to expand)
+
+● While that runs, let me dig into the address-space creation and where PCI
+  config pages get touched at runtime.
+
+  Searched for 4 patterns, read 6 files, ran 1 shell command (ctrl+o to expand)
+
+● Let me check on the reproduction run.
+
+  Searched for 4 patterns, read 1 file, listed 2 directories, ran 5 shell commands (ctrl+o to expand)
+● Still running — the QEMU boot appears wedged (consistent with the hang). While
+  waiting, let me check what changed recently around these files.
+
+  Searched for 2 patterns, read 1 file, listed 1 directory, ran 7 shell commands (ctrl+o to expand)
+
+● Background command "Run bootstate trace check with timeout" completed (exit
+code 0)
+
+● Monitor(boot1.log serial: fault lines or first output)
+  ⎿  Monitor started · task bl4sjs4wn · timeout 250s
+
+● Monitor event: "boot1.log serial: fault lines or first output"
+
+  Read 1 file (ctrl+o to expand)
+
+● Monitor "boot1.log serial: fault lines or first output" stream ended
+
+● Monitor(kernel serial: faults and bring-up milestones)
+  ⎿  Monitor started · task b7cbyqcwu · timeout 240s
+
+  Searched for 2 patterns, read 1 file, ran 1 shell command (ctrl+o to expand)
+
+● Monitor event: "kernel serial: faults and bring-up milestones"
+
+● Monitor event: "kernel serial: faults and bring-up milestones"
+
+● The kernel was just slow under TCG — it's progressing now. Waiting for the
+  fault.
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+● Monitor(boot1 serial: acpi/pci progress and faults)
+  ⎿  Monitor started · task bskkfom3p · timeout 180s
+
+  Searched for 1 pattern, listed 1 directory, ran 4 shell commands (ctrl+o to expand)
+
+● Background command "Boot the trace image once, capture serial" completed (exit
+code 0)
+● Monitor event: "kernel serial: faults and bring-up milestones"
+
+● Monitor(boot2: wait for heap online marker)
+  ⎿  Monitor started · task baani9mup · timeout 420s
+
+● Background command "Boot with gdb stub on port 1234" completed (exit code 0)
+
+  Made 1 scratchpad edit +11, searched for 1 pattern, read 1 file, ran 2 shell commands (ctrl+o to expand)
+
+● Waiting for the boot to reach the wedge — I'll idle until the monitor fires.
+
+  Read 1 file (ctrl+o to expand)
+
+● The boot is in its slow early phase (debug kernel under TCG takes ~2 min to
+  reach serial output). I'm waiting on monitors — once it reaches heap online
+  and wedges, I'll attach lldb through the gdb stub to capture the exact RIP and
+  page-table state. Investigation so far:
+
+  - The four failing checks (bootstate_trace_check, recovery_check,
+  transfer_check, directory_check) all boot disk images via stage-0/OVMF, unlike
+  the passing cargo run-based checks which boot via Limine — that's the common
+  denominator.
+  - Reproduced the hang: the kernel goes silent right after [serial] heap
+  online, before [acpi] — no [kernel fault] line, and the check scripts call
+  QEMU with no subprocess timeout, so the whole check hangs forever.
+  - Also noteworthy: these scripts boot the debug kernel
+  (target/.../debug/slime_os-kernel) even though the Justfile builds --release,
+  so the booted kernel can be stale relative to HEAD.
+
+● Monitor event: "boot1 serial: acpi/pci progress and faults"
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● Boot2 is still in the pre-serial phase. Waiting on the heap online monitor
+  before attaching lldb.
+
+● Monitor event: "boot2: wait for heap online marker"
+
+● Boot2 reached heap online — attaching lldb to sample where the CPU is.
+
+  Made 1 scratchpad edit +8, searched for 1 pattern, ran 1 shell command (ctrl+o to expand)
+
+● Monitor "boot2: wait for heap online marker" stream ended
+
+● Background command "Boot with gdb stub, absolute cwd" completed (exit code 0)
+
+● QEMU died when lldb quit without detaching. Restarting the boot and re-probing
+  with the fixed script once it reaches the wedge.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Monitor(boot3: heap online marker)
+  ⎿  Monitor started · task b11nlg1vr · timeout 600s
+
+● While boot3 comes up, let me check which kernel binary each check script boots
+  — the failing four may all boot the slow debug kernel.
+  Made 2 scratchpad edits +26, searched for 2 patterns, ran 3 shell commands (ctrl+o to expand)
+
+● Boot3 is still climbing to the wedge point (~5 min of TCG emulation). When the
+  heap online monitor fires, I'll take stacked lldb samples of the stuck CPU.
+  Status so far: hang reproduced on bootstate_trace_check's image — kernel goes
+  silent after [serial] heap online with no fault printed; first debugger sample
+  landed in pointer-alignment check code (debug-assertion overhead), backtrace
+  pending.
+
+● Monitor event: "boot3: heap online marker"
+
+  Made 1 scratchpad edit +12, searched for 1 pattern, ran 4 shell commands (ctrl+o to expand)
+
+● Monitor "boot3: heap online marker" stream ended
+
+● Background command "Wait for boot2 to reach the wedge" completed (exit code 0)
+
+● Monitor(int.log: first CPU exception)
+  ⎿  Monitor started · task bbqqau5ha · timeout 900s
+
+  Searched for 1 pattern, ran 2 shell commands (ctrl+o to expand)
+
+● Monitor(directory.log: fault or completion markers)
+  ⎿  Monitor started · task bc4h9ep0e · timeout 440s
+
+● Monitor event: "directory.log: fault or completion markers"
+
+  Searched for 2 patterns, read 1 file, listed 1 directory, ran 7 shell commands (ctrl+o to expand)
+
+● Monitor "directory.log: fault or completion markers" stream ended
+
+● Monitor event: "int.log: first CPU exception"
+● Monitor "int.log: first CPU exception" stream ended
+
+● Background command "Run transfer check (release kernel, stage-0)" completed
+(exit code 0)
+
+● Stop Task
+  ⎿  timeout 840 lldb --batch --source
+     /tmp/claude-1000/-home-iceice666-projects-slime-os/a83a74bb-6d76-4f9b-
+     a6a8-0af4ea3ff0c6/scratchpad/catch.lldb > /tmp/claude-10… · stopped
+
+  Made 2 scratchpad edits +15, searched for 1 pattern, ran 4 shell commands (ctrl+o to expand)
+
+● True CR3 = 0x0e01b000. Walking the chain for the kernel-code VA.
+
+  Made 2 scratchpad edits +14, ran 8 shell commands (ctrl+o to expand)
+
+● Background command "Run directory check boot (release, Limine)" completed
+(exit code 0)
+
+● All live frames are correctly RESERVED — the PMM can't be recycling them. So
+  it's an errant write. Setting write watchpoints on all four table entries and
+  letting the cycle run.
+
+  Made 1 scratchpad edit +17, ran 1 shell command (ctrl+o to expand)
+
+● Monitor(watch.out: watchpoint hit)
+  ⎿  Monitor started · task b6643wfa1 · timeout 620s
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+● Stop Task
+  ⎿  timeout 600 lldb --batch --source
+     /tmp/claude-1000/-home-iceice666-projects-slime-os/a83a74bb-6d76-4f9b-
+     a6a8-0af4ea3ff0c6/scratchpad/watch.lldb > /tmp/claude-10… · stopped
+  Made 1 scratchpad edit +10, ran 1 shell command (ctrl+o to expand)
+
+● Monitor(watch2: PML4 trample caught)
+  ⎿  Monitor started · task bmjap1hb0 · timeout 620s
+
+● Background command "Watch PML4 top entry via identity VA" completed (exit code
+0)
+
+  Searched for 1 pattern, ran 2 shell commands (ctrl+o to expand)
+
+● Monitor(boot5: stage-0 handoff reached)
+  ⎿  Monitor started · task bt2wkuerd · timeout 300s
+
+● Background command "Restart stage-0 boot with gdb stub" completed (exit code
+0)
+
+  Made 1 scratchpad edit +16, read 2 files, ran 4 shell commands (ctrl+o to expand)
+
+● Background command "Restart boot with correct cwd" completed (exit code 0)
+
+● Background command "Boot with QEMU interrupt/exception logging" completed
+(exit code 0)
+
+● Monitor(watch3: PML4 write caught)
+  ⎿  Monitor started · task bdpdhp0fl · timeout 800s
+
+  Listed 2 directories, ran 3 shell commands (ctrl+o to expand)
+
+● Background command "Arm identity-VA watchpoint on PML4 entry 511" completed
+(exit code 0)
+
+● Monitor event: "watch3: PML4 write caught"
+
+● Monitor "watch3: PML4 write caught" stream ended
+
+● Write(docs/2026-07-24-stage0-stack-overflow-report.md)
+  ⎿  Wrote 212 lines to docs/2026-07-24-stage0-stack-overflow-report.md
+       1 # Investigation: `memory::vmm::leaf_flags_in` page-fault hang in
+       2
+       4 **Symptom as reported:** page-fault hang attributed to `memory::
+       5 `bootstate_trace_check`, `recovery_check`, `transfer_check`, `di
+       6 **Verdict:** `leaf_flags_in` is an innocent bystander. The root
+         cause is a
+         s exactly one
+         then detonate
+         s — sometimes
+         t loop.
+     … +296 lines (ctrl+o to expand)
+
+● Stop Task
+  ⎿  SLIME_BOOT_IMAGE=/tmp/slime-os-bootstate-trace.img
+     SLIME_REUSE_BOOT_IMAGE=1 timeout 1800 kernel/scripts/run-kernel.sh
+     kernel/target/x86_64-unknown-none/debug/sl… · stopped
+
+  Ran 6 shell commands (ctrl+o to expand)
+
+● Monitor event: "boot5: stage-0 handoff reached"
+● Full investigation report — root cause is a stage-0 kernel stack overflow into
+  the PML4, not a leaf_flags_in bug.
+
+  › [file] docs/2026-07-24-stage0-stack-overflow-report.md (10.4KB)
+
+● Monitor event: "watch.out: watchpoint hit"
+
+● TL;DR: leaf_flags_in is innocent. The real bug is a kernel stack overflow that
+  shreds the PML4 — the stage-0 boot path allocates the page-table root exactly
+  one page below the 64 KB kernel stack, and the kernel overflows into it.
+  Report written to docs/2026-07-24-stage0-stack-overflow-report.md (also sent
+  to you directly).
+
+  What I found
+
+  Reproduction. bootstate_trace_check wedges 100%: serial shows the kernel going
+  silent right after [serial] heap online, then — minutes later — a fresh
+  [stage0] immutable selector banner. It's not a hang; it's an infinite
+  triple-fault reboot loop, and the check scripts run QEMU with no subprocess
+  timeout, so the loop looks like a hang forever.
+
+  Evidence chain (live-debugged via qemu -s + lldb and qemu -d int):
+
+  1. The fatal exception is an instruction-fetch #PF with CR2 == RIP on the
+  kernel's own code, escalating #PF→#DF→triple fault because the exception
+  handlers themselves became unfetchable. The register dump is damning: CR3 =
+  0x0e01b000 (the PML4) lies between RSP = 0x0e018bb0 and RBP = 0x0e0204c8 — the
+  call stack spans the page-table root.
+  2. Stage-0 allocates the 64 KB stack, then PageTables::new(); OVMF allocates
+  top-down, so the PML4 lands one page below the stack base, with no guard, and
+  the identity map makes the whole area silently writable.
+  3. I caught the corruption red-handed with a write watchpoint on PML4[511]: it
+  fired from the kernel's own memmove (crt.rs:56) filling a stack buffer, with
+  RSP already ~13.5 KB below the stack base. The debug build's deep
+  boot-contracts sha256/generation frames (run during init_from_handoff →
+  find_recovery_index) need ~78 KB of stack — the recent schema-binding commits
+  pushed it over the 64 KB cliff.
+  4. Why it symbolized to leaf_flags_in: the PML4's high entries get wiped
+  first. A shallow trample leaves the handlers alive but puts stack garbage
+  (e.g. a return address with bit 0 set) into PML4[384] — the ECAM scratch slot.
+  leaf_flags_in dereferences entry & ADDR_MASK with zero validation, computes a
+  ~4 PB "physical" address, and page-faults inside the walker — producing the
+  [kernel fault] vec=14 rip∈leaf_flags_in + hlt_loop hang you saw. The fault RIP
+  names the first reader of the corruption, not the writer.
+
+  Ruled out: PMM recycling live frames (memory map verified in guest RAM — all
+  table/kernel/stack frames are RESERVED), handoff ABI skew from 8a73ff1, and
+  the huge-page mis-walk theory. Notably, check-transfer.py and the
+  directory_check boot passed here (release builds have small frames and stayed
+  within margin) — same unguarded geometry, just not over the cliff on this run.
+
+  Recommended fixes (in the report, ordered by leverage)
+
+  1. Stage-0: put an unmapped guard page below the kernel stack.
+  2. Bump KERNEL_STACK_BYTES 64 KB → 256 KB.
+  3. Harden the VMM walkers (leaf_flags_in etc.): reject PS-bit entries and
+  bounds-check table addresses so corruption reports as a typed error instead of
+  a fault inside the walker.
+  4. Fix the scripts:
+  check-bootstate-trace.py/check-rollback.py/check-release-trust.py boot the
+  stale debug kernel even though the Justfile builds --release; also add
+  timeout= to the QEMU subprocess.run calls so wedged boots fail loudly.
+
+  One side effect of the investigation to know about: the repeated crash-boots
+  consumed the boot attempts in /tmp/slime-os-bootstate-trace.img (it now boots
+  boot-exhausted-known-good); the check script rebuilds it from scratch on each
+  run, so nothing to clean up. All QEMU instances I started have been stopped.
+
+● Monitor event: "watch2: PML4 trample caught"
+
+● That was a stale monitor from the superseded watch2 session timing out — no
+  action needed. The investigation is complete: the trample was already captured
+  by the follow-up watchpoint session, the report is written to
+  docs/2026-07-24-stage0-stack-overflow-report.md, and all background QEMU/lldb
+  sessions have been stopped.
+
+❯ apply the fixes from the report
+
+● I'll apply all four fixes. First, let me survey the code that each change
+  touches.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● Session cwd is the kernel dir. Let me use absolute paths.
+
+  Searched for 1 pattern, read 1 file, ran 1 shell command (ctrl+o to expand)
+
+● Now I understand the layout. Let me get the advisor's read on my planned
+  approach before editing, since the stack-guard change is the delicate one.
+
+● Advising using Opus 4.8
+  ⎿  ✔ Advisor has reviewed the conversation and will apply the feedback
+     (ctrl+o to expand)
+
+● The advisor confirms the design and gives a clear sequencing recipe: fix #4
+  first (so verification boots the release kernel containing fix #3), then
+  #1/#2/#3, then verify all four checks + directory_check + just test. Let me
+  start with fix #4.
+
+  Read 1 file (ctrl+o to expand)
+
+● Now let me apply fix #4 to check-bootstate-trace.py — add a timeout and switch
+  to the release kernel.
+
+● Update(scripts/check-bootstate-trace.py)
+  ⎿  Added 23 lines, removed 9 lines
+       87      pass
+       88
+       89
+       90 +# A wedged guest (e.g. a stack overflow that triple-faults int
+          +o a reboot loop)
+       91 +# would otherwise hang the check forever, since QEMU is only a
+          +sked to exit on a
+       92 +# clean `isa-debug-exit`. Bound every subprocess so a hang fai
+          +ls loudly instead.
+       93 +BOOT_TIMEOUT_SECONDS = 600
+       94 +
+       95 +
+       96  def run(
+       97      arguments: list[str],
+       98      *,
+       99      environment: dict[str, str] | None = None,
+      100      allow_failure: bool = False,
+      101 +    timeout: int | None = BOOT_TIMEOUT_SECONDS,
+      102  ) -> str:
+       96 -    process = subprocess.run(
+       97 -        arguments,
+       98 -        cwd=ROOT,
+       99 -        env=environment,
+      100 -        check=False,
+      101 -        text=True,
+      102 -        stdout=subprocess.PIPE,
+      103 -        stderr=subprocess.STDOUT,
+      104 -    )
+      103 +    try:
+      104 +        process = subprocess.run(
+      105 +            arguments,
+      106 +            cwd=ROOT,
+      107 +            env=environment,
+      108 +            check=False,
+      109 +            text=True,
+      110 +            stdout=subprocess.PIPE,
+      111 +            stderr=subprocess.STDOUT,
+      112 +            timeout=timeout,
+      113 +        )
+      114 +    except subprocess.TimeoutExpired as error:
+      115 +        sys.stdout.write(error.output or "")
+      116 +        raise SystemExit(
+      117 +            f"command timed out after {timeout}s (wedged guest
+          +?): {arguments}"
+      118 +        ) from error
+      119      if process.returncode != 0 and not allow_failure:
+      120          sys.stdout.write(process.stdout)
+      121          raise SystemExit(process.returncode)
+
+  Read 1 file (ctrl+o to expand)
+
+● Update(scripts/check-bootstate-trace.py)
+  ⎿  Added 3 lines, removed 1 line
+      407
+      408  def run_scenario(image: Path) -> tuple[list[dict], dict]:
+      409      image.unlink(missing_ok=True)
+      410 -    kernel = ROOT / "kernel" / "target" / "x86_64-unknown-none
+          -" / "debug" / "slime_os-kernel"
+      410 +    # Boot the release kernel: the Justfile target builds `--r
+          +elease`, and the
+      411 +    # debug kernel's much larger stack frames overflow the boo
+          +t stack.
+      412 +    kernel = ROOT / "kernel" / "target" / "x86_64-unknown-none
+          +" / "release" / "slime_os-kernel"
+      413
+      414      environment = os.environ.copy()
+      415      environment["SLIME_GENERATION_NUMBER"] = "99"
+
+● Now check-rollback.py and check-release-trust.py.
+
+  Read 1 file (ctrl+o to expand)
+
+● Update(scripts/check-rollback.py)
+  ⎿  Added 5 lines
+      11  from boot_contracts import BOOTSTATE_SLOT_BYTES
+      12
+      13  ROOT = Path(__file__).resolve().parent.parent
+      14 +# Boot the release kernel (the Justfile target builds `--releas
+         +e`); the debug
+      15 +# kernel's larger stack frames overflow the boot stack.
+      16 +KERNEL = ROOT / "kernel" / "target" / "x86_64-unknown-none" / "
+         +release" / "slime_os-kernel"
+      17 +# Bound each boot so a wedged guest fails loudly instead of han
+         +ging forever.
+      18 +BOOT_TIMEOUT_SECONDS = 600
+      19
+      20  CHECK_GENERATION_SPEC = importlib.util.spec_from_file_location(
+      21      "check_generation", ROOT / "scripts" / "check-generation.py
+          "
+
+● Update(scripts/check-rollback.py)
+  ⎿  Added 17 lines, removed 9 lines
+      32      *,
+      33      environment: dict[str, str] | None = None,
+      34      allow_failure: bool = False,
+      35 +    timeout: int | None = BOOT_TIMEOUT_SECONDS,
+      36  ) -> str:
+      36 -    process = subprocess.run(
+      37 -        arguments,
+      38 -        cwd=ROOT,
+      39 -        env=environment,
+      40 -        check=False,
+      41 -        text=True,
+      42 -        stdout=subprocess.PIPE,
+      43 -        stderr=subprocess.STDOUT,
+      44 -    )
+      37 +    try:
+      38 +        process = subprocess.run(
+      39 +            arguments,
+      40 +            cwd=ROOT,
+      41 +            env=environment,
+      42 +            check=False,
+      43 +            text=True,
+      44 +            stdout=subprocess.PIPE,
+      45 +            stderr=subprocess.STDOUT,
+      46 +            timeout=timeout,
+      47 +        )
+      48 +    except subprocess.TimeoutExpired as error:
+      49 +        sys.stdout.write(error.output or "")
+      50 +        raise SystemExit(
+      51 +            f"command timed out after {timeout}s (wedged guest?
+         +): {arguments}"
+      52 +        ) from error
+      53      sys.stdout.write(process.stdout)
+      54      if process.returncode != 0 and not allow_failure:
+      55          raise SystemExit(process.returncode)
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Now check-release-trust.py.
+
+  Read 1 file (ctrl+o to expand)
+● check-release-trust.py's KERNEL only feeds build-generation.py (a host-side
+  image build, not a QEMU boot), so it has no hang risk — but it should still
+  embed the release binary the Justfile just built, for consistency. One-line
+  path fix, no timeout needed.
+
+● Update(scripts/check-release-trust.py)
+  ⎿  Added 2 lines, removed 1 line
+      15  BUILD = ROOT / "scripts" / "build-generation.py"
+      16  CHECK_PATH = ROOT / "scripts" / "check-generation.py"
+      17  RELEASE_TRUST_PATH = ROOT / "scripts" / "release_trust.py"
+      18 -KERNEL = ROOT / "kernel" / "target" / "x86_64-unknown-none" / "
+         -debug" / "slime_os-kernel"
+      18 +# Embed the release kernel the Justfile target builds, not a st
+         +ale debug binary.
+      19 +KERNEL = ROOT / "kernel" / "target" / "x86_64-unknown-none" / "
+         +release" / "slime_os-kernel"
+      20  WORK = Path("/tmp/slime-os-release-trust")
+      21
+      22
+
+● Now let me check the timeout situation in the other two failing checks
+  (check-recovery.py, check-transfer.py) — both already use the release kernel
+  but may lack timeouts.
+
+  Read 1 file (ctrl+o to expand)
+
+● Update(scripts/check-recovery.py)
+  ⎿  Added 27 lines, removed 10 lines
+      38  CHECK_SPEC.loader.exec_module(CHECK)
+      39
+      40
+      41 -def run(arguments: list[str], *, environment: dict[str, str] |
+         -None = None) -> str:
+      42 -    process = subprocess.run(
+      43 -        arguments,
+      44 -        cwd=ROOT,
+      45 -        env=environment,
+      46 -        check=False,
+      47 -        text=True,
+      48 -        stdout=subprocess.PIPE,
+      49 -        stderr=subprocess.STDOUT,
+      50 -    )
+      41 +# Bound each boot so a wedged guest (e.g. a stack-overflow rebo
+         +ot loop) fails
+      42 +# loudly instead of hanging the check forever.
+      43 +BOOT_TIMEOUT_SECONDS = 600
+      44 +
+      45 +
+      46 +def run(
+      47 +    arguments: list[str],
+      48 +    *,
+      49 +    environment: dict[str, str] | None = None,
+      50 +    timeout: int | None = BOOT_TIMEOUT_SECONDS,
+      51 +) -> str:
+      52 +    try:
+      53 +        process = subprocess.run(
+      54 +            arguments,
+      55 +            cwd=ROOT,
+      56 +            env=environment,
+      57 +            check=False,
+      58 +            text=True,
+      59 +            stdout=subprocess.PIPE,
+      60 +            stderr=subprocess.STDOUT,
+      61 +            timeout=timeout,
+      62 +        )
+      63 +    except subprocess.TimeoutExpired as error:
+      64 +        sys.stdout.write(error.output or "")
+      65 +        raise SystemExit(
+      66 +            f"command timed out after {timeout}s (wedged guest?
+         +): {arguments}"
+      67 +        ) from error
+      68      sys.stdout.write(process.stdout)
+      69      if process.returncode != 0:
+      70          raise SystemExit(process.returncode)
+
+  Read 1 file (ctrl+o to expand)
+
+● Update(scripts/check-transfer.py)
+  ⎿  Added 22 lines, removed 9 lines
+      33  BUILD_TRANSFER = load("build_transfer", ROOT / "scripts" / "bui
+          ld-transfer.py")
+      34
+      35
+      36 +# Bound each boot so a wedged guest (e.g. a stack-overflow rebo
+         +ot loop) fails
+      37 +# loudly instead of hanging the check forever.
+      38 +BOOT_TIMEOUT_SECONDS = 600
+      39 +
+      40 +
+      41  def run(
+      42      arguments: list[str],
+      43      environment: dict[str, str] | None = None,
+      44      cwd: Path = ROOT,
+      45 +    timeout: int | None = BOOT_TIMEOUT_SECONDS,
+      46  ) -> str:
+      41 -    process = subprocess.run(
+      42 -        arguments,
+      43 -        cwd=cwd,
+      44 -        env=environment,
+      45 -        check=False,
+      46 -        text=True,
+      47 -        stdout=subprocess.PIPE,
+      48 -        stderr=subprocess.STDOUT,
+      49 -    )
+      47 +    try:
+      48 +        process = subprocess.run(
+      49 +            arguments,
+      50 +            cwd=cwd,
+      51 +            env=environment,
+      52 +            check=False,
+      53 +            text=True,
+      54 +            stdout=subprocess.PIPE,
+      55 +            stderr=subprocess.STDOUT,
+      56 +            timeout=timeout,
+      57 +        )
+      58 +    except subprocess.TimeoutExpired as error:
+      59 +        raise SystemExit(
+      60 +            f"command timed out after {timeout}s (wedged guest?
+         +): {arguments}\n"
+      61 +            + (error.output or "")
+      62 +        ) from error
+      63      if process.returncode != 0:
+      64          raise SystemExit(process.stdout)
+      65      return process.stdout
+
+● Now check-directory.py — Limine path, passed for me, but the report calls for
+  timeouts on every QEMU boot. Let me add one.
+
+  Read 1 file (ctrl+o to expand)
+
+● Update(scripts/check-directory.py)
+  ⎿  Added 31 lines, removed 20 lines
+      21  ]
+      22
+      23
+      24 +# Bound the boot so a wedged guest fails loudly instead of hang
+         +ing forever.
+      25 +BOOT_TIMEOUT_SECONDS = 600
+      26 +
+      27 +
+      28  def run(image: Path) -> str:
+      29      environment = os.environ.copy()
+      30      environment["SLIME_GENERATION_NUMBER"] = "6"
+      27 -    process = subprocess.run(
+      28 -        [
+      29 -            "cargo",
+      30 -            "run",
+      31 -            "--release",
+      32 -            "--",
+      33 -            "-display",
+      34 -            "none",
+      35 -            "-drive",
+      36 -            f"if=none,id=slime-storage,format=raw,cache=directs
+         -ync,file={image}",
+      37 -            "-device",
+      38 -            "virtio-blk-pci,drive=slime-storage,disable-legacy=
+         -on,queue-size=8",
+      39 -        ],
+      40 -        cwd=ROOT / "kernel",
+      41 -        env=environment,
+      42 -        check=False,
+      43 -        text=True,
+      44 -        stdout=subprocess.PIPE,
+      45 -        stderr=subprocess.STDOUT,
+      46 -    )
+      31 +    try:
+      32 +        process = subprocess.run(
+      33 +            [
+      34 +                "cargo",
+      35 +                "run",
+      36 +                "--release",
+      37 +                "--",
+      38 +                "-display",
+      39 +                "none",
+      40 +                "-drive",
+      41 +                f"if=none,id=slime-storage,format=raw,cache=dir
+         +ectsync,file={image}",
+      42 +                "-device",
+      43 +                "virtio-blk-pci,drive=slime-storage,disable-leg
+         +acy=on,queue-size=8",
+      44 +            ],
+      45 +            cwd=ROOT / "kernel",
+      46 +            env=environment,
+      47 +            check=False,
+      48 +            text=True,
+      49 +            stdout=subprocess.PIPE,
+      50 +            stderr=subprocess.STDOUT,
+      51 +            timeout=BOOT_TIMEOUT_SECONDS,
+      52 +        )
+      53 +    except subprocess.TimeoutExpired as error:
+      54 +        sys.stdout.write(error.output or "")
+      55 +        raise SystemExit(
+      56 +            f"directory check timed out after {BOOT_TIMEOUT_SEC
+         +ONDS}s (wedged guest?)"
+      57 +        ) from error
+      58      sys.stdout.write(process.stdout)
+      59      if process.returncode != 0:
+      60          raise SystemExit(process.returncode)
+
+● Fix #4 done. Now the core fix — fixes #1 and #2 in stage-0: a guarded, larger
+  kernel stack at a dedicated virtual range.
+
+  Read 1 file (ctrl+o to expand)
+
+● Update(stage0/src/main.rs)
+  ⎿  Added 13 lines, removed 1 line
+      28  const PAGE_NX: u64 = 1 << 63;
+      29  const DIRECT_MAP_BASE: u64 = 0xffff_8000_0000_0000;
+      30
+      31 +/// Top (exclusive) of the kernel boot stack's dedicated virtua
+         +l window.
+      32 +///
+      33 +/// The stack is mapped with 4 KiB pages into an otherwise-unus
+         +ed higher-half
+      34 +/// PML4 slot (510 — the kernel uses 256/384/386/388/448/511),
+         +with the page
+      35 +/// directly below its base left unmapped as a guard. Overflow
+         +past the base
+      36 +/// faults deterministically at the guard instead of silently c
+         +orrupting
+      37 +/// whatever physical RAM happens to sit below the stack (previ
+         +ously the kernel
+      38 +/// PML4 itself). Placing the stack at its own virtual address
+         +means the CPU
+      39 +/// reaches it through RSP's VA, so the guard hole catches the
+         +overflow even
+      40 +/// though the underlying frames stay aliased in the identity a
+         +nd direct maps.
+      41 +const KERNEL_STACK_TOP_VA: u64 = 0xffff_ff00_0010_0000;
+      42 +
+      43  #[repr(align(4096))]
+      44  struct Page([u64; 512]);
+      33 -const KERNEL_STACK_BYTES: usize = 64 * 1024;
+      45 +const KERNEL_STACK_BYTES: usize = 256 * 1024;
+      46
+      47  #[derive(Clone, Copy)]
+      48  struct LoadedSegment {
+
+● Now update the boot sequence to map the stack at the dedicated VA and pass
+  that VA as stack_top.
+
+● Update(stage0/src/main.rs)
+  ⎿  Added 4 lines, removed 1 line
+      175      let framebuffer = framebuffer_info()?;
+      176      let (segments, entry) = load_kernel(&kernel)?;
+      177      let stack = allocate_zeroed(KERNEL_STACK_BYTES, MemoryType
+           ::LOADER_DATA)?;
+      178 -    let stack_top = unsafe { stack.add(KERNEL_STACK_BYTES) } a
+          -s u64;
+      178      let mut tables = PageTables::new()?;
+      179      let framebuffer_end = framebuffer
+      180          .address
+     ...
+      184          core::cmp::max(max_physical_address()?, framebuffer_en
+           d).next_multiple_of(1 << 30);
+      185      tables.map_identity(direct_map_end)?;
+      186      tables.map_segments(&segments)?;
+      187 +    // Map the boot stack at its dedicated guarded virtual win
+          +dow (must run after
+      188 +    // the identity/direct maps so it lands in a fresh, huge-p
+          +age-free slot) and
+      189 +    // hand the kernel that VA as its initial RSP.
+      190 +    let stack_top = tables.map_stack(stack as u64, KERNEL_STAC
+          +K_BYTES)?;
+      191      enable_nxe()?;
+      192
+      193      let memory = allocate_zeroed(
+
+● Now add the map_stack method next to map_segments.
+
+● Update(stage0/src/main.rs)
+  ⎿  Added 23 lines
+      520          Ok(())
+      521      }
+      522
+      523 +    /// Map `bytes` of kernel boot stack, whose frames start a
+          +t physical
+      524 +    /// `stack_phys`, into the dedicated virtual window ending
+          + at
+      525 +    /// [`KERNEL_STACK_TOP_VA`], leaving one unmapped guard pa
+          +ge below the base.
+      526 +    /// Returns the top-of-stack virtual address to load into
+          +RSP.
+      527 +    fn map_stack(&mut self, stack_phys: u64, bytes: usize) ->
+          +Result<u64, BootError> {
+      528 +        let page = PAGE_SIZE as u64;
+      529 +        let bytes = bytes as u64;
+      530 +        let base_va = KERNEL_STACK_TOP_VA
+      531 +            .checked_sub(bytes)
+      532 +            .ok_or(BootError::AddressOverflow)?;
+      533 +        // The guard page sits at base_va - PAGE_SIZE and is i
+          +ntentionally never
+      534 +        // mapped, so a downward overflow past the stack base
+          +faults.
+      535 +        let pages = bytes / page;
+      536 +        for index in 0..pages {
+      537 +            self.map_4k(
+      538 +                base_va + index * page,
+      539 +                stack_phys + index * page,
+      540 +                PAGE_WRITE | PAGE_NX,
+      541 +            )?;
+      542 +        }
+      543 +        Ok(KERNEL_STACK_TOP_VA)
+      544 +    }
+      545 +
+      546      unsafe fn activate(&self) {
+      547          unsafe {
+      548              core::arch::asm!(
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Now fix #3 — harden the VMM walkers so corruption produces a typed None
+  instead of a wild dereference that faults inside the walker. Let me review the
+  current walkers and memory init.
+
+  Read 1 file (ctrl+o to expand)
+
+● Let me add a cached maximum physical address in memory/mod.rs, then use it
+  plus a PS-bit check to harden the walkers.
+
+● Update(kernel/src/memory/mod.rs)
+  ⎿  Added 6 lines
+      23  /// HHDM offset published by Limine, captured once in [`init`].
+           Zero until then.
+      24  static HHDM_OFFSET: AtomicU64 = AtomicU64::new(0);
+      25
+      26 +/// One past the highest physical address in the boot memory ma
+         +p, captured once
+      27 +/// in [`init`]. Zero until then. Used by the page-table walker
+         +s to reject a
+      28 +/// table pointer that lands outside real RAM (a sign the table
+         + was corrupted),
+      29 +/// turning a wild HHDM dereference into a typed `None`.
+      30 +static MAX_PHYS_ADDR: AtomicU64 = AtomicU64::new(0);
+      31 +
+      32  /// A physical address. Never dereference directly — go through
+           [`Self::to_virt`].
+      33  #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+      34  #[repr(transparent)]
+
+● Update(kernel/src/memory/mod.rs)
+  ⎿  Added 7 lines
+      65      HHDM_OFFSET.load(Ordering::Relaxed)
+      66  }
+      67
+      68 +/// One past the highest physical address covered by the boot m
+         +emory map, or 0
+      69 +/// before [`init`]. A value of 0 means "unknown", and bounds c
+         +hecks that rely
+      70 +/// on it treat every address as in-range.
+      71 +pub fn max_phys_addr() -> u64 {
+      72 +    MAX_PHYS_ADDR.load(Ordering::Relaxed)
+      73 +}
+      74 +
+      75  /// Round `addr` up to the next multiple of `align` (a power of
+           two).
+      76  pub const fn align_up(addr: u64, align: u64) -> u64 {
+      77      (addr + align - 1) & !(align - 1)
+
+● Update(kernel/src/memory/mod.rs)  ⎿  Added 6 lines
+       89  /// any heap allocation.
+       90  pub fn init() {
+       91      HHDM_OFFSET.store(crate::boot::direct_map_offset(), Orderi
+           ng::Relaxed);
+       92 +    let max_phys = crate::boot::memory_map()
+       93 +        .iter()
+       94 +        .map(|entry| entry.base.saturating_add(entry.length))
+       95 +        .max()
+       96 +        .unwrap_or(0);
+       97 +    MAX_PHYS_ADDR.store(max_phys, Ordering::Relaxed);
+       98      pmm::init(crate::boot::memory_map());
+       99      heap::init().expect("kernel heap init failed");
+      100  }
+
+● Now harden the three read walkers and next_table in vmm.rs.
+
+● Update(kernel/src/memory/vmm.rs)
+  ⎿  Added 25 lines
+      27  /// No-execute (requires EFER.NXE, which Limine enables).
+      28  pub const PTE_NO_EXECUTE: u64 = 1 << 63;
+      29
+      30 +/// Page-size bit (bit 7). At the PDPT/PD levels a set bit mean
+         +s the entry maps a
+      31 +/// huge page directly rather than pointing at a lower-level ta
+         +ble.
+      32 +const PTE_HUGE: u64 = 1 << 7;
+      33 +
+      34  /// Physical-address field mask within a page-table entry (bits
+           12..=51).
+      35  const ADDR_MASK: u64 = 0x000f_ffff_ffff_f000;
+      36
+      37 +/// Follow an intermediate (PML4/PDPT/PD) entry to the physical
+         + frame of its
+      38 +/// child table, or `None` if the entry cannot be safely descen
+         +ded.
+      39 +///
+      40 +/// Rejects entries that are absent, missing any bit in `requir
+         +ed` (e.g.
+      41 +/// [`PTE_USER`]), map a huge page (no 4 KiB child table exists
+         +), or point
+      42 +/// outside physical RAM. The last case makes a corrupted table
+         + produce a typed
+      43 +/// `None` here instead of a wild HHDM dereference that faults
+         +deep inside the
+      44 +/// walker and misattributes the failure.
+      45 +fn child_table(entry: u64, required: u64) -> Option<PhysAddr> {
+      46 +    if entry & (PTE_PRESENT | required) != PTE_PRESENT | requir
+         +ed || entry & PTE_HUGE != 0 {
+      47 +        return None;
+      48 +    }
+      49 +    let phys = PhysAddr(entry & ADDR_MASK);
+      50 +    let max = crate::memory::max_phys_addr();
+      51 +    // `max == 0` means the bound is not yet known (pre-`memory
+         +::init`); accept.
+      52 +    if max != 0 && phys.0 >= max {
+      53 +        return None;
+      54 +    }
+      55 +    Some(phys)
+      56 +}
+      57 +
+      58  /// Why a mapping request failed.
+      59  #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+      60  pub enum MapError {
+
+● Now update the three read walkers to use child_table.
+
+● Update(kernel/src/memory/vmm.rs)
+  ⎿  Added 4 lines, removed 5 lines
+      225      let mut table: &PageTable = pml4;
+      226      for level in (2..=4).rev() {
+      227          let entry = table.entries[index(virt, level)];
+      228 -        if entry & PTE_PRESENT == 0 || entry & PTE_USER == 0 {
+      229 -            return None;
+      230 -        }
+      231 -        // SAFETY: present entry points at a live lower-level
+          -table via HHDM.
+      232 -        table = unsafe { PageTable::at(PhysAddr(entry & ADDR_M
+          -ASK)) };
+      228 +        let child = child_table(entry, PTE_USER)?;
+      229 +        // SAFETY: `child_table` proved the entry present, non
+          +-huge, and within
+      230 +        // RAM, so it names a live lower-level table reachable
+          + via HHDM.
+      231 +        table = unsafe { PageTable::at(child) };
+      232      }
+      233      let leaf = table.entries[index(virt, 1)];
+      234      (leaf & PTE_PRESENT != 0 && leaf & PTE_USER != 0).then_som
+           e(leaf)
+
+● Update(kernel/src/memory/vmm.rs)
+  ⎿  Added 4 lines, removed 4 lines
+      244      let mut table: &PageTable = pml4;
+      245      for level in (2..=4).rev() {
+      246          let entry = table.entries[index(virt, level)];
+      247 -        if entry & PTE_PRESENT == 0 {
+      248 -            return None;
+      249 -        }
+      250 -        table = unsafe { PageTable::at(PhysAddr(entry & ADDR_M
+          -ASK)) };
+      247 +        let child = child_table(entry, 0)?;
+      248 +        // SAFETY: `child_table` proved the entry present, non
+          +-huge, and within
+      249 +        // RAM, so it names a live lower-level table reachable
+          + via HHDM.
+      250 +        table = unsafe { PageTable::at(child) };
+      251      }
+      252      let leaf = table.entries[index(virt, 1)];
+      253      (leaf & PTE_PRESENT != 0).then_some(leaf)
+
+● Update(kernel/src/memory/vmm.rs)
+  ⎿  Added 4 lines, removed 5 lines
+      260      let mut table: &PageTable = pml4;
+      261      for level in (2..=4).rev() {
+      262          let entry = table.entries[index(virt, level)];
+      263 -        if entry & PTE_PRESENT == 0 {
+      264 -            return None;
+      265 -        }
+      266 -        // SAFETY: present entry points at a live lower-level
+          -table via HHDM.
+      267 -        table = unsafe { PageTable::at(PhysAddr(entry & ADDR_M
+          -ASK)) };
+      263 +        let child = child_table(entry, 0)?;
+      264 +        // SAFETY: `child_table` proved the entry present, non
+          +-huge, and within
+      265 +        // RAM, so it names a live lower-level table reachable
+          + via HHDM.
+      266 +        table = unsafe { PageTable::at(child) };
+      267      }
+      268      let leaf = table.entries[index(virt, 1)];
+      269      if leaf & PTE_PRESENT == 0 {
+
+● Now harden next_table (the map/remap path) to refuse descending through a
+  huge-page entry.
+
+● Update(kernel/src/memory/vmm.rs)
+  ⎿  Added 5 lines
+      121  /// `table` must be a live table borrowed through the HHDM.
+      122  unsafe fn next_table(table: &mut PageTable, i: usize) -> Resul
+           t<&'static mut PageTable, MapError> {
+      123      let entry = table.entries[i];
+      124 +    // A huge-page entry at this level already maps the whole
+          +region, so there is
+      125 +    // no lower table to descend into and no 4 KiB leaf can be
+          + installed here.
+      126 +    if entry & PTE_PRESENT != 0 && entry & PTE_HUGE != 0 {
+      127 +        return Err(MapError::AlreadyMapped);
+      128 +    }
+      129      let phys = if entry & PTE_PRESENT == 0 {
+      130          let frame = FRAME_ALLOCATOR
+      131              .lock()
+
+● All edits are in. Let me build stage-0 and the release kernel, and run
+  clippy/fmt checks.
+
+  Ran 6 shell commands (ctrl+o to expand)
+
+● The stage0 lib.rs clippy warnings are pre-existing (present at HEAD, in a file
+  I didn't touch, and the Justfile's lint target only covers the kernel) — out
+  of scope. My kernel changes pass clippy and fmt cleanly.
+
+  Now verification. Let me run the primary repro first — bootstate_trace_check —
+  which previously hung forever.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Monitor(bootstate_trace_check completion)
+  ⎿  Monitor started · task bfajsfuzj · timeout 720s
+
+● While that boots, let me double-check the directsync/handoff nuance: confirm
+  the stage-0 change doesn't break the Limine test path (which doesn't use
+  stage-0 at all). Let me verify nothing else references the old stack_top
+  computation or the removed intermediate.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● The boot path wiring is consistent. Let me launch recovery_check and
+  transfer_check in parallel while bootstate runs.
+
+  Read 1 file, ran 2 shell commands (ctrl+o to expand)
+
+● Background command "Run recovery_check" completed (exit code 0)
+
+● recovery_check passes. Waiting on bootstate and transfer.
+
+  Searched for 1 pattern, read 1 file, listed 1 directory (ctrl+o to expand)
+
+● Both bootstate and transfer are still booting (bootstate buffers all output
+  until completion). Recovery already passed. Let me wait for the two in-flight
+  checks.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● Background command "Run transfer_check" completed (exit code 0)
+
+● transfer_check passes. Now let me run directory_check (Limine path — the key
+  fix-#3 regression test) and the kernel test suite.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Monitor(directory + test + bootstate all complete)
+  ⎿  Monitor started · task b0jl3i5yg · timeout 1000s
+
+● The bootstate log won't contain exit= (that went to its task output). Let me
+  correct the wait condition.
+● Stop Task
+  ⎿  until grep -qs "exit="
+     /tmp/claude-1000/-home-iceice666-projects-slime-os/a83a74bb-6d76-4f9b-
+     a6a8-0af4ea3ff0c6/scratchpad/verify-directory.log && grep -qs "exit… ·
+     stopped
+
+● I'll rely on the individual task-completion notifications instead. Let me
+  check current status.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● All three are still running (bootstate, directory, kernel test suite — all
+  under TCG and now contending). I'll wait for their completion notifications.
+  Recovery and transfer already passed; fix #4's timeout guard is confirmed
+  working since bootstate no longer hangs indefinitely.
+
+  Read 1 file (ctrl+o to expand)
+
+● Everything is booting. I'll wait for the completion notifications for the
+  three in-flight jobs.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● The kernel test suite is progressing through its integration tests (lib 32,
+  main 7, then boot, component_image, …). These run many QEMU boots serially, so
+  it'll take a while. Waiting on the three completion notifications.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Still running. I'll pause active polling and let the harness notify me as each
+  completes.
+
+● Monitor(directory_check completion result)
+  ⎿  Monitor started · task buk08wsen · timeout 900s
+
+● Monitor(kernel test suite completion)
+  ⎿  Monitor started · task brmkk2jdu · timeout 900s
+
+● Monitors armed for directory_check and the kernel test suite; bootstate has
+  its own pending task notification. Recovery and transfer already passed. I'll
+  wait for these to finish.
+
+● Background command "Run kernel QEMU test suite" completed (exit code 0)
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● Monitor event: "kernel test suite completion"
+
+● Monitor "kernel test suite completion" stream ended
+
+● Kernel test suite passes (exit=0) — fix #3 doesn't regress the healthy Limine
+  path. Waiting on bootstate and directory.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● Both still running (contention with the now-finished test suite freed a core).
+  I'll wait for their notifications.
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+● Directory is still in its cargo run boot. Both remaining jobs will notify on
+  completion. Waiting.
+
+● Background command "Run bootstate_trace_check after fix" completed (exit code
+0)
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● Monitor event: "bootstate_trace_check completion"
+
+● Monitor "bootstate_trace_check completion" stream ended
+
+● The check hit my new timeout handler — but there's a bug in the handler itself
+  (TimeoutExpired.output came back as bytes despite text=True, a known Python
+  quirk), and I need to determine whether the timeout was a real hang or just
+  contention from running it alongside the test suite + directory check. Let me
+  fix the handler in all scripts first.
+
+● Update(scripts/check-bootstate-trace.py)
+  ⎿  Added 4 lines, removed 1 line
+      112              timeout=timeout,
+      113          )
+      114      except subprocess.TimeoutExpired as error:
+      115 -        sys.stdout.write(error.output or "")
+      115 +        output = error.output or ""
+      116 +        if isinstance(output, bytes):
+      117 +            output = output.decode(errors="replace")
+      118 +        sys.stdout.write(output)
+      119          raise SystemExit(
+      120              f"command timed out after {timeout}s (wedged guest
+           ?): {arguments}"
+      121          ) from error
+
+● Update(scripts/check-rollback.py)
+  ⎿  Added 4 lines, removed 1 line
+      46              timeout=timeout,
+      47          )
+      48      except subprocess.TimeoutExpired as error:
+      49 -        sys.stdout.write(error.output or "")
+      49 +        output = error.output or ""
+      50 +        if isinstance(output, bytes):
+      51 +            output = output.decode(errors="replace")
+      52 +        sys.stdout.write(output)
+      53          raise SystemExit(
+      54              f"command timed out after {timeout}s (wedged guest?
+          ): {arguments}"
+      55          ) from error
+
+● Update(scripts/check-recovery.py)  ⎿  Added 4 lines, removed 1 line
+      61              timeout=timeout,
+      62          )
+      63      except subprocess.TimeoutExpired as error:
+      64 -        sys.stdout.write(error.output or "")
+      64 +        output = error.output or ""
+      65 +        if isinstance(output, bytes):
+      66 +            output = output.decode(errors="replace")
+      67 +        sys.stdout.write(output)
+      68          raise SystemExit(
+      69              f"command timed out after {timeout}s (wedged guest?
+          ): {arguments}"
+      70          ) from error
+
+● Update(scripts/check-transfer.py)
+  ⎿  Added 4 lines, removed 1 line
+      56              timeout=timeout,
+      57          )
+      58      except subprocess.TimeoutExpired as error:
+      59 +        output = error.output or ""
+      60 +        if isinstance(output, bytes):
+      61 +            output = output.decode(errors="replace")
+      62          raise SystemExit(
+      63              f"command timed out after {timeout}s (wedged guest?
+          ): {arguments}\n"
+      61 -            + (error.output or "")
+      64 +            + output
+      65          ) from error
+      66      if process.returncode != 0:
+      67          raise SystemExit(process.stdout)
+
+● Update(scripts/check-directory.py)
+  ⎿  Added 4 lines, removed 1 line
+      51              timeout=BOOT_TIMEOUT_SECONDS,
+      52          )
+      53      except subprocess.TimeoutExpired as error:
+      54 -        sys.stdout.write(error.output or "")
+      54 +        output = error.output or ""
+      55 +        if isinstance(output, bytes):
+      56 +            output = output.decode(errors="replace")
+      57 +        sys.stdout.write(output)
+      58          raise SystemExit(
+      59              f"directory check timed out after {BOOT_TIMEOUT_SEC
+          ONDS}s (wedged guest?)"
+      60          ) from error
+
+● The bootstate timeout was almost certainly contention, not a real hang:
+  recovery_check and transfer_check use the identical stage-0 boot path and
+  release kernel, and both passed — if the stack fix were broken, they'd wedge
+  too. The bootstate run was competing with transfer + the 40-boot kernel test
+  suite + directory check all hammering TCG at once, and one boot exceeded 600s.
+  Let me confirm by re-running bootstate alone once directory finishes.
+
+  Searched for 2 patterns (ctrl+o to expand)
+
+● Monitor(directory_check final)
+  ⎿  Monitor started · task btc7ulioq · timeout 700s
+
+● Background command "Run directory_check (Limine path)" completed (exit code 0)
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● Monitor event: "directory_check final"
+
+● Monitor "directory_check final" stream ended
+
+● Monitor event: "directory_check completion result"
+
+● Monitor "directory_check completion result" stream ended
+
+● Both timeouts are contention artifacts — I was running 5 heavy TCG workloads
+  at once. The proof: directory_check is the Limine path (unrelated to the stack
+  fix) and it passed cleanly earlier, yet timed out here purely from load. Now
+  that everything else is idle, let me run bootstate and directory one at a
+  time, alone, for a clean result.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Monitor(bootstate solo run result)
+  ⎿  Monitor started · task bisppc7gw · timeout 720s
+
+● While bootstate runs solo, let me confirm my Python edits are syntactically
+  valid across all five scripts.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● All five scripts parse. Waiting on the solo bootstate run.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● 5 QEMU processes running — but I only launched one check. The timed-out runs
+  likely orphaned QEMU grandchildren (subprocess timeout kills the direct child,
+  not detached grandchildren). Those would steal CPU from my solo run and could
+  hold image locks. Let me investigate.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Two orphaned QEMUs (12 and 11 minutes old) survived the timed-out runs and are
+  holding the bootstate/directory images plus stealing CPU. Let me kill just
+  those two, leaving my active solo run untouched.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Killed the two orphans; only my active solo bootstate run remains (pid
+  1004559, alive 48s, so it holds the image lock fine). Waiting for its result —
+  this time with no CPU contention.
+
+  Read 1 file (ctrl+o to expand)
+
+● The bootstate script buffers all output until it completes (it only prints the
+  final result), so an empty log mid-run is expected. Waiting for the monitor
+  to fire on completion.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Clean — one bootstate QEMU running (the second is a transient shell). No
+  contention now. Waiting on completion.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● Still running its three sequential boots (buffered output). I'll wait for the
+  completion notification rather than continue polling.
+
+  Ran 1 shell command (ctrl+o to expand)
+● The boot is healthy and progressing without contention. I'll wait for the
+  monitor notification instead of polling further.
+
+● Background command "Run bootstate_trace_check alone" completed (exit code 0)
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● The boot this time was healthy — it reached the dango> interactive prompt
+  (spawn-service ready, native runtime ready), no triple-fault, no reboot loop.
+  But it then sat at the idle prompt and hit the 600s timeout because the guest
+  never exited QEMU. This means bootstate's scenario expects the guest to
+  terminate itself (reset/shutdown), which isn't happening. Let me understand
+  how these boots are supposed to exit.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● Monitor event: "bootstate solo run result"
+
+● Monitor "bootstate solo run result" stream ended
+
+● The stage-0 trace this run was correct (consume-attempt, attempts 2→1) and the
+  kernel booted healthily to dango> — the crash is fixed. But the guest idles
+  at the interactive prompt instead of exiting QEMU, so the check times out. I
+  need to understand how this scenario is supposed to terminate. Let me read the
+  full serial and the generation-manager flow.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● The guest booted fully healthy through generation 99 to an idle dango> prompt
+  — it never self-terminates. So this check can only complete if the guest exits
+  QEMU somehow. Since the pre-fix debug kernel triple-faulted into a reboot
+  loop (also never exiting), this check has never terminated cleanly — there
+  must be an intended exit path I'm missing. Let me examine the
+  generation-manager pending/confirm flow.
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+● There's an exit path: the scheduler's on_idle calls exit_qemu once all
+  expected components terminate. The guest reached dango> because the
+  interactive components (dango, console) never self-terminate, so on_idle never
+  fires. Let me read the full on_idle to see if bootstate's pending scenario
+  has an intended earlier exit.
+
+  Read 1 file (ctrl+o to expand)
+
+● The guest never reached on_idle (no "terminated" lines in serial) — dango is
+  busy-spinning on the keyboard, starving the idle callback that would call
+  exit_qemu. So generation 99's interactive stack can't self-terminate. This is
+  orthogonal to the stack-overflow crash I fixed. Let me check whether this
+  check ever terminated by looking at its history and whether the guest is meant
+  to boot the full interactive stack.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● The check has always booted generation 99 with the debug kernel. Before the
+  recent boot-contracts commits bloated the debug stack, that boot didn't
+  overflow — so it must have terminated somehow. The exit hinges on on_idle
+  firing (scheduler going idle), which needs the interactive components to yield
+  rather than busy-spin. My run never reached on_idle. The fastest way to
+  disambiguate whether this is the check script or the guest: run check-rollback
+  (identical generation-99 pending env) and see if it terminates.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Monitor(rollback check outcome)
+  ⎿  Monitor started · task bcyp3f1os · timeout 720s
+
+● While rollback runs, let me look at when the scheduler actually invokes
+  on_idle and how a task waits on keyboard input — this determines whether dango
+  starves the idle path.
+
+  Read 1 file (ctrl+o to expand)
+
+● on_idle only fires when the ready queue empties. If dango busy-polls the
+  keyboard (yielding but staying ready), the queue never empties and QEMU never
+  exits. Let me check how a task waits for keyboard input — block vs. poll.
+
+  Searched for 3 patterns, read 1 file (ctrl+o to expand)
+
+● There's no Blocked task state — tasks waiting on IPC stay Ready (poll+yield),
+  so on_idle only fires when every task has Terminated. Generation 99's
+  persistent interactive dango never terminates, so the guest can't self-exit —
+  this is why it hangs, independent of my fix. The pending scenario may change
+  what init spawns. Let me check the bootstate serial for
+  generation-manager/confirmation activity and wait for rollback (the definitive
+  same-env comparison).
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● The bootstate boot went through the full interactive path with no
+  confirmation/exit activity. Let me check whether the generation-manager's
+  confirm/reject path itself triggers a shutdown or reset (a direct exit not
+  gated by on_idle).
+
+  Read 1 file (ctrl+o to expand)
+● Confirmed: exit_qemu is only reached via on_idle, which requires all tasks to
+  have Terminated. Generation 99's persistent interactive dango never
+  terminates, so bootstate/rollback boots can't self-exit — a pre-existing
+  design issue, not the leaf_flags_in stack bug. Let me confirm with the
+  rollback result (identical env), then get the advisor's read on scope.
+
+  Searched for 1 pattern, ran 1 shell command (ctrl+o to expand)
+
+● pid 1004559 (16 min old) is an orphaned QEMU from the timed-out bootstate solo
+  run — the subprocess timeout killed run-kernel.sh but not its QEMU
+  grandchild, and it's now stealing a core from rollback. This reveals a real
+  gap in my timeout fix: it doesn't reap QEMU. Let me kill the orphan and
+  address the reaping.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Killed the orphan. This exposes a second gap in my timeout fix:
+  subprocess.run(timeout=) kills only the direct child (the shell), not the QEMU
+  grandchild, so each timed-out check leaks a running QEMU. I'll need
+  process-group reaping. But the deeper blocker is that generation 99 never
+  self-terminates. Let me wait for rollback to confirm the same-env behavior,
+  then get the advisor's read on scope before proceeding.
+
+  Searched for 2 patterns, read 1 file, ran 1 shell command (ctrl+o to expand)
+
+● init spawns interactive dango + generation-manager for gen 99, then exits —
+  the interactive dango never terminates. But the generation-manager component
+  is spawned; in the pending scenario it may drive the exit. Let me check what
+  the generation-manager component does with a pending state.
+
+  Searched for 1 pattern, read 1 file, ran 1 shell command (ctrl+o to expand)
+
+● generation-manager for gen 99 prints "explicit unhealthy status", calls
+  unhealthy(), then health_confirm(). These are syscalls — one of them likely
+  triggers a kernel-side reset/shutdown that exits QEMU (the real termination
+  path, not on_idle). Let me check the kernel handlers for the health syscalls.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● SYS_UNHEALTHY terminates the calling task with TermReason::Unhealthy — it
+  doesn't reset the machine. Let me check whether an Unhealthy termination
+  triggers a guest-wide exit elsewhere.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● The difference is clear: generations 6/7 have a probe client that finishes and
+  disconnects, cascading PEER_DEAD exits through the services so on_idle fires.
+  Generation 99 has an interactive dango waiting for keyboard input that never
+  comes — so nothing cascades and the guest can't exit. This is why
+  bootstate/rollback hang, and it's structural, not the stack bug. Let me
+  confirm with the rollback result and read the full bootstate serial.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● I have a clear, evidence-backed picture but it diverges from what the report
+  anticipated. This is exactly a scope/interpretation call — let me consult the
+  advisor before finalizing.
+
+● Advising using Opus 4.8
+  ⎿  ✔ Advisor has reviewed the conversation and will apply the feedback
+     (ctrl+o to expand)
+
+● The advisor is right — I've been concluding from empty greps instead of
+  reading the actual output. Let me do the four decisive reads.
+
+  Read 1 file (ctrl+o to expand)
+
+● Background command "Run rollback check (same gen-99 pending env)" completed
+(exit code 0)
+
+● Monitor event: "rollback check outcome"
+
+● Monitor "rollback check outcome" stream ended
+
+● Rollback timed out at dango> too — same env, same hang. But the roadmap marks
+  both rollback_check and bootstate_trace_check as Complete verification targets
+  with the 2→1→0 sequence expected to pass. So the guest exit is supposed to
+  happen and is now broken — this is in scope. Let me read the raw serial (not
+  grep) and dango's loop to find why the exit cascade doesn't fire.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The raw serial reveals the real blocker: init spawns console, dango,
+  spawn-service fine, then [spawn] rejected BadCapability on slot 8
+  (storage-probe), so init calls exit(1) and dies — before spawning
+  generation-manager (slot 10). Without generation-manager, the
+  pending/unhealthy/confirm cascade that terminates the guest never runs, so
+  dango persists and the guest hangs. This is the regression. Let me find why
+  the slot-8 spawn is rejected.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● init spawns storage-probe (slot 8 executable) deriving from its slot 9 — a
+  block-device capability. The spawn is rejected with BadCapability, meaning
+  init's slot 9 has no valid block cap. Since bootstate/rollback boot with no
+  storage drive, the question is whether the kernel still grants init a
+  block-device cap at slot 9 when no device is present. Let me check how
+  bootstrap builds init's capabilities.
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+● Found the mechanism: for gen 99 with no storage drive,
+  optional_block_function() returns None, so bootstrap pushes a fallback
+  ObjectStore/RIGHT_STORE_READ cap into init's slot 9 (bootstrap.rs:385). But
+  init unconditionally spawns storage-probe deriving RIGHT_BLOCK_READ from slot
+  9 — and you can't derive BLOCK_READ from a STORE_READ-only cap, so the spawn
+  is rejected, init exits, and generation-manager never starts. Let me check the
+  git history to see whether this is a regression.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The fallback ObjectStore cap was added in f7d63e8 (the commit that added
+  interactive dango). This is a second regression stacked on the stack-overflow
+  one: gen-99 boots with no virtio/nvme disk get an ObjectStore slot-9 cap, but
+  init derives BLOCK_READ from it, so the storage-probe spawn fails and init
+  dies before generation-manager. The design intends storage-probe to spawn and
+  Exit(1) when the disk is absent (handled by optional_storage_absent). Let me
+  test whether attaching a virtio-blk disk lets the boot terminate — the fastest
+  way to confirm the fix direction.
+
+  Ran 3 shell commands (ctrl+o to expand)
+
+● Fixture built. Now let me rebuild the bootstate image fresh and boot it with a
+  virtio-blk disk attached to test whether init proceeds past storage-probe to
+  generation-manager and the guest terminates.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Monitor(bootstate-with-disk boot exit)
+  ⎿  Monitor started · task b4yo19iby · timeout 330s
+
+● While the disk-attached boot runs, I'm now questioning whether a disk alone
+  suffices: even if storage-probe spawns, the interactive
+  dango/console/spawn-service are persistent, so on_idle still might not fire.
+  The test boot will tell me. Let me check its progress.
+
+  Ran 2 shell commands (ctrl+o to expand)
+
+● Critical finding: even with a disk, the gen-99 guest boots fully — init
+  completes ([init] spawn graph launched), storage-probe verifies sector 0,
+  generation-manager runs (explicit unhealthy status) — but still hangs at
+  dango>. So a disk isn't the fix; the blocker is that gen-99's dango is an
+  infinite interactive REPL and on_idle only fires when all tasks terminate. I
+  keep assuming dango busy-loops — let me finally read its actual loop and the
+  runtime's recv.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● Confirmed — dango busy-polls: input_read returns Ok(None) → yield_now(),
+  keeping it perpetually Ready, so on_idle never fires. But gen-6
+  directory_check did exit despite spawning dango. So dango must behave
+  differently per generation. Let me read dango's main and its launch-context
+  handling.

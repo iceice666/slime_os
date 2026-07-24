@@ -13,10 +13,11 @@ This directory is the curated, chronological record of investigations, regressio
 
 | Date | Entry | Status | Scope |
 |---|---|---|---|
+| 2026-07-24 | [Stage-0 boot-check hangs](2026-07-24-boot-check-hangs/index.md) | Verified | Stack guard, vmm walkers, dango termination, gen-99 init, bootstate model, generation build |
 
 ## Entry format
 
-Create entries as `YYYY-MM-DD-short-topic.md` using [TEMPLATE.md](TEMPLATE.md). One entry may cover several related failures when they share an investigation or verification campaign.
+Create each entry as a folder `YYYY-MM-DD-short-topic/` with a curated `index.md` written from [TEMPLATE.md](TEMPLATE.md). Keep the entry's focused reports, raw transcript, and other evidence as siblings inside that folder so the write-up and its provenance travel together. A single-file `YYYY-MM-DD-short-topic.md` is acceptable when an entry has no accompanying evidence files. One entry may cover several related failures when they share an investigation or verification campaign.
 
 Every regression entry should identify:
 
