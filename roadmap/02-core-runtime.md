@@ -148,6 +148,13 @@ Two isolated components exchange and return a payload larger than the kernel IPC
 
 **Status:** Not started.
 
+**Depends on:** C7's bounded sample plane, and backlog item **B2** (scheduler
+`Blocked` state / `SYS_WAIT` wait-set). C8's fabric service is the first
+long-lived component that no scripted keystroke can terminate, so B2 must land
+before this gate opens; otherwise C8's stalled-subscriber, peer-death, and
+graph-idle exit conditions cannot be observed under QEMU. C7.2–C7.4 do not
+depend on B2 and proceed first.
+
 ### Deliverables
 
 - define one deterministic `InterfaceSchema` identity derived from a normalized, bounded schema; equivalent input produces one type identity and conflicting layouts cannot reuse it;

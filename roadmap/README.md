@@ -8,7 +8,7 @@ A milestone is complete only when its exit condition is observed. Compiled code,
 
 | Track | Status | Next open gate |
 | --- | --- | --- |
-| [Backlog](00-backlog.md) | 1 open (deferred) | B1 resolved; B2 `Blocked` state deferred |
+| [Backlog](00-backlog.md) | 1 open (active) | B1 resolved; B2 `Blocked` state / `SYS_WAIT` promoted to active gate on C8 |
 | [Foundations](01-foundations.md) | M1–M4 and M6 complete; M5 mechanisms complete | Record M5.7 removable-media Framework evidence without internal-NVMe modification |
 | [Core runtime](02-core-runtime.md) | C7 in progress; C7.1 complete (generation v3 + `u64` rights) | Land C7.2 `SharedBufferFactory`, quotas, and supervision-subtree accounting |
 | [ROS 2 compatibility](03-ros2-compatibility.md) | Not started | Admit R1 only after C8 and the H6 network-service contract exist |
