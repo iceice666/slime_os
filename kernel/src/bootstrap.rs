@@ -55,6 +55,19 @@ pub fn start() -> ! {
         crate::input::install_script(b"\n\x1b");
         serial_println!("[powerbox] scripted check active");
     }
+    // The interactive dango REPL busy-polls its input capability and only exits
+    // on Escape. A headless automated boot has no human to press it, so without
+    // a terminating keystroke dango stays perpetually Ready, the scheduler never
+    // goes idle, and `on_idle` (the only path to `exit_qemu`) never fires. Feed a
+    // single Escape by default so dango closes and the termination cascade runs.
+    // Skip it for an explicitly interactive session and for checks that install
+    // their own scripted input above.
+    let scripted_dango = option_env!("SLIME_DANGO_CHECK") == Some("1") && generation.number == 7;
+    let scripted_powerbox =
+        option_env!("SLIME_POWERBOX_CHECK") == Some("1") && generation.number == 9;
+    if option_env!("SLIME_INTERACTIVE") != Some("1") && !scripted_dango && !scripted_powerbox {
+        crate::input::install_script(b"\x1b");
+    }
     serial_println!(
         "[generation] selected {:02x?} parent={:02x?} target={}",
         generation.identity,

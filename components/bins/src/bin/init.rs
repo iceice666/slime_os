@@ -151,7 +151,12 @@ fn main() {
         if option_env!("SLIME_DANGO_CHECK") != Some("1")
             && option_env!("SLIME_GENERATION_NUMBER") != Some("9")
         {
-            spawn_or_fail(8, storage_caps());
+            // With no block device attached, bootstrap hands init an ObjectStore
+            // fallback in the storage slot instead of a block capability, so the
+            // storage-probe's BLOCK_READ derive is rejected. That is the expected
+            // no-disk case (the kernel's `on_idle` already tolerates an absent
+            // storage-probe), so skip it rather than aborting the whole graph.
+            spawn_optional_storage(8, storage_caps());
         }
     }
     if option_env!("SLIME_GENERATION_CMD_CHECK") != Some("1") {
@@ -189,6 +194,30 @@ fn spawn_or_fail(executable_slot: u32, grants: &[SpawnGrant]) {
     });
     if slime_rt::cap_drop(spawned.supervision_slot) < 0 {
         slime_rt::exit(1);
+    }
+}
+
+fn spawn_optional_storage(executable_slot: u32, grants: &[SpawnGrant]) {
+    match slime_rt::spawn(executable_slot, grants) {
+        Ok(spawned) => {
+            if slime_rt::cap_drop(spawned.supervision_slot) < 0 {
+                slime_rt::exit(1);
+            }
+        }
+        // No block device attached: the storage slot holds an ObjectStore
+        // fallback, so the BLOCK_READ derive is rejected. Treat this as the
+        // absent-storage case and continue launching the rest of the graph.
+        Err(slime_rt::ERR_BAD_CAP) => {
+            slime_rt::debug_write(b"[init] storage-probe skipped: no block device\n");
+        }
+        Err(error) => {
+            slime_rt::debug_write(b"[init] spawn failed slot=");
+            write_u32(executable_slot);
+            slime_rt::debug_write(b" error=");
+            write_i64(error);
+            slime_rt::debug_write(b"\n");
+            slime_rt::exit(1);
+        }
     }
 }
 

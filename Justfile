@@ -6,15 +6,15 @@ help:
 
 # Run kernel (dev profile) with serial on stdout.
 run:
-    cd kernel && cargo run
+    cd kernel && SLIME_INTERACTIVE=1 cargo run
 
 # Run kernel in release mode.
 run_release:
-    cd kernel && cargo run --release
+    cd kernel && SLIME_INTERACTIVE=1 cargo run --release
 
 # Run with a visible QEMU window (no -display none).
 run_gui:
-    cd kernel && cargo run
+    cd kernel && SLIME_INTERACTIVE=1 cargo run
 
 # Run kernel tests under QEMU; optimized code keeps boot-time integrity hashing bounded.
 test:
@@ -122,13 +122,13 @@ rollback_check:
 
 # Run with QEMU monitor on stdin.
 monitor:
-    cd kernel && cargo run -- -monitor stdio -serial null
+    cd kernel && SLIME_INTERACTIVE=1 cargo run -- -monitor stdio -serial null
 
 # === Debug Targets ===
 
 # Start QEMU paused with a gdb stub on port 1234.
 debug_server:
-    cd kernel && cargo run -- -s -S -serial stdio
+    cd kernel && SLIME_INTERACTIVE=1 cargo run -- -s -S -serial stdio
     @echo "🌐 QEMU debug server on port 1234 (waiting for gdb/lldb)"
 
 # Start LLDB and attach to the QEMU debug server.
