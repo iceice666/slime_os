@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import os
-import subprocess
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+from harness import ROOT, run_qemu
+
 MARKERS = [
     "[dango] native runtime ready",
     "dango> $(sysinfo)",
@@ -32,24 +32,20 @@ def run() -> str:
     environment = os.environ.copy()
     environment["SLIME_GENERATION_NUMBER"] = "7"
     environment["SLIME_DANGO_CHECK"] = "1"
-    process = subprocess.run(
+    output = run_qemu(
         ["cargo", "run", "--release", "--", "-display", "none"],
+        environment=environment,
         cwd=ROOT / "kernel",
-        env=environment,
-        check=False,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
+        timeout=None,
+        echo="never",
     )
-    if process.returncode != 0:
-        raise SystemExit(process.returncode)
     cursor = 0
     for marker in MARKERS:
-        position = process.stdout.find(marker, cursor)
+        position = output.find(marker, cursor)
         if position < 0:
             raise SystemExit(f"dango transcript is missing or out of order at: {marker}")
         cursor = position + len(marker)
-    return process.stdout
+    return output
 
 
 def transcript(output: str) -> str:

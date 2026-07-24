@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import importlib.util
 import os
 import shutil
 import struct
@@ -11,26 +10,15 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+from harness import RELEASE_KERNEL, ROOT, load_script
+
 BUILD = ROOT / "scripts" / "build-generation.py"
-CHECK_PATH = ROOT / "scripts" / "check-generation.py"
-RELEASE_TRUST_PATH = ROOT / "scripts" / "release_trust.py"
 # Embed the release kernel the Justfile target builds, not a stale debug binary.
-KERNEL = ROOT / "kernel" / "target" / "x86_64-unknown-none" / "release" / "slime_os-kernel"
+KERNEL = RELEASE_KERNEL
 WORK = Path("/tmp/slime-os-release-trust")
 
-
-def load_module(name: str, path: Path):
-    spec = importlib.util.spec_from_file_location(name, path)
-    if spec is None or spec.loader is None:
-        raise SystemExit(f"cannot load {path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-CHECK = load_module("check_generation", CHECK_PATH)
-TRUST = load_module("release_trust", RELEASE_TRUST_PATH)
+CHECK = load_script("check_generation", "check-generation.py")
+TRUST = load_script("release_trust", "release_trust.py")
 
 
 def run(arguments: list[str], *, environment: dict[str, str] | None = None) -> str:

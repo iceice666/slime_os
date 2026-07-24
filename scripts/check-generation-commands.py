@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import importlib.util
 import os
 import shutil
 import struct
@@ -18,18 +17,12 @@ from boot_contracts import (
     RELEASE_BYTES,
     bootstore_checksum,
 )
+from harness import ROOT, load_script
 
-ROOT = Path(__file__).resolve().parent.parent
 KERNEL = ROOT / "kernel"
 BUILD = KERNEL / "target" / "x86_64-unknown-none" / "release"
 WORK = Path("/tmp/slime-os-generation-cmd")
-TRACE_SPEC = importlib.util.spec_from_file_location(
-    "check_bootstate_trace", ROOT / "scripts" / "check-bootstate-trace.py"
-)
-if TRACE_SPEC is None or TRACE_SPEC.loader is None:
-    raise SystemExit("cannot load BootState trace verifier")
-TRACE = importlib.util.module_from_spec(TRACE_SPEC)
-TRACE_SPEC.loader.exec_module(TRACE)
+TRACE = load_script("check_bootstate_trace", "check-bootstate-trace.py")
 
 SUCCESS_MARKERS = (
     "[generation-manager] update service ready",

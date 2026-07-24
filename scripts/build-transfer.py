@@ -3,16 +3,12 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import importlib.util
 import struct
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-SPEC = importlib.util.spec_from_file_location("check_generation", ROOT / "scripts" / "check-generation.py")
-if SPEC is None or SPEC.loader is None:
-    raise SystemExit("cannot load generation checker")
-CHECK = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(CHECK)
+from harness import SECTOR_SIZE, load_script
+
+CHECK = load_script("check_generation", "check-generation.py")
 
 from boot_contracts import (
     TRANSFER_HEADER_GENERATION_END,
@@ -40,7 +36,7 @@ from boot_contracts import (
 
 MAGIC = TRANSFER_MAGIC
 VERSION = TRANSFER_VERSION
-SECTOR = 512
+SECTOR = SECTOR_SIZE
 POLICIES = {1, 3, 4}
 
 

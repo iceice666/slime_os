@@ -12,7 +12,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+from harness import ROOT
+
 KERNEL = ROOT / "kernel" / "src"
 MANIFEST = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "valid.zti"
 INIT = ROOT / "components" / "src" / "init.S"

@@ -6,7 +6,8 @@ import hashlib
 import sys
 from pathlib import Path
 
-SECTOR_SIZE = 512
+from harness import SECTOR_SIZE
+
 SECTORS = 8
 MESSAGE = b"Slime OS M5.2 read-only virtio block fixture\n"
 

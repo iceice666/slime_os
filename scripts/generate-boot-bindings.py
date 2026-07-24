@@ -10,7 +10,8 @@ import tempfile
 from pathlib import Path
 from zutai_cli import STDLIB, binary
 
-ROOT = Path(__file__).resolve().parent.parent
+from harness import ROOT
+
 OUTPUT = ROOT / "scripts" / "boot_contracts.py"
 RUST_OUTPUT_DIR = ROOT / "boot-contracts" / "src" / "generated"
 GENERATORS = (

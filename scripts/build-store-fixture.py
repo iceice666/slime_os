@@ -17,7 +17,9 @@ import struct
 import zlib
 from pathlib import Path
 
-SECTOR = 512
+from harness import SECTOR_SIZE
+
+SECTOR = SECTOR_SIZE
 CAPACITY = 2048
 ENTRY_COUNT = 128
 ENTRY_SIZE = 128

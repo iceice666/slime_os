@@ -2,28 +2,17 @@
 
 from __future__ import annotations
 
-import importlib.util
 import os
 import subprocess
 import sys
 from pathlib import Path
 
 from boot_contracts import BOOTSTATE_SLOT_BYTES
+from harness import BOOT_TIMEOUT_SECONDS, RELEASE_KERNEL, ROOT, load_script, run_qemu
 
-ROOT = Path(__file__).resolve().parent.parent
-# Boot the release kernel (the Justfile target builds `--release`); the debug
-# kernel's larger stack frames overflow the boot stack.
-KERNEL = ROOT / "kernel" / "target" / "x86_64-unknown-none" / "release" / "slime_os-kernel"
-# Bound each boot so a wedged guest fails loudly instead of hanging forever.
-BOOT_TIMEOUT_SECONDS = 600
+KERNEL = RELEASE_KERNEL
 
-CHECK_GENERATION_SPEC = importlib.util.spec_from_file_location(
-    "check_generation", ROOT / "scripts" / "check-generation.py"
-)
-if CHECK_GENERATION_SPEC is None or CHECK_GENERATION_SPEC.loader is None:
-    raise SystemExit("cannot load generation checker")
-CHECK_GENERATION = importlib.util.module_from_spec(CHECK_GENERATION_SPEC)
-CHECK_GENERATION_SPEC.loader.exec_module(CHECK_GENERATION)
+CHECK_GENERATION = load_script("check_generation", "check-generation.py")
 decode_bootstate = CHECK_GENERATION.decode_bootstate
 
 
@@ -34,29 +23,12 @@ def run(
     allow_failure: bool = False,
     timeout: int | None = BOOT_TIMEOUT_SECONDS,
 ) -> str:
-    try:
-        process = subprocess.run(
-            arguments,
-            cwd=ROOT,
-            env=environment,
-            check=False,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            timeout=timeout,
-        )
-    except subprocess.TimeoutExpired as error:
-        output = error.output or ""
-        if isinstance(output, bytes):
-            output = output.decode(errors="replace")
-        sys.stdout.write(output)
-        raise SystemExit(
-            f"command timed out after {timeout}s (wedged guest?): {arguments}"
-        ) from error
-    sys.stdout.write(process.stdout)
-    if process.returncode != 0 and not allow_failure:
-        raise SystemExit(process.returncode)
-    return process.stdout
+    return run_qemu(
+        arguments,
+        environment=environment,
+        allow_failure=allow_failure,
+        timeout=timeout,
+    )
 
 
 def bootstate(image: Path) -> dict:

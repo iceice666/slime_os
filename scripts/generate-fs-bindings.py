@@ -10,7 +10,8 @@ import tempfile
 from pathlib import Path
 from zutai_cli import STDLIB, binary
 
-ROOT = Path(__file__).resolve().parent.parent
+from harness import ROOT
+
 GENERATOR = ROOT / "contracts" / "fs" / "v1" / "schema.zt"
 OUTPUT = ROOT / "components" / "proto" / "src" / "fs.rs"
 PYTHON_OUTPUT = ROOT / "scripts" / "fs_contracts.py"

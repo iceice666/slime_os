@@ -2,15 +2,14 @@
 from __future__ import annotations
 
 import hashlib
-import importlib.util
 import os
 import shutil
-import subprocess
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+from harness import BOOT_TIMEOUT_SECONDS, RELEASE_KERNEL, ROOT, load_script, run_qemu
+
 WORK = Path("/tmp/slime-os-transfer")
-KERNEL = ROOT / "kernel" / "target" / "x86_64-unknown-none" / "release" / "slime_os-kernel"
+KERNEL = RELEASE_KERNEL
 IMAGE = WORK / "receiver.img"
 TRANSFER = WORK / "transfer.img"
 BOOTSTORE = WORK / "boot-store.bin"
@@ -19,23 +18,9 @@ BOOTSTORE_TEMPLATE = WORK / "receiver-boot-store.bin"
 
 RECEIVER_STORE = WORK / "receiver-store.bin"
 
-def load(name: str, path: Path):
-    spec = importlib.util.spec_from_file_location(name, path)
-    if spec is None or spec.loader is None:
-        raise SystemExit(f"cannot load {path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-CHECK = load("check_generation", ROOT / "scripts" / "check-generation.py")
-BUILD_GENERATION = load("build_generation", ROOT / "scripts" / "build-generation.py")
-BUILD_TRANSFER = load("build_transfer", ROOT / "scripts" / "build-transfer.py")
-
-
-# Bound each boot so a wedged guest (e.g. a stack-overflow reboot loop) fails
-# loudly instead of hanging the check forever.
-BOOT_TIMEOUT_SECONDS = 600
+CHECK = load_script("check_generation", "check-generation.py")
+BUILD_GENERATION = load_script("build_generation", "build-generation.py")
+BUILD_TRANSFER = load_script("build_transfer", "build-transfer.py")
 
 
 def run(
@@ -44,28 +29,13 @@ def run(
     cwd: Path = ROOT,
     timeout: int | None = BOOT_TIMEOUT_SECONDS,
 ) -> str:
-    try:
-        process = subprocess.run(
-            arguments,
-            cwd=cwd,
-            env=environment,
-            check=False,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            timeout=timeout,
-        )
-    except subprocess.TimeoutExpired as error:
-        output = error.output or ""
-        if isinstance(output, bytes):
-            output = output.decode(errors="replace")
-        raise SystemExit(
-            f"command timed out after {timeout}s (wedged guest?): {arguments}\n"
-            + output
-        ) from error
-    if process.returncode != 0:
-        raise SystemExit(process.stdout)
-    return process.stdout
+    return run_qemu(
+        arguments,
+        environment=environment,
+        cwd=cwd,
+        timeout=timeout,
+        echo="on-error",
+    )
 
 
 def extract_bootstore() -> bytes:

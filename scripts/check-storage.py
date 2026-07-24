@@ -6,11 +6,10 @@ import argparse
 import hashlib
 import os
 import subprocess
-import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-SECTOR_SIZE = 512
+from harness import ROOT, SECTOR_SIZE, run_qemu
+
 DEVICE_ARGS = [
     "-display",
     "none",
@@ -37,19 +36,12 @@ def run_guest(image: Path, mode: int, device_args: list[str] = DEVICE_ARGS) -> s
     arguments = [value.format(image=image) for value in device_args]
     environment = os.environ.copy()
     environment["SLIME_GENERATION_NUMBER"] = str(mode + 1)
-    process = subprocess.run(
+    return run_qemu(
         ["cargo", "run", "--", *arguments],
+        environment=environment,
         cwd=ROOT / "kernel",
-        env=environment,
-        check=False,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
+        timeout=None,
     )
-    sys.stdout.write(process.stdout)
-    if process.returncode != 0:
-        raise SystemExit(process.returncode)
-    return process.stdout
 
 
 def sector_hash(image: Path, lba: int) -> str:

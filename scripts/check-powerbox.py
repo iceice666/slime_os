@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import os
-import subprocess
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+from harness import ROOT, run_qemu
+
 MARKERS = [
     "[powerbox] scripted check active",
     "[powerbox] chooser ready",
@@ -28,30 +28,26 @@ def run() -> str:
     environment = os.environ.copy()
     environment["SLIME_GENERATION_NUMBER"] = "9"
     environment["SLIME_POWERBOX_CHECK"] = "1"
-    process = subprocess.run(
+    output = run_qemu(
         ["cargo", "run", "--release", "--", "-display", "none"],
+        environment=environment,
         cwd=ROOT / "kernel",
         timeout=90,
-        env=environment,
-        check=False,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
+        echo="on-error",
     )
-    if process.returncode != 0:
-        print(process.stdout, end="")
-        raise SystemExit(process.returncode)
     cursor = 0
     for marker in MARKERS:
-        position = process.stdout.find(marker, cursor)
+        position = output.find(marker, cursor)
         if position < 0:
-            print(process.stdout, end="")
+            print(output, end="")
             raise SystemExit(f"powerbox transcript is missing or out of order at: {marker}")
         cursor = position + len(marker)
-    if "[powerbox] chooser complete" not in process.stdout:
-        print(process.stdout, end="")
+    if "[powerbox] chooser complete" not in output:
+        print(output, end="")
         raise SystemExit("powerbox chooser did not complete")
-    return process.stdout
+    return output
+
+
 def transcript(output: str) -> str:
     return "\n".join(
         line

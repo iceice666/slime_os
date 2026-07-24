@@ -37,7 +37,8 @@ from boot_contracts import (
     SIGN_NAMESPACE,
 )
 
-ROOT = Path(__file__).resolve().parent.parent
+from harness import ROOT
+
 KEY_DIR = ROOT / "contracts" / "release" / "v1" / "test-keys"
 KEY_PATHS = tuple(KEY_DIR / f"key{index}" for index in range(1, 4))
 

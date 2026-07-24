@@ -12,7 +12,8 @@ import subprocess
 import stat
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+from harness import RELEASE_KERNEL, ROOT, run_qemu
+
 KERNEL = ROOT / "kernel"
 DEFAULT_IMAGE = Path("/tmp/slime-os-framework-inventory.img")
 DEFAULT_EVIDENCE = ROOT / "evidence" / "framework-inventory.jsonl"
@@ -114,7 +115,7 @@ def build_image(image: Path) -> str:
     subprocess.run(
         [
             str(KERNEL / "scripts" / "build-iso.sh"),
-            str(KERNEL / "target" / "x86_64-unknown-none" / "release" / "slime_os-kernel"),
+            str(RELEASE_KERNEL),
             str(image),
             "128",
         ],
@@ -129,24 +130,18 @@ def qemu_report(fixture: Path) -> str:
     environment = os.environ.copy()
     environment["SLIME_FRAMEWORK_INVENTORY"] = "1"
     environment["SLIME_FRAMEWORK_INVENTORY_QEMU"] = "1"
-    process = subprocess.run(
+    output = run_qemu(
         [
             "cargo", "run", "--release", "--", "-display", "none",
             "-drive", f"if=none,id=inventory-nvme,format=raw,readonly=on,file={fixture}",
             "-device", "nvme,serial=inventory-nvme,drive=inventory-nvme",
         ],
+        environment=environment,
         cwd=KERNEL,
-        env=environment,
         timeout=120,
-        check=False,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
+        echo="on-error",
     )
-    if process.returncode != 0:
-        print(process.stdout, end="")
-        fail(f"inventory QEMU boot failed with {process.returncode}")
-    return extract_report(process.stdout)
+    return extract_report(output)
 
 
 def extract_report(output: str) -> str:

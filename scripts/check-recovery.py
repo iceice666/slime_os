@@ -3,12 +3,9 @@
 from __future__ import annotations
 
 import hashlib
-import importlib.util
 import os
 import struct
 import shutil
-import subprocess
-import sys
 import zlib
 from pathlib import Path
 
@@ -22,25 +19,14 @@ from boot_contracts import (
     STORE_SUPERBLOCK_MAGIC,
     STORE_SUPERBLOCK_RECORD_AREA_START_OFFSET,
 )
+from harness import BOOT_TIMEOUT_SECONDS, RELEASE_KERNEL, ROOT, SECTOR_SIZE, load_script, run_qemu
 
-ROOT = Path(__file__).resolve().parent.parent
-SECTOR = 512
+SECTOR = SECTOR_SIZE
 STATE_SECTORS = 128
 STATE_FIRST_LBA = BOOTSTORE_CAPACITY // SECTOR
 TARGET_BDF = "0x18"
 
-CHECK_SPEC = importlib.util.spec_from_file_location(
-    "check_generation", ROOT / "scripts" / "check-generation.py"
-)
-if CHECK_SPEC is None or CHECK_SPEC.loader is None:
-    raise SystemExit("cannot load generation checker")
-CHECK = importlib.util.module_from_spec(CHECK_SPEC)
-CHECK_SPEC.loader.exec_module(CHECK)
-
-
-# Bound each boot so a wedged guest (e.g. a stack-overflow reboot loop) fails
-# loudly instead of hanging the check forever.
-BOOT_TIMEOUT_SECONDS = 600
+CHECK = load_script("check_generation", "check-generation.py")
 
 
 def run(
@@ -49,29 +35,7 @@ def run(
     environment: dict[str, str] | None = None,
     timeout: int | None = BOOT_TIMEOUT_SECONDS,
 ) -> str:
-    try:
-        process = subprocess.run(
-            arguments,
-            cwd=ROOT,
-            env=environment,
-            check=False,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            timeout=timeout,
-        )
-    except subprocess.TimeoutExpired as error:
-        output = error.output or ""
-        if isinstance(output, bytes):
-            output = output.decode(errors="replace")
-        sys.stdout.write(output)
-        raise SystemExit(
-            f"command timed out after {timeout}s (wedged guest?): {arguments}"
-        ) from error
-    sys.stdout.write(process.stdout)
-    if process.returncode != 0:
-        raise SystemExit(process.returncode)
-    return process.stdout
+    return run_qemu(arguments, environment=environment, timeout=timeout)
 
 
 def superblock(sequence: int) -> bytes:
@@ -125,7 +89,7 @@ def valid_states(image: Path) -> list[dict]:
 
 
 def main() -> None:
-    kernel = ROOT / "kernel" / "target" / "x86_64-unknown-none" / "release" / "slime_os-kernel"
+    kernel = RELEASE_KERNEL
     build = Path("/tmp/slime-os-recovery-build")
     media = Path("/tmp/slime-os-recovery-media.img")
     target = Path("/tmp/slime-os-recovery-target.img")

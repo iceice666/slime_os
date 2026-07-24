@@ -8,7 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+from harness import BOOT_TIMEOUT_SECONDS, ROOT, run_qemu
+
 MARKERS = [
     "[directory-probe] no-cap denied",
     "[directory-probe] scoped read ok",
@@ -21,50 +22,29 @@ MARKERS = [
 ]
 
 
-# Bound the boot so a wedged guest fails loudly instead of hanging forever.
-BOOT_TIMEOUT_SECONDS = 600
-
-
 def run(image: Path) -> str:
     environment = os.environ.copy()
     environment["SLIME_GENERATION_NUMBER"] = "6"
-    try:
-        process = subprocess.run(
-            [
-                "cargo",
-                "run",
-                "--release",
-                "--",
-                "-display",
-                "none",
-                "-drive",
-                f"if=none,id=slime-storage,format=raw,cache=directsync,file={image}",
-                "-device",
-                "virtio-blk-pci,drive=slime-storage,disable-legacy=on,queue-size=8",
-            ],
-            cwd=ROOT / "kernel",
-            env=environment,
-            check=False,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            timeout=BOOT_TIMEOUT_SECONDS,
-        )
-    except subprocess.TimeoutExpired as error:
-        output = error.output or ""
-        if isinstance(output, bytes):
-            output = output.decode(errors="replace")
-        sys.stdout.write(output)
-        raise SystemExit(
-            f"directory check timed out after {BOOT_TIMEOUT_SECONDS}s (wedged guest?)"
-        ) from error
-    sys.stdout.write(process.stdout)
-    if process.returncode != 0:
-        raise SystemExit(process.returncode)
-    missing = [marker for marker in MARKERS if marker not in process.stdout]
+    output = run_qemu(
+        [
+            "cargo",
+            "run",
+            "--release",
+            "--",
+            "-display",
+            "none",
+            "-drive",
+            f"if=none,id=slime-storage,format=raw,cache=directsync,file={image}",
+            "-device",
+            "virtio-blk-pci,drive=slime-storage,disable-legacy=on,queue-size=8",
+        ],
+        environment=environment,
+        cwd=ROOT / "kernel",
+    )
+    missing = [marker for marker in MARKERS if marker not in output]
     if missing:
         raise SystemExit(f"directory check missing markers: {missing}")
-    return process.stdout
+    return output
 
 
 def main() -> None:

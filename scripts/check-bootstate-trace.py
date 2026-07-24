@@ -24,7 +24,6 @@ are all rejected; and that trace instrumentation stays bounded.
 
 from __future__ import annotations
 
-import importlib.util
 import os
 import subprocess
 import sys
@@ -39,9 +38,9 @@ from boot_contracts import (
     BOOTSTORE_CAPACITY,
     sha256,
 )
+from harness import BOOT_TIMEOUT_SECONDS, RELEASE_KERNEL, ROOT, load_script, run_qemu
 from zutai_cli import STDLIB, binary
 
-ROOT = Path(__file__).resolve().parent.parent
 MODEL_DIR = ROOT / "contracts" / "bootstate" / "model"
 TRACE_PREFIX = BOOTSTATE_TRACE_PREFIX
 TRACE_VERSION = BOOTSTATE_TRACE_VERSION
@@ -51,13 +50,7 @@ MAX_LINE = BOOTSTATE_TRACE_MAX_LINE
 MAX_TRACE_LINES_PER_BOOT = 4
 ORACLE_TIMEOUT_SECONDS = 300
 
-CHECK_GENERATION_SPEC = importlib.util.spec_from_file_location(
-    "check_generation", ROOT / "scripts" / "check-generation.py"
-)
-if CHECK_GENERATION_SPEC is None or CHECK_GENERATION_SPEC.loader is None:
-    raise SystemExit("cannot load generation checker")
-CHECK_GENERATION = importlib.util.module_from_spec(CHECK_GENERATION_SPEC)
-CHECK_GENERATION_SPEC.loader.exec_module(CHECK_GENERATION)
+CHECK_GENERATION = load_script("check_generation", "check-generation.py")
 check_bootstore = CHECK_GENERATION.check_bootstore
 
 ACTIONS = {
@@ -89,10 +82,7 @@ class TraceError(Exception):
 
 # A wedged guest (e.g. a stack overflow that triple-faults into a reboot loop)
 # would otherwise hang the check forever, since QEMU is only asked to exit on a
-# clean `isa-debug-exit`. Bound every subprocess so a hang fails loudly instead.
-BOOT_TIMEOUT_SECONDS = 600
-
-
+# clean `isa-debug-exit`; `run_qemu` bounds every subprocess so a hang fails loud.
 def run(
     arguments: list[str],
     *,
@@ -100,29 +90,13 @@ def run(
     allow_failure: bool = False,
     timeout: int | None = BOOT_TIMEOUT_SECONDS,
 ) -> str:
-    try:
-        process = subprocess.run(
-            arguments,
-            cwd=ROOT,
-            env=environment,
-            check=False,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            timeout=timeout,
-        )
-    except subprocess.TimeoutExpired as error:
-        output = error.output or ""
-        if isinstance(output, bytes):
-            output = output.decode(errors="replace")
-        sys.stdout.write(output)
-        raise SystemExit(
-            f"command timed out after {timeout}s (wedged guest?): {arguments}"
-        ) from error
-    if process.returncode != 0 and not allow_failure:
-        sys.stdout.write(process.stdout)
-        raise SystemExit(process.returncode)
-    return process.stdout
+    return run_qemu(
+        arguments,
+        environment=environment,
+        allow_failure=allow_failure,
+        timeout=timeout,
+        echo="on-error",
+    )
 
 
 def parse_hex32(field: str, value: str) -> bytes:
@@ -412,7 +386,7 @@ def run_scenario(image: Path) -> tuple[list[dict], dict]:
     image.unlink(missing_ok=True)
     # Boot the release kernel: the Justfile target builds `--release`, and the
     # debug kernel's much larger stack frames overflow the boot stack.
-    kernel = ROOT / "kernel" / "target" / "x86_64-unknown-none" / "release" / "slime_os-kernel"
+    kernel = RELEASE_KERNEL
 
     environment = os.environ.copy()
     environment["SLIME_GENERATION_NUMBER"] = "99"

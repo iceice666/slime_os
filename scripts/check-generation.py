@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import struct
+import subprocess
 import sys
 from pathlib import Path
 
 from boot_contracts import *
+from harness import ROOT
 from release_trust import authority_manifest_identity, initial_public_keys, ssh_signed_payload
 
 class CheckError(ValueError):
@@ -197,26 +199,25 @@ def check_release(data: bytes, generation: bytes, accepted_sequence: int | None 
         signature = data[offset + RELEASE_SIGNATURE_SIGNATURE_OFFSET : offset + RELEASE_SIGNATURE_SIGNATURE_END]
         require(key_id > previous and key_id in key_by_id, "DuplicateOrUnknownReleaseKey")
         public = key_by_id[key_id]
-        process = __import__("subprocess").run(
+        process = subprocess.run(
             [
                 "cargo",
                 "run",
                 "--quiet",
                 "--manifest-path",
-                str(Path(__file__).resolve().parent.parent / "boot-contracts" / "Cargo.toml"),
+                str(ROOT / "boot-contracts" / "Cargo.toml"),
                 "--features",
                 "release-crypto",
                 "--example",
                 "verify_release",
                 "--",
                 "signature",
-
                 public.hex(),
                 signed.hex(),
                 signature.hex(),
             ],
-            stdout=__import__("subprocess").DEVNULL,
-            stderr=__import__("subprocess").DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
         require(process.returncode == 0, "BadReleaseSignature")
         previous = key_id

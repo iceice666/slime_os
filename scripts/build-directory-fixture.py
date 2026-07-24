@@ -7,14 +7,9 @@ import struct
 import sys
 from pathlib import Path
 
-import importlib.util
+from harness import load_script
 
-STORE_BUILDER = Path(__file__).with_name("build-store-fixture.py")
-SPEC = importlib.util.spec_from_file_location("build_store_fixture", STORE_BUILDER)
-if SPEC is None or SPEC.loader is None:
-    raise RuntimeError("cannot load store fixture builder")
-store = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(store)
+store = load_script("build_store_fixture", "build-store-fixture.py")
 
 from fs_contracts import (
     FS_MAX_ENTRIES as MAX_ENTRIES,

@@ -79,7 +79,8 @@ from boot_contracts import (
 from release_trust import RELEASE_BYTES, build_release
 from zutai_cli import STDLIB, binary
 
-ROOT = Path(__file__).resolve().parent.parent
+from harness import ROOT
+
 SOURCE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "valid.zti"
 TARGET = "x86_64-qemu-virtio"
 COMPONENTS_WORKSPACE = ROOT / "components" / "Cargo.toml"

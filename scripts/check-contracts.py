@@ -8,7 +8,8 @@ import sys
 from pathlib import Path
 from zutai_cli import STDLIB, binary
 
-ROOT = Path(__file__).resolve().parent.parent
+from harness import ROOT
+
 GENERATION_CONTRACT = ROOT / "contracts" / "generation" / "v1"
 BLOCK_CONTRACT = ROOT / "contracts" / "block" / "v1"
 BLOCK_BINDING_GENERATOR = ROOT / "scripts" / "generate-block-bindings.py"
