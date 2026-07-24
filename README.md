@@ -234,6 +234,7 @@ kernel/       Rust no_std kernel, boot path, generation decoder, scheduler, IPC,
 components/   Rust no_std userspace components and typed service clients/servers
 contracts/    Versioned generation, storage, component, state, spawn, filesystem, and service contracts
 roadmap/      Canonical status, dependency graph, milestones, checks, and release gates
+devlog/       Curated investigations, regression evidence, decisions, and verification history
 scripts/      Host-side generation, contract, image, evidence, and safety tooling
 assets/       Boot/runtime assets
 deps/         Pinned Zutai and Dango submodules
