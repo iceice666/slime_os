@@ -16,33 +16,6 @@ at the bottom rather than deleting it.
 
 ## Open
 
-### B1 — `generation_cmd_check` negative scenario aborts init
-
-**Status:** Open. Pre-existing; not caused by the dango-hang fixes.
-
-**Problem:** `just generation_cmd_check` fails on its `bad-closure` and
-`bad-release` scenarios. In the negative path, init calls
-`spawn_and_wait(23, …)` for `generation-stage`, and `spawn_and_wait` treats any
-non-`Exit(0)` termination as fatal (`slime_rt::exit(1)`). But generation-stage
-*correctly rejects* the malformed closure and exits `1`, so init aborts before
-printing `[init] negative generation scenario complete`, and the boot exits
-`Failed`.
-
-**Evidence:** Reproduced on the current tree and confirmed identical on the
-baseline with all dango-hang fixes stashed (same `generation-stage terminated:
-Some(Exit(1))` → `kernel exit: Failed`). Unrelated to dango: gen-8 does not
-spawn the interactive dango REPL.
-
-**Proposed fix:** In `components/bins/src/bin/init.rs`, the negative
-generation-command scenario should expect a rejecting `Exit(1)` from
-generation-stage rather than aborting — e.g. a `spawn_and_wait`-style helper
-that accepts a declared nonzero status for the staged rejection, then proceed to
-the `[init] negative generation scenario complete` / `exit(0)` path.
-
-**Exit condition:** `just generation_cmd_check` passes for `success`,
-`bad-closure`, and `bad-release`, with rejected staging still leaving BootState
-unchanged.
-
 ### B2 — scheduler has no `Blocked` task state (busy-poll pathology)
 
 **Status:** Open, deferred. Latent debt; nothing is currently gated on it.
@@ -72,4 +45,32 @@ boot checks pass without relying on a scripted Escape keystroke.
 
 ## Resolved
 
-_None yet. Move closed items here with the observed exit condition and date._
+### B1 — `generation_cmd_check` negative scenarios corrupted the wrong generation
+
+**Resolved:** 2026-07-24.
+
+**Problem:** `just generation_cmd_check` failed on its `bad-closure` and
+`bad-release` scenarios. The original diagnosis (init's `spawn_and_wait`
+aborting on a rejecting `Exit(1)`) was wrong: `generation-stage` already
+classifies a `-4`/`-3` rejection internally and exits `0`, and init already
+exits cleanly after the staged rejection. The real defect was in the fixture
+builder `scripts/check-generation-commands.py`. `build_fixture` corrupted
+`entries[1]` by fixed directory index, but the bootstore directory is
+identity-sorted and staging targets the *candidate* generation (identity ≠
+known-good). When component images changed the identity sort order, the
+corruption landed on the untouched known-good generation, so staging *succeeded*
+(`status=0`), `generation-stage` hit its non-`-4`/`-3` `fail()` path, and the
+boot exited `Failed`.
+
+**Evidence:** Instrumented `generation-stage` printed `unexpected status=0` on
+`bad-closure`; probing the fixture confirmed the flipped byte fell inside the
+known-good generation's blob, which staging never reads.
+
+**Fix:** Select the candidate entry by `identity != known_good` (read from
+BootState) instead of a fixed directory index, so the corruption always lands on
+the generation staging actually validates.
+
+**Exit condition (observed):** `just generation_cmd_check` passes for `success`
+(`staged release=3`), `bad-closure` (`rejected status=-4`), and `bad-release`
+(`rejected status=-3`), with rejected staging leaving both BootState slots
+unchanged.

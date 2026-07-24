@@ -14,6 +14,7 @@ This directory is the curated, chronological record of investigations, regressio
 | Date | Entry | Status | Scope |
 |---|---|---|---|
 | 2026-07-24 | [Stage-0 boot-check hangs](2026-07-24-boot-check-hangs/index.md) | Verified | Stack guard, vmm walkers, dango termination, gen-99 init, bootstate model, generation build |
+| 2026-07-24 | [generation_cmd_check wrong target](2026-07-24-generation-cmd-check-wrong-target.md) | Verified | Generation staging fixture, `just generation_cmd_check` |
 
 ## Entry format
 
