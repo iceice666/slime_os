@@ -139,14 +139,17 @@ All direct evidence, this machine, release kernel under TCG.
 
 ## Open risks and follow-ups
 
-- [ ] Backlog B1 (`roadmap/00-backlog.md`): `generation_cmd_check` negative
-      scenario aborts init when generation-stage legitimately rejects a
-      malformed closure. Pre-existing (confirmed on baseline with all fixes
-      stashed); unrelated to the dango hang. Not fixed here.
-- [ ] `[INFERENCE]` A `Blocked` task state remains the correct long-term fix for
-      the busy-poll pathology; the Escape-script approach only un-wedges checks.
-- [ ] Physical Framework evidence for the affected stage-0 paths remains M5.7
-      scope; all evidence here is QEMU/TCG only.
+Tracked in their canonical homes; this section only points to them.
+
+- Backlog B1 (`roadmap/00-backlog.md`): `generation_cmd_check` negative
+  scenario aborts init when generation-stage legitimately rejects a malformed
+  closure. Pre-existing (confirmed on baseline with all fixes stashed);
+  unrelated to the dango hang. Not fixed here.
+- Backlog B2 (`roadmap/00-backlog.md`): the scheduler has no `Blocked` task
+  state, so the busy-poll pathology behind this hang persists. The Escape-script
+  fix only un-wedges the checks; a `Blocked` state is the durable fix. Deferred.
+- Physical Framework evidence for the affected stage-0 paths remains roadmap
+  M5.7 scope (`roadmap/01-foundations.md`); all evidence here is QEMU/TCG only.
 
 ## Artifacts and provenance
 

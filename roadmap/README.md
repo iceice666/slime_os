@@ -8,7 +8,7 @@ A milestone is complete only when its exit condition is observed. Compiled code,
 
 | Track | Status | Next open gate |
 | --- | --- | --- |
-| [Backlog](00-backlog.md) | 1 open defect | Resolve B1 `generation_cmd_check` negative scenario |
+| [Backlog](00-backlog.md) | 2 open (1 defect, 1 deferred) | Resolve B1 `generation_cmd_check`; B2 `Blocked` state deferred |
 | [Foundations](01-foundations.md) | M1–M4 and M6 complete; M5 mechanisms complete | Record M5.7 removable-media Framework evidence without internal-NVMe modification |
 | [Core runtime](02-core-runtime.md) | Not started | C7 bounded resource and shared-sample plane |
 | [ROS 2 compatibility](03-ros2-compatibility.md) | Not started | Admit R1 only after C8 and the H6 network-service contract exist |

@@ -43,6 +43,33 @@ the `[init] negative generation scenario complete` / `exit(0)` path.
 `bad-closure`, and `bad-release`, with rejected staging still leaving BootState
 unchanged.
 
+### B2 — scheduler has no `Blocked` task state (busy-poll pathology)
+
+**Status:** Open, deferred. Latent debt; nothing is currently gated on it.
+
+**Problem:** `TaskState` has only `Ready`, `Running`, and `Terminated`. A task
+waiting on input or IPC poll-and-yields, staying `Ready`, so it keeps the ready
+queue non-empty. The scheduler reaches `exit_qemu` only via `on_idle`, which
+fires when the ready queue drains, so any long-lived poll-and-yield component
+(the interactive dango REPL being the first) prevents idle exit. The
+dango-hang fix (a default Escape input script for non-interactive boots) only
+un-wedges the checks; it does not remove the underlying pathology, which will
+recur for future long-lived or interactive components.
+
+**Evidence:** `devlog/2026-07-24-boot-check-hangs/` — every non-scripted
+full-graph boot (gen-1 storage, gen-6 directory, gen-99 bootstate/rollback)
+hung at `dango>` until fixed by scripting an Escape keystroke.
+
+**Proposed fix:** Add a `Blocked` task state so a task waiting on input/IPC
+leaves the ready queue and is re-queued on wake, letting `on_idle` fire while a
+persistent-but-idle component is parked. This changes scheduler semantics and
+touches every poll-and-yield callsite, so it is deferred until a milestone
+needs a long-lived component that cannot be driven to termination by a script.
+
+**Exit condition:** A persistent, idle component (e.g. interactive dango with
+no input) no longer prevents `on_idle`/`exit_qemu`, and the non-interactive
+boot checks pass without relying on a scripted Escape keystroke.
+
 ## Resolved
 
 _None yet. Move closed items here with the observed exit condition and date._
