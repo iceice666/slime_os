@@ -35,12 +35,28 @@ STORE_TYPE_GUID = b"SLIMEOSSTOREGPT!"
 SEEDED_TYPE = 1
 SEEDED_PAYLOAD_LEN = 512
 SEEDED_RECORD_SECTORS = 2
-RECORD_AREA_START = 2
+from boot_contracts import (
+    STORE_FORMAT_VERSION as FORMAT_VERSION,
+    STORE_RECORD,
+    STORE_RECORD_AREA_START as RECORD_AREA_START,
+    STORE_RECORD_CONTENT_HASH_OFFSET,
+    STORE_RECORD_FORMAT_VERSION_OFFSET,
+    STORE_RECORD_HEADER_SIZE_OFFSET,
+    STORE_RECORD_MAGIC as RECORD_MAGIC,
+    STORE_RECORD_OBJ_TYPE_OFFSET,
+    STORE_RECORD_PAYLOAD_LEN_OFFSET,
+    STORE_SUPERBLOCK_APPEND_LBA_OFFSET,
+    STORE_SUPERBLOCK_CRC32_OFFSET,
+    STORE_SUPERBLOCK_FORMAT_VERSION_OFFSET,
+    STORE_SUPERBLOCK_HEADER_SIZE_OFFSET,
+    STORE_SUPERBLOCK_MAGIC as SUPERBLOCK_MAGIC,
+    STORE_SUPERBLOCK_OBJECT_COUNT_OFFSET,
+    STORE_SUPERBLOCK_PARTITION_SECTORS_OFFSET,
+    STORE_SUPERBLOCK_RECORD_AREA_START_OFFSET,
+    STORE_SUPERBLOCK_SEQUENCE_OFFSET,
+)
 
-SUPERBLOCK_MAGIC = b"SLIMESB\0"
-RECORD_MAGIC = b"SLIMEOR\0"
-FORMAT_VERSION = 1
-HEADER_SIZE = 64
+HEADER_SIZE = STORE_RECORD.size
 
 MESSAGE = b"Slime OS M5.4 object store fixture\n"
 
@@ -95,15 +111,15 @@ def gpt_entries() -> bytes:
 def superblock(sequence: int, append_lba: int, object_count: int) -> bytes:
     sector = bytearray(SECTOR)
     struct.pack_into("<8s", sector, 0, SUPERBLOCK_MAGIC)
-    struct.pack_into("<I", sector, 8, FORMAT_VERSION)
-    struct.pack_into("<I", sector, 12, HEADER_SIZE)
-    struct.pack_into("<Q", sector, 16, sequence)
-    struct.pack_into("<Q", sector, 24, append_lba)
-    struct.pack_into("<I", sector, 32, object_count)
-    struct.pack_into("<Q", sector, 40, RECORD_AREA_START)
-    struct.pack_into("<Q", sector, 48, PARTITION_SECTORS)
-    crc = zlib.crc32(bytes(sector[:60]))
-    struct.pack_into("<I", sector, 60, crc)
+    struct.pack_into("<I", sector, STORE_SUPERBLOCK_FORMAT_VERSION_OFFSET, FORMAT_VERSION)
+    struct.pack_into("<I", sector, STORE_SUPERBLOCK_HEADER_SIZE_OFFSET, HEADER_SIZE)
+    struct.pack_into("<Q", sector, STORE_SUPERBLOCK_SEQUENCE_OFFSET, sequence)
+    struct.pack_into("<Q", sector, STORE_SUPERBLOCK_APPEND_LBA_OFFSET, append_lba)
+    struct.pack_into("<I", sector, STORE_SUPERBLOCK_OBJECT_COUNT_OFFSET, object_count)
+    struct.pack_into("<Q", sector, STORE_SUPERBLOCK_RECORD_AREA_START_OFFSET, RECORD_AREA_START)
+    struct.pack_into("<Q", sector, STORE_SUPERBLOCK_PARTITION_SECTORS_OFFSET, PARTITION_SECTORS)
+    crc = zlib.crc32(bytes(sector[:STORE_SUPERBLOCK_CRC32_OFFSET]))
+    struct.pack_into("<I", sector, STORE_SUPERBLOCK_CRC32_OFFSET, crc)
     return bytes(sector)
 
 
@@ -111,11 +127,11 @@ def record(obj_type: int, payload: bytes) -> bytes:
     digest = hashlib.sha256(payload).digest()
     header = bytearray(HEADER_SIZE)
     struct.pack_into("<8s", header, 0, RECORD_MAGIC)
-    struct.pack_into("<I", header, 8, FORMAT_VERSION)
-    struct.pack_into("<I", header, 12, HEADER_SIZE)
-    struct.pack_into("<I", header, 16, obj_type)
-    struct.pack_into("<Q", header, 24, len(payload))
-    struct.pack_into("<32s", header, 32, digest)
+    struct.pack_into("<I", header, STORE_RECORD_FORMAT_VERSION_OFFSET, FORMAT_VERSION)
+    struct.pack_into("<I", header, STORE_RECORD_HEADER_SIZE_OFFSET, HEADER_SIZE)
+    struct.pack_into("<I", header, STORE_RECORD_OBJ_TYPE_OFFSET, obj_type)
+    struct.pack_into("<Q", header, STORE_RECORD_PAYLOAD_LEN_OFFSET, len(payload))
+    struct.pack_into("<32s", header, STORE_RECORD_CONTENT_HASH_OFFSET, digest)
     data = bytes(header) + payload
     data += bytes(-len(data) % SECTOR)
     return data

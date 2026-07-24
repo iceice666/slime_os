@@ -8,5 +8,6 @@ pub mod kernel_image;
 pub mod recovery;
 pub mod release;
 pub mod sha256;
-pub mod transfer;
+pub mod store_disk;
 pub mod trace;
+pub mod transfer;

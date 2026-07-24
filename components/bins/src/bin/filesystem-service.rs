@@ -2,7 +2,13 @@
 #![no_main]
 
 use slime_proto::{
-    fs::{self, WireFsReply, WireFsRequest},
+    fs::{
+        self, OFF_SNAPSHOT_COUNT, OFF_SNAPSHOT_ENTRY_HASH, OFF_SNAPSHOT_ENTRY_KIND,
+        OFF_SNAPSHOT_ENTRY_NAME, OFF_SNAPSHOT_ENTRY_NAME_LEN, OFF_SNAPSHOT_ENTRY_OBJECT_TYPE,
+        OFF_SNAPSHOT_ENTRY_PAYLOAD_LEN, OFF_SNAPSHOT_ENTRY_RESERVED1, OFF_SNAPSHOT_VERSION,
+        SNAPSHOT_BYTES, SNAPSHOT_ENTRY_BYTES, SNAPSHOT_HEADER, SNAPSHOT_MAGIC,
+        SNAPSHOT_OBJECT_TYPE, SNAPSHOT_VERSION, WireFsReply, WireFsRequest,
+    },
     store::{self, WireStoreReply, WireStoreRequest},
     valid_fs_request,
 };
@@ -18,12 +24,6 @@ const RIGHT_DIRECTORY_READ: u32 = 1 << 19;
 const RIGHT_DIRECTORY_WRITE: u32 = 1 << 20;
 const RIGHT_DIRECTORY_LIST: u32 = 1 << 21;
 const RIGHT_DIRECTORY_DERIVE: u32 = 1 << 22;
-const SNAPSHOT_MAGIC: [u8; 8] = *b"SLIMEDIR";
-const SNAPSHOT_VERSION: u32 = 1;
-const SNAPSHOT_HEADER: usize = 16;
-const ENTRY_BYTES: usize = 64;
-const SNAPSHOT_BYTES: usize = SNAPSHOT_HEADER + fs::MAX_ENTRIES * ENTRY_BYTES;
-const SNAPSHOT_OBJECT_TYPE: u32 = 0x4452_4953;
 const ZERO_HASH: [u8; 32] = [0; 32];
 
 #[derive(Clone, Copy)]
@@ -254,20 +254,29 @@ fn decode_snapshot(
     entries: &mut [Entry; fs::MAX_ENTRIES],
 ) -> Result<usize, i32> {
     if bytes[..8] != SNAPSHOT_MAGIC
-        || u32::from_le_bytes(bytes[8..12].try_into().unwrap()) != SNAPSHOT_VERSION
+        || u32::from_le_bytes(
+            bytes[OFF_SNAPSHOT_VERSION..OFF_SNAPSHOT_VERSION + 4]
+                .try_into()
+                .unwrap(),
+        ) != SNAPSHOT_VERSION
     {
         return Err(-7);
     }
-    let count = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+    let count = u32::from_le_bytes(
+        bytes[OFF_SNAPSHOT_COUNT..OFF_SNAPSHOT_COUNT + 4]
+            .try_into()
+            .unwrap(),
+    ) as usize;
     if count > fs::MAX_ENTRIES {
         return Err(-7);
     }
     let mut previous: Option<&[u8]> = None;
     for (index, entry) in entries.iter_mut().take(count).enumerate() {
-        let offset = SNAPSHOT_HEADER + index * ENTRY_BYTES;
-        let kind = bytes[offset];
-        let name_len = bytes[offset + 1] as usize;
-        let name_bytes = &bytes[offset + 4..offset + 4 + fs::MAX_NAME_BYTES];
+        let offset = SNAPSHOT_HEADER + index * SNAPSHOT_ENTRY_BYTES;
+        let kind = bytes[offset + OFF_SNAPSHOT_ENTRY_KIND];
+        let name_len = bytes[offset + OFF_SNAPSHOT_ENTRY_NAME_LEN] as usize;
+        let name_bytes = &bytes[offset + OFF_SNAPSHOT_ENTRY_NAME
+            ..offset + OFF_SNAPSHOT_ENTRY_NAME + fs::MAX_NAME_BYTES];
         if !matches!(kind, 1 | 2)
             || name_len == 0
             || name_len > fs::MAX_NAME_BYTES
@@ -284,18 +293,29 @@ fn decode_snapshot(
         let mut name = [0u8; fs::MAX_NAME_BYTES];
         name.copy_from_slice(name_bytes);
         let mut hash = [0u8; 32];
-        hash.copy_from_slice(&bytes[offset + 28..offset + 60]);
+        hash.copy_from_slice(
+            &bytes[offset + OFF_SNAPSHOT_ENTRY_HASH..offset + OFF_SNAPSHOT_ENTRY_RESERVED1],
+        );
         *entry = Entry {
             kind,
             name_len: name_len as u8,
             name,
-            object_type: u32::from_le_bytes(bytes[offset + 20..offset + 24].try_into().unwrap()),
-            payload_len: u32::from_le_bytes(bytes[offset + 24..offset + 28].try_into().unwrap()),
+            object_type: u32::from_le_bytes(
+                bytes[offset + OFF_SNAPSHOT_ENTRY_OBJECT_TYPE
+                    ..offset + OFF_SNAPSHOT_ENTRY_PAYLOAD_LEN]
+                    .try_into()
+                    .unwrap(),
+            ),
+            payload_len: u32::from_le_bytes(
+                bytes[offset + OFF_SNAPSHOT_ENTRY_PAYLOAD_LEN..offset + OFF_SNAPSHOT_ENTRY_HASH]
+                    .try_into()
+                    .unwrap(),
+            ),
             hash,
         };
         previous = Some(&entry.name[..name_len]);
     }
-    if bytes[SNAPSHOT_HEADER + count * ENTRY_BYTES..]
+    if bytes[SNAPSHOT_HEADER + count * SNAPSHOT_ENTRY_BYTES..]
         .iter()
         .any(|byte| *byte != 0)
     {
@@ -307,16 +327,22 @@ fn decode_snapshot(
 fn encode_snapshot(entries: &[Entry; fs::MAX_ENTRIES], count: usize) -> [u8; SNAPSHOT_BYTES] {
     let mut bytes = [0u8; SNAPSHOT_BYTES];
     bytes[..8].copy_from_slice(&SNAPSHOT_MAGIC);
-    bytes[8..12].copy_from_slice(&SNAPSHOT_VERSION.to_le_bytes());
-    bytes[12..16].copy_from_slice(&(count as u32).to_le_bytes());
+    bytes[OFF_SNAPSHOT_VERSION..OFF_SNAPSHOT_COUNT]
+        .copy_from_slice(&SNAPSHOT_VERSION.to_le_bytes());
+    bytes[OFF_SNAPSHOT_COUNT..SNAPSHOT_HEADER].copy_from_slice(&(count as u32).to_le_bytes());
     for (index, entry) in entries.iter().take(count).enumerate() {
-        let offset = SNAPSHOT_HEADER + index * ENTRY_BYTES;
-        bytes[offset] = entry.kind;
-        bytes[offset + 1] = entry.name_len;
-        bytes[offset + 4..offset + 4 + fs::MAX_NAME_BYTES].copy_from_slice(&entry.name);
-        bytes[offset + 20..offset + 24].copy_from_slice(&entry.object_type.to_le_bytes());
-        bytes[offset + 24..offset + 28].copy_from_slice(&entry.payload_len.to_le_bytes());
-        bytes[offset + 28..offset + 60].copy_from_slice(&entry.hash);
+        let offset = SNAPSHOT_HEADER + index * SNAPSHOT_ENTRY_BYTES;
+        bytes[offset + OFF_SNAPSHOT_ENTRY_KIND] = entry.kind;
+        bytes[offset + OFF_SNAPSHOT_ENTRY_NAME_LEN] = entry.name_len;
+        bytes[offset + OFF_SNAPSHOT_ENTRY_NAME
+            ..offset + OFF_SNAPSHOT_ENTRY_NAME + fs::MAX_NAME_BYTES]
+            .copy_from_slice(&entry.name);
+        bytes[offset + OFF_SNAPSHOT_ENTRY_OBJECT_TYPE..offset + OFF_SNAPSHOT_ENTRY_PAYLOAD_LEN]
+            .copy_from_slice(&entry.object_type.to_le_bytes());
+        bytes[offset + OFF_SNAPSHOT_ENTRY_PAYLOAD_LEN..offset + OFF_SNAPSHOT_ENTRY_HASH]
+            .copy_from_slice(&entry.payload_len.to_le_bytes());
+        bytes[offset + OFF_SNAPSHOT_ENTRY_HASH..offset + OFF_SNAPSHOT_ENTRY_RESERVED1]
+            .copy_from_slice(&entry.hash);
     }
     bytes
 }

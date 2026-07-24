@@ -16,33 +16,46 @@ if SPEC is None or SPEC.loader is None:
 store = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(store)
 
-SNAPSHOT_MAGIC = b"SLIMEDIR"
-SNAPSHOT_VERSION = 1
-SNAPSHOT_HEADER = 16
-ENTRY_BYTES = 64
-MAX_ENTRIES = 16
-MAX_NAME = 16
-SNAPSHOT_TYPE = 0x44524953
+from fs_contracts import (
+    FS_MAX_ENTRIES as MAX_ENTRIES,
+    FS_MAX_NAME_BYTES as MAX_NAME,
+    SNAPSHOT_BYTES,
+    SNAPSHOT_COUNT_OFFSET,
+    SNAPSHOT_ENTRY_BYTES as ENTRY_BYTES,
+    SNAPSHOT_ENTRY_HASH_END,
+    SNAPSHOT_ENTRY_HASH_OFFSET,
+    SNAPSHOT_ENTRY_KIND_OFFSET,
+    SNAPSHOT_ENTRY_NAME_LEN_OFFSET,
+    SNAPSHOT_ENTRY_NAME_OFFSET,
+    SNAPSHOT_ENTRY_OBJECT_TYPE_OFFSET,
+    SNAPSHOT_ENTRY_PAYLOAD_LEN_OFFSET,
+    SNAPSHOT_HEADER,
+    SNAPSHOT_MAGIC,
+    SNAPSHOT_OBJECT_TYPE as SNAPSHOT_TYPE,
+    SNAPSHOT_VERSION,
+    SNAPSHOT_VERSION_OFFSET,
+)
+
 PAYLOAD_TYPE = 7
 PAYLOAD = b"Slime OS directory payload v1\n"
 
 
 def entry(kind: int, name: bytes, obj_type: int, payload_len: int, digest: bytes) -> bytes:
     encoded = bytearray(ENTRY_BYTES)
-    encoded[0] = kind
-    encoded[1] = len(name)
-    encoded[4 : 4 + len(name)] = name
-    struct.pack_into("<I", encoded, 20, obj_type)
-    struct.pack_into("<I", encoded, 24, payload_len)
-    encoded[28:60] = digest
+    encoded[SNAPSHOT_ENTRY_KIND_OFFSET] = kind
+    encoded[SNAPSHOT_ENTRY_NAME_LEN_OFFSET] = len(name)
+    encoded[SNAPSHOT_ENTRY_NAME_OFFSET : SNAPSHOT_ENTRY_NAME_OFFSET + len(name)] = name
+    struct.pack_into("<I", encoded, SNAPSHOT_ENTRY_OBJECT_TYPE_OFFSET, obj_type)
+    struct.pack_into("<I", encoded, SNAPSHOT_ENTRY_PAYLOAD_LEN_OFFSET, payload_len)
+    encoded[SNAPSHOT_ENTRY_HASH_OFFSET:SNAPSHOT_ENTRY_HASH_END] = digest
     return bytes(encoded)
 
 
 def snapshot(entries: list[bytes]) -> bytes:
-    encoded = bytearray(SNAPSHOT_HEADER + MAX_ENTRIES * ENTRY_BYTES)
+    encoded = bytearray(SNAPSHOT_BYTES)
     encoded[:8] = SNAPSHOT_MAGIC
-    struct.pack_into("<I", encoded, 8, SNAPSHOT_VERSION)
-    struct.pack_into("<I", encoded, 12, len(entries))
+    struct.pack_into("<I", encoded, SNAPSHOT_VERSION_OFFSET, SNAPSHOT_VERSION)
+    struct.pack_into("<I", encoded, SNAPSHOT_COUNT_OFFSET, len(entries))
     for index, value in enumerate(entries):
         encoded[SNAPSHOT_HEADER + index * ENTRY_BYTES : SNAPSHOT_HEADER + (index + 1) * ENTRY_BYTES] = value
     return bytes(encoded)

@@ -14,6 +14,13 @@ pub const OP_READ: u8 = 2;
 pub const OP_WRITE: u8 = 3;
 pub const OP_DERIVE: u8 = 4;
 
+pub const SNAPSHOT_MAGIC: [u8; 8] = *b"SLIMEDIR";
+pub const SNAPSHOT_VERSION: u32 = 1;
+pub const SNAPSHOT_HEADER: usize = 16;
+pub const SNAPSHOT_ENTRY_BYTES: usize = 64;
+pub const SNAPSHOT_BYTES: usize = SNAPSHOT_HEADER + MAX_ENTRIES * SNAPSHOT_ENTRY_BYTES;
+pub const SNAPSHOT_OBJECT_TYPE: u32 = 1146243411;
+
 pub const OFF_REQUEST_MAGIC: usize = 0;
 pub const OFF_REQUEST_VERSION: usize = 4;
 pub const OFF_REQUEST_OP: usize = 8;
@@ -38,6 +45,19 @@ pub const OFF_REPLY_HASH1: usize = 32;
 pub const OFF_REPLY_HASH2: usize = 40;
 pub const OFF_REPLY_HASH3: usize = 48;
 pub const OFF_REPLY_RESERVED: usize = 56;
+
+pub const OFF_SNAPSHOT_MAGIC: usize = 0;
+pub const OFF_SNAPSHOT_VERSION: usize = 8;
+pub const OFF_SNAPSHOT_COUNT: usize = 12;
+
+pub const OFF_SNAPSHOT_ENTRY_KIND: usize = 0;
+pub const OFF_SNAPSHOT_ENTRY_NAME_LEN: usize = 1;
+pub const OFF_SNAPSHOT_ENTRY_RESERVED0: usize = 2;
+pub const OFF_SNAPSHOT_ENTRY_NAME: usize = 4;
+pub const OFF_SNAPSHOT_ENTRY_OBJECT_TYPE: usize = 20;
+pub const OFF_SNAPSHOT_ENTRY_PAYLOAD_LEN: usize = 24;
+pub const OFF_SNAPSHOT_ENTRY_HASH: usize = 28;
+pub const OFF_SNAPSHOT_ENTRY_RESERVED1: usize = 60;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WireFsRequest {

@@ -29,6 +29,9 @@ BOOTSTATE_CONTRACT = ROOT / "contracts" / "bootstate" / "v1"
 BOOTSTATE_TRACE_CONTRACT = ROOT / "contracts" / "bootstate" / "trace" / "v1"
 RECOVERY_CONTRACT = ROOT / "contracts" / "recovery" / "v1"
 TRANSFER_CONTRACT = ROOT / "contracts" / "transfer" / "v1"
+STORE_DISK_CONTRACT = ROOT / "contracts" / "store" / "disk" / "v1"
+HANDOFF_CONTRACT = ROOT / "contracts" / "handoff" / "v1"
+RELEASE_CONTRACT = ROOT / "contracts" / "release" / "v1"
 
 
 def run(*arguments: str) -> str:
@@ -109,6 +112,7 @@ subprocess.run(
 )
 
 run("check", str(TRANSFER_CONTRACT / "schema.zt"))
+run("check", str(TRANSFER_CONTRACT / "gen_rust.zt"))
 
 for contract in (
     GENERATION_V2_CONTRACT,
@@ -116,6 +120,9 @@ for contract in (
     BOOTSTATE_CONTRACT,
     BOOTSTATE_TRACE_CONTRACT,
     RECOVERY_CONTRACT,
+    STORE_DISK_CONTRACT,
+    HANDOFF_CONTRACT,
+    RELEASE_CONTRACT,
 ):
     run("check", str(contract / "schema.zt"))
     run("check", str(contract / "gen_rust.zt"))

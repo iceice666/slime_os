@@ -30,20 +30,18 @@ use crate::crc32::crc32;
 use crate::gpt::Partition;
 use crate::sha256;
 
-pub const FORMAT_VERSION: u32 = 1;
-pub const SUPERBLOCK_MAGIC: [u8; 8] = *b"SLIMESB\0";
-pub const RECORD_MAGIC: [u8; 8] = *b"SLIMEOR\0";
-pub const SUPERBLOCK_HEADER: usize = 64;
-pub const RECORD_HEADER: usize = 64;
-/// First LBA of the append-only record area; slots A/B occupy 0 and 1.
-pub const RECORD_AREA_START: u64 = 2;
-/// Hard bound on committed objects per store.
-pub const MAX_OBJECTS: usize = 64;
-/// Hard bound on one object's payload in bytes (64 sectors).
-pub const MAX_OBJECT_PAYLOAD: usize = 32 * 1024;
-
-const SLOT_A_LBA: u64 = 0;
-const SLOT_B_LBA: u64 = 1;
+pub use boot_contracts::store_disk::{
+    FORMAT_VERSION, MAX_OBJECT_PAYLOAD, MAX_OBJECTS, RECORD_AREA_START, RECORD_HEADER,
+    RECORD_MAGIC, SUPERBLOCK_HEADER, SUPERBLOCK_MAGIC,
+};
+use boot_contracts::store_disk::{
+    RECORD_CONTENT_HASH_OFFSET, RECORD_FORMAT_VERSION_OFFSET, RECORD_HEADER_SIZE_OFFSET,
+    RECORD_OBJ_TYPE_OFFSET, RECORD_PAYLOAD_LEN_OFFSET, SLOT_A_LBA, SLOT_B_LBA,
+    SUPERBLOCK_APPEND_LBA_OFFSET, SUPERBLOCK_CRC32_OFFSET, SUPERBLOCK_FLAGS_OFFSET,
+    SUPERBLOCK_FORMAT_VERSION_OFFSET, SUPERBLOCK_HEADER_SIZE_OFFSET,
+    SUPERBLOCK_OBJECT_COUNT_OFFSET, SUPERBLOCK_PARTITION_SECTORS_OFFSET,
+    SUPERBLOCK_RECORD_AREA_START_OFFSET, SUPERBLOCK_RESERVED_OFFSET, SUPERBLOCK_SEQUENCE_OFFSET,
+};
 
 /// The device surface the store needs. Implemented by `VirtioBlock` for the
 /// syscall service and by mock disks in tests.
@@ -140,16 +138,24 @@ fn record_sectors(payload_len: u64) -> Result<u64, StoreError> {
 pub fn encode_superblock(superblock: &Superblock, partition_sectors: u64) -> [u8; SECTOR_SIZE] {
     let mut sector = [0u8; SECTOR_SIZE];
     sector[..8].copy_from_slice(&SUPERBLOCK_MAGIC);
-    sector[8..12].copy_from_slice(&FORMAT_VERSION.to_le_bytes());
-    sector[12..16].copy_from_slice(&(SUPERBLOCK_HEADER as u32).to_le_bytes());
-    sector[16..24].copy_from_slice(&superblock.sequence.to_le_bytes());
-    sector[24..32].copy_from_slice(&superblock.append_lba.to_le_bytes());
-    sector[32..36].copy_from_slice(&superblock.object_count.to_le_bytes());
-    sector[36..40].copy_from_slice(&0u32.to_le_bytes());
-    sector[40..48].copy_from_slice(&RECORD_AREA_START.to_le_bytes());
-    sector[48..56].copy_from_slice(&partition_sectors.to_le_bytes());
-    let crc = crc32(&sector[..60]);
-    sector[60..64].copy_from_slice(&crc.to_le_bytes());
+    sector[SUPERBLOCK_FORMAT_VERSION_OFFSET..SUPERBLOCK_HEADER_SIZE_OFFSET]
+        .copy_from_slice(&FORMAT_VERSION.to_le_bytes());
+    sector[SUPERBLOCK_HEADER_SIZE_OFFSET..SUPERBLOCK_SEQUENCE_OFFSET]
+        .copy_from_slice(&(SUPERBLOCK_HEADER as u32).to_le_bytes());
+    sector[SUPERBLOCK_SEQUENCE_OFFSET..SUPERBLOCK_APPEND_LBA_OFFSET]
+        .copy_from_slice(&superblock.sequence.to_le_bytes());
+    sector[SUPERBLOCK_APPEND_LBA_OFFSET..SUPERBLOCK_OBJECT_COUNT_OFFSET]
+        .copy_from_slice(&superblock.append_lba.to_le_bytes());
+    sector[SUPERBLOCK_OBJECT_COUNT_OFFSET..SUPERBLOCK_FLAGS_OFFSET]
+        .copy_from_slice(&superblock.object_count.to_le_bytes());
+    sector[SUPERBLOCK_FLAGS_OFFSET..SUPERBLOCK_RECORD_AREA_START_OFFSET]
+        .copy_from_slice(&0u32.to_le_bytes());
+    sector[SUPERBLOCK_RECORD_AREA_START_OFFSET..SUPERBLOCK_PARTITION_SECTORS_OFFSET]
+        .copy_from_slice(&RECORD_AREA_START.to_le_bytes());
+    sector[SUPERBLOCK_PARTITION_SECTORS_OFFSET..SUPERBLOCK_RESERVED_OFFSET]
+        .copy_from_slice(&partition_sectors.to_le_bytes());
+    let crc = crc32(&sector[..SUPERBLOCK_CRC32_OFFSET]);
+    sector[SUPERBLOCK_CRC32_OFFSET..SUPERBLOCK_HEADER].copy_from_slice(&crc.to_le_bytes());
     sector
 }
 
@@ -160,25 +166,23 @@ pub fn decode_superblock(
     if sector[..8] != SUPERBLOCK_MAGIC {
         return Err(SuperblockError::BadMagic);
     }
-    if u32::from_le_bytes(sector[8..12].try_into().expect("version field")) != FORMAT_VERSION {
+    if u32_field(sector, SUPERBLOCK_FORMAT_VERSION_OFFSET) != FORMAT_VERSION {
         return Err(SuperblockError::UnsupportedVersion);
     }
-    if u32::from_le_bytes(sector[12..16].try_into().expect("header size field"))
-        != SUPERBLOCK_HEADER as u32
-    {
+    if u32_field(sector, SUPERBLOCK_HEADER_SIZE_OFFSET) != SUPERBLOCK_HEADER as u32 {
         return Err(SuperblockError::BadHeaderSize);
     }
-    let stored_crc = u32::from_le_bytes(sector[60..64].try_into().expect("crc field"));
-    if crc32(&sector[..60]) != stored_crc {
+    let stored_crc = u32_field(sector, SUPERBLOCK_CRC32_OFFSET);
+    if crc32(&sector[..SUPERBLOCK_CRC32_OFFSET]) != stored_crc {
         return Err(SuperblockError::BadCrc);
     }
     let superblock = Superblock {
-        sequence: u64::from_le_bytes(sector[16..24].try_into().expect("sequence field")),
-        append_lba: u64::from_le_bytes(sector[24..32].try_into().expect("append field")),
-        object_count: u32::from_le_bytes(sector[32..36].try_into().expect("count field")),
+        sequence: u64_field(sector, SUPERBLOCK_SEQUENCE_OFFSET),
+        append_lba: u64_field(sector, SUPERBLOCK_APPEND_LBA_OFFSET),
+        object_count: u32_field(sector, SUPERBLOCK_OBJECT_COUNT_OFFSET),
     };
-    let record_area_start = u64::from_le_bytes(sector[40..48].try_into().expect("area field"));
-    let recorded_partition = u64::from_le_bytes(sector[48..56].try_into().expect("size field"));
+    let record_area_start = u64_field(sector, SUPERBLOCK_RECORD_AREA_START_OFFSET);
+    let recorded_partition = u64_field(sector, SUPERBLOCK_PARTITION_SECTORS_OFFSET);
     if record_area_start != RECORD_AREA_START
         || recorded_partition != partition_sectors
         || superblock.append_lba < RECORD_AREA_START
@@ -194,11 +198,15 @@ pub fn decode_superblock(
 pub fn encode_record_header(obj_type: u32, payload: &[u8], hash: &[u8; 32]) -> [u8; RECORD_HEADER] {
     let mut header = [0u8; RECORD_HEADER];
     header[..8].copy_from_slice(&RECORD_MAGIC);
-    header[8..12].copy_from_slice(&FORMAT_VERSION.to_le_bytes());
-    header[12..16].copy_from_slice(&(RECORD_HEADER as u32).to_le_bytes());
-    header[16..20].copy_from_slice(&obj_type.to_le_bytes());
-    header[24..32].copy_from_slice(&(payload.len() as u64).to_le_bytes());
-    header[32..64].copy_from_slice(hash);
+    header[RECORD_FORMAT_VERSION_OFFSET..RECORD_HEADER_SIZE_OFFSET]
+        .copy_from_slice(&FORMAT_VERSION.to_le_bytes());
+    header[RECORD_HEADER_SIZE_OFFSET..RECORD_OBJ_TYPE_OFFSET]
+        .copy_from_slice(&(RECORD_HEADER as u32).to_le_bytes());
+    header[RECORD_OBJ_TYPE_OFFSET..RECORD_OBJ_TYPE_OFFSET + 4]
+        .copy_from_slice(&obj_type.to_le_bytes());
+    header[RECORD_PAYLOAD_LEN_OFFSET..RECORD_CONTENT_HASH_OFFSET]
+        .copy_from_slice(&(payload.len() as u64).to_le_bytes());
+    header[RECORD_CONTENT_HASH_OFFSET..RECORD_HEADER].copy_from_slice(hash);
     header
 }
 
@@ -206,24 +214,32 @@ pub fn decode_record_header(sector: &[u8; SECTOR_SIZE]) -> Result<Entry, StoreEr
     if sector[..8] != RECORD_MAGIC {
         return Err(StoreError::CorruptRecord);
     }
-    if u32::from_le_bytes(sector[8..12].try_into().expect("version field")) != FORMAT_VERSION {
+    if u32_field(sector, RECORD_FORMAT_VERSION_OFFSET) != FORMAT_VERSION {
         return Err(StoreError::CorruptRecord);
     }
-    if u32::from_le_bytes(sector[12..16].try_into().expect("header size field"))
-        != RECORD_HEADER as u32
-    {
+    if u32_field(sector, RECORD_HEADER_SIZE_OFFSET) != RECORD_HEADER as u32 {
         return Err(StoreError::CorruptRecord);
     }
-    let payload_len = u64::from_le_bytes(sector[24..32].try_into().expect("length field"));
+    let payload_len = u64_field(sector, RECORD_PAYLOAD_LEN_OFFSET);
     if payload_len > MAX_OBJECT_PAYLOAD as u64 {
         return Err(StoreError::CorruptRecord);
     }
     Ok(Entry {
-        hash: sector[32..64].try_into().expect("hash field"),
-        obj_type: u32::from_le_bytes(sector[16..20].try_into().expect("type field")),
+        hash: sector[RECORD_CONTENT_HASH_OFFSET..RECORD_HEADER]
+            .try_into()
+            .expect("hash field"),
+        obj_type: u32_field(sector, RECORD_OBJ_TYPE_OFFSET),
         payload_len: payload_len as u32,
         lba: 0,
     })
+}
+
+fn u32_field(sector: &[u8], offset: usize) -> u32 {
+    u32::from_le_bytes(sector[offset..offset + 4].try_into().expect("u32 field"))
+}
+
+fn u64_field(sector: &[u8], offset: usize) -> u64 {
+    u64::from_le_bytes(sector[offset..offset + 8].try_into().expect("u64 field"))
 }
 
 /// An open object store: validated metadata plus the bounded object index.

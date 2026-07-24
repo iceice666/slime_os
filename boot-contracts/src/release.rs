@@ -8,13 +8,6 @@ use ed25519_dalek::{Signature, VerifyingKey};
 pub const RELEASE_MAGIC: [u8; 8] = *b"SLIMERL\0";
 include!("generated/release.rs");
 
-pub const ROTATION_MAGIC: [u8; 8] = *b"SLIMERT\0";
-pub const ROTATION_VERSION: u32 = 1;
-pub const ROTATION_BYTES: usize = 1024;
-pub const ROTATION_HEADER_BYTES: usize = 64;
-pub const MAX_TRUST_KEYS: usize = 4;
-pub const SIGN_NAMESPACE: &[u8] = b"slime-release";
-
 pub const INITIAL_TRUST_ROOT: TrustRoot = TrustRoot {
     version: 1,
     threshold: 2,
@@ -211,18 +204,20 @@ pub fn apply_rotation(current: &TrustRoot, bytes: &[u8]) -> Result<TrustRoot, Re
     current.validate()?;
     let bytes: &[u8; ROTATION_BYTES] = bytes.try_into().map_err(|_| ReleaseError::BadSize)?;
     if bytes[..8] != ROTATION_MAGIC
-        || read_u32(bytes, 8) != ROTATION_VERSION
-        || read_u32(bytes, 12) as usize != ROTATION_HEADER_BYTES
-        || read_u64(bytes, 16) != 0
+        || read_u32(bytes, ROTATION_HEADER_FORMAT_VERSION_OFFSET) != ROTATION_VERSION
+        || read_u32(bytes, ROTATION_HEADER_HEADER_SIZE_OFFSET) as usize != ROTATION_HEADER_BYTES
+        || read_u64(bytes, ROTATION_HEADER_REQUIRED_FLAGS_OFFSET) != 0
     {
         return Err(ReleaseError::BadRotation);
     }
-    let previous_version = read_u32(bytes, 24);
-    let replacement_version = read_u32(bytes, 28);
-    let replacement_threshold = read_u32(bytes, 32);
-    let replacement_key_count = read_u32(bytes, 36);
-    let previous_signature_count = read_u32(bytes, 40) as usize;
-    let replacement_signature_count = read_u32(bytes, 44) as usize;
+    let previous_version = read_u32(bytes, ROTATION_HEADER_PREVIOUS_VERSION_OFFSET);
+    let replacement_version = read_u32(bytes, ROTATION_HEADER_REPLACEMENT_VERSION_OFFSET);
+    let replacement_threshold = read_u32(bytes, ROTATION_HEADER_REPLACEMENT_THRESHOLD_OFFSET);
+    let replacement_key_count = read_u32(bytes, ROTATION_HEADER_REPLACEMENT_KEY_COUNT_OFFSET);
+    let previous_signature_count =
+        read_u32(bytes, ROTATION_HEADER_PREVIOUS_SIGNATURE_COUNT_OFFSET) as usize;
+    let replacement_signature_count =
+        read_u32(bytes, ROTATION_HEADER_REPLACEMENT_SIGNATURE_COUNT_OFFSET) as usize;
     if previous_version != current.version
         || replacement_version
             != current
@@ -231,7 +226,7 @@ pub fn apply_rotation(current: &TrustRoot, bytes: &[u8]) -> Result<TrustRoot, Re
                 .ok_or(ReleaseError::BadRotation)?
         || previous_signature_count > MAX_RELEASE_SIGNATURES
         || replacement_signature_count > MAX_RELEASE_SIGNATURES
-        || bytes[48..ROTATION_HEADER_BYTES]
+        || bytes[ROTATION_HEADER_RESERVED_OFFSET..ROTATION_HEADER_BYTES]
             .iter()
             .any(|byte| *byte != 0)
     {

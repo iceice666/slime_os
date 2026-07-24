@@ -14,11 +14,32 @@ if SPEC is None or SPEC.loader is None:
 CHECK = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(CHECK)
 
-MAGIC = b"SLIMETR\0"
-VERSION = 1
-HEADER_BYTES = 320
-OBJECT_BYTES = 64
-STATE_BYTES = 80
+from boot_contracts import (
+    TRANSFER_HEADER_GENERATION_END,
+    TRANSFER_HEADER_GENERATION_OFFSET,
+    TRANSFER_HEADER_HASH_END,
+    TRANSFER_HEADER_HASH_OFFSET,
+    TRANSFER_HEADER_OBJECT_COUNT_OFFSET,
+    TRANSFER_HEADER_OBJECT_OFFSET_OFFSET,
+    TRANSFER_HEADER_RELEASE_SEQUENCE_OFFSET,
+    TRANSFER_HEADER_TOTAL_LEN_OFFSET,
+    TRANSFER_MAGIC,
+    TRANSFER_VERSION,
+)
+from boot_contracts import (
+    TRANSFER_HEADER_AUTHORITY_MANIFEST_END as AUTHORITY_END,
+    TRANSFER_HEADER_AUTHORITY_MANIFEST_OFFSET as AUTHORITY_OFFSET,
+    TRANSFER_HEADER_PARENT_END as PARENT_END,
+    TRANSFER_HEADER_PARENT_OFFSET as PARENT_OFFSET,
+    TRANSFER_HEADER_SOURCE_STATE_ROOT_END as STATE_ROOT_END,
+    TRANSFER_HEADER_SOURCE_STATE_ROOT_OFFSET as STATE_ROOT_OFFSET,
+    TRANSFER_HEADER_BYTES as HEADER_BYTES,
+    TRANSFER_OBJECT_BYTES as OBJECT_BYTES,
+    TRANSFER_STATE_BYTES as STATE_BYTES,
+)
+
+MAGIC = TRANSFER_MAGIC
+VERSION = TRANSFER_VERSION
 SECTOR = 512
 POLICIES = {1, 3, 4}
 
@@ -157,16 +178,22 @@ def build_bundle(receiver: bytes, source: bytes, release: bytes, state_root: byt
     header = bytearray(HEADER_BYTES)
     header[:8] = MAGIC
     struct.pack_into("<IIQ", header, 8, VERSION, HEADER_BYTES, 0)
-    header[24:56] = source_generation["identity"]
-    header[56:88] = source_generation["parent"]
-    header[88:120] = state_root
-    header[120:152] = source_generation["authority_manifest"]
-    struct.pack_into("<QQ", header, 152, release_sequence, len(source))
-    struct.pack_into("<IIII", header, 176, len(objects), len(states), 0, 0)
+    header[TRANSFER_HEADER_GENERATION_OFFSET:TRANSFER_HEADER_GENERATION_END] = source_generation[
+        "identity"
+    ]
+    header[PARENT_OFFSET:PARENT_END] = source_generation["parent"]
+    header[STATE_ROOT_OFFSET:STATE_ROOT_END] = state_root
+    header[AUTHORITY_OFFSET:AUTHORITY_END] = source_generation["authority_manifest"]
+    struct.pack_into(
+        "<QQ", header, TRANSFER_HEADER_RELEASE_SEQUENCE_OFFSET, release_sequence, len(source)
+    )
+    struct.pack_into(
+        "<IIII", header, TRANSFER_HEADER_OBJECT_COUNT_OFFSET, len(objects), len(states), 0, 0
+    )
     struct.pack_into(
         "<QQQQQQ",
         header,
-        184,
+        TRANSFER_HEADER_OBJECT_OFFSET_OFFSET,
         object_table_offset,
         state_table_offset,
         release_offset,
@@ -174,10 +201,14 @@ def build_bundle(receiver: bytes, source: bytes, release: bytes, state_root: byt
         len(metadata),
         payload_offset,
     )
-    struct.pack_into("<Q", header, 232, total_len)
+    struct.pack_into("<Q", header, TRANSFER_HEADER_TOTAL_LEN_OFFSET, total_len)
     bundle = bytearray(header + object_records + state_records + release + metadata + payloads)
     bundle.extend(b"\0" * (total_len - len(bundle)))
-    bundle[248:280] = hashlib.sha256(bundle[:248] + b"\0" * 32 + bundle[280:]).digest()
+    bundle[TRANSFER_HEADER_HASH_OFFSET:TRANSFER_HEADER_HASH_END] = hashlib.sha256(
+        bundle[:TRANSFER_HEADER_HASH_OFFSET]
+        + b"\0" * 32
+        + bundle[TRANSFER_HEADER_HASH_END:]
+    ).digest()
     return bytes(bundle)
 
 

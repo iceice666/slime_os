@@ -111,4 +111,5 @@ renderRecords :: List WireRecord -> Text
   recordsValid = recordsValid;
   renderRecords = renderRecords;
   fieldOffset = fieldOffset;
+  wireBytes = wireBytes;
 }

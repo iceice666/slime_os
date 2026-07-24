@@ -15,16 +15,21 @@ use crate::gpt::Partition;
 use crate::object_store::{BlockIo, IoError, ObjectStore, StoreError};
 use crate::sha256::Sha256;
 
-const DIRECTORY_MAGIC: [u8; 8] = *b"SLIMEBT\0";
-const DIRECTORY_VERSION: u32 = 1;
-const DIRECTORY_HEADER: usize = 96;
-const DIRECTORY_ENTRY: usize = 96;
-const DIRECTORY_OFFSET: usize = 4096;
-const RELEASES_OFFSET: usize = 8192;
-const GENERATIONS_OFFSET: usize = 16 * 1024;
-const BOOT_STORE_BYTES: usize = 32 * 1024 * 1024;
+use boot_contracts::bootstate::{
+    BOOTSTORE_CAPACITY, BOOTSTORE_DIRECTORY_OFFSET, BOOTSTORE_ENTRY_GENERATION_LEN_OFFSET,
+    BOOTSTORE_ENTRY_GENERATION_OFFSET_OFFSET, BOOTSTORE_ENTRY_LEN, BOOTSTORE_ENTRY_PADDING_OFFSET,
+    BOOTSTORE_ENTRY_RELEASE_LEN_OFFSET, BOOTSTORE_ENTRY_RELEASE_OFFSET_OFFSET,
+    BOOTSTORE_GENERATIONS_OFFSET, BOOTSTORE_HEADER_CAPACITY_OFFSET, BOOTSTORE_HEADER_CHECKSUM_END,
+    BOOTSTORE_HEADER_CHECKSUM_OFFSET, BOOTSTORE_HEADER_DIRECTORY_LEN_OFFSET,
+    BOOTSTORE_HEADER_ENTRY_COUNT_OFFSET, BOOTSTORE_HEADER_FORMAT_VERSION_OFFSET,
+    BOOTSTORE_HEADER_HEADER_SIZE_OFFSET, BOOTSTORE_HEADER_LEN,
+    BOOTSTORE_HEADER_REQUIRED_FLAGS_OFFSET, BOOTSTORE_HEADER_RESERVED_OFFSET, BOOTSTORE_MAGIC,
+    BOOTSTORE_RELEASES_OFFSET, BOOTSTORE_VERSION,
+};
+
 const MAX_GENERATIONS: usize =
-    (RELEASES_OFFSET - DIRECTORY_OFFSET - DIRECTORY_HEADER) / DIRECTORY_ENTRY;
+    (BOOTSTORE_RELEASES_OFFSET - BOOTSTORE_DIRECTORY_OFFSET - BOOTSTORE_HEADER_LEN)
+        / BOOTSTORE_ENTRY_LEN;
 pub const FLAG_INTERRUPT_AFTER_FIRST_SLOT: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,59 +128,65 @@ pub fn reconstruct(function: PciFunctionInfo, flags: u32) -> Result<RecoveryResu
 }
 
 fn read_directory(device: &mut BlockDevice) -> Result<Vec<DirectoryEntry>, RecoveryError> {
-    let boot_sectors = BOOT_STORE_BYTES / SECTOR_SIZE;
+    let boot_sectors = BOOTSTORE_CAPACITY / SECTOR_SIZE;
     if device.capacity_sectors() < boot_sectors as u64 + 3 {
         return Err(RecoveryError::BadBootStore);
     }
-    let header = read_range(device, DIRECTORY_OFFSET, DIRECTORY_HEADER)?;
-    if header[..8] != DIRECTORY_MAGIC
-        || u32_at(&header, 8)? != DIRECTORY_VERSION
-        || u32_at(&header, 12)? as usize != DIRECTORY_HEADER
-        || u64_at(&header, 16)? != 0
-        || u32_at(&header, 28)? != 0
-        || u64_at(&header, 40)? as usize != BOOT_STORE_BYTES
+    let header = read_range(device, BOOTSTORE_DIRECTORY_OFFSET, BOOTSTORE_HEADER_LEN)?;
+    if header[..8] != BOOTSTORE_MAGIC
+        || u32_at(&header, BOOTSTORE_HEADER_FORMAT_VERSION_OFFSET)? != BOOTSTORE_VERSION
+        || u32_at(&header, BOOTSTORE_HEADER_HEADER_SIZE_OFFSET)? as usize != BOOTSTORE_HEADER_LEN
+        || u64_at(&header, BOOTSTORE_HEADER_REQUIRED_FLAGS_OFFSET)? != 0
+        || u32_at(&header, BOOTSTORE_HEADER_RESERVED_OFFSET)? != 0
+        || u64_at(&header, BOOTSTORE_HEADER_CAPACITY_OFFSET)? as usize != BOOTSTORE_CAPACITY
     {
         return Err(RecoveryError::BadBootStore);
     }
-    let count = u32_at(&header, 24)? as usize;
+    let count = u32_at(&header, BOOTSTORE_HEADER_ENTRY_COUNT_OFFSET)? as usize;
     if !(1..=MAX_GENERATIONS).contains(&count)
-        || u64_at(&header, 32)? as usize != count * DIRECTORY_ENTRY
+        || u64_at(&header, BOOTSTORE_HEADER_DIRECTORY_LEN_OFFSET)? as usize
+            != count * BOOTSTORE_ENTRY_LEN
     {
         return Err(RecoveryError::BadBootStore);
     }
-    let expected: [u8; 32] = header[48..80].try_into().unwrap();
+    let expected: [u8; 32] = header
+        [BOOTSTORE_HEADER_CHECKSUM_OFFSET..BOOTSTORE_HEADER_CHECKSUM_END]
+        .try_into()
+        .unwrap();
     if boot_store_hash(device)? != expected {
         return Err(RecoveryError::BadBootStore);
     }
     let raw = read_range(
         device,
-        DIRECTORY_OFFSET + DIRECTORY_HEADER,
-        count * DIRECTORY_ENTRY,
+        BOOTSTORE_DIRECTORY_OFFSET + BOOTSTORE_HEADER_LEN,
+        count * BOOTSTORE_ENTRY_LEN,
     )?;
     let mut entries = Vec::with_capacity(count);
     let mut previous = [0u8; 32];
     for position in 0..count {
-        let record = &raw[position * DIRECTORY_ENTRY..(position + 1) * DIRECTORY_ENTRY];
+        let record = &raw[position * BOOTSTORE_ENTRY_LEN..(position + 1) * BOOTSTORE_ENTRY_LEN];
         let identity: [u8; 32] = record[..32].try_into().unwrap();
-        let generation_offset = u64_at(record, 32)? as usize;
-        let generation_len = u64_at(record, 40)? as usize;
-        let release_offset = u64_at(record, 48)? as usize;
-        let release_len = u64_at(record, 56)? as usize;
+        let generation_offset = u64_at(record, BOOTSTORE_ENTRY_GENERATION_OFFSET_OFFSET)? as usize;
+        let generation_len = u64_at(record, BOOTSTORE_ENTRY_GENERATION_LEN_OFFSET)? as usize;
+        let release_offset = u64_at(record, BOOTSTORE_ENTRY_RELEASE_OFFSET_OFFSET)? as usize;
+        let release_len = u64_at(record, BOOTSTORE_ENTRY_RELEASE_LEN_OFFSET)? as usize;
         if (position > 0 && identity <= previous)
-            || generation_offset < GENERATIONS_OFFSET
+            || generation_offset < BOOTSTORE_GENERATIONS_OFFSET
             || !generation_offset.is_multiple_of(4096)
             || generation_len == 0
             || generation_len > MAX_GENERATION_BYTES
             || generation_offset
                 .checked_add(generation_len)
-                .is_none_or(|end| end > BOOT_STORE_BYTES)
-            || release_offset < RELEASES_OFFSET
+                .is_none_or(|end| end > BOOTSTORE_CAPACITY)
+            || release_offset < BOOTSTORE_RELEASES_OFFSET
             || !release_offset.is_multiple_of(RELEASE_BYTES)
             || release_len != RELEASE_BYTES
             || release_offset
                 .checked_add(release_len)
-                .is_none_or(|end| end > GENERATIONS_OFFSET)
-            || record[64..].iter().any(|byte| *byte != 0)
+                .is_none_or(|end| end > BOOTSTORE_GENERATIONS_OFFSET)
+            || record[BOOTSTORE_ENTRY_PADDING_OFFSET..]
+                .iter()
+                .any(|byte| *byte != 0)
         {
             return Err(RecoveryError::BadBootStore);
         }
@@ -193,13 +204,13 @@ fn read_directory(device: &mut BlockDevice) -> Result<Vec<DirectoryEntry>, Recov
 fn boot_store_hash(device: &mut BlockDevice) -> Result<[u8; 32], RecoveryError> {
     let mut hasher = Sha256::new();
     let mut sector = [0u8; SECTOR_SIZE];
-    for lba in (SLOT_BYTES * 2 / SECTOR_SIZE) as u64..(BOOT_STORE_BYTES / SECTOR_SIZE) as u64 {
+    for lba in (SLOT_BYTES * 2 / SECTOR_SIZE) as u64..(BOOTSTORE_CAPACITY / SECTOR_SIZE) as u64 {
         device
             .read_sector(lba, &mut sector)
             .map_err(|_| RecoveryError::Device)?;
         let absolute = lba as usize * SECTOR_SIZE;
-        let checksum_start = DIRECTORY_OFFSET + 48;
-        let checksum_end = DIRECTORY_OFFSET + 80;
+        let checksum_start = BOOTSTORE_DIRECTORY_OFFSET + BOOTSTORE_HEADER_CHECKSUM_OFFSET;
+        let checksum_end = BOOTSTORE_DIRECTORY_OFFSET + BOOTSTORE_HEADER_CHECKSUM_END;
         if absolute <= checksum_start && checksum_end <= absolute + SECTOR_SIZE {
             sector[checksum_start - absolute..checksum_end - absolute].fill(0);
         }
@@ -319,7 +330,7 @@ fn read_range(
     len: usize,
 ) -> Result<Vec<u8>, RecoveryError> {
     let end = offset.checked_add(len).ok_or(RecoveryError::BadBootStore)?;
-    if end > BOOT_STORE_BYTES {
+    if end > BOOTSTORE_CAPACITY {
         return Err(RecoveryError::BadBootStore);
     }
     let mut output = vec![0u8; len];

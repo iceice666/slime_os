@@ -21,6 +21,7 @@ Use the Justfile targets from the repository root:
 
 ## Development rules
 
+- **Zutai is the only schema language.** Every serialized format that crosses a persistence, process, or boot boundary — on-disk formats, IPC/protocol messages, manifests, handoff structures — must be defined as a versioned Zutai schema under `contracts/` (`schema.zt`), with Rust/Python bindings generated from it (`scripts/generate-*-bindings.py`, `just *_gen`). Do not introduce hand-written field offsets, ad-hoc `#[repr(C)]` wire structs, `struct.pack` layouts, or any other schema language (JSON Schema, protobuf, etc.) as the source of truth for a format. Purely in-memory types are exempt.
 - Prefer small, direct changes over new abstractions.
 - Keep the kernel policy-free; component policy belongs in userspace.
 - Preserve the capability/component/generation model. Do not add ambient authority, global executable paths, or implicit environment assumptions.

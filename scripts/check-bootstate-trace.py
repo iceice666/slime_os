@@ -34,6 +34,7 @@ from pathlib import Path
 from boot_contracts import (
     BOOTSTATE_SLOT_BYTES,
     BOOTSTATE_TRACE_MAX_LINE,
+    BOOTSTATE_TRACE_PREFIX,
     BOOTSTATE_TRACE_VERSION,
     BOOTSTORE_CAPACITY,
     sha256,
@@ -42,7 +43,7 @@ from zutai_cli import STDLIB, binary
 
 ROOT = Path(__file__).resolve().parent.parent
 MODEL_DIR = ROOT / "contracts" / "bootstate" / "model"
-TRACE_PREFIX = "[bootstate-trace]"
+TRACE_PREFIX = BOOTSTATE_TRACE_PREFIX
 TRACE_VERSION = BOOTSTATE_TRACE_VERSION
 MAX_LINE = BOOTSTATE_TRACE_MAX_LINE
 # One durable transition per boot, plus generous headroom, keeps the trace a

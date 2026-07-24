@@ -47,7 +47,8 @@ pub fn receive(
         return Err(TransferError::BadManifest);
     }
     let total_len = u64::from_le_bytes(
-        header[232..240]
+        header[boot_contracts::transfer::HEADER_TOTAL_LEN_OFFSET
+            ..boot_contracts::transfer::HEADER_TOTAL_LEN_OFFSET + 8]
             .try_into()
             .map_err(|_| TransferError::BadManifest)?,
     ) as usize;

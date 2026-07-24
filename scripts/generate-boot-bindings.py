@@ -17,8 +17,16 @@ GENERATORS = (
     (ROOT / "contracts" / "generation" / "v2" / "schema.zt", "generation.py", "generation.rs"),
     (ROOT / "contracts" / "kernel-image" / "v1" / "schema.zt", "kernel_image.py", "kernel_image.rs"),
     (ROOT / "contracts" / "bootstate" / "v1" / "schema.zt", "bootstate.py", "bootstate.rs"),
+    (
+        ROOT / "contracts" / "bootstate" / "trace" / "v1" / "schema.zt",
+        "bootstate_trace.py",
+        "bootstate_trace.rs",
+    ),
     (ROOT / "contracts" / "release" / "v1" / "schema.zt", "release.py", "release.rs"),
     (ROOT / "contracts" / "recovery" / "v1" / "schema.zt", "recovery.py", "recovery.rs"),
+    (ROOT / "contracts" / "transfer" / "v1" / "schema.zt", "transfer.py", "transfer.rs"),
+    (ROOT / "contracts" / "store" / "disk" / "v1" / "schema.zt", "store_disk.py", "store_disk.rs"),
+    (ROOT / "contracts" / "handoff" / "v1" / "schema.zt", "handoff.py", "handoff.rs"),
 )
 INVALID_SCHEMA = "INVALID_"
 HEADER = """# @generated from boot contract schemas; do not edit.
@@ -26,10 +34,6 @@ from __future__ import annotations
 
 import hashlib
 import struct
-
-"""
-TRACE = """BOOTSTATE_TRACE_VERSION = 1
-BOOTSTATE_TRACE_MAX_LINE = 640
 
 """
 HELPERS = """def sha256(data: bytes) -> bytes:
@@ -119,7 +123,7 @@ def render() -> tuple[str, dict[Path, str]]:
                 raise SystemExit(f"boot schema reflection/layout validation failed in {rust_name}")
             rust_outputs[RUST_OUTPUT_DIR / rust_name] = format_rust(rust_fragment)
 
-        return HEADER + "".join(fragments) + TRACE + HELPERS, rust_outputs
+        return HEADER + "".join(fragments) + HELPERS, rust_outputs
 
 
 def write_atomic(path: Path, contents: str) -> None:

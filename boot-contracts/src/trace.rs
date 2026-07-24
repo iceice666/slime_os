@@ -11,14 +11,7 @@
 
 use core::fmt::{self, Write};
 
-/// Trace-line format version. Bump on any incompatible field change.
-pub const TRACE_VERSION: u32 = 1;
-/// Line prefix the checker greps for on the serial console.
-pub const TRACE_PREFIX: &str = "[bootstate-trace]";
-/// Upper bound on a rendered line, including the prefix. The worst case uses
-/// four 64-character identities plus maximal decimal integers and remains
-/// below this fixed capacity.
-pub const MAX_LINE: usize = 640;
+include!("generated/bootstate_trace.rs");
 
 /// Model action identity a durable transition corresponds to. Only the
 /// transitions the implementation actually performs durably are represented

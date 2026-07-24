@@ -1,19 +1,22 @@
 #![no_std]
 
-use boot_contracts::bootstate::{BootState, SLOT_BYTES};
+use boot_contracts::bootstate::{BootState, SLOT_BYTES, SLOT_COUNT};
 use boot_contracts::generation::{Generation, generation_identity};
 use boot_contracts::kernel_image::{ImageError, KernelImage};
 use boot_contracts::sha256::Sha256;
 
+pub use boot_contracts::bootstate::{
+    BOOTSTORE_CAPACITY, BOOTSTORE_DIRECTORY_OFFSET, BOOTSTORE_ENTRY_GENERATION_LEN_OFFSET,
+    BOOTSTORE_ENTRY_GENERATION_OFFSET_OFFSET, BOOTSTORE_ENTRY_LEN, BOOTSTORE_ENTRY_PADDING_OFFSET,
+    BOOTSTORE_ENTRY_RELEASE_LEN_OFFSET, BOOTSTORE_ENTRY_RELEASE_OFFSET_OFFSET,
+    BOOTSTORE_GENERATIONS_OFFSET, BOOTSTORE_HEADER_CAPACITY_OFFSET, BOOTSTORE_HEADER_CHECKSUM_END,
+    BOOTSTORE_HEADER_CHECKSUM_OFFSET, BOOTSTORE_HEADER_DIRECTORY_LEN_OFFSET,
+    BOOTSTORE_HEADER_ENTRY_COUNT_OFFSET, BOOTSTORE_HEADER_FORMAT_VERSION_OFFSET,
+    BOOTSTORE_HEADER_HEADER_SIZE_OFFSET, BOOTSTORE_HEADER_LEN,
+    BOOTSTORE_HEADER_REQUIRED_FLAGS_OFFSET, BOOTSTORE_HEADER_RESERVED_OFFSET, BOOTSTORE_MAGIC,
+    BOOTSTORE_RELEASES_OFFSET, BOOTSTORE_VERSION,
+};
 use boot_contracts::release::{INITIAL_TRUST_ROOT, RELEASE_BYTES, Release};
-pub const DIRECTORY_MAGIC: [u8; 8] = *b"SLIMEBT\0";
-pub const DIRECTORY_VERSION: u32 = 1;
-pub const DIRECTORY_HEADER: usize = 96;
-pub const DIRECTORY_ENTRY: usize = 96;
-pub const DIRECTORY_OFFSET: usize = 4096;
-pub const RELEASES_OFFSET: usize = 8192;
-pub const GENERATIONS_OFFSET: usize = 16 * 1024;
-pub const BOOT_STORE_BYTES: usize = 32 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BootError {
@@ -73,18 +76,22 @@ impl<'a> BootDirectory<'a> {
         if index >= self.count {
             return Err(BootError::BadDirectoryBounds);
         }
-        let offset = self.entry_offset + index * DIRECTORY_ENTRY;
+        let offset = self.entry_offset + index * BOOTSTORE_ENTRY_LEN;
         let identity: [u8; 32] = self.bytes[offset..offset + 32].try_into().unwrap();
-        let start = u64_at(self.bytes, offset + 32)? as usize;
-        let len = u64_at(self.bytes, offset + 40)? as usize;
-        let release_start = u64_at(self.bytes, offset + 48)? as usize;
-        let release_len = u64_at(self.bytes, offset + 56)? as usize;
-        if self.bytes[offset + 64..offset + DIRECTORY_ENTRY]
+        let start = u64_at(
+            self.bytes,
+            offset + BOOTSTORE_ENTRY_GENERATION_OFFSET_OFFSET,
+        )? as usize;
+        let len = u64_at(self.bytes, offset + BOOTSTORE_ENTRY_GENERATION_LEN_OFFSET)? as usize;
+        let release_start =
+            u64_at(self.bytes, offset + BOOTSTORE_ENTRY_RELEASE_OFFSET_OFFSET)? as usize;
+        let release_len = u64_at(self.bytes, offset + BOOTSTORE_ENTRY_RELEASE_LEN_OFFSET)? as usize;
+        if self.bytes[offset + BOOTSTORE_ENTRY_PADDING_OFFSET..offset + BOOTSTORE_ENTRY_LEN]
             .iter()
             .any(|byte| *byte != 0)
-            || start < GENERATIONS_OFFSET
+            || start < BOOTSTORE_GENERATIONS_OFFSET
             || start % 4096 != 0
-            || release_start < RELEASES_OFFSET
+            || release_start < BOOTSTORE_RELEASES_OFFSET
             || release_start % RELEASE_BYTES != 0
             || release_len != RELEASE_BYTES
         {
@@ -96,7 +103,7 @@ impl<'a> BootDirectory<'a> {
         let release_end = release_start
             .checked_add(release_len)
             .ok_or(BootError::BadDirectoryBounds)?;
-        if release_end > GENERATIONS_OFFSET {
+        if release_end > BOOTSTORE_GENERATIONS_OFFSET {
             return Err(BootError::BadDirectoryBounds);
         }
         let bytes = self
@@ -116,41 +123,50 @@ impl<'a> BootDirectory<'a> {
 }
 
 pub fn decode_directory(bytes: &[u8]) -> Result<BootDirectory<'_>, BootError> {
-    if bytes.len() != BOOT_STORE_BYTES {
+    if bytes.len() != BOOTSTORE_CAPACITY {
         return Err(BootError::BadDirectoryBounds);
     }
     let header = bytes
-        .get(DIRECTORY_OFFSET..DIRECTORY_OFFSET + DIRECTORY_HEADER)
+        .get(BOOTSTORE_DIRECTORY_OFFSET..BOOTSTORE_DIRECTORY_OFFSET + BOOTSTORE_HEADER_LEN)
         .ok_or(BootError::Truncated)?;
-    if header[..8] != DIRECTORY_MAGIC {
+    if header[..8] != BOOTSTORE_MAGIC {
         return Err(BootError::BadDirectoryMagic);
     }
-    if u32_at(header, 8)? != DIRECTORY_VERSION || u32_at(header, 12)? as usize != DIRECTORY_HEADER {
+    if u32_at(header, BOOTSTORE_HEADER_FORMAT_VERSION_OFFSET)? != BOOTSTORE_VERSION
+        || u32_at(header, BOOTSTORE_HEADER_HEADER_SIZE_OFFSET)? as usize != BOOTSTORE_HEADER_LEN
+    {
         return Err(BootError::UnsupportedDirectoryVersion);
     }
-    if u64_at(header, 16)? != 0 {
+    if u64_at(header, BOOTSTORE_HEADER_REQUIRED_FLAGS_OFFSET)? != 0 {
         return Err(BootError::UnknownDirectoryFlags);
     }
-    let count = u32_at(header, 24)? as usize;
-    if u32_at(header, 28)? != 0
+    let count = u32_at(header, BOOTSTORE_HEADER_ENTRY_COUNT_OFFSET)? as usize;
+    if u32_at(header, BOOTSTORE_HEADER_RESERVED_OFFSET)? != 0
         || !(1..=64).contains(&count)
-        || u64_at(header, 32)? as usize != count * DIRECTORY_ENTRY
-        || u64_at(header, 40)? as usize != bytes.len()
+        || u64_at(header, BOOTSTORE_HEADER_DIRECTORY_LEN_OFFSET)? as usize
+            != count * BOOTSTORE_ENTRY_LEN
+        || u64_at(header, BOOTSTORE_HEADER_CAPACITY_OFFSET)? as usize != bytes.len()
     {
         return Err(BootError::BadDirectoryBounds);
     }
-    let expected: [u8; 32] = header[48..80].try_into().unwrap();
+    let expected: [u8; 32] = header
+        [BOOTSTORE_HEADER_CHECKSUM_OFFSET..BOOTSTORE_HEADER_CHECKSUM_END]
+        .try_into()
+        .unwrap();
     let mut hasher = Sha256::new();
-    hasher.update(&bytes[SLOT_BYTES * 2..DIRECTORY_OFFSET + 48]);
+    hasher.update(
+        &bytes[SLOT_BYTES * SLOT_COUNT
+            ..BOOTSTORE_DIRECTORY_OFFSET + BOOTSTORE_HEADER_CHECKSUM_OFFSET],
+    );
     hasher.update(&[0u8; 32]);
-    hasher.update(&bytes[DIRECTORY_OFFSET + 80..]);
+    hasher.update(&bytes[BOOTSTORE_DIRECTORY_OFFSET + BOOTSTORE_HEADER_CHECKSUM_END..]);
     if hasher.finalize() != expected {
         return Err(BootError::BadDirectoryHash);
     }
     let directory = BootDirectory {
         bytes,
         count,
-        entry_offset: DIRECTORY_OFFSET + DIRECTORY_HEADER,
+        entry_offset: BOOTSTORE_DIRECTORY_OFFSET + BOOTSTORE_HEADER_LEN,
     };
     let mut previous = [0u8; 32];
     for index in 0..count {

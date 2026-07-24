@@ -12,6 +12,15 @@ headerBytes :: Int = 208;
 signatureBytes :: Int = 96;
 maxSignatures :: Int = 3;
 maxTargetBytes :: Int = 32;
+-- Threshold trust-root rotation record (M5.8): a 64-byte header, the
+-- replacement key set, then one signature area each for the previous and the
+-- replacement trust root.
+rotationVersion :: Int = 1;
+rotationBytes :: Int = 1024;
+rotationHeaderBytes :: Int = 64;
+maxTrustKeys :: Int = 4;
+-- SSH signature namespace shared by release and rotation signing.
+signNamespace :: Text = "slime-release";
 
 WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
 
@@ -37,8 +46,22 @@ ReleaseSignature :: type {
   signature : Int;
 };
 
+RotationHeader :: type {
+  magic : Int;
+  format_version : Int;
+  header_size : Int;
+  required_flags : Int;
+  previous_version : Int;
+  replacement_version : Int;
+  replacement_threshold : Int;
+  replacement_key_count : Int;
+  previous_signature_count : Int;
+  replacement_signature_count : Int;
+};
+
 releaseHeaderSchema ::= schema ReleaseHeader;
 releaseSignatureSchema ::= schema ReleaseSignature;
+rotationHeaderSchema ::= schema RotationHeader;
 
 headerLayout :: List WireField = {
   { name = "magic"; width = 8; signed = false; byteArray = true; };
@@ -62,11 +85,27 @@ signatureLayout :: List WireField = {
   { name = "signature"; width = 64; signed = false; byteArray = true; };
 };
 
+rotationLayout :: List WireField = {
+  { name = "magic"; width = 8; signed = false; byteArray = true; };
+  { name = "format_version"; width = 4; signed = false; byteArray = false; };
+  { name = "header_size"; width = 4; signed = false; byteArray = false; };
+  { name = "required_flags"; width = 8; signed = false; byteArray = false; };
+  { name = "previous_version"; width = 4; signed = false; byteArray = false; };
+  { name = "replacement_version"; width = 4; signed = false; byteArray = false; };
+  { name = "replacement_threshold"; width = 4; signed = false; byteArray = false; };
+  { name = "replacement_key_count"; width = 4; signed = false; byteArray = false; };
+  { name = "previous_signature_count"; width = 4; signed = false; byteArray = false; };
+  { name = "replacement_signature_count"; width = 4; signed = false; byteArray = false; };
+};
+
 format ::= {
   formatVersion = formatVersion; releaseBytes = releaseBytes; headerBytes = headerBytes; signatureBytes = signatureBytes;
   maxSignatures = maxSignatures; maxTargetBytes = maxTargetBytes;
+  rotationVersion = rotationVersion; rotationBytes = rotationBytes; rotationHeaderBytes = rotationHeaderBytes;
+  maxTrustKeys = maxTrustKeys; signNamespace = signNamespace;
   headerFields = releaseHeaderSchema.fields ?? {;}; signatureFields = releaseSignatureSchema.fields ?? {;};
-  headerLayout = headerLayout; signatureLayout = signatureLayout;
+  rotationFields = rotationHeaderSchema.fields ?? {;};
+  headerLayout = headerLayout; signatureLayout = signatureLayout; rotationLayout = rotationLayout;
 };
 
 main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }

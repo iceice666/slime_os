@@ -1,16 +1,6 @@
 use crate::sha256::Sha256;
 
-pub const MAGIC: [u8; 8] = *b"SLIMETR\0";
-pub const FORMAT_VERSION: u32 = 1;
-pub const HEADER_LEN: usize = 320;
-pub const OBJECT_LEN: usize = 64;
-pub const STATE_LEN: usize = 80;
-pub const MAX_TRANSFER_BYTES: usize = 32 * 1024 * 1024;
-pub const OBJECT_FLAG_PAYLOAD: u32 = 1;
-pub const STATE_FLAG_TRAVEL: u32 = 1;
-pub const STATE_FLAG_READ_ONLY: u32 = 2;
-pub const HASH_OFFSET: usize = 248;
-pub const HASH_END: usize = 280;
+include!("generated/transfer.rs");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransferError {
@@ -66,33 +56,59 @@ impl<'a> TransferManifest<'a> {
         if bytes[..8] != MAGIC {
             return Err(TransferError::BadMagic);
         }
-        if u32_at(bytes, 8)? != FORMAT_VERSION || u32_at(bytes, 12)? as usize != HEADER_LEN {
+        if u32_at(bytes, HEADER_FORMAT_VERSION_OFFSET)? != FORMAT_VERSION
+            || u32_at(bytes, HEADER_HEADER_SIZE_OFFSET)? as usize != HEADER_LEN
+        {
             return Err(TransferError::UnsupportedVersion);
         }
-        if u64_at(bytes, 16)? != 0 || bytes[280..HEADER_LEN].iter().any(|byte| *byte != 0) {
+        if u64_at(bytes, HEADER_REQUIRED_FLAGS_OFFSET)? != 0
+            || bytes[HEADER_FIELDS_END..HEADER_LEN]
+                .iter()
+                .any(|byte| *byte != 0)
+        {
             return Err(TransferError::UnknownFlags);
         }
-        let object_count = u32_at(bytes, 176)? as usize;
-        let state_count = u32_at(bytes, 180)? as usize;
+        let object_count = u32_at(bytes, HEADER_OBJECT_COUNT_OFFSET)? as usize;
+        let state_count = u32_at(bytes, HEADER_STATE_COUNT_OFFSET)? as usize;
         if object_count > crate::generation::MAX_OBJECTS
             || state_count > crate::generation::MAX_STATES
         {
             return Err(TransferError::BadBounds);
         }
-        let object_offset = u64_at(bytes, 184)? as usize;
-        let state_offset = u64_at(bytes, 192)? as usize;
-        let release_offset = u64_at(bytes, 200)? as usize;
-        let metadata_offset = u64_at(bytes, 208)? as usize;
-        let metadata_len = u64_at(bytes, 216)? as usize;
-        let payload_offset = u64_at(bytes, 224)? as usize;
-        let total_len = u64_at(bytes, 232)? as usize;
+        let object_offset = u64_at(bytes, HEADER_OBJECT_OFFSET_OFFSET)? as usize;
+        let state_offset = u64_at(bytes, HEADER_STATE_OFFSET_OFFSET)? as usize;
+        let release_offset = u64_at(bytes, HEADER_RELEASE_OFFSET_OFFSET)? as usize;
+        let metadata_offset = u64_at(bytes, HEADER_METADATA_OFFSET_OFFSET)? as usize;
+        let metadata_len = u64_at(bytes, HEADER_METADATA_LEN_OFFSET)? as usize;
+        let payload_offset = u64_at(bytes, HEADER_PAYLOAD_OFFSET_OFFSET)? as usize;
+        let total_len = u64_at(bytes, HEADER_TOTAL_LEN_OFFSET)? as usize;
         if total_len != bytes.len()
             || total_len > MAX_TRANSFER_BYTES
             || object_offset != HEADER_LEN
-            || state_offset != object_offset.checked_add(object_count.checked_mul(OBJECT_LEN).ok_or(TransferError::BadBounds)?).ok_or(TransferError::BadBounds)?
-            || release_offset != state_offset.checked_add(state_count.checked_mul(STATE_LEN).ok_or(TransferError::BadBounds)?).ok_or(TransferError::BadBounds)?
-            || metadata_offset != release_offset.checked_add(crate::release::RELEASE_BYTES).ok_or(TransferError::BadBounds)?
-            || payload_offset != metadata_offset.checked_add(metadata_len).ok_or(TransferError::BadBounds)?
+            || state_offset
+                != object_offset
+                    .checked_add(
+                        object_count
+                            .checked_mul(OBJECT_LEN)
+                            .ok_or(TransferError::BadBounds)?,
+                    )
+                    .ok_or(TransferError::BadBounds)?
+            || release_offset
+                != state_offset
+                    .checked_add(
+                        state_count
+                            .checked_mul(STATE_LEN)
+                            .ok_or(TransferError::BadBounds)?,
+                    )
+                    .ok_or(TransferError::BadBounds)?
+            || metadata_offset
+                != release_offset
+                    .checked_add(crate::release::RELEASE_BYTES)
+                    .ok_or(TransferError::BadBounds)?
+            || payload_offset
+                != metadata_offset
+                    .checked_add(metadata_len)
+                    .ok_or(TransferError::BadBounds)?
             || payload_offset > total_len
         {
             return Err(TransferError::BadBounds);
@@ -105,15 +121,25 @@ impl<'a> TransferManifest<'a> {
         if hasher.finalize() != expected {
             return Err(TransferError::BadHash);
         }
-        let parent: [u8; 32] = bytes[56..88].try_into().unwrap();
+        let parent: [u8; 32] = bytes[HEADER_PARENT_OFFSET..HEADER_PARENT_OFFSET + 32]
+            .try_into()
+            .unwrap();
         Ok(Self {
             bytes,
-            generation: bytes[24..56].try_into().unwrap(),
+            generation: bytes[HEADER_GENERATION_OFFSET..HEADER_GENERATION_OFFSET + 32]
+                .try_into()
+                .unwrap(),
             parent: (parent != [0; 32]).then_some(parent),
-            source_state_root: bytes[88..120].try_into().unwrap(),
-            authority_manifest: bytes[120..152].try_into().unwrap(),
-            release_sequence: u64_at(bytes, 152)?,
-            generation_len: u64_at(bytes, 160)? as usize,
+            source_state_root: bytes
+                [HEADER_SOURCE_STATE_ROOT_OFFSET..HEADER_SOURCE_STATE_ROOT_OFFSET + 32]
+                .try_into()
+                .unwrap(),
+            authority_manifest: bytes
+                [HEADER_AUTHORITY_MANIFEST_OFFSET..HEADER_AUTHORITY_MANIFEST_OFFSET + 32]
+                .try_into()
+                .unwrap(),
+            release_sequence: u64_at(bytes, HEADER_RELEASE_SEQUENCE_OFFSET)?,
+            generation_len: u64_at(bytes, HEADER_GENERATION_LEN_OFFSET)? as usize,
             object_count,
             state_count,
             object_offset,
@@ -141,15 +167,15 @@ impl<'a> TransferManifest<'a> {
             return Err(TransferError::BadEntry);
         }
         let offset = self.object_offset + index * OBJECT_LEN;
-        if self.bytes[offset + 56..offset + OBJECT_LEN]
+        if self.bytes[offset + OBJECT_PADDING_OFFSET..offset + OBJECT_LEN]
             .iter()
             .any(|byte| *byte != 0)
         {
             return Err(TransferError::BadEntry);
         }
-        let length = u64_at(self.bytes, offset + 32)? as usize;
-        let payload_offset = u64_at(self.bytes, offset + 40)? as usize;
-        let flags = u32_at(self.bytes, offset + 52)?;
+        let length = u64_at(self.bytes, offset + OBJECT_LENGTH_OFFSET)? as usize;
+        let payload_offset = u64_at(self.bytes, offset + OBJECT_PAYLOAD_OFFSET_OFFSET)? as usize;
+        let flags = u32_at(self.bytes, offset + OBJECT_FLAGS_OFFSET)?;
         if flags & !OBJECT_FLAG_PAYLOAD != 0
             || (flags == 0 && payload_offset != 0)
             || (flags == OBJECT_FLAG_PAYLOAD && payload_offset == 0)
@@ -159,7 +185,12 @@ impl<'a> TransferManifest<'a> {
         let payload = if flags == OBJECT_FLAG_PAYLOAD {
             Some(
                 self.bytes
-                    .get(payload_offset..payload_offset.checked_add(length).ok_or(TransferError::BadBounds)?)
+                    .get(
+                        payload_offset
+                            ..payload_offset
+                                .checked_add(length)
+                                .ok_or(TransferError::BadBounds)?,
+                    )
                     .ok_or(TransferError::BadBounds)?,
             )
         } else {
@@ -168,7 +199,7 @@ impl<'a> TransferManifest<'a> {
         Ok(TransferObject {
             digest: self.bytes[offset..offset + 32].try_into().unwrap(),
             length,
-            kind: u32_at(self.bytes, offset + 48)?,
+            kind: u32_at(self.bytes, offset + OBJECT_KIND_OFFSET)?,
             payload,
         })
     }
@@ -178,10 +209,10 @@ impl<'a> TransferManifest<'a> {
             return Err(TransferError::BadEntry);
         }
         let offset = self.state_offset + index * STATE_LEN;
-        if u32_at(self.bytes, offset + 76)? != 0 {
+        if u32_at(self.bytes, offset + STATE_PADDING_OFFSET)? != 0 {
             return Err(TransferError::BadEntry);
         }
-        let flags = u32_at(self.bytes, offset + 72)?;
+        let flags = u32_at(self.bytes, offset + STATE_FLAGS_OFFSET)?;
         if flags & !(STATE_FLAG_TRAVEL | STATE_FLAG_READ_ONLY) != 0
             || flags & STATE_FLAG_TRAVEL == 0
         {
@@ -189,9 +220,12 @@ impl<'a> TransferManifest<'a> {
         }
         Ok(TransferState {
             binding: self.bytes[offset..offset + 32].try_into().unwrap(),
-            state_root: self.bytes[offset + 32..offset + 64].try_into().unwrap(),
-            schema_version: u32_at(self.bytes, offset + 64)?,
-            policy: u32_at(self.bytes, offset + 68)?,
+            state_root: self.bytes
+                [offset + STATE_STATE_ROOT_OFFSET..offset + STATE_STATE_ROOT_OFFSET + 32]
+                .try_into()
+                .unwrap(),
+            schema_version: u32_at(self.bytes, offset + STATE_SCHEMA_VERSION_OFFSET)?,
+            policy: u32_at(self.bytes, offset + STATE_POLICY_OFFSET)?,
             flags,
         })
     }

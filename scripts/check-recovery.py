@@ -12,7 +12,16 @@ import sys
 import zlib
 from pathlib import Path
 
-from boot_contracts import BOOTSTATE_SLOT_BYTES, BOOTSTORE_CAPACITY
+from boot_contracts import (
+    BOOTSTATE_SLOT_BYTES,
+    BOOTSTORE_CAPACITY,
+    STORE_FORMAT_VERSION,
+    STORE_RECORD_AREA_START,
+    STORE_SUPERBLOCK,
+    STORE_SUPERBLOCK_CRC32_OFFSET,
+    STORE_SUPERBLOCK_MAGIC,
+    STORE_SUPERBLOCK_RECORD_AREA_START_OFFSET,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 SECTOR = 512
@@ -47,9 +56,30 @@ def run(arguments: list[str], *, environment: dict[str, str] | None = None) -> s
 
 def superblock(sequence: int) -> bytes:
     sector = bytearray(SECTOR)
-    struct.pack_into("<8sIIQQI", sector, 0, b"SLIMESB\0", 1, 64, sequence, 2, 0)
-    struct.pack_into("<QQ", sector, 40, 2, STATE_SECTORS)
-    struct.pack_into("<I", sector, 60, zlib.crc32(sector[:60]))
+    struct.pack_into(
+        "<8sIIQQI",
+        sector,
+        0,
+        STORE_SUPERBLOCK_MAGIC,
+        STORE_FORMAT_VERSION,
+        STORE_SUPERBLOCK.size,
+        sequence,
+        STORE_RECORD_AREA_START,
+        0,
+    )
+    struct.pack_into(
+        "<QQ",
+        sector,
+        STORE_SUPERBLOCK_RECORD_AREA_START_OFFSET,
+        STORE_RECORD_AREA_START,
+        STATE_SECTORS,
+    )
+    struct.pack_into(
+        "<I",
+        sector,
+        STORE_SUPERBLOCK_CRC32_OFFSET,
+        zlib.crc32(sector[:STORE_SUPERBLOCK_CRC32_OFFSET]),
+    )
     return bytes(sector)
 
 

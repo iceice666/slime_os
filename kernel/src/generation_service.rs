@@ -1,6 +1,16 @@
 use alloc::{vec, vec::Vec};
 
-use boot_contracts::bootstate::{BootState, SLOT_BYTES};
+use boot_contracts::bootstate::{
+    BOOTSTORE_CAPACITY, BOOTSTORE_DIRECTORY_OFFSET, BOOTSTORE_ENTRY_GENERATION_LEN_OFFSET,
+    BOOTSTORE_ENTRY_GENERATION_OFFSET_OFFSET, BOOTSTORE_ENTRY_LEN, BOOTSTORE_ENTRY_PADDING_OFFSET,
+    BOOTSTORE_ENTRY_RELEASE_LEN_OFFSET, BOOTSTORE_ENTRY_RELEASE_OFFSET_OFFSET,
+    BOOTSTORE_GENERATIONS_OFFSET, BOOTSTORE_HEADER_CAPACITY_OFFSET, BOOTSTORE_HEADER_CHECKSUM_END,
+    BOOTSTORE_HEADER_CHECKSUM_OFFSET, BOOTSTORE_HEADER_DIRECTORY_LEN_OFFSET,
+    BOOTSTORE_HEADER_ENTRY_COUNT_OFFSET, BOOTSTORE_HEADER_FORMAT_VERSION_OFFSET,
+    BOOTSTORE_HEADER_HEADER_SIZE_OFFSET, BOOTSTORE_HEADER_LEN,
+    BOOTSTORE_HEADER_REQUIRED_FLAGS_OFFSET, BOOTSTORE_HEADER_RESERVED_OFFSET, BOOTSTORE_MAGIC,
+    BOOTSTORE_RELEASES_OFFSET, BOOTSTORE_VERSION, BootState, SLOT_BYTES,
+};
 use boot_contracts::generation::Generation;
 use boot_contracts::release::{INITIAL_TRUST_ROOT, RELEASE_BYTES, Release};
 
@@ -14,15 +24,6 @@ use crate::generation_proto::{
     request_identity, valid_request,
 };
 use crate::sha256::Sha256;
-
-const DIRECTORY_MAGIC: [u8; 8] = *b"SLIMEBT\0";
-const DIRECTORY_VERSION: u32 = 1;
-const DIRECTORY_HEADER: usize = 96;
-const DIRECTORY_ENTRY: usize = 96;
-const DIRECTORY_OFFSET: usize = 4096;
-const RELEASES_OFFSET: usize = 8192;
-const GENERATIONS_OFFSET: usize = 16 * 1024;
-const BOOT_STORE_BYTES: usize = 32 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Transition {
@@ -129,8 +130,10 @@ pub fn install_and_select_for_transfer(
 ) -> Result<TransferInstallResult, TransferServiceError> {
     if release_bytes.len() != RELEASE_BYTES
         || entries.len() >= MAX_ENTRIES
-        || DIRECTORY_OFFSET + DIRECTORY_HEADER + (entries.len() + 1) * DIRECTORY_ENTRY
-            > RELEASES_OFFSET
+        || BOOTSTORE_DIRECTORY_OFFSET
+            + BOOTSTORE_HEADER_LEN
+            + (entries.len() + 1) * BOOTSTORE_ENTRY_LEN
+            > BOOTSTORE_RELEASES_OFFSET
         || state.pending.is_some()
     {
         return Err(TransferServiceError::Conflict);
@@ -161,18 +164,18 @@ pub fn install_and_select_for_transfer(
         .iter()
         .map(|entry| entry.release_offset + RELEASE_BYTES)
         .max()
-        .unwrap_or(RELEASES_OFFSET)
+        .unwrap_or(BOOTSTORE_RELEASES_OFFSET)
         .next_multiple_of(RELEASE_BYTES);
     let generation_offset = entries
         .iter()
         .map(|entry| entry.generation_offset + entry.generation_len)
         .max()
-        .unwrap_or(GENERATIONS_OFFSET)
+        .unwrap_or(BOOTSTORE_GENERATIONS_OFFSET)
         .next_multiple_of(4096);
-    if release_offset + RELEASE_BYTES > GENERATIONS_OFFSET
+    if release_offset + RELEASE_BYTES > BOOTSTORE_GENERATIONS_OFFSET
         || generation_offset
             .checked_add(generation_bytes.len())
-            .is_none_or(|end| end > BOOT_STORE_BYTES)
+            .is_none_or(|end| end > BOOTSTORE_CAPACITY)
     {
         return Err(TransferServiceError::BadClosure);
     }
@@ -388,14 +391,14 @@ fn transfer_generation_root(entries: &[TransferDirectoryEntry]) -> [u8; 32] {
 fn bootstore_checksum(device: &mut BlockDevice) -> Result<[u8; 32], TransferServiceError> {
     let mut hasher = Sha256::new();
     let mut sector = [0u8; SECTOR_SIZE];
-    for lba in (SLOT_BYTES * 2 / SECTOR_SIZE)..(BOOT_STORE_BYTES / SECTOR_SIZE) {
+    for lba in (SLOT_BYTES * 2 / SECTOR_SIZE)..(BOOTSTORE_CAPACITY / SECTOR_SIZE) {
         device
             .read_sector(lba as u64, &mut sector)
             .map_err(|_| TransferServiceError::Device)?;
-        if lba == DIRECTORY_OFFSET / SECTOR_SIZE {
-            hasher.update(&sector[..48]);
+        if lba == BOOTSTORE_DIRECTORY_OFFSET / SECTOR_SIZE {
+            hasher.update(&sector[..BOOTSTORE_HEADER_CHECKSUM_OFFSET]);
             hasher.update(&[0u8; 32]);
-            hasher.update(&sector[80..]);
+            hasher.update(&sector[BOOTSTORE_HEADER_CHECKSUM_END..]);
         } else {
             hasher.update(&sector);
         }
@@ -410,30 +413,44 @@ fn persist_directory_for_transfer(
     if entries.is_empty() || entries.len() > MAX_ENTRIES {
         return Err(TransferServiceError::BadClosure);
     }
-    let mut directory = vec![0u8; DIRECTORY_HEADER + entries.len() * DIRECTORY_ENTRY];
-    directory[..8].copy_from_slice(&DIRECTORY_MAGIC);
-    directory[8..12].copy_from_slice(&DIRECTORY_VERSION.to_le_bytes());
-    directory[12..16].copy_from_slice(&(DIRECTORY_HEADER as u32).to_le_bytes());
-    directory[24..28].copy_from_slice(&(entries.len() as u32).to_le_bytes());
-    directory[32..40].copy_from_slice(&((entries.len() * DIRECTORY_ENTRY) as u64).to_le_bytes());
-    directory[40..48].copy_from_slice(&(BOOT_STORE_BYTES as u64).to_le_bytes());
+    let mut directory = vec![0u8; BOOTSTORE_HEADER_LEN + entries.len() * BOOTSTORE_ENTRY_LEN];
+    directory[..8].copy_from_slice(&BOOTSTORE_MAGIC);
+    directory[BOOTSTORE_HEADER_FORMAT_VERSION_OFFSET..BOOTSTORE_HEADER_HEADER_SIZE_OFFSET]
+        .copy_from_slice(&BOOTSTORE_VERSION.to_le_bytes());
+    directory[BOOTSTORE_HEADER_HEADER_SIZE_OFFSET..BOOTSTORE_HEADER_REQUIRED_FLAGS_OFFSET]
+        .copy_from_slice(&(BOOTSTORE_HEADER_LEN as u32).to_le_bytes());
+    directory[BOOTSTORE_HEADER_ENTRY_COUNT_OFFSET..BOOTSTORE_HEADER_RESERVED_OFFSET]
+        .copy_from_slice(&(entries.len() as u32).to_le_bytes());
+    directory[BOOTSTORE_HEADER_DIRECTORY_LEN_OFFSET..BOOTSTORE_HEADER_CAPACITY_OFFSET]
+        .copy_from_slice(&((entries.len() * BOOTSTORE_ENTRY_LEN) as u64).to_le_bytes());
+    directory[BOOTSTORE_HEADER_CAPACITY_OFFSET..BOOTSTORE_HEADER_CHECKSUM_OFFSET]
+        .copy_from_slice(&(BOOTSTORE_CAPACITY as u64).to_le_bytes());
     for (index, entry) in entries.iter().enumerate() {
-        let offset = DIRECTORY_HEADER + index * DIRECTORY_ENTRY;
+        let offset = BOOTSTORE_HEADER_LEN + index * BOOTSTORE_ENTRY_LEN;
         directory[offset..offset + 32].copy_from_slice(&entry.identity);
-        directory[offset + 32..offset + 40]
+        directory[offset + BOOTSTORE_ENTRY_GENERATION_OFFSET_OFFSET
+            ..offset + BOOTSTORE_ENTRY_GENERATION_LEN_OFFSET]
             .copy_from_slice(&(entry.generation_offset as u64).to_le_bytes());
-        directory[offset + 40..offset + 48]
+        directory[offset + BOOTSTORE_ENTRY_GENERATION_LEN_OFFSET
+            ..offset + BOOTSTORE_ENTRY_RELEASE_OFFSET_OFFSET]
             .copy_from_slice(&(entry.generation_len as u64).to_le_bytes());
-        directory[offset + 48..offset + 56]
+        directory[offset + BOOTSTORE_ENTRY_RELEASE_OFFSET_OFFSET
+            ..offset + BOOTSTORE_ENTRY_RELEASE_LEN_OFFSET]
             .copy_from_slice(&(entry.release_offset as u64).to_le_bytes());
-        directory[offset + 56..offset + 64].copy_from_slice(&(RELEASE_BYTES as u64).to_le_bytes());
+        directory
+            [offset + BOOTSTORE_ENTRY_RELEASE_LEN_OFFSET..offset + BOOTSTORE_ENTRY_PADDING_OFFSET]
+            .copy_from_slice(&(RELEASE_BYTES as u64).to_le_bytes());
     }
-    let clear = vec![0u8; RELEASES_OFFSET - DIRECTORY_OFFSET];
-    write_bytes(device, DIRECTORY_OFFSET, &clear)?;
-    write_bytes(device, DIRECTORY_OFFSET, &directory)?;
+    let clear = vec![0u8; BOOTSTORE_RELEASES_OFFSET - BOOTSTORE_DIRECTORY_OFFSET];
+    write_bytes(device, BOOTSTORE_DIRECTORY_OFFSET, &clear)?;
+    write_bytes(device, BOOTSTORE_DIRECTORY_OFFSET, &directory)?;
     device.flush().map_err(|_| TransferServiceError::Device)?;
     let checksum = bootstore_checksum(device)?;
-    write_bytes(device, DIRECTORY_OFFSET + 48, &checksum)?;
+    write_bytes(
+        device,
+        BOOTSTORE_DIRECTORY_OFFSET + BOOTSTORE_HEADER_CHECKSUM_OFFSET,
+        &checksum,
+    )?;
     device.flush().map_err(|_| TransferServiceError::Device)?;
     Ok(())
 }
@@ -445,7 +462,7 @@ fn write_bytes(
 ) -> Result<(), TransferServiceError> {
     let end = offset
         .checked_add(bytes.len())
-        .filter(|end| *end <= BOOT_STORE_BYTES)
+        .filter(|end| *end <= BOOTSTORE_CAPACITY)
         .ok_or(TransferServiceError::BadClosure)?;
     let mut sector = [0u8; SECTOR_SIZE];
     for lba in offset / SECTOR_SIZE..end.div_ceil(SECTOR_SIZE) {
@@ -534,48 +551,51 @@ fn read_bootstate_for_root(
 }
 
 fn read_directory(device: &mut BlockDevice) -> Result<Vec<DirectoryEntry>, ServiceError> {
-    let header = read_range(device, DIRECTORY_OFFSET, DIRECTORY_HEADER)?;
-    if header[..8] != DIRECTORY_MAGIC
-        || u32_at(&header, 8)? != DIRECTORY_VERSION
-        || u32_at(&header, 12)? as usize != DIRECTORY_HEADER
-        || u64_at(&header, 16)? != 0
-        || u32_at(&header, 28)? != 0
-        || u64_at(&header, 40)? as usize != BOOT_STORE_BYTES
+    let header = read_range(device, BOOTSTORE_DIRECTORY_OFFSET, BOOTSTORE_HEADER_LEN)?;
+    if header[..8] != BOOTSTORE_MAGIC
+        || u32_at(&header, BOOTSTORE_HEADER_FORMAT_VERSION_OFFSET)? != BOOTSTORE_VERSION
+        || u32_at(&header, BOOTSTORE_HEADER_HEADER_SIZE_OFFSET)? as usize != BOOTSTORE_HEADER_LEN
+        || u64_at(&header, BOOTSTORE_HEADER_REQUIRED_FLAGS_OFFSET)? != 0
+        || u32_at(&header, BOOTSTORE_HEADER_RESERVED_OFFSET)? != 0
+        || u64_at(&header, BOOTSTORE_HEADER_CAPACITY_OFFSET)? as usize != BOOTSTORE_CAPACITY
     {
         return Err(ServiceError::BadClosure);
     }
-    let count = u32_at(&header, 24)? as usize;
+    let count = u32_at(&header, BOOTSTORE_HEADER_ENTRY_COUNT_OFFSET)? as usize;
     if !(1..=MAX_ENTRIES).contains(&count)
-        || u64_at(&header, 32)? as usize != count * DIRECTORY_ENTRY
+        || u64_at(&header, BOOTSTORE_HEADER_DIRECTORY_LEN_OFFSET)? as usize
+            != count * BOOTSTORE_ENTRY_LEN
     {
         return Err(ServiceError::BadClosure);
     }
     let raw = read_range(
         device,
-        DIRECTORY_OFFSET + DIRECTORY_HEADER,
-        count * DIRECTORY_ENTRY,
+        BOOTSTORE_DIRECTORY_OFFSET + BOOTSTORE_HEADER_LEN,
+        count * BOOTSTORE_ENTRY_LEN,
     )?;
     let mut entries = Vec::with_capacity(count);
     let mut previous = [0u8; 32];
     for index in 0..count {
-        let record = &raw[index * DIRECTORY_ENTRY..(index + 1) * DIRECTORY_ENTRY];
+        let record = &raw[index * BOOTSTORE_ENTRY_LEN..(index + 1) * BOOTSTORE_ENTRY_LEN];
         let identity: [u8; 32] = record[..32].try_into().unwrap();
-        let generation_offset = u64_at(record, 32)? as usize;
-        let generation_len = u64_at(record, 40)? as usize;
-        let release_offset = u64_at(record, 48)? as usize;
-        let release_len = u64_at(record, 56)? as usize;
+        let generation_offset = u64_at(record, BOOTSTORE_ENTRY_GENERATION_OFFSET_OFFSET)? as usize;
+        let generation_len = u64_at(record, BOOTSTORE_ENTRY_GENERATION_LEN_OFFSET)? as usize;
+        let release_offset = u64_at(record, BOOTSTORE_ENTRY_RELEASE_OFFSET_OFFSET)? as usize;
+        let release_len = u64_at(record, BOOTSTORE_ENTRY_RELEASE_LEN_OFFSET)? as usize;
         if (index > 0 && identity <= previous)
-            || generation_offset < GENERATIONS_OFFSET
+            || generation_offset < BOOTSTORE_GENERATIONS_OFFSET
             || !generation_offset.is_multiple_of(4096)
             || generation_len == 0
             || generation_offset
                 .checked_add(generation_len)
-                .is_none_or(|end| end > BOOT_STORE_BYTES)
-            || release_offset < RELEASES_OFFSET
+                .is_none_or(|end| end > BOOTSTORE_CAPACITY)
+            || release_offset < BOOTSTORE_RELEASES_OFFSET
             || !release_offset.is_multiple_of(RELEASE_BYTES)
             || release_len != RELEASE_BYTES
-            || release_offset + release_len > GENERATIONS_OFFSET
-            || record[64..].iter().any(|byte| *byte != 0)
+            || release_offset + release_len > BOOTSTORE_GENERATIONS_OFFSET
+            || record[BOOTSTORE_ENTRY_PADDING_OFFSET..]
+                .iter()
+                .any(|byte| *byte != 0)
         {
             return Err(ServiceError::BadClosure);
         }
@@ -707,7 +727,7 @@ fn read_range(
     len: usize,
 ) -> Result<Vec<u8>, ServiceError> {
     let end = offset.checked_add(len).ok_or(ServiceError::BadClosure)?;
-    if end > BOOT_STORE_BYTES {
+    if end > BOOTSTORE_CAPACITY {
         return Err(ServiceError::BadClosure);
     }
     let mut out = vec![0; len];

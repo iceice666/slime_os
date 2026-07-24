@@ -117,7 +117,7 @@ storage_store_check:
 
 # M5.6: consume pending attempts durably and return to known-good after failure.
 rollback_check:
-    cd kernel && cargo build
+    cd kernel && cargo build --release
     ./scripts/check-rollback.py /tmp/slime-os-rollback.img
 
 # Run with QEMU monitor on stdin.
@@ -203,13 +203,13 @@ bootstate_model_check:
 # M5.6c: validate durable BootState transition traces from the rollback
 # power-cut scenario against the checked M5.6a/M5.6b state machines.
 bootstate_trace_check:
-    cd kernel && cargo build
+    cd kernel && cargo build --release
     ./scripts/check-bootstate-trace.py /tmp/slime-os-bootstate-trace.img
 
 # M5.8: verify bounded threshold release authorization, replay protection,
 # dual-authorized root rotation, failed-pending rollback, and promotion.
 release_trust_check:
-    cd kernel && cargo build
+    cd kernel && cargo build --release
     ./scripts/check-release-trust.py
 
 # M5.9: boot signed removable recovery, scrub a disposable repair target,
@@ -225,7 +225,7 @@ contracts_check: bootstate_model_check
 
 # Build and validate deterministic generation and redundant boot metadata.
 generation_check:
-    cd kernel && cargo build
+    cd kernel && cargo build --release
     rm -rf /tmp/slime-os-generation-check-a /tmp/slime-os-generation-check-b
     ./scripts/build-generation.py kernel/target/x86_64-unknown-none/debug/slime_os-kernel /tmp/slime-os-generation-check-a
     ./scripts/build-generation.py kernel/target/x86_64-unknown-none/debug/slime_os-kernel /tmp/slime-os-generation-check-b

@@ -19,6 +19,14 @@ opList :: Int = 1;
 opRead :: Int = 2;
 opWrite :: Int = 3;
 opDerive :: Int = 4;
+-- Persistent directory-snapshot store object: a 16-byte header followed by
+-- maxEntries fixed 64-byte entries, stored content-addressed in the object
+-- store and referenced by the Directory capability's root hash.
+snapshotVersion :: Int = 1;
+snapshotHeaderLen :: Int = 16;
+snapshotEntryLen :: Int = 64;
+-- Store object type tag for a directory snapshot ("SIRD" LE, 0x44524953).
+snapshotObjectType :: Int = 1146243411;
 
 WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
 
@@ -51,8 +59,27 @@ FsReply :: type {
   reserved : Int;
 };
 
+SnapshotHeader :: type {
+  magic : Int;
+  version : Int;
+  count : Int;
+};
+
+SnapshotEntry :: type {
+  kind : Int;
+  name_len : Int;
+  reserved0 : Int;
+  name : Int;
+  object_type : Int;
+  payload_len : Int;
+  hash : Int;
+  reserved1 : Int;
+};
+
 requestSchema ::= schema FsRequest;
 replySchema ::= schema FsReply;
+snapshotHeaderSchema ::= schema SnapshotHeader;
+snapshotEntrySchema ::= schema SnapshotEntry;
 
 requestLayout :: List WireField = {
   { name = "magic"; width = 4; signed = false; byteArray = false; };
@@ -83,6 +110,23 @@ replyLayout :: List WireField = {
   { name = "reserved"; width = 4; signed = false; byteArray = false; };
 };
 
+snapshotHeaderLayout :: List WireField = {
+  { name = "magic"; width = 8; signed = false; byteArray = true; };
+  { name = "version"; width = 4; signed = false; byteArray = false; };
+  { name = "count"; width = 4; signed = false; byteArray = false; };
+};
+
+snapshotEntryLayout :: List WireField = {
+  { name = "kind"; width = 1; signed = false; byteArray = false; };
+  { name = "name_len"; width = 1; signed = false; byteArray = false; };
+  { name = "reserved0"; width = 2; signed = false; byteArray = true; };
+  { name = "name"; width = 16; signed = false; byteArray = true; };
+  { name = "object_type"; width = 4; signed = false; byteArray = false; };
+  { name = "payload_len"; width = 4; signed = false; byteArray = false; };
+  { name = "hash"; width = 32; signed = false; byteArray = true; };
+  { name = "reserved1"; width = 4; signed = false; byteArray = true; };
+};
+
 format ::= {
   formatVersion = formatVersion;
   requestLen = requestLen;
@@ -95,10 +139,18 @@ format ::= {
   opRead = opRead;
   opWrite = opWrite;
   opDerive = opDerive;
+  snapshotVersion = snapshotVersion;
+  snapshotHeaderLen = snapshotHeaderLen;
+  snapshotEntryLen = snapshotEntryLen;
+  snapshotObjectType = snapshotObjectType;
   requestFields = requestSchema.fields ?? {;};
   replyFields = replySchema.fields ?? {;};
+  snapshotHeaderFields = snapshotHeaderSchema.fields ?? {;};
+  snapshotEntryFields = snapshotEntrySchema.fields ?? {;};
   requestLayout = requestLayout;
   replyLayout = replyLayout;
+  snapshotHeaderLayout = snapshotHeaderLayout;
+  snapshotEntryLayout = snapshotEntryLayout;
 };
 
 main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }
@@ -106,7 +158,9 @@ main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * en
     root := env.get caps.env "SLIME_FS_BINDINGS_ROOT" ?? ".";
     bindings := gen.render format;
     path := t.join "" { root; "/components/proto/src/fs.rs"; };
-    fs.writeAll caps.write path bindings.rust
+    pythonPath := t.join "" { root; "/fs_contracts.py"; };
+    fs.writeAll caps.write path bindings.rust;
+    fs.writeAll caps.write pythonPath bindings.python
   ];
 
 main

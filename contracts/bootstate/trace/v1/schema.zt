@@ -6,8 +6,14 @@
 -- deliberately bounded and fixed-field so trace instrumentation cannot become
 -- a new unbounded boot dependency.
 
+env ::= import stdlib.env;
+fs ::= import stdlib.fs;
+gen ::= import "gen_rust.zt";
+t ::= import stdlib.text;
+
 formatVersion :: Int = 1;
 maxLineBytes :: Int = 640;
+tracePrefix :: Text = "[bootstate-trace]";
 -- Action identity vocabulary. Each token names exactly one model action.
 actionConsumeAttempt :: Int = 0;
 actionPromotion :: Int = 1;
@@ -45,4 +51,21 @@ TraceRecord :: type {
 
 traceRecordSchema ::= schema TraceRecord;
 
-{ traceRecordSchema = traceRecordSchema; }
+format ::= {
+  formatVersion = formatVersion;
+  maxLineBytes = maxLineBytes;
+  tracePrefix = tracePrefix;
+  fields = traceRecordSchema.fields ?? {;};
+};
+
+main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }
+  = caps => [
+    root := env.get caps.env "SLIME_BOOT_BINDINGS_ROOT" ?? ".";
+    bindings := gen.render format;
+    pythonPath := t.join "" { root; "/bootstate_trace.py"; };
+    rustPath := t.join "" { root; "/bootstate_trace.rs"; };
+    fs.writeAll caps.write pythonPath bindings.python;
+    fs.writeAll caps.write rustPath bindings.rust
+  ];
+
+main

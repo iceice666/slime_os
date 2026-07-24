@@ -1,0 +1,144 @@
+-- Slime OS stage-0 to kernel handoff ABI, version 1.
+--
+-- Stage-0 builds one `KernelHandoffV1` in memory and passes its address to
+-- the kernel entry point. The struct is `#[repr(C)]` on x86-64 (pointers are
+-- 8 bytes); this contract pins the exact field offsets and sizes, and
+-- `boot-contracts/src/handoff.rs` statically asserts the Rust layout against
+-- the generated constants so the two can never drift apart.
+
+env ::= import stdlib.env;
+fs ::= import stdlib.fs;
+gen ::= import "gen_rust.zt";
+t ::= import stdlib.text;
+
+handoffVersion :: Int = 1;
+handoffBytes :: Int = 304;
+memoryEntryBytes :: Int = 24;
+framebufferBytes :: Int = 48;
+memoryUsable :: Int = 0;
+memoryReserved :: Int = 1;
+maxMemoryEntries :: Int = 512;
+
+WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
+
+HandoffMemoryEntry :: type {
+  base : Int;
+  length : Int;
+  kind : Int;
+};
+
+HandoffFramebuffer :: type {
+  address : Int;
+  width : Int;
+  height : Int;
+  pitch : Int;
+  bpp : Int;
+  memory_model : Int;
+  red_mask_size : Int;
+  red_mask_shift : Int;
+  green_mask_size : Int;
+  green_mask_shift : Int;
+  blue_mask_size : Int;
+  blue_mask_shift : Int;
+  reserved : Int;
+};
+
+KernelHandoff :: type {
+  magic : Int;
+  version : Int;
+  size : Int;
+  direct_map_offset : Int;
+  memory_map_ptr : Int;
+  memory_map_len : Int;
+  reserved0 : Int;
+  framebuffer : Int;
+  rsdp_address : Int;
+  generation_ptr : Int;
+  generation_len : Int;
+  generation_identity : Int;
+  bootstate_sequence : Int;
+  known_good_identity : Int;
+  pending_identity : Int;
+  remaining_attempts : Int;
+  bootstate_slot : Int;
+  running_pending : Int;
+  reserved1 : Int;
+  generation_root : Int;
+  state_root : Int;
+  accepted_release_sequence : Int;
+  running_release_sequence : Int;
+};
+
+memoryEntrySchema ::= schema HandoffMemoryEntry;
+framebufferSchema ::= schema HandoffFramebuffer;
+handoffSchema ::= schema KernelHandoff;
+
+memoryEntryLayout :: List WireField = {
+  { name = "base"; width = 8; signed = false; byteArray = false; };
+  { name = "length"; width = 8; signed = false; byteArray = false; };
+  { name = "kind"; width = 8; signed = false; byteArray = false; };
+};
+
+framebufferLayout :: List WireField = {
+  { name = "address"; width = 8; signed = false; byteArray = false; };
+  { name = "width"; width = 8; signed = false; byteArray = false; };
+  { name = "height"; width = 8; signed = false; byteArray = false; };
+  { name = "pitch"; width = 8; signed = false; byteArray = false; };
+  { name = "bpp"; width = 2; signed = false; byteArray = false; };
+  { name = "memory_model"; width = 1; signed = false; byteArray = false; };
+  { name = "red_mask_size"; width = 1; signed = false; byteArray = false; };
+  { name = "red_mask_shift"; width = 1; signed = false; byteArray = false; };
+  { name = "green_mask_size"; width = 1; signed = false; byteArray = false; };
+  { name = "green_mask_shift"; width = 1; signed = false; byteArray = false; };
+  { name = "blue_mask_size"; width = 1; signed = false; byteArray = false; };
+  { name = "blue_mask_shift"; width = 1; signed = false; byteArray = false; };
+  { name = "reserved"; width = 5; signed = false; byteArray = true; };
+};
+
+handoffLayout :: List WireField = {
+  { name = "magic"; width = 8; signed = false; byteArray = false; };
+  { name = "version"; width = 4; signed = false; byteArray = false; };
+  { name = "size"; width = 4; signed = false; byteArray = false; };
+  { name = "direct_map_offset"; width = 8; signed = false; byteArray = false; };
+  { name = "memory_map_ptr"; width = 8; signed = false; byteArray = false; };
+  { name = "memory_map_len"; width = 4; signed = false; byteArray = false; };
+  { name = "reserved0"; width = 4; signed = false; byteArray = false; };
+  { name = "framebuffer"; width = 48; signed = false; byteArray = true; };
+  { name = "rsdp_address"; width = 8; signed = false; byteArray = false; };
+  { name = "generation_ptr"; width = 8; signed = false; byteArray = false; };
+  { name = "generation_len"; width = 8; signed = false; byteArray = false; };
+  { name = "generation_identity"; width = 32; signed = false; byteArray = true; };
+  { name = "bootstate_sequence"; width = 8; signed = false; byteArray = false; };
+  { name = "known_good_identity"; width = 32; signed = false; byteArray = true; };
+  { name = "pending_identity"; width = 32; signed = false; byteArray = true; };
+  { name = "remaining_attempts"; width = 4; signed = false; byteArray = false; };
+  { name = "bootstate_slot"; width = 1; signed = false; byteArray = false; };
+  { name = "running_pending"; width = 1; signed = false; byteArray = false; };
+  { name = "reserved1"; width = 2; signed = false; byteArray = true; };
+  { name = "generation_root"; width = 32; signed = false; byteArray = true; };
+  { name = "state_root"; width = 32; signed = false; byteArray = true; };
+  { name = "accepted_release_sequence"; width = 8; signed = false; byteArray = false; };
+  { name = "running_release_sequence"; width = 8; signed = false; byteArray = false; };
+};
+
+format ::= {
+  handoffVersion = handoffVersion; handoffBytes = handoffBytes;
+  memoryEntryBytes = memoryEntryBytes; framebufferBytes = framebufferBytes;
+  memoryUsable = memoryUsable; memoryReserved = memoryReserved;
+  maxMemoryEntries = maxMemoryEntries;
+  handoffFields = handoffSchema.fields ?? {;}; memoryEntryFields = memoryEntrySchema.fields ?? {;};
+  framebufferFields = framebufferSchema.fields ?? {;};
+  handoffLayout = handoffLayout; memoryEntryLayout = memoryEntryLayout; framebufferLayout = framebufferLayout;
+};
+
+main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }
+  = caps => [
+    root := env.get caps.env "SLIME_BOOT_BINDINGS_ROOT" ?? ".";
+    bindings := gen.render format;
+    pythonPath := t.join "" { root; "/handoff.py"; };
+    rustPath := t.join "" { root; "/handoff.rs"; };
+    fs.writeAll caps.write pythonPath bindings.python;
+    fs.writeAll caps.write rustPath bindings.rust
+  ];
+
+main
