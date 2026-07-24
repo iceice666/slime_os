@@ -137,7 +137,7 @@ fn call(request: WireFsRequest, directory_slot: u32) -> (WireFsReply, Option<u32
     let mut caps = [0u64; MAX_CAPS_PER_MSG];
     loop {
         match slime_rt::recv(RPC_SLOT, &mut reply, &mut caps) {
-            ERR_WOULDBLOCK => slime_rt::yield_now(),
+            ERR_WOULDBLOCK => slime_rt::wait(&[slime_rt::WaitSource::Endpoint(RPC_SLOT)]),
             result if result < 0 => fail(),
             n => {
                 if caps[0] == 0 || caps[2..].iter().any(|slot| *slot != 0) {

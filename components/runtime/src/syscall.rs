@@ -26,6 +26,7 @@ const SYS_INPUT_READ: u64 = 17;
 
 const SYS_GENERATION_TRANSACT: u64 = 18;
 pub const SYS_GENERATION_RECEIVE: u64 = 19;
+const SYS_WAIT: u64 = 20;
 
 pub const ERR_SUCCESS: i64 = 0;
 pub const ERR_BAD_CAP: i64 = -1;
@@ -128,6 +129,56 @@ unsafe fn raw_syscall_pair(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64)
 pub fn yield_now() {
     unsafe {
         raw_syscall(SYS_YIELD, 0, 0, 0, 0, 0);
+    }
+}
+
+/// Maximum number of sources a single [`wait`] call may register.
+pub const MAX_WAIT_SOURCES: usize = 8;
+
+const WAIT_KIND_ENDPOINT: u64 = 0;
+const WAIT_KIND_INPUT: u64 = 1;
+const WAIT_KIND_SUPERVISION: u64 = 2;
+
+/// One source to block on in [`wait`]. Each maps to a non-blocking poll ABI:
+/// after `wait` returns, re-poll the same source(s) to consume the event.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WaitSource {
+    /// Endpoint capability slot: woken by a peer `send` or peer death.
+    Endpoint(u32),
+    /// Keyboard input: woken by a key event or scripted byte.
+    Input,
+    /// Supervision capability slot: woken when the supervised child exits.
+    Supervision(u32),
+}
+
+impl WaitSource {
+    fn descriptor(self) -> u64 {
+        match self {
+            WaitSource::Endpoint(slot) => WAIT_KIND_ENDPOINT << 32 | slot as u64,
+            WaitSource::Input => WAIT_KIND_INPUT << 32,
+            WaitSource::Supervision(slot) => WAIT_KIND_SUPERVISION << 32 | slot as u64,
+        }
+    }
+}
+
+/// Blocks the caller until one of `sources` (at most [`MAX_WAIT_SOURCES`])
+/// becomes ready, consuming no CPU while parked. This is the blocking
+/// counterpart to a busy `yield_now` retry loop: sweep every source with its
+/// non-blocking call first, and only call `wait` once all returned
+/// `ERR_WOULDBLOCK`/`Ok(None)`. Spurious wakeups are possible, so the caller
+/// must re-poll after `wait` returns rather than assume readiness.
+pub fn wait(sources: &[WaitSource]) {
+    debug_assert!(
+        sources.len() <= MAX_WAIT_SOURCES,
+        "wait() drops sources beyond MAX_WAIT_SOURCES"
+    );
+    let mut descriptors = [0u64; MAX_WAIT_SOURCES];
+    let count = sources.len().min(MAX_WAIT_SOURCES);
+    for (slot, source) in descriptors.iter_mut().zip(sources.iter()) {
+        *slot = source.descriptor();
+    }
+    unsafe {
+        raw_syscall(SYS_WAIT, descriptors.as_ptr() as u64, count as u64, 0, 0, 0);
     }
 }
 

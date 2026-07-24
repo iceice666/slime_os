@@ -55,19 +55,6 @@ pub fn start() -> ! {
         crate::input::install_script(b"\n\x1b");
         serial_println!("[powerbox] scripted check active");
     }
-    // The interactive dango REPL busy-polls its input capability and only exits
-    // on Escape. A headless automated boot has no human to press it, so without
-    // a terminating keystroke dango stays perpetually Ready, the scheduler never
-    // goes idle, and `on_idle` (the only path to `exit_qemu`) never fires. Feed a
-    // single Escape by default so dango closes and the termination cascade runs.
-    // Skip it for an explicitly interactive session and for checks that install
-    // their own scripted input above.
-    let scripted_dango = option_env!("SLIME_DANGO_CHECK") == Some("1") && generation.number == 7;
-    let scripted_powerbox =
-        option_env!("SLIME_POWERBOX_CHECK") == Some("1") && generation.number == 9;
-    if option_env!("SLIME_INTERACTIVE") != Some("1") && !scripted_dango && !scripted_powerbox {
-        crate::input::install_script(b"\x1b");
-    }
     serial_println!(
         "[generation] selected {:02x?} parent={:02x?} target={}",
         generation.identity,
@@ -702,6 +689,13 @@ fn storage_probe_required() -> bool {
 }
 
 extern "C" fn on_idle() {
+    // An interactive session must keep running so a human keystroke can wake
+    // the blocked REPL; it never auto-exits. `idle_dispatch` parks the CPU
+    // (`sti; hlt`) until a wake source re-readies a task, then runs it.
+    if option_env!("SLIME_INTERACTIVE") == Some("1") {
+        serial_println!("[generation] interactive session idle; awaiting input");
+        task::idle_dispatch();
+    }
     let directory_run = GENERATION_NUMBER.load(Ordering::Relaxed) == 6;
     let checks = [
         ("init", INIT_ID.load(Ordering::Relaxed)),
@@ -758,6 +752,28 @@ extern "C" fn on_idle() {
     let mut healthy = true;
     for (name, id) in checks {
         if id == 0 {
+            continue;
+        }
+        // The ready queue has drained to reach `on_idle`, so any component that
+        // has not terminated is cleanly parked in `SYS_WAIT` (Blocked). A
+        // long-lived service parked this way is healthy idle; a one-shot probe
+        // that never reached `Exit(0)` is a genuine stall and stays unhealthy.
+        if task::is_live(id) {
+            let persistent = matches!(
+                name,
+                "console"
+                    | "dango"
+                    | "spawn-service"
+                    | "filesystem-service"
+                    | "generation-manager"
+                    | "powerbox-chooser"
+            );
+            serial_println!(
+                "[generation] {} idle-blocked (persistent={})",
+                name,
+                persistent
+            );
+            healthy &= persistent;
             continue;
         }
         let reason = task::termination_summary(id);

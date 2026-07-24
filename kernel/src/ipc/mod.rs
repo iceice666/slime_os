@@ -3,6 +3,8 @@ use alloc::sync::{Arc, Weak};
 use core::sync::atomic::AtomicBool;
 use spin::Mutex;
 
+use crate::task::{self, TaskId};
+
 use crate::capability::{Capability, CapabilityTable};
 
 pub const MAX_MSG: usize = 64;
@@ -23,9 +25,26 @@ pub struct Message {
     pub caps: [Option<Capability>; MAX_CAPS_PER_MSG],
 }
 
+/// A directed message queue plus the id of the single task (if any) parked in
+/// `SYS_WAIT` on receiving from it. SPSC 1:1 registration is sufficient for the
+/// current channel model; the waiter is consumed on the first wake.
+pub struct Channel {
+    pub queue: VecDeque<Message>,
+    pub recv_waiter: Option<TaskId>,
+}
+
+impl Channel {
+    fn new() -> Self {
+        Self {
+            queue: VecDeque::new(),
+            recv_waiter: None,
+        }
+    }
+}
+
 pub struct EndpointInner {
-    pub queue: Arc<Mutex<VecDeque<Message>>>,
-    pub peer_queue: Weak<Mutex<VecDeque<Message>>>,
+    pub channel: Arc<Mutex<Channel>>,
+    pub peer_channel: Weak<Mutex<Channel>>,
     pub owner_alive: Arc<AtomicBool>,
     pub peer_owner_alive: Weak<AtomicBool>,
 }
@@ -38,6 +57,31 @@ pub struct Endpoint {
 impl Endpoint {
     pub fn inner(&self) -> &EndpointInner {
         &self.inner
+    }
+
+    /// Reports whether this endpoint's own receive queue holds a message.
+    pub fn has_pending(&self) -> bool {
+        !self.inner.channel.lock().queue.is_empty()
+    }
+
+    /// Reports whether the peer owner has been dropped, so a `recv` here would
+    /// return `ERR_PEER_DEAD` rather than block forever.
+    pub fn peer_dead(&self) -> bool {
+        self.inner.peer_owner_alive.upgrade().is_none()
+    }
+
+    /// Records `id` as the task waiting to receive on this endpoint. A later
+    /// peer `send` (or peer death) wakes it. Single-slot (SPSC): each channel
+    /// has exactly one receiving owner, so a second distinct waiter would drop
+    /// a wake. Assert the invariant in debug builds to catch a future fan-in
+    /// channel rather than hang silently.
+    pub fn register_recv_waiter(&self, id: TaskId) {
+        let mut channel = self.inner.channel.lock();
+        debug_assert!(
+            channel.recv_waiter.is_none() || channel.recv_waiter == Some(id),
+            "second concurrent recv waiter would drop a wake"
+        );
+        channel.recv_waiter = Some(id);
     }
 }
 
@@ -55,6 +99,16 @@ impl Drop for Endpoint {
         if Arc::strong_count(&self.owner_alive) == 2 {
             self.owner_alive
                 .store(false, core::sync::atomic::Ordering::Release);
+            // Wake a peer parked in `recv`/`SYS_WAIT`: it will now observe
+            // `ERR_PEER_DEAD` instead of blocking forever. Take the waiter
+            // under the peer channel lock, release it, then enqueue the wake
+            // (lock order: Channel -> PENDING_WAKES).
+            if let Some(peer_channel) = self.inner.peer_channel.upgrade() {
+                let waiter = peer_channel.lock().recv_waiter.take();
+                if let Some(waiter) = waiter {
+                    task::wake(waiter);
+                }
+            }
         }
     }
 }
@@ -62,13 +116,13 @@ impl Drop for Endpoint {
 pub fn channel() -> (Endpoint, Endpoint) {
     let a_alive = Arc::new(AtomicBool::new(true));
     let b_alive = Arc::new(AtomicBool::new(true));
-    let a_queue = Arc::new(Mutex::new(VecDeque::new()));
-    let b_queue = Arc::new(Mutex::new(VecDeque::new()));
+    let a_channel = Arc::new(Mutex::new(Channel::new()));
+    let b_channel = Arc::new(Mutex::new(Channel::new()));
 
     let a = Endpoint {
         inner: Arc::new(EndpointInner {
-            queue: a_queue.clone(),
-            peer_queue: Arc::downgrade(&b_queue),
+            channel: a_channel.clone(),
+            peer_channel: Arc::downgrade(&b_channel),
             owner_alive: a_alive.clone(),
             peer_owner_alive: Arc::downgrade(&b_alive),
         }),
@@ -76,8 +130,8 @@ pub fn channel() -> (Endpoint, Endpoint) {
     };
     let b = Endpoint {
         inner: Arc::new(EndpointInner {
-            queue: b_queue,
-            peer_queue: Arc::downgrade(&a_queue),
+            channel: b_channel,
+            peer_channel: Arc::downgrade(&a_channel),
             owner_alive: b_alive.clone(),
             peer_owner_alive: Arc::downgrade(&a_alive),
         }),
@@ -91,26 +145,34 @@ pub fn send(ep: &Endpoint, bytes: &[u8], caps: &mut [Option<Capability>; MAX_CAP
     if ep.peer_owner_alive.upgrade().is_none() {
         return ERR_PEER_DEAD;
     }
-    let Some(peer_queue) = ep.peer_queue.upgrade() else {
+    let Some(peer_channel) = ep.peer_channel.upgrade() else {
         return ERR_PEER_DEAD;
     };
 
-    let mut queue = peer_queue.lock();
-    if queue.len() >= CHANNEL_QUEUE {
-        return ERR_WOULDBLOCK;
-    }
+    let waiter = {
+        let mut channel = peer_channel.lock();
+        if channel.queue.len() >= CHANNEL_QUEUE {
+            return ERR_WOULDBLOCK;
+        }
 
-    let len = bytes.len().min(MAX_MSG);
-    let mut msg = Message {
-        bytes: [0; MAX_MSG],
-        len,
-        caps: core::array::from_fn(|_| None),
+        let len = bytes.len().min(MAX_MSG);
+        let mut msg = Message {
+            bytes: [0; MAX_MSG],
+            len,
+            caps: core::array::from_fn(|_| None),
+        };
+        msg.bytes[..len].copy_from_slice(&bytes[..len]);
+        for (dst, src) in msg.caps.iter_mut().zip(caps.iter_mut()) {
+            *dst = src.take();
+        }
+        channel.queue.push_back(msg);
+        // Take the peer's receive waiter while holding the channel lock, then
+        // release it before waking (lock order: Channel -> PENDING_WAKES).
+        channel.recv_waiter.take()
     };
-    msg.bytes[..len].copy_from_slice(&bytes[..len]);
-    for (dst, src) in msg.caps.iter_mut().zip(caps.iter_mut()) {
-        *dst = src.take();
+    if let Some(waiter) = waiter {
+        task::wake(waiter);
     }
-    queue.push_back(msg);
     ERR_SUCCESS
 }
 
@@ -121,14 +183,17 @@ pub fn recv(
     caps: &mut CapabilityTable,
 ) -> i64 {
     let ep = ep.inner();
-    let mut queue = ep.queue.lock();
-    if let Some(msg) = queue.front() {
+    let mut channel = ep.channel.lock();
+    if let Some(msg) = channel.queue.front() {
         let cap_count = msg.caps.iter().filter(|cap| cap.is_some()).count();
         if caps.available_slots() < cap_count {
             return ERR_OUT_OF_MEMORY;
         }
 
-        let mut msg = queue.pop_front().expect("front message disappeared");
+        let mut msg = channel
+            .queue
+            .pop_front()
+            .expect("front message disappeared");
         let len = msg.len.min(buf.len());
         buf[..len].copy_from_slice(&msg.bytes[..len]);
         for (i, cap) in msg.caps.iter_mut().enumerate() {
@@ -142,7 +207,7 @@ pub fn recv(
         }
         return len as i64;
     }
-    drop(queue);
+    drop(channel);
 
     if ep.peer_owner_alive.upgrade().is_none() {
         ERR_PEER_DEAD

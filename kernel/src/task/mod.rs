@@ -50,9 +50,17 @@ pub enum TermReason {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockReason {
+    Endpoint,
+    Input,
+    Supervision,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskState {
     Ready,
     Running,
+    Blocked(BlockReason),
     Terminated(TermReason),
 }
 
@@ -68,6 +76,9 @@ pub struct Task {
     pub spawner: Option<TaskId>,
     pub spawn_budget: u16,
     pub live_children: u16,
+    /// Task to re-ready when this task terminates, set by `SYS_WAIT` on a
+    /// supervising parent. Consumed on the first wake.
+    pub wake_on_terminate: Option<TaskId>,
 }
 
 impl Task {
@@ -123,6 +134,57 @@ pub(crate) fn synchronize_kernel_mappings(source: crate::memory::PhysAddr) {
 }
 
 static SCHEDULER: LazyLock<Mutex<Scheduler>> = LazyLock::new(|| Mutex::new(Scheduler::new()));
+
+/// Deferred wake queue. Wake sources (IPC send, keyboard IRQ, endpoint drop,
+/// task termination) push a `TaskId` here instead of touching the scheduler
+/// directly, because they may run while `SCHEDULER` is already held or from an
+/// interrupt handler. `schedule_next` drains this queue under `SCHEDULER`
+/// before dispatching, moving each still-`Blocked` task back to `Ready`.
+///
+/// Lock order is strict: `SCHEDULER` -> `Channel`/`QUEUE` -> `PENDING_WAKES`,
+/// never the reverse. Pushing here never takes `SCHEDULER`.
+static PENDING_WAKES: Mutex<Vec<TaskId>> = Mutex::new(Vec::new());
+
+/// Records a pending wake for `id`. Safe to call from an interrupt handler,
+/// from `Drop`, or while `SCHEDULER` is held: it disables interrupts and only
+/// touches the leaf `PENDING_WAKES` lock. The actual `Blocked -> Ready`
+/// transition happens later, in `schedule_next`.
+pub fn wake(id: TaskId) {
+    without_interrupts(|| {
+        let mut pending = PENDING_WAKES.lock();
+        if !pending.contains(&id) {
+            pending.push(id);
+        }
+    });
+}
+
+/// Applies every deferred wake: a `Blocked` task becomes `Ready` and is
+/// re-queued. Terminated or already-runnable tasks are ignored. Must be called
+/// with `SCHEDULER` held.
+fn drain_pending_wakes(sched: &mut Scheduler) {
+    let drained: Vec<TaskId> = {
+        let mut pending = PENDING_WAKES.lock();
+        core::mem::take(&mut *pending)
+    };
+    for id in drained {
+        if let Some(idx) = sched.index_of(id)
+            && matches!(sched.tasks[idx].state, TaskState::Blocked(_))
+        {
+            sched.tasks[idx].state = TaskState::Ready;
+            sched.ready.push_back(id);
+        }
+    }
+}
+
+/// Reports whether a task is present and not terminated. Used by `on_idle` to
+/// distinguish a cleanly parked (`Blocked`) persistent service from one that
+/// terminated.
+pub fn is_live(id: TaskId) -> bool {
+    let sched = SCHEDULER.lock();
+    sched
+        .index_of(id)
+        .is_some_and(|idx| !matches!(sched.tasks[idx].state, TaskState::Terminated(_)))
+}
 
 global_asm!(
     r#"
@@ -451,6 +513,7 @@ pub fn spawn_with_caps_for(
         spawner,
         spawn_budget: spawn_budget.min(MAX_SPAWN_BUDGET),
         live_children: 0,
+        wake_on_terminate: None,
     };
     sched.tasks.push(task);
     sched.ready.push_back(id);
@@ -498,6 +561,145 @@ pub fn supervision_status(slot: u32) -> Result<Option<TermReason>, crate::capabi
     })
 }
 
+/// A single source a `SYS_WAIT` caller wants to be woken on.
+#[derive(Debug, Clone, Copy)]
+pub enum WaitSource {
+    /// Endpoint capability slot: ready when its receive queue is non-empty or
+    /// the peer is gone.
+    Endpoint(u32),
+    /// Keyboard input: ready when a decoded event or scripted byte is pending.
+    Input,
+    /// Supervision capability slot: ready when the supervised child terminated.
+    Supervision(u32),
+}
+
+/// Returns the `BlockReason` for the first source, used to label the parked
+/// task. Wake logic never reads this discriminant; it only checks `Blocked`.
+fn block_reason(sources: &[WaitSource]) -> BlockReason {
+    match sources.first() {
+        Some(WaitSource::Input) => BlockReason::Input,
+        Some(WaitSource::Supervision(_)) => BlockReason::Supervision,
+        _ => BlockReason::Endpoint,
+    }
+}
+
+/// Reports whether a single source is already satisfied for the task at
+/// `task_idx`. Endpoint sources clone their capability and probe the channel;
+/// supervision sources scan the terminated log; input is a global check.
+/// An invalid or missing source is reported ready (lenient): userspace
+/// re-polls after the wake and discovers the error through the poll ABI.
+fn source_ready(sched: &Scheduler, task_idx: usize, source: WaitSource) -> bool {
+    match source {
+        WaitSource::Input => crate::input::input_pending(),
+        WaitSource::Endpoint(slot) => {
+            let Some(cap) = sched.tasks[task_idx].caps.get(slot) else {
+                return true;
+            };
+            if cap.rights & crate::capability::RIGHT_RECV == 0 {
+                return true;
+            }
+            let KernelObject::Endpoint(endpoint) = &cap.object else {
+                return true;
+            };
+            endpoint.has_pending() || endpoint.peer_dead()
+        }
+        WaitSource::Supervision(slot) => {
+            let child = sched.tasks[task_idx].caps.get(slot).and_then(|cap| {
+                (cap.rights & crate::capability::RIGHT_SUPERVISE != 0)
+                    .then_some(&cap.object)
+                    .and_then(|object| match object {
+                        KernelObject::Supervision(child) => Some(*child),
+                        _ => None,
+                    })
+            });
+            let Some(child) = child else {
+                return true;
+            };
+            sched.terminated.iter().any(|(id, _)| *id == child)
+        }
+    }
+}
+
+/// Registers the current task as the waiter on every requested source, so a
+/// later event (peer send, keyboard IRQ, child exit) re-readies it.
+fn register_waiters(
+    sched: &mut Scheduler,
+    task_idx: usize,
+    current: TaskId,
+    sources: &[WaitSource],
+) {
+    for source in sources {
+        match *source {
+            WaitSource::Input => crate::input::register_waiter(current),
+            WaitSource::Endpoint(slot) => {
+                if let Some(cap) = sched.tasks[task_idx].caps.get(slot)
+                    && let KernelObject::Endpoint(endpoint) = &cap.object
+                {
+                    endpoint.register_recv_waiter(current);
+                }
+            }
+            WaitSource::Supervision(slot) => {
+                let child = sched.tasks[task_idx].caps.get(slot).and_then(|cap| {
+                    (cap.rights & crate::capability::RIGHT_SUPERVISE != 0)
+                        .then_some(&cap.object)
+                        .and_then(|object| match object {
+                            KernelObject::Supervision(child) => Some(*child),
+                            _ => None,
+                        })
+                });
+                if let Some(child) = child
+                    && let Some(child_idx) = sched.index_of(child)
+                {
+                    sched.tasks[child_idx].wake_on_terminate = Some(current);
+                }
+            }
+        }
+    }
+}
+
+/// Blocking multi-source wait. Runs with interrupts disabled (syscall gate is
+/// an interrupt gate, but `without_interrupts` also covers non-syscall
+/// callers). Re-checks readiness of every source before parking to close the
+/// lost-wakeup race, then, if none is ready, saves the frame with a `0` return
+/// value, marks the task `Blocked`, registers waiters, and schedules another
+/// task. If any source is already ready it returns immediately without
+/// blocking (the frame keeps its `0` return).
+pub fn wait(frame: &mut UserFrame, sources: &[WaitSource]) {
+    frame.rax = 0;
+    let (result, pml4) = without_interrupts(|| {
+        let mut sched = SCHEDULER.lock();
+        drain_pending_wakes(&mut sched);
+        let Some(current) = sched.current else {
+            let result = schedule_next(&mut sched, frame);
+            let pml4 = selected_pml4(&sched, &result);
+            return (result, pml4);
+        };
+        let Some(idx) = sched.index_of(current) else {
+            let result = schedule_next(&mut sched, frame);
+            let pml4 = selected_pml4(&sched, &result);
+            return (result, pml4);
+        };
+        let ready = sources
+            .iter()
+            .any(|source| source_ready(&sched, idx, *source));
+        if ready {
+            // A source became ready (possibly via a wake drained above): do not
+            // park. The frame already returns 0; userspace re-polls.
+            return (
+                ScheduleResult::Selected,
+                selected_pml4(&sched, &ScheduleResult::Selected),
+            );
+        }
+        sched.tasks[idx].saved = *frame;
+        sched.tasks[idx].state = TaskState::Blocked(block_reason(sources));
+        register_waiters(&mut sched, idx, current, sources);
+        let result = schedule_next(&mut sched, frame);
+        let pml4 = selected_pml4(&sched, &result);
+        (result, pml4)
+    });
+    finish_schedule(result, pml4, frame);
+}
+
 pub fn termination_summary(id: TaskId) -> Option<TermReason> {
     SCHEDULER
         .lock()
@@ -535,11 +737,15 @@ pub fn copy_from_current(addr: u64, destination: &mut [u8]) -> bool {
     if destination.is_empty() {
         return true;
     }
-    let mut physical = [crate::memory::PhysAddr(0); crate::capability::MAX_CAPS];
-    if destination.len() > physical.len() {
-        return false;
-    }
-    let copied = {
+    // Capture the current task's page-table root under the scheduler lock, then
+    // translate and copy without holding it. Syscalls run with interrupts
+    // disabled on this uniprocessor, so the task cannot be preempted and its
+    // user page tables are stable for the duration of the copy. Translating
+    // each byte's address as we go imposes no fixed length bound; the caller is
+    // responsible for sizing `destination` (a fixed protocol buffer, or up to
+    // `MAX_CAPS` spawn grants). The former per-byte scratch array capped this
+    // at 64 bytes, which the `u64`-rights `SpawnGrant` widening overran.
+    let pml4 = {
         let sched = SCHEDULER.lock();
         let Some(id) = sched.current else {
             return false;
@@ -547,24 +753,20 @@ pub fn copy_from_current(addr: u64, destination: &mut [u8]) -> bool {
         let Some(index) = sched.index_of(id) else {
             return false;
         };
-        for (offset, slot) in physical.iter_mut().take(destination.len()).enumerate() {
-            let Some(address) = addr.checked_add(offset as u64) else {
-                return false;
-            };
-            let Some(translated) = crate::memory::vmm::translate_in(
-                sched.tasks[index].address_space.pml4(),
-                crate::memory::VirtAddr(address),
-            ) else {
-                return false;
-            };
-            *slot = translated;
-        }
-        destination.len()
+        sched.tasks[index].address_space.pml4()
     };
-    for (destination, physical) in destination.iter_mut().zip(physical).take(copied) {
-        // SAFETY: the scheduler lookup proved this physical byte is mapped by
-        // the current task; HHDM provides a stable kernel alias.
-        *destination = unsafe { physical.to_virt().as_mut_ptr::<u8>().read() };
+    for (offset, destination) in destination.iter_mut().enumerate() {
+        let Some(address) = addr.checked_add(offset as u64) else {
+            return false;
+        };
+        let Some(translated) =
+            crate::memory::vmm::translate_in(pml4, crate::memory::VirtAddr(address))
+        else {
+            return false;
+        };
+        // SAFETY: translation proved this physical byte is mapped by the
+        // current task; HHDM provides a stable kernel alias.
+        *destination = unsafe { translated.to_virt().as_mut_ptr::<u8>().read() };
     }
     true
 }
@@ -603,6 +805,12 @@ pub fn terminate(frame: &mut UserFrame, reason: TermReason) {
             let _drained = sched.tasks[idx].caps.drain();
 
             sched.terminated.push((id, reason));
+            // A parent parked in `SYS_WAIT` on this child's supervision slot is
+            // re-readied. `wake` only enqueues; `schedule_next` (next line)
+            // drains it under this same lock.
+            if let Some(parent) = sched.tasks[idx].wake_on_terminate.take() {
+                wake(parent);
+            }
             let spawner = sched.tasks[idx].spawner;
             if let Some(spawner) = spawner
                 && let Some(parent_idx) = sched.index_of(spawner)
@@ -637,18 +845,29 @@ fn finish_schedule(result: ScheduleResult, pml4: Option<u64>, frame: &UserFrame)
     }
 }
 
-fn schedule_next(sched: &mut Scheduler, frame: &mut UserFrame) -> ScheduleResult {
+/// Selects the next runnable task from the ready queue, loading its saved
+/// frame and marking it `Running`. Returns its address space, or `None` when
+/// no task is runnable. Skips terminated ids left in the queue.
+fn pop_ready(sched: &mut Scheduler, frame: &mut UserFrame) -> Option<u64> {
     while let Some(id) = sched.ready.pop_front() {
         let Some(idx) = sched.index_of(id) else {
             continue;
         };
-        if matches!(sched.tasks[idx].state, TaskState::Terminated(_)) {
+        if !matches!(sched.tasks[idx].state, TaskState::Ready) {
             continue;
         }
         sched.tasks[idx].state = TaskState::Running;
         sched.current = Some(id);
         crate::gdt::set_rsp0(sched.tasks[idx].kernel_stack_top());
         *frame = sched.tasks[idx].saved;
+        return Some(sched.tasks[idx].address_space.pml4().0);
+    }
+    None
+}
+
+fn schedule_next(sched: &mut Scheduler, frame: &mut UserFrame) -> ScheduleResult {
+    drain_pending_wakes(sched);
+    if pop_ready(sched, frame).is_some() {
         return ScheduleResult::Selected;
     }
     sched.current = None;
@@ -657,31 +876,68 @@ fn schedule_next(sched: &mut Scheduler, frame: &mut UserFrame) -> ScheduleResult
         .map_or(ScheduleResult::Halt, ScheduleResult::Idle)
 }
 
+/// Interactive idle path. Unlike the default `on_idle` (which exits QEMU when
+/// the graph is healthy-idle), an interactive session must keep running so a
+/// human keystroke can wake the blocked REPL. Parks the CPU with an atomic
+/// `sti; hlt` until a wake source re-readies a task, then switches into it.
+/// Never returns: it either enters a task or halts waiting for the next IRQ.
+pub fn idle_dispatch() -> ! {
+    loop {
+        // Inspect the scheduler with interrupts disabled so a keyboard IRQ
+        // cannot slip a wake between the readiness check and `hlt`.
+        unsafe { core::arch::asm!("cli", options(nomem, nostack, preserves_flags)) };
+        let selected = {
+            let mut sched = SCHEDULER.lock();
+            let mut frame = zeroed_frame();
+            pop_ready_draining(&mut sched, &mut frame).map(|pml4| (frame, pml4))
+        };
+        match selected {
+            // `iretq` inside the switch restores the task's rflags (IF set).
+            Some((frame, pml4)) => unsafe { switch_address_space_and_user(pml4, &frame) },
+            // Atomic on x86: a pending interrupt is delivered only after `hlt`
+            // begins waiting, so no wake is lost. The handler returns here and
+            // the loop re-checks under `cli`.
+            None => unsafe {
+                core::arch::asm!("sti; hlt", options(nomem, nostack, preserves_flags))
+            },
+        }
+    }
+}
+
+fn pop_ready_draining(sched: &mut Scheduler, frame: &mut UserFrame) -> Option<u64> {
+    drain_pending_wakes(sched);
+    pop_ready(sched, frame)
+}
+
+fn zeroed_frame() -> UserFrame {
+    UserFrame {
+        rax: 0,
+        rbx: 0,
+        rcx: 0,
+        rdx: 0,
+        rsi: 0,
+        rdi: 0,
+        rbp: 0,
+        r8: 0,
+        r9: 0,
+        r10: 0,
+        r11: 0,
+        r12: 0,
+        r13: 0,
+        r14: 0,
+        r15: 0,
+        rip: 0,
+        cs: 0,
+        rflags: 0,
+        rsp: 0,
+        ss: 0,
+    }
+}
+
 pub fn run() -> ! {
     let (frame, pml4) = {
         let mut sched = SCHEDULER.lock();
-        let mut frame = UserFrame {
-            rax: 0,
-            rbx: 0,
-            rcx: 0,
-            rdx: 0,
-            rsi: 0,
-            rdi: 0,
-            rbp: 0,
-            r8: 0,
-            r9: 0,
-            r10: 0,
-            r11: 0,
-            r12: 0,
-            r13: 0,
-            r14: 0,
-            r15: 0,
-            rip: 0,
-            cs: 0,
-            rflags: 0,
-            rsp: 0,
-            ss: 0,
-        };
+        let mut frame = zeroed_frame();
         match schedule_next(&mut sched, &mut frame) {
             ScheduleResult::Selected => {}
             ScheduleResult::Idle(on_idle) => {

@@ -23,6 +23,9 @@ static KEYBOARD_PRESENT: AtomicBool = AtomicBool::new(false);
 static QUEUE: Mutex<KeyQueue> = Mutex::new(KeyQueue::new());
 static DECODER: Mutex<ScanDecoder> = Mutex::new(ScanDecoder::new());
 static SCRIPT: Mutex<ScriptInput> = Mutex::new(ScriptInput::new());
+/// Single task parked in `SYS_WAIT` on keyboard input. Woken by the keyboard
+/// IRQ or by `pump_script` when a byte is delivered. `0` means no waiter.
+static INPUT_WAITER: Mutex<Option<crate::task::TaskId>> = Mutex::new(None);
 const MAX_INIT_STAGES: usize = 12;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -282,6 +285,45 @@ pub fn pop_event() -> Option<KeyEvent> {
     without_interrupts(|| QUEUE.lock().pop())
 }
 
+/// Reports whether an input event is available without consuming it: a decoded
+/// event already queued, or an unconsumed scripted byte. Used by `SYS_WAIT`
+/// readiness checks — a blocked reader wakes, calls `input_read` (which pumps
+/// one scripted byte), and loops.
+pub fn input_pending() -> bool {
+    without_interrupts(|| {
+        if QUEUE.lock().len > 0 {
+            return true;
+        }
+        let script = SCRIPT.lock();
+        script.cursor < script.input.len()
+    })
+}
+
+/// Registers `id` as the task waiting on keyboard input. Single-slot (SPSC):
+/// the graph has exactly one input reader at a time (dango, or powerbox-chooser
+/// in the powerbox scenario — they never coexist). A second concurrent input
+/// waiter would evict the first and lose its wake, so assert the invariant in
+/// debug builds rather than hang silently if a future component breaks it.
+pub fn register_waiter(id: crate::task::TaskId) {
+    without_interrupts(|| {
+        let mut waiter = INPUT_WAITER.lock();
+        debug_assert!(
+            waiter.is_none() || *waiter == Some(id),
+            "second concurrent input waiter would drop a wake"
+        );
+        *waiter = Some(id);
+    });
+}
+
+/// Takes the input waiter and enqueues a wake for it, if any. Callers hold no
+/// scheduler lock; `task::wake` only touches the leaf pending-wake queue.
+fn wake_input_waiter() {
+    let waiter = INPUT_WAITER.lock().take();
+    if let Some(waiter) = waiter {
+        crate::task::wake(waiter);
+    }
+}
+
 pub fn install_script(input: &'static [u8]) {
     *SCRIPT.lock() = ScriptInput { input, cursor: 0 };
 }
@@ -311,6 +353,7 @@ pub fn pump_script() {
             });
         }
     });
+    wake_input_waiter();
 }
 
 struct ScriptInput {
@@ -333,6 +376,9 @@ pub(crate) fn on_interrupt() {
         let scancode = unsafe { inb(DATA_PORT) };
         if let Some(event) = DECODER.lock().feed(scancode) {
             QUEUE.lock().push(event);
+            // Runs with IF=0 (interrupt gate). `wake_input_waiter` takes only
+            // leaf locks (INPUT_WAITER, PENDING_WAKES), never SCHEDULER.
+            wake_input_waiter();
         }
     }
 }

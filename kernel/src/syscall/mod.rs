@@ -28,6 +28,7 @@ pub const SYS_DIRECTORY_COMMIT: u64 = 16;
 pub const SYS_INPUT_READ: u64 = 17;
 pub const SYS_GENERATION_TRANSACT: u64 = 18;
 pub const SYS_GENERATION_RECEIVE: u64 = 19;
+pub const SYS_WAIT: u64 = 20;
 
 const USER_TOP: u64 = 0x0000_8000_0000_0000;
 
@@ -68,6 +69,7 @@ pub fn dispatch(frame: &mut UserFrame) {
         SYS_INPUT_READ => sys_input_read(frame),
         SYS_GENERATION_TRANSACT => sys_generation_transact(frame),
         SYS_GENERATION_RECEIVE => sys_generation_receive(frame),
+        SYS_WAIT => sys_wait(frame),
 
         _ => frame.rax = ipc::ERR_INVALID_ARG as u64,
     }
@@ -783,4 +785,48 @@ fn sys_generation_receive(frame: &mut UserFrame) {
             ipc::ERR_INVALID_ARG as u64
         }
     };
+}
+
+/// Maximum wait sources per `SYS_WAIT` call. Bounds the kernel-side copy.
+const MAX_WAIT_SOURCES: usize = 8;
+
+/// Wait-source kinds, packed into the high 32 bits of each descriptor. Must
+/// match the userspace shim's `WAIT_*` constants.
+const WAIT_KIND_ENDPOINT: u32 = 0;
+const WAIT_KIND_INPUT: u32 = 1;
+const WAIT_KIND_SUPERVISION: u32 = 2;
+
+/// `SYS_WAIT(descriptors_ptr, count)`: park the caller until one of up to
+/// `MAX_WAIT_SOURCES` sources becomes ready. Each descriptor is a `u64`
+/// packing `kind << 32 | slot`. Returns 0 always (userspace re-polls each
+/// source through its non-blocking ABI after waking); `ERR_INVALID_ARG` for a
+/// malformed request, without blocking.
+fn sys_wait(frame: &mut UserFrame) {
+    let count = frame.rsi as usize;
+    if count == 0 || count > MAX_WAIT_SOURCES {
+        frame.rax = ipc::ERR_INVALID_ARG as u64;
+        return;
+    }
+    let byte_len = count * core::mem::size_of::<u64>();
+    if !current_user_range(frame.rdi, byte_len, false) {
+        frame.rax = ipc::ERR_INVALID_ARG as u64;
+        return;
+    }
+    // SAFETY: the current task's complete user range was validated as mapped.
+    let raw = unsafe { core::slice::from_raw_parts(frame.rdi as *const u64, count) };
+    let mut sources = [task::WaitSource::Input; MAX_WAIT_SOURCES];
+    for (slot, descriptor) in sources.iter_mut().zip(raw.iter().copied()) {
+        let kind = (descriptor >> 32) as u32;
+        let cap_slot = descriptor as u32;
+        *slot = match kind {
+            WAIT_KIND_ENDPOINT => task::WaitSource::Endpoint(cap_slot),
+            WAIT_KIND_INPUT => task::WaitSource::Input,
+            WAIT_KIND_SUPERVISION => task::WaitSource::Supervision(cap_slot),
+            _ => {
+                frame.rax = ipc::ERR_INVALID_ARG as u64;
+                return;
+            }
+        };
+    }
+    task::wait(frame, &sources[..count]);
 }

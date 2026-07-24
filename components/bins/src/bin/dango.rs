@@ -30,7 +30,7 @@ fn main() {
     console(b"dango> ");
     loop {
         match slime_rt::input_read(INPUT_SLOT) {
-            Ok(None) => slime_rt::yield_now(),
+            Ok(None) => slime_rt::wait(&[slime_rt::WaitSource::Input]),
             Err(_) => slime_rt::exit(1),
             Ok(Some(event)) if !event.pressed => {}
             Ok(Some(event)) => match event.key {
@@ -201,7 +201,7 @@ fn send_request(request: WireSpawnRequest, caps: &[u32]) -> WireSpawnReply {
     let mut received_caps = [0u64; MAX_CAPS_PER_MSG];
     loop {
         match slime_rt::recv(SPAWN_SLOT, &mut reply, &mut received_caps) {
-            ERR_WOULDBLOCK => slime_rt::yield_now(),
+            ERR_WOULDBLOCK => slime_rt::wait(&[slime_rt::WaitSource::Endpoint(SPAWN_SLOT)]),
             n if n < 0 => slime_rt::exit(1),
             n => {
                 let Some(decoded) = WireSpawnReply::decode(&reply[..n as usize]) else {

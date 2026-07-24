@@ -232,7 +232,9 @@ fn spawn_and_wait(executable_slot: u32, grants: &[SpawnGrant]) {
     });
     loop {
         match slime_rt::supervision_status(spawned.supervision_slot) {
-            Ok(None) => slime_rt::yield_now(),
+            Ok(None) => {
+                slime_rt::wait(&[slime_rt::WaitSource::Supervision(spawned.supervision_slot)])
+            }
             Ok(Some(slime_rt::Termination::Exit(0))) => return,
             _ => slime_rt::exit(1),
         }

@@ -61,7 +61,15 @@ fn main() {
             slime_rt::exit(0);
         }
         if !progressed {
-            slime_rt::yield_now();
+            let mut sources = [slime_rt::WaitSource::Endpoint(0); CLIENT_SLOTS.len()];
+            let mut count = 0;
+            for (index, slot) in CLIENT_SLOTS.iter().copied().enumerate() {
+                if connected[index] {
+                    sources[count] = slime_rt::WaitSource::Endpoint(slot);
+                    count += 1;
+                }
+            }
+            slime_rt::wait(&sources[..count]);
         }
     }
 }

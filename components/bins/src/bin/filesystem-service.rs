@@ -53,7 +53,7 @@ fn main() {
         let mut message = [0u8; MAX_MSG];
         let mut received_caps = [0u64; MAX_CAPS_PER_MSG];
         match slime_rt::recv(RPC_SLOT, &mut message, &mut received_caps) {
-            ERR_WOULDBLOCK => slime_rt::yield_now(),
+            ERR_WOULDBLOCK => slime_rt::wait(&[slime_rt::WaitSource::Endpoint(RPC_SLOT)]),
             ERR_PEER_DEAD => slime_rt::exit(0),
             n if n < 0 => slime_rt::exit(1),
             n => {

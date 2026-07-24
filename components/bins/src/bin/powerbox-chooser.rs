@@ -25,7 +25,7 @@ fn main() {
         let mut received_caps = [0u64; MAX_CAPS_PER_MSG];
         let length = loop {
             match slime_rt::recv(RPC_SLOT, &mut message, &mut received_caps) {
-                ERR_WOULDBLOCK => slime_rt::yield_now(),
+                ERR_WOULDBLOCK => slime_rt::wait(&[slime_rt::WaitSource::Endpoint(RPC_SLOT)]),
                 ERR_PEER_DEAD => return,
                 result if result < 0 => slime_rt::exit(1),
                 result => break result as usize,
@@ -78,7 +78,7 @@ enum Gesture {
 fn wait_gesture() -> Gesture {
     loop {
         match slime_rt::input_read(INPUT_SLOT) {
-            Ok(None) => slime_rt::yield_now(),
+            Ok(None) => slime_rt::wait(&[slime_rt::WaitSource::Input]),
             Err(_) => slime_rt::exit(1),
             Ok(Some(event)) if !event.pressed => {}
             Ok(Some(event)) => match event.key {

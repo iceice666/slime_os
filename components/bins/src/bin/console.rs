@@ -10,7 +10,7 @@ fn main() {
     let mut caps = [0u64; MAX_CAPS_PER_MSG];
     loop {
         match slime_rt::recv(0, &mut buf, &mut caps) {
-            ERR_WOULDBLOCK => slime_rt::yield_now(),
+            ERR_WOULDBLOCK => slime_rt::wait(&[slime_rt::WaitSource::Endpoint(0)]),
             ERR_PEER_DEAD => return,
             n if n < 0 => slime_rt::exit(1),
             n => {

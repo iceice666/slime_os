@@ -8,7 +8,7 @@ pub fn receive() -> WireSpawnRequest {
     let mut caps = [0u64; MAX_CAPS_PER_MSG];
     loop {
         match slime_rt::recv(CONTEXT_SLOT, &mut message, &mut caps) {
-            ERR_WOULDBLOCK => slime_rt::yield_now(),
+            ERR_WOULDBLOCK => slime_rt::wait(&[slime_rt::WaitSource::Endpoint(CONTEXT_SLOT)]),
             n if n < 0 => slime_rt::exit(1),
             n => {
                 if caps.iter().any(|slot| *slot != 0) {

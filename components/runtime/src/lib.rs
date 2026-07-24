@@ -6,11 +6,11 @@ mod syscall;
 pub use sha256::sha256;
 pub use syscall::{
     ERR_BAD_CAP, ERR_INVALID_ARG, ERR_OUT_OF_MEMORY, ERR_PEER_DEAD, ERR_SUCCESS, ERR_WOULDBLOCK,
-    InputEvent, InputKey, MAX_CAPS_PER_MSG, MAX_DIRECTORY_PATH, MAX_MSG, Rights, SpawnGrant,
-    Spawned, Termination, block_transact, cap_drop, debug_write, directory_commit,
-    directory_derive, directory_inspect, endpoint_create, exit, generation_receive,
-    generation_transact, health_confirm, input_read, recovery_reconstruct, recv, send, spawn,
-    store_transact, supervision_status, unhealthy, yield_now,
+    InputEvent, InputKey, MAX_CAPS_PER_MSG, MAX_DIRECTORY_PATH, MAX_MSG, MAX_WAIT_SOURCES, Rights,
+    SpawnGrant, Spawned, Termination, WaitSource, block_transact, cap_drop, debug_write,
+    directory_commit, directory_derive, directory_inspect, endpoint_create, exit,
+    generation_receive, generation_transact, health_confirm, input_read, recovery_reconstruct,
+    recv, send, spawn, store_transact, supervision_status, unhealthy, wait, yield_now,
 };
 
 use core::panic::PanicInfo;
