@@ -37,11 +37,15 @@ pub const ERR_OUT_OF_MEMORY: i64 = -5;
 pub const MAX_MSG: usize = 64;
 pub const MAX_CAPS_PER_MSG: usize = 4;
 
+/// A capability rights bitset. Flat `u64`, matching the kernel ABI
+/// (`kernel/src/capability/mod.rs`) and generation format v3.
+pub type Rights = u64;
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct SpawnGrant {
     pub slot: u32,
-    pub rights: u32,
+    pub rights: Rights,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

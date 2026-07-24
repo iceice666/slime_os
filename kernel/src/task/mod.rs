@@ -5,7 +5,9 @@ use alloc::vec::Vec;
 use core::arch::global_asm;
 use spin::{LazyLock, Mutex};
 
-use crate::capability::{Capability, CapabilityTable, KernelObject, RIGHT_SPAWN, RIGHT_TRANSFER};
+use crate::capability::{
+    Capability, CapabilityTable, KernelObject, RIGHT_SPAWN, RIGHT_TRANSFER, Rights,
+};
 use crate::gdt::{USER_CODE_SELECTOR, USER_DATA_SELECTOR};
 use crate::memory::address_space::AddressSpace;
 use crate::memory::pmm::FRAME_ALLOCATOR;
@@ -208,7 +210,7 @@ pub fn spawn_user(image: &[u8]) -> Result<TaskId, SpawnError> {
 #[derive(Clone, Copy)]
 pub struct SpawnGrant {
     pub slot: u32,
-    pub rights: u32,
+    pub rights: Rights,
 }
 
 pub struct SpawnPlan {

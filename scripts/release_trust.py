@@ -116,7 +116,17 @@ def ssh_signature(path: Path, payload: bytes) -> bytes:
 def authority_manifest_identity(generation: bytes) -> bytes:
     header = struct.Struct("<8sIIQ32sQ32sIIIIIIIIIIQQQQQQQQQQ40x")
     component = struct.Struct("<IIIII12x")
-    grant = struct.Struct("<IIIII12x")
+    version = struct.unpack_from("<I", generation, 8)[0]
+    # Grant record layout and hashed rights width differ by format version:
+    # v3 carries a 64-bit rights field; v2 carried a 32-bit field. The retained
+    # v2 path keeps the original 32-bit hashing so a known-good v2 generation
+    # still matches its signed release during the rollback window.
+    if version <= 2:
+        grant = struct.Struct("<IIIII12x")
+        rights_pack = "<I"
+    else:
+        grant = struct.Struct("<IIIQI8x")
+        rights_pack = "<Q"
     fields = header.unpack_from(generation)
     component_count = fields[12]
     grant_count = fields[14]
@@ -141,7 +151,8 @@ def authority_manifest_identity(generation: bytes) -> bytes:
         for value in (text(name_offset), component_names[source], component_names[target]):
             hasher.update(struct.pack("<H", len(value)))
             hasher.update(value)
-        hasher.update(struct.pack("<II", rights, transferable))
+        hasher.update(struct.pack(rights_pack, rights))
+        hasher.update(struct.pack("<I", transferable))
     return hasher.digest()
 
 

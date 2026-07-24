@@ -25,28 +25,114 @@ ROS 2 compatibility in [`03-ros2-compatibility.md`](03-ros2-compatibility.md) is
 
 ## C7: Bounded resource and shared-sample plane
 
-**Status:** Not started.
+**Status:** In progress. Decomposed into C7.1–C7.4 so each slice is an independently reviewable commit, mirroring the M5/M6 sub-slice convention. The C7 gate closes only when C7.4's exit condition is observed.
+
+**Depends on:** the M6 endpoint factory, spawn accounting, supervision, and generation machinery.
+
+**Sequencing:** C7.1 lands the v3 generation format and `u64` rights that every later slice consumes. C7.2 adds the `SharedBufferFactory` object, quotas, and supervision-subtree accounting on top of v3 rights. C7.3 adds the buffer lifecycle operations and the sample-descriptor contract over C7.2's object. C7.4 composes them into the two-component exit condition and owns `just sample_plane_check`.
+
+### C7.1 — Generation format v3 and u64 rights
+
+**Status:** Complete. Generation format v3 with `u64` rights is built and byte-identical across two builds; retained v2 generations still decode and boot (dual-version decode + version-branched authority hash); the `RIGHT_MAP` bit is renamed to the object-specific `RIGHT_BUFFER_MAP`. Verified under `just generation_check`, `just contracts_check` (including boot-contracts v2/v3 decode tests), `just transfer_check`, and `just test`.
+
+**Depends on:** M6.1 generation format v2 and the capability/rights foundation.
 
 ### Deliverables
 
 - introduce deterministic generation format v3 with `u64` rights; retain decoding of known-good v2 generations for the bounded rollback window rather than changing v2 meanings;
 - migrate manifest rights strings deterministically and reject unknown or meaningless v3 rights bits;
-- replace the grandfathered generic `RIGHT_MAP` name with an object-specific shared-buffer map right when the v3 mapping lands;
+- replace the grandfathered generic `RIGHT_MAP` name with an object-specific shared-buffer map right when the v3 mapping lands.
+
+### Required checks
+
+- two builds from identical normalized v3 input are byte-identical, retained v2 known-good artifacts still boot during the rollback window, and unsupported versions fail closed;
+- unknown or object-meaningless v3 rights bits are rejected at decode and at `CapabilityTable::insert`;
+- the renamed shared-buffer map right gates exactly the buffer map operation and no other object.
+
+### Verification target
+
+```sh
+just generation_check
+just contracts_check
+```
+
+### Exit condition
+
+A v3 generation built from normalized input is byte-identical across two builds, boots the existing vertical slice with `u64` rights, and a retained v2 known-good artifact still decodes and boots; an unsupported version and an unknown rights bit both fail closed.
+
+### C7.2 — SharedBufferFactory, quotas, and accounting
+
+**Status:** Not started.
+
+**Depends on:** C7.1 v3 rights; M6.1 supervision and per-spawner accounting.
+
+### Deliverables
+
 - add a named `SharedBufferFactory` capability with generation-declared per-holder byte, buffer-count, mapping-count, and outstanding-loan quotas;
-- expose bounded create, map, unmap, seal/read-only, loan, return, and release operations; userspace cannot invent buffer identity or widen access while deriving or transferring it;
-- define a versioned sample-descriptor contract that fits the existing channel control-message bound and references an exact shared-buffer capability, offset, length, type identity, sequence, and declared flags;
+- expose bounded create and release operations; userspace cannot invent buffer identity or widen access while deriving or transferring it;
 - charge physical pages and mappings to the creating supervision subtree, retain them while any valid loan is outstanding, and reclaim them after return, peer death, supervised restart, or explicit revocation;
 - keep DMA buffers and ordinary shared samples as distinct authority even if they reuse memory-accounting machinery.
 
 ### Required checks
 
 - a component without the factory capability cannot allocate a shared buffer, and a holder cannot exceed any manifest quota;
-- a receiver cannot map bytes outside the granted buffer or widen read-only access to writable;
-- overflowed offset/length, unknown flags, stale loans, duplicate returns, wrong-buffer returns, and use-after-release fail with structured errors before mapping or allocation;
 - the creator cannot reclaim pages while a sample loan is outstanding; peer death and supervised restart reclaim every unreachable mapping and charge;
 - transferring or deriving a buffer checks `RIGHT_TRANSFER` and never widens buffer rights;
-- payloads larger than the kernel message bound traverse descriptor plus shared buffer without increasing `MAX_MSG` or copying payload bytes through the kernel queue;
-- two builds from identical normalized v3 input are byte-identical, retained v2 known-good artifacts still boot during the rollback window, and unsupported versions fail closed.
+- DMA authority and shared-sample authority remain distinct capability kinds.
+
+### Verification target
+
+```sh
+just sample_plane_check
+```
+
+### Exit condition
+
+A factory-authorized holder creates a quota-charged shared buffer whose pages bill the creating supervision subtree; an unauthorized component is denied, a manifest quota cannot be exceeded, and peer death reclaims every page and mapping.
+
+### C7.3 — Buffer lifecycle and sample descriptor
+
+**Status:** Not started.
+
+**Depends on:** C7.2 `SharedBufferFactory` and accounting.
+
+### Deliverables
+
+- expose bounded map, unmap, seal/read-only, loan, and return operations; userspace cannot invent buffer identity or widen access while deriving or transferring it;
+- define a versioned sample-descriptor contract that fits the existing channel control-message bound and references an exact shared-buffer capability, offset, length, type identity, sequence, and declared flags.
+
+### Required checks
+
+- a receiver cannot map bytes outside the granted buffer or widen read-only access to writable;
+- overflowed offset/length, unknown flags, stale loans, duplicate returns, wrong-buffer returns, and use-after-release fail with structured errors before mapping or allocation;
+- payloads larger than the kernel message bound traverse descriptor plus shared buffer without increasing `MAX_MSG` or copying payload bytes through the kernel queue.
+
+### Verification target
+
+```sh
+just sample_plane_check
+```
+
+### Exit condition
+
+A holder seals a buffer read-only, loans a sample described by a versioned descriptor within the control-message bound, and the receiver maps only the granted bytes; every malformed descriptor and lifecycle misuse fails with a structured error before mapping.
+
+### C7.4 — Sample-plane exit condition
+
+**Status:** Not started.
+
+**Depends on:** C7.1, C7.2, and C7.3.
+
+### Deliverables
+
+- compose the factory, quotas, lifecycle, and descriptor into two isolated components that exchange and return a payload larger than the kernel IPC message bound;
+- prove malformed descriptors, quota exhaustion, and peer death remain bounded and reclaim all resources without disturbing an unrelated channel or the retained v2 known-good boot path.
+
+### Required checks
+
+- two isolated components exchange and return a payload larger than `MAX_MSG` through a quota-charged shared buffer;
+- malformed descriptors, quota exhaustion, and peer death remain bounded, reclaim all resources, and do not disturb an unrelated channel;
+- the retained v2 known-good boot path is unaffected by the sample-plane exercise.
 
 ### Planned verification target
 

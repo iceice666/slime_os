@@ -1,14 +1,24 @@
 use crate::sha256::Sha256;
 
-pub const MAGIC: [u8; 8] = *b"SLIMEG2\0";
+/// Format 3 magic (current). Grant rights are a 64-bit little-endian value.
+pub const MAGIC_V3: [u8; 8] = *b"SLIMEG3\0";
+/// Format 2 magic, retained for the bounded rollback window. Grant rights are
+/// a 32-bit value; decoding widens them to `u64` without changing meaning.
+pub const MAGIC_V2: [u8; 8] = *b"SLIMEG2\0";
+/// The magic emitted for newly built generations.
+pub const MAGIC: [u8; 8] = MAGIC_V3;
+/// Retained format-2 version number. `FORMAT_VERSION` (3) is the current one.
+pub const FORMAT_VERSION_V2: u32 = 2;
 include!("generated/generation.rs");
 pub const KIND_KERNEL: u32 = 1;
 pub const KIND_BOOTSTRAP: u32 = 2;
 pub const KIND_COMPONENT: u32 = 3;
 pub const KIND_RESOURCE: u32 = 4;
 pub const ROLE_INIT: u32 = 1;
-pub const RIGHT_TRANSFER: u32 = 1 << 2;
-pub const RIGHT_ALL: u32 = (1 << 24) - 1;
+/// A capability rights bitset. Flat `u64` as of generation format v3.
+pub type Rights = u64;
+pub const RIGHT_TRANSFER: Rights = 1 << 2;
+pub const RIGHT_ALL: Rights = (1 << 24) - 1;
 pub const MAX_SPAWN_BUDGET: u16 = 32;
 pub const POLICY_IMMUTABLE: u32 = 1;
 pub const POLICY_EPHEMERAL: u32 = 2;
@@ -65,7 +75,7 @@ pub struct Grant<'a> {
     pub name: &'a str,
     pub source: usize,
     pub target: usize,
-    pub rights: u32,
+    pub rights: Rights,
     pub transferable: bool,
 }
 
@@ -79,6 +89,9 @@ pub struct StateBinding<'a> {
 
 pub struct Generation<'a> {
     bytes: &'a [u8],
+    /// Decoded format version: `FORMAT_VERSION` (3) or `FORMAT_VERSION_V2` (2).
+    /// Selects the capability-grant rights layout.
+    pub version: u32,
     pub identity: [u8; 32],
     pub number: u64,
     pub parent: Option<[u8; 32]>,
@@ -106,12 +119,12 @@ impl<'a> Generation<'a> {
         if bytes.len() < HEADER_LEN {
             return Err(DecodeError::Truncated);
         }
-        if bytes[..8] != MAGIC {
-            return Err(DecodeError::BadMagic);
-        }
-        if u32_at(bytes, 8)? != FORMAT_VERSION {
-            return Err(DecodeError::UnsupportedVersion);
-        }
+        let version = match (bytes[..8].try_into().unwrap(), u32_at(bytes, 8)?) {
+            (MAGIC_V3, FORMAT_VERSION) => FORMAT_VERSION,
+            (MAGIC_V2, FORMAT_VERSION_V2) => FORMAT_VERSION_V2,
+            (MAGIC_V3, _) | (MAGIC_V2, _) => return Err(DecodeError::UnsupportedVersion),
+            _ => return Err(DecodeError::BadMagic),
+        };
         if u32_at(bytes, 12)? as usize != HEADER_LEN {
             return Err(DecodeError::BadHeader);
         }
@@ -178,6 +191,7 @@ impl<'a> Generation<'a> {
         )?;
         let generation = Self {
             bytes,
+            version,
             identity,
             number: u64_at(bytes, 56)?,
             parent: (parent_bytes != [0; 32]).then_some(parent_bytes),
@@ -317,7 +331,17 @@ impl<'a> Generation<'a> {
             return Err(DecodeError::BadIndex);
         }
         let offset = self.grant_offset + index * GRANT_LEN;
-        if self.bytes[offset + 20..offset + GRANT_LEN]
+        // Grant record layout differs by format version: v3 carries a 64-bit
+        // rights field at +12 with `transferable` at +20; v2 carries a 32-bit
+        // rights field at +12 with `transferable` at +16. Both records are
+        // GRANT_LEN (32) bytes; the trailing bytes past `transferable` are
+        // reserved and must be zero.
+        let (rights, transferable_offset) = if self.version == FORMAT_VERSION_V2 {
+            (u64::from(u32_at(self.bytes, offset + 12)?), offset + 16)
+        } else {
+            (u64_at(self.bytes, offset + 12)?, offset + 20)
+        };
+        if self.bytes[transferable_offset + 4..offset + GRANT_LEN]
             .iter()
             .any(|byte| *byte != 0)
         {
@@ -327,8 +351,8 @@ impl<'a> Generation<'a> {
             name: self.string(u32_at(self.bytes, offset)? as usize)?,
             source: u32_at(self.bytes, offset + 4)? as usize,
             target: u32_at(self.bytes, offset + 8)? as usize,
-            rights: u32_at(self.bytes, offset + 12)?,
-            transferable: match u32_at(self.bytes, offset + 16)? {
+            rights,
+            transferable: match u32_at(self.bytes, transferable_offset)? {
                 0 => false,
                 1 => true,
                 _ => return Err(DecodeError::UnknownEnum),
@@ -355,7 +379,14 @@ impl<'a> Generation<'a> {
             update_bounded_string(&mut hasher, grant.name);
             update_bounded_string(&mut hasher, source.name);
             update_bounded_string(&mut hasher, target.name);
-            hasher.update(&grant.rights.to_le_bytes());
+            // v2 releases hashed a 32-bit rights field; retain that width so a
+            // known-good v2 generation still matches its signed release during
+            // the rollback window. v3 hashes the full 64-bit rights value.
+            if self.version == FORMAT_VERSION_V2 {
+                hasher.update(&(grant.rights as u32).to_le_bytes());
+            } else {
+                hasher.update(&grant.rights.to_le_bytes());
+            }
             hasher.update(&u32::from(grant.transferable).to_le_bytes());
         }
         hasher.finalize()
@@ -617,4 +648,164 @@ fn u64_at(bytes: &[u8], offset: usize) -> Result<u64, DecodeError> {
             .try_into()
             .unwrap(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    extern crate alloc;
+    use super::*;
+
+    /// Build a minimal valid generation with one self-grant, encoded in the
+    /// requested format version. v2 packs grant rights as 4 bytes at +12 with
+    /// `transferable` at +16; v3 packs rights as 8 bytes at +12 with
+    /// `transferable` at +20. Every other record is identical.
+    fn build(version: u32, rights: u64) -> alloc::vec::Vec<u8> {
+        let magic = if version == FORMAT_VERSION_V2 {
+            MAGIC_V2
+        } else {
+            MAGIC_V3
+        };
+        // String table: (u16 len, bytes) entries; offsets are relative.
+        let mut strings = alloc::vec::Vec::new();
+        let mut push_str = |s: &str| -> u32 {
+            let offset = strings.len() as u32;
+            strings.extend_from_slice(&(s.len() as u16).to_le_bytes());
+            strings.extend_from_slice(s.as_bytes());
+            offset
+        };
+        let target_off = push_str("t");
+        let obj_a_off = push_str("a");
+        let obj_b_off = push_str("b");
+        let init_off = push_str("init");
+        let grant_off = push_str("g");
+
+        let object_offset = HEADER_LEN;
+        let component_offset = object_offset + 2 * OBJECT_LEN;
+        let dependency_offset = component_offset + COMPONENT_LEN;
+        let grant_offset = dependency_offset;
+        let state_offset = grant_offset + GRANT_LEN;
+        let health_offset = state_offset;
+        let string_offset = health_offset;
+        let payload_offset = string_offset + strings.len();
+        let total_len = payload_offset + 2;
+
+        let kernel_digest = {
+            let mut h = Sha256::new();
+            h.update(b"K");
+            h.finalize()
+        };
+        let bootstrap_digest = {
+            let mut h = Sha256::new();
+            h.update(b"B");
+            h.finalize()
+        };
+
+        let mut bytes = alloc::vec![0u8; total_len];
+        bytes[..8].copy_from_slice(&magic);
+        bytes[8..12].copy_from_slice(&version.to_le_bytes());
+        bytes[12..16].copy_from_slice(&(HEADER_LEN as u32).to_le_bytes());
+        bytes[56..64].copy_from_slice(&1u64.to_le_bytes()); // generation_number
+        bytes[96..100].copy_from_slice(&target_off.to_le_bytes());
+        bytes[100..104].copy_from_slice(&0u32.to_le_bytes()); // kernel_object
+        bytes[104..108].copy_from_slice(&0u32.to_le_bytes()); // bootstrap_component
+        bytes[108..112].copy_from_slice(&1u32.to_le_bytes()); // boot_attempts
+        bytes[112..116].copy_from_slice(&2u32.to_le_bytes()); // object_count
+        bytes[116..120].copy_from_slice(&1u32.to_le_bytes()); // component_count
+        bytes[124..128].copy_from_slice(&1u32.to_le_bytes()); // grant_count
+        bytes[136..144].copy_from_slice(&(object_offset as u64).to_le_bytes());
+        bytes[144..152].copy_from_slice(&(component_offset as u64).to_le_bytes());
+        bytes[152..160].copy_from_slice(&(dependency_offset as u64).to_le_bytes());
+        bytes[160..168].copy_from_slice(&(grant_offset as u64).to_le_bytes());
+        bytes[168..176].copy_from_slice(&(state_offset as u64).to_le_bytes());
+        bytes[176..184].copy_from_slice(&(health_offset as u64).to_le_bytes());
+        bytes[184..192].copy_from_slice(&(string_offset as u64).to_le_bytes());
+        bytes[192..200].copy_from_slice(&(strings.len() as u64).to_le_bytes());
+        bytes[200..208].copy_from_slice(&(payload_offset as u64).to_le_bytes());
+        bytes[208..216].copy_from_slice(&(total_len as u64).to_le_bytes());
+
+        // Object 0 (id "a", kernel), object 1 (id "b", bootstrap).
+        let obj0 = object_offset;
+        bytes[obj0..obj0 + 4].copy_from_slice(&obj_a_off.to_le_bytes());
+        bytes[obj0 + 4..obj0 + 8].copy_from_slice(&KIND_KERNEL.to_le_bytes());
+        bytes[obj0 + 8..obj0 + 16].copy_from_slice(&(payload_offset as u64).to_le_bytes());
+        bytes[obj0 + 16..obj0 + 24].copy_from_slice(&1u64.to_le_bytes());
+        bytes[obj0 + 24..obj0 + 56].copy_from_slice(&kernel_digest);
+        let obj1 = object_offset + OBJECT_LEN;
+        bytes[obj1..obj1 + 4].copy_from_slice(&obj_b_off.to_le_bytes());
+        bytes[obj1 + 4..obj1 + 8].copy_from_slice(&KIND_BOOTSTRAP.to_le_bytes());
+        bytes[obj1 + 8..obj1 + 16].copy_from_slice(&((payload_offset + 1) as u64).to_le_bytes());
+        bytes[obj1 + 16..obj1 + 24].copy_from_slice(&1u64.to_le_bytes());
+        bytes[obj1 + 24..obj1 + 56].copy_from_slice(&bootstrap_digest);
+
+        // Component 0 ("init", object 1, role init).
+        let comp = component_offset;
+        bytes[comp..comp + 4].copy_from_slice(&init_off.to_le_bytes());
+        bytes[comp + 4..comp + 8].copy_from_slice(&1u32.to_le_bytes()); // object_index
+        bytes[comp + 8..comp + 12].copy_from_slice(&ROLE_INIT.to_le_bytes());
+
+        // Grant 0 ("g", self, rights).
+        let grant = grant_offset;
+        bytes[grant..grant + 4].copy_from_slice(&grant_off.to_le_bytes());
+        bytes[grant + 4..grant + 8].copy_from_slice(&0u32.to_le_bytes()); // source
+        bytes[grant + 8..grant + 12].copy_from_slice(&0u32.to_le_bytes()); // target
+        let transferable = u32::from(rights & RIGHT_TRANSFER != 0);
+        if version == FORMAT_VERSION_V2 {
+            bytes[grant + 12..grant + 16].copy_from_slice(&(rights as u32).to_le_bytes());
+            bytes[grant + 16..grant + 20].copy_from_slice(&transferable.to_le_bytes());
+        } else {
+            bytes[grant + 12..grant + 20].copy_from_slice(&rights.to_le_bytes());
+            bytes[grant + 20..grant + 24].copy_from_slice(&transferable.to_le_bytes());
+        }
+
+        // String table and payloads.
+        bytes[string_offset..string_offset + strings.len()].copy_from_slice(&strings);
+        bytes[payload_offset] = b'K';
+        bytes[payload_offset + 1] = b'B';
+
+        let identity = generation_identity(&bytes);
+        bytes[IDENTITY_OFFSET..IDENTITY_END].copy_from_slice(&identity);
+        bytes
+    }
+
+    #[test]
+    fn v3_generation_decodes_with_u64_rights() {
+        let rights = RIGHT_ALL;
+        let bytes = build(FORMAT_VERSION, rights);
+        let generation = Generation::decode(&bytes).expect("v3 decodes");
+        assert_eq!(generation.version, FORMAT_VERSION);
+        assert_eq!(generation.grant(0).unwrap().rights, rights);
+    }
+
+    #[test]
+    fn retained_v2_generation_still_decodes() {
+        // v2 rights are 24-bit; widen to u64 without changing meaning.
+        let rights = RIGHT_TRANSFER | 1;
+        let bytes = build(FORMAT_VERSION_V2, rights);
+        let generation = Generation::decode(&bytes).expect("retained v2 decodes");
+        assert_eq!(generation.version, FORMAT_VERSION_V2);
+        assert_eq!(generation.grant(0).unwrap().rights, rights);
+        assert!(generation.grant(0).unwrap().transferable);
+    }
+
+    #[test]
+    fn unsupported_version_fails_closed() {
+        let mut bytes = build(FORMAT_VERSION, RIGHT_ALL);
+        bytes[8..12].copy_from_slice(&(FORMAT_VERSION + 1).to_le_bytes());
+        // Re-seal identity so the version, not the hash, is what fails.
+        let identity = generation_identity(&bytes);
+        bytes[IDENTITY_OFFSET..IDENTITY_END].copy_from_slice(&identity);
+        assert!(matches!(
+            Generation::decode(&bytes),
+            Err(DecodeError::UnsupportedVersion)
+        ));
+    }
+
+    #[test]
+    fn wrong_magic_fails_closed() {
+        let mut bytes = build(FORMAT_VERSION, RIGHT_ALL);
+        bytes[0] = b'X';
+        let identity = generation_identity(&bytes);
+        bytes[IDENTITY_OFFSET..IDENTITY_END].copy_from_slice(&identity);
+        assert!(matches!(Generation::decode(&bytes), Err(DecodeError::BadMagic)));
+    }
 }

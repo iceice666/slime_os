@@ -45,7 +45,7 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     slime_os_kernel::test_panic_handler(info)
 }
 
-fn endpoint_cap(rights: u32) -> Capability {
+fn endpoint_cap(rights: u64) -> Capability {
     let (a, _b) = ipc::channel();
     Capability {
         object: KernelObject::Endpoint(a),
@@ -53,7 +53,7 @@ fn endpoint_cap(rights: u32) -> Capability {
     }
 }
 
-fn executable_cap(rights: u32) -> Capability {
+fn executable_cap(rights: u64) -> Capability {
     Capability {
         object: KernelObject::Executable {
             name: None,
@@ -144,7 +144,7 @@ fn table_rejects_rights_foreign_to_object_kind() {
     }
 }
 
-fn grant(slot: u32, rights: u32) -> task::SpawnGrant {
+fn grant(slot: u32, rights: u64) -> task::SpawnGrant {
     task::SpawnGrant { slot, rights }
 }
 

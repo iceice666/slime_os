@@ -11,7 +11,7 @@ use slime_proto::{
 };
 use slime_rt::{
     ERR_BAD_CAP, ERR_INVALID_ARG, ERR_OUT_OF_MEMORY, ERR_PEER_DEAD, ERR_WOULDBLOCK,
-    MAX_CAPS_PER_MSG, MAX_MSG, SpawnGrant, Termination,
+    MAX_CAPS_PER_MSG, MAX_MSG, Rights, SpawnGrant, Termination,
 };
 
 slime_rt::entry!(main);
@@ -21,9 +21,9 @@ const STATUS_OK: i32 = 0;
 const STATUS_BAD_REQUEST: i32 = ERR_INVALID_ARG as i32;
 const STATUS_NOT_ALLOWED: i32 = ERR_BAD_CAP as i32;
 const STATUS_BUDGET_EXHAUSTED: i32 = ERR_OUT_OF_MEMORY as i32;
-const RIGHT_SEND: u32 = 1;
-const RIGHT_RECV: u32 = 2;
-const RIGHT_DIRECTORY_READ: u32 = 1 << 19;
+const RIGHT_SEND: Rights = 1;
+const RIGHT_RECV: Rights = 2;
+const RIGHT_DIRECTORY_READ: Rights = 1 << 19;
 
 include!(concat!(env!("OUT_DIR"), "/command_profile.rs"));
 
@@ -101,7 +101,7 @@ fn handle_inner(
         (CAPABILITY_ROLE_STDIN, RIGHT_RECV),
         (CAPABILITY_ROLE_STDOUT, RIGHT_SEND),
         (CAPABILITY_ROLE_STDERR, RIGHT_SEND),
-        (CAPABILITY_ROLE_GRANT, request.grant_rights),
+        (CAPABILITY_ROLE_GRANT, request.grant_rights as Rights),
     ] {
         if request.capability_roles & role != 0 {
             grants[grant_count] = SpawnGrant {

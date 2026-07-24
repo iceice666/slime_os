@@ -6,7 +6,7 @@ use crate::capability::{
     RIGHT_BLOCK_WRITE, RIGHT_BOOT_UPDATE, RIGHT_DIRECTORY_DERIVE, RIGHT_DIRECTORY_LIST,
     RIGHT_DIRECTORY_READ, RIGHT_DIRECTORY_WRITE, RIGHT_EXEC, RIGHT_HEALTH_CONFIRM,
     RIGHT_INPUT_READ, RIGHT_RECV, RIGHT_SEND, RIGHT_SPAWN, RIGHT_STORE_READ, RIGHT_STORE_WRITE,
-    RIGHT_TRANSFER,
+    RIGHT_TRANSFER, Rights,
 };
 use crate::generation::{self, Generation};
 use crate::{ipc, println, serial_println, task};
@@ -621,7 +621,7 @@ fn executable(
 // Every endpoint held by init is delegated to a spawned component, so each
 // carries RIGHT_TRANSFER: spawn grants enforce the same transfer-right
 // condition as IPC sends.
-fn endpoint(endpoint: ipc::Endpoint, rights: u32) -> Capability {
+fn endpoint(endpoint: ipc::Endpoint, rights: Rights) -> Capability {
     Capability {
         object: KernelObject::Endpoint(endpoint),
         rights: rights | RIGHT_TRANSFER,
@@ -650,7 +650,7 @@ fn require_grant<'a>(
     name: &str,
     source: &str,
     target: &str,
-    rights: u32,
+    rights: Rights,
 ) -> crate::generation::Grant<'a> {
     (0..generation.grant_count())
         .filter_map(|index| generation.grant(index).ok())

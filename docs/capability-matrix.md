@@ -26,13 +26,15 @@ Every new object or right must satisfy these rules before it ships:
 6. Every resource table has a hard bound (see Bounds). "Unbounded" is not an
    acceptable error-handling strategy.
 7. Rights constants are named `<OBJECT>_<OPERATION>`.
-8. Generation format v2 must map manifest grant rights strings 1:1 to bit
+8. Generation format v3 must map manifest grant rights strings 1:1 to bit
    names and `transferable` to `RIGHT_TRANSFER`; bootstrap wiring must be
-   derived from manifest data, not hardcoded.
+   derived from manifest data, not hardcoded. Format v2 generations remain
+   decodable for the bounded rollback window; their 32-bit rights widen to
+   `u64` without changing meaning.
 
 ## Current matrix
 
-Rights are a flat `u32`; bits 24–31 are free.
+Rights are a flat `u64` (generation format v3); bits 24–63 are free.
 
 | Object | Right (bit) | Gated operation | Creation authority | Gate status |
 | --- | --- | --- | --- | --- |
@@ -45,7 +47,7 @@ Rights are a flat `u32`; bits 24–31 are free.
 | DmaMemory | DMA_RELEASE (6) | future release/reclaim operation | same | **ungated** |
 | Irq | IRQ_ACK (7) | future ack operation | kernel interrupt subsystem | **ungated** |
 | SharedBuffer | BUFFER_WRITE (8) | future write-into-region operation | kernel `SharedRegion::new`; no userspace path | **ungated** |
-| SharedBuffer | MAP (9) | future map-into-address-space operation | same | **ungated** |
+| SharedBuffer | BUFFER_MAP (9) | future map-into-address-space operation | same | **ungated** |
 | BlockDevice | BLOCK_READ (10) | read requests in `SYS_BLOCK_TRANSACT` for the capability's exact PCI function | kernel bootstrap | gated |
 | BlockDevice | BLOCK_WRITE (11) | write and flush requests in `SYS_BLOCK_TRANSACT`; receiver writes in `SYS_GENERATION_RECEIVE` require this together with BLOCK_READ and BOOT_UPDATE | kernel bootstrap | gated (M5.3/M6.7) |
 | ObjectStore | STORE_READ (12) | stat/get requests in `SYS_STORE_TRANSACT` | kernel bootstrap | gated (M5.4) |
@@ -112,9 +114,6 @@ factories must follow the same named-capability and hard-bound rules.
 
 ## Debt register
 
-- `RIGHT_MAP` (bit 9) predates the naming rule; rename to
-  `RIGHT_BUFFER_MAP` when convenient (touches `capability/mod.rs`, the
-  storage-authority allowlist, and tests).
 - Terminated tasks are never reaped from the scheduler table; their address
   spaces and kernel stacks leak until reboot. Acceptable at current uptimes,
   but the live-task count already excludes them, so nothing else may rely on

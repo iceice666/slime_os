@@ -3,25 +3,25 @@
 
 slime_rt::entry!(main);
 
-use slime_rt::SpawnGrant;
+use slime_rt::{Rights, SpawnGrant};
 
-const RIGHT_SEND: u32 = 1;
-const RIGHT_RECV: u32 = 2;
-const RIGHT_TRANSFER: u32 = 4;
-const RIGHT_BLOCK_READ: u32 = 1 << 10;
-const RIGHT_BLOCK_WRITE: u32 = 1 << 11;
-const RIGHT_STORE_READ: u32 = 1 << 12;
-const RIGHT_STORE_WRITE: u32 = 1 << 13;
-const RIGHT_HEALTH_CONFIRM: u32 = 1 << 14;
-const RIGHT_BOOT_UPDATE: u32 = 1 << 15;
-const RIGHT_EXEC: u32 = 1 << 3;
-const RIGHT_SPAWN: u32 = 1 << 16;
-const RIGHT_ENDPOINT_CREATE: u32 = 1 << 17;
-const RIGHT_DIRECTORY_READ: u32 = 1 << 19;
-const RIGHT_DIRECTORY_WRITE: u32 = 1 << 20;
-const RIGHT_DIRECTORY_LIST: u32 = 1 << 21;
-const RIGHT_DIRECTORY_DERIVE: u32 = 1 << 22;
-const RIGHT_INPUT_READ: u32 = 1 << 23;
+const RIGHT_SEND: Rights = 1;
+const RIGHT_RECV: Rights = 2;
+const RIGHT_TRANSFER: Rights = 4;
+const RIGHT_BLOCK_READ: Rights = 1 << 10;
+const RIGHT_BLOCK_WRITE: Rights = 1 << 11;
+const RIGHT_STORE_READ: Rights = 1 << 12;
+const RIGHT_STORE_WRITE: Rights = 1 << 13;
+const RIGHT_HEALTH_CONFIRM: Rights = 1 << 14;
+const RIGHT_BOOT_UPDATE: Rights = 1 << 15;
+const RIGHT_EXEC: Rights = 1 << 3;
+const RIGHT_SPAWN: Rights = 1 << 16;
+const RIGHT_ENDPOINT_CREATE: Rights = 1 << 17;
+const RIGHT_DIRECTORY_READ: Rights = 1 << 19;
+const RIGHT_DIRECTORY_WRITE: Rights = 1 << 20;
+const RIGHT_DIRECTORY_LIST: Rights = 1 << 21;
+const RIGHT_DIRECTORY_DERIVE: Rights = 1 << 22;
+const RIGHT_INPUT_READ: Rights = 1 << 23;
 
 // Manifest-derived bootstrap slot order is emitted by the host builder.
 const CONSOLE_CAPS: [SpawnGrant; 1] = [grant(2, RIGHT_RECV)];
@@ -100,7 +100,7 @@ const TRANSFER_SOURCE_SLOT: u32 = 41;
 
 const POWERBOX_PROBE_CAPS: [SpawnGrant; 1] = [grant(38, RIGHT_SEND | RIGHT_RECV)];
 
-const fn grant(slot: u32, rights: u32) -> SpawnGrant {
+const fn grant(slot: u32, rights: Rights) -> SpawnGrant {
     SpawnGrant { slot, rights }
 }
 

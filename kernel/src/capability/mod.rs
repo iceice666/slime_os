@@ -17,37 +17,44 @@ use crate::memory::PhysAddr;
 
 pub const MAX_CAPS: usize = 64;
 
+/// A capability rights bitset. Flat `u64` as of generation format v3; bits
+/// 24-63 are free for future object-specific operations.
+pub type Rights = u64;
+
 // --- Rights bits ---------------------------------------------------------
 // IPC, executable, and M6.1 factory/supervision rights.
-pub const RIGHT_SEND: u32 = 1;
-pub const RIGHT_RECV: u32 = 2;
-pub const RIGHT_TRANSFER: u32 = 4;
-pub const RIGHT_EXEC: u32 = 8;
+pub const RIGHT_SEND: Rights = 1;
+pub const RIGHT_RECV: Rights = 2;
+pub const RIGHT_TRANSFER: Rights = 4;
+pub const RIGHT_EXEC: Rights = 8;
 // M5.1/M5.2 device-resource rights. Each kernel gate checks its relevant bit.
-pub const RIGHT_MAP_MMIO: u32 = 1 << 4;
-pub const RIGHT_DMA_PIN: u32 = 1 << 5;
-pub const RIGHT_DMA_RELEASE: u32 = 1 << 6;
-pub const RIGHT_IRQ_ACK: u32 = 1 << 7;
-pub const RIGHT_BUFFER_WRITE: u32 = 1 << 8;
-pub const RIGHT_MAP: u32 = 1 << 9;
-pub const RIGHT_BLOCK_READ: u32 = 1 << 10;
-pub const RIGHT_BLOCK_WRITE: u32 = 1 << 11;
+pub const RIGHT_MAP_MMIO: Rights = 1 << 4;
+pub const RIGHT_DMA_PIN: Rights = 1 << 5;
+pub const RIGHT_DMA_RELEASE: Rights = 1 << 6;
+pub const RIGHT_IRQ_ACK: Rights = 1 << 7;
+pub const RIGHT_BUFFER_WRITE: Rights = 1 << 8;
+// Object-specific shared-buffer map right (C7.1 rename of the grandfathered
+// generic `RIGHT_MAP`). Gates mapping a `SharedBuffer` region into an address
+// space.
+pub const RIGHT_BUFFER_MAP: Rights = 1 << 9;
+pub const RIGHT_BLOCK_READ: Rights = 1 << 10;
+pub const RIGHT_BLOCK_WRITE: Rights = 1 << 11;
 // M5.4 object-store rights. Each gate lives in `SYS_STORE_TRANSACT`.
-pub const RIGHT_STORE_READ: u32 = 1 << 12;
-pub const RIGHT_STORE_WRITE: u32 = 1 << 13;
-pub const RIGHT_HEALTH_CONFIRM: u32 = 1 << 14;
-pub const RIGHT_BOOT_UPDATE: u32 = 1 << 15;
-pub const RIGHT_SPAWN: u32 = 1 << 16;
-pub const RIGHT_ENDPOINT_CREATE: u32 = 1 << 17;
-pub const RIGHT_SUPERVISE: u32 = 1 << 18;
-pub const RIGHT_DIRECTORY_READ: u32 = 1 << 19;
-pub const RIGHT_DIRECTORY_WRITE: u32 = 1 << 20;
-pub const RIGHT_DIRECTORY_LIST: u32 = 1 << 21;
-pub const RIGHT_DIRECTORY_DERIVE: u32 = 1 << 22;
-pub const RIGHT_INPUT_READ: u32 = 1 << 23;
+pub const RIGHT_STORE_READ: Rights = 1 << 12;
+pub const RIGHT_STORE_WRITE: Rights = 1 << 13;
+pub const RIGHT_HEALTH_CONFIRM: Rights = 1 << 14;
+pub const RIGHT_BOOT_UPDATE: Rights = 1 << 15;
+pub const RIGHT_SPAWN: Rights = 1 << 16;
+pub const RIGHT_ENDPOINT_CREATE: Rights = 1 << 17;
+pub const RIGHT_SUPERVISE: Rights = 1 << 18;
+pub const RIGHT_DIRECTORY_READ: Rights = 1 << 19;
+pub const RIGHT_DIRECTORY_WRITE: Rights = 1 << 20;
+pub const RIGHT_DIRECTORY_LIST: Rights = 1 << 21;
+pub const RIGHT_DIRECTORY_DERIVE: Rights = 1 << 22;
+pub const RIGHT_INPUT_READ: Rights = 1 << 23;
 
 /// All rights a capability may ever carry. Used to reject unknown bits.
-pub const RIGHT_ALL: u32 = RIGHT_SEND
+pub const RIGHT_ALL: Rights = RIGHT_SEND
     | RIGHT_RECV
     | RIGHT_TRANSFER
     | RIGHT_EXEC
@@ -56,7 +63,7 @@ pub const RIGHT_ALL: u32 = RIGHT_SEND
     | RIGHT_DMA_RELEASE
     | RIGHT_IRQ_ACK
     | RIGHT_BUFFER_WRITE
-    | RIGHT_MAP
+    | RIGHT_BUFFER_MAP
     | RIGHT_BLOCK_READ
     | RIGHT_BLOCK_WRITE
     | RIGHT_STORE_READ
@@ -75,13 +82,13 @@ pub const RIGHT_ALL: u32 = RIGHT_SEND
 #[derive(Clone)]
 pub struct Capability {
     pub object: KernelObject,
-    pub rights: u32,
+    pub rights: Rights,
 }
 
 impl Capability {
     /// Return a clone of this capability with rights narrowed to `mask`.
     /// Widening (any bit in `mask` not already held) is rejected.
-    pub fn derive(&self, mask: u32) -> Result<Self, CapError> {
+    pub fn derive(&self, mask: Rights) -> Result<Self, CapError> {
         if mask & !RIGHT_ALL != 0 {
             return Err(CapError::BadRights);
         }
@@ -131,7 +138,7 @@ impl KernelObject {
     /// meta-right valid on every capability; every other bit names the
     /// operation it gates on the specific object. The authoritative
     /// object-by-rights matrix lives in `docs/capability-matrix.md`.
-    pub fn valid_rights(&self) -> u32 {
+    pub fn valid_rights(&self) -> Rights {
         let object_rights = match self {
             KernelObject::Endpoint(_) => RIGHT_SEND | RIGHT_RECV,
             KernelObject::EndpointFactory => RIGHT_ENDPOINT_CREATE,
@@ -141,7 +148,7 @@ impl KernelObject {
             KernelObject::PciFunction(_) => RIGHT_MAP_MMIO | RIGHT_DMA_PIN | RIGHT_DMA_RELEASE,
             KernelObject::DmaMemory(_) => RIGHT_DMA_RELEASE,
             KernelObject::Irq(_) => RIGHT_IRQ_ACK,
-            KernelObject::SharedBuffer(_) => RIGHT_BUFFER_WRITE | RIGHT_MAP,
+            KernelObject::SharedBuffer(_) => RIGHT_BUFFER_WRITE | RIGHT_BUFFER_MAP,
             KernelObject::BlockDevice(_) => {
                 RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE | RIGHT_BOOT_UPDATE
             }

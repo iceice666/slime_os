@@ -451,7 +451,12 @@ fn sys_spawn(frame: &mut UserFrame) {
     let executable_slot = frame.rdi as u32;
     let grant_count = frame.rdx as usize;
     if grant_count > crate::capability::MAX_CAPS
-        || (grant_count > 0 && !current_user_range(frame.rsi, grant_count * 8, false))
+        || (grant_count > 0
+            && !current_user_range(
+                frame.rsi,
+                grant_count * core::mem::size_of::<task::SpawnGrant>(),
+                false,
+            ))
     {
         frame.rax = ipc::ERR_INVALID_ARG as u64;
         return;
@@ -551,7 +556,7 @@ fn sys_cap_drop(frame: &mut UserFrame) {
 
 fn sys_directory_inspect(frame: &mut UserFrame) {
     let slot = frame.rdi as u32;
-    let required = frame.rsi as u32;
+    let required = frame.rsi;
     if required == 0
         || required
             & !(RIGHT_DIRECTORY_READ
@@ -592,7 +597,7 @@ fn sys_directory_inspect(frame: &mut UserFrame) {
 fn sys_directory_derive(frame: &mut UserFrame) {
     let slot = frame.rdi as u32;
     let path_len = frame.rdx as usize;
-    let rights = frame.r10 as u32;
+    let rights = frame.r10;
     let allowed_rights = RIGHT_DIRECTORY_READ
         | RIGHT_DIRECTORY_WRITE
         | RIGHT_DIRECTORY_LIST

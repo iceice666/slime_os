@@ -25,6 +25,7 @@ POWERBOX_CONTRACT = ROOT / "contracts" / "powerbox" / "v1"
 POWERBOX_BINDING_GENERATOR = ROOT / "scripts" / "generate-powerbox-bindings.py"
 BOOT_BINDING_GENERATOR = ROOT / "scripts" / "generate-boot-bindings.py"
 GENERATION_V2_CONTRACT = ROOT / "contracts" / "generation" / "v2"
+GENERATION_V3_CONTRACT = ROOT / "contracts" / "generation" / "v3"
 KERNEL_IMAGE_CONTRACT = ROOT / "contracts" / "kernel-image" / "v1"
 BOOTSTATE_CONTRACT = ROOT / "contracts" / "bootstate" / "v1"
 BOOTSTATE_TRACE_CONTRACT = ROOT / "contracts" / "bootstate" / "trace" / "v1"
@@ -117,6 +118,7 @@ run("check", str(TRANSFER_CONTRACT / "gen_rust.zt"))
 
 for contract in (
     GENERATION_V2_CONTRACT,
+    GENERATION_V3_CONTRACT,
     KERNEL_IMAGE_CONTRACT,
     BOOTSTATE_CONTRACT,
     BOOTSTATE_TRACE_CONTRACT,
@@ -128,11 +130,25 @@ for contract in (
     run("check", str(contract / "schema.zt"))
     run("check", str(contract / "gen_rust.zt"))
 
-invalid_boot_layout = run("run", str(GENERATION_V2_CONTRACT / "check-invalid-layout.zt"))
-if "INVALID_GENERATION_SCHEMA" not in invalid_boot_layout:
-    raise SystemExit("generation wire-layout mismatch was not rejected")
+for contract in (GENERATION_V2_CONTRACT, GENERATION_V3_CONTRACT):
+    invalid_boot_layout = run("run", str(contract / "check-invalid-layout.zt"))
+    if "INVALID_GENERATION_SCHEMA" not in invalid_boot_layout:
+        raise SystemExit("generation wire-layout mismatch was not rejected")
 subprocess.run(
     [sys.executable, str(BOOT_BINDING_GENERATOR), "--check"],
+    cwd=ROOT,
+    check=True,
+)
+
+subprocess.run(
+    [
+        "cargo",
+        "test",
+        "--quiet",
+        "--lib",
+        "--manifest-path",
+        str(ROOT / "boot-contracts" / "Cargo.toml"),
+    ],
     cwd=ROOT,
     check=True,
 )

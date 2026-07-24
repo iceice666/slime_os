@@ -70,7 +70,10 @@ def authority_manifest_identity(generation: bytes) -> bytes:
             encoded = value.encode()
             hasher.update(struct.pack("<H", len(encoded)))
             hasher.update(encoded)
-        hasher.update(struct.pack("<II", row[3], row[4]))
+        # build-transfer only ever ingests a freshly built v3 source generation,
+        # unpacked above with the v3 GENERATION_GRANT layout (64-bit rights).
+        hasher.update(struct.pack("<Q", row[3]))
+        hasher.update(struct.pack("<I", row[4]))
     return hasher.digest()
 
 
