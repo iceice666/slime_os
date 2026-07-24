@@ -8,6 +8,7 @@ A milestone is complete only when its exit condition is observed. Compiled code,
 
 | Track | Status | Next open gate |
 | --- | --- | --- |
+| [Backlog](00-backlog.md) | 1 open defect | Resolve B1 `generation_cmd_check` negative scenario |
 | [Foundations](01-foundations.md) | M1–M4 and M6 complete; M5 mechanisms complete | Record M5.7 removable-media Framework evidence without internal-NVMe modification |
 | [Core runtime](02-core-runtime.md) | Not started | C7 bounded resource and shared-sample plane |
 | [ROS 2 compatibility](03-ros2-compatibility.md) | Not started | Admit R1 only after C8 and the H6 network-service contract exist |
@@ -22,6 +23,8 @@ The active work lanes are deliberately parallel:
 - **Platform lane:** implement H2 and H4 before promoting any DMA-capable physical driver.
 
 No lane may use progress in another lane to claim an unobserved exit condition.
+
+The [backlog](00-backlog.md) sits ahead of all lanes: resolve or explicitly defer its open defects before opening a new track gate. Backlog items restore an already claimed exit condition or remove debt that would compound under new work; they are not new capability.
 
 ## Track map
 
