@@ -1,7 +1,4 @@
-#[path = "gen.rs"]
-mod generated;
-
-pub use generated::*;
+pub use slime_proto::generation::*;
 
 pub const GENERATION_E_OK: i32 = 0;
 pub const GENERATION_E_BAD_REQUEST: i32 = -1;

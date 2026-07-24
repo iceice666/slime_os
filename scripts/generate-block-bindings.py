@@ -13,18 +13,15 @@ from zutai_cli import STDLIB, binary
 from harness import ROOT
 
 GENERATOR = ROOT / "contracts" / "block" / "v1" / "schema.zt"
-RUST_OUTPUT = ROOT / "kernel" / "src" / "block_proto" / "gen.rs"
-COMPONENT_RUST_OUTPUT = ROOT / "components" / "proto" / "src" / "block.rs"
+RUST_OUTPUT = ROOT / "components" / "proto" / "src" / "block.rs"
 INVALID_SCHEMA = "INVALID_BLOCK_SCHEMA"
 
 
 def render() -> dict[Path, str]:
     with tempfile.TemporaryDirectory(prefix="slime-block-bindings-") as temporary:
         staging = Path(temporary)
-        staged_rust = staging / "kernel" / "src" / "block_proto" / "gen.rs"
-        staged_component_rust = staging / "components" / "proto" / "src" / "block.rs"
+        staged_rust = staging / "components" / "proto" / "src" / "block.rs"
         staged_rust.parent.mkdir(parents=True)
-        staged_component_rust.parent.mkdir(parents=True)
 
         environment = os.environ.copy()
         environment["ZUTAI_STDLIB_ROOT"] = str(STDLIB)
@@ -42,13 +39,10 @@ def render() -> dict[Path, str]:
             sys.stderr.write(process.stdout)
             sys.stderr.write(process.stderr)
             raise SystemExit(process.returncode)
-        if not staged_rust.exists() or not staged_component_rust.exists():
-            raise SystemExit("block generator did not write all binding surfaces")
+        if not staged_rust.exists():
+            raise SystemExit("block generator did not write the binding surface")
 
-        generated = {
-            RUST_OUTPUT: staged_rust.read_text(encoding="utf-8"),
-            COMPONENT_RUST_OUTPUT: staged_component_rust.read_text(encoding="utf-8"),
-        }
+        generated = {RUST_OUTPUT: staged_rust.read_text(encoding="utf-8")}
         if INVALID_SCHEMA in generated.values():
             raise SystemExit("block schema reflection/layout validation failed")
         return generated
@@ -86,10 +80,7 @@ def main() -> None:
     )
     arguments = parser.parse_args()
     rendered = render()
-    generated = {
-        RUST_OUTPUT: format_rust(rendered[RUST_OUTPUT]),
-        COMPONENT_RUST_OUTPUT: format_rust(rendered[COMPONENT_RUST_OUTPUT]),
-    }
+    generated = {RUST_OUTPUT: format_rust(rendered[RUST_OUTPUT])}
 
     if arguments.check:
         for path, contents in generated.items():

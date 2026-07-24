@@ -108,9 +108,7 @@ main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * en
   = caps => [
     root := env.get caps.env "SLIME_GENERATION_MANAGEMENT_BINDINGS_ROOT" ?? ".";
     bindings := gen.render format;
-    kernelPath := t.join "" { root; "/kernel/src/generation_proto/gen.rs"; };
     componentPath := t.join "" { root; "/components/proto/src/generation.rs"; };
-    fs.writeAll caps.write kernelPath bindings.rust;
     fs.writeAll caps.write componentPath bindings.rust
   ];
 

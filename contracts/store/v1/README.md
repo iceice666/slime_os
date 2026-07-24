@@ -2,17 +2,16 @@
 
 This directory defines the request/reply protocol between userspace
 components and the kernel object store service (M5.4). `schema.zt` is the
-normative layout; `gen_rust.zt` renders the kernel Rust bindings
-(`kernel/src/store_proto/gen.rs`) and the identical no_std-compatible Rust
-bindings the `components/` workspace depends on
-(`components/proto/src/store.rs`). Regenerate with `just store_gen` and
-validate freshness with `just contracts_check`.
+normative layout; `gen_rust.zt` renders the shared no_std Rust bindings
+(`components/proto/src/store.rs`). Both userspace and the kernel consume that
+single module. Regenerate with `just store_gen` and validate freshness with
+`just contracts_check`.
 
 The protocol transports operation envelopes only. Object payloads move
 through caller-supplied buffers the syscall gate validates per operation;
 the store format itself (superblocks, records, content hashes) lives in
-`kernel/src/object_store.rs`, and partition selection is bounded by GPT
-validation in `kernel/src/gpt.rs`. Authority is the `ObjectStore`
+`kernel/src/storage/object_store.rs`, and partition selection is bounded by GPT
+validation in `kernel/src/storage/gpt.rs`. Authority is the `ObjectStore`
 capability: `RIGHT_STORE_READ` gates `OP_STAT`/`OP_GET`, `RIGHT_STORE_WRITE`
 gates `OP_PUT` (see `docs/capability-matrix.md`).
 

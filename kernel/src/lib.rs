@@ -6,45 +6,27 @@
 
 extern crate alloc;
 
-pub mod acpi;
-pub mod block_device;
-pub mod block_proto;
-pub mod block_service;
-pub mod boot;
-pub mod bootstrap;
+pub mod arch;
 pub mod capability;
-pub mod component;
-pub mod crc32;
-pub mod crt;
-pub mod dma;
-pub mod frame_buffer;
-pub mod gdt;
-pub mod generation;
-pub mod generation_manager;
-pub mod generation_proto;
-pub mod generation_service;
-pub mod gpt;
-pub mod hardware_inventory;
-pub mod input;
-pub mod interrupts;
+pub mod drivers;
 pub mod ipc;
-pub mod limine;
 pub mod memory;
-pub mod nvme;
-pub mod object_store;
-pub mod pci;
-pub mod platform;
-pub mod recovery;
-pub mod serial;
-pub mod sha256;
-pub mod store_proto;
-pub mod store_service;
+pub mod protocol;
+pub mod runtime;
+pub mod storage;
+pub mod support;
 pub mod syscall;
 pub mod task;
 pub mod time;
-pub mod transfer;
-pub mod trap;
-pub mod virtio_blk;
+
+pub use arch::x86_64::{acpi, boot, crt, gdt, interrupts, limine, pci, platform, trap};
+pub use drivers::{dma, frame_buffer, hardware_inventory, input, nvme, serial, virtio_blk};
+pub use protocol::{block_proto, generation_proto, store_proto};
+pub use runtime::{bootstrap, component, generation, generation_manager, generation_service};
+pub use storage::{
+    block_device, block_service, gpt, object_store, recovery, store_service, transfer,
+};
+pub use support::{crc32, sha256};
 
 use core::panic::PanicInfo;
 

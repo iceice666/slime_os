@@ -14,7 +14,6 @@ from zutai_cli import STDLIB, binary
 from harness import ROOT
 
 GENERATOR = ROOT / "contracts" / "generation-management" / "v1" / "schema.zt"
-KERNEL_OUTPUT = ROOT / "kernel" / "src" / "generation_proto" / "gen.rs"
 COMPONENT_OUTPUT = ROOT / "components" / "proto" / "src" / "generation.rs"
 INVALID_SCHEMA = "INVALID_GENERATION_MANAGEMENT_SCHEMA"
 
@@ -22,9 +21,7 @@ INVALID_SCHEMA = "INVALID_GENERATION_MANAGEMENT_SCHEMA"
 def render() -> dict[Path, str]:
     with tempfile.TemporaryDirectory(prefix="slime-generation-management-bindings-") as temporary:
         staging = Path(temporary)
-        staged_kernel = staging / "kernel" / "src" / "generation_proto" / "gen.rs"
         staged_component = staging / "components" / "proto" / "src" / "generation.rs"
-        staged_kernel.parent.mkdir(parents=True)
         staged_component.parent.mkdir(parents=True)
 
         environment = os.environ.copy()
@@ -43,12 +40,9 @@ def render() -> dict[Path, str]:
             sys.stderr.write(process.stdout)
             sys.stderr.write(process.stderr)
             raise SystemExit(process.returncode)
-        if not staged_kernel.exists() or not staged_component.exists():
-            raise SystemExit("generation-management generator did not write all binding surfaces")
-        generated = {
-            KERNEL_OUTPUT: staged_kernel.read_text(encoding="utf-8"),
-            COMPONENT_OUTPUT: staged_component.read_text(encoding="utf-8"),
-        }
+        if not staged_component.exists():
+            raise SystemExit("generation-management generator did not write the binding surface")
+        generated = {COMPONENT_OUTPUT: staged_component.read_text(encoding="utf-8")}
         if INVALID_SCHEMA in generated.values():
             raise SystemExit("generation-management schema reflection/layout validation failed")
         return generated

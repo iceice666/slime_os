@@ -233,6 +233,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77549399552de45a898a580c1b41d445bf730df867cc44e6c0233bbc4b8329de"
 
 [[package]]
+name = "slime-proto"
+version = "0.1.0"
+
+[[package]]
 name = "slime_os-kernel"
 version = "0.1.0"
 dependencies = [
@@ -240,6 +244,7 @@ dependencies = [
  "limine",
  "noto-sans-mono-bitmap",
  "sha2",
+ "slime-proto",
  "spin",
  "uart_16550",
  "volatile",

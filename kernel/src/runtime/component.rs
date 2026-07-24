@@ -37,8 +37,7 @@
 //!   u16 reserved
 //! ```
 
-#[path = "component/gen.rs"]
-mod generated;
+use slime_proto::component as generated;
 
 use alloc::vec::Vec;
 

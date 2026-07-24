@@ -24,7 +24,7 @@ Slime OS will retain x86-64 as its deterministic reference architecture, add AAr
 | Step | Observation | Consequence |
 |---|---|---|
 | 1 | `kernel/.cargo/config.toml` and `components/.cargo/config.toml` select `x86_64-unknown-none`. | A second target requires explicit build/profile selection rather than another implicit default. |
-| 2 | `kernel/src/trap.rs`, `kernel/src/task/mod.rs`, `kernel/src/memory/vmm.rs`, `kernel/src/interrupts.rs`, and `kernel/src/time/apic.rs` encode x86 registers, `iretq`, CR3, four-level page tables, IDT/APIC/PIT, and x86 interrupt state. | The kernel needs a real architecture boundary; conditional compilation around individual instructions would preserve the coupling. |
+| 2 | `kernel/src/arch/x86_64/trap.rs`, `kernel/src/task/mod.rs`, `kernel/src/memory/vmm.rs`, `kernel/src/arch/x86_64/interrupts.rs`, and `kernel/src/time/apic.rs` encode x86 registers, `iretq`, CR3, four-level page tables, IDT/APIC/PIT, and x86 interrupt state. | The kernel needs a real architecture boundary; conditional compilation around individual instructions would preserve the coupling. |
 | 3 | `components/runtime/src/syscall.rs` defines the userspace ABI as `int 0x80` with x86-64 registers. | Syscall semantics can remain shared, but each ISA needs a documented trap and calling convention. |
 | 4 | `scripts/build-generation.py`, `components/component.ld`, and `kernel/linker.ld` accept and emit only x86-64 ELF layouts. | Build and executable validation must be selected by a signed exact target profile. |
 | 5 | Component and kernel image schemas carry ABI versions but no explicit architecture ID. | A versioned Zutai format change is required before non-x86 executable generations are safe. |

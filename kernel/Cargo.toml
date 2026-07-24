@@ -11,6 +11,7 @@ spin = "0.12.2"
 noto-sans-mono-bitmap = { version = "0.3.2", features = ["unicode-specials", "size_32"] }
 uart_16550 = "0.3.2"
 boot-contracts = { path = "../boot-contracts", features = ["release-crypto"] }
+slime-proto = { path = "../components/proto" }
 sha2 = { version = "0.10.9", default-features = false, features = ["force-soft"] }
 
 [lib]

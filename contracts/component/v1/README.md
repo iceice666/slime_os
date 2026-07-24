@@ -1,9 +1,9 @@
 # Component image format 1
 
 This directory defines the executable encoding for Slime OS components.
-`schema.zt` is the normative layout; `gen_rust.zt` renders the kernel Rust
-bindings (`kernel/src/component/gen.rs`). Regenerate with
-`just component_gen` and validate freshness with `just contracts_check`.
+`schema.zt` is the normative layout; `gen_rust.zt` renders the shared Rust
+bindings (`components/proto/src/component.rs`). Regenerate with `just
+component_gen` and validate freshness with `just contracts_check`.
 
 A component image is the only executable encoding the kernel accepts. Images
 are produced on the host from a statically linked ELF intermediate and carried
@@ -68,7 +68,7 @@ byte is mapped.
 
 ## Validation
 
-The kernel decoder (`kernel/src/component.rs`) rejects malformed images with
+The kernel decoder (`kernel/src/runtime/component.rs`) rejects malformed images with
 a structured `ImageError`: `Truncated`, `BadMagic`, `UnsupportedVersion`,
 `AbiMismatch`, `BadSegmentCount`, `BadStack`, `BadFlags` (unknown bits or
 write+execute combined), `BadSegment` (misaligned, empty, `file_len >

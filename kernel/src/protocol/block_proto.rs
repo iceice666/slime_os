@@ -32,10 +32,7 @@
 //!   u8[48] padding
 //! ```
 
-#[path = "block_proto/gen.rs"]
-mod generated;
-
-pub use generated::{
+pub use slime_proto::block::{
     BLOCK_MAGIC, BLOCK_MAGIC_BYTES, FLAG_INJECT_FLUSH_FAILURE, FLAG_INJECT_INTERRUPTED,
     FLAG_INJECT_REQUEST_FAILURE, FLAG_INJECT_RESET, FLAG_INJECT_TIMEOUT, FLAG_REPLAY_LAST,
     FORMAT_VERSION, OP_FLUSH, OP_READ, OP_WRITE, REPLY_LEN, REQUEST_LEN, WireBlockReply,

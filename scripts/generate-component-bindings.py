@@ -13,14 +13,14 @@ from zutai_cli import STDLIB, binary
 from harness import ROOT
 
 GENERATOR = ROOT / "contracts" / "component" / "v1" / "schema.zt"
-RUST_OUTPUT = ROOT / "kernel" / "src" / "component" / "gen.rs"
+RUST_OUTPUT = ROOT / "components" / "proto" / "src" / "component.rs"
 INVALID_SCHEMA = "INVALID_COMPONENT_SCHEMA"
 
 
 def render() -> str:
     with tempfile.TemporaryDirectory(prefix="slime-component-bindings-") as temporary:
         staging = Path(temporary)
-        staged_rust = staging / "kernel" / "src" / "component" / "gen.rs"
+        staged_rust = staging / "components" / "proto" / "src" / "component.rs"
         staged_rust.parent.mkdir(parents=True)
 
         environment = os.environ.copy()

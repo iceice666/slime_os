@@ -33,7 +33,7 @@ pythonBindings :: Format -> Text = format => w.join {
 };
 
 -- Schema-owned scalars + layout-derived offsets shared with
--- kernel/src/object_store.rs. The append/commit machinery stays hand-written
+-- kernel/src/storage/object_store.rs. The append/commit machinery stays hand-written
 -- in that module; every layout constant comes from this contract.
 rustOffsets :: Text -> Int -> List w.WireField -> Text
   = prefix offset fields => match fields {

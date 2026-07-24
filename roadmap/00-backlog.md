@@ -55,7 +55,7 @@ polling) would deadlock if `recv` blocked on one slot. Instead:
    multi-source from the start.
 3. Add waiter registration to each wake source: a waiter task id (SPSC 1:1 is
    sufficient for current channels) in `EndpointInner` (`kernel/src/ipc`), an
-   input-waiter slot for the keyboard queue (`kernel/src/input.rs`), and a
+   input-waiter slot for the keyboard queue (`kernel/src/drivers/input.rs`), and
    supervision-waiter link on the parent task.
 4. Wire wakes from all four sources: `ipc::send` (peer enqueue), the keyboard
    IRQ handler (`interrupts.rs`), `input::pump_script`, and `task::terminate`

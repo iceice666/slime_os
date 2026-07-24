@@ -101,7 +101,7 @@ main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * en
   = caps => [
     root := env.get caps.env "SLIME_COMPONENT_BINDINGS_ROOT" ?? ".";
     bindings := gen.render imageFormat;
-    rustPath := t.join "" { root; "/kernel/src/component/gen.rs"; };
+    rustPath := t.join "" { root; "/components/proto/src/component.rs"; };
     fs.writeAll caps.write rustPath bindings.rust
   ];
 

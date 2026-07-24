@@ -2,6 +2,7 @@
 
 // Protocol modules are generated from contracts/*/v1 schemas.
 pub mod block;
+pub mod component;
 pub mod fs;
 pub mod generation;
 pub mod powerbox;

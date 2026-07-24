@@ -28,10 +28,7 @@
 //!   u64 hash0..hash3 (OP_PUT: stored identity; OP_GET: verified identity)
 //! ```
 
-#[path = "store_proto/gen.rs"]
-mod generated;
-
-pub use generated::{
+pub use slime_proto::store::{
     FORMAT_VERSION, OP_GET, OP_PUT, OP_STAT, REPLY_LEN, REQUEST_LEN, STORE_MAGIC,
     STORE_MAGIC_BYTES, WireStoreReply, WireStoreRequest,
 };
