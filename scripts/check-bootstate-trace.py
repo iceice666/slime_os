@@ -87,21 +87,38 @@ class TraceError(Exception):
     pass
 
 
+# A wedged guest (e.g. a stack overflow that triple-faults into a reboot loop)
+# would otherwise hang the check forever, since QEMU is only asked to exit on a
+# clean `isa-debug-exit`. Bound every subprocess so a hang fails loudly instead.
+BOOT_TIMEOUT_SECONDS = 600
+
+
 def run(
     arguments: list[str],
     *,
     environment: dict[str, str] | None = None,
     allow_failure: bool = False,
+    timeout: int | None = BOOT_TIMEOUT_SECONDS,
 ) -> str:
-    process = subprocess.run(
-        arguments,
-        cwd=ROOT,
-        env=environment,
-        check=False,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
+    try:
+        process = subprocess.run(
+            arguments,
+            cwd=ROOT,
+            env=environment,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as error:
+        output = error.output or ""
+        if isinstance(output, bytes):
+            output = output.decode(errors="replace")
+        sys.stdout.write(output)
+        raise SystemExit(
+            f"command timed out after {timeout}s (wedged guest?): {arguments}"
+        ) from error
     if process.returncode != 0 and not allow_failure:
         sys.stdout.write(process.stdout)
         raise SystemExit(process.returncode)
@@ -393,7 +410,9 @@ def bootstore_bytes(image: Path) -> bytes:
 
 def run_scenario(image: Path) -> tuple[list[dict], dict]:
     image.unlink(missing_ok=True)
-    kernel = ROOT / "kernel" / "target" / "x86_64-unknown-none" / "debug" / "slime_os-kernel"
+    # Boot the release kernel: the Justfile target builds `--release`, and the
+    # debug kernel's much larger stack frames overflow the boot stack.
+    kernel = ROOT / "kernel" / "target" / "x86_64-unknown-none" / "release" / "slime_os-kernel"
 
     environment = os.environ.copy()
     environment["SLIME_GENERATION_NUMBER"] = "99"

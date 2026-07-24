@@ -15,7 +15,8 @@ ROOT = Path(__file__).resolve().parent.parent
 BUILD = ROOT / "scripts" / "build-generation.py"
 CHECK_PATH = ROOT / "scripts" / "check-generation.py"
 RELEASE_TRUST_PATH = ROOT / "scripts" / "release_trust.py"
-KERNEL = ROOT / "kernel" / "target" / "x86_64-unknown-none" / "debug" / "slime_os-kernel"
+# Embed the release kernel the Justfile target builds, not a stale debug binary.
+KERNEL = ROOT / "kernel" / "target" / "x86_64-unknown-none" / "release" / "slime_os-kernel"
 WORK = Path("/tmp/slime-os-release-trust")
 
 

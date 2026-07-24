@@ -33,20 +33,36 @@ BUILD_GENERATION = load("build_generation", ROOT / "scripts" / "build-generation
 BUILD_TRANSFER = load("build_transfer", ROOT / "scripts" / "build-transfer.py")
 
 
+# Bound each boot so a wedged guest (e.g. a stack-overflow reboot loop) fails
+# loudly instead of hanging the check forever.
+BOOT_TIMEOUT_SECONDS = 600
+
+
 def run(
     arguments: list[str],
     environment: dict[str, str] | None = None,
     cwd: Path = ROOT,
+    timeout: int | None = BOOT_TIMEOUT_SECONDS,
 ) -> str:
-    process = subprocess.run(
-        arguments,
-        cwd=cwd,
-        env=environment,
-        check=False,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
+    try:
+        process = subprocess.run(
+            arguments,
+            cwd=cwd,
+            env=environment,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as error:
+        output = error.output or ""
+        if isinstance(output, bytes):
+            output = output.decode(errors="replace")
+        raise SystemExit(
+            f"command timed out after {timeout}s (wedged guest?): {arguments}\n"
+            + output
+        ) from error
     if process.returncode != 0:
         raise SystemExit(process.stdout)
     return process.stdout

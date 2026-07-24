@@ -38,16 +38,36 @@ CHECK = importlib.util.module_from_spec(CHECK_SPEC)
 CHECK_SPEC.loader.exec_module(CHECK)
 
 
-def run(arguments: list[str], *, environment: dict[str, str] | None = None) -> str:
-    process = subprocess.run(
-        arguments,
-        cwd=ROOT,
-        env=environment,
-        check=False,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
+# Bound each boot so a wedged guest (e.g. a stack-overflow reboot loop) fails
+# loudly instead of hanging the check forever.
+BOOT_TIMEOUT_SECONDS = 600
+
+
+def run(
+    arguments: list[str],
+    *,
+    environment: dict[str, str] | None = None,
+    timeout: int | None = BOOT_TIMEOUT_SECONDS,
+) -> str:
+    try:
+        process = subprocess.run(
+            arguments,
+            cwd=ROOT,
+            env=environment,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as error:
+        output = error.output or ""
+        if isinstance(output, bytes):
+            output = output.decode(errors="replace")
+        sys.stdout.write(output)
+        raise SystemExit(
+            f"command timed out after {timeout}s (wedged guest?): {arguments}"
+        ) from error
     sys.stdout.write(process.stdout)
     if process.returncode != 0:
         raise SystemExit(process.returncode)

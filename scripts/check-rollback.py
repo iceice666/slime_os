@@ -11,6 +11,11 @@ from pathlib import Path
 from boot_contracts import BOOTSTATE_SLOT_BYTES
 
 ROOT = Path(__file__).resolve().parent.parent
+# Boot the release kernel (the Justfile target builds `--release`); the debug
+# kernel's larger stack frames overflow the boot stack.
+KERNEL = ROOT / "kernel" / "target" / "x86_64-unknown-none" / "release" / "slime_os-kernel"
+# Bound each boot so a wedged guest fails loudly instead of hanging forever.
+BOOT_TIMEOUT_SECONDS = 600
 
 CHECK_GENERATION_SPEC = importlib.util.spec_from_file_location(
     "check_generation", ROOT / "scripts" / "check-generation.py"
@@ -27,16 +32,27 @@ def run(
     *,
     environment: dict[str, str] | None = None,
     allow_failure: bool = False,
+    timeout: int | None = BOOT_TIMEOUT_SECONDS,
 ) -> str:
-    process = subprocess.run(
-        arguments,
-        cwd=ROOT,
-        env=environment,
-        check=False,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
+    try:
+        process = subprocess.run(
+            arguments,
+            cwd=ROOT,
+            env=environment,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as error:
+        output = error.output or ""
+        if isinstance(output, bytes):
+            output = output.decode(errors="replace")
+        sys.stdout.write(output)
+        raise SystemExit(
+            f"command timed out after {timeout}s (wedged guest?): {arguments}"
+        ) from error
     sys.stdout.write(process.stdout)
     if process.returncode != 0 and not allow_failure:
         raise SystemExit(process.returncode)
@@ -74,7 +90,7 @@ def main() -> None:
     run(
         [
             str(ROOT / "kernel" / "scripts" / "build-iso.sh"),
-            str(ROOT / "kernel" / "target" / "x86_64-unknown-none" / "debug" / "slime_os-kernel"),
+            str(KERNEL),
             str(image),
             "64",
         ],
@@ -92,7 +108,7 @@ def main() -> None:
         output = run(
             [
                 str(ROOT / "kernel" / "scripts" / "run-kernel.sh"),
-                str(ROOT / "kernel" / "target" / "x86_64-unknown-none" / "debug" / "slime_os-kernel"),
+                str(KERNEL),
                 "-display",
                 "none",
             ],
@@ -113,7 +129,7 @@ def main() -> None:
     output = run(
         [
             str(ROOT / "kernel" / "scripts" / "run-kernel.sh"),
-            str(ROOT / "kernel" / "target" / "x86_64-unknown-none" / "debug" / "slime_os-kernel"),
+            str(KERNEL),
             "-display",
             "none",
         ],
