@@ -1,6 +1,6 @@
 # Core runtime track
 
-**Status:** In progress; C7.1–C7.3 are complete and C7.4 is the next open slice.
+**Status:** In progress; C7.1–C7.4 are complete and C7.5 is the next open slice.
 
 This track turns the existing bounded channels, capabilities, components, and generations into a native typed communication runtime. It is local-first: C7 and C8 require no network or physical driver, and they do not wait for unrelated display, audio, wireless, or GPU work.
 
@@ -124,7 +124,7 @@ Two holders receive distinct generation-declared budgets; one reaches byte or bu
 
 ### C7.4 — Mapping and read-only sealing
 
-**Status:** Not started.
+**Status:** Complete. Shared buffers now expose bounded `SYS_SHARED_BUFFER_MAP`/`SYS_SHARED_BUFFER_UNMAP`/`SYS_SHARED_BUFFER_SEAL`. Mapping installs only page-aligned, non-executable, exact-frame user PTEs for the named buffer capability, gated by `RIGHT_BUFFER_MAP` (writable additionally by `RIGHT_BUFFER_WRITE`) and charged one unit against the holder's `mapping_count` quota under `MAX_MAPPINGS`=64; offset/length/base are range- and overflow-checked and confined to the user half before any page-table change, and a partial map is fully rolled back. Sealing is an irreversible Arc-shared read-only transition that downgrades every live writable PTE before publishing the seal; a created-read-only or sealed region can never obtain a writable mapping. Unmap, release, and supervision-subtree reclamation remove the exact PTEs before returning frames, without disturbing an unrelated mapping. Verified under `just shared_buffer_mapping_check` (8 QEMU cases), with `just test`, `just shared_buffer_accounting_check`, `just shared_buffer_factory_check`, `just contracts_check`, `just generation_check`, `just fmt_check`, `just lint`, and `just framework_safety_check` clean.
 
 **Depends on:** C7.2 shared-buffer objects and C7.3 accounting.
 

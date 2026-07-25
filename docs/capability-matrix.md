@@ -46,8 +46,8 @@ Rights are a flat `u64` (generation format v3); bits 25–63 are free.
 | PciFunction / DmaMemory | DMA_PIN (5) | future pin operation | kernel DMA allocator on a driver's behalf | **ungated** |
 | DmaMemory | DMA_RELEASE (6) | future release/reclaim operation | same | **ungated** |
 | Irq | IRQ_ACK (7) | future ack operation | kernel interrupt subsystem | **ungated** |
-| SharedBuffer | BUFFER_WRITE (8) | future write-into-region operation (C7.4/C7.5) | `SYS_SHARED_BUFFER_CREATE` via a `SharedBufferFactory` cap; kernel-assigned identity | **ungated** |
-| SharedBuffer | BUFFER_MAP (9) | future map-into-address-space operation (C7.4) | same | **ungated** |
+| SharedBuffer | BUFFER_WRITE (8) | writable `SYS_SHARED_BUFFER_MAP`; irreversible `SYS_SHARED_BUFFER_SEAL` | `SYS_SHARED_BUFFER_CREATE` via a `SharedBufferFactory` cap; kernel-assigned identity | gated (C7.4) |
+| SharedBuffer | BUFFER_MAP (9) | read-only `SYS_SHARED_BUFFER_MAP`; exact `SYS_SHARED_BUFFER_UNMAP` | same | gated (C7.4) |
 | BlockDevice | BLOCK_READ (10) | read requests in `SYS_BLOCK_TRANSACT` for the capability's exact PCI function | kernel bootstrap | gated |
 | BlockDevice | BLOCK_WRITE (11) | write and flush requests in `SYS_BLOCK_TRANSACT`; receiver writes in `SYS_GENERATION_RECEIVE` require this together with BLOCK_READ and BOOT_UPDATE | kernel bootstrap | gated (M5.3/M6.7) |
 | ObjectStore | STORE_READ (12) | stat/get requests in `SYS_STORE_TRANSACT` | kernel bootstrap | gated (M5.4) |
@@ -71,6 +71,11 @@ Semantics not visible in the table:
   arrives with exactly the rights the sender attached.
 - `derive` and spawn grants are non-consuming and narrow-only. A derived copy
   that retains `TRANSFER` requires that meta-right on its source.
+- Shared-buffer mappings are page-aligned, non-executable, charged one unit per
+  live map to the mapper's generation quota, and never overwrite an existing
+  user page. `SYS_SHARED_BUFFER_SEAL` downgrades every live writable mapping
+  before publishing an Arc-shared irreversible read-only state; release and
+  subtree teardown remove PTEs before returning the buffer frames.
 - Subdirectory-scoped capabilities may browse and derive further, but cannot
   commit the namespace root. Root transitions require an unscoped WRITE cap;
   scoped writes are rejected before object-store I/O.
@@ -85,9 +90,10 @@ Semantics not visible in the table:
   (`shared-buffer-budget/v1`). A component absent from the budget holds the
   deny-by-default quota and cannot allocate. Release, peer death, supervised
   restart, and revocation reclaim every unloaned page and charge in that
-  subtree without disturbing another subtree's account (C7.3). Outstanding-loan
-  and mapping quotas are declared and bounded now; the operations that consume
-  them land in C7.4/C7.5.
+  subtree without disturbing another subtree's account (C7.3). Mapping quota is
+  consumed and reclaimed now (C7.4, `SharedBufferTable::map`); the
+  outstanding-loan quota is declared and bounded, and the loan/return operation
+  that consumes it lands in C7.5.
 
 ## Bounds
 
@@ -103,6 +109,7 @@ Semantics not visible in the table:
 | Shared-buffer total pages | `MAX_TOTAL_PAGES = 256` (1 MiB) | `SharedBufferTable`; `SharedBufferError::BytesExhausted` |
 | Pages per shared buffer | `MAX_BUFFER_PAGES = 64` | `SharedBufferTable`; `SharedBufferError::BadSize` |
 | Per-holder shared-buffer quota | generation `shared-buffer-budget/v1` resource (`byte_pages`, `buffer_count`, `mapping_count`, `loan_count`); deny by default | `SharedBufferTable::create` charges the creating subtree; `SharedBufferError::QuotaExceeded` |
+| Live shared-buffer mappings | `MAX_MAPPINGS = 64` | `SharedBufferTable::map`; `SharedBufferError::MappingsExhausted` |
 | Declared holders per budget | `MAX_HOLDERS = 32` | `SharedBufferBudget::decode` |
 | Directory path bytes | `MAX_DIRECTORY_PATH = 48` | `SYS_DIRECTORY_DERIVE`; filesystem schema |
 | Directory path depth | `MAX_DIRECTORY_DEPTH = 4` | `DirectoryAuthority::derive`; filesystem schema |

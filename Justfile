@@ -47,6 +47,10 @@ shared_buffer_factory_check:
 # other holders, and full reclamation on subtree teardown.
 shared_buffer_accounting_check:
     cd kernel && cargo test -p slime_os-kernel --test shared_buffer_accounting -- -display none
+# C7.4: bounded shared-buffer mappings charged to manifest quota, exact-range
+# PTE installation, irreversible read-only sealing, and lifecycle reclamation.
+shared_buffer_mapping_check:
+    cd kernel && cargo test -p slime_os-kernel --test shared_buffer_mapping -- -display none
 # M6.2: generated spawn protocol, deterministic command profile, bounded
 # userspace spawn service, profile rejection, and exact grant composition.
 spawn_service_check: contracts_check generation_check

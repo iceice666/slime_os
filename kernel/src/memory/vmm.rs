@@ -223,6 +223,89 @@ pub unsafe fn map_page(virt: VirtAddr, phys: PhysAddr, flags: u64) -> Result<(),
     unsafe { map_page_in(active_pml4(), virt, phys, flags) }
 }
 
+/// Map 4 KiB user page `virt` to `phys` with `flags` in `root`'s user half.
+///
+/// Unlike [`map_page_in`], this does **not** propagate the kernel half to other
+/// address spaces, so it never takes the scheduler lock and is safe to call
+/// while another kernel lock (e.g. the shared-buffer table) is held. It is for
+/// user-half mappings only; the caller must pass [`PTE_USER`] in `flags`.
+/// Returns [`MapError::AlreadyMapped`] without overwriting an existing leaf.
+///
+/// # Safety
+///
+/// Installing a mapping aliases physical memory into the address space; the
+/// caller must ensure `phys` is safe to expose at `virt` with `flags`.
+pub(crate) unsafe fn map_user_page_in(
+    root: PhysAddr,
+    virt: VirtAddr,
+    phys: PhysAddr,
+    flags: u64,
+) -> Result<(), MapError> {
+    // SAFETY: `root` names a live PML4, reachable through the HHDM.
+    let pml4 = unsafe { PageTable::at(root) };
+    // SAFETY: each descent borrows a live table reached through the HHDM.
+    let pdpt = unsafe { next_table(pml4, index(virt, 4))? };
+    let pd = unsafe { next_table(pdpt, index(virt, 3))? };
+    let pt = unsafe { next_table(pd, index(virt, 2))? };
+    let i = index(virt, 1);
+    if pt.entries[i] & PTE_PRESENT != 0 {
+        return Err(MapError::AlreadyMapped);
+    }
+    pt.entries[i] = (phys.0 & ADDR_MASK) | flags | PTE_PRESENT;
+    flush(virt);
+    Ok(())
+}
+
+/// Borrow the leaf entry for user page `virt` in `root`, descending only
+/// through present, non-huge, user tables. Returns `None` if any level is
+/// absent (the page is unmapped) — it never allocates a table.
+fn user_leaf_mut(root: PhysAddr, virt: VirtAddr) -> Option<&'static mut u64> {
+    // SAFETY: `root` names a live PML4; every descent stops at a present entry.
+    let mut table: &mut PageTable = unsafe { PageTable::at(root) };
+    for level in (2..=4).rev() {
+        let entry = table.entries[index(virt, level)];
+        let child = child_table(entry, PTE_USER)?;
+        // SAFETY: `child_table` proved the entry present, non-huge, in RAM.
+        table = unsafe { PageTable::at(child) };
+    }
+    Some(&mut table.entries[index(virt, 1)])
+}
+
+/// Remove the user leaf mapping for `virt` in `root`. Returns `true` if a
+/// present user leaf was cleared, `false` if the page was already unmapped.
+/// Only the leaf entry is touched; intermediate tables intentionally remain.
+///
+/// # Safety
+///
+/// The caller must ensure the physical frame behind `virt` is safe to
+/// invalidate — no live borrow must outlast the unmap.
+pub(crate) unsafe fn unmap_user_page_in(root: PhysAddr, virt: VirtAddr) -> bool {
+    let Some(leaf) = user_leaf_mut(root, virt) else {
+        return false;
+    };
+    if *leaf & (PTE_PRESENT | PTE_USER) != PTE_PRESENT | PTE_USER {
+        return false;
+    }
+    *leaf = 0;
+    flush(virt);
+    true
+}
+
+/// Downgrade the user leaf mapping for `virt` in `root` to read-only by
+/// clearing [`PTE_WRITABLE`]. Returns `true` if a present user leaf was found
+/// (already read-only counts as success), `false` if the page is unmapped.
+pub(crate) fn set_user_page_readonly_in(root: PhysAddr, virt: VirtAddr) -> bool {
+    let Some(leaf) = user_leaf_mut(root, virt) else {
+        return false;
+    };
+    if *leaf & (PTE_PRESENT | PTE_USER) != PTE_PRESENT | PTE_USER {
+        return false;
+    }
+    *leaf &= !PTE_WRITABLE;
+    flush(virt);
+    true
+}
+
 /// Return the leaf page-table flags for `virt` in `root`, or `None` if unmapped.
 pub(crate) fn page_flags_in(root: PhysAddr, virt: VirtAddr) -> Option<u64> {
     // SAFETY: `root` names a live PML4; every descent stops at a present entry.

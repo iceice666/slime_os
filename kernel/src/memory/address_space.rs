@@ -57,6 +57,15 @@ impl AddressSpace {
         }
     }
 
+    /// Translate one mapped user address in this address space. Returns `None`
+    /// for an absent or non-user leaf. Used by shared-buffer lifecycle checks
+    /// to prove an admitted subrange maps the exact buffer frame.
+    pub fn user_translation(&self, addr: u64) -> Option<PhysAddr> {
+        let virt = VirtAddr(addr);
+        vmm::page_flags_in(self.pml4, virt)?;
+        vmm::translate_in(self.pml4, virt)
+    }
+
     pub fn switch(&self) {
         // SAFETY: `self.pml4` is a live PML4 frame for this address space.
         unsafe {

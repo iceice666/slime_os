@@ -366,9 +366,14 @@ pub struct IrqLine {
 ///
 /// The `id` is a monotonic, kernel-assigned identity: userspace cannot forge
 /// or invent one, and cloning across a transfer preserves it so the kernel can
-/// recognize the same buffer. `writable` records whether the holder may write;
-/// [`RIGHT_BUFFER_WRITE`] gates the write syscall and [`RIGHT_BUFFER_MAP`] the
-/// map syscall (both land in later C7 slices).
+/// recognize the same buffer. `writable` records whether the region was created
+/// writable; [`RIGHT_BUFFER_WRITE`] gates the write/seal syscalls and
+/// [`RIGHT_BUFFER_MAP`] the map syscall.
+///
+/// `sealed` is an irreversible transition to read-only (C7.4). Once set it is
+/// never cleared, and it is shared across every clone of the handle so the seal
+/// is visible to all holders. A writable mapping is denied once the region is
+/// sealed even though `writable` (the created-writable flag) stays true.
 #[derive(Debug)]
 pub struct SharedRegion {
     inner: Arc<SharedRegionInner>,
@@ -380,6 +385,7 @@ pub struct SharedRegionInner {
     pub phys: PhysAddr,
     pub pages: usize,
     pub writable: bool,
+    sealed: AtomicBool,
 }
 
 impl SharedRegion {
@@ -390,6 +396,7 @@ impl SharedRegion {
                 phys,
                 pages,
                 writable,
+                sealed: AtomicBool::new(false),
             }),
         }
     }
@@ -404,6 +411,18 @@ impl SharedRegion {
     }
     pub fn writable(&self) -> bool {
         self.inner.writable
+    }
+    /// `true` once the region has been irreversibly sealed read-only.
+    pub fn sealed(&self) -> bool {
+        self.inner
+            .sealed
+            .load(core::sync::atomic::Ordering::Acquire)
+    }
+    /// Irreversibly seal the region read-only. Idempotent; never cleared.
+    pub fn seal(&self) {
+        self.inner
+            .sealed
+            .store(true, core::sync::atomic::Ordering::Release);
     }
     /// Compare by backing allocation identity (shared `Arc`).
     pub fn ptr_eq(&self, other: &SharedRegion) -> bool {

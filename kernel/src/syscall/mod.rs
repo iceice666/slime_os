@@ -32,6 +32,9 @@ pub const SYS_GENERATION_RECEIVE: u64 = 19;
 pub const SYS_WAIT: u64 = 20;
 pub const SYS_SHARED_BUFFER_CREATE: u64 = 21;
 pub const SYS_SHARED_BUFFER_RELEASE: u64 = 22;
+pub const SYS_SHARED_BUFFER_MAP: u64 = 23;
+pub const SYS_SHARED_BUFFER_UNMAP: u64 = 24;
+pub const SYS_SHARED_BUFFER_SEAL: u64 = 25;
 
 const USER_TOP: u64 = 0x0000_8000_0000_0000;
 
@@ -75,6 +78,9 @@ pub fn dispatch(frame: &mut UserFrame) {
         SYS_WAIT => sys_wait(frame),
         SYS_SHARED_BUFFER_CREATE => sys_shared_buffer_create(frame),
         SYS_SHARED_BUFFER_RELEASE => sys_shared_buffer_release(frame),
+        SYS_SHARED_BUFFER_MAP => sys_shared_buffer_map(frame),
+        SYS_SHARED_BUFFER_UNMAP => sys_shared_buffer_unmap(frame),
+        SYS_SHARED_BUFFER_SEAL => sys_shared_buffer_seal(frame),
 
         _ => frame.rax = ipc::ERR_INVALID_ARG as u64,
     }
@@ -629,15 +635,123 @@ fn sys_shared_buffer_release(frame: &mut UserFrame) {
     frame.rax = ipc::ERR_SUCCESS as u64;
 }
 
+/// `SYS_SHARED_BUFFER_MAP(buffer_slot, virtual_base, offset_bytes,
+/// length_bytes, writable)`: map an exact page-aligned subrange of a live
+/// shared buffer into the caller's address space.
+///
+/// `RIGHT_BUFFER_MAP` is always required; `writable != 0` additionally requires
+/// `RIGHT_BUFFER_WRITE`. The mapping consumes one unit of the caller's
+/// generation-declared mapping quota. Bounds, arithmetic, quota, rights, and
+/// seal state are checked before any PTE changes.
+fn sys_shared_buffer_map(frame: &mut UserFrame) {
+    let slot = frame.rdi as u32;
+    let base = frame.rsi;
+    let offset = frame.rdx;
+    let length = frame.r10;
+    let writable = frame.r8 != 0;
+    let Ok(length_usize) = usize::try_from(length) else {
+        frame.rax = ipc::ERR_INVALID_ARG as u64;
+        return;
+    };
+    if !user_range(base, length_usize) {
+        frame.rax = ipc::ERR_INVALID_ARG as u64;
+        return;
+    }
+
+    let context = task::with_current_mut(|task| {
+        let cap = task.caps.get(slot)?;
+        let KernelObject::SharedBuffer(region) = &cap.object else {
+            return None;
+        };
+        if cap.rights & RIGHT_BUFFER_MAP == 0 || (writable && cap.rights & RIGHT_BUFFER_WRITE == 0)
+        {
+            return None;
+        }
+        Some((
+            region.clone(),
+            task.id,
+            task.shared_buffer_quota,
+            task.address_space.pml4(),
+        ))
+    });
+    let Some((region, owner, quota, root)) = context else {
+        frame.rax = ipc::ERR_BAD_CAP as u64;
+        return;
+    };
+    frame.rax = match crate::memory::shared_buffer::SHARED_BUFFER_TABLE
+        .lock()
+        .map(owner, quota, &region, root, base, offset, length, writable)
+    {
+        Ok(()) => ipc::ERR_SUCCESS as u64,
+        Err(error) => shared_buffer_error_code(error) as u64,
+    };
+}
+
+/// `SYS_SHARED_BUFFER_UNMAP(buffer_slot, virtual_base)`: remove the caller's
+/// exact mapping at `virtual_base` and return its mapping charge.
+fn sys_shared_buffer_unmap(frame: &mut UserFrame) {
+    let slot = frame.rdi as u32;
+    let base = frame.rsi;
+    let context = task::with_current_mut(|task| {
+        let cap = task.caps.get(slot)?;
+        let KernelObject::SharedBuffer(region) = &cap.object else {
+            return None;
+        };
+        if cap.rights & RIGHT_BUFFER_MAP == 0 {
+            return None;
+        }
+        Some((region.clone(), task.id, task.address_space.pml4()))
+    });
+    let Some((region, owner, root)) = context else {
+        frame.rax = ipc::ERR_BAD_CAP as u64;
+        return;
+    };
+    frame.rax = match crate::memory::shared_buffer::SHARED_BUFFER_TABLE
+        .lock()
+        .unmap(owner, &region, root, base)
+    {
+        Ok(()) => ipc::ERR_SUCCESS as u64,
+        Err(error) => shared_buffer_error_code(error) as u64,
+    };
+}
+
+/// `SYS_SHARED_BUFFER_SEAL(buffer_slot)`: irreversibly seal one live buffer
+/// read-only. `RIGHT_BUFFER_WRITE` is required: the writer publishes the
+/// transition. Every existing writable PTE is downgraded before success.
+fn sys_shared_buffer_seal(frame: &mut UserFrame) {
+    let slot = frame.rdi as u32;
+    let region = task::with_current_mut(|task| {
+        let cap = task.caps.get(slot)?;
+        let KernelObject::SharedBuffer(region) = &cap.object else {
+            return None;
+        };
+        (cap.rights & RIGHT_BUFFER_WRITE != 0).then(|| region.clone())
+    });
+    let Some(region) = region else {
+        frame.rax = ipc::ERR_BAD_CAP as u64;
+        return;
+    };
+    frame.rax = match crate::memory::shared_buffer::SHARED_BUFFER_TABLE
+        .lock()
+        .seal(&region)
+    {
+        Ok(()) => ipc::ERR_SUCCESS as u64,
+        Err(error) => shared_buffer_error_code(error) as u64,
+    };
+}
+
 fn shared_buffer_error_code(error: crate::memory::shared_buffer::SharedBufferError) -> i64 {
     use crate::memory::shared_buffer::SharedBufferError;
     match error {
-        SharedBufferError::BadSize => ipc::ERR_INVALID_ARG,
+        SharedBufferError::BadSize
+        | SharedBufferError::BadRange
+        | SharedBufferError::MapConflict => ipc::ERR_INVALID_ARG,
         SharedBufferError::OutOfFrames
         | SharedBufferError::ObjectsExhausted
         | SharedBufferError::BytesExhausted
-        | SharedBufferError::QuotaExceeded => ipc::ERR_OUT_OF_MEMORY,
-        SharedBufferError::NotFound => ipc::ERR_BAD_CAP,
+        | SharedBufferError::QuotaExceeded
+        | SharedBufferError::MappingsExhausted => ipc::ERR_OUT_OF_MEMORY,
+        SharedBufferError::NotFound | SharedBufferError::WriteDenied => ipc::ERR_BAD_CAP,
     }
 }
 
