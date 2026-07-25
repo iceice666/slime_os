@@ -18,7 +18,8 @@ pub const ROLE_INIT: u32 = 1;
 /// A capability rights bitset. Flat `u64` as of generation format v3.
 pub type Rights = u64;
 pub const RIGHT_TRANSFER: Rights = 1 << 2;
-pub const RIGHT_ALL: Rights = (1 << 24) - 1;
+pub const RIGHT_ALL_V2: Rights = (1 << 24) - 1;
+pub const RIGHT_ALL: Rights = (1 << 26) - 1;
 pub const MAX_SPAWN_BUDGET: u16 = 32;
 pub const POLICY_IMMUTABLE: u32 = 1;
 pub const POLICY_EPHEMERAL: u32 = 2;
@@ -501,13 +502,18 @@ impl<'a> Generation<'a> {
         if bootstrap.role != ROLE_INIT || self.object(bootstrap.object)?.kind != KIND_BOOTSTRAP {
             return Err(DecodeError::BadBootstrap);
         }
+        let rights_mask = if self.version == FORMAT_VERSION_V2 {
+            RIGHT_ALL_V2
+        } else {
+            RIGHT_ALL
+        };
         let mut previous_grant: Option<(&str, usize, usize)> = None;
         for index in 0..self.grant_count {
             let grant = self.grant(index)?;
             if grant.source >= self.component_count
                 || grant.target >= self.component_count
                 || grant.rights == 0
-                || grant.rights & !RIGHT_ALL != 0
+                || grant.rights & !rights_mask != 0
                 || (grant.rights & RIGHT_TRANSFER != 0) != grant.transferable
             {
                 return Err(DecodeError::BadIndex);
@@ -785,6 +791,15 @@ mod tests {
         assert_eq!(generation.version, FORMAT_VERSION_V2);
         assert_eq!(generation.grant(0).unwrap().rights, rights);
         assert!(generation.grant(0).unwrap().transferable);
+    }
+
+    #[test]
+    fn retained_v2_rejects_v3_only_rights() {
+        let bytes = build(FORMAT_VERSION_V2, 1 << 24);
+        assert!(matches!(
+            Generation::decode(&bytes),
+            Err(DecodeError::BadIndex)
+        ));
     }
 
     #[test]

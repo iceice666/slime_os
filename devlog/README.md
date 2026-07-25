@@ -24,6 +24,7 @@ This directory is the curated, chronological record of investigations, regressio
 | 2026-07-24 | [C7.2 shared-buffer factory allocation](2026-07-24-c7-2-shared-buffer-factory.md) | Verified | SharedBufferFactory object, RIGHT_BUFFER_CREATE, bounded shared-buffer table, shared contiguous allocator, syscall ABI, host builder/checkers |
 | 2026-07-24 | [C7.3 shared-buffer accounting](2026-07-24-c7-3-shared-buffer-accounting.md) | Verified | Shared-buffer budget contract, per-holder quotas charged to supervision subtree, reclamation on terminate, generation-decode validation, host bindings/checkers |
 | 2026-07-24 | [C7.4 shared-buffer mapping and read-only sealing](2026-07-24-c7-4-shared-buffer-mapping.md) | Verified | Map/unmap/seal syscalls, user-half vmm primitives, irreversible Arc-shared seal, mapping quota + MAX_MAPPINGS, teardown-before-free, host allowlist |
+| 2026-07-25 | [C7.5 shared-buffer loan/return lifecycle](2026-07-25-c7-5-shared-buffer-loan.md) | Verified | Loan/map/return/revoke syscalls, RIGHT_BUFFER_LOAN + SharedBufferLoan object, receiver-bound single-return identity, retained-while-loaned pages, MAX_LOANS, peer-fault reclamation, v2/v3 rights masks, host allowlist |
 
 ## Entry format
 

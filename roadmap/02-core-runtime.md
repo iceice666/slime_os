@@ -1,6 +1,6 @@
 # Core runtime track
 
-**Status:** In progress; C7.1–C7.4 are complete and C7.5 is the next open slice.
+**Status:** In progress; C7.1–C7.5 are complete and C7.6 is the next open slice.
 
 This track turns the existing bounded channels, capabilities, components, and generations into a native typed communication runtime. It is local-first: C7 and C8 require no network or physical driver, and they do not wait for unrelated display, audio, wireless, or GPU work.
 
@@ -154,7 +154,7 @@ A holder maps only an in-bounds region charged to its manifest quota, seals the 
 
 ### C7.5 — Loan/return lifecycle and fault reclamation
 
-**Status:** Not started.
+**Status:** Complete. Bounded loan/return over an exact sealed subrange lands as `SYS_SHARED_BUFFER_LOAN`/`SYS_SHARED_BUFFER_LOAN_MAP`/`SYS_SHARED_BUFFER_RETURN`/`SYS_SHARED_BUFFER_REVOKE` behind the new object-specific `RIGHT_BUFFER_LOAN` (bit 25) and a receiver-bound `SharedBufferLoan` kernel object. A loan requires an irreversibly sealed source region, names its receiver through a `RIGHT_SUPERVISE` capability (never an ambient task id), charges one unit against the lender's `loan_count` quota under `MAX_LOANS`=64, and carries a kernel-assigned unforgeable single-return identity. `release_by` retains the creator's pages and buffer charge while any loan is outstanding; the final settle finalizes the region. `map_loan` confines the receiver to the loaned subrange and is always read-only; duplicate, stale, and wrong-buffer returns fail closed without changing accounting. `reclaim_owner` settles every loan naming a dying task as lender or receiver, so peer death, supervised restart, and explicit revocation all deterministically restore the loan and resource counters. Verified under `just shared_buffer_loan_check` (7 QEMU cases), with `just test`, `just contracts_check`, `just generation_check`, `just fmt_check`, `just lint`, `just fmt_check_components`, `just lint_components`, and `just framework_safety_check` clean.
 
 **Depends on:** C7.3 accounting and C7.4 sealed mappings.
 

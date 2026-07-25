@@ -18,7 +18,7 @@ use crate::memory::PhysAddr;
 pub const MAX_CAPS: usize = 64;
 
 /// A capability rights bitset. Flat `u64` as of generation format v3; bits
-/// 25-63 are free for future object-specific operations.
+/// 26-63 are free for future object-specific operations.
 pub type Rights = u64;
 
 // --- Rights bits ---------------------------------------------------------
@@ -55,6 +55,9 @@ pub const RIGHT_INPUT_READ: Rights = 1 << 23;
 // C7.2 shared-buffer factory allocation right. Gates
 // `SYS_SHARED_BUFFER_CREATE` on a `SharedBufferFactory` capability.
 pub const RIGHT_BUFFER_CREATE: Rights = 1 << 24;
+// C7.5 shared-buffer loan right. Gates creating or revoking a bounded loan
+// from an exact sealed `SharedBuffer`.
+pub const RIGHT_BUFFER_LOAN: Rights = 1 << 25;
 
 /// All rights a capability may ever carry. Used to reject unknown bits.
 pub const RIGHT_ALL: Rights = RIGHT_SEND
@@ -81,7 +84,8 @@ pub const RIGHT_ALL: Rights = RIGHT_SEND
     | RIGHT_DIRECTORY_LIST
     | RIGHT_DIRECTORY_DERIVE
     | RIGHT_INPUT_READ
-    | RIGHT_BUFFER_CREATE;
+    | RIGHT_BUFFER_CREATE
+    | RIGHT_BUFFER_LOAN;
 
 #[derive(Clone)]
 pub struct Capability {
@@ -129,6 +133,10 @@ pub enum KernelObject {
     DmaMemory(DmaRegion),
     Irq(IrqLine),
     SharedBuffer(SharedRegion),
+    /// Receiver authority over one exact outstanding shared-buffer loan. This
+    /// object can map only through the loan-aware path and never carries write
+    /// authority.
+    SharedBufferLoan(BufferLoan),
     BlockDevice(PciFunctionInfo),
     /// Authority over the GPT-validated, content-addressed object store
     /// partition (M5.4). Created by the kernel bootstrap; the store service
@@ -158,7 +166,10 @@ impl KernelObject {
             KernelObject::PciFunction(_) => RIGHT_MAP_MMIO | RIGHT_DMA_PIN | RIGHT_DMA_RELEASE,
             KernelObject::DmaMemory(_) => RIGHT_DMA_RELEASE,
             KernelObject::Irq(_) => RIGHT_IRQ_ACK,
-            KernelObject::SharedBuffer(_) => RIGHT_BUFFER_WRITE | RIGHT_BUFFER_MAP,
+            KernelObject::SharedBuffer(_) => {
+                RIGHT_BUFFER_WRITE | RIGHT_BUFFER_MAP | RIGHT_BUFFER_LOAN
+            }
+            KernelObject::SharedBufferLoan(_) => RIGHT_BUFFER_MAP,
             KernelObject::BlockDevice(_) => {
                 RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE | RIGHT_BOOT_UPDATE
             }
@@ -435,6 +446,31 @@ impl Clone for SharedRegion {
         Self {
             inner: self.inner.clone(),
         }
+    }
+}
+
+/// Kernel-created receiver handle for one outstanding shared-buffer loan.
+///
+/// The range and receiver binding remain in [`SharedBufferTable`]; this handle
+/// carries only the unforgeable identity and exact backing region needed to
+/// validate map/return operations. It never exposes write authority.
+#[derive(Debug, Clone)]
+pub struct BufferLoan {
+    id: u64,
+    region: SharedRegion,
+}
+
+impl BufferLoan {
+    pub(crate) fn new(id: u64, region: SharedRegion) -> Self {
+        Self { id, region }
+    }
+
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+
+    pub fn region(&self) -> &SharedRegion {
+        &self.region
     }
 }
 

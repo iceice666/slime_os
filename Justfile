@@ -51,6 +51,10 @@ shared_buffer_accounting_check:
 # PTE installation, irreversible read-only sealing, and lifecycle reclamation.
 shared_buffer_mapping_check:
     cd kernel && cargo test -p slime_os-kernel --test shared_buffer_mapping -- -display none
+# C7.5: bounded sealed-region loans, single-return identities, retained
+# accounting, exact receiver mappings, and peer-fault reclamation.
+shared_buffer_loan_check:
+    cd kernel && cargo test -p slime_os-kernel --test shared_buffer_loan -- -display none
 # M6.2: generated spawn protocol, deterministic command profile, bounded
 # userspace spawn service, profile rejection, and exact grant composition.
 spawn_service_check: contracts_check generation_check

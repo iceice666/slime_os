@@ -1,9 +1,9 @@
 use crate::capability::{
     Capability, KernelObject, RIGHT_BLOCK_READ, RIGHT_BLOCK_WRITE, RIGHT_BOOT_UPDATE,
-    RIGHT_BUFFER_CREATE, RIGHT_BUFFER_MAP, RIGHT_BUFFER_WRITE, RIGHT_DIRECTORY_DERIVE,
-    RIGHT_DIRECTORY_LIST, RIGHT_DIRECTORY_READ, RIGHT_DIRECTORY_WRITE, RIGHT_ENDPOINT_CREATE,
-    RIGHT_HEALTH_CONFIRM, RIGHT_INPUT_READ, RIGHT_RECV, RIGHT_SEND, RIGHT_STORE_READ,
-    RIGHT_STORE_WRITE, RIGHT_TRANSFER,
+    RIGHT_BUFFER_CREATE, RIGHT_BUFFER_LOAN, RIGHT_BUFFER_MAP, RIGHT_BUFFER_WRITE,
+    RIGHT_DIRECTORY_DERIVE, RIGHT_DIRECTORY_LIST, RIGHT_DIRECTORY_READ, RIGHT_DIRECTORY_WRITE,
+    RIGHT_ENDPOINT_CREATE, RIGHT_HEALTH_CONFIRM, RIGHT_INPUT_READ, RIGHT_RECV, RIGHT_SEND,
+    RIGHT_STORE_READ, RIGHT_STORE_WRITE, RIGHT_SUPERVISE, RIGHT_TRANSFER,
 };
 use crate::ipc::{self, MAX_CAPS_PER_MSG, MAX_MSG};
 use crate::task::{self, TermReason};
@@ -35,6 +35,10 @@ pub const SYS_SHARED_BUFFER_RELEASE: u64 = 22;
 pub const SYS_SHARED_BUFFER_MAP: u64 = 23;
 pub const SYS_SHARED_BUFFER_UNMAP: u64 = 24;
 pub const SYS_SHARED_BUFFER_SEAL: u64 = 25;
+pub const SYS_SHARED_BUFFER_LOAN: u64 = 26;
+pub const SYS_SHARED_BUFFER_LOAN_MAP: u64 = 27;
+pub const SYS_SHARED_BUFFER_RETURN: u64 = 28;
+pub const SYS_SHARED_BUFFER_REVOKE: u64 = 29;
 
 const USER_TOP: u64 = 0x0000_8000_0000_0000;
 
@@ -81,6 +85,10 @@ pub fn dispatch(frame: &mut UserFrame) {
         SYS_SHARED_BUFFER_MAP => sys_shared_buffer_map(frame),
         SYS_SHARED_BUFFER_UNMAP => sys_shared_buffer_unmap(frame),
         SYS_SHARED_BUFFER_SEAL => sys_shared_buffer_seal(frame),
+        SYS_SHARED_BUFFER_LOAN => sys_shared_buffer_loan(frame),
+        SYS_SHARED_BUFFER_LOAN_MAP => sys_shared_buffer_loan_map(frame),
+        SYS_SHARED_BUFFER_RETURN => sys_shared_buffer_return(frame),
+        SYS_SHARED_BUFFER_REVOKE => sys_shared_buffer_revoke(frame),
 
         _ => frame.rax = ipc::ERR_INVALID_ARG as u64,
     }
@@ -576,10 +584,9 @@ fn sys_shared_buffer_create(frame: &mut UserFrame) {
         }
     };
     let id = region.id();
-    // The creating holder may write only if it asked for a writable buffer;
-    // map authority is always available to the creator. Both remain narrowable
-    // on transfer and gated by their own syscalls in later C7 slices.
-    let mut rights = RIGHT_BUFFER_MAP | RIGHT_TRANSFER;
+    // The creator may map, loan, and transfer the buffer. Write/seal authority
+    // is present only when writable creation was requested.
+    let mut rights = RIGHT_BUFFER_MAP | RIGHT_BUFFER_LOAN | RIGHT_TRANSFER;
     if writable {
         rights |= RIGHT_BUFFER_WRITE;
     }
@@ -599,7 +606,7 @@ fn sys_shared_buffer_create(frame: &mut UserFrame) {
             // reclaim the buffer so the allocation does not leak.
             let _ = crate::memory::shared_buffer::SHARED_BUFFER_TABLE
                 .lock()
-                .release(&region);
+                .release_by(owner, &region);
             frame.rax = ipc::ERR_OUT_OF_MEMORY as u64;
         }
     }
@@ -610,20 +617,20 @@ fn sys_shared_buffer_create(frame: &mut UserFrame) {
 /// `ERR_BAD_CAP` if the slot is not a `SharedBuffer` this table created.
 fn sys_shared_buffer_release(frame: &mut UserFrame) {
     let slot = frame.rdi as u32;
-    let region = task::with_current_mut(|task| match task.caps.get(slot) {
+    let context = task::with_current_mut(|task| match task.caps.get(slot) {
         Some(Capability {
             object: KernelObject::SharedBuffer(region),
             ..
-        }) => Some(region.clone()),
+        }) => Some((task.id, region.clone())),
         _ => None,
     });
-    let Some(region) = region else {
+    let Some((owner, region)) = context else {
         frame.rax = ipc::ERR_BAD_CAP as u64;
         return;
     };
     if crate::memory::shared_buffer::SHARED_BUFFER_TABLE
         .lock()
-        .release(&region)
+        .release_by(owner, &region)
         .is_err()
     {
         frame.rax = ipc::ERR_BAD_CAP as u64;
@@ -694,12 +701,14 @@ fn sys_shared_buffer_unmap(frame: &mut UserFrame) {
     let base = frame.rsi;
     let context = task::with_current_mut(|task| {
         let cap = task.caps.get(slot)?;
-        let KernelObject::SharedBuffer(region) = &cap.object else {
-            return None;
-        };
         if cap.rights & RIGHT_BUFFER_MAP == 0 {
             return None;
         }
+        let region = match &cap.object {
+            KernelObject::SharedBuffer(region) => region,
+            KernelObject::SharedBufferLoan(loan) => loan.region(),
+            _ => return None,
+        };
         Some((region.clone(), task.id, task.address_space.pml4()))
     });
     let Some((region, owner, root)) = context else {
@@ -740,6 +749,193 @@ fn sys_shared_buffer_seal(frame: &mut UserFrame) {
     };
 }
 
+/// `SYS_SHARED_BUFFER_LOAN(buffer_slot, supervision_slot, offset, length)`:
+/// create a read-only, single-return loan of one exact sealed subrange.
+///
+/// The source buffer requires `RIGHT_BUFFER_LOAN`; the supervision capability
+/// names the exact receiver without ambient task identifiers. On success `rax`
+/// is a `SharedBufferLoan` capability slot and `rdx` is its kernel-assigned
+/// identity. The slot carries `RIGHT_TRANSFER` so the lender can deliver it to
+/// the named receiver over IPC, but map/return authority is bound to that exact
+/// receiver: a slot held by any other task names the loan without being able to
+/// map or return it, and settlement stays reachable through the receiver's or
+/// lender's death and the lender's explicit revoke.
+fn sys_shared_buffer_loan(frame: &mut UserFrame) {
+    let buffer_slot = frame.rdi as u32;
+    let receiver_slot = frame.rsi as u32;
+    let offset = frame.rdx;
+    let length = frame.r10;
+    let context = task::with_current_mut(|task| {
+        let buffer = task.caps.get(buffer_slot)?;
+        let KernelObject::SharedBuffer(region) = &buffer.object else {
+            return None;
+        };
+        if buffer.rights & RIGHT_BUFFER_LOAN == 0 || task.caps.available_slots() == 0 {
+            return None;
+        }
+        let receiver = task.caps.get(receiver_slot)?;
+        let KernelObject::Supervision(receiver_id) = receiver.object else {
+            return None;
+        };
+        if receiver.rights & RIGHT_SUPERVISE == 0 {
+            return None;
+        }
+        Some((
+            task.id,
+            receiver_id,
+            task.shared_buffer_quota,
+            region.clone(),
+        ))
+    });
+    let Some((lender, receiver, quota, region)) = context else {
+        frame.rax = ipc::ERR_BAD_CAP as u64;
+        return;
+    };
+    if !task::is_live(receiver) {
+        frame.rax = ipc::ERR_BAD_CAP as u64;
+        return;
+    }
+    let grant = match crate::memory::shared_buffer::SHARED_BUFFER_TABLE
+        .lock()
+        .loan(lender, receiver, quota, &region, offset, length)
+    {
+        Ok(grant) => grant,
+        Err(error) => {
+            frame.rax = shared_buffer_error_code(error) as u64;
+            return;
+        }
+    };
+    let loan_id = grant.id();
+    let inserted = task::with_current_mut(|task| {
+        task.caps.insert(Capability {
+            object: KernelObject::SharedBufferLoan(grant),
+            rights: RIGHT_BUFFER_MAP | RIGHT_TRANSFER,
+        })
+    });
+    match inserted {
+        Ok(slot) => {
+            frame.rax = slot as u64;
+            frame.rdx = loan_id;
+        }
+        Err(_) => {
+            let _ = crate::memory::shared_buffer::SHARED_BUFFER_TABLE
+                .lock()
+                .revoke_loan(lender, loan_id, &region);
+            frame.rax = ipc::ERR_OUT_OF_MEMORY as u64;
+        }
+    }
+}
+
+/// `SYS_SHARED_BUFFER_LOAN_MAP(loan_slot, virtual_base, offset, length)`:
+/// map a read-only subrange relative to the exact outstanding loan.
+fn sys_shared_buffer_loan_map(frame: &mut UserFrame) {
+    let slot = frame.rdi as u32;
+    let base = frame.rsi;
+    let offset = frame.rdx;
+    let length = frame.r10;
+    let Ok(length_usize) = usize::try_from(length) else {
+        frame.rax = ipc::ERR_INVALID_ARG as u64;
+        return;
+    };
+    if !user_range(base, length_usize) {
+        frame.rax = ipc::ERR_INVALID_ARG as u64;
+        return;
+    }
+    let context = task::with_current_mut(|task| {
+        let cap = task.caps.get(slot)?;
+        let KernelObject::SharedBufferLoan(loan) = &cap.object else {
+            return None;
+        };
+        if cap.rights & RIGHT_BUFFER_MAP == 0 {
+            return None;
+        }
+        Some((
+            loan.id(),
+            loan.region().clone(),
+            task.id,
+            task.shared_buffer_quota,
+            task.address_space.pml4(),
+        ))
+    });
+    let Some((loan_id, region, receiver, quota, root)) = context else {
+        frame.rax = ipc::ERR_BAD_CAP as u64;
+        return;
+    };
+    frame.rax = match crate::memory::shared_buffer::SHARED_BUFFER_TABLE
+        .lock()
+        .map_loan(
+            receiver, quota, loan_id, &region, root, base, offset, length,
+        ) {
+        Ok(()) => ipc::ERR_SUCCESS as u64,
+        Err(error) => shared_buffer_error_code(error) as u64,
+    };
+}
+
+/// `SYS_SHARED_BUFFER_RETURN(loan_slot)`: settle one exact loan and invalidate
+/// the receiver's loan capability.
+fn sys_shared_buffer_return(frame: &mut UserFrame) {
+    let slot = frame.rdi as u32;
+    let context = task::with_current_mut(|task| {
+        let cap = task.caps.get(slot)?;
+        let KernelObject::SharedBufferLoan(loan) = &cap.object else {
+            return None;
+        };
+        if cap.rights & RIGHT_BUFFER_MAP == 0 {
+            return None;
+        }
+        Some((task.id, loan.id(), loan.region().clone()))
+    });
+    let Some((receiver, loan_id, region)) = context else {
+        frame.rax = ipc::ERR_BAD_CAP as u64;
+        return;
+    };
+    if let Err(error) = crate::memory::shared_buffer::SHARED_BUFFER_TABLE
+        .lock()
+        .return_loan(receiver, loan_id, &region)
+    {
+        // A `NotFound` means the loan was already settled out from under this
+        // receiver — the lender revoked it or died and `reclaim_owner` tore
+        // down the mapping. The capability now names a dead loan and grants no
+        // access, so drop it here to reclaim the receiver's slot rather than
+        // leaving it permanently occupied.
+        if matches!(
+            error,
+            crate::memory::shared_buffer::SharedBufferError::NotFound
+        ) {
+            let _ = task::with_current_mut(|task| task.caps.take(slot));
+        }
+        frame.rax = shared_buffer_error_code(error) as u64;
+        return;
+    }
+    let _ = task::with_current_mut(|task| task.caps.take(slot));
+    frame.rax = ipc::ERR_SUCCESS as u64;
+}
+
+/// `SYS_SHARED_BUFFER_REVOKE(buffer_slot, loan_id)`: explicitly settle one
+/// outstanding loan as its lender.
+fn sys_shared_buffer_revoke(frame: &mut UserFrame) {
+    let slot = frame.rdi as u32;
+    let loan_id = frame.rsi;
+    let context = task::with_current_mut(|task| {
+        let cap = task.caps.get(slot)?;
+        let KernelObject::SharedBuffer(region) = &cap.object else {
+            return None;
+        };
+        (cap.rights & RIGHT_BUFFER_LOAN != 0).then(|| (task.id, region.clone()))
+    });
+    let Some((lender, region)) = context else {
+        frame.rax = ipc::ERR_BAD_CAP as u64;
+        return;
+    };
+    frame.rax = match crate::memory::shared_buffer::SHARED_BUFFER_TABLE
+        .lock()
+        .revoke_loan(lender, loan_id, &region)
+    {
+        Ok(()) => ipc::ERR_SUCCESS as u64,
+        Err(error) => shared_buffer_error_code(error) as u64,
+    };
+}
+
 fn shared_buffer_error_code(error: crate::memory::shared_buffer::SharedBufferError) -> i64 {
     use crate::memory::shared_buffer::SharedBufferError;
     match error {
@@ -750,8 +946,11 @@ fn shared_buffer_error_code(error: crate::memory::shared_buffer::SharedBufferErr
         | SharedBufferError::ObjectsExhausted
         | SharedBufferError::BytesExhausted
         | SharedBufferError::QuotaExceeded
-        | SharedBufferError::MappingsExhausted => ipc::ERR_OUT_OF_MEMORY,
-        SharedBufferError::NotFound | SharedBufferError::WriteDenied => ipc::ERR_BAD_CAP,
+        | SharedBufferError::MappingsExhausted
+        | SharedBufferError::LoansExhausted => ipc::ERR_OUT_OF_MEMORY,
+        SharedBufferError::NotFound
+        | SharedBufferError::WriteDenied
+        | SharedBufferError::NotSealed => ipc::ERR_BAD_CAP,
     }
 }
 

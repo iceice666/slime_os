@@ -67,7 +67,7 @@ def check_kernel_image(blob: bytes) -> None:
 
 
 RIGHT_TRANSFER = 1 << 2
-RIGHT_ALL = (1 << 24) - 1
+RIGHT_ALL = (1 << 26) - 1
 MAX_SPAWN_BUDGET = 32
 
 

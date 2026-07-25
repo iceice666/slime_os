@@ -50,6 +50,10 @@ ALLOWED_SYSCALLS = {
     "SYS_SHARED_BUFFER_MAP",
     "SYS_SHARED_BUFFER_UNMAP",
     "SYS_SHARED_BUFFER_SEAL",
+    "SYS_SHARED_BUFFER_LOAN",
+    "SYS_SHARED_BUFFER_LOAN_MAP",
+    "SYS_SHARED_BUFFER_RETURN",
+    "SYS_SHARED_BUFFER_REVOKE",
 }
 ALLOWED_KERNEL_OBJECTS = {
     "Endpoint",
@@ -62,6 +66,7 @@ ALLOWED_KERNEL_OBJECTS = {
     "DmaMemory",
     "Irq",
     "SharedBuffer",
+    "SharedBufferLoan",
     "BlockDevice",
     "ObjectStore",
     "Directory",
@@ -93,6 +98,7 @@ ALLOWED_RIGHTS = {
     "RIGHT_DIRECTORY_DERIVE",
     "RIGHT_INPUT_READ",
     "RIGHT_BUFFER_CREATE",
+    "RIGHT_BUFFER_LOAN",
     "RIGHT_ALL",
 }
 

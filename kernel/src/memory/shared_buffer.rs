@@ -20,7 +20,7 @@
 
 use spin::{LazyLock, Mutex};
 
-use crate::capability::SharedRegion;
+use crate::capability::{BufferLoan, SharedRegion};
 use crate::memory::pmm::{self, CONTIG_MAX_FRAMES};
 use crate::memory::vmm::{
     self, PTE_NO_EXECUTE, PTE_PRESENT, PTE_USER, PTE_WRITABLE, map_user_page_in,
@@ -43,6 +43,10 @@ pub const MAX_TOTAL_PAGES: usize = 256;
 /// mapping table independently of the buffer and page ceilings; a per-holder
 /// mapping quota (C7.3) is layered on top of this hard bound.
 pub const MAX_MAPPINGS: usize = 64;
+
+/// Fixed kernel-wide ceiling on outstanding shared-buffer loans. A separate
+/// per-lender quota is enforced before this table-wide bound.
+pub const MAX_LOANS: usize = 64;
 
 /// Exclusive upper bound of the canonical user half under 4-level x86-64
 /// paging. Shared-buffer mappings are always task-private user mappings.
@@ -97,6 +101,10 @@ pub enum SharedBufferError {
     MappingsExhausted,
     /// A target virtual page is already mapped in the holder's address space.
     MapConflict,
+    /// The region must be irreversibly sealed before it can be loaned.
+    NotSealed,
+    /// The fixed kernel-wide loan table is full ([`MAX_LOANS`]).
+    LoansExhausted,
 }
 
 /// Live per-owner charge. Keyed by the creating supervision-subtree owner
@@ -109,17 +117,19 @@ struct OwnerCharge {
     pages: u32,
     buffers: u32,
     mappings: u32,
+    loans: u32,
 }
 
 impl OwnerCharge {
     fn is_empty(&self) -> bool {
-        self.pages == 0 && self.buffers == 0 && self.mappings == 0
+        self.pages == 0 && self.buffers == 0 && self.mappings == 0 && self.loans == 0
     }
 }
 
 struct Entry {
     region: SharedRegion,
     owner: u64,
+    released: bool,
 }
 
 /// One live shared-buffer mapping into a holder's address space. Recorded so a
@@ -133,12 +143,22 @@ struct Mapping {
     root: PhysAddr,
     base: VirtAddr,
     pages: usize,
+    loan_id: Option<u64>,
 }
 
-/// Upper bound on distinct owners that can hold a charge at once. An owner
-/// entry is created by a buffer or a mapping, so this covers the worst case of
-/// every buffer and every mapping belonging to a distinct owner; it never
-/// underflows the live-task ceiling.
+/// One outstanding, single-return loan of an exact sealed subrange.
+struct Loan {
+    grant: BufferLoan,
+    lender: u64,
+    receiver: u64,
+    offset: u64,
+    length: u64,
+}
+
+/// Upper bound on distinct owners that can hold a charge at once. A lender
+/// already owns a buffer charge and a receiver may add a mapping charge, so
+/// buffers plus mappings bound the number of distinct charged owners even with
+/// loans present.
 const MAX_CHARGE_OWNERS: usize = MAX_SHARED_BUFFERS + MAX_MAPPINGS;
 
 /// Bounded table of live shared buffers and their mappings. Every allocation is
@@ -149,8 +169,10 @@ pub struct SharedBufferTable {
     regions: [Option<Entry>; MAX_SHARED_BUFFERS],
     charges: [Option<OwnerCharge>; MAX_CHARGE_OWNERS],
     mappings: [Option<Mapping>; MAX_MAPPINGS],
+    loans: [Option<Loan>; MAX_LOANS],
     total_pages: usize,
     next_id: u64,
+    next_loan_id: u64,
 }
 
 impl Default for SharedBufferTable {
@@ -165,19 +187,24 @@ impl SharedBufferTable {
             regions: [const { None }; MAX_SHARED_BUFFERS],
             charges: [const { None }; MAX_CHARGE_OWNERS],
             mappings: [const { None }; MAX_MAPPINGS],
+            loans: [const { None }; MAX_LOANS],
             total_pages: 0,
             next_id: 1,
+            next_loan_id: 1,
         }
     }
 
-    /// Pages currently held across all live shared buffers.
+    /// Pages currently retained across all live or loan-retained buffers.
     pub fn total_pages(&self) -> usize {
         self.total_pages
     }
 
-    /// Number of live shared buffers.
+    /// Number of live or loan-retained shared buffers.
     pub fn live_count(&self) -> usize {
-        self.regions.iter().filter(|r| r.is_some()).count()
+        self.regions
+            .iter()
+            .filter(|region| region.is_some())
+            .count()
     }
 
     /// Pages currently charged to `owner`.
@@ -201,19 +228,21 @@ impl SharedBufferTable {
             .unwrap_or(0)
     }
 
+    /// Outstanding loans currently charged to `owner` as lender.
+    pub fn owner_loans(&self, owner: u64) -> u32 {
+        self.charge_index(owner)
+            .map(|slot| self.charges[slot].expect("charge present").loans)
+            .unwrap_or(0)
+    }
+
     fn charge_index(&self, owner: u64) -> Option<usize> {
         self.charges
             .iter()
-            .position(|c| c.is_some_and(|c| c.owner == owner))
+            .position(|charge| charge.is_some_and(|charge| charge.owner == owner))
     }
 
     /// Allocate `pages` contiguous physical frames as a new shared buffer owned
-    /// by `owner` and return its kernel-identified handle. Global and per-owner
-    /// bounds are checked before any frame is pulled, so a rejected request
-    /// disturbs neither physical memory nor any existing holder. `quota` is the
-    /// owner's declared per-holder ceiling; a holder with [`HolderQuota::DENY`]
-    /// cannot allocate. `writable` records whether the creating holder may
-    /// later write into the region.
+    /// by `owner` and return its kernel-identified handle.
     pub fn create(
         &mut self,
         owner: u64,
@@ -224,18 +253,15 @@ impl SharedBufferTable {
         if pages == 0 || pages > MAX_BUFFER_PAGES {
             return Err(SharedBufferError::BadSize);
         }
-        // Per-owner quota is checked before the global ceiling and before any
-        // frame is pulled: one holder reaching its quota is a QuotaExceeded, not
-        // a global-exhaustion signal another holder could observe.
         let charged_pages = self.owner_pages(owner);
         let charged_buffers = self.owner_buffers(owner);
         let pages_u32 = pages as u32;
         if charged_buffers
             .checked_add(1)
-            .is_none_or(|n| n > quota.buffer_count)
+            .is_none_or(|count| count > quota.buffer_count)
             || charged_pages
                 .checked_add(pages_u32)
-                .is_none_or(|n| n > quota.byte_pages)
+                .is_none_or(|count| count > quota.byte_pages)
         {
             return Err(SharedBufferError::QuotaExceeded);
         }
@@ -245,25 +271,77 @@ impl SharedBufferTable {
         let slot = self
             .regions
             .iter()
-            .position(|r| r.is_none())
+            .position(Option::is_none)
             .ok_or(SharedBufferError::ObjectsExhausted)?;
         let base = pmm::alloc_contiguous(pages).ok_or(SharedBufferError::OutOfFrames)?;
         let id = self.next_id;
-        self.next_id += 1;
+        self.next_id = self
+            .next_id
+            .checked_add(1)
+            .ok_or(SharedBufferError::ObjectsExhausted)?;
         let region = SharedRegion::new(id, base, pages, writable);
         self.regions[slot] = Some(Entry {
             region: region.clone(),
             owner,
+            released: false,
         });
         self.total_pages += pages;
         self.charge_buffer(owner, pages_u32);
         Ok(region)
     }
 
-    /// Map one page-aligned subrange of `region` into `root` at `base`, charged
-    /// as one live mapping to `owner`. Bounds, write state, quota, and the fixed
-    /// mapping table are checked before any PTE changes. A page-table failure is
-    /// fully rolled back before returning.
+    /// Create a single-return loan of one exact sealed, page-aligned subrange.
+    /// Only the buffer's accounting owner may lend it. The returned grant is
+    /// kernel-created and carries no write authority.
+    pub fn loan(
+        &mut self,
+        lender: u64,
+        receiver: u64,
+        quota: HolderQuota,
+        region: &SharedRegion,
+        offset: u64,
+        length: u64,
+    ) -> Result<BufferLoan, SharedBufferError> {
+        let entry = self
+            .regions
+            .iter()
+            .flatten()
+            .find(|entry| entry.owner == lender && !entry.released && entry.region.ptr_eq(region))
+            .ok_or(SharedBufferError::NotFound)?;
+        if !entry.region.sealed() {
+            return Err(SharedBufferError::NotSealed);
+        }
+        Self::validate_region_range(region, offset, length)?;
+        if self
+            .owner_loans(lender)
+            .checked_add(1)
+            .is_none_or(|count| count > quota.loan_count)
+        {
+            return Err(SharedBufferError::QuotaExceeded);
+        }
+        let slot = self
+            .loans
+            .iter()
+            .position(Option::is_none)
+            .ok_or(SharedBufferError::LoansExhausted)?;
+        let loan_id = self.next_loan_id;
+        self.next_loan_id = self
+            .next_loan_id
+            .checked_add(1)
+            .ok_or(SharedBufferError::LoansExhausted)?;
+        let grant = BufferLoan::new(loan_id, region.clone());
+        self.loans[slot] = Some(Loan {
+            grant: grant.clone(),
+            lender,
+            receiver,
+            offset,
+            length,
+        });
+        self.charge_loan(lender);
+        Ok(grant)
+    }
+
+    /// Map a page-aligned subrange of a live buffer capability.
     #[allow(clippy::too_many_arguments)]
     pub fn map(
         &mut self,
@@ -276,93 +354,68 @@ impl SharedBufferTable {
         length: u64,
         writable: bool,
     ) -> Result<(), SharedBufferError> {
-        let page = PAGE_SIZE as u64;
-        let region_bytes = (region.pages() as u64)
-            .checked_mul(page)
-            .ok_or(SharedBufferError::BadRange)?;
-        let Some(end) = offset.checked_add(length) else {
-            return Err(SharedBufferError::BadRange);
-        };
-        let Some(virtual_end) = base.checked_add(length) else {
-            return Err(SharedBufferError::BadRange);
-        };
-        if length == 0
-            || !base.is_multiple_of(page)
-            || !offset.is_multiple_of(page)
-            || !length.is_multiple_of(page)
-            || base >= USER_TOP
-            || virtual_end > USER_TOP
-            || end > region_bytes
-        {
-            return Err(SharedBufferError::BadRange);
-        }
         if !self.regions.iter().any(|entry| {
             entry
                 .as_ref()
-                .is_some_and(|entry| entry.region.ptr_eq(region))
+                .is_some_and(|entry| !entry.released && entry.region.ptr_eq(region))
         }) {
             return Err(SharedBufferError::NotFound);
         }
-        if writable && (!region.writable() || region.sealed()) {
-            return Err(SharedBufferError::WriteDenied);
-        }
-        if self
-            .owner_mappings(owner)
-            .checked_add(1)
-            .is_none_or(|count| count > quota.mapping_count)
-        {
-            return Err(SharedBufferError::QuotaExceeded);
-        }
-        let mapping_slot = self
-            .mappings
-            .iter()
-            .position(Option::is_none)
-            .ok_or(SharedBufferError::MappingsExhausted)?;
-
-        let pages = (length / page) as usize;
-        let mut flags = PTE_USER | PTE_PRESENT | PTE_NO_EXECUTE;
-        if writable {
-            flags |= PTE_WRITABLE;
-        }
-        for index in 0..pages {
-            let delta = (index * PAGE_SIZE) as u64;
-            let virt = VirtAddr(base + delta);
-            let phys = PhysAddr(region.phys().0 + offset + delta);
-            // SAFETY: range validation proves `phys` is one of `region`'s
-            // frames, and `virt` is the caller-supplied user page in `root`.
-            let result = unsafe { map_user_page_in(root, virt, phys, flags) };
-            if let Err(error) = result {
-                for rollback in 0..index {
-                    // SAFETY: these are exactly the pages this operation
-                    // installed above; no mapping record has been published.
-                    unsafe {
-                        vmm::unmap_user_page_in(
-                            root,
-                            VirtAddr(base + (rollback * PAGE_SIZE) as u64),
-                        );
-                    }
-                }
-                return Err(match error {
-                    vmm::MapError::AlreadyMapped => SharedBufferError::MapConflict,
-                    vmm::MapError::OutOfFrames => SharedBufferError::OutOfFrames,
-                });
-            }
-        }
-
-        self.mappings[mapping_slot] = Some(Mapping {
-            region_id: region.id(),
-            owner,
-            root,
-            base: VirtAddr(base),
-            pages,
-        });
-        self.charge_mapping(owner);
-        Ok(())
+        Self::validate_mapping_range(region, base, offset, length, writable)?;
+        self.install_mapping(
+            owner, quota, region, root, base, offset, length, writable, None,
+        )
     }
 
-    /// Remove the exact mapping of `region` at `base` from `owner`'s address
-    /// space and return its mapping charge. A stale or mismatched tuple returns
-    /// `NotFound` without touching any PTE.
+    /// Map a read-only subrange relative to an exact outstanding loan. The
+    /// caller must be the named receiver and present the loan's exact buffer.
+    #[allow(clippy::too_many_arguments)]
+    pub fn map_loan(
+        &mut self,
+        receiver: u64,
+        quota: HolderQuota,
+        loan_id: u64,
+        region: &SharedRegion,
+        root: PhysAddr,
+        base: u64,
+        offset: u64,
+        length: u64,
+    ) -> Result<(), SharedBufferError> {
+        let loan = self
+            .loans
+            .iter()
+            .flatten()
+            .find(|loan| {
+                loan.grant.id() == loan_id
+                    && loan.receiver == receiver
+                    && loan.grant.region().ptr_eq(region)
+            })
+            .ok_or(SharedBufferError::NotFound)?;
+        let relative_end = offset
+            .checked_add(length)
+            .ok_or(SharedBufferError::BadRange)?;
+        if relative_end > loan.length {
+            return Err(SharedBufferError::BadRange);
+        }
+        let absolute_offset = loan
+            .offset
+            .checked_add(offset)
+            .ok_or(SharedBufferError::BadRange)?;
+        Self::validate_mapping_range(region, base, absolute_offset, length, false)?;
+        self.install_mapping(
+            receiver,
+            quota,
+            region,
+            root,
+            base,
+            absolute_offset,
+            length,
+            false,
+            Some(loan_id),
+        )
+    }
+
+    /// Remove the exact mapping of `region` at `base` from `owner`.
     pub fn unmap(
         &mut self,
         owner: u64,
@@ -386,14 +439,12 @@ impl SharedBufferTable {
         Ok(())
     }
 
-    /// Irreversibly seal `region` read-only. Every present PTE in every live
-    /// mapping is downgraded before the Arc-shared seal flag is published, so a
-    /// holder cannot retain or later recover writable access.
+    /// Irreversibly seal one live region read-only.
     pub fn seal(&mut self, region: &SharedRegion) -> Result<(), SharedBufferError> {
         if !self.regions.iter().any(|entry| {
             entry
                 .as_ref()
-                .is_some_and(|entry| entry.region.ptr_eq(region))
+                .is_some_and(|entry| !entry.released && entry.region.ptr_eq(region))
         }) {
             return Err(SharedBufferError::NotFound);
         }
@@ -415,29 +466,106 @@ impl SharedBufferTable {
         Ok(())
     }
 
-    /// Reclaim a shared buffer, first removing every mapping of its frames,
-    /// then freeing them and returning page, object, and mapping charges.
+    /// Release using the buffer's recorded accounting owner. Tests and
+    /// kernel-internal rollback use this convenience; syscalls use
+    /// [`Self::release_by`] so a transferred cap cannot release its creator's
+    /// allocation.
     pub fn release(&mut self, region: &SharedRegion) -> Result<(), SharedBufferError> {
+        let owner = self
+            .regions
+            .iter()
+            .flatten()
+            .find(|entry| !entry.released && entry.region.ptr_eq(region))
+            .map(|entry| entry.owner)
+            .ok_or(SharedBufferError::NotFound)?;
+        self.release_by(owner, region)
+    }
+
+    /// Drop `owner`'s local buffer ownership. With active loans the allocation
+    /// and its page/buffer charges remain retained until the last loan settles.
+    pub fn release_by(
+        &mut self,
+        owner: u64,
+        region: &SharedRegion,
+    ) -> Result<(), SharedBufferError> {
         let slot = self
             .regions
             .iter()
-            .position(|r| r.as_ref().is_some_and(|e| e.region.ptr_eq(region)))
+            .position(|entry| {
+                entry.as_ref().is_some_and(|entry| {
+                    entry.owner == owner && !entry.released && entry.region.ptr_eq(region)
+                })
+            })
             .ok_or(SharedBufferError::NotFound)?;
-        self.teardown_region_mappings(region.id());
-        let held = self.regions[slot].take().expect("slot checked non-empty");
-        // SAFETY: every mapping was torn down above and `held.region` was
-        // allocated by `create` via `pmm::alloc_contiguous`.
-        unsafe { pmm::free_contiguous(held.region.phys(), held.region.pages()) };
-        self.total_pages -= held.region.pages();
-        self.uncharge_buffer(held.owner, held.region.pages() as u32);
+        self.teardown_unloaned_region_mappings(region.id());
+        if self.has_region_loans(region.id()) {
+            self.regions[slot]
+                .as_mut()
+                .expect("region slot present")
+                .released = true;
+        } else {
+            self.finalize_region(slot);
+        }
         Ok(())
     }
 
-    /// Reclaim every mapping charged to `owner`, then every live buffer owned
-    /// by it. Releasing each owned buffer additionally removes any mappings of
-    /// that buffer held by another owner, preventing stale PTEs to freed frames.
-    /// Unrelated owners' buffers and mappings remain untouched.
+    /// Return one exact loan. Identity, receiver, and buffer must all match.
+    /// The loan record is removed before its mappings are reclaimed, making a
+    /// second return or later map fail without changing accounting.
+    pub fn return_loan(
+        &mut self,
+        receiver: u64,
+        loan_id: u64,
+        region: &SharedRegion,
+    ) -> Result<(), SharedBufferError> {
+        let slot = self
+            .loans
+            .iter()
+            .position(|loan| {
+                loan.as_ref().is_some_and(|loan| {
+                    loan.grant.id() == loan_id
+                        && loan.receiver == receiver
+                        && loan.grant.region().ptr_eq(region)
+                })
+            })
+            .ok_or(SharedBufferError::NotFound)?;
+        self.settle_loan_slot(slot);
+        Ok(())
+    }
+
+    /// Explicitly revoke one exact loan as its lender.
+    pub fn revoke_loan(
+        &mut self,
+        lender: u64,
+        loan_id: u64,
+        region: &SharedRegion,
+    ) -> Result<(), SharedBufferError> {
+        let slot = self
+            .loans
+            .iter()
+            .position(|loan| {
+                loan.as_ref().is_some_and(|loan| {
+                    loan.grant.id() == loan_id
+                        && loan.lender == lender
+                        && loan.grant.region().ptr_eq(region)
+                })
+            })
+            .ok_or(SharedBufferError::NotFound)?;
+        self.settle_loan_slot(slot);
+        Ok(())
+    }
+
+    /// Settle every loan involving `owner`, then reclaim its mappings and
+    /// buffers. This covers receiver/lender death, restart, and revocation.
     pub fn reclaim_owner(&mut self, owner: u64) -> usize {
+        for slot in 0..self.loans.len() {
+            if self.loans[slot]
+                .as_ref()
+                .is_some_and(|loan| loan.lender == owner || loan.receiver == owner)
+            {
+                self.settle_loan_slot(slot);
+            }
+        }
         for slot in 0..self.mappings.len() {
             if self.mappings[slot].is_some_and(|mapping| mapping.owner == owner) {
                 self.teardown_mapping(slot);
@@ -446,22 +574,186 @@ impl SharedBufferTable {
 
         let mut reclaimed = 0;
         for slot in 0..self.regions.len() {
-            let owned = self.regions[slot]
+            if self.regions[slot]
                 .as_ref()
-                .is_some_and(|entry| entry.owner == owner);
-            if !owned {
-                continue;
+                .is_some_and(|entry| entry.owner == owner)
+            {
+                self.finalize_region(slot);
+                reclaimed += 1;
             }
-            let region = self.regions[slot]
-                .as_ref()
-                .expect("owned region present")
-                .region
-                .clone();
-            self.release(&region)
-                .expect("owned region remains live during reclaim");
-            reclaimed += 1;
         }
         reclaimed
+    }
+
+    fn validate_region_range(
+        region: &SharedRegion,
+        offset: u64,
+        length: u64,
+    ) -> Result<(), SharedBufferError> {
+        let page = PAGE_SIZE as u64;
+        let region_bytes = (region.pages() as u64)
+            .checked_mul(page)
+            .ok_or(SharedBufferError::BadRange)?;
+        let end = offset
+            .checked_add(length)
+            .ok_or(SharedBufferError::BadRange)?;
+        if length == 0
+            || !offset.is_multiple_of(page)
+            || !length.is_multiple_of(page)
+            || end > region_bytes
+        {
+            return Err(SharedBufferError::BadRange);
+        }
+        Ok(())
+    }
+
+    fn validate_mapping_range(
+        region: &SharedRegion,
+        base: u64,
+        offset: u64,
+        length: u64,
+        writable: bool,
+    ) -> Result<(), SharedBufferError> {
+        Self::validate_region_range(region, offset, length)?;
+        let page = PAGE_SIZE as u64;
+        let virtual_end = base
+            .checked_add(length)
+            .ok_or(SharedBufferError::BadRange)?;
+        if !base.is_multiple_of(page) || base >= USER_TOP || virtual_end > USER_TOP {
+            return Err(SharedBufferError::BadRange);
+        }
+        if writable && (!region.writable() || region.sealed()) {
+            return Err(SharedBufferError::WriteDenied);
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn install_mapping(
+        &mut self,
+        owner: u64,
+        quota: HolderQuota,
+        region: &SharedRegion,
+        root: PhysAddr,
+        base: u64,
+        offset: u64,
+        length: u64,
+        writable: bool,
+        loan_id: Option<u64>,
+    ) -> Result<(), SharedBufferError> {
+        if self
+            .owner_mappings(owner)
+            .checked_add(1)
+            .is_none_or(|count| count > quota.mapping_count)
+        {
+            return Err(SharedBufferError::QuotaExceeded);
+        }
+        let mapping_slot = self
+            .mappings
+            .iter()
+            .position(Option::is_none)
+            .ok_or(SharedBufferError::MappingsExhausted)?;
+        let page = PAGE_SIZE as u64;
+        let pages = (length / page) as usize;
+        let mut flags = PTE_USER | PTE_PRESENT | PTE_NO_EXECUTE;
+        if writable {
+            flags |= PTE_WRITABLE;
+        }
+        for index in 0..pages {
+            let delta = (index * PAGE_SIZE) as u64;
+            let virt = VirtAddr(base + delta);
+            let phys = PhysAddr(region.phys().0 + offset + delta);
+            // SAFETY: callers validated that `phys` is an exact region frame
+            // and `virt` is a user page in `root`.
+            let result = unsafe { map_user_page_in(root, virt, phys, flags) };
+            if let Err(error) = result {
+                for rollback in 0..index {
+                    // SAFETY: these are exactly the pages installed above.
+                    unsafe {
+                        vmm::unmap_user_page_in(
+                            root,
+                            VirtAddr(base + (rollback * PAGE_SIZE) as u64),
+                        );
+                    }
+                }
+                return Err(match error {
+                    vmm::MapError::AlreadyMapped => SharedBufferError::MapConflict,
+                    vmm::MapError::OutOfFrames => SharedBufferError::OutOfFrames,
+                });
+            }
+        }
+        self.mappings[mapping_slot] = Some(Mapping {
+            region_id: region.id(),
+            owner,
+            root,
+            base: VirtAddr(base),
+            pages,
+            loan_id,
+        });
+        self.charge_mapping(owner);
+        Ok(())
+    }
+
+    fn has_region_loans(&self, region_id: u64) -> bool {
+        self.loans
+            .iter()
+            .flatten()
+            .any(|loan| loan.grant.region().id() == region_id)
+    }
+
+    fn settle_loan_slot(&mut self, slot: usize) {
+        let loan_id = self.loans[slot]
+            .as_ref()
+            .expect("loan slot present")
+            .grant
+            .id();
+        self.teardown_loan_mappings(loan_id);
+        let loan = self.loans[slot].take().expect("loan slot present");
+        self.uncharge_loan(loan.lender);
+
+        let region_id = loan.grant.region().id();
+        if let Some(region_slot) = self.regions.iter().position(|entry| {
+            entry
+                .as_ref()
+                .is_some_and(|entry| entry.region.id() == region_id && entry.released)
+        }) && !self.has_region_loans(region_id)
+        {
+            self.finalize_region(region_slot);
+        }
+    }
+
+    fn finalize_region(&mut self, slot: usize) {
+        let region_id = self.regions[slot]
+            .as_ref()
+            .expect("region slot present")
+            .region
+            .id();
+        debug_assert!(!self.has_region_loans(region_id));
+        self.teardown_region_mappings(region_id);
+        let held = self.regions[slot].take().expect("region slot present");
+        // SAFETY: every mapping is gone and the region came from
+        // `pmm::alloc_contiguous`.
+        unsafe { pmm::free_contiguous(held.region.phys(), held.region.pages()) };
+        self.total_pages -= held.region.pages();
+        self.uncharge_buffer(held.owner, held.region.pages() as u32);
+    }
+
+    fn teardown_unloaned_region_mappings(&mut self, region_id: u64) {
+        for slot in 0..self.mappings.len() {
+            if self.mappings[slot]
+                .is_some_and(|mapping| mapping.region_id == region_id && mapping.loan_id.is_none())
+            {
+                self.teardown_mapping(slot);
+            }
+        }
+    }
+
+    fn teardown_loan_mappings(&mut self, loan_id: u64) {
+        for slot in 0..self.mappings.len() {
+            if self.mappings[slot].is_some_and(|mapping| mapping.loan_id == Some(loan_id)) {
+                self.teardown_mapping(slot);
+            }
+        }
     }
 
     fn teardown_region_mappings(&mut self, region_id: u64) {
@@ -473,12 +765,9 @@ impl SharedBufferTable {
     }
 
     fn teardown_mapping(&mut self, slot: usize) {
-        let mapping = self.mappings[slot]
-            .take()
-            .expect("mapping slot checked present");
+        let mapping = self.mappings[slot].take().expect("mapping slot present");
         for page in 0..mapping.pages {
-            // SAFETY: the mapping record names exactly the PTEs installed by
-            // `map`; the buffer frames remain live until release completes.
+            // SAFETY: the record names exactly the PTEs installed by a map.
             unsafe {
                 vmm::unmap_user_page_in(
                     mapping.root,
@@ -503,6 +792,7 @@ impl SharedBufferTable {
             pages: 0,
             buffers: 0,
             mappings: 0,
+            loans: 0,
         });
         slot
     }
@@ -544,6 +834,17 @@ impl SharedBufferTable {
             .as_mut()
             .expect("charge present")
             .mappings -= 1;
+        self.remove_empty_charge(slot);
+    }
+
+    fn charge_loan(&mut self, owner: u64) {
+        let slot = self.charge_slot(owner);
+        self.charges[slot].as_mut().expect("charge present").loans += 1;
+    }
+
+    fn uncharge_loan(&mut self, owner: u64) {
+        let slot = self.charge_index(owner).expect("live loan was charged");
+        self.charges[slot].as_mut().expect("charge present").loans -= 1;
         self.remove_empty_charge(slot);
     }
 }

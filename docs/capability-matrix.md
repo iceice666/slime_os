@@ -34,7 +34,7 @@ Every new object or right must satisfy these rules before it ships:
 
 ## Current matrix
 
-Rights are a flat `u64` (generation format v3); bits 25–63 are free.
+Rights are a flat `u64` (generation format v3); bits 26–63 are free.
 
 | Object | Right (bit) | Gated operation | Creation authority | Gate status |
 | --- | --- | --- | --- | --- |
@@ -64,6 +64,8 @@ Rights are a flat `u64` (generation format v3); bits 25–63 are free.
 | Directory | DIRECTORY_DERIVE (22) | `SYS_DIRECTORY_DERIVE` for a subdirectory-scoped, narrow-rights copy | same; powerbox minting needs only this operation | gated (M6.3) |
 | Input | INPUT_READ (23) | `SYS_INPUT_READ` drains one decoded keyboard event | kernel bootstrap, only through a generation grant | gated (M6.4) |
 | SharedBufferFactory | BUFFER_CREATE (24) | `SYS_SHARED_BUFFER_CREATE` mints a kernel-identified `SharedBuffer` under fixed global byte/object bounds; `SYS_SHARED_BUFFER_RELEASE` reclaims it | generation manifest | gated (C7.2) |
+| SharedBuffer | BUFFER_LOAN (25) | `SYS_SHARED_BUFFER_LOAN` mints an exact sealed-region loan for a named receiver; `SYS_SHARED_BUFFER_REVOKE` settles it as lender | same | gated (C7.5) |
+| SharedBufferLoan | BUFFER_MAP (9) | receiver-bound read-only `SYS_SHARED_BUFFER_LOAN_MAP` within the loaned subrange; `SYS_SHARED_BUFFER_RETURN` settles the loan once | kernel-created by `SYS_SHARED_BUFFER_LOAN`; transfer delivers it to the named receiver only | gated (C7.5) |
 
 Semantics not visible in the table:
 
@@ -89,11 +91,11 @@ Semantics not visible in the table:
   supervision-subtree account against its generation-declared per-holder quota
   (`shared-buffer-budget/v1`). A component absent from the budget holds the
   deny-by-default quota and cannot allocate. Release, peer death, supervised
-  restart, and revocation reclaim every unloaned page and charge in that
-  subtree without disturbing another subtree's account (C7.3). Mapping quota is
-  consumed and reclaimed now (C7.4, `SharedBufferTable::map`); the
-  outstanding-loan quota is declared and bounded, and the loan/return operation
-  that consumes it lands in C7.5.
+  restart, and revocation reclaim every page and charge in that subtree without
+  disturbing another subtree's account (C7.3/C7.5). Mapping quota is consumed
+  and reclaimed by `SharedBufferTable::map` (C7.4). Loan quota is consumed by
+  `SharedBufferTable::loan`; a released creator's pages and buffer charge remain
+  retained until the final single-return loan settles (C7.5).
 
 ## Bounds
 
@@ -110,6 +112,7 @@ Semantics not visible in the table:
 | Pages per shared buffer | `MAX_BUFFER_PAGES = 64` | `SharedBufferTable`; `SharedBufferError::BadSize` |
 | Per-holder shared-buffer quota | generation `shared-buffer-budget/v1` resource (`byte_pages`, `buffer_count`, `mapping_count`, `loan_count`); deny by default | `SharedBufferTable::create` charges the creating subtree; `SharedBufferError::QuotaExceeded` |
 | Live shared-buffer mappings | `MAX_MAPPINGS = 64` | `SharedBufferTable::map`; `SharedBufferError::MappingsExhausted` |
+| Live shared-buffer loans | `MAX_LOANS = 64` plus generation `loan_count` per lender | `SharedBufferTable::loan`; `SharedBufferError::LoansExhausted` / `QuotaExceeded` |
 | Declared holders per budget | `MAX_HOLDERS = 32` | `SharedBufferBudget::decode` |
 | Directory path bytes | `MAX_DIRECTORY_PATH = 48` | `SYS_DIRECTORY_DERIVE`; filesystem schema |
 | Directory path depth | `MAX_DIRECTORY_DEPTH = 4` | `DirectoryAuthority::derive`; filesystem schema |
