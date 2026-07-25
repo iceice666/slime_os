@@ -70,6 +70,14 @@ pub fn start() -> ! {
     );
     let init_id = launch_init(&generation);
     INIT_ID.store(init_id, Ordering::Relaxed);
+    // Install init's generation-declared shared-buffer quota (C7.3). A
+    // generation that declares no budget leaves the deny-by-default quota, so
+    // no component allocates shared buffers implicitly. Spawned children
+    // receive their own quota through `record_spawn`.
+    task::set_shared_buffer_quota(
+        init_id,
+        crate::generation::shared_buffer_quota(&generation, "init"),
+    );
     task::set_on_idle(on_idle);
     task::run()
 }
@@ -678,6 +686,15 @@ pub fn record_spawn(component: &'static str, id: task::TaskId) {
         _ => return,
     };
     slot.store(id, Ordering::Relaxed);
+    // Install this component's generation-declared shared-buffer quota (C7.3),
+    // charged to its own supervision-subtree account. Absent from the budget
+    // (or no budget declared) leaves the deny-by-default quota.
+    if let Ok(generation) = crate::generation::decode(crate::boot::generation()) {
+        task::set_shared_buffer_quota(
+            id,
+            crate::generation::shared_buffer_quota(&generation, component),
+        );
+    }
 }
 
 fn storage_probe_required() -> bool {

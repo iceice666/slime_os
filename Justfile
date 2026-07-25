@@ -42,6 +42,11 @@ spawn_prereq_check: contracts_check generation_check
 # narrow-only buffer rights distinct from DMA authority.
 shared_buffer_factory_check:
     cd kernel && cargo test -p slime_os-kernel --test shared_buffer_authority -- -display none
+# C7.3: generation-declared per-holder shared-buffer quotas charged to the
+# creating supervision subtree, structured per-holder exhaustion isolated from
+# other holders, and full reclamation on subtree teardown.
+shared_buffer_accounting_check:
+    cd kernel && cargo test -p slime_os-kernel --test shared_buffer_accounting -- -display none
 # M6.2: generated spawn protocol, deterministic command profile, bounded
 # userspace spawn service, profile rejection, and exact grant composition.
 spawn_service_check: contracts_check generation_check

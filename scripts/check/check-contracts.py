@@ -38,6 +38,7 @@ TRANSFER_CONTRACT = ROOT / "contracts" / "transfer" / "v1"
 STORE_DISK_CONTRACT = ROOT / "contracts" / "store" / "disk" / "v1"
 HANDOFF_CONTRACT = ROOT / "contracts" / "handoff" / "v1"
 RELEASE_CONTRACT = ROOT / "contracts" / "release" / "v1"
+SHARED_BUFFER_BUDGET_CONTRACT = ROOT / "contracts" / "shared-buffer-budget" / "v1"
 
 
 def run(*arguments: str) -> str:
@@ -130,6 +131,7 @@ for contract in (
     STORE_DISK_CONTRACT,
     HANDOFF_CONTRACT,
     RELEASE_CONTRACT,
+    SHARED_BUFFER_BUDGET_CONTRACT,
 ):
     run("check", str(contract / "schema.zt"))
     run("check", str(contract / "gen_rust.zt"))

@@ -80,6 +80,14 @@ Semantics not visible in the table:
 - Spawned code cannot be injected: `Executable` objects reference only
   generation-module bytes verified at boot. Spawn composes known components
   with gifted authority; it cannot introduce new code.
+- Shared-buffer allocation is charged to the creating component's
+  supervision-subtree account against its generation-declared per-holder quota
+  (`shared-buffer-budget/v1`). A component absent from the budget holds the
+  deny-by-default quota and cannot allocate. Release, peer death, supervised
+  restart, and revocation reclaim every unloaned page and charge in that
+  subtree without disturbing another subtree's account (C7.3). Outstanding-loan
+  and mapping quotas are declared and bounded now; the operations that consume
+  them land in C7.4/C7.5.
 
 ## Bounds
 
@@ -94,6 +102,8 @@ Semantics not visible in the table:
 | Live shared buffers | `MAX_SHARED_BUFFERS = 32` | `SharedBufferTable`; `SharedBufferError::ObjectsExhausted` |
 | Shared-buffer total pages | `MAX_TOTAL_PAGES = 256` (1 MiB) | `SharedBufferTable`; `SharedBufferError::BytesExhausted` |
 | Pages per shared buffer | `MAX_BUFFER_PAGES = 64` | `SharedBufferTable`; `SharedBufferError::BadSize` |
+| Per-holder shared-buffer quota | generation `shared-buffer-budget/v1` resource (`byte_pages`, `buffer_count`, `mapping_count`, `loan_count`); deny by default | `SharedBufferTable::create` charges the creating subtree; `SharedBufferError::QuotaExceeded` |
+| Declared holders per budget | `MAX_HOLDERS = 32` | `SharedBufferBudget::decode` |
 | Directory path bytes | `MAX_DIRECTORY_PATH = 48` | `SYS_DIRECTORY_DERIVE`; filesystem schema |
 | Directory path depth | `MAX_DIRECTORY_DEPTH = 4` | `DirectoryAuthority::derive`; filesystem schema |
 | Directory entries per snapshot | `MAX_ENTRIES = 16` | filesystem protocol and snapshot decoder |

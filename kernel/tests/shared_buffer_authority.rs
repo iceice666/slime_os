@@ -25,7 +25,8 @@ use slime_os_kernel::capability::{
 };
 use slime_os_kernel::memory::PhysAddr;
 use slime_os_kernel::memory::shared_buffer::{
-    MAX_BUFFER_PAGES, MAX_SHARED_BUFFERS, MAX_TOTAL_PAGES, SharedBufferError, SharedBufferTable,
+    HolderQuota, MAX_BUFFER_PAGES, MAX_SHARED_BUFFERS, MAX_TOTAL_PAGES, SharedBufferError,
+    SharedBufferTable,
 };
 use slime_os_kernel::{gdt, interrupts, memory};
 
@@ -44,6 +45,18 @@ pub unsafe extern "C" fn _start() -> ! {
 fn panic(info: &core::panic::PanicInfo) -> ! {
     slime_os_kernel::test_panic_handler(info)
 }
+
+/// A fixed owner and an effectively-unbounded quota. C7.2's invariants are the
+/// global page/object ceilings and per-buffer size, orthogonal to C7.3's
+/// per-holder quota, so these tests grant enough quota that the kernel bounds
+/// are always what bite.
+const OWNER: u64 = 0x7;
+const UNBOUNDED: HolderQuota = HolderQuota {
+    byte_pages: u32::MAX,
+    buffer_count: u32::MAX,
+    mapping_count: u32::MAX,
+    loan_count: u32::MAX,
+};
 
 /// A factory capability with only the creation right an unauthorized holder
 /// lacks. This is the authority a generation grant would mint.
@@ -92,7 +105,9 @@ fn factory_does_not_grant_buffer_operations() {
 #[test_case]
 fn buffer_rights_narrow_only() {
     let mut buffers = SharedBufferTable::new();
-    let region = buffers.create(1, true).expect("create writable buffer");
+    let region = buffers
+        .create(OWNER, UNBOUNDED, 1, true)
+        .expect("create writable buffer");
     let cap = Capability {
         object: KernelObject::SharedBuffer(region.clone()),
         rights: RIGHT_BUFFER_WRITE | RIGHT_BUFFER_MAP | RIGHT_TRANSFER,
@@ -123,8 +138,10 @@ fn create_and_release_round_trip() {
     assert_eq!(buffers.live_count(), 0);
     assert_eq!(buffers.total_pages(), 0);
 
-    let a = buffers.create(2, true).expect("create a");
-    let b = buffers.create(3, false).expect("create b");
+    let a = buffers.create(OWNER, UNBOUNDED, 2, true).expect("create a");
+    let b = buffers
+        .create(OWNER, UNBOUNDED, 3, false)
+        .expect("create b");
     assert_ne!(a.id(), b.id(), "identities are distinct");
     assert_eq!(a.pages(), 2);
     assert_eq!(b.writable(), false);
@@ -142,7 +159,7 @@ fn create_and_release_round_trip() {
     ));
 
     // A newly created buffer gets a fresh identity, never a recycled one.
-    let c = buffers.create(1, true).expect("create c");
+    let c = buffers.create(OWNER, UNBOUNDED, 1, true).expect("create c");
     assert_ne!(c.id(), a.id());
     assert_ne!(c.id(), b.id());
 
@@ -157,13 +174,13 @@ fn create_and_release_round_trip() {
 fn bad_sizes_rejected() {
     let mut buffers = SharedBufferTable::new();
     assert!(matches!(
-        buffers.create(0, true),
+        buffers.create(OWNER, UNBOUNDED, 0, true),
         Err(SharedBufferError::BadSize)
     ));
     // Exceeding the per-buffer page cap is a structural BadSize, before any
     // frame is pulled.
     assert!(matches!(
-        buffers.create(MAX_BUFFER_PAGES + 1, true),
+        buffers.create(OWNER, UNBOUNDED, MAX_BUFFER_PAGES + 1, true),
         Err(SharedBufferError::BadSize)
     ));
     assert_eq!(buffers.live_count(), 0);
@@ -177,11 +194,15 @@ fn object_exhaustion_is_structured_and_isolated() {
     let mut buffers = SharedBufferTable::new();
     let mut live = alloc::vec::Vec::new();
     for _ in 0..MAX_SHARED_BUFFERS {
-        live.push(buffers.create(1, true).expect("fill table"));
+        live.push(
+            buffers
+                .create(OWNER, UNBOUNDED, 1, true)
+                .expect("fill table"),
+        );
     }
     let survivor_id = live[0].id();
     assert!(matches!(
-        buffers.create(1, true),
+        buffers.create(OWNER, UNBOUNDED, 1, true),
         Err(SharedBufferError::ObjectsExhausted)
     ));
     // The unrelated holder is untouched by the failed allocation.
@@ -206,14 +227,18 @@ fn byte_exhaustion_is_structured_and_isolated() {
     assert!(full < MAX_SHARED_BUFFERS, "byte budget must bite first");
     let mut live = alloc::vec::Vec::new();
     for _ in 0..full {
-        live.push(buffers.create(chunk, true).expect("fill budget"));
+        live.push(
+            buffers
+                .create(OWNER, UNBOUNDED, chunk, true)
+                .expect("fill budget"),
+        );
     }
     assert_eq!(buffers.total_pages(), MAX_TOTAL_PAGES);
     let before = buffers.total_pages();
     let live_before = buffers.live_count();
     // Even a single-page request now crosses the ceiling.
     assert!(matches!(
-        buffers.create(1, true),
+        buffers.create(OWNER, UNBOUNDED, 1, true),
         Err(SharedBufferError::BytesExhausted)
     ));
     // The existing holders' charges are unchanged; nothing leaked or dropped.

@@ -1,6 +1,6 @@
 # Core runtime track
 
-**Status:** In progress; C7.1 and C7.2 are complete and C7.3 is the next open slice.
+**Status:** In progress; C7.1–C7.3 are complete and C7.4 is the next open slice.
 
 This track turns the existing bounded channels, capabilities, components, and generations into a native typed communication runtime. It is local-first: C7 and C8 require no network or physical driver, and they do not wait for unrelated display, audio, wireless, or GPU work.
 
@@ -94,7 +94,7 @@ A factory-authorized holder creates and releases a kernel-identified shared buff
 
 ### C7.3 — Generation quotas and supervision accounting
 
-**Status:** Not started.
+**Status:** Complete. A versioned Zutai shared-buffer budget contract (`contracts/shared-buffer-budget/v1/`) is stored as a generation `KIND_RESOURCE` object, authenticated through the generation's existing per-object digest table; it declares per-holder `byte_pages`, `buffer_count`, `mapping_count`, and `loan_count` quotas. A present budget is validated deterministically at generation decode and rejects missing, malformed, unsorted/duplicate, or globally-impossible limits before any component launches. `SharedBufferTable::create` charges each allocation to the creating supervision-subtree owner against its `HolderQuota` (deny-by-default when absent), enforced before the global ceiling and side-effect-free on rejection; `reclaim_owner` returns every unloaned page and charge on release, peer death, supervised restart, and revocation (via `task::terminate`) without disturbing another subtree. Mapping-count and outstanding-loan quotas are present and bounded for C7.4/C7.5. Verified under `just shared_buffer_accounting_check` (7 QEMU cases) plus `just contracts_check`, `just generation_check`, `just test`, `just shared_buffer_factory_check`, `just fmt_check`, `just lint`, and `just framework_safety_check` clean. See `devlog/2026-07-24-c7-3-shared-buffer-accounting.md`.
 
 **Depends on:** C7.2 factory allocation; M6.1 supervision and per-spawner accounting.
 

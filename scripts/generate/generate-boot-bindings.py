@@ -32,6 +32,11 @@ GENERATORS = (
     (ROOT / "contracts" / "transfer" / "v1" / "schema.zt", "transfer.py", "transfer.rs"),
     (ROOT / "contracts" / "store" / "disk" / "v1" / "schema.zt", "store_disk.py", "store_disk.rs"),
     (ROOT / "contracts" / "handoff" / "v1" / "schema.zt", "handoff.py", "handoff.rs"),
+    (
+        ROOT / "contracts" / "shared-buffer-budget" / "v1" / "schema.zt",
+        "shared_buffer_budget.py",
+        "shared_buffer_budget.rs",
+    ),
 )
 INVALID_SCHEMA = "INVALID_"
 HEADER = """# @generated from boot contract schemas; do not edit.

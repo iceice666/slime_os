@@ -11,6 +11,7 @@ use crate::capability::{
 use crate::gdt::{USER_CODE_SELECTOR, USER_DATA_SELECTOR};
 use crate::memory::address_space::AddressSpace;
 use crate::memory::pmm::FRAME_ALLOCATOR;
+use crate::memory::shared_buffer::{HolderQuota, SHARED_BUFFER_TABLE};
 use crate::memory::vmm::{MapError, PTE_NO_EXECUTE, PTE_PRESENT, PTE_USER, PTE_WRITABLE};
 use crate::memory::{PAGE_SIZE, VirtAddr};
 use crate::trap::UserFrame;
@@ -79,6 +80,11 @@ pub struct Task {
     /// Task to re-ready when this task terminates, set by `SYS_WAIT` on a
     /// supervising parent. Consumed on the first wake.
     pub wake_on_terminate: Option<TaskId>,
+    /// This holder's generation-declared shared-buffer quota (C7.3). Charged as
+    /// the creating supervision-subtree account. Defaults to
+    /// [`HolderQuota::DENY`]: a component with no declared budget may hold no
+    /// shared buffer.
+    pub shared_buffer_quota: HolderQuota,
 }
 
 impl Task {
@@ -514,6 +520,7 @@ pub fn spawn_with_caps_for(
         spawn_budget: spawn_budget.min(MAX_SPAWN_BUDGET),
         live_children: 0,
         wake_on_terminate: None,
+        shared_buffer_quota: HolderQuota::DENY,
     };
     sched.tasks.push(task);
     sched.ready.push_back(id);
@@ -718,6 +725,21 @@ pub fn with_current_mut<R>(f: impl FnOnce(&mut Task) -> R) -> R {
     })
 }
 
+/// Install a holder's generation-declared shared-buffer quota (C7.3). Called by
+/// the bootstrap launcher after a component is spawned; a component whose
+/// generation declares no budget keeps the deny-by-default [`HolderQuota::DENY`].
+pub fn set_shared_buffer_quota(id: TaskId, quota: HolderQuota) -> bool {
+    without_interrupts(|| {
+        let mut sched = SCHEDULER.lock();
+        if let Some(idx) = sched.index_of(id) {
+            sched.tasks[idx].shared_buffer_quota = quota;
+            true
+        } else {
+            false
+        }
+    })
+}
+
 pub(crate) fn without_interrupts<T>(f: impl FnOnce() -> T) -> T {
     let flags: u64;
     unsafe {
@@ -803,6 +825,11 @@ pub fn terminate(frame: &mut UserFrame, reason: TermReason) {
             sched.tasks[idx].state = TaskState::Terminated(reason);
             sched.tasks[idx].saved = *frame;
             let _drained = sched.tasks[idx].caps.drain();
+            // Reclaim every shared buffer charged to this holder's account.
+            // Peer death, supervised restart, and revocation all funnel through
+            // task termination, so this one call restores the subtree's pages
+            // and charges without disturbing any other owner's account.
+            SHARED_BUFFER_TABLE.lock().reclaim_owner(id);
 
             sched.terminated.push((id, reason));
             // A parent parked in `SYS_WAIT` on this child's supervision slot is

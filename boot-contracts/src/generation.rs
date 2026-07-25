@@ -806,6 +806,9 @@ mod tests {
         bytes[0] = b'X';
         let identity = generation_identity(&bytes);
         bytes[IDENTITY_OFFSET..IDENTITY_END].copy_from_slice(&identity);
-        assert!(matches!(Generation::decode(&bytes), Err(DecodeError::BadMagic)));
+        assert!(matches!(
+            Generation::decode(&bytes),
+            Err(DecodeError::BadMagic)
+        ));
     }
 }

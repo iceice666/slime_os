@@ -548,11 +548,12 @@ fn sys_shared_buffer_create(frame: &mut UserFrame) {
     let factory_slot = frame.rdi as u32;
     let pages = frame.rsi as usize;
     let writable = frame.rdx != 0;
-    let allowed = task::with_current_mut(|task| {
-        task.caps.get(factory_slot).is_some_and(|cap| {
+    let (allowed, owner, quota) = task::with_current_mut(|task| {
+        let ok = task.caps.get(factory_slot).is_some_and(|cap| {
             matches!(cap.object, KernelObject::SharedBufferFactory)
                 && cap.rights & RIGHT_BUFFER_CREATE != 0
-        }) && task.caps.available_slots() >= 1
+        }) && task.caps.available_slots() >= 1;
+        (ok, task.id, task.shared_buffer_quota)
     });
     if !allowed {
         frame.rax = ipc::ERR_BAD_CAP as u64;
@@ -560,7 +561,7 @@ fn sys_shared_buffer_create(frame: &mut UserFrame) {
     }
     let region = match crate::memory::shared_buffer::SHARED_BUFFER_TABLE
         .lock()
-        .create(pages, writable)
+        .create(owner, quota, pages, writable)
     {
         Ok(region) => region,
         Err(error) => {
@@ -634,7 +635,8 @@ fn shared_buffer_error_code(error: crate::memory::shared_buffer::SharedBufferErr
         SharedBufferError::BadSize => ipc::ERR_INVALID_ARG,
         SharedBufferError::OutOfFrames
         | SharedBufferError::ObjectsExhausted
-        | SharedBufferError::BytesExhausted => ipc::ERR_OUT_OF_MEMORY,
+        | SharedBufferError::BytesExhausted
+        | SharedBufferError::QuotaExceeded => ipc::ERR_OUT_OF_MEMORY,
         SharedBufferError::NotFound => ipc::ERR_BAD_CAP,
     }
 }
