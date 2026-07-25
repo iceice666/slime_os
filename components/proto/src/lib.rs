@@ -6,6 +6,7 @@ pub mod component;
 pub mod fs;
 pub mod generation;
 pub mod powerbox;
+pub mod sample_descriptor;
 pub mod spawn;
 pub mod store;
 
@@ -130,4 +131,49 @@ fn packed_fields_valid<const N: usize>(bytes: &[u8; N], count: usize) -> bool {
 
 pub fn valid_spawn_reply(reply: &spawn::WireSpawnReply) -> bool {
     reply.magic == spawn::SPAWN_MAGIC && reply.version == spawn::FORMAT_VERSION
+}
+
+/// Validate a versioned sample descriptor before a receiver maps the loaned
+/// bytes or allocates receiver state. Every field that could steer a mapping or
+/// allocation is bounded here: version, known flags, capability kind, a live
+/// loan identity, a page-aligned in-bounds offset/length within `MAX_SAMPLE_BYTES`,
+/// a non-zero type identity, and zeroed reserved bytes. `expected_type` binds the
+/// descriptor to the receiver's declared type; `expected_loan` binds it to the
+/// exact transferred loan the receiver holds.
+pub fn valid_sample_descriptor(
+    descriptor: &sample_descriptor::WireSampleDescriptor,
+    expected_loan: u64,
+    expected_type: u64,
+    page_size: u64,
+) -> bool {
+    if descriptor.magic != sample_descriptor::SAMPLE_DESCRIPTOR_MAGIC
+        || descriptor.version != sample_descriptor::FORMAT_VERSION
+    {
+        return false;
+    }
+    if descriptor.capability_kind != sample_descriptor::CAPABILITY_KIND_LOAN {
+        return false;
+    }
+    if descriptor.flags & !sample_descriptor::KNOWN_FLAGS != 0 {
+        return false;
+    }
+    if descriptor.reserved.iter().any(|byte| *byte != 0) {
+        return false;
+    }
+    if descriptor.loan_id == 0 || descriptor.loan_id != expected_loan {
+        return false;
+    }
+    if descriptor.type_identity == 0 || descriptor.type_identity != expected_type {
+        return false;
+    }
+    if page_size == 0 || !page_size.is_power_of_two() {
+        return false;
+    }
+    let Some(end) = descriptor.offset.checked_add(descriptor.length) else {
+        return false;
+    };
+    descriptor.length != 0
+        && descriptor.offset.is_multiple_of(page_size)
+        && descriptor.length.is_multiple_of(page_size)
+        && end <= sample_descriptor::MAX_SAMPLE_BYTES as u64
 }

@@ -55,6 +55,11 @@ shared_buffer_mapping_check:
 # accounting, exact receiver mappings, and peer-fault reclamation.
 shared_buffer_loan_check:
     cd kernel && cargo test -p slime_os-kernel --test shared_buffer_loan -- -display none
+# C7.6: versioned sample descriptor over the C7.5 loan lifecycle; byte-identical
+# binding round-trip, malformed-descriptor rejection before mapping, and a
+# payload larger than MAX_MSG carried over descriptor plus shared buffer.
+sample_descriptor_check: contracts_check
+    cd kernel && cargo test -p slime_os-kernel --test sample_descriptor -- -display none
 # M6.2: generated spawn protocol, deterministic command profile, bounded
 # userspace spawn service, profile rejection, and exact grant composition.
 spawn_service_check: contracts_check generation_check
@@ -195,6 +200,10 @@ store_gen:
 # Regenerate userspace spawn-service protocol bindings.
 spawn_gen:
     python3 scripts/generate/generate-spawn-bindings.py
+
+# Regenerate the sample-descriptor protocol bindings (C7.6).
+sample_descriptor_gen:
+    python3 scripts/generate/generate-sample-descriptor-bindings.py
 
 # Regenerate kernel + component generation-management protocol bindings.
 generation_management_gen:

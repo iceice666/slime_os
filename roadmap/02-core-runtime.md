@@ -1,6 +1,6 @@
 # Core runtime track
 
-**Status:** In progress; C7.1–C7.5 are complete and C7.6 is the next open slice.
+**Status:** In progress; C7.1–C7.6 are complete and C7.7 is the next open slice.
 
 This track turns the existing bounded channels, capabilities, components, and generations into a native typed communication runtime. It is local-first: C7 and C8 require no network or physical driver, and they do not wait for unrelated display, audio, wireless, or GPU work.
 
@@ -184,7 +184,7 @@ A lender loans one sealed region and cannot reclaim its pages until the receiver
 
 ### C7.6 — Versioned sample descriptor
 
-**Status:** Not started.
+**Status:** Complete. A versioned Zutai sample-descriptor contract (`contracts/sample-descriptor/v1/`) renders byte-identical `slime-proto` bindings (`WireSampleDescriptor`) whose fixed control message is exactly the channel bound (`DESCRIPTOR_LEN == MAX_MSG == 64`), referencing a transferred `SharedBufferLoan` by capability kind, unforgeable loan identity, page-aligned offset/length, type identity, sequence, and known flags. `valid_sample_descriptor` rejects bad magic/version, wrong capability kind, unknown flag bits, dirty reserved bytes, zero/mismatched loan and type identities, non-power-of-two page size, checked-add offset/length overflow, zero or misaligned length, and length beyond `MAX_SAMPLE_BYTES` before any mapping or allocation; the kernel `map_loan` independently re-validates loan identity, receiver binding, bounds, and read-only mapping. A payload larger than `MAX_MSG` (8192 bytes) traverses descriptor plus shared buffer without widening `MAX_MSG` or copying payload bytes through the kernel queue. Verified under `just sample_descriptor_check` (4 QEMU cases), `just contracts_check` (byte-identical bindings), and the full gate stack.
 
 **Depends on:** C7.4 sealed mappings and C7.5 loan/return lifecycle.
 

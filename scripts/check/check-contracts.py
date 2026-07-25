@@ -39,6 +39,8 @@ STORE_DISK_CONTRACT = ROOT / "contracts" / "store" / "disk" / "v1"
 HANDOFF_CONTRACT = ROOT / "contracts" / "handoff" / "v1"
 RELEASE_CONTRACT = ROOT / "contracts" / "release" / "v1"
 SHARED_BUFFER_BUDGET_CONTRACT = ROOT / "contracts" / "shared-buffer-budget" / "v1"
+SAMPLE_DESCRIPTOR_CONTRACT = ROOT / "contracts" / "sample-descriptor" / "v1"
+SAMPLE_DESCRIPTOR_BINDING_GENERATOR = ROOT / "scripts" / "generate" / "generate-sample-descriptor-bindings.py"
 
 
 def run(*arguments: str) -> str:
@@ -121,6 +123,14 @@ subprocess.run(
 run("check", str(TRANSFER_CONTRACT / "schema.zt"))
 run("check", str(TRANSFER_CONTRACT / "gen_rust.zt"))
 
+run("check", str(SAMPLE_DESCRIPTOR_CONTRACT / "schema.zt"))
+run("check", str(SAMPLE_DESCRIPTOR_CONTRACT / "gen_rust.zt"))
+subprocess.run(
+    [sys.executable, str(SAMPLE_DESCRIPTOR_BINDING_GENERATOR), "--check"],
+    cwd=ROOT,
+    check=True,
+)
+
 for contract in (
     GENERATION_V2_CONTRACT,
     GENERATION_V3_CONTRACT,
@@ -155,5 +165,5 @@ subprocess.run(
 print(
     "Generation source/binary, kernel image, BootState, BootState trace, recovery, "
     "block, component, store, spawn, filesystem, powerbox, generation-management, "
-    "and transfer contracts passed"
+    "transfer, and sample-descriptor contracts passed"
 )

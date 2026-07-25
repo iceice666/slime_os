@@ -96,6 +96,14 @@ Semantics not visible in the table:
   and reclaimed by `SharedBufferTable::map` (C7.4). Loan quota is consumed by
   `SharedBufferTable::loan`; a released creator's pages and buffer charge remain
   retained until the final single-return loan settles (C7.5).
+- A C7.6 sample descriptor is a userspace control message (`sample-descriptor/v1`),
+  not a kernel object: it references an exact transferred `SharedBufferLoan` by
+  its unforgeable identity plus a page-aligned offset/length, type identity,
+  sequence, and known flags. It carries no rights bit and mints no authority —
+  the receiver still needs the loan capability to map. The descriptor fits one
+  channel message (`DESCRIPTOR_LEN == MAX_MSG`), so a sample larger than the
+  message bound crosses as descriptor plus shared buffer without copying payload
+  bytes through the kernel queue or widening `MAX_MSG`.
 
 ## Bounds
 
