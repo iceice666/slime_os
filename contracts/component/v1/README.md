@@ -79,7 +79,7 @@ Validation is eager: the generation decoder validates every object of kind
 `bootstrap` or `component` while decoding the generation, so a generation
 that decodes at boot never contains a malformed executable. Spawn re-decodes
 through the same function and therefore cannot fail on format grounds for
-generation-sourced executables. `scripts/check-generation.py` mirrors the
+generation-sourced executables. `scripts/check/check-generation.py` mirrors the
 same rules host-side so builder/kernel drift fails in `just
 generation_check` instead of at boot.
 
@@ -88,10 +88,11 @@ against the generated wire bindings.
 
 ## Build pipeline
 
-`scripts/build-generation.py` builds each component as:
+`scripts/build/build-generation.py` builds each component as:
 
-1. `cargo build --release` in the `components/` workspace compiles every
-   component (Rust `no_std`, target `x86_64-unknown-none`) and links it via
+1. `cargo build --release -p slime-components` from `components/` uses the root
+   workspace while applying the component-specific Cargo target configuration;
+   it compiles every component (Rust `no_std`, target `x86_64-unknown-none`) and links it via
    `components/component.ld` at the fixed base VA (`--build-id=none`,
    `-z max-page-size=4096`, `relocation-model=static`; see
    `components/.cargo/config.toml` and `components/bins/build.rs`) — this

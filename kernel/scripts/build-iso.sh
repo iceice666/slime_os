@@ -31,7 +31,7 @@ if [[ "$CLEAN_GEN_DIR" == 1 ]]; then
     SLIME_GENERATION_NUMBER="${SLIME_GENERATION_NUMBER:-}" \
     SLIME_PENDING_GENERATION="${SLIME_PENDING_GENERATION:-}" \
     SLIME_PENDING_ATTEMPTS="${SLIME_PENDING_ATTEMPTS:-}" \
-        "$ROOT/scripts/build-generation.py" "$KERNEL" "$GEN_DIR" >/dev/null
+        "$ROOT/scripts/build/build-generation.py" "$KERNEL" "$GEN_DIR" >/dev/null
 fi
 
 if [[ "${SLIME_BOOT_LOADER:-stage0}" == "limine" ]]; then
@@ -42,8 +42,8 @@ if [[ "${SLIME_BOOT_LOADER:-stage0}" == "limine" ]]; then
     fi
     [[ -f "$LIMINE_DATADIR/BOOTX64.EFI" ]] || { echo "cannot find BOOTX64.EFI" >&2; exit 1; }
 else
-    cargo build --manifest-path "$ROOT/stage0/Cargo.toml" --target x86_64-unknown-uefi --release >/dev/null
-    STAGE0="$ROOT/stage0/target/x86_64-unknown-uefi/release/slime-stage0.efi"
+    (cd "$ROOT/stage0" && cargo build -p slime-stage0 --target x86_64-unknown-uefi --release) >/dev/null
+    STAGE0="$ROOT/target/x86_64-unknown-uefi/release/slime-stage0.efi"
     [[ -f "$STAGE0" ]] || { echo "stage-0 EFI binary not found: $STAGE0" >&2; exit 1; }
 fi
 

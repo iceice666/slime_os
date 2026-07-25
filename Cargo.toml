@@ -1,0 +1,31 @@
+[workspace]
+resolver = "3"
+members = [
+    "boot-contracts",
+    "components/bins",
+    "components/proto",
+    "components/runtime",
+    "kernel",
+    "stage0",
+]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+
+[profile.release.package.slime-components]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-proto]
+opt-level = "s"
+codegen-units = 1
+debug = false
+
+[profile.release.package.slime-rt]
+opt-level = "s"
+codegen-units = 1
+debug = false

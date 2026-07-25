@@ -80,7 +80,7 @@ are enforced before any capability or device contact.
 
 ## Validation
 
-`scripts/check-contracts.py` checks both schemas and verifies the generated
+`scripts/check/check-contracts.py` checks both schemas and verifies the generated
 bindings are fresh. `kernel/tests/object_store.rs` pins protocol and store-format
 acceptance/rejection classes; `just storage_store_check` exercises the
 complete QEMU path (GPT recovery, content-addressed retrieval, append/seal

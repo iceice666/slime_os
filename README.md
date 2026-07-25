@@ -230,12 +230,16 @@ The active work is not one false total order: M5.7/H1 physical evidence, C7's bo
 ## Current repository layout
 
 ```text
+Cargo.toml    Root Rust workspace and shared build profiles
 kernel/       Rust no_std kernel, boot path, generation decoder, scheduler, IPC, and tests
+stage0/       UEFI stage-0 loader
 components/   Rust no_std userspace components and typed service clients/servers
-contracts/    Versioned generation, storage, component, state, spawn, filesystem, and service contracts
+boot-contracts/ Shared Rust boot, generation, storage, recovery, and handoff contracts
+contracts/    Versioned generation, storage, component, state, spawn, filesystem, and service schemas
+scripts/      Host tooling grouped as build/, check/, generate/, and lib/
+tools/        Developer-facing helpers such as LLDB attachment
 roadmap/      Canonical status, dependency graph, milestones, checks, and release gates
 devlog/       Curated investigations, regression evidence, decisions, and verification history
-scripts/      Host-side generation, contract, image, evidence, and safety tooling
 assets/       Boot/runtime assets
 deps/         Pinned Zutai and Dango submodules
 Justfile      Build, run, test, format, lint, generation, contract, and debug commands

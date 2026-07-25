@@ -77,7 +77,7 @@
 
 **Depends on:** M2 and M4 platform/capability foundations.
 
-**Delivered:** Bounded ACPI MCFG and PCI enumeration; validated PCI capability chains and BARs; rights-checked PCI, DMA, interrupt, and shared-memory capabilities; DMA pinning through completion/reset; bounded block request/reply IPC with shared-memory payloads; and the allowlist-based `scripts/check-no-storage-authority.py` gate.
+**Delivered:** Bounded ACPI MCFG and PCI enumeration; validated PCI capability chains and BARs; rights-checked PCI, DMA, interrupt, and shared-memory capabilities; DMA pinning through completion/reset; bounded block request/reply IPC with shared-memory payloads; and the allowlist-based `scripts/check/check-no-storage-authority.py` gate.
 
 **Required checks:** Reject missing, widened, duplicate, stale, out-of-range, and wrong-kind capabilities; prevent reclaim of in-flight DMA buffers; reject malformed PCI metadata without hanging.
 

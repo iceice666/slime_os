@@ -72,7 +72,7 @@ clean.
 aborting on a rejecting `Exit(1)`) was wrong: `generation-stage` already
 classifies a `-4`/`-3` rejection internally and exits `0`, and init already
 exits cleanly after the staged rejection. The real defect was in the fixture
-builder `scripts/check-generation-commands.py`. `build_fixture` corrupted
+builder `scripts/check/check-generation-commands.py`. `build_fixture` corrupted
 `entries[1]` by fixed directory index, but the bootstore directory is
 identity-sorted and staging targets the *candidate* generation (identity ≠
 known-good). When component images changed the identity sort order, the

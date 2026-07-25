@@ -3,7 +3,7 @@
  * Every component links at the kernel's component load base (ENTRY_VA in
  * kernel/src/task/mod.rs); each component runs in its own address space, so
  * one fixed base serves all of them and no relocation or PIC is ever needed.
- * The image converter in scripts/build-generation.py re-bases segments to
+ * The image converter in scripts/build/build-generation.py re-bases segments to
  * offsets relative to this base and asserts the base matches.
  *
  * --build-id=none (passed by the builder) keeps the link deterministic:

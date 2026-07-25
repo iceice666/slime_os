@@ -16,8 +16,3 @@ name = "slime-stage0"
 path = "src/main.rs"
 test = false
 
-[profile.dev]
-panic = "abort"
-
-[profile.release]
-panic = "abort"

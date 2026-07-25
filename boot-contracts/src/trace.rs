@@ -2,7 +2,7 @@
 //!
 //! Stage-0 and the generation-management service emit one canonical line per
 //! durable BootState transition so the conformance checker
-//! (`scripts/check-bootstate-trace.py`) can validate each finite trace against
+//! (`scripts/check/check-bootstate-trace.py`) can validate each finite trace against
 //! the checked M5.6a/M5.6b state machines in `contracts/bootstate/model/`.
 //!
 //! The format is deliberately fixed-width and allocation-free: rendering never
@@ -15,7 +15,7 @@ include!("generated/bootstate_trace.rs");
 
 /// Model action identity a durable transition corresponds to. Only the
 /// transitions the implementation actually performs durably are represented
-/// here; the conformance checker (`scripts/check-bootstate-trace.py`) carries
+/// here; the conformance checker (`scripts/check/check-bootstate-trace.py`) carries
 /// the complete model vocabulary, including actions used only for adversarial
 /// rejection tests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

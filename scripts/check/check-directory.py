@@ -1,0 +1,71 @@
+#!/usr/bin/env python3
+
+from __future__ import annotations
+import sys as _sys
+from pathlib import Path as _Path
+
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "lib"))
+
+import hashlib
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+from harness import BOOT_TIMEOUT_SECONDS, ROOT, run_qemu
+
+MARKERS = [
+    "[directory-probe] no-cap denied",
+    "[directory-probe] scoped read ok",
+    "[directory-probe] interrupted transition preserved root",
+    "[directory-probe] root transition committed",
+    "[directory-probe] derive narrowed",
+    "[directory-probe] scoped boundary enforced",
+    "[directory-probe] malformed rejected",
+    "[directory-probe] done",
+]
+
+
+def run(image: Path) -> str:
+    environment = os.environ.copy()
+    environment["SLIME_GENERATION_NUMBER"] = "6"
+    output = run_qemu(
+        [
+            "cargo",
+            "run",
+            "--release",
+            "--",
+            "-display",
+            "none",
+            "-drive",
+            f"if=none,id=slime-storage,format=raw,cache=directsync,file={image}",
+            "-device",
+            "virtio-blk-pci,drive=slime-storage,disable-legacy=on,queue-size=8",
+        ],
+        environment=environment,
+        cwd=ROOT / "kernel",
+    )
+    missing = [marker for marker in MARKERS if marker not in output]
+    if missing:
+        raise SystemExit(f"directory check missing markers: {missing}")
+    return output
+
+
+def main() -> None:
+    if len(sys.argv) != 2:
+        raise SystemExit("usage: check-directory.py <image>")
+    image = Path(sys.argv[1])
+    subprocess.run([ROOT / "scripts" / "build" / "build-directory-fixture.py", image], check=True)
+    before = hashlib.sha256(image.read_bytes()).hexdigest()
+    run(image)
+    after_first = hashlib.sha256(image.read_bytes()).hexdigest()
+    if after_first == before:
+        raise SystemExit("directory namespace transition did not commit")
+    run(image)
+    if hashlib.sha256(image.read_bytes()).hexdigest() != after_first:
+        raise SystemExit("idempotent directory transition rewrote the store")
+    print("directory capability and namespace check: ok")
+
+
+if __name__ == "__main__":
+    main()

@@ -17,11 +17,6 @@ sha2 = { version = "0.10.9", default-features = false, features = ["force-soft"]
 [lib]
 doctest = false
 
-[profile.dev]
-panic = "abort"
-
-[profile.release]
-panic = "abort"
 
 [[test]]
 name = "should_panic"
