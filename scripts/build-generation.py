@@ -112,6 +112,7 @@ RIGHT = {
     "directoryList": 1 << 21,
     "directoryDerive": 1 << 22,
     "inputRead": 1 << 23,
+    "bufferCreate": 1 << 24,
 }
 RIGHT_TRANSFER = 1 << 2
 RIGHT_ALL = RIGHT_TRANSFER | sum(RIGHT.values())

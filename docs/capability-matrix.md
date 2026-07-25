@@ -34,7 +34,7 @@ Every new object or right must satisfy these rules before it ships:
 
 ## Current matrix
 
-Rights are a flat `u64` (generation format v3); bits 24–63 are free.
+Rights are a flat `u64` (generation format v3); bits 25–63 are free.
 
 | Object | Right (bit) | Gated operation | Creation authority | Gate status |
 | --- | --- | --- | --- | --- |
@@ -46,8 +46,8 @@ Rights are a flat `u64` (generation format v3); bits 24–63 are free.
 | PciFunction / DmaMemory | DMA_PIN (5) | future pin operation | kernel DMA allocator on a driver's behalf | **ungated** |
 | DmaMemory | DMA_RELEASE (6) | future release/reclaim operation | same | **ungated** |
 | Irq | IRQ_ACK (7) | future ack operation | kernel interrupt subsystem | **ungated** |
-| SharedBuffer | BUFFER_WRITE (8) | future write-into-region operation | kernel `SharedRegion::new`; no userspace path | **ungated** |
-| SharedBuffer | BUFFER_MAP (9) | future map-into-address-space operation | same | **ungated** |
+| SharedBuffer | BUFFER_WRITE (8) | future write-into-region operation (C7.4/C7.5) | `SYS_SHARED_BUFFER_CREATE` via a `SharedBufferFactory` cap; kernel-assigned identity | **ungated** |
+| SharedBuffer | BUFFER_MAP (9) | future map-into-address-space operation (C7.4) | same | **ungated** |
 | BlockDevice | BLOCK_READ (10) | read requests in `SYS_BLOCK_TRANSACT` for the capability's exact PCI function | kernel bootstrap | gated |
 | BlockDevice | BLOCK_WRITE (11) | write and flush requests in `SYS_BLOCK_TRANSACT`; receiver writes in `SYS_GENERATION_RECEIVE` require this together with BLOCK_READ and BOOT_UPDATE | kernel bootstrap | gated (M5.3/M6.7) |
 | ObjectStore | STORE_READ (12) | stat/get requests in `SYS_STORE_TRANSACT` | kernel bootstrap | gated (M5.4) |
@@ -63,6 +63,7 @@ Rights are a flat `u64` (generation format v3); bits 24–63 are free.
 | Directory | DIRECTORY_LIST (21) | `SYS_DIRECTORY_INSPECT` before bounded enumeration | same | gated (M6.3) |
 | Directory | DIRECTORY_DERIVE (22) | `SYS_DIRECTORY_DERIVE` for a subdirectory-scoped, narrow-rights copy | same; powerbox minting needs only this operation | gated (M6.3) |
 | Input | INPUT_READ (23) | `SYS_INPUT_READ` drains one decoded keyboard event | kernel bootstrap, only through a generation grant | gated (M6.4) |
+| SharedBufferFactory | BUFFER_CREATE (24) | `SYS_SHARED_BUFFER_CREATE` mints a kernel-identified `SharedBuffer` under fixed global byte/object bounds; `SYS_SHARED_BUFFER_RELEASE` reclaims it | generation manifest | gated (C7.2) |
 
 Semantics not visible in the table:
 
@@ -90,6 +91,9 @@ Semantics not visible in the table:
 | Live tasks | `MAX_TASKS = 32` | `SpawnError::TooManyTasks` |
 | Live children per spawner | manifest `spawnBudget <= 32` | `SpawnError::BudgetExhausted` |
 | Pinned DMA regions | `MAX_PINNED_REGIONS = 32` | DMA table |
+| Live shared buffers | `MAX_SHARED_BUFFERS = 32` | `SharedBufferTable`; `SharedBufferError::ObjectsExhausted` |
+| Shared-buffer total pages | `MAX_TOTAL_PAGES = 256` (1 MiB) | `SharedBufferTable`; `SharedBufferError::BytesExhausted` |
+| Pages per shared buffer | `MAX_BUFFER_PAGES = 64` | `SharedBufferTable`; `SharedBufferError::BadSize` |
 | Directory path bytes | `MAX_DIRECTORY_PATH = 48` | `SYS_DIRECTORY_DERIVE`; filesystem schema |
 | Directory path depth | `MAX_DIRECTORY_DEPTH = 4` | `DirectoryAuthority::derive`; filesystem schema |
 | Directory entries per snapshot | `MAX_ENTRIES = 16` | filesystem protocol and snapshot decoder |
@@ -106,7 +110,6 @@ Per-spawner budgets prevent one client from consuming that global allowance.
 | BootState update authority beyond recovery | possibly STAGE_PENDING | M6 generation staging | Boundary between userspace staging and immutable stage-0 slot writes |
 | NetworkDestination | CONNECT / SEND / RECV / LISTEN | [Hardware H6](../roadmap/04-platform-hardware.md) | Object shape: (protocol, address, port) declared in the generation? |
 | EnergyAccount | READ? | [Hardware H track](../roadmap/04-platform-hardware.md) | Whether accounting is authority at all or read-only telemetry |
-| SharedBufferFactory | CREATE with generation-resource quotas | [Core runtime C7.2–C7.3](../roadmap/02-core-runtime.md#c7-bounded-resource-and-shared-sample-plane) | Exact syscall surface and fixed global byte/object ceilings |
 
 M6.1 landed userspace endpoint minting, non-consuming narrow derive-copy spawn
 grants, per-spawner accounting, and supervision handles. Future resource

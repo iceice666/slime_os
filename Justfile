@@ -36,6 +36,12 @@ powerbox_check: contracts_check generation_check
 # accounting, supervision result shape, and generation-v2 determinism.
 spawn_prereq_check: contracts_check generation_check
     cd kernel && cargo test --test spawn_authority -- -display none
+
+# C7.2: shared-buffer factory authority, kernel-identified allocation under
+# fixed global byte/object bounds, structured isolated exhaustion, and
+# narrow-only buffer rights distinct from DMA authority.
+shared_buffer_factory_check:
+    cd kernel && cargo test --test shared_buffer_authority -- -display none
 # M6.2: generated spawn protocol, deterministic command profile, bounded
 # userspace spawn service, profile rejection, and exact grant composition.
 spawn_service_check: contracts_check generation_check

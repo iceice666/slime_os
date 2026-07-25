@@ -1,6 +1,6 @@
 # Core runtime track
 
-**Status:** In progress; C7.1 is complete and C7.2 is the next open slice.
+**Status:** In progress; C7.1 and C7.2 are complete and C7.3 is the next open slice.
 
 This track turns the existing bounded channels, capabilities, components, and generations into a native typed communication runtime. It is local-first: C7 and C8 require no network or physical driver, and they do not wait for unrelated display, audio, wireless, or GPU work.
 
@@ -64,7 +64,7 @@ A v3 generation built from normalized input is byte-identical across two builds,
 
 ### C7.2 — Shared-buffer authority and factory allocation
 
-**Status:** Not started.
+**Status:** Complete. A distinct `SharedBufferFactory` kernel object gates `SYS_SHARED_BUFFER_CREATE`/`SYS_SHARED_BUFFER_RELEASE` behind `RIGHT_BUFFER_CREATE`; buffers carry a kernel-assigned unforgeable identity and only narrow-only `RIGHT_BUFFER_WRITE`/`RIGHT_BUFFER_MAP`/`RIGHT_TRANSFER`. Allocation is bounded by fixed global ceilings (`MAX_SHARED_BUFFERS`=32, `MAX_TOTAL_PAGES`=256, `MAX_BUFFER_PAGES`=64) checked before any frame is pulled, returning structured `SharedBufferError`; DMA and shared-sample authority remain distinct capability kinds. Verified under `just shared_buffer_factory_check` (8 QEMU cases), with `just test`, `just contracts_check`, `just generation_check`, `just fmt_check`, `just lint`, and `just framework_safety_check` clean.
 
 **Depends on:** C7.1 v3 rights and the M6.1 factory-capability pattern.
 

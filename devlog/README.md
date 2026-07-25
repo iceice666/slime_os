@@ -20,6 +20,7 @@ This directory is the curated, chronological record of investigations, regressio
 | 2026-07-24 | [C7 finer decomposition](2026-07-24-c7-finer-decomposition.md) | Proposed | C7.2–C7.7 state surfaces, dependencies, and verification gates |
 | 2026-07-24 | [Multi-architecture roadmap boundary](2026-07-24-multi-architecture-roadmap/index.md) | Proposed | Exact target/artifact contracts, x86-64 boundary, AArch64-first, RV64, MCU companion scope |
 | 2026-07-24 | [B2 scheduler Blocked task state](2026-07-24-b2-blocked-task-state/index.md) | Verified | Blocked task state, SYS_WAIT wait-set, IPC/input/supervision wakes, on_idle rework, copy_from_current grant bound |
+| 2026-07-24 | [C7.2 shared-buffer factory allocation](2026-07-24-c7-2-shared-buffer-factory.md) | Verified | SharedBufferFactory object, RIGHT_BUFFER_CREATE, bounded shared-buffer table, shared contiguous allocator, syscall ABI, host builder/checkers |
 
 ## Entry format
 

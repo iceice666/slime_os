@@ -18,7 +18,7 @@ use crate::memory::PhysAddr;
 pub const MAX_CAPS: usize = 64;
 
 /// A capability rights bitset. Flat `u64` as of generation format v3; bits
-/// 24-63 are free for future object-specific operations.
+/// 25-63 are free for future object-specific operations.
 pub type Rights = u64;
 
 // --- Rights bits ---------------------------------------------------------
@@ -52,6 +52,9 @@ pub const RIGHT_DIRECTORY_WRITE: Rights = 1 << 20;
 pub const RIGHT_DIRECTORY_LIST: Rights = 1 << 21;
 pub const RIGHT_DIRECTORY_DERIVE: Rights = 1 << 22;
 pub const RIGHT_INPUT_READ: Rights = 1 << 23;
+// C7.2 shared-buffer factory allocation right. Gates
+// `SYS_SHARED_BUFFER_CREATE` on a `SharedBufferFactory` capability.
+pub const RIGHT_BUFFER_CREATE: Rights = 1 << 24;
 
 /// All rights a capability may ever carry. Used to reject unknown bits.
 pub const RIGHT_ALL: Rights = RIGHT_SEND
@@ -77,7 +80,8 @@ pub const RIGHT_ALL: Rights = RIGHT_SEND
     | RIGHT_DIRECTORY_WRITE
     | RIGHT_DIRECTORY_LIST
     | RIGHT_DIRECTORY_DERIVE
-    | RIGHT_INPUT_READ;
+    | RIGHT_INPUT_READ
+    | RIGHT_BUFFER_CREATE;
 
 #[derive(Clone)]
 pub struct Capability {
@@ -109,6 +113,11 @@ impl Capability {
 pub enum KernelObject {
     Endpoint(Endpoint),
     EndpointFactory,
+    /// Authority to allocate and release kernel-identified `SharedBuffer`
+    /// objects under fixed global byte and object ceilings (C7.2). A distinct
+    /// object from `SharedBuffer`: holding the factory does not grant write or
+    /// map authority over any specific buffer, only creation.
+    SharedBufferFactory,
     Input,
     Executable {
         name: Option<&'static str>,
@@ -142,6 +151,7 @@ impl KernelObject {
         let object_rights = match self {
             KernelObject::Endpoint(_) => RIGHT_SEND | RIGHT_RECV,
             KernelObject::EndpointFactory => RIGHT_ENDPOINT_CREATE,
+            KernelObject::SharedBufferFactory => RIGHT_BUFFER_CREATE,
             KernelObject::Input => RIGHT_INPUT_READ,
             KernelObject::Executable { .. } => RIGHT_EXEC | RIGHT_SPAWN,
             KernelObject::Supervision(_) => RIGHT_SUPERVISE,
@@ -352,8 +362,13 @@ pub struct IrqLine {
     pub vector: u8,
 }
 
-/// A shared-memory region grantable between components. `writable` records
-/// whether the holder may write; [`RIGHT_BUFFER_WRITE`] gates the syscall.
+/// A kernel-created shared-memory region grantable between components.
+///
+/// The `id` is a monotonic, kernel-assigned identity: userspace cannot forge
+/// or invent one, and cloning across a transfer preserves it so the kernel can
+/// recognize the same buffer. `writable` records whether the holder may write;
+/// [`RIGHT_BUFFER_WRITE`] gates the write syscall and [`RIGHT_BUFFER_MAP`] the
+/// map syscall (both land in later C7 slices).
 #[derive(Debug)]
 pub struct SharedRegion {
     inner: Arc<SharedRegionInner>,
@@ -361,20 +376,25 @@ pub struct SharedRegion {
 
 #[derive(Debug)]
 pub struct SharedRegionInner {
+    pub id: u64,
     pub phys: PhysAddr,
     pub pages: usize,
     pub writable: bool,
 }
 
 impl SharedRegion {
-    pub fn new(phys: PhysAddr, pages: usize, writable: bool) -> Self {
+    pub fn new(id: u64, phys: PhysAddr, pages: usize, writable: bool) -> Self {
         Self {
             inner: Arc::new(SharedRegionInner {
+                id,
                 phys,
                 pages,
                 writable,
             }),
         }
+    }
+    pub fn id(&self) -> u64 {
+        self.inner.id
     }
     pub fn phys(&self) -> PhysAddr {
         self.inner.phys
@@ -384,6 +404,10 @@ impl SharedRegion {
     }
     pub fn writable(&self) -> bool {
         self.inner.writable
+    }
+    /// Compare by backing allocation identity (shared `Arc`).
+    pub fn ptr_eq(&self, other: &SharedRegion) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
     }
 }
 

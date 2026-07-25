@@ -40,10 +40,14 @@ ALLOWED_SYSCALLS = {
     "SYS_INPUT_READ",
     "SYS_GENERATION_TRANSACT",
     "SYS_GENERATION_RECEIVE",
+    "SYS_WAIT",
+    "SYS_SHARED_BUFFER_CREATE",
+    "SYS_SHARED_BUFFER_RELEASE",
 }
 ALLOWED_KERNEL_OBJECTS = {
     "Endpoint",
     "EndpointFactory",
+    "SharedBufferFactory",
     "Input",
     "Executable",
     "Supervision",
@@ -81,6 +85,7 @@ ALLOWED_RIGHTS = {
     "RIGHT_DIRECTORY_LIST",
     "RIGHT_DIRECTORY_DERIVE",
     "RIGHT_INPUT_READ",
+    "RIGHT_BUFFER_CREATE",
     "RIGHT_ALL",
 }
 
@@ -150,7 +155,7 @@ def check_explicit_grants() -> None:
 
 
 def check_framework_path() -> None:
-    bootstrap = (KERNEL / "bootstrap.rs").read_text(encoding="utf-8")
+    bootstrap = (KERNEL / "runtime" / "bootstrap.rs").read_text(encoding="utf-8")
     if "generation.number" not in bootstrap or "storage_fault_probe" not in bootstrap:
         fail("storage test selection is no longer manifest-driven")
     justfile = JUSTFILE.read_text(encoding="utf-8")
@@ -163,8 +168,8 @@ def check_framework_path() -> None:
     body = framework.group("body")
     if "SLIME_GENERATION_NUMBER" in body or "virtio-blk" in body:
         fail("Framework image recipe enables disposable-QEMU storage writes")
-    nvme = (KERNEL / "nvme.rs").read_text(encoding="utf-8")
-    block_device = (KERNEL / "block_device.rs").read_text(encoding="utf-8")
+    nvme = (KERNEL / "drivers" / "nvme.rs").read_text(encoding="utf-8")
+    block_device = (KERNEL / "storage" / "block_device.rs").read_text(encoding="utf-8")
     if "NVM_WRITE" in nvme or "pub fn write_sector" not in nvme or "NvmeError::ReadOnly" not in nvme:
         fail("Framework NVMe backend is not structurally read-only")
     nvme_write_arm = re.search(

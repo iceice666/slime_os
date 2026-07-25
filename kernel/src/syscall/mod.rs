@@ -1,8 +1,9 @@
 use crate::capability::{
     Capability, KernelObject, RIGHT_BLOCK_READ, RIGHT_BLOCK_WRITE, RIGHT_BOOT_UPDATE,
-    RIGHT_DIRECTORY_DERIVE, RIGHT_DIRECTORY_LIST, RIGHT_DIRECTORY_READ, RIGHT_DIRECTORY_WRITE,
-    RIGHT_ENDPOINT_CREATE, RIGHT_HEALTH_CONFIRM, RIGHT_INPUT_READ, RIGHT_RECV, RIGHT_SEND,
-    RIGHT_STORE_READ, RIGHT_STORE_WRITE, RIGHT_TRANSFER,
+    RIGHT_BUFFER_CREATE, RIGHT_BUFFER_MAP, RIGHT_BUFFER_WRITE, RIGHT_DIRECTORY_DERIVE,
+    RIGHT_DIRECTORY_LIST, RIGHT_DIRECTORY_READ, RIGHT_DIRECTORY_WRITE, RIGHT_ENDPOINT_CREATE,
+    RIGHT_HEALTH_CONFIRM, RIGHT_INPUT_READ, RIGHT_RECV, RIGHT_SEND, RIGHT_STORE_READ,
+    RIGHT_STORE_WRITE, RIGHT_TRANSFER,
 };
 use crate::ipc::{self, MAX_CAPS_PER_MSG, MAX_MSG};
 use crate::task::{self, TermReason};
@@ -29,6 +30,8 @@ pub const SYS_INPUT_READ: u64 = 17;
 pub const SYS_GENERATION_TRANSACT: u64 = 18;
 pub const SYS_GENERATION_RECEIVE: u64 = 19;
 pub const SYS_WAIT: u64 = 20;
+pub const SYS_SHARED_BUFFER_CREATE: u64 = 21;
+pub const SYS_SHARED_BUFFER_RELEASE: u64 = 22;
 
 const USER_TOP: u64 = 0x0000_8000_0000_0000;
 
@@ -70,6 +73,8 @@ pub fn dispatch(frame: &mut UserFrame) {
         SYS_GENERATION_TRANSACT => sys_generation_transact(frame),
         SYS_GENERATION_RECEIVE => sys_generation_receive(frame),
         SYS_WAIT => sys_wait(frame),
+        SYS_SHARED_BUFFER_CREATE => sys_shared_buffer_create(frame),
+        SYS_SHARED_BUFFER_RELEASE => sys_shared_buffer_release(frame),
 
         _ => frame.rax = ipc::ERR_INVALID_ARG as u64,
     }
@@ -527,6 +532,110 @@ fn sys_endpoint_create(frame: &mut UserFrame) {
             frame.rdx = b as u64;
         }
         Err(_) => frame.rax = ipc::ERR_OUT_OF_MEMORY as u64,
+    }
+}
+
+/// `SYS_SHARED_BUFFER_CREATE(factory_slot, pages, writable)`: allocate a
+/// kernel-identified shared buffer under fixed global bounds and install a
+/// `SharedBuffer` capability for it.
+///
+/// Requires a `SharedBufferFactory` capability carrying `RIGHT_BUFFER_CREATE`.
+/// On success `rax` is the new capability slot and `rdx` is the buffer's
+/// kernel identity. Denial returns `ERR_BAD_CAP`; a bad size returns
+/// `ERR_INVALID_ARG`; byte/object exhaustion returns `ERR_OUT_OF_MEMORY`
+/// without disturbing any existing holder.
+fn sys_shared_buffer_create(frame: &mut UserFrame) {
+    let factory_slot = frame.rdi as u32;
+    let pages = frame.rsi as usize;
+    let writable = frame.rdx != 0;
+    let allowed = task::with_current_mut(|task| {
+        task.caps.get(factory_slot).is_some_and(|cap| {
+            matches!(cap.object, KernelObject::SharedBufferFactory)
+                && cap.rights & RIGHT_BUFFER_CREATE != 0
+        }) && task.caps.available_slots() >= 1
+    });
+    if !allowed {
+        frame.rax = ipc::ERR_BAD_CAP as u64;
+        return;
+    }
+    let region = match crate::memory::shared_buffer::SHARED_BUFFER_TABLE
+        .lock()
+        .create(pages, writable)
+    {
+        Ok(region) => region,
+        Err(error) => {
+            frame.rax = shared_buffer_error_code(error) as u64;
+            return;
+        }
+    };
+    let id = region.id();
+    // The creating holder may write only if it asked for a writable buffer;
+    // map authority is always available to the creator. Both remain narrowable
+    // on transfer and gated by their own syscalls in later C7 slices.
+    let mut rights = RIGHT_BUFFER_MAP | RIGHT_TRANSFER;
+    if writable {
+        rights |= RIGHT_BUFFER_WRITE;
+    }
+    let inserted = task::with_current_mut(|task| {
+        task.caps.insert(Capability {
+            object: KernelObject::SharedBuffer(region.clone()),
+            rights,
+        })
+    });
+    match inserted {
+        Ok(slot) => {
+            frame.rax = slot as u64;
+            frame.rdx = id;
+        }
+        Err(_) => {
+            // The capability table filled between the pre-check and insert;
+            // reclaim the buffer so the allocation does not leak.
+            let _ = crate::memory::shared_buffer::SHARED_BUFFER_TABLE
+                .lock()
+                .release(&region);
+            frame.rax = ipc::ERR_OUT_OF_MEMORY as u64;
+        }
+    }
+}
+
+/// `SYS_SHARED_BUFFER_RELEASE(buffer_slot)`: reclaim a shared buffer and
+/// invalidate the releasing holder's capability. Returns `ERR_SUCCESS`, or
+/// `ERR_BAD_CAP` if the slot is not a `SharedBuffer` this table created.
+fn sys_shared_buffer_release(frame: &mut UserFrame) {
+    let slot = frame.rdi as u32;
+    let region = task::with_current_mut(|task| match task.caps.get(slot) {
+        Some(Capability {
+            object: KernelObject::SharedBuffer(region),
+            ..
+        }) => Some(region.clone()),
+        _ => None,
+    });
+    let Some(region) = region else {
+        frame.rax = ipc::ERR_BAD_CAP as u64;
+        return;
+    };
+    if crate::memory::shared_buffer::SHARED_BUFFER_TABLE
+        .lock()
+        .release(&region)
+        .is_err()
+    {
+        frame.rax = ipc::ERR_BAD_CAP as u64;
+        return;
+    }
+    // The region is reclaimed; drop the releasing holder's capability so it
+    // can no longer name the freed buffer.
+    let _ = task::with_current_mut(|task| task.caps.take(slot));
+    frame.rax = ipc::ERR_SUCCESS as u64;
+}
+
+fn shared_buffer_error_code(error: crate::memory::shared_buffer::SharedBufferError) -> i64 {
+    use crate::memory::shared_buffer::SharedBufferError;
+    match error {
+        SharedBufferError::BadSize => ipc::ERR_INVALID_ARG,
+        SharedBufferError::OutOfFrames
+        | SharedBufferError::ObjectsExhausted
+        | SharedBufferError::BytesExhausted => ipc::ERR_OUT_OF_MEMORY,
+        SharedBufferError::NotFound => ipc::ERR_BAD_CAP,
     }
 }
 

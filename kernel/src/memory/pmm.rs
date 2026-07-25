@@ -105,3 +105,104 @@ pub fn init(entries: &[crate::boot::MemoryEntry]) {
 
     fa.total = fa.free;
 }
+
+/// Upper bound on frames per contiguous run. Bounds the fixed scratch array
+/// in [`alloc_contiguous`]; both the DMA table and the shared-buffer table
+/// cap their per-region page counts at or below this value.
+pub const CONTIG_MAX_FRAMES: usize = 64;
+
+/// Allocate `pages` physically contiguous frames and return the base (lowest)
+/// address, or `None` if no contiguous run is available. Scans the free list
+/// for a run of consecutive frame numbers; for the bounded QEMU vertical slice
+/// this is sufficient and avoids a buddy allocator.
+///
+/// The free list is a stack, so a contiguous block is handed out in
+/// *descending* address order; contiguity is therefore checked by span, not by
+/// pop order. On a non-contiguous batch one frame is set aside to shift the
+/// scan window, and every set-aside frame is returned before this call exits.
+///
+/// `pages` must be in `1..=CONTIG_MAX_FRAMES`; a larger request returns `None`.
+pub fn alloc_contiguous(pages: usize) -> Option<PhysAddr> {
+    if pages == 0 || pages > CONTIG_MAX_FRAMES {
+        return None;
+    }
+    let mut alloc = FRAME_ALLOCATOR.lock();
+    // Frames set aside to shift the scan window across retries. Bounded by the
+    // retry budget so the scratch array stays fixed-size and stack-resident.
+    const MAX_RETRIES: usize = CONTIG_MAX_FRAMES * 4;
+    let mut aside = [PhysAddr(0); MAX_RETRIES];
+    let mut aside_len = 0;
+    let page = PAGE_SIZE as u64;
+
+    let mut result = None;
+    for _ in 0..MAX_RETRIES {
+        let mut collected = [PhysAddr(0); CONTIG_MAX_FRAMES];
+        let mut got = 0;
+        while got < pages {
+            match alloc.alloc() {
+                Some(p) => {
+                    collected[got] = p;
+                    got += 1;
+                }
+                None => break,
+            }
+        }
+        if got < pages {
+            // Exhausted: return this partial batch and stop.
+            for frame in collected.iter().take(got) {
+                // SAFETY: each came from `alloc` and is unused.
+                unsafe { alloc.dealloc(*frame) };
+            }
+            break;
+        }
+        // Contiguous iff `pages` distinct frames span exactly (pages-1) pages.
+        let mut min = collected[0].0;
+        let mut max = collected[0].0;
+        for frame in collected.iter().take(pages).skip(1) {
+            min = min.min(frame.0);
+            max = max.max(frame.0);
+        }
+        if max - min == (pages as u64 - 1) * page {
+            result = Some(PhysAddr(min));
+            break;
+        }
+        // Not contiguous. Set one frame aside to shift the window, return the
+        // rest, and retry. If the stash is full, give up (return everything).
+        if aside_len == MAX_RETRIES {
+            for frame in collected.iter().take(pages) {
+                // SAFETY: each came from `alloc` and is unused.
+                unsafe { alloc.dealloc(*frame) };
+            }
+            break;
+        }
+        aside[aside_len] = collected[0];
+        aside_len += 1;
+        for frame in collected.iter().take(pages).skip(1) {
+            // SAFETY: each came from `alloc` and is unused.
+            unsafe { alloc.dealloc(*frame) };
+        }
+    }
+
+    // Return every set-aside frame to the free list.
+    for frame in aside.iter().take(aside_len) {
+        // SAFETY: each came from `alloc` and is unused (never part of `result`).
+        unsafe { alloc.dealloc(*frame) };
+    }
+    result
+}
+
+/// Free a contiguous run previously returned by [`alloc_contiguous`].
+///
+/// # Safety
+///
+/// `base` must name a region of `pages` contiguous frames currently owned by
+/// the caller and no longer in use.
+pub unsafe fn free_contiguous(base: PhysAddr, pages: usize) {
+    let mut alloc = FRAME_ALLOCATOR.lock();
+    for i in 0..pages {
+        // SAFETY: caller guarantees these frames are owned and unused.
+        unsafe {
+            alloc.dealloc(PhysAddr(base.0 + (i as u64) * PAGE_SIZE as u64));
+        }
+    }
+}

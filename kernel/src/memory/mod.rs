@@ -13,6 +13,7 @@
 pub mod address_space;
 pub mod heap;
 pub mod pmm;
+pub mod shared_buffer;
 pub mod vmm;
 
 use core::sync::atomic::{AtomicU64, Ordering};
