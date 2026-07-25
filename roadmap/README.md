@@ -10,7 +10,7 @@ A milestone is complete only when its exit condition is observed. Compiled code,
 | --- | --- | --- |
 | [Backlog](00-backlog.md) | No open items | B1 and B2 resolved; B2 `Blocked` state / `SYS_WAIT` landed, unblocking the C8 gate |
 | [Foundations](01-foundations.md) | M1–M4 and M6 complete; M5 mechanisms complete | Record M5.7 removable-media Framework evidence without internal-NVMe modification |
-| [Core runtime](02-core-runtime.md) | C7 in progress; C7.1–C7.6 complete (generation v3 + `u64` rights; shared-buffer factory allocation; per-holder quotas + supervision-subtree accounting; mapping + read-only sealing; loan/return lifecycle + fault reclamation; versioned sample descriptor) | Compose C7.7 sample-plane integration over the loan lifecycle and descriptor |
+| [Core runtime](02-core-runtime.md) | C7 complete; C7.1–C7.7 landed (generation v3 + `u64` rights; shared-buffer factory allocation; per-holder quotas + supervision-subtree accounting; mapping + read-only sealing; loan/return lifecycle + fault reclamation; versioned sample descriptor; two-component sample-plane integration + isolation) | Begin C8 native typed data fabric (B2 dependency resolved) |
 | [Architecture portability](07-architecture-portability.md) | Not started | Clear the active backlog, then land P0 target/artifact contracts before P1 x86 boundary extraction |
 | [ROS 2 compatibility](03-ros2-compatibility.md) | Not started | Admit R1 only after C8 and the H6 network-service contract exist |
 | [Platform hardware](04-platform-hardware.md) | H1 implementation complete; physical evidence pending | Record H1 topology/input/storage evidence; implement H2 driver authority ABI |

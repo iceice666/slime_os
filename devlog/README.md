@@ -26,6 +26,7 @@ This directory is the curated, chronological record of investigations, regressio
 | 2026-07-24 | [C7.4 shared-buffer mapping and read-only sealing](2026-07-24-c7-4-shared-buffer-mapping.md) | Verified | Map/unmap/seal syscalls, user-half vmm primitives, irreversible Arc-shared seal, mapping quota + MAX_MAPPINGS, teardown-before-free, host allowlist |
 | 2026-07-25 | [C7.5 shared-buffer loan/return lifecycle](2026-07-25-c7-5-shared-buffer-loan.md) | Verified | Loan/map/return/revoke syscalls, RIGHT_BUFFER_LOAN + SharedBufferLoan object, receiver-bound single-return identity, retained-while-loaned pages, MAX_LOANS, peer-fault reclamation, v2/v3 rights masks, host allowlist |
 | 2026-07-25 | [C7.6 versioned sample descriptor](2026-07-25-c7-6-sample-descriptor.md) | Verified | Zutai sample-descriptor contract, WireSampleDescriptor bindings, valid_sample_descriptor bounds, DESCRIPTOR_LEN==MAX_MSG, loan-referenced payload over shared buffer, QEMU gate |
+| 2026-07-25 | [C7.7 sample-plane integration and isolation](2026-07-25-c7-7-sample-plane-integration.md) | Verified | Two-component sample-plane composition over C7.2–C7.6, real-channel descriptor exchange, four quota classes, peer-death reclamation, unrelated-channel isolation, retained-v2 decode probe, `just sample_plane_check` |
 
 ## Entry format
 

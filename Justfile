@@ -60,6 +60,13 @@ shared_buffer_loan_check:
 # payload larger than MAX_MSG carried over descriptor plus shared buffer.
 sample_descriptor_check: contracts_check
     cd kernel && cargo test -p slime_os-kernel --test sample_descriptor -- -display none
+# C7.7: sample-plane integration and isolation. Two isolated holders exchange
+# and return a payload larger than MAX_MSG through a quota-charged shared buffer
+# over a real channel; malformed descriptors, every quota class, and peer death
+# stay bounded, reclaim all resources, and disturb neither an unrelated channel
+# nor the retained v2 known-good decode path.
+sample_plane_check: contracts_check
+    cd kernel && cargo test -p slime_os-kernel --test sample_plane -- -display none
 # M6.2: generated spawn protocol, deterministic command profile, bounded
 # userspace spawn service, profile rejection, and exact grant composition.
 spawn_service_check: contracts_check generation_check

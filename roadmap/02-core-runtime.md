@@ -1,6 +1,6 @@
 # Core runtime track
 
-**Status:** In progress; C7.1–C7.6 are complete and C7.7 is the next open slice.
+**Status:** C7 complete; C7.1–C7.7 are done and the C7 bounded resource and shared-sample plane gate is closed. C8 is the next open slice.
 
 This track turns the existing bounded channels, capabilities, components, and generations into a native typed communication runtime. It is local-first: C7 and C8 require no network or physical driver, and they do not wait for unrelated display, audio, wireless, or GPU work.
 
@@ -27,7 +27,7 @@ ROS 2 compatibility in [`03-ros2-compatibility.md`](03-ros2-compatibility.md) is
 
 ## C7: Bounded resource and shared-sample plane
 
-**Status:** In progress. Decomposed into C7.1–C7.7 so each slice introduces one primary state surface and owns an independently reviewable QEMU check, mirroring the M5/M6 sub-slice convention. The C7 gate closes only when C7.7's exit condition is observed.
+**Status:** Complete. Decomposed into C7.1–C7.7 so each slice introduces one primary state surface and owns an independently reviewable QEMU check, mirroring the M5/M6 sub-slice convention. C7.7's exit condition is observed, so the C7 gate is closed.
 
 **Depends on:** the M6 endpoint factory, spawn accounting, supervision, and generation machinery.
 
@@ -212,7 +212,7 @@ A receiver validates a bounded versioned descriptor, maps only the exact loaned 
 
 ### C7.7 — Sample-plane integration and isolation
 
-**Status:** Not started.
+**Status:** Complete. `kernel/tests/sample_plane.rs` composes the C7.2 factory allocation, C7.3 per-holder quotas, C7.4 mapping/sealing, C7.5 loan/return lifecycle, and the C7.6 sample descriptor into two isolated holders that exchange a `>MAX_MSG` payload: only the 64-byte descriptor crosses a real IPC channel while the receiver reconstructs the full two-page payload from the quota-charged sealed loaned buffer through exact read-only page-table translations. A malformed (stale-identity) descriptor delivered over the channel is rejected by validation and by the loan-aware map path before any mapping or allocation, leaving the loan intact. Every quota class (byte-pages, buffer-count, mapping-count, loan-count) fails with `QuotaExceeded` at ceiling+1 without disturbing an unrelated owner's buffer, mapping, or channel; receiver and lender death via `reclaim_owner` settle all loans, mappings, and page charges while an unrelated channel keeps carrying traffic; and a retained v2 known-good generation decodes byte-identically before and after a full sample-plane exchange. Verified under `just sample_plane_check` (5 QEMU cases), with `just test`, `just fmt_check`, and `just lint` clean.
 
 **Depends on:** C7.1–C7.6.
 
@@ -227,7 +227,7 @@ A receiver validates a bounded versioned descriptor, maps only the exact loaned 
 - malformed descriptors, byte/buffer/mapping/loan quota exhaustion, and peer death remain bounded, reclaim all resources, and do not disturb an unrelated channel;
 - the retained v2 known-good boot path is unaffected by the sample-plane exercise.
 
-### Planned verification target
+### Verification target
 
 ```sh
 just sample_plane_check
