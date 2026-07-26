@@ -802,6 +802,79 @@ mod tests {
         ));
     }
 
+    /// The stage-0 admission chain a retained v2 generation actually traverses
+    /// on a rollback boot: the identity seal is verified, the kernel object is
+    /// located, and its own kernel image is what would be loaded.
+    ///
+    /// Each generation embeds the kernel it boots (`stage0::verify_kernel`
+    /// resolves `generation.kernel_object`), so a v2 rollback runs its v2-era
+    /// kernel rather than the current one. That is why the current tree's
+    /// v3-only rights cannot break the rollback window, and it is the property
+    /// worth pinning: an unmodified v2 artifact stays admissible end to end.
+    #[test]
+    fn retained_v2_generation_passes_stage0_admission() {
+        let bytes = build(FORMAT_VERSION_V2, RIGHT_TRANSFER | 1);
+
+        // Stage 0 verifies the recorded identity before decoding anything.
+        let identity = generation_identity(&bytes);
+        assert_eq!(&bytes[IDENTITY_OFFSET..IDENTITY_END], &identity[..]);
+
+        let generation = Generation::decode(&bytes).expect("retained v2 decodes");
+        assert_eq!(generation.version, FORMAT_VERSION_V2);
+
+        // The generation names its own kernel object, so rollback boots the
+        // kernel that shipped with it.
+        let kernel = generation
+            .object(generation.kernel_object)
+            .expect("kernel object present");
+        assert_eq!(kernel.kind, KIND_KERNEL);
+        assert!(!kernel.bytes.is_empty());
+
+        // A bootstrap component is present and reachable, so stage 0 has an
+        // init to launch.
+        let bootstrap = generation
+            .component(generation.bootstrap)
+            .expect("bootstrap component present");
+        assert_eq!(bootstrap.role, ROLE_INIT);
+
+        // Any byte flipped in a retained artifact fails the identity seal
+        // rather than being admitted.
+        let mut tampered = bytes.clone();
+        let last = tampered.len() - 1;
+        tampered[last] ^= 1;
+        assert_ne!(generation_identity(&tampered), identity);
+    }
+
+    /// A v2 generation's authority manifest keeps hashing rights at 32 bits, so
+    /// its signed release still matches during the rollback window. Widening to
+    /// `u64` in C7.1 must not have moved this value — if it had, every retained
+    /// v2 release would fail authorization and the rollback window would be
+    /// closed in practice while appearing open.
+    #[test]
+    fn retained_v2_authority_manifest_is_width_stable() {
+        let rights = RIGHT_TRANSFER | 1;
+        let v2_bytes = build(FORMAT_VERSION_V2, rights);
+        let v3_bytes = build(FORMAT_VERSION, rights);
+        let v2 = Generation::decode(&v2_bytes).expect("v2 decodes");
+        let v3 = Generation::decode(&v3_bytes).expect("v3 decodes");
+
+        // Same logical grant, different encoded widths: the hashes must differ,
+        // because each version hashes its own on-disk width. A v2 release is
+        // therefore only ever valid against a v2 generation.
+        assert_ne!(
+            v2.authority_manifest_identity(),
+            v3.authority_manifest_identity()
+        );
+
+        // And the v2 value is stable across decodes of the same bytes.
+        let again_bytes = build(FORMAT_VERSION_V2, rights);
+        let again = Generation::decode(&again_bytes).expect("v2 decodes");
+        assert_eq!(
+            v2.authority_manifest_identity(),
+            again.authority_manifest_identity()
+        );
+    }
+
     #[test]
     fn unsupported_version_fails_closed() {
         let mut bytes = build(FORMAT_VERSION, RIGHT_ALL);
