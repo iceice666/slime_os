@@ -6,7 +6,7 @@ use crate::capability::{
     RIGHT_BLOCK_WRITE, RIGHT_BOOT_UPDATE, RIGHT_DIRECTORY_DERIVE, RIGHT_DIRECTORY_LIST,
     RIGHT_DIRECTORY_READ, RIGHT_DIRECTORY_WRITE, RIGHT_EXEC, RIGHT_HEALTH_CONFIRM,
     RIGHT_INPUT_READ, RIGHT_RECV, RIGHT_SEND, RIGHT_SPAWN, RIGHT_STORE_READ, RIGHT_STORE_WRITE,
-    RIGHT_TRANSFER, Rights,
+    RIGHT_SUPERVISE, RIGHT_TRANSFER, Rights,
 };
 use crate::generation::{self, Generation};
 use crate::{ipc, println, serial_println, task};
@@ -30,6 +30,8 @@ static GENERATION_SELECT_ID: AtomicU64 = AtomicU64::new(0);
 static GENERATION_ROLLBACK_ID: AtomicU64 = AtomicU64::new(0);
 static POWERBOX_CHOOSER_ID: AtomicU64 = AtomicU64::new(0);
 static POWERBOX_PROBE_ID: AtomicU64 = AtomicU64::new(0);
+static SAMPLE_LENDER_ID: AtomicU64 = AtomicU64::new(0);
+static SAMPLE_RECEIVER_ID: AtomicU64 = AtomicU64::new(0);
 static GENERATION_NUMBER: AtomicU64 = AtomicU64::new(0);
 static RECOVERY_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -143,6 +145,12 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
     let powerbox_probe = generation
         .component_bytes("powerbox-probe")
         .expect("powerbox-probe object missing");
+    let sample_lender = generation
+        .component_bytes("sample-lender")
+        .expect("sample-lender object missing");
+    let sample_receiver = generation
+        .component_bytes("sample-receiver")
+        .expect("sample-receiver object missing");
     serial_println!("[generation] validating bootstrap grants");
 
     require_grant(
@@ -338,6 +346,27 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         "spawn-service",
         crate::capability::RIGHT_BUFFER_CREATE,
     );
+    require_grant(
+        generation,
+        "sample-lender-shared-buffer-factory",
+        "init",
+        "sample-lender",
+        crate::capability::RIGHT_BUFFER_CREATE,
+    );
+    require_grant(
+        generation,
+        "sample-plane-channel",
+        "sample-lender",
+        "sample-receiver",
+        RIGHT_SEND | RIGHT_RECV,
+    );
+    require_grant(
+        generation,
+        "sample-plane-receiver-supervision",
+        "init",
+        "sample-lender",
+        RIGHT_SUPERVISE,
+    );
     serial_println!("[generation] shared-buffer factory grants valid");
     serial_println!("[generation] filesystem grants valid");
     let storage_capability = match generation.number {
@@ -381,6 +410,7 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
     let (generation_select_client, generation_select_service) = ipc::channel();
     let (generation_rollback_client, generation_rollback_service) = ipc::channel();
     let (powerbox_client, powerbox_service) = ipc::channel();
+    let (sample_lender_side, sample_receiver_side) = ipc::channel();
     let mut caps = vec![
         Capability {
             object: KernelObject::EndpointFactory,
@@ -481,6 +511,17 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
             object: KernelObject::SharedBufferFactory,
             rights: crate::capability::RIGHT_BUFFER_CREATE | RIGHT_TRANSFER,
         },
+        // C7.7 sample plane, slots 41-44. Two real components exchange a
+        // >MAX_MSG payload through the shared-buffer syscalls; init spawns both
+        // and hands the lender the receiver's supervision handle so the loan
+        // names its receiver by capability rather than an ambient task id.
+        executable(generation, "sample-lender", sample_lender),
+        executable(generation, "sample-receiver", sample_receiver),
+        endpoint(sample_lender_side, RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER),
+        endpoint(
+            sample_receiver_side,
+            RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
+        ),
     ]);
     if let (Some(receiver), Some(source)) = (transfer_receiver, transfer_source) {
         caps.extend([
@@ -707,6 +748,8 @@ pub fn record_spawn(component: &'static str, id: task::TaskId) {
         "generation-rollback" => &GENERATION_ROLLBACK_ID,
         "powerbox-chooser" => &POWERBOX_CHOOSER_ID,
         "powerbox-probe" => &POWERBOX_PROBE_ID,
+        "sample-lender" => &SAMPLE_LENDER_ID,
+        "sample-receiver" => &SAMPLE_RECEIVER_ID,
         "recovery" => &RECOVERY_ID,
         _ => return,
     };
@@ -790,6 +833,11 @@ extern "C" fn on_idle() {
             POWERBOX_CHOOSER_ID.load(Ordering::Relaxed),
         ),
         ("powerbox-probe", POWERBOX_PROBE_ID.load(Ordering::Relaxed)),
+        ("sample-lender", SAMPLE_LENDER_ID.load(Ordering::Relaxed)),
+        (
+            "sample-receiver",
+            SAMPLE_RECEIVER_ID.load(Ordering::Relaxed),
+        ),
     ];
     let mut healthy = true;
     for (name, id) in checks {
@@ -829,6 +877,8 @@ extern "C" fn on_idle() {
             && GENERATION_NUMBER.load(Ordering::Relaxed) == 8;
         let powerbox_check = option_env!("SLIME_POWERBOX_CHECK") == Some("1")
             && GENERATION_NUMBER.load(Ordering::Relaxed) == 9;
+        let sample_plane_check = option_env!("SLIME_SAMPLE_PLANE_CHECK") == Some("1")
+            && GENERATION_NUMBER.load(Ordering::Relaxed) == 10;
         let optional_generation_command_component = generation_command_check
             && matches!(name, "init" | "generation-manager")
             && matches!(
@@ -862,6 +912,27 @@ extern "C" fn on_idle() {
         let optional_powerbox_manager = powerbox_check
             && name == "generation-manager"
             && matches!(reason, Some(task::TermReason::Exit(1)));
+        // The sample-plane scenario runs a bounded two-component exchange and
+        // exits; the services it does not use may cleanly terminate or lose a
+        // peer as init tears the graph down.
+        let optional_sample_plane_component = sample_plane_check
+            && matches!(
+                name,
+                "init"
+                    | "console"
+                    | "dango"
+                    | "spawn-service"
+                    | "filesystem-service"
+                    | "sample-lender"
+                    | "sample-receiver"
+            )
+            && matches!(
+                reason,
+                Some(task::TermReason::Exit(0) | task::TermReason::PeerLoss)
+            );
+        let optional_sample_plane_manager = sample_plane_check
+            && name == "generation-manager"
+            && matches!(reason, Some(task::TermReason::Exit(1)));
         healthy &= matches!(reason, Some(task::TermReason::Exit(0)))
             || optional_storage_absent
             || optional_confirmation_absent
@@ -869,7 +940,9 @@ extern "C" fn on_idle() {
             || optional_dango_check_probe
             || optional_generation_command_component
             || optional_powerbox_component
-            || optional_powerbox_manager;
+            || optional_powerbox_manager
+            || optional_sample_plane_component
+            || optional_sample_plane_manager;
     }
     if healthy {
         if crate::boot::bootstate().is_some_and(|state| state.running_pending) {

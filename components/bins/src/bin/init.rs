@@ -23,6 +23,7 @@ const RIGHT_DIRECTORY_LIST: Rights = 1 << 21;
 const RIGHT_DIRECTORY_DERIVE: Rights = 1 << 22;
 const RIGHT_INPUT_READ: Rights = 1 << 23;
 const RIGHT_BUFFER_CREATE: Rights = 1 << 24;
+const RIGHT_SUPERVISE: Rights = 1 << 18;
 
 // Manifest-derived bootstrap slot order is emitted by the host builder.
 const CONSOLE_CAPS: [SpawnGrant; 1] = [grant(2, RIGHT_RECV)];
@@ -99,10 +100,15 @@ const POWERBOX_CHOOSER_CAPS: [SpawnGrant; 3] = [
     grant(20, RIGHT_INPUT_READ),
 ];
 // C7.2 shared-buffer factory, minted by bootstrap at a fixed slot ahead of the
-// optional transfer block so both are addressable on every boot.
+// optional transfer block so every index below is stable on any boot.
 const SHARED_BUFFER_FACTORY_SLOT: u32 = 40;
-const TRANSFER_RECEIVER_SLOT: u32 = 41;
-const TRANSFER_SOURCE_SLOT: u32 = 42;
+// C7.7 sample plane: two components and the channel joining them.
+const SAMPLE_LENDER_SLOT: u32 = 41;
+const SAMPLE_RECEIVER_SLOT: u32 = 42;
+const SAMPLE_LENDER_ENDPOINT_SLOT: u32 = 43;
+const SAMPLE_RECEIVER_ENDPOINT_SLOT: u32 = 44;
+const TRANSFER_RECEIVER_SLOT: u32 = 45;
+const TRANSFER_SOURCE_SLOT: u32 = 46;
 
 const POWERBOX_PROBE_CAPS: [SpawnGrant; 1] = [grant(38, RIGHT_SEND | RIGHT_RECV)];
 
@@ -186,8 +192,51 @@ fn main() {
         spawn_and_wait(24, &GENERATION_SELECT_CAPS);
         spawn_and_wait(25, &GENERATION_ROLLBACK_CAPS);
     }
+    if option_env!("SLIME_SAMPLE_PLANE_CHECK") == Some("1") {
+        launch_sample_plane();
+        slime_rt::debug_write(b"[init] sample plane complete\n");
+        slime_rt::exit(0);
+    }
     slime_rt::debug_write(b"[init] spawn graph launched\n");
     slime_rt::exit(0);
+}
+
+/// Launch the C7.7 sample plane: two real components exchanging a payload
+/// larger than `MAX_MSG` through the shared-buffer syscalls.
+///
+/// The receiver spawns first so its supervision handle exists before the lender
+/// launches — the lender names its loan receiver through that capability rather
+/// than an ambient task id, which is what makes the loan's receiver binding
+/// unforgeable. Init waits on the lender, whose own exit follows the receiver's.
+fn launch_sample_plane() {
+    let receiver = slime_rt::spawn(
+        SAMPLE_RECEIVER_SLOT,
+        &[grant(
+            SAMPLE_RECEIVER_ENDPOINT_SLOT,
+            RIGHT_SEND | RIGHT_RECV,
+        )],
+    )
+    .unwrap_or_else(|_| slime_rt::exit(1));
+
+    let lender = slime_rt::spawn(
+        SAMPLE_LENDER_SLOT,
+        &[
+            grant(SAMPLE_LENDER_ENDPOINT_SLOT, RIGHT_SEND | RIGHT_RECV),
+            grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
+            grant(receiver.supervision_slot, RIGHT_SUPERVISE),
+        ],
+    )
+    .unwrap_or_else(|_| slime_rt::exit(1));
+
+    for handle in [receiver.supervision_slot, lender.supervision_slot] {
+        loop {
+            match slime_rt::supervision_status(handle) {
+                Ok(None) => slime_rt::wait(&[slime_rt::WaitSource::Supervision(handle)]),
+                Ok(Some(slime_rt::Termination::Exit(0))) => break,
+                _ => slime_rt::exit(1),
+            }
+        }
+    }
 }
 fn spawn_or_fail(executable_slot: u32, grants: &[SpawnGrant]) {
     let spawned = slime_rt::spawn(executable_slot, grants).unwrap_or_else(|error| {

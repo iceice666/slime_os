@@ -32,6 +32,10 @@ const SYS_SHARED_BUFFER_RELEASE: u64 = 22;
 const SYS_SHARED_BUFFER_MAP: u64 = 23;
 const SYS_SHARED_BUFFER_UNMAP: u64 = 24;
 const SYS_SHARED_BUFFER_SEAL: u64 = 25;
+const SYS_SHARED_BUFFER_LOAN: u64 = 26;
+const SYS_SHARED_BUFFER_LOAN_MAP: u64 = 27;
+const SYS_SHARED_BUFFER_RETURN: u64 = 28;
+const SYS_SHARED_BUFFER_REVOKE: u64 = 29;
 
 pub const ERR_SUCCESS: i64 = 0;
 pub const ERR_BAD_CAP: i64 = -1;
@@ -332,6 +336,83 @@ pub fn shared_buffer_unmap(slot: u32, base: u64) -> i64 {
 /// mapping first. Requires `RIGHT_BUFFER_WRITE`; write access never returns.
 pub fn shared_buffer_seal(slot: u32) -> i64 {
     unsafe { raw_syscall(SYS_SHARED_BUFFER_SEAL, slot as u64, 0, 0, 0, 0) }
+}
+
+/// An outstanding loan of a sealed shared-buffer subrange: the slot holding the
+/// receiver-bound `SharedBufferLoan` handle, plus its kernel-assigned
+/// single-return identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BufferLoan {
+    pub slot: u32,
+    pub id: u64,
+}
+
+/// Loan an exact sealed subrange to the task named by a `RIGHT_SUPERVISE`
+/// capability (C7.5). The source needs `RIGHT_BUFFER_LOAN` and must already be
+/// irreversibly sealed; the loan is read-only, single-return, and charged
+/// against the lender's `loan_count` quota. The receiver is named through a
+/// capability, never an ambient task id.
+pub fn shared_buffer_loan(
+    buffer_slot: u32,
+    receiver_slot: u32,
+    offset: u64,
+    length: u64,
+) -> Result<BufferLoan, i64> {
+    let (slot, id) = unsafe {
+        raw_syscall_pair(
+            SYS_SHARED_BUFFER_LOAN,
+            buffer_slot as u64,
+            receiver_slot as u64,
+            offset,
+            length,
+            0,
+        )
+    };
+    if slot < 0 {
+        Err(slot)
+    } else {
+        Ok(BufferLoan {
+            slot: slot as u32,
+            id,
+        })
+    }
+}
+
+/// Map a read-only subrange relative to a loan this task received. Offsets are
+/// relative to the loaned region, so the receiver cannot address bytes outside
+/// it even by naming the underlying buffer.
+pub fn shared_buffer_loan_map(loan_slot: u32, base: u64, offset: u64, length: u64) -> i64 {
+    unsafe {
+        raw_syscall(
+            SYS_SHARED_BUFFER_LOAN_MAP,
+            loan_slot as u64,
+            base,
+            offset,
+            length,
+            0,
+        )
+    }
+}
+
+/// Return a loan as its named receiver, settling it once and releasing the
+/// loan capability. A second return fails: the identity is single-use.
+pub fn shared_buffer_return(loan_slot: u32) -> i64 {
+    unsafe { raw_syscall(SYS_SHARED_BUFFER_RETURN, loan_slot as u64, 0, 0, 0, 0) }
+}
+
+/// Revoke an outstanding loan as its lender, naming it by the source buffer and
+/// the loan's kernel-assigned identity.
+pub fn shared_buffer_revoke(buffer_slot: u32, loan_id: u64) -> i64 {
+    unsafe {
+        raw_syscall(
+            SYS_SHARED_BUFFER_REVOKE,
+            buffer_slot as u64,
+            loan_id,
+            0,
+            0,
+            0,
+        )
+    }
 }
 
 /// Query a child supervision handle. `Ok(None)` means the child is live; a

@@ -27,12 +27,16 @@
     { id = "sha256:generation-rollback"; kind = "component"; size = 32768; };
     { id = "sha256:powerbox-chooser"; kind = "component"; size = 65536; };
     { id = "sha256:powerbox-probe"; kind = "component"; size = 65536; };
+    { id = "sha256:sample-lender"; kind = "component"; size = 65536; };
+    { id = "sha256:sample-receiver"; kind = "component"; size = 65536; };
     { id = "shared-buffer-budget"; kind = "resource"; size = 4096; };
   ];
 
   sharedBufferBudget = [
     { holder = "dango"; bytePages = 8; bufferCount = 2; mappingCount = 4; loanCount = 2; };
     { holder = "spawn-service"; bytePages = 4; bufferCount = 1; mappingCount = 2; loanCount = 1; };
+    { holder = "sample-lender"; bytePages = 4; bufferCount = 1; mappingCount = 2; loanCount = 1; };
+    { holder = "sample-receiver"; bytePages = 2; bufferCount = 1; mappingCount = 2; loanCount = 1; };
   ];
 
   components = [
@@ -193,6 +197,22 @@
       object = "sha256:powerbox-probe";
       role = "application";
       dependencies = ["powerbox-chooser";];
+      spawnBudget = 0;
+      commandProfile = [];
+    };
+    {
+      name = "sample-lender";
+      object = "sha256:sample-lender";
+      role = "application";
+      dependencies = ["init";];
+      spawnBudget = 0;
+      commandProfile = [];
+    };
+    {
+      name = "sample-receiver";
+      object = "sha256:sample-receiver";
+      role = "application";
+      dependencies = ["init";];
       spawnBudget = 0;
       commandProfile = [];
     };
@@ -394,6 +414,27 @@
       source = "init";
       target = "spawn-service";
       rights = ["bufferCreate";];
+      transferable = false;
+    };
+    {
+      name = "sample-lender-shared-buffer-factory";
+      source = "init";
+      target = "sample-lender";
+      rights = ["bufferCreate";];
+      transferable = false;
+    };
+    {
+      name = "sample-plane-channel";
+      source = "sample-lender";
+      target = "sample-receiver";
+      rights = ["send"; "recv";];
+      transferable = false;
+    };
+    {
+      name = "sample-plane-receiver-supervision";
+      source = "init";
+      target = "sample-lender";
+      rights = ["supervise";];
       transferable = false;
     };
   ];

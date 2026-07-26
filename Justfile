@@ -67,6 +67,13 @@ sample_descriptor_check: contracts_check
 # nor the retained v2 known-good decode path.
 sample_plane_check: contracts_check
     cd kernel && cargo test -p slime_os-kernel --test sample_plane -- -display none
+# B5: the same sample plane driven by two real components over the actual
+# SYS_SHARED_BUFFER_* syscalls, with capabilities granted by the generation.
+# Complements sample_plane_check, which composes the lifecycle in-harness:
+# this arm exercises the rights gates, the loan receiver binding, and
+# reclamation through real task termination.
+sample_plane_live_check: contracts_check generation_check
+    python3 scripts/check/check-sample-plane.py
 # M6.2: generated spawn protocol, deterministic command profile, bounded
 # userspace spawn service, profile rejection, and exact grant composition.
 spawn_service_check: contracts_check generation_check
