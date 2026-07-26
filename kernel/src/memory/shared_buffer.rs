@@ -18,7 +18,7 @@
 //! shared contiguous frame allocator in [`crate::memory::pmm`]. Holding one
 //! never grants the other.
 
-use spin::{LazyLock, Mutex};
+use spin::Mutex;
 
 use crate::capability::{BufferLoan, SharedRegion};
 use crate::memory::pmm::{self, CONTIG_MAX_FRAMES};
@@ -849,5 +849,27 @@ impl SharedBufferTable {
     }
 }
 
-pub static SHARED_BUFFER_TABLE: LazyLock<Mutex<SharedBufferTable>> =
-    LazyLock::new(|| Mutex::new(SharedBufferTable::new()));
+/// The live shared-buffer table.
+///
+/// Deliberately a plain `const`-initialized static rather than a `LazyLock`:
+/// the table is ~10 KiB of fixed arrays, so a lazy initializer would construct
+/// it on whichever kernel stack first touched it. `task::terminate` calls
+/// `reclaim_owner` on a 32 KiB task kernel stack with no guard page, so that
+/// first touch silently overflowed the stack and wedged every full-graph boot
+/// (backlog B3). Const-initializing places the table in `.bss` instead, and
+/// matches the `FRAME_ALLOCATOR`/`QUEUE` statics.
+pub static SHARED_BUFFER_TABLE: Mutex<SharedBufferTable> = Mutex::new(SharedBufferTable::new());
+
+/// Regression guard for backlog B3. The table must stay far smaller than a task
+/// kernel stack ([`crate::task::KERNEL_STACK_SIZE`], 32 KiB, unguarded), because
+/// any code path that materializes one by value — a lazy static's initializer, a
+/// `SharedBufferTable::new()` local, a by-value return — builds it on the current
+/// stack. At 10 KiB in `.bss` that never happens; growing the fixed arrays until
+/// a temporary no longer fits would silently overflow into whatever precedes the
+/// stack and wedge the boot instead of faulting. Raise the bounds only with this
+/// in mind.
+const _: () = assert!(
+    core::mem::size_of::<SharedBufferTable>() * 2 < crate::task::KERNEL_STACK_SIZE,
+    "SharedBufferTable is too large to be safely materialized on a kernel stack; \
+     shrink MAX_SHARED_BUFFERS/MAX_MAPPINGS/MAX_LOANS or grow KERNEL_STACK_SIZE"
+);
