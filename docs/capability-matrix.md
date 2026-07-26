@@ -96,6 +96,15 @@ Semantics not visible in the table:
   and reclaimed by `SharedBufferTable::map` (C7.4). Loan quota is consumed by
   `SharedBufferTable::loan`; a released creator's pages and buffer charge remain
   retained until the final single-return loan settles (C7.5).
+- The reference generation declares that budget in practice, not only in
+  principle: `contracts/generation/v1/fixtures/valid.zti` carries a
+  `shared-buffer-budget` `KIND_RESOURCE` object plus one `bufferCreate` grant
+  each to `dango` and `spawn-service`, and `bootstrap` mints a single
+  transferable `SharedBufferFactory` that init derive-copies to exactly those
+  holders. The grant authorizes the operation and the budget bounds it: a
+  component with a grant but no budget entry still allocates nothing. Both
+  holders run a bounded create/map/write/seal/release self-check at startup, so
+  a healthy boot is itself evidence that the declared quotas are live (B4).
 - A C7.6 sample descriptor is a userspace control message (`sample-descriptor/v1`),
   not a kernel object: it references an exact transferred `SharedBufferLoan` by
   its unforgeable identity plus a page-aligned offset/length, type identity,

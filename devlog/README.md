@@ -29,6 +29,7 @@ This directory is the curated, chronological record of investigations, regressio
 | 2026-07-25 | [C7.7 sample-plane integration and isolation](2026-07-25-c7-7-sample-plane-integration.md) | Verified | Two-component sample-plane composition over C7.2–C7.6, real-channel descriptor exchange, four quota classes, peer-death reclamation, unrelated-channel isolation, retained-v2 decode probe, `just sample_plane_check` |
 | 2026-07-26 | [C7 milestone audit](2026-07-26-c7-audit/index.md) | Verified | C7.1–C7.7 gate re-run, C7.5 full-graph boot wedge bisected, dormant budget/factory wiring, missing syscall and real-component coverage, backlog B3–B8 |
 | 2026-07-26 | [B3 shared-buffer table kernel-stack overflow](2026-07-26-b3-shared-buffer-table-stack-overflow/index.md) | Verified | 10 KiB `SharedBufferTable` built on a 32 KiB unguarded task kernel stack by a `LazyLock` initializer, const-static fix, compile-time size guard, full-graph boot gates restored |
+| 2026-07-26 | [B4 live shared-buffer budget and factory](2026-07-26-b4-live-shared-buffer-budget/index.md) | Verified | Budget emitted as a digest-authenticated KIND_RESOURCE object, manifest holder quotas + factory grants, bootstrap mint at a fixed slot, slime_rt shared-buffer wrappers, dango/spawn-service startup quota probe |
 
 ## Entry format
 

@@ -17,61 +17,31 @@ at the bottom rather than deleting it.
 ## Open
 
 _Opened 2026-07-26 by a full C7 audit (C7.1–C7.7) at `2384bea`. Every C7
-sub-slice gate passes, but several C7 exit conditions are not observable on the
-live path. Evidence and bisect: `devlog/2026-07-26-c7-audit/`. B3 (the C7.5
-full-graph boot wedge) is resolved; `roadmap/02-core-runtime.md` and
-`roadmap/README.md` have been corrected to reopen C7, and B4 must close before
-the milestone claim is restored or C8 opens._
-
-### B4 — the C7 shared-buffer plane is dormant on the live boot path
-
-**Problem:** Nothing in a running system can allocate a shared buffer. No
-generation declares a `shared-buffer-budget/v1` resource, so every component
-launches with `HolderQuota::DENY`; no manifest grants `bufferCreate` or
-`bufferLoan`; and the kernel never mints a `SharedBufferFactory`. C7.3's exit
-condition ("Two holders receive distinct generation-declared budgets") and
-C7.7's ("Two isolated components exchange and return a payload...") are
-therefore not observable on the live path — they hold only inside the kernel
-test harness. The C7.2, C7.3, and C7.4 devlogs each recorded this wiring as
-deferred to C7.7; C7.7 closed with "Open risks: None" without doing it, and
-the deferral disappeared from the roadmap rather than being resolved.
-
-**Evidence:** Parsed `/tmp/slime-os-generation-check-a/generation-1.bin` built
-by `just generation_check`: 21 objects, zero of kind `KIND_RESOURCE` (4). The
-one `SLIMESB` byte match in the file falls at offset 248756, inside the kernel
-object's range (72347..639962), not in an object payload.
-`scripts/build/build-generation.py` has no budget emitter, and
-`contracts/generation/v1/fixtures/valid.zti` declares no budget stanza and no
-`bufferCreate`/`bufferLoan` grant (all 26 `rights = [...]` lines checked).
-`kernel/src/runtime/bootstrap.rs` mints `EndpointFactory` (:371, :517) and
-`Input` (:422) but never `SharedBufferFactory`.
-
-**Proposed fix:** Emit the budget as a real generation object: add a
-`KIND_RESOURCE` budget emitter to `build-generation.py` (holder entries sorted
-by `holder_identity` and unique, per `SharedBufferBudget::decode`), declare
-per-holder quotas plus a factory grant for the two participating components in
-the manifest fixture, and mint `SharedBufferFactory` in `bootstrap.rs` for the
-granted components so `set_shared_buffer_quota` resolves a real quota instead
-of `DENY`. Generation identities change, so rebuild the pinned fixtures and
-re-run the determinism check.
-
-**Exit condition:** A built generation contains exactly one `KIND_RESOURCE`
-budget object that `crate::generation::decode` validates; two named components
-boot with distinct non-`DENY` quotas and one of them allocates a shared buffer
-through its factory grant; `just contracts_check` and `just generation_check`
-pass with two byte-identical builds.
+sub-slice gate passes; the audit found a boot regression and several exit
+conditions that were provable only in-harness. Evidence and bisect:
+`devlog/2026-07-26-c7-audit/`. B3 (the C7.5 full-graph boot wedge) and B4 (the
+dormant shared-buffer plane) are resolved, so C7's blocking items are cleared
+and C8 may open; B5–B8 remain as evidence and hygiene debt on the C7 surface._
 
 ### B5 — no C7 gate exercises the syscall layer or real components
 
-**Problem:** All nine `SYS_SHARED_BUFFER_*` syscalls are unreachable from
-every test. The gates call `SharedBufferTable` methods directly on locally
-constructed tables and never touch the global `SHARED_BUFFER_TABLE`, so the
-rights gates, the `available_slots()` pre-checks, the create-insert-failure
-rollback (`kernel/src/syscall/mod.rs:604-611`), and the loan-insert-failure
-revoke (`:820-825`) have zero coverage. C7.7's "two isolated components" are
-two `u64` constants, and its "peer death" is a direct `reclaim_owner` call, so
-the real reclamation wiring in `task::terminate` is never executed by the gate
-that claims it. This is what let B3 through.
+**Problem:** No *test* reaches any `SYS_SHARED_BUFFER_*` syscall. The gates call
+`SharedBufferTable` methods directly on locally constructed tables and never
+touch the global `SHARED_BUFFER_TABLE`, so the rights gates, the
+`available_slots()` pre-checks, the create-insert-failure rollback
+(`kernel/src/syscall/mod.rs:604-611`), and the loan-insert-failure revoke
+(`:820-825`) have no test coverage. C7.7's "two isolated components" are two
+`u64` constants, and its "peer death" is a direct `reclaim_owner` call, so the
+real reclamation wiring in `task::terminate` is never executed by the gate that
+claims it. This is what let B3 through.
+
+**Partly addressed 2026-07-26 (B4).** `slime_rt` now wraps
+`create`/`map`/`unmap`/`seal`/`release`, and the dango and spawn-service
+startup probes exercise all five against the real kernel on every boot, so
+those paths are no longer unreachable from userspace. What remains: the four
+loan syscalls (`LOAN`/`LOAN_MAP`/`RETURN`/`REVOKE`) still have no wrapper and
+no caller; no *test* drives any syscall; and the C7.7 gate still composes owner
+ids rather than tasks.
 
 **Evidence:** `grep 'dispatch|UserFrame|sys_'` over `kernel/tests/` returns no
 matches; `grep SHARED_BUFFER_TABLE` over `kernel/tests/` returns no matches,
@@ -81,17 +51,18 @@ the file never mentions `spawn` or `task::`; `:462` calls
 `buffers.reclaim_owner(RECEIVER)` in place of a termination. Compare
 `kernel/tests/isolation.rs:174-189`, which spawns real tasks.
 
-**Proposed fix:** Promote the C7.7 gate to the milestone it claims: spawn two
-real components holding granted factory/loan capabilities (available once B4
-lands), move the descriptor and payload through the actual syscalls, and drive
-reclamation by terminating a task rather than calling the table. Add negative
-syscall cases for a missing right and a full capability table so the denial
-and rollback arms are covered.
+**Proposed fix:** Add the four missing loan wrappers to `slime_rt`, then promote
+the C7.7 gate to the milestone it claims: spawn two real components holding
+granted factory/loan capabilities (the factory grant landed with B4), move the
+descriptor and payload through the actual syscalls, and drive reclamation by
+terminating a task rather than calling the table. Add negative syscall cases for
+a missing right and a full capability table so the denial and rollback arms are
+covered.
 
 **Exit condition:** `just sample_plane_check` spawns two real tasks, moves a
 payload larger than `MAX_MSG` through `SYS_SHARED_BUFFER_*` and a real
-channel, and reclaims every charge via task termination; each shared-buffer
-syscall has at least one authorized and one denied case.
+channel, and reclaims every charge via task termination; each of the nine
+shared-buffer syscalls has at least one authorized and one denied case.
 
 ### B6 — the retained-v2 "still boots" claim is proven only as decode
 
@@ -167,6 +138,52 @@ aggregate over-commit, and `roadmap/02-core-runtime.md` describes the same
 rule the code enforces.
 
 ## Resolved
+
+### B4 — the C7 shared-buffer plane was dormant on the live boot path
+
+**Resolved:** 2026-07-26. See `devlog/2026-07-26-b4-live-shared-buffer-budget/`.
+
+**Problem:** Nothing in a running system could allocate a shared buffer. No
+generation declared a `shared-buffer-budget/v1` resource, so every component
+launched with `HolderQuota::DENY`; no manifest granted `bufferCreate`; the
+kernel never minted a `SharedBufferFactory`; and `slime_rt` had no wrapper for
+any shared-buffer syscall. C7.3's exit condition ("two holders receive distinct
+generation-declared budgets") therefore held only inside the kernel test
+harness. C7.2/C7.3/C7.4 each deferred this wiring to C7.7, which closed without
+doing it.
+
+**Evidence:** The built `generation-1.bin` held 21 objects and zero of kind
+`KIND_RESOURCE`; the one `SLIMESB` match sat inside the kernel object's byte
+range, not an object payload. No `bufferCreate` grant in the manifest fixture;
+`bootstrap.rs` minted `EndpointFactory` and `Input` but never
+`SharedBufferFactory`.
+
+**Fix:** Emit the budget as a digest-authenticated `KIND_RESOURCE` object from
+`build-generation.py` (entries sorted by `holder_identity` and duplicate-checked,
+as `SharedBufferBudget::decode` requires); declare per-holder quotas and two
+`bufferCreate` grants in the manifest; mint one transferable
+`SharedBufferFactory` in `bootstrap.rs` at a fixed slot ahead of the optional
+transfer block (renumbering the transfer slots to 41/42) and validate both
+grants with `require_grant`; add the five missing `slime_rt` wrappers; and run a
+bounded create/map/write/seal/unmap/release self-check at dango and
+spawn-service startup so a normal boot proves its own quota.
+
+**Exit condition (observed):** A built generation contains exactly one
+`KIND_RESOURCE` budget object (128 bytes, digest verified, magic `SLIMESB\0`,
+two holders sorted by identity) that `crate::generation::decode` validates.
+A normal boot prints `[generation] shared-buffer factory grants valid`,
+`[dango] shared-buffer quota live`, and `[spawn-service] shared-buffer quota
+live`, then `vertical slice healthy`. The new
+`booted_generation_declares_distinct_holder_budgets` case decodes the booted
+generation and asserts two distinct non-`DENY` quotas with an absent component
+denied. `just generation_check` produces two byte-identical builds; `just
+test`, all six C7 sub-slice gates (8/8/8/7/4/5), `just dango_check`, `just
+transfer_check`, `just generation_cmd_check`, `just contracts_check`, `just
+framework_safety_check`, and fmt/lint (with `_components`) are clean.
+
+**Follow-up:** B5 is partly addressed — five syscalls are now exercised on a
+live boot, but the four loan syscalls still have no wrapper and no test drives
+any syscall.
 
 ### B3 — C7.5 wedged every full-graph boot (kernel-stack overflow)
 
