@@ -20,31 +20,8 @@ _Opened 2026-07-26 by a full C7 audit (C7.1–C7.7) at `2384bea`. Every C7
 sub-slice gate passed; the audit found a boot regression and several exit
 conditions that were provable only in-harness. Evidence and bisect:
 `devlog/2026-07-26-c7-audit/`. B3 (boot wedge), B4 (dormant shared-buffer
-plane), and B5 (no syscall or real-component coverage) are resolved. B6–B8
-remain as narrower evidence and hygiene debt on the C7 surface._
-
-### B6 — the retained-v2 "still boots" claim is proven only as decode
-
-**Problem:** C7.1's exit condition states that a retained v2 known-good
-artifact "still decodes **and boots**". Only decode is proven. No v2
-generation is ever booted, so the rollback window's boot path is unverified.
-
-**Evidence:** `scripts/lib/boot_contracts.py:7-8` pins
-`GENERATION_MAGIC = b"SLIMEG3\0"` / version 3, so the builder emits v3 only.
-The sole v2 artifacts are hand-built in memory: `boot-contracts/src/
-generation.rs:786` (`retained_v2_generation_still_decodes`) and
-`kernel/tests/sample_plane.rs:564` (`build_v2_known_good`). C7.7's
-`retained_v2_known_good_decode_is_unaffected` is honestly named as a decode
-probe; `roadmap/02-core-runtime.md:38,63` upgrades it to "boots".
-
-**Proposed fix:** Either build a v2 known-good generation into a bootstore
-fixture and boot it under QEMU during the rollback window, or amend C7.1's
-exit condition and status line to claim decode-and-verify only, and record the
-boot arm as an explicit deferral with its reason.
-
-**Exit condition:** Either a v2 known-good generation boots to a healthy slice
-under a named `just` target, or `roadmap/02-core-runtime.md` states the
-decode-only scope and the deferral is recorded here.
+plane), B5 (no syscall or real-component coverage), and B6 (retained-v2 scope)
+are resolved. B7 and B8 remain as naming and validation hygiene._
 
 ### B7 — the `RIGHT_MAP` rename never reached the manifest vocabulary
 
@@ -97,6 +74,53 @@ aggregate over-commit, and `roadmap/02-core-runtime.md` describes the same
 rule the code enforces.
 
 ## Resolved
+
+### B6 — the retained-v2 "still boots" claim was proven only as decode
+
+**Resolved:** 2026-07-26 (scope corrected + admission covered). See
+`devlog/2026-07-26-b6-retained-v2-rollback-scope.md`.
+
+**Problem:** C7.1's exit condition stated that a retained v2 known-good artifact
+"still decodes **and boots**". Only decode was proven; no v2 generation was ever
+booted.
+
+**Evidence:** `scripts/lib/boot_contracts.py:7-8` pins `GENERATION_MAGIC =
+b"SLIMEG3\0"` / version 3, so the builder emits v3 only. The sole v2 artifacts
+were hand-built in memory (`boot-contracts/src/generation.rs`,
+`kernel/tests/sample_plane.rs:564`).
+
+**Resolution:** The boot arm is not merely unproven, it is unconstructible from
+this tree, and investigating why closed a more interesting question.
+`stage0::verify_kernel` (`stage0/src/lib.rs:320-325`) resolves
+`generation.kernel_object`, so each generation embeds and boots its **own**
+kernel. A retained v2 generation therefore runs its v2-era kernel — which is
+also why this tree's v3-only rights cannot break the rollback window, despite
+`bufferCreate` (bit 24) lying outside v2's 24-bit rights space and
+`require_grant` being unconditional. Any "v2 boot" staged today would pair a v2
+manifest with a v3-era kernel: a configuration that has never existed.
+
+Covered the provable and load-bearing part instead — the stage-0 admission
+chain, which had no coverage. Two `boot-contracts` tests were added:
+`retained_v2_generation_passes_stage0_admission` (identity seal, kernel object,
+bootstrap component, tamper detection) and
+`retained_v2_authority_manifest_is_width_stable`, which pins the 32-bit v2
+authority hash. That second one guards a real hazard: `release.rs:163` binds a
+signed release to `authority_manifest_identity`, so losing the version branch
+would fail every retained v2 release while every gate stayed green. C7.1's
+status and exit condition now claim decode + release authorization + admission,
+and state why the boot arm cannot be staged.
+
+**Exit condition (observed):** `cargo test -p boot-contracts --lib` passes 21
+tests (19 prior + 2 new). Fault injection confirms the guard bites: removing the
+v2 branch from `authority_manifest_identity` so it hashes at 64-bit made
+`retained_v2_authority_manifest_is_width_stable` fail, and the branch was
+restored. `just contracts_check`, `just generation_check`, and `just
+transfer_check` all pass.
+
+**Follow-up:** If a real v2 generation is ever recovered from history, booting
+it under QEMU would upgrade this from admission to a true rollback boot. The
+rollback window also remains unlimited in code — v2 retention is unconditional
+decode support, noted since C7.1.
 
 ### B5 — no C7 gate exercised the syscall layer or real components
 
