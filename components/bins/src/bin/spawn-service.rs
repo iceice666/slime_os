@@ -24,6 +24,10 @@ const STATUS_BUDGET_EXHAUSTED: i32 = ERR_OUT_OF_MEMORY as i32;
 const RIGHT_SEND: Rights = 1;
 const RIGHT_RECV: Rights = 2;
 const RIGHT_DIRECTORY_READ: Rights = 1 << 19;
+// C7.2 shared-buffer factory, granted by init as the fifth spawn grant.
+const SHARED_BUFFER_FACTORY_SLOT: u32 = 4;
+// A free page-aligned user address, borrowed only for the startup self-check.
+const SHARED_BUFFER_PROBE_BASE: u64 = 0x0000_0004_0000_0000;
 
 include!(concat!(env!("OUT_DIR"), "/command_profile.rs"));
 
@@ -36,6 +40,16 @@ struct LiveChild {
 
 fn main() {
     slime_rt::debug_write(b"[spawn-service] ready\n");
+    // C7.2/C7.3: prove this component's generation-declared shared-buffer
+    // quota is live before serving requests. A failure here is fatal: the
+    // generation granted authority the kernel did not honour.
+    if !slime_components::shared_buffer_probe::probe_and_report(
+        b"[spawn-service]",
+        SHARED_BUFFER_FACTORY_SLOT,
+        SHARED_BUFFER_PROBE_BASE,
+    ) {
+        slime_rt::exit(1);
+    }
     let mut live = [None; CLIENT_BUDGET];
     loop {
         reap(&mut live);

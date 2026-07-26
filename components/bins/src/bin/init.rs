@@ -22,6 +22,7 @@ const RIGHT_DIRECTORY_WRITE: Rights = 1 << 20;
 const RIGHT_DIRECTORY_LIST: Rights = 1 << 21;
 const RIGHT_DIRECTORY_DERIVE: Rights = 1 << 22;
 const RIGHT_INPUT_READ: Rights = 1 << 23;
+const RIGHT_BUFFER_CREATE: Rights = 1 << 24;
 
 // Manifest-derived bootstrap slot order is emitted by the host builder.
 const CONSOLE_CAPS: [SpawnGrant; 1] = [grant(2, RIGHT_RECV)];
@@ -41,7 +42,7 @@ const RECOVERY_CAPS: [SpawnGrant; 2] = [
     grant(3, RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE),
 ];
 
-fn dango_caps() -> [SpawnGrant; 5] {
+fn dango_caps() -> [SpawnGrant; 6] {
     [
         grant(12, RIGHT_SEND | RIGHT_RECV),
         grant(4, RIGHT_SEND | RIGHT_TRANSFER),
@@ -51,15 +52,17 @@ fn dango_caps() -> [SpawnGrant; 5] {
             RIGHT_DIRECTORY_READ | RIGHT_DIRECTORY_DERIVE | RIGHT_TRANSFER,
         ),
         grant(0, RIGHT_ENDPOINT_CREATE),
+        grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
     ]
 }
 
-fn spawn_service_caps() -> [SpawnGrant; 4] {
+fn spawn_service_caps() -> [SpawnGrant; 5] {
     [
         grant(13, RIGHT_SEND | RIGHT_RECV),
         grant(6, RIGHT_EXEC | RIGHT_SPAWN),
         grant(7, RIGHT_EXEC | RIGHT_SPAWN),
         grant(0, RIGHT_ENDPOINT_CREATE),
+        grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
     ]
 }
 
@@ -95,8 +98,11 @@ const POWERBOX_CHOOSER_CAPS: [SpawnGrant; 3] = [
     ),
     grant(20, RIGHT_INPUT_READ),
 ];
-const TRANSFER_RECEIVER_SLOT: u32 = 40;
-const TRANSFER_SOURCE_SLOT: u32 = 41;
+// C7.2 shared-buffer factory, minted by bootstrap at a fixed slot ahead of the
+// optional transfer block so both are addressable on every boot.
+const SHARED_BUFFER_FACTORY_SLOT: u32 = 40;
+const TRANSFER_RECEIVER_SLOT: u32 = 41;
+const TRANSFER_SOURCE_SLOT: u32 = 42;
 
 const POWERBOX_PROBE_CAPS: [SpawnGrant; 1] = [grant(38, RIGHT_SEND | RIGHT_RECV)];
 

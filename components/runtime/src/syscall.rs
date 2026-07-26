@@ -27,6 +27,11 @@ const SYS_INPUT_READ: u64 = 17;
 const SYS_GENERATION_TRANSACT: u64 = 18;
 pub const SYS_GENERATION_RECEIVE: u64 = 19;
 const SYS_WAIT: u64 = 20;
+const SYS_SHARED_BUFFER_CREATE: u64 = 21;
+const SYS_SHARED_BUFFER_RELEASE: u64 = 22;
+const SYS_SHARED_BUFFER_MAP: u64 = 23;
+const SYS_SHARED_BUFFER_UNMAP: u64 = 24;
+const SYS_SHARED_BUFFER_SEAL: u64 = 25;
 
 pub const ERR_SUCCESS: i64 = 0;
 pub const ERR_BAD_CAP: i64 = -1;
@@ -256,6 +261,77 @@ pub fn endpoint_create(factory_slot: u32) -> Result<(u32, u32), i64> {
     } else {
         Ok((first as u32, second as u32))
     }
+}
+
+/// A shared buffer allocated through a `SharedBufferFactory` capability: the
+/// slot holding the new `SharedBuffer` handle, plus the kernel-assigned
+/// unforgeable identity that names it across a transfer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SharedBuffer {
+    pub slot: u32,
+    pub id: u64,
+}
+
+/// Allocate `pages` of shared memory through a `SharedBufferFactory` capability
+/// (C7.2). Charged to this component's generation-declared quota (C7.3); a
+/// component with no budget entry is denied. `writable` requests write and seal
+/// authority on the returned handle.
+pub fn shared_buffer_create(
+    factory_slot: u32,
+    pages: usize,
+    writable: bool,
+) -> Result<SharedBuffer, i64> {
+    let (slot, id) = unsafe {
+        raw_syscall_pair(
+            SYS_SHARED_BUFFER_CREATE,
+            factory_slot as u64,
+            pages as u64,
+            u64::from(writable),
+            0,
+            0,
+        )
+    };
+    if slot < 0 {
+        Err(slot)
+    } else {
+        Ok(SharedBuffer {
+            slot: slot as u32,
+            id,
+        })
+    }
+}
+
+/// Release a shared buffer and invalidate this holder's capability. Pages stay
+/// retained while any loan is outstanding.
+pub fn shared_buffer_release(slot: u32) -> i64 {
+    unsafe { raw_syscall(SYS_SHARED_BUFFER_RELEASE, slot as u64, 0, 0, 0, 0) }
+}
+
+/// Map an exact page-aligned subrange of a shared buffer at `base`. Requires
+/// `RIGHT_BUFFER_MAP`; `writable` additionally requires `RIGHT_BUFFER_WRITE`
+/// and fails once the region is sealed.
+pub fn shared_buffer_map(slot: u32, base: u64, offset: u64, length: u64, writable: bool) -> i64 {
+    unsafe {
+        raw_syscall(
+            SYS_SHARED_BUFFER_MAP,
+            slot as u64,
+            base,
+            offset,
+            length,
+            u64::from(writable),
+        )
+    }
+}
+
+/// Remove this holder's mapping of `slot` at `base` and return its charge.
+pub fn shared_buffer_unmap(slot: u32, base: u64) -> i64 {
+    unsafe { raw_syscall(SYS_SHARED_BUFFER_UNMAP, slot as u64, base, 0, 0, 0) }
+}
+
+/// Irreversibly seal a shared buffer read-only, downgrading every live writable
+/// mapping first. Requires `RIGHT_BUFFER_WRITE`; write access never returns.
+pub fn shared_buffer_seal(slot: u32) -> i64 {
+    unsafe { raw_syscall(SYS_SHARED_BUFFER_SEAL, slot as u64, 0, 0, 0, 0) }
 }
 
 /// Query a child supervision handle. `Ok(None)` means the child is live; a

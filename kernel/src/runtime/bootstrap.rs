@@ -324,6 +324,21 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         RIGHT_INPUT_READ,
     );
     serial_println!("[generation] powerbox grants valid");
+    require_grant(
+        generation,
+        "dango-shared-buffer-factory",
+        "init",
+        "dango",
+        crate::capability::RIGHT_BUFFER_CREATE,
+    );
+    require_grant(
+        generation,
+        "spawn-service-shared-buffer-factory",
+        "init",
+        "spawn-service",
+        crate::capability::RIGHT_BUFFER_CREATE,
+    );
+    serial_println!("[generation] shared-buffer factory grants valid");
     serial_println!("[generation] filesystem grants valid");
     let storage_capability = match generation.number {
         2 | 3 => optional_block_function().map(|function| Capability {
@@ -456,6 +471,16 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         executable(generation, "powerbox-probe", powerbox_probe),
         endpoint(powerbox_client, RIGHT_SEND | RIGHT_RECV),
         endpoint(powerbox_service, RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER),
+        // C7.2 shared-buffer factory, slot 40. Placed before the optional
+        // transfer block so its slot is fixed on every boot. Creation authority
+        // only, and transferable so init can derive-copy it into the components
+        // the generation grants it to. A holder still allocates nothing without
+        // a `shared-buffer-budget` entry (C7.3): the grant authorizes the
+        // operation, the budget bounds it.
+        Capability {
+            object: KernelObject::SharedBufferFactory,
+            rights: crate::capability::RIGHT_BUFFER_CREATE | RIGHT_TRANSFER,
+        },
     ]);
     if let (Some(receiver), Some(source)) = (transfer_receiver, transfer_source) {
         caps.extend([

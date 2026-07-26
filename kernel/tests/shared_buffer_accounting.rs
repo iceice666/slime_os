@@ -232,3 +232,60 @@ fn kernel_ceilings_still_bound_a_generous_quota() {
     }
     assert_eq!(buffers.total_pages(), 0);
 }
+
+/// The booted generation actually declares a shared-buffer budget, and the
+/// kernel resolves distinct non-deny quotas from it for the two named holders
+/// (backlog B4). Every other component stays deny-by-default.
+///
+/// This is the live-path arm of the C7.3 exit condition: the cases above prove
+/// the accounting mechanism against synthetic quotas, while this one proves the
+/// quotas a real boot hands out came from the generation resource object rather
+/// than from a test fixture.
+#[test_case]
+fn booted_generation_declares_distinct_holder_budgets() {
+    let generation = slime_os_kernel::generation::decode(slime_os_kernel::boot::generation())
+        .expect("booted generation decodes");
+
+    let dango = slime_os_kernel::generation::shared_buffer_quota(&generation, "dango");
+    let spawn_service =
+        slime_os_kernel::generation::shared_buffer_quota(&generation, "spawn-service");
+
+    // Both holders are declared, and their budgets differ — one generation
+    // grants distinct per-holder ceilings, not a single global allowance.
+    assert_ne!(
+        dango,
+        HolderQuota::DENY,
+        "dango must have a declared budget"
+    );
+    assert_ne!(
+        spawn_service,
+        HolderQuota::DENY,
+        "spawn-service must have a declared budget"
+    );
+    assert_ne!(
+        dango, spawn_service,
+        "holders must receive distinct budgets"
+    );
+
+    // A component absent from the budget holds nothing: authority is never
+    // ambient, so omission denies rather than defaulting to some allowance.
+    assert_eq!(
+        slime_os_kernel::generation::shared_buffer_quota(&generation, "console"),
+        HolderQuota::DENY
+    );
+
+    // The declared ceilings are satisfiable under the fixed kernel bounds, and
+    // charging against them really allocates.
+    let mut buffers = SharedBufferTable::new();
+    let region = buffers
+        .create(0xD1, dango, dango.byte_pages as usize, true)
+        .expect("dango may fill its declared page ceiling");
+    assert_eq!(buffers.owner_pages(0xD1), dango.byte_pages);
+    // One page past the declared ceiling is refused for that holder alone.
+    assert!(matches!(
+        buffers.create(0xD1, dango, 1, true),
+        Err(SharedBufferError::QuotaExceeded)
+    ));
+    buffers.release(&region).expect("cleanup");
+    assert_eq!(buffers.total_pages(), 0);
+}

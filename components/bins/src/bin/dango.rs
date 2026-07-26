@@ -16,6 +16,10 @@ const CONSOLE_SLOT: u32 = 1;
 const INPUT_SLOT: u32 = 2;
 const CWD_ROOT_SLOT: u32 = 3;
 const ENDPOINT_FACTORY_SLOT: u32 = 4;
+// C7.2 shared-buffer factory, granted by init as the sixth spawn grant.
+const SHARED_BUFFER_FACTORY_SLOT: u32 = 5;
+// A free page-aligned user address, borrowed only for the startup self-check.
+const SHARED_BUFFER_PROBE_BASE: u64 = 0x0000_0005_0000_0000;
 const RIGHT_TRANSFER: u32 = 4;
 const RIGHT_DIRECTORY_READ: u32 = 1 << 19;
 
@@ -25,6 +29,16 @@ slime_rt::entry!(main);
 
 fn main() {
     console(b"[dango] native runtime ready\n");
+    // C7.2/C7.3: prove the generation-declared shared-buffer quota is live
+    // before accepting input. Fatal on failure — the generation granted
+    // authority the kernel did not honour.
+    if !slime_components::shared_buffer_probe::probe_and_report(
+        b"[dango]",
+        SHARED_BUFFER_FACTORY_SLOT,
+        SHARED_BUFFER_PROBE_BASE,
+    ) {
+        slime_rt::exit(1);
+    }
     let mut line = [0u8; MAX_LINE_BYTES];
     let mut len = 0;
     console(b"dango> ");

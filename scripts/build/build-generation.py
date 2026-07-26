@@ -73,6 +73,13 @@ from boot_contracts import (
     MAX_STATES,
     MAX_STRING_BYTES,
     MAX_STRING_TABLE_BYTES,
+    SHARED_BUFFER_BUDGET_ENTRY,
+    SHARED_BUFFER_BUDGET_HEADER,
+    SHARED_BUFFER_BUDGET_HEADER_BYTES,
+    SHARED_BUFFER_BUDGET_ENTRY_BYTES,
+    SHARED_BUFFER_BUDGET_MAGIC,
+    SHARED_BUFFER_BUDGET_VERSION,
+    MAX_SHARED_BUFFER_BUDGET_HOLDERS,
     SEGMENT_EXEC,
     SEGMENT_WRITE,
     bootstate_checksum,
@@ -188,6 +195,53 @@ def recovery_manifest(manifest: dict) -> dict:
 def binding_identity(name: str) -> bytes:
     encoded = name.encode("utf-8")
     return sha256(b"slime-state-binding-v1" + struct.pack("<H", len(encoded)) + encoded)
+
+
+def holder_identity(name: str) -> bytes:
+    """Stable per-holder identity, matching `boot_contracts::shared_buffer_budget`."""
+    encoded = name.encode("utf-8")
+    return sha256(
+        b"slime-shared-buffer-holder-v1" + struct.pack("<H", len(encoded)) + encoded
+    )
+
+
+def build_shared_buffer_budget(holders: list[dict]) -> bytes:
+    """Encode the C7.3 shared-buffer budget resource object.
+
+    Entries are sorted by holder identity and must be unique: the decoder
+    rejects an unsorted or duplicated table, so the sort here is part of the
+    format rather than a convenience. A component absent from the table gets no
+    quota at all (deny by default), so omission is meaningful, not a default.
+    """
+    if len(holders) > MAX_SHARED_BUFFER_BUDGET_HOLDERS:
+        fail("shared-buffer budget exceeds holder bound")
+    entries = []
+    for holder in holders:
+        identity = holder_identity(holder["holder"])
+        limits = (
+            holder["bytePages"],
+            holder["bufferCount"],
+            holder["mappingCount"],
+            holder["loanCount"],
+        )
+        for limit in limits:
+            if not isinstance(limit, int) or not 0 <= limit <= 0xFFFFFFFF:
+                fail(f"shared-buffer budget: invalid limit for {holder['holder']}")
+        entries.append((identity, *limits))
+    entries.sort(key=lambda entry: entry[0])
+    identities = {entry[0] for entry in entries}
+    if len(identities) != len(entries):
+        fail("shared-buffer budget: duplicate holder")
+    total_len = SHARED_BUFFER_BUDGET_HEADER_BYTES + len(entries) * SHARED_BUFFER_BUDGET_ENTRY_BYTES
+    header = SHARED_BUFFER_BUDGET_HEADER.pack(
+        SHARED_BUFFER_BUDGET_MAGIC,
+        SHARED_BUFFER_BUDGET_VERSION,
+        SHARED_BUFFER_BUDGET_HEADER_BYTES,
+        0,
+        len(entries),
+        total_len,
+    )
+    return header + b"".join(SHARED_BUFFER_BUDGET_ENTRY.pack(*entry) for entry in entries)
 
 
 def build_recovery_index(
@@ -684,6 +738,10 @@ def main() -> None:
     generation1_components = build_rust_components(generation1_number, candidate_identity=None)
     payloads: dict[str, bytes] = {manifest["kernelObject"]: kernel_image(kernel)}
     object_by_id = {obj["id"]: obj for obj in manifest["objects"]}
+    if "shared-buffer-budget" in object_by_id:
+        payloads["shared-buffer-budget"] = build_shared_buffer_budget(
+            manifest.get("sharedBufferBudget", [])
+        )
     for component in manifest["components"]:
         stack = component.get("stackBytes", DEFAULT_STACK_BYTES)
         if not isinstance(stack, int) or stack <= 0 or stack % PAGE_SIZE or stack > MAX_STACK_BYTES:
