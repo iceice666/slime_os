@@ -16,64 +16,72 @@ at the bottom rather than deleting it.
 
 ## Open
 
-_Opened 2026-07-26 by a full C7 audit (C7.1–C7.7) at `2384bea`. Every C7
-sub-slice gate passed; the audit found a boot regression and several exit
-conditions that were provable only in-harness. Evidence and bisect:
-`devlog/2026-07-26-c7-audit/`. B3 (boot wedge), B4 (dormant shared-buffer
-plane), B5 (no syscall or real-component coverage), and B6 (retained-v2 scope)
-are resolved. B7 and B8 remain as naming and validation hygiene._
+_No open items. The 2026-07-26 C7 audit (C7.1–C7.7 at `2384bea`) opened B3–B8;
+all six are resolved and logged below. Evidence and bisect:
+`devlog/2026-07-26-c7-audit/`._
+
+## Resolved
+
+### B8 — budget validation bounded each holder but never the aggregate
+
+**Resolved:** 2026-07-26. See `devlog/2026-07-26-b7-b8-budget-hygiene.md`.
+
+**Problem:** `SharedBufferBudget::validate_against` checked each holder's quota
+against the fixed kernel ceilings but never summed holders, so a budget could
+promise N holders `MAX_TOTAL_PAGES` each. Not exploitable —
+`SharedBufferTable::create` still enforced the real global ceiling — but the
+roadmap said decode rejects "globally impossible" limits, and an aggregate
+over-commit degraded a declared quota into first-come-first-served: a
+late-starting component failed with `BytesExhausted` despite holding a quota the
+generation promised it.
+
+**Evidence:** `boot-contracts/src/shared_buffer_budget.rs:116-148` looped per
+entry with no accumulator; its comment noted `max_buffer_pages` was retained
+only "for symmetry". Lib tests covered per-holder impossibility only.
+
+**Fix:** Chose the stricter reading, since `AGENTS.md` requires generation data
+to be deterministic, bounded, and explicitly validated: `validate_against` now
+sums `byte_pages`, `buffer_count`, `mapping_count`, and `loan_count` with
+saturating adds and rejects any total past its kernel ceiling, so a budget that
+validates is one the kernel can honour with every holder at its ceiling at once.
+Also added the two per-holder bounds the check was missing — `mapping_count` and
+`loan_count` against `MAX_MAPPINGS`/`MAX_LOANS`, without which a holder could
+declare 200 mappings against a 64-entry table. `validate_against` grew to five
+parameters; the kernel caller passes the new ceilings.
+
+**Exit condition (observed):** `cargo test -p boot-contracts --lib` passes 24
+tests, including `aggregate_over_commitment_is_rejected`,
+`aggregate_buffer_mapping_and_loan_ceilings_are_enforced`, and
+`per_holder_mapping_and_loan_ceilings_are_enforced`. Fault injection confirms it
+bites on the live path: raising the manifest to 306 aggregate pages (> 256) made
+the boot fail closed, and the real budget (18/256 pages, 5/32 buffers, 10/64
+mappings, 5/64 loans) passes. `just generation_check` (two byte-identical
+builds), `just contracts_check`, `just spawn_service_check`, `just
+sample_plane_live_check`, `just test`, and fmt/lint are clean.
+
+**Follow-up:** The host builder does not validate the aggregate; only the kernel
+does at decode, so an over-committed manifest builds and fails at boot. That is
+fail-closed and keeps one source of truth for the rule.
 
 ### B7 — the `RIGHT_MAP` rename never reached the manifest vocabulary
 
-**Problem:** C7.1's deliverable was to "replace the grandfathered generic
-`RIGHT_MAP` name with an object-specific shared-buffer map right". The kernel
-constant was renamed to `RIGHT_BUFFER_MAP`, but the host-facing manifest right
-is still spelled `map`, so generation authors keep writing the generic name
-for a buffer-specific authority.
+**Resolved:** 2026-07-26. See `devlog/2026-07-26-b7-b8-budget-hygiene.md`.
 
-**Evidence:** `scripts/build/build-generation.py:105` maps `"map": 1 << 9`,
-alongside object-specific siblings such as `"bufferWrite"`, `"bufferCreate"`,
-and `"bufferLoan"`. `kernel/src/capability/mod.rs:39` defines the same bit as
-`RIGHT_BUFFER_MAP`.
+**Problem:** C7.1's deliverable was to replace the grandfathered generic
+`RIGHT_MAP` name with an object-specific shared-buffer map right. The kernel
+constant became `RIGHT_BUFFER_MAP`, but the manifest key stayed `map`, so
+generation authors kept writing a generic name for buffer-specific authority.
 
-**Proposed fix:** Rename the manifest key to `bufferMap` in the builder's
-`RIGHT` table, update any manifest fixture that uses it, and re-run
-`generation_check`/`contracts_check` for the identity change. No wire-format
-change: the bit value is unchanged.
+**Evidence:** `scripts/build/build-generation.py:112` mapped `"map": 1 << 9`
+alongside object-specific siblings `bufferWrite`, `bufferCreate`, `bufferLoan`;
+`kernel/src/capability/mod.rs:39` defined the same bit as `RIGHT_BUFFER_MAP`.
 
-**Exit condition:** No `"map"` key remains in the builder rights table, the
-manifest fixtures build byte-identically across two runs, and
-`just framework_safety_check` stays clean.
+**Fix:** Renamed the builder key to `bufferMap`. No wire or identity change —
+the bit value is unchanged and no manifest fixture referenced the old key.
 
-### B8 — budget validation bounds each holder but never the aggregate
-
-**Problem:** `SharedBufferBudget::validate_against` checks each holder's
-quota against the fixed kernel ceilings but never sums holders, so a budget
-may promise N holders `MAX_TOTAL_PAGES` each. That is over-commitment rather
-than a per-holder impossibility, and `SharedBufferTable::create` still
-enforces the real global ceiling, so it is not exploitable — but
-`roadmap/02-core-runtime.md:104` says decode rejects "globally impossible"
-limits, and an aggregate over-commit is exactly the case a reader expects that
-phrase to cover. Left as is, the first holder to run wins and later holders
-fail with `BytesExhausted` at runtime rather than at decode.
-
-**Evidence:** `boot-contracts/src/shared_buffer_budget.rs:116-148` loops
-per-entry with no accumulator; its comment at :141-145 explicitly notes
-`max_buffer_pages` is retained only "for symmetry". The lib tests at :298-327
-cover per-holder impossibility only.
-
-**Proposed fix:** Decide and record the intent. Either sum `byte_pages`,
-`buffer_count`, `mapping_count`, and `loan_count` across holders and reject a
-budget whose total exceeds the corresponding kernel ceiling, or keep
-over-commitment legal and reword the roadmap deliverable to say per-holder
-impossibility. The first is stricter and matches the wording; the second is
-the smaller change and keeps deliberate over-subscription available.
-
-**Exit condition:** The chosen rule is implemented with a lib test covering an
-aggregate over-commit, and `roadmap/02-core-runtime.md` describes the same
-rule the code enforces.
-
-## Resolved
+**Exit condition (observed):** No `"map"` key remains in the builder rights
+table; `just generation_check` produces two byte-identical builds and `just
+framework_safety_check` stays clean.
 
 ### B6 — the retained-v2 "still boots" claim was proven only as decode
 

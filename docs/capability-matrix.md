@@ -136,7 +136,7 @@ Semantics not visible in the table:
 | Live shared buffers | `MAX_SHARED_BUFFERS = 32` | `SharedBufferTable`; `SharedBufferError::ObjectsExhausted` |
 | Shared-buffer total pages | `MAX_TOTAL_PAGES = 256` (1 MiB) | `SharedBufferTable`; `SharedBufferError::BytesExhausted` |
 | Pages per shared buffer | `MAX_BUFFER_PAGES = 64` | `SharedBufferTable`; `SharedBufferError::BadSize` |
-| Per-holder shared-buffer quota | generation `shared-buffer-budget/v1` resource (`byte_pages`, `buffer_count`, `mapping_count`, `loan_count`); deny by default | `SharedBufferTable::create` charges the creating subtree; `SharedBufferError::QuotaExceeded` |
+| Per-holder shared-buffer quota | generation `shared-buffer-budget/v1` resource (`byte_pages`, `buffer_count`, `mapping_count`, `loan_count`); deny by default; declared totals across all holders must also fit the kernel ceilings, so a validating budget can be honoured with every holder at its ceiling at once | `SharedBufferTable::create` charges the creating subtree; `SharedBufferError::QuotaExceeded`; aggregate over-commit fails at generation decode |
 | Live shared-buffer mappings | `MAX_MAPPINGS = 64` | `SharedBufferTable::map`; `SharedBufferError::MappingsExhausted` |
 | Live shared-buffer loans | `MAX_LOANS = 64` plus generation `loan_count` per lender | `SharedBufferTable::loan`; `SharedBufferError::LoansExhausted` / `QuotaExceeded` |
 | Declared holders per budget | `MAX_HOLDERS = 32` | `SharedBufferBudget::decode` |
