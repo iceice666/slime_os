@@ -3,8 +3,11 @@
 | Field | Value |
 |---|---|
 | Date | 2026-07-24 |
+| Kind | Defect |
 | Status | Verified |
 | Scope | `kernel/src/task`, `kernel/src/ipc`, `kernel/src/drivers/input.rs`, `kernel/src/syscall`, `kernel/src/runtime/bootstrap.rs`, `components/runtime`, `components/bins`; checks `dango_check`/`powerbox_check`/`generation_cmd_check`/`test` |
+| Roadmap | B2 |
+| Gates | `just dango_check`, `just generation_cmd_check`, `just powerbox_check` |
 | Trigger | Backlog B2, promoted to a declared gate on the C8 native typed data fabric |
 | Baseline | Waiting components poll-and-yield staying `Ready`; a default Escape input script masked the resulting idle-exit wedge |
 

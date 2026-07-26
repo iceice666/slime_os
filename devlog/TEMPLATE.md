@@ -3,10 +3,23 @@
 | Field | Value |
 |---|---|
 | Date | YYYY-MM-DD |
+| Kind | Defect / Change / Audit / Decision |
 | Status | Investigating / Root-caused / Fixed / Verified / Monitoring / Proposed |
-| Scope | Subsystems and checks |
+| Scope | Subsystems, files, and checks touched |
+| Roadmap | Milestone and backlog ids this entry bears on, comma-separated (`C7.4, B3`), or `none` |
+| Gates | The narrowest `just` targets that guard this entry's claim, or `none` |
 | Trigger | Commit, change, or first observed condition |
 | Baseline | Last known-good behavior or invariant |
+
+Delete the sections your **Kind** does not require; keep the remaining ones in
+the order below. Required sections per kind:
+
+| Kind | Required sections |
+|---|---|
+| **Defect** | all of them |
+| **Change** | Summary, Changes, Regression guards, Verification, Decisions, Open risks and follow-ups, Artifacts and provenance |
+| **Audit** | Summary, Observable symptom, Investigation log, Changes, Verification, Open risks and follow-ups, Artifacts and provenance |
+| **Decision** | Summary, Changes, Decisions, Open risks and follow-ups, Artifacts and provenance |
 
 ## Summary
 

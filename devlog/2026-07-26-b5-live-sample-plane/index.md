@@ -3,8 +3,11 @@
 | Field | Value |
 |---|---|
 | Date | 2026-07-26 |
+| Kind | Defect |
 | Status | Verified |
 | Scope | `slime_rt` loan wrappers, `sample-lender`/`sample-receiver` components, generation manifest, `bootstrap` wiring, `just sample_plane_live_check` |
+| Roadmap | B5, C7.2, C7.4, C7.5, C7.7 |
+| Gates | `just sample_plane_live_check` |
 | Trigger | Backlog B5, opened by the 2026-07-26 C7 audit (`devlog/2026-07-26-c7-audit/`) |
 | Baseline | No test or component reached any `SYS_SHARED_BUFFER_*` syscall; C7.7's "two isolated components" were the `u64` constants `0x71`/`0x72` |
 

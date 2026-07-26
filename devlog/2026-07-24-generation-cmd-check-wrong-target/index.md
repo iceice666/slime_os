@@ -3,8 +3,11 @@
 | Field | Value |
 |---|---|
 | Date | 2026-07-24 |
+| Kind | Defect |
 | Status | Verified |
 | Scope | `scripts/check-generation-commands.py`, generation staging service, `just generation_cmd_check` |
+| Roadmap | B1 |
+| Gates | `just generation_cmd_check` |
 | Trigger | Component image changes shifting the bootstore directory's identity sort order |
 | Baseline | `just generation_cmd_check` previously passed `success`, `bad-closure`, and `bad-release` |
 

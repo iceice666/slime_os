@@ -3,8 +3,11 @@
 | Field | Value |
 |---|---|
 | Date | 2026-07-24 |
+| Kind | Decision |
 | Status | Proposed |
 | Scope | `roadmap/02-core-runtime.md`, C7 sequencing and verification gates |
+| Roadmap | C7 |
+| Gates | `just sample_plane_check` |
 | Trigger | C7.2–C7.4 still combined multiple independently risky state machines |
 | Baseline | C7.1 complete; remaining work grouped into factory/accounting, lifecycle/descriptor, and final integration |
 
@@ -59,4 +62,4 @@ The remaining C7 plan is split from three slices into six. Each new slice introd
 ## Artifacts and provenance
 
 - Related roadmap item: `roadmap/02-core-runtime.md` (C7)
-- Related completed foundation: `devlog/2026-07-24-c7-1-generation-v3-u64-rights.md`
+- Related completed foundation: `devlog/2026-07-24-c7-1-generation-v3-u64-rights/`

@@ -185,6 +185,7 @@ The repository-wide gates remain:
 
 ```sh
 just contracts_check
+just devlog_check
 just generation_check
 just test
 just fmt_check

@@ -3,8 +3,11 @@
 | Field | Value |
 |---|---|
 | Date | 2026-07-26 |
+| Kind | Defect |
 | Status | Verified |
 | Scope | `kernel/src/memory/shared_buffer.rs` static initialization; full-graph boot gates (`transfer_check`, `spawn_service_check`, `dango_check`) |
+| Roadmap | B3, C7.5 |
+| Gates | `just transfer_check`, `just spawn_service_check`, `just dango_check` |
 | Trigger | Backlog B3, opened by the 2026-07-26 C7 audit (`devlog/2026-07-26-c7-audit/`) |
 | Baseline | C7.4 `928389e` boots the full component graph to `vertical slice healthy`; C7.5 `ca15764` and every later commit wedge |
 

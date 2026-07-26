@@ -3,8 +3,11 @@
 | Field | Value |
 |---|---|
 | Date | 2026-07-24 |
+| Kind | Change |
 | Status | Verified |
 | Scope | `kernel/src`, shared Zutai Rust bindings, contract generators |
+| Roadmap | none |
+| Gates | `just contracts_check` |
 | Trigger | Kernel implementation files and generated bindings were interleaved in one source root |
 | Baseline | `kernel/src` had 51 top-level Rust files and four checked-in `gen.rs` binding copies |
 

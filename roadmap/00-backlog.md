@@ -24,7 +24,7 @@ all six are resolved and logged below. Evidence and bisect:
 
 ### B8 — budget validation bounded each holder but never the aggregate
 
-**Resolved:** 2026-07-26. See `devlog/2026-07-26-b7-b8-budget-hygiene.md`.
+**Resolved:** 2026-07-26. See `devlog/2026-07-26-b7-b8-budget-hygiene/`.
 
 **Problem:** `SharedBufferBudget::validate_against` checked each holder's quota
 against the fixed kernel ceilings but never summed holders, so a budget could
@@ -65,7 +65,7 @@ fail-closed and keeps one source of truth for the rule.
 
 ### B7 — the `RIGHT_MAP` rename never reached the manifest vocabulary
 
-**Resolved:** 2026-07-26. See `devlog/2026-07-26-b7-b8-budget-hygiene.md`.
+**Resolved:** 2026-07-26. See `devlog/2026-07-26-b7-b8-budget-hygiene/`.
 
 **Problem:** C7.1's deliverable was to replace the grandfathered generic
 `RIGHT_MAP` name with an object-specific shared-buffer map right. The kernel
@@ -86,7 +86,7 @@ framework_safety_check` stays clean.
 ### B6 — the retained-v2 "still boots" claim was proven only as decode
 
 **Resolved:** 2026-07-26 (scope corrected + admission covered). See
-`devlog/2026-07-26-b6-retained-v2-rollback-scope.md`.
+`devlog/2026-07-26-b6-retained-v2-rollback-scope/`.
 
 **Problem:** C7.1's exit condition stated that a retained v2 known-good artifact
 "still decodes **and boots**". Only decode was proven; no v2 generation was ever

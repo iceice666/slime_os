@@ -3,8 +3,11 @@
 | Field | Value |
 |---|---|
 | Date | 2026-07-24 |
+| Kind | Change |
 | Status | Verified |
 | Scope | Capability object surface, kernel shared-buffer table, physical contiguous allocator, syscall ABI, host builder/checkers |
+| Roadmap | C7.2 |
+| Gates | `just shared_buffer_factory_check`, `just storage_read_check`, `just test` |
 | Trigger | Roadmap C7 decomposition; C7.2 lands the shared-buffer factory the later C7 slices consume |
 | Baseline | C7.1 generation format v3 + `u64` rights; `SharedBuffer(SharedRegion)` object defined but never instantiated (no userspace creation path); DMA owned a private contiguous frame allocator |
 

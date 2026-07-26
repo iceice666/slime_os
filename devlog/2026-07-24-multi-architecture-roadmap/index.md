@@ -3,8 +3,11 @@
 | Field | Value |
 |---|---|
 | Date | 2026-07-24 |
+| Kind | Decision |
 | Status | Proposed |
 | Scope | Roadmap dependencies, executable contracts, x86-64/AArch64/RV64 boundaries, ROS 2 and embedded targets |
+| Roadmap | P0, P1, P2, P3, P4 |
+| Gates | none |
 | Trigger | Decision to prepare Slime OS for ROS 2 devices and embedded Linux-class hardware |
 | Baseline | The implemented kernel, stage-0, component builder, and QEMU harness are x86-64-specific; userspace authority and protocol contracts are largely ISA-independent |
 

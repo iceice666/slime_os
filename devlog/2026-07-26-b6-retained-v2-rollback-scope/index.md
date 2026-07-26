@@ -3,8 +3,11 @@
 | Field | Value |
 |---|---|
 | Date | 2026-07-26 |
+| Kind | Defect |
 | Status | Verified |
 | Scope | `boot-contracts/src/generation.rs` v2 admission tests; C7.1 status and exit condition wording |
+| Roadmap | B6, C7.1, C7.7 |
+| Gates | `just contracts_check`, `just generation_check` |
 | Trigger | Backlog B6, opened by the 2026-07-26 C7 audit (`devlog/2026-07-26-c7-audit/`) |
 | Baseline | C7.1 claimed a retained v2 known-good artifact "still decodes **and boots**"; only decode was proven |
 
@@ -127,5 +130,5 @@ No production code changed — additions are tests plus documentation.
 - Related roadmap items: `roadmap/00-backlog.md` B6 (resolved by this entry);
   `roadmap/02-core-runtime.md` C7.1, C7.7.
 - Related prior entries: `devlog/2026-07-26-c7-audit/` (opened B6);
-  `devlog/2026-07-24-c7-1-generation-v3-u64-rights.md` (introduced the claim and
+  `devlog/2026-07-24-c7-1-generation-v3-u64-rights/` (introduced the claim and
   the version-branched authority hash this pins).

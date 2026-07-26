@@ -3,8 +3,11 @@
 | Field | Value |
 |---|---|
 | Date | 2026-07-25 |
+| Kind | Change |
 | Status | Verified |
 | Scope | `kernel/src/memory/shared_buffer.rs`, `kernel/src/capability/mod.rs`, `kernel/src/syscall/mod.rs`, `boot-contracts/src/generation.rs`; `just shared_buffer_loan_check` |
+| Roadmap | C7.5 |
+| Gates | `just shared_buffer_loan_check`, `just contracts_check` |
 | Trigger | Roadmap C7 decomposition; C7.5 adds loan/return ownership and fault reclamation on top of C7.4 sealed mappings |
 | Baseline | C7.4 shared-buffer table: bounded factory allocation charged to a supervision-subtree owner with per-holder `byte_pages`/`buffer_count`/`mapping_count` quotas and irreversible read-only sealing; `loan_count` declared but unconsumed, no loan object, no cross-holder receiver authority |
 

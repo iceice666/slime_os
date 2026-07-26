@@ -3,8 +3,11 @@
 | Field | Value |
 |---|---|
 | Date | 2026-07-26 |
+| Kind | Defect |
 | Status | Verified |
 | Scope | `scripts/build/build-generation.py` rights table; `boot-contracts/src/shared_buffer_budget.rs` validation; `kernel/src/runtime/generation.rs` caller |
+| Roadmap | B7, B8, C7.1, C7.3 |
+| Gates | `just generation_check`, `just sample_plane_live_check` |
 | Trigger | Backlog B7 and B8, opened by the 2026-07-26 C7 audit (`devlog/2026-07-26-c7-audit/`) |
 | Baseline | The manifest right for bit 9 was still spelled `map`; budget validation bounded each holder but never the aggregate |
 

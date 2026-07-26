@@ -3,8 +3,11 @@
 | Field | Value |
 |---|---|
 | Date | 2026-07-24 |
+| Kind | Change |
 | Status | Verified |
 | Scope | Root Cargo workspace, host tooling layout, LLDB helper, build artifact paths |
+| Roadmap | none |
+| Gates | `just generation_check`, `just contracts_check`, `just test` |
 | Trigger | Repository root mixed Rust workspaces, host tools, and an ignored local debug script without a common layout |
 | Baseline | Kernel, stage-0, components, and boot contracts used separate lockfiles/workspace roots; host scripts were flat under `scripts/` |
 

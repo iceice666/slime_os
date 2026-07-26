@@ -260,6 +260,11 @@ recovery_check:
     cd kernel && cargo build --release -p slime_os-kernel
     ./scripts/check/check-recovery.py
 
+# Validate devlog structure: entry layout, front matter, kind-required sections,
+# roadmap/Justfile identifier resolution, index agreement, and link health.
+devlog_check:
+    python3 scripts/check/check-devlog.py
+
 # Validate the pinned generation manifest schema and fixtures.
 contracts_check: bootstate_model_check
     python3 scripts/check/check-contracts.py

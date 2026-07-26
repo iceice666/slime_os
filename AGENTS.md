@@ -16,6 +16,7 @@ Use the Justfile targets from the repository root:
 - `just test` — run kernel and integration tests under QEMU.
 - `just generation_check` — build and validate the deterministic generation binary.
 - `just contracts_check` — validate generation manifest contracts.
+- `just devlog_check` — validate devlog structure, front matter, and links.
 - `just fmt_check` — check Rust formatting.
 - `just lint` — run clippy with warnings denied.
 
@@ -25,7 +26,9 @@ Use the Justfile targets from the repository root:
 
 ## Development log
 
-`devlog/` is the curated, chronological record of investigations, regressions, design decisions, and verification results. Record an entry whenever you complete a roadmap milestone or land a non-trivial feature, make a design or architecture decision, fix a non-trivial regression, root-cause a defect, or run a verification campaign: a folder `devlog/YYYY-MM-DD-short-topic/` with a curated `index.md` written from `devlog/TEMPLATE.md`, keeping focused reports, raw transcripts, and other evidence as siblings in that folder. Register the entry in `devlog/README.md` and follow its evidence rules — prefer exact `just` targets and observed results, label inherited evidence and unobserved conclusions, and never rewrite a raw log. Roadmap completion stays authoritative in `roadmap/`; devlog entries explain how conclusions were reached. When a backlog item is resolved, link its devlog entry from the backlog's resolved log.
+`devlog/` is the curated, chronological record of investigations, regressions, design decisions, and verification results. Record an entry whenever you complete a roadmap milestone or land a non-trivial feature, make a design or architecture decision, fix a non-trivial regression, root-cause a defect, or run a verification campaign.
+
+Every entry is a folder `devlog/YYYY-MM-DD-short-topic/` holding a curated `index.md` written from `devlog/TEMPLATE.md`, with focused reports, raw transcripts, and other evidence as siblings in that folder — a folder even when there is no evidence yet, so later evidence never moves the entry. Front matter declares `Date`, `Kind` (`Defect`/`Change`/`Audit`/`Decision`, which selects the required sections), `Status`, `Scope`, `Roadmap`, `Gates`, `Trigger`, and `Baseline` in that order; `Roadmap` ids must resolve to real roadmap headings and `Gates` to real Justfile targets. Register the entry in `devlog/README.md` and follow its evidence rules — prefer exact `just` targets and observed results, label inherited evidence and unobserved conclusions, and never rewrite a raw log; corrections are appended under `## Corrections`, never edited into the frozen body. Run `just devlog_check` after touching `devlog/`. Roadmap completion stays authoritative in `roadmap/`; devlog entries explain how conclusions were reached. When a backlog item is resolved, link its devlog entry from the backlog's resolved log.
 
 ## Development rules
 
