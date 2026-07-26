@@ -109,7 +109,7 @@ RIGHT = {
     "dmaRelease": 1 << 6,
     "irqAck": 1 << 7,
     "bufferWrite": 1 << 8,
-    "map": 1 << 9,
+    "bufferMap": 1 << 9,
     "blockRead": 1 << 10,
     "blockWrite": 1 << 11,
     "storeRead": 1 << 12,

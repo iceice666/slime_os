@@ -108,17 +108,32 @@ impl<'a> SharedBufferBudget<'a> {
         None
     }
 
-    /// Reject any quota that can never be satisfied under the fixed kernel
+    /// Reject any budget that can never be satisfied under the fixed kernel
     /// ceilings. This is validated before component launch, so a manifest that
     /// promises more than the kernel can ever grant fails closed rather than
     /// silently capping at runtime. A zero quota is legal (a holder that may
     /// hold nothing); it is impossibility, not smallness, that is rejected.
+    ///
+    /// Two classes are rejected. Per-holder: a ceiling no single holder could
+    /// ever reach, or an internally inconsistent one. Aggregate: a budget whose
+    /// holders, all at their declared ceilings simultaneously, would exceed a
+    /// kernel-wide bound. The aggregate rule means a budget that validates is
+    /// one the kernel can honour in full — every declared holder can peak at
+    /// once. Without it the declaration would be first-come-first-served, and a
+    /// late-starting component would fail at runtime with `BytesExhausted`
+    /// despite holding a quota the generation promised it.
     pub fn validate_against(
         &self,
         max_buffer_pages: u32,
         max_total_pages: u32,
         max_shared_buffers: u32,
+        max_mappings: u32,
+        max_loans: u32,
     ) -> Result<(), DecodeError> {
+        let mut total_pages: u32 = 0;
+        let mut total_buffers: u32 = 0;
+        let mut total_mappings: u32 = 0;
+        let mut total_loans: u32 = 0;
         for index in 0..self.holder_count {
             let entry = decode_entry(self.bytes, index).expect("validated budget entry");
             // A page ceiling above the global page budget, or a per-holder
@@ -138,11 +153,30 @@ impl<'a> SharedBufferBudget<'a> {
             if entry.mapping_count > entry.byte_pages || entry.loan_count > entry.buffer_count {
                 return Err(DecodeError::Impossible);
             }
+            // A holder's mapping and loan ceilings are also bounded by the
+            // fixed kernel tables, independently of its page budget.
+            if entry.mapping_count > max_mappings || entry.loan_count > max_loans {
+                return Err(DecodeError::Impossible);
+            }
+            // Sum with saturation: an overflowing total is over-committed by
+            // construction, and saturating keeps the comparison below honest
+            // instead of wrapping into a passing value.
+            total_pages = total_pages.saturating_add(entry.byte_pages);
+            total_buffers = total_buffers.saturating_add(entry.buffer_count);
+            total_mappings = total_mappings.saturating_add(entry.mapping_count);
+            total_loans = total_loans.saturating_add(entry.loan_count);
             // A single buffer never exceeds the per-run contiguous ceiling, but
             // that is a per-buffer, not per-holder, cap; nothing to check here
             // beyond the above. `max_buffer_pages` is retained for symmetry with
             // the kernel bounds and future per-buffer descriptor checks.
             let _ = max_buffer_pages;
+        }
+        if total_pages > max_total_pages
+            || total_buffers > max_shared_buffers
+            || total_mappings > max_mappings
+            || total_loans > max_loans
+        {
+            return Err(DecodeError::Impossible);
         }
         Ok(())
     }
@@ -294,36 +328,123 @@ mod tests {
         ));
     }
 
+    /// Fixed kernel ceilings used by the tests below, matching the real
+    /// `MAX_BUFFER_PAGES` / `MAX_TOTAL_PAGES` / `MAX_SHARED_BUFFERS` /
+    /// `MAX_MAPPINGS` / `MAX_LOANS`.
+    fn check(budget: &SharedBufferBudget<'_>) -> Result<(), DecodeError> {
+        budget.validate_against(64, 256, 32, 64, 64)
+    }
+
     #[test]
     fn impossible_quotas_rejected_against_ceilings() {
         // Page ceiling above the global budget.
         let bytes = build(&[quota(0x11, 300, 1)]);
         let budget = SharedBufferBudget::decode(&bytes).expect("decodes");
-        assert!(matches!(
-            budget.validate_against(64, 256, 32),
-            Err(DecodeError::Impossible)
-        ));
+        assert!(matches!(check(&budget), Err(DecodeError::Impossible)));
         // More buffers than the whole table.
         let bytes = build(&[quota(0x11, 64, 40)]);
         let budget = SharedBufferBudget::decode(&bytes).expect("decodes");
-        assert!(matches!(
-            budget.validate_against(64, 256, 32),
-            Err(DecodeError::Impossible)
-        ));
+        assert!(matches!(check(&budget), Err(DecodeError::Impossible)));
         // More buffers than pages: cannot back each buffer with a page.
         let bytes = build(&[quota(0x11, 2, 3)]);
         let budget = SharedBufferBudget::decode(&bytes).expect("decodes");
-        assert!(matches!(
-            budget.validate_against(64, 256, 32),
-            Err(DecodeError::Impossible)
-        ));
+        assert!(matches!(check(&budget), Err(DecodeError::Impossible)));
         // A satisfiable budget passes.
         let bytes = build(&[quota(0x11, 8, 2)]);
         let budget = SharedBufferBudget::decode(&bytes).expect("decodes");
-        assert!(budget.validate_against(64, 256, 32).is_ok());
+        assert!(check(&budget).is_ok());
         // A zero quota is legal (holder may hold nothing).
         let bytes = build(&[quota(0x11, 0, 0)]);
         let budget = SharedBufferBudget::decode(&bytes).expect("decodes");
-        assert!(budget.validate_against(64, 256, 32).is_ok());
+        assert!(check(&budget).is_ok());
+    }
+
+    /// A budget whose holders are each individually satisfiable but whose totals
+    /// exceed a kernel-wide ceiling is rejected at decode, not discovered at
+    /// runtime by whichever component happens to start last.
+    #[test]
+    fn aggregate_over_commitment_is_rejected() {
+        // Five holders at 64 pages each: every holder is individually fine
+        // (64 <= MAX_TOTAL_PAGES), but 320 > 256 in total.
+        let holders: [HolderQuota; 5] = core::array::from_fn(|index| {
+            let mut entry = quota(0x21 + index as u8, 64, 1);
+            // Keep mappings and loans small so pages are unambiguously the
+            // ceiling that bites.
+            entry.mapping_count = 1;
+            entry.loan_count = 1;
+            entry
+        });
+        let bytes = build(&holders);
+        let budget = SharedBufferBudget::decode(&bytes).expect("decodes");
+        assert!(matches!(check(&budget), Err(DecodeError::Impossible)));
+
+        // The same five holders at 32 pages each total 160 <= 256 and pass, so
+        // it is the aggregate and not the holder count that was rejected above.
+        let holders: [HolderQuota; 5] = core::array::from_fn(|index| {
+            let mut entry = quota(0x21 + index as u8, 32, 1);
+            entry.mapping_count = 1;
+            entry.loan_count = 1;
+            entry
+        });
+        let bytes = build(&holders);
+        let budget = SharedBufferBudget::decode(&bytes).expect("decodes");
+        assert!(check(&budget).is_ok());
+    }
+
+    /// The aggregate rule applies to every counted resource, not just pages.
+    #[test]
+    fn aggregate_buffer_mapping_and_loan_ceilings_are_enforced() {
+        // Buffers: 17 holders x 2 buffers = 34 > MAX_SHARED_BUFFERS (32), while
+        // pages stay well inside their own ceiling.
+        let holders: [HolderQuota; 17] = core::array::from_fn(|index| {
+            let mut entry = quota(0x31 + index as u8, 2, 2);
+            entry.mapping_count = 1;
+            entry.loan_count = 1;
+            entry
+        });
+        let bytes = build(&holders);
+        let budget = SharedBufferBudget::decode(&bytes).expect("decodes");
+        assert!(matches!(check(&budget), Err(DecodeError::Impossible)));
+
+        // Mappings: 9 holders x 8 mappings = 72 > MAX_MAPPINGS (64).
+        let holders: [HolderQuota; 9] = core::array::from_fn(|index| {
+            let mut entry = quota(0x51 + index as u8, 8, 1);
+            entry.mapping_count = 8;
+            entry.loan_count = 1;
+            entry
+        });
+        let bytes = build(&holders);
+        let budget = SharedBufferBudget::decode(&bytes).expect("decodes");
+        assert!(matches!(check(&budget), Err(DecodeError::Impossible)));
+
+        // Loans: 9 holders x 8 loans = 72 > MAX_LOANS (64).
+        let holders: [HolderQuota; 9] = core::array::from_fn(|index| {
+            let mut entry = quota(0x71 + index as u8, 8, 8);
+            entry.mapping_count = 1;
+            entry.loan_count = 8;
+            entry
+        });
+        let bytes = build(&holders);
+        let budget = SharedBufferBudget::decode(&bytes).expect("decodes");
+        assert!(matches!(check(&budget), Err(DecodeError::Impossible)));
+    }
+
+    /// A single holder cannot exceed the fixed mapping or loan tables either,
+    /// independently of how many pages it declares.
+    #[test]
+    fn per_holder_mapping_and_loan_ceilings_are_enforced() {
+        let mut entry = quota(0x11, 200, 100);
+        entry.mapping_count = 100;
+        entry.loan_count = 1;
+        let bytes = build(&[entry]);
+        let budget = SharedBufferBudget::decode(&bytes).expect("decodes");
+        assert!(matches!(check(&budget), Err(DecodeError::Impossible)));
+
+        let mut entry = quota(0x11, 200, 100);
+        entry.mapping_count = 1;
+        entry.loan_count = 100;
+        let bytes = build(&[entry]);
+        let budget = SharedBufferBudget::decode(&bytes).expect("decodes");
+        assert!(matches!(check(&budget), Err(DecodeError::Impossible)));
     }
 }

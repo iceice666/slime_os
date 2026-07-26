@@ -8,7 +8,7 @@ use boot_contracts::shared_buffer_budget::{
 };
 
 use crate::memory::shared_buffer::{
-    HolderQuota, MAX_BUFFER_PAGES, MAX_SHARED_BUFFERS, MAX_TOTAL_PAGES,
+    HolderQuota, MAX_BUFFER_PAGES, MAX_LOANS, MAX_MAPPINGS, MAX_SHARED_BUFFERS, MAX_TOTAL_PAGES,
 };
 
 pub fn decode(bytes: &[u8]) -> Result<Generation<'_>, DecodeError> {
@@ -30,6 +30,8 @@ pub fn decode(bytes: &[u8]) -> Result<Generation<'_>, DecodeError> {
                 MAX_BUFFER_PAGES as u32,
                 MAX_TOTAL_PAGES as u32,
                 MAX_SHARED_BUFFERS as u32,
+                MAX_MAPPINGS as u32,
+                MAX_LOANS as u32,
             )
             .map_err(|_| DecodeError::BadBounds)?;
     }
