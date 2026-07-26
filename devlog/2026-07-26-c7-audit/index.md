@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Date | 2026-07-26 |
-| Status | Root-caused (B3 narrowed, not isolated); audit findings recorded |
+| Status | Verified (B3 isolated and fixed 2026-07-26 — see Corrections; B4–B8 open) |
 | Scope | C7.1–C7.7 gates, full-graph boot paths (`transfer_check`, `spawn_service_check`, `dango_check`), generation budget wiring, shared-buffer syscall coverage |
 | Trigger | Requested audit of the complete C7 milestone at `2384bea` |
 | Baseline | `roadmap/02-core-runtime.md` records C7 and every sub-slice as complete; `roadmap/README.md` names C8 as the next open slice |
@@ -186,3 +186,22 @@ results above were observed during the audit itself. Raw output:
   `roadmap/00-backlog.md` B3–B8.
 - Related prior entry: `devlog/2026-07-24-b2-blocked-task-state/` — same
   observable class (ready queue never drains to `on_idle`).
+
+## Corrections
+
+**2026-07-26 — B3 root cause isolated; this entry's hypothesis was wrong.**
+The body above records B3's root cause as narrowed but not isolated, and offers
+a **[INFERENCE]** lead that the `KernelObject::SharedBufferLoan` variant widening
+`Capability`/`Task` was the likely mechanism, by analogy with the B2
+`copy_from_current` overflow. That lead was incorrect. The actual cause is a
+kernel-stack overflow at the *static initializer*, not at any widened struct:
+`SHARED_BUFFER_TABLE` was a `LazyLock`, so the 10520-byte `SharedBufferTable`
+was constructed as a temporary on whichever stack first touched it — a 32 KiB
+unguarded task kernel stack inside `task::terminate`. The step-10 reasoning
+above (that empty tables make `reclaim_owner` iterate nothing) was correct and
+did rule out the loop body; it simply did not go on to consider the cost of
+*reaching* the static rather than walking it. Fixed by const-initializing the
+table into `.bss`. Full analysis:
+`devlog/2026-07-26-b3-shared-buffer-table-stack-overflow/`. The Status field is
+updated from `Root-caused` to `Verified`; the body's observations and evidence
+are unchanged and remain accurate.

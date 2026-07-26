@@ -17,59 +17,11 @@ at the bottom rather than deleting it.
 ## Open
 
 _Opened 2026-07-26 by a full C7 audit (C7.1–C7.7) at `2384bea`. Every C7
-sub-slice gate passes, but three boot-path gates are red and several C7 exit
-conditions are not observable on the live path. Evidence and bisect:
-`devlog/2026-07-26-c7-audit/`. `roadmap/02-core-runtime.md` and
-`roadmap/README.md` have been corrected to reopen C7; B3 and B4 must close
-before the milestone claim is restored or C8 opens._
-
-### B3 — C7.5 wedges every full-graph boot (no `on_idle`, no QEMU exit)
-
-**Problem:** Since the C7.5 loan/return lifecycle landed, every boot that
-launches the full component graph hangs instead of draining its ready queue.
-`transfer_check` stalls after `[init] generation transfer installed`;
-`spawn_service_check` and `dango_check` stall after `[init] spawn graph
-launched`. `on_idle` is the only path to `exit_qemu`, so the guest never exits
-and each gate dies on its outer timeout. This is the same observable class as
-resolved item B2, and it breaks the green-suite precondition for C8.
-
-**Evidence:** Bisected one gate per worktree on `x86_64-qemu-virtio`. `just
-transfer_check` passes at C7.2 `991dcbb`, C7.3 `ed49fb5`, and C7.4 `928389e`;
-it wedges at C7.5 `ca15764` and at HEAD `2384bea`. `just spawn_service_check`
-passes at `928389e` and wedges at `ca15764` and HEAD, reproduced three times
-including on an otherwise idle machine. Not a timeout-tuning artifact: raising
-the inner QEMU timeout in `scripts/check/check-transfer.py` from 60 s to 600 s
-still wedged. `git diff --stat ca15764 HEAD -- kernel/src components
-boot-contracts/src` is empty, so C7.6 and C7.7 are not implicated; the defect
-is inside the C7.5 kernel diff.
-
-**Root cause:** Not yet isolated — only narrowed. The reclamation path is the
-obvious suspect (`task::terminate` calls `SHARED_BUFFER_TABLE.lock()
-.reclaim_owner(id)` at `kernel/src/task/mod.rs:832` while `SCHEDULER` is held,
-and C7.5 rewrote `reclaim_owner` to settle loans and tear down mappings under
-that lock), but it is unlikely on its own: no `SharedBufferFactory` is minted
-and every holder is deny-by-default (B4), so the shared-buffer, mapping, and
-loan tables are all empty during these boots and `reclaim_owner` iterates
-nothing. That points instead at C7.5's capability-surface changes — the new
-`KernelObject::SharedBufferLoan(BufferLoan)` variant widens `KernelObject`,
-hence `Capability`, hence the `[Option<Capability>; MAX_CAPS]` table and
-`Task` — which is the same shape as the `copy_from_current` scratch-array
-overflow that the B2 fix had to repair after the `u64`-rights widening.
-
-**Proposed fix:** Confirm the mechanism before patching: bisect the C7.5 diff
-itself (capability/rights surface vs. `shared_buffer.rs` rewrite), and
-establish whether the wedge is a task left non-`Ready`, a lock-order stall, or
-a fault swallowed into a halt loop — serial output stops mid-graph, after
-`[init] spawn graph launched` but before any `idle-blocked` line. Then restore
-the drain. Separately, add the full-graph boot gates back to the C7
-verification set: C7.1's devlog lists `just transfer_check` as direct
-evidence, C7.5's does not, which is exactly how a kernel-lifecycle regression
-passed review on the shared-buffer unit gates alone.
-
-**Exit condition:** `just transfer_check`, `just spawn_service_check`, and
-`just dango_check` each reach their success line and exit QEMU `Success` at
-HEAD, with `just test`, `just generation_check`, `just contracts_check`, `just
-fmt_check`, and `just lint` still clean.
+sub-slice gate passes, but several C7 exit conditions are not observable on the
+live path. Evidence and bisect: `devlog/2026-07-26-c7-audit/`. B3 (the C7.5
+full-graph boot wedge) is resolved; `roadmap/02-core-runtime.md` and
+`roadmap/README.md` have been corrected to reopen C7, and B4 must close before
+the milestone claim is restored or C8 opens._
 
 ### B4 — the C7 shared-buffer plane is dormant on the live boot path
 
@@ -215,6 +167,58 @@ aggregate over-commit, and `roadmap/02-core-runtime.md` describes the same
 rule the code enforces.
 
 ## Resolved
+
+### B3 — C7.5 wedged every full-graph boot (kernel-stack overflow)
+
+**Resolved:** 2026-07-26. See
+`devlog/2026-07-26-b3-shared-buffer-table-stack-overflow/`.
+
+**Problem:** From C7.5 onward every boot that launched the full component graph
+hung instead of draining its ready queue. `transfer_check` stalled after
+`[init] generation transfer installed`; `spawn_service_check` and `dango_check`
+stalled after `[init] spawn graph launched`. `on_idle` is the only path to
+`exit_qemu`, so the guest never exited and each gate died on its timeout — the
+same observable class as B2, but an unrelated cause.
+
+**Evidence:** Bisected one gate per worktree: `just transfer_check` passed at
+C7.2 `991dcbb`, C7.3 `ed49fb5`, and C7.4 `928389e`, and wedged at C7.5
+`ca15764` and HEAD; `just spawn_service_check` passed at `928389e` and wedged
+at `ca15764` and HEAD. Not timeout tuning: raising the inner QEMU timeout from
+60 s to 600 s still wedged. `git diff --stat ca15764 HEAD -- kernel/src` is
+empty, so C7.6/C7.7 were not implicated. Full transcript in
+`devlog/2026-07-26-c7-audit/transcript.txt` §3–§4.
+
+**Root cause:** Kernel-stack overflow, not the reclamation logic first
+suspected. C7.5 grew `SharedBufferTable` to 10520 bytes of fixed arrays
+(`loans: [Option<Loan>; 64]` plus a widened `Mapping`), and the table was
+published through a `LazyLock`, whose initializer builds the value on whichever
+stack first touches the static. Because no `SharedBufferFactory` is minted on
+the live path (B4), the first touch is `SHARED_BUFFER_TABLE.lock()` inside
+`task::terminate` (`kernel/src/task/mod.rs:832`) — on a 32 KiB task kernel stack
+allocated as a plain boxed slice with no guard page. The 10 KiB temporary
+overflowed it while `SCHEDULER` was held, corrupting adjacent memory silently
+rather than faulting, so the boot wedged with no panic. Confirmed by raising
+`KERNEL_STACK_SIZE` to 128 KiB with no other change, which made the gate pass.
+
+**Fix:** Replaced the `LazyLock` with a plain `const`-initialized
+`Mutex<SharedBufferTable>` static, matching `FRAME_ALLOCATOR` and the
+`drivers/input.rs` tables. `SharedBufferTable::new()` was already a `const fn`,
+so the laziness bought nothing; const-initializing places the table in `.bss`
+and removes the stack temporary. The diagnostic stack bump was reverted. Added
+a compile-time assertion that `size_of::<SharedBufferTable>() * 2 <
+KERNEL_STACK_SIZE`, verified to fire by temporarily setting `MAX_LOANS = 1024`.
+
+**Exit condition (observed):** `just transfer_check` (install, pending boot,
+promotion, rollback retention), `just spawn_service_check`, and `just
+dango_check` all reach their success lines and exit QEMU `Success` at the stock
+32 KiB stack. `just test` (160 assertions), all six C7 sub-slice gates (8/7/8/7/
+4/5), `just generation_cmd_check`, `just contracts_check`, `just
+generation_check`, `just framework_safety_check`, `just fmt_check`, `just
+lint`, `just fmt_check_components`, and `just lint_components` are clean.
+
+**Follow-up:** Task kernel stacks still have no guard page, so a future
+overflow will again corrupt memory silently instead of faulting. This fix
+removes the trigger, not the class.
 
 ### B2 — scheduler has no `Blocked` task state (busy-poll pathology)
 

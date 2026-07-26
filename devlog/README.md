@@ -27,7 +27,8 @@ This directory is the curated, chronological record of investigations, regressio
 | 2026-07-25 | [C7.5 shared-buffer loan/return lifecycle](2026-07-25-c7-5-shared-buffer-loan.md) | Verified | Loan/map/return/revoke syscalls, RIGHT_BUFFER_LOAN + SharedBufferLoan object, receiver-bound single-return identity, retained-while-loaned pages, MAX_LOANS, peer-fault reclamation, v2/v3 rights masks, host allowlist |
 | 2026-07-25 | [C7.6 versioned sample descriptor](2026-07-25-c7-6-sample-descriptor.md) | Verified | Zutai sample-descriptor contract, WireSampleDescriptor bindings, valid_sample_descriptor bounds, DESCRIPTOR_LEN==MAX_MSG, loan-referenced payload over shared buffer, QEMU gate |
 | 2026-07-25 | [C7.7 sample-plane integration and isolation](2026-07-25-c7-7-sample-plane-integration.md) | Verified | Two-component sample-plane composition over C7.2–C7.6, real-channel descriptor exchange, four quota classes, peer-death reclamation, unrelated-channel isolation, retained-v2 decode probe, `just sample_plane_check` |
-| 2026-07-26 | [C7 milestone audit](2026-07-26-c7-audit/index.md) | Root-caused | C7.1–C7.7 gate re-run, C7.5 full-graph boot wedge bisected, dormant budget/factory wiring, missing syscall and real-component coverage, backlog B3–B8 |
+| 2026-07-26 | [C7 milestone audit](2026-07-26-c7-audit/index.md) | Verified | C7.1–C7.7 gate re-run, C7.5 full-graph boot wedge bisected, dormant budget/factory wiring, missing syscall and real-component coverage, backlog B3–B8 |
+| 2026-07-26 | [B3 shared-buffer table kernel-stack overflow](2026-07-26-b3-shared-buffer-table-stack-overflow/index.md) | Verified | 10 KiB `SharedBufferTable` built on a 32 KiB unguarded task kernel stack by a `LazyLock` initializer, const-static fix, compile-time size guard, full-graph boot gates restored |
 
 ## Entry format
 
