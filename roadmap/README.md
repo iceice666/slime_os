@@ -8,9 +8,9 @@ A milestone is complete only when its exit condition is observed. Compiled code,
 
 | Track | Status | Next open gate |
 | --- | --- | --- |
-| [Backlog](00-backlog.md) | No open items | B1 and B2 resolved; B2 `Blocked` state / `SYS_WAIT` landed, unblocking the C8 gate |
+| [Backlog](00-backlog.md) | 6 open (B3–B8) | Fix the C7.5 full-graph boot wedge (B3), then wire the shared-buffer budget and factory into a real generation (B4) |
 | [Foundations](01-foundations.md) | M1–M4 and M6 complete; M5 mechanisms complete | Record M5.7 removable-media Framework evidence without internal-NVMe modification |
-| [Core runtime](02-core-runtime.md) | C7 complete; C7.1–C7.7 landed (generation v3 + `u64` rights; shared-buffer factory allocation; per-holder quotas + supervision-subtree accounting; mapping + read-only sealing; loan/return lifecycle + fault reclamation; versioned sample descriptor; two-component sample-plane integration + isolation) | Begin C8 native typed data fabric (B2 dependency resolved) |
+| [Core runtime](02-core-runtime.md) | C7 reopened; C7.1–C7.7 landed and every sub-slice gate passes, but three full-graph boot gates are red and the shared-buffer plane is dormant on the live path | Close backlog B3 and B4 before C8 native typed data fabric opens |
 | [Architecture portability](07-architecture-portability.md) | Not started | Clear the active backlog, then land P0 target/artifact contracts before P1 x86 boundary extraction |
 | [ROS 2 compatibility](03-ros2-compatibility.md) | Not started | Admit R1 only after C8 and the H6 network-service contract exist |
 | [Platform hardware](04-platform-hardware.md) | H1 implementation complete; physical evidence pending | Record H1 topology/input/storage evidence; implement H2 driver authority ABI |
@@ -20,7 +20,7 @@ A milestone is complete only when its exit condition is observed. Compiled code,
 The active work lanes are deliberately parallel:
 
 - **Evidence lane:** close M5.7 and H1 with an observed removable-media Framework run.
-- **Core lane:** implement C7 without waiting for compositor, audio, wireless, GPU, or a non-x86 boot.
+- **Core lane:** close the C7 backlog items (B3 boot wedge, B4 budget/factory wiring) before C8; no compositor, audio, wireless, GPU, or non-x86 boot is required for either.
 - **Portability lane:** after the backlog gate, land P0/P1 before H2 or C9 establishes more low-level contracts; AArch64 P2 follows without blocking C8.
 - **Platform lane:** record H1 physical evidence, then implement H2 only after P1; H4 still gates DMA-capable Framework promotion.
 

@@ -1,0 +1,476 @@
+C7 audit — raw observed output
+Date: 2026-07-26
+Repo: /home/iceice666/projects/slime_os
+HEAD: 2384bea feat(slime_os/core-runtime): add C7.7 sample-plane integration
+Host: linux 7.0.9-zen1 (NixOS), AMD Ryzen AI 7 350, x86_64
+Working tree clean at audit start and end; no source file modified during the audit.
+
+This file is the raw record. Do not rewrite it. Curated reading is in index.md.
+
+
+================================================================
+1. C7 SUB-SLICE GATES AT HEAD (all pass)
+================================================================
+
+$ just shared_buffer_factory_check
+Running 8 test(s)
+shared_buffer_authority::bad_sizes_rejected...	[Passed]
+shared_buffer_authority::buffer_rights_narrow_only...	[Passed]
+shared_buffer_authority::byte_exhaustion_is_structured_and_isolated...	[Passed]
+shared_buffer_authority::create_and_release_round_trip...	[Passed]
+shared_buffer_authority::dma_and_shared_sample_authority_are_distinct...	[Passed]
+shared_buffer_authority::factory_does_not_grant_buffer_operations...	[Passed]
+shared_buffer_authority::factory_rights_are_object_specific...	[Passed]
+shared_buffer_authority::object_exhaustion_is_structured_and_isolated...	[Passed]
+exit=0
+
+$ just shared_buffer_accounting_check
+Running 7 test(s)
+shared_buffer_accounting::buffer_count_quota_is_enforced_per_holder...	[Passed]
+shared_buffer_accounting::byte_quota_is_enforced_per_holder...	[Passed]
+shared_buffer_accounting::deny_by_default_holder_cannot_allocate...	[Passed]
+shared_buffer_accounting::kernel_ceilings_still_bound_a_generous_quota...	[Passed]
+shared_buffer_accounting::one_holder_exhaustion_does_not_disturb_another...	[Passed]
+shared_buffer_accounting::quota_check_precedes_global_and_is_side_effect_free...	[Passed]
+shared_buffer_accounting::subtree_teardown_reclaims_only_its_own_charges...	[Passed]
+exit=0
+
+$ just shared_buffer_mapping_check
+Running 8 test(s)
+shared_buffer_mapping::created_read_only_region_cannot_be_widened...	[Passed]
+shared_buffer_mapping::in_bounds_mapping_is_exact_and_charged...	[Passed]
+shared_buffer_mapping::malformed_ranges_are_side_effect_free...	[Passed]
+shared_buffer_mapping::map_conflict_rolls_back_partial_page_table_changes...	[Passed]
+shared_buffer_mapping::mapping_quota_is_per_holder_and_reusable...	[Passed]
+shared_buffer_mapping::release_unmaps_before_free_and_rejects_stale_region...	[Passed]
+shared_buffer_mapping::seal_is_irreversible_and_downgrades_live_mappings...	[Passed]
+shared_buffer_mapping::subtree_cleanup_does_not_disturb_unrelated_mapping...	[Passed]
+exit=0
+
+$ just shared_buffer_loan_check
+Running 7 test(s)
+shared_buffer_loan::lender_death_revokes_receiver_and_preserves_unrelated_owner...	[Passed]
+shared_buffer_loan::loan_quota_is_per_lender_and_reusable_after_revocation...	[Passed]
+shared_buffer_loan::loans_require_a_sealed_exact_region...	[Passed]
+shared_buffer_loan::receiver_death_settles_only_its_loan...	[Passed]
+shared_buffer_loan::receiver_mapping_cannot_escape_or_gain_write_access...	[Passed]
+shared_buffer_loan::release_retains_pages_until_single_return...	[Passed]
+shared_buffer_loan::stale_duplicate_and_wrong_buffer_returns_are_side_effect_free...	[Passed]
+exit=0
+
+$ just sample_descriptor_check
+Sample-descriptor protocol bindings are current
+Boot contract bindings are current
+running 19 tests
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+Generation source/binary, kernel image, BootState, BootState trace, recovery, block,
+component, store, spawn, filesystem, powerbox, generation-management, transfer, and
+sample-descriptor contracts passed
+Running 4 test(s)
+sample_descriptor::descriptor_fits_the_channel_message_bound...	[Passed]
+sample_descriptor::descriptor_round_trips_and_rejects_unsupported_versions_and_flags...	[Passed]
+sample_descriptor::malformed_descriptors_fail_before_mapping...	[Passed]
+sample_descriptor::receiver_observes_payload_larger_than_message_bound...	[Passed]
+exit=0
+
+$ just sample_plane_check
+Running 5 test(s)
+sample_plane::every_quota_class_is_bounded_and_isolated...	[Passed]
+sample_plane::malformed_descriptor_over_channel_maps_nothing...	[Passed]
+sample_plane::peer_death_reclaims_all_and_preserves_unrelated_channel...	[Passed]
+sample_plane::retained_v2_known_good_decode_is_unaffected...	[Passed]
+sample_plane::two_components_exchange_and_return_payload_over_message_bound...	[Passed]
+exit=0
+
+Total wall time for the six gates above, run sequentially: 1428.48 s.
+
+
+================================================================
+2. REPO-WIDE GATES AT HEAD
+================================================================
+
+$ just test
+(full kernel suite; tail shown)
+storage_capability::derive_narrows_to_subset...	[Passed]
+storage_capability::derive_rejects_unknown_bits...	[Passed]
+storage_capability::derive_rejects_widening...	[Passed]
+storage_capability::dma_pin_only_cannot_derive_release...	[Passed]
+storage_capability::dma_release_refused_while_outstanding...	[Passed]
+storage_capability::pci_bar_rejects_64bit_in_last_slot...	[Passed]
+storage_capability::pci_cap_chain_rejects_cycle...	[Passed]
+storage_capability::pci_cap_chain_rejects_misaligned_ptr...	[Passed]
+storage_capability::pci_enumeration_is_bounded...	[storage_cap] enumerated 6 PCI functions
+[Passed]
+storage_capability::read_only_slice_identifies_write_requests...	[Passed]
+storage_capability::unprivileged_component_has_no_device_rights...	[Passed]
+
+$ just generation_check
+Built generation 1 ce12d632a78be5657efb9d10963d24ff3a100e6059d1ba2b5167a47c223926cd
+Built generation 2 6be28723c05293224540b0eb730966fab248442ffd34746a0b8c794271b332a0 parent=ce12d632...
+Built boot-store.bin (33554432 bytes)
+Built recovery generation 0e011d9dcf18b731aa5b3f69e21bfb7420c74c411fe26afa465363e9321deec9
+cmp /tmp/slime-os-generation-check-a/generation-1.bin /tmp/slime-os-generation-check-b/generation-1.bin
+cmp /tmp/slime-os-generation-check-a/generation-2.bin /tmp/slime-os-generation-check-b/generation-2.bin
+cmp /tmp/slime-os-generation-check-a/boot-store.bin /tmp/slime-os-generation-check-b/boot-store.bin
+Boot store passed: slot A sequence 2
+selected=6be28723... parent=ce12d632... target=x86_64-qemu-virtio kernel=567615
+
+$ just fmt_check
+cd kernel && cargo fmt -p slime_os-kernel -- --check
+(clean, no output)
+
+$ just lint
+cd kernel && cargo clippy -p slime_os-kernel --all-features -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.07s
+(clean)
+
+$ just framework_safety_check
+Framework storage authority allowlist check: ok
+
+$ just generation_cmd_check
+[generation] generation-stage terminated: Some(Exit(0))
+[generation] vertical slice healthy
+generation command check: ok
+exit=0
+
+
+================================================================
+3. FAILING BOOT-PATH GATES AT HEAD (B3)
+================================================================
+
+--- 3a. transfer_check, run 1 of 3 ---
+$ just transfer_check
+[generation] spawning init
+[generation] launching init with 42 capabilities
+[init] launching component graph
+[virtio-blk] device=6 common=0xffffc10000480000 notify=0xffffc100004c0000 config=0xffffc10000500000
+[virtio-blk] device=6 queue_phys=0x9e9d000
+[virtio-blk] device=5 common=0xffffc100003c0000 notify=0xffffc10000400000 config=0xffffc10000440000
+[virtio-blk] device=5 queue_phys=0x9e9a000
+[bootstate-trace] v1 action=stage-pending commit=after-pending-commit selected_slot=A
+  target_slot=B sequence_before=2 sequence_after=3 attempts_before=0 attempts_after=3
+  known_good=46dfa355612dc3cc344848643cd26a90248be9a39f92bf965fe5f0d1f3ee86f6
+  pending=e3ff8dcdeca8e7d3faacfd872d318373616fd46c7a46026d4522ffe8f2f96214
+  generation_root=e1e684869c32fc72cde66bc17e88b0145a29711d205cc68be6a07a16ecde7a17
+  state_root=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+[transfer] generation received objects=1 states=3 release=2 attempts=3
+[init] generation transfer installed
+qemu-system-x86_64: terminating on signal 15 from pid 715107 (timeout)
+error: recipe `transfer_check` failed on line 95 with exit code 124
+
+--- 3b. transfer_check, run 2 of 3 (identical wedge point) ---
+[transfer] generation received objects=1 states=3 release=2 attempts=3
+[init] generation transfer installed
+qemu-system-x86_64: terminating on signal 15 from pid 737231 (timeout)
+error: recipe `transfer_check` failed on line 95 with exit code 124
+Wall time: 256.75 s
+
+--- 3c. transfer_check, run 3 of 3, with phase markers ---
+3:scenario "main": ok (5416 states)
+4:scenario "skip-attempt": ok (violated "PendingAttemptConsumedBeforeTransfer" as expected)
+5:scenario "omitted-root": ok (violated "ProtectedRootsPresent" as expected)
+6:scenario "mixed-epoch": ok (violated "RetainedGraphsConsistent" as expected)
+7:model-check: all 4 scenarios passed
+107:[transfer] receive rejected: BadClosure
+108:qemu-system-x86_64: terminating on signal 15 from pid 755743 (timeout)
+165:[transfer] receive rejected: BadRelease
+166:qemu-system-x86_64: terminating on signal 15 from pid 759818 (timeout)
+226:[init] generation transfer installed
+227:qemu-system-x86_64: terminating on signal 15 from pid 765462 (timeout)
+228:error: recipe `transfer_check` failed on line 83 with exit code 124
+
+NOTE on 3c: the bad-closure and bad-release negative scenarios reach their
+expected rejection markers and then ALSO hang. The scenarios are only counted
+as passing by the harness because it catches SystemExit; the guest still never
+exits. So the wedge is not specific to the success path.
+
+--- 3d. slow-vs-hung discriminator ---
+Copied scripts/check/check-transfer.py to a scratch copy and raised only the
+inner QEMU timeout from 60 s to 600 s (outer harness untouched):
+
+$ python3 scripts/check/check-transfer-longto.py
+[transfer] generation received objects=1 states=3 release=2 attempts=3
+[init] generation transfer installed
+command timed out after 600s (wedged guest?): ['timeout', '600',
+  '/home/iceice666/projects/slime_os/kernel/scripts/run-kernel.sh',
+  '/home/iceice666/projects/slime_os/target/x86_64-unknown-none/release/slime_os-kernel',
+  '-display', 'none', '-drive',
+  'if=none,format=raw,cache=none,file=/tmp/slime-os-transfer/receiver-store.bin,id=receiver',
+  '-device', 'virtio-blk-pci,drive=receiver,disable-legacy=on,queue-size=8,bus=pcie.0,addr=0x5',
+  '-drive', 'if=none,format=raw,readonly=on,file=/tmp/slime-os-transfer/transfer.img,id=transfer',
+  '-device', 'virtio-blk-pci,drive=transfer,disable-legacy=on,queue-size=8,bus=pcie.0,addr=0x6']
+EXIT=1
+Wall time: 1804.58 s
+
+CONCLUSION: 10x the timeout changes nothing. This is a wedge, not slowness.
+The scratch copy was deleted after this run.
+
+--- 3e. spawn_service_check at HEAD, three runs ---
+run 1 (timeout 180 inside a 900 s outer bound):
+[generation] bootstrap grants valid
+[generation] spawning init
+[generation] launching init with 40 capabilities
+[init] launching component graph
+[init] spawn graph launched
+qemu-system-x86_64: terminating on signal 15 from pid 580828 (omp)
+
+run 2 (batch with other gates, timeout 400): exit=124
+[generation] launching init with 40 capabilities
+[init] launching component graph
+[init] spawn graph launched
+
+run 3 (alone on an otherwise idle machine, `uptime` load average 2.45 2.18 1.58,
+timeout 600 inside a 900 s outer bound):
+[generation] spawning init
+[generation] launching init with 40 capabilities
+[init] launching component graph
+[init] spawn graph launched
+qemu-system-x86_64: terminating on signal 15 from pid 580828 (omp)
+Wall time: 901.17 s
+
+--- 3f. dango_check at HEAD ---
+$ timeout 400 just dango_check
+Boot store passed: slot A sequence 2
+selected=6be28723... parent=ce12d632... target=x86_64-qemu-virtio kernel=567615
+python3 scripts/check/check-dango.py
+exit=124
+
+In every wedge the last serial line is an init progress marker and NO
+"[generation] ... idle-blocked" or "[generation] vertical slice healthy" line
+is ever printed, i.e. on_idle is never reached and exit_qemu never runs.
+
+
+================================================================
+4. BISECT (B3 attribution)
+================================================================
+
+Method: one detached worktree per commit at /tmp/slime-bisect. Because
+deps/zutai and deps/dango are submodules not populated in a fresh worktree,
+each worktree got symlinks to the main checkout's deps, and the release test
+keys were chmod 600 (a fresh checkout leaves them 644, which makes ssh-keygen
+refuse them and generation_check fail before any boot).
+
+  rm -rf deps/zutai deps/dango
+  ln -s <main>/deps/zutai deps/zutai
+  ln -s <main>/deps/dango deps/dango
+  chmod 600 contracts/release/v1/test-keys/key*
+
+--- transfer_check across the C7 series ---
+
+991bbb/991dcbb  refactor(slime_os/layout): unify root into cargo workspace   [post-C7.2]
+  [transfer] receive rejected: BadRelease
+  [generation] init terminated: Some(Exit(1))
+  kernel exit: Failed (0x11)
+  receiver preboot: ['d1a4ca4afd8db1158746be639af3fc38688e95e15c8c94cc0446ce3ab146f187']
+  generation transfer check: install, pending boot, promotion, and rollback retention passed
+  EXIT=0                                                        PASS  (95.55 s)
+
+ed49fb5  feat(slime_os/core-runtime): add shared-buffer quotas and accounting  [C7.3]
+  [transfer] receive rejected: BadRelease
+  [generation] init terminated: Some(Exit(1))
+  kernel exit: Failed (0x11)
+  receiver preboot: ['38efbaca361785381979ca8e4b6feb0fd0cae40ff31d56bdd732d8737405faae']
+  generation transfer check: install, pending boot, promotion, and rollback retention passed
+  EXIT=0                                                        PASS  (105.68 s)
+
+928389e  feat(slime_os/core-runtime): add shared-buffer mapping and sealing   [C7.4]
+  [transfer] receive rejected: BadRelease
+  [generation] init terminated: Some(Exit(1))
+  kernel exit: Failed (0x11)
+  receiver preboot: ['7359cb831d804fe2f10cbc70593a6889a06d6d4a4ef451e98be7bb8e6f707f9f']
+  generation transfer check: install, pending boot, promotion, and rollback retention passed
+  EXIT=0                                                        PASS
+
+ca15764  feat(kernel/shared-buffer): add C7.5 loan/return lifecycle          [C7.5]
+  [bootstate-trace] v1 action=stage-pending commit=after-pending-commit ...
+  [transfer] generation received objects=1 states=3 release=2 attempts=3
+  [init] generation transfer installed
+  qemu-system-x86_64: terminating on signal 15 from pid 832920 (timeout)
+  error: recipe `transfer_check` failed on line 83 with exit code 124
+  EXIT=124                                                      FAIL  (268.77 s)
+
+2384bea  HEAD                                                                [C7.7]
+  EXIT=124                                                      FAIL  (3 runs, section 3)
+
+--- spawn_service_check across the boundary ---
+
+928389e  [C7.4]
+  [generation] dango idle-blocked (persistent=true)
+  [generation] storage-probe terminated: Some(Exit(0))
+  [generation] generation-manager terminated: Some(Exit(0))
+  [generation] spawn-service idle-blocked (persistent=true)
+  [generation] vertical slice healthy
+  EXIT=0                                                        PASS  (94.39 s)
+
+ca15764  [C7.5]
+  [generation] spawning init
+  [generation] launching init with 40 capabilities
+  [init] launching component graph
+  [init] spawn graph launched
+  qemu-system-x86_64: terminating on signal 15 from pid 580828 (omp)
+  (timed out at the 1000 s outer bound)                         FAIL
+
+2384bea  HEAD
+  same wedge, three runs                                        FAIL
+
+--- scope of the C7.5..HEAD diff ---
+$ git diff --stat ca15764 HEAD -- kernel/src components boot-contracts/src
+(no output — C7.6 and C7.7 changed no kernel/component/contract source)
+
+$ git diff --stat 928389e ca15764 -- kernel/src components boot-contracts scripts
+ boot-contracts/src/generation.rs            |  19 +-
+ kernel/src/capability/mod.rs                |  42 +-
+ kernel/src/memory/shared_buffer.rs          | 571 +++++++++++++++++++++-------
+ kernel/src/syscall/mod.rs                   | 235 +++++++++++-
+ scripts/build/build-generation.py           |   1 +
+ scripts/check/check-generation.py           |   2 +-
+ scripts/check/check-no-storage-authority.py |   6 +
+ 7 files changed, 717 insertions(+), 159 deletions(-)
+
+$ git diff 928389e ca15764 -- kernel/src/syscall/mod.rs | grep '^  [+-]' \
+    | grep -v 'shared_buffer|SHARED_BUFFER|SharedBuffer|loan|Loan|RIGHT_BUFFER'
+(no output — every syscall-layer line C7.5 touched is shared-buffer related)
+
+
+================================================================
+5. LIVE GENERATION HAS NO BUDGET RESOURCE (B4)
+================================================================
+
+Parsed the artifact just generation_check had produced.
+
+$ python3  # via boot_contracts GENERATION_HEADER / GENERATION_OBJECT
+magic b'SLIMEG3\x00'
+header format '<8sIIQ32sQ32sIIIIIIIIIIQQQQQQQQQQ40x' size 256
+objects 21   components 20   grants 13   deps 26   states 5   health 4
+o_objects 256  o_components 1600  o_grants 2240  o_strings 3260  total 684228
+
+object table (index, kind, offset, size):
+   0 3     4571   3345        11 2    66816   5531
+   1 3     7916  10089        12 1    72347 567615   <- kernel
+   2 3    18005   7395        13 3   639962   6379
+   3 3    25400   4961        14 3   646341   5699
+   4 3    30361  10441        15 3   652040   7259
+   5 3    40802   5723        16 3   659299   3041
+   6 3    46525   4689        17 3   662340   6105
+   7 3    51214    187        18 3   668445   6825
+   8 3    55450   4049        19 3   675270   4669
+   9 3    61069   5619        20 3   679939   4289
+  10 3    61069   5747
+
+indices with kind == KIND_RESOURCE (4): NONE
+
+The single 'SLIMESB' byte match in the file is at offset 248756, which lies
+inside the kernel object's range 72347..639962 — it is kernel .rodata, not an
+object payload:
+$ python3 -c "print(72347 <= 248756 < 639962)"
+True
+
+$ grep -rn "sharedBufferBudget|shared-buffer-budget|sharedBuffer" scripts/ kernel/ components/
+scripts/check/check-contracts.py:41:SHARED_BUFFER_BUDGET_CONTRACT = ROOT / "contracts" / "shared-buffer-budget" / "v1"
+scripts/generate/generate-boot-bindings.py:36: ROOT / "contracts" / "shared-buffer-budget" / "v1" / "schema.zt",
+(no emitter in scripts/build/build-generation.py)
+
+$ grep -n "bufferCreate|bufferLoan|bufferWrite" contracts/generation/v1/fixtures/valid.zti
+(no matches; all 26 `rights = [...]` lines checked)
+
+$ grep -n "KernelObject::(EndpointFactory|Input|SharedBufferFactory)" kernel/src/runtime/bootstrap.rs
+370-371:  KernelObject::EndpointFactory
+421-422:  KernelObject::Input
+516-517:  KernelObject::EndpointFactory
+(SharedBufferFactory: never minted)
+
+
+================================================================
+6. NO SYSCALL-LAYER OR REAL-COMPONENT COVERAGE (B5)
+================================================================
+
+$ grep -n "dispatch|UserFrame|sys_" kernel/tests/
+No matches found.
+
+$ grep -n "SHARED_BUFFER_TABLE" kernel/tests/
+No matches found.
+
+$ grep -c "SharedBufferTable::new" kernel/tests/*.rs
+sample_descriptor.rs:1   sample_plane.rs:5   shared_buffer_accounting.rs:7
+shared_buffer_authority.rs:5   shared_buffer_loan.rs:7   shared_buffer_mapping.rs:8
+(33 total; every gate builds its own table and never touches the global)
+
+$ grep -n "SYS_SHARED_BUFFER|shared_buffer_create" components/ kernel/tests/ scripts/
+Only hit: scripts/check/check-no-storage-authority.py allowlist entries.
+No component and no test invokes any of the nine syscalls.
+
+kernel/tests/sample_plane.rs:
+  57:const LENDER: u64 = 0x71;
+  58:const RECEIVER: u64 = 0x72;
+ 462:    assert_eq!(buffers.reclaim_owner(RECEIVER), 0);   <- stands in for "peer death"
+$ grep -n "spawn|task::|TaskId" kernel/tests/sample_plane.rs
+(no output)
+
+Contrast, a gate that does use real tasks:
+kernel/tests/isolation.rs:174  let recv_id = task::spawn_with_caps(
+kernel/tests/isolation.rs:182  let send_id = task::spawn_with_caps(
+
+
+================================================================
+7. RETAINED-V2 IS DECODE-ONLY (B6)
+================================================================
+
+$ grep -n "GENERATION_MAGIC|GENERATION_VERSION" scripts/lib/boot_contracts.py
+7:GENERATION_MAGIC = b"SLIMEG3\0"
+8:GENERATION_VERSION = 3
+(the builder emits v3 only)
+
+$ grep -rln "FORMAT_VERSION_V2|MAGIC_V2" --include=*.rs --include=*.py .
+./kernel/tests/sample_plane.rs
+./boot-contracts/src/generation.rs
+(both hand-build v2 bytes in memory; no v2 bootstore fixture exists)
+
+boot-contracts/src/generation.rs:786  fn retained_v2_generation_still_decodes()
+boot-contracts/src/generation.rs:797  fn retained_v2_rejects_v3_only_rights()
+kernel/tests/sample_plane.rs:564      fn build_v2_known_good() -> Vec<u8>
+
+roadmap/02-core-runtime.md:63 claims the v2 artifact "still decodes and boots".
+
+
+================================================================
+8. RIGHT_MAP RENAME INCOMPLETE (B7)
+================================================================
+
+$ sed -n '105p' scripts/build/build-generation.py
+    "map": 1 << 9,
+$ sed -n '39p' kernel/src/capability/mod.rs
+pub const RIGHT_BUFFER_MAP: Rights = 1 << 9;
+
+Sibling keys in the same builder table are object-specific:
+"bufferWrite": 1 << 8, "bufferCreate": 1 << 24, "bufferLoan": 1 << 25
+
+
+================================================================
+9. BUDGET AGGREGATE NOT BOUNDED (B8)
+================================================================
+
+boot-contracts/src/shared_buffer_budget.rs:116-148 validate_against() loops
+per entry with no accumulator. Its own comment, lines 141-145:
+
+    // A single buffer never exceeds the per-run contiguous ceiling, but
+    // that is a per-buffer, not per-holder, cap; nothing to check here
+    // beyond the above. `max_buffer_pages` is retained for symmetry with
+    // the kernel bounds and future per-buffer descriptor checks.
+    let _ = max_buffer_pages;
+
+Lib tests at :298-327 cover per-holder impossibility only
+(fn impossible_quotas_rejected_against_ceilings).
+
+roadmap/02-core-runtime.md:104 says decode rejects "globally impossible" limits.
+
+
+================================================================
+10. CLEANUP
+================================================================
+
+$ git worktree remove --force /tmp/slime-bisect ; git worktree prune
+$ rm -f scripts/check/check-transfer-longto.py /tmp/check-transfer-longtimeout.py
+$ git status --porcelain
+(empty)
+$ git worktree list
+~/projects/slime_os 2384bea [master]
