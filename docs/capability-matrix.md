@@ -99,12 +99,21 @@ Semantics not visible in the table:
 - The reference generation declares that budget in practice, not only in
   principle: `contracts/generation/v1/fixtures/valid.zti` carries a
   `shared-buffer-budget` `KIND_RESOURCE` object plus one `bufferCreate` grant
-  each to `dango` and `spawn-service`, and `bootstrap` mints a single
-  transferable `SharedBufferFactory` that init derive-copies to exactly those
-  holders. The grant authorizes the operation and the budget bounds it: a
+  each to `dango`, `spawn-service`, and `sample-lender`, and `bootstrap` mints a
+  single transferable `SharedBufferFactory` that init derive-copies to exactly
+  those holders. The grant authorizes the operation and the budget bounds it: a
   component with a grant but no budget entry still allocates nothing. Both
   holders run a bounded create/map/write/seal/release self-check at startup, so
   a healthy boot is itself evidence that the declared quotas are live (B4).
+- The whole nine-syscall surface is driven by real components, not only by
+  in-harness tables: `sample-lender` and `sample-receiver` exchange a payload
+  larger than `MAX_MSG` under `just sample_plane_live_check`, with the loan
+  receiver named through a `RIGHT_SUPERVISE` capability rather than an ambient
+  task id. The gate asserts the denial arms in order — a factory capability is
+  not a buffer, an unsealed region cannot be loaned, a sealed region never
+  yields a writable mapping, a stale descriptor maps nothing, a loan cannot
+  address past its subrange or gain write access, and a loan returns exactly
+  once (B5).
 - A C7.6 sample descriptor is a userspace control message (`sample-descriptor/v1`),
   not a kernel object: it references an exact transferred `SharedBufferLoan` by
   its unforgeable identity plus a page-aligned offset/length, type identity,

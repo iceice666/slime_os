@@ -17,52 +17,11 @@ at the bottom rather than deleting it.
 ## Open
 
 _Opened 2026-07-26 by a full C7 audit (C7.1–C7.7) at `2384bea`. Every C7
-sub-slice gate passes; the audit found a boot regression and several exit
+sub-slice gate passed; the audit found a boot regression and several exit
 conditions that were provable only in-harness. Evidence and bisect:
-`devlog/2026-07-26-c7-audit/`. B3 (the C7.5 full-graph boot wedge) and B4 (the
-dormant shared-buffer plane) are resolved, so C7's blocking items are cleared
-and C8 may open; B5–B8 remain as evidence and hygiene debt on the C7 surface._
-
-### B5 — no C7 gate exercises the syscall layer or real components
-
-**Problem:** No *test* reaches any `SYS_SHARED_BUFFER_*` syscall. The gates call
-`SharedBufferTable` methods directly on locally constructed tables and never
-touch the global `SHARED_BUFFER_TABLE`, so the rights gates, the
-`available_slots()` pre-checks, the create-insert-failure rollback
-(`kernel/src/syscall/mod.rs:604-611`), and the loan-insert-failure revoke
-(`:820-825`) have no test coverage. C7.7's "two isolated components" are two
-`u64` constants, and its "peer death" is a direct `reclaim_owner` call, so the
-real reclamation wiring in `task::terminate` is never executed by the gate that
-claims it. This is what let B3 through.
-
-**Partly addressed 2026-07-26 (B4).** `slime_rt` now wraps
-`create`/`map`/`unmap`/`seal`/`release`, and the dango and spawn-service
-startup probes exercise all five against the real kernel on every boot, so
-those paths are no longer unreachable from userspace. What remains: the four
-loan syscalls (`LOAN`/`LOAN_MAP`/`RETURN`/`REVOKE`) still have no wrapper and
-no caller; no *test* drives any syscall; and the C7.7 gate still composes owner
-ids rather than tasks.
-
-**Evidence:** `grep 'dispatch|UserFrame|sys_'` over `kernel/tests/` returns no
-matches; `grep SHARED_BUFFER_TABLE` over `kernel/tests/` returns no matches,
-while `SharedBufferTable::new()` appears 33 times. `kernel/tests/
-sample_plane.rs:57-58` defines `LENDER`/`RECEIVER` as bare `u64` constants and
-the file never mentions `spawn` or `task::`; `:462` calls
-`buffers.reclaim_owner(RECEIVER)` in place of a termination. Compare
-`kernel/tests/isolation.rs:174-189`, which spawns real tasks.
-
-**Proposed fix:** Add the four missing loan wrappers to `slime_rt`, then promote
-the C7.7 gate to the milestone it claims: spawn two real components holding
-granted factory/loan capabilities (the factory grant landed with B4), move the
-descriptor and payload through the actual syscalls, and drive reclamation by
-terminating a task rather than calling the table. Add negative syscall cases for
-a missing right and a full capability table so the denial and rollback arms are
-covered.
-
-**Exit condition:** `just sample_plane_check` spawns two real tasks, moves a
-payload larger than `MAX_MSG` through `SYS_SHARED_BUFFER_*` and a real
-channel, and reclaims every charge via task termination; each of the nine
-shared-buffer syscalls has at least one authorized and one denied case.
+`devlog/2026-07-26-c7-audit/`. B3 (boot wedge), B4 (dormant shared-buffer
+plane), and B5 (no syscall or real-component coverage) are resolved. B6–B8
+remain as narrower evidence and hygiene debt on the C7 surface._
 
 ### B6 — the retained-v2 "still boots" claim is proven only as decode
 
@@ -138,6 +97,49 @@ aggregate over-commit, and `roadmap/02-core-runtime.md` describes the same
 rule the code enforces.
 
 ## Resolved
+
+### B5 — no C7 gate exercised the syscall layer or real components
+
+**Resolved:** 2026-07-26. See `devlog/2026-07-26-b5-live-sample-plane/`.
+
+**Problem:** No test or component reached any `SYS_SHARED_BUFFER_*` syscall. The
+gates called `SharedBufferTable` methods on locally constructed tables and never
+touched the global `SHARED_BUFFER_TABLE`, so the rights gates, the loan receiver
+binding, and reclamation through real termination were unproven. C7.7's "two
+isolated components" were the `u64` constants `0x71`/`0x72`, and its "peer death"
+was a direct `reclaim_owner` call. This is the blind spot B3's boot wedge shipped
+through.
+
+**Evidence:** `grep 'dispatch|UserFrame|sys_'` and `grep SHARED_BUFFER_TABLE`
+over `kernel/tests/` both returned no matches, while `SharedBufferTable::new()`
+appeared 33 times. `kernel/tests/sample_plane.rs:57-58` defined its holders as
+bare integers; `:462` stood in for peer death with `reclaim_owner`.
+
+**Fix:** Added the four missing loan wrappers (`loan`/`loan_map`/`return`/
+`revoke`) to `slime_rt`, completing the nine-syscall surface begun in B4. Added
+two real components, `sample-lender` and `sample-receiver`, that the generation
+grants a factory, a channel, and a `supervise` handle; init spawns the receiver
+first so the lender names its loan receiver by capability rather than ambient
+task id. `just sample_plane_live_check` asserts an ordered transcript covering
+the happy path plus six denial arms, and rejects any component `fail:` line.
+A first draft exposed a real ordering property: a lender that exits before the
+receiver maps has its loan settled by its own termination, so the lender now
+waits for a settle message — the C7.5 retention rule, asserted rather than raced.
+
+**Exit condition (observed):** `just sample_plane_live_check` passes: two
+separately spawned components move a two-page payload — larger than `MAX_MSG` —
+through the real syscalls, with only the 64-byte descriptor crossing the IPC
+channel, and every denial arm observed before the operation it guards.
+`just sample_plane_check` (5/5), `just test`, all shared-buffer gates
+(8/8/8/7/4), `just spawn_service_check`, `just dango_check`, `just
+powerbox_check`, `just transfer_check` (exercising the renumbered slots 45/46),
+`just generation_cmd_check`, `just generation_check`, `just
+framework_safety_check`, and fmt/lint with `_components` are all clean.
+
+**Follow-up:** `SYS_SHARED_BUFFER_REVOKE` has a wrapper and in-harness coverage
+but no live caller, since the lender settles by return. The two insert-failure
+rollback paths still need a full capability table at the moment of insert, which
+neither gate stages.
 
 ### B4 — the C7 shared-buffer plane was dormant on the live boot path
 
