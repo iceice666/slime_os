@@ -1,0 +1,98 @@
+-- Slime OS native interface-schema source contract, version 1 (C8.1).
+--
+-- Interface declarations are inert Zutai data. The host compiler decodes this
+-- exact shape, validates the semantic bounds below, then sorts type
+-- declarations and contract roles before serializing the normalized record as
+-- UTF-8 JSON with lexicographically sorted keys, no insignificant whitespace,
+-- ASCII escapes, and one trailing newline. Field order remains significant.
+-- The authoritative identity is SHA-256 over identityDomain followed by those
+-- exact normalized bytes. The descriptor type tag is the little-endian u64 in
+-- the first eight bytes of SHA-256(tagDomain || full identity); it is only a
+-- generation-local lookup key, never authority, and collisions are rejected.
+
+Field :: type {
+  name : Text;
+  kind : Text;
+  width : Int;
+  signed : Bool;
+  bound : Int;
+  typeName : Text;
+};
+
+RecordType :: type {
+  name : Text;
+  fields : List Field;
+};
+
+ContractRole :: type {
+  role : Text;
+  typeName : Text;
+};
+
+InterfaceSchema :: type {
+  formatVersion : Int;
+  name : Text;
+  kind : Text;
+  roles : List ContractRole;
+  types : List RecordType;
+};
+
+FromData @Field :: derive
+FromData @RecordType :: derive
+FromData @ContractRole :: derive
+FromData @InterfaceSchema :: derive
+
+formatVersion :: Int = 1;
+maxSchemas :: Int = 64;
+maxSourceBytes :: Int = 65536;
+maxNormalizedBytes :: Int = 65536;
+maxGeneratedBytes :: Int = 262144;
+maxNameBytes :: Int = 64;
+maxTypes :: Int = 64;
+maxFieldsPerType :: Int = 32;
+maxTotalFields :: Int = 256;
+maxDepth :: Int = 8;
+maxSequenceElements :: Int = 4096;
+maxEncodedBytes :: Int = 1048576;
+identityDomain :: Text = "slime-interface-schema-v1:";
+tagDomain :: Text = "slime-interface-type-tag-v1:";
+
+fieldKindScalar :: Text = "scalar";
+fieldKindBytes :: Text = "bytes";
+fieldKindRecord :: Text = "record";
+fieldKindSequence :: Text = "sequence";
+contractKindStream :: Text = "stream";
+contractKindCall :: Text = "call";
+contractKindOperation :: Text = "operation";
+
+decodeInterfaceSchema :: Data -> Validation DecodeIssue InterfaceSchema
+  = data => decode data;
+
+{
+  Field = Field;
+  RecordType = RecordType;
+  ContractRole = ContractRole;
+  InterfaceSchema = InterfaceSchema;
+  decodeInterfaceSchema = decodeInterfaceSchema;
+  formatVersion = formatVersion;
+  maxSchemas = maxSchemas;
+  maxSourceBytes = maxSourceBytes;
+  maxNormalizedBytes = maxNormalizedBytes;
+  maxGeneratedBytes = maxGeneratedBytes;
+  maxNameBytes = maxNameBytes;
+  maxTypes = maxTypes;
+  maxFieldsPerType = maxFieldsPerType;
+  maxTotalFields = maxTotalFields;
+  maxDepth = maxDepth;
+  maxSequenceElements = maxSequenceElements;
+  maxEncodedBytes = maxEncodedBytes;
+  identityDomain = identityDomain;
+  tagDomain = tagDomain;
+  fieldKindScalar = fieldKindScalar;
+  fieldKindBytes = fieldKindBytes;
+  fieldKindRecord = fieldKindRecord;
+  fieldKindSequence = fieldKindSequence;
+  contractKindStream = contractKindStream;
+  contractKindCall = contractKindCall;
+  contractKindOperation = contractKindOperation;
+}

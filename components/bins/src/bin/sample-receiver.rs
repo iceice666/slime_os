@@ -9,6 +9,7 @@
 //! payload larger than the kernel message bound, and returns the loan exactly
 //! once.
 
+use slime_proto::interface_schema::telemetry_stream::TYPE_TAG;
 use slime_proto::sample_descriptor::{DESCRIPTOR_LEN, WireSampleDescriptor};
 use slime_proto::valid_sample_descriptor;
 use slime_rt::{ERR_BAD_CAP, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG, WaitSource};
@@ -20,7 +21,6 @@ const PEER_SLOT: u32 = 0;
 
 const PAGE: u64 = 4096;
 const BASE: u64 = 0x0000_000A_0000_0000;
-const TYPE_ID: u64 = 0x5359_4E43_5459_5045; // "SYNCTYPE"
 
 fn fail(reason: &[u8]) -> ! {
     slime_rt::debug_write(b"[sample-receiver] fail: ");
@@ -57,7 +57,7 @@ fn main() {
         loan_id: descriptor.loan_id ^ 1,
         ..descriptor
     };
-    if valid_sample_descriptor(&stale, descriptor.loan_id, TYPE_ID, PAGE) {
+    if valid_sample_descriptor(&stale, descriptor.loan_id, TYPE_TAG, PAGE) {
         fail(b"stale descriptor validated");
     }
     if slime_rt::shared_buffer_loan_map(loan_slot, BASE, 0, descriptor.length + PAGE) == ERR_SUCCESS
@@ -66,7 +66,7 @@ fn main() {
     }
     slime_rt::debug_write(b"[sample-receiver] malformed descriptor mapped nothing\n");
 
-    if !valid_sample_descriptor(&descriptor, descriptor.loan_id, TYPE_ID, PAGE) {
+    if !valid_sample_descriptor(&descriptor, descriptor.loan_id, TYPE_TAG, PAGE) {
         fail(b"admitted descriptor rejected");
     }
     if slime_rt::shared_buffer_loan_map(loan_slot, BASE, descriptor.offset, descriptor.length)

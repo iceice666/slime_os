@@ -4,6 +4,12 @@
   target = "x86_64-qemu-virtio";
   kernelObject = "sha256:kernel";
   bootstrapComponent = "init";
+  interfaceSchemas = [
+    "contracts/interface-schema/v1/interfaces/telemetry-stream.zti";
+    "contracts/interface-schema/v1/interfaces/parameter-call.zti";
+    "contracts/interface-schema/v1/interfaces/navigation-operation.zti";
+  ];
+
 
   objects = [
     { id = "sha256:kernel"; kind = "kernel"; size = 1048576; };

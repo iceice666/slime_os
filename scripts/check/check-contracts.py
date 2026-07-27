@@ -41,6 +41,10 @@ RELEASE_CONTRACT = ROOT / "contracts" / "release" / "v1"
 SHARED_BUFFER_BUDGET_CONTRACT = ROOT / "contracts" / "shared-buffer-budget" / "v1"
 SAMPLE_DESCRIPTOR_CONTRACT = ROOT / "contracts" / "sample-descriptor" / "v1"
 SAMPLE_DESCRIPTOR_BINDING_GENERATOR = ROOT / "scripts" / "generate" / "generate-sample-descriptor-bindings.py"
+INTERFACE_SCHEMA_CONTRACT = ROOT / "contracts" / "interface-schema" / "v1"
+INTERFACE_SCHEMA_BINDING_GENERATOR = (
+    ROOT / "scripts" / "generate" / "generate-interface-schema-bindings.py"
+)
 
 
 def run(*arguments: str) -> str:
@@ -130,6 +134,15 @@ subprocess.run(
     cwd=ROOT,
     check=True,
 )
+run("check", str(INTERFACE_SCHEMA_CONTRACT / "schema.zt"))
+run("check", str(INTERFACE_SCHEMA_CONTRACT / "check.zt"))
+run("check", str(INTERFACE_SCHEMA_CONTRACT / "gen_python.zt"))
+subprocess.run(
+    [sys.executable, str(INTERFACE_SCHEMA_BINDING_GENERATOR), "--check"],
+    cwd=ROOT,
+    check=True,
+)
+
 
 for contract in (
     GENERATION_V2_CONTRACT,
@@ -165,5 +178,5 @@ subprocess.run(
 print(
     "Generation source/binary, kernel image, BootState, BootState trace, recovery, "
     "block, component, store, spawn, filesystem, powerbox, generation-management, "
-    "transfer, and sample-descriptor contracts passed"
+    "transfer, sample-descriptor, and interface-schema contracts passed"
 )

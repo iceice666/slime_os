@@ -56,6 +56,7 @@ GenerationManifest :: type {
   parent? : Int;
   kernelObject : Text;
   bootstrapComponent : Text;
+  interfaceSchemas : List Text;
   objects : List Object;
   components : List Component;
   grants : List CapabilityGrant;

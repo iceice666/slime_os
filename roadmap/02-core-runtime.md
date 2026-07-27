@@ -293,7 +293,7 @@ portability work continues.
 
 ### C8.1 — Deterministic interface schemas and native bindings
 
-**Status:** Not started.
+**Status:** Complete. `just interface_schema_check` and the live sample-plane gate pass with one deterministic normal form, full identity, generated local tag, and native binding set; malformed, unsupported, over-bound, duplicate, and forced-collision inputs fail before output.
 
 #### Deliverables
 

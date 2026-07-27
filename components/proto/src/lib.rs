@@ -5,6 +5,7 @@ pub mod block;
 pub mod component;
 pub mod fs;
 pub mod generation;
+pub mod interface_schema;
 pub mod powerbox;
 pub mod sample_descriptor;
 pub mod spawn;

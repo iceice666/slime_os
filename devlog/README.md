@@ -135,3 +135,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-07-26 | [C7 milestone audit — boot wedge and unproven exit conditions](2026-07-26-c7-audit/index.md) | Audit | Verified | C7, B3, B4, B5, B6, B7, B8 |
 | 2026-07-27 | [Devlog format contract, uniform layout, and enforcement gate](2026-07-27-devlog-format-and-gate/index.md) | Change | Verified | none |
 | 2026-07-27 | [C8 — Native typed data fabric decomposition](2026-07-27-c8-sub-milestones/index.md) | Decision | Proposed | C8 |
+| 2026-07-27 | [C8.1 — Deterministic interface schemas and native bindings](2026-07-27-c8-1-interface-schemas/index.md) | Change | Verified | C8.1 |

@@ -87,6 +87,7 @@ from boot_contracts import (
     generation_identity,
     sha256,
 )
+from interface_schema import InterfaceSchemaError, admit_interfaces, resolve_interface_paths
 from release_trust import RELEASE_BYTES, build_release
 from zutai_cli import STDLIB, binary
 
@@ -463,6 +464,14 @@ def kernel_image(path: Path) -> bytes:
     return header + records + relocation_records + payload
 
 
+def validate_interface_schemas(entries: object) -> None:
+    try:
+        paths = resolve_interface_paths(entries)
+        admit_interfaces(paths)
+    except InterfaceSchemaError as error:
+        fail(str(error))
+
+
 def unique_sorted(items: list[dict], key: str, label: str) -> list[dict]:
     values = [item[key] for item in items]
     if len(set(values)) != len(values):
@@ -723,9 +732,12 @@ def build_bootstore(generations: list[bytes]) -> bytes:
 
 def main() -> None:
     if len(sys.argv) != 3: fail("usage: build-generation.py <kernel-elf> <output-dir>")
-    kernel = Path(sys.argv[1]).resolve(); output = Path(sys.argv[2]).resolve(); output.mkdir(parents=True, exist_ok=True)
+    kernel = Path(sys.argv[1]).resolve()
+    output = Path(sys.argv[2]).resolve()
     manifest = load_manifest()
     if manifest["formatVersion"] != 1: fail("unsupported source formatVersion")
+    validate_interface_schemas(manifest["interfaceSchemas"])
+    output.mkdir(parents=True, exist_ok=True)
     policy_number = int(os.environ.get("SLIME_GENERATION_NUMBER") or manifest["generation"])
     # Generation 1 is the known-good baseline: its components must carry their own
     # generation number (1) so the generation-manager runs the known-good path,

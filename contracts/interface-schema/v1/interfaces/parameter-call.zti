@@ -1,0 +1,25 @@
+{
+  formatVersion = 1;
+  name = "ParameterCall";
+  kind = "call";
+  roles = [
+    { role = "request"; typeName = "ParameterRequest"; };
+    { role = "reply"; typeName = "ParameterReply"; };
+  ];
+  types = [
+    {
+      name = "ParameterReply";
+      fields = [
+        { name = "accepted"; kind = "scalar"; width = 1; signed = false; bound = 0; typeName = ""; };
+        { name = "revision"; kind = "scalar"; width = 8; signed = false; bound = 0; typeName = ""; };
+      ];
+    };
+    {
+      name = "ParameterRequest";
+      fields = [
+        { name = "parameter"; kind = "bytes"; width = 0; signed = false; bound = 32; typeName = ""; };
+        { name = "value"; kind = "scalar"; width = 8; signed = true; bound = 0; typeName = ""; };
+      ];
+    };
+  ];
+}

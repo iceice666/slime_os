@@ -14,6 +14,7 @@
 //! generation, so this exercises `SYS_SHARED_BUFFER_*`, the rights gates, the
 //! loan receiver binding, and reclamation through real task termination.
 
+use slime_proto::interface_schema::telemetry_stream::TYPE_TAG;
 use slime_proto::sample_descriptor::{
     CAPABILITY_KIND_LOAN, FLAG_LAST, FORMAT_VERSION, SAMPLE_DESCRIPTOR_MAGIC, WireSampleDescriptor,
 };
@@ -33,7 +34,6 @@ const PAGE: u64 = 4096;
 const PAGES: usize = 2;
 const PAYLOAD_LEN: u64 = PAGES as u64 * PAGE;
 const BASE: u64 = 0x0000_0009_0000_0000;
-const TYPE_ID: u64 = 0x5359_4E43_5459_5045; // "SYNCTYPE"
 
 fn fail(reason: &[u8]) -> ! {
     slime_rt::debug_write(b"[sample-lender] fail: ");
@@ -110,7 +110,7 @@ fn main() {
         loan_id: loan.id,
         offset: 0,
         length: PAYLOAD_LEN,
-        type_identity: TYPE_ID,
+        type_identity: TYPE_TAG,
         sequence: 1,
         reserved: [0; 8],
     };
