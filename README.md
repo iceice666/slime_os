@@ -2,7 +2,7 @@
 
 Slime OS is an experimental atomic personal operating system built from a new kernel and userspace rather than on Linux. Its purpose is to explore capability-based isolation, component-oriented system services, explicit resource authority, and generation-based deployment while progressing toward a system usable on one real daily-driver laptop.
 
-The project is currently a QEMU-verified Rust `no_std` kernel and native userspace component system, plus an observed removable-media boot on the Framework 13 AMD AI 300 target. The QEMU paths cover isolation, typed capability IPC, durable virtio storage, an integrity-checked object store, rollbackable generations, signed release metadata, recovery, native Dango, generation management, powerbox selection, and generation transfer. Framework storage-aware physical evidence, daily-driver hardware, the native typed data fabric, and ROS 2 interoperability remain open.
+The project is currently a QEMU-verified Rust `no_std` kernel and native userspace component system, plus an observed removable-media boot on the Framework 13 AMD AI 300 target. The QEMU paths cover isolation, typed capability IPC, durable virtio storage, an integrity-checked object store, rollbackable generations, signed release metadata, recovery, native Dango, generation management, powerbox selection, and generation transfer. Framework storage-aware physical evidence, daily-driver hardware, the native typed data fabric, ROS 2 interoperability, and the in-system native development path remain open.
 
 ## Current status
 
@@ -12,7 +12,8 @@ The project is currently a QEMU-verified Rust `no_std` kernel and native userspa
 - M5 remains open only on M5.7 physical evidence: its NVMe transport and QEMU checks pass, but the storage-aware removable-media slice has not yet been recorded on Framework. Internal-NVMe writes remain disabled.
 - M6.1–M6.7 are complete: manifest-driven spawn, directory capabilities, native Dango, generation commands, powerbox selection, and generation transfer run through explicit capabilities.
 - The Hardware H1 evidence harness is implemented and QEMU-verified; its physical Framework inventory record is pending. H2–H14 are not implemented.
-- Core C7–C9 and ROS R1–R3 are planned userspace/runtime tracks. ROS 2 is a bounded compatibility profile over native Slime contracts, not a kernel ABI.
+- Core C7 is complete; C8–C9 and ROS R1–R3 are planned userspace/runtime tracks. ROS 2 is a bounded compatibility profile over native Slime contracts, not a kernel ABI.
+- Native development D1–D7 is planned: in-system authoring, a direct component-image language backend, hermetic builds, ephemeral execution, transactional live component cutover, authorized on-device generations, and full-generation reproduction are not yet implemented.
 
 ## Vision
 
@@ -136,6 +137,12 @@ A command such as `$(sysinfo)` does not directly invoke a path-based syscall. Th
 
 Dango stdout is a data stream. Stderr is a separate diagnostic channel. A component fault, forced termination, peer loss, capability revocation, and a program-selected nonzero status remain distinguishable at the host boundary.
 
+### Native application language
+
+The native-development roadmap admits an additional application language whose compiler emits the exact target-qualified Slime component-image format directly. This is a programming-language frontend, not a replacement for Zutai configuration/schemas or Dango command interaction. The compiler and standard library are pinned content-addressed toolchain inputs; emitted images carry mapping information only, while capabilities, resource accounts, release authorization, and activation remain Slime generation/admission policy.
+
+The language may consume Zutai-generated syscall and IPC bindings but may not define an independent cross-boundary schema source. Host and on-device compilation use the same normalized source/toolchain/target closure and must produce the same image identity.
+
 ## Component and generation boundary
 
 The first stable cross-project artifact should be a versioned, deterministic generation manifest. Its logical content is:
@@ -224,8 +231,10 @@ The canonical plan, acceptance criteria, status, and dependency graph live in [`
 - [Platform hardware H1–H14](roadmap/04-platform-hardware.md)
 - [Foreign workloads X1–X2](roadmap/05-foreign-workloads.md)
 - [Authority and trust A1–A5](roadmap/06-authority-trust.md)
+- [Architecture portability P0–P4](roadmap/07-architecture-portability.md)
+- [Native development D1–D7](roadmap/08-native-development.md)
 
-The active work is not one false total order: M5.7/H1 physical evidence, C7's bounded shared-sample plane, and H2's userspace driver authority ABI can proceed as separate lanes. Their results compose only at the release gates defined by the roadmap index.
+The active work is not one false total order: M5.7/H1 physical evidence, C8's typed data fabric, P0/P1 architecture boundaries, and D1's source workspace may proceed as separate lanes. D2 consumes P0, while later native-development build and live-update slices consume C9. Results compose only at the release gates defined by the roadmap index.
 
 ## Current repository layout
 

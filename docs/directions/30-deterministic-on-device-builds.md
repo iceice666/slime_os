@@ -2,11 +2,11 @@
 
 | | |
 | --- | --- |
-| Status | parked |
+| Status | promoted → [Native development D1–D7](../../roadmap/08-native-development.md) |
 | Route | determinism |
-| Depends on | [entry 3](03-nondeterminism-as-capabilities.md); M6 spawn, generation inspection/staging, and object-store paths (complete); M5.8 release authorization (complete) still governs locally built generations |
-| Enables | self-hosting: rebuilding the running system on-device, byte-identical to the host build |
-| Now | Mostly paper: normalized build-step semantics and content-addressed inputs are legal design work; execution waits on entry 3 and an on-device builder not delivered by M6. |
+| Depends on | M5/M6 generation, store, spawn, and update paths; P0 target/artifact identity; C9 lifecycle/resource authority |
+| Enables | in-system authoring, direct native-language image production, ephemeral execution, live component cutover, authorized local generations, and full-generation reproduction |
+| Now | Canonical bounded deliverables, checks, sequencing, and exit conditions live in the native-development roadmap track. |
 
 ## Motivation
 

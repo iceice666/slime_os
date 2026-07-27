@@ -2,11 +2,11 @@
 
 | | |
 | --- | --- |
-| Status | parked |
+| Status | promoted → [Native development D3](../../roadmap/08-native-development.md) |
 | Route | determinism |
-| Depends on | capability-matrix rows for new object kinds; no milestone consumes it yet, so it is a matrix amendment proposal first |
-| Enables | [entry 11](11-flight-recorder-replay.md) (replay half), [entry 26](26-hermetic-testing.md), [entry 30](30-deterministic-on-device-builds.md) |
-| Now | The amendment proposal — object kinds, rights strings, the formal meaning of "deterministic component" — is a paper exercise legal today. Highest fan-out in the register: three parked entries consume it. |
+| Depends on | C9 explicit time/resource authority; D3 owns Entropy authority, deterministic-component sealing, and the build gate |
+| Enables | [entry 11](11-flight-recorder-replay.md) (replay half), [entry 26](26-hermetic-testing.md), and the D3/D7 reproducibility path |
+| Now | Retained design: the canonical bounded deliverables, checks, and exit condition are in Native development D3. |
 
 ## Motivation
 

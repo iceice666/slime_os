@@ -22,6 +22,7 @@ A profile name identifies a complete executable and platform contract, not only 
 - Trap frames, context switching, privilege transitions, page tables, TLB operations, interrupt controllers, timers, idle instructions, debug transports, QEMU exit paths, and early boot mappings are architecture-specific mechanisms.
 - The generation `target` remains the signed complete platform profile. Release metadata continues to bind the exact target.
 - Kernel and component executables are built and authenticated per target. Architecture-neutral resource objects may be shared when their schemas and identities are byte-identical; executable objects are never assumed portable across targets.
+- The component-image contract is producer-neutral. Static-ELF conversion and direct language backends must emit the same target-qualified image revision and pass the same validator; producer-specific metadata never enters the loader contract.
 - A logical syscall operation has one semantic contract, error model, bounds, and rights checks. Each architecture has an explicit calling convention and trap instruction; register layouts are not serialized as a cross-architecture ABI.
 - The implementation uses small explicit architecture modules. It does not introduce a broad trait framework merely to hide one call site, and it does not move device or scheduling policy into the kernel.
 - QEMU proves deterministic architecture behavior. It cannot establish a physical board, firmware, DMA, storage, timing, or device-support claim.
@@ -49,7 +50,7 @@ A profile name identifies a complete executable and platform contract, not only 
 - retain bounded decoding of existing x86 component and kernel images for the declared rollback window; old formats keep their existing meaning and are never reinterpreted as architecture-neutral;
 - validate generation target, release target, kernel image, bootstrap image, and every component executable as one compatible set before execution or activation;
 - define the three initial profile identifiers above and reject unknown architecture IDs, ABI IDs, required flags, page profiles, and target/image mismatches before mapping executable bytes;
-- parameterize host builders, ELF validation, linker inputs, Cargo targets, artifact paths, and QEMU launch selection by the exact profile; each builder accepts only the ELF machine and relocation subset declared by that profile;
+- parameterize host builders, ELF validation, direct image emitters, linker inputs, Cargo targets, artifact paths, and QEMU launch selection by the exact profile; ELF-based builders accept only the machine/relocation subset declared by that profile, and direct emitters bind the same architecture, ABI, ISA, and page-profile identity without a second executable format;
 - preserve content identity for byte-identical architecture-neutral resources while producing separately identified target executables and complete target generations;
 - define one semantic syscall table with per-architecture calling-convention documents for x86-64 `int 0x80`, AArch64 `svc`, and RV64 `ecall`;
 - audit the stage-0 handoff and generation contracts so physical addresses, direct-map metadata, framebuffer data, memory maps, and executable entry state remain versioned and sufficient without serializing x86 page-table or register layouts.
@@ -59,7 +60,7 @@ A profile name identifies a complete executable and platform contract, not only 
 - an image for one architecture or ABI cannot be staged, selected, or executed under another target even when its hashes and segment bounds are otherwise valid;
 - retained x86 generations continue to decode and boot during the rollback window, while unsupported legacy or future formats fail closed;
 - two builds of the same normalized target input are byte-identical, and changing only the target changes the authenticated generation and release identity;
-- builders reject the wrong ELF machine, unsupported relocation, page profile, endianness, required ISA flag, or target-specific load layout before emitting a Slime executable image;
+- builders reject the wrong ELF machine, unsupported relocation, page profile, endianness, required ISA flag, or target-specific load layout before emitting a Slime executable image; direct emitters run the same target/image rejection corpus and cannot bypass it by omitting ELF;
 - resource objects that are declared architecture-neutral remain byte-identical across target builds, while executable object selection is exact and unambiguous;
 - syscall numbers, errors, capability checks, message bounds, and transfer semantics are identical across calling-convention specifications.
 

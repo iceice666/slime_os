@@ -16,6 +16,7 @@ A milestone is complete only when its exit condition is observed. Compiled code,
 | [Platform hardware](04-platform-hardware.md) | H1 implementation complete; physical evidence pending | Record H1 topology/input/storage evidence; implement H2 driver authority ABI |
 | [Foreign workloads](05-foreign-workloads.md) | Not started | X1 Linux userspace personality |
 | [Authority and trust](06-authority-trust.md) | Not started | A1 revocation/leases and A2 secrets after their core dependencies |
+| [Native development](08-native-development.md) | Not started | Begin D1 in-system source workspace; D2 direct image emission follows P0 |
 
 The active work lanes are deliberately parallel:
 
@@ -23,6 +24,7 @@ The active work lanes are deliberately parallel:
 - **Core lane:** the C7 backlog is clear; C8.1 and C8.2 have landed, so C8.3 attenuated endpoint provisioning is the next open slice.
 - **Portability lane:** after the backlog gate, land P0/P1 before H2 or C9 establishes more low-level contracts; AArch64 P2 follows without blocking C8.
 - **Platform lane:** record H1 physical evidence, then implement H2 only after P1; H4 still gates DMA-capable Framework promotion.
+- **Development lane:** D1 source authoring can begin from completed M6; D2 waits for P0's producer-neutral artifact contract, and hermetic build/live activation consume C9.
 
 No lane may use progress in another lane to claim an unobserved exit condition.
 
@@ -61,6 +63,13 @@ flowchart TD
     A3["A3<br/>Accelerator authority"]
     A4["A4<br/>Physical trust"]
     A5["A5<br/>Distributed capabilities"]
+    D1["D1<br/>Source workspace"]
+    D2["D2<br/>Direct language image backend"]
+    D3["D3<br/>Hermetic build service"]
+    D4["D4<br/>Ephemeral admission and run"]
+    D5["D5<br/>Live component cutover"]
+    D6["D6<br/>On-device generation activation"]
+    D7["D7<br/>Full-generation reproduction"]
 
     Foundations --> P0 --> P1 --> P2 --> P3
     P2 --> P4
@@ -88,6 +97,18 @@ flowchart TD
     Foundations --> A4
     A1 --> A5
     H6 --> A5
+
+    Foundations --> D1
+    P0 --> D2
+    D1 --> D3
+    D2 --> D3
+    C9 --> D3
+    D3 --> D4
+    C9 --> D5
+    D4 --> D6
+    D5 --> D6
+    D6 --> D7
+    X1 --> D7
 ```
 
 ## Architecture and embedded boundary
@@ -144,6 +165,7 @@ Every track preserves these rules:
 10. Every executable generation names one exact admitted target profile; stage-0 rejects architecture, ABI, page-profile, and required-feature mismatches before mapping executable bytes.
 11. Architecture ports preserve the same capability, fault, wait/wake, resource-reclamation, generation, and rollback semantics. ISA-specific register frames and page tables are mechanisms, not portable contracts.
 12. MCU-class companions never gain ambient graph, network, storage, or actuator authority and do not weaken the kernel's MMU-backed isolation baseline.
+13. Source languages may emit native executable images only through the admitted target/image contract. Zutai remains the only serialized-schema language, and neither source nor compiler output may mint authority.
 
 ## Release gates
 
@@ -172,6 +194,14 @@ Requires H1–H14 and all physical evidence named in the hardware track. It is i
 ### Existing-workload release
 
 Requires X1 or X2 plus R3 for existing ROS workloads. The workload's complete filesystem, network, time, randomness, scheduling, and device authority must be generation-declared and visible to audit tooling.
+
+### Native development release
+
+Requires D1–D6 and their P0/P1, C8/C9, and M5/M6 dependencies. In one QEMU boot a user must create source, compile the pinned native language directly to the admitted component format, execute it ephemerally with selected capabilities, and keep malformed or unauthorized bytes inert. A release-authorized compatible userspace generation switches one service without reboot; every excluded diff follows the ordinary pending-boot path.
+
+### Reproducible on-device build release
+
+Requires the native development release and D7. A clean Slime build environment must reproduce the complete reference mixed-language generation byte-for-byte from the same normalized source/toolchain closure as the host, with bounded hermetic execution and detached provenance. The current Rust closure initially consumes X1 unless a native Rust toolchain independently passes the same contract.
 
 ### Distributed-authority release
 

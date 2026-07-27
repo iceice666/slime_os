@@ -38,7 +38,7 @@ Promoted entries collapse to a pointer row in the index below; the canonical
 | --- | --- | --- | --- |
 | 1 | [Authority diff as a build-pipeline gate](01-authority-diff-gate.md) | parked | authority |
 | 2 | [Revocable and time-bounded grants](02-revocable-leases.md) | promoted → [Authority A1](../../roadmap/06-authority-trust.md) (design retained) | lifecycle |
-| 3 | [Nondeterminism sources as capabilities](03-nondeterminism-as-capabilities.md) | parked | determinism |
+| 3 | Nondeterminism sources as capabilities | promoted → [Native development D3](../../roadmap/08-native-development.md) | determinism |
 | 4 | Generation-consistent state snapshots | promoted → M5.6b | — |
 | 5 | [TPM-bound boot state and attestation](05-tpm-bound-boot-state.md) | promoted → [Authority A4](../../roadmap/06-authority-trust.md) (design retained) | hardware; updates |
 | 6 | Formal model of BootState transitions | promoted → M5.6a | — |
@@ -58,14 +58,14 @@ Promoted entries collapse to a pointer row in the index below; the canonical
 | 20 | BootState model-implementation conformance | promoted → M5.6c | — |
 | 21 | Signed generation release metadata | promoted → M5.8 | — |
 | 22 | Recovery, scrub, and BootState reconstruction | promoted → M5.9 | — |
-| 23 | [Generation build-provenance attestations](23-build-provenance.md) | parked | updates |
+| 23 | Generation build-provenance attestations | promoted → [Native development D3/D7](../../roadmap/08-native-development.md) | updates |
 | 24 | [Checked model of the capability rights algebra](24-rights-algebra-model.md) | **probing** | authority |
 | 25 | [Resource accounts as capabilities](25-resource-accounts.md) | parked | lifecycle |
 | 26 | [Hermetic generation testing](26-hermetic-testing.md) | parked | determinism |
 | 27 | [Policy-carrying generations](27-policy-carrying-generations.md) | parked | authority |
 | 28 | [Accelerator compute objects](28-accelerator-objects.md) | promoted → [Authority A3](../../roadmap/06-authority-trust.md) (design retained) | hardware |
 | 29 | [Schema-declared state merge](29-schema-state-merge.md) | parked | sync |
-| 30 | [Deterministic on-device builds](30-deterministic-on-device-builds.md) | parked | determinism |
+| 30 | Deterministic on-device builds | promoted → [Native development D1–D7](../../roadmap/08-native-development.md) | determinism |
 | 31 | [Linux/container compatibility route](31-compat-personality.md) | promoted → [Foreign X1](../../roadmap/05-foreign-workloads.md) (design retained) | compat |
 | 32 | [Scheduling class and QoS authority](32-scheduling-authority.md) | promoted → [Core C9](../../roadmap/02-core-runtime.md) (design retained) | lifecycle |
 | 33 | [Secrets as capabilities](33-secrets-as-capabilities.md) | promoted → [Authority A2](../../roadmap/06-authority-trust.md) (design retained) | authority |

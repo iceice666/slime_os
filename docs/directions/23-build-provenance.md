@@ -2,11 +2,11 @@
 
 | | |
 | --- | --- |
-| Status | parked |
+| Status | promoted → [Native development D3/D7](../../roadmap/08-native-development.md) |
 | Route | updates |
-| Depends on | M5.5 deterministic generation output and M5.8 release authorization (complete); provenance remains detached and is not parsed by stage-0 |
-| Enables | rebuild verification, incident response, supply-chain audit for host-built generations |
-| Now | Paper and host-side implementation are legal today. M5.8 supplies release-signing identities and detached-metadata discipline; the provenance-specific builder identity and storage convention remain open. |
+| Depends on | M5.5 deterministic generation output and M5.8 release authorization (complete); D3 keeps provenance detached and D7 applies it to complete reproduction |
+| Enables | rebuild verification, incident response, and supply-chain audit for host- and Slime-built generations |
+| Now | Retained design: Native development D3 owns the schema/verifier boundary and D7 closes full-generation provenance. |
 
 ## Motivation
 
