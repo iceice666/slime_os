@@ -62,6 +62,13 @@ interface_schema_check: contracts_check generation_check
     python3 scripts/check/check-interface-schema.py
     cd components && cargo test --target x86_64-unknown-linux-gnu -p slime-proto --test interface_schema
 
+# C8.2: deterministic authenticated fabric-graph generation resource; exact
+# route/grant authority tuples, bounded QoS, interposition chains without
+# bypass, and per-entry plus aggregate admission before component launch.
+fabric_manifest_check: contracts_check generation_check
+    python3 scripts/check/check-fabric-manifest.py
+    cd kernel && cargo test --release -p slime_os-kernel --test fabric_manifest -- -display none
+
 # C7.6: versioned sample descriptor over the C7.5 loan lifecycle; byte-identical
 # binding round-trip, malformed-descriptor rejection before mapping, and a
 # payload larger than MAX_MSG carried over descriptor plus shared buffer.
@@ -229,6 +236,9 @@ sample_descriptor_gen:
 # Regenerate native interface-schema compiler constants and Rust bindings (C8.1).
 interface_schema_gen:
     python3 scripts/generate/generate-interface-schema-bindings.py
+
+# Regenerate the fabric-graph resource bindings (C8.2); part of the boot set.
+fabric_graph_gen: boot_gen
 
 # Regenerate kernel + component generation-management protocol bindings.
 generation_management_gen:

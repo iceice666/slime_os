@@ -45,6 +45,7 @@ INTERFACE_SCHEMA_CONTRACT = ROOT / "contracts" / "interface-schema" / "v1"
 INTERFACE_SCHEMA_BINDING_GENERATOR = (
     ROOT / "scripts" / "generate" / "generate-interface-schema-bindings.py"
 )
+FABRIC_GRAPH_CONTRACT = ROOT / "contracts" / "fabric-graph" / "v1"
 
 
 def run(*arguments: str) -> str:
@@ -155,6 +156,7 @@ for contract in (
     HANDOFF_CONTRACT,
     RELEASE_CONTRACT,
     SHARED_BUFFER_BUDGET_CONTRACT,
+    FABRIC_GRAPH_CONTRACT,
 ):
     run("check", str(contract / "schema.zt"))
     run("check", str(contract / "gen_rust.zt"))
@@ -178,5 +180,5 @@ subprocess.run(
 print(
     "Generation source/binary, kernel image, BootState, BootState trace, recovery, "
     "block, component, store, spawn, filesystem, powerbox, generation-management, "
-    "transfer, sample-descriptor, and interface-schema contracts passed"
+    "transfer, sample-descriptor, interface-schema, and fabric-graph contracts passed"
 )

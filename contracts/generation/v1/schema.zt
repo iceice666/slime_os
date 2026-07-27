@@ -44,6 +44,58 @@ StateBinding :: type {
   policy : Text;
 };
 
+-- One participant's exact role on one fabric route (C8.2). `interposition` is
+-- the ordered proxy chain, outermost first; an empty list is a direct edge.
+FabricParticipant :: type {
+  component : Text;
+  direction : Text;
+  visibility : Text;
+  interposition : List Text;
+  reliability : Text;
+  durability : Text;
+  liveliness : Text;
+  historyDepth : Int;
+  retainedDepth : Int;
+  deadlineNs : Int;
+  lifespanNs : Int;
+  leaseNs : Int;
+};
+
+FabricRoute :: type {
+  name : Text;
+  interface : Text;
+  participants : List FabricParticipant;
+};
+
+-- Every per-graph resource ceiling the fabric and its clients are admitted
+-- against. Nothing at runtime may raise them.
+FabricLimits :: type {
+  routes : Int;
+  ingressSources : Int;
+  publishers : Int;
+  subscribers : Int;
+  clients : Int;
+  servers : Int;
+  sampleBytes : Int;
+  queueDepth : Int;
+  historyDepth : Int;
+  eventDepth : Int;
+  retainedSamples : Int;
+  retries : Int;
+  inFlightCalls : Int;
+  inFlightOperations : Int;
+  bufferPages : Int;
+  mappings : Int;
+  loans : Int;
+  capabilitySlots : Int;
+};
+
+FabricGraph :: type {
+  fabricComponent : Text;
+  limits : FabricLimits;
+  routes : List FabricRoute;
+};
+
 HealthPolicy :: type {
   bootAttempts : Int;
   requiredComponents : List Text;
@@ -62,6 +114,9 @@ GenerationManifest :: type {
   grants : List CapabilityGrant;
   state : List StateBinding;
   health : HealthPolicy;
+  -- Optional C8.2 fabric graph. Absent means the generation declares no
+  -- native data fabric; no component then receives any route authority.
+  fabricGraph? : FabricGraph;
 };
 
 FromData @Object :: derive
@@ -69,6 +124,10 @@ FromData @Component :: derive
 FromData @CapabilityGrant :: derive
 FromData @StateBinding :: derive
 FromData @HealthPolicy :: derive
+FromData @FabricParticipant :: derive
+FromData @FabricRoute :: derive
+FromData @FabricLimits :: derive
+FromData @FabricGraph :: derive
 FromData @GenerationManifest :: derive
 
 decodeManifest :: Data -> Validation DecodeIssue GenerationManifest
@@ -80,6 +139,10 @@ decodeManifest :: Data -> Validation DecodeIssue GenerationManifest
   CapabilityGrant = CapabilityGrant;
   StateBinding = StateBinding;
   HealthPolicy = HealthPolicy;
+  FabricParticipant = FabricParticipant;
+  FabricRoute = FabricRoute;
+  FabricLimits = FabricLimits;
+  FabricGraph = FabricGraph;
   GenerationManifest = GenerationManifest;
   decodeManifest = decodeManifest;
 }

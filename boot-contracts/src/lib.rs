@@ -2,6 +2,7 @@
 
 pub mod bootstate;
 pub mod crc32;
+pub mod fabric_graph;
 pub mod generation;
 pub mod handoff;
 pub mod kernel_image;

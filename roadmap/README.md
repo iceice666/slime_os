@@ -10,7 +10,7 @@ A milestone is complete only when its exit condition is observed. Compiled code,
 | --- | --- | --- |
 | [Backlog](00-backlog.md) | No open items; B1–B8 resolved | Backlog gate is clear — the next track milestone may open |
 | [Foundations](01-foundations.md) | M1–M4 and M6 complete; M5 mechanisms complete | Record M5.7 removable-media Framework evidence without internal-NVMe modification |
-| [Core runtime](02-core-runtime.md) | C7 complete; all gates green, live boot declares per-holder budgets, and two real components drive the shared-buffer syscalls | Begin C8 native typed data fabric |
+| [Core runtime](02-core-runtime.md) | C7 complete; C8.1–C8.2 complete — one authenticated generation resource fixes every native interface, graph edge, QoS policy, visibility grant, interposition hop, and resource ceiling | Begin C8.3 attenuated endpoint provisioning and control plane |
 | [Architecture portability](07-architecture-portability.md) | Not started | Clear the active backlog, then land P0 target/artifact contracts before P1 x86 boundary extraction |
 | [ROS 2 compatibility](03-ros2-compatibility.md) | Not started | Admit R1 only after C8 and the H6 network-service contract exist |
 | [Platform hardware](04-platform-hardware.md) | H1 implementation complete; physical evidence pending | Record H1 topology/input/storage evidence; implement H2 driver authority ABI |
@@ -20,7 +20,7 @@ A milestone is complete only when its exit condition is observed. Compiled code,
 The active work lanes are deliberately parallel:
 
 - **Evidence lane:** close M5.7 and H1 with an observed removable-media Framework run.
-- **Core lane:** the C7 backlog is clear; C8 native typed data fabric is the next open slice.
+- **Core lane:** the C7 backlog is clear; C8.1 and C8.2 have landed, so C8.3 attenuated endpoint provisioning is the next open slice.
 - **Portability lane:** after the backlog gate, land P0/P1 before H2 or C9 establishes more low-level contracts; AArch64 P2 follows without blocking C8.
 - **Platform lane:** record H1 physical evidence, then implement H2 only after P1; H4 still gates DMA-capable Framework promotion.
 

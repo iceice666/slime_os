@@ -239,8 +239,11 @@ Two isolated components exchange and return a payload larger than the kernel IPC
 
 ## C8: Native typed data fabric
 
-**Status:** Not started. Decomposed into C8.1–C8.9; the numbered slices are
-planned contracts and gates, not implemented capability.
+**Status:** In progress. Decomposed into C8.1–C8.9. C8.1 (deterministic
+interface schemas and native bindings) and C8.2 (authenticated fabric-graph
+resource with per-entry and aggregate admission) are complete and gated by
+`just interface_schema_check` and `just fabric_manifest_check`. C8.3–C8.9
+remain planned contracts and gates, not implemented capability.
 
 **Depends on:** C7's bounded sample plane and backlog item **B2** (scheduler
 `Blocked` state / `SYS_WAIT` wait-set). Both are complete. C8 remains
@@ -333,7 +336,26 @@ layouts cannot reuse an admitted identity or tag.
 
 ### C8.2 — Generation graph, QoS, and aggregate admission
 
-**Status:** Not started.
+**Status:** Complete. A versioned Zutai fabric-graph contract
+(`contracts/fabric-graph/v1/`) is stored as a generation `KIND_RESOURCE`
+object, authenticated through the generation's existing per-object digest
+table. It fixes the admitted schema set (full C8.1 identities, collision-checked
+generation-local tags, contract kinds, encoded bounds), the route table, the
+participant table with exact `TransportQoS`, visibility, and interposition
+chains, and every per-graph resource ceiling. Route authority is the fold of
+(route name, full interface identity, contract kind); participant authority
+additionally folds in component identity and direction, so a name, a type, or
+a graph observation grants nothing. A present graph is validated
+deterministically at generation decode against the kernel's own
+`MAX_WAIT_SOURCES`/`MAX_CAPS`/`MAX_TOTAL_PAGES`/`MAX_MAPPINGS`/`MAX_LOANS`/
+`MAX_MSG` before any component launches, and the host builder enforces the same
+rule set so a malformed graph fails the build rather than the boot; the
+contract's copies of the kernel bounds are pinned by `const _: () = assert!` in
+`kernel/src/runtime/generation.rs`. `just fabric_manifest_check` passes: a
+deterministic 896-byte resource with 2 schemas, 2 routes, 4 participants, and
+one interposition hop, a 35-case negative corpus each rejected by its intended
+check, 18 `boot-contracts` decoder tests, and 4 QEMU tests against the booted
+generation.
 
 **Depends on:** C8.1.
 

@@ -39,6 +39,50 @@ from boot_contracts import (
     BOOTSTORE_HEADER,
     BOOTSTORE_MAGIC,
     BOOTSTORE_VERSION,
+    FABRIC_COMPONENT_DOMAIN,
+    FABRIC_CONTRACT_KIND_CALL,
+    FABRIC_CONTRACT_KIND_OPERATION,
+    FABRIC_CONTRACT_KIND_STREAM,
+    FABRIC_DIRECTION_CLIENT,
+    FABRIC_DIRECTION_PUBLISH,
+    FABRIC_DIRECTION_SERVER,
+    FABRIC_DIRECTION_SUBSCRIBE,
+    FABRIC_DURABILITY_RETAINED,
+    FABRIC_DURABILITY_VOLATILE,
+    FABRIC_GRANT_DOMAIN,
+    FABRIC_GRAPH_CONTROL_MESSAGE_BYTES,
+    FABRIC_GRAPH_HEADER,
+    FABRIC_GRAPH_HEADER_BYTES,
+    FABRIC_GRAPH_INTERPOSITION_ENTRY,
+    FABRIC_GRAPH_INTERPOSITION_NONE,
+    FABRIC_GRAPH_KERNEL_LOANS,
+    FABRIC_GRAPH_KERNEL_MAPPINGS,
+    FABRIC_GRAPH_KERNEL_TOTAL_PAGES,
+    FABRIC_GRAPH_LIMIT_CAPABILITY_SLOTS,
+    FABRIC_GRAPH_LIMIT_EVENT_DEPTH,
+    FABRIC_GRAPH_LIMIT_HISTORY_DEPTH,
+    FABRIC_GRAPH_LIMIT_IN_FLIGHT,
+    FABRIC_GRAPH_LIMIT_QUEUE_DEPTH,
+    FABRIC_GRAPH_LIMIT_RETAINED_SAMPLES,
+    FABRIC_GRAPH_LIMIT_RETRIES,
+    FABRIC_GRAPH_LIMIT_SAMPLE_BYTES,
+    FABRIC_GRAPH_MAGIC,
+    FABRIC_GRAPH_PARTICIPANT_ENTRY,
+    FABRIC_GRAPH_ROUTE_ENTRY,
+    FABRIC_GRAPH_SCHEMA_ENTRY,
+    FABRIC_GRAPH_VERSION,
+    FABRIC_LIVELINESS_AUTOMATIC,
+    FABRIC_LIVELINESS_MANUAL,
+    FABRIC_RELIABILITY_BEST_EFFORT,
+    FABRIC_RELIABILITY_RELIABLE,
+    FABRIC_ROUTE_DOMAIN,
+    FABRIC_VISIBILITY_GRAPH,
+    FABRIC_VISIBILITY_PRIVATE,
+    MAX_FABRIC_GRAPH_INGRESS_SOURCES,
+    MAX_FABRIC_GRAPH_INTERPOSITION_HOPS,
+    MAX_FABRIC_GRAPH_PARTICIPANTS,
+    MAX_FABRIC_GRAPH_ROUTES,
+    MAX_FABRIC_GRAPH_SCHEMAS,
     GENERATION_COMPONENT,
     GENERATION_DEPENDENCY,
     GENERATION_GRANT,
@@ -189,6 +233,9 @@ def recovery_manifest(manifest: dict) -> dict:
         {"name": "recovery-target", "source": "init", "target": "recovery", "rights": ["blockRead", "blockWrite"], "transferable": False},
     ]
     recovery["state"] = []
+    # Recovery boots two components with no data fabric; leaving the graph in
+    # would declare route authority for components that do not exist there.
+    recovery.pop("fabricGraph", None)
     recovery["health"] = {"bootAttempts": 1, "requiredComponents": ["init", "recovery"]}
     return recovery
 
@@ -243,6 +290,377 @@ def build_shared_buffer_budget(holders: list[dict]) -> bytes:
         total_len,
     )
     return header + b"".join(SHARED_BUFFER_BUDGET_ENTRY.pack(*entry) for entry in entries)
+
+
+FABRIC_CONTRACT_KIND = {
+    "stream": FABRIC_CONTRACT_KIND_STREAM,
+    "call": FABRIC_CONTRACT_KIND_CALL,
+    "operation": FABRIC_CONTRACT_KIND_OPERATION,
+}
+FABRIC_DIRECTION = {
+    "publish": FABRIC_DIRECTION_PUBLISH,
+    "subscribe": FABRIC_DIRECTION_SUBSCRIBE,
+    "client": FABRIC_DIRECTION_CLIENT,
+    "server": FABRIC_DIRECTION_SERVER,
+}
+FABRIC_VISIBILITY = {
+    "private": FABRIC_VISIBILITY_PRIVATE,
+    "graph": FABRIC_VISIBILITY_GRAPH,
+}
+FABRIC_RELIABILITY = {
+    "bestEffort": FABRIC_RELIABILITY_BEST_EFFORT,
+    "reliable": FABRIC_RELIABILITY_RELIABLE,
+}
+FABRIC_DURABILITY = {
+    "volatile": FABRIC_DURABILITY_VOLATILE,
+    "retained": FABRIC_DURABILITY_RETAINED,
+}
+FABRIC_LIVELINESS = {
+    "automatic": FABRIC_LIVELINESS_AUTOMATIC,
+    "manual": FABRIC_LIVELINESS_MANUAL,
+}
+# Which directions each contract kind admits. Mixing them is a malformed
+# graph, not a policy choice, and the decoder rejects it too.
+FABRIC_KIND_DIRECTIONS = {
+    FABRIC_CONTRACT_KIND_STREAM: {FABRIC_DIRECTION_PUBLISH, FABRIC_DIRECTION_SUBSCRIBE},
+    FABRIC_CONTRACT_KIND_CALL: {FABRIC_DIRECTION_CLIENT, FABRIC_DIRECTION_SERVER},
+    FABRIC_CONTRACT_KIND_OPERATION: {FABRIC_DIRECTION_CLIENT, FABRIC_DIRECTION_SERVER},
+}
+# Order matches the header layout after `fabric_component_identity`.
+FABRIC_LIMIT_KEYS = (
+    "routes",
+    "ingressSources",
+    "publishers",
+    "subscribers",
+    "clients",
+    "servers",
+    "sampleBytes",
+    "queueDepth",
+    "historyDepth",
+    "eventDepth",
+    "retainedSamples",
+    "retries",
+    "inFlightCalls",
+    "inFlightOperations",
+    "bufferPages",
+    "mappings",
+    "loans",
+    "capabilitySlots",
+)
+# Structural ceiling for each declared limit, mirroring what the decoder
+# enforces in `validate_declared_limits` and `validate_against`. The page,
+# mapping, and loan ceilings are the kernel's own table sizes, pinned in the
+# contract and asserted against the kernel at compile time, so the builder can
+# reject an over-declared budget here instead of emitting a graph the kernel
+# refuses at boot.
+FABRIC_LIMIT_CEILINGS = {
+    "routes": MAX_FABRIC_GRAPH_ROUTES,
+    "ingressSources": MAX_FABRIC_GRAPH_INGRESS_SOURCES,
+    "publishers": MAX_FABRIC_GRAPH_PARTICIPANTS,
+    "subscribers": MAX_FABRIC_GRAPH_PARTICIPANTS,
+    "clients": MAX_FABRIC_GRAPH_PARTICIPANTS,
+    "servers": MAX_FABRIC_GRAPH_PARTICIPANTS,
+    "sampleBytes": FABRIC_GRAPH_LIMIT_SAMPLE_BYTES,
+    "queueDepth": FABRIC_GRAPH_LIMIT_QUEUE_DEPTH,
+    "historyDepth": FABRIC_GRAPH_LIMIT_HISTORY_DEPTH,
+    "eventDepth": FABRIC_GRAPH_LIMIT_EVENT_DEPTH,
+    "retainedSamples": FABRIC_GRAPH_LIMIT_RETAINED_SAMPLES,
+    "retries": FABRIC_GRAPH_LIMIT_RETRIES,
+    "inFlightCalls": FABRIC_GRAPH_LIMIT_IN_FLIGHT,
+    "inFlightOperations": FABRIC_GRAPH_LIMIT_IN_FLIGHT,
+    "capabilitySlots": FABRIC_GRAPH_LIMIT_CAPABILITY_SLOTS,
+    "bufferPages": FABRIC_GRAPH_KERNEL_TOTAL_PAGES,
+    "mappings": FABRIC_GRAPH_KERNEL_MAPPINGS,
+    "loans": FABRIC_GRAPH_KERNEL_LOANS,
+}
+
+
+def validate_fabric_qos(member: dict, limits: dict, label: str) -> None:
+    """Apply the same QoS truth table `fabric_graph::validate_qos` enforces.
+
+    Duplicated deliberately: the decoder owns the rule for anything that
+    reaches a boot, but a producing side that does not check it emits an
+    artifact the kernel refuses, turning a manifest error into a boot panic.
+    """
+    scalars = ("historyDepth", "retainedDepth", "deadlineNs", "lifespanNs", "leaseNs")
+    for key in scalars:
+        value = member[key]
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            fail(f"fabric graph: {label} has an invalid {key}")
+    history = member["historyDepth"]
+    retained = member["retainedDepth"]
+    deadline = member["deadlineNs"]
+    lifespan = member["lifespanNs"]
+    lease = member["leaseNs"]
+    if history > 0xFFFFFFFF or retained > 0xFFFFFFFF:
+        fail(f"fabric graph: {label} depth exceeds the wire width")
+    for key, value in (("deadlineNs", deadline), ("lifespanNs", lifespan), ("leaseNs", lease)):
+        if value > 0xFFFFFFFFFFFFFFFF:
+            fail(f"fabric graph: {label} has an out-of-range {key}")
+    # KEEP_LAST is the only history policy this version defines, so the depth
+    # is always finite and at least one; "keep all" would be unbounded.
+    if history == 0 or history > limits["historyDepth"]:
+        fail(f"fabric graph: {label} declares an out-of-range history depth")
+    # Retained depth and durability are one fact stated twice.
+    if (member["durability"] == "retained") == (retained == 0):
+        fail(f"fabric graph: {label} durability and retained depth disagree")
+    if retained > limits["retainedSamples"]:
+        fail(f"fabric graph: {label} exceeds the declared retained-sample bound")
+    # A lifespan shorter than the deadline expires every sample before its
+    # deadline can be met.
+    if deadline != 0 and lifespan != 0 and lifespan < deadline:
+        fail(f"fabric graph: {label} lifespan is shorter than its deadline")
+    # MANUAL liveliness needs a lease to assert against; AUTOMATIC must not
+    # carry one.
+    if (member["liveliness"] == "manual") == (lease == 0):
+        fail(f"fabric graph: {label} liveliness and lease disagree")
+
+
+def fabric_component_identity(name: str) -> bytes:
+    """Stable component identity, matching `boot_contracts::fabric_graph`.
+
+    Deliberately a different domain from `holder_identity`: shared-buffer
+    quota authority and fabric route authority are separate domains, so one
+    identity may never be replayed into the other.
+    """
+    encoded = name.encode("utf-8")
+    return sha256(
+        FABRIC_COMPONENT_DOMAIN + struct.pack("<H", len(encoded)) + encoded
+    )
+
+
+def fabric_route_identity(name: str, interface_identity: bytes, contract_kind: int) -> bytes:
+    encoded = name.encode("utf-8")
+    return sha256(
+        FABRIC_ROUTE_DOMAIN
+        + struct.pack("<H", len(encoded))
+        + encoded
+        + interface_identity
+        + struct.pack("<I", contract_kind)
+    )
+
+
+def fabric_grant_identity(route_identity: bytes, component: bytes, direction: int) -> bytes:
+    return sha256(
+        FABRIC_GRANT_DOMAIN + route_identity + component + struct.pack("<I", direction)
+    )
+
+
+def build_fabric_graph(graph: dict, component_names: set[str], interfaces: list) -> bytes:
+    """Encode the C8.2 fabric-graph resource object.
+
+    Route, schema, and participant tables are sorted by identity and must be
+    unique: the decoder rejects an unsorted or duplicated table, so the sort
+    here is part of the format. A component absent from the participant table
+    holds no route authority at all — omission is meaningful, not a default.
+    """
+    by_name = {interface.name: interface for interface in interfaces}
+    fabric = graph["fabricComponent"]
+    if fabric not in component_names:
+        fail(f"fabric graph: unknown fabric component {fabric}")
+
+    # Every declared limit is checked against the contract's own structural
+    # ceiling here, mirroring `FabricGraph::validate_declared_limits`. Without
+    # this the builder would emit a graph the kernel decoder rejects, so an
+    # over-declared limit would surface as a boot panic instead of a build
+    # failure — green build, unbootable image.
+    limits = graph["limits"]
+    limit_values = []
+    for key in FABRIC_LIMIT_KEYS:
+        value = limits[key]
+        if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= 0xFFFFFFFF:
+            fail(f"fabric graph: invalid limit {key}")
+        ceiling = FABRIC_LIMIT_CEILINGS.get(key)
+        if ceiling is not None and value > ceiling:
+            fail(f"fabric graph: limit {key} exceeds the contract ceiling {ceiling}")
+        limit_values.append(value)
+
+    routes = graph["routes"]
+    if len(routes) > MAX_FABRIC_GRAPH_ROUTES:
+        fail("fabric graph exceeds route bound")
+
+    # Only interfaces a route actually names are admitted into the resource:
+    # the schema table is the graph's own closure, not the whole catalog.
+    used: dict[str, object] = {}
+    route_rows: list[tuple[bytes, str, int]] = []
+    for route in routes:
+        interface_name = route["interface"]
+        interface = by_name.get(interface_name)
+        if interface is None:
+            fail(f"fabric graph: route {route['name']} names unknown interface {interface_name}")
+        contract_kind = FABRIC_CONTRACT_KIND.get(interface.kind)
+        if contract_kind is None:
+            fail(f"fabric graph: unsupported contract kind {interface.kind}")
+        used[interface_name] = interface
+        route_rows.append(
+            (
+                fabric_route_identity(route["name"], interface.identity, contract_kind),
+                interface_name,
+                contract_kind,
+            )
+        )
+
+    schemas = sorted(used.values(), key=lambda item: item.identity)
+    if len(schemas) > MAX_FABRIC_GRAPH_SCHEMAS:
+        fail("fabric graph exceeds schema bound")
+    schema_index = {interface.name: index for index, interface in enumerate(schemas)}
+
+    ordered = sorted(zip(route_rows, routes), key=lambda pair: pair[0][0])
+    if len({row[0] for row, _ in ordered}) != len(ordered):
+        fail("fabric graph: duplicate route identity")
+    # A graph admitting more routes than it budgets is over-committed at rest,
+    # before a single participant launches.
+    if len(ordered) > limits["routes"]:
+        fail("fabric graph admits more routes than it budgets")
+
+    # Hops are emitted per participant so each chain owns its own slots; the
+    # decoder walks `next_hop` and rejects a revisit or a self-hop.
+    hops: list[tuple[bytes, int]] = []
+    participants: list[tuple] = []
+    per_direction = {name: 0 for name in FABRIC_DIRECTION}
+    route_records = bytearray()
+    for route_index, (row, route) in enumerate(ordered):
+        route_identity, interface_name, contract_kind = row
+        members = route["participants"]
+        if not members:
+            fail(f"fabric graph: route {route['name']} has no participants")
+        for member in members:
+            component = member["component"]
+            if component not in component_names:
+                fail(f"fabric graph: unknown participant component {component}")
+            direction = FABRIC_DIRECTION.get(member["direction"])
+            visibility = FABRIC_VISIBILITY.get(member["visibility"])
+            reliability = FABRIC_RELIABILITY.get(member["reliability"])
+            durability = FABRIC_DURABILITY.get(member["durability"])
+            liveliness = FABRIC_LIVELINESS.get(member["liveliness"])
+            if None in (direction, visibility, reliability, durability, liveliness):
+                fail(f"fabric graph: unsupported policy for {component} on {route['name']}")
+            if direction not in FABRIC_KIND_DIRECTIONS[contract_kind]:
+                fail(
+                    f"fabric graph: {member['direction']} is not a "
+                    f"{interface_name} direction on {route['name']}"
+                )
+            validate_fabric_qos(member, limits, f"{component} on {route['name']}")
+            per_direction[member["direction"]] += 1
+            head = FABRIC_GRAPH_INTERPOSITION_NONE
+            chain = member["interposition"]
+            if chain:
+                if len(hops) + len(chain) > MAX_FABRIC_GRAPH_INTERPOSITION_HOPS:
+                    fail("fabric graph exceeds interposition hop bound")
+                if len(set(chain)) != len(chain):
+                    fail(f"fabric graph: repeated interposition hop on {route['name']}")
+                if component in chain:
+                    fail(f"fabric graph: {component} interposes on itself")
+                head = len(hops)
+                for offset, hop in enumerate(chain):
+                    if hop not in component_names:
+                        fail(f"fabric graph: unknown interposition component {hop}")
+                    last = offset == len(chain) - 1
+                    hops.append(
+                        (
+                            fabric_component_identity(hop),
+                            FABRIC_GRAPH_INTERPOSITION_NONE if last else head + offset + 1,
+                        )
+                    )
+            identity = fabric_component_identity(component)
+            participants.append(
+                (
+                    fabric_grant_identity(route_identity, identity, direction),
+                    identity,
+                    route_index,
+                    direction,
+                    visibility,
+                    head,
+                    member["deadlineNs"],
+                    member["lifespanNs"],
+                    member["leaseNs"],
+                    member["historyDepth"],
+                    member["retainedDepth"],
+                    reliability,
+                    durability,
+                    liveliness,
+                    0,
+                )
+            )
+        route_records += FABRIC_GRAPH_ROUTE_ENTRY.pack(
+            route_identity, schema_index[interface_name], contract_kind, len(members), 0
+        )
+
+    if len(participants) > MAX_FABRIC_GRAPH_PARTICIPANTS:
+        fail("fabric graph exceeds participant bound")
+    participants.sort(key=lambda entry: entry[0])
+    if len({entry[0] for entry in participants}) != len(participants):
+        fail("fabric graph: duplicate participant grant")
+
+    # Aggregate demand: every declared participant live at once must fit the
+    # limits the graph itself declares, so a validating graph is one the fabric
+    # can honour in full rather than first-come-first-served. Mirrors
+    # `FabricGraph::validate_against`.
+    for name, budget in (
+        ("publish", "publishers"),
+        ("subscribe", "subscribers"),
+        ("client", "clients"),
+        ("server", "servers"),
+    ):
+        if per_direction[name] > limits[budget]:
+            fail(f"fabric graph declares more {name} edges than its {budget} budget")
+    # Every edge delivering into the fabric is a live wake source it must
+    # register; a graph it cannot block on would have to poll.
+    ingress = per_direction["publish"] + per_direction["client"]
+    if ingress > limits["ingressSources"]:
+        fail("fabric graph declares more live ingress sources than it budgets")
+    # The fabric owes one receiver-bound downstream loan, and one mapping for
+    # it, per matched subscriber.
+    if limits["subscribers"] > limits["loans"] or limits["subscribers"] > limits["mappings"]:
+        fail("fabric graph budgets fewer loans or mappings than subscribers")
+    # A sample larger than the control-message bound must travel as a C7
+    # shared-buffer loan, so the page budget has to be able to hold one.
+    if limits["sampleBytes"] > FABRIC_GRAPH_CONTROL_MESSAGE_BYTES and limits["bufferPages"] == 0:
+        fail("fabric graph admits >MAX_MSG samples with no page budget")
+    for interface in schemas:
+        if interface.max_encoded_bytes > limits["sampleBytes"]:
+            fail(
+                f"fabric graph: {interface.name} encodes larger than the declared sample bound"
+            )
+
+    schema_records = b"".join(
+        FABRIC_GRAPH_SCHEMA_ENTRY.pack(
+            interface.identity,
+            interface.type_tag,
+            FABRIC_CONTRACT_KIND[interface.kind],
+            interface.max_encoded_bytes,
+        )
+        for interface in schemas
+    )
+    participant_records = b"".join(
+        FABRIC_GRAPH_PARTICIPANT_ENTRY.pack(*entry) for entry in participants
+    )
+    hop_records = b"".join(
+        FABRIC_GRAPH_INTERPOSITION_ENTRY.pack(identity, next_hop, 0)
+        for identity, next_hop in hops
+    )
+    total_len = (
+        FABRIC_GRAPH_HEADER_BYTES
+        + len(schema_records)
+        + len(route_records)
+        + len(participant_records)
+        + len(hop_records)
+    )
+    header = FABRIC_GRAPH_HEADER.pack(
+        FABRIC_GRAPH_MAGIC,
+        FABRIC_GRAPH_VERSION,
+        FABRIC_GRAPH_HEADER_BYTES,
+        0,
+        total_len,
+        len(schemas),
+        len(ordered),
+        len(participants),
+        len(hops),
+        0,
+        fabric_component_identity(fabric),
+        *limit_values,
+    )
+    return header + schema_records + route_records + participant_records + hop_records
 
 
 def build_recovery_index(
@@ -464,12 +882,19 @@ def kernel_image(path: Path) -> bytes:
     return header + records + relocation_records + payload
 
 
-def validate_interface_schemas(entries: object) -> None:
+def validate_interface_schemas(entries: object) -> list:
+    """Admit the manifest's declared interface set and return it compiled.
+
+    The C8.2 fabric graph is built from these exact admitted interfaces, so a
+    route can only ever name a schema that already passed C8.1 normalization,
+    identity, tag-collision, and bounds admission.
+    """
     try:
         paths = resolve_interface_paths(entries)
-        admit_interfaces(paths)
+        return admit_interfaces(paths)
     except InterfaceSchemaError as error:
         fail(str(error))
+        raise
 
 
 def unique_sorted(items: list[dict], key: str, label: str) -> list[dict]:
@@ -736,7 +1161,7 @@ def main() -> None:
     output = Path(sys.argv[2]).resolve()
     manifest = load_manifest()
     if manifest["formatVersion"] != 1: fail("unsupported source formatVersion")
-    validate_interface_schemas(manifest["interfaceSchemas"])
+    interfaces = validate_interface_schemas(manifest["interfaceSchemas"])
     output.mkdir(parents=True, exist_ok=True)
     policy_number = int(os.environ.get("SLIME_GENERATION_NUMBER") or manifest["generation"])
     # Generation 1 is the known-good baseline: its components must carry their own
@@ -754,6 +1179,17 @@ def main() -> None:
         payloads["shared-buffer-budget"] = build_shared_buffer_budget(
             manifest.get("sharedBufferBudget", [])
         )
+    if "fabric-graph" in object_by_id:
+        graph = manifest.get("fabricGraph")
+        if graph is None:
+            fail("fabric-graph object declared without a fabricGraph manifest section")
+        payloads["fabric-graph"] = build_fabric_graph(
+            graph,
+            {component["name"] for component in manifest["components"]},
+            interfaces,
+        )
+    elif manifest.get("fabricGraph") is not None:
+        fail("fabricGraph declared without a fabric-graph resource object")
     for component in manifest["components"]:
         stack = component.get("stackBytes", DEFAULT_STACK_BYTES)
         if not isinstance(stack, int) or stack <= 0 or stack % PAGE_SIZE or stack > MAX_STACK_BYTES:

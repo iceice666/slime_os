@@ -36,6 +36,7 @@
     { id = "sha256:sample-lender"; kind = "component"; size = 65536; };
     { id = "sha256:sample-receiver"; kind = "component"; size = 65536; };
     { id = "shared-buffer-budget"; kind = "resource"; size = 4096; };
+    { id = "fabric-graph"; kind = "resource"; size = 4096; };
   ];
 
   sharedBufferBudget = [
@@ -44,6 +45,100 @@
     { holder = "sample-lender"; bytePages = 4; bufferCount = 1; mappingCount = 2; loanCount = 1; };
     { holder = "sample-receiver"; bytePages = 2; bufferCount = 1; mappingCount = 2; loanCount = 1; };
   ];
+
+  fabricGraph = {
+    fabricComponent = "init";
+    limits = {
+      routes = 8;
+      ingressSources = 4;
+      publishers = 2;
+      subscribers = 2;
+      clients = 2;
+      servers = 2;
+      sampleBytes = 65536;
+      queueDepth = 8;
+      historyDepth = 8;
+      eventDepth = 8;
+      retainedSamples = 4;
+      retries = 4;
+      inFlightCalls = 4;
+      inFlightOperations = 4;
+      bufferPages = 8;
+      mappings = 8;
+      loans = 8;
+      capabilitySlots = 16;
+    };
+    routes = [
+      {
+        name = "telemetry";
+        interface = "TelemetryStream";
+        participants = [
+          {
+            component = "sample-lender";
+            direction = "publish";
+            visibility = "graph";
+            interposition = [];
+            reliability = "reliable";
+            durability = "retained";
+            liveliness = "automatic";
+            historyDepth = 4;
+            retainedDepth = 2;
+            deadlineNs = 0;
+            lifespanNs = 0;
+            leaseNs = 0;
+          };
+          {
+            component = "sample-receiver";
+            direction = "subscribe";
+            visibility = "graph";
+            interposition = [];
+            reliability = "reliable";
+            durability = "volatile";
+            liveliness = "automatic";
+            historyDepth = 2;
+            retainedDepth = 0;
+            deadlineNs = 0;
+            lifespanNs = 0;
+            leaseNs = 0;
+          };
+        ];
+      };
+      {
+        name = "parameters";
+        interface = "ParameterCall";
+        participants = [
+          {
+            component = "dango";
+            direction = "client";
+            visibility = "private";
+            interposition = ["echo-agent";];
+            reliability = "reliable";
+            durability = "volatile";
+            liveliness = "automatic";
+            historyDepth = 1;
+            retainedDepth = 0;
+            deadlineNs = 0;
+            lifespanNs = 0;
+            leaseNs = 0;
+          };
+          {
+            component = "sysinfo";
+            direction = "server";
+            visibility = "private";
+            interposition = [];
+            reliability = "reliable";
+            durability = "volatile";
+            liveliness = "manual";
+            historyDepth = 1;
+            retainedDepth = 0;
+            deadlineNs = 1000000;
+            lifespanNs = 2000000;
+            leaseNs = 5000000;
+          };
+        ];
+      };
+    ];
+  };
 
   components = [
     {

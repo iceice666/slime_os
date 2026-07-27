@@ -136,3 +136,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-07-27 | [Devlog format contract, uniform layout, and enforcement gate](2026-07-27-devlog-format-and-gate/index.md) | Change | Verified | none |
 | 2026-07-27 | [C8 — Native typed data fabric decomposition](2026-07-27-c8-sub-milestones/index.md) | Decision | Proposed | C8 |
 | 2026-07-27 | [C8.1 — Deterministic interface schemas and native bindings](2026-07-27-c8-1-interface-schemas/index.md) | Change | Verified | C8.1 |
+| 2026-07-27 | [C8.2 — Generation graph, QoS, and aggregate admission](2026-07-27-c8-2-fabric-graph-admission/index.md) | Change | Verified | C8.2 |

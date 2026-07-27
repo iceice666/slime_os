@@ -37,6 +37,11 @@ GENERATORS = (
         "shared_buffer_budget.py",
         "shared_buffer_budget.rs",
     ),
+    (
+        ROOT / "contracts" / "fabric-graph" / "v1" / "schema.zt",
+        "fabric_graph.py",
+        "fabric_graph.rs",
+    ),
 )
 INVALID_SCHEMA = "INVALID_"
 HEADER = """# @generated from boot contract schemas; do not edit.

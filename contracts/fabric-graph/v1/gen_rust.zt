@@ -1,0 +1,178 @@
+-- Schema-reflected Python + Rust renderer for fabric-graph/v1.
+-- Shared struct.Struct mechanics live in the `wire.python` package module;
+-- shared Rust scalar-const mechanics live in `wire.rust`.
+
+refl ::= import stdlib.reflect;
+n ::= import stdlib.num;
+w ::= import wire.python;
+r ::= import wire.rust;
+t ::= import stdlib.text;
+
+Format :: type {
+  formatVersion : Int;
+  headerBytes : Int;
+  schemaEntryBytes : Int;
+  routeEntryBytes : Int;
+  participantEntryBytes : Int;
+  interpositionEntryBytes : Int;
+  maxSchemas : Int;
+  maxRoutes : Int;
+  maxParticipants : Int;
+  maxInterpositionHops : Int;
+  maxIngressSources : Int;
+  limitSampleBytes : Int;
+  limitQueueDepth : Int;
+  limitHistoryDepth : Int;
+  limitEventDepth : Int;
+  limitRetainedSamples : Int;
+  limitRetries : Int;
+  limitInFlight : Int;
+  limitCapabilitySlots : Int;
+  controlMessageBytes : Int;
+  kernelTotalPages : Int;
+  kernelMappings : Int;
+  kernelLoans : Int;
+  interpositionNone : Int;
+  contractKindStream : Int;
+  contractKindCall : Int;
+  contractKindOperation : Int;
+  directionPublish : Int;
+  directionSubscribe : Int;
+  directionClient : Int;
+  directionServer : Int;
+  visibilityPrivate : Int;
+  visibilityGraph : Int;
+  reliabilityBestEffort : Int;
+  reliabilityReliable : Int;
+  durabilityVolatile : Int;
+  durabilityRetained : Int;
+  livelinessAutomatic : Int;
+  livelinessManual : Int;
+  routeDomain : Text;
+  grantDomain : Text;
+  componentDomain : Text;
+  headerFields : List refl.SchemaField;
+  schemaEntryFields : List refl.SchemaField;
+  routeEntryFields : List refl.SchemaField;
+  participantEntryFields : List refl.SchemaField;
+  interpositionEntryFields : List refl.SchemaField;
+  headerLayout : List w.WireField;
+  schemaEntryLayout : List w.WireField;
+  routeEntryLayout : List w.WireField;
+  participantEntryLayout : List w.WireField;
+  interpositionEntryLayout : List w.WireField;
+};
+
+-- `participantEntryBytes` carries 12 bytes of trailing padding so the entry
+-- stays a power-of-two stride; every other record is exactly its field width.
+records :: Format -> List w.WireRecord = format => {
+  { pythonName = "FABRIC_GRAPH_HEADER"; constPrefix = "FABRIC_GRAPH_HEADER"; size = format.headerBytes; trailingPadding = 0; fields = format.headerFields; layout = format.headerLayout; };
+  { pythonName = "FABRIC_GRAPH_SCHEMA_ENTRY"; constPrefix = "FABRIC_GRAPH_SCHEMA_ENTRY"; size = format.schemaEntryBytes; trailingPadding = 0; fields = format.schemaEntryFields; layout = format.schemaEntryLayout; };
+  { pythonName = "FABRIC_GRAPH_ROUTE_ENTRY"; constPrefix = "FABRIC_GRAPH_ROUTE_ENTRY"; size = format.routeEntryBytes; trailingPadding = 0; fields = format.routeEntryFields; layout = format.routeEntryLayout; };
+  { pythonName = "FABRIC_GRAPH_PARTICIPANT_ENTRY"; constPrefix = "FABRIC_GRAPH_PARTICIPANT_ENTRY"; size = format.participantEntryBytes; trailingPadding = 12; fields = format.participantEntryFields; layout = format.participantEntryLayout; };
+  { pythonName = "FABRIC_GRAPH_INTERPOSITION_ENTRY"; constPrefix = "FABRIC_GRAPH_INTERPOSITION_ENTRY"; size = format.interpositionEntryBytes; trailingPadding = 0; fields = format.interpositionEntryFields; layout = format.interpositionEntryLayout; };
+};
+
+pythonBindings :: Format -> Text = format => w.join {
+  "FABRIC_GRAPH_MAGIC = b\"SLIMEFG\\0\"\n";
+  "FABRIC_GRAPH_VERSION = "; n.toText format.formatVersion; "\n";
+  "FABRIC_GRAPH_HEADER_BYTES = "; n.toText format.headerBytes; "\n";
+  "FABRIC_GRAPH_SCHEMA_ENTRY_BYTES = "; n.toText format.schemaEntryBytes; "\n";
+  "FABRIC_GRAPH_ROUTE_ENTRY_BYTES = "; n.toText format.routeEntryBytes; "\n";
+  "FABRIC_GRAPH_PARTICIPANT_ENTRY_BYTES = "; n.toText format.participantEntryBytes; "\n";
+  "FABRIC_GRAPH_INTERPOSITION_ENTRY_BYTES = "; n.toText format.interpositionEntryBytes; "\n";
+  "MAX_FABRIC_GRAPH_SCHEMAS = "; n.toText format.maxSchemas; "\n";
+  "MAX_FABRIC_GRAPH_ROUTES = "; n.toText format.maxRoutes; "\n";
+  "MAX_FABRIC_GRAPH_PARTICIPANTS = "; n.toText format.maxParticipants; "\n";
+  "MAX_FABRIC_GRAPH_INTERPOSITION_HOPS = "; n.toText format.maxInterpositionHops; "\n";
+  "MAX_FABRIC_GRAPH_INGRESS_SOURCES = "; n.toText format.maxIngressSources; "\n";
+  "FABRIC_GRAPH_LIMIT_SAMPLE_BYTES = "; n.toText format.limitSampleBytes; "\n";
+  "FABRIC_GRAPH_LIMIT_QUEUE_DEPTH = "; n.toText format.limitQueueDepth; "\n";
+  "FABRIC_GRAPH_LIMIT_HISTORY_DEPTH = "; n.toText format.limitHistoryDepth; "\n";
+  "FABRIC_GRAPH_LIMIT_EVENT_DEPTH = "; n.toText format.limitEventDepth; "\n";
+  "FABRIC_GRAPH_LIMIT_RETAINED_SAMPLES = "; n.toText format.limitRetainedSamples; "\n";
+  "FABRIC_GRAPH_LIMIT_RETRIES = "; n.toText format.limitRetries; "\n";
+  "FABRIC_GRAPH_LIMIT_IN_FLIGHT = "; n.toText format.limitInFlight; "\n";
+  "FABRIC_GRAPH_LIMIT_CAPABILITY_SLOTS = "; n.toText format.limitCapabilitySlots; "\n";
+  "FABRIC_GRAPH_CONTROL_MESSAGE_BYTES = "; n.toText format.controlMessageBytes; "\n";
+  "FABRIC_GRAPH_KERNEL_TOTAL_PAGES = "; n.toText format.kernelTotalPages; "\n";
+  "FABRIC_GRAPH_KERNEL_MAPPINGS = "; n.toText format.kernelMappings; "\n";
+  "FABRIC_GRAPH_KERNEL_LOANS = "; n.toText format.kernelLoans; "\n";
+  "FABRIC_GRAPH_INTERPOSITION_NONE = "; n.toText format.interpositionNone; "\n";
+  "FABRIC_CONTRACT_KIND_STREAM = "; n.toText format.contractKindStream; "\n";
+  "FABRIC_CONTRACT_KIND_CALL = "; n.toText format.contractKindCall; "\n";
+  "FABRIC_CONTRACT_KIND_OPERATION = "; n.toText format.contractKindOperation; "\n";
+  "FABRIC_DIRECTION_PUBLISH = "; n.toText format.directionPublish; "\n";
+  "FABRIC_DIRECTION_SUBSCRIBE = "; n.toText format.directionSubscribe; "\n";
+  "FABRIC_DIRECTION_CLIENT = "; n.toText format.directionClient; "\n";
+  "FABRIC_DIRECTION_SERVER = "; n.toText format.directionServer; "\n";
+  "FABRIC_VISIBILITY_PRIVATE = "; n.toText format.visibilityPrivate; "\n";
+  "FABRIC_VISIBILITY_GRAPH = "; n.toText format.visibilityGraph; "\n";
+  "FABRIC_RELIABILITY_BEST_EFFORT = "; n.toText format.reliabilityBestEffort; "\n";
+  "FABRIC_RELIABILITY_RELIABLE = "; n.toText format.reliabilityReliable; "\n";
+  "FABRIC_DURABILITY_VOLATILE = "; n.toText format.durabilityVolatile; "\n";
+  "FABRIC_DURABILITY_RETAINED = "; n.toText format.durabilityRetained; "\n";
+  "FABRIC_LIVELINESS_AUTOMATIC = "; n.toText format.livelinessAutomatic; "\n";
+  "FABRIC_LIVELINESS_MANUAL = "; n.toText format.livelinessManual; "\n";
+  "FABRIC_ROUTE_DOMAIN = "; t.show format.routeDomain; ".encode(\"utf-8\")\n";
+  "FABRIC_GRANT_DOMAIN = "; t.show format.grantDomain; ".encode(\"utf-8\")\n";
+  "FABRIC_COMPONENT_DOMAIN = "; t.show format.componentDomain; ".encode(\"utf-8\")\n";
+  w.renderRecords (records format);
+};
+
+-- Schema-owned scalars shared with boot-contracts/src/fabric_graph.rs. The
+-- magic tag, the identity domains, derived MAX_BYTES, and the decode/validate
+-- machinery stay hand-written in that module.
+rustBindings :: Format -> Text = format => r.join {
+  "// @generated by contracts/fabric-graph/v1/gen_rust.zt; do not edit.\n";
+  "// Source contract: contracts/fabric-graph/v1/schema.zt\n\n";
+  r.u32Const "FORMAT_VERSION" format.formatVersion;
+  r.usizeConst "HEADER_BYTES" format.headerBytes;
+  r.usizeConst "SCHEMA_ENTRY_BYTES" format.schemaEntryBytes;
+  r.usizeConst "ROUTE_ENTRY_BYTES" format.routeEntryBytes;
+  r.usizeConst "PARTICIPANT_ENTRY_BYTES" format.participantEntryBytes;
+  r.usizeConst "INTERPOSITION_ENTRY_BYTES" format.interpositionEntryBytes;
+  r.usizeConst "MAX_SCHEMAS" format.maxSchemas;
+  r.usizeConst "MAX_ROUTES" format.maxRoutes;
+  r.usizeConst "MAX_PARTICIPANTS" format.maxParticipants;
+  r.usizeConst "MAX_INTERPOSITION_HOPS" format.maxInterpositionHops;
+  r.usizeConst "MAX_INGRESS_SOURCES" format.maxIngressSources;
+  r.u32Const "LIMIT_SAMPLE_BYTES" format.limitSampleBytes;
+  r.u32Const "LIMIT_QUEUE_DEPTH" format.limitQueueDepth;
+  r.u32Const "LIMIT_HISTORY_DEPTH" format.limitHistoryDepth;
+  r.u32Const "LIMIT_EVENT_DEPTH" format.limitEventDepth;
+  r.u32Const "LIMIT_RETAINED_SAMPLES" format.limitRetainedSamples;
+  r.u32Const "LIMIT_RETRIES" format.limitRetries;
+  r.u32Const "LIMIT_IN_FLIGHT" format.limitInFlight;
+  r.u32Const "LIMIT_CAPABILITY_SLOTS" format.limitCapabilitySlots;
+  r.u32Const "CONTROL_MESSAGE_BYTES" format.controlMessageBytes;
+  r.u32Const "KERNEL_TOTAL_PAGES" format.kernelTotalPages;
+  r.u32Const "KERNEL_MAPPINGS" format.kernelMappings;
+  r.u32Const "KERNEL_LOANS" format.kernelLoans;
+  r.u32Const "INTERPOSITION_NONE" format.interpositionNone;
+  r.u32Const "CONTRACT_KIND_STREAM" format.contractKindStream;
+  r.u32Const "CONTRACT_KIND_CALL" format.contractKindCall;
+  r.u32Const "CONTRACT_KIND_OPERATION" format.contractKindOperation;
+  r.u32Const "DIRECTION_PUBLISH" format.directionPublish;
+  r.u32Const "DIRECTION_SUBSCRIBE" format.directionSubscribe;
+  r.u32Const "DIRECTION_CLIENT" format.directionClient;
+  r.u32Const "DIRECTION_SERVER" format.directionServer;
+  r.u32Const "VISIBILITY_PRIVATE" format.visibilityPrivate;
+  r.u32Const "VISIBILITY_GRAPH" format.visibilityGraph;
+  r.u32Const "RELIABILITY_BEST_EFFORT" format.reliabilityBestEffort;
+  r.u32Const "RELIABILITY_RELIABLE" format.reliabilityReliable;
+  r.u32Const "DURABILITY_VOLATILE" format.durabilityVolatile;
+  r.u32Const "DURABILITY_RETAINED" format.durabilityRetained;
+  r.u32Const "LIVELINESS_AUTOMATIC" format.livelinessAutomatic;
+  r.u32Const "LIVELINESS_MANUAL" format.livelinessManual;
+  "\n";
+  "pub const ROUTE_DOMAIN: &[u8] = b"; t.show format.routeDomain; ";\n";
+  "pub const GRANT_DOMAIN: &[u8] = b"; t.show format.grantDomain; ";\n";
+  "pub const COMPONENT_DOMAIN: &[u8] = b"; t.show format.componentDomain; ";\n";
+};
+
+render :: Format -> { python : Text; rust : Text; }
+  = format => if w.recordsValid (records format)
+    then { python = pythonBindings format; rust = rustBindings format; }
+    else { python = "INVALID_FABRIC_GRAPH_SCHEMA"; rust = "INVALID_FABRIC_GRAPH_SCHEMA"; };
+{ render = render; }
