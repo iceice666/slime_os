@@ -134,3 +134,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-07-26 | [B7/B8 — manifest rights vocabulary and budget aggregate bounds](2026-07-26-b7-b8-budget-hygiene/index.md) | Defect | Verified | B7, B8, C7.1, C7.3 |
 | 2026-07-26 | [C7 milestone audit — boot wedge and unproven exit conditions](2026-07-26-c7-audit/index.md) | Audit | Verified | C7, B3, B4, B5, B6, B7, B8 |
 | 2026-07-27 | [Devlog format contract, uniform layout, and enforcement gate](2026-07-27-devlog-format-and-gate/index.md) | Change | Verified | none |
+| 2026-07-27 | [C8 — Native typed data fabric decomposition](2026-07-27-c8-sub-milestones/index.md) | Decision | Proposed | C8 |

@@ -239,39 +239,456 @@ Two isolated components exchange and return a payload larger than the kernel IPC
 
 ## C8: Native typed data fabric
 
+**Status:** Not started. Decomposed into C8.1–C8.9; the numbered slices are
+planned contracts and gates, not implemented capability.
+
+**Depends on:** C7's bounded sample plane and backlog item **B2** (scheduler
+`Blocked` state / `SYS_WAIT` wait-set). Both are complete. C8 remains
+local-first and may proceed on `x86_64-qemu-virtio` while architecture
+portability work continues.
+
+### Architecture decisions
+
+- the authoritative `InterfaceSchema` identity is a domain-separated SHA-256
+  digest of versioned normalized Zutai schema bytes; generated bindings embed
+  the full identity;
+- C7's existing 64-bit sample-descriptor `type_identity` remains wire-stable
+  and becomes a generation-local type tag derived from the full identity;
+  generation admission rejects tag collisions between distinct admitted
+  schemas, and route matching never treats the tag alone as authority;
+- the kernel remains unaware of schemas, graph names, route kinds, QoS, and
+  correlation policy. Its only new C8 mechanism is a generic bounded
+  narrow-on-transfer operation so a userspace service can move a capability
+  with an exact non-widening rights mask;
+- the fabric brokers large samples through C7's receiver-bound loans. It maps a
+  publisher loan read-only, makes one bounded copy into a fabric-owned sealed
+  buffer, and creates one receiver-bound downstream loan per subscriber. C8
+  does not add multi-receiver loans or transferable ambient supervision;
+- timed QoS consumes an explicit capability-routed monotonic-time input. The
+  C8 corpus drives it with deterministic simulated time; C9 later supplies the
+  standard component-facing monotonic and simulated-time services without
+  changing C8 QoS state-machine meanings;
+- the initial fabric graph admits at most the existing `SYS_WAIT` bound of
+  eight live ingress sources per fabric instance. Admission rejects a graph
+  whose endpoint and control topology cannot block without polling; expanding
+  the generic wait-set or introducing bounded route workers requires a later
+  observed profile need;
+- `Operation<Goal, Feedback, Result>` owns bounded transport, correlation,
+  feedback, result, cancellation, and peer-loss semantics. Application goal
+  policy and the ROS action state machine remain outside the fabric.
+
+### Sequence
+
+1. C8.1 defines the normalized schema and generated native contracts.
+2. C8.2 makes the graph, QoS, visibility, interposition, and every resource
+   ceiling deterministic generation data.
+3. C8.3 supplies attenuated capability handoff and the live fabric control
+   plane.
+4. C8.4 establishes bounded streams; C8.5 adds reliable, retained, and timed
+   QoS.
+5. C8.6 establishes calls; C8.7 composes calls and streams into operations.
+6. C8.8 adds filtered introspection and declared interposition.
+7. C8.9 closes the parent milestone with the full QEMU graph, fault, denial,
+   and determinism corpus.
+
+### C8.1 — Deterministic interface schemas and native bindings
+
 **Status:** Not started.
 
-**Depends on:** C7's bounded sample plane, and backlog item **B2** (scheduler
-`Blocked` state / `SYS_WAIT` wait-set). C8's fabric service is the first
-long-lived component that no scripted keystroke can terminate, so B2 must land
-before this gate opens; otherwise C8's stalled-subscriber, peer-death, and
-graph-idle exit conditions cannot be observed under QEMU. C7.2–C7.7 do not
-depend on B2 and proceed first.
+#### Deliverables
 
-### Deliverables
+- define a bounded versioned Zutai normal form for native interface schemas and
+  derive the authoritative `InterfaceSchema` identity from the exact normalized
+  bytes with a domain-separated SHA-256 digest;
+- generate or deterministically validate Rust bindings and embedded identities
+  for `Stream<T>`, `Call<Request, Reply>`, and
+  `Operation<Goal, Feedback, Result>`;
+- define the generation-local 64-bit type-tag derivation used by the retained
+  C7 sample descriptor and reject any collision between distinct admitted full
+  identities before building the generation;
+- bound schema depth, fields, names, sequences, encoded size, generated output,
+  and the total admitted schema set before allocation.
 
-- define one deterministic `InterfaceSchema` identity derived from a normalized, bounded schema; equivalent input produces one type identity and conflicting layouts cannot reuse it;
-- generate or deterministically validate bindings for three native contracts: `Stream<T>`, `Call<Request, Reply>`, and `Operation<Goal, Feedback, Result>`;
-- implement a userspace fabric service that creates per-route endpoint capabilities from generation-declared graph grants; publishers receive only send authority, subscribers only receive authority, and clients cannot mint graph edges themselves;
-- implement bounded many-to-many streams and request/reply correlation over ordinary channels, using C7 shared samples when payloads exceed the control-message bound;
-- define `TransportQoS` with explicit bounds: KEEP_LAST depth, RELIABLE or BEST_EFFORT delivery, VOLATILE or bounded retained durability, deadline, lifespan, liveliness kind, and lease duration;
-- implement requested/offered compatibility, matched/unmatched notifications, incompatible-QoS events, loss/expiry reporting, peer-death propagation, and fixed retry/history/resource ceilings;
-- expose graph introspection through a read-only service whose result is filtered to the caller's declared graph visibility; a name or type string is never authority;
-- make every route, queue depth, sample-size bound, publisher/subscriber count, retained-history count, retry limit, and event-queue size generation data;
-- support transparent userspace interposition so a declared recorder, replay membrane, or protocol gateway receives exactly the narrowed route capabilities it proxies.
+#### Required checks
 
-### Required checks
+- equivalent schema input produces byte-identical normalized bytes, full
+  identity, type tag, and generated bindings across two runs;
+- field order, width, signedness, bounds, nesting, or contract kind changes the
+  full identity, while source formatting and declaration order that normalize
+  equivalently do not;
+- malformed, unsupported, over-bound, duplicate, and forced type-tag-collision
+  inputs fail before emitting bindings or a generation artifact.
 
-- publishers and subscribers match only when name, type identity, and requested/offered QoS are compatible;
-- an ungranted component cannot create, discover, publish, subscribe, call, serve, or inspect the protected route;
-- alternate names with the same type and conflicting types with the same name do not alias authority;
-- KEEP_LAST evicts deterministically at the declared depth, BEST_EFFORT may report loss without retry growth, and RELIABLE exhausts a fixed retry budget with a structured error;
-- a stalled subscriber cannot grow publisher, broker, buffer, or event memory beyond manifest bounds;
-- deadline, lifespan, liveliness loss, incompatible QoS, and peer death remain distinguishable events;
-- one publisher or fabric client may fault without terminating another route, the fabric service, or the kernel;
-- a fixed graph and input sequence produces byte-identical normalized schema artifacts and deterministic IPC trace records.
+#### Planned verification target
 
-### Planned verification target
+```sh
+just interface_schema_check
+```
+
+#### Exit condition
+
+Equivalent bounded Zutai interfaces produce one byte-identical normal form,
+full identity, generation-local tag, and native binding set; conflicting
+layouts cannot reuse an admitted identity or tag.
+
+### C8.2 — Generation graph, QoS, and aggregate admission
+
+**Status:** Not started.
+
+**Depends on:** C8.1.
+
+#### Deliverables
+
+- define a versioned Zutai fabric-graph resource containing admitted schemas,
+  exact endpoint grants, route name, full schema identity, contract kind,
+  direction, offered/requested `TransportQoS`, graph visibility, optional
+  interposition chain, and component identity;
+- define `TransportQoS` with bounded KEEP_LAST depth, RELIABLE or BEST_EFFORT
+  delivery, VOLATILE or bounded retained durability, deadline, lifespan,
+  liveliness kind, and lease duration;
+- make route count, live ingress sources, publisher/subscriber/client/server
+  count, sample bytes, queue/history/event depth, retained samples, retries,
+  in-flight calls/operations, shared-buffer pages, mappings, and loans explicit
+  generation limits;
+- validate per-entry and aggregate memory, capability-slot, wait-source, buffer,
+  and loan requirements before any fabric or client component launches;
+- derive route authority from the exact tuple of route name, full interface
+  identity, contract kind, component identity, and direction. A name, type
+  string, or graph observation grants nothing.
+
+#### Required checks
+
+- identical normalized graph input produces a byte-identical authenticated
+  resource object across two builds;
+- missing references, duplicate grants, impossible aggregate limits, cycles or
+  bypasses in an interposition chain, unsupported QoS, and more than eight live
+  fabric ingress sources fail before launch;
+- alternate names with the same type and conflicting types with the same name
+  remain distinct authority and matching domains;
+- offered/requested compatibility is a fixed truth table with no implicit
+  defaults or ROS/DDS policy leaking into the native contract.
+
+#### Planned verification target
+
+```sh
+just fabric_manifest_check
+```
+
+#### Exit condition
+
+One authenticated generation resource deterministically fixes every native
+interface, graph edge, direction, QoS policy, visibility grant, interposition
+hop, and resource ceiling; malformed, unauthorized, or globally impossible
+graphs fail before component launch.
+
+### C8.3 — Attenuated endpoint provisioning and control plane
+
+**Status:** Not started.
+
+**Depends on:** C8.2.
+
+#### Deliverables
+
+- define a versioned Zutai capability-transfer descriptor and implement a
+  bounded move operation whose destination rights are an exact subset of the
+  source rights and object-specific rights mask;
+- require transfer authority at the source, consume the moved source
+  capability, and omit transfer authority at the destination unless it was
+  both held and explicitly retained;
+- implement a long-lived userspace fabric service that consumes the generation
+  graph, endpoint factory, participant supervision capabilities, shared-buffer
+  budget/factory, and explicit time input;
+- create route data, acknowledgement/event, call, and operation endpoints and
+  hand each participant only its exact non-transferable route role;
+- authenticate a client by its generation-provisioned control endpoint rather
+  than a caller-supplied component name, route name, or type identity.
+
+#### Required checks
+
+- a publisher receives no route receive authority, a subscriber receives no
+  route publish authority, and neither can retransfer its endpoint or create an
+  undeclared edge;
+- masked transfer cannot widen rights, change object identity, retain an
+  unauthorized transfer bit, duplicate a moved capability, or disturb an
+  unrelated capability;
+- an ungranted component cannot register, request, discover, or receive a
+  protected endpoint even when it supplies the exact route and schema strings;
+- the idle service parks through `SYS_WAIT`, wakes on every admitted source or
+  peer death, and consumes no CPU through a poll/yield loop.
+
+#### Planned verification target
+
+```sh
+just fabric_authority_check
+```
+
+#### Exit condition
+
+The live fabric derives exact non-widening, non-transferable route endpoints
+from the authenticated generation graph; possession of names or generic
+channel authority cannot mint, widen, or delegate a graph edge.
+
+### C8.4 — Bounded many-to-many streams
+
+**Status:** Not started.
+
+**Depends on:** C8.3.
+
+#### Deliverables
+
+- implement bounded many-to-many `Stream<T>` matching on exact route name, full
+  interface identity, and compatible requested/offered QoS;
+- carry control-bound samples inline over ordinary channels and payloads larger
+  than `MAX_MSG` through validated C7 sample descriptors and receiver-bound
+  shared-buffer loans;
+- copy each admitted large publisher sample at most once into a fabric-owned
+  sealed buffer, then create an independently accounted downstream loan for
+  each matched subscriber;
+- implement deterministic KEEP_LAST eviction and BEST_EFFORT delivery with
+  bounded queues, loss accounting, and event delivery;
+- reclaim inline queue entries, fabric buffers, mappings, downstream loans, and
+  event slots on normal return, unmatch, participant death, or route teardown.
+
+#### Required checks
+
+- two publishers and two subscribers exchange both inline and `>MAX_MSG`
+  samples without a participant obtaining authority over another route;
+- KEEP_LAST evicts the exact oldest sequence at the declared depth and a
+  BEST_EFFORT stalled subscriber reports bounded loss without retry growth;
+- one large sample incurs one fabric payload copy and one quota-charged
+  receiver-bound loan per subscriber; every return and peer-death path settles
+  all charges;
+- malformed descriptors, wrong tags, stale loans, sequence misuse, queue
+  exhaustion, and one participant fault do not disturb an unrelated stream.
+
+#### Planned verification target
+
+```sh
+just fabric_stream_check
+```
+
+#### Exit condition
+
+A generation-declared many-to-many stream moves bounded typed inline and shared
+samples under exact route authority; KEEP_LAST and BEST_EFFORT behavior is
+deterministic, and a stalled or faulting participant cannot grow or disturb
+unrelated state.
+
+### C8.5 — Reliable, retained, and timed QoS
+
+**Status:** Not started.
+
+**Depends on:** C8.4.
+
+#### Deliverables
+
+- implement a bounded credit/acknowledgement protocol so RELIABLE delivery never
+  busy-retries a full channel and BEST_EFFORT never acquires retry state;
+- retain unacknowledged and durability history within fixed sample, byte,
+  buffer, loan, retry, and event ceilings;
+- implement offered/requested QoS matching, matched/unmatched notifications,
+  incompatible-QoS events, fixed retry exhaustion, and bounded retained replay;
+- drive deadline, lifespan, liveliness, and lease transitions only from the
+  explicit monotonic-time capability and preserve deterministic tie ordering
+  when data, acknowledgement, peer-death, and time events coincide;
+- keep loss, expiry, retry exhaustion, deadline miss, liveliness loss,
+  incompatible QoS, and peer death as distinct structured events.
+
+#### Required checks
+
+- RELIABLE delivery advances only with declared credit, retains no more than
+  its fixed history, and ends at success, expiry, peer death, or fixed retry
+  exhaustion without a yield/poll loop;
+- BEST_EFFORT reports loss at zero credit without allocating retry/history
+  state, while bounded retained durability replays only the declared live
+  history;
+- deterministic simulated time distinguishes deadline, lifespan, liveliness,
+  and lease boundaries including equal-timestamp tie cases;
+- a stalled subscriber cannot grow publisher, fabric, shared-buffer, loan, or
+  event memory beyond generation bounds.
+
+#### Planned verification target
+
+```sh
+just fabric_qos_check
+```
+
+#### Exit condition
+
+Compatible endpoints exchange data under bounded RELIABLE/BEST_EFFORT,
+VOLATILE/retained, deadline, lifespan, and liveliness semantics without
+busy-polling or unbounded history; every terminal or degradation condition has
+a distinct deterministic event.
+
+### C8.6 — Bounded native calls
+
+**Status:** Not started.
+
+**Depends on:** C8.3 and C8.5's event/time semantics.
+
+#### Deliverables
+
+- implement `Call<Request, Reply>` endpoint matching and generation/session-
+  qualified request identities with a fixed in-flight table per route, client,
+  and server;
+- route inline and shared-sample requests/replies under distinct client and
+  server authority, preserving the C7 receiver binding on every large payload;
+- implement one terminal result per request, bounded cancellation and timeout,
+  duplicate/stale request and reply rejection, server rejection, and peer-death
+  propagation;
+- prevent a duplicate or stale request from re-executing a declared
+  non-idempotent operation and reclaim every correlation, buffer, loan, retry,
+  and event entry on all terminal paths.
+
+#### Required checks
+
+- concurrent clients receive only their correlated replies and cannot answer,
+  cancel, or observe another client's request;
+- duplicate/stale request and reply identities fail deterministically, and a
+  non-idempotent server sees one execution;
+- success, server rejection, timeout, cancellation, retry exhaustion, malformed
+  reply, and peer death remain distinct;
+- server or client death reclaims all in-flight state without terminating the
+  fabric or an unrelated call route.
+
+#### Planned verification target
+
+```sh
+just fabric_call_check
+```
+
+#### Exit condition
+
+Generation-authorized clients and servers exchange bounded typed requests and
+replies with exact correlation and one terminal result; duplicate, timeout,
+cancellation, rejection, and peer-fault paths remain isolated and fully
+reclaimed.
+
+### C8.7 — Native operations
+
+**Status:** Not started.
+
+**Depends on:** C8.4 and C8.6.
+
+#### Deliverables
+
+- compose `Operation<Goal, Feedback, Result>` from a bounded start-goal call,
+  operation-keyed feedback stream, result call, and cancellation request;
+- assign generation/session-qualified operation identities and bound active
+  operations, feedback depth/bytes, cancellation state, terminal results,
+  retained results, retries, and events before admission;
+- route each goal, feedback sample, result, and cancellation only to holders of
+  the exact operation-role capability;
+- define transport-level accepted/rejected, active, cancel-requested, terminal,
+  expired, and peer-lost outcomes without embedding application goal policy or
+  the ROS action state machine in the fabric.
+
+#### Required checks
+
+- two concurrent operations cannot cross-correlate feedback, result, or cancel
+  authority;
+- unauthorized observation, result retrieval, and cancellation fail even when
+  the caller knows the operation identity;
+- duplicate goals, feedback after terminal state, duplicate results,
+  cancellation races, result expiry, and participant restart are deterministic
+  and bounded;
+- peer death settles every active operation and leaves unrelated stream, call,
+  and operation routes live.
+
+#### Planned verification target
+
+```sh
+just fabric_operation_check
+```
+
+#### Exit condition
+
+Authorized components start, observe, cancel, and retrieve bounded native
+operations with exact correlation and authority; transport outcomes remain
+deterministic while application and ROS goal policy stay outside the fabric.
+
+### C8.8 — Filtered introspection and declared interposition
+
+**Status:** Not started.
+
+**Depends on:** C8.3, C8.4, and C8.6.
+
+#### Deliverables
+
+- expose graph introspection through a read-only service whose bounded result is
+  filtered to the caller's exact generation-declared visibility grants;
+- report only admitted route, schema identity, contract kind, match, QoS, and
+  event metadata; never return a capability or make an observed name/type into
+  authority;
+- compile each recorder, replay membrane, or protocol gateway into an explicit
+  acyclic route chain whose proxy receives only the narrowed upstream receive,
+  downstream send, acknowledgement/event, and visibility capabilities it
+  requires;
+- omit every direct bypass endpoint when interposition is declared and isolate
+  proxy failure to the affected route chain.
+
+#### Required checks
+
+- two callers with different visibility grants receive different bounded graph
+  views, and an ungranted caller cannot infer the protected route through
+  counts, names, types, match events, or error detail;
+- a proxy can relay only its declared route/direction and cannot publish,
+  subscribe, call, serve, inspect, or retransfer outside that chain;
+- publisher and subscriber cannot bypass a declared proxy, while proxy death
+  emits a route event without terminating unrelated routes or the fabric;
+- a fixed graph and request order produces byte-identical introspection and
+  interposition trace records.
+
+#### Planned verification target
+
+```sh
+just fabric_visibility_check
+```
+
+#### Exit condition
+
+Read-only graph views reveal exactly the caller's visibility grant, and every
+declared interposer occupies the only authorized route path with no ambient
+discovery, bypass, or widened proxy authority.
+
+### C8.9 — Full-graph integration, determinism, and fault isolation
+
+**Status:** Not started.
+
+**Depends on:** C8.5–C8.8.
+
+#### Deliverables
+
+- compose isolated native publishers, subscribers, call clients/servers,
+  operation participants, an unauthorized probe, a stalled subscriber, a
+  filtered introspection client, and an interposed route in one
+  generation-declared graph;
+- exercise inline and shared samples, compatible and incompatible endpoints,
+  KEEP_LAST, BEST_EFFORT, RELIABLE, retained durability, timed QoS, calls,
+  operations, visibility, interposition, denial, and participant faults;
+- capture normalized schema artifacts and bounded IPC/event trace records for a
+  fixed graph, input, and simulated-time sequence;
+- prove every route, queue, history, retry, retained sample, event, in-flight
+  request/operation, shared-buffer, mapping, and loan ceiling under normal,
+  stalled, malformed, denied, and peer-death paths.
+
+#### Required checks
+
+- publishers and subscribers match only when name, full type identity, contract
+  kind, and requested/offered QoS are compatible;
+- an ungranted component cannot create, discover, publish, subscribe, call,
+  serve, operate, cancel, retrieve, or inspect the protected route;
+- alternate names with the same type and conflicting types with the same name
+  do not alias matching, visibility, or authority;
+- deadline, lifespan, liveliness loss, incompatible QoS, loss, expiry, retry
+  exhaustion, timeout, cancellation, rejection, and peer death remain
+  distinguishable;
+- one participant or proxy may stall or fault without exceeding any manifest
+  bound or terminating another route, the fabric service, or the kernel;
+- the same graph, input, and simulated-time sequence produces byte-identical
+  normalized schema artifacts and deterministic IPC/event trace records.
+
+#### Planned verification target
 
 ```sh
 just data_fabric_check
@@ -279,7 +696,11 @@ just data_fabric_check
 
 ### Exit condition
 
-A generation-declared graph of isolated native publishers, subscribers, service clients, and servers exchanges bounded typed data under explicit QoS and graph grants; denied graph edges are neither usable nor visible, incompatible endpoints do not match, and a stalled or faulting participant cannot exceed its quota or disrupt unrelated routes.
+A generation-declared graph of isolated native publishers, subscribers, service
+clients/servers, and operation participants exchanges bounded typed data under
+explicit QoS and graph grants; denied graph edges are neither usable nor
+visible, incompatible endpoints do not match, and a stalled or faulting
+participant cannot exceed its quota or disrupt unrelated routes.
 
 ## C9: Robot runtime authority
 
