@@ -240,10 +240,12 @@ Two isolated components exchange and return a payload larger than the kernel IPC
 ## C8: Native typed data fabric
 
 **Status:** In progress. Decomposed into C8.1–C8.9. C8.1 (deterministic
-interface schemas and native bindings) and C8.2 (authenticated fabric-graph
-resource with per-entry and aggregate admission) are complete and gated by
-`just interface_schema_check` and `just fabric_manifest_check`. C8.3–C8.9
-remain planned contracts and gates, not implemented capability.
+interface schemas and native bindings), C8.2 (authenticated fabric-graph
+resource with per-entry and aggregate admission), and C8.3 (attenuated
+endpoint provisioning and the live control plane) are complete and gated by
+`just interface_schema_check`, `just fabric_manifest_check`, and `just
+fabric_authority_check`. C8.4–C8.9 remain planned contracts and gates, not
+implemented capability.
 
 **Depends on:** C7's bounded sample plane and backlog item **B2** (scheduler
 `Blocked` state / `SYS_WAIT` wait-set). Both are complete. C8 remains
@@ -286,7 +288,7 @@ portability work continues.
 2. C8.2 makes the graph, QoS, visibility, interposition, and every resource
    ceiling deterministic generation data.
 3. C8.3 supplies attenuated capability handoff and the live fabric control
-   plane.
+   plane. Complete.
 4. C8.4 establishes bounded streams; C8.5 adds reliable, retained, and timed
    QoS.
 5. C8.6 establishes calls; C8.7 composes calls and streams into operations.
@@ -405,7 +407,31 @@ graphs fail before component launch.
 
 ### C8.3 — Attenuated endpoint provisioning and control plane
 
-**Status:** Not started.
+**Status:** Complete. A versioned Zutai capability-transfer contract
+(`contracts/capability-transfer/v1/`) defines the provisioning request and the
+descriptor that accompanies one bounded move. The kernel's only new C8
+mechanism, `SYS_CAP_TRANSFER` (30), requires `RIGHT_TRANSFER` at the source,
+rejects any mask outside the source rights or the object's meaningful rights,
+requires the descriptor's declared object kind to be the moved capability's
+real kind, consumes the source, and restores it at full rights on a failed
+send; `RIGHT_TRANSFER` is dropped at the destination unless
+`FLAG_RETAIN_TRANSFER` is set, so a provisioned role is non-delegable by
+default. The kernel gained no knowledge of routes, schemas, or graph roles —
+`route_identity` and `direction` ride in the descriptor as bytes it never
+interprets. A userspace `fabric-service` owns both halves of the declared
+telemetry route, hands `fabric-publisher` `RIGHT_SEND` only and
+`fabric-subscriber` `RIGHT_RECV` only, and authenticates each client by the
+generation-provisioned control endpoint its request arrived on rather than the
+route name, direction, or type identity the request carries. It sweeps every
+control endpoint through the non-blocking ABI and parks in `SYS_WAIT` across
+the whole set. `just fabric_authority_check` passes: 7 kernel rights-algebra
+tests plus a live boot in which each participant observes its own denials —
+no opposite-direction authority, no re-delegation, no widening — before
+publishing, and `fabric-intruder`, holding a real control endpoint and
+supplying byte-identical route strings, receives a denial with no capability
+attached. The service provisions one round and exits by design; C8.4 makes its
+loop unbounded when it gains sample brokering. See
+`devlog/2026-07-27-c8-3-fabric-authority/`.
 
 **Depends on:** C8.2.
 
@@ -438,7 +464,7 @@ graphs fail before component launch.
 - the idle service parks through `SYS_WAIT`, wakes on every admitted source or
   peer death, and consumes no CPU through a poll/yield loop.
 
-#### Planned verification target
+#### Verification target
 
 ```sh
 just fabric_authority_check
@@ -448,7 +474,16 @@ just fabric_authority_check
 
 The live fabric derives exact non-widening, non-transferable route endpoints
 from the authenticated generation graph; possession of names or generic
-channel authority cannot mint, widen, or delegate a graph edge.
+channel authority cannot mint, widen, or delegate a graph edge. Observed: on a
+real boot the publisher holds `RIGHT_SEND` only and the subscriber
+`RIGHT_RECV` only, neither can re-delegate or widen its role, and
+`fabric-intruder` — holding a real generation-provisioned control endpoint and
+supplying byte-identical route name, direction, and type identity — receives a
+denial carrying no capability. The "consumes no CPU through a poll/yield loop"
+arm is proven by the service's sweep-then-park loop plus a source lint, not by
+a measurement: the gate rejects any fabric component containing `yield_now` or
+lacking a `SYS_WAIT` park, which is a necessary condition rather than a proof
+(see the devlog entry's open risks).
 
 ### C8.4 — Bounded many-to-many streams
 

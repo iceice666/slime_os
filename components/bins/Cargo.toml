@@ -12,6 +12,7 @@ path = "src/lib.rs"
 doctest = false
 
 [dependencies]
+boot-contracts = { path = "../../boot-contracts" }
 slime-rt = { path = "../runtime", optional = true }
 slime-proto = { path = "../proto" }
 
@@ -92,6 +93,26 @@ test = false
 [[bin]]
 name = "sample-receiver"
 path = "src/bin/sample-receiver.rs"
+test = false
+
+[[bin]]
+name = "fabric-service"
+path = "src/bin/fabric-service.rs"
+test = false
+
+[[bin]]
+name = "fabric-publisher"
+path = "src/bin/fabric-publisher.rs"
+test = false
+
+[[bin]]
+name = "fabric-subscriber"
+path = "src/bin/fabric-subscriber.rs"
+test = false
+
+[[bin]]
+name = "fabric-intruder"
+path = "src/bin/fabric-intruder.rs"
 test = false
 
 [[bin]]

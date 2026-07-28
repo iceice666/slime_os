@@ -1,0 +1,146 @@
+-- Slime OS capability-transfer protocol, version 1 (C8.3).
+--
+-- Two fixed 64-byte control messages that together provision one attenuated
+-- route endpoint.
+--
+-- `FabricRequest` is what a client asks for. It deliberately carries the
+-- caller-supplied route name, direction, and type identity — the exact strings
+-- a component might hope to register with — because the fabric service must
+-- ignore every one of them and authenticate the caller by the
+-- generation-provisioned control endpoint the request arrived on. The request
+-- exists so that "possession of names grants nothing" is a property under
+-- test rather than an absence of code.
+--
+-- `CapabilityTransfer` is the descriptor that accompanies one bounded
+-- narrow-on-transfer move: a holder with transfer authority moves a capability
+-- to a peer with rights narrowed to an exact mask, the source capability is
+-- consumed, and the destination receives no authority the descriptor does not
+-- state. The kernel parses `status`, `flags`, `object_kind`, and `rights_mask`
+-- and enforces exactly them, so the bytes the peer reads and the rights the
+-- kernel installed are one decision rather than two. A denial reuses the same
+-- record with a nonzero `status`, a zero `rights_mask`, and no capability
+-- attached. `route_identity` and `direction` are the fabric's own role
+-- binding, opaque to the kernel — the kernel knows nothing of routes.
+--
+-- Logical records and concrete packed little-endian layouts live together. The
+-- renderer reflects each record, checks field order against its layout, and
+-- writes the Rust binding fragment consumed by slime-proto.
+
+env ::= import stdlib.env;
+fs ::= import stdlib.fs;
+gen ::= import "gen_rust.zt";
+t ::= import stdlib.text;
+
+formatVersion :: Int = 1;
+requestLen :: Int = 64;
+transferLen :: Int = 64;
+maxRouteNameBytes :: Int = 32;
+
+-- Record discriminators, little-endian `SFBR` and `SCAP`. Both live here
+-- rather than in the renderer: the kernel validates a descriptor by comparing
+-- `magic`, so these values are part of the wire format the schema owns.
+fabricRequestMagic :: Int = 1380075091;
+capabilityTransferMagic :: Int = 1346454355;
+
+-- Which kernel object the descriptor claims to carry. The kernel rejects a
+-- descriptor whose declared kind is not the moved capability's actual kind, so
+-- the wire form cannot misdescribe what crossed.
+objectKindEndpoint :: Int = 1;
+objectKindSharedBuffer :: Int = 2;
+objectKindSharedBufferLoan :: Int = 3;
+objectKindSupervision :: Int = 4;
+
+-- Transfer authority is omitted at the destination unless it was both held at
+-- the source and explicitly retained by this flag. A rights mask naming the
+-- transfer bit without the flag is not enough: retention must be deliberate.
+flagRetainTransfer :: Int = 1;
+knownFlags :: Int = 1;
+
+-- Route roles, matching `contracts/fabric-graph/v1`. Restated here because a
+-- request and a descriptor both name one; the graph remains the authority.
+directionPublish :: Int = 1;
+directionSubscribe :: Int = 2;
+directionClient :: Int = 3;
+directionServer :: Int = 4;
+
+WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
+
+FabricRequest :: type {
+  magic : Int;
+  version : Int;
+  flags : Int;
+  direction : Int;
+  type_identity : Int;
+  route_name_len : Int;
+  route_name : Int;
+  reserved : Int;
+};
+
+CapabilityTransfer :: type {
+  magic : Int;
+  version : Int;
+  status : Int;
+  flags : Int;
+  object_kind : Int;
+  direction : Int;
+  rights_mask : Int;
+  route_identity : Int;
+};
+
+requestSchema ::= schema FabricRequest;
+transferSchema ::= schema CapabilityTransfer;
+
+requestLayout :: List WireField = {
+  { name = "magic"; width = 4; signed = false; byteArray = false; };
+  { name = "version"; width = 4; signed = false; byteArray = false; };
+  { name = "flags"; width = 4; signed = false; byteArray = false; };
+  { name = "direction"; width = 4; signed = false; byteArray = false; };
+  { name = "type_identity"; width = 8; signed = false; byteArray = false; };
+  { name = "route_name_len"; width = 4; signed = false; byteArray = false; };
+  { name = "route_name"; width = 32; signed = false; byteArray = true; };
+  { name = "reserved"; width = 4; signed = false; byteArray = true; };
+};
+
+transferLayout :: List WireField = {
+  { name = "magic"; width = 4; signed = false; byteArray = false; };
+  { name = "version"; width = 4; signed = false; byteArray = false; };
+  { name = "status"; width = 4; signed = true; byteArray = false; };
+  { name = "flags"; width = 4; signed = false; byteArray = false; };
+  { name = "object_kind"; width = 4; signed = false; byteArray = false; };
+  { name = "direction"; width = 4; signed = false; byteArray = false; };
+  { name = "rights_mask"; width = 8; signed = false; byteArray = false; };
+  { name = "route_identity"; width = 32; signed = false; byteArray = true; };
+};
+
+format ::= {
+  formatVersion = formatVersion;
+  requestLen = requestLen;
+  transferLen = transferLen;
+  maxRouteNameBytes = maxRouteNameBytes;
+  fabricRequestMagic = fabricRequestMagic;
+  capabilityTransferMagic = capabilityTransferMagic;
+  objectKindEndpoint = objectKindEndpoint;
+  objectKindSharedBuffer = objectKindSharedBuffer;
+  objectKindSharedBufferLoan = objectKindSharedBufferLoan;
+  objectKindSupervision = objectKindSupervision;
+  flagRetainTransfer = flagRetainTransfer;
+  knownFlags = knownFlags;
+  directionPublish = directionPublish;
+  directionSubscribe = directionSubscribe;
+  directionClient = directionClient;
+  directionServer = directionServer;
+  requestFields = requestSchema.fields ?? {;};
+  transferFields = transferSchema.fields ?? {;};
+  requestLayout = requestLayout;
+  transferLayout = transferLayout;
+};
+
+main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }
+  = caps => [
+    root := env.get caps.env "SLIME_CAPABILITY_TRANSFER_BINDINGS_ROOT" ?? ".";
+    bindings := gen.render format;
+    path := t.join "" { root; "/components/proto/src/capability_transfer.rs"; };
+    fs.writeAll caps.write path bindings.rust
+  ];
+
+main

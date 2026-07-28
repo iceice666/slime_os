@@ -36,6 +36,7 @@ const SYS_SHARED_BUFFER_LOAN: u64 = 26;
 const SYS_SHARED_BUFFER_LOAN_MAP: u64 = 27;
 const SYS_SHARED_BUFFER_RETURN: u64 = 28;
 const SYS_SHARED_BUFFER_REVOKE: u64 = 29;
+const SYS_CAP_TRANSFER: u64 = 30;
 
 pub const ERR_SUCCESS: i64 = 0;
 pub const ERR_BAD_CAP: i64 = -1;
@@ -264,6 +265,32 @@ pub fn endpoint_create(factory_slot: u32) -> Result<(u32, u32), i64> {
         Err(first)
     } else {
         Ok((first as u32, second as u32))
+    }
+}
+
+/// Move the capability in `capability_slot` to the peer of the endpoint in
+/// `endpoint_slot`, with its rights narrowed to the mask the 64-byte
+/// `descriptor` declares (C8.3).
+///
+/// Unlike [`send`]'s capability attachment, which moves a capability at its
+/// full held rights, this is a bounded narrow-on-transfer move: the source
+/// needs `RIGHT_TRANSFER`, the destination mask must be a subset of the source
+/// rights and of the object's meaningful rights, and the destination loses
+/// `RIGHT_TRANSFER` unless the descriptor explicitly retains it. On success the
+/// source capability is consumed; on failure it is left untouched.
+///
+/// The descriptor crosses as the message payload, so the receiver parses
+/// exactly the bytes the kernel enforced.
+pub fn cap_transfer(endpoint_slot: u32, capability_slot: u32, descriptor: &[u8; 64]) -> i64 {
+    unsafe {
+        raw_syscall(
+            SYS_CAP_TRANSFER,
+            endpoint_slot as u64,
+            capability_slot as u64,
+            descriptor.as_ptr() as u64,
+            0,
+            0,
+        )
     }
 }
 

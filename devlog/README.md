@@ -137,4 +137,5 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-07-27 | [C8 — Native typed data fabric decomposition](2026-07-27-c8-sub-milestones/index.md) | Decision | Proposed | C8 |
 | 2026-07-27 | [C8.1 — Deterministic interface schemas and native bindings](2026-07-27-c8-1-interface-schemas/index.md) | Change | Verified | C8.1 |
 | 2026-07-27 | [C8.2 — Generation graph, QoS, and aggregate admission](2026-07-27-c8-2-fabric-graph-admission/index.md) | Change | Verified | C8.2 |
+| 2026-07-27 | [C8.3 — Attenuated endpoint provisioning and control plane](2026-07-27-c8-3-fabric-authority/index.md) | Change | Verified | C8.3 |
 | 2026-07-27 | [D1–D7 — Native development, live update, and on-device build roadmap](2026-07-27-d1-d7-native-development-roadmap/index.md) | Decision | Proposed | D1, D2, D3, D4, D5, D6, D7, P0 |

@@ -46,6 +46,10 @@ INTERFACE_SCHEMA_BINDING_GENERATOR = (
     ROOT / "scripts" / "generate" / "generate-interface-schema-bindings.py"
 )
 FABRIC_GRAPH_CONTRACT = ROOT / "contracts" / "fabric-graph" / "v1"
+CAPABILITY_TRANSFER_CONTRACT = ROOT / "contracts" / "capability-transfer" / "v1"
+CAPABILITY_TRANSFER_BINDING_GENERATOR = (
+    ROOT / "scripts" / "generate" / "generate-capability-transfer-bindings.py"
+)
 
 
 def run(*arguments: str) -> str:
@@ -135,6 +139,14 @@ subprocess.run(
     cwd=ROOT,
     check=True,
 )
+
+run("check", str(CAPABILITY_TRANSFER_CONTRACT / "schema.zt"))
+run("check", str(CAPABILITY_TRANSFER_CONTRACT / "gen_rust.zt"))
+subprocess.run(
+    [sys.executable, str(CAPABILITY_TRANSFER_BINDING_GENERATOR), "--check"],
+    cwd=ROOT,
+    check=True,
+)
 run("check", str(INTERFACE_SCHEMA_CONTRACT / "schema.zt"))
 run("check", str(INTERFACE_SCHEMA_CONTRACT / "check.zt"))
 run("check", str(INTERFACE_SCHEMA_CONTRACT / "gen_python.zt"))
@@ -180,5 +192,6 @@ subprocess.run(
 print(
     "Generation source/binary, kernel image, BootState, BootState trace, recovery, "
     "block, component, store, spawn, filesystem, powerbox, generation-management, "
-    "transfer, sample-descriptor, interface-schema, and fabric-graph contracts passed"
+    "transfer, sample-descriptor, interface-schema, fabric-graph, and "
+    "capability-transfer contracts passed"
 )

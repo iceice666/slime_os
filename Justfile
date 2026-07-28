@@ -69,6 +69,14 @@ fabric_manifest_check: contracts_check generation_check
     python3 scripts/check/check-fabric-manifest.py
     cd kernel && cargo test --release -p slime_os-kernel --test fabric_manifest -- -display none
 
+# C8.3: attenuated endpoint provisioning and control plane. A live userspace
+# fabric service derives exact non-widening, non-transferable route endpoints
+# from the authenticated generation graph; possession of route names or generic
+# channel authority mints, widens, or delegates nothing.
+fabric_authority_check: contracts_check generation_check
+    python3 scripts/check/check-fabric-authority.py
+    cd kernel && cargo test --release -p slime_os-kernel --test fabric_authority -- -display none
+
 # C7.6: versioned sample descriptor over the C7.5 loan lifecycle; byte-identical
 # binding round-trip, malformed-descriptor rejection before mapping, and a
 # payload larger than MAX_MSG carried over descriptor plus shared buffer.
@@ -236,6 +244,10 @@ sample_descriptor_gen:
 # Regenerate native interface-schema compiler constants and Rust bindings (C8.1).
 interface_schema_gen:
     python3 scripts/generate/generate-interface-schema-bindings.py
+
+# Regenerate the capability-transfer protocol bindings (C8.3).
+capability_transfer_gen:
+    python3 scripts/generate/generate-capability-transfer-bindings.py
 
 # Regenerate the fabric-graph resource bindings (C8.2); part of the boot set.
 fabric_graph_gen: boot_gen

@@ -39,6 +39,9 @@ pub const SYS_SHARED_BUFFER_LOAN: u64 = 26;
 pub const SYS_SHARED_BUFFER_LOAN_MAP: u64 = 27;
 pub const SYS_SHARED_BUFFER_RETURN: u64 = 28;
 pub const SYS_SHARED_BUFFER_REVOKE: u64 = 29;
+/// C8.3 bounded narrow-on-transfer move. Distinct from `SYS_SEND`'s cap
+/// attachment, which moves a capability at its full held rights.
+pub const SYS_CAP_TRANSFER: u64 = 30;
 
 const USER_TOP: u64 = 0x0000_8000_0000_0000;
 
@@ -89,6 +92,7 @@ pub fn dispatch(frame: &mut UserFrame) {
         SYS_SHARED_BUFFER_LOAN_MAP => sys_shared_buffer_loan_map(frame),
         SYS_SHARED_BUFFER_RETURN => sys_shared_buffer_return(frame),
         SYS_SHARED_BUFFER_REVOKE => sys_shared_buffer_revoke(frame),
+        SYS_CAP_TRANSFER => sys_cap_transfer(frame),
 
         _ => frame.rax = ipc::ERR_INVALID_ARG as u64,
     }
@@ -934,6 +938,134 @@ fn sys_shared_buffer_revoke(frame: &mut UserFrame) {
         Ok(()) => ipc::ERR_SUCCESS as u64,
         Err(error) => shared_buffer_error_code(error) as u64,
     };
+}
+
+/// `SYS_CAP_TRANSFER(endpoint_slot, capability_slot, descriptor_ptr)`: move one
+/// capability to the endpoint's peer with its rights narrowed to the exact mask
+/// the accompanying descriptor declares (C8.3).
+///
+/// The kernel's only new C8 mechanism, and deliberately generic: it knows
+/// nothing of routes, schemas, or graph roles. It enforces four rules, and a
+/// userspace broker composes a fabric out of them.
+///
+/// 1. **Transfer authority at the source.** The moved capability must carry
+///    `RIGHT_TRANSFER`, the same condition `SYS_SEND` cap attachment applies.
+/// 2. **Narrow only.** The destination mask must be a subset of the source
+///    rights *and* of the object's meaningful rights. Widening is rejected
+///    before anything moves.
+/// 3. **Transfer authority is not inherited.** `RIGHT_TRANSFER` is dropped at
+///    the destination unless the descriptor sets `FLAG_RETAIN_TRANSFER`, so a
+///    provisioned endpoint is non-delegable by default rather than by
+///    convention.
+/// 4. **The descriptor describes the move.** Its declared `object_kind` must be
+///    the moved capability's real kind, and the peer parses the same bytes the
+///    kernel enforced, so the descriptor cannot advertise authority the
+///    receiver did not get.
+///
+/// The move consumes the source capability, so the object never has two
+/// holders, and a failed send restores the original at its full rights rather
+/// than dropping it. One window is not closed here: a message already queued
+/// for a task that then dies is discarded with its channel, so a capability
+/// moved to a peer that terminates before calling `recv` is destroyed rather
+/// than returned. `SYS_SEND`'s cap attachment has the same shape; closing it
+/// needs queue-draining on endpoint teardown, which is a kernel-wide change
+/// rather than a property of this syscall. The failure is a leak — never a
+/// duplication and never a widening.
+///
+/// Returns `ERR_SUCCESS`; `ERR_BAD_CAP` for a missing slot, missing transfer
+/// authority, a widening mask, or a kind mismatch; `ERR_INVALID_ARG` for a
+/// malformed descriptor; `ERR_PEER_DEAD` or `ERR_WOULDBLOCK` from the
+/// underlying send, with the source intact.
+fn sys_cap_transfer(frame: &mut UserFrame) {
+    use crate::capability_transfer_proto::{
+        TRANSFER_LEN, WireCapabilityTransfer, destination_rights, kind_matches, valid_transfer,
+    };
+
+    let endpoint_slot = frame.rdi as u32;
+    let capability_slot = frame.rsi as u32;
+    if !current_user_range(frame.rdx, TRANSFER_LEN, false) {
+        frame.rax = ipc::ERR_INVALID_ARG as u64;
+        return;
+    }
+    let mut descriptor_bytes = [0u8; TRANSFER_LEN];
+    if !task::copy_from_current(frame.rdx, &mut descriptor_bytes) {
+        frame.rax = ipc::ERR_INVALID_ARG as u64;
+        return;
+    }
+    let Some(descriptor) = WireCapabilityTransfer::decode(&descriptor_bytes) else {
+        frame.rax = ipc::ERR_INVALID_ARG as u64;
+        return;
+    };
+    if !valid_transfer(&descriptor) {
+        frame.rax = ipc::ERR_INVALID_ARG as u64;
+        return;
+    }
+    let rights = destination_rights(&descriptor);
+    if rights == 0 {
+        frame.rax = ipc::ERR_INVALID_ARG as u64;
+        return;
+    }
+
+    // Resolve, validate, and consume under one borrow of the table so no
+    // window exists where the capability is neither held nor moved.
+    let prepared = task::with_current_mut(|task| {
+        if endpoint_slot == capability_slot {
+            return Err(ipc::ERR_BAD_CAP);
+        }
+        let Some(channel) = task.caps.get(endpoint_slot) else {
+            return Err(ipc::ERR_BAD_CAP);
+        };
+        if channel.rights & RIGHT_SEND == 0 {
+            return Err(ipc::ERR_BAD_CAP);
+        }
+        let KernelObject::Endpoint(endpoint) = &channel.object else {
+            return Err(ipc::ERR_BAD_CAP);
+        };
+        let endpoint = endpoint.clone();
+        let Some(source) = task.caps.get(capability_slot) else {
+            return Err(ipc::ERR_BAD_CAP);
+        };
+        // Moving requires transfer authority, exactly as `SYS_SEND` does.
+        if source.rights & RIGHT_TRANSFER == 0 {
+            return Err(ipc::ERR_BAD_CAP);
+        }
+        if !kind_matches(descriptor.object_kind, &source.object) {
+            return Err(ipc::ERR_BAD_CAP);
+        }
+        // `derive` rejects any bit the source does not hold; `insert` at the
+        // destination rejects any bit meaningless for the object kind. Check
+        // the latter here so a widening mask never consumes the source.
+        if rights & !source.object.valid_rights() != 0 {
+            return Err(ipc::ERR_BAD_CAP);
+        }
+        let moved = source.derive(rights).map_err(|_| ipc::ERR_BAD_CAP)?;
+        let original = task
+            .caps
+            .take(capability_slot)
+            .expect("source capability present under this borrow");
+        Ok((endpoint, moved, original))
+    });
+    let (endpoint, moved, original) = match prepared {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            frame.rax = error as u64;
+            return;
+        }
+    };
+
+    let mut payload: [Option<Capability>; MAX_CAPS_PER_MSG] = core::array::from_fn(|_| None);
+    payload[0] = Some(moved);
+    let result = ipc::send(&endpoint, &descriptor_bytes, &mut payload);
+    if result != ipc::ERR_SUCCESS {
+        // Nothing crossed, so the move did not happen: restore the source at
+        // its original rights rather than leaving the holder short a capability.
+        task::with_current_mut(|task| {
+            task.caps
+                .put(capability_slot, original)
+                .expect("source slot stayed free across a failed transfer")
+        });
+    }
+    frame.rax = result as u64;
 }
 
 fn shared_buffer_error_code(error: crate::memory::shared_buffer::SharedBufferError) -> i64 {

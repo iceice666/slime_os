@@ -16,8 +16,9 @@ Every new object or right must satisfy these rules before it ships:
    it). The six ungated M5.1 bits below are the last grandfathered exception;
    they gain gates when the userspace-driver path lands.
 3. Every transfer path checks `RIGHT_TRANSFER` on each moved capability.
-   Current paths: `SYS_SEND` cap attachment and `SYS_SPAWN` grants
-   (`task::preflight_spawn_grant`). Any future path inherits the rule.
+   Current paths: `SYS_SEND` cap attachment, `SYS_SPAWN` grants
+   (`task::preflight_spawn_grant`), and `SYS_CAP_TRANSFER` (C8.3). Any future
+   path inherits the rule.
 4. `CapabilityTable::insert` rejects rights meaningless for the object kind
    (`KernelObject::valid_rights`). `derive` narrows only and never widens.
 5. Object creation authority is kernel-only unless this matrix names a mint
@@ -73,6 +74,20 @@ Semantics not visible in the table:
   arrives with exactly the rights the sender attached.
 - `derive` and spawn grants are non-consuming and narrow-only. A derived copy
   that retains `TRANSFER` requires that meta-right on its source.
+- `SYS_CAP_TRANSFER` (C8.3) is the one *consuming* movement path: it derives a
+  narrowed copy, moves it to the endpoint's peer, and takes the source. Its
+  destination mask must be a subset of both the source rights and the object's
+  `valid_rights()`, and `TRANSFER` is dropped at the destination unless the
+  accompanying `capability-transfer/v1` descriptor sets `FLAG_RETAIN_TRANSFER`
+  — so a provisioned capability is non-delegable by default rather than by
+  convention. The descriptor's declared object kind must be the moved
+  capability's real kind, so the bytes the peer parses describe what actually
+  crossed. Only `Endpoint`, `SharedBuffer`, `SharedBufferLoan`, and
+  `Supervision` are nameable by the descriptor; no other object kind can move
+  through this path. A failed send restores the source at its original rights.
+  The kernel reads no route, schema, or graph meaning from the descriptor:
+  `route_identity` and `direction` are opaque bytes a userspace fabric uses to
+  bind the move to a declared edge.
 - Shared-buffer mappings are page-aligned, non-executable, charged one unit per
   live map to the mapper's generation quota, and never overwrite an existing
   user page. `SYS_SHARED_BUFFER_SEAL` downgrades every live writable mapping
@@ -122,6 +137,18 @@ Semantics not visible in the table:
   channel message (`DESCRIPTOR_LEN == MAX_MSG`), so a sample larger than the
   message bound crosses as descriptor plus shared buffer without copying payload
   bytes through the kernel queue or widening `MAX_MSG`.
+- C8.3 makes the C8.2 fabric graph load-bearing without teaching the kernel
+  about it. A userspace `fabric-service` mints both halves of each declared
+  route through its own `EndpointFactory` grant and moves each participant one
+  role via `SYS_CAP_TRANSFER`: `RIGHT_SEND` to the publisher, `RIGHT_RECV` to
+  the subscriber, `RIGHT_TRANSFER` to neither. A client is authenticated by the
+  generation-provisioned control endpoint its request arrived on — a binding
+  init establishes at spawn and no component can forge — never by the route
+  name, direction, or type identity the request carries. Those fields exist in
+  `capability-transfer/v1` precisely so that ignoring them is a tested
+  property: `just fabric_authority_check` boots a component that supplies
+  byte-identical route strings for an edge the graph never declared and
+  observes it receive a denial with no capability attached.
 
 ## Bounds
 

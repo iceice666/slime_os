@@ -107,8 +107,21 @@ const SAMPLE_LENDER_SLOT: u32 = 41;
 const SAMPLE_RECEIVER_SLOT: u32 = 42;
 const SAMPLE_LENDER_ENDPOINT_SLOT: u32 = 43;
 const SAMPLE_RECEIVER_ENDPOINT_SLOT: u32 = 44;
-const TRANSFER_RECEIVER_SLOT: u32 = 45;
-const TRANSFER_SOURCE_SLOT: u32 = 46;
+// C8.3 fabric control plane: the service, its three clients, and the two
+// halves of each control channel. Init holds no route capability at all —
+// the fabric mints those and moves each participant a narrowed role.
+const FABRIC_SERVICE_SLOT: u32 = 45;
+const FABRIC_PUBLISHER_SLOT: u32 = 46;
+const FABRIC_SUBSCRIBER_SLOT: u32 = 47;
+const FABRIC_INTRUDER_SLOT: u32 = 48;
+const FABRIC_PUBLISHER_CONTROL_SLOT: u32 = 49;
+const FABRIC_SUBSCRIBER_CONTROL_SLOT: u32 = 50;
+const FABRIC_INTRUDER_CONTROL_SLOT: u32 = 51;
+const FABRIC_PUBLISHER_SERVICE_SLOT: u32 = 52;
+const FABRIC_SUBSCRIBER_SERVICE_SLOT: u32 = 53;
+const FABRIC_INTRUDER_SERVICE_SLOT: u32 = 54;
+const TRANSFER_RECEIVER_SLOT: u32 = 55;
+const TRANSFER_SOURCE_SLOT: u32 = 56;
 
 const POWERBOX_PROBE_CAPS: [SpawnGrant; 1] = [grant(38, RIGHT_SEND | RIGHT_RECV)];
 
@@ -197,6 +210,11 @@ fn main() {
         slime_rt::debug_write(b"[init] sample plane complete\n");
         slime_rt::exit(0);
     }
+    if option_env!("SLIME_FABRIC_AUTHORITY_CHECK") == Some("1") {
+        launch_fabric_graph();
+        slime_rt::debug_write(b"[init] fabric authority complete\n");
+        slime_rt::exit(0);
+    }
     slime_rt::debug_write(b"[init] spawn graph launched\n");
     slime_rt::exit(0);
 }
@@ -229,6 +247,56 @@ fn launch_sample_plane() {
     .unwrap_or_else(|_| slime_rt::exit(1));
 
     for handle in [receiver.supervision_slot, lender.supervision_slot] {
+        loop {
+            match slime_rt::supervision_status(handle) {
+                Ok(None) => slime_rt::wait(&[slime_rt::WaitSource::Supervision(handle)]),
+                Ok(Some(slime_rt::Termination::Exit(0))) => break,
+                _ => slime_rt::exit(1),
+            }
+        }
+    }
+}
+
+/// Launch the C8.3 fabric control plane: one service that owns every route
+/// endpoint, and three clients that can only ask it for one.
+///
+/// Init deliberately holds no route capability. It mints the control channels
+/// and hands the fabric one service side per client, then hands each client
+/// only its own client side. The binding between a control endpoint and a
+/// component identity is established exactly here, at spawn, and is what the
+/// fabric authenticates against — a client cannot forge, share, or re-derive
+/// one, so "which component is asking" is a capability fact rather than a
+/// claim in a message.
+///
+/// `fabric-intruder` is spawned with a real control endpoint on purpose: the
+/// denial under test is not "no channel" but "no declared edge".
+fn launch_fabric_graph() {
+    let service = slime_rt::spawn(
+        FABRIC_SERVICE_SLOT,
+        &[
+            grant(0, RIGHT_ENDPOINT_CREATE),
+            grant(FABRIC_PUBLISHER_SERVICE_SLOT, RIGHT_SEND | RIGHT_RECV),
+            grant(FABRIC_SUBSCRIBER_SERVICE_SLOT, RIGHT_SEND | RIGHT_RECV),
+            grant(FABRIC_INTRUDER_SERVICE_SLOT, RIGHT_SEND | RIGHT_RECV),
+        ],
+    )
+    .unwrap_or_else(|_| slime_rt::exit(1));
+
+    let mut clients = [service.supervision_slot; 4];
+    for (index, (executable, control)) in [
+        (FABRIC_PUBLISHER_SLOT, FABRIC_PUBLISHER_CONTROL_SLOT),
+        (FABRIC_SUBSCRIBER_SLOT, FABRIC_SUBSCRIBER_CONTROL_SLOT),
+        (FABRIC_INTRUDER_SLOT, FABRIC_INTRUDER_CONTROL_SLOT),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let spawned = slime_rt::spawn(executable, &[grant(control, RIGHT_SEND | RIGHT_RECV)])
+            .unwrap_or_else(|_| slime_rt::exit(1));
+        clients[index + 1] = spawned.supervision_slot;
+    }
+
+    for handle in clients {
         loop {
             match slime_rt::supervision_status(handle) {
                 Ok(None) => slime_rt::wait(&[slime_rt::WaitSource::Supervision(handle)]),

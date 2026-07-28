@@ -63,7 +63,7 @@ fn booted_generation_declares_an_admitted_fabric_graph() {
     assert_eq!(graph.participant_count(), 4);
     assert_eq!(
         graph.fabric_component_identity(),
-        component_identity("init"),
+        component_identity("fabric-service"),
         "the fabric host is the component the manifest names"
     );
 

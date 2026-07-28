@@ -2,6 +2,7 @@
 
 // Protocol modules are generated from contracts/*/v1 schemas.
 pub mod block;
+pub mod capability_transfer;
 pub mod component;
 pub mod fs;
 pub mod generation;
@@ -177,4 +178,50 @@ pub fn valid_sample_descriptor(
         && descriptor.offset.is_multiple_of(page_size)
         && descriptor.length.is_multiple_of(page_size)
         && end <= sample_descriptor::MAX_SAMPLE_BYTES as u64
+}
+
+/// Validate a capability-transfer descriptor a component received alongside a
+/// moved capability (C8.3), binding it to the role the receiver expects.
+///
+/// The kernel already enforced the structural rules and installed exactly
+/// `rights_mask` (minus `RIGHT_TRANSFER` without `FLAG_RETAIN_TRANSFER`), so a
+/// descriptor cannot overstate what arrived. What the kernel cannot check is
+/// the fabric's own role binding: it knows nothing of routes or directions.
+/// This checks that half — the descriptor names the exact
+/// (route identity, direction) edge the receiver was provisioned for, and
+/// carries the object kind that role implies.
+pub fn valid_capability_transfer(
+    descriptor: &capability_transfer::WireCapabilityTransfer,
+    expected_route: &[u8; 32],
+    expected_direction: u32,
+    expected_kind: u32,
+) -> bool {
+    descriptor.magic == capability_transfer::CAPABILITY_TRANSFER_MAGIC
+        && descriptor.version == capability_transfer::FORMAT_VERSION
+        && descriptor.status == 0
+        && descriptor.flags & !capability_transfer::KNOWN_FLAGS == 0
+        && descriptor.rights_mask != 0
+        && descriptor.object_kind == expected_kind
+        && descriptor.direction == expected_direction
+        && descriptor.route_identity == *expected_route
+        && *expected_route != [0; 32]
+}
+
+/// Structural validity of a fabric provisioning request, before the service
+/// looks at anything it claims.
+///
+/// Deliberately shallow: the route name, direction, and type identity a
+/// request carries are caller-supplied and grant nothing. The fabric
+/// authenticates by the control endpoint the request arrived on and answers
+/// from the generation graph, so this only rejects bytes that are not a
+/// request at all.
+pub fn valid_fabric_request(request: &capability_transfer::WireFabricRequest) -> bool {
+    request.magic == capability_transfer::FABRIC_REQUEST_MAGIC
+        && request.version == capability_transfer::FORMAT_VERSION
+        && request.flags == 0
+        && request.reserved.iter().all(|byte| *byte == 0)
+        && (request.route_name_len as usize) <= capability_transfer::MAX_ROUTE_NAME_BYTES
+        && request.route_name[request.route_name_len as usize..]
+            .iter()
+            .all(|byte| *byte == 0)
 }

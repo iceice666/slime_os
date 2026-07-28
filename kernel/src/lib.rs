@@ -21,7 +21,7 @@ pub mod time;
 
 pub use arch::x86_64::{acpi, boot, crt, gdt, interrupts, limine, pci, platform, trap};
 pub use drivers::{dma, frame_buffer, hardware_inventory, input, nvme, serial, virtio_blk};
-pub use protocol::{block_proto, generation_proto, store_proto};
+pub use protocol::{block_proto, capability_transfer_proto, generation_proto, store_proto};
 pub use runtime::{bootstrap, component, generation, generation_manager, generation_service};
 pub use storage::{
     block_device, block_service, gpt, object_store, recovery, store_service, transfer,
