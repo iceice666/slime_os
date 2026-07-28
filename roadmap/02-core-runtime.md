@@ -10,6 +10,7 @@ ROS 2 compatibility in [`03-ros2-compatibility.md`](03-ros2-compatibility.md) is
 
 - Kernel IPC remains a small control plane. The current 64-byte message bound is not enlarged for sensor or image data.
 - Bulk samples live in bounded shared buffers referenced by typed control messages.
+- Component working memory is task-private and non-transferable. Shared buffers carry samples *between* components; they are not a general allocator, and neither mechanism may be reinterpreted as the other.
 - Topic names and types are userspace metadata. Authority is carried by SEND/RECV endpoint capabilities minted or distributed by the declared fabric service.
 - The generation declares which component may publish, subscribe, call, serve, inspect, or administer each graph edge.
 - `TransportQoS` controls message delivery. `SchedulingClass` controls CPU ordering. They are separate contracts and namespaces.
@@ -22,9 +23,10 @@ ROS 2 compatibility in [`03-ros2-compatibility.md`](03-ros2-compatibility.md) is
 1. C7 consumes the M6 endpoint factory, spawn accounting, supervision, and generation machinery.
 2. C8 consumes C7's bounded sample plane.
 3. C9 consumes C8 plus the scheduler and time mechanisms from M1/M2, after P1 has made their architecture boundary explicit.
-4. H2 consumes C7's generation-v3/shared-buffer foundation and P1's extracted architecture/platform boundary for userspace drivers.
-5. ROS R1 consumes C8 and H6 networking; it does not block C9 and its initial wire-conformance gate does not require a non-x86 boot.
-
+4. C10 consumes C7's per-holder quota and accounting pattern only. It does not consume C8 or C9 and may proceed in parallel with the remaining fabric slices.
+5. H2 consumes C7's generation-v3/shared-buffer foundation and P1's extracted architecture/platform boundary for userspace drivers.
+6. ROS R1 consumes C8 and H6 networking; it does not block C9 and its initial wire-conformance gate does not require a non-x86 boot.
+omp --resume 019fa694-98d1-7000-93b1-e54ee0f898fd
 ## C7: Bounded resource and shared-sample plane
 
 **Status:** Complete. Decomposed into C7.1–C7.7 so each slice introduces one primary state surface and owns an independently reviewable QEMU check, mirroring the M5/M6 sub-slice convention. Every gate passes, including the full-graph boot checks. The 2026-07-26 audit reopened this gate on three findings, all now resolved: C7.5's boot wedge (backlog B3), the dormant live-path shared-buffer plane (backlog B4), and the absence of any syscall-level or real-component evidence (backlog B5). A built generation carries a digest-authenticated `shared-buffer-budget/v1` resource; `bootstrap` mints a `SharedBufferFactory` and validates its generation grants; `dango` and `spawn-service` boot with distinct non-`DENY` quotas; and `sample-lender`/`sample-receiver` move a `>MAX_MSG` payload through the real `SYS_SHARED_BUFFER_*` syscalls under `just sample_plane_live_check`. Residual debt is narrow and recorded rather than open: `SYS_SHARED_BUFFER_REVOKE` has no live caller, and the two insert-failure rollback paths are uncovered. Evidence: `devlog/2026-07-26-c7-audit/`, `devlog/2026-07-26-b3-shared-buffer-table-stack-overflow/`, `devlog/2026-07-26-b4-live-shared-buffer-budget/`, `devlog/2026-07-26-b5-live-sample-plane/`.
@@ -798,6 +800,264 @@ just robot_runtime_check
 ### Exit condition
 
 A simulated sensor/controller/actuator graph runs through the native fabric with explicit time, scheduling, lifecycle, and parameter authority; under CPU contention and an injected component restart it remains bounded, preserves the declared scheduling order, restores fresh authority, and reproduces its typed outputs from a complete recorded input trace.
+
+## C10: Bounded private component memory
+
+**Status:** Not started. Decomposed into C10.1–C10.4.
+
+**Depends on:** C7's per-holder quota, supervision-subtree accounting, and
+reclamation pattern; and backlog item **B9**, which must land first because
+C10.1 extends the same task-teardown path B9 repairs. C10 does not consume C8
+or C9 and may proceed in parallel with the remaining fabric slices on
+`x86_64-qemu-virtio`.
+
+**Motivation:** A component's working memory is fixed at build time. Its stack
+comes from the `SLIMECMP` header and its `.data`/`.bss` from the linked image;
+`components/runtime` installs no `GlobalAlloc`, and no syscall yields a page, so
+`Vec`, `Box`, and `String` are unavailable to a native component. Every buffer
+is therefore sized for its worst case in every generation that carries that
+component. A build service, a filesystem index, and a bounded introspection
+reply all need memory proportional to their input, and none can be written under
+that constraint.
+
+The shared-buffer plane is not that mechanism and must not become it. It exists
+to move samples *between* components: every region is a nameable, transferable,
+loanable kernel object drawn from the contiguous frame allocator under a
+256-page kernel-wide ceiling. Working memory is private, never transferred,
+never sealed, and needs no physical contiguity. Overloading one onto the other
+would attach transfer and loan semantics to a heap and force fragmentation-prone
+contiguous runs on every allocation.
+
+### Architecture decisions
+
+- component working memory is **one task-private region at a fixed base**, grown
+  only at its tail. `SLIMECMP` images link at a fixed VA and hold real machine
+  pointers, so a growth that relocated the base would invalidate every live
+  pointer; growth past the reserved window fails instead of moving;
+- the region is **reserved as address space at spawn and backed page by page on
+  demand**. Frames are drawn individually and need not be contiguous;
+- growth is **authorized by a generation-declared page quota, not a capability**.
+  The region is not nameable, transferable, loanable, sealable, or shareable, so
+  there is no object for a capability to designate; the authority question is
+  how many pages a component may hold, which is a budget. This mirrors the
+  stack, which is generation-sized and needs no capability, and it leaves
+  `../docs/capability-matrix.md` unchanged: C10 adds no kernel object and no
+  right;
+- the quota is **deny-by-default**. A component absent from the budget resource
+  grows nothing, exactly as an absent shared-buffer holder allocates nothing;
+- pages are **always user/read-write/no-execute**, preserving W^X. No growth,
+  admission, or compilation path may derive an executable mapping from them;
+- the kernel exposes **growth only** — no `malloc`, `free`, arbitrary `mmap`,
+  file-backed or executable mappings, and no second region. `free` is a
+  userspace free-list operation; the pages return to the kernel when the task
+  dies;
+- allocation policy lives **entirely in `slime-rt`**. The kernel tracks a page
+  count and never an allocation.
+
+This is the WebAssembly linear-memory split — a runtime that grows bounded,
+zero-filled pages under a host-enforced limit, and a language runtime that
+allocates inside them — with one deliberate divergence. WebAssembly programs
+address memory by offset, so a runtime may relocate the base on growth; native
+`SLIMECMP` code cannot, so the base is pinned and the reservation is fixed.
+
+### C10.1 — Task-private growable memory mechanism
+
+**Status:** Not started.
+
+**Depends on:** B9.
+
+#### Deliverables
+
+- reserve a fixed per-task private-memory window in the component address space,
+  clear of the image, the shared-buffer mapping convention, and the stack, with
+  unmapped address space on both sides serving as its guard;
+- add one growth syscall taking a page delta and returning the previous page
+  count, with distinct structured errors for delta overflow, reservation
+  overrun, quota exhaustion, and frame exhaustion;
+- back each new page with a freshly zeroed frame mapped user/read-write/
+  no-execute, and never move the base;
+- make growth all-or-nothing: a failure part-way through unmaps and returns
+  every frame the attempt took, leaving the page count and every existing
+  mapping unchanged;
+- charge growth to a per-task page count bounded by both the declared quota and
+  a fixed kernel-wide ceiling, and return every page on termination through the
+  reclamation path B9 establishes;
+- treat a zero delta as a size query, so an allocator can read its current
+  extent without a second call.
+
+#### Required checks
+
+- growth returns the previous page count and every new page reads as zero;
+- the base address and previously written contents survive repeated growths;
+- leaf mappings carry user, write, and no-execute, and never an executable bit;
+- a component with no budget entry cannot grow at all;
+- quota overrun, reservation overrun, and delta overflow each fail with their
+  own structured error and leave the page count unchanged;
+- frame exhaustion part-way through a multi-page growth returns every frame it
+  had taken, observable as an unchanged free-frame count;
+- the kernel-wide ceiling holds across several components, and one component's
+  exhaustion leaves every other component's region intact;
+- termination returns every private page, observable as a free-frame count that
+  comes back to its pre-spawn value.
+
+#### Planned verification target
+
+```sh
+just private_memory_check
+```
+
+#### Exit condition
+
+A task grows a private region repeatedly at a fixed base, reads zeros from every
+new page, cannot obtain an executable mapping of it, fails closed on quota,
+reservation, overflow, and frame exhaustion with no partial effect, and returns
+every page to the frame allocator when it terminates.
+
+### C10.2 — Generation-declared private-memory budget
+
+**Status:** Not started.
+
+**Depends on:** C10.1.
+
+#### Deliverables
+
+- define a versioned Zutai private-memory budget resource under `../contracts/`,
+  carried as a generation `KIND_RESOURCE` object and authenticated by the
+  existing object digest table, reusing the domain-separated holder identity,
+  sorted unique entries, and bounded holder count of `shared-buffer-budget/v1`
+  rather than widening that contract;
+- validate the resource eagerly while decoding the generation, so a malformed,
+  unsorted, duplicated, or globally impossible budget fails the whole generation
+  closed before any component launches;
+- reject aggregate over-commitment as B8 requires: the summed holder quotas must
+  fit the kernel-wide ceiling, so a budget that validates is one the kernel can
+  honour with every holder at its ceiling at once;
+- install each component's quota at spawn and leave a holder absent from the
+  resource at its deny-by-default zero;
+- mirror the encoding and bound rules host-side, so builder/kernel drift fails
+  in `just generation_check` instead of at boot.
+
+#### Required checks
+
+- malformed, unsorted, duplicated, over-bound, and aggregate-over-committed
+  budgets each fail generation decode;
+- two builds from identical normalized input emit byte-identical resource bytes
+  and object identities;
+- a component named in the budget boots with exactly its declared ceiling, and
+  one omitted from it grows nothing;
+- lowering one holder's declared quota lowers exactly that holder's ceiling and
+  leaves every other holder unchanged;
+- a generation declaring no budget at all boots with every component denied.
+
+#### Planned verification target
+
+```sh
+just private_memory_check
+```
+
+#### Exit condition
+
+One authenticated generation resource fixes every component's private-memory
+ceiling; the declared quota is the live ceiling on the running system, an
+undeclared component allocates nothing, and every malformed or over-committed
+budget fails the generation closed rather than degrading into
+first-come-first-served.
+
+### C10.3 — Userspace allocator and live quota evidence
+
+**Status:** Not started.
+
+**Depends on:** C10.2.
+
+#### Deliverables
+
+- add a `GlobalAlloc` to `components/runtime` backed by the private region: a
+  first-fit free list ordered by address with boundary coalescing on free,
+  matching the audited kernel heap, extended so a growth appends to the tail of
+  the list and merges with the trailing free block;
+- request growth in batches rather than per allocation, keeping the syscall ABI
+  in target pages while the batching policy stays in userspace, so a later page
+  profile changes no contract;
+- surface exhaustion as a structured allocation failure that a component can
+  observe, never a fault, silent truncation, or hang;
+- add a startup self-check component proving the declared quota is live on the
+  real boot path, in the same shape as the C7 shared-buffer probe, so the
+  syscall is exercised by a real component and not only by kernel tests
+  (backlog B5's lesson);
+- leave components that declare no quota untouched: no growth call, no allocator
+  use, and no change to their image or behavior.
+
+#### Required checks
+
+- `Vec`, `Box`, and `String` work in a component across reallocation, including
+  growth that crosses a batch boundary;
+- the allocator requests growth only when its free list cannot serve a request,
+  and freed memory is reused without further growth;
+- an allocation beyond the declared quota fails structurally and the component
+  stays alive to observe it;
+- the startup probe fails the boot when the generation granted a quota the
+  kernel does not honour;
+- a zero-quota component that never allocates is byte-identical in behavior to
+  its pre-C10 build.
+
+#### Planned verification target
+
+```sh
+just private_memory_check
+```
+
+#### Exit condition
+
+A real component allocates and frees dynamically sized data through ordinary
+Rust collections under its generation-declared ceiling, reuses freed memory
+without growing, observes exhaustion as a structured error rather than a fault,
+and proves its quota live at startup on the ordinary boot path.
+
+### C10.4 — Adoption, reclamation, and leak evidence
+
+**Status:** Not started.
+
+**Depends on:** C10.3.
+
+#### Deliverables
+
+- convert at least one existing worst-case-sized static buffer in a real
+  component to input-proportional allocation, removing the reserved `.bss` from
+  every generation that carries it;
+- drive a repeated spawn/exit workload through Dango's command path, where the
+  B9 leak and any C10 reclamation defect both manifest, and record the
+  free-frame count across the cycle;
+- confirm the private region is absent from every capability path: it cannot be
+  named, transferred, loaned, sealed, mapped by another component, or made
+  executable;
+- confirm shared-buffer and private-memory accounting stay independent, so
+  exhausting one leaves the other's declared ceilings intact.
+
+#### Required checks
+
+- a repeated spawn/exit cycle returns the free-frame count to its starting value
+  and does not drift across iterations;
+- a component holding a private region and a shared buffer at once charges each
+  to its own account, and exhausting either leaves the other usable;
+- no syscall, transfer descriptor, or spawn grant can name another component's
+  private region;
+- the converted component behaves identically to its static-buffer predecessor
+  on the same inputs while its image declares less `.bss`.
+
+#### Planned verification target
+
+```sh
+just private_memory_check
+```
+
+### Exit condition
+
+A generation declares per-component private-memory ceilings; components allocate
+dynamically sized working data through ordinary language collections inside
+them; growth is zero-filled, pinned at a fixed base, never executable, and
+fails closed on every bound; the region is invisible to every capability and
+transfer path; and a repeated spawn/exit workload returns every page, leaving
+the frame allocator where it started.
 
 ## Core verification stack
 

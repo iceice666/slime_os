@@ -8,9 +8,9 @@ A milestone is complete only when its exit condition is observed. Compiled code,
 
 | Track | Status | Next open gate |
 | --- | --- | --- |
-| [Backlog](00-backlog.md) | No open items; B1–B8 resolved | Backlog gate is clear — the next track milestone may open |
+| [Backlog](00-backlog.md) | B9 open (terminated tasks are never reaped); B1–B8 resolved | Reclaim terminated-task frames before opening C10 |
 | [Foundations](01-foundations.md) | M1–M4 and M6 complete; M5 mechanisms complete | Record M5.7 removable-media Framework evidence without internal-NVMe modification |
-| [Core runtime](02-core-runtime.md) | C7 complete; C8.1–C8.3 complete — one authenticated generation resource fixes every native interface, graph edge, QoS policy, visibility grant, interposition hop, and resource ceiling, and a live userspace fabric derives exact non-widening, non-transferable route roles from it | Begin C8.4 bounded many-to-many streams |
+| [Core runtime](02-core-runtime.md) | C7 complete; C8.1–C8.3 complete — one authenticated generation resource fixes every native interface, graph edge, QoS policy, visibility grant, interposition hop, and resource ceiling, and a live userspace fabric derives exact non-widening, non-transferable route roles from it. C10 is planned, not started | Begin C8.4 bounded many-to-many streams; C10 opens after B9 |
 | [Architecture portability](07-architecture-portability.md) | Not started | Clear the active backlog, then land P0 target/artifact contracts before P1 x86 boundary extraction |
 | [ROS 2 compatibility](03-ros2-compatibility.md) | Not started | Admit R1 only after C8 and the H6 network-service contract exist |
 | [Platform hardware](04-platform-hardware.md) | H1 implementation complete; physical evidence pending | Record H1 topology/input/storage evidence; implement H2 driver authority ABI |
@@ -21,10 +21,11 @@ A milestone is complete only when its exit condition is observed. Compiled code,
 The active work lanes are deliberately parallel:
 
 - **Evidence lane:** close M5.7 and H1 with an observed removable-media Framework run.
-- **Core lane:** the C7 backlog is clear; C8.1–C8.3 have landed, so C8.4 bounded many-to-many streams is the next open slice.
+- **Core lane:** the C7 backlog is clear; C8.1–C8.3 have landed, so C8.4 bounded many-to-many streams is the next open slice. C10 private component memory is planned and independent of C8/C9, but waits on B9.
 - **Portability lane:** after the backlog gate, land P0/P1 before H2 or C9 establishes more low-level contracts; AArch64 P2 follows without blocking C8.
 - **Platform lane:** record H1 physical evidence, then implement H2 only after P1; H4 still gates DMA-capable Framework promotion.
 - **Development lane:** D1 source authoring can begin from completed M6; D2 waits for P0's producer-neutral artifact contract, and hermetic build/live activation consume C9.
+- **Memory lane:** B9 first, then C10 gives components a generation-bounded private heap so working memory stops being a build-time constant. It consumes only C7's quota pattern, so it does not queue behind the fabric.
 
 No lane may use progress in another lane to claim an unobserved exit condition.
 
@@ -44,6 +45,7 @@ flowchart TD
     C7["C7<br/>Bounded resource and sample plane"]
     C8["C8<br/>Native typed data fabric"]
     C9["C9<br/>Robot runtime authority"]
+    C10["C10<br/>Bounded private component memory"]
     H2["H2<br/>Userspace driver authority ABI"]
 
     R1["R1<br/>ROS 2 topic wire profile"]
@@ -78,6 +80,7 @@ flowchart TD
     P1 --> C9
 
     Foundations --> C7 --> C8
+    C7 --> C10
     C8 --> C9
     C8 --> R1 --> R2 --> R3
 
@@ -166,6 +169,7 @@ Every track preserves these rules:
 11. Architecture ports preserve the same capability, fault, wait/wake, resource-reclamation, generation, and rollback semantics. ISA-specific register frames and page tables are mechanisms, not portable contracts.
 12. MCU-class companions never gain ambient graph, network, storage, or actuator authority and do not weaken the kernel's MMU-backed isolation baseline.
 13. Source languages may emit native executable images only through the admitted target/image contract. Zutai remains the only serialized-schema language, and neither source nor compiler output may mint authority.
+14. Component memory obtained at runtime is task-private, generation-bounded, never executable, and fully reclaimed on termination. Growth is a budgeted mechanism, not an ambient allocator, and never yields a transferable or shareable object.
 
 ## Release gates
 

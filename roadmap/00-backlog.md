@@ -16,11 +16,54 @@ at the bottom rather than deleting it.
 
 ## Open
 
-_No open items. The 2026-07-26 C7 audit (C7.1–C7.7 at `2384bea`) opened B3–B8;
-all six are resolved and logged below. Evidence and bisect:
-`devlog/2026-07-26-c7-audit/`._
+### B9 — terminated tasks are never reaped, so their frames never return
+
+**Problem:** `task::terminate` marks a task `Terminated`, drains its
+capabilities, and reclaims its shared buffers, but never removes the `Task` from
+the scheduler. The `Task` — and the `AddressSpace` it owns — therefore lives for
+the rest of the boot, so `AddressSpace::drop` never runs. Even if it did, that
+`Drop` frees only the PML4 frame and deliberately leaks every user-half page
+table; the image and stack frames mapped by `spawn_with_caps_for` have no
+release path at all. Every spawn permanently consumes its image pages plus its
+stack pages, so a repeated spawn/exit workload — exactly what Dango's command
+path does — drains the frame allocator monotonically.
+
+**Evidence:** `kernel/src/task/mod.rs` — `terminate` pushes to
+`sched.terminated` and leaves the task in `sched.tasks`; `remove_task` is called
+only from the `spawn_from_cap` capability-insert failure path.
+`kernel/src/memory/address_space.rs:81-89` — `Drop` deallocs `self.pml4` alone,
+with the comment that intermediate user-half tables "intentionally leak for the
+small M2 isolation test". No caller frees the frames that `spawn_with_caps_for`
+maps for segments and the stack. Not yet quantified against a live boot: the
+per-cycle frame delta is **[INFERENCE]** from the source until the C10.4
+spawn/exit measurement records it.
+
+**Why it is open now:** the leak is bounded and one-shot for the fixed boot
+graph, which is why it has not bitten. C10 makes it unbounded: private memory is
+grown on demand and reclaimed on termination, so a mechanism that reclaims
+nothing would turn a fixed cost into one that scales with allocation and
+uptime. C10.1 extends this same teardown path, so the path must be correct
+first.
+
+**Proposed fix:** give a terminated task a reclamation point that returns its
+mapped user frames — image segments, stack, and any later per-task region — and
+its user-half page tables, then removes it from the scheduler once no supervisor
+can still read its termination reason. Keep the existing lock order
+(`SCHEDULER` -> `FRAME_ALLOCATOR`, already established by the adjacent
+`reclaim_owner` call) and preserve `SYS_WAIT` and `supervision_status`
+semantics, which read `sched.terminated` after the task is gone. Apply the same
+reclamation to the `spawn_from_cap` failure path, which today drops a
+partially-built address space.
+
+**Exit condition:** a repeated spawn/exit workload returns the free-frame count
+to its starting value with no drift across iterations, supervision results stay
+observable after the child is reaped, and `just test`, `just spawn_service_check`,
+`just dango_check`, and `just sample_plane_live_check` stay green.
 
 ## Resolved
+
+_The 2026-07-26 C7 audit (C7.1–C7.7 at `2384bea`) opened B3–B8; all six are
+resolved and logged below. Evidence and bisect: `devlog/2026-07-26-c7-audit/`._
 
 ### B8 — budget validation bounded each holder but never the aggregate
 
