@@ -13,6 +13,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=SLIME_POWERBOX_CHECK");
     println!("cargo:rerun-if-env-changed=SLIME_SAMPLE_PLANE_CHECK");
     println!("cargo:rerun-if-env-changed=SLIME_FABRIC_AUTHORITY_CHECK");
+    println!("cargo:rerun-if-env-changed=SLIME_FABRIC_STREAM_CHECK");
     println!("cargo:rerun-if-env-changed=SLIME_GENERATION_CANDIDATE");
     println!("cargo:rerun-if-env-changed=SLIME_GENERATION_CMD_SCENARIO");
     if let Ok(number) = std::env::var("SLIME_GENERATION_NUMBER") {
@@ -38,6 +39,9 @@ fn main() {
     }
     if let Ok(value) = std::env::var("SLIME_FABRIC_AUTHORITY_CHECK") {
         println!("cargo:rustc-env=SLIME_FABRIC_AUTHORITY_CHECK={value}");
+    }
+    if let Ok(value) = std::env::var("SLIME_FABRIC_STREAM_CHECK") {
+        println!("cargo:rustc-env=SLIME_FABRIC_STREAM_CHECK={value}");
     }
     if let Ok(value) = std::env::var("SLIME_GENERATION_CANDIDATE") {
         println!("cargo:rustc-env=SLIME_GENERATION_CANDIDATE={value}");
@@ -137,6 +141,76 @@ fn generate_fabric_profile(manifest_dir: &str) {
             format!("    (b\"{component}\", \"{route}\", \"{interface}\", {direction}),\n")
         })
         .collect::<String>();
+    // KEEP_LAST depth is per (component, route): the same component may sit on
+    // two routes with different declared depths, and the fabric sizes each
+    // subscriber's ring from its own entry rather than from a shared default.
+    //
+    // The two scans are independent, so a positional `zip` would silently
+    // truncate — and a mis-sized ring is exactly the kind of quiet wrong answer
+    // KEEP_LAST must not have. Assert the lengths agree before pairing them.
+    let history_depths = fabric_history_depths(&manifest);
+    assert_eq!(
+        participants.len(),
+        history_depths.len(),
+        "every fabric participant declares exactly one historyDepth"
+    );
+    let depths = participants
+        .iter()
+        .zip(history_depths)
+        .map(|((component, route, _, _), depth)| {
+            format!("    (b\"{component}\", \"{route}\", {depth}),\n")
+        })
+        .collect::<String>();
+    // Control endpoints, in the order init grants them. Derived from the
+    // manifest's `*-control` grants rather than from the participant table:
+    // `fabric-intruder` holds a real control endpoint and appears in no route,
+    // which is exactly the denial C8.3 tests. Reading participants here would
+    // silently drop it and turn that denial into an absent channel.
+    let clients = fabric_control_clients(&manifest);
+    assert!(
+        !clients.is_empty(),
+        "generation manifest declares no fabric control endpoints"
+    );
+    // Only stream participants are provisioned by this service, and only they
+    // need a control endpoint. Call and operation routes are C8.6/C8.7 scope:
+    // they are declared in the graph, carried in the table, and skipped at
+    // runtime, so a participant on one is not required to hold a channel here.
+    for (component, _, _, direction) in participants.iter() {
+        if !matches!(direction, 1 | 2) {
+            continue;
+        }
+        assert!(
+            clients.iter().any(|client| client == component),
+            "fabric stream participant {component} has no control endpoint grant"
+        );
+    }
+    let client_rows = clients
+        .iter()
+        .map(|component| format!("    b\"{component}\",\n"))
+        .collect::<String>();
+    // Supervision handles the fabric holds for its subscribers, at the slots
+    // init grants after the control endpoints. A downstream loan names its
+    // receiver through one of these rather than through an ambient task id.
+    // Only stream subscribers appear: a call or operation server receives no
+    // brokered sample and so needs no loan receiver binding.
+    let mut subscribers: Vec<&String> = Vec::new();
+    for (component, _, _, direction) in participants.iter() {
+        if *direction == 2 && !subscribers.contains(&component) {
+            subscribers.push(component);
+        }
+    }
+    let supervision_rows = subscribers
+        .iter()
+        .enumerate()
+        .map(|(index, component)| {
+            let slot = FABRIC_FIRST_CONTROL_SLOT + clients.len() + index;
+            format!("    (b\"{component}\", {slot}),\n")
+        })
+        .collect::<String>();
+    let subscriber_rows = subscribers
+        .iter()
+        .map(|component| format!("    b\"{component}\",\n"))
+        .collect::<String>();
     let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR"));
     std::fs::write(
         out.join("fabric_profile.rs"),
@@ -144,10 +218,89 @@ fn generate_fabric_profile(manifest_dir: &str) {
             "/// Every (component, route name, interface name, direction) edge the\n\
              /// generation declares. Deny by default: a component absent from this\n\
              /// table holds no route authority, whatever it asks for.\n\
-             pub const FABRIC_PARTICIPANTS: &[(&[u8], &str, &str, u32)] = &[\n{rows}];\n"
+             pub const FABRIC_PARTICIPANTS: &[(&[u8], &str, &str, u32)] = &[\n{rows}];\n\
+             \n\
+             /// The KEEP_LAST depth the generation declares for each edge.\n\
+             pub const FABRIC_HISTORY_DEPTHS: &[(&[u8], &str, u32)] = &[\n{depths}];\n\
+             \n\
+             /// Every distinct component holding a fabric control endpoint, in the\n\
+             /// order init grants those endpoints.\n\
+             pub const FABRIC_CLIENTS: &[&[u8]] = &[\n{client_rows}];\n\
+             \n\
+             /// Supervision handle slots for every declared subscriber.\n\
+             pub const FABRIC_SUPERVISION: &[(&[u8], u32)] = &[\n{supervision_rows}];\n\
+             \n\
+             /// Every distinct subscriber, in the order init spawns them. Init\n\
+             /// spawns each before the fabric so their supervision handles exist\n\
+             /// when it grants them.\n\
+             pub const FABRIC_SUBSCRIBERS: &[&[u8]] = &[\n{subscriber_rows}];\n\
+             \n\
+             /// The fabric's first control-endpoint slot, shared with init so the\n\
+             /// two cannot disagree about the grant order.\n\
+             pub const FABRIC_FIRST_CONTROL_SLOT: u32 = {FABRIC_FIRST_CONTROL_SLOT};\n"
         ),
     )
     .expect("write fabric profile");
+}
+
+/// The fabric's own capability layout: slot 0 is its endpoint factory, slot 1
+/// its shared-buffer factory, and control endpoints start here. Declared once
+/// and emitted into the generated profile so `fabric-service` and `init` read
+/// the same number rather than each hard-coding it.
+const FABRIC_FIRST_CONTROL_SLOT: usize = 2;
+
+/// Every component the manifest grants a fabric control endpoint, in manifest
+/// order.
+///
+/// Keyed on the `*-control` grant naming `fabric-service` as its target, which
+/// is exactly the set init spawns with a control channel — including
+/// `fabric-intruder`, which holds one and is declared on no route.
+fn fabric_control_clients(manifest: &str) -> Vec<String> {
+    let mut clients = Vec::new();
+    let mut source = None;
+    let mut control_grant = false;
+    for line in manifest.lines() {
+        let trimmed = line.trim_start();
+        if let Some(rest) = trimmed.strip_prefix("name = \"") {
+            // A new grant record begins: remember whether it is a control
+            // grant, and drop any source carried over from the previous one.
+            control_grant = rest.starts_with("fabric-") && rest.contains("-control\"");
+            source = None;
+        } else if let Some(name) = trimmed.strip_prefix("source = \"") {
+            source = control_grant.then(|| name.trim_end_matches("\";").to_owned());
+        } else if trimmed.starts_with("target = \"fabric-service\"")
+            && let Some(client) = source.take()
+            && !clients.contains(&client)
+        {
+            clients.push(client);
+        }
+    }
+    clients
+}
+
+/// The declared KEEP_LAST depth of each participant, in the same order
+/// [`fabric_participants`] returns them.
+///
+/// Read as its own pass rather than folded into the participant parse: the
+/// depth sits at the same indentation as every other QoS field, so keying on
+/// it there would make the participant tuple depend on field order within a
+/// block. Counting `historyDepth` lines inside the same block keeps the two
+/// readings independent, and a mismatch in length is caught by the caller's
+/// `zip` truncating — which the participant/`declared` cross-check above
+/// already makes impossible to reach silently.
+fn fabric_history_depths(manifest: &str) -> Vec<u32> {
+    fabric_graph_block(manifest)
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim_start();
+            let indent = line.len() - trimmed.len();
+            if indent != 12 {
+                return None;
+            }
+            let value = trimmed.strip_prefix("historyDepth = ")?;
+            value.trim_end_matches(';').parse().ok()
+        })
+        .collect()
 }
 
 /// Scan the manifest's `fabricGraph` block for its declared participants.

@@ -58,9 +58,12 @@ fn booted_generation_declares_an_admitted_fabric_graph() {
     let graph = slime_os_kernel::generation::fabric_graph(&generation)
         .expect("generation declares a graph");
 
-    assert_eq!(graph.schema_count(), 2);
-    assert_eq!(graph.route_count(), 2);
-    assert_eq!(graph.participant_count(), 4);
+    // Three declared routes: two C8.4 streams and one C8.6 call. Eight
+    // participants across them, so the fan-out under test is a real
+    // many-to-many graph rather than one edge per route.
+    assert_eq!(graph.schema_count(), 3);
+    assert_eq!(graph.route_count(), 3);
+    assert_eq!(graph.participant_count(), 8);
     assert_eq!(
         graph.fabric_component_identity(),
         component_identity("fabric-service"),
@@ -161,7 +164,9 @@ fn route_authority_is_the_exact_tuple() {
             );
         }
     }
-    assert_eq!(stream_routes, 1);
+    // Two stream routes (C8.4 telemetry and diagnostics) and one call route
+    // (C8.6 parameters), so the loop above covered both contract kinds.
+    assert_eq!(stream_routes, 2);
     assert_eq!(call_routes, 1);
 }
 

@@ -140,3 +140,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-07-27 | [C8.3 — Attenuated endpoint provisioning and control plane](2026-07-27-c8-3-fabric-authority/index.md) | Change | Verified | C8.3 |
 | 2026-07-27 | [D1–D7 — Native development, live update, and on-device build roadmap](2026-07-27-d1-d7-native-development-roadmap/index.md) | Decision | Proposed | D1, D2, D3, D4, D5, D6, D7, P0 |
 | 2026-07-28 | [C10 — Bounded private component memory](2026-07-28-c10-private-component-memory/index.md) | Decision | Proposed | C10, C10.1, C10.2, C10.3, C10.4, B9, C7 |
+| 2026-07-28 | [C8.4 — Bounded many-to-many streams](2026-07-28-c8-4-bounded-streams/index.md) | Change | Verified | C8.4 |

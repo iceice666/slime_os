@@ -78,6 +78,24 @@ impl<T, const N: usize> BoundedSequence<T, N> {
     }
 }
 
+pub mod diagnostics_stream {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct DiagnosticsSample {
+        pub sequence: u64,
+        pub severity: u32,
+        pub detail: [u8; 16],
+    }
+
+    pub type DiagnosticsStream = super::Stream<DiagnosticsSample>;
+
+    pub const INTERFACE_IDENTITY: [u8; 32] = [
+        0x96, 0xdb, 0x0f, 0x15, 0x42, 0xed, 0xcd, 0x4d, 0x80, 0xa8, 0x2e, 0xf2, 0x7f, 0x1f, 0xe6,
+        0xb8, 0xe6, 0xfc, 0xc3, 0x5a, 0xf4, 0xc7, 0xf2, 0x70, 0x30, 0xaa, 0xbf, 0xeb, 0xbb, 0x81,
+        0x12, 0x94,
+    ];
+    pub const TYPE_TAG: u64 = 0xc5508e6fa99ba2bc;
+    pub const MAX_ENCODED_BYTES: usize = 28;
+}
 pub mod navigation_operation {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct NavigationFeedback {

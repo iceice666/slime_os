@@ -1,0 +1,18 @@
+{
+  formatVersion = 1;
+  name = "DiagnosticsStream";
+  kind = "stream";
+  roles = [
+    { role = "item"; typeName = "DiagnosticsSample"; };
+  ];
+  types = [
+    {
+      name = "DiagnosticsSample";
+      fields = [
+        { name = "sequence"; kind = "scalar"; width = 8; signed = false; bound = 0; typeName = ""; };
+        { name = "severity"; kind = "scalar"; width = 4; signed = false; bound = 0; typeName = ""; };
+        { name = "detail"; kind = "bytes"; width = 0; signed = false; bound = 16; typeName = ""; };
+      ];
+    };
+  ];
+}

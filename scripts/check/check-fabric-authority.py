@@ -43,12 +43,10 @@ CHAINS: list[tuple[str, list[str]]] = [
         [
             # Generation authority is validated before anything runs.
             "[generation] fabric control grants valid",
-            # The fabric owns both halves of the route; no participant holds a
-            # factory, and init never holds a route capability at all.
-            "[fabric] route endpoints minted",
             # It parks instead of spinning while its clients start. Init spawns
-            # the service before any client, so its first sweep necessarily
-            # finds an empty set and this line is reached.
+            # the subscribers before the service, but the publishers after, so
+            # its first sweep necessarily finds an unanswered set and this line
+            # is reached.
             "[fabric] idle: parked on control endpoints",
         ],
     ),
@@ -56,7 +54,7 @@ CHAINS: list[tuple[str, list[str]]] = [
         "publisher provisioning and denials",
         [
             "[fabric-publisher] role requested",
-            "[fabric] provisioned fabric-publisher publish",
+            "[fabric] provisioned fabric-publisher telemetry publish",
             "[fabric-publisher] publish role received",
             # A publish role is one direction: no receive authority came with it.
             "[fabric-publisher] route receive denied",
@@ -64,7 +62,7 @@ CHAINS: list[tuple[str, list[str]]] = [
             "[fabric-publisher] re-delegation denied",
             "[fabric-publisher] widening denied",
             # Only after every denial does the role do what it is for.
-            "[fabric-publisher] sample published",
+            "[fabric-publisher] inline samples published",
             "[fabric-publisher] done",
         ],
     ),
@@ -72,11 +70,11 @@ CHAINS: list[tuple[str, list[str]]] = [
         "subscriber provisioning and denials",
         [
             "[fabric-subscriber] role requested",
-            "[fabric] provisioned fabric-subscriber subscribe",
+            "[fabric] provisioned fabric-subscriber telemetry subscribe",
             "[fabric-subscriber] subscribe role received",
             "[fabric-subscriber] route publish denied",
             "[fabric-subscriber] re-delegation denied",
-            "[fabric-subscriber] sample received",
+            "[fabric-subscriber] inline and shared received",
             "[fabric-subscriber] done",
         ],
     ),
@@ -95,17 +93,17 @@ CHAINS: list[tuple[str, list[str]]] = [
     (
         "route carries data end to end",
         [
-            "[fabric-publisher] sample published",
-            "[fabric-subscriber] sample received",
+            "[fabric-publisher] inline samples published",
+            "[fabric-subscriber] inline and shared received",
         ],
     ),
     (
         "every declared edge provisioned, then teardown",
         [
-            "[fabric] route endpoints minted",
-            # The service exits only after both declared directions were
-            # claimed; an unprovisioned route endpoint is a failure there.
-            "[fabric] control plane complete",
+            # The service provisions every declared stream edge before brokering,
+            # and an unprovisioned route endpoint is a failure there.
+            "[fabric] every declared stream edge provisioned",
+            "[fabric] stream plane complete",
             "[init] fabric authority complete",
         ],
     ),
@@ -114,15 +112,22 @@ CHAINS: list[tuple[str, list[str]]] = [
 FORBIDDEN = [
     "[fabric] fail:",
     "[fabric-publisher] fail:",
+    "[fabric-publisher-b] fail:",
     "[fabric-subscriber] fail:",
+    "[fabric-subscriber-b] fail:",
     "[fabric-intruder] fail:",
 ]
 
 FABRIC_SOURCES = [
-    ROOT / "components" / "bins" / "src" / "bin" / "fabric-service.rs",
-    ROOT / "components" / "bins" / "src" / "bin" / "fabric-publisher.rs",
-    ROOT / "components" / "bins" / "src" / "bin" / "fabric-subscriber.rs",
-    ROOT / "components" / "bins" / "src" / "bin" / "fabric-intruder.rs",
+    ROOT / "components" / "bins" / "src" / "bin" / name
+    for name in (
+        "fabric-service.rs",
+        "fabric-publisher.rs",
+        "fabric-publisher-b.rs",
+        "fabric-subscriber.rs",
+        "fabric-subscriber-b.rs",
+        "fabric-intruder.rs",
+    )
 ]
 
 

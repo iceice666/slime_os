@@ -6,6 +6,7 @@
   bootstrapComponent = "init";
   interfaceSchemas = [
     "contracts/interface-schema/v1/interfaces/telemetry-stream.zti";
+    "contracts/interface-schema/v1/interfaces/diagnostics-stream.zti";
     "contracts/interface-schema/v1/interfaces/parameter-call.zti";
     "contracts/interface-schema/v1/interfaces/navigation-operation.zti";
   ];
@@ -39,6 +40,8 @@
     { id = "sha256:fabric-publisher"; kind = "component"; size = 65536; };
     { id = "sha256:fabric-subscriber"; kind = "component"; size = 65536; };
     { id = "sha256:fabric-intruder"; kind = "component"; size = 65536; };
+    { id = "sha256:fabric-publisher-b"; kind = "component"; size = 65536; };
+    { id = "sha256:fabric-subscriber-b"; kind = "component"; size = 65536; };
     { id = "shared-buffer-budget"; kind = "resource"; size = 4096; };
     { id = "fabric-graph"; kind = "resource"; size = 4096; };
   ];
@@ -48,6 +51,10 @@
     { holder = "spawn-service"; bytePages = 4; bufferCount = 1; mappingCount = 2; loanCount = 1; };
     { holder = "sample-lender"; bytePages = 4; bufferCount = 1; mappingCount = 2; loanCount = 1; };
     { holder = "sample-receiver"; bytePages = 2; bufferCount = 1; mappingCount = 2; loanCount = 1; };
+    { holder = "fabric-service"; bytePages = 8; bufferCount = 4; mappingCount = 8; loanCount = 4; };
+    { holder = "fabric-publisher-b"; bytePages = 4; bufferCount = 1; mappingCount = 2; loanCount = 1; };
+    { holder = "fabric-subscriber"; bytePages = 4; bufferCount = 0; mappingCount = 4; loanCount = 0; };
+    { holder = "fabric-subscriber-b"; bytePages = 4; bufferCount = 0; mappingCount = 4; loanCount = 0; };
   ];
 
   fabricGraph = {
@@ -55,8 +62,8 @@
     limits = {
       routes = 8;
       ingressSources = 4;
-      publishers = 2;
-      subscribers = 2;
+      publishers = 3;
+      subscribers = 3;
       clients = 2;
       servers = 2;
       sampleBytes = 65536;
@@ -70,7 +77,7 @@
       bufferPages = 8;
       mappings = 8;
       loans = 8;
-      capabilitySlots = 16;
+      capabilitySlots = 32;
     };
     routes = [
       {
@@ -97,6 +104,68 @@
             visibility = "graph";
             interposition = [];
             reliability = "reliable";
+            durability = "volatile";
+            liveliness = "automatic";
+            historyDepth = 8;
+            retainedDepth = 0;
+            deadlineNs = 0;
+            lifespanNs = 0;
+            leaseNs = 0;
+          };
+          {
+            component = "fabric-publisher-b";
+            direction = "publish";
+            visibility = "graph";
+            interposition = [];
+            reliability = "reliable";
+            durability = "retained";
+            liveliness = "automatic";
+            historyDepth = 4;
+            retainedDepth = 2;
+            deadlineNs = 0;
+            lifespanNs = 0;
+            leaseNs = 0;
+          };
+          {
+            component = "fabric-subscriber-b";
+            direction = "subscribe";
+            visibility = "graph";
+            interposition = [];
+            reliability = "bestEffort";
+            durability = "volatile";
+            liveliness = "automatic";
+            historyDepth = 4;
+            retainedDepth = 0;
+            deadlineNs = 0;
+            lifespanNs = 0;
+            leaseNs = 0;
+          };
+        ];
+      };
+      {
+        name = "diagnostics";
+        interface = "DiagnosticsStream";
+        participants = [
+          {
+            component = "fabric-publisher-b";
+            direction = "publish";
+            visibility = "graph";
+            interposition = [];
+            reliability = "reliable";
+            durability = "volatile";
+            liveliness = "automatic";
+            historyDepth = 2;
+            retainedDepth = 0;
+            deadlineNs = 0;
+            lifespanNs = 0;
+            leaseNs = 0;
+          };
+          {
+            component = "fabric-subscriber-b";
+            direction = "subscribe";
+            visibility = "graph";
+            interposition = [];
+            reliability = "bestEffort";
             durability = "volatile";
             liveliness = "automatic";
             historyDepth = 2;
@@ -353,6 +422,22 @@
       spawnBudget = 0;
       commandProfile = [];
     };
+    {
+      name = "fabric-publisher-b";
+      object = "sha256:fabric-publisher-b";
+      role = "application";
+      dependencies = ["fabric-service";];
+      spawnBudget = 0;
+      commandProfile = [];
+    };
+    {
+      name = "fabric-subscriber-b";
+      object = "sha256:fabric-subscriber-b";
+      role = "application";
+      dependencies = ["fabric-service";];
+      spawnBudget = 0;
+      commandProfile = [];
+    };
   ];
   grants = [
     {
@@ -600,6 +685,27 @@
       source = "fabric-intruder";
       target = "fabric-service";
       rights = ["send"; "recv";];
+      transferable = false;
+    };
+    {
+      name = "fabric-publisher-b-control";
+      source = "fabric-publisher-b";
+      target = "fabric-service";
+      rights = ["send"; "recv";];
+      transferable = false;
+    };
+    {
+      name = "fabric-subscriber-b-control";
+      source = "fabric-subscriber-b";
+      target = "fabric-service";
+      rights = ["send"; "recv";];
+      transferable = false;
+    };
+    {
+      name = "fabric-shared-buffer-factory";
+      source = "init";
+      target = "fabric-service";
+      rights = ["bufferCreate";];
       transferable = false;
     };
   ];

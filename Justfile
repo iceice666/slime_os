@@ -77,6 +77,15 @@ fabric_authority_check: contracts_check generation_check
     python3 scripts/check/check-fabric-authority.py
     cd kernel && cargo test --release -p slime_os-kernel --test fabric_authority -- -display none
 
+# C8.4: bounded many-to-many streams. Two publishers and two subscribers
+# exchange inline and >MAX_MSG samples over generation-declared routes;
+# KEEP_LAST evicts the exact oldest sequence, a stalled BEST_EFFORT subscriber
+# reports bounded loss without retry growth, and one large sample incurs one
+# fabric copy plus one quota-charged receiver-bound loan per subscriber.
+fabric_stream_check: contracts_check generation_check
+    python3 scripts/check/check-fabric-stream.py
+    cd kernel && cargo test --release -p slime_os-kernel --test fabric_stream -- -display none
+
 # C7.6: versioned sample descriptor over the C7.5 loan lifecycle; byte-identical
 # binding round-trip, malformed-descriptor rejection before mapping, and a
 # payload larger than MAX_MSG carried over descriptor plus shared buffer.
@@ -248,6 +257,10 @@ interface_schema_gen:
 # Regenerate the capability-transfer protocol bindings (C8.3).
 capability_transfer_gen:
     python3 scripts/generate/generate-capability-transfer-bindings.py
+
+# Regenerate the fabric stream framing bindings (C8.4).
+fabric_stream_gen:
+    python3 scripts/generate/generate-fabric-stream-bindings.py
 
 # Regenerate the fabric-graph resource bindings (C8.2); part of the boot set.
 fabric_graph_gen: boot_gen

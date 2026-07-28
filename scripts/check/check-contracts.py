@@ -50,6 +50,10 @@ CAPABILITY_TRANSFER_CONTRACT = ROOT / "contracts" / "capability-transfer" / "v1"
 CAPABILITY_TRANSFER_BINDING_GENERATOR = (
     ROOT / "scripts" / "generate" / "generate-capability-transfer-bindings.py"
 )
+FABRIC_STREAM_CONTRACT = ROOT / "contracts" / "fabric-stream" / "v1"
+FABRIC_STREAM_BINDING_GENERATOR = (
+    ROOT / "scripts" / "generate" / "generate-fabric-stream-bindings.py"
+)
 
 
 def run(*arguments: str) -> str:
@@ -147,6 +151,14 @@ subprocess.run(
     cwd=ROOT,
     check=True,
 )
+
+run("check", str(FABRIC_STREAM_CONTRACT / "schema.zt"))
+run("check", str(FABRIC_STREAM_CONTRACT / "gen_rust.zt"))
+subprocess.run(
+    [sys.executable, str(FABRIC_STREAM_BINDING_GENERATOR), "--check"],
+    cwd=ROOT,
+    check=True,
+)
 run("check", str(INTERFACE_SCHEMA_CONTRACT / "schema.zt"))
 run("check", str(INTERFACE_SCHEMA_CONTRACT / "check.zt"))
 run("check", str(INTERFACE_SCHEMA_CONTRACT / "gen_python.zt"))
@@ -192,6 +204,6 @@ subprocess.run(
 print(
     "Generation source/binary, kernel image, BootState, BootState trace, recovery, "
     "block, component, store, spawn, filesystem, powerbox, generation-management, "
-    "transfer, sample-descriptor, interface-schema, fabric-graph, and "
-    "capability-transfer contracts passed"
+    "transfer, sample-descriptor, interface-schema, fabric-graph, "
+    "capability-transfer, and fabric-stream contracts passed"
 )

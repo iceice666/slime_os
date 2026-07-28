@@ -107,21 +107,27 @@ const SAMPLE_LENDER_SLOT: u32 = 41;
 const SAMPLE_RECEIVER_SLOT: u32 = 42;
 const SAMPLE_LENDER_ENDPOINT_SLOT: u32 = 43;
 const SAMPLE_RECEIVER_ENDPOINT_SLOT: u32 = 44;
-// C8.3 fabric control plane: the service, its three clients, and the two
-// halves of each control channel. Init holds no route capability at all —
-// the fabric mints those and moves each participant a narrowed role.
+// C8.3/C8.4 fabric plane: the service, its five clients, and the two halves of
+// each control channel. Init holds no route capability at all — the fabric
+// mints those and moves each participant a narrowed role.
 const FABRIC_SERVICE_SLOT: u32 = 45;
 const FABRIC_PUBLISHER_SLOT: u32 = 46;
 const FABRIC_SUBSCRIBER_SLOT: u32 = 47;
 const FABRIC_INTRUDER_SLOT: u32 = 48;
-const FABRIC_PUBLISHER_CONTROL_SLOT: u32 = 49;
-const FABRIC_SUBSCRIBER_CONTROL_SLOT: u32 = 50;
-const FABRIC_INTRUDER_CONTROL_SLOT: u32 = 51;
-const FABRIC_PUBLISHER_SERVICE_SLOT: u32 = 52;
-const FABRIC_SUBSCRIBER_SERVICE_SLOT: u32 = 53;
-const FABRIC_INTRUDER_SERVICE_SLOT: u32 = 54;
-const TRANSFER_RECEIVER_SLOT: u32 = 55;
-const TRANSFER_SOURCE_SLOT: u32 = 56;
+const FABRIC_PUBLISHER_B_SLOT: u32 = 49;
+const FABRIC_SUBSCRIBER_B_SLOT: u32 = 50;
+const FABRIC_PUBLISHER_CONTROL_SLOT: u32 = 51;
+const FABRIC_SUBSCRIBER_CONTROL_SLOT: u32 = 52;
+const FABRIC_INTRUDER_CONTROL_SLOT: u32 = 53;
+const FABRIC_PUBLISHER_B_CONTROL_SLOT: u32 = 54;
+const FABRIC_SUBSCRIBER_B_CONTROL_SLOT: u32 = 55;
+const FABRIC_PUBLISHER_SERVICE_SLOT: u32 = 56;
+const FABRIC_SUBSCRIBER_SERVICE_SLOT: u32 = 57;
+const FABRIC_INTRUDER_SERVICE_SLOT: u32 = 58;
+const FABRIC_PUBLISHER_B_SERVICE_SLOT: u32 = 59;
+const FABRIC_SUBSCRIBER_B_SERVICE_SLOT: u32 = 60;
+const TRANSFER_RECEIVER_SLOT: u32 = 61;
+const TRANSFER_SOURCE_SLOT: u32 = 62;
 
 const POWERBOX_PROBE_CAPS: [SpawnGrant; 1] = [grant(38, RIGHT_SEND | RIGHT_RECV)];
 
@@ -210,9 +216,18 @@ fn main() {
         slime_rt::debug_write(b"[init] sample plane complete\n");
         slime_rt::exit(0);
     }
+    // C8.3 and C8.4 launch the same graph: the fabric provisions every declared
+    // edge, then brokers the samples those edges carry. The two gates differ
+    // only in what they assert about one boot, so one launch serves both rather
+    // than two scenarios drifting apart.
     if option_env!("SLIME_FABRIC_AUTHORITY_CHECK") == Some("1") {
         launch_fabric_graph();
         slime_rt::debug_write(b"[init] fabric authority complete\n");
+        slime_rt::exit(0);
+    }
+    if option_env!("SLIME_FABRIC_STREAM_CHECK") == Some("1") {
+        launch_fabric_graph();
+        slime_rt::debug_write(b"[init] fabric stream complete\n");
         slime_rt::exit(0);
     }
     slime_rt::debug_write(b"[init] spawn graph launched\n");
@@ -257,8 +272,8 @@ fn launch_sample_plane() {
     }
 }
 
-/// Launch the C8.3 fabric control plane: one service that owns every route
-/// endpoint, and three clients that can only ask it for one.
+/// Launch the C8.3/C8.4 fabric plane: one service that owns every route
+/// endpoint, and five clients that can only ask it for one.
 ///
 /// Init deliberately holds no route capability. It mints the control channels
 /// and hands the fabric one service side per client, then hands each client
@@ -268,35 +283,102 @@ fn launch_sample_plane() {
 /// one, so "which component is asking" is a capability fact rather than a
 /// claim in a message.
 ///
+/// **Spawn order is load-bearing.** Both subscribers are spawned before the
+/// fabric, because the fabric needs their supervision handles: a downstream
+/// loan names its receiver through a `RIGHT_SUPERVISE` capability, never
+/// through an ambient task id, so the handle must exist before the service
+/// starts. The publishers follow the fabric, so no sample can arrive before
+/// the service is ready to broker it.
+///
 /// `fabric-intruder` is spawned with a real control endpoint on purpose: the
 /// denial under test is not "no channel" but "no declared edge".
 fn launch_fabric_graph() {
-    let service = slime_rt::spawn(
+    // Init launches with 61 of the kernel's 64 capability slots already
+    // occupied, and every spawn returns one more supervision handle. Each
+    // grant is a non-consuming derive-copy, so a slot init has handed on is
+    // still init's until it says otherwise: release the executable and the
+    // control endpoint as soon as the spawn that needed them returns. Nothing
+    // is dropped that init still uses — it keeps only the supervision handles
+    // it waits on.
+    let subscriber = spawn_fabric_client(
+        FABRIC_SUBSCRIBER_SLOT,
+        &[grant(
+            FABRIC_SUBSCRIBER_CONTROL_SLOT,
+            RIGHT_SEND | RIGHT_RECV,
+        )],
+        &[FABRIC_SUBSCRIBER_SLOT, FABRIC_SUBSCRIBER_CONTROL_SLOT],
+    );
+    let subscriber_b = spawn_fabric_client(
+        FABRIC_SUBSCRIBER_B_SLOT,
+        &[grant(
+            FABRIC_SUBSCRIBER_B_CONTROL_SLOT,
+            RIGHT_SEND | RIGHT_RECV,
+        )],
+        &[FABRIC_SUBSCRIBER_B_SLOT, FABRIC_SUBSCRIBER_B_CONTROL_SLOT],
+    );
+
+    // The fabric's own authority: an endpoint factory to mint route halves, a
+    // shared-buffer factory for the one copy each large sample makes, one
+    // control endpoint per client, and one supervision handle per subscriber.
+    // The slot order here is the order `fabric-service` reads them in, emitted
+    // into its generated profile from this same manifest.
+    let service = spawn_fabric_client(
         FABRIC_SERVICE_SLOT,
         &[
             grant(0, RIGHT_ENDPOINT_CREATE),
+            grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
             grant(FABRIC_PUBLISHER_SERVICE_SLOT, RIGHT_SEND | RIGHT_RECV),
             grant(FABRIC_SUBSCRIBER_SERVICE_SLOT, RIGHT_SEND | RIGHT_RECV),
             grant(FABRIC_INTRUDER_SERVICE_SLOT, RIGHT_SEND | RIGHT_RECV),
+            grant(FABRIC_PUBLISHER_B_SERVICE_SLOT, RIGHT_SEND | RIGHT_RECV),
+            grant(FABRIC_SUBSCRIBER_B_SERVICE_SLOT, RIGHT_SEND | RIGHT_RECV),
+            grant(subscriber.supervision_slot, RIGHT_SUPERVISE),
+            grant(subscriber_b.supervision_slot, RIGHT_SUPERVISE),
         ],
-    )
-    .unwrap_or_else(|_| slime_rt::exit(1));
+        &[
+            FABRIC_SERVICE_SLOT,
+            FABRIC_PUBLISHER_SERVICE_SLOT,
+            FABRIC_SUBSCRIBER_SERVICE_SLOT,
+            FABRIC_INTRUDER_SERVICE_SLOT,
+            FABRIC_PUBLISHER_B_SERVICE_SLOT,
+            FABRIC_SUBSCRIBER_B_SERVICE_SLOT,
+        ],
+    );
 
-    let mut clients = [service.supervision_slot; 4];
-    for (index, (executable, control)) in [
-        (FABRIC_PUBLISHER_SLOT, FABRIC_PUBLISHER_CONTROL_SLOT),
-        (FABRIC_SUBSCRIBER_SLOT, FABRIC_SUBSCRIBER_CONTROL_SLOT),
-        (FABRIC_INTRUDER_SLOT, FABRIC_INTRUDER_CONTROL_SLOT),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let spawned = slime_rt::spawn(executable, &[grant(control, RIGHT_SEND | RIGHT_RECV)])
-            .unwrap_or_else(|_| slime_rt::exit(1));
-        clients[index + 1] = spawned.supervision_slot;
-    }
+    let publisher = spawn_fabric_client(
+        FABRIC_PUBLISHER_SLOT,
+        &[grant(
+            FABRIC_PUBLISHER_CONTROL_SLOT,
+            RIGHT_SEND | RIGHT_RECV,
+        )],
+        &[FABRIC_PUBLISHER_SLOT, FABRIC_PUBLISHER_CONTROL_SLOT],
+    );
+    // `fabric-publisher-b` originates the >MAX_MSG sample, so it needs its own
+    // buffer factory and a supervision handle naming the fabric: its upstream
+    // loan names the fabric as receiver by capability.
+    let publisher_b = spawn_fabric_client(
+        FABRIC_PUBLISHER_B_SLOT,
+        &[
+            grant(FABRIC_PUBLISHER_B_CONTROL_SLOT, RIGHT_SEND | RIGHT_RECV),
+            grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
+            grant(service.supervision_slot, RIGHT_SUPERVISE),
+        ],
+        &[FABRIC_PUBLISHER_B_SLOT, FABRIC_PUBLISHER_B_CONTROL_SLOT],
+    );
+    let intruder = spawn_fabric_client(
+        FABRIC_INTRUDER_SLOT,
+        &[grant(FABRIC_INTRUDER_CONTROL_SLOT, RIGHT_SEND | RIGHT_RECV)],
+        &[FABRIC_INTRUDER_SLOT, FABRIC_INTRUDER_CONTROL_SLOT],
+    );
 
-    for handle in clients {
+    for handle in [
+        publisher.supervision_slot,
+        publisher_b.supervision_slot,
+        intruder.supervision_slot,
+        subscriber.supervision_slot,
+        subscriber_b.supervision_slot,
+        service.supervision_slot,
+    ] {
         loop {
             match slime_rt::supervision_status(handle) {
                 Ok(None) => slime_rt::wait(&[slime_rt::WaitSource::Supervision(handle)]),
@@ -306,6 +388,36 @@ fn launch_fabric_graph() {
         }
     }
 }
+
+/// Spawn one fabric component, then release the slots that spawn consumed.
+///
+/// `release` names capabilities init holds only to hand on: the executable it
+/// just launched, and the control endpoints now owned by the child or the
+/// service. A grant is a non-consuming derive-copy, so without this init keeps
+/// every one of them and runs out of the kernel's 64 capability slots partway
+/// through the graph — a failure that looks like a spawn error rather than a
+/// leak. Init keeps only the supervision handle it returns and waits on.
+fn spawn_fabric_client(
+    executable_slot: u32,
+    grants: &[SpawnGrant],
+    release: &[u32],
+) -> slime_rt::Spawned {
+    let spawned = slime_rt::spawn(executable_slot, grants).unwrap_or_else(|error| {
+        slime_rt::debug_write(b"[init] fabric spawn failed slot=");
+        write_u32(executable_slot);
+        slime_rt::debug_write(b" error=");
+        write_i64(error);
+        slime_rt::debug_write(b"\n");
+        slime_rt::exit(1)
+    });
+    for slot in release {
+        if slime_rt::cap_drop(*slot) < 0 {
+            slime_rt::exit(1);
+        }
+    }
+    spawned
+}
+
 fn spawn_or_fail(executable_slot: u32, grants: &[SpawnGrant]) {
     let spawned = slime_rt::spawn(executable_slot, grants).unwrap_or_else(|error| {
         slime_rt::debug_write(b"[init] spawn failed slot=");

@@ -36,6 +36,8 @@ static FABRIC_SERVICE_ID: AtomicU64 = AtomicU64::new(0);
 static FABRIC_PUBLISHER_ID: AtomicU64 = AtomicU64::new(0);
 static FABRIC_SUBSCRIBER_ID: AtomicU64 = AtomicU64::new(0);
 static FABRIC_INTRUDER_ID: AtomicU64 = AtomicU64::new(0);
+static FABRIC_PUBLISHER_B_ID: AtomicU64 = AtomicU64::new(0);
+static FABRIC_SUBSCRIBER_B_ID: AtomicU64 = AtomicU64::new(0);
 static GENERATION_NUMBER: AtomicU64 = AtomicU64::new(0);
 static RECOVERY_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -167,6 +169,12 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
     let fabric_intruder = generation
         .component_bytes("fabric-intruder")
         .expect("fabric-intruder object missing");
+    let fabric_publisher_b = generation
+        .component_bytes("fabric-publisher-b")
+        .expect("fabric-publisher-b object missing");
+    let fabric_subscriber_b = generation
+        .component_bytes("fabric-subscriber-b")
+        .expect("fabric-subscriber-b object missing");
     serial_println!("[generation] validating bootstrap grants");
 
     require_grant(
@@ -396,19 +404,31 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         "fabric-service",
         crate::capability::RIGHT_ENDPOINT_CREATE,
     );
-    for client in ["fabric-publisher", "fabric-subscriber", "fabric-intruder"] {
+    for (client, grant) in [
+        ("fabric-publisher", "fabric-publisher-control"),
+        ("fabric-subscriber", "fabric-subscriber-control"),
+        ("fabric-intruder", "fabric-intruder-control"),
+        ("fabric-publisher-b", "fabric-publisher-b-control"),
+        ("fabric-subscriber-b", "fabric-subscriber-b-control"),
+    ] {
         require_grant(
             generation,
-            match client {
-                "fabric-publisher" => "fabric-publisher-control",
-                "fabric-subscriber" => "fabric-subscriber-control",
-                _ => "fabric-intruder-control",
-            },
+            grant,
             client,
             "fabric-service",
             RIGHT_SEND | RIGHT_RECV,
         );
     }
+    // C8.4 brokering: the fabric owns the one copy each large sample makes, so
+    // it needs creation authority of its own. Its `shared-buffer-budget` entry
+    // bounds that copy, which is what keeps a fan-out inside a declared quota.
+    require_grant(
+        generation,
+        "fabric-shared-buffer-factory",
+        "init",
+        "fabric-service",
+        crate::capability::RIGHT_BUFFER_CREATE,
+    );
     serial_println!("[generation] fabric control grants valid");
     serial_println!("[generation] filesystem grants valid");
     let storage_capability = match generation.number {
@@ -456,6 +476,8 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
     let (fabric_publisher_client, fabric_publisher_service) = ipc::channel();
     let (fabric_subscriber_client, fabric_subscriber_service) = ipc::channel();
     let (fabric_intruder_client, fabric_intruder_service) = ipc::channel();
+    let (fabric_publisher_b_client, fabric_publisher_b_service) = ipc::channel();
+    let (fabric_subscriber_b_client, fabric_subscriber_b_service) = ipc::channel();
     let mut caps = vec![
         Capability {
             object: KernelObject::EndpointFactory,
@@ -567,19 +589,24 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
             sample_receiver_side,
             RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
         ),
-        // C8.3 fabric control plane, slots 45-51. The fabric holds one control
-        // endpoint per client and its own endpoint factory grant; each client
-        // holds only its half of its control channel. Route endpoints are not
-        // minted here: the fabric creates them and moves each participant a
-        // narrowed, non-transferable role through `SYS_CAP_TRANSFER`, so a
-        // route capability never exists in init's table at all.
+        // C8.3/C8.4 fabric control plane, slots 45-58. The fabric holds one
+        // control endpoint per client and its own endpoint and shared-buffer
+        // factory grants; each client holds only its half of its control
+        // channel. Route endpoints are not minted here: the fabric creates them
+        // and moves each participant a narrowed, non-transferable role through
+        // `SYS_CAP_TRANSFER`, so a route capability never exists in init's
+        // table at all.
         executable(generation, "fabric-service", fabric_service),
         executable(generation, "fabric-publisher", fabric_publisher),
         executable(generation, "fabric-subscriber", fabric_subscriber),
         executable(generation, "fabric-intruder", fabric_intruder),
+        executable(generation, "fabric-publisher-b", fabric_publisher_b),
+        executable(generation, "fabric-subscriber-b", fabric_subscriber_b),
         endpoint(fabric_publisher_client, RIGHT_SEND | RIGHT_RECV),
         endpoint(fabric_subscriber_client, RIGHT_SEND | RIGHT_RECV),
         endpoint(fabric_intruder_client, RIGHT_SEND | RIGHT_RECV),
+        endpoint(fabric_publisher_b_client, RIGHT_SEND | RIGHT_RECV),
+        endpoint(fabric_subscriber_b_client, RIGHT_SEND | RIGHT_RECV),
         // The service side of each control channel. Transferable so init can
         // grant them into the fabric; the fabric itself never re-delegates one.
         endpoint(
@@ -592,6 +619,14 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         ),
         endpoint(
             fabric_intruder_service,
+            RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
+        ),
+        endpoint(
+            fabric_publisher_b_service,
+            RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
+        ),
+        endpoint(
+            fabric_subscriber_b_service,
             RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
         ),
     ]);
@@ -826,6 +861,8 @@ pub fn record_spawn(component: &'static str, id: task::TaskId) {
         "fabric-publisher" => &FABRIC_PUBLISHER_ID,
         "fabric-subscriber" => &FABRIC_SUBSCRIBER_ID,
         "fabric-intruder" => &FABRIC_INTRUDER_ID,
+        "fabric-publisher-b" => &FABRIC_PUBLISHER_B_ID,
+        "fabric-subscriber-b" => &FABRIC_SUBSCRIBER_B_ID,
         "recovery" => &RECOVERY_ID,
         _ => return,
     };
@@ -970,6 +1007,8 @@ extern "C" fn on_idle() {
             && GENERATION_NUMBER.load(Ordering::Relaxed) == 10;
         let fabric_authority_check = option_env!("SLIME_FABRIC_AUTHORITY_CHECK") == Some("1")
             && GENERATION_NUMBER.load(Ordering::Relaxed) == 11;
+        let fabric_stream_check = option_env!("SLIME_FABRIC_STREAM_CHECK") == Some("1")
+            && GENERATION_NUMBER.load(Ordering::Relaxed) == 12;
         let optional_generation_command_component = generation_command_check
             && matches!(name, "init" | "generation-manager")
             && matches!(
@@ -1044,9 +1083,30 @@ extern "C" fn on_idle() {
                 reason,
                 Some(task::TermReason::Exit(0) | task::TermReason::PeerLoss)
             );
-        let optional_fabric_manager = fabric_authority_check
+        let optional_fabric_manager = (fabric_authority_check || fabric_stream_check)
             && name == "generation-manager"
             && matches!(reason, Some(task::TermReason::Exit(1)));
+        // The stream scenario runs the same graph as the authority one, plus
+        // the two components that make the fan-out many-to-many.
+        let optional_fabric_stream_component = fabric_stream_check
+            && matches!(
+                name,
+                "init"
+                    | "console"
+                    | "dango"
+                    | "spawn-service"
+                    | "filesystem-service"
+                    | "fabric-service"
+                    | "fabric-publisher"
+                    | "fabric-subscriber"
+                    | "fabric-intruder"
+                    | "fabric-publisher-b"
+                    | "fabric-subscriber-b"
+            )
+            && matches!(
+                reason,
+                Some(task::TermReason::Exit(0) | task::TermReason::PeerLoss)
+            );
         healthy &= matches!(reason, Some(task::TermReason::Exit(0)))
             || optional_storage_absent
             || optional_confirmation_absent
@@ -1058,7 +1118,8 @@ extern "C" fn on_idle() {
             || optional_sample_plane_component
             || optional_sample_plane_manager
             || optional_fabric_component
-            || optional_fabric_manager;
+            || optional_fabric_manager
+            || optional_fabric_stream_component;
     }
     if healthy {
         if crate::boot::bootstate().is_some_and(|state| state.running_pending) {

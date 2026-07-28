@@ -243,10 +243,11 @@ Two isolated components exchange and return a payload larger than the kernel IPC
 
 **Status:** In progress. Decomposed into C8.1–C8.9. C8.1 (deterministic
 interface schemas and native bindings), C8.2 (authenticated fabric-graph
-resource with per-entry and aggregate admission), and C8.3 (attenuated
-endpoint provisioning and the live control plane) are complete and gated by
-`just interface_schema_check`, `just fabric_manifest_check`, and `just
-fabric_authority_check`. C8.4–C8.9 remain planned contracts and gates, not
+resource with per-entry and aggregate admission), C8.3 (attenuated endpoint
+provisioning and the live control plane), and C8.4 (bounded many-to-many
+streams) are complete and gated by `just interface_schema_check`, `just
+fabric_manifest_check`, `just fabric_authority_check`, and `just
+fabric_stream_check`. C8.5–C8.9 remain planned contracts and gates, not
 implemented capability.
 
 **Depends on:** C7's bounded sample plane and backlog item **B2** (scheduler
@@ -489,7 +490,29 @@ lacking a `SYS_WAIT` park, which is a necessary condition rather than a proof
 
 ### C8.4 — Bounded many-to-many streams
 
-**Status:** Not started.
+**Status:** Complete. A versioned Zutai fabric-stream contract
+(`contracts/fabric-stream/v1/`) defines the three fixed 64-byte records a
+bounded stream moves: an inline `StreamSample`, a `StreamAck` that releases one
+delivery slot, and a `StreamEvent` carrying `SAMPLE_LOST`/`STREAM_END`. The
+userspace `fabric-service` provisions every declared stream edge and then
+brokers it: matching is the route index its ingress endpoint belongs to, so a
+sample never reaches a route it did not arrive on. A payload within the control
+bound rides inline; a payload larger than `MAX_MSG` arrives as a C7.6 descriptor
+over a receiver-bound loan, which the fabric maps read-only, copies once into a
+fabric-owned sealed buffer, and re-loans per matched subscriber — one publisher
+sample is one copy and one independently accounted loan per subscriber.
+Delivery is bounded by each subscriber's declared KEEP_LAST depth
+(`boot_contracts::stream_history`): admitting past the depth evicts the exact
+oldest sequence, counts the loss, and reports it when delivery resumes, so a
+stalled BEST_EFFORT reader costs a fixed number of entries and never a retry.
+A subscriber releases slots over a second, opposite-facing ack endpoint rather
+than a widened role, so it still holds no publish authority on the route it
+reads. `just fabric_stream_check` passes: two publishers and two subscribers
+exchange inline and `>MAX_MSG` samples across two declared routes, the stalled
+reader observes bounded loss while its unrelated route is undisturbed, and one
+large sample is measured at exactly one fabric copy and two downstream loans;
+plus 6 kernel tests against the booted graph. See
+`devlog/2026-07-28-c8-4-bounded-streams/`.
 
 **Depends on:** C8.3.
 
@@ -520,7 +543,7 @@ lacking a `SYS_WAIT` park, which is a necessary condition rather than a proof
 - malformed descriptors, wrong tags, stale loans, sequence misuse, queue
   exhaustion, and one participant fault do not disturb an unrelated stream.
 
-#### Planned verification target
+#### Verification target
 
 ```sh
 just fabric_stream_check
@@ -531,7 +554,18 @@ just fabric_stream_check
 A generation-declared many-to-many stream moves bounded typed inline and shared
 samples under exact route authority; KEEP_LAST and BEST_EFFORT behavior is
 deterministic, and a stalled or faulting participant cannot grow or disturb
-unrelated state.
+unrelated state. Observed: on a real boot two publishers and two subscribers
+exchange both sample forms over `telemetry` while `diagnostics` carries an
+unrelated stream through the same service; the declared depth evicts the exact
+oldest sequence; the stalled BEST_EFFORT reader is told what it lost within a
+bound its publishers fix, retries nothing, and leaves the other route
+untouched; and the one `>MAX_MSG` sample is counted at one fabric copy and one
+quota-charged receiver-bound loan per subscriber. The eviction rule itself is
+pinned by host unit tests, because a transcript can show that samples arrived
+but not which one was dropped. The malformed-descriptor and queue-exhaustion
+arms are proven as rejection paths the gate forbids on a clean run rather than
+as injected faults; a participant fault beyond a deliberate stall is C8.9's
+composition.
 
 ### C8.5 — Reliable, retained, and timed QoS
 

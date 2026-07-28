@@ -4,6 +4,7 @@
 pub mod block;
 pub mod capability_transfer;
 pub mod component;
+pub mod fabric_stream;
 pub mod fs;
 pub mod generation;
 pub mod interface_schema;
@@ -224,4 +225,88 @@ pub fn valid_fabric_request(request: &capability_transfer::WireFabricRequest) ->
         && request.route_name[request.route_name_len as usize..]
             .iter()
             .all(|byte| *byte == 0)
+}
+
+/// Structural validity of an inline stream sample, before a subscriber reads
+/// its payload or a broker forwards it (C8.4).
+///
+/// Inline delivery is the path a control-bound sample takes; anything larger
+/// travels as a C7.6 descriptor over a receiver-bound loan. So this bounds
+/// every field that could steer a copy: version, known flags, a payload length
+/// inside `MAX_INLINE_BYTES`, zeroed padding past that length, and the exact
+/// admitted type identity. `expected_type` binds the sample to the route's
+/// declared interface, so a publisher cannot inject another type's bytes into
+/// a route that carries this one.
+pub fn valid_stream_sample(
+    sample: &fabric_stream::WireStreamSample,
+    expected_type: u64,
+    max_inline: usize,
+) -> bool {
+    if sample.magic != fabric_stream::STREAM_SAMPLE_MAGIC
+        || sample.version != fabric_stream::FORMAT_VERSION
+    {
+        return false;
+    }
+    if sample.flags & !fabric_stream::KNOWN_SAMPLE_FLAGS != 0 {
+        return false;
+    }
+    if sample.type_identity == 0 || sample.type_identity != expected_type {
+        return false;
+    }
+    let bound = max_inline.min(fabric_stream::MAX_INLINE_BYTES);
+    let length = sample.payload_len as usize;
+    if length == 0 || length > bound {
+        return false;
+    }
+    // Padding past the declared length must be zero: two byte-distinct samples
+    // that decode to the same payload would otherwise both be admissible, and
+    // a KEEP_LAST ring comparing stored bytes could not treat them as one.
+    sample.payload[length..].iter().all(|byte| *byte == 0)
+}
+
+/// Structural validity of a delivery-slot release (C8.4).
+///
+/// An ack names the sequence it releases, so the fabric can reject a
+/// subscriber that tries to free a slot it never consumed. That check needs the
+/// fabric's own delivery state and lives there; this bounds only the bytes:
+/// version, no unknown flags, zeroed padding, the route's exact type identity,
+/// and a nonzero sequence, since publishers number from one.
+pub fn valid_stream_ack(ack: &fabric_stream::WireStreamAck, expected_type: u64) -> bool {
+    ack.magic == fabric_stream::STREAM_ACK_MAGIC
+        && ack.version == fabric_stream::FORMAT_VERSION
+        && ack.flags & !fabric_stream::KNOWN_ACK_FLAGS == 0
+        && ack.reserved0 == 0
+        && ack.reserved.iter().all(|byte| *byte == 0)
+        && ack.sequence != 0
+        && ack.type_identity != 0
+        && ack.type_identity == expected_type
+}
+
+/// Structural validity of a stream event (C8.4). An event never carries data,
+/// so it must never be mistaken for a sample: the kind is checked against the
+/// three this version defines, and each is bound to the fields it may name.
+pub fn valid_stream_event(event: &fabric_stream::WireStreamEvent, expected_type: u64) -> bool {
+    if event.magic != fabric_stream::STREAM_EVENT_MAGIC
+        || event.version != fabric_stream::FORMAT_VERSION
+    {
+        return false;
+    }
+    if event.flags & !fabric_stream::KNOWN_EVENT_FLAGS != 0 {
+        return false;
+    }
+    if event.reserved.iter().any(|byte| *byte != 0) {
+        return false;
+    }
+    if event.type_identity == 0 || event.type_identity != expected_type {
+        return false;
+    }
+    match event.event {
+        // A loss report must name a loss and the oldest sequence it covers.
+        fabric_stream::EVENT_SAMPLE_LOST => event.lost != 0 && event.sequence != 0,
+        // A terminal notice covers the route, not a sample, so it names neither.
+        fabric_stream::EVENT_STREAM_END => event.lost == 0 && event.sequence == 0,
+        // A credit settles one exact sample, so it names that sequence.
+        fabric_stream::EVENT_SAMPLE_TAKEN => event.lost == 0 && event.sequence != 0,
+        _ => false,
+    }
 }

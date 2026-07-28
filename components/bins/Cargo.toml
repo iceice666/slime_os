@@ -111,6 +111,16 @@ path = "src/bin/fabric-subscriber.rs"
 test = false
 
 [[bin]]
+name = "fabric-publisher-b"
+path = "src/bin/fabric-publisher-b.rs"
+test = false
+
+[[bin]]
+name = "fabric-subscriber-b"
+path = "src/bin/fabric-subscriber-b.rs"
+test = false
+
+[[bin]]
 name = "fabric-intruder"
 path = "src/bin/fabric-intruder.rs"
 test = false
