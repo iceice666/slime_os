@@ -120,11 +120,79 @@ impl Scheduler {
     }
 }
 
+/// Remove a task that was never scheduled, releasing everything it holds.
+///
+/// Used by the `spawn_from_cap` failure path, where a fully built task must be
+/// undone because the spawner's capability table had no room for its
+/// supervision handle. Dropping the `Task` runs `AddressSpace::drop`, which
+/// returns the image pages, the stack pages, and the user-half page tables — so
+/// a rejected spawn costs nothing (B9).
 fn remove_task(sched: &mut Scheduler, id: TaskId) {
     if let Some(index) = sched.index_of(id) {
         sched.tasks.remove(index);
     }
     sched.ready.retain(|ready| *ready != id);
+}
+
+/// Remove a never-scheduled task and report whether it was present.
+///
+/// The test-facing form of [`remove_task`]: it lets a harness prove the release
+/// path returns exactly what a spawn consumed, without needing to run the task
+/// to termination first.
+pub fn release_unscheduled(id: TaskId) -> bool {
+    without_interrupts(|| {
+        let mut sched = SCHEDULER.lock();
+        let present = sched.index_of(id).is_some();
+        remove_task(&mut sched, id);
+        present
+    })
+}
+
+/// The PML4 of a live task, or `None` when no such task exists.
+///
+/// Exposed for the reclamation harness, which needs to install a mapping into a
+/// spawned task's address space to prove that releasing the task does not
+/// double-free a frame owned by the shared-buffer table.
+pub fn address_space_root(id: TaskId) -> Option<crate::memory::PhysAddr> {
+    let sched = SCHEDULER.lock();
+    sched
+        .index_of(id)
+        .map(|index| sched.tasks[index].address_space.pml4())
+}
+
+/// Release every terminated task except the one currently being executed on.
+///
+/// A task cannot be freed at the moment it terminates: `terminate` is still
+/// running on that task's kernel stack and in its address space, and the `Task`
+/// owns both. So termination only records the exit, and the frames come back
+/// here — from a later scheduling event, once the CPU has moved on. `executing`
+/// names the task this call is standing on and is always skipped.
+///
+/// Dropping the `Task` drops its `AddressSpace`, whose `Drop` returns the image
+/// pages, the stack pages, and the user-half page tables (B9). Its kernel stack
+/// is a boxed slice and returns to the heap with it.
+///
+/// The termination *reason* deliberately outlives the task: `sched.terminated`
+/// is a separate log, so `supervision_status` and `SYS_WAIT` still answer for a
+/// child whose frames are already gone. That is what lets this run eagerly
+/// instead of waiting for every supervisor to collect.
+///
+/// Callers must hold `SCHEDULER`. Freeing takes `FRAME_ALLOCATOR` underneath
+/// it, matching the `SCHEDULER -> FRAME_ALLOCATOR` order the adjacent
+/// `reclaim_owner` call already establishes.
+fn reap_terminated(sched: &mut Scheduler, executing: Option<TaskId>) {
+    let mut index = 0;
+    while index < sched.tasks.len() {
+        let task = &sched.tasks[index];
+        if !matches!(task.state, TaskState::Terminated(_)) || Some(task.id) == executing {
+            index += 1;
+            continue;
+        }
+        let id = task.id;
+        // Dropping the task frees its address space and kernel stack.
+        sched.tasks.remove(index);
+        sched.ready.retain(|ready| *ready != id);
+    }
 }
 
 /// Propagates active kernel-half mappings to every task address space.
@@ -894,7 +962,19 @@ fn pop_ready(sched: &mut Scheduler, frame: &mut UserFrame) -> Option<u64> {
 
 fn schedule_next(sched: &mut Scheduler, frame: &mut UserFrame) -> ScheduleResult {
     drain_pending_wakes(sched);
-    if pop_ready(sched, frame).is_some() {
+    // The task this call entered on. `terminate` runs on that task's kernel
+    // stack and in its address space, and the `Task` owns both, so it is the
+    // one task that must survive this call however the scheduling goes — even
+    // after `pop_ready` reassigns `current` or the idle path clears it.
+    let executing = sched.current;
+    let selected = pop_ready(sched, frame);
+    // Reap after choosing: every terminated task other than the one we are
+    // standing on is dead weight, and its image pages, stack pages, and
+    // user-half tables return here (B9). A task that terminates last is
+    // released by the next scheduling event rather than this one — a constant
+    // one-task lag, not growth.
+    reap_terminated(sched, executing);
+    if selected.is_some() {
         return ScheduleResult::Selected;
     }
     sched.current = None;
@@ -931,6 +1011,15 @@ pub fn idle_dispatch() -> ! {
     }
 }
 
+/// Idle-loop counterpart to [`pop_ready`], draining wakes first.
+///
+/// Deliberately does **not** reap. `idle_dispatch` is reached from `on_idle`,
+/// which `finish_schedule` calls while still executing on the last task's
+/// kernel stack with its PML4 in CR3 — including when that task is the one that
+/// just terminated. Freeing it here would pull the running stack and address
+/// space out from under this very loop. The frames come back at the next real
+/// scheduling event instead, which is the same one-task lag `schedule_next`
+/// already accepts (B9).
 fn pop_ready_draining(sched: &mut Scheduler, frame: &mut UserFrame) -> Option<u64> {
     drain_pending_wakes(sched);
     pop_ready(sched, frame)

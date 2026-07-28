@@ -141,3 +141,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-07-27 | [D1–D7 — Native development, live update, and on-device build roadmap](2026-07-27-d1-d7-native-development-roadmap/index.md) | Decision | Proposed | D1, D2, D3, D4, D5, D6, D7, P0 |
 | 2026-07-28 | [C10 — Bounded private component memory](2026-07-28-c10-private-component-memory/index.md) | Decision | Proposed | C10, C10.1, C10.2, C10.3, C10.4, B9, C7 |
 | 2026-07-28 | [C8.4 — Bounded many-to-many streams](2026-07-28-c8-4-bounded-streams/index.md) | Change | Verified | C8.4 |
+| 2026-07-28 | [B9 — terminated tasks are never reaped, so their frames never return](2026-07-28-b9-task-frame-reclamation/index.md) | Defect | Verified | B9, C10 |

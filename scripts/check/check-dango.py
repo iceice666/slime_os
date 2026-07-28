@@ -32,6 +32,27 @@ MARKERS = [
 ]
 
 
+def check_frames_are_conserved(output: str) -> None:
+    """A spawn and its release must return every frame they took (B9).
+
+    The kernel reports this from a real spawn against a real generation image
+    before the graph starts, so the delta is attributable to the spawn rather
+    than to whatever else a running system is doing.
+
+    Scope: the probe releases without scheduling, so it measures the release
+    path — `AddressSpace::drop` and the user-half walk — rather than the
+    scheduler's reaper. The reaper's evidence is this same boot: dango spawns
+    two components that exit through `terminate`, and the run still reports a
+    healthy slice. Both paths free through `AddressSpace::drop`, so a leak in
+    the common path shows up in the marker below.
+    """
+    leaked = [line for line in output.splitlines() if "[reclaim] spawn/exit leaked" in line]
+    if leaked:
+        raise SystemExit(f"spawn/exit leaked frames: {leaked[0].strip()}")
+    if "[reclaim] spawn/exit conserves frames" not in output:
+        raise SystemExit("boot reported no frame-reclamation result")
+
+
 def run() -> str:
     environment = os.environ.copy()
     environment["SLIME_GENERATION_NUMBER"] = "7"
@@ -43,6 +64,7 @@ def run() -> str:
         timeout=None,
         echo="never",
     )
+    check_frames_are_conserved(output)
     cursor = 0
     for marker in MARKERS:
         position = output.find(marker, cursor)

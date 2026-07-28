@@ -76,6 +76,7 @@ pub fn start() -> ! {
         generation.component_count(),
         generation.grant_count(),
     );
+    reclamation_probe(&generation);
     let init_id = launch_init(&generation);
     INIT_ID.store(init_id, Ordering::Relaxed);
     // Install init's generation-declared shared-buffer quota (C7.3). A
@@ -88,6 +89,66 @@ pub fn start() -> ! {
     );
     task::set_on_idle(on_idle);
     task::run()
+}
+
+/// Prove on the live boot path that a spawn and its release conserve frames
+/// (B9).
+///
+/// The kernel test harness measures the same conservation, but against a
+/// synthetic image. This runs the real `spawn_with_caps_for` over a real
+/// generation component, so the frames counted are the ones an actual boot
+/// maps: image segments, stack, and the user-half page tables behind them.
+///
+/// Scope, stated precisely: this exercises the **release** path
+/// (`release_unscheduled` -> `AddressSpace::drop` -> `free_user_half`), not the
+/// scheduler's reaper. The task is never scheduled, so it never terminates.
+/// Running it to exit would need the scheduler, and the reaper's own evidence
+/// is that `just spawn_service_check` and `just dango_check` boot real
+/// components that exit through `terminate` and still report a healthy slice.
+/// Both halves share `AddressSpace::drop`, which is where every frame actually
+/// goes back, so a leak in the common path fails here first.
+///
+/// Deliberately before `launch_init`: the graph has not started, so nothing
+/// else is allocating and the delta is attributable.
+///
+/// The first cycle is discarded: it may grow the kernel heap for the task's
+/// bookkeeping, which later cycles reuse. What must hold afterwards is zero
+/// drift, which is exactly what a per-spawn leak would break.
+fn reclamation_probe(generation: &Generation<'static>) {
+    let Some(image) = generation.component_bytes("sysinfo") else {
+        return;
+    };
+    let free = || crate::memory::pmm::FRAME_ALLOCATOR.lock().free_frames();
+
+    let Ok(warm_up) = task::spawn_with_caps(image, alloc::vec::Vec::new()) else {
+        serial_println!("[reclaim] probe skipped: spawn unavailable");
+        return;
+    };
+    task::release_unscheduled(warm_up);
+
+    let before = free();
+    let mut cost = 0;
+    for _ in 0..4 {
+        let start = free();
+        let Ok(id) = task::spawn_with_caps(image, alloc::vec::Vec::new()) else {
+            serial_println!("[reclaim] probe skipped: spawn unavailable");
+            return;
+        };
+        cost = start.saturating_sub(free());
+        task::release_unscheduled(id);
+    }
+    let after = free();
+    if after == before {
+        serial_println!(
+            "[reclaim] spawn/exit conserves frames: {} per cycle, 0 drift",
+            cost
+        );
+    } else {
+        serial_println!(
+            "[reclaim] spawn/exit leaked: {} frame(s) over 4 cycles",
+            before.saturating_sub(after)
+        );
+    }
 }
 
 fn launch_init(generation: &Generation<'static>) -> task::TaskId {

@@ -80,9 +80,22 @@ impl AddressSpace {
 
 impl Drop for AddressSpace {
     fn drop(&mut self) {
-        // SAFETY: this address space owns its PML4 frame. Intermediate user-half
-        // tables intentionally leak for the small M2 isolation test.
+        // Release the whole user half — leaf pages, then the tables that held
+        // them — before the PML4 itself (B9). Every frame `spawn_with_caps_for`
+        // mapped for image segments and the stack is reachable from here, and
+        // nothing else releases them: without this, each spawn permanently
+        // consumed its image plus stack pages.
+        //
+        // The kernel half is left alone on purpose. Entries 256..512 are
+        // aliases of the one kernel hierarchy copied in by `new`, shared with
+        // every other address space, so freeing them would unmap the kernel out
+        // from under the whole system.
+        //
+        // SAFETY: an `AddressSpace` is dropped only once its task has been
+        // reaped, so no task is running in it and no live borrow of its user
+        // frames remains.
         unsafe {
+            vmm::free_user_half(self.pml4);
             FRAME_ALLOCATOR.lock().dealloc(self.pml4);
         }
     }

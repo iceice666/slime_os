@@ -364,3 +364,80 @@ pub(crate) fn translate_in(root: PhysAddr, virt: VirtAddr) -> Option<PhysAddr> {
 pub fn translate(virt: VirtAddr) -> Option<PhysAddr> {
     translate_in(active_pml4(), virt)
 }
+
+/// Free every user-half frame reachable from `root`: leaf pages first, then the
+/// intermediate tables that held them.
+///
+/// This is the release path for an address space that is going away (B9). The
+/// kernel half is deliberately untouched — entries 256..512 of the PML4 are
+/// shared aliases of the one kernel hierarchy, copied in by
+/// [`AddressSpace::new`](super::address_space::AddressSpace::new), so freeing
+/// them would tear down the kernel's own mappings for every task.
+///
+/// Only entries carrying [`PTE_USER`] are followed, and huge entries are left
+/// alone: nothing in this kernel installs a user huge page, so one appearing
+/// here means the table is not ours to walk. Both rules make a corrupted table
+/// leak rather than free a frame the allocator may hand out again.
+///
+/// Returns the number of frames released. Nothing consumes it today — the
+/// conservation gates measure the allocator's own free count instead, which is
+/// the stronger check because it also catches a frame freed twice. It is
+/// returned for the caller that wants to attribute a teardown.
+///
+/// # Safety
+///
+/// `root` must name a live PML4 whose user half no longer has any live
+/// borrow — no task may be running in this address space, and no kernel
+/// mapping may still alias one of its user frames.
+pub(crate) unsafe fn free_user_half(root: PhysAddr) -> usize {
+    let mut freed = 0;
+    // SAFETY: the caller guarantees `root` is a live PML4 reached via the HHDM.
+    let pml4 = unsafe { PageTable::at(root) };
+    // The user half is the low 256 entries; 256.. is the shared kernel half.
+    for pml4_index in 0..256 {
+        let Some(pdpt_frame) = child_table(pml4.entries[pml4_index], PTE_USER) else {
+            continue;
+        };
+        // SAFETY: `child_table` validated the entry as a present, non-huge,
+        // in-range table frame.
+        let pdpt = unsafe { PageTable::at(pdpt_frame) };
+        for pdpt_index in 0..512 {
+            let Some(pd_frame) = child_table(pdpt.entries[pdpt_index], PTE_USER) else {
+                continue;
+            };
+            // SAFETY: as above, one level down.
+            let pd = unsafe { PageTable::at(pd_frame) };
+            for pd_index in 0..512 {
+                let Some(pt_frame) = child_table(pd.entries[pd_index], PTE_USER) else {
+                    continue;
+                };
+                // SAFETY: as above, one level down.
+                let pt = unsafe { PageTable::at(pt_frame) };
+                for leaf in 0..512 {
+                    let entry = pt.entries[leaf];
+                    if entry & (PTE_PRESENT | PTE_USER) != PTE_PRESENT | PTE_USER {
+                        continue;
+                    }
+                    pt.entries[leaf] = 0;
+                    // SAFETY: the leaf is cleared, the address space is dead, and
+                    // `child_table`'s bound check kept the frame inside RAM.
+                    unsafe { FRAME_ALLOCATOR.lock().dealloc(PhysAddr(entry & ADDR_MASK)) };
+                    freed += 1;
+                }
+                pd.entries[pd_index] = 0;
+                // SAFETY: every leaf it held is cleared and freed.
+                unsafe { FRAME_ALLOCATOR.lock().dealloc(pt_frame) };
+                freed += 1;
+            }
+            pdpt.entries[pdpt_index] = 0;
+            // SAFETY: every page table it held is cleared and freed.
+            unsafe { FRAME_ALLOCATOR.lock().dealloc(pd_frame) };
+            freed += 1;
+        }
+        pml4.entries[pml4_index] = 0;
+        // SAFETY: every page directory it held is cleared and freed.
+        unsafe { FRAME_ALLOCATOR.lock().dealloc(pdpt_frame) };
+        freed += 1;
+    }
+    freed
+}
