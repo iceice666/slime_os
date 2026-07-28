@@ -14,6 +14,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=SLIME_SAMPLE_PLANE_CHECK");
     println!("cargo:rerun-if-env-changed=SLIME_FABRIC_AUTHORITY_CHECK");
     println!("cargo:rerun-if-env-changed=SLIME_FABRIC_STREAM_CHECK");
+    println!("cargo:rerun-if-env-changed=SLIME_FABRIC_QOS_CHECK");
     println!("cargo:rerun-if-env-changed=SLIME_GENERATION_CANDIDATE");
     println!("cargo:rerun-if-env-changed=SLIME_GENERATION_CMD_SCENARIO");
     if let Ok(number) = std::env::var("SLIME_GENERATION_NUMBER") {
@@ -42,6 +43,9 @@ fn main() {
     }
     if let Ok(value) = std::env::var("SLIME_FABRIC_STREAM_CHECK") {
         println!("cargo:rustc-env=SLIME_FABRIC_STREAM_CHECK={value}");
+    }
+    if let Ok(value) = std::env::var("SLIME_FABRIC_QOS_CHECK") {
+        println!("cargo:rustc-env=SLIME_FABRIC_QOS_CHECK={value}");
     }
     if let Ok(value) = std::env::var("SLIME_GENERATION_CANDIDATE") {
         println!("cargo:rustc-env=SLIME_GENERATION_CANDIDATE={value}");
@@ -148,17 +152,37 @@ fn generate_fabric_profile(manifest_dir: &str) {
     // The two scans are independent, so a positional `zip` would silently
     // truncate — and a mis-sized ring is exactly the kind of quiet wrong answer
     // KEEP_LAST must not have. Assert the lengths agree before pairing them.
-    let history_depths = fabric_history_depths(&manifest);
+    let qos = fabric_qos(&manifest);
     assert_eq!(
         participants.len(),
-        history_depths.len(),
-        "every fabric participant declares exactly one historyDepth"
+        qos.len(),
+        "every fabric participant declares one complete QoS policy"
     );
     let depths = participants
         .iter()
-        .zip(history_depths)
-        .map(|((component, route, _, _), depth)| {
-            format!("    (b\"{component}\", \"{route}\", {depth}),\n")
+        .zip(qos.iter())
+        .map(|((component, route, _, _), entry)| {
+            format!(
+                "    (b\"{component}\", \"{route}\", {}),\n",
+                entry.history_depth
+            )
+        })
+        .collect::<String>();
+    let qos_rows = participants
+        .iter()
+        .zip(qos.iter())
+        .map(|((component, route, _, _), entry)| {
+            format!(
+                "    (b\"{component}\", \"{route}\", {}, {}, {}, {}, {}, {}, {}, {}),\n",
+                entry.deadline_ns,
+                entry.lifespan_ns,
+                entry.lease_ns,
+                entry.history_depth,
+                entry.retained_depth,
+                entry.reliability,
+                entry.durability,
+                entry.liveliness,
+            )
         })
         .collect::<String>();
     // Control endpoints, in the order init grants them. Derived from the
@@ -222,6 +246,10 @@ fn generate_fabric_profile(manifest_dir: &str) {
              \n\
              /// The KEEP_LAST depth the generation declares for each edge.\n\
              pub const FABRIC_HISTORY_DEPTHS: &[(&[u8], &str, u32)] = &[\n{depths}];\n\
+             /// Complete generation-declared QoS per participant.\n\
+             pub type FabricQosRow = (&'static [u8], &'static str, u64, u64, u64, u32, u32, u8, u8, u8);\n\
+             pub const FABRIC_QOS: &[FabricQosRow] = &[\n{qos_rows}];\n\
+             \n\
              \n\
              /// Every distinct component holding a fabric control endpoint, in the\n\
              /// order init grants those endpoints.\n\
@@ -288,19 +316,69 @@ fn fabric_control_clients(manifest: &str) -> Vec<String> {
 /// readings independent, and a mismatch in length is caught by the caller's
 /// `zip` truncating — which the participant/`declared` cross-check above
 /// already makes impossible to reach silently.
-fn fabric_history_depths(manifest: &str) -> Vec<u32> {
-    fabric_graph_block(manifest)
-        .lines()
-        .filter_map(|line| {
-            let trimmed = line.trim_start();
-            let indent = line.len() - trimmed.len();
-            if indent != 12 {
-                return None;
-            }
-            let value = trimmed.strip_prefix("historyDepth = ")?;
-            value.trim_end_matches(';').parse().ok()
-        })
-        .collect()
+#[derive(Clone, Copy)]
+struct FabricQos {
+    deadline_ns: u64,
+    lifespan_ns: u64,
+    lease_ns: u64,
+    history_depth: u32,
+    retained_depth: u32,
+    reliability: u8,
+    durability: u8,
+    liveliness: u8,
+}
+
+fn fabric_qos(manifest: &str) -> Vec<FabricQos> {
+    let mut values = Vec::new();
+    let mut reliability = 0;
+    let mut durability = 0;
+    let mut liveliness = 0;
+    let mut history_depth = 0;
+    let mut retained_depth = 0;
+    let mut deadline_ns = 0;
+    let mut lifespan_ns = 0;
+    for line in fabric_graph_block(manifest).lines() {
+        let trimmed = line.trim_start();
+        if line.len() - trimmed.len() != 12 {
+            continue;
+        }
+        if let Some(value) = trimmed.strip_prefix("reliability = ") {
+            reliability = if value.starts_with("\"reliable") {
+                2
+            } else {
+                1
+            };
+        } else if let Some(value) = trimmed.strip_prefix("durability = ") {
+            durability = if value.starts_with("\"retained") {
+                2
+            } else {
+                1
+            };
+        } else if let Some(value) = trimmed.strip_prefix("liveliness = ") {
+            liveliness = if value.starts_with("\"manual") { 2 } else { 1 };
+        } else if let Some(value) = trimmed.strip_prefix("historyDepth = ") {
+            history_depth = value.trim_end_matches(';').parse().expect("historyDepth");
+        } else if let Some(value) = trimmed.strip_prefix("retainedDepth = ") {
+            retained_depth = value.trim_end_matches(';').parse().expect("retainedDepth");
+        } else if let Some(value) = trimmed.strip_prefix("deadlineNs = ") {
+            deadline_ns = value.trim_end_matches(';').parse().expect("deadlineNs");
+        } else if let Some(value) = trimmed.strip_prefix("lifespanNs = ") {
+            lifespan_ns = value.trim_end_matches(';').parse().expect("lifespanNs");
+        } else if let Some(value) = trimmed.strip_prefix("leaseNs = ") {
+            let lease_ns = value.trim_end_matches(';').parse().expect("leaseNs");
+            values.push(FabricQos {
+                deadline_ns,
+                lifespan_ns,
+                lease_ns,
+                history_depth,
+                retained_depth,
+                reliability,
+                durability,
+                liveliness,
+            });
+        }
+    }
+    values
 }
 
 /// Scan the manifest's `fabricGraph` block for its declared participants.

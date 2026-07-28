@@ -290,6 +290,7 @@ fn the_declared_depth_evicts_the_oldest_sequence() {
         assert_eq!(
             history.push(HistoryEntry {
                 sequence,
+                publisher: 0,
                 slot: sequence as u32,
                 inline: true,
             }),
@@ -301,6 +302,7 @@ fn the_declared_depth_evicts_the_oldest_sequence() {
     let evicted = history
         .push(HistoryEntry {
             sequence: depth as u64 + 1,
+            publisher: 0,
             slot: 0,
             inline: true,
         })
@@ -544,4 +546,121 @@ fn malformed_stream_records_are_refused() {
         &WireStreamEvent { event: 0, ..lost },
         tag
     ));
+}
+
+/// C8.5's control records reject malformed time and ambiguous QoS events.
+#[test_case]
+fn malformed_qos_and_time_records_are_refused() {
+    use slime_proto::fabric_qos::{
+        EVENT_DEADLINE_MISSED, EVENT_LIFESPAN_EXPIRED, EVENT_MATCHED, FORMAT_VERSION,
+        QOS_EVENT_MAGIC, WireQosEvent,
+    };
+    use slime_proto::fabric_time::{TIME_ADVANCE_MAGIC, WireTimeAdvance};
+    use slime_proto::{valid_qos_event, valid_time_advance};
+
+    let tag = slime_proto::interface_schema::telemetry_stream::TYPE_TAG;
+    let time = WireTimeAdvance {
+        magic: TIME_ADVANCE_MAGIC,
+        version: slime_proto::fabric_time::FORMAT_VERSION,
+        flags: 0,
+        reserved0: 0,
+        now_ns: 100,
+        reserved: [0; 40],
+    };
+    assert!(valid_time_advance(&time));
+    for malformed in [
+        WireTimeAdvance { magic: 0, ..time },
+        WireTimeAdvance {
+            version: slime_proto::fabric_time::FORMAT_VERSION + 1,
+            ..time
+        },
+        WireTimeAdvance { flags: 1, ..time },
+        WireTimeAdvance {
+            reserved0: 1,
+            ..time
+        },
+        WireTimeAdvance {
+            reserved: [1; 40],
+            ..time
+        },
+    ] {
+        assert!(!valid_time_advance(&malformed));
+    }
+
+    let event = WireQosEvent {
+        magic: QOS_EVENT_MAGIC,
+        version: FORMAT_VERSION,
+        event: EVENT_MATCHED,
+        flags: 0,
+        sequence: 0,
+        value: 2,
+        timestamp_ns: 0,
+        type_identity: tag,
+        reserved: [0; 16],
+    };
+    assert!(valid_qos_event(&event, tag));
+    for malformed in [
+        WireQosEvent { magic: 0, ..event },
+        WireQosEvent {
+            version: FORMAT_VERSION + 1,
+            ..event
+        },
+        WireQosEvent { flags: 1, ..event },
+        WireQosEvent {
+            event: EVENT_MATCHED,
+            type_identity: 0,
+            ..event
+        },
+        WireQosEvent { event: 0, ..event },
+        WireQosEvent {
+            reserved: [1; 16],
+            ..event
+        },
+    ] {
+        assert!(!valid_qos_event(&malformed, tag));
+    }
+
+    // Distinct timed conditions remain distinct wire values.
+    assert_ne!(EVENT_DEADLINE_MISSED, EVENT_LIFESPAN_EXPIRED);
+}
+
+/// The booted QoS profile fixes every state bound used by the live scenario.
+#[test_case]
+fn qos_profile_is_bounded_and_contains_retained_and_best_effort_paths() {
+    use boot_contracts::fabric_graph::{
+        DURABILITY_RETAINED, DURABILITY_VOLATILE, RELIABILITY_BEST_EFFORT, RELIABILITY_RELIABLE,
+    };
+
+    let generation = booted();
+    let graph = graph_of(&generation);
+    let limits = graph.limits();
+    let mut retained = 0;
+    let mut best_effort = 0;
+    let mut reliable = 0;
+
+    assert!(limits.history_depth > 0);
+    assert!(limits.event_depth > 0);
+    assert!(limits.retained_samples > 0);
+    assert!(limits.retries > 0);
+    for index in 0..graph.participant_count() {
+        let participant = graph.participant(index).expect("participant");
+        assert!(participant.qos.history_depth <= limits.history_depth);
+        assert!(participant.qos.retained_depth <= limits.retained_samples);
+        match participant.qos.reliability as u32 {
+            RELIABILITY_RELIABLE => reliable += 1,
+            RELIABILITY_BEST_EFFORT => best_effort += 1,
+            other => panic!("unsupported reliability {other}"),
+        }
+        match participant.qos.durability as u32 {
+            DURABILITY_RETAINED => {
+                retained += 1;
+                assert!(participant.qos.retained_depth > 0);
+            }
+            DURABILITY_VOLATILE => assert_eq!(participant.qos.retained_depth, 0),
+            other => panic!("unsupported durability {other}"),
+        }
+    }
+    assert!(reliable > 0);
+    assert!(best_effort > 0);
+    assert!(retained > 0);
 }

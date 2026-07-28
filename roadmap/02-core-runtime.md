@@ -569,7 +569,7 @@ composition.
 
 ### C8.5 — Reliable, retained, and timed QoS
 
-**Status:** Not started.
+**Status:** Complete.
 
 **Depends on:** C8.4.
 

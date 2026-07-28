@@ -143,7 +143,7 @@ pub fn yield_now() {
 }
 
 /// Maximum number of sources a single [`wait`] call may register.
-pub const MAX_WAIT_SOURCES: usize = 8;
+pub const MAX_WAIT_SOURCES: usize = 9;
 
 const WAIT_KIND_ENDPOINT: u64 = 0;
 const WAIT_KIND_INPUT: u64 = 1;

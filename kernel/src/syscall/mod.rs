@@ -1346,7 +1346,7 @@ fn sys_generation_receive(frame: &mut UserFrame) {
 /// Maximum wait sources per `SYS_WAIT` call. Bounds the kernel-side copy, and
 /// bounds the live ingress sources a C8.2 fabric graph may declare: a fabric
 /// that cannot register every wake source would have to poll.
-pub const MAX_WAIT_SOURCES: usize = 8;
+pub const MAX_WAIT_SOURCES: usize = 9;
 
 /// Wait-source kinds, packed into the high 32 bits of each descriptor. Must
 /// match the userspace shim's `WAIT_*` constants.

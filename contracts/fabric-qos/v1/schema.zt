@@ -1,0 +1,38 @@
+-- Slime OS structured fabric QoS events, version 1 (C8.5).
+-- Separate from C8.4 StreamEvent so loss/end/taken retain their meanings.
+
+env ::= import stdlib.env;
+fs ::= import stdlib.fs;
+gen ::= import "gen_rust.zt";
+t ::= import stdlib.text;
+
+formatVersion :: Int = 1;
+recordLen :: Int = 64;
+magic :: Int = 1397702993; -- `QOSE`
+matched :: Int = 1;
+unmatched :: Int = 2;
+incompatible :: Int = 3;
+expired :: Int = 4;
+retryExhausted :: Int = 5;
+deadlineMissed :: Int = 6;
+livelinessLost :: Int = 7;
+peerDead :: Int = 8;
+
+WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
+QosEvent :: type { magic : Int; version : Int; event : Int; flags : Int; sequence : Int; value : Int; timestamp_ns : Int; type_identity : Int; reserved : Int; };
+schemaValue ::= schema QosEvent;
+layout :: List WireField = {
+  { name = "magic"; width = 4; signed = false; byteArray = false; };
+  { name = "version"; width = 4; signed = false; byteArray = false; };
+  { name = "event"; width = 4; signed = false; byteArray = false; };
+  { name = "flags"; width = 4; signed = false; byteArray = false; };
+  { name = "sequence"; width = 8; signed = false; byteArray = false; };
+  { name = "value"; width = 8; signed = false; byteArray = false; };
+  { name = "timestamp_ns"; width = 8; signed = false; byteArray = false; };
+  { name = "type_identity"; width = 8; signed = false; byteArray = false; };
+  { name = "reserved"; width = 16; signed = false; byteArray = true; };
+};
+format ::= { formatVersion = formatVersion; recordLen = recordLen; magic = magic; matched = matched; unmatched = unmatched; incompatible = incompatible; expired = expired; retryExhausted = retryExhausted; deadlineMissed = deadlineMissed; livelinessLost = livelinessLost; peerDead = peerDead; fields = schemaValue.fields ?? {;}; layout = layout; };
+main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }
+  = caps => [ root := env.get caps.env "SLIME_FABRIC_QOS_BINDINGS_ROOT" ?? "."; bindings := gen.render format; path := t.join "" { root; "/components/proto/src/fabric_qos.rs"; }; fs.writeAll caps.write path bindings.rust ];
+main

@@ -33,6 +33,9 @@ use slime_proto::fabric_stream::{
     EVENT_SAMPLE_TAKEN, FLAG_LAST, MAX_INLINE_BYTES, STREAM_SAMPLE_MAGIC, WireStreamEvent,
     WireStreamSample,
 };
+use slime_proto::fabric_time::{
+    FORMAT_VERSION as TIME_VERSION, TIME_ADVANCE_MAGIC, WireTimeAdvance,
+};
 use slime_proto::interface_schema::{diagnostics_stream, telemetry_stream};
 use slime_proto::sample_descriptor::{
     CAPABILITY_KIND_LOAN, SAMPLE_DESCRIPTOR_MAGIC, WireSampleDescriptor,
@@ -50,6 +53,9 @@ const FACTORY_SLOT: u32 = 1;
 /// `RIGHT_SUPERVISE` handle naming the fabric service. The upstream loan names
 /// its receiver through this capability, never through an ambient task id.
 const FABRIC_SLOT: u32 = 2;
+/// Generation-granted simulated monotonic-time input. This is a separate
+/// capability from both publish routes; possessing a route grants no clock.
+const TIME_SLOT: u32 = 3;
 
 const RIGHT_SEND: u64 = 1;
 const RIGHT_RECV: u64 = 2;
@@ -170,6 +176,16 @@ fn main() {
 
     publish_large(telemetry_slot, telemetry_credit);
     slime_rt::debug_write(b"[fabric-publisher-b] large sample published\n");
+    for now_ns in [50u64, 100, 200, 300, 400, 500, 600] {
+        advance_time(now_ns);
+        await_time_credit(now_ns);
+    }
+    publish(
+        diagnostics_slot,
+        &inline_sample(diagnostics_stream::TYPE_TAG, 2, FLAG_LAST).encode(),
+    );
+    slime_rt::debug_write(b"[fabric-publisher-b] diagnostics terminal published\n");
+    slime_rt::debug_write(b"[fabric-publisher-b] simulated time advanced\n");
     slime_rt::debug_write(b"[fabric-publisher-b] done\n");
 }
 
@@ -294,6 +310,47 @@ fn inline_sample(type_tag: u64, sequence: u64, flags: u32) -> WireStreamSample {
         sequence,
         type_identity: type_tag,
         payload,
+    }
+}
+
+fn advance_time(now_ns: u64) {
+    let message = WireTimeAdvance {
+        magic: TIME_ADVANCE_MAGIC,
+        version: TIME_VERSION,
+        flags: 0,
+        reserved0: 0,
+        now_ns,
+        reserved: [0; 40],
+    }
+    .encode();
+    loop {
+        match slime_rt::send(TIME_SLOT, &message, &[]) {
+            ERR_SUCCESS => return,
+            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(TIME_SLOT)]),
+            _ => fail(b"time advance"),
+        }
+    }
+}
+
+fn await_time_credit(now_ns: u64) {
+    let mut message = [0u8; MAX_MSG];
+    let mut caps = [0u64; MAX_CAPS_PER_MSG];
+    loop {
+        let length = match slime_rt::recv(TIME_SLOT, &mut message, &mut caps) {
+            ERR_WOULDBLOCK => {
+                slime_rt::wait(&[WaitSource::Endpoint(TIME_SLOT)]);
+                continue;
+            }
+            n if n < 0 => fail(b"time credit"),
+            n => n as usize,
+        };
+        let Some(value) = WireTimeAdvance::decode(&message[..length]) else {
+            fail(b"time credit decode")
+        };
+        if !slime_proto::valid_time_advance(&value) || value.now_ns != now_ns {
+            fail(b"time credit mismatch")
+        }
+        return;
     }
 }
 

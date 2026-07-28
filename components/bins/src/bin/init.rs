@@ -126,6 +126,8 @@ const FABRIC_SUBSCRIBER_SERVICE_SLOT: u32 = 57;
 const FABRIC_INTRUDER_SERVICE_SLOT: u32 = 58;
 const FABRIC_PUBLISHER_B_SERVICE_SLOT: u32 = 59;
 const FABRIC_SUBSCRIBER_B_SERVICE_SLOT: u32 = 60;
+const FABRIC_TIME_CLIENT_SLOT: u32 = 61;
+const FABRIC_TIME_SERVICE_SLOT: u32 = 62;
 const TRANSFER_RECEIVER_SLOT: u32 = 61;
 const TRANSFER_SOURCE_SLOT: u32 = 62;
 
@@ -148,6 +150,16 @@ fn main() {
         slime_rt::debug_write(b"[init] launching recovery graph\n");
         spawn_or_fail(1, &RECOVERY_CAPS);
         return;
+    }
+    if option_env!("SLIME_FABRIC_QOS_CHECK") == Some("1") {
+        for slot in 1..FABRIC_SERVICE_SLOT {
+            if slot != SHARED_BUFFER_FACTORY_SLOT {
+                let _ = slime_rt::cap_drop(slot);
+            }
+        }
+        launch_fabric_graph();
+        slime_rt::debug_write(b"[init] fabric QoS complete\n");
+        slime_rt::exit(0);
     }
     slime_rt::debug_write(b"[init] launching component graph\n");
     if option_env!("SLIME_TRANSFER_RECEIVER") == Some("1") {
@@ -322,28 +334,55 @@ fn launch_fabric_graph() {
     // control endpoint per client, and one supervision handle per subscriber.
     // The slot order here is the order `fabric-service` reads them in, emitted
     // into its generated profile from this same manifest.
-    let service = spawn_fabric_client(
-        FABRIC_SERVICE_SLOT,
-        &[
-            grant(0, RIGHT_ENDPOINT_CREATE),
-            grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
-            grant(FABRIC_PUBLISHER_SERVICE_SLOT, RIGHT_SEND | RIGHT_RECV),
-            grant(FABRIC_SUBSCRIBER_SERVICE_SLOT, RIGHT_SEND | RIGHT_RECV),
-            grant(FABRIC_INTRUDER_SERVICE_SLOT, RIGHT_SEND | RIGHT_RECV),
-            grant(FABRIC_PUBLISHER_B_SERVICE_SLOT, RIGHT_SEND | RIGHT_RECV),
-            grant(FABRIC_SUBSCRIBER_B_SERVICE_SLOT, RIGHT_SEND | RIGHT_RECV),
-            grant(subscriber.supervision_slot, RIGHT_SUPERVISE),
-            grant(subscriber_b.supervision_slot, RIGHT_SUPERVISE),
-        ],
-        &[
+    let service = if option_env!("SLIME_FABRIC_QOS_CHECK") == Some("1") {
+        spawn_fabric_client(
             FABRIC_SERVICE_SLOT,
-            FABRIC_PUBLISHER_SERVICE_SLOT,
-            FABRIC_SUBSCRIBER_SERVICE_SLOT,
-            FABRIC_INTRUDER_SERVICE_SLOT,
-            FABRIC_PUBLISHER_B_SERVICE_SLOT,
-            FABRIC_SUBSCRIBER_B_SERVICE_SLOT,
-        ],
-    );
+            &[
+                grant(0, RIGHT_ENDPOINT_CREATE),
+                grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
+                grant(FABRIC_PUBLISHER_SERVICE_SLOT, RIGHT_SEND | RIGHT_RECV),
+                grant(FABRIC_SUBSCRIBER_SERVICE_SLOT, RIGHT_SEND | RIGHT_RECV),
+                grant(FABRIC_INTRUDER_SERVICE_SLOT, RIGHT_SEND | RIGHT_RECV),
+                grant(FABRIC_PUBLISHER_B_SERVICE_SLOT, RIGHT_SEND | RIGHT_RECV),
+                grant(FABRIC_SUBSCRIBER_B_SERVICE_SLOT, RIGHT_SEND | RIGHT_RECV),
+                grant(subscriber.supervision_slot, RIGHT_SUPERVISE),
+                grant(subscriber_b.supervision_slot, RIGHT_SUPERVISE),
+                grant(FABRIC_TIME_SERVICE_SLOT, RIGHT_SEND | RIGHT_RECV),
+            ],
+            &[
+                FABRIC_SERVICE_SLOT,
+                FABRIC_PUBLISHER_SERVICE_SLOT,
+                FABRIC_SUBSCRIBER_SERVICE_SLOT,
+                FABRIC_INTRUDER_SERVICE_SLOT,
+                FABRIC_PUBLISHER_B_SERVICE_SLOT,
+                FABRIC_SUBSCRIBER_B_SERVICE_SLOT,
+                FABRIC_TIME_SERVICE_SLOT,
+            ],
+        )
+    } else {
+        spawn_fabric_client(
+            FABRIC_SERVICE_SLOT,
+            &[
+                grant(0, RIGHT_ENDPOINT_CREATE),
+                grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
+                grant(FABRIC_PUBLISHER_SERVICE_SLOT, RIGHT_SEND | RIGHT_RECV),
+                grant(FABRIC_SUBSCRIBER_SERVICE_SLOT, RIGHT_SEND | RIGHT_RECV),
+                grant(FABRIC_INTRUDER_SERVICE_SLOT, RIGHT_SEND | RIGHT_RECV),
+                grant(FABRIC_PUBLISHER_B_SERVICE_SLOT, RIGHT_SEND | RIGHT_RECV),
+                grant(FABRIC_SUBSCRIBER_B_SERVICE_SLOT, RIGHT_SEND | RIGHT_RECV),
+                grant(subscriber.supervision_slot, RIGHT_SUPERVISE),
+                grant(subscriber_b.supervision_slot, RIGHT_SUPERVISE),
+            ],
+            &[
+                FABRIC_SERVICE_SLOT,
+                FABRIC_PUBLISHER_SERVICE_SLOT,
+                FABRIC_SUBSCRIBER_SERVICE_SLOT,
+                FABRIC_INTRUDER_SERVICE_SLOT,
+                FABRIC_PUBLISHER_B_SERVICE_SLOT,
+                FABRIC_SUBSCRIBER_B_SERVICE_SLOT,
+            ],
+        )
+    };
 
     let publisher = spawn_fabric_client(
         FABRIC_PUBLISHER_SLOT,
@@ -356,15 +395,33 @@ fn launch_fabric_graph() {
     // `fabric-publisher-b` originates the >MAX_MSG sample, so it needs its own
     // buffer factory and a supervision handle naming the fabric: its upstream
     // loan names the fabric as receiver by capability.
-    let publisher_b = spawn_fabric_client(
-        FABRIC_PUBLISHER_B_SLOT,
-        &[
-            grant(FABRIC_PUBLISHER_B_CONTROL_SLOT, RIGHT_SEND | RIGHT_RECV),
-            grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
-            grant(service.supervision_slot, RIGHT_SUPERVISE),
-        ],
-        &[FABRIC_PUBLISHER_B_SLOT, FABRIC_PUBLISHER_B_CONTROL_SLOT],
-    );
+    let publisher_b = if option_env!("SLIME_FABRIC_QOS_CHECK") == Some("1") {
+        spawn_fabric_client(
+            FABRIC_PUBLISHER_B_SLOT,
+            &[
+                grant(FABRIC_PUBLISHER_B_CONTROL_SLOT, RIGHT_SEND | RIGHT_RECV),
+                grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
+                grant(service.supervision_slot, RIGHT_SUPERVISE),
+                grant(FABRIC_TIME_CLIENT_SLOT, RIGHT_SEND | RIGHT_RECV),
+            ],
+            &[FABRIC_PUBLISHER_B_SLOT, FABRIC_PUBLISHER_B_CONTROL_SLOT],
+        )
+    } else {
+        spawn_fabric_client(
+            FABRIC_PUBLISHER_B_SLOT,
+            &[
+                grant(FABRIC_PUBLISHER_B_CONTROL_SLOT, RIGHT_SEND | RIGHT_RECV),
+                grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
+                grant(service.supervision_slot, RIGHT_SUPERVISE),
+            ],
+            &[FABRIC_PUBLISHER_B_SLOT, FABRIC_PUBLISHER_B_CONTROL_SLOT],
+        )
+    };
+    if option_env!("SLIME_FABRIC_QOS_CHECK") == Some("1")
+        && slime_rt::cap_drop(FABRIC_TIME_CLIENT_SLOT) < 0
+    {
+        slime_rt::exit(1);
+    }
     let intruder = spawn_fabric_client(
         FABRIC_INTRUDER_SLOT,
         &[grant(FABRIC_INTRUDER_CONTROL_SLOT, RIGHT_SEND | RIGHT_RECV)],

@@ -53,17 +53,24 @@
 //! a retry.
 
 use boot_contracts::fabric_graph::{
-    CONTRACT_KIND_STREAM, DIRECTION_PUBLISH, DIRECTION_SUBSCRIBE, route_identity,
+    CONTRACT_KIND_STREAM, DIRECTION_PUBLISH, DIRECTION_SUBSCRIBE, DURABILITY_RETAINED,
+    RELIABILITY_RELIABLE, TransportQos, route_identity,
 };
 use boot_contracts::stream_history::{HistoryEntry, StreamHistory};
 use slime_proto::capability_transfer::{
     CAPABILITY_TRANSFER_MAGIC, FORMAT_VERSION, OBJECT_KIND_ENDPOINT, REQUEST_LEN, TRANSFER_LEN,
     WireCapabilityTransfer, WireFabricRequest,
 };
+use slime_proto::fabric_qos::{
+    EVENT_DEADLINE_MISSED, EVENT_INCOMPATIBLE_QOS, EVENT_LIFESPAN_EXPIRED, EVENT_LIVELINESS_LOST,
+    EVENT_MATCHED, EVENT_RETRY_EXHAUSTED, EVENT_UNMATCHED, FORMAT_VERSION as QOS_FORMAT_VERSION,
+    QOS_EVENT_MAGIC, WireQosEvent,
+};
 use slime_proto::fabric_stream::{
     EVENT_SAMPLE_LOST, EVENT_SAMPLE_TAKEN, EVENT_STREAM_END, FLAG_LAST, MAX_INLINE_BYTES,
     STREAM_EVENT_MAGIC, STREAM_SAMPLE_MAGIC, WireStreamAck, WireStreamEvent, WireStreamSample,
 };
+use slime_proto::fabric_time::WireTimeAdvance;
 use slime_proto::interface_schema::{diagnostics_stream, telemetry_stream};
 use slime_proto::sample_descriptor::{
     CAPABILITY_KIND_LOAN, SAMPLE_DESCRIPTOR_MAGIC, WireSampleDescriptor,
@@ -85,6 +92,7 @@ const FACTORY_SLOT: u32 = 0;
 /// copy each large sample makes; the fabric's own `shared-buffer-budget` entry
 /// bounds it, so brokering can never outgrow a declared quota.
 const BUFFER_FACTORY_SLOT: u32 = 1;
+const TIME_SLOT: u32 = 9;
 /// Control endpoints, one per client, in the order init granted them. The slot
 /// a request arrives on *is* the caller's identity: init bound each to exactly
 /// one component at spawn, and no component can forge or re-derive one.
@@ -137,6 +145,10 @@ fn fail(reason: &[u8]) -> ! {
     slime_rt::exit(1)
 }
 
+fn qos_check() -> bool {
+    option_env!("SLIME_FABRIC_QOS_CHECK") == Some("1")
+}
+
 /// One client's control binding: the slot init gave the fabric for it, and the
 /// component identity that slot authenticates.
 struct Client {
@@ -160,6 +172,11 @@ struct Publisher {
     credit_slot: u32,
     route: usize,
     finished: bool,
+    qos: TransportQos,
+    last_assertion_ns: u64,
+    /// Per-publisher bounded durable history. Entries hold ordinary frame
+    /// references and are replayed only to later compatible subscribers.
+    retained: StreamHistory,
 }
 
 /// One provisioned subscriber, with its declared delivery bound and the
@@ -182,6 +199,24 @@ struct Subscriber {
     in_flight: usize,
     /// Whether a `STREAM_END` event has been emitted for this subscriber.
     ended: bool,
+    qos: TransportQos,
+    matched_publishers: u32,
+    deadline_reported: bool,
+    liveliness_reported: bool,
+    retry_count: u32,
+    terminal: bool,
+    retry_interval_ns: u64,
+    last_retry_ns: u64,
+}
+
+#[derive(Clone, Copy)]
+struct LateSubscriber {
+    fabric_slot: u32,
+    client_slot: u32,
+    history: StreamHistory,
+    qos: TransportQos,
+    received: bool,
+    delivered: bool,
 }
 
 /// One fabric-owned sample frame. `refs` is the number of subscriber histories
@@ -200,6 +235,7 @@ struct Frame {
     /// Fabric-owned sealed buffer holding a large sample's single copy.
     buffer_slot: Option<u32>,
     buffer_len: u64,
+    admitted_ns: u64,
 }
 
 impl Frame {
@@ -212,6 +248,7 @@ impl Frame {
         payload_len: 0,
         buffer_slot: None,
         buffer_len: 0,
+        admitted_ns: 0,
     };
 }
 
@@ -441,11 +478,18 @@ fn provision_edge(
                 .iter()
                 .position(Option::is_none)
                 .unwrap_or_else(|| fail(b"publisher table exhausted"));
+            let qos = declared_qos(component, ROUTE_NAMES[route_index]);
+            let retained_depth = qos.retained_depth as usize;
+            let retained = StreamHistory::new(retained_depth.max(1))
+                .unwrap_or_else(|| fail(b"declared retained depth"));
             publishers[free] = Some(Publisher {
                 slot: fabric_side,
                 credit_slot: fabric_credit_side,
                 route: route_index,
                 finished: false,
+                qos,
+                last_assertion_ns: 0,
+                retained,
             });
         }
         _ => {
@@ -477,6 +521,7 @@ fn provision_edge(
             let depth = declared_history_depth(component, ROUTE_NAMES[route_index]);
             let history =
                 StreamHistory::new(depth).unwrap_or_else(|| fail(b"declared history depth"));
+            let qos = declared_qos(component, ROUTE_NAMES[route_index]);
             subscribers[free] = Some(Subscriber {
                 slot: fabric_side,
                 ack_slot: fabric_ack_side,
@@ -487,10 +532,19 @@ fn provision_edge(
                 history,
                 in_flight: 0,
                 ended: false,
+                retry_interval_ns: qos.deadline_ns.max(1),
+                qos,
+                matched_publishers: 0,
+                deadline_reported: false,
+                liveliness_reported: false,
+                retry_count: 0,
+                terminal: false,
+                last_retry_ns: 0,
             });
         }
     }
 
+    refresh_matches(route_index, publishers, subscribers);
     slime_rt::debug_write(b"[fabric] provisioned ");
     slime_rt::debug_write(component);
     slime_rt::debug_write(b" ");
@@ -516,6 +570,10 @@ fn broker(
     frames: &mut [Frame; MAX_FRAMES],
 ) {
     let mut parked = false;
+    let mut now_ns = 0u64;
+    let mut pending_time = None;
+    let mut late_subscriber = None;
+    let mut late_replay_done = false;
     loop {
         let mut progressed = false;
 
@@ -526,7 +584,7 @@ fn broker(
             {
                 continue;
             }
-            if pump_publisher(index, type_tags, publishers, subscribers, frames) {
+            if pump_publisher(index, now_ns, type_tags, publishers, subscribers, frames) {
                 progressed = true;
             }
         }
@@ -538,12 +596,38 @@ fn broker(
             if drain_acks(index, type_tags, subscribers, frames) {
                 progressed = true;
             }
-            if deliver(index, type_tags, subscribers, frames) {
+            if deliver(index, now_ns, type_tags, subscribers, frames) {
                 progressed = true;
             }
         }
 
+        // Deterministic tie order: ingress data first, then acknowledgements and
+        // delivery, then exactly one explicit monotonic-time transition.
+        if qos_check() {
+            receive_time(&mut pending_time);
+            if apply_time(
+                &mut now_ns,
+                &mut pending_time,
+                publishers,
+                subscribers,
+                frames,
+            ) {
+                progressed = true;
+            }
+        }
+        if qos_check() && !late_replay_done && now_ns >= 200 {
+            if late_subscriber.is_none() {
+                late_subscriber = Some(create_late_subscriber(publishers, frames));
+                progressed = true;
+            }
+            if pump_late_subscriber(&mut late_subscriber, now_ns, frames) {
+                progressed = true;
+            }
+            late_replay_done = late_subscriber.is_none();
+        }
+
         // A route whose publishers have all finished and whose subscribers hold
+
         // nothing further is done: emit one terminal event per subscriber so it
         // stops waiting on a route that will produce nothing more.
         for route in 0..ROUTE_COUNT {
@@ -560,12 +644,17 @@ fn broker(
         if subscribers
             .iter()
             .flatten()
-            .all(|subscriber| subscriber.ended && subscriber.history.is_empty())
+            .all(|subscriber| subscriber.ended)
         {
-            // Every declared subscriber has been told its routes ended and holds
-            // no undelivered sample, so there is no source left worth parking on.
-            return;
+            // The QoS check owns one explicit time channel. Its peer closes only
+            // after every scheduled boundary has been acknowledged; until then
+            // the broker stays alive even when all stream routes have ended.
+            if !qos_check() || time_peer_dead() {
+                release_retained(publishers, frames);
+                return;
+            }
         }
+
         if progressed {
             parked = false;
             continue;
@@ -586,14 +675,20 @@ fn broker(
 /// stays live so one bad message cannot retire a declared edge.
 fn pump_publisher(
     index: usize,
+    now_ns: u64,
     type_tags: &[u64; ROUTE_COUNT],
     publishers: &mut [Option<Publisher>; MAX_PARTICIPANTS],
     subscribers: &mut [Option<Subscriber>; MAX_PARTICIPANTS],
     frames: &mut [Frame; MAX_FRAMES],
 ) -> bool {
-    let (slot, credit_slot, route) = {
+    let (slot, credit_slot, route, publisher_qos) = {
         let publisher = publishers[index].as_ref().expect("live publisher");
-        (publisher.slot, publisher.credit_slot, publisher.route)
+        (
+            publisher.slot,
+            publisher.credit_slot,
+            publisher.route,
+            publisher.qos,
+        )
     };
     // Admitting a sample can cost one frame plus one loan per matched
     // subscriber, so refuse to start when no frame is free rather than tearing
@@ -659,11 +754,16 @@ fn pump_publisher(
         slime_rt::debug_write(b"[fabric] malformed sample rejected\n");
         return true;
     };
-
+    publishers[index]
+        .as_mut()
+        .expect("live publisher")
+        .last_assertion_ns = now_ns;
+    frames[frame].admitted_ns = now_ns;
     if frames[frame].flags & FLAG_LAST != 0 {
         publishers[index].as_mut().expect("live publisher").finished = true;
     }
-    fan_out(frame, route, subscribers, frames);
+    fan_out(frame, route, index, &publisher_qos, subscribers, frames);
+    retain_sample(index, frame, publishers, frames);
     true
 }
 
@@ -723,6 +823,7 @@ fn admit_inline(
         payload_len: sample.payload_len as usize,
         buffer_slot: None,
         buffer_len: 0,
+        admitted_ns: 0,
     };
     Some(index)
 }
@@ -852,19 +953,49 @@ fn admit_shared(
         payload_len: 0,
         buffer_slot: Some(copy.slot),
         buffer_len: descriptor.length,
+        admitted_ns: 0,
     };
     slime_rt::debug_write(b"[fabric] large sample copied once\n");
     Some(index)
 }
 
+/// Add one admitted sample to the publisher's fixed durable window. The
+/// retained ring owns one extra frame reference; eviction releases exactly that
+/// reference, so durable history cannot outlive its declared bound.
+fn retain_sample(
+    publisher_index: usize,
+    frame: usize,
+    publishers: &mut [Option<Publisher>; MAX_PARTICIPANTS],
+    frames: &mut [Frame; MAX_FRAMES],
+) {
+    let publisher = publishers[publisher_index]
+        .as_mut()
+        .expect("live publisher");
+    if publisher.qos.durability as u32 != DURABILITY_RETAINED || publisher.qos.retained_depth == 0 {
+        return;
+    }
+    frames[frame].refs += 1;
+    let entry = HistoryEntry {
+        sequence: frames[frame].sequence,
+        publisher: publisher_index as u32,
+        slot: frame as u32,
+        inline: frames[frame].buffer_slot.is_none(),
+    };
+    if let Some(evicted) = publisher.retained.push(entry) {
+        release_frame(evicted.slot as usize, frames);
+    }
+}
+
 /// Offer one admitted frame to every subscriber matched on its route.
 ///
-/// Matching is the route index, which came from the ingress endpoint the sample
-/// arrived on. A subscriber on another route is not offered the frame at all,
-/// so cross-route delivery is impossible rather than merely unauthorized.
+/// Matching is the route index plus offered/requested QoS compatibility. A
+/// subscriber on another route or with a stronger request is not offered the
+/// frame at all.
 fn fan_out(
     frame: usize,
     route: usize,
+    publisher_index: usize,
+    publisher_qos: &TransportQos,
     subscribers: &mut [Option<Subscriber>; MAX_PARTICIPANTS],
     frames: &mut [Frame; MAX_FRAMES],
 ) {
@@ -872,11 +1003,14 @@ fn fan_out(
     // to release an eviction, so it cannot hold a reference to this frame.
     let entry = HistoryEntry {
         sequence: frames[frame].sequence,
+        publisher: publisher_index as u32,
         slot: frame as u32,
         inline: frames[frame].buffer_slot.is_none(),
     };
     for subscriber in subscribers.iter_mut().flatten() {
-        if subscriber.route != route {
+        if subscriber.route != route
+            || !TransportQos::offer_satisfies(publisher_qos, &subscriber.qos)
+        {
             continue;
         }
         frames[frame].refs += 1;
@@ -904,14 +1038,149 @@ fn fan_out(
         frames[frame] = Frame::EMPTY;
     }
 }
+fn late_subscriber_qos(publisher: &Publisher) -> TransportQos {
+    TransportQos {
+        reliability: publisher.qos.reliability,
+        durability: DURABILITY_RETAINED as u8,
+        liveliness: publisher.qos.liveliness,
+        deadline_ns: publisher.qos.deadline_ns,
+        lifespan_ns: publisher.qos.lifespan_ns,
+        lease_ns: publisher.qos.lease_ns,
+        history_depth: publisher.qos.retained_depth,
+        retained_depth: publisher.qos.retained_depth,
+    }
+}
+
+/// Provision a real late subscriber and copy only the retained publisher's
+/// declared live window into its bounded delivery history.
+fn create_late_subscriber(
+    publishers: &mut [Option<Publisher>; MAX_PARTICIPANTS],
+    frames: &mut [Frame; MAX_FRAMES],
+) -> LateSubscriber {
+    let publisher_index = publishers
+        .iter()
+        .position(|publisher| {
+            publisher.as_ref().is_some_and(|publisher| {
+                publisher.qos.durability as u32 == DURABILITY_RETAINED
+                    && publisher.retained.peek().is_some_and(|entry| entry.inline)
+            })
+        })
+        .unwrap_or_else(|| fail(b"no inline retained publisher"));
+    let publisher = publishers[publisher_index]
+        .as_ref()
+        .expect("retained publisher");
+    let qos = late_subscriber_qos(publisher);
+    if !TransportQos::offer_satisfies(&publisher.qos, &qos) {
+        fail(b"late retained QoS mismatch");
+    }
+    let (fabric_slot, client_slot) =
+        slime_rt::endpoint_create(FACTORY_SLOT).unwrap_or_else(|_| fail(b"late subscriber"));
+    let mut history = StreamHistory::new(qos.history_depth as usize)
+        .unwrap_or_else(|| fail(b"late subscriber history"));
+    let mut retained = publisher.retained;
+    while let Some(entry) = retained.pop() {
+        if frames[entry.slot as usize].buffer_slot.is_some() {
+            continue;
+        }
+        frames[entry.slot as usize].refs += 1;
+        if history.push(entry).is_some() {
+            fail(b"retained replay exceeded declared window");
+        }
+    }
+    if history.is_empty() {
+        fail(b"late subscriber has no inline retained sample");
+    }
+    slime_rt::debug_write(b"[fabric] retained history offered to late subscriber\n");
+    LateSubscriber {
+        fabric_slot,
+        client_slot,
+        history,
+        qos,
+        received: false,
+        delivered: false,
+    }
+}
+
+fn pump_late_subscriber(
+    late: &mut Option<LateSubscriber>,
+    now_ns: u64,
+    frames: &mut [Frame; MAX_FRAMES],
+) -> bool {
+    let Some(subscriber) = late.as_mut() else {
+        return false;
+    };
+    if !subscriber.delivered {
+        let Some(entry) = subscriber.history.peek() else {
+            fail(b"late subscriber received no retained sample");
+        };
+        let frame = entry.slot as usize;
+        let sample = WireStreamSample {
+            magic: STREAM_SAMPLE_MAGIC,
+            version: FORMAT_VERSION,
+            flags: frames[frame].flags,
+            payload_len: frames[frame].payload_len as u32,
+            sequence: frames[frame].sequence,
+            type_identity: frames[frame].type_identity,
+            payload: frames[frame].payload,
+        };
+        match slime_rt::send(subscriber.fabric_slot, &sample.encode(), &[]) {
+            ERR_SUCCESS => {
+                subscriber.delivered = true;
+                return true;
+            }
+            ERR_WOULDBLOCK => return false,
+            _ => fail(b"late retained delivery"),
+        }
+    }
+    if !subscriber.received {
+        let Some(entry) = subscriber.history.peek() else {
+            fail(b"late subscriber retained sample disappeared");
+        };
+        let frame = entry.slot as usize;
+        let mut message = [0u8; MAX_MSG];
+        let mut caps = [0u64; MAX_CAPS_PER_MSG];
+        let length = match slime_rt::recv(subscriber.client_slot, &mut message, &mut caps) {
+            n if n >= 0 => n as usize,
+            ERR_WOULDBLOCK => return false,
+            _ => fail(b"late retained receive"),
+        };
+        release_received(&caps);
+        let Some(received) = WireStreamSample::decode(&message[..length]) else {
+            fail(b"late retained decode")
+        };
+        if !slime_proto::valid_stream_sample(
+            &received,
+            frames[frame].type_identity,
+            MAX_INLINE_BYTES,
+        ) || received.sequence != entry.sequence
+        {
+            fail(b"late retained validation");
+        }
+        subscriber.received = true;
+        slime_rt::debug_write(b"[fabric] retained history replayed to late subscriber\n");
+        return true;
+    }
+    if now_ns >= subscriber.qos.lifespan_ns {
+        while let Some(entry) = subscriber.history.pop() {
+            release_frame(entry.slot as usize, frames);
+        }
+        slime_rt::debug_write(b"[fabric] QoS lifespan expired\n");
+        slime_rt::debug_write(b"[fabric] retained history expired for late subscriber\n");
+        let _ = slime_rt::cap_drop(subscriber.fabric_slot);
+        let _ = slime_rt::cap_drop(subscriber.client_slot);
+        *late = None;
+        return true;
+    }
+    false
+}
 
 /// Send at most one queued sample to one subscriber.
-///
 /// Bounded by the declared depth: `in_flight` counts samples sent but not yet
 /// acked, so a subscriber that stops acking stops receiving, and its publisher
 /// keeps running against the KEEP_LAST ring instead of blocking the route.
 fn deliver(
     index: usize,
+    now_ns: u64,
     type_tags: &[u64; ROUTE_COUNT],
     subscribers: &mut [Option<Subscriber>; MAX_PARTICIPANTS],
     frames: &mut [Frame; MAX_FRAMES],
@@ -922,6 +1191,12 @@ fn deliver(
     let route = subscriber.route;
     let type_identity = type_tags[route];
     let slot = subscriber.slot;
+    if subscriber.matched_publishers == 0 {
+        return false;
+    }
+    if subscriber.terminal {
+        return false;
+    }
 
     // Report loss before the next sample, so a subscriber learns of a gap ahead
     // of the sequence that follows it rather than after.
@@ -960,6 +1235,24 @@ fn deliver(
         return false;
     };
     let frame = entry.slot as usize;
+    if subscriber.qos.lifespan_ns != 0
+        && now_ns.saturating_sub(frames[frame].admitted_ns) >= subscriber.qos.lifespan_ns
+    {
+        let expired = subscriber.history.pop().expect("queued frame");
+        subscriber.in_flight = subscriber.in_flight.saturating_sub(1);
+        release_frame(expired.slot as usize, frames);
+        if send_qos_event(
+            slot,
+            EVENT_LIFESPAN_EXPIRED,
+            entry.sequence,
+            0,
+            now_ns,
+            type_identity,
+        ) {
+            slime_rt::debug_write(b"[fabric] QoS lifespan expired\n");
+        }
+        return true;
+    }
 
     let sent = if let Some(buffer_slot) = frames[frame].buffer_slot {
         // One independently accounted downstream loan per subscriber, bound to
@@ -1044,6 +1337,10 @@ fn deliver(
         return false;
     }
     subscriber.in_flight += 1;
+    subscriber.deadline_reported = false;
+    if subscriber.in_flight == 1 {
+        subscriber.last_retry_ns = now_ns;
+    }
     true
 }
 
@@ -1067,9 +1364,15 @@ fn drain_acks(
         let length = match slime_rt::recv(slot, &mut message, &mut received) {
             ERR_WOULDBLOCK => return progressed,
             ERR_PEER_DEAD => {
-                // The subscriber is gone: release every frame it still held so
-                // a dead peer cannot retain fabric storage, and retire it from
-                // the wait set.
+                let _ = send_qos_event(
+                    slot,
+                    slime_proto::fabric_qos::EVENT_PEER_DEAD,
+                    0,
+                    0,
+                    0,
+                    type_identity,
+                );
+                slime_rt::debug_write(b"[fabric] QoS peer dead\n");
                 retire_subscriber(index, subscribers, frames);
                 return true;
             }
@@ -1106,6 +1409,7 @@ fn drain_acks(
         }
         subscriber.history.pop();
         subscriber.in_flight -= 1;
+        subscriber.retry_count = 0;
         release_frame(entry.slot as usize, frames);
     }
 }
@@ -1124,8 +1428,10 @@ fn announce_end(
         return false;
     }
     // Everything queued must reach the subscriber before it is told the stream
-    // ended, so a terminal event never overtakes a delivered sample.
-    if !subscriber.history.is_empty() || subscriber.in_flight != 0 {
+    // ended, except after a declared terminal QoS transition has reclaimed the
+    // queue itself. A lifespan-expired publisher is already absent from this
+    // subscriber's queue, so retained history cannot keep it waiting.
+    if !subscriber.terminal && (!subscriber.history.is_empty() || subscriber.in_flight != 0) {
         return false;
     }
     let event = WireStreamEvent {
@@ -1149,6 +1455,20 @@ fn announce_end(
             true
         }
         _ => fail(b"stream end event"),
+    }
+}
+
+/// Drop the durable-history references once the broker is finished. Retained
+/// samples are live only for this fabric instance; shutdown releases their
+/// fixed frame and buffer charges before the component exits.
+fn release_retained(
+    publishers: &mut [Option<Publisher>; MAX_PARTICIPANTS],
+    frames: &mut [Frame; MAX_FRAMES],
+) {
+    for publisher in publishers.iter_mut().flatten() {
+        while let Some(entry) = publisher.retained.pop() {
+            release_frame(entry.slot as usize, frames);
+        }
     }
 }
 
@@ -1269,6 +1589,9 @@ fn park_on_streams(
         // becomes interesting when it releases a slot or dies.
         push(subscriber.ack_slot);
     }
+    if option_env!("SLIME_FABRIC_QOS_CHECK") == Some("1") {
+        push(TIME_SLOT);
+    }
     if count == 0 {
         fail(b"no live stream source to park on");
     }
@@ -1301,6 +1624,288 @@ fn declared_history_depth(component: &[u8], route: &str) -> usize {
         .find(|(name, entry_route, _)| *name == component && *entry_route == route)
         .map(|(_, _, depth)| *depth as usize)
         .unwrap_or_else(|| fail(b"participant declares no history depth"))
+}
+
+fn declared_qos(component: &[u8], route: &str) -> TransportQos {
+    FABRIC_QOS
+        .iter()
+        .find(|entry| entry.0 == component && entry.1 == route)
+        .map(|entry| TransportQos {
+            deadline_ns: entry.2,
+            lifespan_ns: entry.3,
+            lease_ns: entry.4,
+            history_depth: entry.5,
+            retained_depth: entry.6,
+            reliability: entry.7,
+            durability: entry.8,
+            liveliness: entry.9,
+        })
+        .unwrap_or_else(|| fail(b"participant declares no QoS"))
+}
+
+fn refresh_matches(
+    route: usize,
+    publishers: &[Option<Publisher>; MAX_PARTICIPANTS],
+    subscribers: &mut [Option<Subscriber>; MAX_PARTICIPANTS],
+) {
+    for subscriber in subscribers
+        .iter_mut()
+        .flatten()
+        .filter(|subscriber| subscriber.route == route)
+    {
+        let old = subscriber.matched_publishers;
+        let matched = publishers
+            .iter()
+            .flatten()
+            .filter(|publisher| publisher.route == route)
+            .filter(|publisher| TransportQos::offer_satisfies(&publisher.qos, &subscriber.qos))
+            .count() as u32;
+        let incompatible = publishers
+            .iter()
+            .flatten()
+            .filter(|publisher| publisher.route == route)
+            .count() as u32
+            - matched;
+        subscriber.matched_publishers = matched;
+        if matched != old {
+            let event = if matched == 0 {
+                EVENT_UNMATCHED
+            } else {
+                EVENT_MATCHED
+            };
+            if send_qos_event(
+                subscriber.slot,
+                event,
+                0,
+                matched as u64,
+                0,
+                route_type_tag(route),
+            ) {
+                slime_rt::debug_write(if event == EVENT_MATCHED {
+                    b"[fabric] QoS matched\n" as &[u8]
+                } else {
+                    b"[fabric] QoS unmatched\n"
+                });
+            }
+        }
+        if incompatible != 0
+            && send_qos_event(
+                subscriber.slot,
+                EVENT_INCOMPATIBLE_QOS,
+                0,
+                incompatible as u64,
+                0,
+                route_type_tag(route),
+            )
+        {
+            slime_rt::debug_write(b"[fabric] QoS incompatible\n");
+        }
+    }
+}
+
+fn receive_time(pending_time: &mut Option<u64>) {
+    if pending_time.is_some() {
+        return;
+    }
+    let mut bytes = [0u8; MAX_MSG];
+    let mut caps = [0u64; MAX_CAPS_PER_MSG];
+    let length = match slime_rt::recv(TIME_SLOT, &mut bytes, &mut caps) {
+        ERR_WOULDBLOCK | ERR_PEER_DEAD => return,
+        n if n < 0 => fail(b"time recv"),
+        n => n as usize,
+    };
+    release_received(&caps);
+    let Some(value) = WireTimeAdvance::decode(&bytes[..length]) else {
+        fail(b"time decode")
+    };
+    if !slime_proto::valid_time_advance(&value) {
+        fail(b"non-monotonic time")
+    }
+    *pending_time = Some(value.now_ns);
+}
+
+fn time_peer_dead() -> bool {
+    let mut bytes = [0u8; MAX_MSG];
+    let mut caps = [0u64; MAX_CAPS_PER_MSG];
+    match slime_rt::recv(TIME_SLOT, &mut bytes, &mut caps) {
+        ERR_PEER_DEAD => true,
+        ERR_WOULDBLOCK => false,
+        n if n < 0 => fail(b"time peer probe"),
+        _ => fail(b"unapplied time advance"),
+    }
+}
+
+fn apply_time(
+    now_ns: &mut u64,
+    pending_time: &mut Option<u64>,
+    publishers: &mut [Option<Publisher>; MAX_PARTICIPANTS],
+    subscribers: &mut [Option<Subscriber>; MAX_PARTICIPANTS],
+    frames: &mut [Frame; MAX_FRAMES],
+) -> bool {
+    let Some(next) = pending_time.take() else {
+        return false;
+    };
+    if next < *now_ns {
+        fail(b"non-monotonic time")
+    }
+    *now_ns = next;
+
+    // Tie order after the broker's data/ack sweep: lifespan, retry exhaustion,
+    // deadline, then liveliness/lease.
+    for subscriber in subscribers.iter_mut().flatten() {
+        while let Some(entry) = subscriber.history.peek() {
+            let frame = entry.slot as usize;
+            if subscriber.qos.lifespan_ns == 0
+                || now_ns.saturating_sub(frames[frame].admitted_ns) < subscriber.qos.lifespan_ns
+            {
+                break;
+            }
+            let expired = subscriber.history.pop().expect("queued frame");
+            subscriber.in_flight = subscriber.in_flight.saturating_sub(1);
+            let publisher_index = expired.publisher as usize;
+            if publishers.get(publisher_index).is_none_or(Option::is_none) {
+                fail(b"expired sample has no publisher");
+            }
+            release_frame(expired.slot as usize, frames);
+            if send_qos_event(
+                subscriber.slot,
+                EVENT_LIFESPAN_EXPIRED,
+                expired.sequence,
+                0,
+                *now_ns,
+                route_type_tag(subscriber.route),
+            ) {
+                slime_rt::debug_write(b"[fabric] QoS lifespan expired\n");
+            }
+        }
+    }
+
+    for subscriber in subscribers.iter_mut().flatten() {
+        if subscriber.terminal
+            || subscriber.qos.reliability as u32 != RELIABILITY_RELIABLE
+            || subscriber.in_flight == 0
+        {
+            continue;
+        }
+        if now_ns.saturating_sub(subscriber.last_retry_ns) < subscriber.retry_interval_ns {
+            continue;
+        }
+        subscriber.retry_count = subscriber.retry_count.saturating_add(1);
+        subscriber.last_retry_ns = *now_ns;
+        slime_rt::debug_write(b"[fabric] reliable retry accounted\n");
+        if subscriber.retry_count < 4 {
+            continue;
+        }
+
+        let mut exhausted = None;
+        while let Some(entry) = subscriber.history.pop() {
+            exhausted.get_or_insert(entry.sequence);
+            release_frame(entry.slot as usize, frames);
+        }
+        subscriber.in_flight = 0;
+        subscriber.terminal = true;
+        if let Some(sequence) = exhausted
+            && send_qos_event(
+                subscriber.slot,
+                EVENT_RETRY_EXHAUSTED,
+                sequence,
+                subscriber.retry_count as u64,
+                *now_ns,
+                route_type_tag(subscriber.route),
+            )
+        {
+            slime_rt::debug_write(b"[fabric] QoS retry exhausted\n");
+        }
+    }
+
+    for subscriber in subscribers.iter_mut().flatten() {
+        if subscriber.qos.deadline_ns != 0
+            && !subscriber.deadline_reported
+            && *now_ns >= subscriber.qos.deadline_ns
+        {
+            subscriber.deadline_reported = true;
+            if send_qos_event(
+                subscriber.slot,
+                EVENT_DEADLINE_MISSED,
+                0,
+                0,
+                *now_ns,
+                route_type_tag(subscriber.route),
+            ) {
+                slime_rt::debug_write(b"[fabric] QoS deadline missed\n");
+            }
+        }
+    }
+
+    for publisher in publishers.iter().flatten() {
+        if publisher.qos.lease_ns != 0
+            && now_ns.saturating_sub(publisher.last_assertion_ns) >= publisher.qos.lease_ns
+        {
+            for subscriber in subscribers.iter_mut().flatten().filter(|subscriber| {
+                subscriber.route == publisher.route && !subscriber.liveliness_reported
+            }) {
+                subscriber.liveliness_reported = true;
+                if send_qos_event(
+                    subscriber.slot,
+                    EVENT_LIVELINESS_LOST,
+                    0,
+                    0,
+                    *now_ns,
+                    route_type_tag(subscriber.route),
+                ) {
+                    slime_rt::debug_write(b"[fabric] QoS liveliness lost\n");
+                }
+            }
+        }
+    }
+    let credit = WireTimeAdvance {
+        magic: slime_proto::fabric_time::TIME_ADVANCE_MAGIC,
+        version: slime_proto::fabric_time::FORMAT_VERSION,
+        flags: 0,
+        reserved0: 0,
+        now_ns: *now_ns,
+        reserved: [0; 40],
+    };
+    match slime_rt::send(TIME_SLOT, &credit.encode(), &[]) {
+        ERR_SUCCESS => {}
+        ERR_WOULDBLOCK | ERR_PEER_DEAD => fail(b"time credit blocked"),
+        _ => fail(b"time credit"),
+    }
+    true
+}
+
+fn route_type_tag(route: usize) -> u64 {
+    match route {
+        0 => telemetry_stream::TYPE_TAG,
+        1 => diagnostics_stream::TYPE_TAG,
+        _ => fail(b"route tag"),
+    }
+}
+
+fn send_qos_event(
+    slot: u32,
+    event: u32,
+    sequence: u64,
+    value: u64,
+    timestamp_ns: u64,
+    type_identity: u64,
+) -> bool {
+    let record = WireQosEvent {
+        magic: QOS_EVENT_MAGIC,
+        version: QOS_FORMAT_VERSION,
+        event,
+        flags: 0,
+        sequence,
+        value,
+        timestamp_ns,
+        type_identity,
+        reserved: [0; 16],
+    };
+    match slime_rt::send(slot, &record.encode(), &[]) {
+        ERR_SUCCESS => true,
+        ERR_WOULDBLOCK | ERR_PEER_DEAD => false,
+        _ => fail(b"QoS event"),
+    }
 }
 
 /// The supervision handle init granted the fabric for one subscriber. Init

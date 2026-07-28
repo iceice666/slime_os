@@ -86,6 +86,15 @@ fabric_stream_check: contracts_check generation_check
     python3 scripts/check/check-fabric-stream.py
     cd kernel && cargo test --release -p slime_os-kernel --test fabric_stream -- -display none
 
+# C8.5: bounded reliable/best-effort QoS, retained history, compatibility
+# events, fixed retry exhaustion, and explicit simulated-time transitions.
+fabric_qos_check: contracts_check generation_check
+    python3 scripts/check/check-fabric-qos.py
+
+fabric_qos_gen:
+    python3 scripts/generate/generate-fabric-qos-bindings.py
+    python3 scripts/generate/generate-fabric-time-bindings.py
+
 # C7.6: versioned sample descriptor over the C7.5 loan lifecycle; byte-identical
 # binding round-trip, malformed-descriptor rejection before mapping, and a
 # payload larger than MAX_MSG carried over descriptor plus shared buffer.

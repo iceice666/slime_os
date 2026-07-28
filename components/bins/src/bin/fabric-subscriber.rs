@@ -21,6 +21,7 @@ use slime_proto::capability_transfer::{
     FABRIC_REQUEST_MAGIC, FORMAT_VERSION, OBJECT_KIND_ENDPOINT, REQUEST_LEN,
     WireCapabilityTransfer, WireFabricRequest,
 };
+use slime_proto::fabric_qos::{QOS_EVENT_MAGIC, WireQosEvent};
 use slime_proto::fabric_stream::{
     EVENT_SAMPLE_LOST, EVENT_STREAM_END, MAX_INLINE_BYTES, STREAM_ACK_MAGIC, STREAM_EVENT_MAGIC,
     STREAM_SAMPLE_MAGIC, WireStreamAck, WireStreamEvent, WireStreamSample,
@@ -222,6 +223,39 @@ fn consume(route_slot: u32, ack_slot: u32) {
                 shared += 1;
                 slime_rt::debug_write(b"[fabric-subscriber] shared sample verified\n");
                 ack(ack_slot, descriptor.sequence);
+            }
+            QOS_EVENT_MAGIC => {
+                let Some(event) = WireQosEvent::decode(&message) else {
+                    fail(b"decode QoS event")
+                };
+                if !slime_proto::valid_qos_event(&event, telemetry_stream::TYPE_TAG) {
+                    fail(b"QoS event failed validation");
+                }
+                match event.event {
+                    slime_proto::fabric_qos::EVENT_MATCHED => {
+                        slime_rt::debug_write(b"[fabric-subscriber] QoS matched\n");
+                    }
+                    slime_proto::fabric_qos::EVENT_INCOMPATIBLE_QOS => {
+                        slime_rt::debug_write(b"[fabric-subscriber] QoS incompatible\n");
+                    }
+                    slime_proto::fabric_qos::EVENT_LIFESPAN_EXPIRED => {
+                        slime_rt::debug_write(b"[fabric-subscriber] QoS lifespan expired\n");
+                    }
+                    slime_proto::fabric_qos::EVENT_RETRY_EXHAUSTED => {
+                        slime_rt::debug_write(b"[fabric-subscriber] QoS retry exhausted\n");
+                    }
+                    slime_proto::fabric_qos::EVENT_DEADLINE_MISSED => {
+                        slime_rt::debug_write(b"[fabric-subscriber] QoS deadline missed\n");
+                    }
+                    slime_proto::fabric_qos::EVENT_LIVELINESS_LOST => {
+                        slime_rt::debug_write(b"[fabric-subscriber] QoS liveliness lost\n");
+                    }
+                    slime_proto::fabric_qos::EVENT_UNMATCHED
+                    | slime_proto::fabric_qos::EVENT_PEER_DEAD => {
+                        slime_rt::debug_write(b"[fabric-subscriber] QoS terminal event\n");
+                    }
+                    _ => fail(b"unknown QoS event"),
+                }
             }
             STREAM_EVENT_MAGIC => {
                 let Some(event) = WireStreamEvent::decode(&message) else {

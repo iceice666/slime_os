@@ -38,6 +38,8 @@ pub struct HistoryEntry {
     /// Publisher-assigned sequence. Monotonic per publisher; the fabric does
     /// not renumber, so a subscriber sees the gap an eviction left.
     pub sequence: u64,
+    /// Index of the publisher whose per-edge sequence this sample carries.
+    pub publisher: u32,
     /// Index into the fabric's own sample storage.
     pub slot: u32,
     /// Whether this entry is carried inline or through a shared-buffer loan.
@@ -172,6 +174,7 @@ mod tests {
     fn entry(sequence: u64) -> HistoryEntry {
         HistoryEntry {
             sequence,
+            publisher: 0,
             slot: sequence as u32,
             inline: true,
         }

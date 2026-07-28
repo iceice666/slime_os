@@ -4,7 +4,9 @@
 pub mod block;
 pub mod capability_transfer;
 pub mod component;
+pub mod fabric_qos;
 pub mod fabric_stream;
+pub mod fabric_time;
 pub mod fs;
 pub mod generation;
 pub mod interface_schema;
@@ -309,4 +311,32 @@ pub fn valid_stream_event(event: &fabric_stream::WireStreamEvent, expected_type:
         fabric_stream::EVENT_SAMPLE_TAKEN => event.lost == 0 && event.sequence != 0,
         _ => false,
     }
+}
+
+pub fn valid_time_advance(value: &fabric_time::WireTimeAdvance) -> bool {
+    value.magic == fabric_time::TIME_ADVANCE_MAGIC
+        && value.version == fabric_time::FORMAT_VERSION
+        && value.flags == 0
+        && value.reserved0 == 0
+        && value.reserved.iter().all(|byte| *byte == 0)
+}
+
+pub fn valid_qos_event(value: &fabric_qos::WireQosEvent, expected_type: u64) -> bool {
+    use fabric_qos::*;
+    value.magic == QOS_EVENT_MAGIC
+        && value.version == FORMAT_VERSION
+        && value.flags == 0
+        && value.type_identity == expected_type
+        && value.reserved.iter().all(|byte| *byte == 0)
+        && matches!(
+            value.event,
+            EVENT_MATCHED
+                | EVENT_UNMATCHED
+                | EVENT_INCOMPATIBLE_QOS
+                | EVENT_LIFESPAN_EXPIRED
+                | EVENT_RETRY_EXHAUSTED
+                | EVENT_DEADLINE_MISSED
+                | EVENT_LIVELINESS_LOST
+                | EVENT_PEER_DEAD
+        )
 }

@@ -539,6 +539,7 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
     let (fabric_intruder_client, fabric_intruder_service) = ipc::channel();
     let (fabric_publisher_b_client, fabric_publisher_b_service) = ipc::channel();
     let (fabric_subscriber_b_client, fabric_subscriber_b_service) = ipc::channel();
+    let (fabric_time_client, fabric_time_service) = ipc::channel();
     let mut caps = vec![
         Capability {
             object: KernelObject::EndpointFactory,
@@ -691,6 +692,15 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
             RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
         ),
     ]);
+    if generation.number == 13 {
+        caps.extend([
+            endpoint(fabric_time_client, RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER),
+            endpoint(
+                fabric_time_service,
+                RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
+            ),
+        ]);
+    }
     if let (Some(receiver), Some(source)) = (transfer_receiver, transfer_source) {
         caps.extend([
             Capability {
@@ -1070,6 +1080,8 @@ extern "C" fn on_idle() {
             && GENERATION_NUMBER.load(Ordering::Relaxed) == 11;
         let fabric_stream_check = option_env!("SLIME_FABRIC_STREAM_CHECK") == Some("1")
             && GENERATION_NUMBER.load(Ordering::Relaxed) == 12;
+        let fabric_qos_check = option_env!("SLIME_FABRIC_QOS_CHECK") == Some("1")
+            && GENERATION_NUMBER.load(Ordering::Relaxed) == 13;
         let optional_generation_command_component = generation_command_check
             && matches!(name, "init" | "generation-manager")
             && matches!(
@@ -1144,12 +1156,32 @@ extern "C" fn on_idle() {
                 reason,
                 Some(task::TermReason::Exit(0) | task::TermReason::PeerLoss)
             );
-        let optional_fabric_manager = (fabric_authority_check || fabric_stream_check)
-            && name == "generation-manager"
-            && matches!(reason, Some(task::TermReason::Exit(1)));
+        let optional_fabric_manager =
+            (fabric_authority_check || fabric_stream_check || fabric_qos_check)
+                && name == "generation-manager"
+                && matches!(reason, Some(task::TermReason::Exit(1)));
         // The stream scenario runs the same graph as the authority one, plus
         // the two components that make the fan-out many-to-many.
         let optional_fabric_stream_component = fabric_stream_check
+            && matches!(
+                name,
+                "init"
+                    | "console"
+                    | "dango"
+                    | "spawn-service"
+                    | "filesystem-service"
+                    | "fabric-service"
+                    | "fabric-publisher"
+                    | "fabric-subscriber"
+                    | "fabric-intruder"
+                    | "fabric-publisher-b"
+                    | "fabric-subscriber-b"
+            )
+            && matches!(
+                reason,
+                Some(task::TermReason::Exit(0) | task::TermReason::PeerLoss)
+            );
+        let optional_fabric_qos_component = fabric_qos_check
             && matches!(
                 name,
                 "init"
@@ -1180,7 +1212,8 @@ extern "C" fn on_idle() {
             || optional_sample_plane_manager
             || optional_fabric_component
             || optional_fabric_manager
-            || optional_fabric_stream_component;
+            || optional_fabric_stream_component
+            || optional_fabric_qos_component;
     }
     if healthy {
         if crate::boot::bootstate().is_some_and(|state| state.running_pending) {

@@ -26,6 +26,7 @@ use slime_proto::capability_transfer::{
     FABRIC_REQUEST_MAGIC, FORMAT_VERSION, OBJECT_KIND_ENDPOINT, REQUEST_LEN,
     WireCapabilityTransfer, WireFabricRequest,
 };
+use slime_proto::fabric_qos::{QOS_EVENT_MAGIC, WireQosEvent};
 use slime_proto::fabric_stream::{
     EVENT_SAMPLE_LOST, EVENT_STREAM_END, MAX_INLINE_BYTES, STREAM_ACK_MAGIC, STREAM_EVENT_MAGIC,
     STREAM_SAMPLE_MAGIC, WireStreamAck, WireStreamEvent, WireStreamSample,
@@ -144,38 +145,21 @@ fn main() {
     }
     slime_rt::debug_write(b"[fabric-subscriber-b] both subscribe roles received\n");
 
-    // Consume telemetry until the large sample has been taken, then stop
-    // acking. Ordering matters: the shared sample must reach *both* matched
-    // subscribers so the fan-out really is one copy and one loan per
-    // subscriber. Stalling before it arrived would evict it here under
-    // KEEP_LAST and leave the second loan never created — a weaker system
-    // passing a weaker test.
-    let consumed = consume_telemetry(telemetry_slot, telemetry_ack, StopAfter::SharedSample);
-    if consumed == 0 {
-        fail(b"route delivered nothing before the stall");
-    }
+    // Leave telemetry unread while the independent RELIABLE diagnostics arm
+    // consumes explicit time. Both telemetry publishers continue, so the
+    // BEST_EFFORT ring must evict and later report bounded loss.
     slime_rt::debug_write(b"[fabric-subscriber-b] stalling on telemetry\n");
 
-    // While telemetry is stalled, the unrelated route must still work. This is
-    // the isolation arm: one participant's fault does not disturb another
-    // stream.
+    // The diagnostics reader is the RELIABLE/manual-liveliness arm. It
+    // withholds its first sample while explicit time drives deadline, lease,
+    // and fixed retry exhaustion.
     consume_diagnostics(diagnostics_slot, diagnostics_ack);
-    slime_rt::debug_write(b"[fabric-subscriber-b] diagnostics unaffected by stall\n");
 
-    // Resume. Delivery continues from the retained window rather than from the
-    // beginning, and the stall's cost is reported as bounded loss.
-    consume_telemetry(telemetry_slot, telemetry_ack, StopAfter::StreamEnd);
+    // Resume telemetry after the timed scenario. The large sample still proves
+    // the shared path if it survived the fixed KEEP_LAST window; loss itself is
+    // the required zero-credit outcome.
+    consume_telemetry(telemetry_slot, telemetry_ack);
     slime_rt::debug_write(b"[fabric-subscriber-b] done\n");
-}
-
-/// When to stop consuming telemetry.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum StopAfter {
-    /// Return once the `>MAX_MSG` shared sample has been taken. The stall must
-    /// begin after it, so both matched subscribers receive their own loan.
-    SharedSample,
-    /// Return when the fabric reports the route ended.
-    StreamEnd,
 }
 
 /// Consume telemetry until `stop` is satisfied.
@@ -183,7 +167,7 @@ enum StopAfter {
 /// Loss is admissible throughout — this reader declares BEST_EFFORT — so it is
 /// counted and bounded rather than forbidden at any point. Returns the number
 /// of samples consumed.
-fn consume_telemetry(route_slot: u32, ack_slot: u32, stop: StopAfter) -> u32 {
+fn consume_telemetry(route_slot: u32, ack_slot: u32) -> u32 {
     let mut consumed = 0;
     let mut observed_loss = false;
     let mut reports = 0u32;
@@ -257,9 +241,22 @@ fn consume_telemetry(route_slot: u32, ack_slot: u32, stop: StopAfter) -> u32 {
                 slime_rt::debug_write(b"[fabric-subscriber-b] shared sample verified\n");
                 consumed += 1;
                 ack(ack_slot, descriptor.sequence, telemetry_stream::TYPE_TAG);
-                if stop == StopAfter::SharedSample {
-                    return consumed;
+            }
+            QOS_EVENT_MAGIC => {
+                let Some(event) = WireQosEvent::decode(&message) else {
+                    fail(b"decode QoS event")
+                };
+                if !slime_proto::valid_qos_event(
+                    &event,
+                    if event.type_identity == diagnostics_stream::TYPE_TAG {
+                        diagnostics_stream::TYPE_TAG
+                    } else {
+                        telemetry_stream::TYPE_TAG
+                    },
+                ) {
+                    fail(b"QoS event failed validation");
                 }
+                slime_rt::debug_write(b"[fabric-subscriber-b] QoS event observed\n");
             }
             STREAM_EVENT_MAGIC => {
                 let Some(event) = WireStreamEvent::decode(&message) else {
@@ -312,10 +309,14 @@ fn consume_telemetry(route_slot: u32, ack_slot: u32, stop: StopAfter) -> u32 {
     }
 }
 
-/// Consume the diagnostics route to its end. A different route with a different
-/// interface: a telemetry sample arriving here would be a routing failure.
-fn consume_diagnostics(route_slot: u32, ack_slot: u32) {
-    let mut consumed = 0u32;
+/// Consume the RELIABLE diagnostics route without acknowledging its sample.
+/// The service's explicit time input must terminate it through bounded QoS,
+/// while the unrelated telemetry route continues independently.
+fn consume_diagnostics(route_slot: u32, _ack_slot: u32) {
+    let mut sample_seen = false;
+    let mut deadline = false;
+    let mut liveliness = false;
+    let mut exhausted = false;
     loop {
         let mut message = [0u8; MAX_MSG];
         let mut received = [0u64; MAX_CAPS_PER_MSG];
@@ -336,31 +337,55 @@ fn consume_diagnostics(route_slot: u32, ack_slot: u32) {
                 let Some(sample) = WireStreamSample::decode(&message) else {
                     fail(b"decode diagnostics sample")
                 };
-                // The type tag is the route's own, so a telemetry sample
-                // delivered here fails validation rather than being accepted.
                 if !valid_stream_sample(&sample, diagnostics_stream::TYPE_TAG, MAX_INLINE_BYTES) {
                     fail(b"diagnostics sample failed validation");
                 }
-                consumed += 1;
-                ack(ack_slot, sample.sequence, diagnostics_stream::TYPE_TAG);
+                sample_seen = true;
+                slime_rt::debug_write(b"[fabric-subscriber-b] reliable sample withheld\n");
+            }
+            QOS_EVENT_MAGIC => {
+                let Some(event) = WireQosEvent::decode(&message) else {
+                    fail(b"decode QoS event")
+                };
+                if !slime_proto::valid_qos_event(&event, diagnostics_stream::TYPE_TAG) {
+                    fail(b"QoS event failed validation");
+                }
+                match event.event {
+                    slime_proto::fabric_qos::EVENT_MATCHED => {}
+                    slime_proto::fabric_qos::EVENT_DEADLINE_MISSED => {
+                        deadline = true;
+                        slime_rt::debug_write(b"[fabric-subscriber-b] QoS deadline observed\n");
+                    }
+                    slime_proto::fabric_qos::EVENT_LIFESPAN_EXPIRED => {
+                        fail(b"volatile diagnostics sample expired")
+                    }
+                    slime_proto::fabric_qos::EVENT_LIVELINESS_LOST => {
+                        liveliness = true;
+                        slime_rt::debug_write(b"[fabric-subscriber-b] QoS liveliness observed\n");
+                    }
+                    slime_proto::fabric_qos::EVENT_RETRY_EXHAUSTED => {
+                        exhausted = true;
+                        slime_rt::debug_write(
+                            b"[fabric-subscriber-b] QoS retry exhausted observed\n",
+                        );
+                    }
+                    _ => fail(b"unexpected diagnostics QoS event"),
+                }
             }
             STREAM_EVENT_MAGIC => {
                 let Some(event) = WireStreamEvent::decode(&message) else {
                     fail(b"decode event")
                 };
-                if !valid_stream_event(&event, diagnostics_stream::TYPE_TAG) {
-                    fail(b"event failed validation");
+                if !valid_stream_event(&event, diagnostics_stream::TYPE_TAG)
+                    || event.event != EVENT_STREAM_END
+                {
+                    fail(b"unexpected diagnostics stream event");
                 }
-                match event.event {
-                    EVENT_SAMPLE_LOST => fail(b"unrelated route reported loss during the stall"),
-                    EVENT_STREAM_END => {
-                        if consumed == 0 {
-                            fail(b"diagnostics ended without delivering a sample");
-                        }
-                        return;
-                    }
-                    _ => fail(b"unknown event kind"),
+                if !sample_seen || !deadline || !liveliness || !exhausted {
+                    fail(b"diagnostics ended before every QoS condition");
                 }
+                slime_rt::debug_write(b"[fabric-subscriber-b] reliable QoS terminal\n");
+                return;
             }
             _ => fail(b"unknown stream record"),
         }

@@ -89,13 +89,13 @@
             direction = "publish";
             visibility = "graph";
             interposition = [];
-            reliability = "reliable";
+            reliability = "bestEffort";
             durability = "retained";
             liveliness = "automatic";
             historyDepth = 4;
             retainedDepth = 2;
             deadlineNs = 0;
-            lifespanNs = 0;
+            lifespanNs = 300;
             leaseNs = 0;
           };
           {
@@ -103,7 +103,7 @@
             direction = "subscribe";
             visibility = "graph";
             interposition = [];
-            reliability = "reliable";
+            reliability = "bestEffort";
             durability = "volatile";
             liveliness = "automatic";
             historyDepth = 8;
@@ -119,12 +119,12 @@
             interposition = [];
             reliability = "reliable";
             durability = "retained";
-            liveliness = "automatic";
+            liveliness = "manual";
             historyDepth = 4;
             retainedDepth = 2;
-            deadlineNs = 0;
-            lifespanNs = 0;
-            leaseNs = 0;
+            deadlineNs = 100;
+            lifespanNs = 300;
+            leaseNs = 200;
           };
           {
             component = "fabric-subscriber-b";
@@ -134,7 +134,7 @@
             reliability = "bestEffort";
             durability = "volatile";
             liveliness = "automatic";
-            historyDepth = 4;
+            historyDepth = 2;
             retainedDepth = 0;
             deadlineNs = 0;
             lifespanNs = 0;
@@ -153,26 +153,26 @@
             interposition = [];
             reliability = "reliable";
             durability = "volatile";
-            liveliness = "automatic";
+            liveliness = "manual";
             historyDepth = 2;
             retainedDepth = 0;
-            deadlineNs = 0;
+            deadlineNs = 100;
             lifespanNs = 0;
-            leaseNs = 0;
+            leaseNs = 200;
           };
           {
             component = "fabric-subscriber-b";
             direction = "subscribe";
             visibility = "graph";
             interposition = [];
-            reliability = "bestEffort";
+            reliability = "reliable";
             durability = "volatile";
-            liveliness = "automatic";
+            liveliness = "manual";
             historyDepth = 2;
             retainedDepth = 0;
-            deadlineNs = 0;
+            deadlineNs = 100;
             lifespanNs = 0;
-            leaseNs = 0;
+            leaseNs = 200;
           };
         ];
       };
@@ -396,6 +396,7 @@
       role = "service";
       dependencies = ["init";];
       spawnBudget = 0;
+      stackBytes = 49152;
       commandProfile = [];
     };
     {
@@ -697,6 +698,13 @@
     {
       name = "fabric-subscriber-b-control";
       source = "fabric-subscriber-b";
+      target = "fabric-service";
+      rights = ["send"; "recv";];
+      transferable = false;
+    };
+    {
+      name = "fabric-clock-control";
+      source = "fabric-publisher-b";
       target = "fabric-service";
       rights = ["send"; "recv";];
       transferable = false;

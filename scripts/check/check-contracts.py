@@ -54,6 +54,14 @@ FABRIC_STREAM_CONTRACT = ROOT / "contracts" / "fabric-stream" / "v1"
 FABRIC_STREAM_BINDING_GENERATOR = (
     ROOT / "scripts" / "generate" / "generate-fabric-stream-bindings.py"
 )
+FABRIC_QOS_CONTRACT = ROOT / "contracts" / "fabric-qos" / "v1"
+FABRIC_QOS_BINDING_GENERATOR = (
+    ROOT / "scripts" / "generate" / "generate-fabric-qos-bindings.py"
+)
+FABRIC_TIME_CONTRACT = ROOT / "contracts" / "fabric-time" / "v1"
+FABRIC_TIME_BINDING_GENERATOR = (
+    ROOT / "scripts" / "generate" / "generate-fabric-time-bindings.py"
+)
 
 
 def run(*arguments: str) -> str:
@@ -159,6 +167,20 @@ subprocess.run(
     cwd=ROOT,
     check=True,
 )
+run("check", str(FABRIC_QOS_CONTRACT / "schema.zt"))
+run("check", str(FABRIC_QOS_CONTRACT / "gen_rust.zt"))
+subprocess.run(
+    [sys.executable, str(FABRIC_QOS_BINDING_GENERATOR), "--check"],
+    cwd=ROOT,
+    check=True,
+)
+run("check", str(FABRIC_TIME_CONTRACT / "schema.zt"))
+run("check", str(FABRIC_TIME_CONTRACT / "gen_rust.zt"))
+subprocess.run(
+    [sys.executable, str(FABRIC_TIME_BINDING_GENERATOR), "--check"],
+    cwd=ROOT,
+    check=True,
+)
 run("check", str(INTERFACE_SCHEMA_CONTRACT / "schema.zt"))
 run("check", str(INTERFACE_SCHEMA_CONTRACT / "check.zt"))
 run("check", str(INTERFACE_SCHEMA_CONTRACT / "gen_python.zt"))
@@ -205,5 +227,5 @@ print(
     "Generation source/binary, kernel image, BootState, BootState trace, recovery, "
     "block, component, store, spawn, filesystem, powerbox, generation-management, "
     "transfer, sample-descriptor, interface-schema, fabric-graph, "
-    "capability-transfer, and fabric-stream contracts passed"
+    "capability-transfer, fabric-stream, fabric-qos, and fabric-time contracts passed"
 )
