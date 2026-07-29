@@ -15,6 +15,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=SLIME_FABRIC_AUTHORITY_CHECK");
     println!("cargo:rerun-if-env-changed=SLIME_FABRIC_STREAM_CHECK");
     println!("cargo:rerun-if-env-changed=SLIME_FABRIC_QOS_CHECK");
+    println!("cargo:rerun-if-env-changed=SLIME_FABRIC_CALL_CHECK");
     println!("cargo:rerun-if-env-changed=SLIME_GENERATION_CANDIDATE");
     println!("cargo:rerun-if-env-changed=SLIME_GENERATION_CMD_SCENARIO");
     if let Ok(number) = std::env::var("SLIME_GENERATION_NUMBER") {
@@ -46,6 +47,9 @@ fn main() {
     }
     if let Ok(value) = std::env::var("SLIME_FABRIC_QOS_CHECK") {
         println!("cargo:rustc-env=SLIME_FABRIC_QOS_CHECK={value}");
+    }
+    if let Ok(value) = std::env::var("SLIME_FABRIC_CALL_CHECK") {
+        println!("cargo:rustc-env=SLIME_FABRIC_CALL_CHECK={value}");
     }
     if let Ok(value) = std::env::var("SLIME_GENERATION_CANDIDATE") {
         println!("cargo:rustc-env=SLIME_GENERATION_CANDIDATE={value}");
@@ -120,6 +124,8 @@ fn generate_fabric_profile(manifest_dir: &str) {
         std::path::Path::new(manifest_dir).join("../../contracts/generation/v1/fixtures/valid.zti");
     println!("cargo:rerun-if-changed={}", manifest_path.display());
     let manifest = std::fs::read_to_string(&manifest_path).expect("read generation manifest");
+    let limits = fabric_limits(&manifest);
+    let call_deadline_ns = participants_call_deadline(&manifest, "parameters");
     let participants = fabric_participants(&manifest);
     // The parser is indentation-keyed, so its failure mode is a short table
     // rather than an empty one — and a short table is silent: the fabric denies
@@ -235,6 +241,12 @@ fn generate_fabric_profile(manifest_dir: &str) {
         .iter()
         .map(|component| format!("    b\"{component}\",\n"))
         .collect::<String>();
+    assert!(
+        limits.in_flight_calls > 0,
+        "fabric graph admits no in-flight calls"
+    );
+    assert!(limits.retries > 0, "fabric graph admits no call retries");
+    assert!(call_deadline_ns > 0, "call route declares no deadline");
     let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR"));
     std::fs::write(
         out.join("fabric_profile.rs"),
@@ -263,9 +275,16 @@ fn generate_fabric_profile(manifest_dir: &str) {
              /// when it grants them.\n\
              pub const FABRIC_SUBSCRIBERS: &[&[u8]] = &[\n{subscriber_rows}];\n\
              \n\
+             /// C8.6 bounds taken from the authenticated generation graph.\n\
+             pub const FABRIC_MAX_IN_FLIGHT_CALLS: usize = {};\n\
+             pub const FABRIC_MAX_RETRIES: u8 = {};\n\
+             pub const FABRIC_CALL_DEADLINE_NS: u64 = {};\n\
              /// The fabric's first control-endpoint slot, shared with init so the\n\
              /// two cannot disagree about the grant order.\n\
-             pub const FABRIC_FIRST_CONTROL_SLOT: u32 = {FABRIC_FIRST_CONTROL_SLOT};\n"
+             pub const FABRIC_FIRST_CONTROL_SLOT: u32 = {FABRIC_FIRST_CONTROL_SLOT};\n",
+            limits.in_flight_calls,
+            limits.retries,
+            call_deadline_ns,
         ),
     )
     .expect("write fabric profile");
@@ -326,6 +345,46 @@ struct FabricQos {
     reliability: u8,
     durability: u8,
     liveliness: u8,
+}
+
+#[derive(Clone, Copy)]
+struct FabricLimits {
+    retries: u8,
+    in_flight_calls: usize,
+}
+
+fn fabric_limits(manifest: &str) -> FabricLimits {
+    let block = fabric_graph_block(manifest);
+    let limits = block
+        .split_once("    limits = {")
+        .and_then(|(_, rest)| rest.split_once("    };").map(|(limits, _)| limits))
+        .expect("fabric graph limits");
+    let mut retries = None;
+    let mut in_flight_calls = None;
+    for line in limits.lines() {
+        let trimmed = line.trim();
+        if let Some(value) = trimmed.strip_prefix("retries = ") {
+            retries = Some(value.trim_end_matches(';').parse().expect("retries"));
+        } else if let Some(value) = trimmed.strip_prefix("inFlightCalls = ") {
+            in_flight_calls = Some(value.trim_end_matches(';').parse().expect("inFlightCalls"));
+        }
+    }
+    FabricLimits {
+        retries: retries.expect("fabric graph retries"),
+        in_flight_calls: in_flight_calls.expect("fabric graph inFlightCalls"),
+    }
+}
+
+fn participants_call_deadline(manifest: &str, route_name: &str) -> u64 {
+    let participants = fabric_participants(manifest);
+    let qos = fabric_qos(manifest);
+    participants
+        .iter()
+        .zip(qos.iter())
+        .filter(|((_, route, _, direction), _)| route == route_name && matches!(*direction, 3 | 4))
+        .map(|(_, entry)| entry.deadline_ns)
+        .min()
+        .expect("call route participant deadline")
 }
 
 fn fabric_qos(manifest: &str) -> Vec<FabricQos> {

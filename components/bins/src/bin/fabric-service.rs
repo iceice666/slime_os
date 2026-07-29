@@ -48,9 +48,13 @@
 //! Delivery is bounded per subscriber by its declared KEEP_LAST depth. A
 //! subscriber releases a delivery slot with a `StreamAck`; until it does, the
 //! fabric holds at most `history_depth` samples for it and evicts the oldest to
+
 //! admit a newer one. Eviction is counted, and one stall produces exactly one
 //! `SAMPLE_LOST` event when delivery resumes — never a growing queue and never
 //! a retry.
+
+#[path = "../call_broker.rs"]
+mod call_broker;
 
 use boot_contracts::fabric_graph::{
     CONTRACT_KIND_STREAM, DIRECTION_PUBLISH, DIRECTION_SUBSCRIBE, DURABILITY_RETAINED,
@@ -253,6 +257,11 @@ impl Frame {
 }
 
 fn main() {
+    if option_env!("SLIME_FABRIC_CALL_CHECK") == Some("1") {
+        call_broker::Broker::new(FACTORY_SLOT, BUFFER_FACTORY_SLOT, [2, 3], 4, 5, 0).run();
+        slime_rt::debug_write(b"[fabric] call plane complete\n");
+        return;
+    }
     let routes: [[u8; 32]; ROUTE_COUNT] = [
         route_identity(
             ROUTE_NAMES[0],

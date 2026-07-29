@@ -58,12 +58,12 @@ fn booted_generation_declares_an_admitted_fabric_graph() {
     let graph = slime_os_kernel::generation::fabric_graph(&generation)
         .expect("generation declares a graph");
 
-    // Three declared routes: two C8.4 streams and one C8.6 call. Eight
-    // participants across them, so the fan-out under test is a real
-    // many-to-many graph rather than one edge per route.
+    // Three declared routes: two C8.4 streams and one C8.6 call. Nine
+    // participants across them, including two clients and one server on the
+    // call route, so the admitted graph is the graph exercised by C8.6.
     assert_eq!(graph.schema_count(), 3);
     assert_eq!(graph.route_count(), 3);
-    assert_eq!(graph.participant_count(), 8);
+    assert_eq!(graph.participant_count(), 9);
     assert_eq!(
         graph.fabric_component_identity(),
         component_identity("fabric-service"),

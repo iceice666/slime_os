@@ -38,6 +38,10 @@ static FABRIC_SUBSCRIBER_ID: AtomicU64 = AtomicU64::new(0);
 static FABRIC_INTRUDER_ID: AtomicU64 = AtomicU64::new(0);
 static FABRIC_PUBLISHER_B_ID: AtomicU64 = AtomicU64::new(0);
 static FABRIC_SUBSCRIBER_B_ID: AtomicU64 = AtomicU64::new(0);
+static FABRIC_CALL_CLIENT_ID: AtomicU64 = AtomicU64::new(0);
+static FABRIC_CALL_CLIENT_B_ID: AtomicU64 = AtomicU64::new(0);
+static FABRIC_CALL_SERVER_ID: AtomicU64 = AtomicU64::new(0);
+static FABRIC_CALL_TIME_ID: AtomicU64 = AtomicU64::new(0);
 static GENERATION_NUMBER: AtomicU64 = AtomicU64::new(0);
 static RECOVERY_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -236,6 +240,18 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
     let fabric_subscriber_b = generation
         .component_bytes("fabric-subscriber-b")
         .expect("fabric-subscriber-b object missing");
+    let fabric_call_client = generation
+        .component_bytes("fabric-call-client")
+        .expect("fabric-call-client object missing");
+    let fabric_call_client_b = generation
+        .component_bytes("fabric-call-client-b")
+        .expect("fabric-call-client-b object missing");
+    let fabric_call_server = generation
+        .component_bytes("fabric-call-server")
+        .expect("fabric-call-server object missing");
+    let fabric_call_time = generation
+        .component_bytes("fabric-call-time")
+        .expect("fabric-call-time object missing");
     serial_println!("[generation] validating bootstrap grants");
 
     require_grant(
@@ -480,6 +496,19 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
             RIGHT_SEND | RIGHT_RECV,
         );
     }
+    for (client, grant) in [
+        ("fabric-call-client", "fabric-call-client-control"),
+        ("fabric-call-client-b", "fabric-call-client-b-control"),
+        ("fabric-call-server", "fabric-call-server-control"),
+    ] {
+        require_grant(
+            generation,
+            grant,
+            client,
+            "fabric-service",
+            RIGHT_SEND | RIGHT_RECV,
+        );
+    }
     // C8.4 brokering: the fabric owns the one copy each large sample makes, so
     // it needs creation authority of its own. Its `shared-buffer-budget` entry
     // bounds that copy, which is what keeps a fan-out inside a declared quota.
@@ -540,6 +569,11 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
     let (fabric_publisher_b_client, fabric_publisher_b_service) = ipc::channel();
     let (fabric_subscriber_b_client, fabric_subscriber_b_service) = ipc::channel();
     let (fabric_time_client, fabric_time_service) = ipc::channel();
+    let (fabric_call_client_control, fabric_call_client_service) = ipc::channel();
+    let (fabric_call_client_b_control, fabric_call_client_b_service) = ipc::channel();
+    let (fabric_call_server_control, fabric_call_server_service) = ipc::channel();
+    let (fabric_call_time_control, fabric_call_time_service) = ipc::channel();
+    let (fabric_call_phase_client, fabric_call_phase_time) = ipc::channel();
     let mut caps = vec![
         Capability {
             object: KernelObject::EndpointFactory,
@@ -699,6 +733,41 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
                 fabric_time_service,
                 RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
             ),
+        ]);
+    }
+    if generation.number == 14 {
+        // The call gate reuses the executable/control slots occupied by three
+        // stream participants in every other generation profile.
+        caps[46] = executable(generation, "fabric-call-client", fabric_call_client);
+        caps[47] = executable(generation, "fabric-call-client-b", fabric_call_client_b);
+        caps[49] = executable(generation, "fabric-call-server", fabric_call_server);
+        for slot in [45usize, 46, 47, 49] {
+            caps[slot].rights |= RIGHT_TRANSFER;
+        }
+        caps[51] = endpoint(fabric_call_client_control, RIGHT_SEND | RIGHT_RECV);
+        caps[52] = endpoint(fabric_call_client_b_control, RIGHT_SEND | RIGHT_RECV);
+        caps[54] = endpoint(fabric_call_server_control, RIGHT_SEND | RIGHT_RECV);
+        caps[56] = endpoint(
+            fabric_call_client_service,
+            RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
+        );
+        caps[57] = endpoint(
+            fabric_call_client_b_service,
+            RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
+        );
+        caps[59] = endpoint(
+            fabric_call_server_service,
+            RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
+        );
+        caps[48] = executable(generation, "fabric-call-time", fabric_call_time);
+        caps[53] = endpoint(fabric_call_time_control, RIGHT_SEND | RIGHT_RECV);
+        caps[58] = endpoint(
+            fabric_call_time_service,
+            RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
+        );
+        caps.extend([
+            endpoint(fabric_call_phase_time, RIGHT_RECV),
+            endpoint(fabric_call_phase_client, RIGHT_SEND),
         ]);
     }
     if let (Some(receiver), Some(source)) = (transfer_receiver, transfer_source) {
@@ -932,8 +1001,12 @@ pub fn record_spawn(component: &'static str, id: task::TaskId) {
         "fabric-publisher" => &FABRIC_PUBLISHER_ID,
         "fabric-subscriber" => &FABRIC_SUBSCRIBER_ID,
         "fabric-intruder" => &FABRIC_INTRUDER_ID,
+        "fabric-call-time" => &FABRIC_CALL_TIME_ID,
         "fabric-publisher-b" => &FABRIC_PUBLISHER_B_ID,
         "fabric-subscriber-b" => &FABRIC_SUBSCRIBER_B_ID,
+        "fabric-call-client" => &FABRIC_CALL_CLIENT_ID,
+        "fabric-call-client-b" => &FABRIC_CALL_CLIENT_B_ID,
+        "fabric-call-server" => &FABRIC_CALL_SERVER_ID,
         "recovery" => &RECOVERY_ID,
         _ => return,
     };
@@ -1035,6 +1108,22 @@ extern "C" fn on_idle() {
             "fabric-intruder",
             FABRIC_INTRUDER_ID.load(Ordering::Relaxed),
         ),
+        (
+            "fabric-call-client",
+            FABRIC_CALL_CLIENT_ID.load(Ordering::Relaxed),
+        ),
+        (
+            "fabric-call-client-b",
+            FABRIC_CALL_CLIENT_B_ID.load(Ordering::Relaxed),
+        ),
+        (
+            "fabric-call-time",
+            FABRIC_CALL_TIME_ID.load(Ordering::Relaxed),
+        ),
+        (
+            "fabric-call-server",
+            FABRIC_CALL_SERVER_ID.load(Ordering::Relaxed),
+        ),
     ];
     let mut healthy = true;
     for (name, id) in checks {
@@ -1082,6 +1171,8 @@ extern "C" fn on_idle() {
             && GENERATION_NUMBER.load(Ordering::Relaxed) == 12;
         let fabric_qos_check = option_env!("SLIME_FABRIC_QOS_CHECK") == Some("1")
             && GENERATION_NUMBER.load(Ordering::Relaxed) == 13;
+        let fabric_call_check = option_env!("SLIME_FABRIC_CALL_CHECK") == Some("1")
+            && GENERATION_NUMBER.load(Ordering::Relaxed) == 14;
         let optional_generation_command_component = generation_command_check
             && matches!(name, "init" | "generation-manager")
             && matches!(
@@ -1156,10 +1247,12 @@ extern "C" fn on_idle() {
                 reason,
                 Some(task::TermReason::Exit(0) | task::TermReason::PeerLoss)
             );
-        let optional_fabric_manager =
-            (fabric_authority_check || fabric_stream_check || fabric_qos_check)
-                && name == "generation-manager"
-                && matches!(reason, Some(task::TermReason::Exit(1)));
+        let optional_fabric_manager = (fabric_authority_check
+            || fabric_stream_check
+            || fabric_qos_check
+            || fabric_call_check)
+            && name == "generation-manager"
+            && matches!(reason, Some(task::TermReason::Exit(1)));
         // The stream scenario runs the same graph as the authority one, plus
         // the two components that make the fan-out many-to-many.
         let optional_fabric_stream_component = fabric_stream_check
@@ -1200,6 +1293,19 @@ extern "C" fn on_idle() {
                 reason,
                 Some(task::TermReason::Exit(0) | task::TermReason::PeerLoss)
             );
+        let optional_fabric_call_component = fabric_call_check
+            && matches!(
+                name,
+                "init"
+                    | "fabric-service"
+                    | "fabric-call-client"
+                    | "fabric-call-client-b"
+                    | "fabric-call-server"
+            )
+            && matches!(
+                reason,
+                Some(task::TermReason::Exit(0) | task::TermReason::PeerLoss)
+            );
         healthy &= matches!(reason, Some(task::TermReason::Exit(0)))
             || optional_storage_absent
             || optional_confirmation_absent
@@ -1213,7 +1319,8 @@ extern "C" fn on_idle() {
             || optional_fabric_component
             || optional_fabric_manager
             || optional_fabric_stream_component
-            || optional_fabric_qos_component;
+            || optional_fabric_qos_component
+            || optional_fabric_call_component;
     }
     if healthy {
         if crate::boot::bootstate().is_some_and(|state| state.running_pending) {

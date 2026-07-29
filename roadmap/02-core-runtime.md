@@ -615,7 +615,7 @@ a distinct deterministic event.
 
 ### C8.6 — Bounded native calls
 
-**Status:** Not started.
+**Status:** Complete.
 
 **Depends on:** C8.3 and C8.5's event/time semantics.
 

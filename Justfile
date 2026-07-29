@@ -95,6 +95,16 @@ fabric_qos_gen:
     python3 scripts/generate/generate-fabric-qos-bindings.py
     python3 scripts/generate/generate-fabric-time-bindings.py
 
+# C8.6: generation/session-qualified bounded native calls with exact client and
+# server authority, one terminal result, duplicate/stale suppression, timeout,
+# cancellation, rejection, malformed reply, retry exhaustion, and peer death.
+fabric_call_check: contracts_check generation_check
+    python3 scripts/generate/generate-fabric-call-bindings.py --check
+    python3 scripts/check/check-fabric-call.py
+
+fabric_call_gen:
+    python3 scripts/generate/generate-fabric-call-bindings.py
+
 # C7.6: versioned sample descriptor over the C7.5 loan lifecycle; byte-identical
 # binding round-trip, malformed-descriptor rejection before mapping, and a
 # payload larger than MAX_MSG carried over descriptor plus shared buffer.

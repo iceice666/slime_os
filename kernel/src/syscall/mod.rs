@@ -1353,6 +1353,7 @@ pub const MAX_WAIT_SOURCES: usize = 9;
 const WAIT_KIND_ENDPOINT: u32 = 0;
 const WAIT_KIND_INPUT: u32 = 1;
 const WAIT_KIND_SUPERVISION: u32 = 2;
+const WAIT_KIND_SEND_CAPACITY: u32 = 3;
 
 /// `SYS_WAIT(descriptors_ptr, count)`: park the caller until one of up to
 /// `MAX_WAIT_SOURCES` sources becomes ready. Each descriptor is a `u64`
@@ -1378,6 +1379,7 @@ fn sys_wait(frame: &mut UserFrame) {
         let cap_slot = descriptor as u32;
         *slot = match kind {
             WAIT_KIND_ENDPOINT => task::WaitSource::Endpoint(cap_slot),
+            WAIT_KIND_SEND_CAPACITY => task::WaitSource::SendCapacity(cap_slot),
             WAIT_KIND_INPUT => task::WaitSource::Input,
             WAIT_KIND_SUPERVISION => task::WaitSource::Supervision(cap_slot),
             _ => {

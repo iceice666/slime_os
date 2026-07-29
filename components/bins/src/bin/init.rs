@@ -130,6 +130,22 @@ const FABRIC_TIME_CLIENT_SLOT: u32 = 61;
 const FABRIC_TIME_SERVICE_SLOT: u32 = 62;
 const TRANSFER_RECEIVER_SLOT: u32 = 61;
 const TRANSFER_SOURCE_SLOT: u32 = 62;
+// C8.6 reuses three existing fabric executable/control pairs. The call gate is
+// a mutually exclusive generation profile, so no capability table grows.
+const FABRIC_CALL_CLIENT_SLOT: u32 = FABRIC_PUBLISHER_SLOT;
+const FABRIC_CALL_CLIENT_B_SLOT: u32 = FABRIC_SUBSCRIBER_SLOT;
+const FABRIC_CALL_SERVER_SLOT: u32 = FABRIC_PUBLISHER_B_SLOT;
+const FABRIC_CALL_CLIENT_CONTROL_SLOT: u32 = FABRIC_PUBLISHER_CONTROL_SLOT;
+const FABRIC_CALL_CLIENT_B_CONTROL_SLOT: u32 = FABRIC_SUBSCRIBER_CONTROL_SLOT;
+const FABRIC_CALL_SERVER_CONTROL_SLOT: u32 = FABRIC_PUBLISHER_B_CONTROL_SLOT;
+const FABRIC_CALL_CLIENT_SERVICE_SLOT: u32 = FABRIC_PUBLISHER_SERVICE_SLOT;
+const FABRIC_CALL_CLIENT_B_SERVICE_SLOT: u32 = FABRIC_SUBSCRIBER_SERVICE_SLOT;
+const FABRIC_CALL_SERVER_SERVICE_SLOT: u32 = FABRIC_PUBLISHER_B_SERVICE_SLOT;
+const FABRIC_CALL_TIME_SLOT: u32 = FABRIC_INTRUDER_SLOT;
+const FABRIC_CALL_TIME_CONTROL_SLOT: u32 = FABRIC_INTRUDER_CONTROL_SLOT;
+const FABRIC_CALL_TIME_SERVICE_SLOT: u32 = FABRIC_INTRUDER_SERVICE_SLOT;
+const FABRIC_CALL_PHASE_TIME_SLOT: u32 = 61;
+const FABRIC_CALL_PHASE_CLIENT_SLOT: u32 = 62;
 
 const POWERBOX_PROBE_CAPS: [SpawnGrant; 1] = [grant(38, RIGHT_SEND | RIGHT_RECV)];
 
@@ -159,6 +175,11 @@ fn main() {
         }
         launch_fabric_graph();
         slime_rt::debug_write(b"[init] fabric QoS complete\n");
+        slime_rt::exit(0);
+    }
+    if option_env!("SLIME_FABRIC_CALL_CHECK") == Some("1") {
+        launch_fabric_calls();
+        slime_rt::debug_write(b"[init] fabric call complete\n");
         slime_rt::exit(0);
     }
     slime_rt::debug_write(b"[init] launching component graph\n");
@@ -244,6 +265,140 @@ fn main() {
     }
     slime_rt::debug_write(b"[init] spawn graph launched\n");
     slime_rt::exit(0);
+}
+
+fn launch_fabric_calls() {
+    // The broker starts first so its supervision handle can name the receiver
+    // of every participant's upstream shared payload. Participant supervision
+    // handles then travel over their authenticated control channels to let the
+    // broker create receiver-bound downstream loans without ambient task ids.
+    // The call profile does not launch the second stream subscriber. Release
+    // its executable and control endpoint so init has room for a private
+    // client/client-B coordination channel plus each spawn supervision handle.
+    for slot in [FABRIC_SUBSCRIBER_B_SLOT, FABRIC_SUBSCRIBER_B_CONTROL_SLOT] {
+        if slime_rt::cap_drop(slot) < 0 {
+            slime_rt::exit(1);
+        }
+    }
+    let (phase_client, phase_client_b) =
+        slime_rt::endpoint_create(0).unwrap_or_else(|_| slime_rt::exit(1));
+    let service = spawn_fabric_client(
+        FABRIC_SERVICE_SLOT,
+        &[
+            grant(0, RIGHT_ENDPOINT_CREATE),
+            grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
+            grant(FABRIC_CALL_CLIENT_SERVICE_SLOT, RIGHT_SEND | RIGHT_RECV),
+            grant(FABRIC_CALL_CLIENT_B_SERVICE_SLOT, RIGHT_SEND | RIGHT_RECV),
+            grant(FABRIC_CALL_SERVER_SERVICE_SLOT, RIGHT_SEND | RIGHT_RECV),
+            grant(FABRIC_CALL_TIME_SERVICE_SLOT, RIGHT_SEND | RIGHT_RECV),
+        ],
+        &[FABRIC_SERVICE_SLOT],
+    );
+    let client = spawn_fabric_client(
+        FABRIC_CALL_CLIENT_SLOT,
+        &[
+            grant(FABRIC_CALL_CLIENT_CONTROL_SLOT, RIGHT_SEND | RIGHT_RECV),
+            grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
+            grant(service.supervision_slot, RIGHT_SUPERVISE),
+            grant(FABRIC_CALL_PHASE_CLIENT_SLOT, RIGHT_SEND),
+            grant(phase_client, RIGHT_SEND | RIGHT_RECV),
+        ],
+        &[FABRIC_CALL_CLIENT_SLOT],
+    );
+    let client_b = spawn_fabric_client(
+        FABRIC_CALL_CLIENT_B_SLOT,
+        &[
+            grant(FABRIC_CALL_CLIENT_B_CONTROL_SLOT, RIGHT_SEND | RIGHT_RECV),
+            grant(phase_client_b, RIGHT_SEND | RIGHT_RECV),
+        ],
+        &[FABRIC_CALL_CLIENT_B_SLOT],
+    );
+    let server = spawn_fabric_client(
+        FABRIC_CALL_SERVER_SLOT,
+        &[
+            grant(FABRIC_CALL_SERVER_CONTROL_SLOT, RIGHT_SEND | RIGHT_RECV),
+            grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
+            grant(service.supervision_slot, RIGHT_SUPERVISE),
+        ],
+        &[FABRIC_CALL_SERVER_SLOT],
+    );
+
+    slime_rt::yield_now();
+    for (control, supervision, direction) in [
+        (
+            FABRIC_CALL_CLIENT_CONTROL_SLOT,
+            client.supervision_slot,
+            boot_contracts::fabric_graph::DIRECTION_CLIENT,
+        ),
+        (
+            FABRIC_CALL_CLIENT_B_CONTROL_SLOT,
+            client_b.supervision_slot,
+            boot_contracts::fabric_graph::DIRECTION_CLIENT,
+        ),
+        (
+            FABRIC_CALL_SERVER_CONTROL_SLOT,
+            server.supervision_slot,
+            boot_contracts::fabric_graph::DIRECTION_SERVER,
+        ),
+    ] {
+        transfer_supervision(control, supervision, direction);
+        if slime_rt::cap_drop(control) < 0 {
+            slime_rt::exit(1);
+        }
+    }
+
+    let time = spawn_fabric_client(
+        FABRIC_CALL_TIME_SLOT,
+        &[
+            grant(FABRIC_CALL_TIME_CONTROL_SLOT, RIGHT_SEND | RIGHT_RECV),
+            grant(FABRIC_CALL_PHASE_TIME_SLOT, RIGHT_RECV),
+        ],
+        &[FABRIC_CALL_TIME_SLOT],
+    );
+    for slot in [
+        FABRIC_CALL_CLIENT_SERVICE_SLOT,
+        FABRIC_CALL_CLIENT_B_SERVICE_SLOT,
+        FABRIC_CALL_SERVER_SERVICE_SLOT,
+        FABRIC_CALL_TIME_SERVICE_SLOT,
+    ] {
+        if slime_rt::cap_drop(slot) < 0 {
+            slime_rt::exit(1);
+        }
+    }
+    slime_rt::yield_now();
+    for handle in [time.supervision_slot, service.supervision_slot] {
+        loop {
+            match slime_rt::supervision_status(handle) {
+                Ok(None) => slime_rt::wait(&[slime_rt::WaitSource::Supervision(handle)]),
+                Ok(Some(slime_rt::Termination::Exit(0))) => break,
+                _ => slime_rt::exit(1),
+            }
+        }
+    }
+}
+
+fn transfer_supervision(control_slot: u32, supervision_slot: u32, direction: u32) {
+    let descriptor = slime_proto::capability_transfer::WireCapabilityTransfer {
+        magic: slime_proto::capability_transfer::CAPABILITY_TRANSFER_MAGIC,
+        version: slime_proto::capability_transfer::FORMAT_VERSION,
+        status: 0,
+        flags: 0,
+        object_kind: slime_proto::capability_transfer::OBJECT_KIND_SUPERVISION,
+        direction,
+        rights_mask: RIGHT_SUPERVISE,
+        route_identity: boot_contracts::fabric_graph::route_identity(
+            "parameters",
+            &slime_proto::interface_schema::parameter_call::INTERFACE_IDENTITY,
+            boot_contracts::fabric_graph::CONTRACT_KIND_CALL,
+        ),
+    };
+    loop {
+        match slime_rt::cap_transfer(control_slot, supervision_slot, &descriptor.encode()) {
+            slime_rt::ERR_SUCCESS => return,
+            slime_rt::ERR_WOULDBLOCK => slime_rt::yield_now(),
+            _ => slime_rt::exit(1),
+        }
+    }
 }
 
 /// Launch the C7.7 sample plane: two real components exchanging a payload

@@ -125,6 +125,27 @@ name = "fabric-intruder"
 path = "src/bin/fabric-intruder.rs"
 test = false
 
+
+[[bin]]
+name = "fabric-call-client"
+path = "src/bin/fabric-call-client.rs"
+test = false
+
+[[bin]]
+name = "fabric-call-client-b"
+path = "src/bin/fabric-call-client-b.rs"
+test = false
+
+[[bin]]
+name = "fabric-call-server"
+path = "src/bin/fabric-call-server.rs"
+test = false
+
+[[bin]]
+name = "fabric-call-time"
+path = "src/bin/fabric-call-time.rs"
+test = false
+
 [[bin]]
 name = "init"
 path = "src/bin/init.rs"

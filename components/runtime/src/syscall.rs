@@ -148,6 +148,7 @@ pub const MAX_WAIT_SOURCES: usize = 9;
 const WAIT_KIND_ENDPOINT: u64 = 0;
 const WAIT_KIND_INPUT: u64 = 1;
 const WAIT_KIND_SUPERVISION: u64 = 2;
+const WAIT_KIND_SEND_CAPACITY: u64 = 3;
 
 /// One source to block on in [`wait`]. Each maps to a non-blocking poll ABI:
 /// after `wait` returns, re-poll the same source(s) to consume the event.
@@ -155,6 +156,9 @@ const WAIT_KIND_SUPERVISION: u64 = 2;
 pub enum WaitSource {
     /// Endpoint capability slot: woken by a peer `send` or peer death.
     Endpoint(u32),
+    /// Endpoint capability slot: woken when the peer receive queue has room or
+    /// the peer dies.
+    SendCapacity(u32),
     /// Keyboard input: woken by a key event or scripted byte.
     Input,
     /// Supervision capability slot: woken when the supervised child exits.
@@ -165,6 +169,7 @@ impl WaitSource {
     fn descriptor(self) -> u64 {
         match self {
             WaitSource::Endpoint(slot) => WAIT_KIND_ENDPOINT << 32 | slot as u64,
+            WaitSource::SendCapacity(slot) => WAIT_KIND_SEND_CAPACITY << 32 | slot as u64,
             WaitSource::Input => WAIT_KIND_INPUT << 32,
             WaitSource::Supervision(slot) => WAIT_KIND_SUPERVISION << 32 | slot as u64,
         }

@@ -4,6 +4,7 @@
 pub mod block;
 pub mod capability_transfer;
 pub mod component;
+pub mod fabric_call;
 pub mod fabric_qos;
 pub mod fabric_stream;
 pub mod fabric_time;
@@ -339,4 +340,62 @@ pub fn valid_qos_event(value: &fabric_qos::WireQosEvent, expected_type: u64) -> 
                 | EVENT_LIVELINESS_LOST
                 | EVENT_PEER_DEAD
         )
+}
+
+/// Structural validity of one C8.6 inline call envelope. Correlation/session
+/// checks that require live broker state stay in the fabric service; this
+/// rejects malformed bytes before they can allocate an in-flight entry or
+/// steer data. Shared payloads use `SampleDescriptor`, never this envelope.
+pub fn valid_call_envelope(value: &fabric_call::WireCallEnvelope, expected_type: u64) -> bool {
+    use fabric_call::*;
+    if value.magic != CALL_MAGIC
+        || value.version != FORMAT_VERSION
+        || value.flags & !FLAG_NON_IDEMPOTENT != 0
+        || value.session == 0
+        || value.request_id == 0
+        || value.type_identity == 0
+        || value.type_identity != expected_type
+        || (value.kind != KIND_TERMINAL && value.payload_len as usize > INLINE_BYTES)
+        || (value.kind == KIND_TERMINAL && value.payload_len != 0)
+        || value.payload[value.payload_len.min(value.payload.len() as u32) as usize..]
+            .iter()
+            .any(|byte| *byte != 0)
+    {
+        return false;
+    }
+    match value.kind {
+        KIND_REQUEST => value.status == STATUS_SUCCESS,
+        KIND_REPLY => matches!(
+            value.status,
+            STATUS_SUCCESS | STATUS_REJECTED | STATUS_CANCELLED
+        ),
+        KIND_CANCEL => {
+            value.flags == 0 && value.status == STATUS_CANCELLED && value.payload_len == 0
+        }
+        KIND_TERMINAL => {
+            value.flags == 0
+                && matches!(
+                    value.status,
+                    STATUS_SUCCESS
+                        | STATUS_REJECTED
+                        | STATUS_TIMEOUT
+                        | STATUS_CANCELLED
+                        | STATUS_RETRY_EXHAUSTED
+                        | STATUS_MALFORMED_REPLY
+                        | STATUS_PEER_DEAD
+                        | STATUS_DUPLICATE
+                        | STATUS_STALE
+                )
+                && value.payload_len == 0
+        }
+        _ => false,
+    }
+}
+
+pub fn valid_call_time_advance(value: &fabric_call::WireCallTimeAdvance) -> bool {
+    value.magic == fabric_call::CALL_TIME_MAGIC
+        && value.version == fabric_call::FORMAT_VERSION
+        && value.flags == 0
+        && value.reserved0 == 0
+        && value.reserved.iter().all(|byte| *byte == 0)
 }

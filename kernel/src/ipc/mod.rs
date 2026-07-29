@@ -31,6 +31,7 @@ pub struct Message {
 pub struct Channel {
     pub queue: VecDeque<Message>,
     pub recv_waiter: Option<TaskId>,
+    pub send_waiter: Option<TaskId>,
 }
 
 impl Channel {
@@ -38,6 +39,7 @@ impl Channel {
         Self {
             queue: VecDeque::new(),
             recv_waiter: None,
+            send_waiter: None,
         }
     }
 }
@@ -70,6 +72,36 @@ impl Endpoint {
         self.inner.peer_owner_alive.upgrade().is_none()
     }
 
+    /// Reports whether the peer receive queue has capacity for another send,
+    /// or the peer is gone.
+    pub fn can_send(&self) -> bool {
+        self.inner
+            .peer_channel
+            .upgrade()
+            .is_none_or(|channel| channel.lock().queue.len() < CHANNEL_QUEUE)
+    }
+
+    /// Records `id` as waiting for space in the peer receive queue.
+    pub fn register_send_waiter(&self, id: TaskId) {
+        if let Some(peer_channel) = self.inner.peer_channel.upgrade() {
+            let mut channel = peer_channel.lock();
+            debug_assert!(
+                channel.send_waiter.is_none() || channel.send_waiter == Some(id),
+                "second concurrent send waiter would drop a wake"
+            );
+            channel.send_waiter = Some(id);
+        }
+    }
+    /// Clears this task's stale send-capacity registration on the peer queue.
+    pub fn clear_send_waiter(&self, id: TaskId) {
+        if let Some(peer_channel) = self.inner.peer_channel.upgrade() {
+            let mut channel = peer_channel.lock();
+            if channel.send_waiter == Some(id) {
+                channel.send_waiter = None;
+            }
+        }
+    }
+
     /// Records `id` as the task waiting to receive on this endpoint. A later
     /// peer `send` (or peer death) wakes it. Single-slot (SPSC): each channel
     /// has exactly one receiving owner, so a second distinct waiter would drop
@@ -94,18 +126,45 @@ impl Clone for Endpoint {
     }
 }
 
+fn settle_discarded_capability(capability: Capability) {
+    if let crate::capability::KernelObject::SharedBufferLoan(loan) = &capability.object {
+        let _ = crate::memory::shared_buffer::SHARED_BUFFER_TABLE
+            .lock()
+            .revoke_queued_loan(loan.id(), loan.region());
+    }
+}
+
+fn drain_discarded_messages(channel: &Mutex<Channel>) {
+    let mut channel = channel.lock();
+    for mut message in channel.queue.drain(..) {
+        for capability in message.caps.iter_mut().filter_map(Option::take) {
+            settle_discarded_capability(capability);
+        }
+    }
+}
+
 impl Drop for Endpoint {
     fn drop(&mut self) {
         if Arc::strong_count(&self.owner_alive) == 2 {
             self.owner_alive
                 .store(false, core::sync::atomic::Ordering::Release);
+            // The receive owner is gone: queued transferred capabilities can no
+            // longer be consumed. Settle receiver-bound loans before dropping
+            // the queue so the live lender is not left permanently charged.
+            drain_discarded_messages(&self.inner.channel);
             // Wake a peer parked in `recv`/`SYS_WAIT`: it will now observe
             // `ERR_PEER_DEAD` instead of blocking forever. Take the waiter
             // under the peer channel lock, release it, then enqueue the wake
             // (lock order: Channel -> PENDING_WAKES).
             if let Some(peer_channel) = self.inner.peer_channel.upgrade() {
-                let waiter = peer_channel.lock().recv_waiter.take();
-                if let Some(waiter) = waiter {
+                let (recv_waiter, send_waiter) = {
+                    let mut channel = peer_channel.lock();
+                    (channel.recv_waiter.take(), channel.send_waiter.take())
+                };
+                if let Some(waiter) = recv_waiter {
+                    task::wake(waiter);
+                }
+                if let Some(waiter) = send_waiter {
                     task::wake(waiter);
                 }
             }
@@ -194,6 +253,7 @@ pub fn recv(
             .queue
             .pop_front()
             .expect("front message disappeared");
+        let send_waiter = channel.send_waiter.take();
         let len = msg.len.min(buf.len());
         buf[..len].copy_from_slice(&msg.bytes[..len]);
         for (i, cap) in msg.caps.iter_mut().enumerate() {
@@ -205,6 +265,10 @@ pub fn recv(
                     as u64;
             }
         }
+        drop(channel);
+        if let Some(waiter) = send_waiter {
+            task::wake(waiter);
+        }
         return len as i64;
     }
     drop(channel);
@@ -213,5 +277,49 @@ pub fn recv(
         ERR_PEER_DEAD
     } else {
         ERR_WOULDBLOCK
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test_case]
+    fn dropping_receiver_drains_queued_capabilities() {
+        let (sender, receiver) = channel();
+        let (queued, _peer) = channel();
+        let mut capabilities = core::array::from_fn(|_| None);
+        capabilities[0] = Some(Capability {
+            object: crate::capability::KernelObject::Endpoint(queued),
+            rights: crate::capability::RIGHT_SEND,
+        });
+        assert_eq!(send(&sender, b"cap", &mut capabilities), ERR_SUCCESS);
+        assert!(capabilities[0].is_none());
+
+        drop(receiver);
+
+        assert_eq!(
+            send(&sender, b"peer-dead", &mut capabilities),
+            ERR_PEER_DEAD
+        );
+    }
+
+    #[test_case]
+    fn send_capacity_tracks_queue_and_peer_death() {
+        let (sender, receiver) = channel();
+        let mut capabilities = core::array::from_fn(|_| None);
+        for _ in 0..CHANNEL_QUEUE {
+            assert_eq!(send(&sender, b"full", &mut capabilities), ERR_SUCCESS);
+        }
+        assert!(!sender.can_send());
+
+        let mut bytes = [0u8; MAX_MSG];
+        let mut cap_out = [0u64; MAX_CAPS_PER_MSG];
+        let mut cap_table = CapabilityTable::new();
+        assert_eq!(recv(&receiver, &mut bytes, &mut cap_out, &mut cap_table), 4);
+        assert!(sender.can_send());
+
+        drop(receiver);
+        assert!(sender.can_send());
     }
 }

@@ -411,22 +411,31 @@ pub fn spawn_from_cap(
     executable_slot: u32,
     grants: &[SpawnGrant],
 ) -> Result<(TaskId, u32), SpawnError> {
-    let (spawner, plan) = with_current_mut(|task| {
+    let (spawner, plan, transferable_supervision) = with_current_mut(|task| {
         if task.live_children >= task.spawn_budget {
             return Err(SpawnError::BudgetExhausted);
         }
         if task.caps.available_slots() == 0 {
             return Err(SpawnError::BadCapability);
         }
+        let transferable_supervision = task
+            .caps
+            .get(executable_slot)
+            .is_some_and(|cap| cap.rights & RIGHT_TRANSFER != 0);
         let plan = preflight_spawn_grant(&task.caps, executable_slot, grants)?;
-        Ok((task.id, plan))
+        Ok((task.id, plan, transferable_supervision))
     })?;
     let id = spawn_with_caps_for(plan.image, plan.caps, Some(spawner), plan.spawn_budget)?;
     let handle = with_current_mut(|task| {
         task.caps
             .insert(Capability {
                 object: KernelObject::Supervision(id),
-                rights: crate::capability::RIGHT_SUPERVISE,
+                rights: crate::capability::RIGHT_SUPERVISE
+                    | if transferable_supervision {
+                        RIGHT_TRANSFER
+                    } else {
+                        0
+                    },
             })
             .map_err(|_| SpawnError::BadCapability)
     });
@@ -642,6 +651,9 @@ pub enum WaitSource {
     /// Endpoint capability slot: ready when its receive queue is non-empty or
     /// the peer is gone.
     Endpoint(u32),
+    /// Endpoint capability slot: ready when the peer receive queue has room or
+    /// the peer is gone.
+    SendCapacity(u32),
     /// Keyboard input: ready when a decoded event or scripted byte is pending.
     Input,
     /// Supervision capability slot: ready when the supervised child terminated.
@@ -678,6 +690,18 @@ fn source_ready(sched: &Scheduler, task_idx: usize, source: WaitSource) -> bool 
             };
             endpoint.has_pending() || endpoint.peer_dead()
         }
+        WaitSource::SendCapacity(slot) => {
+            let Some(cap) = sched.tasks[task_idx].caps.get(slot) else {
+                return true;
+            };
+            if cap.rights & crate::capability::RIGHT_SEND == 0 {
+                return true;
+            }
+            let KernelObject::Endpoint(endpoint) = &cap.object else {
+                return true;
+            };
+            endpoint.can_send()
+        }
         WaitSource::Supervision(slot) => {
             let child = sched.tasks[task_idx].caps.get(slot).and_then(|cap| {
                 (cap.rights & crate::capability::RIGHT_SUPERVISE != 0)
@@ -697,6 +721,17 @@ fn source_ready(sched: &Scheduler, task_idx: usize, source: WaitSource) -> bool 
 
 /// Registers the current task as the waiter on every requested source, so a
 /// later event (peer send, keyboard IRQ, child exit) re-readies it.
+fn clear_waiters(sched: &Scheduler, task_idx: usize, current: TaskId) {
+    for slot in 0..crate::capability::MAX_CAPS as u32 {
+        let Some(cap) = sched.tasks[task_idx].caps.get(slot) else {
+            continue;
+        };
+        if let KernelObject::Endpoint(endpoint) = &cap.object {
+            endpoint.clear_send_waiter(current);
+        }
+    }
+}
+
 fn register_waiters(
     sched: &mut Scheduler,
     task_idx: usize,
@@ -711,6 +746,14 @@ fn register_waiters(
                     && let KernelObject::Endpoint(endpoint) = &cap.object
                 {
                     endpoint.register_recv_waiter(current);
+                }
+            }
+            WaitSource::SendCapacity(slot) => {
+                if let Some(cap) = sched.tasks[task_idx].caps.get(slot)
+                    && cap.rights & crate::capability::RIGHT_SEND != 0
+                    && let KernelObject::Endpoint(endpoint) = &cap.object
+                {
+                    endpoint.register_send_waiter(current);
                 }
             }
             WaitSource::Supervision(slot) => {
@@ -745,12 +788,12 @@ pub fn wait(frame: &mut UserFrame, sources: &[WaitSource]) {
         let mut sched = SCHEDULER.lock();
         drain_pending_wakes(&mut sched);
         let Some(current) = sched.current else {
-            let result = schedule_next(&mut sched, frame);
+            let result = schedule_next(&mut sched, frame, None);
             let pml4 = selected_pml4(&sched, &result);
             return (result, pml4);
         };
         let Some(idx) = sched.index_of(current) else {
-            let result = schedule_next(&mut sched, frame);
+            let result = schedule_next(&mut sched, frame, None);
             let pml4 = selected_pml4(&sched, &result);
             return (result, pml4);
         };
@@ -767,8 +810,9 @@ pub fn wait(frame: &mut UserFrame, sources: &[WaitSource]) {
         }
         sched.tasks[idx].saved = *frame;
         sched.tasks[idx].state = TaskState::Blocked(block_reason(sources));
+        clear_waiters(&sched, idx, current);
         register_waiters(&mut sched, idx, current, sources);
-        let result = schedule_next(&mut sched, frame);
+        let result = schedule_next(&mut sched, frame, Some(current));
         let pml4 = selected_pml4(&sched, &result);
         (result, pml4)
     });
@@ -870,14 +914,18 @@ enum ScheduleResult {
 pub fn yield_now(frame: &mut UserFrame) {
     let (result, pml4) = {
         let mut sched = SCHEDULER.lock();
-        if let Some(id) = sched.current
+        let executing = if let Some(id) = sched.current
             && let Some(idx) = sched.index_of(id)
         {
             sched.tasks[idx].saved = *frame;
             sched.tasks[idx].state = TaskState::Ready;
             sched.ready.push_back(id);
-        }
-        let result = schedule_next(&mut sched, frame);
+            sched.current = None;
+            Some(id)
+        } else {
+            None
+        };
+        let result = schedule_next(&mut sched, frame, executing);
         let pml4 = selected_pml4(&sched, &result);
         (result, pml4)
     };
@@ -892,7 +940,11 @@ pub fn terminate(frame: &mut UserFrame, reason: TermReason) {
         {
             sched.tasks[idx].state = TaskState::Terminated(reason);
             sched.tasks[idx].saved = *frame;
-            let _drained = sched.tasks[idx].caps.drain();
+            // Dropping the drained values now, rather than at scope exit after
+            // scheduling, makes endpoint peer death observable before any
+            // supervisor or broker awakened by this termination runs.
+            let drained = sched.tasks[idx].caps.drain();
+            drop(drained);
             // Reclaim every shared buffer charged to this holder's account.
             // Peer death, supervised restart, and revocation all funnel through
             // task termination, so this one call restores the subtree's pages
@@ -914,7 +966,8 @@ pub fn terminate(frame: &mut UserFrame, reason: TermReason) {
                     sched.tasks[parent_idx].live_children.saturating_sub(1);
             }
         }
-        let result = schedule_next(&mut sched, frame);
+        let executing = sched.current;
+        let result = schedule_next(&mut sched, frame, executing);
         let pml4 = selected_pml4(&sched, &result);
         (result, pml4)
     };
@@ -960,13 +1013,12 @@ fn pop_ready(sched: &mut Scheduler, frame: &mut UserFrame) -> Option<u64> {
     None
 }
 
-fn schedule_next(sched: &mut Scheduler, frame: &mut UserFrame) -> ScheduleResult {
+fn schedule_next(
+    sched: &mut Scheduler,
+    frame: &mut UserFrame,
+    executing: Option<TaskId>,
+) -> ScheduleResult {
     drain_pending_wakes(sched);
-    // The task this call entered on. `terminate` runs on that task's kernel
-    // stack and in its address space, and the `Task` owns both, so it is the
-    // one task that must survive this call however the scheduling goes — even
-    // after `pop_ready` reassigns `current` or the idle path clears it.
-    let executing = sched.current;
     let selected = pop_ready(sched, frame);
     // Reap after choosing: every terminated task other than the one we are
     // standing on is dead weight, and its image pages, stack pages, and
@@ -1054,7 +1106,7 @@ pub fn run() -> ! {
     let (frame, pml4) = {
         let mut sched = SCHEDULER.lock();
         let mut frame = zeroed_frame();
-        match schedule_next(&mut sched, &mut frame) {
+        match schedule_next(&mut sched, &mut frame, None) {
             ScheduleResult::Selected => {}
             ScheduleResult::Idle(on_idle) => {
                 drop(sched);

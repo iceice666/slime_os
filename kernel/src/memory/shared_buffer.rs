@@ -555,6 +555,28 @@ impl SharedBufferTable {
         Ok(())
     }
 
+    /// Settle a loan whose receiver capability was discarded from an endpoint
+    /// queue during receiver teardown. The queued capability carries the
+    /// kernel-created loan identity and exact region, so no ambient holder
+    /// authority is involved.
+    pub(crate) fn revoke_queued_loan(
+        &mut self,
+        loan_id: u64,
+        region: &SharedRegion,
+    ) -> Result<(), SharedBufferError> {
+        let slot = self
+            .loans
+            .iter()
+            .position(|loan| {
+                loan.as_ref().is_some_and(|loan| {
+                    loan.grant.id() == loan_id && loan.grant.region().ptr_eq(region)
+                })
+            })
+            .ok_or(SharedBufferError::NotFound)?;
+        self.settle_loan_slot(slot);
+        Ok(())
+    }
+
     /// Settle every loan involving `owner`, then reclaim its mappings and
     /// buffers. This covers receiver/lender death, restart, and revocation.
     pub fn reclaim_owner(&mut self, owner: u64) -> usize {

@@ -143,3 +143,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-07-28 | [C8.4 — Bounded many-to-many streams](2026-07-28-c8-4-bounded-streams/index.md) | Change | Verified | C8.4 |
 | 2026-07-28 | [B9 — terminated tasks are never reaped, so their frames never return](2026-07-28-b9-task-frame-reclamation/index.md) | Defect | Verified | B9, C10 |
 | 2026-07-28 | [C8.5 — Reliable, retained, and timed QoS](2026-07-28-c8-5-fabric-qos/index.md) | Change | Verified | C8.5 |
+| 2026-07-28 | [C8.6 — Bounded native calls](2026-07-28-c8-6-bounded-native-calls/index.md) | Change | Verified | C8.6 |

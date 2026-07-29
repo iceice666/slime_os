@@ -1,0 +1,114 @@
+-- Slime OS bounded native call control records, version 1 (C8.6).
+--
+-- `CallEnvelope` carries inline requests/replies, cancellation, and terminal
+-- results. Large payloads travel as the existing C7.6 `SampleDescriptor` with
+-- one receiver-bound loan capability; the authenticated endpoint supplies the
+-- caller/server role and descriptor.sequence supplies the request identity.
+-- `TimeAdvance` is a capability-routed monotonic input used to drive bounded
+-- deadlines and retries deterministically without busy-polling.
+
+env ::= import stdlib.env;
+fs ::= import stdlib.fs;
+gen ::= import "gen_rust.zt";
+t ::= import stdlib.text;
+
+formatVersion :: Int = 1;
+recordLen :: Int = 64;
+inlineBytes :: Int = 8;
+magic :: Int = 1280065875; -- `SCAL`
+timeMagic :: Int = 1296253251; -- `CTIM`
+kindRequest :: Int = 1;
+kindReply :: Int = 2;
+kindCancel :: Int = 3;
+kindTerminal :: Int = 4;
+flagNonIdempotent :: Int = 1;
+flagSharedPayload :: Int = 2;
+knownFlags :: Int = 3;
+statusSuccess :: Int = 0;
+statusRejected :: Int = 1;
+statusTimeout :: Int = 2;
+statusCancelled :: Int = 3;
+statusRetryExhausted :: Int = 4;
+statusMalformedReply :: Int = 5;
+statusPeerDead :: Int = 6;
+statusDuplicate :: Int = 7;
+statusStale :: Int = 8;
+
+WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
+CallEnvelope :: type {
+  magic : Int;
+  version : Int;
+  kind : Int;
+  flags : Int;
+  session : Int;
+  request_id : Int;
+  type_identity : Int;
+  status : Int;
+  payload_len : Int;
+  payload : Int;
+};
+TimeAdvance :: type {
+  magic : Int;
+  version : Int;
+  flags : Int;
+  reserved0 : Int;
+  now_ns : Int;
+  reserved : Int;
+};
+schemaValue ::= schema CallEnvelope;
+timeSchemaValue ::= schema TimeAdvance;
+layout :: List WireField = {
+  { name = "magic"; width = 4; signed = false; byteArray = false; };
+  { name = "version"; width = 4; signed = false; byteArray = false; };
+  { name = "kind"; width = 4; signed = false; byteArray = false; };
+  { name = "flags"; width = 4; signed = false; byteArray = false; };
+  { name = "session"; width = 8; signed = false; byteArray = false; };
+  { name = "request_id"; width = 8; signed = false; byteArray = false; };
+  { name = "type_identity"; width = 8; signed = false; byteArray = false; };
+  { name = "status"; width = 4; signed = true; byteArray = false; };
+  { name = "payload_len"; width = 4; signed = false; byteArray = false; };
+  { name = "payload"; width = 16; signed = false; byteArray = true; };
+};
+timeLayout :: List WireField = {
+  { name = "magic"; width = 4; signed = false; byteArray = false; };
+  { name = "version"; width = 4; signed = false; byteArray = false; };
+  { name = "flags"; width = 4; signed = false; byteArray = false; };
+  { name = "reserved0"; width = 4; signed = false; byteArray = false; };
+  { name = "now_ns"; width = 8; signed = false; byteArray = false; };
+  { name = "reserved"; width = 40; signed = false; byteArray = true; };
+};
+format ::= {
+  formatVersion = formatVersion;
+  recordLen = recordLen;
+  inlineBytes = inlineBytes;
+  magic = magic;
+  timeMagic = timeMagic;
+  kindRequest = kindRequest;
+  kindReply = kindReply;
+  kindCancel = kindCancel;
+  kindTerminal = kindTerminal;
+  flagNonIdempotent = flagNonIdempotent;
+  flagSharedPayload = flagSharedPayload;
+  knownFlags = knownFlags;
+  statusSuccess = statusSuccess;
+  statusRejected = statusRejected;
+  statusTimeout = statusTimeout;
+  statusCancelled = statusCancelled;
+  statusRetryExhausted = statusRetryExhausted;
+  statusMalformedReply = statusMalformedReply;
+  statusPeerDead = statusPeerDead;
+  statusDuplicate = statusDuplicate;
+  statusStale = statusStale;
+  fields = schemaValue.fields ?? {;};
+  layout = layout;
+  timeFields = timeSchemaValue.fields ?? {;};
+  timeLayout = timeLayout;
+};
+main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }
+  = caps => [
+    root := env.get caps.env "SLIME_FABRIC_CALL_BINDINGS_ROOT" ?? ".";
+    bindings := gen.render format;
+    path := t.join "" { root; "/components/proto/src/fabric_call.rs"; };
+    fs.writeAll caps.write path bindings.rust
+  ];
+main
