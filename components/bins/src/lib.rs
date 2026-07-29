@@ -3,4 +3,6 @@
 pub mod dango_runtime;
 
 #[cfg(feature = "component-runtime")]
+pub mod fabric_visibility;
+#[cfg(feature = "component-runtime")]
 pub mod shared_buffer_probe;

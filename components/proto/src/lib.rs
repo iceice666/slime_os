@@ -9,6 +9,7 @@ pub mod fabric_operation;
 pub mod fabric_qos;
 pub mod fabric_stream;
 pub mod fabric_time;
+pub mod fabric_visibility;
 pub mod fs;
 pub mod generation;
 pub mod interface_schema;
@@ -229,6 +230,89 @@ pub fn valid_fabric_request(request: &capability_transfer::WireFabricRequest) ->
         && request.route_name[request.route_name_len as usize..]
             .iter()
             .all(|byte| *byte == 0)
+}
+/// Structural validity of one C8.8 introspection page request. The cursor is a
+/// bounded `u8` by construction; the service filters it against the caller's
+/// generation-derived view and returns the same terminal record for an empty
+/// view and an out-of-range cursor.
+pub fn valid_visibility_request(request: &fabric_visibility::WireVisibilityRequest) -> bool {
+    request.magic == fabric_visibility::VISIBILITY_REQUEST_MAGIC
+        && request.version == fabric_visibility::FORMAT_VERSION
+        && request.flags & !fabric_visibility::KNOWN_REQUEST_FLAGS == 0
+        && request.reserved.iter().all(|byte| *byte == 0)
+}
+
+/// Validate a route page returned by the read-only graph service. An end page
+/// carries no graph-dependent bytes; this is what prevents an ungranted caller
+/// from learning protected counts or identities through error detail.
+pub fn valid_visibility_route_record(
+    record: &fabric_visibility::WireVisibilityRouteRecord,
+) -> bool {
+    if record.magic != fabric_visibility::VISIBILITY_ROUTE_MAGIC
+        || record.version != fabric_visibility::FORMAT_VERSION
+        || record.flags & !fabric_visibility::KNOWN_ROUTE_FLAGS != 0
+        || record.reserved0.iter().any(|byte| *byte != 0)
+    {
+        return false;
+    }
+    if record.status == fabric_visibility::STATUS_END {
+        return record.contract_kind == 0
+            && record.route_name_len == 0
+            && record.route_name.iter().all(|byte| *byte == 0)
+            && record.schema_identity.iter().all(|byte| *byte == 0)
+            && record.flags == 0;
+    }
+    let name_len = record.route_name_len as usize;
+    record.status == fabric_visibility::STATUS_RECORD
+        && matches!(record.contract_kind, 1..=3)
+        && name_len > 0
+        && name_len <= fabric_visibility::ROUTE_NAME_BYTES
+        && record.route_name[name_len..].iter().all(|byte| *byte == 0)
+        && record.route_name[..name_len]
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'-' | b'_'))
+        && record.schema_identity.iter().any(|byte| *byte != 0)
+}
+
+/// Validate the complete QoS half of one introspection page.
+pub fn valid_visibility_qos_record(record: &fabric_visibility::WireVisibilityQosRecord) -> bool {
+    record.magic == fabric_visibility::VISIBILITY_QOS_MAGIC
+        && record.version == fabric_visibility::FORMAT_VERSION
+        && record.status == fabric_visibility::STATUS_RECORD
+        && record.flags & !fabric_visibility::KNOWN_QOS_FLAGS == 0
+        && fixed_name_valid(&record.route_name)
+        && matches!(record.reliability, 1 | 2)
+        && matches!(record.durability, 1 | 2)
+        && matches!(record.liveliness, 1 | 2)
+        && record.matched <= 1
+        && record.event_mask & !fabric_visibility::EVENT_PROXY_LOST == 0
+}
+
+/// Validate a trace record before accepting it from an authenticated interposer
+/// or delivering the resulting route event.
+pub fn valid_interposition_trace(record: &fabric_visibility::WireInterpositionTrace) -> bool {
+    record.magic == fabric_visibility::INTERPOSITION_TRACE_MAGIC
+        && record.version == fabric_visibility::FORMAT_VERSION
+        && matches!(
+            record.event,
+            fabric_visibility::TRACE_RELAYED | fabric_visibility::TRACE_PROXY_LOST
+        )
+        && record.flags & !fabric_visibility::KNOWN_TRACE_FLAGS == 0
+        && record.route_identity.iter().any(|byte| *byte != 0)
+        && record.sequence != 0
+        && record.reserved.iter().all(|byte| *byte == 0)
+}
+
+fn fixed_name_valid(name: &[u8]) -> bool {
+    let length = name
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(name.len());
+    length > 0
+        && name[length..].iter().all(|byte| *byte == 0)
+        && name[..length]
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'-' | b'_'))
 }
 
 /// Structural validity of an inline stream sample, before a subscriber reads

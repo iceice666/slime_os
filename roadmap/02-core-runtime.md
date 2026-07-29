@@ -702,7 +702,7 @@ deterministic while application and ROS goal policy stay outside the fabric.
 
 ### C8.8 — Filtered introspection and declared interposition
 
-**Status:** Not started.
+**Status:** Complete.
 
 **Depends on:** C8.3, C8.4, and C8.6.
 

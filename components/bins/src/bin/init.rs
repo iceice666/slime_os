@@ -203,6 +203,11 @@ fn main() {
         slime_rt::debug_write(b"[init] fabric operation complete\n");
         slime_rt::exit(0);
     }
+    if option_env!("SLIME_FABRIC_VISIBILITY_CHECK") == Some("1") {
+        launch_fabric_graph();
+        slime_rt::debug_write(b"[init] fabric visibility complete\n");
+        slime_rt::exit(0);
+    }
     slime_rt::debug_write(b"[init] launching component graph\n");
     if option_env!("SLIME_TRANSFER_RECEIVER") == Some("1") {
         if slime_rt::generation_receive(TRANSFER_RECEIVER_SLOT, TRANSFER_SOURCE_SLOT) == 0 {
@@ -692,7 +697,31 @@ fn launch_fabric_graph() {
     // control endpoint per client, and one supervision handle per subscriber.
     // The slot order here is the order `fabric-service` reads them in, emitted
     // into its generated profile from this same manifest.
-    let service = if option_env!("SLIME_FABRIC_QOS_CHECK") == Some("1") {
+    let service = if option_env!("SLIME_FABRIC_VISIBILITY_CHECK") == Some("1") {
+        spawn_fabric_client(
+            FABRIC_SERVICE_SLOT,
+            &[
+                grant(0, RIGHT_ENDPOINT_CREATE),
+                // Keep the service's manifest-derived control endpoints at
+                // slots 2..; the visibility service drops this otherwise
+                // unused factory before handling its first request.
+                grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
+                grant(FABRIC_PUBLISHER_SERVICE_SLOT, RIGHT_SEND | RIGHT_RECV),
+                grant(FABRIC_SUBSCRIBER_SERVICE_SLOT, RIGHT_SEND | RIGHT_RECV),
+                grant(FABRIC_INTRUDER_SERVICE_SLOT, RIGHT_SEND | RIGHT_RECV),
+                grant(FABRIC_PUBLISHER_B_SERVICE_SLOT, RIGHT_SEND | RIGHT_RECV),
+                grant(FABRIC_SUBSCRIBER_B_SERVICE_SLOT, RIGHT_SEND | RIGHT_RECV),
+            ],
+            &[
+                FABRIC_SERVICE_SLOT,
+                FABRIC_PUBLISHER_SERVICE_SLOT,
+                FABRIC_SUBSCRIBER_SERVICE_SLOT,
+                FABRIC_INTRUDER_SERVICE_SLOT,
+                FABRIC_PUBLISHER_B_SERVICE_SLOT,
+                FABRIC_SUBSCRIBER_B_SERVICE_SLOT,
+            ],
+        )
+    } else if option_env!("SLIME_FABRIC_QOS_CHECK") == Some("1") {
         spawn_fabric_client(
             FABRIC_SERVICE_SLOT,
             &[
@@ -753,7 +782,16 @@ fn launch_fabric_graph() {
     // `fabric-publisher-b` originates the >MAX_MSG sample, so it needs its own
     // buffer factory and a supervision handle naming the fabric: its upstream
     // loan names the fabric as receiver by capability.
-    let publisher_b = if option_env!("SLIME_FABRIC_QOS_CHECK") == Some("1") {
+    let publisher_b = if option_env!("SLIME_FABRIC_VISIBILITY_CHECK") == Some("1") {
+        spawn_fabric_client(
+            FABRIC_PUBLISHER_B_SLOT,
+            &[grant(
+                FABRIC_PUBLISHER_B_CONTROL_SLOT,
+                RIGHT_SEND | RIGHT_RECV,
+            )],
+            &[FABRIC_PUBLISHER_B_SLOT, FABRIC_PUBLISHER_B_CONTROL_SLOT],
+        )
+    } else if option_env!("SLIME_FABRIC_QOS_CHECK") == Some("1") {
         spawn_fabric_client(
             FABRIC_PUBLISHER_B_SLOT,
             &[

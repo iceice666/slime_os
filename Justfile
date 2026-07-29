@@ -118,6 +118,17 @@ fabric_operation_check: contracts_check generation_check
 fabric_operation_gen:
     python3 scripts/generate/generate-fabric-operation-bindings.py
 
+# C8.8: caller-filtered bounded graph introspection and explicit acyclic
+# interposition with no direct bypass, narrowed proxy authority, deterministic
+# trace records, and proxy failure isolated from unrelated routes.
+fabric_visibility_check: contracts_check generation_check
+    python3 scripts/generate/generate-fabric-visibility-bindings.py --check
+    cd components && cargo test --target x86_64-unknown-linux-gnu -p slime-proto --test fabric_visibility
+    python3 scripts/check/check-fabric-visibility.py
+
+fabric_visibility_gen:
+    python3 scripts/generate/generate-fabric-visibility-bindings.py
+
 # C7.6: versioned sample descriptor over the C7.5 loan lifecycle; byte-identical
 # binding round-trip, malformed-descriptor rejection before mapping, and a
 # payload larger than MAX_MSG carried over descriptor plus shared buffer.

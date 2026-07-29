@@ -58,6 +58,8 @@ mod call_broker;
 
 #[path = "../operation_broker.rs"]
 mod operation_broker;
+#[path = "../visibility_broker.rs"]
+mod visibility_broker;
 
 use boot_contracts::fabric_graph::{
     CONTRACT_KIND_STREAM, DIRECTION_PUBLISH, DIRECTION_SUBSCRIBE, DURABILITY_RETAINED,
@@ -260,6 +262,10 @@ impl Frame {
 }
 
 fn main() {
+    if option_env!("SLIME_FABRIC_VISIBILITY_CHECK") == Some("1") {
+        visibility_broker::run();
+        return;
+    }
     if option_env!("SLIME_FABRIC_CALL_CHECK") == Some("1") {
         let controls = request_response_controls(FABRIC_CALL_CLIENTS);
         call_broker::Broker::new(

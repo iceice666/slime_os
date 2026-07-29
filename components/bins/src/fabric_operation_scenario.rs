@@ -35,7 +35,7 @@ const RESTART_START_SLOT: u32 = 2;
 /// consumed by client B, which would deadlock both.
 const PHASE_TIME_SLOT: u32 = 2;
 const ROUTE_NAME: &str = "navigation";
-const BACKUP_ROUTE_NAME: &str = "navigation-backup";
+const BACKUP_ROUTE_NAME: &str = "nav-backup";
 const RIGHT_SEND: u64 = 1;
 const RIGHT_RECV: u64 = 2;
 

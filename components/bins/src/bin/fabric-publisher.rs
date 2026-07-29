@@ -18,6 +18,7 @@
 //! many-to-many check a real fan-in rather than one component talking twice.
 
 use boot_contracts::fabric_graph::{CONTRACT_KIND_STREAM, DIRECTION_PUBLISH, route_identity};
+use slime_components::fabric_visibility::{ViewPage, request_page};
 use slime_proto::capability_transfer::{
     FABRIC_REQUEST_MAGIC, FORMAT_VERSION, OBJECT_KIND_ENDPOINT, REQUEST_LEN,
     WireCapabilityTransfer, WireFabricRequest,
@@ -61,6 +62,10 @@ fn fail(reason: &[u8]) -> ! {
 }
 
 fn main() {
+    if option_env!("SLIME_FABRIC_VISIBILITY_CHECK") == Some("1") {
+        visibility_main();
+        return;
+    }
     let route = route_identity(
         ROUTE_NAME,
         &telemetry_stream::INTERFACE_IDENTITY,
@@ -174,6 +179,81 @@ fn main() {
         &inline_sample(INLINE_SAMPLES + STALL_SAMPLES + 1, FLAG_LAST).encode(),
     );
     slime_rt::debug_write(b"[fabric-publisher] done\n");
+}
+fn visibility_main() {
+    let mut cursor = 0;
+    let mut routes = 0;
+    let mut qos = 0;
+    loop {
+        match request_page(CONTROL_SLOT, cursor).unwrap_or_else(|_| fail(b"graph view")) {
+            ViewPage::Route(record) => {
+                let expected = if routes == 0 {
+                    b"telemetry".as_slice()
+                } else if routes == 1 {
+                    b"diagnostics".as_slice()
+                } else {
+                    fail(b"graph view exposed extra route")
+                };
+                if &record.route_name[..record.route_name_len as usize] != expected
+                    || record.contract_kind != CONTRACT_KIND_STREAM as u8
+                {
+                    fail(b"graph route metadata");
+                }
+                routes += 1;
+                cursor = record.cursor;
+            }
+            ViewPage::Qos(record) => {
+                if record.matched != 1 {
+                    fail(b"graph match metadata");
+                }
+                qos += 1;
+                cursor = record.cursor;
+            }
+            ViewPage::End(record) => {
+                let _ = record.cursor;
+                break;
+            }
+        }
+    }
+    if routes != 2 || qos != 2 {
+        fail(b"graph view bound");
+    }
+    slime_rt::debug_write(b"[fabric-publisher] graph view routes=2\n");
+
+    let route = route_identity(
+        ROUTE_NAME,
+        &telemetry_stream::INTERFACE_IDENTITY,
+        CONTRACT_KIND_STREAM,
+    );
+    let request = WireFabricRequest {
+        magic: FABRIC_REQUEST_MAGIC,
+        version: FORMAT_VERSION,
+        flags: 0,
+        direction: DIRECTION_PUBLISH,
+        type_identity: telemetry_stream::TYPE_TAG,
+        route_name_len: ROUTE_NAME.len() as u32,
+        route_name: route_name_bytes(),
+        reserved: [0; 4],
+    };
+    if send_request(&request) != ERR_SUCCESS {
+        fail(b"visibility role request");
+    }
+    let (descriptor, route_slot) = receive_role();
+    if descriptor.rights_mask != RIGHT_SEND
+        || !valid_capability_transfer(&descriptor, &route, DIRECTION_PUBLISH, OBJECT_KIND_ENDPOINT)
+    {
+        fail(b"visibility publish role");
+    }
+    let mut discard = [0u8; MAX_MSG];
+    let mut no_caps = [0u64; MAX_CAPS_PER_MSG];
+    if slime_rt::recv(route_slot, &mut discard, &mut no_caps) != ERR_BAD_CAP {
+        fail(b"visibility publisher widened");
+    }
+    if slime_rt::cap_transfer(CONTROL_SLOT, route_slot, &descriptor.encode()) != ERR_BAD_CAP {
+        fail(b"visibility publisher retransfer");
+    }
+    publish(route_slot, &inline_sample(1, FLAG_LAST).encode());
+    slime_rt::debug_write(b"[fabric-publisher] interposed sample published\n");
 }
 
 /// One inline sample: the payload is a deterministic function of the sequence,

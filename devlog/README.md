@@ -145,3 +145,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-07-28 | [C8.5 — Reliable, retained, and timed QoS](2026-07-28-c8-5-fabric-qos/index.md) | Change | Verified | C8.5 |
 | 2026-07-28 | [C8.6 — Bounded native calls](2026-07-28-c8-6-bounded-native-calls/index.md) | Change | Verified | C8.6 |
 | 2026-07-29 | [C8.7 — Native operations](2026-07-29-c8-7-native-operations/index.md) | Change | Verified | C8.7 |
+| 2026-07-30 | [C8.8 — Filtered introspection and declared interposition](2026-07-30-c8-8-filtered-introspection-interposition/index.md) | Change | Verified | C8.8 |

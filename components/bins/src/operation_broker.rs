@@ -58,7 +58,7 @@ use fabric_profile::*;
 use slime_rt::{ERR_PEER_DEAD, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG, WaitSource};
 
 const ROUTE_NAME: &str = "navigation";
-const BACKUP_ROUTE_NAME: &str = "navigation-backup";
+const BACKUP_ROUTE_NAME: &str = "nav-backup";
 const INTERFACE_NAME: &str = "NavigationOperation";
 const RIGHT_SEND: u64 = 1;
 const RIGHT_RECV: u64 = 2;

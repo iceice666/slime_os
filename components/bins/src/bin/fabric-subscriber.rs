@@ -17,6 +17,7 @@
 //! anything.
 
 use boot_contracts::fabric_graph::{CONTRACT_KIND_STREAM, DIRECTION_SUBSCRIBE, route_identity};
+use slime_components::fabric_visibility::{ViewPage, request_page};
 use slime_proto::capability_transfer::{
     FABRIC_REQUEST_MAGIC, FORMAT_VERSION, OBJECT_KIND_ENDPOINT, REQUEST_LEN,
     WireCapabilityTransfer, WireFabricRequest,
@@ -26,10 +27,12 @@ use slime_proto::fabric_stream::{
     EVENT_SAMPLE_LOST, EVENT_STREAM_END, MAX_INLINE_BYTES, STREAM_ACK_MAGIC, STREAM_EVENT_MAGIC,
     STREAM_SAMPLE_MAGIC, WireStreamAck, WireStreamEvent, WireStreamSample,
 };
+use slime_proto::fabric_visibility::{EVENT_PROXY_LOST, TRACE_PROXY_LOST, WireInterpositionTrace};
 use slime_proto::interface_schema::telemetry_stream;
 use slime_proto::sample_descriptor::{SAMPLE_DESCRIPTOR_MAGIC, WireSampleDescriptor};
 use slime_proto::{
-    valid_capability_transfer, valid_sample_descriptor, valid_stream_event, valid_stream_sample,
+    valid_capability_transfer, valid_interposition_trace, valid_sample_descriptor,
+    valid_stream_event, valid_stream_sample,
 };
 use slime_rt::{ERR_BAD_CAP, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG, WaitSource};
 
@@ -54,6 +57,10 @@ fn fail(reason: &[u8]) -> ! {
 }
 
 fn main() {
+    if option_env!("SLIME_FABRIC_VISIBILITY_CHECK") == Some("1") {
+        visibility_main();
+        return;
+    }
     let route = route_identity(
         ROUTE_NAME,
         &telemetry_stream::INTERFACE_IDENTITY,
@@ -133,6 +140,158 @@ fn main() {
 
     consume(route_slot, ack_slot);
     slime_rt::debug_write(b"[fabric-subscriber] done\n");
+}
+fn visibility_main() {
+    let mut cursor = 0;
+    let mut routes = 0;
+    let mut qos = 0;
+    loop {
+        match request_page(CONTROL_SLOT, cursor).unwrap_or_else(|_| fail(b"private view")) {
+            ViewPage::Route(record) => {
+                if routes != 0
+                    || &record.route_name[..record.route_name_len as usize] != b"telemetry"
+                    || record.schema_identity != telemetry_stream::INTERFACE_IDENTITY
+                {
+                    fail(b"private route metadata");
+                }
+                routes += 1;
+                cursor = record.cursor;
+            }
+            ViewPage::Qos(record) => {
+                if record.route_name[..9] != *b"telemetry" || record.matched != 1 {
+                    fail(b"private qos metadata");
+                }
+                qos += 1;
+                cursor = record.cursor;
+            }
+            ViewPage::End(record) => {
+                let _ = record.cursor;
+                break;
+            }
+        }
+    }
+    if routes != 1 || qos != 1 {
+        fail(b"private view bound");
+    }
+    slime_rt::debug_write(b"[fabric-subscriber] private view routes=1\n");
+
+    let route = route_identity(
+        ROUTE_NAME,
+        &telemetry_stream::INTERFACE_IDENTITY,
+        CONTRACT_KIND_STREAM,
+    );
+    let request = WireFabricRequest {
+        magic: FABRIC_REQUEST_MAGIC,
+        version: FORMAT_VERSION,
+        flags: 0,
+        direction: DIRECTION_SUBSCRIBE,
+        type_identity: telemetry_stream::TYPE_TAG,
+        route_name_len: ROUTE_NAME.len() as u32,
+        route_name: route_name_bytes(),
+        reserved: [0; 4],
+    };
+    if send_request(&request) != ERR_SUCCESS {
+        fail(b"visibility role request");
+    }
+    let mut slots = [0u32; 3];
+    let mut descriptors = [None; 3];
+    for index in 0..3 {
+        let (descriptor, slot) = receive_role();
+        if !valid_capability_transfer(
+            &descriptor,
+            &route,
+            DIRECTION_SUBSCRIBE,
+            OBJECT_KIND_ENDPOINT,
+        ) {
+            fail(b"interposed subscriber role");
+        }
+        slots[index] = slot;
+        descriptors[index] = Some(descriptor);
+    }
+    if descriptors[0].expect("data descriptor").rights_mask != RIGHT_RECV
+        || descriptors[1].expect("ack descriptor").rights_mask != RIGHT_SEND
+        || descriptors[2].expect("event descriptor").rights_mask != RIGHT_RECV
+    {
+        fail(b"interposed subscriber rights");
+    }
+    if slime_rt::send(slots[0], b"bypass", &[]) != ERR_BAD_CAP {
+        fail(b"subscriber bypass publish");
+    }
+    let mut discard = [0u8; MAX_MSG];
+    let mut no_caps = [0u64; MAX_CAPS_PER_MSG];
+    if slime_rt::recv(slots[1], &mut discard, &mut no_caps) != ERR_BAD_CAP {
+        fail(b"subscriber ack widened");
+    }
+    if slime_rt::cap_transfer(
+        CONTROL_SLOT,
+        slots[0],
+        &descriptors[0].expect("data descriptor").encode(),
+    ) != ERR_BAD_CAP
+    {
+        fail(b"subscriber retransfer");
+    }
+
+    let sample_sequence = match receive_message(slots[0]) {
+        Some(sample_bytes) => {
+            let sample = WireStreamSample::decode(&sample_bytes)
+                .filter(|sample| {
+                    valid_stream_sample(sample, telemetry_stream::TYPE_TAG, MAX_INLINE_BYTES)
+                })
+                .filter(|sample| sample.sequence == 1)
+                .unwrap_or_else(|| fail(b"interposed sample"));
+            ack(slots[1], sample.sequence);
+            slime_rt::debug_write(b"[fabric-subscriber] sample arrived through proxy\n");
+            sample.sequence
+        }
+        None => 1,
+    };
+
+    let event_bytes = receive_message(slots[2]).unwrap_or_else(|| fail(b"proxy loss event peer"));
+    let event = WireInterpositionTrace::decode(&event_bytes)
+        .filter(valid_interposition_trace)
+        .filter(|event| {
+            event.event == TRACE_PROXY_LOST
+                && event.route_identity == route
+                && event.sequence == sample_sequence
+        })
+        .unwrap_or_else(|| fail(b"proxy loss event"));
+    let _ = event;
+    slime_rt::debug_write(b"[fabric-subscriber] proxy loss route event observed\n");
+
+    let mut cursor = 0;
+    let mut event_seen = false;
+    loop {
+        match request_page(CONTROL_SLOT, cursor).unwrap_or_else(|_| fail(b"event graph view")) {
+            ViewPage::Route(record) => cursor = record.cursor,
+            ViewPage::Qos(record) => {
+                if record.event_mask != EVENT_PROXY_LOST {
+                    fail(b"proxy loss absent from graph view");
+                }
+                event_seen = true;
+                cursor = record.cursor;
+            }
+            ViewPage::End(_) => break,
+        }
+    }
+    if !event_seen {
+        fail(b"event graph view empty");
+    }
+    slime_rt::debug_write(b"[fabric-subscriber] proxy loss visible in graph view\n");
+}
+
+fn receive_message(slot: u32) -> Option<[u8; MAX_MSG]> {
+    let mut message = [0u8; MAX_MSG];
+    let mut received = [0u64; MAX_CAPS_PER_MSG];
+    loop {
+        match slime_rt::recv(slot, &mut message, &mut received) {
+            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(slot)]),
+            slime_rt::ERR_PEER_DEAD => return None,
+            n if n < 0 => fail(b"visibility receive"),
+            n if n as usize != MAX_MSG => fail(b"visibility message length"),
+            _ if received.iter().any(|slot| *slot != 0) => fail(b"visibility carried capability"),
+            _ => return Some(message),
+        }
+    }
 }
 
 /// Consume the route until the fabric reports it ended.

@@ -17,6 +17,8 @@ fn main() {
     println!("cargo:rerun-if-env-changed=SLIME_FABRIC_QOS_CHECK");
     println!("cargo:rerun-if-env-changed=SLIME_FABRIC_CALL_CHECK");
     println!("cargo:rerun-if-env-changed=SLIME_FABRIC_OPERATION_CHECK");
+    println!("cargo:rerun-if-env-changed=SLIME_FABRIC_VISIBILITY_CHECK");
+    println!("cargo:rerun-if-env-changed=SLIME_FABRIC_PROXY_EARLY_EXIT");
     println!("cargo:rerun-if-env-changed=SLIME_GENERATION_CANDIDATE");
     println!("cargo:rerun-if-env-changed=SLIME_GENERATION_CMD_SCENARIO");
     if let Ok(number) = std::env::var("SLIME_GENERATION_NUMBER") {
@@ -51,6 +53,12 @@ fn main() {
     }
     if let Ok(value) = std::env::var("SLIME_FABRIC_CALL_CHECK") {
         println!("cargo:rustc-env=SLIME_FABRIC_CALL_CHECK={value}");
+    }
+    if let Ok(value) = std::env::var("SLIME_FABRIC_VISIBILITY_CHECK") {
+        println!("cargo:rustc-env=SLIME_FABRIC_VISIBILITY_CHECK={value}");
+    }
+    if let Ok(value) = std::env::var("SLIME_FABRIC_PROXY_EARLY_EXIT") {
+        println!("cargo:rustc-env=SLIME_FABRIC_PROXY_EARLY_EXIT={value}");
     }
     if let Ok(value) = std::env::var("SLIME_GENERATION_CANDIDATE") {
         println!("cargo:rustc-env=SLIME_GENERATION_CANDIDATE={value}");
@@ -129,6 +137,14 @@ fn generate_fabric_profile(manifest_dir: &str) {
     let call_deadline_ns = participants_call_deadline(&manifest, "parameters");
     let operation_deadline_ns = participants_call_deadline(&manifest, "navigation");
     let participants = fabric_participants(&manifest);
+    if std::env::var("SLIME_FABRIC_VISIBILITY_CHECK").as_deref() == Ok("1") {
+        assert!(
+            participants
+                .iter()
+                .all(|(_, route, _, _)| route.len() <= 16),
+            "visibility profile route name exceeds 16-byte record bound"
+        );
+    }
     // The parser is indentation-keyed, so its failure mode is a short table
     // rather than an empty one — and a short table is silent: the fabric denies
     // by default, so a dropped participant becomes a refused component with no
@@ -191,6 +207,38 @@ fn generate_fabric_profile(manifest_dir: &str) {
                 entry.durability,
                 entry.liveliness,
             )
+        })
+        .collect::<String>();
+    let visibility = fabric_visibility(&manifest);
+    assert_eq!(
+        participants.len(),
+        visibility.len(),
+        "every fabric participant declares one visibility policy"
+    );
+    let visibility_rows = participants
+        .iter()
+        .zip(visibility.iter())
+        .map(
+            |((component, route, _, _), (visible_component, visible_route, policy))| {
+                assert_eq!(
+                    component, visible_component,
+                    "visibility component order drift"
+                );
+                assert_eq!(route, visible_route, "visibility route order drift");
+                format!("    (b\"{component}\", \"{route}\", {policy}),\n")
+            },
+        )
+        .collect::<String>();
+    let interpositions = fabric_interpositions(&manifest);
+    let interposition_rows = interpositions
+        .iter()
+        .map(|(component, route, chain)| {
+            let hops = chain
+                .iter()
+                .map(|hop| format!("b\"{hop}\" as &[u8]"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("    (b\"{component}\", \"{route}\", &[{hops}]),\n")
         })
         .collect::<String>();
     // Control endpoints, in the order init grants them, one set per plane.
@@ -303,6 +351,15 @@ fn generate_fabric_profile(manifest_dir: &str) {
              /// Complete generation-declared QoS per participant.\n\
              pub type FabricQosRow = (&'static [u8], &'static str, u64, u64, u64, u32, u32, u8, u8, u8);\n\
              pub const FABRIC_QOS: &[FabricQosRow] = &[\n{qos_rows}];\n\
+             /// Generation-declared graph visibility for every participant,\n\
+             /// positionally cross-checked against `FABRIC_PARTICIPANTS`.\n\
+             pub const FABRIC_VISIBILITY: &[(&[u8], &str, u8)] = &[\n{visibility_rows}];\n\
+             \n\
+             /// Non-empty declared interposition chains. The first tuple member\n\
+             /// is the downstream participant whose only path traverses `chain`.\n\
+             pub type FabricInterpositionRow = (&'static [u8], &'static str, &'static [&'static [u8]]);\n\
+             pub const FABRIC_INTERPOSITIONS: &[FabricInterpositionRow] = &[\n{interposition_rows}];\n\
+             \n\
              \n\
              \n\
              /// Every distinct component holding a fabric control endpoint, in the\n\
@@ -563,6 +620,131 @@ fn fabric_qos(manifest: &str) -> Vec<FabricQos> {
         }
     }
     values
+}
+
+/// Read the visibility policy beside every participant without changing the
+/// authority tuple parser. The caller cross-checks keys and length before
+/// emitting either table, so an indentation drift stops the build.
+fn fabric_visibility(manifest: &str) -> Vec<(String, String, u8)> {
+    let mut rows = Vec::new();
+    let mut route = String::new();
+    let mut component = String::new();
+    for line in fabric_graph_block(manifest).lines() {
+        let trimmed = line.trim_start();
+        let indent = line.len() - trimmed.len();
+        if indent == 8 && trimmed.starts_with("name = \"") {
+            route = quoted(trimmed).unwrap_or_default();
+        } else if indent == 12 && trimmed.starts_with("component = \"") {
+            component = quoted(trimmed).unwrap_or_default();
+        } else if indent == 12 && trimmed.starts_with("visibility = \"") {
+            let policy = match quoted(trimmed).unwrap_or_default().as_str() {
+                "private" => 1,
+                "graph" => 2,
+                other => panic!("unknown fabric visibility {other}"),
+            };
+            assert!(
+                !component.is_empty() && !route.is_empty(),
+                "fabric visibility is missing its component or route"
+            );
+            rows.push((component.clone(), route.clone(), policy));
+        }
+    }
+    rows
+}
+
+/// Extract every non-empty interposition chain with the participant edge it
+/// guards. The manifest and boot decoder already reject unknown hops, cycles,
+/// and bypasses; this build-time profile is the userspace service's exact copy
+/// of the authenticated declaration.
+fn fabric_interpositions(manifest: &str) -> Vec<(String, String, Vec<String>)> {
+    let mut rows = Vec::new();
+    let mut route = String::new();
+    let mut component = String::new();
+    let mut chain: Option<Vec<String>> = None;
+    for line in fabric_graph_block(manifest).lines() {
+        let trimmed = line.trim_start();
+        let indent = line.len() - trimmed.len();
+        if indent == 8 && trimmed.starts_with("name = \"") {
+            route = quoted(trimmed).unwrap_or_default();
+        } else if indent == 12 && trimmed.starts_with("component = \"") {
+            component = quoted(trimmed).unwrap_or_default();
+        } else if indent == 12 && trimmed == "interposition = [" {
+            chain = Some(Vec::new());
+        } else if indent == 14 && chain.is_some() && trimmed.starts_with('"') {
+            chain
+                .as_mut()
+                .expect("interposition chain")
+                .push(quoted(trimmed).expect("interposition component"));
+        } else if indent == 12
+            && trimmed == "];"
+            && let Some(completed) = chain.take()
+            && !completed.is_empty()
+        {
+            assert!(
+                !component.is_empty() && !route.is_empty(),
+                "fabric interposition is missing its participant or route"
+            );
+            rows.push((component.clone(), route.clone(), completed));
+        }
+    }
+    assert!(chain.is_none(), "unterminated fabric interposition chain");
+    if std::env::var("SLIME_FABRIC_VISIBILITY_CHECK").as_deref() == Ok("1") {
+        let overrides = fabric_profile_interpositions(manifest, "visibility");
+        assert_eq!(overrides.len(), 1, "visibility profile interposition count");
+        for (component, route, replacement) in overrides {
+            let matches = rows
+                .iter_mut()
+                .filter(|(declared_component, declared_route, _)| {
+                    *declared_component == component && *declared_route == route
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                matches.len(),
+                1,
+                "profile interposition must name exactly one participant"
+            );
+            matches.into_iter().next().expect("profile interposition").2 = replacement;
+        }
+    }
+    rows
+}
+
+fn fabric_profile_interpositions(
+    manifest: &str,
+    wanted: &str,
+) -> Vec<(String, String, Vec<String>)> {
+    let mut rows = Vec::new();
+    let mut selected = false;
+    let mut route = String::new();
+    let mut component = String::new();
+    for line in fabric_graph_block(manifest).lines() {
+        let trimmed = line.trim_start();
+        let indent = line.len() - trimmed.len();
+        if indent == 8 && trimmed.starts_with("name = \"") {
+            selected = quoted(trimmed).as_deref() == Some(wanted);
+        } else if selected && indent == 12 && trimmed.starts_with("route = \"") {
+            route = quoted(trimmed).unwrap_or_default();
+        } else if selected && indent == 12 && trimmed.starts_with("participant = \"") {
+            component = quoted(trimmed).unwrap_or_default();
+        } else if selected && indent == 12 && trimmed.starts_with("chain = [") {
+            let chain = trimmed
+                .split('"')
+                .skip(1)
+                .step_by(2)
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            assert!(
+                !component.is_empty() && !route.is_empty() && !chain.is_empty(),
+                "fabric profile interposition is incomplete"
+            );
+            rows.push((
+                core::mem::take(&mut component),
+                core::mem::take(&mut route),
+                chain,
+            ));
+        }
+    }
+    rows
 }
 
 /// Scan the manifest's `fabricGraph` block for its declared participants.

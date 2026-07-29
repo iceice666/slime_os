@@ -446,6 +446,37 @@ def fabric_grant_identity(route_identity: bytes, component: bytes, direction: in
     )
 
 
+def selected_fabric_graph(graph: dict) -> dict:
+    """Apply one explicit build profile before encoding the authenticated graph."""
+    selected = "visibility" if os.environ.get("SLIME_FABRIC_VISIBILITY_CHECK") == "1" else None
+    if selected is None:
+        return graph
+    profiles = [profile for profile in graph.get("profiles", []) if profile.get("name") == selected]
+    if len(profiles) != 1:
+        fail(f"fabric graph: expected one {selected} profile")
+    resolved = copy.deepcopy(graph)
+    for override in profiles[0].get("interpositions", []):
+        matches = [
+            member
+            for route in resolved["routes"]
+            if route["name"] == override["route"]
+            for member in route["participants"]
+            if member["component"] == override["participant"]
+        ]
+        if len(matches) != 1:
+            fail(
+                "fabric graph: profile interposition must name exactly one "
+                f"participant ({override['participant']} on {override['route']})"
+            )
+        chain = override["chain"]
+        if not isinstance(chain, list) or not chain:
+            fail("fabric graph: profile interposition chain must be non-empty")
+        matches[0]["interposition"] = chain
+    if any(len(route["name"].encode("utf-8")) > 16 for route in resolved["routes"]):
+        fail("fabric graph: visibility profile route name exceeds 16-byte record bound")
+    return resolved
+
+
 def build_fabric_graph(graph: dict, component_names: set[str], interfaces: list) -> bytes:
     """Encode the C8.2 fabric-graph resource object.
 
@@ -454,6 +485,7 @@ def build_fabric_graph(graph: dict, component_names: set[str], interfaces: list)
     here is part of the format. A component absent from the participant table
     holds no route authority at all — omission is meaningful, not a default.
     """
+    graph = selected_fabric_graph(graph)
     by_name = {interface.name: interface for interface in interfaces}
     fabric = graph["fabricComponent"]
     if fabric not in component_names:
@@ -733,6 +765,14 @@ def build_rust_components(
         environment["SLIME_FABRIC_OPERATION_CHECK"] = "1"
     else:
         environment.pop("SLIME_FABRIC_OPERATION_CHECK", None)
+    if environment.get("SLIME_FABRIC_VISIBILITY_CHECK") == "1":
+        environment["SLIME_FABRIC_VISIBILITY_CHECK"] = "1"
+    else:
+        environment.pop("SLIME_FABRIC_VISIBILITY_CHECK", None)
+    if environment.get("SLIME_FABRIC_PROXY_EARLY_EXIT") == "1":
+        environment["SLIME_FABRIC_PROXY_EARLY_EXIT"] = "1"
+    else:
+        environment.pop("SLIME_FABRIC_PROXY_EARLY_EXIT", None)
     if recovery:
         environment["SLIME_RECOVERY_IMAGE"] = "1"
     if environment.get("SLIME_GENERATION_CMD_CHECK") == "1" and candidate_identity is not None:

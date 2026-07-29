@@ -1271,6 +1271,8 @@ extern "C" fn on_idle() {
             && GENERATION_NUMBER.load(Ordering::Relaxed) == 14;
         let fabric_operation_check = option_env!("SLIME_FABRIC_OPERATION_CHECK") == Some("1")
             && GENERATION_NUMBER.load(Ordering::Relaxed) == 15;
+        let fabric_visibility_check = option_env!("SLIME_FABRIC_VISIBILITY_CHECK") == Some("1")
+            && GENERATION_NUMBER.load(Ordering::Relaxed) == 16;
         let optional_generation_command_component = generation_command_check
             && matches!(name, "init" | "generation-manager")
             && matches!(
@@ -1349,7 +1351,8 @@ extern "C" fn on_idle() {
             || fabric_stream_check
             || fabric_qos_check
             || fabric_call_check
-            || fabric_operation_check)
+            || fabric_operation_check
+            || fabric_visibility_check)
             && name == "generation-manager"
             && matches!(reason, Some(task::TermReason::Exit(1)));
         // The stream scenario runs the same graph as the authority one, plus
@@ -1424,6 +1427,21 @@ extern "C" fn on_idle() {
                 reason,
                 Some(task::TermReason::Exit(0) | task::TermReason::PeerLoss)
             );
+        let optional_fabric_visibility_component = fabric_visibility_check
+            && matches!(
+                name,
+                "init"
+                    | "fabric-service"
+                    | "fabric-publisher"
+                    | "fabric-subscriber"
+                    | "fabric-intruder"
+                    | "fabric-publisher-b"
+                    | "fabric-subscriber-b"
+            )
+            && matches!(
+                reason,
+                Some(task::TermReason::Exit(0) | task::TermReason::PeerLoss)
+            );
         healthy &= matches!(reason, Some(task::TermReason::Exit(0)))
             || optional_storage_absent
             || optional_confirmation_absent
@@ -1439,7 +1457,8 @@ extern "C" fn on_idle() {
             || optional_fabric_stream_component
             || optional_fabric_qos_component
             || optional_fabric_call_component
-            || optional_fabric_operation_component;
+            || optional_fabric_operation_component
+            || optional_fabric_visibility_component;
     }
     if healthy {
         if crate::boot::bootstate().is_some_and(|state| state.running_pending) {

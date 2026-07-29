@@ -79,6 +79,10 @@ fn fail(reason: &[u8]) -> ! {
 }
 
 fn main() {
+    if option_env!("SLIME_FABRIC_VISIBILITY_CHECK") == Some("1") {
+        visibility_main();
+        return;
+    }
     let telemetry_route = route_identity(
         TELEMETRY_ROUTE,
         &telemetry_stream::INTERFACE_IDENTITY,
@@ -165,6 +169,55 @@ fn main() {
     // loss itself is the required zero-credit outcome.
     consume_telemetry(telemetry_slot, telemetry_ack);
     slime_rt::debug_write(b"[fabric-subscriber-b] done\n");
+}
+fn visibility_main() {
+    let route = route_identity(
+        DIAGNOSTICS_ROUTE,
+        &diagnostics_stream::INTERFACE_IDENTITY,
+        CONTRACT_KIND_STREAM,
+    );
+    if request_roles() != ERR_SUCCESS {
+        fail(b"visibility request");
+    }
+    let (data_descriptor, data_slot) = receive_role();
+    let (ack_descriptor, ack_slot) = receive_role();
+    if data_descriptor.rights_mask != RIGHT_RECV
+        || ack_descriptor.rights_mask != RIGHT_SEND
+        || !valid_capability_transfer(
+            &data_descriptor,
+            &route,
+            DIRECTION_SUBSCRIBE,
+            OBJECT_KIND_ENDPOINT,
+        )
+        || !valid_capability_transfer(
+            &ack_descriptor,
+            &route,
+            DIRECTION_SUBSCRIBE,
+            OBJECT_KIND_ENDPOINT,
+        )
+    {
+        fail(b"visibility diagnostics role");
+    }
+    let mut message = [0u8; MAX_MSG];
+    let mut received = [0u64; MAX_CAPS_PER_MSG];
+    let length = loop {
+        match slime_rt::recv(data_slot, &mut message, &mut received) {
+            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(data_slot)]),
+            n if n < 0 => fail(b"visibility diagnostics receive"),
+            n => break n as usize,
+        }
+    };
+    if length != MAX_MSG || received.iter().any(|slot| *slot != 0) {
+        fail(b"visibility diagnostics framing");
+    }
+    let sample = WireStreamSample::decode(&message)
+        .filter(|sample| {
+            valid_stream_sample(sample, diagnostics_stream::TYPE_TAG, MAX_INLINE_BYTES)
+        })
+        .filter(|sample| sample.sequence == 1)
+        .unwrap_or_else(|| fail(b"visibility diagnostics sample"));
+    ack(ack_slot, sample.sequence, diagnostics_stream::TYPE_TAG);
+    slime_rt::debug_write(b"[fabric-subscriber-b] unrelated diagnostics live after proxy death\n");
 }
 
 fn consume_diagnostics_stream(route_slot: u32, ack_slot: u32) {

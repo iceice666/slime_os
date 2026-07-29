@@ -112,7 +112,7 @@
           {
             component = "fabric-subscriber";
             direction = "subscribe";
-            visibility = "graph";
+            visibility = "private";
             interposition = [
               "fabric-service";
             ];
@@ -300,7 +300,7 @@
         ];
       };
       {
-        name = "navigation-backup";
+        name = "nav-backup";
         interface = "NavigationOperation";
         participants = [
           {
@@ -316,6 +316,18 @@
             deadlineNs = 1000000;
             lifespanNs = 2000000;
             leaseNs = 0;
+          };
+        ];
+      };
+    ];
+    profiles = [
+      {
+        name = "visibility";
+        interpositions = [
+          {
+            route = "telemetry";
+            participant = "fabric-subscriber";
+            chain = ["fabric-intruder";];
           };
         ];
       };

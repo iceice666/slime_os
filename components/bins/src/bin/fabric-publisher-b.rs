@@ -96,6 +96,10 @@ fn fail(reason: &[u8]) -> ! {
 }
 
 fn main() {
+    if option_env!("SLIME_FABRIC_VISIBILITY_CHECK") == Some("1") {
+        visibility_main();
+        return;
+    }
     // A payload larger than the control-message bound is the whole point of
     // this component's telemetry arm.
     if PAYLOAD_LEN <= MAX_MSG as u64 {
@@ -189,6 +193,32 @@ fn main() {
     );
     slime_rt::debug_write(b"[fabric-publisher-b] diagnostics terminal published\n");
     slime_rt::debug_write(b"[fabric-publisher-b] done\n");
+}
+fn visibility_main() {
+    let diagnostics = route_identity(
+        DIAGNOSTICS_ROUTE,
+        &diagnostics_stream::INTERFACE_IDENTITY,
+        CONTRACT_KIND_STREAM,
+    );
+    if request_roles() != ERR_SUCCESS {
+        fail(b"visibility request");
+    }
+    let (descriptor, slot) = receive_role();
+    if descriptor.rights_mask != RIGHT_SEND
+        || !valid_capability_transfer(
+            &descriptor,
+            &diagnostics,
+            DIRECTION_PUBLISH,
+            OBJECT_KIND_ENDPOINT,
+        )
+    {
+        fail(b"visibility diagnostics role");
+    }
+    publish(
+        slot,
+        &inline_sample(diagnostics_stream::TYPE_TAG, 1, FLAG_LAST).encode(),
+    );
+    slime_rt::debug_write(b"[fabric-publisher-b] unrelated diagnostics published\n");
 }
 
 /// Allocate, fill, seal, and loan one payload larger than the control bound,
