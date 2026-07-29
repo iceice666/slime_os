@@ -145,21 +145,140 @@ fn main() {
     }
     slime_rt::debug_write(b"[fabric-subscriber-b] both subscribe roles received\n");
 
-    // Leave telemetry unread while the independent RELIABLE diagnostics arm
-    // consumes explicit time. Both telemetry publishers continue, so the
-    // BEST_EFFORT ring must evict and later report bounded loss.
+    // Leave telemetry unread while the independent diagnostics route moves.
+    // The QoS profile drives its reliable/deadline arms with explicit time;
+    // the plain stream profile only proves the unrelated route stays live.
     slime_rt::debug_write(b"[fabric-subscriber-b] stalling on telemetry\n");
+    // Receive the large shared sample before stalling inline delivery. Returning
+    // its loan proves the second independently-accounted downstream loan; the
+    // later inline burst still fills KEEP_LAST and produces bounded loss.
+    receive_large_sample(telemetry_slot, telemetry_ack);
 
-    // The diagnostics reader is the RELIABLE/manual-liveliness arm. It
-    // withholds its first sample while explicit time drives deadline, lease,
-    // and fixed retry exhaustion.
-    consume_diagnostics(diagnostics_slot, diagnostics_ack);
+    if option_env!("SLIME_FABRIC_QOS_CHECK") == Some("1") {
+        consume_diagnostics(diagnostics_slot, diagnostics_ack);
+    } else {
+        consume_diagnostics_stream(diagnostics_slot, diagnostics_ack);
+    }
 
-    // Resume telemetry after the timed scenario. The large sample still proves
-    // the shared path if it survived the fixed KEEP_LAST window; loss itself is
-    // the required zero-credit outcome.
+    // Resume telemetry after the independent diagnostics arm. The large sample
+    // still proves the shared path if it survived the fixed KEEP_LAST window;
+    // loss itself is the required zero-credit outcome.
     consume_telemetry(telemetry_slot, telemetry_ack);
     slime_rt::debug_write(b"[fabric-subscriber-b] done\n");
+}
+
+fn consume_diagnostics_stream(route_slot: u32, ack_slot: u32) {
+    let mut sample_seen = false;
+    loop {
+        let mut message = [0u8; MAX_MSG];
+        let mut received = [0u64; MAX_CAPS_PER_MSG];
+        let length = match slime_rt::recv(route_slot, &mut message, &mut received) {
+            ERR_WOULDBLOCK => {
+                slime_rt::wait(&[WaitSource::Endpoint(route_slot)]);
+                continue;
+            }
+            n if n < 0 => fail(b"diagnostics recv"),
+            n => n as usize,
+        };
+        if length != MAX_MSG {
+            fail(b"stream record is not one control message");
+        }
+        let magic = u32::from_le_bytes(message[..4].try_into().expect("record prefix"));
+        match magic {
+            STREAM_SAMPLE_MAGIC => {
+                let Some(sample) = WireStreamSample::decode(&message) else {
+                    fail(b"decode diagnostics sample")
+                };
+                if !valid_stream_sample(&sample, diagnostics_stream::TYPE_TAG, MAX_INLINE_BYTES) {
+                    fail(b"diagnostics sample failed validation");
+                }
+                sample_seen = true;
+                ack(ack_slot, sample.sequence, diagnostics_stream::TYPE_TAG);
+            }
+            QOS_EVENT_MAGIC => {}
+            STREAM_EVENT_MAGIC => {
+                let Some(event) = WireStreamEvent::decode(&message) else {
+                    fail(b"decode event")
+                };
+                if !valid_stream_event(&event, diagnostics_stream::TYPE_TAG)
+                    || event.event != EVENT_STREAM_END
+                    || !sample_seen
+                {
+                    fail(b"unexpected diagnostics stream event");
+                }
+                slime_rt::debug_write(b"[fabric-subscriber-b] diagnostics unaffected by stall\n");
+                return;
+            }
+            _ => fail(b"unknown stream record"),
+        }
+    }
+}
+
+fn receive_large_sample(route_slot: u32, ack_slot: u32) {
+    loop {
+        let mut message = [0u8; MAX_MSG];
+        let mut received = [0u64; MAX_CAPS_PER_MSG];
+        let length = match slime_rt::recv(route_slot, &mut message, &mut received) {
+            ERR_WOULDBLOCK => {
+                slime_rt::wait(&[WaitSource::Endpoint(route_slot)]);
+                continue;
+            }
+            n if n < 0 => fail(b"telemetry recv"),
+            n => n as usize,
+        };
+        if length != MAX_MSG {
+            fail(b"stream record is not one control message");
+        }
+        let magic = u32::from_le_bytes(message[..4].try_into().expect("record prefix"));
+        match magic {
+            STREAM_SAMPLE_MAGIC => {
+                let Some(sample) = WireStreamSample::decode(&message) else {
+                    fail(b"decode inline sample")
+                };
+                if !valid_stream_sample(&sample, telemetry_stream::TYPE_TAG, MAX_INLINE_BYTES) {
+                    fail(b"inline sample failed validation");
+                }
+                ack(ack_slot, sample.sequence, telemetry_stream::TYPE_TAG);
+                continue;
+            }
+            QOS_EVENT_MAGIC | STREAM_EVENT_MAGIC => continue,
+            SAMPLE_DESCRIPTOR_MAGIC => {}
+            _ => fail(b"unknown stream record"),
+        }
+        let Some(descriptor) = WireSampleDescriptor::decode(&message) else {
+            fail(b"decode sample descriptor")
+        };
+        let loan_slot = received[0] as u32;
+        if loan_slot == 0
+            || !valid_sample_descriptor(
+                &descriptor,
+                descriptor.loan_id,
+                telemetry_stream::TYPE_TAG,
+                PAGE,
+            )
+        {
+            fail(b"descriptor failed validation");
+        }
+        if slime_rt::shared_buffer_loan_map(loan_slot, BASE, 0, descriptor.length) != ERR_SUCCESS {
+            fail(b"loan map");
+        }
+        let mismatch = unsafe {
+            let bytes = BASE as *const u8;
+            (0..descriptor.length as usize)
+                .find(|index| bytes.add(*index).read_volatile() != (*index % 251) as u8)
+        };
+        if mismatch.is_some() {
+            fail(b"shared payload mismatch");
+        }
+        if slime_rt::shared_buffer_unmap(loan_slot, BASE) != ERR_SUCCESS
+            || slime_rt::shared_buffer_return(loan_slot) != ERR_SUCCESS
+        {
+            fail(b"return loan");
+        }
+        ack(ack_slot, descriptor.sequence, telemetry_stream::TYPE_TAG);
+        slime_rt::debug_write(b"[fabric-subscriber-b] shared sample verified\n");
+        return;
+    }
 }
 
 /// Consume telemetry until `stop` is satisfied.
@@ -268,7 +387,7 @@ fn consume_telemetry(route_slot: u32, ack_slot: u32) -> u32 {
                 match event.event {
                     EVENT_SAMPLE_LOST => {
                         // Loss before the deliberate stall is admissible too:
-                        // this reader declares BEST_EFFORT at depth 2 while two
+                        // this reader declares BEST_EFFORT at depth 4 while two
                         // publishers feed its route, so the fabric may evict
                         // even while it is keeping up. What must hold either
                         // way is that loss stays bounded and named, which is

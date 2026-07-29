@@ -21,8 +21,9 @@
 
 extern crate alloc;
 use boot_contracts::fabric_graph::{
-    CONTRACT_KIND_CALL, CONTRACT_KIND_STREAM, DIRECTION_CLIENT, DIRECTION_PUBLISH,
-    DIRECTION_SERVER, DIRECTION_SUBSCRIBE, INTERPOSITION_NONE, component_identity, grant_identity,
+    CONTRACT_KIND_CALL, CONTRACT_KIND_OPERATION, CONTRACT_KIND_STREAM, DIRECTION_CLIENT,
+    DIRECTION_PUBLISH, DIRECTION_SERVER, DIRECTION_SUBSCRIBE, INTERPOSITION_NONE,
+    component_identity, grant_identity,
 };
 use slime_os_kernel::capability::MAX_CAPS;
 use slime_os_kernel::ipc::MAX_MSG;
@@ -58,12 +59,12 @@ fn booted_generation_declares_an_admitted_fabric_graph() {
     let graph = slime_os_kernel::generation::fabric_graph(&generation)
         .expect("generation declares a graph");
 
-    // Three declared routes: two C8.4 streams and one C8.6 call. Nine
-    // participants across them, including two clients and one server on the
-    // call route, so the admitted graph is the graph exercised by C8.6.
-    assert_eq!(graph.schema_count(), 3);
-    assert_eq!(graph.route_count(), 3);
-    assert_eq!(graph.participant_count(), 9);
+    // Five declared routes: two C8.4 streams, one C8.6 call, and two C8.7
+    // operations. Fourteen participants include the restart identity and the
+    // backup route, so both derive authority only from the admitted graph.
+    assert_eq!(graph.schema_count(), 4);
+    assert_eq!(graph.route_count(), 5);
+    assert_eq!(graph.participant_count(), 14);
     assert_eq!(
         graph.fabric_component_identity(),
         component_identity("fabric-service"),
@@ -102,11 +103,13 @@ fn route_authority_is_the_exact_tuple() {
 
     let mut stream_routes = 0;
     let mut call_routes = 0;
+    let mut operation_routes = 0;
     for index in 0..graph.route_count() {
         let route = graph.route(index).expect("route in range");
         match route.contract_kind {
             CONTRACT_KIND_STREAM => stream_routes += 1,
             CONTRACT_KIND_CALL => call_routes += 1,
+            CONTRACT_KIND_OPERATION => operation_routes += 1,
             other => panic!("unexpected contract kind {other}"),
         }
 
@@ -164,10 +167,12 @@ fn route_authority_is_the_exact_tuple() {
             );
         }
     }
-    // Two stream routes (C8.4 telemetry and diagnostics) and one call route
-    // (C8.6 parameters), so the loop above covered both contract kinds.
+    // Two stream routes (C8.4 telemetry and diagnostics), one call route (C8.6
+    // parameters), and two operation routes (C8.7 navigation and its unrelated
+    // backup), so the loop above covered every admitted contract kind.
     assert_eq!(stream_routes, 2);
     assert_eq!(call_routes, 1);
+    assert_eq!(operation_routes, 2);
 }
 
 /// The declared interposition chain is present, terminates, and every hop names

@@ -147,6 +147,31 @@ path = "src/bin/fabric-call-time.rs"
 test = false
 
 [[bin]]
+name = "fabric-op-client"
+path = "src/bin/fabric-op-client.rs"
+test = false
+
+[[bin]]
+name = "fabric-op-client-b"
+path = "src/bin/fabric-op-client-b.rs"
+test = false
+
+[[bin]]
+name = "fabric-op-client-b-restart"
+path = "src/bin/fabric-op-client-b-restart.rs"
+test = false
+
+[[bin]]
+name = "fabric-op-server"
+path = "src/bin/fabric-op-server.rs"
+test = false
+
+[[bin]]
+name = "fabric-op-time"
+path = "src/bin/fabric-op-time.rs"
+test = false
+
+[[bin]]
 name = "init"
 path = "src/bin/init.rs"
 test = false

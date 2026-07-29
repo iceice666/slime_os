@@ -56,6 +56,9 @@
 #[path = "../call_broker.rs"]
 mod call_broker;
 
+#[path = "../operation_broker.rs"]
+mod operation_broker;
+
 use boot_contracts::fabric_graph::{
     CONTRACT_KIND_STREAM, DIRECTION_PUBLISH, DIRECTION_SUBSCRIBE, DURABILITY_RETAINED,
     RELIABILITY_RELIABLE, TransportQos, route_identity,
@@ -258,8 +261,30 @@ impl Frame {
 
 fn main() {
     if option_env!("SLIME_FABRIC_CALL_CHECK") == Some("1") {
-        call_broker::Broker::new(FACTORY_SLOT, BUFFER_FACTORY_SLOT, [2, 3], 4, 5, 0).run();
+        let controls = request_response_controls(FABRIC_CALL_CLIENTS);
+        call_broker::Broker::new(
+            FACTORY_SLOT,
+            BUFFER_FACTORY_SLOT,
+            controls.clients,
+            controls.server,
+            controls.time,
+            0,
+        )
+        .run();
         slime_rt::debug_write(b"[fabric] call plane complete\n");
+        return;
+    }
+    if option_env!("SLIME_FABRIC_OPERATION_CHECK") == Some("1") {
+        let controls = request_response_controls(FABRIC_OPERATION_CLIENTS);
+        operation_broker::Broker::new(
+            FACTORY_SLOT,
+            controls.clients,
+            controls.server,
+            controls.time,
+            6,
+        )
+        .run();
+        slime_rt::debug_write(b"[fabric] operation plane complete\n");
         return;
     }
     let routes: [[u8; 32]; ROUTE_COUNT] = [
@@ -287,6 +312,50 @@ fn main() {
 
     broker(&type_tags, &mut publishers, &mut subscribers, &mut frames);
     slime_rt::debug_write(b"[fabric] stream plane complete\n");
+}
+
+struct RequestResponseControls {
+    clients: [u32; 2],
+    server: u32,
+    time: u32,
+}
+
+/// Resolve one request/response plane's authenticated control slots from the
+/// manifest-derived table. The table is authoritative for ordering; the role
+/// assertions make a reordered or misclassified grant a build-time-visible
+/// failure instead of a broker reading the wrong capability slot.
+fn request_response_controls(table: &[&[u8]]) -> RequestResponseControls {
+    assert!(
+        table.len() == 4,
+        "request/response plane must declare four controls"
+    );
+    let slot = |component: &[u8]| {
+        table
+            .iter()
+            .position(|entry| *entry == component)
+            .map(|index| FABRIC_FIRST_CONTROL_SLOT + index as u32)
+            .unwrap_or_else(|| fail(b"request/response control missing"))
+    };
+    let (client_a, client_b, server, time) = if table[0].starts_with(b"fabric-call-") {
+        (
+            b"fabric-call-client".as_slice(),
+            b"fabric-call-client-b".as_slice(),
+            b"fabric-call-server".as_slice(),
+            b"fabric-call-time".as_slice(),
+        )
+    } else {
+        (
+            b"fabric-op-client".as_slice(),
+            b"fabric-op-client-b".as_slice(),
+            b"fabric-op-server".as_slice(),
+            b"fabric-op-time".as_slice(),
+        )
+    };
+    RequestResponseControls {
+        clients: [slot(client_a), slot(client_b)],
+        server: slot(server),
+        time: slot(time),
+    }
 }
 
 /// The control-endpoint table, in the fixed order init granted the slots. Built
@@ -598,7 +667,12 @@ fn broker(
             }
         }
 
-        for index in 0..subscribers.len() {
+        // Shared samples consume one fabric loan per matched subscriber. Walk
+        // this table in reverse so the fixed first subscriber cannot always
+        // take the only immediately-available loan before a later peer gets a
+        // turn; acknowledgements are still drained for every participant each
+        // pass. Inline delivery order is not observable authority.
+        for index in (0..subscribers.len()).rev() {
             if subscribers[index].is_none() {
                 continue;
             }

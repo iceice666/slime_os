@@ -25,7 +25,12 @@ stateLen :: Int = 24;
 healthLen :: Int = 4;
 maxGenerationBytes :: Int = 16777216;
 maxObjects :: Int = 64;
-maxComponents :: Int = 32;
+-- Raised from 32 for C8.7: the fabric planes each declare their own
+-- participants, and the stream, call, and operation sets together passed the
+-- old ceiling. Still a fixed bound the decoder sizes against before reading any
+-- untrusted count; only `component_count` admission widens, and the 32-byte
+-- component record layout is unchanged, so no wire offset or identity moves.
+maxComponents :: Int = 48;
 maxGrants :: Int = 128;
 maxStates :: Int = 32;
 maxDependencies :: Int = 128;

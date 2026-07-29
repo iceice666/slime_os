@@ -66,6 +66,10 @@ FABRIC_CALL_CONTRACT = ROOT / "contracts" / "fabric-call" / "v1"
 FABRIC_CALL_BINDING_GENERATOR = (
     ROOT / "scripts" / "generate" / "generate-fabric-call-bindings.py"
 )
+FABRIC_OPERATION_CONTRACT = ROOT / "contracts" / "fabric-operation" / "v1"
+FABRIC_OPERATION_BINDING_GENERATOR = (
+    ROOT / "scripts" / "generate" / "generate-fabric-operation-bindings.py"
+)
 
 
 def run(*arguments: str) -> str:
@@ -192,6 +196,13 @@ subprocess.run(
     cwd=ROOT,
     check=True,
 )
+run("check", str(FABRIC_OPERATION_CONTRACT / "schema.zt"))
+run("check", str(FABRIC_OPERATION_CONTRACT / "gen_rust.zt"))
+subprocess.run(
+    [sys.executable, str(FABRIC_OPERATION_BINDING_GENERATOR), "--check"],
+    cwd=ROOT,
+    check=True,
+)
 run("check", str(INTERFACE_SCHEMA_CONTRACT / "schema.zt"))
 run("check", str(INTERFACE_SCHEMA_CONTRACT / "check.zt"))
 run("check", str(INTERFACE_SCHEMA_CONTRACT / "gen_python.zt"))
@@ -238,5 +249,6 @@ print(
     "Generation source/binary, kernel image, BootState, BootState trace, recovery, "
     "block, component, store, spawn, filesystem, powerbox, generation-management, "
     "transfer, sample-descriptor, interface-schema, fabric-graph, "
-    "capability-transfer, fabric-stream, fabric-qos, fabric-time, and fabric-call contracts passed"
+    "capability-transfer, fabric-stream, fabric-qos, fabric-time, fabric-call, and "
+    "fabric-operation contracts passed"
 )

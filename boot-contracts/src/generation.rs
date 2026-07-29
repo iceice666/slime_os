@@ -9,6 +9,7 @@ pub const MAGIC_V2: [u8; 8] = *b"SLIMEG2\0";
 pub const MAGIC: [u8; 8] = MAGIC_V3;
 /// Retained format-2 version number. `FORMAT_VERSION` (3) is the current one.
 pub const FORMAT_VERSION_V2: u32 = 2;
+const MAX_COMPONENTS_V2: usize = 32;
 include!("generated/generation.rs");
 pub const KIND_KERNEL: u32 = 1;
 pub const KIND_BOOTSTRAP: u32 = 2;
@@ -145,7 +146,12 @@ impl<'a> Generation<'a> {
         }
         let parent_bytes: [u8; 32] = bytes[64..96].try_into().unwrap();
         let object_count = bounded_count(u32_at(bytes, 112)? as usize, 1, MAX_OBJECTS)?;
-        let component_count = bounded_count(u32_at(bytes, 116)? as usize, 1, MAX_COMPONENTS)?;
+        let component_limit = if version == FORMAT_VERSION_V2 {
+            MAX_COMPONENTS_V2
+        } else {
+            MAX_COMPONENTS
+        };
+        let component_count = bounded_count(u32_at(bytes, 116)? as usize, 1, component_limit)?;
         let dependency_count = bounded_count(u32_at(bytes, 120)? as usize, 0, MAX_DEPENDENCIES)?;
         let grant_count = bounded_count(u32_at(bytes, 124)? as usize, 0, MAX_GRANTS)?;
         let state_count = bounded_count(u32_at(bytes, 128)? as usize, 0, MAX_STATES)?;
@@ -791,6 +797,18 @@ mod tests {
         assert_eq!(generation.version, FORMAT_VERSION_V2);
         assert_eq!(generation.grant(0).unwrap().rights, rights);
         assert!(generation.grant(0).unwrap().transferable);
+    }
+
+    #[test]
+    fn retained_v2_keeps_its_component_ceiling() {
+        let mut bytes = build(FORMAT_VERSION_V2, RIGHT_TRANSFER | 1);
+        bytes[116..120].copy_from_slice(&33u32.to_le_bytes());
+        let identity = generation_identity(&bytes);
+        bytes[IDENTITY_OFFSET..IDENTITY_END].copy_from_slice(&identity);
+        assert!(matches!(
+            Generation::decode(&bytes),
+            Err(DecodeError::BadBounds)
+        ));
     }
 
     #[test]

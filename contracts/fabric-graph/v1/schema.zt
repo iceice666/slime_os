@@ -30,13 +30,14 @@ participantEntryBytes :: Int = 128;
 interpositionEntryBytes :: Int = 40;
 
 -- Admitted-set ceilings. `maxSchemas` matches the C8.1 admitted interface set.
--- `maxIngressSources` is the kernel's `SYS_WAIT` source bound: a fabric that
--- cannot register every live wake source would have to poll.
+-- `maxIngressSources` matches the kernel's `SYS_WAIT` source bound. C8.7 uses
+-- the ninth source for the replacement-authenticated operation participant;
+-- a fabric that cannot register every live wake source would have to poll.
 maxSchemas :: Int = 64;
 maxRoutes :: Int = 32;
 maxParticipants :: Int = 32;
 maxInterpositionHops :: Int = 16;
-maxIngressSources :: Int = 8;
+maxIngressSources :: Int = 9;
 
 -- Structural ceilings on the *declared* per-graph limits. A generation names
 -- its own limits, but never above these: the format itself must stay bounded

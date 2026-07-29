@@ -729,6 +729,10 @@ def build_rust_components(
         environment["SLIME_FABRIC_CALL_CHECK"] = "1"
     else:
         environment.pop("SLIME_FABRIC_CALL_CHECK", None)
+    if environment.get("SLIME_FABRIC_OPERATION_CHECK") == "1":
+        environment["SLIME_FABRIC_OPERATION_CHECK"] = "1"
+    else:
+        environment.pop("SLIME_FABRIC_OPERATION_CHECK", None)
     if recovery:
         environment["SLIME_RECOVERY_IMAGE"] = "1"
     if environment.get("SLIME_GENERATION_CMD_CHECK") == "1" and candidate_identity is not None:

@@ -146,6 +146,22 @@ const FABRIC_CALL_TIME_CONTROL_SLOT: u32 = FABRIC_INTRUDER_CONTROL_SLOT;
 const FABRIC_CALL_TIME_SERVICE_SLOT: u32 = FABRIC_INTRUDER_SERVICE_SLOT;
 const FABRIC_CALL_PHASE_TIME_SLOT: u32 = 61;
 const FABRIC_CALL_PHASE_CLIENT_SLOT: u32 = 62;
+// C8.7 reuses the same fabric executable/control pairs as C8.6: the operation
+// gate is a mutually exclusive generation profile, so no capability table grows.
+// The two phase channels are minted at runtime rather than granted.
+const FABRIC_OP_CLIENT_SLOT: u32 = FABRIC_PUBLISHER_SLOT;
+const FABRIC_OP_CLIENT_B_SLOT: u32 = FABRIC_SUBSCRIBER_SLOT;
+const FABRIC_OP_SERVER_SLOT: u32 = FABRIC_INTRUDER_SLOT;
+const FABRIC_OP_TIME_SLOT: u32 = FABRIC_PUBLISHER_B_SLOT;
+const FABRIC_OP_CLIENT_CONTROL_SLOT: u32 = FABRIC_PUBLISHER_CONTROL_SLOT;
+const FABRIC_OP_CLIENT_B_CONTROL_SLOT: u32 = FABRIC_SUBSCRIBER_CONTROL_SLOT;
+const FABRIC_OP_SERVER_CONTROL_SLOT: u32 = FABRIC_PUBLISHER_B_CONTROL_SLOT;
+const FABRIC_OP_TIME_CONTROL_SLOT: u32 = FABRIC_INTRUDER_CONTROL_SLOT;
+const FABRIC_OP_CLIENT_SERVICE_SLOT: u32 = FABRIC_PUBLISHER_SERVICE_SLOT;
+const FABRIC_OP_CLIENT_B_SERVICE_SLOT: u32 = FABRIC_SUBSCRIBER_SERVICE_SLOT;
+const FABRIC_OP_SERVER_SERVICE_SLOT: u32 = FABRIC_PUBLISHER_B_SERVICE_SLOT;
+const FABRIC_OP_TIME_SERVICE_SLOT: u32 = FABRIC_INTRUDER_SERVICE_SLOT;
+const FABRIC_OP_CLIENT_B_RESTART_SLOT: u32 = FABRIC_SUBSCRIBER_B_SLOT;
 
 const POWERBOX_PROBE_CAPS: [SpawnGrant; 1] = [grant(38, RIGHT_SEND | RIGHT_RECV)];
 
@@ -180,6 +196,11 @@ fn main() {
     if option_env!("SLIME_FABRIC_CALL_CHECK") == Some("1") {
         launch_fabric_calls();
         slime_rt::debug_write(b"[init] fabric call complete\n");
+        slime_rt::exit(0);
+    }
+    if option_env!("SLIME_FABRIC_OPERATION_CHECK") == Some("1") {
+        launch_fabric_operations();
+        slime_rt::debug_write(b"[init] fabric operation complete\n");
         slime_rt::exit(0);
     }
     slime_rt::debug_write(b"[init] launching component graph\n");
@@ -267,6 +288,165 @@ fn main() {
     slime_rt::exit(0);
 }
 
+/// Launch the C8.7 operation plane: one fabric brokering two clients and one
+/// server on the declared `navigation` operation route, plus the capability-routed
+/// clock that makes expiry and timeout deterministic.
+///
+/// Init holds no route capability. It mints the control channels, hands the
+/// fabric one service side per participant, and hands each participant only its
+/// own client side — so "which component is asking" is a capability fact
+/// established here at spawn, not a claim in a message. That binding is exactly
+/// what makes the milestone's authority denials hold: client B cannot observe,
+/// retrieve, or cancel client A's operation even knowing its identity, because
+/// its requests arrive on a different endpoint.
+///
+/// **Spawn order is load-bearing.** The fabric starts before any participant so
+/// no goal can arrive before there is a broker to correlate it, and the clock
+/// starts last so no time advance precedes the operations it must expire.
+fn launch_fabric_operations() {
+    for slot in 1..FABRIC_SERVICE_SLOT {
+        let keep = slot == SHARED_BUFFER_FACTORY_SLOT || matches!(slot, 46..=60);
+        if !keep && slime_rt::cap_drop(slot) < 0 {
+            slime_rt::exit(1);
+        }
+    }
+    // Slot 50 carries the replacement client-B executable in generation 15;
+    // keep it until the first participant exits and init performs the restart.
+    let (phase_client, phase_client_b) =
+        slime_rt::endpoint_create(0).unwrap_or_else(|_| slime_rt::exit(1));
+    let (phase_time_client, phase_time_service) =
+        slime_rt::endpoint_create(0).unwrap_or_else(|_| slime_rt::exit(1));
+    let (replacement_control, replacement_service) =
+        slime_rt::endpoint_create(0).unwrap_or_else(|_| slime_rt::exit(1));
+    let (restart_start_send, restart_start_recv) =
+        slime_rt::endpoint_create(0).unwrap_or_else(|_| slime_rt::exit(1));
+    let _service = spawn_fabric_client(
+        FABRIC_SERVICE_SLOT,
+        &[
+            grant(0, RIGHT_ENDPOINT_CREATE),
+            grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
+            grant(FABRIC_OP_CLIENT_SERVICE_SLOT, RIGHT_SEND | RIGHT_RECV),
+            grant(FABRIC_OP_CLIENT_B_SERVICE_SLOT, RIGHT_SEND | RIGHT_RECV),
+            grant(FABRIC_OP_SERVER_SERVICE_SLOT, RIGHT_SEND | RIGHT_RECV),
+            grant(FABRIC_OP_TIME_SERVICE_SLOT, RIGHT_SEND | RIGHT_RECV),
+            grant(replacement_service, RIGHT_SEND | RIGHT_RECV),
+        ],
+        &[FABRIC_SERVICE_SLOT],
+    );
+    let client = spawn_fabric_client(
+        FABRIC_OP_CLIENT_SLOT,
+        &[
+            grant(FABRIC_OP_CLIENT_CONTROL_SLOT, RIGHT_SEND | RIGHT_RECV),
+            grant(phase_client, RIGHT_SEND | RIGHT_RECV),
+            grant(phase_time_client, RIGHT_SEND),
+        ],
+        &[FABRIC_OP_CLIENT_SLOT],
+    );
+    let client_b = spawn_fabric_client(
+        FABRIC_OP_CLIENT_B_SLOT,
+        &[
+            grant(FABRIC_OP_CLIENT_B_CONTROL_SLOT, RIGHT_SEND | RIGHT_RECV),
+            grant(phase_client_b, RIGHT_SEND | RIGHT_RECV),
+        ],
+        &[FABRIC_OP_CLIENT_B_SLOT],
+    );
+    let server = spawn_fabric_client(
+        FABRIC_OP_SERVER_SLOT,
+        &[grant(
+            FABRIC_OP_SERVER_CONTROL_SLOT,
+            RIGHT_SEND | RIGHT_RECV,
+        )],
+        &[FABRIC_OP_SERVER_SLOT],
+    );
+    let _time = spawn_fabric_client(
+        FABRIC_OP_TIME_SLOT,
+        &[
+            grant(FABRIC_OP_TIME_CONTROL_SLOT, RIGHT_SEND | RIGHT_RECV),
+            grant(phase_time_service, RIGHT_RECV),
+        ],
+        &[FABRIC_OP_TIME_SLOT],
+    );
+
+    slime_rt::yield_now();
+    for (control, supervision, direction) in [
+        (
+            FABRIC_OP_CLIENT_CONTROL_SLOT,
+            client.supervision_slot,
+            boot_contracts::fabric_graph::DIRECTION_CLIENT,
+        ),
+        (
+            FABRIC_OP_CLIENT_B_CONTROL_SLOT,
+            client_b.supervision_slot,
+            boot_contracts::fabric_graph::DIRECTION_CLIENT,
+        ),
+        (
+            FABRIC_OP_SERVER_CONTROL_SLOT,
+            server.supervision_slot,
+            boot_contracts::fabric_graph::DIRECTION_SERVER,
+        ),
+    ] {
+        transfer_supervision(control, supervision, direction, operation_route_identity());
+        if control != FABRIC_OP_CLIENT_B_CONTROL_SLOT && slime_rt::cap_drop(control) < 0 {
+            slime_rt::exit(1);
+        }
+    }
+    // The broker owns client B's original supervision handle. Spawn a
+    // replacement immediately on a distinct authenticated control channel;
+    // the replacement's own role request queues behind this supervision
+    // descriptor, while its scenario blocks until the original client signals
+    // that the retained result is ready.
+    let client_b_restart = slime_rt::spawn(
+        FABRIC_OP_CLIENT_B_RESTART_SLOT,
+        &[
+            grant(replacement_control, RIGHT_SEND | RIGHT_RECV),
+            grant(phase_client_b, RIGHT_SEND | RIGHT_RECV),
+            grant(restart_start_recv, RIGHT_RECV),
+        ],
+    )
+    .unwrap_or_else(|error| {
+        slime_rt::debug_write(b"[init] operation restart spawn failed error=");
+        write_i64(error);
+        slime_rt::debug_write(b"\n");
+        slime_rt::exit(1)
+    });
+    slime_rt::debug_write(b"[init] operation replacement spawned\n");
+    transfer_supervision(
+        replacement_control,
+        client_b_restart.supervision_slot,
+        boot_contracts::fabric_graph::DIRECTION_CLIENT,
+        operation_route_identity(),
+    );
+    slime_rt::debug_write(b"[init] operation replacement supervision transferred\n");
+    if slime_rt::cap_drop(FABRIC_OP_CLIENT_B_CONTROL_SLOT) < 0
+        || slime_rt::cap_drop(replacement_control) < 0
+    {
+        slime_rt::exit(1);
+    }
+
+    slime_rt::debug_write(b"[init] operation replacement controls dropped\n");
+    loop {
+        match slime_rt::send(restart_start_send, &[1], &[]) {
+            slime_rt::ERR_SUCCESS => break,
+            slime_rt::ERR_WOULDBLOCK => slime_rt::yield_now(),
+            _ => slime_rt::exit(1),
+        }
+    }
+    for slot in [
+        FABRIC_OP_CLIENT_SERVICE_SLOT,
+        FABRIC_OP_SERVER_SERVICE_SLOT,
+        FABRIC_OP_TIME_SERVICE_SLOT,
+        phase_time_client,
+        phase_time_service,
+        replacement_service,
+        restart_start_send,
+        restart_start_recv,
+    ] {
+        if slime_rt::cap_drop(slot) < 0 {
+            slime_rt::exit(1);
+        }
+    }
+    slime_rt::yield_now();
+}
 fn launch_fabric_calls() {
     // The broker starts first so its supervision handle can name the receiver
     // of every participant's upstream shared payload. Participant supervision
@@ -341,7 +521,7 @@ fn launch_fabric_calls() {
             boot_contracts::fabric_graph::DIRECTION_SERVER,
         ),
     ] {
-        transfer_supervision(control, supervision, direction);
+        transfer_supervision(control, supervision, direction, call_route_identity());
         if slime_rt::cap_drop(control) < 0 {
             slime_rt::exit(1);
         }
@@ -377,7 +557,15 @@ fn launch_fabric_calls() {
     }
 }
 
-fn transfer_supervision(control_slot: u32, supervision_slot: u32, direction: u32) {
+/// Hand the fabric one participant's supervision handle over that participant's
+/// own authenticated control channel.
+///
+/// The descriptor names the exact (route, direction) edge the handle belongs to,
+/// because that is what the broker verifies before accepting it: a handle for
+/// one route may not be replayed as authority on another. `route` therefore has
+/// to be the caller's plane rather than a fixed one — the call and operation
+/// planes both use this path.
+fn transfer_supervision(control_slot: u32, supervision_slot: u32, direction: u32, route: [u8; 32]) {
     let descriptor = slime_proto::capability_transfer::WireCapabilityTransfer {
         magic: slime_proto::capability_transfer::CAPABILITY_TRANSFER_MAGIC,
         version: slime_proto::capability_transfer::FORMAT_VERSION,
@@ -386,11 +574,7 @@ fn transfer_supervision(control_slot: u32, supervision_slot: u32, direction: u32
         object_kind: slime_proto::capability_transfer::OBJECT_KIND_SUPERVISION,
         direction,
         rights_mask: RIGHT_SUPERVISE,
-        route_identity: boot_contracts::fabric_graph::route_identity(
-            "parameters",
-            &slime_proto::interface_schema::parameter_call::INTERFACE_IDENTITY,
-            boot_contracts::fabric_graph::CONTRACT_KIND_CALL,
-        ),
+        route_identity: route,
     };
     loop {
         match slime_rt::cap_transfer(control_slot, supervision_slot, &descriptor.encode()) {
@@ -399,6 +583,25 @@ fn transfer_supervision(control_slot: u32, supervision_slot: u32, direction: u32
             _ => slime_rt::exit(1),
         }
     }
+}
+
+/// The `parameters` call route identity, folded from the admitted C8.1 schema so
+/// it cannot drift from the graph.
+fn call_route_identity() -> [u8; 32] {
+    boot_contracts::fabric_graph::route_identity(
+        "parameters",
+        &slime_proto::interface_schema::parameter_call::INTERFACE_IDENTITY,
+        boot_contracts::fabric_graph::CONTRACT_KIND_CALL,
+    )
+}
+
+/// The `navigation` operation route identity, folded the same way.
+fn operation_route_identity() -> [u8; 32] {
+    boot_contracts::fabric_graph::route_identity(
+        "navigation",
+        &slime_proto::interface_schema::navigation_operation::INTERFACE_IDENTITY,
+        boot_contracts::fabric_graph::CONTRACT_KIND_OPERATION,
+    )
 }
 
 /// Launch the C7.7 sample plane: two real components exchanging a payload

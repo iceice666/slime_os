@@ -16,6 +16,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=SLIME_FABRIC_STREAM_CHECK");
     println!("cargo:rerun-if-env-changed=SLIME_FABRIC_QOS_CHECK");
     println!("cargo:rerun-if-env-changed=SLIME_FABRIC_CALL_CHECK");
+    println!("cargo:rerun-if-env-changed=SLIME_FABRIC_OPERATION_CHECK");
     println!("cargo:rerun-if-env-changed=SLIME_GENERATION_CANDIDATE");
     println!("cargo:rerun-if-env-changed=SLIME_GENERATION_CMD_SCENARIO");
     if let Ok(number) = std::env::var("SLIME_GENERATION_NUMBER") {
@@ -126,6 +127,7 @@ fn generate_fabric_profile(manifest_dir: &str) {
     let manifest = std::fs::read_to_string(&manifest_path).expect("read generation manifest");
     let limits = fabric_limits(&manifest);
     let call_deadline_ns = participants_call_deadline(&manifest, "parameters");
+    let operation_deadline_ns = participants_call_deadline(&manifest, "navigation");
     let participants = fabric_participants(&manifest);
     // The parser is indentation-keyed, so its failure mode is a short table
     // rather than an empty one — and a short table is silent: the fabric denies
@@ -191,30 +193,54 @@ fn generate_fabric_profile(manifest_dir: &str) {
             )
         })
         .collect::<String>();
-    // Control endpoints, in the order init grants them. Derived from the
-    // manifest's `*-control` grants rather than from the participant table:
-    // `fabric-intruder` holds a real control endpoint and appears in no route,
-    // which is exactly the denial C8.3 tests. Reading participants here would
-    // silently drop it and turn that denial into an absent channel.
-    let clients = fabric_control_clients(&manifest);
+    // Control endpoints, in the order init grants them, one set per plane.
+    // Derived from the manifest's `*-control` grants rather than from the
+    // participant table: `fabric-intruder` holds a real control endpoint and
+    // appears in no route, which is exactly the denial C8.3 tests, and each
+    // plane's time service drives a clock from no route at all. Reading
+    // participants here would drop both.
+    let clients = fabric_control_clients(&manifest, Plane::Stream, false);
+    let call_clients = fabric_control_clients(&manifest, Plane::Call, false);
+    let operation_clients = fabric_control_clients(&manifest, Plane::Operation, false);
     assert!(
         !clients.is_empty(),
         "generation manifest declares no fabric control endpoints"
     );
-    // Only stream participants are provisioned by this service, and only they
-    // need a control endpoint. Call and operation routes are C8.6/C8.7 scope:
-    // they are declared in the graph, carried in the table, and skipped at
-    // runtime, so a participant on one is not required to hold a channel here.
-    for (component, _, _, direction) in participants.iter() {
-        if !matches!(direction, 1 | 2) {
-            continue;
-        }
-        assert!(
-            clients.iter().any(|client| client == component),
-            "fabric stream participant {component} has no control endpoint grant"
+    assert!(
+        !call_clients.is_empty(),
+        "generation manifest declares no fabric call control endpoints"
+    );
+    assert!(
+        !operation_clients.is_empty(),
+        "generation manifest declares no fabric operation control endpoints"
+    );
+    // Every route participant needs a control endpoint on its own plane: that
+    // channel is how it asks for its role and how the fabric authenticates it.
+    // Determine the plane from the participant's actual control grant, never
+    // from its component-name spelling.
+    for (component, _, _, _) in participants.iter() {
+        let planes = [Plane::Stream, Plane::Call, Plane::Operation]
+            .into_iter()
+            .filter(|candidate| {
+                fabric_control_clients(&manifest, *candidate, true)
+                    .iter()
+                    .any(|client| client == component)
+            })
+            .count();
+        assert_eq!(
+            planes, 1,
+            "fabric participant {component} must have exactly one control-endpoint plane"
         );
     }
     let client_rows = clients
+        .iter()
+        .map(|component| format!("    b\"{component}\",\n"))
+        .collect::<String>();
+    let call_client_rows = call_clients
+        .iter()
+        .map(|component| format!("    b\"{component}\",\n"))
+        .collect::<String>();
+    let operation_client_rows = operation_clients
         .iter()
         .map(|component| format!("    b\"{component}\",\n"))
         .collect::<String>();
@@ -245,8 +271,24 @@ fn generate_fabric_profile(manifest_dir: &str) {
         limits.in_flight_calls > 0,
         "fabric graph admits no in-flight calls"
     );
+    assert!(
+        limits.in_flight_operations > 0,
+        "fabric graph admits no in-flight operations"
+    );
     assert!(limits.retries > 0, "fabric graph admits no call retries");
+    assert!(
+        limits.retained_samples > 0,
+        "fabric graph admits no retained results"
+    );
+    assert!(
+        limits.event_depth > 0,
+        "fabric graph admits no operation events"
+    );
     assert!(call_deadline_ns > 0, "call route declares no deadline");
+    assert!(
+        operation_deadline_ns > 0,
+        "operation route declares no deadline"
+    );
     let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR"));
     std::fs::write(
         out.join("fabric_profile.rs"),
@@ -275,16 +317,34 @@ fn generate_fabric_profile(manifest_dir: &str) {
              /// when it grants them.\n\
              pub const FABRIC_SUBSCRIBERS: &[&[u8]] = &[\n{subscriber_rows}];\n\
              \n\
-             /// C8.6 bounds taken from the authenticated generation graph.\n\
+             /// Every distinct component holding a fabric *call*-plane control\n\
+             /// endpoint, in the order init grants them. Separate from the stream\n\
+             /// set because the planes are mutually exclusive profiles that each\n\
+             /// grant from `FABRIC_FIRST_CONTROL_SLOT` upward.\n\
+             pub const FABRIC_CALL_CLIENTS: &[&[u8]] = &[\n{call_client_rows}];\n\
+             \n\
+             /// Every distinct component holding a fabric *operation*-plane control\n\
+             /// endpoint, in the order init grants them.\n\
+             pub const FABRIC_OPERATION_CLIENTS: &[&[u8]] = &[\n{operation_client_rows}];\n\
+             \n\
+             /// C8.6/C8.7 bounds taken from the authenticated generation graph.\n\
              pub const FABRIC_MAX_IN_FLIGHT_CALLS: usize = {};\n\
+             pub const FABRIC_MAX_IN_FLIGHT_OPERATIONS: usize = {};\n\
              pub const FABRIC_MAX_RETRIES: u8 = {};\n\
              pub const FABRIC_CALL_DEADLINE_NS: u64 = {};\n\
+             pub const FABRIC_OPERATION_DEADLINE_NS: u64 = {};\n\
+             pub const FABRIC_MAX_RETAINED_SAMPLES: usize = {};\n\
+             pub const FABRIC_MAX_EVENT_DEPTH: usize = {};\n\
              /// The fabric's first control-endpoint slot, shared with init so the\n\
              /// two cannot disagree about the grant order.\n\
              pub const FABRIC_FIRST_CONTROL_SLOT: u32 = {FABRIC_FIRST_CONTROL_SLOT};\n",
             limits.in_flight_calls,
+            limits.in_flight_operations,
             limits.retries,
             call_deadline_ns,
+            operation_deadline_ns,
+            limits.retained_samples,
+            limits.event_depth,
         ),
     )
     .expect("write fabric profile");
@@ -296,27 +356,68 @@ fn generate_fabric_profile(manifest_dir: &str) {
 /// the same number rather than each hard-coding it.
 const FABRIC_FIRST_CONTROL_SLOT: usize = 2;
 
-/// Every component the manifest grants a fabric control endpoint, in manifest
-/// order.
+/// Which fabric plane a control-endpoint grant belongs to.
 ///
-/// Keyed on the `*-control` grant naming `fabric-service` as its target, which
-/// is exactly the set init spawns with a control channel — including
-/// `fabric-intruder`, which holds one and is declared on no route.
-fn fabric_control_clients(manifest: &str) -> Vec<String> {
+/// The three planes are mutually exclusive generation profiles: `init` launches
+/// exactly one of them and grants its control endpoints from
+/// `FABRIC_FIRST_CONTROL_SLOT` upward in the order the plane's own table lists
+/// them. So the planes must be enumerated separately. Folding them into one
+/// table makes a later plane's clients shift an earlier plane's slot numbers,
+/// and `fabric-service::control_clients` turns those numbers into real
+/// receives: the fabric then reads a slot init never granted it, which is
+/// `[fabric] fail: control recv` followed by every participant failing its
+/// provisioning request.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Plane {
+    Stream,
+    Call,
+    Operation,
+}
+
+/// The plane a `fabric-*-control` grant serves, named by the grant itself.
+///
+/// Keyed on the grant name rather than inferred from the participant table,
+/// because the two time services (`fabric-call-time`, `fabric-op-time`) sit on
+/// no route at all — they drive their plane's simulated clock — and so are
+/// indistinguishable from `fabric-intruder` by route membership alone.
+fn control_grant_plane(grant: &str) -> Plane {
+    if grant.starts_with("fabric-call-") {
+        Plane::Call
+    } else if grant.starts_with("fabric-op-") {
+        Plane::Operation
+    } else {
+        Plane::Stream
+    }
+}
+
+/// Every component the manifest grants a control endpoint on one plane, in
+/// manifest order.
+///
+/// `fabric-intruder` is deliberately part of the stream plane: it holds a real
+/// control endpoint and is declared on no route, which is exactly the C8.3
+/// denial under test — the refusal is "no declared edge", not "no channel".
+fn fabric_control_clients(manifest: &str, plane: Plane, include_replacements: bool) -> Vec<String> {
     let mut clients = Vec::new();
     let mut source = None;
-    let mut control_grant = false;
+    let mut grant_plane = None;
+    let mut replacement = false;
     for line in manifest.lines() {
         let trimmed = line.trim_start();
         if let Some(rest) = trimmed.strip_prefix("name = \"") {
-            // A new grant record begins: remember whether it is a control
-            // grant, and drop any source carried over from the previous one.
-            control_grant = rest.starts_with("fabric-") && rest.contains("-control\"");
+            // A new grant record begins: remember which plane it serves, and
+            // drop any source carried over from the previous one. Replacement
+            // controls authenticate a later respawn and are not initial slots.
+            grant_plane = (rest.starts_with("fabric-") && rest.contains("-control\""))
+                .then(|| control_grant_plane(rest));
+            replacement = rest.contains("-restart-control\"");
             source = None;
         } else if let Some(name) = trimmed.strip_prefix("source = \"") {
-            source = control_grant.then(|| name.trim_end_matches("\";").to_owned());
+            source = grant_plane
+                .is_some_and(|candidate| candidate == plane)
+                .then(|| name.trim_end_matches("\";").to_owned());
         } else if trimmed.starts_with("target = \"fabric-service\"")
             && let Some(client) = source.take()
+            && (include_replacements || !replacement)
             && !clients.contains(&client)
         {
             clients.push(client);
@@ -347,10 +448,12 @@ struct FabricQos {
     liveliness: u8,
 }
 
-#[derive(Clone, Copy)]
 struct FabricLimits {
     retries: u8,
     in_flight_calls: usize,
+    in_flight_operations: usize,
+    retained_samples: usize,
+    event_depth: usize,
 }
 
 fn fabric_limits(manifest: &str) -> FabricLimits {
@@ -361,17 +464,39 @@ fn fabric_limits(manifest: &str) -> FabricLimits {
         .expect("fabric graph limits");
     let mut retries = None;
     let mut in_flight_calls = None;
+    let mut in_flight_operations = None;
+    let mut retained_samples = None;
+    let mut event_depth = None;
     for line in limits.lines() {
         let trimmed = line.trim();
         if let Some(value) = trimmed.strip_prefix("retries = ") {
             retries = Some(value.trim_end_matches(';').parse().expect("retries"));
         } else if let Some(value) = trimmed.strip_prefix("inFlightCalls = ") {
             in_flight_calls = Some(value.trim_end_matches(';').parse().expect("inFlightCalls"));
+        } else if let Some(value) = trimmed.strip_prefix("inFlightOperations = ") {
+            in_flight_operations = Some(
+                value
+                    .trim_end_matches(';')
+                    .parse()
+                    .expect("inFlightOperations"),
+            );
+        } else if let Some(value) = trimmed.strip_prefix("retainedSamples = ") {
+            retained_samples = Some(
+                value
+                    .trim_end_matches(';')
+                    .parse()
+                    .expect("retainedSamples"),
+            );
+        } else if let Some(value) = trimmed.strip_prefix("eventDepth = ") {
+            event_depth = Some(value.trim_end_matches(';').parse().expect("eventDepth"));
         }
     }
     FabricLimits {
         retries: retries.expect("fabric graph retries"),
         in_flight_calls: in_flight_calls.expect("fabric graph inFlightCalls"),
+        in_flight_operations: in_flight_operations.expect("fabric graph inFlightOperations"),
+        retained_samples: retained_samples.expect("fabric graph retainedSamples"),
+        event_depth: event_depth.expect("fabric graph eventDepth"),
     }
 }
 

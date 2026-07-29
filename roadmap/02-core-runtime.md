@@ -659,7 +659,7 @@ reclaimed.
 
 ### C8.7 — Native operations
 
-**Status:** Not started.
+**Status:** Complete.
 
 **Depends on:** C8.4 and C8.6.
 

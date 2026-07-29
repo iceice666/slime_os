@@ -176,16 +176,18 @@ fn main() {
 
     publish_large(telemetry_slot, telemetry_credit);
     slime_rt::debug_write(b"[fabric-publisher-b] large sample published\n");
-    for now_ns in [50u64, 100, 200, 300, 400, 500, 600] {
-        advance_time(now_ns);
-        await_time_credit(now_ns);
+    if option_env!("SLIME_FABRIC_QOS_CHECK") == Some("1") {
+        for now_ns in [50u64, 100, 200, 300, 400, 500, 600] {
+            advance_time(now_ns);
+            await_time_credit(now_ns);
+        }
+        slime_rt::debug_write(b"[fabric-publisher-b] simulated time advanced\n");
     }
     publish(
         diagnostics_slot,
         &inline_sample(diagnostics_stream::TYPE_TAG, 2, FLAG_LAST).encode(),
     );
     slime_rt::debug_write(b"[fabric-publisher-b] diagnostics terminal published\n");
-    slime_rt::debug_write(b"[fabric-publisher-b] simulated time advanced\n");
     slime_rt::debug_write(b"[fabric-publisher-b] done\n");
 }
 
@@ -302,6 +304,7 @@ fn inline_sample(type_tag: u64, sequence: u64, flags: u32) -> WireStreamSample {
     for (index, byte) in payload.iter_mut().enumerate() {
         *byte = (sequence as u8).wrapping_mul(3).wrapping_add(index as u8);
     }
+
     WireStreamSample {
         magic: STREAM_SAMPLE_MAGIC,
         version: FORMAT_VERSION,

@@ -5,6 +5,7 @@ pub mod block;
 pub mod capability_transfer;
 pub mod component;
 pub mod fabric_call;
+pub mod fabric_operation;
 pub mod fabric_qos;
 pub mod fabric_stream;
 pub mod fabric_time;
@@ -398,4 +399,78 @@ pub fn valid_call_time_advance(value: &fabric_call::WireCallTimeAdvance) -> bool
         && value.flags == 0
         && value.reserved0 == 0
         && value.reserved.iter().all(|byte| *byte == 0)
+}
+
+/// Structural validity of one C8.7 operation envelope, before it can allocate
+/// an active-operation entry, a feedback slot, or a retained result.
+///
+/// C8.7 composes an operation from a start-goal call, an operation-keyed
+/// feedback stream, a result call, and a cancellation request. Every leg rides
+/// this one record, so the checks are per-kind: a field that means nothing on a
+/// leg must be zero there rather than merely ignored, or a peer could smuggle a
+/// feedback sequence into a cancellation and have it survive into broker state.
+///
+/// Correlation, authority, and duplicate/stale suppression need live broker
+/// state and stay in the fabric; this rejects bytes that are not a well-formed
+/// leg at all. Shared payloads travel as `SampleDescriptor`, never here.
+pub fn valid_operation_envelope(
+    value: &fabric_operation::WireOperationEnvelope,
+    expected_type: u64,
+) -> bool {
+    use fabric_operation::*;
+    if value.magic != OPERATION_MAGIC
+        || value.version != FORMAT_VERSION
+        || value.session == 0
+        || value.operation_id == 0
+        || value.type_identity == 0
+        || value.type_identity != expected_type
+        || value.payload_len as usize > INLINE_BYTES
+        || value.payload[value.payload_len as usize..]
+            .iter()
+            .any(|byte| *byte != 0)
+    {
+        return false;
+    }
+    // Only feedback is ordered within an operation; a sequence anywhere else is
+    // a field the sender had no business setting.
+    if value.kind != KIND_FEEDBACK && value.sequence != 0 {
+        return false;
+    }
+    match value.kind {
+        KIND_GOAL => value.status == STATUS_SUCCESS,
+        // The transport's answer to a goal: refused, running, or winding down.
+        KIND_ACCEPTED => {
+            value.payload_len == 0
+                && matches!(
+                    value.status,
+                    STATUS_SUCCESS | STATUS_REJECTED | STATUS_ACTIVE | STATUS_CANCEL_REQUESTED
+                )
+        }
+        // Feedback is progress, never an outcome, and is numbered from one.
+        KIND_FEEDBACK => value.status == STATUS_ACTIVE && value.sequence != 0,
+        KIND_RESULT => matches!(
+            value.status,
+            STATUS_SUCCESS | STATUS_REJECTED | STATUS_CANCELLED
+        ),
+        KIND_RESULT_REQUEST | KIND_CANCEL => {
+            value.payload_len == 0 && value.status == STATUS_SUCCESS
+        }
+        KIND_TERMINAL => {
+            value.payload_len == 0
+                && matches!(
+                    value.status,
+                    STATUS_SUCCESS
+                        | STATUS_REJECTED
+                        | STATUS_CANCELLED
+                        | STATUS_EXPIRED
+                        | STATUS_TIMEOUT
+                        | STATUS_PEER_DEAD
+                        | STATUS_DUPLICATE
+                        | STATUS_STALE
+                        | STATUS_MALFORMED
+                        | STATUS_RETRY_EXHAUSTED
+                )
+        }
+        _ => false,
+    }
 }

@@ -105,6 +105,19 @@ fabric_call_check: contracts_check generation_check
 fabric_call_gen:
     python3 scripts/generate/generate-fabric-call-bindings.py
 
+# C8.7: generation/session-qualified bounded native operations composed from a
+# start-goal call, an operation-keyed feedback stream, a result call, and a
+# cancellation request. Exact per-role authority, no cross-correlation between
+# concurrent operations, duplicate goals and results suppressed, feedback after
+# terminal state dropped, deterministic cancellation/expiry/timeout from the
+# explicit time capability, and peer death leaving unrelated routes live.
+fabric_operation_check: contracts_check generation_check
+    python3 scripts/generate/generate-fabric-operation-bindings.py --check
+    python3 scripts/check/check-fabric-operation.py
+
+fabric_operation_gen:
+    python3 scripts/generate/generate-fabric-operation-bindings.py
+
 # C7.6: versioned sample descriptor over the C7.5 loan lifecycle; byte-identical
 # binding round-trip, malformed-descriptor rejection before mapping, and a
 # payload larger than MAX_MSG carried over descriptor plus shared buffer.

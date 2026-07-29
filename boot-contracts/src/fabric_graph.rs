@@ -1114,10 +1114,10 @@ mod tests {
         builder
     }
 
-    /// Kernel ceilings the live path passes: SYS_WAIT sources, MAX_CAPS,
-    /// MAX_TOTAL_PAGES, MAX_MAPPINGS, MAX_LOANS, MAX_MSG.
+    /// Kernel ceilings the live path passes: MAX_WAIT_SOURCES, MAX_CAPS,
+    /// MAX_TOTAL_PAGES, MAX_MAPPINGS, MAX_LOANS, and MAX_MSG.
     fn check(graph: &FabricGraph<'_>) -> Result<(), DecodeError> {
-        graph.validate_against(8, 64, 256, 64, 64, 64)
+        graph.validate_against(9, 64, 256, 64, 64, 64)
     }
 
     #[test]
@@ -1487,14 +1487,14 @@ mod tests {
     }
 
     #[test]
-    fn more_than_eight_live_ingress_sources_fails_closed() {
-        // Nine publishers, each a live wake source the fabric must register.
+    fn more_than_nine_live_ingress_sources_fails_closed() {
+        // Ten publishers, each a live wake source the fabric must register.
         let mut builder = Builder::new();
         builder.limits.publishers = 16;
         builder.limits.ingress_sources = MAX_INGRESS_SOURCES as u32;
         let schema = builder.schema([0x11; 32], 0xAAAA, CONTRACT_KIND_STREAM);
         let route = builder.route("telemetry", schema);
-        for index in 0..9 {
+        for index in 0..10 {
             let name = match index {
                 0 => "p0",
                 1 => "p1",
@@ -1504,28 +1504,29 @@ mod tests {
                 5 => "p5",
                 6 => "p6",
                 7 => "p7",
-                _ => "p8",
+                8 => "p8",
+                _ => "p9",
             };
             builder.participant(route, name, DIRECTION_PUBLISH, volatile_qos());
         }
         let bytes = builder.encode();
-        // Structurally admissible; the aggregate arm counts nine live sources
-        // against the eight the graph declared and the kernel can register.
+        // Structurally admissible; the aggregate arm counts ten live sources
+        // against the nine the graph declared and the kernel can register.
         let graph = FabricGraph::decode(&bytes).expect("decodes");
         assert!(matches!(check(&graph), Err(DecodeError::Impossible)));
 
-        // Eight is the boundary and passes.
+        // Nine is the boundary and passes.
         let mut builder = Builder::new();
         builder.limits.publishers = 16;
-        builder.limits.ingress_sources = 8;
+        builder.limits.ingress_sources = MAX_INGRESS_SOURCES as u32;
         let schema = builder.schema([0x11; 32], 0xAAAA, CONTRACT_KIND_STREAM);
         let route = builder.route("telemetry", schema);
-        for name in ["p0", "p1", "p2", "p3", "p4", "p5", "p6", "p7"] {
+        for name in ["p0", "p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8"] {
             builder.participant(route, name, DIRECTION_PUBLISH, volatile_qos());
         }
         let bytes = builder.encode();
         let graph = FabricGraph::decode(&bytes).expect("decodes");
-        check(&graph).expect("eight sources is admissible");
+        check(&graph).expect("nine sources is admissible");
     }
 
     #[test]

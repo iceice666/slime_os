@@ -46,6 +46,11 @@
     { id = "sha256:fabric-call-client-b"; kind = "component"; size = 65536; };
     { id = "sha256:fabric-call-server"; kind = "component"; size = 65536; };
     { id = "sha256:fabric-call-time"; kind = "component"; size = 32768; };
+    { id = "sha256:fabric-op-client"; kind = "component"; size = 65536; };
+    { id = "sha256:fabric-op-client-b"; kind = "component"; size = 65536; };
+    { id = "sha256:fabric-op-client-b-restart"; kind = "component"; size = 65536; };
+    { id = "sha256:fabric-op-server"; kind = "component"; size = 65536; };
+    { id = "sha256:fabric-op-time"; kind = "component"; size = 32768; };
     { id = "shared-buffer-budget"; kind = "resource"; size = 4096; };
     { id = "fabric-graph"; kind = "resource"; size = 4096; };
   ];
@@ -67,10 +72,10 @@
     fabricComponent = "fabric-service";
     limits = {
       routes = 8;
-      ingressSources = 5;
+      ingressSources = 9;
       publishers = 3;
       subscribers = 3;
-      clients = 2;
+      clients = 6;
       servers = 2;
       sampleBytes = 65536;
       queueDepth = 8;
@@ -142,7 +147,7 @@
             reliability = "bestEffort";
             durability = "volatile";
             liveliness = "automatic";
-            historyDepth = 2;
+            historyDepth = 4;
             retainedDepth = 0;
             deadlineNs = 0;
             lifespanNs = 0;
@@ -229,6 +234,88 @@
             deadlineNs = 1000000;
             lifespanNs = 2000000;
             leaseNs = 5000000;
+          };
+        ];
+      };
+      {
+        name = "navigation";
+        interface = "NavigationOperation";
+        participants = [
+          {
+            component = "fabric-op-client";
+            direction = "client";
+            visibility = "private";
+            interposition = [];
+            reliability = "reliable";
+            durability = "volatile";
+            liveliness = "automatic";
+            historyDepth = 4;
+            retainedDepth = 0;
+            deadlineNs = 1000000;
+            lifespanNs = 2000000;
+            leaseNs = 0;
+          };
+          {
+            component = "fabric-op-client-b";
+            direction = "client";
+            visibility = "private";
+            interposition = [];
+            reliability = "reliable";
+            durability = "volatile";
+            liveliness = "automatic";
+            historyDepth = 4;
+            retainedDepth = 0;
+            deadlineNs = 1000000;
+            lifespanNs = 2000000;
+            leaseNs = 0;
+          };
+          {
+            component = "fabric-op-client-b-restart";
+            direction = "client";
+            visibility = "private";
+            interposition = [];
+            reliability = "reliable";
+            durability = "volatile";
+            liveliness = "automatic";
+            historyDepth = 4;
+            retainedDepth = 0;
+            deadlineNs = 1000000;
+            lifespanNs = 2000000;
+            leaseNs = 0;
+          };
+          {
+            component = "fabric-op-server";
+            direction = "server";
+            visibility = "private";
+            interposition = [];
+            reliability = "reliable";
+            durability = "volatile";
+            liveliness = "manual";
+            historyDepth = 4;
+            retainedDepth = 0;
+            deadlineNs = 1000000;
+            lifespanNs = 2000000;
+            leaseNs = 5000000;
+          };
+        ];
+      };
+      {
+        name = "navigation-backup";
+        interface = "NavigationOperation";
+        participants = [
+          {
+            component = "fabric-op-client";
+            direction = "client";
+            visibility = "private";
+            interposition = [];
+            reliability = "reliable";
+            durability = "volatile";
+            liveliness = "automatic";
+            historyDepth = 4;
+            retainedDepth = 0;
+            deadlineNs = 1000000;
+            lifespanNs = 2000000;
+            leaseNs = 0;
           };
         ];
       };
@@ -488,6 +575,46 @@
     {
       name = "fabric-call-time";
       object = "sha256:fabric-call-time";
+      role = "service";
+      dependencies = ["fabric-service";];
+      spawnBudget = 0;
+      commandProfile = [];
+    };
+    {
+      name = "fabric-op-client";
+      object = "sha256:fabric-op-client";
+      role = "application";
+      dependencies = ["fabric-service";];
+      spawnBudget = 0;
+      commandProfile = [];
+    };
+    {
+      name = "fabric-op-client-b";
+      object = "sha256:fabric-op-client-b";
+      role = "application";
+      dependencies = ["fabric-service";];
+      spawnBudget = 0;
+      commandProfile = [];
+    };
+    {
+      name = "fabric-op-client-b-restart";
+      object = "sha256:fabric-op-client-b-restart";
+      role = "application";
+      dependencies = ["fabric-service";];
+      spawnBudget = 0;
+      commandProfile = [];
+    };
+    {
+      name = "fabric-op-server";
+      object = "sha256:fabric-op-server";
+      role = "application";
+      dependencies = ["fabric-service";];
+      spawnBudget = 0;
+      commandProfile = [];
+    };
+    {
+      name = "fabric-op-time";
+      object = "sha256:fabric-op-time";
       role = "service";
       dependencies = ["fabric-service";];
       spawnBudget = 0;
@@ -808,6 +935,41 @@
     {
       name = "fabric-call-time-control";
       source = "fabric-call-time";
+      target = "fabric-service";
+      rights = ["send"; "recv";];
+      transferable = false;
+    };
+    {
+      name = "fabric-op-client-control";
+      source = "fabric-op-client";
+      target = "fabric-service";
+      rights = ["send"; "recv";];
+      transferable = false;
+    };
+    {
+      name = "fabric-op-client-b-control";
+      source = "fabric-op-client-b";
+      target = "fabric-service";
+      rights = ["send"; "recv";];
+      transferable = false;
+    };
+    {
+      name = "fabric-op-client-b-restart-control";
+      source = "fabric-op-client-b-restart";
+      target = "fabric-service";
+      rights = ["send"; "recv";];
+      transferable = false;
+    };
+    {
+      name = "fabric-op-server-control";
+      source = "fabric-op-server";
+      target = "fabric-service";
+      rights = ["send"; "recv";];
+      transferable = false;
+    };
+    {
+      name = "fabric-op-time-control";
+      source = "fabric-op-time";
       target = "fabric-service";
       rights = ["send"; "recv";];
       transferable = false;
