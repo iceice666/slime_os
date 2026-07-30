@@ -1,5 +1,8 @@
 #![no_main]
 #![no_std]
+// Stage-0 must never panic: a panic here bricks the boot path before any
+// rollback machinery exists. Every fallible step must return a BootError.
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 extern crate alloc;
 
@@ -74,8 +77,14 @@ fn boot() -> Result<(), BootError> {
 
     let store = read_file(BOOT_STORE_PATH)?;
     let directory = decode_directory(&store)?;
-    let slot_a: &[u8; 512] = store[..512].try_into().unwrap();
-    let slot_b: &[u8; 512] = store[512..1024].try_into().unwrap();
+    let slot_a: &[u8; 512] = store
+        .get(..512)
+        .and_then(|slice| slice.try_into().ok())
+        .ok_or(BootError::Truncated)?;
+    let slot_b: &[u8; 512] = store
+        .get(512..1024)
+        .and_then(|slice| slice.try_into().ok())
+        .ok_or(BootError::Truncated)?;
     let mut selected_state = select_bootstate_for_directory(slot_a, slot_b, &directory)?;
     let selection_state = selected_state.state;
     let running_pending =
@@ -143,9 +152,10 @@ fn boot() -> Result<(), BootError> {
     )?;
     if confirmation_pending {
         let before = selected_state.state;
+        let pending = before.pending.ok_or(BootError::NoValidBootState)?;
         selected_state.state = selected_state
             .state
-            .promote_pending(before.pending.unwrap(), release_sequence)
+            .promote_pending(pending, release_sequence)
             .map_err(|_| BootError::NoValidBootState)?;
         let target = match selected_state.slot {
             Slot::A => Slot::B,

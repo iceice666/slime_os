@@ -1,4 +1,8 @@
 #![no_std]
+// Stage-0 must never panic: a panic here bricks the boot path before any
+// rollback machinery exists. Every fallible step must return a BootError.
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![deny(clippy::indexing_slicing)]
 
 use boot_contracts::bootstate::{BootState, SLOT_BYTES, SLOT_COUNT};
 use boot_contracts::generation::{Generation, generation_identity};
@@ -77,7 +81,7 @@ impl<'a> BootDirectory<'a> {
             return Err(BootError::BadDirectoryBounds);
         }
         let offset = self.entry_offset + index * BOOTSTORE_ENTRY_LEN;
-        let identity: [u8; 32] = self.bytes[offset..offset + 32].try_into().unwrap();
+        let identity: [u8; 32] = *array32_at(self.bytes, offset)?;
         let start = u64_at(
             self.bytes,
             offset + BOOTSTORE_ENTRY_GENERATION_OFFSET_OFFSET,
@@ -86,13 +90,15 @@ impl<'a> BootDirectory<'a> {
         let release_start =
             u64_at(self.bytes, offset + BOOTSTORE_ENTRY_RELEASE_OFFSET_OFFSET)? as usize;
         let release_len = u64_at(self.bytes, offset + BOOTSTORE_ENTRY_RELEASE_LEN_OFFSET)? as usize;
-        if self.bytes[offset + BOOTSTORE_ENTRY_PADDING_OFFSET..offset + BOOTSTORE_ENTRY_LEN]
-            .iter()
-            .any(|byte| *byte != 0)
+        let padding = self
+            .bytes
+            .get(offset + BOOTSTORE_ENTRY_PADDING_OFFSET..offset + BOOTSTORE_ENTRY_LEN)
+            .ok_or(BootError::Truncated)?;
+        if padding.iter().any(|byte| *byte != 0)
             || start < BOOTSTORE_GENERATIONS_OFFSET
-            || start % 4096 != 0
+            || !start.is_multiple_of(4096)
             || release_start < BOOTSTORE_RELEASES_OFFSET
-            || release_start % RELEASE_BYTES != 0
+            || !release_start.is_multiple_of(RELEASE_BYTES)
             || release_len != RELEASE_BYTES
         {
             return Err(BootError::BadDirectoryBounds);
@@ -129,7 +135,7 @@ pub fn decode_directory(bytes: &[u8]) -> Result<BootDirectory<'_>, BootError> {
     let header = bytes
         .get(BOOTSTORE_DIRECTORY_OFFSET..BOOTSTORE_DIRECTORY_OFFSET + BOOTSTORE_HEADER_LEN)
         .ok_or(BootError::Truncated)?;
-    if header[..8] != BOOTSTORE_MAGIC {
+    if *header.get(..8).ok_or(BootError::Truncated)? != BOOTSTORE_MAGIC {
         return Err(BootError::BadDirectoryMagic);
     }
     if u32_at(header, BOOTSTORE_HEADER_FORMAT_VERSION_OFFSET)? != BOOTSTORE_VERSION
@@ -149,17 +155,22 @@ pub fn decode_directory(bytes: &[u8]) -> Result<BootDirectory<'_>, BootError> {
     {
         return Err(BootError::BadDirectoryBounds);
     }
-    let expected: [u8; 32] = header
-        [BOOTSTORE_HEADER_CHECKSUM_OFFSET..BOOTSTORE_HEADER_CHECKSUM_END]
-        .try_into()
-        .unwrap();
+    let expected: [u8; 32] = *array32_at(header, BOOTSTORE_HEADER_CHECKSUM_OFFSET)?;
     let mut hasher = Sha256::new();
     hasher.update(
-        &bytes[SLOT_BYTES * SLOT_COUNT
-            ..BOOTSTORE_DIRECTORY_OFFSET + BOOTSTORE_HEADER_CHECKSUM_OFFSET],
+        bytes
+            .get(
+                SLOT_BYTES * SLOT_COUNT
+                    ..BOOTSTORE_DIRECTORY_OFFSET + BOOTSTORE_HEADER_CHECKSUM_OFFSET,
+            )
+            .ok_or(BootError::Truncated)?,
     );
     hasher.update(&[0u8; 32]);
-    hasher.update(&bytes[BOOTSTORE_DIRECTORY_OFFSET + BOOTSTORE_HEADER_CHECKSUM_END..]);
+    hasher.update(
+        bytes
+            .get(BOOTSTORE_DIRECTORY_OFFSET + BOOTSTORE_HEADER_CHECKSUM_END..)
+            .ok_or(BootError::Truncated)?,
+    );
     if hasher.finalize() != expected {
         return Err(BootError::BadDirectoryHash);
     }
@@ -325,21 +336,24 @@ pub fn verify_kernel<'a>(generation: &Generation<'a>) -> Result<KernelImage<'a>,
 }
 
 fn u32_at(bytes: &[u8], offset: usize) -> Result<u32, BootError> {
-    Ok(u32::from_le_bytes(
-        bytes
-            .get(offset..offset + 4)
-            .ok_or(BootError::Truncated)?
-            .try_into()
-            .unwrap(),
-    ))
+    let bytes: &[u8; 4] = bytes
+        .get(offset..offset + 4)
+        .and_then(|slice| slice.try_into().ok())
+        .ok_or(BootError::Truncated)?;
+    Ok(u32::from_le_bytes(*bytes))
 }
 
 fn u64_at(bytes: &[u8], offset: usize) -> Result<u64, BootError> {
-    Ok(u64::from_le_bytes(
-        bytes
-            .get(offset..offset + 8)
-            .ok_or(BootError::Truncated)?
-            .try_into()
-            .unwrap(),
-    ))
+    let bytes: &[u8; 8] = bytes
+        .get(offset..offset + 8)
+        .and_then(|slice| slice.try_into().ok())
+        .ok_or(BootError::Truncated)?;
+    Ok(u64::from_le_bytes(*bytes))
+}
+
+fn array32_at(bytes: &[u8], offset: usize) -> Result<&[u8; 32], BootError> {
+    bytes
+        .get(offset..offset + 32)
+        .and_then(|slice| slice.try_into().ok())
+        .ok_or(BootError::Truncated)
 }
