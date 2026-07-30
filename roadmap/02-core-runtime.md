@@ -1,6 +1,6 @@
 # Core runtime track
 
-**Status:** C7 complete; its two blocking audit findings are resolved. A 2026-07-26 audit of C7.1–C7.7 found a C7.5 full-graph boot wedge (backlog B3) and a shared-buffer plane that was dormant on the live boot path (backlog B4); both are fixed, and every gate — including `just transfer_check`, `just spawn_service_check`, and `just dango_check` — is green. The live boot now declares a real per-holder budget, mints the factory through generation grants, and two components prove their quotas at startup. Remaining C7 debt is evidence and hygiene, not capability: B5 (no test drives the syscall layer; C7.7 composes owner ids rather than tasks), B6, B7, and B8 in `roadmap/00-backlog.md`. C8 may open. See `devlog/2026-07-26-c7-audit/`, `devlog/2026-07-26-b3-shared-buffer-table-stack-overflow/`, and `devlog/2026-07-26-b4-live-shared-buffer-budget/`.
+**Status:** C7 and C8.1–C8.8 are complete under their named QEMU gates; the backlog is clear. The original C8.9 full-graph close was too broad for one reviewable slice and is now decomposed into C8.9–C8.15: typed profile closure, collision-free topology, deterministic time/traces, the authority matrix, concurrent resource ceilings, fault isolation, and the final aggregate gate. C9 remains blocked on the completed C8 parent plus P1; C10 may proceed independently.
 
 This track turns the existing bounded channels, capabilities, components, and generations into a native typed communication runtime. It is local-first: C7 and C8 require no network or physical driver, and they do not wait for unrelated display, audio, wireless, or GPU work.
 
@@ -26,7 +26,7 @@ ROS 2 compatibility in [`03-ros2-compatibility.md`](03-ros2-compatibility.md) is
 4. C10 consumes C7's per-holder quota and accounting pattern only. It does not consume C8 or C9 and may proceed in parallel with the remaining fabric slices.
 5. H2 consumes C7's generation-v3/shared-buffer foundation and P1's extracted architecture/platform boundary for userspace drivers.
 6. ROS R1 consumes C8 and H6 networking; it does not block C9 and its initial wire-conformance gate does not require a non-x86 boot.
-omp --resume 019fa694-98d1-7000-93b1-e54ee0f898fd
+
 ## C7: Bounded resource and shared-sample plane
 
 **Status:** Complete. Decomposed into C7.1–C7.7 so each slice introduces one primary state surface and owns an independently reviewable QEMU check, mirroring the M5/M6 sub-slice convention. Every gate passes, including the full-graph boot checks. The 2026-07-26 audit reopened this gate on three findings, all now resolved: C7.5's boot wedge (backlog B3), the dormant live-path shared-buffer plane (backlog B4), and the absence of any syscall-level or real-component evidence (backlog B5). A built generation carries a digest-authenticated `shared-buffer-budget/v1` resource; `bootstrap` mints a `SharedBufferFactory` and validates its generation grants; `dango` and `spawn-service` boot with distinct non-`DENY` quotas; and `sample-lender`/`sample-receiver` move a `>MAX_MSG` payload through the real `SYS_SHARED_BUFFER_*` syscalls under `just sample_plane_live_check`. Residual debt is narrow and recorded rather than open: `SYS_SHARED_BUFFER_REVOKE` has no live caller, and the two insert-failure rollback paths are uncovered. Evidence: `devlog/2026-07-26-c7-audit/`, `devlog/2026-07-26-b3-shared-buffer-table-stack-overflow/`, `devlog/2026-07-26-b4-live-shared-buffer-budget/`, `devlog/2026-07-26-b5-live-sample-plane/`.
@@ -241,14 +241,14 @@ Two isolated components exchange and return a payload larger than the kernel IPC
 
 ## C8: Native typed data fabric
 
-**Status:** In progress. Decomposed into C8.1–C8.9. C8.1 (deterministic
-interface schemas and native bindings), C8.2 (authenticated fabric-graph
-resource with per-entry and aggregate admission), C8.3 (attenuated endpoint
-provisioning and the live control plane), and C8.4 (bounded many-to-many
-streams) are complete and gated by `just interface_schema_check`, `just
-fabric_manifest_check`, `just fabric_authority_check`, and `just
-fabric_stream_check`. C8.5–C8.9 remain planned contracts and gates, not
-implemented capability.
+**Status:** In progress. C8.1–C8.8 are complete and gated by `just
+interface_schema_check`, `just fabric_manifest_check`, `just
+fabric_authority_check`, `just fabric_stream_check`, `just fabric_qos_check`,
+`just fabric_call_check`, `just fabric_operation_check`, and `just
+fabric_visibility_check`. The former single C8.9 integration slice is
+decomposed into C8.9–C8.15 so profile authority, topology, deterministic
+tracing, denial, resource ceilings, fault isolation, and the parent close each
+own one reviewable gate.
 
 **Depends on:** C7's bounded sample plane and backlog item **B2** (scheduler
 `Blocked` state / `SYS_WAIT` wait-set). Both are complete. C8 remains
@@ -293,11 +293,18 @@ portability work continues.
 3. C8.3 supplies attenuated capability handoff and the live fabric control
    plane. Complete.
 4. C8.4 establishes bounded streams; C8.5 adds reliable, retained, and timed
-   QoS.
+   QoS. Complete.
 5. C8.6 establishes calls; C8.7 composes calls and streams into operations.
-6. C8.8 adds filtered introspection and declared interposition.
-7. C8.9 closes the parent milestone with the full QEMU graph, fault, denial,
-   and determinism corpus.
+   Complete.
+6. C8.8 adds filtered introspection and declared interposition. Complete.
+7. C8.9 closes the typed full-profile and resource-bound contract.
+8. C8.10 establishes a collision-free full-graph bootstrap and bounded route
+   workers.
+9. C8.11 unifies simulated time and versioned semantic traces.
+10. C8.12 executes the complete matching, visibility, and denial matrix.
+11. C8.13 proves concurrent cross-plane traffic and every resource ceiling.
+12. C8.14 proves degradation and fault isolation.
+13. C8.15 owns the repeated-boot determinism corpus and closes C8.
 
 ### C8.1 — Deterministic interface schemas and native bindings
 
@@ -744,42 +751,293 @@ Read-only graph views reveal exactly the caller's visibility grant, and every
 declared interposer occupies the only authorized route path with no ambient
 discovery, bypass, or widened proxy authority.
 
-### C8.9 — Full-graph integration, determinism, and fault isolation
+### C8.9 — Typed full-profile and resource-bound closure
 
 **Status:** Not started.
 
-**Depends on:** C8.5–C8.8.
+**Depends on:** C8.2, C8.7, and C8.8. C8.7 is named explicitly because
+`inFlightOperations`, `retainedSamples`, and `eventDepth` are graph limits its
+broker consumes, so operation ceilings cannot be proven satisfiable without it.
 
 #### Deliverables
 
-- compose isolated native publishers, subscribers, call clients/servers,
-  operation participants, an unauthorized probe, a stalled subscriber, a
-  filtered introspection client, and an interposed route in one
-  generation-declared graph;
-- exercise inline and shared samples, compatible and incompatible endpoints,
-  KEEP_LAST, BEST_EFFORT, RELIABLE, retained durability, timed QoS, calls,
-  operations, visibility, interposition, denial, and participant faults;
-- capture normalized schema artifacts and bounded IPC/event trace records for a
-  fixed graph, input, and simulated-time sequence;
-- prove every route, queue, history, retry, retained sample, event, in-flight
-  request/operation, shared-buffer, mapping, and loan ceiling under normal,
-  stalled, malformed, denied, and peer-death paths.
+- formalize the existing generation profile and shared-buffer-budget fields in
+  the generation schema instead of accepting load-bearing undeclared fields;
+- resolve one named full-graph profile once and derive both authenticated graph
+  bytes and the userspace build profile from that resolved value, with no
+  independent text/indentation interpretation of route authority;
+- emit every fabric limit consumed by later slices, including queue depth,
+  sample bytes, buffers, mappings, loans, and capability slots, and reject a
+  graph whose declared limits cannot be satisfied by its fabric-holder quota,
+  kernel channel bound, or generated capability layout;
+- preserve admitted normalized interface bytes in deterministic schema-identity
+  order as the schema artifact consumed by the final corpus.
 
 #### Required checks
 
-- publishers and subscribers match only when name, full type identity, contract
-  kind, and requested/offered QoS are compatible;
-- an ungranted component cannot create, discover, publish, subscribe, call,
-  serve, operate, cancel, retrieve, or inspect the protected route;
-- alternate names with the same type and conflicting types with the same name
-  do not alias matching, visibility, or authority;
+- malformed, duplicate, unknown, or ambiguous profile records fail before an
+  artifact is built;
+- Python graph encoding and Rust userspace profile generation consume one
+  canonical resolved graph and produce matching route, participant, QoS,
+  visibility, interposition, and limit tables;
+- queue, shared-buffer, mapping, loan, and capability declarations that are
+  individually legal but mutually unsatisfiable are rejected before launch;
+- the same source produces byte-identical resolved graph and normalized schema
+  artifacts.
+
+#### Planned verification target
+
+```sh
+just data_fabric_profile_check
+```
+
+#### Exit condition
+
+One typed generation source deterministically fixes the full fabric profile,
+normalized schemas, runtime tables, and satisfiable resource ceilings; host,
+kernel, and userspace cannot select or interpret different graph authority.
+
+### C8.10 — Collision-free full-graph bootstrap and bounded route workers
+
+**Status:** Not started.
+
+**Depends on:** C8.9.
+
+#### Deliverables
+
+- replace the mutually exclusive stream, call, operation, and visibility slot
+  overlays with one collision-free fabric-only bootstrap layout under the
+  kernel capability-table ceiling;
+- launch distinct stream participants, call participants, operation
+  participants, an unauthorized probe, a filtered-introspection client, and a
+  declared interposition proxy in one generation;
+- split the fabric into generation-declared bounded route workers or an
+  equivalent scheduler shape so every worker registers all live wake sources
+  within `SYS_WAIT` limits and never polls;
+- bind every control, supervision, time, and route role to one exact component
+  identity and release bootstrap-only capabilities immediately after spawn.
+
+#### Required checks
+
+- all declared participants launch and provision concurrently without a reused
+  executable, control endpoint, service endpoint, or child slot;
+- the bootstrap and every worker stay within their declared capability and wait
+  source ceilings at peak provisioning;
+- the proxy, unauthorized probe, and introspection client are distinct tasks
+  with non-overlapping grants;
+- the fully provisioned graph reaches healthy blocked idle with no traffic,
+  polling, ambient lookup, or profile-dependent slot rewrite.
+
+#### Planned verification target
+
+```sh
+just data_fabric_boot_check
+```
+
+#### Exit condition
+
+One generation boots every C8 role simultaneously through collision-free,
+bounded capability layouts, and each route worker can block on all of its
+declared sources without polling or exceeding kernel limits.
+
+### C8.11 — Unified simulated time and deterministic semantic traces
+
+**Status:** Not started.
+
+**Depends on:** C8.10.
+
+#### Deliverables
+
+- define a versioned Zutai semantic-trace contract for bounded schema, route,
+  QoS, call, operation, visibility, interposition, denial, fault, and resource
+  records, with generated native bindings and validators;
+- route one phase-driven simulated-time sequence to all timed fabric workers and
+  define a total tie order across data, acknowledgement, peer death, and time;
+- record only bounded semantic fields — route/grant identity, correlation,
+  sequence, status/event, simulated time, and resource high-water counts — with
+  no task ids, addresses, capabilities, or scheduler-dependent prose;
+- provide a bounded trace sink whose capacity and overflow behavior are fixed by
+  the generation profile.
+
+#### Required checks
+
+- every trace family round-trips byte-identically and rejects malformed,
+  over-bound, reserved-bit, and unknown-kind records;
+- two workers receiving equal-time data, acknowledgement, fault, and clock
+  inputs emit the declared deterministic order;
+- a full trace sink neither grows nor silently drops mandatory terminal records;
+- identical schemas, graph, inputs, and time sequence produce byte-identical
+  schema and semantic-trace artifacts independent of serial-log interleaving.
+
+#### Planned verification target
+
+```sh
+just data_fabric_trace_check
+```
+
+#### Exit condition
+
+All C8 planes share one explicit simulated clock and one bounded, versioned,
+deterministic semantic evidence stream suitable for the final repeated-boot
+comparison.
+
+### C8.12 — Integrated matching, visibility, and denial matrix
+
+**Status:** Not started.
+
+**Depends on:** C8.10 and C8.11.
+
+#### Deliverables
+
+- add generation-declared compatible and incompatible endpoint pairs covering
+  exact name, full interface identity, contract kind, and offered/requested QoS;
+- add alternate-name/same-type and same-name/conflicting-type cases that remain
+  distinct in matching, route authority, and filtered visibility;
+- make one ungranted probe attempt create, discover, publish, subscribe, call,
+  serve, operate, cancel, retrieve, and inspect operations without receiving a
+  capability or protected metadata;
+- run filtered introspection and the declared interposition chain concurrently
+  with ordinary stream traffic, using the distinct proxy identity from C8.10.
+
+#### Required checks
+
+- only the exact compatible tuple matches and receives a role; every mismatch
+  emits its declared non-match or incompatible-QoS event without authority;
+- alternate names and conflicting types never alias in route identity, graph
+  views, events, or endpoint provisioning;
+- every unauthorized operation returns a graph-independent denial with zero
+  rights, zero capabilities, and no protected names, identities, counts, or
+  event detail;
+- the proxy holds only its declared chain roles, the direct bypass is absent,
+  and read-only visibility never becomes a path to route authority.
+
+#### Planned verification target
+
+```sh
+just data_fabric_matrix_check
+```
+
+#### Exit condition
+
+The simultaneous graph matches only exact authorized contracts; mismatched and
+ungranted callers acquire neither route authority nor protected visibility, and
+declared interposition remains the only route path.
+
+### C8.13 — Concurrent cross-plane traffic and resource ceilings
+
+**Status:** Not started.
+
+**Depends on:** C8.11 and C8.12.
+
+#### Deliverables
+
+- run inline and shared streams, KEEP_LAST, BEST_EFFORT, RELIABLE, retained and
+  timed QoS, calls, and operations concurrently under one fixed input schedule;
+- account and emit bounded high-water and baseline records for every route,
+  queue, history, retry, retained sample, event, in-flight call/operation,
+  shared buffer, mapping, loan, and capability ceiling;
+- keep the fabric holder's declared shared-buffer quota sufficient for
+  simultaneous stream copies, downstream loans, and shared call/operation
+  payloads;
+- reclaim every correlation, retained result, frame, buffer, mapping, loan, and
+  endpoint on ordinary terminal paths.
+
+#### Required checks
+
+- each declared resource reaches an observable bounded high-water mark without
+  exceeding its manifest ceiling and returns to its declared post-scenario
+  baseline;
+- one large stream sample still incurs one fabric copy and one receiver-bound
+  loan per matched subscriber while shared call and operation payloads coexist;
+- concurrent traffic on one route class never consumes another class's declared
+  queue, history, in-flight, retained, buffer, mapping, or loan allowance;
+- saturating every declared ceiling at once neither exceeds a manifest bound nor
+  deadlocks a route worker.
+
+#### Planned verification target
+
+```sh
+just data_fabric_traffic_check
+```
+
+#### Exit condition
+
+All C8 transport classes carry concurrent bounded traffic through one fabric
+while every declared resource stays inside its manifest ceiling and returns to
+its declared baseline.
+
+### C8.14 — Degradation and fault isolation
+
+**Status:** Not started.
+
+**Depends on:** C8.13.
+
+#### Deliverables
+
+- exercise stalled, malformed, denied, retry-exhausted, cancelled, rejected,
+  expired, timed-out, participant-death, server-death, and proxy-death paths
+  against the concurrent graph;
+- keep every unaffected stream, call, and operation route observably
+  progressing during and after each injected fault;
+- settle every in-flight correlation, retained result, loan, mapping, buffer,
+  endpoint, and route-worker capability on peer-loss and terminal fault paths;
+- keep each degradation and terminal condition a distinct semantic record.
+
+#### Required checks
+
+- a stalled subscriber, backpressured call client, full operation table, or
+  faulting proxy cannot starve or terminate another stream, call, operation,
+  the fabric service, or the kernel;
 - deadline, lifespan, liveliness loss, incompatible QoS, loss, expiry, retry
-  exhaustion, timeout, cancellation, rejection, and peer death remain
-  distinguishable;
-- one participant or proxy may stall or fault without exceeding any manifest
-  bound or terminating another route, the fabric service, or the kernel;
-- the same graph, input, and simulated-time sequence produces byte-identical
-  normalized schema artifacts and deterministic IPC/event trace records.
+  exhaustion, timeout, cancellation, rejection, malformed input, and peer death
+  remain distinct semantic records;
+- every fault path returns each declared resource to its baseline without
+  leaking a capability, loan, mapping, buffer, or correlation entry;
+- no injected fault leaves a route worker parked on a dead source, polling, or
+  waiting without a bound.
+
+#### Planned verification target
+
+```sh
+just data_fabric_fault_check
+```
+
+#### Exit condition
+
+Every declared degradation and fault path stays bounded, distinguishable, and
+fully reclaimed, and no participant or proxy failure disrupts an unrelated route
+class, the fabric service, or the kernel.
+
+### C8.15 — Full-graph determinism and parent close
+
+**Status:** Not started.
+
+**Depends on:** C8.9–C8.14.
+
+#### Deliverables
+
+- compose the final generation-declared graph and fixed normal, denial, stall,
+  malformed-input, and peer/proxy-fault schedules from the preceding slices;
+- run the identical graph, input, and simulated-time sequence repeatedly and
+  compare normalized schema artifacts and bounded semantic traces byte for
+  byte;
+- retain the narrow C8.9–C8.14 gates and add one aggregate QEMU gate that
+  exercises the complete parent exit condition without relying on separate
+  profile boots;
+- audit the final authority, resource, and fault corpus against every C8
+  deliverable before closing the parent milestone.
+
+#### Required checks
+
+- repeated normal runs produce byte-identical schema and semantic-trace
+  artifacts with exact record counts and declared causal order;
+- every fault variant terminates within its bound, records the expected
+  distinct outcome, restores resource baselines, and preserves unrelated route
+  completion markers in the same boot;
+- no legacy mutually exclusive profile, slot overlay, alternate graph parser,
+  prose-only deterministic claim, or unbounded state remains in the aggregate
+  path;
+- all C8.1–C8.14 regression gates remain clean.
 
 #### Planned verification target
 
@@ -787,13 +1045,14 @@ discovery, bypass, or widened proxy authority.
 just data_fabric_check
 ```
 
-### Exit condition
+#### Exit condition
 
 A generation-declared graph of isolated native publishers, subscribers, service
-clients/servers, and operation participants exchanges bounded typed data under
-explicit QoS and graph grants; denied graph edges are neither usable nor
-visible, incompatible endpoints do not match, and a stalled or faulting
-participant cannot exceed its quota or disrupt unrelated routes.
+clients/servers, operation participants, introspection clients, and declared
+proxies exchanges bounded typed data under explicit QoS and graph grants;
+denied and incompatible edges are neither usable nor visible, every resource
+and fault path stays bounded and isolated, and identical inputs produce
+byte-identical normalized schemas and semantic traces.
 
 ## C9: Robot runtime authority
 

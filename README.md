@@ -2,7 +2,7 @@
 
 Slime OS is an experimental atomic personal operating system built from a new kernel and userspace rather than on Linux. Its purpose is to explore capability-based isolation, component-oriented system services, explicit resource authority, and generation-based deployment while progressing toward a system usable on one real daily-driver laptop.
 
-The project is currently a QEMU-verified Rust `no_std` kernel and native userspace component system, plus an observed removable-media boot on the Framework 13 AMD AI 300 target. The QEMU paths cover isolation, typed capability IPC, durable virtio storage, an integrity-checked object store, rollbackable generations, signed release metadata, recovery, native Dango, generation management, powerbox selection, and generation transfer. Framework storage-aware physical evidence, daily-driver hardware, the native typed data fabric, ROS 2 interoperability, and the in-system native development path remain open.
+The project is currently a QEMU-verified Rust `no_std` kernel and native userspace component system, plus an observed removable-media boot on the Framework 13 AMD AI 300 target. The QEMU paths cover isolation, typed capability IPC, durable virtio storage, an integrity-checked object store, rollbackable generations, signed release metadata, recovery, native Dango, generation management, powerbox selection, generation transfer, and the native typed-data-fabric slices through filtered introspection and declared interposition. Framework storage-aware physical evidence, daily-driver hardware, full-graph fabric integration, ROS 2 interoperability, and the in-system native development path remain open.
 
 ## Current status
 
@@ -12,7 +12,7 @@ The project is currently a QEMU-verified Rust `no_std` kernel and native userspa
 - M5 remains open only on M5.7 physical evidence: its NVMe transport and QEMU checks pass, but the storage-aware removable-media slice has not yet been recorded on Framework. Internal-NVMe writes remain disabled.
 - M6.1–M6.7 are complete: manifest-driven spawn, directory capabilities, native Dango, generation commands, powerbox selection, and generation transfer run through explicit capabilities.
 - The Hardware H1 evidence harness is implemented and QEMU-verified; its physical Framework inventory record is pending. H2–H14 are not implemented.
-- Core C7 is complete; C8–C9 and ROS R1–R3 are planned userspace/runtime tracks. ROS 2 is a bounded compatibility profile over native Slime contracts, not a kernel ABI.
+- Core C7 and C8.1–C8.8 are complete; C8.9–C8.15 now sequence the full-graph integration close, while C9 and ROS R1–R3 remain planned userspace/runtime tracks. ROS 2 is a bounded compatibility profile over native Slime contracts, not a kernel ABI.
 - Native development D1–D7 is planned: in-system authoring, a direct component-image language backend, hermetic builds, ephemeral execution, transactional live component cutover, authorized on-device generations, and full-generation reproduction are not yet implemented.
 
 ## Vision
