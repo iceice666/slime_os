@@ -1,0 +1,30 @@
+# Spell-check config — `just typos`.
+
+[files]
+extend-exclude = [
+    "deps/",
+    "target/",
+    ".direnv/",
+    # Raw transcripts are frozen evidence; never edit them for spelling.
+    "devlog/*/transcript.txt",
+    "devlog/*/*.txt",
+]
+
+[default.extend-words]
+# x86 Interrupt Stack Table
+ist = "ist"
+# ELF relocation-with-addend sections (.rela.dyn, SHT_RELA)
+rela = "rela"
+# High Definition Audio
+hda = "hda"
+# ACPI OEM table id fixture, deliberately 8 bytes
+inventry = "inventry"
+# Common hex byte in fixtures
+ba = "ba"
+# "mis" prefix in identifiers
+mis = "mis"
+ot = "ot"
+nd = "nd"
+scap = "scap"
+ded = "ded"
+bui = "bui"

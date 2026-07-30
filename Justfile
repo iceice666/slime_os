@@ -421,6 +421,39 @@ lint_boot_contracts:
 # Every crate's clippy gate: kernel, components, stage0, boot-contracts.
 lint_all: lint lint_components lint_stage0 lint_boot_contracts
 
+# Dependency advisories (RUSTSEC), duplicate/wildcard bans, license
+# allowlist, and source pinning. Config in deny.toml.
+deny:
+    cargo-deny check
+
+# Unused-dependency scan; scoped to workspace crates so submodules under
+# deps/ (zutai, dango) do not pollute the result.
+machete:
+    cargo-machete boot-contracts components kernel stage0
+
+# UB check for the host-testable crates. boot-contracts covers the
+# verified-boot decode/crypto path; slime-proto covers wire validation.
+# kernel/stage0 are QEMU-only and cannot run under Miri.
+miri:
+    cd boot-contracts && cargo miri test --all-features --target x86_64-unknown-linux-gnu
+    cd components && cargo miri test --target x86_64-unknown-linux-gnu -p slime-proto
+
+# Host-side unit tests for the crates that do not need QEMU.
+test_host:
+    cd boot-contracts && cargo test --all-features
+    cd components && cargo test --target x86_64-unknown-linux-gnu -p slime-proto
+
+# Python lint for the host-side build/check/generate scripts. Config in ruff.toml.
+ruff:
+    ruff check scripts/
+
+ruff_fix:
+    ruff check scripts/ --fix
+
+# Spell-check sources and docs. Config in _typos.toml.
+typos:
+    typos
+
 # Advisory-only lints with known existing hits (missing SAFETY comments,
 # lossy casts). Not part of `lint_all`; burn the backlog down module by
 # module, then promote a lint into [workspace.lints.clippy] once clean.

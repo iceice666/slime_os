@@ -34,6 +34,10 @@
               OVMF
               mtools
               dosfstools
+              cargo-deny
+              cargo-machete
+              ruff
+              typos
             ];
 
             OVMF_CODE = "${pkgs.OVMF.fd}/FV/OVMF_CODE.fd";
@@ -45,7 +49,7 @@
               rustup toolchain install ${rustToolchain} \
                 --profile minimal \
                 --target x86_64-unknown-none,x86_64-unknown-uefi \
-                --component clippy,rustfmt,llvm-tools-preview,rust-src \
+                --component clippy,rustfmt,llvm-tools-preview,rust-src,miri \
                 --no-self-update
             '';
           };
