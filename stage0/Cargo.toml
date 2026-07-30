@@ -7,6 +7,14 @@ publish = false
 [dependencies]
 boot-contracts = { path = "../boot-contracts", features = ["release-crypto"] }
 uefi = { version = "0.39.0", features = ["alloc", "global_allocator", "panic_handler", "qemu"] }
+# Not imported directly: forces the force-soft feature onto the sha2 that
+# ed25519-dalek pulls in transitively. Without it, sha2's SIMD path hits an
+# LLVM "Do not know how to split the result of this operator" crash on
+# x86_64-unknown-uefi dev builds.
+sha2 = { version = "0.10.9", default-features = false, features = ["force-soft"] }
+
+[package.metadata.cargo-machete]
+ignored = ["sha2"]
 
 [lib]
 doctest = false
