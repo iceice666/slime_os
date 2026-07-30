@@ -279,6 +279,21 @@ fmt_components:
 fmt_check_components:
     cd components && cargo fmt -p slime-rt -p slime-proto -p slime-components -- --check
 
+fmt_stage0:
+    cd stage0 && cargo fmt
+
+fmt_check_stage0:
+    cd stage0 && cargo fmt -- --check
+
+fmt_boot_contracts:
+    cd boot-contracts && cargo fmt
+
+fmt_check_boot_contracts:
+    cd boot-contracts && cargo fmt -- --check
+
+# Every crate's format gate, mirroring lint_all.
+fmt_check_all: fmt_check fmt_check_components fmt_check_stage0 fmt_check_boot_contracts
+
 # Regenerate Rust block protocol bindings from the Zutai schema.
 block_gen:
     python3 scripts/generate/generate-block-bindings.py
@@ -396,6 +411,26 @@ lint:
 
 lint_fix:
     cd kernel && cargo clippy -p slime_os-kernel --fix --all-features --allow-dirty
+
+lint_stage0:
+    cd stage0 && cargo clippy --target x86_64-unknown-uefi -- -D warnings
+
+lint_boot_contracts:
+    cd boot-contracts && cargo clippy --all-features -- -D warnings
+
+# Every crate's clippy gate: kernel, components, stage0, boot-contracts.
+lint_all: lint lint_components lint_stage0 lint_boot_contracts
+
+# Advisory-only lints with known existing hits (missing SAFETY comments,
+# lossy casts). Not part of `lint_all`; burn the backlog down module by
+# module, then promote a lint into [workspace.lints.clippy] once clean.
+lint_pedantic:
+    cd kernel && cargo clippy -p slime_os-kernel --all-features -- \
+        -W clippy::undocumented_unsafe_blocks \
+        -W clippy::cast_possible_truncation \
+        -W clippy::cast_sign_loss \
+        -W clippy::cast_possible_wrap \
+        -W clippy::arithmetic_side_effects
 
 # components/ is no_std bare-metal with no test harness (like the kernel, it
 # is QEMU-verified rather than cargo-test-verified), so --all-targets is

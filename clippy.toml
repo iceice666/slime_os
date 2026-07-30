@@ -1,0 +1,5 @@
+too-many-arguments-threshold = 8
+cognitive-complexity-threshold = 30
+disallowed-methods = [
+    { path = "core::mem::forget", reason = "breaks capability/shared-buffer accounting invariants; use the explicit release/revoke path" },
+]

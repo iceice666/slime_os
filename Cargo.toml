@@ -9,6 +9,16 @@ members = [
     "stage0",
 ]
 
+# Inherited by every member via `[lints] workspace = true`. Only lints the
+# tree already passes belong here — `just lint` denies all warnings, so any
+# addition with existing hits breaks the lint gate. Advisory-only lints
+# (undocumented unsafe, cast truncation) run through `just lint_pedantic`.
+[workspace.lints.clippy]
+mem_forget = "deny"
+todo = "deny"
+dbg_macro = "deny"
+disallowed_methods = "deny"
+
 [profile.dev]
 panic = "abort"
 

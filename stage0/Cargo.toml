@@ -24,3 +24,6 @@ name = "slime-stage0"
 path = "src/main.rs"
 test = false
 
+
+[lints]
+workspace = true

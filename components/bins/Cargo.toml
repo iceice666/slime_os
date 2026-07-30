@@ -2,6 +2,7 @@
 name = "slime-components"
 version = "0.1.0"
 edition = "2024"
+publish = false
 rust-version = "1.96"
 build = "build.rs"
 autobins = false
@@ -210,3 +211,6 @@ test = false
 name = "sysinfo"
 path = "src/bin/sysinfo.rs"
 test = false
+
+[lints]
+workspace = true
