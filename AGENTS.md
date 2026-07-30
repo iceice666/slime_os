@@ -65,8 +65,15 @@ Use the Justfile targets from the repository root:
 - `just generation_check` — build and validate the deterministic generation binary.
 - `just contracts_check` — validate generation manifest contracts.
 - `just devlog_check` — validate devlog structure, front matter, and links.
-- `just fmt_check` — check Rust formatting.
-- `just lint` — run clippy with warnings denied.
+- `just fmt_check_all` — check Rust formatting for every workspace crate.
+- `just lint_all` — run clippy with warnings denied for every workspace crate (kernel, components, stage0, boot-contracts).
+- `just lint_pedantic` — advisory-only clippy pass (missing SAFETY comments, lossy casts); has known existing hits and is not a gate.
+- `just deny` — dependency advisories, bans, licenses, and source pinning (deny.toml).
+- `just machete` — unused-dependency scan of workspace crates.
+- `just miri` — UB check of host-testable crates (boot-contracts, slime-proto).
+- `just test_host` — host-side unit tests for boot-contracts and slime-proto.
+- `just ruff` — Python lint for `scripts/` (ruff.toml).
+- `just typos` — spell-check sources and docs (_typos.toml).
 
 ## Backlog before roadmap
 
@@ -92,5 +99,6 @@ Every entry is a folder `devlog/YYYY-MM-DD-short-topic/` holding a curated `inde
 
 - For kernel or userspace behavior changes, run the narrowest QEMU path that exercises the changed behavior.
 - For generation-format or builder changes, run `just contracts_check` and `just generation_check`.
-- For permanent Rust changes, run `just fmt_check` and `just lint` before finishing (or the `_components` variants for changes under `components/`).
+- For permanent Rust changes, run `just fmt_check_all` and `just lint_all` before finishing (or the narrower per-crate variants for scoped changes).
+- Stage-0 denies `clippy::unwrap_used`, `clippy::expect_used`, `clippy::panic`, and `clippy::indexing_slicing` at the crate level; every fallible step there must return a `BootError`.
 - For documentation-only changes, state that no runtime tests were run.
