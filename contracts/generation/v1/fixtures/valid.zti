@@ -60,7 +60,7 @@
     { holder = "spawn-service"; bytePages = 4; bufferCount = 1; mappingCount = 2; loanCount = 1; };
     { holder = "sample-lender"; bytePages = 4; bufferCount = 1; mappingCount = 2; loanCount = 1; };
     { holder = "sample-receiver"; bytePages = 2; bufferCount = 1; mappingCount = 2; loanCount = 1; };
-    { holder = "fabric-service"; bytePages = 12; bufferCount = 8; mappingCount = 12; loanCount = 8; };
+    { holder = "fabric-service"; bytePages = 28; bufferCount = 14; mappingCount = 14; loanCount = 14; };
     { holder = "fabric-publisher-b"; bytePages = 4; bufferCount = 1; mappingCount = 2; loanCount = 1; };
     { holder = "fabric-subscriber"; bytePages = 4; bufferCount = 0; mappingCount = 4; loanCount = 0; };
     { holder = "fabric-call-client"; bytePages = 2; bufferCount = 1; mappingCount = 2; loanCount = 1; };
@@ -77,7 +77,7 @@
       subscribers = 3;
       clients = 6;
       servers = 2;
-      sampleBytes = 65536;
+      sampleBytes = 8192;
       queueDepth = 8;
       historyDepth = 8;
       eventDepth = 8;
@@ -85,10 +85,11 @@
       retries = 4;
       inFlightCalls = 4;
       inFlightOperations = 4;
-      bufferPages = 8;
-      mappings = 8;
-      loans = 8;
-      capabilitySlots = 32;
+      bufferPages = 28;
+      buffers = 14;
+      mappings = 14;
+      loans = 14;
+      capabilitySlots = 48;
     };
     routes = [
       {
@@ -321,6 +322,10 @@
       };
     ];
     profiles = [
+      {
+        name = "default";
+        interpositions = [];
+      };
       {
         name = "visibility";
         interpositions = [

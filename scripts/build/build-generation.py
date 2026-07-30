@@ -58,15 +58,18 @@ from boot_contracts import (
     FABRIC_GRAPH_KERNEL_LOANS,
     FABRIC_GRAPH_KERNEL_MAPPINGS,
     FABRIC_GRAPH_KERNEL_TOTAL_PAGES,
+    FABRIC_GRAPH_KERNEL_SHARED_BUFFERS,
     FABRIC_GRAPH_LIMIT_CAPABILITY_SLOTS,
     FABRIC_GRAPH_LIMIT_EVENT_DEPTH,
     FABRIC_GRAPH_LIMIT_HISTORY_DEPTH,
     FABRIC_GRAPH_LIMIT_IN_FLIGHT,
+    FABRIC_GRAPH_LIMIT_BUFFERS,
     FABRIC_GRAPH_LIMIT_QUEUE_DEPTH,
     FABRIC_GRAPH_LIMIT_RETAINED_SAMPLES,
     FABRIC_GRAPH_LIMIT_RETRIES,
     FABRIC_GRAPH_LIMIT_SAMPLE_BYTES,
     FABRIC_GRAPH_MAGIC,
+    FABRIC_GRAPH_CHANNEL_QUEUE_DEPTH,
     FABRIC_GRAPH_PARTICIPANT_ENTRY,
     FABRIC_GRAPH_ROUTE_ENTRY,
     FABRIC_GRAPH_SCHEMA_ENTRY,
@@ -124,6 +127,13 @@ from boot_contracts import (
     SHARED_BUFFER_BUDGET_MAGIC,
     SHARED_BUFFER_BUDGET_VERSION,
     MAX_SHARED_BUFFER_BUDGET_HOLDERS,
+    MAX_NORMALIZED_SCHEMAS,
+    MAX_NORMALIZED_SCHEMAS_ARTIFACT_BYTES,
+    NORMALIZED_SCHEMAS_ENTRY,
+    NORMALIZED_SCHEMAS_HEADER,
+    NORMALIZED_SCHEMAS_HEADER_BYTES,
+    NORMALIZED_SCHEMAS_MAGIC,
+    NORMALIZED_SCHEMAS_VERSION,
     SEGMENT_EXEC,
     SEGMENT_WRITE,
     bootstate_checksum,
@@ -192,6 +202,39 @@ IMAGE_BASE = 0x400000
 MAX_COMPONENT_IMAGE_BYTES = 16 * 1024 * 1024
 MAX_STACK_BYTES = 1024 * 1024
 DEFAULT_STACK_BYTES = 16384
+DEFAULT_FABRIC_PROFILE = "default"
+VISIBILITY_FABRIC_PROFILE = "visibility"
+FABRIC_FIRST_CONTROL_SLOT = 2
+FABRIC_COPY_PAGES = 2
+FABRIC_FRAME_CAPACITY = 32
+FABRIC_STREAM_CONTROL_GRANTS = (
+    "fabric-publisher-control",
+    "fabric-subscriber-control",
+    "fabric-intruder-control",
+    "fabric-publisher-b-control",
+    "fabric-subscriber-b-control",
+)
+FABRIC_CALL_CONTROL_GRANTS = (
+    "fabric-call-client-control",
+    "fabric-call-client-b-control",
+    "fabric-call-server-control",
+    "fabric-call-time-control",
+)
+FABRIC_OPERATION_CONTROL_GRANTS = (
+    "fabric-op-client-control",
+    "fabric-op-client-b-control",
+    "fabric-op-server-control",
+    "fabric-op-time-control",
+)
+FABRIC_OPERATION_REPLACEMENT_GRANTS = ("fabric-op-client-b-restart-control",)
+
+
+class ResolvedFabricProfile:
+    def __init__(self, graph: dict, artifact: dict, schemas: list, graph_bytes: bytes):
+        self.graph = graph
+        self.artifact = artifact
+        self.schemas = schemas
+        self.graph_bytes = graph_bytes
 
 
 def fail(message: str) -> None:
@@ -291,6 +334,38 @@ def build_shared_buffer_budget(holders: list[dict]) -> bytes:
     )
     return header + b"".join(SHARED_BUFFER_BUDGET_ENTRY.pack(*entry) for entry in entries)
 
+def validated_shared_buffer_quotas(holders: list[dict]) -> dict[str, dict]:
+    if len(holders) > MAX_SHARED_BUFFER_BUDGET_HOLDERS:
+        fail("shared-buffer budget exceeds holder bound")
+    by_name: dict[str, dict] = {}
+    totals = {"bytePages": 0, "bufferCount": 0, "mappingCount": 0, "loanCount": 0}
+    ceilings = {
+        "bytePages": FABRIC_GRAPH_KERNEL_TOTAL_PAGES,
+        "bufferCount": FABRIC_GRAPH_KERNEL_SHARED_BUFFERS,
+        "mappingCount": FABRIC_GRAPH_KERNEL_MAPPINGS,
+        "loanCount": FABRIC_GRAPH_KERNEL_LOANS,
+    }
+    for holder in holders:
+        name = holder["holder"]
+        if name in by_name:
+            fail(f"shared-buffer budget: duplicate holder {name}")
+        for key, ceiling in ceilings.items():
+            value = holder[key]
+            if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= ceiling:
+                fail(f"shared-buffer budget: invalid {key} for {name}")
+            totals[key] += value
+        if holder["bufferCount"] > holder["bytePages"]:
+            fail(f"shared-buffer budget: {name} buffers exceed its page quota")
+        if holder["mappingCount"] > holder["bytePages"]:
+            fail(f"shared-buffer budget: {name} mappings exceed its page quota")
+        if holder["loanCount"] > holder["bufferCount"]:
+            fail(f"shared-buffer budget: {name} loans exceed its buffer quota")
+        by_name[name] = holder
+    for key, ceiling in ceilings.items():
+        if totals[key] > ceiling:
+            fail(f"shared-buffer budget: aggregate {key} exceeds the kernel ceiling")
+    return by_name
+
 
 FABRIC_CONTRACT_KIND = {
     "stream": FABRIC_CONTRACT_KIND_STREAM,
@@ -343,6 +418,7 @@ FABRIC_LIMIT_KEYS = (
     "inFlightCalls",
     "inFlightOperations",
     "bufferPages",
+    "buffers",
     "mappings",
     "loans",
     "capabilitySlots",
@@ -369,6 +445,7 @@ FABRIC_LIMIT_CEILINGS = {
     "inFlightCalls": FABRIC_GRAPH_LIMIT_IN_FLIGHT,
     "inFlightOperations": FABRIC_GRAPH_LIMIT_IN_FLIGHT,
     "capabilitySlots": FABRIC_GRAPH_LIMIT_CAPABILITY_SLOTS,
+    "buffers": FABRIC_GRAPH_LIMIT_BUFFERS,
     "bufferPages": FABRIC_GRAPH_KERNEL_TOTAL_PAGES,
     "mappings": FABRIC_GRAPH_KERNEL_MAPPINGS,
     "loans": FABRIC_GRAPH_KERNEL_LOANS,
@@ -415,6 +492,364 @@ def validate_fabric_qos(member: dict, limits: dict, label: str) -> None:
     if (member["liveliness"] == "manual") == (lease == 0):
         fail(f"fabric graph: {label} liveliness and lease disagree")
 
+def selected_profile_name() -> str:
+    explicit = os.environ.get("SLIME_FABRIC_PROFILE") or None
+    visibility = os.environ.get("SLIME_FABRIC_VISIBILITY_CHECK") == "1"
+    legacy_modes = any(
+        os.environ.get(name) == "1"
+        for name in (
+            "SLIME_FABRIC_QOS_CHECK",
+            "SLIME_FABRIC_CALL_CHECK",
+            "SLIME_FABRIC_OPERATION_CHECK",
+        )
+    )
+    legacy = VISIBILITY_FABRIC_PROFILE if visibility else DEFAULT_FABRIC_PROFILE if legacy_modes else None
+    if explicit is not None and legacy is not None and explicit != legacy:
+        fail("fabric graph: ambiguous selected profile")
+    return explicit or legacy or DEFAULT_FABRIC_PROFILE
+
+def _control_sources(manifest: dict, grant_names: tuple[str, ...]) -> list[str]:
+    controls_by_name = [
+        grant
+        for grant in manifest["grants"]
+        if grant["name"] in grant_names
+    ]
+    grants = {grant["name"]: grant for grant in controls_by_name}
+    if len(grants) != len(controls_by_name):
+        fail("fabric graph: duplicate control grant name")
+    controls = []
+    for name in grant_names:
+        grant = grants.get(name)
+        if grant is None or grant["target"] != "fabric-service" or grant["rights"] != ["send", "recv"]:
+            fail(f"fabric graph: invalid control grant {name}")
+        controls.append(grant["source"])
+    if len(set(controls)) != len(controls):
+        fail("fabric graph: duplicate control source")
+    return controls
+
+
+def resolve_fabric_graph(graph: dict, profile_name: str) -> dict:
+    profiles = graph.get("profiles", [])
+    names = [profile.get("name") for profile in profiles]
+    if len(names) != len(set(names)):
+        fail("fabric graph: duplicate profile name")
+    matches = [profile for profile in profiles if profile.get("name") == profile_name]
+    if len(matches) != 1:
+        fail(f"fabric graph: expected exactly one {profile_name} profile")
+    resolved = copy.deepcopy(graph)
+    resolved.pop("profiles", None)
+    seen: set[tuple[str, str]] = set()
+    for override in matches[0]["interpositions"]:
+        target = (override["route"], override["participant"])
+        if target in seen:
+            fail("fabric graph: duplicate profile override")
+        seen.add(target)
+        matches = [
+            member
+            for route in resolved["routes"]
+            if route["name"] == target[0]
+            for member in route["participants"]
+            if member["component"] == target[1]
+        ]
+        if len(matches) != 1:
+            fail(
+                "fabric graph: profile interposition must name exactly one "
+                f"participant ({target[1]} on {target[0]})"
+            )
+        chain = override["chain"]
+        if not isinstance(chain, list) or not chain:
+            fail("fabric graph: profile interposition chain must be non-empty")
+        matches[0]["interposition"] = chain
+    return resolved
+
+
+def build_normalized_schema_artifact(schemas: list) -> bytes:
+    if len(schemas) > MAX_NORMALIZED_SCHEMAS:
+        fail("normalized schema artifact exceeds the schema bound")
+    records = bytearray()
+    payload = bytearray()
+    for interface in schemas:
+        records += NORMALIZED_SCHEMAS_ENTRY.pack(
+            interface.identity, len(interface.normalized), 0
+        )
+        payload += interface.normalized
+    total_len = NORMALIZED_SCHEMAS_HEADER_BYTES + len(records) + len(payload)
+    if total_len > MAX_NORMALIZED_SCHEMAS_ARTIFACT_BYTES:
+        fail("normalized schema artifact exceeds its byte bound")
+    return NORMALIZED_SCHEMAS_HEADER.pack(
+        NORMALIZED_SCHEMAS_MAGIC,
+        NORMALIZED_SCHEMAS_VERSION,
+        NORMALIZED_SCHEMAS_HEADER_BYTES,
+        0,
+        len(schemas),
+        total_len,
+    ) + records + payload
+
+
+def resolve_fabric_profile(manifest: dict, interfaces: list, profile_name: str) -> ResolvedFabricProfile:
+    graph = resolve_fabric_graph(manifest["fabricGraph"], profile_name)
+    component_names = {component["name"] for component in manifest["components"]}
+    graph_bytes = build_fabric_graph(graph, component_names, interfaces)
+    by_interface = {interface.name: interface for interface in interfaces}
+    used_schemas = {route["interface"]: by_interface[route["interface"]] for route in graph["routes"]}
+    schemas = sorted(used_schemas.values(), key=lambda interface: interface.identity)
+    route_rows = sorted(
+        (
+            fabric_route_identity(
+                route["name"],
+                by_interface[route["interface"]].identity,
+                FABRIC_CONTRACT_KIND[by_interface[route["interface"]].kind],
+            ),
+            route,
+        )
+        for route in graph["routes"]
+    )
+    stream_controls = _control_sources(manifest, FABRIC_STREAM_CONTROL_GRANTS)
+    call_controls = _control_sources(manifest, FABRIC_CALL_CONTROL_GRANTS)
+    operation_controls = _control_sources(manifest, FABRIC_OPERATION_CONTROL_GRANTS)
+    replacement_controls = _control_sources(manifest, FABRIC_OPERATION_REPLACEMENT_GRANTS)
+    participants = []
+    for _route_identity, route in route_rows:
+        interface = by_interface[route["interface"]]
+        for member in route["participants"]:
+            participants.append(
+                {
+                    "component": member["component"],
+                    "route": route["name"],
+                    "interface": interface.name,
+                    "direction": FABRIC_DIRECTION[member["direction"]],
+                    "visibility": FABRIC_VISIBILITY[member["visibility"]],
+                    "reliability": FABRIC_RELIABILITY[member["reliability"]],
+                    "durability": FABRIC_DURABILITY[member["durability"]],
+                    "liveliness": FABRIC_LIVELINESS[member["liveliness"]],
+                    "historyDepth": member["historyDepth"],
+                    "retainedDepth": member["retainedDepth"],
+                    "deadlineNs": member["deadlineNs"],
+                    "lifespanNs": member["lifespanNs"],
+                    "leaseNs": member["leaseNs"],
+                    "interposition": member["interposition"],
+                }
+            )
+    subscriber_components = {
+        participant["component"]
+        for participant in participants
+        if participant["direction"] == FABRIC_DIRECTION_SUBSCRIBE
+    }
+    subscribers = [component for component in stream_controls if component in subscriber_components]
+    supervision = [
+        {"component": component, "slot": FABRIC_FIRST_CONTROL_SLOT + len(stream_controls) + index}
+        for index, component in enumerate(subscribers)
+    ]
+    retained_route_endpoints = max(
+        len(stream_controls) * 2 + len(subscribers),
+        len(call_controls),
+        len(operation_controls) + len(replacement_controls),
+    )
+    required_capability_slots = FABRIC_FIRST_CONTROL_SLOT + retained_route_endpoints + graph["limits"]["buffers"]
+    artifact = {
+        "formatVersion": 1,
+        "name": profile_name,
+        "fabricComponent": graph["fabricComponent"],
+        "firstControlSlot": FABRIC_FIRST_CONTROL_SLOT,
+        "copyPages": FABRIC_COPY_PAGES,
+        "frameCapacity": FABRIC_FRAME_CAPACITY,
+        "requiredCapabilitySlots": required_capability_slots,
+        "limits": [{"name": key, "value": graph["limits"][key]} for key in FABRIC_LIMIT_KEYS],
+        "schemas": [
+            {
+                "name": interface.name,
+                "identity": interface.identity.hex(),
+                "typeTag": f"{interface.type_tag:016x}",
+                "contractKind": FABRIC_CONTRACT_KIND[interface.kind],
+                "maxEncodedBytes": interface.max_encoded_bytes,
+            }
+            for interface in schemas
+        ],
+        "routes": [
+            {
+                "name": route["name"],
+                "interface": route["interface"],
+                "identity": identity.hex(),
+                "contractKind": FABRIC_CONTRACT_KIND[by_interface[route["interface"]].kind],
+            }
+            for identity, route in route_rows
+        ],
+        "participants": participants,
+        "planes": [
+            {"name": "stream", "controls": [{"component": component, "slot": FABRIC_FIRST_CONTROL_SLOT + index} for index, component in enumerate(stream_controls)]},
+            {"name": "call", "controls": [{"component": component, "slot": FABRIC_FIRST_CONTROL_SLOT + index} for index, component in enumerate(call_controls)]},
+            {"name": "operation", "controls": [{"component": component, "slot": FABRIC_FIRST_CONTROL_SLOT + index} for index, component in enumerate(operation_controls)]},
+            {"name": "operationReplacement", "controls": [{"component": component, "slot": FABRIC_FIRST_CONTROL_SLOT + len(operation_controls) + index} for index, component in enumerate(replacement_controls)]},
+        ],
+        "supervision": supervision,
+    }
+    quotas = validated_shared_buffer_quotas(manifest["sharedBufferBudget"])
+    quota = quotas.get(graph["fabricComponent"])
+    if quota is None:
+        fail("fabric graph: fabric holder has no shared-buffer quota")
+    limits = graph["limits"]
+    for limit, quota_key in (
+        ("bufferPages", "bytePages"),
+        ("buffers", "bufferCount"),
+        ("mappings", "mappingCount"),
+        ("loans", "loanCount"),
+    ):
+        if limits[limit] > quota[quota_key]:
+            fail(f"fabric graph: {limit} exceeds the fabric holder quota")
+    sample_pages = (limits["sampleBytes"] + PAGE_SIZE - 1) // PAGE_SIZE
+    if sample_pages > FABRIC_COPY_PAGES:
+        fail("fabric graph: sampleBytes exceeds the generated copy layout")
+    ring_capacity = sum(
+        participant["historyDepth"]
+        for participant in participants
+        if participant["direction"] == FABRIC_DIRECTION_SUBSCRIBE
+    )
+    if ring_capacity > FABRIC_FRAME_CAPACITY:
+        fail("fabric graph: subscriber history exceeds the frame table")
+    if limits["eventDepth"] % 2 != 0 or limits["eventDepth"] < 2:
+        fail("fabric graph: operation event depth is not evenly allocatable")
+    if required_capability_slots > limits["capabilitySlots"]:
+        fail("fabric graph: generated capability layout exceeds its declaration")
+    if any(len(route["name"].encode("utf-8")) > 16 for route in graph["routes"]):
+        fail("fabric graph: route name exceeds the 16-byte record bound")
+    return ResolvedFabricProfile(graph, artifact, schemas, graph_bytes)
+
+
+def _zti_value(value: object, indent: int = 0) -> str:
+    padding = "  " * indent
+    child = "  " * (indent + 1)
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=True)
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, list):
+        if not value:
+            return "[]"
+        return "[\n" + "".join(f"{child}{_zti_value(item, indent + 1)};\n" for item in value) + f"{padding}]"
+    if isinstance(value, dict):
+        return "{\n" + "".join(
+            f"{child}{key} = {_zti_value(item, indent + 1)};\n" for key, item in value.items()
+        ) + f"{padding}}}"
+    fail(f"unsupported canonical profile value {type(value).__name__}")
+
+
+def render_fabric_profile_rust(resolved: ResolvedFabricProfile) -> str:
+    artifact = resolved.artifact
+    limits = {entry["name"]: entry["value"] for entry in artifact["limits"]}
+    participants = artifact["participants"]
+    rust_string = lambda value: json.dumps(value, ensure_ascii=True)
+    participant_rows = "".join(
+        f"    (b{rust_string(row['component'])}, {rust_string(row['route'])}, {rust_string(row['interface'])}, {row['direction']}),\n"
+        for row in participants
+    )
+    depth_rows = "".join(
+        f"    (b{rust_string(row['component'])}, {rust_string(row['route'])}, {row['historyDepth']}),\n"
+        for row in participants
+    )
+    qos_rows = "".join(
+        f"    (b{rust_string(row['component'])}, {rust_string(row['route'])}, {row['deadlineNs']}, {row['lifespanNs']}, {row['leaseNs']}, {row['historyDepth']}, {row['retainedDepth']}, {row['reliability']}, {row['durability']}, {row['liveliness']}),\n"
+        for row in participants
+    )
+    visibility_rows = "".join(
+        f"    (b{rust_string(row['component'])}, {rust_string(row['route'])}, {row['visibility']}),\n"
+        for row in participants
+    )
+    interposition_rows = "".join(
+        f"    (b{rust_string(row['component'])}, {rust_string(row['route'])}, &[{', '.join(f'b{rust_string(hop)} as &[u8]' for hop in row['interposition'])}]),\n"
+        for row in participants if row["interposition"]
+    )
+    planes = {plane["name"]: plane["controls"] for plane in artifact["planes"]}
+    controls = lambda name: "".join(
+        f"    b{rust_string(row['component'])},\n" for row in planes[name]
+    )
+    supervision_rows = "".join(
+        f"    (b{rust_string(row['component'])}, {row['slot']}),\n" for row in artifact["supervision"]
+    )
+    subscriber_rows = "".join(
+        f"    b{rust_string(row['component'])},\n" for row in artifact["supervision"]
+    )
+    schema_rows = "".join(
+        f"    ({rust_string(row['name'])}, {rust_string(row['identity'])}, 0x{row['typeTag']}, {row['contractKind']}, {row['maxEncodedBytes']}),\n"
+        for row in artifact["schemas"]
+    )
+    route_rows = "".join(
+        f"    ({rust_string(row['name'])}, {rust_string(row['interface'])}, {rust_string(row['identity'])}, {row['contractKind']}),\n"
+        for row in artifact["routes"]
+    )
+    def deadline(route: str) -> int:
+        return min(
+            row["deadlineNs"]
+            for row in participants
+            if row["route"] == route and row["direction"] in (FABRIC_DIRECTION_CLIENT, FABRIC_DIRECTION_SERVER)
+        )
+    return f'''// @generated from the canonical C8.9 resolved fabric profile; do not edit.
+#[allow(dead_code)]
+pub const FABRIC_PROFILE_NAME: &str = {rust_string(artifact['name'])};
+#[allow(dead_code)]
+pub const FABRIC_SCHEMAS: &[(&str, &str, u64, u32, u32)] = &[\n{schema_rows}];
+#[allow(dead_code)]
+pub const FABRIC_ROUTES: &[(&str, &str, &str, u32)] = &[\n{route_rows}];
+pub const FABRIC_PARTICIPANTS: &[(&[u8], &str, &str, u32)] = &[\n{participant_rows}];
+pub const FABRIC_HISTORY_DEPTHS: &[(&[u8], &str, u32)] = &[\n{depth_rows}];
+pub type FabricQosRow = (&'static [u8], &'static str, u64, u64, u64, u32, u32, u8, u8, u8);
+pub const FABRIC_QOS: &[FabricQosRow] = &[\n{qos_rows}];
+pub const FABRIC_VISIBILITY: &[(&[u8], &str, u8)] = &[\n{visibility_rows}];
+pub type FabricInterpositionRow = (&'static [u8], &'static str, &'static [&'static [u8]]);
+pub const FABRIC_INTERPOSITIONS: &[FabricInterpositionRow] = &[\n{interposition_rows}];
+pub const FABRIC_CLIENTS: &[&[u8]] = &[\n{controls('stream')}];
+pub const FABRIC_CALL_CLIENTS: &[&[u8]] = &[\n{controls('call')}];
+pub const FABRIC_OPERATION_CLIENTS: &[&[u8]] = &[\n{controls('operation')}];
+pub const FABRIC_SUPERVISION: &[(&[u8], u32)] = &[\n{supervision_rows}];
+pub const FABRIC_SUBSCRIBERS: &[&[u8]] = &[\n{subscriber_rows}];
+#[allow(dead_code)]
+pub const FABRIC_MAX_ROUTES: usize = {limits['routes']};
+#[allow(dead_code)]
+pub const FABRIC_MAX_INGRESS_SOURCES: usize = {limits['ingressSources']};
+pub const FABRIC_MAX_PUBLISHERS: usize = {limits['publishers']};
+pub const FABRIC_MAX_SUBSCRIBERS: usize = {limits['subscribers']};
+#[allow(dead_code)]
+pub const FABRIC_MAX_CLIENTS: usize = {limits['clients']};
+#[allow(dead_code)]
+pub const FABRIC_MAX_SERVERS: usize = {limits['servers']};
+pub const FABRIC_MAX_SAMPLE_BYTES: usize = {limits['sampleBytes']};
+#[allow(dead_code)]
+pub const FABRIC_MAX_QUEUE_DEPTH: usize = {limits['queueDepth']};
+#[allow(dead_code)]
+pub const FABRIC_MAX_HISTORY_DEPTH: usize = {limits['historyDepth']};
+pub const FABRIC_MAX_EVENT_DEPTH: usize = {limits['eventDepth']};
+pub const FABRIC_MAX_RETAINED_SAMPLES: usize = {limits['retainedSamples']};
+pub const FABRIC_MAX_RETRIES: u8 = {limits['retries']};
+pub const FABRIC_MAX_IN_FLIGHT_CALLS: usize = {limits['inFlightCalls']};
+pub const FABRIC_MAX_IN_FLIGHT_OPERATIONS: usize = {limits['inFlightOperations']};
+pub const FABRIC_MAX_BUFFER_PAGES: usize = {limits['bufferPages']};
+pub const FABRIC_MAX_BUFFERS: usize = {limits['buffers']};
+#[allow(dead_code)]
+pub const FABRIC_MAX_MAPPINGS: usize = {limits['mappings']};
+#[allow(dead_code)]
+pub const FABRIC_MAX_LOANS: usize = {limits['loans']};
+pub const FABRIC_MAX_CAPABILITY_SLOTS: usize = {limits['capabilitySlots']};
+pub const FABRIC_REQUIRED_CAPABILITY_SLOTS: usize = {artifact['requiredCapabilitySlots']};
+pub const FABRIC_FRAME_CAPACITY: usize = {artifact['frameCapacity']};
+pub const FABRIC_COPY_PAGES: usize = {artifact['copyPages']};
+pub const FABRIC_CALL_DEADLINE_NS: u64 = {deadline('parameters')};
+pub const FABRIC_OPERATION_DEADLINE_NS: u64 = {deadline('navigation')};
+pub const FABRIC_FIRST_CONTROL_SLOT: u32 = {artifact['firstControlSlot']};
+'''
+
+
+def write_resolved_profile(output: Path, resolved: ResolvedFabricProfile) -> tuple[Path, Path, Path]:
+    profile_path = output / "data-fabric-profile.zti"
+    rust_path = output / "data-fabric-profile.rs"
+    schemas_path = output / "normalized-interface-schemas.bin"
+    profile_path.write_text(_zti_value(resolved.artifact) + "\n", encoding="utf-8")
+    rust_path.write_text(render_fabric_profile_rust(resolved), encoding="utf-8")
+    schemas_path.write_bytes(build_normalized_schema_artifact(resolved.schemas))
+    return profile_path, rust_path, schemas_path
+
+
+
 
 def fabric_component_identity(name: str) -> bytes:
     """Stable component identity, matching `boot_contracts::fabric_graph`.
@@ -446,35 +881,6 @@ def fabric_grant_identity(route_identity: bytes, component: bytes, direction: in
     )
 
 
-def selected_fabric_graph(graph: dict) -> dict:
-    """Apply one explicit build profile before encoding the authenticated graph."""
-    selected = "visibility" if os.environ.get("SLIME_FABRIC_VISIBILITY_CHECK") == "1" else None
-    if selected is None:
-        return graph
-    profiles = [profile for profile in graph.get("profiles", []) if profile.get("name") == selected]
-    if len(profiles) != 1:
-        fail(f"fabric graph: expected one {selected} profile")
-    resolved = copy.deepcopy(graph)
-    for override in profiles[0].get("interpositions", []):
-        matches = [
-            member
-            for route in resolved["routes"]
-            if route["name"] == override["route"]
-            for member in route["participants"]
-            if member["component"] == override["participant"]
-        ]
-        if len(matches) != 1:
-            fail(
-                "fabric graph: profile interposition must name exactly one "
-                f"participant ({override['participant']} on {override['route']})"
-            )
-        chain = override["chain"]
-        if not isinstance(chain, list) or not chain:
-            fail("fabric graph: profile interposition chain must be non-empty")
-        matches[0]["interposition"] = chain
-    if any(len(route["name"].encode("utf-8")) > 16 for route in resolved["routes"]):
-        fail("fabric graph: visibility profile route name exceeds 16-byte record bound")
-    return resolved
 
 
 def build_fabric_graph(graph: dict, component_names: set[str], interfaces: list) -> bytes:
@@ -485,7 +891,6 @@ def build_fabric_graph(graph: dict, component_names: set[str], interfaces: list)
     here is part of the format. A component absent from the participant table
     holds no route authority at all — omission is meaningful, not a default.
     """
-    graph = selected_fabric_graph(graph)
     by_name = {interface.name: interface for interface in interfaces}
     fabric = graph["fabricComponent"]
     if fabric not in component_names:
@@ -645,10 +1050,15 @@ def build_fabric_graph(graph: dict, component_names: set[str], interfaces: list)
     # it, per matched subscriber.
     if limits["subscribers"] > limits["loans"] or limits["subscribers"] > limits["mappings"]:
         fail("fabric graph budgets fewer loans or mappings than subscribers")
-    # A sample larger than the control-message bound must travel as a C7
-    # shared-buffer loan, so the page budget has to be able to hold one.
-    if limits["sampleBytes"] > FABRIC_GRAPH_CONTROL_MESSAGE_BYTES and limits["bufferPages"] == 0:
-        fail("fabric graph admits >MAX_MSG samples with no page budget")
+    # A shared sample needs one fabric-owned buffer whose page footprint can
+    # carry the graph's maximum admitted sample.
+    sample_pages = (limits["sampleBytes"] + PAGE_SIZE - 1) // PAGE_SIZE
+    if limits["sampleBytes"] > FABRIC_GRAPH_CONTROL_MESSAGE_BYTES and (
+        limits["buffers"] == 0 or sample_pages > limits["bufferPages"]
+    ):
+        fail("fabric graph admits a shared sample its buffer budget cannot hold")
+    if limits["queueDepth"] > FABRIC_GRAPH_CHANNEL_QUEUE_DEPTH:
+        fail("fabric graph queue depth exceeds the kernel channel bound")
     for interface in schemas:
         if interface.max_encoded_bytes > limits["sampleBytes"]:
             fail(
@@ -740,11 +1150,13 @@ def build_recovery_index(
 
 def build_rust_components(
     generation_number: int,
+    profile_path: Path,
     recovery: bool = False,
     candidate_identity: bytes | None = None,
 ) -> Path:
     environment = os.environ.copy()
     environment["SLIME_GENERATION_NUMBER"] = str(generation_number)
+    environment["SLIME_DATA_FABRIC_PROFILE"] = str(profile_path)
     if candidate_identity is None and os.environ.get("SLIME_TRANSFER_RECEIVER") == "1":
         environment["SLIME_TRANSFER_RECEIVER"] = "1"
     else:
@@ -1207,14 +1619,20 @@ def build_bootstore(generations: list[bytes]) -> bytes:
     return bytes(image)
 
 
+
+
 def main() -> None:
-    if len(sys.argv) != 3: fail("usage: build-generation.py <kernel-elf> <output-dir>")
+    if len(sys.argv) != 3:
+        fail("usage: build-generation.py <kernel-elf> <output-dir>")
     kernel = Path(sys.argv[1]).resolve()
     output = Path(sys.argv[2]).resolve()
     manifest = load_manifest()
-    if manifest["formatVersion"] != 1: fail("unsupported source formatVersion")
+    if manifest["formatVersion"] != 1:
+        fail("unsupported source formatVersion")
     interfaces = validate_interface_schemas(manifest["interfaceSchemas"])
     output.mkdir(parents=True, exist_ok=True)
+    resolved_profile = resolve_fabric_profile(manifest, interfaces, selected_profile_name())
+    _, profile_rust_path, _ = write_resolved_profile(output, resolved_profile)
     policy_number = int(os.environ.get("SLIME_GENERATION_NUMBER") or manifest["generation"])
     # Generation 1 is the known-good baseline: its components must carry their own
     # generation number (1) so the generation-manager runs the known-good path,
@@ -1224,7 +1642,9 @@ def main() -> None:
     # The transfer receiver is the exception: there generation 1 *is* the
     # policy-numbered receiver generation, built with the receiver flag.
     generation1_number = policy_number if os.environ.get("SLIME_TRANSFER_RECEIVER") == "1" else 1
-    generation1_components = build_rust_components(generation1_number, candidate_identity=None)
+    generation1_components = build_rust_components(
+        generation1_number, profile_rust_path, candidate_identity=None
+    )
     payloads: dict[str, bytes] = {manifest["kernelObject"]: kernel_image(kernel)}
     object_by_id = {obj["id"]: obj for obj in manifest["objects"]}
     if "shared-buffer-budget" in object_by_id:
@@ -1232,33 +1652,33 @@ def main() -> None:
             manifest.get("sharedBufferBudget", [])
         )
     if "fabric-graph" in object_by_id:
-        graph = manifest.get("fabricGraph")
-        if graph is None:
-            fail("fabric-graph object declared without a fabricGraph manifest section")
-        payloads["fabric-graph"] = build_fabric_graph(
-            graph,
-            {component["name"] for component in manifest["components"]},
-            interfaces,
-        )
+        payloads["fabric-graph"] = resolved_profile.graph_bytes
     elif manifest.get("fabricGraph") is not None:
         fail("fabricGraph declared without a fabric-graph resource object")
     for component in manifest["components"]:
         stack = component.get("stackBytes", DEFAULT_STACK_BYTES)
         if not isinstance(stack, int) or stack <= 0 or stack % PAGE_SIZE or stack > MAX_STACK_BYTES:
             fail(f"component {component['name']}: invalid stack")
-        if component["object"] not in object_by_id: fail(f"component {component['name']}: missing object")
-        payloads[component["object"]] = component_image(component["name"], generation1_components / component["name"], stack)
+        if component["object"] not in object_by_id:
+            fail(f"component {component['name']}: missing object")
+        payloads[component["object"]] = component_image(
+            component["name"], generation1_components / component["name"], stack
+        )
     generation1 = build_generation(manifest, payloads, None, 1)
-    generation2_components = build_rust_components(policy_number, candidate_identity=generation1[24:56])
+    generation2_components = build_rust_components(
+        policy_number, profile_rust_path, candidate_identity=generation1[24:56]
+    )
     for component in manifest["components"]:
         stack = component.get("stackBytes", DEFAULT_STACK_BYTES)
         if not isinstance(stack, int) or stack <= 0 or stack % PAGE_SIZE or stack > MAX_STACK_BYTES:
             fail(f"component {component['name']}: invalid stack")
-        payloads[component["object"]] = component_image(component["name"], generation2_components / component["name"], stack)
+        payloads[component["object"]] = component_image(
+            component["name"], generation2_components / component["name"], stack
+        )
     parent_override = os.environ.get("SLIME_GENERATION_PARENT")
     generation2_parent = bytes.fromhex(parent_override) if parent_override else generation1[24:56]
     generation2 = build_generation(manifest, payloads, generation2_parent, policy_number)
-    recovery_components = build_rust_components(5, recovery=True)
+    recovery_components = build_rust_components(5, profile_rust_path, recovery=True)
     recovery = recovery_manifest(manifest)
     state_first_lba = int(os.environ.get("SLIME_RECOVERY_STATE_FIRST_LBA") or BOOTSTORE_CAPACITY // 512)
     state_last_lba = int(os.environ.get("SLIME_RECOVERY_STATE_LAST_LBA") or state_first_lba + 127)

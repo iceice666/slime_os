@@ -44,6 +44,30 @@ StateBinding :: type {
   policy : Text;
 };
 
+-- Per-holder C7 shared-buffer quota carried by the authenticated generation.
+-- Omission is deny-by-default; each listed ceiling is absolute live usage.
+SharedBufferBudgetEntry :: type {
+  holder : Text;
+  bytePages : Int;
+  bufferCount : Int;
+  mappingCount : Int;
+  loanCount : Int;
+};
+
+-- One named full-graph profile override. Profiles may replace only an exact
+-- participant's interposition chain; every other authority and policy field
+-- remains fixed by the base graph.
+FabricProfileInterposition :: type {
+  route : Text;
+  participant : Text;
+  chain : List Text;
+};
+
+FabricProfile :: type {
+  name : Text;
+  interpositions : List FabricProfileInterposition;
+};
+
 -- One participant's exact role on one fabric route (C8.2). `interposition` is
 -- the ordered proxy chain, outermost first; an empty list is a direct edge.
 FabricParticipant :: type {
@@ -88,12 +112,14 @@ FabricLimits :: type {
   mappings : Int;
   loans : Int;
   capabilitySlots : Int;
+  buffers : Int;
 };
 
 FabricGraph :: type {
   fabricComponent : Text;
   limits : FabricLimits;
   routes : List FabricRoute;
+  profiles : List FabricProfile;
 };
 
 HealthPolicy :: type {
@@ -109,6 +135,7 @@ GenerationManifest :: type {
   kernelObject : Text;
   bootstrapComponent : Text;
   interfaceSchemas : List Text;
+  sharedBufferBudget : List SharedBufferBudgetEntry;
   objects : List Object;
   components : List Component;
   grants : List CapabilityGrant;
@@ -124,6 +151,9 @@ FromData @Component :: derive
 FromData @CapabilityGrant :: derive
 FromData @StateBinding :: derive
 FromData @HealthPolicy :: derive
+FromData @SharedBufferBudgetEntry :: derive
+FromData @FabricProfileInterposition :: derive
+FromData @FabricProfile :: derive
 FromData @FabricParticipant :: derive
 FromData @FabricRoute :: derive
 FromData @FabricLimits :: derive
@@ -136,6 +166,9 @@ decodeManifest :: Data -> Validation DecodeIssue GenerationManifest
 {
   Object = Object;
   Component = Component;
+  SharedBufferBudgetEntry = SharedBufferBudgetEntry;
+  FabricProfileInterposition = FabricProfileInterposition;
+  FabricProfile = FabricProfile;
   CapabilityGrant = CapabilityGrant;
   StateBinding = StateBinding;
   HealthPolicy = HealthPolicy;

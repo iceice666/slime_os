@@ -74,6 +74,8 @@ FABRIC_VISIBILITY_CONTRACT = ROOT / "contracts" / "fabric-visibility" / "v1"
 FABRIC_VISIBILITY_BINDING_GENERATOR = (
     ROOT / "scripts" / "generate" / "generate-fabric-visibility-bindings.py"
 )
+DATA_FABRIC_PROFILE_CONTRACT = ROOT / "contracts" / "data-fabric-profile" / "v1"
+NORMALIZED_INTERFACE_SCHEMAS_CONTRACT = ROOT / "contracts" / "normalized-interface-schemas" / "v1"
 
 
 def run(*arguments: str) -> str:
@@ -222,6 +224,10 @@ subprocess.run(
     cwd=ROOT,
     check=True,
 )
+run("check", str(DATA_FABRIC_PROFILE_CONTRACT / "schema.zt"))
+run("check", str(DATA_FABRIC_PROFILE_CONTRACT / "check.zt"))
+run("check", str(NORMALIZED_INTERFACE_SCHEMAS_CONTRACT / "schema.zt"))
+run("check", str(NORMALIZED_INTERFACE_SCHEMAS_CONTRACT / "gen_rust.zt"))
 
 
 for contract in (

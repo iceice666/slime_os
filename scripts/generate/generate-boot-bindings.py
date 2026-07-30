@@ -42,6 +42,11 @@ GENERATORS = (
         "fabric_graph.py",
         "fabric_graph.rs",
     ),
+    (
+        ROOT / "contracts" / "normalized-interface-schemas" / "v1" / "schema.zt",
+        "normalized_interface_schemas.py",
+        "normalized_interface_schemas.rs",
+    ),
 )
 INVALID_SCHEMA = "INVALID_"
 HEADER = """# @generated from boot contract schemas; do not edit.

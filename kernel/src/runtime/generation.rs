@@ -9,7 +9,7 @@ use boot_contracts::shared_buffer_budget::{
 };
 
 use crate::capability::MAX_CAPS;
-use crate::ipc::MAX_MSG;
+use crate::ipc::{CHANNEL_QUEUE, MAX_MSG};
 use crate::memory::shared_buffer::{
     HolderQuota, MAX_BUFFER_PAGES, MAX_LOANS, MAX_MAPPINGS, MAX_SHARED_BUFFERS, MAX_TOTAL_PAGES,
 };
@@ -21,6 +21,8 @@ use crate::syscall::MAX_WAIT_SOURCES;
 // graph would be admitted against the wrong bound on one side.
 const _: () = assert!(fabric_graph::CONTROL_MESSAGE_BYTES as usize == MAX_MSG);
 const _: () = assert!(fabric_graph::KERNEL_TOTAL_PAGES as usize == MAX_TOTAL_PAGES);
+const _: () = assert!(fabric_graph::KERNEL_SHARED_BUFFERS as usize == MAX_SHARED_BUFFERS);
+const _: () = assert!(fabric_graph::CHANNEL_QUEUE_DEPTH as usize == CHANNEL_QUEUE);
 const _: () = assert!(fabric_graph::KERNEL_MAPPINGS as usize == MAX_MAPPINGS);
 const _: () = assert!(fabric_graph::KERNEL_LOANS as usize == MAX_LOANS);
 
@@ -59,9 +61,11 @@ pub fn decode(bytes: &[u8]) -> Result<Generation<'_>, DecodeError> {
                 MAX_WAIT_SOURCES as u32,
                 MAX_CAPS as u32,
                 MAX_TOTAL_PAGES as u32,
+                MAX_SHARED_BUFFERS as u32,
                 MAX_MAPPINGS as u32,
                 MAX_LOANS as u32,
                 MAX_MSG as u32,
+                CHANNEL_QUEUE as u32,
             )
             .map_err(|_| DecodeError::BadBounds)?;
     }

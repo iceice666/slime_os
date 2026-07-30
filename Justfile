@@ -129,6 +129,12 @@ fabric_visibility_check: contracts_check generation_check
 fabric_visibility_gen:
     python3 scripts/generate/generate-fabric-visibility-bindings.py
 
+# C8.9: one typed generation source resolves the authenticated graph, the
+# userspace build profile, every downstream limit, and the deterministic
+# normalized-schema corpus; mutually unsatisfiable declarations fail closed.
+data_fabric_profile_check: contracts_check generation_check
+    python3 scripts/check/check-data-fabric-profile.py
+
 # C7.6: versioned sample descriptor over the C7.5 loan lifecycle; byte-identical
 # binding round-trip, malformed-descriptor rejection before mapping, and a
 # payload larger than MAX_MSG carried over descriptor plus shared buffer.

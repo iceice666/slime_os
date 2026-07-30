@@ -180,6 +180,7 @@ pub struct GraphLimits {
     pub in_flight_calls: u32,
     pub in_flight_operations: u32,
     pub buffer_pages: u32,
+    pub buffers: u32,
     pub mappings: u32,
     pub loans: u32,
     pub capability_slots: u32,
@@ -265,9 +266,10 @@ impl<'a> FabricGraph<'a> {
             in_flight_calls: u32_at(bytes, 128)?,
             in_flight_operations: u32_at(bytes, 132)?,
             buffer_pages: u32_at(bytes, 136)?,
-            mappings: u32_at(bytes, 140)?,
-            loans: u32_at(bytes, 144)?,
-            capability_slots: u32_at(bytes, 148)?,
+            buffers: u32_at(bytes, 140)?,
+            mappings: u32_at(bytes, 144)?,
+            loans: u32_at(bytes, 148)?,
+            capability_slots: u32_at(bytes, 152)?,
         };
 
         let graph = Self {
@@ -352,6 +354,7 @@ impl<'a> FabricGraph<'a> {
             || limits.retries > LIMIT_RETRIES
             || limits.in_flight_calls > LIMIT_IN_FLIGHT
             || limits.in_flight_operations > LIMIT_IN_FLIGHT
+            || limits.buffers > LIMIT_BUFFERS
             || limits.capability_slots > LIMIT_CAPABILITY_SLOTS
         {
             return Err(DecodeError::Impossible);
@@ -644,21 +647,26 @@ impl<'a> FabricGraph<'a> {
     /// in full — every declared participant can peak at once — rather than
     /// first-come-first-served, where a late-starting subscriber would fail at
     /// runtime despite holding a route the generation promised it.
+    #[allow(clippy::too_many_arguments)]
     pub fn validate_against(
         &self,
         max_wait_sources: u32,
         max_capability_slots: u32,
         max_total_pages: u32,
+        max_shared_buffers: u32,
         max_mappings: u32,
         max_loans: u32,
         max_message_bytes: u32,
+        max_channel_queue_depth: u32,
     ) -> Result<(), DecodeError> {
         let limits = &self.limits;
         if limits.ingress_sources > max_wait_sources
             || limits.capability_slots > max_capability_slots
             || limits.buffer_pages > max_total_pages
+            || limits.buffers > max_shared_buffers
             || limits.mappings > max_mappings
             || limits.loans > max_loans
+            || limits.queue_depth > max_channel_queue_depth
         {
             return Err(DecodeError::Impossible);
         }
@@ -669,8 +677,13 @@ impl<'a> FabricGraph<'a> {
             return Err(DecodeError::Impossible);
         }
         // A sample larger than the control-message bound must travel as a C7
-        // shared-buffer loan, so the page budget has to be able to hold one.
-        if limits.sample_bytes > max_message_bytes && limits.buffer_pages == 0 {
+        // shared-buffer loan. The graph must admit one buffer and enough pages
+        // for the largest sample it promises, otherwise a valid sample can be
+        // accepted by type but cannot be represented by the broker.
+        let sample_pages = limits.sample_bytes.div_ceil(4096);
+        if limits.sample_bytes > max_message_bytes
+            && (limits.buffers == 0 || sample_pages > limits.buffer_pages)
+        {
             return Err(DecodeError::Impossible);
         }
 
@@ -919,6 +932,7 @@ mod tests {
             in_flight_calls: 4,
             in_flight_operations: 4,
             buffer_pages: 16,
+            buffers: 8,
             mappings: 8,
             loans: 8,
             capability_slots: 16,
@@ -1045,6 +1059,7 @@ mod tests {
                 self.limits.in_flight_calls,
                 self.limits.in_flight_operations,
                 self.limits.buffer_pages,
+                self.limits.buffers,
                 self.limits.mappings,
                 self.limits.loans,
                 self.limits.capability_slots,
@@ -1115,9 +1130,10 @@ mod tests {
     }
 
     /// Kernel ceilings the live path passes: MAX_WAIT_SOURCES, MAX_CAPS,
-    /// MAX_TOTAL_PAGES, MAX_MAPPINGS, MAX_LOANS, and MAX_MSG.
+    /// MAX_TOTAL_PAGES, MAX_SHARED_BUFFERS, MAX_MAPPINGS, MAX_LOANS, MAX_MSG,
+    /// and the channel queue depth.
     fn check(graph: &FabricGraph<'_>) -> Result<(), DecodeError> {
-        graph.validate_against(9, 64, 256, 64, 64, 64)
+        graph.validate_against(9, 64, 256, 32, 64, 64, 64, 16)
     }
 
     #[test]
@@ -1576,7 +1592,7 @@ mod tests {
         let graph = FabricGraph::decode(&bytes).expect("decodes");
         check(&graph).expect("at the ceiling is admissible");
         assert!(matches!(
-            graph.validate_against(8, 32, 256, 64, 64, 64),
+            graph.validate_against(8, 32, 256, 32, 64, 64, 64, 16),
             Err(DecodeError::Impossible)
         ));
 
@@ -1584,6 +1600,22 @@ mod tests {
         let mut builder = stream_graph();
         builder.limits.sample_bytes = 4096;
         builder.limits.buffer_pages = 0;
+        let bytes = builder.encode();
+        let graph = FabricGraph::decode(&bytes).expect("decodes");
+        assert!(matches!(check(&graph), Err(DecodeError::Impossible)));
+
+        // A declared queue deeper than the kernel channel cannot be honoured.
+        let mut builder = stream_graph();
+        builder.limits.queue_depth = 17;
+        let bytes = builder.encode();
+        let graph = FabricGraph::decode(&bytes).expect("decodes");
+        assert!(matches!(check(&graph), Err(DecodeError::Impossible)));
+
+        // A sample whose page footprint exceeds the graph page budget cannot
+        // be represented even when the budget is nonzero.
+        let mut builder = stream_graph();
+        builder.limits.sample_bytes = 8192;
+        builder.limits.buffer_pages = 1;
         let bytes = builder.encode();
         let graph = FabricGraph::decode(&bytes).expect("decodes");
         assert!(matches!(check(&graph), Err(DecodeError::Impossible)));
@@ -1686,7 +1718,7 @@ mod tests {
         ));
 
         let mut bad = bytes.clone();
-        bad[8..12].copy_from_slice(&2u32.to_le_bytes());
+        bad[8..12].copy_from_slice(&(FORMAT_VERSION + 1).to_le_bytes());
         assert!(matches!(
             FabricGraph::decode(&bad),
             Err(DecodeError::UnsupportedVersion)

@@ -26,8 +26,10 @@ use boot_contracts::fabric_graph::{
     component_identity, grant_identity,
 };
 use slime_os_kernel::capability::MAX_CAPS;
-use slime_os_kernel::ipc::MAX_MSG;
-use slime_os_kernel::memory::shared_buffer::{MAX_LOANS, MAX_MAPPINGS, MAX_TOTAL_PAGES};
+use slime_os_kernel::ipc::{CHANNEL_QUEUE, MAX_MSG};
+use slime_os_kernel::memory::shared_buffer::{
+    MAX_LOANS, MAX_MAPPINGS, MAX_SHARED_BUFFERS, MAX_TOTAL_PAGES,
+};
 use slime_os_kernel::syscall::MAX_WAIT_SOURCES;
 use slime_os_kernel::{gdt, interrupts, memory};
 
@@ -76,9 +78,11 @@ fn booted_generation_declares_an_admitted_fabric_graph() {
             MAX_WAIT_SOURCES as u32,
             MAX_CAPS as u32,
             MAX_TOTAL_PAGES as u32,
+            MAX_SHARED_BUFFERS as u32,
             MAX_MAPPINGS as u32,
             MAX_LOANS as u32,
             MAX_MSG as u32,
+            CHANNEL_QUEUE as u32,
         )
         .expect("the booted graph is satisfiable under the kernel's ceilings");
 

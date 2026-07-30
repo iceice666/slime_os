@@ -105,7 +105,7 @@ const TIME_SLOT: u32 = 9;
 /// Control endpoints, one per client, in the order init granted them. The slot
 /// a request arrives on *is* the caller's identity: init bound each to exactly
 /// one component at spawn, and no component can forge or re-derive one.
-const FIRST_CONTROL_SLOT: u32 = 2;
+const FIRST_CONTROL_SLOT: u32 = FABRIC_FIRST_CONTROL_SLOT;
 
 const RIGHT_SEND: Rights = 1;
 const RIGHT_RECV: Rights = 2;
@@ -124,7 +124,7 @@ const STATUS_BAD_REQUEST: i32 = -2;
 
 /// Fixed brokering capacity. Every table below is sized from the generation's
 /// own declared ceilings, so nothing here grows with traffic.
-const MAX_PARTICIPANTS: usize = 8;
+const MAX_PARTICIPANTS: usize = FABRIC_MAX_PUBLISHERS + FABRIC_MAX_SUBSCRIBERS;
 /// Fabric-owned sample frames. Each holds one inline payload or names one
 /// fabric-owned buffer; a frame is freed when its last reference is delivered
 /// or evicted.
@@ -136,11 +136,11 @@ const MAX_PARTICIPANTS: usize = 8;
 /// and the publishers blocked, nothing would ever wake the fabric again. That
 /// is a deadlock, not backpressure, so the table is sized to make it
 /// unreachable rather than detected.
-const MAX_FRAMES: usize = 32;
+const MAX_FRAMES: usize = FABRIC_FRAME_CAPACITY;
 /// Pages in one fabric-owned copy buffer. Bounds the largest brokered sample at
 /// two pages, matching the C7 sample plane's payload and the fabric's declared
 /// `bytePages` quota.
-const COPY_PAGES: usize = 2;
+const COPY_PAGES: usize = FABRIC_COPY_PAGES;
 const PAGE: u64 = 4096;
 /// Scratch window where the fabric maps an upstream loan and its own copy
 /// buffer. Two disjoint ranges, both unmapped before the next sample.
@@ -2037,6 +2037,9 @@ const _: () = assert!(TRANSFER_LEN == MAX_MSG);
 const _: () = assert!(slime_proto::fabric_stream::SAMPLE_LEN == MAX_MSG);
 const _: () = assert!(slime_proto::fabric_stream::ACK_LEN == MAX_MSG);
 const _: () = assert!(slime_proto::fabric_stream::EVENT_LEN == MAX_MSG);
+const _: () = assert!(FABRIC_MAX_SAMPLE_BYTES <= COPY_PAGES * PAGE as usize);
+const _: () = assert!(FABRIC_MAX_BUFFER_PAGES <= FABRIC_MAX_BUFFERS * COPY_PAGES);
+const _: () = assert!(FABRIC_REQUIRED_CAPABILITY_SLOTS <= FABRIC_MAX_CAPABILITY_SLOTS);
 
 // The frame table must cover every reference the declared rings can hold at
 // once, or a full set of rings would leave the fabric with no free frame while

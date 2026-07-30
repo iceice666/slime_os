@@ -27,9 +27,12 @@ Format :: type {
   limitRetainedSamples : Int;
   limitRetries : Int;
   limitInFlight : Int;
+  limitBuffers : Int;
   limitCapabilitySlots : Int;
   controlMessageBytes : Int;
+  channelQueueDepth : Int;
   kernelTotalPages : Int;
+  kernelSharedBuffers : Int;
   kernelMappings : Int;
   kernelLoans : Int;
   interpositionNone : Int;
@@ -93,9 +96,12 @@ pythonBindings :: Format -> Text = format => w.join {
   "FABRIC_GRAPH_LIMIT_RETAINED_SAMPLES = "; n.toText format.limitRetainedSamples; "\n";
   "FABRIC_GRAPH_LIMIT_RETRIES = "; n.toText format.limitRetries; "\n";
   "FABRIC_GRAPH_LIMIT_IN_FLIGHT = "; n.toText format.limitInFlight; "\n";
+  "FABRIC_GRAPH_LIMIT_BUFFERS = "; n.toText format.limitBuffers; "\n";
   "FABRIC_GRAPH_LIMIT_CAPABILITY_SLOTS = "; n.toText format.limitCapabilitySlots; "\n";
   "FABRIC_GRAPH_CONTROL_MESSAGE_BYTES = "; n.toText format.controlMessageBytes; "\n";
+  "FABRIC_GRAPH_CHANNEL_QUEUE_DEPTH = "; n.toText format.channelQueueDepth; "\n";
   "FABRIC_GRAPH_KERNEL_TOTAL_PAGES = "; n.toText format.kernelTotalPages; "\n";
+  "FABRIC_GRAPH_KERNEL_SHARED_BUFFERS = "; n.toText format.kernelSharedBuffers; "\n";
   "FABRIC_GRAPH_KERNEL_MAPPINGS = "; n.toText format.kernelMappings; "\n";
   "FABRIC_GRAPH_KERNEL_LOANS = "; n.toText format.kernelLoans; "\n";
   "FABRIC_GRAPH_INTERPOSITION_NONE = "; n.toText format.interpositionNone; "\n";
@@ -144,9 +150,12 @@ rustBindings :: Format -> Text = format => r.join {
   r.u32Const "LIMIT_RETAINED_SAMPLES" format.limitRetainedSamples;
   r.u32Const "LIMIT_RETRIES" format.limitRetries;
   r.u32Const "LIMIT_IN_FLIGHT" format.limitInFlight;
+  r.u32Const "LIMIT_BUFFERS" format.limitBuffers;
   r.u32Const "LIMIT_CAPABILITY_SLOTS" format.limitCapabilitySlots;
   r.u32Const "CONTROL_MESSAGE_BYTES" format.controlMessageBytes;
+  r.u32Const "CHANNEL_QUEUE_DEPTH" format.channelQueueDepth;
   r.u32Const "KERNEL_TOTAL_PAGES" format.kernelTotalPages;
+  r.u32Const "KERNEL_SHARED_BUFFERS" format.kernelSharedBuffers;
   r.u32Const "KERNEL_MAPPINGS" format.kernelMappings;
   r.u32Const "KERNEL_LOANS" format.kernelLoans;
   r.u32Const "INTERPOSITION_NONE" format.interpositionNone;

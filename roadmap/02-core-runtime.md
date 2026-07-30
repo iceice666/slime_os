@@ -753,7 +753,7 @@ discovery, bypass, or widened proxy authority.
 
 ### C8.9 — Typed full-profile and resource-bound closure
 
-**Status:** Not started.
+**Status:** Complete.
 
 **Depends on:** C8.2, C8.7, and C8.8. C8.7 is named explicitly because
 `inFlightOperations`, `retainedSamples`, and `eventDepth` are graph limits its

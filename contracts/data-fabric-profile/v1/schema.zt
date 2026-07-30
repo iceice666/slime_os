@@ -1,0 +1,74 @@
+-- Canonical resolved userspace fabric profile, version 1 (C8.9).
+--
+-- Python emits the exact resolved value as compact sorted-key JSON with one
+-- trailing newline. Rust build scripts consume that artifact without re-reading
+-- or interpreting the generation source. The types below own the projection.
+
+ProfileLimit :: type { name : Text; value : Int; };
+ProfileSchema :: type {
+  name : Text;
+  identity : Text;
+  typeTag : Text;
+  contractKind : Int;
+  maxEncodedBytes : Int;
+};
+ProfileRoute :: type {
+  name : Text;
+  interface : Text;
+  identity : Text;
+  contractKind : Int;
+};
+ProfileParticipant :: type {
+  component : Text;
+  route : Text;
+  interface : Text;
+  direction : Int;
+  visibility : Int;
+  reliability : Int;
+  durability : Int;
+  liveliness : Int;
+  historyDepth : Int;
+  retainedDepth : Int;
+  deadlineNs : Int;
+  lifespanNs : Int;
+  leaseNs : Int;
+  interposition : List Text;
+};
+ProfileControl :: type { component : Text; slot : Int; };
+ProfilePlane :: type { name : Text; controls : List ProfileControl; };
+ResolvedDataFabricProfile :: type {
+  formatVersion : Int;
+  name : Text;
+  fabricComponent : Text;
+  firstControlSlot : Int;
+  copyPages : Int;
+  frameCapacity : Int;
+  requiredCapabilitySlots : Int;
+  limits : List ProfileLimit;
+  schemas : List ProfileSchema;
+  routes : List ProfileRoute;
+  participants : List ProfileParticipant;
+  planes : List ProfilePlane;
+  supervision : List ProfileControl;
+};
+
+FromData @ProfileLimit :: derive
+FromData @ProfileSchema :: derive
+FromData @ProfileRoute :: derive
+FromData @ProfileParticipant :: derive
+FromData @ProfileControl :: derive
+FromData @ProfilePlane :: derive
+FromData @ResolvedDataFabricProfile :: derive
+
+decodeProfile :: Data -> Validation DecodeIssue ResolvedDataFabricProfile = data => decode data;
+
+{
+  ProfileLimit = ProfileLimit;
+  ProfileSchema = ProfileSchema;
+  ProfileRoute = ProfileRoute;
+  ProfileParticipant = ProfileParticipant;
+  ProfileControl = ProfileControl;
+  ProfilePlane = ProfilePlane;
+  ResolvedDataFabricProfile = ResolvedDataFabricProfile;
+  decodeProfile = decodeProfile;
+}
