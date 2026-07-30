@@ -148,3 +148,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-07-30 | [C8.8 — Filtered introspection and declared interposition](2026-07-30-c8-8-filtered-introspection-interposition/index.md) | Change | Verified | C8.8 |
 | 2026-07-30 | [C8.9–C8.15 — Full-graph fabric integration decomposition](2026-07-30-c8-9-integration-decomposition/index.md) | Decision | Proposed | C8, C8.9, C8.10, C8.11, C8.12, C8.13, C8.14, C8.15 |
 | 2026-07-30 | [C8.9 — Typed full-profile and resource-bound closure](2026-07-30-c8-9-typed-fabric-profile/index.md) | Change | Verified | C8.9 |
+| 2026-07-30 | [Verification tooling: full-crate gates, dependency checks, and CI](2026-07-30-verification-tooling/index.md) | Change | Verified | none |
