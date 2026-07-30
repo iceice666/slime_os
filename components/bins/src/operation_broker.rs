@@ -1411,3 +1411,8 @@ const _: () = assert!(slime_proto::fabric_time::TIME_ADVANCE_LEN == MAX_MSG);
 // exercised after that death, when the server endpoint and supervision sources
 // are gone. This keeps the real worst-case set within the syscall ABI bound.
 const _: () = assert!(CLIENTS * 3 + 3 <= slime_rt::MAX_WAIT_SOURCES);
+// The same peak the generation resolved for this worker. Binding the two makes a
+// park set that outgrows the declared partition a compile error rather than a
+// boot-time overflow: the resolver rejects a partition above the kernel bound,
+// and this is what keeps the broker honest about which partition it is.
+const _: () = assert!(fabric_worker_wait_sources("operation") == CLIENTS * 3 + 3);

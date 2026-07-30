@@ -2040,6 +2040,12 @@ const _: () = assert!(slime_proto::fabric_stream::EVENT_LEN == MAX_MSG);
 const _: () = assert!(FABRIC_MAX_SAMPLE_BYTES <= COPY_PAGES * PAGE as usize);
 const _: () = assert!(FABRIC_MAX_BUFFER_PAGES <= FABRIC_MAX_BUFFERS * COPY_PAGES);
 const _: () = assert!(FABRIC_REQUIRED_CAPABILITY_SLOTS <= FABRIC_MAX_CAPABILITY_SLOTS);
+// The peak the generation resolved for the stream worker must fit one `SYS_WAIT`
+// set. `park_on_streams` already fails closed if the live set overruns its array,
+// but that is a boot-time failure on a graph the build could have refused: the
+// resolver rejects an over-wide partition, and this pins that same number here so
+// the two cannot disagree.
+const _: () = assert!(fabric_worker_wait_sources("stream") <= slime_rt::MAX_WAIT_SOURCES);
 
 // The frame table must cover every reference the declared rings can hold at
 // once, or a full set of rings would leave the fabric with no free frame while

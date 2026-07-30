@@ -62,11 +62,12 @@ fn booted_generation_declares_an_admitted_fabric_graph() {
         .expect("generation declares a graph");
 
     // Five declared routes: two C8.4 streams, one C8.6 call, and two C8.7
-    // operations. Fourteen participants include the restart identity and the
-    // backup route, so both derive authority only from the admitted graph.
+    // operations. Fifteen participants include the restart identity, the backup
+    // route, and the C8.10 filtered-introspection client, so each derives
+    // authority only from the admitted graph.
     assert_eq!(graph.schema_count(), 4);
     assert_eq!(graph.route_count(), 5);
-    assert_eq!(graph.participant_count(), 14);
+    assert_eq!(graph.participant_count(), 15);
     assert_eq!(
         graph.fabric_component_identity(),
         component_identity("fabric-service"),

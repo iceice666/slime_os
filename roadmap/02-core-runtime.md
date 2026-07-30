@@ -1,6 +1,6 @@
 # Core runtime track
 
-**Status:** C7 and C8.1–C8.8 are complete under their named QEMU gates; the backlog is clear. The original C8.9 full-graph close was too broad for one reviewable slice and is now decomposed into C8.9–C8.15: typed profile closure, collision-free topology, deterministic time/traces, the authority matrix, concurrent resource ceilings, fault isolation, and the final aggregate gate. C9 remains blocked on the completed C8 parent plus P1; C10 may proceed independently.
+**Status:** C7 and C8.1–C8.9 are complete under their named QEMU gates; the backlog is clear. C8.10 is in progress: its declared route-worker partition and wait-source bounds are gated, while the collision-free fabric-only bootstrap remains open on the kernel capability-table ceiling. The original C8.9 full-graph close was too broad for one reviewable slice and is now decomposed into C8.9–C8.15: typed profile closure, collision-free topology, deterministic time/traces, the authority matrix, concurrent resource ceilings, fault isolation, and the final aggregate gate. C9 remains blocked on the completed C8 parent plus P1; C10 may proceed independently.
 
 This track turns the existing bounded channels, capabilities, components, and generations into a native typed communication runtime. It is local-first: C7 and C8 require no network or physical driver, and they do not wait for unrelated display, audio, wireless, or GPU work.
 
@@ -799,7 +799,18 @@ kernel, and userspace cannot select or interpret different graph authority.
 
 ### C8.10 — Collision-free full-graph bootstrap and bounded route workers
 
-**Status:** Not started.
+**Status:** In progress. The declarative half is complete and gated by `just
+data_fabric_profile_check`: plane control slots are summed into one disjoint
+layout rather than overlaid, the bounded route-worker partition is a declared
+generation fact validated for coverage and overlap, and each worker's peak
+`SYS_WAIT` set is checked against the kernel bound. The bootstrap replacement is
+open. `launch_init` measures 61 of `MAX_CAPS = 64`, so the split probe, proxy,
+and introspection roles cannot be added to it; a fabric-only layout is projected
+at 53/64 — a projection to re-count against real code, not an observed layout —
+and is the intended target, reached by an early return in `launch_init` mirroring
+`launch_recovery_init`. That work also owns renumbering the `init.rs`
+slot constants, the three worker tasks, retiring the superseded
+`fabric-intruder`, and `just data_fabric_boot_check`.
 
 **Depends on:** C8.9.
 

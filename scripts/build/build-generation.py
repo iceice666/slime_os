@@ -226,6 +226,49 @@ FABRIC_OPERATION_CONTROL_GRANTS = (
     "fabric-op-time-control",
 )
 FABRIC_OPERATION_REPLACEMENT_GRANTS = ("fabric-op-client-b-restart-control",)
+# C8.10 bounded route workers: whole routes, partitioned so no worker's live
+# wake sources exceed one `SYS_WAIT` set. Declared here rather than inferred so
+# the partition is a generation fact the resolver validates, not a runtime
+# heuristic that could silently drift past the kernel bound.
+FABRIC_ROUTE_WORKERS = (
+    ("stream", ("telemetry", "diagnostics")),
+    ("call", ("parameters",)),
+    ("operation", ("navigation", "nav-backup")),
+)
+# How each worker shape's peak `SYS_WAIT` set is established.
+#
+# Counting one source per participant edge is right for the stream shape and
+# wrong for the request/response ones, because the two brokers park differently.
+# `park_on_streams` walks its live participant tables, so its set scales with the
+# graph. `call_broker` and `operation_broker` park across *fixed slot arrays*
+# (`CLIENTS = 2`, `supervision: [u32; CLIENTS + 1]`), adding a `SendCapacity` and
+# a `Supervision` source per slot — so their peak is a property of the broker, not
+# of how many components the graph names. A client replaced at runtime reuses its
+# slot, and the operation shape's backup-route source is registered only while the
+# server source is absent; deriving either from edge counts double-counts and
+# rejects partitions the broker parks on comfortably.
+#
+# So a fixed-shape worker declares its peak and the resolver checks it against
+# the kernel bound, rather than re-deriving a number the broker computes its own
+# way. `graphDerived` shapes are summed from the routes the worker carries.
+FABRIC_WORKER_WAIT_SHAPES = {
+    # One ingress per publisher, one ack per subscriber — both counted as edges —
+    # plus the capability-routed clock the QoS profile parks on.
+    "stream": {"graphDerived": True, "fixed": 1},
+    # Two client slots x (control endpoint + send capacity), plus the server
+    # endpoint, the clock, and the server's supervision handle. Mirrors the
+    # `[WaitSource; 7]` array in `call_broker::run`.
+    #
+    # Both shapes below sit at their bound with zero headroom — 7 of 7 for the
+    # call array, 9 of 9 for the kernel set — and every combination of client
+    # presence, send readiness, server presence, backup fallback, clock state,
+    # and replacement-control state reaches it. So a broker that grows its park
+    # set by even one source overflows immediately, and this number must move in
+    # the same change rather than after the next boot fails.
+    "call": {"graphDerived": False, "peak": 2 * 2 + 3},
+    # As the call shape, plus one supervision source per client slot.
+    "operation": {"graphDerived": False, "peak": 2 * 3 + 3},
+}
 
 
 class ResolvedFabricProfile:
@@ -507,6 +550,12 @@ def selected_profile_name() -> str:
         fail("fabric graph: ambiguous selected profile")
     return explicit or legacy or DEFAULT_FABRIC_PROFILE
 
+def declared_fabric_profiles(manifest: dict) -> list[str]:
+    """Every fabric profile the manifest names, selected or not."""
+    graph = manifest.get("fabricGraph") or {}
+    return [profile["name"] for profile in graph.get("profiles", [])]
+
+
 def _control_sources(manifest: dict, grant_names: tuple[str, ...]) -> list[str]:
     controls_by_name = [
         grant
@@ -639,12 +688,62 @@ def resolve_fabric_profile(manifest: dict, interfaces: list, profile_name: str) 
         {"component": component, "slot": FABRIC_FIRST_CONTROL_SLOT + len(stream_controls) + index}
         for index, component in enumerate(subscribers)
     ]
-    retained_route_endpoints = max(
+    # C8.10: every plane coexists in one boot, so its control slots are summed
+    # into one disjoint layout rather than overlaid. `max()` here would size the
+    # table for whichever single plane happened to be largest, which is exactly
+    # the mutually-exclusive assumption the milestone removes: two planes would
+    # then be numbered from the same base and collide on the same slot.
+    plane_control_counts = (
         len(stream_controls) * 2 + len(subscribers),
         len(call_controls),
         len(operation_controls) + len(replacement_controls),
     )
+    retained_route_endpoints = sum(plane_control_counts)
     required_capability_slots = FABRIC_FIRST_CONTROL_SLOT + retained_route_endpoints + graph["limits"]["buffers"]
+    # C8.10 bounded route workers. Each worker owns whole routes and must be able
+    # to park on every live source those routes produce at once. A graph that
+    # cannot be split into workers under the kernel wait bound would have to poll,
+    # so it fails the build rather than the boot.
+    #
+    # The count is every source the broker registers, which is not the same as
+    # every participant. How it is established depends on the worker's shape —
+    # see `FABRIC_WORKER_WAIT_SHAPES` — because the stream broker's set scales
+    # with the graph while the request/response brokers park across fixed slot
+    # arrays of their own.
+    workers = []
+    for worker_name, worker_routes in FABRIC_ROUTE_WORKERS:
+        declared = [route for route in graph["routes"] if route["name"] in worker_routes]
+        if len(declared) != len(worker_routes):
+            fail(f"fabric graph: worker {worker_name} names an undeclared route")
+        shape = FABRIC_WORKER_WAIT_SHAPES.get(worker_name)
+        if shape is None:
+            fail(f"fabric graph: worker {worker_name} declares no wait-source shape")
+        if shape["graphDerived"]:
+            members = [member for route in declared for member in route["participants"]]
+            sources = (
+                sum(
+                    1
+                    for member in members
+                    if member["direction"] in ("publish", "client", "subscribe", "server")
+                )
+                + shape["fixed"]
+            )
+        else:
+            sources = shape["peak"]
+        if sources > MAX_FABRIC_GRAPH_INGRESS_SOURCES:
+            fail(f"fabric graph: worker {worker_name} exceeds one SYS_WAIT set")
+        workers.append(
+            {
+                "name": worker_name,
+                "routes": sorted(route["name"] for route in declared),
+                "waitSources": sources,
+            }
+        )
+    covered = [route for worker in workers for route in worker["routes"]]
+    if sorted(covered) != sorted(route["name"] for route in graph["routes"]):
+        fail("fabric graph: route workers do not partition the declared routes")
+    if len(covered) != len(set(covered)):
+        fail("fabric graph: a route is claimed by more than one worker")
     artifact = {
         "formatVersion": 1,
         "name": profile_name,
@@ -674,6 +773,13 @@ def resolve_fabric_profile(manifest: dict, interfaces: list, profile_name: str) 
             for identity, route in route_rows
         ],
         "participants": participants,
+        "workers": workers,
+        # C8.10: one plane is one bounded route worker. Each worker is its own
+        # task with its own capability table, so numbering every plane from
+        # `FABRIC_FIRST_CONTROL_SLOT` is disjoint by construction rather than
+        # colliding: slot 2 in the stream worker and slot 2 in the call worker
+        # name different objects in different tables. What must not collide is
+        # the aggregate init hands out, which `requiredCapabilitySlots` sums.
         "planes": [
             {"name": "stream", "controls": [{"component": component, "slot": FABRIC_FIRST_CONTROL_SLOT + index} for index, component in enumerate(stream_controls)]},
             {"name": "call", "controls": [{"component": component, "slot": FABRIC_FIRST_CONTROL_SLOT + index} for index, component in enumerate(call_controls)]},
@@ -763,6 +869,14 @@ def render_fabric_profile_rust(resolved: ResolvedFabricProfile) -> str:
     controls = lambda name: "".join(
         f"    b{rust_string(row['component'])},\n" for row in planes[name]
     )
+    # C8.10 bounded route workers. One row per worker: the routes it carries and
+    # the number of live wake sources it must hold at once. The fabric parks on
+    # exactly this set, so the generation — not a runtime heuristic — decides how
+    # the graph is partitioned across `SYS_WAIT` sets.
+    worker_rows = "".join(
+        f"    ({rust_string(row['name'])}, &[{', '.join(rust_string(route) for route in row['routes'])}], {row['waitSources']}),\n"
+        for row in artifact["workers"]
+    )
     supervision_rows = "".join(
         f"    (b{rust_string(row['component'])}, {row['slot']}),\n" for row in artifact["supervision"]
     )
@@ -797,6 +911,42 @@ pub const FABRIC_QOS: &[FabricQosRow] = &[\n{qos_rows}];
 pub const FABRIC_VISIBILITY: &[(&[u8], &str, u8)] = &[\n{visibility_rows}];
 pub type FabricInterpositionRow = (&'static [u8], &'static str, &'static [&'static [u8]]);
 pub const FABRIC_INTERPOSITIONS: &[FabricInterpositionRow] = &[\n{interposition_rows}];
+pub type FabricWorkerRow = (&'static str, &'static [&'static str], usize);
+pub const FABRIC_WORKERS: &[FabricWorkerRow] = &[\n{worker_rows}];
+/// The wake sources the generation declares one worker parks on at once.
+///
+/// `const fn` so a broker can bind its own `SYS_WAIT` array to this number in a
+/// `const _: () = assert!(..)`. The declared peak and the array that has to hold
+/// it then cannot drift apart silently: a broker that grows its park set past
+/// what the generation resolved stops compiling instead of overflowing at boot.
+#[allow(dead_code)]
+pub const fn fabric_worker_wait_sources(name: &str) -> usize {{
+    let mut index = 0;
+    while index < FABRIC_WORKERS.len() {{
+        let (candidate, _, sources) = FABRIC_WORKERS[index];
+        if konst_str_eq(candidate, name) {{
+            return sources;
+        }}
+        index += 1;
+    }}
+    panic!("worker absent from the resolved profile")
+}}
+
+/// `str` equality usable in a `const fn`; `==` on `&str` is not yet const.
+const fn konst_str_eq(left: &str, right: &str) -> bool {{
+    let (left, right) = (left.as_bytes(), right.as_bytes());
+    if left.len() != right.len() {{
+        return false;
+    }}
+    let mut index = 0;
+    while index < left.len() {{
+        if left[index] != right[index] {{
+            return false;
+        }}
+        index += 1;
+    }}
+    true
+}}
 pub const FABRIC_CLIENTS: &[&[u8]] = &[\n{controls('stream')}];
 pub const FABRIC_CALL_CLIENTS: &[&[u8]] = &[\n{controls('call')}];
 pub const FABRIC_OPERATION_CLIENTS: &[&[u8]] = &[\n{controls('operation')}];

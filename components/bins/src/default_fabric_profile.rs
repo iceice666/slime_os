@@ -21,6 +21,7 @@ pub const FABRIC_PARTICIPANTS: &[(&[u8], &str, &str, u32)] = &[
     (b"fabric-subscriber", "telemetry", "TelemetryStream", 2),
     (b"fabric-publisher-b", "telemetry", "TelemetryStream", 1),
     (b"fabric-subscriber-b", "telemetry", "TelemetryStream", 2),
+    (b"fabric-observer", "telemetry", "TelemetryStream", 2),
     (b"fabric-call-client", "parameters", "ParameterCall", 3),
     (b"fabric-call-client-b", "parameters", "ParameterCall", 3),
     (b"fabric-call-server", "parameters", "ParameterCall", 4),
@@ -37,6 +38,7 @@ pub const FABRIC_HISTORY_DEPTHS: &[(&[u8], &str, u32)] = &[
     (b"fabric-subscriber", "telemetry", 8),
     (b"fabric-publisher-b", "telemetry", 4),
     (b"fabric-subscriber-b", "telemetry", 4),
+    (b"fabric-observer", "telemetry", 4),
     (b"fabric-call-client", "parameters", 4),
     (b"fabric-call-client-b", "parameters", 4),
     (b"fabric-call-server", "parameters", 4),
@@ -54,6 +56,7 @@ pub const FABRIC_QOS: &[FabricQosRow] = &[
     (b"fabric-subscriber", "telemetry", 0, 0, 0, 8, 0, 1, 1, 1),
     (b"fabric-publisher-b", "telemetry", 100, 300, 200, 4, 2, 2, 2, 2),
     (b"fabric-subscriber-b", "telemetry", 0, 0, 0, 4, 0, 1, 1, 1),
+    (b"fabric-observer", "telemetry", 0, 0, 0, 4, 0, 1, 1, 1),
     (b"fabric-call-client", "parameters", 1000000, 2000000, 0, 4, 0, 2, 1, 1),
     (b"fabric-call-client-b", "parameters", 1000000, 2000000, 0, 4, 0, 2, 1, 1),
     (b"fabric-call-server", "parameters", 1000000, 2000000, 5000000, 4, 0, 2, 1, 2),
@@ -70,6 +73,7 @@ pub const FABRIC_VISIBILITY: &[(&[u8], &str, u8)] = &[
     (b"fabric-subscriber", "telemetry", 1),
     (b"fabric-publisher-b", "telemetry", 2),
     (b"fabric-subscriber-b", "telemetry", 2),
+    (b"fabric-observer", "telemetry", 1),
     (b"fabric-call-client", "parameters", 1),
     (b"fabric-call-client-b", "parameters", 1),
     (b"fabric-call-server", "parameters", 1),
@@ -85,6 +89,46 @@ pub type FabricInterpositionRow = (&'static [u8], &'static str, &'static [&'stat
 pub const FABRIC_INTERPOSITIONS: &[FabricInterpositionRow] = &[
     (b"fabric-subscriber", "telemetry", &[b"fabric-service" as &[u8]]),
 ];
+pub type FabricWorkerRow = (&'static str, &'static [&'static str], usize);
+pub const FABRIC_WORKERS: &[FabricWorkerRow] = &[
+    ("stream", &["diagnostics", "telemetry"], 8),
+    ("call", &["parameters"], 7),
+    ("operation", &["nav-backup", "navigation"], 9),
+];
+/// The wake sources the generation declares one worker parks on at once.
+///
+/// `const fn` so a broker can bind its own `SYS_WAIT` array to this number in a
+/// `const _: () = assert!(..)`. The declared peak and the array that has to hold
+/// it then cannot drift apart silently: a broker that grows its park set past
+/// what the generation resolved stops compiling instead of overflowing at boot.
+#[allow(dead_code)]
+pub const fn fabric_worker_wait_sources(name: &str) -> usize {
+    let mut index = 0;
+    while index < FABRIC_WORKERS.len() {
+        let (candidate, _, sources) = FABRIC_WORKERS[index];
+        if konst_str_eq(candidate, name) {
+            return sources;
+        }
+        index += 1;
+    }
+    panic!("worker absent from the resolved profile")
+}
+
+/// `str` equality usable in a `const fn`; `==` on `&str` is not yet const.
+const fn konst_str_eq(left: &str, right: &str) -> bool {
+    let (left, right) = (left.as_bytes(), right.as_bytes());
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut index = 0;
+    while index < left.len() {
+        if left[index] != right[index] {
+            return false;
+        }
+        index += 1;
+    }
+    true
+}
 pub const FABRIC_CLIENTS: &[&[u8]] = &[
     b"fabric-publisher",
     b"fabric-subscriber",
@@ -117,7 +161,7 @@ pub const FABRIC_MAX_ROUTES: usize = 8;
 #[allow(dead_code)]
 pub const FABRIC_MAX_INGRESS_SOURCES: usize = 9;
 pub const FABRIC_MAX_PUBLISHERS: usize = 3;
-pub const FABRIC_MAX_SUBSCRIBERS: usize = 3;
+pub const FABRIC_MAX_SUBSCRIBERS: usize = 4;
 #[allow(dead_code)]
 pub const FABRIC_MAX_CLIENTS: usize = 6;
 #[allow(dead_code)]
@@ -139,7 +183,7 @@ pub const FABRIC_MAX_MAPPINGS: usize = 14;
 #[allow(dead_code)]
 pub const FABRIC_MAX_LOANS: usize = 14;
 pub const FABRIC_MAX_CAPABILITY_SLOTS: usize = 48;
-pub const FABRIC_REQUIRED_CAPABILITY_SLOTS: usize = 28;
+pub const FABRIC_REQUIRED_CAPABILITY_SLOTS: usize = 37;
 pub const FABRIC_FRAME_CAPACITY: usize = 32;
 pub const FABRIC_COPY_PAGES: usize = 2;
 pub const FABRIC_CALL_DEADLINE_NS: u64 = 1000000;

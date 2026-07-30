@@ -36,6 +36,11 @@ ProfileParticipant :: type {
 };
 ProfileControl :: type { component : Text; slot : Int; };
 ProfilePlane :: type { name : Text; controls : List ProfileControl; };
+-- One bounded route worker (C8.10): the whole routes it carries and the number
+-- of live wake sources it registers at once. `waitSources` is bounded by the
+-- kernel `SYS_WAIT` set, so a partition that cannot block on its own graph is
+-- rejected at build time rather than polling at runtime.
+ProfileWorker :: type { name : Text; routes : List Text; waitSources : Int; };
 ResolvedDataFabricProfile :: type {
   formatVersion : Int;
   name : Text;
@@ -48,6 +53,7 @@ ResolvedDataFabricProfile :: type {
   schemas : List ProfileSchema;
   routes : List ProfileRoute;
   participants : List ProfileParticipant;
+  workers : List ProfileWorker;
   planes : List ProfilePlane;
   supervision : List ProfileControl;
 };
@@ -58,6 +64,7 @@ FromData @ProfileRoute :: derive
 FromData @ProfileParticipant :: derive
 FromData @ProfileControl :: derive
 FromData @ProfilePlane :: derive
+FromData @ProfileWorker :: derive
 FromData @ResolvedDataFabricProfile :: derive
 
 decodeProfile :: Data -> Validation DecodeIssue ResolvedDataFabricProfile = data => decode data;
@@ -69,6 +76,7 @@ decodeProfile :: Data -> Validation DecodeIssue ResolvedDataFabricProfile = data
   ProfileParticipant = ProfileParticipant;
   ProfileControl = ProfileControl;
   ProfilePlane = ProfilePlane;
+  ProfileWorker = ProfileWorker;
   ResolvedDataFabricProfile = ResolvedDataFabricProfile;
   decodeProfile = decodeProfile;
 }

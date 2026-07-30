@@ -126,6 +126,20 @@ name = "fabric-intruder"
 path = "src/bin/fabric-intruder.rs"
 test = false
 
+[[bin]]
+name = "fabric-probe"
+path = "src/bin/fabric-probe.rs"
+test = false
+
+[[bin]]
+name = "fabric-proxy"
+path = "src/bin/fabric-proxy.rs"
+test = false
+
+[[bin]]
+name = "fabric-observer"
+path = "src/bin/fabric-observer.rs"
+test = false
 
 [[bin]]
 name = "fabric-call-client"

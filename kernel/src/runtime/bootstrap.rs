@@ -47,6 +47,9 @@ static FABRIC_OP_CLIENT_B_ID: AtomicU64 = AtomicU64::new(0);
 static FABRIC_OP_CLIENT_B_RESTART_ID: AtomicU64 = AtomicU64::new(0);
 static FABRIC_OP_SERVER_ID: AtomicU64 = AtomicU64::new(0);
 static FABRIC_OP_TIME_ID: AtomicU64 = AtomicU64::new(0);
+static FABRIC_PROBE_ID: AtomicU64 = AtomicU64::new(0);
+static FABRIC_PROXY_ID: AtomicU64 = AtomicU64::new(0);
+static FABRIC_OBSERVER_ID: AtomicU64 = AtomicU64::new(0);
 static GENERATION_NUMBER: AtomicU64 = AtomicU64::new(0);
 static RECOVERY_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -1086,6 +1089,9 @@ pub fn record_spawn(component: &'static str, id: task::TaskId) {
         "fabric-op-client-b" => &FABRIC_OP_CLIENT_B_ID,
         "fabric-op-server" => &FABRIC_OP_SERVER_ID,
         "fabric-op-time" => &FABRIC_OP_TIME_ID,
+        "fabric-probe" => &FABRIC_PROBE_ID,
+        "fabric-proxy" => &FABRIC_PROXY_ID,
+        "fabric-observer" => &FABRIC_OBSERVER_ID,
         "recovery" => &RECOVERY_ID,
         _ => return,
     };

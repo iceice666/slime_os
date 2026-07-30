@@ -40,6 +40,19 @@ const LOAN_BASE: u64 = 0x7200_0000;
 const BUFFER_BASE: u64 = LOAN_BASE + PAGE;
 const MAX_PENDING_TERMINALS_PER_CLIENT: usize = MAX_CALLS * 2;
 const MAX_PENDING_TERMINALS: usize = MAX_PENDING_TERMINALS_PER_CLIENT * 2;
+/// Client slots this broker serves. The generation declares two clients on the
+/// call route, and a client replaced at runtime reuses its slot, so this bounds
+/// the park set rather than the number of components that ever hold a role.
+const CLIENTS: usize = 2;
+/// Live wake sources this broker parks on at peak: each of two clients through
+/// its control endpoint and its send capacity, plus the server endpoint, the
+/// capability-routed clock, and the server's supervision handle.
+///
+/// Taken from the generation rather than written here so the resolved profile and
+/// the array below cannot disagree. The generation rejects a partition above the
+/// kernel bound at build time; this ties that same number to the array that has
+/// to hold it, so growing the park set without re-resolving fails to compile.
+const WAIT_SOURCES: usize = fabric_worker_wait_sources("call");
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Phase {
@@ -114,7 +127,7 @@ pub struct Broker {
     server_control: u32,
     time_control: u32,
     supervision: [u32; 3],
-    clients: [Option<u32>; 2],
+    clients: [Option<u32>; CLIENTS],
     server_slot: Option<u32>,
     calls: [Call; MAX_CALLS],
     high_water: [u64; 2],
@@ -140,7 +153,7 @@ impl Broker {
             server_control,
             time_control,
             supervision: [0; 3],
-            clients: [None; 2],
+            clients: [None; CLIENTS],
             server_slot: None,
             calls: [Call::EMPTY; MAX_CALLS],
             high_water: [0; 2],
@@ -178,7 +191,7 @@ impl Broker {
             if progressed {
                 continue;
             }
-            let mut sources = [WaitSource::Endpoint(0); 7];
+            let mut sources = [WaitSource::Endpoint(0); WAIT_SOURCES];
             let mut count = 0;
             for (client, slot) in self
                 .clients
@@ -235,7 +248,7 @@ impl Broker {
             &parameter_call::INTERFACE_IDENTITY,
             CONTRACT_KIND_CALL,
         );
-        let declared_clients: [&[u8]; 2] = [b"fabric-call-client", b"fabric-call-client-b"];
+        let declared_clients: [&[u8]; CLIENTS] = [b"fabric-call-client", b"fabric-call-client-b"];
         for (index, component) in declared_clients.iter().enumerate() {
             let expected = FABRIC_PARTICIPANTS
                 .iter()
@@ -1277,3 +1290,10 @@ fn fail(reason: &[u8]) -> ! {
 const _: () = assert!(slime_proto::fabric_call::CALL_LEN == MAX_MSG);
 const _: () = assert!(slime_proto::fabric_call::CALL_TIME_LEN == MAX_MSG);
 const _: () = assert!(FLAG_NON_IDEMPOTENT == 1);
+// Two clients x (control endpoint + send capacity), plus server, clock, and the
+// server's supervision handle. Stated here as well as taken from the generation
+// so a park set that outgrows the declared peak fails at this assertion rather
+// than at a boot, and so the arithmetic behind the declared number is auditable
+// from the broker that has to satisfy it.
+const _: () = assert!(WAIT_SOURCES == CLIENTS * 2 + 3);
+const _: () = assert!(WAIT_SOURCES <= slime_rt::MAX_WAIT_SOURCES);

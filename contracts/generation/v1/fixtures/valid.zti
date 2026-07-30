@@ -39,7 +39,6 @@
     { id = "sha256:fabric-service"; kind = "component"; size = 65536; };
     { id = "sha256:fabric-publisher"; kind = "component"; size = 65536; };
     { id = "sha256:fabric-subscriber"; kind = "component"; size = 65536; };
-    { id = "sha256:fabric-intruder"; kind = "component"; size = 65536; };
     { id = "sha256:fabric-publisher-b"; kind = "component"; size = 65536; };
     { id = "sha256:fabric-subscriber-b"; kind = "component"; size = 65536; };
     { id = "sha256:fabric-call-client"; kind = "component"; size = 65536; };
@@ -51,6 +50,10 @@
     { id = "sha256:fabric-op-client-b-restart"; kind = "component"; size = 65536; };
     { id = "sha256:fabric-op-server"; kind = "component"; size = 65536; };
     { id = "sha256:fabric-op-time"; kind = "component"; size = 32768; };
+    { id = "sha256:fabric-intruder"; kind = "component"; size = 65536; };
+    { id = "sha256:fabric-probe"; kind = "component"; size = 65536; };
+    { id = "sha256:fabric-proxy"; kind = "component"; size = 65536; };
+    { id = "sha256:fabric-observer"; kind = "component"; size = 65536; };
     { id = "shared-buffer-budget"; kind = "resource"; size = 4096; };
     { id = "fabric-graph"; kind = "resource"; size = 4096; };
   ];
@@ -74,7 +77,7 @@
       routes = 8;
       ingressSources = 9;
       publishers = 3;
-      subscribers = 3;
+      subscribers = 4;
       clients = 6;
       servers = 2;
       sampleBytes = 8192;
@@ -144,6 +147,20 @@
             component = "fabric-subscriber-b";
             direction = "subscribe";
             visibility = "graph";
+            interposition = [];
+            reliability = "bestEffort";
+            durability = "volatile";
+            liveliness = "automatic";
+            historyDepth = 4;
+            retainedDepth = 0;
+            deadlineNs = 0;
+            lifespanNs = 0;
+            leaseNs = 0;
+          };
+          {
+            component = "fabric-observer";
+            direction = "subscribe";
+            visibility = "private";
             interposition = [];
             reliability = "bestEffort";
             durability = "volatile";
@@ -333,6 +350,16 @@
             route = "telemetry";
             participant = "fabric-subscriber";
             chain = ["fabric-intruder";];
+          };
+        ];
+      };
+      {
+        name = "unified";
+        interpositions = [
+          {
+            route = "telemetry";
+            participant = "fabric-subscriber";
+            chain = ["fabric-proxy";];
           };
         ];
       };
@@ -633,6 +660,30 @@
       name = "fabric-op-time";
       object = "sha256:fabric-op-time";
       role = "service";
+      dependencies = ["fabric-service";];
+      spawnBudget = 0;
+      commandProfile = [];
+    };
+    {
+      name = "fabric-probe";
+      object = "sha256:fabric-probe";
+      role = "application";
+      dependencies = ["fabric-service";];
+      spawnBudget = 0;
+      commandProfile = [];
+    };
+    {
+      name = "fabric-proxy";
+      object = "sha256:fabric-proxy";
+      role = "application";
+      dependencies = ["fabric-service";];
+      spawnBudget = 0;
+      commandProfile = [];
+    };
+    {
+      name = "fabric-observer";
+      object = "sha256:fabric-observer";
+      role = "application";
       dependencies = ["fabric-service";];
       spawnBudget = 0;
       commandProfile = [];
@@ -987,6 +1038,27 @@
     {
       name = "fabric-op-time-control";
       source = "fabric-op-time";
+      target = "fabric-service";
+      rights = ["send"; "recv";];
+      transferable = false;
+    };
+    {
+      name = "fabric-probe-control";
+      source = "fabric-probe";
+      target = "fabric-service";
+      rights = ["send"; "recv";];
+      transferable = false;
+    };
+    {
+      name = "fabric-proxy-control";
+      source = "fabric-proxy";
+      target = "fabric-service";
+      rights = ["send"; "recv";];
+      transferable = false;
+    };
+    {
+      name = "fabric-observer-control";
+      source = "fabric-observer";
       target = "fabric-service";
       rights = ["send"; "recv";];
       transferable = false;

@@ -35,13 +35,25 @@ def fail(message: str) -> None:
 
 def rejected(label: str, mutate, *, profile: str = "default") -> None:
     manifest = copy.deepcopy(MANIFEST)
-    mutate(manifest)
+    # A mutator may alter builder module state rather than the manifest — the
+    # fixed-shape worker bound lives there, not in the graph. Snapshot and restore
+    # it so one negative case cannot leak into the next.
+    shapes = copy.deepcopy(builder.FABRIC_WORKER_WAIT_SHAPES)
+    # The outer `finally` covers mutation as well as resolution, so a mutator that
+    # edits module state and then raises cannot leak into the next case. Only the
+    # resolve is allowed to answer "rejected": a `SystemExit` out of `mutate` is a
+    # broken mutator, and swallowing it here would make the case pass vacuously.
     try:
-        builder.resolve_fabric_profile(manifest, INTERFACES, profile)
-    except SystemExit:
-        return
-    except (KeyError, TypeError, ValueError, struct.error) as error:
-        fail(f"{label} bypassed a builder check: {type(error).__name__}: {error}")
+        mutate(manifest)
+        try:
+            builder.resolve_fabric_profile(manifest, INTERFACES, profile)
+        except SystemExit:
+            return
+        except (KeyError, TypeError, ValueError, struct.error) as error:
+            fail(f"{label} bypassed a builder check: {type(error).__name__}: {error}")
+    finally:
+        builder.FABRIC_WORKER_WAIT_SHAPES.clear()
+        builder.FABRIC_WORKER_WAIT_SHAPES.update(shapes)
     fail(f"{label} was accepted")
 
 
@@ -179,6 +191,69 @@ def capability_layout_too_small(manifest: dict) -> None:
     manifest["fabricGraph"]["limits"]["capabilitySlots"] = first.artifact["requiredCapabilitySlots"] - 1
 
 
+def worker_above_wait_bound(manifest: dict) -> None:
+    """Crowd one worker's routes past a single `SYS_WAIT` set.
+
+    C8.10 partitions the graph so every worker can block on all of its live
+    sources at once. Adding subscribers to a route the stream worker already
+    carries pushes that worker past the kernel bound, which must fail the build:
+    a worker that cannot register its whole set would have to poll.
+
+    Reaching that check at all takes care, because three unrelated guards sit in
+    front of it and each rejects a careless mutation for its own reason — which
+    would leave the wait bound untested while the case still looked green:
+
+    * a participant naming an undeclared component is refused by graph encoding,
+      so each addition needs a matching `components` entry;
+    * `subscribers` is already exactly at its declared budget, so the mutator has
+      to raise the very limit it is not testing;
+    * the summed subscriber history is checked against the frame table, so the
+      additions carry the shallowest history that still declares an edge.
+
+    Two subscribers is the minimum that exceeds the bound: the stream worker sits
+    at 8 of 9, so one more would only reach it.
+    """
+    graph = manifest["fabricGraph"]
+    telemetry = next(route for route in graph["routes"] if route["name"] == "telemetry")
+    template = next(
+        member for member in telemetry["participants"] if member["direction"] == "subscribe"
+    )
+    crowd = 2
+    for index in range(crowd):
+        component = f"fabric-crowd-{index}"
+        manifest["components"].append(
+            {
+                "name": component,
+                "object": "sha256:fabric-observer",
+                "role": "application",
+                "dependencies": ["fabric-service"],
+                "spawnBudget": 0,
+                "commandProfile": [],
+            }
+        )
+        extra = dict(template)
+        extra["component"] = component
+        extra["historyDepth"] = 1
+        extra["retainedDepth"] = 0
+        telemetry["participants"].append(extra)
+    graph["limits"]["subscribers"] += crowd
+
+
+def worker_shape_above_wait_bound(manifest: dict) -> None:
+    """Raise a fixed-shape worker's declared peak past the kernel bound.
+
+    The request/response workers park across fixed slot arrays rather than the
+    graph, so crowding a route cannot move their peak — the only way one drifts
+    over the bound is the broker growing its own set. Mutating the declared shape
+    is the closest stand-in, and it proves the ceiling is enforced for fixed-shape
+    workers too rather than only for the graph-derived one.
+    """
+    builder.FABRIC_WORKER_WAIT_SHAPES["call"] = {
+        "graphDerived": False,
+        "peak": builder.MAX_FABRIC_GRAPH_INGRESS_SOURCES + 1,
+    }
+
+
 def frame_layout_too_small(manifest: dict) -> None:
     for route in manifest["fabricGraph"]["routes"]:
         for participant in route["participants"]:
@@ -198,9 +273,34 @@ for label, mutate in (
     ("insufficient fabric loan quota", insufficient_holder_loans),
     ("queue above kernel bound", queue_above_kernel),
     ("capability layout above declaration", capability_layout_too_small),
+    ("route worker above wait bound", worker_above_wait_bound),
+    ("fixed-shape worker above wait bound", worker_shape_above_wait_bound),
     ("frame layout above generated table", frame_layout_too_small),
 ):
     rejected(label, mutate)
+
+# Each wait-bound mutator must be rejected *by the wait bound*, not by one of the
+# unrelated guards standing in front of it. Neutralizing the ceiling and requiring
+# the same manifest to resolve is what tells the two apart: a mutator that still
+# fails here was never testing this bound, and would have kept passing after the
+# check it names was deleted outright.
+for label, mutate in (
+    ("route worker above wait bound", worker_above_wait_bound),
+    ("fixed-shape worker above wait bound", worker_shape_above_wait_bound),
+):
+    ceiling = builder.MAX_FABRIC_GRAPH_INGRESS_SOURCES
+    shapes = copy.deepcopy(builder.FABRIC_WORKER_WAIT_SHAPES)
+    probe = copy.deepcopy(MANIFEST)
+    mutate(probe)
+    builder.MAX_FABRIC_GRAPH_INGRESS_SOURCES = 1 << 30
+    try:
+        builder.resolve_fabric_profile(probe, INTERFACES, "default")
+    except SystemExit as error:
+        fail(f"{label} is rejected by {error!s}, not by the wait bound it names")
+    finally:
+        builder.MAX_FABRIC_GRAPH_INGRESS_SOURCES = ceiling
+        builder.FABRIC_WORKER_WAIT_SHAPES.clear()
+        builder.FABRIC_WORKER_WAIT_SHAPES.update(shapes)
 
 rejected("unknown profile", lambda _manifest: None, profile="missing")
 
@@ -209,6 +309,18 @@ if visibility.graph_bytes == first.graph_bytes:
     fail("named visibility profile did not change authenticated graph authority")
 if visibility.artifact["name"] != "visibility":
     fail("resolved artifact lost its selected profile name")
+
+# Every declared profile must resolve, including one no generation selects yet.
+# An unresolvable profile is a latent boot failure rather than dead text: it stays
+# green until the generation that selects it is written, which is exactly when a
+# stale interposition chain or dropped participant is most expensive to find.
+for profile in builder.declared_fabric_profiles(MANIFEST):
+    resolved = builder.resolve_fabric_profile(MANIFEST, INTERFACES, profile)
+    if resolved.artifact["name"] != profile:
+        fail(f"resolved artifact lost its selected profile name: {profile}")
+    for worker in resolved.artifact["workers"]:
+        if worker["waitSources"] > builder.MAX_FABRIC_GRAPH_INGRESS_SOURCES:
+            fail(f"profile {profile} worker {worker['name']} exceeds one SYS_WAIT set")
 
 # The Rust decoder is the second reader of the schema artifact. Run its tests
 # so a layout or rule drift between the builder and decoder fails this gate.

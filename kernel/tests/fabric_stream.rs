@@ -85,14 +85,15 @@ fn booted() -> boot_contracts::generation::Generation<'static> {
         .expect("booted generation decodes")
 }
 
-/// The booted graph declares a real many-to-many stream: two publishers and two
-/// subscribers on one route, each as its own authority tuple.
+/// The booted graph declares a real many-to-many stream: two publishers and
+/// three subscribers on one route, each as its own authority tuple.
 ///
 /// This is the structural form of the milestone's "two publishers and two
-/// subscribers" check. A transcript can show four components talking; only the
+/// subscribers" check, now carrying C8.10's filtered-introspection client as a
+/// third declared subscriber. A transcript can show components talking; only the
 /// resource shows that the generation — not the service — decided they match.
 #[test_case]
-fn telemetry_route_declares_two_publishers_and_two_subscribers() {
+fn telemetry_route_declares_two_publishers_and_three_subscribers() {
     let generation = booted();
     let graph = graph_of(&generation);
     let route = telemetry_route();
@@ -112,7 +113,7 @@ fn telemetry_route_declares_two_publishers_and_two_subscribers() {
         }
     }
     assert_eq!(publishers, 2, "telemetry declares two publishers");
-    assert_eq!(subscribers, 2, "telemetry declares two subscribers");
+    assert_eq!(subscribers, 3, "telemetry declares three subscribers");
 }
 
 /// Every stream participant's authority is the exact fold of its tuple, and no
