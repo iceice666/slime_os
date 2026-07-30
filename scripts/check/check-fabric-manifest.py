@@ -24,17 +24,12 @@ _sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "lib"))
 import copy
 import struct
 import subprocess
-import sys
 
 from boot_contracts import (
-    FABRIC_COMPONENT_DOMAIN,
     FABRIC_CONTRACT_KIND_CALL,
     FABRIC_CONTRACT_KIND_STREAM,
-    FABRIC_DIRECTION_CLIENT,
     FABRIC_DIRECTION_PUBLISH,
-    FABRIC_DIRECTION_SERVER,
     FABRIC_DIRECTION_SUBSCRIBE,
-    FABRIC_GRANT_DOMAIN,
     FABRIC_GRAPH_HEADER,
     FABRIC_GRAPH_HEADER_BYTES,
     FABRIC_GRAPH_INTERPOSITION_ENTRY,
@@ -53,7 +48,6 @@ from boot_contracts import (
     FABRIC_GRAPH_SCHEMA_ENTRY_BYTES,
     FABRIC_GRAPH_VERSION,
     MAX_FABRIC_GRAPH_INGRESS_SOURCES,
-    sha256,
 )
 from harness import ROOT, load_script
 

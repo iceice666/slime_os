@@ -12,7 +12,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from harness import BOOT_TIMEOUT_SECONDS, ROOT, run_qemu
+from harness import ROOT, run_qemu
 
 MARKERS = [
     "[directory-probe] no-cap denied",

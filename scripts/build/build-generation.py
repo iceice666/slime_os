@@ -7,7 +7,6 @@ from pathlib import Path as _Path
 _sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "lib"))
 
 import copy
-import hashlib
 import json
 import os
 import struct
@@ -942,7 +941,7 @@ def build_fabric_graph(graph: dict, component_names: set[str], interfaces: list)
         fail("fabric graph exceeds schema bound")
     schema_index = {interface.name: index for index, interface in enumerate(schemas)}
 
-    ordered = sorted(zip(route_rows, routes), key=lambda pair: pair[0][0])
+    ordered = sorted(zip(route_rows, routes, strict=True), key=lambda pair: pair[0][0])
     if len({row[0] for row, _ in ordered}) != len(ordered):
         fail("fabric graph: duplicate route identity")
     # A graph admitting more routes than it budgets is over-committed at rest,

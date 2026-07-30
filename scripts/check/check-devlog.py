@@ -175,7 +175,7 @@ for line in README.read_text().splitlines():
         continue
     if not index_header or len(cells) != len(index_header):
         continue
-    row = dict(zip(index_header, cells))
+    row = dict(zip(index_header, cells, strict=True))
     link = re.match(r"^\[[^\]]+\]\(([^)]+)/index\.md\)$", row.get("Entry", ""))
     if not link:
         continue

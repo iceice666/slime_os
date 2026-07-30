@@ -16,8 +16,6 @@ from harness import load_script
 store = load_script("build_store_fixture", "build/build-store-fixture.py")
 
 from fs_contracts import (
-    FS_MAX_ENTRIES as MAX_ENTRIES,
-    FS_MAX_NAME_BYTES as MAX_NAME,
     SNAPSHOT_BYTES,
     SNAPSHOT_COUNT_OFFSET,
     SNAPSHOT_ENTRY_BYTES as ENTRY_BYTES,

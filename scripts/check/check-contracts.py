@@ -9,7 +9,6 @@ _sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "lib"))
 import os
 import subprocess
 import sys
-from pathlib import Path
 from zutai_cli import STDLIB, binary
 
 from harness import ROOT

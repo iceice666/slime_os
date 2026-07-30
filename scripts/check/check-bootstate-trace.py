@@ -35,7 +35,6 @@ import tempfile
 from pathlib import Path
 
 from boot_contracts import (
-    BOOTSTATE_SLOT_BYTES,
     BOOTSTATE_TRACE_MAX_LINE,
     BOOTSTATE_TRACE_PREFIX,
     BOOTSTATE_TRACE_VERSION,
