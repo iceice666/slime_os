@@ -413,8 +413,9 @@ M6 is complete because its spawn, filesystem, powerbox, generation-management, a
 
 ## Handoff to future tracks
 
-Continue with the [roadmap index](README.md) and the independent future tracks:
+Continue with the [roadmap index](README.md) and the current demo-first track before resuming deferred future tracks:
 
+- [RPi5 ROS 2 demo](09-rpi5-ros2-demo.md)
 - [Core runtime](02-core-runtime.md)
 - [ROS 2 compatibility](03-ros2-compatibility.md)
 - [Platform and hardware](04-platform-hardware.md)

@@ -1,14 +1,14 @@
 # Platform hardware
 
-**Purpose:** Deliver a Framework daily-driver hardware platform through typed, capability-routed services, deterministic QEMU/host checks, explicit DMA and storage safety gates, and reproducible physical evidence.
+**Purpose:** Preserve the deferred Framework daily-driver hardware plan through typed, capability-routed services, deterministic QEMU/host checks, explicit DMA and storage safety gates, and reproducible physical evidence.
 
-**Status:** In progress. H1's bounded inventory and host evidence harness are implemented and QEMU-verified; the required physical Framework evidence record is pending. The current Framework removable image has previously reported no usable physical keyboard input, and H4 is the first slice allowed to claim a working physical keyboard.
+**Status:** Deferred relative to the Raspberry Pi 5 ROS 2 two-node demo. H1's bounded inventory and host evidence harness are implemented and QEMU-verified; the required physical Framework evidence record is pending. The current Framework removable image has previously reported no usable physical keyboard input, and H4 is the first slice allowed to claim a working physical keyboard.
 
-**Dependencies:** [Foundations](01-foundations.md), especially the retained M5.7 storage-safety boundary; [Core runtime](02-core-runtime.md), especially C7 generation-v3 authority and C9 scheduling authority; [Architecture portability](07-architecture-portability.md), especially P1 before H2/C9 low-level contracts; [ROS 2 compatibility](03-ros2-compatibility.md) consumes H6 networking; [Authority and trust](06-authority-trust.md) owns A1 revocation, A2 secrets, and A3 general accelerator authority.
+**Dependencies:** [Foundations](01-foundations.md), especially the retained M5.7 storage-safety boundary; [Core runtime](02-core-runtime.md), especially C7 generation-v3 authority and C9 scheduling authority; [Architecture portability](07-architecture-portability.md), especially P1 before H2/C9 low-level contracts; [ROS 2 compatibility](03-ros2-compatibility.md) consumes H6-style networking for the later external ROS wire profile, while the first RPi5 DDS demo consumes a target-specific bounded datagram/network path owned by the RPi5 demo track; [Authority and trust](06-authority-trust.md) owns A1 revocation, A2 secrets, and A3 general accelerator authority.
 
 The Hardware track promotes hardware in two distinct steps: deterministic mechanism and fault handling under QEMU first, then an observed Framework run with the exact generation-declared device grant. A QEMU pass never substitutes for physical evidence. DMA-capable physical drivers remain trusted and read-only until H4 installs IOMMU containment; internal NVMe writes remain disabled until H7 completes every promotion gate.
 
-This track qualifies the named x86-64 Framework platform. It does not own generic ARM or RISC-V support, and its ACPI, PCI, APIC, AMD-IOMMU, xHCI, NVMe, and firmware evidence must not become requirements for another architecture profile. Named non-x86 boards are admitted through P4 and qualify each peripheral through an explicit owning milestone.
+This track qualifies the named x86-64 Framework platform if and when Framework daily-driver work resumes. It does not own Raspberry Pi 5, generic ARM, or RISC-V support, and its ACPI, PCI, APIC, AMD-IOMMU, xHCI, NVMe, and firmware evidence must not become requirements for another architecture profile. Raspberry Pi 5 is admitted through P4 and the RPi5 ROS 2 demo track, with each peripheral qualified through an explicit owning milestone.
 
 Sequencing:
 
@@ -167,7 +167,7 @@ Exit condition: Slime OS has a capability-selected disposable physical storage t
 
 **Status:** Not started.
 
-H6 enables [ROS R1](03-ros2-compatibility.md#r1-ros-2-topic-wire-profile). Its deterministic virtio-net backend is initially the x86-64 reference QEMU profile. ROS networking work may begin when H6 exits; it does not wait for unrelated compositor, platform UI, audio, wireless, GPU slices H8-H13, or an AArch64 boot. A later P2 replay reuses the ROS corpus but does not retroactively turn this Framework hardware track into generic ARM support.
+H6 enables the later broader [ROS R1](03-ros2-compatibility.md#r1-broader-ros-2-topic-wire-profile). It is not the owner of the first [R0](03-ros2-compatibility.md#r0-minimal-raspberry-pi-5-ddsrtps-ros-2-topic-profile) demo path: that path still needs bounded DDSI-RTPS datagram/network authority, but the target-specific minimum lives in the RPi5 demo track rather than the deferred Framework hardware track. H6's deterministic virtio-net backend remains the x86-64 reference QEMU profile for later external peer interoperability. A later AArch64/RPi5 network replay reuses the ROS wire corpus but does not retroactively turn this Framework hardware track into generic ARM support.
 
 Deliverables:
 

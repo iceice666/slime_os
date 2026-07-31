@@ -1,235 +1,146 @@
 # Slime OS roadmap
 
-This directory is the canonical plan for Slime OS. It separates mechanism, protocol compatibility, physical-platform qualification, foreign workloads, and authority work so unrelated hardware does not impose a false total order on the system architecture.
+This directory is the canonical plan for Slime OS. The near-term product goal is now a concrete robotics demonstration:
 
-A milestone is complete only when its exit condition is observed. Compiled code, a framebuffer demo, or a narrowed unit test is not completion. QEMU is the deterministic architecture target; a physical support claim additionally requires recorded behavior on the named Framework target.
+> **Boot Slime OS on a Raspberry Pi 5 and run two local ROS 2 nodes that exchange bounded topic data through a minimal DDSI-RTPS/XCDR profile.**
+
+Everything below is ordered around that acceptance test. Completed x86-64/QEMU work remains valuable regression evidence, but it is no longer the product-leading path. Framework daily-driver work, broad external ROS compatibility beyond the minimum DDS/RTPS topic path, RV64, foreign workloads, and distributed authority are deferred unless they directly de-risk the Raspberry Pi 5 ROS 2 two-node demo.
+
+A milestone is complete only when its exit condition is observed. Compiled code, a framebuffer demo, a passing host unit test, or an x86-only QEMU run cannot close a Raspberry Pi 5 milestone.
 
 ## Current state
 
 | Track | Status | Next open gate |
 | --- | --- | --- |
-| [Backlog](00-backlog.md) | No open items; B1–B9 resolved | Backlog gate is clear — C10 may open |
-| [Foundations](01-foundations.md) | M1–M4 and M6 complete; M5 mechanisms complete | Record M5.7 removable-media Framework evidence without internal-NVMe modification |
-| [Core runtime](02-core-runtime.md) | C7 and C8.1–C8.10 complete — the live userspace fabric provides authenticated bounded streams, reliable/retained/timed QoS, calls, native operations, filtered introspection, declared interposition, a typed full profile, and one collision-free full-graph boot across three bounded route workers. C10 is planned, not started | Begin C8.11 unified simulated time and deterministic semantic traces; C10's B9 prerequisite is clear |
-| [Architecture portability](07-architecture-portability.md) | Not started | Clear the active backlog, then land P0 target/artifact contracts before P1 x86 boundary extraction |
-| [ROS 2 compatibility](03-ros2-compatibility.md) | Not started | Admit R1 only after C8 and the H6 network-service contract exist |
-| [Platform hardware](04-platform-hardware.md) | H1 implementation complete; physical evidence pending | Record H1 topology/input/storage evidence; implement H2 driver authority ABI |
-| [Foreign workloads](05-foreign-workloads.md) | Not started | X1 Linux userspace personality |
-| [Authority and trust](06-authority-trust.md) | Not started | A1 revocation/leases and A2 secrets after their core dependencies |
-| [Native development](08-native-development.md) | Not started | Begin D1 in-system source workspace; D2 direct image emission follows P0 |
+| [Backlog](00-backlog.md) | No open items; B1–B9 resolved | Backlog gate is clear for the RPi5 ROS 2 demo track |
+| [Foundations](01-foundations.md) | M1–M4 and M6 complete; M5 mechanisms complete except M5.7 physical Framework evidence | Preserve as regression history; do not block RPi5 work on Framework-only evidence unless storage safety is touched |
+| [Core runtime](02-core-runtime.md) | C7 and C8.1–C8.10 complete; C8.11–C8.15 and C10 are planned | For the demo, prioritize only the C8/C10 slices required by two ROS 2 nodes over minimal DDS/RTPS |
+| [RPi5 ROS 2 demo](09-rpi5-ros2-demo.md) | Not started | Begin RP0 demo contract, then RP1/RP2 AArch64 and Raspberry Pi 5 boot bring-up |
+| [Architecture portability](07-architecture-portability.md) | Not started | P0/P1 are prerequisites for target-qualified AArch64 artifacts; P2 and P4 are on the demo critical path |
+| [ROS 2 compatibility](03-ros2-compatibility.md) | Not started | R0 minimal DDS/RTPS topic profile is first; broader external/multi-vendor compatibility follows after the RPi5 demo path |
+| [Platform hardware](04-platform-hardware.md) | Framework track deferred; H1 implementation complete but physical evidence pending | Do not advance Framework daily-driver hardware unless needed for shared mechanisms or evidence preservation |
+| [Foreign workloads](05-foreign-workloads.md) | Deferred | Use only if the chosen ROS 2 node route requires a Linux userspace personality |
+| [Authority and trust](06-authority-trust.md) | Deferred | Resume after the demo unless a demo milestone needs a specific authority primitive |
+| [Native development](08-native-development.md) | Deferred | Resume after the demo; D2/D3 may be useful later for on-device ROS node builds |
 
-The active work lanes are deliberately parallel:
+## Demo-first sequencing
 
-- **Evidence lane:** close M5.7 and H1 with an observed removable-media Framework run.
-- **Core lane:** the backlog is clear; C8.1–C8.10 have landed, and C8.11 unified simulated time and deterministic semantic traces is the next slice in the C8.9–C8.15 aggregate sequence. C10 private component memory is planned and independent of C8/C9; its B9 teardown prerequisite is resolved, so it may open.
-- **Portability lane:** after the backlog gate, land P0/P1 before H2 or C9 establishes more low-level contracts; AArch64 P2 follows without blocking C8.
-- **Platform lane:** record H1 physical evidence, then implement H2 only after P1; H4 still gates DMA-capable Framework promotion.
-- **Development lane:** D1 source authoring can begin from completed M6; D2 waits for P0's producer-neutral artifact contract, and hermetic build/live activation consume C9.
-- **Memory lane:** B9 first, then C10 gives components a generation-bounded private heap so working memory stops being a build-time constant. It consumes only C7's quota pattern, so it does not queue behind the fabric.
+The active lane is now the [RPi5 ROS 2 demo track](09-rpi5-ros2-demo.md). Work should be selected by whether it closes one of these risks, in this order:
 
-No lane may use progress in another lane to claim an unobserved exit condition.
+1. **Target contract:** pin the exact Raspberry Pi 5 board/firmware/media path, ROS 2 distribution, node API subset, message type, and observed success transcript.
+2. **Target-qualified artifacts:** make the generation, release, kernel image, and component images reject wrong-architecture binaries before mapping executable bytes.
+3. **AArch64 QEMU boot:** establish the EL1/EL0, MMU, exception, timer, interrupt, UART, syscall, and component-launch path under `aarch64-qemu-virt`.
+4. **Raspberry Pi 5 physical boot:** bring up serial logging, device-tree discovery, interrupt/timer path, and a no-ambient-storage removable-media boot on the named board.
+5. **Two-component data path on Arm:** run two isolated components exchanging a bounded C7/C8 sample on AArch64 and then on the Pi.
+6. **Node and DDS transport envelope:** provide only the allocator, startup, clock/timer, executor, bounded datagram/network path, and packaging surface needed by the pinned ROS 2 DDS profile.
+7. **Minimal DDS/RTPS topic profile:** implement the fixed participant/writer/reader, XCDR1, RTPS DATA, bounded discovery, and QoS subset for two nodes without introducing ambient DDS discovery, POSIX paths, or wildcard network authority.
+8. **Observed demo:** record the Raspberry Pi 5 run where one node publishes DDS-backed topic data and the other receives it, with bounded semantic/RTPS evidence and failure markers.
+9. **Hardening:** repeat the run, inject denial/restart/resource cases, and make the narrow RPi5 gates stable before resuming broader tracks.
 
-The [backlog](00-backlog.md) sits ahead of all lanes: resolve or explicitly defer its open defects before opening a new track gate. Backlog items restore an already claimed exit condition or remove debt that would compound under new work; they are not new capability.
+The [backlog](00-backlog.md) still sits ahead of all lanes: resolve or explicitly defer open defects before opening a new roadmap gate. A green verification suite is a precondition for milestone work, not a milestone itself.
 
 ## Track map
 
 ```mermaid
 flowchart TD
-    Foundations["M1–M6<br/>Foundations"]
-    P0["P0<br/>Target and artifact contracts"]
-    P1["P1<br/>x86-64 boundary extraction"]
-    P2["P2<br/>AArch64 QEMU vertical slice"]
-    P3["P3<br/>RV64 QEMU vertical slice"]
-    P4["P4<br/>Named physical qualification"]
+    Backlog["Backlog clear"]
+    Foundations["M1–M6 foundations\nexisting x86/QEMU evidence"]
+    C7["C7 sample plane\ncomplete"]
+    C8["C8.1–C8.10 fabric\ncomplete baseline"]
+    P0["P0 target/artifact contracts"]
+    P1["P1 x86 boundary extraction"]
+    P2["P2 AArch64 QEMU vertical slice"]
+    P4["P4 Raspberry Pi 5 qualification"]
+    C10["C10 private component memory"]
+    R0["R0 minimal DDS/RTPS topic profile"]
+    RP0["RP0 demo contract"]
+    RP1["RP1 target-qualified build path"]
+    RP2["RP2 AArch64 QEMU boot"]
+    RP3["RP3 Raspberry Pi 5 serial boot"]
+    RP4["RP4 Arm component data path"]
+    RP5["RP5 node + DDS transport envelope"]
+    RP6["RP6 minimal DDS/RTPS nodes"]
+    RP7["RP7 observed RPi5 data demo"]
+    RP8["RP8 repeatability and fault envelope"]
+    R1["R1 broader ROS 2 topic wire profile"]
+    R2["R2 services/actions"]
+    Framework["Framework daily-driver hardware\ndeferred"]
+    RV64["P3 RV64\ndeferred"]
+    X1["X1 Linux personality\noptional/deferred"]
 
-    C7["C7<br/>Bounded resource and sample plane"]
-    C8["C8<br/>Native typed data fabric"]
-    C9["C9<br/>Robot runtime authority"]
-    C10["C10<br/>Bounded private component memory"]
-    H2["H2<br/>Userspace driver authority ABI"]
-
-    R1["R1<br/>ROS 2 topic wire profile"]
-    R2["R2<br/>ROS 2 services and actions"]
-    R3["R3<br/>Existing ROS workload route"]
-
-    Hardware["H1–H14<br/>Platform qualification"]
-    H4["H4<br/>IOMMU containment"]
-    H6["H6<br/>Network service"]
-    H14["H14<br/>Daily-driver qualification"]
-
-    X1["X1<br/>Linux personality"]
-    X2["X2<br/>AMD-V guest VM"]
-
-    A1["A1<br/>Revocation and leases"]
-    A2["A2<br/>Secrets"]
-    A3["A3<br/>Accelerator authority"]
-    A4["A4<br/>Physical trust"]
-    A5["A5<br/>Distributed capabilities"]
-    D1["D1<br/>Source workspace"]
-    D2["D2<br/>Direct language image backend"]
-    D3["D3<br/>Hermetic build service"]
-    D4["D4<br/>Ephemeral admission and run"]
-    D5["D5<br/>Live component cutover"]
-    D6["D6<br/>On-device generation activation"]
-    D7["D7<br/>Full-generation reproduction"]
-
-    Foundations --> P0 --> P1 --> P2 --> P3
-    P2 --> P4
-    P3 --> P4
-    P1 --> H2
-    P1 --> C9
-
+    Backlog --> Foundations
     Foundations --> C7 --> C8
-    C7 --> C10
-    C8 --> C9
-    C8 --> R1 --> R2 --> R3
-
-    Foundations --> Hardware
-    H2 --> Hardware
-    Hardware --> H4
-    Hardware --> H6
-    H4 --> H14
-    H6 --> H14
-
-    H6 --> R1
-    Foundations --> X1 --> R3
-    H4 --> X2 --> R3
-
-    Foundations --> A1 --> A2
-    H4 --> A3
-    Foundations --> A4
-    A1 --> A5
-    H6 --> A5
-
-    Foundations --> D1
-    P0 --> D2
-    D1 --> D3
-    D2 --> D3
-    C9 --> D3
-    D3 --> D4
-    C9 --> D5
-    D4 --> D6
-    D5 --> D6
-    D6 --> D7
-    X1 --> D7
+    Foundations --> P0 --> P1 --> P2 --> P4
+    C8 --> RP0
+    P0 --> RP1
+    P1 --> RP1
+    RP0 --> RP1 --> RP2 --> RP3 --> RP4 --> RP5 --> RP6 --> RP7 --> RP8
+    P2 --> RP2
+    P4 --> RP3
+    C7 --> RP4
+    C8 --> RP4
+    C10 --> RP5
+    R0 --> RP6
+    X1 -.->|only if chosen| RP6
+    RP8 --> R1 --> R2
+    P2 -.->|later| RV64
+    Foundations -.->|later| Framework
 ```
 
-## Architecture and embedded boundary
+## RPi5 ROS 2 demo boundary
 
-The [architecture portability track](07-architecture-portability.md) makes target identity and privileged mechanisms explicit without creating separate capability or generation models:
+The demo is intentionally narrower than “full ROS 2 support”:
 
-- x86-64 remains the deterministic reference architecture; AArch64 is the first non-x86 implementation and product priority; RV64 follows as a separately gated profile.
-- An admitted target is a complete profile covering ISA, privilege model, page profile, firmware handoff, interrupt/timer path, and baseline devices. A generic “ARM” or “RISC-V” claim is invalid.
-- Kernel and component executables are architecture-qualified and authenticated for one exact generation target. Architecture-neutral resource objects may remain byte-identical across targets.
-- C7, B2, and C8 continue on x86-64 while P0/P1 are prepared. P1 gates H2 and C9 so PCI/APIC/CR3/register layouts do not become universal contracts.
-- Cortex-M, RV32, and other no-MMU MCU-class devices are bounded external companions over declared serial, CAN, USB, network, micro-ROS/XRCE-DDS, or Zutai routes. They do not run a weakened version of the Slime kernel.
-
-## ROS 2 architecture boundary
-
-```mermaid
-flowchart LR
-    Native["Native Slime component"]
-    Fabric["C8 typed data fabric"]
-    Gateway["R1/R2 ROS gateway"]
-    Network["H6 network service"]
-    Peer["External ROS 2 peer"]
-    Kernel["Kernel"]
-
-    Native -->|"Stream / Call / Operation"| Fabric
-    Fabric -->|"Narrowed route capabilities"| Gateway
-    Gateway -->|"Exact NetworkDestination grant"| Network
-    Network -->|"DDSI-RTPS and CDR"| Peer
-
-    Kernel -.->|"Channels, capabilities,<br/>shared buffers only"| Fabric
-```
-
-Dependencies are minimum prerequisites, not permission to add ambient authority. In particular:
-
-- ROS 2 compatibility is a userspace profile over native Slime contracts, never a kernel ABI.
-- DDSI-RTPS carries typed data, not Slime capabilities. A5 distributed capabilities is a separate cryptographic authority protocol.
-- Existing ROS binaries are R3 scope. R1 and R2 prove protocol interoperability without importing Linux, POSIX, a global filesystem, or an ambient network model.
-- Hardware track completion never substitutes for core fault, bounds, schema, or authority checks.
-- ROS wire interoperability is architecture-independent. The initial R1/R2 gate remains deterministic on the reference QEMU profile; an AArch64 replay adds heterogeneous evidence after P2 without redefining the wire profile.
-- A physical Raspberry Pi acting as an external ROS peer proves heterogeneous protocol behavior, not that Slime OS supports that board.
+- It proves **two local Slime-hosted ROS 2 nodes** on Raspberry Pi 5 exchanging one or more bounded topic samples through the admitted minimal DDSI-RTPS/XCDR profile.
+- The selected route must be generation-declared, target-qualified, and DDS-backed. Native C8 fabric may back internal delivery, but the demo cannot be claimed from a local-only ROS-like API that skips DDS/RTPS entirely.
+- It does **not** require arbitrary DDS discovery, unrestricted LAN communication, multiple middleware vendors, services/actions, unmodified desktop ROS packages, Python, Gazebo, compositor support, Wi-Fi, GPU acceleration, or Framework hardware support.
+- It does not put ROS or DDS concepts in the kernel. Nodes, topics, participants, writers/readers, executors, QoS policy, and graph metadata remain userspace contracts over capabilities, C8 routes, and exact datagram/network grants.
+- A Raspberry Pi 5 run must be physical evidence for the named board; `aarch64-qemu-virt` evidence is necessary regression coverage but cannot replace it.
 
 ## Architectural invariants
 
 Every track preserves these rules:
 
-1. The kernel owns only privileged mechanisms: scheduling, address spaces, memory objects, capability enforcement, IPC, interrupts, timers, and minimal platform control.
-2. Device, filesystem, generation, graph, discovery, QoS policy, health, activation, and rollback policy live in userspace services.
+1. The kernel owns privileged mechanisms only: scheduling, address spaces, memory objects, capability enforcement, IPC, interrupts, timers, and minimal platform control.
+2. Device, filesystem, generation, graph, discovery, QoS policy, health, activation, rollback, and ROS node policy live in userspace services.
 3. Authority is carried by explicit capabilities. There are no ambient executable paths, storage handles, working directories, streams, network destinations, discovery domains, or environment state.
 4. New kernel objects or rights update `../docs/capability-matrix.md` in the same change and ship with a real gate.
-5. New IPC protocols are schema-first under `../contracts/`; generated or validated bindings cannot disagree on layout.
-6. Generation, storage, protocol, queue, retry, history, and payload data are deterministic, versioned, bounded, integrity checked, and rejected when malformed or unsupported.
+5. New IPC, ROS profile, demo trace, and persistent protocols are schema-first under `../contracts/`; generated or validated bindings cannot disagree on layout.
+6. Generation, storage, protocol, queue, retry, history, payload, and demo evidence data are deterministic, versioned, bounded, integrity checked, and rejected when malformed or unsupported.
 7. Activation never overwrites the running generation in place, and a failed pending generation cannot consume the last selectable boot root.
-8. A QEMU pass cannot complete a physical-machine milestone.
-9. Internal Framework NVMe writes remain disabled until the H7 bounds, IOMMU, timeout/reset, flush-ordering, interruption, identity, malformed-metadata, rollback, and recovery gates all pass.
-10. Every executable generation names one exact admitted target profile; stage-0 rejects architecture, ABI, page-profile, and required-feature mismatches before mapping executable bytes.
-11. Architecture ports preserve the same capability, fault, wait/wake, resource-reclamation, generation, and rollback semantics. ISA-specific register frames and page tables are mechanisms, not portable contracts.
-12. MCU-class companions never gain ambient graph, network, storage, or actuator authority and do not weaken the kernel's MMU-backed isolation baseline.
-13. Source languages may emit native executable images only through the admitted target/image contract. Zutai remains the only serialized-schema language, and neither source nor compiler output may mint authority.
-14. Component memory obtained at runtime is task-private, generation-bounded, never executable, and fully reclaimed on termination. Growth is a budgeted mechanism, not an ambient allocator, and never yields a transferable or shareable object.
+8. A QEMU pass cannot complete a physical Raspberry Pi 5 or Framework milestone.
+9. Every executable generation names one exact admitted target profile; stage-0 rejects architecture, ABI, page-profile, and required-feature mismatches before mapping executable bytes.
+10. Architecture ports preserve the same capability, fault, wait/wake, resource-reclamation, generation, and rollback semantics. ISA-specific register frames and page tables are mechanisms, not portable contracts.
+11. ROS wire or node interoperability is not authority. Names, types, domains, graph visibility, parameters, files, devices, and network destinations grant nothing without explicit capabilities.
+12. Component memory obtained at runtime is task-private, generation-bounded, never executable, and fully reclaimed on termination. Growth is a budgeted mechanism, not an ambient allocator.
 
 ## Release gates
 
-Track milestones compose into observable releases rather than one global milestone number.
+### RPi5 ROS 2 two-node demo release
 
-### Reference native architecture release
-
-Requires M1–M6, C7, C8, P0, and P1 on `x86_64-qemu-virtio`. The release must boot an exact-target generation, run isolated native components, move bounded typed samples and calls through capability-routed services, survive a peer fault, and roll back a failed pending generation. P0/P1 do not erase earlier x86 evidence; they make its target and mechanism boundary explicit before this release closes.
+Requires RP0–RP8. The release must boot a target-qualified Slime OS generation from reproducible Raspberry Pi 5 media, run two local ROS 2 nodes under the selected generation-declared minimal DDS/RTPS route, move bounded DDS topic data from publisher to subscriber, emit deterministic semantic and RTPS evidence of the exchange, and preserve the capability/component/generation invariants above. QEMU evidence and host checks support the claim but do not replace the physical board run.
 
 ### AArch64 native architecture release
 
-Requires the reference native architecture release and P2. The same architecture-neutral isolation, B2 wait/wake, C7 sample-plane, generation, release, and rollback corpus must pass on `aarch64-qemu-virt`; a successful x86 run cannot substitute.
+Requires P0, P1, and P2. It is a prerequisite for the RPi5 demo path but is not sufficient by itself: it proves `aarch64-qemu-virt`, not Raspberry Pi 5 hardware.
 
-### RV64 native architecture release
+### ROS-interoperable external wire release
 
-Requires the AArch64 native architecture release and P3. The pinned `riscv64-qemu-virt` profile must pass the same semantic corpus while rejecting unsupported ISA, firmware, page, interrupt, and executable assumptions explicitly.
-
-### ROS-interoperable QEMU release
-
-Requires the reference native architecture release, H6's deterministic virtio-net backend and network authority contract, then R1 and R2. The canonical oracle is one content-addressed host ROS 2 Jazzy peer image: Fast DDS and Cyclone DDS run the same fixed probes, network, packet capture, and malformed-input corpus. Only declared topics, services, and actions may cross; denied graph edges emit no corresponding data packet. A later AArch64 QEMU replay and wired physical runs supply heterogeneous evidence but cannot replace the deterministic L0–L3 gates.
+Requires the minimal RPi5 DDS demo path to be stable unless explicitly reprioritized, then R1 and R2 with their deterministic peer fixtures. R0 proves the minimum DDS/RTPS topic path; R1/R2 broaden it to external peers, more vendors, services, and actions.
 
 ### Framework daily-driver release
 
-Requires H1–H14 and all physical evidence named in the hardware track. It is independent of whether existing ROS binaries run locally.
+Deferred. It still requires the Framework H1–H14 evidence if resumed, but it is no longer on the near-term critical path.
 
 ### Existing-workload release
 
-Requires X1 or X2 plus R3 for existing ROS workloads. The workload's complete filesystem, network, time, randomness, scheduling, and device authority must be generation-declared and visible to audit tooling.
-
-### Native development release
-
-Requires D1–D6 and their P0/P1, C8/C9, and M5/M6 dependencies. In one QEMU boot a user must create source, compile the pinned native language directly to the admitted component format, execute it ephemerally with selected capabilities, and keep malformed or unauthorized bytes inert. A release-authorized compatible userspace generation switches one service without reboot; every excluded diff follows the ordinary pending-boot path.
-
-### Reproducible on-device build release
-
-Requires the native development release and D7. A clean Slime build environment must reproduce the complete reference mixed-language generation byte-for-byte from the same normalized source/toolchain closure as the host, with bounded hermetic execution and detached provenance. The current Rust closure initially consumes X1 unless a native Rust toolchain independently passes the same contract.
-
-### Distributed-authority release
-
-Requires A1 and A5 plus H6 networking. Revocation, partition, unreachable, and replay failures remain distinguishable structured errors; RTPS interoperability alone does not satisfy this gate.
+Deferred unless selected as the implementation route for RP6. If used, X1 or a target-specific alternative must be admitted for Raspberry Pi 5/AArch64, not inherited from x86-64.
 
 ## Verification policy
 
-Use the narrowest target named by each slice. Permanent Rust changes also run the repository format and lint gates. Generation or contract changes run `just generation_check` and `just contracts_check`. P1–P3 run their architecture-specific QEMU target plus the shared semantic corpus; one ISA cannot close another ISA's gate. Hardware promotion includes the exact physical evidence record required by the relevant H or P4 slice.
+Use the narrowest target named by each slice. Permanent Rust changes also run the repository format and lint gates. Generation or contract changes run `just generation_check` and `just contracts_check`. Architecture changes run the target-specific QEMU gate before any physical board claim. Raspberry Pi 5 promotion requires a recorded board run with exact image, firmware/media, generation identity, serial output, and declared device/storage authority.
 
-The repository-wide gates remain:
-
-```sh
-just contracts_check
-just devlog_check
-just generation_check
-just test
-just fmt_check
-just lint
-just fmt_check_components
-just lint_components
-just framework_safety_check
-```
-
-Documentation-only roadmap edits do not run runtime tests; their verification is link, status, identifier, and content consistency.
+Documentation-only roadmap edits do not run runtime tests; their verification is link, status, identifier, and content consistency, currently guarded by `just devlog_check` when devlog entries are added or touched.
 
 ## Updating this roadmap
 
