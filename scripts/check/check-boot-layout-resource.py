@@ -35,7 +35,14 @@ from boot_contracts import (
     BOOT_LAYOUT_MAGIC,
     BOOT_LAYOUT_VERSION,
 )
-from boot_layout import ROLE, build_boot_layout, channel_identity, component_identity, layout_for
+from boot_layout import (
+    ROLE,
+    build_boot_layout,
+    channel_identity,
+    component_identity,
+    layout_for,
+    render_rust as render_boot_layout_rust,
+)
 from harness import ROOT
 
 FIXTURES = ROOT / "contracts" / "boot-layout" / "v1" / "fixtures"
@@ -183,7 +190,23 @@ def kind_for(role: str) -> str:
     }.get(role, role)
 
 
+def check_component_fallback() -> None:
+    """The checked-in slot table must match what the emitter renders.
+
+    `components/bins/build.rs` falls back to it when `SLIME_BOOT_LAYOUT` is
+    unset, which is every plain `cargo build`. If it drifts, userspace compiles
+    against slots the kernel no longer places, and only a QEMU boot would say
+    so.
+    """
+    path = ROOT / "components" / "bins" / "src" / "default_boot_layout.rs"
+    expected = render_boot_layout_rust(1)
+    if path.read_text() != expected:
+        fail(f"{path.relative_to(ROOT)} is stale; regenerate it from layout_for(1)")
+
+
 def main() -> None:
+    check_component_fallback()
+    print("boot layout resource: component fallback table is current")
     numbers = sorted(set(FIXTURE_GENERATIONS.values()))
     for number in numbers:
         check_generation(number)

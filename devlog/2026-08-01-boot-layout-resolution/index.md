@@ -43,6 +43,7 @@ B10's exit condition asks for.
 | `bootstrap.rs` | The script-install and idle-exit `SLIME_*_CHECK` flags dropped; each was `flag && number == N`, and every gate's number is unique | One kernel binary for the whole gate suite |
 | `bootstrap.rs` | `assert!(caps.len() <= MAX_CAPS)` after the transfer append | The one path that can outgrow the table is bounded, as `launch_fabric_boot_init` already was |
 | `build-generation.py` | Its own directory added to `sys.path` | The builder imports its sibling modules when invoked from another directory |
+| `boot_layout.py`, `build.rs`, `init.rs` | The layout is rendered as a Rust constant table per generation and included by `init.rs`; 84 lines of hand-maintained slot constants deleted | The kernel that places a capability and the component that uses it read one source |
 
 The placer checks agreement in both directions. A declared slot left empty
 means the kernel did not mint something the layout expects; a filled slot the
@@ -64,6 +65,7 @@ makes the layout's rights column load-bearing rather than decorative.
 | Minted rights drift from declared rights | placer assertion at boot | `slot N (<what>) declares rights 0x…, kernel minted 0x…` |
 | A generation boots another generation's layout | `generation::boot_layout` assertion | `boot layout belongs to another generation` |
 | The emitter and the kernel disagree | `just contracts_check` | Host-side, in under a second, without booting |
+| The checked-in component fallback table drifts from the emitter | `just contracts_check` | `default_boot_layout.rs is stale`. Fault-injected: changing one slot value there fails the check |
 
 ## Verification
 
@@ -128,6 +130,32 @@ either drifts.
 - Rejected alternative: declaring channels in the resource. It restructures IPC
   setup for no gain against the defect B10 names.
 
+- Decision: the slot table reaches `init.rs` as a generated Rust file passed by
+  path, not by reading the layout resource out of the generation.
+- Rationale: `build_rust_components` runs before `build_generation`, so at
+  component-compile time the resource does not exist yet. The
+  `write_resolved_profile` → `SLIME_DATA_FABRIC_PROFILE` channel already solves
+  exactly this for the fabric profile, so the layout travels the same way.
+- Rejected alternative: having `build.rs` call the emitter directly. It would
+  put a Python dependency in the component build and duplicate the
+  per-generation logic that `build_rust_components` already parameterizes.
+
+- Decision: every generation's table defines the same set of constant *names*,
+  with `SLOT_ABSENT` where that layout is silent.
+- Rationale: `init.rs` references call-profile slots inside bodies gated by
+  `option_env!`, and those bodies still compile when the flag is unset. A table
+  emitting only the labels the current layout declares would fail to build for
+  fifteen profiles. Using an absent slot now fails at the syscall with a slot
+  number in hand.
+- Rejected alternative: `#[cfg]`-gating the uses to match. It spreads the
+  profile's identity across every use site, which is the coupling B10 removes.
+
+- Decision: `TRANSFER_RECEIVER_SLOT` and `TRANSFER_SOURCE_SLOT` stay hardcoded
+  in `init.rs`.
+- Rationale: bootstrap appends that pair past the layout's high-water mark, and
+  only when the platform enumerates both block devices, so no generation can
+  declare its slots. They are the two slots the table genuinely cannot supply.
+
 - Decision: the storage slot's no-disk fallback rights stay in kernel source.
 - Rationale: the layout declares the authority a present block device carries.
   When none is enumerated a read-only object store stands in, and applying the
@@ -147,9 +175,11 @@ either drifts.
       component images are per-generation artifacts by design, content-hashed
       into the generation. Out of scope here, and not a blocker for P1, which
       asks that architecture-neutral *kernel* code type-check for AArch64.
-- [ ] `init.rs` still hardcodes its slot constants. Until it consumes the same
-      table, the layout is authoritative on one side only, and the two agree by
-      inspection rather than by construction.
+- [ ] `launch_fabric_boot_init` still builds its 53-slot table positionally
+      while the layout declares those same slots, so the C8.10 path has the
+      one-sided-authority property `init.rs` just shed. `boot_layout_check`
+      covers it — the `fabric-boot` fixture would fail if it drifted — but the
+      agreement is by inspection rather than by construction.
 - [ ] `launch_recovery_init` still builds its four-slot table positionally.
       Decided out of scope in the baseline entry: its trigger is already
       generation-data-driven, and no layout fixture covers it.

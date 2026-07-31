@@ -359,3 +359,87 @@ def build_boot_layout(number: int, fail) -> bytes:
         total_len,
     )
     return header + encoded
+
+
+# Every label any profile declares, so the generated Rust table defines a
+# constant for each in every build. A component body gated by a check flag still
+# *compiles* when that flag is unset, so a table emitting only the labels the
+# current layout happens to declare would fail to build for fifteen profiles.
+# A label this layout is silent about gets `SLOT_ABSENT`.
+# How many times one role may repeat in a layout. Generation 4 declares two
+# object stores; the table emits this many indexed constants for every role so
+# a name is present in every generation's table, whatever that generation
+# declares.
+MAX_ROLE_REPEATS = 2
+
+
+def all_labels() -> list[tuple[str, str]]:
+    labels: dict[str, str] = {}
+    for number in sorted({1, *OVERRIDES, *REPLACEMENTS}):
+        for _, role, label, _ in layout_for(number):
+            if label is not None:
+                labels[label] = role
+    return sorted(labels.items())
+
+
+def rust_identifier(label: str) -> str:
+    return label.replace("-", "_").upper() + "_SLOT"
+
+
+def render_rust(number: int) -> str:
+    """The slot table for one generation, as a Rust constant per label.
+
+    `init.rs` addresses slots by these names rather than by literal numbers, so
+    the kernel that places a capability and the component that uses it read one
+    source. A label this generation does not declare is `SLOT_ABSENT`: using it
+    then fails at the syscall with a slot number in hand, rather than failing
+    the build for every other profile.
+    """
+    declared = {label: slot for slot, _, label, _ in layout_for(number) if label is not None}
+    lines = [
+        "// @generated from contracts/boot-layout/v1 by scripts/build/boot_layout.py;",
+        "// do not edit. Regenerate through `just generation_check`.",
+        "",
+        "/// A slot this generation's boot layout does not declare. Using one is a",
+        "/// component asking for authority this profile never granted it.",
+        "#[allow(dead_code)]",
+        "pub const SLOT_ABSENT: u32 = u32::MAX;",
+        "",
+        "/// The generation this table was emitted for.",
+        "#[allow(dead_code)]",
+        f"pub const BOOT_LAYOUT_GENERATION: u64 = {number};",
+        "",
+    ]
+    for label, _ in all_labels():
+        slot = declared.get(label)
+        value = "SLOT_ABSENT" if slot is None else str(slot)
+        lines.append("#[allow(dead_code)]")
+        lines.append(f"pub const {rust_identifier(label)}: u32 = {value};")
+    # The singular objects carry no name -- there is one endpoint factory, one
+    # input device -- so they are addressed by role. A role appearing more than
+    # once (generation 4 declares two object stores) is emitted in declared
+    # order with an index suffix, matching the order the kernel places them in.
+    lines.append("")
+    by_role: dict[str, list[int]] = {}
+    for slot, role, label, _ in layout_for(number):
+        if label is None:
+            by_role.setdefault(role, []).append(slot)
+    # A role can repeat: generation 4 declares an object store in both the
+    # storage and filesystem slots. Every role therefore emits `_0`.._N` for a
+    # fixed N in every generation, plus an unsuffixed alias for the first, so a
+    # constant's *name* never varies between profiles -- only its value.
+    roles = sorted(
+        {role for _, role, label, _ in BASE_LAYOUT if label is None}
+        | {role for table in REPLACEMENTS.values() for _, role, label, _ in table if label is None}
+        | set(by_role)
+    )
+    for role in roles:
+        slots = by_role.get(role, [])
+        base = role.replace("-", "_").upper() + "_SLOT"
+        lines.append("#[allow(dead_code)]")
+        lines.append(f"pub const {base}: u32 = {slots[0] if slots else 'SLOT_ABSENT'};")
+        for index in range(MAX_ROLE_REPEATS):
+            value = str(slots[index]) if index < len(slots) else "SLOT_ABSENT"
+            lines.append("#[allow(dead_code)]")
+            lines.append(f"pub const {base}_{index}: u32 = {value};")
+    return "\n".join(lines) + "\n"

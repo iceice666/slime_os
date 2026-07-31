@@ -99,69 +99,22 @@ const POWERBOX_CHOOSER_CAPS: [SpawnGrant; 3] = [
     ),
     grant(20, RIGHT_INPUT_READ),
 ];
-// C7.2 shared-buffer factory, minted by bootstrap at a fixed slot ahead of the
-// optional transfer block so every index below is stable on any boot.
-const SHARED_BUFFER_FACTORY_SLOT: u32 = 40;
-// C7.7 sample plane: two components and the channel joining them.
-const SAMPLE_LENDER_SLOT: u32 = 41;
-const SAMPLE_RECEIVER_SLOT: u32 = 42;
-const SAMPLE_LENDER_ENDPOINT_SLOT: u32 = 43;
-const SAMPLE_RECEIVER_ENDPOINT_SLOT: u32 = 44;
-// C8.3/C8.4 fabric plane: the service, its five clients, and the two halves of
-// each control channel. Init holds no route capability at all — the fabric
-// mints those and moves each participant a narrowed role.
-const FABRIC_SERVICE_SLOT: u32 = 45;
-const FABRIC_PUBLISHER_SLOT: u32 = 46;
-const FABRIC_SUBSCRIBER_SLOT: u32 = 47;
-const FABRIC_INTRUDER_SLOT: u32 = 48;
-const FABRIC_PUBLISHER_B_SLOT: u32 = 49;
-const FABRIC_SUBSCRIBER_B_SLOT: u32 = 50;
-const FABRIC_PUBLISHER_CONTROL_SLOT: u32 = 51;
-const FABRIC_SUBSCRIBER_CONTROL_SLOT: u32 = 52;
-const FABRIC_INTRUDER_CONTROL_SLOT: u32 = 53;
-const FABRIC_PUBLISHER_B_CONTROL_SLOT: u32 = 54;
-const FABRIC_SUBSCRIBER_B_CONTROL_SLOT: u32 = 55;
-const FABRIC_PUBLISHER_SERVICE_SLOT: u32 = 56;
-const FABRIC_SUBSCRIBER_SERVICE_SLOT: u32 = 57;
-const FABRIC_INTRUDER_SERVICE_SLOT: u32 = 58;
-const FABRIC_PUBLISHER_B_SERVICE_SLOT: u32 = 59;
-const FABRIC_SUBSCRIBER_B_SERVICE_SLOT: u32 = 60;
-const FABRIC_TIME_CLIENT_SLOT: u32 = 61;
-const FABRIC_TIME_SERVICE_SLOT: u32 = 62;
+// Init's slot numbers come from the generation's boot layout, emitted by
+// `scripts/build/boot_layout.py` into `OUT_DIR` at component build time. The
+// kernel places each capability at the slot the same layout names, so the
+// component that uses a slot and the kernel that fills it read one source
+// rather than two hand-maintained lists that agreed by inspection (B10).
+//
+// A label this generation does not declare is `SLOT_ABSENT`. Every generation
+// emits the same set of constant *names*, so a body gated by a check flag still
+// compiles under every profile; only the values differ.
+include!(concat!(env!("OUT_DIR"), "/boot_layout.rs"));
+
+// The transfer pair is not in the layout: bootstrap appends it past the
+// layout's high-water mark, and only when the platform enumerates both block
+// devices, so no generation can declare its slots.
 const TRANSFER_RECEIVER_SLOT: u32 = 61;
 const TRANSFER_SOURCE_SLOT: u32 = 62;
-// C8.6 reuses three existing fabric executable/control pairs. The call gate is
-// a mutually exclusive generation profile, so no capability table grows.
-const FABRIC_CALL_CLIENT_SLOT: u32 = FABRIC_PUBLISHER_SLOT;
-const FABRIC_CALL_CLIENT_B_SLOT: u32 = FABRIC_SUBSCRIBER_SLOT;
-const FABRIC_CALL_SERVER_SLOT: u32 = FABRIC_PUBLISHER_B_SLOT;
-const FABRIC_CALL_CLIENT_CONTROL_SLOT: u32 = FABRIC_PUBLISHER_CONTROL_SLOT;
-const FABRIC_CALL_CLIENT_B_CONTROL_SLOT: u32 = FABRIC_SUBSCRIBER_CONTROL_SLOT;
-const FABRIC_CALL_SERVER_CONTROL_SLOT: u32 = FABRIC_PUBLISHER_B_CONTROL_SLOT;
-const FABRIC_CALL_CLIENT_SERVICE_SLOT: u32 = FABRIC_PUBLISHER_SERVICE_SLOT;
-const FABRIC_CALL_CLIENT_B_SERVICE_SLOT: u32 = FABRIC_SUBSCRIBER_SERVICE_SLOT;
-const FABRIC_CALL_SERVER_SERVICE_SLOT: u32 = FABRIC_PUBLISHER_B_SERVICE_SLOT;
-const FABRIC_CALL_TIME_SLOT: u32 = FABRIC_INTRUDER_SLOT;
-const FABRIC_CALL_TIME_CONTROL_SLOT: u32 = FABRIC_INTRUDER_CONTROL_SLOT;
-const FABRIC_CALL_TIME_SERVICE_SLOT: u32 = FABRIC_INTRUDER_SERVICE_SLOT;
-const FABRIC_CALL_PHASE_TIME_SLOT: u32 = 61;
-const FABRIC_CALL_PHASE_CLIENT_SLOT: u32 = 62;
-// C8.7 reuses the same fabric executable/control pairs as C8.6: the operation
-// gate is a mutually exclusive generation profile, so no capability table grows.
-// The two phase channels are minted at runtime rather than granted.
-const FABRIC_OP_CLIENT_SLOT: u32 = FABRIC_PUBLISHER_SLOT;
-const FABRIC_OP_CLIENT_B_SLOT: u32 = FABRIC_SUBSCRIBER_SLOT;
-const FABRIC_OP_SERVER_SLOT: u32 = FABRIC_INTRUDER_SLOT;
-const FABRIC_OP_TIME_SLOT: u32 = FABRIC_PUBLISHER_B_SLOT;
-const FABRIC_OP_CLIENT_CONTROL_SLOT: u32 = FABRIC_PUBLISHER_CONTROL_SLOT;
-const FABRIC_OP_CLIENT_B_CONTROL_SLOT: u32 = FABRIC_SUBSCRIBER_CONTROL_SLOT;
-const FABRIC_OP_SERVER_CONTROL_SLOT: u32 = FABRIC_PUBLISHER_B_CONTROL_SLOT;
-const FABRIC_OP_TIME_CONTROL_SLOT: u32 = FABRIC_INTRUDER_CONTROL_SLOT;
-const FABRIC_OP_CLIENT_SERVICE_SLOT: u32 = FABRIC_PUBLISHER_SERVICE_SLOT;
-const FABRIC_OP_CLIENT_B_SERVICE_SLOT: u32 = FABRIC_SUBSCRIBER_SERVICE_SLOT;
-const FABRIC_OP_SERVER_SERVICE_SLOT: u32 = FABRIC_PUBLISHER_B_SERVICE_SLOT;
-const FABRIC_OP_TIME_SERVICE_SLOT: u32 = FABRIC_INTRUDER_SERVICE_SLOT;
-const FABRIC_OP_CLIENT_B_RESTART_SLOT: u32 = FABRIC_SUBSCRIBER_B_SLOT;
 
 const POWERBOX_PROBE_CAPS: [SpawnGrant; 1] = [grant(38, RIGHT_SEND | RIGHT_RECV)];
 
@@ -738,7 +691,7 @@ fn launch_fabric_calls() {
     // The call profile does not launch the second stream subscriber. Release
     // its executable and control endpoint so init has room for a private
     // client/client-B coordination channel plus each spawn supervision handle.
-    for slot in [FABRIC_SUBSCRIBER_B_SLOT, FABRIC_SUBSCRIBER_B_CONTROL_SLOT] {
+    for slot in [FABRIC_SUBSCRIBER_B_SLOT, FABRIC_SUBSCRIBER_B_CLIENT_SLOT] {
         if slime_rt::cap_drop(slot) < 0 {
             slime_rt::exit(1);
         }
@@ -897,17 +850,14 @@ fn operation_route_identity() -> [u8; 32] {
 fn launch_sample_plane() {
     let receiver = slime_rt::spawn(
         SAMPLE_RECEIVER_SLOT,
-        &[grant(
-            SAMPLE_RECEIVER_ENDPOINT_SLOT,
-            RIGHT_SEND | RIGHT_RECV,
-        )],
+        &[grant(SAMPLE_RECEIVER_SIDE_SLOT, RIGHT_SEND | RIGHT_RECV)],
     )
     .unwrap_or_else(|_| slime_rt::exit(1));
 
     let lender = slime_rt::spawn(
         SAMPLE_LENDER_SLOT,
         &[
-            grant(SAMPLE_LENDER_ENDPOINT_SLOT, RIGHT_SEND | RIGHT_RECV),
+            grant(SAMPLE_LENDER_SIDE_SLOT, RIGHT_SEND | RIGHT_RECV),
             grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
             grant(receiver.supervision_slot, RIGHT_SUPERVISE),
         ],
@@ -956,18 +906,18 @@ fn launch_fabric_graph() {
     let subscriber = spawn_fabric_client(
         FABRIC_SUBSCRIBER_SLOT,
         &[grant(
-            FABRIC_SUBSCRIBER_CONTROL_SLOT,
+            FABRIC_SUBSCRIBER_CLIENT_SLOT,
             RIGHT_SEND | RIGHT_RECV,
         )],
-        &[FABRIC_SUBSCRIBER_SLOT, FABRIC_SUBSCRIBER_CONTROL_SLOT],
+        &[FABRIC_SUBSCRIBER_SLOT, FABRIC_SUBSCRIBER_CLIENT_SLOT],
     );
     let subscriber_b = spawn_fabric_client(
         FABRIC_SUBSCRIBER_B_SLOT,
         &[grant(
-            FABRIC_SUBSCRIBER_B_CONTROL_SLOT,
+            FABRIC_SUBSCRIBER_B_CLIENT_SLOT,
             RIGHT_SEND | RIGHT_RECV,
         )],
-        &[FABRIC_SUBSCRIBER_B_SLOT, FABRIC_SUBSCRIBER_B_CONTROL_SLOT],
+        &[FABRIC_SUBSCRIBER_B_SLOT, FABRIC_SUBSCRIBER_B_CLIENT_SLOT],
     );
 
     // The fabric's own authority: an endpoint factory to mint route halves, a
@@ -1051,11 +1001,8 @@ fn launch_fabric_graph() {
 
     let publisher = spawn_fabric_client(
         FABRIC_PUBLISHER_SLOT,
-        &[grant(
-            FABRIC_PUBLISHER_CONTROL_SLOT,
-            RIGHT_SEND | RIGHT_RECV,
-        )],
-        &[FABRIC_PUBLISHER_SLOT, FABRIC_PUBLISHER_CONTROL_SLOT],
+        &[grant(FABRIC_PUBLISHER_CLIENT_SLOT, RIGHT_SEND | RIGHT_RECV)],
+        &[FABRIC_PUBLISHER_SLOT, FABRIC_PUBLISHER_CLIENT_SLOT],
     );
     // `fabric-publisher-b` originates the >MAX_MSG sample, so it needs its own
     // buffer factory and a supervision handle naming the fabric: its upstream
@@ -1064,31 +1011,31 @@ fn launch_fabric_graph() {
         spawn_fabric_client(
             FABRIC_PUBLISHER_B_SLOT,
             &[grant(
-                FABRIC_PUBLISHER_B_CONTROL_SLOT,
+                FABRIC_PUBLISHER_B_CLIENT_SLOT,
                 RIGHT_SEND | RIGHT_RECV,
             )],
-            &[FABRIC_PUBLISHER_B_SLOT, FABRIC_PUBLISHER_B_CONTROL_SLOT],
+            &[FABRIC_PUBLISHER_B_SLOT, FABRIC_PUBLISHER_B_CLIENT_SLOT],
         )
     } else if option_env!("SLIME_FABRIC_QOS_CHECK") == Some("1") {
         spawn_fabric_client(
             FABRIC_PUBLISHER_B_SLOT,
             &[
-                grant(FABRIC_PUBLISHER_B_CONTROL_SLOT, RIGHT_SEND | RIGHT_RECV),
+                grant(FABRIC_PUBLISHER_B_CLIENT_SLOT, RIGHT_SEND | RIGHT_RECV),
                 grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
                 grant(service.supervision_slot, RIGHT_SUPERVISE),
                 grant(FABRIC_TIME_CLIENT_SLOT, RIGHT_SEND | RIGHT_RECV),
             ],
-            &[FABRIC_PUBLISHER_B_SLOT, FABRIC_PUBLISHER_B_CONTROL_SLOT],
+            &[FABRIC_PUBLISHER_B_SLOT, FABRIC_PUBLISHER_B_CLIENT_SLOT],
         )
     } else {
         spawn_fabric_client(
             FABRIC_PUBLISHER_B_SLOT,
             &[
-                grant(FABRIC_PUBLISHER_B_CONTROL_SLOT, RIGHT_SEND | RIGHT_RECV),
+                grant(FABRIC_PUBLISHER_B_CLIENT_SLOT, RIGHT_SEND | RIGHT_RECV),
                 grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
                 grant(service.supervision_slot, RIGHT_SUPERVISE),
             ],
-            &[FABRIC_PUBLISHER_B_SLOT, FABRIC_PUBLISHER_B_CONTROL_SLOT],
+            &[FABRIC_PUBLISHER_B_SLOT, FABRIC_PUBLISHER_B_CLIENT_SLOT],
         )
     };
     if option_env!("SLIME_FABRIC_QOS_CHECK") == Some("1")
@@ -1098,8 +1045,8 @@ fn launch_fabric_graph() {
     }
     let intruder = spawn_fabric_client(
         FABRIC_INTRUDER_SLOT,
-        &[grant(FABRIC_INTRUDER_CONTROL_SLOT, RIGHT_SEND | RIGHT_RECV)],
-        &[FABRIC_INTRUDER_SLOT, FABRIC_INTRUDER_CONTROL_SLOT],
+        &[grant(FABRIC_INTRUDER_CLIENT_SLOT, RIGHT_SEND | RIGHT_RECV)],
+        &[FABRIC_INTRUDER_SLOT, FABRIC_INTRUDER_CLIENT_SLOT],
     );
 
     for handle in [

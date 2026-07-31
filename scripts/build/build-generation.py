@@ -144,7 +144,7 @@ from boot_contracts import (
     generation_identity,
     sha256,
 )
-from boot_layout import build_boot_layout
+from boot_layout import build_boot_layout, render_rust as render_boot_layout_rust
 from interface_schema import InterfaceSchemaError, admit_interfaces, resolve_interface_paths
 from release_trust import RELEASE_BYTES, build_release
 from zutai_cli import STDLIB, binary
@@ -1355,6 +1355,14 @@ def build_rust_components(
     environment = os.environ.copy()
     environment["SLIME_GENERATION_NUMBER"] = str(generation_number)
     environment["SLIME_DATA_FABRIC_PROFILE"] = str(profile_path)
+    # The components are compiled before the generation is assembled, so they
+    # cannot read the layout resource out of it. Emit the same table as Rust
+    # here and hand `build.rs` the path, the way the fabric profile already
+    # travels. Per generation number, so each component build addresses the
+    # slots its own generation declares.
+    layout_path = profile_path.parent / f"boot-layout-{generation_number}.rs"
+    layout_path.write_text(render_boot_layout_rust(generation_number), encoding="utf-8")
+    environment["SLIME_BOOT_LAYOUT"] = str(layout_path)
     if candidate_identity is None and os.environ.get("SLIME_TRANSFER_RECEIVER") == "1":
         environment["SLIME_TRANSFER_RECEIVER"] = "1"
     else:

@@ -20,6 +20,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=SLIME_FABRIC_VISIBILITY_CHECK");
     println!("cargo:rerun-if-env-changed=SLIME_FABRIC_BOOT_CHECK");
     println!("cargo:rerun-if-env-changed=SLIME_DATA_FABRIC_PROFILE");
+    println!("cargo:rerun-if-env-changed=SLIME_BOOT_LAYOUT");
     println!("cargo:rerun-if-env-changed=SLIME_FABRIC_PROXY_EARLY_EXIT");
     println!("cargo:rerun-if-env-changed=SLIME_GENERATION_CANDIDATE");
     println!("cargo:rerun-if-env-changed=SLIME_GENERATION_CMD_SCENARIO");
@@ -73,6 +74,25 @@ fn main() {
     }
     generate_command_profile(manifest_dir);
     generate_fabric_profile(manifest_dir);
+    generate_boot_layout(manifest_dir);
+}
+
+/// Copy the generation's slot table into `OUT_DIR` for `init.rs` to include.
+///
+/// `build-generation.py` emits it per generation number and passes the path,
+/// because components are compiled before the generation is assembled and so
+/// cannot read the layout resource out of it. The checked-in fallback keeps a
+/// plain `cargo build` working; it holds the default profile's slots, which is
+/// what generation 1 declares.
+fn generate_boot_layout(manifest_dir: &str) {
+    let fallback = std::path::Path::new(manifest_dir).join("src/default_boot_layout.rs");
+    let layout_path = std::env::var_os("SLIME_BOOT_LAYOUT")
+        .map(std::path::PathBuf::from)
+        .unwrap_or(fallback);
+    println!("cargo:rerun-if-changed={}", layout_path.display());
+    let layout = std::fs::read(&layout_path).expect("read generated boot layout");
+    let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR"));
+    std::fs::write(out.join("boot_layout.rs"), layout).expect("write boot layout");
 }
 
 fn generate_command_profile(manifest_dir: &str) {
