@@ -635,9 +635,9 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
             rights: crate::capability::RIGHT_ENDPOINT_CREATE,
         },
         executable(generation, "console", console),
-        endpoint(console_output, RIGHT_RECV),
+        endpoint("console-output", console_output, RIGHT_RECV),
         executable(generation, "dango", dango),
-        endpoint(dango_output, RIGHT_SEND),
+        endpoint("dango-output", dango_output, RIGHT_SEND),
         executable(generation, "spawn-service", spawn_service),
         executable(generation, "sysinfo", sysinfo),
         executable(
@@ -663,12 +663,24 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
             object: KernelObject::GenerationControl,
             rights: RIGHT_HEALTH_CONFIRM | RIGHT_BOOT_UPDATE | RIGHT_TRANSFER,
         },
-        endpoint(dango_spawn, RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER),
-        endpoint(service_spawn, RIGHT_SEND | RIGHT_RECV),
+        endpoint(
+            "dango-spawn",
+            dango_spawn,
+            RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
+        ),
+        endpoint("service-spawn", service_spawn, RIGHT_SEND | RIGHT_RECV),
         executable(generation, "filesystem-service", filesystem_service),
         executable(generation, "directory-probe", directory_probe),
-        endpoint(directory_client, RIGHT_SEND | RIGHT_RECV),
-        endpoint(directory_service, RIGHT_SEND | RIGHT_RECV),
+        endpoint(
+            "directory-client",
+            directory_client,
+            RIGHT_SEND | RIGHT_RECV,
+        ),
+        endpoint(
+            "directory-service",
+            directory_service,
+            RIGHT_SEND | RIGHT_RECV,
+        ),
         Capability {
             object: KernelObject::ObjectStore,
             rights: RIGHT_STORE_READ | RIGHT_STORE_WRITE | RIGHT_TRANSFER,
@@ -690,35 +702,64 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         executable(generation, "generation-stage", generation_stage),
         executable(generation, "generation-select", generation_select),
         executable(generation, "generation-rollback", generation_rollback),
-        endpoint(generation_list_client, RIGHT_SEND | RIGHT_RECV),
-        endpoint(generation_inspect_client, RIGHT_SEND | RIGHT_RECV),
-        endpoint(generation_stage_client, RIGHT_SEND | RIGHT_RECV),
-        endpoint(generation_select_client, RIGHT_SEND | RIGHT_RECV),
-        endpoint(generation_rollback_client, RIGHT_SEND | RIGHT_RECV),
         endpoint(
+            "generation-list-client",
+            generation_list_client,
+            RIGHT_SEND | RIGHT_RECV,
+        ),
+        endpoint(
+            "generation-inspect-client",
+            generation_inspect_client,
+            RIGHT_SEND | RIGHT_RECV,
+        ),
+        endpoint(
+            "generation-stage-client",
+            generation_stage_client,
+            RIGHT_SEND | RIGHT_RECV,
+        ),
+        endpoint(
+            "generation-select-client",
+            generation_select_client,
+            RIGHT_SEND | RIGHT_RECV,
+        ),
+        endpoint(
+            "generation-rollback-client",
+            generation_rollback_client,
+            RIGHT_SEND | RIGHT_RECV,
+        ),
+        endpoint(
+            "generation-list-service",
             generation_list_service,
             RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
         ),
         endpoint(
+            "generation-inspect-service",
             generation_inspect_service,
             RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
         ),
         endpoint(
+            "generation-stage-service",
             generation_stage_service,
             RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
         ),
         endpoint(
+            "generation-select-service",
             generation_select_service,
             RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
         ),
         endpoint(
+            "generation-rollback-service",
             generation_rollback_service,
             RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
         ),
         executable(generation, "powerbox-chooser", powerbox_chooser),
         executable(generation, "powerbox-probe", powerbox_probe),
-        endpoint(powerbox_client, RIGHT_SEND | RIGHT_RECV),
-        endpoint(powerbox_service, RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER),
+        endpoint("powerbox-client", powerbox_client, RIGHT_SEND | RIGHT_RECV),
+        endpoint(
+            "powerbox-service",
+            powerbox_service,
+            RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
+        ),
         // C7.2 shared-buffer factory, slot 40. Placed before the optional
         // transfer block so its slot is fixed on every boot. Creation authority
         // only, and transferable so init can derive-copy it into the components
@@ -735,8 +776,13 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         // names its receiver by capability rather than an ambient task id.
         executable(generation, "sample-lender", sample_lender),
         executable(generation, "sample-receiver", sample_receiver),
-        endpoint(sample_lender_side, RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER),
         endpoint(
+            "sample-lender-side",
+            sample_lender_side,
+            RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
+        ),
+        endpoint(
+            "sample-receiver-side",
             sample_receiver_side,
             RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
         ),
@@ -753,38 +799,68 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         executable(generation, "fabric-intruder", fabric_intruder),
         executable(generation, "fabric-publisher-b", fabric_publisher_b),
         executable(generation, "fabric-subscriber-b", fabric_subscriber_b),
-        endpoint(fabric_publisher_client, RIGHT_SEND | RIGHT_RECV),
-        endpoint(fabric_subscriber_client, RIGHT_SEND | RIGHT_RECV),
-        endpoint(fabric_intruder_client, RIGHT_SEND | RIGHT_RECV),
-        endpoint(fabric_publisher_b_client, RIGHT_SEND | RIGHT_RECV),
-        endpoint(fabric_subscriber_b_client, RIGHT_SEND | RIGHT_RECV),
+        endpoint(
+            "fabric-publisher-client",
+            fabric_publisher_client,
+            RIGHT_SEND | RIGHT_RECV,
+        ),
+        endpoint(
+            "fabric-subscriber-client",
+            fabric_subscriber_client,
+            RIGHT_SEND | RIGHT_RECV,
+        ),
+        endpoint(
+            "fabric-intruder-client",
+            fabric_intruder_client,
+            RIGHT_SEND | RIGHT_RECV,
+        ),
+        endpoint(
+            "fabric-publisher-b-client",
+            fabric_publisher_b_client,
+            RIGHT_SEND | RIGHT_RECV,
+        ),
+        endpoint(
+            "fabric-subscriber-b-client",
+            fabric_subscriber_b_client,
+            RIGHT_SEND | RIGHT_RECV,
+        ),
         // The service side of each control channel. Transferable so init can
         // grant them into the fabric; the fabric itself never re-delegates one.
         endpoint(
+            "fabric-publisher-service",
             fabric_publisher_service,
             RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
         ),
         endpoint(
+            "fabric-subscriber-service",
             fabric_subscriber_service,
             RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
         ),
         endpoint(
+            "fabric-intruder-service",
             fabric_intruder_service,
             RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
         ),
         endpoint(
+            "fabric-publisher-b-service",
             fabric_publisher_b_service,
             RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
         ),
         endpoint(
+            "fabric-subscriber-b-service",
             fabric_subscriber_b_service,
             RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
         ),
     ]);
     if generation.number == 13 {
         caps.extend([
-            endpoint(fabric_time_client, RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER),
             endpoint(
+                "fabric-time-client",
+                fabric_time_client,
+                RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
+            ),
+            endpoint(
+                "fabric-time-service",
                 fabric_time_service,
                 RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
             ),
@@ -799,30 +875,54 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         for slot in [45usize, 46, 47, 49] {
             caps[slot].rights |= RIGHT_TRANSFER;
         }
-        caps[51] = endpoint(fabric_call_client_control, RIGHT_SEND | RIGHT_RECV);
-        caps[52] = endpoint(fabric_call_client_b_control, RIGHT_SEND | RIGHT_RECV);
-        caps[54] = endpoint(fabric_call_server_control, RIGHT_SEND | RIGHT_RECV);
+        caps[51] = endpoint(
+            "fabric-call-client-control",
+            fabric_call_client_control,
+            RIGHT_SEND | RIGHT_RECV,
+        );
+        caps[52] = endpoint(
+            "fabric-call-client-b-control",
+            fabric_call_client_b_control,
+            RIGHT_SEND | RIGHT_RECV,
+        );
+        caps[54] = endpoint(
+            "fabric-call-server-control",
+            fabric_call_server_control,
+            RIGHT_SEND | RIGHT_RECV,
+        );
         caps[56] = endpoint(
+            "fabric-call-client-service",
             fabric_call_client_service,
             RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
         );
         caps[57] = endpoint(
+            "fabric-call-client-b-service",
             fabric_call_client_b_service,
             RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
         );
         caps[59] = endpoint(
+            "fabric-call-server-service",
             fabric_call_server_service,
             RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
         );
         caps[48] = executable(generation, "fabric-call-time", fabric_call_time);
-        caps[53] = endpoint(fabric_call_time_control, RIGHT_SEND | RIGHT_RECV);
+        caps[53] = endpoint(
+            "fabric-call-time-control",
+            fabric_call_time_control,
+            RIGHT_SEND | RIGHT_RECV,
+        );
         caps[58] = endpoint(
+            "fabric-call-time-service",
             fabric_call_time_service,
             RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
         );
         caps.extend([
-            endpoint(fabric_call_phase_time, RIGHT_RECV),
-            endpoint(fabric_call_phase_client, RIGHT_SEND),
+            endpoint("fabric-call-phase-time", fabric_call_phase_time, RIGHT_RECV),
+            endpoint(
+                "fabric-call-phase-client",
+                fabric_call_phase_client,
+                RIGHT_SEND,
+            ),
         ]);
     }
     if generation.number == 15 {
@@ -842,23 +942,43 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         for slot in [45usize, 46, 47, 48, 49, 50] {
             caps[slot].rights |= RIGHT_TRANSFER;
         }
-        caps[51] = endpoint(fabric_op_client_control, RIGHT_SEND | RIGHT_RECV);
-        caps[52] = endpoint(fabric_op_client_b_control, RIGHT_SEND | RIGHT_RECV);
-        caps[53] = endpoint(fabric_op_time_control, RIGHT_SEND | RIGHT_RECV);
-        caps[54] = endpoint(fabric_op_server_control, RIGHT_SEND | RIGHT_RECV);
+        caps[51] = endpoint(
+            "fabric-op-client-control",
+            fabric_op_client_control,
+            RIGHT_SEND | RIGHT_RECV,
+        );
+        caps[52] = endpoint(
+            "fabric-op-client-b-control",
+            fabric_op_client_b_control,
+            RIGHT_SEND | RIGHT_RECV,
+        );
+        caps[53] = endpoint(
+            "fabric-op-time-control",
+            fabric_op_time_control,
+            RIGHT_SEND | RIGHT_RECV,
+        );
+        caps[54] = endpoint(
+            "fabric-op-server-control",
+            fabric_op_server_control,
+            RIGHT_SEND | RIGHT_RECV,
+        );
         caps[56] = endpoint(
+            "fabric-op-client-service",
             fabric_op_client_service,
             RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
         );
         caps[57] = endpoint(
+            "fabric-op-client-b-service",
             fabric_op_client_b_service,
             RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
         );
         caps[58] = endpoint(
+            "fabric-op-time-service",
             fabric_op_time_service,
             RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
         );
         caps[59] = endpoint(
+            "fabric-op-server-service",
             fabric_op_server_service,
             RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
         );
@@ -901,31 +1021,92 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
 /// once carried behind one env switch are three declared components here.
 /// The stream plane, in the resolved profile's control order. Every one of these
 /// is a participant on a route this generation's stream worker carries.
-const FABRIC_BOOT_STREAM: [(&str, &str); 7] = [
-    ("fabric-publisher", "fabric-publisher-control"),
-    ("fabric-subscriber", "fabric-subscriber-control"),
-    ("fabric-publisher-b", "fabric-publisher-b-control"),
-    ("fabric-subscriber-b", "fabric-subscriber-b-control"),
-    ("fabric-observer", "fabric-observer-control"),
-    ("fabric-probe", "fabric-probe-control"),
-    ("fabric-proxy", "fabric-proxy-control"),
+const FABRIC_BOOT_STREAM: [(&str, &str, &str); 7] = [
+    (
+        "fabric-publisher",
+        "fabric-publisher-control",
+        "fabric-publisher-control-service",
+    ),
+    (
+        "fabric-subscriber",
+        "fabric-subscriber-control",
+        "fabric-subscriber-control-service",
+    ),
+    (
+        "fabric-publisher-b",
+        "fabric-publisher-b-control",
+        "fabric-publisher-b-control-service",
+    ),
+    (
+        "fabric-subscriber-b",
+        "fabric-subscriber-b-control",
+        "fabric-subscriber-b-control-service",
+    ),
+    (
+        "fabric-observer",
+        "fabric-observer-control",
+        "fabric-observer-control-service",
+    ),
+    (
+        "fabric-probe",
+        "fabric-probe-control",
+        "fabric-probe-control-service",
+    ),
+    (
+        "fabric-proxy",
+        "fabric-proxy-control",
+        "fabric-proxy-control-service",
+    ),
 ];
 
 /// The call plane, then the operation plane and its replacement channel. Each
 /// carries its own capability-routed clock: a worker's time source is a declared
 /// participant, never an ambient timer.
-const FABRIC_BOOT_REQUEST_RESPONSE: [(&str, &str); 9] = [
-    ("fabric-call-client", "fabric-call-client-control"),
-    ("fabric-call-client-b", "fabric-call-client-b-control"),
-    ("fabric-call-server", "fabric-call-server-control"),
-    ("fabric-call-time", "fabric-call-time-control"),
-    ("fabric-op-client", "fabric-op-client-control"),
-    ("fabric-op-client-b", "fabric-op-client-b-control"),
-    ("fabric-op-server", "fabric-op-server-control"),
-    ("fabric-op-time", "fabric-op-time-control"),
+const FABRIC_BOOT_REQUEST_RESPONSE: [(&str, &str, &str); 9] = [
+    (
+        "fabric-call-client",
+        "fabric-call-client-control",
+        "fabric-call-client-control-service",
+    ),
+    (
+        "fabric-call-client-b",
+        "fabric-call-client-b-control",
+        "fabric-call-client-b-control-service",
+    ),
+    (
+        "fabric-call-server",
+        "fabric-call-server-control",
+        "fabric-call-server-control-service",
+    ),
+    (
+        "fabric-call-time",
+        "fabric-call-time-control",
+        "fabric-call-time-control-service",
+    ),
+    (
+        "fabric-op-client",
+        "fabric-op-client-control",
+        "fabric-op-client-control-service",
+    ),
+    (
+        "fabric-op-client-b",
+        "fabric-op-client-b-control",
+        "fabric-op-client-b-control-service",
+    ),
+    (
+        "fabric-op-server",
+        "fabric-op-server-control",
+        "fabric-op-server-control-service",
+    ),
+    (
+        "fabric-op-time",
+        "fabric-op-time-control",
+        "fabric-op-time-control-service",
+    ),
     (
         "fabric-op-client-b-restart",
         "fabric-op-client-b-restart-control",
+        "fabric-op-client-b-restart-control-service",
     ),
 ];
 
@@ -933,8 +1114,8 @@ const FABRIC_BOOT_REQUEST_RESPONSE: [(&str, &str); 9] = [
 /// request/response planes. One flat order, because init's executable and
 /// control slots are derived from it by index and `init.rs` walks the same
 /// order.
-const FABRIC_BOOT_PARTICIPANTS: [(&str, &str); 16] = {
-    let mut all = [("", ""); 16];
+const FABRIC_BOOT_PARTICIPANTS: [(&str, &str, &str); 16] = {
+    let mut all = [("", "", ""); 16];
     let mut index = 0;
     while index < FABRIC_BOOT_STREAM.len() {
         all[index] = FABRIC_BOOT_STREAM[index];
@@ -1001,7 +1182,7 @@ fn launch_fabric_boot_init(generation: &Generation<'static>) -> task::TaskId {
             RIGHT_EXEC | RIGHT_SPAWN,
         );
     }
-    for (client, grant) in FABRIC_BOOT_PARTICIPANTS {
+    for (client, grant, _) in FABRIC_BOOT_PARTICIPANTS {
         require_grant(
             generation,
             grant,
@@ -1046,7 +1227,7 @@ fn launch_fabric_boot_init(generation: &Generation<'static>) -> task::TaskId {
     // One executable per participant, then both halves of its control channel.
     // Grouped per participant rather than by kind so init's slot arithmetic is
     // one stride, and a participant added or removed moves one block.
-    for (component, _) in FABRIC_BOOT_PARTICIPANTS {
+    for (component, _, _) in FABRIC_BOOT_PARTICIPANTS {
         let mut capability = executable(
             generation,
             component,
@@ -1063,10 +1244,14 @@ fn launch_fabric_boot_init(generation: &Generation<'static>) -> task::TaskId {
         capability.rights |= RIGHT_TRANSFER;
         caps.push(capability);
     }
-    for _ in FABRIC_BOOT_PARTICIPANTS {
+    for (_, control, service_control) in FABRIC_BOOT_PARTICIPANTS {
         let (client, service) = ipc::channel();
-        caps.push(endpoint(client, RIGHT_SEND | RIGHT_RECV));
-        caps.push(endpoint(service, RIGHT_SEND | RIGHT_RECV));
+        // Both halves of one channel, but not interchangeable: the client half
+        // goes to the participant and the service half to the fabric. The dump
+        // labels them apart so a layout that swapped the two would not compare
+        // equal to one that did not.
+        caps.push(endpoint(control, client, RIGHT_SEND | RIGHT_RECV));
+        caps.push(endpoint(service_control, service, RIGHT_SEND | RIGHT_RECV));
     }
     assert!(
         caps.len() <= crate::capability::MAX_CAPS,
@@ -1184,8 +1369,9 @@ fn dump_boot_layout(path: &str, caps: &[Capability]) {
         crate::capability::MAX_CAPS
     );
     for (slot, capability) in caps.iter().enumerate() {
-        let name = match capability.object {
+        let name = match &capability.object {
             KernelObject::Executable { name, .. } => name.unwrap_or("?"),
+            KernelObject::Endpoint(endpoint) => endpoint.label().unwrap_or("?"),
             _ => "-",
         };
         serial_println!(
@@ -1276,9 +1462,14 @@ fn executable(
 // Every endpoint held by init is delegated to a spawned component, so each
 // carries RIGHT_TRANSFER: spawn grants enforce the same transfer-right
 // condition as IPC sends.
-fn endpoint(endpoint: ipc::Endpoint, rights: Rights) -> Capability {
+//
+// `label` names which half of which channel this is. Endpoints are otherwise
+// indistinguishable in the boot-layout dump — most of init's carry identical
+// rights — so without it a check could not tell a client half from its service
+// half, and a layout that swapped two control endpoints would compare equal.
+fn endpoint(label: &'static str, endpoint: ipc::Endpoint, rights: Rights) -> Capability {
     Capability {
-        object: KernelObject::Endpoint(endpoint),
+        object: KernelObject::Endpoint(endpoint.with_label(label)),
         rights: rights | RIGHT_TRANSFER,
     }
 }
@@ -1553,7 +1744,7 @@ extern "C" fn on_idle() {
                 && (name == "init"
                     || FABRIC_BOOT_PARTICIPANTS
                         .iter()
-                        .any(|(component, _)| *component == name)
+                        .any(|(component, _, _)| *component == name)
                     || matches!(
                         name,
                         "fabric-service" | "fabric-call-worker" | "fabric-op-worker"

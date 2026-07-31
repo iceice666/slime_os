@@ -33,10 +33,29 @@ refactor that follows can be measured against them.
 | `contracts/boot-layout/v1/fixtures/*.layout` | Sixteen frozen baselines, captured before any B10 edit | The pre-refactor layout is recoverable and diffable |
 | `Justfile` | `boot_layout_check`, `boot_layout_bless` | The equivalence claim has a gate that exists |
 
-The dump names object *kind* and, for executables, component name. Endpoint
-identity, executable bytes, and block-device addresses are deliberately
-excluded: they vary per boot or per host, and including them would make the
-fixture unstable and therefore worthless as an equivalence check.
+The dump names object *kind*, and identity for the two kinds that would
+otherwise be ambiguous: component name for executables, channel label for
+endpoints. Endpoint addresses, executable bytes, and block-device addresses are
+deliberately excluded: they vary per boot or per host, and including them would
+make the fixture unstable and therefore worthless as an equivalence check.
+
+The endpoint label was not in the first draft of this dump, and its absence
+would have made the check unsound. Roughly half of init's slots are endpoints,
+and most carry identical rights — thirty of the sixty-one default slots, and
+`fabric-call` slots 51 through 59 rendered as nine identical `endpoint - 0x7`
+lines. A refactor that swapped two control endpoints, or placed a service half
+where a client half belonged, would have compared *equal*, and the resulting
+failure would have surfaced as a fabric correlation error far from its cause —
+precisely the failure this check exists to catch. `ipc::Endpoint` therefore
+carries an optional `&'static str` label, set by the boot path and used only by
+the dump. It carries no authority and gates nothing; endpoints minted at
+runtime through `SYS_ENDPOINT_CREATE` have none, because no layout describes
+them.
+
+After labelling, every slot in fifteen of the sixteen fixtures is uniquely
+identified. The exception is the store profile, where slots 9 and 18 are both
+`object-store - 0x3004`; those two capabilities are genuinely identical, so a
+swap between them is not an observable change.
 
 `check-boot-layout.py` clears every gate-selecting `SLIME_*` flag from the
 inherited environment before applying a profile's own settings. Without that, a
@@ -48,6 +67,7 @@ capture a layout its gate never boots.
 | Risk | Guard | Failure signal |
 |---|---|---|
 | A refactor silently moves a slot | `just boot_layout_check` | `<name>: layout differs`, with the `was:`/`now:` lines for each moved slot |
+| A refactor swaps two same-rights endpoints, or a client half for its service half | `just boot_layout_check` | The endpoint label differs on both slots. Guarded only because endpoints carry a channel label; without it these compare equal |
 | A profile stops booting far enough to build init's table | `just boot_layout_check` | `<name>: boot emitted no complete layout block` |
 | A layout change lands without review | fixture diff in version control | `.layout` files appear in the changeset |
 
@@ -60,6 +80,9 @@ capture a layout its gate never boots.
 | `check-boot-layout.py --bless --profile sample-plane` | 61 slots recorded | Direct |
 | `check-boot-layout.py --profile sample-plane` (rerun against its own fixture) | 61 slots match — dump is deterministic across boots | Direct |
 | `check-boot-layout.py --bless` (all sixteen) | all captured; 61 slots typical, 63 for fabric-qos and fabric-call, 53 for fabric-boot | Direct |
+| Duplicate-line scan of all sixteen fixtures after labelling | 15 fixtures fully discriminated; storage-store has one genuine duplicate pair (slots 9/18, identical capabilities) | Direct |
+| `check-boot-layout.py` on fabric-call, sample-plane, fabric-boot after labelling | all match — labels are deterministic across boots | Direct |
+| `just sample_plane_live_check`, `just fabric_call_check`, `just data_fabric_boot_check` after labelling | ok; fabric-boot still reports 53 of 64 slots and 20 roles | Direct |
 | `just fmt_check_all` | passed | Direct |
 | `just lint_all` | passed | Direct |
 | `just ruff`, `just typos` | passed | Direct |

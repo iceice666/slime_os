@@ -54,11 +54,28 @@ pub struct EndpointInner {
 pub struct Endpoint {
     inner: Arc<EndpointInner>,
     owner_alive: Arc<AtomicBool>,
+    /// Which half of which channel this is, for the boot-layout dump. Carries
+    /// no authority and gates nothing: two endpoints with the same label are
+    /// not interchangeable, and the kernel never compares them. `None` for
+    /// every endpoint minted at runtime through `SYS_ENDPOINT_CREATE`, which
+    /// no layout describes.
+    label: Option<&'static str>,
 }
 
 impl Endpoint {
     pub fn inner(&self) -> &EndpointInner {
         &self.inner
+    }
+
+    /// Name this endpoint for the boot-layout dump. See [`Endpoint::label`].
+    pub fn with_label(mut self, label: &'static str) -> Self {
+        self.label = Some(label);
+        self
+    }
+
+    /// This endpoint's layout label, if it was minted by the boot path.
+    pub fn label(&self) -> Option<&'static str> {
+        self.label
     }
 
     /// Reports whether this endpoint's own receive queue holds a message.
@@ -122,6 +139,7 @@ impl Clone for Endpoint {
         Self {
             inner: self.inner.clone(),
             owner_alive: self.owner_alive.clone(),
+            label: self.label,
         }
     }
 }
@@ -186,6 +204,7 @@ pub fn channel() -> (Endpoint, Endpoint) {
             peer_owner_alive: Arc::downgrade(&b_alive),
         }),
         owner_alive: a_alive.clone(),
+        label: None,
     };
     let b = Endpoint {
         inner: Arc::new(EndpointInner {
@@ -195,6 +214,7 @@ pub fn channel() -> (Endpoint, Endpoint) {
             peer_owner_alive: Arc::downgrade(&a_alive),
         }),
         owner_alive: b_alive.clone(),
+        label: None,
     };
     (a, b)
 }
