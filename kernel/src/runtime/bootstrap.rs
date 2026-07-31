@@ -67,15 +67,15 @@ pub fn start() -> ! {
     );
     crate::generation_manager::init();
     GENERATION_NUMBER.store(generation.number, Ordering::Relaxed);
-    if option_env!("SLIME_GENERATION_CMD_CHECK") == Some("1") && generation.number == 8 {
+    if generation.number == 8 {
         serial_println!("[generation-command] scripted check active");
     }
-    if option_env!("SLIME_DANGO_CHECK") == Some("1") && generation.number == 7 {
+    if generation.number == 7 {
         crate::input::install_script(
             b"$(sysinfo)\n(with-env {MODE=ci} (with-cwd docs (with-stdin data $(echo ok))))\n$(inject)\n$(echo a b c)\n\x1b",
         );
     }
-    if option_env!("SLIME_POWERBOX_CHECK") == Some("1") && generation.number == 9 {
+    if generation.number == 9 {
         crate::input::install_script(b"\n\x1b");
         serial_println!("[powerbox] scripted check active");
     }
@@ -172,17 +172,29 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         return launch_recovery_init(generation);
     }
     // C8.10 full-graph boot. A separate layout reached by an early return,
-    // mirroring `launch_recovery_init`, rather than more overlays on the vector
+    // mirroring `launch_recovery_init`, rather than more overlays on the table
     // below.
     //
-    // That vector is 61 of `MAX_CAPS = 64` before this milestone adds anything,
+    // That table is 61 of `MAX_CAPS = 64` before this milestone adds anything,
     // so the three new roles cannot be appended: they need nine slots against
-    // three free. It is also the layout six passing QEMU gates read positionally
-    // — the `caps[46] = ...` blocks below rewrite it per generation number — so
-    // renumbering it to fit would rewrite C8.3-C8.8's evidence rather than
-    // extend it. A fabric-only vector holds only what the fabric graph needs and
-    // leaves every earlier gate's slots exactly where they were.
-    if option_env!("SLIME_FABRIC_BOOT_CHECK") == Some("1") && generation.number == 17 {
+    // three free. A fabric-only layout holds only what the fabric graph needs
+    // and leaves every earlier gate's slots exactly where they were.
+    //
+    // Selected by what the generation's layout declares, like the recovery fork
+    // above it. Only the full-graph layout gives init the fabric's own route
+    // workers; every other layout leaves the fabric to spawn them. The
+    // component *list* is the same in all of them — one manifest declares every
+    // component any profile uses — so the layout, not the manifest, is what
+    // distinguishes a profile.
+    //
+    // This was a `SLIME_FABRIC_BOOT_CHECK` flag compared against generation 17,
+    // which meant the gate taking this path built a different kernel binary
+    // than every other gate (B10).
+    let layout = generation::boot_layout(generation);
+    if layout_declares(
+        &layout,
+        boot_layout::component_identity("fabric-call-worker"),
+    ) {
         return launch_fabric_boot_init(generation);
     }
     let init = generation
@@ -499,9 +511,9 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
     let (fabric_call_time_control, fabric_call_time_service) = ipc::channel();
     let (fabric_call_phase_client, fabric_call_phase_time) = ipc::channel();
     // C8.7 operation control plane. Its own channels rather than the call
-    // plane's: the two profiles occupy the same capability slots but are
-    // selected by generation number, and one `ipc::Endpoint` cannot be moved
-    // into both `caps` blocks.
+    // plane's: the two profiles occupy the same capability slots but only one
+    // is ever placed, and a single `ipc::Endpoint` cannot be moved into both
+    // branches.
     let (fabric_op_client_control, fabric_op_client_service) = ipc::channel();
     let (fabric_op_client_b_control, fabric_op_client_b_service) = ipc::channel();
     let (fabric_op_server_control, fabric_op_server_service) = ipc::channel();
@@ -511,7 +523,7 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
     // only the kernel knows what a channel is, or which half of one a client
     // holds — but where each lands is generation data. A capability the layout
     // does not name, or a declared slot nothing fills, stops the boot.
-    let mut placer = LayoutPlacer::new(generation::boot_layout(generation));
+    let mut placer = LayoutPlacer::new(layout);
     placer.role(
         boot_layout::Role::EndpointFactory,
         "endpoint factory",
@@ -698,7 +710,7 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
     // handed them, and the old `caps[46] = ...` block is why. Preserving it
     // exactly is the point: the layout now records which slots a rewrite loop
     // happened to cover, instead of that being implied by an index range.
-    if generation.number != 15 {
+    if placer.declares_component("fabric-subscriber-b") {
         placer.executable(generation, "fabric-subscriber-b");
     }
     placer.endpoint(
@@ -711,7 +723,7 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         fabric_subscriber_b_service,
         RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
     );
-    if generation.number == 14 {
+    if placer.declares_component("fabric-call-client") {
         placer.executable_as_declared(generation, "fabric-call-client");
         placer.executable_as_declared(generation, "fabric-call-client-b");
         placer.executable_as_declared(generation, "fabric-call-time");
@@ -762,7 +774,7 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
             fabric_call_phase_client,
             RIGHT_SEND,
         );
-    } else if generation.number == 15 {
+    } else if placer.declares_component("fabric-op-client") {
         placer.executable_as_declared(generation, "fabric-op-client");
         placer.executable_as_declared(generation, "fabric-op-client-b");
         placer.executable_as_declared(generation, "fabric-op-server");
@@ -855,7 +867,7 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
             fabric_publisher_b_service,
             RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
         );
-        if generation.number == 13 {
+        if placer.declares_channel("fabric-time-client") {
             placer.endpoint(
                 "fabric-time-client",
                 fabric_time_client,
@@ -869,6 +881,10 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         }
     }
     let mut caps = placer.finish();
+    // The transfer pair is appended rather than placed: it exists only when the
+    // platform enumerates both block devices, so no layout declares it. It
+    // lands past the layout's high-water mark, which is why this is the one
+    // path that can outgrow the capability table.
     if let (Some(receiver), Some(source)) = (transfer_receiver, transfer_source) {
         caps.extend([
             Capability {
@@ -881,6 +897,10 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
             },
         ]);
     }
+    assert!(
+        caps.len() <= MAX_CAPS,
+        "init layout exceeds the kernel capability table"
+    );
 
     let spawn_budget = generation
         .component_named("init")
@@ -1215,6 +1235,13 @@ fn launch_recovery_init(generation: &Generation<'static>) -> task::TaskId {
     .expect("failed to launch recovery init")
 }
 
+/// Whether a layout gives `identity` a slot.
+fn layout_declares(layout: &BootLayout<'_>, identity: [u8; 32]) -> bool {
+    (0..layout.entry_count())
+        .filter_map(|index| layout.entry(index))
+        .any(|entry| entry.name_identity == identity)
+}
+
 /// Places minted capabilities into the slots the generation's boot layout
 /// declares, rather than at literal indices in this file.
 ///
@@ -1302,14 +1329,28 @@ impl<'a> LayoutPlacer<'a> {
     ) {
         let chosen = candidates
             .iter()
-            .find(|name| {
-                let identity = boot_layout::component_identity(name);
-                (0..self.layout.entry_count())
-                    .filter_map(|index| self.layout.entry(index))
-                    .any(|entry| entry.name_identity == identity)
-            })
+            .find(|name| self.declares_component(name))
             .unwrap_or_else(|| panic!("boot layout names no {what}"));
         self.executable(generation, chosen);
+    }
+
+    /// Whether this generation's layout gives `name` a slot.
+    ///
+    /// This is what the boot path asks instead of comparing
+    /// `generation.number` against a literal. A profile is identified by the
+    /// participants it declares, so the condition states why a branch is taken
+    /// rather than encoding a number that happens to mean it.
+    fn declares_component(&self, name: &str) -> bool {
+        self.declares(boot_layout::component_identity(name))
+    }
+
+    /// Whether this generation's layout gives the channel half `label` a slot.
+    fn declares_channel(&self, label: &str) -> bool {
+        self.declares(boot_layout::channel_identity(label))
+    }
+
+    fn declares(&self, identity: [u8; 32]) -> bool {
+        layout_declares(&self.layout, identity)
     }
 
     fn endpoint(&mut self, label: &'static str, endpoint: ipc::Endpoint, rights: Rights) {
@@ -1795,8 +1836,7 @@ extern "C" fn on_idle() {
             // other arm here: a prefix would silently extend this verdict to any
             // future component whose name happened to start that way, including a
             // one-shot probe whose failure to exit is a real stall.
-            let fabric_boot_idle = option_env!("SLIME_FABRIC_BOOT_CHECK") == Some("1")
-                && GENERATION_NUMBER.load(Ordering::Relaxed) == 17
+            let fabric_boot_idle = GENERATION_NUMBER.load(Ordering::Relaxed) == 17
                 && (name == "init"
                     || FABRIC_BOOT_PARTICIPANTS
                         .iter()
@@ -1828,26 +1868,16 @@ extern "C" fn on_idle() {
         let optional_storage_absent = name == "storage-probe"
             && (!storage_probe_required() || directory_run)
             && matches!(reason, Some(task::TermReason::Exit(1)));
-        let dango_check = option_env!("SLIME_DANGO_CHECK") == Some("1")
-            && GENERATION_NUMBER.load(Ordering::Relaxed) == 7;
-        let generation_command_check = option_env!("SLIME_GENERATION_CMD_CHECK") == Some("1")
-            && GENERATION_NUMBER.load(Ordering::Relaxed) == 8;
-        let powerbox_check = option_env!("SLIME_POWERBOX_CHECK") == Some("1")
-            && GENERATION_NUMBER.load(Ordering::Relaxed) == 9;
-        let sample_plane_check = option_env!("SLIME_SAMPLE_PLANE_CHECK") == Some("1")
-            && GENERATION_NUMBER.load(Ordering::Relaxed) == 10;
-        let fabric_authority_check = option_env!("SLIME_FABRIC_AUTHORITY_CHECK") == Some("1")
-            && GENERATION_NUMBER.load(Ordering::Relaxed) == 11;
-        let fabric_stream_check = option_env!("SLIME_FABRIC_STREAM_CHECK") == Some("1")
-            && GENERATION_NUMBER.load(Ordering::Relaxed) == 12;
-        let fabric_qos_check = option_env!("SLIME_FABRIC_QOS_CHECK") == Some("1")
-            && GENERATION_NUMBER.load(Ordering::Relaxed) == 13;
-        let fabric_call_check = option_env!("SLIME_FABRIC_CALL_CHECK") == Some("1")
-            && GENERATION_NUMBER.load(Ordering::Relaxed) == 14;
-        let fabric_operation_check = option_env!("SLIME_FABRIC_OPERATION_CHECK") == Some("1")
-            && GENERATION_NUMBER.load(Ordering::Relaxed) == 15;
-        let fabric_visibility_check = option_env!("SLIME_FABRIC_VISIBILITY_CHECK") == Some("1")
-            && GENERATION_NUMBER.load(Ordering::Relaxed) == 16;
+        let dango_check = GENERATION_NUMBER.load(Ordering::Relaxed) == 7;
+        let generation_command_check = GENERATION_NUMBER.load(Ordering::Relaxed) == 8;
+        let powerbox_check = GENERATION_NUMBER.load(Ordering::Relaxed) == 9;
+        let sample_plane_check = GENERATION_NUMBER.load(Ordering::Relaxed) == 10;
+        let fabric_authority_check = GENERATION_NUMBER.load(Ordering::Relaxed) == 11;
+        let fabric_stream_check = GENERATION_NUMBER.load(Ordering::Relaxed) == 12;
+        let fabric_qos_check = GENERATION_NUMBER.load(Ordering::Relaxed) == 13;
+        let fabric_call_check = GENERATION_NUMBER.load(Ordering::Relaxed) == 14;
+        let fabric_operation_check = GENERATION_NUMBER.load(Ordering::Relaxed) == 15;
+        let fabric_visibility_check = GENERATION_NUMBER.load(Ordering::Relaxed) == 16;
         let optional_generation_command_component = generation_command_check
             && matches!(name, "init" | "generation-manager")
             && matches!(

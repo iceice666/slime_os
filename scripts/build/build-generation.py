@@ -5,6 +5,10 @@ import sys as _sys
 from pathlib import Path as _Path
 
 _sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "lib"))
+# This script's own directory, for sibling modules. Python only adds it
+# implicitly when the script is invoked by path from the directory holding it,
+# and `check-transfer.py` runs it from elsewhere.
+_sys.path.insert(0, str(_Path(__file__).resolve().parent))
 
 import copy
 import json
