@@ -175,6 +175,14 @@ either drifts.
       component images are per-generation artifacts by design, content-hashed
       into the generation. Out of scope here, and not a blocker for P1, which
       asks that architecture-neutral *kernel* code type-check for AArch64.
+- [ ] `just boot_layout_check` is not in CI. `.github/workflows/ci.yml` runs no
+      QEMU gate at all — only `fmt_check_all`, `lint_all`, `test_host`, `miri`,
+      `contracts_check`, and `devlog_check` — so this is the existing shape
+      rather than an omission, and the host-side half of the layout check does
+      run there inside `contracts_check`. But the eighteen-boot equivalence
+      half runs only when someone types it, which makes it weaker protection
+      than its role in B10's exit condition suggests. Whether CI should gain a
+      QEMU job is a separate decision from B10.
 - [ ] `launch_fabric_boot_init` still builds its 53-slot table positionally
       while the layout declares those same slots, so the C8.10 path has the
       one-sided-authority property `init.rs` just shed. `boot_layout_check`

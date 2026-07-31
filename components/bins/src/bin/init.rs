@@ -113,6 +113,13 @@ include!(concat!(env!("OUT_DIR"), "/boot_layout.rs"));
 // The transfer pair is not in the layout: bootstrap appends it past the
 // layout's high-water mark, and only when the platform enumerates both block
 // devices, so no generation can declare its slots.
+//
+// 61 and 62 are also where generation 13 puts the fabric clock channel and 14
+// puts the call phase channels. There is no conflict: transfer runs under
+// generation 9, whose table gives all four of those labels `SLOT_ABSENT`, and
+// the two profiles that do declare 61/62 never carry a transfer pair — their
+// layouts already reach 63 slots, so bootstrap's append would exceed
+// `MAX_CAPS` and trip the assert rather than overwrite anything.
 const TRANSFER_RECEIVER_SLOT: u32 = 61;
 const TRANSFER_SOURCE_SLOT: u32 = 62;
 
