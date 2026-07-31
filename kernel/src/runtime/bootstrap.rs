@@ -1,6 +1,7 @@
 use alloc::vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 
+use crate::capability::MAX_CAPS;
 use crate::capability::{
     Capability, DirectoryAuthority, KernelObject, PciFunctionInfo, RIGHT_BLOCK_READ,
     RIGHT_BLOCK_WRITE, RIGHT_BOOT_UPDATE, RIGHT_DIRECTORY_DERIVE, RIGHT_DIRECTORY_LIST,
@@ -10,6 +11,7 @@ use crate::capability::{
 };
 use crate::generation::{self, Generation};
 use crate::{ipc, println, serial_println, task};
+use boot_contracts::boot_layout::{self, BootLayout};
 
 static INIT_ID: AtomicU64 = AtomicU64::new(0);
 static CONSOLE_ID: AtomicU64 = AtomicU64::new(0);
@@ -186,111 +188,6 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
     let init = generation
         .component_bytes("init")
         .expect("init object missing");
-    let console = generation
-        .component_bytes("console")
-        .expect("console object missing");
-    let dango = generation
-        .component_bytes("dango")
-        .expect("dango object missing");
-    let sysinfo = generation
-        .component_bytes("sysinfo")
-        .expect("sysinfo object missing");
-    let storage_probe = generation
-        .component_bytes("storage-probe")
-        .expect("storage-probe object missing");
-    let storage_writer = generation
-        .component_bytes("storage-writer")
-        .expect("storage-writer object missing");
-    let storage_fault_probe = generation
-        .component_bytes("storage-fault-probe")
-        .expect("storage-fault-probe object missing");
-    let storage_store_probe = generation
-        .component_bytes("storage-store-probe")
-        .expect("storage-store-probe object missing");
-    let generation_manager = generation
-        .component_bytes("generation-manager")
-        .expect("generation-manager object missing");
-    let spawn_service = generation
-        .component_bytes("spawn-service")
-        .expect("spawn-service object missing");
-    let filesystem_service = generation
-        .component_bytes("filesystem-service")
-        .expect("filesystem-service object missing");
-    let directory_probe = generation
-        .component_bytes("directory-probe")
-        .expect("directory-probe object missing");
-    let generation_list = generation
-        .component_bytes("generation-list")
-        .expect("generation-list object missing");
-    let generation_inspect = generation
-        .component_bytes("generation-inspect")
-        .expect("generation-inspect object missing");
-    let generation_stage = generation
-        .component_bytes("generation-stage")
-        .expect("generation-stage object missing");
-    let generation_select = generation
-        .component_bytes("generation-select")
-        .expect("generation-select object missing");
-    let generation_rollback = generation
-        .component_bytes("generation-rollback")
-        .expect("generation-rollback object missing");
-    let powerbox_chooser = generation
-        .component_bytes("powerbox-chooser")
-        .expect("powerbox-chooser object missing");
-    let powerbox_probe = generation
-        .component_bytes("powerbox-probe")
-        .expect("powerbox-probe object missing");
-    let sample_lender = generation
-        .component_bytes("sample-lender")
-        .expect("sample-lender object missing");
-    let sample_receiver = generation
-        .component_bytes("sample-receiver")
-        .expect("sample-receiver object missing");
-    let fabric_service = generation
-        .component_bytes("fabric-service")
-        .expect("fabric-service object missing");
-    let fabric_publisher = generation
-        .component_bytes("fabric-publisher")
-        .expect("fabric-publisher object missing");
-    let fabric_subscriber = generation
-        .component_bytes("fabric-subscriber")
-        .expect("fabric-subscriber object missing");
-    let fabric_intruder = generation
-        .component_bytes("fabric-intruder")
-        .expect("fabric-intruder object missing");
-    let fabric_publisher_b = generation
-        .component_bytes("fabric-publisher-b")
-        .expect("fabric-publisher-b object missing");
-    let fabric_subscriber_b = generation
-        .component_bytes("fabric-subscriber-b")
-        .expect("fabric-subscriber-b object missing");
-    let fabric_call_client = generation
-        .component_bytes("fabric-call-client")
-        .expect("fabric-call-client object missing");
-    let fabric_call_client_b = generation
-        .component_bytes("fabric-call-client-b")
-        .expect("fabric-call-client-b object missing");
-    let fabric_call_server = generation
-        .component_bytes("fabric-call-server")
-        .expect("fabric-call-server object missing");
-    let fabric_call_time = generation
-        .component_bytes("fabric-call-time")
-        .expect("fabric-call-time object missing");
-    let fabric_op_client = generation
-        .component_bytes("fabric-op-client")
-        .expect("fabric-op-client object missing");
-    let fabric_op_client_b = generation
-        .component_bytes("fabric-op-client-b")
-        .expect("fabric-op-client-b object missing");
-    let fabric_op_client_b_restart = generation
-        .component_bytes("fabric-op-client-b-restart")
-        .expect("fabric-op-client-b-restart object missing");
-    let fabric_op_server = generation
-        .component_bytes("fabric-op-server")
-        .expect("fabric-op-server object missing");
-    let fabric_op_time = generation
-        .component_bytes("fabric-op-time")
-        .expect("fabric-op-time object missing");
     serial_println!("[generation] validating bootstrap grants");
 
     require_grant(
@@ -568,20 +465,6 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
     );
     serial_println!("[generation] fabric control grants valid");
     serial_println!("[generation] filesystem grants valid");
-    let storage_capability = match generation.number {
-        2 | 3 => optional_block_function().map(|function| Capability {
-            object: KernelObject::BlockDevice(function),
-            rights: RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE | RIGHT_TRANSFER,
-        }),
-        4 => Some(Capability {
-            object: KernelObject::ObjectStore,
-            rights: RIGHT_STORE_READ | RIGHT_STORE_WRITE | RIGHT_TRANSFER,
-        }),
-        _ => optional_block_function().map(|function| Capability {
-            object: KernelObject::BlockDevice(function),
-            rights: RIGHT_BLOCK_READ | RIGHT_TRANSFER,
-        }),
-    };
     let transfer_functions = block_functions();
     let transfer_receiver = transfer_functions
         .iter()
@@ -592,12 +475,6 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         .find(|function| function.device == 6)
         .copied();
 
-    let storage_component = match generation.number {
-        2 => storage_writer,
-        3 => storage_fault_probe,
-        4 => storage_store_probe,
-        _ => storage_probe,
-    };
     serial_println!("[generation] bootstrap grants valid");
 
     let (console_output, dango_output) = ipc::channel();
@@ -629,360 +506,369 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
     let (fabric_op_client_b_control, fabric_op_client_b_service) = ipc::channel();
     let (fabric_op_server_control, fabric_op_server_service) = ipc::channel();
     let (fabric_op_time_control, fabric_op_time_service) = ipc::channel();
-    let mut caps = vec![
-        Capability {
-            object: KernelObject::EndpointFactory,
-            rights: crate::capability::RIGHT_ENDPOINT_CREATE,
-        },
-        executable(generation, "console", console),
-        endpoint("console-output", console_output, RIGHT_RECV),
-        executable(generation, "dango", dango),
-        endpoint("dango-output", dango_output, RIGHT_SEND),
-        executable(generation, "spawn-service", spawn_service),
-        executable(generation, "sysinfo", sysinfo),
-        executable(
-            generation,
-            "echo-agent",
-            generation
-                .component_bytes("echo-agent")
-                .expect("echo-agent object missing"),
-        ),
-        executable(
-            generation,
-            storage_component_name(generation.number),
-            storage_component,
-        ),
-    ];
-    caps.push(storage_capability.unwrap_or(Capability {
-        object: KernelObject::ObjectStore,
-        rights: RIGHT_STORE_READ,
-    }));
-    caps.extend([
-        executable(generation, "generation-manager", generation_manager),
-        Capability {
-            object: KernelObject::GenerationControl,
-            rights: RIGHT_HEALTH_CONFIRM | RIGHT_BOOT_UPDATE | RIGHT_TRANSFER,
-        },
-        endpoint(
-            "dango-spawn",
-            dango_spawn,
-            RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
-        ),
-        endpoint("service-spawn", service_spawn, RIGHT_SEND | RIGHT_RECV),
-        executable(generation, "filesystem-service", filesystem_service),
-        executable(generation, "directory-probe", directory_probe),
-        endpoint(
-            "directory-client",
-            directory_client,
-            RIGHT_SEND | RIGHT_RECV,
-        ),
-        endpoint(
-            "directory-service",
-            directory_service,
-            RIGHT_SEND | RIGHT_RECV,
-        ),
-        Capability {
-            object: KernelObject::ObjectStore,
-            rights: RIGHT_STORE_READ | RIGHT_STORE_WRITE | RIGHT_TRANSFER,
-        },
-        Capability {
-            object: KernelObject::Directory(DirectoryAuthority::root(directory_fixture_root())),
-            rights: RIGHT_DIRECTORY_READ
-                | RIGHT_DIRECTORY_WRITE
-                | RIGHT_DIRECTORY_LIST
-                | RIGHT_DIRECTORY_DERIVE
-                | RIGHT_TRANSFER,
-        },
-        Capability {
-            object: KernelObject::Input,
-            rights: RIGHT_INPUT_READ | RIGHT_TRANSFER,
-        },
-        executable(generation, "generation-list", generation_list),
-        executable(generation, "generation-inspect", generation_inspect),
-        executable(generation, "generation-stage", generation_stage),
-        executable(generation, "generation-select", generation_select),
-        executable(generation, "generation-rollback", generation_rollback),
-        endpoint(
-            "generation-list-client",
-            generation_list_client,
-            RIGHT_SEND | RIGHT_RECV,
-        ),
-        endpoint(
-            "generation-inspect-client",
-            generation_inspect_client,
-            RIGHT_SEND | RIGHT_RECV,
-        ),
-        endpoint(
-            "generation-stage-client",
-            generation_stage_client,
-            RIGHT_SEND | RIGHT_RECV,
-        ),
-        endpoint(
-            "generation-select-client",
-            generation_select_client,
-            RIGHT_SEND | RIGHT_RECV,
-        ),
-        endpoint(
-            "generation-rollback-client",
-            generation_rollback_client,
-            RIGHT_SEND | RIGHT_RECV,
-        ),
-        endpoint(
-            "generation-list-service",
-            generation_list_service,
-            RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
-        ),
-        endpoint(
-            "generation-inspect-service",
-            generation_inspect_service,
-            RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
-        ),
-        endpoint(
-            "generation-stage-service",
-            generation_stage_service,
-            RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
-        ),
-        endpoint(
-            "generation-select-service",
-            generation_select_service,
-            RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
-        ),
-        endpoint(
-            "generation-rollback-service",
-            generation_rollback_service,
-            RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
-        ),
-        executable(generation, "powerbox-chooser", powerbox_chooser),
-        executable(generation, "powerbox-probe", powerbox_probe),
-        endpoint("powerbox-client", powerbox_client, RIGHT_SEND | RIGHT_RECV),
-        endpoint(
-            "powerbox-service",
-            powerbox_service,
-            RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
-        ),
-        // C7.2 shared-buffer factory, slot 40. Placed before the optional
-        // transfer block so its slot is fixed on every boot. Creation authority
-        // only, and transferable so init can derive-copy it into the components
-        // the generation grants it to. A holder still allocates nothing without
-        // a `shared-buffer-budget` entry (C7.3): the grant authorizes the
-        // operation, the budget bounds it.
-        Capability {
-            object: KernelObject::SharedBufferFactory,
-            rights: crate::capability::RIGHT_BUFFER_CREATE | RIGHT_TRANSFER,
-        },
-        // C7.7 sample plane, slots 41-44. Two real components exchange a
-        // >MAX_MSG payload through the shared-buffer syscalls; init spawns both
-        // and hands the lender the receiver's supervision handle so the loan
-        // names its receiver by capability rather than an ambient task id.
-        executable(generation, "sample-lender", sample_lender),
-        executable(generation, "sample-receiver", sample_receiver),
-        endpoint(
-            "sample-lender-side",
-            sample_lender_side,
-            RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
-        ),
-        endpoint(
-            "sample-receiver-side",
-            sample_receiver_side,
-            RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
-        ),
-        // C8.3/C8.4 fabric control plane, slots 45-58. The fabric holds one
-        // control endpoint per client and its own endpoint and shared-buffer
-        // factory grants; each client holds only its half of its control
-        // channel. Route endpoints are not minted here: the fabric creates them
-        // and moves each participant a narrowed, non-transferable role through
-        // `SYS_CAP_TRANSFER`, so a route capability never exists in init's
-        // table at all.
-        executable(generation, "fabric-service", fabric_service),
-        executable(generation, "fabric-publisher", fabric_publisher),
-        executable(generation, "fabric-subscriber", fabric_subscriber),
-        executable(generation, "fabric-intruder", fabric_intruder),
-        executable(generation, "fabric-publisher-b", fabric_publisher_b),
-        executable(generation, "fabric-subscriber-b", fabric_subscriber_b),
-        endpoint(
-            "fabric-publisher-client",
-            fabric_publisher_client,
-            RIGHT_SEND | RIGHT_RECV,
-        ),
-        endpoint(
-            "fabric-subscriber-client",
-            fabric_subscriber_client,
-            RIGHT_SEND | RIGHT_RECV,
-        ),
-        endpoint(
-            "fabric-intruder-client",
-            fabric_intruder_client,
-            RIGHT_SEND | RIGHT_RECV,
-        ),
-        endpoint(
-            "fabric-publisher-b-client",
-            fabric_publisher_b_client,
-            RIGHT_SEND | RIGHT_RECV,
-        ),
-        endpoint(
-            "fabric-subscriber-b-client",
-            fabric_subscriber_b_client,
-            RIGHT_SEND | RIGHT_RECV,
-        ),
-        // The service side of each control channel. Transferable so init can
-        // grant them into the fabric; the fabric itself never re-delegates one.
-        endpoint(
-            "fabric-publisher-service",
-            fabric_publisher_service,
-            RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
-        ),
-        endpoint(
-            "fabric-subscriber-service",
-            fabric_subscriber_service,
-            RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
-        ),
-        endpoint(
-            "fabric-intruder-service",
-            fabric_intruder_service,
-            RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
-        ),
-        endpoint(
-            "fabric-publisher-b-service",
-            fabric_publisher_b_service,
-            RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
-        ),
-        endpoint(
-            "fabric-subscriber-b-service",
-            fabric_subscriber_b_service,
-            RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
-        ),
-    ]);
-    if generation.number == 13 {
-        caps.extend([
-            endpoint(
-                "fabric-time-client",
-                fabric_time_client,
-                RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
-            ),
-            endpoint(
-                "fabric-time-service",
-                fabric_time_service,
-                RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
-            ),
-        ]);
+    // Init's capability table is placed by the layout this generation declares,
+    // not by the order of this block. Every capability is still minted here —
+    // only the kernel knows what a channel is, or which half of one a client
+    // holds — but where each lands is generation data. A capability the layout
+    // does not name, or a declared slot nothing fills, stops the boot.
+    let mut placer = LayoutPlacer::new(generation::boot_layout(generation));
+    placer.role(
+        boot_layout::Role::EndpointFactory,
+        "endpoint factory",
+        KernelObject::EndpointFactory,
+    );
+    placer.executable(generation, "console");
+    placer.endpoint("console-output", console_output, RIGHT_RECV);
+    placer.executable(generation, "dango");
+    placer.endpoint("dango-output", dango_output, RIGHT_SEND);
+    placer.executable(generation, "spawn-service");
+    placer.executable(generation, "sysinfo");
+    placer.executable(generation, "echo-agent");
+    placer.one_of(generation, &STORAGE_COMPONENTS, "storage component");
+    // The storage capability is the one slot whose object the layout cannot
+    // name. It declares the authority a present block device carries; when the
+    // platform enumerates none, a read-only object store stands in. Those
+    // fallback rights are the kernel's, not the layout's — applying the
+    // declared block rights to an `ObjectStore` would grant an authority the
+    // object does not answer for. `NO_DISK_FALLBACK` in
+    // `scripts/check/check-boot-layout-resource.py` is this fallback's
+    // host-side twin.
+    if let Some(entry) = placer.entry_for_role(boot_layout::Role::StorageCapability) {
+        let capability = optional_block_function()
+            .map(|function| Capability {
+                object: KernelObject::BlockDevice(function),
+                rights: entry.rights,
+            })
+            .unwrap_or(Capability {
+                object: KernelObject::ObjectStore,
+                rights: RIGHT_STORE_READ,
+            });
+        placer.slots[entry.slot as usize] = Some(capability);
+    } else {
+        // Generation 4 declares an object store outright: it exercises the
+        // store service rather than a block device, so no probe applies.
+        placer.role(
+            boot_layout::Role::ObjectStore,
+            "storage object store",
+            KernelObject::ObjectStore,
+        );
     }
+    placer.executable(generation, "generation-manager");
+    placer.role(
+        boot_layout::Role::GenerationControl,
+        "generation control",
+        KernelObject::GenerationControl,
+    );
+    placer.endpoint(
+        "dango-spawn",
+        dango_spawn,
+        RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
+    );
+    placer.endpoint("service-spawn", service_spawn, RIGHT_SEND | RIGHT_RECV);
+    placer.executable(generation, "filesystem-service");
+    placer.executable(generation, "directory-probe");
+    placer.endpoint(
+        "directory-client",
+        directory_client,
+        RIGHT_SEND | RIGHT_RECV,
+    );
+    placer.endpoint(
+        "directory-service",
+        directory_service,
+        RIGHT_SEND | RIGHT_RECV,
+    );
+    placer.role(
+        boot_layout::Role::ObjectStore,
+        "filesystem object store",
+        KernelObject::ObjectStore,
+    );
+    placer.role(
+        boot_layout::Role::DirectoryRoot,
+        "directory root",
+        KernelObject::Directory(DirectoryAuthority::root(directory_fixture_root())),
+    );
+    placer.role(boot_layout::Role::Input, "input", KernelObject::Input);
+    placer.executable(generation, "generation-list");
+    placer.executable(generation, "generation-inspect");
+    placer.executable(generation, "generation-stage");
+    placer.executable(generation, "generation-select");
+    placer.executable(generation, "generation-rollback");
+    placer.endpoint(
+        "generation-list-client",
+        generation_list_client,
+        RIGHT_SEND | RIGHT_RECV,
+    );
+    placer.endpoint(
+        "generation-inspect-client",
+        generation_inspect_client,
+        RIGHT_SEND | RIGHT_RECV,
+    );
+    placer.endpoint(
+        "generation-stage-client",
+        generation_stage_client,
+        RIGHT_SEND | RIGHT_RECV,
+    );
+    placer.endpoint(
+        "generation-select-client",
+        generation_select_client,
+        RIGHT_SEND | RIGHT_RECV,
+    );
+    placer.endpoint(
+        "generation-rollback-client",
+        generation_rollback_client,
+        RIGHT_SEND | RIGHT_RECV,
+    );
+    placer.endpoint(
+        "generation-list-service",
+        generation_list_service,
+        RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
+    );
+    placer.endpoint(
+        "generation-inspect-service",
+        generation_inspect_service,
+        RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
+    );
+    placer.endpoint(
+        "generation-stage-service",
+        generation_stage_service,
+        RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
+    );
+    placer.endpoint(
+        "generation-select-service",
+        generation_select_service,
+        RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
+    );
+    placer.endpoint(
+        "generation-rollback-service",
+        generation_rollback_service,
+        RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
+    );
+    placer.executable(generation, "powerbox-chooser");
+    placer.executable(generation, "powerbox-probe");
+    placer.endpoint("powerbox-client", powerbox_client, RIGHT_SEND | RIGHT_RECV);
+    placer.endpoint(
+        "powerbox-service",
+        powerbox_service,
+        RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
+    );
+    // C7.2 shared-buffer factory. Creation authority only, and transferable so
+    // init can derive-copy it into the components the generation grants it to.
+    // A holder still allocates nothing without a `shared-buffer-budget` entry
+    // (C7.3): the grant authorizes the operation, the budget bounds it.
+    placer.role(
+        boot_layout::Role::SharedBufferFactory,
+        "shared-buffer factory",
+        KernelObject::SharedBufferFactory,
+    );
+    // C7.7 sample plane. Two real components exchange a >MAX_MSG payload
+    // through the shared-buffer syscalls; init spawns both and hands the lender
+    // the receiver's supervision handle so the loan names its receiver by
+    // capability rather than an ambient task id.
+    placer.executable(generation, "sample-lender");
+    placer.executable(generation, "sample-receiver");
+    placer.endpoint(
+        "sample-lender-side",
+        sample_lender_side,
+        RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
+    );
+    placer.endpoint(
+        "sample-receiver-side",
+        sample_receiver_side,
+        RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
+    );
+    // C8.3/C8.4 fabric control plane. The fabric holds one control endpoint per
+    // client and its own endpoint and shared-buffer factory grants; each client
+    // holds only its half of its control channel. Route endpoints are not
+    // minted here: the fabric creates them and moves each participant a
+    // narrowed, non-transferable role through `SYS_CAP_TRANSFER`, so a route
+    // capability never exists in init's table at all.
+    //
+    // The call and operation profiles (generations 14 and 15) declare their own
+    // participants in the same slot range: the three planes are mutually
+    // exclusive, so none grows init's table past `MAX_CAPS`. That reuse was a
+    // block of `caps[46] = ...` rewrites; it is now the layout saying which
+    // component each slot holds, and the branches below only decide which set
+    // of capabilities to mint.
+    placer.executable_as_declared(generation, "fabric-service");
+    // The call and operation profiles replace most but not all of the stream
+    // plane's slots, and they stop at different points. Generation 14 rewrote
+    // slots 46-49 and left 50 holding `fabric-subscriber-b`; generation 15 took
+    // 50 as well but left its control channel at 55 and 60. Those leftovers are
+    // inert — no stream route exists in either profile — but init is still
+    // handed them, and the old `caps[46] = ...` block is why. Preserving it
+    // exactly is the point: the layout now records which slots a rewrite loop
+    // happened to cover, instead of that being implied by an index range.
+    if generation.number != 15 {
+        placer.executable(generation, "fabric-subscriber-b");
+    }
+    placer.endpoint(
+        "fabric-subscriber-b-client",
+        fabric_subscriber_b_client,
+        RIGHT_SEND | RIGHT_RECV,
+    );
+    placer.endpoint(
+        "fabric-subscriber-b-service",
+        fabric_subscriber_b_service,
+        RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
+    );
     if generation.number == 14 {
-        // The call gate reuses the executable/control slots occupied by three
-        // stream participants in every other generation profile.
-        caps[46] = executable(generation, "fabric-call-client", fabric_call_client);
-        caps[47] = executable(generation, "fabric-call-client-b", fabric_call_client_b);
-        caps[49] = executable(generation, "fabric-call-server", fabric_call_server);
-        for slot in [45usize, 46, 47, 49] {
-            caps[slot].rights |= RIGHT_TRANSFER;
-        }
-        caps[51] = endpoint(
+        placer.executable_as_declared(generation, "fabric-call-client");
+        placer.executable_as_declared(generation, "fabric-call-client-b");
+        placer.executable_as_declared(generation, "fabric-call-time");
+        placer.executable_as_declared(generation, "fabric-call-server");
+        placer.endpoint(
             "fabric-call-client-control",
             fabric_call_client_control,
             RIGHT_SEND | RIGHT_RECV,
         );
-        caps[52] = endpoint(
+        placer.endpoint(
             "fabric-call-client-b-control",
             fabric_call_client_b_control,
             RIGHT_SEND | RIGHT_RECV,
         );
-        caps[54] = endpoint(
-            "fabric-call-server-control",
-            fabric_call_server_control,
-            RIGHT_SEND | RIGHT_RECV,
-        );
-        caps[56] = endpoint(
-            "fabric-call-client-service",
-            fabric_call_client_service,
-            RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
-        );
-        caps[57] = endpoint(
-            "fabric-call-client-b-service",
-            fabric_call_client_b_service,
-            RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
-        );
-        caps[59] = endpoint(
-            "fabric-call-server-service",
-            fabric_call_server_service,
-            RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
-        );
-        caps[48] = executable(generation, "fabric-call-time", fabric_call_time);
-        caps[53] = endpoint(
+        placer.endpoint(
             "fabric-call-time-control",
             fabric_call_time_control,
             RIGHT_SEND | RIGHT_RECV,
         );
-        caps[58] = endpoint(
+        placer.endpoint(
+            "fabric-call-server-control",
+            fabric_call_server_control,
+            RIGHT_SEND | RIGHT_RECV,
+        );
+        placer.endpoint(
+            "fabric-call-client-service",
+            fabric_call_client_service,
+            RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
+        );
+        placer.endpoint(
+            "fabric-call-client-b-service",
+            fabric_call_client_b_service,
+            RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
+        );
+        placer.endpoint(
             "fabric-call-time-service",
             fabric_call_time_service,
             RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
         );
-        caps.extend([
-            endpoint("fabric-call-phase-time", fabric_call_phase_time, RIGHT_RECV),
-            endpoint(
-                "fabric-call-phase-client",
-                fabric_call_phase_client,
-                RIGHT_SEND,
-            ),
-        ]);
-    }
-    if generation.number == 15 {
-        // The operation gate reuses the same executable/control slots the call
-        // gate does: both are mutually exclusive generation profiles, so neither
-        // grows init's capability table. Init mints its own two phase channels at
-        // runtime, so unlike the call profile none are granted here.
-        caps[46] = executable(generation, "fabric-op-client", fabric_op_client);
-        caps[47] = executable(generation, "fabric-op-client-b", fabric_op_client_b);
-        caps[48] = executable(generation, "fabric-op-server", fabric_op_server);
-        caps[49] = executable(generation, "fabric-op-time", fabric_op_time);
-        caps[50] = executable(
-            generation,
-            "fabric-op-client-b-restart",
-            fabric_op_client_b_restart,
+        placer.endpoint(
+            "fabric-call-server-service",
+            fabric_call_server_service,
+            RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
         );
-        for slot in [45usize, 46, 47, 48, 49, 50] {
-            caps[slot].rights |= RIGHT_TRANSFER;
-        }
-        caps[51] = endpoint(
+        placer.endpoint("fabric-call-phase-time", fabric_call_phase_time, RIGHT_RECV);
+        placer.endpoint(
+            "fabric-call-phase-client",
+            fabric_call_phase_client,
+            RIGHT_SEND,
+        );
+    } else if generation.number == 15 {
+        placer.executable_as_declared(generation, "fabric-op-client");
+        placer.executable_as_declared(generation, "fabric-op-client-b");
+        placer.executable_as_declared(generation, "fabric-op-server");
+        placer.executable_as_declared(generation, "fabric-op-time");
+        placer.executable_as_declared(generation, "fabric-op-client-b-restart");
+        placer.endpoint(
             "fabric-op-client-control",
             fabric_op_client_control,
             RIGHT_SEND | RIGHT_RECV,
         );
-        caps[52] = endpoint(
+        placer.endpoint(
             "fabric-op-client-b-control",
             fabric_op_client_b_control,
             RIGHT_SEND | RIGHT_RECV,
         );
-        caps[53] = endpoint(
+        placer.endpoint(
             "fabric-op-time-control",
             fabric_op_time_control,
             RIGHT_SEND | RIGHT_RECV,
         );
-        caps[54] = endpoint(
+        placer.endpoint(
             "fabric-op-server-control",
             fabric_op_server_control,
             RIGHT_SEND | RIGHT_RECV,
         );
-        caps[56] = endpoint(
+        placer.endpoint(
             "fabric-op-client-service",
             fabric_op_client_service,
             RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
         );
-        caps[57] = endpoint(
+        placer.endpoint(
             "fabric-op-client-b-service",
             fabric_op_client_b_service,
             RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
         );
-        caps[58] = endpoint(
+        placer.endpoint(
             "fabric-op-time-service",
             fabric_op_time_service,
             RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
         );
-        caps[59] = endpoint(
+        placer.endpoint(
             "fabric-op-server-service",
             fabric_op_server_service,
             RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
         );
+    } else {
+        placer.executable(generation, "fabric-publisher");
+        placer.executable(generation, "fabric-subscriber");
+        placer.executable(generation, "fabric-intruder");
+        placer.executable(generation, "fabric-publisher-b");
+        placer.endpoint(
+            "fabric-publisher-client",
+            fabric_publisher_client,
+            RIGHT_SEND | RIGHT_RECV,
+        );
+        placer.endpoint(
+            "fabric-subscriber-client",
+            fabric_subscriber_client,
+            RIGHT_SEND | RIGHT_RECV,
+        );
+        placer.endpoint(
+            "fabric-intruder-client",
+            fabric_intruder_client,
+            RIGHT_SEND | RIGHT_RECV,
+        );
+        placer.endpoint(
+            "fabric-publisher-b-client",
+            fabric_publisher_b_client,
+            RIGHT_SEND | RIGHT_RECV,
+        );
+        // The service side of each control channel. Transferable so init can
+        // grant them into the fabric; the fabric itself never re-delegates one.
+        placer.endpoint(
+            "fabric-publisher-service",
+            fabric_publisher_service,
+            RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
+        );
+        placer.endpoint(
+            "fabric-subscriber-service",
+            fabric_subscriber_service,
+            RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
+        );
+        placer.endpoint(
+            "fabric-intruder-service",
+            fabric_intruder_service,
+            RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
+        );
+        placer.endpoint(
+            "fabric-publisher-b-service",
+            fabric_publisher_b_service,
+            RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
+        );
+        if generation.number == 13 {
+            placer.endpoint(
+                "fabric-time-client",
+                fabric_time_client,
+                RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
+            );
+            placer.endpoint(
+                "fabric-time-service",
+                fabric_time_service,
+                RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
+            );
+        }
     }
+    let mut caps = placer.finish();
     if let (Some(receiver), Some(source)) = (transfer_receiver, transfer_source) {
         caps.extend([
             Capability {
@@ -1283,9 +1169,6 @@ fn launch_recovery_init(generation: &Generation<'static>) -> task::TaskId {
         "init",
         crate::capability::RIGHT_ENDPOINT_CREATE,
     );
-    let recovery = generation
-        .component_bytes("recovery")
-        .expect("recovery object missing");
     require_grant(
         generation,
         "recovery-control",
@@ -1301,6 +1184,9 @@ fn launch_recovery_init(generation: &Generation<'static>) -> task::TaskId {
         RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE,
     );
     let function = recovery_block_function(&recovery_index);
+    let recovery = generation
+        .component_bytes("recovery")
+        .expect("recovery object missing");
     let caps = vec![
         Capability {
             object: KernelObject::EndpointFactory,
@@ -1327,6 +1213,174 @@ fn launch_recovery_init(generation: &Generation<'static>) -> task::TaskId {
             .spawn_budget,
     )
     .expect("failed to launch recovery init")
+}
+
+/// Places minted capabilities into the slots the generation's boot layout
+/// declares, rather than at literal indices in this file.
+///
+/// The kernel still mints every capability: what a channel is, and which half
+/// of it is the client's, is knowable only here. What the layout supplies is
+/// *where each one goes*, which is what used to be a `caps[46] = ...` write
+/// whose correctness nothing checked.
+///
+/// Nothing is placed by position. A capability is offered under the name the
+/// layout knows it by, and one that the layout does not mention is a fault
+/// rather than a capability appended to the end.
+struct LayoutPlacer<'a> {
+    layout: BootLayout<'a>,
+    slots: [Option<Capability>; MAX_CAPS],
+}
+
+impl<'a> LayoutPlacer<'a> {
+    fn new(layout: BootLayout<'a>) -> Self {
+        Self {
+            layout,
+            slots: [const { None }; MAX_CAPS],
+        }
+    }
+
+    /// Place `capability` at whichever slot the layout gives `identity`.
+    fn place(&mut self, identity: [u8; 32], what: &str, capability: Capability) {
+        let entry = (0..self.layout.entry_count())
+            .filter_map(|index| self.layout.entry(index))
+            .find(|entry| entry.name_identity == identity)
+            .unwrap_or_else(|| panic!("boot layout declares no slot for {what}"));
+        let slot = entry.slot as usize;
+        assert!(
+            self.slots[slot].is_none(),
+            "boot layout slot {slot} filled twice, second by {what}"
+        );
+        assert!(
+            capability.rights == entry.rights,
+            "boot layout slot {slot} ({what}) declares rights {:#x}, kernel minted {:#x}",
+            entry.rights,
+            capability.rights
+        );
+        self.slots[slot] = Some(capability);
+    }
+
+    fn executable(&mut self, generation: &Generation<'static>, name: &'static str) {
+        let bytes = generation
+            .component_bytes(name)
+            .unwrap_or_else(|| panic!("{name} object missing"));
+        let capability = executable(generation, name, bytes);
+        self.place(boot_layout::component_identity(name), name, capability);
+    }
+
+    /// Place an executable whose declared rights add `RIGHT_TRANSFER`.
+    ///
+    /// Whether a participant's image is transferable varies by profile — the
+    /// call plane grants it on four of its five, the stream plane on none — so
+    /// the layout carries it and this reads it back rather than the caller
+    /// restating it.
+    fn executable_as_declared(&mut self, generation: &Generation<'static>, name: &'static str) {
+        let bytes = generation
+            .component_bytes(name)
+            .unwrap_or_else(|| panic!("{name} object missing"));
+        let mut capability = executable(generation, name, bytes);
+        let identity = boot_layout::component_identity(name);
+        if let Some(entry) = (0..self.layout.entry_count())
+            .filter_map(|index| self.layout.entry(index))
+            .find(|entry| entry.name_identity == identity)
+        {
+            capability.rights = entry.rights;
+        }
+        self.place(identity, name, capability);
+    }
+
+    /// Place whichever of `candidates` this generation's layout declares.
+    ///
+    /// Used where one slot holds a different component per profile — the
+    /// storage slot names four. The kernel offers the set it can build and the
+    /// layout picks, so adding a fifth is a manifest change rather than another
+    /// arm of a `match generation.number`.
+    fn one_of(
+        &mut self,
+        generation: &Generation<'static>,
+        candidates: &[&'static str],
+        what: &str,
+    ) {
+        let chosen = candidates
+            .iter()
+            .find(|name| {
+                let identity = boot_layout::component_identity(name);
+                (0..self.layout.entry_count())
+                    .filter_map(|index| self.layout.entry(index))
+                    .any(|entry| entry.name_identity == identity)
+            })
+            .unwrap_or_else(|| panic!("boot layout names no {what}"));
+        self.executable(generation, chosen);
+    }
+
+    fn endpoint(&mut self, label: &'static str, endpoint: ipc::Endpoint, rights: Rights) {
+        let capability = self::endpoint(label, endpoint, rights);
+        self.place(boot_layout::channel_identity(label), label, capability);
+    }
+
+    /// Place a capability the layout names by role rather than by identity.
+    /// Used for the singular objects — one endpoint factory, one input device —
+    /// which no name would distinguish.
+    ///
+    /// A role is not always unique: generation 4 declares an object store in
+    /// both the storage and filesystem slots, identical in every field. The
+    /// first *unfilled* entry wins, so repeated calls walk them in declared
+    /// order rather than all resolving to the first.
+    fn role(&mut self, role: boot_layout::Role, what: &str, object: KernelObject) {
+        let entry = (0..self.layout.entry_count())
+            .filter_map(|index| self.layout.entry(index))
+            .find(|entry| entry.role == role && self.slots[entry.slot as usize].is_none())
+            .unwrap_or_else(|| panic!("boot layout declares no free slot for {what}"));
+        let slot = entry.slot as usize;
+        assert!(
+            self.slots[slot].is_none(),
+            "boot layout slot {slot} filled twice, second by {what}"
+        );
+        self.slots[slot] = Some(Capability {
+            object,
+            rights: entry.rights,
+        });
+    }
+
+    /// The declared entry for a role, when the kernel needs to read its rights
+    /// before deciding what object to put there.
+    fn entry_for_role(&self, role: boot_layout::Role) -> Option<boot_layout::LayoutEntry> {
+        (0..self.layout.entry_count())
+            .filter_map(|index| self.layout.entry(index))
+            .find(|entry| entry.role == role)
+    }
+
+    /// Collapse to the vector `spawn_with_caps_for` takes, checking that the
+    /// layout and the kernel agree in both directions.
+    ///
+    /// A declared slot left empty means the kernel did not mint something the
+    /// layout expects; a filled slot the layout does not declare means the
+    /// kernel minted something with nowhere to go. Either way the boot stops
+    /// here, naming the slot, rather than launching init with a table its
+    /// component images do not address.
+    fn finish(self) -> alloc::vec::Vec<Capability> {
+        let declared: alloc::vec::Vec<usize> = (0..self.layout.entry_count())
+            .filter_map(|index| self.layout.entry(index))
+            .map(|entry| entry.slot as usize)
+            .collect();
+        for slot in &declared {
+            assert!(
+                self.slots[*slot].is_some(),
+                "boot layout declares slot {slot}, but the kernel minted nothing for it"
+            );
+        }
+        for (slot, capability) in self.slots.iter().enumerate() {
+            assert!(
+                capability.is_none() || declared.contains(&slot),
+                "kernel minted a capability for slot {slot}, which the layout does not declare"
+            );
+        }
+        let len = declared.iter().copied().max().map_or(0, |slot| slot + 1);
+        let mut caps = alloc::vec::Vec::with_capacity(len);
+        for slot in self.slots.into_iter().take(len) {
+            caps.push(slot.expect("every slot below the high-water mark is declared"));
+        }
+        caps
+    }
 }
 
 /// The stable name of a capability's object kind, for the boot-layout dump.
@@ -1482,14 +1536,16 @@ fn directory_fixture_root() -> [u8; 32] {
     ]
 }
 
-fn storage_component_name(generation: u64) -> &'static str {
-    match generation {
-        2 => "storage-writer",
-        3 => "storage-fault-probe",
-        4 => "storage-store-probe",
-        _ => "storage-probe",
-    }
-}
+/// Every component that can occupy the storage slot. Which one a generation
+/// puts there is the layout's answer, not this list's: the layout carries name
+/// identities rather than names, so the kernel offers the candidates and takes
+/// whichever the layout claims.
+const STORAGE_COMPONENTS: [&str; 4] = [
+    "storage-probe",
+    "storage-writer",
+    "storage-fault-probe",
+    "storage-store-probe",
+];
 
 fn require_grant<'a>(
     generation: &Generation<'a>,
