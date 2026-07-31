@@ -58,6 +58,7 @@
     { id = "sha256:fabric-observer"; kind = "component"; size = 65536; };
     { id = "shared-buffer-budget"; kind = "resource"; size = 4096; };
     { id = "fabric-graph"; kind = "resource"; size = 4096; };
+    { id = "boot-layout"; kind = "resource"; size = 4096; };
   ];
 
   sharedBufferBudget = [

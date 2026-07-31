@@ -397,6 +397,7 @@ devlog_check:
 contracts_check: bootstate_model_check
     python3 scripts/check/check-contracts.py
     python3 scripts/generate/generate-spawn-bindings.py --check
+    python3 scripts/check/check-boot-layout-resource.py
 
 # Build and validate deterministic generation and redundant boot metadata.
 generation_check:

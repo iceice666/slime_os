@@ -2,6 +2,7 @@ pub use boot_contracts::generation::{
     Component, DecodeError, Generation, Grant, Object, StateBinding, generation_identity,
 };
 
+use boot_contracts::boot_layout::{self, BootLayout};
 use boot_contracts::fabric_graph::{self, FabricGraph};
 use boot_contracts::generation::{KIND_BOOTSTRAP, KIND_COMPONENT, KIND_RESOURCE};
 use boot_contracts::shared_buffer_budget::{
@@ -25,6 +26,11 @@ const _: () = assert!(fabric_graph::KERNEL_SHARED_BUFFERS as usize == MAX_SHARED
 const _: () = assert!(fabric_graph::CHANNEL_QUEUE_DEPTH as usize == CHANNEL_QUEUE);
 const _: () = assert!(fabric_graph::KERNEL_MAPPINGS as usize == MAX_MAPPINGS);
 const _: () = assert!(fabric_graph::KERNEL_LOANS as usize == MAX_LOANS);
+
+// A boot layout declares one entry per capability slot, so its ceiling is this
+// kernel's capability table. A layout that could declare more slots than the
+// table holds would be admitted here and truncated at spawn.
+const _: () = assert!(boot_layout::MAX_ENTRIES == MAX_CAPS);
 
 pub fn decode(bytes: &[u8]) -> Result<Generation<'_>, DecodeError> {
     let generation = Generation::decode(bytes)?;
@@ -119,6 +125,52 @@ pub fn fabric_graph<'a>(generation: &Generation<'a>) -> Option<FabricGraph<'a>> 
         Some(Ok(graph)) => Some(graph),
         _ => None,
     }
+}
+
+/// Locate the boot-layout resource object, if the generation declares one.
+/// Same shape as [`budget_object`]: a `KIND_RESOURCE` object carrying the
+/// boot-layout magic. At most one is expected; the first match wins.
+fn boot_layout_object<'a>(
+    generation: &Generation<'a>,
+) -> Option<Result<BootLayout<'a>, boot_layout::DecodeError>> {
+    for index in 0..generation.object_count() {
+        let object = generation.object(index).ok()?;
+        if object.kind == KIND_RESOURCE
+            && object.bytes.len() >= 8
+            && object.bytes[..8] == boot_layout::MAGIC
+        {
+            return Some(BootLayout::decode(object.bytes));
+        }
+    }
+    None
+}
+
+/// The capability layout this generation declares for its bootstrap component.
+///
+/// Unlike [`fabric_graph`] and [`shared_buffer_quota`], this does not degrade
+/// to a permissive default. Those answer a question whose negative case is
+/// legitimate — a generation may declare no data fabric, and a component may
+/// hold no buffer quota. Init always has a capability table, so `None` here
+/// could only mean "fall back to something", and the only available fallback
+/// is the hardcoded layout this resource replaces. That fallback would make a
+/// malformed or mismatched layout silently resolve the old behavior, and an
+/// equivalence check comparing the two would report a match while proving
+/// nothing. Absent, malformed, or built for another generation is fatal.
+pub fn boot_layout<'a>(generation: &Generation<'a>) -> BootLayout<'a> {
+    let layout = match boot_layout_object(generation) {
+        Some(Ok(layout)) => layout,
+        Some(Err(error)) => panic!("generation declares an invalid boot layout: {error:?}"),
+        None => panic!("generation declares no boot layout"),
+    };
+    // Two generations are built from one manifest and each carries its own
+    // layout. A builder that emitted one generation's layout into the other
+    // would otherwise launch init with a table its component images do not
+    // address, failing later and far from the cause.
+    assert!(
+        layout.generation_number() == generation.number,
+        "boot layout belongs to another generation"
+    );
+    layout
 }
 
 /// The shared-buffer quota a named component should receive under this

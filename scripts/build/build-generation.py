@@ -140,6 +140,7 @@ from boot_contracts import (
     generation_identity,
     sha256,
 )
+from boot_layout import build_boot_layout
 from interface_schema import InterfaceSchemaError, admit_interfaces, resolve_interface_paths
 from release_trust import RELEASE_BYTES, build_release
 from zutai_cli import STDLIB, binary
@@ -1581,6 +1582,14 @@ def validate_acyclic(components: list[dict]) -> None:
 
 
 def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes | None, number: int) -> bytes:
+    # The boot layout is per generation number, and two generations are built
+    # from one manifest. Encode it here, where the number is in hand, rather
+    # than into the shared `payloads` — sharing one layout across both would
+    # make generation 1 boot the policy generation's slot table, failing far
+    # from its cause.
+    if "boot-layout" in {object_["id"] for object_ in manifest["objects"]}:
+        payloads = dict(payloads)
+        payloads["boot-layout"] = build_boot_layout(number, fail)
     objects = unique_sorted(manifest["objects"], "id", "object ids")
     components = unique_sorted(manifest["components"], "name", "component names")
     grants = sorted(manifest["grants"], key=lambda grant: (grant["name"], grant["source"], grant["target"]))

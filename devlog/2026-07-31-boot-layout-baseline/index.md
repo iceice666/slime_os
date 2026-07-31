@@ -32,6 +32,9 @@ refactor that follows can be measured against them.
 | `scripts/check/check-boot-layout.py` | Boots sixteen profiles, extracts each layout block, compares against a fixture; `--bless` rewrites, `--profile` narrows | A layout change produces a reviewable diff instead of a silent behavior change |
 | `contracts/boot-layout/v1/fixtures/*.layout` | Sixteen frozen baselines, captured before any B10 edit | The pre-refactor layout is recoverable and diffable |
 | `Justfile` | `boot_layout_check`, `boot_layout_bless` | The equivalence claim has a gate that exists |
+| `contracts/boot-layout/v1/{schema,gen_rust}.zt`, `boot-contracts/src/boot_layout.rs` | The layout format and its decoder | The layout is expressible as generation data |
+| `scripts/build/boot_layout.py`, `build-generation.py` | Emit the resource per generation number, inside `build_generation` | Two generations built from one manifest cannot share one layout |
+| `scripts/check/check-boot-layout-resource.py` | Host-side agreement between the emitted resource and every fixture | The emitter's agreement with the kernel is checked in under a second rather than by an 18-boot QEMU cycle |
 
 The dump names object *kind*, and identity for the two kinds that would
 otherwise be ambiguous: component name for executables, channel label for
@@ -87,6 +90,13 @@ capture a layout its gate never boots.
 | Generation 17 booted with `SLIME_FABRIC_BOOT_CHECK` unset | 61-slot `init` layout, not the 53-slot `fabric-boot` one — the only flag that does select a layout | Direct |
 | Storage profiles booted with a virtio-blk device attached | slot 9 becomes `block-device` (`0x404` read, `0xc04` write/fault) where it was the `object-store` fallback — object kind is decided by PCI enumeration | Direct |
 | `just boot_layout_check`, all eighteen profiles | all match | Direct |
+| `check-boot-layout-resource.py` | 17 generations encode and decode; 18 fixtures agree with the emitted resource | Direct |
+| Built generation with `SLIME_GENERATION_NUMBER=14` | generation 1's embedded resource carries number 1 with 61 entries, generation 2's carries number 14 with 63 — one build, two layouts | Direct |
+| `just rollback_check`, `just bootstate_trace_check` | pass — generation 1 still boots as the known-good | Direct |
+| `just generation_check` | generation bytes still reproducible across two builds | Direct |
+| Fault injection into the emitter: duplicate slot, named role without a label, unnamed role with one | all three rejected. The duplicate initially passed — `layout_for` merges into a dict, so a slot claimed twice within one source table was silently dropped before validation saw it. Now checked per table | Direct |
+| `just storage_read_check` | ok | Direct |
+| `just storage_write_check` | not observed — the gate does not complete on this host, before or after these changes (see open risks) | Direct |
 | `just fmt_check_all` | passed | Direct |
 | `just lint_all` | passed | Direct |
 | `just ruff`, `just typos` | passed | Direct |
@@ -153,6 +163,25 @@ exercises. The storage profiles now attach a virtio-blk device, and a
 `storage-read` profile was added so the read-only block capability has a
 baseline of its own.
 
+- Decision: the layout resource declares slot assignment keyed by a per-half
+  channel label; the kernel keeps minting its 27 channels in source.
+- Rationale: B10's stated fix is to "resolve init's grants by name from the
+  generation instead of by index in kernel source." Channel *creation* was
+  never the defect. Keeping it kernel-side also means the blessed fixtures are
+  the lookup keys verbatim, so the layout needed no third re-blessing.
+- Rejected alternative: declaring channels in the resource and having the
+  kernel mint from that declaration. It restructures IPC setup for no gain
+  against the defect B10 names.
+
+- Decision: the storage slot declares the authority a *present* block device
+  carries; the no-disk fallback stays kernel-side.
+- Rationale: the host cannot know whether a device will be enumerated. The
+  check accepts exactly one substitution — a read-only object store — so a
+  kernel that resolved anything else in that slot still fails.
+- Rejected alternative: declaring both a primary and a fallback kind per entry.
+  It widens every entry for one case and moves hardware knowledge into a
+  declarative format.
+
 - Decision: capture the baseline before writing any part of the fix.
 - Rationale: the exit condition requires demonstrating that every profile
   resolves to the slots it holds today. Recording the layouts after the
@@ -199,6 +228,17 @@ baseline of its own.
       strongest single check that the collapse preserved behavior.
 - [ ] The dump adds ~62 serial lines per boot. Harmless for QEMU gates; revisit
       if serial throughput becomes a boot-time cost on hardware.
+- [ ] `just storage_write_check` did not complete on this host. It is not
+      caused by these changes: it reproduces identically with every change
+      stashed, on the unmodified commit. `check-storage.py` runs `cargo run`
+      without `--release`, so the guest is a debug build under TCG, and it
+      reached only line 37 of the ~141 a release boot emits in the same wall
+      time. The same image boots clean in a few seconds with `--release`.
+      `run_guest` passes `timeout=None`, so a slow boot hangs indefinitely
+      rather than failing — worth a bound, and worth asking whether the gate
+      should build release like its siblings. Filed here rather than fixed:
+      unrelated to B10, and changing a gate's build profile mid-item would
+      confuse this item's evidence.
 - [ ] Storage identity selection at `bootstrap.rs:571`/`:595` is decided **in
       scope** for B10: leaving it means `launch_init` still contains
       `generation.number ==` branches, which B10's exit condition forbids. The
