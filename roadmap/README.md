@@ -12,7 +12,7 @@ A milestone is complete only when its exit condition is observed. Compiled code,
 
 | Track | Status | Next open gate |
 | --- | --- | --- |
-| [Backlog](00-backlog.md) | B10 and B11 open; B1–B9 resolved | Resolve or explicitly defer B10 (positional boot layout, compile-time gate selection) before P1; B11 follows it |
+| [Backlog](00-backlog.md) | B11 open; B1–B10 resolved | Resolve or explicitly defer B11 (test scaffolding in the product boot generation); its B10 dependency is cleared, so it is actionable |
 | [Foundations](01-foundations.md) | M1–M4 and M6 complete; M5 mechanisms complete except M5.7 physical Framework evidence | Preserve as regression history; do not block RPi5 work on Framework-only evidence unless storage safety is touched |
 | [Core runtime](02-core-runtime.md) | C7 and C8.1–C8.10 complete; C8.11–C8.15 and C10 are planned | For the demo, prioritize only the C8/C10 slices required by two ROS 2 nodes over minimal DDS/RTPS |
 | [RPi5 ROS 2 demo](09-rpi5-ros2-demo.md) | Not started | Begin RP0 demo contract, then RP1/RP2 AArch64 and Raspberry Pi 5 boot bring-up |

@@ -16,11 +16,60 @@ at the bottom rather than deleting it.
 
 ## Open
 
-B10 and B11 are open. They come from one survey, recorded in
-`devlog/2026-07-31-boot-layout-positional-coupling/`, and they are ordered: B11
-depends on B10's named-grant resolution, so B10 lands first.
+B11 is open. It comes from the same survey as B10, recorded in
+`devlog/2026-07-31-boot-layout-positional-coupling/`. B10 is resolved, which
+clears B11's stated blocker: slot numbers are no longer hardcoded on either
+side, so moving a component between profiles no longer moves a number that
+kernel or component source has baked in.
+
+### B11 — test scaffolding is declared in the product boot generation
+
+**Problem:** `contracts/generation/v1/fixtures/valid.zti` declares 42 components,
+of which 16 are probes and scenario doubles: `storage-probe`,
+`storage-fault-probe`, `storage-store-probe`, `directory-probe`,
+`powerbox-probe`, `sample-lender`, `sample-receiver`, `fabric-intruder`,
+`fabric-probe`, `fabric-observer`, `fabric-proxy`, `fabric-publisher-b`,
+`fabric-subscriber-b`, `fabric-call-client-b`, `fabric-op-client-b`, and
+`fabric-op-client-b-restart`. They are not incidental strings: they hold
+`-control` endpoints and real capability grants, and `storage-probe` appears in
+`requiredComponents`. There is one manifest and one shape, so verification
+scaffolding and product services are declared as peers.
+
+**Evidence:** The fixture is 1161 lines. `fabric-intruder` (line 593),
+`fabric-probe` (689), and `fabric-observer` (705) each declare an object, a
+component entry, and a `-control` grant; `requiredComponents` at line 1159 is
+`["init"; "console"; "dango"; "storage-probe";]`.
+
+**Proposed fix:** Extend the profile mechanism that already exists rather than
+adding a second selector. `scripts/build/build-generation.py` already resolves a
+named profile (`selected_profile_name` at 563, `resolve_fabric_graph` at 616,
+`SLIME_FABRIC_PROFILE`), and the fixture already declares `default`,
+`visibility`, and `unified` profiles — but that mechanism governs interposition
+chains only, not which components a generation declares. Extending it to select
+the component set lets scaffolding live in test profiles while the product
+profile declares only real services. A separate test-generation file is the wrong
+shape: it would duplicate the route, QoS, and budget declarations the fabric
+graph already resolves, and would let the two paths drift.
+
+**Depends on:** B10, resolved 2026-08-01. That dependency is cleared: slot
+numbers are no longer written by hand on either side, so moving a component
+between profiles changes the layout resource rather than a literal in kernel or
+component source. `just boot_layout_check` will show the resulting slot changes
+as a reviewable diff, which is what "the gates cannot absorb" previously
+described.
+
+**Exit condition:** The product boot profile declares only components the product
+needs; scaffolding participants are declared in test profiles selected by the
+existing profile mechanism; and every gate that today depends on a probe still
+selects it explicitly and observes its current result.
+
+## Resolved
 
 ### B10 — init's capability layout is a positional convention, so boot paths are selected at kernel compile time
+
+**Resolved:** 2026-08-01. See `devlog/2026-07-31-boot-layout-baseline/` for the
+equivalence baseline and `devlog/2026-08-01-boot-layout-resolution/` for the
+change.
 
 **Problem:** `launch_init` builds init's capability vector by writing fixed
 indices (`caps[46] = ...`) rather than resolving named grants the generation
@@ -67,10 +116,11 @@ Counted at the commit that opened this item:
   `SLIME_FABRIC_QOS_CHECK=1` with 13, and `check-data-fabric-boot.py` sets
   `SLIME_FABRIC_BOOT_CHECK=1` against the kernel's `generation.number == 17`.
 
-**Proposed fix:** Resolve init's grants by name from the generation instead of by
-index in kernel source, so a profile's participant set is generation data. The
-hard constraint is that every profile in use today must resolve to **the same
-slot numbers it occupies now** — this is a naming layer over the existing
+**Fix as proposed when the item opened:** Resolve init's grants by name from
+the generation instead of by index in kernel source, so a profile's participant
+set is generation data. The hard constraint is that every profile in use today
+must resolve to **the same slot numbers it occupies now** — a naming layer over
+the existing
 layout, not a renumbering, because renumbering rewrites six gates' evidence
 rather than extending it. With grants named, the `option_env!` and
 `generation.number` branches in `launch_init` lose their purpose and the
@@ -86,55 +136,65 @@ in `components/` (9 reading `SLIME_FABRIC_VISIBILITY_CHECK` alone) make their ow
 build-time decisions independent of the kernel layout, and may need their own
 pass.
 
-**Exit condition:** Init's capability layout is resolved from generation-declared
-names; an equivalence check demonstrates that every profile in use resolves to
-the slot assignments it holds today; the `option_env!` and `generation.number`
-branches in `launch_init` are gone; and the existing gates — at minimum `just
-dango_check`, `just sample_plane_live_check`, `just fabric_stream_check`, `just
-fabric_call_check`, `just fabric_operation_check`, `just fabric_visibility_check`,
-and `just data_fabric_boot_check` — observe the results they observe today. P0/P1
-name `just architecture_contract_check` and `just x86_portability_check` as
-planned targets; neither exists yet, so this item must name a gate that exists
-when it is claimed.
+**Fix:** A `contracts/boot-layout/v1` resource declares which capability slot
+holds which role, under which name, with which rights, per generation number.
+`launch_init` offers each capability it mints to a placer under the name the
+layout knows it by, and the layout decides where it lands; a capability the
+layout does not name, or a declared slot nothing fills, stops the boot. The
+storage `generation.number` matches disappear by construction rather than by a
+separate fix, because the layout names the component and declares the rights.
+Profile branches ask what the layout declares instead of comparing against a
+literal, and the C8.10 fork keys on the layout declaring the fabric's own route
+workers — putting it in the same category as the `component_named("recovery")`
+fork beside it. The script-install and idle-exit gates were each `flag &&
+number == N` with a unique number per gate, so the flag was redundant in all
+ten. `init.rs` reads the same table, rendered as Rust at component build time,
+dropping 84 lines of constants that previously agreed with the kernel only by
+inspection.
 
-### B11 — test scaffolding is declared in the product boot generation
+An entry declares a *role*, not a concrete object: the storage slot resolves to
+a block device when the platform enumerates one and an object store when it
+does not, which is decided by PCI enumeration at boot and is not knowable to
+the host builder.
 
-**Problem:** `contracts/generation/v1/fixtures/valid.zti` declares 42 components,
-of which 16 are probes and scenario doubles: `storage-probe`,
-`storage-fault-probe`, `storage-store-probe`, `directory-probe`,
-`powerbox-probe`, `sample-lender`, `sample-receiver`, `fabric-intruder`,
-`fabric-probe`, `fabric-observer`, `fabric-proxy`, `fabric-publisher-b`,
-`fabric-subscriber-b`, `fabric-call-client-b`, `fabric-op-client-b`, and
-`fabric-op-client-b-restart`. They are not incidental strings: they hold
-`-control` endpoints and real capability grants, and `storage-probe` appears in
-`requiredComponents`. There is one manifest and one shape, so verification
-scaffolding and product services are declared as peers.
+**Exit condition (observed):** `just boot_layout_check` — a new gate, since
+P0/P1's `architecture_contract_check` and `x86_portability_check` do not exist
+— boots all eighteen distinct profiles and finds every slot, label, and rights
+value identical to the pre-change fixtures. `launch_init` contains no
+`option_env!` and no `generation.number` branch. One kernel binary now serves
+every gate: built with no flags and with `SLIME_FABRIC_BOOT_CHECK`,
+`SLIME_DANGO_CHECK`, `SLIME_FABRIC_CALL_CHECK`, `SLIME_POWERBOX_CHECK` and
+`SLIME_GENERATION_CMD_CHECK` all set, it hashes identically, where the same
+comparison previously gave three distinct binaries. The named gates observe
+their existing results: `dango_check`, `sample_plane_live_check`,
+`fabric_stream_check`, `fabric_call_check`, `fabric_operation_check`,
+`fabric_visibility_check`, `data_fabric_boot_check`, plus `fabric_qos_check`,
+`fabric_authority_check`, `generation_cmd_check`, `powerbox_check`,
+`directory_check`, `transfer_check`, `rollback_check`, `bootstate_trace_check`,
+`test`, `contracts_check`, `generation_check`.
 
-**Evidence:** The fixture is 1161 lines. `fabric-intruder` (line 593),
-`fabric-probe` (689), and `fabric-observer` (705) each declare an object, a
-component entry, and a `-control` grant; `requiredComponents` at line 1159 is
-`["init"; "console"; "dango"; "storage-probe";]`.
+**Fault injection:** three defects surfaced during the change, each caught by a
+fixture rather than by reading code. Generation 4 declares two identical
+object-store entries, so resolving a role by first-match filled one slot twice;
+generation 14 leaves `fabric-subscriber-b` in slot 50 because the call profile
+rewrote 46-49 and stopped; generation 15 takes slot 50 but leaves the same
+component's control channel at 55 and 60. The last two are the argument for the
+change — which slots a profile overwrote was implied by the index range a
+rewrite block happened to cover, stated nowhere and checked by nothing. The
+emitter's own guards were fault-injected too: a duplicate slot, a named role
+without a label, an unnamed role carrying one, and a stale component fallback
+table are each rejected.
 
-**Proposed fix:** Extend the profile mechanism that already exists rather than
-adding a second selector. `scripts/build/build-generation.py` already resolves a
-named profile (`selected_profile_name` at 563, `resolve_fabric_graph` at 616,
-`SLIME_FABRIC_PROFILE`), and the fixture already declares `default`,
-`visibility`, and `unified` profiles — but that mechanism governs interposition
-chains only, not which components a generation declares. Extending it to select
-the component set lets scaffolding live in test profiles while the product
-profile declares only real services. A separate test-generation file is the wrong
-shape: it would duplicate the route, QoS, and budget declarations the fabric
-graph already resolves, and would let the two paths drift.
-
-**Depends on:** B10. While grants are positional, moving a component between
-profiles changes slot numbers, which is exactly what the gates cannot absorb.
-
-**Exit condition:** The product boot profile declares only components the product
-needs; scaffolding participants are declared in test profiles selected by the
-existing profile mechanism; and every gate that today depends on a probe still
-selects it explicitly and observes its current result.
-
-## Resolved
+**Follow-up:** `launch_fabric_boot_init` still builds its 53-slot table
+positionally while the layout declares those same slots, so the C8.10 path
+keeps the one-sided-authority property `init.rs` shed; `boot_layout_check`
+covers it, but by inspection rather than construction. `launch_recovery_init`
+is unchanged and was decided out of scope: its trigger is already
+generation-data-driven, and no layout fixture covers its four-slot table.
+`SLIME_INTERACTIVE` remains in `on_idle` — a user-facing mode from `just run`,
+not a gate, and it does not divide the kernel binary across the suite. 52
+`option_env!` sites remain in `components/`, which B10's text anticipated; the
+component images are per-generation artifacts by design.
 
 ### B9 — terminated tasks are never reaped, so their frames never return
 
