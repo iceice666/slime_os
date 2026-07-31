@@ -885,6 +885,7 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         "[generation] launching init with {} capabilities",
         caps.len()
     );
+    dump_boot_layout("init", &caps);
     task::spawn_with_caps_for(init, caps, None, spawn_budget).expect("failed to launch init")
 }
 
@@ -1080,6 +1081,7 @@ fn launch_fabric_boot_init(generation: &Generation<'static>) -> task::TaskId {
         .component_named("init")
         .expect("init component missing")
         .spawn_budget;
+    dump_boot_layout("fabric-boot", &caps);
     task::spawn_with_caps_for(init, caps, None, spawn_budget)
         .expect("failed to launch fabric boot init")
 }
@@ -1129,6 +1131,7 @@ fn launch_recovery_init(generation: &Generation<'static>) -> task::TaskId {
             rights: RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE | RIGHT_TRANSFER,
         },
     ];
+    dump_boot_layout("recovery", &caps);
     task::spawn_with_caps_for(
         init,
         caps,
@@ -1139,6 +1142,61 @@ fn launch_recovery_init(generation: &Generation<'static>) -> task::TaskId {
             .spawn_budget,
     )
     .expect("failed to launch recovery init")
+}
+
+/// The stable name of a capability's object kind, for the boot-layout dump.
+///
+/// Names the kind only. Endpoint identity, executable bytes, and block-device
+/// addresses vary per boot or per host, so including them would make the dump
+/// unstable across runs and useless as an equivalence fixture.
+fn object_kind_name(object: &KernelObject) -> &'static str {
+    match object {
+        KernelObject::Endpoint(_) => "endpoint",
+        KernelObject::EndpointFactory => "endpoint-factory",
+        KernelObject::SharedBufferFactory => "shared-buffer-factory",
+        KernelObject::Input => "input",
+        KernelObject::Executable { .. } => "executable",
+        KernelObject::Supervision(_) => "supervision",
+        KernelObject::PciFunction(_) => "pci-function",
+        KernelObject::DmaMemory(_) => "dma-memory",
+        KernelObject::Irq(_) => "irq",
+        KernelObject::SharedBuffer(_) => "shared-buffer",
+        KernelObject::SharedBufferLoan(_) => "shared-buffer-loan",
+        KernelObject::BlockDevice(_) => "block-device",
+        KernelObject::ObjectStore => "object-store",
+        KernelObject::Directory(_) => "directory",
+        KernelObject::GenerationControl => "generation-control",
+    }
+}
+
+/// Emit init's resolved capability layout to the serial log, one line per slot.
+///
+/// This is the observable form of a layout that is otherwise only implied by
+/// source order, so an equivalence check can compare the layout a generation
+/// resolves against the layout the same generation resolved before a change.
+/// Executables carry their component name; every other kind is identified by
+/// kind and rights alone.
+fn dump_boot_layout(path: &str, caps: &[Capability]) {
+    serial_println!(
+        "[layout] path={} slots={} max={}",
+        path,
+        caps.len(),
+        crate::capability::MAX_CAPS
+    );
+    for (slot, capability) in caps.iter().enumerate() {
+        let name = match capability.object {
+            KernelObject::Executable { name, .. } => name.unwrap_or("?"),
+            _ => "-",
+        };
+        serial_println!(
+            "[layout] {} {} {} {:#x}",
+            slot,
+            object_kind_name(&capability.object),
+            name,
+            capability.rights
+        );
+    }
+    serial_println!("[layout] end");
 }
 
 fn boot_block_function() -> Option<PciFunctionInfo> {

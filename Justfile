@@ -162,6 +162,16 @@ sample_plane_check: contracts_check
 # reclamation through real task termination.
 sample_plane_live_check: contracts_check generation_check
     python3 scripts/check/check-sample-plane.py
+# B10: init's resolved capability layout, per boot profile, against frozen
+# fixtures. The layout is a contract between the kernel that builds the table,
+# the component images that address slots by number, and the gates that assert
+# on what those components do; nothing else fails when the three disagree.
+# Regenerate with `just boot_layout_bless` — the resulting diff is the evidence
+# that a layout change was intended.
+boot_layout_check: contracts_check generation_check
+    python3 scripts/check/check-boot-layout.py
+boot_layout_bless: contracts_check generation_check
+    python3 scripts/check/check-boot-layout.py --bless
 # M6.2: generated spawn protocol, deterministic command profile, bounded
 # userspace spawn service, profile rejection, and exact grant composition.
 spawn_service_check: contracts_check generation_check
