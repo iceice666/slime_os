@@ -67,4 +67,4 @@ C8.8 turns the authenticated fabric graph's visibility and interposition declara
 - Focused report: this entry.
 - Raw transcript: none.
 - Serial/debugger/model output: observed through `just fabric_visibility_check`; no frozen sibling capture retained.
-- Related roadmap item: [C8.8](../../../roadmap/02-core-runtime.md#c88--filtered-introspection-and-declared-interposition).
+- Related roadmap item: [C8.8](../../roadmap/02-core-runtime.md#c88--filtered-introspection-and-declared-interposition).

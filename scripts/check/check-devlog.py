@@ -265,10 +265,12 @@ for entry in entries:
         if sibling.name not in text:
             fail(f"{name}: evidence file {sibling.name} is not referenced from index.md")
 
-    for target in re.findall(r"\]\(([^)#]+)\)", text):
-        if target.startswith(("http://", "https://")):
+    # An anchor suffix is stripped rather than skipped: a link into a roadmap
+    # heading still has to name a file that exists.
+    for target in re.findall(r"\]\(([^)\s]+)\)", text):
+        if target.startswith(("http://", "https://", "mailto:", "#")):
             continue
-        if not (entry / target).exists():
+        if not (entry / target.partition("#")[0]).exists():
             fail(f"{name}: dead relative link {target}")
 
     if name not in index_rows:

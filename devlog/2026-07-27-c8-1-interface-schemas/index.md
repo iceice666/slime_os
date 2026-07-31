@@ -57,4 +57,4 @@ C8.1 adds a bounded Zutai source contract for native interfaces, deterministic n
 - Focused report: none.
 - Raw transcript: none.
 - Serial/debugger/model output: none; C8.1 is a host contract/generation and native-binding gate.
-- Related roadmap item: [`C8.1`](../../../roadmap/02-core-runtime.md#c81--deterministic-interface-schemas-and-native-bindings).
+- Related roadmap item: [`C8.1`](../../roadmap/02-core-runtime.md#c81--deterministic-interface-schemas-and-native-bindings).

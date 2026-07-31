@@ -60,4 +60,4 @@ C8.7 adds generation-authorized native operations composed from goal, feedback, 
 - Focused report: this entry.
 - Raw transcript: none.
 - Serial/debugger/model output: observed through `just fabric_operation_check` and `just test`; no frozen sibling capture retained.
-- Related roadmap item: [C8.7](../../../roadmap/02-core-runtime.md#c87--native-operations).
+- Related roadmap item: [C8.7](../../roadmap/02-core-runtime.md#c87--native-operations).

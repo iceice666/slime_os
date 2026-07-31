@@ -92,4 +92,4 @@ larger change than this slice should carry; see *Open risks and follow-ups*.
 - Focused report: this entry.
 - Raw transcript: none.
 - Serial/debugger/model output: observed through `just data_fabric_profile_check`; no frozen sibling capture retained.
-- Related roadmap item: [C8.10](../../../roadmap/02-core-runtime.md#c810--collision-free-full-graph-bootstrap-and-bounded-route-workers).
+- Related roadmap item: [C8.10](../../roadmap/02-core-runtime.md#c810--collision-free-full-graph-bootstrap-and-bounded-route-workers).
