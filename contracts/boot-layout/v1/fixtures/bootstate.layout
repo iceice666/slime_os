@@ -7,8 +7,8 @@
 [layout] 5 executable spawn-service 0x10008
 [layout] 6 executable sysinfo 0x10008
 [layout] 7 executable echo-agent 0x10008
-[layout] 8 executable storage-fault-probe 0x10008
-[layout] 9 block-device - 0xc04
+[layout] 8 executable storage-probe 0x10008
+[layout] 9 object-store - 0x1000
 [layout] 10 executable generation-manager 0x10008
 [layout] 11 generation-control - 0xc004
 [layout] 12 endpoint dango-spawn 0x7

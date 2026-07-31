@@ -26,52 +26,85 @@ _sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "lib"))
 
 import argparse
 import os
+import subprocess
+import tempfile
+from pathlib import Path
 
 from harness import ROOT, run_qemu
 
 FIXTURES = ROOT / "contracts" / "boot-layout" / "v1" / "fixtures"
 
+# A virtio-blk device at the address the storage path probes. The storage
+# profiles must boot with one attached: `optional_block_function()` decides slot
+# 9's object *kind* by PCI enumeration, so without a drive those profiles
+# capture the no-disk `ObjectStore` fallback rather than the block capability
+# their gate actually exercises.
+STORAGE_DRIVE = [
+    "-drive",
+    "if=none,id=slime-storage,format=raw,cache=directsync,file={image}",
+    "-device",
+    "virtio-blk-pci,drive=slime-storage,disable-legacy=on,queue-size=8",
+]
+
 # One entry per distinct init layout a gate boots today. The name is the fixture
 # stem; the environment is exactly what the corresponding check script sets, so
-# a profile here resolves the same layout its gate resolves.
-PROFILES: list[tuple[str, dict[str, str]]] = [
-    ("default", {"SLIME_GENERATION_NUMBER": "1"}),
-    ("storage-write", {"SLIME_GENERATION_NUMBER": "2"}),
-    ("storage-fault", {"SLIME_GENERATION_NUMBER": "3"}),
-    ("storage-store", {"SLIME_GENERATION_NUMBER": "4"}),
-    ("directory", {"SLIME_GENERATION_NUMBER": "6"}),
-    ("dango", {"SLIME_GENERATION_NUMBER": "7", "SLIME_DANGO_CHECK": "1"}),
+# a profile here resolves the same layout its gate resolves. The third element
+# is extra QEMU arguments, for profiles whose layout depends on attached
+# hardware.
+PROFILES: list[tuple[str, dict[str, str], list[str]]] = [
+    ("default", {"SLIME_GENERATION_NUMBER": "1"}, []),
+    ("storage-read", {"SLIME_GENERATION_NUMBER": "1"}, STORAGE_DRIVE),
+    ("storage-write", {"SLIME_GENERATION_NUMBER": "2"}, STORAGE_DRIVE),
+    ("storage-fault", {"SLIME_GENERATION_NUMBER": "3"}, STORAGE_DRIVE),
+    ("storage-store", {"SLIME_GENERATION_NUMBER": "4"}, STORAGE_DRIVE),
+    ("directory", {"SLIME_GENERATION_NUMBER": "6"}, []),
+    ("dango", {"SLIME_GENERATION_NUMBER": "7", "SLIME_DANGO_CHECK": "1"}, []),
     (
         "generation-commands",
         {"SLIME_GENERATION_NUMBER": "8", "SLIME_GENERATION_CMD_CHECK": "1"},
+        [],
     ),
-    ("powerbox", {"SLIME_GENERATION_NUMBER": "9", "SLIME_POWERBOX_CHECK": "1"}),
+    ("powerbox", {"SLIME_GENERATION_NUMBER": "9", "SLIME_POWERBOX_CHECK": "1"}, []),
     (
         "sample-plane",
         {"SLIME_GENERATION_NUMBER": "10", "SLIME_SAMPLE_PLANE_CHECK": "1"},
+        [],
     ),
     (
         "fabric-authority",
         {"SLIME_GENERATION_NUMBER": "11", "SLIME_FABRIC_AUTHORITY_CHECK": "1"},
+        [],
     ),
     (
         "fabric-stream",
         {"SLIME_GENERATION_NUMBER": "12", "SLIME_FABRIC_STREAM_CHECK": "1"},
+        [],
     ),
-    ("fabric-qos", {"SLIME_GENERATION_NUMBER": "13", "SLIME_FABRIC_QOS_CHECK": "1"}),
-    ("fabric-call", {"SLIME_GENERATION_NUMBER": "14", "SLIME_FABRIC_CALL_CHECK": "1"}),
+    ("fabric-qos", {"SLIME_GENERATION_NUMBER": "13", "SLIME_FABRIC_QOS_CHECK": "1"}, []),
+    (
+        "fabric-call",
+        {"SLIME_GENERATION_NUMBER": "14", "SLIME_FABRIC_CALL_CHECK": "1"},
+        [],
+    ),
     (
         "fabric-operation",
         {"SLIME_GENERATION_NUMBER": "15", "SLIME_FABRIC_OPERATION_CHECK": "1"},
+        [],
     ),
     (
         "fabric-visibility",
         {"SLIME_GENERATION_NUMBER": "16", "SLIME_FABRIC_VISIBILITY_CHECK": "1"},
+        [],
     ),
     (
         "fabric-boot",
         {"SLIME_GENERATION_NUMBER": "17", "SLIME_FABRIC_BOOT_CHECK": "1"},
+        [],
     ),
+    # Gen 99 is the rollback/bootstate known-good pair. `just rollback_check`
+    # and `just bootstate_trace_check` boot it, and it is the layout that
+    # catches a builder emitting one generation's resource into both.
+    ("bootstate", {"SLIME_GENERATION_NUMBER": "99"}, []),
 ]
 
 # Flags that select a boot path. A profile that does not set one must not
@@ -99,14 +132,15 @@ GATE_FLAGS = [
 ]
 
 
-def capture(name: str, settings: dict[str, str]) -> str:
+def capture(name: str, settings: dict[str, str], qemu_args: list[str], image: Path) -> str:
     """Boot one profile and return its `[layout]` block."""
     environment = os.environ.copy()
     for flag in GATE_FLAGS:
         environment.pop(flag, None)
     environment.update(settings)
+    arguments = [value.format(image=image) for value in qemu_args]
     output = run_qemu(
-        ["cargo", "run", "--release", "--", "-display", "none"],
+        ["cargo", "run", "--release", "--", "-display", "none", *arguments],
         environment=environment,
         cwd=ROOT / "kernel",
         timeout=180,
@@ -142,17 +176,42 @@ def main() -> None:
     selected = PROFILES
     if arguments.profile:
         wanted = set(arguments.profile)
-        unknown = wanted - {name for name, _ in PROFILES}
+        unknown = wanted - {name for name, _, _ in PROFILES}
         if unknown:
             raise SystemExit(f"unknown profile(s): {', '.join(sorted(unknown))}")
         selected = [entry for entry in PROFILES if entry[0] in wanted]
 
     FIXTURES.mkdir(parents=True, exist_ok=True)
     failures: list[str] = []
-    for name, settings in selected:
-        observed = capture(name, settings)
+    with tempfile.TemporaryDirectory() as work:
+        image = Path(work) / "storage.img"
+        if any(qemu_args for _, _, qemu_args in selected):
+            subprocess.run(
+                [ROOT / "scripts" / "build" / "build-storage-fixture.py", image],
+                check=True,
+            )
+        failures = run_profiles(selected, image, arguments.bless)
+
+    if failures:
+        for line in failures:
+            print(line)
+        raise SystemExit("boot layout check: layouts moved")
+    if arguments.bless:
+        print("boot layout check: blessed")
+        return
+    print("boot layout check: ok")
+
+
+def run_profiles(
+    selected: list[tuple[str, dict[str, str], list[str]]],
+    image: Path,
+    bless: bool,
+) -> list[str]:
+    failures: list[str] = []
+    for name, settings, qemu_args in selected:
+        observed = capture(name, settings, qemu_args, image)
         fixture = FIXTURES / f"{name}.layout"
-        if arguments.bless:
+        if bless:
             fixture.write_text(observed)
             print(f"blessed {name}: {len(observed.splitlines()) - 2} slots")
             continue
@@ -172,15 +231,7 @@ def main() -> None:
             if was != now:
                 failures.append(f"    was: {was}")
                 failures.append(f"    now: {now}")
-
-    if failures:
-        for line in failures:
-            print(line)
-        raise SystemExit("boot layout check: layouts moved")
-    if arguments.bless:
-        print("boot layout check: blessed")
-        return
-    print("boot layout check: ok")
+    return failures
 
 
 if __name__ == "__main__":

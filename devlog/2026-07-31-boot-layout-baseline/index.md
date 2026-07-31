@@ -83,6 +83,10 @@ capture a layout its gate never boots.
 | Duplicate-line scan of all sixteen fixtures after labelling | 15 fixtures fully discriminated; storage-store has one genuine duplicate pair (slots 9/18, identical capabilities) | Direct |
 | `check-boot-layout.py` on fabric-call, sample-plane, fabric-boot after labelling | all match — labels are deterministic across boots | Direct |
 | `just sample_plane_live_check`, `just fabric_call_check`, `just data_fabric_boot_check` after labelling | ok; fabric-boot still reports 53 of 64 slots and 20 roles | Direct |
+| Generation 14 booted with `SLIME_FABRIC_CALL_CHECK` unset | layout byte-identical to the `fabric-call` fixture — the flag does not select the layout | Direct |
+| Generation 17 booted with `SLIME_FABRIC_BOOT_CHECK` unset | 61-slot `init` layout, not the 53-slot `fabric-boot` one — the only flag that does select a layout | Direct |
+| Storage profiles booted with a virtio-blk device attached | slot 9 becomes `block-device` (`0x404` read, `0xc04` write/fault) where it was the `object-store` fallback — object kind is decided by PCI enumeration | Direct |
+| `just boot_layout_check`, all eighteen profiles | all match | Direct |
 | `just fmt_check_all` | passed | Direct |
 | `just lint_all` | passed | Direct |
 | `just ruff`, `just typos` | passed | Direct |
@@ -97,6 +101,57 @@ and `0x3004` under the store profile. This is the aliasing B10 exists to
 remove, now recorded rather than inferred.
 
 ## Decisions
+
+Two properties of the layout were assumed rather than known. The fixtures
+settle both, and each settles a schema decision that would be expensive to
+revisit later.
+
+- Decision: the layout resource is keyed by generation number alone.
+- Rationale: booting generation 14 with `SLIME_FABRIC_CALL_CHECK` unset
+  produces a layout byte-identical to the blessed `fabric-call` fixture, so the
+  flag does not participate. Detail below.
+- Rejected alternative: keying the resource by flag *and* number, which would
+  have carried the compile-time coupling into the data format B10 exists to
+  replace it with.
+
+- Decision: a layout entry declares a *role* and rights, not a concrete object
+  kind; the kernel resolves the role.
+- Rationale: slot 9's kind is decided by PCI enumeration at boot and is not
+  knowable to the host builder. Detail below.
+- Rejected alternative: an entry carrying a primary kind and a fallback kind.
+  It models today's code faithfully but widens every entry to accommodate one
+  case, and it moves hardware probing into a declarative format.
+
+**The layout is a function of `generation.number` alone, not of the gate flag.**
+Booting generation 14 with `SLIME_FABRIC_CALL_CHECK` unset produces a layout
+byte-identical to the blessed `fabric-call` fixture. The `SLIME_*_CHECK` flags
+paired with a generation number in `launch_init` are therefore redundant for
+layout purposes; the three at lines 68/71/76 are in `start()`'s script-install
+path and the sites past line 1585 are in the healthy/idle exit condition,
+neither of which touches `caps`. The single exception is generation 17: with
+`SLIME_FABRIC_BOOT_CHECK` unset it resolves the ordinary 61-slot layout rather
+than `launch_fabric_boot_init`'s 53-slot one, because that flag gates the fork
+itself. Since only the fabric-boot gate ever builds generation 17, that flag is
+redundant too — which is what lets the fork be selected by generation data.
+
+**A slot's object kind is not always host-knowable, but its role is.** Slot 9
+is `object-store - 0x1000` with no drive attached and `block-device - 0x404`
+with one, because `optional_block_function()` decides the kind by PCI
+enumeration at boot. The host builder cannot emit that. Across all four storage
+profiles the slot is always the *storage capability*, while its kind varies with
+both generation number and attached hardware — `block-device 0x404` for read,
+`block-device 0xc04` for write and fault, `object-store 0x3004` for store.
+
+The resource must therefore declare **which slot holds which role with which
+rights**, and leave the kernel to resolve a role to a concrete object. That is
+exactly the positional coupling B10 removes, and nothing more: hardware
+probing stays kernel-side where it belongs.
+
+This also corrected the storage fixtures. As first captured they booted without
+a drive and recorded the no-disk fallback — not the layout `just storage_check`
+exercises. The storage profiles now attach a virtio-blk device, and a
+`storage-read` profile was added so the read-only block capability has a
+baseline of its own.
 
 - Decision: capture the baseline before writing any part of the fix.
 - Rationale: the exit condition requires demonstrating that every profile
@@ -123,10 +178,21 @@ remove, now recorded rather than inferred.
 
 ## Open risks and follow-ups
 
-- [ ] The sixteen profiles are enumerated by hand in `PROFILES`, mirroring what
+- [ ] The eighteen profiles are enumerated by hand in `PROFILES`, mirroring what
       the check scripts set. A new gate that boots a new layout will not be
       covered until it is added there. Not automated because the check scripts
       set their environment inline rather than declaring it.
+- [ ] Two layouts remain uncovered. `launch_recovery_init`'s four-slot table
+      needs a recovery bootstore rather than a plain `cargo run`, and the
+      transfer layout needs two block devices at specific PCI addresses plus a
+      staged receiver generation. **Decision:** `launch_recovery_init` is not
+      collapsed in B10. Its trigger — `component_named("recovery").is_some()` —
+      is already generation-data-driven rather than a compile-time flag, so it
+      is not the defect B10 names, and collapsing it would rest on
+      `check-recovery.py`'s behavioral markers rather than a layout fixture.
+      The transfer tail (`bootstrap.rs:866`, appending two slots when PCI
+      devices 5 and 6 are both present) is in scope and must be preserved, but
+      is verified by `just transfer_check` rather than by equivalence.
 - [ ] `fabric-boot` captures 53 slots from `launch_fabric_boot_init`, a
       different function than the other fifteen. When the forks collapse (B10,
       later step) this fixture must still match, which is the point — it is the
