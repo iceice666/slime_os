@@ -1,5 +1,6 @@
 #![no_std]
 
+pub mod boot_layout;
 pub mod bootstate;
 pub mod crc32;
 pub mod fabric_graph;

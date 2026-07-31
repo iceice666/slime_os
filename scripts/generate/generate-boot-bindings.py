@@ -43,6 +43,11 @@ GENERATORS = (
         "fabric_graph.rs",
     ),
     (
+        ROOT / "contracts" / "boot-layout" / "v1" / "schema.zt",
+        "boot_layout.py",
+        "boot_layout.rs",
+    ),
+    (
         ROOT / "contracts" / "normalized-interface-schemas" / "v1" / "schema.zt",
         "normalized_interface_schemas.py",
         "normalized_interface_schemas.rs",
