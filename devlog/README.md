@@ -152,3 +152,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-07-30 | [C8.10 groundwork — Declared route-worker partition and wait-source bounds](2026-07-30-c8-10-route-worker-partition/index.md) | Change | Verified | C8.10 |
 | 2026-07-31 | [C8.10 — Collision-free full-graph boot and live bounded route workers](2026-07-31-c8-10-full-graph-boot/index.md) | Change | Verified | C8.10 |
 | 2026-07-31 | [RPi5 ROS 2 two-node roadmap pivot](2026-07-31-rpi5-ros2-roadmap-pivot/index.md) | Decision | Proposed | RP0, RP1, RP2, RP3, RP4, RP5, RP6, RP7, RP8, R0, P0, P1, P2, P4 |
+| 2026-07-31 | [Boot capability layout is a positional convention, not generation data](2026-07-31-boot-layout-positional-coupling/index.md) | Decision | Proposed | B10, B11, P1, P2, RP2, C8, C8.10 |
