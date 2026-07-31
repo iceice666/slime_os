@@ -18,6 +18,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=SLIME_FABRIC_CALL_CHECK");
     println!("cargo:rerun-if-env-changed=SLIME_FABRIC_OPERATION_CHECK");
     println!("cargo:rerun-if-env-changed=SLIME_FABRIC_VISIBILITY_CHECK");
+    println!("cargo:rerun-if-env-changed=SLIME_FABRIC_BOOT_CHECK");
     println!("cargo:rerun-if-env-changed=SLIME_DATA_FABRIC_PROFILE");
     println!("cargo:rerun-if-env-changed=SLIME_FABRIC_PROXY_EARLY_EXIT");
     println!("cargo:rerun-if-env-changed=SLIME_GENERATION_CANDIDATE");
@@ -57,6 +58,9 @@ fn main() {
     }
     if let Ok(value) = std::env::var("SLIME_FABRIC_VISIBILITY_CHECK") {
         println!("cargo:rustc-env=SLIME_FABRIC_VISIBILITY_CHECK={value}");
+    }
+    if let Ok(value) = std::env::var("SLIME_FABRIC_BOOT_CHECK") {
+        println!("cargo:rustc-env=SLIME_FABRIC_BOOT_CHECK={value}");
     }
     if let Ok(value) = std::env::var("SLIME_FABRIC_PROXY_EARLY_EXIT") {
         println!("cargo:rustc-env=SLIME_FABRIC_PROXY_EARLY_EXIT={value}");

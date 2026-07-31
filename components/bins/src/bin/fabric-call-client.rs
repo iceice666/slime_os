@@ -12,6 +12,10 @@ use slime_proto::fabric_call::{
 slime_rt::entry!(main);
 
 fn main() {
+    scenario::boot_park(
+        boot_contracts::fabric_graph::DIRECTION_CLIENT,
+        b"fabric-call-client",
+    );
     let route = scenario::request_role(boot_contracts::fabric_graph::DIRECTION_CLIENT);
     let session = scenario::client_session(0);
 

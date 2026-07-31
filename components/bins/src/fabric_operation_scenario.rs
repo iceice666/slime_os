@@ -53,6 +53,7 @@ const GOAL_KILLS_SERVER: u64 = 8;
 /// Client A: the correlation, feedback, result, retrieval, expiry, and
 /// peer-death arms.
 pub fn run_client() {
+    boot_park(DIRECTION_CLIENT, 2, b"fabric-op-client");
     let roles = request_roles(DIRECTION_CLIENT, 2);
     let route = roles[0];
     let backup_route = roles[1];
@@ -166,6 +167,7 @@ pub fn run_client() {
 /// Client B: the authority arms. Everything here is a denial that must hold even
 /// though B knows the exact operation identity A used.
 pub fn run_client_b() {
+    boot_park(DIRECTION_CLIENT, 1, b"fabric-op-client-b");
     let route = request_role(DIRECTION_CLIENT);
     let session = client_session(1);
 
@@ -253,6 +255,7 @@ pub fn run_client_b_restarted() {
 /// The operation server. Its policy is deliberately trivial and lives entirely
 /// here: the fabric composes transport, the server decides outcomes.
 pub fn run_server() {
+    boot_park(DIRECTION_SERVER, 1, b"fabric-op-server");
     let route = request_role(DIRECTION_SERVER);
     let mut executed = [false; 16];
     loop {
@@ -355,6 +358,23 @@ fn handle_goal(route: u32, record: WireOperationEnvelope, executed: &mut [bool; 
 /// directions of its own role and nothing more.
 pub fn request_role(direction: u32) -> u32 {
     request_roles(direction, 1)[0]
+}
+
+/// C8.10 full-graph boot arm: take the declared operation role, then park
+/// forever. See [`crate::fabric_call_scenario::boot_park`] — same contract, and
+/// `roles` is how many the graph declares for this participant (the primary
+/// client holds both `navigation` and `nav-backup`).
+pub fn boot_park(direction: u32, roles: usize, name: &'static [u8]) {
+    if !slime_components::fabric_boot::active() {
+        return;
+    }
+    // As the call arm: `request_roles` validates each descriptor against the
+    // declared edge before this reports it.
+    let _roles = request_roles(direction, roles);
+    slime_rt::debug_write(b"[");
+    slime_rt::debug_write(name);
+    slime_rt::debug_write(b"] boot role provisioned\n");
+    slime_components::fabric_boot::park(name)
 }
 
 fn request_roles(direction: u32, count: usize) -> [u32; 2] {

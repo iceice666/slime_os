@@ -135,6 +135,14 @@ fabric_visibility_gen:
 data_fabric_profile_check: contracts_check generation_check
     python3 scripts/check/check-data-fabric-profile.py
 
+# C8.10: one generation boots every C8 role at once through collision-free,
+# bounded capability layouts — stream, call, and operation planes plus the
+# unauthorized probe, declared interposition proxy, and filtered-introspection
+# client as distinct identities — and every bounded route worker blocks on all
+# of its declared sources without polling or exceeding kernel limits.
+data_fabric_boot_check: contracts_check generation_check
+    python3 scripts/check/check-data-fabric-boot.py
+
 # C7.6: versioned sample descriptor over the C7.5 loan lifecycle; byte-identical
 # binding round-trip, malformed-descriptor rejection before mapping, and a
 # payload larger than MAX_MSG carried over descriptor plus shared buffer.

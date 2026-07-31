@@ -55,6 +55,19 @@ fn fail(reason: &[u8]) -> ! {
 }
 
 fn main() {
+    if slime_components::fabric_boot::active() {
+        // The full-graph boot runs the ordinary stream broker, which provisions
+        // *route participants*. This component is declared as an interposition
+        // hop on the telemetry chain rather than a participant on it, so the
+        // broker has no edge to hand it — and the relay authority this file
+        // asserts below is C8.8's to provision and prove.
+        //
+        // What C8.10 requires of it is exactly what happens here: it launches as
+        // its own task, with its own generation-declared control endpoint and
+        // grants that overlap neither the probe's nor the observer's, and it
+        // reaches blocked idle. It asks for nothing, so it must receive nothing.
+        slime_components::fabric_boot::park_only(b"fabric-proxy");
+    }
     let ViewPage::End(end) =
         request_page(CONTROL_SLOT, 0).unwrap_or_else(|_| fail(b"empty visibility view"))
     else {
@@ -126,6 +139,14 @@ fn main() {
         fail(b"proxy authority escaped chain");
     }
     slime_rt::debug_write(b"[fabric-proxy] proxy authority narrowed to chain\n");
+    if slime_components::fabric_boot::active() {
+        // Every property this component exists to prove has now been checked
+        // against the kernel: the empty view above, the four narrowed roles, and
+        // the five denials that keep relay authority inside the chain. The
+        // relaying itself is C8.8's gate; here the graph must reach idle with no
+        // traffic, so the proxy parks holding exactly its declared chain.
+        slime_components::fabric_boot::park(b"fabric-proxy");
+    }
     if option_env!("SLIME_FABRIC_PROXY_EARLY_EXIT") == Some("1") {
         slime_rt::debug_write(b"[fabric-proxy] injected early proxy death\n");
         return;

@@ -1,0 +1,184 @@
+//! C8.10 full-graph boot arm: what a declared fabric participant does when one
+//! generation launches the whole graph at once.
+//!
+//! The full-graph gate asserts that every declared role is *provisioned* and
+//! that the graph then reaches healthy blocked idle **with no traffic**. So a
+//! participant here asks for its declared role, proves the capability it
+//! received is the narrowed one the graph named, and parks. It publishes
+//! nothing, acks nothing, and calls nothing: any sample would make the boot's
+//! idle condition depend on a data path C8.4-C8.8 already own, and a
+//! regression there would surface as a failure of this gate instead of theirs.
+//!
+//! Each participant keeps its own identity and its own generation-provisioned
+//! control endpoint. This module removes the per-scenario traffic, never the
+//! authority checks: the role a participant accepts here is still verified
+//! against the exact (route, direction, object kind) tuple the graph declared,
+//! so a boot that widened or mis-bound a role fails rather than idling.
+
+#![allow(dead_code)]
+
+use slime_proto::capability_transfer::{
+    FABRIC_REQUEST_MAGIC, FORMAT_VERSION, OBJECT_KIND_ENDPOINT, WireCapabilityTransfer,
+    WireFabricRequest,
+};
+use slime_proto::valid_capability_transfer;
+use slime_rt::{ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG, WaitSource};
+
+/// Control endpoint to this participant's route worker. Init binds it to
+/// exactly one component at spawn, so it is also this participant's identity.
+const CONTROL_SLOT: u32 = 0;
+
+/// Whether this build is the full-graph boot generation.
+pub fn active() -> bool {
+    option_env!("SLIME_FABRIC_BOOT_CHECK") == Some("1")
+}
+
+fn fail(name: &[u8], reason: &[u8]) -> ! {
+    slime_rt::debug_write(b"[");
+    slime_rt::debug_write(name);
+    slime_rt::debug_write(b"] fail: ");
+    slime_rt::debug_write(reason);
+    slime_rt::debug_write(b"\n");
+    slime_rt::exit(1)
+}
+
+/// Ask for this participant's declared role, verify every capability the worker
+/// moves back, and park.
+///
+/// `roles` is how many narrowed capabilities the graph declares for this edge —
+/// two for a stream participant (data plus its opposite-facing credit or ack
+/// channel), one for a call or operation participant. Receiving a different
+/// number is a provisioning defect, so the count is asserted rather than
+/// drained: the worker and the participant must agree from the same graph.
+pub fn provision_and_park(
+    name: &'static [u8],
+    route_name: &str,
+    route: &[u8; 32],
+    type_tag: u64,
+    direction: u32,
+    roles: usize,
+) -> ! {
+    provision(name, route_name, type_tag, direction);
+    accept_roles(name, &[(*route, direction, roles)]);
+    park(name)
+}
+
+/// As [`provision_and_park`], for a participant the graph declares on more than
+/// one route.
+///
+/// One request provisions every edge the graph declares for a component, so the
+/// worker answers with all of them and each is checked against its own
+/// (route, direction) pair. `edges` is `(route identity, direction, capability
+/// count)` in the order the graph declares them, because the roles arrive in
+/// that order — a participant and its worker read the same table.
+pub fn provision_multi_and_park(
+    name: &'static [u8],
+    route_name: &str,
+    type_tag: u64,
+    direction: u32,
+    edges: &[([u8; 32], u32, usize)],
+) -> ! {
+    provision(name, route_name, type_tag, direction);
+    accept_roles(name, edges);
+    park(name)
+}
+
+fn provision(name: &'static [u8], route_name: &str, type_tag: u64, direction: u32) {
+    let mut route_bytes = [0u8; 32];
+    if route_name.len() > route_bytes.len() {
+        fail(name, b"boot route name");
+    }
+    route_bytes[..route_name.len()].copy_from_slice(route_name.as_bytes());
+    let request = WireFabricRequest {
+        magic: FABRIC_REQUEST_MAGIC,
+        version: FORMAT_VERSION,
+        flags: 0,
+        direction,
+        type_identity: type_tag,
+        route_name_len: route_name.len() as u32,
+        route_name: route_bytes,
+        reserved: [0; 4],
+    };
+    let encoded = request.encode();
+    loop {
+        match slime_rt::send(CONTROL_SLOT, &encoded, &[]) {
+            ERR_SUCCESS => break,
+            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(CONTROL_SLOT)]),
+            _ => fail(name, b"boot role request"),
+        }
+    }
+}
+
+fn accept_roles(name: &'static [u8], edges: &[([u8; 32], u32, usize)]) {
+    for (route, direction, roles) in edges {
+        for _ in 0..*roles {
+            let descriptor = receive_role(name);
+            if descriptor.status != 0 {
+                fail(name, b"declared participant was denied");
+            }
+            // The descriptor is the kernel's own record of what it installed, so
+            // a role bound to another route or another direction shows up here
+            // rather than as traffic that silently crosses the wrong edge.
+            if !valid_capability_transfer(&descriptor, route, *direction, OBJECT_KIND_ENDPOINT) {
+                fail(name, b"boot role binding");
+            }
+        }
+    }
+    slime_rt::debug_write(b"[");
+    slime_rt::debug_write(name);
+    slime_rt::debug_write(b"] boot role provisioned\n");
+}
+
+/// Block forever on the control endpoint.
+///
+/// This is the boot gate's healthy end state: the ready queue drains, `on_idle`
+/// finds the task `Blocked`, and the generation is idle rather than finished.
+///
+/// An unexpected message is drained rather than ignored. Parking on a ready
+/// endpoint would return immediately and turn this into a spin, which would
+/// look like a hang instead of the bounded idle the gate asserts.
+pub fn park(name: &'static [u8]) -> ! {
+    let mut message = [0u8; MAX_MSG];
+    let mut received = [0u64; MAX_CAPS_PER_MSG];
+    loop {
+        match slime_rt::recv(CONTROL_SLOT, &mut message, &mut received) {
+            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(CONTROL_SLOT)]),
+            n if n < 0 => fail(name, b"boot idle control"),
+            _ => {
+                for slot in received.iter().filter(|slot| **slot != 0) {
+                    let _ = slime_rt::cap_drop(*slot as u32);
+                }
+                slime_rt::debug_write(b"[");
+                slime_rt::debug_write(name);
+                slime_rt::debug_write(b"] boot idle drained a message\n");
+            }
+        }
+    }
+}
+
+/// Park without asking for anything.
+///
+/// For a component the graph declares but the boot generation gives no work: it
+/// must exist as its own task with its own grants, and must not invent traffic
+/// to prove it.
+pub fn park_only(name: &'static [u8]) -> ! {
+    slime_rt::debug_write(b"[");
+    slime_rt::debug_write(name);
+    slime_rt::debug_write(b"] boot idle without a role\n");
+    park(name)
+}
+
+fn receive_role(name: &'static [u8]) -> WireCapabilityTransfer {
+    let mut message = [0u8; MAX_MSG];
+    let mut received = [0u64; MAX_CAPS_PER_MSG];
+    loop {
+        match slime_rt::recv(CONTROL_SLOT, &mut message, &mut received) {
+            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(CONTROL_SLOT)]),
+            n if n < 0 => fail(name, b"boot role reply"),
+            _ => {
+                return WireCapabilityTransfer::decode(&message)
+                    .unwrap_or_else(|| fail(name, b"boot role decode"));
+            }
+        }
+    }
+}

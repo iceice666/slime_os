@@ -50,6 +50,8 @@ static FABRIC_OP_TIME_ID: AtomicU64 = AtomicU64::new(0);
 static FABRIC_PROBE_ID: AtomicU64 = AtomicU64::new(0);
 static FABRIC_PROXY_ID: AtomicU64 = AtomicU64::new(0);
 static FABRIC_OBSERVER_ID: AtomicU64 = AtomicU64::new(0);
+static FABRIC_CALL_WORKER_ID: AtomicU64 = AtomicU64::new(0);
+static FABRIC_OP_WORKER_ID: AtomicU64 = AtomicU64::new(0);
 static GENERATION_NUMBER: AtomicU64 = AtomicU64::new(0);
 static RECOVERY_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -166,6 +168,20 @@ fn reclamation_probe(generation: &Generation<'static>) {
 fn launch_init(generation: &Generation<'static>) -> task::TaskId {
     if generation.component_named("recovery").is_some() {
         return launch_recovery_init(generation);
+    }
+    // C8.10 full-graph boot. A separate layout reached by an early return,
+    // mirroring `launch_recovery_init`, rather than more overlays on the vector
+    // below.
+    //
+    // That vector is 61 of `MAX_CAPS = 64` before this milestone adds anything,
+    // so the three new roles cannot be appended: they need nine slots against
+    // three free. It is also the layout six passing QEMU gates read positionally
+    // — the `caps[46] = ...` blocks below rewrite it per generation number — so
+    // renumbering it to fit would rewrite C8.3-C8.8's evidence rather than
+    // extend it. A fabric-only vector holds only what the fabric graph needs and
+    // leaves every earlier gate's slots exactly where they were.
+    if option_env!("SLIME_FABRIC_BOOT_CHECK") == Some("1") && generation.number == 17 {
+        return launch_fabric_boot_init(generation);
     }
     let init = generation
         .component_bytes("init")
@@ -872,6 +888,202 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
     task::spawn_with_caps_for(init, caps, None, spawn_budget).expect("failed to launch init")
 }
 
+/// Every participant the C8.10 full-graph boot launches, with the control grant
+/// that binds it to the fabric.
+///
+/// Order is the layout: init's executable and control slots are derived from
+/// this table by index, and `init.rs` walks the same order. The two route
+/// workers are absent because the fabric spawns them and mints their controls,
+/// so they never occupy an init slot at all.
+///
+/// `fabric-intruder` is absent too: the probe, proxy, and introspection roles it
+/// once carried behind one env switch are three declared components here.
+/// The stream plane, in the resolved profile's control order. Every one of these
+/// is a participant on a route this generation's stream worker carries.
+const FABRIC_BOOT_STREAM: [(&str, &str); 7] = [
+    ("fabric-publisher", "fabric-publisher-control"),
+    ("fabric-subscriber", "fabric-subscriber-control"),
+    ("fabric-publisher-b", "fabric-publisher-b-control"),
+    ("fabric-subscriber-b", "fabric-subscriber-b-control"),
+    ("fabric-observer", "fabric-observer-control"),
+    ("fabric-probe", "fabric-probe-control"),
+    ("fabric-proxy", "fabric-proxy-control"),
+];
+
+/// The call plane, then the operation plane and its replacement channel. Each
+/// carries its own capability-routed clock: a worker's time source is a declared
+/// participant, never an ambient timer.
+const FABRIC_BOOT_REQUEST_RESPONSE: [(&str, &str); 9] = [
+    ("fabric-call-client", "fabric-call-client-control"),
+    ("fabric-call-client-b", "fabric-call-client-b-control"),
+    ("fabric-call-server", "fabric-call-server-control"),
+    ("fabric-call-time", "fabric-call-time-control"),
+    ("fabric-op-client", "fabric-op-client-control"),
+    ("fabric-op-client-b", "fabric-op-client-b-control"),
+    ("fabric-op-server", "fabric-op-server-control"),
+    ("fabric-op-time", "fabric-op-time-control"),
+    (
+        "fabric-op-client-b-restart",
+        "fabric-op-client-b-restart-control",
+    ),
+];
+
+/// Every participant the C8.10 boot launches: the stream plane, then the two
+/// request/response planes. One flat order, because init's executable and
+/// control slots are derived from it by index and `init.rs` walks the same
+/// order.
+const FABRIC_BOOT_PARTICIPANTS: [(&str, &str); 16] = {
+    let mut all = [("", ""); 16];
+    let mut index = 0;
+    while index < FABRIC_BOOT_STREAM.len() {
+        all[index] = FABRIC_BOOT_STREAM[index];
+        index += 1;
+    }
+    while index < all.len() {
+        all[index] = FABRIC_BOOT_REQUEST_RESPONSE[index - FABRIC_BOOT_STREAM.len()];
+        index += 1;
+    }
+    all
+};
+
+/// C8.10: launch init with one collision-free fabric-only capability layout.
+///
+/// Every C8 role in one generation — the stream, call, and operation planes,
+/// the unauthorized probe, the declared interposition proxy, and the filtered
+/// introspection client — against a table that must stay under `MAX_CAPS`.
+/// Nothing from the console, Dango, storage, filesystem, generation-management,
+/// or powerbox graphs appears: those are not part of the fabric graph, and
+/// carrying them is what left the main layout with three free slots.
+///
+/// Init holds no route capability here either. It mints one control channel per
+/// participant, hands the fabric the service side and the participant its own
+/// client side, and that spawn-time binding is what the workers authenticate
+/// against. The two route workers are spawned *by the fabric*, not by init, so
+/// the component that binds a worker's control endpoints to an identity is the
+/// same component that created them.
+fn launch_fabric_boot_init(generation: &Generation<'static>) -> task::TaskId {
+    let init = generation
+        .component_bytes("init")
+        .expect("init object missing");
+    require_grant(
+        generation,
+        "endpoint-factory",
+        "init",
+        "init",
+        crate::capability::RIGHT_ENDPOINT_CREATE,
+    );
+    require_grant(
+        generation,
+        "fabric-endpoint-factory",
+        "init",
+        "fabric-service",
+        crate::capability::RIGHT_ENDPOINT_CREATE,
+    );
+    require_grant(
+        generation,
+        "fabric-shared-buffer-factory",
+        "init",
+        "fabric-service",
+        crate::capability::RIGHT_BUFFER_CREATE,
+    );
+    // The fabric spawns the two route workers, so it — not init — holds their
+    // executables. Authority to run a worker is a declared grant like any other.
+    for grant in [
+        "fabric-call-worker-executable",
+        "fabric-op-worker-executable",
+    ] {
+        require_grant(
+            generation,
+            grant,
+            "init",
+            "fabric-service",
+            RIGHT_EXEC | RIGHT_SPAWN,
+        );
+    }
+    for (client, grant) in FABRIC_BOOT_PARTICIPANTS {
+        require_grant(
+            generation,
+            grant,
+            client,
+            "fabric-service",
+            RIGHT_SEND | RIGHT_RECV,
+        );
+    }
+    serial_println!("[generation] fabric boot control grants valid");
+
+    let mut caps = vec![
+        Capability {
+            object: KernelObject::EndpointFactory,
+            rights: crate::capability::RIGHT_ENDPOINT_CREATE | RIGHT_TRANSFER,
+        },
+        Capability {
+            object: KernelObject::SharedBufferFactory,
+            rights: crate::capability::RIGHT_BUFFER_CREATE | RIGHT_TRANSFER,
+        },
+        executable(
+            generation,
+            "fabric-service",
+            generation
+                .component_bytes("fabric-service")
+                .expect("fabric-service object missing"),
+        ),
+        executable(
+            generation,
+            "fabric-call-worker",
+            generation
+                .component_bytes("fabric-call-worker")
+                .expect("fabric-call-worker object missing"),
+        ),
+        executable(
+            generation,
+            "fabric-op-worker",
+            generation
+                .component_bytes("fabric-op-worker")
+                .expect("fabric-op-worker object missing"),
+        ),
+    ];
+    // One executable per participant, then both halves of its control channel.
+    // Grouped per participant rather than by kind so init's slot arithmetic is
+    // one stride, and a participant added or removed moves one block.
+    for (component, _) in FABRIC_BOOT_PARTICIPANTS {
+        let mut capability = executable(
+            generation,
+            component,
+            generation
+                .component_bytes(component)
+                .unwrap_or_else(|| panic!("{component} object missing")),
+        );
+        // `spawn_from_cap` makes a child's supervision handle transferable only
+        // when the executable it came from is. The call and operation workers
+        // authenticate a participant by a supervision capability moved over its
+        // own control channel, so without this init cannot hand those on — and
+        // the failure surfaces as the *worker* seeing a dead peer, because init
+        // exits mid-launch rather than as an error naming the transfer.
+        capability.rights |= RIGHT_TRANSFER;
+        caps.push(capability);
+    }
+    for _ in FABRIC_BOOT_PARTICIPANTS {
+        let (client, service) = ipc::channel();
+        caps.push(endpoint(client, RIGHT_SEND | RIGHT_RECV));
+        caps.push(endpoint(service, RIGHT_SEND | RIGHT_RECV));
+    }
+    assert!(
+        caps.len() <= crate::capability::MAX_CAPS,
+        "fabric boot layout exceeds the kernel capability table"
+    );
+    serial_println!(
+        "[generation] fabric boot layout {} of {} slots",
+        caps.len(),
+        crate::capability::MAX_CAPS
+    );
+    let spawn_budget = generation
+        .component_named("init")
+        .expect("init component missing")
+        .spawn_budget;
+    task::spawn_with_caps_for(init, caps, None, spawn_budget)
+        .expect("failed to launch fabric boot init")
+}
+
 fn launch_recovery_init(generation: &Generation<'static>) -> task::TaskId {
     let recovery_index = recovery_index(generation);
     let init = generation
@@ -1092,6 +1304,8 @@ pub fn record_spawn(component: &'static str, id: task::TaskId) {
         "fabric-probe" => &FABRIC_PROBE_ID,
         "fabric-proxy" => &FABRIC_PROXY_ID,
         "fabric-observer" => &FABRIC_OBSERVER_ID,
+        "fabric-call-worker" => &FABRIC_CALL_WORKER_ID,
+        "fabric-op-worker" => &FABRIC_OP_WORKER_ID,
         "recovery" => &RECOVERY_ID,
         _ => return,
     };
@@ -1226,6 +1440,35 @@ extern "C" fn on_idle() {
             FABRIC_OP_SERVER_ID.load(Ordering::Relaxed),
         ),
         ("fabric-op-time", FABRIC_OP_TIME_ID.load(Ordering::Relaxed)),
+        // The second stream pair. Tracked by `record_spawn` since C8.4 but never
+        // swept, so until now a crashed `fabric-publisher-b` left the slice
+        // "healthy".
+        (
+            "fabric-publisher-b",
+            FABRIC_PUBLISHER_B_ID.load(Ordering::Relaxed),
+        ),
+        (
+            "fabric-subscriber-b",
+            FABRIC_SUBSCRIBER_B_ID.load(Ordering::Relaxed),
+        ),
+        // C8.10's three split roles and two route workers. Absent from this
+        // array their failure would be invisible: `record_spawn` tracks them, so
+        // a crashed proxy or a worker that never provisioned would leave the
+        // slice "healthy" while the boot gate's markers merely went missing.
+        ("fabric-probe", FABRIC_PROBE_ID.load(Ordering::Relaxed)),
+        ("fabric-proxy", FABRIC_PROXY_ID.load(Ordering::Relaxed)),
+        (
+            "fabric-observer",
+            FABRIC_OBSERVER_ID.load(Ordering::Relaxed),
+        ),
+        (
+            "fabric-call-worker",
+            FABRIC_CALL_WORKER_ID.load(Ordering::Relaxed),
+        ),
+        (
+            "fabric-op-worker",
+            FABRIC_OP_WORKER_ID.load(Ordering::Relaxed),
+        ),
     ];
     let mut healthy = true;
     for (name, id) in checks {
@@ -1237,15 +1480,36 @@ extern "C" fn on_idle() {
         // long-lived service parked this way is healthy idle; a one-shot probe
         // that never reached `Exit(0)` is a genuine stall and stays unhealthy.
         if task::is_live(id) {
-            let persistent = matches!(
-                name,
-                "console"
-                    | "dango"
-                    | "spawn-service"
-                    | "filesystem-service"
-                    | "generation-manager"
-                    | "powerbox-chooser"
-            );
+            // C8.10's exit condition *is* blocked idle: every role provisions
+            // and then parks on its control endpoint with no traffic. So under
+            // the boot check a live fabric task is the healthy outcome, not a
+            // stall — the opposite of every other fabric gate, where a live
+            // participant means a scenario that never finished.
+            //
+            // Enumerated rather than matched on a `fabric-` prefix, like every
+            // other arm here: a prefix would silently extend this verdict to any
+            // future component whose name happened to start that way, including a
+            // one-shot probe whose failure to exit is a real stall.
+            let fabric_boot_idle = option_env!("SLIME_FABRIC_BOOT_CHECK") == Some("1")
+                && GENERATION_NUMBER.load(Ordering::Relaxed) == 17
+                && (name == "init"
+                    || FABRIC_BOOT_PARTICIPANTS
+                        .iter()
+                        .any(|(component, _)| *component == name)
+                    || matches!(
+                        name,
+                        "fabric-service" | "fabric-call-worker" | "fabric-op-worker"
+                    ));
+            let persistent = fabric_boot_idle
+                || matches!(
+                    name,
+                    "console"
+                        | "dango"
+                        | "spawn-service"
+                        | "filesystem-service"
+                        | "generation-manager"
+                        | "powerbox-chooser"
+                );
             serial_println!(
                 "[generation] {} idle-blocked (persistent={})",
                 name,

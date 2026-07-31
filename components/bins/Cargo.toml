@@ -228,3 +228,13 @@ test = false
 
 [lints]
 workspace = true
+
+[[bin]]
+name = "fabric-call-worker"
+path = "src/bin/fabric-call-worker.rs"
+test = false
+
+[[bin]]
+name = "fabric-op-worker"
+path = "src/bin/fabric-op-worker.rs"
+test = false

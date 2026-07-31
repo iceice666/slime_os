@@ -89,6 +89,15 @@ fn main() {
     }
     slime_rt::debug_write(b"[fabric-probe] undeclared edge denied\n");
     slime_rt::debug_write(b"[fabric-probe] done\n");
+    if slime_components::fabric_boot::active() {
+        // The denial above is this component's whole assertion, and it holds in
+        // the full-graph boot exactly as it does alone: a real control endpoint
+        // and the exact route strings still buy nothing. Park rather than exit,
+        // because the gate's exit condition is every role blocked — a probe that
+        // terminated would be indistinguishable from one that was never
+        // launched.
+        slime_components::fabric_boot::park(b"fabric-probe");
+    }
 }
 
 const _: () = assert!(REQUEST_LEN == MAX_MSG);

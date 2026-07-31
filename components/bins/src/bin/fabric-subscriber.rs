@@ -66,6 +66,19 @@ fn main() {
         &telemetry_stream::INTERFACE_IDENTITY,
         CONTRACT_KIND_STREAM,
     );
+    if slime_components::fabric_boot::active() {
+        // Two capabilities for one subscriber role: the receive-only data
+        // endpoint and the send-only ack channel. The boot gate asserts both
+        // arrive narrowed and then parks — no sample, no ack.
+        slime_components::fabric_boot::provision_and_park(
+            b"fabric-subscriber",
+            ROUTE_NAME,
+            &route,
+            telemetry_stream::TYPE_TAG,
+            DIRECTION_SUBSCRIBE,
+            2,
+        );
+    }
 
     let request = WireFabricRequest {
         magic: FABRIC_REQUEST_MAGIC,

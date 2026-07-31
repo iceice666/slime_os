@@ -111,6 +111,26 @@ fn main() {
         &telemetry_stream::INTERFACE_IDENTITY,
         CONTRACT_KIND_STREAM,
     );
+    if slime_components::fabric_boot::active() {
+        // Declared on both stream routes, so one request returns four
+        // capabilities: data plus credit for telemetry, then the same for
+        // diagnostics, in the order the graph declares them.
+        let diagnostics = route_identity(
+            DIAGNOSTICS_ROUTE,
+            &diagnostics_stream::INTERFACE_IDENTITY,
+            CONTRACT_KIND_STREAM,
+        );
+        slime_components::fabric_boot::provision_multi_and_park(
+            b"fabric-publisher-b",
+            TELEMETRY_ROUTE,
+            telemetry_stream::TYPE_TAG,
+            DIRECTION_PUBLISH,
+            &[
+                (telemetry, DIRECTION_PUBLISH, 2),
+                (diagnostics, DIRECTION_PUBLISH, 2),
+            ],
+        );
+    }
     let diagnostics = route_identity(
         DIAGNOSTICS_ROUTE,
         &diagnostics_stream::INTERFACE_IDENTITY,

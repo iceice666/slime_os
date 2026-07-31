@@ -37,6 +37,24 @@ fn fail(reason: &[u8]) -> ! {
 }
 
 fn main() {
+    if slime_components::fabric_boot::active() {
+        // In the full-graph boot the observer is a declared telemetry
+        // subscriber, so it takes its narrowed data and ack capabilities and
+        // parks. Its filtered *view* is C8.8's property to prove; what this gate
+        // needs from it is that it exists as its own task with its own grants.
+        slime_components::fabric_boot::provision_and_park(
+            b"fabric-observer",
+            "telemetry",
+            &boot_contracts::fabric_graph::route_identity(
+                "telemetry",
+                &telemetry_stream::INTERFACE_IDENTITY,
+                boot_contracts::fabric_graph::CONTRACT_KIND_STREAM,
+            ),
+            telemetry_stream::TYPE_TAG,
+            boot_contracts::fabric_graph::DIRECTION_SUBSCRIBE,
+            2,
+        );
+    }
     // Page the whole cursor. The view is bounded by the generation's declared
     // visibility policy, so exhausting it is a finite walk rather than a poll.
     let mut cursor = 0;

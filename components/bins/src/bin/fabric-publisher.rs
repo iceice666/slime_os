@@ -71,6 +71,20 @@ fn main() {
         &telemetry_stream::INTERFACE_IDENTITY,
         CONTRACT_KIND_STREAM,
     );
+    if slime_components::fabric_boot::active() {
+        // C8.10 launches every plane at once and asserts the graph reaches
+        // healthy blocked idle *with no traffic*, so this publisher takes its
+        // declared role — data endpoint plus credit channel — and parks rather
+        // than publishing. The sample path stays C8.4's to prove.
+        slime_components::fabric_boot::provision_and_park(
+            b"fabric-publisher",
+            ROUTE_NAME,
+            &route,
+            telemetry_stream::TYPE_TAG,
+            DIRECTION_PUBLISH,
+            2,
+        );
+    }
 
     // The request names the route and type it wants. None of it is authority:
     // the fabric answers from the generation graph keyed by this control

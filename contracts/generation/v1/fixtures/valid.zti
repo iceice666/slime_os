@@ -51,6 +51,8 @@
     { id = "sha256:fabric-op-server"; kind = "component"; size = 65536; };
     { id = "sha256:fabric-op-time"; kind = "component"; size = 32768; };
     { id = "sha256:fabric-intruder"; kind = "component"; size = 65536; };
+    { id = "sha256:fabric-call-worker"; kind = "component"; size = 65536; };
+    { id = "sha256:fabric-op-worker"; kind = "component"; size = 65536; };
     { id = "sha256:fabric-probe"; kind = "component"; size = 65536; };
     { id = "sha256:fabric-proxy"; kind = "component"; size = 65536; };
     { id = "sha256:fabric-observer"; kind = "component"; size = 65536; };
@@ -69,6 +71,7 @@
     { holder = "fabric-call-client"; bytePages = 2; bufferCount = 1; mappingCount = 2; loanCount = 1; };
     { holder = "fabric-call-server"; bytePages = 2; bufferCount = 1; mappingCount = 2; loanCount = 1; };
     { holder = "fabric-subscriber-b"; bytePages = 4; bufferCount = 0; mappingCount = 4; loanCount = 0; };
+    { holder = "fabric-call-worker"; bytePages = 4; bufferCount = 2; mappingCount = 4; loanCount = 2; };
   ];
 
   fabricGraph = {
@@ -548,6 +551,24 @@
       object = "sha256:fabric-service";
       role = "service";
       dependencies = ["init";];
+      spawnBudget = 2;
+      stackBytes = 49152;
+      commandProfile = [];
+    };
+    {
+      name = "fabric-call-worker";
+      object = "sha256:fabric-call-worker";
+      role = "service";
+      dependencies = ["fabric-service";];
+      spawnBudget = 0;
+      stackBytes = 49152;
+      commandProfile = [];
+    };
+    {
+      name = "fabric-op-worker";
+      object = "sha256:fabric-op-worker";
+      role = "service";
+      dependencies = ["fabric-service";];
       spawnBudget = 0;
       stackBytes = 49152;
       commandProfile = [];
@@ -1040,6 +1061,41 @@
       source = "fabric-op-time";
       target = "fabric-service";
       rights = ["send"; "recv";];
+      transferable = false;
+    };
+    {
+      name = "fabric-call-worker-executable";
+      source = "init";
+      target = "fabric-service";
+      rights = ["exec"; "spawn";];
+      transferable = false;
+    };
+    {
+      name = "fabric-op-worker-executable";
+      source = "init";
+      target = "fabric-service";
+      rights = ["exec"; "spawn";];
+      transferable = false;
+    };
+    {
+      name = "fabric-call-worker-endpoint-factory";
+      source = "init";
+      target = "fabric-call-worker";
+      rights = ["endpointCreate";];
+      transferable = false;
+    };
+    {
+      name = "fabric-op-worker-endpoint-factory";
+      source = "init";
+      target = "fabric-op-worker";
+      rights = ["endpointCreate";];
+      transferable = false;
+    };
+    {
+      name = "fabric-call-worker-shared-buffer-factory";
+      source = "init";
+      target = "fabric-call-worker";
+      rights = ["bufferCreate";];
       transferable = false;
     };
     {

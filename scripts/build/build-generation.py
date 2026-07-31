@@ -203,6 +203,7 @@ MAX_STACK_BYTES = 1024 * 1024
 DEFAULT_STACK_BYTES = 16384
 DEFAULT_FABRIC_PROFILE = "default"
 VISIBILITY_FABRIC_PROFILE = "visibility"
+UNIFIED_FABRIC_PROFILE = "unified"
 FABRIC_FIRST_CONTROL_SLOT = 2
 FABRIC_COPY_PAGES = 2
 FABRIC_FRAME_CAPACITY = 32
@@ -212,6 +213,31 @@ FABRIC_STREAM_CONTROL_GRANTS = (
     "fabric-intruder-control",
     "fabric-publisher-b-control",
     "fabric-subscriber-b-control",
+)
+# C8.10's full-graph boot stream plane, declared in full rather than derived
+# from the tuple above.
+#
+# Two things change together here. The unauthorized probe, the declared
+# interposition proxy, and the filtered-introspection client join as three
+# distinct component identities; `fabric-intruder` — which carried all three
+# roles at once behind an env switch — drops out, so the new boot path is free
+# of it without disturbing `fabric_visibility_check`, whose markers and source
+# assertions still name it.
+#
+# Declared *per profile* because the stream plane's supervision slots are
+# numbered `FIRST_CONTROL_SLOT + len(controls) + index`. Lengthening one shared
+# list would renumber the subscriber supervision handles that the C8.3-C8.8
+# gates' `launch_fabric_graph` grants positionally, and each of those gates
+# would then read a control endpoint where it expects a supervision handle.
+# Every earlier profile keeps its layout byte-for-byte.
+FABRIC_BOOT_STREAM_CONTROL_GRANTS = (
+    "fabric-publisher-control",
+    "fabric-subscriber-control",
+    "fabric-publisher-b-control",
+    "fabric-subscriber-b-control",
+    "fabric-observer-control",
+    "fabric-probe-control",
+    "fabric-proxy-control",
 )
 FABRIC_CALL_CONTROL_GRANTS = (
     "fabric-call-client-control",
@@ -537,6 +563,7 @@ def validate_fabric_qos(member: dict, limits: dict, label: str) -> None:
 def selected_profile_name() -> str:
     explicit = os.environ.get("SLIME_FABRIC_PROFILE") or None
     visibility = os.environ.get("SLIME_FABRIC_VISIBILITY_CHECK") == "1"
+    boot = os.environ.get("SLIME_FABRIC_BOOT_CHECK") == "1"
     legacy_modes = any(
         os.environ.get(name) == "1"
         for name in (
@@ -545,7 +572,17 @@ def selected_profile_name() -> str:
             "SLIME_FABRIC_OPERATION_CHECK",
         )
     )
-    legacy = VISIBILITY_FABRIC_PROFILE if visibility else DEFAULT_FABRIC_PROFILE if legacy_modes else None
+    if visibility and boot:
+        fail("fabric graph: ambiguous selected profile")
+    legacy = (
+        UNIFIED_FABRIC_PROFILE
+        if boot
+        else VISIBILITY_FABRIC_PROFILE
+        if visibility
+        else DEFAULT_FABRIC_PROFILE
+        if legacy_modes
+        else None
+    )
     if explicit is not None and legacy is not None and explicit != legacy:
         fail("fabric graph: ambiguous selected profile")
     return explicit or legacy or DEFAULT_FABRIC_PROFILE
@@ -652,7 +689,14 @@ def resolve_fabric_profile(manifest: dict, interfaces: list, profile_name: str) 
         )
         for route in graph["routes"]
     )
-    stream_controls = _control_sources(manifest, FABRIC_STREAM_CONTROL_GRANTS)
+    # The full-graph boot profile declares its own stream plane; every other
+    # profile keeps the exact control layout its gate already grants.
+    stream_controls = _control_sources(
+        manifest,
+        FABRIC_BOOT_STREAM_CONTROL_GRANTS
+        if profile_name == UNIFIED_FABRIC_PROFILE
+        else FABRIC_STREAM_CONTROL_GRANTS,
+    )
     call_controls = _control_sources(manifest, FABRIC_CALL_CONTROL_GRANTS)
     operation_controls = _control_sources(manifest, FABRIC_OPERATION_CONTROL_GRANTS)
     replacement_controls = _control_sources(manifest, FABRIC_OPERATION_REPLACEMENT_GRANTS)

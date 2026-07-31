@@ -9,6 +9,11 @@ use slime_rt::{ERR_PEER_DEAD, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG, WaitSou
 slime_rt::entry!(main);
 
 fn main() {
+    if slime_components::fabric_boot::active() {
+        // As `fabric-op-time`: no phase channel in the boot layout, and a graph
+        // at rest must not have its clock advanced underneath it.
+        slime_components::fabric_boot::park_only(b"fabric-call-time");
+    }
     for phase in 1..=3 {
         wait_phase(phase);
         let now_ns = match phase {

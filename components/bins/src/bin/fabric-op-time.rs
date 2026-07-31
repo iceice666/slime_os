@@ -23,6 +23,14 @@ const CONTROL_SLOT: u32 = 0;
 const PHASE_SLOT: u32 = 1;
 
 fn main() {
+    if slime_components::fabric_boot::active() {
+        // The full-graph boot carries no phase channel: phases exist to order a
+        // scenario's transcript, and the boot gate runs no scenario. The clock
+        // still launches as its own declared identity holding only its control
+        // endpoint, and parks — advancing time here would drive expiry in a
+        // graph that is supposed to be at rest.
+        slime_components::fabric_boot::park_only(b"fabric-op-time");
+    }
     loop {
         match try_wait_phase(3) {
             Some(()) => {

@@ -27,6 +27,7 @@ const BASE: u64 = 0x7100_0000;
 const CLIENT_PHASE_SLOT: u32 = 1;
 
 pub fn run_client_b() {
+    boot_park(DIRECTION_CLIENT, b"fabric-call-client-b");
     let route = request_role(DIRECTION_CLIENT);
     let session = client_session(1);
     send_call(
@@ -108,6 +109,7 @@ pub fn run_client_b() {
 }
 
 pub fn run_server() {
+    boot_park(DIRECTION_SERVER, b"fabric-call-server");
     let route = request_role(DIRECTION_SERVER);
     let mut executed_non_idempotent = false;
     loop {
@@ -240,6 +242,26 @@ fn handle_inline(
             0,
         )),
     }
+}
+
+/// C8.10 full-graph boot arm: take the declared call role, then park forever.
+///
+/// A no-op outside the boot generation, so a caller writes `boot_park(..)` as
+/// the first line of its scenario. The boot gate asserts a provisioned graph at
+/// rest with no traffic; the call scenario's own correlation, duplicate,
+/// timeout, and peer-death arms stay `just fabric_call_check`'s to prove.
+pub fn boot_park(direction: u32, name: &'static [u8]) {
+    if !slime_components::fabric_boot::active() {
+        return;
+    }
+    // `request_role` already verifies the descriptor names this exact
+    // (route, direction) edge and carries no more rights than declared, so the
+    // marker below reports a checked role rather than merely a received one.
+    let _route = request_role(direction);
+    slime_rt::debug_write(b"[");
+    slime_rt::debug_write(name);
+    slime_rt::debug_write(b"] boot role provisioned\n");
+    slime_components::fabric_boot::park(name)
 }
 
 pub fn request_role(direction: u32) -> u32 {

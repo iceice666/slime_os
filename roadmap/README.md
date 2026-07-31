@@ -10,7 +10,7 @@ A milestone is complete only when its exit condition is observed. Compiled code,
 | --- | --- | --- |
 | [Backlog](00-backlog.md) | No open items; B1–B9 resolved | Backlog gate is clear — C10 may open |
 | [Foundations](01-foundations.md) | M1–M4 and M6 complete; M5 mechanisms complete | Record M5.7 removable-media Framework evidence without internal-NVMe modification |
-| [Core runtime](02-core-runtime.md) | C7 and C8.1–C8.8 complete — the live userspace fabric provides authenticated bounded streams, reliable/retained/timed QoS, calls, native operations, filtered introspection, and declared interposition. The former aggregate C8.9 is decomposed into C8.9–C8.15; C10 is planned, not started | Begin C8.9 typed full-profile and resource-bound closure; C10's B9 prerequisite is clear |
+| [Core runtime](02-core-runtime.md) | C7 and C8.1–C8.10 complete — the live userspace fabric provides authenticated bounded streams, reliable/retained/timed QoS, calls, native operations, filtered introspection, declared interposition, a typed full profile, and one collision-free full-graph boot across three bounded route workers. C10 is planned, not started | Begin C8.11 unified simulated time and deterministic semantic traces; C10's B9 prerequisite is clear |
 | [Architecture portability](07-architecture-portability.md) | Not started | Clear the active backlog, then land P0 target/artifact contracts before P1 x86 boundary extraction |
 | [ROS 2 compatibility](03-ros2-compatibility.md) | Not started | Admit R1 only after C8 and the H6 network-service contract exist |
 | [Platform hardware](04-platform-hardware.md) | H1 implementation complete; physical evidence pending | Record H1 topology/input/storage evidence; implement H2 driver authority ABI |
@@ -21,7 +21,7 @@ A milestone is complete only when its exit condition is observed. Compiled code,
 The active work lanes are deliberately parallel:
 
 - **Evidence lane:** close M5.7 and H1 with an observed removable-media Framework run.
-- **Core lane:** the backlog is clear; C8.1–C8.8 have landed, and C8.9 typed full-profile/resource-bound closure is the next slice in the C8.9–C8.15 aggregate sequence. C10 private component memory is planned and independent of C8/C9; its B9 teardown prerequisite is resolved, so it may open.
+- **Core lane:** the backlog is clear; C8.1–C8.10 have landed, and C8.11 unified simulated time and deterministic semantic traces is the next slice in the C8.9–C8.15 aggregate sequence. C10 private component memory is planned and independent of C8/C9; its B9 teardown prerequisite is resolved, so it may open.
 - **Portability lane:** after the backlog gate, land P0/P1 before H2 or C9 establishes more low-level contracts; AArch64 P2 follows without blocking C8.
 - **Platform lane:** record H1 physical evidence, then implement H2 only after P1; H4 still gates DMA-capable Framework promotion.
 - **Development lane:** D1 source authoring can begin from completed M6; D2 waits for P0's producer-neutral artifact contract, and hermetic build/live activation consume C9.

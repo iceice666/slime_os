@@ -93,6 +93,20 @@ fn main() {
         &diagnostics_stream::INTERFACE_IDENTITY,
         CONTRACT_KIND_STREAM,
     );
+    if slime_components::fabric_boot::active() {
+        // Subscribed to both stream routes: data plus ack for telemetry, then
+        // the same for diagnostics.
+        slime_components::fabric_boot::provision_multi_and_park(
+            b"fabric-subscriber-b",
+            TELEMETRY_ROUTE,
+            telemetry_stream::TYPE_TAG,
+            DIRECTION_SUBSCRIBE,
+            &[
+                (telemetry_route, DIRECTION_SUBSCRIBE, 2),
+                (diagnostics_route, DIRECTION_SUBSCRIBE, 2),
+            ],
+        );
+    }
 
     if request_roles() != ERR_SUCCESS {
         fail(b"request");

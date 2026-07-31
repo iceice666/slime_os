@@ -799,18 +799,20 @@ kernel, and userspace cannot select or interpret different graph authority.
 
 ### C8.10 — Collision-free full-graph bootstrap and bounded route workers
 
-**Status:** In progress. The declarative half is complete and gated by `just
+**Status:** Complete. The declarative half is gated by `just
 data_fabric_profile_check`: plane control slots are summed into one disjoint
 layout rather than overlaid, the bounded route-worker partition is a declared
 generation fact validated for coverage and overlap, and each worker's peak
 `SYS_WAIT` set is checked against the kernel bound. The bootstrap replacement is
-open. `launch_init` measures 61 of `MAX_CAPS = 64`, so the split probe, proxy,
-and introspection roles cannot be added to it; a fabric-only layout is projected
-at 53/64 — a projection to re-count against real code, not an observed layout —
-and is the intended target, reached by an early return in `launch_init` mirroring
-`launch_recovery_init`. That work also owns renumbering the `init.rs`
-slot constants, the three worker tasks, retiring the superseded
-`fabric-intruder`, and `just data_fabric_boot_check`.
+gated by `just data_fabric_boot_check`: one generation launches every C8 role at
+once through a fabric-only layout measuring an observed 53 of `MAX_CAPS = 64`,
+reached by an early return in `launch_init` mirroring `launch_recovery_init`, and
+all 20 roles reach healthy blocked idle. The three declared workers are live —
+`fabric-service` carries the stream routes and spawns `fabric-call-worker` and
+`fabric-op-worker` — and the probe, proxy, and introspection roles are three
+distinct component identities. The superseded `fabric-intruder` is retired from
+this boot profile but still serves `just fabric_visibility_check`; deleting it is
+deferred to that gate rather than taken here.
 
 **Depends on:** C8.9.
 
