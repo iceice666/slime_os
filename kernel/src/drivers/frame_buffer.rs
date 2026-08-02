@@ -199,13 +199,26 @@ impl fmt::Write for FrameBufferWriter {
 pub static WRITER: Mutex<Option<FrameBufferWriter>> = Mutex::new(None);
 
 /// Initialize the framebuffer console from the boot handoff.
-pub fn init_framebuffer() {
+///
+/// A handoff may describe no framebuffer — a headless machine is a legitimate
+/// configuration, and stage-0 encodes it as a zero address and zero geometry.
+/// In that case the console stays uninitialized and `println!` is a no-op;
+/// serial remains the diagnostic channel. Returns whether a console was
+/// installed.
+pub fn init_framebuffer() -> bool {
     let fb = crate::boot::framebuffer();
+    let len = (fb.pitch as usize).saturating_mul(fb.height as usize);
+    if fb.address == 0 || len == 0 {
+        return false;
+    }
     let info = FrameBufferInfo::from_boot(fb);
-    let len = (fb.pitch as usize) * (fb.height as usize);
+    // SAFETY: the handoff describes a firmware framebuffer at this address with
+    // this pitch and height, mapped through the direct map; the zero cases that
+    // would make it invalid are rejected above.
     let framebuffer = unsafe { core::slice::from_raw_parts_mut(fb.address as *mut u8, len) };
     let writer = FrameBufferWriter::new(framebuffer, info);
     *WRITER.lock() = Some(writer);
+    true
 }
 
 /// Write userspace console bytes to the visible framebuffer without allocating.

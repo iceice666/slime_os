@@ -11,7 +11,21 @@ rustflags = [
 runner = "scripts/run-kernel.sh"
 
 [target.aarch64-unknown-none]
+# Built with `-Z build-std=core,alloc,compiler_builtins`, which the AArch64
+# gates pass explicitly rather than setting `[unstable]` here: that key has no
+# per-target form, and applying it to the x86 build makes rustc load two
+# distinct `core` crates and fail with a duplicate-lang-item error.
+#
+# `aarch64-unknown-none` defaults to `relocation-model = "static"`, unlike
+# `x86_64-unknown-none`, which is position-independent by default. Stage-0
+# relocates the kernel to a load address it chooses, so the image must be a PIE
+# carrying R_AARCH64_RELATIVE relocations — P0's profile declares the exact
+# count it expects. Without these flags the linker emits an EXEC image and the
+# generation builder rejects it.
 rustflags = [
+    "-C", "relocation-model=pie",
+    "-C", "link-arg=-pie",
+    "-C", "link-arg=--no-dynamic-linker",
     "-C", "force-frame-pointers",
     "-C", "link-arg=--gc-sections",
     "-C", "codegen-units=1",

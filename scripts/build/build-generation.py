@@ -2072,6 +2072,17 @@ def main() -> None:
     kernel = Path(sys.argv[1]).resolve()
     output = Path(sys.argv[2]).resolve()
     manifest = load_manifest()
+    # The manifest names the profile a generation is built for.
+    # `SLIME_TARGET_PROFILE` retargets it so one component graph can produce a
+    # generation for another admitted profile without a second source of truth.
+    # The override rewrites the manifest's own field rather than bypassing it,
+    # so every downstream target check — including the manifest/profile
+    # agreement assertion — still runs against one value. The name is resolved
+    # against the closed profile table, so an unknown or misspelled target fails
+    # here rather than producing an unqualified artifact.
+    requested_target = os.environ.get("SLIME_TARGET_PROFILE")
+    if requested_target:
+        manifest["target"] = requested_target
     target_profile = resolve_target_profile(manifest.get("target"))
     if manifest["formatVersion"] != 1:
         fail("unsupported source formatVersion")

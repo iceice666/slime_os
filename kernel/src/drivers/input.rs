@@ -6,6 +6,13 @@
 //! today by [`crate::platform::i8042_keyboard`], which feeds bytes in through
 //! [`feed_scancode`]. Console focus and key-binding policy stay in userspace
 //! once the input service exists.
+//!
+//! The scan-code decoding half has no caller on a target without a keyboard
+//! transport, which is every non-x86 profile until P2.5 discovers one from the
+//! device tree. It is kept compiled there — the queue, waiter, and scripted
+//! input are what `SYS_WAIT` and `SYS_INPUT_READ` use on every architecture,
+//! and a decoder that only exists on one target would drift from them.
+#![cfg_attr(not(target_arch = "x86_64"), allow(dead_code))]
 
 use core::sync::atomic::{AtomicBool, Ordering};
 

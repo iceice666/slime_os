@@ -68,10 +68,27 @@ pub const PTE_ADDR_MASK: u64 = 0x000f_ffff_ffff_f000;
 /// permissions are decided by the leaf, so intermediates stay open.
 pub const PTE_INTERMEDIATE: u64 = PTE_PRESENT | PTE_WRITABLE | PTE_USER;
 
+/// Bits every valid leaf must carry, whatever permissions the caller asked for.
+///
+/// On x86 that is just the present bit. AArch64 additionally needs a page-type
+/// bit and an access flag, so neutral code must not assume its intent flags are
+/// a complete descriptor — it ORs this in for every leaf it installs.
+pub const PTE_LEAF: u64 = PTE_PRESENT;
+
 /// The index selecting an entry at `level` (1..=[`PAGE_TABLE_LEVELS`]).
 pub fn table_index(virt: VirtAddr, level: u8) -> usize {
     let shift = LEAF_SHIFT + LEVEL_INDEX_BITS * (level as u64 - 1);
     ((virt.as_u64() >> shift) & 0x1ff) as usize
+}
+
+/// The translation root covering kernel-half addresses.
+///
+/// x86 has one root for the whole address space, so this is the active root.
+/// AArch64 splits the halves across two registers, which is why the boundary
+/// exposes this separately from [`active_root`] rather than letting neutral
+/// code assume one root serves every address.
+pub fn kernel_root() -> PhysAddr {
+    active_root()
 }
 
 /// Physical frame the root register currently points at.

@@ -2,7 +2,7 @@
 
 **Purpose:** Preserve one Slime capability/component/generation architecture across target profiles while making AArch64 and Raspberry Pi 5 the near-term product path.
 
-**Status:** In progress — P0 and P1 complete.
+**Status:** In progress — P0, P1, and P2.1 complete.
 
 **Decision:** AArch64/Raspberry Pi 5 is now the near-term physical target because the current product goal is the RPi5 ROS 2 two-node demo. The existing x86-64 QEMU path remains the regression oracle for completed work until each semantic corpus is replayed on AArch64, but x86-64/Framework is no longer the product-leading roadmap. RV64 is deferred.
 
@@ -126,9 +126,35 @@ it makes no claim that AArch64 boots, which is P2.
 
 ## P2: AArch64 QEMU vertical slice
 
-**Status:** Not started.
+**Status:** In progress — decomposed into P2.1–P2.6.
 
 **Depends on:** P1 (complete), C7, and backlog item B2.
+
+P2 as originally written is one milestone covering a complete second
+architecture: firmware handoff, translation tables, exception vectors, syscall
+entry, context switching, an interrupt controller, a timer, device transports,
+target-specific component images, and a replay of the B2/C7/C8 acceptance
+corpus. That is too broad for one reviewable slice, and its exit condition
+cannot be partially observed — either every part boots or none of it is
+evidence. It is decomposed below on the same principle that split C7 into
+C7.1–C7.7 and C8.9 into C8.9–C8.15: each sub-slice introduces one primary
+mechanism and owns an independently observable QEMU gate.
+
+The parent's deliverables, required checks, and exit condition below remain
+authoritative for the aggregate. P2 closes only when P2.1–P2.6 have each closed
+under their own gate and the aggregate corpus runs; no sub-slice may claim the
+parent's exit condition.
+
+### Sub-slice sequence
+
+| Slice | Primary mechanism | Gate |
+| --- | --- | --- |
+| P2.1 | Firmware handoff, EL1 entry, translation tables, PL011, QEMU exit | `just aarch64_boot_check` (complete) |
+| P2.2 | Exception vectors, fault decoding, `svc` syscall entry, saved user context | `just aarch64_trap_check` |
+| P2.3 | EL0 component execution, address-space switching, isolation, fault attribution | `just aarch64_isolation_check` |
+| P2.4 | GICv3 delivery, generic timer, preemption, all B2 wake classes | `just aarch64_wake_check` |
+| P2.5 | virtio-mmio transport, generation selection, rollback, wrong-target rejection | `just aarch64_generation_check` |
+| P2.6 | C7/C8 bounded data path and the aggregate semantic corpus | `just aarch64_qemu_check` |
 
 ### Deliverables
 
@@ -157,6 +183,206 @@ just aarch64_qemu_check
 ### Exit condition
 
 The AArch64 QEMU profile boots a verified rollbackable generation, runs isolated EL0 components, exercises IPC, faults, timer preemption, all B2 wake classes, and the bounded C7/C8 data path with the same architecture-neutral authority and lifecycle semantics as x86-64.
+
+### P2.1 — Firmware handoff, EL1 entry, and translation tables
+
+**Status:** Complete.
+
+**Depends on:** P1.
+
+The first slice that executes AArch64 instructions. Everything before it is
+contract and boundary work; this is where the profile either boots or does not.
+
+#### Deliverables
+
+- pin the exact `qemu-system-aarch64 -machine virt` machine, CPU, memory, and UEFI firmware for the `aarch64-qemu-virt` profile, recorded where the launcher reads it rather than passed ad hoc;
+- build the stage-0 loader for `aarch64-unknown-uefi`, sharing the architecture-neutral generation selection, BootState, release authorization, and rollback flow with x86 and supplying only AArch64 entry mechanism behind `stage0::arch`;
+- construct bounded 4 KiB stage-1 translation tables covering the loaded kernel image, a direct map of physical memory, and a guarded boot stack, and validate the descriptor encodings against a running EL1 rather than inheriting them from the reference manual unchecked;
+- enter the kernel at EL1 with `MMU`, caches, and the SIMD baseline configured, and reject an unsupported granule, address-size, or firmware entry state with a structured `BootError` rather than a hang;
+- implement PL011 diagnostics and the profile's QEMU exit path so a boot produces observable serial output and a deterministic exit code;
+- fill the AArch64 boot context from the same `KernelHandoffV1` bytes x86 consumes, with no second handoff format.
+
+#### Required checks
+
+- a verified generation built for `aarch64-qemu-virt` boots under the pinned QEMU machine and firmware, and emits its bring-up markers over PL011;
+- the kernel runs at EL1 with the MMU enabled, reaches the heap through the direct map, and reports its translation configuration;
+- a malformed or unsupported mapping, granule, or entry state fails with a structured error and a distinct marker instead of a silent reset or hang;
+- an x86 generation, and a generation naming another AArch64 profile, are both rejected before executable bytes are mapped;
+- the run terminates through the profile's debug-exit path with a deterministic exit code rather than a timeout;
+- the x86 regression corpus is unchanged by the slice.
+
+#### Verification target
+
+```sh
+just aarch64_boot_check
+```
+
+#### Exit condition (observed)
+
+Observed 2026-08-03; see [`devlog/2026-08-03-p2-1-aarch64-boot/`](../devlog/2026-08-03-p2-1-aarch64-boot/index.md).
+
+`qemu-system-aarch64 -machine virt` boots a verified `aarch64-qemu-virt`
+generation to EL1 under AArch64 UEFI firmware with the MMU and both caches
+enabled, brings up physical and virtual memory over the direct map, allocates
+from a working heap, reports the generation identity and BootState stage-0
+selected, and ends through the profile's semihosting exit rather than a timeout
+— all asserted as ordered PL011 markers by `just aarch64_boot_check`. The x86
+corpus is unchanged at 191 assertions.
+
+No component runs and no syscall is served; those are P2.3 and P2.2. This is the
+first non-x86 execution in the project, and it is QEMU only — it establishes
+nothing about Raspberry Pi 5 hardware.
+
+### P2.2 — Exception vectors, fault decoding, and `svc` entry
+
+**Status:** Not started.
+
+**Depends on:** P2.1.
+
+#### Deliverables
+
+- install the EL1 exception vector table and save/restore the `UserFrame` P1 defined, preserving `x0`–`x30`, `SP_EL0`, `ELR_EL1`, and `SPSR_EL1` across entry;
+- decode synchronous exception classes from `ESR_EL1` into the existing architecture-neutral `UserFaultReason` vocabulary without adding an AArch64-specific fault taxonomy;
+- implement `svc #0` syscall entry against the register mapping already documented in `docs/syscall-abi.md`, dispatching into the shared syscall body;
+- implement `DAIF` interrupt masking and the idle/park path behind the `arch::cpu` signatures P1 fixed.
+
+#### Required checks
+
+- a synchronous fault taken at EL1 is decoded, attributed, and reported rather than escalating silently;
+- every documented syscall argument and return register carries its value across `svc` and `eret` unchanged;
+- the frame saved on entry is the frame restored on return, including for a handler that mutates it;
+- syscall numbers, errors, bounds, and rights checks match x86 for the same call, exercised through the shared syscall body rather than an architecture-specific stub.
+
+#### Verification target
+
+```sh
+just aarch64_trap_check
+```
+
+#### Exit condition
+
+An AArch64 exception is decoded into the shared fault vocabulary and an `svc`
+syscall completes through the architecture-neutral syscall body with the
+documented register mapping observed, not assumed.
+
+### P2.3 — EL0 execution, address spaces, and isolation
+
+**Status:** Not started.
+
+**Depends on:** P2.2.
+
+#### Deliverables
+
+- move the user/kernel top-level table split behind `arch::paging` before the first EL0 task exists: `KERNEL_HALF_START` in `memory/vmm.rs` describes x86's single-root layout, and AArch64's two-root split makes `free_user_half` leak the upper half of every user root;
+- build target-qualified AArch64 component images from AArch64 ELF intermediates through the existing profile-parameterized builders;
+- execute components at EL0 with user/kernel translation separation, switch address spaces on schedule, and reclaim every frame on termination as x86 does;
+- attribute an invalid instruction, data abort, permission fault, and malformed user range to the responsible component and terminate it without disturbing another component or the kernel.
+
+#### Required checks
+
+- stage-0 launches at least two isolated EL0 components that exchange bounded IPC under the same capability semantics as x86;
+- each fault class terminates the responsible component with the same structured result x86 produces;
+- a component cannot read or write another's mapped pages, and address-space teardown conserves frames.
+
+#### Verification target
+
+```sh
+just aarch64_isolation_check
+```
+
+#### Exit condition
+
+Two isolated EL0 components run under one AArch64 kernel, exchange bounded IPC
+through unchanged capability semantics, and every fault class is attributed and
+reclaimed as on x86.
+
+### P2.4 — GICv3, generic timer, and the B2 wake classes
+
+**Status:** Not started.
+
+**Depends on:** P2.3 and backlog item B2.
+
+#### Deliverables
+
+- implement GICv3 distributor/redistributor initialization and interrupt delivery for the pinned machine;
+- implement the ARM generic timer as the periodic tick behind the boundary's timer slot, replacing the retained `apic` name with an architecture-neutral one on both architectures;
+- drive timer preemption, endpoint wake, scripted-input wake, and supervision wake through the shared scheduler rather than an AArch64 alternative.
+
+#### Required checks
+
+- timer preemption advances the monotonic clock and rotates the ready queue;
+- every B2 wake class drains and refills the ready queue with no lost wakeup and no busy polling;
+- the idle path parks without a lost-wake window, as the x86 `sti; hlt` pairing does.
+
+#### Verification target
+
+```sh
+just aarch64_wake_check
+```
+
+#### Exit condition
+
+The generic timer preempts and all four B2 wake classes drain and refill the
+ready queue on AArch64 under the shared scheduler.
+
+### P2.5 — virtio-mmio, generation selection, and rollback
+
+**Status:** Not started.
+
+**Depends on:** P2.4.
+
+#### Deliverables
+
+- implement the device-tree-discovered virtio-mmio block transport behind the neutral `device_discovery` and `BlockDevice` surfaces P1 established, replacing the empty non-x86 device list;
+- run AArch64 generation staging, activation, and rollback through the same BootState, release, and recovery flow as x86.
+
+#### Required checks
+
+- a failing pending AArch64 generation returns to a verified AArch64 known-good generation and durably drains its attempt window;
+- a signed x86 generation is rejected as the wrong target rather than attempted;
+- block reads and writes reach a deterministic virtio-mmio device with the same capability gates and error model as the PCI transport.
+
+#### Verification target
+
+```sh
+just aarch64_generation_check
+```
+
+#### Exit condition
+
+An AArch64 generation is selected, activated, and rolled back through the shared
+flow over a device-tree-discovered virtio-mmio transport, with wrong-target
+artifacts refused before execution.
+
+### P2.6 — C7/C8 data path and the aggregate corpus
+
+**Status:** Not started.
+
+**Depends on:** P2.5 and C7.
+
+#### Deliverables
+
+- run the C7 shared-sample plane and the C8 bounded data path required by the RPi5 demo on AArch64, unmodified;
+- produce deterministic normalized traces from fixed inputs, comparable with x86 at the semantic event level.
+
+#### Required checks
+
+- two components exchange and return a payload larger than the control-message bound, with quota exhaustion and peer death reclaiming the same resources as on x86;
+- fixed inputs produce normalized traces that match x86 at the semantic event level, with raw register frames and physical addresses explicitly excluded from the comparison;
+- the aggregate P2 corpus passes and the x86 corpus is unchanged.
+
+#### Verification target
+
+```sh
+just aarch64_qemu_check
+```
+
+#### Exit condition
+
+The parent P2 exit condition above, observed: the AArch64 QEMU profile boots a
+verified rollbackable generation, runs isolated EL0 components, and exercises
+IPC, faults, preemption, every wake class, and the bounded C7/C8 data path with
+the same architecture-neutral authority and lifecycle semantics as x86-64.
 
 ## P3: RV64 QEMU vertical slice
 

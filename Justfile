@@ -421,6 +421,16 @@ contracts_check: bootstate_model_check
 architecture_contract_check: contracts_check
     python3 scripts/check/check-architecture-contract.py
 
+# P2.1: the first AArch64 boot. Builds a verified aarch64-qemu-virt generation
+# and boots it under the pinned QEMU virt machine and AArch64 UEFI firmware,
+# asserting ordered serial evidence that the kernel reached EL1 with the MMU and
+# caches enabled, came up over the direct map, and saw the generation stage-0
+# verified. Requires AAVMF firmware (exported by `nix develop`) and the
+# aarch64-unknown-uefi/none Rust targets. Closes P2.1 only: no component runs
+# and no syscall is served, so it is not evidence for the P2 parent.
+aarch64_boot_check:
+    python3 scripts/check/check-aarch64-boot.py
+
 # P1: no x86 mechanism outside the architecture/platform boundary. Scans the
 # neutral trees for x86 instructions, registers, ELF/linker constants, and
 # undeclared profile dispatch, then *builds* the neutral kernel library and
@@ -464,8 +474,13 @@ lint:
 lint_fix:
     cd kernel && cargo clippy -p slime_os-kernel --fix --all-features --allow-dirty
 
+# Both stage-0 targets. The AArch64 loader is behind `cfg(target_arch)`, so
+# linting only the x86 target leaves its ~450 lines — including the crate-level
+# no-panic, no-unwrap, no-indexing denials this crate depends on — entirely
+# unchecked.
 lint_stage0:
     cd stage0 && cargo clippy --target x86_64-unknown-uefi -- -D warnings
+    cd stage0 && cargo clippy --target aarch64-unknown-uefi -- -D warnings
 
 lint_boot_contracts:
     cd boot-contracts && cargo clippy --all-features -- -D warnings

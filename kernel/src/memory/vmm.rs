@@ -24,8 +24,8 @@
 use super::pmm::FRAME_ALLOCATOR;
 use super::{PAGE_SIZE, PhysAddr, VirtAddr};
 use crate::arch::paging::{
-    ENTRIES_PER_TABLE, PAGE_TABLE_LEVELS, PTE_ADDR_MASK, PTE_INTERMEDIATE, active_root, flush_tlb,
-    is_block, make_read_only, table_index,
+    ENTRIES_PER_TABLE, PAGE_TABLE_LEVELS, PTE_ADDR_MASK, PTE_INTERMEDIATE, PTE_LEAF, active_root,
+    flush_tlb, is_block, kernel_root, make_read_only, table_index,
 };
 
 pub use crate::arch::paging::{
@@ -36,6 +36,16 @@ pub use crate::arch::paging::{
 /// Index of the first kernel-half entry in the top-level table. Entries below
 /// it are per-address-space user mappings; entries from here up are aliases of
 /// the single shared kernel hierarchy.
+///
+/// This describes a *single-root* layout, where one table spans both halves —
+/// the x86 arrangement. AArch64 splits the halves across two roots, so all 512
+/// entries of a `TTBR0_EL1` table are user and all 512 of a `TTBR1_EL1` table
+/// are kernel, and this split index does not describe either. It is not wrong
+/// today only because AArch64 has no tasks yet: [`copy_kernel_half`] and
+/// [`free_user_half`] are reached from address-space creation and teardown,
+/// which P2.3 introduces. **P2.3 must move this split behind `arch::paging`
+/// before the first EL0 task exists**, or `free_user_half` will leak the upper
+/// half of every user root.
 const KERNEL_HALF_START: usize = ENTRIES_PER_TABLE / 2;
 
 /// Follow an intermediate (PML4/PDPT/PD) entry to the physical frame of its
@@ -182,14 +192,20 @@ pub(crate) unsafe fn map_page_in(
     if pt.entries[i] & PTE_PRESENT != 0 {
         return Err(MapError::AlreadyMapped);
     }
-    pt.entries[i] = (phys.0 & PTE_ADDR_MASK) | flags | PTE_PRESENT;
+    pt.entries[i] = (phys.0 & PTE_ADDR_MASK) | flags | PTE_LEAF;
     flush(virt);
     crate::task::synchronize_kernel_mappings(root);
     Ok(())
 }
 
 /// Remap 4 KiB virtual page `virt` to a new physical frame `phys`, overwriting
-/// any existing leaf mapping. Used only for the single PCI ECAM scratch page,
+/// any existing leaf mapping.
+///
+/// Its only caller today is the PCI ECAM scratch page, which is x86-only, so a
+/// non-x86 build sees it as dead. Kept neutral rather than moved into the
+/// platform: a device-tree MMIO window (P2.5) needs the same remap.
+///
+/// Used only for the single PCI ECAM scratch page,
 /// which is reused across functions during single-threaded boot enumeration.
 ///
 /// # Safety
@@ -199,6 +215,7 @@ pub(crate) unsafe fn map_page_in(
 ///
 /// Must not be called while holding the scheduler lock: successful remaps
 /// propagate the kernel half to all task address spaces under that lock.
+#[cfg_attr(not(target_arch = "x86_64"), allow(dead_code))]
 pub(crate) unsafe fn remap_page_in(
     root: PhysAddr,
     virt: VirtAddr,
@@ -214,7 +231,7 @@ pub(crate) unsafe fn remap_page_in(
     }
     let pt = table;
     let i = table_index(virt, 1);
-    pt.entries[i] = (phys.0 & PTE_ADDR_MASK) | flags | PTE_PRESENT;
+    pt.entries[i] = (phys.0 & PTE_ADDR_MASK) | flags | PTE_LEAF;
     flush(virt);
     crate::task::synchronize_kernel_mappings(root);
     Ok(())
@@ -222,13 +239,35 @@ pub(crate) unsafe fn remap_page_in(
 
 /// Map 4 KiB virtual page `virt` in the active address space.
 ///
+/// Selects the translation root by address: a kernel-half mapping starts from
+/// the kernel root, everything else from the active root. On x86 those are the
+/// same register; on AArch64 they are `TTBR1_EL1` and `TTBR0_EL1`, and using
+/// the wrong one writes a descriptor the CPU will never consult.
+///
 /// # Safety
 ///
 /// Installing a mapping aliases physical memory into the address space; the
 /// caller must ensure `phys` is safe to expose at `virt` with `flags`.
 pub unsafe fn map_page(virt: VirtAddr, phys: PhysAddr, flags: u64) -> Result<(), MapError> {
-    // SAFETY: CR3 names the live PML4, reachable through the HHDM.
-    unsafe { map_page_in(active_pml4(), virt, phys, flags) }
+    let root = root_for(virt);
+    // SAFETY: `root` names the live top-level table covering `virt`.
+    unsafe { map_page_in(root, virt, phys, flags) }
+}
+
+/// Whether `virt` belongs to the kernel half of the address space.
+fn is_kernel_half(virt: VirtAddr) -> bool {
+    // The kernel half is the upper half of the canonical address space, which
+    // both admitted profiles place above this boundary.
+    virt.as_u64() >= 0xffff_0000_0000_0000
+}
+
+/// The translation root covering `virt`.
+pub(crate) fn root_for(virt: VirtAddr) -> PhysAddr {
+    if is_kernel_half(virt) {
+        kernel_root()
+    } else {
+        active_root()
+    }
 }
 
 /// Map 4 KiB user page `virt` to `phys` with `flags` in `root`'s user half.
@@ -262,7 +301,7 @@ pub(crate) unsafe fn map_user_page_in(
     if pt.entries[i] & PTE_PRESENT != 0 {
         return Err(MapError::AlreadyMapped);
     }
-    pt.entries[i] = (phys.0 & PTE_ADDR_MASK) | flags | PTE_PRESENT;
+    pt.entries[i] = (phys.0 & PTE_ADDR_MASK) | flags | PTE_LEAF;
     flush(virt);
     Ok(())
 }
@@ -334,10 +373,14 @@ pub(crate) fn page_flags_in(root: PhysAddr, virt: VirtAddr) -> Option<u64> {
     (leaf & PTE_PRESENT != 0 && leaf & PTE_USER != 0).then_some(leaf)
 }
 
-/// Like [`page_flags_in`] but does not require the `PTE_USER` bit. Used for
-/// kernel-space mappings such as the PCI ECAM scratch page, where intermediate
+/// Like [`page_flags_in`] but does not require the `PTE_USER` bit.
+///
+/// As with [`remap_page_in`], the only caller today is x86-only PCI ECAM.
+///
+/// Used for kernel-space mappings such as the PCI ECAM scratch page, where intermediate
 /// entries are still created with `PTE_USER` (per `next_table`) but the leaf
 /// intentionally omits it.
+#[cfg_attr(not(target_arch = "x86_64"), allow(dead_code))]
 pub(crate) fn leaf_flags_in(root: PhysAddr, virt: VirtAddr) -> Option<u64> {
     // SAFETY: same HHDM-walk discipline as `page_flags_in`.
     let pml4 = unsafe { PageTable::at(root) };
@@ -374,7 +417,7 @@ pub(crate) fn translate_in(root: PhysAddr, virt: VirtAddr) -> Option<PhysAddr> {
 }
 
 pub fn translate(virt: VirtAddr) -> Option<PhysAddr> {
-    translate_in(active_pml4(), virt)
+    translate_in(root_for(virt), virt)
 }
 
 /// Free every user-half frame reachable from `root`: leaf pages first, then the

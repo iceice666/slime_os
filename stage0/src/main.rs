@@ -439,11 +439,44 @@ fn max_physical_address() -> Result<u64, BootError> {
         .ok_or(BootError::AddressOverflow)
 }
 
+/// The handoff encoding for "this machine has no framebuffer": a zero address
+/// and zero geometry.
+///
+/// A headless machine is a legitimate configuration, not a boot failure — the
+/// serial console is the diagnostic channel that must always exist, and the
+/// `aarch64-qemu-virt` profile is booted headless by its own gate. The kernel's
+/// framebuffer console checks for this and stays uninitialized; the direct-map
+/// sizing math already treats a zero-length framebuffer as contributing no
+/// range.
+const ABSENT_FRAMEBUFFER: HandoffFramebuffer = HandoffFramebuffer {
+    address: 0,
+    width: 0,
+    height: 0,
+    pitch: 0,
+    bpp: 0,
+    memory_model: 0,
+    red_mask_size: 0,
+    red_mask_shift: 0,
+    green_mask_size: 0,
+    green_mask_shift: 0,
+    blue_mask_size: 0,
+    blue_mask_shift: 0,
+    reserved: [0; 5],
+};
+
+/// Describe the firmware's framebuffer, or report its absence.
+///
+/// Absence is distinguished from a framebuffer that exists in an unsupported
+/// pixel format: the latter still fails closed with
+/// [`BootError::UnsupportedFramebuffer`], because a present device we cannot
+/// describe correctly must not be handed over as if it were describable.
 fn framebuffer_info() -> Result<HandoffFramebuffer, BootError> {
-    let handle = boot::get_handle_for_protocol::<GraphicsOutput>()
-        .map_err(|_| BootError::MissingFramebuffer)?;
-    let mut gop = boot::open_protocol_exclusive::<GraphicsOutput>(handle)
-        .map_err(|_| BootError::MissingFramebuffer)?;
+    let Ok(handle) = boot::get_handle_for_protocol::<GraphicsOutput>() else {
+        return Ok(ABSENT_FRAMEBUFFER);
+    };
+    let Ok(mut gop) = boot::open_protocol_exclusive::<GraphicsOutput>(handle) else {
+        return Ok(ABSENT_FRAMEBUFFER);
+    };
     let info = gop.current_mode_info();
     let (
         red_mask_size,

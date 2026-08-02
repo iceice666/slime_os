@@ -51,6 +51,12 @@ pub enum BootError {
     UnsupportedFramebuffer,
     AddressOverflow,
     PageTableExhausted,
+    /// The CPU does not support a translation feature the target profile
+    /// requires — page granule, physical address range, or a comparable
+    /// baseline. Distinct from [`Self::PageTableExhausted`], which means the
+    /// tables could not be built, so a failing board reports which of the two
+    /// it hit instead of one ambiguous marker.
+    UnsupportedTranslation,
 }
 
 #[derive(Debug, Clone, Copy)]

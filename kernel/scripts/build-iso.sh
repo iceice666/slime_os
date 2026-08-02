@@ -18,6 +18,20 @@ SIZE_MIB="${3:-64}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 [[ -f "$KERNEL" ]] || { echo "kernel not found: $KERNEL" >&2; exit 1; }
 
+# The target profile selects the stage-0 UEFI target and the removable-media
+# boot filename firmware looks for. UEFI defines one default name per
+# architecture, so an AArch64 image booted as BOOTX64.EFI is simply not found.
+case "${SLIME_TARGET_PROFILE:-x86_64-qemu-virtio}" in
+    aarch64-*)
+        STAGE0_TARGET="aarch64-unknown-uefi"
+        BOOT_EFI_NAME="BOOTAA64.EFI"
+        ;;
+    *)
+        STAGE0_TARGET="x86_64-unknown-uefi"
+        BOOT_EFI_NAME="BOOTX64.EFI"
+        ;;
+esac
+
 if [[ -n "${SLIME_GENERATION_DIR:-}" ]]; then
     GEN_DIR="$SLIME_GENERATION_DIR"
     CLEAN_GEN_DIR=0
@@ -43,8 +57,8 @@ if [[ "${SLIME_BOOT_LOADER:-stage0}" == "limine" ]]; then
     fi
     [[ -f "$LIMINE_DATADIR/BOOTX64.EFI" ]] || { echo "cannot find BOOTX64.EFI" >&2; exit 1; }
 else
-    (cd "$ROOT/stage0" && cargo build -p slime-stage0 --target x86_64-unknown-uefi --release) >/dev/null
-    STAGE0="$ROOT/target/x86_64-unknown-uefi/release/slime-stage0.efi"
+    (cd "$ROOT/stage0" && cargo build -p slime-stage0 --target "$STAGE0_TARGET" --release) >/dev/null
+    STAGE0="$ROOT/target/$STAGE0_TARGET/release/slime-stage0.efi"
     [[ -f "$STAGE0" ]] || { echo "stage-0 EFI binary not found: $STAGE0" >&2; exit 1; }
 fi
 
@@ -58,7 +72,7 @@ if [[ "${SLIME_BOOT_LOADER:-stage0}" == "limine" ]]; then
     MTOOLS_SKIP_CHECK=1 mcopy -i "$OUTPUT" "$KERNEL" ::/boot/slime_os-kernel
     MTOOLS_SKIP_CHECK=1 mcopy -i "$OUTPUT" "$GEN_DIR/generation.bin" ::/boot/generation.bin
 else
-    MTOOLS_SKIP_CHECK=1 mcopy -i "$OUTPUT" "$STAGE0" ::/EFI/BOOT/BOOTX64.EFI
+    MTOOLS_SKIP_CHECK=1 mcopy -i "$OUTPUT" "$STAGE0" "::/EFI/BOOT/$BOOT_EFI_NAME"
     MTOOLS_SKIP_CHECK=1 mcopy -i "$OUTPUT" "${SLIME_BOOTSTORE_OVERRIDE:-$GEN_DIR/boot-store.bin}" ::/boot/boot-store.bin
     if [[ "${SLIME_RECOVERY_IMAGE:-}" == "1" ]]; then
         MTOOLS_SKIP_CHECK=1 mcopy -o -i "$OUTPUT" "$GEN_DIR/recovery-boot-store.bin" ::/boot/boot-store.bin

@@ -82,6 +82,15 @@ ASSEMBLY_RULES = frozenset(
 # to have: module selection and the neutral fallbacks beside it.
 CFG_DISPATCH_ALLOWED = {
     "kernel/src/arch/mod.rs",
+    # Selects the per-architecture platform bring-up module. The bring-up
+    # sequences themselves are separate files, so this is module selection, not
+    # a branch inside shared logic.
+    "kernel/src/main.rs",
+    # The stage-0 handoff decoder is shared; x86 additionally supports a Limine
+    # entry path for the Cargo test harness, which is gated here so a target
+    # without a second bootloader does not carry its backing storage.
+    "kernel/src/arch/boot_context.rs",
+
     # P0's target-profile resolution: binds the compiled ISA to exactly one
     # admitted profile and fails closed on a mismatch. This is the contract
     # that makes profile dispatch safe, not a consumer of it.
@@ -136,6 +145,9 @@ REGISTER_FIELD = re.compile(r"\.\s*(?:" + "|".join(REGISTERS) + r")\b(?!\s*\()")
 # architecture semantic divergence would enter neutral code.
 CFG_KEYWORD = re.compile(r"\bcfg(?:_attr)?\s*\(")
 CFG_TARGET_X86 = re.compile(r'target_arch\s*=\s*"x86_64"')
+# `cfg_attr(<predicate>, allow(dead_code))` and friends: a lint suppression,
+# which selects no code and so is not profile dispatch.
+LINT_SUPPRESSION = re.compile(r"\b(?:allow|expect|warn|deny)\s*\(\s*dead_code\s*\)")
 
 
 def fail(message: str) -> None:
@@ -228,6 +240,12 @@ def scan_cfg_dispatch() -> list[str]:
             for match in CFG_KEYWORD.finditer(text):
                 extent = cfg_extent(text, match.end() - 1)
                 if extent is None or not CFG_TARGET_X86.search(extent):
+                    continue
+                # A dead-code suppression is a lint attribute, not dispatch: it
+                # changes no behavior and compiles the same code on every
+                # target. Neutral code may carry one where a caller does not
+                # exist yet, without the whole file losing dispatch coverage.
+                if LINT_SUPPRESSION.search(extent):
                     continue
                 line = text.count("\n", 0, match.start()) + 1
                 violations.append(
