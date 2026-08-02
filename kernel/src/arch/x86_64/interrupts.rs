@@ -231,7 +231,7 @@ fn timer_handler(_frame: &InterruptStackFrame) {
 
 /// i8042 keyboard interrupt. Drain one scan code, then acknowledge the LAPIC.
 fn keyboard_handler(_frame: &InterruptStackFrame) {
-    crate::input::on_interrupt();
+    crate::platform::i8042_keyboard::on_interrupt();
     crate::time::apic::end_of_interrupt();
 }
 

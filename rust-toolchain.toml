@@ -1,4 +1,7 @@
 [toolchain]
 channel = "nightly-2026-05-26"
-targets = ["x86_64-unknown-none", "x86_64-unknown-uefi"]
+# `aarch64-unknown-none` is required by `just x86_portability_check`, which
+# builds the architecture-neutral kernel and component runtime for it to prove
+# no x86 mechanism leaked outside `arch/`. It does not imply an AArch64 boot.
+targets = ["x86_64-unknown-none", "x86_64-unknown-uefi", "aarch64-unknown-none"]
 components = ["clippy", "rustfmt", "llvm-tools-preview", "rust-src", "miri"]

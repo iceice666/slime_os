@@ -158,3 +158,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-01 | [B11 — Product boot profiles exclude verification scaffolding](2026-08-01-b11-product-boot-profiles/index.md) | Defect | Verified | B11 |
 | 2026-08-02 | [RP0 — Raspberry Pi 5 ROS 2 demo contract](2026-08-02-rp0-demo-contract/index.md) | Change | Verified | RP0 |
 | 2026-08-02 | [P0 — Architecture, target, and executable-artifact contracts](2026-08-02-p0-architecture-contracts/index.md) | Change | Verified | P0 |
+| 2026-08-02 | [P1 — x86-64 architecture boundary extraction](2026-08-02-p1-x86-boundary-extraction/index.md) | Change | Verified | P1 |

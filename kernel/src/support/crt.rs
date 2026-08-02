@@ -1,12 +1,14 @@
 //! Minimal C runtime shims.
 //!
 //! `core` emits calls to `memset`, `memcpy`, `memmove`, and `memcmp` for
-//! aggregate initialization, slice ops, and struct copies. On a hosted
-//! target libc provides them; on `x86_64-unknown-none` nothing does, so we
-//! define them ourselves. `compiler_builtins` supplies the same symbols
-//! when built with `build-std`, but providing them explicitly keeps the
-//! kernel self-contained and avoids any hidden dependency on a particular
-//! `build-std` configuration.
+//! aggregate initialization, slice ops, and struct copies. On a hosted target
+//! libc provides them; on a bare-metal target nothing does, so we define them
+//! ourselves. `compiler_builtins` supplies the same symbols when built with
+//! `build-std`, but providing them explicitly keeps the kernel self-contained
+//! and avoids any hidden dependency on a particular `build-std` configuration.
+//!
+//! These are plain Rust byte loops with no ISA mechanism, so one definition
+//! serves every target.
 //!
 //! Each is `#[inline(never)]` + `volatile` loops so the compiler cannot
 //! turn them back into a self-call.

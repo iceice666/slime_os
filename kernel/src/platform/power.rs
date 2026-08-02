@@ -5,6 +5,7 @@
 //! diagnostics or a trusted service path.
 
 use crate::acpi::GenericAddress;
+use crate::arch::cpu;
 use crate::{println, serial_println};
 
 const SLP_EN: u16 = 1 << 13;
@@ -174,48 +175,4 @@ fn wait_input_buffer_empty() -> bool {
     false
 }
 
-unsafe fn outb(port: u16, value: u8) {
-    unsafe {
-        core::arch::asm!(
-            "out dx, al",
-            in("dx") port,
-            in("al") value,
-            options(nomem, nostack, preserves_flags),
-        );
-    }
-}
-
-unsafe fn outw(port: u16, value: u16) {
-    unsafe {
-        core::arch::asm!(
-            "out dx, ax",
-            in("dx") port,
-            in("ax") value,
-            options(nomem, nostack, preserves_flags),
-        );
-    }
-}
-
-unsafe fn outl(port: u16, value: u32) {
-    unsafe {
-        core::arch::asm!(
-            "out dx, eax",
-            in("dx") port,
-            in("eax") value,
-            options(nomem, nostack, preserves_flags),
-        );
-    }
-}
-
-unsafe fn inb(port: u16) -> u8 {
-    let value: u8;
-    unsafe {
-        core::arch::asm!(
-            "in al, dx",
-            out("al") value,
-            in("dx") port,
-            options(nomem, nostack, preserves_flags),
-        );
-    }
-    value
-}
+use cpu::{inb, outb, outl, outw};

@@ -9,7 +9,9 @@
 //! The LAPIC is memory-mapped; we reach its registers through the HHDM, mapping
 //! the page uncached because it is device memory, not RAM.
 
-use crate::memory::vmm::{self, MapError, PTE_CACHE_DISABLE, PTE_NO_EXECUTE, PTE_WRITABLE};
+use super::cpu;
+use super::paging::{PTE_ADDR_MASK, PTE_DEVICE};
+use crate::memory::vmm::{self, MapError};
 use crate::memory::{PhysAddr, VirtAddr};
 
 // --- Local APIC register offsets (bytes from the LAPIC base) ---
@@ -99,46 +101,17 @@ pub fn end_of_interrupt() {
     lapic_write(REG_EOI, 0);
 }
 
-/// Read a model-specific register.
-fn read_msr(msr: u32) -> u64 {
-    let (hi, lo): (u32, u32);
-    // SAFETY: `rdmsr` is a privileged ring-0 read; `IA32_APIC_BASE` always exists.
-    unsafe {
-        core::arch::asm!("rdmsr", in("ecx") msr, out("edx") hi, out("eax") lo,
-            options(nomem, nostack, preserves_flags));
-    }
-    ((hi as u64) << 32) | lo as u64
-}
-
-/// Write a model-specific register.
-fn write_msr(msr: u32, value: u64) {
-    let hi = (value >> 32) as u32;
-    let lo = value as u32;
-    // SAFETY: `wrmsr` is a privileged ring-0 write to a known-good MSR/value.
-    unsafe {
-        core::arch::asm!("wrmsr", in("ecx") msr, in("edx") hi, in("eax") lo,
-            options(nomem, nostack, preserves_flags));
-    }
-}
-
-/// Byte out to an I/O port.
+/// Byte out to a fixed legacy I/O port.
 fn outb(port: u16, val: u8) {
-    // SAFETY: ring-0 port I/O to a fixed legacy port.
-    unsafe {
-        core::arch::asm!("out dx, al", in("dx") port, in("al") val,
-            options(nomem, nostack, preserves_flags));
-    }
+    // SAFETY: the ports written here are the fixed 8259 PIC and PIT registers
+    // this module owns during bring-up.
+    unsafe { cpu::outb(port, val) };
 }
 
-/// Byte in from an I/O port.
+/// Byte in from a fixed legacy I/O port.
 fn inb(port: u16) -> u8 {
-    let val: u8;
-    // SAFETY: ring-0 port I/O from a fixed legacy port.
-    unsafe {
-        core::arch::asm!("in al, dx", out("al") val, in("dx") port,
-            options(nomem, nostack, preserves_flags));
-    }
-    val
+    // SAFETY: as `outb`; these legacy status reads have no side effect.
+    unsafe { cpu::inb(port) }
 }
 
 /// Mask every line on both 8259 PICs so no legacy IRQ is delivered. We drive
@@ -190,21 +163,17 @@ pub fn init(hz: u64) {
 
     // Locate and enable the LAPIC. The base's low 12 bits are flags; the frame
     // address is bits 12.. .
-    let base_msr = read_msr(IA32_APIC_BASE);
-    let lapic_phys = PhysAddr(base_msr & 0x000f_ffff_ffff_f000);
-    write_msr(IA32_APIC_BASE, base_msr | APIC_BASE_GLOBAL_ENABLE);
+    // SAFETY: `IA32_APIC_BASE` exists on every long-mode CPU, and setting the
+    // global-enable bit is the documented way to bring the LAPIC online.
+    let base_msr = unsafe { cpu::read_msr(IA32_APIC_BASE) };
+    let lapic_phys = PhysAddr(base_msr & PTE_ADDR_MASK);
+    unsafe { cpu::write_msr(IA32_APIC_BASE, base_msr | APIC_BASE_GLOBAL_ENABLE) };
 
     // Map the LAPIC MMIO page uncached at its HHDM address. Limine may already
     // map this region; treat an existing mapping as success.
     let lapic_virt = lapic_phys.to_virt();
     // SAFETY: mapping device MMIO uncached and non-executable at its HHDM VA.
-    let mapped = unsafe {
-        vmm::map_page(
-            lapic_virt,
-            lapic_phys,
-            PTE_WRITABLE | PTE_CACHE_DISABLE | PTE_NO_EXECUTE,
-        )
-    };
+    let mapped = unsafe { vmm::map_page(lapic_virt, lapic_phys, PTE_DEVICE) };
     match mapped {
         Ok(()) | Err(MapError::AlreadyMapped) => {}
         Err(e) => panic!("apic: failed to map LAPIC MMIO: {e:?}"),
@@ -256,13 +225,8 @@ pub fn route_external_irq(
         .ok_or(RouteError::MissingIoApic)?;
     let phys = PhysAddr(descriptor.address as u64);
     let virt = phys.to_virt();
-    let mapped = unsafe {
-        vmm::map_page(
-            virt,
-            phys,
-            PTE_WRITABLE | PTE_CACHE_DISABLE | PTE_NO_EXECUTE,
-        )
-    };
+    // SAFETY: mapping I/O APIC MMIO uncached and non-executable at its HHDM VA.
+    let mapped = unsafe { vmm::map_page(virt, phys, PTE_DEVICE) };
     match mapped {
         Ok(()) | Err(MapError::AlreadyMapped) => {}
         Err(error) => return Err(RouteError::Map(error)),

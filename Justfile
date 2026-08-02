@@ -421,6 +421,17 @@ contracts_check: bootstate_model_check
 architecture_contract_check: contracts_check
     python3 scripts/check/check-architecture-contract.py
 
+# P1: no x86 mechanism outside the architecture/platform boundary. Scans the
+# neutral trees for x86 instructions, registers, ELF/linker constants, and
+# undeclared profile dispatch, then *builds* the neutral kernel library and
+# component runtime for aarch64-unknown-none. The build is the binding half:
+# inline assembly is only validated during codegen, so `cargo check` would
+# accept x86 assembly on an AArch64 target and make this gate vacuous. Requires
+# `rustup target add aarch64-unknown-none`; it proves the boundary holds, not
+# that AArch64 boots (that is P2).
+x86_portability_check:
+    python3 scripts/check/check-x86-portability.py
+
 # Build and validate deterministic generation and redundant boot metadata.
 generation_check:
     cd kernel && cargo build --release -p slime_os-kernel

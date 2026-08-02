@@ -1,53 +1,25 @@
+//! Serial diagnostic console.
+//!
+//! The transport is architecture-specific (`arch::target::uart`); this module
+//! owns only the neutral console policy: one lock, CRLF line endings, and the
+//! `serial_print!`/`serial_println!` formatting entry points.
+
 use core::fmt::{self, Write};
 
 use spin::{LazyLock, Mutex};
 
-const COM1: u16 = 0x3F8;
-const INTERRUPT_ENABLE: u16 = COM1 + 1;
-const FIFO_CONTROL: u16 = COM1 + 2;
-const LINE_CONTROL: u16 = COM1 + 3;
-const MODEM_CONTROL: u16 = COM1 + 4;
-const LINE_STATUS: u16 = COM1 + 5;
-const TRANSMITTER_EMPTY: u8 = 1 << 5;
-const DLAB: u8 = 1 << 7;
-const SERIAL_SPINS: usize = 100_000;
+use crate::arch::target::uart;
 
 static SERIAL1: LazyLock<Mutex<SerialPort>> = LazyLock::new(|| {
-    let mut serial = SerialPort;
-    serial.init();
-    Mutex::new(serial)
+    uart::init();
+    Mutex::new(SerialPort)
 });
 
 struct SerialPort;
 
 impl SerialPort {
-    fn init(&mut self) {
-        // 38400 baud, 8 data bits, no parity, one stop bit. Every wait below is
-        // bounded so a Framework with no legacy COM1 UART cannot hang bring-up.
-        unsafe {
-            outb(INTERRUPT_ENABLE, 0x00);
-            outb(LINE_CONTROL, DLAB);
-            outb(COM1, 0x03);
-            outb(INTERRUPT_ENABLE, 0x00);
-            outb(LINE_CONTROL, 0x03);
-            outb(FIFO_CONTROL, 0xC7);
-            outb(MODEM_CONTROL, 0x0B);
-        }
-    }
-
     fn write_byte(&mut self, byte: u8) {
-        if self.wait_transmitter_empty() {
-            unsafe { outb(COM1, byte) };
-        }
-    }
-
-    fn wait_transmitter_empty(&self) -> bool {
-        for _ in 0..SERIAL_SPINS {
-            if unsafe { inb(LINE_STATUS) } & TRANSMITTER_EMPTY != 0 {
-                return true;
-            }
-        }
-        false
+        uart::write_byte(byte);
     }
 }
 
@@ -61,30 +33,6 @@ impl Write for SerialPort {
         }
         Ok(())
     }
-}
-
-unsafe fn outb(port: u16, val: u8) {
-    unsafe {
-        core::arch::asm!(
-            "out dx, al",
-            in("dx") port,
-            in("al") val,
-            options(nomem, nostack, preserves_flags),
-        );
-    }
-}
-
-unsafe fn inb(port: u16) -> u8 {
-    let value: u8;
-    unsafe {
-        core::arch::asm!(
-            "in al, dx",
-            out("al") value,
-            in("dx") port,
-            options(nomem, nostack, preserves_flags),
-        );
-    }
-    value
 }
 
 #[doc(hidden)]

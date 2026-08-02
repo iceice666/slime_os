@@ -1,9 +1,12 @@
 //! Syscall ABI wrappers (`kernel/src/syscall/mod.rs` is authoritative).
 //!
-//! Trap: `int 0x80`. Number in `rax`; arguments in `rdi, rsi, rdx, r10, r8`;
-//! return in `rax` as `i64` (negative = error). The kernel's trap handler
-//! saves and restores every general-purpose register across the trap, so no
-//! register beyond `rax` needs to be marked clobbered here.
+//! Syscall numbers, arguments, errors, bounds, and transfer semantics are
+//! architecture-neutral and defined once here. Only the trap instruction and
+//! the mapping from semantic arguments to registers differ per architecture;
+//! that lives in [`crate::arch`], selected by `cfg(target_arch)`. See
+//! `docs/syscall-abi.md` for the shared table and each calling convention.
+
+use crate::arch::{raw_syscall, raw_syscall_pair};
 
 const SYS_YIELD: u64 = 0;
 const SYS_SEND: u64 = 1;
@@ -97,43 +100,6 @@ pub enum InputKey {
 pub struct InputEvent {
     pub key: InputKey,
     pub pressed: bool,
-}
-
-#[inline(always)]
-unsafe fn raw_syscall(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> i64 {
-    let ret: i64;
-    unsafe {
-        core::arch::asm!(
-            "int 0x80",
-            inlateout("rax") nr => ret,
-            in("rdi") a1,
-            in("rsi") a2,
-            in("rdx") a3,
-            in("r10") a4,
-            in("r8") a5,
-            options(nostack),
-        );
-    }
-    ret
-}
-
-#[inline(always)]
-unsafe fn raw_syscall_pair(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> (i64, u64) {
-    let ret: i64;
-    let aux: u64;
-    unsafe {
-        core::arch::asm!(
-            "int 0x80",
-            inlateout("rax") nr => ret,
-            in("rdi") a1,
-            in("rsi") a2,
-            inlateout("rdx") a3 => aux,
-            in("r10") a4,
-            in("r8") a5,
-            options(nostack),
-        );
-    }
-    (ret, aux)
 }
 
 pub fn yield_now() {

@@ -43,7 +43,7 @@ pub const SYS_SHARED_BUFFER_REVOKE: u64 = 29;
 /// attachment, which moves a capability at its full held rights.
 pub const SYS_CAP_TRANSFER: u64 = 30;
 
-const USER_TOP: u64 = 0x0000_8000_0000_0000;
+use crate::arch::trap::USER_ADDRESS_TOP as USER_TOP;
 
 fn user_range(addr: u64, len: usize) -> bool {
     let Some(end) = addr.checked_add(len as u64) else {
@@ -58,12 +58,12 @@ fn current_user_range(addr: u64, len: usize, writable: bool) -> bool {
 }
 
 pub fn dispatch(frame: &mut UserFrame) {
-    match frame.rax {
+    match frame.syscall_number() {
         SYS_YIELD => task::yield_now(frame),
         SYS_SEND => sys_send(frame),
         SYS_RECV => sys_recv(frame),
         SYS_EXIT => {
-            let status = frame.rdi as i64;
+            let status = frame.arg(0) as i64;
             task::terminate(frame, TermReason::Exit(status));
         }
         SYS_SPAWN => sys_spawn(frame),
@@ -94,23 +94,23 @@ pub fn dispatch(frame: &mut UserFrame) {
         SYS_SHARED_BUFFER_REVOKE => sys_shared_buffer_revoke(frame),
         SYS_CAP_TRANSFER => sys_cap_transfer(frame),
 
-        _ => frame.rax = ipc::ERR_INVALID_ARG as u64,
+        _ => frame.set_return(ipc::ERR_INVALID_ARG as u64),
     }
 }
 
 fn sys_send(frame: &mut UserFrame) {
-    let slot = frame.rdi as u32;
-    let buf = frame.rsi as *const u8;
-    let len = (frame.rdx as usize).min(MAX_MSG);
-    let cap_handles = frame.r10 as *const u32;
-    let cap_count = frame.r8 as usize;
+    let slot = frame.arg(0) as u32;
+    let buf = frame.arg(1) as *const u8;
+    let len = (frame.arg(2) as usize).min(MAX_MSG);
+    let cap_handles = frame.arg(3) as *const u32;
+    let cap_count = frame.arg(4) as usize;
 
     if cap_count > MAX_CAPS_PER_MSG
-        || !current_user_range(frame.rsi, len, false)
+        || !current_user_range(frame.arg(1), len, false)
         || (cap_count > 0
-            && !current_user_range(frame.r10, cap_count * core::mem::size_of::<u32>(), false))
+            && !current_user_range(frame.arg(3), cap_count * core::mem::size_of::<u32>(), false))
     {
-        frame.rax = ipc::ERR_INVALID_ARG as u64;
+        frame.set_return(ipc::ERR_INVALID_ARG as u64);
         return;
     }
 
@@ -168,17 +168,17 @@ fn sys_send(frame: &mut UserFrame) {
         result
     });
 
-    frame.rax = ret as u64;
+    frame.set_return(ret as u64);
 }
 
 fn sys_block_transact(frame: &mut UserFrame) {
-    let slot = frame.rdi as u32;
-    let request_address = frame.rsi;
-    let reply_address = frame.rdx;
+    let slot = frame.arg(0) as u32;
+    let request_address = frame.arg(1);
+    let reply_address = frame.arg(2);
     if !current_user_range(request_address, crate::block_proto::REQUEST_LEN, false)
         || !current_user_range(reply_address, crate::block_proto::REPLY_LEN, true)
     {
-        frame.rax = ipc::ERR_INVALID_ARG as u64;
+        frame.set_return(ipc::ERR_INVALID_ARG as u64);
         return;
     }
     let capability = task::with_current_mut(|task| {
@@ -188,7 +188,7 @@ fn sys_block_transact(frame: &mut UserFrame) {
         })
     });
     let Some((function, rights)) = capability else {
-        frame.rax = ipc::ERR_BAD_CAP as u64;
+        frame.set_return(ipc::ERR_BAD_CAP as u64);
         return;
     };
 
@@ -212,7 +212,7 @@ fn sys_block_transact(frame: &mut UserFrame) {
                     reply.len(),
                 )
             };
-            frame.rax = ipc::ERR_SUCCESS as u64;
+            frame.set_return(ipc::ERR_SUCCESS as u64);
             return;
         }
     };
@@ -223,7 +223,7 @@ fn sys_block_transact(frame: &mut UserFrame) {
         _ => 0,
     };
     if rights & required_right == 0 {
-        frame.rax = ipc::ERR_BAD_CAP as u64;
+        frame.set_return(ipc::ERR_BAD_CAP as u64);
         return;
     }
     let payload_len = decoded.sector_count as usize * crate::block_proto::SECTOR_SIZE;
@@ -242,7 +242,7 @@ fn sys_block_transact(frame: &mut UserFrame) {
         }
     };
     if invalid_payload {
-        frame.rax = ipc::ERR_INVALID_ARG as u64;
+        frame.set_return(ipc::ERR_INVALID_ARG as u64);
         return;
     }
 
@@ -251,17 +251,17 @@ fn sys_block_transact(frame: &mut UserFrame) {
     unsafe {
         core::ptr::copy_nonoverlapping(reply.as_ptr(), reply_address as *mut u8, reply.len())
     };
-    frame.rax = ipc::ERR_SUCCESS as u64;
+    frame.set_return(ipc::ERR_SUCCESS as u64);
 }
 
 fn sys_store_transact(frame: &mut UserFrame) {
-    let slot = frame.rdi as u32;
-    let request_address = frame.rsi;
-    let reply_address = frame.rdx;
+    let slot = frame.arg(0) as u32;
+    let request_address = frame.arg(1);
+    let reply_address = frame.arg(2);
     if !current_user_range(request_address, crate::store_proto::REQUEST_LEN, false)
         || !current_user_range(reply_address, crate::store_proto::REPLY_LEN, true)
     {
-        frame.rax = ipc::ERR_INVALID_ARG as u64;
+        frame.set_return(ipc::ERR_INVALID_ARG as u64);
         return;
     }
     let rights = task::with_current_mut(|task| {
@@ -270,7 +270,7 @@ fn sys_store_transact(frame: &mut UserFrame) {
             .and_then(|cap| matches!(cap.object, KernelObject::ObjectStore).then_some(cap.rights))
     });
     let Some(rights) = rights else {
-        frame.rax = ipc::ERR_BAD_CAP as u64;
+        frame.set_return(ipc::ERR_BAD_CAP as u64);
         return;
     };
 
@@ -295,7 +295,7 @@ fn sys_store_transact(frame: &mut UserFrame) {
                     reply.len(),
                 )
             };
-            frame.rax = ipc::ERR_SUCCESS as u64;
+            frame.set_return(ipc::ERR_SUCCESS as u64);
             return;
         }
     };
@@ -305,7 +305,7 @@ fn sys_store_transact(frame: &mut UserFrame) {
         _ => 0,
     };
     if rights & required_right == 0 {
-        frame.rax = ipc::ERR_BAD_CAP as u64;
+        frame.set_return(ipc::ERR_BAD_CAP as u64);
         return;
     }
     let payload_valid = match decoded.op {
@@ -321,7 +321,7 @@ fn sys_store_transact(frame: &mut UserFrame) {
         _ => false,
     };
     if !payload_valid {
-        frame.rax = ipc::ERR_INVALID_ARG as u64;
+        frame.set_return(ipc::ERR_INVALID_ARG as u64);
         return;
     }
 
@@ -330,22 +330,22 @@ fn sys_store_transact(frame: &mut UserFrame) {
     unsafe {
         core::ptr::copy_nonoverlapping(reply.as_ptr(), reply_address as *mut u8, reply.len())
     };
-    frame.rax = ipc::ERR_SUCCESS as u64;
+    frame.set_return(ipc::ERR_SUCCESS as u64);
 }
 
 fn sys_recv(frame: &mut UserFrame) {
-    let slot = frame.rdi as u32;
-    let buf = frame.rsi as *mut u8;
-    let cap_out = frame.rdx as *mut u64;
+    let slot = frame.arg(0) as u32;
+    let buf = frame.arg(1) as *mut u8;
+    let cap_out = frame.arg(2) as *mut u64;
 
-    if !current_user_range(frame.rsi, MAX_MSG, true)
+    if !current_user_range(frame.arg(1), MAX_MSG, true)
         || !current_user_range(
-            frame.rdx,
+            frame.arg(2),
             MAX_CAPS_PER_MSG * core::mem::size_of::<u64>(),
             true,
         )
     {
-        frame.rax = ipc::ERR_INVALID_ARG as u64;
+        frame.set_return(ipc::ERR_INVALID_ARG as u64);
         return;
     }
 
@@ -373,11 +373,11 @@ fn sys_recv(frame: &mut UserFrame) {
             core::ptr::copy_nonoverlapping(cap_handles.as_ptr(), cap_out, MAX_CAPS_PER_MSG);
         }
     }
-    frame.rax = ret as u64;
+    frame.set_return(ret as u64);
 }
 
 fn sys_health_confirm(frame: &mut UserFrame) {
-    let slot = frame.rdi as u32;
+    let slot = frame.arg(0) as u32;
     let authorized = task::with_current_mut(|task| {
         task.caps.get(slot).is_some_and(|cap| {
             matches!(cap.object, KernelObject::GenerationControl)
@@ -385,22 +385,22 @@ fn sys_health_confirm(frame: &mut UserFrame) {
         })
     });
     if !authorized {
-        frame.rax = ipc::ERR_BAD_CAP as u64;
+        frame.set_return(ipc::ERR_BAD_CAP as u64);
         return;
     }
-    frame.rax = if crate::generation_manager::confirm_running_pending() {
+    frame.set_return(if crate::generation_manager::confirm_running_pending() {
         ipc::ERR_SUCCESS as u64
     } else {
         ipc::ERR_INVALID_ARG as u64
-    };
+    });
 }
 
 fn sys_generation_transact(frame: &mut UserFrame) {
-    let slot = frame.rdi as u32;
-    if !current_user_range(frame.rsi, crate::generation_proto::REQUEST_LEN, false)
-        || !current_user_range(frame.rdx, crate::generation_proto::REPLY_LEN, true)
+    let slot = frame.arg(0) as u32;
+    if !current_user_range(frame.arg(1), crate::generation_proto::REQUEST_LEN, false)
+        || !current_user_range(frame.arg(2), crate::generation_proto::REPLY_LEN, true)
     {
-        frame.rax = ipc::ERR_INVALID_ARG as u64;
+        frame.set_return(ipc::ERR_INVALID_ARG as u64);
         return;
     }
     let authorized = task::with_current_mut(|task| {
@@ -410,31 +410,31 @@ fn sys_generation_transact(frame: &mut UserFrame) {
         })
     });
     if !authorized {
-        frame.rax = ipc::ERR_BAD_CAP as u64;
+        frame.set_return(ipc::ERR_BAD_CAP as u64);
         return;
     }
     let mut request_bytes = [0u8; crate::generation_proto::REQUEST_LEN];
-    if !task::copy_from_current(frame.rsi, &mut request_bytes) {
-        frame.rax = ipc::ERR_INVALID_ARG as u64;
+    if !task::copy_from_current(frame.arg(1), &mut request_bytes) {
+        frame.set_return(ipc::ERR_INVALID_ARG as u64);
         return;
     }
     let Some(request) = crate::generation_proto::WireGenerationRequest::decode(&request_bytes)
     else {
-        frame.rax = ipc::ERR_INVALID_ARG as u64;
+        frame.set_return(ipc::ERR_INVALID_ARG as u64);
         return;
     };
     let reply = crate::generation_service::transact(&request).encode();
     // SAFETY: `current_user_range` validated the complete writable reply mapping.
     unsafe {
-        core::ptr::copy_nonoverlapping(reply.as_ptr(), frame.rdx as *mut u8, reply.len());
+        core::ptr::copy_nonoverlapping(reply.as_ptr(), frame.arg(2) as *mut u8, reply.len());
     }
-    frame.rax = ipc::ERR_SUCCESS as u64;
+    frame.set_return(ipc::ERR_SUCCESS as u64);
 }
 
 fn sys_recovery_reconstruct(frame: &mut UserFrame) {
-    let generation_control_slot = frame.rdi as u32;
-    let block_slot = frame.rsi as u32;
-    let flags = frame.rdx as u32;
+    let generation_control_slot = frame.arg(0) as u32;
+    let block_slot = frame.arg(1) as u32;
+    let flags = frame.arg(2) as u32;
     let (control, block) = task::with_current_mut(|task| {
         let control = task.caps.get(generation_control_slot).is_some_and(|cap| {
             matches!(cap.object, KernelObject::GenerationControl)
@@ -453,10 +453,10 @@ fn sys_recovery_reconstruct(frame: &mut UserFrame) {
     });
     let authorized = control.then_some(block).flatten();
     let Some(function) = authorized else {
-        frame.rax = ipc::ERR_BAD_CAP as u64;
+        frame.set_return(ipc::ERR_BAD_CAP as u64);
         return;
     };
-    frame.rax = match crate::recovery::reconstruct(function, flags) {
+    frame.set_return(match crate::recovery::reconstruct(function, flags) {
         Ok(result) => {
             crate::serial_println!(
                 "[recovery] reconstructed generation={:02x?} state_root={:02x?}",
@@ -469,21 +469,21 @@ fn sys_recovery_reconstruct(frame: &mut UserFrame) {
             crate::serial_println!("[recovery] reconstruction rejected: {:?}", error);
             ipc::ERR_INVALID_ARG as u64
         }
-    };
+    });
 }
 
 fn sys_spawn(frame: &mut UserFrame) {
-    let executable_slot = frame.rdi as u32;
-    let grant_count = frame.rdx as usize;
+    let executable_slot = frame.arg(0) as u32;
+    let grant_count = frame.arg(2) as usize;
     if grant_count > crate::capability::MAX_CAPS
         || (grant_count > 0
             && !current_user_range(
-                frame.rsi,
+                frame.arg(1),
                 grant_count * core::mem::size_of::<task::SpawnGrant>(),
                 false,
             ))
     {
-        frame.rax = ipc::ERR_INVALID_ARG as u64;
+        frame.set_return(ipc::ERR_INVALID_ARG as u64);
         return;
     }
     let mut grant_buffer = [task::SpawnGrant { slot: 0, rights: 0 }; crate::capability::MAX_CAPS];
@@ -493,29 +493,29 @@ fn sys_spawn(frame: &mut UserFrame) {
             grant_count * core::mem::size_of::<task::SpawnGrant>(),
         )
     };
-    if !task::copy_from_current(frame.rsi, grant_bytes) {
-        frame.rax = ipc::ERR_INVALID_ARG as u64;
+    if !task::copy_from_current(frame.arg(1), grant_bytes) {
+        frame.set_return(ipc::ERR_INVALID_ARG as u64);
         return;
     }
     match task::spawn_from_cap(executable_slot, &grant_buffer[..grant_count]) {
         Ok((id, handle)) => {
-            frame.rax = id;
-            frame.rdx = handle as u64;
+            frame.set_return(id);
+            frame.set_aux_return(handle as u64);
         }
         Err(error) => {
             crate::serial_println!("[spawn] rejected {:?}", error);
-            frame.rax = match error {
+            frame.set_return(match error {
                 task::SpawnError::TooManyTasks | task::SpawnError::BudgetExhausted => {
                     ipc::ERR_OUT_OF_MEMORY as u64
                 }
                 _ => ipc::ERR_BAD_CAP as u64,
-            };
+            });
         }
     }
 }
 
 fn sys_endpoint_create(frame: &mut UserFrame) {
-    let factory_slot = frame.rdi as u32;
+    let factory_slot = frame.arg(0) as u32;
     let allowed = task::with_current_mut(|task| {
         task.caps.get(factory_slot).is_some_and(|cap| {
             matches!(cap.object, KernelObject::EndpointFactory)
@@ -523,7 +523,7 @@ fn sys_endpoint_create(frame: &mut UserFrame) {
         }) && task.caps.available_slots() >= 2
     });
     if !allowed {
-        frame.rax = ipc::ERR_BAD_CAP as u64;
+        frame.set_return(ipc::ERR_BAD_CAP as u64);
         return;
     }
     let (a, b) = ipc::channel();
@@ -546,10 +546,10 @@ fn sys_endpoint_create(frame: &mut UserFrame) {
     });
     match inserted {
         Ok((a, b)) => {
-            frame.rax = a as u64;
-            frame.rdx = b as u64;
+            frame.set_return(a as u64);
+            frame.set_aux_return(b as u64);
         }
-        Err(_) => frame.rax = ipc::ERR_OUT_OF_MEMORY as u64,
+        Err(_) => frame.set_return(ipc::ERR_OUT_OF_MEMORY as u64),
     }
 }
 
@@ -563,9 +563,9 @@ fn sys_endpoint_create(frame: &mut UserFrame) {
 /// `ERR_INVALID_ARG`; byte/object exhaustion returns `ERR_OUT_OF_MEMORY`
 /// without disturbing any existing holder.
 fn sys_shared_buffer_create(frame: &mut UserFrame) {
-    let factory_slot = frame.rdi as u32;
-    let pages = frame.rsi as usize;
-    let writable = frame.rdx != 0;
+    let factory_slot = frame.arg(0) as u32;
+    let pages = frame.arg(1) as usize;
+    let writable = frame.arg(2) != 0;
     let (allowed, owner, quota) = task::with_current_mut(|task| {
         let ok = task.caps.get(factory_slot).is_some_and(|cap| {
             matches!(cap.object, KernelObject::SharedBufferFactory)
@@ -574,7 +574,7 @@ fn sys_shared_buffer_create(frame: &mut UserFrame) {
         (ok, task.id, task.shared_buffer_quota)
     });
     if !allowed {
-        frame.rax = ipc::ERR_BAD_CAP as u64;
+        frame.set_return(ipc::ERR_BAD_CAP as u64);
         return;
     }
     let region = match crate::memory::shared_buffer::SHARED_BUFFER_TABLE
@@ -583,7 +583,7 @@ fn sys_shared_buffer_create(frame: &mut UserFrame) {
     {
         Ok(region) => region,
         Err(error) => {
-            frame.rax = shared_buffer_error_code(error) as u64;
+            frame.set_return(shared_buffer_error_code(error) as u64);
             return;
         }
     };
@@ -602,8 +602,8 @@ fn sys_shared_buffer_create(frame: &mut UserFrame) {
     });
     match inserted {
         Ok(slot) => {
-            frame.rax = slot as u64;
-            frame.rdx = id;
+            frame.set_return(slot as u64);
+            frame.set_aux_return(id);
         }
         Err(_) => {
             // The capability table filled between the pre-check and insert;
@@ -611,7 +611,7 @@ fn sys_shared_buffer_create(frame: &mut UserFrame) {
             let _ = crate::memory::shared_buffer::SHARED_BUFFER_TABLE
                 .lock()
                 .release_by(owner, &region);
-            frame.rax = ipc::ERR_OUT_OF_MEMORY as u64;
+            frame.set_return(ipc::ERR_OUT_OF_MEMORY as u64);
         }
     }
 }
@@ -620,7 +620,7 @@ fn sys_shared_buffer_create(frame: &mut UserFrame) {
 /// invalidate the releasing holder's capability. Returns `ERR_SUCCESS`, or
 /// `ERR_BAD_CAP` if the slot is not a `SharedBuffer` this table created.
 fn sys_shared_buffer_release(frame: &mut UserFrame) {
-    let slot = frame.rdi as u32;
+    let slot = frame.arg(0) as u32;
     let context = task::with_current_mut(|task| match task.caps.get(slot) {
         Some(Capability {
             object: KernelObject::SharedBuffer(region),
@@ -629,7 +629,7 @@ fn sys_shared_buffer_release(frame: &mut UserFrame) {
         _ => None,
     });
     let Some((owner, region)) = context else {
-        frame.rax = ipc::ERR_BAD_CAP as u64;
+        frame.set_return(ipc::ERR_BAD_CAP as u64);
         return;
     };
     if crate::memory::shared_buffer::SHARED_BUFFER_TABLE
@@ -637,13 +637,13 @@ fn sys_shared_buffer_release(frame: &mut UserFrame) {
         .release_by(owner, &region)
         .is_err()
     {
-        frame.rax = ipc::ERR_BAD_CAP as u64;
+        frame.set_return(ipc::ERR_BAD_CAP as u64);
         return;
     }
     // The region is reclaimed; drop the releasing holder's capability so it
     // can no longer name the freed buffer.
     let _ = task::with_current_mut(|task| task.caps.take(slot));
-    frame.rax = ipc::ERR_SUCCESS as u64;
+    frame.set_return(ipc::ERR_SUCCESS as u64);
 }
 
 /// `SYS_SHARED_BUFFER_MAP(buffer_slot, virtual_base, offset_bytes,
@@ -655,17 +655,17 @@ fn sys_shared_buffer_release(frame: &mut UserFrame) {
 /// generation-declared mapping quota. Bounds, arithmetic, quota, rights, and
 /// seal state are checked before any PTE changes.
 fn sys_shared_buffer_map(frame: &mut UserFrame) {
-    let slot = frame.rdi as u32;
-    let base = frame.rsi;
-    let offset = frame.rdx;
-    let length = frame.r10;
-    let writable = frame.r8 != 0;
+    let slot = frame.arg(0) as u32;
+    let base = frame.arg(1);
+    let offset = frame.arg(2);
+    let length = frame.arg(3);
+    let writable = frame.arg(4) != 0;
     let Ok(length_usize) = usize::try_from(length) else {
-        frame.rax = ipc::ERR_INVALID_ARG as u64;
+        frame.set_return(ipc::ERR_INVALID_ARG as u64);
         return;
     };
     if !user_range(base, length_usize) {
-        frame.rax = ipc::ERR_INVALID_ARG as u64;
+        frame.set_return(ipc::ERR_INVALID_ARG as u64);
         return;
     }
 
@@ -686,23 +686,25 @@ fn sys_shared_buffer_map(frame: &mut UserFrame) {
         ))
     });
     let Some((region, owner, quota, root)) = context else {
-        frame.rax = ipc::ERR_BAD_CAP as u64;
+        frame.set_return(ipc::ERR_BAD_CAP as u64);
         return;
     };
-    frame.rax = match crate::memory::shared_buffer::SHARED_BUFFER_TABLE
-        .lock()
-        .map(owner, quota, &region, root, base, offset, length, writable)
-    {
-        Ok(()) => ipc::ERR_SUCCESS as u64,
-        Err(error) => shared_buffer_error_code(error) as u64,
-    };
+    frame.set_return(
+        match crate::memory::shared_buffer::SHARED_BUFFER_TABLE
+            .lock()
+            .map(owner, quota, &region, root, base, offset, length, writable)
+        {
+            Ok(()) => ipc::ERR_SUCCESS as u64,
+            Err(error) => shared_buffer_error_code(error) as u64,
+        },
+    );
 }
 
 /// `SYS_SHARED_BUFFER_UNMAP(buffer_slot, virtual_base)`: remove the caller's
 /// exact mapping at `virtual_base` and return its mapping charge.
 fn sys_shared_buffer_unmap(frame: &mut UserFrame) {
-    let slot = frame.rdi as u32;
-    let base = frame.rsi;
+    let slot = frame.arg(0) as u32;
+    let base = frame.arg(1);
     let context = task::with_current_mut(|task| {
         let cap = task.caps.get(slot)?;
         if cap.rights & RIGHT_BUFFER_MAP == 0 {
@@ -716,23 +718,25 @@ fn sys_shared_buffer_unmap(frame: &mut UserFrame) {
         Some((region.clone(), task.id, task.address_space.pml4()))
     });
     let Some((region, owner, root)) = context else {
-        frame.rax = ipc::ERR_BAD_CAP as u64;
+        frame.set_return(ipc::ERR_BAD_CAP as u64);
         return;
     };
-    frame.rax = match crate::memory::shared_buffer::SHARED_BUFFER_TABLE
-        .lock()
-        .unmap(owner, &region, root, base)
-    {
-        Ok(()) => ipc::ERR_SUCCESS as u64,
-        Err(error) => shared_buffer_error_code(error) as u64,
-    };
+    frame.set_return(
+        match crate::memory::shared_buffer::SHARED_BUFFER_TABLE
+            .lock()
+            .unmap(owner, &region, root, base)
+        {
+            Ok(()) => ipc::ERR_SUCCESS as u64,
+            Err(error) => shared_buffer_error_code(error) as u64,
+        },
+    );
 }
 
 /// `SYS_SHARED_BUFFER_SEAL(buffer_slot)`: irreversibly seal one live buffer
 /// read-only. `RIGHT_BUFFER_WRITE` is required: the writer publishes the
 /// transition. Every existing writable PTE is downgraded before success.
 fn sys_shared_buffer_seal(frame: &mut UserFrame) {
-    let slot = frame.rdi as u32;
+    let slot = frame.arg(0) as u32;
     let region = task::with_current_mut(|task| {
         let cap = task.caps.get(slot)?;
         let KernelObject::SharedBuffer(region) = &cap.object else {
@@ -741,16 +745,18 @@ fn sys_shared_buffer_seal(frame: &mut UserFrame) {
         (cap.rights & RIGHT_BUFFER_WRITE != 0).then(|| region.clone())
     });
     let Some(region) = region else {
-        frame.rax = ipc::ERR_BAD_CAP as u64;
+        frame.set_return(ipc::ERR_BAD_CAP as u64);
         return;
     };
-    frame.rax = match crate::memory::shared_buffer::SHARED_BUFFER_TABLE
-        .lock()
-        .seal(&region)
-    {
-        Ok(()) => ipc::ERR_SUCCESS as u64,
-        Err(error) => shared_buffer_error_code(error) as u64,
-    };
+    frame.set_return(
+        match crate::memory::shared_buffer::SHARED_BUFFER_TABLE
+            .lock()
+            .seal(&region)
+        {
+            Ok(()) => ipc::ERR_SUCCESS as u64,
+            Err(error) => shared_buffer_error_code(error) as u64,
+        },
+    );
 }
 
 /// `SYS_SHARED_BUFFER_LOAN(buffer_slot, supervision_slot, offset, length)`:
@@ -765,10 +771,10 @@ fn sys_shared_buffer_seal(frame: &mut UserFrame) {
 /// map or return it, and settlement stays reachable through the receiver's or
 /// lender's death and the lender's explicit revoke.
 fn sys_shared_buffer_loan(frame: &mut UserFrame) {
-    let buffer_slot = frame.rdi as u32;
-    let receiver_slot = frame.rsi as u32;
-    let offset = frame.rdx;
-    let length = frame.r10;
+    let buffer_slot = frame.arg(0) as u32;
+    let receiver_slot = frame.arg(1) as u32;
+    let offset = frame.arg(2);
+    let length = frame.arg(3);
     let context = task::with_current_mut(|task| {
         let buffer = task.caps.get(buffer_slot)?;
         let KernelObject::SharedBuffer(region) = &buffer.object else {
@@ -792,11 +798,11 @@ fn sys_shared_buffer_loan(frame: &mut UserFrame) {
         ))
     });
     let Some((lender, receiver, quota, region)) = context else {
-        frame.rax = ipc::ERR_BAD_CAP as u64;
+        frame.set_return(ipc::ERR_BAD_CAP as u64);
         return;
     };
     if !task::is_live(receiver) {
-        frame.rax = ipc::ERR_BAD_CAP as u64;
+        frame.set_return(ipc::ERR_BAD_CAP as u64);
         return;
     }
     let grant = match crate::memory::shared_buffer::SHARED_BUFFER_TABLE
@@ -805,7 +811,7 @@ fn sys_shared_buffer_loan(frame: &mut UserFrame) {
     {
         Ok(grant) => grant,
         Err(error) => {
-            frame.rax = shared_buffer_error_code(error) as u64;
+            frame.set_return(shared_buffer_error_code(error) as u64);
             return;
         }
     };
@@ -818,14 +824,14 @@ fn sys_shared_buffer_loan(frame: &mut UserFrame) {
     });
     match inserted {
         Ok(slot) => {
-            frame.rax = slot as u64;
-            frame.rdx = loan_id;
+            frame.set_return(slot as u64);
+            frame.set_aux_return(loan_id);
         }
         Err(_) => {
             let _ = crate::memory::shared_buffer::SHARED_BUFFER_TABLE
                 .lock()
                 .revoke_loan(lender, loan_id, &region);
-            frame.rax = ipc::ERR_OUT_OF_MEMORY as u64;
+            frame.set_return(ipc::ERR_OUT_OF_MEMORY as u64);
         }
     }
 }
@@ -833,16 +839,16 @@ fn sys_shared_buffer_loan(frame: &mut UserFrame) {
 /// `SYS_SHARED_BUFFER_LOAN_MAP(loan_slot, virtual_base, offset, length)`:
 /// map a read-only subrange relative to the exact outstanding loan.
 fn sys_shared_buffer_loan_map(frame: &mut UserFrame) {
-    let slot = frame.rdi as u32;
-    let base = frame.rsi;
-    let offset = frame.rdx;
-    let length = frame.r10;
+    let slot = frame.arg(0) as u32;
+    let base = frame.arg(1);
+    let offset = frame.arg(2);
+    let length = frame.arg(3);
     let Ok(length_usize) = usize::try_from(length) else {
-        frame.rax = ipc::ERR_INVALID_ARG as u64;
+        frame.set_return(ipc::ERR_INVALID_ARG as u64);
         return;
     };
     if !user_range(base, length_usize) {
-        frame.rax = ipc::ERR_INVALID_ARG as u64;
+        frame.set_return(ipc::ERR_INVALID_ARG as u64);
         return;
     }
     let context = task::with_current_mut(|task| {
@@ -862,23 +868,25 @@ fn sys_shared_buffer_loan_map(frame: &mut UserFrame) {
         ))
     });
     let Some((loan_id, region, receiver, quota, root)) = context else {
-        frame.rax = ipc::ERR_BAD_CAP as u64;
+        frame.set_return(ipc::ERR_BAD_CAP as u64);
         return;
     };
-    frame.rax = match crate::memory::shared_buffer::SHARED_BUFFER_TABLE
-        .lock()
-        .map_loan(
-            receiver, quota, loan_id, &region, root, base, offset, length,
-        ) {
-        Ok(()) => ipc::ERR_SUCCESS as u64,
-        Err(error) => shared_buffer_error_code(error) as u64,
-    };
+    frame.set_return(
+        match crate::memory::shared_buffer::SHARED_BUFFER_TABLE
+            .lock()
+            .map_loan(
+                receiver, quota, loan_id, &region, root, base, offset, length,
+            ) {
+            Ok(()) => ipc::ERR_SUCCESS as u64,
+            Err(error) => shared_buffer_error_code(error) as u64,
+        },
+    );
 }
 
 /// `SYS_SHARED_BUFFER_RETURN(loan_slot)`: settle one exact loan and invalidate
 /// the receiver's loan capability.
 fn sys_shared_buffer_return(frame: &mut UserFrame) {
-    let slot = frame.rdi as u32;
+    let slot = frame.arg(0) as u32;
     let context = task::with_current_mut(|task| {
         let cap = task.caps.get(slot)?;
         let KernelObject::SharedBufferLoan(loan) = &cap.object else {
@@ -890,7 +898,7 @@ fn sys_shared_buffer_return(frame: &mut UserFrame) {
         Some((task.id, loan.id(), loan.region().clone()))
     });
     let Some((receiver, loan_id, region)) = context else {
-        frame.rax = ipc::ERR_BAD_CAP as u64;
+        frame.set_return(ipc::ERR_BAD_CAP as u64);
         return;
     };
     if let Err(error) = crate::memory::shared_buffer::SHARED_BUFFER_TABLE
@@ -908,18 +916,18 @@ fn sys_shared_buffer_return(frame: &mut UserFrame) {
         ) {
             let _ = task::with_current_mut(|task| task.caps.take(slot));
         }
-        frame.rax = shared_buffer_error_code(error) as u64;
+        frame.set_return(shared_buffer_error_code(error) as u64);
         return;
     }
     let _ = task::with_current_mut(|task| task.caps.take(slot));
-    frame.rax = ipc::ERR_SUCCESS as u64;
+    frame.set_return(ipc::ERR_SUCCESS as u64);
 }
 
 /// `SYS_SHARED_BUFFER_REVOKE(buffer_slot, loan_id)`: explicitly settle one
 /// outstanding loan as its lender.
 fn sys_shared_buffer_revoke(frame: &mut UserFrame) {
-    let slot = frame.rdi as u32;
-    let loan_id = frame.rsi;
+    let slot = frame.arg(0) as u32;
+    let loan_id = frame.arg(1);
     let context = task::with_current_mut(|task| {
         let cap = task.caps.get(slot)?;
         let KernelObject::SharedBuffer(region) = &cap.object else {
@@ -928,16 +936,18 @@ fn sys_shared_buffer_revoke(frame: &mut UserFrame) {
         (cap.rights & RIGHT_BUFFER_LOAN != 0).then(|| (task.id, region.clone()))
     });
     let Some((lender, region)) = context else {
-        frame.rax = ipc::ERR_BAD_CAP as u64;
+        frame.set_return(ipc::ERR_BAD_CAP as u64);
         return;
     };
-    frame.rax = match crate::memory::shared_buffer::SHARED_BUFFER_TABLE
-        .lock()
-        .revoke_loan(lender, loan_id, &region)
-    {
-        Ok(()) => ipc::ERR_SUCCESS as u64,
-        Err(error) => shared_buffer_error_code(error) as u64,
-    };
+    frame.set_return(
+        match crate::memory::shared_buffer::SHARED_BUFFER_TABLE
+            .lock()
+            .revoke_loan(lender, loan_id, &region)
+        {
+            Ok(()) => ipc::ERR_SUCCESS as u64,
+            Err(error) => shared_buffer_error_code(error) as u64,
+        },
+    );
 }
 
 /// `SYS_CAP_TRANSFER(endpoint_slot, capability_slot, descriptor_ptr)`: move one
@@ -981,28 +991,28 @@ fn sys_cap_transfer(frame: &mut UserFrame) {
         TRANSFER_LEN, WireCapabilityTransfer, destination_rights, kind_matches, valid_transfer,
     };
 
-    let endpoint_slot = frame.rdi as u32;
-    let capability_slot = frame.rsi as u32;
-    if !current_user_range(frame.rdx, TRANSFER_LEN, false) {
-        frame.rax = ipc::ERR_INVALID_ARG as u64;
+    let endpoint_slot = frame.arg(0) as u32;
+    let capability_slot = frame.arg(1) as u32;
+    if !current_user_range(frame.arg(2), TRANSFER_LEN, false) {
+        frame.set_return(ipc::ERR_INVALID_ARG as u64);
         return;
     }
     let mut descriptor_bytes = [0u8; TRANSFER_LEN];
-    if !task::copy_from_current(frame.rdx, &mut descriptor_bytes) {
-        frame.rax = ipc::ERR_INVALID_ARG as u64;
+    if !task::copy_from_current(frame.arg(2), &mut descriptor_bytes) {
+        frame.set_return(ipc::ERR_INVALID_ARG as u64);
         return;
     }
     let Some(descriptor) = WireCapabilityTransfer::decode(&descriptor_bytes) else {
-        frame.rax = ipc::ERR_INVALID_ARG as u64;
+        frame.set_return(ipc::ERR_INVALID_ARG as u64);
         return;
     };
     if !valid_transfer(&descriptor) {
-        frame.rax = ipc::ERR_INVALID_ARG as u64;
+        frame.set_return(ipc::ERR_INVALID_ARG as u64);
         return;
     }
     let rights = destination_rights(&descriptor);
     if rights == 0 {
-        frame.rax = ipc::ERR_INVALID_ARG as u64;
+        frame.set_return(ipc::ERR_INVALID_ARG as u64);
         return;
     }
 
@@ -1048,7 +1058,7 @@ fn sys_cap_transfer(frame: &mut UserFrame) {
     let (endpoint, moved, original) = match prepared {
         Ok(prepared) => prepared,
         Err(error) => {
-            frame.rax = error as u64;
+            frame.set_return(error as u64);
             return;
         }
     };
@@ -1065,7 +1075,7 @@ fn sys_cap_transfer(frame: &mut UserFrame) {
                 .expect("source slot stayed free across a failed transfer")
         });
     }
-    frame.rax = result as u64;
+    frame.set_return(result as u64);
 }
 
 fn shared_buffer_error_code(error: crate::memory::shared_buffer::SharedBufferError) -> i64 {
@@ -1087,34 +1097,36 @@ fn shared_buffer_error_code(error: crate::memory::shared_buffer::SharedBufferErr
 }
 
 fn sys_supervision_status(frame: &mut UserFrame) {
-    match task::supervision_status(frame.rdi as u32) {
-        Ok(None) => frame.rax = ipc::ERR_WOULDBLOCK as u64,
+    match task::supervision_status(frame.arg(0) as u32) {
+        Ok(None) => frame.set_return(ipc::ERR_WOULDBLOCK as u64),
         Ok(Some(TermReason::Exit(status))) => {
-            frame.rax = 0;
-            frame.rdx = status as u64;
+            frame.set_return(0);
+            frame.set_aux_return(status as u64);
         }
         Ok(Some(TermReason::Fault(reason))) => {
-            frame.rax = 1;
-            frame.rdx = reason_code(reason);
+            frame.set_return(1);
+            frame.set_aux_return(reason_code(reason));
         }
-        Ok(Some(TermReason::Timeout)) => frame.rax = 2,
-        Ok(Some(TermReason::PeerLoss)) => frame.rax = 3,
-        Ok(Some(TermReason::Unhealthy)) => frame.rax = 4,
-        Err(_) => frame.rax = ipc::ERR_BAD_CAP as u64,
+        Ok(Some(TermReason::Timeout)) => frame.set_return(2),
+        Ok(Some(TermReason::PeerLoss)) => frame.set_return(3),
+        Ok(Some(TermReason::Unhealthy)) => frame.set_return(4),
+        Err(_) => frame.set_return(ipc::ERR_BAD_CAP as u64),
     }
 }
 
 fn sys_cap_drop(frame: &mut UserFrame) {
-    frame.rax = if task::with_current_mut(|task| task.caps.remove(frame.rdi as u32)).is_ok() {
-        ipc::ERR_SUCCESS as u64
-    } else {
-        ipc::ERR_BAD_CAP as u64
-    };
+    frame.set_return(
+        if task::with_current_mut(|task| task.caps.remove(frame.arg(0) as u32)).is_ok() {
+            ipc::ERR_SUCCESS as u64
+        } else {
+            ipc::ERR_BAD_CAP as u64
+        },
+    );
 }
 
 fn sys_directory_inspect(frame: &mut UserFrame) {
-    let slot = frame.rdi as u32;
-    let required = frame.rsi;
+    let slot = frame.arg(0) as u32;
+    let required = frame.arg(1);
     if required == 0
         || required
             & !(RIGHT_DIRECTORY_READ
@@ -1122,10 +1134,10 @@ fn sys_directory_inspect(frame: &mut UserFrame) {
                 | RIGHT_DIRECTORY_WRITE
                 | RIGHT_DIRECTORY_DERIVE)
             != 0
-        || !current_user_range(frame.rdx, 32, true)
-        || !current_user_range(frame.r10, crate::capability::MAX_DIRECTORY_PATH, true)
+        || !current_user_range(frame.arg(2), 32, true)
+        || !current_user_range(frame.arg(3), crate::capability::MAX_DIRECTORY_PATH, true)
     {
-        frame.rax = ipc::ERR_INVALID_ARG as u64;
+        frame.set_return(ipc::ERR_INVALID_ARG as u64);
         return;
     }
     let inspected = task::with_current_mut(|task| {
@@ -1142,37 +1154,37 @@ fn sys_directory_inspect(frame: &mut UserFrame) {
         Some((directory.root_identity(), scope, scope_len))
     });
     let Some((root, scope, scope_len)) = inspected else {
-        frame.rax = ipc::ERR_BAD_CAP as u64;
+        frame.set_return(ipc::ERR_BAD_CAP as u64);
         return;
     };
     unsafe {
-        core::ptr::copy_nonoverlapping(root.as_ptr(), frame.rdx as *mut u8, root.len());
-        core::ptr::copy_nonoverlapping(scope.as_ptr(), frame.r10 as *mut u8, scope.len());
+        core::ptr::copy_nonoverlapping(root.as_ptr(), frame.arg(2) as *mut u8, root.len());
+        core::ptr::copy_nonoverlapping(scope.as_ptr(), frame.arg(3) as *mut u8, scope.len());
     }
-    frame.rax = scope_len as u64;
+    frame.set_return(scope_len as u64);
 }
 
 fn sys_directory_derive(frame: &mut UserFrame) {
-    let slot = frame.rdi as u32;
-    let path_len = frame.rdx as usize;
-    let rights = frame.r10;
+    let slot = frame.arg(0) as u32;
+    let path_len = frame.arg(2) as usize;
+    let rights = frame.arg(3);
     let allowed_rights = RIGHT_DIRECTORY_READ
         | RIGHT_DIRECTORY_WRITE
         | RIGHT_DIRECTORY_LIST
         | RIGHT_DIRECTORY_DERIVE
         | RIGHT_TRANSFER;
     if path_len > crate::capability::MAX_DIRECTORY_PATH
-        || (path_len > 0 && !current_user_range(frame.rsi, path_len, false))
+        || (path_len > 0 && !current_user_range(frame.arg(1), path_len, false))
         || rights == 0
         || rights & !allowed_rights != 0
     {
-        frame.rax = ipc::ERR_INVALID_ARG as u64;
+        frame.set_return(ipc::ERR_INVALID_ARG as u64);
         return;
     }
     let mut path = [0u8; crate::capability::MAX_DIRECTORY_PATH];
     if path_len > 0 {
         unsafe {
-            core::ptr::copy_nonoverlapping(frame.rsi as *const u8, path.as_mut_ptr(), path_len)
+            core::ptr::copy_nonoverlapping(frame.arg(1) as *const u8, path.as_mut_ptr(), path_len)
         };
     }
     let derived = task::with_current_mut(|task| {
@@ -1192,28 +1204,29 @@ fn sys_directory_derive(frame: &mut UserFrame) {
         let object = KernelObject::Directory(directory.derive(&path[..path_len])?);
         task.caps.insert(Capability { object, rights })
     });
-    frame.rax = match derived {
+    frame.set_return(match derived {
         Ok(slot) => slot as u64,
         Err(crate::capability::CapError::TableFull) => ipc::ERR_OUT_OF_MEMORY as u64,
         Err(_) => ipc::ERR_BAD_CAP as u64,
-    };
+    });
 }
 
 /// Atomically commits only through an unscoped directory writer. This prevents
 /// a subdirectory snapshot from replacing the namespace-wide root.
 fn sys_directory_commit(frame: &mut UserFrame) {
-    if !current_user_range(frame.rsi, 32, false) || !current_user_range(frame.rdx, 32, false) {
-        frame.rax = ipc::ERR_INVALID_ARG as u64;
+    if !current_user_range(frame.arg(1), 32, false) || !current_user_range(frame.arg(2), 32, false)
+    {
+        frame.set_return(ipc::ERR_INVALID_ARG as u64);
         return;
     }
     let mut expected = [0u8; 32];
     let mut new = [0u8; 32];
     unsafe {
-        core::ptr::copy_nonoverlapping(frame.rsi as *const u8, expected.as_mut_ptr(), 32);
-        core::ptr::copy_nonoverlapping(frame.rdx as *const u8, new.as_mut_ptr(), 32);
+        core::ptr::copy_nonoverlapping(frame.arg(1) as *const u8, expected.as_mut_ptr(), 32);
+        core::ptr::copy_nonoverlapping(frame.arg(2) as *const u8, new.as_mut_ptr(), 32);
     }
     let committed = task::with_current_mut(|task| {
-        let cap = task.caps.get(frame.rdi as u32)?;
+        let cap = task.caps.get(frame.arg(0) as u32)?;
         if cap.rights & RIGHT_DIRECTORY_WRITE == 0 {
             return None;
         }
@@ -1225,30 +1238,30 @@ fn sys_directory_commit(frame: &mut UserFrame) {
         }
         Some(directory.commit_root(expected, new))
     });
-    frame.rax = match committed {
+    frame.set_return(match committed {
         Some(true) => ipc::ERR_SUCCESS as u64,
         Some(false) => ipc::ERR_WOULDBLOCK as u64,
         None => ipc::ERR_BAD_CAP as u64,
-    };
+    });
 }
 
 fn sys_input_read(frame: &mut UserFrame) {
     let authorized = task::with_current_mut(|task| {
-        task.caps.get(frame.rdi as u32).is_some_and(|cap| {
+        task.caps.get(frame.arg(0) as u32).is_some_and(|cap| {
             matches!(cap.object, KernelObject::Input) && cap.rights & RIGHT_INPUT_READ != 0
         })
     });
     if !authorized {
-        frame.rax = ipc::ERR_BAD_CAP as u64;
+        frame.set_return(ipc::ERR_BAD_CAP as u64);
         return;
     }
     crate::input::pump_script();
     let Some(event) = crate::input::pop_event() else {
-        frame.rax = ipc::ERR_WOULDBLOCK as u64;
+        frame.set_return(ipc::ERR_WOULDBLOCK as u64);
         return;
     };
-    frame.rax = 0;
-    frame.rdx = encode_key_event(event);
+    frame.set_return(0);
+    frame.set_aux_return(encode_key_event(event));
 }
 
 fn encode_key_event(event: crate::input::KeyEvent) -> u64 {
@@ -1283,21 +1296,21 @@ fn reason_code(reason: task::UserFaultReason) -> u64 {
 }
 
 fn sys_debug_write(frame: &mut UserFrame) {
-    let buf = frame.rdi as *const u8;
-    let len = frame.rsi as usize;
-    if !current_user_range(frame.rdi, len, false) {
-        frame.rax = ipc::ERR_INVALID_ARG as u64;
+    let buf = frame.arg(0) as *const u8;
+    let len = frame.arg(1) as usize;
+    if !current_user_range(frame.arg(0), len, false) {
+        frame.set_return(ipc::ERR_INVALID_ARG as u64);
         return;
     }
     // SAFETY: the current task's complete user range was validated as mapped.
     let bytes = unsafe { core::slice::from_raw_parts(buf, len) };
     crate::serial::write_bytes(bytes);
     crate::frame_buffer::write_bytes(bytes);
-    frame.rax = len as u64;
+    frame.set_return(len as u64);
 }
 fn sys_generation_receive(frame: &mut UserFrame) {
-    let receiver_slot = frame.rdi as u32;
-    let transfer_slot = frame.rsi as u32;
+    let receiver_slot = frame.arg(0) as u32;
+    let transfer_slot = frame.arg(1) as u32;
     let authorized = task::with_current_mut(|task| {
         let receiver = task.caps.get(receiver_slot)?;
         let transfer = task.caps.get(transfer_slot)?;
@@ -1322,25 +1335,27 @@ fn sys_generation_receive(frame: &mut UserFrame) {
             receiver_slot,
             transfer_slot
         );
-        frame.rax = ipc::ERR_BAD_CAP as u64;
+        frame.set_return(ipc::ERR_BAD_CAP as u64);
         return;
     };
-    frame.rax = match task::without_interrupts(|| crate::transfer::receive(receiver, transfer)) {
-        Ok(result) => {
-            crate::serial_println!(
-                "[transfer] generation received objects={} states={} release={} attempts={}",
-                result.copied_objects,
-                result.state_count,
-                result.release_sequence,
-                result.remaining_attempts
-            );
-            ipc::ERR_SUCCESS as u64
-        }
-        Err(error) => {
-            crate::serial_println!("[transfer] receive rejected: {:?}", error);
-            ipc::ERR_INVALID_ARG as u64
-        }
-    };
+    frame.set_return(
+        match task::without_interrupts(|| crate::transfer::receive(receiver, transfer)) {
+            Ok(result) => {
+                crate::serial_println!(
+                    "[transfer] generation received objects={} states={} release={} attempts={}",
+                    result.copied_objects,
+                    result.state_count,
+                    result.release_sequence,
+                    result.remaining_attempts
+                );
+                ipc::ERR_SUCCESS as u64
+            }
+            Err(error) => {
+                crate::serial_println!("[transfer] receive rejected: {:?}", error);
+                ipc::ERR_INVALID_ARG as u64
+            }
+        },
+    );
 }
 
 /// Maximum wait sources per `SYS_WAIT` call. Bounds the kernel-side copy, and
@@ -1361,18 +1376,18 @@ const WAIT_KIND_SEND_CAPACITY: u32 = 3;
 /// source through its non-blocking ABI after waking); `ERR_INVALID_ARG` for a
 /// malformed request, without blocking.
 fn sys_wait(frame: &mut UserFrame) {
-    let count = frame.rsi as usize;
+    let count = frame.arg(1) as usize;
     if count == 0 || count > MAX_WAIT_SOURCES {
-        frame.rax = ipc::ERR_INVALID_ARG as u64;
+        frame.set_return(ipc::ERR_INVALID_ARG as u64);
         return;
     }
     let byte_len = count * core::mem::size_of::<u64>();
-    if !current_user_range(frame.rdi, byte_len, false) {
-        frame.rax = ipc::ERR_INVALID_ARG as u64;
+    if !current_user_range(frame.arg(0), byte_len, false) {
+        frame.set_return(ipc::ERR_INVALID_ARG as u64);
         return;
     }
     // SAFETY: the current task's complete user range was validated as mapped.
-    let raw = unsafe { core::slice::from_raw_parts(frame.rdi as *const u64, count) };
+    let raw = unsafe { core::slice::from_raw_parts(frame.arg(0) as *const u64, count) };
     let mut sources = [task::WaitSource::Input; MAX_WAIT_SOURCES];
     for (slot, descriptor) in sources.iter_mut().zip(raw.iter().copied()) {
         let kind = (descriptor >> 32) as u32;
@@ -1383,7 +1398,7 @@ fn sys_wait(frame: &mut UserFrame) {
             WAIT_KIND_INPUT => task::WaitSource::Input,
             WAIT_KIND_SUPERVISION => task::WaitSource::Supervision(cap_slot),
             _ => {
-                frame.rax = ipc::ERR_INVALID_ARG as u64;
+                frame.set_return(ipc::ERR_INVALID_ARG as u64);
                 return;
             }
         };

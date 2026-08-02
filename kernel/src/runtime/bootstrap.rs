@@ -1499,15 +1499,13 @@ fn dump_boot_layout(path: &str, caps: &[Capability]) {
 }
 
 fn boot_block_function() -> Option<PciFunctionInfo> {
-    crate::pci::enumerate()
-        .ok()?
+    crate::device_discovery::functions()
         .into_iter()
         .find(|function| function.vendor_id == 0x8086 && function.device_id == 0x2922)
 }
 
 fn block_functions() -> alloc::vec::Vec<PciFunctionInfo> {
-    crate::pci::enumerate()
-        .unwrap_or_default()
+    crate::device_discovery::functions()
         .into_iter()
         .filter(|function| {
             (function.vendor_id == 0x1af4 && function.device_id == 0x1042)
@@ -1524,10 +1522,12 @@ pub fn primary_block_function() -> Option<PciFunctionInfo> {
 }
 
 fn optional_block_function() -> Option<PciFunctionInfo> {
-    crate::pci::enumerate().ok()?.into_iter().find(|function| {
-        (function.vendor_id == 0x1af4 && function.device_id == 0x1042)
-            || function.class_code & 0x00ff_ffff == 0x010802
-    })
+    crate::device_discovery::functions()
+        .into_iter()
+        .find(|function| {
+            (function.vendor_id == 0x1af4 && function.device_id == 0x1042)
+                || function.class_code & 0x00ff_ffff == 0x010802
+        })
 }
 
 fn recovery_index<'a>(
@@ -1546,8 +1546,7 @@ fn recovery_index<'a>(
 }
 
 fn recovery_block_function(index: &boot_contracts::recovery::RecoveryIndex<'_>) -> PciFunctionInfo {
-    crate::pci::enumerate()
-        .expect("recovery target enumeration failed")
+    crate::device_discovery::functions()
         .into_iter()
         .find(|function| crate::recovery::packed_bdf(*function) == index.target_pci_bdf)
         .expect("signed recovery target missing")
@@ -1713,10 +1712,8 @@ pub fn record_spawn(component: &'static str, id: task::TaskId) {
 }
 
 fn storage_probe_required() -> bool {
-    crate::pci::enumerate().is_ok_and(|functions| {
-        functions.iter().any(|function| {
-            function.vendor_id == 0x1af4 && matches!(function.device_id, 0x1001 | 0x1042)
-        })
+    crate::device_discovery::functions().iter().any(|function| {
+        function.vendor_id == 0x1af4 && matches!(function.device_id, 0x1001 | 0x1042)
     })
 }
 

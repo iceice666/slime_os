@@ -11,8 +11,9 @@ use core::panic::PanicInfo;
 #[cfg(not(test))]
 use boot_contracts::handoff::KernelHandoffV1;
 use slime_os_kernel::frame_buffer::init_framebuffer;
+use slime_os_kernel::platform::i8042_keyboard;
 use slime_os_kernel::{
-    acpi, gdt, hardware_inventory, input, interrupts, memory, pci, println, serial_println, time,
+    acpi, gdt, hardware_inventory, interrupts, memory, pci, println, serial_println, time,
 };
 #[cfg(test)]
 mod testing;
@@ -26,25 +27,11 @@ mod testing;
 #[cfg(not(test))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn _start(handoff: *const KernelHandoffV1) -> ! {
-    // UEFI may leave floating-point/SIMD state disabled. Rust code can emit
-    // SSE2 instructions on x86_64, so establish the architectural baseline
-    // before calling any ordinary Rust function.
-    unsafe {
-        core::arch::asm!(
-            "mov rax, cr0",
-            "and rax, {clear_em}",
-            "or rax, {set_mp}",
-            "mov cr0, rax",
-            "mov rax, cr4",
-            "or rax, {set_osfxsr}",
-            "mov cr4, rax",
-            clear_em = const !(1u64 << 2),
-            set_mp = const 1u64 << 1,
-            set_osfxsr = const (1u64 << 9) | (1u64 << 10),
-            out("rax") _,
-            options(nostack),
-        );
-    }
+    // Firmware may hand off with SIMD state disabled, so establish the
+    // architectural baseline the compiler assumes before calling any ordinary
+    // Rust function.
+    // SAFETY: this is the first instruction sequence of kernel entry, run once.
+    unsafe { slime_os_kernel::arch::cpu::init_simd_baseline() };
     unsafe extern "C" {
         static mut __bss_start: u8;
         static mut __stop_data: u8;
@@ -165,7 +152,7 @@ fn kernel_main() {
             .iter()
             .any(|function| function.class_code & 0x00ff_ffff == 0x0c_03_30)
     });
-    let input_report = input::init_with_report(
+    let input_report = i8042_keyboard::init_with_report(
         &platform.madt,
         platform.i8042_present,
         usb_controller_present,
@@ -201,18 +188,16 @@ fn kernel_main() {
             slime_os_kernel::hlt_loop();
         }
         #[cfg(not(test))]
-        slime_os_kernel::platform::shutdown_or_reset();
+        slime_os_kernel::platform::power::shutdown_or_reset();
     }
     serial_println!("[platform] ACPI shutdown/reset mechanisms discovered");
     serial_println!("[policy] storage writes require an explicit disposable-QEMU generation grant");
 
     #[cfg(not(test))]
     {
-        // #BP: trigger a breakpoint and prove we come back.
-        // SAFETY: `int3` is a trap; our #BP handler returns normally.
-        unsafe {
-            core::arch::asm!("int3", options(nostack, preserves_flags));
-        }
+        // Trigger a debug breakpoint and prove we come back.
+        // SAFETY: the breakpoint gate is installed and its handler returns.
+        unsafe { slime_os_kernel::arch::cpu::breakpoint() };
         serial_println!("[serial] survived int3");
         println!("[bringup] survived int3");
 

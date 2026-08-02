@@ -90,21 +90,43 @@ not used for a return therefore retain their input values; in particular,
 `rcx` and `r11` are not implicit clobbers as they are for the x86-64 `syscall`
 instruction.
 
+Architecture-neutral kernel code never reads these registers by name. It goes
+through the semantic accessors on the saved user frame — `syscall_number()`,
+`arg(0..=4)`, `set_return()`, `set_aux_return()` — which each architecture
+implements in its own `arch::<target>::trap`. That is what makes the table above
+one contract rather than an x86 description other targets must imitate.
+
 ## AArch64 calling convention
 
-The architecture-specific trap instruction is `svc`. The kernel currently
-exports only `arch::x86_64`, so AArch64 syscall entry is not implemented.
-Register assignment, exception-entry state, return registers, and clobbers are
-not yet defined. The semantic syscall table and error model above are shared by
-contract; P2, the AArch64 QEMU vertical slice, defines and implements the
-calling convention without changing those semantics.
+The architecture-specific trap instruction is `svc #0`. P1 defines the register
+assignment and implements it on the userspace side
+(`components/runtime/src/arch/aarch64.rs`) and in the kernel-side frame
+accessors (`kernel/src/arch/aarch64/trap.rs`). Exception entry itself — the
+vector table that saves this frame and the `eret` that restores it — is
+implemented by P2, the AArch64 QEMU vertical slice. **No AArch64 syscall has
+been executed; this is a defined convention, not observed behavior.**
+
+| Role | Register |
+| --- | --- |
+| Syscall number | `x8` |
+| `a0` | `x0` |
+| `a1` | `x1` |
+| `a2` | `x2` |
+| `a3` | `x3` |
+| `a4` | `x4` |
+| Primary return | `x0` |
+| Auxiliary return | `x1` |
+
+The saved frame holds `x0`–`x30`, `SP_EL0`, `ELR_EL1`, and `SPSR_EL1`. A task
+returns to `EL0t` with the `DAIF` interrupt masks clear, so the generic timer
+preempts it. The auxiliary return is defined for the same calls as on x86-64.
 
 ## RV64 calling convention
 
-The architecture-specific trap instruction is `ecall`. The kernel currently
-exports only `arch::x86_64`, so RV64 syscall entry is not implemented. Register
-assignment, trap-entry state, return registers, and clobbers are not yet
-defined. The semantic syscall table and error model above are shared by
+The architecture-specific trap instruction is `ecall`. RV64 is deferred until
+after the Raspberry Pi 5 demo stabilizes, so no `arch::riscv64` module exists.
+Register assignment, trap-entry state, return registers, and clobbers are not
+yet defined. The semantic syscall table and error model above are shared by
 contract; P3, the RV64 QEMU vertical slice, defines and implements the calling
 convention without changing those semantics.
 
@@ -114,3 +136,10 @@ Syscall numbers, error values, capability checks, message bounds, and transfer
 semantics are identical across calling conventions. Only the trap instruction
 and the mapping between semantic arguments or returns and architecture
 registers differ.
+
+The syscall *table* is also identical: no syscall appears, disappears, or
+changes meaning with the target. Where a target lacks a device the syscall
+reaches — a block transport, for instance — the call still exists and returns
+its ordinary absent-device error rather than vanishing from the surface.
+`just x86_portability_check` builds the architecture-neutral kernel for a second
+target to keep that true.

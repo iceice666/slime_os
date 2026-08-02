@@ -1,17 +1,19 @@
-//! Timekeeping built on the Local APIC timer.
+//! Timekeeping built on the architecture's periodic interrupt source.
 //!
-//! [`init`] masks the legacy 8259 PICs, enables the Local APIC, calibrates its
-//! timer against the PIT, and programs it to fire periodically at
-//! [`TICK_HZ`]. Each tick runs [`on_tick`] from the interrupt handler,
+//! [`init`] asks the architecture to program a periodic timer at [`TICK_HZ`]
+//! and unmasks interrupts. Each tick runs [`on_tick`] from the handler,
 //! advancing a monotonic counter that [`uptime_ms`] and [`sleep_ms`] read.
 //!
-//! This is the milestone's "APIC/timer support": a working interrupt-driven
-//! monotonic clock, with the legacy PIC deliberately silenced so stray IRQs
-//! cannot reach vectors we do not handle.
-
-pub mod apic;
+//! The counter, tick rate, and sleep policy are architecture-neutral; the timer
+//! device (Local APIC here, generic timer on AArch64) lives behind
+//! `arch::target`.
 
 use core::sync::atomic::{AtomicU64, Ordering};
+
+use crate::arch::cpu;
+/// The architecture's timer implementation, re-exported so existing
+/// `time::apic::…` diagnostic callers keep one path to the timer device.
+pub use crate::arch::target::apic;
 
 /// Timer interrupt frequency. 100 Hz → a 10 ms tick.
 pub const TICK_HZ: u64 = 100;
@@ -42,22 +44,18 @@ pub fn sleep_ms(ms: u64) {
     let start = ticks();
     let needed = ms * TICK_HZ / 1000;
     while ticks().wrapping_sub(start) < needed {
-        // SAFETY: `hlt` waits for the next interrupt; the timer will wake us.
-        unsafe {
-            core::arch::asm!("hlt", options(nomem, nostack, preserves_flags));
-        }
+        // Park until the next interrupt; the timer tick wakes us.
+        cpu::wait_for_interrupt();
     }
 }
 
-/// Bring up the APIC timer and start ticking. Enables interrupts on return.
+/// Bring up the periodic timer and start ticking. Enables interrupts on return.
 ///
 /// Call after [`crate::interrupts::init`] (the timer vector must be routed) and
-/// after [`crate::memory::init`] (LAPIC access goes through the HHDM).
+/// after [`crate::memory::init`] (timer MMIO goes through the direct map).
 pub fn init() {
     apic::init(TICK_HZ);
     // Unmask interrupts now that a handler exists for the timer vector.
-    // SAFETY: the IDT is loaded and the timer gate is installed.
-    unsafe {
-        core::arch::asm!("sti", options(nomem, nostack, preserves_flags));
-    }
+    // SAFETY: the interrupt table is loaded and the timer gate is installed.
+    unsafe { cpu::enable_interrupts() };
 }

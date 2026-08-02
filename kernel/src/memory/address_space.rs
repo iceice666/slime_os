@@ -1,5 +1,5 @@
 use super::pmm::FRAME_ALLOCATOR;
-use super::vmm::{self, MapError, PTE_PRESENT, PTE_USER, PTE_WRITABLE, map_page_in};
+use super::vmm::{self, MapError, PTE_PRESENT, PTE_USER, is_writable, map_page_in};
 use super::{PAGE_SIZE, PhysAddr, VirtAddr};
 
 pub struct AddressSpace {
@@ -19,12 +19,9 @@ impl AddressSpace {
         }
 
         let cur = vmm::active_pml4();
-        // SAFETY: both frames are live PML4-sized pages reached through HHDM.
-        unsafe {
-            let dst = frame.to_virt().as_mut_ptr::<u64>();
-            let src = cur.to_virt().as_mut_ptr::<u64>();
-            core::ptr::copy_nonoverlapping(src.add(256), dst.add(256), 256);
-        }
+        // SAFETY: both frames are live top-level tables reached through the
+        // direct map, and `frame` is not yet any task's active root.
+        unsafe { vmm::copy_kernel_half(cur, frame) };
 
         Ok(Self { pml4: frame })
     }
@@ -47,7 +44,7 @@ impl AddressSpace {
             let Some(flags) = vmm::page_flags_in(self.pml4, VirtAddr(page)) else {
                 return false;
             };
-            if writable && flags & PTE_WRITABLE == 0 {
+            if writable && !is_writable(flags) {
                 return false;
             }
             if page == last {
@@ -67,10 +64,9 @@ impl AddressSpace {
     }
 
     pub fn switch(&self) {
-        // SAFETY: `self.pml4` is a live PML4 frame for this address space.
-        unsafe {
-            core::arch::asm!("mov cr3, {}", in(reg) self.pml4.0, options(nostack, preserves_flags));
-        }
+        // SAFETY: `self.pml4` is a live top-level table for this address space,
+        // whose kernel half aliases the running kernel's mappings.
+        unsafe { crate::arch::paging::set_active_root(self.pml4) };
     }
 
     pub fn pml4(&self) -> PhysAddr {

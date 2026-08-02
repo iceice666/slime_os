@@ -15,8 +15,8 @@ A milestone is complete only when its exit condition is observed. Compiled code,
 | [Backlog](00-backlog.md) | B1–B11 resolved; no open defects recorded | Backlog is clear; preserve the regression baseline while advancing the RPi5 path |
 | [Foundations](01-foundations.md) | M1–M4 and M6 complete; M5 mechanisms complete except M5.7 physical Framework evidence | Preserve as regression history; do not block RPi5 work on Framework-only evidence unless storage safety is touched |
 | [Core runtime](02-core-runtime.md) | C7 and C8.1–C8.10 complete; C8.11–C8.15 and C10 are planned | For the demo, prioritize only the C8/C10 slices required by two ROS 2 nodes over minimal DDS/RTPS |
-| [RPi5 ROS 2 demo](09-rpi5-ros2-demo.md) | RP0 contract complete; RP1–RP8 planned | Complete P1 architecture-boundary extraction, then begin RP1 target-qualified build/admission |
-| [Architecture portability](07-architecture-portability.md) | P0 complete; P1–P4 planned | Begin P1 x86-64 architecture-boundary extraction; P2 and P4 remain on the demo critical path |
+| [RPi5 ROS 2 demo](09-rpi5-ros2-demo.md) | RP0 contract complete; RP1–RP8 planned | P1 architecture-boundary extraction is complete; begin RP1 target-qualified build/admission |
+| [Architecture portability](07-architecture-portability.md) | P0 and P1 complete; P2–P4 planned | Begin P2 AArch64 QEMU vertical slice; P2 and P4 remain on the demo critical path |
 | [ROS 2 compatibility](03-ros2-compatibility.md) | Not started | R0 minimal DDS/RTPS topic profile is first; broader external/multi-vendor compatibility follows after the RPi5 demo path |
 | [Platform hardware](04-platform-hardware.md) | Framework track deferred; H1 implementation complete but physical evidence pending | Do not advance Framework daily-driver hardware unless needed for shared mechanisms or evidence preservation |
 | [Foreign workloads](05-foreign-workloads.md) | Deferred | Use only if the chosen ROS 2 node route requires a Linux userspace personality |

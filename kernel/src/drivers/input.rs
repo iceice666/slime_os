@@ -1,22 +1,18 @@
-//! Interrupt-driven i8042 keyboard input for early Framework bring-up.
+//! Keyboard input: scan-code decoding, the event queue, and the single
+//! blocked-reader waiter.
 //!
-//! The driver owns only device mechanism: bounded controller setup, scan-code
-//! decoding, and a fixed-size queue. Console focus and key-binding policy stay
-//! in userspace once the input service exists.
+//! This half is architecture-neutral. It owns decoding and buffering only;
+//! controller bring-up and raw byte delivery are platform mechanism, supplied
+//! today by [`crate::platform::i8042_keyboard`], which feeds bytes in through
+//! [`feed_scancode`]. Console focus and key-binding policy stay in userspace
+//! once the input service exists.
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use spin::Mutex;
 
-use crate::acpi::MadtInfo;
-use crate::serial_println;
-use crate::time::apic::RouteError;
+use crate::arch::cpu::without_interrupts;
 
-const STATUS_PORT: u16 = 0x64;
-const DATA_PORT: u16 = 0x60;
-const STATUS_OUTPUT_FULL: u8 = 1 << 0;
-const STATUS_INPUT_FULL: u8 = 1 << 1;
-const CONTROLLER_SPINS: usize = 100_000;
 const QUEUE_CAPACITY: usize = 128;
 
 static KEYBOARD_PRESENT: AtomicBool = AtomicBool::new(false);
@@ -65,7 +61,7 @@ pub struct InputInitReport {
 }
 
 impl InputInitReport {
-    const fn new(path: InputPath) -> Self {
+    pub(crate) const fn new(path: InputPath) -> Self {
         Self {
             path,
             stages: [None; MAX_INIT_STAGES],
@@ -73,7 +69,7 @@ impl InputInitReport {
         }
     }
 
-    fn push(&mut self, stage: InputStage, error: Option<InputError>) {
+    pub(crate) fn push(&mut self, stage: InputStage, error: Option<InputError>) {
         if let Some(slot) = self.stages.get_mut(self.len) {
             *slot = Some(InputStageRecord { stage, error });
             self.len += 1;
@@ -125,160 +121,26 @@ pub struct KeyEvent {
     pub pressed: bool,
 }
 
-pub fn init(madt: &MadtInfo, i8042_present: bool) -> Result<(), InputError> {
-    init_with_report(madt, i8042_present, false).result()
-}
-
-pub fn init_with_report(
-    madt: &MadtInfo,
-    i8042_present: bool,
-    usb_controller_present: bool,
-) -> InputInitReport {
-    let mut report = InputInitReport::new(if i8042_present {
-        InputPath::I8042
-    } else if usb_controller_present {
-        InputPath::UsbHid
-    } else {
-        InputPath::FirmwareOther
-    });
-    report.push(InputStage::FirmwareHint, None);
-    if !i8042_present {
-        report.push(
-            InputStage::Failed,
-            Some(InputError::ControllerNotImplemented),
-        );
-        return report;
-    }
-
-    unsafe { outb(STATUS_PORT, 0xad) };
-    unsafe { outb(STATUS_PORT, 0xa7) };
-    report.push(InputStage::PortsDisabled, None);
-    drain_output();
-    report.push(InputStage::OutputDrained, None);
-
-    let mut config = match read_controller_config() {
-        Ok(config) => config,
-        Err(error) => {
-            report.push(InputStage::ConfigRead, Some(error));
-            return report;
-        }
-    };
-    config &= !0x43;
-    if let Err(error) = write_controller_config(config) {
-        report.push(InputStage::ConfigRead, Some(error));
-        return report;
-    }
-    report.push(InputStage::ConfigRead, None);
-
-    if let Err(error) = command(0xaa) {
-        report.push(InputStage::ControllerSelfTest, Some(error));
-        return report;
-    }
-    let self_test = match read_data() {
-        Ok(value) => value,
-        Err(error) => {
-            report.push(InputStage::ControllerSelfTest, Some(error));
-            return report;
-        }
-    };
-    if self_test != 0x55 {
-        report.push(
-            InputStage::ControllerSelfTest,
-            Some(InputError::ControllerSelfTestFailed(self_test)),
-        );
-        return report;
-    }
-    report.push(InputStage::ControllerSelfTest, None);
-
-    let port_result = (|| {
-        command(0xae)?;
-        config = read_controller_config()?;
-        config |= 0x41;
-        config &= !0x10;
-        write_controller_config(config)
-    })();
-    if let Err(error) = port_result {
-        report.push(InputStage::FirstPortEnabled, Some(error));
-        return report;
-    }
-    report.push(InputStage::FirstPortEnabled, None);
-
-    let reset_ack = (|| {
-        write_data(0xff)?;
-        read_data()
-    })();
-    let ack = match reset_ack {
-        Ok(value) => value,
-        Err(error) => {
-            report.push(InputStage::KeyboardResetAck, Some(error));
-            return report;
-        }
-    };
-    if ack != 0xfa {
-        report.push(
-            InputStage::KeyboardResetAck,
-            Some(InputError::KeyboardResetFailed(ack)),
-        );
-        return report;
-    }
-    report.push(InputStage::KeyboardResetAck, None);
-
-    let reset = match read_data() {
-        Ok(value) => value,
-        Err(error) => {
-            report.push(InputStage::KeyboardSelfTest, Some(error));
-            return report;
-        }
-    };
-    if reset != 0xaa {
-        report.push(
-            InputStage::KeyboardSelfTest,
-            Some(InputError::KeyboardResetFailed(reset)),
-        );
-        return report;
-    }
-    report.push(InputStage::KeyboardSelfTest, None);
-
-    let enable_ack = (|| {
-        write_data(0xf4)?;
-        read_data()
-    })();
-    let enable = match enable_ack {
-        Ok(value) => value,
-        Err(error) => {
-            report.push(InputStage::ScanningEnabled, Some(error));
-            return report;
-        }
-    };
-    if enable != 0xfa {
-        report.push(
-            InputStage::ScanningEnabled,
-            Some(InputError::KeyboardResetFailed(enable)),
-        );
-        return report;
-    }
-    report.push(InputStage::ScanningEnabled, None);
-
-    if let Err(error) =
-        crate::time::apic::route_external_irq(madt, 1, crate::interrupts::KEYBOARD_VECTOR)
-    {
-        let error = match error {
-            RouteError::MissingIoApic => InputError::RouteMissingIoApic,
-            RouteError::GsiOutOfRange => InputError::RouteGsiOutOfRange,
-            RouteError::Map(_) => InputError::RouteMapFailed,
-        };
-        report.push(InputStage::InterruptRouted, Some(error));
-        return report;
-    }
-    report.push(InputStage::InterruptRouted, None);
-    KEYBOARD_PRESENT.store(true, Ordering::Release);
-    report.push(InputStage::Online, None);
-    serial_println!("[input] i8042 keyboard online");
-    report
-}
-
 pub fn present() -> bool {
     KEYBOARD_PRESENT.load(Ordering::Acquire)
+}
+
+/// Record that a keyboard transport finished bring-up and is delivering bytes.
+pub(crate) fn set_present() {
+    KEYBOARD_PRESENT.store(true, Ordering::Release);
+}
+
+/// Decode one raw scan-code byte from the keyboard transport, queueing the
+/// event it completes and waking a blocked reader.
+///
+/// Called from the platform interrupt handler, which runs with interrupts
+/// masked. `wake_input_waiter` takes only leaf locks (`INPUT_WAITER`,
+/// `PENDING_WAKES`), never `SCHEDULER`.
+pub(crate) fn feed_scancode(scancode: u8) {
+    if let Some(event) = DECODER.lock().feed(scancode) {
+        QUEUE.lock().push(event);
+        wake_input_waiter();
+    }
 }
 
 pub fn pop_event() -> Option<KeyEvent> {
@@ -366,19 +228,6 @@ impl ScriptInput {
         Self {
             input: &[],
             cursor: 0,
-        }
-    }
-}
-
-pub(crate) fn on_interrupt() {
-    let status = unsafe { inb(STATUS_PORT) };
-    if status & STATUS_OUTPUT_FULL != 0 {
-        let scancode = unsafe { inb(DATA_PORT) };
-        if let Some(event) = DECODER.lock().feed(scancode) {
-            QUEUE.lock().push(event);
-            // Runs with IF=0 (interrupt gate). `wake_input_waiter` takes only
-            // leaf locks (INPUT_WAITER, PENDING_WAKES), never SCHEDULER.
-            wake_input_waiter();
         }
     }
 }
@@ -545,92 +394,4 @@ fn decode_character(code: u8, shift: bool) -> Option<char> {
         _ => return None,
     };
     Some(if shift { pair.1 } else { pair.0 })
-}
-
-fn read_controller_config() -> Result<u8, InputError> {
-    command(0x20)?;
-    read_data()
-}
-
-fn write_controller_config(config: u8) -> Result<(), InputError> {
-    command(0x60)?;
-    write_data(config)
-}
-
-fn command(value: u8) -> Result<(), InputError> {
-    wait_input_empty()?;
-    unsafe { outb(STATUS_PORT, value) };
-    Ok(())
-}
-
-fn write_data(value: u8) -> Result<(), InputError> {
-    wait_input_empty()?;
-    unsafe { outb(DATA_PORT, value) };
-    Ok(())
-}
-
-fn read_data() -> Result<u8, InputError> {
-    for _ in 0..CONTROLLER_SPINS {
-        if unsafe { inb(STATUS_PORT) } & STATUS_OUTPUT_FULL != 0 {
-            return Ok(unsafe { inb(DATA_PORT) });
-        }
-    }
-    Err(InputError::ControllerTimeout)
-}
-
-fn wait_input_empty() -> Result<(), InputError> {
-    for _ in 0..CONTROLLER_SPINS {
-        if unsafe { inb(STATUS_PORT) } & STATUS_INPUT_FULL == 0 {
-            return Ok(());
-        }
-    }
-    Err(InputError::ControllerTimeout)
-}
-
-fn drain_output() {
-    for _ in 0..64 {
-        if unsafe { inb(STATUS_PORT) } & STATUS_OUTPUT_FULL == 0 {
-            return;
-        }
-        let _ = unsafe { inb(DATA_PORT) };
-    }
-}
-
-fn without_interrupts<T>(f: impl FnOnce() -> T) -> T {
-    let flags: u64;
-    unsafe {
-        core::arch::asm!("pushfq", "pop {}", out(reg) flags, options(nomem, preserves_flags));
-        core::arch::asm!("cli", options(nomem, nostack, preserves_flags));
-    }
-    let result = f();
-    if flags & (1 << 9) != 0 {
-        unsafe {
-            core::arch::asm!("sti", options(nomem, nostack, preserves_flags));
-        }
-    }
-    result
-}
-
-unsafe fn outb(port: u16, value: u8) {
-    unsafe {
-        core::arch::asm!(
-            "out dx, al",
-            in("dx") port,
-            in("al") value,
-            options(nomem, nostack, preserves_flags),
-        );
-    }
-}
-
-unsafe fn inb(port: u16) -> u8 {
-    let value: u8;
-    unsafe {
-        core::arch::asm!(
-            "in al, dx",
-            out("al") value,
-            in("dx") port,
-            options(nomem, nostack, preserves_flags),
-        );
-    }
-    value
 }

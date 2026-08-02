@@ -2,13 +2,13 @@ use alloc::boxed::Box;
 use alloc::collections::VecDeque;
 use alloc::vec;
 use alloc::vec::Vec;
-use core::arch::global_asm;
 use spin::{LazyLock, Mutex};
 
+use crate::arch::context::switch_address_space_and_user;
+use crate::arch::cpu;
 use crate::capability::{
     Capability, CapabilityTable, KernelObject, RIGHT_SPAWN, RIGHT_TRANSFER, Rights,
 };
-use crate::gdt::{USER_CODE_SELECTOR, USER_DATA_SELECTOR};
 use crate::memory::address_space::AddressSpace;
 use crate::memory::pmm::FRAME_ALLOCATOR;
 use crate::memory::shared_buffer::{HolderQuota, SHARED_BUFFER_TABLE};
@@ -18,12 +18,6 @@ use crate::trap::UserFrame;
 use boot_contracts::target_profile::TargetProfile;
 
 pub const KERNEL_STACK_SIZE: usize = 32 * 1024;
-const SWITCH_STACK_SIZE: usize = 4096;
-static mut SWITCH_STACK: [u8; SWITCH_STACK_SIZE] = [0; SWITCH_STACK_SIZE];
-
-fn switch_stack_top() -> u64 {
-    core::ptr::addr_of_mut!(SWITCH_STACK) as u64 + SWITCH_STACK_SIZE as u64
-}
 /// Hard global bound on simultaneously live tasks. The 24 MiB heap reserves
 /// at most 2 MiB for eager kernel stacks, leaving generation/object-store
 /// staging headroom. Per-spawner limits provide the finer M6.1 bound.
@@ -32,6 +26,9 @@ pub const DEFAULT_SPAWN_BUDGET: u16 = 16;
 pub const MAX_SPAWN_BUDGET: u16 = 32;
 pub const ENTRY_VA: u64 = 0x0000_0000_0040_0000;
 pub const USER_STACK_TOP: u64 = 0x0000_7fff_ffff_f000;
+/// Bytes left unused at the very top of a new task's stack, so the entry frame
+/// does not sit flush against the last mapped page.
+const INITIAL_STACK_RESERVE: u64 = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UserFaultReason {
@@ -203,7 +200,9 @@ pub(crate) fn synchronize_kernel_mappings(source: crate::memory::PhysAddr) {
     for task in &sched.tasks {
         let destination = task.address_space.pml4();
         if destination != source {
-            crate::memory::vmm::copy_kernel_half(source, destination);
+            // SAFETY: both are live top-level tables held by the scheduler, and
+            // `destination` is not the running root (it differs from `source`).
+            unsafe { crate::memory::vmm::copy_kernel_half(source, destination) };
         }
     }
 }
@@ -259,84 +258,6 @@ pub fn is_live(id: TaskId) -> bool {
     sched
         .index_of(id)
         .is_some_and(|idx| !matches!(sched.tasks[idx].state, TaskState::Terminated(_)))
-}
-
-global_asm!(
-    r#"
-    .global switch_to_user
-    switch_to_user:
-        mov rdx, rdi
-        mov rax, [rdx+0]
-        mov rbx, [rdx+8]
-        mov rcx, [rdx+16]
-        mov rsi, [rdx+32]
-        mov rbp, [rdx+48]
-        mov r8,  [rdx+56]
-        mov r9,  [rdx+64]
-        mov r10, [rdx+72]
-        mov r11, [rdx+80]
-        mov r12, [rdx+88]
-        mov r13, [rdx+96]
-        mov r14, [rdx+104]
-        mov r15, [rdx+112]
-        push qword ptr [rdx+152]
-        push qword ptr [rdx+144]
-        push qword ptr [rdx+136]
-        push qword ptr [rdx+128]
-        push qword ptr [rdx+120]
-        mov rdi, [rdx+40]
-        mov rdx, [rdx+24]
-        iretq
-
-    .global switch_address_space_and_user
-    switch_address_space_and_user:
-        cli
-        mov rbx, rdi
-        mov r12, rsi
-        call {switch_stack_top}
-        mov rsp, rax
-        push rbx
-        push r12
-        call {tss_rsp0}
-        pop r12
-        pop rbx
-        sub rax, 160
-        mov rdi, rax
-        mov rsi, r12
-        mov rcx, 20
-        rep movsq
-        mov r10, rax
-        mov cr3, rbx
-        mov rsp, rax
-        add rsp, 160
-        push qword ptr [r10+152]
-        push qword ptr [r10+144]
-        push qword ptr [r10+136]
-        push qword ptr [r10+128]
-        push qword ptr [r10+120]
-        mov rax, [r10+0]
-        mov rbx, [r10+8]
-        mov rcx, [r10+16]
-        mov rdx, [r10+24]
-        mov rsi, [r10+32]
-        mov rdi, [r10+40]
-        mov rbp, [r10+48]
-        mov r8,  [r10+56]
-        mov r9,  [r10+64]
-        mov r11, [r10+80]
-        mov r12, [r10+88]
-        mov r13, [r10+96]
-        mov r14, [r10+104]
-        mov r15, [r10+112]
-        mov r10, [r10+72]
-        iretq
-    "#,
-    tss_rsp0 = sym crate::gdt::rsp0,
-    switch_stack_top = sym switch_stack_top,
-);
-
-unsafe extern "C" {
-    fn switch_address_space_and_user(pml4: u64, frame: *const UserFrame) -> !;
 }
 
 pub fn spawn_user(image: &[u8]) -> Result<TaskId, SpawnError> {
@@ -570,28 +491,10 @@ pub fn spawn_with_caps_for(
         state: TaskState::Ready,
         address_space,
         kernel_stack: vec![0u8; KERNEL_STACK_SIZE].into_boxed_slice(),
-        saved: UserFrame {
-            rax: 0,
-            rbx: 0,
-            rcx: 0,
-            rdx: 0,
-            rsi: 0,
-            rdi: 0,
-            rbp: 0,
-            r8: 0,
-            r9: 0,
-            r10: 0,
-            r11: 0,
-            r12: 0,
-            r13: 0,
-            r14: 0,
-            r15: 0,
-            rip: ENTRY_VA + decoded.entry_offset as u64,
-            cs: USER_CODE_SELECTOR as u64 | 3,
-            rflags: 0x200,
-            rsp: USER_STACK_TOP - 16,
-            ss: USER_DATA_SELECTOR as u64 | 3,
-        },
+        saved: UserFrame::for_user_entry(
+            ENTRY_VA + decoded.entry_offset as u64,
+            USER_STACK_TOP - INITIAL_STACK_RESERVE,
+        ),
         caps: cap_table,
         spawner,
         spawn_budget: spawn_budget.min(MAX_SPAWN_BUDGET),
@@ -783,7 +686,7 @@ fn register_waiters(
 /// task. If any source is already ready it returns immediately without
 /// blocking (the frame keeps its `0` return).
 pub fn wait(frame: &mut UserFrame, sources: &[WaitSource]) {
-    frame.rax = 0;
+    frame.set_return(0);
     let (result, pml4) = without_interrupts(|| {
         let mut sched = SCHEDULER.lock();
         drain_pending_wakes(&mut sched);
@@ -852,18 +755,7 @@ pub fn set_shared_buffer_quota(id: TaskId, quota: HolderQuota) -> bool {
     })
 }
 
-pub(crate) fn without_interrupts<T>(f: impl FnOnce() -> T) -> T {
-    let flags: u64;
-    unsafe {
-        core::arch::asm!("pushfq", "pop {}", out(reg) flags, options(nomem, preserves_flags));
-        core::arch::asm!("cli", options(nomem, nostack, preserves_flags));
-    }
-    let result = f();
-    if flags & (1 << 9) != 0 {
-        unsafe { core::arch::asm!("sti", options(nomem, nostack, preserves_flags)) };
-    }
-    result
-}
+pub(crate) use crate::arch::cpu::without_interrupts;
 
 /// Copy bytes from the current task's mapped user address without switching
 /// address spaces or holding the scheduler lock during the copy.
@@ -1037,28 +929,31 @@ fn schedule_next(
 
 /// Interactive idle path. Unlike the default `on_idle` (which exits QEMU when
 /// the graph is healthy-idle), an interactive session must keep running so a
-/// human keystroke can wake the blocked REPL. Parks the CPU with an atomic
-/// `sti; hlt` until a wake source re-readies a task, then switches into it.
-/// Never returns: it either enters a task or halts waiting for the next IRQ.
+/// human keystroke can wake the blocked REPL. Parks the CPU until a wake source
+/// re-readies a task, then switches into it. Never returns: it either enters a
+/// task or waits for the next interrupt.
 pub fn idle_dispatch() -> ! {
     loop {
-        // Inspect the scheduler with interrupts disabled so a keyboard IRQ
-        // cannot slip a wake between the readiness check and `hlt`.
-        unsafe { core::arch::asm!("cli", options(nomem, nostack, preserves_flags)) };
+        // Inspect the scheduler with interrupts masked so a keyboard IRQ cannot
+        // slip a wake between the readiness check and parking.
+        // SAFETY: every path out of the check either enters a task (whose
+        // return-to-user restores its own interrupt state) or re-enables
+        // interrupts as it parks.
+        unsafe { cpu::disable_interrupts() };
         let selected = {
             let mut sched = SCHEDULER.lock();
             let mut frame = zeroed_frame();
             pop_ready_draining(&mut sched, &mut frame).map(|pml4| (frame, pml4))
         };
         match selected {
-            // `iretq` inside the switch restores the task's rflags (IF set).
+            // The privilege transition inside the switch restores the task's
+            // own interrupt state.
             Some((frame, pml4)) => unsafe { switch_address_space_and_user(pml4, &frame) },
-            // Atomic on x86: a pending interrupt is delivered only after `hlt`
-            // begins waiting, so no wake is lost. The handler returns here and
-            // the loop re-checks under `cli`.
-            None => unsafe {
-                core::arch::asm!("sti; hlt", options(nomem, nostack, preserves_flags))
-            },
+            // Unmasking and parking is one atomic step, so a pending interrupt
+            // is delivered only after the CPU begins waiting and no wake is
+            // lost. The handler returns here and the loop re-checks masked.
+            // SAFETY: the interrupt table is installed by this point.
+            None => unsafe { cpu::enable_interrupts_and_wait() },
         }
     }
 }
@@ -1078,28 +973,7 @@ fn pop_ready_draining(sched: &mut Scheduler, frame: &mut UserFrame) -> Option<u6
 }
 
 fn zeroed_frame() -> UserFrame {
-    UserFrame {
-        rax: 0,
-        rbx: 0,
-        rcx: 0,
-        rdx: 0,
-        rsi: 0,
-        rdi: 0,
-        rbp: 0,
-        r8: 0,
-        r9: 0,
-        r10: 0,
-        r11: 0,
-        r12: 0,
-        r13: 0,
-        r14: 0,
-        r15: 0,
-        rip: 0,
-        cs: 0,
-        rflags: 0,
-        rsp: 0,
-        ss: 0,
-    }
+    UserFrame::zeroed()
 }
 
 pub fn run() -> ! {

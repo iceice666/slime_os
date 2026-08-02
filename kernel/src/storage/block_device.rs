@@ -3,9 +3,18 @@
 //! Clients see one capability-gated block protocol. Transport identity remains
 //! inside the trusted service: deterministic QEMU prefers virtio, while a
 //! Framework NVMe controller is admitted only through the read-only backend.
+//!
+//! [`BlockError`] and the operations on [`BlockDevice`] are
+//! architecture-neutral — the block protocol, its error model, and the services
+//! above it are the same on every target. Only the transports are
+//! platform-bound: on a target with no admitted transport, every operation
+//! reports [`BlockError::DeviceNotFound`] instead of the type disappearing, so
+//! the syscall surface does not vary by architecture.
 
 use crate::capability::PciFunctionInfo;
+#[cfg(target_arch = "x86_64")]
 use crate::nvme::{NvmeBlock, NvmeError};
+#[cfg(target_arch = "x86_64")]
 use crate::virtio_blk::{VirtioBlkError, VirtioBlock};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,6 +35,7 @@ impl BlockError {
     }
 }
 
+#[cfg(target_arch = "x86_64")]
 impl From<VirtioBlkError> for BlockError {
     fn from(value: VirtioBlkError) -> Self {
         match value {
@@ -39,6 +49,7 @@ impl From<VirtioBlkError> for BlockError {
     }
 }
 
+#[cfg(target_arch = "x86_64")]
 impl From<NvmeError> for BlockError {
     fn from(value: NvmeError) -> Self {
         match value {
@@ -52,14 +63,16 @@ impl From<NvmeError> for BlockError {
     }
 }
 
+#[cfg(target_arch = "x86_64")]
 pub enum BlockDevice {
     Virtio(VirtioBlock),
     Nvme(NvmeBlock),
 }
 
+#[cfg(target_arch = "x86_64")]
 impl BlockDevice {
     pub fn find_and_init() -> Result<(PciFunctionInfo, Self), BlockError> {
-        let functions = crate::pci::enumerate().map_err(|_| BlockError::DeviceNotFound)?;
+        let functions = crate::device_discovery::functions();
         let function = functions
             .iter()
             .find(|function| {
@@ -158,5 +171,62 @@ impl BlockDevice {
                 .map_err(Into::into),
             Self::Nvme(_) => Err(BlockError::ReadOnly),
         }
+    }
+}
+
+/// The admitted block transports for this target profile.
+///
+/// No block transport is admitted yet on this architecture: P2 brings up
+/// virtio-mmio for `aarch64-qemu-virt` and P4 qualifies the Raspberry Pi 5
+/// storage path. Until then every operation reports
+/// [`BlockError::DeviceNotFound`], which the services above already handle as
+/// an ordinary absent-device outcome.
+#[cfg(not(target_arch = "x86_64"))]
+pub enum BlockDevice {}
+
+#[cfg(not(target_arch = "x86_64"))]
+impl BlockDevice {
+    pub fn find_and_init() -> Result<(PciFunctionInfo, Self), BlockError> {
+        Err(BlockError::DeviceNotFound)
+    }
+
+    pub fn init(_function: PciFunctionInfo) -> Result<Self, BlockError> {
+        Err(BlockError::DeviceNotFound)
+    }
+
+    pub fn capacity_sectors(&self) -> u64 {
+        match *self {}
+    }
+
+    pub fn read_sector(&mut self, _lba: u64, _output: &mut [u8]) -> Result<(), BlockError> {
+        match *self {}
+    }
+
+    pub fn write_sector(&mut self, _lba: u64, _input: &[u8]) -> Result<(), BlockError> {
+        match *self {}
+    }
+
+    pub fn flush(&mut self) -> Result<(), BlockError> {
+        match *self {}
+    }
+
+    pub fn inject_failure(&mut self) -> Result<(), BlockError> {
+        match *self {}
+    }
+
+    pub fn inject_timeout(&mut self) -> Result<(), BlockError> {
+        match *self {}
+    }
+
+    pub fn inject_reset(&mut self) -> Result<(), BlockError> {
+        match *self {}
+    }
+
+    pub fn inject_flush_failure(&mut self) -> Result<(), BlockError> {
+        match *self {}
+    }
+
+    pub fn inject_interrupted_write(&mut self, _lba: u64, _input: &[u8]) -> Result<(), BlockError> {
+        match *self {}
     }
 }

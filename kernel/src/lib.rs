@@ -1,6 +1,11 @@
 #![no_std]
 #![cfg_attr(test, no_main)]
-#![feature(abi_x86_interrupt, custom_test_frameworks)]
+// Crate features must be declared at the crate root, so this one x86 mechanism
+// cannot live inside `arch::x86_64` with the handlers that use it. It is gated
+// on the target so no other architecture enables it, and it is the single
+// admitted exception in `just x86_portability_check`.
+#![cfg_attr(target_arch = "x86_64", feature(abi_x86_interrupt))]
+#![feature(custom_test_frameworks)]
 #![test_runner(crate::test_runner)]
 #![reexport_test_harness_main = "test_main"]
 
@@ -11,6 +16,7 @@ pub mod capability;
 pub mod drivers;
 pub mod ipc;
 pub mod memory;
+pub mod platform;
 pub mod protocol;
 pub mod runtime;
 pub mod storage;
@@ -19,14 +25,26 @@ pub mod syscall;
 pub mod task;
 pub mod time;
 
-pub use arch::x86_64::{acpi, boot, crt, gdt, interrupts, limine, pci, platform, trap};
-pub use drivers::{dma, frame_buffer, hardware_inventory, input, nvme, serial, virtio_blk};
+// Architecture mechanism, re-exported at the crate root so `crate::trap`,
+// `crate::gdt`, and friends resolve to whichever architecture is being built.
+// `arch::mod` selects the module; nothing outside `arch` names an ISA.
+pub use arch::target::{boot, gdt, interrupts, trap};
+// PC-class platform assembly for the current profile: ACPI tables, PCI ECAM,
+// and ACPI power control. An AArch64 profile supplies device-tree equivalents
+// instead, so these are not part of the architecture-neutral surface.
+#[cfg(target_arch = "x86_64")]
+pub use arch::x86_64::limine;
+pub use drivers::{device_discovery, frame_buffer, input, serial};
+#[cfg(target_arch = "x86_64")]
+pub use drivers::{dma, hardware_inventory, nvme, virtio_blk};
+#[cfg(target_arch = "x86_64")]
+pub use platform::{acpi, pci};
 pub use protocol::{block_proto, capability_transfer_proto, generation_proto, store_proto};
 pub use runtime::{bootstrap, component, generation, generation_manager, generation_service};
 pub use storage::{
     block_device, block_service, gpt, object_store, recovery, store_service, transfer,
 };
-pub use support::{crc32, sha256};
+pub use support::{crc32, crt, sha256};
 
 use core::panic::PanicInfo;
 
@@ -39,21 +57,12 @@ pub enum QemuExitCode {
 }
 
 pub fn exit_qemu(exit_code: QemuExitCode) {
-    unsafe {
-        core::arch::asm!(
-            "out dx, eax",
-            in("dx") 0xf4_u16,
-            in("eax") exit_code as u32,
-            options(nomem, nostack, preserves_flags),
-        );
-    }
+    arch::cpu::debug_exit(exit_code as u32);
 }
 
 pub fn hlt_loop() -> ! {
     loop {
-        unsafe {
-            core::arch::asm!("hlt", options(nomem, nostack, preserves_flags));
-        }
+        arch::cpu::wait_for_interrupt();
     }
 }
 

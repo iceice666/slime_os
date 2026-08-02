@@ -1,5 +1,6 @@
 #![no_std]
 
+mod arch;
 mod sha256;
 mod syscall;
 

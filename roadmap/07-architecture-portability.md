@@ -2,7 +2,7 @@
 
 **Purpose:** Preserve one Slime capability/component/generation architecture across target profiles while making AArch64 and Raspberry Pi 5 the near-term product path.
 
-**Status:** In progress — P0 complete.
+**Status:** In progress — P0 and P1 complete.
 
 **Decision:** AArch64/Raspberry Pi 5 is now the near-term physical target because the current product goal is the RPi5 ROS 2 two-node demo. The existing x86-64 QEMU path remains the regression oracle for completed work until each semantic corpus is replayed on AArch64, but x86-64/Framework is no longer the product-leading roadmap. RV64 is deferred.
 
@@ -77,7 +77,7 @@ A generation and its release identify one exact target profile; stage-0 rejects 
 
 ## P1: x86-64 architecture boundary extraction
 
-**Status:** Not started.
+**Status:** Complete.
 
 **Depends on:** P0.
 
@@ -97,21 +97,38 @@ A generation and its release identify one exact target profile; stage-0 rejects 
 - no x86 assembly, CR register, GDT/IDT/APIC/PIT, port-I/O, ELF-machine, linker-format, or `qemu-system-x86_64` assumption remains in architecture-neutral kernel, component-runtime, contract, or generation code except an explicit profile dispatch;
 - architecture-neutral code can be type-checked for AArch64 without importing x86-only modules, even before that target boots.
 
-### Planned verification target
+### Verification target
 
 ```sh
 just x86_portability_check
 ```
 
-### Exit condition
+The gate has two halves: a source allowlist over the architecture-neutral trees,
+and a `cargo build` of the neutral kernel library and component runtime for
+`aarch64-unknown-none`. The build, not a `cargo check`, is the binding half —
+rustc validates inline-assembly mnemonics only during codegen, so a check-based
+gate accepts x86 assembly on an AArch64 target. Both halves were confirmed to
+fire on deliberately introduced leaks. It requires
+`rustup target add aarch64-unknown-none`, declared in `rust-toolchain.toml`.
 
-The full x86-64 reference vertical slice behaves as before through a named architecture/platform boundary, and an enforced allowlist prevents new x86 mechanism from leaking back into shared contracts or runtime code.
+### Exit condition (observed)
+
+Observed 2026-08-02; see [`devlog/2026-08-02-p1-x86-boundary-extraction/`](../devlog/2026-08-02-p1-x86-boundary-extraction/index.md).
+
+The x86-64 reference vertical slice behaves as before through a named
+architecture/platform boundary: `just test` passes the same 191 assertions and
+`just product_boot_check` reaches the same healthy 45-slot product slice as the
+pre-change baseline, with `just rollback_check`, `just architecture_contract_check`,
+`just generation_check`, and `just contracts_check` clean. `just x86_portability_check`
+enforces the boundary over 186 neutral Rust files and builds the neutral kernel
+and component runtime for a second architecture. This proves the boundary holds;
+it makes no claim that AArch64 boots, which is P2.
 
 ## P2: AArch64 QEMU vertical slice
 
 **Status:** Not started.
 
-**Depends on:** P1, C7, and backlog item B2.
+**Depends on:** P1 (complete), C7, and backlog item B2.
 
 ### Deliverables
 
