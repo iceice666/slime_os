@@ -61,6 +61,80 @@
     { id = "boot-layout"; kind = "resource"; size = 4096; };
   ];
 
+  bootProfiles = [
+    {
+      name = "default";
+      fabricProfile = "default";
+      components = [];
+      requiredComponents = ["init"; "console"; "dango";];
+    };
+    {
+      name = "test";
+      fabricProfile = "default";
+      components = [
+        "storage-probe";
+        "storage-writer";
+        "storage-fault-probe";
+        "storage-store-probe";
+        "directory-probe";
+        "powerbox-probe";
+        "sample-lender";
+        "sample-receiver";
+        "fabric-intruder";
+        "fabric-publisher-b";
+        "fabric-subscriber-b";
+        "fabric-call-client-b";
+        "fabric-op-client-b";
+        "fabric-op-client-b-restart";
+        "fabric-observer";
+      ];
+      requiredComponents = ["init"; "console"; "dango"; "storage-probe";];
+    };
+    {
+      name = "visibility";
+      fabricProfile = "visibility";
+      components = [
+        "storage-probe";
+        "storage-fault-probe";
+        "storage-store-probe";
+        "directory-probe";
+        "powerbox-probe";
+        "sample-lender";
+        "sample-receiver";
+        "fabric-intruder";
+        "fabric-publisher-b";
+        "fabric-subscriber-b";
+        "fabric-call-client-b";
+        "fabric-op-client-b";
+        "fabric-op-client-b-restart";
+        "fabric-observer";
+      ];
+      requiredComponents = ["init"; "console"; "dango"; "storage-probe";];
+    };
+    {
+      name = "unified";
+      fabricProfile = "unified";
+      components = [
+        "storage-probe";
+        "storage-fault-probe";
+        "storage-store-probe";
+        "directory-probe";
+        "powerbox-probe";
+        "sample-lender";
+        "sample-receiver";
+        "fabric-publisher-b";
+        "fabric-subscriber-b";
+        "fabric-observer";
+        "fabric-probe";
+        "fabric-proxy";
+        "fabric-call-client-b";
+        "fabric-op-client-b";
+        "fabric-op-client-b-restart";
+      ];
+      requiredComponents = ["init"; "console"; "dango"; "storage-probe";];
+    };
+  ];
+
   sharedBufferBudget = [
     { holder = "dango"; bytePages = 8; bufferCount = 2; mappingCount = 4; loanCount = 2; };
     { holder = "spawn-service"; bytePages = 4; bufferCount = 1; mappingCount = 2; loanCount = 1; };

@@ -392,7 +392,10 @@ def run_scenario(image: Path) -> tuple[list[dict], dict]:
     kernel = RELEASE_KERNEL
 
     environment = os.environ.copy()
+    # B11: this gate exercises verification scaffolding, so it selects the
+    # boot profile that declares it. The product profile declares none.
     environment["SLIME_GENERATION_NUMBER"] = "99"
+    environment["SLIME_FABRIC_PROFILE"] = "test"
     environment["SLIME_PENDING_GENERATION"] = "1"
     environment["SLIME_PENDING_ATTEMPTS"] = "2"
     run(

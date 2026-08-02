@@ -16,54 +16,39 @@ at the bottom rather than deleting it.
 
 ## Open
 
-B11 is open. It comes from the same survey as B10, recorded in
-`devlog/2026-07-31-boot-layout-positional-coupling/`. B10 is resolved, which
-clears B11's stated blocker: slot numbers are no longer hardcoded on either
-side, so moving a component between profiles no longer moves a number that
-kernel or component source has baked in.
+
+## Resolved
 
 ### B11 — test scaffolding is declared in the product boot generation
 
-**Problem:** `contracts/generation/v1/fixtures/valid.zti` declares 42 components,
-of which 16 are probes and scenario doubles: `storage-probe`,
-`storage-fault-probe`, `storage-store-probe`, `directory-probe`,
-`powerbox-probe`, `sample-lender`, `sample-receiver`, `fabric-intruder`,
-`fabric-probe`, `fabric-observer`, `fabric-proxy`, `fabric-publisher-b`,
-`fabric-subscriber-b`, `fabric-call-client-b`, `fabric-op-client-b`, and
-`fabric-op-client-b-restart`. They are not incidental strings: they hold
-`-control` endpoints and real capability grants, and `storage-probe` appears in
-`requiredComponents`. There is one manifest and one shape, so verification
-scaffolding and product services are declared as peers.
+**Resolved:** 2026-08-01. See
+`devlog/2026-08-01-b11-product-boot-profiles/`.
 
-**Evidence:** The fixture is 1161 lines. `fabric-intruder` (line 593),
-`fabric-probe` (689), and `fabric-observer` (705) each declare an object, a
-component entry, and a `-control` grant; `requiredComponents` at line 1159 is
-`["init"; "console"; "dango"; "storage-probe";]`.
+**Problem:** The source manifest had one global component graph and health
+policy. It declared the sixteen probes and scenario doubles originally named by
+B11, plus the test-only `storage-writer`, as peers of product services with
+real capability grants. Selecting a fabric profile changed interposition only;
+it could not remove a component, its executable object, authority, budget, or
+health edge from the authenticated generation.
 
-**Proposed fix:** Extend the profile mechanism that already exists rather than
-adding a second selector. `scripts/build/build-generation.py` already resolves a
-named profile (`selected_profile_name` at 563, `resolve_fabric_graph` at 616,
-`SLIME_FABRIC_PROFILE`), and the fixture already declares `default`,
-`visibility`, and `unified` profiles — but that mechanism governs interposition
-chains only, not which components a generation declares. Extending it to select
-the component set lets scaffolding live in test profiles while the product
-profile declares only real services. A separate test-generation file is the wrong
-shape: it would duplicate the route, QoS, and budget declarations the fabric
-graph already resolves, and would let the two paths drift.
+**Fix:** Added a versioned Zutai `BootProfile` to the existing profile mechanism.
+The builder resolves one profile to a closed component/object/grant/state/budget/
+health/fabric graph before encoding. `default` is the scaffolding-free product
+profile; `test`, `visibility`, and `unified` explicitly declare the verification
+participants their gates use. The boot-layout emitter and kernel placer accept
+profile-absent scaffolding while retaining exact rights and filled-slot checks,
+and init consumes the same generated labels for every scenario executable and
+authority role.
 
-**Depends on:** B10, resolved 2026-08-01. That dependency is cleared: slot
-numbers are no longer written by hand on either side, so moving a component
-between profiles changes the layout resource rather than a literal in kernel or
-component source. `just boot_layout_check` will show the resulting slot changes
-as a reviewable diff, which is what "the gates cannot absorb" previously
-described.
-
-**Exit condition:** The product boot profile declares only components the product
-needs; scaffolding participants are declared in test profiles selected by the
-existing profile mechanism; and every gate that today depends on a probe still
-selects it explicitly and observes its current result.
-
-## Resolved
+**Exit condition (observed):** `just product_boot_check` boots a healthy 45-slot
+product generation that names none of the seventeen test-only components. `just
+boot_layout_check` passes all nineteen profile/layout pairs while preserving all
+eighteen pre-B11 fixtures. Every probe-dependent gate explicitly selects its
+profile and passes, including all five storage gates, directory, powerbox,
+sample-plane, fabric authority/stream/QoS/call/operation/visibility/full-graph,
+generation commands, rollback, bootstate trace, and transfer. `just test` passes
+189 assertions; contracts, generation determinism, formatting, lint, Python
+lint, spelling, devlog, and Framework safety checks are clean.
 
 ### B10 — init's capability layout is a positional convention, so boot paths are selected at kernel compile time
 

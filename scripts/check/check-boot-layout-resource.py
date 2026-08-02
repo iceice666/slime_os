@@ -43,32 +43,43 @@ from boot_layout import (
     layout_for,
     render_rust as render_boot_layout_rust,
 )
-from harness import ROOT
+from harness import ROOT, load_script
 
 FIXTURES = ROOT / "contracts" / "boot-layout" / "v1" / "fixtures"
 
-# Fixture stem -> the generation number that boots it. Mirrors `PROFILES` in
-# check-boot-layout.py; the storage fixtures differ only in attached hardware,
-# so several map to the same number.
-FIXTURE_GENERATIONS = {
-    "default": 1,
-    "storage-read": 1,
-    "storage-write": 2,
-    "storage-fault": 3,
-    "storage-store": 4,
-    "directory": 6,
-    "dango": 7,
-    "generation-commands": 8,
-    "powerbox": 9,
-    "sample-plane": 10,
-    "fabric-authority": 11,
-    "fabric-stream": 12,
-    "fabric-qos": 13,
-    "fabric-call": 14,
-    "fabric-operation": 15,
-    "fabric-visibility": 16,
-    "fabric-boot": 17,
-    "bootstate": 99,
+# The boot profiles are declared in the generation manifest, so this check reads
+# them through the builder rather than restating the component sets (B11).
+builder = load_script("build_generation", "build/build-generation.py")
+MANIFEST = builder.load_manifest()
+
+# Fixture stem -> (generation number, boot profile) that boots it. Mirrors
+# `PROFILES` in check-boot-layout.py; the storage fixtures differ only in
+# attached hardware, so several map to the same number.
+#
+# B11: every fixture below `product` boots a profile that declares verification
+# scaffolding, which is why their slot tables are unchanged by that milestone.
+# `product` is the boot the product ships -- no probes, no scenario doubles --
+# and is the one layout the scaffolding profiles cannot speak for.
+FIXTURE_PROFILES = {
+    "default": (1, "test"),
+    "product": (1, "default"),
+    "storage-read": (1, "test"),
+    "storage-write": (2, "test"),
+    "storage-fault": (3, "test"),
+    "storage-store": (4, "test"),
+    "directory": (6, "test"),
+    "dango": (7, "test"),
+    "generation-commands": (8, "test"),
+    "powerbox": (9, "test"),
+    "sample-plane": (10, "test"),
+    "fabric-authority": (11, "test"),
+    "fabric-stream": (12, "test"),
+    "fabric-qos": (13, "test"),
+    "fabric-call": (14, "test"),
+    "fabric-operation": (15, "test"),
+    "fabric-visibility": (16, "visibility"),
+    "fabric-boot": (17, "unified"),
+    "bootstate": (99, "test"),
 }
 
 # What the kernel puts in the storage slot when the platform enumerates no
@@ -126,13 +137,22 @@ def expected_identity(role: str, label: str | None) -> bytes:
     return component_identity(label) if role == "executable" else channel_identity(label)
 
 
-def check_generation(number: int) -> None:
+def profile_components(profile: str) -> set[str]:
+    """The component set one boot profile declares (B11)."""
+    return {
+        component["name"]
+        for component in builder.resolve_boot_profile(MANIFEST, profile)["components"]
+    }
+
+
+def check_generation(number: int, profile: str) -> None:
     """Encode and decode one generation's resource, and check its header."""
-    blob = build_boot_layout(number, fail)
+    components = profile_components(profile)
+    blob = build_boot_layout(number, fail, components)
     decoded_number, entries = decode(blob)
     if decoded_number != number:
         fail(f"generation {number} resource carries number {decoded_number}")
-    declared = layout_for(number)
+    declared = layout_for(number, components)
     if len(entries) != len(declared):
         fail(f"generation {number}: encoded {len(entries)} entries, declared {len(declared)}")
     for (slot, role, identity, rights), (want_slot, want_role, want_label, want_rights) in zip(
@@ -144,9 +164,12 @@ def check_generation(number: int) -> None:
             fail(f"generation {number} slot {slot}: identity disagrees with its label")
 
 
-def check_fixture(stem: str, number: int) -> None:
+def check_fixture(stem: str, number: int, profile: str) -> None:
     """Compare one generation's emitted layout against what the kernel resolved."""
-    declared = {slot: (role, label, rights) for slot, role, label, rights in layout_for(number)}
+    declared = {
+        slot: (role, label, rights)
+        for slot, role, label, rights in layout_for(number, profile_components(profile))
+    }
     observed = fixture_rows(stem)
     if len(observed) != len(declared):
         fail(f"{stem}: kernel resolved {len(observed)} slots, resource declares {len(declared)}")
@@ -199,31 +222,37 @@ def check_component_fallback() -> None:
     so.
     """
     path = ROOT / "components" / "bins" / "src" / "default_boot_layout.rs"
-    expected = render_boot_layout_rust(1)
+    expected = render_boot_layout_rust(1, profile_components("default"))
     if path.read_text() != expected:
-        fail(f"{path.relative_to(ROOT)} is stale; regenerate it from layout_for(1)")
+        fail(
+            f"{path.relative_to(ROOT)} is stale; regenerate it from the product "
+            "profile's layout_for(1)"
+        )
 
 
 def main() -> None:
     check_component_fallback()
     print("boot layout resource: component fallback table is current")
-    numbers = sorted(set(FIXTURE_GENERATIONS.values()))
-    for number in numbers:
-        check_generation(number)
-    print(f"boot layout resource: {len(numbers)} generations encode and decode")
+    pairs = sorted(set(FIXTURE_PROFILES.values()))
+    for number, profile in pairs:
+        check_generation(number, profile)
+    print(f"boot layout resource: {len(pairs)} generation/profile pairs encode and decode")
 
     # `build-generation.py` builds two generations from one manifest, and the
     # layout resource must be recomputed for each. Every generation's resource
     # therefore differs from generation 1's, if only in the header number —
     # which is what makes a builder that emitted one into both detectable.
-    baseline = build_boot_layout(1, fail)
-    for number in numbers:
-        if number != 1 and build_boot_layout(number, fail) == baseline:
+    scaffolding = profile_components("test")
+    baseline = build_boot_layout(1, fail, scaffolding)
+    for number, profile in pairs:
+        if profile != "test":
+            continue
+        if number != 1 and build_boot_layout(number, fail, scaffolding) == baseline:
             fail(f"generation 1 and {number} encode identical resources")
 
-    for stem, number in sorted(FIXTURE_GENERATIONS.items()):
-        check_fixture(stem, number)
-    print(f"boot layout resource: {len(FIXTURE_GENERATIONS)} fixtures agree with the resource")
+    for stem, (number, profile) in sorted(FIXTURE_PROFILES.items()):
+        check_fixture(stem, number, profile)
+    print(f"boot layout resource: {len(FIXTURE_PROFILES)} fixtures agree with the resource")
     print("boot layout resource check: ok")
 
 

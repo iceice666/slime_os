@@ -302,28 +302,115 @@ def _distinct_slots(table: tuple, name: str) -> None:
         raise ValueError(f"boot layout {name}: slot(s) {duplicated} declared twice")
 
 
-def layout_for(number: int) -> tuple:
-    """The slot table this generation number resolves, as (slot, role, label, rights)."""
+# Every component any layout names an executable for. A channel half belongs to
+# whichever of these its label is built from, so dropping a component from a
+# profile drops the endpoints minted for it too.
+def _layout_components() -> set[str]:
+    tables = (BASE_LAYOUT, *OVERRIDES.values(), *REPLACEMENTS.values())
+    return {
+        label
+        for table in tables
+        for _slot, role, label, _rights in table
+        if role == "executable"
+    }
+
+
+# Channel label -> the component it belongs to. Built by stripping the suffixes
+# the endpoint convention appends, longest first so `-control-service` is not
+# read as a `-control` channel of a component ending `-control`. A label that
+# strips to no known component belongs to no one -- `console-output` and
+# `dango-spawn` name a channel between two components rather than one
+# component's own endpoint, and both ends live or die with the base layout.
+def _channel_components() -> dict[str, str]:
+    components = _layout_components()
+    suffixes = ("-control-service", "-control", "-service", "-client", "-side")
+    owners: dict[str, str] = {}
+    for table in (BASE_LAYOUT, *OVERRIDES.values(), *REPLACEMENTS.values()):
+        for _slot, role, label, _rights in table:
+            if label is None or role == "executable" or label in owners:
+                continue
+            for suffix in suffixes:
+                if label.endswith(suffix) and label[: -len(suffix)] in components:
+                    owners[label] = label[: -len(suffix)]
+                    break
+    return owners
+
+
+CHANNEL_COMPONENTS = _channel_components()
+
+
+def layout_for(number: int, components: set[str] | None = None) -> tuple:
+    """The slot table this generation number resolves, as (slot, role, label, rights).
+
+    B11: `components` is the set the selected boot profile declares. A slot
+    naming a component the profile leaves out is dropped, and the survivors are
+    renumbered from zero in declared order -- init's table cannot carry a hole,
+    since `LayoutPlacer::finish` requires every slot below the high-water mark
+    to be filled.
+
+    Renumbering is safe where it happens because `init.rs` addresses every slot
+    through the generated constant for its label rather than a literal, so a
+    moved slot moves in both readers at once. It also only happens for a profile
+    that actually drops something: a profile declaring every component this
+    table names filters nothing and compacts nothing, which is why the test,
+    visibility, and full-graph profiles keep their slots byte-for-byte and their
+    gates keep observing the evidence they already recorded.
+    """
     if number in REPLACEMENTS:
         _distinct_slots(REPLACEMENTS[number], f"replacement {number}")
-        return REPLACEMENTS[number]
-    _distinct_slots(BASE_LAYOUT, "base")
-    override = OVERRIDES.get(number, ())
-    _distinct_slots(override, f"override {number}")
-    entries = {slot: (slot, role, label, rights) for slot, role, label, rights in BASE_LAYOUT}
-    for slot, role, label, rights in override:
-        entries[slot] = (slot, role, label, rights)
-    return tuple(entries[slot] for slot in sorted(entries))
+        entries = REPLACEMENTS[number]
+    else:
+        _distinct_slots(BASE_LAYOUT, "base")
+        override = OVERRIDES.get(number, ())
+        _distinct_slots(override, f"override {number}")
+        merged = {slot: (slot, role, label, rights) for slot, role, label, rights in BASE_LAYOUT}
+        for slot, role, label, rights in override:
+            merged[slot] = (slot, role, label, rights)
+        entries = tuple(merged[slot] for slot in sorted(merged))
+    if components is None:
+        return entries
+    kept = [
+        entry
+        for entry in entries
+        if (owner := _entry_component(entry)) is None or owner in components
+    ]
+    if len(kept) == len(entries):
+        return entries
+    return tuple(
+        (index, role, label, rights)
+        for index, (_slot, role, label, rights) in enumerate(kept)
+    )
 
 
-def build_boot_layout(number: int, fail) -> bytes:
+def _entry_component(entry: tuple) -> str | None:
+    """The component a slot belongs to, or `None` when it belongs to no one.
+
+    An executable is its own component. A channel half belongs to the component
+    its label names, which is the label with the `-client`/`-service` suffix
+    the endpoint convention adds -- so dropping a component drops both halves of
+    its control channel with it. A role slot (the endpoint factory, the input
+    device) belongs to no component and is always kept.
+    """
+    _slot, role, label, _rights = entry
+    if label is None:
+        return None
+    if role == "executable":
+        return label
+    return CHANNEL_COMPONENTS.get(label)
+
+
+def build_boot_layout(number: int, fail, components: set[str] | None = None) -> bytes:
     """Encode the B10 boot capability layout resource object for one generation.
 
     Entries are sorted by slot and unique: the decoder rejects any other order,
     because a slot claimed twice would make the layout depend on which claim was
     applied last -- the positional ambiguity this resource exists to remove.
+
+    `components` is the set the selected boot profile declares (B11); the layout
+    is narrowed to it so the resource and the generation cannot disagree about
+    which components exist.
     """
-    entries = layout_for(number)
+    entries = layout_for(number, components)
     if len(entries) > MAX_BOOT_LAYOUT_ENTRIES:
         fail(f"boot layout for generation {number} exceeds the capability table")
     encoded = b""
@@ -386,7 +473,7 @@ def rust_identifier(label: str) -> str:
     return label.replace("-", "_").upper() + "_SLOT"
 
 
-def render_rust(number: int) -> str:
+def render_rust(number: int, components: set[str] | None = None) -> str:
     """The slot table for one generation, as a Rust constant per label.
 
     `init.rs` addresses slots by these names rather than by literal numbers, so
@@ -394,8 +481,17 @@ def render_rust(number: int) -> str:
     source. A label this generation does not declare is `SLOT_ABSENT`: using it
     then fails at the syscall with a slot number in hand, rather than failing
     the build for every other profile.
+
+    `components` narrows the table to the selected boot profile (B11). The set
+    of constant *names* is unaffected -- `all_labels()` unions every profile, so
+    a body gated by a check flag still compiles -- and a component the profile
+    drops simply has `SLOT_ABSENT` where it had a slot.
     """
-    declared = {label: slot for slot, _, label, _ in layout_for(number) if label is not None}
+    declared = {
+        label: slot
+        for slot, _, label, _ in layout_for(number, components)
+        if label is not None
+    }
     lines = [
         "// @generated from contracts/boot-layout/v1 by scripts/build/boot_layout.py;",
         "// do not edit. Regenerate through `just generation_check`.",
@@ -421,7 +517,7 @@ def render_rust(number: int) -> str:
     # order with an index suffix, matching the order the kernel places them in.
     lines.append("")
     by_role: dict[str, list[int]] = {}
-    for slot, role, label, _ in layout_for(number):
+    for slot, role, label, _ in layout_for(number, components):
         if label is None:
             by_role.setdefault(role, []).append(slot)
     # A role can repeat: generation 4 declares an object store in both the

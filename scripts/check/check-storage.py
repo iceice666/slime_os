@@ -39,12 +39,22 @@ STORE_DEVICE_ARGS = [
 def run_guest(image: Path, mode: int, device_args: list[str] = DEVICE_ARGS) -> str:
     arguments = [value.format(image=image) for value in device_args]
     environment = os.environ.copy()
+    # B11: this gate exercises verification scaffolding, so it selects the
+    # boot profile that declares it. The product profile declares none.
     environment["SLIME_GENERATION_NUMBER"] = str(mode + 1)
+    environment["SLIME_FABRIC_PROFILE"] = "test"
+    # Generations 2-4 are candidate generations. The generation manager must
+    # confirm them against a BootState that actually names them as pending;
+    # otherwise it correctly rejects confirmation before the storage probe can
+    # satisfy health. This is the same fixture contract used by rollback and
+    # bootstate-trace checks.
+    environment["SLIME_PENDING_GENERATION"] = "1"
+    environment["SLIME_PENDING_ATTEMPTS"] = "2"
     return run_qemu(
-        ["cargo", "run", "--", *arguments],
+        ["cargo", "run", "--release", "--", *arguments],
         environment=environment,
         cwd=ROOT / "kernel",
-        timeout=None,
+        timeout=300,
     )
 
 

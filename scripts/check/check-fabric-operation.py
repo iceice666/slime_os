@@ -197,7 +197,10 @@ UNRELATED_CHECKS = [
 
 def run_profile(flag: str, generation: str) -> str:
     environment = os.environ.copy()
+    # B11: this gate exercises verification scaffolding, so it selects the
+    # boot profile that declares it. The product profile declares none.
     environment["SLIME_GENERATION_NUMBER"] = generation
+    environment["SLIME_FABRIC_PROFILE"] = "test"
     environment[flag] = "1"
     return run_qemu(
         ["cargo", "run", "--release", "--", "-display", "none"],

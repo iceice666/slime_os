@@ -26,17 +26,26 @@ const RIGHT_BUFFER_CREATE: Rights = 1 << 24;
 const RIGHT_SUPERVISE: Rights = 1 << 18;
 
 // Manifest-derived bootstrap slot order is emitted by the host builder.
-const CONSOLE_CAPS: [SpawnGrant; 1] = [grant(2, RIGHT_RECV)];
-const STORAGE_PROBE_READ_CAPS: [SpawnGrant; 1] = [grant(9, RIGHT_BLOCK_READ)];
-const STORAGE_PROBE_WRITE_CAPS: [SpawnGrant; 1] = [grant(9, RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE)];
-const STORAGE_PROBE_STORE_CAPS: [SpawnGrant; 1] = [grant(9, RIGHT_STORE_READ | RIGHT_STORE_WRITE)];
+const CONSOLE_CAPS: [SpawnGrant; 1] = [grant(CONSOLE_OUTPUT_SLOT, RIGHT_RECV)];
+const STORAGE_PROBE_READ_CAPS: [SpawnGrant; 1] = [grant(STORAGE_CAPABILITY_SLOT, RIGHT_BLOCK_READ)];
+const STORAGE_PROBE_WRITE_CAPS: [SpawnGrant; 1] = [grant(
+    STORAGE_CAPABILITY_SLOT,
+    RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE,
+)];
+const STORAGE_PROBE_STORE_CAPS: [SpawnGrant; 1] = [grant(
+    OBJECT_STORE_SLOT_0,
+    RIGHT_STORE_READ | RIGHT_STORE_WRITE,
+)];
 const GENERATION_MANAGER_CAPS: [SpawnGrant; 6] = [
-    grant(31, RIGHT_SEND | RIGHT_RECV),
-    grant(11, RIGHT_HEALTH_CONFIRM | RIGHT_BOOT_UPDATE),
-    grant(32, RIGHT_SEND | RIGHT_RECV),
-    grant(33, RIGHT_SEND | RIGHT_RECV),
-    grant(34, RIGHT_SEND | RIGHT_RECV),
-    grant(35, RIGHT_SEND | RIGHT_RECV),
+    grant(GENERATION_LIST_SERVICE_SLOT, RIGHT_SEND | RIGHT_RECV),
+    grant(
+        GENERATION_CONTROL_SLOT,
+        RIGHT_HEALTH_CONFIRM | RIGHT_BOOT_UPDATE,
+    ),
+    grant(GENERATION_INSPECT_SERVICE_SLOT, RIGHT_SEND | RIGHT_RECV),
+    grant(GENERATION_STAGE_SERVICE_SLOT, RIGHT_SEND | RIGHT_RECV),
+    grant(GENERATION_SELECT_SERVICE_SLOT, RIGHT_SEND | RIGHT_RECV),
+    grant(GENERATION_ROLLBACK_SERVICE_SLOT, RIGHT_SEND | RIGHT_RECV),
 ];
 const RECOVERY_CAPS: [SpawnGrant; 2] = [
     grant(2, RIGHT_BOOT_UPDATE),
@@ -45,39 +54,39 @@ const RECOVERY_CAPS: [SpawnGrant; 2] = [
 
 fn dango_caps() -> [SpawnGrant; 6] {
     [
-        grant(12, RIGHT_SEND | RIGHT_RECV),
-        grant(4, RIGHT_SEND | RIGHT_TRANSFER),
-        grant(20, RIGHT_INPUT_READ),
+        grant(DANGO_SPAWN_SLOT, RIGHT_SEND | RIGHT_RECV),
+        grant(DANGO_OUTPUT_SLOT, RIGHT_SEND | RIGHT_TRANSFER),
+        grant(INPUT_SLOT, RIGHT_INPUT_READ),
         grant(
-            19,
+            DIRECTORY_SLOT,
             RIGHT_DIRECTORY_READ | RIGHT_DIRECTORY_DERIVE | RIGHT_TRANSFER,
         ),
-        grant(0, RIGHT_ENDPOINT_CREATE),
+        grant(ENDPOINT_FACTORY_SLOT, RIGHT_ENDPOINT_CREATE),
         grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
     ]
 }
 
 fn spawn_service_caps() -> [SpawnGrant; 5] {
     [
-        grant(13, RIGHT_SEND | RIGHT_RECV),
-        grant(6, RIGHT_EXEC | RIGHT_SPAWN),
-        grant(7, RIGHT_EXEC | RIGHT_SPAWN),
-        grant(0, RIGHT_ENDPOINT_CREATE),
+        grant(SERVICE_SPAWN_SLOT, RIGHT_SEND | RIGHT_RECV),
+        grant(SYSINFO_SLOT, RIGHT_EXEC | RIGHT_SPAWN),
+        grant(ECHO_AGENT_SLOT, RIGHT_EXEC | RIGHT_SPAWN),
+        grant(ENDPOINT_FACTORY_SLOT, RIGHT_ENDPOINT_CREATE),
         grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
     ]
 }
 
 fn filesystem_caps() -> [SpawnGrant; 2] {
     [
-        grant(17, RIGHT_SEND | RIGHT_RECV),
-        grant(18, RIGHT_STORE_READ | RIGHT_STORE_WRITE),
+        grant(DIRECTORY_SERVICE_SLOT, RIGHT_SEND | RIGHT_RECV),
+        grant(OBJECT_STORE_SLOT, RIGHT_STORE_READ | RIGHT_STORE_WRITE),
     ]
 }
 
 const DIRECTORY_PROBE_CAPS: [SpawnGrant; 2] = [
-    grant(16, RIGHT_SEND | RIGHT_RECV),
+    grant(DIRECTORY_CLIENT_SLOT, RIGHT_SEND | RIGHT_RECV),
     grant(
-        19,
+        DIRECTORY_SLOT,
         RIGHT_TRANSFER
             | RIGHT_DIRECTORY_READ
             | RIGHT_DIRECTORY_WRITE
@@ -86,18 +95,29 @@ const DIRECTORY_PROBE_CAPS: [SpawnGrant; 2] = [
     ),
 ];
 
-const GENERATION_LIST_CAPS: [SpawnGrant; 1] = [grant(26, RIGHT_SEND | RIGHT_RECV)];
-const GENERATION_INSPECT_CAPS: [SpawnGrant; 1] = [grant(27, RIGHT_SEND | RIGHT_RECV)];
-const GENERATION_STAGE_CAPS: [SpawnGrant; 1] = [grant(28, RIGHT_SEND | RIGHT_RECV)];
-const GENERATION_SELECT_CAPS: [SpawnGrant; 1] = [grant(29, RIGHT_SEND | RIGHT_RECV)];
-const GENERATION_ROLLBACK_CAPS: [SpawnGrant; 1] = [grant(30, RIGHT_SEND | RIGHT_RECV)];
+const GENERATION_LIST_CAPS: [SpawnGrant; 1] =
+    [grant(GENERATION_LIST_CLIENT_SLOT, RIGHT_SEND | RIGHT_RECV)];
+const GENERATION_INSPECT_CAPS: [SpawnGrant; 1] = [grant(
+    GENERATION_INSPECT_CLIENT_SLOT,
+    RIGHT_SEND | RIGHT_RECV,
+)];
+const GENERATION_STAGE_CAPS: [SpawnGrant; 1] =
+    [grant(GENERATION_STAGE_CLIENT_SLOT, RIGHT_SEND | RIGHT_RECV)];
+const GENERATION_SELECT_CAPS: [SpawnGrant; 1] = [grant(
+    GENERATION_SELECT_CLIENT_SLOT,
+    RIGHT_SEND | RIGHT_RECV,
+)];
+const GENERATION_ROLLBACK_CAPS: [SpawnGrant; 1] = [grant(
+    GENERATION_ROLLBACK_CLIENT_SLOT,
+    RIGHT_SEND | RIGHT_RECV,
+)];
 const POWERBOX_CHOOSER_CAPS: [SpawnGrant; 3] = [
-    grant(39, RIGHT_SEND | RIGHT_RECV),
+    grant(POWERBOX_SERVICE_SLOT, RIGHT_SEND | RIGHT_RECV),
     grant(
-        19,
+        DIRECTORY_SLOT,
         RIGHT_DIRECTORY_READ | RIGHT_DIRECTORY_DERIVE | RIGHT_TRANSFER,
     ),
-    grant(20, RIGHT_INPUT_READ),
+    grant(INPUT_SLOT, RIGHT_INPUT_READ),
 ];
 // Init's slot numbers come from the generation's boot layout, emitted by
 // `scripts/build/boot_layout.py` into `OUT_DIR` at component build time. The
@@ -123,7 +143,7 @@ include!(concat!(env!("OUT_DIR"), "/boot_layout.rs"));
 const TRANSFER_RECEIVER_SLOT: u32 = 61;
 const TRANSFER_SOURCE_SLOT: u32 = 62;
 
-const POWERBOX_PROBE_CAPS: [SpawnGrant; 1] = [grant(38, RIGHT_SEND | RIGHT_RECV)];
+const POWERBOX_PROBE_CAPS: [SpawnGrant; 1] = [grant(POWERBOX_CLIENT_SLOT, RIGHT_SEND | RIGHT_RECV)];
 
 const fn grant(slot: u32, rights: Rights) -> SpawnGrant {
     SpawnGrant { slot, rights }
@@ -134,6 +154,15 @@ fn storage_caps() -> &'static [SpawnGrant] {
         Some("2") | Some("3") => &STORAGE_PROBE_WRITE_CAPS,
         Some("4") => &STORAGE_PROBE_STORE_CAPS,
         _ => &STORAGE_PROBE_READ_CAPS,
+    }
+}
+
+fn storage_executable_slot() -> u32 {
+    match option_env!("SLIME_GENERATION_NUMBER") {
+        Some("2") => STORAGE_WRITER_SLOT,
+        Some("3") => STORAGE_FAULT_PROBE_SLOT,
+        Some("4") => STORAGE_STORE_PROBE_SLOT,
+        _ => STORAGE_PROBE_SLOT,
     }
 }
 
@@ -191,22 +220,22 @@ fn main() {
     }
 
     if matches!(option_env!("SLIME_GENERATION_NUMBER"), Some("6" | "7")) {
-        spawn_or_fail(14, &filesystem_caps());
-        spawn_or_fail(15, &DIRECTORY_PROBE_CAPS);
+        spawn_or_fail(FILESYSTEM_SERVICE_SLOT, &filesystem_caps());
+        spawn_or_fail(DIRECTORY_PROBE_SLOT, &DIRECTORY_PROBE_CAPS);
     }
     if option_env!("SLIME_POWERBOX_CHECK") == Some("1") {
-        spawn_or_fail(1, &CONSOLE_CAPS);
-        spawn_or_fail(36, &POWERBOX_CHOOSER_CAPS);
-        spawn_and_wait(37, &POWERBOX_PROBE_CAPS);
+        spawn_or_fail(CONSOLE_SLOT, &CONSOLE_CAPS);
+        spawn_or_fail(POWERBOX_CHOOSER_SLOT, &POWERBOX_CHOOSER_CAPS);
+        spawn_and_wait(POWERBOX_PROBE_SLOT, &POWERBOX_PROBE_CAPS);
         slime_rt::debug_write(b"[init] powerbox scenario complete\n");
         slime_rt::exit(0);
     }
     if option_env!("SLIME_GENERATION_CMD_CHECK") != Some("1")
         && option_env!("SLIME_POWERBOX_CHECK") != Some("1")
     {
-        spawn_or_fail(1, &CONSOLE_CAPS);
-        spawn_or_fail(3, &dango_caps());
-        spawn_or_fail(5, &spawn_service_caps());
+        spawn_or_fail(CONSOLE_SLOT, &CONSOLE_CAPS);
+        spawn_or_fail(DANGO_SLOT, &dango_caps());
+        spawn_or_fail(SPAWN_SERVICE_SLOT, &spawn_service_caps());
         if option_env!("SLIME_DANGO_CHECK") != Some("1")
             && option_env!("SLIME_GENERATION_NUMBER") != Some("9")
         {
@@ -215,29 +244,37 @@ fn main() {
             // storage-probe's BLOCK_READ derive is rejected. That is the expected
             // no-disk case (the kernel's `on_idle` already tolerates an absent
             // storage-probe), so skip it rather than aborting the whole graph.
-            spawn_optional_storage(8, storage_caps());
+            //
+            // The selected generation's layout names exactly one storage probe
+            // executable. Product boots name none, so the resolved slot is
+            // `SLOT_ABSENT`; storage scenarios name their writer/fault/store
+            // executable rather than the read probe's label.
+            let storage_slot = storage_executable_slot();
+            if storage_slot != SLOT_ABSENT {
+                spawn_optional_storage(storage_slot, storage_caps());
+            }
         }
     }
     if option_env!("SLIME_GENERATION_CMD_CHECK") != Some("1") {
-        spawn_or_fail(10, &GENERATION_MANAGER_CAPS);
+        spawn_or_fail(GENERATION_MANAGER_SLOT, &GENERATION_MANAGER_CAPS);
     }
     if option_env!("SLIME_GENERATION_CMD_CHECK") == Some("1") {
         let negative_scenario = matches!(
             option_env!("SLIME_GENERATION_CMD_SCENARIO"),
             Some("bad-closure" | "bad-release")
         );
-        spawn_or_fail(10, &GENERATION_MANAGER_CAPS);
-        spawn_and_wait(21, &GENERATION_LIST_CAPS);
+        spawn_or_fail(GENERATION_MANAGER_SLOT, &GENERATION_MANAGER_CAPS);
+        spawn_and_wait(GENERATION_LIST_SLOT, &GENERATION_LIST_CAPS);
         if !negative_scenario {
-            spawn_and_wait(22, &GENERATION_INSPECT_CAPS);
+            spawn_and_wait(GENERATION_INSPECT_SLOT, &GENERATION_INSPECT_CAPS);
         }
-        spawn_and_wait(23, &GENERATION_STAGE_CAPS);
+        spawn_and_wait(GENERATION_STAGE_SLOT, &GENERATION_STAGE_CAPS);
         if negative_scenario {
             slime_rt::debug_write(b"[init] negative generation scenario complete\n");
             slime_rt::exit(0);
         }
-        spawn_and_wait(24, &GENERATION_SELECT_CAPS);
-        spawn_and_wait(25, &GENERATION_ROLLBACK_CAPS);
+        spawn_and_wait(GENERATION_SELECT_SLOT, &GENERATION_SELECT_CAPS);
+        spawn_and_wait(GENERATION_ROLLBACK_SLOT, &GENERATION_ROLLBACK_CAPS);
     }
     if option_env!("SLIME_SAMPLE_PLANE_CHECK") == Some("1") {
         launch_sample_plane();

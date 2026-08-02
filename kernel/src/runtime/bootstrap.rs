@@ -271,7 +271,7 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         crate::capability::RIGHT_ENDPOINT_CREATE,
     );
     serial_println!("[generation] Dango context grants valid");
-    require_grant(
+    require_scaffolding_grant(
         generation,
         "block-read",
         "init",
@@ -279,7 +279,7 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         RIGHT_BLOCK_READ,
     );
     serial_println!("[generation] block read grant valid");
-    require_grant(
+    require_scaffolding_grant(
         generation,
         "block-write-check",
         "init",
@@ -287,7 +287,7 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE,
     );
     serial_println!("[generation] block write grant valid");
-    require_grant(
+    require_scaffolding_grant(
         generation,
         "block-fault-check",
         "init",
@@ -326,7 +326,7 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         );
     }
     serial_println!("[generation] update grants valid");
-    require_grant(
+    require_scaffolding_grant(
         generation,
         "store-access",
         "init",
@@ -334,7 +334,7 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         RIGHT_STORE_READ | RIGHT_STORE_WRITE,
     );
     serial_println!("[generation] store grant valid");
-    require_grant(
+    require_scaffolding_grant(
         generation,
         "filesystem-rpc",
         "directory-probe",
@@ -348,7 +348,7 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         "filesystem-service",
         RIGHT_STORE_READ | RIGHT_STORE_WRITE,
     );
-    require_grant(
+    require_scaffolding_grant(
         generation,
         "filesystem-root",
         "init",
@@ -359,7 +359,7 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
             | RIGHT_DIRECTORY_LIST
             | RIGHT_DIRECTORY_DERIVE,
     );
-    require_grant(
+    require_scaffolding_grant(
         generation,
         "powerbox-rpc",
         "powerbox-probe",
@@ -395,21 +395,21 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         "spawn-service",
         crate::capability::RIGHT_BUFFER_CREATE,
     );
-    require_grant(
+    require_scaffolding_grant(
         generation,
         "sample-lender-shared-buffer-factory",
         "init",
         "sample-lender",
         crate::capability::RIGHT_BUFFER_CREATE,
     );
-    require_grant(
+    require_scaffolding_grant(
         generation,
         "sample-plane-channel",
         "sample-lender",
         "sample-receiver",
         RIGHT_SEND | RIGHT_RECV,
     );
-    require_grant(
+    require_scaffolding_grant(
         generation,
         "sample-plane-receiver-supervision",
         "init",
@@ -435,16 +435,6 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         ("fabric-intruder", "fabric-intruder-control"),
         ("fabric-publisher-b", "fabric-publisher-b-control"),
         ("fabric-subscriber-b", "fabric-subscriber-b-control"),
-    ] {
-        require_grant(
-            generation,
-            grant,
-            client,
-            "fabric-service",
-            RIGHT_SEND | RIGHT_RECV,
-        );
-    }
-    for (client, grant) in [
         ("fabric-call-client", "fabric-call-client-control"),
         ("fabric-call-client-b", "fabric-call-client-b-control"),
         ("fabric-call-server", "fabric-call-server-control"),
@@ -457,7 +447,7 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         ("fabric-op-server", "fabric-op-server-control"),
         ("fabric-op-time", "fabric-op-time-control"),
     ] {
-        require_grant(
+        require_scaffolding_grant(
             generation,
             grant,
             client,
@@ -536,7 +526,7 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
     placer.executable(generation, "spawn-service");
     placer.executable(generation, "sysinfo");
     placer.executable(generation, "echo-agent");
-    placer.one_of(generation, &STORAGE_COMPONENTS, "storage component");
+    placer.one_of(generation, &STORAGE_COMPONENTS);
     // The storage capability is the one slot whose object the layout cannot
     // name. It declares the authority a present block device carries; when the
     // platform enumerates none, a read-only object store stands in. Those
@@ -578,7 +568,7 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
     );
     placer.endpoint("service-spawn", service_spawn, RIGHT_SEND | RIGHT_RECV);
     placer.executable(generation, "filesystem-service");
-    placer.executable(generation, "directory-probe");
+    placer.optional_executable(generation, "directory-probe");
     placer.endpoint(
         "directory-client",
         directory_client,
@@ -656,7 +646,7 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
     );
     placer.executable(generation, "powerbox-chooser");
-    placer.executable(generation, "powerbox-probe");
+    placer.optional_executable(generation, "powerbox-probe");
     placer.endpoint("powerbox-client", powerbox_client, RIGHT_SEND | RIGHT_RECV);
     placer.endpoint(
         "powerbox-service",
@@ -676,14 +666,14 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
     // through the shared-buffer syscalls; init spawns both and hands the lender
     // the receiver's supervision handle so the loan names its receiver by
     // capability rather than an ambient task id.
-    placer.executable(generation, "sample-lender");
-    placer.executable(generation, "sample-receiver");
-    placer.endpoint(
+    placer.optional_executable(generation, "sample-lender");
+    placer.optional_executable(generation, "sample-receiver");
+    placer.optional_endpoint(
         "sample-lender-side",
         sample_lender_side,
         RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
     );
-    placer.endpoint(
+    placer.optional_endpoint(
         "sample-receiver-side",
         sample_receiver_side,
         RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
@@ -710,22 +700,20 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
     // handed them, and the old `caps[46] = ...` block is why. Preserving it
     // exactly is the point: the layout now records which slots a rewrite loop
     // happened to cover, instead of that being implied by an index range.
-    if placer.declares_component("fabric-subscriber-b") {
-        placer.executable(generation, "fabric-subscriber-b");
-    }
-    placer.endpoint(
+    placer.optional_executable(generation, "fabric-subscriber-b");
+    placer.optional_endpoint(
         "fabric-subscriber-b-client",
         fabric_subscriber_b_client,
         RIGHT_SEND | RIGHT_RECV,
     );
-    placer.endpoint(
+    placer.optional_endpoint(
         "fabric-subscriber-b-service",
         fabric_subscriber_b_service,
         RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
     );
     if placer.declares_component("fabric-call-client") {
         placer.executable_as_declared(generation, "fabric-call-client");
-        placer.executable_as_declared(generation, "fabric-call-client-b");
+        placer.optional_executable_as_declared(generation, "fabric-call-client-b");
         placer.executable_as_declared(generation, "fabric-call-time");
         placer.executable_as_declared(generation, "fabric-call-server");
         placer.endpoint(
@@ -733,7 +721,7 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
             fabric_call_client_control,
             RIGHT_SEND | RIGHT_RECV,
         );
-        placer.endpoint(
+        placer.optional_endpoint(
             "fabric-call-client-b-control",
             fabric_call_client_b_control,
             RIGHT_SEND | RIGHT_RECV,
@@ -753,7 +741,7 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
             fabric_call_client_service,
             RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
         );
-        placer.endpoint(
+        placer.optional_endpoint(
             "fabric-call-client-b-service",
             fabric_call_client_b_service,
             RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
@@ -776,16 +764,16 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
         );
     } else if placer.declares_component("fabric-op-client") {
         placer.executable_as_declared(generation, "fabric-op-client");
-        placer.executable_as_declared(generation, "fabric-op-client-b");
+        placer.optional_executable_as_declared(generation, "fabric-op-client-b");
         placer.executable_as_declared(generation, "fabric-op-server");
         placer.executable_as_declared(generation, "fabric-op-time");
-        placer.executable_as_declared(generation, "fabric-op-client-b-restart");
+        placer.optional_executable_as_declared(generation, "fabric-op-client-b-restart");
         placer.endpoint(
             "fabric-op-client-control",
             fabric_op_client_control,
             RIGHT_SEND | RIGHT_RECV,
         );
-        placer.endpoint(
+        placer.optional_endpoint(
             "fabric-op-client-b-control",
             fabric_op_client_b_control,
             RIGHT_SEND | RIGHT_RECV,
@@ -805,7 +793,7 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
             fabric_op_client_service,
             RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
         );
-        placer.endpoint(
+        placer.optional_endpoint(
             "fabric-op-client-b-service",
             fabric_op_client_b_service,
             RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
@@ -823,8 +811,8 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
     } else {
         placer.executable(generation, "fabric-publisher");
         placer.executable(generation, "fabric-subscriber");
-        placer.executable(generation, "fabric-intruder");
-        placer.executable(generation, "fabric-publisher-b");
+        placer.optional_executable(generation, "fabric-intruder");
+        placer.optional_executable(generation, "fabric-publisher-b");
         placer.endpoint(
             "fabric-publisher-client",
             fabric_publisher_client,
@@ -835,12 +823,12 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
             fabric_subscriber_client,
             RIGHT_SEND | RIGHT_RECV,
         );
-        placer.endpoint(
+        placer.optional_endpoint(
             "fabric-intruder-client",
             fabric_intruder_client,
             RIGHT_SEND | RIGHT_RECV,
         );
-        placer.endpoint(
+        placer.optional_endpoint(
             "fabric-publisher-b-client",
             fabric_publisher_b_client,
             RIGHT_SEND | RIGHT_RECV,
@@ -857,12 +845,12 @@ fn launch_init(generation: &Generation<'static>) -> task::TaskId {
             fabric_subscriber_service,
             RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
         );
-        placer.endpoint(
+        placer.optional_endpoint(
             "fabric-intruder-service",
             fabric_intruder_service,
             RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
         );
-        placer.endpoint(
+        placer.optional_endpoint(
             "fabric-publisher-b-service",
             fabric_publisher_b_service,
             RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
@@ -1315,23 +1303,53 @@ impl<'a> LayoutPlacer<'a> {
         self.place(identity, name, capability);
     }
 
+    /// Place an executable only when this profile declares the component (B11).
+    ///
+    /// Verification scaffolding lives in test profiles, so the product boot
+    /// declares neither the component nor a slot for it. Asking the layout
+    /// rather than a flag keeps the condition the same fact the layout was
+    /// narrowed by; a profile that *does* declare the component still places it
+    /// unconditionally, so `finish`'s both-directions check stays exact.
+    fn optional_executable(&mut self, generation: &Generation<'static>, name: &'static str) {
+        if self.declares_component(name) {
+            self.executable(generation, name);
+        }
+    }
+
+    /// Place a channel half only when this profile declares its slot.
+    fn optional_endpoint(&mut self, label: &'static str, endpoint: ipc::Endpoint, rights: Rights) {
+        if self.declares_channel(label) {
+            self.endpoint(label, endpoint, rights);
+        }
+    }
+
+    /// Place a rights-carrying executable only when this profile declares it.
+    fn optional_executable_as_declared(
+        &mut self,
+        generation: &Generation<'static>,
+        name: &'static str,
+    ) {
+        if self.declares_component(name) {
+            self.executable_as_declared(generation, name);
+        }
+    }
+
     /// Place whichever of `candidates` this generation's layout declares.
     ///
     /// Used where one slot holds a different component per profile — the
     /// storage slot names four. The kernel offers the set it can build and the
     /// layout picks, so adding a fifth is a manifest change rather than another
     /// arm of a `match generation.number`.
-    fn one_of(
-        &mut self,
-        generation: &Generation<'static>,
-        candidates: &[&'static str],
-        what: &str,
-    ) {
-        let chosen = candidates
-            .iter()
-            .find(|name| self.declares_component(name))
-            .unwrap_or_else(|| panic!("boot layout names no {what}"));
-        self.executable(generation, chosen);
+    ///
+    /// A layout naming none of them is a profile with no storage component at
+    /// all, which is what the product boot declares (B11): the probes are
+    /// verification scaffolding. The storage *capability* slot is unaffected —
+    /// it is a role, not a component — so the authority a present block device
+    /// carries is still placed; there is simply nothing here to hand it to.
+    fn one_of(&mut self, generation: &Generation<'static>, candidates: &[&'static str]) {
+        if let Some(chosen) = candidates.iter().find(|name| self.declares_component(name)) {
+            self.executable(generation, chosen);
+        }
     }
 
     /// Whether this generation's layout gives `name` a slot.
@@ -1608,6 +1626,32 @@ fn require_grant<'a>(
                 && grant.rights == rights
         })
         .expect("required grant missing or changed")
+}
+
+/// Check a grant that only some boot profiles declare (B11).
+///
+/// Verification scaffolding — the storage, directory, powerbox, and sample
+/// probes, and the fabric's `-b` participants — is declared by test profiles
+/// and absent from the product profile, so the grants that carry its authority
+/// are absent there too. A profile that declares neither endpoint of a grant
+/// has nothing to check; a profile that declares both must still get the exact
+/// grant, so `require_grant`'s assertion applies unchanged.
+///
+/// Keyed on the components the generation declares rather than on a flag or a
+/// generation number: the same fact the layout is narrowed by, so the grant
+/// wall and the capability table cannot disagree about which profile this is.
+fn require_scaffolding_grant(
+    generation: &Generation<'_>,
+    name: &str,
+    source: &str,
+    target: &str,
+    rights: Rights,
+) {
+    if generation.component_named(source).is_none() || generation.component_named(target).is_none()
+    {
+        return;
+    }
+    require_grant(generation, name, source, target, rights);
 }
 
 pub fn record_spawn(component: &'static str, id: task::TaskId) {

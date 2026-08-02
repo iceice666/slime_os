@@ -68,7 +68,10 @@ def generation_entries(image: bytes) -> list[tuple[bytes, int, int, int, int]]:
 
 def build_fixture(scenario: str) -> Path:
     environment = os.environ.copy()
+    # B11: this gate exercises verification scaffolding, so it selects the
+    # boot profile that declares it. The product profile declares none.
     environment["SLIME_GENERATION_NUMBER"] = "8"
+    environment["SLIME_FABRIC_PROFILE"] = "test"
     environment["SLIME_GENERATION_CMD_CHECK"] = "1"
     environment["SLIME_GENERATION_CMD_SCENARIO"] = scenario
     environment["SLIME_KNOWN_GOOD_FIRST"] = "1"
@@ -126,7 +129,10 @@ def run_scenario(scenario: str, expected_marker: str) -> tuple[str, bytes, bytes
     boot_image = WORK / f"{scenario}-boot.img"
     environment = os.environ.copy()
     environment["SLIME_GENERATION_CMD_SCENARIO"] = scenario
+    # B11: this gate exercises verification scaffolding, so it selects the
+    # boot profile that declares it. The product profile declares none.
     environment["SLIME_GENERATION_NUMBER"] = "8"
+    environment["SLIME_FABRIC_PROFILE"] = "test"
     environment["SLIME_GENERATION_CMD_CHECK"] = "1"
     environment["SLIME_GENERATION_DIR"] = str(WORK / f"build-{scenario}")
     environment["SLIME_BOOT_IMAGE"] = str(boot_image)

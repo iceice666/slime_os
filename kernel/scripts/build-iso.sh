@@ -29,6 +29,7 @@ fi
 trap 'if [[ "$CLEAN_GEN_DIR" == 1 ]]; then rm -rf "$GEN_DIR"; fi' EXIT
 if [[ "$CLEAN_GEN_DIR" == 1 ]]; then
     SLIME_GENERATION_NUMBER="${SLIME_GENERATION_NUMBER:-}" \
+    SLIME_FABRIC_PROFILE="${SLIME_FABRIC_PROFILE:-}" \
     SLIME_PENDING_GENERATION="${SLIME_PENDING_GENERATION:-}" \
     SLIME_PENDING_ATTEMPTS="${SLIME_PENDING_ATTEMPTS:-}" \
         "$ROOT/scripts/build/build-generation.py" "$KERNEL" "$GEN_DIR" >/dev/null

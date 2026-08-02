@@ -28,7 +28,10 @@ MARKERS = [
 
 def run(image: Path) -> str:
     environment = os.environ.copy()
+    # B11: this gate exercises verification scaffolding, so it selects the
+    # boot profile that declares it. The product profile declares none.
     environment["SLIME_GENERATION_NUMBER"] = "6"
+    environment["SLIME_FABRIC_PROFILE"] = "test"
     output = run_qemu(
         [
             "cargo",

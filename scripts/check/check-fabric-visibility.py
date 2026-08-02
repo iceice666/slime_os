@@ -45,7 +45,10 @@ FORBIDDEN = [
 
 def run_profile(*, early_proxy_death: bool = False) -> str:
     environment = os.environ.copy()
+    # B11: this gate exercises verification scaffolding, so it selects the
+    # boot profile that declares it. The product profile declares none.
     environment["SLIME_GENERATION_NUMBER"] = "16"
+    environment["SLIME_FABRIC_PROFILE"] = "visibility"
     environment["SLIME_FABRIC_VISIBILITY_CHECK"] = "1"
     if early_proxy_death:
         environment["SLIME_FABRIC_PROXY_EARLY_EXIT"] = "1"

@@ -51,60 +51,138 @@ STORAGE_DRIVE = [
 # a profile here resolves the same layout its gate resolves. The third element
 # is extra QEMU arguments, for profiles whose layout depends on attached
 # hardware.
+#
+# B11: every entry names its boot profile explicitly. `product` is the boot the
+# product ships and declares no verification scaffolding; every other entry
+# selects a profile that declares the probes its gate exercises, which is why
+# their slot tables are unchanged.
 PROFILES: list[tuple[str, dict[str, str], list[str]]] = [
-    ("default", {"SLIME_GENERATION_NUMBER": "1"}, []),
-    ("storage-read", {"SLIME_GENERATION_NUMBER": "1"}, STORAGE_DRIVE),
-    ("storage-write", {"SLIME_GENERATION_NUMBER": "2"}, STORAGE_DRIVE),
-    ("storage-fault", {"SLIME_GENERATION_NUMBER": "3"}, STORAGE_DRIVE),
-    ("storage-store", {"SLIME_GENERATION_NUMBER": "4"}, STORAGE_DRIVE),
-    ("directory", {"SLIME_GENERATION_NUMBER": "6"}, []),
-    ("dango", {"SLIME_GENERATION_NUMBER": "7", "SLIME_DANGO_CHECK": "1"}, []),
+    ("product", {"SLIME_GENERATION_NUMBER": "1", "SLIME_FABRIC_PROFILE": "default"}, []),
+    ("default", {"SLIME_GENERATION_NUMBER": "1", "SLIME_FABRIC_PROFILE": "test"}, []),
     (
-        "generation-commands",
-        {"SLIME_GENERATION_NUMBER": "8", "SLIME_GENERATION_CMD_CHECK": "1"},
+        "storage-read",
+        {"SLIME_GENERATION_NUMBER": "1", "SLIME_FABRIC_PROFILE": "test"},
+        STORAGE_DRIVE,
+    ),
+    (
+        "storage-write",
+        {"SLIME_GENERATION_NUMBER": "2", "SLIME_FABRIC_PROFILE": "test"},
+        STORAGE_DRIVE,
+    ),
+    (
+        "storage-fault",
+        {"SLIME_GENERATION_NUMBER": "3", "SLIME_FABRIC_PROFILE": "test"},
+        STORAGE_DRIVE,
+    ),
+    (
+        "storage-store",
+        {"SLIME_GENERATION_NUMBER": "4", "SLIME_FABRIC_PROFILE": "test"},
+        STORAGE_DRIVE,
+    ),
+    ("directory", {"SLIME_GENERATION_NUMBER": "6", "SLIME_FABRIC_PROFILE": "test"}, []),
+    (
+        "dango",
+        {
+            "SLIME_GENERATION_NUMBER": "7",
+            "SLIME_DANGO_CHECK": "1",
+            "SLIME_FABRIC_PROFILE": "test",
+        },
         [],
     ),
-    ("powerbox", {"SLIME_GENERATION_NUMBER": "9", "SLIME_POWERBOX_CHECK": "1"}, []),
+    (
+        "generation-commands",
+        {
+            "SLIME_GENERATION_NUMBER": "8",
+            "SLIME_GENERATION_CMD_CHECK": "1",
+            "SLIME_FABRIC_PROFILE": "test",
+        },
+        [],
+    ),
+    (
+        "powerbox",
+        {
+            "SLIME_GENERATION_NUMBER": "9",
+            "SLIME_POWERBOX_CHECK": "1",
+            "SLIME_FABRIC_PROFILE": "test",
+        },
+        [],
+    ),
     (
         "sample-plane",
-        {"SLIME_GENERATION_NUMBER": "10", "SLIME_SAMPLE_PLANE_CHECK": "1"},
+        {
+            "SLIME_GENERATION_NUMBER": "10",
+            "SLIME_SAMPLE_PLANE_CHECK": "1",
+            "SLIME_FABRIC_PROFILE": "test",
+        },
         [],
     ),
     (
         "fabric-authority",
-        {"SLIME_GENERATION_NUMBER": "11", "SLIME_FABRIC_AUTHORITY_CHECK": "1"},
+        {
+            "SLIME_GENERATION_NUMBER": "11",
+            "SLIME_FABRIC_AUTHORITY_CHECK": "1",
+            "SLIME_FABRIC_PROFILE": "test",
+        },
         [],
     ),
     (
         "fabric-stream",
-        {"SLIME_GENERATION_NUMBER": "12", "SLIME_FABRIC_STREAM_CHECK": "1"},
+        {
+            "SLIME_GENERATION_NUMBER": "12",
+            "SLIME_FABRIC_STREAM_CHECK": "1",
+            "SLIME_FABRIC_PROFILE": "test",
+        },
         [],
     ),
-    ("fabric-qos", {"SLIME_GENERATION_NUMBER": "13", "SLIME_FABRIC_QOS_CHECK": "1"}, []),
+    (
+        "fabric-qos",
+        {
+            "SLIME_GENERATION_NUMBER": "13",
+            "SLIME_FABRIC_QOS_CHECK": "1",
+            "SLIME_FABRIC_PROFILE": "test",
+        },
+        [],
+    ),
     (
         "fabric-call",
-        {"SLIME_GENERATION_NUMBER": "14", "SLIME_FABRIC_CALL_CHECK": "1"},
+        {
+            "SLIME_GENERATION_NUMBER": "14",
+            "SLIME_FABRIC_CALL_CHECK": "1",
+            "SLIME_FABRIC_PROFILE": "test",
+        },
         [],
     ),
     (
         "fabric-operation",
-        {"SLIME_GENERATION_NUMBER": "15", "SLIME_FABRIC_OPERATION_CHECK": "1"},
+        {
+            "SLIME_GENERATION_NUMBER": "15",
+            "SLIME_FABRIC_OPERATION_CHECK": "1",
+            "SLIME_FABRIC_PROFILE": "test",
+        },
         [],
     ),
     (
         "fabric-visibility",
-        {"SLIME_GENERATION_NUMBER": "16", "SLIME_FABRIC_VISIBILITY_CHECK": "1"},
+        {
+            "SLIME_GENERATION_NUMBER": "16",
+            "SLIME_FABRIC_VISIBILITY_CHECK": "1",
+            "SLIME_FABRIC_PROFILE": "visibility",
+        },
         [],
     ),
     (
         "fabric-boot",
-        {"SLIME_GENERATION_NUMBER": "17", "SLIME_FABRIC_BOOT_CHECK": "1"},
+        {
+            "SLIME_GENERATION_NUMBER": "17",
+            "SLIME_FABRIC_BOOT_CHECK": "1",
+            "SLIME_FABRIC_PROFILE": "unified",
+        },
         [],
     ),
     # Gen 99 is the rollback/bootstate known-good pair. `just rollback_check`
     # and `just bootstate_trace_check` boot it, and it is the layout that
     # catches a builder emitting one generation's resource into both.
-    ("bootstate", {"SLIME_GENERATION_NUMBER": "99"}, []),
+    ("bootstate", {"SLIME_GENERATION_NUMBER": "99", "SLIME_FABRIC_PROFILE": "test"}, []),
 ]
 
 # Flags that select a boot path. A profile that does not set one must not

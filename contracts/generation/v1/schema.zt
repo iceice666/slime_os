@@ -68,6 +68,27 @@ FabricProfile :: type {
   interpositions : List FabricProfileInterposition;
 };
 
+-- One named boot profile: which components the generation declares beyond the
+-- product set, and which fabric interposition chains apply (B11).
+--
+-- `components` names verification scaffolding -- probes and scenario doubles --
+-- that only a test profile declares. The product profile names none, so a
+-- generation built for the product declares only components the product needs.
+-- A profile is closed over its own scaffolding: every object, grant, state
+-- binding, shared-buffer holder, fabric participant, and interposition hop that
+-- names a component this profile does not declare is dropped with it, and
+-- `health` is resolved per profile rather than shared.
+--
+-- `fabricProfile` names the `fabricGraph.profiles` entry this boot profile
+-- resolves, so interposition selection stays where the fabric graph declares
+-- it rather than being restated here.
+BootProfile :: type {
+  name : Text;
+  fabricProfile : Text;
+  components : List Text;
+  requiredComponents : List Text;
+};
+
 -- One participant's exact role on one fabric route (C8.2). `interposition` is
 -- the ordered proxy chain, outermost first; an empty list is a direct edge.
 FabricParticipant :: type {
@@ -140,7 +161,13 @@ GenerationManifest :: type {
   components : List Component;
   grants : List CapabilityGrant;
   state : List StateBinding;
+  -- Fallback health policy, used by a profile that declares no required set of
+  -- its own.
   health : HealthPolicy;
+  -- Named boot profiles (B11). The builder resolves exactly one per build and
+  -- declares only the components that profile names, so verification
+  -- scaffolding never reaches the product generation.
+  bootProfiles : List BootProfile;
   -- Optional C8.2 fabric graph. Absent means the generation declares no
   -- native data fabric; no component then receives any route authority.
   fabricGraph? : FabricGraph;
@@ -158,6 +185,7 @@ FromData @FabricParticipant :: derive
 FromData @FabricRoute :: derive
 FromData @FabricLimits :: derive
 FromData @FabricGraph :: derive
+FromData @BootProfile :: derive
 FromData @GenerationManifest :: derive
 
 decodeManifest :: Data -> Validation DecodeIssue GenerationManifest
@@ -176,6 +204,7 @@ decodeManifest :: Data -> Validation DecodeIssue GenerationManifest
   FabricRoute = FabricRoute;
   FabricLimits = FabricLimits;
   FabricGraph = FabricGraph;
+  BootProfile = BootProfile;
   GenerationManifest = GenerationManifest;
   decodeManifest = decodeManifest;
 }

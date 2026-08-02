@@ -14,8 +14,10 @@ pub enum BlockError {
     OutOfRange,
     BufferSize,
     Timeout,
+    InjectedTimeout,
     ReadOnly,
     Device,
+    InjectedFailure,
 }
 
 impl BlockError {
@@ -31,6 +33,7 @@ impl From<VirtioBlkError> for BlockError {
             VirtioBlkError::OutOfRange => Self::OutOfRange,
             VirtioBlkError::BufferSize => Self::BufferSize,
             VirtioBlkError::Timeout | VirtioBlkError::ResetTimeout => Self::Timeout,
+            VirtioBlkError::InjectedFailure => Self::InjectedFailure,
             _ => Self::Device,
         }
     }
@@ -123,7 +126,10 @@ impl BlockDevice {
 
     pub fn inject_timeout(&mut self) -> Result<(), BlockError> {
         match self {
-            Self::Virtio(device) => device.inject_timeout().map_err(Into::into),
+            Self::Virtio(device) => device.inject_timeout().map_err(|error| match error {
+                VirtioBlkError::Timeout => BlockError::InjectedTimeout,
+                other => other.into(),
+            }),
             Self::Nvme(_) => Err(BlockError::Timeout),
         }
     }

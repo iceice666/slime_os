@@ -168,9 +168,23 @@ def check_explicit_grants() -> None:
 
 
 def check_framework_path() -> None:
+    # Which storage component a profile runs is generation data, not a kernel
+    # source decision. B10 replaced the `generation.number` comparison that used
+    # to pick it with a boot-layout lookup over the candidate set, and B11 made
+    # the candidates themselves profile-declared -- so the invariant to assert is
+    # that the kernel still offers the set and lets the layout choose, rather
+    # than naming one probe in source.
+    #
+    # This previously required the strings `generation.number` and
+    # `storage_fault_probe` to appear in `bootstrap.rs`. Both were proxies for
+    # the old mechanism and neither survived B10, which left the check passing
+    # only until something else removed them.
     bootstrap = (KERNEL / "runtime" / "bootstrap.rs").read_text(encoding="utf-8")
-    if "generation.number" not in bootstrap or "storage_fault_probe" not in bootstrap:
-        fail("storage test selection is no longer manifest-driven")
+    if "STORAGE_COMPONENTS" not in bootstrap or "one_of(" not in bootstrap:
+        fail("storage component selection is no longer layout-driven")
+    for probe in ("storage-probe", "storage-writer", "storage-fault-probe", "storage-store-probe"):
+        if f'"{probe}"' not in bootstrap:
+            fail(f"{probe} is no longer an offered storage candidate")
     justfile = JUSTFILE.read_text(encoding="utf-8")
     framework = re.search(
         r"framework_usb_image[^\n]*: framework_safety_check\n(?P<body>(?:    .*\n)+)",

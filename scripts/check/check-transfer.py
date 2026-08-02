@@ -120,7 +120,10 @@ def main() -> None:
     ):
         os.environ.pop(name, None)
     environment = os.environ.copy()
+    # B11: this gate exercises verification scaffolding, so it selects the
+    # boot profile that declares it. The product profile declares none.
     environment["SLIME_GENERATION_NUMBER"] = "9"
+    environment["SLIME_FABRIC_PROFILE"] = "test"
     environment["SLIME_GENERATION_CMD_SCENARIO"] = "transfer-receiver"
     environment["SLIME_TRANSFER_RECEIVER"] = "1"
     os.environ["SLIME_TRANSFER_RECEIVER"] = "1"

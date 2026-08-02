@@ -29,11 +29,18 @@ from harness import ROOT, load_script
 builder = load_script("build_generation_profile", "build/build-generation.py")
 
 
+# B11: `default` is now the product boot profile and declares no verification
+# scaffolding, so the negative cases below — which crowd participants, exhaust
+# the fabric holder's quota, and interpose through a probe — are written against
+# the profile that declares the full participant set. `default` gets its own
+# determinism and resolution coverage through the all-profiles loop at the end.
+SCAFFOLDING_PROFILE = "test"
+
 def fail(message: str) -> None:
     raise SystemExit(f"data fabric profile check: {message}")
 
 
-def rejected(label: str, mutate, *, profile: str = "default") -> None:
+def rejected(label: str, mutate, *, profile: str = SCAFFOLDING_PROFILE) -> None:
     manifest = copy.deepcopy(MANIFEST)
     # A mutator may alter builder module state rather than the manifest — the
     # fixed-shape worker bound lives there, not in the graph. Snapshot and restore
@@ -77,8 +84,10 @@ def zti_check(path: _Path) -> None:
 MANIFEST = builder.load_manifest()
 INTERFACES = builder.validate_interface_schemas(MANIFEST["interfaceSchemas"])
 
-first = builder.resolve_fabric_profile(MANIFEST, INTERFACES, "default")
-second = builder.resolve_fabric_profile(copy.deepcopy(MANIFEST), INTERFACES, "default")
+first = builder.resolve_fabric_profile(MANIFEST, INTERFACES, SCAFFOLDING_PROFILE)
+second = builder.resolve_fabric_profile(
+    copy.deepcopy(MANIFEST), INTERFACES, SCAFFOLDING_PROFILE
+)
 if first.graph_bytes != second.graph_bytes or first.artifact != second.artifact:
     fail("identical source did not produce identical resolved graph/profile values")
 
@@ -338,8 +347,12 @@ subprocess.run(
     check=True,
 )
 
+# The checked-in fallback is what a plain `cargo build` compiles against, so it
+# carries the product boot profile (B11) — the same profile
+# `default_boot_layout.rs` renders.
 fallback_profile = ROOT / "components/bins/src/default_fabric_profile.rs"
-if fallback_profile.read_text(encoding="utf-8") != builder.render_fabric_profile_rust(first):
-    fail("checked-in default userspace profile is stale")
+product = builder.resolve_fabric_profile(copy.deepcopy(MANIFEST), INTERFACES, "default")
+if fallback_profile.read_text(encoding="utf-8") != builder.render_fabric_profile_rust(product):
+    fail("checked-in product userspace profile is stale")
 
 print("typed fabric profile, resources, and deterministic schema corpus: ok")

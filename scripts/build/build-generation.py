@@ -207,6 +207,9 @@ MAX_COMPONENT_IMAGE_BYTES = 16 * 1024 * 1024
 MAX_STACK_BYTES = 1024 * 1024
 DEFAULT_STACK_BYTES = 16384
 DEFAULT_FABRIC_PROFILE = "default"
+# B11: the boot profile carrying the scaffolding the pre-C8.10 gate families
+# exercise. `default` is the product boot and declares none of it.
+TEST_BOOT_PROFILE = "test"
 VISIBILITY_FABRIC_PROFILE = "visibility"
 UNIFIED_FABRIC_PROFILE = "unified"
 FABRIC_FIRST_CONTROL_SLOT = 2
@@ -303,11 +306,22 @@ FABRIC_WORKER_WAIT_SHAPES = {
 
 
 class ResolvedFabricProfile:
-    def __init__(self, graph: dict, artifact: dict, schemas: list, graph_bytes: bytes):
+    def __init__(
+        self,
+        graph: dict,
+        artifact: dict,
+        schemas: list,
+        graph_bytes: bytes,
+        manifest: dict,
+    ):
         self.graph = graph
         self.artifact = artifact
         self.schemas = schemas
         self.graph_bytes = graph_bytes
+        # The manifest narrowed to this profile's component set (B11). The
+        # encoder reads this rather than the source manifest, so the generation
+        # declares exactly what the profile resolved.
+        self.manifest = manifest
 
 
 def fail(message: str) -> None:
@@ -566,6 +580,14 @@ def validate_fabric_qos(member: dict, limits: dict, label: str) -> None:
         fail(f"fabric graph: {label} liveliness and lease disagree")
 
 def selected_profile_name() -> str:
+    """The boot profile this build resolves (B11).
+
+    One selector names both the component set and the interposition chains: a
+    profile entry declares which scaffolding the generation adds and which
+    `fabricGraph.profiles` entry supplies its interpositions. The legacy flags
+    keep resolving the profile they always did, so a gate that has not been
+    updated to name a profile explicitly still builds the graph it expects.
+    """
     explicit = os.environ.get("SLIME_FABRIC_PROFILE") or None
     visibility = os.environ.get("SLIME_FABRIC_VISIBILITY_CHECK") == "1"
     boot = os.environ.get("SLIME_FABRIC_BOOT_CHECK") == "1"
@@ -584,13 +606,129 @@ def selected_profile_name() -> str:
         if boot
         else VISIBILITY_FABRIC_PROFILE
         if visibility
-        else DEFAULT_FABRIC_PROFILE
+        else TEST_BOOT_PROFILE
         if legacy_modes
         else None
     )
     if explicit is not None and legacy is not None and explicit != legacy:
         fail("fabric graph: ambiguous selected profile")
     return explicit or legacy or DEFAULT_FABRIC_PROFILE
+
+
+def declared_boot_profiles(manifest: dict) -> list[str]:
+    """Every boot profile the manifest names, selected or not."""
+    return [profile["name"] for profile in manifest.get("bootProfiles", [])]
+
+
+def boot_profile(manifest: dict, name: str) -> dict:
+    """The one boot profile `name` selects."""
+    profiles = manifest.get("bootProfiles", [])
+    names = [profile["name"] for profile in profiles]
+    if len(names) != len(set(names)):
+        fail("boot profile: duplicate profile name")
+    matches = [profile for profile in profiles if profile["name"] == name]
+    if len(matches) != 1:
+        fail(f"boot profile: expected exactly one {name} profile")
+    return matches[0]
+
+
+def resolve_boot_profile(manifest: dict, name: str) -> dict:
+    """Narrow the manifest to the components one boot profile declares (B11).
+
+    The product profile names no scaffolding, so the generation it builds
+    declares only components the product needs; a test profile adds exactly the
+    probes and scenario doubles its gate family exercises.
+
+    A profile is closed over its component set rather than listing every
+    consequence: an object, grant, state binding, shared-buffer holder, route
+    participant, or interposition hop naming a component this profile does not
+    declare is dropped with it. Stating those separately would let the two
+    drift, and every one of them fails late inside `build_generation` with a
+    message naming the symptom rather than the cause.
+    """
+    profile = boot_profile(manifest, name)
+    scaffolding = profile["components"]
+    if len(set(scaffolding)) != len(scaffolding):
+        fail(f"boot profile {name}: duplicate component")
+    declared = {component["name"] for component in manifest["components"]}
+    unknown = sorted(set(scaffolding) - declared)
+    if unknown:
+        fail(f"boot profile {name}: undeclared component(s) {', '.join(unknown)}")
+    # Every component no profile names is product surface. Deriving the product
+    # set by subtraction rather than listing it means a component added to the
+    # manifest is a product component until some profile claims it, which fails
+    # towards declaring too much rather than silently dropping a real service.
+    scaffolding_everywhere = {
+        component
+        for entry in manifest.get("bootProfiles", [])
+        for component in entry["components"]
+    }
+    kept = (declared - scaffolding_everywhere) | set(scaffolding)
+    resolved = copy.deepcopy(manifest)
+    resolved.pop("bootProfiles", None)
+    resolved["components"] = [
+        component for component in manifest["components"] if component["name"] in kept
+    ]
+    kept_objects = {component["object"] for component in resolved["components"]}
+    resolved["objects"] = [
+        object_
+        for object_ in manifest["objects"]
+        if object_["kind"] != "component" or object_["id"] in kept_objects
+    ]
+    resolved["grants"] = [
+        grant
+        for grant in manifest["grants"]
+        if grant["source"] in kept and grant["target"] in kept
+    ]
+    resolved["state"] = [binding for binding in manifest["state"] if binding["owner"] in kept]
+    resolved["sharedBufferBudget"] = [
+        entry for entry in manifest["sharedBufferBudget"] if entry["holder"] in kept
+    ]
+    required = profile["requiredComponents"] or manifest["health"]["requiredComponents"]
+    missing = sorted(set(required) - kept)
+    if missing:
+        fail(f"boot profile {name}: required component(s) {', '.join(missing)} not declared")
+    resolved["health"] = dict(manifest["health"], requiredComponents = list(required))
+    graph = resolved.get("fabricGraph")
+    if graph is not None:
+        graph["profiles"] = [
+            entry
+            for entry in graph.get("profiles", [])
+            if entry["name"] == profile["fabricProfile"]
+        ]
+        if len(graph["profiles"]) != 1:
+            fail(
+                f"boot profile {name}: fabric profile "
+                f"{profile['fabricProfile']} is not declared exactly once"
+            )
+        for chain in graph["profiles"][0]["interpositions"]:
+            absent = sorted(set(chain["chain"]) - kept)
+            if absent:
+                fail(
+                    f"boot profile {name}: interposition chain names "
+                    f"{', '.join(absent)}, which this profile does not declare"
+                )
+        routes = []
+        for route in graph["routes"]:
+            route["participants"] = [
+                member for member in route["participants"] if member["component"] in kept
+            ]
+            for member in route["participants"]:
+                hidden = sorted(set(member["interposition"]) - kept)
+                if hidden:
+                    fail(
+                        f"boot profile {name}: route {route['name']} interposes through "
+                        f"{', '.join(hidden)}, which this profile does not declare"
+                    )
+            # A route every participant of which was scaffolding carries no
+            # traffic in this profile. Keeping it would declare a route the
+            # fabric must provision and nobody can use, and `build_fabric_graph`
+            # rejects a participant-less route outright.
+            if route["participants"]:
+                routes.append(route)
+        graph["routes"] = routes
+    return resolved
+
 
 def declared_fabric_profiles(manifest: dict) -> list[str]:
     """Every fabric profile the manifest names, selected or not."""
@@ -599,6 +737,16 @@ def declared_fabric_profiles(manifest: dict) -> list[str]:
 
 
 def _control_sources(manifest: dict, grant_names: tuple[str, ...]) -> list[str]:
+    """The components holding each named control grant, in declared order.
+
+    B11: a grant whose source the selected boot profile does not declare is
+    absent rather than invalid, so the list shortens for a profile that drops
+    that participant. Order is the tuple's, and the tuple is per plane, so a
+    profile declaring the same participants numbers its control slots exactly
+    as it did before — which is what keeps the C8.3-C8.8 gates reading a
+    control endpoint where they expect one. A grant that *is* declared must
+    still be exactly right.
+    """
     controls_by_name = [
         grant
         for grant in manifest["grants"]
@@ -610,7 +758,9 @@ def _control_sources(manifest: dict, grant_names: tuple[str, ...]) -> list[str]:
     controls = []
     for name in grant_names:
         grant = grants.get(name)
-        if grant is None or grant["target"] != "fabric-service" or grant["rights"] != ["send", "recv"]:
+        if grant is None:
+            continue
+        if grant["target"] != "fabric-service" or grant["rights"] != ["send", "recv"]:
             fail(f"fabric graph: invalid control grant {name}")
         controls.append(grant["source"])
     if len(set(controls)) != len(controls):
@@ -677,7 +827,25 @@ def build_normalized_schema_artifact(schemas: list) -> bytes:
 
 
 def resolve_fabric_profile(manifest: dict, interfaces: list, profile_name: str) -> ResolvedFabricProfile:
-    graph = resolve_fabric_graph(manifest["fabricGraph"], profile_name)
+    """Resolve one named boot profile into everything downstream reads.
+
+    B11 folded the component set into this one selector, so this is where the
+    manifest is narrowed: `profile_name` names a `bootProfiles` entry, that
+    entry names the scaffolding to declare and the `fabricGraph.profiles` entry
+    to apply, and every later stage reads the narrowed manifest this returns.
+    Narrowing here rather than in `main` keeps the host-side gates that call
+    this function directly on the same path a real build takes.
+    """
+    # Captured before narrowing: the route workers are a partition of the routes
+    # the *manifest* declares, so a typo in `FABRIC_ROUTE_WORKERS` must stay
+    # detectable even under a profile that drops the route it misspells.
+    declared_routes = {route["name"] for route in manifest["fabricGraph"]["routes"]}
+    if manifest.get("bootProfiles"):
+        manifest = resolve_boot_profile(manifest, profile_name)
+        fabric_profile_name = manifest["fabricGraph"]["profiles"][0]["name"]
+    else:
+        fabric_profile_name = profile_name
+    graph = resolve_fabric_graph(manifest["fabricGraph"], fabric_profile_name)
     component_names = {component["name"] for component in manifest["components"]}
     graph_bytes = build_fabric_graph(graph, component_names, interfaces)
     by_interface = {interface.name: interface for interface in interfaces}
@@ -695,11 +863,13 @@ def resolve_fabric_profile(manifest: dict, interfaces: list, profile_name: str) 
         for route in graph["routes"]
     )
     # The full-graph boot profile declares its own stream plane; every other
-    # profile keeps the exact control layout its gate already grants.
+    # profile keeps the exact control layout its gate already grants. A source
+    # this profile does not declare drops out of the list rather than failing,
+    # so the product profile resolves the same plane with fewer participants.
     stream_controls = _control_sources(
         manifest,
         FABRIC_BOOT_STREAM_CONTROL_GRANTS
-        if profile_name == UNIFIED_FABRIC_PROFILE
+        if fabric_profile_name == UNIFIED_FABRIC_PROFILE
         else FABRIC_STREAM_CONTROL_GRANTS,
     )
     call_controls = _control_sources(manifest, FABRIC_CALL_CONTROL_GRANTS)
@@ -761,9 +931,16 @@ def resolve_fabric_profile(manifest: dict, interfaces: list, profile_name: str) 
     # arrays of their own.
     workers = []
     for worker_name, worker_routes in FABRIC_ROUTE_WORKERS:
-        declared = [route for route in graph["routes"] if route["name"] in worker_routes]
-        if len(declared) != len(worker_routes):
+        unknown = [route for route in worker_routes if route not in declared_routes]
+        if unknown:
             fail(f"fabric graph: worker {worker_name} names an undeclared route")
+        # A route whose every participant was scaffolding is absent from this
+        # profile. Its worker still exists and still owns the routes that
+        # remain; only a worker left with no route at all drops out, so the
+        # partition below stays a statement about this profile's graph.
+        declared = [route for route in graph["routes"] if route["name"] in worker_routes]
+        if not declared:
+            continue
         shape = FABRIC_WORKER_WAIT_SHAPES.get(worker_name)
         if shape is None:
             fail(f"fabric graph: worker {worker_name} declares no wait-source shape")
@@ -866,7 +1043,7 @@ def resolve_fabric_profile(manifest: dict, interfaces: list, profile_name: str) 
         fail("fabric graph: generated capability layout exceeds its declaration")
     if any(len(route["name"].encode("utf-8")) > 16 for route in graph["routes"]):
         fail("fabric graph: route name exceeds the 16-byte record bound")
-    return ResolvedFabricProfile(graph, artifact, schemas, graph_bytes)
+    return ResolvedFabricProfile(graph, artifact, schemas, graph_bytes, manifest)
 
 
 def _zti_value(value: object, indent: int = 0) -> str:
@@ -1351,6 +1528,7 @@ def build_rust_components(
     profile_path: Path,
     recovery: bool = False,
     candidate_identity: bytes | None = None,
+    components: set[str] | None = None,
 ) -> Path:
     environment = os.environ.copy()
     environment["SLIME_GENERATION_NUMBER"] = str(generation_number)
@@ -1359,9 +1537,13 @@ def build_rust_components(
     # cannot read the layout resource out of it. Emit the same table as Rust
     # here and hand `build.rs` the path, the way the fabric profile already
     # travels. Per generation number, so each component build addresses the
-    # slots its own generation declares.
+    # slots its own generation declares, and narrowed to the selected boot
+    # profile's component set (B11) so `init.rs` reads the same slots the kernel
+    # will place.
     layout_path = profile_path.parent / f"boot-layout-{generation_number}.rs"
-    layout_path.write_text(render_boot_layout_rust(generation_number), encoding="utf-8")
+    layout_path.write_text(
+        render_boot_layout_rust(generation_number, components), encoding="utf-8"
+    )
     environment["SLIME_BOOT_LAYOUT"] = str(layout_path)
     if candidate_identity is None and os.environ.get("SLIME_TRANSFER_RECEIVER") == "1":
         environment["SLIME_TRANSFER_RECEIVER"] = "1"
@@ -1599,9 +1781,16 @@ def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes |
     # than into the shared `payloads` — sharing one layout across both would
     # make generation 1 boot the policy generation's slot table, failing far
     # from its cause.
+    #
+    # Narrowed to the components this manifest declares (B11). Taking the set
+    # from the manifest being encoded rather than from the profile means the
+    # layout cannot name a component the generation does not carry: the recovery
+    # manifest gets the recovery layout for the same reason, without a second
+    # selector saying so.
+    declared_components = {component["name"] for component in manifest["components"]}
     if "boot-layout" in {object_["id"] for object_ in manifest["objects"]}:
         payloads = dict(payloads)
-        payloads["boot-layout"] = build_boot_layout(number, fail)
+        payloads["boot-layout"] = build_boot_layout(number, fail, declared_components)
     objects = unique_sorted(manifest["objects"], "id", "object ids")
     components = unique_sorted(manifest["components"], "name", "component names")
     grants = sorted(manifest["grants"], key=lambda grant: (grant["name"], grant["source"], grant["target"]))
@@ -1846,6 +2035,12 @@ def main() -> None:
     interfaces = validate_interface_schemas(manifest["interfaceSchemas"])
     output.mkdir(parents=True, exist_ok=True)
     resolved_profile = resolve_fabric_profile(manifest, interfaces, selected_profile_name())
+    # Everything below builds from the profile-resolved manifest (B11): the
+    # component set, and therefore the objects, grants, state bindings,
+    # shared-buffer holders, and health policy the generation declares, are
+    # whatever the selected profile resolved. The source manifest is the union
+    # of every profile and is never encoded.
+    manifest = resolved_profile.manifest
     _, profile_rust_path, _ = write_resolved_profile(output, resolved_profile)
     policy_number = int(os.environ.get("SLIME_GENERATION_NUMBER") or manifest["generation"])
     # Generation 1 is the known-good baseline: its components must carry their own
@@ -1856,8 +2051,12 @@ def main() -> None:
     # The transfer receiver is the exception: there generation 1 *is* the
     # policy-numbered receiver generation, built with the receiver flag.
     generation1_number = policy_number if os.environ.get("SLIME_TRANSFER_RECEIVER") == "1" else 1
+    profile_components = {component["name"] for component in manifest["components"]}
     generation1_components = build_rust_components(
-        generation1_number, profile_rust_path, candidate_identity=None
+        generation1_number,
+        profile_rust_path,
+        candidate_identity=None,
+        components=profile_components,
     )
     payloads: dict[str, bytes] = {manifest["kernelObject"]: kernel_image(kernel)}
     object_by_id = {obj["id"]: obj for obj in manifest["objects"]}
@@ -1880,7 +2079,10 @@ def main() -> None:
         )
     generation1 = build_generation(manifest, payloads, None, 1)
     generation2_components = build_rust_components(
-        policy_number, profile_rust_path, candidate_identity=generation1[24:56]
+        policy_number,
+        profile_rust_path,
+        candidate_identity=generation1[24:56],
+        components=profile_components,
     )
     for component in manifest["components"]:
         stack = component.get("stackBytes", DEFAULT_STACK_BYTES)
@@ -1892,8 +2094,13 @@ def main() -> None:
     parent_override = os.environ.get("SLIME_GENERATION_PARENT")
     generation2_parent = bytes.fromhex(parent_override) if parent_override else generation1[24:56]
     generation2 = build_generation(manifest, payloads, generation2_parent, policy_number)
-    recovery_components = build_rust_components(5, profile_rust_path, recovery=True)
     recovery = recovery_manifest(manifest)
+    recovery_components = build_rust_components(
+        5,
+        profile_rust_path,
+        recovery=True,
+        components={component["name"] for component in recovery["components"]},
+    )
     state_first_lba = int(os.environ.get("SLIME_RECOVERY_STATE_FIRST_LBA") or BOOTSTORE_CAPACITY // 512)
     state_last_lba = int(os.environ.get("SLIME_RECOVERY_STATE_LAST_LBA") or state_first_lba + 127)
     target_bdf = int(os.environ.get("SLIME_RECOVERY_TARGET_BDF") or "0x000018", 0)

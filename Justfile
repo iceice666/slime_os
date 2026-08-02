@@ -16,9 +16,20 @@ run_release:
 run_gui:
     cd kernel && SLIME_INTERACTIVE=1 cargo run -p slime_os-kernel
 
-# Run kernel tests under QEMU; optimized code keeps boot-time integrity hashing bounded.
+# Run kernel tests under QEMU; optimized code keeps boot-time integrity hashing
+# bounded. The kernel test binaries assert on the booted generation's fabric
+# graph and health policy, so they select the boot profile that declares the
+# verification scaffolding they describe (B11); `product_boot_check` covers the
+# scaffolding-free product boot.
 test:
-    cd kernel && cargo test --release -p slime_os-kernel -- -display none
+    cd kernel && SLIME_FABRIC_PROFILE=test cargo test --release -p slime_os-kernel -- -display none
+
+# B11: the product boot profile declares only components the product needs — no
+# probes, no scenario doubles. Boots it and requires the same healthy vertical
+# slice the scaffolding profiles reach, so "the product generation still boots"
+# is an observed result rather than an inference from the layout diff.
+product_boot_check: contracts_check generation_check
+    python3 scripts/check/check-product-boot.py
 
 
 # M6.5: native generation inspection, staging, selection, and rollback.
@@ -67,7 +78,7 @@ interface_schema_check: contracts_check generation_check
 # bypass, and per-entry plus aggregate admission before component launch.
 fabric_manifest_check: contracts_check generation_check
     python3 scripts/check/check-fabric-manifest.py
-    cd kernel && cargo test --release -p slime_os-kernel --test fabric_manifest -- -display none
+    cd kernel && SLIME_FABRIC_PROFILE=test cargo test --release -p slime_os-kernel --test fabric_manifest -- -display none
 
 # C8.3: attenuated endpoint provisioning and control plane. A live userspace
 # fabric service derives exact non-widening, non-transferable route endpoints
@@ -75,7 +86,7 @@ fabric_manifest_check: contracts_check generation_check
 # channel authority mints, widens, or delegates nothing.
 fabric_authority_check: contracts_check generation_check
     python3 scripts/check/check-fabric-authority.py
-    cd kernel && cargo test --release -p slime_os-kernel --test fabric_authority -- -display none
+    cd kernel && SLIME_FABRIC_PROFILE=test cargo test --release -p slime_os-kernel --test fabric_authority -- -display none
 
 # C8.4: bounded many-to-many streams. Two publishers and two subscribers
 # exchange inline and >MAX_MSG samples over generation-declared routes;
@@ -84,7 +95,7 @@ fabric_authority_check: contracts_check generation_check
 # fabric copy plus one quota-charged receiver-bound loan per subscriber.
 fabric_stream_check: contracts_check generation_check
     python3 scripts/check/check-fabric-stream.py
-    cd kernel && cargo test --release -p slime_os-kernel --test fabric_stream -- -display none
+    cd kernel && SLIME_FABRIC_PROFILE=test cargo test --release -p slime_os-kernel --test fabric_stream -- -display none
 
 # C8.5: bounded reliable/best-effort QoS, retained history, compatibility
 # events, fixed retry exhaustion, and explicit simulated-time transitions.
@@ -209,7 +220,7 @@ storage_cap_check:
 storage_read_check:
     rm -f /tmp/slime-os-storage-read.img
     ./scripts/build/build-storage-fixture.py /tmp/slime-os-storage-read.img
-    cd kernel && cargo run --release -p slime_os-kernel -- \
+    cd kernel && SLIME_FABRIC_PROFILE=test cargo run --release -p slime_os-kernel -- \
         -display none \
         -drive if=none,id=slime-storage,format=raw,readonly=on,file=/tmp/slime-os-storage-read.img \
         -device virtio-blk-pci,drive=slime-storage,disable-legacy=on,queue-size=8
@@ -219,7 +230,7 @@ storage_read_check:
 storage_nvme_read_check:
     rm -f /tmp/slime-os-nvme-read.img
     ./scripts/build/build-storage-fixture.py /tmp/slime-os-nvme-read.img
-    cd kernel && cargo run --release -p slime_os-kernel -- \
+    cd kernel && SLIME_FABRIC_PROFILE=test cargo run --release -p slime_os-kernel -- \
         -display none \
         -drive if=none,id=slime-nvme,format=raw,readonly=on,file=/tmp/slime-os-nvme-read.img \
         -device nvme,serial=slime-nvme,drive=slime-nvme

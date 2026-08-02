@@ -155,3 +155,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-07-31 | [Boot capability layout is a positional convention, not generation data](2026-07-31-boot-layout-positional-coupling/index.md) | Decision | Proposed | B10, B11, P1, P2, RP2, C8, C8.10 |
 | 2026-07-31 | [Boot-layout equivalence baseline](2026-07-31-boot-layout-baseline/index.md) | Change | Verified | B10 |
 | 2026-08-01 | [Init's capability layout resolves from generation data](2026-08-01-boot-layout-resolution/index.md) | Change | Verified | B10 |
+| 2026-08-01 | [B11 — Product boot profiles exclude verification scaffolding](2026-08-01-b11-product-boot-profiles/index.md) | Defect | Verified | B11 |

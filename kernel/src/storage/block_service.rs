@@ -205,7 +205,7 @@ fn device_status(error: BlockError) -> i32 {
     match error {
         BlockError::OutOfRange => BLOCK_E_OUT_OF_RANGE,
         BlockError::BufferSize => BLOCK_E_BUFFER_TOO_SMALL,
-        BlockError::Timeout => BLOCK_E_TIMEOUT,
+        BlockError::Timeout | BlockError::InjectedTimeout => BLOCK_E_TIMEOUT,
         BlockError::ReadOnly => BLOCK_E_NOT_AUTHORIZED,
         _ => BLOCK_E_DEVICE,
     }

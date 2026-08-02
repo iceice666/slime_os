@@ -197,7 +197,10 @@ IDLE_BLOCKED = [
 
 def run() -> str:
     environment = os.environ.copy()
+    # B11: this gate exercises verification scaffolding, so it selects the
+    # boot profile that declares it. The product profile declares none.
     environment["SLIME_GENERATION_NUMBER"] = GENERATION
+    environment["SLIME_FABRIC_PROFILE"] = "unified"
     environment["SLIME_FABRIC_BOOT_CHECK"] = "1"
     return run_qemu(
         ["cargo", "run", "--release", "--", "-display", "none"],

@@ -61,7 +61,10 @@ FORBIDDEN = [
 
 def run() -> str:
     environment = os.environ.copy()
+    # B11: this gate exercises verification scaffolding, so it selects the
+    # boot profile that declares it. The product profile declares none.
     environment["SLIME_GENERATION_NUMBER"] = "10"
+    environment["SLIME_FABRIC_PROFILE"] = "test"
     environment["SLIME_SAMPLE_PLANE_CHECK"] = "1"
     output = run_qemu(
         ["cargo", "run", "--release", "--", "-display", "none"],
