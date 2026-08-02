@@ -2,6 +2,16 @@
 channel = "nightly-2026-05-26"
 # `aarch64-unknown-none` is required by `just x86_portability_check`, which
 # builds the architecture-neutral kernel and component runtime for it to prove
-# no x86 mechanism leaked outside `arch/`. It does not imply an AArch64 boot.
-targets = ["x86_64-unknown-none", "x86_64-unknown-uefi", "aarch64-unknown-none"]
+# no x86 mechanism leaked outside `arch/`. `aarch64-unknown-uefi` builds the
+# AArch64 stage-0 loader. Neither implies a booted AArch64 kernel.
+#
+# Keep this list in sync with `rustTargets` in flake.nix. The dev shell pins
+# `RUSTUP_TOOLCHAIN` by name, which makes rustup ignore this file's `targets`,
+# so the flake's list is what a `nix develop` checkout actually installs.
+targets = [
+    "x86_64-unknown-none",
+    "x86_64-unknown-uefi",
+    "aarch64-unknown-none",
+    "aarch64-unknown-uefi",
+]
 components = ["clippy", "rustfmt", "llvm-tools-preview", "rust-src", "miri"]
