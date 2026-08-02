@@ -103,9 +103,11 @@ static SEND_ID: AtomicU64 = AtomicU64::new(0);
 static RECV_ID: AtomicU64 = AtomicU64::new(0);
 
 /// Wrap a position-independent code blob in a single-segment executable
-/// component image (`contracts/component/v1`).
+/// component image (`contracts/component/v2`).
 fn rx_image(code: &[u8]) -> Vec<u8> {
+    use boot_contracts::target_profile::TargetProfile;
     use slime_os_kernel::component::*;
+    let profile = TargetProfile::legacy().expect("admitted profile");
     let mut image = Vec::new();
     image.extend_from_slice(
         &WireImageHeader {
@@ -113,10 +115,15 @@ fn rx_image(code: &[u8]) -> Vec<u8> {
             format_version: FORMAT_VERSION,
             header_size: HEADER_LEN as u32,
             kernel_abi: KERNEL_ABI_VERSION,
+            architecture: profile.architecture,
+            abi: profile.abi,
+            page_profile: profile.page_profile,
             entry_offset: 0,
             segment_count: 1,
             reserved: 0,
             stack_bytes: DEFAULT_STACK_BYTES,
+            target_profile: profile.id,
+            required_features: profile.required_features,
         }
         .encode(),
     );

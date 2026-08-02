@@ -20,7 +20,17 @@ OUTPUT = ROOT / "scripts" / "lib" / "boot_contracts.py"
 RUST_OUTPUT_DIR = ROOT / "boot-contracts" / "src" / "generated"
 GENERATORS = (
     (ROOT / "contracts" / "generation" / "v3" / "schema.zt", "generation.py", "generation.rs"),
-    (ROOT / "contracts" / "kernel-image" / "v1" / "schema.zt", "kernel_image.py", "kernel_image.rs"),
+    (ROOT / "contracts" / "kernel-image" / "v2" / "schema.zt", "kernel_image.py", "kernel_image.rs"),
+    (
+        ROOT / "contracts" / "target-profile" / "v1" / "schema.zt",
+        "target_profile.py",
+        "target_profile.rs",
+    ),
+    (
+        ROOT / "contracts" / "component" / "v2" / "schema.zt",
+        "component_image.py",
+        "component_image.rs",
+    ),
     (ROOT / "contracts" / "bootstate" / "v1" / "schema.zt", "bootstate.py", "bootstate.rs"),
     (
         ROOT / "contracts" / "bootstate" / "trace" / "v1" / "schema.zt",
@@ -59,6 +69,7 @@ from __future__ import annotations
 
 import hashlib
 import struct
+import typing
 
 """
 HELPERS = """def sha256(data: bytes) -> bytes:
@@ -92,6 +103,10 @@ def run_generator(generator: Path, staging: Path) -> None:
     environment = os.environ.copy()
     environment["ZUTAI_STDLIB_ROOT"] = str(STDLIB)
     environment["SLIME_BOOT_BINDINGS_ROOT"] = str(staging)
+    # The component schema renders for two consumers and defaults this root to
+    # the working directory, which would let a staging run overwrite the real
+    # proto binding with unformatted output. Every generator output stays staged.
+    environment["SLIME_COMPONENT_BINDINGS_ROOT"] = str(staging)
     process = subprocess.run(
         [str(binary()), "run", str(generator)],
         cwd=ROOT,
@@ -126,6 +141,9 @@ def format_rust(source: str) -> str:
 def render() -> tuple[str, dict[Path, str]]:
     with tempfile.TemporaryDirectory(prefix="slime-boot-bindings-") as temporary:
         staging = Path(temporary)
+        # The component schema also renders the proto binding at its own nested
+        # path; stage that tree so a boot run never writes outside `staging`.
+        (staging / "components" / "proto" / "src").mkdir(parents=True)
         for generator, _, _ in GENERATORS:
             run_generator(generator, staging)
 

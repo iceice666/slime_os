@@ -17,6 +17,7 @@ GENERATION_CONTRACT = ROOT / "contracts" / "generation" / "v1"
 BLOCK_CONTRACT = ROOT / "contracts" / "block" / "v1"
 BLOCK_BINDING_GENERATOR = ROOT / "scripts" / "generate" / "generate-block-bindings.py"
 COMPONENT_CONTRACT = ROOT / "contracts" / "component" / "v1"
+COMPONENT_V2_CONTRACT = ROOT / "contracts" / "component" / "v2"
 COMPONENT_BINDING_GENERATOR = ROOT / "scripts" / "generate" / "generate-component-bindings.py"
 STORE_CONTRACT = ROOT / "contracts" / "store" / "v1"
 STORE_BINDING_GENERATOR = ROOT / "scripts" / "generate" / "generate-store-bindings.py"
@@ -30,6 +31,8 @@ BOOT_BINDING_GENERATOR = ROOT / "scripts" / "generate" / "generate-boot-bindings
 GENERATION_V2_CONTRACT = ROOT / "contracts" / "generation" / "v2"
 GENERATION_V3_CONTRACT = ROOT / "contracts" / "generation" / "v3"
 KERNEL_IMAGE_CONTRACT = ROOT / "contracts" / "kernel-image" / "v1"
+KERNEL_IMAGE_V2_CONTRACT = ROOT / "contracts" / "kernel-image" / "v2"
+TARGET_PROFILE_CONTRACT = ROOT / "contracts" / "target-profile" / "v1"
 BOOTSTATE_CONTRACT = ROOT / "contracts" / "bootstate" / "v1"
 BOOTSTATE_TRACE_CONTRACT = ROOT / "contracts" / "bootstate" / "trace" / "v1"
 RECOVERY_CONTRACT = ROOT / "contracts" / "recovery" / "v1"
@@ -241,6 +244,9 @@ for contract in (
     GENERATION_V2_CONTRACT,
     GENERATION_V3_CONTRACT,
     KERNEL_IMAGE_CONTRACT,
+    KERNEL_IMAGE_V2_CONTRACT,
+    COMPONENT_V2_CONTRACT,
+    TARGET_PROFILE_CONTRACT,
     BOOTSTATE_CONTRACT,
     BOOTSTATE_TRACE_CONTRACT,
     RECOVERY_CONTRACT,
@@ -270,9 +276,9 @@ subprocess.run(
 )
 
 print(
-    "Generation source/binary, kernel image, BootState, BootState trace, recovery, "
-    "block, component, store, spawn, filesystem, powerbox, generation-management, "
-    "transfer, sample-descriptor, interface-schema, fabric-graph, "
-    "capability-transfer, fabric-stream, fabric-qos, fabric-time, fabric-call, "
-    "fabric-operation, fabric-visibility, and rpi5-ros2-demo contracts passed"
+    "Generation source/binary, kernel image v1/v2, target profile, BootState, "
+    "BootState trace, recovery, block, component v1/v2, store, spawn, filesystem, "
+    "powerbox, generation-management, transfer, sample-descriptor, interface-schema, "
+    "fabric-graph, capability-transfer, fabric-stream, fabric-qos, fabric-time, "
+    "fabric-call, fabric-operation, fabric-visibility, and rpi5-ros2-demo contracts passed"
 )

@@ -66,8 +66,10 @@ pub fn receive(
     let (selected_slot, state) =
         generation_service::read_state_for_transfer(&mut receiver).map_err(map_service_error)?;
     let generation_bytes = reconstruct_generation(&manifest, &mut receiver, &receiver_entries)?;
-    let generation =
-        Generation::decode(&generation_bytes).map_err(|_| TransferError::BadClosure)?;
+    let generation = boot_contracts::generation::Generation::decode(&generation_bytes)
+        .map_err(|_| TransferError::BadClosure)?;
+    crate::generation::admit_executable_closure(&generation)
+        .map_err(|_| TransferError::BadClosure)?;
     if generation.identity != manifest.generation {
         return Err(TransferError::BadClosure);
     }

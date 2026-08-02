@@ -416,6 +416,11 @@ contracts_check: bootstate_model_check
     python3 scripts/generate/generate-spawn-bindings.py --check
     python3 scripts/check/check-boot-layout-resource.py
 
+# P0: one exact target profile per executable artifact, with closed admission,
+# generated-binding agreement, and the retained x86 rollback-window identity.
+architecture_contract_check: contracts_check
+    python3 scripts/check/check-architecture-contract.py
+
 # Build and validate deterministic generation and redundant boot metadata.
 generation_check:
     cd kernel && cargo build --release -p slime_os-kernel

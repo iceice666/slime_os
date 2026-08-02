@@ -1,4 +1,4 @@
-//! Component image decoding and validation (`contracts/component/v1`).
+//! Component image decoding and validation (`contracts/component/v2`).
 //!
 //! A component image is the only executable encoding the kernel accepts.
 //! Images are produced on the host from a statically linked ELF intermediate
@@ -12,19 +12,24 @@
 //! stack size) and nothing else — there are no relocations, no dynamic
 //! linking metadata, and no capability declarations.
 //!
-//! Layout (all little-endian, generated from `contracts/component/v1/schema.zt`):
+//! Layout (all little-endian, generated from `contracts/component/v2/schema.zt`):
 //!
 //! ```text
-//! Header (32 bytes):
-//!   u64 magic         = IMAGE_MAGIC ("SLIMECMP")
+//! Header (56 bytes):
+//!   u64 magic          = IMAGE_MAGIC ("SLIMECM2")
 //!   u32 format_version = FORMAT_VERSION
 //!   u32 header_size    = HEADER_LEN
 //!   u32 kernel_abi     = KERNEL_ABI_VERSION
+//!   u32 architecture
+//!   u32 abi
+//!   u32 page_profile
 //!   u32 entry_offset   (relative to the component base VA; must land in an
 //!                       executable segment)
 //!   u16 segment_count  (1..=MAX_SEGMENTS)
-//!   u16 reserved
+//!   u16 reserved       = 0
 //!   u32 stack_bytes    (page multiple, 1..=MAX_STACK_BYTES)
+//!   u32 target_profile
+//!   u64 required_features
 //!
 //! Segment record (20 bytes), sorted by strictly increasing vaddr_offset with
 //! non-overlapping memory ranges:
@@ -36,14 +41,20 @@
 //!                       never both set)
 //!   u16 reserved
 //! ```
+//!
+//! Retained v1 images use `SLIMECMP` and a 32-byte header. Their target was
+//! implicit in the sole producer and therefore means exactly
+//! `x86_64-qemu-virtio`, never an architecture-neutral executable.
 
 use slime_proto::component as generated;
 
 use alloc::vec::Vec;
+use boot_contracts::target_profile::{ImageTarget, TargetError, TargetProfile};
 
 pub use generated::{
     DEFAULT_STACK_BYTES, FORMAT_VERSION, HEADER_LEN, IMAGE_MAGIC, IMAGE_MAGIC_BYTES,
-    KERNEL_ABI_VERSION, MAX_IMAGE_BYTES, MAX_SEGMENTS, MAX_STACK_BYTES, SEGMENT_FLAG_EXEC,
+    KERNEL_ABI_VERSION, LEGACY_FORMAT_VERSION, LEGACY_HEADER_LEN, LEGACY_IMAGE_MAGIC,
+    LEGACY_IMAGE_MAGIC_BYTES, MAX_IMAGE_BYTES, MAX_SEGMENTS, MAX_STACK_BYTES, SEGMENT_FLAG_EXEC,
     SEGMENT_FLAG_WRITE, SEGMENT_LEN, WireImageHeader, WireSegmentRecord,
 };
 
@@ -54,8 +65,10 @@ pub enum ImageError {
     /// Fewer bytes than the header or segment table requires.
     Truncated,
     BadMagic,
-    /// `format_version`/`header_size` does not name this contract version.
+    /// The magic names a supported revision but its version does not match.
     UnsupportedVersion,
+    /// The header length does not match the selected revision.
+    BadHeader,
     /// The image was built against a different syscall ABI than this kernel.
     AbiMismatch,
     /// Zero segments or more than `MAX_SEGMENTS`.
@@ -73,6 +86,8 @@ pub enum ImageError {
     ImageTooLarge,
     /// Stack size is zero, not a page multiple, or above `MAX_STACK_BYTES`.
     BadStack,
+    /// The image's declared target does not match the admitted profile.
+    Target(TargetError),
 }
 
 /// One validated load segment.
@@ -95,11 +110,18 @@ impl Segment {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Revision {
+    Current(ImageTarget),
+    Legacy,
+}
+
 /// A validated component image, borrowed against the generation object bytes.
 pub struct Image<'a> {
     pub entry_offset: u32,
     pub stack_bytes: u32,
     pub segments: Vec<Segment>,
+    revision: Revision,
     data: &'a [u8],
 }
 
@@ -110,33 +132,82 @@ impl<'a> Image<'a> {
         let start = segment.file_offset as usize;
         &self.data[start..start + segment.file_len as usize]
     }
+
+    pub fn target(&self) -> ImageTarget {
+        match self.revision {
+            Revision::Current(target) => target,
+            Revision::Legacy => TargetProfile::legacy_image_target(),
+        }
+    }
 }
 
 /// Decode and fully validate an image. Bounded in every dimension: at most
 /// `MAX_SEGMENTS` records, `MAX_IMAGE_BYTES` of mapped footprint, and file
 /// ranges proven inside `blob` before any byte is exposed.
 pub fn decode(blob: &[u8]) -> Result<Image<'_>, ImageError> {
-    let header = WireImageHeader::decode(blob).ok_or(ImageError::Truncated)?;
-    if header.magic != IMAGE_MAGIC {
-        return Err(ImageError::BadMagic);
+    if blob.len() < LEGACY_HEADER_LEN {
+        return Err(ImageError::Truncated);
     }
-    if header.format_version != FORMAT_VERSION || header.header_size as usize != HEADER_LEN {
-        return Err(ImageError::UnsupportedVersion);
+    let magic = u64_at(blob, generated::OFF_HEADER_MAGIC)?;
+    let version = u32_at(blob, generated::OFF_HEADER_FORMAT_VERSION)?;
+    let revision = match (magic, version) {
+        (IMAGE_MAGIC, FORMAT_VERSION) => Revision::Current(ImageTarget {
+            profile: u32_at(blob, generated::OFF_HEADER_TARGET_PROFILE)?,
+            architecture: u32_at(blob, generated::OFF_HEADER_ARCHITECTURE)?,
+            abi: u32_at(blob, generated::OFF_HEADER_ABI)?,
+            page_profile: u32_at(blob, generated::OFF_HEADER_PAGE_PROFILE)?,
+            required_features: u64_at(blob, generated::OFF_HEADER_REQUIRED_FEATURES)?,
+        }),
+        (LEGACY_IMAGE_MAGIC, LEGACY_FORMAT_VERSION) => Revision::Legacy,
+        (IMAGE_MAGIC | LEGACY_IMAGE_MAGIC, _) => return Err(ImageError::UnsupportedVersion),
+        _ => return Err(ImageError::BadMagic),
+    };
+    let header_len = match revision {
+        Revision::Current(_) => HEADER_LEN,
+        Revision::Legacy => LEGACY_HEADER_LEN,
+    };
+    if blob.len() < header_len {
+        return Err(ImageError::Truncated);
     }
-    if header.kernel_abi != KERNEL_ABI_VERSION {
+    if u32_at(blob, generated::OFF_HEADER_HEADER_SIZE)? as usize != header_len {
+        return Err(ImageError::BadHeader);
+    }
+    if u32_at(blob, generated::OFF_HEADER_KERNEL_ABI)? != KERNEL_ABI_VERSION {
         return Err(ImageError::AbiMismatch);
     }
-    let count = header.segment_count;
+    let (entry_offset, count, stack_bytes) = match revision {
+        Revision::Current(_) => {
+            let header = WireImageHeader::decode(blob).ok_or(ImageError::Truncated)?;
+            if header.reserved != 0 {
+                return Err(ImageError::BadFlags);
+            }
+            (
+                header.entry_offset,
+                header.segment_count,
+                header.stack_bytes,
+            )
+        }
+        Revision::Legacy => {
+            if u16_at(blob, generated::OFF_LEGACY_HEADER_RESERVED)? != 0 {
+                return Err(ImageError::BadFlags);
+            }
+            (
+                u32_at(blob, generated::OFF_LEGACY_HEADER_ENTRY_OFFSET)?,
+                u16_at(blob, generated::OFF_LEGACY_HEADER_SEGMENT_COUNT)?,
+                u32_at(blob, generated::OFF_LEGACY_HEADER_STACK_BYTES)?,
+            )
+        }
+    };
     if count == 0 || count > MAX_SEGMENTS {
         return Err(ImageError::BadSegmentCount);
     }
-    if header.stack_bytes == 0
-        || header.stack_bytes % crate::memory::PAGE_SIZE as u32 != 0
-        || header.stack_bytes > MAX_STACK_BYTES
+    if stack_bytes == 0
+        || stack_bytes % crate::memory::PAGE_SIZE as u32 != 0
+        || stack_bytes > MAX_STACK_BYTES
     {
         return Err(ImageError::BadStack);
     }
-    let records_end = HEADER_LEN
+    let records_end = header_len
         .checked_add(count as usize * SEGMENT_LEN)
         .ok_or(ImageError::Truncated)?;
     if records_end > blob.len() {
@@ -149,7 +220,7 @@ pub fn decode(blob: &[u8]) -> Result<Image<'_>, ImageError> {
     let mut total_pages: u64 = 0;
     let mut entry_ok = false;
     for index in 0..count as usize {
-        let record = WireSegmentRecord::decode(&blob[HEADER_LEN + index * SEGMENT_LEN..])
+        let record = WireSegmentRecord::decode(&blob[header_len + index * SEGMENT_LEN..])
             .ok_or(ImageError::Truncated)?;
         let flags = record.flags;
         if flags & !(SEGMENT_FLAG_WRITE | SEGMENT_FLAG_EXEC) != 0
@@ -181,8 +252,8 @@ pub fn decode(blob: &[u8]) -> Result<Image<'_>, ImageError> {
             return Err(ImageError::ImageTooLarge);
         }
         if record.flags & SEGMENT_FLAG_EXEC != 0
-            && u64::from(header.entry_offset) >= start
-            && u64::from(header.entry_offset) < end
+            && u64::from(entry_offset) >= start
+            && u64::from(entry_offset) < end
         {
             entry_ok = true;
         }
@@ -199,9 +270,40 @@ pub fn decode(blob: &[u8]) -> Result<Image<'_>, ImageError> {
     }
 
     Ok(Image {
-        entry_offset: header.entry_offset,
-        stack_bytes: header.stack_bytes,
+        entry_offset,
+        stack_bytes,
         segments,
+        revision,
         data,
     })
+}
+
+pub fn decode_for_profile<'a>(
+    blob: &'a [u8],
+    profile: &TargetProfile,
+) -> Result<Image<'a>, ImageError> {
+    let image = decode(blob)?;
+    profile.admit(&image.target()).map_err(ImageError::Target)?;
+    Ok(image)
+}
+
+fn u16_at(blob: &[u8], offset: usize) -> Result<u16, ImageError> {
+    let bytes = blob.get(offset..offset + 2).ok_or(ImageError::Truncated)?;
+    Ok(u16::from_le_bytes(
+        bytes.try_into().map_err(|_| ImageError::Truncated)?,
+    ))
+}
+
+fn u32_at(blob: &[u8], offset: usize) -> Result<u32, ImageError> {
+    let bytes = blob.get(offset..offset + 4).ok_or(ImageError::Truncated)?;
+    Ok(u32::from_le_bytes(
+        bytes.try_into().map_err(|_| ImageError::Truncated)?,
+    ))
+}
+
+fn u64_at(blob: &[u8], offset: usize) -> Result<u64, ImageError> {
+    let bytes = blob.get(offset..offset + 8).ok_or(ImageError::Truncated)?;
+    Ok(u64::from_le_bytes(
+        bytes.try_into().map_err(|_| ImageError::Truncated)?,
+    ))
 }

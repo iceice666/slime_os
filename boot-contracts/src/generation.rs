@@ -824,7 +824,7 @@ mod tests {
     /// on a rollback boot: the identity seal is verified, the kernel object is
     /// located, and its own kernel image is what would be loaded.
     ///
-    /// Each generation embeds the kernel it boots (`stage0::verify_kernel`
+    /// Each generation embeds the kernel it boots (`stage0::admit_generation_closure`
     /// resolves `generation.kernel_object`), so a v2 rollback runs its v2-era
     /// kernel rather than the current one. That is why the current tree's
     /// v3-only rights cannot break the rollback window, and it is the property

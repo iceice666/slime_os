@@ -15,6 +15,7 @@ use crate::memory::shared_buffer::{HolderQuota, SHARED_BUFFER_TABLE};
 use crate::memory::vmm::{MapError, PTE_NO_EXECUTE, PTE_PRESENT, PTE_USER, PTE_WRITABLE};
 use crate::memory::{PAGE_SIZE, VirtAddr};
 use crate::trap::UserFrame;
+use boot_contracts::target_profile::TargetProfile;
 
 pub const KERNEL_STACK_SIZE: usize = 32 * 1024;
 const SWITCH_STACK_SIZE: usize = 4096;
@@ -458,10 +459,7 @@ pub fn spawn_from_cap(
 pub enum SpawnError {
     BadExecutable,
     BadCapability,
-    /// The executable bytes are not a valid component image
-    /// (`contracts/component/v1`). Generation decoding validates images
-    /// eagerly, so this can only fire for executables sourced outside a
-    /// decoded generation.
+    /// The executable image does not match the profile this kernel admits.
     BadImage(crate::component::ImageError),
     /// The global live-task table is full.
     TooManyTasks,
@@ -498,7 +496,9 @@ pub fn spawn_with_caps_for(
         }
     }
 
-    let decoded = crate::component::decode(image).map_err(SpawnError::BadImage)?;
+    let profile = TargetProfile::current().map_err(|_| SpawnError::BadExecutable)?;
+    let decoded =
+        crate::component::decode_for_profile(image, profile).map_err(SpawnError::BadImage)?;
 
     let mut address_space = AddressSpace::new()?;
 

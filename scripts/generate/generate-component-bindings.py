@@ -16,7 +16,7 @@ from zutai_cli import STDLIB, binary
 
 from harness import ROOT
 
-GENERATOR = ROOT / "contracts" / "component" / "v1" / "schema.zt"
+GENERATOR = ROOT / "contracts" / "component" / "v2" / "schema.zt"
 RUST_OUTPUT = ROOT / "components" / "proto" / "src" / "component.rs"
 INVALID_SCHEMA = "INVALID_COMPONENT_SCHEMA"
 
@@ -30,6 +30,7 @@ def render() -> str:
         environment = os.environ.copy()
         environment["ZUTAI_STDLIB_ROOT"] = str(STDLIB)
         environment["SLIME_COMPONENT_BINDINGS_ROOT"] = str(staging)
+        environment["SLIME_BOOT_BINDINGS_ROOT"] = str(staging)
         process = subprocess.run(
             [str(binary()), "run", str(GENERATOR)],
             cwd=ROOT,

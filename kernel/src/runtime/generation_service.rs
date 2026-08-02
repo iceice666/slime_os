@@ -11,7 +11,6 @@ use boot_contracts::bootstate::{
     BOOTSTORE_HEADER_REQUIRED_FLAGS_OFFSET, BOOTSTORE_HEADER_RESERVED_OFFSET, BOOTSTORE_MAGIC,
     BOOTSTORE_RELEASES_OFFSET, BOOTSTORE_VERSION, BootState, SLOT_BYTES,
 };
-use boot_contracts::generation::Generation;
 use boot_contracts::release::{INITIAL_TRUST_ROOT, RELEASE_BYTES, Release};
 
 use crate::block_device::BlockDevice;
@@ -98,6 +97,16 @@ pub fn read_state_for_transfer(
     read_bootstate_for_root(device, directory_root(&entries)).map_err(Into::into)
 }
 
+fn decode_generation(
+    bytes: &[u8],
+) -> Result<boot_contracts::generation::Generation<'_>, ServiceError> {
+    let generation = boot_contracts::generation::Generation::decode(bytes)
+        .map_err(|_| ServiceError::BadClosure)?;
+    crate::generation::admit_executable_closure(&generation)
+        .map_err(|_| ServiceError::BadClosure)?;
+    Ok(generation)
+}
+
 pub fn read_object_by_digest_for_transfer(
     device: &mut BlockDevice,
     entries: &[TransferDirectoryEntry],
@@ -106,7 +115,11 @@ pub fn read_object_by_digest_for_transfer(
 ) -> Result<Vec<u8>, TransferServiceError> {
     for entry in entries {
         let bytes = read_range(device, entry.generation_offset, entry.generation_len)?;
-        let generation = Generation::decode(&bytes).map_err(|_| ServiceError::BadClosure)?;
+        // Object retrieval intentionally decodes structure without current-profile
+        // admission: a retained generation may supply byte-addressed resource data
+        // even when its executable closure cannot run on this kernel.
+        let generation = boot_contracts::generation::Generation::decode(&bytes)
+            .map_err(|_| TransferServiceError::BadClosure)?;
         for index in 0..generation.object_count() {
             let object = generation
                 .object(index)
@@ -138,8 +151,7 @@ pub fn install_and_select_for_transfer(
     {
         return Err(TransferServiceError::Conflict);
     }
-    let generation =
-        Generation::decode(generation_bytes).map_err(|_| TransferServiceError::BadClosure)?;
+    let generation = decode_generation(generation_bytes).map_err(TransferServiceError::from)?;
     let release = Release::decode(release_bytes).map_err(|_| TransferServiceError::BadRelease)?;
     release
         .verify_for_staging(
@@ -277,7 +289,7 @@ fn inspect_reply(
 ) -> Result<WireGenerationReply, ServiceError> {
     let entry = find_entry(entries, identity)?;
     let generation_bytes = read_range(device, entry.generation_offset, entry.generation_len)?;
-    let generation = Generation::decode(&generation_bytes).map_err(|_| ServiceError::BadClosure)?;
+    let generation = decode_generation(&generation_bytes)?;
     let release_bytes = read_range(device, entry.release_offset, RELEASE_BYTES)?;
     let release = Release::decode(&release_bytes).map_err(|_| ServiceError::BadRelease)?;
     release
@@ -301,7 +313,7 @@ fn stage_reply(
 ) -> Result<WireGenerationReply, ServiceError> {
     let entry = find_entry(entries, identity)?;
     let generation_bytes = read_range(device, entry.generation_offset, entry.generation_len)?;
-    let generation = Generation::decode(&generation_bytes).map_err(|_| ServiceError::BadClosure)?;
+    let generation = decode_generation(&generation_bytes)?;
     let release_bytes = read_range(device, entry.release_offset, RELEASE_BYTES)?;
     let release = Release::decode(&release_bytes).map_err(|_| ServiceError::BadRelease)?;
     release
@@ -333,7 +345,7 @@ fn select_reply(
 ) -> Result<WireGenerationReply, ServiceError> {
     let entry = find_entry(entries, identity)?;
     let generation_bytes = read_range(device, entry.generation_offset, entry.generation_len)?;
-    let generation = Generation::decode(&generation_bytes).map_err(|_| ServiceError::BadClosure)?;
+    let generation = decode_generation(&generation_bytes)?;
     let release_bytes = read_range(device, entry.release_offset, RELEASE_BYTES)?;
     let release = Release::decode(&release_bytes).map_err(|_| ServiceError::BadRelease)?;
     release
@@ -620,7 +632,7 @@ fn directory_root(entries: &[DirectoryEntry]) -> [u8; 32] {
 
 fn verify_closure(
     entries: &[DirectoryEntry],
-    generation: &Generation<'_>,
+    generation: &boot_contracts::generation::Generation<'_>,
 ) -> Result<(), ServiceError> {
     if generation
         .parent

@@ -157,3 +157,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-01 | [Init's capability layout resolves from generation data](2026-08-01-boot-layout-resolution/index.md) | Change | Verified | B10 |
 | 2026-08-01 | [B11 — Product boot profiles exclude verification scaffolding](2026-08-01-b11-product-boot-profiles/index.md) | Defect | Verified | B11 |
 | 2026-08-02 | [RP0 — Raspberry Pi 5 ROS 2 demo contract](2026-08-02-rp0-demo-contract/index.md) | Change | Verified | RP0 |
+| 2026-08-02 | [P0 — Architecture, target, and executable-artifact contracts](2026-08-02-p0-architecture-contracts/index.md) | Change | Verified | P0 |

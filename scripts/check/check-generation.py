@@ -34,12 +34,38 @@ def read_string(data: bytes, base: int, table_len: int, offset: int) -> str:
         raise CheckError("BadUtf8") from error
 
 
-def check_kernel_image(blob: bytes) -> None:
+def check_kernel_image(blob: bytes, profile) -> None:
     require(len(blob) >= KERNEL_HEADER.size, "TruncatedKernelImage")
-    magic, version, header, abi, flags, preferred, entry, segments, relocations, payload, total = KERNEL_HEADER.unpack_from(blob)
+    (
+        magic,
+        version,
+        header,
+        abi,
+        flags,
+        architecture,
+        image_abi,
+        page_profile,
+        target_profile,
+        required_features,
+        preferred,
+        entry,
+        segments,
+        relocations,
+        payload,
+        total,
+    ) = KERNEL_HEADER.unpack_from(blob)
     require(magic == KERNEL_MAGIC, "BadKernelMagic")
     require(version == KERNEL_VERSION and header == KERNEL_HEADER.size and abi == KERNEL_ABI_VERSION, "BadKernelVersion")
-    require(flags == 0 and preferred == KERNEL_PREFERRED_BASE and total == len(blob), "BadKernelHeader")
+    require(flags == 0 and total == len(blob), "BadKernelHeader")
+    # The authenticated generation, kernel, and every component name the same
+    # exact profile id. This also separates profiles that share an ISA and ABI,
+    # such as AArch64 QEMU and Raspberry Pi 5.
+    require(target_profile == profile.id, "KernelTargetProfileMismatch")
+    require(architecture == profile.architecture, "KernelArchitectureMismatch")
+    require(image_abi == profile.abi, "KernelAbiMismatch")
+    require(page_profile == profile.page_profile, "KernelPageProfileMismatch")
+    require(required_features == profile.required_features, "KernelFeatureMismatch")
+    require(preferred == profile.kernel_preferred_base, "KernelLoadLayoutMismatch")
     require(1 <= segments <= MAX_KERNEL_SEGMENTS and relocations <= MAX_KERNEL_RELOCATIONS, "ExcessiveKernelCount")
     require(payload == KERNEL_HEADER.size + segments * KERNEL_SEGMENT.size + relocations * KERNEL_RELOCATION.size, "BadKernelBounds")
     require(len(blob) <= MAX_KERNEL_IMAGE_BYTES, "KernelImageTooLarge")
@@ -63,7 +89,40 @@ def check_kernel_image(blob: bytes) -> None:
         target, addend = KERNEL_RELOCATION.unpack_from(blob, relocation_start + index * KERNEL_RELOCATION.size)
         require(target % 8 == 0 and any(start <= target and target + 8 <= end for start, end in writable), "BadRelocation")
         absolute_addend = addend if addend >= 0 else (1 << 64) + addend
-        require(KERNEL_PREFERRED_BASE <= absolute_addend <= KERNEL_PREFERRED_BASE + ((image_end + 4095) & ~4095), "BadRelocationAddend")
+        require(profile.kernel_preferred_base <= absolute_addend <= profile.kernel_preferred_base + ((image_end + profile.page_bytes - 1) & -profile.page_bytes), "BadRelocationAddend")
+
+
+def check_component_image(blob: bytes, profile, name: str) -> None:
+    require(len(blob) >= COMPONENT_IMAGE_HEADER.size, f"TruncatedComponentImage:{name}")
+    (
+        magic,
+        version,
+        header,
+        abi,
+        architecture,
+        image_abi,
+        page_profile,
+        _entry,
+        _segments,
+        reserved,
+        _stack,
+        target_profile,
+        required_features,
+    ) = COMPONENT_IMAGE_HEADER.unpack_from(blob)
+    require(magic == COMPONENT_IMAGE_MAGIC, f"BadComponentMagic:{name}")
+    require(
+        version == COMPONENT_IMAGE_VERSION
+        and header == COMPONENT_IMAGE_HEADER.size
+        and abi == COMPONENT_IMAGE_KERNEL_ABI,
+        f"BadComponentVersion:{name}",
+    )
+    require(reserved == 0, f"BadComponentHeader:{name}")
+    require(target_profile == profile.id, f"ComponentTargetProfileMismatch:{name}")
+    require(architecture == profile.architecture, f"ComponentArchitectureMismatch:{name}")
+    require(image_abi == profile.abi, f"ComponentAbiMismatch:{name}")
+    require(page_profile == profile.page_profile, f"ComponentPageProfileMismatch:{name}")
+    require(required_features == profile.required_features, f"ComponentFeatureMismatch:{name}")
+
 
 
 RIGHT_TRANSFER = 1 << 2
@@ -99,6 +158,11 @@ def check_generation(data: bytes, expected_identity: bytes | None = None) -> dic
     require(strings_offset == health_offset + health * GENERATION_HEALTH.size, "BadGenerationBounds")
     require(payload_offset == strings_offset + strings_len, "BadGenerationBounds")
     target = read_string(data, strings_offset, strings_len, target_offset)
+    # The generation names exactly one admitted profile. An unrecognized name
+    # is refused here rather than resolving to a nearby target, so every
+    # executable below is checked against the profile the generation claims.
+    profile = TARGET_PROFILES_BY_NAME.get(target)
+    require(profile is not None, "UnknownGenerationTarget")
     object_rows = []
     previous_id = ""
     previous_payload = payload_offset
@@ -114,7 +178,7 @@ def check_generation(data: bytes, expected_identity: bytes | None = None) -> dic
         previous_id, previous_payload = object_id, offset + length
     require(previous_payload == len(data), "TrailingGenerationBytes")
     require(kernel_index < objects and object_rows[kernel_index][1] == 1, "BadKernelObject")
-    check_kernel_image(object_rows[kernel_index][2])
+    check_kernel_image(object_rows[kernel_index][2], profile)
     component_rows = []
     previous_name = ""
     for index in range(components):
@@ -125,6 +189,14 @@ def check_generation(data: bytes, expected_identity: bytes | None = None) -> dic
         require(0 <= spawn_budget <= MAX_SPAWN_BUDGET, "BadSpawnBudget")
         component_rows.append((name, object_index, role, dependency_start, dependency_count, spawn_budget))
         previous_name = name
+        # Every component record must resolve to an executable object admitted
+        # for this generation's profile. Iterating component records rather
+        # than objects of executable kind is deliberate: only the bootstrap
+        # component's object kind is otherwise constrained, so a component
+        # pointing at a resource object would never be target-checked at all.
+        component_kind = object_rows[object_index][1]
+        require(component_kind in (2, 3), "ComponentObjectNotExecutable")
+        check_component_image(object_rows[object_index][2], profile, name)
     require(bootstrap < components and component_rows[bootstrap][2] == 1 and object_rows[component_rows[bootstrap][1]][1] == 2, "BadBootstrap")
     for index, (_, _, _, start, count, _) in enumerate(component_rows):
         previous_dependency = -1

@@ -5,9 +5,13 @@
 #![deny(clippy::indexing_slicing)]
 
 use boot_contracts::bootstate::{BootState, SLOT_BYTES, SLOT_COUNT};
-use boot_contracts::generation::{Generation, generation_identity};
+use boot_contracts::component_image::{self, ComponentTargetError};
+use boot_contracts::generation::{
+    Generation, KIND_BOOTSTRAP, KIND_COMPONENT, KIND_KERNEL, generation_identity,
+};
 use boot_contracts::kernel_image::{ImageError, KernelImage};
 use boot_contracts::sha256::Sha256;
+use boot_contracts::target_profile::{TargetError, TargetProfile};
 
 pub use boot_contracts::bootstate::{
     BOOTSTORE_CAPACITY, BOOTSTORE_DIRECTORY_OFFSET, BOOTSTORE_ENTRY_GENERATION_LEN_OFFSET,
@@ -37,7 +41,10 @@ pub enum BootError {
     BadGenerationHash,
     BadObjectHash,
     BadKernelImage,
+    BadComponentImage(ComponentTargetError),
+    BadExecutableKind,
     BadRelease,
+    Target(TargetError),
     KernelImage(ImageError),
     TooManyMemoryEntries,
     MissingFramebuffer,
@@ -308,6 +315,37 @@ pub fn verify_generation<'a>(
     })
 }
 
+pub fn admit_generation_closure<'a>(
+    generation: &Generation<'a>,
+) -> Result<KernelImage<'a>, BootError> {
+    let current = TargetProfile::current().map_err(BootError::Target)?;
+    let profile = TargetProfile::by_name(generation.target).map_err(BootError::Target)?;
+    if profile.id != current.id {
+        return Err(BootError::Target(TargetError::ProfileMismatch));
+    }
+    let kernel = generation
+        .object(generation.kernel_object)
+        .map_err(|_| BootError::BadKernelImage)?;
+    if kernel.kind != KIND_KERNEL {
+        return Err(BootError::BadKernelImage);
+    }
+    let kernel =
+        KernelImage::decode_for_profile(kernel.bytes, profile).map_err(BootError::KernelImage)?;
+    for index in 0..generation.component_count() {
+        let component = generation
+            .component(index)
+            .map_err(|_| BootError::BadGenerationHash)?;
+        let object = generation
+            .object(component.object)
+            .map_err(|_| BootError::BadGenerationHash)?;
+        if !matches!(object.kind, KIND_BOOTSTRAP | KIND_COMPONENT) {
+            return Err(BootError::BadExecutableKind);
+        }
+        component_image::admit(object.bytes, profile).map_err(BootError::BadComponentImage)?;
+    }
+    Ok(kernel)
+}
+
 pub fn verify_release(
     entry: &DirectoryEntry<'_>,
     generation: &Generation<'_>,
@@ -326,13 +364,6 @@ pub fn verify_release(
         return Err(BootError::BadRelease);
     }
     Ok(release.sequence)
-}
-
-pub fn verify_kernel<'a>(generation: &Generation<'a>) -> Result<KernelImage<'a>, BootError> {
-    let object = generation
-        .object(generation.kernel_object)
-        .map_err(|_| BootError::BadKernelImage)?;
-    KernelImage::decode(object.bytes).map_err(BootError::KernelImage)
 }
 
 fn u32_at(bytes: &[u8], offset: usize) -> Result<u32, BootError> {

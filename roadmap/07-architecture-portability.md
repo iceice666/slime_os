@@ -2,7 +2,7 @@
 
 **Purpose:** Preserve one Slime capability/component/generation architecture across target profiles while making AArch64 and Raspberry Pi 5 the near-term product path.
 
-**Status:** Not started.
+**Status:** In progress — P0 complete.
 
 **Decision:** AArch64/Raspberry Pi 5 is now the near-term physical target because the current product goal is the RPi5 ROS 2 two-node demo. The existing x86-64 QEMU path remains the regression oracle for completed work until each semantic corpus is replayed on AArch64, but x86-64/Framework is no longer the product-leading roadmap. RV64 is deferred.
 
@@ -41,7 +41,7 @@ A profile name identifies a complete executable and platform contract, not only 
 
 ## P0: Architecture, target, and executable-artifact contracts
 
-**Status:** Not started.
+**Status:** Complete.
 
 **Depends on:** Foundations and a cleared or explicitly deferred backlog.
 

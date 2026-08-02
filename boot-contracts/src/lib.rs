@@ -2,6 +2,7 @@
 
 pub mod boot_layout;
 pub mod bootstate;
+pub mod component_image;
 pub mod crc32;
 pub mod fabric_graph;
 pub mod generation;
@@ -14,5 +15,6 @@ pub mod sha256;
 pub mod shared_buffer_budget;
 pub mod store_disk;
 pub mod stream_history;
+pub mod target_profile;
 pub mod trace;
 pub mod transfer;

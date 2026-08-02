@@ -89,6 +89,17 @@ from boot_contracts import (
     MAX_FABRIC_GRAPH_PARTICIPANTS,
     MAX_FABRIC_GRAPH_ROUTES,
     MAX_FABRIC_GRAPH_SCHEMAS,
+    COMPONENT_DEFAULT_STACK_BYTES,
+    COMPONENT_IMAGE_HEADER,
+    COMPONENT_IMAGE_KERNEL_ABI,
+    COMPONENT_IMAGE_MAGIC,
+    COMPONENT_IMAGE_MAX_SEGMENTS,
+    COMPONENT_IMAGE_SEGMENT,
+    COMPONENT_IMAGE_VERSION,
+    COMPONENT_MAX_STACK_BYTES,
+    COMPONENT_SEGMENT_FLAG_EXEC,
+    COMPONENT_SEGMENT_FLAG_WRITE,
+    MAX_COMPONENT_IMAGE_BYTES,
     GENERATION_COMPONENT,
     GENERATION_DEPENDENCY,
     GENERATION_GRANT,
@@ -101,10 +112,11 @@ from boot_contracts import (
     KERNEL_ABI_VERSION,
     KERNEL_HEADER,
     KERNEL_MAGIC,
-    KERNEL_PREFERRED_BASE,
     KERNEL_RELOCATION,
     KERNEL_SEGMENT,
     KERNEL_VERSION,
+    TARGET_PROFILES_BY_NAME,
+    TargetProfile,
     MAX_COMPONENTS,
     MAX_DEPENDENCIES,
     MAX_GENERATION_BYTES,
@@ -152,7 +164,6 @@ from zutai_cli import STDLIB, binary
 from harness import ROOT
 
 SOURCE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "valid.zti"
-TARGET = "x86_64-qemu-virtio"
 COMPONENTS_TARGET_DIR = Path(
     os.environ.get("CARGO_TARGET_DIR") or ROOT / "target" / "components"
 )
@@ -197,15 +208,6 @@ POLICY = {
     "discardOnRollback": 5,
 }
 
-IMAGE_MAGIC = b"SLIMECMP"
-IMAGE_FORMAT_VERSION = 1
-IMAGE_KERNEL_ABI = 1
-IMAGE_HEADER = struct.Struct("<8sIIIIHHI")
-IMAGE_SEGMENT = struct.Struct("<IIIIHH")
-IMAGE_BASE = 0x400000
-MAX_COMPONENT_IMAGE_BYTES = 16 * 1024 * 1024
-MAX_STACK_BYTES = 1024 * 1024
-DEFAULT_STACK_BYTES = 16384
 DEFAULT_FABRIC_PROFILE = "default"
 # B11: the boot profile carrying the scaffolding the pre-C8.10 gate families
 # exercise. `default` is the product boot and declares none of it.
@@ -344,6 +346,15 @@ def load_manifest() -> dict:
         stdout=subprocess.PIPE,
     ).stdout
     return json.loads(output)
+
+
+def resolve_target_profile(target: object) -> TargetProfile:
+    if not isinstance(target, str):
+        fail(f"unknown target {target!r}; admitted targets: {', '.join(sorted(TARGET_PROFILES_BY_NAME))}")
+    profile = TARGET_PROFILES_BY_NAME.get(target)
+    if profile is None:
+        fail(f"unknown target {target!r}; admitted targets: {', '.join(sorted(TARGET_PROFILES_BY_NAME))}")
+    return profile
 
 def recovery_manifest(manifest: dict) -> dict:
     recovery = copy.deepcopy(manifest)
@@ -1526,6 +1537,7 @@ def build_recovery_index(
 def build_rust_components(
     generation_number: int,
     profile_path: Path,
+    target_profile: TargetProfile,
     recovery: bool = False,
     candidate_identity: bytes | None = None,
     components: set[str] | None = None,
@@ -1545,6 +1557,7 @@ def build_rust_components(
         render_boot_layout_rust(generation_number, components), encoding="utf-8"
     )
     environment["SLIME_BOOT_LAYOUT"] = str(layout_path)
+    environment["SLIME_TARGET_PROFILE"] = target_profile.name
     if candidate_identity is None and os.environ.get("SLIME_TRANSFER_RECEIVER") == "1":
         environment["SLIME_TRANSFER_RECEIVER"] = "1"
     else:
@@ -1588,21 +1601,21 @@ def build_rust_components(
     target_dir = COMPONENTS_TARGET_DIR / target_name
     environment["CARGO_TARGET_DIR"] = str(target_dir)
     subprocess.run(
-        ["cargo", "build", "--release", "-p", "slime-components"],
+        ["cargo", "build", "--release", "--target", target_profile.cargo_target, "-p", "slime-components"],
         cwd=ROOT / "components",
         env=environment,
         check=True,
     )
-    return target_dir / "x86_64-unknown-none" / "release"
+    return target_dir / target_profile.cargo_target / "release"
 
 
-def component_image(name: str, elf: Path, stack_bytes: int) -> bytes:
+def component_image(name: str, elf: Path, stack_bytes: int, profile: TargetProfile) -> bytes:
     data = elf.read_bytes()
     if len(data) < 64 or data[:4] != b"\x7fELF" or data[4] != 2 or data[5] != 1:
         fail(f"{name}: not a 64-bit little-endian ELF")
     elf_type, machine = struct.unpack_from("<HH", data, 16)
-    if elf_type != 2 or machine != 62:
-        fail(f"{name}: not a static x86-64 executable")
+    if elf_type != 2 or machine != profile.elf_machine:
+        fail(f"{name}: not a static executable for target {profile.name}")
     entry, phoff = struct.unpack_from("<QQ", data, 24)
     _, phentsize, phnum = struct.unpack_from("<HHH", data, 52)
     segments: list[tuple[int, int, int, int, int]] = []
@@ -1615,37 +1628,52 @@ def component_image(name: str, elf: Path, stack_bytes: int) -> bytes:
         if p_type == 1 and p_memsz:
             segments.append((p_vaddr, p_offset, p_filesz, p_memsz, p_flags))
     segments.sort()
-    if not 1 <= len(segments) <= 16 or segments[0][0] != IMAGE_BASE or entry < IMAGE_BASE:
+    if not 1 <= len(segments) <= COMPONENT_IMAGE_MAX_SEGMENTS or segments[0][0] != profile.component_base or entry < profile.component_base:
         fail(f"{name}: invalid component load layout")
     records = bytearray()
     payload = bytearray()
     previous_end = 0
-    entry_offset = entry - IMAGE_BASE
+    entry_offset = entry - profile.component_base
     entry_ok = False
     total_pages = 0
     for vaddr, offset, filesz, memsz, elf_flags in segments:
-        if filesz > memsz or vaddr % PAGE_SIZE or vaddr < previous_end or offset + filesz > len(data):
+        if filesz > memsz or vaddr % profile.page_bytes or vaddr < previous_end or offset + filesz > len(data):
             fail(f"{name}: invalid or overlapping segment")
-        flags = (SEGMENT_EXEC if elf_flags & 1 else 0) | (SEGMENT_WRITE if elf_flags & 2 else 0)
-        if flags == SEGMENT_EXEC | SEGMENT_WRITE:
+        flags = (COMPONENT_SEGMENT_FLAG_EXEC if elf_flags & 1 else 0) | (COMPONENT_SEGMENT_FLAG_WRITE if elf_flags & 2 else 0)
+        if flags == COMPONENT_SEGMENT_FLAG_EXEC | COMPONENT_SEGMENT_FLAG_WRITE:
             fail(f"{name}: writable executable segment")
-        relative = vaddr - IMAGE_BASE
-        entry_ok |= bool(flags & SEGMENT_EXEC and relative <= entry_offset < relative + memsz)
-        records += IMAGE_SEGMENT.pack(relative, memsz, len(payload), filesz, flags, 0)
+        relative = vaddr - profile.component_base
+        entry_ok |= bool(flags & COMPONENT_SEGMENT_FLAG_EXEC and relative <= entry_offset < relative + memsz)
+        records += COMPONENT_IMAGE_SEGMENT.pack(relative, memsz, len(payload), filesz, flags, 0)
         payload += data[offset : offset + filesz]
         previous_end = vaddr + memsz
-        total_pages += -(-memsz // PAGE_SIZE)
-    if not entry_ok or total_pages * PAGE_SIZE > MAX_COMPONENT_IMAGE_BYTES:
+        total_pages += -(-memsz // profile.page_bytes)
+    if not entry_ok or total_pages * profile.page_bytes > MAX_COMPONENT_IMAGE_BYTES:
         fail(f"{name}: invalid entry or image size")
-    return IMAGE_HEADER.pack(IMAGE_MAGIC, IMAGE_FORMAT_VERSION, IMAGE_HEADER.size, IMAGE_KERNEL_ABI, entry_offset, len(segments), 0, stack_bytes) + records + payload
+    header = COMPONENT_IMAGE_HEADER.pack(
+        COMPONENT_IMAGE_MAGIC,
+        COMPONENT_IMAGE_VERSION,
+        COMPONENT_IMAGE_HEADER.size,
+        COMPONENT_IMAGE_KERNEL_ABI,
+        profile.architecture,
+        profile.abi,
+        profile.page_profile,
+        entry_offset,
+        len(segments),
+        0,
+        stack_bytes,
+        profile.id,
+        profile.required_features,
+    )
+    return header + records + payload
 
 
-def parse_elf64(data: bytes) -> tuple[int, list[tuple[int, int, int, int, int]], list[tuple[int, int]]]:
+def parse_elf64(data: bytes, profile: TargetProfile) -> tuple[int, list[tuple[int, int, int, int, int]], list[tuple[int, int]]]:
     if len(data) < 64 or data[:4] != b"\x7fELF" or data[4] != 2 or data[5] != 1:
         fail("kernel: not a 64-bit little-endian ELF")
     elf_type, machine = struct.unpack_from("<HH", data, 16)
-    if elf_type != 3 or machine != 62:
-        fail("kernel: expected x86-64 PIE ELF")
+    if elf_type != 3 or machine != profile.elf_machine:
+        fail(f"kernel: expected PIE ELF for target {profile.name}")
     entry, phoff, shoff = struct.unpack_from("<QQQ", data, 24)
     _, phentsize, phnum, shentsize, shnum = struct.unpack_from("<HHHHH", data, 52)
     segments: list[tuple[int, int, int, int, int]] = []
@@ -1672,35 +1700,35 @@ def parse_elf64(data: bytes) -> tuple[int, list[tuple[int, int, int, int, int]],
             fail("kernel: malformed RELA section")
         for rela_offset in range(sh_offset, sh_offset + sh_size, sh_entsize):
             target, info, addend = struct.unpack_from("<QQq", data, rela_offset)
-            if info & 0xFFFF_FFFF != 8 or info >> 32 != 0:
-                fail("kernel: unsupported relocation")
+            if info & 0xFFFF_FFFF != profile.relative_relocation or info >> 32 != 0:
+                fail(f"kernel: unsupported relocation for target {profile.name}")
             relocations.append((target, addend))
     relocations.sort()
     return entry, segments, relocations
 
 
-def kernel_image(path: Path) -> bytes:
+def kernel_image(path: Path, profile: TargetProfile) -> bytes:
     data = path.read_bytes()
-    entry, segments, relocations = parse_elf64(data)
+    entry, segments, relocations = parse_elf64(data, profile)
     if not 1 <= len(segments) <= MAX_KERNEL_SEGMENTS or len(relocations) > MAX_KERNEL_RELOCATIONS:
         fail("kernel: segment or relocation count exceeds bound")
-    if not segments or segments[0][0] != KERNEL_PREFERRED_BASE or entry < KERNEL_PREFERRED_BASE:
+    if not segments or segments[0][0] != profile.kernel_preferred_base or entry < profile.kernel_preferred_base:
         fail("kernel: unexpected preferred base")
     records = bytearray()
     payload = bytearray()
-    previous_end = KERNEL_PREFERRED_BASE
+    previous_end = profile.kernel_preferred_base
     entry_ok = False
     writable: list[tuple[int, int]] = []
-    image_end = KERNEL_PREFERRED_BASE
+    image_end = profile.kernel_preferred_base
     table_bytes = KERNEL_HEADER.size + len(segments) * KERNEL_SEGMENT.size + len(relocations) * KERNEL_RELOCATION.size
     payload_cursor = table_bytes
     for vaddr, file_offset, file_len, mem_len, elf_flags in segments:
-        if vaddr % PAGE_SIZE or vaddr < previous_end or file_len > mem_len or file_offset + file_len > len(data):
+        if vaddr % profile.page_bytes or vaddr < previous_end or file_len > mem_len or file_offset + file_len > len(data):
             fail("kernel: invalid or overlapping segment")
         flags = (SEGMENT_EXEC if elf_flags & 1 else 0) | (SEGMENT_WRITE if elf_flags & 2 else 0)
         if flags == SEGMENT_EXEC | SEGMENT_WRITE:
             fail("kernel: writable executable segment")
-        relative = vaddr - KERNEL_PREFERRED_BASE
+        relative = vaddr - profile.kernel_preferred_base
         entry_ok |= bool(flags & SEGMENT_EXEC and vaddr <= entry < vaddr + mem_len)
         if flags & SEGMENT_WRITE:
             writable.append((relative, relative + mem_len))
@@ -1709,17 +1737,17 @@ def kernel_image(path: Path) -> bytes:
         payload_cursor += file_len
         previous_end = vaddr + mem_len
         image_end = max(image_end, previous_end)
-    if not entry_ok or image_end - KERNEL_PREFERRED_BASE > MAX_KERNEL_IMAGE_BYTES:
+    if not entry_ok or image_end - profile.kernel_preferred_base > MAX_KERNEL_IMAGE_BYTES:
         fail("kernel: entry or image footprint invalid")
     relocation_records = bytearray()
     for target, addend in relocations:
-        if target < KERNEL_PREFERRED_BASE or target % 8:
+        if target < profile.kernel_preferred_base or target % 8:
             fail("kernel: relocation target invalid")
-        relative = target - KERNEL_PREFERRED_BASE
+        relative = target - profile.kernel_preferred_base
         if not any(start <= relative and relative + 8 <= end for start, end in writable):
             fail("kernel: relocation target outside writable segment")
-        absolute_addend = addend if addend >= KERNEL_PREFERRED_BASE else (1 << 64) + addend
-        if not KERNEL_PREFERRED_BASE <= absolute_addend <= align_up(image_end, PAGE_SIZE):
+        absolute_addend = addend if addend >= profile.kernel_preferred_base else (1 << 64) + addend
+        if not profile.kernel_preferred_base <= absolute_addend <= align_up(image_end, profile.page_bytes):
             fail("kernel: relocation addend outside image")
         signed_addend = absolute_addend - (1 << 64) if absolute_addend >= 1 << 63 else absolute_addend
         relocation_records += KERNEL_RELOCATION.pack(relative, signed_addend)
@@ -1727,9 +1755,22 @@ def kernel_image(path: Path) -> bytes:
     if image_len > MAX_KERNEL_IMAGE_BYTES:
         fail("kernel: image bytes exceed bound")
     header = KERNEL_HEADER.pack(
-        KERNEL_MAGIC, KERNEL_VERSION, KERNEL_HEADER.size, KERNEL_ABI_VERSION, 0,
-        KERNEL_PREFERRED_BASE, entry - KERNEL_PREFERRED_BASE, len(segments), len(relocations),
-        table_bytes, image_len,
+        KERNEL_MAGIC,
+        KERNEL_VERSION,
+        KERNEL_HEADER.size,
+        KERNEL_ABI_VERSION,
+        0,
+        profile.architecture,
+        profile.abi,
+        profile.page_profile,
+        profile.id,
+        profile.required_features,
+        profile.kernel_preferred_base,
+        entry - profile.kernel_preferred_base,
+        len(segments),
+        len(relocations),
+        table_bytes,
+        image_len,
     )
     return header + records + relocation_records + payload
 
@@ -1775,7 +1816,7 @@ def validate_acyclic(components: list[dict]) -> None:
     for name in graph: visit(name)
 
 
-def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes | None, number: int) -> bytes:
+def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes | None, number: int, profile: TargetProfile) -> bytes:
     # The boot layout is per generation number, and two generations are built
     # from one manifest. Encode it here, where the number is in hand, rather
     # than into the shared `payloads` — sharing one layout across both would
@@ -1801,7 +1842,8 @@ def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes |
     validate_acyclic(components)
     object_index = {obj["id"]: index for index, obj in enumerate(objects)}
     component_index = {component["name"]: index for index, component in enumerate(components)}
-    if manifest["target"] != TARGET: fail("unexpected target")
+    if manifest["target"] != profile.name:
+        fail(f"manifest target {manifest['target']!r} does not match resolved profile {profile.name!r}")
     if object_index.get(manifest["kernelObject"]) is None or objects[object_index[manifest["kernelObject"]]]["kind"] != "kernel": fail("kernelObject must name kernel")
     bootstrap = component_index.get(manifest["bootstrapComponent"])
     if bootstrap is None or components[bootstrap]["role"] != "init": fail("bootstrapComponent must name init")
@@ -2030,6 +2072,7 @@ def main() -> None:
     kernel = Path(sys.argv[1]).resolve()
     output = Path(sys.argv[2]).resolve()
     manifest = load_manifest()
+    target_profile = resolve_target_profile(manifest.get("target"))
     if manifest["formatVersion"] != 1:
         fail("unsupported source formatVersion")
     interfaces = validate_interface_schemas(manifest["interfaceSchemas"])
@@ -2055,10 +2098,11 @@ def main() -> None:
     generation1_components = build_rust_components(
         generation1_number,
         profile_rust_path,
+        target_profile,
         candidate_identity=None,
         components=profile_components,
     )
-    payloads: dict[str, bytes] = {manifest["kernelObject"]: kernel_image(kernel)}
+    payloads: dict[str, bytes] = {manifest["kernelObject"]: kernel_image(kernel, target_profile)}
     object_by_id = {obj["id"]: obj for obj in manifest["objects"]}
     if "shared-buffer-budget" in object_by_id:
         payloads["shared-buffer-budget"] = build_shared_buffer_budget(
@@ -2069,35 +2113,37 @@ def main() -> None:
     elif manifest.get("fabricGraph") is not None:
         fail("fabricGraph declared without a fabric-graph resource object")
     for component in manifest["components"]:
-        stack = component.get("stackBytes", DEFAULT_STACK_BYTES)
-        if not isinstance(stack, int) or stack <= 0 or stack % PAGE_SIZE or stack > MAX_STACK_BYTES:
+        stack = component.get("stackBytes", COMPONENT_DEFAULT_STACK_BYTES)
+        if not isinstance(stack, int) or stack <= 0 or stack % target_profile.page_bytes or stack > COMPONENT_MAX_STACK_BYTES:
             fail(f"component {component['name']}: invalid stack")
         if component["object"] not in object_by_id:
             fail(f"component {component['name']}: missing object")
         payloads[component["object"]] = component_image(
-            component["name"], generation1_components / component["name"], stack
+            component["name"], generation1_components / component["name"], stack, target_profile
         )
-    generation1 = build_generation(manifest, payloads, None, 1)
+    generation1 = build_generation(manifest, payloads, None, 1, target_profile)
     generation2_components = build_rust_components(
         policy_number,
         profile_rust_path,
+        target_profile,
         candidate_identity=generation1[24:56],
         components=profile_components,
     )
     for component in manifest["components"]:
-        stack = component.get("stackBytes", DEFAULT_STACK_BYTES)
-        if not isinstance(stack, int) or stack <= 0 or stack % PAGE_SIZE or stack > MAX_STACK_BYTES:
+        stack = component.get("stackBytes", COMPONENT_DEFAULT_STACK_BYTES)
+        if not isinstance(stack, int) or stack <= 0 or stack % target_profile.page_bytes or stack > COMPONENT_MAX_STACK_BYTES:
             fail(f"component {component['name']}: invalid stack")
         payloads[component["object"]] = component_image(
-            component["name"], generation2_components / component["name"], stack
+            component["name"], generation2_components / component["name"], stack, target_profile
         )
     parent_override = os.environ.get("SLIME_GENERATION_PARENT")
     generation2_parent = bytes.fromhex(parent_override) if parent_override else generation1[24:56]
-    generation2 = build_generation(manifest, payloads, generation2_parent, policy_number)
+    generation2 = build_generation(manifest, payloads, generation2_parent, policy_number, target_profile)
     recovery = recovery_manifest(manifest)
     recovery_components = build_rust_components(
         5,
         profile_rust_path,
+        target_profile,
         recovery=True,
         components={component["name"] for component in recovery["components"]},
     )
@@ -2108,8 +2154,8 @@ def main() -> None:
     generation_root = sha256(b"".join(sorted((generation1[24:56], generation2[24:56]))))
     recovery_payloads = {
         manifest["kernelObject"]: payloads[manifest["kernelObject"]],
-        "sha256:init": component_image("init", recovery_components / "init", DEFAULT_STACK_BYTES),
-        "sha256:recovery": component_image("recovery", recovery_components / "recovery", DEFAULT_STACK_BYTES),
+        "sha256:init": component_image("init", recovery_components / "init", COMPONENT_DEFAULT_STACK_BYTES, target_profile),
+        "sha256:recovery": component_image("recovery", recovery_components / "recovery", COMPONENT_DEFAULT_STACK_BYTES, target_profile),
         "recovery-index": build_recovery_index(
             generation2[24:56],
             generation_root,
@@ -2120,7 +2166,7 @@ def main() -> None:
             state_last_lba,
         ),
     }
-    recovery_generation = build_generation(recovery, recovery_payloads, None, 5)
+    recovery_generation = build_generation(recovery, recovery_payloads, None, 5, target_profile)
     recovery_bootstore = build_bootstore([recovery_generation])
     bootstore = build_bootstore([generation1, generation2])
     (output / "generation-1.bin").write_bytes(generation1)

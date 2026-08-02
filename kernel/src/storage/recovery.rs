@@ -235,6 +235,8 @@ fn scrub_generations(
         }
         let generation =
             Generation::decode(&generation_bytes).map_err(|_| RecoveryError::BadBootStore)?;
+        crate::generation::admit_executable_closure(&generation)
+            .map_err(|_| RecoveryError::BadBootStore)?;
         let release_bytes = read_range(device, entry.release_offset, RELEASE_BYTES)?;
         let release = Release::decode(&release_bytes).map_err(|_| RecoveryError::BadRelease)?;
         release

@@ -9,3 +9,10 @@ rustflags = [
     "-C", "codegen-units=1",
 ]
 runner = "scripts/run-kernel.sh"
+
+[target.aarch64-unknown-none]
+rustflags = [
+    "-C", "force-frame-pointers",
+    "-C", "link-arg=--gc-sections",
+    "-C", "codegen-units=1",
+]

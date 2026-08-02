@@ -11,7 +11,17 @@ import subprocess
 import sys
 from pathlib import Path
 
-from boot_contracts import BOOTSTATE_SLOT_BYTES
+
+from boot_contracts import (
+    BOOTSTATE_SLOT_BYTES,
+    BOOTSTORE_DIRECTORY_OFFSET,
+    BOOTSTORE_ENTRY,
+    BOOTSTORE_HEADER,
+    BOOTSTORE_HEADER_CHECKSUM_END,
+    BOOTSTORE_HEADER_CHECKSUM_OFFSET,
+    RELEASE_HEADER_BYTES,
+    bootstore_checksum,
+)
 from harness import BOOT_TIMEOUT_SECONDS, RELEASE_KERNEL, ROOT, load_script, run_qemu
 
 KERNEL = RELEASE_KERNEL
@@ -54,6 +64,41 @@ def bootstate(image: Path) -> dict:
         raise SystemExit("rollback image has no valid BootState slot")
     return max(states, key=lambda state: state["sequence"])
 
+def corrupt_pending_release(image: Path) -> None:
+    extracted = Path("/tmp/slime-os-rollback-bad-release.bin")
+    extracted.unlink(missing_ok=True)
+    subprocess.run(
+        ["mcopy", "-o", "-i", str(image), "::/boot/boot-store.bin", str(extracted)],
+        check=True,
+    )
+    data = bytearray(extracted.read_bytes())
+    pending = bootstate(image)["pending"]
+    if pending is None:
+        raise SystemExit("rollback fixture has no pending release to corrupt")
+    count = int.from_bytes(
+        data[BOOTSTORE_DIRECTORY_OFFSET + 24 : BOOTSTORE_DIRECTORY_OFFSET + 28], "little"
+    )
+    directory = BOOTSTORE_DIRECTORY_OFFSET + BOOTSTORE_HEADER.size
+    for index in range(count):
+        identity, _offset, _length, release_offset, release_length = BOOTSTORE_ENTRY.unpack_from(
+            data, directory + index * BOOTSTORE_ENTRY.size
+        )
+        if identity == pending:
+            if release_length <= RELEASE_HEADER_BYTES:
+                raise SystemExit("pending release has no signature bytes")
+            data[release_offset + RELEASE_HEADER_BYTES] ^= 0x01
+            checksum_start = BOOTSTORE_DIRECTORY_OFFSET + BOOTSTORE_HEADER_CHECKSUM_OFFSET
+            checksum_end = BOOTSTORE_DIRECTORY_OFFSET + BOOTSTORE_HEADER_CHECKSUM_END
+            data[checksum_start:checksum_end] = bytes(checksum_end - checksum_start)
+            data[checksum_start:checksum_end] = bootstore_checksum(data)
+            extracted.write_bytes(data)
+            subprocess.run(
+                ["mcopy", "-o", "-i", str(image), str(extracted), "::/boot/boot-store.bin"],
+                check=True,
+            )
+            return
+    raise SystemExit("pending release directory entry is missing")
+
 
 def main() -> None:
     image = Path(sys.argv[1] if len(sys.argv) > 1 else "/tmp/slime-os-rollback.img")
@@ -80,6 +125,57 @@ def main() -> None:
     if initial["pending"] is None or initial["remaining_attempts"] != 2:
         raise SystemExit("rollback fixture did not start with two pending attempts")
 
+    # Verification failures must consume attempts too. A corrupt signed release
+    # cannot reach userspace, but it must still drain the bounded pending window
+    # instead of trapping the selector in a permanent retry loop.
+    previous_attempts = initial["remaining_attempts"]
+    while previous_attempts > 0:
+        environment = os.environ.copy()
+        environment["SLIME_BOOT_IMAGE"] = str(image)
+        environment["SLIME_REUSE_BOOT_IMAGE"] = "1"
+        try:
+            run(
+                [
+                    str(ROOT / "kernel" / "scripts" / "run-kernel.sh"),
+                    str(KERNEL),
+                    "-display",
+                    "none",
+                ],
+                environment=environment,
+                timeout=30,
+                allow_failure=True,
+            )
+        except SystemExit:
+            # UEFI may remain in its boot manager after stage-0 returns
+            # LOAD_ERROR. The persisted BootState is the assertion.
+            pass
+        current = bootstate(image)
+        attempts = current["remaining_attempts"]
+        if attempts >= previous_attempts:
+            raise SystemExit(
+                "verification-failing pending attempt count did not decrease: "
+                f"{previous_attempts} -> {attempts}"
+            )
+        previous_attempts = attempts
+
+
+    # Restore a clean fixture and exercise the existing runtime-unhealthy path.
+    image.unlink(missing_ok=True)
+    environment = os.environ.copy()
+    environment["SLIME_GENERATION_NUMBER"] = "99"
+    environment["SLIME_FABRIC_PROFILE"] = "test"
+    environment["SLIME_PENDING_GENERATION"] = "1"
+    environment["SLIME_PENDING_ATTEMPTS"] = "2"
+    run(
+        [
+            str(ROOT / "kernel" / "scripts" / "build-iso.sh"),
+            str(KERNEL),
+            str(image),
+            "64",
+        ],
+        environment=environment,
+    )
+    initial = bootstate(image)
     for expected_attempts in (1, 0):
         environment = os.environ.copy()
         environment["SLIME_BOOT_IMAGE"] = str(image)

@@ -15,6 +15,8 @@ import sys
 from pathlib import Path
 from types import ModuleType
 
+from boot_contracts import TARGET_PROFILES_BY_NAME
+
 # ``scripts/lib`` is two levels below the repository root.
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = ROOT / "scripts"
@@ -25,7 +27,15 @@ LIB_SCRIPTS = SCRIPTS / "lib"
 
 # The Justfile check targets build `--release`; the debug kernel's larger stack
 # frames overflow the boot stack, so every host check embeds the release binary.
-RELEASE_KERNEL = ROOT / "target" / "x86_64-unknown-none" / "release" / "slime_os-kernel"
+def release_kernel(profile_name: str = "x86_64-qemu-virtio") -> Path:
+    profile = TARGET_PROFILES_BY_NAME.get(profile_name)
+    if profile is None:
+        admitted = ", ".join(sorted(TARGET_PROFILES_BY_NAME))
+        raise ValueError(f"unknown target profile {profile_name!r}; admitted targets: {admitted}")
+    return ROOT / "target" / profile.cargo_target / "release" / "slime_os-kernel"
+
+
+RELEASE_KERNEL = release_kernel()
 
 # Bound each boot so a wedged guest (e.g. a stack-overflow reboot loop) fails
 # loudly instead of hanging the check forever.

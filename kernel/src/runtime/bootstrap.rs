@@ -1700,10 +1700,11 @@ pub fn record_spawn(component: &'static str, id: task::TaskId) {
         _ => return,
     };
     slot.store(id, Ordering::Relaxed);
-    // Install this component's generation-declared shared-buffer quota (C7.3),
-    // charged to its own supervision-subtree account. Absent from the budget
-    // (or no budget declared) leaves the deny-by-default quota.
-    if let Ok(generation) = crate::generation::decode(crate::boot::generation()) {
+    // The boot generation's complete executable closure was admitted once in
+    // `start`; quota lookup only needs the already-authenticated manifest view.
+    // Re-running every image decoder for each child spawn adds work without
+    // strengthening the invariant.
+    if let Ok(generation) = Generation::decode(crate::boot::generation()) {
         task::set_shared_buffer_quota(
             id,
             crate::generation::shared_buffer_quota(&generation, component),

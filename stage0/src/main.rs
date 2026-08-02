@@ -14,8 +14,8 @@ use boot_contracts::handoff::{
 use boot_contracts::kernel_image::{KernelImage, LOAD_BASE, SEGMENT_EXEC, SEGMENT_WRITE};
 use boot_contracts::trace;
 use slime_stage0::{
-    BootError, Slot, decode_directory, select_bootstate_for_directory, select_generation,
-    verify_generation, verify_kernel, verify_release,
+    BootError, Slot, admit_generation_closure, decode_directory, select_bootstate_for_directory,
+    select_generation, verify_generation, verify_release,
 };
 use uefi::boot::{self, AllocateType, MemoryType, PAGE_SIZE};
 use uefi::mem::memory_map::MemoryMap;
@@ -88,7 +88,7 @@ fn boot() -> Result<(), BootError> {
     let mut selected_state = select_bootstate_for_directory(slot_a, slot_b, &directory)?;
     let selection_state = selected_state.state;
     let running_pending =
-        selected_state.state.pending.is_some() && selected_state.state.remaining_attempts > 0;
+        selection_state.pending.is_some() && selection_state.remaining_attempts > 0;
     if running_pending {
         let before = selected_state.state;
         selected_state.state = selected_state
@@ -99,6 +99,9 @@ fn boot() -> Result<(), BootError> {
             Slot::A => Slot::B,
             Slot::B => Slot::A,
         };
+        // Commit before touching untrusted pending-generation bytes. Any
+        // selection, image-admission, or release failure then consumes one
+        // bounded attempt and eventually returns to known-good.
         persist_bootstate(target, selected_state.state)?;
         emit_trace(&trace::Record {
             action: trace::Action::ConsumeAttempt,
@@ -115,7 +118,24 @@ fn boot() -> Result<(), BootError> {
             state_root: selected_state.state.state_root,
         });
         selected_state.slot = target;
-    } else {
+    }
+    let selected = select_generation(&directory, &selection_state)?;
+    let generation = verify_generation(selected.bytes, &selected.identity)?;
+    let kernel = admit_generation_closure(&generation)?;
+    let confirmation_pending =
+        selection_state.pending.is_some() && health_confirmation_matches(selection_state.pending);
+    if confirmation_pending {
+        verify_pending_for_promotion(&directory, &selection_state)?;
+    }
+    let release_sequence = verify_release(
+        &selected,
+        &generation,
+        &selection_state,
+        confirmation_pending
+            || (selection_state.pending.is_some() && selection_state.remaining_attempts > 0),
+    )?;
+
+    if !running_pending {
         let state = selected_state.state;
         emit_trace(&trace::Record {
             action: if state.pending.is_some() {
@@ -136,20 +156,6 @@ fn boot() -> Result<(), BootError> {
             state_root: state.state_root,
         });
     }
-    let selected = select_generation(&directory, &selection_state)?;
-    let confirmation_pending =
-        selection_state.pending.is_some() && health_confirmation_matches(selection_state.pending);
-    if confirmation_pending {
-        verify_pending_for_promotion(&directory, &selection_state)?;
-    }
-    let generation = verify_generation(selected.bytes, &selected.identity)?;
-    let release_sequence = verify_release(
-        &selected,
-        &generation,
-        &selection_state,
-        confirmation_pending
-            || (selection_state.pending.is_some() && selection_state.remaining_attempts > 0),
-    )?;
     if confirmation_pending {
         let before = selected_state.state;
         let pending = before.pending.ok_or(BootError::NoValidBootState)?;
@@ -179,8 +185,6 @@ fn boot() -> Result<(), BootError> {
         });
         selected_state.slot = target;
     }
-    let kernel = verify_kernel(&generation)?;
-
     let generation_copy = allocate_bytes(selected.bytes)?;
     let framebuffer = framebuffer_info()?;
     let (segments, entry) = load_kernel(&kernel)?;
@@ -307,6 +311,7 @@ fn verify_pending_for_promotion(
         let entry = directory.entry(index)?;
         if entry.identity == pending {
             let generation = verify_generation(entry.bytes, &entry.identity)?;
+            admit_generation_closure(&generation)?;
             verify_release(&entry, &generation, state, true)?;
             return Ok(());
         }

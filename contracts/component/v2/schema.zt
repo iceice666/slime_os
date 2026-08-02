@@ -1,0 +1,168 @@
+-- Slime OS component image format, version 2 (P0).
+--
+-- Version 2 adds the target-qualification fields version 1 left implicit:
+-- `architecture`, the architecture-qualified `abi`, `page_profile`, and the
+-- exact `required_features` mask. Every other record is byte-identical in
+-- meaning to version 1; only the header grew, so the 20-byte segment record and
+-- all segment semantics carry over unchanged.
+--
+-- Why a new magic rather than a version bump alone: a v1 image is not an
+-- architecture-neutral image missing some fields, it is an x86-64 image whose
+-- architecture was implied by the only builder that could produce it. Readers
+-- retain v1 for the bounded rollback window and give it exactly that meaning --
+-- `x86_64-qemu-virtio` -- rather than reinterpreting it as portable. A distinct
+-- magic makes that a decode-time fact instead of a convention.
+--
+-- Identifier values come from contracts/target-profile/v1. An image declares
+-- the exact feature set it needs; admission requires equality with the profile,
+-- not containment, so an artifact built for a richer platform fails closed
+-- here rather than faulting on a missing instruction later.
+
+env ::= import stdlib.env;
+fs ::= import stdlib.fs;
+gen ::= import "gen_rust.zt";
+t ::= import stdlib.text;
+
+formatVersion :: Int = 2;
+-- The syscall ABI revision, unchanged from v1: the semantic syscall table did
+-- not move. `abi` below names *which architecture's* calling convention
+-- implements that table; the two are independent axes.
+kernelAbiVersion :: Int = 1;
+headerLen :: Int = 56;
+segmentLen :: Int = 20;
+maxSegments :: Int = 16;
+maxImageBytes :: Int = 16777216;
+maxStackBytes :: Int = 1048576;
+defaultStackBytes :: Int = 16384;
+segmentFlagWrite :: Int = 1;
+segmentFlagExec :: Int = 2;
+-- "SLIMECM2" as a little-endian u64.
+imageMagic :: Int = 3624627240031571027;
+-- Retained v1 identity, decoded as an `x86_64-qemu-virtio` image.
+legacyMagic :: Int = 5786355061169409107;
+legacyFormatVersion :: Int = 1;
+legacyHeaderLen :: Int = 32;
+
+WireField :: type { name : Text; width : Int; signed : Bool; };
+-- The Python renderer's field shape carries a `byteArray` flag the Rust one
+-- does not: there the magic is a fixed 8-byte tag rather than an integer.
+PythonWireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
+
+ImageHeader :: type {
+  magic : Int;
+  format_version : Int;
+  header_size : Int;
+  kernel_abi : Int;
+  architecture : Int;
+  abi : Int;
+  page_profile : Int;
+  entry_offset : Int;
+  segment_count : Int;
+  reserved : Int;
+  stack_bytes : Int;
+  target_profile : Int;
+  required_features : Int;
+};
+
+SegmentRecord :: type {
+  vaddr_offset : Int;
+  mem_len : Int;
+  file_offset : Int;
+  file_len : Int;
+  flags : Int;
+  reserved : Int;
+};
+
+headerSchema ::= schema ImageHeader;
+segmentSchema ::= schema SegmentRecord;
+
+headerLayout :: List WireField = {
+  { name = "magic"; width = 8; signed = false; };
+  { name = "format_version"; width = 4; signed = false; };
+  { name = "header_size"; width = 4; signed = false; };
+  { name = "kernel_abi"; width = 4; signed = false; };
+  { name = "architecture"; width = 4; signed = false; };
+  { name = "abi"; width = 4; signed = false; };
+  { name = "page_profile"; width = 4; signed = false; };
+  { name = "entry_offset"; width = 4; signed = false; };
+  { name = "segment_count"; width = 2; signed = false; };
+  { name = "reserved"; width = 2; signed = false; };
+  { name = "stack_bytes"; width = 4; signed = false; };
+  { name = "target_profile"; width = 4; signed = false; };
+  { name = "required_features"; width = 8; signed = false; };
+};
+
+segmentLayout :: List WireField = {
+  { name = "vaddr_offset"; width = 4; signed = false; };
+  { name = "mem_len"; width = 4; signed = false; };
+  { name = "file_offset"; width = 4; signed = false; };
+  { name = "file_len"; width = 4; signed = false; };
+  { name = "flags"; width = 2; signed = false; };
+  { name = "reserved"; width = 2; signed = false; };
+};
+
+pythonHeaderLayout :: List PythonWireField = {
+  { name = "magic"; width = 8; signed = false; byteArray = true; };
+  { name = "format_version"; width = 4; signed = false; byteArray = false; };
+  { name = "header_size"; width = 4; signed = false; byteArray = false; };
+  { name = "kernel_abi"; width = 4; signed = false; byteArray = false; };
+  { name = "architecture"; width = 4; signed = false; byteArray = false; };
+  { name = "abi"; width = 4; signed = false; byteArray = false; };
+  { name = "page_profile"; width = 4; signed = false; byteArray = false; };
+  { name = "entry_offset"; width = 4; signed = false; byteArray = false; };
+  { name = "segment_count"; width = 2; signed = false; byteArray = false; };
+  { name = "reserved"; width = 2; signed = false; byteArray = false; };
+  { name = "stack_bytes"; width = 4; signed = false; byteArray = false; };
+  { name = "target_profile"; width = 4; signed = false; byteArray = false; };
+  { name = "required_features"; width = 8; signed = false; byteArray = false; };
+};
+
+pythonSegmentLayout :: List PythonWireField = {
+  { name = "vaddr_offset"; width = 4; signed = false; byteArray = false; };
+  { name = "mem_len"; width = 4; signed = false; byteArray = false; };
+  { name = "file_offset"; width = 4; signed = false; byteArray = false; };
+  { name = "file_len"; width = 4; signed = false; byteArray = false; };
+  { name = "flags"; width = 2; signed = false; byteArray = false; };
+  { name = "reserved"; width = 2; signed = false; byteArray = false; };
+};
+
+imageFormat ::= {
+  formatVersion = formatVersion;
+  kernelAbiVersion = kernelAbiVersion;
+  headerLen = headerLen;
+  segmentLen = segmentLen;
+  maxSegments = maxSegments;
+  maxImageBytes = maxImageBytes;
+  maxStackBytes = maxStackBytes;
+  defaultStackBytes = defaultStackBytes;
+  segmentFlagWrite = segmentFlagWrite;
+  segmentFlagExec = segmentFlagExec;
+  imageMagic = imageMagic;
+  legacyMagic = legacyMagic;
+  legacyFormatVersion = legacyFormatVersion;
+  legacyHeaderLen = legacyHeaderLen;
+  headerFields = headerSchema.fields ?? {;};
+  segmentFields = segmentSchema.fields ?? {;};
+  headerLayout = headerLayout;
+  segmentLayout = segmentLayout;
+  pythonHeaderLayout = pythonHeaderLayout;
+  pythonSegmentLayout = pythonSegmentLayout;
+};
+main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }
+  = caps => [
+    root := env.get caps.env "SLIME_COMPONENT_BINDINGS_ROOT" ?? ".";
+    -- The boot path reads the same header to answer "which target is this
+    -- image for?" before stage-0 copies a generation, so the constants are
+    -- rendered into boot-contracts as well. One schema, two consumers, no
+    -- second hand-maintained copy of the layout.
+    bootRoot := env.get caps.env "SLIME_BOOT_BINDINGS_ROOT" ?? root;
+    bindings := gen.render imageFormat;
+    rustPath := t.join "" { root; "/components/proto/src/component.rs"; };
+    bootRustPath := t.join "" { bootRoot; "/component_image.rs"; };
+    pythonPath := t.join "" { bootRoot; "/component_image.py"; };
+    fs.writeAll caps.write rustPath bindings.rust;
+    fs.writeAll caps.write bootRustPath bindings.rust;
+    fs.writeAll caps.write pythonPath bindings.python
+  ];
+
+main

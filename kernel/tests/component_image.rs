@@ -13,10 +13,11 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
+use boot_contracts::target_profile::TargetProfile;
 use slime_os_kernel::component::{
     self, DEFAULT_STACK_BYTES, FORMAT_VERSION, HEADER_LEN, IMAGE_MAGIC, ImageError,
-    KERNEL_ABI_VERSION, MAX_SEGMENTS, MAX_STACK_BYTES, SEGMENT_FLAG_EXEC, SEGMENT_FLAG_WRITE,
-    WireImageHeader, WireSegmentRecord,
+    KERNEL_ABI_VERSION, LEGACY_FORMAT_VERSION, LEGACY_HEADER_LEN, LEGACY_IMAGE_MAGIC, MAX_SEGMENTS,
+    MAX_STACK_BYTES, SEGMENT_FLAG_EXEC, SEGMENT_FLAG_WRITE, WireImageHeader, WireSegmentRecord,
 };
 use slime_os_kernel::{gdt, interrupts, memory};
 
@@ -37,15 +38,21 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 }
 
 fn header(count: u16, entry: u32, stack: u32) -> WireImageHeader {
+    let profile = TargetProfile::legacy().expect("admitted profile");
     WireImageHeader {
         magic: IMAGE_MAGIC,
         format_version: FORMAT_VERSION,
         header_size: HEADER_LEN as u32,
         kernel_abi: KERNEL_ABI_VERSION,
+        architecture: profile.architecture,
+        abi: profile.abi,
+        page_profile: profile.page_profile,
         entry_offset: entry,
         segment_count: count,
         reserved: 0,
         stack_bytes: stack,
+        target_profile: profile.id,
+        required_features: profile.required_features,
     }
 }
 
@@ -73,6 +80,23 @@ fn image(header: &WireImageHeader, segments: &[WireSegmentRecord], payload: &[u8
         blob.extend_from_slice(&segment.encode());
     }
     blob.extend_from_slice(payload);
+    blob
+}
+
+fn legacy_image(reserved: u16) -> Vec<u8> {
+    let mut blob = Vec::new();
+    let mut header = [0u8; LEGACY_HEADER_LEN];
+    header[..8].copy_from_slice(&LEGACY_IMAGE_MAGIC.to_le_bytes());
+    header[8..12].copy_from_slice(&LEGACY_FORMAT_VERSION.to_le_bytes());
+    header[12..16].copy_from_slice(&(LEGACY_HEADER_LEN as u32).to_le_bytes());
+    header[16..20].copy_from_slice(&KERNEL_ABI_VERSION.to_le_bytes());
+    header[20..24].copy_from_slice(&0u32.to_le_bytes());
+    header[24..26].copy_from_slice(&1u16.to_le_bytes());
+    header[26..28].copy_from_slice(&reserved.to_le_bytes());
+    header[28..32].copy_from_slice(&DEFAULT_STACK_BYTES.to_le_bytes());
+    blob.extend_from_slice(&header);
+    blob.extend_from_slice(&segment(0, 0x100, 0, 0x100, SEGMENT_FLAG_EXEC).encode());
+    blob.extend_from_slice(&[0x90; 0x100]);
     blob
 }
 
@@ -119,8 +143,17 @@ fn multi_segment_image_decodes_with_bss_tail() {
 #[test_case]
 fn rejects_truncated_inputs() {
     assert!(matches!(component::decode(&[]), Err(ImageError::Truncated)));
+    // Shorter than the smallest header any accepted revision uses, so the
+    // revision cannot even be established.
     assert!(matches!(
-        component::decode(&[0u8; HEADER_LEN - 1]),
+        component::decode(&[0u8; LEGACY_HEADER_LEN - 1]),
+        Err(ImageError::Truncated)
+    ));
+    // A well-formed header identifying the current revision, cut short of that
+    // revision's own header length.
+    let full = header(1, 0, DEFAULT_STACK_BYTES).encode();
+    assert!(matches!(
+        component::decode(&full[..HEADER_LEN - 1]),
         Err(ImageError::Truncated)
     ));
     // Two declared segments but only one record present.
@@ -152,10 +185,16 @@ fn rejects_bad_magic() {
 
 #[test_case]
 fn rejects_unsupported_version() {
-    for (version, size) in [(2, HEADER_LEN as u32), (FORMAT_VERSION, 64)] {
+    // A known magic paired with a version that revision never used, in both
+    // directions, so neither revision's tag can smuggle the other's layout.
+    for (magic, version) in [
+        (IMAGE_MAGIC, FORMAT_VERSION + 1),
+        (IMAGE_MAGIC, LEGACY_FORMAT_VERSION),
+        (LEGACY_IMAGE_MAGIC, FORMAT_VERSION),
+    ] {
         let mut header = header(1, 0, DEFAULT_STACK_BYTES);
+        header.magic = magic;
         header.format_version = version;
-        header.header_size = size;
         let blob = image(
             &header,
             &[segment(0, 0x100, 0, 0x100, SEGMENT_FLAG_EXEC)],
@@ -166,6 +205,21 @@ fn rejects_unsupported_version() {
             Err(ImageError::UnsupportedVersion)
         ));
     }
+}
+
+#[test_case]
+fn rejects_header_size_disagreeing_with_the_revision() {
+    let mut header = header(1, 0, DEFAULT_STACK_BYTES);
+    header.header_size = LEGACY_HEADER_LEN as u32;
+    let blob = image(
+        &header,
+        &[segment(0, 0x100, 0, 0x100, SEGMENT_FLAG_EXEC)],
+        &[0x90; 0x100],
+    );
+    assert!(matches!(
+        component::decode(&blob),
+        Err(ImageError::BadHeader)
+    ));
 }
 
 #[test_case]
@@ -180,6 +234,15 @@ fn rejects_abi_mismatch() {
     assert!(matches!(
         component::decode(&blob),
         Err(ImageError::AbiMismatch)
+    ));
+}
+
+#[test_case]
+fn retained_v1_reserved_field_must_be_zero() {
+    assert!(component::decode(&legacy_image(0)).is_ok());
+    assert!(matches!(
+        component::decode(&legacy_image(1)),
+        Err(ImageError::BadFlags)
     ));
 }
 

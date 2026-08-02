@@ -4,10 +4,12 @@ pub use boot_contracts::generation::{
 
 use boot_contracts::boot_layout::{self, BootLayout};
 use boot_contracts::fabric_graph::{self, FabricGraph};
-use boot_contracts::generation::{KIND_BOOTSTRAP, KIND_COMPONENT, KIND_RESOURCE};
+use boot_contracts::generation::{KIND_BOOTSTRAP, KIND_COMPONENT, KIND_KERNEL, KIND_RESOURCE};
+use boot_contracts::kernel_image::{ImageError as KernelImageError, KernelImage};
 use boot_contracts::shared_buffer_budget::{
     self, HolderQuota as BudgetQuota, SharedBufferBudget, holder_identity,
 };
+use boot_contracts::target_profile::{TargetError, TargetProfile};
 
 use crate::capability::MAX_CAPS;
 use crate::ipc::{CHANNEL_QUEUE, MAX_MSG};
@@ -32,20 +34,60 @@ const _: () = assert!(fabric_graph::KERNEL_LOANS as usize == MAX_LOANS);
 // table holds would be admitted here and truncated at spawn.
 const _: () = assert!(boot_layout::MAX_ENTRIES == MAX_CAPS);
 
-pub fn decode(bytes: &[u8]) -> Result<Generation<'_>, DecodeError> {
-    let generation = Generation::decode(bytes)?;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdmissionError {
+    Generation(DecodeError),
+    Target(TargetError),
+    Kernel(KernelImageError),
+    Component(crate::component::ImageError),
+    BadExecutableKind,
+}
+
+impl From<DecodeError> for AdmissionError {
+    fn from(error: DecodeError) -> Self {
+        Self::Generation(error)
+    }
+}
+
+pub fn admit_executable_closure(
+    generation: &Generation<'_>,
+) -> Result<&'static TargetProfile, AdmissionError> {
+    let current = TargetProfile::current().map_err(AdmissionError::Target)?;
+    let profile = TargetProfile::by_name(generation.target).map_err(AdmissionError::Target)?;
+    if profile.id != current.id {
+        return Err(AdmissionError::Target(TargetError::ProfileMismatch));
+    }
+    let kernel = generation.object(generation.kernel_object)?;
+    if kernel.kind != KIND_KERNEL {
+        return Err(AdmissionError::BadExecutableKind);
+    }
+    KernelImage::decode_for_profile(kernel.bytes, profile).map_err(AdmissionError::Kernel)?;
     for index in 0..generation.object_count() {
         let object = generation.object(index)?;
         if matches!(object.kind, KIND_BOOTSTRAP | KIND_COMPONENT) {
-            crate::component::decode(object.bytes).map_err(|_| DecodeError::BadBounds)?;
+            crate::component::decode_for_profile(object.bytes, profile)
+                .map_err(AdmissionError::Component)?;
         }
     }
+    for index in 0..generation.component_count() {
+        let component = generation.component(index)?;
+        let object = generation.object(component.object)?;
+        if !matches!(object.kind, KIND_BOOTSTRAP | KIND_COMPONENT) {
+            return Err(AdmissionError::BadExecutableKind);
+        }
+    }
+    Ok(profile)
+}
+
+pub fn decode(bytes: &[u8]) -> Result<Generation<'_>, AdmissionError> {
+    let generation = Generation::decode(bytes)?;
+    admit_executable_closure(&generation)?;
     // A shared-buffer budget resource, when present, is validated deterministically
     // before any component launches: a missing, malformed, or globally-impossible
     // budget fails the whole generation closed rather than silently capping at
     // runtime (C7.3).
     if let Some(budget) = budget_object(&generation) {
-        let budget = budget.map_err(|_| DecodeError::BadBounds)?;
+        let budget = budget.map_err(|_| AdmissionError::Generation(DecodeError::BadBounds))?;
         budget
             .validate_against(
                 MAX_BUFFER_PAGES as u32,
@@ -54,14 +96,14 @@ pub fn decode(bytes: &[u8]) -> Result<Generation<'_>, DecodeError> {
                 MAX_MAPPINGS as u32,
                 MAX_LOANS as u32,
             )
-            .map_err(|_| DecodeError::BadBounds)?;
+            .map_err(|_| AdmissionError::Generation(DecodeError::BadBounds))?;
     }
     // A fabric graph resource, when present, is validated the same way: a
     // malformed graph, an impossible declared limit, or an aggregate demand
     // the kernel could never satisfy fails the whole generation closed before
     // the fabric or any client component launches (C8.2).
     if let Some(graph) = fabric_graph_object(&generation) {
-        let graph = graph.map_err(|_| DecodeError::BadBounds)?;
+        let graph = graph.map_err(|_| AdmissionError::Generation(DecodeError::BadBounds))?;
         graph
             .validate_against(
                 MAX_WAIT_SOURCES as u32,
@@ -73,7 +115,7 @@ pub fn decode(bytes: &[u8]) -> Result<Generation<'_>, DecodeError> {
                 MAX_MSG as u32,
                 CHANNEL_QUEUE as u32,
             )
-            .map_err(|_| DecodeError::BadBounds)?;
+            .map_err(|_| AdmissionError::Generation(DecodeError::BadBounds))?;
     }
     Ok(generation)
 }

@@ -1,0 +1,178 @@
+-- Slime OS target-profile table, version 1 (P0).
+--
+-- A target profile is a complete executable and platform contract, not only an
+-- instruction set. Two artifacts belong to the same profile only when their
+-- architecture, architecture-qualified ABI, page profile, and required-feature
+-- set all agree; a different page granule, privilege model, firmware handoff,
+-- or board topology is a new profile until its own checks pass.
+--
+-- This table is the single source of truth for those identifiers. It is not
+-- itself a wire format -- nothing serializes a profile record -- but every
+-- field it names *is* serialized: component-image v2 and kernel-image v2 carry
+-- `architecture`, `abi`, `page_profile`, and `required_features` in their
+-- headers, and the generation/release `target` string carries `name`. Rendering
+-- one table into both the host builder and the Rust admission path is what
+-- keeps the builder that emits those headers and the decoder that admits them
+-- from disagreeing by inspection.
+--
+-- Numeric identifiers are dense and stable: a value is never reused for a
+-- different meaning, because retained rollback-window artifacts still carry the
+-- old encoding. `requiredFeatures` is a bitmask an image must declare exactly;
+-- it is not a "supported" set the platform may exceed, so an image asking for a
+-- feature the profile does not name fails closed rather than being downgraded.
+
+env ::= import stdlib.env;
+fs ::= import stdlib.fs;
+gen ::= import "gen_rust.zt";
+t ::= import stdlib.text;
+
+formatVersion :: Int = 1;
+-- Matches release/v1 `maxTargetBytes`: the signed release header carries the
+-- profile name in a fixed 32-byte area, so no profile name may exceed it.
+maxNameBytes :: Int = 32;
+
+Named :: type { constName : Text; value : Int; };
+
+Profile :: type {
+  constName : Text;
+  name : Text;
+  id : Int;
+  architecture : Int;
+  abi : Int;
+  pageProfile : Int;
+  requiredFeatures : Int;
+  elfMachine : Int;
+  relativeRelocation : Int;
+  pageBytes : Int;
+  kernelPreferredBaseText : Text;
+  kernelLoadBaseText : Text;
+  componentBaseText : Text;
+  cargoTarget : Text;
+  qemuBinary : Text;
+};
+
+architectures :: List Named = {
+  { constName = "X86_64"; value = 1; };
+  { constName = "AARCH64"; value = 2; };
+  { constName = "RISCV64"; value = 3; };
+};
+
+-- ABI identifiers are architecture-qualified by construction: one number names
+-- both the instruction set and the calling convention documented for it in
+-- docs/syscall-abi.md, so an AArch64 image can never claim the x86-64 ABI.
+abis :: List Named = {
+  { constName = "SLIME_X86_64_V1"; value = 1; };
+  { constName = "SLIME_AARCH64_V1"; value = 2; };
+  { constName = "SLIME_RISCV64_V1"; value = 3; };
+};
+
+pageProfiles :: List Named = {
+  { constName = "X86_64_4K"; value = 1; };
+  { constName = "AARCH64_4K"; value = 2; };
+  { constName = "RISCV64_SV39_4K"; value = 3; };
+};
+
+-- Required-feature bits. An executable declares the exact set it needs; the
+-- profile declares the exact set it provides. Admission requires equality, not
+-- containment, so an artifact built for a richer platform is rejected here
+-- rather than faulting on a missing instruction later.
+features :: List Named = {
+  { constName = "X86_64_BASELINE"; value = 1; };
+  { constName = "AARCH64_BASELINE"; value = 2; };
+  { constName = "AARCH64_GICV3"; value = 4; };
+  { constName = "AARCH64_GENERIC_TIMER"; value = 8; };
+  { constName = "RISCV64_BASELINE"; value = 16; };
+};
+
+profiles :: List Profile = {
+  {
+    constName = "X86_64_QEMU_VIRTIO";
+    name = "x86_64-qemu-virtio";
+    id = 1;
+    architecture = 1;
+    abi = 1;
+    pageProfile = 1;
+    requiredFeatures = 1;
+    elfMachine = 62;
+    relativeRelocation = 8;
+    pageBytes = 4096;
+    kernelPreferredBaseText = "0xFFFF_FFFF_8000_0000";
+    kernelLoadBaseText = "0xFFFF_FFFF_9000_0000";
+    componentBaseText = "0x0040_0000";
+    cargoTarget = "x86_64-unknown-none";
+    qemuBinary = "qemu-system-x86_64";
+  };
+  {
+    constName = "AARCH64_QEMU_VIRT";
+    name = "aarch64-qemu-virt";
+    id = 2;
+    architecture = 2;
+    abi = 2;
+    pageProfile = 2;
+    requiredFeatures = 14;
+    elfMachine = 183;
+    relativeRelocation = 1027;
+    pageBytes = 4096;
+    kernelPreferredBaseText = "0xFFFF_FFFF_8000_0000";
+    kernelLoadBaseText = "0xFFFF_FFFF_9000_0000";
+    componentBaseText = "0x0040_0000";
+    cargoTarget = "aarch64-unknown-none";
+    qemuBinary = "qemu-system-aarch64";
+  };
+  {
+    constName = "AARCH64_RPI5";
+    name = "aarch64-rpi5";
+    id = 3;
+    architecture = 2;
+    abi = 2;
+    pageProfile = 2;
+    requiredFeatures = 14;
+    elfMachine = 183;
+    relativeRelocation = 1027;
+    pageBytes = 4096;
+    kernelPreferredBaseText = "0xFFFF_FFFF_8000_0000";
+    kernelLoadBaseText = "0xFFFF_FFFF_9000_0000";
+    componentBaseText = "0x0040_0000";
+    cargoTarget = "aarch64-unknown-none";
+    qemuBinary = "";
+  };
+  {
+    constName = "RISCV64_QEMU_VIRT";
+    name = "riscv64-qemu-virt";
+    id = 4;
+    architecture = 3;
+    abi = 3;
+    pageProfile = 3;
+    requiredFeatures = 16;
+    elfMachine = 243;
+    relativeRelocation = 3;
+    pageBytes = 4096;
+    kernelPreferredBaseText = "0xFFFF_FFFF_8000_0000";
+    kernelLoadBaseText = "0xFFFF_FFFF_9000_0000";
+    componentBaseText = "0x0040_0000";
+    cargoTarget = "riscv64gc-unknown-none-elf";
+    qemuBinary = "qemu-system-riscv64";
+  };
+};
+
+format ::= {
+  formatVersion = formatVersion;
+  maxNameBytes = maxNameBytes;
+  architectures = architectures;
+  abis = abis;
+  pageProfiles = pageProfiles;
+  features = features;
+  profiles = profiles;
+};
+
+main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }
+  = caps => [
+    root := env.get caps.env "SLIME_BOOT_BINDINGS_ROOT" ?? ".";
+    bindings := gen.render format;
+    pythonPath := t.join "" { root; "/target_profile.py"; };
+    rustPath := t.join "" { root; "/target_profile.rs"; };
+    fs.writeAll caps.write pythonPath bindings.python;
+    fs.writeAll caps.write rustPath bindings.rust
+  ];
+
+main

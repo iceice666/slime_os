@@ -1,9 +1,20 @@
 fn main() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let target = std::env::var("TARGET").expect("TARGET");
-    if target == "x86_64-unknown-none" {
-        println!("cargo:rustc-link-arg=-T{manifest_dir}/../component.ld");
-        println!("cargo:rerun-if-changed={manifest_dir}/../component.ld");
+    let linker_script = match target.as_str() {
+        "x86_64-unknown-none" => "component.ld",
+        "aarch64-unknown-none" => "component-aarch64.ld",
+        _ => panic!("unsupported component target {}", target),
+    };
+    println!("cargo:rustc-link-arg=-T{manifest_dir}/../{linker_script}");
+    println!("cargo:rerun-if-changed={manifest_dir}/../{linker_script}");
+    println!("cargo:rerun-if-env-changed=SLIME_TARGET_PROFILE");
+    match std::env::var("SLIME_TARGET_PROFILE") {
+        Ok(profile) => println!("cargo:rustc-env=SLIME_TARGET_PROFILE={profile}"),
+        Err(_) if target == "aarch64-unknown-none" => {
+            panic!("SLIME_TARGET_PROFILE is required for AArch64 component builds")
+        }
+        Err(_) => {}
     }
     println!("cargo:rerun-if-env-changed=SLIME_GENERATION_NUMBER");
     println!("cargo:rerun-if-env-changed=SLIME_RECOVERY_INTERRUPT");

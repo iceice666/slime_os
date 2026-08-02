@@ -57,10 +57,12 @@ fn free_frames() -> usize {
     FRAME_ALLOCATOR.lock().free_frames()
 }
 
-/// A single-segment executable component image (`contracts/component/v1`) whose
+/// A single-segment executable component image (`contracts/component/v2`) whose
 /// segment spans `pages` pages, so the spawn's frame cost is a known quantity.
 fn image_spanning(pages: usize) -> Vec<u8> {
+    use boot_contracts::target_profile::TargetProfile;
     use slime_os_kernel::component::*;
+    let profile = TargetProfile::legacy().expect("admitted profile");
     let mem_len = pages * slime_os_kernel::memory::PAGE_SIZE;
     let mut image = Vec::new();
     image.extend_from_slice(
@@ -69,10 +71,15 @@ fn image_spanning(pages: usize) -> Vec<u8> {
             format_version: FORMAT_VERSION,
             header_size: HEADER_LEN as u32,
             kernel_abi: KERNEL_ABI_VERSION,
+            architecture: profile.architecture,
+            abi: profile.abi,
+            page_profile: profile.page_profile,
             entry_offset: 0,
             segment_count: 1,
             reserved: 0,
             stack_bytes: DEFAULT_STACK_BYTES,
+            target_profile: profile.id,
+            required_features: profile.required_features,
         }
         .encode(),
     );
