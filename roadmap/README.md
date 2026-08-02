@@ -12,10 +12,10 @@ A milestone is complete only when its exit condition is observed. Compiled code,
 
 | Track | Status | Next open gate |
 | --- | --- | --- |
-| [Backlog](00-backlog.md) | B1–B11 resolved; no open defects recorded | Backlog is clear; begin RP0's demo contract before opening implementation work |
+| [Backlog](00-backlog.md) | B1–B11 resolved; no open defects recorded | Backlog is clear; preserve the regression baseline while advancing the RPi5 path |
 | [Foundations](01-foundations.md) | M1–M4 and M6 complete; M5 mechanisms complete except M5.7 physical Framework evidence | Preserve as regression history; do not block RPi5 work on Framework-only evidence unless storage safety is touched |
 | [Core runtime](02-core-runtime.md) | C7 and C8.1–C8.10 complete; C8.11–C8.15 and C10 are planned | For the demo, prioritize only the C8/C10 slices required by two ROS 2 nodes over minimal DDS/RTPS |
-| [RPi5 ROS 2 demo](09-rpi5-ros2-demo.md) | Not started | Begin RP0 demo contract, then RP1/RP2 AArch64 and Raspberry Pi 5 boot bring-up |
+| [RPi5 ROS 2 demo](09-rpi5-ros2-demo.md) | RP0 contract complete; RP1–RP8 planned | Begin RP1 target-qualified build/admission, then RP2 AArch64 QEMU bring-up |
 | [Architecture portability](07-architecture-portability.md) | Not started | P0/P1 are prerequisites for target-qualified AArch64 artifacts; P2 and P4 are on the demo critical path |
 | [ROS 2 compatibility](03-ros2-compatibility.md) | Not started | R0 minimal DDS/RTPS topic profile is first; broader external/multi-vendor compatibility follows after the RPi5 demo path |
 | [Platform hardware](04-platform-hardware.md) | Framework track deferred; H1 implementation complete but physical evidence pending | Do not advance Framework daily-driver hardware unless needed for shared mechanisms or evidence preservation |

@@ -1,0 +1,6 @@
+schema ::= import "schema.zt";
+
+main :: Load -> Validation DecodeIssue schema.DemoContract ! { load.zti : Path -> Data; }
+= load => schema.decodeDemoContract (loadZti "contracts/rpi5-ros2-demo/v1/fixtures/invalid.zti");
+
+main

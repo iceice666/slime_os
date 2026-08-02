@@ -75,6 +75,7 @@ FABRIC_VISIBILITY_BINDING_GENERATOR = (
 )
 DATA_FABRIC_PROFILE_CONTRACT = ROOT / "contracts" / "data-fabric-profile" / "v1"
 NORMALIZED_INTERFACE_SCHEMAS_CONTRACT = ROOT / "contracts" / "normalized-interface-schemas" / "v1"
+RPI5_ROS2_DEMO_CONTRACT = ROOT / "contracts" / "rpi5-ros2-demo" / "v1"
 
 
 def run(*arguments: str) -> str:
@@ -227,6 +228,13 @@ run("check", str(DATA_FABRIC_PROFILE_CONTRACT / "schema.zt"))
 run("check", str(DATA_FABRIC_PROFILE_CONTRACT / "check.zt"))
 run("check", str(NORMALIZED_INTERFACE_SCHEMAS_CONTRACT / "schema.zt"))
 run("check", str(NORMALIZED_INTERFACE_SCHEMAS_CONTRACT / "gen_rust.zt"))
+run("check", str(RPI5_ROS2_DEMO_CONTRACT / "schema.zt"))
+run("check", str(RPI5_ROS2_DEMO_CONTRACT / "check.zt"))
+subprocess.run(
+    [sys.executable, str(ROOT / "scripts" / "check" / "check-rpi5-ros2-demo-contract.py")],
+    cwd=ROOT,
+    check=True,
+)
 
 
 for contract in (
@@ -266,5 +274,5 @@ print(
     "block, component, store, spawn, filesystem, powerbox, generation-management, "
     "transfer, sample-descriptor, interface-schema, fabric-graph, "
     "capability-transfer, fabric-stream, fabric-qos, fabric-time, fabric-call, "
-    "fabric-operation, and fabric-visibility contracts passed"
+    "fabric-operation, fabric-visibility, and rpi5-ros2-demo contracts passed"
 )

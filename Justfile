@@ -404,6 +404,12 @@ recovery_check:
 devlog_check:
     python3 scripts/check/check-devlog.py
 
+# RP0: exact Raspberry Pi 5 board/firmware/media and ROS 2 Jazzy DDSI-RTPS
+# Profile 0 acceptance fixture; closed identifiers, finite resources, explicit
+# authority, trace ordering, and distinct operator failure markers.
+rpi5_ros2_demo_contract_check:
+    python3 scripts/check/check-rpi5-ros2-demo-contract.py
+
 # Validate the pinned generation manifest schema and fixtures.
 contracts_check: bootstate_model_check
     python3 scripts/check/check-contracts.py
