@@ -2,9 +2,9 @@
 
 **Purpose:** Preserve one Slime capability/component/generation architecture across target profiles while making AArch64 and Raspberry Pi 5 the near-term product path.
 
-**Status:** In progress — P0, P1, and P2.1 complete.
+**Status:** In progress - P0, P1, P2.1, and P5.1 complete.
 
-**Decision:** AArch64/Raspberry Pi 5 is now the near-term physical target because the current product goal is the RPi5 ROS 2 two-node demo. The existing x86-64 QEMU path remains the regression oracle for completed work until each semantic corpus is replayed on AArch64, but x86-64/Framework is no longer the product-leading roadmap. RV64 is deferred.
+**Decision:** AArch64/Raspberry Pi 5 is now the near-term physical target because the current product goal is the RPi5 ROS 2 two-node demo. The existing x86-64 QEMU path remains the regression oracle for completed work until each semantic corpus is replayed on AArch64, but x86-64/Framework is no longer the product-leading roadmap. RV64 is deferred. As of P5, the AArch64 kernel-side mechanism is being substituted with upstream seL4 rather than hand-written: see [P5](#p5-sel4-microkernel-substitution), which supersedes the custom-kernel half of P2.2-P2.6 if it completes.
 
 Slime targets 64-bit little-endian systems with an MMU and user/supervisor isolation. MCU-class targets without that isolation boundary are external bounded companions, not reduced-security ports of this kernel.
 
@@ -444,6 +444,124 @@ just rpi5_boot_check
 ### Exit condition
 
 One named Raspberry Pi 5 profile runs the verified isolated Slime vertical slice with reproducible firmware/media evidence and no unqualified device or storage claim; this physical evidence is available to the RPi5 ROS 2 demo track.
+
+## P5: seL4 microkernel substitution
+
+**Status:** In progress — P5.1 complete; P5.2–P5.4 planned.
+
+**Depends on:** P0 and P1. Supersedes the custom-kernel half of P2.2–P2.6 if it
+completes; P2.1 AArch64 boot evidence is retained and not re-claimed here.
+
+**Decision:** Slime's differentiator is the capability/component/generation
+model in userspace, not a hand-written AArch64 microkernel. P2.2–P2.6 each
+require re-deriving exception vectors, isolation, GICv3, timers, and virtio on
+a second architecture — mechanism upstream seL4 already provides under formal
+verification. P5 substitutes seL4 for the custom kernel and keeps Slime's
+authority model as a root task, so architecture bring-up stops being Slime's
+problem. The custom kernel is retained as the frozen regression oracle until
+P5.4, because it is the only implementation that currently runs the full
+component graph.
+
+### P5.1 — Standalone seL4 root task with generation authority
+
+**Status:** Complete.
+
+#### Deliverables
+
+- pin upstream seL4 and rust-sel4 as submodules with exact commit, release, toolchain, target-spec, kernel-config, and observed-artifact hashes, all enforced by a gate that fails closed on a dirty tree;
+- build a deterministic `qemu-arm-virt` image from those pins, reproducible across source paths, with an identity manifest the boot gate re-verifies;
+- decode and admit the existing verified generation inside a Rust root task, deriving every child's authority strictly from declared grants;
+- construct child CSpace/VSpace/TCB from a native AArch64 ELF with no untyped, CNode, VSpace, ASID, or IRQ authority in any child CSpace;
+- own IPC, fault supervision, timers, and shared buffers as bounded root-task mechanism behind the existing Slime operation vocabulary.
+
+#### Required checks
+
+- the pinned image boots and the root task admits the generation graph while explicitly activating no legacy component image;
+- a native child runs, issues a grant-derived root-mediated request, and exits cleanly; a second child faults deliberately and is observed on the supervision path;
+- a real hardware timer interrupt is claimed, delivered, serviced, and acknowledged, with the monotonic counter observed to advance;
+- a shared frame carries bytes both ways between root and child, a read-only mapping refuses a write, a data page refuses execution, and teardown returns every frame, mapping, and quota to zero.
+
+#### Verification target
+
+```sh
+just sel4_root_boot_check
+```
+
+#### Exit condition (observed)
+
+Observed 2026-08-03; see [`devlog/2026-08-03-p5-1-sel4-cutover/`](../devlog/2026-08-03-p5-1-sel4-cutover/index.md).
+
+`qemu-system-aarch64 -machine virt,virtualization=on` boots the pinned seL4
+kernel and the `slime-root` root task, which admits the 25-component generation
+graph and its authority manifest, states that all 25 legacy SLIMECM images are
+not activated, claims PPI 30 and observes one real timer interrupt delivered
+through its bound notification and acknowledged, maps two shared regions and
+exchanges bytes both ways with a
+native child, has seL4 refuse both a read-only write and an execute from a data
+page, runs one clean-exit and one deliberate-fault child through root-mediated
+IPC and fault supervision, and tears every resource back down to `live=0` — all
+asserted as ordered serial markers.
+
+No legacy component image runs on seL4, and no Slime service graph is active:
+the proof is a native fixture. That is P5.2.
+
+### P5.2 — Native component images on seL4
+
+**Status:** Not started.
+
+**Depends on:** P5.1.
+
+The generation's component payloads are the retired kernel's custom SLIMECM
+images, which the root task admits but cannot load. This slice rebuilds
+`components/bins` as native AArch64 ELF images against the `sel4` transport
+feature and boots the real service graph.
+
+#### Required checks
+
+- a generation whose payloads are native ELF images launches its declared components with their declared grants;
+- the root service answers the operation surface those components actually invoke, with the same errors and bounds as the legacy kernel;
+- an unsupported operation returns its bounded Slime error rather than faulting the caller.
+
+#### Planned verification target
+
+```sh
+just sel4_component_graph_check
+```
+
+#### Exit condition
+
+A generation of native component images boots its declared graph on seL4 with
+unchanged capability and lifecycle semantics.
+
+### P5.3 — C7/C8 data path on seL4
+
+**Status:** Not started.
+
+**Depends on:** P5.2 and C7.
+
+Replay the bounded sample plane and typed fabric on the seL4 root task, so the
+RPi5 demo's data path does not depend on the retired kernel.
+
+#### Exit condition
+
+Two components exchange and return a payload larger than the control-message
+bound over seL4, with quota exhaustion and peer death reclaiming the same
+resources the x86 corpus records.
+
+### P5.4 — Retire the custom kernel
+
+**Status:** Not started.
+
+**Depends on:** P5.3.
+
+`kernel/` is deleted only once seL4 carries every behavior it currently proves.
+Until then it is the frozen oracle: its gates keep running, its code does not
+change, and the two are never claimed to be one system.
+
+#### Exit condition
+
+Every acceptance check the custom kernel guards has an observed seL4 equivalent,
+and `kernel/` plus its legacy-only gates are removed in one reviewable change.
 
 ## MCU and embedded-companion boundary
 
