@@ -98,13 +98,14 @@ one contract rather than an x86 description other targets must imitate.
 
 ## AArch64 calling convention
 
-The architecture-specific trap instruction is `svc #0`. P1 defines the register
-assignment and implements it on the userspace side
+The architecture-specific trap instruction is `svc #0`. P1 defined the
+register assignment and implemented it on the userspace side
 (`components/runtime/src/arch/aarch64.rs`) and in the kernel-side frame
-accessors (`kernel/src/arch/aarch64/trap.rs`). Exception entry itself — the
-vector table that saves this frame and the `eret` that restores it — is
-implemented by P2, the AArch64 QEMU vertical slice. **No AArch64 syscall has
-been executed; this is a defined convention, not observed behavior.**
+accessors (`kernel/src/arch/aarch64/trap.rs`). P2.2 installs the EL1 vector
+table, saves and restores the complete frame, and dispatches `svc #0` into the
+shared semantic syscall body. `just aarch64_trap_check` observes the mapping and
+mutable-frame round trip under `aarch64-qemu-virt`; general component launch and
+address-space switching remain P2.3.
 
 | Role | Register |
 | --- | --- |
@@ -124,11 +125,12 @@ preempts it. The auxiliary return is defined for the same calls as on x86-64.
 The userspace wrapper treats a syscall as a compiler-visible memory boundary:
 the inline assembly is not `nomem`, so Rust cannot move memory accesses across
 the trap. `svc` may update condition flags; callers must not depend on NZCV
-across a syscall. ABI revision 1 requires the eventual vector/context path to
-preserve all general-purpose registers except `x0` and, for calls with an
-auxiliary result, `x1`; P2.2/P2.3 must implement and observe that behavior.
-SIMD/FP state is not part of ABI revision 1, so components must not depend on
-preserving it until the AArch64 context-switch slice admits that state.
+across a syscall. ABI revision 1 requires the vector/context path to preserve
+all general-purpose registers except `x0` and, for calls with an auxiliary
+result, `x1`. P2.2 observes the complete exception-frame round trip for one
+bounded probe; P2.3 extends it to scheduled components. SIMD/FP state is not
+part of ABI revision 1, so components must not depend on preserving it until
+the AArch64 context-switch slice admits that state.
 
 ## RV64 calling convention
 

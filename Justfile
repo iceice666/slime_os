@@ -438,6 +438,13 @@ rpi5_artifact_check: architecture_contract_check rpi5_ros2_demo_contract_check
 aarch64_boot_check:
     python3 scripts/check/check-aarch64-boot.py
 
+# P2.2: install the AArch64 EL1 vector table, decode synchronous exceptions
+# into the shared fault vocabulary, and observe the documented svc/eret frame
+# through the architecture-neutral syscall body. This is a bounded EL0 probe,
+# not the component/address-space isolation path P2.3 owns.
+aarch64_trap_check:
+    python3 scripts/check/check-aarch64-trap.py
+
 # P1: no x86 mechanism outside the architecture/platform boundary. Scans the
 # neutral trees for x86 instructions, registers, ELF/linker constants, and
 # undeclared profile dispatch, then *builds* the neutral kernel library and

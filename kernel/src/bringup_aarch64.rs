@@ -1,15 +1,10 @@
 //! AArch64 platform bring-up for the `aarch64-qemu-virt` profile.
 //!
-//! P2.1's scope: prove the kernel reached EL1 with the MMU on, that the
-//! stage-0 handoff decodes, that physical and virtual memory management come up
-//! over the direct map, and that the result is observable over PL011 and
-//! reported through a deterministic exit.
-//!
-//! What is deliberately absent is the rest of P2. There are no exception
-//! vectors (P2.2), no components (P2.3), no timer or interrupt controller
-//! (P2.4), and no block transport (P2.5), so this does not call
-//! `bootstrap::start` — launching components without vectors installed would
-//! fault into nothing. Bring-up ends by reporting success and exiting.
+//! P2.1 established verified EL1 entry, translation, memory, PL011, and the
+//! deterministic exit path. P2.2 extends that live path with exception vectors,
+//! synchronous fault decoding, a complete `svc`/`eret` register round trip,
+//! and shared syscall dispatch. Component scheduling, timer delivery, and
+//! devices remain in P2.3–P2.5.
 
 use slime_os_kernel::arch::cpu;
 use slime_os_kernel::arch::target::uart;
@@ -67,9 +62,40 @@ pub fn bringup() {
     report_generation();
 
     serial_println!("[bringup] aarch64 EL1 vertical slice reached");
-    // P2.2 installs exception vectors; until then there is nothing further to
-    // run, so report success through the profile's exit path rather than
-    // spinning and timing the gate out.
+
+    slime_os_kernel::interrupts::init();
+    if option_env!("SLIME_AARCH64_TRAP_CHECK") == Some("1") {
+        let entry_masked = !cpu::interrupts_enabled();
+        // SAFETY: vectors are installed. No GIC source is enabled during this
+        // bounded window; it exists only to exercise both DAIF restore paths.
+        unsafe { cpu::enable_interrupts() };
+        let enabled_window = cpu::interrupts_enabled();
+        let masked_inside = cpu::without_interrupts(|| !cpu::interrupts_enabled());
+        let restored_enabled = cpu::interrupts_enabled();
+        // SAFETY: restore the masked EL1 bring-up state before any later slice
+        // enables an interrupt controller.
+        unsafe { cpu::disable_interrupts() };
+        let final_masked = !cpu::interrupts_enabled();
+        serial_println!(
+            "[aarch64-trap] daif entry_masked={} enabled_window={} masked_inside={} restored_enabled={} final_masked={}",
+            entry_masked,
+            enabled_window,
+            masked_inside,
+            restored_enabled,
+            final_masked,
+        );
+        if !(entry_masked && enabled_window && masked_inside && restored_enabled && final_masked) {
+            serial_println!("[aarch64-trap] failed: DAIF mask state was not restored");
+            exit_qemu(QemuExitCode::Failed);
+        }
+
+        slime_os_kernel::trap::run_el1_breakpoint_probe();
+
+        if !slime_os_kernel::trap::run_user_probe() {
+            exit_qemu(QemuExitCode::Failed);
+        }
+        serial_println!("[aarch64-trap] complete");
+    }
     exit_qemu(QemuExitCode::Success);
 }
 

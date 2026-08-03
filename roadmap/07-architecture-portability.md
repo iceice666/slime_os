@@ -2,7 +2,7 @@
 
 **Purpose:** Preserve one Slime capability/component/generation architecture across target profiles while making AArch64 and Raspberry Pi 5 the near-term product path.
 
-**Status:** In progress — P0, P1, and P2.1 complete.
+**Status:** In progress — P0, P1, P2.1, and P2.2 complete.
 
 **Decision:** AArch64/Raspberry Pi 5 is now the near-term physical target because the current product goal is the RPi5 ROS 2 two-node demo. The existing x86-64 QEMU path remains the regression oracle for completed work until each semantic corpus is replayed on AArch64, but x86-64/Framework is no longer the product-leading roadmap. RV64 is deferred.
 
@@ -150,7 +150,7 @@ parent's exit condition.
 | Slice | Primary mechanism | Gate |
 | --- | --- | --- |
 | P2.1 | Firmware handoff, EL1 entry, translation tables, PL011, QEMU exit | `just aarch64_boot_check` (complete) |
-| P2.2 | Exception vectors, fault decoding, `svc` syscall entry, saved user context | `just aarch64_trap_check` |
+| P2.2 | Exception vectors, fault decoding, `svc` syscall entry, saved user context | `just aarch64_trap_check` (complete) |
 | P2.3 | EL0 component execution, address-space switching, isolation, fault attribution | `just aarch64_isolation_check` |
 | P2.4 | GICv3 delivery, generic timer, preemption, all B2 wake classes | `just aarch64_wake_check` |
 | P2.5 | virtio-mmio transport, generation selection, rollback, wrong-target rejection | `just aarch64_generation_check` |
@@ -235,7 +235,7 @@ nothing about Raspberry Pi 5 hardware.
 
 ### P2.2 — Exception vectors, fault decoding, and `svc` entry
 
-**Status:** Not started.
+**Status:** Complete.
 
 **Depends on:** P2.1.
 
@@ -259,11 +259,23 @@ nothing about Raspberry Pi 5 hardware.
 just aarch64_trap_check
 ```
 
-#### Exit condition
+#### Exit condition (observed)
 
-An AArch64 exception is decoded into the shared fault vocabulary and an `svc`
-syscall completes through the architecture-neutral syscall body with the
-documented register mapping observed, not assumed.
+Observed 2026-08-03; see [`devlog/2026-08-03-p2-2-aarch64-traps/`](../devlog/2026-08-03-p2-2-aarch64-traps/index.md).
+
+The architected 16-slot EL1 vector table is installed at `VBAR_EL1`, an EL1
+`brk` and an EL0 undefined instruction are both decoded through `ESR_EL1.EC`
+into the shared `UserFaultReason` vocabulary and reported, an `svc #0` issued
+from EL0 carries all five documented argument registers into the
+architecture-neutral `kernel/src/syscall/mod.rs` body and returns its result in
+`x0`, the complete 31-register frame plus `SP_EL0` survives `eret` including a
+deliberate handler mutation, and `DAIF` masking is observed enabled, masked,
+and restored — all asserted as ordered PL011 markers by
+`just aarch64_trap_check`. The x86 corpus is unchanged.
+
+No component is scheduled and no address space is switched per task; the EL0
+evidence comes from a bounded bring-up probe that builds its own TTBR0 root and
+releases it. Component execution and isolation are P2.3.
 
 ### P2.3 — EL0 execution, address spaces, and isolation
 

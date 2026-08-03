@@ -46,6 +46,11 @@ pub const PTE_WRITABLE: u64 = 0;
 pub const PTE_READ_ONLY: u64 = 1 << 7;
 /// AP[1] (bit 6): accessible from EL0.
 pub const PTE_USER: u64 = 1 << 6;
+/// SH[1:0]: Inner Shareable, required for normal cacheable mappings that
+/// alias the direct map.
+pub const PTE_INNER_SHAREABLE: u64 = 0b11 << 8;
+/// nG: translation is local to the current ASID rather than a global entry.
+pub const PTE_NOT_GLOBAL: u64 = 1 << 11;
 /// `MAIR_EL1` attribute index 0: normal write-back cacheable memory.
 ///
 /// The indices below must match the `MAIR_EL1` stage-0 programs
@@ -109,7 +114,7 @@ pub const PTE_INTERMEDIATE: u64 = PTE_PRESENT | PTE_PAGE;
 /// walker ORs this into every leaf. x86 needs only its present bit here, which
 /// is why the flags a caller passes are a complete descriptor there and not
 /// here.
-pub const PTE_LEAF: u64 = PTE_PRESENT | PTE_PAGE | PTE_ACCESS_FLAG;
+pub const PTE_LEAF: u64 = PTE_PRESENT | PTE_PAGE | PTE_ACCESS_FLAG | PTE_INNER_SHAREABLE;
 
 /// The index selecting a descriptor at `level` (1..=[`PAGE_TABLE_LEVELS`]).
 pub fn table_index(virt: VirtAddr, level: u8) -> usize {
@@ -165,6 +170,25 @@ pub unsafe fn set_active_root(root: PhysAddr) {
             "dsb ish",
             "isb",
             root = in(reg) root.as_u64(),
+            options(nostack, preserves_flags),
+        );
+    }
+}
+
+/// Invalidate every EL1 stage-1 translation on the local shareable domain.
+///
+/// A TTBR write does not implicitly invalidate AArch64 TLB entries. Call this
+/// after switching a root that reuses an ASID, and before releasing frames the
+/// outgoing root mapped.
+pub fn flush_tlb_all() {
+    // SAFETY: this only discards cached translations; the barriers make the
+    // root/descriptor writes visible before subsequent address translation.
+    unsafe {
+        core::arch::asm!(
+            "dsb ishst",
+            "tlbi vmalle1is",
+            "dsb ish",
+            "isb",
             options(nostack, preserves_flags),
         );
     }

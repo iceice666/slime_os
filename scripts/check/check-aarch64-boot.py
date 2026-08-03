@@ -152,6 +152,8 @@ def run(
 def build_artifacts(generation_dir: _Path, image: _Path) -> None:
     environment = dict(os.environ)
     environment["SLIME_TARGET_PROFILE"] = PROFILE_NAME
+    if os.environ.get("SLIME_AARCH64_TRAP_CHECK") == "1":
+        environment["SLIME_AARCH64_TRAP_CHECK"] = "1"
 
     # `aarch64-unknown-none`'s precompiled sysroot is built non-PIC, so it
     # cannot link into the position-independent image stage-0 relocates. Build

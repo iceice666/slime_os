@@ -5,6 +5,10 @@ fn main() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let target = std::env::var("TARGET").expect("TARGET");
     println!("cargo:rerun-if-env-changed=SLIME_TARGET_PROFILE");
+    println!("cargo:rerun-if-env-changed=SLIME_AARCH64_TRAP_CHECK");
+    if std::env::var("SLIME_AARCH64_TRAP_CHECK").as_deref() == Ok("1") {
+        println!("cargo:rustc-env=SLIME_AARCH64_TRAP_CHECK=1");
+    }
     match std::env::var("SLIME_TARGET_PROFILE") {
         Ok(profile) => println!("cargo:rustc-env=SLIME_TARGET_PROFILE={profile}"),
         Err(_) if target == "aarch64-unknown-none" => {
