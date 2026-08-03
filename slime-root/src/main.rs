@@ -50,6 +50,7 @@ use child_vspace::{ChildImage, GRANULE_SIZE, ScratchPage};
 use event::TaskEpoch;
 use fault::{LifecycleEventKind, SupervisionTable};
 use generation::{Admission, Authority, RIGHT_RECV, RIGHT_SEND, inbound_authority};
+use graph::GraphTables;
 use ipc::{IpcError, Operation, Response, poll_notification};
 use object_allocator::ObjectAllocator;
 use platform_timer::{PhysicalTimerAdapter, TIMER_IRQ};
@@ -59,6 +60,7 @@ use shared_buffer::{
 };
 use task::{Arrival, MAX_TASKS, Supervision, TaskId, TaskTable};
 use timer::{PlatformTimer, ServiceTimerError, TimerScheduler, apply_deadline_programming};
+use transfer_window::WindowTable;
 
 /// Report an unrecoverable startup condition and park the root task. Every
 /// fallible step returns a typed error that ends up here; nothing panics.
@@ -69,7 +71,41 @@ macro_rules! fatal {
     }};
 }
 
-const GENERATION_BYTES: &[u8] = include_bytes!("../fixtures/generation.bin");
+/// The generation this root task admits and launches.
+///
+/// Supplied by the build harness through `SLIME_GENERATION`, which
+/// `scripts/build/build-sel4.py` points at the `aarch64-sel4-qemu-virt`
+/// generation it just built. The checked-in fixture is the fallback, and it is
+/// the retained x86 generation P5.1 admitted: its component payloads are the
+/// retired kernel's segment-carrying images, which are admitted for authority
+/// derivation and never activated. Which one is compiled in therefore decides
+/// whether this boot launches a graph or reports that it cannot — and the boot
+/// markers say which, rather than leaving it to be inferred.
+/// Aligned to 8 for the same reason `CHILD_ELF` is: the component ELFs this
+/// generation carries are parsed in place, at their address inside this
+/// constant, and `object`'s ELF64 parser requires an 8-byte-aligned buffer.
+/// Each image's payload sits at a multiple of 8 from the start of the
+/// generation, so aligning the whole blob aligns every ELF within it.
+/// Selected once here so the two `include_bytes!` sites — the length and the
+/// value — can never disagree about which file they read. A `match` cannot do
+/// this: the two arms are arrays of different lengths, so they have different
+/// types and will not unify.
+#[cfg(slime_generation_supplied)]
+macro_rules! generation_bytes {
+    () => {
+        include_bytes!(env!("SLIME_GENERATION"))
+    };
+}
+#[cfg(not(slime_generation_supplied))]
+macro_rules! generation_bytes {
+    () => {
+        include_bytes!("../fixtures/generation.bin")
+    };
+}
+
+static GENERATION: Aligned<{ generation_bytes!().len() }> = Aligned(*generation_bytes!());
+
+const GENERATION_BYTES: &[u8] = &GENERATION.0;
 
 /// The target profile this root task admits executables for. Named rather than
 /// inferred: an image is admitted by equality on every axis the profile
@@ -380,6 +416,29 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         Ok(slot) => slot.cap(),
         Err(error) => fatal!("service endpoint unavailable: {error:?}"),
     };
+
+    // ---- component graph phase (P5.2) ----
+    //
+    // A generation whose payloads this root task can load gets its declared
+    // components launched from those payloads, and that is the whole boot: the
+    // graph is the proof, so there is nothing for the native fixture to add.
+    //
+    // A generation whose payloads are the retired kernel's segment-carrying
+    // images cannot be launched, and the fixture path below runs instead. The
+    // two are told apart by what the generation actually carries rather than by
+    // a build flag, so one root task binary serves both and each says which it
+    // took.
+    if admission.loadable > 0 {
+        launch_component_graph(
+            &generation,
+            &admission,
+            &mut allocator,
+            &scratch,
+            service_endpoint,
+        );
+        sel4::init_thread::suspend_self()
+    }
+    // ---- end component graph phase ----
 
     // Fixture authority is generation-derived: each task carries the inbound
     // service authority of a declared component the generation grants both send
@@ -699,6 +758,175 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
     );
 
     sel4::init_thread::suspend_self()
+}
+
+/// Largest component ELF the loader will copy through [`ElfScratch`]. Generous
+/// against the five components this profile declares (the largest is ~44 KiB)
+/// while keeping the buffer a bounded, statically sized object like every other
+/// table in this crate.
+const MAX_COMPONENT_ELF_BYTES: usize = 512 * 1024;
+
+/// An 8-byte-aligned staging buffer for one component ELF at a time.
+#[repr(align(8))]
+struct ElfScratch {
+    bytes: [u8; MAX_COMPONENT_ELF_BYTES],
+}
+
+/// The staging buffer, `const`-initialized in `.bss`.
+///
+/// A static rather than a local: at 512 KiB it would overflow the root task's
+/// 256 KiB stack, which is exactly the failure B3 recorded — a 10 KiB stack
+/// temporary silently corrupting adjacent memory instead of faulting. The same
+/// reasoning that made `SHARED_BUFFER_TABLE` a plain `const`-initialized static
+/// applies here, and more so.
+static mut ELF_SCRATCH: ElfScratch = ElfScratch {
+    bytes: [0; MAX_COMPONENT_ELF_BYTES],
+};
+
+const _: () = assert!(MAX_COMPONENT_ELF_BYTES >= 64 * 1024);
+
+impl ElfScratch {
+    /// Copy `elf` into the buffer and return it at a guaranteed 8-byte
+    /// alignment. Returns the payload's length when it does not fit, so the
+    /// caller reports the bound rather than truncating to it.
+    fn hold(&mut self, elf: &[u8]) -> Result<&[u8], usize> {
+        let destination = self.bytes.get_mut(..elf.len()).ok_or(elf.len())?;
+        destination.copy_from_slice(elf);
+        Ok(destination)
+    }
+}
+
+/// Launch every component whose payload this root task can load (P5.2).
+///
+/// Each component is built from the ELF its own generation object carries — not
+/// from one embedded fixture — with its authority derived from the grants the
+/// generation declares for it, and its transfer window recorded so its startup
+/// bind can be checked against what was actually mapped.
+///
+/// Construction is staged exactly as the fixture path stages it: every task is
+/// built and every window declared before any of them runs, so a failure part
+/// way through leaves tasks that never ran rather than a half-started graph.
+fn launch_component_graph(
+    generation: &Generation<'_>,
+    admission: &Admission,
+    allocator: &mut ObjectAllocator,
+    scratch: &ScratchPage,
+    service_endpoint: sel4::cap::Endpoint,
+) {
+    let mut tasks = TaskTable::<MAX_TASKS>::new();
+    let mut windows = WindowTable::<MAX_TASKS>::new();
+    let mut graph = GraphTables::new();
+    let mut launched = 0;
+    // The generation format packs object payloads without padding, so an ELF's
+    // address inside the blob is whatever the preceding objects left it at,
+    // while `object`'s ELF64 parser requires 8-byte alignment. Aligning the
+    // generation as a whole is therefore not enough — only the first few images
+    // land aligned. Each image is copied through this aligned buffer instead,
+    // which keeps the wire format unchanged: the generation is also read by the
+    // frozen x86 oracle, so adding padding to it would be a format change made
+    // for one reader's parser.
+    //
+    // SAFETY: the root task is single-threaded and this is the only reference
+    // taken to `ELF_SCRATCH`, held for the duration of this loop and released
+    // before the function returns.
+    let aligned = unsafe { &mut *ptr::addr_of_mut!(ELF_SCRATCH) };
+
+    for plan in admission.loadable_plans() {
+        let record = match generation.component(plan.component) {
+            Ok(record) => record,
+            Err(error) => fatal!("SLIME_GRAPH FAIL component rejected: {error:?}"),
+        };
+        let object = match generation.object(record.object) {
+            Ok(object) => object,
+            Err(error) => fatal!("SLIME_GRAPH FAIL object rejected: {error:?}"),
+        };
+        // Target admission happens again here, at the point of use, and its
+        // result is what yields the bytes: the ELF cannot be reached without
+        // passing it, so a wrong-target payload is refused before mapping
+        // rather than by a check a caller could skip.
+        let elf = match boot_contracts::component_image::admit_elf(
+            object.bytes,
+            match boot_contracts::target_profile::TargetProfile::by_name(TARGET_PROFILE) {
+                Ok(profile) => profile,
+                Err(error) => fatal!("SLIME_GRAPH FAIL profile unavailable: {error:?}"),
+            },
+        ) {
+            Ok(elf) => elf,
+            Err(error) => fatal!(
+                "SLIME_GRAPH FAIL component {} refused: {error:?}",
+                record.name
+            ),
+        };
+        let elf = match aligned.hold(elf) {
+            Ok(elf) => elf,
+            Err(len) => fatal!(
+                "SLIME_GRAPH FAIL component {} is {len} bytes, over the load bound",
+                record.name
+            ),
+        };
+        let image = match ChildImage::parse(elf) {
+            Ok(image) => image,
+            Err(error) => fatal!(
+                "SLIME_GRAPH FAIL component {} image rejected: {error:?}",
+                record.name
+            ),
+        };
+        let authority = match inbound_authority(generation, plan.component) {
+            Ok(authority) => authority,
+            Err(error) => fatal!("SLIME_GRAPH FAIL grant closure rejected: {error:?}"),
+        };
+        let id = match tasks.create(
+            allocator,
+            &image,
+            service_endpoint,
+            authority,
+            Supervision::SelfManaged,
+            sel4::init_thread::slot::VSPACE.cap(),
+            scratch,
+            sel4::init_thread::slot::ASID_POOL.cap(),
+        ) {
+            Ok(id) => id,
+            Err(error) => fatal!(
+                "SLIME_GRAPH FAIL component {} construction failed: {error:?}",
+                record.name
+            ),
+        };
+        let Some(task) = tasks.get(id) else {
+            fatal!("SLIME_GRAPH FAIL constructed task {} is missing", id.0)
+        };
+        if let Err(error) = windows.declare(
+            id,
+            task.vspace.transfer_window_addr,
+            task.vspace.transfer_window,
+        ) {
+            fatal!("SLIME_GRAPH FAIL window declaration rejected: {error:?}")
+        }
+        if graph.create(id).is_err() {
+            fatal!(
+                "SLIME_GRAPH FAIL capability table unavailable for task {}",
+                id.0
+            )
+        }
+        sel4::debug_println!(
+            "SLIME_GRAPH staged task={} component={} grants={} window={:#x} frames={} tables={} entry={:#x}",
+            id.0,
+            record.name,
+            authority.grants,
+            task.vspace.transfer_window_addr,
+            task.vspace.frames_mapped,
+            task.vspace.tables_mapped,
+            task.entry,
+        );
+        launched += 1;
+    }
+
+    sel4::debug_println!(
+        "SLIME_GRAPH staged components={launched} loadable={} slimecm={} wrong_target={} unrecognized={}",
+        admission.loadable,
+        admission.slime_component_images,
+        admission.wrong_target_images,
+        admission.unrecognized_images,
+    );
 }
 
 /// Serve the badged root endpoint until fixture `index` reaches a terminal state

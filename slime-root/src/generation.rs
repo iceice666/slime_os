@@ -98,12 +98,17 @@ impl PayloadFormat {
         const ELF_MACHINE_AARCH64: u16 = 183;
 
         match component_image::target(bytes) {
-            Ok((revision, _)) => {
+            // A segment-carrying image is unloadable here whatever it targets:
+            // `slime-root` has no loader for the retired kernel's format. Its
+            // target is therefore not consulted, so a retained x86 generation
+            // is still reported as the Slime component images it holds rather
+            // than as a pile of wrong-target artifacts.
+            Ok((revision, _)) if !revision.carries_elf() => return Self::SlimeComponent,
+            // An ELF-carrying image is one this root task could load, so the
+            // target is exactly what decides whether it may.
+            Ok(_) => {
                 return match component_image::admit(bytes, profile) {
-                    Ok(_) if revision.carries_elf() => Self::QualifiedElf,
-                    // Admitted, but its body is a segment table this root task
-                    // has no loader for.
-                    Ok(_) => Self::SlimeComponent,
+                    Ok(_) => Self::QualifiedElf,
                     Err(ComponentTargetError::Target(_)) => Self::WrongTarget,
                     Err(_) => Self::Unrecognized,
                 };
@@ -418,19 +423,30 @@ mod tests {
         }
     }
 
+    /// A segment-carrying image is unloadable here whatever it targets, so its
+    /// target is not consulted. This is what keeps a retained x86 generation
+    /// reported as the Slime component images it holds — P5.1's
+    /// `slimecm=[1-9]\d*` evidence — rather than as wrong-target artifacts.
     #[test]
-    fn segment_carrying_images_are_recognized_but_not_loadable() {
+    fn segment_carrying_images_are_recognized_without_consulting_their_target() {
         let x86 = TargetProfile::legacy().expect("legacy profile");
-        // A retained v1 image, admitted for the profile it implies.
         let mut v1 = [0u8; wire::LEGACY_HEADER_LEN];
         v1[wire::OFF_HEADER_MAGIC..][..8].copy_from_slice(&wire::LEGACY_IMAGE_MAGIC.to_le_bytes());
         v1[wire::OFF_HEADER_FORMAT_VERSION..][..4]
             .copy_from_slice(&wire::LEGACY_FORMAT_VERSION.to_le_bytes());
         v1[wire::OFF_HEADER_HEADER_SIZE..][..4]
             .copy_from_slice(&(wire::LEGACY_HEADER_LEN as u32).to_le_bytes());
-        let format = PayloadFormat::classify(&v1, x86);
-        assert_eq!(format, PayloadFormat::SlimeComponent);
-        assert!(!format.is_loadable());
+        for profile in [x86, sel4_profile()] {
+            let format = PayloadFormat::classify(&v1, profile);
+            assert_eq!(format, PayloadFormat::SlimeComponent);
+            assert!(!format.is_loadable());
+        }
+        // The same holds for a v2 image built for another architecture.
+        let board = TargetProfile::by_name("aarch64-rpi5").expect("declared profile");
+        assert_eq!(
+            PayloadFormat::classify(&qualified(wire::IMAGE_MAGIC, board), sel4_profile()),
+            PayloadFormat::SlimeComponent
+        );
     }
 
     #[test]
