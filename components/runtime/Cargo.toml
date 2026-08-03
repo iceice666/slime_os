@@ -8,5 +8,20 @@ rust-version = "1.96"
 [lib]
 doctest = false
 
+# The `sel4` feature selects the native seL4 transport: operations become
+# `seL4_Call`s on the root service endpoint in child CSpace slot 1, and `entry!`
+# performs real seL4 task startup. Without it, `slime-rt` traps into the custom
+# Slime kernel, which is what the frozen oracle build needs.
+#
+# It cannot be inferred from `cfg(target_arch)`: the seL4 target spec reports
+# `aarch64` exactly as the legacy AArch64 target does.
+[features]
+sel4 = ["dep:sel4", "dep:sel4-panicking-env", "dep:sel4-runtime-common"]
+
+[dependencies]
+sel4 = { path = "../../deps/rust-sel4/crates/sel4", optional = true }
+sel4-panicking-env = { path = "../../deps/rust-sel4/crates/sel4-panicking/env", optional = true }
+sel4-runtime-common = { path = "../../deps/rust-sel4/crates/sel4-runtime-common", optional = true }
+
 [lints]
 workspace = true

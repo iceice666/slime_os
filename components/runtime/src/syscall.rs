@@ -1,18 +1,48 @@
-//! Syscall ABI wrappers (`kernel/src/syscall/mod.rs` is authoritative).
+//! The Slime operation API components program against.
 //!
-//! Syscall numbers, arguments, errors, bounds, and transfer semantics are
-//! architecture-neutral and defined once here. Only the trap instruction and
-//! the mapping from semantic arguments to registers differ per architecture;
-//! that lives in [`crate::arch`], selected by `cfg(target_arch)`. See
-//! `docs/syscall-abi.md` for the shared table and each calling convention.
+//! Operation numbers, arguments, errors, bounds, and transfer semantics are
+//! defined once here and are identical on every transport. What differs is how
+//! an operation reaches its implementation:
+//!
+//! - [`sel4_transport`] (feature `sel4`) calls the badged root service endpoint
+//!   in child CSpace slot 1. The operation number is the message label, at most
+//!   four fast message registers cross in each direction, and larger payloads
+//!   go through the component's bound transfer window.
+//! - [`legacy`] traps directly into the custom Slime kernel
+//!   (`kernel/src/syscall/mod.rs`), which addresses caller memory by pointer.
+//!   It serves the frozen oracle build and retires with that kernel.
+//!
+//! Callers see neither. They see the wrappers below, which return the same
+//! named `ERR_*` values and the same typed results whichever transport is
+//! compiled in — no raw `sel4` type, capability, or `MessageInfo` escapes into
+//! component code.
 
-use crate::arch::{raw_syscall, raw_syscall_pair};
+#[cfg(feature = "sel4")]
+use sel4_transport as transport;
 
+#[cfg(not(feature = "sel4"))]
+use legacy as transport;
+
+#[cfg(not(feature = "sel4"))]
+mod legacy;
+#[cfg(feature = "sel4")]
+mod sel4_transport;
+#[cfg(feature = "sel4")]
+mod wire;
+
+#[cfg(feature = "sel4")]
+pub use sel4_transport::ROOT_SERVICE_SLOT;
+
+#[cfg(not(feature = "sel4"))]
 const SYS_YIELD: u64 = 0;
 const SYS_SEND: u64 = 1;
 const SYS_RECV: u64 = 2;
 const SYS_EXIT: u64 = 3;
 const SYS_SPAWN: u64 = 4;
+// Under `sel4` with kernel printing, `debug_write` reaches the debug log
+// directly and never labels a root-service call, so the number is unused in
+// that one configuration. It stays the wire identity for every other build.
+#[cfg_attr(feature = "sel4", allow(dead_code))]
 const SYS_DEBUG_WRITE: u64 = 5;
 const SYS_BLOCK_TRANSACT: u64 = 6;
 const SYS_STORE_TRANSACT: u64 = 7;
@@ -40,6 +70,8 @@ const SYS_SHARED_BUFFER_LOAN_MAP: u64 = 27;
 const SYS_SHARED_BUFFER_RETURN: u64 = 28;
 const SYS_SHARED_BUFFER_REVOKE: u64 = 29;
 const SYS_CAP_TRANSFER: u64 = 30;
+#[cfg(feature = "sel4")]
+const SYS_TRANSFER_WINDOW_BIND: u64 = 31;
 
 pub const ERR_SUCCESS: i64 = 0;
 pub const ERR_BAD_CAP: i64 = -1;
@@ -50,6 +82,13 @@ pub const ERR_OUT_OF_MEMORY: i64 = -5;
 
 pub const MAX_MSG: usize = 64;
 pub const MAX_CAPS_PER_MSG: usize = 4;
+
+/// Smallest transfer window [`transfer_window_bind`] accepts: enough for the
+/// largest single frame any operation stages, which is the up-to-64-grant
+/// spawn payload (matching the kernel's per-task capability capacity); every
+/// other frame — a [`MAX_MSG`]-byte message, the 80-byte directory-inspect
+/// reply, a 64-byte transact protocol — fits with room to spare.
+pub const MIN_TRANSFER_WINDOW: usize = 4096;
 
 /// A capability rights bitset. Flat `u64`, matching the kernel ABI
 /// (`kernel/src/capability/mod.rs`) and generation format v3.
@@ -102,10 +141,35 @@ pub struct InputEvent {
     pub pressed: bool,
 }
 
-pub fn yield_now() {
-    unsafe {
-        raw_syscall(SYS_YIELD, 0, 0, 0, 0, 0);
+/// Declares an already-mapped shared buffer as this component's transfer
+/// window, the bounded region through which payloads too large for the
+/// transport's inline registers cross.
+///
+/// Bind it once, after mapping a buffer of at least [`MIN_TRANSFER_WINDOW`]
+/// bytes at `base`. Until then, operations whose payload exceeds the inline
+/// bound fail with [`ERR_INVALID_ARG`] — the transport never truncates a
+/// payload to make it fit.
+///
+/// On the legacy trap transport the kernel reads caller memory directly, so no
+/// window is required; the call validates its arguments and succeeds, letting
+/// one component source build against either transport.
+pub fn transfer_window_bind(buffer_slot: u32, base: u64, len: usize) -> i64 {
+    #[cfg(feature = "sel4")]
+    {
+        transport::transfer_window_bind(buffer_slot, base, len)
     }
+    #[cfg(not(feature = "sel4"))]
+    {
+        let _ = buffer_slot;
+        transport::transfer_window_bind(base, len)
+    }
+}
+
+/// Relinquishes the CPU for the rest of this time slice. The only operation
+/// with no policy content, so the seL4 transport issues `seL4_Yield` directly
+/// rather than crossing the root service endpoint.
+pub fn yield_now() {
+    transport::yield_now();
 }
 
 /// Maximum number of sources a single [`wait`] call may register.
@@ -153,71 +217,32 @@ pub fn wait(sources: &[WaitSource]) {
         sources.len() <= MAX_WAIT_SOURCES,
         "wait() drops sources beyond MAX_WAIT_SOURCES"
     );
-    let mut descriptors = [0u64; MAX_WAIT_SOURCES];
-    let count = sources.len().min(MAX_WAIT_SOURCES);
-    for (slot, source) in descriptors.iter_mut().zip(sources.iter()) {
-        *slot = source.descriptor();
-    }
-    unsafe {
-        raw_syscall(SYS_WAIT, descriptors.as_ptr() as u64, count as u64, 0, 0, 0);
-    }
+    transport::wait(sources);
 }
 
 /// Sends `payload` (at most [`MAX_MSG`] bytes) over the endpoint in
 /// capability slot `slot`, transferring the capabilities named in `caps`
 /// (at most [`MAX_CAPS_PER_MSG`]).
 pub fn send(slot: u32, payload: &[u8], caps: &[u32]) -> i64 {
-    unsafe {
-        raw_syscall(
-            SYS_SEND,
-            slot as u64,
-            payload.as_ptr() as u64,
-            payload.len() as u64,
-            caps.as_ptr() as u64,
-            caps.len() as u64,
-        )
-    }
+    transport::send(slot, payload, caps)
 }
 
 /// Receives into `buf` (must be [`MAX_MSG`] bytes) and `cap_out` (must be
 /// [`MAX_CAPS_PER_MSG`] entries) from the endpoint in capability slot `slot`.
 /// Returns the received byte count, or a negative error.
 pub fn recv(slot: u32, buf: &mut [u8; MAX_MSG], cap_out: &mut [u64; MAX_CAPS_PER_MSG]) -> i64 {
-    unsafe {
-        raw_syscall(
-            SYS_RECV,
-            slot as u64,
-            buf.as_mut_ptr() as u64,
-            cap_out.as_mut_ptr() as u64,
-            0,
-            0,
-        )
-    }
+    transport::recv(slot, buf, cap_out)
 }
 
 pub fn exit(status: i64) -> ! {
-    unsafe {
-        raw_syscall(SYS_EXIT, status as u64, 0, 0, 0, 0);
-    }
-    loop {
-        core::hint::spin_loop();
-    }
+    transport::exit(status)
 }
 
 /// Spawns the executable in `executable_slot`. Each grant is a non-consuming
 /// narrow copy; the source capability remains in the spawner. Success returns
 /// both the child task id and a supervision capability slot.
 pub fn spawn(executable_slot: u32, grants: &[SpawnGrant]) -> Result<Spawned, i64> {
-    let (task_id, supervision_slot) = unsafe {
-        raw_syscall_pair(
-            SYS_SPAWN,
-            executable_slot as u64,
-            grants.as_ptr() as u64,
-            grants.len() as u64,
-            0,
-            0,
-        )
-    };
+    let (task_id, supervision_slot) = transport::spawn(executable_slot, grants);
     if task_id < 0 {
         Err(task_id)
     } else {
@@ -230,8 +255,7 @@ pub fn spawn(executable_slot: u32, grants: &[SpawnGrant]) -> Result<Spawned, i64
 
 /// Mint a bounded channel pair through an `EndpointFactory` capability.
 pub fn endpoint_create(factory_slot: u32) -> Result<(u32, u32), i64> {
-    let (first, second) =
-        unsafe { raw_syscall_pair(SYS_ENDPOINT_CREATE, factory_slot as u64, 0, 0, 0, 0) };
+    let (first, second) = transport::endpoint_create(factory_slot);
     if first < 0 {
         Err(first)
     } else {
@@ -251,23 +275,14 @@ pub fn endpoint_create(factory_slot: u32) -> Result<(u32, u32), i64> {
 /// source capability is consumed; on failure it is left untouched.
 ///
 /// The descriptor crosses as the message payload, so the receiver parses
-/// exactly the bytes the kernel enforced.
+/// exactly the bytes the mechanism owner enforced.
 pub fn cap_transfer(endpoint_slot: u32, capability_slot: u32, descriptor: &[u8; 64]) -> i64 {
-    unsafe {
-        raw_syscall(
-            SYS_CAP_TRANSFER,
-            endpoint_slot as u64,
-            capability_slot as u64,
-            descriptor.as_ptr() as u64,
-            0,
-            0,
-        )
-    }
+    transport::cap_transfer(endpoint_slot, capability_slot, descriptor)
 }
 
 /// A shared buffer allocated through a `SharedBufferFactory` capability: the
-/// slot holding the new `SharedBuffer` handle, plus the kernel-assigned
-/// unforgeable identity that names it across a transfer.
+/// slot holding the new `SharedBuffer` handle, plus the assigned unforgeable
+/// identity that names it across a transfer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SharedBuffer {
     pub slot: u32,
@@ -283,16 +298,7 @@ pub fn shared_buffer_create(
     pages: usize,
     writable: bool,
 ) -> Result<SharedBuffer, i64> {
-    let (slot, id) = unsafe {
-        raw_syscall_pair(
-            SYS_SHARED_BUFFER_CREATE,
-            factory_slot as u64,
-            pages as u64,
-            u64::from(writable),
-            0,
-            0,
-        )
-    };
+    let (slot, id) = transport::shared_buffer_create(factory_slot, pages, writable);
     if slot < 0 {
         Err(slot)
     } else {
@@ -306,39 +312,30 @@ pub fn shared_buffer_create(
 /// Release a shared buffer and invalidate this holder's capability. Pages stay
 /// retained while any loan is outstanding.
 pub fn shared_buffer_release(slot: u32) -> i64 {
-    unsafe { raw_syscall(SYS_SHARED_BUFFER_RELEASE, slot as u64, 0, 0, 0, 0) }
+    transport::shared_buffer_release(slot)
 }
 
 /// Map an exact page-aligned subrange of a shared buffer at `base`. Requires
 /// `RIGHT_BUFFER_MAP`; `writable` additionally requires `RIGHT_BUFFER_WRITE`
 /// and fails once the region is sealed.
 pub fn shared_buffer_map(slot: u32, base: u64, offset: u64, length: u64, writable: bool) -> i64 {
-    unsafe {
-        raw_syscall(
-            SYS_SHARED_BUFFER_MAP,
-            slot as u64,
-            base,
-            offset,
-            length,
-            u64::from(writable),
-        )
-    }
+    transport::shared_buffer_map(slot, base, offset, length, writable)
 }
 
 /// Remove this holder's mapping of `slot` at `base` and return its charge.
 pub fn shared_buffer_unmap(slot: u32, base: u64) -> i64 {
-    unsafe { raw_syscall(SYS_SHARED_BUFFER_UNMAP, slot as u64, base, 0, 0, 0) }
+    transport::shared_buffer_unmap(slot, base)
 }
 
 /// Irreversibly seal a shared buffer read-only, downgrading every live writable
 /// mapping first. Requires `RIGHT_BUFFER_WRITE`; write access never returns.
 pub fn shared_buffer_seal(slot: u32) -> i64 {
-    unsafe { raw_syscall(SYS_SHARED_BUFFER_SEAL, slot as u64, 0, 0, 0, 0) }
+    transport::shared_buffer_seal(slot)
 }
 
 /// An outstanding loan of a sealed shared-buffer subrange: the slot holding the
-/// receiver-bound `SharedBufferLoan` handle, plus its kernel-assigned
-/// single-return identity.
+/// receiver-bound `SharedBufferLoan` handle, plus its assigned single-return
+/// identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BufferLoan {
     pub slot: u32,
@@ -356,16 +353,7 @@ pub fn shared_buffer_loan(
     offset: u64,
     length: u64,
 ) -> Result<BufferLoan, i64> {
-    let (slot, id) = unsafe {
-        raw_syscall_pair(
-            SYS_SHARED_BUFFER_LOAN,
-            buffer_slot as u64,
-            receiver_slot as u64,
-            offset,
-            length,
-            0,
-        )
-    };
+    let (slot, id) = transport::shared_buffer_loan(buffer_slot, receiver_slot, offset, length);
     if slot < 0 {
         Err(slot)
     } else {
@@ -380,44 +368,25 @@ pub fn shared_buffer_loan(
 /// relative to the loaned region, so the receiver cannot address bytes outside
 /// it even by naming the underlying buffer.
 pub fn shared_buffer_loan_map(loan_slot: u32, base: u64, offset: u64, length: u64) -> i64 {
-    unsafe {
-        raw_syscall(
-            SYS_SHARED_BUFFER_LOAN_MAP,
-            loan_slot as u64,
-            base,
-            offset,
-            length,
-            0,
-        )
-    }
+    transport::shared_buffer_loan_map(loan_slot, base, offset, length)
 }
 
 /// Return a loan as its named receiver, settling it once and releasing the
 /// loan capability. A second return fails: the identity is single-use.
 pub fn shared_buffer_return(loan_slot: u32) -> i64 {
-    unsafe { raw_syscall(SYS_SHARED_BUFFER_RETURN, loan_slot as u64, 0, 0, 0, 0) }
+    transport::shared_buffer_return(loan_slot)
 }
 
 /// Revoke an outstanding loan as its lender, naming it by the source buffer and
-/// the loan's kernel-assigned identity.
+/// the loan's assigned identity.
 pub fn shared_buffer_revoke(buffer_slot: u32, loan_id: u64) -> i64 {
-    unsafe {
-        raw_syscall(
-            SYS_SHARED_BUFFER_REVOKE,
-            buffer_slot as u64,
-            loan_id,
-            0,
-            0,
-            0,
-        )
-    }
+    transport::shared_buffer_revoke(buffer_slot, loan_id)
 }
 
 /// Query a child supervision handle. `Ok(None)` means the child is live; a
 /// completed result consumes the handle slot so it can be reused.
 pub fn supervision_status(slot: u32) -> Result<Option<Termination>, i64> {
-    let (kind, detail) =
-        unsafe { raw_syscall_pair(SYS_SUPERVISION_STATUS, slot as u64, 0, 0, 0, 0) };
+    let (kind, detail) = transport::supervision_status(slot);
     match kind {
         ERR_WOULDBLOCK => Ok(None),
         0 => Ok(Some(Termination::Exit(detail as i64))),
@@ -431,7 +400,7 @@ pub fn supervision_status(slot: u32) -> Result<Option<Termination>, i64> {
 
 /// Releases the capability in `slot`, revoking this task's ownership of it.
 pub fn cap_drop(slot: u32) -> i64 {
-    unsafe { raw_syscall(SYS_CAP_DROP, slot as u64, 0, 0, 0, 0) }
+    transport::cap_drop(slot)
 }
 
 pub const MAX_DIRECTORY_PATH: usize = 48;
@@ -443,16 +412,7 @@ pub fn directory_inspect(
     root: &mut [u8; 32],
     scope: &mut [u8; MAX_DIRECTORY_PATH],
 ) -> Result<usize, i64> {
-    let result = unsafe {
-        raw_syscall(
-            SYS_DIRECTORY_INSPECT,
-            slot as u64,
-            required_rights as u64,
-            root.as_mut_ptr() as u64,
-            scope.as_mut_ptr() as u64,
-            0,
-        )
-    };
+    let result = transport::directory_inspect(slot, required_rights, root, scope);
     if result < 0 {
         Err(result)
     } else {
@@ -462,16 +422,7 @@ pub fn directory_inspect(
 
 /// Derives a capability scoped below `relative`, with a narrow rights mask.
 pub fn directory_derive(slot: u32, relative: &[u8], rights: u32) -> Result<u32, i64> {
-    let result = unsafe {
-        raw_syscall(
-            SYS_DIRECTORY_DERIVE,
-            slot as u64,
-            relative.as_ptr() as u64,
-            relative.len() as u64,
-            rights as u64,
-            0,
-        )
-    };
+    let result = transport::directory_derive(slot, relative, rights);
     if result < 0 {
         Err(result)
     } else {
@@ -482,21 +433,12 @@ pub fn directory_derive(slot: u32, relative: &[u8], rights: u32) -> Result<u32, 
 /// Atomically swaps a directory namespace root after the new snapshot object
 /// has been committed. A stale expected root returns `ERR_WOULDBLOCK`.
 pub fn directory_commit(slot: u32, expected: &[u8; 32], new: &[u8; 32]) -> i64 {
-    unsafe {
-        raw_syscall(
-            SYS_DIRECTORY_COMMIT,
-            slot as u64,
-            expected.as_ptr() as u64,
-            new.as_ptr() as u64,
-            0,
-            0,
-        )
-    }
+    transport::directory_commit(slot, expected, new)
 }
 
 /// Reads one decoded keyboard event through an explicit input capability.
 pub fn input_read(slot: u32) -> Result<Option<InputEvent>, i64> {
-    let (result, encoded) = unsafe { raw_syscall_pair(SYS_INPUT_READ, slot as u64, 0, 0, 0, 0) };
+    let (result, encoded) = transport::input_read(slot);
     if result == ERR_WOULDBLOCK {
         return Ok(None);
     }
@@ -531,108 +473,48 @@ pub fn input_read(slot: u32) -> Result<Option<InputEvent>, i64> {
     }))
 }
 
-/// Writes `bytes` to the kernel debug/serial log. Returns the byte count
-/// written.
+/// Writes `bytes` to the debug/serial log. Returns the byte count written.
 pub fn debug_write(bytes: &[u8]) -> i64 {
-    unsafe {
-        raw_syscall(
-            SYS_DEBUG_WRITE,
-            bytes.as_ptr() as u64,
-            bytes.len() as u64,
-            0,
-            0,
-            0,
-        )
-    }
+    transport::debug_write(bytes)
 }
 
 /// Issues a 64-byte block-protocol request/reply pair against the block
 /// device capability in slot `slot`. A non-negative return means the
 /// transaction was delivered; the block-protocol outcome is in `reply`
-/// (`OFF_REPLY_STATUS`), not in the syscall return value.
+/// (`OFF_REPLY_STATUS`), not in the return value.
 pub fn block_transact(slot: u32, request: &[u8; 64], reply: &mut [u8; 64]) -> i64 {
-    unsafe {
-        raw_syscall(
-            SYS_BLOCK_TRANSACT,
-            slot as u64,
-            request.as_ptr() as u64,
-            reply.as_mut_ptr() as u64,
-            0,
-            0,
-        )
-    }
+    transport::block_transact(slot, request, reply)
 }
 
 /// Issues a 64-byte store-protocol request/reply pair against the object
 /// store capability in slot `slot`. Same delivered-vs-outcome distinction as
 /// [`block_transact`].
 pub fn store_transact(slot: u32, request: &[u8; 64], reply: &mut [u8; 64]) -> i64 {
-    unsafe {
-        raw_syscall(
-            SYS_STORE_TRANSACT,
-            slot as u64,
-            request.as_ptr() as u64,
-            reply.as_mut_ptr() as u64,
-            0,
-            0,
-        )
-    }
+    transport::store_transact(slot, request, reply)
 }
 
 /// Issues a fixed generation-management request/reply pair through the
 /// `GenerationControl` capability in `slot`.
 pub fn generation_transact(slot: u32, request: &[u8; 64], reply: &mut [u8; 64]) -> i64 {
-    unsafe {
-        raw_syscall(
-            SYS_GENERATION_TRANSACT,
-            slot as u64,
-            request.as_ptr() as u64,
-            reply.as_mut_ptr() as u64,
-            0,
-            0,
-        )
-    }
+    transport::generation_transact(slot, request, reply)
 }
 
 /// Confirms the currently running pending generation using the
 /// `GenerationControl` capability in `slot`.
 pub fn health_confirm(slot: u32) -> i64 {
-    unsafe { raw_syscall(SYS_HEALTH_CONFIRM, slot as u64, 0, 0, 0, 0) }
+    transport::health_confirm(slot)
 }
 
 /// Scrubs and reconstructs BootState on the explicitly granted repair target.
 pub fn recovery_reconstruct(generation_control_slot: u32, block_slot: u32, flags: u32) -> i64 {
-    unsafe {
-        raw_syscall(
-            SYS_RECOVERY_RECONSTRUCT,
-            generation_control_slot as u64,
-            block_slot as u64,
-            flags as u64,
-            0,
-            0,
-        )
-    }
+    transport::recovery_reconstruct(generation_control_slot, block_slot, flags)
 }
 
 pub fn generation_receive(receiver_slot: u32, transfer_slot: u32) -> i64 {
-    unsafe {
-        raw_syscall(
-            SYS_GENERATION_RECEIVE,
-            receiver_slot as u64,
-            transfer_slot as u64,
-            0,
-            0,
-            0,
-        )
-    }
+    transport::generation_receive(receiver_slot, transfer_slot)
 }
 
 /// Terminates the current component with an explicit unhealthy status.
 pub fn unhealthy() -> ! {
-    unsafe {
-        raw_syscall(SYS_UNHEALTHY, 0, 0, 0, 0, 0);
-    }
-    loop {
-        core::hint::spin_loop();
-    }
+    transport::unhealthy()
 }
