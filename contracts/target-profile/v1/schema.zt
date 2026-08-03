@@ -64,6 +64,14 @@ abis :: List Named = {
   { constName = "SLIME_X86_64_V1"; value = 1; };
   { constName = "SLIME_AARCH64_V1"; value = 2; };
   { constName = "SLIME_RISCV64_V1"; value = 3; };
+  -- P5.2. A distinct ABI rather than a reuse of `SLIME_AARCH64_V1`, because the
+  -- calling convention genuinely differs: a component here reaches its
+  -- operations by `seL4_Call` on the root service endpoint in its own CSpace,
+  -- not by `svc` into a Slime kernel that reads caller memory by pointer. The
+  -- semantic syscall table is identical -- same numbers, errors, and bounds --
+  -- but how an operation reaches its implementation is exactly what an ABI
+  -- identifier names, and an image built for one cannot run under the other.
+  { constName = "SLIME_AARCH64_SEL4_V1"; value = 4; };
 };
 
 pageProfiles :: List Named = {
@@ -83,6 +91,12 @@ features :: List Named = {
   { constName = "AARCH64_GICV2"; value = 32; };
   { constName = "AARCH64_GENERIC_TIMER"; value = 8; };
   { constName = "RISCV64_BASELINE"; value = 16; };
+  -- P5.2. Names the seL4 kernel itself as a required platform feature: under
+  -- this profile the interrupt controller, timer, and privilege transitions
+  -- belong to seL4, so an image declares that it targets that mechanism rather
+  -- than enumerating GICv2/GICv3 and the generic timer as the custom kernel's
+  -- profiles must.
+  { constName = "AARCH64_SEL4"; value = 64; };
 };
 
 profiles :: List Profile = {
@@ -136,6 +150,34 @@ profiles :: List Profile = {
     componentBaseText = "0x0040_0000";
     cargoTarget = "aarch64-unknown-none";
     qemuBinary = "";
+  };
+  {
+    constName = "AARCH64_SEL4_QEMU_VIRT";
+    name = "aarch64-sel4-qemu-virt";
+    id = 5;
+    architecture = 2;
+    abi = 4;
+    pageProfile = 2;
+    -- AArch64 baseline plus seL4. GICv2/GICv3 and the generic timer are absent
+    -- on purpose: they are seL4's to drive, and admission is equality, so
+    -- naming them would reject every image this profile actually builds.
+    requiredFeatures = 66;
+    elfMachine = 183;
+    relativeRelocation = 1027;
+    pageBytes = 4096;
+    -- No Slime kernel image exists for this profile: seL4 is the kernel, built
+    -- and pinned separately under `sel4/pins.toml`. The bases are retained at
+    -- the table's shared values so the record stays uniform; nothing reads them
+    -- for this profile, and `component_base` is likewise unused because a
+    -- component here is an ordinary seL4 ELF task loaded at its own link
+    -- address rather than re-based onto a fixed load base.
+    kernelPreferredBaseText = "0xFFFF_FFFF_8000_0000";
+    kernelLoadBaseText = "0xFFFF_FFFF_9000_0000";
+    componentBaseText = "0x0040_0000";
+    -- A JSON target specification, resolved relative to the repository root.
+    -- Cargo names its output directory by this path's file stem.
+    cargoTarget = "deps/rust-sel4/support/targets/aarch64-sel4-minimal.json";
+    qemuBinary = "qemu-system-aarch64";
   };
   {
     constName = "RISCV64_QEMU_VIRT";

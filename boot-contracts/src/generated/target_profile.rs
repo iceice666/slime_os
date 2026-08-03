@@ -3,7 +3,7 @@
 
 pub const FORMAT_VERSION: u32 = 1;
 pub const MAX_NAME_BYTES: usize = 32;
-pub const PROFILE_COUNT: usize = 4;
+pub const PROFILE_COUNT: usize = 5;
 
 pub const ARCH_X86_64: u32 = 1;
 pub const ARCH_AARCH64: u32 = 2;
@@ -12,6 +12,7 @@ pub const ARCH_RISCV64: u32 = 3;
 pub const ABI_SLIME_X86_64_V1: u32 = 1;
 pub const ABI_SLIME_AARCH64_V1: u32 = 2;
 pub const ABI_SLIME_RISCV64_V1: u32 = 3;
+pub const ABI_SLIME_AARCH64_SEL4_V1: u32 = 4;
 
 pub const PAGE_PROFILE_X86_64_4K: u32 = 1;
 pub const PAGE_PROFILE_AARCH64_4K: u32 = 2;
@@ -23,10 +24,12 @@ pub const FEATURE_AARCH64_GICV3: u64 = 4;
 pub const FEATURE_AARCH64_GICV2: u64 = 32;
 pub const FEATURE_AARCH64_GENERIC_TIMER: u64 = 8;
 pub const FEATURE_RISCV64_BASELINE: u64 = 16;
+pub const FEATURE_AARCH64_SEL4: u64 = 64;
 
 pub const PROFILE_X86_64_QEMU_VIRTIO: u32 = 1;
 pub const PROFILE_AARCH64_QEMU_VIRT: u32 = 2;
 pub const PROFILE_AARCH64_RPI5: u32 = 3;
+pub const PROFILE_AARCH64_SEL4_QEMU_VIRT: u32 = 5;
 pub const PROFILE_RISCV64_QEMU_VIRT: u32 = 4;
 
 pub const PROFILES: [TargetProfile; PROFILE_COUNT] = [
@@ -65,6 +68,20 @@ pub const PROFILES: [TargetProfile; PROFILE_COUNT] = [
         abi: 2,
         page_profile: 2,
         required_features: 42,
+        elf_machine: 183,
+        relative_relocation: 1027,
+        page_bytes: 4096,
+        kernel_preferred_base: 0xFFFF_FFFF_8000_0000,
+        kernel_load_base: 0xFFFF_FFFF_9000_0000,
+        component_base: 0x0040_0000,
+    },
+    TargetProfile {
+        id: 5,
+        name: "aarch64-sel4-qemu-virt",
+        architecture: 2,
+        abi: 4,
+        page_profile: 2,
+        required_features: 66,
         elf_machine: 183,
         relative_relocation: 1027,
         page_bytes: 4096,

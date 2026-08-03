@@ -206,6 +206,7 @@ ARCH_RISCV64 = 3
 ABI_SLIME_X86_64_V1 = 1
 ABI_SLIME_AARCH64_V1 = 2
 ABI_SLIME_RISCV64_V1 = 3
+ABI_SLIME_AARCH64_SEL4_V1 = 4
 PAGE_PROFILE_X86_64_4K = 1
 PAGE_PROFILE_AARCH64_4K = 2
 PAGE_PROFILE_RISCV64_SV39_4K = 3
@@ -215,9 +216,11 @@ FEATURE_AARCH64_GICV3 = 4
 FEATURE_AARCH64_GICV2 = 32
 FEATURE_AARCH64_GENERIC_TIMER = 8
 FEATURE_RISCV64_BASELINE = 16
+FEATURE_AARCH64_SEL4 = 64
 PROFILE_X86_64_QEMU_VIRTIO = 1
 PROFILE_AARCH64_QEMU_VIRT = 2
 PROFILE_AARCH64_RPI5 = 3
+PROFILE_AARCH64_SEL4_QEMU_VIRT = 5
 PROFILE_RISCV64_QEMU_VIRT = 4
 
 class TargetProfile(typing.NamedTuple):
@@ -287,6 +290,22 @@ TARGET_PROFILES = (
         qemu_binary="",
     ),
     TargetProfile(
+        id=5,
+        name="aarch64-sel4-qemu-virt",
+        architecture=2,
+        abi=4,
+        page_profile=2,
+        required_features=66,
+        elf_machine=183,
+        relative_relocation=1027,
+        page_bytes=4096,
+        kernel_preferred_base=0xFFFF_FFFF_8000_0000,
+        kernel_load_base=0xFFFF_FFFF_9000_0000,
+        component_base=0x0040_0000,
+        cargo_target="deps/rust-sel4/support/targets/aarch64-sel4-minimal.json",
+        qemu_binary="qemu-system-aarch64",
+    ),
+    TargetProfile(
         id=4,
         name="riscv64-qemu-virt",
         architecture=3,
@@ -308,6 +327,9 @@ TARGET_PROFILES_BY_ID = {profile.id: profile for profile in TARGET_PROFILES}
 
 COMPONENT_IMAGE_MAGIC = b"SLIMECM2"
 COMPONENT_IMAGE_LEGACY_MAGIC = b"SLIMECMP"
+COMPONENT_IMAGE_ELF_MAGIC = b"SLIMECME"
+COMPONENT_IMAGE_ELF_VERSION = 2
+COMPONENT_IMAGE_ELF_HEADER_LEN = 56
 COMPONENT_IMAGE_VERSION = 2
 COMPONENT_IMAGE_LEGACY_VERSION = 1
 COMPONENT_IMAGE_LEGACY_HEADER_LEN = 32

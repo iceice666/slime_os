@@ -31,12 +31,14 @@ mod child_vspace;
 mod event;
 mod fault;
 mod generation;
+mod graph;
 mod ipc;
 mod object_allocator;
 mod platform_timer;
 mod shared_buffer;
 mod task;
 mod timer;
+mod transfer_window;
 
 use core::ptr;
 
@@ -68,6 +70,12 @@ macro_rules! fatal {
 }
 
 const GENERATION_BYTES: &[u8] = include_bytes!("../fixtures/generation.bin");
+
+/// The target profile this root task admits executables for. Named rather than
+/// inferred: an image is admitted by equality on every axis the profile
+/// declares, so the profile has to be a stated fact the build can be checked
+/// against, not something derived from whatever happens to be running.
+const TARGET_PROFILE: &str = "aarch64-sel4-qemu-virt";
 
 /// The native child fixture, built for `aarch64-sel4-minimal.json`. Supplied by
 /// the build harness; see `slime-root/child`. `include_bytes!` only guarantees
@@ -223,7 +231,14 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         Ok(generation) => generation,
         Err(error) => fatal!("generation rejected: {error:?}"),
     };
-    let admission = match Admission::admit(&generation) {
+    // The profile this root task runs. Every component payload is admitted
+    // against it before the loader is offered a byte, so an executable built
+    // for another target is refused rather than mapped (roadmap invariant 9).
+    let profile = match boot_contracts::target_profile::TargetProfile::by_name(TARGET_PROFILE) {
+        Ok(profile) => profile,
+        Err(error) => fatal!("target profile {TARGET_PROFILE} unavailable: {error:?}"),
+    };
+    let admission = match Admission::admit(&generation, profile) {
         Ok(admission) => admission,
         Err(error) => fatal!("generation admission rejected: {error:?}"),
     };

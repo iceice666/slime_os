@@ -24,8 +24,8 @@ pub mod wire {
 }
 
 pub use wire::{
-    FORMAT_VERSION, HEADER_LEN, IMAGE_MAGIC, LEGACY_FORMAT_VERSION, LEGACY_HEADER_LEN,
-    LEGACY_IMAGE_MAGIC, MAX_SEGMENTS, SEGMENT_LEN,
+    ELF_FORMAT_VERSION, ELF_HEADER_LEN, ELF_IMAGE_MAGIC, FORMAT_VERSION, HEADER_LEN, IMAGE_MAGIC,
+    LEGACY_FORMAT_VERSION, LEGACY_HEADER_LEN, LEGACY_IMAGE_MAGIC, MAX_SEGMENTS, SEGMENT_LEN,
 };
 
 /// Why a component image's target could not be established.
@@ -51,6 +51,19 @@ pub enum Revision {
     V1,
     /// Carries architecture, ABI, page profile, and required features.
     V2,
+    /// Same qualification header as [`Revision::V2`], but the body is a
+    /// complete native ELF executable rather than a segment table. Used by the
+    /// seL4 target profile, where a component is an ordinary seL4 task loaded
+    /// at its own link addresses.
+    Elf,
+}
+
+impl Revision {
+    /// Whether this revision's payload is a native ELF the caller must load
+    /// with an ELF loader, rather than a Slime segment table.
+    pub const fn carries_elf(self) -> bool {
+        matches!(self, Self::Elf)
+    }
 }
 
 /// Read the revision and declared target qualification from an image header.
@@ -62,15 +75,22 @@ pub fn target(blob: &[u8]) -> Result<(Revision, ImageTarget), ComponentTargetErr
     let version = u32_at(blob, wire::OFF_HEADER_FORMAT_VERSION)?;
     let header_size = u32_at(blob, wire::OFF_HEADER_HEADER_SIZE)? as usize;
     match (magic, version) {
-        (IMAGE_MAGIC, FORMAT_VERSION) => {
+        // The two qualified revisions share one header layout, so they are read
+        // by identical offsets and differ only in which loader owns the body.
+        (IMAGE_MAGIC, FORMAT_VERSION) | (ELF_IMAGE_MAGIC, ELF_FORMAT_VERSION) => {
             if header_size != HEADER_LEN || blob.len() < HEADER_LEN {
                 return Err(ComponentTargetError::Truncated);
             }
             if u16_at(blob, wire::OFF_HEADER_RESERVED)? != 0 {
                 return Err(ComponentTargetError::NonZeroReserved);
             }
+            let revision = if magic == ELF_IMAGE_MAGIC {
+                Revision::Elf
+            } else {
+                Revision::V2
+            };
             Ok((
-                Revision::V2,
+                revision,
                 ImageTarget {
                     profile: u32_at(blob, wire::OFF_HEADER_TARGET_PROFILE)?,
                     architecture: u32_at(blob, wire::OFF_HEADER_ARCHITECTURE)?,
@@ -89,9 +109,29 @@ pub fn target(blob: &[u8]) -> Result<(Revision, ImageTarget), ComponentTargetErr
             }
             Ok((Revision::V1, TargetProfile::legacy_image_target()))
         }
-        (IMAGE_MAGIC | LEGACY_IMAGE_MAGIC, _) => Err(ComponentTargetError::UnsupportedVersion),
+        (IMAGE_MAGIC | LEGACY_IMAGE_MAGIC | ELF_IMAGE_MAGIC, _) => {
+            Err(ComponentTargetError::UnsupportedVersion)
+        }
         _ => Err(ComponentTargetError::BadMagic),
     }
+}
+
+/// The native ELF an [`Revision::Elf`] image carries, after its target has been
+/// admitted for `profile`.
+///
+/// Admission runs first and its failure is returned unchanged, so a wrong-target
+/// image never yields bytes a caller could map — the qualification check is not
+/// something the caller can forget to do before reaching the payload.
+pub fn admit_elf<'a>(
+    blob: &'a [u8],
+    profile: &TargetProfile,
+) -> Result<&'a [u8], ComponentTargetError> {
+    if admit(blob, profile)? != Revision::Elf {
+        return Err(ComponentTargetError::UnsupportedVersion);
+    }
+    blob.get(ELF_HEADER_LEN..)
+        .filter(|elf| !elf.is_empty())
+        .ok_or(ComponentTargetError::Truncated)
 }
 
 /// Admit an image for `profile`, or report the axis that disagrees.
@@ -155,6 +195,24 @@ mod tests {
         bytes
     }
 
+    /// Bytes of the stand-in ELF body the tests below carry.
+    const ELF_BODY: &[u8] = b"\x7fELF-body";
+
+    /// An ELF-revision image: the shared qualification header under the ELF
+    /// magic, followed by `body` standing in for a native executable. Returns a
+    /// fixed-size buffer and its used length, because `boot-contracts` is
+    /// `no_std` without `alloc`.
+    fn elf_image(
+        profile: &TargetProfile,
+        body: &[u8],
+    ) -> ([u8; ELF_HEADER_LEN + ELF_BODY.len()], usize) {
+        let mut bytes = [0u8; ELF_HEADER_LEN + ELF_BODY.len()];
+        bytes[..HEADER_LEN].copy_from_slice(&v2_header(profile));
+        bytes[wire::OFF_HEADER_MAGIC..][..8].copy_from_slice(&ELF_IMAGE_MAGIC.to_le_bytes());
+        bytes[ELF_HEADER_LEN..][..body.len()].copy_from_slice(body);
+        (bytes, ELF_HEADER_LEN + body.len())
+    }
+
     fn v1_header() -> [u8; LEGACY_HEADER_LEN] {
         let mut bytes = [0u8; LEGACY_HEADER_LEN];
         bytes[wire::OFF_HEADER_MAGIC..][..8].copy_from_slice(&LEGACY_IMAGE_MAGIC.to_le_bytes());
@@ -178,6 +236,52 @@ mod tests {
             assert_eq!(declared.required_features, profile.required_features);
             assert_eq!(admit(&header, profile), Ok(Revision::V2));
         }
+    }
+
+    #[test]
+    fn an_elf_image_is_qualified_by_the_same_header_as_v2() {
+        for profile in crate::target_profile::PROFILES.iter() {
+            let (image, len) = elf_image(profile, ELF_BODY);
+            let image = &image[..len];
+            let (revision, declared) = target(image).expect("well-formed header");
+            assert_eq!(revision, Revision::Elf);
+            assert!(revision.carries_elf());
+            // The distinguishing fact: identical offsets yield identical
+            // qualification, so one layout describes both revisions.
+            let (_, from_v2) = target(&v2_header(profile)).expect("well-formed header");
+            assert_eq!(declared, from_v2);
+            assert_eq!(admit(image, profile), Ok(Revision::Elf));
+        }
+    }
+
+    #[test]
+    fn an_elf_payload_is_only_reachable_after_its_target_is_admitted() {
+        let sel4 = TargetProfile::by_name("aarch64-sel4-qemu-virt").expect("declared profile");
+        let (buffer, len) = elf_image(sel4, ELF_BODY);
+        let image = &buffer[..len];
+        assert_eq!(admit_elf(image, sel4), Ok(ELF_BODY));
+
+        // Offered to another profile, the bytes are never handed back: the
+        // qualification failure is returned instead, so a wrong-target image
+        // cannot be mapped by a caller that forgot to check first.
+        let board = TargetProfile::by_name("aarch64-rpi5").expect("declared profile");
+        assert_eq!(
+            admit_elf(image, board),
+            Err(ComponentTargetError::Target(TargetError::ProfileMismatch))
+        );
+
+        // A segment-carrying image is not an ELF image even when its target is
+        // admitted, so the two loaders can never be handed each other's body.
+        assert_eq!(
+            admit_elf(&v2_header(sel4), sel4),
+            Err(ComponentTargetError::UnsupportedVersion)
+        );
+        // A header with no payload has nothing to load.
+        let (empty, empty_len) = elf_image(sel4, b"");
+        assert_eq!(
+            admit_elf(&empty[..empty_len], sel4),
+            Err(ComponentTargetError::Truncated)
+        );
     }
 
     #[test]

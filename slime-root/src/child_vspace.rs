@@ -154,6 +154,11 @@ pub struct ChildVSpace {
     pub vspace: sel4::cap::VSpace,
     pub ipc_buffer_addr: usize,
     pub ipc_buffer: sel4::cap::Granule,
+    /// Where this child's startup transfer window is mapped. The seL4 transport
+    /// stages payloads too large for the fast registers here; see
+    /// [`crate::transfer_window`].
+    pub transfer_window_addr: usize,
+    pub transfer_window: sel4::cap::Granule,
     pub frames_mapped: usize,
     pub tables_mapped: usize,
 }
@@ -220,9 +225,10 @@ pub fn create_child_vspace(
         .asid_pool_assign(vspace)
         .map_err(VSpaceError::AsidAssign)?;
 
-    // The IPC buffer sits in the granule directly above the image, so the
-    // translation tables must cover one page more than the image footprint.
-    let mapped = footprint.start..(footprint.end + GRANULE_SIZE);
+    // The IPC buffer sits in the granule directly above the image, and the
+    // startup transfer window in the granule above that, so the translation
+    // tables must cover two pages more than the image footprint.
+    let mapped = footprint.start..(footprint.end + 2 * GRANULE_SIZE);
     let tables_mapped = map_intermediate_tables(allocator, vspace, &mapped)?;
 
     let mut pages = [EMPTY_PAGE; MAX_CHILD_IMAGE_PAGES];
@@ -273,11 +279,34 @@ pub fn create_child_vspace(
             error,
         })?;
 
+    // The startup transfer window, one granule above the IPC buffer. It is
+    // mapped by the root rather than allocated by the child on purpose: a
+    // component the generation grants no `SharedBufferFactory` — `console` and
+    // every spawned application — could not create one for itself, yet still
+    // needs `recv` to work. Placing it by construction keeps the window a
+    // property of the address space the root built, not an authority the child
+    // had to be given.
+    let transfer_window_addr = ipc_buffer_addr + GRANULE_SIZE;
+    let transfer_window = allocator.allocate_fixed::<sel4::cap_type::Granule>()?.cap();
+    transfer_window
+        .frame_map(
+            vspace,
+            transfer_window_addr,
+            sel4::CapRights::read_write(),
+            sel4::VmAttributes::DEFAULT | sel4::VmAttributes::EXECUTE_NEVER,
+        )
+        .map_err(|error| VSpaceError::FrameMap {
+            vaddr: transfer_window_addr,
+            error,
+        })?;
+
     Ok(ChildVSpace {
         vspace,
         ipc_buffer_addr,
         ipc_buffer,
-        frames_mapped: page_count + 1,
+        transfer_window_addr,
+        transfer_window,
+        frames_mapped: page_count + 2,
         tables_mapped,
     })
 }

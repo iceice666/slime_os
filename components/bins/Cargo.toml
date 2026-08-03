@@ -20,6 +20,12 @@ slime-proto = { path = "../proto" }
 [features]
 default = ["component-runtime"]
 component-runtime = ["dep:slime-rt"]
+# Select the native seL4 transport: operations become `seL4_Call`s on the root
+# service endpoint and `entry!` performs real seL4 task startup. Cannot be
+# inferred from `cfg(target_arch)` — the seL4 target spec reports `aarch64`
+# exactly as the legacy AArch64 target does — so the generation builder passes
+# it explicitly for the seL4 target profile.
+sel4 = ["component-runtime", "slime-rt/sel4"]
 
 [[bin]]
 name = "console"

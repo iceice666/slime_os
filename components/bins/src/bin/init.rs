@@ -234,7 +234,16 @@ fn main() {
         && option_env!("SLIME_POWERBOX_CHECK") != Some("1")
     {
         spawn_or_fail(CONSOLE_SLOT, &CONSOLE_CAPS);
-        spawn_or_fail(DANGO_SLOT, &dango_caps());
+        // A generation that does not declare dango does not get one. The seL4
+        // profile (P5.2) is the first such generation: dango drives the input
+        // and directory planes, which `slime-root` does not mediate, so it is
+        // not in that graph. Guarding on the layout rather than on a build flag
+        // keeps this a fact the generation states — `SLOT_ABSENT` is what the
+        // boot layout emits for a label the profile drops — in the same shape
+        // as the storage-probe guard below.
+        if DANGO_SLOT != SLOT_ABSENT {
+            spawn_or_fail(DANGO_SLOT, &dango_caps());
+        }
         spawn_or_fail(SPAWN_SERVICE_SLOT, &spawn_service_caps());
         if option_env!("SLIME_DANGO_CHECK") != Some("1")
             && option_env!("SLIME_GENERATION_NUMBER") != Some("9")
@@ -255,7 +264,12 @@ fn main() {
             }
         }
     }
-    if option_env!("SLIME_GENERATION_CMD_CHECK") != Some("1") {
+    // As for dango above: the generation-manager drives the generation-management
+    // plane, which the seL4 profile's root task does not mediate, so that
+    // profile's layout leaves this label absent.
+    if option_env!("SLIME_GENERATION_CMD_CHECK") != Some("1")
+        && GENERATION_MANAGER_SLOT != SLOT_ABSENT
+    {
         spawn_or_fail(GENERATION_MANAGER_SLOT, &GENERATION_MANAGER_CAPS);
     }
     if option_env!("SLIME_GENERATION_CMD_CHECK") == Some("1") {

@@ -90,6 +90,9 @@ from boot_contracts import (
     MAX_FABRIC_GRAPH_ROUTES,
     MAX_FABRIC_GRAPH_SCHEMAS,
     COMPONENT_DEFAULT_STACK_BYTES,
+    COMPONENT_IMAGE_ELF_HEADER_LEN,
+    COMPONENT_IMAGE_ELF_MAGIC,
+    COMPONENT_IMAGE_ELF_VERSION,
     COMPONENT_IMAGE_HEADER,
     COMPONENT_IMAGE_KERNEL_ABI,
     COMPONENT_IMAGE_MAGIC,
@@ -164,6 +167,12 @@ from zutai_cli import STDLIB, binary
 from harness import ROOT
 
 SOURCE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "valid.zti"
+# P5.2: the `aarch64-sel4-qemu-virt` graph is a sibling manifest rather than a
+# boot profile of `valid.zti`, because `resolve_boot_profile` narrows by
+# subtraction and naming a component in a new profile would drop it from
+# `default`, changing the frozen product generation. See `sel4.md` beside it.
+SEL4_SOURCE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "sel4.zti"
+SEL4_TARGET_PROFILE = "aarch64-sel4-qemu-virt"
 COMPONENTS_TARGET_DIR = Path(
     os.environ.get("CARGO_TARGET_DIR") or ROOT / "target" / "components"
 )
@@ -334,11 +343,23 @@ def align_up(value: int, alignment: int) -> int:
     return (value + alignment - 1) & ~(alignment - 1)
 
 
+def manifest_source() -> Path:
+    """Which generation manifest this build encodes.
+
+    Selected by the requested target profile rather than by a separate switch,
+    so the target and the graph it declares cannot be chosen independently and
+    then disagree.
+    """
+    if os.environ.get("SLIME_TARGET_PROFILE") == SEL4_TARGET_PROFILE:
+        return SEL4_SOURCE
+    return SOURCE
+
+
 def load_manifest() -> dict:
     environment = os.environ.copy()
     environment["ZUTAI_STDLIB_ROOT"] = str(STDLIB)
     output = subprocess.run(
-        [str(binary()), "json", str(SOURCE)],
+        [str(binary()), "json", str(manifest_source())],
         cwd=ROOT,
         env=environment,
         check=True,
@@ -1539,6 +1560,82 @@ def component_target_dir(root: Path, target_profile: TargetProfile, name: str) -
     return root / target_profile.name / name
 
 
+def component_executable(built: Path, name: str, target_profile: TargetProfile) -> Path:
+    """Where cargo wrote one component's executable.
+
+    The rust-sel4 target specifications set `"exe-suffix": ".elf"`, so a binary
+    named `init` is written as `init.elf`. Resolving it here rather than at each
+    call site keeps the suffix a property of the target, which is what it is.
+    """
+    if is_json_target(target_profile):
+        return built / f"{name}.elf"
+    return built / name
+
+
+def is_json_target(target_profile: TargetProfile) -> bool:
+    """Whether this profile's Cargo target is a JSON specification file.
+
+    A JSON target is not merely a different triple: cargo needs `-Z
+    json-target-spec`, has no prebuilt `core`/`alloc` so it needs `build-std`,
+    names its output directory by the file *stem* rather than the path, and is
+    not matched by the per-triple `rustflags` in `components/.cargo/config.toml`.
+    Each of those is handled below.
+    """
+    return target_profile.cargo_target.endswith(".json")
+
+
+def cargo_target_argument(target_profile: TargetProfile) -> str:
+    """What `--target` receives: an absolute path for a JSON spec, else the
+    triple verbatim."""
+    if is_json_target(target_profile):
+        return str(ROOT / target_profile.cargo_target)
+    return target_profile.cargo_target
+
+
+def cargo_target_directory_name(target_profile: TargetProfile) -> str:
+    """The directory cargo writes artifacts into.
+
+    For a JSON specification this is the file stem, not the path — the single
+    most common way a JSON target silently breaks a build script that assumed
+    the two were the same string.
+    """
+    if is_json_target(target_profile):
+        return Path(target_profile.cargo_target).stem
+    return target_profile.cargo_target
+
+
+def sel4_component_environment(environment: dict[str, str]) -> dict[str, str]:
+    """Add what a `slime-components` build for the seL4 profile needs.
+
+    `slime-rt`'s seL4 transport compiles against the installed libsel4, whose
+    bindings `sel4-sys` generates with bindgen at build time, so the prefix and
+    libclang must both be present and named. The toolchain is pinned by
+    `sel4/pins.toml` because `build-std` requires the matching `rust-src`.
+    Mirrors `scripts/build/build-sel4.py::cargo_environment`, which is the
+    working precedent for building against these pins.
+    """
+    pins_path = ROOT / "sel4" / "pins.toml"
+    if not pins_path.is_file():
+        fail(f"missing pin manifest: {pins_path.relative_to(ROOT)}")
+    import tomllib
+
+    pins = tomllib.loads(pins_path.read_text(encoding="utf-8"))
+    environment["RUSTUP_TOOLCHAIN"] = pins["rust_sel4"]["toolchain"]
+    prefix = ROOT / "build" / "sel4-prefix"
+    if not (prefix / "libsel4" / "include" / "kernel" / "gen_config.json").is_file():
+        fail(
+            f"no installed seL4 prefix at {prefix.relative_to(ROOT)}; "
+            "run `just sel4_qemu_image_check` first"
+        )
+    environment["SEL4_PREFIX"] = str(prefix)
+    if not environment.get("LIBCLANG_PATH"):
+        fail(
+            "LIBCLANG_PATH is unset, so bindgen cannot generate the libsel4 bindings; "
+            "enter the pinned shell with `nix develop` or export LIBCLANG_PATH"
+        )
+    return environment
+
+
 def build_rust_components(
     generation_number: int,
     profile_path: Path,
@@ -1605,16 +1702,100 @@ def build_rust_components(
         target_name = f"generation-{generation_number}"
     target_dir = component_target_dir(COMPONENTS_TARGET_DIR, target_profile, target_name)
     environment["CARGO_TARGET_DIR"] = str(target_dir)
+    command = [
+        "cargo",
+        "build",
+        "--release",
+        "--target",
+        cargo_target_argument(target_profile),
+        "-p",
+        "slime-components",
+    ]
+    if is_json_target(target_profile):
+        # The seL4 transport is a Cargo feature, not something `cfg(target_arch)`
+        # can infer: the seL4 target spec reports `aarch64` exactly as the legacy
+        # AArch64 target does.
+        command += ["--no-default-features", "--features", "sel4"]
+        # Build exactly the binaries this generation declares, rather than every
+        # binary in the crate. The fabric components are compiled against a
+        # generated C8 profile this target has no graph for, so building them
+        # would fail on constants that describe routes the generation does not
+        # declare. Naming the binaries keeps the build's contents equal to the
+        # manifest's, which is the same property the boot layout already has.
+        if components is None:
+            fail("seL4 component builds must name the components to build")
+        for component in sorted(components):
+            command += ["--bin", component]
+        command += [
+            "-Z",
+            "json-target-spec",
+            "-Z",
+            "build-std=core,alloc,compiler_builtins",
+            "-Z",
+            "build-std-features=compiler-builtins-mem",
+        ]
+        # `components/.cargo/config.toml` keys `rustflags` by triple, so a JSON
+        # target inherits none of them. Passing the determinism-relevant ones
+        # explicitly keeps the link reproducible instead of silently dropping
+        # them. `-T` and the load base are deliberately absent: a component here
+        # is an ordinary seL4 ELF task at its own link addresses.
+        environment["RUSTFLAGS"] = " ".join(
+            [
+                "-C link-arg=--build-id=none",
+                f"--remap-path-prefix={ROOT}=.",
+            ]
+        )
+        environment = sel4_component_environment(environment)
     subprocess.run(
-        ["cargo", "build", "--release", "--target", target_profile.cargo_target, "-p", "slime-components"],
+        command,
         cwd=ROOT / "components",
         env=environment,
         check=True,
     )
-    return target_dir / target_profile.cargo_target / "release"
+    return target_dir / cargo_target_directory_name(target_profile) / "release"
+
+
+def elf_component_image(name: str, elf: Path, stack_bytes: int, profile: TargetProfile) -> bytes:
+    """Wrap a native ELF in the target-qualification header (P5.2).
+
+    The seL4 profile carries the executable whole rather than re-basing it onto
+    a fixed component load base: `slime-root` loads it with a real ELF loader at
+    the addresses it links to. The header is byte-identical in layout to the
+    segment-carrying revision, so `boot_contracts::component_image::admit`
+    qualifies both by the same offsets and stage-0-style wrong-target rejection
+    still applies before any byte is mapped. `segment_count` is zero because the
+    body has no Slime segment table, and `entry_offset` is likewise zero: the
+    entry point lives in the ELF header, where the loader reads it.
+    """
+    data = elf.read_bytes()
+    if len(data) < 64 or data[:4] != b"\x7fELF" or data[4] != 2 or data[5] != 1:
+        fail(f"{name}: not a 64-bit little-endian ELF")
+    elf_type, machine = struct.unpack_from("<HH", data, 16)
+    if elf_type != 2 or machine != profile.elf_machine:
+        fail(f"{name}: not a static executable for target {profile.name}")
+    if len(data) > MAX_COMPONENT_IMAGE_BYTES:
+        fail(f"{name}: image exceeds the component image bound")
+    header = COMPONENT_IMAGE_HEADER.pack(
+        COMPONENT_IMAGE_ELF_MAGIC,
+        COMPONENT_IMAGE_ELF_VERSION,
+        COMPONENT_IMAGE_ELF_HEADER_LEN,
+        COMPONENT_IMAGE_KERNEL_ABI,
+        profile.architecture,
+        profile.abi,
+        profile.page_profile,
+        0,
+        0,
+        0,
+        stack_bytes,
+        profile.id,
+        profile.required_features,
+    )
+    return header + data
 
 
 def component_image(name: str, elf: Path, stack_bytes: int, profile: TargetProfile) -> bytes:
+    if is_json_target(profile):
+        return elf_component_image(name, elf, stack_bytes, profile)
     data = elf.read_bytes()
     if len(data) < 64 or data[:4] != b"\x7fELF" or data[4] != 2 or data[5] != 1:
         fail(f"{name}: not a 64-bit little-endian ELF")
@@ -2071,6 +2252,75 @@ def build_bootstore(generations: list[bytes]) -> bytes:
 
 
 
+def build_sel4_generation(output: Path, manifest: dict, target_profile: TargetProfile) -> None:
+    """Build the `aarch64-sel4-qemu-virt` generation (P5.2).
+
+    A separate path from the custom-kernel build below rather than a set of
+    conditionals threaded through it, because three of that build's assumptions
+    simply do not hold here:
+
+    * there is no Slime kernel ELF to convert — seL4 is the kernel, pinned and
+      built by `scripts/build/build-sel4.py`, so `kernelObject` carries a
+      placeholder the root task's closure check counts but never maps;
+    * there is no fabric graph and no interface schema, so the C8 resolution
+      `resolve_fabric_profile` performs has nothing to resolve;
+    * there is no recovery generation, because recovery drives block storage
+      through a plane this cutover does not mediate.
+
+    What is shared is what matters: the same `build_generation` encoder, the
+    same boot-layout resource, the same shared-buffer budget encoding, and the
+    same digest-authenticated object closure. The generation this writes is a
+    generation in exactly the sense every other one is.
+    """
+    profile_path = output / "sel4-fabric-profile.rs"
+    profile_path.write_text("", encoding="utf-8")
+    components = {component["name"] for component in manifest["components"]}
+    built = build_rust_components(
+        manifest["generation"],
+        profile_path,
+        target_profile,
+        candidate_identity=None,
+        components=components,
+    )
+
+    payloads: dict[str, bytes] = {}
+    object_ids = {object_["id"] for object_ in manifest["objects"]}
+    # seL4 is the kernel and is not carried in the generation. The object is
+    # declared because the format requires exactly one and the root task
+    # re-checks that closure; its payload is never mapped, so it names the
+    # pinned image rather than pretending to be one.
+    payloads[manifest["kernelObject"]] = b"SLIME-SEL4-KERNEL-EXTERNAL\0"
+    if "shared-buffer-budget" in object_ids:
+        payloads["shared-buffer-budget"] = build_shared_buffer_budget(
+            manifest.get("sharedBufferBudget", [])
+        )
+    for component in manifest["components"]:
+        stack = component.get("stackBytes", COMPONENT_DEFAULT_STACK_BYTES)
+        if (
+            not isinstance(stack, int)
+            or stack <= 0
+            or stack % target_profile.page_bytes
+            or stack > COMPONENT_MAX_STACK_BYTES
+        ):
+            fail(f"component {component['name']}: invalid stack")
+        if component["object"] not in object_ids:
+            fail(f"component {component['name']}: missing object")
+        payloads[component["object"]] = component_image(
+            component["name"],
+            component_executable(built, component["name"], target_profile),
+            stack,
+            target_profile,
+        )
+
+    generation = build_generation(manifest, payloads, None, manifest["generation"], target_profile)
+    bootstore = build_bootstore([generation])
+    (output / "generation.bin").write_bytes(generation)
+    (output / "generation-1.bin").write_bytes(generation)
+    (output / "boot-store.bin").write_bytes(bootstore)
+    print(f"Built seL4 generation {generation[24:56].hex()} target={target_profile.name}")
+    print(f"Built boot-store.bin ({len(bootstore)} bytes)")
+
+
 def main() -> None:
     if len(sys.argv) != 3:
         fail("usage: build-generation.py <kernel-elf> <output-dir>")
@@ -2091,8 +2341,11 @@ def main() -> None:
     target_profile = resolve_target_profile(manifest.get("target"))
     if manifest["formatVersion"] != 1:
         fail("unsupported source formatVersion")
-    interfaces = validate_interface_schemas(manifest["interfaceSchemas"])
     output.mkdir(parents=True, exist_ok=True)
+    if target_profile.name == SEL4_TARGET_PROFILE:
+        build_sel4_generation(output, manifest, target_profile)
+        return
+    interfaces = validate_interface_schemas(manifest["interfaceSchemas"])
     resolved_profile = resolve_fabric_profile(manifest, interfaces, selected_profile_name())
     # Everything below builds from the profile-resolved manifest (B11): the
     # component set, and therefore the objects, grants, state bindings,

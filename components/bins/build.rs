@@ -1,17 +1,30 @@
+/// Cargo names a JSON target specification by its file stem, so this is what
+/// `TARGET` reads as for `aarch64-sel4-minimal.json`.
+const SEL4_TARGET: &str = "aarch64-sel4-minimal";
+
 fn main() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let target = std::env::var("TARGET").expect("TARGET");
+    // The seL4 target deliberately has no Slime linker script. A component
+    // there is an ordinary seL4 task loaded by `slime-root`'s ELF loader at
+    // whatever address it links to, not an image the retired kernel re-based
+    // onto a fixed component load base. `sel4-runtime-common` also expects the
+    // default layout — its `declare_stack!` and the `_end`-relative IPC buffer
+    // and transfer window all come from rust-lld's own script.
     let linker_script = match target.as_str() {
-        "x86_64-unknown-none" => "component.ld",
-        "aarch64-unknown-none" => "component-aarch64.ld",
+        "x86_64-unknown-none" => Some("component.ld"),
+        "aarch64-unknown-none" => Some("component-aarch64.ld"),
+        SEL4_TARGET => None,
         _ => panic!("unsupported component target {}", target),
     };
-    println!("cargo:rustc-link-arg=-T{manifest_dir}/../{linker_script}");
-    println!("cargo:rerun-if-changed={manifest_dir}/../{linker_script}");
+    if let Some(linker_script) = linker_script {
+        println!("cargo:rustc-link-arg=-T{manifest_dir}/../{linker_script}");
+        println!("cargo:rerun-if-changed={manifest_dir}/../{linker_script}");
+    }
     println!("cargo:rerun-if-env-changed=SLIME_TARGET_PROFILE");
     match std::env::var("SLIME_TARGET_PROFILE") {
         Ok(profile) => println!("cargo:rustc-env=SLIME_TARGET_PROFILE={profile}"),
-        Err(_) if target == "aarch64-unknown-none" => {
+        Err(_) if target == "aarch64-unknown-none" || target == SEL4_TARGET => {
             panic!("SLIME_TARGET_PROFILE is required for AArch64 component builds")
         }
         Err(_) => {}

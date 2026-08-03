@@ -33,6 +33,14 @@ mod wire;
 #[cfg(feature = "sel4")]
 pub use sel4_transport::ROOT_SERVICE_SLOT;
 
+/// Declare the root-mapped startup transfer window. Called once by
+/// [`crate::runtime::start`], before the component body runs, so that `recv`,
+/// `spawn` and `wait` have somewhere to stage payloads.
+#[cfg(feature = "sel4")]
+pub(crate) fn bind_startup_window(base: usize) -> i64 {
+    sel4_transport::bind_startup_window(base)
+}
+
 #[cfg(not(feature = "sel4"))]
 const SYS_YIELD: u64 = 0;
 const SYS_SEND: u64 = 1;

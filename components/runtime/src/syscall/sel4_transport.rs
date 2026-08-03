@@ -108,6 +108,23 @@ pub fn transfer_window_bind(buffer_slot: u32, base: u64, len: usize) -> i64 {
     result
 }
 
+/// Slot value naming the startup window the root mapped rather than a
+/// component-created shared buffer. A component's own buffers are named by
+/// CSpace slots the generation granted, and slot 0 is null in every child
+/// CSpace, so it cannot collide with one.
+pub const STARTUP_WINDOW_SLOT: u32 = 0;
+
+/// Declare the root-mapped startup window at `base` as this component's
+/// transfer window.
+///
+/// Called once from [`crate::runtime::start`] before the component body runs.
+/// Unlike [`transfer_window_bind`], the region is not a shared buffer this
+/// component allocated: `slime-root` mapped it when it built the VSpace, which
+/// is what lets a component with no `SharedBufferFactory` grant use `recv`.
+pub fn bind_startup_window(base: usize) -> i64 {
+    transfer_window_bind(STARTUP_WINDOW_SLOT, base as u64, MIN_TRANSFER_WINDOW)
+}
+
 /// Copies `bytes` and `caps` into the transfer window, returning the transfer
 /// descriptor for `MR1`. Short capability-free payloads stay in the fast
 /// registers and need no window at all. Anything larger fails rather than
