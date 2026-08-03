@@ -80,6 +80,7 @@ features :: List Named = {
   { constName = "X86_64_BASELINE"; value = 1; };
   { constName = "AARCH64_BASELINE"; value = 2; };
   { constName = "AARCH64_GICV3"; value = 4; };
+  { constName = "AARCH64_GICV2"; value = 32; };
   { constName = "AARCH64_GENERIC_TIMER"; value = 8; };
   { constName = "RISCV64_BASELINE"; value = 16; };
 };
@@ -126,7 +127,7 @@ profiles :: List Profile = {
     architecture = 2;
     abi = 2;
     pageProfile = 2;
-    requiredFeatures = 14;
+    requiredFeatures = 42;
     elfMachine = 183;
     relativeRelocation = 1027;
     pageBytes = 4096;

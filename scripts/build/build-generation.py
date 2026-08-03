@@ -1534,6 +1534,11 @@ def build_recovery_index(
     return header + encoded
 
 
+def component_target_dir(root: Path, target_profile: TargetProfile, name: str) -> Path:
+    """Keep profiles sharing one Cargo target from reusing executable outputs."""
+    return root / target_profile.name / name
+
+
 def build_rust_components(
     generation_number: int,
     profile_path: Path,
@@ -1598,7 +1603,7 @@ def build_rust_components(
         target_name = f"generation-{generation_number}-transfer-activate"
     else:
         target_name = f"generation-{generation_number}"
-    target_dir = COMPONENTS_TARGET_DIR / target_name
+    target_dir = component_target_dir(COMPONENTS_TARGET_DIR, target_profile, target_name)
     environment["CARGO_TARGET_DIR"] = str(target_dir)
     subprocess.run(
         ["cargo", "build", "--release", "--target", target_profile.cargo_target, "-p", "slime-components"],

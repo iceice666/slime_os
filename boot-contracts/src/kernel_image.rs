@@ -321,10 +321,7 @@ mod tests {
     extern crate alloc;
 
     use super::*;
-    use crate::target_profile::{
-        ABI_SLIME_AARCH64_V1, ARCH_AARCH64, FEATURE_AARCH64_BASELINE,
-        FEATURE_AARCH64_GENERIC_TIMER, FEATURE_AARCH64_GICV3, PAGE_PROFILE_AARCH64_4K,
-    };
+    use crate::target_profile::{ABI_SLIME_AARCH64_V1, ARCH_AARCH64, PAGE_PROFILE_AARCH64_4K};
 
     #[derive(Debug, Clone, Copy)]
     struct FixtureTarget {
@@ -342,9 +339,7 @@ mod tests {
             architecture: ARCH_AARCH64,
             abi: ABI_SLIME_AARCH64_V1,
             page_profile: PAGE_PROFILE_AARCH64_4K,
-            required_features: FEATURE_AARCH64_BASELINE
-                | FEATURE_AARCH64_GICV3
-                | FEATURE_AARCH64_GENERIC_TIMER,
+            required_features: profile.required_features,
         }
     }
 

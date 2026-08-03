@@ -131,7 +131,11 @@ def main() -> None:
     run(["cargo", "build", "--release", "-p", "slime_os-kernel"], environment, ROOT / "kernel")
     generated = WORK / "generated"
     shutil.rmtree(
-        ROOT / "target" / "components" / "generation-9-transfer-receiver",
+        BUILD_GENERATION.component_target_dir(
+            BUILD_GENERATION.COMPONENTS_TARGET_DIR,
+            BUILD_GENERATION.resolve_target_profile("x86_64-qemu-virtio"),
+            "generation-9-transfer-receiver",
+        ),
         ignore_errors=True,
     )
     run(

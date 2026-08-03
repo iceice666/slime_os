@@ -421,6 +421,13 @@ contracts_check: bootstate_model_check
 architecture_contract_check: contracts_check
     python3 scripts/check/check-architecture-contract.py
 
+# RP1: bind the RP0 DDS runtime and ROS node executable closure to the exact
+# aarch64-rpi5 profile. Uses real generation/release encoders and admission
+# checks to reject x86 and same-ISA QEMU artifacts, prove deterministic RPi5
+# outputs, preserve neutral resource identity, and isolate profile build caches.
+rpi5_artifact_check: architecture_contract_check rpi5_ros2_demo_contract_check
+    python3 scripts/check/check-rpi5-artifacts.py
+
 # P2.1: the first AArch64 boot. Builds a verified aarch64-qemu-virt generation
 # and boots it under the pinned QEMU virt machine and AArch64 UEFI firmware,
 # asserting ordered serial evidence that the kernel reached EL1 with the MMU and

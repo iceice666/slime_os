@@ -64,7 +64,7 @@ The repository contains a bounded, versioned, target-qualified demo contract tha
 
 ## RP1 — Target-qualified build and admission path
 
-**Status:** Not started.
+**Status:** Complete.
 
 **Depends on:** P0 and P1 from [Architecture portability](07-architecture-portability.md).
 

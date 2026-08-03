@@ -160,3 +160,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-02 | [P0 — Architecture, target, and executable-artifact contracts](2026-08-02-p0-architecture-contracts/index.md) | Change | Verified | P0 |
 | 2026-08-02 | [P1 — x86-64 architecture boundary extraction](2026-08-02-p1-x86-boundary-extraction/index.md) | Change | Verified | P1 |
 | 2026-08-03 | [P2.1 — AArch64 firmware handoff, EL1 entry, and translation tables](2026-08-03-p2-1-aarch64-boot/index.md) | Change | Verified | P2.1, P2 |
+| 2026-08-03 | [RP1 — Target-qualified build and admission path](2026-08-03-rp1-target-qualified-artifacts/index.md) | Change | Verified | RP1 |

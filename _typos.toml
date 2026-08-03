@@ -28,3 +28,5 @@ nd = "nd"
 scap = "scap"
 ded = "ded"
 bui = "bui"
+# AArch64 translation-table field name from the Arm architecture.
+Indx = "Indx"

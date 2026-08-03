@@ -20,6 +20,7 @@ pub const PAGE_PROFILE_RISCV64_SV39_4K: u32 = 3;
 pub const FEATURE_X86_64_BASELINE: u64 = 1;
 pub const FEATURE_AARCH64_BASELINE: u64 = 2;
 pub const FEATURE_AARCH64_GICV3: u64 = 4;
+pub const FEATURE_AARCH64_GICV2: u64 = 32;
 pub const FEATURE_AARCH64_GENERIC_TIMER: u64 = 8;
 pub const FEATURE_RISCV64_BASELINE: u64 = 16;
 
@@ -63,7 +64,7 @@ pub const PROFILES: [TargetProfile; PROFILE_COUNT] = [
         architecture: 2,
         abi: 2,
         page_profile: 2,
-        required_features: 14,
+        required_features: 42,
         elf_machine: 183,
         relative_relocation: 1027,
         page_bytes: 4096,

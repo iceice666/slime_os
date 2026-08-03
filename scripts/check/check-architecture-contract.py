@@ -115,7 +115,6 @@ def check_cross_profile_rejection() -> None:
                 left.architecture == right.architecture
                 and left.abi == right.abi
                 and left.page_profile == right.page_profile
-                and left.required_features == right.required_features
             )
             if not same_qualification:
                 continue

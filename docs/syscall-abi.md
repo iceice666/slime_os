@@ -121,6 +121,15 @@ The saved frame holds `x0`–`x30`, `SP_EL0`, `ELR_EL1`, and `SPSR_EL1`. A task
 returns to `EL0t` with the `DAIF` interrupt masks clear, so the generic timer
 preempts it. The auxiliary return is defined for the same calls as on x86-64.
 
+The userspace wrapper treats a syscall as a compiler-visible memory boundary:
+the inline assembly is not `nomem`, so Rust cannot move memory accesses across
+the trap. `svc` may update condition flags; callers must not depend on NZCV
+across a syscall. ABI revision 1 requires the eventual vector/context path to
+preserve all general-purpose registers except `x0` and, for calls with an
+auxiliary result, `x1`; P2.2/P2.3 must implement and observe that behavior.
+SIMD/FP state is not part of ABI revision 1, so components must not depend on
+preserving it until the AArch64 context-switch slice admits that state.
+
 ## RV64 calling convention
 
 The architecture-specific trap instruction is `ecall`. RV64 is deferred until
