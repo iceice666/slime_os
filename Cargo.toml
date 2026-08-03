@@ -6,6 +6,7 @@ members = [
     "components/proto",
     "components/runtime",
     "kernel",
+    "slime-root",
     "stage0",
 ]
 

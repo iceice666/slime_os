@@ -1,0 +1,20 @@
+[package]
+name = "slime-root"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+boot-contracts = { path = "../boot-contracts" }
+sel4 = { path = "../deps/rust-sel4/crates/sel4" }
+sel4-root-task = { path = "../deps/rust-sel4/crates/sel4-root-task" }
+
+# ELF64 reading only: `read_core` plus `elf`, without `std`, `compression`, or
+# any writer. The root task loads AArch64 ELF child images and nothing else.
+[dependencies.object]
+version = "0.38.1"
+default-features = false
+features = ["read_core", "elf"]
+
+[lints]
+workspace = true
