@@ -24,7 +24,28 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: extractions/setup-just@v2
       - run: just fmt_check_all
-      - run: just lint_all
+      # `just lint_all` also runs `lint_sel4_root`, which compiles against an
+      # installed seL4 prefix (libsel4 headers, kernel config) produced by
+      # `just sel4_qemu_image_check`. That needs cmake, ninja, the AArch64 cross
+      # toolchain, libclang, and the pinned QEMU, none of which this runner has;
+      # it runs in the pinned `nix develop` shell instead. The legacy crates are
+      # linted here explicitly so this job never silently narrows.
+      - run: just lint lint_components lint_stage0 lint_boot_contracts
+
+  sel4_pins:
+    name: seL4 pins
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: extractions/setup-just@v2
+      # Static pin validation only: submodule commits and origins, the seL4
+      # release, both Rust toolchain pins, the root target spec bytes, and the
+      # qemu-arm-virt kernel configuration. `--skip-host-tools` drops the
+      # installed-rustup and QEMU-version assertions, which belong to the
+      # machine that actually builds and boots the image.
+      - run: python3 scripts/check/check-sel4-pins.py --skip-host-tools
 
   test_host:
     name: Host tests

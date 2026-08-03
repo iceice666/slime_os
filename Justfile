@@ -2,25 +2,64 @@
 help:
     @just --choose
 
-# === Run Targets ===
+# === seL4 Product Targets ===
+#
+# The product runs on upstream seL4 16.0.0 (`deps/sel4`) with `slime-root` as
+# the dynamic mechanism owner. These three targets are the product path: pins,
+# image, boot. The `legacy_*` targets below still drive the retained custom
+# kernel as a semantic oracle and are removed once parity is signed off.
 
-# Run kernel (dev profile) with serial on stdout.
-run:
+# Verify every exact pin the seL4 product depends on: submodule commits and
+# origins, the seL4 release, the rust-sel4 and workspace Rust toolchains, the
+# root target spec bytes, and the qemu-arm-virt kernel configuration (hypervisor
+# ON, MCS OFF, one node) against `sel4/pins.toml`. Fetches nothing: submodules
+# must already be initialized and the pinned toolchain already installed.
+sel4_pin_check:
+    python3 scripts/check/check-sel4-pins.py
+
+# Configure, build, and install seL4 for qemu-arm-virt, build the root child and
+# root task against the pinned rust-sel4 target specs, build the loader, add the
+# kernel+root payload, and write `build/slime-sel4.identity.json` recording the
+# source, config, ELF, and image digests the boot gate re-checks.
+sel4_qemu_image_check: sel4_pin_check
+    python3 scripts/build/build-sel4.py --skip-pin-check
+
+# Boot the packaged image on the pinned machine (`virt,virtualization=on`,
+# cortex-a53, 1 CPU, 2048 MiB) and require the ordered generation, task, IPC,
+# fault, and ready markers on serial. Rebuilds first so the booted bytes are the
+# ones the identity manifest describes.
+sel4_root_boot_check: sel4_pin_check
+    python3 scripts/check/check-sel4-root-boot.py
+
+# Run the seL4 product image interactively on the pinned QEMU machine.
+run: sel4_qemu_image_check
+    qemu-system-aarch64 -machine virt,virtualization=on -cpu cortex-a53 -smp 1 \
+        -m size=2048M -nographic -serial mon:stdio -kernel build/slime-sel4.elf
+
+run_release: run
+
+# === Legacy Oracle Targets ===
+#
+# The custom kernel is retained only as the semantic oracle for the cutover.
+# Nothing in the product path depends on it; these targets disappear with it.
+
+# Run the legacy custom kernel (dev profile) with serial on stdout.
+legacy_run:
     cd kernel && SLIME_INTERACTIVE=1 cargo run -p slime_os-kernel
 
-# Run kernel in release mode.
-run_release:
+# Run the legacy custom kernel in release mode.
+legacy_run_release:
     cd kernel && SLIME_INTERACTIVE=1 cargo run --release -p slime_os-kernel
 
-# Run with a visible QEMU window (no -display none).
+# Run the legacy kernel with a visible QEMU window (no -display none).
 run_gui:
     cd kernel && SLIME_INTERACTIVE=1 cargo run -p slime_os-kernel
 
-# Run kernel tests under QEMU; optimized code keeps boot-time integrity hashing
-# bounded. The kernel test binaries assert on the booted generation's fabric
-# graph and health policy, so they select the boot profile that declares the
-# verification scaffolding they describe (B11); `product_boot_check` covers the
-# scaffolding-free product boot.
+# Run legacy kernel tests under QEMU; optimized code keeps boot-time integrity
+# hashing bounded. The kernel test binaries assert on the booted generation's
+# fabric graph and health policy, so they select the boot profile that declares
+# the verification scaffolding they describe (B11); `product_boot_check` covers
+# the scaffolding-free legacy product boot.
 test:
     cd kernel && SLIME_FABRIC_PROFILE=test cargo test --release -p slime_os-kernel -- -display none
 
@@ -320,8 +359,19 @@ fmt_boot_contracts:
 fmt_check_boot_contracts:
     cd boot-contracts && cargo fmt -- --check
 
+# The seL4 root task and its child task. Formatting needs no seL4 prefix or
+# cross toolchain, so these run with the default toolchain like every other
+# crate; only compilation needs the rust-sel4 pin.
+fmt_sel4_root:
+    cargo fmt -p slime-root
+    cargo fmt --manifest-path slime-root/child/Cargo.toml
+
+fmt_check_sel4_root:
+    cargo fmt -p slime-root -- --check
+    cargo fmt --manifest-path slime-root/child/Cargo.toml -- --check
+
 # Every crate's format gate, mirroring lint_all.
-fmt_check_all: fmt_check fmt_check_components fmt_check_stage0 fmt_check_boot_contracts
+fmt_check_all: fmt_check fmt_check_components fmt_check_stage0 fmt_check_boot_contracts fmt_check_sel4_root
 
 # Regenerate Rust block protocol bindings from the Zutai schema.
 block_gen:
@@ -492,8 +542,42 @@ lint_stage0:
 lint_boot_contracts:
     cd boot-contracts && cargo clippy --all-features -- -D warnings
 
-# Every crate's clippy gate: kernel, components, stage0, boot-contracts.
-lint_all: lint lint_components lint_stage0 lint_boot_contracts
+# Clippy for the seL4 product crates: the root task, its child, and the
+# seL4-enabled component runtime. Unlike the format gates these compile, so
+# they need the installed seL4 prefix (libsel4 headers and config), the
+# rust-sel4 toolchain pin, the custom target specs, and the child ELF the root
+# task embeds at compile time. `sel4_qemu_image_check` produces both; this gate
+# refuses to run against a missing one rather than silently linting a
+# different configuration.
+lint_sel4_root:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    prefix="$PWD/build/sel4-prefix"
+    if [ ! -f "$prefix/libsel4/include/kernel/gen_config.json" ]; then
+        echo "lint_sel4_root: no installed seL4 prefix at $prefix; run 'just sel4_qemu_image_check' first" >&2
+        exit 1
+    fi
+    child_elf="$PWD/build/sel4-cargo/child/aarch64-sel4-minimal/release/slime-root-child.elf"
+    if [ ! -f "$child_elf" ]; then
+        echo "lint_sel4_root: no root child ELF at $child_elf; run 'just sel4_qemu_image_check' first" >&2
+        exit 1
+    fi
+    toolchain="$(python3 -c "import pathlib,tomllib; print(tomllib.loads(pathlib.Path('sel4/pins.toml').read_text())['rust_sel4']['toolchain'])")"
+    targets="$PWD/deps/rust-sel4/support/targets"
+    export SEL4_PREFIX="$prefix" RUSTUP_TOOLCHAIN="$toolchain" CHILD_ELF="$child_elf"
+    build_std=(-Z json-target-spec -Z build-std=core,alloc,compiler_builtins -Z build-std-features=compiler-builtins-mem)
+    cargo clippy -p slime-root --target "$targets/aarch64-sel4-roottask-minimal.json" \
+        --target-dir build/sel4-cargo/lint-root "${build_std[@]}" -- -D warnings
+    cargo clippy --manifest-path slime-root/child/Cargo.toml -p slime-root-child \
+        --target "$targets/aarch64-sel4-minimal.json" \
+        --target-dir build/sel4-cargo/lint-child "${build_std[@]}" -- -D warnings
+    cd components && cargo clippy -p slime-rt --features sel4 \
+        --target "$targets/aarch64-sel4-minimal.json" \
+        --target-dir ../build/sel4-cargo/lint-runtime "${build_std[@]}" -- -D warnings
+
+# Every crate's clippy gate: kernel, components, stage0, boot-contracts, and
+# the seL4 product crates.
+lint_all: lint lint_components lint_stage0 lint_boot_contracts lint_sel4_root
 
 # Dependency advisories (RUSTSEC), duplicate/wildcard bans, license
 # allowlist, and source pinning. Config in deny.toml.
