@@ -19,7 +19,12 @@
         system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
+          # The retained legacy custom-kernel gates build with this toolchain.
+          # It is not the seL4 toolchain: `deps/rust-sel4` pins its own, and
+          # `sel4/pins.toml` is the single source of truth for that pin.
           rustToolchain = "nightly-2026-05-26";
+          sel4Pins = builtins.fromTOML (builtins.readFile ./sel4/pins.toml);
+          sel4RustToolchain = sel4Pins.rust_sel4.toolchain;
           # Every target any gate builds for. `RUSTUP_TOOLCHAIN` below pins the
           # toolchain by name, which makes rustup ignore the `targets` list in
           # `rust-toolchain.toml` — so this list, not that one, is what a fresh
@@ -34,6 +39,20 @@
           # `pkgs.OVMF` is built for the host, so the AArch64 build has to be
           # named explicitly even when the host is already AArch64.
           aavmf = pkgs.pkgsCross.aarch64-multiplatform.OVMF.fd;
+          # The exact GNU AArch64 cross toolchain the pinned seL4 kernel and
+          # kernel loader are built with (`CROSS_COMPILER_PREFIX`, `CC`).
+          crossCC = pkgs.pkgsCross.aarch64-multiplatform.stdenv.cc;
+          # The seL4 build drives host Python generators (bitfield, invocation,
+          # hardware/DTS) through a bare `python3`.
+          sel4Python = pkgs.python3.withPackages (ps: [
+            ps.jinja2
+            ps.pyyaml
+            ps.lxml
+            ps.ply
+            ps.pyfdt
+            ps.jsonschema
+            ps.setuptools
+          ]);
         in
         {
           default = pkgs.mkShell {
@@ -52,12 +71,29 @@
               cargo-machete
               ruff
               typos
+              # seL4 product build: kernel configure/build, cross compilation,
+              # bindgen, device-tree handling, and the `xmllint` the kernel's
+              # syscall/invocation header generators validate their XML with.
+              cmake
+              ninja
+              dtc
+              libxml2.bin
+              crossCC
+              sel4Python
             ];
 
             OVMF_CODE = "${pkgs.OVMF.fd}/FV/OVMF_CODE.fd";
             OVMF_VARS = "${pkgs.OVMF.fd}/FV/OVMF_VARS.fd";
             AAVMF_CODE = "${aavmf}/FV/AAVMF_CODE.fd";
             AAVMF_VARS = "${aavmf}/FV/AAVMF_VARS.fd";
+
+            # `sel4-sys` generates the libsel4 bindings with bindgen, which
+            # resolves libclang at run time rather than at link time.
+            LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
+            # The prefix `scripts/build/build-sel4.py` passes to CMake and uses
+            # for `CC`; it must name the toolchain the pinned prefix was built
+            # with, since the loader links against those objects.
+            CROSS_COMPILER_PREFIX = crossCC.targetPrefix;
 
             RUSTUP_TOOLCHAIN = rustToolchain;
 
@@ -66,6 +102,14 @@
                 --profile minimal \
                 --target ${nixpkgs.lib.concatStringsSep "," rustTargets} \
                 --component clippy,rustfmt,llvm-tools-preview,rust-src,miri \
+                --no-self-update
+              # The seL4 artifacts build with the rust-sel4 pin from
+              # sel4/pins.toml, not the legacy toolchain above. `-Z build-std`
+              # needs rust-src; the scripts select it per invocation via
+              # RUSTUP_TOOLCHAIN, so it is installed but not made default.
+              rustup toolchain install ${sel4RustToolchain} \
+                --profile minimal \
+                --component rust-src,rustfmt,clippy \
                 --no-self-update
             '';
           };

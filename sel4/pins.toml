@@ -1,0 +1,46 @@
+schema = 1
+
+[sel4]
+repository = "https://github.com/seL4/seL4.git"
+release = "16.0.0"
+commit = "6e7c3b733d296cfd88d5fbf635c96e447a882374"
+
+[rust_sel4]
+repository = "https://github.com/seL4/rust-sel4.git"
+release = "v5.0.0"
+commit = "d441a880938209f661201704dfbee7b91c5aa905"
+toolchain = "nightly-2026-04-04"
+root_target = "deps/rust-sel4/support/targets/aarch64-sel4-roottask-minimal.json"
+root_target_sha256 = "84fcb8cd021b032041f1e2b0c4996cafc8d7aa0f7ba2ae56d5868a313c53956e"
+loader_target = "aarch64-unknown-none"
+
+[qemu_arm_virt]
+platform = "qemu-arm-virt"
+sel4_arch = "aarch64"
+hypervisor = true
+mcs = false
+nodes = 1
+verification_build = false
+debug_build = true
+printing = true
+machine = "virt,virtualization=on"
+cpu = "cortex-a53"
+cpus = 1
+memory_mib = 2048
+qemu_version = "11.0.1"
+# `slime-root`'s timer phase programs the EL1 physical timer directly from
+# EL0 (`slime-root/src/platform_timer.rs`); these grant PL0 access to the
+# physical counter/frequency and physical timer control/compare registers.
+export_pcnt_user = true
+export_ptmr_user = true
+
+# Hashes of the installed seL4 prefix, observed from `just sel4_qemu_image_check`.
+# The build pins the QEMU device-tree dump (`dtb-randomness=off`) and maps the
+# source and build roots to fixed logical prefixes, so these are reproducible
+# across checkouts rather than a one-time snapshot.
+[observed_prefix]
+kernel_sha256 = "2d88b9a4395e71fe8ad9773a5e390616aa476c19f571003ad2ca3d063ff7bbb4"
+kernel_config_sha256 = "e775930bb15fd6d484abcba19620479d997625be531bcb4a5d9c0ec8aed444c4"
+libsel4_config_sha256 = "ccd1c7f73790485f92fadaf954e71f3d68b80a664a96b402e33da5bb57a06825"
+dtb_sha256 = "2c9a92343b95448b8c63785adf728aa94eca4a70f9ff35b36b5a062800c040a8"
+platform_info_sha256 = "9a8eca4b07ddf06130d713ce4e4a7d52944955fc29fa826b5e28c9a318d65f6c"

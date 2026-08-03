@@ -1,4 +1,10 @@
 [toolchain]
+# The retained legacy custom-kernel gates build with this toolchain. The seL4
+# product path does NOT: `slime-root`, its child, and the kernel loader build
+# with the rust-sel4 pin recorded in `sel4/pins.toml` (`[rust_sel4].toolchain`),
+# which the build scripts select per invocation through `RUSTUP_TOOLCHAIN`.
+# `just sel4_pin_check` requires both toolchains to be exact dated nightlies and
+# to be installed by `nix develop`.
 channel = "nightly-2026-05-26"
 # `aarch64-unknown-none` is required by `just x86_portability_check`, which
 # builds the architecture-neutral kernel and component runtime for it to prove
