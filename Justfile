@@ -31,6 +31,18 @@ sel4_qemu_image_check: sel4_pin_check
 sel4_root_boot_check: sel4_pin_check
     python3 scripts/check/check-sel4-root-boot.py
 
+# P5.2: boot the component-graph image, whose root task embeds the
+# `aarch64-sel4-qemu-virt` generation, and require the ordered markers proving
+# that its five native ELF components launch with their declared grants, that
+# the root answers the operation surface they invoke, and that an unsupported
+# operation returns a bounded Slime error with the caller still running.
+#
+# A separate image from `sel4_root_boot_check`'s: the two differ only in which
+# generation the root task embeds, and each gate boots the artifact it asserts
+# about so neither invalidates the other's evidence by being built last.
+sel4_component_graph_check: sel4_pin_check
+    python3 scripts/check/check-sel4-component-graph.py
+
 # Run the seL4 product image interactively on the pinned QEMU machine.
 run: sel4_qemu_image_check
     qemu-system-aarch64 -machine virt,virtualization=on -cpu cortex-a53 -smp 1 \
