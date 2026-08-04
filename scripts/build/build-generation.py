@@ -173,6 +173,20 @@ SOURCE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "valid.zti"
 # `default`, changing the frozen product generation. See `sel4.md` beside it.
 SEL4_SOURCE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "sel4.zti"
 SEL4_TARGET_PROFILE = "aarch64-sel4-qemu-virt"
+# P5.3.1: a second seL4 graph, for the channel plane. It cannot be folded into
+# `sel4.zti` because `init.rs` selects its scenario with `option_env!`, which is
+# resolved at compile time -- one component build cannot serve two gates. Keyed
+# by name rather than by target, because both graphs are built for the same
+# target profile and it is the *graph* that differs. See `sel4-channel.md`.
+SEL4_MANIFESTS = {
+    "sel4": SEL4_SOURCE,
+    "sel4-channel": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-channel.zti",
+}
 COMPONENTS_TARGET_DIR = Path(
     os.environ.get("CARGO_TARGET_DIR") or ROOT / "target" / "components"
 )
@@ -346,12 +360,18 @@ def align_up(value: int, alignment: int) -> int:
 def manifest_source() -> Path:
     """Which generation manifest this build encodes.
 
-    Selected by the requested target profile rather than by a separate switch,
-    so the target and the graph it declares cannot be chosen independently and
-    then disagree.
+    The target profile selects the family, so the target and the graph it
+    declares cannot be chosen independently and then disagree. Within the seL4
+    family `SLIME_SEL4_MANIFEST` names which graph, because P5.3.1 adds a second
+    one built for the same target; absent, it is the P5.2 graph, so every
+    existing caller keeps its behaviour without passing anything.
     """
     if os.environ.get("SLIME_TARGET_PROFILE") == SEL4_TARGET_PROFILE:
-        return SEL4_SOURCE
+        name = os.environ.get("SLIME_SEL4_MANIFEST", "sel4")
+        source = SEL4_MANIFESTS.get(name)
+        if source is None:
+            fail(f"unknown seL4 manifest {name!r}")
+        return source
     return SOURCE
 
 
@@ -1688,12 +1708,29 @@ def build_rust_components(
         environment["SLIME_FABRIC_PROXY_EARLY_EXIT"] = "1"
     else:
         environment.pop("SLIME_FABRIC_PROXY_EARLY_EXIT", None)
+    # P5.3.1. Set by `build_sel4_generation` for the channel graph and popped
+    # for every other build, so which scenario `init.rs` compiles in is decided
+    # by the manifest being built rather than by whatever is in the caller's
+    # shell. Scrubbed here for the same reason every flag above is: an inherited
+    # value would silently change a different generation's components.
+    if environment.get("SLIME_SEL4_CHANNEL_CHECK") == "1":
+        environment["SLIME_SEL4_CHANNEL_CHECK"] = "1"
+    else:
+        environment.pop("SLIME_SEL4_CHANNEL_CHECK", None)
     if recovery:
         environment["SLIME_RECOVERY_IMAGE"] = "1"
     if environment.get("SLIME_GENERATION_CMD_CHECK") == "1" and candidate_identity is not None:
         environment["SLIME_GENERATION_CANDIDATE"] = candidate_identity.hex()
+    # P5.3.1: the two seL4 graphs are both generation 1, so keying only on the
+    # number would give them one Cargo target directory — and since they differ
+    # by a compile-time `option_env!` in `init.rs` rather than by any input
+    # Cargo tracks, the second build would silently reuse the first's `init.elf`
+    # and boot the wrong scenario.
+    sel4_manifest = os.environ.get("SLIME_SEL4_MANIFEST")
     if recovery:
         target_name = "recovery"
+    elif sel4_manifest is not None and sel4_manifest != "sel4":
+        target_name = f"{sel4_manifest}-{generation_number}"
     elif candidate_identity is None and os.environ.get("SLIME_TRANSFER_RECEIVER") == "1":
         target_name = f"generation-{generation_number}-transfer-receiver"
     elif candidate_identity is not None and os.environ.get("SLIME_TRANSFER_ACTIVATE") == "1":
@@ -2274,6 +2311,14 @@ def build_sel4_generation(output: Path, manifest: dict, target_profile: TargetPr
     """
     profile_path = output / "sel4-fabric-profile.rs"
     profile_path.write_text("", encoding="utf-8")
+    # P5.3.1: the channel graph's `init` needs its scenario compiled in, and
+    # `init.rs` selects that with `option_env!`. Set from the manifest being
+    # built rather than inherited, so the flag and the graph cannot disagree;
+    # `build_rust_components` pops it for every other build.
+    if os.environ.get("SLIME_SEL4_MANIFEST") == "sel4-channel":
+        os.environ["SLIME_SEL4_CHANNEL_CHECK"] = "1"
+    else:
+        os.environ.pop("SLIME_SEL4_CHANNEL_CHECK", None)
     components = {component["name"] for component in manifest["components"]}
     built = build_rust_components(
         manifest["generation"],

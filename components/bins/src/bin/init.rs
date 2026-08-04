@@ -206,6 +206,15 @@ fn main() {
     {
         launch_fabric_boot();
     }
+    // P5.3.1. Before the graph-launching block below, because this generation
+    // declares no spawnable executable at all — its two components are both
+    // launched by the root — so init would exit on a failed spawn before ever
+    // reaching a scenario placed after it.
+    if option_env!("SLIME_SEL4_CHANNEL_CHECK") == Some("1") {
+        drive_channel_plane();
+        slime_rt::debug_write(b"[init] channel plane complete\n");
+        slime_rt::exit(0);
+    }
     slime_rt::debug_write(b"[init] launching component graph\n");
     if option_env!("SLIME_TRANSFER_RECEIVER") == Some("1") {
         if slime_rt::generation_receive(TRANSFER_RECEIVER_SLOT, TRANSFER_SOURCE_SLOT) == 0 {
@@ -896,6 +905,137 @@ fn operation_route_identity() -> [u8; 32] {
         &slime_proto::interface_schema::navigation_operation::INTERFACE_IDENTITY,
         boot_contracts::fabric_graph::CONTRACT_KIND_OPERATION,
     )
+}
+
+/// Drive the P5.3.1 channel plane: the operations `slime-root` newly mediates,
+/// each exercised so its outcome is a serial marker rather than an inference.
+///
+/// Only reachable under `SLIME_SEL4_CHANNEL_CHECK`, whose generation is
+/// `contracts/generation/v1/fixtures/sel4-channel.zti`; see the `.md` beside it
+/// for why the two channels are shaped the way they are.
+fn drive_channel_plane() {
+    // The message is deliberately over sixteen bytes. At or below that bound
+    // the transport packs a payload into the fast message registers and the
+    // transfer window is never touched, so a shorter line would leave the whole
+    // staging path — the part that maps a child's window frame into the root —
+    // unexercised.
+    const LINE: &[u8] = b"[console] channel plane carried this line\n";
+    const _: () = assert!(LINE.len() > 16);
+    const _: () = assert!(LINE.len() <= slime_rt::MAX_MSG);
+
+    // Let `console` reach its `recv` first, so the send below lands on a peer
+    // that is genuinely parked in the kernel rather than one that has not run
+    // yet. Both components are runnable from activation and nothing orders
+    // them, so without this the send is a fast-path enqueue to a queue nobody
+    // is waiting on and the wake path is never taken.
+    //
+    // `yield_now` is the whole mechanism a component has for this: it holds no
+    // capability naming `console` and cannot observe another task's state. The
+    // count is a bound, not a timing assumption — the marker the gate asserts
+    // is the root's own `parked` line, so a boot where this proved too few
+    // fails rather than passing with the arm skipped.
+    for _ in 0..PEER_PARK_YIELDS {
+        slime_rt::yield_now();
+    }
+
+    // One send to a component parked in `recv`. `console` is blocked in the
+    // kernel when this lands, because the root holds its reply rather than
+    // answering `ERR_WOULDBLOCK`, so this is the wake path.
+    if slime_rt::send(CONSOLE_SEND_SLOT, LINE, &[]) != slime_rt::ERR_SUCCESS {
+        fail(b"send to console");
+    }
+    slime_rt::debug_write(b"[init] parked receiver sent\n");
+
+    // A capability-carrying send. This slice mediates no transferable logical
+    // resource — loans are P5.3.2 — so the refusal is the designed answer, and
+    // it must arrive as a bounded error with this component still running.
+    if slime_rt::send(CONSOLE_SEND_SLOT, b"caps", &[CONSOLE_SEND_SLOT]) == slime_rt::ERR_SUCCESS {
+        fail(b"capability transfer was permitted");
+    }
+    slime_rt::debug_write(b"[init] capability transfer denied\n");
+
+    // Fill the self-edge past its depth. Nothing drains a queue whose only
+    // reader is this task, so the refusal is deterministic rather than a race
+    // against a peer.
+    let mut queued = 0;
+    let mut refused = false;
+    for _ in 0..(CHANNEL_DEPTH + 1) {
+        match slime_rt::send(SERVICE_SPAWN_SLOT, b"fill", &[]) {
+            slime_rt::ERR_SUCCESS => queued += 1,
+            slime_rt::ERR_WOULDBLOCK => {
+                refused = true;
+                break;
+            }
+            _ => fail(b"unexpected send failure"),
+        }
+    }
+    if !refused || queued != CHANNEL_DEPTH {
+        fail(b"a full queue accepted more than its depth");
+    }
+    slime_rt::debug_write(b"[init] queue full refused\n");
+
+    // A wait on a source that is already ready. The queue above is non-empty,
+    // so this must answer at once; parking here would deadlock this component
+    // against itself, which is exactly what the readiness probe prevents.
+    slime_rt::wait(&[slime_rt::WaitSource::Endpoint(SERVICE_SPAWN_SLOT)]);
+    slime_rt::debug_write(b"[init] ready wait answered\n");
+
+    // Drain what was queued, so the receive path is exercised on a queue this
+    // component filled itself and the counts in the root's marker balance.
+    let mut drained = 0;
+    let mut payload = [0u8; slime_rt::MAX_MSG];
+    let mut caps = [0u64; slime_rt::MAX_CAPS_PER_MSG];
+    while drained < queued {
+        match slime_rt::recv(SERVICE_SPAWN_SLOT, &mut payload, &mut caps) {
+            n if n < 0 => fail(b"drain failed"),
+            n => {
+                if &payload[..n as usize] != b"fill" {
+                    fail(b"drained the wrong bytes");
+                }
+                drained += 1;
+            }
+        }
+    }
+    slime_rt::debug_write(b"[init] queue drained\n");
+
+    // Leave `console` parked on an empty channel before exiting, so its
+    // reply is owed at the moment its peer dies. Without this the send above
+    // is still queued when init exits, console's next `recv` finds it
+    // immediately, and the death-wake path is never taken — the graph drains
+    // either way, so nothing in the transcript would say the arm was skipped.
+    //
+    // The yields let console consume the queued message and block again. As
+    // with the wait before the first send, the count is a bound rather than a
+    // timing assumption: the gate asserts the root's own `woken=1` marker, so a
+    // boot where this proved too few fails instead of quietly passing.
+    for _ in 0..PEER_PARK_YIELDS {
+        slime_rt::yield_now();
+    }
+}
+
+/// Depth of one directed logical channel, mirroring
+/// `slime-root/src/ipc.rs::CHANNEL_CAPACITY`.
+const CHANNEL_DEPTH: usize = 16;
+
+/// The slot init sends to `console` on.
+///
+/// `dango-output` rather than `console-output`, because the boot layout's two
+/// entries describe the two *halves* of a channel and only this one declares
+/// the send side. The root requires an end's rights to be contained in the
+/// rights its layout slot declares, so the half a component holds and the label
+/// it is placed under have to agree.
+const CONSOLE_SEND_SLOT: u32 = DANGO_OUTPUT_SLOT;
+
+/// Yields given up so a peer can reach its first `recv` and park. Generous
+/// against the two operations `console` issues before blocking — a transfer
+/// window bind and the receive itself — while still bounding the wait.
+const PEER_PARK_YIELDS: usize = 64;
+
+fn fail(reason: &[u8]) -> ! {
+    slime_rt::debug_write(b"[init] channel plane fail: ");
+    slime_rt::debug_write(reason);
+    slime_rt::debug_write(b"\n");
+    slime_rt::exit(1)
 }
 
 /// Launch the C7.7 sample plane: two real components exchanging a payload
