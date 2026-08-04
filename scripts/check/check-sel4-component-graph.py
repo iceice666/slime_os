@@ -119,23 +119,28 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     #                   (storage, directory, input, generation management,
     #                   recovery). This is the designed answer.
     #   `unimplemented` the operation IS root-mediated and this slice has no
-    #                   handler for it yet -- `recv`, `send`, `wait`, which are
-    #                   P5.3's channel plane.
+    #                   handler for it yet.
     #
-    # What the five declared components actually reach on this boot path is the
-    # second: none of them invokes an unmediated plane, because init's
-    # `generation_receive` sits behind a transfer flag and echo-agent's
-    # `directory_inspect` behind a capability role only a constructed child
-    # receives. So this gate asserts the bounded-error behaviour on the case it
-    # can observe, and `check_operation_surface` below asserts the unmediated
-    # half statically against `Operation::mediation`. Asserting an
-    # `unsupported` marker here would mean asserting a line this boot never
-    # emits.
-    (
-        "an unanswered operation returns a bounded error and the caller survives",
-        r"SLIME_GRAPH unimplemented operation task=\d+ operation=\d+ "
-        r"result=-4 caller_survives=1",
-    ),
+    # Until P5.3.1 this gate asserted at least one `unimplemented` marker,
+    # because `send`, `recv`, and `wait` had no handler and every declared
+    # component reached one. P5.3.1 implemented them, so this boot no longer
+    # emits that line -- the components now get real answers instead of bounded
+    # errors, which is the point of that slice. Asserting the marker still
+    # appears would be asserting that the channel plane is *missing*.
+    #
+    # Relaxing an assertion in the same change that alters the behaviour it
+    # covered is how evidence gets lost, so the property is re-evidenced rather
+    # than dropped. Four things assert it now, and each names a different half:
+    #
+    #   - the `spawn refused` / `spawn failed slot=N error=-4` pair below is a
+    #     *live* bounded refusal on this boot -- an operation the root declines
+    #     and the caller survives, observed rather than argued;
+    #   - `check_operation_surface` asserts the nine unmediated planes are still
+    #     classified `Unavailable`, statically, against `Operation::mediation`;
+    #   - the terminal marker pins `unimplemented=0` exactly, so an operation
+    #     losing its handler fails this gate rather than passing quietly;
+    #   - FAILURE_MARKERS fails on any fault, panic, or abort, which is what
+    #     "bounded rather than fatal" means.
     ("init ran and drove the graph", r"\[init\] launching component graph"),
     (
         # The negative half of required check 1: authority is resolved from the
@@ -149,9 +154,23 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"\[init\] spawn failed slot=\d+ error=-4",
     ),
     (
+        # `unimplemented=0` is pinned exactly rather than left open: with the
+        # channel plane landed, every operation these five components reach now
+        # has a handler, and an operation losing one would show up here.
         "the graph drained with every window and table reclaimed",
-        r"SLIME_GRAPH served live=0 unsupported=\d+ unimplemented=[1-9]\d* "
+        r"SLIME_GRAPH served live=0 unsupported=0 unimplemented=0 "
         r"buffers=[1-9]\d* windows=0 tables=0",
+    ),
+    (
+        # P5.3.1. The channel plane's own accounting for this graph. `parked=0`
+        # and `queues=0` are the teardown property: no component is still
+        # blocked on a reply the root owes it, and no queue still believes it
+        # has a live peer -- either would be a graph that drained only because
+        # the loop hit its iteration bound. `replies` counts every saved reply
+        # CSlot handed back, so the parking path is shown not to leak.
+        "every channel and held reply was reclaimed",
+        r"SLIME_GRAPH channels served sends=\d+ receives=\d+ parks=\d+ "
+        r"settled=\d+ parked=0 queues=0 replies=\d+",
     ),
 )
 

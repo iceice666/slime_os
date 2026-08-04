@@ -43,6 +43,19 @@ sel4_root_boot_check: sel4_pin_check
 sel4_component_graph_check: sel4_pin_check
     python3 scripts/check/check-sel4-component-graph.py
 
+# P5.3.1: build the channel-plane image, boot it, and require the ordered
+# markers proving that channels are materialized from the generation's declared
+# send/recv grants, that a component parked in `recv` is woken by its peer's
+# send with a payload too large for the fast registers, that the queue-full and
+# capability-transfer refusals are bounded Slime errors, and that every channel
+# and held reply is reclaimed at teardown.
+#
+# A third image, beside `sel4_root_boot_check`'s and
+# `sel4_component_graph_check`'s. All three differ only in which generation the
+# root task embeds, and each gate boots the artifact it asserts about.
+sel4_channel_check: sel4_pin_check
+    python3 scripts/check/check-sel4-channel-plane.py
+
 # Run the seL4 product image interactively on the pinned QEMU machine.
 run: sel4_qemu_image_check
     qemu-system-aarch64 -machine virt,virtualization=on -cpu cortex-a53 -smp 1 \
