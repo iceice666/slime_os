@@ -33,22 +33,31 @@ GRAPH_IMAGE = BUILD_ROOT / "slime-sel4-graph.elf"
 GRAPH_MANIFEST = BUILD_ROOT / "slime-sel4-graph.identity.json"
 CHANNEL_IMAGE = BUILD_ROOT / "slime-sel4-channel.elf"
 CHANNEL_MANIFEST = BUILD_ROOT / "slime-sel4-channel.identity.json"
+LOAN_IMAGE = BUILD_ROOT / "slime-sel4-loan.elf"
+LOAN_MANIFEST = BUILD_ROOT / "slime-sel4-loan.identity.json"
 
 # Which generation the root task embeds. That is the only difference between the
 # images this script builds; see `build_application`.
 FIXTURE_VARIANT = "fixture"
 GRAPH_VARIANT = "graph"
 CHANNEL_VARIANT = "channel"
-VARIANT_MANIFESTS = {GRAPH_VARIANT: "sel4", CHANNEL_VARIANT: "sel4-channel"}
+LOAN_VARIANT = "loan"
+VARIANT_MANIFESTS = {
+    GRAPH_VARIANT: "sel4",
+    CHANNEL_VARIANT: "sel4-channel",
+    LOAN_VARIANT: "sel4-loan",
+}
 VARIANT_TARGET_DIRS = {
     FIXTURE_VARIANT: "root",
     GRAPH_VARIANT: "root-graph",
     CHANNEL_VARIANT: "root-channel",
+    LOAN_VARIANT: "root-loan",
 }
 VARIANT_IMAGES = {
     FIXTURE_VARIANT: (IMAGE, MANIFEST),
     GRAPH_VARIANT: (GRAPH_IMAGE, GRAPH_MANIFEST),
     CHANNEL_VARIANT: (CHANNEL_IMAGE, CHANNEL_MANIFEST),
+    LOAN_VARIANT: (LOAN_IMAGE, LOAN_MANIFEST),
 }
 
 CHILD_MANIFEST = ROOT / "slime-root" / "child" / "Cargo.toml"
@@ -688,15 +697,24 @@ def main() -> None:
             "embed the channel-plane generation (P5.3.1), writing a separate image"
         ),
     )
+    parser.add_argument(
+        "--loan-plane",
+        action="store_true",
+        help="embed the loan-plane generation (P5.3.2), writing a separate image",
+    )
     arguments = parser.parse_args()
-    if arguments.component_graph and arguments.channel_plane:
-        fail("--component-graph and --channel-plane select different generations")
-    if arguments.channel_plane:
-        variant = CHANNEL_VARIANT
-    elif arguments.component_graph:
-        variant = GRAPH_VARIANT
-    else:
-        variant = FIXTURE_VARIANT
+    selected = [
+        variant
+        for variant, chosen in (
+            (GRAPH_VARIANT, arguments.component_graph),
+            (CHANNEL_VARIANT, arguments.channel_plane),
+            (LOAN_VARIANT, arguments.loan_plane),
+        )
+        if chosen
+    ]
+    if len(selected) > 1:
+        fail("--component-graph, --channel-plane, and --loan-plane select different generations")
+    variant = selected[0] if selected else FIXTURE_VARIANT
 
     if Path.cwd().resolve() != ROOT:
         fail(f"run from repository root: {ROOT}")

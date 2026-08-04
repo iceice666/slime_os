@@ -215,6 +215,11 @@ fn main() {
         slime_rt::debug_write(b"[init] channel plane complete\n");
         slime_rt::exit(0);
     }
+    if option_env!("SLIME_SEL4_LOAN_CHECK") == Some("1") {
+        drive_loan_plane();
+        slime_rt::debug_write(b"[init] loan plane complete\n");
+        slime_rt::exit(0);
+    }
     slime_rt::debug_write(b"[init] launching component graph\n");
     if option_env!("SLIME_TRANSFER_RECEIVER") == Some("1") {
         if slime_rt::generation_receive(TRANSFER_RECEIVER_SLOT, TRANSFER_SOURCE_SLOT) == 0 {
@@ -1013,6 +1018,288 @@ fn drive_channel_plane() {
     }
 }
 
+/// Drive the P5.3.2 loan plane, as the lender.
+///
+/// Only reachable under `SLIME_SEL4_LOAN_CHECK`, whose generation is
+/// `contracts/generation/v1/fixtures/sel4-loan.zti`; see the `.md` beside it.
+///
+/// This is `sample-lender`'s shape, and deliberately not `sample-lender`
+/// itself: that component is spawned by init on x86 and receives its peer
+/// through a spawn grant, which this cutover has no mechanism for until P5.3.3.
+/// Init stands in as the lender so the *loan* plane can be exercised without
+/// the *spawn* plane. The receiver is the real `sample-receiver`, unmodified —
+/// which is the point: a component written against the retired kernel's loan
+/// ABI runs unchanged on seL4.
+fn drive_loan_plane() {
+    const PAGE: u64 = 4096;
+    const PAGES: usize = 2;
+    const PAYLOAD_LEN: u64 = PAGES as u64 * PAGE;
+    const BASE: u64 = 0x0000_0009_0000_0000;
+    // The whole point of a loan: a payload the control message cannot carry.
+    const _: () = assert!(PAYLOAD_LEN > slime_rt::MAX_MSG as u64);
+
+    // ---- the four quota ceilings, each at ceiling + 1 ----
+    //
+    // Run before the loan, because a refusal must be a refusal against an
+    // ungrazed ceiling rather than against whatever the loan happened to leave.
+    // The generation declares init 4 pages / 2 buffers / 2 mappings / 1 loan;
+    // every probe below asks for exactly one more than one of those.
+    probe_quota_ceilings(BASE);
+
+    let buffer = match slime_rt::shared_buffer_create(SHARED_BUFFER_FACTORY_SLOT, PAGES, true) {
+        Ok(buffer) => buffer,
+        Err(_) => fail_loan(b"create"),
+    };
+    if slime_rt::shared_buffer_map(buffer.slot, BASE, 0, PAYLOAD_LEN, true) != slime_rt::ERR_SUCCESS
+    {
+        fail_loan(b"writable map");
+    }
+    // SAFETY: the root installed a writable mapping of exactly `PAYLOAD_LEN`
+    // bytes at `BASE`, and it stays mapped until the unmap below.
+    unsafe {
+        let bytes = BASE as *mut u8;
+        for index in 0..PAYLOAD_LEN as usize {
+            bytes.add(index).write_volatile((index % 251) as u8);
+        }
+    }
+    slime_rt::debug_write(b"[init] payload written\n");
+
+    // A loan requires an irreversibly sealed source, so an unsealed one must be
+    // refused. Checked before sealing, because afterwards it is unobservable.
+    if slime_rt::shared_buffer_loan(buffer.slot, RECEIVER_SLOT, 0, PAYLOAD_LEN).is_ok() {
+        fail_loan(b"unsealed region was loanable");
+    }
+    slime_rt::debug_write(b"[init] unsealed loan denied\n");
+
+    if slime_rt::shared_buffer_seal(buffer.slot) != slime_rt::ERR_SUCCESS {
+        fail_loan(b"seal");
+    }
+
+    // How the receiver is named is the exit condition's own words — "a receiver
+    // named by capability" — so the ways of naming one badly are checked before
+    // the way that works. Each must be refused, and each for its own reason.
+    //
+    // A slot holding nothing. `MAX_CAPS - 1` is inside the table's bounds and
+    // this component was granted nothing there, so this is the empty-slot case
+    // rather than an out-of-range one.
+    if slime_rt::shared_buffer_loan(buffer.slot, 63, 0, PAYLOAD_LEN).is_ok() {
+        fail_loan(b"an empty slot named a receiver");
+    }
+    // A slot holding the wrong *kind*. The buffer's own slot is real authority
+    // this component holds — it is the source of the loan — and it still names
+    // no receiver, so the check is on kind rather than on possession.
+    if slime_rt::shared_buffer_loan(buffer.slot, buffer.slot, 0, PAYLOAD_LEN).is_ok() {
+        fail_loan(b"a buffer slot named a receiver");
+    }
+    slime_rt::debug_write(b"[init] unnamed receiver denied\n");
+
+    // A real channel to a real peer, over an edge the generation declared
+    // `transferable = false`. Everything else about this loan would succeed —
+    // the source is sealed, the receiver is a live task at the other end of a
+    // channel this component holds — so the only thing refusing it is the
+    // generation's delegation bit, which is what makes that bit load-bearing
+    // rather than decorative.
+    if slime_rt::shared_buffer_loan(buffer.slot, CONSOLE_SEND_SLOT, 0, PAYLOAD_LEN).is_ok() {
+        fail_loan(b"an undelegated channel carried a loan");
+    }
+    slime_rt::debug_write(b"[init] undelegated loan denied\n");
+
+    let loan = match slime_rt::shared_buffer_loan(buffer.slot, RECEIVER_SLOT, 0, PAYLOAD_LEN) {
+        Ok(loan) => loan,
+        Err(_) => fail_loan(b"loan"),
+    };
+    slime_rt::debug_write(b"[init] loan created\n");
+
+    // The loan ceiling is one. A second loan of the same sealed region is
+    // therefore refused by the quota rather than by anything about the range.
+    if slime_rt::shared_buffer_loan(buffer.slot, RECEIVER_SLOT, 0, PAGE).is_ok() {
+        fail_loan(b"loan quota did not bite");
+    }
+    slime_rt::debug_write(b"[init] loan quota refused\n");
+
+    // Only the descriptor crosses the channel; the payload never enters a
+    // queue. The loan capability rides with it, which is the transfer this
+    // slice adds — and it is the loan, not the buffer, that moves: the receiver
+    // gets a read-only window onto an exact subrange, not the region.
+    let descriptor = sample_descriptor(loan.id, PAYLOAD_LEN);
+    if slime_rt::send(RECEIVER_SLOT, &descriptor, &[loan.slot]) != slime_rt::ERR_SUCCESS {
+        fail_loan(b"send descriptor");
+    }
+    slime_rt::debug_write(b"[init] loan transferred\n");
+
+    // The capability moved, so this component can no longer name it. Naming it
+    // again must be refused: a transfer that left the sender holding the
+    // capability would be a copy, not a move.
+    if slime_rt::shared_buffer_return(loan.slot) == slime_rt::ERR_SUCCESS {
+        fail_loan(b"transferred loan still nameable");
+    }
+    slime_rt::debug_write(b"[init] transferred loan released by sender\n");
+
+    // Wait for the receiver to settle before reclaiming. Not politeness: this
+    // component's own termination would settle every loan it owns, so exiting
+    // early would reclaim the region out from under a receiver that has not
+    // mapped it yet. That retention is the C7.5 property under test.
+    let mut done = [0u8; slime_rt::MAX_MSG];
+    let mut no_caps = [0u64; slime_rt::MAX_CAPS_PER_MSG];
+    loop {
+        match slime_rt::recv(RECEIVER_SLOT, &mut done, &mut no_caps) {
+            slime_rt::ERR_WOULDBLOCK => {
+                slime_rt::wait(&[slime_rt::WaitSource::Endpoint(RECEIVER_SLOT)]);
+            }
+            n if n < 0 => fail_loan(b"await receiver"),
+            _ => break,
+        }
+    }
+    slime_rt::debug_write(b"[init] receiver settled\n");
+
+    // With the loan returned, the creator may reclaim.
+    if slime_rt::shared_buffer_unmap(buffer.slot, BASE) != slime_rt::ERR_SUCCESS {
+        fail_loan(b"unmap");
+    }
+    if slime_rt::shared_buffer_release(buffer.slot) != slime_rt::ERR_SUCCESS {
+        fail_loan(b"release");
+    }
+    if slime_rt::shared_buffer_release(buffer.slot) != slime_rt::ERR_BAD_CAP {
+        fail_loan(b"released buffer still nameable");
+    }
+    slime_rt::debug_write(b"[init] released\n");
+
+    // Let `console` — the third holder, which took no part in any of the above
+    // — prove its own quota is intact. This is the "without disturbing an
+    // unrelated holder" half: init exhausted all four of its own ceilings, and
+    // console's are untouched.
+    if slime_rt::send(
+        CONSOLE_SEND_SLOT,
+        b"[console] unrelated holder intact\n",
+        &[],
+    ) != slime_rt::ERR_SUCCESS
+    {
+        fail_loan(b"notify unrelated holder");
+    }
+    for _ in 0..PEER_PARK_YIELDS {
+        slime_rt::yield_now();
+    }
+
+    // Strand one loan in flight, deliberately.
+    //
+    // Everything above settles cleanly, which leaves one reclamation path
+    // untested: a capability parked between its send and a receive that never
+    // happens. In flight it belongs to no table — this component can no longer
+    // name it and the receiver cannot yet — so neither end's teardown reaches
+    // it, and the root's own transit reclamation is the only thing that can.
+    //
+    // A fault injection found this. With `transit.reclaim` removed the gate
+    // still passed, because no boot had ever left a capability in flight; the
+    // arm was uncovered and looked covered.
+    //
+    // `STRAND_SLOT` is a second channel to `console` that console never reads —
+    // it loops on slot 0 alone. So this send queues and is never collected,
+    // deterministically, rather than racing a peer that might consume it.
+    let stranded = match slime_rt::shared_buffer_create(SHARED_BUFFER_FACTORY_SLOT, 1, true) {
+        Ok(buffer) => buffer,
+        Err(_) => fail_loan(b"strand region"),
+    };
+    if slime_rt::shared_buffer_seal(stranded.slot) != slime_rt::ERR_SUCCESS {
+        fail_loan(b"strand seal");
+    }
+    let stranded_loan = match slime_rt::shared_buffer_loan(stranded.slot, STRAND_SLOT, 0, 4096) {
+        Ok(loan) => loan,
+        Err(_) => fail_loan(b"strand loan"),
+    };
+    if slime_rt::send(STRAND_SLOT, b"stranded", &[stranded_loan.slot]) != slime_rt::ERR_SUCCESS {
+        fail_loan(b"strand send");
+    }
+    slime_rt::debug_write(b"[init] loan stranded in flight\n");
+}
+
+/// Ask for exactly one more than each declared ceiling, and require a refusal.
+///
+/// Each probe is a single operation past one ceiling with the other three
+/// unspent, so a refusal names the class it was aimed at rather than whichever
+/// limit happened to be reached first. The root prints the class it refused on,
+/// which is what the gate asserts — the wire status collapses all four to
+/// `ERR_OUT_OF_MEMORY` by design.
+fn probe_quota_ceilings(base: u64) {
+    const PAGE: u64 = 4096;
+    // Pages: the ceiling is 4, so a single 5-page region can never fit.
+    if slime_rt::shared_buffer_create(SHARED_BUFFER_FACTORY_SLOT, 5, true).is_ok() {
+        fail_loan(b"page quota did not bite");
+    }
+    slime_rt::debug_write(b"[init] page quota refused\n");
+
+    // Buffers: the ceiling is 2. Three single-page regions exceed it while
+    // staying inside the 4-page budget, so it is the buffer count that refuses.
+    let first = match slime_rt::shared_buffer_create(SHARED_BUFFER_FACTORY_SLOT, 1, true) {
+        Ok(buffer) => buffer,
+        Err(_) => fail_loan(b"first probe region"),
+    };
+    let second = match slime_rt::shared_buffer_create(SHARED_BUFFER_FACTORY_SLOT, 1, true) {
+        Ok(buffer) => buffer,
+        Err(_) => fail_loan(b"second probe region"),
+    };
+    if slime_rt::shared_buffer_create(SHARED_BUFFER_FACTORY_SLOT, 1, true).is_ok() {
+        fail_loan(b"buffer quota did not bite");
+    }
+    slime_rt::debug_write(b"[init] buffer quota refused\n");
+
+    // Mappings: the ceiling is 2. Two land, the third is refused — and it is a
+    // mapping of a region already charged, so no page or buffer limit is
+    // involved.
+    for (index, buffer) in [first, second].into_iter().enumerate() {
+        if slime_rt::shared_buffer_map(buffer.slot, base + index as u64 * PAGE, 0, PAGE, true)
+            != slime_rt::ERR_SUCCESS
+        {
+            fail_loan(b"probe mapping");
+        }
+    }
+    if slime_rt::shared_buffer_map(first.slot, base + 2 * PAGE, 0, PAGE, true)
+        == slime_rt::ERR_SUCCESS
+    {
+        fail_loan(b"mapping quota did not bite");
+    }
+    slime_rt::debug_write(b"[init] mapping quota refused\n");
+
+    // Hand every probe resource back, so the loan below runs against ceilings
+    // that are entirely unspent. A probe that left a charge behind would make
+    // the loan's own refusals ambiguous.
+    for (index, buffer) in [first, second].into_iter().enumerate() {
+        if slime_rt::shared_buffer_unmap(buffer.slot, base + index as u64 * PAGE)
+            != slime_rt::ERR_SUCCESS
+        {
+            fail_loan(b"probe unmap");
+        }
+        if slime_rt::shared_buffer_release(buffer.slot) != slime_rt::ERR_SUCCESS {
+            fail_loan(b"probe release");
+        }
+    }
+    slime_rt::debug_write(b"[init] quota probes reclaimed\n");
+}
+
+/// The 64-byte sample descriptor naming this loan, in the wire form
+/// `sample-receiver` validates.
+fn sample_descriptor(loan_id: u64, length: u64) -> [u8; slime_rt::MAX_MSG] {
+    slime_proto::sample_descriptor::WireSampleDescriptor {
+        magic: slime_proto::sample_descriptor::SAMPLE_DESCRIPTOR_MAGIC,
+        version: slime_proto::sample_descriptor::FORMAT_VERSION,
+        flags: slime_proto::sample_descriptor::FLAG_LAST,
+        capability_kind: slime_proto::sample_descriptor::CAPABILITY_KIND_LOAN,
+        loan_id,
+        offset: 0,
+        length,
+        type_identity: slime_proto::interface_schema::telemetry_stream::TYPE_TAG,
+        sequence: 1,
+        reserved: [0; 8],
+    }
+    .encode()
+}
+
+fn fail_loan(reason: &[u8]) -> ! {
+    slime_rt::debug_write(b"[init] loan plane fail: ");
+    slime_rt::debug_write(reason);
+    slime_rt::debug_write(b"\n");
+    slime_rt::exit(1)
+}
+
 /// Depth of one directed logical channel, mirroring
 /// `slime-root/src/ipc.rs::CHANNEL_CAPACITY`.
 const CHANNEL_DEPTH: usize = 16;
@@ -1030,6 +1317,20 @@ const CONSOLE_SEND_SLOT: u32 = DANGO_OUTPUT_SLOT;
 /// against the two operations `console` issues before blocking — a transfer
 /// window bind and the receive itself — while still bounding the wait.
 const PEER_PARK_YIELDS: usize = 64;
+
+/// The channel to `sample-receiver`, which is also how the loan names its
+/// receiver.
+///
+/// One slot for both because the root resolves the loan's receiver as the task
+/// at the other end of this channel — see
+/// `slime-root/src/main.rs::serve_buffer_loan` for why that stands in for the
+/// supervision handle the retired kernel uses, and what replaces it in P5.3.3.
+const RECEIVER_SLOT: u32 = SAMPLE_RECEIVER_SIDE_SLOT;
+
+/// A second channel to `console`, which console never reads: it loops on slot 0
+/// alone. Used to strand one loan in flight deterministically — see
+/// `drive_loan_plane`'s last block for why that path needs covering.
+const STRAND_SLOT: u32 = POWERBOX_CLIENT_SLOT;
 
 fn fail(reason: &[u8]) -> ! {
     slime_rt::debug_write(b"[init] channel plane fail: ");

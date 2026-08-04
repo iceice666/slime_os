@@ -186,6 +186,12 @@ SEL4_MANIFESTS = {
     / "v1"
     / "fixtures"
     / "sel4-channel.zti",
+    "sel4-loan": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-loan.zti",
 }
 COMPONENTS_TARGET_DIR = Path(
     os.environ.get("CARGO_TARGET_DIR") or ROOT / "target" / "components"
@@ -1717,6 +1723,11 @@ def build_rust_components(
         environment["SLIME_SEL4_CHANNEL_CHECK"] = "1"
     else:
         environment.pop("SLIME_SEL4_CHANNEL_CHECK", None)
+    # P5.3.2, on the same rule as the flag above.
+    if environment.get("SLIME_SEL4_LOAN_CHECK") == "1":
+        environment["SLIME_SEL4_LOAN_CHECK"] = "1"
+    else:
+        environment.pop("SLIME_SEL4_LOAN_CHECK", None)
     if recovery:
         environment["SLIME_RECOVERY_IMAGE"] = "1"
     if environment.get("SLIME_GENERATION_CMD_CHECK") == "1" and candidate_identity is not None:
@@ -2315,10 +2326,15 @@ def build_sel4_generation(output: Path, manifest: dict, target_profile: TargetPr
     # `init.rs` selects that with `option_env!`. Set from the manifest being
     # built rather than inherited, so the flag and the graph cannot disagree;
     # `build_rust_components` pops it for every other build.
-    if os.environ.get("SLIME_SEL4_MANIFEST") == "sel4-channel":
-        os.environ["SLIME_SEL4_CHANNEL_CHECK"] = "1"
-    else:
-        os.environ.pop("SLIME_SEL4_CHANNEL_CHECK", None)
+    selected = os.environ.get("SLIME_SEL4_MANIFEST")
+    for manifest_name, flag in (
+        ("sel4-channel", "SLIME_SEL4_CHANNEL_CHECK"),
+        ("sel4-loan", "SLIME_SEL4_LOAN_CHECK"),
+    ):
+        if selected == manifest_name:
+            os.environ[flag] = "1"
+        else:
+            os.environ.pop(flag, None)
     components = {component["name"] for component in manifest["components"]}
     built = build_rust_components(
         manifest["generation"],

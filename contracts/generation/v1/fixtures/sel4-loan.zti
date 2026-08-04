@@ -1,0 +1,81 @@
+{
+  formatVersion = 1;
+  generation = 1;
+  target = "aarch64-sel4-qemu-virt";
+  kernelObject = "sha256:kernel";
+  bootstrapComponent = "init";
+  interfaceSchemas = [];
+
+  objects = [
+    { id = "sha256:kernel"; kind = "kernel"; size = 1048576; };
+    { id = "sha256:init"; kind = "bootstrap"; size = 65536; };
+    { id = "sha256:sample-receiver"; kind = "component"; size = 65536; };
+    { id = "sha256:console"; kind = "component"; size = 65536; };
+    { id = "shared-buffer-budget"; kind = "resource"; size = 4096; };
+    { id = "boot-layout"; kind = "resource"; size = 4096; };
+  ];
+
+  sharedBufferBudget = [
+    { holder = "init"; bytePages = 4; bufferCount = 2; mappingCount = 2; loanCount = 1; };
+    { holder = "sample-receiver"; bytePages = 4; bufferCount = 1; mappingCount = 1; loanCount = 1; };
+    { holder = "console"; bytePages = 2; bufferCount = 1; mappingCount = 1; loanCount = 1; };
+  ];
+
+  components = [
+    {
+      name = "init";
+      object = "sha256:init";
+      role = "init";
+      dependencies = [];
+      spawnBudget = 0;
+      commandProfile = [];
+    };
+    {
+      name = "sample-receiver";
+      object = "sha256:sample-receiver";
+      role = "service";
+      dependencies = ["init";];
+      spawnBudget = 0;
+      commandProfile = [];
+    };
+    {
+      name = "console";
+      object = "sha256:console";
+      role = "service";
+      dependencies = ["init";];
+      spawnBudget = 0;
+      commandProfile = [];
+    };
+  ];
+
+  grants = [
+    {
+      name = "sample-receiver-side";
+      source = "init";
+      target = "sample-receiver";
+      rights = ["send"; "recv";];
+      transferable = true;
+    };
+    {
+      name = "dango-output";
+      source = "init";
+      target = "console";
+      rights = ["recv";];
+      transferable = false;
+    };
+    {
+      name = "powerbox-client";
+      source = "init";
+      target = "console";
+      rights = ["recv";];
+      transferable = true;
+    };
+  ];
+
+  state = [];
+
+  health = {
+    bootAttempts = 3;
+    requiredComponents = ["init"; "sample-receiver"; "console";];
+  };
+}
