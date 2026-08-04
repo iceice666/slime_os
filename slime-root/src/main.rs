@@ -27,6 +27,7 @@
 #![allow(dead_code)]
 
 mod buffer_adapter;
+mod channel;
 mod child_vspace;
 mod event;
 mod fault;
@@ -34,6 +35,7 @@ mod generation;
 mod graph;
 mod ipc;
 mod object_allocator;
+mod parked;
 mod platform_timer;
 mod shared_buffer;
 mod task;
@@ -42,10 +44,12 @@ mod transfer_window;
 
 use core::ptr;
 
-use boot_contracts::generation::Generation;
+use boot_contracts::boot_layout::BootLayout;
+use boot_contracts::generation::{Generation, KIND_RESOURCE};
 use sel4_root_task::root_task;
 
 use buffer_adapter::BufferAdapter;
+use channel::{ChannelTable, LaunchedComponents, SlotCursors, WaitTarget};
 use child_vspace::{ChildImage, GRANULE_SIZE, ScratchPage};
 use event::TaskEpoch;
 use fault::{LifecycleEventKind, SupervisionTable};
@@ -53,6 +57,7 @@ use generation::{Admission, Authority, RIGHT_EXEC, RIGHT_RECV, RIGHT_SEND, inbou
 use graph::GraphTables;
 use ipc::{IpcError, Operation, Response, poll_notification};
 use object_allocator::ObjectAllocator;
+use parked::{ParkReason, ParkedReplies};
 use platform_timer::{PhysicalTimerAdapter, TIMER_IRQ};
 use shared_buffer::{
     BufferHandle, GenerationEpoch, HolderId, HolderQuota, MappingRights, PAGE_SIZE,
@@ -261,7 +266,18 @@ struct BufferPhase {
     unexpected: usize,
 }
 
-#[root_task(stack_size = 256 * 1024, heap_size = 1024 * 128)]
+// The stack must clear the deepest frame the service loop reaches, which is a
+// shared-buffer teardown: `SharedBufferTable::unmap` builds a `TeardownPlan`
+// and an `ActionList` as locals, and both are fixed-size arrays sized for the
+// whole table. At 256 KiB that frame ran off the bottom of the stack and the
+// root task took a VM fault on `FREE_PAGE` — the scratch page `ScratchPage`
+// deliberately leaves unmapped, which is the only reason the overflow was
+// visible rather than silent corruption of whatever `.bss` lay below.
+//
+// This is backlog B3's failure mode a second time, in the same repository, for
+// the same reason: a table sized for the graph, built in a stack frame. The
+// bound is stated here rather than discovered again.
+#[root_task(stack_size = 1024 * 1024, heap_size = 1024 * 128)]
 fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
     let generation = match Generation::decode(GENERATION_BYTES) {
         Ok(generation) => generation,
@@ -792,6 +808,19 @@ static mut ELF_SCRATCH: ElfScratch = ElfScratch {
 
 const _: () = assert!(MAX_COMPONENT_ELF_BYTES >= 64 * 1024);
 
+/// The graph's logical channels, as a static rather than a local.
+///
+/// Every queued message is stored inline, so this table is tens of kilobytes —
+/// far too large to construct in a stack frame. That is backlog B3's failure
+/// exactly: the retired kernel's `SharedBufferTable` was first built on a task
+/// stack, overflowed it silently, and the boot wedged with no diagnostic.
+///
+/// It lands in `.data` rather than `.bss`, because `Option<Message>::None` is
+/// not all-zero — the inline queue slots have no niche, so their `None` is a
+/// non-zero discriminant. That costs image size and nothing else; what matters
+/// is that it is not on the stack.
+static mut CHANNELS: ChannelTable = ChannelTable::new();
+
 impl ElfScratch {
     /// Copy `elf` into the buffer and return it at a guaranteed 8-byte
     /// alignment. Returns the payload's length when it does not fit, so the
@@ -823,6 +852,23 @@ fn launch_component_graph(
     let mut tasks = TaskTable::<MAX_TASKS>::new();
     let mut windows = WindowTable::<MAX_TASKS>::new();
     let mut graph = GraphTables::new();
+    // The channel table holds every queued message inline — sixteen channels of
+    // two sixteen-deep queues of 64-byte messages — so it is tens of kilobytes
+    // and must never be constructed in a stack frame. `const`-initialized into
+    // `.bss` and taken by reference here, which is the fix backlog B3 records
+    // for the identical overflow in the retired kernel's `SharedBufferTable`:
+    // there the table was published through a `LazyLock` and first built on a
+    // 32 KiB task stack, overflowing it silently so the boot simply wedged.
+    //
+    // SAFETY: the root task is single-threaded and this is the only reference
+    // taken to `CHANNELS`. It is held for the rest of this function, which does
+    // not return until the graph is served.
+    let channels = unsafe { &mut *ptr::addr_of_mut!(CHANNELS) };
+    // Which component index each task came from, and how many executable slots
+    // it already holds. Both are needed after the staging loop, by the channel
+    // materialization that turns declared send/recv grants into queues.
+    let mut launched_components = LaunchedComponents::new();
+    let mut cursors = SlotCursors::new();
     let mut launched = 0;
     // The generation format packs object payloads without padding, so an ELF's
     // address inside the blob is whatever the preceding objects left it at,
@@ -905,6 +951,7 @@ fn launch_component_graph(
             id,
             task.vspace.transfer_window_addr,
             task.vspace.transfer_window,
+            task.vspace.transfer_window_alias,
         ) {
             fatal!("SLIME_GRAPH FAIL window declaration rejected: {error:?}")
         }
@@ -948,6 +995,12 @@ fn launch_component_graph(
                 )
             }
         }
+        if let Err(error) = launched_components.record(plan.component, id) {
+            fatal!("SLIME_GRAPH FAIL component index unrecorded: {error:?}")
+        }
+        if let Err(error) = cursors.declare(id, executables) {
+            fatal!("SLIME_GRAPH FAIL slot cursor unavailable: {error:?}")
+        }
         sel4::debug_println!(
             "SLIME_GRAPH staged task={} component={} grants={} executables={executables} window={:#x} frames={} tables={} entry={:#x}",
             id.0,
@@ -967,6 +1020,33 @@ fn launch_component_graph(
         admission.slime_component_images,
         admission.wrong_target_images,
         admission.unrecognized_images,
+    );
+
+    // Turn the generation's declared send/recv grants into root-owned queues,
+    // before any task runs. A component's first `recv` therefore finds either a
+    // channel the generation declared for it or nothing at all — never a
+    // half-built graph, and never a channel it was not granted.
+    let layout = boot_layout_resource(generation);
+    let bootstrap = launched_components.task_for(admission.bootstrap);
+    let materialized = match channel::materialize(
+        generation,
+        layout.as_ref(),
+        bootstrap,
+        &launched_components,
+        channels,
+        &mut graph,
+        &mut cursors,
+    ) {
+        Ok(report) => report,
+        Err(error) => fatal!("SLIME_GRAPH FAIL channel materialization rejected: {error:?}"),
+    };
+    sel4::debug_println!(
+        "SLIME_GRAPH channels grants={} channels={} queues={} slots={} unplaced={}",
+        materialized.grants,
+        materialized.channels,
+        materialized.queues,
+        materialized.slots,
+        materialized.unplaced,
     );
 
     // Every allocation for every component has succeeded, so activation is
@@ -1004,9 +1084,32 @@ fn launch_component_graph(
         &mut tasks,
         &mut windows,
         &mut graph,
+        channels,
         &mut buffers,
         allocator,
+        scratch,
     );
+}
+
+/// Decode the generation's boot-layout resource, if it carries one.
+///
+/// The layout is what numbers the bootstrap component's capability slots, and
+/// `init.rs` compiles against constants generated from the same table, so the
+/// slot a component addresses and the slot the root fills are one number. A
+/// generation without the resource is not an error here — only a graph whose
+/// bootstrap component holds a declared channel needs it, and
+/// `channel::materialize` reports that case as `UnlaidSlot` rather than
+/// guessing a number.
+///
+/// A malformed resource *is* an error, but it is not this function's to raise:
+/// returning `None` lets a graph that never consults the layout boot, and one
+/// that does fails at the point of use with the channel it could not place.
+fn boot_layout_resource<'a>(generation: &Generation<'a>) -> Option<BootLayout<'a>> {
+    (0..generation.object_count())
+        .filter_map(|index| generation.object(index).ok())
+        .filter(|object| object.kind == KIND_RESOURCE)
+        .find_map(|object| BootLayout::decode(object.bytes).ok())
+        .filter(|layout| layout.generation_number() == generation.number)
 }
 
 /// Iterations the graph service loop will run before declaring the graph wedged.
@@ -1030,18 +1133,32 @@ fn serve_component_graph(
     tasks: &mut TaskTable<MAX_TASKS>,
     windows: &mut WindowTable<MAX_TASKS>,
     graph: &mut GraphTables,
+    channels: &mut ChannelTable,
     buffers: &mut SharedBufferTable,
     allocator: &mut ObjectAllocator,
+    scratch: &ScratchPage,
 ) {
     let mut live = tasks.len();
     let mut unsupported = 0;
     let mut unimplemented = 0;
     let mut buffers_served = 0;
+    let mut sends = 0;
+    let mut receives = 0;
+    let mut parks = 0;
+    let mut peer_deaths = 0;
+    let mut parked = ParkedReplies::new();
     for _ in 0..MAX_GRAPH_ITERATIONS {
         if live == 0 {
             break;
         }
-        let (info, badge) = endpoint.recv(());
+        // Through `recv_request` rather than a hand-rolled register read, so the
+        // bound `graph.rs` documents is the bound the loop enforces: a message
+        // longer than the fast registers, or one carrying real seL4 extra-caps,
+        // is refused here instead of being silently truncated. Slime capability
+        // transfer is by logical slot number in the payload; the transport never
+        // moves a seL4 capability, and this is what makes that checkable.
+        let reception = ipc::recv_request(endpoint);
+        let (info, badge) = (reception.info, reception.badge);
         let Some((id, arrival)) = TaskId::from_badge(badge) else {
             sel4::debug_println!("SLIME_GRAPH unbadged arrival badge={badge:#x} rejected");
             ipc::reply(Response::error(IpcError::InvalidOperation));
@@ -1053,37 +1170,48 @@ fn serve_component_graph(
             continue;
         }
         if arrival == Arrival::Fault {
-            let detail = match fault::decode_fault(&info) {
-                Ok(record) => record,
-                Err(error) => {
-                    sel4::debug_println!(
-                        "SLIME_GRAPH fault undecodable task={} error={error:?}",
-                        id.0
-                    );
-                    continue;
-                }
-            };
-            sel4::debug_println!(
-                "SLIME_GRAPH component fault task={} kind={:?} address={:?}",
-                id.0,
-                detail.kind,
-                detail.address,
-            );
+            // A fault the root cannot decode is still a fault: the thread is
+            // stopped in the kernel and will never run again. Continuing without
+            // tearing it down would leave `live` counting a task that can never
+            // exit, so the loop would spin to its iteration bound and the graph
+            // would look wedged rather than faulted.
+            match fault::decode_fault(&info) {
+                Ok(detail) => sel4::debug_println!(
+                    "SLIME_GRAPH component fault task={} kind={:?} address={:?}",
+                    id.0,
+                    detail.kind,
+                    detail.address,
+                ),
+                Err(error) => sel4::debug_println!(
+                    "SLIME_GRAPH fault undecodable task={} error={error:?}",
+                    id.0
+                ),
+            }
             if let Some(task) = tasks.get(id) {
                 let _ = task.suspend();
             }
+            // A faulted task is as dead as an exited one to everything holding a
+            // channel to it, and its authority and window are as reclaimable.
+            // The two paths do the same teardown for the same reason: a peer
+            // blocked on a crashed producer would otherwise wait forever, and a
+            // table left behind would misreport the terminal marker.
+            reclaim_dead_task(
+                channels,
+                &mut parked,
+                windows,
+                graph,
+                scratch,
+                id,
+                &mut peer_deaths,
+            );
+            graph.release(id);
+            windows.release(id);
             live -= 1;
             continue;
         }
 
-        let words = sel4::with_ipc_buffer(|buffer| {
-            let mut words = [0 as sel4::Word; ipc::FAST_MESSAGE_REGISTERS];
-            let len = info.length().min(ipc::FAST_MESSAGE_REGISTERS);
-            words[..len].copy_from_slice(&buffer.msg_regs()[..len]);
-            words
-        });
-        let operation = match Operation::from_label(info.label()) {
-            Ok(operation) => operation,
+        let request = match reception.request {
+            Ok(request) => request,
             Err(error) => {
                 sel4::debug_println!(
                     "SLIME_GRAPH request rejected task={} label={} error={error:?}",
@@ -1094,6 +1222,30 @@ fn serve_component_graph(
                 continue;
             }
         };
+        let (operation, words) = (request.operation, request.mrs);
+
+        // Every operation that can block is answered through a reply authority
+        // saved out of the implicit slot *before* anything else runs, because
+        // the implicit slot is transient and the next `recv` overwrites it. A
+        // save the operation turns out not to need is answered over and
+        // released on the same call, so the non-blocking path costs one CSlot
+        // that is handed straight back rather than leaking.
+        let saved = if parkable(operation) {
+            match parked.save(allocator, id) {
+                Ok(saved) => Some(saved),
+                Err(error) => {
+                    sel4::debug_println!(
+                        "SLIME_GRAPH reply authority unavailable task={} error={error:?}",
+                        id.0
+                    );
+                    ipc::reply(Response::error(error));
+                    continue;
+                }
+            }
+        } else {
+            None
+        };
+
         match operation {
             // The startup declaration of the window the loader already mapped.
             // Checked against that mapping rather than accepted on the caller's
@@ -1128,6 +1280,15 @@ fn serve_component_graph(
                 if let Some(task) = tasks.get(id) {
                     let _ = task.suspend();
                 }
+                reclaim_dead_task(
+                    channels,
+                    &mut parked,
+                    windows,
+                    graph,
+                    scratch,
+                    id,
+                    &mut peer_deaths,
+                );
                 graph.release(id);
                 windows.release(id);
                 live -= 1;
@@ -1234,6 +1395,93 @@ fn serve_component_graph(
                 );
                 ipc::reply(response);
             }
+            // The channel plane. A slot resolves through the caller's own table
+            // with the right the operation needs, so a component can only send
+            // on a channel it was granted `send` over and only receive on one it
+            // was granted `recv` over — and an ungranted slot is refused
+            // identically to an underpowered one, so the table cannot be probed.
+            Operation::Send => {
+                let saved = saved.expect("send is parkable");
+                let response = serve_send(
+                    channels,
+                    graph,
+                    windows,
+                    &mut parked,
+                    scratch,
+                    id,
+                    &words,
+                    &mut sends,
+                    &mut receives,
+                );
+                parked.answer_saved(saved, response);
+            }
+            Operation::Recv => {
+                let saved = saved.expect("recv is parkable");
+                match serve_recv(channels, graph, windows, scratch, id, &words, &mut receives) {
+                    Ok(response) => parked.answer_saved(saved, response),
+                    // Nothing queued and the peer is alive. Hold the reply
+                    // rather than answering `WouldBlock`: the component is
+                    // blocked in a call either way, and answering would make it
+                    // spin through `wait` and burn the loop's iteration bound.
+                    Err(channel) => {
+                        if let Err(error) = channels.register_wait(id, WaitTarget::Receive(channel))
+                        {
+                            parked.answer_saved(saved, Response::error(error));
+                            continue;
+                        }
+                        match parked.commit(saved, ParkReason::Receive { channel }) {
+                            Ok(()) => {
+                                parks += 1;
+                                sel4::debug_println!(
+                                    "SLIME_GRAPH parked task={} channel={channel} reason=recv",
+                                    id.0,
+                                );
+                            }
+                            // The caller is blocked in a call, so a refused
+                            // park still owes it an answer — the bounded error
+                            // that says the receive did not happen. Dropping
+                            // the save here would hang it silently.
+                            Err((saved, error)) => {
+                                channels.clear_waits(id);
+                                sel4::debug_println!(
+                                    "SLIME_GRAPH park refused task={} error={error:?}",
+                                    id.0
+                                );
+                                parked.answer_saved(saved, Response::error(error));
+                            }
+                        }
+                    }
+                }
+            }
+            Operation::Wait => {
+                let saved = saved.expect("wait is parkable");
+                match serve_wait(channels, graph, windows, scratch, id, &words) {
+                    // A source was already ready, so the wait is answered at
+                    // once and the caller re-polls, exactly as `slime_rt::wait`
+                    // documents.
+                    Ok(true) => parked.answer_saved(saved, Response::success(0, 0)),
+                    Ok(false) => match parked.commit(saved, ParkReason::Wait) {
+                        Ok(()) => {
+                            parks += 1;
+                            sel4::debug_println!("SLIME_GRAPH parked task={} reason=wait", id.0);
+                        }
+                        // As for `recv` above: a refused park must still answer
+                        // the blocked caller.
+                        Err((saved, error)) => {
+                            channels.clear_waits(id);
+                            sel4::debug_println!(
+                                "SLIME_GRAPH park refused task={} error={error:?}",
+                                id.0
+                            );
+                            parked.answer_saved(saved, Response::error(error));
+                        }
+                    },
+                    Err(error) => {
+                        channels.clear_waits(id);
+                        parked.answer_saved(saved, Response::error(error));
+                    }
+                }
+            }
             // Every other label resolves to a bounded answer, but the two
             // reasons an operation goes unanswered are kept apart.
             //
@@ -1246,8 +1494,9 @@ fn serve_component_graph(
             // `None` means the operation *is* root-mediated and this dispatcher
             // simply has no handler for it yet. Collapsing the two would report
             // a gap in this slice as a property of the cutover, so it is
-            // counted and named separately — `recv`, `send`, and `wait` are the
-            // live examples, and they are P5.3's channel plane.
+            // counted and named separately — the loan plane, `spawn`'s child
+            // construction, and supervision are the live examples, and they are
+            // P5.3.2 and P5.3.3's work.
             other => {
                 let response = match other.unmediated_response() {
                     Some(response) => {
@@ -1280,6 +1529,364 @@ fn serve_component_graph(
         windows.len(),
         graph.len(),
     );
+    // The channel plane's own accounting, kept on its own line so P5.2's
+    // terminal marker keeps the exact shape its gate already asserts.
+    //
+    // `parked=0` and `queues=0` together are what make teardown complete: no
+    // task is still blocked on a reply the root owes it, and no queue still
+    // believes it has a live peer. `replies` is every saved CSlot handed back,
+    // which is what shows the save path is not a leak.
+    sel4::debug_println!(
+        "SLIME_GRAPH channels served sends={sends} receives={receives} parks={parks} settled={peer_deaths} parked={} queues={} replies={}",
+        parked.len(),
+        channels.live_queues(),
+        parked.recycled(),
+    );
+}
+
+/// Whether this operation may end with the caller parked, and so needs its
+/// reply authority saved before anything else runs.
+///
+/// `send` is included even though it never parks: it can still fail after the
+/// window read, and answering a caller whose implicit reply slot is intact
+/// while other operations answer over saved capabilities would make the reply
+/// path depend on which arm ran. One rule for the whole channel plane is easier
+/// to hold correct than three.
+const fn parkable(operation: Operation) -> bool {
+    matches!(
+        operation,
+        Operation::Send | Operation::Recv | Operation::Wait
+    )
+}
+
+/// Resolve a slot through the caller's own table to the channel it names,
+/// requiring `rights`.
+fn resolve_channel(
+    graph: &GraphTables,
+    id: TaskId,
+    slot: u32,
+    rights: u64,
+) -> Result<ipc::ChannelKey, IpcError> {
+    let table = graph.get(id).ok_or(IpcError::InvalidOperation)?;
+    match table.resolve(slot, rights)?.resource {
+        graph::Resource::Endpoint { channel } => Ok(channel),
+        // A slot the task holds but that names something else — an executable,
+        // a factory, a buffer — is refused exactly as an ungranted one is.
+        _ => Err(IpcError::InvalidOperation),
+    }
+}
+
+/// Enqueue one message onto the channel the caller named.
+///
+/// Capability transfer is refused rather than performed: this slice has no
+/// transferable logical resource, since loans arrive in P5.3.2. Implementing
+/// the move now would be code no caller exercises, so the bound is stated and
+/// observed instead of assumed.
+#[allow(clippy::too_many_arguments)]
+fn serve_send(
+    channels: &mut ChannelTable,
+    graph: &GraphTables,
+    windows: &WindowTable<MAX_TASKS>,
+    parked: &mut ParkedReplies,
+    scratch: &ScratchPage,
+    id: TaskId,
+    words: &[sel4::Word; ipc::FAST_MESSAGE_REGISTERS],
+    served: &mut usize,
+    woken_receives: &mut usize,
+) -> Response {
+    let channel = match resolve_channel(graph, id, words[0] as u32, RIGHT_SEND) {
+        Ok(channel) => channel,
+        Err(error) => return Response::error(error),
+    };
+    let frame = match transfer_window::read_staged(windows.bound(id), words[1], words, scratch) {
+        Ok(frame) => frame,
+        Err(error) => return Response::error(error),
+    };
+    if frame.cap_count() != 0 {
+        sel4::debug_println!(
+            "SLIME_GRAPH capability transfer refused task={} channel={channel} caps={}",
+            id.0,
+            frame.cap_count(),
+        );
+        return Response::error(IpcError::UnsupportedCapabilityTransfer);
+    }
+    let message = match ipc::Message::new(frame.bytes(), &[]) {
+        Ok(message) => message,
+        Err(error) => return Response::error(error),
+    };
+    let len = message.len();
+    let Some(queue) = channels.send_queue_mut(channel, id) else {
+        return Response::error(IpcError::InvalidOperation);
+    };
+    // Preflight and commit are one atomic step over a queue whose revision has
+    // not moved, so a refused send enqueues nothing.
+    let wake = match ipc::send_atomic(queue, message, &mut RefuseCapabilityTransfer) {
+        Ok(wake) => wake,
+        Err(error) => return Response::error(error),
+    };
+    *served += 1;
+    sel4::debug_println!(
+        "SLIME_GRAPH sent task={} channel={channel} bytes={len} queued={}",
+        id.0,
+        channels
+            .send_queue(channel, id)
+            .map_or(0, ipc::Channel::len),
+    );
+    // A receiver blocked on this queue is owed its answer now: it is parked in
+    // a call, so nothing else will make it retry.
+    if let Some(wake) = wake {
+        // Counted as a receive, because it is one: the woken task's `recv` is
+        // completed here rather than retried. Leaving it out would make the
+        // send and receive totals disagree by exactly the number of messages
+        // that took the wake path, which is the path this slice exists to add.
+        if deliver_wake(channels, parked, windows, scratch, graph, wake) {
+            *woken_receives += 1;
+        }
+    }
+    Response::success(0, 0)
+}
+
+/// Dequeue one message for the caller, or report the channel it must park on.
+///
+/// `Err(channel)` is not a failure: it is "nothing queued and the peer is
+/// alive", which the dispatcher turns into a held reply. A dead peer is an
+/// answer and comes back as `Ok`.
+#[allow(clippy::too_many_arguments)]
+fn serve_recv(
+    channels: &mut ChannelTable,
+    graph: &GraphTables,
+    windows: &WindowTable<MAX_TASKS>,
+    scratch: &ScratchPage,
+    id: TaskId,
+    words: &[sel4::Word; ipc::FAST_MESSAGE_REGISTERS],
+    served: &mut usize,
+) -> Result<Response, ipc::ChannelKey> {
+    let channel = match resolve_channel(graph, id, words[0] as u32, RIGHT_RECV) {
+        Ok(channel) => channel,
+        Err(error) => return Ok(Response::error(error)),
+    };
+    let Some(queue) = channels.recv_queue_mut(channel, id) else {
+        return Ok(Response::error(IpcError::InvalidOperation));
+    };
+    let outcome =
+        match ipc::receive_atomic(queue, ipc::MAX_MESSAGE_CAPS, &mut RefuseCapabilityTransfer) {
+            Ok(outcome) => outcome,
+            Err(IpcError::WouldBlock) => return Err(channel),
+            Err(error) => return Ok(Response::error(error)),
+        };
+    let response = deliver_message(windows, scratch, id, &outcome.message);
+    if response.result >= 0 {
+        *served += 1;
+        sel4::debug_println!(
+            "SLIME_GRAPH received task={} channel={channel} bytes={}",
+            id.0,
+            outcome.message.len(),
+        );
+    }
+    Ok(response)
+}
+
+/// Write a received message into the caller's window and build its reply.
+fn deliver_message(
+    windows: &WindowTable<MAX_TASKS>,
+    scratch: &ScratchPage,
+    id: TaskId,
+    message: &ipc::Message,
+) -> Response {
+    let frame = match transfer_window::StagedFrame::from_bytes(message.bytes()) {
+        Ok(frame) => frame,
+        Err(error) => return Response::error(error),
+    };
+    // The component's `collect` reads the frame back at the descriptor this
+    // reply names, so the two must agree byte for byte about where it is.
+    match transfer_window::write_staged(windows.bound(id), &frame, scratch) {
+        Ok(()) => Response::success(message.len() as i64, frame.reply_descriptor()),
+        Err(error) => Response::error(error),
+    }
+}
+
+/// Arm the caller's wait set, reporting whether a source was already ready.
+///
+/// Registration is all-or-nothing across the whole set, and every registration
+/// is dropped again when one fires, so a stale waiter can never make a later
+/// wake name a task that is no longer parked.
+fn serve_wait(
+    channels: &mut ChannelTable,
+    graph: &GraphTables,
+    windows: &WindowTable<MAX_TASKS>,
+    scratch: &ScratchPage,
+    id: TaskId,
+    words: &[sel4::Word; ipc::FAST_MESSAGE_REGISTERS],
+) -> Result<bool, IpcError> {
+    let count = words[0] as usize;
+    if count == 0 || count > ipc::MAX_WAIT_SOURCES {
+        return Err(IpcError::InvalidLength);
+    }
+    let frame = transfer_window::read_staged(windows.bound(id), words[1], words, scratch)?;
+    let bytes = frame.bytes();
+    if bytes.len() != count * channel::WAIT_RECORD_BYTES {
+        return Err(IpcError::InvalidLength);
+    }
+    let table = graph.get(id).ok_or(IpcError::InvalidOperation)?;
+
+    let mut targets = [None; ipc::MAX_WAIT_SOURCES];
+    let mut mediated = 0;
+    for (slot, record) in targets
+        .iter_mut()
+        .zip(bytes.chunks_exact(channel::WAIT_RECORD_BYTES))
+    {
+        let record = u64::from_le_bytes(record.try_into().map_err(|_| IpcError::InvalidLength)?);
+        let target = channel::resolve_wait_source(record, table)?;
+        if target != WaitTarget::Unmediated {
+            mediated += 1;
+        }
+        *slot = Some(target);
+    }
+    // A set naming only planes this cutover does not mediate would park forever,
+    // because nothing can ever make one ready. Refuse it, so the caller gets a
+    // bounded error and keeps running.
+    if mediated == 0 {
+        return Err(IpcError::UnsupportedOperation);
+    }
+
+    let ready = targets
+        .iter()
+        .flatten()
+        .any(|target| channels.is_ready(id, *target));
+    if ready {
+        return Ok(true);
+    }
+    for target in targets.iter().flatten() {
+        channels.register_wait(id, *target)?;
+    }
+    // Probe again after registering: a send that landed between the first probe
+    // and the registration would otherwise be a lost wakeup.
+    if targets
+        .iter()
+        .flatten()
+        .any(|target| channels.is_ready(id, *target))
+    {
+        channels.clear_waits(id);
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+/// Deliver one wake to whichever task is parked for it.
+///
+/// Reports whether a queued message was handed over, so the caller can count it
+/// as the receive it is. A wake naming a task that is not parked is not an
+/// error — its registration outlived the `wait` that made it — and delivers
+/// nothing.
+fn deliver_wake(
+    channels: &mut ChannelTable,
+    parked: &mut ParkedReplies,
+    windows: &WindowTable<MAX_TASKS>,
+    scratch: &ScratchPage,
+    graph: &GraphTables,
+    wake: ipc::WakeDecision,
+) -> bool {
+    let task = TaskId(wake.task);
+    let Some(reason) = parked.reason(task) else {
+        return false;
+    };
+    channels.clear_waits(task);
+    let delivered = matches!(reason, ParkReason::Receive { .. });
+    let response = match reason {
+        // A parked `recv` is owed the message itself, not a nudge to retry: the
+        // component is blocked in one call and will not issue another.
+        ParkReason::Receive { channel } => match channels.recv_queue_mut(channel, task) {
+            Some(queue) => match ipc::receive_atomic(
+                queue,
+                ipc::MAX_MESSAGE_CAPS,
+                &mut RefuseCapabilityTransfer,
+            ) {
+                Ok(outcome) => deliver_message(windows, scratch, task, &outcome.message),
+                Err(error) => Response::error(error),
+            },
+            None => Response::error(IpcError::InvalidOperation),
+        },
+        // A parked `wait` is owed only the wake; `slime_rt::wait` documents that
+        // the caller re-polls every source afterwards.
+        ParkReason::Wait => Response::success(0, 0),
+    };
+    let _ = graph;
+    // The wake is delivered unconditionally — a task parked in `wait` is owed
+    // its answer just as much as one parked in `recv`, and short-circuiting on
+    // `delivered` here would hold it forever. Only the *count* distinguishes
+    // them: a `wait` that fired carried no message, and a delivery the queue
+    // refused is not a receive either.
+    let answered = parked.wake(task, response);
+    delivered && answered && response.result >= 0
+}
+
+/// Settle every channel a dying task held an end of, and answer whoever was
+/// blocked on it.
+///
+/// This is the half of peer death that a suspend alone does not do. Stopping
+/// the thread makes the task stop *producing*; it does not tell the task at the
+/// other end that nothing more is coming. A component parked in `recv` is
+/// blocked inside a call the root owes an answer to, so without this it waits
+/// for a message that can never arrive and the graph never drains.
+///
+/// The dying task's own parked reply is abandoned rather than answered: there
+/// is no one left to receive it, and its CSlot still has to come back.
+#[allow(clippy::too_many_arguments)]
+fn reclaim_dead_task(
+    channels: &mut ChannelTable,
+    parked: &mut ParkedReplies,
+    windows: &WindowTable<MAX_TASKS>,
+    graph: &GraphTables,
+    scratch: &ScratchPage,
+    id: TaskId,
+    settled: &mut usize,
+) {
+    parked.abandon(id);
+    channels.clear_waits(id);
+
+    let held = channels.held_by(id);
+    let mut wakes = channel::DeathWakes::new();
+    channels.mark_dead(id, &mut wakes);
+
+    let mut woken = 0;
+    for (_, wake) in wakes.drain() {
+        // A wake naming a task that is not parked is not an error: it was
+        // registered by a `wait` that has since been answered, and the
+        // registration outlived it. `deliver_wake` returns without doing
+        // anything in that case.
+        deliver_wake(channels, parked, windows, scratch, graph, wake);
+        woken += 1;
+    }
+    if held != 0 {
+        *settled += held;
+        sel4::debug_println!(
+            "SLIME_GRAPH peer death task={} channels={held} woken={woken}",
+            id.0,
+        );
+    }
+}
+
+/// The capability-transfer policy for this slice: refuse every move.
+///
+/// `ipc::send_atomic` and `ipc::receive_atomic` are written around a transfer
+/// that either moves every listed capability or none, and this is the
+/// degenerate case — nothing is transferable yet, so the only correct answer is
+/// to refuse before the queue is touched. A message carrying no capabilities
+/// passes through unchanged, which is every message this slice carries.
+struct RefuseCapabilityTransfer;
+
+impl ipc::CapabilityTransfer for RefuseCapabilityTransfer {
+    type Error = IpcError;
+
+    fn transfer_atomic(
+        &mut self,
+        capabilities: &[Option<ipc::LogicalCap>; ipc::MAX_MESSAGE_CAPS],
+    ) -> Result<[Option<ipc::LogicalCap>; ipc::MAX_MESSAGE_CAPS], Self::Error> {
+        if capabilities.iter().any(Option::is_some) {
+            return Err(IpcError::UnsupportedCapabilityTransfer);
+        }
+        Ok(*capabilities)
+    }
 }
 
 /// Allocate one shared region for `holder` and admit it against the quota the

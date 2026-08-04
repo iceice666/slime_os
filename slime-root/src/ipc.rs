@@ -244,9 +244,13 @@ impl Response {
 /// One decoded arrival on the root service endpoint.
 ///
 /// The badge is kept even when decoding fails, because the dispatcher still
-/// owes the caller a reply and still attributes the attempt to a task.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// owes the caller a reply and still attributes the attempt to a task. The raw
+/// `MessageInfo` is kept because a fault arrives on this same endpoint and is
+/// decoded from it by `fault::decode_fault`, which needs the message rather
+/// than the operation this decoder tried to read out of it.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Reception {
+    pub info: sel4::MessageInfo,
     pub badge: sel4::Badge,
     pub request: Result<Request, IpcError>,
 }
@@ -259,6 +263,7 @@ pub struct Reception {
 pub fn recv_request(endpoint: sel4::cap::Endpoint) -> Reception {
     let reception = endpoint.recv_with_mrs(());
     Reception {
+        info: reception.info.clone(),
         badge: reception.badge,
         request: decode_request(&reception),
     }
