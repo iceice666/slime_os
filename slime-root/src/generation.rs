@@ -24,6 +24,9 @@ pub const MAX_ADMITTED_COMPONENTS: usize = 48;
 /// endpoint rights.
 pub const RIGHT_SEND: Rights = 1;
 pub const RIGHT_RECV: Rights = 1 << 1;
+/// Authority to execute an object: what makes a grant name a spawnable
+/// executable rather than a channel or a factory.
+pub const RIGHT_EXEC: Rights = 1 << 3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GenerationError {

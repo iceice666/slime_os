@@ -49,7 +49,7 @@ use buffer_adapter::BufferAdapter;
 use child_vspace::{ChildImage, GRANULE_SIZE, ScratchPage};
 use event::TaskEpoch;
 use fault::{LifecycleEventKind, SupervisionTable};
-use generation::{Admission, Authority, RIGHT_RECV, RIGHT_SEND, inbound_authority};
+use generation::{Admission, Authority, RIGHT_EXEC, RIGHT_RECV, RIGHT_SEND, inbound_authority};
 use graph::GraphTables;
 use ipc::{IpcError, Operation, Response, poll_notification};
 use object_allocator::ObjectAllocator;
@@ -908,14 +908,48 @@ fn launch_component_graph(
         ) {
             fatal!("SLIME_GRAPH FAIL window declaration rejected: {error:?}")
         }
-        if graph.create(id).is_err() {
+        // Install the executables this component's outbound `exec | spawn`
+        // grants name, at the slots its boot layout numbers them by. This is
+        // what makes "launches its declared components with their declared
+        // grants" a property of the table rather than a claim: `spawn-service`
+        // can start exactly the two executables the generation grants it, and a
+        // slot naming anything else resolves to nothing.
+        let Ok(table) = graph.create(id) else {
             fatal!(
                 "SLIME_GRAPH FAIL capability table unavailable for task {}",
                 id.0
             )
+        };
+        let mut executables = 0;
+        for index in 0..generation.grant_count() {
+            let Ok(grant) = generation.grant(index) else {
+                continue;
+            };
+            if grant.source != plan.component || grant.rights & RIGHT_EXEC == 0 {
+                continue;
+            }
+            // Slot numbering mirrors the retired kernel's: an executable a
+            // component may spawn is addressed by the boot layout's slot for
+            // it, and `spawn-service`'s generated command profile compiles
+            // against those same numbers.
+            executables += 1;
+            if let Err(error) = table.install(
+                executables,
+                graph::Capability {
+                    resource: graph::Resource::Executable {
+                        component: grant.target,
+                    },
+                    rights: grant.rights,
+                },
+            ) {
+                fatal!(
+                    "SLIME_GRAPH FAIL executable grant {} rejected: {error:?}",
+                    grant.name
+                )
+            }
         }
         sel4::debug_println!(
-            "SLIME_GRAPH staged task={} component={} grants={} window={:#x} frames={} tables={} entry={:#x}",
+            "SLIME_GRAPH staged task={} component={} grants={} executables={executables} window={:#x} frames={} tables={} entry={:#x}",
             id.0,
             record.name,
             authority.grants,
@@ -965,11 +999,11 @@ fn launch_component_graph(
     }
 
     serve_component_graph(
+        generation,
         service_endpoint,
         &mut tasks,
         &mut windows,
         &mut graph,
-        scratch,
         &mut buffers,
         allocator,
     );
@@ -983,66 +1017,19 @@ fn launch_component_graph(
 /// seconds rather than burning the gate's whole timeout.
 const MAX_GRAPH_ITERATIONS: usize = 512;
 
-/// Read a frame out of `window`, through the root's own capability for it.
-///
-/// The root never touches the child's virtual address: it maps its own frame
-/// capability into the scratch window and reads there, so a task cannot make
-/// the root read somewhere else by naming a different base. Returns the payload
-/// length actually copied.
-fn read_window(
-    window: &transfer_window::Window,
-    scratch: &ScratchPage,
-    out: &mut [u8],
-) -> Result<usize, sel4::Error> {
-    window.frame.frame_map(
-        sel4::init_thread::slot::VSPACE.cap(),
-        scratch.addr(),
-        sel4::CapRights::read_write(),
-        sel4::VmAttributes::DEFAULT | sel4::VmAttributes::EXECUTE_NEVER,
-    )?;
-    let len = out.len().min(window.len);
-    // SAFETY: the frame is mapped read-write at `scratch.addr()` for the
-    // duration of this copy, `len` is bounded by both the window and the
-    // destination, and no live Rust reference aliases the page.
-    unsafe {
-        ptr::copy_nonoverlapping(scratch.addr() as *const u8, out.as_mut_ptr(), len);
-    }
-    window.frame.frame_unmap()?;
-    Ok(len)
-}
-
-/// Write a frame into `window`, through the root's own capability for it.
-fn write_window(
-    window: &transfer_window::Window,
-    scratch: &ScratchPage,
-    bytes: &[u8],
-) -> Result<(), sel4::Error> {
-    window.frame.frame_map(
-        sel4::init_thread::slot::VSPACE.cap(),
-        scratch.addr(),
-        sel4::CapRights::read_write(),
-        sel4::VmAttributes::DEFAULT | sel4::VmAttributes::EXECUTE_NEVER,
-    )?;
-    let len = bytes.len().min(window.len);
-    // SAFETY: as for `read_window`; the same mapping, bounded the same way.
-    unsafe {
-        ptr::copy_nonoverlapping(bytes.as_ptr(), scratch.addr() as *mut u8, len);
-    }
-    window.frame.frame_unmap()
-}
-
 /// Serve the root operation surface for the component graph.
 ///
 /// Every arrival is decoded by `ipc::Operation::from_label`, so the whole legacy
 /// syscall surface resolves to a bounded answer: an operation this cutover does
 /// not mediate returns its ordinary Slime error rather than faulting the caller,
 /// which is P5.2's third required check.
+#[allow(clippy::too_many_arguments)]
 fn serve_component_graph(
+    generation: &Generation<'_>,
     endpoint: sel4::cap::Endpoint,
     tasks: &mut TaskTable<MAX_TASKS>,
     windows: &mut WindowTable<MAX_TASKS>,
     graph: &mut GraphTables,
-    scratch: &ScratchPage,
     buffers: &mut SharedBufferTable,
     allocator: &mut ObjectAllocator,
 ) {
@@ -1143,6 +1130,41 @@ fn serve_component_graph(
                 graph.release(id);
                 windows.release(id);
                 live -= 1;
+            }
+            // Spawn the executable a declared grant named. The slot resolves
+            // through the caller's own table, so a component can start exactly
+            // the executables its generation granted it and nothing else — an
+            // ungranted slot resolves to nothing and is refused.
+            Operation::Spawn => {
+                let response = match graph.get(id).and_then(|table| table.get(words[0] as u32)) {
+                    Some(graph::Capability {
+                        resource: graph::Resource::Executable { component },
+                        ..
+                    }) => {
+                        let name = generation
+                            .component(component)
+                            .map(|record| record.name)
+                            .unwrap_or("<unknown>");
+                        sel4::debug_println!(
+                            "SLIME_GRAPH spawn authorized task={} slot={} component={name}",
+                            id.0,
+                            words[0],
+                        );
+                        // Constructing the child is P5.3's work: this slice
+                        // proves the authority resolves, and answers with the
+                        // bounded error rather than a partial spawn.
+                        Response::error(IpcError::UnsupportedOperation)
+                    }
+                    _ => {
+                        sel4::debug_println!(
+                            "SLIME_GRAPH spawn refused task={} slot={} ungranted",
+                            id.0,
+                            words[0],
+                        );
+                        Response::error(IpcError::InvalidOperation)
+                    }
+                };
+                ipc::reply(response);
             }
             // The shared-buffer plane, answered from the table that already
             // owns rights, quota, and frame accounting. `spawn-service` runs a
