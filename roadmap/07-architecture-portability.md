@@ -561,8 +561,17 @@ scoped in P5:
 | `recovery` | recovery |
 | `sample-lender`, `sample-receiver`, the whole `fabric-*` set | C7 sample plane and C8 fabric — P5.3 |
 
-`spawn` resolves its authority from the caller's declared grants but does not
-yet construct the child; that is P5.3, together with the C7/C8 data path.
+Two limits of this slice, both P5.3's work:
+
+- `spawn` resolves its authority from the caller's declared grants but does not
+  yet construct the child, so `spawn-service` cannot start `sysinfo` or
+  `echo-agent`.
+- `recv`, `send`, and `wait` are root-mediated but have no handler yet. They are
+  answered with a bounded error and reported as `unimplemented`, held separate
+  from the `unsupported` planes above so a gap in this slice is not recorded as
+  a property of the cutover. Every declared component reaches its first `recv`
+  and exits non-zero; the graph runs and is served, but does not yet do work
+  over channels.
 
 #### Exit condition (observed)
 
@@ -577,9 +586,14 @@ its own generation object, receives the grants the generation declares for it �
 component holds none — binds the transfer window the loader mapped for it, and
 runs. `spawn-service` completes the full shared-buffer
 create/map/write/seal/unmap/release cycle through real seL4 frames against its
-declared quota. An operation on an unmediated plane returns its bounded Slime
-error with the caller still running, and an ungranted executable slot is
-refused rather than served.
+declared quota. An unanswered operation returns its bounded Slime error with the
+caller still running, and an ungranted executable slot is refused rather than
+served.
+
+The bounded-error property is observed on the operations these components
+actually reach — which are the `unimplemented` ones — and asserted statically
+over the nine `Unavailable` planes, since no declared component invokes one on
+this boot path. Both halves are fault-injected in the devlog entry.
 
 ### P5.3 — C7/C8 data path on seL4
 

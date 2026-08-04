@@ -110,10 +110,30 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         "the full shared-buffer lifecycle completed",
         r"\[spawn-service\] shared-buffer quota live",
     ),
-    # -- required check 3: unsupported operations are bounded, not fatal --
+    # -- required check 3: an unanswered operation is bounded, not fatal --
+    #
+    # Two distinct reasons an operation goes unanswered, and the root task keeps
+    # them apart rather than reporting both as the same thing:
+    #
+    #   `unsupported`   the plane has no seL4 mechanism owner in this cutover
+    #                   (storage, directory, input, generation management,
+    #                   recovery). This is the designed answer.
+    #   `unimplemented` the operation IS root-mediated and this slice has no
+    #                   handler for it yet -- `recv`, `send`, `wait`, which are
+    #                   P5.3's channel plane.
+    #
+    # What the five declared components actually reach on this boot path is the
+    # second: none of them invokes an unmediated plane, because init's
+    # `generation_receive` sits behind a transfer flag and echo-agent's
+    # `directory_inspect` behind a capability role only a constructed child
+    # receives. So this gate asserts the bounded-error behaviour on the case it
+    # can observe, and `check_operation_surface` below asserts the unmediated
+    # half statically against `Operation::mediation`. Asserting an
+    # `unsupported` marker here would mean asserting a line this boot never
+    # emits.
     (
-        "an unmediated operation returns a bounded error and the caller survives",
-        r"SLIME_GRAPH unsupported operation task=\d+ operation=\d+ "
+        "an unanswered operation returns a bounded error and the caller survives",
+        r"SLIME_GRAPH unimplemented operation task=\d+ operation=\d+ "
         r"result=-4 caller_survives=1",
     ),
     ("init ran and drove the graph", r"\[init\] launching component graph"),
@@ -130,10 +150,34 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     ),
     (
         "the graph drained with every window and table reclaimed",
-        r"SLIME_GRAPH served live=0 unsupported=[1-9]\d* buffers=[1-9]\d* "
-        r"windows=0 tables=0",
+        r"SLIME_GRAPH served live=0 unsupported=\d+ unimplemented=[1-9]\d* "
+        r"buffers=[1-9]\d* windows=0 tables=0",
     ),
 )
+
+# Every operation the root task must answer with a bounded error rather than a
+# handler, checked against `slime-root/src/ipc.rs` itself.
+#
+# The runtime half of required check 3 can only observe the operations these
+# five components happen to invoke. This half asserts the property for the whole
+# unmediated surface: each of these labels is classified `Unavailable`, so
+# `unmediated_response` returns a bounded error for it and the dispatcher's
+# catch-all cannot turn one into a fault. Pinning the list here means a plane
+# silently reclassified as `RootService` -- and therefore falling through to the
+# unimplemented path -- fails this gate rather than passing quietly.
+UNMEDIATED_OPERATIONS: tuple[tuple[str, int], ...] = (
+    ("BlockTransact", 6),
+    ("StoreTransact", 7),
+    ("RecoveryReconstruct", 10),
+    ("DirectoryInspect", 14),
+    ("DirectoryDerive", 15),
+    ("DirectoryCommit", 16),
+    ("InputRead", 17),
+    ("GenerationTransact", 18),
+    ("GenerationReceive", 19),
+)
+
+IPC_SOURCE = ROOT / "slime-root" / "src" / "ipc.rs"
 
 FAILURE_MARKERS: tuple[str, ...] = (
     r"SLIME_ROOT FATAL .*",
@@ -328,6 +372,44 @@ def report_transcript(transcript: str) -> None:
         sys.stdout.flush()
 
 
+def check_operation_surface() -> None:
+    """The static half of required check 3.
+
+    Asserts that every plane this cutover does not own is still classified
+    `Mediation::Unavailable`, so `unmediated_response` yields a bounded error
+    for it. A plane quietly reclassified `RootService` would fall through the
+    dispatcher's unimplemented path instead — the same visible result today,
+    but a different claim, and one that would stop being true the moment a
+    handler landed.
+    """
+    if not IPC_SOURCE.is_file():
+        fail(f"missing {IPC_SOURCE.relative_to(ROOT)}")
+    source = IPC_SOURCE.read_text(encoding="utf-8")
+    start = source.find("pub const fn mediation(self) -> Mediation {")
+    if start < 0:
+        fail(f"{IPC_SOURCE.relative_to(ROOT)} declares no mediation table")
+    table = source[start:]
+    unavailable = table.find("Mediation::Unavailable")
+    if unavailable < 0:
+        fail("the mediation table declares no Unavailable plane")
+    # The arm listing the unavailable operations is whatever precedes the
+    # `Mediation::Unavailable` result.
+    arm = table[:unavailable]
+    arm = arm[arm.rfind("Mediation::RootService") :]
+    for name, label in UNMEDIATED_OPERATIONS:
+        if f"Self::{name}" not in arm:
+            fail(
+                f"operation {name} (label {label}) is no longer classified "
+                "Unavailable; required check 3 covers a different surface than "
+                "this gate asserts"
+            )
+    print(
+        f"operation surface: {len(UNMEDIATED_OPERATIONS)} unmediated planes "
+        "answer a bounded Slime error",
+        flush=True,
+    )
+
+
 def check_transcript(transcript: str) -> None:
     for pattern in FAILURE_MARKERS:
         match = re.search(pattern, transcript)
@@ -362,13 +444,14 @@ def main() -> None:
     if not arguments.no_build:
         build_image()
     check_manifest()
+    check_operation_surface()
     profile = pins["qemu_arm_virt"]
     assert isinstance(profile, dict)
     check_transcript(boot(profile))
     print(
         "seL4 component graph check: 5 native ELF components launched with their "
         "declared grants, the root answered their operation surface, and an "
-        "unsupported operation returned a bounded error with the caller running"
+        "unanswered operation returned a bounded error with the caller running"
     )
 
 

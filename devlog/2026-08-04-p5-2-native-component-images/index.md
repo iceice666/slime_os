@@ -86,12 +86,37 @@ SLIME_GRAPH window bound task=3 base=0x237000 len=4096
 [spawn-service] ready
 SLIME_GRAPH buffer created task=3 slot=3 id=1 pages=1
 [spawn-service] shared-buffer quota live
-SLIME_GRAPH unsupported operation task=3 operation=2 result=-4 caller_survives=1
+SLIME_GRAPH unimplemented operation task=3 operation=2 result=-4 caller_survives=1
 [init] launching component graph
 SLIME_GRAPH spawn refused task=2 slot=1 ungranted
 [init] spawn failed slot=1 error=-4
-SLIME_GRAPH served live=0 unsupported=4 buffers=5 windows=0 tables=0
+SLIME_GRAPH served live=0 unsupported=0 unimplemented=4 buffers=5 windows=0 tables=0
 ```
+
+### What required check 3 actually rests on
+
+`unsupported=0` in that transcript is the honest number, and it is why the gate
+has two halves.
+
+The root task distinguishes two reasons an operation goes unanswered.
+`unsupported` means the plane has no seL4 mechanism owner in this cutover —
+storage, directory, input, generation management, recovery — which is the
+designed answer required check 3 names. `unimplemented` means the operation *is*
+root-mediated and this slice has no handler for it yet: `recv`, `send`, `wait`.
+
+None of the five declared components reaches an unmediated plane on this boot
+path. `init`'s `generation_receive` sits behind a transfer flag, and
+`echo-agent`'s `directory_inspect` behind a capability role only a constructed
+child receives — and `spawn` cannot construct one yet. So the runtime half of
+the check observes the bounded-error behaviour on the `unimplemented` case,
+which is what these components do reach, and `check_operation_surface` asserts
+the `Unavailable` half statically against `Operation::mediation` itself.
+
+An earlier revision of this gate collapsed the two into one `unsupported`
+counter and asserted required check 3 against a `recv` refusal. That read as a
+pass while proving something else: it would have kept passing if every
+unmediated plane were quietly reclassified. Separating the counters made
+`unsupported=0` visible, which is what exposed it.
 
 ### Fault injection
 
@@ -101,6 +126,7 @@ Both halves of the gate were confirmed to bite, then restored and re-verified:
 |---|---|
 | Root endpoint rights derived from grants again (the pre-fix behaviour) | Fails on `Attempted to invoke a read-only endpoint` |
 | Every executable granted to every component | Fails on `console staged with its declared grants` — `executables=0` |
+| `InputRead` reclassified `RootService` in `ipc.rs` | Fails on `operation InputRead (label 17) is no longer classified Unavailable` |
 
 ## Decisions
 
@@ -137,13 +163,17 @@ Both halves of the gate were confirmed to bite, then restored and re-verified:
 ## Open risks and follow-ups
 
 - **`spawn` resolves but does not construct.** A resolved grant is answered with
-  `UnsupportedOperation` rather than a child. The authority half is proven — the
-  gate asserts both the grant and the refusal of an ungranted slot — but
-  `spawn-service` cannot yet start `sysinfo` or `echo-agent`. That, and the
-  `recv`/`send` channel plane behind it, is P5.3.
+  a bounded error rather than a child. The authority half is proven — the gate
+  asserts both the grant and the refusal of an ungranted slot — but
+  `spawn-service` cannot yet start `sysinfo` or `echo-agent`.
+- **`recv`, `send`, and `wait` have no handler.** They are root-mediated and
+  answered `unimplemented`. Every declared component reaches its first `recv`
+  and exits non-zero, so the graph runs and is served but does not yet do work
+  over channels. This is the largest single gap between "the declared graph
+  boots" and "the declared graph functions", and it is P5.3's channel plane.
 - **`ipc.rs`'s `Channel`, `WaitSet`, `send_atomic`, and `CapabilityTransfer`
-  remain unwired.** They are written and unit-tested; P5.3's channel plane is
-  what will use them. The crate keeps `#![allow(dead_code)]` until then.
+  remain unwired.** They are written and unit-tested, and are exactly what the
+  channel plane above needs. The crate keeps `#![allow(dead_code)]` until then.
 - **`components/.cargo/config.toml` carries a stale `--remap-path-prefix`**
   naming `/home/iceice666/projects/slime_os` while the checkout is
   `slime_os-sel4-cutover`. It is a prefix of the real path, so it mangles rather

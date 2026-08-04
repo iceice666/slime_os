@@ -1035,6 +1035,7 @@ fn serve_component_graph(
 ) {
     let mut live = tasks.len();
     let mut unsupported = 0;
+    let mut unimplemented = 0;
     let mut buffers_served = 0;
     for _ in 0..MAX_GRAPH_ITERATIONS {
         if live == 0 {
@@ -1233,37 +1234,49 @@ fn serve_component_graph(
                 );
                 ipc::reply(response);
             }
-            // Every other label resolves to a bounded answer. The planes this
-            // cutover does not mediate — storage, directory, input, generation
-            // management, recovery — answer `UnsupportedOperation`, so a
-            // component naming one receives an ordinary Slime error and keeps
-            // running instead of being faulted.
+            // Every other label resolves to a bounded answer, but the two
+            // reasons an operation goes unanswered are kept apart.
+            //
+            // `unmediated_response()` returning `Some` means the plane has no
+            // seL4 mechanism owner in this cutover — storage, directory, input,
+            // generation management, recovery. That is the designed answer, and
+            // it is P5.2's third required check: the caller gets an ordinary
+            // Slime error and keeps running.
+            //
+            // `None` means the operation *is* root-mediated and this dispatcher
+            // simply has no handler for it yet. Collapsing the two would report
+            // a gap in this slice as a property of the cutover, so it is
+            // counted and named separately — `recv`, `send`, and `wait` are the
+            // live examples, and they are P5.3's channel plane.
             other => {
-                let response = other
-                    .unmediated_response()
-                    .unwrap_or(Response::error(IpcError::UnsupportedOperation));
-                if response.result == IpcError::UnsupportedOperation.slime_status() {
-                    unsupported += 1;
-                    sel4::debug_println!(
-                        "SLIME_GRAPH unsupported operation task={} operation={} result={} caller_survives=1",
-                        id.0,
-                        other.label(),
-                        response.result,
-                    );
-                } else {
-                    sel4::debug_println!(
-                        "SLIME_GRAPH request answered task={} operation={} result={}",
-                        id.0,
-                        other.label(),
-                        response.result,
-                    );
-                }
+                let response = match other.unmediated_response() {
+                    Some(response) => {
+                        unsupported += 1;
+                        sel4::debug_println!(
+                            "SLIME_GRAPH unsupported operation task={} operation={} result={} caller_survives=1",
+                            id.0,
+                            other.label(),
+                            response.result,
+                        );
+                        response
+                    }
+                    None => {
+                        unimplemented += 1;
+                        sel4::debug_println!(
+                            "SLIME_GRAPH unimplemented operation task={} operation={} result={} caller_survives=1",
+                            id.0,
+                            other.label(),
+                            IpcError::UnsupportedOperation.slime_status(),
+                        );
+                        Response::error(IpcError::UnsupportedOperation)
+                    }
+                };
                 ipc::reply(response);
             }
         }
     }
     sel4::debug_println!(
-        "SLIME_GRAPH served live={live} unsupported={unsupported} buffers={buffers_served} windows={} tables={}",
+        "SLIME_GRAPH served live={live} unsupported={unsupported} unimplemented={unimplemented} buffers={buffers_served} windows={} tables={}",
         windows.len(),
         graph.len(),
     );
