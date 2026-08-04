@@ -44,6 +44,16 @@ pub enum Resource {
     SharedBufferFactory,
     /// A supervision handle for a spawned child.
     Supervision { task: TaskId },
+    /// A shared buffer this task holds.
+    ///
+    /// The `BufferHandle` the table issues carries rights and a generation
+    /// epoch, so it is authority rather than a name. It stays here, in root
+    /// memory; the component receives only the slot number, and every operation
+    /// on the region resolves back to this record. That is what stops a
+    /// component from widening its own rights by editing a handle it holds.
+    SharedBuffer {
+        handle: crate::shared_buffer::BufferHandle,
+    },
 }
 
 /// One logical capability: what it names, and the rights held over it.

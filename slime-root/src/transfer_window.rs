@@ -172,6 +172,69 @@ impl<const CAPACITY: usize> Default for WindowTable<CAPACITY> {
     }
 }
 
+// ---- transfer descriptors ----
+//
+// The component half of this encoding is `components/runtime/src/syscall/wire.rs`;
+// these are the same fields read from the other side. They are duplicated rather
+// than shared because the two live in different crates built for different
+// targets, and the encoding is a calling convention between them, not a
+// persisted format.
+
+/// Payload bytes ride in the fast registers.
+pub const FORM_INLINE: u64 = 0;
+/// Payload bytes and capability slots ride in the bound transfer window.
+pub const FORM_WINDOW: u64 = 1;
+
+pub const fn descriptor(len: usize, caps: usize, form: u64) -> u64 {
+    (len as u64) | ((caps as u64) << 16) | (form << 24)
+}
+
+pub const fn descriptor_len(descriptor: u64) -> usize {
+    (descriptor & 0xffff) as usize
+}
+
+pub const fn descriptor_caps(descriptor: u64) -> usize {
+    ((descriptor >> 16) & 0xff) as usize
+}
+
+pub const fn descriptor_form(descriptor: u64) -> u64 {
+    (descriptor >> 24) & 0xff
+}
+
+/// Byte offset of the capability vector in a frame whose payload is `len`
+/// bytes. Word-aligned so neither side takes an unaligned access.
+pub const fn frame_caps_offset(len: usize) -> usize {
+    len.next_multiple_of(8)
+}
+
+/// Total frame bytes for `len` payload bytes and `caps` capability slots.
+pub const fn frame_len(len: usize, caps: usize) -> usize {
+    frame_caps_offset(len) + caps * 8
+}
+
+#[cfg(test)]
+mod descriptor_tests {
+    use super::*;
+
+    #[test]
+    fn a_descriptor_round_trips_its_three_fields() {
+        let value = descriptor(64, 4, FORM_WINDOW);
+        assert_eq!(descriptor_len(value), 64);
+        assert_eq!(descriptor_caps(value), 4);
+        assert_eq!(descriptor_form(value), FORM_WINDOW);
+    }
+
+    #[test]
+    fn capability_slots_follow_the_payload_word_aligned() {
+        // A 64-byte payload is already aligned; a 5-byte one is padded to 8, so
+        // the reader never takes an unaligned load of a slot.
+        assert_eq!(frame_caps_offset(64), 64);
+        assert_eq!(frame_caps_offset(5), 8);
+        assert_eq!(frame_len(64, 4), 96);
+        assert_eq!(frame_len(0, 0), 0);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{STARTUP_WINDOW_SLOT, WINDOW_BYTES, WindowTable};

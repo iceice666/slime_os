@@ -760,6 +760,13 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
     sel4::init_thread::suspend_self()
 }
 
+/// Rights recorded on a shared buffer's own slot.
+///
+/// The region's real authority lives in the `BufferHandle` the table issued and
+/// the quota it charged; this slot's rights only say the task holds it at all,
+/// so the buffer plane's own checks stay the single place rights are decided.
+const RIGHT_BUFFER_ALL: u64 = u64::MAX;
+
 /// Largest component ELF the loader will copy through [`ElfScratch`]. Generous
 /// against the five components this profile declares (the largest is ~44 KiB)
 /// while keeping the buffer a bounded, statically sized object like every other
@@ -939,12 +946,33 @@ fn launch_component_graph(
     };
     for id in ids.iter().flatten().copied() {
         if let Err(error) = tasks.activate(id) {
-            fatal!("SLIME_GRAPH FAIL activation failed task={}: {error:?}", id.0)
+            fatal!(
+                "SLIME_GRAPH FAIL activation failed task={}: {error:?}",
+                id.0
+            )
         }
     }
     sel4::debug_println!("SLIME_GRAPH activated components={}", tasks.activated());
 
-    serve_component_graph(service_endpoint, &mut tasks, &mut windows, &mut graph);
+    // Every launched task gets the declared shared-buffer ceiling before it can
+    // ask for a page, so an allocation is admitted against generation-declared
+    // state rather than against whatever the caller asked for.
+    let mut buffers = SharedBufferTable::new(GenerationEpoch(generation.number));
+    for id in ids.iter().flatten().copied() {
+        if let Err(error) = buffers.declare_quota(HolderId(u64::from(id.0)), SHARED_QUOTA) {
+            fatal!("SLIME_GRAPH FAIL quota rejected task={}: {error:?}", id.0)
+        }
+    }
+
+    serve_component_graph(
+        service_endpoint,
+        &mut tasks,
+        &mut windows,
+        &mut graph,
+        scratch,
+        &mut buffers,
+        allocator,
+    );
 }
 
 /// Iterations the graph service loop will run before declaring the graph wedged.
@@ -954,6 +982,54 @@ fn launch_component_graph(
 /// and spawns two children — while still bounding a livelock so it fails in
 /// seconds rather than burning the gate's whole timeout.
 const MAX_GRAPH_ITERATIONS: usize = 512;
+
+/// Read a frame out of `window`, through the root's own capability for it.
+///
+/// The root never touches the child's virtual address: it maps its own frame
+/// capability into the scratch window and reads there, so a task cannot make
+/// the root read somewhere else by naming a different base. Returns the payload
+/// length actually copied.
+fn read_window(
+    window: &transfer_window::Window,
+    scratch: &ScratchPage,
+    out: &mut [u8],
+) -> Result<usize, sel4::Error> {
+    window.frame.frame_map(
+        sel4::init_thread::slot::VSPACE.cap(),
+        scratch.addr(),
+        sel4::CapRights::read_write(),
+        sel4::VmAttributes::DEFAULT | sel4::VmAttributes::EXECUTE_NEVER,
+    )?;
+    let len = out.len().min(window.len);
+    // SAFETY: the frame is mapped read-write at `scratch.addr()` for the
+    // duration of this copy, `len` is bounded by both the window and the
+    // destination, and no live Rust reference aliases the page.
+    unsafe {
+        ptr::copy_nonoverlapping(scratch.addr() as *const u8, out.as_mut_ptr(), len);
+    }
+    window.frame.frame_unmap()?;
+    Ok(len)
+}
+
+/// Write a frame into `window`, through the root's own capability for it.
+fn write_window(
+    window: &transfer_window::Window,
+    scratch: &ScratchPage,
+    bytes: &[u8],
+) -> Result<(), sel4::Error> {
+    window.frame.frame_map(
+        sel4::init_thread::slot::VSPACE.cap(),
+        scratch.addr(),
+        sel4::CapRights::read_write(),
+        sel4::VmAttributes::DEFAULT | sel4::VmAttributes::EXECUTE_NEVER,
+    )?;
+    let len = bytes.len().min(window.len);
+    // SAFETY: as for `read_window`; the same mapping, bounded the same way.
+    unsafe {
+        ptr::copy_nonoverlapping(bytes.as_ptr(), scratch.addr() as *mut u8, len);
+    }
+    window.frame.frame_unmap()
+}
 
 /// Serve the root operation surface for the component graph.
 ///
@@ -966,9 +1042,13 @@ fn serve_component_graph(
     tasks: &mut TaskTable<MAX_TASKS>,
     windows: &mut WindowTable<MAX_TASKS>,
     graph: &mut GraphTables,
+    scratch: &ScratchPage,
+    buffers: &mut SharedBufferTable,
+    allocator: &mut ObjectAllocator,
 ) {
     let mut live = tasks.len();
     let mut unsupported = 0;
+    let mut buffers_served = 0;
     for _ in 0..MAX_GRAPH_ITERATIONS {
         if live == 0 {
             break;
@@ -1031,29 +1111,25 @@ fn serve_component_graph(
             // Checked against that mapping rather than accepted on the caller's
             // word, so a task cannot name a region it does not have.
             Operation::TransferWindowBind => {
-                let response = match windows.bind(
-                    id,
-                    words[0] as u32,
-                    words[1] as usize,
-                    words[2] as usize,
-                ) {
-                    Ok(window) => {
-                        sel4::debug_println!(
-                            "SLIME_GRAPH window bound task={} base={:#x} len={}",
-                            id.0,
-                            window.base,
-                            window.len
-                        );
-                        Response::success(0, 0)
-                    }
-                    Err(error) => {
-                        sel4::debug_println!(
-                            "SLIME_GRAPH window bind refused task={} error={error:?}",
-                            id.0
-                        );
-                        Response::error(error)
-                    }
-                };
+                let response =
+                    match windows.bind(id, words[0] as u32, words[1] as usize, words[2] as usize) {
+                        Ok(window) => {
+                            sel4::debug_println!(
+                                "SLIME_GRAPH window bound task={} base={:#x} len={}",
+                                id.0,
+                                window.base,
+                                window.len
+                            );
+                            Response::success(0, 0)
+                        }
+                        Err(error) => {
+                            sel4::debug_println!(
+                                "SLIME_GRAPH window bind refused task={} error={error:?}",
+                                id.0
+                            );
+                            Response::error(error)
+                        }
+                    };
                 ipc::reply(response);
             }
             // A clean exit is a send, not a call: the task is suspended rather
@@ -1067,6 +1143,73 @@ fn serve_component_graph(
                 graph.release(id);
                 windows.release(id);
                 live -= 1;
+            }
+            // The shared-buffer plane, answered from the table that already
+            // owns rights, quota, and frame accounting. `spawn-service` runs a
+            // full create/map/write/seal/unmap/release cycle at startup and
+            // exits non-zero if any step fails, so this is the operation set
+            // that decides whether the declared graph reaches its service loop.
+            Operation::SharedBufferCreate => {
+                let holder = HolderId(u64::from(id.0));
+                let pages = words[1] as usize;
+                let response = match serve_buffer_create(buffers, allocator, holder, pages) {
+                    Ok(handle) => match graph.get_mut(id).and_then(|table| {
+                        let slot = table.free_slot_from(1)?;
+                        table
+                            .install(
+                                slot,
+                                graph::Capability {
+                                    resource: graph::Resource::SharedBuffer { handle },
+                                    rights: RIGHT_BUFFER_ALL,
+                                },
+                            )
+                            .ok()?;
+                        Some(slot)
+                    }) {
+                        Some(slot) => {
+                            buffers_served += 1;
+                            sel4::debug_println!(
+                                "SLIME_GRAPH buffer created task={} slot={slot} id={} pages={pages}",
+                                id.0,
+                                handle.id.0,
+                            );
+                            Response::success(i64::from(slot), handle.id.0)
+                        }
+                        None => {
+                            sel4::debug_println!(
+                                "SLIME_GRAPH buffer slot unavailable task={}",
+                                id.0
+                            );
+                            Response::error(IpcError::DestinationSlotsExhausted)
+                        }
+                    },
+                    Err(error) => {
+                        sel4::debug_println!(
+                            "SLIME_GRAPH buffer create refused task={} error={error}",
+                            id.0
+                        );
+                        Response::error(IpcError::TransferFailed)
+                    }
+                };
+                ipc::reply(response);
+            }
+            // The remaining shared-buffer operations act on a region this task
+            // already holds, so they are answered against the same table.
+            Operation::SharedBufferMap
+            | Operation::SharedBufferUnmap
+            | Operation::SharedBufferSeal
+            | Operation::SharedBufferRelease => {
+                let response = serve_buffer_lifecycle(
+                    operation,
+                    buffers,
+                    allocator,
+                    tasks,
+                    graph,
+                    id,
+                    &words,
+                    &mut buffers_served,
+                );
+                ipc::reply(response);
             }
             // Every other label resolves to a bounded answer. The planes this
             // cutover does not mediate — storage, directory, input, generation
@@ -1098,10 +1241,119 @@ fn serve_component_graph(
         }
     }
     sel4::debug_println!(
-        "SLIME_GRAPH served live={live} unsupported={unsupported} windows={} tables={}",
+        "SLIME_GRAPH served live={live} unsupported={unsupported} buffers={buffers_served} windows={} tables={}",
         windows.len(),
         graph.len(),
     );
+}
+
+/// Allocate one shared region for `holder` and admit it against the quota the
+/// generation declared.
+fn serve_buffer_create(
+    buffers: &mut SharedBufferTable,
+    allocator: &mut ObjectAllocator,
+    holder: HolderId,
+    pages: usize,
+) -> Result<BufferHandle, &'static str> {
+    if pages == 0 || pages > SHARED_QUOTA.byte_pages as usize {
+        return Err("page count");
+    }
+    let mut adapter = BufferAdapter::new(allocator);
+    let frame = adapter.allocate_frame().map_err(|_| "frame allocation")?;
+    let anchors = shared_buffer::FrameAnchors::from_slice(&[frame]).map_err(|_| "frame anchors")?;
+    buffers
+        .create(holder, anchors, true)
+        .map_err(|_| "region admission")
+}
+
+/// Answer map/unmap/seal/release for a region the caller already holds.
+///
+/// Every one resolves through the table, which is where rights and quota live,
+/// so a task naming a region it does not hold is refused by the same mechanism
+/// that bounds one it does.
+#[allow(clippy::too_many_arguments)]
+fn serve_buffer_lifecycle(
+    operation: Operation,
+    buffers: &mut SharedBufferTable,
+    allocator: &mut ObjectAllocator,
+    tasks: &TaskTable<MAX_TASKS>,
+    graph: &mut GraphTables,
+    id: TaskId,
+    words: &[sel4::Word; ipc::FAST_MESSAGE_REGISTERS],
+    served: &mut usize,
+) -> Response {
+    let holder = HolderId(u64::from(id.0));
+    let slot = (words[0] & 0xffff_ffff) as u32;
+    // The handle is resolved from the caller's own table, never reconstructed
+    // from the message: it carries rights and an epoch, so accepting one off
+    // the wire would let a component name authority it was not issued.
+    let Some(graph::Capability {
+        resource: graph::Resource::SharedBuffer { handle },
+        ..
+    }) = graph.get(id).and_then(|table| table.get(slot))
+    else {
+        return Response::error(IpcError::InvalidOperation);
+    };
+    let Some(task) = tasks.get(id) else {
+        return Response::error(IpcError::InvalidOperation);
+    };
+    let vspace = VSpaceCap(task.vspace.vspace.bits() as usize);
+    let mut adapter = BufferAdapter::new(allocator);
+    let outcome = match operation {
+        Operation::SharedBufferMap => {
+            let writable = words[0] >> 32 != 0;
+            buffers
+                .map(
+                    &mut adapter,
+                    holder,
+                    handle,
+                    vspace,
+                    words[1] as usize,
+                    words[2] as usize,
+                    words[3] as usize,
+                    if writable {
+                        MappingRights::ReadWrite
+                    } else {
+                        MappingRights::ReadOnly
+                    },
+                )
+                .map(|_| ())
+                .map_err(|_| "map")
+        }
+        Operation::SharedBufferUnmap => buffers
+            .unmap(&mut adapter, holder, handle, vspace, words[1] as usize)
+            .map(|_| ())
+            .map_err(|_| "unmap"),
+        Operation::SharedBufferSeal => buffers
+            .seal(&mut adapter, holder, handle)
+            .map(|_| ())
+            .map_err(|_| "seal"),
+        Operation::SharedBufferRelease => buffers
+            .release(&mut adapter, holder, handle)
+            .map(|_| ())
+            .map_err(|_| "release"),
+        _ => Err("unreachable"),
+    };
+    match outcome {
+        Ok(()) => {
+            *served += 1;
+            // A released region is no longer authority the task holds, so its
+            // slot is emptied here rather than left naming a dead handle.
+            if operation == Operation::SharedBufferRelease
+                && let Some(table) = graph.get_mut(id)
+            {
+                table.drop_slot(slot);
+            }
+            Response::success(0, 0)
+        }
+        Err(stage) => {
+            sel4::debug_println!(
+                "SLIME_GRAPH buffer {stage} refused task={} slot={slot}",
+                id.0
+            );
+            Response::error(IpcError::TransferFailed)
+        }
+    }
 }
 
 /// Serve the badged root endpoint until fixture `index` reaches a terminal state
