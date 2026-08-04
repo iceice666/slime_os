@@ -309,7 +309,7 @@ mod tests {
     }
 
     #[test]
-    fn one_task_cannot_see_anothers_capabilities() {
+    fn one_task_cannot_see_another_tasks_capabilities() {
         let mut graph = GraphTables::new();
         graph
             .create(TaskId(0))

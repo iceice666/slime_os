@@ -12,11 +12,11 @@ A milestone is complete only when its exit condition is observed. Compiled code,
 
 | Track | Status | Next open gate |
 | --- | --- | --- |
-| [Backlog](00-backlog.md) | B1–B11 resolved; no open defects recorded | Backlog is clear; preserve the regression baseline while advancing the RPi5 path |
+| [Backlog](00-backlog.md) | B1–B11 resolved; B12 open (stale component-build path remap, deferred with reason) | Resolve B12 before the next track gate, or record why it stays deferred |
 | [Foundations](01-foundations.md) | M1–M4 and M6 complete; M5 mechanisms complete except M5.7 physical Framework evidence | Preserve as regression history; do not block RPi5 work on Framework-only evidence unless storage safety is touched |
 | [Core runtime](02-core-runtime.md) | C7 and C8.1–C8.10 complete; C8.11–C8.15 and C10 are planned | For the demo, prioritize only the C8/C10 slices required by two ROS 2 nodes over minimal DDS/RTPS |
 | [RPi5 ROS 2 demo](09-rpi5-ros2-demo.md) | RP0 contract complete; RP1–RP8 planned | P1 architecture-boundary extraction is complete; begin RP1 target-qualified build/admission |
-| [Architecture portability](07-architecture-portability.md) | P0, P1, P2.1, and P5.1 complete; P2.2-P2.6 superseded-if-P5-completes; P5.2-P5.4 planned | Begin P5.2: build native AArch64 component images so the declared service graph runs on seL4 |
+| [Architecture portability](07-architecture-portability.md) | P0, P1, P2.1, P5.1, and P5.2 complete; P2.2-P2.6 superseded-if-P5-completes; P5.3-P5.4 planned | Begin P5.3: replay the C7 sample plane and C8 fabric on seL4, and construct a child from a resolved spawn grant |
 | [ROS 2 compatibility](03-ros2-compatibility.md) | Not started | R0 minimal DDS/RTPS topic profile is first; broader external/multi-vendor compatibility follows after the RPi5 demo path |
 | [Platform hardware](04-platform-hardware.md) | Framework track deferred; H1 implementation complete but physical evidence pending | Do not advance Framework daily-driver hardware unless needed for shared mechanisms or evidence preservation |
 | [Foreign workloads](05-foreign-workloads.md) | Deferred | Use only if the chosen ROS 2 node route requires a Linux userspace personality |

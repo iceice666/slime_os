@@ -2,7 +2,7 @@
 
 **Purpose:** Preserve one Slime capability/component/generation architecture across target profiles while making AArch64 and Raspberry Pi 5 the near-term product path.
 
-**Status:** In progress - P0, P1, P2.1, and P5.1 complete.
+**Status:** In progress - P0, P1, P2.1, P5.1, and P5.2 complete.
 
 **Decision:** AArch64/Raspberry Pi 5 is now the near-term physical target because the current product goal is the RPi5 ROS 2 two-node demo. The existing x86-64 QEMU path remains the regression oracle for completed work until each semantic corpus is replayed on AArch64, but x86-64/Framework is no longer the product-leading roadmap. RV64 is deferred. As of P5, the AArch64 kernel-side mechanism is being substituted with upstream seL4 rather than hand-written: see [P5](#p5-sel4-microkernel-substitution), which supersedes the custom-kernel half of P2.2-P2.6 if it completes.
 
@@ -447,7 +447,7 @@ One named Raspberry Pi 5 profile runs the verified isolated Slime vertical slice
 
 ## P5: seL4 microkernel substitution
 
-**Status:** In progress — P5.1 complete; P5.2–P5.4 planned.
+**Status:** In progress — P5.1 and P5.2 complete; P5.3–P5.4 planned.
 
 **Depends on:** P0 and P1. Supersedes the custom-kernel half of P2.2–P2.6 if it
 completes; P2.1 AArch64 boot evidence is retained and not re-claimed here.
@@ -507,14 +507,14 @@ the proof is a native fixture. That is P5.2.
 
 ### P5.2 — Native component images on seL4
 
-**Status:** Not started.
+**Status:** Complete.
 
 **Depends on:** P5.1.
 
-The generation's component payloads are the retired kernel's custom SLIMECM
+The generation's component payloads were the retired kernel's custom SLIMECM
 images, which the root task admits but cannot load. This slice rebuilds
 `components/bins` as native AArch64 ELF images against the `sel4` transport
-feature and boots the real service graph.
+feature and boots a declared service graph from them.
 
 #### Required checks
 
@@ -522,16 +522,64 @@ feature and boots the real service graph.
 - the root service answers the operation surface those components actually invoke, with the same errors and bounds as the legacy kernel;
 - an unsupported operation returns its bounded Slime error rather than faulting the caller.
 
-#### Planned verification target
+#### Verification target
 
 ```sh
 just sel4_component_graph_check
 ```
 
-#### Exit condition
+A separate image from `sel4_root_boot_check`'s. The two differ only in which
+generation the root task embeds, and each gate boots the artifact it asserts
+about, so neither invalidates the other's evidence by being built last. The root
+task chooses its startup path by what the generation carries — loadable payloads
+or not — rather than by a flag it was built with.
 
-A generation of native component images boots its declared graph on seL4 with
-unchanged capability and lifecycle semantics.
+#### Declared graph, and what is deferred
+
+The seL4 generation is a sibling manifest,
+[`contracts/generation/v1/fixtures/sel4.zti`](../contracts/generation/v1/fixtures/sel4.zti),
+not a boot profile of `valid.zti`: `resolve_boot_profile` narrows by
+subtraction, so naming a component in a new profile would drop it from
+`default` and change the frozen 45-slot product generation that
+`just product_boot_check` and the nineteen `just boot_layout_check` pairs
+guard. See [`sel4.md`](../contracts/generation/v1/fixtures/sel4.md) beside it.
+
+It declares the five components whose entire operation surface the root
+mediates: `init`, `console`, `spawn-service`, `sysinfo`, `echo-agent`.
+
+The remaining components are deferred, each on a plane
+`slime-root/src/ipc.rs::Operation::mediation` answers `Unavailable` — those
+planes have no seL4 mechanism owner in this cutover, and giving them one is not
+scoped in P5:
+
+| Deferred | Blocking plane |
+| --- | --- |
+| `dango`, `powerbox-chooser`, `powerbox-probe` | input, directory |
+| `generation-manager` and the five `generation-*` commands | generation management |
+| `filesystem-service`, `directory-probe` | directory, object store |
+| `storage-probe`, `storage-writer`, `storage-fault-probe`, `storage-store-probe` | block, object store |
+| `recovery` | recovery |
+| `sample-lender`, `sample-receiver`, the whole `fabric-*` set | C7 sample plane and C8 fabric — P5.3 |
+
+`spawn` resolves its authority from the caller's declared grants but does not
+yet construct the child; that is P5.3, together with the C7/C8 data path.
+
+#### Exit condition (observed)
+
+Observed 2026-08-04; see
+[`devlog/2026-08-04-p5-2-native-component-images/`](../devlog/2026-08-04-p5-2-native-component-images/index.md).
+
+A generation of five native ELF component images boots its declared graph on
+seL4. Every payload is target-qualified and admitted before mapping
+(`elf=5 slimecm=0 wrong_target=0 unrecognized=0`); each component is built from
+its own generation object, receives the grants the generation declares for it —
+`spawn-service` holds exactly the two executables it is granted, every other
+component holds none — binds the transfer window the loader mapped for it, and
+runs. `spawn-service` completes the full shared-buffer
+create/map/write/seal/unmap/release cycle through real seL4 frames against its
+declared quota. An operation on an unmediated plane returns its bounded Slime
+error with the caller still running, and an ungranted executable slot is
+refused rather than served.
 
 ### P5.3 — C7/C8 data path on seL4
 

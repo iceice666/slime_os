@@ -16,6 +16,47 @@ at the bottom rather than deleting it.
 
 ## Open
 
+### B12 — the component build's `--remap-path-prefix` names a path that does not exist
+
+**Problem:** `components/.cargo/config.toml` passes
+`--remap-path-prefix /home/iceice666/projects/slime_os=.` for both the
+`x86_64-unknown-none` and `aarch64-unknown-none` targets. The current checkout is
+`/home/iceice666/projects/slime_os-sel4-cutover`. Because the stale literal is a
+*prefix* of the real path, the flag does not simply miss: it rewrites the leading
+portion and leaves `-sel4-cutover/...` behind, so recorded paths are mangled
+rather than normalized, and a checkout at a different directory still produces
+different bytes.
+
+The determinism claim this flag exists to support is therefore weaker than it
+reads. `just generation_check` still passes, because it builds twice from *one*
+checkout — the property it verifies is reproducibility across runs, not across
+source paths. `build-sel4.py` closes the same leak properly for the kernel with
+`-ffile-prefix-map` onto fixed logical roots (`/slime/sel4`, `/slime/build`), and
+P5.1's devlog records two builds from different source paths as byte-identical
+on that path.
+
+**Evidence:** `components/.cargo/config.toml:11` and `:21` against `pwd`. Noted
+while adding the seL4 target in P5.2; see
+`devlog/2026-08-04-p5-2-native-component-images/`.
+
+**Proposed fix:** remap from the repository root as computed at build time rather
+than from a hardcoded literal — the builder already knows it (`ROOT` in
+`scripts/build/build-generation.py`), and the seL4 path passes
+`--remap-path-prefix={ROOT}=.` explicitly for exactly this reason. Deciding
+whether the mapped-to token should match `build-sel4.py`'s `/slime/...`
+convention is part of the fix.
+
+**Why deferred rather than fixed in P5.2:** changing the frozen x86 oracle's
+build inputs alters every component ELF it produces, and therefore the
+authenticated identity of every generation the oracle's gates assert against.
+That is a larger blast radius than the defect, and it is orthogonal to native
+seL4 component images. The seL4 target is unaffected: it inherits none of these
+rustflags (they are keyed by triple) and passes its own.
+
+**Exit condition:** two builds of the same generation from two different
+checkout directories produce byte-identical component images and the same
+generation identity, with `just generation_check`, `just product_boot_check`,
+and `just test` unchanged.
 
 ## Resolved
 
