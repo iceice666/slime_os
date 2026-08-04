@@ -2,7 +2,7 @@
 
 **Purpose:** Preserve one Slime capability/component/generation architecture across target profiles while making AArch64 and Raspberry Pi 5 the near-term product path.
 
-**Status:** In progress - P0, P1, P2.1, P5.1, P5.2, and P5.3.1 complete.
+**Status:** In progress - P0, P1, P2.1, P5.1, P5.2, P5.3.1, and P5.3.2 complete.
 
 **Decision:** AArch64/Raspberry Pi 5 is now the near-term physical target because the current product goal is the RPi5 ROS 2 two-node demo. The existing x86-64 QEMU path remains the regression oracle for completed work until each semantic corpus is replayed on AArch64, but x86-64/Framework is no longer the product-leading roadmap. RV64 is deferred. As of P5, the AArch64 kernel-side mechanism is being substituted with upstream seL4 rather than hand-written: see [P5](#p5-sel4-microkernel-substitution), which supersedes the custom-kernel half of P2.2-P2.6 if it completes.
 
@@ -447,8 +447,8 @@ One named Raspberry Pi 5 profile runs the verified isolated Slime vertical slice
 
 ## P5: seL4 microkernel substitution
 
-**Status:** In progress — P5.1, P5.2, and P5.3.1 complete; P5.3.2–P5.3.4, P5.4,
-and P5.5 planned.
+**Status:** In progress — P5.1, P5.2, P5.3.1, and P5.3.2 complete; P5.3.3,
+P5.3.4, P5.4, and P5.5 planned.
 
 **Depends on:** P0 and P1. Supersedes the custom-kernel half of P2.2–P2.6 if it
 completes; P2.1 AArch64 boot evidence is retained and not re-claimed here.
@@ -598,7 +598,7 @@ this boot path. Both halves are fault-injected in the devlog entry.
 
 ### P5.3 — C7 sample plane on seL4
 
-**Status:** In progress — P5.3.1 complete; P5.3.2–P5.3.4 planned.
+**Status:** In progress — P5.3.1 and P5.3.2 complete; P5.3.3 and P5.3.4 planned.
 
 **Depends on:** P5.2 and C7.
 
@@ -683,21 +683,74 @@ halves `init` brokers through spawn, which arrives with P5.3.3.
 
 ### P5.3.2 — Loan plane and generation-declared quotas on seL4
 
-**Status:** Not started.
+**Status:** Complete.
 
 **Depends on:** P5.3.1.
 
-`SharedBufferTable` already implements loan, loan-map, return, and revoke against
-real seL4 frames, but no dispatcher arm reaches them, and `SHARED_QUOTA` is a
-hardcoded constant with `loan_count: 0` applied to every task rather than the
-`shared-buffer-budget` resource the generation carries.
+`SharedBufferTable` already implemented loan, loan-map, return, and revoke
+against real seL4 frames, but no dispatcher arm reached them, and `SHARED_QUOTA`
+was a hardcoded constant with `loan_count: 0` applied to every task rather than
+the `shared-buffer-budget` resource the generation carries.
+`SharedBufferTable::reclaim_holder` existed but was called only from unit tests,
+so a dead task's buffers, mappings, and loans were never settled.
 
-#### Exit condition
+#### Required checks
+
+- every launched component's four ceilings are decoded from the generation's
+  `shared-buffer-budget` resource, and a component the budget does not name
+  holds no quota at all;
+- a component loans an exact sealed subrange to a receiver it named through a
+  capability, and an unsealed source is refused;
+- the loan capability moves to the receiver — a move, not a copy: the sender
+  cannot name it afterwards — while every other resource kind stays unmovable;
+- the receiver maps only the loaned bytes, read-only, and returns the loan
+  exactly once;
+- each of the four quota classes refuses at ceiling+1 while the other three are
+  unspent, and a third holder that took no part is undisturbed;
+- every loan, mapping, region, frame alias, and in-flight capability is
+  reclaimed when its holder dies.
+
+#### Verification target
+
+```sh
+just sel4_loan_check
+```
+
+A fourth image, beside the three P5.1–P5.3.1 gates boot. Each gate boots the
+artifact it asserts about, so none invalidates another's evidence by being
+built last.
+
+#### Exit condition (observed)
+
+Observed 2026-08-04; see
+[`devlog/2026-08-04-p5-3-2-loan-plane/`](../devlog/2026-08-04-p5-3-2-loan-plane/index.md).
 
 A component loans a sealed subrange to a receiver named by capability, the
 receiver maps it read-only and returns it exactly once, and each of the four
 quota classes fails at ceiling+1 against limits decoded from the generation
 without disturbing an unrelated holder.
+
+The receiver is `sample-receiver`, **unmodified** — the same binary the x86
+oracle's `just sample_plane_live_check` runs, with no seL4 branch. It brings
+four denial arms of its own, all observed: a descriptor naming another loan, a
+map past the loaned range, a writable map of a read-only loan, and a second
+return. The graph drains to `loans=0 mappings=0 regions=0 transit=0 orphans=0
+aliases=0`.
+
+Capability transfer over `send` landed here rather than with P5.5, because a
+loan cannot reach its receiver without it. It is the narrow form — one resource
+kind, over a channel the generation declared — and P5.5's `Operation::CapTransfer`
+remains the separate narrow-on-transfer operation C8.3 needs.
+
+Five denial arms are fault-injected in the devlog entry. Two are recorded
+specially: the page ceiling survives a single-site injection because the table
+re-checks it, and the in-flight reclamation arm was uncovered until the fixture
+was made to strand a capability deliberately.
+
+Not in this slice: resolving a `bufferCreate` capability before admitting an
+allocation, so the quota is currently the only bound — recorded as **B13** in
+[`00-backlog.md`](00-backlog.md), deferred because closing it renumbers every
+component's capability slots, which is P5.3.3's distribution problem.
 
 ### P5.3.3 — Child construction and supervision on seL4
 

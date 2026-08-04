@@ -1,0 +1,91 @@
+SLIME_ROOT generation admitted number=1 components=3 grants=3 health=3 kernel=1 bootstrap=1
+SLIME_ROOT authority manifest=[be, 29, 33, f4, 60, 76, b6, aa, aa, 19, 78, cd, 3e, 8c, 02, 2b, b1, 22, af, c7, 4a, 4d, 2d, 18, 35, 36, 33, 14, 89, 30, b9, 4a]
+SLIME_ROOT graph admitted; legacy SLIMECM images not activated components=3 slimecm=0 elf=3 unrecognized=0
+SLIME_ROOT allocator slots=3471 untypeds=32 bytes=532179312
+SLIME_GRAPH staged task=0 component=console grants=2 executables=0 window=0x236000 frames=55 tables=3 entry=0x2114f0
+SLIME_GRAPH staged task=1 component=init grants=0 executables=0 window=0x238000 frames=57 tables=3 entry=0x211d68
+SLIME_GRAPH staged task=2 component=sample-receiver grants=1 executables=0 window=0x236000 frames=55 tables=3 entry=0x2115f0
+SLIME_GRAPH staged components=3 loadable=3 slimecm=0 wrong_target=0 unrecognized=0
+SLIME_GRAPH channel grant=dango-output key=0 producer=1 consumer=0 queues=1
+SLIME_GRAPH channel end task=1 slot=3 key=0 rights=0x1
+SLIME_GRAPH channel end task=0 slot=0 key=0 rights=0x2
+SLIME_GRAPH channel grant=powerbox-client key=1 producer=1 consumer=0 queues=1
+SLIME_GRAPH channel end task=1 slot=13 key=1 rights=0x1
+SLIME_GRAPH channel end task=0 slot=1 key=1 rights=0x2
+SLIME_GRAPH channel grant=sample-receiver-side key=2 producer=2 consumer=1 queues=2
+SLIME_GRAPH channel end task=2 slot=0 key=2 rights=0x3
+SLIME_GRAPH channel end task=1 slot=17 key=2 rights=0x3
+SLIME_GRAPH channels grants=3 channels=3 queues=4 slots=6 unplaced=0
+SLIME_GRAPH activated components=3
+SLIME_GRAPH quota task=0 component=console pages=2 buffers=1 mappings=1 loans=1
+SLIME_GRAPH quota task=1 component=init pages=4 buffers=2 mappings=2 loans=1
+SLIME_GRAPH quota task=2 component=sample-receiver pages=4 buffers=1 mappings=1 loans=1
+SLIME_GRAPH quotas declared=3 budgeted=3 holders=3
+SLIME_GRAPH window bound task=2 base=0x236000 len=4096
+SLIME_GRAPH parked task=2 channel=2 reason=recv
+SLIME_GRAPH window bound task=1 base=0x238000 len=4096
+SLIME_GRAPH buffer create refused task=1 pages=5 class=quota
+[init] page quota refused
+SLIME_GRAPH buffer created task=1 slot=1 id=1 pages=1 writable=1
+SLIME_GRAPH buffer created task=1 slot=2 id=2 pages=1 writable=1
+SLIME_GRAPH buffer create refused task=1 pages=1 class=quota
+[init] buffer quota refused
+SLIME_GRAPH buffer map refused task=1 slot=1 class=quota
+[init] mapping quota refused
+[init] quota probes reclaimed
+SLIME_GRAPH buffer created task=1 slot=1 id=3 pages=2 writable=1
+[init] payload written
+SLIME_GRAPH loan refused task=1 slot=1 class=unsealed
+[init] unsealed loan denied
+SLIME_GRAPH loan refused task=1 slot=63 class=absent
+SLIME_GRAPH loan refused task=1 slot=1 class=absent
+[init] unnamed receiver denied
+SLIME_GRAPH loan refused task=1 slot=1 class=undelegated
+[init] undelegated loan denied
+SLIME_GRAPH loan created task=1 slot=2 id=1 to=2 offset=0 length=8192
+[init] loan created
+SLIME_GRAPH loan refused task=1 slot=1 class=quota
+[init] loan quota refused
+SLIME_GRAPH sent task=1 channel=2 bytes=64 caps=1 queued=1
+SLIME_GRAPH capability transfer task=1 channel=2 to=2 caps=1
+[init] loan transferred
+[init] transferred loan released by sender
+SLIME_GRAPH parked task=1 channel=2 reason=recv
+[sample-receiver] descriptor received
+SLIME_GRAPH loan mapped refused task=2 slot=1 class=range
+[sample-receiver] malformed descriptor mapped nothing
+SLIME_GRAPH frame aliased frame=827 vaddr=0xa00000000 live=1
+SLIME_GRAPH frame aliased frame=828 vaddr=0xa00001000 live=2
+SLIME_GRAPH loan mapped task=2 slot=1 id=1
+[sample-receiver] loaned bytes mapped
+[sample-receiver] loan stays read-only
+[sample-receiver] payload verified
+SLIME_GRAPH loan returned task=2 slot=1 id=1
+[sample-receiver] loan returned once
+SLIME_GRAPH window bound task=0 base=0x236000 len=4096
+SLIME_GRAPH parked task=0 channel=0 reason=recv
+SLIME_GRAPH sent task=2 channel=2 bytes=7 caps=0 queued=1
+[sample-receiver] done
+SLIME_GRAPH component exit task=2 status=0
+SLIME_GRAPH peer death task=2 channels=1 woken=0
+[init] receiver settled
+[init] released
+SLIME_GRAPH sent task=1 channel=0 bytes=34 caps=0 queued=1
+[console] unrelated holder intact
+SLIME_GRAPH buffer created task=0 slot=2 id=4 pages=1 writable=1
+[console] shared-buffer quota live
+SLIME_GRAPH parked task=0 channel=0 reason=recv
+SLIME_GRAPH buffer created task=1 slot=1 id=5 pages=1 writable=1
+SLIME_GRAPH loan created task=1 slot=2 id=2 to=0 offset=0 length=4096
+SLIME_GRAPH sent task=1 channel=1 bytes=8 caps=1 queued=1
+SLIME_GRAPH capability transfer task=1 channel=1 to=0 caps=1
+[init] loan stranded in flight
+[init] loan plane complete
+SLIME_GRAPH component exit task=1 status=0
+SLIME_GRAPH peer death task=1 channels=3 woken=1
+SLIME_GRAPH holder reclaimed task=1 charges=2 actions=2 stranded=1
+SLIME_GRAPH component exit task=0 status=0
+SLIME_GRAPH peer death task=0 channels=2 woken=0
+SLIME_GRAPH served live=0 unsupported=0 unimplemented=0 buffers=20 windows=0 tables=0
+SLIME_GRAPH channels served sends=4 receives=3 parks=4 settled=6 parked=0 queues=0 replies=8
+SLIME_GRAPH loans served=4 loans=0 mappings=0 regions=0 transit=0 orphans=0 aliases=0

@@ -16,6 +16,65 @@ at the bottom rather than deleting it.
 
 ## Open
 
+### B13 — `slime-root` admits a shared-buffer allocation without resolving a factory capability
+
+**Problem:** `slime-root/src/main.rs::serve_buffer_create` ignores the factory
+slot its caller names and admits the allocation against the holder's declared
+quota alone. The retired kernel resolves a `RIGHT_BUFFER_CREATE` capability
+first (`kernel/src/syscall/mod.rs::sys_shared_buffer_create`), so a component
+the generation grants no factory allocates nothing there whatever its budget
+says. On seL4 the budget is the only bound: a component with a non-zero ceiling
+and no factory grant still allocates.
+
+That inverts the intended relationship between the two. The grant authorizes
+the operation and the budget bounds it; they are independent by design, and
+`components/bins/src/shared_buffer_probe.rs` documents exactly that. With the
+grant unchecked, authority to allocate follows from a budget entry — which is
+ambient authority arriving through the back door, against the invariant that
+`slime-root`'s whole capability model exists to hold.
+
+The blast radius is currently small: every seL4 generation that declares a
+budget holder also intends it to allocate, so no live graph is mis-admitted.
+It is a latent hole rather than an observed defect.
+
+The same discarded word carries the caller's `writable` flag
+(`slot_with_flag(factory_slot, writable)` in
+`components/runtime/src/syscall/wire.rs`), so every region is created writable
+whatever the caller asked for. That is permissive in the same direction and
+belongs to the same fix.
+
+**Evidence:** `slime-root/src/main.rs::serve_buffer_create` takes no slot
+argument and the `SharedBufferCreate` arm reads only `words[1]`, against
+`kernel/src/syscall/mod.rs::sys_shared_buffer_create`'s capability resolution.
+`graph::Resource::SharedBufferFactory` is defined and never installed or
+resolved anywhere in the crate. Noted while adding the loan plane in P5.3.2 and
+confirmed by that slice's review; see `devlog/2026-08-04-p5-3-2-loan-plane/`.
+
+**Proposed fix:** materialize the boot layout's `shared-buffer-factory` role and
+the generation's `bufferCreate` grants into the holding components' capability
+tables, the way `channel::materialize` already does for send/recv grants, and
+resolve the slot in `serve_buffer_create` before admitting anything — reading
+the `writable` flag from the same word while it is being decoded.
+
+P5.3.2 made this sharper rather than causing it: replacing the uniform
+`SHARED_QUOTA` with the generation's declared ceilings means the budget now
+carries the weight the factory grant used to. Authority to allocate currently
+follows from a budget entry alone, which is why the entry moved to the top of
+the open list.
+
+**Why deferred rather than fixed in P5.3.2:** installing non-channel grants
+changes what occupies each component's capability table, and therefore the slot
+numbers `channel::materialize`'s cursor hands out for channel ends. Those
+numbers are asserted marker-for-marker by `just sel4_component_graph_check` and
+`just sel4_channel_check`. Renumbering them is the same distribution problem
+P5.3.3 solves for spawn grants, and doing it twice — once here and once there —
+would rewrite two gates' evidence for one change.
+
+**Exit condition:** a component holding a budget entry but no `bufferCreate`
+grant is refused `ERR_BAD_CAP` by `shared_buffer_create`, observed under a named
+seL4 gate, with `just sel4_component_graph_check`, `just sel4_channel_check`, and
+`just sel4_loan_check` still passing.
+
 ### B12 — the component build's `--remap-path-prefix` names a path that does not exist
 
 **Problem:** `components/.cargo/config.toml` passes
@@ -57,6 +116,11 @@ rustflags (they are keyed by triple) and passes its own.
 checkout directories produce byte-identical component images and the same
 generation identity, with `just generation_check`, `just product_boot_check`,
 and `just test` unchanged.
+
+**Deferral re-reviewed 2026-08-04, before opening P5.3.2's gate** on the same
+reasoning: that slice adds a fourth seL4 generation through the same build path,
+so it neither touches the defect nor extends its reach. See
+`devlog/2026-08-04-p5-3-2-loan-plane/`.
 
 **Deferral reviewed 2026-08-04, before opening P5.3.1's gate.** Still deferred,
 on the reason recorded above rather than by omission. B12's own analysis
