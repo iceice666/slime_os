@@ -159,6 +159,9 @@ pub struct ChildVSpace {
     /// [`crate::transfer_window`].
     pub transfer_window_addr: usize,
     pub transfer_window: sel4::cap::Granule,
+    /// A root-held second capability to the window frame, for the root's own
+    /// transient staging mapping. See [`crate::transfer_window::Window::alias`].
+    pub transfer_window_alias: sel4::cap::Granule,
     pub frames_mapped: usize,
     pub tables_mapped: usize,
 }
@@ -299,6 +302,27 @@ pub fn create_child_vspace(
             vaddr: transfer_window_addr,
             error,
         })?;
+    // A second capability to that same frame, kept in root CSpace so the root
+    // can map the window at its scratch address to stage a payload through it.
+    // A frame capability records exactly one mapping, and the one above is the
+    // child's; without a copy the root could only read the window by first
+    // unmapping a live child's own view of it.
+    //
+    // Allocated from the same cursor as every other object this task owns, so
+    // the task's cleanup record already covers it and teardown still reaches
+    // zero.
+    let transfer_window_alias = allocator.reserve_slot::<sel4::cap_type::Granule>()?.cap();
+    let root_cnode = sel4::init_thread::slot::CNODE.cap();
+    root_cnode
+        .absolute_cptr(transfer_window_alias)
+        .copy(
+            &root_cnode.absolute_cptr(transfer_window),
+            sel4::CapRights::read_write(),
+        )
+        .map_err(|error| VSpaceError::FrameMap {
+            vaddr: transfer_window_addr,
+            error,
+        })?;
 
     Ok(ChildVSpace {
         vspace,
@@ -306,6 +330,7 @@ pub fn create_child_vspace(
         ipc_buffer,
         transfer_window_addr,
         transfer_window,
+        transfer_window_alias,
         frames_mapped: page_count + 2,
         tables_mapped,
     })

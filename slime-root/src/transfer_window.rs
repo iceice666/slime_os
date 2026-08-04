@@ -47,6 +47,19 @@ pub struct Window {
     /// Root-held capability for the frame backing it. The root stages through
     /// this, never through `base`, which is only meaningful in the child.
     pub frame: sel4::cap::Granule,
+    /// A second capability to the same frame, for the root's own transient
+    /// mapping at the scratch address.
+    ///
+    /// A frame capability records exactly one mapping, and `frame`'s is the
+    /// child's — live for as long as the child is. Staging therefore cannot go
+    /// through `frame` without first tearing down the mapping the child is
+    /// using, so the copy is made once at construction and mapped and unmapped
+    /// around each staged transfer instead.
+    ///
+    /// It is a copy of the same authority, not a widening: the frame is one the
+    /// root allocated and mapped for this child, and the alias never leaves the
+    /// root's CSpace.
+    pub alias: sel4::cap::Granule,
 }
 
 /// Windows the root has mapped, and which of them their tasks have declared.
@@ -77,11 +90,15 @@ impl<const CAPACITY: usize> WindowTable<CAPACITY> {
 
     /// Record the window the loader mapped for `task`. Called during task
     /// construction, before the task runs.
+    ///
+    /// `alias` is a second capability to the same frame; see [`Window::alias`]
+    /// for why staging needs one.
     pub fn declare(
         &mut self,
         task: TaskId,
         base: usize,
         frame: sel4::cap::Granule,
+        alias: sel4::cap::Granule,
     ) -> Result<(), IpcError> {
         if self.entries.iter().flatten().any(|(w, _)| w.task == task) {
             return Err(IpcError::WaiterConflict);
@@ -95,6 +112,7 @@ impl<const CAPACITY: usize> WindowTable<CAPACITY> {
                 base,
                 len: WINDOW_BYTES,
                 frame,
+                alias,
             },
             false,
         ));
@@ -212,6 +230,187 @@ pub const fn frame_len(len: usize, caps: usize) -> usize {
     frame_caps_offset(len) + caps * 8
 }
 
+// ---- staging through a window ----
+//
+// The root reads and writes a child's window through its own frame capability
+// at the scratch address, never through the child's `base`: `base` is only
+// meaningful inside that child's VSpace, and trusting it would let a task point
+// the root at memory it does not own. The frame is mapped for the duration of
+// one copy and unmapped after, so the root holds no standing alias of a region
+// a child can write.
+
+/// Payload bytes one staged frame may carry. The logical message bound, which
+/// is what every windowed operation actually stages.
+pub const MAX_STAGED_BYTES: usize = crate::ipc::MAX_MESSAGE_BYTES;
+
+/// Capability slots one staged frame may carry.
+pub const MAX_STAGED_CAPS: usize = crate::ipc::MAX_MESSAGE_CAPS;
+
+/// One frame read out of, or to be written into, a task's transfer window.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StagedFrame {
+    bytes: [u8; MAX_STAGED_BYTES],
+    len: usize,
+    caps: [u64; MAX_STAGED_CAPS],
+    cap_count: usize,
+}
+
+impl StagedFrame {
+    pub const fn empty() -> Self {
+        Self {
+            bytes: [0; MAX_STAGED_BYTES],
+            len: 0,
+            caps: [0; MAX_STAGED_CAPS],
+            cap_count: 0,
+        }
+    }
+
+    /// A frame carrying `bytes` and no capabilities.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, IpcError> {
+        let mut frame = Self::empty();
+        let destination = frame
+            .bytes
+            .get_mut(..bytes.len())
+            .ok_or(IpcError::InvalidLength)?;
+        destination.copy_from_slice(bytes);
+        frame.len = bytes.len();
+        Ok(frame)
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes[..self.len]
+    }
+
+    pub fn caps(&self) -> &[u64] {
+        &self.caps[..self.cap_count]
+    }
+
+    pub const fn cap_count(&self) -> usize {
+        self.cap_count
+    }
+
+    /// The descriptor a reply carrying this frame reports.
+    pub const fn reply_descriptor(&self) -> u64 {
+        descriptor(self.len, self.cap_count, FORM_WINDOW)
+    }
+}
+
+/// Read the frame a caller staged, whether it rode inline or through the
+/// window.
+///
+/// `words` are the fast message registers as received: `words[1]` is the
+/// transfer descriptor and `words[2..]` the inline payload. An inline frame
+/// needs no window at all, which is what lets a short `send` work before a task
+/// has bound one.
+pub fn read_staged(
+    window: Option<Window>,
+    transfer: u64,
+    words: &[sel4::Word],
+    scratch: &crate::child_vspace::ScratchPage,
+) -> Result<StagedFrame, IpcError> {
+    let len = descriptor_len(transfer);
+    let caps = descriptor_caps(transfer);
+    if len > MAX_STAGED_BYTES || caps > MAX_STAGED_CAPS {
+        return Err(IpcError::InvalidLength);
+    }
+    let mut frame = StagedFrame::empty();
+    frame.len = len;
+    frame.cap_count = caps;
+    if descriptor_form(transfer) == FORM_INLINE {
+        // The two payload registers, little-endian, exactly as `pack_bytes`
+        // wrote them. A descriptor claiming more bytes than they hold is
+        // refused rather than read past.
+        if caps != 0 || len > INLINE_BYTES {
+            return Err(IpcError::InvalidLength);
+        }
+        let mut inline = [0u8; INLINE_BYTES];
+        for (index, word) in words.iter().skip(2).take(2).enumerate() {
+            inline[index * 8..][..8].copy_from_slice(&word.to_le_bytes());
+        }
+        frame.bytes[..len].copy_from_slice(&inline[..len]);
+        return Ok(frame);
+    }
+    let window = window.ok_or(IpcError::InvalidLength)?;
+    if frame_len(len, caps) > window.len {
+        return Err(IpcError::InvalidLength);
+    }
+    with_window_mapped(window, scratch, |base| {
+        // SAFETY: `base` is the scratch address, where `window.frame` is mapped
+        // read-write for the duration of this closure and aliased by no live
+        // Rust reference. `frame_len(len, caps)` was bounded by `window.len`
+        // above, and the window is one granule, so every read is in bounds.
+        unsafe {
+            core::ptr::copy_nonoverlapping(base, frame.bytes.as_mut_ptr(), len);
+            let slots = base.add(frame_caps_offset(len)).cast::<u64>();
+            for (index, slot) in frame.caps.iter_mut().take(caps).enumerate() {
+                *slot = slots.add(index).read();
+            }
+        }
+    })?;
+    Ok(frame)
+}
+
+/// Write a reply frame into a caller's window. The caller's `collect` reads it
+/// back at the descriptor [`StagedFrame::reply_descriptor`] reports.
+pub fn write_staged(
+    window: Option<Window>,
+    frame: &StagedFrame,
+    scratch: &crate::child_vspace::ScratchPage,
+) -> Result<(), IpcError> {
+    let window = window.ok_or(IpcError::InvalidLength)?;
+    if frame_len(frame.len, frame.cap_count) > window.len {
+        return Err(IpcError::InvalidLength);
+    }
+    with_window_mapped(window, scratch, |base| {
+        // SAFETY: as for `read_staged` — the same mapping, bounded by the same
+        // `window.len` check, for the duration of this closure.
+        unsafe {
+            core::ptr::copy_nonoverlapping(frame.bytes.as_ptr(), base, frame.len);
+            let slots = base.add(frame_caps_offset(frame.len)).cast::<u64>();
+            for (index, slot) in frame.caps.iter().take(frame.cap_count).enumerate() {
+                slots.add(index).write(*slot);
+            }
+        }
+    })
+}
+
+/// Map `window`'s frame at the scratch address, run `body`, and unmap.
+///
+/// Through the window's *alias* capability, never through `frame`. A frame
+/// capability records exactly one mapping — the same constraint the shared
+/// buffer phase already works around by unmapping before it reads — and
+/// `frame` is spent on the child's own mapping, which is live for as long as
+/// the child is. Mapping through it here would silently fail and leave the root
+/// reading an unmapped scratch address, which faults the root task.
+///
+/// The alias is unmapped again on both paths: a standing root mapping of a page
+/// a child can write is an alias the root does not need, and it would break the
+/// next caller that needs the scratch address.
+fn with_window_mapped(
+    window: Window,
+    scratch: &crate::child_vspace::ScratchPage,
+    body: impl FnOnce(*mut u8),
+) -> Result<(), IpcError> {
+    window
+        .alias
+        .frame_map(
+            sel4::init_thread::slot::VSPACE.cap(),
+            scratch.addr(),
+            sel4::CapRights::read_write(),
+            sel4::VmAttributes::DEFAULT | sel4::VmAttributes::EXECUTE_NEVER,
+        )
+        .map_err(|_| IpcError::TransferFailed)?;
+    body(scratch.addr() as *mut u8);
+    window
+        .alias
+        .frame_unmap()
+        .map_err(|_| IpcError::TransferFailed)
+}
+
+/// Payload bytes the two inline registers carry. Mirrors
+/// `components/runtime/src/syscall/wire.rs::INLINE_BYTES`.
+pub const INLINE_BYTES: usize = 16;
+
 #[cfg(test)]
 mod descriptor_tests {
     use super::*;
@@ -247,9 +446,15 @@ mod tests {
         sel4::cap::Granule::from_bits(7)
     }
 
+    /// The root-side alias of the same frame. A distinct CPtr, because it is a
+    /// distinct capability: one mapping each.
+    fn alias() -> sel4::cap::Granule {
+        sel4::cap::Granule::from_bits(8)
+    }
+
     fn table() -> WindowTable<4> {
         let mut table = WindowTable::new();
-        table.declare(TaskId(0), BASE, frame()).unwrap();
+        table.declare(TaskId(0), BASE, frame(), alias()).unwrap();
         table
     }
 
@@ -306,7 +511,9 @@ mod tests {
     #[test]
     fn windows_are_per_task_and_released_on_reclaim() {
         let mut table = table();
-        table.declare(TaskId(1), BASE + 0x8000, frame()).unwrap();
+        table
+            .declare(TaskId(1), BASE + 0x8000, frame(), alias())
+            .unwrap();
         table
             .bind(TaskId(1), STARTUP_WINDOW_SLOT, BASE + 0x8000, WINDOW_BYTES)
             .unwrap();
@@ -328,7 +535,7 @@ mod tests {
     fn a_task_cannot_hold_two_windows() {
         let mut table = table();
         assert_eq!(
-            table.declare(TaskId(0), BASE + 0x8000, frame()),
+            table.declare(TaskId(0), BASE + 0x8000, frame(), alias()),
             Err(IpcError::WaiterConflict)
         );
     }
