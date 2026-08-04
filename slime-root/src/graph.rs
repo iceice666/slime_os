@@ -54,6 +54,34 @@ pub enum Resource {
     SharedBuffer {
         handle: crate::shared_buffer::BufferHandle,
     },
+    /// One outstanding loan of a sealed subrange, held by its receiver.
+    ///
+    /// The only resource kind this cutover moves between tasks. A
+    /// [`LoanHandle`](crate::shared_buffer::LoanHandle) names the receiver it
+    /// was minted for, and the table refuses a claim from anyone else, so the
+    /// move is a transfer of a name the recipient can already be checked
+    /// against rather than a widening of authority. Every other kind is
+    /// refused: an endpoint end, an executable, a factory, and a supervision
+    /// handle are all authority the generation placed, and moving one would let
+    /// a component redistribute a graph the generation declared.
+    Loan {
+        handle: crate::shared_buffer::LoanHandle,
+    },
+}
+
+impl Resource {
+    /// Whether this cutover can move the resource between capability tables.
+    ///
+    /// Kind, not rights, is what decides *here*: this answers only whether the
+    /// root has a mechanism for the move, and today it has one only for a loan.
+    ///
+    /// Whether the generation *delegated* the move is a separate question,
+    /// answered at the mint rather than at the send — `main.rs::serve_buffer_loan`
+    /// refuses to create a loan over a channel the generation did not declare
+    /// `transferable`, so an undelegated edge carries nothing to test here.
+    pub const fn is_transferable(&self) -> bool {
+        matches!(self, Self::Loan { .. })
+    }
 }
 
 /// One logical capability: what it names, and the rights held over it.

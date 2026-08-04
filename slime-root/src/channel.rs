@@ -111,6 +111,15 @@ struct Entry {
     /// bidirectional *and* the two ends are different tasks. A loopback has no
     /// reverse: both accessors resolve to `forward` for the one task holding it.
     reverse: Option<Channel>,
+    /// Whether the generation declared this grant `transferable`.
+    ///
+    /// Recorded on the channel rather than folded into the ends' rights bits,
+    /// because it is not authority over the *channel*: it does not widen what
+    /// either end may send or receive. It is the generation's statement that
+    /// this edge may carry delegated authority, and the only thing that reads
+    /// it is the loan plane, which refuses to mint a loan over an edge the
+    /// generation did not mark — see `main.rs::serve_buffer_loan`.
+    transferable: bool,
 }
 
 impl Entry {
@@ -274,6 +283,14 @@ impl ChannelTable {
             .count()
     }
 
+    /// Whether the generation declared this channel's grant `transferable`.
+    ///
+    /// `None` for a key naming no channel. A component cannot influence this:
+    /// it is decided once at materialization from the generation's own field.
+    pub fn transferable(&self, key: ChannelKey) -> Option<bool> {
+        self.entry(key).map(|entry| entry.transferable)
+    }
+
     /// The task at the other end of `key` from `task`.
     pub fn peer(&self, key: ChannelKey, task: TaskId) -> Option<TaskId> {
         let entry = self.entry(key)?;
@@ -325,6 +342,7 @@ impl ChannelTable {
         producer: TaskId,
         consumer: TaskId,
         rights: u64,
+        transferable: bool,
     ) -> Result<(ChannelKey, usize), ChannelError> {
         let key = self.len as ChannelKey;
         let slot = self
@@ -353,6 +371,7 @@ impl ChannelTable {
             consumer,
             forward,
             reverse,
+            transferable,
         });
         self.len += 1;
         Ok((key, queues))
@@ -497,6 +516,21 @@ impl LaunchedComponents {
             .find(|(index, _)| *index == component)
             .map(|(_, task)| *task)
     }
+
+    pub const fn len(&self) -> usize {
+        self.len
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Every launched component and the task it became, in launch order. The
+    /// component index is what resolves back to the generation's own record, so
+    /// a caller can reach the declared name rather than only the task id.
+    pub fn iter(&self) -> impl Iterator<Item = (usize, TaskId)> + '_ {
+        self.entries.iter().flatten().copied()
+    }
 }
 
 impl Default for LaunchedComponents {
@@ -599,7 +633,7 @@ pub fn materialize(
             *destination = Some((task, slot, held));
         }
 
-        let (key, queues) = channels.push(producer, consumer, carries)?;
+        let (key, queues) = channels.push(producer, consumer, carries, grant.transferable)?;
         report.channels += 1;
         report.queues += queues;
         sel4::debug_println!(

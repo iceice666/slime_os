@@ -32,6 +32,131 @@ use crate::shared_buffer::{
 /// closed instead of exhausting CSlots silently.
 pub const MAX_ADAPTER_TABLES: usize = 32;
 
+/// Frame aliases the root may hold at once, across every adapter.
+///
+/// One per *page* of a second-or-later mapping of the same frame, which in
+/// practice means one per loaned page: the lender's mapping uses the anchor and
+/// the receiver's needs a copy. Sized against `MAX_MAPPINGS`, so a graph whose
+/// every mapping were an alias still fits.
+pub const MAX_FRAME_ALIASES: usize = crate::shared_buffer::MAX_MAPPINGS;
+
+/// One frame capability minted so a frame could be mapped a second time.
+///
+/// Keyed by the exact mapping it backs — the anchor, the VSpace, and the
+/// address — because that is what an unmap names, and unmapping through the
+/// anchor when the alias holds the mapping would tear down the *other* holder's
+/// view instead. See [`FrameAliases`].
+#[derive(Clone, Copy)]
+struct AliasRecord {
+    frame: FrameCap,
+    vspace: VSpaceCap,
+    vaddr: usize,
+    alias: sel4::cap::Granule,
+}
+
+/// Root-owned registry of frame aliases, outliving any one [`BufferAdapter`].
+///
+/// It has to outlive the adapter because the adapter is constructed fresh for
+/// each operation: the mapping is installed by one and torn down by another,
+/// and both must agree about which capability records it.
+///
+/// Nothing here owns memory. An alias is a copy of an anchor the shared-buffer
+/// table already owns, and `AdapterAction::Revoke` on that anchor drops every
+/// copy along with every mapping — so a record this registry loses costs a
+/// CSlot, never a page.
+pub struct FrameAliases {
+    entries: [Option<AliasRecord>; MAX_FRAME_ALIASES],
+    len: usize,
+}
+
+impl FrameAliases {
+    pub const fn new() -> Self {
+        Self {
+            entries: [None; MAX_FRAME_ALIASES],
+            len: 0,
+        }
+    }
+
+    pub const fn len(&self) -> usize {
+        self.len
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    fn record(
+        &mut self,
+        frame: FrameCap,
+        vspace: VSpaceCap,
+        vaddr: usize,
+        alias: sel4::cap::Granule,
+    ) -> Result<(), BufferAdapterError> {
+        let slot = self
+            .entries
+            .iter_mut()
+            .find(|entry| entry.is_none())
+            .ok_or(BufferAdapterError::TablesExhausted)?;
+        *slot = Some(AliasRecord {
+            frame,
+            vspace,
+            vaddr,
+            alias,
+        });
+        self.len += 1;
+        Ok(())
+    }
+
+    /// The capability holding the mapping of `frame` at `vaddr` in `vspace`, if
+    /// an alias holds it. `None` means the anchor does.
+    fn take(
+        &mut self,
+        frame: FrameCap,
+        vspace: VSpaceCap,
+        vaddr: usize,
+    ) -> Option<sel4::cap::Granule> {
+        let slot = self.entries.iter_mut().find(|entry| {
+            entry.is_some_and(|record| {
+                record.frame == frame && record.vspace == vspace && record.vaddr == vaddr
+            })
+        })?;
+        let record = slot.take()?;
+        self.len -= 1;
+        Some(record.alias)
+    }
+}
+
+impl Default for FrameAliases {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// The root's frame-alias registry.
+///
+/// A static rather than a field, because it must outlive every
+/// [`BufferAdapter`] — one adapter installs a mapping and a later one tears it
+/// down, and both have to agree about which capability records it — while every
+/// adapter is a short-lived local constructed per operation. Threading it
+/// through the eight call sites that build one would put a parameter on each
+/// only to reach the two places that read it.
+///
+/// The same shape, and for a related reason, as `main.rs`'s `CHANNELS`. Access
+/// is sound because the root task is single-threaded and each borrow below ends
+/// within its own statement, so no two references are ever live at once.
+///
+/// How many aliases are live is reported by [`live_frame_aliases`], which the
+/// terminal accounting reads: an alias outstanding at teardown means a mapping
+/// the root still believes exists.
+static mut FRAME_ALIASES: FrameAliases = FrameAliases::new();
+
+/// Frame aliases the root currently holds. Zero at teardown means every
+/// second-holder mapping was torn down through the capability that recorded it.
+pub fn live_frame_aliases() -> usize {
+    // SAFETY: single-threaded; the borrow ends with this expression.
+    unsafe { &*core::ptr::addr_of!(FRAME_ALIASES) }.len()
+}
+
 /// Typed failure for every live invocation this adapter performs. Nothing here
 /// panics: an exhausted table, a bad capability, and a kernel error are all
 /// values the caller can report.
@@ -104,6 +229,7 @@ pub struct BufferAdapter<'a> {
     unmapped: usize,
     revoked: usize,
     released: usize,
+    aliased: usize,
     last_error: Option<BufferAdapterError>,
 }
 
@@ -118,8 +244,14 @@ impl<'a> BufferAdapter<'a> {
             unmapped: 0,
             revoked: 0,
             released: 0,
+            aliased: 0,
             last_error: None,
         }
+    }
+
+    /// Capabilities minted so one frame could be mapped into a second VSpace.
+    pub const fn aliased(&self) -> usize {
+        self.aliased
     }
 
     pub const fn frames_allocated(&self) -> usize {
@@ -254,15 +386,116 @@ impl<'a> BufferAdapter<'a> {
             MappingRights::ReadOnly => sel4::CapRights::read_only(),
             MappingRights::ReadWrite => sel4::CapRights::read_write(),
         };
-        frame_cap(frame)
-            .frame_map(
+        // An seL4 frame capability records exactly one mapping. A loaned region
+        // is mapped by two holders at once — that is what a loan *is* — so the
+        // second mapping cannot go through the same capability: the kernel
+        // answers `InvalidCapability` with "attempting to remap a frame that
+        // does not belong to the passed address space", and the receiver's map
+        // fails while the lender's is live.
+        //
+        // So a mapping that finds the anchor already mapped is installed through
+        // a fresh copy of it. The copy is the same authority, not a widening:
+        // rights are narrowed per mapping by `cap_rights` above, so the
+        // receiver's read-only mapping stays read-only however the lender's was
+        // made. The root's own anchor keeps naming the frame, and `Revoke` on it
+        // drops every copy along with every mapping — which is what keeps
+        // reclamation whole without the table having to know an alias exists.
+        //
+        // The same technique the transfer window already uses for the root's own
+        // staging mapping (`child_vspace::transfer_window_alias`); this is the
+        // per-mapping form of it.
+        let mut cap = frame_cap(frame);
+        let mut aliased = false;
+        loop {
+            match cap.frame_map(
                 vspace_cap,
                 vaddr,
-                cap_rights,
+                cap_rights.clone(),
                 sel4::VmAttributes::default() | sel4::VmAttributes::EXECUTE_NEVER,
+            ) {
+                Ok(()) => break,
+                // The anchor, or the alias tried, is spent on another mapping.
+                // One retry through a fresh copy is enough: the copy is
+                // unmapped by construction.
+                Err(sel4::Error::InvalidCapability) if !aliased => {
+                    aliased = true;
+                    cap = self.alias_frame(frame, vaddr)?;
+                }
+                Err(error) => return Err(BufferAdapterError::Map { vaddr, error }),
+            }
+        }
+        // Only now, with the mapping installed — see `record_alias`.
+        if aliased {
+            self.record_alias(frame, vspace, vaddr, cap)?;
+        }
+        self.mapped += 1;
+        Ok(())
+    }
+
+    /// Mint a second capability to the frame `frame` anchors.
+    ///
+    /// From the same monotonic CSlot cursor as every other object, so the
+    /// allocator's accounting still covers it. It is never deleted
+    /// individually: `AdapterAction::Revoke` on the anchor drops every
+    /// capability derived from it, which is exactly this set.
+    fn alias_frame(
+        &mut self,
+        frame: FrameCap,
+        vaddr: usize,
+    ) -> Result<sel4::cap::Granule, BufferAdapterError> {
+        let alias = self
+            .allocator
+            .reserve_slot::<sel4::cap_type::Granule>()
+            .map_err(BufferAdapterError::Alloc)?
+            .cap();
+        let root_cnode = sel4::init_thread::slot::CNODE.cap();
+        root_cnode
+            .absolute_cptr(alias)
+            .copy(
+                &root_cnode.absolute_cptr(frame_cap(frame)),
+                sel4::CapRights::read_write(),
             )
             .map_err(|error| BufferAdapterError::Map { vaddr, error })?;
-        self.mapped += 1;
+        self.aliased += 1;
+        Ok(alias)
+    }
+
+    /// Record that `alias` holds the mapping of `frame` at `vaddr` in `vspace`.
+    ///
+    /// Called only once the map has *succeeded*, which is the whole ordering
+    /// question here. A record written before the attempt would be findable by
+    /// nothing if the attempt then failed: [`FrameAliases::take`] runs from the
+    /// `Unmap` arm alone, and an unmap is only ever emitted for a mapping that
+    /// committed. The entry would sit in the registry for the rest of the boot
+    /// and [`live_frame_aliases`] would never return to zero — which the loan
+    /// gate's terminal `aliases=0` asserts.
+    ///
+    /// The capability itself is not lost by recording late: it is a copy of an
+    /// anchor the shared-buffer table owns, and `AdapterAction::Revoke` on that
+    /// anchor drops every copy. An unrecorded alias costs a CSlot, never a page.
+    fn record_alias(
+        &mut self,
+        frame: FrameCap,
+        vspace: VSpaceCap,
+        vaddr: usize,
+        alias: sel4::cap::Granule,
+    ) -> Result<(), BufferAdapterError> {
+        // SAFETY: the root task is single-threaded and every `BufferAdapter`
+        // is a short-lived local, so no two references to the registry exist at
+        // once. See `FRAME_ALIASES`.
+        let registry = unsafe { &mut *core::ptr::addr_of_mut!(FRAME_ALIASES) };
+        registry.record(frame, vspace, vaddr, alias)?;
+        // Reported, because the terminal `aliases=0` cannot evidence this on
+        // its own: a boot that never recorded an alias also ends at zero. The
+        // failure that hides behind that is quiet and serious — an unrecorded
+        // alias sends the unmap through the anchor, which holds the *other*
+        // holder's mapping, so the wrong view is torn down and the right one
+        // silently survives its own teardown.
+        sel4::debug_println!(
+            "SLIME_GRAPH frame aliased frame={} vaddr={vaddr:#x} live={}",
+            frame.0,
+            registry.len(),
+        );
         Ok(())
     }
 
@@ -271,8 +504,21 @@ impl<'a> BufferAdapter<'a> {
             // `seL4_ARM_Page_Unmap` on an already-unmapped frame is a no-op that
             // returns success, which is exactly the idempotence the trait
             // requires for a retryable teardown batch.
-            AdapterAction::Unmap { frame, vaddr, .. } => {
-                frame_cap(frame)
+            AdapterAction::Unmap {
+                frame,
+                vspace,
+                vaddr,
+            } => {
+                // Through whichever capability holds *this* mapping. When a
+                // frame is mapped by two holders the anchor holds one and an
+                // alias the other, so unmapping through the anchor
+                // unconditionally would tear down the wrong holder's view and
+                // leave this one live.
+                // SAFETY: as in `alias_frame` — single-threaded, and the
+                // borrow ends before this statement does.
+                unsafe { &mut *core::ptr::addr_of_mut!(FRAME_ALIASES) }
+                    .take(frame, vspace, vaddr)
+                    .unwrap_or_else(|| frame_cap(frame))
                     .frame_unmap()
                     .map_err(|error| BufferAdapterError::Unmap { vaddr, error })?;
                 self.unmapped += 1;

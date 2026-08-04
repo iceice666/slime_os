@@ -285,6 +285,35 @@ impl StagedFrame {
         &self.caps[..self.cap_count]
     }
 
+    /// The capability slots this frame names, as logical slot numbers.
+    ///
+    /// The wire carries them as `u64` because the window is word-addressed, but
+    /// a logical slot is a `u32` — the same width every operation's slot
+    /// argument takes. A value that does not fit is refused rather than
+    /// truncated: truncating would turn a nonsense slot into a plausible one
+    /// and resolve it against the sender's table.
+    pub fn cap_slots(&self) -> Result<[u32; MAX_STAGED_CAPS], IpcError> {
+        let mut slots = [0u32; MAX_STAGED_CAPS];
+        for (destination, source) in slots.iter_mut().zip(self.caps()) {
+            *destination = u32::try_from(*source).map_err(|_| IpcError::InvalidOperation)?;
+        }
+        Ok(slots)
+    }
+
+    /// A frame carrying `bytes` and the capability slots `caps` names.
+    pub fn from_parts(bytes: &[u8], caps: &[u32]) -> Result<Self, IpcError> {
+        let mut frame = Self::from_bytes(bytes)?;
+        let destination = frame
+            .caps
+            .get_mut(..caps.len())
+            .ok_or(IpcError::InvalidLength)?;
+        for (slot, value) in destination.iter_mut().zip(caps) {
+            *slot = u64::from(*value);
+        }
+        frame.cap_count = caps.len();
+        Ok(frame)
+    }
+
     pub const fn cap_count(&self) -> usize {
         self.cap_count
     }

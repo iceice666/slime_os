@@ -41,11 +41,13 @@ mod shared_buffer;
 mod task;
 mod timer;
 mod transfer_window;
+mod transit;
 
 use core::ptr;
 
 use boot_contracts::boot_layout::BootLayout;
 use boot_contracts::generation::{Generation, KIND_RESOURCE};
+use boot_contracts::shared_buffer_budget::{self as budget_magic, SharedBufferBudget};
 use sel4_root_task::root_task;
 
 use buffer_adapter::BufferAdapter;
@@ -61,11 +63,12 @@ use parked::{ParkReason, ParkedReplies};
 use platform_timer::{PhysicalTimerAdapter, TIMER_IRQ};
 use shared_buffer::{
     BufferHandle, GenerationEpoch, HolderId, HolderQuota, MappingRights, PAGE_SIZE,
-    SharedBufferTable, VSpaceCap,
+    SharedBufferAdapter, SharedBufferTable, VSpaceCap,
 };
 use task::{Arrival, MAX_TASKS, Supervision, TaskId, TaskTable};
 use timer::{PlatformTimer, ServiceTimerError, TimerScheduler, apply_deadline_programming};
 use transfer_window::WindowTable;
+use transit::Transit;
 
 /// Report an unrecoverable startup condition and park the root task. Every
 /// fallible step returns a typed error that ends up here; nothing panics.
@@ -233,9 +236,15 @@ const REPORT_EXECUTE_REFUSED: sel4::Word = 1 << 2;
 /// clean-exit fixture's logical task id, never from a capability pointer.
 const SHARED_HOLDER: HolderId = HolderId(0);
 
-/// Ceiling the generation declares for the shared-buffer holder. Two
-/// single-page regions and two mappings is exactly what this phase needs; the
-/// phase fails closed rather than raising its own ceiling.
+/// Ceiling for the P5.1 fixture phase's shared-buffer holder. Two single-page
+/// regions and two mappings is exactly what this phase needs; the phase fails
+/// closed rather than raising its own ceiling.
+///
+/// This phase alone, and only because it has no generation to read: the fixture
+/// is an ELF the root task embeds at compile time, not a declared component, so
+/// there is no budget resource naming it. The component graph resolves every
+/// holder's ceiling from the generation's `shared-buffer-budget` resource —
+/// see [`declared_quota`] — and never consults this constant.
 const SHARED_QUOTA: HolderQuota = HolderQuota {
     byte_pages: 2,
     buffer_count: 2,
@@ -783,6 +792,16 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
 /// so the buffer plane's own checks stay the single place rights are decided.
 const RIGHT_BUFFER_ALL: u64 = u64::MAX;
 
+/// Delegation. Numbered as in `boot-contracts`' generation format and
+/// `kernel/src/capability/mod.rs`, which agree; restated here because
+/// `slime-root` tests it on a capability rather than on a grant.
+const RIGHT_TRANSFER: u64 = 1 << 2;
+
+/// Authority to map a loaned range. The rights a loan capability carries, and
+/// the pair the retired kernel's `sys_shared_buffer_loan` installs on the
+/// handle it returns.
+const RIGHT_BUFFER_MAP: u64 = 1 << 9;
+
 /// Largest component ELF the loader will copy through [`ElfScratch`]. Generous
 /// against the five components this profile declares (the largest is ~44 KiB)
 /// while keeping the buffer a bounded, statically sized object like every other
@@ -1068,15 +1087,62 @@ fn launch_component_graph(
     }
     sel4::debug_println!("SLIME_GRAPH activated components={}", tasks.activated());
 
-    // Every launched task gets the declared shared-buffer ceiling before it can
-    // ask for a page, so an allocation is admitted against generation-declared
-    // state rather than against whatever the caller asked for.
+    // Every launched task gets the ceiling its generation declared for it,
+    // before it can ask for a page, so an allocation is admitted against
+    // generation-declared state rather than against whatever the caller asked
+    // for — or against a constant compiled into the root task.
+    //
+    // Keyed by component *name* through `holder_identity`, which is the same
+    // derivation `scripts/build/build-generation.py::holder_identity` writes
+    // into the budget and the retired kernel reads back
+    // (`kernel/src/runtime/generation.rs::shared_buffer_quota`). A component the
+    // budget does not name gets `DENY` rather than a default: omission from the
+    // table is a statement, not a gap.
     let mut buffers = SharedBufferTable::new(GenerationEpoch(generation.number));
-    for id in ids.iter().flatten().copied() {
-        if let Err(error) = buffers.declare_quota(HolderId(u64::from(id.0)), SHARED_QUOTA) {
+    let budget = shared_buffer_budget(generation);
+    // A budget promising more than this root task's fixed tables can ever grant
+    // is rejected before any component runs, rather than discovered at runtime
+    // by whichever component happens to allocate last. Same check the retired
+    // kernel performs at admission (`kernel/src/runtime/generation.rs::decode`),
+    // against this crate's own ceilings.
+    if let Some(budget) = budget.as_ref()
+        && let Err(error) = budget.validate_against(
+            shared_buffer::MAX_BUFFER_PAGES as u32,
+            shared_buffer::MAX_TOTAL_PAGES as u32,
+            shared_buffer::MAX_SHARED_BUFFERS as u32,
+            shared_buffer::MAX_MAPPINGS as u32,
+            shared_buffer::MAX_LOANS as u32,
+        )
+    {
+        fatal!("SLIME_GRAPH FAIL shared-buffer budget unsatisfiable: {error:?}")
+    }
+    let mut budgeted = 0;
+    for (component, id) in launched_components.iter() {
+        let Ok(record) = generation.component(component) else {
+            fatal!("SLIME_GRAPH FAIL launched component {component} is unreadable")
+        };
+        let quota = declared_quota(budget.as_ref(), record.name);
+        if quota != HolderQuota::DENY {
+            budgeted += 1;
+        }
+        if let Err(error) = buffers.declare_quota(HolderId(u64::from(id.0)), quota) {
             fatal!("SLIME_GRAPH FAIL quota rejected task={}: {error:?}", id.0)
         }
+        sel4::debug_println!(
+            "SLIME_GRAPH quota task={} component={} pages={} buffers={} mappings={} loans={}",
+            id.0,
+            record.name,
+            quota.byte_pages,
+            quota.buffer_count,
+            quota.mapping_count,
+            quota.loan_count,
+        );
     }
+    sel4::debug_println!(
+        "SLIME_GRAPH quotas declared={} budgeted={budgeted} holders={}",
+        launched_components.len(),
+        budget.as_ref().map_or(0, SharedBufferBudget::holder_count),
+    );
 
     serve_component_graph(
         generation,
@@ -1112,6 +1178,54 @@ fn boot_layout_resource<'a>(generation: &Generation<'a>) -> Option<BootLayout<'a
         .filter(|layout| layout.generation_number() == generation.number)
 }
 
+/// Decode the generation's shared-buffer budget resource, if it carries one.
+///
+/// Located by magic among the `KIND_RESOURCE` objects, exactly as
+/// `kernel/src/runtime/generation.rs::budget_object` does — the generation
+/// authenticates every object against its digest table, so this decodes bytes
+/// whose integrity is already established and enforces only structural
+/// validity.
+///
+/// A generation carrying no budget is not an error: it declares that no
+/// component holds any shared-buffer quota, and every holder then resolves to
+/// [`HolderQuota::DENY`]. Neither is a malformed one — it also yields `DENY`
+/// for every holder, which fails closed. Both are the same answer the retired
+/// kernel gives, and it is the conservative one: a component denied a quota it
+/// was promised fails at its own probe with a bounded error, whereas a
+/// permissive fallback would hand out authority no generation declared.
+fn shared_buffer_budget<'a>(generation: &Generation<'a>) -> Option<SharedBufferBudget<'a>> {
+    // The *first* magic match decides, and a malformed one is `None` rather
+    // than a reason to keep looking. Scanning past it would let a generation
+    // carrying one bad budget and one good one resolve the good one, which is
+    // not what "the generation declares a budget" means. `budget_object` in the
+    // retired kernel returns `Some(Err(..))` here for the same reason.
+    let object = (0..generation.object_count())
+        .filter_map(|index| generation.object(index).ok())
+        .filter(|object| object.kind == KIND_RESOURCE)
+        .find(|object| object.bytes.len() >= 8 && object.bytes[..8] == budget_magic::MAGIC)?;
+    SharedBufferBudget::decode(object.bytes).ok()
+}
+
+/// The ceiling this generation declares for the component named `component`.
+///
+/// [`HolderQuota::DENY`] when the generation declares no budget or the
+/// component is absent from it — authority is never ambient, so a component the
+/// budget does not name holds nothing rather than something small.
+fn declared_quota(budget: Option<&SharedBufferBudget<'_>>, component: &str) -> HolderQuota {
+    let Some(budget) = budget else {
+        return HolderQuota::DENY;
+    };
+    match budget.quota_for(&budget_magic::holder_identity(component)) {
+        Some(quota) => HolderQuota {
+            byte_pages: quota.byte_pages,
+            buffer_count: quota.buffer_count,
+            mapping_count: quota.mapping_count,
+            loan_count: quota.loan_count,
+        },
+        None => HolderQuota::DENY,
+    }
+}
+
 /// Iterations the graph service loop will run before declaring the graph wedged.
 ///
 /// Generous against what the five declared components actually issue — each
@@ -1142,11 +1256,16 @@ fn serve_component_graph(
     let mut unsupported = 0;
     let mut unimplemented = 0;
     let mut buffers_served = 0;
+    let mut loans_served = 0;
     let mut sends = 0;
     let mut receives = 0;
     let mut parks = 0;
     let mut peer_deaths = 0;
     let mut parked = ParkedReplies::new();
+    // Capabilities between their send and the receive that collects them. Held
+    // here rather than in either task's table, because in flight they belong to
+    // neither; see `transit.rs`.
+    let mut transit = Transit::new();
     for _ in 0..MAX_GRAPH_ITERATIONS {
         if live == 0 {
             break;
@@ -1200,6 +1319,9 @@ fn serve_component_graph(
                 &mut parked,
                 windows,
                 graph,
+                &mut transit,
+                buffers,
+                allocator,
                 scratch,
                 id,
                 &mut peer_deaths,
@@ -1285,6 +1407,9 @@ fn serve_component_graph(
                     &mut parked,
                     windows,
                     graph,
+                    &mut transit,
+                    buffers,
+                    allocator,
                     scratch,
                     id,
                     &mut peer_deaths,
@@ -1335,8 +1460,17 @@ fn serve_component_graph(
             // that decides whether the declared graph reaches its service loop.
             Operation::SharedBufferCreate => {
                 let holder = HolderId(u64::from(id.0));
+                // The caller's own request, both fields. `slot_with_flag` packs
+                // the writability into bit 32 of the same word as the factory
+                // slot, exactly as `SharedBufferMap` reads it — a region created
+                // writable when its creator asked for read-only would carry
+                // `BufferRights::WRITE`, so the root would be widening rights
+                // past what was requested.
+                let writable = words[0] >> 32 != 0;
                 let pages = words[1] as usize;
-                let response = match serve_buffer_create(buffers, allocator, holder, pages) {
+                let response = match serve_buffer_create(
+                    buffers, allocator, holder, pages, writable,
+                ) {
                     Ok(handle) => match graph.get_mut(id).and_then(|table| {
                         let slot = table.free_slot_from(1)?;
                         table
@@ -1353,9 +1487,10 @@ fn serve_component_graph(
                         Some(slot) => {
                             buffers_served += 1;
                             sel4::debug_println!(
-                                "SLIME_GRAPH buffer created task={} slot={slot} id={} pages={pages}",
+                                "SLIME_GRAPH buffer created task={} slot={slot} id={} pages={pages} writable={}",
                                 id.0,
                                 handle.id.0,
+                                u8::from(writable),
                             );
                             Response::success(i64::from(slot), handle.id.0)
                         }
@@ -1369,10 +1504,11 @@ fn serve_component_graph(
                     },
                     Err(error) => {
                         sel4::debug_println!(
-                            "SLIME_GRAPH buffer create refused task={} error={error}",
-                            id.0
+                            "SLIME_GRAPH buffer create refused task={} pages={pages} class={}",
+                            id.0,
+                            buffer_error_class(error),
                         );
-                        Response::error(IpcError::TransferFailed)
+                        Response::error(buffer_error_status(error))
                     }
                 };
                 ipc::reply(response);
@@ -1395,6 +1531,37 @@ fn serve_component_graph(
                 );
                 ipc::reply(response);
             }
+            // The loan plane. A loan is the one authority this cutover moves
+            // between components, and it is the narrow one: read-only over an
+            // exact sealed subrange, bound to a receiver the lender named
+            // through a capability, and settled exactly once.
+            Operation::SharedBufferLoan => {
+                let response = serve_buffer_loan(
+                    buffers,
+                    allocator,
+                    graph,
+                    channels,
+                    id,
+                    &words,
+                    &mut loans_served,
+                );
+                ipc::reply(response);
+            }
+            Operation::SharedBufferLoanMap
+            | Operation::SharedBufferReturn
+            | Operation::SharedBufferRevoke => {
+                let response = serve_loan_lifecycle(
+                    operation,
+                    buffers,
+                    allocator,
+                    tasks,
+                    graph,
+                    id,
+                    &words,
+                    &mut loans_served,
+                );
+                ipc::reply(response);
+            }
             // The channel plane. A slot resolves through the caller's own table
             // with the right the operation needs, so a component can only send
             // on a channel it was granted `send` over and only receive on one it
@@ -1407,6 +1574,7 @@ fn serve_component_graph(
                     graph,
                     windows,
                     &mut parked,
+                    &mut transit,
                     scratch,
                     id,
                     &words,
@@ -1417,7 +1585,16 @@ fn serve_component_graph(
             }
             Operation::Recv => {
                 let saved = saved.expect("recv is parkable");
-                match serve_recv(channels, graph, windows, scratch, id, &words, &mut receives) {
+                match serve_recv(
+                    channels,
+                    graph,
+                    windows,
+                    &mut transit,
+                    scratch,
+                    id,
+                    &words,
+                    &mut receives,
+                ) {
                     Ok(response) => parked.answer_saved(saved, response),
                     // Nothing queued and the peer is alive. Hold the reply
                     // rather than answering `WouldBlock`: the component is
@@ -1542,6 +1719,24 @@ fn serve_component_graph(
         channels.live_queues(),
         parked.recycled(),
     );
+    // The loan plane's accounting, on its own line for the same reason: P5.3.1's
+    // gate asserts the line above by its exact shape.
+    //
+    // The four zeros are what make reclamation observable. `loans`, `mappings`,
+    // and `regions` are the shared-buffer table's own live counts, so a loan
+    // whose lender died without settling, or a mapping a dead receiver still
+    // held, shows up here rather than as memory quietly retained. `transit` is
+    // capabilities in flight — one still parked at teardown is one no task can
+    // ever name.
+    sel4::debug_println!(
+        "SLIME_GRAPH loans served={loans_served} loans={} mappings={} regions={} transit={} orphans={} aliases={}",
+        buffers.loan_count(),
+        buffers.mapping_count(),
+        buffers.live_count(),
+        transit.len(),
+        buffers.orphan_count(),
+        buffer_adapter::live_frame_aliases(),
+    );
 }
 
 /// Whether this operation may end with the caller parked, and so needs its
@@ -1578,16 +1773,18 @@ fn resolve_channel(
 
 /// Enqueue one message onto the channel the caller named.
 ///
-/// Capability transfer is refused rather than performed: this slice has no
-/// transferable logical resource, since loans arrive in P5.3.2. Implementing
-/// the move now would be code no caller exercises, so the bound is stated and
-/// observed instead of assumed.
+/// A capability the message carries is moved out of the caller's table and
+/// parked in the transit table, inside the same atomic step as the enqueue —
+/// see [`DepartingCaps`]. Only a loan can move; every other resource kind is
+/// authority the generation placed, and the refusal is a bounded Slime error
+/// with the caller still running.
 #[allow(clippy::too_many_arguments)]
 fn serve_send(
     channels: &mut ChannelTable,
-    graph: &GraphTables,
+    graph: &mut GraphTables,
     windows: &WindowTable<MAX_TASKS>,
     parked: &mut ParkedReplies,
+    transit: &mut Transit,
     scratch: &ScratchPage,
     id: TaskId,
     words: &[sel4::Word; ipc::FAST_MESSAGE_REGISTERS],
@@ -1602,36 +1799,75 @@ fn serve_send(
         Ok(frame) => frame,
         Err(error) => return Response::error(error),
     };
-    if frame.cap_count() != 0 {
-        sel4::debug_println!(
-            "SLIME_GRAPH capability transfer refused task={} channel={channel} caps={}",
-            id.0,
-            frame.cap_count(),
-        );
-        return Response::error(IpcError::UnsupportedCapabilityTransfer);
-    }
-    let message = match ipc::Message::new(frame.bytes(), &[]) {
+    // Whoever receives on this channel is who the capabilities are bound to,
+    // fixed here rather than at collection time: a capability in flight names
+    // the task it was sent to, so a later change to who is receiving cannot
+    // redirect it.
+    let Some(peer) = channels.peer(channel, id) else {
+        return Response::error(IpcError::InvalidOperation);
+    };
+    let slots = match frame.cap_slots() {
+        Ok(slots) => slots,
+        Err(error) => return Response::error(error),
+    };
+    let message = match ipc::Message::new(frame.bytes(), &slots[..frame.cap_count()]) {
         Ok(message) => message,
         Err(error) => return Response::error(error),
     };
     let len = message.len();
+    let caps = message.cap_count();
     let Some(queue) = channels.send_queue_mut(channel, id) else {
         return Response::error(IpcError::InvalidOperation);
     };
-    // Preflight and commit are one atomic step over a queue whose revision has
-    // not moved, so a refused send enqueues nothing.
-    let wake = match ipc::send_atomic(queue, message, &mut RefuseCapabilityTransfer) {
-        Ok(wake) => wake,
-        Err(error) => return Response::error(error),
+    // Preflight, capability move, and commit are one atomic step over a queue
+    // whose revision has not moved, so a refused send enqueues nothing and
+    // moves nothing.
+    let mut departing = DepartingCaps {
+        graph,
+        transit,
+        sender: id,
+        receiver: peer,
+        departed: [None; ipc::MAX_MESSAGE_CAPS],
+        refusal: None,
     };
+    let wake = match ipc::send_atomic(queue, message, &mut departing) {
+        Ok(wake) => wake,
+        Err(error) => {
+            // `send_atomic` re-checks the queue after the move, so a commit can
+            // fail with capabilities already parked. They belong to nobody at
+            // that point; hand them back to the sender, which still holds them
+            // as far as it knows.
+            departing.recall_all();
+            // The adapter's own reason when it has one, because `send_atomic`
+            // reports every adapter failure as `TransferFailed` and a component
+            // that named an unmovable capability is owed the refusal rather
+            // than a generic failure.
+            let error = departing.refusal.unwrap_or(error);
+            if error == IpcError::UnsupportedCapabilityTransfer {
+                sel4::debug_println!(
+                    "SLIME_GRAPH capability transfer refused task={} channel={channel} caps={caps}",
+                    id.0,
+                );
+            }
+            return Response::error(error);
+        }
+    };
+    let moved = departing.departed();
     *served += 1;
     sel4::debug_println!(
-        "SLIME_GRAPH sent task={} channel={channel} bytes={len} queued={}",
+        "SLIME_GRAPH sent task={} channel={channel} bytes={len} caps={moved} queued={}",
         id.0,
         channels
             .send_queue(channel, id)
             .map_or(0, ipc::Channel::len),
     );
+    if moved != 0 {
+        sel4::debug_println!(
+            "SLIME_GRAPH capability transfer task={} channel={channel} to={} caps={moved}",
+            id.0,
+            peer.0,
+        );
+    }
     // A receiver blocked on this queue is owed its answer now: it is parked in
     // a call, so nothing else will make it retry.
     if let Some(wake) = wake {
@@ -1639,7 +1875,7 @@ fn serve_send(
         // completed here rather than retried. Leaving it out would make the
         // send and receive totals disagree by exactly the number of messages
         // that took the wake path, which is the path this slice exists to add.
-        if deliver_wake(channels, parked, windows, scratch, graph, wake) {
+        if deliver_wake(channels, parked, windows, scratch, graph, transit, wake) {
             *woken_receives += 1;
         }
     }
@@ -1654,8 +1890,9 @@ fn serve_send(
 #[allow(clippy::too_many_arguments)]
 fn serve_recv(
     channels: &mut ChannelTable,
-    graph: &GraphTables,
+    graph: &mut GraphTables,
     windows: &WindowTable<MAX_TASKS>,
+    transit: &mut Transit,
     scratch: &ScratchPage,
     id: TaskId,
     words: &[sel4::Word; ipc::FAST_MESSAGE_REGISTERS],
@@ -1668,32 +1905,178 @@ fn serve_recv(
     let Some(queue) = channels.recv_queue_mut(channel, id) else {
         return Ok(Response::error(IpcError::InvalidOperation));
     };
-    let outcome =
-        match ipc::receive_atomic(queue, ipc::MAX_MESSAGE_CAPS, &mut RefuseCapabilityTransfer) {
-            Ok(outcome) => outcome,
-            Err(IpcError::WouldBlock) => return Err(channel),
-            Err(error) => return Ok(Response::error(error)),
-        };
-    let response = deliver_message(windows, scratch, id, &outcome.message);
+    // The message's capabilities are transit tokens, not slot numbers, so
+    // nothing here moves them: the tokens ride out on the dequeued message and
+    // `land_caps` resolves them below. The destination-capacity preflight is
+    // still real — the queue refuses to hand over a message this task has no
+    // room for, leaving it queued.
+    let available = graph
+        .get(id)
+        .map_or(0, |table| graph::MAX_TASK_CAPS - table.len());
+    let outcome = match ipc::receive_atomic(queue, available, &mut CarryCapabilities) {
+        Ok(outcome) => outcome,
+        Err(IpcError::WouldBlock) => return Err(channel),
+        Err(error) => return Ok(Response::error(error)),
+    };
+    // Land the capabilities before the reply is built, because the reply must
+    // report the slots they landed at. A landing that fails is not silently
+    // dropped: the message is already dequeued, so the capabilities are handed
+    // back to the transit table's reclamation rather than lost — see
+    // `land_caps`.
+    let landed = match land_caps(graph, transit, id, &outcome.message) {
+        Ok(landed) => landed,
+        Err(error) => return Ok(Response::error(error)),
+    };
+    let response = deliver_message(windows, scratch, id, &outcome.message, &landed);
     if response.result >= 0 {
         *served += 1;
         sel4::debug_println!(
-            "SLIME_GRAPH received task={} channel={channel} bytes={}",
+            "SLIME_GRAPH received task={} channel={channel} bytes={} caps={}",
             id.0,
             outcome.message.len(),
+            landed.len(),
         );
     }
     Ok(response)
 }
 
+/// Slots one received message's capabilities landed at, in message order.
+#[derive(Clone, Copy, Default)]
+struct LandedCaps {
+    slots: [u32; ipc::MAX_MESSAGE_CAPS],
+    len: usize,
+}
+
+impl LandedCaps {
+    const fn len(&self) -> usize {
+        self.len
+    }
+
+    fn slots(&self) -> &[u32] {
+        &self.slots[..self.len]
+    }
+}
+
+/// Install each capability a received message carries into the receiver's
+/// table, and report the slots.
+///
+/// The message carries transit tokens; the receiver learns slot numbers. That
+/// substitution is the whole point of the transit table — a sender's slot
+/// number means nothing in the receiver's table — and it happens here, once,
+/// after the message has been dequeued and before the reply names anything.
+///
+/// All or none. A token that resolves and is then followed by one that does not
+/// would otherwise leave the receiver holding half a transfer with no way to
+/// learn what it got. On failure every capability already installed is returned
+/// to the transit table bound to the same receiver, so it is still reclaimed
+/// when either end dies rather than stranded in a table nobody reads.
+fn land_caps(
+    graph: &mut GraphTables,
+    transit: &mut Transit,
+    id: TaskId,
+    message: &ipc::Message,
+) -> Result<LandedCaps, IpcError> {
+    let mut landed = LandedCaps::default();
+    for token in message.caps().iter().flatten().copied() {
+        let Some(capability) = transit.arrive(token, id) else {
+            // The token names nothing. That means the capability was reclaimed
+            // while this message sat in its queue — its sender or its intended
+            // receiver died — and the message has already been dequeued by the
+            // time this runs, so refusing here would consume the payload and
+            // report only a failure.
+            //
+            // The bytes are delivered anyway, minus the capability. A message
+            // is not void because authority that rode alongside it went away,
+            // and a receiver told "transfer failed" would have lost a payload
+            // it could still have read.
+            sel4::debug_println!(
+                "SLIME_GRAPH capability expired task={} bytes={}",
+                id.0,
+                message.len(),
+            );
+            continue;
+        };
+        let outcome = graph
+            .get_mut(id)
+            .ok_or(IpcError::InvalidOperation)
+            .and_then(|table| {
+                let slot = table
+                    .free_slot_from(0)
+                    .ok_or(IpcError::DestinationSlotsExhausted)?;
+                table.install(slot, capability)?;
+                Ok(slot)
+            });
+        match outcome {
+            Ok(slot) => {
+                landed.slots[landed.len] = slot;
+                landed.len += 1;
+            }
+            Err(error) => {
+                // This one never landed, so put it back before unwinding the
+                // ones that did; otherwise it would be the single capability
+                // this path lost.
+                //
+                // A re-park that itself fails — the transit table full — has
+                // nowhere left to put the capability, so it is reported rather
+                // than dropped in silence. The terminal `transit=` count cannot
+                // show it: a capability that never got back into the table is
+                // exactly the one that count stops seeing.
+                if transit.depart(capability, id, id).is_err() {
+                    sel4::debug_println!(
+                        "SLIME_GRAPH FAIL capability lost task={} reason=transit-full",
+                        id.0,
+                    );
+                }
+                unland_caps(graph, transit, id, &landed);
+                return Err(error);
+            }
+        }
+    }
+    Ok(landed)
+}
+
+/// Take back every capability [`land_caps`] installed, re-parking each one.
+///
+/// Re-parked as `id -> id`: the transfer did not complete, and the receiver is
+/// the only task that could still legitimately be handed it, so binding it to
+/// anyone else would be inventing a destination. It is unreachable either way —
+/// no message names its new token — and [`Transit::reclaim`] drops it when the
+/// task ends, which is the property that matters: the terminal marker still
+/// reaches zero.
+fn unland_caps(graph: &mut GraphTables, transit: &mut Transit, id: TaskId, landed: &LandedCaps) {
+    let Some(table) = graph.get_mut(id) else {
+        return;
+    };
+    for slot in landed.slots() {
+        if let Some(capability) = table.get(*slot) {
+            table.drop_slot(*slot);
+            // As in `land_caps`: a re-park with nowhere to go is reported. It
+            // cannot happen on this path — every entry being returned came out
+            // of this table moments ago, so the room is there — but a silent
+            // drop is not the failure to choose if it ever does.
+            if transit.depart(capability, id, id).is_err() {
+                sel4::debug_println!(
+                    "SLIME_GRAPH FAIL capability lost task={} reason=transit-full",
+                    id.0,
+                );
+            }
+        }
+    }
+}
+
 /// Write a received message into the caller's window and build its reply.
+///
+/// The frame carries the *landed* slot numbers, not the tokens the message
+/// held: the component's `recv` reads them back as capability slots it can name
+/// in a later operation, and a token would name nothing in its table.
 fn deliver_message(
     windows: &WindowTable<MAX_TASKS>,
     scratch: &ScratchPage,
     id: TaskId,
     message: &ipc::Message,
+    landed: &LandedCaps,
 ) -> Response {
-    let frame = match transfer_window::StagedFrame::from_bytes(message.bytes()) {
+    let frame = match transfer_window::StagedFrame::from_parts(message.bytes(), landed.slots()) {
         Ok(frame) => frame,
         Err(error) => return Response::error(error),
     };
@@ -1783,7 +2166,8 @@ fn deliver_wake(
     parked: &mut ParkedReplies,
     windows: &WindowTable<MAX_TASKS>,
     scratch: &ScratchPage,
-    graph: &GraphTables,
+    graph: &mut GraphTables,
+    transit: &mut Transit,
     wake: ipc::WakeDecision,
 ) -> bool {
     let task = TaskId(wake.task);
@@ -1795,22 +2179,34 @@ fn deliver_wake(
     let response = match reason {
         // A parked `recv` is owed the message itself, not a nudge to retry: the
         // component is blocked in one call and will not issue another.
-        ParkReason::Receive { channel } => match channels.recv_queue_mut(channel, task) {
-            Some(queue) => match ipc::receive_atomic(
-                queue,
-                ipc::MAX_MESSAGE_CAPS,
-                &mut RefuseCapabilityTransfer,
-            ) {
-                Ok(outcome) => deliver_message(windows, scratch, task, &outcome.message),
-                Err(error) => Response::error(error),
-            },
-            None => Response::error(IpcError::InvalidOperation),
-        },
+        //
+        // Capabilities land here exactly as they do on the unparked path: this
+        // *is* that task's `recv` completing, just completed by its peer's send
+        // rather than by its own call, so a message carrying a loan must land
+        // it in the woken task's table and report the slot.
+        ParkReason::Receive { channel } => {
+            let available = graph
+                .get(task)
+                .map_or(0, |table| graph::MAX_TASK_CAPS - table.len());
+            match channels.recv_queue_mut(channel, task) {
+                Some(queue) => {
+                    match ipc::receive_atomic(queue, available, &mut CarryCapabilities) {
+                        Ok(outcome) => match land_caps(graph, transit, task, &outcome.message) {
+                            Ok(landed) => {
+                                deliver_message(windows, scratch, task, &outcome.message, &landed)
+                            }
+                            Err(error) => Response::error(error),
+                        },
+                        Err(error) => Response::error(error),
+                    }
+                }
+                None => Response::error(IpcError::InvalidOperation),
+            }
+        }
         // A parked `wait` is owed only the wake; `slime_rt::wait` documents that
         // the caller re-polls every source afterwards.
         ParkReason::Wait => Response::success(0, 0),
     };
-    let _ = graph;
     // The wake is delivered unconditionally — a task parked in `wait` is owed
     // its answer just as much as one parked in `recv`, and short-circuiting on
     // `delivered` here would hold it forever. Only the *count* distinguishes
@@ -1831,12 +2227,26 @@ fn deliver_wake(
 ///
 /// The dying task's own parked reply is abandoned rather than answered: there
 /// is no one left to receive it, and its CSlot still has to come back.
+///
+/// The same argument applies to everything else the task held, which is why
+/// this also reclaims its shared buffers and its in-flight capabilities:
+///
+/// - **Buffers and loans.** `SharedBufferTable::reclaim_holder` settles every
+///   loan the task lent or received, tears down its mappings, and reclaims the
+///   regions it owned. Without it a dead lender's loan stays live and its
+///   receiver keeps a mapping of a region nothing can reclaim — the retained
+///   pages outlive the task that was charged for them.
+/// - **In-flight capabilities.** One parked between a send and a receive
+///   belongs to no table, so neither end's release reaches it.
 #[allow(clippy::too_many_arguments)]
 fn reclaim_dead_task(
     channels: &mut ChannelTable,
     parked: &mut ParkedReplies,
     windows: &WindowTable<MAX_TASKS>,
-    graph: &GraphTables,
+    graph: &mut GraphTables,
+    transit: &mut Transit,
+    buffers: &mut SharedBufferTable,
+    allocator: &mut ObjectAllocator,
     scratch: &ScratchPage,
     id: TaskId,
     settled: &mut usize,
@@ -1854,7 +2264,7 @@ fn reclaim_dead_task(
         // registered by a `wait` that has since been answered, and the
         // registration outlived it. `deliver_wake` returns without doing
         // anything in that case.
-        deliver_wake(channels, parked, windows, scratch, graph, wake);
+        deliver_wake(channels, parked, windows, scratch, graph, transit, wake);
         woken += 1;
     }
     if held != 0 {
@@ -1864,48 +2274,679 @@ fn reclaim_dead_task(
             id.0,
         );
     }
+
+    // After the wakes, not before: a wake can complete a parked `recv` that
+    // lands a capability, and reclaiming in-flight entries first would drop one
+    // the woken task was about to receive.
+    let stranded = transit.reclaim(id);
+
+    // Settle everything the shared-buffer table charged this holder. Reported
+    // whenever it did anything, so the terminal accounting can be read against
+    // per-task lines rather than only as a total.
+    let holder = HolderId(u64::from(id.0));
+    let charged = buffers.holder_buffers(holder)
+        + buffers.holder_mappings(holder)
+        + buffers.holder_loans(holder);
+    if charged != 0 || stranded != 0 {
+        let mut adapter = BufferAdapter::new(allocator);
+        match buffers.reclaim_holder(&mut adapter, holder) {
+            Ok(actions) => sel4::debug_println!(
+                "SLIME_GRAPH holder reclaimed task={} charges={charged} actions={} stranded={stranded}",
+                id.0,
+                actions.len(),
+            ),
+            // Reported rather than fatal: the table keeps whatever it could not
+            // tear down as its own recorded state — an orphaned page stays
+            // named so it is never revoked while mapped — and the terminal
+            // marker's non-zero counts are what surface it.
+            Err(error) => sel4::debug_println!(
+                "SLIME_GRAPH holder reclaim incomplete task={} class={}",
+                id.0,
+                buffer_error_class(error),
+            ),
+        }
+    }
 }
 
-/// The capability-transfer policy for this slice: refuse every move.
+/// Carry a dequeued message's capabilities through unchanged.
 ///
-/// `ipc::send_atomic` and `ipc::receive_atomic` are written around a transfer
-/// that either moves every listed capability or none, and this is the
-/// degenerate case — nothing is transferable yet, so the only correct answer is
-/// to refuse before the queue is touched. A message carrying no capabilities
-/// passes through unchanged, which is every message this slice carries.
-struct RefuseCapabilityTransfer;
+/// The receive side's whole policy, because there is nothing for it to do: the
+/// values in a queued message are transit tokens, and turning one into a slot
+/// number in the receiver's table needs the receiver's table — which
+/// `receive_atomic` has no access to and should not. So the tokens ride out on
+/// the dequeued message and [`land_caps`] resolves them, after the dequeue has
+/// committed and before the reply names anything.
+///
+/// That still leaves `receive_atomic`'s guarantee intact. Its job here is the
+/// destination-capacity preflight: it refuses to hand over a message carrying
+/// more capabilities than the receiver has room for, leaving it queued. What it
+/// does not do is decide *where* they go.
+///
+/// The send side is [`DepartingCaps`], which does move things — that is the
+/// direction where a capability leaves a table.
+struct CarryCapabilities;
 
-impl ipc::CapabilityTransfer for RefuseCapabilityTransfer {
+impl ipc::CapabilityTransfer for CarryCapabilities {
     type Error = IpcError;
 
     fn transfer_atomic(
         &mut self,
         capabilities: &[Option<ipc::LogicalCap>; ipc::MAX_MESSAGE_CAPS],
     ) -> Result<[Option<ipc::LogicalCap>; ipc::MAX_MESSAGE_CAPS], Self::Error> {
-        if capabilities.iter().any(Option::is_some) {
+        Ok(*capabilities)
+    }
+}
+
+/// Move the sender's capabilities into the transit table, all or none.
+///
+/// Runs inside `ipc::send_atomic`, between the queue preflight and the commit,
+/// which is the only place it can run and stay atomic with the enqueue. Doing
+/// the move earlier would strand a capability whenever the enqueue then failed
+/// — the sender's table would no longer hold it and no queue would carry its
+/// token — and doing it later would mean committing a message naming a
+/// transfer that had not happened.
+///
+/// The input slots are the *sender's* logical slot numbers, as its `send`
+/// staged them; the output is transit tokens. `receive_atomic` on the other end
+/// never sees a slot number from this table, which is why the two directions
+/// use different adapters.
+///
+/// Every check is inside `transfer_atomic` rather than in the caller, so a
+/// failure at the fourth capability rolls the first three back. A partial move
+/// is the one outcome the trait exists to exclude.
+struct DepartingCaps<'a> {
+    graph: &'a mut GraphTables,
+    transit: &'a mut Transit,
+    sender: TaskId,
+    receiver: TaskId,
+    /// Every `(original slot, token)` this transfer parked. Recorded because
+    /// `send_atomic` can still fail *after* `transfer_atomic` returns — its
+    /// commit re-checks the queue — and a capability parked for a message that
+    /// was never enqueued belongs to nobody. [`Self::recall_all`] is what the
+    /// caller runs on that path.
+    departed: [Option<(ipc::LogicalCap, ipc::LogicalCap)>; ipc::MAX_MESSAGE_CAPS],
+    /// Why this transfer refused, if it did.
+    ///
+    /// `send_atomic` collapses every adapter failure to
+    /// `IpcError::TransferFailed`, because the trait's error type is the
+    /// adapter's own and it cannot know what one means. That is right for the
+    /// queue, and wrong for the caller: a component that named a
+    /// non-transferable capability should learn that, not "the transfer
+    /// failed". So the reason is kept here and read back by `serve_send`.
+    refusal: Option<IpcError>,
+}
+
+impl ipc::CapabilityTransfer for DepartingCaps<'_> {
+    type Error = IpcError;
+
+    fn transfer_atomic(
+        &mut self,
+        capabilities: &[Option<ipc::LogicalCap>; ipc::MAX_MESSAGE_CAPS],
+    ) -> Result<[Option<ipc::LogicalCap>; ipc::MAX_MESSAGE_CAPS], Self::Error> {
+        let mut tokens = [None; ipc::MAX_MESSAGE_CAPS];
+        for (index, slot) in capabilities
+            .iter()
+            .enumerate()
+            .filter_map(|(index, slot)| slot.map(|slot| (index, slot)))
+        {
+            // A slot named twice would be taken once and then fail to resolve,
+            // reading as an ordinary "no such capability" rather than as the
+            // duplicate it is. The retired kernel refuses the same case
+            // (`kernel/src/syscall/mod.rs::sys_send`).
+            if capabilities[..index].contains(&Some(slot)) {
+                self.recall_all();
+                self.refusal = Some(IpcError::BadCapability);
+                return Err(IpcError::BadCapability);
+            }
+            match self.depart_one(slot) {
+                Ok(token) => {
+                    self.departed[index] = Some((slot, token));
+                    tokens[index] = Some(token);
+                }
+                Err(error) => {
+                    self.recall_all();
+                    self.refusal = Some(error);
+                    return Err(error);
+                }
+            }
+        }
+        Ok(tokens)
+    }
+}
+
+impl DepartingCaps<'_> {
+    /// Take one capability out of the sender's table and park it.
+    ///
+    /// The transferability test is on the resource *kind*: it decides whether
+    /// the root has a mechanism for the move at all, and today it has one only
+    /// for a loan. `RIGHT_TRANSFER` is checked too, but note what it is and is
+    /// not doing here — every loan capability is minted carrying it
+    /// (`serve_buffer_loan`), so on this path it never discriminates. The
+    /// generation's delegation statement is enforced one step earlier, at the
+    /// mint: a loan is refused outright over a channel the generation did not
+    /// mark `transferable`, so a capability that reaches this function is
+    /// already one the generation allowed to move. The bit is kept as a
+    /// standing precondition rather than removed, because a future kind minted
+    /// without it must not become movable by default.
+    fn depart_one(&mut self, slot: ipc::LogicalCap) -> Result<ipc::LogicalCap, IpcError> {
+        // A loan is bound to its receiver at the mint, so sending it to anyone
+        // else produces a capability the recipient can hold and never use —
+        // every operation on it fails `authorize_loan` — while the loan stays
+        // charged against the lender until it revokes or dies. Refusing the
+        // send instead keeps the lender's own accounting honest, and costs
+        // nothing: a loan sent to its declared receiver is the only send that
+        // was ever going to work.
+        if let Some(graph::Capability {
+            resource: graph::Resource::Loan { handle },
+            ..
+        }) = self
+            .graph
+            .get(self.sender)
+            .and_then(|table| table.get(slot))
+            && handle.receiver != HolderId(u64::from(self.receiver.0))
+        {
             return Err(IpcError::UnsupportedCapabilityTransfer);
         }
-        Ok(*capabilities)
+        // Both failures answer `BadCapability`, which is `ERR_BAD_CAP` — what
+        // `sys_send` answers for the same two cases, and what a component
+        // written against the retired kernel therefore tests for. They are also
+        // indistinguishable from each other, so a send cannot be used to probe
+        // which slots hold what.
+        let table = self
+            .graph
+            .get_mut(self.sender)
+            .ok_or(IpcError::BadCapability)?;
+        let capability = table.get(slot).ok_or(IpcError::BadCapability)?;
+        if !capability.resource.is_transferable() || !capability.allows(RIGHT_TRANSFER) {
+            return Err(IpcError::UnsupportedCapabilityTransfer);
+        }
+        // Removed before parking, so the capability is in exactly one place at
+        // every point: the sender's table, then the transit table, then the
+        // receiver's. `rollback` puts it back at the same slot on failure.
+        table.drop_slot(slot);
+        match self.transit.depart(capability, self.sender, self.receiver) {
+            Ok(token) => Ok(token),
+            Err(error) => {
+                // The transit table refused, so nothing holds the capability.
+                // Reinstalling at the slot it just left cannot collide: this is
+                // the only path that emptied it, and nothing ran in between.
+                let _ = table.install(slot, capability);
+                Err(error)
+            }
+        }
+    }
+
+    /// Return every capability this transfer parked to the sender's table, at
+    /// the slot each one came from.
+    ///
+    /// The original slot, not a free one: the sender named those numbers in the
+    /// message it sent and will name them again if it retries. Handing back a
+    /// different slot would leave a component holding a capability at a number
+    /// it never learned.
+    ///
+    /// Idempotent, so the failure paths inside `transfer_atomic` and the
+    /// post-commit path in `serve_send` can both call it. Reinstalling cannot
+    /// collide: only this transfer emptied those slots, and nothing else ran in
+    /// between.
+    fn recall_all(&mut self) {
+        for (slot, token) in self.departed.iter_mut().filter_map(Option::take) {
+            let Some(capability) = self.transit.recall(token, self.sender) else {
+                continue;
+            };
+            if let Some(table) = self.graph.get_mut(self.sender) {
+                let _ = table.install(slot, capability);
+            }
+        }
+    }
+
+    /// How many capabilities this transfer parked.
+    fn departed(&self) -> usize {
+        self.departed.iter().flatten().count()
     }
 }
 
 /// Allocate one shared region for `holder` and admit it against the quota the
 /// generation declared.
+///
+/// The page bound is read from the holder's own declared ceiling, not from a
+/// constant: a request past it is refused before a frame is allocated, and the
+/// table's own `preflight_buffer_charge` refuses it again against live usage.
+/// Both are the same generation-declared number, so a holder the budget does
+/// not name is refused here at `byte_pages == 0` rather than allocating a frame
+/// the admission below would only hand back.
 fn serve_buffer_create(
     buffers: &mut SharedBufferTable,
     allocator: &mut ObjectAllocator,
     holder: HolderId,
     pages: usize,
-) -> Result<BufferHandle, &'static str> {
-    if pages == 0 || pages > SHARED_QUOTA.byte_pages as usize {
-        return Err("page count");
+    writable: bool,
+) -> Result<BufferHandle, shared_buffer::SharedBufferError> {
+    if pages == 0 || pages > buffers.quota(holder).byte_pages as usize {
+        // Named as the class it is rather than as a generic bad argument: a
+        // request past the holder's declared page ceiling is a quota refusal,
+        // and it is one of the four the milestone requires be observable.
+        return Err(shared_buffer::SharedBufferError::QuotaExceeded);
     }
+    // One frame per requested page. Allocating a single frame regardless of
+    // `pages` would produce a region whose anchor count disagreed with what the
+    // caller asked for, and every later range check reads the anchor count — so
+    // a two-page request would create a one-page region and then refuse the
+    // caller's own two-page mapping as out of range.
+    let mut frames = [shared_buffer::FrameCap(0); shared_buffer::MAX_BUFFER_PAGES];
+    let requested = frames
+        .get_mut(..pages)
+        .ok_or(shared_buffer::SharedBufferError::BadSize)?;
     let mut adapter = BufferAdapter::new(allocator);
-    let frame = adapter.allocate_frame().map_err(|_| "frame allocation")?;
-    let anchors = shared_buffer::FrameAnchors::from_slice(&[frame]).map_err(|_| "frame anchors")?;
-    buffers
-        .create(holder, anchors, true)
-        .map_err(|_| "region admission")
+    let mut allocated = 0;
+    // `create` documents that a refused admission leaves the caller owning every
+    // anchor it supplied, so the frames are released here on both failure paths.
+    // A partial allocation is the same case seen earlier.
+    let outcome = (|| {
+        for frame in requested.iter_mut() {
+            *frame = adapter
+                .allocate_frame()
+                .map_err(|_| shared_buffer::SharedBufferError::BytesExhausted)?;
+            allocated += 1;
+        }
+        let anchors = shared_buffer::FrameAnchors::from_slice(requested)?;
+        buffers.create(holder, anchors, writable)
+    })();
+    if outcome.is_err() {
+        for frame in requested.iter().take(allocated) {
+            let _ = adapter.perform(shared_buffer::AdapterAction::ReleaseFrame { frame: *frame });
+        }
+    }
+    outcome
+}
+
+/// Mint one loan of a sealed subrange, bound to the receiver the caller named.
+///
+/// # Naming the receiver
+///
+/// `receiver_slot` must name a channel end the caller holds, and the loan is
+/// bound to the task at the other end of it. The receiver is therefore reached
+/// through a capability the generation declared, never through an ambient task
+/// id a component supplied — which is the property the exit condition asks for.
+///
+/// This is *not* how the retired kernel names it. There, `sys_shared_buffer_loan`
+/// resolves `receiver_slot` to a `RIGHT_SUPERVISE` handle over the receiving
+/// task, minted when `init` spawned it
+/// (`kernel/src/syscall/mod.rs::sys_shared_buffer_loan`). This cutover has no
+/// spawn — that is P5.3.3 — so no supervision handle exists to name, and there
+/// is no reading of a `supervise` grant that would produce one: the x86 grant
+/// `sample-plane-receiver-supervision` is `source = init, target = sample-lender`
+/// and means "init may hand sample-lender a handle", naming no subject at all.
+/// Deriving a subject from it would be inventing a rule the only witness for
+/// that right contradicts.
+///
+/// So the channel peer stands in, and it is a real bound rather than a
+/// convenience: a component can only loan to a task the generation already
+/// connected it to. P5.3.3 replaces this with the supervision handle once spawn
+/// mints one, and the operation's shape does not change — only which resource
+/// kind `receiver_slot` resolves to.
+#[allow(clippy::too_many_arguments)]
+fn serve_buffer_loan(
+    buffers: &mut SharedBufferTable,
+    allocator: &mut ObjectAllocator,
+    graph: &mut GraphTables,
+    channels: &ChannelTable,
+    id: TaskId,
+    words: &[sel4::Word; ipc::FAST_MESSAGE_REGISTERS],
+    served: &mut usize,
+) -> Response {
+    let lender = HolderId(u64::from(id.0));
+    let buffer_slot = (words[0] & 0xffff_ffff) as u32;
+    let receiver_slot = (words[0] >> 32) as u32;
+    let offset = words[1] as usize;
+    let length = words[2] as usize;
+
+    // Both slots resolve through the caller's own table. A component that holds
+    // neither the buffer nor a channel to the receiver is refused identically
+    // to one that holds the wrong kind at that number, so the table cannot be
+    // probed by watching which error comes back.
+    let Some(graph::Capability {
+        resource: graph::Resource::SharedBuffer { handle },
+        ..
+    }) = graph.get(id).and_then(|table| table.get(buffer_slot))
+    else {
+        return Response::error(IpcError::BadCapability);
+    };
+    // The receiver is named through a channel end, so a slot holding nothing
+    // and a slot holding real authority of another kind are refused
+    // identically: which one it was is not the caller's business, and
+    // distinguishing them would let a component map its own table by probing.
+    // One marker covers both for the same reason.
+    // `RIGHT_SEND` on the end, not merely possession of it. A loan exists to be
+    // transferred, and it reaches its receiver over this same channel — so a
+    // receive-only end names a peer this component could never deliver to, and
+    // minting against it would burn a `loan_count` on a loan nobody can
+    // collect. Resolved with the right the delivery will need, exactly as
+    // `resolve_channel` does for the send itself.
+    let Some(graph::Capability {
+        resource: graph::Resource::Endpoint { channel },
+        ..
+    }) = graph
+        .get(id)
+        .and_then(|table| table.resolve(receiver_slot, RIGHT_SEND).ok())
+    else {
+        sel4::debug_println!(
+            "SLIME_GRAPH loan refused task={} slot={receiver_slot} class=absent",
+            id.0,
+        );
+        return Response::error(IpcError::BadCapability);
+    };
+    let Some(peer) = channels.peer(channel, id) else {
+        sel4::debug_println!(
+            "SLIME_GRAPH loan refused task={} slot={receiver_slot} class=absent",
+            id.0,
+        );
+        return Response::error(IpcError::BadCapability);
+    };
+    // A loopback channel names the lender itself. Loaning to oneself would
+    // charge a loan against a receiver that already owns the region, so it is
+    // refused rather than admitted as a degenerate transfer.
+    if peer == id {
+        return Response::error(IpcError::BadCapability);
+    }
+    // The generation's delegation bit, on the edge the loan will cross.
+    //
+    // A loan exists to be transferred — it reaches its receiver over this
+    // channel and nowhere else — so an edge the generation did not mark
+    // `transferable` cannot carry one, and minting it would produce a
+    // capability whose only destination is closed. Refusing at the mint is what
+    // makes the bit load-bearing rather than decorative: without this check the
+    // *kind* alone decides, and `transferable = false` in a manifest would
+    // change nothing observable.
+    if channels.transferable(channel) != Some(true) {
+        sel4::debug_println!(
+            "SLIME_GRAPH loan refused task={} slot={buffer_slot} class=undelegated",
+            id.0,
+        );
+        // `BadCapability`, the same answer as an absent slot and a wrong-kind
+        // one — and deliberately so. A distinct code here would be a free
+        // oracle: this check runs before `buffers.loan()`, so it consumes no
+        // quota and leaves no state, and a component could sweep every slot
+        // number learning which hold channel ends. That is exactly what
+        // `CapabilityTable::resolve` refuses to leak, and what
+        // `sys_shared_buffer_loan` answers `ERR_BAD_CAP` for.
+        //
+        // The marker above keeps the distinction where only the root can read
+        // it.
+        return Response::error(IpcError::BadCapability);
+    }
+    let receiver = HolderId(u64::from(peer.0));
+
+    // The table decides: it holds the region's rights, its sealed state, the
+    // range, and the lender's `loan_count` ceiling. Nothing is re-checked here
+    // that it already checks, so there is one place a loan can be refused.
+    let handle = match buffers.loan(lender, receiver, handle, offset, length) {
+        Ok(handle) => handle,
+        Err(error) => {
+            sel4::debug_println!(
+                "SLIME_GRAPH loan refused task={} slot={buffer_slot} class={}",
+                id.0,
+                buffer_error_class(error),
+            );
+            return Response::error(buffer_error_status(error));
+        }
+    };
+    // The loan capability goes to the *lender*, which is what the ABI returns
+    // and what `sample-lender` then names in its `send`. The receiver gets it
+    // only when that send delivers — a loan the lender minted but never
+    // transferred is one the receiver cannot map.
+    let installed = graph.get_mut(id).and_then(|table| {
+        let slot = table.free_slot_from(1)?;
+        table
+            .install(
+                slot,
+                graph::Capability {
+                    resource: graph::Resource::Loan { handle },
+                    rights: RIGHT_BUFFER_MAP | RIGHT_TRANSFER,
+                },
+            )
+            .ok()?;
+        Some(slot)
+    });
+    let Some(slot) = installed else {
+        // The loan exists in the table but the lender cannot name it, so it
+        // would be charged against the quota forever. Revoking is the only way
+        // back to the state before the call.
+        //
+        // A fresh loan has no mappings, so the teardown this drives issues no
+        // adapter action at all — but it is run through the real adapter rather
+        // than assumed empty, because "a loan just minted maps nothing" is a
+        // property of the table, not something this call site should encode.
+        let mut adapter = BufferAdapter::new(allocator);
+        let _ = buffers.revoke_loan(&mut adapter, lender, handle);
+        sel4::debug_println!("SLIME_GRAPH loan slot unavailable task={}", id.0);
+        return Response::error(IpcError::DestinationSlotsExhausted);
+    };
+    *served += 1;
+    sel4::debug_println!(
+        "SLIME_GRAPH loan created task={} slot={slot} id={} to={} offset={offset} length={length}",
+        id.0,
+        handle.id.0,
+        peer.0,
+    );
+    Response::success(i64::from(slot), handle.id.0)
+}
+
+/// Answer loan-map, return, and revoke for a loan the caller holds.
+///
+/// Each resolves the loan through the caller's own table, and the table's own
+/// `authorize_loan` then checks the recorded loan agrees about who the receiver
+/// is. Two independent checks of the same claim, because they answer different
+/// questions: the table lookup asks whether this component was given the loan,
+/// and `authorize_loan` asks whether the loan still exists and still names it.
+#[allow(clippy::too_many_arguments)]
+fn serve_loan_lifecycle(
+    operation: Operation,
+    buffers: &mut SharedBufferTable,
+    allocator: &mut ObjectAllocator,
+    tasks: &TaskTable<MAX_TASKS>,
+    graph: &mut GraphTables,
+    id: TaskId,
+    words: &[sel4::Word; ipc::FAST_MESSAGE_REGISTERS],
+    served: &mut usize,
+) -> Response {
+    let holder = HolderId(u64::from(id.0));
+    let slot = (words[0] & 0xffff_ffff) as u32;
+
+    // Revoke is the lender's operation and names the *buffer*, plus the loan's
+    // assigned identity; the other two are the receiver's and name the loan.
+    let handle = if operation == Operation::SharedBufferRevoke {
+        let Some(graph::Capability {
+            resource: graph::Resource::SharedBuffer { handle: buffer },
+            ..
+        }) = graph.get(id).and_then(|table| table.get(slot))
+        else {
+            return Response::error(IpcError::BadCapability);
+        };
+        // Reconstructed from the buffer the lender holds plus the identity it
+        // named. The `receiver` field is a placeholder the revoke path never
+        // reads — `revoke_loan` resolves the recorded loan by id and checks the
+        // caller is its lender, so the receiver comes from the record.
+        shared_buffer::LoanHandle {
+            id: shared_buffer::LoanId(words[1]),
+            buffer: buffer.id,
+            epoch: buffers.epoch(),
+            receiver: holder,
+        }
+    } else {
+        let Some(graph::Capability {
+            resource: graph::Resource::Loan { handle },
+            ..
+        }) = graph.get(id).and_then(|table| table.get(slot))
+        else {
+            return Response::error(IpcError::BadCapability);
+        };
+        handle
+    };
+
+    let Some(task) = tasks.get(id) else {
+        return Response::error(IpcError::InvalidOperation);
+    };
+    let vspace = VSpaceCap(task.vspace.vspace.bits() as usize);
+    let mut adapter = BufferAdapter::new(allocator);
+    let outcome = match operation {
+        Operation::SharedBufferLoanMap => buffers.map_loan(
+            &mut adapter,
+            holder,
+            handle,
+            vspace,
+            words[1] as usize,
+            words[2] as usize,
+            words[3] as usize,
+        ),
+        Operation::SharedBufferReturn => buffers.return_loan(&mut adapter, holder, handle),
+        Operation::SharedBufferRevoke => buffers.revoke_loan(&mut adapter, holder, handle),
+        _ => Err(shared_buffer::SharedBufferError::NotFound),
+    };
+    match outcome {
+        Ok(()) => {
+            *served += 1;
+            // A settled loan is no longer authority anyone holds, so the slot
+            // naming it is emptied rather than left naming a consumed identity.
+            // A second operation on it then finds no capability and is refused,
+            // which is what makes single-return observable from the component
+            // rather than only inside the table.
+            //
+            // `revoke` names the *buffer*, not the loan, so its own slot stays
+            // — but a lender that minted a loan, kept the capability rather
+            // than sending it, and then revoked would otherwise hold a `Loan`
+            // naming a torn-down record for the rest of its life. The `Err`
+            // cleanup below does not reach that case either: the stale handle
+            // fails `authorize_loan` with `WrongReceiver`, not `NotFound`.
+            if let Some(table) = graph.get_mut(id) {
+                match operation {
+                    Operation::SharedBufferReturn => {
+                        table.drop_slot(slot);
+                    }
+                    Operation::SharedBufferRevoke => {
+                        drop_loan_slots(table, handle.id);
+                    }
+                    _ => {}
+                }
+            }
+            sel4::debug_println!(
+                "SLIME_GRAPH loan {} task={} slot={slot} id={}",
+                loan_operation_name(operation),
+                id.0,
+                handle.id.0,
+            );
+            Response::success(0, 0)
+        }
+        Err(error) => {
+            // A receiver whose loan was settled out from under it — the lender
+            // revoked it, or died and reclamation tore it down — holds a
+            // capability naming nothing. Drop it here so the slot comes back,
+            // matching `sys_shared_buffer_return`'s handling of the same case.
+            if operation == Operation::SharedBufferReturn
+                && error == shared_buffer::SharedBufferError::NotFound
+                && let Some(table) = graph.get_mut(id)
+            {
+                table.drop_slot(slot);
+            }
+            sel4::debug_println!(
+                "SLIME_GRAPH loan {} refused task={} slot={slot} class={}",
+                loan_operation_name(operation),
+                id.0,
+                buffer_error_class(error),
+            );
+            Response::error(buffer_error_status(error))
+        }
+    }
+}
+
+/// Empty every slot in `table` naming the loan `id`.
+///
+/// By identity rather than by slot number, because the caller of a revoke names
+/// the buffer and never the loan: the slot holding the loan capability is one
+/// only this table can find.
+fn drop_loan_slots(table: &mut graph::CapabilityTable, id: shared_buffer::LoanId) {
+    for slot in 0..graph::MAX_TASK_CAPS as u32 {
+        if let Some(graph::Capability {
+            resource: graph::Resource::Loan { handle },
+            ..
+        }) = table.get(slot)
+            && handle.id == id
+        {
+            table.drop_slot(slot);
+        }
+    }
+}
+
+const fn loan_operation_name(operation: Operation) -> &'static str {
+    match operation {
+        Operation::SharedBufferLoanMap => "mapped",
+        Operation::SharedBufferReturn => "returned",
+        Operation::SharedBufferRevoke => "revoked",
+        _ => "unknown",
+    }
+}
+
+/// Which ceiling or check refused an operation, as a stable marker token.
+///
+/// The wire status a component sees is deliberately coarse — `slime_rt` has six
+/// codes and every quota class collapses to `ERR_OUT_OF_MEMORY`, exactly as the
+/// retired kernel's does. That is the right ABI: a component's response to a
+/// full quota does not depend on which of the four ceilings it hit.
+///
+/// A gate's does. "Each of the four quota classes fails at ceiling+1" is not
+/// observable from a status code that says only "quota", so the class is named
+/// in the marker instead. Widening the status would change the ABI to make a
+/// test easier; widening the marker changes nothing a component can see.
+const fn buffer_error_class(error: shared_buffer::SharedBufferError) -> &'static str {
+    use shared_buffer::SharedBufferError as Error;
+    match error {
+        Error::QuotaExceeded => "quota",
+        Error::BytesExhausted => "pages",
+        Error::ObjectsExhausted => "buffers",
+        Error::MappingsExhausted => "mappings",
+        Error::LoansExhausted => "loans",
+        Error::NotSealed => "unsealed",
+        Error::RightsDenied => "rights",
+        Error::WriteDenied => "write",
+        Error::WrongOwner => "owner",
+        Error::WrongReceiver => "receiver",
+        Error::BadRange => "range",
+        Error::BadSize => "size",
+        Error::NotFound => "absent",
+        Error::EpochMismatch => "epoch",
+        _ => "other",
+    }
+}
+
+/// The Slime status a shared-buffer failure answers with.
+///
+/// Every exhausted ceiling is `ERR_OUT_OF_MEMORY` and every authority failure
+/// is `ERR_BAD_CAP`, matching `kernel/src/syscall/mod.rs::shared_buffer_error_code`
+/// so a component sees one ABI whichever kernel is under it.
+const fn buffer_error_status(error: shared_buffer::SharedBufferError) -> IpcError {
+    use shared_buffer::SharedBufferError as Error;
+    match error {
+        // Every exhausted ceiling, whether the holder's declared quota or a
+        // fixed table bound, is `ERR_OUT_OF_MEMORY`.
+        Error::QuotaExceeded
+        | Error::BytesExhausted
+        | Error::ObjectsExhausted
+        | Error::MappingsExhausted
+        | Error::LoansExhausted
+        | Error::ChargesExhausted
+        | Error::IdentityExhausted => IpcError::DestinationSlotsExhausted,
+        // Every authority failure — absent, wrong holder, insufficient rights,
+        // stale epoch — is `ERR_BAD_CAP`, indistinguishable to the caller.
+        Error::NotFound
+        | Error::WrongOwner
+        | Error::WrongReceiver
+        | Error::RightsDenied
+        | Error::WriteDenied
+        | Error::NotSealed
+        | Error::EpochMismatch => IpcError::BadCapability,
+        // A malformed range or size is a bad argument, not bad authority.
+        Error::BadSize | Error::BadRange | Error::BadFrameAnchors => IpcError::InvalidLength,
+        _ => IpcError::TransferFailed,
+    }
 }
 
 /// Answer map/unmap/seal/release for a region the caller already holds.
@@ -1934,7 +2975,11 @@ fn serve_buffer_lifecycle(
         ..
     }) = graph.get(id).and_then(|table| table.get(slot))
     else {
-        return Response::error(IpcError::InvalidOperation);
+        // `ERR_BAD_CAP`, which is what a component tests for: `sample-lender`
+        // proves a released buffer is unnameable by requiring exactly that code
+        // from the second release, and the slot is empty by then because the
+        // first one emptied it.
+        return Response::error(IpcError::BadCapability);
     };
     let Some(task) = tasks.get(id) else {
         return Response::error(IpcError::InvalidOperation);
@@ -1944,37 +2989,27 @@ fn serve_buffer_lifecycle(
     let outcome = match operation {
         Operation::SharedBufferMap => {
             let writable = words[0] >> 32 != 0;
-            buffers
-                .map(
-                    &mut adapter,
-                    holder,
-                    handle,
-                    vspace,
-                    words[1] as usize,
-                    words[2] as usize,
-                    words[3] as usize,
-                    if writable {
-                        MappingRights::ReadWrite
-                    } else {
-                        MappingRights::ReadOnly
-                    },
-                )
-                .map(|_| ())
-                .map_err(|_| "map")
+            buffers.map(
+                &mut adapter,
+                holder,
+                handle,
+                vspace,
+                words[1] as usize,
+                words[2] as usize,
+                words[3] as usize,
+                if writable {
+                    MappingRights::ReadWrite
+                } else {
+                    MappingRights::ReadOnly
+                },
+            )
         }
-        Operation::SharedBufferUnmap => buffers
-            .unmap(&mut adapter, holder, handle, vspace, words[1] as usize)
-            .map(|_| ())
-            .map_err(|_| "unmap"),
-        Operation::SharedBufferSeal => buffers
-            .seal(&mut adapter, holder, handle)
-            .map(|_| ())
-            .map_err(|_| "seal"),
-        Operation::SharedBufferRelease => buffers
-            .release(&mut adapter, holder, handle)
-            .map(|_| ())
-            .map_err(|_| "release"),
-        _ => Err("unreachable"),
+        Operation::SharedBufferUnmap => {
+            buffers.unmap(&mut adapter, holder, handle, vspace, words[1] as usize)
+        }
+        Operation::SharedBufferSeal => buffers.seal(&mut adapter, holder, handle),
+        Operation::SharedBufferRelease => buffers.release(&mut adapter, holder, handle),
+        _ => Err(shared_buffer::SharedBufferError::NotFound),
     };
     match outcome {
         Ok(()) => {
@@ -1988,13 +3023,30 @@ fn serve_buffer_lifecycle(
             }
             Response::success(0, 0)
         }
-        Err(stage) => {
+        Err(error) => {
+            // The stage *and* the class, because they answer different
+            // questions: which operation was refused, and which ceiling or
+            // check refused it. A gate asserting that the mapping quota bites
+            // at ceiling+1 needs the second, and the wire status cannot carry
+            // it — see `buffer_error_class`.
             sel4::debug_println!(
-                "SLIME_GRAPH buffer {stage} refused task={} slot={slot}",
-                id.0
+                "SLIME_GRAPH buffer {} refused task={} slot={slot} class={}",
+                buffer_operation_name(operation),
+                id.0,
+                buffer_error_class(error),
             );
-            Response::error(IpcError::TransferFailed)
+            Response::error(buffer_error_status(error))
         }
+    }
+}
+
+const fn buffer_operation_name(operation: Operation) -> &'static str {
+    match operation {
+        Operation::SharedBufferMap => "map",
+        Operation::SharedBufferUnmap => "unmap",
+        Operation::SharedBufferSeal => "seal",
+        Operation::SharedBufferRelease => "release",
+        _ => "unknown",
     }
 }
 

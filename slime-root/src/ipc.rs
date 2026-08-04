@@ -41,18 +41,43 @@ pub enum IpcError {
     StalePlan,
     WaitSetFull,
     WaiterConflict,
+    /// The caller named a slot holding nothing, holding the wrong kind of
+    /// resource, or carrying insufficient rights.
+    ///
+    /// One variant for all three deliberately: they are indistinguishable to
+    /// the caller by design, so a component cannot map its own capability table
+    /// by watching which error a probe returns.
+    ///
+    /// Distinct from [`Self::InvalidOperation`] because it is the one the
+    /// retired kernel answers `ERR_BAD_CAP` to, and components test for that
+    /// code specifically — `sample-receiver` proves a loan is single-return by
+    /// requiring exactly `ERR_BAD_CAP` from the second return. Collapsing it
+    /// into `InvalidOperation` would answer `ERR_INVALID_ARG` and make that
+    /// check fail against a correct implementation.
+    ///
+    /// [`Self::UnsupportedCapabilityTransfer`] answers the same status for the
+    /// same reason and stays separate only so the root's own markers can name
+    /// the cause.
+    BadCapability,
 }
 
 impl IpcError {
     /// Slime-visible status returned in reply MR0 by the root service loop.
     pub const fn slime_status(self) -> i64 {
         match self {
+            Self::BadCapability => -1,
             Self::PeerDead => -2,
             Self::QueueFull | Self::WouldBlock => -3,
+            // `ERR_BAD_CAP`, with the other capability failures: `sys_send`
+            // answers that for a capability it will not move, and a component
+            // written against the retired kernel tests for it. It stays a
+            // distinct variant because the root's own marker distinguishes an
+            // unmovable capability from an absent one, which is a diagnosis a
+            // component is deliberately not given.
+            Self::UnsupportedCapabilityTransfer => -1,
             Self::InvalidOperation
             | Self::UnsupportedOperation
             | Self::InvalidLength
-            | Self::UnsupportedCapabilityTransfer
             | Self::StalePlan
             | Self::WaitSetFull
             | Self::WaiterConflict => -4,
