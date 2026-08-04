@@ -163,3 +163,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-03 | [RP1 — Target-qualified build and admission path](2026-08-03-rp1-target-qualified-artifacts/index.md) | Change | Verified | RP1 |
 | 2026-08-03 | [P5.1 — Substituting seL4 for the custom microkernel](2026-08-03-p5-1-sel4-cutover/index.md) | Change | Verified | P5.1 |
 | 2026-08-04 | [P5.2 — Native component images on seL4](2026-08-04-p5-2-native-component-images/index.md) | Change | Verified | P5.2 |
+| 2026-08-04 | [P5.3.1 — The channel plane on seL4](2026-08-04-p5-3-1-channel-plane/index.md) | Change | Verified | P5.3.1, P5.3, P5.5, B12 |

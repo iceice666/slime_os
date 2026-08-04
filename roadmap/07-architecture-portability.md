@@ -2,7 +2,7 @@
 
 **Purpose:** Preserve one Slime capability/component/generation architecture across target profiles while making AArch64 and Raspberry Pi 5 the near-term product path.
 
-**Status:** In progress - P0, P1, P2.1, P5.1, and P5.2 complete.
+**Status:** In progress - P0, P1, P2.1, P5.1, P5.2, and P5.3.1 complete.
 
 **Decision:** AArch64/Raspberry Pi 5 is now the near-term physical target because the current product goal is the RPi5 ROS 2 two-node demo. The existing x86-64 QEMU path remains the regression oracle for completed work until each semantic corpus is replayed on AArch64, but x86-64/Framework is no longer the product-leading roadmap. RV64 is deferred. As of P5, the AArch64 kernel-side mechanism is being substituted with upstream seL4 rather than hand-written: see [P5](#p5-sel4-microkernel-substitution), which supersedes the custom-kernel half of P2.2-P2.6 if it completes.
 
@@ -447,7 +447,8 @@ One named Raspberry Pi 5 profile runs the verified isolated Slime vertical slice
 
 ## P5: seL4 microkernel substitution
 
-**Status:** In progress — P5.1 and P5.2 complete; P5.3–P5.4 planned.
+**Status:** In progress — P5.1, P5.2, and P5.3.1 complete; P5.3.2–P5.3.4, P5.4,
+and P5.5 planned.
 
 **Depends on:** P0 and P1. Supersedes the custom-kernel half of P2.2–P2.6 if it
 completes; P2.1 AArch64 boot evidence is retained and not re-claimed here.
@@ -595,14 +596,22 @@ actually reach — which are the `unimplemented` ones — and asserted staticall
 over the nine `Unavailable` planes, since no declared component invokes one on
 this boot path. Both halves are fault-injected in the devlog entry.
 
-### P5.3 — C7/C8 data path on seL4
+### P5.3 — C7 sample plane on seL4
 
-**Status:** Not started.
+**Status:** In progress — P5.3.1 complete; P5.3.2–P5.3.4 planned.
 
 **Depends on:** P5.2 and C7.
 
-Replay the bounded sample plane and typed fabric on the seL4 root task, so the
-RPi5 demo's data path does not depend on the retired kernel.
+Replay the bounded sample plane on the seL4 root task, so the RPi5 demo's data
+path does not depend on the retired kernel.
+
+**Retitled 2026-08-04.** This heading previously read "C7/C8 data path", but its
+exit condition names only C7-shaped properties and the minimal typed-fabric
+slice is four tasks plus an `Operation::CapTransfer` handler — see P5.5, which
+now owns that work. It is also decomposed, in the same shape and for the same
+reason C7 and C8.9 were: reaching the exit condition requires four independent
+state surfaces — channels, the loan plane, child construction, and death
+reclamation — and one slice landing all four is not reviewable.
 
 #### Exit condition
 
@@ -610,11 +619,145 @@ Two components exchange and return a payload larger than the control-message
 bound over seL4, with quota exhaustion and peer death reclaiming the same
 resources the x86 corpus records.
 
+### P5.3.1 — Channel plane on seL4
+
+**Status:** Complete.
+
+**Depends on:** P5.2.
+
+`Send`, `Recv`, and `Wait` were root-mediated but had no handler: every declared
+component reached its first `recv` and exited non-zero, so the P5.2 graph ran and
+was served but did nothing over channels. This slice makes a channel a real
+object — materialized from the generation's declared grants, owned by the root,
+named by a logical slot the component was granted.
+
+#### Required checks
+
+- every channel the generation's send/recv grants declare is materialized before
+  any component runs, with each end at the slot that end's component addresses
+  and carrying only the rights that end holds;
+- a component blocked in `recv` is parked in the kernel and woken by its peer's
+  send, receiving a payload too large for the fast message registers through its
+  transfer window;
+- a bounded channel refuses a send past its depth, and a capability-carrying send
+  is refused outright, both as ordinary Slime errors with the caller running;
+- a `wait` on an already-ready source is answered rather than parked;
+- a component still parked when its peer dies is woken with a bounded error, and
+  every channel, held reply, and window is reclaimed.
+
+#### Verification target
+
+```sh
+just sel4_channel_check
+```
+
+A third image, beside `sel4_root_boot_check`'s and
+`sel4_component_graph_check`'s. All three differ only in which generation the
+root task embeds, and each gate boots the artifact it asserts about. A separate
+generation is mechanically required rather than preferred: `init.rs` selects its
+scenario with `option_env!`, resolved at compile time, so one component build
+cannot serve two gates.
+
+#### Exit condition (observed)
+
+Observed 2026-08-04; see
+[`devlog/2026-08-04-p5-3-1-channel-plane/`](../devlog/2026-08-04-p5-3-1-channel-plane/index.md).
+
+Two components exchange bounded messages over channels the generation declared.
+`init` sends a 42-byte payload — over the 16 bytes the inline registers carry, so
+it crosses the transfer window — to a `console` parked in `recv`, which is woken
+and prints the exact bytes. A capability-carrying send is refused, a self-edge
+accepts exactly `CHANNEL_CAPACITY` messages and refuses the next, a `wait` on a
+ready source is answered rather than parked, and `console` — parked again when
+`init` exits — is woken by its peer's death. The graph drains to
+`live=0 … parked=0 queues=0`.
+
+Three denial arms are fault-injected in the devlog entry. The peer-death arm was
+not covered by the first fixture and the injection is what found it.
+
+Not in this slice: the loan plane (P5.3.2), child construction from a resolved
+spawn grant and supervision (P5.3.3), and the composed sample-plane exit
+condition (P5.3.4). A channel grant naming the bootstrap component that the boot
+layout does not label is reported unplaced rather than guessed at — those are the
+halves `init` brokers through spawn, which arrives with P5.3.3.
+
+### P5.3.2 — Loan plane and generation-declared quotas on seL4
+
+**Status:** Not started.
+
+**Depends on:** P5.3.1.
+
+`SharedBufferTable` already implements loan, loan-map, return, and revoke against
+real seL4 frames, but no dispatcher arm reaches them, and `SHARED_QUOTA` is a
+hardcoded constant with `loan_count: 0` applied to every task rather than the
+`shared-buffer-budget` resource the generation carries.
+
+#### Exit condition
+
+A component loans a sealed subrange to a receiver named by capability, the
+receiver maps it read-only and returns it exactly once, and each of the four
+quota classes fails at ceiling+1 against limits decoded from the generation
+without disturbing an unrelated holder.
+
+### P5.3.3 — Child construction and supervision on seL4
+
+**Status:** Not started.
+
+**Depends on:** P5.3.1.
+
+`Spawn` resolves its authority from the caller's declared grants and then refuses,
+so no component can start another. This slice constructs the child, distributes
+the channel halves `init` brokers, and answers `SupervisionStatus`.
+
+#### Exit condition
+
+A component spawns a child from a grant-resolved executable, hands it declared
+capabilities at the slots its layout names, and observes its termination through
+a supervision handle rather than an ambient task id.
+
+### P5.3.4 — Sample-plane composition on seL4
+
+**Status:** Not started.
+
+**Depends on:** P5.3.2 and P5.3.3.
+
+Composes the slices into P5.3's stated exit condition: the `sample-lender` and
+`sample-receiver` components, unmodified, running the same ordered transcript
+`just sample_plane_live_check` records on x86.
+
+#### Exit condition
+
+P5.3's exit condition above, observed under a named seL4 gate.
+
+### P5.5 — C8 typed fabric on seL4
+
+**Status:** Not started.
+
+**Depends on:** P5.3.3 and C8.
+
+Split out of P5.3 on 2026-08-04, because P5.3's exit condition names only
+C7-shaped properties while its title claimed C8 as well. The typed fabric is a
+different slice by size and by mechanism: its smallest honest configuration is
+four tasks — `init`, `fabric-service`, one publisher, one subscriber — because
+the C8.3 authority claim is that a participant never holds a route endpoint
+directly but is provisioned one by the fabric from the authenticated graph. That
+provisioning is `Operation::CapTransfer`, which this cutover does not yet
+mediate, and it presupposes P5.3.3's spawn-time capability distribution.
+
+Note the threshold difference: a C7 payload crosses to a shared buffer above the
+64-byte control-message bound, a C8 stream sample above `maxInlineBytes = 32`.
+
+#### Exit condition
+
+One declared typed route carries a sample from a publisher to a subscriber over
+seL4, with the route endpoints provisioned by the fabric from the generation's
+declared edges, a re-delegation refused, and an undeclared participant denied.
+
 ### P5.4 — Retire the custom kernel
 
 **Status:** Not started.
 
-**Depends on:** P5.3.
+**Depends on:** P5.3 and P5.5.
 
 `kernel/` is deleted only once seL4 carries every behavior it currently proves.
 Until then it is the frozen oracle: its gates keep running, its code does not

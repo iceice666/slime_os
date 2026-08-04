@@ -58,6 +58,19 @@ checkout directories produce byte-identical component images and the same
 generation identity, with `just generation_check`, `just product_boot_check`,
 and `just test` unchanged.
 
+**Deferral reviewed 2026-08-04, before opening P5.3.1's gate.** Still deferred,
+on the reason recorded above rather than by omission. B12's own analysis
+establishes that the seL4 target is unaffected: `components/.cargo/config.toml`
+keys its rustflags by triple, the seL4 component build matches none of them
+(it uses a JSON target specification), and `build-generation.py` passes
+`--remap-path-prefix={ROOT}=.` explicitly on that path for exactly this reason.
+P5.3.1 adds a second seL4 generation built through that same path, so it neither
+touches the defect nor extends its reach. Fixing it still means rebuilding every
+frozen x86 component image and re-authenticating every generation identity the
+x86 gates assert against — a blast radius larger than the defect, and orthogonal
+to the seL4 cutover. It should be scheduled against the x86 oracle deliberately,
+not folded into a portability slice.
+
 ## Resolved
 
 ### B11 — test scaffolding is declared in the product boot generation
