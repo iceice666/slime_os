@@ -286,13 +286,35 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
         let tcb = allocator.allocate_fixed::<sel4::cap_type::Tcb>()?.cap();
 
         let root_cnode = sel4::init_thread::slot::CNODE.cap();
-        // Slot 1: the service endpoint, badged with this task's identity and
-        // carrying exactly the rights its declared grants imply.
+        // Slot 1: the root service endpoint, badged with this task's identity.
+        //
+        // This is the task's *transport*, not one of its grants: it is how a
+        // component reaches `exit`, `debug_write`, and the window bind that
+        // every other operation stages through. So it carries send and
+        // grant-reply unconditionally — a component that could not invoke it
+        // could not run at all, and seL4 refuses a call on a read-only
+        // endpoint.
+        //
+        // Conveying no authority by doing so is what makes that safe. What a
+        // component may *ask for* is decided by the root when it dispatches:
+        // each request resolves against that task's logical capability table
+        // (`graph.rs`), which holds exactly the grants its generation
+        // declared. An ungranted component can therefore call the root and be
+        // told no, which is the bounded error P5.2 requires, rather than being
+        // unable to speak and faulting instead.
+        //
+        // `grant` — the right to pass capabilities through the endpoint — is
+        // still gated on the generation declaring a transferable grant.
         mint_child_slot(
             cnode,
             CHILD_SLOT_SERVICE,
             &root_cnode.absolute_cptr(service_endpoint),
-            authority.endpoint_rights(),
+            sel4::CapRightsBuilder::none()
+                .write(true)
+                .read(true)
+                .grant_reply(true)
+                .grant(authority.rights & boot_contracts::generation::RIGHT_TRANSFER != 0)
+                .build(),
             id.service_badge(),
         )?;
         // Slot 3: the same endpoint object under this task's fault badge. The

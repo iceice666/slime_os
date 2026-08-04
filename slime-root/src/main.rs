@@ -927,6 +927,181 @@ fn launch_component_graph(
         admission.wrong_target_images,
         admission.unrecognized_images,
     );
+
+    // Every allocation for every component has succeeded, so activation is
+    // safe. Ordered by task id so the serial record is deterministic.
+    let ids: [Option<TaskId>; MAX_TASKS] = {
+        let mut ids = [None; MAX_TASKS];
+        for (slot, task) in ids.iter_mut().zip(tasks.tasks()) {
+            *slot = Some(task.id);
+        }
+        ids
+    };
+    for id in ids.iter().flatten().copied() {
+        if let Err(error) = tasks.activate(id) {
+            fatal!("SLIME_GRAPH FAIL activation failed task={}: {error:?}", id.0)
+        }
+    }
+    sel4::debug_println!("SLIME_GRAPH activated components={}", tasks.activated());
+
+    serve_component_graph(service_endpoint, &mut tasks, &mut windows, &mut graph);
+}
+
+/// Iterations the graph service loop will run before declaring the graph wedged.
+///
+/// Generous against what the five declared components actually issue — each
+/// binds a window, and spawn-service additionally runs a shared-buffer probe
+/// and spawns two children — while still bounding a livelock so it fails in
+/// seconds rather than burning the gate's whole timeout.
+const MAX_GRAPH_ITERATIONS: usize = 512;
+
+/// Serve the root operation surface for the component graph.
+///
+/// Every arrival is decoded by `ipc::Operation::from_label`, so the whole legacy
+/// syscall surface resolves to a bounded answer: an operation this cutover does
+/// not mediate returns its ordinary Slime error rather than faulting the caller,
+/// which is P5.2's third required check.
+fn serve_component_graph(
+    endpoint: sel4::cap::Endpoint,
+    tasks: &mut TaskTable<MAX_TASKS>,
+    windows: &mut WindowTable<MAX_TASKS>,
+    graph: &mut GraphTables,
+) {
+    let mut live = tasks.len();
+    let mut unsupported = 0;
+    for _ in 0..MAX_GRAPH_ITERATIONS {
+        if live == 0 {
+            break;
+        }
+        let (info, badge) = endpoint.recv(());
+        let Some((id, arrival)) = TaskId::from_badge(badge) else {
+            sel4::debug_println!("SLIME_GRAPH unbadged arrival badge={badge:#x} rejected");
+            ipc::reply(Response::error(IpcError::InvalidOperation));
+            continue;
+        };
+        if tasks.get(id).is_none() {
+            sel4::debug_println!("SLIME_GRAPH unknown task badge={badge:#x} rejected");
+            ipc::reply(Response::error(IpcError::InvalidOperation));
+            continue;
+        }
+        if arrival == Arrival::Fault {
+            let detail = match fault::decode_fault(&info) {
+                Ok(record) => record,
+                Err(error) => {
+                    sel4::debug_println!(
+                        "SLIME_GRAPH fault undecodable task={} error={error:?}",
+                        id.0
+                    );
+                    continue;
+                }
+            };
+            sel4::debug_println!(
+                "SLIME_GRAPH component fault task={} kind={:?} address={:?}",
+                id.0,
+                detail.kind,
+                detail.address,
+            );
+            if let Some(task) = tasks.get(id) {
+                let _ = task.suspend();
+            }
+            live -= 1;
+            continue;
+        }
+
+        let words = sel4::with_ipc_buffer(|buffer| {
+            let mut words = [0 as sel4::Word; ipc::FAST_MESSAGE_REGISTERS];
+            let len = info.length().min(ipc::FAST_MESSAGE_REGISTERS);
+            words[..len].copy_from_slice(&buffer.msg_regs()[..len]);
+            words
+        });
+        let operation = match Operation::from_label(info.label()) {
+            Ok(operation) => operation,
+            Err(error) => {
+                sel4::debug_println!(
+                    "SLIME_GRAPH request rejected task={} label={} error={error:?}",
+                    id.0,
+                    info.label()
+                );
+                ipc::reply(Response::error(error));
+                continue;
+            }
+        };
+        match operation {
+            // The startup declaration of the window the loader already mapped.
+            // Checked against that mapping rather than accepted on the caller's
+            // word, so a task cannot name a region it does not have.
+            Operation::TransferWindowBind => {
+                let response = match windows.bind(
+                    id,
+                    words[0] as u32,
+                    words[1] as usize,
+                    words[2] as usize,
+                ) {
+                    Ok(window) => {
+                        sel4::debug_println!(
+                            "SLIME_GRAPH window bound task={} base={:#x} len={}",
+                            id.0,
+                            window.base,
+                            window.len
+                        );
+                        Response::success(0, 0)
+                    }
+                    Err(error) => {
+                        sel4::debug_println!(
+                            "SLIME_GRAPH window bind refused task={} error={error:?}",
+                            id.0
+                        );
+                        Response::error(error)
+                    }
+                };
+                ipc::reply(response);
+            }
+            // A clean exit is a send, not a call: the task is suspended rather
+            // than replied to.
+            Operation::Exit => {
+                let status = words[0] as i64;
+                sel4::debug_println!("SLIME_GRAPH component exit task={} status={status}", id.0);
+                if let Some(task) = tasks.get(id) {
+                    let _ = task.suspend();
+                }
+                graph.release(id);
+                windows.release(id);
+                live -= 1;
+            }
+            // Every other label resolves to a bounded answer. The planes this
+            // cutover does not mediate — storage, directory, input, generation
+            // management, recovery — answer `UnsupportedOperation`, so a
+            // component naming one receives an ordinary Slime error and keeps
+            // running instead of being faulted.
+            other => {
+                let response = other
+                    .unmediated_response()
+                    .unwrap_or(Response::error(IpcError::UnsupportedOperation));
+                if response.result == IpcError::UnsupportedOperation.slime_status() {
+                    unsupported += 1;
+                    sel4::debug_println!(
+                        "SLIME_GRAPH unsupported operation task={} operation={} result={} caller_survives=1",
+                        id.0,
+                        other.label(),
+                        response.result,
+                    );
+                } else {
+                    sel4::debug_println!(
+                        "SLIME_GRAPH request answered task={} operation={} result={}",
+                        id.0,
+                        other.label(),
+                        response.result,
+                    );
+                }
+                ipc::reply(response);
+            }
+        }
+    }
+    sel4::debug_println!(
+        "SLIME_GRAPH served live={live} unsupported={unsupported} windows={} tables={}",
+        windows.len(),
+        graph.len(),
+    );
 }
 
 /// Serve the badged root endpoint until fixture `index` reaches a terminal state
