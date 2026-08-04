@@ -56,6 +56,19 @@ sel4_component_graph_check: sel4_pin_check
 sel4_channel_check: sel4_pin_check
     python3 scripts/check/check-sel4-channel-plane.py
 
+# P5.3.2: build the loan-plane image, boot it, and require the ordered markers
+# proving that a sealed subrange is loaned to a receiver named by capability,
+# mapped read-only and returned exactly once by the unmodified `sample-receiver`,
+# that each of the four quota classes refuses at ceiling+1 against limits decoded
+# from the generation rather than a hardcoded constant, that an unrelated holder
+# is undisturbed, and that every loan, mapping, region, and in-flight capability
+# is reclaimed at teardown.
+#
+# A fourth image, beside the three above, on the same rule: each gate boots the
+# artifact it asserts about.
+sel4_loan_check: sel4_pin_check
+    python3 scripts/check/check-sel4-loan-plane.py
+
 # Run the seL4 product image interactively on the pinned QEMU machine.
 run: sel4_qemu_image_check
     qemu-system-aarch64 -machine virt,virtualization=on -cpu cortex-a53 -smp 1 \

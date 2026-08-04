@@ -138,8 +138,14 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     (
         # Required check 2, second half. The payload exceeds the inline
         # registers, so it crossed through the transfer window.
-        "init sent a windowed payload to the parked receiver",
-        rf"SLIME_GRAPH sent task=1 channel=0 bytes={PAYLOAD_BYTES} queued=1",
+        #
+        # `caps=0` is pinned rather than left open. P5.3.2 added capability
+        # transfer over `send`, so this marker gained a field; asserting it as
+        # zero keeps the line exact and additionally states that this slice's
+        # payload-carrying send moves no capability -- which the arm below,
+        # where one is refused, is the complement of.
+        "init sent a windowed payload carrying no capability to the parked receiver",
+        rf"SLIME_GRAPH sent task=1 channel=0 bytes={PAYLOAD_BYTES} caps=0 queued=1",
     ),
     ("init observed its own send succeed", r"\[init\] parked receiver sent"),
     (
@@ -445,7 +451,9 @@ def check_queue_depth(transcript: str) -> None:
     would satisfy `[init] queue full refused` just as well, and would be a
     bounded channel of the wrong bound.
     """
-    queued = re.findall(r"SLIME_GRAPH sent task=1 channel=1 bytes=\d+ queued=(\d+)", transcript)
+    queued = re.findall(
+        r"SLIME_GRAPH sent task=1 channel=1 bytes=\d+ caps=0 queued=(\d+)", transcript
+    )
     if not queued:
         fail("the transcript records no sends on the bounded channel")
     depth = max(int(value) for value in queued)
