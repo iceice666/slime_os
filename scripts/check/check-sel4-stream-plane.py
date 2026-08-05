@@ -1,0 +1,732 @@
+#!/usr/bin/env python3
+
+"""P5.5.2 gate: the full C8.4 stream plane, unmodified, on seL4.
+
+Boots `build/slime-sel4-stream.elf` -- the image whose root task embeds the
+stream-plane generation, `contracts/generation/v1/fixtures/sel4-stream.zti` --
+and asserts P5.5.2's exit condition:
+
+    `fabric-service` and every stream participant run on seL4 with no seL4
+    branch in any of them, producing the transcript `just fabric_stream_check`
+    records on x86, and the transfer plane's subset test (B17) is observed
+    rather than argued.
+
+# The transcript is the x86 one
+
+`CHAINS` below is `check-fabric-stream.py`'s own, in the same causal-chain
+shape and with the same reasoning behind each chain. Every line in it is
+produced by a component this gate does not modify, and
+`check_transcript_matches_the_oracle` re-reads the x86 gate at run time so the
+two cannot quietly drift into different transcripts that merely resemble each
+other. That is the same guard `check-sel4-sample-plane.py` uses, and for the
+same reason: a transcript adjusted to suit whatever this root happened to
+implement would prove nothing about ABI compatibility.
+
+# What changed from P5.5.1
+
+P5.5.1 ran one route, one publisher, one subscriber, and asserted the *exact
+extent* of the seL4 branching its components carried -- because
+`fabric-subscriber` needed one branch to run against a graph declaring no
+`>MAX_MSG` publisher. This graph declares that publisher, so the branch is gone
+and this gate asserts its **absence**, on P5.3.4's standard rather than
+P5.5.1's counted-branch one.
+
+P5.5.1's own gate and generation are retired here rather than kept. Every
+assertion it made is a subset of this one's: the publisher's re-delegation and
+widening denials, the intruder's denial, the one-direction role masks, and the
+root's own `transfers served` count all appear below, over a graph that
+additionally carries the shared-sample path and KEEP_LAST eviction. Keeping
+both would have meant maintaining two images to observe one property twice.
+
+# B17, observed rather than argued
+
+`serve_cap_transfer` enforces four rules. P5.5.1 observed three and recorded
+the fourth -- the **subset test**, `rights & !source.rights` -- as uncovered,
+because no capability that graph could produce held transfer authority while
+being narrower than its kind admits.
+
+The backlog's stated reason for that was wrong, and this slice corrects it: a
+plain **spawn grant** produces exactly that shape. `preflight_spawn_grants`
+installs the requested mask verbatim, so a parent granting `send|transfer` on
+an endpoint hands its child a capability the per-kind rule has nothing to
+object to and the transfer-authority rule admits. Asking to move it with `recv`
+restored is refused by the subset test and by nothing else.
+
+`fabric-publisher` carries that arm, beside its two existing transfer denials
+so all three rules are observed in one place. It is guarded on *holding* the
+subject rather than on a check flag -- an absent slot answers the same `ERR_BAD_CAP` the
+subset test does, so a bare widening arm would pass identically in a graph that
+never granted the endpoint. See `subset_test_arm` in that component.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import re
+import shutil
+import subprocess
+import sys
+import threading
+import tomllib
+from pathlib import Path
+from typing import NoReturn
+
+ROOT = Path(__file__).resolve().parents[2]
+PINS_PATH = ROOT / "sel4" / "pins.toml"
+IMAGE = ROOT / "build" / "slime-sel4-stream.elf"
+MANIFEST = ROOT / "build" / "slime-sel4-stream.identity.json"
+BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
+FIXTURE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "sel4-stream.zti"
+ORACLE_GATE = ROOT / "scripts" / "check" / "check-fabric-stream.py"
+IMAGE_VARIANT = "stream"
+
+BOOT_TIMEOUT_SECONDS = 180
+
+# Grouped into causal chains rather than one global order.
+#
+# The three participants provision concurrently: each asks over its own control
+# endpoint as soon as it is activated, and the fabric sweeps them in whatever
+# order they arrive. That interleaving is a scheduling detail, and pinning it
+# would make this gate fail on an unrelated scheduling change. What is *not* a
+# detail is the order *within* each chain — a denial must be observed before the
+# operation it guards succeeds — so a regression that widens a role or lets an
+# undeclared component through fails here even when the happy path still
+# delivers its sample.
+#
+# This is the shape `check-fabric-authority.py` and `check-data-fabric-boot.py`
+# already use, and for the same reason.
+CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "the graph was admitted and launched",
+        (
+            r"SLIME_ROOT generation admitted number=\d+ components=7 grants=13 ",
+            r"SLIME_ROOT graph admitted; legacy SLIMECM images not activated "
+            r"components=7 slimecm=0 elf=7 unrecognized=0",
+            # Six pairs, one per participant plus B17's probe. Init holds both
+            # halves of each and gives one away, so the binding between a
+            # control endpoint and a component identity is established here and
+            # nowhere else -- init itself holds no route capability at all.
+            r"\[init\] fabric control channels minted",
+            # The fabric's grants: two factories, five control halves, and one
+            # supervision handle per subscriber -- nine, well past the four
+            # records this root admitted before B15 was closed.
+            r"SLIME_GRAPH spawned task=\d+ child=\d+ component=fabric-service grants=9 ",
+            r"\[init\] fabric service spawned",
+            r"\[init\] fabric participants spawned",
+        ),
+    ),
+    (
+        "publisher provisioning and denials",
+        (
+            r"\[fabric-publisher\] role requested",
+            # The fabric answers from the generation graph keyed by the control
+            # endpoint the request arrived on -- never from the route name,
+            # direction, or type identity the request carries.
+            r"\[fabric\] provisioned fabric-publisher telemetry publish",
+            r"\[fabric-publisher\] publish role received",
+            # A publish role is one direction: no receive authority came with it.
+            r"\[fabric-publisher\] route receive denied",
+            # And it is terminal: it cannot be handed on or widened.
+            r"\[fabric-publisher\] re-delegation denied",
+            r"\[fabric-publisher\] widening denied",
+            # Only after every denial does the role do what it is for.
+            r"\[fabric-publisher\] inline samples published",
+            r"\[fabric-publisher\] done",
+        ),
+    ),
+    (
+        "second publisher spans two routes",
+        (
+            r"\[fabric-publisher-b\] roles requested",
+            r"\[fabric\] provisioned fabric-publisher-b telemetry publish",
+            r"\[fabric\] provisioned fabric-publisher-b diagnostics publish",
+            # Two declared routes arrive as two distinct capabilities; the
+            # component fails if they collapse into one.
+            r"\[fabric-publisher-b\] both publish roles received",
+            r"\[fabric-publisher-b\] diagnostics sample published",
+            r"\[fabric-publisher-b\] large sample published",
+            r"\[fabric-publisher-b\] done",
+        ),
+    ),
+    (
+        "subscriber provisioning and denials",
+        (
+            r"\[fabric-subscriber\] role requested",
+            r"\[fabric\] provisioned fabric-subscriber telemetry subscribe",
+            r"\[fabric-subscriber\] subscribe role received",
+            r"\[fabric-subscriber\] route publish denied",
+            r"\[fabric-subscriber\] re-delegation denied",
+            # Both sample forms reach a keeping-up subscriber, and it is never
+            # told it lost anything. `shared` is the C7.6 descriptor-and-loan
+            # hop, which no earlier seL4 fabric graph carried.
+            r"\[fabric-subscriber\] shared sample verified",
+            r"\[fabric-subscriber\] inline and shared received",
+            r"\[fabric-subscriber\] done",
+        ),
+    ),
+    (
+        "ungranted component denial",
+        (
+            # Everything a naive registry would accept is present: a real
+            # generation-provisioned control endpoint and the exact route
+            # strings the publisher supplies.
+            r"\[fabric-intruder\] exact route strings supplied",
+            # It is refused anyway, because the graph declares no edge for it.
+            r"\[fabric\] ungranted component denied: fabric-intruder",
+            r"\[fabric-intruder\] undeclared edge denied",
+            r"\[fabric-intruder\] done",
+        ),
+    ),
+    (
+        # B17. The one arm in this transcript the x86 oracle does not also
+        # produce, because `valid.zti` grants the intruder no probe endpoint --
+        # see `check_transcript_matches_the_oracle`, which records it as this
+        # gate's single addition rather than letting it pass as drift.
+        "a spawn-narrowed transfer role cannot widen",
+        (
+            # *Before* the role request, which is the only point at which the
+            # probe slot is unambiguous: provisioning installs capabilities at
+            # the first free slots, so afterwards slot 1 holds a route role in
+            # any graph that granted no probe. The two denials that follow are
+            # the same operation refused by *different* rules, and the ordering
+            # here is what keeps them distinguishable.
+            #
+            # Emitted only after the component has *used* the granted end, so a
+            # graph that never declared one skips the arm silently rather than
+            # passing it vacuously on an empty slot's identical error code.
+            r"\[fabric-publisher\] narrowed transfer role cannot widen",
+            r"\[fabric-publisher\] role requested",
+            r"\[fabric-publisher\] re-delegation denied",
+            r"\[fabric-publisher\] widening denied",
+            r"\[fabric-publisher\] done",
+        ),
+    ),
+    (
+        "one copy per large sample, one loan per subscriber",
+        (
+            # The fabric copies a >MAX_MSG payload exactly once into its own
+            # sealed buffer...
+            r"\[fabric\] large sample copied once",
+            # ...and each subscriber then verifies the payload through its own
+            # independently accounted downstream loan.
+            r"\[fabric-subscriber\] shared sample verified",
+        ),
+    ),
+    (
+        "stalled BEST_EFFORT subscriber reports bounded loss",
+        (
+            r"\[fabric-subscriber-b\] both subscribe roles received",
+            # It consumes, then deliberately stops acking.
+            r"\[fabric-subscriber-b\] stalling on telemetry",
+            # The stall costs a bounded number of retained samples, and
+            # resuming produces loss reports naming what was dropped.
+            r"\[fabric-subscriber-b\] bounded loss reported",
+            r"\[fabric-subscriber-b\] done",
+        ),
+    ),
+    (
+        "one participant's stall does not disturb an unrelated stream",
+        (
+            r"\[fabric-subscriber-b\] stalling on telemetry",
+            # A different route with a different interface keeps delivering
+            # while telemetry is stalled.
+            r"\[fabric-subscriber-b\] diagnostics unaffected by stall",
+        ),
+    ),
+    (
+        "the plane completed and the graph drained",
+        (
+            r"\[fabric\] every declared stream edge provisioned",
+            r"\[fabric\] stream plane complete",
+            r"\[init\] fabric stream complete",
+            # Every in-flight capability settled. A transfer parks its
+            # capability in the transit table between the send and the receive
+            # that collects it, so a nonzero `transit` would mean a role was
+            # moved and never landed -- authority belonging to nobody.
+            r"SLIME_GRAPH loans served=\d+ loans=0 mappings=0 regions=0 transit=\d+ "
+            r"orphans=0 aliases=0",
+            # The root's own count of narrow-on-transfer moves, and a nonzero
+            # one: zero would mean every role was placed by the generation
+            # rather than provisioned by the fabric, which is the property C8.3
+            # exists to establish. Every seL4 gate before the typed fabric
+            # reports zero because no component in those graphs invokes the
+            # operation.
+            #
+            # Not pinned to an exact number, unlike P5.5.1's `served=4`. That
+            # graph provisioned four halves and nothing else could move a
+            # capability; here the count also covers the intruder's refused
+            # widening attempt and both routes' fan-in, so an exact number
+            # would encode this composition's arithmetic rather than the
+            # property, and would have to be recomputed whenever a participant
+            # is added. The chains above already assert *which* roles crossed.
+            r"SLIME_GRAPH transfers served=[1-9]\d*\b",
+        ),
+    ),
+)
+
+# The last marker any chain requires, which is what `boot` watches for to know
+# the run is over.
+TERMINAL_MARKER = CHAINS[-1][1][-1]
+
+FAILURE_MARKERS: tuple[str, ...] = (
+    r"SLIME_ROOT FATAL .*",
+    r"SLIME_GRAPH FAIL .*",
+    r"\[init\] stream plane fail: .*",
+    r"SLIME_GRAPH spawn failed .*",
+    r"SLIME_GRAPH channel (?:recall|rollback) failed .*",
+    r"\[slime-rt\] transfer window bind failed",
+    r"SLIME_GRAPH window bind refused",
+    r"SLIME_GRAPH park refused .*",
+    r"SLIME_GRAPH channel unplaced .*",
+    r"Attempted to invoke a read-only endpoint",
+    r"seL4 called fail",
+    r"Caught cap fault",
+    r"Caught vm fault",
+    r"Caught user exception",
+    r"panicked at ",
+    r"aborted at ",
+    r"\(aborted\)",
+)
+
+
+def fail(message: str) -> NoReturn:
+    raise SystemExit(f"seL4 stream plane check: {message}")
+
+
+def load_pins() -> dict[str, object]:
+    if not PINS_PATH.is_file():
+        fail(f"missing pin manifest: {PINS_PATH.relative_to(ROOT)}")
+    try:
+        pins = tomllib.loads(PINS_PATH.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError) as error:
+        fail(f"cannot parse {PINS_PATH.relative_to(ROOT)}: {error}")
+    if pins.get("schema") != 1:
+        fail("unsupported sel4/pins.toml schema (expected 1)")
+    if not isinstance(pins.get("qemu_arm_virt"), dict):
+        fail("sel4/pins.toml is missing [qemu_arm_virt]")
+    return pins
+
+
+def profile_text(profile: dict[str, object], key: str) -> str:
+    value = profile.get(key)
+    if not isinstance(value, str) or not value:
+        fail(f"sel4/pins.toml [qemu_arm_virt].{key} must be non-empty text")
+    return value
+
+
+def profile_integer(profile: dict[str, object], key: str) -> int:
+    value = profile.get(key)
+    if not isinstance(value, int) or isinstance(value, bool):
+        fail(f"sel4/pins.toml [qemu_arm_virt].{key} must be an integer")
+    return value
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as handle:
+            while chunk := handle.read(1024 * 1024):
+                digest.update(chunk)
+    except OSError as error:
+        fail(f"cannot hash {path.relative_to(ROOT)}: {error}")
+    return digest.hexdigest()
+
+
+def build_image() -> None:
+    command = [sys.executable, str(BUILD_SCRIPT), "--stream-plane"]
+    print(f"[build] {' '.join(command)}", flush=True)
+    try:
+        process = subprocess.run(command, cwd=ROOT, check=False)
+    except OSError as error:
+        fail(f"cannot run the seL4 image build: {error}")
+    if process.returncode != 0:
+        fail(f"seL4 image build failed with exit status {process.returncode}")
+
+
+def check_manifest() -> None:
+    if not MANIFEST.is_file():
+        fail(
+            f"missing identity manifest {MANIFEST.relative_to(ROOT)}; "
+            "run `just sel4_stream_check`"
+        )
+    try:
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        fail(f"cannot parse {MANIFEST.relative_to(ROOT)}: {error}")
+    if not isinstance(manifest, dict) or manifest.get("kind") != "slime-sel4-image-identity":
+        fail(f"{MANIFEST.relative_to(ROOT)} is not a Slime seL4 identity manifest")
+    # The seven images are built from the same sources and differ only in which
+    # generation the root task embeds, so booting the wrong one would fail on
+    # markers rather than on identity. Checking the variant reports the actual
+    # cause instead.
+    if manifest.get("variant") != IMAGE_VARIANT:
+        fail(
+            f"{MANIFEST.relative_to(ROOT)} records variant "
+            f"{manifest.get('variant')!r}, not {IMAGE_VARIANT!r}; "
+            "rebuild with `--stream-plane`"
+        )
+    image = manifest.get("image")
+    if not isinstance(image, dict) or not isinstance(image.get("sha256"), str):
+        fail("identity manifest does not record the packaged image digest")
+    if not IMAGE.is_file():
+        fail(f"missing packaged image {IMAGE.relative_to(ROOT)}")
+    actual = sha256_file(IMAGE)
+    if actual != image["sha256"]:
+        fail(
+            f"{IMAGE.relative_to(ROOT)} SHA-256 is {actual}, but the identity manifest "
+            f"records {image['sha256']}; rebuild before booting"
+        )
+
+
+def boot(profile: dict[str, object]) -> str:
+    """Boot the image and return the serial transcript.
+
+    The root task suspends itself once the graph has drained, so QEMU stays
+    alive afterwards and waiting for an exit would always time out. Serial
+    output is read line by line and the guest is killed as soon as the terminal
+    or any failure marker appears.
+    """
+    qemu = shutil.which("qemu-system-aarch64")
+    if qemu is None:
+        fail("qemu-system-aarch64 is not on PATH")
+    command = [
+        qemu,
+        "-machine",
+        profile_text(profile, "machine"),
+        "-cpu",
+        profile_text(profile, "cpu"),
+        "-smp",
+        str(profile_integer(profile, "cpus")),
+        "-m",
+        f"size={profile_integer(profile, 'memory_mib')}M",
+        "-nographic",
+        "-serial",
+        "mon:stdio",
+        "-kernel",
+        str(IMAGE),
+    ]
+    print(f"[boot] {' '.join(command)}", flush=True)
+    terminal = re.compile(TERMINAL_MARKER)
+    failures = re.compile("|".join(FAILURE_MARKERS))
+    lines: list[str] = []
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=ROOT,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+    except OSError as error:
+        fail(f"cannot run QEMU: {error}")
+    # A wedged guest emits nothing, so the deadline cannot live in the read
+    # loop; a watchdog kills QEMU, which closes the pipe and ends the loop.
+    watchdog = threading.Timer(BOOT_TIMEOUT_SECONDS, process.kill)
+    watchdog.start()
+    try:
+        assert process.stdout is not None
+        for line in process.stdout:
+            lines.append(line.rstrip("\n"))
+            if terminal.search(line) or failures.search(line):
+                break
+    finally:
+        timed_out = not watchdog.is_alive()
+        watchdog.cancel()
+        process.terminate()
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+    transcript = "\n".join(lines)
+    if timed_out and terminal.search(transcript) is None:
+        report_transcript(transcript)
+        fail(f"boot exceeded {BOOT_TIMEOUT_SECONDS}s without reaching the final marker")
+    return transcript
+
+
+def report_transcript(transcript: str) -> None:
+    tail = transcript.splitlines()[-40:]
+    if tail:
+        sys.stdout.write("--- serial transcript (tail) ---\n")
+        sys.stdout.write("\n".join(tail) + "\n")
+        sys.stdout.write("--- end transcript ---\n")
+        sys.stdout.flush()
+
+
+def check_transcript(transcript: str) -> None:
+    for pattern in FAILURE_MARKERS:
+        match = re.search(pattern, transcript)
+        if match is not None:
+            report_transcript(transcript)
+            fail(f"failure marker in serial transcript: {match.group(0)!r}")
+    for label, chain in CHAINS:
+        position = 0
+        for pattern in chain:
+            match = re.compile(pattern).search(transcript, position)
+            if match is None:
+                report_transcript(transcript)
+                if re.search(pattern, transcript) is not None:
+                    fail(f"{label}: marker out of order: {pattern}")
+                fail(f"{label}: missing marker: {pattern}")
+            position = match.end()
+    print(
+        f"transcript: {sum(len(chain) for _, chain in CHAINS)} markers observed "
+        f"across {len(CHAINS)} causal chains",
+        flush=True,
+    )
+    check_no_participant_failed(transcript)
+    check_components_are_unmodified()
+    check_transcript_matches_the_oracle()
+
+
+def check_no_participant_failed(transcript: str) -> None:
+    """No component *of this composition* reported a failure.
+
+    Scoped, for the reason P5.3.4's gate records: the root launches every
+    component the generation declares (P5.2), so this boot also starts one
+    unconfigured instance of each of the six participants, holding no control
+    endpoint at all. Each fails its own first operation and exits non-zero. Those failures are expected, and reading
+    them as this composition's would be reading a different graph.
+
+    Scoped by **identity rather than by time**, which P5.3.4's window could not
+    be. There the unconfigured pair failed before the composition began, so a
+    transcript slice separated them; here the four unconfigured instances are
+    activated alongside init's six children and interleave freely with them --
+    the unconfigured service fails its first `endpoint_create` *while* the
+    composition is still brokering. A window would either admit that failure or
+    exclude a real one depending on scheduling.
+
+    So the composition's members are identified exactly: the root names each
+    child it constructs, and every `[component] fail:` line is attributed by
+    counting which instance produced it. The unconfigured instances are the ones
+    the root *launched*; the composition's are the ones init *spawned*.
+    """
+    spawned = {
+        match.group("component")
+        for match in re.finditer(
+            r"SLIME_GRAPH spawned task=\d+ child=(?P<child>\d+) "
+            r"component=(?P<component>[a-z-]+) ",
+            transcript,
+        )
+    }
+    expected = {
+        "fabric-service",
+        "fabric-publisher",
+        "fabric-publisher-b",
+        "fabric-subscriber",
+        "fabric-subscriber-b",
+        "fabric-intruder",
+    }
+    if spawned != expected:
+        report_transcript(transcript)
+        fail(
+            f"init spawned {sorted(spawned)}, not the six participants this "
+            f"composition declares ({sorted(expected)})"
+        )
+
+    # Each component name appears twice per boot -- once unconfigured, once
+    # spawned -- so a failure line alone cannot say which produced it. What can
+    # is the count: the unconfigured instance of each contributes exactly one
+    # failure, so a second from the same component is necessarily the spawned
+    # one. `fabric-service` logs as `[fabric]`.
+    #
+    # `!= 1`, not `> 1`. Requiring the unconfigured failure to be *present*
+    # rather than merely tolerated is what keeps the premise structural instead
+    # of scheduling-dependent: if an unconfigured instance ever stopped failing
+    # -- it faults before reaching its first operation, or its first `send`
+    # succeeds because the control channels the generation declares happen to be
+    # materialised by then -- then a real participant's failure would land in
+    # its budget and pass unnoticed. Under `> 1` that regression is silent;
+    # under `!= 1` the disappearance itself fails the gate and says so.
+    # Each prefix ends in a literal `]`, so `[fabric-publisher]` does not also
+    # match `[fabric-publisher-b]` -- the two are counted separately, which is
+    # what makes a per-component budget meaningful at all.
+    for component, prefix in (
+        ("fabric-service", r"\[fabric\]"),
+        ("fabric-publisher", r"\[fabric-publisher\]"),
+        ("fabric-publisher-b", r"\[fabric-publisher-b\]"),
+        ("fabric-subscriber", r"\[fabric-subscriber\]"),
+        ("fabric-subscriber-b", r"\[fabric-subscriber-b\]"),
+        ("fabric-intruder", r"\[fabric-intruder\]"),
+    ):
+        failures = re.findall(rf"{prefix} fail: .*", transcript)
+        if len(failures) != 1:
+            report_transcript(transcript)
+            fail(
+                f"{component} reported {len(failures)} failures; exactly one is "
+                f"expected (the unconfigured instance the root launches): {failures}"
+            )
+    print(
+        "transcript: each fabric component failed exactly once -- the "
+        "unconfigured instance the root launches -- so no participant init "
+        "spawned reported a failure",
+        flush=True,
+    )
+
+
+# Every compile-time scenario flag any seL4 gate sets. A stream component
+# branching on any of them would be tailoring itself to this root.
+SEL4_CHECK_FLAGS = (
+    "SLIME_SEL4_CHANNEL_CHECK",
+    "SLIME_SEL4_LOAN_CHECK",
+    "SLIME_SEL4_SPAWN_CHECK",
+    "SLIME_SEL4_SAMPLE_CHECK",
+    "SLIME_SEL4_STREAM_CHECK",
+)
+
+# Every component this graph runs. All six, with no exceptions and no allowance
+# table -- which is the difference between this milestone and P5.5.1.
+STREAM_COMPONENTS = (
+    "fabric-service.rs",
+    "fabric-publisher.rs",
+    "fabric-publisher-b.rs",
+    "fabric-subscriber.rs",
+    "fabric-subscriber-b.rs",
+    "fabric-intruder.rs",
+)
+
+
+def check_components_are_unmodified() -> None:
+    """No stream participant carries a seL4 branch at all.
+
+    P5.5.1's gate counted branches, because `fabric-subscriber` needed one to
+    run against a graph that declared no `>MAX_MSG` publisher. This graph
+    declares it, so the branch is gone and the weaker assertion goes with it:
+    every component here is the binary the x86 oracle builds.
+
+    That is the milestone's whole claim, and it is checked at the source rather
+    than inferred from the transcript -- a component could branch on a flag in
+    a way no marker reveals.
+    """
+    for name in STREAM_COMPONENTS:
+        source = ROOT / "components" / "bins" / "src" / "bin" / name
+        try:
+            text = source.read_text(encoding="utf-8")
+        except OSError as error:
+            fail(f"cannot read {source.relative_to(ROOT)}: {error}")
+        for flag in SEL4_CHECK_FLAGS:
+            if flag in text:
+                fail(
+                    f"{source.relative_to(ROOT)} branches on {flag}; this "
+                    "milestone requires every stream participant to run as the "
+                    "x86 oracle builds it, with no seL4 branch"
+                )
+    print(
+        "components: "
+        + ", ".join(name.removesuffix(".rs") for name in STREAM_COMPONENTS)
+        + " all run as the x86 oracle builds them, with no seL4 branch",
+        flush=True,
+    )
+
+
+# The one marker this gate requires that the x86 gate does not, and why.
+#
+# `valid.zti` grants `fabric-intruder` its control endpoint alone, so the B17
+# arm detects no probe there and stays silent; `sel4-stream.zti` grants the
+# probe, so it runs. Recorded explicitly rather than left as an unexplained
+# difference, because the whole point of comparing the two transcripts is that
+# an unexplained difference should be a failure.
+SEL4_ONLY: dict[str, str] = {
+    r"\[fabric-publisher\] narrowed transfer role cannot widen": (
+        "B17's subset-test arm, which needs a spawn-granted send+transfer "
+        "endpoint; the x86 graph declares none, so the arm skips there"
+    ),
+}
+
+
+def check_transcript_matches_the_oracle() -> None:
+    """Every marker this gate requires is one the x86 gate requires too.
+
+    The claim is ABI compatibility, so the transcript must be the oracle's
+    rather than one written to suit whatever this root implements. Reading the
+    x86 gate at run time is what keeps that true as both change: a marker
+    renamed there and here in the same commit would otherwise look like
+    agreement.
+
+    `SEL4_ONLY` is the declared exception list, and it is checked in both
+    directions -- an entry that stops being seL4-only is as much a drift as an
+    undeclared addition.
+    """
+    try:
+        oracle = ORACLE_GATE.read_text(encoding="utf-8")
+    except OSError as error:
+        fail(f"cannot read {ORACLE_GATE.relative_to(ROOT)}: {error}")
+    for _label, chain in CHAINS:
+        for pattern in chain:
+            # Only *participant* markers are compared, which is what the
+            # milestone's claim is about: those come from the six binaries this
+            # gate does not modify, so a difference in one is a real divergence.
+            #
+            # Two kinds are excluded, both because they have no x86 counterpart
+            # by construction rather than by convenience. The `SLIME_ROOT` and
+            # `SLIME_GRAPH` lines are this root's own accounting, which the
+            # retired kernel does not emit at all. And `[init]` is the scenario
+            # driver: on x86 the composition is `launch_fabric_graph` inside a
+            # much larger boot, while here it is `drive_stream_plane` and the
+            # whole of the boot, so their progress markers differ by design.
+            # `[init] fabric stream complete` is the one both emit, and it is
+            # compared like any participant marker.
+            if not pattern.startswith(r"\["):
+                continue
+            if pattern.startswith(r"\[init\]") and "fabric stream complete" not in pattern:
+                continue
+            plain = pattern.replace("\\[", "[").replace("\\]", "]")
+            if plain in oracle:
+                if pattern in SEL4_ONLY:
+                    fail(
+                        f"{pattern} is listed in SEL4_ONLY but the x86 gate "
+                        "requires it too; remove the exception"
+                    )
+                continue
+            if pattern not in SEL4_ONLY:
+                fail(
+                    f"{plain} is required here but not by "
+                    f"{ORACLE_GATE.relative_to(ROOT)}; either it is drift from "
+                    "the oracle's transcript, or it belongs in SEL4_ONLY with "
+                    "its reason"
+                )
+    print(
+        f"transcript: every component marker is one the x86 gate requires, "
+        f"except {len(SEL4_ONLY)} declared seL4-only marker(s)",
+        flush=True,
+    )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Boot the seL4 stream-plane image and assert ordered markers"
+    )
+    parser.add_argument(
+        "--no-build",
+        action="store_true",
+        help="boot the already-built image instead of rebuilding it first",
+    )
+    arguments = parser.parse_args()
+
+    if Path.cwd().resolve() != ROOT:
+        fail(f"run from repository root: {ROOT}")
+    if not FIXTURE.is_file():
+        fail(f"missing generation fixture {FIXTURE.relative_to(ROOT)}")
+    pins = load_pins()
+    if not arguments.no_build:
+        build_image()
+    check_manifest()
+    profile = pins["qemu_arm_virt"]
+    assert isinstance(profile, dict)
+    check_transcript(boot(profile))
+    print(
+        "seL4 stream plane check: the full C8.4 stream plane ran on seL4 with every "
+        "participant unmodified -- two publishers, two subscribers, two routes, the "
+        ">MAX_INLINE_BYTES descriptor and loan path, and KEEP_LAST eviction under a "
+        "stalled subscriber -- producing the x86 gate's own transcript, and the "
+        "transfer contract's subset test was observed (B17)"
+    )
+
+
+if __name__ == "__main__":
+    main()
