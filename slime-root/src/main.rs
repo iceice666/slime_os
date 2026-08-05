@@ -4696,11 +4696,41 @@ fn serve_buffer_lifecycle(
     // The handle is resolved from the caller's own table, never reconstructed
     // from the message: it carries rights and an epoch, so accepting one off
     // the wire would let a component name authority it was not issued.
-    let Some(graph::Capability {
-        resource: graph::Resource::SharedBuffer { handle },
-        ..
-    }) = graph.get(id).and_then(|table| table.get(slot))
-    else {
+    //
+    // **A loan slot resolves here too**, for `unmap` alone, because
+    // `sys_shared_buffer_unmap` accepts one: its resolution arm is
+    // `SharedBufferLoan(loan) => loan.region()`, so a receiver that mapped
+    // through `loan_map` unmaps through the same slot it mapped with. Without
+    // this a component doing exactly that — which `fabric-subscriber` does on
+    // every shared sample — is answered `ERR_BAD_CAP` on a slot it holds, and
+    // has no other slot to name: the region belongs to the *lender*, and the
+    // receiver was never issued a buffer capability for it.
+    //
+    // Only `unmap`. The oracle's `map`, `seal`, and `release` each require a
+    // `SharedBuffer` and refuse a loan, so widening those would grant a
+    // receiver authority over a region it merely borrows. The asymmetry is the
+    // oracle's, not this function's.
+    //
+    // A loan resolves to a *different table call* rather than to a converted
+    // handle, because the two authorize differently: a receiver does not own
+    // the region, so `unmap`'s owner check would refuse it. See
+    // `SharedBufferTable::unmap_loan`.
+    enum Subject {
+        Buffer(shared_buffer::BufferHandle),
+        Loan(shared_buffer::LoanHandle),
+    }
+    let resolved = graph.get(id).and_then(|table| match table.get(slot) {
+        Some(graph::Capability {
+            resource: graph::Resource::SharedBuffer { handle },
+            ..
+        }) => Some(Subject::Buffer(handle)),
+        Some(graph::Capability {
+            resource: graph::Resource::Loan { handle },
+            ..
+        }) if operation == Operation::SharedBufferUnmap => Some(Subject::Loan(handle)),
+        _ => None,
+    });
+    let Some(subject) = resolved else {
         // `ERR_BAD_CAP`, which is what a component tests for: `sample-lender`
         // proves a released buffer is unnameable by requiring exactly that code
         // from the second release, and the slot is empty by then because the
@@ -4712,6 +4742,14 @@ fn serve_buffer_lifecycle(
     };
     let vspace = VSpaceCap(task.vspace.vspace.bits() as usize);
     let mut adapter = BufferAdapter::new(allocator);
+    // A loan reaches only the unmap arm, by construction above.
+    let handle = match subject {
+        Subject::Buffer(handle) => handle,
+        Subject::Loan(loan) => {
+            let outcome = buffers.unmap_loan(&mut adapter, holder, loan, vspace, words[1] as usize);
+            return finish_buffer_lifecycle(operation, graph, id, slot, outcome, served);
+        }
+    };
     let outcome = match operation {
         Operation::SharedBufferMap => {
             let writable = words[0] >> 32 != 0;
@@ -4737,6 +4775,22 @@ fn serve_buffer_lifecycle(
         Operation::SharedBufferRelease => buffers.release(&mut adapter, holder, handle),
         _ => Err(shared_buffer::SharedBufferError::NotFound),
     };
+    finish_buffer_lifecycle(operation, graph, id, slot, outcome, served)
+}
+
+/// Turn a buffer-lifecycle table outcome into the wire response.
+///
+/// Extracted so the loan-unmap path and the buffer path answer identically:
+/// the same success accounting, the same marker, and the same error mapping.
+/// Two copies would be two places for those to drift.
+fn finish_buffer_lifecycle(
+    operation: Operation,
+    graph: &mut GraphTables,
+    id: TaskId,
+    slot: u32,
+    outcome: Result<(), shared_buffer::SharedBufferError>,
+    served: &mut usize,
+) -> Response {
     match outcome {
         Ok(()) => {
             *served += 1;

@@ -100,9 +100,24 @@ const RIGHT_SUPERVISE: u64 = 1 << 18;
 /// silently, which is exactly the failure backlog B3 records for the retired
 /// kernel's `SharedBufferTable`.
 ///
-/// Sixteen is the same bound `graph::MAX_GRAPH_TASKS` uses, and one channel per
-/// task pair is more than any declared seL4 generation needs.
-pub const MAX_CHANNELS: usize = 16;
+/// **Not one per task pair.** That was the original reasoning, and P5.5.2's
+/// stream plane disproved it: a channel is created per *edge*, and a userspace
+/// broker mints edges the generation never declared. The stream graph's thirteen
+/// declared grants become six control channels, and `fabric-service` then mints
+/// two more per publisher (data, credit) and two per subscriber (data, ack) —
+/// ten for a two-publisher, two-subscriber graph. Sixteen wedged it: the fabric
+/// failed its eleventh `endpoint_create`, and every participant then failed
+/// downstream of that, which reads as four broken components rather than one
+/// exhausted table.
+///
+/// Thirty-two is `task::MAX_TASKS`, chosen because the growth is driven by
+/// route roles rather than by task pairs and a bound that tracks the wrong
+/// quantity would have to move again at the next graph. At ~1.3 KiB per queue
+/// it costs about 40 KiB of additional `.data`, which is why the table lives in
+/// a `static`: constructing something this size in a stack frame overflows it
+/// silently, exactly the failure backlog B3 records for the retired kernel's
+/// `SharedBufferTable`.
+pub const MAX_CHANNELS: usize = 32;
 
 /// One logical channel: the two tasks holding it, and the directed queues
 /// between them. A one-directional grant leaves `reverse` absent, so a task

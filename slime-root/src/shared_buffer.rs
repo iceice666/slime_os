@@ -845,7 +845,64 @@ impl SharedBufferTable {
         vspace: VSpaceCap,
         base: usize,
     ) -> Result<(), SharedBufferError> {
-        self.authorize(holder, handle, BufferRights::MAP)?;
+        self.unmap_authorized(adapter, holder, handle, vspace, base, false)
+    }
+
+    /// Remove a mapping a *loan receiver* installed through [`Self::map_loan`].
+    ///
+    /// Split from [`Self::unmap`] because the two authorize differently, and
+    /// only one of them can. `unmap` requires the caller to own the region;
+    /// a loan receiver never does — the region belongs to the lender, and the
+    /// receiver holds a loan naming it. Running the owner check here would
+    /// refuse every borrower unmapping something it legitimately mapped.
+    ///
+    /// What authorizes instead is **the mapping record itself**. `map_loan`
+    /// stamps each mapping with the receiver as `holder` and the loan as
+    /// `loan`, so a record matching this caller, this vspace, and this base is
+    /// proof the caller installed it. That is the same thing the retired
+    /// kernel's `SharedBufferTable::unmap` relies on — it takes no rights
+    /// argument at all and matches on `mapping.owner` — so this is the oracle's
+    /// authorization restated rather than a weaker one.
+    ///
+    /// The caller must still have resolved a live loan capability from its own
+    /// table to get here, which is what bounds *which* buffer it may name.
+    pub fn unmap_loan<A: SharedBufferAdapter>(
+        &mut self,
+        adapter: &mut A,
+        receiver: HolderId,
+        handle: LoanHandle,
+        vspace: VSpaceCap,
+        base: usize,
+    ) -> Result<(), SharedBufferError> {
+        // The loan must still be live and still name this receiver. Without
+        // this a revoked loan's stale slot would keep unmapping rights.
+        let loan = self.authorize_loan(receiver, handle)?;
+        self.unmap_authorized(
+            adapter,
+            receiver,
+            BufferHandle {
+                id: loan.buffer,
+                epoch: loan.epoch,
+                rights: BufferRights::MAP,
+            },
+            vspace,
+            base,
+            true,
+        )
+    }
+
+    fn unmap_authorized<A: SharedBufferAdapter>(
+        &mut self,
+        adapter: &mut A,
+        holder: HolderId,
+        handle: BufferHandle,
+        vspace: VSpaceCap,
+        base: usize,
+        through_loan: bool,
+    ) -> Result<(), SharedBufferError> {
+        if !through_loan {
+            self.authorize(holder, handle, BufferRights::MAP)?;
+        }
         let slot = self
             .mappings
             .iter()
@@ -856,6 +913,11 @@ impl SharedBufferTable {
                         && mapping.epoch == handle.epoch
                         && mapping.vspace == vspace
                         && mapping.base == base
+                        // A loan unmap removes only a mapping *made through a
+                        // loan*. Otherwise a receiver that also happened to own
+                        // a direct mapping of the same region at the same base
+                        // could tear that one down instead.
+                        && mapping.loan.is_some() == through_loan
                 })
             })
             .ok_or(SharedBufferError::NotFound)?;
