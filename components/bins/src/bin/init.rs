@@ -220,6 +220,14 @@ fn main() {
         slime_rt::debug_write(b"[init] loan plane complete\n");
         slime_rt::exit(0);
     }
+    // P5.3.3, before the graph-launching block for the same reason the two
+    // above are: this generation's scenario is the whole boot, and the block
+    // below would spawn a different graph.
+    if option_env!("SLIME_SEL4_SPAWN_CHECK") == Some("1") {
+        drive_spawn_plane();
+        slime_rt::debug_write(b"[init] spawn plane complete\n");
+        slime_rt::exit(0);
+    }
     slime_rt::debug_write(b"[init] launching component graph\n");
     if option_env!("SLIME_TRANSFER_RECEIVER") == Some("1") {
         if slime_rt::generation_receive(TRANSFER_RECEIVER_SLOT, TRANSFER_SOURCE_SLOT) == 0 {
@@ -1038,6 +1046,25 @@ fn drive_loan_plane() {
     // The whole point of a loan: a payload the control message cannot carry.
     const _: () = assert!(PAYLOAD_LEN > slime_rt::MAX_MSG as u64);
 
+    // ---- B13: the factory grant, independent of the budget ----
+    //
+    // The generation declares init a budget *and* a `bufferCreate` grant, and
+    // the two are independent gates: the grant authorizes the operation, the
+    // budget bounds it. Naming a slot that holds no factory must therefore be
+    // refused however much quota the holder has left — which is the whole
+    // ceiling here, since this runs first.
+    //
+    // `MAX_CAPS - 1` is inside the table and init was granted nothing there.
+    if slime_rt::shared_buffer_create(63, 1, true).is_ok() {
+        fail_loan(b"an empty slot named a buffer factory");
+    }
+    // A slot holding real authority of another kind, so the check is on kind
+    // rather than on possession.
+    if slime_rt::shared_buffer_create(RECEIVER_SLOT, 1, true).is_ok() {
+        fail_loan(b"a channel slot named a buffer factory");
+    }
+    slime_rt::debug_write(b"[init] ungranted buffer factory refused\n");
+
     // ---- the four quota ceilings, each at ceiling + 1 ----
     //
     // Run before the loan, because a refusal must be a refusal against an
@@ -1337,6 +1364,182 @@ fn fail(reason: &[u8]) -> ! {
     slime_rt::debug_write(reason);
     slime_rt::debug_write(b"\n");
     slime_rt::exit(1)
+}
+
+fn fail_spawn(reason: &[u8]) -> ! {
+    slime_rt::debug_write(b"[init] spawn plane fail: ");
+    slime_rt::debug_write(reason);
+    slime_rt::debug_write(b"\n");
+    slime_rt::exit(1)
+}
+
+/// Drive the P5.3.3 spawn plane: construct children from grant-resolved
+/// executables, hand each one the capabilities its layout names, and observe
+/// termination through a supervision handle.
+///
+/// Only reachable under `SLIME_SEL4_SPAWN_CHECK`, whose generation is
+/// `contracts/generation/v1/fixtures/sel4-spawn.zti`; see the `.md` beside it.
+///
+/// The two children are `console` and `sysinfo`, both **unmodified** — the same
+/// binaries the x86 oracle runs. That is the milestone's claim: a component
+/// written against the retired kernel's spawn ABI is started by `slime-root`
+/// with no seL4 branch in it. `sysinfo` is the useful one to wait on, because
+/// it runs to completion and exits 0 of its own accord; `console` loops until
+/// its peer dies, which is what makes it the right subject for the
+/// still-live arm.
+fn drive_spawn_plane() {
+    // ---- an ungranted executable slot is refused ----
+    //
+    // Before any real spawn, so the refusal is against an untouched table.
+    // `MAX_CAPS - 1` is inside the table's bounds and this generation grants
+    // init nothing there.
+    if slime_rt::spawn(63, &[]).is_ok() {
+        fail_spawn(b"an empty slot named an executable");
+    }
+    // A slot holding real authority of the wrong kind. Init holds its endpoint
+    // factory here — a capability it genuinely has — so the check is on kind
+    // rather than on possession.
+    if slime_rt::spawn(ENDPOINT_FACTORY_SLOT, &[]).is_ok() {
+        fail_spawn(b"a factory slot named an executable");
+    }
+    slime_rt::debug_write(b"[init] ungranted executable refused\n");
+
+    // ---- a grant naming authority the parent does not hold ----
+    //
+    // The rights must be a subset of what init holds at that slot. Init holds
+    // the factory with `endpointCreate` alone, so asking to hand on
+    // `bufferCreate` as well is asking the root to manufacture authority no
+    // generation declared.
+    if slime_rt::spawn(
+        CONSOLE_SLOT,
+        &[grant(
+            ENDPOINT_FACTORY_SLOT,
+            RIGHT_ENDPOINT_CREATE | RIGHT_BUFFER_CREATE,
+        )],
+    )
+    .is_ok()
+    {
+        fail_spawn(b"a spawn widened its own grant");
+    }
+    slime_rt::debug_write(b"[init] widened grant refused\n");
+
+    // The executable slot cannot be handed to the child: that is authority to
+    // create this child, and passing it on would let the child re-spawn its own
+    // image outside its parent's budget.
+    if slime_rt::spawn(CONSOLE_SLOT, &[grant(CONSOLE_SLOT, RIGHT_EXEC)]).is_ok() {
+        fail_spawn(b"a child was granted its own executable");
+    }
+    slime_rt::debug_write(b"[init] self-executable grant refused\n");
+
+    // ---- the real spawn: console, holding the channel half init brokers ----
+    //
+    // `console.rs` loops on slot 0, which is where its first spawn grant lands.
+    // Nothing in that component knows the number: it is fixed by the order of
+    // this list, exactly as the retired kernel fixes it.
+    let (console_side, console_child_side) = slime_rt::endpoint_create(ENDPOINT_FACTORY_SLOT)
+        .unwrap_or_else(|_| fail_spawn(b"console endpoint"));
+    let console = slime_rt::spawn(CONSOLE_SLOT, &[grant(console_child_side, RIGHT_RECV)])
+        .unwrap_or_else(|_| fail_spawn(b"console"));
+    slime_rt::debug_write(b"[init] console spawned\n");
+
+    // A live child has no outcome yet, and the query must say so rather than
+    // block or invent one.
+    match slime_rt::supervision_status(console.supervision_slot) {
+        Ok(None) => slime_rt::debug_write(b"[init] live child reports no outcome\n"),
+        _ => fail_spawn(b"a live child reported an outcome"),
+    };
+
+    // The slot init granted from is gone from init's own table: an endpoint
+    // grant is a move, because a channel's queues are resolved by which task
+    // holds each end. Init keeps `console_side`, the half it did not grant.
+    if slime_rt::send(console_child_side, b"after", &[]) != slime_rt::ERR_INVALID_ARG {
+        // `ERR_INVALID_ARG` is what an unresolvable channel slot answers
+        // (`resolve_channel`), and it is deliberately the same answer an
+        // ungranted slot gives: which one it was is not the caller's business.
+        fail_spawn(b"a handed-off channel end still resolved");
+    }
+    // The half init kept still works, which is what makes the move a move
+    // rather than a revocation: the pair exists to talk over.
+    if slime_rt::send(console_side, b"[console] spawned child reached\n", &[])
+        != slime_rt::ERR_SUCCESS
+    {
+        fail_spawn(b"the retained half stopped working");
+    }
+    slime_rt::debug_write(b"[init] handed channel end released\n");
+
+    // ---- spawn and wait: sysinfo runs to completion ----
+    //
+    // `sysinfo` receives its launch context on slot 0 and exits 0. Init parks
+    // in `wait` on the supervision handle and is woken by the child's death,
+    // which is the arm no channel can produce: the readiness event is a task
+    // ending, not a queue filling.
+    //
+    // `sysinfo` reads its launch context from slot 0, and no generation edge
+    // connects init to it: the channel is minted here, at runtime, through the
+    // declared endpoint factory. That is the mechanism `spawn-service` uses on
+    // every x86 boot, and it is what "distributes the channel halves init
+    // brokers" means — init holds both ends of a fresh pair, hands one to the
+    // child at spawn, and writes the context down the half it kept.
+    let (service_side, child_side) = slime_rt::endpoint_create(ENDPOINT_FACTORY_SLOT)
+        .unwrap_or_else(|_| fail_spawn(b"endpoint create"));
+    slime_rt::debug_write(b"[init] context channel minted\n");
+
+    let sysinfo = slime_rt::spawn(SYSINFO_SLOT, &[grant(child_side, RIGHT_SEND | RIGHT_RECV)])
+        .unwrap_or_else(|_| fail_spawn(b"sysinfo"));
+    slime_rt::debug_write(b"[init] sysinfo spawned\n");
+
+    // The launch context the child is blocked reading. Sent after the spawn, so
+    // it lands on a task that exists; `sysinfo` parks in `recv` until it does.
+    let mut command = [0u8; slime_proto::spawn::MAX_COMMAND_BYTES];
+    command[..7].copy_from_slice(b"sysinfo");
+    let context = slime_proto::spawn::WireSpawnRequest {
+        magic: slime_proto::spawn::SPAWN_MAGIC,
+        version: slime_proto::spawn::FORMAT_VERSION,
+        flags: 0,
+        command_len: 7,
+        argument_count: 0,
+        environment_count: 0,
+        capability_roles: 0,
+        client_budget: 0,
+        command,
+        arguments: [0; 8],
+        environment: [0; 8],
+        grant_rights: 0,
+        reserved: [0; 6],
+    };
+    if slime_rt::send(service_side, &context.encode(), &[]) != slime_rt::ERR_SUCCESS {
+        fail_spawn(b"launch context");
+    }
+    slime_rt::debug_write(b"[init] launch context sent\n");
+    loop {
+        match slime_rt::supervision_status(sysinfo.supervision_slot) {
+            Ok(None) => {
+                slime_rt::wait(&[slime_rt::WaitSource::Supervision(sysinfo.supervision_slot)])
+            }
+            Ok(Some(slime_rt::Termination::Exit(0))) => break,
+            _ => fail_spawn(b"sysinfo did not exit cleanly"),
+        }
+    }
+    slime_rt::debug_write(b"[init] sysinfo outcome collected\n");
+
+    // Collecting an outcome consumes the handle, so a second query finds
+    // nothing. That is what makes the outcome single-use rather than a fact a
+    // parent can re-read forever.
+    if slime_rt::supervision_status(sysinfo.supervision_slot).is_ok() {
+        fail_spawn(b"a collected handle answered twice");
+    }
+    slime_rt::debug_write(b"[init] collected handle consumed\n");
+
+    // Dropping the console handle releases init's authority over it while the
+    // child is still live. `spawn_or_fail` does exactly this on every x86 boot,
+    // so an unimplemented `cap_drop` would abort the product graph.
+    if slime_rt::cap_drop(console.supervision_slot) != slime_rt::ERR_SUCCESS {
+        fail_spawn(b"dropping a live handle");
+    }
+    if slime_rt::supervision_status(console.supervision_slot).is_ok() {
+        fail_spawn(b"a dropped handle still answered");
+    }
+    slime_rt::debug_write(b"[init] dropped handle released\n");
 }
 
 /// Launch the C7.7 sample plane: two real components exchanging a payload

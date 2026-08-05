@@ -8,6 +8,16 @@ slime_rt::entry!(main);
 /// A free page-aligned address, borrowed only for the startup self-check.
 const QUOTA_PROBE_BASE: u64 = 0x0000_0006_0000_0000;
 
+/// The shared-buffer factory this component is granted, when it is granted one.
+///
+/// Slot 0 is the channel end every `console` addresses, and a root-launched
+/// component's runtime-numbered slots start above its executables — of which
+/// this component has none — so a `bufferCreate` grant lands at 1. Named here
+/// rather than passed as a literal so the coupling is visible: B13 made the
+/// grant load-bearing, and before that this slot resolved to nothing and the
+/// quota alone admitted the allocation.
+const SHARED_BUFFER_FACTORY_SLOT: u32 = 1;
+
 fn main() {
     let mut buf = [0u8; MAX_MSG];
     let mut caps = [0u64; MAX_CAPS_PER_MSG];
@@ -35,7 +45,7 @@ fn main() {
                 if option_env!("SLIME_SEL4_LOAN_CHECK") == Some("1")
                     && !slime_components::shared_buffer_probe::probe_and_report(
                         b"[console]",
-                        0,
+                        SHARED_BUFFER_FACTORY_SLOT,
                         QUOTA_PROBE_BASE,
                     )
                 {

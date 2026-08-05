@@ -50,6 +50,20 @@
 
   grants = [
     {
+      name = "init-shared-buffer-factory";
+      source = "init";
+      target = "init";
+      rights = ["bufferCreate";];
+      transferable = false;
+    };
+    {
+      name = "console-shared-buffer-factory";
+      source = "init";
+      target = "console";
+      rights = ["bufferCreate";];
+      transferable = false;
+    };
+    {
       name = "sample-receiver-side";
       source = "init";
       target = "sample-receiver";
