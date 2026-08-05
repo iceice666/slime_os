@@ -56,7 +56,11 @@ MAX_MSG_BYTES = 64
 REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     (
         "the loan generation was admitted",
-        r"SLIME_ROOT generation admitted number=\d+ components=3 grants=3 ",
+        # Five grants: three channel edges plus the two `bufferCreate` grants
+        # P5.3.3 made load-bearing. Before that slice the factory slot was
+        # discarded and the budget alone admitted an allocation (B13), so this
+        # graph reached its loan with no factory grant declared at all.
+        r"SLIME_ROOT generation admitted number=\d+ components=3 grants=5 ",
     ),
     (
         "all three payloads are native ELF and no legacy image was activated",
@@ -75,6 +79,24 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         # order among them would pin something the milestone does not claim.
         "every declared holder was budgeted",
         r"SLIME_GRAPH quotas declared=3 budgeted=3 holders=3",
+    ),
+    (
+        # B13. The factory grant and the budget are independent gates: the
+        # grant authorizes the operation, the budget bounds it. This is the
+        # first, asserted before any ceiling is grazed so the refusal cannot be
+        # a quota answer wearing another name -- `class=ungranted`, not
+        # `class=quota`.
+        #
+        # Two arms in one marker pair, deliberately: an empty slot and a slot
+        # holding real authority of another kind are refused identically, which
+        # is what stops a component probing its own table by watching which
+        # error comes back.
+        "a slot holding no factory cannot allocate, whatever the budget says",
+        r"SLIME_GRAPH buffer create refused task=\d+ class=ungranted",
+    ),
+    (
+        "init observed the ungranted-factory refusal",
+        r"\[init\] ungranted buffer factory refused",
     ),
     (
         # Quota class 1 of 4: pages. A five-page region against a four-page

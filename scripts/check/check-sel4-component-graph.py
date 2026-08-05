@@ -150,8 +150,20 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"SLIME_GRAPH spawn refused task=2 slot=\d+ ungranted",
     ),
     (
+        # `-1` is `ERR_BAD_CAP`, tightened from `-4` (`ERR_INVALID_ARG`) by
+        # P5.3.3. Until that slice the arm answered `InvalidOperation` because
+        # nothing resolved the slot; now `preflight_spawn_grants` resolves it
+        # and refuses, which is a capability answer -- and it is the code
+        # `kernel/src/syscall/mod.rs::sys_spawn` returns for every
+        # `SpawnError` but the two exhaustion cases.
+        #
+        # That agreement is load-bearing rather than cosmetic:
+        # `init.rs::spawn_optional_storage` matches on exactly
+        # `Err(slime_rt::ERR_BAD_CAP)` to distinguish "no block device" from a
+        # real failure, so a seL4 root answering -4 there would abort a graph
+        # the retired kernel launches.
         "the refusal reached the component as an ordinary Slime error",
-        r"\[init\] spawn failed slot=\d+ error=-4",
+        r"\[init\] spawn failed slot=\d+ error=-1",
     ),
     (
         # `unimplemented=0` is pinned exactly rather than left open: with the

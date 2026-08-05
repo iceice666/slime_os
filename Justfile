@@ -69,6 +69,18 @@ sel4_channel_check: sel4_pin_check
 sel4_loan_check: sel4_pin_check
     python3 scripts/check/check-sel4-loan-plane.py
 
+# P5.3.3: build the spawn-plane image, boot it, and require the ordered markers
+# proving that a component constructs a child from a grant-resolved executable,
+# that the child receives its declared capabilities at the slots its own
+# numbering names, that an ungranted or widened grant is refused with nothing
+# constructed, and that the parent observes the child's termination through a
+# supervision handle rather than an ambient task id.
+#
+# A fifth image, beside the four above, on the same rule: each gate boots the
+# artifact it asserts about.
+sel4_spawn_check: sel4_pin_check
+    python3 scripts/check/check-sel4-spawn-plane.py
+
 # Run the seL4 product image interactively on the pinned QEMU machine.
 run: sel4_qemu_image_check
     qemu-system-aarch64 -machine virt,virtualization=on -cpu cortex-a53 -smp 1 \
