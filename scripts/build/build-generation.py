@@ -204,6 +204,12 @@ SEL4_MANIFESTS = {
     / "v1"
     / "fixtures"
     / "sel4-sample.zti",
+    "sel4-fabric": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-fabric.zti",
 }
 COMPONENTS_TARGET_DIR = Path(
     os.environ.get("CARGO_TARGET_DIR") or ROOT / "target" / "components"
@@ -896,6 +902,61 @@ def build_normalized_schema_artifact(schemas: list) -> bytes:
     ) + records + payload
 
 
+def validate_route_worker_names() -> None:
+    """Every name in `FABRIC_ROUTE_WORKERS` is a route some manifest declares.
+
+    Checked against the **full catalogue** — the union of every route the
+    canonical x86 source declares — rather than against the graph being built.
+    Those are different questions, and conflating them is what makes the check
+    either useless or wrong:
+
+    * against the graph being built, a manifest declaring a subset of the
+      routes (P5.5.1's seL4 graph declares `telemetry` alone) fails on a tuple
+      that has no typo in it;
+    * without the check at all, a genuine misspelling in the tuple silently
+      drops a route from its worker, and the partition assertion below then
+      reports the route as uncovered rather than the worker as misspelled.
+
+    So the typo check reads the source of truth for what routes exist, and the
+    partition check reads the graph. A worker whose routes this graph does not
+    declare simply has no work here.
+    """
+    catalogue = {
+        route["name"]
+        for route in _canonical_manifest()["fabricGraph"]["routes"]
+    }
+    for worker_name, worker_routes in FABRIC_ROUTE_WORKERS:
+        unknown = [route for route in worker_routes if route not in catalogue]
+        if unknown:
+            fail(
+                f"fabric graph: worker {worker_name} names {unknown}, which no "
+                "declared route matches"
+            )
+
+
+def _canonical_manifest() -> dict:
+    """The x86 source manifest, which is the union of every declared route.
+
+    Decoded through the same Zutai binary every other manifest goes through,
+    rather than parsed here, so the catalogue this validates against is the one
+    the builder would actually encode.
+    """
+    environment = os.environ.copy()
+    environment["ZUTAI_STDLIB_ROOT"] = str(STDLIB)
+    try:
+        output = subprocess.run(
+            [str(binary()), "json", str(SOURCE)],
+            cwd=ROOT,
+            env=environment,
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError) as error:
+        fail(f"cannot read the canonical manifest {SOURCE}: {error}")
+    return json.loads(output)
+
+
 def resolve_fabric_profile(manifest: dict, interfaces: list, profile_name: str) -> ResolvedFabricProfile:
     """Resolve one named boot profile into everything downstream reads.
 
@@ -999,11 +1060,18 @@ def resolve_fabric_profile(manifest: dict, interfaces: list, profile_name: str) 
     # see `FABRIC_WORKER_WAIT_SHAPES` — because the stream broker's set scales
     # with the graph while the request/response brokers park across fixed slot
     # arrays of their own.
+    validate_route_worker_names()
     workers = []
     for worker_name, worker_routes in FABRIC_ROUTE_WORKERS:
-        unknown = [route for route in worker_routes if route not in declared_routes]
-        if unknown:
-            fail(f"fabric graph: worker {worker_name} names an undeclared route")
+        # A route this manifest does not declare is not this manifest's to
+        # partition. Every name in the tuple was already checked against the
+        # full route catalogue by `validate_route_worker_names` above, so what
+        # is filtered here is genuinely "not in this graph" rather than
+        # "misspelled" — which is the distinction the two checks exist to keep
+        # apart. P5.5.1's seL4 graph declares `telemetry` alone.
+        worker_routes = tuple(route for route in worker_routes if route in declared_routes)
+        if not worker_routes:
+            continue
         # A route whose every participant was scaffolding is absent from this
         # profile. Its worker still exists and still owns the routes that
         # remain; only a worker left with no route at all drops out, so the
@@ -1188,11 +1256,21 @@ def render_fabric_profile_rust(resolved: ResolvedFabricProfile) -> str:
         for row in artifact["routes"]
     )
     def deadline(route: str) -> int:
-        return min(
+        """The tightest deadline any request/response participant declares.
+
+        Zero when the graph declares no such route at all. A stream-only graph
+        — P5.5.1's seL4 fabric — has no `parameters` or `navigation` route, and
+        the brokers those constants belong to are not in it. The value is only
+        read by `call_broker` and `operation_broker`, so a graph without them
+        emits a constant nothing compiles against; emitting *no* constant would
+        instead break every graph that has them.
+        """
+        deadlines = [
             row["deadlineNs"]
             for row in participants
             if row["route"] == route and row["direction"] in (FABRIC_DIRECTION_CLIENT, FABRIC_DIRECTION_SERVER)
-        )
+        ]
+        return min(deadlines, default=0)
     return f'''// @generated from the canonical C8.9 resolved fabric profile; do not edit.
 #[allow(dead_code)]
 pub const FABRIC_PROFILE_NAME: &str = {rust_string(artifact['name'])};
@@ -1209,12 +1287,23 @@ pub type FabricInterpositionRow = (&'static [u8], &'static str, &'static [&'stat
 pub const FABRIC_INTERPOSITIONS: &[FabricInterpositionRow] = &[\n{interposition_rows}];
 pub type FabricWorkerRow = (&'static str, &'static [&'static str], usize);
 pub const FABRIC_WORKERS: &[FabricWorkerRow] = &[\n{worker_rows}];
-/// The wake sources the generation declares one worker parks on at once.
+/// The wake sources the generation declares one worker parks on at once, or
+/// `WORKER_ABSENT` when this graph declares no route that worker carries.
 ///
 /// `const fn` so a broker can bind its own `SYS_WAIT` array to this number in a
 /// `const _: () = assert!(..)`. The declared peak and the array that has to hold
 /// it then cannot drift apart silently: a broker that grows its park set past
 /// what the generation resolved stops compiling instead of overflowing at boot.
+///
+/// Absent is a real answer rather than a panic, because a broker is a *module*
+/// of `fabric-service` and is therefore compiled into every graph, including
+/// ones that declare no route for it. A stream-only graph has no call or
+/// operation plane; panicking here would make such a graph fail to build over a
+/// constant nothing in it ever reads. The asserts that consume this admit
+/// `WORKER_ABSENT` and keep their exact check for every graph that does declare
+/// the plane, so the drift they exist to catch is still caught.
+#[allow(dead_code)]
+pub const WORKER_ABSENT: usize = usize::MAX;
 #[allow(dead_code)]
 pub const fn fabric_worker_wait_sources(name: &str) -> usize {{
     let mut index = 0;
@@ -1225,7 +1314,7 @@ pub const fn fabric_worker_wait_sources(name: &str) -> usize {{
         }}
         index += 1;
     }}
-    panic!("worker absent from the resolved profile")
+    WORKER_ABSENT
 }}
 
 /// `str` equality usable in a `const fn`; `==` on `&str` is not yet const.
@@ -2332,18 +2421,39 @@ def build_sel4_generation(output: Path, manifest: dict, target_profile: TargetPr
     * there is no Slime kernel ELF to convert — seL4 is the kernel, pinned and
       built by `scripts/build/build-sel4.py`, so `kernelObject` carries a
       placeholder the root task's closure check counts but never maps;
-    * there is no fabric graph and no interface schema, so the C8 resolution
-      `resolve_fabric_profile` performs has nothing to resolve;
     * there is no recovery generation, because recovery drives block storage
       through a plane this cutover does not mediate.
+
+    A fabric graph is *conditional* rather than absent (P5.5.1). Four of the
+    five seL4 manifests declare none, and for those the C8 resolution has
+    nothing to resolve — that was true of every seL4 manifest until the typed
+    fabric arrived. `sel4-fabric.zti` declares one, because `fabric-service`
+    reads its route table, participant list, and control-slot base out of the
+    generated profile at compile time: a graph it cannot resolve is a component
+    that does not build, not one that runs without routes.
 
     What is shared is what matters: the same `build_generation` encoder, the
     same boot-layout resource, the same shared-buffer budget encoding, and the
     same digest-authenticated object closure. The generation this writes is a
     generation in exactly the sense every other one is.
     """
+    # P5.5.1: a manifest that declares a fabric graph resolves it through the
+    # same function every x86 profile uses, so a seL4 route identity, QoS row,
+    # and control-slot base are folded from the same schemas and the same
+    # validation rather than from a second implementation. A manifest that
+    # declares none gets the empty profile the four earlier seL4 graphs get.
+    resolved_profile = None
     profile_path = output / "sel4-fabric-profile.rs"
-    profile_path.write_text("", encoding="utf-8")
+    if manifest.get("fabricGraph"):
+        interfaces = validate_interface_schemas(manifest["interfaceSchemas"])
+        resolved_profile = resolve_fabric_profile(
+            manifest, interfaces, manifest["fabricGraph"]["profiles"][0]["name"]
+        )
+        profile_path.write_text(
+            render_fabric_profile_rust(resolved_profile), encoding="utf-8"
+        )
+    else:
+        profile_path.write_text("", encoding="utf-8")
     # P5.3.1: the channel graph's `init` needs its scenario compiled in, and
     # `init.rs` selects that with `option_env!`. Set from the manifest being
     # built rather than inherited, so the flag and the graph cannot disagree;
@@ -2354,6 +2464,7 @@ def build_sel4_generation(output: Path, manifest: dict, target_profile: TargetPr
         ("sel4-loan", "SLIME_SEL4_LOAN_CHECK"),
         ("sel4-spawn", "SLIME_SEL4_SPAWN_CHECK"),
         ("sel4-sample", "SLIME_SEL4_SAMPLE_CHECK"),
+        ("sel4-fabric", "SLIME_SEL4_FABRIC_CHECK"),
     ):
         if selected == manifest_name:
             os.environ[flag] = "1"
@@ -2375,6 +2486,18 @@ def build_sel4_generation(output: Path, manifest: dict, target_profile: TargetPr
     # re-checks that closure; its payload is never mapped, so it names the
     # pinned image rather than pretending to be one.
     payloads[manifest["kernelObject"]] = b"SLIME-SEL4-KERNEL-EXTERNAL\0"
+    # The authenticated C8.2 graph, byte-identical to what an x86 generation
+    # carries for the same declaration. `slime-root` does not read it — the
+    # fabric is userspace policy and the root knows nothing of routes — but it
+    # is part of the object closure the root re-checks, so a graph the builder
+    # resolved and then failed to carry would fail admission rather than boot
+    # with an unauthenticated one.
+    if resolved_profile is not None:
+        if "fabric-graph" not in object_ids:
+            fail("fabricGraph declared without a fabric-graph resource object")
+        payloads["fabric-graph"] = resolved_profile.graph_bytes
+    elif "fabric-graph" in object_ids:
+        fail("fabric-graph resource object declared without a fabricGraph")
     if "shared-buffer-budget" in object_ids:
         payloads["shared-buffer-budget"] = build_shared_buffer_budget(
             manifest.get("sharedBufferBudget", [])
