@@ -168,3 +168,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-05 | [P5.3.3 — Child construction and supervision on seL4](2026-08-05-p5-3-3-spawn-plane/index.md) | Change | Verified | P5.3.3, B13, B10 |
 | 2026-08-05 | [P5.3.4 — The C7 sample plane composed on seL4](2026-08-05-p5-3-4-sample-plane/index.md) | Change | Verified | P5.3.4, P5.3, B14 |
 | 2026-08-05 | [P5.5.1 — Narrow-on-transfer provisioning on seL4](2026-08-05-p5-5-1-typed-fabric/index.md) | Change | Verified | P5.5.1, P5.5, B15, B17 |
+| 2026-08-05 | [P5.5.2 — The full stream plane, unmodified, on seL4](2026-08-05-p5-5-2-stream-plane/index.md) | Change | Verified | P5.5.2, P5.5, B17 |

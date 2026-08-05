@@ -2,7 +2,7 @@
 
 **Purpose:** Preserve one Slime capability/component/generation architecture across target profiles while making AArch64 and Raspberry Pi 5 the near-term product path.
 
-**Status:** In progress - P0, P1, P2.1, P5.1, P5.2, P5.3.1, and P5.3.2 complete.
+**Status:** In progress - P0, P1, P2.1, P5.1, P5.2, all of P5.3, and all of P5.5 complete.
 
 **Decision:** AArch64/Raspberry Pi 5 is now the near-term physical target because the current product goal is the RPi5 ROS 2 two-node demo. The existing x86-64 QEMU path remains the regression oracle for completed work until each semantic corpus is replayed on AArch64, but x86-64/Framework is no longer the product-leading roadmap. RV64 is deferred. As of P5, the AArch64 kernel-side mechanism is being substituted with upstream seL4 rather than hand-written: see [P5](#p5-sel4-microkernel-substitution), which supersedes the custom-kernel half of P2.2-P2.6 if it completes.
 
@@ -447,7 +447,7 @@ One named Raspberry Pi 5 profile runs the verified isolated Slime vertical slice
 
 ## P5: seL4 microkernel substitution
 
-**Status:** In progress — P5.1, P5.2, and all of P5.3 complete; P5.4 and P5.5
+**Status:** In progress — P5.1, P5.2, all of P5.3, and all of P5.5 complete; P5.4
 planned.
 
 **Depends on:** P0 and P1. Supersedes the custom-kernel half of P2.2–P2.6 if it
@@ -894,7 +894,7 @@ P5.3 is complete: all four sub-slices are observed.
 
 ### P5.5 — C8 typed fabric on seL4
 
-**Status:** In progress — P5.5.1 complete; P5.5.2 planned.
+**Status:** Complete — P5.5.1 and P5.5.2 both observed.
 
 **Depends on:** P5.3.3 and C8.
 
@@ -959,10 +959,12 @@ non-delegable at the moment it crosses.
 #### Verification target
 
 ```sh
-just sel4_fabric_check
+just sel4_fabric_check   # retired by P5.5.2; see below
 ```
 
-A seventh image, beside the six P5.1–P5.3.4 gates boot, on the same rule.
+A seventh image, beside the six P5.1–P5.3.4 gates boot, on the same rule. It was
+replaced by `just sel4_stream_check` when P5.5.2 landed, which asserts a
+superset of it.
 
 #### Exit condition (observed)
 
@@ -1002,14 +1004,19 @@ P5.3.1 and neither observable from a one-source graph:
 `just sel4_spawn_check`.
 
 Three denial arms are fault-injected in the devlog entry. A fourth — the
-transfer's *subset* test — is recorded as **uncovered** rather than claimed:
-deleting it leaves every marker intact, because no capability this graph can
-produce holds transfer authority while being narrower than its kind admits. See
-B17.
+transfer's *subset* test — was recorded as **uncovered** rather than claimed:
+deleting it left every marker intact, because no capability this graph could
+produce held transfer authority while being narrower than its kind admits.
+
+**Superseded by P5.5.2**, in two ways. The coverage gap is closed there, and
+the reasoning above turned out to be wrong: a spawn grant produces exactly that
+capability, so the property was reachable all along. This slice's gate,
+generation, and image are also retired there, their assertions subsumed by a
+larger graph.
 
 ### P5.5.2 — The full stream plane, unmodified, on seL4
 
-**Status:** Not started.
+**Status:** Complete.
 
 **Depends on:** P5.5.1.
 
@@ -1019,11 +1026,63 @@ KEEP_LAST eviction with a stalled subscriber told exactly what it lost. Every
 component unmodified, on P5.3.4's standard rather than P5.5.1's counted-branch
 one.
 
-#### Exit condition
+#### Required checks
 
-`fabric-service` and every stream participant run on seL4 with no seL4 branch in
-any of them, producing the transcript `just fabric_stream_check` records on x86,
-and the transfer plane's subset test (B17) is observed rather than argued.
+- every stream participant runs with **no** seL4 branch, asserted at the source
+  rather than inferred from the transcript;
+- the transcript is the x86 gate's own, re-read at run time so the two cannot
+  drift into transcripts that merely resemble each other;
+- one `>MAX_INLINE_BYTES` sample incurs exactly one fabric copy and one
+  quota-charged receiver-bound loan per matched subscriber;
+- a stalled BEST_EFFORT subscriber loses a bounded number of samples, is told
+  exactly what it lost, and does not disturb an unrelated route;
+- the transfer contract's subset test refuses a widening that no earlier rule
+  refuses first (B17).
+
+#### Verification target
+
+```sh
+just sel4_stream_check
+```
+
+The seventh image. It **replaces** P5.5.1's, rather than joining it — see the
+exit condition below.
+
+#### Exit condition (observed)
+
+Observed 2026-08-05; see
+[`devlog/2026-08-05-p5-5-2-stream-plane/`](../devlog/2026-08-05-p5-5-2-stream-plane/index.md).
+
+`fabric-service`, `fabric-publisher`, `fabric-publisher-b`,
+`fabric-subscriber`, `fabric-subscriber-b`, and `fabric-intruder` all run on
+seL4 with **no seL4 branch in any of them**, producing 48 markers across 10
+causal chains — every participant marker one the x86 gate also requires, plus a
+single declared seL4-only marker for B17's arm.
+
+**B17 is closed, and its premise corrected.** The backlog held that only a
+`cap_transfer` retaining its transfer bit could produce a capability holding
+transfer authority while narrower than its kind admits, and therefore that no
+declarable graph could reach the subset test. That was wrong: a plain **spawn
+grant** produces one, because `preflight_spawn_grants` installs the requested
+mask verbatim. Deleting `rights & !source.rights` now fails this gate, which is
+what P5.5.1's graph could not do.
+
+**P5.5.1's gate, generation, and image are retired here.** Every assertion that
+slice made is a subset of this one's, over a strictly larger graph, so keeping
+both would have meant maintaining two images to observe one property twice.
+Recorded rather than silently dropped: P5.5.1's exit condition stays observed,
+by this gate.
+
+**A third ABI divergence was found and fixed**, after the two P5.5.1 found and
+on the same pattern — latent since P5.3.2, unreachable until a component
+exercised the path. `shared_buffer_unmap` refused a **loan** slot where
+`sys_shared_buffer_unmap` accepts one, so a receiver that mapped through
+`loan_map` had no slot it could unmap with: the region belongs to the lender.
+
+`MAX_CHANNELS` also grew 16 → 32. The old bound's reasoning was "one channel per
+task pair"; a userspace broker mints edges per *route role*, so the stream
+plane's six control channels became sixteen and the fabric failed its eleventh
+`endpoint_create`.
 
 ### P5.4 — Retire the custom kernel
 

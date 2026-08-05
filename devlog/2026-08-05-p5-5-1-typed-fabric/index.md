@@ -7,7 +7,7 @@
 | Status | Verified |
 | Scope | `slime-root/src/{main,transfer_window,parked}.rs`, `components/bins/src/bin/{init,fabric-subscriber}.rs`, `components/bins/src/{call_broker,operation_broker,default_fabric_profile}.rs`, `contracts/generation/v1/fixtures/sel4-fabric.zti`, `scripts/build/{build-generation,build-sel4}.py`, `scripts/check/check-sel4-{fabric,spawn,channel}-plane.py`, `Justfile` |
 | Roadmap | P5.5.1, P5.5, B15, B17, B16, B12 |
-| Gates | `just sel4_fabric_check`, `just sel4_spawn_check`, `just sel4_channel_check` |
+| Gates | `just sel4_stream_check`, `just sel4_spawn_check`, `just sel4_channel_check` |
 | Trigger | P5.5 opened as the next uncompleted milestone after P5.3 closed |
 | Baseline | P5.3.4 (`44d273d`): six seL4 gates green, `Operation::CapTransfer` answering `unimplemented` |
 
@@ -157,8 +157,47 @@ and the gate re-run.
 
 ## Artifacts and provenance
 
-- Generation fixture: [`sel4-fabric.zti`](../../contracts/generation/v1/fixtures/sel4-fabric.zti)
-  and its rationale [`sel4-fabric.md`](../../contracts/generation/v1/fixtures/sel4-fabric.md)
-- Gate: [`check-sel4-fabric-plane.py`](../../scripts/check/check-sel4-fabric-plane.py)
-  — its module doc records the B17 coverage gap and both withdrawn probes
+- Generation fixture: `sel4-fabric.zti` and its rationale `sel4-fabric.md`,
+  both superseded by [`sel4-stream.zti`](../../contracts/generation/v1/fixtures/sel4-stream.zti)
+  and [`sel4-stream.md`](../../contracts/generation/v1/fixtures/sel4-stream.md)
+- Gate: `check-sel4-fabric-plane.py`, superseded by
+  [`check-sel4-stream-plane.py`](../../scripts/check/check-sel4-stream-plane.py).
+  The retired gate's module doc recorded the B17 coverage gap and both withdrawn
+  probes; see the Corrections section for what that analysis got wrong
 - Related roadmap item: [P5.5.1](../../roadmap/07-architecture-portability.md)
+
+## Corrections
+
+**2026-08-05 — P5.5.2 retired this entry's artifacts, and disproved one of its
+conclusions.** Appended rather than edited into the body above, which stays as
+it was written.
+
+- The three paths this entry's **Artifacts and provenance** names no longer
+  exist. `sel4-fabric.zti` and `sel4-fabric.md` became
+  `contracts/generation/v1/fixtures/sel4-stream.{zti,md}`;
+  `check-sel4-fabric-plane.py` became
+  `scripts/check/check-sel4-stream-plane.py`; and the `Gates` field's
+  `sel4_fabric_check` is now `just sel4_stream_check`. P5.5.2's graph is a
+  strict superset of this one's, so every assertion recorded above is still
+  observed — by that gate rather than this one.
+- **The B17 analysis in this entry is wrong**, and so is the version of it in
+  the retired gate's module doc. Both argued the subset test was unreachable
+  from any graph this cutover could declare, on the grounds that only a
+  `cap_transfer` retaining its transfer bit produces a capability holding
+  transfer authority while narrower than its kind admits. A plain **spawn
+  grant** produces one: `preflight_spawn_grants` installs the requested mask
+  verbatim, and `init.rs` already granted `DANGO_OUTPUT_SLOT` at
+  `RIGHT_SEND | RIGHT_TRANSFER` on x86 at the time this was written.
+
+  The reasoning enumerated what `cap_transfer` itself could emit and treated
+  that as the set of capabilities that could exist. It was checking one
+  producer rather than every path that installs a rights mask.
+
+  B17 is closed in P5.5.2 with a one-line fixture grant and one denial arm — not
+  the two-broker composition this entry proposed. See
+  [`2026-08-05-p5-5-2-stream-plane`](../2026-08-05-p5-5-2-stream-plane/index.md).
+- The **front matter's `Gates` field and the artifact links** were repointed to
+  the superseding gate and fixture, because `just devlog_check` requires every
+  one to resolve and the originals were deleted. That is the only edit made
+  below the correction line, and it changes no claim: the prose naming the old
+  artifacts is left exactly as written.

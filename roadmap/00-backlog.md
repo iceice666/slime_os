@@ -16,52 +16,6 @@ at the bottom rather than deleting it.
 
 ## Open
 
-### B17 — the capability transfer's subset test has no coverage
-
-**Problem:** `slime-root/src/main.rs::serve_cap_transfer` enforces four rules,
-and `just sel4_fabric_check` observes three: transfer authority at the source,
-the per-kind mask, and the descriptor/kind agreement. The fourth — the **subset
-test**, `rights & !source.rights != 0`, which is what makes the move
-narrow-only against *what the holder actually has* — is not observed. Deleting
-it leaves every marker in that gate intact.
-
-Not reachable from any graph this cutover can declare, because the four rules
-are one disjunction and every candidate subject fails an earlier one first:
-
-- a **provisioned role** carries no `RIGHT_TRANSFER`, so rule 1 refuses it —
-  which is exactly why `fabric-publisher`'s own widening arm proves the
-  *per-kind* rule rather than this one;
-- a **factory** is granted its single operation right and no transfer bit, so
-  rule 1 again;
-- an **endpoint** minted by `endpoint_create` holds `send|recv|transfer`, which
-  is precisely what `valid_rights` admits for its kind, so no mask widens it
-  without the per-kind rule refusing the same mask.
-
-Reaching it needs a capability holding transfer authority that is strictly
-narrower than its kind admits. `cap_transfer` itself is the only thing that
-produces one — a role moved with `FLAG_RETAIN_TRANSFER` — and a component cannot
-move a capability to itself, because the two ends of a channel it holds alone
-are a loopback the root refuses to split.
-
-So this is a property of the *graph*, not of the root. A latent gap rather than
-a defect: the check is present and correct, and nothing observes it.
-
-**Evidence:** found by fault injection while landing P5.5.1 — the subset test
-was removed and `just sel4_fabric_check` still passed. Two attempts at an
-in-fixture probe were written and withdrawn, each caught by a different earlier
-rule; the reasoning is recorded in `check-sel4-fabric-plane.py`'s module doc
-rather than left as an arm that looks like coverage. See
-`devlog/2026-08-05-p5-5-1-typed-fabric/`.
-
-**Proposed fix:** a composition where one broker provisions another, so a role
-moved with `FLAG_RETAIN_TRANSFER` becomes a subject holding `send|transfer`
-where its kind admits `send|recv|transfer`. Asking to move that with `recv`
-restored is a widening only the subset test can refuse. P5.5.2's two-route graph
-with a declared interposition chain is that shape.
-
-**Exit condition:** a widening refused by the subset test alone, observed under
-a named seL4 gate, and fault-injected to show that removing the test fails it.
-
 ### B16 — a supervision termination record is never reclaimed, so a long-lived graph exhausts the table
 
 **Problem:** `slime-root/src/supervision.rs::Terminations` records how each child
@@ -91,10 +45,18 @@ table release. Alternatively fail the *spawn* when the record table is full,
 which turns a silent wrong answer into a bounded refusal at the point of
 allocation — the same shape `construct_child` already uses for `MAX_GRAPH_TASKS`.
 
-**Deferral re-reviewed 2026-08-05, before opening P5.5.1's gate.** Still
-deferred, on the same observation: that slice's graph creates nine tasks — five
-launched, four spawned — against `MAX_RECORDS = 32`, so the bound is not
-approached. See `devlog/2026-08-05-p5-5-1-typed-fabric/`.
+**Deferral re-reviewed 2026-08-05, before opening P5.5.2's gate.** Still
+deferred, on the same observation, and this is the largest graph the cutover
+declares: P5.5.2's stream plane creates thirteen tasks — seven launched, six
+spawned — against `MAX_RECORDS = 32`. The bound is approached more closely than
+by any earlier slice and still not reached. See
+`devlog/2026-08-05-p5-5-2-stream-plane/`.
+
+Worth stating plainly, since the margin is now under 3×: this stays a latent
+bound rather than a defect only because every declared generation runs to
+completion and exits. A long-lived graph that spawns and reaps repeatedly is
+what makes it bite, and P5.4 — which retires the oracle — is the point at which
+"every declared generation" stops being a safe quantifier.
 
 **Why deferred rather than fixed in P5.3.3:** the counting version touches every
 path that installs or releases a capability, and the refusal version needs a
@@ -147,10 +109,14 @@ checkout directories produce byte-identical component images and the same
 generation identity, with `just generation_check`, `just product_boot_check`,
 and `just test` unchanged.
 
+**Deferral re-reviewed 2026-08-05, before opening P5.5.2's gate**, on the same
+reasoning: that slice replaces the seventh seL4 generation through the same
+build path, whose rustflags are keyed by triple and match none of the stale
+literal's. See `devlog/2026-08-05-p5-5-2-stream-plane/`.
+
 **Deferral re-reviewed 2026-08-05, before opening P5.5.1's gate**, on the same
 reasoning: that slice adds a seventh seL4 generation through the same build
-path, whose rustflags are keyed by triple and match none of the stale
-literal's. See `devlog/2026-08-05-p5-5-1-typed-fabric/`.
+path. See `devlog/2026-08-05-p5-5-1-typed-fabric/`.
 
 **Deferral re-reviewed 2026-08-05, before opening P5.3.4's gate**, on the same
 reasoning: that slice adds a sixth seL4 generation through the same build path,
@@ -182,6 +148,50 @@ to the seL4 cutover. It should be scheduled against the x86 oracle deliberately,
 not folded into a portability slice.
 
 ## Resolved
+
+### B17 — the capability transfer's subset test had no coverage — **resolved 2026-08-05**
+
+**Problem:** `slime-root/src/main.rs::serve_cap_transfer` enforces four rules,
+and P5.5.1's gate observed three. The fourth — the **subset test**,
+`rights & !source.rights != 0`, which is what makes the move narrow-only
+against *what the holder actually has* — was not observed: deleting it left
+every marker in that gate intact.
+
+**The entry's stated reason was wrong, and that is the interesting part.** It
+argued the property was unreachable from any graph this cutover could declare,
+because reaching it needs a capability holding transfer authority while being
+strictly narrower than its kind admits, and `cap_transfer` with
+`FLAG_RETAIN_TRANSFER` was "the only thing that produces one" — which a
+component cannot use on itself, since the two ends of a channel it holds alone
+are a loopback the root refuses to split.
+
+A plain **spawn grant** produces one. `preflight_spawn_grants` installs the
+requested mask verbatim, so `grant(endpoint, RIGHT_SEND | RIGHT_TRANSFER)`
+yields exactly send+transfer where `Endpoint` admits send+recv+transfer.
+Init already does this on x86 for `DANGO_OUTPUT_SLOT` — the shape existed in the
+tree the whole time; nobody had asked to widen one. The gap was a missing arm,
+not an unreachable property, and the analysis that said otherwise was checking
+`cap_transfer`'s own outputs rather than every path that installs a mask.
+
+**Resolution:** `sel4-stream.zti` grants `fabric-publisher` a second endpoint
+end at send+transfer, carrying no traffic and belonging to no route. It goes to
+the publisher because that component already carries the other two
+transfer-rule denials, so all three sit together and each states which rule it
+proves. The component asks to move it with `recv` restored: that passes the transfer-authority rule,
+passes the descriptor/kind rule, and computes zero against the per-kind mask, so
+only the subset test can refuse it.
+
+The arm is guarded on **holding** the subject rather than on a check flag,
+because an empty slot answers the same `ERR_BAD_CAP` the subset test does — a
+bare widening arm would pass identically in a graph that never granted the
+endpoint, which is the "looks like coverage and is not" failure this item was
+opened for. It establishes possession by *using* the granted end first, so a
+graph without one skips silently and claims nothing.
+
+**Exit condition (observed):** `just sel4_stream_check` observes the refusal,
+and removing `rights & !source.rights` from `serve_cap_transfer` fails that gate
+— the fault injection P5.5.1 ran and could not make fail. See
+`devlog/2026-08-05-p5-5-2-stream-plane/`.
 
 ### B15 — a spawn carries at most four grants on seL4, against the oracle's sixty-four — **resolved 2026-08-05**
 
