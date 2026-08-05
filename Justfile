@@ -81,6 +81,18 @@ sel4_loan_check: sel4_pin_check
 sel4_spawn_check: sel4_pin_check
     python3 scripts/check/check-sel4-spawn-plane.py
 
+# P5.3.4: build the sample-plane image, boot it, and require the ordered
+# transcript `just sample_plane_live_check` records on x86 — produced by the
+# unmodified `sample-lender` and `sample-receiver`, which carry no seL4 branch.
+# Also requires that a spawned child is budgeted from the generation, that the
+# declared spawn budget refuses a child past its ceiling, and that every loan,
+# mapping, region, and window is reclaimed at teardown.
+#
+# A sixth image, beside the five above, on the same rule: each gate boots the
+# artifact it asserts about.
+sel4_sample_check: sel4_pin_check
+    python3 scripts/check/check-sel4-sample-plane.py
+
 # Run the seL4 product image interactively on the pinned QEMU machine.
 run: sel4_qemu_image_check
     qemu-system-aarch64 -machine virt,virtualization=on -cpu cortex-a53 -smp 1 \
