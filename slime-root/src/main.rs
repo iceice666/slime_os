@@ -516,6 +516,12 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
             sel4::init_thread::slot::VSPACE.cap(),
             &scratch,
             sel4::init_thread::slot::ASID_POOL.cap(),
+            // The P5.1 fixture path: neither spawned by a component nor built
+            // from a generation component, so it carries neither. Every
+            // per-component bound reads as absent for it, which is correct —
+            // no manifest describes this task.
+            None,
+            None,
         ) {
             Ok(id) => id,
             Err(error) => fatal!("child task construction failed: {error:?}"),
@@ -981,6 +987,10 @@ fn launch_component_graph(
             sel4::init_thread::slot::VSPACE.cap(),
             scratch,
             sel4::init_thread::slot::ASID_POOL.cap(),
+            // Launched by the root from the generation, so no spawner: its
+            // existence is the manifest's, not another component's.
+            None,
+            Some(plan.component),
         ) {
             Ok(id) => id,
             Err(error) => fatal!(
@@ -1275,6 +1285,7 @@ fn launch_component_graph(
 
     serve_component_graph(
         generation,
+        &launched_components,
         service_endpoint,
         &mut tasks,
         &mut windows,
@@ -1372,6 +1383,7 @@ const MAX_GRAPH_ITERATIONS: usize = 512;
 #[allow(clippy::too_many_arguments)]
 fn serve_component_graph(
     generation: &Generation<'_>,
+    launched: &LaunchedComponents,
     endpoint: sel4::cap::Endpoint,
     tasks: &mut TaskTable<MAX_TASKS>,
     windows: &mut WindowTable<MAX_TASKS>,
@@ -1392,6 +1404,7 @@ fn serve_component_graph(
     let mut peer_deaths = 0;
     let mut spawns = 0;
     let mut drops = 0;
+    let mut reclaimed_slots = 0;
     let mut endpoints = 0;
     let mut parked = ParkedReplies::new();
     // How each dead child ended, kept past the task's own reclamation because
@@ -1483,6 +1496,7 @@ fn serve_component_graph(
             );
             graph.release(id);
             windows.release(id);
+            reclaim_task_objects(tasks, &mut reclaimed_slots, id);
             live -= 1;
             continue;
         }
@@ -1578,6 +1592,7 @@ fn serve_component_graph(
                 );
                 graph.release(id);
                 windows.release(id);
+                reclaim_task_objects(tasks, &mut reclaimed_slots, id);
                 live -= 1;
             }
             // Spawn the executable a declared grant named. The slot resolves
@@ -1595,10 +1610,12 @@ fn serve_component_graph(
             Operation::Spawn => {
                 let response = serve_spawn(
                     generation,
+                    launched,
                     tasks,
                     windows,
                     graph,
                     channels,
+                    buffers,
                     allocator,
                     scratch,
                     endpoint,
@@ -2022,6 +2039,18 @@ fn serve_component_graph(
         "SLIME_GRAPH served live={live} unsupported={unsupported} unimplemented={unimplemented} buffers={buffers_served} windows={} tables={}",
         windows.len(),
         graph.len(),
+    );
+    // Task objects returned, on its own line so the marker above keeps the
+    // exact shape four earlier gates already assert.
+    //
+    // `tasks=0` is the property: every task the graph created has been reclaimed
+    // out of the table, which is what frees a parent's declared spawn budget and
+    // what makes `CleanupRecord::revoke` run. Before P5.3.4 neither death path
+    // reclaimed, so this would have read `tasks=N slots=0` on every boot — the
+    // table full of dead entries and not one CSlot returned.
+    sel4::debug_println!(
+        "SLIME_GRAPH tasks reclaimed live={} slots={reclaimed_slots}",
+        tasks.len(),
     );
     // The channel plane's own accounting, kept on its own line so P5.2's
     // terminal marker keeps the exact shape its gate already asserts.
@@ -2837,9 +2866,11 @@ fn construct_child(
     tasks: &mut TaskTable<MAX_TASKS>,
     windows: &mut WindowTable<MAX_TASKS>,
     graph: &mut GraphTables,
+    buffers: &mut SharedBufferTable,
     allocator: &mut ObjectAllocator,
     scratch: &ScratchPage,
     service_endpoint: sel4::cap::Endpoint,
+    parent: TaskId,
     plan: &SpawnPlan,
 ) -> Result<TaskId, IpcError> {
     let record = generation
@@ -2883,6 +2914,8 @@ fn construct_child(
             sel4::init_thread::slot::VSPACE.cap(),
             scratch,
             sel4::init_thread::slot::ASID_POOL.cap(),
+            Some(parent),
+            Some(plan.component),
         )
         .map_err(|_| IpcError::DestinationSlotsExhausted)?;
 
@@ -2907,6 +2940,39 @@ fn construct_child(
         release_child(tasks, graph, id);
         return Err(IpcError::DestinationSlotsExhausted);
     }
+    // The child's shared-buffer ceiling, from the generation's budget and keyed
+    // by the component *name* — the same derivation `launch_component_graph`
+    // uses for a root-launched task, and the same one
+    // `scripts/build/build-generation.py::holder_identity` writes into the
+    // budget.
+    //
+    // Without this a spawned child holds `HolderQuota::DENY`, because absent
+    // holders deny by default, and its first `shared_buffer_create` fails. That
+    // is not a bound the generation declared: the budget names a *component*,
+    // and whether that component's task was launched by the root or spawned by
+    // a parent is not something the manifest says or should have to.
+    //
+    // A quota that cannot be declared is fatal to the spawn rather than to the
+    // boot, because the parent is owed a bounded error and the rest of the
+    // graph is still running.
+    let quota = declared_quota(shared_buffer_budget(generation).as_ref(), record.name);
+    if buffers
+        .declare_quota(HolderId(u64::from(id.0)), quota)
+        .is_err()
+    {
+        release_child(tasks, graph, id);
+        windows.release(id);
+        return Err(IpcError::DestinationSlotsExhausted);
+    }
+    sel4::debug_println!(
+        "SLIME_GRAPH quota task={} component={} pages={} buffers={} mappings={} loans={}",
+        id.0,
+        record.name,
+        quota.byte_pages,
+        quota.buffer_count,
+        quota.mapping_count,
+        quota.loan_count,
+    );
     let Ok(child_table) = graph.create(id) else {
         release_child(tasks, graph, id);
         windows.release(id);
@@ -3099,15 +3165,47 @@ fn release_child(tasks: &mut TaskTable<MAX_TASKS>, graph: &mut GraphTables, id: 
     }
 }
 
+/// The live-child budget the generation declares for the component `task` is.
+///
+/// Zero when the task is not a launched component, or when the generation
+/// declares no budget for it — deny by default, exactly as an absent
+/// shared-buffer holder resolves to `HolderQuota::DENY`. A component the
+/// manifest gives no budget spawns nothing.
+fn spawner_budget(
+    generation: &Generation<'_>,
+    launched: &LaunchedComponents,
+    tasks: &TaskTable<MAX_TASKS>,
+    task: TaskId,
+) -> usize {
+    // The component this task was built from, whether the root launched it or a
+    // parent spawned it. `LaunchedComponents` holds only the former, so
+    // resolving through it alone would give every *spawned* component a budget
+    // of zero — a service that declares `spawnBudget = 2` and is itself spawned
+    // could then never start a child, which is not what its manifest says.
+    tasks
+        .get(task)
+        .and_then(|task| task.component)
+        .or_else(|| {
+            launched
+                .iter()
+                .find(|(_, id)| *id == task)
+                .map(|(component, _)| component)
+        })
+        .and_then(|component| generation.component(component).ok())
+        .map_or(0, |record| usize::from(record.spawn_budget))
+}
+
 /// Serve one `spawn`: validate, construct, activate, and hand the parent a
 /// supervision handle.
 #[allow(clippy::too_many_arguments)]
 fn serve_spawn(
     generation: &Generation<'_>,
+    launched: &LaunchedComponents,
     tasks: &mut TaskTable<MAX_TASKS>,
     windows: &mut WindowTable<MAX_TASKS>,
     graph: &mut GraphTables,
     channels: &mut ChannelTable,
+    buffers: &mut SharedBufferTable,
     allocator: &mut ObjectAllocator,
     scratch: &ScratchPage,
     service_endpoint: sel4::cap::Endpoint,
@@ -3150,6 +3248,36 @@ fn serve_spawn(
     let name = generation
         .component(plan.component)
         .map_or("<unknown>", |record| record.name);
+
+    // B14: the caller's own declared live-child budget, checked before anything
+    // is allocated. The generation states how many children a component may
+    // have at once, and without this the only bound is a global task table no
+    // manifest named — authority arriving from a table size rather than from a
+    // declaration, which is the shape B13 had.
+    //
+    // Keyed by the caller's *component*, not its task: the budget is a
+    // statement about the component the generation declared.
+    //
+    // `DestinationSlotsExhausted`, whose status is -5 — `ERR_OUT_OF_MEMORY`,
+    // matching `sys_spawn`, which maps `BudgetExhausted` and
+    // `TooManyTasks` alike to `ERR_OUT_OF_MEMORY` and everything else to
+    // `ERR_BAD_CAP`. That distinction is the caller's business here in a way the
+    // preflight refusals are not: a component that has hit its ceiling learns
+    // something true about itself and can wait for a child to exit, whereas a
+    // component naming an ungranted slot learns nothing about its table.
+    let budget = spawner_budget(generation, launched, tasks, id);
+    let live = tasks.live_children(id);
+    if live >= budget {
+        sel4::debug_println!(
+            // `child=` rather than `component=`: the budget is the *caller's*,
+            // and naming the child's component beside it read as though the
+            // ceiling belonged to the thing being refused.
+            "SLIME_GRAPH spawn refused task={} child={name} class=budget live={live} budget={budget}",
+            id.0,
+        );
+        return Response::error(IpcError::DestinationSlotsExhausted);
+    }
+
     sel4::debug_println!(
         "SLIME_GRAPH spawn authorized task={} slot={executable_slot} component={name} grants={}",
         id.0,
@@ -3161,9 +3289,11 @@ fn serve_spawn(
         tasks,
         windows,
         graph,
+        buffers,
         allocator,
         scratch,
         service_endpoint,
+        id,
         &plan,
     ) {
         Ok(child) => child,
@@ -3297,6 +3427,39 @@ fn serve_supervision_status(
         task.0,
     );
     Response::success(kind, detail)
+}
+
+/// Return a dead task's own objects: its VSpace, image frames, CNode, and TCB.
+///
+/// The half of teardown `reclaim_dead_task` does not do. That function settles
+/// what the task *held* — channels, buffers, loans, in-flight capabilities —
+/// and this returns what the task *is*. Both death paths need both: a task
+/// whose peers were all notified and whose buffers were all reclaimed still
+/// occupies a `TaskTable` entry and still holds every root CSlot its
+/// construction allocated.
+///
+/// Two things depend on it, which is why it is not merely tidiness:
+///
+/// - **`TaskTable::live_children`** counts the table, so a dead child that
+///   stays in it consumes its parent's declared `spawnBudget` forever. The
+///   budget would be a lifetime cap rather than the live-child cap the
+///   generation declares and `sys_spawn` enforces.
+/// - **`CleanupRecord::revoke`** is reachable only from `TaskTable::reclaim`,
+///   so without this every component that exits or faults leaks its root
+///   CSlots for the rest of the boot.
+///
+/// Reported rather than fatal: the objects stay recorded as the table's own
+/// state and the terminal marker's count is what surfaces them, and a graph
+/// whose other components are still running should not be stopped over one
+/// task's cleanup.
+fn reclaim_task_objects(tasks: &mut TaskTable<MAX_TASKS>, reclaimed: &mut usize, id: TaskId) {
+    match tasks.reclaim(id) {
+        Ok(record) => *reclaimed += record.slot_count(),
+        Err(error) => sel4::debug_println!(
+            "SLIME_GRAPH task reclaim incomplete task={} error={error:?}",
+            id.0
+        ),
+    }
 }
 
 /// Settle every channel a dying task held an end of, and answer whoever was
@@ -3660,29 +3823,32 @@ fn serve_buffer_create(
 ///
 /// # Naming the receiver
 ///
-/// `receiver_slot` must name a channel end the caller holds, and the loan is
-/// bound to the task at the other end of it. The receiver is therefore reached
-/// through a capability the generation declared, never through an ambient task
-/// id a component supplied — which is the property the exit condition asks for.
+/// `receiver_slot` names the receiver through a capability, never through an
+/// ambient task id a component supplied — which is the property the exit
+/// condition asks for. Two resource kinds satisfy that, and the caller may use
+/// either.
 ///
-/// This is *not* how the retired kernel names it. There, `sys_shared_buffer_loan`
-/// resolves `receiver_slot` to a `RIGHT_SUPERVISE` handle over the receiving
-/// task, minted when `init` spawned it
-/// (`kernel/src/syscall/mod.rs::sys_shared_buffer_loan`).
+/// A **supervision handle** names its subject outright. It was minted by the
+/// spawn that created that task and names nothing else, ever. This is how the
+/// retired kernel does it (`kernel/src/syscall/mod.rs::sys_shared_buffer_loan`),
+/// and it is what `sample-lender` — unmodified — passes at its `RECEIVER_SLOT`,
+/// so accepting it is what lets a component written against that ABI run here
+/// (P5.3.4).
 ///
-/// P5.3.3 added spawn, so a supervision handle now exists — but this still
-/// resolves the channel peer, and deliberately. Nothing reads a `supervise`
-/// grant to decide who a handle names: the x86 grant
-/// `sample-plane-receiver-supervision` is `source = init, target = sample-lender`
-/// and means "init may hand sample-lender a handle", naming no subject at all.
-/// A handle's subject is fixed at the spawn that minted it, so accepting one
-/// here would let a lender loan to any task it happens to supervise rather than
-/// to one the generation connected it to — a wider bound, not a narrower one.
+/// A **channel end** names its peer. P5.3.2 admitted only this, because no
+/// spawn existed to mint a handle; it is kept because it is a real bound in its
+/// own right — a component can only loan to a task the generation gave it an
+/// edge to — and because a graph without spawn has no handle to name.
 ///
-/// The channel peer is the tighter rule and it is the one the exit condition
-/// asks for: a component can only loan to a task the generation already gave it
-/// an edge to. Widening this to accept either resource kind is P5.3.4's
-/// question, when the composed sample plane has both to choose between.
+/// Neither widens the other. A supervision handle is authority over a task the
+/// caller *created*, from an executable the generation granted it; a channel end
+/// is authority over a task the generation *connected* it to. Both are
+/// delegations the manifest made, differing in which one they rest on.
+///
+/// Note what is *not* read: the x86 grant `sample-plane-receiver-supervision` is
+/// `source = init, target = sample-lender` and means "init may hand
+/// sample-lender a handle", naming no subject at all. A handle's subject comes
+/// from the spawn that minted it, which is the only thing that could know it.
 #[allow(clippy::too_many_arguments)]
 fn serve_buffer_loan(
     buffers: &mut SharedBufferTable,
@@ -3721,20 +3887,50 @@ fn serve_buffer_loan(
     // minting against it would burn a `loan_count` on a loan nobody can
     // collect. Resolved with the right the delivery will need, exactly as
     // `resolve_channel` does for the send itself.
-    let Some(graph::Capability {
-        resource: graph::Resource::Endpoint { channel },
-        ..
-    }) = graph
-        .get(id)
-        .and_then(|table| table.resolve(receiver_slot, RIGHT_SEND).ok())
-    else {
-        sel4::debug_println!(
-            "SLIME_GRAPH loan refused task={} slot={receiver_slot} class=absent",
-            id.0,
-        );
-        return Response::error(IpcError::BadCapability);
-    };
-    let Some(peer) = channels.peer(channel, id) else {
+    //
+    // **Two kinds resolve here**, and the difference is which question the
+    // caller is answering.
+    //
+    // A `Supervision` handle names its subject outright: it was minted by the
+    // spawn that created that task and names nothing else, ever. That is how
+    // the retired kernel does it (`sys_shared_buffer_loan`), and it is what
+    // `sample-lender` — unmodified — passes at `RECEIVER_SLOT`, so accepting it
+    // is what lets a component written against that ABI run here unchanged.
+    //
+    // A channel end names its peer. P5.3.2 admitted only this, because no spawn
+    // existed to mint a handle; it is kept because it is a real bound in its
+    // own right — a component can only loan to a task the generation gave it an
+    // edge to — and because `sel4-loan.zti`'s graph has no spawn in it.
+    //
+    // Neither widens the other. A supervision handle is authority over a task
+    // the caller *created*; a channel end is authority over a task the
+    // generation *connected* it to. In both cases the receiver is reached
+    // through a capability rather than an ambient task id, which is what the
+    // exit condition asks for.
+    let resolved = graph.get(id).and_then(|table| {
+        table
+            .resolve(receiver_slot, RIGHT_SUPERVISE)
+            .ok()
+            .and_then(|capability| match capability.resource {
+                graph::Resource::Supervision { task } => Some((task, None)),
+                _ => None,
+            })
+            .or_else(|| {
+                // `RIGHT_SEND` on the end, not merely possession of it. A loan
+                // exists to be transferred, and it reaches its receiver over
+                // this same channel — so a receive-only end names a peer this
+                // component could never deliver to, and minting against it
+                // would burn a `loan_count` on a loan nobody can collect.
+                let capability = table.resolve(receiver_slot, RIGHT_SEND).ok()?;
+                match capability.resource {
+                    graph::Resource::Endpoint { channel } => {
+                        Some((channels.peer(channel, id)?, Some(channel)))
+                    }
+                    _ => None,
+                }
+            })
+    });
+    let Some((peer, edge)) = resolved else {
         sel4::debug_println!(
             "SLIME_GRAPH loan refused task={} slot={receiver_slot} class=absent",
             id.0,
@@ -3756,7 +3952,22 @@ fn serve_buffer_loan(
     // makes the bit load-bearing rather than decorative: without this check the
     // *kind* alone decides, and `transferable = false` in a manifest would
     // change nothing observable.
-    if channels.transferable(channel) != Some(true) {
+    //
+    // Only a channel end carries this question. A supervision handle names a
+    // task rather than an edge, so there is no `transferable` bit to read — and
+    // the delegation it rests on is a different one: the caller *created* the
+    // receiver, from an executable the generation granted it, which is the
+    // authority the spawn already checked. Requiring an edge bit as well would
+    // demand a manifest restate a delegation it made by granting the
+    // executable.
+    //
+    // The send that carries the loan is still checked. `DepartingCaps` refuses
+    // to move a capability over a channel the loan was not minted for, and the
+    // loan handle names its receiver, so a lender cannot mint against a
+    // supervision handle and then deliver somewhere else.
+    if let Some(channel) = edge
+        && channels.transferable(channel) != Some(true)
+    {
         sel4::debug_println!(
             "SLIME_GRAPH loan refused task={} slot={buffer_slot} class=undelegated",
             id.0,

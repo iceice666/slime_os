@@ -190,6 +190,23 @@ pub struct Task {
     pub entry: u64,
     pub activated: bool,
     pub cleanup: CleanupRecord,
+    /// The task that spawned this one, if any. `None` for a component the root
+    /// launched from the generation.
+    ///
+    /// Recorded so a spawner's live-child count can be derived rather than
+    /// tracked: a counter would need decrementing on both death paths and on
+    /// every unwind, and a missed decrement would silently tighten a bound the
+    /// generation declared. Counting the table is O(MAX_TASKS) on a path that
+    /// already allocates a VSpace.
+    pub spawner: Option<TaskId>,
+    /// The generation component index this task was built from.
+    ///
+    /// Recorded because a task's *component* is what the manifest makes
+    /// statements about — its spawn budget, its shared-buffer ceiling — and
+    /// `LaunchedComponents` maps only the components the root launched. A
+    /// spawned task would otherwise resolve to no component at all, and every
+    /// per-component bound would read as zero for it.
+    pub component: Option<usize>,
 }
 
 impl Task {
@@ -248,6 +265,19 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
         self.reclaimed_slots
     }
 
+    /// How many live tasks `spawner` created and has not yet lost.
+    ///
+    /// Derived from the table rather than from a counter, so a task reclaimed
+    /// by any path — clean exit, fault, or a spawn unwind — frees its parent's
+    /// budget without a decrement anyone has to remember to write.
+    pub fn live_children(&self, spawner: TaskId) -> usize {
+        self.tasks
+            .iter()
+            .flatten()
+            .filter(|task| task.spawner == Some(spawner))
+            .count()
+    }
+
     pub fn get(&self, id: TaskId) -> Option<&Task> {
         self.tasks.iter().flatten().find(|task| task.id == id)
     }
@@ -272,6 +302,8 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
         caller_vspace: sel4::cap::VSpace,
         scratch: &ScratchPage,
         asid_pool: sel4::cap::AsidPool,
+        spawner: Option<TaskId>,
+        component: Option<usize>,
     ) -> Result<TaskId, TaskError> {
         let Some(index) = self.tasks.iter().position(Option::is_none) else {
             return Err(TaskError::TableFull { limit: CAPACITY });
@@ -381,6 +413,8 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
             entry,
             activated: false,
             cleanup,
+            spawner,
+            component,
         });
         self.len += 1;
         self.next_id += 1;
