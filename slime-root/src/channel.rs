@@ -64,14 +64,19 @@
 //!   this root task can read.
 //! - In the retired kernel `init` is a **broker**: it holds both halves of every
 //!   channel it mints and hands one to each child in that child's spawn grant
-//!   list, which is also what fixes the child's slot numbers. This slice has no
-//!   spawn — that is P5.3.3 — so there is no distribution step to place those
-//!   halves through.
+//!   list, which is also what fixes the child's slot numbers.
 //!
 //! So a channel whose slot this slice cannot know is left unmaterialized and
 //! reported in [`Materialized::unplaced`], rather than installed at a number the
 //! component never compiled against. A component then finds either the channel
 //! its generation declared or nothing at all — never someone else's.
+//!
+//! **P5.3.3 does not change that rule, and deliberately.** Spawn now exists, so
+//! init *can* broker a half — but it brokers one it already holds, handed on as
+//! a spawn grant that lands at a slot the child's own `0..n` numbering fixes.
+//! Nothing about that needs the layout to have labelled the grant, so the
+//! unplaced count stays what it was: a statement that this root cannot map a
+//! grant name onto a layout channel label, which is still true.
 
 use boot_contracts::boot_layout::{BootLayout, Role, channel_identity};
 use boot_contracts::generation::Generation;
@@ -80,6 +85,10 @@ use crate::generation::{RIGHT_RECV, RIGHT_SEND};
 use crate::graph::{self, GraphTables};
 use crate::ipc::{Channel, ChannelKey, IpcError};
 use crate::task::TaskId;
+
+/// Authority to observe a spawned child's termination; see
+/// `main.rs::RIGHT_SUPERVISE`, which this must agree with.
+const RIGHT_SUPERVISE: u64 = 1 << 18;
 
 /// Logical channels one generation's graph may declare.
 ///
@@ -218,8 +227,11 @@ pub struct Materialized {
     /// Grants this slice could not place a slot for — a channel touching the
     /// bootstrap component that the boot layout does not label. See the module
     /// doc: these are the ones `init` brokers through spawn in the retired
-    /// kernel, and spawn is P5.3.3. Counted rather than silently dropped, so
-    /// the boot transcript states what the graph did not get.
+    /// kernel. P5.3.3 added spawn without changing this — a brokered half is
+    /// one init already holds, handed on at a slot the child's own numbering
+    /// fixes, which never needed the layout to have labelled the grant.
+    /// Counted rather than silently dropped, so the boot transcript states what
+    /// the graph did not get.
     pub unplaced: usize,
 }
 
@@ -326,6 +338,58 @@ impl ChannelTable {
         }
     }
 
+    /// Move the end `from` holds on `key` to `to`.
+    ///
+    /// A channel's queues are resolved by *which task* holds each end — see
+    /// [`Entry::send_queue`] — rather than by anything carried in the
+    /// capability. So handing a child a channel end at spawn is not complete
+    /// until the table agrees the child is the holder: a capability alone would
+    /// resolve to no queue at all, because the child matches neither
+    /// `producer` nor `consumer`.
+    ///
+    /// That makes this a **move**, where the retired kernel's spawn grant is a
+    /// non-consuming copy. The difference is real but narrow, and it falls on
+    /// the side of less authority: there, parent and child would both hold a
+    /// working end; here the parent gives its end up. Every x86 caller already
+    /// behaves that way — `launch_sample_plane` grants each half to exactly one
+    /// child, and `launch_fabric_graph`'s comment states outright that init
+    /// "releases the control endpoint as soon as the spawn that needed them
+    /// returns". A parent that tried to keep a granted end would find it gone
+    /// rather than find it silently shared.
+    ///
+    /// `false` when `from` holds no end of this channel, which the caller turns
+    /// into a refused spawn rather than a partially distributed graph.
+    pub fn reassign(&mut self, key: ChannelKey, from: TaskId, to: TaskId) -> bool {
+        let Some(entry) = self.entry_mut(key) else {
+            return false;
+        };
+        // A loopback is the case [`Self::mint`] creates: both ends start with
+        // the minting task, and handing one to a child is the whole point.
+        // Splitting it makes the pair real — the consumer end moves, the task
+        // keeps the producer end, and the reverse queue the two-task shape
+        // needs is allocated here rather than at mint, because until now there
+        // was only one task to carry it.
+        if entry.producer == entry.consumer {
+            if entry.producer != from || from == to {
+                return false;
+            }
+            entry.consumer = to;
+            if entry.reverse.is_none() {
+                entry.reverse = Some(Channel::new(entry.key));
+            }
+            return true;
+        }
+        if entry.producer == from {
+            entry.producer = to;
+            true
+        } else if entry.consumer == from {
+            entry.consumer = to;
+            true
+        } else {
+            false
+        }
+    }
+
     fn entry(&self, key: ChannelKey) -> Option<&Entry> {
         self.entries.iter().flatten().find(|entry| entry.key == key)
     }
@@ -335,6 +399,26 @@ impl ChannelTable {
             .iter_mut()
             .flatten()
             .find(|entry| entry.key == key)
+    }
+
+    /// Mint a bidirectional channel between `first` and `second` at runtime.
+    ///
+    /// The generation declares the graph's *standing* edges; this is how a
+    /// component that holds an `EndpointFactory` makes one the generation could
+    /// not have named — a per-request context channel, whose two ends exist
+    /// only for as long as the request does. `spawn-service` does exactly this
+    /// on every x86 boot (`endpoint_create(3)` then `send_context`), which is
+    /// why the operation must exist before any component can hand a child its
+    /// launch context.
+    ///
+    /// Marked `transferable`, matching the retired kernel's
+    /// `sys_endpoint_create`: a freshly minted pair carries `RIGHT_TRANSFER` on
+    /// both ends because handing one half away is the only reason to mint one.
+    /// That is not a widening of the generation's authority — the authority to
+    /// mint at all came from a declared `endpointCreate` grant.
+    pub fn mint(&mut self, first: TaskId, second: TaskId) -> Result<ChannelKey, ChannelError> {
+        let (key, _) = self.push(first, second, RIGHT_SEND | RIGHT_RECV, true)?;
+        Ok(key)
     }
 
     fn push(
@@ -700,6 +784,65 @@ fn channel_slot(
         .ok_or(ChannelError::UnlaunchedEndpoint)
 }
 
+/// The bootstrap component's slot for a singular role, from the boot layout.
+///
+/// The endpoint and shared-buffer factories carry no name — there is one of
+/// each — so they are addressed by role rather than by identity, exactly as
+/// `LayoutPlacer::role` does in the retired kernel. `init.rs` reads them
+/// through the generated `ENDPOINT_FACTORY_SLOT` and
+/// `SHARED_BUFFER_FACTORY_SLOT`, so as with every other slot the number it
+/// compiles against and the number filled here are one number.
+pub fn bootstrap_role_slot(layout: Option<&BootLayout<'_>>, role: Role) -> Option<u32> {
+    let layout = layout?;
+    (0..layout.entry_count())
+        .filter_map(|index| layout.entry(index))
+        .find(|entry| entry.role == role && !entry.role.is_named())
+        .map(|entry| entry.slot)
+}
+
+/// The bootstrap component's slot for the executable named `component`, from
+/// the boot layout.
+///
+/// The same rule the channel halves follow, applied to the other kind of thing
+/// a layout numbers. `init.rs` addresses every executable it spawns through a
+/// constant generated from this table — `CONSOLE_SLOT`, `SYSINFO_SLOT` — so the
+/// number it compiles against and the number the root fills must be one number.
+/// Numbering init's executables `1..=N` from a cursor instead is what P5.2 did,
+/// and it happened to agree only because `sel4.zti` grants init no executable at
+/// all; the moment one is granted, a cursor puts `sysinfo` at 2 while `init.rs`
+/// reads 4, and the spawn resolves to whatever else landed there. That is
+/// precisely the positional coupling B10 exists to remove.
+///
+/// `None` when the layout names no executable for this component, which the
+/// caller reports as unplaced rather than guessing a number.
+pub fn bootstrap_executable_slot(
+    layout: Option<&BootLayout<'_>>,
+    component: &str,
+    rights: u64,
+) -> Result<Option<u32>, ChannelError> {
+    let Some(layout) = layout else {
+        return Ok(None);
+    };
+    let identity = boot_contracts::boot_layout::component_identity(component);
+    let Some(entry) = (0..layout.entry_count())
+        .filter_map(|index| layout.entry(index))
+        .filter(|entry| entry.role == Role::Executable)
+        .find(|entry| entry.name_identity == identity)
+    else {
+        return Ok(None);
+    };
+    // Containment, for the reason `bootstrap_slot` documents below: the layout
+    // states what the slot may carry and the grant states what the generation
+    // confers, and a grant may not exceed the layout.
+    if rights & !entry.rights != 0 {
+        return Err(ChannelError::RightsMismatch {
+            declared: rights,
+            layout: entry.rights,
+        });
+    }
+    Ok(Some(entry.slot))
+}
+
 /// The bootstrap component's slot for the channel grant `name` authorizes, from
 /// the boot layout.
 ///
@@ -773,6 +916,12 @@ pub enum WaitTarget {
     /// Ready when the task's send queue on this channel has room, or its peer
     /// has died.
     SendCapacity(ChannelKey),
+    /// Ready when the named child has terminated.
+    ///
+    /// Not a queue, unlike the two above: the readiness event is a task dying,
+    /// which no channel observes. `main.rs` holds the registration and the
+    /// termination record, and this only carries which child was named.
+    Supervision(TaskId),
     /// A source this cutover has no mechanism for. Never ready, and never
     /// registered — a task waiting only on one of these would block forever, so
     /// the dispatcher refuses the wait rather than parking on it.
@@ -795,7 +944,15 @@ pub fn resolve_wait_source(
     Ok(match kind {
         WAIT_KIND_ENDPOINT => WaitTarget::Receive(channel(RIGHT_RECV)?),
         WAIT_KIND_SEND_CAPACITY => WaitTarget::SendCapacity(channel(RIGHT_SEND)?),
-        WAIT_KIND_INPUT | WAIT_KIND_SUPERVISION => WaitTarget::Unmediated,
+        // Resolved through the caller's own table with the right the query
+        // itself requires, so a task can only wait on a child it may also ask
+        // about. Before P5.3.3 this was `Unmediated`, because no spawn existed
+        // to mint a handle for it to name.
+        WAIT_KIND_SUPERVISION => match table.resolve(slot, RIGHT_SUPERVISE)?.resource {
+            graph::Resource::Supervision { task } => WaitTarget::Supervision(task),
+            _ => return Err(IpcError::InvalidOperation),
+        },
+        WAIT_KIND_INPUT => WaitTarget::Unmediated,
         _ => return Err(IpcError::InvalidOperation),
     })
 }
@@ -814,7 +971,10 @@ impl ChannelTable {
             WaitTarget::SendCapacity(key) => {
                 self.send_queue(key, task).is_some_and(Channel::send_ready)
             }
-            WaitTarget::Unmediated => false,
+            // Never ready *here*: a child's death is not a queue event, so
+            // the dispatcher tests it against the termination record instead.
+            // Returning `false` is what makes it fall through to registration.
+            WaitTarget::Supervision(_) | WaitTarget::Unmediated => false,
         }
     }
 
@@ -830,7 +990,9 @@ impl ChannelTable {
                 .send_queue_mut(key, task)
                 .ok_or(IpcError::InvalidOperation)?
                 .register_send_waiter(task.0),
-            WaitTarget::Unmediated => Ok(()),
+            // Registered in `main.rs::SupervisionWaits` rather than on a
+            // queue, because no queue observes a task dying.
+            WaitTarget::Supervision(_) | WaitTarget::Unmediated => Ok(()),
         }
     }
 
@@ -852,6 +1014,9 @@ impl ChannelTable {
 mod tests {
     use super::{ChannelTable, DeathWakes, SlotCursors, WaitTarget};
     use crate::generation::{RIGHT_RECV, RIGHT_SEND};
+    /// Authority to observe a spawned child's termination; see
+    /// `main.rs::RIGHT_SUPERVISE`, which this must agree with.
+    const RIGHT_SUPERVISE: u64 = 1 << 18;
     use crate::task::TaskId;
 
     const PRODUCER: TaskId = TaskId(1);

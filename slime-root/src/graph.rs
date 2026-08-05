@@ -60,17 +60,15 @@ pub enum Resource {
     /// [`LoanHandle`](crate::shared_buffer::LoanHandle) names the receiver it
     /// was minted for, and the table refuses a claim from anyone else, so the
     /// move is a transfer of a name the recipient can already be checked
-    /// against rather than a widening of authority. Every other kind is
-    /// refused: an endpoint end, an executable, a factory, and a supervision
-    /// handle are all authority the generation placed, and moving one would let
-    /// a component redistribute a graph the generation declared.
+    /// against rather than a widening of authority.
     Loan {
         handle: crate::shared_buffer::LoanHandle,
     },
 }
 
 impl Resource {
-    /// Whether this cutover can move the resource between capability tables.
+    /// Whether this cutover can move the resource between capability tables
+    /// **over a channel**, as a `send` attachment.
     ///
     /// Kind, not rights, is what decides *here*: this answers only whether the
     /// root has a mechanism for the move, and today it has one only for a loan.
@@ -79,8 +77,46 @@ impl Resource {
     /// answered at the mint rather than at the send — `main.rs::serve_buffer_loan`
     /// refuses to create a loan over a channel the generation did not declare
     /// `transferable`, so an undelegated edge carries nothing to test here.
+    ///
+    /// # Not the same question as a spawn grant
+    ///
+    /// P5.3.3 hands a child capabilities at construction, and those are of
+    /// every kind this returns `false` for — an endpoint end, a factory, a
+    /// supervision handle. That is not a contradiction, because the two are
+    /// authorized by different things and neither can stand in for the other:
+    ///
+    /// - a **spawn grant** is a derived copy the parent makes at the moment it
+    ///   constructs the child, bounded by `preflight_spawn_grants` to rights
+    ///   the parent already holds. The parent is the child's whole reason for
+    ///   existing, and the generation authorized the pair by granting the
+    ///   parent the executable. Nothing reaches a task the generation did not
+    ///   connect to the parent, because the child had no table to reach at all
+    ///   until the parent made one.
+    /// - a **send attachment** moves a capability to a task that already
+    ///   exists, chosen at runtime by whoever is at the other end of a channel.
+    ///   That is redistribution of a declared graph, which is why it is
+    ///   narrowed to the one kind whose handle names its own recipient.
+    ///
+    /// So this bound is about the *send* path specifically. Widening it to
+    /// endpoints would let a component pass its channel ends around at runtime;
+    /// spawn cannot, because a spawn grant's destination is a task that does
+    /// not exist yet.
     pub const fn is_transferable(&self) -> bool {
         matches!(self, Self::Loan { .. })
+    }
+
+    /// A short name for markers, so a refusal states which kind was named
+    /// without leaking the handle behind it.
+    pub const fn kind(&self) -> &'static str {
+        match self {
+            Self::Executable { .. } => "executable",
+            Self::Endpoint { .. } => "endpoint",
+            Self::EndpointFactory => "endpoint-factory",
+            Self::SharedBufferFactory => "shared-buffer-factory",
+            Self::Supervision { .. } => "supervision",
+            Self::SharedBuffer { .. } => "shared-buffer",
+            Self::Loan { .. } => "loan",
+        }
     }
 }
 
