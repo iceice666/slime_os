@@ -439,30 +439,20 @@ fn consume(route_slot: u32, ack_slot: u32) {
                 match event.event {
                     EVENT_SAMPLE_LOST => fail(b"keeping-up subscriber was told it lost a sample"),
                     EVENT_STREAM_END => {
-                        // Both forms, because the x86 graph declares a second
-                        // publisher (`fabric-publisher-b`) that sends the
-                        // `>MAX_MSG` one. P5.5.1's seL4 graph declares one
-                        // publisher and therefore only the inline form, so
-                        // requiring `shared` there would be asserting a
-                        // property of a *different* graph.
+                        // Both forms, because every graph that declares this
+                        // component also declares the second publisher
+                        // (`fabric-publisher-b`) that sends the `>MAX_MSG` one.
                         //
-                        // The requirement is relaxed rather than dropped:
-                        // `inline` is still required on both, and P5.5.2 —
-                        // which runs this component against the full two-route
-                        // plane unmodified — restores `shared` by declaring the
-                        // publisher that produces it, not by editing this line.
-                        let both_forms = option_env!("SLIME_SEL4_FABRIC_CHECK") != Some("1");
-                        if inline == 0 || (both_forms && shared == 0) {
+                        // This was briefly a `option_env!` branch: P5.5.1's
+                        // seL4 graph declared one publisher and so produced
+                        // only the inline form. P5.5.2 removed the branch by
+                        // declaring the publisher that produces the other form,
+                        // which was the stated way back — the component is the
+                        // x86 binary again, with no seL4 branch in it.
+                        if inline == 0 || shared == 0 {
                             fail(b"stream ended before both sample forms arrived");
                         }
-                        // The marker names what arrived rather than a fixed
-                        // claim, so a transcript cannot report a shared sample
-                        // on a graph that declares no publisher for one.
-                        slime_rt::debug_write(if both_forms {
-                            b"[fabric-subscriber] inline and shared received\n" as &[u8]
-                        } else {
-                            b"[fabric-subscriber] inline received\n"
-                        });
+                        slime_rt::debug_write(b"[fabric-subscriber] inline and shared received\n");
                         return;
                     }
                     _ => fail(b"unknown event kind"),

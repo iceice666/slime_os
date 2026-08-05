@@ -20,8 +20,8 @@
 use boot_contracts::fabric_graph::{CONTRACT_KIND_STREAM, DIRECTION_PUBLISH, route_identity};
 use slime_components::fabric_visibility::{ViewPage, request_page};
 use slime_proto::capability_transfer::{
-    FABRIC_REQUEST_MAGIC, FORMAT_VERSION, OBJECT_KIND_ENDPOINT, REQUEST_LEN,
-    WireCapabilityTransfer, WireFabricRequest,
+    CAPABILITY_TRANSFER_MAGIC, FABRIC_REQUEST_MAGIC, FLAG_RETAIN_TRANSFER, FORMAT_VERSION,
+    OBJECT_KIND_ENDPOINT, REQUEST_LEN, WireCapabilityTransfer, WireFabricRequest,
 };
 use slime_proto::fabric_stream::{
     FLAG_LAST, MAX_INLINE_BYTES, STREAM_SAMPLE_MAGIC, WireStreamSample,
@@ -36,8 +36,15 @@ slime_rt::entry!(main);
 /// with: it holds no factory, no route, and no peer endpoint.
 const CONTROL_SLOT: u32 = 0;
 
+/// B17's subject, when the graph declares one: an endpoint end this component
+/// was *spawn-granted* at `send`+`transfer`. Slot 1, the first free number
+/// after the control endpoint. A graph that grants no such end leaves it empty,
+/// and [`subset_test_arm`] detects that rather than assuming it.
+const PROBE_SLOT: u32 = 1;
+
 const RIGHT_SEND: u64 = 1;
 const RIGHT_RECV: u64 = 2;
+const RIGHT_TRANSFER: u64 = 4;
 
 const ROUTE_NAME: &str = "telemetry";
 
@@ -99,6 +106,13 @@ fn main() {
         route_name: route_name_bytes(),
         reserved: [0; 4],
     };
+    // Before the role request, because it is the only point at which
+    // `PROBE_SLOT` is unambiguous: provisioning installs capabilities at the
+    // first free slots, so after it slot 1 holds a route role in any graph that
+    // granted no probe. Running here, the slot holds either the spawn-granted
+    // probe or nothing at all.
+    subset_test_arm(&route);
+
     if send_request(&request) != ERR_SUCCESS {
         fail(b"request");
     }
@@ -287,6 +301,65 @@ fn inline_sample(sequence: u64, flags: u32) -> WireStreamSample {
         type_identity: telemetry_stream::TYPE_TAG,
         payload,
     }
+}
+
+/// B17: the transfer contract's **subset test**, against the one capability
+/// shape a declared graph can produce for it.
+///
+/// `cap_transfer` enforces four rules as one disjunction, and for every subject
+/// this file already exercises, an earlier rule refuses a widening first. The
+/// two arms above are exactly that: the route role carries no `RIGHT_TRANSFER`,
+/// so the transfer-authority rule refuses both the re-delegation and the
+/// widening before either mask is compared against anything.
+///
+/// Reaching the subset test needs a capability that holds transfer authority
+/// **and** is strictly narrower than its kind admits. A route role is not one.
+/// Nor is a factory (one operation right, no transfer bit) or an endpoint from
+/// `endpoint_create` (exactly `send|recv|transfer`, which is what its kind
+/// admits, so the per-kind rule catches any widening mask first).
+///
+/// A **spawn grant** is what produces it. The requested mask is installed
+/// verbatim, so a parent granting `send|transfer` on an endpoint hands its
+/// child a capability holding transfer authority at strictly less than
+/// `Endpoint`'s `send|recv|transfer`. Asking to move that with `recv` restored
+/// passes the transfer-authority rule, passes the descriptor/kind rule, and
+/// computes zero against the per-kind mask — so only `rights & !source.rights`
+/// can refuse it.
+///
+/// Guarded on **holding** the subject rather than on a check flag, because an
+/// empty slot answers the same `ERR_BAD_CAP` the subset test does: a bare
+/// widening arm would pass identically in a graph that never granted the
+/// endpoint, which is coverage that looks real and is not. Possession is
+/// established by *use* — a send on the granted end — so a graph without one
+/// skips silently and claims nothing. The x86 graph grants none and skips; the
+/// seL4 stream graph grants one and runs the arm.
+fn subset_test_arm(route: &[u8; 32]) {
+    // `ERR_WOULDBLOCK` counts as possession: the endpoint resolved and its
+    // queue was full, which proves a live `send`-capable capability as much as
+    // a delivery does. Only a slot holding no such capability answers
+    // `ERR_BAD_CAP`.
+    match slime_rt::send(PROBE_SLOT, &[0u8; MAX_MSG], &[]) {
+        ERR_SUCCESS | ERR_WOULDBLOCK => {}
+        // No probe in this graph. Nothing to test, and nothing claimed.
+        _ => return,
+    }
+    // The mask restores `recv`, which this end does not hold and its kind does
+    // admit, and keeps the transfer bit so the request is a strict superset of
+    // the source's rights in both.
+    let widening = WireCapabilityTransfer {
+        magic: CAPABILITY_TRANSFER_MAGIC,
+        version: FORMAT_VERSION,
+        status: 0,
+        flags: FLAG_RETAIN_TRANSFER,
+        object_kind: OBJECT_KIND_ENDPOINT,
+        direction: DIRECTION_PUBLISH,
+        rights_mask: RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
+        route_identity: *route,
+    };
+    if slime_rt::cap_transfer(CONTROL_SLOT, PROBE_SLOT, &widening.encode()) != ERR_BAD_CAP {
+        fail(b"a spawn-granted role widened past its own rights");
+    }
+    slime_rt::debug_write(b"[fabric-publisher] narrowed transfer role cannot widen\n");
 }
 
 fn publish(route_slot: u32, message: &[u8; MAX_MSG]) {
