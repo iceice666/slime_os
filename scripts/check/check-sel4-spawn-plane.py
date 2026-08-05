@@ -152,10 +152,41 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     ),
     # -- required check: termination observed through a supervision handle --
     (
-        "sysinfo was authorized from its layout-named executable slot",
-        r"SLIME_GRAPH spawn authorized task=\d+ slot=4 component=sysinfo grants=1",
+        # B15: six grants, where this root admitted four before P5.5.1. The
+        # grant array crosses the transfer window as a staged payload, and it
+        # used to be read with the *message* bound -- 64 bytes, four records --
+        # against the retired kernel's sixty-four. Six records are 96 bytes, so
+        # this line is only reachable through the wide reader
+        # (`transfer_window::read_staged_array`); a root that lost it refuses
+        # the spawn outright and `init` never reaches this marker at all.
+        #
+        # Six is B15's own exit-condition number and the size of this repo's
+        # largest real grant lists (`GENERATION_MANAGER_CAPS`, `dango_caps()`),
+        # so the arm is the oracle's shape rather than a synthetic width.
+        "sysinfo was authorized from its layout-named executable slot with six grants",
+        r"SLIME_GRAPH spawn authorized task=\d+ slot=4 component=sysinfo grants=6",
+    ),
+    (
+        # The other half of B15's exit condition: the child holds all six at
+        # the slots its numbering fixes. A root that admitted the wide array
+        # but distributed only the first four would reach the marker above and
+        # fail here.
+        "all six grants moved to the child",
+        r"SLIME_GRAPH spawned task=\d+ child=\d+ component=sysinfo grants=6 "
+        r"channels=6 handle=\d+",
     ),
     ("sysinfo was constructed", r"\[init\] sysinfo spawned"),
+    (
+        # The same fact from the parent's side, which is the side that can
+        # observe it: `sysinfo` runs unmodified and reads only slot 0. An
+        # endpoint grant is a move, so every granted slot has left init's table
+        # -- each answers `ERR_BAD_CAP`, which is what an unresolvable channel
+        # slot answers on both kernels -- while every retained half still sends.
+        # That distinguishes six ends genuinely handed over from six counted in
+        # a marker.
+        "the parent observed all six ends move",
+        r"\[init\] six grants delivered",
+    ),
     (
         # The launch context, sent down the half init kept. `sysinfo` is
         # blocked in `recv` on the half it was granted.
@@ -227,8 +258,12 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         # `terminated` is deliberately non-zero -- one record per child that
         # ended, kept past reclamation by design -- so a zero there would mean
         # the supervision path recorded nothing at all.
+        # `endpoints=7` is the two channels the scenario always minted plus the
+        # five B15's wide spawn needs: `preflight_spawn_grants` refuses a
+        # repeated slot and an endpoint grant is a move, so six distinct grants
+        # need six distinct ends and no channel can supply two.
         "every spawn, drop, and wait was accounted for",
-        r"SLIME_GRAPH spawns served=2 drops=1 endpoints=2 terminated=[1-9]\d* waits=0",
+        r"SLIME_GRAPH spawns served=2 drops=1 endpoints=7 terminated=[1-9]\d* waits=0",
     ),
 )
 
