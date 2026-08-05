@@ -447,7 +447,7 @@ One named Raspberry Pi 5 profile runs the verified isolated Slime vertical slice
 
 ## P5: seL4 microkernel substitution
 
-**Status:** In progress — P5.1, P5.2, P5.3.1, and P5.3.2 complete; P5.3.3,
+**Status:** In progress — P5.1, P5.2, P5.3.1, P5.3.2, and P5.3.3 complete;
 P5.3.4, P5.4, and P5.5 planned.
 
 **Depends on:** P0 and P1. Supersedes the custom-kernel half of P2.2–P2.6 if it
@@ -598,7 +598,7 @@ this boot path. Both halves are fault-injected in the devlog entry.
 
 ### P5.3 — C7 sample plane on seL4
 
-**Status:** In progress — P5.3.1 and P5.3.2 complete; P5.3.3 and P5.3.4 planned.
+**Status:** In progress — P5.3.1, P5.3.2, and P5.3.3 complete; P5.3.4 planned.
 
 **Depends on:** P5.2 and C7.
 
@@ -754,19 +754,75 @@ component's capability slots, which is P5.3.3's distribution problem.
 
 ### P5.3.3 — Child construction and supervision on seL4
 
-**Status:** Not started.
+**Status:** Complete.
 
 **Depends on:** P5.3.1.
 
-`Spawn` resolves its authority from the caller's declared grants and then refuses,
-so no component can start another. This slice constructs the child, distributes
-the channel halves `init` brokers, and answers `SupervisionStatus`.
+`Spawn` resolved its authority from the caller's declared grants and then
+refused, so no component could start another. `SupervisionStatus`, `CapDrop`,
+and `EndpointCreate` had no handler at all, and `WaitSource::Supervision`
+resolved to `Unmediated` — a wait naming only it was refused outright, because
+no spawn existed to mint a handle for it to name.
 
-#### Exit condition
+#### Required checks
 
-A component spawns a child from a grant-resolved executable, hands it declared
-capabilities at the slots its layout names, and observes its termination through
-a supervision handle rather than an ambient task id.
+- an executable slot the caller was not granted, and one holding authority of
+  another kind, are both refused with nothing constructed;
+- a grant may not exceed the rights the parent holds at that slot, and the
+  executable slot itself may not be handed to the child;
+- a child is constructed from the grant-resolved executable and receives its
+  declared capabilities at the slots its own numbering fixes, with the channel
+  end *moving* — the parent cannot name it afterwards, while the half it kept
+  still works;
+- a live child's handle answers "no outcome" rather than blocking; a terminated
+  child's outcome is collected exactly once and consumes the handle; a live
+  handle can be dropped;
+- a parent parked on a child's termination is woken by that death, and every
+  registration is cleared at teardown.
+
+#### Verification target
+
+```sh
+just sel4_spawn_check
+```
+
+A fifth image, beside the four P5.1–P5.3.2 gates boot, on the same rule: each
+gate boots the artifact it asserts about.
+
+#### Exit condition (observed)
+
+Observed 2026-08-05; see
+[`devlog/2026-08-05-p5-3-3-spawn-plane/`](../devlog/2026-08-05-p5-3-3-spawn-plane/index.md).
+
+`init` constructs two children from grant-resolved executables, hands each the
+capabilities its slots name, and collects `sysinfo`'s clean exit through a
+supervision handle after being woken by that child's death. Both children are
+**unmodified** — the same `console` and `sysinfo` binaries the x86 oracle
+builds, with no seL4 branch in either, which the gate checks against the sources
+rather than inferring from the transcript.
+
+The channel a child receives is minted at runtime through the generation's
+declared `endpointCreate` grant, not declared as a graph edge: that is the
+broker shape the retired kernel's `init` uses, and it is what P5.3.1's
+`channel.rs` recorded as impossible until spawn existed to distribute halves
+through. An endpoint grant is a **move** rather than a copy, because a channel's
+queues are resolved by which task holds each end; the parent keeps only the half
+it did not grant.
+
+Four denial arms are fault-injected in the devlog entry, and one of them found a
+real gap: with the supervision wake removed the gate wedges rather than passing,
+but with **B13's factory check removed every gate still passed**, because no
+fixture had a component that held a budget and tried to allocate without a
+grant. The loan gate now names one.
+
+Also in this slice, because the milestone's own words required it: the bootstrap
+component's executable and factory slots are placed from the boot layout rather
+than from a running cursor. This is the first seL4 generation to grant `init` an
+executable, and it is what made the coupling observable — a cursor puts
+`sysinfo` at slot 2 while `init.rs` compiles against 4, which is exactly the
+positional ambiguity B10 exists to remove.
+
+Not in this slice: the composed sample-plane exit condition (P5.3.4).
 
 ### P5.3.4 — Sample-plane composition on seL4
 

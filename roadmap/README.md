@@ -12,11 +12,11 @@ A milestone is complete only when its exit condition is observed. Compiled code,
 
 | Track | Status | Next open gate |
 | --- | --- | --- |
-| [Backlog](00-backlog.md) | B1–B11 resolved; B12 open (stale component-build path remap, deferred with reason) | Resolve B12 before the next track gate, or record why it stays deferred |
+| [Backlog](00-backlog.md) | B1–B11 and B13 resolved; B12 and B14–B16 open, all deferred with reason | Resolve B12 and B14–B16 before the next track gate, or record why they stay deferred |
 | [Foundations](01-foundations.md) | M1–M4 and M6 complete; M5 mechanisms complete except M5.7 physical Framework evidence | Preserve as regression history; do not block RPi5 work on Framework-only evidence unless storage safety is touched |
 | [Core runtime](02-core-runtime.md) | C7 and C8.1–C8.10 complete; C8.11–C8.15 and C10 are planned | For the demo, prioritize only the C8/C10 slices required by two ROS 2 nodes over minimal DDS/RTPS |
 | [RPi5 ROS 2 demo](09-rpi5-ros2-demo.md) | RP0 contract complete; RP1–RP8 planned | P1 architecture-boundary extraction is complete; begin RP1 target-qualified build/admission |
-| [Architecture portability](07-architecture-portability.md) | P0, P1, P2.1, P5.1, P5.2, P5.3.1, and P5.3.2 complete; P2.2-P2.6 superseded-if-P5-completes; P5.3.3, P5.3.4, P5.4, and P5.5 planned | Begin P5.3.3: construct children from grant-resolved executables on seL4 and answer supervision, so `init` can distribute the channel halves it brokers |
+| [Architecture portability](07-architecture-portability.md) | P0, P1, P2.1, P5.1, P5.2, P5.3.1, P5.3.2, and P5.3.3 complete; P2.2-P2.6 superseded-if-P5-completes; P5.3.4, P5.4, and P5.5 planned | Begin P5.3.4: compose the slices into P5.3's stated exit condition, running the unmodified `sample-lender` and `sample-receiver` under a named seL4 gate |
 | [ROS 2 compatibility](03-ros2-compatibility.md) | Not started | R0 minimal DDS/RTPS topic profile is first; broader external/multi-vendor compatibility follows after the RPi5 demo path |
 | [Platform hardware](04-platform-hardware.md) | Framework track deferred; H1 implementation complete but physical evidence pending | Do not advance Framework daily-driver hardware unless needed for shared mechanisms or evidence preservation |
 | [Foreign workloads](05-foreign-workloads.md) | Deferred | Use only if the chosen ROS 2 node route requires a Linux userspace personality |

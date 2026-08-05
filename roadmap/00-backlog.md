@@ -16,6 +16,198 @@ at the bottom rather than deleting it.
 
 ## Open
 
+### B16 — a supervision termination record is never reclaimed, so a long-lived graph exhausts the table
+
+**Problem:** `slime-root/src/supervision.rs::Terminations` records how each child
+ended and never removes the record, because two parents may hold handles to one
+child and each is owed the answer. `MAX_RECORDS` is `MAX_TASKS` (32), which
+bounds the tasks *alive at once* — but `TaskTable::reclaim` frees its entries
+while `TaskId`'s `next_id` keeps counting, so a graph that spawns and reaps
+repeatedly creates far more than 32 tasks while never holding more than a few.
+
+Past the bound, `record` drops silently and every later
+`supervision_status` on that child answers `WouldBlock` forever: the
+parent-waits-forever failure the module exists to prevent, arriving by the
+module's own bookkeeping rather than by a missed wake. The retired kernel's
+`sched.terminated` is an unbounded `Vec` and has no equivalent limit.
+
+Not reachable by any declared seL4 generation — each creates a handful of tasks
+and exits — so it is a latent bound rather than an observed defect.
+
+**Evidence:** `supervision.rs::MAX_RECORDS` against `task.rs::TaskTable::reclaim`,
+which decrements `len` but not `next_id`. Noted in the P5.3.3 review; see
+`devlog/2026-08-05-p5-3-3-spawn-plane/`.
+
+**Proposed fix:** reclaim a record once every holder of a handle naming that
+child has collected or dropped it, which needs a reference count incremented at
+each `Supervision` capability install and decremented at each collect, drop, and
+table release. Alternatively fail the *spawn* when the record table is full,
+which turns a silent wrong answer into a bounded refusal at the point of
+allocation — the same shape `construct_child` already uses for `MAX_GRAPH_TASKS`.
+
+**Why deferred rather than fixed in P5.3.3:** the counting version touches every
+path that installs or releases a capability, and the refusal version needs a
+gate whose graph spawns past the record table to prove it. Neither is a line;
+both want the multi-child graph P5.3.4 composes.
+
+**Exit condition:** a graph that creates more than `MAX_RECORDS` tasks over its
+lifetime still answers `supervision_status` correctly for every live handle,
+observed under a named seL4 gate, with the five existing seL4 gates passing.
+
+### B15 — a spawn carries at most four grants on seL4, against the oracle's sixty-four
+
+**Problem:** `slime-root`'s spawn reads its grant array out of the caller's
+transfer window through `transfer_window::read_staged`, which refuses anything
+over `MAX_STAGED_BYTES` — `ipc::MAX_MESSAGE_BYTES`, 64 bytes. At 16 bytes per
+record that is **four grants**. The retired kernel's `sys_spawn` reads the array
+straight out of caller memory and is bounded only by
+`kernel/src/capability/mod.rs::MAX_CAPS` (64).
+
+Real x86 callers already exceed four: `init.rs::GENERATION_MANAGER_CAPS` and
+`dango_caps()` are six grants each, and `spawn-service.rs` builds up to five.
+On seL4 those would be refused `ERR_INVALID_ARG` where the oracle succeeds — a
+component that runs on the retired kernel failing to launch its children on the
+cutover, which is the one property P5.4 must be able to claim.
+
+Latent today: every declared seL4 generation spawns with at most one grant, so
+no gate observes it. `MAX_SPAWN_GRANTS` is now derived from the staging bound
+rather than asserted to match the kernel's, so the ceiling is stated in the
+source instead of discovered as a length error.
+
+**Evidence:** `transfer_window::MAX_STAGED_BYTES` = `ipc::MAX_MESSAGE_BYTES` = 64
+against `SPAWN_GRANT_RECORD_BYTES` = 16, and the six-element grant arrays in
+`components/bins/src/bin/init.rs`. Noted in the P5.3.3 review; see
+`devlog/2026-08-05-p5-3-3-spawn-plane/`.
+
+**Proposed fix:** stage the grant array across more than one message-sized frame,
+or give the spawn path its own staged-payload bound independent of the control
+message's. The transfer window is already `MIN_TRANSFER_WINDOW` = 4096 bytes and
+`sel4_transport::spawn` encodes into a `MAX_SPAWN_GRANTS * GRANT_RECORD_BYTES`
+buffer, so the room exists; what is missing is a root-side reader that will
+accept more than one message's worth.
+
+**Why deferred rather than fixed in P5.3.3:** it is a transport change rather
+than a spawn change — `read_staged` and its bound are the channel plane's, and
+widening them touches every operation that stages a payload, each with its own
+gate. P5.3.4 is where a graph with realistic grant lists first runs.
+
+**Exit condition:** a component spawns a child with at least six declared grants
+on seL4 and the child holds all six at the slots its numbering fixes, observed
+under a named seL4 gate, with the five existing seL4 gates passing.
+
+### B14 — `slime-root` ignores the generation's declared spawn budget
+
+**Problem:** the generation declares `spawnBudget` per component, and
+`slime-root/src/main.rs::serve_spawn` never reads it. A component with a
+declared budget of 1 can spawn until `MAX_TASKS` fills. The retired kernel
+checks it first thing in `spawn_from_cap`
+(`kernel/src/task/mod.rs`: `if task.live_children >= task.spawn_budget`), and
+refuses with `ERR_OUT_OF_MEMORY`.
+
+This is the same shape B13 had, and it is why it is recorded rather than left
+in a devlog note: the generation declares a bound and the root does not enforce
+it, so the only thing limiting a component is a global table size no generation
+named. Authority to spawn comes from the executable grant, which *is* checked;
+what goes unchecked is how many times it may be used.
+
+The blast radius is currently small — no seL4 fixture spawns near its declared
+budget, and `boot_contracts` already clamps the decoded value to
+`MAX_SPAWN_BUDGET` — so it is a latent hole rather than an observed defect.
+
+**Evidence:** `Component::spawn_budget` is decoded in
+`boot-contracts/src/generation.rs` and read nowhere in `slime-root/`;
+`contracts/generation/v1/fixtures/sel4-spawn.zti` declares `spawnBudget = 4`
+for `init`, which spawns twice, so no boot currently reaches the bound. Noted
+while implementing spawn in P5.3.3; see
+`devlog/2026-08-05-p5-3-3-spawn-plane/`.
+
+**Proposed fix:** count live children per task in `TaskTable`, decremented when
+a child is reclaimed, and refuse a spawn past the declared budget with
+`ERR_OUT_OF_MEMORY` — matching the retired kernel's code, since
+`init.rs::spawn_optional_storage` already distinguishes that from `ERR_BAD_CAP`.
+The count must be decremented on both death paths, not only on clean exit.
+
+**Why deferred rather than fixed in P5.3.3:** the exit condition that slice
+carries is about *which* executables resolve and how a child's fate is
+observed, not how many children may exist. Adding a counter would be
+straightforward, but the arm that proves it needs a fixture whose component
+spawns past its declared budget, which is a scenario rather than a line —
+P5.3.4 composes the sample plane and is where a multi-child graph already
+exists.
+
+**Exit condition:** a component whose generation declares `spawnBudget = N` is
+refused `ERR_OUT_OF_MEMORY` on its `N+1`th live child and succeeds again once
+one is reclaimed, observed under a named seL4 gate, with the five existing seL4
+gates still passing.
+
+### B12 — the component build's `--remap-path-prefix` names a path that does not exist
+
+**Problem:** `components/.cargo/config.toml` passes
+`--remap-path-prefix /home/iceice666/projects/slime_os=.` for both the
+`x86_64-unknown-none` and `aarch64-unknown-none` targets. The current checkout is
+`/home/iceice666/projects/slime_os-sel4-cutover`. Because the stale literal is a
+*prefix* of the real path, the flag does not simply miss: it rewrites the leading
+portion and leaves `-sel4-cutover/...` behind, so recorded paths are mangled
+rather than normalized, and a checkout at a different directory still produces
+different bytes.
+
+The determinism claim this flag exists to support is therefore weaker than it
+reads. `just generation_check` still passes, because it builds twice from *one*
+checkout — the property it verifies is reproducibility across runs, not across
+source paths. `build-sel4.py` closes the same leak properly for the kernel with
+`-ffile-prefix-map` onto fixed logical roots (`/slime/sel4`, `/slime/build`), and
+P5.1's devlog records two builds from different source paths as byte-identical
+on that path.
+
+**Evidence:** `components/.cargo/config.toml:11` and `:21` against `pwd`. Noted
+while adding the seL4 target in P5.2; see
+`devlog/2026-08-04-p5-2-native-component-images/`.
+
+**Proposed fix:** remap from the repository root as computed at build time rather
+than from a hardcoded literal — the builder already knows it (`ROOT` in
+`scripts/build/build-generation.py`), and the seL4 path passes
+`--remap-path-prefix={ROOT}=.` explicitly for exactly this reason. Deciding
+whether the mapped-to token should match `build-sel4.py`'s `/slime/...`
+convention is part of the fix.
+
+**Why deferred rather than fixed in P5.2:** changing the frozen x86 oracle's
+build inputs alters every component ELF it produces, and therefore the
+authenticated identity of every generation the oracle's gates assert against.
+That is a larger blast radius than the defect, and it is orthogonal to native
+seL4 component images. The seL4 target is unaffected: it inherits none of these
+rustflags (they are keyed by triple) and passes its own.
+
+**Exit condition:** two builds of the same generation from two different
+checkout directories produce byte-identical component images and the same
+generation identity, with `just generation_check`, `just product_boot_check`,
+and `just test` unchanged.
+
+**Deferral re-reviewed 2026-08-05, before opening P5.3.3's gate**, on the
+reasoning recorded below: that slice adds a fifth seL4 generation through the
+same build path, whose rustflags are keyed by triple and match none of the stale
+literal's, so it neither touches the defect nor extends its reach. See
+`devlog/2026-08-05-p5-3-3-spawn-plane/`.
+
+**Deferral re-reviewed 2026-08-04, before opening P5.3.2's gate** on the same
+reasoning: that slice adds a fourth seL4 generation through the same build path,
+so it neither touches the defect nor extends its reach. See
+`devlog/2026-08-04-p5-3-2-loan-plane/`.
+
+**Deferral reviewed 2026-08-04, before opening P5.3.1's gate.** Still deferred,
+on the reason recorded above rather than by omission. B12's own analysis
+establishes that the seL4 target is unaffected: `components/.cargo/config.toml`
+keys its rustflags by triple, the seL4 component build matches none of them
+(it uses a JSON target specification), and `build-generation.py` passes
+`--remap-path-prefix={ROOT}=.` explicitly on that path for exactly this reason.
+P5.3.1 adds a second seL4 generation built through that same path, so it neither
+touches the defect nor extends its reach. Fixing it still means rebuilding every
+frozen x86 component image and re-authenticating every generation identity the
+x86 gates assert against — a blast radius larger than the defect, and orthogonal
+to the seL4 cutover. It should be scheduled against the x86 oracle deliberately,
+not folded into a portability slice.
+
+## Resolved
+
 ### B13 — `slime-root` admits a shared-buffer allocation without resolving a factory capability
 
 **Problem:** `slime-root/src/main.rs::serve_buffer_create` ignores the factory
@@ -75,67 +267,36 @@ grant is refused `ERR_BAD_CAP` by `shared_buffer_create`, observed under a named
 seL4 gate, with `just sel4_component_graph_check`, `just sel4_channel_check`, and
 `just sel4_loan_check` still passing.
 
-### B12 — the component build's `--remap-path-prefix` names a path that does not exist
+**Resolved 2026-08-05** by P5.3.3; see
+[`devlog/2026-08-05-p5-3-3-spawn-plane/`](../devlog/2026-08-05-p5-3-3-spawn-plane/index.md).
 
-**Problem:** `components/.cargo/config.toml` passes
-`--remap-path-prefix /home/iceice666/projects/slime_os=.` for both the
-`x86_64-unknown-none` and `aarch64-unknown-none` targets. The current checkout is
-`/home/iceice666/projects/slime_os-sel4-cutover`. Because the stale literal is a
-*prefix* of the real path, the flag does not simply miss: it rewrites the leading
-portion and leaves `-sel4-cutover/...` behind, so recorded paths are mangled
-rather than normalized, and a checkout at a different directory still produces
-different bytes.
+`slime-root/src/main.rs`'s `SharedBufferCreate` arm now resolves the factory
+slot the caller names, requiring `RIGHT_BUFFER_CREATE`, before admitting
+anything — and reads the `writable` flag out of the same word while it is being
+decoded, so a region created read-only no longer carries write rights. The
+generation's `bufferCreate` grants are materialized into the holding
+components' capability tables beside the channel ends: at the boot layout's
+role slot for the bootstrap component, and above the executables for every
+other, which is the same split `channel::materialize` already made.
 
-The determinism claim this flag exists to support is therefore weaker than it
-reads. `just generation_check` still passes, because it builds twice from *one*
-checkout — the property it verifies is reproducibility across runs, not across
-source paths. `build-sel4.py` closes the same leak properly for the kernel with
-`-ffile-prefix-map` onto fixed logical roots (`/slime/sel4`, `/slime/build`), and
-P5.1's devlog records two builds from different source paths as byte-identical
-on that path.
+The deferral reason was verbatim "the same distribution problem P5.3.3 solves",
+and that is this slice, so it was closed here rather than deferred again.
 
-**Evidence:** `components/.cargo/config.toml:11` and `:21` against `pwd`. Noted
-while adding the seL4 target in P5.2; see
-`devlog/2026-08-04-p5-2-native-component-images/`.
+**Observed exit condition.** `just sel4_loan_check` asserts
+`SLIME_GRAPH buffer create refused task=N class=ungranted` before any ceiling is
+grazed, so the refusal is a capability answer rather than a quota answer wearing
+another name. Two arms in one marker pair: an empty slot and a slot holding real
+authority of another kind are refused identically, which is what stops a
+component probing its table by watching which error comes back.
+`just sel4_component_graph_check`, `just sel4_channel_check`,
+`just sel4_loan_check`, and `just sel4_spawn_check` all pass.
 
-**Proposed fix:** remap from the repository root as computed at build time rather
-than from a hardcoded literal — the builder already knows it (`ROOT` in
-`scripts/build/build-generation.py`), and the seL4 path passes
-`--remap-path-prefix={ROOT}=.` explicitly for exactly this reason. Deciding
-whether the mapped-to token should match `build-sel4.py`'s `/slime/...`
-convention is part of the fix.
-
-**Why deferred rather than fixed in P5.2:** changing the frozen x86 oracle's
-build inputs alters every component ELF it produces, and therefore the
-authenticated identity of every generation the oracle's gates assert against.
-That is a larger blast radius than the defect, and it is orthogonal to native
-seL4 component images. The seL4 target is unaffected: it inherits none of these
-rustflags (they are keyed by triple) and passes its own.
-
-**Exit condition:** two builds of the same generation from two different
-checkout directories produce byte-identical component images and the same
-generation identity, with `just generation_check`, `just product_boot_check`,
-and `just test` unchanged.
-
-**Deferral re-reviewed 2026-08-04, before opening P5.3.2's gate** on the same
-reasoning: that slice adds a fourth seL4 generation through the same build path,
-so it neither touches the defect nor extends its reach. See
-`devlog/2026-08-04-p5-3-2-loan-plane/`.
-
-**Deferral reviewed 2026-08-04, before opening P5.3.1's gate.** Still deferred,
-on the reason recorded above rather than by omission. B12's own analysis
-establishes that the seL4 target is unaffected: `components/.cargo/config.toml`
-keys its rustflags by triple, the seL4 component build matches none of them
-(it uses a JSON target specification), and `build-generation.py` passes
-`--remap-path-prefix={ROOT}=.` explicitly on that path for exactly this reason.
-P5.3.1 adds a second seL4 generation built through that same path, so it neither
-touches the defect nor extends its reach. Fixing it still means rebuilding every
-frozen x86 component image and re-authenticating every generation identity the
-x86 gates assert against — a blast radius larger than the defect, and orthogonal
-to the seL4 cutover. It should be scheduled against the x86 oracle deliberately,
-not folded into a portability slice.
-
-## Resolved
+**Fault injection is what made this real.** Removing the factory check left
+*every* gate passing: no fixture had a component that held a budget and tried to
+allocate without a grant, so the fix was uncovered by construction. The loan
+fixture's `init` now names one deliberately. Recorded because a gate that passes
+against an injected build is evidence of nothing, and this one nearly shipped
+that way.
 
 ### B11 — test scaffolding is declared in the product boot generation
 
