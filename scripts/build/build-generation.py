@@ -204,12 +204,12 @@ SEL4_MANIFESTS = {
     / "v1"
     / "fixtures"
     / "sel4-sample.zti",
-    "sel4-fabric": ROOT
+    "sel4-stream": ROOT
     / "contracts"
     / "generation"
     / "v1"
     / "fixtures"
-    / "sel4-fabric.zti",
+    / "sel4-stream.zti",
 }
 COMPONENTS_TARGET_DIR = Path(
     os.environ.get("CARGO_TARGET_DIR") or ROOT / "target" / "components"
@@ -911,8 +911,8 @@ def validate_route_worker_names() -> None:
     either useless or wrong:
 
     * against the graph being built, a manifest declaring a subset of the
-      routes (P5.5.1's seL4 graph declares `telemetry` alone) fails on a tuple
-      that has no typo in it;
+      routes (P5.5.2's seL4 graph declares the two stream routes alone)
+      fails on a tuple that has no typo in it;
     * without the check at all, a genuine misspelling in the tuple silently
       drops a route from its worker, and the partition assertion below then
       reports the route as uncovered rather than the worker as misspelled.
@@ -1068,7 +1068,7 @@ def resolve_fabric_profile(manifest: dict, interfaces: list, profile_name: str) 
         # full route catalogue by `validate_route_worker_names` above, so what
         # is filtered here is genuinely "not in this graph" rather than
         # "misspelled" — which is the distinction the two checks exist to keep
-        # apart. P5.5.1's seL4 graph declares `telemetry` alone.
+        # apart. P5.5.2's seL4 graph declares the two stream routes alone.
         worker_routes = tuple(route for route in worker_routes if route in declared_routes)
         if not worker_routes:
             continue
@@ -1259,8 +1259,9 @@ def render_fabric_profile_rust(resolved: ResolvedFabricProfile) -> str:
         """The tightest deadline any request/response participant declares.
 
         Zero when the graph declares no such route at all. A stream-only graph
-        — P5.5.1's seL4 fabric — has no `parameters` or `navigation` route, and
-        the brokers those constants belong to are not in it. The value is only
+        — P5.5.2's seL4 stream plane — has no `parameters` or `navigation`
+        route, and the brokers those constants belong to are not in it. The
+        value is only
         read by `call_broker` and `operation_broker`, so a graph without them
         emits a constant nothing compiles against; emitting *no* constant would
         instead break every graph that has them.
@@ -1839,6 +1840,11 @@ def build_rust_components(
         environment["SLIME_SEL4_SAMPLE_CHECK"] = "1"
     else:
         environment.pop("SLIME_SEL4_SAMPLE_CHECK", None)
+    # P5.5.2, likewise.
+    if environment.get("SLIME_SEL4_STREAM_CHECK") == "1":
+        environment["SLIME_SEL4_STREAM_CHECK"] = "1"
+    else:
+        environment.pop("SLIME_SEL4_STREAM_CHECK", None)
     if recovery:
         environment["SLIME_RECOVERY_IMAGE"] = "1"
     if environment.get("SLIME_GENERATION_CMD_CHECK") == "1" and candidate_identity is not None:
@@ -2424,10 +2430,10 @@ def build_sel4_generation(output: Path, manifest: dict, target_profile: TargetPr
     * there is no recovery generation, because recovery drives block storage
       through a plane this cutover does not mediate.
 
-    A fabric graph is *conditional* rather than absent (P5.5.1). Four of the
+    A fabric graph is *conditional* rather than absent (P5.5.2). Four of the
     five seL4 manifests declare none, and for those the C8 resolution has
-    nothing to resolve — that was true of every seL4 manifest until the typed
-    fabric arrived. `sel4-fabric.zti` declares one, because `fabric-service`
+    nothing to resolve — that was true of every seL4 manifest until the stream
+    plane arrived. `sel4-stream.zti` declares one, because `fabric-service`
     reads its route table, participant list, and control-slot base out of the
     generated profile at compile time: a graph it cannot resolve is a component
     that does not build, not one that runs without routes.
@@ -2437,7 +2443,7 @@ def build_sel4_generation(output: Path, manifest: dict, target_profile: TargetPr
     same digest-authenticated object closure. The generation this writes is a
     generation in exactly the sense every other one is.
     """
-    # P5.5.1: a manifest that declares a fabric graph resolves it through the
+    # P5.5.2: a manifest that declares a fabric graph resolves it through the
     # same function every x86 profile uses, so a seL4 route identity, QoS row,
     # and control-slot base are folded from the same schemas and the same
     # validation rather than from a second implementation. A manifest that
@@ -2464,7 +2470,7 @@ def build_sel4_generation(output: Path, manifest: dict, target_profile: TargetPr
         ("sel4-loan", "SLIME_SEL4_LOAN_CHECK"),
         ("sel4-spawn", "SLIME_SEL4_SPAWN_CHECK"),
         ("sel4-sample", "SLIME_SEL4_SAMPLE_CHECK"),
-        ("sel4-fabric", "SLIME_SEL4_FABRIC_CHECK"),
+        ("sel4-stream", "SLIME_SEL4_STREAM_CHECK"),
     ):
         if selected == manifest_name:
             os.environ[flag] = "1"

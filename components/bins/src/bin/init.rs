@@ -234,10 +234,10 @@ fn main() {
         slime_rt::debug_write(b"[init] sample plane complete\n");
         slime_rt::exit(0);
     }
-    // P5.5.1, on the same rule again.
-    if option_env!("SLIME_SEL4_FABRIC_CHECK") == Some("1") {
-        drive_fabric_plane();
-        slime_rt::debug_write(b"[init] fabric plane complete\n");
+    // P5.5.2, on the same rule again.
+    if option_env!("SLIME_SEL4_STREAM_CHECK") == Some("1") {
+        drive_stream_plane();
+        slime_rt::debug_write(b"[init] fabric stream complete\n");
         slime_rt::exit(0);
     }
     slime_rt::debug_write(b"[init] launching component graph\n");
@@ -1357,25 +1357,36 @@ const CONSOLE_SEND_SLOT: u32 = DANGO_OUTPUT_SLOT;
 /// window bind and the receive itself — while still bounding the wait.
 const PEER_PARK_YIELDS: usize = 64;
 
-/// Participants the P5.5.1 fabric plane launches: one publisher, one
-/// subscriber, and the undeclared component whose denial the milestone names.
+/// Participants the P5.5.2 stream plane launches: two publishers, two
+/// subscribers, and the undeclared component whose denial C8.3 names.
 ///
-/// Three, which is the smallest graph that can carry P5.5's exit condition: a
-/// route needs both directions to carry a sample, and "an undeclared
-/// participant is denied" needs a participant the graph declares no edge for.
-const FABRIC_PLANE_CLIENTS: usize = 3;
+/// Five, which is what the *full* C8.4 stream plane needs rather than the
+/// smallest graph that carries one sample. The second publisher originates the
+/// `>MAX_INLINE_BYTES` sample and spans both routes; the second subscriber
+/// stalls, so KEEP_LAST eviction has an observable cost; and the two routes
+/// together are what makes the fan-in many-to-many.
+const STREAM_PLANE_CLIENTS: usize = 5;
 
-/// Their executable slots, in the order init spawns them and therefore in the
-/// order their control endpoints are numbered. It must match
-/// `FABRIC_STREAM_CONTROL_GRANTS` in `scripts/build/build-generation.py`, which
-/// is what fixes the fabric's own `FIRST_CONTROL_SLOT + index` layout: the
-/// service authenticates a caller by *which* control slot its request arrived
-/// on, so a disagreement here would hand one component another's identity.
-const FABRIC_PLANE_EXECUTABLES: [u32; FABRIC_PLANE_CLIENTS] = [
-    FABRIC_PUBLISHER_SLOT,
-    FABRIC_SUBSCRIBER_SLOT,
-    FABRIC_INTRUDER_SLOT,
-];
+/// Which control pair each participant is handed, by index into the arrays
+/// `drive_stream_plane` mints.
+///
+/// This is **not** the spawn order, and the two must not be conflated. The
+/// index fixes the *control-slot* number the fabric addresses a component by
+/// (`FIRST_CONTROL_SLOT + index`), so it must match `FABRIC_STREAM_CONTROL_GRANTS`
+/// in `scripts/build/build-generation.py` — the service authenticates a caller
+/// by which control slot its request arrived on, and a disagreement here would
+/// hand one component another's identity. The spawn order is separately
+/// constrained by the supervision handles the fabric needs, and is stated at
+/// `drive_stream_plane`.
+///
+/// Named rather than written as literals at each spawn, because a bare `1` and
+/// a bare `4` at two distant call sites is exactly how the two orderings would
+/// drift into each other.
+const STREAM_PUBLISHER: usize = 0;
+const STREAM_SUBSCRIBER: usize = 1;
+const STREAM_INTRUDER: usize = 2;
+const STREAM_PUBLISHER_B: usize = 3;
+const STREAM_SUBSCRIBER_B: usize = 4;
 
 /// Grants the spawn plane's widest spawn carries (B15).
 ///
@@ -1500,100 +1511,169 @@ fn fail_sample(reason: &[u8]) -> ! {
     slime_rt::exit(1)
 }
 
-/// Drive the P5.5.1 typed-fabric plane: one declared route carrying one sample
-/// from a publisher to a subscriber, with the route endpoints provisioned by
-/// the fabric rather than declared as edges.
+/// Drive the P5.5.2 stream plane: the full C8.4 graph the x86 oracle builds —
+/// two publishers, two subscribers, two routes, the `>MAX_INLINE_BYTES`
+/// descriptor and loan path, and KEEP_LAST eviction under a stalled subscriber.
 ///
-/// Only reachable under `SLIME_SEL4_FABRIC_CHECK`, whose generation is
-/// `contracts/generation/v1/fixtures/sel4-fabric.zti`; see the `.md` beside it.
+/// Only reachable under `SLIME_SEL4_STREAM_CHECK`, whose generation is
+/// `contracts/generation/v1/fixtures/sel4-stream.zti`; see the `.md` beside it.
 ///
-/// This is `launch_fabric_graph`'s shape, narrowed to the four properties
-/// P5.5's exit condition names. Init's authority here is exactly what it is on
-/// x86: it mints one control channel per participant and holds **no route
-/// capability at all**. The binding between a control endpoint and a component
-/// identity is established here, at spawn, and it is what the fabric
-/// authenticates against — a client cannot forge, share, or re-derive one, so
-/// "which component is asking" is a capability fact rather than a claim in a
-/// message.
+/// This is `launch_fabric_graph`'s shape and its spawn order, on the same
+/// authority argument. Init holds **no route capability at all**: it mints one
+/// control channel per participant, and the binding between a control endpoint
+/// and a component identity is established here, at spawn. That is what the
+/// fabric authenticates against — a client cannot forge, share, or re-derive
+/// one, so "which component is asking" is a capability fact rather than a claim
+/// in a message.
 ///
-/// **Spawn order is load-bearing**, as it is on x86: the fabric starts before
-/// any participant, so no request can arrive before the service can answer it.
+/// **Spawn order is load-bearing**, exactly as it is on x86. Both subscribers
+/// start before the fabric, because a downstream loan names its receiver
+/// through a `RIGHT_SUPERVISE` capability rather than an ambient task id, so
+/// those handles must exist before the service does. The publishers follow the
+/// fabric, so no sample arrives before there is a broker for it.
 ///
 /// `fabric-intruder` is spawned holding a real control endpoint on purpose.
 /// The denial under test is not "no channel" but "no declared edge".
-fn drive_fabric_plane() {
-    // One control pair per participant. Init keeps the service half of each to
-    // hand the fabric, and gives each client its own half — so no two clients
-    // share an identity and init never holds a route.
-    let mut service_sides = [0u32; FABRIC_PLANE_CLIENTS];
-    let mut client_sides = [0u32; FABRIC_PLANE_CLIENTS];
-    for index in 0..FABRIC_PLANE_CLIENTS {
+fn drive_stream_plane() {
+    // One control pair per participant, all minted before anything is spawned.
+    // Init keeps the service half of each to hand the fabric and gives each
+    // client its own half, so no two clients share an identity.
+    //
+    // Minting up front is what lets the *spawn* order differ from the *slot*
+    // order. The fabric numbers its controls `FIRST_CONTROL_SLOT + index` in
+    // `FABRIC_STREAM_CONTROL_GRANTS`'s order, while the graph requires the
+    // subscribers to be constructed first; both hold because the pairs exist
+    // before either ordering is applied.
+    let mut service_sides = [0u32; STREAM_PLANE_CLIENTS];
+    let mut client_sides = [0u32; STREAM_PLANE_CLIENTS];
+    for index in 0..STREAM_PLANE_CLIENTS {
         let (service_side, client_side) = slime_rt::endpoint_create(ENDPOINT_FACTORY_SLOT)
-            .unwrap_or_else(|_| fail_fabric(b"control endpoint"));
+            .unwrap_or_else(|_| fail_stream(b"control endpoint"));
         service_sides[index] = service_side;
         client_sides[index] = client_side;
     }
+    // B17's subject, minted here for the same reason: it must be granted at
+    // spawn, and the arm that uses it runs in the child. See the grant below.
+    let (probe_retained, probe_narrowed) = slime_rt::endpoint_create(ENDPOINT_FACTORY_SLOT)
+        .unwrap_or_else(|_| fail_stream(b"transfer probe endpoint"));
     slime_rt::debug_write(b"[init] fabric control channels minted\n");
+
+    // Both subscribers first: the fabric is granted a supervision handle naming
+    // each, and a handle cannot name a task that does not exist.
+    let subscriber = slime_rt::spawn(
+        FABRIC_SUBSCRIBER_SLOT,
+        &[grant(
+            client_sides[STREAM_SUBSCRIBER],
+            RIGHT_SEND | RIGHT_RECV,
+        )],
+    )
+    .unwrap_or_else(|_| fail_stream(b"spawn subscriber"));
+    let subscriber_b = slime_rt::spawn(
+        FABRIC_SUBSCRIBER_B_SLOT,
+        &[grant(
+            client_sides[STREAM_SUBSCRIBER_B],
+            RIGHT_SEND | RIGHT_RECV,
+        )],
+    )
+    .unwrap_or_else(|_| fail_stream(b"spawn subscriber-b"));
 
     // The fabric's own authority, in exactly the order and shape
     // `launch_fabric_graph` gives it on x86: an endpoint factory to mint route
-    // halves with, a shared-buffer factory, and one control endpoint per
-    // client. Both factories are *narrowing copies* of init's own — a factory
-    // is not an endpoint, so granting one does not move it — which is why init
-    // can hand the same authority on and keep it.
+    // halves with, a shared-buffer factory for the one copy each large sample
+    // makes, one control endpoint per client, and one supervision handle per
+    // subscriber. Both factories are *narrowing copies* of init's own — a
+    // factory is not an endpoint, so granting one does not move it — which is
+    // why init can hand the same authority on and keep it.
     //
     // Grant order *is* the fabric's slot layout: `FACTORY_SLOT = 0`,
-    // `BUFFER_FACTORY_SLOT = 1`, and the controls from
-    // `FABRIC_FIRST_CONTROL_SLOT`, all read from the generated profile. The
-    // buffer factory is granted even though this graph brokers only inline
-    // samples, because the profile numbers the controls after it and a hole
-    // would shift every one of them.
+    // `BUFFER_FACTORY_SLOT = 1`, the controls from `FABRIC_FIRST_CONTROL_SLOT`,
+    // and the supervision handles after them — all read from the generated
+    // profile, so a hole here would shift every slot the service addresses.
     let mut grants =
-        [grant(ENDPOINT_FACTORY_SLOT, RIGHT_ENDPOINT_CREATE); 2 + FABRIC_PLANE_CLIENTS];
+        [grant(ENDPOINT_FACTORY_SLOT, RIGHT_ENDPOINT_CREATE); 4 + STREAM_PLANE_CLIENTS];
     grants[1] = grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE);
     for (index, service_side) in service_sides.iter().enumerate() {
         grants[2 + index] = grant(*service_side, RIGHT_SEND | RIGHT_RECV);
     }
+    grants[2 + STREAM_PLANE_CLIENTS] = grant(subscriber.supervision_slot, RIGHT_SUPERVISE);
+    grants[3 + STREAM_PLANE_CLIENTS] = grant(subscriber_b.supervision_slot, RIGHT_SUPERVISE);
     let fabric = slime_rt::spawn(FABRIC_SERVICE_SLOT, &grants)
-        .unwrap_or_else(|_| fail_fabric(b"spawn fabric"));
+        .unwrap_or_else(|_| fail_stream(b"spawn fabric"));
     slime_rt::debug_write(b"[init] fabric service spawned\n");
 
-    // Each client gets its own control half and nothing else. A participant
-    // starts with no factory, no route, and no peer — the whole reason it must
-    // ask the fabric for its edge.
-    let mut clients = [None; FABRIC_PLANE_CLIENTS];
-    for (index, executable) in FABRIC_PLANE_EXECUTABLES.iter().enumerate() {
-        clients[index] = Some(
-            slime_rt::spawn(
-                *executable,
-                &[grant(client_sides[index], RIGHT_SEND | RIGHT_RECV)],
-            )
-            .unwrap_or_else(|_| fail_fabric(b"spawn participant")),
-        );
-    }
+    // B17: the transfer contract's subset test needs a capability holding
+    // `RIGHT_TRANSFER` that is *strictly narrower than its kind admits*, and a
+    // spawn grant is what produces one — the requested mask is installed
+    // verbatim, so this end lands as send+transfer where `Endpoint` admits
+    // send+recv+transfer.
+    //
+    // No other capability in this graph has that shape. A provisioned route
+    // role carries no transfer bit at all, a factory carries its one operation
+    // right, and an endpoint straight from `endpoint_create` holds exactly what
+    // its kind admits — so a widening mask on any of them is refused by an
+    // earlier rule and never reaches the subset test.
+    //
+    // Granted to the publisher because that component already owns this graph's
+    // other two transfer-rule denials, so all three sit together and each says
+    // which rule it proves. The end belongs to no route and carries no traffic;
+    // the other half stays with init and is never used, since what is under
+    // test is the refusal rather than a delivery.
+    let publisher = slime_rt::spawn(
+        FABRIC_PUBLISHER_SLOT,
+        &[
+            grant(client_sides[STREAM_PUBLISHER], RIGHT_SEND | RIGHT_RECV),
+            grant(probe_narrowed, RIGHT_SEND | RIGHT_TRANSFER),
+        ],
+    )
+    .unwrap_or_else(|_| fail_stream(b"spawn publisher"));
+    let _ = probe_retained;
+    // `fabric-publisher-b` originates the `>MAX_INLINE_BYTES` sample, so it
+    // needs a buffer factory of its own and a supervision handle naming the
+    // fabric: its upstream loan names the fabric as receiver by capability.
+    // Its slot order is the component's own `CONTROL_SLOT`/`FACTORY_SLOT`/
+    // `FABRIC_SLOT`.
+    let publisher_b = slime_rt::spawn(
+        FABRIC_PUBLISHER_B_SLOT,
+        &[
+            grant(client_sides[STREAM_PUBLISHER_B], RIGHT_SEND | RIGHT_RECV),
+            grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
+            grant(fabric.supervision_slot, RIGHT_SUPERVISE),
+        ],
+    )
+    .unwrap_or_else(|_| fail_stream(b"spawn publisher-b"));
+    let intruder = slime_rt::spawn(
+        FABRIC_INTRUDER_SLOT,
+        &[grant(
+            client_sides[STREAM_INTRUDER],
+            RIGHT_SEND | RIGHT_RECV,
+        )],
+    )
+    .unwrap_or_else(|_| fail_stream(b"spawn intruder"));
     slime_rt::debug_write(b"[init] fabric participants spawned\n");
 
     // Init waits on every participant and on the fabric itself. Waiting rather
     // than spinning is also what makes a fabric that dies wake init instead of
     // going unnoticed.
-    for handle in clients
-        .iter()
-        .flatten()
-        .map(|spawned| spawned.supervision_slot)
-        .chain(core::iter::once(fabric.supervision_slot))
-    {
+    for handle in [
+        publisher.supervision_slot,
+        publisher_b.supervision_slot,
+        intruder.supervision_slot,
+        subscriber.supervision_slot,
+        subscriber_b.supervision_slot,
+        fabric.supervision_slot,
+    ] {
         loop {
             match slime_rt::supervision_status(handle) {
                 Ok(None) => slime_rt::wait(&[slime_rt::WaitSource::Supervision(handle)]),
                 Ok(Some(slime_rt::Termination::Exit(0))) => break,
-                _ => fail_fabric(b"a fabric component did not exit cleanly"),
+                _ => fail_stream(b"a fabric component did not exit cleanly"),
             }
         }
     }
 }
 
-fn fail_fabric(reason: &[u8]) -> ! {
-    slime_rt::debug_write(b"[init] fabric plane fail: ");
+fn fail_stream(reason: &[u8]) -> ! {
+    slime_rt::debug_write(b"[init] stream plane fail: ");
     slime_rt::debug_write(reason);
     slime_rt::debug_write(b"\n");
     slime_rt::exit(1)

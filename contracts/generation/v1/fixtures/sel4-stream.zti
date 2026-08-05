@@ -7,6 +7,7 @@
 
   interfaceSchemas = [
     "contracts/interface-schema/v1/interfaces/telemetry-stream.zti";
+    "contracts/interface-schema/v1/interfaces/diagnostics-stream.zti";
   ];
 
   objects = [
@@ -14,7 +15,9 @@
     { id = "sha256:init"; kind = "bootstrap"; size = 65536; };
     { id = "sha256:fabric-service"; kind = "component"; size = 131072; };
     { id = "sha256:fabric-publisher"; kind = "component"; size = 65536; };
+    { id = "sha256:fabric-publisher-b"; kind = "component"; size = 65536; };
     { id = "sha256:fabric-subscriber"; kind = "component"; size = 65536; };
+    { id = "sha256:fabric-subscriber-b"; kind = "component"; size = 65536; };
     { id = "sha256:fabric-intruder"; kind = "component"; size = 65536; };
     { id = "shared-buffer-budget"; kind = "resource"; size = 4096; };
     { id = "fabric-graph"; kind = "resource"; size = 4096; };
@@ -22,7 +25,10 @@
   ];
 
   sharedBufferBudget = [
-    { holder = "fabric-service"; bytePages = 4; bufferCount = 2; mappingCount = 2; loanCount = 2; };
+    { holder = "fabric-service"; bytePages = 28; bufferCount = 14; mappingCount = 14; loanCount = 14; };
+    { holder = "fabric-publisher-b"; bytePages = 4; bufferCount = 1; mappingCount = 2; loanCount = 1; };
+    { holder = "fabric-subscriber"; bytePages = 4; bufferCount = 0; mappingCount = 4; loanCount = 0; };
+    { holder = "fabric-subscriber-b"; bytePages = 4; bufferCount = 0; mappingCount = 4; loanCount = 0; };
   ];
 
   components = [
@@ -31,7 +37,7 @@
       object = "sha256:init";
       role = "init";
       dependencies = [];
-      spawnBudget = 4;
+      spawnBudget = 6;
       commandProfile = [];
     };
     {
@@ -51,8 +57,24 @@
       commandProfile = [];
     };
     {
+      name = "fabric-publisher-b";
+      object = "sha256:fabric-publisher-b";
+      role = "service";
+      dependencies = ["init";];
+      spawnBudget = 0;
+      commandProfile = [];
+    };
+    {
       name = "fabric-subscriber";
       object = "sha256:fabric-subscriber";
+      role = "service";
+      dependencies = ["init";];
+      spawnBudget = 0;
+      commandProfile = [];
+    };
+    {
+      name = "fabric-subscriber-b";
+      object = "sha256:fabric-subscriber-b";
       role = "service";
       dependencies = ["init";];
       spawnBudget = 0;
@@ -84,9 +106,23 @@
       transferable = false;
     };
     {
+      name = "init-fabric-publisher-b";
+      source = "init";
+      target = "fabric-publisher-b";
+      rights = ["exec"; "spawn";];
+      transferable = false;
+    };
+    {
       name = "init-fabric-subscriber";
       source = "init";
       target = "fabric-subscriber";
+      rights = ["exec"; "spawn";];
+      transferable = false;
+    };
+    {
+      name = "init-fabric-subscriber-b";
+      source = "init";
+      target = "fabric-subscriber-b";
       rights = ["exec"; "spawn";];
       transferable = false;
     };
@@ -132,30 +168,44 @@
       rights = ["send"; "recv";];
       transferable = false;
     };
+    {
+      name = "fabric-publisher-b-control";
+      source = "fabric-publisher-b";
+      target = "fabric-service";
+      rights = ["send"; "recv";];
+      transferable = false;
+    };
+    {
+      name = "fabric-subscriber-b-control";
+      source = "fabric-subscriber-b";
+      target = "fabric-service";
+      rights = ["send"; "recv";];
+      transferable = false;
+    };
   ];
 
   fabricGraph = {
     fabricComponent = "fabric-service";
     limits = {
-      routes = 1;
+      routes = 2;
       ingressSources = 9;
-      publishers = 1;
-      subscribers = 1;
-      clients = 3;
+      publishers = 3;
+      subscribers = 4;
+      clients = 5;
       servers = 0;
-      sampleBytes = 4096;
+      sampleBytes = 8192;
       queueDepth = 8;
       historyDepth = 8;
       eventDepth = 2;
-      retainedSamples = 0;
+      retainedSamples = 2;
       retries = 0;
       inFlightCalls = 0;
       inFlightOperations = 0;
-      bufferPages = 4;
-      buffers = 2;
-      mappings = 2;
-      loans = 2;
-      capabilitySlots = 16;
+      bufferPages = 28;
+      buffers = 14;
+      mappings = 14;
+      loans = 14;
+      capabilitySlots = 32;
     };
     routes = [
       {
@@ -168,18 +218,18 @@
             visibility = "graph";
             interposition = [];
             reliability = "bestEffort";
-            durability = "volatile";
+            durability = "retained";
             liveliness = "automatic";
             historyDepth = 4;
-            retainedDepth = 0;
+            retainedDepth = 2;
             deadlineNs = 0;
-            lifespanNs = 0;
+            lifespanNs = 300;
             leaseNs = 0;
           };
           {
             component = "fabric-subscriber";
             direction = "subscribe";
-            visibility = "graph";
+            visibility = "private";
             interposition = [];
             reliability = "bestEffort";
             durability = "volatile";
@@ -189,6 +239,68 @@
             deadlineNs = 0;
             lifespanNs = 0;
             leaseNs = 0;
+          };
+          {
+            component = "fabric-publisher-b";
+            direction = "publish";
+            visibility = "graph";
+            interposition = [];
+            reliability = "reliable";
+            durability = "retained";
+            liveliness = "manual";
+            historyDepth = 4;
+            retainedDepth = 2;
+            deadlineNs = 100;
+            lifespanNs = 300;
+            leaseNs = 200;
+          };
+          {
+            component = "fabric-subscriber-b";
+            direction = "subscribe";
+            visibility = "graph";
+            interposition = [];
+            reliability = "bestEffort";
+            durability = "volatile";
+            liveliness = "automatic";
+            historyDepth = 4;
+            retainedDepth = 0;
+            deadlineNs = 0;
+            lifespanNs = 0;
+            leaseNs = 0;
+          };
+        ];
+      };
+      {
+        name = "diagnostics";
+        interface = "DiagnosticsStream";
+        participants = [
+          {
+            component = "fabric-publisher-b";
+            direction = "publish";
+            visibility = "graph";
+            interposition = [];
+            reliability = "reliable";
+            durability = "volatile";
+            liveliness = "manual";
+            historyDepth = 2;
+            retainedDepth = 0;
+            deadlineNs = 100;
+            lifespanNs = 0;
+            leaseNs = 200;
+          };
+          {
+            component = "fabric-subscriber-b";
+            direction = "subscribe";
+            visibility = "graph";
+            interposition = [];
+            reliability = "reliable";
+            durability = "volatile";
+            liveliness = "manual";
+            historyDepth = 2;
+            retainedDepth = 0;
+            deadlineNs = 100;
+            lifespanNs = 0;
+            leaseNs = 200;
           };
         ];
       };
