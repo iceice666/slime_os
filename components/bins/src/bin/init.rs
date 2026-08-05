@@ -234,6 +234,12 @@ fn main() {
         slime_rt::debug_write(b"[init] sample plane complete\n");
         slime_rt::exit(0);
     }
+    // P5.5.1, on the same rule again.
+    if option_env!("SLIME_SEL4_FABRIC_CHECK") == Some("1") {
+        drive_fabric_plane();
+        slime_rt::debug_write(b"[init] fabric plane complete\n");
+        slime_rt::exit(0);
+    }
     slime_rt::debug_write(b"[init] launching component graph\n");
     if option_env!("SLIME_TRANSFER_RECEIVER") == Some("1") {
         if slime_rt::generation_receive(TRANSFER_RECEIVER_SLOT, TRANSFER_SOURCE_SLOT) == 0 {
@@ -1351,6 +1357,36 @@ const CONSOLE_SEND_SLOT: u32 = DANGO_OUTPUT_SLOT;
 /// window bind and the receive itself — while still bounding the wait.
 const PEER_PARK_YIELDS: usize = 64;
 
+/// Participants the P5.5.1 fabric plane launches: one publisher, one
+/// subscriber, and the undeclared component whose denial the milestone names.
+///
+/// Three, which is the smallest graph that can carry P5.5's exit condition: a
+/// route needs both directions to carry a sample, and "an undeclared
+/// participant is denied" needs a participant the graph declares no edge for.
+const FABRIC_PLANE_CLIENTS: usize = 3;
+
+/// Their executable slots, in the order init spawns them and therefore in the
+/// order their control endpoints are numbered. It must match
+/// `FABRIC_STREAM_CONTROL_GRANTS` in `scripts/build/build-generation.py`, which
+/// is what fixes the fabric's own `FIRST_CONTROL_SLOT + index` layout: the
+/// service authenticates a caller by *which* control slot its request arrived
+/// on, so a disagreement here would hand one component another's identity.
+const FABRIC_PLANE_EXECUTABLES: [u32; FABRIC_PLANE_CLIENTS] = [
+    FABRIC_PUBLISHER_SLOT,
+    FABRIC_SUBSCRIBER_SLOT,
+    FABRIC_INTRUDER_SLOT,
+];
+
+/// Grants the spawn plane's widest spawn carries (B15).
+///
+/// Six, which is B15's own exit-condition number and the size of this file's
+/// largest real grant list — `GENERATION_MANAGER_CAPS` and `dango_caps()` are
+/// both six. It is over the four records `slime-root` admitted before P5.5.1,
+/// which is the whole point: at `GRANT_RECORD_BYTES` each, six records are 96
+/// bytes against a 64-byte message bound, so this spawn is refused outright by
+/// a root that reads the grant array with the message reader.
+const WIDE_SPAWN_GRANTS: usize = 6;
+
 /// The channel to `sample-receiver`, which is also how the loan names its
 /// receiver.
 ///
@@ -1464,6 +1500,105 @@ fn fail_sample(reason: &[u8]) -> ! {
     slime_rt::exit(1)
 }
 
+/// Drive the P5.5.1 typed-fabric plane: one declared route carrying one sample
+/// from a publisher to a subscriber, with the route endpoints provisioned by
+/// the fabric rather than declared as edges.
+///
+/// Only reachable under `SLIME_SEL4_FABRIC_CHECK`, whose generation is
+/// `contracts/generation/v1/fixtures/sel4-fabric.zti`; see the `.md` beside it.
+///
+/// This is `launch_fabric_graph`'s shape, narrowed to the four properties
+/// P5.5's exit condition names. Init's authority here is exactly what it is on
+/// x86: it mints one control channel per participant and holds **no route
+/// capability at all**. The binding between a control endpoint and a component
+/// identity is established here, at spawn, and it is what the fabric
+/// authenticates against — a client cannot forge, share, or re-derive one, so
+/// "which component is asking" is a capability fact rather than a claim in a
+/// message.
+///
+/// **Spawn order is load-bearing**, as it is on x86: the fabric starts before
+/// any participant, so no request can arrive before the service can answer it.
+///
+/// `fabric-intruder` is spawned holding a real control endpoint on purpose.
+/// The denial under test is not "no channel" but "no declared edge".
+fn drive_fabric_plane() {
+    // One control pair per participant. Init keeps the service half of each to
+    // hand the fabric, and gives each client its own half — so no two clients
+    // share an identity and init never holds a route.
+    let mut service_sides = [0u32; FABRIC_PLANE_CLIENTS];
+    let mut client_sides = [0u32; FABRIC_PLANE_CLIENTS];
+    for index in 0..FABRIC_PLANE_CLIENTS {
+        let (service_side, client_side) = slime_rt::endpoint_create(ENDPOINT_FACTORY_SLOT)
+            .unwrap_or_else(|_| fail_fabric(b"control endpoint"));
+        service_sides[index] = service_side;
+        client_sides[index] = client_side;
+    }
+    slime_rt::debug_write(b"[init] fabric control channels minted\n");
+
+    // The fabric's own authority, in exactly the order and shape
+    // `launch_fabric_graph` gives it on x86: an endpoint factory to mint route
+    // halves with, a shared-buffer factory, and one control endpoint per
+    // client. Both factories are *narrowing copies* of init's own — a factory
+    // is not an endpoint, so granting one does not move it — which is why init
+    // can hand the same authority on and keep it.
+    //
+    // Grant order *is* the fabric's slot layout: `FACTORY_SLOT = 0`,
+    // `BUFFER_FACTORY_SLOT = 1`, and the controls from
+    // `FABRIC_FIRST_CONTROL_SLOT`, all read from the generated profile. The
+    // buffer factory is granted even though this graph brokers only inline
+    // samples, because the profile numbers the controls after it and a hole
+    // would shift every one of them.
+    let mut grants =
+        [grant(ENDPOINT_FACTORY_SLOT, RIGHT_ENDPOINT_CREATE); 2 + FABRIC_PLANE_CLIENTS];
+    grants[1] = grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE);
+    for (index, service_side) in service_sides.iter().enumerate() {
+        grants[2 + index] = grant(*service_side, RIGHT_SEND | RIGHT_RECV);
+    }
+    let fabric = slime_rt::spawn(FABRIC_SERVICE_SLOT, &grants)
+        .unwrap_or_else(|_| fail_fabric(b"spawn fabric"));
+    slime_rt::debug_write(b"[init] fabric service spawned\n");
+
+    // Each client gets its own control half and nothing else. A participant
+    // starts with no factory, no route, and no peer — the whole reason it must
+    // ask the fabric for its edge.
+    let mut clients = [None; FABRIC_PLANE_CLIENTS];
+    for (index, executable) in FABRIC_PLANE_EXECUTABLES.iter().enumerate() {
+        clients[index] = Some(
+            slime_rt::spawn(
+                *executable,
+                &[grant(client_sides[index], RIGHT_SEND | RIGHT_RECV)],
+            )
+            .unwrap_or_else(|_| fail_fabric(b"spawn participant")),
+        );
+    }
+    slime_rt::debug_write(b"[init] fabric participants spawned\n");
+
+    // Init waits on every participant and on the fabric itself. Waiting rather
+    // than spinning is also what makes a fabric that dies wake init instead of
+    // going unnoticed.
+    for handle in clients
+        .iter()
+        .flatten()
+        .map(|spawned| spawned.supervision_slot)
+        .chain(core::iter::once(fabric.supervision_slot))
+    {
+        loop {
+            match slime_rt::supervision_status(handle) {
+                Ok(None) => slime_rt::wait(&[slime_rt::WaitSource::Supervision(handle)]),
+                Ok(Some(slime_rt::Termination::Exit(0))) => break,
+                _ => fail_fabric(b"a fabric component did not exit cleanly"),
+            }
+        }
+    }
+}
+
+fn fail_fabric(reason: &[u8]) -> ! {
+    slime_rt::debug_write(b"[init] fabric plane fail: ");
+    slime_rt::debug_write(reason);
+    slime_rt::debug_write(b"\n");
+    slime_rt::exit(1)
+}
+
 fn fail_spawn(reason: &[u8]) -> ! {
     slime_rt::debug_write(b"[init] spawn plane fail: ");
     slime_rt::debug_write(reason);
@@ -1550,10 +1685,11 @@ fn drive_spawn_plane() {
     // The slot init granted from is gone from init's own table: an endpoint
     // grant is a move, because a channel's queues are resolved by which task
     // holds each end. Init keeps `console_side`, the half it did not grant.
-    if slime_rt::send(console_child_side, b"after", &[]) != slime_rt::ERR_INVALID_ARG {
-        // `ERR_INVALID_ARG` is what an unresolvable channel slot answers
-        // (`resolve_channel`), and it is deliberately the same answer an
-        // ungranted slot gives: which one it was is not the caller's business.
+    if slime_rt::send(console_child_side, b"after", &[]) != slime_rt::ERR_BAD_CAP {
+        // `ERR_BAD_CAP` is what an unresolvable channel slot answers, matching
+        // `sys_send`, and it is deliberately the same answer an ungranted slot
+        // and a slot of the wrong kind both give: which one it was is not the
+        // caller's business.
         fail_spawn(b"a handed-off channel end still resolved");
     }
     // The half init kept still works, which is what makes the move a move
@@ -1582,9 +1718,53 @@ fn drive_spawn_plane() {
         .unwrap_or_else(|_| fail_spawn(b"endpoint create"));
     slime_rt::debug_write(b"[init] context channel minted\n");
 
-    let sysinfo = slime_rt::spawn(SYSINFO_SLOT, &[grant(child_side, RIGHT_SEND | RIGHT_RECV)])
-        .unwrap_or_else(|_| fail_spawn(b"sysinfo"));
+    // ---- B15: a spawn carrying more grants than one control message holds ----
+    //
+    // The grant array crosses the transfer window as a staged payload, and
+    // until P5.5.1 the root read it with the *message* bound — 64 bytes, four
+    // records — where the retired kernel's `sys_spawn` admits sixty-four. Real
+    // x86 callers already exceed four: `GENERATION_MANAGER_CAPS` and
+    // `dango_caps()` are six each, and `launch_fabric_graph` hands the fabric
+    // nine. Every one of them would have been refused here while succeeding on
+    // the oracle, which is the one property P5.4 has to be able to claim.
+    //
+    // Six is B15's own exit-condition number, not a round one. Five more pairs
+    // are minted so the list is six *distinct* slots: `preflight_spawn_grants`
+    // refuses a repeated slot, and an endpoint grant is a move, so no channel
+    // can supply two of them.
+    //
+    // `child_side` stays first because that is the slot ordering fixes:
+    // `sysinfo` reads its launch context from slot 0 and knows nothing of the
+    // five behind it.
+    let mut retained = [0u32; WIDE_SPAWN_GRANTS - 1];
+    let mut granted = [grant(child_side, RIGHT_SEND | RIGHT_RECV); WIDE_SPAWN_GRANTS];
+    for (index, keep) in retained.iter_mut().enumerate() {
+        let (ours, theirs) = slime_rt::endpoint_create(ENDPOINT_FACTORY_SLOT)
+            .unwrap_or_else(|_| fail_spawn(b"wide grant endpoint"));
+        *keep = ours;
+        granted[index + 1] = grant(theirs, RIGHT_SEND | RIGHT_RECV);
+    }
+
+    let sysinfo =
+        slime_rt::spawn(SYSINFO_SLOT, &granted).unwrap_or_else(|_| fail_spawn(b"sysinfo"));
     slime_rt::debug_write(b"[init] sysinfo spawned\n");
+
+    // Every one of the six landed: an endpoint grant is a move, so each granted
+    // slot is gone from init's own table while the half it kept still works.
+    // That is the observation B15's exit condition asks for — "the child holds
+    // all six at the slots its numbering fixes" — made from the one side that
+    // can make it, since `sysinfo` runs unmodified and reads only slot 0.
+    for slot in granted.iter().map(|record| record.slot) {
+        if slime_rt::send(slot, b"moved", &[]) != slime_rt::ERR_BAD_CAP {
+            fail_spawn(b"a granted end stayed in the parent's table");
+        }
+    }
+    for slot in retained {
+        if slime_rt::send(slot, b"kept", &[]) != slime_rt::ERR_SUCCESS {
+            fail_spawn(b"a retained half stopped working");
+        }
+    }
+    slime_rt::debug_write(b"[init] six grants delivered\n");
 
     // The launch context the child is blocked reading. Sent after the spawn, so
     // it lands on a task that exists; `sysinfo` parks in `recv` until it does.

@@ -1415,4 +1415,14 @@ const _: () = assert!(CLIENTS * 3 + 3 <= slime_rt::MAX_WAIT_SOURCES);
 // park set that outgrows the declared partition a compile error rather than a
 // boot-time overflow: the resolver rejects a partition above the kernel bound,
 // and this is what keeps the broker honest about which partition it is.
-const _: () = assert!(fabric_worker_wait_sources("operation") == CLIENTS * 3 + 3);
+// A graph declaring no operation plane resolves `WORKER_ABSENT` and is exempt:
+// this module is compiled into every `fabric-service`, including one whose
+// generation declares only a stream route, and there is no declared partition
+// there to agree with. Every graph that does declare the plane is checked
+// exactly as before.
+const _: () = assert!(
+    matches!(
+        fabric_worker_wait_sources("operation"),
+        fabric_profile::WORKER_ABSENT
+    ) || fabric_worker_wait_sources("operation") == CLIENTS * 3 + 3
+);

@@ -1368,10 +1368,19 @@ fn declared_quota(budget: Option<&SharedBufferBudget<'_>>, component: &str) -> H
 
 /// Iterations the graph service loop will run before declaring the graph wedged.
 ///
-/// Generous against what the five declared components actually issue — each
-/// binds a window, and spawn-service additionally runs a shared-buffer probe
-/// and spawns two children — while still bounding a livelock so it fails in
-/// seconds rather than burning the gate's whole timeout.
+/// Generous against what the declared components actually issue — each binds a
+/// window, and spawn-service additionally runs a shared-buffer probe and spawns
+/// two children — while still bounding a livelock so it fails in seconds rather
+/// than burning the gate's whole timeout.
+///
+/// **Headroom is measured, not assumed.** P5.5.1 made `recv` non-blocking, so a
+/// component that blocks now costs two iterations where it cost one — the
+/// `recv` that reports `WouldBlock` and the `wait` that parks. The densest
+/// graph this cutover declares is the typed fabric, whose nine tasks provision
+/// four route roles and broker seven samples: it used **136** of these 512, so
+/// the change spent headroom rather than exhausting it. A graph that reached
+/// the bound would drain incompletely and fail its gate on a missing terminal
+/// marker, which is the wedge this exists to catch.
 const MAX_GRAPH_ITERATIONS: usize = 512;
 
 /// Serve the root operation surface for the component graph.
@@ -1406,6 +1415,11 @@ fn serve_component_graph(
     let mut drops = 0;
     let mut reclaimed_slots = 0;
     let mut endpoints = 0;
+    // Narrow-on-transfer moves served (C8.3). Counted apart from `sends`
+    // because a transfer is the operation a broker provisions a role with, and
+    // a graph where every participant holds its own declared edge performs
+    // none.
+    let mut transfers = 0;
     let mut parked = ParkedReplies::new();
     // How each dead child ended, kept past the task's own reclamation because
     // that is precisely when its parent asks. See `supervision.rs`.
@@ -1484,12 +1498,9 @@ fn serve_component_graph(
             reclaim_dead_task(
                 channels,
                 &mut parked,
-                windows,
-                graph,
                 &mut transit,
                 buffers,
                 allocator,
-                scratch,
                 &mut supervision_waits,
                 id,
                 &mut peer_deaths,
@@ -1580,12 +1591,9 @@ fn serve_component_graph(
                 reclaim_dead_task(
                     channels,
                     &mut parked,
-                    windows,
-                    graph,
                     &mut transit,
                     buffers,
                     allocator,
-                    scratch,
                     &mut supervision_waits,
                     id,
                     &mut peer_deaths,
@@ -1731,6 +1739,32 @@ fn serve_component_graph(
                 } else {
                     Response::error(IpcError::BadCapability)
                 });
+            }
+            // C8.3's narrow-on-transfer move (P5.5.1). The one mechanism a
+            // userspace fabric needs that neither `send` nor `spawn` provides:
+            // `send` moves only a loan, whose handle names its own recipient,
+            // and a spawn grant's destination is a task that does not exist
+            // yet. A route role is neither — it goes to a task already running,
+            // chosen by a broker at runtime, narrowed to one direction and made
+            // non-delegable at the moment it crosses.
+            //
+            // Unparkable, like every other operation here except `send`,
+            // `recv`, and `wait`: a queue-full transfer answers `WouldBlock`
+            // and the broker retries, matching `sys_cap_transfer`.
+            Operation::CapTransfer => {
+                let response = serve_cap_transfer(
+                    channels,
+                    graph,
+                    windows,
+                    &mut parked,
+                    &mut transit,
+                    scratch,
+                    &mut supervision_waits,
+                    id,
+                    &words,
+                    &mut transfers,
+                );
+                ipc::reply(response);
             }
             // The shared-buffer plane, answered from the table that already
             // owns rights, quota, and frame accounting. `spawn-service` runs a
@@ -1894,13 +1928,36 @@ fn serve_component_graph(
                     id,
                     &words,
                     &mut sends,
-                    &mut receives,
                 );
                 parked.answer_saved(saved, response);
             }
+            // `recv` is **non-blocking**, exactly as `kernel/src/ipc/mod.rs`
+            // makes it: an empty queue whose peer is alive answers
+            // `ERR_WOULDBLOCK` and the component decides what to do next.
+            //
+            // P5.3.1 parked the caller here instead, on the reasoning that a
+            // component blocked in a call is blocked either way and answering
+            // would make it spin through `wait`. That reasoning holds for a
+            // component with **one** source — `console` — and is wrong for any
+            // component with several, which is what P5.5.1's fabric first
+            // showed: `provision` and `broker` sweep every control endpoint,
+            // ingress, and ack before parking across the whole set, and a park
+            // inside the sweep freezes it at the first empty source. The fabric
+            // ended up parked on its ack channel holding samples the subscriber
+            // was parked waiting for — a deadlock invisible to every one-source
+            // graph, and produced by the root rather than by the component.
+            //
+            // So the poll/park split is the component's to make, and the two
+            // steps stay separate: `recv` reports, `wait` parks. That is not a
+            // reversal of P5.3.1's property — a component blocked on an empty
+            // channel is still parked in the kernel and still woken by its
+            // peer's send — only of *which operation* holds the reply. It does
+            // not reintroduce a spin, because the component's next call is
+            // `wait`, which parks; the round trip costs one extra dispatcher
+            // iteration per park, not a busy loop.
             Operation::Recv => {
                 let saved = saved.expect("recv is parkable");
-                match serve_recv(
+                let response = match serve_recv(
                     channels,
                     graph,
                     windows,
@@ -1910,40 +1967,10 @@ fn serve_component_graph(
                     &words,
                     &mut receives,
                 ) {
-                    Ok(response) => parked.answer_saved(saved, response),
-                    // Nothing queued and the peer is alive. Hold the reply
-                    // rather than answering `WouldBlock`: the component is
-                    // blocked in a call either way, and answering would make it
-                    // spin through `wait` and burn the loop's iteration bound.
-                    Err(channel) => {
-                        if let Err(error) = channels.register_wait(id, WaitTarget::Receive(channel))
-                        {
-                            parked.answer_saved(saved, Response::error(error));
-                            continue;
-                        }
-                        match parked.commit(saved, ParkReason::Receive { channel }) {
-                            Ok(()) => {
-                                parks += 1;
-                                sel4::debug_println!(
-                                    "SLIME_GRAPH parked task={} channel={channel} reason=recv",
-                                    id.0,
-                                );
-                            }
-                            // The caller is blocked in a call, so a refused
-                            // park still owes it an answer — the bounded error
-                            // that says the receive did not happen. Dropping
-                            // the save here would hang it silently.
-                            Err((saved, error)) => {
-                                channels.clear_waits(id);
-                                sel4::debug_println!(
-                                    "SLIME_GRAPH park refused task={} error={error:?}",
-                                    id.0
-                                );
-                                parked.answer_saved(saved, Response::error(error));
-                            }
-                        }
-                    }
-                }
+                    Ok(response) => response,
+                    Err(_) => Response::error(IpcError::WouldBlock),
+                };
+                parked.answer_saved(saved, response);
             }
             Operation::Wait => {
                 let saved = saved.expect("wait is parkable");
@@ -1997,12 +2024,11 @@ fn serve_component_graph(
             // `None` means the operation *is* root-mediated and this dispatcher
             // simply has no handler for it yet. Collapsing the two would report
             // a gap in this slice as a property of the cutover, so it is
-            // counted and named separately. Three `RootService` operations
-            // still land here — `HealthConfirm`, `Unhealthy`, and
-            // `CapTransfer` — so this is a live description rather than a
-            // standing guard. The first two are the health plane, which no
-            // seL4 milestone has opened; `CapTransfer` is C8.3's
-            // narrow-on-transfer move and belongs to P5.5.
+            // counted and named separately. Two `RootService` operations still
+            // land here — `HealthConfirm` and `Unhealthy` — so this is a live
+            // description rather than a standing guard. Both are the health
+            // plane, which no seL4 milestone has opened. `CapTransfer` left
+            // this list in P5.5.1 and has a handler above.
             //
             // No component in any declared seL4 graph invokes one, which is why
             // every gate observes `unimplemented=0` — that zero is a fact about
@@ -2097,6 +2123,15 @@ fn serve_component_graph(
         terminations.len(),
         supervision_waits.len(),
     );
+    // The C8.3 transfer plane, on its own line for the same reason: five
+    // earlier gates assert the lines above by exact shape.
+    //
+    // `transfers` is how many narrow-on-transfer moves crossed. It is zero on
+    // every graph where each participant holds the edge the generation declared
+    // it — which is every seL4 gate before P5.5.1 — and nonzero exactly when a
+    // broker provisioned a role, so the number distinguishes a graph whose
+    // authority was placed from one whose authority was handed on.
+    sel4::debug_println!("SLIME_GRAPH transfers served={transfers}");
 }
 
 /// Whether this operation may end with the caller parked, and so needs its
@@ -2116,18 +2151,35 @@ const fn parkable(operation: Operation) -> bool {
 
 /// Resolve a slot through the caller's own table to the channel it names,
 /// requiring `rights`.
+///
+/// Every failure is `BadCapability` — `ERR_BAD_CAP`, status -1 — matching
+/// `kernel/src/syscall/mod.rs::{sys_send,sys_recv}`, which answer it for all
+/// three cases alike: a slot holding nothing, a slot holding another kind, and
+/// a slot holding an endpoint without the right the operation needs. Components
+/// compare against the literal, so this is ABI rather than diagnostics:
+/// `fabric-publisher` asserts `recv(route_slot) == ERR_BAD_CAP` to prove its
+/// send-only role carries no receive authority, and answering anything else
+/// reads to it as "the denial did not fire".
+///
+/// Indistinguishable on purpose, too. Which of the three it was is not the
+/// caller's business, and separating them would let a component map its own
+/// table — or infer another's authority — by watching which refusal came back.
 fn resolve_channel(
     graph: &GraphTables,
     id: TaskId,
     slot: u32,
     rights: u64,
 ) -> Result<ipc::ChannelKey, IpcError> {
-    let table = graph.get(id).ok_or(IpcError::InvalidOperation)?;
-    match table.resolve(slot, rights)?.resource {
+    let table = graph.get(id).ok_or(IpcError::BadCapability)?;
+    match table
+        .resolve(slot, rights)
+        .map_err(|_| IpcError::BadCapability)?
+        .resource
+    {
         graph::Resource::Endpoint { channel } => Ok(channel),
         // A slot the task holds but that names something else — an executable,
         // a factory, a buffer — is refused exactly as an ungranted one is.
-        _ => Err(IpcError::InvalidOperation),
+        _ => Err(IpcError::BadCapability),
     }
 }
 
@@ -2150,7 +2202,6 @@ fn serve_send(
     id: TaskId,
     words: &[sel4::Word; ipc::FAST_MESSAGE_REGISTERS],
     served: &mut usize,
-    woken_receives: &mut usize,
 ) -> Response {
     let channel = match resolve_channel(graph, id, words[0] as u32, RIGHT_SEND) {
         Ok(channel) => channel,
@@ -2229,25 +2280,11 @@ fn serve_send(
             peer.0,
         );
     }
-    // A receiver blocked on this queue is owed its answer now: it is parked in
-    // a call, so nothing else will make it retry.
+    // A receiver parked in `wait` on this queue is owed its wake now: nothing
+    // else will make it retry. The message it collects is counted when its own
+    // `recv` takes it, not here.
     if let Some(wake) = wake {
-        // Counted as a receive, because it is one: the woken task's `recv` is
-        // completed here rather than retried. Leaving it out would make the
-        // send and receive totals disagree by exactly the number of messages
-        // that took the wake path, which is the path this slice exists to add.
-        if deliver_wake(
-            channels,
-            parked,
-            windows,
-            scratch,
-            graph,
-            transit,
-            supervision_waits,
-            wake,
-        ) {
-            *woken_receives += 1;
-        }
+        deliver_wake(channels, parked, supervision_waits, wake);
     }
     Response::success(0, 0)
 }
@@ -2592,68 +2629,32 @@ fn wake_supervisors(
 
 /// Deliver one wake to whichever task is parked for it.
 ///
-/// Reports whether a queued message was handed over, so the caller can count it
-/// as the receive it is. A wake naming a task that is not parked is not an
-/// error — its registration outlived the `wait` that made it — and delivers
-/// nothing.
+/// A wake naming a task that is not parked is not an error — its registration
+/// outlived the `wait` that made it — and answers nothing.
+///
+/// Every park is a `wait` since P5.5.1, so a wake carries only the wake:
+/// `slime_rt::wait` documents that the caller re-polls every source afterwards,
+/// and that re-poll is the `recv` that takes the message. Before this, `recv`
+/// parked too and this function had to *deliver* the message to it — dequeue,
+/// land the capabilities, and write the payload into the woken task's window —
+/// which was a second copy of `serve_recv`'s body reachable by two paths that
+/// had to stay in step. Making `recv` non-blocking removed it.
 fn deliver_wake(
     channels: &mut ChannelTable,
     parked: &mut ParkedReplies,
-    windows: &WindowTable<MAX_TASKS>,
-    scratch: &ScratchPage,
-    graph: &mut GraphTables,
-    transit: &mut Transit,
     supervision_waits: &mut supervision::SupervisionWaits,
     wake: ipc::WakeDecision,
-) -> bool {
+) {
     let task = TaskId(wake.task);
-    let Some(reason) = parked.reason(task) else {
-        return false;
-    };
+    if parked.reason(task).is_none() {
+        return;
+    }
     // Both halves of the woken task's wait set, cleared together: a wait is
     // answered once, so a supervision source in the same set must stop being
     // able to answer it again.
     channels.clear_waits(task);
     supervision_waits.clear(task);
-    let delivered = matches!(reason, ParkReason::Receive { .. });
-    let response = match reason {
-        // A parked `recv` is owed the message itself, not a nudge to retry: the
-        // component is blocked in one call and will not issue another.
-        //
-        // Capabilities land here exactly as they do on the unparked path: this
-        // *is* that task's `recv` completing, just completed by its peer's send
-        // rather than by its own call, so a message carrying a loan must land
-        // it in the woken task's table and report the slot.
-        ParkReason::Receive { channel } => {
-            let available = graph
-                .get(task)
-                .map_or(0, |table| graph::MAX_TASK_CAPS - table.len());
-            match channels.recv_queue_mut(channel, task) {
-                Some(queue) => {
-                    match ipc::receive_atomic(queue, available, &mut CarryCapabilities) {
-                        Ok(outcome) => match land_caps(graph, transit, task, &outcome.message) {
-                            Ok(landed) => {
-                                deliver_message(windows, scratch, task, &outcome.message, &landed)
-                            }
-                            Err(error) => Response::error(error),
-                        },
-                        Err(error) => Response::error(error),
-                    }
-                }
-                None => Response::error(IpcError::InvalidOperation),
-            }
-        }
-        // A parked `wait` is owed only the wake; `slime_rt::wait` documents that
-        // the caller re-polls every source afterwards.
-        ParkReason::Wait => Response::success(0, 0),
-    };
-    // The wake is delivered unconditionally — a task parked in `wait` is owed
-    // its answer just as much as one parked in `recv`, and short-circuiting on
-    // `delivered` here would hold it forever. Only the *count* distinguishes
-    // them: a `wait` that fired carried no message, and a delivery the queue
-    // refused is not a receive either.
-    let answered = parked.wake(task, response);
-    delivered && answered && response.result >= 0
+    parked.wake(task, Response::success(0, 0));
 }
 
 /// Bytes one encoded spawn-grant record occupies in the caller's transfer
@@ -2662,27 +2663,34 @@ fn deliver_wake(
 /// Matches `components/runtime/src/syscall/sel4_transport.rs::GRANT_RECORD_BYTES`.
 const SPAWN_GRANT_RECORD_BYTES: usize = 16;
 
-/// Grants one spawn call may carry.
+/// Grants one spawn call may carry. **B15 is closed here.**
 ///
-/// **Not** the retired kernel's bound. There, `sys_spawn` reads the grant array
-/// straight out of caller memory and is limited only by
-/// `kernel/src/capability/mod.rs::MAX_CAPS` (64). Here the array crosses the
-/// transfer window as a staged payload, and `transfer_window::read_staged`
-/// refuses anything over `MAX_STAGED_BYTES` — which is `ipc::MAX_MESSAGE_BYTES`,
-/// 64 *bytes*. At [`SPAWN_GRANT_RECORD_BYTES`] each, that is four records.
+/// This is the retired kernel's bound, which it had not been until P5.5.1.
+/// `sys_spawn` there reads the grant array straight out of caller memory,
+/// limited only by `kernel/src/capability/mod.rs::MAX_CAPS` (64). Here the
+/// array crosses the transfer window as a staged payload, and it used to be
+/// read by `transfer_window::read_staged` — whose bound is
+/// `ipc::MAX_MESSAGE_BYTES`, 64 *bytes*, or four records. Real x86 callers
+/// already exceeded that: `init.rs::GENERATION_MANAGER_CAPS` and `dango_caps()`
+/// are six grants each, `spawn-service.rs` builds up to five, and
+/// `launch_fabric_graph` hands the fabric nine. Every one of them would have
+/// been refused `ERR_INVALID_ARG` on the cutover where the oracle succeeds.
 ///
-/// So this is the real ceiling, stated rather than left to be discovered as an
-/// `InvalidLength` from a length check that could never fire. It is genuinely
-/// narrower than the oracle's, and real x86 callers already exceed it:
-/// `init.rs::GENERATION_MANAGER_CAPS` and `dango_caps()` are six grants,
-/// `spawn-service.rs` builds up to five. None of them run on any seL4 fixture
-/// yet — every declared graph here spawns with at most one grant — so nothing
-/// observes it, which is exactly why it is written down.
-///
-/// Widening it means staging the grant array over more than one message-sized
-/// frame, which is a transport change rather than a spawn change. Recorded as
-/// **B15** in `roadmap/00-backlog.md`.
-const MAX_SPAWN_GRANTS: usize = transfer_window::MAX_STAGED_BYTES / SPAWN_GRANT_RECORD_BYTES;
+/// The fix is a second staged bound rather than a wider message:
+/// [`transfer_window::MAX_STAGED_ARRAY_BYTES`] bounds an *array* staged through
+/// a window, where `MAX_STAGED_BYTES` bounds a *message*. See that constant for
+/// why the two must stay separate numbers. The component side needed no change
+/// at all — `sel4_transport::spawn` already encoded into a
+/// `MAX_SPAWN_GRANTS * GRANT_RECORD_BYTES` buffer and staged it into a
+/// 4096-byte window; the refusal was entirely on this side.
+const MAX_SPAWN_GRANTS: usize = transfer_window::MAX_STAGED_ARRAY_BYTES / SPAWN_GRANT_RECORD_BYTES;
+
+// The two sides of the ABI agree on the ceiling. `sel4_transport::spawn`
+// encodes into a fixed `MAX_SPAWN_GRANTS * GRANT_RECORD_BYTES` array of its
+// own; a root that accepted fewer would refuse a list the component staged
+// successfully, and one that accepted more would be describing a payload no
+// caller can produce.
+const _: () = assert!(MAX_SPAWN_GRANTS == 64);
 
 /// One requested grant, as the caller encoded it.
 #[derive(Clone, Copy)]
@@ -3214,19 +3222,21 @@ fn serve_spawn(
     spawns: &mut usize,
 ) -> Response {
     let executable_slot = words[0] as u32;
+    // The wide reader (B15), because a grant array is not a message: at
+    // `SPAWN_GRANT_RECORD_BYTES` each, the message bound admitted four records
+    // where the oracle admits sixty-four. It refuses a descriptor naming any
+    // capability itself — grants are logical slot numbers in the payload, and a
+    // spawn carrying real seL4 capabilities is refused by `recv_request` before
+    // reaching here.
+    //
     // An empty grant list stages nothing, so a spawn granting no capabilities
-    // does not require a bound window. `read_staged` reports the empty frame
-    // for a zero-length transfer, and `preflight_spawn_grants` reads zero
-    // records out of it.
-    let frame = match transfer_window::read_staged(windows.bound(id), words[1], words, scratch) {
-        Ok(frame) => frame,
-        Err(error) => return Response::error(error),
-    };
-    // Grants are logical slot numbers in the payload; a spawn carrying real
-    // seL4 capabilities is refused by `recv_request` before reaching here.
-    if frame.cap_count() != 0 {
-        return Response::error(IpcError::UnsupportedCapabilityTransfer);
-    }
+    // still does not require a bound window: a zero-length transfer reports the
+    // empty array, and `preflight_spawn_grants` reads zero records out of it.
+    let frame =
+        match transfer_window::read_staged_array(windows.bound(id), words[1], words, scratch) {
+            Ok(frame) => frame,
+            Err(error) => return Response::error(error),
+        };
 
     let Some(table) = graph.get(id) else {
         return Response::error(IpcError::InvalidOperation);
@@ -3429,6 +3439,424 @@ fn serve_supervision_status(
     Response::success(kind, detail)
 }
 
+/// Move one capability to a channel's peer, narrowed to exactly the mask its
+/// descriptor declares (C8.3, P5.5.1).
+///
+/// The root's counterpart to `kernel/src/syscall/mod.rs::sys_cap_transfer`, and
+/// deliberately as generic: it knows nothing of routes, schemas, or graph roles.
+/// A userspace broker composes a typed fabric out of it, which is what makes
+/// "a participant never holds a route endpoint directly but is provisioned one
+/// by the fabric" a property of the graph rather than of this function.
+///
+/// Four rules, restated from the oracle against this crate's tables:
+///
+/// 1. **Transfer authority at the source.** The moved capability must carry
+///    `RIGHT_TRANSFER`, the same condition a `send` attachment applies.
+/// 2. **Narrow only.** The destination mask must be a subset of the source's
+///    rights *and* of the kind's meaningful rights. A widening mask is refused
+///    before anything moves.
+/// 3. **Transfer authority is not inherited.** `RIGHT_TRANSFER` is dropped at
+///    the destination unless the descriptor sets `FLAG_RETAIN_TRANSFER`, so a
+///    provisioned endpoint is non-delegable by default rather than by
+///    convention. That single bit is what makes `fabric-publisher`'s
+///    re-delegation arm fail rather than succeed.
+/// 4. **The descriptor describes the move.** Its declared `object_kind` must be
+///    the moved capability's real kind, and the peer parses the same bytes this
+///    enforced — through `slime_proto::capability_transfer`, the same generated
+///    module both ends read — so a descriptor cannot advertise authority the
+///    receiver did not get.
+///
+/// # Why this is not `Resource::is_transferable`
+///
+/// [`graph::Resource::is_transferable`] answers `true` only for a loan, and its
+/// doc explains why widening it would be wrong: it gates the **send** path,
+/// where a capability rides a message chosen at runtime by whoever holds a
+/// channel. This is a different question with a different gate. Here the mover
+/// must hold `RIGHT_TRANSFER` on the capability itself — authority the
+/// generation placed or a parent narrowed at spawn — and the oracle's own
+/// `sys_cap_transfer` gates on exactly that bit rather than on any kind
+/// predicate. So the kind gate on `send` stands unchanged and this path is
+/// authorized by rights, matching the retired kernel line for line.
+///
+/// The move consumes the source capability, so the object never has two
+/// holders, and a failed send restores the original at its full rights rather
+/// than dropping it.
+#[allow(clippy::too_many_arguments)]
+fn serve_cap_transfer(
+    channels: &mut ChannelTable,
+    graph: &mut GraphTables,
+    windows: &WindowTable<MAX_TASKS>,
+    parked: &mut ParkedReplies,
+    transit: &mut Transit,
+    scratch: &ScratchPage,
+    supervision_waits: &mut supervision::SupervisionWaits,
+    id: TaskId,
+    words: &[sel4::Word; ipc::FAST_MESSAGE_REGISTERS],
+    transfers: &mut usize,
+) -> Response {
+    use slime_proto::capability_transfer::{
+        FLAG_RETAIN_TRANSFER, TRANSFER_LEN, WireCapabilityTransfer,
+    };
+
+    let endpoint_slot = (words[0] & 0xffff_ffff) as u32;
+    let capability_slot = (words[0] >> 32) as u32;
+    let frame = match transfer_window::read_staged(windows.bound(id), words[1], words, scratch) {
+        Ok(frame) => frame,
+        Err(error) => return Response::error(error),
+    };
+    // The descriptor is the payload, so a staged frame carrying capabilities is
+    // malformed rather than a transfer of several: this operation moves exactly
+    // the one capability `capability_slot` names.
+    if frame.cap_count() != 0 || frame.bytes().len() != TRANSFER_LEN {
+        return Response::error(IpcError::InvalidLength);
+    }
+    let Some(descriptor) = WireCapabilityTransfer::decode(frame.bytes()) else {
+        return Response::error(IpcError::InvalidLength);
+    };
+    if !valid_transfer_descriptor(&descriptor) {
+        return Response::error(IpcError::InvalidLength);
+    }
+    // Rule 3, applied before anything is checked against the source: the
+    // destination mask is what the receiver will hold, and it is what rule 2
+    // narrows against. Computing it later would test the declared mask rather
+    // than the installed one.
+    let rights = if descriptor.flags & FLAG_RETAIN_TRANSFER != 0 {
+        descriptor.rights_mask
+    } else {
+        descriptor.rights_mask & !RIGHT_TRANSFER
+    };
+    if rights == 0 {
+        // A move granting nothing is a drop, and `CapDrop` already spells that.
+        return Response::error(IpcError::InvalidLength);
+    }
+
+    // The channel first, at the right the delivery will need. A transfer is a
+    // send that happens to carry a capability, so an end this component could
+    // not send on names a peer it could never deliver to.
+    let channel = match resolve_channel(graph, id, endpoint_slot, RIGHT_SEND) {
+        Ok(channel) => channel,
+        Err(error) => return Response::error(error),
+    };
+    let Some(peer) = channels.peer(channel, id) else {
+        return Response::error(IpcError::InvalidOperation);
+    };
+    // Naming one slot twice would move the endpoint out from under the message
+    // carrying it. Refused for the same reason the oracle refuses it.
+    if endpoint_slot == capability_slot {
+        return Response::error(IpcError::BadCapability);
+    }
+
+    // Resolve, validate, and consume under one borrow, so no window exists
+    // where the capability is neither held nor moved.
+    let Some(table) = graph.get_mut(id) else {
+        return Response::error(IpcError::InvalidOperation);
+    };
+    let Some(source) = table.get(capability_slot) else {
+        return Response::error(IpcError::BadCapability);
+    };
+    // Rules 1, 2, and 4. All three answer `BadCapability`, and
+    // indistinguishably: a component must not be able to map its own table, or
+    // another's authority, by watching which refusal comes back.
+    if !source.allows(RIGHT_TRANSFER)
+        || !descriptor_names(descriptor.object_kind, &source.resource)
+        || rights & !source.rights != 0
+        || rights & !valid_rights(&source.resource) != 0
+    {
+        return Response::error(IpcError::BadCapability);
+    }
+    let moved = graph::Capability {
+        resource: source.resource,
+        rights,
+    };
+    // Removed before it is parked, so the capability is in exactly one place at
+    // every point: the sender's table, then the transit table, then the
+    // receiver's. Restored at its original rights if the send fails.
+    let original = source;
+    table.drop_slot(capability_slot);
+    let token = match transit.depart(moved, id, peer) {
+        Ok(token) => token,
+        Err(error) => {
+            let _ = graph
+                .get_mut(id)
+                .map(|table| table.install(capability_slot, original));
+            return Response::error(error);
+        }
+    };
+
+    // An endpoint's *holder* moves with its capability, because a channel's
+    // queues are resolved by which task holds each end rather than by anything
+    // the capability carries (`channel::Entry::send_queue`). Without this the
+    // receiver would land a capability that resolves to no queue at all — the
+    // failure `distribute_channel_ends` records for the spawn path, and the
+    // reason a route endpoint provisioned by a broker would leave its
+    // participant parked forever on a channel nothing can deliver to.
+    //
+    // The reassign happens here rather than at collection because `peer` is
+    // fixed at this moment: the transit entry binds the capability to exactly
+    // this receiver, so a later change to who is receiving cannot redirect it.
+    // Until the receiver collects, it holds the end record but no capability
+    // naming it, and every operation resolves through the table — so the window
+    // grants nothing.
+    //
+    // A loopback splits here, which is the case that matters: a broker mints
+    // both halves through its own factory (`ChannelTable::mint`, a loopback)
+    // and hands one away, so this is the split that makes the pair real.
+    // What the rollback below must undo, recorded as it is done rather than
+    // re-derived. `None` when the moved capability is not an endpoint and no
+    // holder record moved at all.
+    let mut reassigned = None;
+    if let graph::Resource::Endpoint {
+        channel: moved_channel,
+    } = moved.resource
+    {
+        // Refused rather than partially applied. Moving the end the message
+        // rides on would leave the caller unable to deliver the very message
+        // carrying it, and an end the caller does not hold is one it cannot
+        // give away.
+        if moved_channel == channel || !channels.reassign(moved_channel, id, peer) {
+            // Nothing to unwind here: the reassign either was not attempted or
+            // reported that it did not happen.
+            restore_transferred(
+                channels,
+                graph,
+                transit,
+                id,
+                capability_slot,
+                token,
+                original,
+                None,
+            );
+            return Response::error(IpcError::BadCapability);
+        }
+        reassigned = Some((moved_channel, peer));
+    }
+
+    // The descriptor rides as the message body, so the peer reads the same
+    // bytes this enforced. `CarryCapabilities` is the right adapter here rather
+    // than `DepartingCaps`: the move already happened above, atomically with
+    // the rights check, and the message carries the transit token it produced.
+    let message = match ipc::Message::new(frame.bytes(), &[token]) {
+        Ok(message) => message,
+        Err(error) => {
+            restore_transferred(
+                channels,
+                graph,
+                transit,
+                id,
+                capability_slot,
+                token,
+                original,
+                reassigned,
+            );
+            return Response::error(error);
+        }
+    };
+    let Some(queue) = channels.send_queue_mut(channel, id) else {
+        restore_transferred(
+            channels,
+            graph,
+            transit,
+            id,
+            capability_slot,
+            token,
+            original,
+            reassigned,
+        );
+        return Response::error(IpcError::InvalidOperation);
+    };
+    let wake = match ipc::send_atomic(queue, message, &mut CarryCapabilities) {
+        Ok(wake) => wake,
+        Err(error) => {
+            // Nothing crossed, so the move did not happen: the source comes
+            // back at its original rights rather than the narrowed ones, and
+            // the caller may retry.
+            restore_transferred(
+                channels,
+                graph,
+                transit,
+                id,
+                capability_slot,
+                token,
+                original,
+                reassigned,
+            );
+            return Response::error(error);
+        }
+    };
+    *transfers += 1;
+    sel4::debug_println!(
+        "SLIME_GRAPH capability transferred task={} channel={channel} to={} kind={} rights={rights:#x}",
+        id.0,
+        peer.0,
+        moved.resource.kind(),
+    );
+    if let Some(wake) = wake {
+        deliver_wake(channels, parked, supervision_waits, wake);
+    }
+    Response::success(0, 0)
+}
+
+/// Put a capability back after a transfer that did not cross.
+///
+/// At its **original** rights, not the narrowed ones the descriptor asked for:
+/// the move did not happen, so the holder is owed exactly what it had. Handing
+/// back the narrowed copy would let a failed send silently attenuate a
+/// capability its holder never gave up.
+///
+/// `reassigned` names the channel whose holder record was moved and the task it
+/// went to, when one was, so the channel end comes back with it. Restoring the
+/// capability without the end would leave the caller holding a slot that
+/// resolves to no queue — the same failure the move exists to prevent, arriving
+/// on the rollback path instead.
+///
+/// The channel key is **passed in** rather than re-derived from `original`. The
+/// two agree today — `moved` copies `source.resource` verbatim — but the
+/// forward path reassigns the key it read from `moved`, so a rollback reading
+/// `original` would depend on that equality silently continuing to hold. A
+/// change that let a transfer re-key a channel on move would break the undo
+/// while both sides still compiled.
+fn restore_transferred(
+    channels: &mut ChannelTable,
+    graph: &mut GraphTables,
+    transit: &mut Transit,
+    id: TaskId,
+    slot: u32,
+    token: ipc::LogicalCap,
+    original: graph::Capability,
+    reassigned: Option<(ipc::ChannelKey, TaskId)>,
+) {
+    if let Some((channel, peer)) = reassigned
+        && !channels.reassign(channel, peer, id)
+    {
+        // The end did not come back, so the caller's restored slot would name a
+        // channel it no longer holds an end of — a capability resolving to no
+        // queue. Unreachable as written (this runs only after the forward
+        // reassign reported success, and nothing ran in between), but a silent
+        // pass would leave the caller parked forever on a channel nothing can
+        // deliver to.
+        sel4::debug_println!(
+            "SLIME_GRAPH FAIL channel end stranded task={} channel={channel}",
+            id.0,
+        );
+    }
+    // Unparked before the capability is reinstalled, so it is not left in two
+    // places.
+    if transit.recall(token, id).is_none() {
+        // Nothing to restore: the token named no parked capability, so the
+        // slot stays empty rather than being filled with a copy of something
+        // that may be elsewhere.
+        sel4::debug_println!(
+            "SLIME_GRAPH FAIL capability lost task={} slot={slot} reason=transit-empty",
+            id.0,
+        );
+        return;
+    }
+    // Reinstalling at the slot it came from cannot collide: only this transfer
+    // emptied it, and nothing ran in between. Reported rather than assumed, for
+    // the reason `land_caps` reports the same shape — a capability now out of
+    // the transit table and not in any other is one the terminal `transit=`
+    // count stops seeing, so a silent drop here is exactly the failure no
+    // marker would surface.
+    let restored = graph
+        .get_mut(id)
+        .is_some_and(|table| table.install(slot, original).is_ok());
+    if !restored {
+        sel4::debug_println!(
+            "SLIME_GRAPH FAIL capability lost task={} slot={slot} reason=install-refused",
+            id.0,
+        );
+    }
+}
+
+/// Structural validity of a transfer descriptor, independent of the capability
+/// it accompanies.
+///
+/// `kernel/src/protocol/capability_transfer_proto.rs::valid_transfer`, restated
+/// against this crate's rights vocabulary. The one difference is the rights
+/// bound: the kernel checks `rights_mask & !RIGHT_ALL == 0` against its own
+/// enumeration of every defined bit, which this crate does not have — it names
+/// only the bits it interprets. The per-kind check in [`valid_rights`] is
+/// stricter than `RIGHT_ALL` anyway, since it bounds the mask by what the
+/// *named object* can carry rather than by what any object could, so an
+/// undefined bit is refused there rather than admitted here — and refused with
+/// the same `ERR_BAD_CAP` the kernel answers for a mask its capability does not
+/// hold, so the difference is not observable.
+fn valid_transfer_descriptor(
+    descriptor: &slime_proto::capability_transfer::WireCapabilityTransfer,
+) -> bool {
+    use slime_proto::capability_transfer::{
+        CAPABILITY_TRANSFER_MAGIC, FORMAT_VERSION, KNOWN_FLAGS,
+    };
+
+    descriptor.magic == CAPABILITY_TRANSFER_MAGIC
+        && descriptor.version == FORMAT_VERSION
+        // A nonzero status marks a denial, which carries no capability and
+        // never reaches this operation.
+        && descriptor.status == 0
+        && descriptor.flags & !KNOWN_FLAGS == 0
+        && descriptor.rights_mask != 0
+        // A kind this contract does not define is a *malformed descriptor*, not
+        // a capability failure, and the difference is the answer the caller
+        // gets: `ERR_INVALID_ARG` here against `ERR_BAD_CAP` from
+        // `descriptor_names` below. `descriptor_names` would refuse it anyway —
+        // no resource arm matches an undefined code — so without this the
+        // refusal still happens but under the wrong error, diverging from
+        // `sys_cap_transfer` on exactly the path this milestone claims parity
+        // for.
+        && is_object_kind(descriptor.object_kind)
+}
+
+/// Whether this contract version defines `object_kind`.
+///
+/// `kernel/src/protocol/capability_transfer_proto.rs::is_object_kind`, restated.
+/// The transferable set is deliberately narrow: the objects a userspace broker
+/// legitimately hands to a participant.
+const fn is_object_kind(object_kind: u32) -> bool {
+    use slime_proto::capability_transfer::{
+        OBJECT_KIND_ENDPOINT, OBJECT_KIND_SHARED_BUFFER, OBJECT_KIND_SHARED_BUFFER_LOAN,
+        OBJECT_KIND_SUPERVISION,
+    };
+
+    matches!(
+        object_kind,
+        OBJECT_KIND_ENDPOINT
+            | OBJECT_KIND_SHARED_BUFFER
+            | OBJECT_KIND_SHARED_BUFFER_LOAN
+            | OBJECT_KIND_SUPERVISION
+    )
+}
+
+/// Whether the descriptor's declared `object_kind` is the resource's real kind.
+///
+/// Rule 4 of the transfer contract: the peer decides what it received by
+/// reading this field, so a descriptor that could name a kind the capability is
+/// not would let a broker advertise authority the root never installed. An
+/// `object_kind` this contract does not define matches nothing.
+///
+/// The kinds deliberately do not cover every [`graph::Resource`]. An executable
+/// and a factory have no descriptor code, so neither can be moved over a
+/// channel at all — not because this refuses them by name, but because the
+/// contract has no way to describe one. That is `contracts/capability-transfer`
+/// stating which objects a userspace broker may legitimately hand to a
+/// participant, and it is the same set the retired kernel's `kind_code`
+/// enumerates.
+fn descriptor_names(object_kind: u32, resource: &graph::Resource) -> bool {
+    use slime_proto::capability_transfer::{
+        OBJECT_KIND_ENDPOINT, OBJECT_KIND_SHARED_BUFFER, OBJECT_KIND_SHARED_BUFFER_LOAN,
+        OBJECT_KIND_SUPERVISION,
+    };
+
+    match resource {
+        graph::Resource::Endpoint { .. } => object_kind == OBJECT_KIND_ENDPOINT,
+        graph::Resource::SharedBuffer { .. } => object_kind == OBJECT_KIND_SHARED_BUFFER,
+        graph::Resource::Loan { .. } => object_kind == OBJECT_KIND_SHARED_BUFFER_LOAN,
+        graph::Resource::Supervision { .. } => object_kind == OBJECT_KIND_SUPERVISION,
+        graph::Resource::Executable { .. }
+        | graph::Resource::EndpointFactory
+        | graph::Resource::SharedBufferFactory => false,
+    }
+}
+
 /// Return a dead task's own objects: its VSpace, image frames, CNode, and TCB.
 ///
 /// The half of teardown `reclaim_dead_task` does not do. That function settles
@@ -3488,12 +3916,9 @@ fn reclaim_task_objects(tasks: &mut TaskTable<MAX_TASKS>, reclaimed: &mut usize,
 fn reclaim_dead_task(
     channels: &mut ChannelTable,
     parked: &mut ParkedReplies,
-    windows: &WindowTable<MAX_TASKS>,
-    graph: &mut GraphTables,
     transit: &mut Transit,
     buffers: &mut SharedBufferTable,
     allocator: &mut ObjectAllocator,
-    scratch: &ScratchPage,
     supervision_waits: &mut supervision::SupervisionWaits,
     id: TaskId,
     settled: &mut usize,
@@ -3515,16 +3940,7 @@ fn reclaim_dead_task(
         // registered by a `wait` that has since been answered, and the
         // registration outlived it. `deliver_wake` returns without doing
         // anything in that case.
-        deliver_wake(
-            channels,
-            parked,
-            windows,
-            scratch,
-            graph,
-            transit,
-            supervision_waits,
-            wake,
-        );
+        deliver_wake(channels, parked, supervision_waits, wake);
         woken += 1;
     }
     if held != 0 {

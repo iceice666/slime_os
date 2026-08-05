@@ -739,6 +739,7 @@ dependencies = [
  "object",
  "sel4",
  "sel4-root-task",
+ "slime-proto",
 ]
 
 [[package]]

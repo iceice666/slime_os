@@ -61,12 +61,23 @@ pub const FABRIC_WORKERS: &[FabricWorkerRow] = &[
     ("call", &["parameters"], 7),
     ("operation", &["nav-backup", "navigation"], 9),
 ];
-/// The wake sources the generation declares one worker parks on at once.
+/// The wake sources the generation declares one worker parks on at once, or
+/// `WORKER_ABSENT` when this graph declares no route that worker carries.
 ///
 /// `const fn` so a broker can bind its own `SYS_WAIT` array to this number in a
 /// `const _: () = assert!(..)`. The declared peak and the array that has to hold
 /// it then cannot drift apart silently: a broker that grows its park set past
 /// what the generation resolved stops compiling instead of overflowing at boot.
+///
+/// Absent is a real answer rather than a panic, because a broker is a *module*
+/// of `fabric-service` and is therefore compiled into every graph, including
+/// ones that declare no route for it. A stream-only graph has no call or
+/// operation plane; panicking here would make such a graph fail to build over a
+/// constant nothing in it ever reads. The asserts that consume this admit
+/// `WORKER_ABSENT` and keep their exact check for every graph that does declare
+/// the plane, so the drift they exist to catch is still caught.
+#[allow(dead_code)]
+pub const WORKER_ABSENT: usize = usize::MAX;
 #[allow(dead_code)]
 pub const fn fabric_worker_wait_sources(name: &str) -> usize {
     let mut index = 0;
@@ -77,7 +88,7 @@ pub const fn fabric_worker_wait_sources(name: &str) -> usize {
         }
         index += 1;
     }
-    panic!("worker absent from the resolved profile")
+    WORKER_ABSENT
 }
 
 /// `str` equality usable in a `const fn`; `==` on `&str` is not yet const.

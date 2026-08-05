@@ -52,7 +52,15 @@ const CLIENTS: usize = 2;
 /// the array below cannot disagree. The generation rejects a partition above the
 /// kernel bound at build time; this ties that same number to the array that has
 /// to hold it, so growing the park set without re-resolving fails to compile.
-const WAIT_SOURCES: usize = fabric_worker_wait_sources("call");
+/// Falls back to the broker's own peak when the graph declares no call plane —
+/// a stream-only generation (P5.5.1's seL4 fabric) still compiles this module,
+/// and sizing an array to `WORKER_ABSENT` would try to allocate `usize::MAX`
+/// entries. The tie to the resolved profile is unchanged for every graph that
+/// does declare the plane, which is where drift can actually occur.
+const WAIT_SOURCES: usize = match fabric_worker_wait_sources("call") {
+    fabric_profile::WORKER_ABSENT => CLIENTS * 2 + 3,
+    declared => declared,
+};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Phase {

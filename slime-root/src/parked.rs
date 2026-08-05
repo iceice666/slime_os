@@ -37,11 +37,18 @@ pub const MAX_PARKED: usize = crate::task::MAX_TASKS;
 /// Why a task is parked, so the right thing wakes it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ParkReason {
-    /// Blocked in `recv` on one channel.
-    Receive { channel: u32 },
     /// Blocked in `wait` on a source set. The set itself lives in the wait
     /// registration; this only records that the task is parked in a wait, whose
     /// answer carries no payload.
+    ///
+    /// The only variant since P5.5.1. There was a `Receive` beside it, because
+    /// `recv` parked the caller and the wake had to hand it the message. That
+    /// made any component sweeping several sources freeze at the first empty
+    /// one, so `recv` became non-blocking — as `kernel/src/ipc/mod.rs` always
+    /// had it — and `wait` is now the only operation that parks. The enum is
+    /// kept rather than collapsed into a bare marker: it names *why* a reply is
+    /// held, and a second reason is a plausible future rather than a
+    /// contradiction.
     Wait,
 }
 

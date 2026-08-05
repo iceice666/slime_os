@@ -246,6 +246,37 @@ pub const MAX_STAGED_BYTES: usize = crate::ipc::MAX_MESSAGE_BYTES;
 /// Capability slots one staged frame may carry.
 pub const MAX_STAGED_CAPS: usize = crate::ipc::MAX_MESSAGE_CAPS;
 
+/// Payload bytes one staged **array** may carry (B15).
+///
+/// A second, wider bound beside [`MAX_STAGED_BYTES`], for the one operation
+/// whose payload is not a message: a spawn's grant array. The two are separate
+/// numbers because they bound different things, and collapsing them would be
+/// wrong in both directions.
+///
+/// [`MAX_STAGED_BYTES`] is `ipc::MAX_MESSAGE_BYTES` because a `send` payload
+/// becomes an [`ipc::Message`](crate::ipc::Message), which is that many bytes
+/// wide by construction. Raising it would not let a longer message through; it
+/// would only move the refusal from the window reader to `Message::new`.
+///
+/// A grant array becomes no message at all. It is decoded into a
+/// [`SpawnPlan`](crate::main) and discarded, so the only real constraints are
+/// the window it crosses and the plan array it fills. The retired kernel reads
+/// the same array straight out of caller memory bounded by
+/// `kernel/src/capability/mod.rs::MAX_CAPS` (64), and
+/// `sel4_transport::spawn` already stages up to `64 * 16` bytes without
+/// complaint — the 64-byte refusal was entirely this side.
+///
+/// 1024 is that same 64 records at `SPAWN_GRANT_RECORD_BYTES`, which restores
+/// parity with the oracle rather than picking a new number. It is a quarter of
+/// [`WINDOW_BYTES`], so a staged array cannot approach the window's own bound.
+pub const MAX_STAGED_ARRAY_BYTES: usize = 1024;
+
+// The wide frame must fit the window it is read out of, with room for the
+// capability vector `frame_len` word-aligns after it. A bound larger than the
+// window would be refused at every call rather than at this line.
+const _: () = assert!(MAX_STAGED_ARRAY_BYTES < WINDOW_BYTES);
+const _: () = assert!(MAX_STAGED_ARRAY_BYTES > MAX_STAGED_BYTES);
+
 /// One frame read out of, or to be written into, a task's transfer window.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StagedFrame {
@@ -377,6 +408,81 @@ pub fn read_staged(
         }
     })?;
     Ok(frame)
+}
+
+/// One wide byte array read out of a task's transfer window (B15).
+///
+/// Deliberately not a [`StagedFrame`]: it carries no capability vector at all.
+/// The one operation that stages an array — a spawn's grant list — encodes
+/// *logical slot numbers* in its payload, and `serve_spawn` already refuses a
+/// spawn carrying real capabilities. Giving this type a cap vector it would
+/// only ever refuse would make the wide path look like a widening of what may
+/// cross a window, which it is not: exactly the same kinds of thing cross, one
+/// operation may carry more bytes of them.
+pub struct StagedArray {
+    bytes: [u8; MAX_STAGED_ARRAY_BYTES],
+    len: usize,
+}
+
+impl StagedArray {
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes[..self.len]
+    }
+}
+
+/// Read a wide byte array a caller staged (B15).
+///
+/// [`read_staged`]'s shape, with three differences, each of which is why this
+/// is a second function rather than a parameter on the first:
+///
+/// - the byte bound is [`MAX_STAGED_ARRAY_BYTES`], not the message bound;
+/// - a descriptor naming any capability is refused here rather than accepted
+///   and refused by the caller, so the wide path never parks a capability;
+/// - the inline form is still honored, because a short grant list rides the
+///   fast registers exactly as it does today and must not start requiring a
+///   bound window.
+///
+/// The returned array is heap-free and lives in the caller's frame. At 1 KiB
+/// against the root task's 1 MiB stack that is comfortable, but it is the
+/// reason the bound is stated rather than raised to the window's own size —
+/// backlog B3 records what an oversized stack temporary costs here.
+pub fn read_staged_array(
+    window: Option<Window>,
+    transfer: u64,
+    words: &[sel4::Word],
+    scratch: &crate::child_vspace::ScratchPage,
+) -> Result<StagedArray, IpcError> {
+    let len = descriptor_len(transfer);
+    if len > MAX_STAGED_ARRAY_BYTES || descriptor_caps(transfer) != 0 {
+        return Err(IpcError::InvalidLength);
+    }
+    let mut array = StagedArray {
+        bytes: [0; MAX_STAGED_ARRAY_BYTES],
+        len,
+    };
+    if descriptor_form(transfer) == FORM_INLINE {
+        // The narrow reader's own inline path, which is unchanged by this
+        // widening: the fast registers carry what they always carried, and a
+        // descriptor claiming more than they hold is refused rather than read
+        // past.
+        let inline = read_staged(window, transfer, words, scratch)?;
+        array.bytes[..len].copy_from_slice(inline.bytes());
+        return Ok(array);
+    }
+    let window = window.ok_or(IpcError::InvalidLength)?;
+    if frame_len(len, 0) > window.len {
+        return Err(IpcError::InvalidLength);
+    }
+    with_window_mapped(window, scratch, |base| {
+        // SAFETY: `base` is the scratch address, where `window.frame` is mapped
+        // read-write for the duration of this closure and aliased by no live
+        // Rust reference. `len` was bounded by `window.len` above, and the
+        // window is one granule, so every read is in bounds.
+        unsafe {
+            core::ptr::copy_nonoverlapping(base, array.bytes.as_mut_ptr(), len);
+        }
+    })?;
+    Ok(array)
 }
 
 /// Write a reply frame into a caller's window. The caller's `collect` reads it

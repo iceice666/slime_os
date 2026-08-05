@@ -8,6 +8,11 @@ publish = false
 boot-contracts = { path = "../boot-contracts" }
 sel4 = { path = "../deps/rust-sel4/crates/sel4" }
 sel4-root-task = { path = "../deps/rust-sel4/crates/sel4-root-task" }
+# C8.3 capability-transfer descriptor (P5.5.1). The wire form is generated from
+# `contracts/capability-transfer/v1/schema.zt`, and the root parses exactly the
+# bytes the receiving peer parses — the same crate the retired kernel reads it
+# through, so a descriptor cannot mean one thing here and another there.
+slime-proto = { path = "../components/proto" }
 
 # ELF64 reading only: `read_core` plus `elf`, without `std`, `compression`, or
 # any writer. The root task loads AArch64 ELF child images and nothing else.
