@@ -45,6 +45,10 @@ table release. Alternatively fail the *spawn* when the record table is full,
 which turns a silent wrong answer into a bounded refusal at the point of
 allocation — the same shape `construct_child` already uses for `MAX_GRAPH_TASKS`.
 
+**Deferral re-reviewed 2026-08-05, before opening P5.3.4's gate.** Still
+deferred: that slice's graph creates five tasks against `MAX_RECORDS = 32`, so
+the bound is not approached. See `devlog/2026-08-05-p5-3-4-sample-plane/`.
+
 **Why deferred rather than fixed in P5.3.3:** the counting version touches every
 path that installs or releases a capability, and the refusal version needs a
 gate whose graph spawns past the record table to prove it. Neither is a line;
@@ -86,6 +90,12 @@ message's. The transfer window is already `MIN_TRANSFER_WINDOW` = 4096 bytes and
 buffer, so the room exists; what is missing is a root-side reader that will
 accept more than one message's worth.
 
+**Deferral re-reviewed 2026-08-05, before opening P5.3.4's gate.** Still
+deferred, on an observation rather than by omission: that slice's largest grant
+list is `sample-lender`'s three, which is 48 bytes against the 64-byte staging
+bound, so the ceiling is not reached and the composition needs no widening. See
+`devlog/2026-08-05-p5-3-4-sample-plane/`.
+
 **Why deferred rather than fixed in P5.3.3:** it is a transport change rather
 than a spawn change — `read_staged` and its bound are the channel plane's, and
 widening them touches every operation that stages a payload, each with its own
@@ -94,6 +104,79 @@ gate. P5.3.4 is where a graph with realistic grant lists first runs.
 **Exit condition:** a component spawns a child with at least six declared grants
 on seL4 and the child holds all six at the slots its numbering fixes, observed
 under a named seL4 gate, with the five existing seL4 gates passing.
+
+### B12 — the component build's `--remap-path-prefix` names a path that does not exist
+
+**Problem:** `components/.cargo/config.toml` passes
+`--remap-path-prefix /home/iceice666/projects/slime_os=.` for both the
+`x86_64-unknown-none` and `aarch64-unknown-none` targets. The current checkout is
+`/home/iceice666/projects/slime_os-sel4-cutover`. Because the stale literal is a
+*prefix* of the real path, the flag does not simply miss: it rewrites the leading
+portion and leaves `-sel4-cutover/...` behind, so recorded paths are mangled
+rather than normalized, and a checkout at a different directory still produces
+different bytes.
+
+The determinism claim this flag exists to support is therefore weaker than it
+reads. `just generation_check` still passes, because it builds twice from *one*
+checkout — the property it verifies is reproducibility across runs, not across
+source paths. `build-sel4.py` closes the same leak properly for the kernel with
+`-ffile-prefix-map` onto fixed logical roots (`/slime/sel4`, `/slime/build`), and
+P5.1's devlog records two builds from different source paths as byte-identical
+on that path.
+
+**Evidence:** `components/.cargo/config.toml:11` and `:21` against `pwd`. Noted
+while adding the seL4 target in P5.2; see
+`devlog/2026-08-04-p5-2-native-component-images/`.
+
+**Proposed fix:** remap from the repository root as computed at build time rather
+than from a hardcoded literal — the builder already knows it (`ROOT` in
+`scripts/build/build-generation.py`), and the seL4 path passes
+`--remap-path-prefix={ROOT}=.` explicitly for exactly this reason. Deciding
+whether the mapped-to token should match `build-sel4.py`'s `/slime/...`
+convention is part of the fix.
+
+**Why deferred rather than fixed in P5.2:** changing the frozen x86 oracle's
+build inputs alters every component ELF it produces, and therefore the
+authenticated identity of every generation the oracle's gates assert against.
+That is a larger blast radius than the defect, and it is orthogonal to native
+seL4 component images. The seL4 target is unaffected: it inherits none of these
+rustflags (they are keyed by triple) and passes its own.
+
+**Exit condition:** two builds of the same generation from two different
+checkout directories produce byte-identical component images and the same
+generation identity, with `just generation_check`, `just product_boot_check`,
+and `just test` unchanged.
+
+**Deferral re-reviewed 2026-08-05, before opening P5.3.4's gate**, on the same
+reasoning: that slice adds a sixth seL4 generation through the same build path,
+whose rustflags are keyed by triple and match none of the stale literal's. See
+`devlog/2026-08-05-p5-3-4-sample-plane/`.
+
+**Deferral re-reviewed 2026-08-05, before opening P5.3.3's gate**, on the
+reasoning recorded below: that slice adds a fifth seL4 generation through the
+same build path, whose rustflags are keyed by triple and match none of the stale
+literal's, so it neither touches the defect nor extends its reach. See
+`devlog/2026-08-05-p5-3-3-spawn-plane/`.
+
+**Deferral re-reviewed 2026-08-04, before opening P5.3.2's gate** on the same
+reasoning: that slice adds a fourth seL4 generation through the same build path,
+so it neither touches the defect nor extends its reach. See
+`devlog/2026-08-04-p5-3-2-loan-plane/`.
+
+**Deferral reviewed 2026-08-04, before opening P5.3.1's gate.** Still deferred,
+on the reason recorded above rather than by omission. B12's own analysis
+establishes that the seL4 target is unaffected: `components/.cargo/config.toml`
+keys its rustflags by triple, the seL4 component build matches none of them
+(it uses a JSON target specification), and `build-generation.py` passes
+`--remap-path-prefix={ROOT}=.` explicitly on that path for exactly this reason.
+P5.3.1 adds a second seL4 generation built through that same path, so it neither
+touches the defect nor extends its reach. Fixing it still means rebuilding every
+frozen x86 component image and re-authenticating every generation identity the
+x86 gates assert against — a blast radius larger than the defect, and orthogonal
+to the seL4 cutover. It should be scheduled against the x86 oracle deliberately,
+not folded into a portability slice.
+
+## Resolved
 
 ### B14 — `slime-root` ignores the generation's declared spawn budget
 
@@ -140,73 +223,47 @@ refused `ERR_OUT_OF_MEMORY` on its `N+1`th live child and succeeds again once
 one is reclaimed, observed under a named seL4 gate, with the five existing seL4
 gates still passing.
 
-### B12 — the component build's `--remap-path-prefix` names a path that does not exist
+**Resolved 2026-08-05** by P5.3.4; see
+[`devlog/2026-08-05-p5-3-4-sample-plane/`](../devlog/2026-08-05-p5-3-4-sample-plane/index.md).
 
-**Problem:** `components/.cargo/config.toml` passes
-`--remap-path-prefix /home/iceice666/projects/slime_os=.` for both the
-`x86_64-unknown-none` and `aarch64-unknown-none` targets. The current checkout is
-`/home/iceice666/projects/slime_os-sel4-cutover`. Because the stale literal is a
-*prefix* of the real path, the flag does not simply miss: it rewrites the leading
-portion and leaves `-sel4-cutover/...` behind, so recorded paths are mangled
-rather than normalized, and a checkout at a different directory still produces
-different bytes.
+`slime-root/src/main.rs::serve_spawn` now reads the caller's declared
+`spawnBudget` and refuses a spawn past it, before anything is allocated. The
+count is *derived* rather than tracked: `Task` records the id of the task that
+spawned it, and `TaskTable::live_children` counts the table. A counter would
+need decrementing on the clean-exit path, the fault path, and every spawn
+unwind, and a missed decrement would silently tighten a bound the generation
+declared — whereas a reclaimed task frees its parent's budget by ceasing to
+exist.
 
-The determinism claim this flag exists to support is therefore weaker than it
-reads. `just generation_check` still passes, because it builds twice from *one*
-checkout — the property it verifies is reproducibility across runs, not across
-source paths. `build-sel4.py` closes the same leak properly for the kernel with
-`-ffile-prefix-map` onto fixed logical roots (`/slime/sel4`, `/slime/build`), and
-P5.1's devlog records two builds from different source paths as byte-identical
-on that path.
+The refusal is `ERR_OUT_OF_MEMORY`, matching `sys_spawn`, which maps
+`BudgetExhausted` and `TooManyTasks` alike to that code and everything else to
+`ERR_BAD_CAP`. That distinction is the caller's business in a way the preflight
+refusals are not: a component at its ceiling learns something true about itself
+and can wait for a child to exit.
 
-**Evidence:** `components/.cargo/config.toml:11` and `:21` against `pwd`. Noted
-while adding the seL4 target in P5.2; see
-`devlog/2026-08-04-p5-2-native-component-images/`.
+The deferral reason was "P5.3.4 composes the sample plane and is where a
+multi-child graph already exists," and that is this slice.
 
-**Proposed fix:** remap from the repository root as computed at build time rather
-than from a hardcoded literal — the builder already knows it (`ROOT` in
-`scripts/build/build-generation.py`), and the seL4 path passes
-`--remap-path-prefix={ROOT}=.` explicitly for exactly this reason. Deciding
-whether the mapped-to token should match `build-sel4.py`'s `/slime/...`
-convention is part of the fix.
+**Observed exit condition, both clauses.**
+`contracts/generation/v1/fixtures/sel4-sample.zti` declares `init` a budget of
+exactly two — the two children the composition needs — so the third spawn is a
+denial arm rather than an unused allowance. `just sel4_sample_check` asserts
+`SLIME_GRAPH spawn refused task=N child=... class=budget live=2 budget=2` and
+`[init] spawn budget refused`, which `drive_sample_plane` prints only after
+requiring exactly `ERR_OUT_OF_MEMORY`.
 
-**Why deferred rather than fixed in P5.2:** changing the frozen x86 oracle's
-build inputs alters every component ELF it produces, and therefore the
-authenticated identity of every generation the oracle's gates assert against.
-That is a larger blast radius than the defect, and it is orthogonal to native
-seL4 component images. The seL4 target is unaffected: it inherits none of these
-rustflags (they are keyed by triple) and passes its own.
+The second clause — "succeeds again once one is reclaimed" — is asserted too,
+and getting it required a real fix. `TaskTable::reclaim` was reachable from the
+P5.1 fixture path and from `release_child`, but from neither death arm in
+`serve_component_graph`, so a dead child kept its table entry and the derived
+count made the budget a *lifetime* cap. Both arms now reclaim, and init spawns
+once more after both children exit; a lifetime cap would refuse there too, so
+that arm is what distinguishes the two readings. All six seL4 gates pass.
 
-**Exit condition:** two builds of the same generation from two different
-checkout directories produce byte-identical component images and the same
-generation identity, with `just generation_check`, `just product_boot_check`,
-and `just test` unchanged.
-
-**Deferral re-reviewed 2026-08-05, before opening P5.3.3's gate**, on the
-reasoning recorded below: that slice adds a fifth seL4 generation through the
-same build path, whose rustflags are keyed by triple and match none of the stale
-literal's, so it neither touches the defect nor extends its reach. See
-`devlog/2026-08-05-p5-3-3-spawn-plane/`.
-
-**Deferral re-reviewed 2026-08-04, before opening P5.3.2's gate** on the same
-reasoning: that slice adds a fourth seL4 generation through the same build path,
-so it neither touches the defect nor extends its reach. See
-`devlog/2026-08-04-p5-3-2-loan-plane/`.
-
-**Deferral reviewed 2026-08-04, before opening P5.3.1's gate.** Still deferred,
-on the reason recorded above rather than by omission. B12's own analysis
-establishes that the seL4 target is unaffected: `components/.cargo/config.toml`
-keys its rustflags by triple, the seL4 component build matches none of them
-(it uses a JSON target specification), and `build-generation.py` passes
-`--remap-path-prefix={ROOT}=.` explicitly on that path for exactly this reason.
-P5.3.1 adds a second seL4 generation built through that same path, so it neither
-touches the defect nor extends its reach. Fixing it still means rebuilding every
-frozen x86 component image and re-authenticating every generation identity the
-x86 gates assert against — a blast radius larger than the defect, and orthogonal
-to the seL4 cutover. It should be scheduled against the x86 oracle deliberately,
-not folded into a portability slice.
-
-## Resolved
+**Fault injection.** With the budget check disabled the gate fails on
+`spawn budget did not bite`; with task reclamation removed from the death paths
+it fails on `budget did not recover after a child exited`. Both arms are covered
+rather than merely present.
 
 ### B13 — `slime-root` admits a shared-buffer allocation without resolving a factory capability
 

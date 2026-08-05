@@ -447,8 +447,8 @@ One named Raspberry Pi 5 profile runs the verified isolated Slime vertical slice
 
 ## P5: seL4 microkernel substitution
 
-**Status:** In progress — P5.1, P5.2, P5.3.1, P5.3.2, and P5.3.3 complete;
-P5.3.4, P5.4, and P5.5 planned.
+**Status:** In progress — P5.1, P5.2, and all of P5.3 complete; P5.4 and P5.5
+planned.
 
 **Depends on:** P0 and P1. Supersedes the custom-kernel half of P2.2–P2.6 if it
 completes; P2.1 AArch64 boot evidence is retained and not re-claimed here.
@@ -598,7 +598,7 @@ this boot path. Both halves are fault-injected in the devlog entry.
 
 ### P5.3 — C7 sample plane on seL4
 
-**Status:** In progress — P5.3.1, P5.3.2, and P5.3.3 complete; P5.3.4 planned.
+**Status:** Complete — P5.3.1, P5.3.2, P5.3.3, and P5.3.4 all observed.
 
 **Depends on:** P5.2 and C7.
 
@@ -826,7 +826,7 @@ Not in this slice: the composed sample-plane exit condition (P5.3.4).
 
 ### P5.3.4 — Sample-plane composition on seL4
 
-**Status:** Not started.
+**Status:** Complete.
 
 **Depends on:** P5.3.2 and P5.3.3.
 
@@ -834,9 +834,63 @@ Composes the slices into P5.3's stated exit condition: the `sample-lender` and
 `sample-receiver` components, unmodified, running the same ordered transcript
 `just sample_plane_live_check` records on x86.
 
-#### Exit condition
+#### Required checks
 
-P5.3's exit condition above, observed under a named seL4 gate.
+- both components run **unmodified** — the same binaries the x86 oracle builds,
+  with no seL4 branch, checked against the sources rather than inferred from
+  serial output;
+- the seventeen ordered markers the x86 gate requires are observed in its order,
+  and the marker list is re-read from that gate at run time so the two cannot
+  drift;
+- a spawned child holds the shared-buffer ceiling the generation declares for
+  its component, not the deny-by-default an unnamed holder gets;
+- the generation's declared spawn budget refuses a child past its ceiling, as
+  `ERR_OUT_OF_MEMORY` rather than a capability error;
+- every loan, mapping, region, frame alias, in-flight capability, window, and
+  table is reclaimed at teardown.
+
+#### Verification target
+
+```sh
+just sel4_sample_check
+```
+
+A sixth image, beside the five P5.1–P5.3.3 gates boot, on the same rule.
+
+#### Exit condition (observed)
+
+Observed 2026-08-05; see
+[`devlog/2026-08-05-p5-3-4-sample-plane/`](../devlog/2026-08-05-p5-3-4-sample-plane/index.md).
+
+The unmodified `sample-lender` and `sample-receiver` exchange and return an
+8192-byte payload over seL4 — 128× the 64-byte control-message bound — running
+the transcript `just sample_plane_live_check` records on x86, and the graph
+drains to `live=0 loans=0 mappings=0 regions=0 transit=0 orphans=0 aliases=0`.
+
+Two changes in the root made that possible, and both are the milestone's own
+words rather than additions to it. `serve_buffer_loan` now accepts a
+`RIGHT_SUPERVISE` handle at `receiver_slot` alongside the channel end P5.3.2
+admitted — the retired kernel names a loan's receiver that way, and
+`sample-lender.rs::RECEIVER_SLOT` is exactly that handle, so accepting it is
+what lets the component run unchanged. And a **spawned** child now takes the
+ceiling the generation declares for its component; before this only
+root-launched components were budgeted, so a spawned lender held `DENY` and
+could not allocate at all.
+
+The peer channel is minted at runtime through the declared `endpointCreate`
+grant rather than declared as an edge, because a `source == target` grant is a
+loopback and yields one slot where this composition needs two halves. That is
+the same mechanism `spawn-service` uses on x86, and the components cannot tell:
+each receives its half at its own slot 0 either way.
+
+**B14 is closed here**, with the denial arm its deferral reason named:
+`init`'s declared budget is exactly two, so the third spawn is refused by the
+generation's own number rather than by a global table size.
+
+Four denial arms are fault-injected in the devlog entry, including the two
+changes above — with either removed the gate fails rather than passing.
+
+P5.3 is complete: all four sub-slices are observed.
 
 ### P5.5 — C8 typed fabric on seL4
 

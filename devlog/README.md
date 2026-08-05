@@ -166,3 +166,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-04 | [P5.3.1 — The channel plane on seL4](2026-08-04-p5-3-1-channel-plane/index.md) | Change | Verified | P5.3.1, P5.3, P5.5, B12 |
 | 2026-08-04 | [P5.3.2 — The loan plane and generation-declared quotas on seL4](2026-08-04-p5-3-2-loan-plane/index.md) | Change | Verified | P5.3.2, B13 |
 | 2026-08-05 | [P5.3.3 — Child construction and supervision on seL4](2026-08-05-p5-3-3-spawn-plane/index.md) | Change | Verified | P5.3.3, B13, B10 |
+| 2026-08-05 | [P5.3.4 — The C7 sample plane composed on seL4](2026-08-05-p5-3-4-sample-plane/index.md) | Change | Verified | P5.3.4, P5.3, B14 |
