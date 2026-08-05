@@ -125,15 +125,22 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     ),
     ("both components were activated", r"SLIME_GRAPH activated components=2"),
     (
-        # Required check 2, first half. `console` reaches its `recv` on an empty
-        # queue and is parked: the root holds its reply authority rather than
-        # answering `ERR_WOULDBLOCK`, so the component is blocked in the kernel
-        # rather than spinning. This marker appearing *before* the send below is
-        # the whole claim -- a send that arrived first would be a fast-path
-        # enqueue onto a queue nobody was waiting on, and the wake path would
-        # never run.
+        # Required check 2, first half. `console` reaches its `recv` on an
+        # empty queue, is told `ERR_WOULDBLOCK`, and parks in the `wait` it
+        # issues next: the root holds its reply authority there rather than
+        # answering, so the component is blocked in the kernel rather than
+        # spinning. This marker appearing *before* the send below is the whole
+        # claim -- a send that arrived first would be a fast-path enqueue onto a
+        # queue nobody was waiting on, and the wake path would never run.
+        #
+        # `reason=wait` rather than `reason=recv` since P5.5.1. The property is
+        # unchanged -- parked in the kernel, woken by the peer's send -- but the
+        # operation holding the reply moved, because `recv` is now non-blocking
+        # exactly as `kernel/src/ipc/mod.rs` makes it. Parking inside `recv`
+        # froze any component that sweeps several sources before parking, which
+        # is what the typed fabric first showed; see the P5.3.1 roadmap entry.
         "console parked on an empty channel",
-        r"SLIME_GRAPH parked task=0 channel=0 reason=recv",
+        r"SLIME_GRAPH parked task=0 reason=wait",
     ),
     (
         # Required check 2, second half. The payload exceeds the inline
@@ -189,7 +196,7 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         # is owed at the moment its peer dies. This second park is what makes
         # the death-wake arm below observable rather than vacuous.
         "console parked again on an empty channel",
-        r"SLIME_GRAPH parked task=0 channel=0 reason=recv",
+        r"SLIME_GRAPH parked task=0 reason=wait",
     ),
     ("init completed the scenario", r"\[init\] channel plane complete"),
     ("init exited cleanly", r"SLIME_GRAPH component exit task=1 status=0"),

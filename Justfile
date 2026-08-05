@@ -93,6 +93,17 @@ sel4_spawn_check: sel4_pin_check
 sel4_sample_check: sel4_pin_check
     python3 scripts/check/check-sel4-sample-plane.py
 
+# P5.5.1: build the typed-fabric image, boot it, and require that one declared
+# route carries a sample from a publisher to a subscriber over seL4 — with both
+# route endpoints provisioned by the fabric from the generation's declared
+# edges through C8.3's narrow-on-transfer move, a re-delegation refused, and a
+# component the graph declares no edge for denied.
+#
+# A seventh image, beside the six above, on the same rule: each gate boots the
+# artifact it asserts about.
+sel4_fabric_check: sel4_pin_check
+    python3 scripts/check/check-sel4-fabric-plane.py
+
 # Run the seL4 product image interactively on the pinned QEMU machine.
 run: sel4_qemu_image_check
     qemu-system-aarch64 -machine virt,virtualization=on -cpu cortex-a53 -smp 1 \
