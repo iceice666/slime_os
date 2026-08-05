@@ -228,6 +228,12 @@ fn main() {
         slime_rt::debug_write(b"[init] spawn plane complete\n");
         slime_rt::exit(0);
     }
+    // P5.3.4, on the same rule as the three above.
+    if option_env!("SLIME_SEL4_SAMPLE_CHECK") == Some("1") {
+        drive_sample_plane();
+        slime_rt::debug_write(b"[init] sample plane complete\n");
+        slime_rt::exit(0);
+    }
     slime_rt::debug_write(b"[init] launching component graph\n");
     if option_env!("SLIME_TRANSFER_RECEIVER") == Some("1") {
         if slime_rt::generation_receive(TRANSFER_RECEIVER_SLOT, TRANSFER_SOURCE_SLOT) == 0 {
@@ -1361,6 +1367,98 @@ const STRAND_SLOT: u32 = POWERBOX_CLIENT_SLOT;
 
 fn fail(reason: &[u8]) -> ! {
     slime_rt::debug_write(b"[init] channel plane fail: ");
+    slime_rt::debug_write(reason);
+    slime_rt::debug_write(b"\n");
+    slime_rt::exit(1)
+}
+
+/// Drive the P5.3.4 sample plane: `launch_sample_plane`'s composition, on seL4.
+///
+/// Only reachable under `SLIME_SEL4_SAMPLE_CHECK`, whose generation is
+/// `contracts/generation/v1/fixtures/sel4-sample.zti`; see the `.md` beside it.
+///
+/// Both components are **unmodified** — the same `sample-lender` and
+/// `sample-receiver` the x86 oracle's `just sample_plane_live_check` runs, with
+/// no seL4 branch in either. That is P5.3's whole claim.
+///
+/// The one difference from `launch_sample_plane` above is where the channel
+/// comes from. There it is a generation-declared edge and init holds both
+/// halves at two layout-named slots; here it is minted at runtime through the
+/// declared endpoint factory, because a `source == target` grant is a loopback
+/// and yields one slot rather than two. The components cannot tell: each
+/// receives its half at its own slot 0 either way.
+///
+/// Spawn order is load-bearing, exactly as it is on x86. The receiver goes
+/// first because the lender names its loan receiver through a `RIGHT_SUPERVISE`
+/// handle, which cannot exist until the receiver does.
+fn drive_sample_plane() {
+    let (lender_side, receiver_side) = slime_rt::endpoint_create(ENDPOINT_FACTORY_SLOT)
+        .unwrap_or_else(|_| fail_sample(b"endpoint create"));
+
+    let receiver = slime_rt::spawn(
+        SAMPLE_RECEIVER_SLOT,
+        &[grant(receiver_side, RIGHT_SEND | RIGHT_RECV)],
+    )
+    .unwrap_or_else(|_| fail_sample(b"spawn receiver"));
+
+    // The lender's three grants, in the order `sample-lender.rs` compiles
+    // against: `PEER_SLOT = 0`, `FACTORY_SLOT = 1`, `RECEIVER_SLOT = 2`. The
+    // component never learns those numbers — the order of this list is what
+    // fixes them — and this is the same list `launch_sample_plane` passes.
+    let lender = slime_rt::spawn(
+        SAMPLE_LENDER_SLOT,
+        &[
+            grant(lender_side, RIGHT_SEND | RIGHT_RECV),
+            grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
+            grant(receiver.supervision_slot, RIGHT_SUPERVISE),
+        ],
+    )
+    .unwrap_or_else(|_| fail_sample(b"spawn lender"));
+
+    // B14: init's declared budget is two, and both are now live. A third spawn
+    // must be refused by the generation's own number rather than by a global
+    // table size — and refused as `ERR_OUT_OF_MEMORY`, which is what
+    // distinguishes "you have reached your ceiling" from "you named something
+    // you do not hold".
+    if slime_rt::spawn(SAMPLE_RECEIVER_SLOT, &[]) != Err(slime_rt::ERR_OUT_OF_MEMORY) {
+        fail_sample(b"spawn budget did not bite");
+    }
+    slime_rt::debug_write(b"[init] spawn budget refused\n");
+
+    for handle in [receiver.supervision_slot, lender.supervision_slot] {
+        loop {
+            match slime_rt::supervision_status(handle) {
+                Ok(None) => slime_rt::wait(&[slime_rt::WaitSource::Supervision(handle)]),
+                Ok(Some(slime_rt::Termination::Exit(0))) => break,
+                _ => fail_sample(b"a sample component did not exit cleanly"),
+            }
+        }
+    }
+
+    // B14's second half: the budget is a *live-child* cap, not a lifetime one.
+    // Both children have now exited, so the ceiling that refused above must
+    // admit again — which it can only do if a dead task stops being counted.
+    //
+    // This is the arm that distinguishes the two readings. A budget derived
+    // from a table that never releases its dead would still have refused the
+    // spawn above, and would still refuse here; only a live-child count
+    // recovers.
+    //
+    // The spawn is *authorized* and then immediately unwound: the point is
+    // whether the ceiling admits it, not what the child does. Granting it no
+    // channel means it would fail its own `recv`, so the handle is dropped and
+    // the child left to exit on its own — the gate scopes its component-failure
+    // scan to the composition above, which has already completed.
+    let reaped = slime_rt::spawn(SAMPLE_RECEIVER_SLOT, &[])
+        .unwrap_or_else(|_| fail_sample(b"budget did not recover after a child exited"));
+    slime_rt::debug_write(b"[init] spawn budget recovered\n");
+    if slime_rt::cap_drop(reaped.supervision_slot) != slime_rt::ERR_SUCCESS {
+        fail_sample(b"dropping the reaped handle");
+    }
+}
+
+fn fail_sample(reason: &[u8]) -> ! {
+    slime_rt::debug_write(b"[init] sample plane fail: ");
     slime_rt::debug_write(reason);
     slime_rt::debug_write(b"\n");
     slime_rt::exit(1)

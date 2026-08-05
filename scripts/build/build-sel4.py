@@ -37,6 +37,8 @@ LOAN_IMAGE = BUILD_ROOT / "slime-sel4-loan.elf"
 LOAN_MANIFEST = BUILD_ROOT / "slime-sel4-loan.identity.json"
 SPAWN_IMAGE = BUILD_ROOT / "slime-sel4-spawn.elf"
 SPAWN_MANIFEST = BUILD_ROOT / "slime-sel4-spawn.identity.json"
+SAMPLE_IMAGE = BUILD_ROOT / "slime-sel4-sample.elf"
+SAMPLE_MANIFEST = BUILD_ROOT / "slime-sel4-sample.identity.json"
 
 # Which generation the root task embeds. That is the only difference between the
 # images this script builds; see `build_application`.
@@ -45,11 +47,13 @@ GRAPH_VARIANT = "graph"
 CHANNEL_VARIANT = "channel"
 LOAN_VARIANT = "loan"
 SPAWN_VARIANT = "spawn"
+SAMPLE_VARIANT = "sample"
 VARIANT_MANIFESTS = {
     GRAPH_VARIANT: "sel4",
     CHANNEL_VARIANT: "sel4-channel",
     LOAN_VARIANT: "sel4-loan",
     SPAWN_VARIANT: "sel4-spawn",
+    SAMPLE_VARIANT: "sel4-sample",
 }
 VARIANT_TARGET_DIRS = {
     FIXTURE_VARIANT: "root",
@@ -57,6 +61,7 @@ VARIANT_TARGET_DIRS = {
     CHANNEL_VARIANT: "root-channel",
     LOAN_VARIANT: "root-loan",
     SPAWN_VARIANT: "root-spawn",
+    SAMPLE_VARIANT: "root-sample",
 }
 VARIANT_IMAGES = {
     FIXTURE_VARIANT: (IMAGE, MANIFEST),
@@ -64,6 +69,7 @@ VARIANT_IMAGES = {
     CHANNEL_VARIANT: (CHANNEL_IMAGE, CHANNEL_MANIFEST),
     LOAN_VARIANT: (LOAN_IMAGE, LOAN_MANIFEST),
     SPAWN_VARIANT: (SPAWN_IMAGE, SPAWN_MANIFEST),
+    SAMPLE_VARIANT: (SAMPLE_IMAGE, SAMPLE_MANIFEST),
 }
 
 CHILD_MANIFEST = ROOT / "slime-root" / "child" / "Cargo.toml"
@@ -713,6 +719,11 @@ def main() -> None:
         action="store_true",
         help="embed the spawn-plane generation (P5.3.3), writing a separate image",
     )
+    parser.add_argument(
+        "--sample-plane",
+        action="store_true",
+        help="embed the sample-plane generation (P5.3.4), writing a separate image",
+    )
     arguments = parser.parse_args()
     selected = [
         variant
@@ -721,11 +732,12 @@ def main() -> None:
             (CHANNEL_VARIANT, arguments.channel_plane),
             (LOAN_VARIANT, arguments.loan_plane),
             (SPAWN_VARIANT, arguments.spawn_plane),
+            (SAMPLE_VARIANT, arguments.sample_plane),
         )
         if chosen
     ]
     if len(selected) > 1:
-        fail("--component-graph, --channel-plane, --loan-plane, and --spawn-plane select different generations")
+        fail("--component-graph, --channel-plane, --loan-plane, --spawn-plane, and --sample-plane select different generations")
     variant = selected[0] if selected else FIXTURE_VARIANT
 
     if Path.cwd().resolve() != ROOT:

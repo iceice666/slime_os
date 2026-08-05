@@ -198,6 +198,12 @@ SEL4_MANIFESTS = {
     / "v1"
     / "fixtures"
     / "sel4-spawn.zti",
+    "sel4-sample": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-sample.zti",
 }
 COMPONENTS_TARGET_DIR = Path(
     os.environ.get("CARGO_TARGET_DIR") or ROOT / "target" / "components"
@@ -1739,6 +1745,11 @@ def build_rust_components(
         environment["SLIME_SEL4_SPAWN_CHECK"] = "1"
     else:
         environment.pop("SLIME_SEL4_SPAWN_CHECK", None)
+    # P5.3.4, likewise.
+    if environment.get("SLIME_SEL4_SAMPLE_CHECK") == "1":
+        environment["SLIME_SEL4_SAMPLE_CHECK"] = "1"
+    else:
+        environment.pop("SLIME_SEL4_SAMPLE_CHECK", None)
     if recovery:
         environment["SLIME_RECOVERY_IMAGE"] = "1"
     if environment.get("SLIME_GENERATION_CMD_CHECK") == "1" and candidate_identity is not None:
@@ -2342,6 +2353,7 @@ def build_sel4_generation(output: Path, manifest: dict, target_profile: TargetPr
         ("sel4-channel", "SLIME_SEL4_CHANNEL_CHECK"),
         ("sel4-loan", "SLIME_SEL4_LOAN_CHECK"),
         ("sel4-spawn", "SLIME_SEL4_SPAWN_CHECK"),
+        ("sel4-sample", "SLIME_SEL4_SAMPLE_CHECK"),
     ):
         if selected == manifest_name:
             os.environ[flag] = "1"

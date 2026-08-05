@@ -1,0 +1,87 @@
+{
+  formatVersion = 1;
+  generation = 1;
+  target = "aarch64-sel4-qemu-virt";
+  kernelObject = "sha256:kernel";
+  bootstrapComponent = "init";
+  interfaceSchemas = [];
+
+  objects = [
+    { id = "sha256:kernel"; kind = "kernel"; size = 1048576; };
+    { id = "sha256:init"; kind = "bootstrap"; size = 65536; };
+    { id = "sha256:sample-lender"; kind = "component"; size = 65536; };
+    { id = "sha256:sample-receiver"; kind = "component"; size = 65536; };
+    { id = "shared-buffer-budget"; kind = "resource"; size = 4096; };
+    { id = "boot-layout"; kind = "resource"; size = 4096; };
+  ];
+
+  sharedBufferBudget = [
+    { holder = "sample-lender"; bytePages = 4; bufferCount = 1; mappingCount = 2; loanCount = 1; };
+    { holder = "sample-receiver"; bytePages = 2; bufferCount = 1; mappingCount = 2; loanCount = 1; };
+  ];
+
+  components = [
+    {
+      name = "init";
+      object = "sha256:init";
+      role = "init";
+      dependencies = [];
+      spawnBudget = 2;
+      commandProfile = [];
+    };
+    {
+      name = "sample-lender";
+      object = "sha256:sample-lender";
+      role = "service";
+      dependencies = ["init";];
+      spawnBudget = 0;
+      commandProfile = [];
+    };
+    {
+      name = "sample-receiver";
+      object = "sha256:sample-receiver";
+      role = "service";
+      dependencies = ["init";];
+      spawnBudget = 0;
+      commandProfile = [];
+    };
+  ];
+
+  grants = [
+    {
+      name = "init-sample-lender";
+      source = "init";
+      target = "sample-lender";
+      rights = ["exec"; "spawn";];
+      transferable = false;
+    };
+    {
+      name = "init-sample-receiver";
+      source = "init";
+      target = "sample-receiver";
+      rights = ["exec"; "spawn";];
+      transferable = false;
+    };
+    {
+      name = "init-endpoint-factory";
+      source = "init";
+      target = "init";
+      rights = ["endpointCreate";];
+      transferable = false;
+    };
+    {
+      name = "init-shared-buffer-factory";
+      source = "init";
+      target = "init";
+      rights = ["bufferCreate";];
+      transferable = false;
+    };
+  ];
+
+  state = [];
+
+  health = {
+    bootAttempts = 3;
+    requiredComponents = ["init"; "sample-lender"; "sample-receiver";];
+  };
+}

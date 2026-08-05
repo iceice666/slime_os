@@ -95,13 +95,20 @@ capability to carry. `Resource::is_transferable` is the separate question of
 which resource *kinds* the root has a mechanism to move, checked at the send.
 Both must hold, and only a loan satisfies the second.
 
-This channel is also how the loan names its receiver. `shared_buffer_loan`
+This channel is also how the loan names its receiver here. `shared_buffer_loan`
 resolves its `receiver_slot` to a channel end and binds the loan to the task at
 the other end of it. The retired kernel instead resolves a `RIGHT_SUPERVISE`
-handle minted when init spawned the receiver — which does not exist here,
-because there is no spawn. See `slime-root/src/main.rs::serve_buffer_loan` for
-why no reading of a `supervise` *grant* would produce one either, and for what
-P5.3.3 replaces this with.
+handle minted when init spawned the receiver — which does not exist in *this*
+graph, because it declares no spawn.
+
+P5.3.4 added the supervision form beside this one, so `serve_buffer_loan` now
+accepts either, and `just sel4_sample_check` exercises the handle path with the
+unmodified `sample-lender`. This fixture still exercises the channel-end path,
+which is why it is kept rather than replaced: it is a real bound in its own
+right — a component can only loan to a task the generation gave it an edge to —
+and it is the only form a graph without spawn can use. See
+`slime-root/src/main.rs::serve_buffer_loan` for why neither widens the other,
+and why no reading of a `supervise` *grant* would name a subject.
 
 ### `dango-output` — the unrelated holder's channel
 

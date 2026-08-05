@@ -39,6 +39,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=SLIME_SEL4_CHANNEL_CHECK");
     println!("cargo:rerun-if-env-changed=SLIME_SEL4_LOAN_CHECK");
     println!("cargo:rerun-if-env-changed=SLIME_SEL4_SPAWN_CHECK");
+    println!("cargo:rerun-if-env-changed=SLIME_SEL4_SAMPLE_CHECK");
     println!("cargo:rerun-if-env-changed=SLIME_FABRIC_AUTHORITY_CHECK");
     println!("cargo:rerun-if-env-changed=SLIME_FABRIC_STREAM_CHECK");
     println!("cargo:rerun-if-env-changed=SLIME_FABRIC_QOS_CHECK");
@@ -80,6 +81,9 @@ fn main() {
     }
     if let Ok(value) = std::env::var("SLIME_SEL4_SPAWN_CHECK") {
         println!("cargo:rustc-env=SLIME_SEL4_SPAWN_CHECK={value}");
+    }
+    if let Ok(value) = std::env::var("SLIME_SEL4_SAMPLE_CHECK") {
+        println!("cargo:rustc-env=SLIME_SEL4_SAMPLE_CHECK={value}");
     }
     if let Ok(value) = std::env::var("SLIME_FABRIC_AUTHORITY_CHECK") {
         println!("cargo:rustc-env=SLIME_FABRIC_AUTHORITY_CHECK={value}");
