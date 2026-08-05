@@ -16,6 +16,52 @@ at the bottom rather than deleting it.
 
 ## Open
 
+### B17 — the capability transfer's subset test has no coverage
+
+**Problem:** `slime-root/src/main.rs::serve_cap_transfer` enforces four rules,
+and `just sel4_fabric_check` observes three: transfer authority at the source,
+the per-kind mask, and the descriptor/kind agreement. The fourth — the **subset
+test**, `rights & !source.rights != 0`, which is what makes the move
+narrow-only against *what the holder actually has* — is not observed. Deleting
+it leaves every marker in that gate intact.
+
+Not reachable from any graph this cutover can declare, because the four rules
+are one disjunction and every candidate subject fails an earlier one first:
+
+- a **provisioned role** carries no `RIGHT_TRANSFER`, so rule 1 refuses it —
+  which is exactly why `fabric-publisher`'s own widening arm proves the
+  *per-kind* rule rather than this one;
+- a **factory** is granted its single operation right and no transfer bit, so
+  rule 1 again;
+- an **endpoint** minted by `endpoint_create` holds `send|recv|transfer`, which
+  is precisely what `valid_rights` admits for its kind, so no mask widens it
+  without the per-kind rule refusing the same mask.
+
+Reaching it needs a capability holding transfer authority that is strictly
+narrower than its kind admits. `cap_transfer` itself is the only thing that
+produces one — a role moved with `FLAG_RETAIN_TRANSFER` — and a component cannot
+move a capability to itself, because the two ends of a channel it holds alone
+are a loopback the root refuses to split.
+
+So this is a property of the *graph*, not of the root. A latent gap rather than
+a defect: the check is present and correct, and nothing observes it.
+
+**Evidence:** found by fault injection while landing P5.5.1 — the subset test
+was removed and `just sel4_fabric_check` still passed. Two attempts at an
+in-fixture probe were written and withdrawn, each caught by a different earlier
+rule; the reasoning is recorded in `check-sel4-fabric-plane.py`'s module doc
+rather than left as an arm that looks like coverage. See
+`devlog/2026-08-05-p5-5-1-typed-fabric/`.
+
+**Proposed fix:** a composition where one broker provisions another, so a role
+moved with `FLAG_RETAIN_TRANSFER` becomes a subject holding `send|transfer`
+where its kind admits `send|recv|transfer`. Asking to move that with `recv`
+restored is a widening only the subset test can refuse. P5.5.2's two-route graph
+with a declared interposition chain is that shape.
+
+**Exit condition:** a widening refused by the subset test alone, observed under
+a named seL4 gate, and fault-injected to show that removing the test fails it.
+
 ### B16 — a supervision termination record is never reclaimed, so a long-lived graph exhausts the table
 
 **Problem:** `slime-root/src/supervision.rs::Terminations` records how each child
@@ -45,9 +91,10 @@ table release. Alternatively fail the *spawn* when the record table is full,
 which turns a silent wrong answer into a bounded refusal at the point of
 allocation — the same shape `construct_child` already uses for `MAX_GRAPH_TASKS`.
 
-**Deferral re-reviewed 2026-08-05, before opening P5.3.4's gate.** Still
-deferred: that slice's graph creates five tasks against `MAX_RECORDS = 32`, so
-the bound is not approached. See `devlog/2026-08-05-p5-3-4-sample-plane/`.
+**Deferral re-reviewed 2026-08-05, before opening P5.5.1's gate.** Still
+deferred, on the same observation: that slice's graph creates nine tasks — five
+launched, four spawned — against `MAX_RECORDS = 32`, so the bound is not
+approached. See `devlog/2026-08-05-p5-5-1-typed-fabric/`.
 
 **Why deferred rather than fixed in P5.3.3:** the counting version touches every
 path that installs or releases a capability, and the refusal version needs a
@@ -57,53 +104,6 @@ both want the multi-child graph P5.3.4 composes.
 **Exit condition:** a graph that creates more than `MAX_RECORDS` tasks over its
 lifetime still answers `supervision_status` correctly for every live handle,
 observed under a named seL4 gate, with the five existing seL4 gates passing.
-
-### B15 — a spawn carries at most four grants on seL4, against the oracle's sixty-four
-
-**Problem:** `slime-root`'s spawn reads its grant array out of the caller's
-transfer window through `transfer_window::read_staged`, which refuses anything
-over `MAX_STAGED_BYTES` — `ipc::MAX_MESSAGE_BYTES`, 64 bytes. At 16 bytes per
-record that is **four grants**. The retired kernel's `sys_spawn` reads the array
-straight out of caller memory and is bounded only by
-`kernel/src/capability/mod.rs::MAX_CAPS` (64).
-
-Real x86 callers already exceed four: `init.rs::GENERATION_MANAGER_CAPS` and
-`dango_caps()` are six grants each, and `spawn-service.rs` builds up to five.
-On seL4 those would be refused `ERR_INVALID_ARG` where the oracle succeeds — a
-component that runs on the retired kernel failing to launch its children on the
-cutover, which is the one property P5.4 must be able to claim.
-
-Latent today: every declared seL4 generation spawns with at most one grant, so
-no gate observes it. `MAX_SPAWN_GRANTS` is now derived from the staging bound
-rather than asserted to match the kernel's, so the ceiling is stated in the
-source instead of discovered as a length error.
-
-**Evidence:** `transfer_window::MAX_STAGED_BYTES` = `ipc::MAX_MESSAGE_BYTES` = 64
-against `SPAWN_GRANT_RECORD_BYTES` = 16, and the six-element grant arrays in
-`components/bins/src/bin/init.rs`. Noted in the P5.3.3 review; see
-`devlog/2026-08-05-p5-3-3-spawn-plane/`.
-
-**Proposed fix:** stage the grant array across more than one message-sized frame,
-or give the spawn path its own staged-payload bound independent of the control
-message's. The transfer window is already `MIN_TRANSFER_WINDOW` = 4096 bytes and
-`sel4_transport::spawn` encodes into a `MAX_SPAWN_GRANTS * GRANT_RECORD_BYTES`
-buffer, so the room exists; what is missing is a root-side reader that will
-accept more than one message's worth.
-
-**Deferral re-reviewed 2026-08-05, before opening P5.3.4's gate.** Still
-deferred, on an observation rather than by omission: that slice's largest grant
-list is `sample-lender`'s three, which is 48 bytes against the 64-byte staging
-bound, so the ceiling is not reached and the composition needs no widening. See
-`devlog/2026-08-05-p5-3-4-sample-plane/`.
-
-**Why deferred rather than fixed in P5.3.3:** it is a transport change rather
-than a spawn change — `read_staged` and its bound are the channel plane's, and
-widening them touches every operation that stages a payload, each with its own
-gate. P5.3.4 is where a graph with realistic grant lists first runs.
-
-**Exit condition:** a component spawns a child with at least six declared grants
-on seL4 and the child holds all six at the slots its numbering fixes, observed
-under a named seL4 gate, with the five existing seL4 gates passing.
 
 ### B12 — the component build's `--remap-path-prefix` names a path that does not exist
 
@@ -147,6 +147,11 @@ checkout directories produce byte-identical component images and the same
 generation identity, with `just generation_check`, `just product_boot_check`,
 and `just test` unchanged.
 
+**Deferral re-reviewed 2026-08-05, before opening P5.5.1's gate**, on the same
+reasoning: that slice adds a seventh seL4 generation through the same build
+path, whose rustflags are keyed by triple and match none of the stale
+literal's. See `devlog/2026-08-05-p5-5-1-typed-fabric/`.
+
 **Deferral re-reviewed 2026-08-05, before opening P5.3.4's gate**, on the same
 reasoning: that slice adds a sixth seL4 generation through the same build path,
 whose rustflags are keyed by triple and match none of the stale literal's. See
@@ -177,6 +182,33 @@ to the seL4 cutover. It should be scheduled against the x86 oracle deliberately,
 not folded into a portability slice.
 
 ## Resolved
+
+### B15 — a spawn carries at most four grants on seL4, against the oracle's sixty-four — **resolved 2026-08-05**
+
+**Was:** `slime-root`'s spawn read its grant array through
+`transfer_window::read_staged`, whose bound is `ipc::MAX_MESSAGE_BYTES` (64). At
+`SPAWN_GRANT_RECORD_BYTES` = 16 that is **four** records, against the retired
+kernel's sixty-four. Real x86 callers already exceeded it —
+`init.rs::GENERATION_MANAGER_CAPS` and `dango_caps()` are six each, and
+`launch_fabric_graph` hands the fabric nine — so a component that runs on the
+retired kernel would have failed to launch its children on the cutover, which is
+the one property P5.4 must be able to claim.
+
+**Fixed by** a second staged bound rather than a wider message.
+`transfer_window::MAX_STAGED_ARRAY_BYTES` (1024) bounds an *array* staged
+through a window, where `MAX_STAGED_BYTES` bounds a *message*; the two stay
+separate numbers because a `send` payload becomes an `ipc::Message` and is that
+wide by construction, while a grant array becomes no message at all. The
+component side needed no change: `sel4_transport::spawn` already encoded into a
+`MAX_SPAWN_GRANTS * GRANT_RECORD_BYTES` buffer and staged it into a 4096-byte
+window, so the refusal was entirely root-side.
+
+**Exit condition observed 2026-08-05** under `just sel4_spawn_check`: `init`
+spawns `sysinfo` with **six** grants — B15's own number, and the size of this
+repository's largest real grant lists — and all six ends move, each granted slot
+leaving init's table while each retained half still sends. Fault-injected: with
+the narrow reader restored the spawn is refused outright and the gate fails. See
+`devlog/2026-08-05-p5-5-1-typed-fabric/`.
 
 ### B14 — `slime-root` ignores the generation's declared spawn budget
 

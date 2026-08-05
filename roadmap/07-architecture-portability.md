@@ -894,7 +894,7 @@ P5.3 is complete: all four sub-slices are observed.
 
 ### P5.5 — C8 typed fabric on seL4
 
-**Status:** Not started.
+**Status:** In progress — P5.5.1 complete; P5.5.2 planned.
 
 **Depends on:** P5.3.3 and C8.
 
@@ -904,17 +904,126 @@ different slice by size and by mechanism: its smallest honest configuration is
 four tasks — `init`, `fabric-service`, one publisher, one subscriber — because
 the C8.3 authority claim is that a participant never holds a route endpoint
 directly but is provisioned one by the fabric from the authenticated graph. That
-provisioning is `Operation::CapTransfer`, which this cutover does not yet
-mediate, and it presupposes P5.3.3's spawn-time capability distribution.
+provisioning is `Operation::CapTransfer`, which this cutover did not mediate
+until P5.5.1, and it presupposes P5.3.3's spawn-time capability distribution.
 
 Note the threshold difference: a C7 payload crosses to a shared buffer above the
 64-byte control-message bound, a C8 stream sample above `maxInlineBytes = 32`.
+
+**Decomposed 2026-08-05,** in the same shape and for the same reason P5.3 was.
+The exit condition below is C8.3-shaped — it names where route authority comes
+from, not how much data a route can move — and reaching it needs one route, one
+publisher, and one subscriber. Reaching the *full* C8.4 stream plane with the
+components unmodified needs a second publisher for the `>MAX_MSG` descriptor
+path, a stalled subscriber for KEEP_LAST eviction, and a second route for the
+many-to-many fan-in: twice the graph, and none of it required by the exit
+condition. Landing both in one slice would make the reviewable claim depend on
+the unreviewable one.
 
 #### Exit condition
 
 One declared typed route carries a sample from a publisher to a subscriber over
 seL4, with the route endpoints provisioned by the fabric from the generation's
 declared edges, a re-delegation refused, and an undeclared participant denied.
+
+### P5.5.1 — Narrow-on-transfer provisioning on seL4
+
+**Status:** Complete.
+
+**Depends on:** P5.3.3.
+
+`Operation::CapTransfer` was root-mediated but had no handler: it fell to the
+dispatcher's catch-all and answered `unimplemented`, so no component could hand
+a capability to a task that already existed. That is the one mechanism a
+userspace fabric needs and neither `send` nor `spawn` provides — `send` moves
+only a loan, whose handle names its own recipient, and a spawn grant's
+destination is a task that does not exist yet. A route role is neither: it goes
+to a running task, chosen by a broker, narrowed to one direction and made
+non-delegable at the moment it crosses.
+
+#### Required checks
+
+- a capability moves to a channel's peer with its rights narrowed to exactly the
+  mask its descriptor declares, and the descriptor's declared object kind must
+  be the moved capability's real kind;
+- `RIGHT_TRANSFER` is dropped at the destination unless the descriptor retains
+  it, so a provisioned role is non-delegable by construction rather than by
+  convention, and a participant's re-delegation is refused;
+- a component the generation's graph declares no edge for is denied even when it
+  holds a real control endpoint and supplies the exact route strings;
+- a moved endpoint's channel *holder* moves with its capability, so the receiver
+  resolves a live queue rather than a capability naming nothing;
+- both halves of one route are separate objects, so neither participant can
+  perform the other's operation with what it holds.
+
+#### Verification target
+
+```sh
+just sel4_fabric_check
+```
+
+A seventh image, beside the six P5.1–P5.3.4 gates boot, on the same rule.
+
+#### Exit condition (observed)
+
+Observed 2026-08-05; see
+[`devlog/2026-08-05-p5-5-1-typed-fabric/`](../devlog/2026-08-05-p5-5-1-typed-fabric/index.md).
+
+One declared `telemetry` route carries a sample from `fabric-publisher` to
+`fabric-subscriber` over seL4. Both route endpoints are provisioned by
+`fabric-service` from the generation's declared edges through four
+narrow-on-transfer moves — the publisher's data and credit halves, the
+subscriber's data and ack halves — each landing with exactly one direction
+(`rights=0x1` and `rights=0x2`) and no transfer bit. `fabric-publisher`'s
+re-delegation and widening are both refused, `fabric-intruder` is denied with an
+empty rights mask and no capability attached despite holding a real control
+endpoint, and the graph drains to `transit=0`.
+
+Three of the four participants — `fabric-service`, `fabric-publisher`,
+`fabric-intruder` — run **unmodified**. `fabric-subscriber` carries exactly one
+guarded branch, because it refuses to finish until both sample forms arrive and
+the `>MAX_MSG` one comes from a publisher this graph does not declare. The gate
+asserts that count exactly rather than asserting absence, so the difference from
+P5.5.2 is a checked fact.
+
+**Two defects were found by this slice and fixed in it**, both latent since
+P5.3.1 and neither observable from a one-source graph:
+
+- **`recv` parked the caller** where the retired kernel's is non-blocking. A
+  component that sweeps several sources before parking — which every broker
+  does — froze at the first empty one, holding samples a peer was parked waiting
+  for. `recv` now answers `ERR_WOULDBLOCK` and `wait` remains the only operation
+  that parks, which is the oracle's own split.
+- **`resolve_channel` answered `-4`** where `sys_send` and `sys_recv` both
+  answer `ERR_BAD_CAP`. Components compare against the literal, so a denial arm
+  testing for it read as "the denial did not fire".
+
+**B15 is closed here**, with a six-grant spawn observed under
+`just sel4_spawn_check`.
+
+Three denial arms are fault-injected in the devlog entry. A fourth — the
+transfer's *subset* test — is recorded as **uncovered** rather than claimed:
+deleting it leaves every marker intact, because no capability this graph can
+produce holds transfer authority while being narrower than its kind admits. See
+B17.
+
+### P5.5.2 — The full stream plane, unmodified, on seL4
+
+**Status:** Not started.
+
+**Depends on:** P5.5.1.
+
+Runs the C8.4 stream plane as the x86 oracle builds it: two publishers, two
+subscribers, two routes, the `>MAX_INLINE_BYTES` descriptor and loan path, and
+KEEP_LAST eviction with a stalled subscriber told exactly what it lost. Every
+component unmodified, on P5.3.4's standard rather than P5.5.1's counted-branch
+one.
+
+#### Exit condition
+
+`fabric-service` and every stream participant run on seL4 with no seL4 branch in
+any of them, producing the transcript `just fabric_stream_check` records on x86,
+and the transfer plane's subset test (B17) is observed rather than argued.
 
 ### P5.4 — Retire the custom kernel
 
