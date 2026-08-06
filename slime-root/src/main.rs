@@ -1740,6 +1740,63 @@ fn serve_component_graph(
                     Response::error(IpcError::BadCapability)
                 });
             }
+            // Emit a component's diagnostic line as one uninterruptible unit
+            // (B18).
+            //
+            // Components used to bypass the root entirely here, calling
+            // `seL4_DebugPutChar` per byte from their own thread. That is one
+            // syscall per character, so the root's own `debug_println!` — or
+            // another component's line — could land in the middle of a marker
+            // and destroy it. The transcript then showed ` QoS matched` where
+            // `[fabric] QoS matched` was written, and whichever gate required
+            // that marker failed on a boot that was otherwise correct. It cost
+            // this milestone's gate roughly one run in three.
+            //
+            // Serving it here fixes that by construction rather than by
+            // ordering: the graph loop is single-threaded and answers one
+            // request at a time, so a line assembled and printed inside this
+            // arm cannot interleave with anything.
+            //
+            // The bytes travel like any other payload, through the caller's
+            // transfer window, which is why this is the only operation whose
+            // component-side implementation had a reason to avoid the root: a
+            // task that has not bound a window cannot print. That is acceptable
+            // — every launched component binds one before it runs, and a task
+            // that has not is not yet in a state where its output would be
+            // attributable anyway.
+            Operation::DebugWrite => {
+                let response = match transfer_window::read_staged(
+                    windows.bound(id),
+                    words[1],
+                    &words,
+                    scratch,
+                ) {
+                    Ok(frame) if frame.cap_count() == 0 => {
+                        // One `debug_print!` for the whole payload. Not
+                        // `debug_println!`: the component's bytes carry their
+                        // own newline, and adding one would reflow every
+                        // marker the x86 corpus records.
+                        let bytes = frame.bytes();
+                        if let Ok(text) = core::str::from_utf8(bytes) {
+                            sel4::debug_print!("{text}");
+                        } else {
+                            // Not text. Printed as an explicit refusal rather
+                            // than lossily, so a component cannot inject
+                            // arbitrary bytes into a transcript gates parse.
+                            sel4::debug_println!(
+                                "SLIME_GRAPH debug write refused task={} bytes={} reason=not-utf8",
+                                id.0,
+                                bytes.len(),
+                            );
+                        }
+                        Response::success(bytes.len() as i64, 0)
+                    }
+                    // A diagnostic line carries no capabilities.
+                    Ok(_) => Response::error(IpcError::InvalidLength),
+                    Err(error) => Response::error(error),
+                };
+                ipc::reply(response);
+            }
             // C8.3's narrow-on-transfer move (P5.5.1). The one mechanism a
             // userspace fabric needs that neither `send` nor `spawn` provides:
             // `send` moves only a loan, whose handle names its own recipient,

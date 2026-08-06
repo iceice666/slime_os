@@ -564,28 +564,28 @@ pub fn unhealthy() -> ! {
     }
 }
 
-sel4::sel4_cfg_if! {
-    if #[sel4_cfg(PRINTING)] {
-        /// Writes to the kernel debug log. The log is not a Slime object, so
-        /// this needs neither the root service nor a transfer window — which
-        /// is what keeps diagnostics available to a component that has not
-        /// bound one.
-        pub fn debug_write(bytes: &[u8]) -> i64 {
-            for byte in bytes {
-                sel4::debug_put_char(*byte);
-            }
-            bytes.len() as i64
-        }
-    } else {
-        /// Without kernel printing the root service owns the serial path, so
-        /// the bytes cross like any other payload.
-        pub fn debug_write(bytes: &[u8]) -> i64 {
-            let transfer = match stage(bytes, &[]) {
-                Ok(transfer) => transfer,
-                Err(error) => return error,
-            };
-            let (operands, used) = payload_operands(0, transfer, bytes);
-            result_of(super::SYS_DEBUG_WRITE, &operands[..used])
-        }
-    }
+/// Write one diagnostic line through the root service.
+///
+/// **Not `seL4_DebugPutChar`, even where the kernel offers it.** That was the
+/// implementation under `PRINTING`, and it emitted one syscall per byte — so
+/// the root's own `debug_println!`, or another component's line, could land
+/// mid-string and destroy a marker. A transcript would show ` QoS matched`
+/// where `[fabric] QoS matched` was written, and whichever gate required that
+/// marker failed on a boot that was otherwise correct (B18).
+///
+/// The root's graph loop is single-threaded and answers one request at a time,
+/// so a line printed inside its `DebugWrite` arm cannot interleave with
+/// anything. That makes atomicity structural rather than a matter of timing.
+///
+/// The cost is that this now needs a bound transfer window, where the direct
+/// path needed nothing. Every launched component binds one before it runs, and
+/// a task that has not is not yet in a state where its output would be
+/// attributable.
+pub fn debug_write(bytes: &[u8]) -> i64 {
+    let transfer = match stage(bytes, &[]) {
+        Ok(transfer) => transfer,
+        Err(error) => return error,
+    };
+    let (operands, used) = payload_operands(0, transfer, bytes);
+    result_of(super::SYS_DEBUG_WRITE, &operands[..used])
 }
