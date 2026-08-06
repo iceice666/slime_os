@@ -42,6 +42,13 @@
           aavmf = pkgs.pkgsCross.aarch64-multiplatform.OVMF.fd;
           # The exact GNU AArch64 cross toolchain the pinned seL4 kernel and
           # kernel loader are built with (`CROSS_COMPILER_PREFIX`, `CC`).
+          #
+          # `pkgsCross.aarch64-multiplatform.stdenv.cc` is not the same *shape*
+          # on every system: on `aarch64-darwin` and `x86_64-linux` it is a
+          # cross `gcc-wrapper` whose `targetPrefix` is
+          # `aarch64-unknown-linux-gnu-`, and on `aarch64-linux` it is a
+          # *native* `gcc-wrapper` whose `targetPrefix` is empty. Only the
+          # derivation differs; the wrappers inject the same flags.
           crossCC = pkgs.pkgsCross.aarch64-multiplatform.stdenv.cc;
           # The seL4 build drives host Python generators (bitfield, invocation,
           # hardware/DTS) through a bare `python3`.
@@ -111,7 +118,17 @@
             # The prefix `scripts/build/build-sel4.py` passes to CMake and uses
             # for `CC`; it must name the toolchain the pinned prefix was built
             # with, since the loader links against those objects.
-            CROSS_COMPILER_PREFIX = crossCC.targetPrefix;
+            #
+            # Absolute, not a bare triple prefix. A bare prefix is resolved
+            # against `PATH`, and the entry that wins is not the same
+            # derivation on every system: `aarch64-linux` puts the *native*
+            # wrapper first — which exports no `aarch64-unknown-linux-gnu-gcc`
+            # at all — so the prefixed name falls through to the **unwrapped**
+            # GCC, while Darwin resolves the cross wrapper. Different binaries,
+            # so different injected flags and a different `as`. Naming the
+            # wrapper's `bin/` by store path makes every host run the same
+            # compiler driver and the same assembler (B21).
+            CROSS_COMPILER_PREFIX = "${crossCC}/bin/${crossCC.targetPrefix}";
 
             RUSTUP_TOOLCHAIN = rustToolchain;
 

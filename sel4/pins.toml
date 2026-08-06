@@ -37,11 +37,12 @@ export_ptmr_user = true
 # Hashes of the installed seL4 prefix, observed from `just sel4_qemu_image_check`.
 # The build pins the QEMU device-tree dump (`dtb-randomness=off`), maps the
 # source and build roots to fixed logical prefixes, drops the ambient dev
-# shell's compiler flags in favour of a fixed `-frandom-seed`, and states its own
-# frame-pointer policy. So these depend on neither the shell that ran the build
-# nor the platform it ran on: adding a package to `flake.nix` changes that
-# shell's derivation hash and leaves these unchanged (B19), and `aarch64-darwin`,
-# `aarch64-linux`, and `x86_64-linux` produce a byte-identical `kernel.elf` (B20).
+# shell's compiler flags in favour of a fixed `-frandom-seed`, states its own
+# frame-pointer policy, and takes the cross toolchain by absolute store path.
+# So these depend on neither the shell that ran the build nor the platform it
+# ran on: adding a package to `flake.nix` changes that shell's derivation hash
+# and leaves these unchanged (B19), and `aarch64-darwin`, `aarch64-linux`, and
+# `x86_64-linux` produce a byte-identical `kernel.elf` (B20, B21).
 #
 # What they do still bind, beyond the pinned seL4 source and config: the
 # compiler *version*, and the build tooling this file does not pin — `cmake`,
@@ -53,10 +54,16 @@ export_ptmr_user = true
 # to what this file pins.
 #
 # Observed on `aarch64-darwin`, `aarch64-linux`, and `x86_64-linux`, all with
-# GCC 15.2.0 from `pkgsCross.aarch64-multiplatform`. Those resolve to different
-# wrappers — a cross wrapper on Darwin and `x86_64-linux`, a native `gcc` on
-# `aarch64-linux` — and agree byte-for-byte anyway, which is what makes this a
-# toolchain gate rather than a host gate.
+# GCC 15.2.0 from `pkgsCross.aarch64-multiplatform`. That attribute is a *cross*
+# `gcc-wrapper` on Darwin and `x86_64-linux` and a *native* one on
+# `aarch64-linux`; all three ship the same `nix-support/cc-cflags-before`, and
+# B20's claim that the native one "forces neither" frame-pointer flag was
+# wrong. What actually differed was binary selection: the native wrapper
+# exports no `aarch64-unknown-linux-gnu-`-prefixed `gcc`, so a bare prefix fell
+# through to the *unwrapped* compiler and a different `as`. `flake.nix` now
+# exports an absolute `CROSS_COMPILER_PREFIX`, so every host runs the same
+# driver and assembler (B21) — which is what makes this a toolchain gate rather
+# than a host gate.
 [observed_prefix]
 kernel_sha256 = "97dcb029127bcc0fac1fd6cc83950ba878040a773a380e2d000b0ebc20d875ce"
 kernel_config_sha256 = "e775930bb15fd6d484abcba19620479d997625be531bcb4a5d9c0ec8aed444c4"

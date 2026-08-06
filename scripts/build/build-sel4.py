@@ -220,6 +220,19 @@ def cross_compiler_prefix() -> str:
 
     `CROSS_COMPILER_PREFIX` overrides it for hosts whose GNU AArch64 toolchain
     carries a different triple; the default matches the `nix develop` shell.
+
+    The shell sets this to an **absolute** `.../bin/<triple>-` path rather than
+    a bare `<triple>-`, because a bare prefix names whatever `PATH` resolves
+    and that is a different derivation per system. On `aarch64-linux`
+    nixpkgs' `pkgsCross.aarch64-multiplatform.stdenv.cc` is a *native* wrapper
+    that exports no `aarch64-unknown-linux-gnu-gcc`, so the prefixed lookup
+    reaches past it to the unwrapped GCC, while Darwin resolves the cross
+    wrapper: different flag injection and a different `as`, hence a different
+    `kernel.elf`. Absolute pinning is what makes `[observed_prefix]` a function
+    of the toolchain rather than of `PATH` order (B21).
+
+    A bare prefix is still accepted: `require_tool` resolves either form, and
+    hosts outside the pinned shell may legitimately have only a `PATH` entry.
     """
     prefix = os.environ.get("CROSS_COMPILER_PREFIX") or "aarch64-unknown-linux-gnu-"
     require_tool(f"{prefix}gcc")
@@ -489,17 +502,30 @@ def configure_and_install_sel4() -> None:
     #    dev shell, so the ELF depends on that shell's derivation hash.
     #    `sel4_build_environment` drops them and the fixed `-frandom-seed`
     #    below replaces the seed. See `ENVIRONMENT_FLAG_PREFIXES`.
-    #  * Frame-pointer policy differs per *platform*, not per shell, so the
-    #    scrub cannot reach it: `pkgsCross.aarch64-multiplatform.stdenv.cc` is a
-    #    cross `gcc-wrapper` on Darwin, whose `nix-support/cc-cflags-before`
-    #    forces `-fno-omit-frame-pointer -mno-omit-leaf-frame-pointer`, and a
-    #    native `gcc` on `aarch64-linux`, which forces neither. Those live in
-    #    `cc-cflags-before`, ahead of the command line, so the only way to
-    #    settle the question is to state the wanted policy ourselves.
+    #  * Frame-pointer policy is stated rather than inherited. The recorded
+    #    cause for this (B20) was wrong and is corrected here: it claimed
+    #    Darwin's wrapper injects `-fno-omit-frame-pointer` while
+    #    `aarch64-linux` "forces neither". Both systems' wrappers ship the
+    #    *same* `nix-support/cc-cflags-before`
+    #    (`-fno-omit-frame-pointer -mno-omit-leaf-frame-pointer -march=armv8-a`)
+    #    — verified by reading both files. The real divergence was which
+    #    binary ran at all: with a bare `CROSS_COMPILER_PREFIX`, Darwin
+    #    resolved the cross *wrapper* and `aarch64-linux` fell through to the
+    #    *unwrapped* GCC, which injects nothing. `CROSS_COMPILER_PREFIX` is now
+    #    absolute, so both run the wrapper and the injection is uniform (B21).
     #
-    #    This is a policy this build *chooses*, not a compiler default it
-    #    restores, and it moves both platforms. GCC's aarch64 backend disables
-    #    `-fomit-frame-pointer` at every `-O` level
+    #    These flags remain load-bearing, for a reason B20 did not identify.
+    #    With the toolchain pinned but the flags removed, the two hosts still
+    #    disagree: every ALLOC section matches byte-for-byte and only
+    #    `.debug_line` differs (observed `e8cbab4f…` vs `4c694979…`, both
+    #    982208 bytes). The frame-pointer prologue makes GAS emit an extra
+    #    line-table row at one address, and GAS's DWARF-5 "view" numbering for
+    #    that row is not host-independent. Keeping the frame pointer omitted
+    #    keeps that row from existing, so the flags close a real residual leak
+    #    rather than merely restating a policy. Do not drop them.
+    #
+    #    They are also a policy this build *chooses*. GCC's aarch64 backend
+    #    disables `-fomit-frame-pointer` at every `-O` level
     #    (`aarch_option_optimization_table`, `OPT_LEVELS_ALL`), so an aarch64
     #    kernel keeps its frame pointers at `-O2` unless the flag is passed
     #    explicitly. `-Q --help=optimizers` reports `-fomit-frame-pointer
@@ -507,14 +533,12 @@ def configure_and_install_sel4() -> None:
     #    the truth: `aarch64.cc` drives codegen off a tri-state where only an
     #    explicit flag counts. seL4 asks for no frame pointer, nothing in the
     #    tree walks one, and omitting it is worth a register and the prologue.
-    #    Without these flags the two platforms disagree byte-for-byte on every
-    #    function prologue (B20).
     #
     #    `-momit-leaf-frame-pointer` is belt and braces: under
     #    `-fomit-frame-pointer` no function gets a frame pointer, leaf or not,
     #    and the two flags together emit assembly identical to the first alone.
-    #    It is kept because it names the second of the wrapper's two injections.
-    #    Neither flag converges the platforms on its own.
+    #    It is kept because it names the second of the wrapper's two
+    #    injections.
     common_flags = (
         f"-ffile-prefix-map={SEL4_SOURCE}=/slime/sel4 "
         f"-ffile-prefix-map={SEL4_BUILD}=/slime/build "

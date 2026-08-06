@@ -284,6 +284,20 @@ def check_toolchain_and_targets(pins: dict[str, object]) -> None:
             f"flake.nix does not install the workspace toolchain {workspace_toolchain} "
             "named by rust-toolchain.toml"
         )
+    # `flake.nix` must export `CROSS_COMPILER_PREFIX` as an absolute path into
+    # the wrapper's `bin/`, not a bare triple prefix. A bare prefix resolves
+    # against `PATH`, and nixpkgs' `pkgsCross.aarch64-multiplatform.stdenv.cc`
+    # is a *native* wrapper on `aarch64-linux` that exports no prefixed `gcc`,
+    # so the lookup silently reaches the unwrapped compiler and a different
+    # `as` — a different `kernel.elf` from the same pinned inputs (B21). The
+    # prefix pin cannot catch that itself: it only reports "toolchain drift"
+    # without naming which host is odd.
+    if 'CROSS_COMPILER_PREFIX = "${crossCC}/bin/${crossCC.targetPrefix}"' not in flake:
+        fail(
+            "flake.nix must export CROSS_COMPILER_PREFIX as an absolute "
+            '"${crossCC}/bin/${crossCC.targetPrefix}" path; a bare triple '
+            "prefix resolves per-host and silently changes kernel.elf (B21)"
+        )
 
     root_target_text = text(rust_sel4, "root_target", "rust_sel4")
     root_target = (ROOT / root_target_text).resolve()
