@@ -1079,10 +1079,17 @@ exercised the path. `shared_buffer_unmap` refused a **loan** slot where
 `sys_shared_buffer_unmap` accepts one, so a receiver that mapped through
 `loan_map` had no slot it could unmap with: the region belongs to the lender.
 
-`MAX_CHANNELS` also grew 16 → 32. The old bound's reasoning was "one channel per
-task pair"; a userspace broker mints edges per *route role*, so the stream
-plane's six control channels became sixteen and the fabric failed its eleventh
-`endpoint_create`.
+`MAX_CHANNELS` also grew 16 → 32, and `MAX_GRAPH_TASKS` 16 → `MAX_TASKS`. Both
+bounds were sized against the wrong quantity — task pairs rather than route
+roles — and this is the first graph large enough to reach either.
+
+**The gate is currently flaky: it passes roughly one run in three (B18).** The
+failure is `fabric-publisher-b` publishing on a route it had already marked
+terminal, which the retired kernel's cooperative scheduling hides; the one-line
+fix wedges `just fabric_qos_check` and was reverted. Every assertion above is
+observed on a passing run — what is unreliable is reaching the end of the boot,
+not what the boot proves — but the gate should not be relied on as a regression
+guard until B18 is resolved.
 
 ### P5.4 — Retire the custom kernel
 

@@ -6,7 +6,7 @@
 | Kind | Change |
 | Status | Verified |
 | Scope | `slime-root/src/{main,channel,shared_buffer}.rs`, `components/bins/src/bin/{init,fabric-publisher,fabric-subscriber}.rs`, `components/bins/build.rs`, `contracts/generation/v1/fixtures/sel4-stream.{zti,md}`, `scripts/build/{build-generation,build-sel4}.py`, `scripts/check/check-sel4-stream-plane.py`, `Justfile` |
-| Roadmap | P5.5.2, P5.5, B17, B16, B12 |
+| Roadmap | P5.5.2, P5.5, B17, B18, B16, B12 |
 | Gates | `just sel4_stream_check`, `just fabric_stream_check` |
 | Trigger | P5.5.2 opened as the next uncompleted milestone after P5.5.1 closed |
 | Baseline | P5.5.1 (`11d9b72`): seven seL4 gates green, one counted seL4 branch in `fabric-subscriber`, B17 open |
@@ -52,6 +52,33 @@ larger graph.
 | `slime-root/src/shared_buffer.rs` | `unmap_loan`, authorizing by the mapping record rather than region ownership | A loan receiver can unmap what it mapped |
 | `slime-root/src/main.rs` | `serve_buffer_lifecycle` resolves a loan slot for `unmap` alone; response handling factored into `finish_buffer_lifecycle` | `shared_buffer_unmap`'s accepted kinds match `sys_shared_buffer_unmap`'s |
 | `scripts/check/check-sel4-stream-plane.py` | Rewritten from P5.5.1's gate: 10 chains, branch **absence**, and `check_transcript_matches_the_oracle` | The transcript is the oracle's, not one written to suit this root |
+| `slime-root/src/graph.rs` | `MAX_GRAPH_TASKS` 16 → `MAX_TASKS` | One ceiling on how many tasks a graph may hold, refused where nothing is allocated yet |
+
+### A scheduling-dependent defect this gate exposes and does not fix
+
+`fabric-publisher-b` sends its first `diagnostics` sample with `FLAG_LAST` —
+which retires the route at the fabric — and then publishes on that same route
+again after the large telemetry sample. Once `diagnostics` is retired only
+`telemetry` keeps the service alive; when that drains, the fabric exits and the
+late send answers `ERR_PEER_DEAD`, which `publish` treats as fatal.
+
+**The seL4 gate fails roughly two runs in three on this**, and the passes
+recorded earlier in implementation were luck rather than evidence — stated
+plainly because it would have been easy to keep re-running until green. The x86
+gate passes consistently because cooperative scheduling orders the two events
+favourably every time.
+
+**The one-line fix was tried and reverted.** Moving `FLAG_LAST` to the second
+diagnostics sample, where the route genuinely ends, wedges
+`just fabric_qos_check`: that graph has a subscriber depending on `diagnostics`
+terminating early, so the fabric parks forever on a route that never finishes.
+Two gates want opposite things from one component, which makes this a question
+about what `FLAG_LAST` should mean for a publisher that continues — not about
+where the flag sits. Recorded as **B18** with the failed attempt included,
+rather than left as an unexplained flake or papered over by re-running.
+
+Everything this milestone claims is observed on a passing run; what is
+unreliable is reaching the end of the boot, not what the boot proves.
 
 ### Two divergences the composition exposed
 
@@ -90,13 +117,14 @@ own `SharedBufferTable::unmap` does — it takes no rights argument and matches 
 | The B17 arm silently stops testing anything | `just fabric_stream_check` | The x86 graph grants no probe, so the marker must be absent there; injected below |
 | A participant failure is masked by an unconfigured instance's | `just sel4_stream_check` | Per-component failure count `!= 1` |
 | The loan-unmap path regresses | `just sel4_stream_check` | `[fabric-subscriber] fail: unmap` |
+| A publisher outlives a route it terminated | `just sel4_stream_check` | `[fabric-publisher-b] fail: publish` after `[fabric] stream plane complete` — currently firing; B18 |
 | The x86 oracle is disturbed | `just fabric_stream_check`, `just fabric_visibility_check` | Marker or source-lint failure |
 
 ## Verification
 
 | Command/scenario | Result | Evidence class |
 |---|---|---|
-| `just sel4_stream_check` | Pass — 48 markers, 10 chains, six components unmodified, 1 declared seL4-only marker | Direct |
+| `just sel4_stream_check` | Pass — 51 markers, 10 chains, six components unmodified, 1 declared seL4-only marker. **Roughly 1 run in 3**; the failures are B18, not an assertion | Direct |
 | `just sel4_sample_check` | Pass | Direct |
 | `just sel4_spawn_check` | Pass | Direct |
 | `just sel4_loan_check` | Pass | Direct |
@@ -199,6 +227,16 @@ loan-unmap injection above, which fails the gate.
       generation runs to completion and exits — a quantifier that stops being
       safe at P5.4.
 - [ ] **B12** stays open, re-reviewed before this gate on unchanged reasoning.
+- [ ] **B18** opened, and it is the significant one: `just sel4_stream_check`
+      passes roughly one run in three. The failure is `fabric-publisher-b`
+      publishing on a route it already terminated, and the obvious fix breaks
+      `just fabric_qos_check`. A gate this flaky is one whose real regressions
+      get attributed to flake, so this should be resolved before the gate is
+      relied on. Every assertion the milestone makes is observed on a passing
+      run.
+- [ ] A second, rarer flake — one run in seven — is a marker corrupted
+      mid-string by the root's own `debug_println!`. `debug_write` is not atomic
+      against the root's markers on seL4. Folded into B18.
 - [ ] `just deny` fails at HEAD and failed identically before this change. Not
       in CLAUDE.md's required list; unaddressed here rather than silently
       ignored.

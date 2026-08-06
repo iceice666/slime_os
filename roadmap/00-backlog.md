@@ -16,6 +16,59 @@ at the bottom rather than deleting it.
 
 ## Open
 
+### B18 — `fabric-publisher-b` publishes past a route it already terminated, so the seL4 stream plane is scheduling-dependent
+
+**Problem:** `components/bins/src/bin/fabric-publisher-b.rs` sends its first
+`diagnostics` sample with `FLAG_LAST`, which retires that route at the fabric,
+and then — after `publish_large` — publishes on the same route again. Whether
+the second send succeeds depends on whether `fabric-service` has decided every
+route is finished and exited in the interval.
+
+Once `diagnostics` is retired, only `telemetry` keeps the service alive; when
+that drains, the fabric exits and the late send answers `ERR_PEER_DEAD`, which
+`publish` treats as fatal. The component exits 1 and init reports
+`a fabric component did not exit cleanly`.
+
+**Evidence:** `just sel4_stream_check` fails roughly two runs in three:
+
+```
+[fabric] stream plane complete
+SLIME_GRAPH component exit task=9 status=0
+[fabric-publisher-b] large sample published
+[fabric-publisher-b] fail: publish
+```
+
+Reproduced at both `MAX_GRAPH_TASKS = 16` and `= 32`, so it is unrelated to that
+bound. `just fabric_stream_check` passed three consecutive runs, so the x86 gate
+does not observe it — cooperative scheduling orders the two events favourably
+every time. See `devlog/2026-08-05-p5-5-2-stream-plane/`.
+
+**A second, rarer flake was observed once in seven runs** and is *not* this: a
+component's marker corrupted mid-string by the root's own `debug_println!`
+(`[fabric-sSLIME_GRAPH received task=9 …`), which fails whichever gate required
+the destroyed marker. `debug_write` is not atomic against the root's markers on
+seL4. Recorded here rather than as its own item because both make the same gate
+flaky and both want measuring together.
+
+**Proposed fix, and why it is not one line.** The obvious change — move
+`FLAG_LAST` to the second diagnostics sample, where the route genuinely ends —
+**was tried and reverted**: it wedges `just fabric_qos_check`, whose graph has a
+subscriber that depends on `diagnostics` terminating early, so the fabric parks
+forever waiting for a route that never finishes. The two gates want opposite
+things from the same component, which makes this a question about what
+`FLAG_LAST` means for a publisher that continues, not a flag placement. Likely
+answers: a per-route "no more from this publisher" that is distinct from "route
+finished", or a QoS graph that does not rely on the early terminal.
+
+**Exit condition:** ten consecutive `just sel4_stream_check` runs pass, with
+`just fabric_stream_check`, `just fabric_qos_check`, and
+`just data_fabric_boot_check` unchanged.
+
+**Not blocking P5.5.2.** Its exit condition is what the transcript asserts, and
+every assertion is observed on a passing run; what is unreliable is reaching the
+end of the boot, not what the boot proves. Recorded plainly because a gate that
+fails two runs in three is one whose real regressions get attributed to flake.
+
 ### B16 — a supervision termination record is never reclaimed, so a long-lived graph exhausts the table
 
 **Problem:** `slime-root/src/supervision.rs::Terminations` records how each child
