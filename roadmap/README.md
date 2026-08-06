@@ -12,7 +12,7 @@ A milestone is complete only when its exit condition is observed. Compiled code,
 
 | Track | Status | Next open gate |
 | --- | --- | --- |
-| [Backlog](00-backlog.md) | B1–B11, B13–B15, and B18–B20 resolved; B12, B16, and B17 open, all deferred with reason | Resolve B12, B16, and B17 before the next track gate, or record why they stay deferred |
+| [Backlog](00-backlog.md) | B1–B11, B13–B15, and B18–B21 resolved; B12, B16, and B17 open, all deferred with reason | Resolve B12, B16, and B17 before the next track gate, or record why they stay deferred |
 | [Foundations](01-foundations.md) | M1–M4 and M6 complete; M5 mechanisms complete except M5.7 physical Framework evidence | Preserve as regression history; do not block RPi5 work on Framework-only evidence unless storage safety is touched |
 | [Core runtime](02-core-runtime.md) | C7 and C8.1–C8.10 complete; C8.11–C8.15 and C10 are planned | For the demo, prioritize only the C8/C10 slices required by two ROS 2 nodes over minimal DDS/RTPS |
 | [RPi5 ROS 2 demo](09-rpi5-ros2-demo.md) | RP0 contract complete; RP1–RP8 planned | P1 architecture-boundary extraction is complete; begin RP1 target-qualified build/admission |

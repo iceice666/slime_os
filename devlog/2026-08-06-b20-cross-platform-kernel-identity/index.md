@@ -208,3 +208,40 @@ claims, and no evidence about physical-board reproducibility.
   `## Corrections` section opened this defect, and whose pin this supersedes.
 - Related roadmap item: `roadmap/07-architecture-portability.md` — P5, whose
   `[observed_prefix]` gate this widens from one platform to three.
+
+## Corrections
+
+### 2026-08-06 — this entry's root cause is wrong; the follow-up above is resolved as B21
+
+The body above is frozen and left as written. Two of its claims do not survive
+re-measurement, and the open follow-up is now closed.
+
+1. **The stated root cause is false.** This entry says Darwin's wrapper forces
+   `-fno-omit-frame-pointer -mno-omit-leaf-frame-pointer` through
+   `nix-support/cc-cflags-before` while `aarch64-linux` "forces neither"
+   (Summary, Investigation log step 3, Root cause, and the `Changes` table).
+   Both systems' wrappers ship a **byte-identical** `cc-cflags-before`, verified
+   by reading both files: nixpkgs emits it for every non-x86-32, non-s390
+   target, which includes both. The real divergence was **binary selection**:
+   `CROSS_COMPILER_PREFIX` was a bare triple prefix resolved through `PATH`, and
+   `aarch64-linux`'s native wrapper publishes no prefixed `gcc`, so the lookup
+   reached the *unwrapped* compiler — and a different `as`. The pre-fix hashes
+   this entry attributes to platforms, `e8cbab4f…` and `f2d316e1…`, are
+   reproducible on a single host by choosing the wrapped or unwrapped driver.
+2. **The open follow-up predicted the wrong failure.** It warned that "a future
+   nixpkgs change that adds a different `cc-cflags-before` entry on one
+   platform would reintroduce divergence". The wrappers were never the
+   asymmetric part, so that is not the exposure. The real one — `PATH`-order
+   binary selection — was already live.
+3. **The rejected alternative was rejected on a false premise.** "Making
+   `flake.nix` name one wrapper for both platforms" is now implemented, and it
+   neither fetches a toolchain no platform selects nor moves the recorded hash:
+   `crossCC` is unchanged, only the *reference* to it became an absolute store
+   path. `kernel_sha256` remains `97dcb029…`.
+
+What this entry got right, and what still stands: the frame-pointer flags are
+kept. They are load-bearing, though for a reason not recorded here — with the
+toolchain pinned but the flags removed, the hosts still differ in `.debug_line`
+alone, via GAS's DWARF-5 view numbering.
+
+See `devlog/2026-08-06-b21-cross-toolchain-binary-selection/`.

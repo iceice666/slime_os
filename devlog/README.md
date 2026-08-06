@@ -171,3 +171,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-05 | [P5.5.2 — The full stream plane, unmodified, on seL4](2026-08-05-p5-5-2-stream-plane/index.md) | Change | Verified | P5.5.2, P5.5, B17 |
 | 2026-08-06 | [B19 — the seL4 prefix pins bound the dev-shell derivation hash, not the toolchain](2026-08-06-b19-sel4-prefix-pin-shell-coupling/index.md) | Defect | Verified | B19 |
 | 2026-08-06 | [B20 — the prefix pin held for one platform at a time](2026-08-06-b20-cross-platform-kernel-identity/index.md) | Defect | Verified | B20, B19 |
+| 2026-08-06 | [B21 — the toolchain was pinned by name, so each host resolved a different binary](2026-08-06-b21-cross-toolchain-binary-selection/index.md) | Defect | Verified | B21, B20, B19 |

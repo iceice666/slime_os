@@ -195,6 +195,55 @@ not folded into a portability slice.
 
 ## Resolved
 
+### B21 — the toolchain was pinned by name, so each host resolved a different binary — **resolved 2026-08-06**
+
+**Problem:** `flake.nix` pinned the seL4 cross toolchain by *name*
+(`CROSS_COMPILER_PREFIX = crossCC.targetPrefix`), and `build-sel4.py` passed
+that bare prefix to CMake, which resolves `${prefix}gcc` through `PATH`. A name
+is not an identity. `pkgsCross.aarch64-multiplatform.stdenv.cc` is a *cross*
+wrapper on `aarch64-darwin` and `x86_64-linux` but a *native* wrapper on
+`aarch64-linux`, where `targetPrefix` is empty and `bin/` contains no
+`aarch64-unknown-linux-gnu-`-prefixed entry. The prefixed lookup therefore
+skipped that wrapper and found the **unwrapped** GCC its own `setup-hook` had
+put on `PATH` — a different compiler driver *and* a different assembler,
+selected by `PATH` order rather than by anything pinned.
+
+**This corrects B20's recorded root cause.** B20 attributed the divergence to
+Darwin's wrapper injecting `-fno-omit-frame-pointer` where `aarch64-linux`
+"forces neither". Both wrappers ship a byte-identical
+`nix-support/cc-cflags-before`; nixpkgs emits it for every non-x86-32,
+non-s390 target. B20's two pre-fix hashes, `e8cbab4f…` and `f2d316e1…`, differ
+by *driver*, not by host: both are reproducible on one machine by choosing the
+wrapped or unwrapped compiler.
+
+**Resolved by** exporting `CROSS_COMPILER_PREFIX` as an absolute
+`"${crossCC}/bin/${crossCC.targetPrefix}"` store path, so every host runs the
+same driver and assembler. This is the fix B20 proposed and rejected as
+"larger, with a worse failure mode"; that rejection rested on a false premise.
+`crossCC` is the same derivation each platform already evaluates and installs,
+so nothing new is fetched and no pinned hash moves. `just sel4_pin_check` now
+fails if the bare form returns — the prefix pin cannot catch this itself, since
+it reports "toolchain drift" without naming which host is odd.
+
+B20's `-fomit-frame-pointer -momit-leaf-frame-pointer` are **kept**. Fault
+injection shows they close a *different* leak than the one B20 recorded: with
+the toolchain pinned but the flags removed, the hosts still diverge in
+`.debug_line` alone (`e8cbab4f…` vs `4c694979…`, both 982208 bytes, every ALLOC
+section equal), because GAS's DWARF-5 view numbering for the extra prologue row
+is not host-independent. That binutils behavior is masked, not fixed.
+
+**Exit condition (observed 2026-08-06):** `kernel.elf` rebuilt from scratch on
+`aarch64-darwin` and `aarch64-linux` is `97dcb029…`, 973184 bytes on both —
+**unchanged** from the recorded pin, now depending on the toolchain rather than
+on `PATH`. `CROSS_COMPILER_PREFIX` resolves to the wrapper on `aarch64-linux`
+instead of being empty. `just sel4_qemu_image_check` passes on `aarch64-darwin`,
+and the new guard is fault-injected: reverting to `crossCC.targetPrefix` fails
+`just sel4_pin_check`. `x86_64-linux` was not re-observed; its prefix was
+already the cross form, so the change is expected to be a no-op there
+(**[INFERENCE]**). Both hosts are on one machine, one virtualized — the right
+test for toolchain and `PATH` independence and no evidence about physical
+boards. See `devlog/2026-08-06-b21-cross-toolchain-binary-selection/`.
+
 ### B20 — the prefix pin held for one platform at a time — **resolved 2026-08-06**
 
 **Problem:** B19 made `kernel_sha256` independent of the dev *shell*; it was
@@ -250,6 +299,16 @@ replacing the flag string with `""` reverts Darwin to `e8cbab4f…` and
 are containers under a macOS hypervisor, one of them emulated, not separate
 hardware — the right test for toolchain independence and no evidence about
 physical boards. See `devlog/2026-08-06-b20-cross-platform-kernel-identity/`.
+
+**Root cause superseded by B21 (2026-08-06).** The mechanism recorded above is
+wrong. Both wrappers ship a byte-identical `cc-cflags-before`; the divergence
+was `PATH`-order *binary* selection, not a per-platform wrapper policy, and the
+two pre-fix hashes differ by driver rather than by host. The "stronger fix …
+now optional" is implemented and moved no hash. The frame-pointer flags are
+kept, for a residual `.debug_line` leak this entry did not identify. See the
+B21 entry above and
+`devlog/2026-08-06-b20-cross-platform-kernel-identity/index.md`'s
+`## Corrections`.
 
 ### B19 — the seL4 prefix pins bound the dev-shell derivation hash, not the toolchain — **resolved 2026-08-06**
 
