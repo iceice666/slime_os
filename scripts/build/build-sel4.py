@@ -476,7 +476,7 @@ def configure_and_install_sel4() -> None:
     SEL4_BUILD.mkdir(parents=True, exist_ok=True)
     SEL4_PREFIX.mkdir(parents=True, exist_ok=True)
     dtb = dump_device_tree()
-    # Three reproducibility leaks in the upstream build, all closed here so the
+    # Four reproducibility leaks in the upstream build, all closed here so the
     # observed prefix hashes in `sel4/pins.toml` mean something:
     #  * QEMU's `virt` machine seeds `rng-seed`/`kaslr-seed` into every dumped
     #    device tree, so letting the kernel extract its own DTB produces a
@@ -489,10 +489,37 @@ def configure_and_install_sel4() -> None:
     #    dev shell, so the ELF depends on that shell's derivation hash.
     #    `sel4_build_environment` drops them and the fixed `-frandom-seed`
     #    below replaces the seed. See `ENVIRONMENT_FLAG_PREFIXES`.
+    #  * Frame-pointer policy differs per *platform*, not per shell, so the
+    #    scrub cannot reach it: `pkgsCross.aarch64-multiplatform.stdenv.cc` is a
+    #    cross `gcc-wrapper` on Darwin, whose `nix-support/cc-cflags-before`
+    #    forces `-fno-omit-frame-pointer -mno-omit-leaf-frame-pointer`, and a
+    #    native `gcc` on `aarch64-linux`, which forces neither. Those live in
+    #    `cc-cflags-before`, ahead of the command line, so the only way to
+    #    settle the question is to state the wanted policy ourselves.
+    #
+    #    This is a policy this build *chooses*, not a compiler default it
+    #    restores, and it moves both platforms. GCC's aarch64 backend disables
+    #    `-fomit-frame-pointer` at every `-O` level
+    #    (`aarch_option_optimization_table`, `OPT_LEVELS_ALL`), so an aarch64
+    #    kernel keeps its frame pointers at `-O2` unless the flag is passed
+    #    explicitly. `-Q --help=optimizers` reports `-fomit-frame-pointer
+    #    [enabled]` at `-O2` regardless, which is a reporting trap rather than
+    #    the truth: `aarch64.cc` drives codegen off a tri-state where only an
+    #    explicit flag counts. seL4 asks for no frame pointer, nothing in the
+    #    tree walks one, and omitting it is worth a register and the prologue.
+    #    Without these flags the two platforms disagree byte-for-byte on every
+    #    function prologue (B20).
+    #
+    #    `-momit-leaf-frame-pointer` is belt and braces: under
+    #    `-fomit-frame-pointer` no function gets a frame pointer, leaf or not,
+    #    and the two flags together emit assembly identical to the first alone.
+    #    It is kept because it names the second of the wrapper's two injections.
+    #    Neither flag converges the platforms on its own.
     common_flags = (
         f"-ffile-prefix-map={SEL4_SOURCE}=/slime/sel4 "
         f"-ffile-prefix-map={SEL4_BUILD}=/slime/build "
-        f"-frandom-seed={SEL4_RANDOM_SEED}"
+        f"-frandom-seed={SEL4_RANDOM_SEED} "
+        "-fomit-frame-pointer -momit-leaf-frame-pointer"
     )
     environment = sel4_build_environment()
     run(

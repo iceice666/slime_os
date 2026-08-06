@@ -36,23 +36,29 @@ export_ptmr_user = true
 
 # Hashes of the installed seL4 prefix, observed from `just sel4_qemu_image_check`.
 # The build pins the QEMU device-tree dump (`dtb-randomness=off`), maps the
-# source and build roots to fixed logical prefixes, and drops the ambient dev
-# shell's compiler flags in favour of a fixed `-frandom-seed`, so these no
-# longer depend on the shell that ran the build: adding a package to
-# `flake.nix` changes that shell's derivation hash and leaves these unchanged.
+# source and build roots to fixed logical prefixes, drops the ambient dev
+# shell's compiler flags in favour of a fixed `-frandom-seed`, and states its own
+# frame-pointer policy. So these depend on neither the shell that ran the build
+# nor the platform it ran on: adding a package to `flake.nix` changes that
+# shell's derivation hash and leaves these unchanged (B19), and `aarch64-darwin`,
+# `aarch64-linux`, and `x86_64-linux` produce a byte-identical `kernel.elf` (B20).
 #
-# What they do still bind, beyond the pinned seL4 source and config: the cross
-# compiler, and the build tooling this file does not pin — `cmake`, `ninja`, and
-# the host Python generators (`bitfield_gen.py`, `invocation_header_gen.py`,
-# `hardware_gen.py`, …) whose output is compiled into `kernel.elf`. A `cmake` or
-# `jinja2` bump in `flake.nix` can therefore move `kernel_sha256` even though the
-# compiler did not change, and the failure message will still say "toolchain
-# drift". Narrowing that is a separate change to what this file pins.
+# What they do still bind, beyond the pinned seL4 source and config: the
+# compiler *version*, and the build tooling this file does not pin — `cmake`,
+# `ninja`, and the host Python generators (`bitfield_gen.py`,
+# `invocation_header_gen.py`, `hardware_gen.py`, …) whose output is compiled into
+# `kernel.elf`. A `cmake` or `jinja2` bump in `flake.nix` can therefore move
+# `kernel_sha256` even though the compiler did not change, and the failure
+# message will still say "toolchain drift". Narrowing that is a separate change
+# to what this file pins.
 #
-# Observed on `aarch64-darwin` with the `pkgsCross.aarch64-multiplatform`
-# GCC 15.2.0 cross toolchain.
+# Observed on `aarch64-darwin`, `aarch64-linux`, and `x86_64-linux`, all with
+# GCC 15.2.0 from `pkgsCross.aarch64-multiplatform`. Those resolve to different
+# wrappers — a cross wrapper on Darwin and `x86_64-linux`, a native `gcc` on
+# `aarch64-linux` — and agree byte-for-byte anyway, which is what makes this a
+# toolchain gate rather than a host gate.
 [observed_prefix]
-kernel_sha256 = "e8cbab4f74bbdb761d7bffac35a4a4ae0edcc68733af7758d696544fe5991503"
+kernel_sha256 = "97dcb029127bcc0fac1fd6cc83950ba878040a773a380e2d000b0ebc20d875ce"
 kernel_config_sha256 = "e775930bb15fd6d484abcba19620479d997625be531bcb4a5d9c0ec8aed444c4"
 libsel4_config_sha256 = "ccd1c7f73790485f92fadaf954e71f3d68b80a664a96b402e33da5bb57a06825"
 dtb_sha256 = "2c9a92343b95448b8c63785adf728aa94eca4a70f9ff35b36b5a062800c040a8"

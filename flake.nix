@@ -74,7 +74,11 @@
               # this shell's derivation hash, and therefore the `-frandom-seed`
               # nixpkgs derives from it, but that no longer reaches the seL4
               # kernel: `scripts/build/build-sel4.py` builds it with the shell's
-              # compiler flags removed and a fixed seed of its own (B19).
+              # compiler flags removed and a fixed seed of its own (B19). Nor
+              # does the per-platform difference in what `crossCC` resolves to,
+              # since that build states its own frame-pointer policy (B20) —
+              # `aarch64-darwin` and `aarch64-linux` produce a byte-identical
+              # `kernel.elf`.
               ++ lib.optional (!stdenv.isDarwin) limine
               ++ [
                 xorriso
