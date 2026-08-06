@@ -35,11 +35,24 @@ export_pcnt_user = true
 export_ptmr_user = true
 
 # Hashes of the installed seL4 prefix, observed from `just sel4_qemu_image_check`.
-# The build pins the QEMU device-tree dump (`dtb-randomness=off`) and maps the
-# source and build roots to fixed logical prefixes, so these are reproducible
-# across checkouts rather than a one-time snapshot.
+# The build pins the QEMU device-tree dump (`dtb-randomness=off`), maps the
+# source and build roots to fixed logical prefixes, and drops the ambient dev
+# shell's compiler flags in favour of a fixed `-frandom-seed`, so these no
+# longer depend on the shell that ran the build: adding a package to
+# `flake.nix` changes that shell's derivation hash and leaves these unchanged.
+#
+# What they do still bind, beyond the pinned seL4 source and config: the cross
+# compiler, and the build tooling this file does not pin — `cmake`, `ninja`, and
+# the host Python generators (`bitfield_gen.py`, `invocation_header_gen.py`,
+# `hardware_gen.py`, …) whose output is compiled into `kernel.elf`. A `cmake` or
+# `jinja2` bump in `flake.nix` can therefore move `kernel_sha256` even though the
+# compiler did not change, and the failure message will still say "toolchain
+# drift". Narrowing that is a separate change to what this file pins.
+#
+# Observed on `aarch64-darwin` with the `pkgsCross.aarch64-multiplatform`
+# GCC 15.2.0 cross toolchain.
 [observed_prefix]
-kernel_sha256 = "2d88b9a4395e71fe8ad9773a5e390616aa476c19f571003ad2ca3d063ff7bbb4"
+kernel_sha256 = "e8cbab4f74bbdb761d7bffac35a4a4ae0edcc68733af7758d696544fe5991503"
 kernel_config_sha256 = "e775930bb15fd6d484abcba19620479d997625be531bcb4a5d9c0ec8aed444c4"
 libsel4_config_sha256 = "ccd1c7f73790485f92fadaf954e71f3d68b80a664a96b402e33da5bb57a06825"
 dtb_sha256 = "2c9a92343b95448b8c63785adf728aa94eca4a70f9ff35b36b5a062800c040a8"

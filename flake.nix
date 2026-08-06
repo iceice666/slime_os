@@ -70,11 +70,11 @@
               # used only by the legacy x86_64 custom-kernel ISO build) is
               # marked badPlatforms on Darwin. The seL4/AArch64 path this
               # shell otherwise supports never invokes it, so it is dropped
-              # there rather than blocking the whole shell. It stays in its
-              # original list position so the Linux shells keep the exact
-              # derivation hash `sel4/pins.toml` was observed under: nixpkgs
-              # seeds `-frandom-seed` from that hash, so reordering this list
-              # would change every Linux `kernel.elf` byte-for-byte.
+              # there rather than blocking the whole shell. Dropping it changes
+              # this shell's derivation hash, and therefore the `-frandom-seed`
+              # nixpkgs derives from it, but that no longer reaches the seL4
+              # kernel: `scripts/build/build-sel4.py` builds it with the shell's
+              # compiler flags removed and a fixed seed of its own (B19).
               ++ lib.optional (!stdenv.isDarwin) limine
               ++ [
                 xorriso

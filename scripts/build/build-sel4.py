@@ -226,6 +226,97 @@ def cross_compiler_prefix() -> str:
     return prefix
 
 
+# nixpkgs' compiler wrappers inject host-varying flags through the environment:
+# `-frandom-seed=<the dev shell's derivation hash>`, which GCC uses to seed the
+# symbol and section names that must differ per file, plus `-isystem` and
+# `-fmacro-prefix-map` entries for every package in the shell. Inheriting them
+# makes `[observed_prefix]` a function of the dev shell as much as of the
+# toolchain: adding a tool to `flake.nix`, or reordering that list, changes the
+# derivation hash, changes the seed, and changes `kernel.elf` byte-for-byte —
+# reported as toolchain drift by a gate that cannot tell the two apart. They are
+# dropped here and the seed is set from a fixed repo-controlled value instead.
+#
+# The hardening set goes with them. It is the ambient shell's policy for hosted
+# userspace, and this is a freestanding kernel that states its own flags in
+# `deps/sel4/CMakeLists.txt` and asks for none of it. Most of the set was
+# already inert here — `-fno-stack-protector` is appended after the wrapper's
+# `-fstack-protector-strong` and wins, and `_FORTIFY_SOURCE` is a libc macro
+# with nothing to attach to under `-nostdinc -ffreestanding`. The one that
+# reached codegen is `-fzero-call-used-regs=used-gpr`, which adds a
+# `mov x16, 0` / `mov x17, 0` pair before every `ret`.
+#
+# Matching by prefix rather than by exact name is required: the wrappers read
+# target- and role-mangled spellings — `NIX_CFLAGS_COMPILE_aarch64_unknown_linux_gnu`,
+# `_FOR_BUILD`, `_FOR_TARGET` — rather than the base names.
+ENVIRONMENT_FLAG_PREFIXES = (
+    "NIX_CFLAGS",
+    "NIX_CXXSTDLIB",
+    "NIX_FFLAGS",
+    "NIX_GNATFLAGS",
+    "NIX_HARDENING_ENABLE",
+    "NIX_LDFLAGS",
+)
+# The two groups below reach the build by routes the flag prefixes do not cover,
+# and they are classified separately because only one of them is a live leak.
+#
+# Defense in depth. The bintools wrapper's boolean switches carry no flags
+# themselves, so they match none of the prefixes above. Its `ld` reads
+# `NIX_SET_BUILD_ID` and appends `--build-id=<NIX_BUILD_ID_STYLE>` *after* the
+# kernel's own `-Wl,--build-id=none`, which the linker honours over it — but
+# `linker.lds_pp` then discards `.note.gnu.build-id` outright, so no note
+# survives into `kernel.elf` either way. Fault-injected with the scrub disabled:
+# byte-identical. Dropped anyway, because the protection is the kernel's linker
+# script rather than anything this build states, and the loader links through
+# `rust-lld` with no such script.
+ENVIRONMENT_SWITCH_NAMES = ("NIX_BUILD_ID_STYLE", "NIX_SET_BUILD_ID")
+# CMake seeds `CMAKE_<LANG>_FLAGS_INIT` and `CMAKE_EXE_LINKER_FLAGS_INIT` from
+# these. The assembler variable is `ASMFLAGS`, not `ASFLAGS`:
+# `deps/sel4/CMakeLists.txt` declares `project(seL4 C ASM)`, so `ASM_DIALECT` is
+# empty and `CMakeASMInformation.cmake` reads `$ENV{ASMFLAGS}`. The configure
+# line passes an explicit `-D` for each of these, and a cache entry beats
+# `_INIT` seeding, so today they are belt and braces.
+ENVIRONMENT_FLAG_NAMES = ("ASMFLAGS", "CFLAGS", "CXXFLAGS", "LDFLAGS")
+# A real redirection, not defense in depth: these carry one store path per
+# package in the shell and are prepended to `find_file`/`find_path` search
+# order, which no `-D` on the configure line protects. seL4 resolves
+# `KERNEL_HELPERS_PATH` (`deps/sel4/CMakeLists.txt`) and `UMM_TYPES` that way,
+# so a shell package shipping a `helpers.cmake` or `umm_types.txt` would win
+# over the in-tree file and silently change what gets built.
+ENVIRONMENT_SEARCH_NAMES = ("CMAKE_INCLUDE_PATH", "CMAKE_LIBRARY_PATH", "CMAKE_PREFIX_PATH")
+
+# Replaces the dev shell's derivation hash as GCC's symbol-naming seed. One
+# value for the whole build is safe: the seed only suffixes file-scope static
+# and section names, and `kernel.elf` links five objects — `kernel_all.c` plus
+# `head.S`, `traps.S`, `idle.S`, and `machine_asm.S` — so there is nothing for a
+# shared seed to collide with. Thirteen compile edges share these flags in all;
+# the other eight are bitfield/pruning scaffolding and libsel4, never co-linked
+# into the pinned artifact.
+SEL4_RANDOM_SEED = "slime-sel4-qemu-arm-virt"
+
+
+ENVIRONMENT_DROPPED_NAMES = (
+    ENVIRONMENT_FLAG_NAMES + ENVIRONMENT_SWITCH_NAMES + ENVIRONMENT_SEARCH_NAMES
+)
+
+
+def sel4_build_environment() -> dict[str, str]:
+    """The kernel's build environment, with the ambient shell's build inputs removed.
+
+    Everything the build genuinely needs is kept: `PATH`, the wrappers' own
+    `NIX_CC`/`NIX_BINTOOLS` and `NIX_CC_WRAPPER_TARGET_*` role markers, the
+    Darwin SDK variables, and the store/SSL/temp settings. The cross compiler
+    finds its libc, crt, and include paths through its `nix-support` files
+    rather than through the environment, so dropping the flag variables cannot
+    strand it.
+    """
+    return {
+        name: value
+        for name, value in os.environ.items()
+        if not name.startswith(ENVIRONMENT_FLAG_PREFIXES)
+        and name not in ENVIRONMENT_DROPPED_NAMES
+    }
+
+
 def cargo_environment(toolchain: str) -> dict[str, str]:
     environment = dict(os.environ)
     environment["RUSTUP_TOOLCHAIN"] = toolchain
@@ -385,7 +476,7 @@ def configure_and_install_sel4() -> None:
     SEL4_BUILD.mkdir(parents=True, exist_ok=True)
     SEL4_PREFIX.mkdir(parents=True, exist_ok=True)
     dtb = dump_device_tree()
-    # Two reproducibility leaks in the upstream build, both closed here so the
+    # Three reproducibility leaks in the upstream build, all closed here so the
     # observed prefix hashes in `sel4/pins.toml` mean something:
     #  * QEMU's `virt` machine seeds `rng-seed`/`kaslr-seed` into every dumped
     #    device tree, so letting the kernel extract its own DTB produces a
@@ -394,10 +485,16 @@ def configure_and_install_sel4() -> None:
     #  * The assembler records absolute source and build paths in the kernel's
     #    `.debug_line`, so the ELF depends on where the checkout lives. Both
     #    roots are mapped to fixed logical prefixes.
-    prefix_map = (
+    #  * GCC's symbol-naming seed and the hardening set arrive from the ambient
+    #    dev shell, so the ELF depends on that shell's derivation hash.
+    #    `sel4_build_environment` drops them and the fixed `-frandom-seed`
+    #    below replaces the seed. See `ENVIRONMENT_FLAG_PREFIXES`.
+    common_flags = (
         f"-ffile-prefix-map={SEL4_SOURCE}=/slime/sel4 "
-        f"-ffile-prefix-map={SEL4_BUILD}=/slime/build"
+        f"-ffile-prefix-map={SEL4_BUILD}=/slime/build "
+        f"-frandom-seed={SEL4_RANDOM_SEED}"
     )
+    environment = sel4_build_environment()
     run(
         [
             "cmake",
@@ -412,17 +509,24 @@ def configure_and_install_sel4() -> None:
             f"-DCMAKE_INSTALL_PREFIX={SEL4_PREFIX}",
             f"-DCROSS_COMPILER_PREFIX={cross_prefix}",
             f"-DQEMU_DTB={dtb}",
-            f"-DCMAKE_C_FLAGS={prefix_map}",
-            f"-DCMAKE_ASM_FLAGS={prefix_map}",
+            f"-DCMAKE_C_FLAGS={common_flags}",
+            f"-DCMAKE_ASM_FLAGS={common_flags}",
+            # Empty rather than absent: an explicit cache entry is what stops a
+            # tree configured under a shell that exported `LDFLAGS` from
+            # retaining it. seL4 appends its own linker flags itself.
+            "-DCMAKE_EXE_LINKER_FLAGS=",
         ],
+        environment=environment,
         description="configure seL4",
     )
     run(
         ["cmake", "--build", str(SEL4_BUILD), "--parallel"],
+        environment=environment,
         description="build seL4",
     )
     run(
         ["cmake", "--install", str(SEL4_BUILD)],
+        environment=environment,
         description="install seL4",
     )
 
