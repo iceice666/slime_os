@@ -26,7 +26,26 @@ use crate::task::TaskId;
 pub const MAX_TASK_CAPS: usize = 64;
 
 /// Tasks one generation's graph may declare capability tables for.
-pub const MAX_GRAPH_TASKS: usize = 16;
+///
+/// [`crate::task::MAX_TASKS`], so this is no longer a *second* ceiling on how
+/// many tasks a graph may hold. It was 16 against that 32, which made this
+/// table exhaustible before the task table — and `construct_child` reserves an
+/// entry here only after the child's frames, CNode, and TCB are allocated, so
+/// running out produces a mid-construction unwind rather than a bounded refusal
+/// at the point of allocation.
+///
+/// P5.5.2's stream plane is what made the margin worth closing: it holds
+/// **13** tables at peak — seven components the root launches from the
+/// generation plus six children init spawns — against the old 16. That is
+/// tighter than the `MAX_CHANNELS` margin which had already broken, and driven
+/// by the same growth: route roles, not task pairs.
+///
+/// Costs ~48 KiB of additional stack in `launch_component_graph`, where
+/// `GraphTables` is a local. That is affordable against the root's 1 MiB stack
+/// and was checked rather than assumed — backlog B3 records a silent overflow
+/// from exactly this kind of growth, which is why the *channel* table lives in
+/// a `static` instead.
+pub const MAX_GRAPH_TASKS: usize = crate::task::MAX_TASKS;
 
 /// What a logical slot resolves to.
 ///

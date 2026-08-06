@@ -2928,10 +2928,15 @@ fn construct_child(
         .map_err(|_| IpcError::DestinationSlotsExhausted)?;
 
     // From here on a failure must tear the task back down: its frames, CNode,
-    // and TCB are already allocated. `MAX_GRAPH_TASKS` is 16 against
-    // `MAX_TASKS`'s 32, so the table this reserves is genuinely exhaustible
-    // before the task table is — which is exactly the leak shape
-    // `serve_buffer_create` had.
+    // and TCB are already allocated, so an early return without this leaks a
+    // whole task — the leak shape `serve_buffer_create` had.
+    //
+    // `MAX_GRAPH_TASKS` used to be 16 against `MAX_TASKS`'s 32, which made this
+    // table exhaustible *before* the task table and so made that unwind
+    // reachable by ordinary graph growth rather than only by a real failure.
+    // P5.5.2 raised it to `MAX_TASKS`, so there is now one ceiling on how many
+    // tasks a graph may hold, and reaching it refuses at the task table where
+    // nothing has been allocated yet.
     let Some(task) = tasks.get(id) else {
         release_child(tasks, graph, id);
         return Err(IpcError::DestinationSlotsExhausted);
