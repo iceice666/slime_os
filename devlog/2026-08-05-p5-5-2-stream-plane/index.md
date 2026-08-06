@@ -54,42 +54,44 @@ larger graph.
 | `scripts/check/check-sel4-stream-plane.py` | Rewritten from P5.5.1's gate: 10 chains, branch **absence**, and `check_transcript_matches_the_oracle` | The transcript is the oracle's, not one written to suit this root |
 | `slime-root/src/graph.rs` | `MAX_GRAPH_TASKS` 16 → `MAX_TASKS` | One ceiling on how many tasks a graph may hold, refused where nothing is allocated yet |
 
-### Two scheduling races the gate exposed, one closed and one narrowed
+### Two scheduling races the gate exposed, both closed (B18)
 
-The seL4 gate was flaky, and the passes recorded early in implementation were
-luck rather than evidence — stated plainly because it would have been easy to
-keep re-running until green. It now passes **6 runs in 9**, up from roughly 1 in
-3. Both causes are the same shape: the oracle's cooperative scheduler orders
-events favourably every time, and seL4's does not.
+The gate was flaky — roughly one pass in three — and the passes recorded early
+in implementation were luck rather than evidence. Stated plainly because it
+would have been easy to keep re-running until green. It now passes **ten
+consecutive runs**.
 
-**Closed: a publisher writing to a route it had already retired.**
+**A publisher writing to a route it had already retired.**
 `fabric-publisher-b` marked its first `diagnostics` sample terminal and then
-published on that route again. That second send was **dead code** —
-`FLAG_LAST` sets `publisher.finished`, and both the broker loop and
-`park_on_streams` skip a finished publisher, so nothing ever read it. It was
-worse than inert: once `diagnostics` retired, only `telemetry` kept the fabric
-alive, so after that drained the send answered `ERR_PEER_DEAD` and the component
-exited 1. Deleted. Moving `FLAG_LAST` to the second sample instead was tried
-first and wedges `just fabric_qos_check`, whose subscriber waits for the early
-terminal event — the two gates want opposite things from the flag.
+published on that route again. That second send was **dead code** — `FLAG_LAST`
+sets `publisher.finished`, and both the broker loop and `park_on_streams` skip a
+finished publisher, so nothing ever read it. Worse than inert: once
+`diagnostics` retired, only `telemetry` kept the fabric alive, so after that
+drained the send answered `ERR_PEER_DEAD` and the component exited 1. Deleted.
 
-**Narrowed: provisioning races publishing.** `deliver` refuses a subscriber
-whose `matched_publishers` is zero, and `refresh_matches` counts only publishers
-already provisioned — so a subscriber that asks after `fabric-publisher` has
-sent its whole stall window matches nothing, receives nothing, and loses
-nothing. `fabric-subscriber-b` then fails its own loss assertion on a boot where
-the fabric was correct.
+**`debug_write` was one syscall per byte.** Under `PRINTING`, components called
+`seL4_DebugPutChar` per character and bypassed the root entirely, so the root's
+own `debug_println!` could land mid-string: the transcript showed
+` QoS matched` where `[fabric] QoS matched` was written.
 
-`drive_stream_plane` now yields after spawning the fabric, which is what
-`launch_fabric_graph` does on x86 — and it is *not* sufficient here, which is
-the interesting part. That comment argues one yield is enough "deterministically
-rather than by luck" because scheduling is cooperative and `SYS_YIELD` drains a
-FIFO ready queue. On seL4 it only makes the ordering likely. The real fix is a
-dependency rather than a timing hint, and init cannot express it: it holds no
-channel to a participant after spawn. B18 records the two candidate signals.
+This was the larger cause and the more instructive one, because it wore three
+different disguises — a missing `re-delegation denied`, a missing
+`large sample published`, and an apparent *provisioning race*, since a corrupted
+`QoS matched` changes what the transcript appears to say about matching. I
+chased the third for some time on the strength of a marker that had simply been
+destroyed. What settled it was reading full serial captures instead of the
+gate's 40-line failure tail; the tail is what made three symptoms look
+unrelated.
 
-Everything this milestone claims is observed on a passing run; what is
-unreliable is reaching the end of the boot, not what the boot proves.
+`Operation::DebugWrite` is now served by the root's graph loop, which is
+single-threaded, so a line printed inside that arm cannot interleave. Structural
+rather than timing-dependent.
+
+**Three fixes were tried and reverted**, each recorded in B18 because each
+looked plausible: moving `FLAG_LAST` to the second sample (wedges
+`fabric_qos_check`), making the stall stop acking (wedges the fabric — the ack
+is load-bearing, releasing a delivery slot), and narrowing the declared
+`historyDepth` (the failures were never ring arithmetic).
 
 ### Two divergences the composition exposed
 
@@ -135,7 +137,7 @@ own `SharedBufferTable::unmap` does — it takes no rights argument and matches 
 
 | Command/scenario | Result | Evidence class |
 |---|---|---|
-| `just sel4_stream_check` | Pass — 51 markers, 10 chains, six components unmodified, 1 declared seL4-only marker. **6 runs in 9** after two B18 fixes, up from ~1 in 3; the failures are B18, not an assertion | Direct |
+| `just sel4_stream_check` | Pass — 51 markers, 10 chains, six components unmodified, 1 declared seL4-only marker. **10 consecutive runs** after B18 was resolved | Direct |
 | `just sel4_sample_check` | Pass | Direct |
 | `just sel4_spawn_check` | Pass | Direct |
 | `just sel4_loan_check` | Pass | Direct |
@@ -238,11 +240,8 @@ loan-unmap injection above, which fails the gate.
       generation runs to completion and exits — a quantifier that stops being
       safe at P5.4.
 - [ ] **B12** stays open, re-reviewed before this gate on unchanged reasoning.
-- [ ] **B18** partly fixed and still open: the gate now passes 6 runs in 9. Two
-      residual causes — a publisher that can still start before its subscribers
-      are provisioned (needs a real dependency, not a yield), and a marker lost
-      to non-atomic `debug_write` on an otherwise correct boot. Resolve before
-      the gate is relied on as a regression guard.
+- [x] **B18 resolved**: ten consecutive `sel4_stream_check` runs, with every
+      other seL4 and x86 fabric gate unchanged.
 - [ ] `just deny` fails at HEAD and failed identically before this change. Not
       in CLAUDE.md's required list; unaddressed here rather than silently
       ignored.

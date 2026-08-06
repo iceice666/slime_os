@@ -16,63 +16,6 @@ at the bottom rather than deleting it.
 
 ## Open
 
-### B18 — the seL4 stream gate is scheduling-dependent: publishing races provisioning
-
-**Status: partly fixed.** `just sel4_stream_check` went from roughly 1 pass in 3
-to **6 in 9** across two fixes; two residual causes remain, both measured below.
-
-**Fixed — a publisher writing to a route it had already retired.**
-`fabric-publisher-b` sent its first `diagnostics` sample with `FLAG_LAST` and
-then published on that route again after the large telemetry sample. The second
-send was **dead code**: `FLAG_LAST` sets `publisher.finished`, and both `broker`
-and `park_on_streams` skip a finished publisher, so nothing ever read it. Worse
-than useless — once `diagnostics` retired, only `telemetry` kept the fabric
-alive, and when that drained the late send answered `ERR_PEER_DEAD`, which
-`publish` treats as fatal. Deleted rather than re-flagged: the route genuinely
-ends at the first sample, `fabric-subscriber-b` consumes exactly one diagnostics
-sample on both paths, and no gate required the dropped marker. (Moving
-`FLAG_LAST` to the second sample was tried first and wedges
-`just fabric_qos_check`, whose subscriber waits for the early terminal event.)
-
-**Partly fixed — provisioning races publishing.** `deliver` refuses a subscriber
-whose `matched_publishers` is zero, and `refresh_matches` counts only publishers
-the fabric has *already provisioned*. A subscriber that asks after
-`fabric-publisher` has published its whole stall window matches nothing, is
-delivered nothing, and therefore loses nothing — so `fabric-subscriber-b` fails
-its own `the stall was never reported as loss` assertion on a boot where the
-fabric behaved correctly.
-
-`drive_stream_plane` now yields after spawning the fabric, the same device
-`launch_fabric_graph` uses on x86. It is not sufficient here: the oracle's
-scheduler is cooperative, so one yield deterministically drains the ready queue,
-while seL4 preempts and the ordering is only made *likely*. Observed twice in
-nine runs after the yield.
-
-**Residual, second cause.** One run in nine failed on a missing
-`[fabric-publisher] re-delegation denied` with every component exiting 0 — a
-marker lost from an otherwise correct boot. Components emit markers through
-`debug_put_char` one byte at a time (`sel4_transport.rs`, `PRINTING` arm), which
-is not atomic against the root's own `debug_println!`, so a marker can be
-interleaved into unreadability.
-
-**Proposed fix:** make the ordering a dependency rather than a timing hint. Init
-cannot observe it — it holds no channel to a participant after spawn — so the
-signal has to come from the fabric: either a publisher waits for its first
-`EVENT_MATCHED` before publishing (the QoS event already exists, and publishers
-already hold a credit endpoint to receive on), or the fabric buffers into a
-declared subscriber's ring before that subscriber has asked. For the marker
-loss, serialize `debug_write` in the root.
-
-**Exit condition:** ten consecutive `just sel4_stream_check` runs pass, with
-`just fabric_stream_check`, `just fabric_qos_check`, and
-`just data_fabric_boot_check` unchanged.
-
-**Not blocking P5.5.2**, whose exit condition is what the transcript asserts;
-every assertion is observed on a passing run. Recorded plainly because a gate
-that fails one run in three is one whose real regressions get attributed to
-flake — which is exactly what happened during this milestone, where several
-early passes were luck rather than evidence.
-
 ### B16 — a supervision termination record is never reclaimed, so a long-lived graph exhausts the table
 
 **Problem:** `slime-root/src/supervision.rs::Terminations` records how each child
@@ -205,6 +148,60 @@ to the seL4 cutover. It should be scheduled against the x86 oracle deliberately,
 not folded into a portability slice.
 
 ## Resolved
+
+### B18 — the seL4 stream gate was scheduling-dependent — **resolved 2026-08-06**
+
+**Problem:** `just sel4_stream_check` passed roughly one run in three. Two
+independent causes, both invisible on x86 because the retired kernel's
+cooperative scheduler orders the events favourably every time.
+
+**Cause 1 — a publisher writing to a route it had already retired.**
+`fabric-publisher-b` sent its first `diagnostics` sample with `FLAG_LAST` and
+then published on that route again after the large telemetry sample. That second
+send was **dead code**: `FLAG_LAST` sets `publisher.finished`, and both the
+broker loop and `park_on_streams` skip a finished publisher, so nothing ever
+read it. Worse than inert — once `diagnostics` retired, only `telemetry` kept
+the fabric alive, so after that drained the send answered `ERR_PEER_DEAD`, which
+`publish` treats as fatal. Deleted.
+
+**Cause 2 — `debug_write` was one syscall per byte.** Under `PRINTING` the
+component-side implementation called `seL4_DebugPutChar` per character,
+bypassing the root entirely. The root's own `debug_println!`, or another
+component's line, could land mid-string: the transcript showed ` QoS matched`
+where `[fabric] QoS matched` was written, and whichever gate required the
+destroyed marker failed on a boot that was otherwise correct.
+
+This was the larger cause, and it masqueraded as several different bugs — a
+missing `re-delegation denied`, a missing `large sample published`, and (because
+a corrupted `QoS matched` changes what the transcript appears to say about
+matching) an apparent provisioning race. Diagnosing it as one defect rather than
+three took reading full transcripts rather than the gate's 40-line tail.
+
+`Operation::DebugWrite` is now served by the root's graph loop, which is
+single-threaded and answers one request at a time, so a line printed inside that
+arm cannot interleave with anything. Atomicity is structural rather than a
+matter of timing. The cost is that printing now needs a bound transfer window;
+every launched component binds one before it runs.
+
+**Two fixes were tried and reverted**, both recorded because each looked
+plausible and each made things worse:
+
+- **Moving `FLAG_LAST` to the second diagnostics sample**, where the route
+  genuinely ends. Wedges `just fabric_qos_check`, whose subscriber waits for the
+  terminal event the early flag produces.
+- **Making the stall stop acking.** `receive_large_sample` acks the inline
+  samples it passes over, which does drain the ring the stall is supposed to
+  overrun — but removing the ack wedges the fabric outright, because it waits
+  for a delivery slot that never frees. The ack is load-bearing.
+- Narrowing `fabric-subscriber-b`'s declared `historyDepth` from 4 to 2 also
+  failed, and for the same underlying reason as everything else: the failures
+  were marker corruption, not ring arithmetic.
+
+**Exit condition (observed):** ten consecutive `just sel4_stream_check` runs
+pass, with all six other seL4 gates, `just fabric_stream_check`,
+`just fabric_qos_check`, `just fabric_visibility_check`, and
+`just data_fabric_boot_check` unchanged. See
+`devlog/2026-08-05-p5-5-2-stream-plane/`.
 
 ### B17 — the capability transfer's subset test had no coverage — **resolved 2026-08-05**
 

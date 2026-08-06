@@ -1083,14 +1083,14 @@ exercised the path. `shared_buffer_unmap` refused a **loan** slot where
 bounds were sized against the wrong quantity — task pairs rather than route
 roles — and this is the first graph large enough to reach either.
 
-**The gate is scheduling-dependent (B18): it passes 6 runs in 9.** Two races the
-retired kernel's cooperative scheduler hides were found here; one is closed — a
-publisher writing to a route it had already retired, which turned out to be dead
-code — and one is narrowed, where a subscriber provisioned after a publisher has
-finished matches nothing and so cannot observe the loss it asserts. Every
-assertion above is observed on a passing run; what is unreliable is reaching the
-end of the boot, not what the boot proves. The gate should not be relied on as a
-regression guard until B18 closes.
+**Two scheduling races the retired kernel hides were found and fixed here
+(B18).** A publisher wrote to a route it had already retired — dead code that
+turned fatal once the fabric exited — and `debug_write` emitted one syscall per
+byte, so the root's own markers could land mid-string and destroy a component's.
+The second wore three disguises, including an apparent provisioning race, since
+a corrupted marker changes what the transcript appears to say. `DebugWrite` is
+now served by the root's single-threaded graph loop, so line atomicity is
+structural. The gate passes ten consecutive runs.
 
 ### P5.4 — Retire the custom kernel
 
