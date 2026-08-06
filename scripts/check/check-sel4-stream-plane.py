@@ -245,7 +245,7 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
             # capability in the transit table between the send and the receive
             # that collects it, so a nonzero `transit` would mean a role was
             # moved and never landed -- authority belonging to nobody.
-            r"SLIME_GRAPH loans served=\d+ loans=0 mappings=0 regions=0 transit=\d+ "
+            r"SLIME_GRAPH loans served=\d+ loans=0 mappings=0 regions=0 transit=0 "
             r"orphans=0 aliases=0",
             # The root's own count of narrow-on-transfer moves, and a nonzero
             # one: zero would mean every role was placed by the generation
@@ -285,6 +285,20 @@ FAILURE_MARKERS: tuple[str, ...] = (
     r"Caught cap fault",
     r"Caught vm fault",
     r"Caught user exception",
+    # The oracle's own `FORBIDDEN` rejection markers, inherited rather than
+    # reimplemented. A malformed record must never reach a subscriber, and no
+    # component under test hands the fabric one — so each of these names a real
+    # defect rather than a tolerated refusal.
+    #
+    # They matter more here than on x86, and are the reason this list is not
+    # just panics and faults: the fabric *tolerates* a malformed record (it
+    # rejects and continues), so a root-side framing or ABI divergence could
+    # leave every chain marker intact while corrupting what crossed. That is
+    # precisely the defect class this milestone exists to find.
+    r"\[fabric\] malformed sample rejected",
+    r"\[fabric\] malformed ack rejected",
+    r"\[fabric\] unmatched ack rejected",
+    r"\[fabric\] reject:",
     r"panicked at ",
     r"aborted at ",
     r"\(aborted\)",
@@ -639,6 +653,29 @@ SEL4_ONLY: dict[str, str] = {
 }
 
 
+def load_oracle_markers() -> tuple[str, ...]:
+    """Every marker the x86 stream gate *requires*, from its own `CHAINS`.
+
+    Imported rather than parsed, so the two gates cannot disagree about what
+    the oracle's chain list contains. `check-fabric-stream.py` is not an
+    importable module name, so it is loaded by path.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("_oracle_stream_gate", ORACLE_GATE)
+    if spec is None or spec.loader is None:
+        fail(f"cannot load {ORACLE_GATE.relative_to(ROOT)}")
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except Exception as error:  # noqa: BLE001 - any import failure is fatal here
+        fail(f"cannot load {ORACLE_GATE.relative_to(ROOT)}: {error}")
+    chains = getattr(module, "CHAINS", None)
+    if not chains:
+        fail(f"{ORACLE_GATE.relative_to(ROOT)} declares no CHAINS to compare against")
+    return tuple(marker for _label, chain in chains for marker in chain)
+
+
 def check_transcript_matches_the_oracle() -> None:
     """Every marker this gate requires is one the x86 gate requires too.
 
@@ -651,11 +688,15 @@ def check_transcript_matches_the_oracle() -> None:
     `SEL4_ONLY` is the declared exception list, and it is checked in both
     directions -- an entry that stops being seL4-only is as much a drift as an
     undeclared addition.
+
+    Compared against the oracle's parsed `CHAINS`, not against its file text.
+    A substring search over the source would accept any line the oracle merely
+    *mentions*, and the oracle mentions plenty it does not require: its whole
+    `FORBIDDEN` list is in that file, so `[fabric] malformed sample rejected`
+    -- a line the x86 gate treats as a hard failure -- would read as agreement.
+    Importing the module makes "the oracle requires this" mean what it says.
     """
-    try:
-        oracle = ORACLE_GATE.read_text(encoding="utf-8")
-    except OSError as error:
-        fail(f"cannot read {ORACLE_GATE.relative_to(ROOT)}: {error}")
+    oracle_markers = load_oracle_markers()
     for _label, chain in CHAINS:
         for pattern in chain:
             # Only *participant* markers are compared, which is what the
@@ -676,7 +717,7 @@ def check_transcript_matches_the_oracle() -> None:
             if pattern.startswith(r"\[init\]") and "fabric stream complete" not in pattern:
                 continue
             plain = pattern.replace("\\[", "[").replace("\\]", "]")
-            if plain in oracle:
+            if any(plain in marker for marker in oracle_markers):
                 if pattern in SEL4_ONLY:
                     fail(
                         f"{pattern} is listed in SEL4_ONLY but the x86 gate "
