@@ -16,68 +16,6 @@ at the bottom rather than deleting it.
 
 ## Open
 
-### B19 — the seL4 prefix pins bind the dev-shell derivation hash, not the toolchain
-
-**Problem:** `sel4/pins.toml`'s `[observed_prefix]` hashes are documented as
-"reproducible across checkouts", and `scripts/build/build-sel4.py` closes the
-two leaks it knows about (QEMU `dtb-randomness=off`, `-ffile-prefix-map` for the
-source and build roots). But the build inherits `NIX_CFLAGS_COMPILE` from the
-ambient dev shell, and nixpkgs puts two host-varying things in it:
-
-- `-frandom-seed=<first 10 chars of the devShell derivation hash>`, which GCC
-  uses to seed symbol/section naming, and
-- `-isystem` / `-fmacro-prefix-map` entries for every dev-shell package
-  (`lldb`, `qemu`, `dtc`, `python3`, ...), whose store paths differ per host.
-
-So `kernel_sha256` pins the *dev shell's own hash* as much as the toolchain.
-Any change to the `packages` list — adding a tool, reordering it — changes the
-derivation hash, changes the seed, and changes `kernel.elf` byte-for-byte,
-producing a "toolchain drift" failure that is not toolchain drift. The gate is
-weaker than it reads: it cannot distinguish a real compiler change from an
-unrelated dev-shell edit, and it silently binds a freestanding kernel build to
-hardening flags (`-fstack-protector-strong`, `-fzero-call-used-regs`,
-`_FORTIFY_SOURCE=3`) that seL4 explicitly does not ask for.
-
-**Evidence:** observed on `aarch64-darwin` (2026-08-06). Four of the five
-pinned artifacts — both `gen_config.json`, `kernel.dtb`, `platform_gen.yaml` —
-match the pins *exactly*, so configuration and device tree are reproducible;
-only `kernel.elf` differs. Varying only the seed, with everything else held
-fixed, moves the hash:
-
-| `-frandom-seed` | `kernel.elf` SHA-256 |
-| --- | --- |
-| `r279wlb3cq` (this host's shell) | `8248bb69…` |
-| `slimesel4` (arbitrary) | `cb2d4bf5…` |
-| `7jrsis0m3q` (`x86_64-linux` shell) | `a13121bb…` |
-| `78nax60gpi` (`aarch64-linux` shell) | `27383e4f…` |
-| `NIX_CFLAGS_COMPILE` empty | `dc852cf9…` |
-| pinned value | `2d88b9a4…` |
-
-Two clean builds at a fixed seed are bit-identical, so the Darwin build is
-internally deterministic — this is a stable input difference, not nondeterminism.
-Substituting either Linux shell's seed does not reproduce the pin either,
-because the `-isystem` store paths differ as well.
-
-The pin is therefore reproducible only on the exact host that recorded it, which
-was `x86_64-linux`: on `aarch64-linux`, `pkgsCross.aarch64-multiplatform.stdenv.cc`
-resolves to a *native* `gcc-wrapper-15.2.0` with an empty `targetPrefix`, so
-`CROSS_COMPILER_PREFIX` is empty there and the documented build cannot run as
-written. This is a pre-existing gap in the gate, not a macOS-specific one.
-
-**Proposed fix:** make the seL4 kernel build independent of the ambient shell
-rather than re-pinning per host. In `configure_and_install_sel4`, pass an
-explicitly constructed environment that drops `NIX_CFLAGS_COMPILE` /
-`NIX_LDFLAGS` (and the target-suffixed variants) instead of inheriting
-`os.environ`, and add `-frandom-seed=` with a fixed repo-controlled value to the
-existing `CMAKE_C_FLAGS` / `CMAKE_ASM_FLAGS` prefix-map string. Then re-observe
-`[observed_prefix]` once and record which host observed it. That makes the hash
-a function of the pinned seL4 source, the pinned config, and the compiler
-version — which is what the gate is supposed to assert.
-
-**Exit condition:** `just sel4_qemu_image_check` passes on a host whose dev
-shell derivation hash differs from the recording host's, and adding an unrelated
-package to `flake.nix`'s `packages` list does not change `kernel_sha256`.
-
 ### B17 — the capability transfer's subset test has no coverage
 
 **Problem:** `slime-root/src/main.rs::serve_cap_transfer` enforces four rules,
@@ -256,6 +194,52 @@ to the seL4 cutover. It should be scheduled against the x86 oracle deliberately,
 not folded into a portability slice.
 
 ## Resolved
+
+### B19 — the seL4 prefix pins bound the dev-shell derivation hash, not the toolchain — **resolved 2026-08-06**
+
+**Problem:** `sel4/pins.toml`'s `[observed_prefix]` is the gate that would
+notice a change of seL4 compiler, and it pinned the **dev shell's own derivation
+hash** instead. `configure_and_install_sel4` inherited `os.environ`, and nixpkgs
+puts `-frandom-seed=<first 10 chars of the devShell derivation hash>` into
+`NIX_CFLAGS_COMPILE`; GCC seeds symbol and section naming from it, so adding a
+tool to `flake.nix` — or reordering the list — changed `kernel.elf` byte-for-byte
+and was reported as toolchain drift. The same variable carried per-package
+`-isystem` store paths, and `NIX_HARDENING_ENABLE` imposed
+`-fstack-protector-strong`, `-fzero-call-used-regs`, and `_FORTIFY_SOURCE=3` on a
+freestanding kernel whose own `CMakeLists.txt` asks for `-fno-stack-protector`.
+
+**Resolved by** making the kernel build independent of the shell rather than by
+re-pinning per host. `sel4_build_environment` builds the environment from
+`os.environ` minus every flag-carrying `NIX_*` variable, the `CFLAGS`-family
+names CMake seeds `CMAKE_<LANG>_FLAGS_INIT` from, the bintools wrapper's
+`NIX_SET_BUILD_ID`/`NIX_BUILD_ID_STYLE` switches, and
+`CMAKE_INCLUDE_PATH`/`CMAKE_LIBRARY_PATH`/`CMAKE_PREFIX_PATH`; a fixed
+`-frandom-seed=slime-sel4-qemu-arm-virt` replaces the shell's seed. The scrub
+matches by *prefix* because the cc-wrapper reads target- and role-mangled
+spellings (`NIX_CFLAGS_COMPILE_aarch64_unknown_linux_gnu`, `_FOR_BUILD`,
+`_FOR_TARGET`) rather than the base names.
+
+Of the exact-name groups, only the search paths were a live route:
+`CMAKE_INCLUDE_PATH` is prepended to `find_file` order, which no `-D` protects,
+and seL4 resolves `KERNEL_HELPERS_PATH` that way. The rest are defense in depth
+and are labelled so in the code rather than described as leaks.
+
+`kernel_sha256` is re-observed as `e8cbab4f…` on `aarch64-darwin`. The other four
+pinned artifacts were already reproducible and are unchanged. The hash still
+binds `cmake`, `ninja`, and the host Python generators, which this file does not
+pin — recorded as a residual in the devlog, not claimed as closed.
+
+**Exit condition (observed 2026-08-06):** `just sel4_qemu_image_check` passes,
+and adding `hexdump` to `flake.nix`'s `packages` moves the shell's seed from
+`r279wlb3cq` to `rhl1f441df` while leaving `kernel_sha256` byte-identical. A
+third build with a fabricated seed, fake `-isystem` store paths, a narrowed
+hardening set, and an ambient `CFLAGS` is byte-identical too. Fault-injected:
+one nibble changed in `kernel_sha256` makes the gate exit 1. The stated "host
+whose dev shell derivation hash differs" is satisfied by changing this host's
+own shell hash rather than by a second machine; no Linux host was observed, and
+`aarch64-linux` still cannot run the documented build for the pre-existing
+empty-`CROSS_COMPILER_PREFIX` reason B19's analysis recorded. See
+`devlog/2026-08-06-b19-sel4-prefix-pin-shell-coupling/`.
 
 ### B18 — the seL4 stream gate was scheduling-dependent — **resolved 2026-08-06**
 

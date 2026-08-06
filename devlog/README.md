@@ -169,3 +169,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-05 | [P5.3.4 — The C7 sample plane composed on seL4](2026-08-05-p5-3-4-sample-plane/index.md) | Change | Verified | P5.3.4, P5.3, B14 |
 | 2026-08-05 | [P5.5.1 — Narrow-on-transfer provisioning on seL4](2026-08-05-p5-5-1-typed-fabric/index.md) | Change | Verified | P5.5.1, P5.5, B15, B17 |
 | 2026-08-05 | [P5.5.2 — The full stream plane, unmodified, on seL4](2026-08-05-p5-5-2-stream-plane/index.md) | Change | Verified | P5.5.2, P5.5, B17 |
+| 2026-08-06 | [B19 — the seL4 prefix pins bound the dev-shell derivation hash, not the toolchain](2026-08-06-b19-sel4-prefix-pin-shell-coupling/index.md) | Defect | Verified | B19 |
