@@ -246,9 +246,22 @@ tracked as a follow-up below rather than fixed here — closing it means making
 `flake.nix` name one wrapper for both platforms, which changes the recorded hash
 and is a `flake.nix` change rather than a build-script one.
 
-- [ ] `[observed_prefix]` holds for one platform at a time. `aarch64-linux`
+- [x] `[observed_prefix]` holds for one platform at a time. `aarch64-linux`
       produces `f2d316e1…` where `aarch64-darwin` produces `e8cbab4f…`, because
       `pkgsCross.aarch64-multiplatform.stdenv.cc` is a cross wrapper on Darwin
       and a native `gcc` on `aarch64-linux`. A cross-platform gate needs
       `flake.nix` to pin one wrapper for both, or `pins.toml` to record a hash
       per platform.
+
+### 2026-08-06 — the follow-up above is resolved as B20, by a third route
+
+Neither option the note predicted. The build now states
+`-fomit-frame-pointer -momit-leaf-frame-pointer` itself, so all three platforms
+tested produce a byte-identical `kernel.elf` without changing which toolchain
+`flake.nix` names. That is a policy the build **chooses**, not a compiler default
+it restores: GCC's aarch64 backend keeps the frame pointer at every `-O` level
+unless the flag is explicit, so the change moves this entry's `aarch64-linux`
+hash as well as Darwin's. The pin recorded in this entry (`e8cbab4f…`) is
+therefore **superseded by `97dcb029…`**; `e8cbab4f…` remains exactly what this
+entry's build produces, and is what B20's fault injection reproduces when the new
+flags are removed. See `devlog/2026-08-06-b20-cross-platform-kernel-identity/`.

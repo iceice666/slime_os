@@ -170,3 +170,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-05 | [P5.5.1 — Narrow-on-transfer provisioning on seL4](2026-08-05-p5-5-1-typed-fabric/index.md) | Change | Verified | P5.5.1, P5.5, B15, B17 |
 | 2026-08-05 | [P5.5.2 — The full stream plane, unmodified, on seL4](2026-08-05-p5-5-2-stream-plane/index.md) | Change | Verified | P5.5.2, P5.5, B17 |
 | 2026-08-06 | [B19 — the seL4 prefix pins bound the dev-shell derivation hash, not the toolchain](2026-08-06-b19-sel4-prefix-pin-shell-coupling/index.md) | Defect | Verified | B19 |
+| 2026-08-06 | [B20 — the prefix pin held for one platform at a time](2026-08-06-b20-cross-platform-kernel-identity/index.md) | Defect | Verified | B20, B19 |

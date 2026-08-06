@@ -16,48 +16,6 @@ at the bottom rather than deleting it.
 
 ## Open
 
-### B20 — `[observed_prefix]` holds for one platform at a time
-
-**Problem:** B19 made `kernel_sha256` independent of the dev *shell*. It is
-still per-*platform*: `aarch64-darwin` produces `e8cbab4f…` and `aarch64-linux`
-produces `f2d316e1…` from the same checkout, the same `flake.nix`, and the same
-pinned seL4 source and config.
-
-The cause is the compiler, not a leak. `flake.nix` names
-`pkgsCross.aarch64-multiplatform.stdenv.cc`, which resolves to a **cross**
-`gcc-wrapper` on Darwin and to a **native** `gcc` on `aarch64-linux` — the same
-empty-`targetPrefix` fact B19's analysis recorded as the reason the documented
-build could not run there as written. The two wrappers do not inject the same
-flags: Darwin's `nix-support/cc-cflags-before` is
-`-fno-omit-frame-pointer -mno-omit-leaf-frame-pointer -march=armv8-a`, the
-native one adds none of it. One trivial translation unit compiled with identical
-explicit flags differs accordingly — the Darwin output carries the
-`stp x29, x30` / `mov x29, sp` / `ldp` frame-pointer prologue and epilogue plus
-its `.cfi` directives, the Linux output is the bare `add w0, w0, 1; ret`.
-
-So the gate is honest but narrow: it can only be run on the platform that
-recorded the pin. On any other platform it reports drift that is real but
-uninteresting, and it cannot be used as a cross-host reproducibility check —
-which is what B19's exit condition was reaching for.
-
-**Evidence:** observed 2026-08-06 on `aarch64-linux` under OrbStack's Docker
-engine (`nixos/nix:latest`, Nix 2.35.1). B19's own property holds on that host:
-a real-shell build and one under a fabricated `NIX_CFLAGS_COMPILE` /
-`NIX_HARDENING_ENABLE` / `CFLAGS` / `ASMFLAGS` / `NIX_SET_BUILD_ID` environment
-are byte-identical at `f2d316e1…`, with zero host or store paths in the ELF. The
-four other pinned artifacts match Darwin's exactly. See
-`devlog/2026-08-06-b19-sel4-prefix-pin-shell-coupling/`, `## Corrections`.
-
-**Proposed fix:** name one exact cross toolchain in `flake.nix` that resolves to
-the same wrapper on every supported system, rather than one whose identity
-depends on whether the host is already AArch64, then re-observe
-`[observed_prefix]` once. The alternative — recording a hash per platform — makes
-the gate weaker in the way B19 argued against, since a per-host pin cannot fail
-for the reason it exists.
-
-**Exit condition:** two different platforms build byte-identical `kernel.elf`
-from the same checkout, with `just sel4_qemu_image_check` passing on both.
-
 ### B17 — the capability transfer's subset test has no coverage
 
 **Problem:** `slime-root/src/main.rs::serve_cap_transfer` enforces four rules,
@@ -237,6 +195,62 @@ not folded into a portability slice.
 
 ## Resolved
 
+### B20 — the prefix pin held for one platform at a time — **resolved 2026-08-06**
+
+**Problem:** B19 made `kernel_sha256` independent of the dev *shell*; it was
+still per-*platform*. `aarch64-darwin` produced `e8cbab4f…` and `aarch64-linux`
+produced `f2d316e1…` from the same checkout, the same `flake.nix`, and the same
+pinned seL4 source and config.
+
+The cause was the toolchain, not a leak. `flake.nix` names
+`pkgsCross.aarch64-multiplatform.stdenv.cc`, which resolves to a **cross**
+`gcc-wrapper` on Darwin and a **native** `gcc` on `aarch64-linux` — the
+empty-`targetPrefix` fact B19's analysis recorded, seen from the other side.
+Darwin's `nix-support/cc-cflags-before` forces
+`-fno-omit-frame-pointer -mno-omit-leaf-frame-pointer`, so every function
+prologue differed. Because that file lives inside the wrapper derivation rather
+than the environment, B19's scrub could not reach it.
+
+**Resolved by** having the build state its own frame-pointer policy:
+`-fomit-frame-pointer -momit-leaf-frame-pointer` joins the prefix maps and the
+fixed seed in `CMAKE_C_FLAGS`/`CMAKE_ASM_FLAGS`. This is a policy the build
+**chooses**, not a compiler default it restores, and it moves *both* platforms:
+GCC's aarch64 backend disables `-fomit-frame-pointer` at every `-O` level, so an
+aarch64 kernel keeps its frame pointers at `-O2` unless the flag is explicit.
+(`-Q --help=optimizers` claims otherwise at `-O2`; that is a reporting trap, and
+it is what an earlier draft of this entry got wrong.) The choice is sound because
+seL4 states no frame-pointer preference and nothing walks one — the AArch64 trap
+path's `x29` uses are full register-context saves indexed off `sp`, and
+`Arch_userStackTrace` scans `SP_EL0` linearly. `-momit-leaf-frame-pointer` is
+belt and braces: under `-fomit-frame-pointer` it changes no emitted code, and it
+is kept only because it names the second of the wrapper's two injections.
+
+Darwin's two other injections need no counter-flag: `-march=armv8-a` is what seL4
+passes itself and what both compilers default to, and the glibc/gcc
+`-idirafter`/`-B` paths reach nothing in a `-nostdinc -ffreestanding -nostdlib`
+build.
+
+Naming one cross toolchain for every system — B20's own proposed fix — was
+rejected as larger, with a worse failure mode, and moving the pin for a reason
+unrelated to the defect. It remains the stronger fix and is now optional.
+
+`kernel_sha256` is re-observed as `97dcb029…` on **all three platforms tested**.
+
+**Exit condition (observed 2026-08-06):** `kernel.elf` built on
+`aarch64-darwin`, `aarch64-linux`, and `x86_64-linux` are **byte-identical** by
+`cmp`, each 973184 bytes at `97dcb029…`, from three different dev-shell seeds
+(`r279wlb3cq`, `65gzz0x3v8`, `6ckb6q72lb`), with all nine `sel4_*` Justfile gates
+passing. `x86_64-linux` is the case that matters most:
+there `pkgsCross.aarch64-multiplatform.stdenv.cc` is a genuine *cross* wrapper as
+on Darwin, rather than the native `gcc` `aarch64-linux` resolves, so both wrapper
+shapes agree. B19's property still holds on each: a real-shell build and a
+hostile-environment build are byte-identical. Fault-injected symmetrically —
+replacing the flag string with `""` reverts Darwin to `e8cbab4f…` and
+`aarch64-linux` to `f2d316e1…`, the exact pre-B20 divergence. Both Linux hosts
+are containers under a macOS hypervisor, one of them emulated, not separate
+hardware — the right test for toolchain independence and no evidence about
+physical boards. See `devlog/2026-08-06-b20-cross-platform-kernel-identity/`.
+
 ### B19 — the seL4 prefix pins bound the dev-shell derivation hash, not the toolchain — **resolved 2026-08-06**
 
 **Problem:** `sel4/pins.toml`'s `[observed_prefix]` is the gate that would
@@ -266,7 +280,9 @@ Of the exact-name groups, only the search paths were a live route:
 and seL4 resolves `KERNEL_HELPERS_PATH` that way. The rest are defense in depth
 and are labelled so in the code rather than described as leaks.
 
-`kernel_sha256` is re-observed as `e8cbab4f…` on `aarch64-darwin`. The other four
+`kernel_sha256` was re-observed as `e8cbab4f…` on `aarch64-darwin` — **since
+superseded by B20's `97dcb029…`**, which is the same kernel built with the
+frame-pointer policy stated rather than inherited. The other four
 pinned artifacts were already reproducible and are unchanged. The hash still
 binds `cmake`, `ninja`, and the host Python generators, which this file does not
 pin — recorded as a residual in the devlog, not claimed as closed.
@@ -285,8 +301,10 @@ a real-shell build and a hostile-environment build are byte-identical — but at
 `gcc-wrapper` that forces `-fno-omit-frame-pointer` while `aarch64-linux`
 resolves a *native* `gcc` that does not. That is a genuine toolchain difference,
 which is what the gate exists to catch, so the pin stands as recorded. It does
-mean `[observed_prefix]` is **per-platform**; that is opened as B20 rather than
-folded in here. See `devlog/2026-08-06-b19-sel4-prefix-pin-shell-coupling/`.
+mean `[observed_prefix]` is **per-platform**; that was opened as B20 rather than
+folded in here, and B20 is now resolved — both platforms produce a
+byte-identical `97dcb029…`. See
+`devlog/2026-08-06-b19-sel4-prefix-pin-shell-coupling/`.
 
 ### B18 — the seL4 stream gate was scheduling-dependent — **resolved 2026-08-06**
 
