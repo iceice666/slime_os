@@ -16,6 +16,114 @@ at the bottom rather than deleting it.
 
 ## Open
 
+### B19 — the seL4 prefix pins bind the dev-shell derivation hash, not the toolchain
+
+**Problem:** `sel4/pins.toml`'s `[observed_prefix]` hashes are documented as
+"reproducible across checkouts", and `scripts/build/build-sel4.py` closes the
+two leaks it knows about (QEMU `dtb-randomness=off`, `-ffile-prefix-map` for the
+source and build roots). But the build inherits `NIX_CFLAGS_COMPILE` from the
+ambient dev shell, and nixpkgs puts two host-varying things in it:
+
+- `-frandom-seed=<first 10 chars of the devShell derivation hash>`, which GCC
+  uses to seed symbol/section naming, and
+- `-isystem` / `-fmacro-prefix-map` entries for every dev-shell package
+  (`lldb`, `qemu`, `dtc`, `python3`, ...), whose store paths differ per host.
+
+So `kernel_sha256` pins the *dev shell's own hash* as much as the toolchain.
+Any change to the `packages` list — adding a tool, reordering it — changes the
+derivation hash, changes the seed, and changes `kernel.elf` byte-for-byte,
+producing a "toolchain drift" failure that is not toolchain drift. The gate is
+weaker than it reads: it cannot distinguish a real compiler change from an
+unrelated dev-shell edit, and it silently binds a freestanding kernel build to
+hardening flags (`-fstack-protector-strong`, `-fzero-call-used-regs`,
+`_FORTIFY_SOURCE=3`) that seL4 explicitly does not ask for.
+
+**Evidence:** observed on `aarch64-darwin` (2026-08-06). Four of the five
+pinned artifacts — both `gen_config.json`, `kernel.dtb`, `platform_gen.yaml` —
+match the pins *exactly*, so configuration and device tree are reproducible;
+only `kernel.elf` differs. Varying only the seed, with everything else held
+fixed, moves the hash:
+
+| `-frandom-seed` | `kernel.elf` SHA-256 |
+| --- | --- |
+| `r279wlb3cq` (this host's shell) | `8248bb69…` |
+| `slimesel4` (arbitrary) | `cb2d4bf5…` |
+| `7jrsis0m3q` (`x86_64-linux` shell) | `a13121bb…` |
+| `78nax60gpi` (`aarch64-linux` shell) | `27383e4f…` |
+| `NIX_CFLAGS_COMPILE` empty | `dc852cf9…` |
+| pinned value | `2d88b9a4…` |
+
+Two clean builds at a fixed seed are bit-identical, so the Darwin build is
+internally deterministic — this is a stable input difference, not nondeterminism.
+Substituting either Linux shell's seed does not reproduce the pin either,
+because the `-isystem` store paths differ as well.
+
+The pin is therefore reproducible only on the exact host that recorded it, which
+was `x86_64-linux`: on `aarch64-linux`, `pkgsCross.aarch64-multiplatform.stdenv.cc`
+resolves to a *native* `gcc-wrapper-15.2.0` with an empty `targetPrefix`, so
+`CROSS_COMPILER_PREFIX` is empty there and the documented build cannot run as
+written. This is a pre-existing gap in the gate, not a macOS-specific one.
+
+**Proposed fix:** make the seL4 kernel build independent of the ambient shell
+rather than re-pinning per host. In `configure_and_install_sel4`, pass an
+explicitly constructed environment that drops `NIX_CFLAGS_COMPILE` /
+`NIX_LDFLAGS` (and the target-suffixed variants) instead of inheriting
+`os.environ`, and add `-frandom-seed=` with a fixed repo-controlled value to the
+existing `CMAKE_C_FLAGS` / `CMAKE_ASM_FLAGS` prefix-map string. Then re-observe
+`[observed_prefix]` once and record which host observed it. That makes the hash
+a function of the pinned seL4 source, the pinned config, and the compiler
+version — which is what the gate is supposed to assert.
+
+**Exit condition:** `just sel4_qemu_image_check` passes on a host whose dev
+shell derivation hash differs from the recording host's, and adding an unrelated
+package to `flake.nix`'s `packages` list does not change `kernel_sha256`.
+
+### B17 — the capability transfer's subset test has no coverage
+
+**Problem:** `slime-root/src/main.rs::serve_cap_transfer` enforces four rules,
+and `just sel4_fabric_check` observes three: transfer authority at the source,
+the per-kind mask, and the descriptor/kind agreement. The fourth — the **subset
+test**, `rights & !source.rights != 0`, which is what makes the move
+narrow-only against *what the holder actually has* — is not observed. Deleting
+it leaves every marker in that gate intact.
+
+Not reachable from any graph this cutover can declare, because the four rules
+are one disjunction and every candidate subject fails an earlier one first:
+
+- a **provisioned role** carries no `RIGHT_TRANSFER`, so rule 1 refuses it —
+  which is exactly why `fabric-publisher`'s own widening arm proves the
+  *per-kind* rule rather than this one;
+- a **factory** is granted its single operation right and no transfer bit, so
+  rule 1 again;
+- an **endpoint** minted by `endpoint_create` holds `send|recv|transfer`, which
+  is precisely what `valid_rights` admits for its kind, so no mask widens it
+  without the per-kind rule refusing the same mask.
+
+Reaching it needs a capability holding transfer authority that is strictly
+narrower than its kind admits. `cap_transfer` itself is the only thing that
+produces one — a role moved with `FLAG_RETAIN_TRANSFER` — and a component cannot
+move a capability to itself, because the two ends of a channel it holds alone
+are a loopback the root refuses to split.
+
+So this is a property of the *graph*, not of the root. A latent gap rather than
+a defect: the check is present and correct, and nothing observes it.
+
+**Evidence:** found by fault injection while landing P5.5.1 — the subset test
+was removed and `just sel4_fabric_check` still passed. Two attempts at an
+in-fixture probe were written and withdrawn, each caught by a different earlier
+rule; the reasoning is recorded in `check-sel4-fabric-plane.py`'s module doc
+rather than left as an arm that looks like coverage. See
+`devlog/2026-08-05-p5-5-1-typed-fabric/`.
+
+**Proposed fix:** a composition where one broker provisions another, so a role
+moved with `FLAG_RETAIN_TRANSFER` becomes a subject holding `send|transfer`
+where its kind admits `send|recv|transfer`. Asking to move that with `recv`
+restored is a widening only the subset test can refuse. P5.5.2's two-route graph
+with a declared interposition chain is that shape.
+
+**Exit condition:** a widening refused by the subset test alone, observed under
+a named seL4 gate, and fault-injected to show that removing the test fails it.
+
 ### B16 — a supervision termination record is never reclaimed, so a long-lived graph exhausts the table
 
 **Problem:** `slime-root/src/supervision.rs::Terminations` records how each child
