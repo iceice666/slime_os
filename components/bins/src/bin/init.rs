@@ -1601,6 +1601,25 @@ fn drive_stream_plane() {
         .unwrap_or_else(|_| fail_stream(b"spawn fabric"));
     slime_rt::debug_write(b"[init] fabric service spawned\n");
 
+    // Let both subscribers reach the fabric before either publisher exists
+    // (B18). Same device `launch_fabric_graph` uses on x86, and needed here for
+    // a sharper reason than message ordering: `deliver` refuses a subscriber
+    // whose `matched_publishers` is zero, and `refresh_matches` counts only
+    // publishers the fabric has *already provisioned*. A subscriber that asks
+    // after `fabric-publisher` has finished therefore matches nothing, is
+    // delivered nothing, and loses nothing — so `fabric-subscriber-b` fails
+    // its own `the stall was never reported as loss` assertion, on a boot where
+    // the fabric behaved correctly.
+    //
+    // The subscribers were spawned first because the fabric needs their
+    // supervision handles, but spawning is not running: without this they are
+    // merely *created* before the publishers, and which one reaches its control
+    // endpoint first is a scheduling detail. One yield is enough, and for the
+    // reason the x86 comment gives — `SYS_YIELD` puts the caller at the back of
+    // a FIFO ready queue, so every task spawned above runs until it blocks, and
+    // a subscriber blocks in `recv` only after its request is enqueued.
+    slime_rt::yield_now();
+
     // B17: the transfer contract's subset test needs a capability holding
     // `RIGHT_TRANSFER` that is *strictly narrower than its kind admits*, and a
     // spawn grant is what produces one — the requested mask is installed

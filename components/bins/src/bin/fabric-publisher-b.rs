@@ -207,11 +207,23 @@ fn main() {
         }
         slime_rt::debug_write(b"[fabric-publisher-b] simulated time advanced\n");
     }
-    publish(
-        diagnostics_slot,
-        &inline_sample(diagnostics_stream::TYPE_TAG, 2, FLAG_LAST).encode(),
-    );
-    slime_rt::debug_write(b"[fabric-publisher-b] diagnostics terminal published\n");
+    // No second diagnostics sample. The first carries `FLAG_LAST`, which retires
+    // this publisher's ingress at the fabric: `broker` skips a finished
+    // publisher and `park_on_streams` drops it from the wait set, so a further
+    // send is never read by anyone. It only sat in a queue.
+    //
+    // That made it worse than useless (B18). Once `diagnostics` is retired,
+    // only `telemetry` keeps the service alive; when that drains the fabric
+    // exits, and this send then answers `ERR_PEER_DEAD` — which `publish`
+    // treats as fatal. So the component's exit status depended on whether the
+    // fabric happened to still be running, which on seL4 it usually was not.
+    //
+    // Deleting it rather than moving `FLAG_LAST` to it: the route genuinely
+    // ends at the first sample, `fabric-subscriber-b` consumes exactly one
+    // diagnostics sample on both paths, and no gate requires the marker this
+    // dropped. Moving the flag instead was tried and wedges
+    // `just fabric_qos_check`, whose subscriber waits for the terminal event
+    // the early flag produces.
     slime_rt::debug_write(b"[fabric-publisher-b] done\n");
 }
 fn visibility_main() {

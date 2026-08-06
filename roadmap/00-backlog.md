@@ -16,58 +16,62 @@ at the bottom rather than deleting it.
 
 ## Open
 
-### B18 — `fabric-publisher-b` publishes past a route it already terminated, so the seL4 stream plane is scheduling-dependent
+### B18 — the seL4 stream gate is scheduling-dependent: publishing races provisioning
 
-**Problem:** `components/bins/src/bin/fabric-publisher-b.rs` sends its first
-`diagnostics` sample with `FLAG_LAST`, which retires that route at the fabric,
-and then — after `publish_large` — publishes on the same route again. Whether
-the second send succeeds depends on whether `fabric-service` has decided every
-route is finished and exited in the interval.
+**Status: partly fixed.** `just sel4_stream_check` went from roughly 1 pass in 3
+to **6 in 9** across two fixes; two residual causes remain, both measured below.
 
-Once `diagnostics` is retired, only `telemetry` keeps the service alive; when
-that drains, the fabric exits and the late send answers `ERR_PEER_DEAD`, which
-`publish` treats as fatal. The component exits 1 and init reports
-`a fabric component did not exit cleanly`.
+**Fixed — a publisher writing to a route it had already retired.**
+`fabric-publisher-b` sent its first `diagnostics` sample with `FLAG_LAST` and
+then published on that route again after the large telemetry sample. The second
+send was **dead code**: `FLAG_LAST` sets `publisher.finished`, and both `broker`
+and `park_on_streams` skip a finished publisher, so nothing ever read it. Worse
+than useless — once `diagnostics` retired, only `telemetry` kept the fabric
+alive, and when that drained the late send answered `ERR_PEER_DEAD`, which
+`publish` treats as fatal. Deleted rather than re-flagged: the route genuinely
+ends at the first sample, `fabric-subscriber-b` consumes exactly one diagnostics
+sample on both paths, and no gate required the dropped marker. (Moving
+`FLAG_LAST` to the second sample was tried first and wedges
+`just fabric_qos_check`, whose subscriber waits for the early terminal event.)
 
-**Evidence:** `just sel4_stream_check` fails roughly two runs in three:
+**Partly fixed — provisioning races publishing.** `deliver` refuses a subscriber
+whose `matched_publishers` is zero, and `refresh_matches` counts only publishers
+the fabric has *already provisioned*. A subscriber that asks after
+`fabric-publisher` has published its whole stall window matches nothing, is
+delivered nothing, and therefore loses nothing — so `fabric-subscriber-b` fails
+its own `the stall was never reported as loss` assertion on a boot where the
+fabric behaved correctly.
 
-```
-[fabric] stream plane complete
-SLIME_GRAPH component exit task=9 status=0
-[fabric-publisher-b] large sample published
-[fabric-publisher-b] fail: publish
-```
+`drive_stream_plane` now yields after spawning the fabric, the same device
+`launch_fabric_graph` uses on x86. It is not sufficient here: the oracle's
+scheduler is cooperative, so one yield deterministically drains the ready queue,
+while seL4 preempts and the ordering is only made *likely*. Observed twice in
+nine runs after the yield.
 
-Reproduced at both `MAX_GRAPH_TASKS = 16` and `= 32`, so it is unrelated to that
-bound. `just fabric_stream_check` passed three consecutive runs, so the x86 gate
-does not observe it — cooperative scheduling orders the two events favourably
-every time. See `devlog/2026-08-05-p5-5-2-stream-plane/`.
+**Residual, second cause.** One run in nine failed on a missing
+`[fabric-publisher] re-delegation denied` with every component exiting 0 — a
+marker lost from an otherwise correct boot. Components emit markers through
+`debug_put_char` one byte at a time (`sel4_transport.rs`, `PRINTING` arm), which
+is not atomic against the root's own `debug_println!`, so a marker can be
+interleaved into unreadability.
 
-**A second, rarer flake was observed once in seven runs** and is *not* this: a
-component's marker corrupted mid-string by the root's own `debug_println!`
-(`[fabric-sSLIME_GRAPH received task=9 …`), which fails whichever gate required
-the destroyed marker. `debug_write` is not atomic against the root's markers on
-seL4. Recorded here rather than as its own item because both make the same gate
-flaky and both want measuring together.
-
-**Proposed fix, and why it is not one line.** The obvious change — move
-`FLAG_LAST` to the second diagnostics sample, where the route genuinely ends —
-**was tried and reverted**: it wedges `just fabric_qos_check`, whose graph has a
-subscriber that depends on `diagnostics` terminating early, so the fabric parks
-forever waiting for a route that never finishes. The two gates want opposite
-things from the same component, which makes this a question about what
-`FLAG_LAST` means for a publisher that continues, not a flag placement. Likely
-answers: a per-route "no more from this publisher" that is distinct from "route
-finished", or a QoS graph that does not rely on the early terminal.
+**Proposed fix:** make the ordering a dependency rather than a timing hint. Init
+cannot observe it — it holds no channel to a participant after spawn — so the
+signal has to come from the fabric: either a publisher waits for its first
+`EVENT_MATCHED` before publishing (the QoS event already exists, and publishers
+already hold a credit endpoint to receive on), or the fabric buffers into a
+declared subscriber's ring before that subscriber has asked. For the marker
+loss, serialize `debug_write` in the root.
 
 **Exit condition:** ten consecutive `just sel4_stream_check` runs pass, with
 `just fabric_stream_check`, `just fabric_qos_check`, and
 `just data_fabric_boot_check` unchanged.
 
-**Not blocking P5.5.2.** Its exit condition is what the transcript asserts, and
-every assertion is observed on a passing run; what is unreliable is reaching the
-end of the boot, not what the boot proves. Recorded plainly because a gate that
-fails two runs in three is one whose real regressions get attributed to flake.
+**Not blocking P5.5.2**, whose exit condition is what the transcript asserts;
+every assertion is observed on a passing run. Recorded plainly because a gate
+that fails one run in three is one whose real regressions get attributed to
+flake — which is exactly what happened during this milestone, where several
+early passes were luck rather than evidence.
 
 ### B16 — a supervision termination record is never reclaimed, so a long-lived graph exhausts the table
 

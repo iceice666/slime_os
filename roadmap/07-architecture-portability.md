@@ -1083,13 +1083,14 @@ exercised the path. `shared_buffer_unmap` refused a **loan** slot where
 bounds were sized against the wrong quantity — task pairs rather than route
 roles — and this is the first graph large enough to reach either.
 
-**The gate is currently flaky: it passes roughly one run in three (B18).** The
-failure is `fabric-publisher-b` publishing on a route it had already marked
-terminal, which the retired kernel's cooperative scheduling hides; the one-line
-fix wedges `just fabric_qos_check` and was reverted. Every assertion above is
-observed on a passing run — what is unreliable is reaching the end of the boot,
-not what the boot proves — but the gate should not be relied on as a regression
-guard until B18 is resolved.
+**The gate is scheduling-dependent (B18): it passes 6 runs in 9.** Two races the
+retired kernel's cooperative scheduler hides were found here; one is closed — a
+publisher writing to a route it had already retired, which turned out to be dead
+code — and one is narrowed, where a subscriber provisioned after a publisher has
+finished matches nothing and so cannot observe the loss it asserts. Every
+assertion above is observed on a passing run; what is unreliable is reaching the
+end of the boot, not what the boot proves. The gate should not be relied on as a
+regression guard until B18 closes.
 
 ### P5.4 — Retire the custom kernel
 
