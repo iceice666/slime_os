@@ -16,6 +16,48 @@ at the bottom rather than deleting it.
 
 ## Open
 
+### B20 — `[observed_prefix]` holds for one platform at a time
+
+**Problem:** B19 made `kernel_sha256` independent of the dev *shell*. It is
+still per-*platform*: `aarch64-darwin` produces `e8cbab4f…` and `aarch64-linux`
+produces `f2d316e1…` from the same checkout, the same `flake.nix`, and the same
+pinned seL4 source and config.
+
+The cause is the compiler, not a leak. `flake.nix` names
+`pkgsCross.aarch64-multiplatform.stdenv.cc`, which resolves to a **cross**
+`gcc-wrapper` on Darwin and to a **native** `gcc` on `aarch64-linux` — the same
+empty-`targetPrefix` fact B19's analysis recorded as the reason the documented
+build could not run there as written. The two wrappers do not inject the same
+flags: Darwin's `nix-support/cc-cflags-before` is
+`-fno-omit-frame-pointer -mno-omit-leaf-frame-pointer -march=armv8-a`, the
+native one adds none of it. One trivial translation unit compiled with identical
+explicit flags differs accordingly — the Darwin output carries the
+`stp x29, x30` / `mov x29, sp` / `ldp` frame-pointer prologue and epilogue plus
+its `.cfi` directives, the Linux output is the bare `add w0, w0, 1; ret`.
+
+So the gate is honest but narrow: it can only be run on the platform that
+recorded the pin. On any other platform it reports drift that is real but
+uninteresting, and it cannot be used as a cross-host reproducibility check —
+which is what B19's exit condition was reaching for.
+
+**Evidence:** observed 2026-08-06 on `aarch64-linux` under OrbStack's Docker
+engine (`nixos/nix:latest`, Nix 2.35.1). B19's own property holds on that host:
+a real-shell build and one under a fabricated `NIX_CFLAGS_COMPILE` /
+`NIX_HARDENING_ENABLE` / `CFLAGS` / `ASMFLAGS` / `NIX_SET_BUILD_ID` environment
+are byte-identical at `f2d316e1…`, with zero host or store paths in the ELF. The
+four other pinned artifacts match Darwin's exactly. See
+`devlog/2026-08-06-b19-sel4-prefix-pin-shell-coupling/`, `## Corrections`.
+
+**Proposed fix:** name one exact cross toolchain in `flake.nix` that resolves to
+the same wrapper on every supported system, rather than one whose identity
+depends on whether the host is already AArch64, then re-observe
+`[observed_prefix]` once. The alternative — recording a hash per platform — makes
+the gate weaker in the way B19 argued against, since a per-host pin cannot fail
+for the reason it exists.
+
+**Exit condition:** two different platforms build byte-identical `kernel.elf`
+from the same checkout, with `just sel4_qemu_image_check` passing on both.
+
 ### B17 — the capability transfer's subset test has no coverage
 
 **Problem:** `slime-root/src/main.rs::serve_cap_transfer` enforces four rules,
@@ -234,12 +276,17 @@ and adding `hexdump` to `flake.nix`'s `packages` moves the shell's seed from
 `r279wlb3cq` to `rhl1f441df` while leaving `kernel_sha256` byte-identical. A
 third build with a fabricated seed, fake `-isystem` store paths, a narrowed
 hardening set, and an ambient `CFLAGS` is byte-identical too. Fault-injected:
-one nibble changed in `kernel_sha256` makes the gate exit 1. The stated "host
-whose dev shell derivation hash differs" is satisfied by changing this host's
-own shell hash rather than by a second machine; no Linux host was observed, and
-`aarch64-linux` still cannot run the documented build for the pre-existing
-empty-`CROSS_COMPILER_PREFIX` reason B19's analysis recorded. See
-`devlog/2026-08-06-b19-sel4-prefix-pin-shell-coupling/`.
+one nibble changed in `kernel_sha256` makes the gate exit 1.
+
+**A second host was then observed, on `aarch64-linux` under OrbStack** (shell
+seed `65gzz0x3v8` against Darwin's `r279wlb3cq`). B19's property holds there —
+a real-shell build and a hostile-environment build are byte-identical — but at
+`f2d316e1…` rather than `e8cbab4f…`, because Darwin resolves a *cross*
+`gcc-wrapper` that forces `-fno-omit-frame-pointer` while `aarch64-linux`
+resolves a *native* `gcc` that does not. That is a genuine toolchain difference,
+which is what the gate exists to catch, so the pin stands as recorded. It does
+mean `[observed_prefix]` is **per-platform**; that is opened as B20 rather than
+folded in here. See `devlog/2026-08-06-b19-sel4-prefix-pin-shell-coupling/`.
 
 ### B18 — the seL4 stream gate was scheduling-dependent — **resolved 2026-08-06**
 

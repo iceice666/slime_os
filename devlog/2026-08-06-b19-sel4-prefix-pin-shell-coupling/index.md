@@ -192,3 +192,63 @@ the old pin are exactly what is now dropped, but no Linux host was observed.
   `[observed_prefix]` gate this repairs.
 - Predecessor: `devlog/2026-08-05-p5-5-2-stream-plane/` — the last slice to
   build through this path with the leak present.
+
+## Corrections
+
+### 2026-08-06 — a second host was observed, and it does not reproduce `e8cbab4f…`
+
+The body above closes with "No non-Darwin host has been observed since the fix"
+and an **[INFERENCE]** that a Linux shell would reproduce `e8cbab4f…` given the
+same cross-compiler version. A second host has now been observed, and **that
+inference was wrong** — for a reason that leaves B19's own property intact.
+
+Host: `aarch64-linux` under OrbStack's Docker engine (`nixos/nix:latest`, Nix
+2.35.1, `uname -sm` = `Linux aarch64`), building this same checkout through the
+same `flake.nix` dev shell. Its shell seed is `65gzz0x3v8`, against Darwin's
+`r279wlb3cq` — a genuinely different derivation hash.
+
+| Artifact | `aarch64-darwin` | `aarch64-linux` |
+|---|---|---|
+| `kernel_sha256` | `e8cbab4f…` | **`f2d316e1…`** |
+| `kernel_config_sha256` | `e775930b…` | `e775930b…` |
+| `libsel4_config_sha256` | `ccd1c7f7…` | `ccd1c7f7…` |
+| `dtb_sha256` | `2c9a9234…` | `2c9a9234…` |
+| `platform_info_sha256` | `9a8eca4b…` | `9a8eca4b…` |
+
+**B19's property holds on the new host.** Within `aarch64-linux`, a build under
+the real shell and a build under a fabricated environment
+(`NIX_CFLAGS_COMPILE` with seed `deadbeef42` and a fake `-isystem` store path,
+`NIX_HARDENING_ENABLE`, `CFLAGS`, `ASMFLAGS`, `NIX_SET_BUILD_ID=1`) are
+**byte-identical** at `f2d316e1…`. The shell no longer reaches the kernel on
+either platform, which is what this entry fixed. The Linux ELF also carries zero
+`/work`, `/nix/store`, or `/Users` strings against 91 `/slime/` logical
+prefixes — same as Darwin.
+
+**The cross-host difference is a real toolchain difference, which is what the
+gate is supposed to catch.** Both hosts report `aarch64-unknown-linux-gnu-gcc
+(GCC) 15.2.0`, the same `-dumpmachine`, the same `--with-arch=armv8-a
+--enable-default-pie`, and the same `.ident`. But Darwin resolves a *cross*
+`gcc-wrapper` whose `nix-support/cc-cflags-before` is
+`-fno-omit-frame-pointer -mno-omit-leaf-frame-pointer -march=armv8-a`, while
+`aarch64-linux` resolves a *native* `gcc` (B19's recorded empty-`targetPrefix`
+gap) that injects no such flags. Compiling one trivial translation unit with
+identical explicit flags on both hosts shows the delta directly — the Darwin
+output adds the `stp x29, x30` / `mov x29, sp` / `ldp` frame-pointer prologue and
+epilogue and its `.cfi` directives; the Linux output is the bare
+`add w0, w0, 1; ret`. Different codegen from a differently-configured compiler
+wrapper is drift, not shell coupling.
+
+So the pin stays as recorded, and the `[observed_prefix]` comment's statement
+that it binds the cross compiler is now demonstrated rather than asserted. What
+this does establish, and the body did not: the pin is **per-platform**, because
+the two platforms do not resolve the same cross-compiler wrapper. That is
+tracked as a follow-up below rather than fixed here — closing it means making
+`flake.nix` name one wrapper for both platforms, which changes the recorded hash
+and is a `flake.nix` change rather than a build-script one.
+
+- [ ] `[observed_prefix]` holds for one platform at a time. `aarch64-linux`
+      produces `f2d316e1…` where `aarch64-darwin` produces `e8cbab4f…`, because
+      `pkgsCross.aarch64-multiplatform.stdenv.cc` is a cross wrapper on Darwin
+      and a native `gcc` on `aarch64-linux`. A cross-platform gate needs
+      `flake.nix` to pin one wrapper for both, or `pins.toml` to record a hash
+      per platform.
