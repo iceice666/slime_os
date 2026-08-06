@@ -11,6 +11,7 @@
       systems = [
         "x86_64-linux"
         "aarch64-linux"
+        "aarch64-darwin"
       ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
     in
@@ -56,31 +57,44 @@
         in
         {
           default = pkgs.mkShell {
-            packages = with pkgs; [
-              gcc
-              just
-              lldb
-              qemu
-              rustup
-              limine
-              xorriso
-              OVMF
-              mtools
-              dosfstools
-              cargo-deny
-              cargo-machete
-              ruff
-              typos
-              # seL4 product build: kernel configure/build, cross compilation,
-              # bindgen, device-tree handling, and the `xmllint` the kernel's
-              # syscall/invocation header generators validate their XML with.
-              cmake
-              ninja
-              dtc
-              libxml2.bin
-              crossCC
-              sel4Python
-            ];
+            packages =
+              with pkgs;
+              [
+                gcc
+                just
+                lldb
+                qemu
+                rustup
+              ]
+              # nixpkgs' `limine` package (the UEFI bootloader installer CLI,
+              # used only by the legacy x86_64 custom-kernel ISO build) is
+              # marked badPlatforms on Darwin. The seL4/AArch64 path this
+              # shell otherwise supports never invokes it, so it is dropped
+              # there rather than blocking the whole shell. It stays in its
+              # original list position so the Linux shells keep the exact
+              # derivation hash `sel4/pins.toml` was observed under: nixpkgs
+              # seeds `-frandom-seed` from that hash, so reordering this list
+              # would change every Linux `kernel.elf` byte-for-byte.
+              ++ lib.optional (!stdenv.isDarwin) limine
+              ++ [
+                xorriso
+                OVMF
+                mtools
+                dosfstools
+                cargo-deny
+                cargo-machete
+                ruff
+                typos
+                # seL4 product build: kernel configure/build, cross compilation,
+                # bindgen, device-tree handling, and the `xmllint` the kernel's
+                # syscall/invocation header generators validate their XML with.
+                cmake
+                ninja
+                dtc
+                libxml2.bin
+                crossCC
+                sel4Python
+              ];
 
             OVMF_CODE = "${pkgs.OVMF.fd}/FV/OVMF_CODE.fd";
             OVMF_VARS = "${pkgs.OVMF.fd}/FV/OVMF_VARS.fd";
