@@ -301,14 +301,34 @@ and the `ksDebugTCBs` pointer without the naming storage that
 `CONFIG_DEBUG_BUILD`'s thread-name support would add. The change was reverted rather
 than left as a call whose effect is unobservable.
 
-So identifying *which* of the six children that TCB is needs either a kernel rebuilt
-with thread-name support, or matching its `tcbVTable`/`tcbCTable` against the root's
-own per-task records — the latter needs no new build options and is the cheaper
-route.
+**The thread is identified: it is task 10, `fabric-publisher` itself.** Matching was
+done through the IPC buffer rather than the VSpace, because the root already prints
+the derived address. The Running TCB reports
+`tcbIPCBuffer = 0x237000`; `child_vspace.rs` sets `ipc_buffer_addr = footprint.end`
+and places the transfer window one page above it, so that TCB's window is
+`0x238000` — and the transcript's `window bound task=10 base=0x238000` names exactly
+one spawned task with that address. Task 10 is the `fabric-publisher` instance init
+spawned, which is the thread that never wakes.
 
-**Exit condition unchanged, and the remaining work is bounded:** identify that
-thread by its VSpace or CNode root, then read seL4's reply path for the enqueue that
-does not happen.
+Its saved context is consistent with a live component rather than a fresh one:
+`registers[31]` (PC) is `0x2366f0`, far above the `entry=0x211e78`
+`fabric-publisher` was started at.
+
+**So the defect is now stated exactly.** `fabric-publisher`'s thread is in
+`ThreadState_Running` with a plausible mid-execution PC, absent from
+`ksReadyQueues` at every priority, while `ksCurThread` is the idle TCB and
+`ksSchedulerAction` is `ResumeCurrentThread`. The root has sent it a reply over a
+capability the kernel identifies as a live `cap_reply_cap`. Sixteen readings
+excluded; every layer above the scheduler checks out.
+
+**Exit condition unchanged.** What is left is a single question inside seL4: what
+transition leaves a thread Running and unqueued on the reply path. Two shapes are
+possible and they need different fixes — the kernel's `setThreadState(Running)`
+without a following `SCHED_ENQUEUE` for a thread that was `BlockedOnReceive`, or a
+root invocation sequence that drives the thread out of its blocked state without
+completing the send. Reading `deps/sel4/src/object/endpoint.c`'s reply path against
+this state is the next step, and it is a source read rather than another
+measurement.
 
 **One wider finding stands regardless of B28**, and it is worth its own slice:
 `sel4_transport::wait` returns `()`, so its staging-failure branch can only
