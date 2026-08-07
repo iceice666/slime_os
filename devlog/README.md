@@ -174,3 +174,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-06 | [B21 — the toolchain was pinned by name, so each host resolved a different binary](2026-08-06-b21-cross-toolchain-binary-selection/index.md) | Defect | Verified | B21, B20, B19 |
 | 2026-08-07 | [B16 — a supervision termination record was never reclaimed](2026-08-07-b16-supervision-records/index.md) | Defect | Verified | B16, B22, B23, P5.4 |
 | 2026-08-07 | [P5.4 — decomposed into an equivalence inventory before deletion](2026-08-07-p5-4-decomposition/index.md) | Decision | Proposed | P5.4, P5.4.1, B12, B16, B22, B23 |
+| 2026-08-07 | [P5.4.1 — the oracle equivalence inventory](2026-08-07-p5-4-1-oracle-inventory/index.md) | Audit | Verified | P5.4.1, P5.4, B22, B12, B23 |

@@ -16,46 +16,50 @@ at the bottom rather than deleting it.
 
 ## Open
 
-### B22 — `ChannelTable` never reclaims, so `MAX_CHANNELS` is a lifetime bound
+### B24 — `SharedBufferTable::quotas` never reclaims, so `MAX_CHARGE_HOLDERS` is a lifetime bound
 
-**Problem:** B16's exact defect shape in a second table.
-`slime-root/src/channel.rs` never frees an entry: `push` derives its key as
-`self.len`, `mark_dead` marks both queues of a dying task's channels dead but
-frees nothing, and `recall_channel_ends` reassigns ends rather than releasing
-them. So `MAX_CHANNELS` (32) bounds the channels a boot may **ever** mint, not
-those live at once.
+**Problem:** B16's and B22's defect shape in a third table, and the one B16's
+sweep implicitly cleared. `slime-root/src/shared_buffer.rs:502` declares
+`quotas: [Option<QuotaEntry>; MAX_CHARGE_HOLDERS]` one line below `charges`,
+which B16 named among the correct tables. `charges` **is** correct — `uncharge`
+frees it at `:1782-1784`. `quotas` has no free path anywhere:
+`declare_quota` (`:574-587`) reuses a slot only for the *same* `HolderId` and
+otherwise takes a fresh one, while `commit_teardown` (`:1590-1614`),
+`reclaim_holder` (`:1120-1143`), and `advance_epoch` (`:1144-1173`) never
+mention it. Grep across the crate returns only declare, init, insert, and read.
 
-Worse than B16 in one respect: because `mark_dead` marks the queues dead in both
-directions and nothing revives them, an exhausted table cannot be worked around
-by reusing a dead peer's channel. Every channel a long-running graph mints is
-spent permanently.
+Because `construct_child` (`main.rs:3092`) keys it `HolderId(task_id)` and
+`TaskTable::next_id` never rewinds (`task.rs:311`, `:420`), a graph that spawns
+and reaps repeatedly presents a fresh holder every time, so the same-holder
+reuse never fires. The 96 slots bound the holders a boot may **ever** construct.
 
-**Evidence:** `channel.rs:120` (`MAX_CHANNELS`), `:446` (`key = self.len`),
-`:339-354` (`mark_dead`), `main.rs:3180-3203` (`recall_channel_ends`). Found
-while fixing B16, which is also what made it load-bearing: the supervision
-plane's loop child had to be written channel-free
-(`components/bins/src/bin/supervision-child.rs`) because a channel-per-child
-loop would have hit this bound before B16's. The gate asserts `endpoints=1` for
-exactly that reason, so the plane avoids this bound rather than deferring it.
+**Evidence:** found by P5.4.1's class audit of every bounded table in
+`slime-root/src`, which is the check that milestone exists to perform. B16's
+sweep was correct within its literal scope of *per-task* tables and missed this
+one because `quotas` is only *keyed* per-task — it is declared per-component at
+boot (`main.rs:1267`) and per-task only on the runtime spawn path.
 
-**Why deferred rather than fixed with B16:** the fix is a second derived
-predicate, over channel *ends* held in live capability tables, and it needs its
-own gate and its own fault injection. Bundling it would have doubled a slice
-that was already large, and the one-line routing around it is the
-eight-line child.
+**Failure mode:** `declare_quota` returns `ChargesExhausted`, which
+`construct_child` (`main.rs:3091-3097`) turns into a released child and
+`DestinationSlotsExhausted`. A bounded refusal of the spawn, not a silent drop
+— but it refuses for a reason unrelated to what the caller did, and it is
+indistinguishable at the wire from real slot exhaustion. At boot the same error
+is `fatal!` (`main.rs:1267`).
 
-**Scheduled under P5.4.1**, whose inventory audits lifetime-vs-live bounds as a
-class. That is the right place: B16 and this were each found one at a time, and
-a sweep of `slime-root/src` during the B16 fix established they are the only two
-*per-task* tables that never free — every other table either frees on reclaim
-(`WindowTable::release`, `ParkedReplies`, `SupervisionWaits::clear`, the
-shared-buffer orphan and charge tables) or is boot-time and deliberately
-monotonic (`generation.rs`, `object_allocator.rs`, `child_vspace.rs`).
+**Reachable today?** No. 96 is triple `MAX_TASKS`, and the deepest declared
+graph is the supervision plane's 35 spawns. But that is already 36% of the way
+there and it is the newest gate, which is exactly B16's trajectory: a bound
+nothing crosses until one loop-shaped plane does.
 
-**Exit condition:** a graph that mints more than `MAX_CHANNELS` channels over
-its lifetime still sends and receives correctly on every live channel, observed
-under a named seL4 gate, and fault-injected to show that removing the reclaim
-fails it.
+**Why opened rather than fixed with B22:** the fix is a third derived
+predicate, over a different key space (`HolderId`, not `ChannelKey`), and it
+needs its own gate and its own fault injection. Bundling it into P5.4.1 would
+repeat exactly what B22's own deferral note describes.
+
+**Exit condition:** a graph that constructs more than `MAX_CHARGE_HOLDERS`
+shared-buffer holders over its lifetime still resolves the declared quota for
+every live holder, observed under a named seL4 gate, and fault-injected to show
+that removing the reclaim fails it.
 
 ### B23 — `slime-root`'s unit tests are run by no gate
 
@@ -176,7 +180,73 @@ again. `just generation_check` and `just contracts_check` were run to confirm
 the new binary perturbed neither contract validation nor generation identity.
 See `devlog/2026-08-07-b16-supervision-records/`.
 
+**Deferral re-reviewed 2026-08-07, before opening P5.4.1's own gate.** Still
+deferred, on the same reasoning once more. B22's fix adds a ninth seL4
+generation and a new component binary through the same JSON-target path, whose
+rustflags this defect does not match, so the reach is unchanged.
+`just generation_check` and `just contracts_check` were run to confirm the new
+binary perturbed neither contract validation nor generation identity. See
+`devlog/2026-08-07-p5-4-1-oracle-inventory/`.
+
 ## Resolved
+
+### B22 — `ChannelTable` never reclaimed, so `MAX_CHANNELS` was a lifetime bound — **resolved 2026-08-07**
+
+**Problem:** B16's exact defect shape in a second table.
+`slime-root/src/channel.rs` never freed an entry: `push` derived its key as
+`self.len` (`:446`), `mark_dead` (`:339-354`) marked both queues of a dying
+task's channels dead but freed nothing, and `reassign` only rewrote the holder
+fields. So `MAX_CHANNELS` (32) bounded the channels a boot could **ever** mint,
+not those live at once, and every channel a long-running graph minted was spent
+permanently.
+
+**How it differed from B16, and why that changed the fix's evidence:** B16
+dropped a record *silently* and hung the parent, so converting the failure into
+a reported one was part of its fix. B22's was already a bounded refusal —
+`ChannelError::TableFull` becomes `IpcError::DestinationSlotsExhausted` — so
+"the failure became reportable" proves nothing here. The gate could only be
+satisfied by the graph *succeeding* past 32. The downstream symptom was the real
+cost: a refused `mint` surfaces in the component, and at `MAX_CHANNELS = 16` the
+stream plane's exhaustion "read as four broken components rather than one
+exhausted table" (`channel.rs:107-111`). The bound had already been crossed once
+and raised rather than fixed.
+
+**Resolved by** `channel::sweep(&mut ChannelTable, &GraphTables, &Transit)`,
+which frees every entry no live holder can name — derived from state that
+already exists, exactly as `supervision::sweep` is. Two predicates, not one:
+`GraphTables::holds_endpoint` for the live half and `Transit::holds_endpoint`
+for the in-flight half, because `serve_cap_transfer` drops the capability from
+the sender's table *before* parking it, so a sweep reading only the graph would
+free the channel a transfer is mid-way through moving.
+
+A precondition came with it: `key = self.len` had to become a monotonic
+`next_key`. That derivation is unique only while `len` never decreases — once
+the sweep frees an entry, the next `push` would reissue a key some live
+capability already names, and `Resource::Endpoint { channel }` is the only
+handle a component holds. That would have converted an exhaustion bug into
+confused-deputy redirection, which is strictly worse.
+
+The sweep is lazy, firing on `TableFull` and retrying, for B16's reason: one
+trigger condition is one thing to keep correct, and a channel that stays is a
+channel that still works.
+
+**Exit condition (observed 2026-08-07):** `just sel4_crossing_check` boots a
+graph that mints 33 pairs against a 32-entry table and still sends and receives
+on every live channel, including a pair held across the crossing and an end
+parked in `Transit` across it. The transcript records the first sweep as
+`freed=28 live=4 minted=32` and the terminal line as `minted=37`; what the gate
+*asserts* is looser and deliberately so — a nonzero `freed` on the sweep line
+and a terminal `minted` in 33..=99, since pinning exact counts would break on
+unrelated allocator changes while the loop-vs-bound arithmetic is enforced
+separately from source. Three fault injections confirmed failing:
+removing the sweep dies at the 33rd mint, removing the `Transit` half of the
+predicate loses the in-flight end, and restoring `key = self.len` trips the
+gate's key-derivation source check. The other eight seL4 gates,
+`just generation_check`, and `just contracts_check` are unchanged. See
+[`devlog/2026-08-07-p5-4-1-oracle-inventory/`](../devlog/2026-08-07-p5-4-1-oracle-inventory/index.md).
+
+**Follow-up opened:** [B24](#b24--sharedbuffertablequotas-never-reclaims-so-max_charge_holders-is-a-lifetime-bound),
+a third table of the same shape found by the same class audit.
 
 ### B21 — the toolchain was pinned by name, so each host resolved a different binary — **resolved 2026-08-06**
 

@@ -12,11 +12,11 @@ A milestone is complete only when its exit condition is observed. Compiled code,
 
 | Track | Status | Next open gate |
 | --- | --- | --- |
-| [Backlog](00-backlog.md) | B1–B11 and B13–B21 resolved; B12, B22, and B23 open, all deferred with reason | Audit lifetime-vs-live bounds as a class under P5.4.1, which closes B22; B12 and B23 stay deferred with reason |
+| [Backlog](00-backlog.md) | B1–B11 and B13–B22 resolved; B12, B23, and B24 open, all deferred with reason | B24 is the third lifetime-vs-live table, found by P5.4.1's class audit and scheduled after it; B12 and B23 stay deferred with reason |
 | [Foundations](01-foundations.md) | M1–M4 and M6 complete; M5 mechanisms complete except M5.7 physical Framework evidence | Preserve as regression history; do not block RPi5 work on Framework-only evidence unless storage safety is touched |
 | [Core runtime](02-core-runtime.md) | C7 and C8.1–C8.10 complete; C8.11–C8.15 and C10 are planned | For the demo, prioritize only the C8/C10 slices required by two ROS 2 nodes over minimal DDS/RTPS |
 | [RPi5 ROS 2 demo](09-rpi5-ros2-demo.md) | RP0 and RP1 complete; RP2–RP8 planned | RP2 is the next open gate, but its deliverables specify exception vectors, `svc`, translation tables, GICv3, and the generic timer — the mechanisms P5 delegates to seL4 — so it needs rewriting before it can be implemented |
-| [Architecture portability](07-architecture-portability.md) | P0, P1, P2.1, P5.1, P5.2, all of P5.3, and all of P5.5 complete; P2.2-P2.6 superseded-if-P5-completes; P5.4 decomposed into P5.4.1–P5.4.final | P5.4.1, the oracle equivalence inventory. `kernel/` cannot be deleted yet: C8.5–C8.10 have no recorded seL4 equivalent, and eight `kernel/tests/*.rs` files have no named gate at all |
+| [Architecture portability](07-architecture-portability.md) | P0, P1, P2.1, P5.1, P5.2, all of P5.3, all of P5.5, and P5.4.1 complete; P2.2-P2.6 superseded-if-P5-completes | P5.4.2, the M5 storage class. P5.4.1's inventory found the uncovered set is larger than P5.4 assumed: M5.x, M6.x, B10, and B11 were never named, and C8.1–C8.4 are partial rather than covered |
 | [ROS 2 compatibility](03-ros2-compatibility.md) | Not started | R0 minimal DDS/RTPS topic profile is first; broader external/multi-vendor compatibility follows after the RPi5 demo path |
 | [Platform hardware](04-platform-hardware.md) | Framework track deferred; H1 implementation complete but physical evidence pending | Do not advance Framework daily-driver hardware unless needed for shared mechanisms or evidence preservation |
 | [Foreign workloads](05-foreign-workloads.md) | Deferred | Use only if the chosen ROS 2 node route requires a Linux userspace personality |

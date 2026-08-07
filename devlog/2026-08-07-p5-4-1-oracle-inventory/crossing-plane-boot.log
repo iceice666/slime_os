@@ -1,0 +1,202 @@
+seL4 kernel loader | INFO   Starting loader
+seL4 kernel loader | DEBUG  Platform info: PlatformInfo {
+    memory: [
+        0x60000000..0x80000000,
+    ],
+    devices: [
+        0x0..0x8000000,
+        0x8001000..0x8010000,
+        0x8011000..0x8030000,
+        0x8031000..0x60000000,
+        0x80000000..0x10000000000,
+    ],
+}
+seL4 kernel loader | DEBUG  Loader footprint: 0x60280000..0x6034d588
+seL4 kernel loader | DEBUG  Payload info: ArchivedPayloadInfo {
+    kernel_entry: 0x8060000000,
+    user_image: ArchivedUserImageInfo {
+        ui_p_reg_start: 0x7fddc000,
+        ui_p_reg_end: 0x80000000,
+        pv_offset: 0x7fbdc000,
+        v_entry: 0x258fc0,
+    },
+    dtb: Some(
+        ArchivedDtbInfo {
+            addr_p: 0x7fdda000,
+            size: 0x1e84,
+        },
+    ),
+}
+seL4 kernel loader | DEBUG  Payload regions:
+seL4 kernel loader | DEBUG      0x60000000 (filesz = 0x240000, memsz = 0x311a0)
+seL4 kernel loader | DEBUG      0x7fddc000 (filesz = 0x66090, memsz = 0x66090)
+seL4 kernel loader | DEBUG      0x7fe43090 (filesz = 0x1bc9d0, memsz = 0x1a1f8)
+seL4 kernel loader | DEBUG      0x7fdda000 (filesz = 0x1e84, memsz = 0x1e84)
+seL4 kernel loader | DEBUG  Copying payload data
+seL4 kernel loader | INFO   Entering kernel
+Bootstrapping kernel
+Warning: Could not infer GIC interrupt target ID, assuming 0.
+Available phys memory regions: 1
+  [60000000..80000000)
+Reserved virt address space regions: 3
+  [8060000000..8060240000)
+  [807fdda000..807fddbe84)
+  [807fddc000..8080000000)
+Booting all finished, dropped to user space
+SLIME_ROOT generation admitted number=1 components=2 grants=2 health=2 kernel=1 bootstrap=1
+SLIME_ROOT authority manifest=[3b, 13, d4, 2e, a5, 65, 50, 81, d5, 01, 50, b1, a6, 29, 37, 19, a9, 4a, f8, d5, ce, 7b, 89, ae, 7a, 67, 4b, e6, 0e, 76, 03, ac]
+SLIME_ROOT graph admitted; legacy SLIMECM images not activated components=2 slimecm=0 elf=2 unrecognized=0
+SLIME_ROOT allocator slots=3464 untypeds=28 bytes=532150640
+SLIME_TIMER acquired irq=30 freq_hz=62500000
+SLIME_TIMER delivered badge=0x1 polls=12265
+SLIME_TIMER serviced events=1 programming=Disarm
+SLIME_TIMER advanced start=932125 end=1614125 delta=682000
+SLIME_TIMER OK
+SLIME_GRAPH staged task=0 component=crossing-peer grants=1 executables=0 window=0x236000 frames=55 tables=3 entry=0x211468
+SLIME_GRAPH factory placed task=1 component=init slot=0 kind=endpoint-factory
+SLIME_GRAPH staged task=1 component=init grants=1 executables=1 window=0x237000 frames=56 tables=3 entry=0x211be8
+SLIME_GRAPH staged components=2 loadable=2 slimecm=0 wrong_target=0 unrecognized=0
+SLIME_GRAPH channels grants=0 channels=0 queues=0 slots=0 unplaced=0
+SLIME_GRAPH activated components=2
+SLIME_GRAPH quota task=0 component=crossing-peer pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH quota task=1 component=init pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH quotas declared=2 budgeted=0 holders=0
+SLIME_GRAPH window bound task=1 base=0x237000 len=4096
+SLIME_GRAPH endpoint minted task=1 key=0 slots=1,2
+SLIME_GRAPH endpoint minted task=1 key=1 slots=3,4
+SLIME_GRAPH spawn authorized task=1 slot=15 component=crossing-peer grants=2
+SLIME_GRAPH quota task=2 component=crossing-peer pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH channel handed parent=1 child=2 key=0 slot=0
+SLIME_GRAPH channel handed parent=1 child=2 key=1 slot=1
+SLIME_GRAPH spawned task=1 child=2 component=crossing-peer grants=2 channels=2 handle=2
+SLIME_GRAPH endpoint minted task=1 key=2 slots=4,5
+SLIME_GRAPH capability transferred task=1 channel=0 to=2 kind=endpoint rights=0x3
+[init] channel end parked in transit
+SLIME_GRAPH endpoint minted task=1 key=3 slots=4,5
+SLIME_GRAPH sent task=1 channel=3 bytes=6 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=3 bytes=6 caps=0
+[init] channel pair retained
+SLIME_GRAPH endpoint minted task=1 key=4 slots=6,7
+SLIME_GRAPH sent task=1 channel=4 bytes=4 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=4 bytes=4 caps=0
+SLIME_GRAPH endpoint minted task=1 key=5 slots=6,7
+SLIME_GRAPH sent task=1 channel=5 bytes=4 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=5 bytes=4 caps=0
+SLIME_GRAPH endpoint minted task=1 key=6 slots=6,7
+SLIME_GRAPH sent task=1 channel=6 bytes=4 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=6 bytes=4 caps=0
+SLIME_GRAPH endpoint minted task=1 key=7 slots=6,7
+SLIME_GRAPH sent task=1 channel=7 bytes=4 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=7 bytes=4 caps=0
+SLIME_GRAPH endpoint minted task=1 key=8 slots=6,7
+SLIME_GRAPH sent task=1 channel=8 bytes=4 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=8 bytes=4 caps=0
+SLIME_GRAPH endpoint minted task=1 key=9 slots=6,7
+SLIME_GRAPH sent task=1 channel=9 bytes=4 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=9 bytes=4 caps=0
+SLIME_GRAPH endpoint minted task=1 key=10 slots=6,7
+SLIME_GRAPH sent task=1 channel=10 bytes=4 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=10 bytes=4 caps=0
+SLIME_GRAPH endpoint minted task=1 key=11 slots=6,7
+SLIME_GRAPH sent task=1 channel=11 bytes=4 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=11 bytes=4 caps=0
+SLIME_GRAPH endpoint minted task=1 key=12 slots=6,7
+SLIME_GRAPH sent task=1 channel=12 bytes=4 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=12 bytes=4 caps=0
+SLIME_GRAPH endpoint minted task=1 key=13 slots=6,7
+SLIME_GRAPH sent task=1 channel=13 bytes=4 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=13 bytes=4 caps=0
+SLIME_GRAPH endpoint minted task=1 key=14 slots=6,7
+SLIME_GRAPH sent task=1 channel=14 bytes=4 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=14 bytes=4 caps=0
+SLIME_GRAPH endpoint minted task=1 key=15 slots=6,7
+SLIME_GRAPH sent task=1 channel=15 bytes=4 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=15 bytes=4 caps=0
+SLIME_GRAPH endpoint minted task=1 key=16 slots=6,7
+SLIME_GRAPH sent task=1 channel=16 bytes=4 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=16 bytes=4 caps=0
+SLIME_GRAPH endpoint minted task=1 key=17 slots=6,7
+SLIME_GRAPH sent task=1 channel=17 bytes=4 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=17 bytes=4 caps=0
+SLIME_GRAPH endpoint minted task=1 key=18 slots=6,7
+SLIME_GRAPH sent task=1 channel=18 bytes=4 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=18 bytes=4 caps=0
+SLIME_GRAPH endpoint minted task=1 key=19 slots=6,7
+SLIME_GRAPH sent task=1 channel=19 bytes=4 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=19 bytes=4 caps=0
+SLIME_GRAPH endpoint minted task=1 key=20 slots=6,7
+SLIME_GRAPH sent task=1 channel=20 bytes=4 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=20 bytes=4 caps=0
+SLIME_GRAPH endpoint minted task=1 key=21 slots=6,7
+SLIME_GRAPH sent task=1 channel=21 bytes=4 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=21 bytes=4 caps=0
+SLIME_GRAPH endpoint minted task=1 key=22 slots=6,7
+SLIME_GRAPH sent task=1 channel=22 bytes=4 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=22 bytes=4 caps=0
+SLIME_GRAPH endpoint minted task=1 key=23 slots=6,7
+SLIME_GRAPH sent task=1 channel=23 bytes=4 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=23 bytes=4 caps=0
+SLIME_GRAPH endpoint minted task=1 key=24 slots=6,7
+SLIME_GRAPH sent task=1 channel=24 bytes=4 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=24 bytes=4 caps=0
+SLIME_GRAPH endpoint minted task=1 key=25 slots=6,7
+SLIME_GRAPH sent task=1 channel=25 bytes=4 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=25 bytes=4 caps=0
+SLIME_GRAPH endpoint minted task=1 key=26 slots=6,7
+SLIME_GRAPH sent task=1 channel=26 bytes=4 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=26 bytes=4 caps=0
+SLIME_GRAPH endpoint minted task=1 key=27 slots=6,7
+SLIME_GRAPH sent task=1 channel=27 bytes=4 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=27 bytes=4 caps=0
+SLIME_GRAPH endpoint minted task=1 key=28 slots=6,7
+SLIME_GRAPH sent task=1 channel=28 bytes=4 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=28 bytes=4 caps=0
+SLIME_GRAPH endpoint minted task=1 key=29 slots=6,7
+SLIME_GRAPH sent task=1 channel=29 bytes=4 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=29 bytes=4 caps=0
+SLIME_GRAPH endpoint minted task=1 key=30 slots=6,7
+SLIME_GRAPH sent task=1 channel=30 bytes=4 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=30 bytes=4 caps=0
+SLIME_GRAPH endpoint minted task=1 key=31 slots=6,7
+SLIME_GRAPH sent task=1 channel=31 bytes=4 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=31 bytes=4 caps=0
+SLIME_GRAPH channels swept freed=28 live=4 minted=32
+SLIME_GRAPH endpoint minted task=1 key=32 slots=6,7
+SLIME_GRAPH sent task=1 channel=32 bytes=4 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=32 bytes=4 caps=0
+SLIME_GRAPH endpoint minted task=1 key=33 slots=6,7
+SLIME_GRAPH sent task=1 channel=33 bytes=4 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=33 bytes=4 caps=0
+SLIME_GRAPH endpoint minted task=1 key=34 slots=6,7
+SLIME_GRAPH sent task=1 channel=34 bytes=4 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=34 bytes=4 caps=0
+SLIME_GRAPH endpoint minted task=1 key=35 slots=6,7
+SLIME_GRAPH sent task=1 channel=35 bytes=4 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=35 bytes=4 caps=0
+SLIME_GRAPH endpoint minted task=1 key=36 slots=6,7
+SLIME_GRAPH sent task=1 channel=36 bytes=4 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=36 bytes=4 caps=0
+[init] channel lifetime bound crossed
+SLIME_GRAPH sent task=1 channel=3 bytes=5 caps=0 queued=1
+SLIME_GRAPH received task=1 channel=3 bytes=5 caps=0
+[init] retained pair carried after crossing
+SLIME_GRAPH sent task=1 channel=1 bytes=2 caps=0 queued=1
+SLIME_GRAPH parked task=1 reason=wait
+SLIME_GRAPH window bound task=2 base=0x236000 len=4096
+SLIME_GRAPH received task=2 channel=1 bytes=2 caps=0
+SLIME_GRAPH received task=2 channel=0 bytes=64 caps=1
+SLIME_GRAPH sent task=2 channel=2 bytes=8 caps=0 queued=1
+[crossing-peer] carried on the end it collected
+SLIME_GRAPH component exit task=2 status=0
+SLIME_GRAPH supervision woken task=1 child=2
+SLIME_GRAPH peer death task=2 channels=3 woken=0
+SLIME_GRAPH supervision collected task=1 child=2 kind=0
+[init] transit end survived crossing
+[init] crossing plane complete
+SLIME_GRAPH component exit task=1 status=0
+SLIME_GRAPH peer death task=1 channels=9 woken=0
+SLIME_GRAPH window bound task=0 base=0x236000 len=4096
+SLIME_GRAPH component exit task=0 status=0
+SLIME_GRAPH served live=0 unsupported=0 unimplemented=0 buffers=0 windows=0 tables=0
+SLIME_GRAPH tasks reclaimed live=0 slots=187
+SLIME_GRAPH channels served sends=37 receives=37 parks=1 settled=12 parked=0 queues=0 replies=78 minted=37

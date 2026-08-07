@@ -2,7 +2,7 @@
 
 **Purpose:** Preserve one Slime capability/component/generation architecture across target profiles while making AArch64 and Raspberry Pi 5 the near-term product path.
 
-**Status:** In progress - P0, P1, P2.1, P5.1, P5.2, all of P5.3, and all of P5.5 complete.
+**Status:** In progress - P0, P1, P2.1, P5.1, P5.2, all of P5.3, all of P5.5, and P5.4.1 complete.
 
 **Decision:** AArch64/Raspberry Pi 5 is now the near-term physical target because the current product goal is the RPi5 ROS 2 two-node demo. The existing x86-64 QEMU path remains the regression oracle for completed work until each semantic corpus is replayed on AArch64, but x86-64/Framework is no longer the product-leading roadmap. RV64 is deferred. As of P5, the AArch64 kernel-side mechanism is being substituted with upstream seL4 rather than hand-written: see [P5](#p5-sel4-microkernel-substitution), which supersedes the custom-kernel half of P2.2-P2.6 if it completes.
 
@@ -447,8 +447,8 @@ One named Raspberry Pi 5 profile runs the verified isolated Slime vertical slice
 
 ## P5: seL4 microkernel substitution
 
-**Status:** In progress — P5.1, P5.2, all of P5.3, and all of P5.5 complete; P5.4
-planned.
+**Status:** In progress — P5.1, P5.2, all of P5.3, all of P5.5, and P5.4.1
+complete; P5.4.2–P5.4.10 and P5.4.final planned.
 
 **Depends on:** P0 and P1. Supersedes the custom-kernel half of P2.2–P2.6 if it
 completes; P2.1 AArch64 boot evidence is retained and not re-claimed here.
@@ -1103,24 +1103,42 @@ Until then it is the frozen oracle: its gates keep running, its code does not
 change, and the two are never claimed to be one system.
 
 Decomposed 2026-08-07, on the evidence that its exit condition is not close to
-met and its scope was larger than one milestone. seL4 has equivalents through
-C8.4; **C8.5–C8.10 have none recorded** — reliable/retained/timed QoS
-([C8.5](02-core-runtime.md)), bounded native calls (C8.6), native operations
-(C8.7), filtered introspection and declared interposition (C8.8), typed
-full-profile closure (C8.9), and collision-free full-graph bootstrap (C8.10).
-Deleting `kernel/` now would drop that coverage silently, which is exactly what
-the frozen-oracle rule above exists to prevent.
+met and its scope was larger than one milestone. Deleting `kernel/` now would
+drop coverage silently, which is exactly what the frozen-oracle rule above
+exists to prevent.
 
-The legacy surface is also wider than the roadmap text suggested: eight Justfile
-recipes run a named `kernel/tests/*` binary via `cargo test --test`, 31 shell out
-to `cd kernel` at all, and a further set reach the oracle *indirectly* through
-`scripts/lib/harness.py`, which 34 of 43 `scripts/check/*.py` import. Eight of
-the nineteen `kernel/tests/*.rs` files have no named gate at all and are
-reachable only via `just test`:
+**P5.4.1's inventory has since replaced the estimates this decomposition was
+written from.** Both halves of the original reading were wrong in the same
+direction — the surface is wider, and the uncovered set is larger:
+
+- "seL4 has equivalents through C8.4" **overstates C8.1–C8.4**. C8.2 has no
+  equivalent at all: `slime-root` never decodes the fabric-graph resource, so
+  aggregate admission before component launch is unmet rather than partial.
+  C8.1's collision rejection, C8.3's graph provenance, and C8.4's structural
+  arm are each uncovered.
+- "C8.5–C8.10 have none recorded" is **confirmed**, and worse than stated: two
+  C8.5 assertions live inside the C8.4-gated `kernel/tests/fabric_stream.rs`,
+  so they vanish without `fabric_qos_check` turning red.
+- **The M5.x, M6.x, B10, and B11 class was never named here at all.** Nineteen
+  closed oracle milestones with named Justfile gates have zero or partial seL4
+  coverage — ten M5 storage/rollback/recovery gaps (M5.2a, M5.6a, and M5.6b are
+  host or model checks and survive deletion), five M6 service gaps, two M6
+  partials, plus B10 and B11. This is the larger half of the remaining work.
+- Of the three figures quoted below, one was wrong: **11** Justfile recipes run
+  a named `kernel/tests/*` binary, not eight (the three `fabric_*` ones sit as
+  second commands inside python-first recipes). The 31 `cd kernel` recipes and
+  the 34 harness importers are correct — but only **24** of the 43 checkers
+  then present (44 once this slice's own gate landed)
+  actually depend on the oracle; importing `harness` for `ROOT` or `load_script`
+  is not dependence.
+
+Eight of the nineteen `kernel/tests/*.rs` files have no named gate at all and
+are reachable only via `just test`:
 `boot.rs`, `component_image.rs`, `generation_manager.rs`, `isolation.rs`,
 `kernel_foundation.rs`, `object_store.rs`, `should_panic.rs`, and
-`task_reclamation.rs`. Those are where coverage would disappear without any gate
-turning red, which is why the inventory below comes before any deletion.
+`task_reclamation.rs`. Those hold 51 architecture-neutral assertions, 32 of them
+`object_store.rs`'s M5.4 storage corpus, and they are where coverage would
+disappear without any gate turning red.
 
 #### Exit condition
 
@@ -1131,7 +1149,7 @@ reviewable change.
 
 ### P5.4.1 — The oracle equivalence inventory
 
-**Status:** Not started.
+**Status:** Complete.
 
 **Depends on:** P5.3 and P5.5.
 
@@ -1169,16 +1187,37 @@ is true; that is the reviewable content of the entry. If a cross-referencing
 script turns out to be needed, it is written as part of this slice rather than
 assumed here.
 
-#### Exit condition
+#### Exit condition (observed)
 
-An **Audit**-kind devlog entry recording the full mapping, with every gap named
-and assigned to a P5.4.2+ slice below, and `just devlog_check` passing.
+Observed 2026-08-07; see
+[`devlog/2026-08-07-p5-4-1-oracle-inventory/`](../devlog/2026-08-07-p5-4-1-oracle-inventory/index.md).
 
-No architectural invariant in [`README.md`](README.md) changes under this
-decomposition: it adds no kernel object and no right (invariant 4), introduces
-no protocol (invariant 5), and preserves rather than alters the semantics
-invariant 10 names — the point of the inventory is to establish that the seL4
-port *has* preserved them before the oracle proving it is deleted.
+All three legacy surfaces are mapped: 11 direct `kernel/tests/*` recipes with
+their per-milestone verdicts, 24 legacy checkers of the 43 then present
+separated from the 10 portable harness importers and the 9 seL4 gates — this
+slice's own gate makes the current totals 44 and 10 — and all 19
+`kernel/tests/*.rs`
+files accounted for at 151 test entities — 130 architecture-neutral semantics
+seL4 must uphold against 21 custom mechanisms that die with `kernel/`, of which
+51 neutral assertions sit in the eight ungated files. Every gap is named and
+assigned to a P5.4.2–P5.4.10 slice below. `just devlog_check` passes.
+
+The bounds audit closed [B22](00-backlog.md) — `ChannelTable` now reclaims
+through `channel::sweep`, gated by `just sel4_crossing_check` with three fault
+injections confirmed failing — and found a third table of the same shape,
+`SharedBufferTable::quotas`, opened as [B24](00-backlog.md) rather than fixed
+here.
+
+No architectural invariant in [`README.md`](README.md) changed: the slice adds
+no kernel object and no right (invariant 4), introduces no protocol
+(invariant 5), and preserves rather than alters the semantics invariant 10
+names — the point of the inventory is to establish that the seL4 port *has*
+preserved them before the oracle proving it is deleted.
+
+A cross-referencing script was considered and not written. `devlog_check`
+resolves the entry's `Gates` and `Roadmap` ids, but no script can check that a
+claimed equivalence is *true* — that is the reviewable content of the entry,
+and it is re-established per slice as each gap closes.
 
 ### P5.4.2 … P5.4.n — Close the recorded gaps
 
@@ -1186,11 +1225,26 @@ port *has* preserved them before the oracle proving it is deleted.
 
 **Depends on:** P5.4.1.
 
-One slice per uncovered oracle milestone — C8.5 through C8.10 on today's
-evidence, in that order, since the later ones compose the earlier. They are
-deliberately **not** specified here: P5.4.1's output determines what each one
-must prove, and writing their deliverables before the inventory exists would be
-the same implement-by-inference this decomposition replaces.
+One slice per uncovered oracle milestone, in the order P5.4.1 recorded. The
+M-series comes first because it is the larger half and P5.4's original text
+never named it; the C-series follows in ascending order, since the later ones
+compose the earlier.
+
+| Slice | Uncovered | Shape |
+| --- | --- | --- |
+| P5.4.2 | M5.1–M5.9 | Ten storage/rollback/recovery gaps. Structural: five of the nine `Mediation::Unavailable` planes are M5's surface. Carries `object_store.rs`'s 32 ungated assertions |
+| P5.4.3 | M6.1–M6.7 | Five gaps (directory, dango, generation commands, powerbox, transfer) and two partials (M6.1 v2 determinism, M6.2 protocol surface) |
+| P5.4.4 | C8.2 | Aggregate fabric-graph admission before component launch; `slime-root` never decodes the resource |
+| P5.4.5 | C8.5 | Reliable/retained/timed QoS, plus the two C8.5 assertions colocated in `kernel/tests/fabric_stream.rs` |
+| P5.4.6 | C8.6 | Bounded native calls |
+| P5.4.7 | C8.7 | Native operations |
+| P5.4.8 | C8.8 | Filtered introspection and declared interposition |
+| P5.4.9 | C8.9, C8.10 | Typed full-profile closure and collision-free full-graph bootstrap |
+| P5.4.10 | the partials | C8.1 collision rejection, C8.3 graph provenance, C8.4's structural arm, C7.1's retained-v2 arm, B10's missing seL4 layout fixture, B11's product-vs-test pair, `component_image.rs`'s malformed corpus, `task_reclamation.rs`'s three uncovered properties |
+
+Their individual deliverables stay unwritten until each is opened: the
+inventory fixes *what* each must prove, not how, and specifying the mechanism
+in advance would be the same implement-by-inference this decomposition replaces.
 
 #### Exit condition
 
