@@ -155,9 +155,19 @@ capability. On the stream plane the same pair lands and the receiver drains both
 so the ordering that breaks is graph-dependent, which is consistent with the
 retained bisect.
 
-Closing it needs the transit/enqueue order in `serve_cap_transfer` read against
-`ipc::send_atomic`'s wake decision, or a debugger on the child. Nothing further
-follows from the boot log.
+That ordering was then read, and it is **correct**, so this reading is refuted too.
+`Channel::commit_send` enqueues and `take()`s `recv_waiter`, so the first transfer
+carries the wake and the second correctly returns `None`; the receiver is expected
+to drain both messages once awake. The transcript confirms the order is favourable:
+`parked task=10 reason=wait` precedes both transfers, so `deliver_wake`'s
+`parked.reason(task).is_none()` guard cannot have skipped the first wake.
+
+So: the receiver parks, two messages are enqueued on the queue it polls, the wake
+is delivered to a task the root agrees is parked, its park entry is consumed, and
+it never runs again. Every step is individually correct and the composition
+deadlocks. That is as far as static reading and boot-log instrumentation reach —
+eight readings excluded — and closing it needs a debugger on the child (`xd://debug`
+against the `aarch64-sel4` target) to see where task 10's thread actually sits.
 
 **One wider finding stands regardless of B28**, and it is worth its own slice:
 `sel4_transport::wait` returns `()`, so its staging-failure branch can only
