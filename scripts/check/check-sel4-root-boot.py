@@ -170,15 +170,39 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"SLIME_BUF teardown unmapped=[1-9]\d* revoked=[1-9]\d* released=[1-9]\d* "
         r"live=0 pages=0 mappings=0 holder_pages=0 orphans=0",
     ),
+    # B9 on seL4 (P5.4.10): `kernel/tests/task_reclamation.rs` measures frame
+    # conservation across spawn/release cycles — a task that goes away returns
+    # every frame it consumed. The seL4 shape of the same property is CSlot
+    # conservation, and the counts were wildcards here, so a task reclaiming
+    # half its slots passed unnoticed.
+    #
+    # Each task's range is pinned exactly: contiguous, equal-width, and
+    # adjoining its neighbour, which is the conservation B9 asserts. Root
+    # CSlots are deliberately *not* returned to the allocator
+    # (`task.rs::CleanupRecord::revoke`), so the property here is "every slot a
+    # task took is accounted for", not "the free count returns to its start" —
+    # the drift B9 measures cannot exist on a monotonic allocator.
+    #
+    # Interleaved with the settle markers rather than grouped after them: each
+    # task is reclaimed as it settles, and this list is order-sensitive, so
+    # grouping would assert a sequence the root does not produce.
     ("clean-exit task settled", r"SLIME_ROOT task settled task=0 role=clean-exit termination=Exit\(0\)"),
+    (
+        "the clean-exit task's slots are all accounted for",
+        r"SLIME_ROOT task reclaimed task=0 source=fabric-service slots=832\.\.882",
+    ),
     (
         "deliberate-fault task settled",
         r"SLIME_ROOT task settled task=1 role=deliberate-fault termination=Fault\(",
     ),
-    ("both tasks reclaimed", r"SLIME_ROOT cleanup tasks=2 slots=\d+ live=0"),
+    (
+        "the faulted task's slots adjoin them with no gap and no overlap",
+        r"SLIME_ROOT task reclaimed task=1 source=generation-manager slots=882\.\.932",
+    ),
+    ("both tasks reclaimed", r"SLIME_ROOT cleanup tasks=2 slots=100 live=0"),
     (
         "root reached ready",
-        r"SLIME_ROOT READY tasks=2 grants=\d+ declared_grants=\d+ reclaimed_slots=\d+",
+        r"SLIME_ROOT READY tasks=2 grants=\d+ declared_grants=\d+ reclaimed_slots=100",
     ),
 )
 

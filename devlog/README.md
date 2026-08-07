@@ -184,3 +184,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-07 | [P5.4.10 (part) — B10's boot layout, frozen on seL4](2026-08-07-p5-4-10-sel4-boot-layout/index.md) | Change | Verified | P5.4.10, P5.4, P5.4.1, B10 |
 | 2026-08-07 | [P5.4.10 (part) — two rows that need no seL4 gate](2026-08-07-p5-4-10-reclassified-rows/index.md) | Audit | Verified | P5.4.10, P5.4.1, C7.1, B11 |
 | 2026-08-07 | [P5.4.10 (part) — C8.4's structural arm: the shape the generation fixed](2026-08-07-p5-4-10-graph-shape/index.md) | Change | Verified | P5.4.10, P5.4, P5.4.1, C8.4 |
+| 2026-08-07 | [P5.4.10 (part) — B9's conservation, in the shape seL4 can hold it](2026-08-07-p5-4-10-slot-conservation/index.md) | Change | Verified | P5.4.10, P5.4, P5.4.1, B9 |

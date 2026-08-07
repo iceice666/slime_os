@@ -1302,7 +1302,8 @@ compatibility over the booted graph. Those stay with P5.4.10's partials.
 **Status:** In progress — three rows closed (the `component_image.rs` segment
 corpus, C8.2's live-graph assertions, and B10's seL4 layout fixtures) and two
 reclassified as needing no seL4 gate (C7.1's retained-v2 arm, B11's
-product-vs-test pair); three remain.
+product-vs-test pair); `task_reclamation.rs`'s row is partial for a structural reason
+recorded there; C8.1 and C8.3 remain.
 
 **Depends on:** P5.4.1.
 
@@ -1320,7 +1321,7 @@ milestones; they are the residue of milestones otherwise covered.
 | C7.1's retained-v2 rollback arm | **Reclassified — needs no seL4 gate.** A v2 generation names its own kernel object, so a rollback boots the v2-era kernel rather than `slime-root`; and v2 predates the ELF component revision entirely, so every payload it carries is a SLIMECM image this root has no loader for. The decode path stays host-tested in `boot-contracts` (`retained_v2_generation_passes_stage0_admission` and four siblings). Booting one here would assert that an unloadable graph is reported unloadable, which `sel4_root_boot_check`'s `slimecm=[1-9]` marker already does |
 | B10's seL4 layout fixture | **Done** — `just sel4_boot_layout_check` freezes all eight plane layouts; see [`devlog/2026-08-07-p5-4-10-sel4-boot-layout/`](../devlog/2026-08-07-p5-4-10-sel4-boot-layout/index.md) |
 | B11's product-vs-test profile pair | **Reclassified — structurally absent.** B11's defect is a *shared* manifest whose product graph declares probes and scenario doubles as peers of real services. The seL4 fixtures are per-scenario siblings rather than profiles of one manifest, so there is no shared graph to contaminate: `sel4.zti` declares five real components and no probe, and each scenario's doubles live only in its own fixture. Checked component-by-component across all eight. A product-vs-test pair would first require the shared manifest this design does not have |
-| `task_reclamation.rs`'s per-cycle drift, cost scaling, rejected-spawn conservation | Open — teardown-to-zero is covered; these three are not |
+| `task_reclamation.rs`'s per-cycle drift, cost scaling, rejected-spawn conservation | **Partial — as far as this allocator allows.** `sel4_root_boot_check` now pins each task's reclaimed CSlot range exactly (`832..882`, `882..932`, aggregate `100`) instead of matching `\d+`, so a short or overlapping reclaim fails. The three named properties are *frame-count differentials*, and root CSlots are never returned to the allocator (`task.rs::CleanupRecord::revoke`), so a free-count comparison here is flat by construction and would pass whether or not reclamation ran. Closing them needs an allocator that reuses — see [`devlog/2026-08-07-p5-4-10-slot-conservation/`](../devlog/2026-08-07-p5-4-10-slot-conservation/index.md) |
 
 Two of the oracle's fifteen `component_image.rs` cases were deliberately not
 ported: the `stack_bytes` rules read a page constant in a header context rather
