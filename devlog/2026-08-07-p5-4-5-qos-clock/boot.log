@@ -1,0 +1,349 @@
+Booting all finished, dropped to user space
+SLIME_ROOT generation admitted number=19 components=7 grants=13 health=2 kernel=1 bootstrap=1
+SLIME_ROOT fabric graph=admitted schemas=2 routes=2 participants=6 interpositions=0
+SLIME_ROOT authority manifest=[bc, 61, e4, d1, b7, bc, 2d, 02, d6, dc, e2, 2c, 3b, 29, 01, 22, 0d, 85, 2b, a6, de, a2, bf, 23, 25, e9, cd, 0b, 43, 7b, 4c, e1]
+SLIME_ROOT graph admitted; legacy SLIMECM images not activated components=7 slimecm=0 elf=7 unrecognized=0
+SLIME_ROOT allocator slots=3389 untypeds=25 bytes=531831152
+SLIME_TIMER acquired irq=30 freq_hz=62500000
+SLIME_TIMER delivered badge=0x1 polls=13276
+SLIME_TIMER serviced events=1 programming=Disarm
+SLIME_TIMER advanced start=1543750 end=2287875 delta=744125
+SLIME_TIMER OK
+SLIME_GRAPH staged task=0 component=fabric-intruder grants=1 executables=0 window=0x236000 frames=55 tables=3 entry=0x211598
+SLIME_GRAPH staged task=1 component=fabric-publisher grants=1 executables=0 window=0x238000 frames=57 tables=3 entry=0x211e48
+SLIME_GRAPH staged task=2 component=fabric-publisher-b grants=1 executables=0 window=0x239000 frames=58 tables=3 entry=0x212060
+SLIME_GRAPH staged task=3 component=fabric-service grants=6 executables=0 window=0x23d000 frames=62 tables=3 entry=0x213000
+SLIME_GRAPH staged task=4 component=fabric-subscriber grants=1 executables=0 window=0x239000 frames=58 tables=3 entry=0x212280
+SLIME_GRAPH staged task=5 component=fabric-subscriber-b grants=1 executables=0 window=0x239000 frames=58 tables=3 entry=0x212298
+SLIME_GRAPH factory placed task=6 component=init slot=0 kind=endpoint-factory
+SLIME_GRAPH factory placed task=6 component=init slot=14 kind=shared-buffer-factory
+SLIME_GRAPH staged task=6 component=init grants=2 executables=6 window=0x238000 frames=57 tables=3 entry=0x211cc0
+SLIME_GRAPH staged components=7 loadable=7 slimecm=0 wrong_target=0 unrecognized=0
+SLIME_GRAPH channel grant=fabric-intruder-control key=0 producer=3 consumer=0 queues=2
+SLIME_GRAPH channel end task=3 slot=0 key=0 rights=0x3
+SLIME_GRAPH channel end task=0 slot=0 key=0 rights=0x3
+SLIME_GRAPH channel grant=fabric-publisher-b-control key=1 producer=3 consumer=2 queues=2
+SLIME_GRAPH channel end task=3 slot=1 key=1 rights=0x3
+SLIME_GRAPH channel end task=2 slot=0 key=1 rights=0x3
+SLIME_GRAPH channel grant=fabric-publisher-control key=2 producer=3 consumer=1 queues=2
+SLIME_GRAPH channel end task=3 slot=2 key=2 rights=0x3
+SLIME_GRAPH channel end task=1 slot=0 key=2 rights=0x3
+SLIME_GRAPH channel grant=fabric-subscriber-b-control key=3 producer=3 consumer=5 queues=2
+SLIME_GRAPH channel end task=3 slot=3 key=3 rights=0x3
+SLIME_GRAPH channel end task=5 slot=0 key=3 rights=0x3
+SLIME_GRAPH channel grant=fabric-subscriber-control key=4 producer=3 consumer=4 queues=2
+SLIME_GRAPH channel end task=3 slot=4 key=4 rights=0x3
+SLIME_GRAPH channel end task=4 slot=0 key=4 rights=0x3
+SLIME_GRAPH channels grants=5 channels=5 queues=10 slots=10 unplaced=0
+[layout] path=init slots=8 max=64
+[layout] 0 endpoint-factory - 0x20000
+[layout] 14 shared-buffer-factory - 0x1000000 declared=0x1000004
+[layout] 15 executable fabric-service 0x10008
+[layout] 16 executable fabric-publisher 0x10008
+[layout] 17 executable fabric-subscriber 0x10008
+[layout] 18 executable fabric-intruder 0x10008
+[layout] 19 executable fabric-publisher-b 0x10008
+[layout] 20 executable fabric-subscriber-b 0x10008
+[layout] end
+SLIME_GRAPH activated components=7
+SLIME_GRAPH quota task=0 component=fabric-intruder pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH quota task=1 component=fabric-publisher pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH quota task=2 component=fabric-publisher-b pages=4 buffers=1 mappings=2 loans=1
+SLIME_GRAPH quota task=3 component=fabric-service pages=28 buffers=14 mappings=14 loans=14
+SLIME_GRAPH quota task=4 component=fabric-subscriber pages=4 buffers=0 mappings=4 loans=0
+SLIME_GRAPH quota task=5 component=fabric-subscriber-b pages=4 buffers=0 mappings=4 loans=0
+SLIME_GRAPH quota task=6 component=init pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH quotas declared=7 budgeted=4 holders=4
+SLIME_GRAPH window bound task=6 base=0x238000 len=4096
+SLIME_GRAPH endpoint minted task=6 key=5 slots=1,2
+SLIME_GRAPH endpoint minted task=6 key=6 slots=3,4
+SLIME_GRAPH endpoint minted task=6 key=7 slots=5,6
+SLIME_GRAPH endpoint minted task=6 key=8 slots=7,8
+SLIME_GRAPH endpoint minted task=6 key=9 slots=9,10
+SLIME_GRAPH endpoint minted task=6 key=10 slots=11,12
+SLIME_GRAPH endpoint minted task=6 key=11 slots=13,21
+[init] fabric control channels minted
+SLIME_GRAPH spawn authorized task=6 slot=17 component=fabric-subscriber grants=1
+SLIME_GRAPH quota task=7 component=fabric-subscriber pages=4 buffers=0 mappings=4 loans=0
+SLIME_GRAPH channel handed parent=6 child=7 key=6 slot=0
+SLIME_GRAPH spawned task=6 child=7 component=fabric-subscriber grants=1 channels=1 handle=4
+SLIME_GRAPH spawn authorized task=6 slot=20 component=fabric-subscriber-b grants=1
+SLIME_GRAPH quota task=8 component=fabric-subscriber-b pages=4 buffers=0 mappings=4 loans=0
+SLIME_GRAPH channel handed parent=6 child=8 key=9 slot=0
+SLIME_GRAPH spawned task=6 child=8 component=fabric-subscriber-b grants=1 channels=1 handle=10
+SLIME_GRAPH spawn authorized task=6 slot=15 component=fabric-service grants=10
+SLIME_GRAPH quota task=9 component=fabric-service pages=28 buffers=14 mappings=14 loans=14
+SLIME_GRAPH channel handed parent=6 child=9 key=5 slot=2
+SLIME_GRAPH channel handed parent=6 child=9 key=6 slot=3
+SLIME_GRAPH channel handed parent=6 child=9 key=7 slot=4
+SLIME_GRAPH channel handed parent=6 child=9 key=8 slot=5
+SLIME_GRAPH channel handed parent=6 child=9 key=9 slot=6
+SLIME_GRAPH channel handed parent=6 child=9 key=11 slot=9
+SLIME_GRAPH spawned task=6 child=9 component=fabric-service grants=10 channels=6 handle=1
+[init] fabric service spawned
+SLIME_GRAPH window bound task=9 base=0x23d000 len=4096
+[fabric] idle: parked on control endpoints
+SLIME_GRAPH parked task=9 reason=wait
+SLIME_GRAPH window bound task=8 base=0x239000 len=4096
+SLIME_GRAPH sent task=8 channel=9 bytes=64 caps=0 queued=1
+[fabric-subscriber-b] roles requested
+SLIME_GRAPH parked task=8 reason=wait
+SLIME_GRAPH received task=9 channel=9 bytes=64 caps=0
+SLIME_GRAPH endpoint minted task=9 key=12 slots=10,11
+SLIME_GRAPH capability transferred task=9 channel=9 to=8 kind=endpoint rights=0x2
+SLIME_GRAPH endpoint minted task=9 key=13 slots=11,12
+SLIME_GRAPH capability transferred task=9 channel=9 to=8 kind=endpoint rights=0x1
+[fabric] provisioned fabric-subscriber-b telemetry subscribe
+SLIME_GRAPH endpoint minted task=9 key=14 slots=12,13
+SLIME_GRAPH capability transferred task=9 channel=9 to=8 kind=endpoint rights=0x2
+SLIME_GRAPH endpoint minted task=9 key=15 slots=13,14
+SLIME_GRAPH capability transferred task=9 channel=9 to=8 kind=endpoint rights=0x1
+[fabric] provisioned fabric-subscriber-b diagnostics subscribe
+SLIME_GRAPH parked task=9 reason=wait
+SLIME_GRAPH received task=8 channel=9 bytes=64 caps=1
+SLIME_GRAPH received task=8 channel=9 bytes=64 caps=1
+SLIME_GRAPH received task=8 channel=9 bytes=64 caps=1
+SLIME_GRAPH received task=8 channel=9 bytes=64 caps=1
+[fabric-subscriber-b] both subscribe roles received
+[fabric-subscriber-b] stalling on telemetry
+SLIME_GRAPH parked task=8 reason=wait
+SLIME_GRAPH window bound task=7 base=0x239000 len=4096
+SLIME_GRAPH sent task=7 channel=6 bytes=64 caps=0 queued=1
+[fabric-subscriber] role requested
+SLIME_GRAPH parked task=7 reason=wait
+SLIME_GRAPH received task=9 channel=6 bytes=64 caps=0
+SLIME_GRAPH endpoint minted task=9 key=16 slots=14,15
+SLIME_GRAPH capability transferred task=9 channel=6 to=7 kind=endpoint rights=0x2
+SLIME_GRAPH endpoint minted task=9 key=17 slots=15,16
+SLIME_GRAPH capability transferred task=9 channel=6 to=7 kind=endpoint rights=0x1
+[fabric] provisioned fabric-subscriber telemetry subscribe
+SLIME_GRAPH parked task=9 reason=wait
+SLIME_GRAPH received task=7 channel=6 bytes=64 caps=1
+SLIME_GRAPH received task=7 channel=6 bytes=64 caps=1
+[fabric-subscriber] subscribe role received
+[fabric-subscriber] route publish denied
+[fabric-subscriber] ack channel is send-only
+[fabric-subscriber] re-delegation denied
+SLIME_GRAPH parked task=7 reason=wait
+SLIME_GRAPH window bound task=5 base=0x239000 len=4096
+SLIME_GRAPH sent task=5 channel=3 bytes=64 caps=0 queued=1
+[fabric-subscriber-b] roles requested
+SLIME_GRAPH parked task=5 reason=wait
+SLIME_GRAPH window bound task=4 base=0x239000 len=4096
+SLIME_GRAPH sent task=4 channel=4 bytes=64 caps=0 queued=1
+[fabric-subscriber] role requested
+SLIME_GRAPH parked task=4 reason=wait
+SLIME_GRAPH window bound task=3 base=0x23d000 len=4096
+SLIME_GRAPH received task=3 channel=3 bytes=64 caps=0
+[fabric] fail: route endpoints
+SLIME_GRAPH component exit task=3 status=1
+SLIME_GRAPH peer death task=3 channels=5 woken=2
+SLIME_GRAPH quota released task=3 live=9
+[fabric-subscriber] fail: role reply
+SLIME_GRAPH component exit task=4 status=1
+SLIME_GRAPH peer death task=4 channels=1 woken=0
+SLIME_GRAPH quota released task=4 live=8
+[fabric-subscriber-b] fail: role reply
+SLIME_GRAPH component exit task=5 status=1
+SLIME_GRAPH peer death task=5 channels=1 woken=0
+SLIME_GRAPH quota released task=5 live=7
+SLIME_GRAPH window bound task=2 base=0x239000 len=4096
+[fabric-publisher-b] fail: request
+SLIME_GRAPH component exit task=2 status=1
+SLIME_GRAPH peer death task=2 channels=1 woken=0
+SLIME_GRAPH quota released task=2 live=6
+SLIME_GRAPH window bound task=1 base=0x238000 len=4096
+[fabric-publisher] fail: request
+SLIME_GRAPH component exit task=1 status=1
+SLIME_GRAPH peer death task=1 channels=1 woken=0
+SLIME_GRAPH quota released task=1 live=5
+SLIME_GRAPH window bound task=0 base=0x236000 len=4096
+[fabric-intruder] fail: request
+SLIME_GRAPH component exit task=0 status=1
+SLIME_GRAPH peer death task=0 channels=1 woken=0
+SLIME_GRAPH quota released task=0 live=4
+SLIME_GRAPH spawn authorized task=6 slot=16 component=fabric-publisher grants=2
+SLIME_GRAPH quota task=10 component=fabric-publisher pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH channel handed parent=6 child=10 key=5 slot=0
+SLIME_GRAPH channel handed parent=6 child=10 key=10 slot=1
+SLIME_GRAPH spawned task=6 child=10 component=fabric-publisher grants=2 channels=2 handle=2
+SLIME_GRAPH spawn authorized task=6 slot=19 component=fabric-publisher-b grants=4
+SLIME_GRAPH quota task=11 component=fabric-publisher-b pages=4 buffers=1 mappings=2 loans=1
+SLIME_GRAPH channel handed parent=6 child=11 key=8 slot=0
+SLIME_GRAPH channel handed parent=6 child=11 key=11 slot=3
+SLIME_GRAPH spawned task=6 child=11 component=fabric-publisher-b grants=4 channels=2 handle=3
+SLIME_GRAPH spawn authorized task=6 slot=18 component=fabric-intruder grants=1
+SLIME_GRAPH quota task=12 component=fabric-intruder pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH channel handed parent=6 child=12 key=7 slot=0
+SLIME_GRAPH spawned task=6 child=12 component=fabric-intruder grants=1 channels=1 handle=5
+[init] fabric participants spawned
+SLIME_GRAPH parked task=6 reason=wait
+SLIME_GRAPH window bound task=12 base=0x236000 len=4096
+SLIME_GRAPH sent task=12 channel=7 bytes=64 caps=0 queued=1
+[fabric-intruder] exact route strings supplied
+SLIME_GRAPH parked task=12 reason=wait
+SLIME_GRAPH received task=9 channel=7 bytes=64 caps=0
+[fabric] ungranted component denied: fabric-intruder
+SLIME_GRAPH sent task=9 channel=7 bytes=64 caps=0 queued=1
+SLIME_GRAPH parked task=9 reason=wait
+SLIME_GRAPH received task=12 channel=7 bytes=64 caps=0
+[fabric-intruder] undeclared edge denied
+[fabric-intruder] done
+SLIME_GRAPH component exit task=12 status=0
+SLIME_GRAPH peer death task=12 channels=1 woken=0
+SLIME_GRAPH quota released task=12 live=6
+SLIME_GRAPH window bound task=11 base=0x239000 len=4096
+SLIME_GRAPH sent task=11 channel=8 bytes=64 caps=0 queued=1
+[fabric-publisher-b] roles requested
+SLIME_GRAPH parked task=11 reason=wait
+SLIME_GRAPH received task=9 channel=8 bytes=64 caps=0
+SLIME_GRAPH endpoint minted task=9 key=18 slots=16,17
+SLIME_GRAPH capability transferred task=9 channel=8 to=11 kind=endpoint rights=0x1
+SLIME_GRAPH endpoint minted task=9 key=19 slots=17,18
+SLIME_GRAPH capability transferred task=9 channel=8 to=11 kind=endpoint rights=0x2
+SLIME_GRAPH sent task=9 channel=12 bytes=64 caps=0 queued=1
+[fabric] QoS matched
+SLIME_GRAPH sent task=9 channel=16 bytes=64 caps=0 queued=1
+[fabric] QoS matched
+[fabric] provisioned fabric-publisher-b telemetry publish
+SLIME_GRAPH endpoint minted task=9 key=20 slots=18,19
+SLIME_GRAPH capability transferred task=9 channel=8 to=11 kind=endpoint rights=0x1
+SLIME_GRAPH endpoint minted task=9 key=21 slots=19,20
+SLIME_GRAPH capability transferred task=9 channel=8 to=11 kind=endpoint rights=0x2
+SLIME_GRAPH sent task=9 channel=14 bytes=64 caps=0 queued=1
+[fabric] QoS matched
+[fabric] provisioned fabric-publisher-b diagnostics publish
+SLIME_GRAPH parked task=9 reason=wait
+SLIME_GRAPH received task=7 channel=16 bytes=64 caps=0
+[fabric-subscriber] QoS matched
+SLIME_GRAPH parked task=7 reason=wait
+SLIME_GRAPH received task=8 channel=12 bytes=64 caps=0
+SLIME_GRAPH parked task=8 reason=wait
+SLIME_GRAPH received task=11 channel=8 bytes=64 caps=1
+SLIME_GRAPH received task=11 channel=8 bytes=64 caps=1
+SLIME_GRAPH received task=11 channel=8 bytes=64 caps=1
+SLIME_GRAPH received task=11 channel=8 bytes=64 caps=1
+[fabric-publisher-b] both publish roles received
+SLIME_GRAPH sent task=11 channel=20 bytes=64 caps=0 queued=1
+[fabric-publisher-b] diagnostics sample published
+SLIME_GRAPH buffer created task=11 slot=8 id=1 pages=3 writable=1
+SLIME_GRAPH loan created task=11 slot=9 id=1 to=9 offset=0 length=12288
+SLIME_GRAPH sent task=11 channel=18 bytes=64 caps=1 queued=1
+SLIME_GRAPH capability transfer task=11 channel=18 to=9 caps=1
+SLIME_GRAPH parked task=11 reason=wait
+SLIME_GRAPH window bound task=10 base=0x238000 len=4096
+SLIME_GRAPH sent task=10 channel=10 bytes=64 caps=0 queued=1
+[fabric-publisher] narrowed transfer role cannot widen
+SLIME_GRAPH sent task=10 channel=5 bytes=64 caps=0 queued=1
+[fabric-publisher] role requested
+SLIME_GRAPH parked task=10 reason=wait
+SLIME_GRAPH received task=9 channel=5 bytes=64 caps=0
+SLIME_GRAPH endpoint minted task=9 key=22 slots=20,21
+SLIME_GRAPH capability transferred task=9 channel=5 to=10 kind=endpoint rights=0x1
+SLIME_GRAPH endpoint minted task=9 key=23 slots=21,22
+SLIME_GRAPH capability transferred task=9 channel=5 to=10 kind=endpoint rights=0x2
+SLIME_GRAPH sent task=9 channel=12 bytes=64 caps=0 queued=1
+[fabric] QoS matched
+SLIME_GRAPH sent task=9 channel=16 bytes=64 caps=0 queued=1
+[fabric] QoS matched
+[fabric] provisioned fabric-publisher telemetry publish
+[fabric] every declared stream edge provisioned
+SLIME_GRAPH received task=9 channel=18 bytes=64 caps=1
+SLIME_GRAPH buffer created task=9 slot=23 id=2 pages=2 writable=1
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeARMFrameInvocation/1568 T0x807fd8a400 "rootserver" @2a4e50]: ARMPageMap: Attempting to remap a frame that does not belong to the passed address space>>[0m
+SLIME_GRAPH frame aliased frame=1645 vaddr=0xb00000000 live=1
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeARMFrameInvocation/1568 T0x807fd8a400 "rootserver" @2a4e50]: ARMPageMap: Attempting to remap a frame that does not belong to the passed address space>>[0m
+SLIME_GRAPH frame aliased frame=1646 vaddr=0xb00001000 live=2
+SLIME_GRAPH loan mapped task=9 slot=22 id=1
+SLIME_GRAPH loan returned task=9 slot=22 id=1
+[fabric] large sample copied once
+SLIME_GRAPH sent task=9 channel=19 bytes=64 caps=0 queued=1
+SLIME_GRAPH received task=9 channel=20 bytes=64 caps=0
+SLIME_GRAPH loan created task=9 slot=22 id=2 to=7 offset=0 length=8192
+SLIME_GRAPH sent task=9 channel=16 bytes=64 caps=1 queued=2
+SLIME_GRAPH capability transfer task=9 channel=16 to=7 caps=1
+[fabric] downstream loan created
+SLIME_GRAPH sent task=9 channel=14 bytes=64 caps=0 queued=2
+SLIME_GRAPH loan created task=9 slot=22 id=3 to=8 offset=0 length=8192
+SLIME_GRAPH sent task=9 channel=12 bytes=64 caps=1 queued=2
+SLIME_GRAPH capability transfer task=9 channel=12 to=8 caps=1
+[fabric] downstream loan created
+[fabric] idle: parked on stream sources
+SLIME_GRAPH parked task=9 reason=wait
+SLIME_GRAPH received task=11 channel=19 bytes=64 caps=0
+[fabric-publisher-b] loan settled by fabric
+[fabric-publisher-b] large sample published
+SLIME_GRAPH sent task=11 channel=11 bytes=64 caps=0 queued=1
+SLIME_GRAPH parked task=11 reason=wait
+SLIME_GRAPH received task=9 channel=11 bytes=64 caps=0
+SLIME_GRAPH sent task=9 channel=11 bytes=64 caps=0 queued=1
+[fabric] idle: parked on stream sources
+SLIME_GRAPH parked task=9 reason=wait
+SLIME_GRAPH received task=11 channel=11 bytes=64 caps=0
+SLIME_GRAPH sent task=11 channel=11 bytes=64 caps=0 queued=1
+SLIME_GRAPH parked task=11 reason=wait
+SLIME_GRAPH received task=9 channel=11 bytes=64 caps=0
+[fabric] reliable retry accounted
+SLIME_GRAPH sent task=9 channel=14 bytes=64 caps=0 queued=3
+[fabric] QoS deadline missed
+SLIME_GRAPH sent task=9 channel=11 bytes=64 caps=0 queued=1
+[fabric] idle: parked on stream sources
+SLIME_GRAPH parked task=9 reason=wait
+SLIME_GRAPH received task=11 channel=11 bytes=64 caps=0
+SLIME_GRAPH sent task=11 channel=11 bytes=64 caps=0 queued=1
+SLIME_GRAPH parked task=11 reason=wait
+SLIME_GRAPH received task=9 channel=11 bytes=64 caps=0
+[fabric] reliable retry accounted
+SLIME_GRAPH sent task=9 channel=12 bytes=64 caps=0 queued=3
+[fabric] QoS liveliness lost
+SLIME_GRAPH sent task=9 channel=16 bytes=64 caps=0 queued=3
+[fabric] QoS liveliness lost
+SLIME_GRAPH sent task=9 channel=14 bytes=64 caps=0 queued=4
+[fabric] QoS liveliness lost
+SLIME_GRAPH sent task=9 channel=11 bytes=64 caps=0 queued=1
+[fabric] fail: no inline retained publisher
+SLIME_GRAPH component exit task=9 status=1
+SLIME_GRAPH peer death task=9 channels=18 woken=0
+SLIME_GRAPH holder reclaimed task=9 charges=3 actions=4 stranded=4
+SLIME_GRAPH quota released task=9 live=5
+SLIME_GRAPH received task=11 channel=11 bytes=64 caps=0
+[fabric-publisher-b] fail: time advance
+SLIME_GRAPH component exit task=11 status=1
+SLIME_GRAPH peer death task=11 channels=6 woken=0
+SLIME_GRAPH quota released task=11 live=4
+SLIME_GRAPH received task=7 channel=16 bytes=64 caps=0
+[fabric-subscriber] QoS matched
+SLIME_GRAPH capability expired task=7 bytes=64
+SLIME_GRAPH received task=7 channel=16 bytes=64 caps=0
+[fabric-subscriber] fail: descriptor arrived without its loan
+SLIME_GRAPH component exit task=7 status=1
+SLIME_GRAPH peer death task=7 channels=3 woken=0
+SLIME_GRAPH quota released task=7 live=3
+SLIME_GRAPH received task=8 channel=12 bytes=64 caps=0
+SLIME_GRAPH capability expired task=8 bytes=64
+SLIME_GRAPH received task=8 channel=12 bytes=64 caps=0
+[fabric-subscriber-b] fail: descriptor failed validation
+SLIME_GRAPH component exit task=8 status=1
+SLIME_GRAPH peer death task=8 channels=5 woken=0
+SLIME_GRAPH quota released task=8 live=2
+SLIME_GRAPH capability expired task=10 bytes=64
+SLIME_GRAPH received task=10 channel=5 bytes=64 caps=0
+SLIME_GRAPH capability expired task=10 bytes=64
+SLIME_GRAPH received task=10 channel=5 bytes=64 caps=0
+[fabric-publisher] publish role received
+[fabric-publisher] fail: publisher could receive on its route
+SLIME_GRAPH component exit task=10 status=1
+SLIME_GRAPH supervision woken task=6 child=10
+SLIME_GRAPH peer death task=10 channels=4 woken=0
+SLIME_GRAPH quota released task=10 live=1
+SLIME_GRAPH supervision collected task=6 child=10 kind=0
+[init] stream plane fail: a fabric component did not exit cleanly
+SLIME_GRAPH component exit task=6 status=1
+SLIME_GRAPH peer death task=6 channels=1 woken=0
+SLIME_GRAPH quota released task=6 live=0
+SLIME_GRAPH served live=0 unsupported=0 unimplemented=0 buffers=10 windows=0 tables=0
+SLIME_GRAPH tasks reclaimed live=0 slots=844
+SLIME_GRAPH channels served sends=30 receives=34 parks=24 settled=48 parked=0 queues=0 replies=171 minted=24
+SLIME_GRAPH loans served=5 loans=0 mappings=0 regions=0 transit=0 orphans=0 aliases=0 quotas=0
+SLIME_GRAPH spawns served=6 drops=0 endpoints=19 terminated=13 waits=0
+SLIME_GRAPH transfers served=12

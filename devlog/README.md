@@ -191,3 +191,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-07 | [P5.4.6 (part) — the C8.6 call plane builds and boots; the broker's slot model does not fit](2026-08-07-p5-4-6-call-plane/index.md) | Change | Root-caused | P5.4.6, P5.4, P5.4.1, C8.6 |
 | 2026-08-07 | [P5.4.6 — the C8.6 call plane's real blocker is spawn-grant semantics, not slot numbering](2026-08-07-p5-4-6-call-spawn-semantics/index.md) | Defect | Root-caused | P5.4.6, B25, C8.6 |
 | 2026-08-07 | [B26 — the boot-layout dump reported the grant's rights, hiding a too-permissive layout row](2026-08-07-b26-layout-declared-rights/index.md) | Defect | Verified | B26, B10, P5.4.6 |
+| 2026-08-07 | [P5.4.5 (part) — a monotonic-time channel makes three C8.5 arms fire on seL4](2026-08-07-p5-4-5-qos-clock/index.md) | Change | Root-caused | P5.4.5, C8.5, B25 |

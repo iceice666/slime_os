@@ -172,7 +172,15 @@ fn main() {
         spawn_or_fail(1, &RECOVERY_CAPS);
         return;
     }
-    if option_env!("SLIME_FABRIC_QOS_CHECK") == Some("1") {
+    // Both halves of the guard. P5.4.5's seL4 QoS plane sets this same flag —
+    // deliberately, so `fabric-service` and the two participants select their
+    // QoS behaviour from the oracle's own switch and stay byte-identical
+    // between the planes — but its *composition* is `drive_stream_plane` plus a
+    // clock, not `launch_fabric_graph`. Without the second half this branch
+    // would claim that plane and walk the x86 boot layout.
+    if option_env!("SLIME_FABRIC_QOS_CHECK") == Some("1")
+        && option_env!("SLIME_SEL4_STREAM_CHECK") != Some("1")
+    {
         for slot in 1..FABRIC_SERVICE_SLOT {
             if slot != SHARED_BUFFER_FACTORY_SLOT {
                 let _ = slime_rt::cap_drop(slot);
@@ -1411,6 +1419,25 @@ const STREAM_INTRUDER: usize = 2;
 const STREAM_PUBLISHER_B: usize = 3;
 const STREAM_SUBSCRIBER_B: usize = 4;
 
+/// Whether this build is P5.4.5's seL4 QoS plane.
+///
+/// Keyed on the **oracle's own** `SLIME_FABRIC_QOS_CHECK` rather than a
+/// seL4-only flag, and that is the point rather than a shortcut:
+/// `fabric-service`, `fabric-publisher-b`, and `fabric-subscriber-b` all select
+/// their QoS behaviour from it, so a separate flag would mean init built the
+/// clock while the components ignored it. Reusing the oracle's keeps the three
+/// participants byte-identical between the two planes, which is what
+/// `check-sel4-stream-plane.py`'s unmodified-component assertion demands.
+///
+/// Both halves of the guard, matching `launch_fabric_boot`: the seL4 QoS
+/// generation is the only one that pairs this flag with the stream driver, so
+/// keying on the env alone would make the x86 QoS generation — built with the
+/// same flag — mint a clock inside a composition that already has one.
+fn qos_plane() -> bool {
+    option_env!("SLIME_FABRIC_QOS_CHECK") == Some("1")
+        && option_env!("SLIME_SEL4_STREAM_CHECK") == Some("1")
+}
+
 /// Grants the spawn plane's widest spawn carries (B15).
 ///
 /// Six, which is B15's own exit-condition number and the size of this file's
@@ -1579,6 +1606,20 @@ fn drive_stream_plane() {
     // spawn, and the arm that uses it runs in the child. See the grant below.
     let (probe_retained, probe_narrowed) = slime_rt::endpoint_create(ENDPOINT_FACTORY_SLOT)
         .unwrap_or_else(|_| fail_stream(b"transfer probe endpoint"));
+    // P5.4.5's clock. Minted only for the QoS plane, and with the same
+    // `endpoint_create` every other control pair uses, so the plane that does
+    // not declare it mints nothing and its channel count is unchanged.
+    //
+    // Init keeps neither end: the service half is grant 9 to the fabric and the
+    // client half is grant 3 to `fabric-publisher-b`, which is what drives the
+    // scheduled boundaries. Both are ordinary spawn grants, so nothing here
+    // depends on B25's post-spawn introduction.
+    let (time_service, time_client) = if qos_plane() {
+        slime_rt::endpoint_create(ENDPOINT_FACTORY_SLOT)
+            .unwrap_or_else(|_| fail_stream(b"qos time endpoint"))
+    } else {
+        (0, 0)
+    };
     slime_rt::debug_write(b"[init] fabric control channels minted\n");
 
     // Both subscribers first: the fabric is granted a supervision handle naming
@@ -1612,16 +1653,37 @@ fn drive_stream_plane() {
     // `BUFFER_FACTORY_SLOT = 1`, the controls from `FABRIC_FIRST_CONTROL_SLOT`,
     // and the supervision handles after them — all read from the generated
     // profile, so a hole here would shift every slot the service addresses.
-    let mut grants =
-        [grant(ENDPOINT_FACTORY_SLOT, RIGHT_ENDPOINT_CREATE); 4 + STREAM_PLANE_CLIENTS];
+    //
+    // P5.4.5 adds one more, and its position is not free: `fabric-service`
+    // reads its clock at a literal `TIME_SLOT = 9`, and the nine grants above
+    // fill 0..=8 exactly, so the time channel is grant 9 or it is nothing. The
+    // array is sized from the plane rather than a constant so the two cannot
+    // drift — a participant added above moves this grant and breaks the build
+    // rather than silently handing the fabric a control endpoint where it
+    // expects a clock.
+    const STREAM_GRANTS: usize = 4 + STREAM_PLANE_CLIENTS;
+    const QOS_GRANTS: usize = STREAM_GRANTS + 1;
+    const _: () = assert!(STREAM_GRANTS == 9);
+    let mut grants = [grant(ENDPOINT_FACTORY_SLOT, RIGHT_ENDPOINT_CREATE); QOS_GRANTS];
     grants[1] = grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE);
     for (index, service_side) in service_sides.iter().enumerate() {
         grants[2 + index] = grant(*service_side, RIGHT_SEND | RIGHT_RECV);
     }
     grants[2 + STREAM_PLANE_CLIENTS] = grant(subscriber.supervision_slot, RIGHT_SUPERVISE);
     grants[3 + STREAM_PLANE_CLIENTS] = grant(subscriber_b.supervision_slot, RIGHT_SUPERVISE);
-    let fabric = slime_rt::spawn(FABRIC_SERVICE_SLOT, &grants)
-        .unwrap_or_else(|_| fail_stream(b"spawn fabric"));
+    grants[STREAM_GRANTS] = grant(time_service, RIGHT_SEND | RIGHT_RECV);
+    // The QoS plane grants all ten; every other stream plane grants the first
+    // nine and never mints the clock, which is what keeps `sel4_stream_check`'s
+    // observed layout byte-for-byte unchanged.
+    let fabric = slime_rt::spawn(
+        FABRIC_SERVICE_SLOT,
+        if qos_plane() {
+            &grants[..]
+        } else {
+            &grants[..STREAM_GRANTS]
+        },
+    )
+    .unwrap_or_else(|_| fail_stream(b"spawn fabric"));
     slime_rt::debug_write(b"[init] fabric service spawned\n");
 
     // Let both subscribers reach the fabric before either publisher exists
@@ -1674,13 +1736,24 @@ fn drive_stream_plane() {
     // fabric: its upstream loan names the fabric as receiver by capability.
     // Its slot order is the component's own `CONTROL_SLOT`/`FACTORY_SLOT`/
     // `FABRIC_SLOT`.
+    //
+    // P5.4.5 adds its clock as grant 3, matching `fabric-publisher-b`'s own
+    // `TIME_SLOT = 3`. It drives the scheduled boundaries — deadline, lifespan,
+    // liveliness, lease — so the component that publishes is also the one that
+    // says what time it is, which is how the oracle's QoS gate wires it.
+    let publisher_b_grants = [
+        grant(client_sides[STREAM_PUBLISHER_B], RIGHT_SEND | RIGHT_RECV),
+        grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
+        grant(fabric.supervision_slot, RIGHT_SUPERVISE),
+        grant(time_client, RIGHT_SEND | RIGHT_RECV),
+    ];
     let publisher_b = slime_rt::spawn(
         FABRIC_PUBLISHER_B_SLOT,
-        &[
-            grant(client_sides[STREAM_PUBLISHER_B], RIGHT_SEND | RIGHT_RECV),
-            grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
-            grant(fabric.supervision_slot, RIGHT_SUPERVISE),
-        ],
+        if qos_plane() {
+            &publisher_b_grants[..]
+        } else {
+            &publisher_b_grants[..3]
+        },
     )
     .unwrap_or_else(|_| fail_stream(b"spawn publisher-b"));
     let intruder = slime_rt::spawn(

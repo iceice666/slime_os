@@ -47,6 +47,8 @@ CROSSING_IMAGE = BUILD_ROOT / "slime-sel4-crossing.elf"
 CROSSING_MANIFEST = BUILD_ROOT / "slime-sel4-crossing.identity.json"
 CALL_IMAGE = BUILD_ROOT / "slime-sel4-call.elf"
 CALL_MANIFEST = BUILD_ROOT / "slime-sel4-call.identity.json"
+QOS_IMAGE = BUILD_ROOT / "slime-sel4-qos.elf"
+QOS_MANIFEST = BUILD_ROOT / "slime-sel4-qos.identity.json"
 
 # Which generation the root task embeds. That is the only difference between the
 # images this script builds; see `build_application`.
@@ -60,6 +62,7 @@ STREAM_VARIANT = "stream"
 SUPERVISION_VARIANT = "supervision"
 CROSSING_VARIANT = "crossing"
 CALL_VARIANT = "call"
+QOS_VARIANT = "qos"
 VARIANT_MANIFESTS = {
     GRAPH_VARIANT: "sel4",
     CHANNEL_VARIANT: "sel4-channel",
@@ -70,6 +73,7 @@ VARIANT_MANIFESTS = {
     SUPERVISION_VARIANT: "sel4-supervision",
     CROSSING_VARIANT: "sel4-crossing",
     CALL_VARIANT: "sel4-call",
+    QOS_VARIANT: "sel4-qos",
 }
 VARIANT_TARGET_DIRS = {
     FIXTURE_VARIANT: "root",
@@ -82,6 +86,7 @@ VARIANT_TARGET_DIRS = {
     SUPERVISION_VARIANT: "root-supervision",
     CROSSING_VARIANT: "root-crossing",
     CALL_VARIANT: "root-call",
+    QOS_VARIANT: "root-qos",
 }
 VARIANT_IMAGES = {
     FIXTURE_VARIANT: (IMAGE, MANIFEST),
@@ -94,6 +99,7 @@ VARIANT_IMAGES = {
     SUPERVISION_VARIANT: (SUPERVISION_IMAGE, SUPERVISION_MANIFEST),
     CROSSING_VARIANT: (CROSSING_IMAGE, CROSSING_MANIFEST),
     CALL_VARIANT: (CALL_IMAGE, CALL_MANIFEST),
+    QOS_VARIANT: (QOS_IMAGE, QOS_MANIFEST),
 }
 
 CHILD_MANIFEST = ROOT / "slime-root" / "child" / "Cargo.toml"
@@ -927,6 +933,14 @@ def main() -> None:
         action="store_true",
         help="embed the bounded-call generation (C8.6), writing a separate image",
     )
+    parser.add_argument(
+        "--qos-plane",
+        action="store_true",
+        help=(
+            "embed the timed-QoS generation (C8.5): the stream graph plus a "
+            "monotonic-time channel, writing a separate image"
+        ),
+    )
     arguments = parser.parse_args()
     selected = [
         variant
@@ -940,6 +954,7 @@ def main() -> None:
             (SUPERVISION_VARIANT, arguments.supervision_plane),
             (CROSSING_VARIANT, arguments.crossing_plane),
             (CALL_VARIANT, arguments.call_plane),
+            (QOS_VARIANT, arguments.qos_plane),
         )
         if chosen
     ]

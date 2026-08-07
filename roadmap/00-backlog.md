@@ -228,6 +228,35 @@ binary perturbed neither contract validation nor generation identity. See
 
 ## Resolved
 
+### B27 — the manifest→flag table set and scrubbed in one pass, so two manifests could not share a flag — **resolved 2026-08-07**
+
+**Problem:** `build_sel4_generation`'s manifest→flag loop
+(`scripts/build/build-generation.py`) set the selected manifest's flag and
+popped every other manifest's in the same iteration. With one flag per manifest
+that is correct. The moment two manifests declare the same flag it is not: a row
+later in the table pops what an earlier row set, and which one wins depends on
+table order rather than on the selection.
+
+**Found by** P5.4.5's QoS plane, which is the stream driver plus a clock and so
+declares `SLIME_SEL4_STREAM_CHECK` alongside the oracle's
+`SLIME_FABRIC_QOS_CHECK`. Adding the `sel4-qos` row *after* `sel4-stream`
+cleared the stream plane's own flag, and `just sel4_stream_check` failed with
+`boot exceeded 180s without reaching the final marker` — init fell through to
+`[init] launching component graph` and spawned nothing. Observed directly, and
+worth recording because the failure is a timeout rather than an error: nothing
+said "flag missing", and the plane simply ran a different composition.
+
+**Resolved by** collecting the selected manifest's flags into one set and every
+flag the table declares into another, then setting the first and removing the
+rest. A flag two manifests share now survives for whichever asked for it,
+independent of row order.
+
+**Exit condition observed.** `just sel4_stream_check` passes with the
+`sel4-qos` row present, and the QoS plane's own boot shows both flags in effect
+— it runs `drive_stream_plane` and its components take the QoS path. All nine
+seL4 plane gates pass with every image rebuilt. See
+`devlog/2026-08-07-p5-4-5-qos-clock/`.
+
 ### B26 — the `[layout]` dump reported the grant's rights, so a too-permissive layout row was unobservable — **resolved 2026-08-07**
 
 **Problem:** `slime-root/src/main.rs` printed each layout row's rights from the

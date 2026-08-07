@@ -1239,7 +1239,7 @@ compose the earlier.
 | P5.4.2 | M5.1–M5.9 | **In progress** — ten storage/rollback/recovery gaps. Structural: five of the nine `Mediation::Unavailable` planes are M5's surface. Carries `object_store.rs`'s 32 ungated assertions, of which the eight superblock-shaped ones are now portable and host-tested in `boot-contracts` (see [`devlog/2026-08-07-p5-4-2-store-superblock/`](../devlog/2026-08-07-p5-4-2-store-superblock/index.md)); the rest need a block device `slime-root` does not have |
 | P5.4.3 | M6.1–M6.7 | Five gaps (directory, dango, generation commands, powerbox, transfer) and two partials (M6.1 v2 determinism, M6.2 protocol surface) |
 | P5.4.4 | C8.2 | **Complete** — aggregate fabric-graph admission before component launch; see below |
-| P5.4.5 | C8.5 | **In progress** — reliable/retained/timed QoS, plus the two C8.5 assertions colocated in `kernel/tests/fabric_stream.rs`. Three arms already ran on the seL4 stream plane unasserted (matching-before-data, bounded loss under a stall, peer death as a distinct event) and are now gated; the arms needing simulated time — retry exhaustion, deadline, lifespan, liveliness, lease, tie ordering — remain. See [`devlog/2026-08-07-p5-4-5-qos-arms/`](../devlog/2026-08-07-p5-4-5-qos-arms/index.md) |
+| P5.4.5 | C8.5 | **In progress** — reliable/retained/timed QoS, plus the two C8.5 assertions colocated in `kernel/tests/fabric_stream.rs`. Three arms already ran on the seL4 stream plane unasserted (matching-before-data, bounded loss under a stall, peer death as a distinct event) and are now gated. An eleventh image, `sel4-qos`, adds the monotonic-time channel those arms needed, and three more now fire — RELIABLE retry accounting, deadline miss, liveliness loss — but the plane stops at `no inline retained publisher`, so retry exhaustion, lifespan, lease, and tie ordering stay unobserved and no gate is registered. See [`devlog/2026-08-07-p5-4-5-qos-arms/`](../devlog/2026-08-07-p5-4-5-qos-arms/index.md) and [`devlog/2026-08-07-p5-4-5-qos-clock/`](../devlog/2026-08-07-p5-4-5-qos-clock/index.md) |
 | P5.4.6 | C8.6 | **In progress** — bounded native calls. The `sel4-call` image builds, admits its graph, mints and binds every control channel, spawns all five components, and delivers each role request to the broker; it then deadlocks, because `slime-root` treats a spawn-granted endpoint as a *move* while the oracle treats it as a *copy*, so init cannot hand the broker the supervision handles the x86 plane transfers after spawning. Tracked as B25. No gate yet. See [`devlog/2026-08-07-p5-4-6-call-spawn-semantics/`](../devlog/2026-08-07-p5-4-6-call-spawn-semantics/index.md) |
 | P5.4.7 | C8.7 | Native operations |
 | P5.4.8 | C8.8 | Filtered introspection and declared interposition |
@@ -1339,11 +1339,23 @@ data, bounded loss under a stalled subscriber, and peer death as a distinct
 event are now asserted by `just sel4_stream_check`; see
 [`devlog/2026-08-07-p5-4-5-qos-arms/`](../devlog/2026-08-07-p5-4-5-qos-arms/index.md).
 
-Remaining: bounded RELIABLE credit and acknowledgement, fixed retry
-exhaustion, deadline, lifespan, liveliness and lease transitions driven from
-the monotonic-time capability, equal-timestamp tie ordering, and the runtime
-incompatible-QoS event. Those need a plane that stalls deliberately and
-advances a clock, which is a new image and fixture rather than an assertion.
+That plane now exists. An eleventh image, `sel4-qos`, is the stream graph at
+generation 19 plus one runtime-minted monotonic-time channel, granted to
+`fabric-service` at its `TIME_SLOT` 9 and to `fabric-publisher-b` at its
+`TIME_SLOT` 3. With the clock advancing, three arms that had been unreachable
+fire: **bounded RELIABLE retry accounting, deadline miss, and liveliness loss**.
+B25 does not block it — every capability the plane needs, the clock included, is
+a spawn grant, so the post-spawn introduction P5.4.6 is stuck on never arises.
+
+It does not yet pass. The scenario reaches
+`[fabric] fail: no inline retained publisher`: `create_late_subscriber` wants a
+`DURABILITY_RETAINED` publisher whose retained head is *inline*, and the stream
+graph's retained publisher lends a `>MAX_INLINE_BYTES` sample instead. That is a
+graph-shape gap rather than a mechanism one, and it is what stands between here
+and the remaining arms — retry exhaustion, lifespan, lease, tie ordering, and
+the runtime incompatible-QoS event, all of which sit after it in the scenario.
+No gate is registered while the plane cannot pass. See
+[`devlog/2026-08-07-p5-4-5-qos-clock/`](../devlog/2026-08-07-p5-4-5-qos-clock/index.md).
 
 One inversion is already recorded: P5.4.10 made an incompatible QoS pair a
 *refusal at admission*, correct for a root with no QoS plane, but it means the

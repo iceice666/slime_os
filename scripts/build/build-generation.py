@@ -228,6 +228,12 @@ SEL4_MANIFESTS = {
     / "v1"
     / "fixtures"
     / "sel4-call.zti",
+    "sel4-qos": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-qos.zti",
 }
 COMPONENTS_TARGET_DIR = Path(
     os.environ.get("CARGO_TARGET_DIR") or ROOT / "target" / "components"
@@ -2501,14 +2507,26 @@ def build_sel4_generation(output: Path, manifest: dict, target_profile: TargetPr
     # built rather than inherited, so the flag and the graph cannot disagree;
     # `build_rust_components` pops it for every other build.
     selected = os.environ.get("SLIME_SEL4_MANIFEST")
-    for manifest_name, flag in (
-        ("sel4-channel", "SLIME_SEL4_CHANNEL_CHECK"),
-        ("sel4-loan", "SLIME_SEL4_LOAN_CHECK"),
-        ("sel4-spawn", "SLIME_SEL4_SPAWN_CHECK"),
-        ("sel4-sample", "SLIME_SEL4_SAMPLE_CHECK"),
-        ("sel4-stream", "SLIME_SEL4_STREAM_CHECK"),
-        ("sel4-supervision", "SLIME_SEL4_SUPERVISION_CHECK"),
-        ("sel4-crossing", "SLIME_SEL4_CROSSING_CHECK"),
+    #
+    # A manifest may name more than one flag. P5.4.5's QoS plane is the stream
+    # driver plus a clock, so it sets `SLIME_SEL4_STREAM_CHECK` — which selects
+    # that driver in `init.rs` — *and* the oracle's own
+    # `SLIME_FABRIC_QOS_CHECK`, which is what `fabric-service`,
+    # `fabric-publisher-b`, and `fabric-subscriber-b` read to select their QoS
+    # behaviour. Reusing the oracle's flag is what keeps those three components
+    # byte-identical between the two seL4 planes; `init.rs::qos_plane` requires
+    # both, so the x86 QoS generation cannot walk this composition.
+    wanted: set[str] = set()
+    declared: set[str] = set()
+    for manifest_name, flags in (
+        ("sel4-channel", ("SLIME_SEL4_CHANNEL_CHECK",)),
+        ("sel4-loan", ("SLIME_SEL4_LOAN_CHECK",)),
+        ("sel4-spawn", ("SLIME_SEL4_SPAWN_CHECK",)),
+        ("sel4-sample", ("SLIME_SEL4_SAMPLE_CHECK",)),
+        ("sel4-stream", ("SLIME_SEL4_STREAM_CHECK",)),
+        ("sel4-qos", ("SLIME_SEL4_STREAM_CHECK", "SLIME_FABRIC_QOS_CHECK")),
+        ("sel4-supervision", ("SLIME_SEL4_SUPERVISION_CHECK",)),
+        ("sel4-crossing", ("SLIME_SEL4_CROSSING_CHECK",)),
         # P5.4.6: its own flag rather than the oracle's
         # `SLIME_FABRIC_CALL_CHECK`. The call *broker* is the same code on both
         # planes — `fabric-service` selects it on either flag, which is what
@@ -2516,9 +2534,20 @@ def build_sel4_generation(output: Path, manifest: dict, target_profile: TargetPr
         # this plane mints its control channels instead of reading them from
         # the base boot layout. Sharing one flag made generation 18 walk
         # generation 14's layout.
-        ("sel4-call", "SLIME_SEL4_CALL_CHECK"),
+        ("sel4-call", ("SLIME_SEL4_CALL_CHECK",)),
     ):
+        # Set-then-scrub in one pass would let a later row pop a flag an earlier
+        # row set: `sel4-qos` and `sel4-stream` share
+        # `SLIME_SEL4_STREAM_CHECK`, so iterating the table and popping for
+        # every non-selected manifest cleared the stream plane's own flag. The
+        # selected manifest's flags are collected first and every other flag in
+        # the table is removed, so a flag two manifests share survives for the
+        # one that asked for it.
         if selected == manifest_name:
+            wanted.update(flags)
+        declared.update(flags)
+    for flag in declared:
+        if flag in wanted:
             os.environ[flag] = "1"
         else:
             os.environ.pop(flag, None)
