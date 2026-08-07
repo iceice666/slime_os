@@ -1075,6 +1075,8 @@ This slice supplies the timing, execution, lifecycle, and observation contracts 
 
 **Depends on:** C8 and architecture-portability milestone P1. C9 defines architecture-neutral timer, wait-set, scheduling-class, lifecycle, and observation semantics; each admitted ISA supplies the privileged timer, interrupt, context-switch, and idle mechanisms behind P1's boundary.
 
+R2's ROS 2 managed-node and parameter-service compatibility is expected to be implemented as a profile over C9's lifecycle-transition and parameter-state schemas rather than a separate ROS-specific state machine; see [`devlog/2026-08-07-ros2-transport-zenoh-vs-dds/`](../devlog/2026-08-07-ros2-transport-zenoh-vs-dds/index.md).
+
 ### Deliverables
 
 - expose monotonic time, optional wall time, timers, and simulated time as distinct explicit service capabilities; a component with no clock grant cannot observe time implicitly;
