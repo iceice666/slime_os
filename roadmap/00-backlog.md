@@ -165,9 +165,29 @@ to drain both messages once awake. The transcript confirms the order is favourab
 So: the receiver parks, two messages are enqueued on the queue it polls, the wake
 is delivered to a task the root agrees is parked, its park entry is consumed, and
 it never runs again. Every step is individually correct and the composition
-deadlocks. That is as far as static reading and boot-log instrumentation reach —
-eight readings excluded — and closing it needs a debugger on the child (`xd://debug`
-against the `aarch64-sel4` target) to see where task 10's thread actually sits.
+deadlocks.
+
+Two further readings were tested and refuted, which is worth recording because both
+look compelling from the transcript:
+
+* *Both ends of the loopback given away.* Init mints `key=5` as a loopback and the
+  log shows it handed to child 9 *and* child 10, so init keeps neither end — which
+  would leave the queue's `producer`/`consumer` naming only the two children. That
+  is exactly what `reassign`'s loopback split is for, and the **stream plane does
+  the identical thing** (`channel handed parent=6 child=9 key=5` then
+  `… child=10 key=5`, same line shape, same order) and drains both messages. Not
+  the cause.
+* *Round-robin starvation.* On the stream plane task 10 runs only after the fabric
+  parks and every other task blocks, so it is plainly last in the queue — and on
+  the QoS plane the clock keeps the fabric busy. But the QoS fabric still parks
+  **eight** times after the transfers, so task 10 has scheduling opportunities and
+  does not take them. Not the cause either.
+
+Ten readings excluded. Both planes are byte-comparable through the park and the two
+transfers, the rights on the control end are `send|recv` so `WAIT_KIND_ENDPOINT`
+resolves, and every root-side structure reports consistent state. Closing this needs
+a debugger on the child (`xd://debug` against the `aarch64-sel4` target) to see where
+task 10's thread actually sits; the boot log has no more to give.
 
 **One wider finding stands regardless of B28**, and it is worth its own slice:
 `sel4_transport::wait` returns `()`, so its staging-failure branch can only
