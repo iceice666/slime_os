@@ -183,11 +183,32 @@ look compelling from the transcript:
   **eight** times after the transfers, so task 10 has scheduling opportunities and
   does not take them. Not the cause either.
 
-Ten readings excluded. Both planes are byte-comparable through the park and the two
-transfers, the rights on the control end are `send|recv` so `WAIT_KIND_ENDPOINT`
-resolves, and every root-side structure reports consistent state. Closing this needs
-a debugger on the child (`xd://debug` against the `aarch64-sel4` target) to see where
-task 10's thread actually sits; the boot log has no more to give.
+Ten readings excluded from the boot log. Both planes are byte-comparable through the
+park and the two transfers, the rights on the control end are `send|recv` so
+`WAIT_KIND_ENDPOINT` resolves, and every root-side structure reports consistent
+state.
+
+**The debugger settles it.** Booting under `-gdb tcp::1234`, letting the plane reach
+its deadlock, and attaching `lldb` shows the CPU parked at `0x8060011190`, inside a
+`b .` self-loop. Resolving that against the kernel's symbol table puts it in
+`idle_thread` (`0x806001118c`, the symbol immediately below). **seL4 has no runnable
+thread at all** — so task 10 is not spinning in userspace and not starving behind a
+peer: it is blocked in the kernel on an endpoint nothing will signal.
+
+That inverts the remaining suspicion back onto the root, with one specific
+candidate. `parked::send_reply` ends with `slot.cap().send(info)` and **discards the
+result**. Every accounting structure the root keeps is updated as though the reply
+was delivered — the entry is removed from `ParkedReplies`, `recycled` is bumped, the
+`reply owed` list is correspondingly empty for task 10 — while an `seL4_Send` that
+failed would leave the child blocked forever with no trace anywhere. That is exactly
+the observed combination: consistent root bookkeeping, an idle CPU, and a child that
+never resumes.
+
+**Next step, and it is now narrow:** check that `send` result and report a failure.
+If the send is the loss, the fix is that check plus deciding what a failed reply
+means (retry, or record the task as unanswerable); if it succeeds, the loss is in
+seL4's reply-capability lifetime and the saved `Unspecified` slot is the next thing
+to read.
 
 **One wider finding stands regardless of B28**, and it is worth its own slice:
 `sel4_transport::wait` returns `()`, so its staging-failure branch can only
