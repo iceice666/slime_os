@@ -25,7 +25,8 @@ pub mod wire {
 
 pub use wire::{
     ELF_FORMAT_VERSION, ELF_HEADER_LEN, ELF_IMAGE_MAGIC, FORMAT_VERSION, HEADER_LEN, IMAGE_MAGIC,
-    LEGACY_FORMAT_VERSION, LEGACY_HEADER_LEN, LEGACY_IMAGE_MAGIC, MAX_SEGMENTS, SEGMENT_LEN,
+    LEGACY_FORMAT_VERSION, LEGACY_HEADER_LEN, LEGACY_IMAGE_MAGIC, MAX_IMAGE_BYTES, MAX_SEGMENTS,
+    MAX_STACK_BYTES, SEGMENT_FLAG_EXEC, SEGMENT_FLAG_WRITE, SEGMENT_LEN, WireSegmentRecord,
 };
 
 /// Why a component image's target could not be established.
@@ -165,6 +166,125 @@ fn u64_at(bytes: &[u8], offset: usize) -> Result<u64, ComponentTargetError> {
         .and_then(|slice| slice.try_into().ok())
         .map(u64::from_le_bytes)
         .ok_or(ComponentTargetError::Truncated)
+}
+
+/// Why a segment table is inadmissible.
+///
+/// The vocabulary is the retired kernel's `ImageError`, restated for the
+/// subset that is a property of the *image* rather than of the loader: a
+/// mapping decision the kernel makes is not here, and neither is anything
+/// needing a page allocator. Every variant below is a statement about bytes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SegmentError {
+    /// Zero segments, or more than [`MAX_SEGMENTS`].
+    BadSegmentCount,
+    /// A flag outside the defined set, or `WRITE | EXEC` together (W^X).
+    BadFlags,
+    /// A misaligned load offset, an empty memory range, `file_len` past
+    /// `mem_len`, or ranges out of order or overlapping.
+    BadSegment,
+    /// A file range extending past the payload.
+    BadFileRange,
+    /// The entry point lands outside every executable segment.
+    BadEntry,
+    /// The total mapped footprint exceeds [`MAX_IMAGE_BYTES`].
+    ImageTooLarge,
+    /// A record shorter than [`SEGMENT_LEN`].
+    Truncated,
+}
+
+/// Validate a component image's segment table (P5.4.10).
+///
+/// `records` is the packed segment array, `data` the payload the file ranges
+/// index into, `entry_offset` the declared entry, and `page_size` the target
+/// profile's page granule.
+///
+/// # Why this lives in `boot-contracts`
+///
+/// These rules were only in `kernel/src/runtime/component.rs`, exercised only
+/// by `kernel/tests/component_image.rs` — eleven architecture-neutral
+/// assertions in a file no Justfile target names, reachable only through
+/// `just test`. P5.4.1's inventory recorded them as coverage that would vanish
+/// silently when `kernel/` is deleted, with no seL4 equivalent: P5.2 observes
+/// the positive path and target mismatch, and nothing exercises the malformed
+/// corpus.
+///
+/// `slime-root` is not the right home either — it has no SLIMECM loader and
+/// never will. The rules are a property of the *format*, which is what
+/// `boot-contracts` is for, and P0's required check says the corpus must
+/// "reject the wrong ... target-specific load layout" regardless of producer.
+/// Here they are host-tested and survive the oracle's deletion.
+///
+/// The retired kernel's `decode` keeps its own copy for now: it is frozen, and
+/// rewriting it to call this would edit the oracle. That is P5.4.final's
+/// business, not this slice's.
+pub fn validate_segments(
+    records: &[u8],
+    data: &[u8],
+    count: u16,
+    entry_offset: u32,
+    page_size: u32,
+) -> Result<(), SegmentError> {
+    if count == 0 || count > MAX_SEGMENTS {
+        return Err(SegmentError::BadSegmentCount);
+    }
+    let mut previous_end: u64 = 0;
+    let mut total_pages: u64 = 0;
+    let mut entry_ok = false;
+    for index in 0..count as usize {
+        let record = records
+            .get(index * SEGMENT_LEN..)
+            .and_then(WireSegmentRecord::decode)
+            .ok_or(SegmentError::Truncated)?;
+        // W^X, and no undefined bits: a segment that is both writable and
+        // executable is refused as an image property, before any loader has
+        // the chance to map it that way.
+        let flags = record.flags;
+        if flags & !(SEGMENT_FLAG_WRITE | SEGMENT_FLAG_EXEC) != 0
+            || flags & (SEGMENT_FLAG_WRITE | SEGMENT_FLAG_EXEC)
+                == (SEGMENT_FLAG_WRITE | SEGMENT_FLAG_EXEC)
+        {
+            return Err(SegmentError::BadFlags);
+        }
+        if record.vaddr_offset % page_size != 0
+            || record.mem_len == 0
+            || record.file_len > record.mem_len
+        {
+            return Err(SegmentError::BadSegment);
+        }
+        // Sorted and non-overlapping, checked as one comparison: a table whose
+        // ranges are out of order and one whose ranges collide are the same
+        // defect seen from two sides.
+        let start = u64::from(record.vaddr_offset);
+        let end = start + u64::from(record.mem_len);
+        if start < previous_end {
+            return Err(SegmentError::BadSegment);
+        }
+        previous_end = end;
+        let file_end = (record.file_offset as usize)
+            .checked_add(record.file_len as usize)
+            .ok_or(SegmentError::BadFileRange)?;
+        if file_end > data.len() {
+            return Err(SegmentError::BadFileRange);
+        }
+        total_pages += u64::from(record.mem_len).div_ceil(u64::from(page_size));
+        if total_pages * u64::from(page_size) > MAX_IMAGE_BYTES {
+            return Err(SegmentError::ImageTooLarge);
+        }
+        if flags & SEGMENT_FLAG_EXEC != 0
+            && u64::from(entry_offset) >= start
+            && u64::from(entry_offset) < end
+        {
+            entry_ok = true;
+        }
+    }
+    // The entry must land inside an executable segment. Not merely inside the
+    // image: an entry pointing at data is an image that cannot start.
+    if entry_ok {
+        Ok(())
+    } else {
+        Err(SegmentError::BadEntry)
+    }
 }
 
 #[cfg(test)]
@@ -440,5 +560,168 @@ mod tests {
         header[wire::OFF_HEADER_HEADER_SIZE..][..4]
             .copy_from_slice(&(LEGACY_HEADER_LEN as u32).to_le_bytes());
         assert_eq!(target(&header), Err(ComponentTargetError::Truncated));
+    }
+
+    /// A 4 KiB page granule, which every profile this format admits uses.
+    const PAGE: u32 = 4096;
+
+    /// One segment record, encoded.
+    fn segment(
+        vaddr: u32,
+        mem_len: u32,
+        file_offset: u32,
+        file_len: u32,
+        flags: u16,
+    ) -> [u8; SEGMENT_LEN] {
+        WireSegmentRecord {
+            vaddr_offset: vaddr,
+            mem_len,
+            file_offset,
+            file_len,
+            flags,
+            reserved: 0,
+        }
+        .encode()
+    }
+
+    /// A one-segment executable table and a payload long enough for it.
+    fn one_executable_segment() -> ([u8; SEGMENT_LEN], [u8; 64]) {
+        (segment(0, PAGE, 0, 32, SEGMENT_FLAG_EXEC), [0u8; 64])
+    }
+
+    #[test]
+    fn a_well_formed_segment_table_is_admitted() {
+        let (records, data) = one_executable_segment();
+        assert_eq!(validate_segments(&records, &data, 1, 0, PAGE), Ok(()));
+    }
+
+    /// A `.bss` tail: `mem_len` beyond `file_len` is the zero-fill the loader
+    /// owes, not a malformed range.
+    #[test]
+    fn a_zero_fill_tail_is_not_a_malformed_range() {
+        let records = segment(0, PAGE * 2, 0, 16, SEGMENT_FLAG_EXEC);
+        assert_eq!(validate_segments(&records, &[0u8; 64], 1, 0, PAGE), Ok(()));
+    }
+
+    #[test]
+    fn zero_and_excess_segment_counts_are_refused() {
+        let (records, data) = one_executable_segment();
+        for count in [0, MAX_SEGMENTS + 1] {
+            assert_eq!(
+                validate_segments(&records, &data, count, 0, PAGE),
+                Err(SegmentError::BadSegmentCount),
+            );
+        }
+    }
+
+    /// W^X as an image property. A segment claiming both is refused before any
+    /// loader can map it that way, which is the invariant the roadmap states.
+    #[test]
+    fn a_writable_executable_segment_is_refused() {
+        let records = segment(0, PAGE, 0, 32, SEGMENT_FLAG_WRITE | SEGMENT_FLAG_EXEC);
+        assert_eq!(
+            validate_segments(&records, &[0u8; 64], 1, 0, PAGE),
+            Err(SegmentError::BadFlags),
+        );
+    }
+
+    #[test]
+    fn undefined_segment_flags_are_refused() {
+        for flags in [1 << 2, 1 << 15] {
+            let records = segment(0, PAGE, 0, 32, SEGMENT_FLAG_EXEC | flags);
+            assert_eq!(
+                validate_segments(&records, &[0u8; 64], 1, 0, PAGE),
+                Err(SegmentError::BadFlags),
+            );
+        }
+    }
+
+    /// Misaligned, empty, and file-longer-than-memory, which are the three
+    /// shapes a single record can be wrong in.
+    #[test]
+    fn a_malformed_single_segment_is_refused() {
+        for records in [
+            segment(1, PAGE, 0, 32, SEGMENT_FLAG_EXEC),
+            segment(0, 0, 0, 0, SEGMENT_FLAG_EXEC),
+            segment(0, 16, 0, 32, SEGMENT_FLAG_EXEC),
+        ] {
+            assert_eq!(
+                validate_segments(&records, &[0u8; 64], 1, 0, PAGE),
+                Err(SegmentError::BadSegment),
+            );
+        }
+    }
+
+    /// Out of order and overlapping are one check seen from two sides: a table
+    /// whose ranges are unsorted cannot be proven non-overlapping in one pass.
+    #[test]
+    fn unsorted_and_overlapping_ranges_are_refused() {
+        let mut unsorted = [0u8; SEGMENT_LEN * 2];
+        unsorted[..SEGMENT_LEN].copy_from_slice(&segment(PAGE, PAGE, 0, 16, SEGMENT_FLAG_EXEC));
+        unsorted[SEGMENT_LEN..].copy_from_slice(&segment(0, PAGE, 16, 16, SEGMENT_FLAG_WRITE));
+
+        let mut overlapping = [0u8; SEGMENT_LEN * 2];
+        overlapping[..SEGMENT_LEN].copy_from_slice(&segment(0, PAGE * 2, 0, 16, SEGMENT_FLAG_EXEC));
+        overlapping[SEGMENT_LEN..].copy_from_slice(&segment(
+            PAGE,
+            PAGE,
+            16,
+            16,
+            SEGMENT_FLAG_WRITE,
+        ));
+
+        for records in [unsorted, overlapping] {
+            assert_eq!(
+                validate_segments(&records, &[0u8; 64], 2, 0, PAGE),
+                Err(SegmentError::BadSegment),
+            );
+        }
+    }
+
+    #[test]
+    fn a_file_range_past_the_payload_is_refused() {
+        let records = segment(0, PAGE, 0, 65, SEGMENT_FLAG_EXEC);
+        assert_eq!(
+            validate_segments(&records, &[0u8; 64], 1, 0, PAGE),
+            Err(SegmentError::BadFileRange),
+        );
+    }
+
+    /// The entry must land inside an *executable* segment, not merely inside
+    /// the image: an entry pointing at data is an image that cannot start.
+    #[test]
+    fn an_entry_outside_every_executable_segment_is_refused() {
+        let (records, data) = one_executable_segment();
+        assert_eq!(
+            validate_segments(&records, &data, 1, PAGE, PAGE),
+            Err(SegmentError::BadEntry),
+        );
+
+        let writable = segment(0, PAGE, 0, 32, SEGMENT_FLAG_WRITE);
+        assert_eq!(
+            validate_segments(&writable, &[0u8; 64], 1, 0, PAGE),
+            Err(SegmentError::BadEntry),
+        );
+    }
+
+    #[test]
+    fn a_footprint_past_the_image_ceiling_is_refused() {
+        // One page past the ceiling: exactly `MAX_IMAGE_BYTES` is admissible,
+        // so the fixture has to exceed it rather than reach it.
+        let over = u32::try_from(MAX_IMAGE_BYTES + u64::from(PAGE)).unwrap_or(u32::MAX);
+        let records = segment(0, over, 0, 0, SEGMENT_FLAG_EXEC);
+        assert_eq!(
+            validate_segments(&records, &[0u8; 64], 1, 0, PAGE),
+            Err(SegmentError::ImageTooLarge),
+        );
+    }
+
+    #[test]
+    fn a_record_shorter_than_the_contract_is_refused() {
+        let (records, data) = one_executable_segment();
+        assert_eq!(
+            validate_segments(&records[..SEGMENT_LEN - 1], &data, 1, 0, PAGE),
+            Err(SegmentError::Truncated),
+        );
     }
 }
