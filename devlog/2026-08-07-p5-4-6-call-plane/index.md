@@ -129,3 +129,32 @@ this plane must reproduce is not readable here either.
   [P5.4.6](../../roadmap/07-architecture-portability.md),
   [C8.6](../../roadmap/02-core-runtime.md),
   [P5.4.1](../../roadmap/07-architecture-portability.md).
+
+## Corrections
+
+- **2026-08-07.** The blocking finding above is not the whole story, and the
+  fix it proposes does not work. I tried it: deriving `firstControlSlot` from
+  the fabric's factory-grant count instead of the constant `2`. The derived
+  value was correct — `3`, matching the observed factories at slots 1 and 2 —
+  and the plane still failed identically.
+
+  The reason is one layer down, in `slime-root/src/channel.rs`.
+  `SlotCursors::take` hands every task its **slot 0 first**, unconditionally
+  (`used_slot_zero`), and only then continues from `executables + 1`. A fabric
+  holding two factory grants therefore receives its control endpoints at slots
+  `[0, 3, 4, 5, 6]` — slot 0 from the `used_slot_zero` rule, then 3 upward past
+  the factories. The call broker maps a control's slot to the caller's identity
+  by `FIRST_CONTROL_SLOT + index`, which assumes contiguity. **No single base
+  value can describe a set with a hole in it**, so the constant was never the
+  problem.
+
+  Why the stream plane is unaffected: its fabric holds no factory grant at all,
+  so `used_slot_zero` gives it slot 0 and the cursor continues from 1 —
+  contiguous by accident of having nothing installed between them.
+
+  The real fix is one of: make `used_slot_zero` yield to installed factories so
+  channel slots stay contiguous above them; or have the broker resolve each
+  control by identity rather than by `base + index`. Both are load-bearing
+  changes to code the nine passing planes depend on, which is why neither is
+  attempted here. The derivation experiment was reverted; the tree is back to
+  the constant.

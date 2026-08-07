@@ -1364,13 +1364,21 @@ A tenth image, `sel4-call`, carrying a one-route `ParameterCall` graph with two
 clients, a server, and a time source. It builds, admits, and mints every
 declared control channel; it does not yet run the C8.6 protocol.
 
-The blocker is named and specific: `fabric-service` resolves `FACTORY_SLOT = 0`
-and `BUFFER_FACTORY_SLOT = 1` as literals, which is the x86 boot layout. On
-seL4 a non-bootstrap component's runtime slots start at `executables + 1`, so a
-fabric with no executables receives its factories at 1 and 2 while slot 0 goes
-to its first channel. Resolving both from the generated profile — as
-`FABRIC_FIRST_CONTROL_SLOT` already is — is the fix, and it touches the working
-stream plane, so it carries its own fault injection.
+The blocker is named and specific, and it is not a constant. `SlotCursors::take`
+(`slime-root/src/channel.rs`) hands every task its slot 0 first, unconditionally,
+and only then continues from `executables + 1`. A fabric holding two factory
+grants therefore receives its controls at slots `[0, 3, 4, 5, 6]`, while the call
+broker maps a control's slot to the caller's identity by `FIRST_CONTROL_SLOT +
+index`. No base value describes a set with a hole in it. Deriving the base from
+the factory count was tried and reverted — the derived value was right and the
+plane failed identically.
+
+The stream plane is unaffected because its fabric holds no factory grant, so
+slot 0 and the cursor's 1-upward run happen to be contiguous.
+
+The fix is either to make `used_slot_zero` yield to installed factories, or to
+have the broker resolve controls by identity rather than by `base + index`. Both
+touch code all nine passing planes depend on.
 
 No gate is registered: a gate that cannot pass is not a gate.
 
