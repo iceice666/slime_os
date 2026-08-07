@@ -158,3 +158,27 @@ this plane must reproduce is not readable here either.
   changes to code the nine passing planes depend on, which is why neither is
   attempted here. The derivation experiment was reverted; the tree is back to
   the constant.
+
+- **2026-08-07 (second correction).** The correction above says the fabric's
+  controls land at `[0, 3, 4, 5, 6]` and calls the cause a slot *collision*
+  between channels and factory grants. The slot set is right; the word
+  "collision" is wrong, and the backlog entry B25 was filed on that error.
+
+  `cursors.declare` receives `next_runtime_slot - 1`, and staging has already
+  advanced that counter past every factory it installed. The cursor therefore
+  resumes *clear* of the factories, never on top of one. Verified two ways: by
+  the arithmetic (two executables plus two factories gives `declare(4)`, so the
+  cursor's first non-zero slot is 5), and by a temporary unit test against the
+  real `SlotCursors`, which returned `[0, 5, 6]`. `CapabilityTable::install` is
+  never called with an occupied slot, so nothing fails closed and nothing is
+  overwritten.
+
+  What is true, and what actually breaks the call plane, is narrower: the set is
+  **discontiguous**. Slot 0 comes from `used_slot_zero` and sits *below* the
+  factories, so the controls run `0, 3, 4, 5, 6` with a hole at 1–2. The broker
+  addresses controls as `FIRST_CONTROL_SLOT + index`, and no base value
+  describes a set with a gap. B25 has been rewritten to say this.
+
+  Recorded because the two diagnoses imply different fixes — a collision would
+  be a correctness bug in slot allocation, while a gap is a mismatch between how
+  slots are assigned and how one broker addresses them.

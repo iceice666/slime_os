@@ -1366,12 +1366,13 @@ declared control channel; it does not yet run the C8.6 protocol.
 
 The blocker is named and specific, and it is not a constant. `SlotCursors::take`
 (`slime-root/src/channel.rs`) hands every task its slot 0 first, unconditionally,
-and only then continues from `executables + 1`. A fabric holding two factory
-grants therefore receives its controls at slots `[0, 3, 4, 5, 6]`, while the call
-broker maps a control's slot to the caller's identity by `FIRST_CONTROL_SLOT +
-index`. No base value describes a set with a hole in it. Deriving the base from
-the factory count was tried and reverted — the derived value was right and the
-plane failed identically.
+via `used_slot_zero`; the cursor then resumes above everything staging installed.
+A fabric holding two factory grants therefore receives its controls at
+`[0, 3, 4, 5, 6]` — distinct slots with a hole at 1–2, not a collision — while
+the call broker maps a control's slot to the caller's identity by
+`FIRST_CONTROL_SLOT + index`. No base value describes a set with a gap. Deriving
+the base from the factory count was tried and reverted: the derived value was
+right and the plane failed identically. Tracked as B25.
 
 The stream plane is unaffected because its fabric holds no factory grant, so
 slot 0 and the cursor's 1-upward run happen to be contiguous.

@@ -16,52 +16,48 @@ at the bottom rather than deleting it.
 
 ## Open
 
-### B25 — a task's first channel takes slot 0 even when a factory grant already sits above it
+### B25 — a task's first channel takes slot 0, below any factory grant it holds
 
 **Problem:** `SlotCursors::take` (`slime-root/src/channel.rs`) hands every task
-its slot 0 first, unconditionally, via the `used_slot_zero` flag, and only then
-continues from `executables + 1`. Factory grants are installed during *staging*,
-from that same `executables + 1` base. So a non-bootstrap component holding both
-a factory grant and more than one channel receives a **discontiguous** slot set:
-slot 0 from the `used_slot_zero` rule, then the cursor's run starting at the
-first slot the factories already occupy.
+its slot 0 first, unconditionally, via the `used_slot_zero` flag. Factory grants
+are installed during *staging*, from `executables + 1` upward. A non-bootstrap
+component holding both a factory grant and channels therefore receives a
+**discontiguous** slot set: slot 0, then the cursor's run resuming *above* the
+factories.
 
-`declare`'s own doc states the contract this breaks — channels are "numbered
-clear of" the executables — which holds only when nothing else was installed in
-between.
+**Not a collision.** An earlier version of this entry claimed a second channel
+would overlap a factory slot. That is wrong: `cursors.declare` is called with
+`next_runtime_slot - 1` *after* staging has already advanced that counter past
+every factory, so the cursor resumes clear of them. Checked arithmetically and
+then empirically — a task with two executables and two factories (the
+component-graph plane's `spawn-service`) hands out `[0, 5, 6]`, not `[0, 3, 4]`.
+`CapabilityTable::install` is never reached with an occupied slot.
 
-**Evidence:** Observed on the seL4 component-graph plane
-(`build/slime-sel4-graph.elf`): `spawn-service` stages with `executables=2`,
-takes factories at slots 3 and 4, and takes its one channel at slot 0. It boots
-because it has exactly one channel. A second would take `executables + 1` = 3,
-which the endpoint factory already holds, and `CapabilityTable::install` returns
-`IpcError::WaiterConflict`.
+**Evidence:** The C8.6 call plane
+(`devlog/2026-08-07-p5-4-6-call-plane/`). `fabric-service` stages with
+`executables=0`, takes factories at slots 1 and 2, and takes five control
+channels at `[0, 3, 4, 5, 6]`. Every slot is distinct and every install
+succeeds; the set simply has a hole at 1–2. The call broker maps a control's
+slot to the caller's identity by `FIRST_CONTROL_SLOT + index`, which no base
+value can express over a set with a gap, so the broker reads the wrong slots and
+fails with `call role request`.
 
-Reached for real while building the C8.6 call plane
-(`devlog/2026-08-07-p5-4-6-call-plane/`), where the fabric holds two factories
-and five controls and lands on `[0, 3, 4, 5, 6]`. That plane fails for the
-related reason that its broker maps slot to caller identity by
-`FIRST_CONTROL_SLOT + index`, which no base value can express over a set with a
-hole in it.
+**Severity:** Latent, and reachable only by a component that holds a factory
+grant *and* more than one channel *and* addresses its channels positionally.
+No currently passing plane does all three: every other factory holder is either
+the bootstrap component (which takes layout slots, not cursor slots) or holds a
+single channel.
 
-**Severity:** Fails closed rather than corrupting — `install` refuses an occupied
-slot instead of overwriting it — so this is a boot-time refusal, not a confused
-deputy. No currently passing plane reaches it: every other factory holder is
-the bootstrap component, which takes layout slots rather than cursor slots.
+**Proposed fix:** Either drop `used_slot_zero` so channels are numbered strictly
+above everything staging installed, or have the broker resolve controls by
+identity rather than position. The first is simpler but moves the channel slot
+of every component that holds no factory — which is every component in the nine
+passing planes — so each gate asserting a slot number needs re-blessing. That
+re-blessing is why this is filed rather than fixed in passing.
 
-**Proposed fix:** Make the cursor aware of what staging already installed,
-rather than assuming slot 0 is free and the run above the executables is clear.
-Either have `declare` take the highest occupied slot instead of the executable
-count, or drop `used_slot_zero` and number channels strictly above everything
-installed. The second is simpler and costs slot 0 on components that hold no
-factory — which is every component in the nine passing planes, so it moves
-their channel slots by one and every gate asserting a slot number would need
-re-blessing. That re-blessing is the reason this is filed rather than fixed in
-passing.
-
-**Exit condition:** A component holding a factory grant and two or more
-channels boots with a contiguous, non-overlapping slot set, asserted on a plane
-that declares one, with a fault injection showing the overlap is refused.
+**Exit condition:** A component holding a factory grant and two or more channels
+addresses every one of them correctly, asserted on a plane that declares such a
+component, with a fault injection showing a mis-numbered slot is caught.
 
 ### B12 — the component build's `--remap-path-prefix` names a path that does not exist
 
