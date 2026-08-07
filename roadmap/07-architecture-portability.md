@@ -1354,6 +1354,14 @@ graph's retained publisher lends a `>MAX_INLINE_BYTES` sample instead. That is a
 graph-shape gap rather than a mechanism one, and it is what stands between here
 and the remaining arms — retry exhaustion, lifespan, lease, tie ordering, and
 the runtime incompatible-QoS event, all of which sit after it in the scenario.
+
+Two experiments bracket it, so the committed order is a local maximum rather
+than an untested guess. Removing a yield loses all three working arms; adding a
+bounded run of them (8 or 64) closes the race — `inline samples published`
+appears and the retained failure is gone — but then `publish_large` never
+returns, so time is never advanced and every timed arm reads zero. The gap is
+therefore not reachable by scheduling in either direction, and the fixture has
+to supply an inline retained head independently of when any publisher runs.
 No gate is registered while the plane cannot pass. See
 [`devlog/2026-08-07-p5-4-5-qos-clock/`](../devlog/2026-08-07-p5-4-5-qos-clock/index.md).
 

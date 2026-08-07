@@ -153,3 +153,36 @@ a real regression while it was being written (below).
   and the graph must have an inline retained head by then — which the fixture has
   to guarantee structurally, by declaring a retained publisher that publishes
   small, rather than by any ordering of the existing one.
+
+- **2026-08-07 (second correction).** The correction above says one `yield_now`
+  before the clock driver's spawn removes the working arms, and concludes the
+  fixture must guarantee an inline retained head structurally. The first half is
+  right; the second is better founded now, because a *bounded run* of yields was
+  tried too and it fails differently.
+
+  With 64 yields before `fabric-publisher-b`'s spawn the race genuinely closes:
+  `[fabric-publisher] inline samples published` appears, `no inline retained
+  publisher` is gone, `fabric-subscriber` reaches `done` with exit 0, and the six
+  remaining failures are exactly the unconfigured root-launched instances the
+  stream gate budgets for. So the ordering diagnosis was correct — the probes
+  (`route receive denied`, `re-delegation denied`, `widening denied`) are three
+  root round-trips on this mechanism where they are plain syscalls on x86, and
+  they are what let the clock run ahead.
+
+  But the plane then hangs instead: `fabric-publisher-b` stops at
+  `diagnostics sample published` and never returns from `publish_large`, so
+  simulated time is never advanced at all and every timed arm reads zero.
+  Retrying with 8 yields hangs the same way. The delay that lets the inline
+  publisher win the race also perturbs the loan handshake `publish_large`
+  depends on.
+
+  So the gap is **not** reachable by scheduling at all — neither by removing a
+  yield nor by adding a bounded number of them. Both ends of that range are
+  worse than the committed order, which keeps three arms observable. The
+  follow-up stands and is now better justified: the graph has to give the fabric
+  an inline retained head without depending on when any publisher runs, which
+  means declaring a retained publisher that publishes small and early rather
+  than reordering the ones it has.
+
+  Recorded because the two experiments bracket the option: the committed plane is
+  a local maximum for scheduling, and the remaining work is a fixture change.
