@@ -1,0 +1,8 @@
+test bootstate::tests::exhausted_pending_round_trips ... ok
+fatal runtime error: failed to initiate panic, error test component_image::tests::a_nonzero_reserved_field_fails_closed ... ok
+5, aborting
+test component_image::tests::a_record_shorter_than_the_contract_is_refused ... ok
+error: test failed, to rerun pass `--lib`
+
+Caused by:
+  process didn't exit successfully: `/Users/iceice666/code/slime_os/target/debug/deps/boot_contracts-18c773108398f5c3` (signal: 6, SIGABRT: process abort signal)

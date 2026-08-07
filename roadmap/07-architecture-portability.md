@@ -1243,7 +1243,7 @@ compose the earlier.
 | P5.4.7 | C8.7 | Native operations |
 | P5.4.8 | C8.8 | Filtered introspection and declared interposition |
 | P5.4.9 | C8.9, C8.10 | Typed full-profile closure and collision-free full-graph bootstrap |
-| P5.4.10 | the partials | C8.1 collision rejection, C8.3 graph provenance, C8.4's structural arm, C7.1's retained-v2 arm, B10's missing seL4 layout fixture, B11's product-vs-test pair, `component_image.rs`'s malformed corpus, `task_reclamation.rs`'s three uncovered properties |
+| P5.4.10 | the partials | **In progress** — the `component_image.rs` segment corpus is done; see below |
 
 Their individual deliverables stay unwritten until each is opened: the
 inventory fixes *what* each must prove, not how, and specifying the mechanism
@@ -1296,6 +1296,38 @@ from "nothing to check". `just test_sel4_root` covers the ceiling table itself.
 Not closed by this: the oracle's `kernel/tests/fabric_manifest.rs` also asserts
 route-authority tuples, interposition-chain termination, and per-pair QoS
 compatibility over the booted graph. Those stay with P5.4.10's partials.
+
+### P5.4.10 — The recorded partials
+
+**Status:** In progress — the `component_image.rs` segment corpus is portable
+and host-tested; the rest are open.
+
+**Depends on:** P5.4.1.
+
+The gaps P5.4.1 recorded that are each too small for their own slice, collected
+so none is lost. Unlike P5.4.2–P5.4.9 these do not map one-to-one onto oracle
+milestones; they are the residue of milestones otherwise covered.
+
+| Partial | State |
+| --- | --- |
+| `component_image.rs`'s malformed segment corpus | **Done** — `boot_contracts::component_image::validate_segments`, eleven host tests under `just test_host` and `just miri`; see [`devlog/2026-08-07-p5-4-10-segment-corpus/`](../devlog/2026-08-07-p5-4-10-segment-corpus/index.md) |
+| C8.1 collision rejection | Open — the artifact rides along; identity determinism and pre-artifact collision are unobserved on seL4 |
+| C8.2 route-authority tuples, interposition termination, per-pair QoS | Open — the aggregate half closed as P5.4.4; `kernel/tests/fabric_manifest.rs`'s live-graph assertions remain |
+| C8.3 graph provenance | Open — the rights algebra is observed; that the fabric answers from the *authenticated* graph rather than a compile-time table is not |
+| C8.4's structural arm | Open — the transcript is reproduced exactly; `kernel/tests/fabric_stream.rs`'s "what a transcript cannot show" assertions are not |
+| C7.1's retained-v2 rollback arm | Open — no seL4 gate admits a v2 generation |
+| B10's seL4 layout fixture | Open — slot numbers are asserted in three gates; no frozen-fixture diff exists for any seL4 layout |
+| B11's product-vs-test profile pair | Open — the seL4 fixtures are per-scenario siblings, not profiles of one manifest |
+| `task_reclamation.rs`'s per-cycle drift, cost scaling, rejected-spawn conservation | Open — teardown-to-zero is covered; these three are not |
+
+Two of the oracle's fifteen `component_image.rs` cases were deliberately not
+ported: the `stack_bytes` rules read a page constant in a header context rather
+than a segment one, and belong with a header validator if one is written.
+
+#### Exit condition
+
+Every row above is closed or explicitly reclassified, each with its own devlog
+entry.
 
 ### P5.4.final — Delete `kernel/`
 
