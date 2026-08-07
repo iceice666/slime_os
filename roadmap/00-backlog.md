@@ -63,9 +63,21 @@ Two resource-exhaustion readings are also ruled out, so a bound is not the cause
 * *Frame-table exhaustion.* `FABRIC_FRAME_CAPACITY` is 32 against a retained
   demand of 4, and the transcript carries no frame-exhaustion marker.
 
-What remains is the broker's control flow rather than its sizing: whether the
-wake is consumed on the new path, the reply is answered to a stale saved
-capability, or the broker never returns to the pending request.
+A fifth reading is ruled out too, and it moves the suspicion off the broker: the
+late-subscriber path **works**. With the diagnostics route retained the transcript
+carries `retained history offered to late subscriber`,
+`retained history replayed to late subscriber`, and
+`retained history expired for late subscriber` in order — and that replay is what
+produces the `QoS lifespan expired` arm. The fabric's capability slots peak at 23
+of 32, so it is not out of slots either. The broker is healthy and simply parks on
+its stream sources with `fabric-publisher`'s request never served.
+
+What remains is therefore narrower than "the broker's control flow": every actor
+looks correct in isolation, the reply capability was saved, `deliver_wake` ran,
+and the task never resumed. The next step is instrumenting `ParkedReplies` — the
+root parks 33 times and recycles 323 replies across this boot, so establishing
+whether task 10's entry is still held at teardown, or was answered to a slot that
+no longer names its caller, is what separates a lost reply from an unserved one.
 
 **Severity:** Blocks P5.4.5's exit condition and nothing else. Latent for every
 other plane: no other seL4 graph declares two retained routes on one publisher.
