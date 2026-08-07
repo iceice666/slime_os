@@ -182,3 +182,25 @@ this plane must reproduce is not readable here either.
   Recorded because the two diagnoses imply different fixes — a collision would
   be a correctness bug in slot allocation, while a gap is a mismatch between how
   slots are assigned and how one broker addresses them.
+
+- **2026-08-07 (third correction — superseded).** Both corrections above, and
+  the body they correct, name `SlotCursors::take` as the blocker. That is
+  wrong, and the entry is superseded by
+  [`devlog/2026-08-07-p5-4-6-call-spawn-semantics/`](../2026-08-07-p5-4-6-call-spawn-semantics/index.md).
+
+  The slot gap is real but is a *consequence of this fixture's shape*, not a
+  defect in slot allocation: declaring the control channels as generation
+  grants is what put them on the root's channel cursor. Having `init` mint the
+  pairs and hand them out at spawn — which is what `drive_stream_plane` already
+  does — removes the gap entirely, and the plane still fails.
+
+  The real blocker is that `slime-root`'s `distribute_channel_ends` treats a
+  spawn-granted endpoint as a **move** while the oracle's
+  `preflight_spawn_grant` derives a **copy**. The x86 call plane depends on the
+  copy: `launch_fabric_calls` keeps every service half and transfers each
+  participant's supervision handle afterwards. B25 has been rewritten again to
+  say this.
+
+  Recorded because the two diagnoses send a reader to different files: the
+  retired one to `slime-root/src/channel.rs`, where nothing is wrong, and the
+  current one to a semantic divergence from the frozen oracle.

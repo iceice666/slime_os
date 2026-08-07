@@ -1,0 +1,125 @@
+  [807fda1000..8080000000)
+Booting all finished, dropped to user space
+SLIME_ROOT generation admitted number=18 components=6 grants=11 health=2 kernel=1 bootstrap=1
+SLIME_ROOT fabric graph=admitted schemas=1 routes=1 participants=3 interpositions=0
+SLIME_ROOT authority manifest=[14, 36, 1c, 57, 43, f9, 1d, f2, cc, cd, 77, 99, 8e, 36, 92, 89, 88, 95, 64, 38, 70, 60, 65, 49, 04, e5, cb, e5, 91, 28, 71, ae]
+SLIME_ROOT graph admitted; legacy SLIMECM images not activated components=6 slimecm=0 elf=6 unrecognized=0
+SLIME_ROOT allocator slots=3403 untypeds=30 bytes=531908976
+SLIME_TIMER acquired irq=30 freq_hz=62500000
+SLIME_TIMER delivered badge=0x1 polls=13365
+SLIME_TIMER serviced events=1 programming=Disarm
+SLIME_TIMER advanced start=1381062 end=2119875 delta=738813
+SLIME_TIMER OK
+SLIME_GRAPH staged task=0 component=fabric-call-client grants=1 executables=0 window=0x239000 frames=58 tables=3 entry=0x211fc0
+SLIME_GRAPH staged task=1 component=fabric-call-client-b grants=1 executables=0 window=0x238000 frames=57 tables=3 entry=0x211c50
+SLIME_GRAPH staged task=2 component=fabric-call-server grants=1 executables=0 window=0x239000 frames=58 tables=3 entry=0x211db0
+SLIME_GRAPH staged task=3 component=fabric-call-time grants=1 executables=0 window=0x236000 frames=55 tables=3 entry=0x211540
+SLIME_GRAPH staged task=4 component=fabric-service grants=5 executables=0 window=0x23b000 frames=60 tables=3 entry=0x2125d0
+SLIME_GRAPH factory placed task=5 component=init slot=0 kind=endpoint-factory
+SLIME_GRAPH factory placed task=5 component=init slot=1 kind=shared-buffer-factory
+SLIME_GRAPH staged task=5 component=init grants=2 executables=5 window=0x237000 frames=56 tables=3 entry=0x2118f8
+SLIME_GRAPH staged components=6 loadable=6 slimecm=0 wrong_target=0 unrecognized=0
+SLIME_GRAPH channel grant=fabric-call-client-b-control key=0 producer=4 consumer=1 queues=2
+SLIME_GRAPH channel end task=4 slot=0 key=0 rights=0x3
+SLIME_GRAPH channel end task=1 slot=0 key=0 rights=0x3
+SLIME_GRAPH channel grant=fabric-call-client-control key=1 producer=4 consumer=0 queues=2
+SLIME_GRAPH channel end task=4 slot=1 key=1 rights=0x3
+SLIME_GRAPH channel end task=0 slot=0 key=1 rights=0x3
+SLIME_GRAPH channel grant=fabric-call-server-control key=2 producer=4 consumer=2 queues=2
+SLIME_GRAPH channel end task=4 slot=2 key=2 rights=0x3
+SLIME_GRAPH channel end task=2 slot=0 key=2 rights=0x3
+SLIME_GRAPH channel grant=fabric-call-time-control key=3 producer=4 consumer=3 queues=2
+SLIME_GRAPH channel end task=4 slot=3 key=3 rights=0x3
+SLIME_GRAPH channel end task=3 slot=0 key=3 rights=0x3
+SLIME_GRAPH channels grants=4 channels=4 queues=8 slots=8 unplaced=0
+[layout] path=init slots=7 max=64
+[layout] 0 endpoint-factory - 0x20000
+[layout] 1 shared-buffer-factory - 0x1000000
+[layout] 2 executable fabric-service 0x1000c
+[layout] 3 executable fabric-call-client 0x10008
+[layout] 4 executable fabric-call-client-b 0x10008
+[layout] 5 executable fabric-call-server 0x10008
+[layout] 6 executable fabric-call-time 0x10008
+[layout] end
+SLIME_GRAPH activated components=6
+SLIME_GRAPH quota task=0 component=fabric-call-client pages=4 buffers=2 mappings=2 loans=2
+SLIME_GRAPH quota task=1 component=fabric-call-client-b pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH quota task=2 component=fabric-call-server pages=4 buffers=2 mappings=2 loans=2
+SLIME_GRAPH quota task=3 component=fabric-call-time pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH quota task=4 component=fabric-service pages=24 buffers=12 mappings=12 loans=12
+SLIME_GRAPH quota task=5 component=init pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH quotas declared=6 budgeted=3 holders=3
+SLIME_GRAPH window bound task=5 base=0x237000 len=4096
+SLIME_GRAPH endpoint minted task=5 key=4 slots=7,8
+SLIME_GRAPH endpoint minted task=5 key=5 slots=9,10
+SLIME_GRAPH endpoint minted task=5 key=6 slots=11,12
+SLIME_GRAPH endpoint minted task=5 key=7 slots=13,14
+SLIME_GRAPH endpoint minted task=5 key=8 slots=15,16
+SLIME_GRAPH endpoint minted task=5 key=9 slots=17,18
+[init] call control channels minted
+SLIME_GRAPH spawn authorized task=5 slot=2 component=fabric-service grants=6
+SLIME_GRAPH quota task=6 component=fabric-service pages=24 buffers=12 mappings=12 loans=12
+SLIME_GRAPH channel handed parent=5 child=6 key=4 slot=2
+SLIME_GRAPH channel handed parent=5 child=6 key=5 slot=3
+SLIME_GRAPH channel handed parent=5 child=6 key=6 slot=4
+SLIME_GRAPH channel handed parent=5 child=6 key=7 slot=5
+SLIME_GRAPH spawned task=5 child=6 component=fabric-service grants=6 channels=4 handle=7
+[init] call fabric spawned
+SLIME_GRAPH spawn authorized task=5 slot=3 component=fabric-call-client grants=5
+SLIME_GRAPH quota task=7 component=fabric-call-client pages=4 buffers=2 mappings=2 loans=2
+SLIME_GRAPH channel handed parent=5 child=7 key=4 slot=0
+SLIME_GRAPH channel handed parent=5 child=7 key=8 slot=3
+SLIME_GRAPH channel handed parent=5 child=7 key=9 slot=4
+SLIME_GRAPH spawned task=5 child=7 component=fabric-call-client grants=5 channels=3 handle=8
+SLIME_GRAPH spawn authorized task=5 slot=4 component=fabric-call-client-b grants=2
+SLIME_GRAPH quota task=8 component=fabric-call-client-b pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH channel handed parent=5 child=8 key=5 slot=0
+SLIME_GRAPH channel handed parent=5 child=8 key=9 slot=1
+SLIME_GRAPH spawned task=5 child=8 component=fabric-call-client-b grants=2 channels=2 handle=9
+SLIME_GRAPH spawn authorized task=5 slot=5 component=fabric-call-server grants=3
+SLIME_GRAPH quota task=9 component=fabric-call-server pages=4 buffers=2 mappings=2 loans=2
+SLIME_GRAPH channel handed parent=5 child=9 key=6 slot=0
+SLIME_GRAPH spawned task=5 child=9 component=fabric-call-server grants=3 channels=1 handle=10
+[init] call participants spawned
+SLIME_GRAPH spawn authorized task=5 slot=6 component=fabric-call-time grants=2
+SLIME_GRAPH quota task=10 component=fabric-call-time pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH channel handed parent=5 child=10 key=7 slot=0
+SLIME_GRAPH channel handed parent=5 child=10 key=8 slot=1
+SLIME_GRAPH spawned task=5 child=10 component=fabric-call-time grants=2 channels=2 handle=11
+SLIME_GRAPH parked task=5 reason=wait
+SLIME_GRAPH window bound task=10 base=0x236000 len=4096
+SLIME_GRAPH parked task=10 reason=wait
+SLIME_GRAPH window bound task=9 base=0x239000 len=4096
+SLIME_GRAPH sent task=9 channel=6 bytes=64 caps=0 queued=1
+SLIME_GRAPH parked task=9 reason=wait
+SLIME_GRAPH window bound task=8 base=0x238000 len=4096
+SLIME_GRAPH sent task=8 channel=5 bytes=64 caps=0 queued=1
+SLIME_GRAPH parked task=8 reason=wait
+SLIME_GRAPH window bound task=7 base=0x239000 len=4096
+SLIME_GRAPH sent task=7 channel=4 bytes=64 caps=0 queued=1
+SLIME_GRAPH parked task=7 reason=wait
+SLIME_GRAPH window bound task=6 base=0x23b000 len=4096
+SLIME_GRAPH received task=6 channel=4 bytes=64 caps=0
+SLIME_GRAPH window bound task=4 base=0x23b000 len=4096
+SLIME_GRAPH parked task=4 reason=wait
+SLIME_GRAPH window bound task=3 base=0x236000 len=4096
+[fabric-call] fail: time phase receive
+SLIME_GRAPH component exit task=3 status=1
+SLIME_GRAPH peer death task=3 channels=1 woken=0
+SLIME_GRAPH quota released task=3 live=10
+SLIME_GRAPH window bound task=2 base=0x239000 len=4096
+SLIME_GRAPH sent task=2 channel=2 bytes=64 caps=0 queued=1
+SLIME_GRAPH parked task=2 reason=wait
+SLIME_GRAPH received task=4 channel=2 bytes=64 caps=0
+SLIME_GRAPH window bound task=1 base=0x238000 len=4096
+SLIME_GRAPH sent task=1 channel=0 bytes=64 caps=0 queued=1
+SLIME_GRAPH parked task=1 reason=wait
+SLIME_GRAPH window bound task=0 base=0x239000 len=4096
+SLIME_GRAPH sent task=0 channel=1 bytes=64 caps=0 queued=1
+SLIME_GRAPH parked task=0 reason=wait
+SLIME_GRAPH served live=10 unsupported=0 unimplemented=0 buffers=0 windows=10 tables=10
+SLIME_GRAPH tasks reclaimed live=10 slots=62
+SLIME_GRAPH channels served sends=6 receives=2 parks=9 settled=1 parked=8 queues=18 replies=474 minted=10
+SLIME_GRAPH loans served=0 loans=0 mappings=0 regions=0 transit=0 orphans=0 aliases=0 quotas=10
+SLIME_GRAPH spawns served=5 drops=0 endpoints=6 terminated=1 waits=1
+SLIME_GRAPH transfers served=0

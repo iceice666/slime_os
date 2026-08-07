@@ -16,48 +16,78 @@ at the bottom rather than deleting it.
 
 ## Open
 
-### B25 — a task's first channel takes slot 0, below any factory grant it holds
+### B25 — a spawn-granted endpoint moves on seL4 and copies on x86, so a parent cannot broker a later introduction
 
-**Problem:** `SlotCursors::take` (`slime-root/src/channel.rs`) hands every task
-its slot 0 first, unconditionally, via the `used_slot_zero` flag. Factory grants
-are installed during *staging*, from `executables + 1` upward. A non-bootstrap
-component holding both a factory grant and channels therefore receives a
-**discontiguous** slot set: slot 0, then the cursor's run resuming *above* the
-factories.
+**Problem:** `slime-root`'s `distribute_channel_ends` (`slime-root/src/main.rs`)
+treats an endpoint named by a spawn grant as a **move**: it reassigns the
+channel's holder to the child and calls `table.drop_slot` on the parent's slot.
+The retired kernel copies: `preflight_spawn_grant`
+(`kernel/src/task/mod.rs:286`) performs `cap.derive(grant.rights)` at `:320`
+into a fresh vector that `spawn_with_caps_for` (`:402`) installs into the
+child, and neither reads nor mutates the parent's table — so the parent keeps
+its end.
 
-**Not a collision.** An earlier version of this entry claimed a second channel
-would overlap a factory slot. That is wrong: `cursors.declare` is called with
-`next_runtime_slot - 1` *after* staging has already advanced that counter past
-every factory, so the cursor resumes clear of them. Checked arithmetically and
-then empirically — a task with two executables and two factories (the
-component-graph plane's `spawn-service`) hands out `[0, 5, 6]`, not `[0, 3, 4]`.
-`CapabilityTable::install` is never reached with an occupied slot.
+That difference is invisible to every component that hands an end away and
+never touches it again — which is every component in the nine passing planes —
+and fatal to any composition where a parent grants one end at spawn and then
+*uses* that channel itself. The x86 call plane is exactly such a composition:
+`init.rs::launch_fabric_calls` spawns `fabric-service` with all four service
+halves, keeps them, and afterwards moves each participant's supervision handle
+to the broker with `cap_transfer` over the matching half.
 
-**Evidence:** The C8.6 call plane
-(`devlog/2026-08-07-p5-4-6-call-plane/`). `fabric-service` stages with
-`executables=0`, takes factories at slots 1 and 2, and takes five control
-channels at `[0, 3, 4, 5, 6]`. Every slot is distinct and every install
-succeeds; the set simply has a hole at 1–2. The call broker maps a control's
-slot to the caller's identity by `FIRST_CONTROL_SLOT + index`, which no base
-value can express over a set with a gap, so the broker reads the wrong slots and
-fails with `call role request`.
+**Not a slot-numbering defect.** Two earlier versions of this entry blamed
+`SlotCursors::take`'s `used_slot_zero`, first as a slot *collision* and then as
+a slot *gap*. The gap is real, but it was a consequence of declaring the
+control channels as **generation grants** — the root then numbers a launched
+component's ends from its own cursor, which resumes above the factory grants
+staging installed. Having `init` mint the pairs and hand them out at spawn
+removes it, because `construct_child` installs a child's grants at `0..count`
+in the requested order. Observed with the pairs minted: the fabric's four
+controls arrive as `channel handed parent=5 child=6 … slot=2,3,4,5`,
+contiguous above the two factory grants at the head of its grant array.
 
-**Severity:** Latent, and reachable only by a component that holds a factory
-grant *and* more than one channel *and* addresses its channels positionally.
-No currently passing plane does all three: every other factory holder is either
-the bootstrap component (which takes layout slots, not cursor slots) or holds a
-single channel.
+The grants themselves stay in the manifest, which the first attempt at this got
+wrong by deleting them. `_control_sources`
+(`scripts/build/build-generation.py:833`) derives `FABRIC_CALL_CLIENTS` — the
+table the broker maps a control slot to a caller identity with — from exactly
+those four grant *names*, and in `FABRIC_CALL_CONTROL_GRANTS` order rather than
+the builder's `(name, source, target)` sort. Removing them emptied the table
+and tripped `request_response_controls`' four-control assert before the broker
+read a slot. They are the naming source; the minted endpoints are the
+authority.
 
-**Proposed fix:** Either drop `used_slot_zero` so channels are numbered strictly
-above everything staging installed, or have the broker resolve controls by
-identity rather than position. The first is simpler but moves the channel slot
-of every component that holds no factory — which is every component in the nine
-passing planes — so each gate asserting a slot number needs re-blessing. That
-re-blessing is why this is filed rather than fixed in passing.
+**Evidence:** `devlog/2026-08-07-p5-4-6-call-spawn-semantics/`. With the plane
+rebuilt to mint its control pairs, the boot reaches
+`SLIME_GRAPH channel handed parent=5 child=6 key=4 slot=2` — the fabric's end
+arriving *and* init's slot being dropped in one step. Every participant's role
+request then reaches the broker (`SLIME_GRAPH received task=4 channel=2`) and
+is never answered: `Broker::provision` blocks in `consume_supervision` awaiting
+a handle no one on this plane can send, and the graph ends `live=10`,
+`parked=8`, `transfers served=0`.
 
-**Exit condition:** A component holding a factory grant and two or more channels
-addresses every one of them correctly, asserted on a plane that declares such a
-component, with a fault injection showing a mis-numbered slot is caught.
+The obvious alternative — each participant sending a handle naming itself — is
+not constructible. `serve_spawn` installs a supervision handle only into the
+**parent's** table, and only after `construct_child` has built the child's
+(`slime-root/src/main.rs:3586-3603`), so no component ever holds a handle
+naming itself.
+
+**Severity:** Latent for every current plane, and a hard blocker for any plane
+whose parent must broker an introduction after spawning. It is a genuine
+*semantic* divergence from the frozen oracle, not a numbering accident, so it
+cannot be resolved by re-blessing a fixture.
+
+**Proposed fix:** Decide which semantics the model wants and make both
+implementations agree, rather than working around it per plane. A copy matches
+the oracle and keeps `init.rs` portable, but it means two tasks name one
+channel end and `ChannelTable` resolves queues by holder — so the copy needs a
+holder model that admits more than one. A move is the cheaper invariant and is
+arguably the more capability-honest one, but then the oracle's own call plane
+is not portable as written and `launch_fabric_calls` needs restructuring.
+
+**Exit condition:** A parent grants one end of a minted pair at spawn, uses the
+other end afterwards to deliver a capability to that child, and the child
+observes it — asserted on a plane that declares such a composition, with a
+fault injection showing the parent's end going missing is caught.
 
 ### B12 — the component build's `--remap-path-prefix` names a path that does not exist
 

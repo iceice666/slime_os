@@ -1240,7 +1240,7 @@ compose the earlier.
 | P5.4.3 | M6.1–M6.7 | Five gaps (directory, dango, generation commands, powerbox, transfer) and two partials (M6.1 v2 determinism, M6.2 protocol surface) |
 | P5.4.4 | C8.2 | **Complete** — aggregate fabric-graph admission before component launch; see below |
 | P5.4.5 | C8.5 | **In progress** — reliable/retained/timed QoS, plus the two C8.5 assertions colocated in `kernel/tests/fabric_stream.rs`. Three arms already ran on the seL4 stream plane unasserted (matching-before-data, bounded loss under a stall, peer death as a distinct event) and are now gated; the arms needing simulated time — retry exhaustion, deadline, lifespan, liveliness, lease, tie ordering — remain. See [`devlog/2026-08-07-p5-4-5-qos-arms/`](../devlog/2026-08-07-p5-4-5-qos-arms/index.md) |
-| P5.4.6 | C8.6 | **In progress** — bounded native calls. The `sel4-call` image builds, admits its graph, and mints every control channel; the call broker resolves its endpoint factory at a literal slot 0, which the seL4 slot model does not produce. No gate yet. See [`devlog/2026-08-07-p5-4-6-call-plane/`](../devlog/2026-08-07-p5-4-6-call-plane/index.md) |
+| P5.4.6 | C8.6 | **In progress** — bounded native calls. The `sel4-call` image builds, admits its graph, mints and binds every control channel, spawns all five components, and delivers each role request to the broker; it then deadlocks, because `slime-root` treats a spawn-granted endpoint as a *move* while the oracle treats it as a *copy*, so init cannot hand the broker the supervision handles the x86 plane transfers after spawning. Tracked as B25. No gate yet. See [`devlog/2026-08-07-p5-4-6-call-spawn-semantics/`](../devlog/2026-08-07-p5-4-6-call-spawn-semantics/index.md) |
 | P5.4.7 | C8.7 | Native operations |
 | P5.4.8 | C8.8 | Filtered introspection and declared interposition |
 | P5.4.9 | C8.9, C8.10 | Typed full-profile closure and collision-free full-graph bootstrap |
@@ -1361,27 +1361,45 @@ Every item in C8.5's required-checks list has an observed seL4 gate.
 **Depends on:** P5.4.1.
 
 A tenth image, `sel4-call`, carrying a one-route `ParameterCall` graph with two
-clients, a server, and a time source. It builds, admits, and mints every
-declared control channel; it does not yet run the C8.6 protocol.
+clients, a server, and a time source. It builds, admits, mints and binds every
+control channel, and spawns all five components; it does not yet run the C8.6
+protocol.
 
-The blocker is named and specific, and it is not a constant. `SlotCursors::take`
-(`slime-root/src/channel.rs`) hands every task its slot 0 first, unconditionally,
-via `used_slot_zero`; the cursor then resumes above everything staging installed.
-A fabric holding two factory grants therefore receives its controls at
-`[0, 3, 4, 5, 6]` — distinct slots with a hole at 1–2, not a collision — while
-the call broker maps a control's slot to the caller's identity by
-`FIRST_CONTROL_SLOT + index`. No base value describes a set with a gap. Deriving
-the base from the factory count was tried and reverted: the derived value was
-right and the plane failed identically. Tracked as B25.
+The blocker recorded here previously — `SlotCursors::take`'s `used_slot_zero`
+leaving the fabric's controls at `[0, 3, 4, 5, 6]` — was a **symptom of the
+fixture's shape**, and is gone. Declaring the control channels as generation
+grants is what put them on the root's channel cursor, which resumes above the
+factory grants staging installed. Having `init` mint the pairs and hand them
+out at spawn (as `drive_stream_plane` already does) numbers them `0..count` in
+grant order, so the broker's compiled-in `FACTORY_SLOT`,
+`BUFFER_FACTORY_SLOT`, and `FABRIC_FIRST_CONTROL_SLOT` now resolve exactly.
+The same change removes a second, previously unrecorded hazard: the builder
+sorts grants by `(name, source, target)`, so `fabric-call-client-b-control`
+sorted ahead of `fabric-call-client-control` and the broker would have bound
+client B's identity to client A's slot regardless of contiguity.
 
-The stream plane is unaffected because its fabric holds no factory grant, so
-slot 0 and the cursor's 1-upward run happen to be contiguous.
+The real blocker is a semantic divergence from the frozen oracle, and it cannot
+be fixed in a fixture. `slime-root`'s `distribute_channel_ends` treats a
+spawn-granted endpoint as a **move** — it reassigns the channel and drops the
+parent's slot — while the oracle's `spawn_from_cap` treats it as a
+**derive-copy**. The x86 call plane depends on the copy: `init` grants every
+service half to the fabric, keeps them, and afterwards `cap_transfer`s each
+participant's supervision handle over the matching half. Here init holds
+neither end after the spawn, so the transfer has nowhere to go and all three
+participants fail `role receive`.
 
-The fix is either to make `used_slot_zero` yield to installed factories, or to
-have the broker resolve controls by identity rather than by `base + index`. Both
-touch code all nine passing planes depend on.
+The cycle is what makes reordering insufficient: a participant needs a handle
+naming the fabric, so the fabric must exist first; the fabric needs a handle
+naming each participant over that participant's own control channel, so the
+participants must exist first. The oracle cuts it by letting init retain the
+service halves.
 
-No gate is registered: a gate that cannot pass is not a gate.
+Tracked as B25, rewritten from the numbering claim to this one. It is a
+decision about the capability model rather than a bug fix, and it touches the
+path all nine passing planes take.
+
+No gate is registered: a gate that cannot pass is not a gate. See
+[`devlog/2026-08-07-p5-4-6-call-spawn-semantics/`](../devlog/2026-08-07-p5-4-6-call-spawn-semantics/index.md).
 
 #### Exit condition
 
