@@ -178,3 +178,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-07 | [B23 — `slime-root`'s unit tests were run by no gate](2026-08-07-b23-slime-root-host-tests/index.md) | Defect | Verified | B23, P5.4.1, P5.4 |
 | 2026-08-07 | [B24 — a shared-buffer quota was never released](2026-08-07-b24-shared-buffer-quotas/index.md) | Defect | Verified | B24, B22, B16, P5.4.1 |
 | 2026-08-07 | [ROS 2 transport: self-built DDSI-RTPS/XCDR vs Zenoh](2026-08-07-ros2-transport-zenoh-vs-dds/index.md) | Decision | Proposed | R0, R1, R2, C9, X1, P5 |
+| 2026-08-07 | [P5.4.4 — C8.2 aggregate fabric-graph admission on seL4](2026-08-07-p5-4-4-fabric-graph-admission/index.md) | Change | Verified | P5.4.4, P5.4, P5.4.1, C8.2 |

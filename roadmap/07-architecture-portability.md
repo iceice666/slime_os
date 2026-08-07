@@ -2,7 +2,7 @@
 
 **Purpose:** Preserve one Slime capability/component/generation architecture across target profiles while making AArch64 and Raspberry Pi 5 the near-term product path.
 
-**Status:** In progress - P0, P1, P2.1, P5.1, P5.2, all of P5.3, all of P5.5, and P5.4.1 complete.
+**Status:** In progress - P0, P1, P2.1, P5.1, P5.2, all of P5.3, all of P5.5, P5.4.1, and P5.4.4 complete.
 
 **Decision:** AArch64/Raspberry Pi 5 is now the near-term physical target because the current product goal is the RPi5 ROS 2 two-node demo. The existing x86-64 QEMU path remains the regression oracle for completed work until each semantic corpus is replayed on AArch64, but x86-64/Framework is no longer the product-leading roadmap. RV64 is deferred. As of P5, the AArch64 kernel-side mechanism is being substituted with upstream seL4 rather than hand-written: see [P5](#p5-sel4-microkernel-substitution), which supersedes the custom-kernel half of P2.2-P2.6 if it completes.
 
@@ -448,7 +448,7 @@ One named Raspberry Pi 5 profile runs the verified isolated Slime vertical slice
 ## P5: seL4 microkernel substitution
 
 **Status:** In progress — P5.1, P5.2, all of P5.3, all of P5.5, and P5.4.1
-complete; P5.4.2–P5.4.10 and P5.4.final planned.
+complete, plus P5.4.4; P5.4.2, P5.4.3, P5.4.5–P5.4.10, and P5.4.final planned.
 
 **Depends on:** P0 and P1. Supersedes the custom-kernel half of P2.2–P2.6 if it
 completes; P2.1 AArch64 boot evidence is retained and not re-claimed here.
@@ -1237,7 +1237,7 @@ compose the earlier.
 | --- | --- | --- |
 | P5.4.2 | M5.1–M5.9 | Ten storage/rollback/recovery gaps. Structural: five of the nine `Mediation::Unavailable` planes are M5's surface. Carries `object_store.rs`'s 32 ungated assertions |
 | P5.4.3 | M6.1–M6.7 | Five gaps (directory, dango, generation commands, powerbox, transfer) and two partials (M6.1 v2 determinism, M6.2 protocol surface) |
-| P5.4.4 | C8.2 | Aggregate fabric-graph admission before component launch; `slime-root` never decodes the resource |
+| P5.4.4 | C8.2 | **Complete** — aggregate fabric-graph admission before component launch; see below |
 | P5.4.5 | C8.5 | Reliable/retained/timed QoS, plus the two C8.5 assertions colocated in `kernel/tests/fabric_stream.rs` |
 | P5.4.6 | C8.6 | Bounded native calls |
 | P5.4.7 | C8.7 | Native operations |
@@ -1253,6 +1253,49 @@ in advance would be the same implement-by-inference this decomposition replaces.
 
 Every gap P5.4.1 recorded has an observed seL4 gate, each with its own devlog
 entry.
+
+### P5.4.4 — C8.2 aggregate fabric-graph admission
+
+**Status:** Complete.
+
+**Depends on:** P5.4.1.
+
+`slime-root` decoded only `BootLayout` and `SharedBufferBudget`. The declared
+fabric-graph resource rode along in every generation the builder emits and
+nothing read it, so a graph promising more than the mechanism could deliver
+would have launched — C8.2's exit condition ("per-entry plus aggregate
+admission before component launch") entirely unmet rather than partially.
+
+#### Required checks
+
+- a generation's declared fabric graph is validated against **this root's own**
+  ceilings before any component launches, using the same `boot_contracts`
+  predicate the oracle uses;
+- a graph exceeding any ceiling this root owns is never admitted, checked one
+  field at a time so a ceiling wired to the wrong constant is visible;
+- a graph that contradicts itself within every ceiling is refused;
+- a generation declaring no graph is unaffected.
+
+#### Verification target
+
+```sh
+just sel4_stream_check
+```
+
+#### Exit condition (observed)
+
+Observed 2026-08-07; see
+[`devlog/2026-08-07-p5-4-4-fabric-graph-admission/`](../devlog/2026-08-07-p5-4-4-fabric-graph-admission/index.md).
+
+The stream plane's real two-publisher/two-subscriber graph is admitted against
+`slime-root`'s ceilings and the plane runs unchanged, asserted as
+`SLIME_ROOT fabric graph=admitted` and fault-injected by removing the wiring.
+The other eight planes report `absent`, so the marker distinguishes "checked"
+from "nothing to check". `just test_sel4_root` covers the ceiling table itself.
+
+Not closed by this: the oracle's `kernel/tests/fabric_manifest.rs` also asserts
+route-authority tuples, interposition-chain termination, and per-pair QoS
+compatibility over the booted graph. Those stay with P5.4.10's partials.
 
 ### P5.4.final — Delete `kernel/`
 
