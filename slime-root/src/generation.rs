@@ -225,7 +225,29 @@ pub fn fabric_graph_is_satisfiable(graph: &FabricGraph<'_>) -> Result<(), Genera
             crate::ipc::MAX_MESSAGE_BYTES as u32,
             crate::ipc::CHANNEL_CAPACITY as u32,
         )
-        .map_err(|_| GenerationError::UnsatisfiableFabricGraph)
+        .map_err(|_| GenerationError::UnsatisfiableFabricGraph)?;
+    // Every matched pair's offered QoS must satisfy the requested one
+    // (P5.4.10). `validate_against` bounds the graph's *aggregate* demand;
+    // this is the per-pair question, and the two are independent — a graph can
+    // fit every ceiling and still promise a reader more than its writer offers.
+    //
+    // Refused at admission rather than reported. C8.5 treats an incompatible
+    // pair as a runtime event a live fabric surfaces, which is why
+    // `boot_contracts` makes it a query rather than a decode error — but this
+    // root has no C8.5 plane to surface it on, so a graph it cannot honour
+    // fails closed instead of launching participants that will never match.
+    // When P5.4.5 brings the QoS plane, this becomes the wrong answer and
+    // moves; recorded here so that is a decision rather than a discovery.
+    //
+    // The structural siblings need no call: `FabricGraph::decode` already runs
+    // `validate_participants` and `validate_interposition`, so route-membership
+    // counts, chain termination, hop revisits, and self-bypass are enforced
+    // before this function is reached.
+    if graph.all_pairs_qos_compatible() {
+        Ok(())
+    } else {
+        Err(GenerationError::UnsatisfiableFabricGraph)
+    }
 }
 
 /// Validate a declared fabric graph against this root's own ceilings (C8.2),
@@ -510,6 +532,90 @@ mod tests {
         bytes
     }
 
+    /// A one-route stream graph with a publisher and a subscriber, each
+    /// carrying the reliability the caller names.
+    ///
+    /// Enough structure to reach `all_pairs_qos_compatible`, which
+    /// [`graph_with`]'s empty participant table cannot: with no pairs the
+    /// predicate is vacuously true, so a graph built there proves nothing about
+    /// QoS either way.
+    fn qos_graph(offered: u8, requested: u8) -> alloc::vec::Vec<u8> {
+        use boot_contracts::fabric_graph::{
+            CONTRACT_KIND_STREAM, DIRECTION_PUBLISH, DIRECTION_SUBSCRIBE, DURABILITY_VOLATILE,
+            FORMAT_VERSION, HEADER_BYTES, INTERPOSITION_NONE, LIVELINESS_AUTOMATIC, MAGIC,
+            PARTICIPANT_ENTRY_BYTES, ROUTE_ENTRY_BYTES, SCHEMA_ENTRY_BYTES, VISIBILITY_GRAPH,
+            grant_identity, route_identity,
+        };
+        // Route and grant identities are derived hashes, not arbitrary bytes:
+        // the decoder recomputes and compares them, so a hand-built graph must
+        // fold them the same way. That check is what makes an identity name one
+        // exact (route, component, direction) tuple rather than a label.
+        const SCHEMA_IDENTITY: [u8; 32] = [0x11; 32];
+        let route_id = route_identity("telemetry", &SCHEMA_IDENTITY, CONTRACT_KIND_STREAM);
+        let total =
+            HEADER_BYTES + SCHEMA_ENTRY_BYTES + ROUTE_ENTRY_BYTES + 2 * PARTICIPANT_ENTRY_BYTES;
+        let mut bytes = alloc::vec![0u8; total];
+        bytes[..8].copy_from_slice(&MAGIC);
+        bytes[8..12].copy_from_slice(&FORMAT_VERSION.to_le_bytes());
+        bytes[12..16].copy_from_slice(&(HEADER_BYTES as u32).to_le_bytes());
+        bytes[24..28].copy_from_slice(&(total as u32).to_le_bytes());
+        bytes[28..32].copy_from_slice(&1u32.to_le_bytes()); // schemas
+        bytes[32..36].copy_from_slice(&1u32.to_le_bytes()); // routes
+        bytes[36..40].copy_from_slice(&2u32.to_le_bytes()); // participants
+        bytes[48..80].copy_from_slice(&[0xab; 32]);
+        for (index, value) in SATISFIABLE.iter().enumerate() {
+            bytes[80 + index * 4..][..4].copy_from_slice(&value.to_le_bytes());
+        }
+
+        let schema = HEADER_BYTES;
+        bytes[schema..schema + 32].copy_from_slice(&SCHEMA_IDENTITY);
+        bytes[schema + 32..schema + 40].copy_from_slice(&0xAAAAu64.to_le_bytes());
+        bytes[schema + 40..schema + 44].copy_from_slice(&CONTRACT_KIND_STREAM.to_le_bytes());
+        bytes[schema + 44..schema + 48].copy_from_slice(&64u32.to_le_bytes());
+
+        let route = schema + SCHEMA_ENTRY_BYTES;
+        bytes[route..route + 32].copy_from_slice(&route_id);
+        bytes[route + 32..route + 36].copy_from_slice(&0u32.to_le_bytes()); // schema index
+        bytes[route + 36..route + 40].copy_from_slice(&CONTRACT_KIND_STREAM.to_le_bytes());
+        bytes[route + 40..route + 44].copy_from_slice(&2u32.to_le_bytes()); // participants
+
+        // Grant identities must be distinct and sorted: the decoder rejects a
+        // duplicate, and `encode` sorts, so a hand-built graph must too.
+        let mut placed = [([0u8; 32], [0u8; 32], 0u32, 0u8); 2];
+        for (slot, (component, direction, reliability)) in [
+            ([0x41u8; 32], DIRECTION_PUBLISH, offered),
+            ([0x42u8; 32], DIRECTION_SUBSCRIBE, requested),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            placed[slot] = (
+                grant_identity(&route_id, &component, direction),
+                component,
+                direction,
+                reliability,
+            );
+        }
+        // The decoder requires grant identities in ascending order, as the
+        // builder's own encoder sorts them.
+        placed.sort_by_key(|entry| entry.0);
+        for (slot, (identity, component, direction, reliability)) in placed.into_iter().enumerate()
+        {
+            let at = route + ROUTE_ENTRY_BYTES + slot * PARTICIPANT_ENTRY_BYTES;
+            bytes[at..at + 32].copy_from_slice(&identity);
+            bytes[at + 32..at + 64].copy_from_slice(&component);
+            bytes[at + 64..at + 68].copy_from_slice(&0u32.to_le_bytes()); // route
+            bytes[at + 68..at + 72].copy_from_slice(&direction.to_le_bytes());
+            bytes[at + 72..at + 76].copy_from_slice(&VISIBILITY_GRAPH.to_le_bytes());
+            bytes[at + 76..at + 80].copy_from_slice(&INTERPOSITION_NONE.to_le_bytes());
+            bytes[at + 104..at + 108].copy_from_slice(&1u32.to_le_bytes()); // history
+            bytes[at + 112] = reliability;
+            bytes[at + 113] = DURABILITY_VOLATILE as u8;
+            bytes[at + 114] = LIVELINESS_AUTOMATIC as u8;
+        }
+        bytes
+    }
+
     /// Limits every ceiling admits. Field order is the wire order:
     /// routes, ingress_sources, publishers, subscribers, clients, servers,
     /// sample_bytes, queue_depth, history_depth, event_depth, retained_samples,
@@ -524,6 +630,39 @@ mod tests {
         let bytes = graph_with(SATISFIABLE);
         let graph = FabricGraph::decode(&bytes).expect("well-formed graph");
         assert_eq!(fabric_graph_is_satisfiable(&graph), Ok(()));
+    }
+
+    /// A matched pair whose offer satisfies the request is admitted, so the
+    /// QoS half of the check is not refusing every graph that has pairs at all.
+    #[test]
+    fn a_compatible_qos_pair_is_admitted() {
+        use boot_contracts::fabric_graph::RELIABILITY_RELIABLE;
+        let bytes = qos_graph(RELIABILITY_RELIABLE as u8, RELIABILITY_RELIABLE as u8);
+        let graph = FabricGraph::decode(&bytes).expect("well-formed graph");
+        assert_eq!(fabric_graph_is_satisfiable(&graph), Ok(()));
+    }
+
+    /// P5.4.10: a graph within every ceiling but promising a reader more than
+    /// its writer offers is refused. This is the assertion
+    /// `kernel/tests/fabric_manifest.rs` makes over the booted graph and no
+    /// seL4 gate made — `validate_against` bounds aggregate demand and says
+    /// nothing about per-pair compatibility, so the two are independent.
+    ///
+    /// A BEST_EFFORT writer against a RELIABLE reader: the reader asks for
+    /// delivery the writer never promised.
+    #[test]
+    fn an_incompatible_qos_pair_is_refused_within_every_ceiling() {
+        use boot_contracts::fabric_graph::{RELIABILITY_BEST_EFFORT, RELIABILITY_RELIABLE};
+        let bytes = qos_graph(RELIABILITY_BEST_EFFORT as u8, RELIABILITY_RELIABLE as u8);
+        let graph = FabricGraph::decode(&bytes).expect("well-formed graph");
+        assert!(
+            !graph.all_pairs_qos_compatible(),
+            "the fixture must actually declare an incompatible pair",
+        );
+        assert_eq!(
+            fabric_graph_is_satisfiable(&graph),
+            Err(GenerationError::UnsatisfiableFabricGraph),
+        );
     }
 
     /// The other half, and the one that matters: no graph exceeding a ceiling

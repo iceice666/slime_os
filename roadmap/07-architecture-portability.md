@@ -1299,8 +1299,8 @@ compatibility over the booted graph. Those stay with P5.4.10's partials.
 
 ### P5.4.10 — The recorded partials
 
-**Status:** In progress — the `component_image.rs` segment corpus is portable
-and host-tested; the rest are open.
+**Status:** In progress — two rows closed (the `component_image.rs` segment
+corpus, and C8.2's live-graph assertions); seven remain.
 
 **Depends on:** P5.4.1.
 
@@ -1312,7 +1312,7 @@ milestones; they are the residue of milestones otherwise covered.
 | --- | --- |
 | `component_image.rs`'s malformed segment corpus | **Done** — `boot_contracts::component_image::validate_segments`, eleven host tests under `just test_host` and `just miri`; see [`devlog/2026-08-07-p5-4-10-segment-corpus/`](../devlog/2026-08-07-p5-4-10-segment-corpus/index.md) |
 | C8.1 collision rejection | Open — the artifact rides along; identity determinism and pre-artifact collision are unobserved on seL4 |
-| C8.2 route-authority tuples, interposition termination, per-pair QoS | Open — the aggregate half closed as P5.4.4; `kernel/tests/fabric_manifest.rs`'s live-graph assertions remain |
+| C8.2 route-authority tuples, interposition termination, per-pair QoS | **Done** — the aggregate half closed as P5.4.4; membership and interposition are enforced by `FabricGraph::decode`, and per-pair QoS is now refused at admission. See [`devlog/2026-08-07-p5-4-10-qos-pair-admission/`](../devlog/2026-08-07-p5-4-10-qos-pair-admission/index.md) |
 | C8.3 graph provenance | Open — the rights algebra is observed; that the fabric answers from the *authenticated* graph rather than a compile-time table is not |
 | C8.4's structural arm | Open — the transcript is reproduced exactly; `kernel/tests/fabric_stream.rs`'s "what a transcript cannot show" assertions are not |
 | C7.1's retained-v2 rollback arm | Open — no seL4 gate admits a v2 generation |
