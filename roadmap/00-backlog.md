@@ -119,15 +119,31 @@ next poll can succeed. When it cannot, the silent return converts a bounded erro
 into an invisible hang — and `wait`'s `()` return type is what makes it
 unreportable.
 
-**What is still unexplained** is *why* staging fails for this task on this graph.
-Its window is bound (`window bound task=10 base=0x238000 len=4096`) and one wait
-record is 8 bytes, so the size check in `reserve`/`stage` should pass. Reading it
-needs a debugger on the child, or a temporary marker on that arm — the latter is
-the cheaper next step and is what closes B28.
+**That arm is not the cause — refuted by instrumentation.** A temporary
+`debug_write` on the staging-failure branch, rebuilt and booted, produces **zero**
+lines. `wait` stages successfully every time on this plane, so the silent-yield
+path is never taken and task 10 is not spinning there.
 
-The wider finding stands on its own regardless of B28: **a silent `yield` return
-inside `wait` can hang any component invisibly**, and it should either report or
-be unreachable.
+The park accounting is also self-consistent, which removes the last root-side
+suspicion: 33 park events, one owed reply at teardown (task 6), and task 10 never
+appears in a reclaim or peer-death line. Its park entry was therefore *consumed by
+a wake* rather than abandoned. It resumed, and then made no root call by any path
+the root or the runtime can report.
+
+Seven readings are now excluded: lost wake, lost reply, starvation, clock volume,
+boot duration, the `retainedSamples` bound, the frame table, a component fault, and
+the runtime's silent-yield arm. Closing B28 needs a debugger attached to the child
+— `xd://debug` with the `dlv`-equivalent for this target, or a marker compiled into
+`fabric-publisher` between `role requested` and its two-capability loop. Nothing
+further follows from the boot log.
+
+**One wider finding stands regardless of B28**, and it is worth its own slice:
+`sel4_transport::wait` returns `()`, so its staging-failure branch can only
+`yield_now()` and return silently. It is unreachable on every current plane — hence
+the zero lines above — but if it were ever reached it would convert a bounded error
+into an invisible hang, exactly the signature that made this defect take seven
+attempts to characterize. It should either report or be made impossible by
+construction.
 
 **Severity:** Blocks P5.4.5's exit condition and nothing else. Latent for every
 other plane: no other seL4 graph declares two retained routes on one publisher.
