@@ -102,6 +102,18 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "the graph was admitted and launched",
         (
             r"SLIME_ROOT generation admitted number=\d+ components=7 grants=13 ",
+            # C8.2 (P5.4.4): the root validated this generation's declared
+            # fabric graph against its *own* ceilings before any participant
+            # launched. `slime-root` did not read the resource at all until
+            # this slice -- P5.4.1's inventory recorded C8.2 as having no seL4
+            # equivalent rather than a partial one -- so this marker is the
+            # wiring being observable. The predicate has its own unit tests;
+            # that the admission path consults it is what only a boot shows.
+            #
+            # `absent` on every other plane, since this is the one seL4 fixture
+            # declaring a graph, so the marker also distinguishes "checked" from
+            # "nothing to check" rather than merely appearing.
+            r"SLIME_ROOT fabric graph=admitted",
             r"SLIME_ROOT graph admitted; legacy SLIMECM images not activated "
             r"components=7 slimecm=0 elf=7 unrecognized=0",
             # Six pairs, one per participant plus B17's probe. Init holds both
