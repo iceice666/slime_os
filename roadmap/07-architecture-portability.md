@@ -1239,7 +1239,7 @@ compose the earlier.
 | P5.4.2 | M5.1–M5.9 | **In progress** — ten storage/rollback/recovery gaps. Structural: five of the nine `Mediation::Unavailable` planes are M5's surface. Carries `object_store.rs`'s 32 ungated assertions, of which the eight superblock-shaped ones are now portable and host-tested in `boot-contracts` (see [`devlog/2026-08-07-p5-4-2-store-superblock/`](../devlog/2026-08-07-p5-4-2-store-superblock/index.md)); the rest need a block device `slime-root` does not have |
 | P5.4.3 | M6.1–M6.7 | Five gaps (directory, dango, generation commands, powerbox, transfer) and two partials (M6.1 v2 determinism, M6.2 protocol surface) |
 | P5.4.4 | C8.2 | **Complete** — aggregate fabric-graph admission before component launch; see below |
-| P5.4.5 | C8.5 | Reliable/retained/timed QoS, plus the two C8.5 assertions colocated in `kernel/tests/fabric_stream.rs` |
+| P5.4.5 | C8.5 | **In progress** — reliable/retained/timed QoS, plus the two C8.5 assertions colocated in `kernel/tests/fabric_stream.rs`. Three arms already ran on the seL4 stream plane unasserted (matching-before-data, bounded loss under a stall, peer death as a distinct event) and are now gated; the arms needing simulated time — retry exhaustion, deadline, lifespan, liveliness, lease, tie ordering — remain. See [`devlog/2026-08-07-p5-4-5-qos-arms/`](../devlog/2026-08-07-p5-4-5-qos-arms/index.md) |
 | P5.4.6 | C8.6 | Bounded native calls |
 | P5.4.7 | C8.7 | Native operations |
 | P5.4.8 | C8.8 | Filtered introspection and declared interposition |
@@ -1297,6 +1297,62 @@ from "nothing to check". `just test_sel4_root` covers the ceiling table itself.
 Not closed by this: the oracle's `kernel/tests/fabric_manifest.rs` also asserts
 route-authority tuples, interposition-chain termination, and per-pair QoS
 compatibility over the booted graph. Those stay with P5.4.10's partials.
+
+### P5.4.2 — M5 storage, rollback, and recovery
+
+**Status:** In progress.
+
+**Depends on:** P5.4.1.
+
+Ten M5 gaps. The largest single block P5.4.1 recorded is
+`kernel/tests/object_store.rs`'s thirty-two ungated assertions.
+
+Split by what the property actually needs. Eight of those assertions are
+**superblock-shaped** — a fixed 64-byte header in a 512-byte sector, decidable
+from bytes alone — and are now portable, host-tested, and Miri-clean in
+`boot-contracts::store_disk`; see
+[`devlog/2026-08-07-p5-4-2-store-superblock/`](../devlog/2026-08-07-p5-4-2-store-superblock/index.md).
+
+The rest need a block device. `slime-root` has none: its object allocator
+skips every device untyped (`object_allocator.rs`, `descriptor.is_device()`),
+so it holds no MMIO region and no DMA-capable frame, and its only interrupt
+surface is `IRQControl` for the timer. Append/commit behaviour, GPT partition
+validation, the recovery paths, and the five `Mediation::Unavailable` planes
+all sit behind that, which is why this slice stays open rather than being
+declared blocked: the device surface is buildable, just not small.
+
+#### Exit condition
+
+Every M5 gap has an observed seL4 gate, including the store's behaviour under
+interruption at each append/commit boundary.
+
+### P5.4.5 — C8.5 reliable, retained, and timed QoS
+
+**Status:** In progress.
+
+**Depends on:** P5.4.1.
+
+P5.4.1 recorded C8.5 as uncovered on seL4. Half right: no gate asserted a QoS
+property, but three were already running, because the QoS logic lives in
+`fabric-service` and the stream plane boots it unmodified. Matching before
+data, bounded loss under a stalled subscriber, and peer death as a distinct
+event are now asserted by `just sel4_stream_check`; see
+[`devlog/2026-08-07-p5-4-5-qos-arms/`](../devlog/2026-08-07-p5-4-5-qos-arms/index.md).
+
+Remaining: bounded RELIABLE credit and acknowledgement, fixed retry
+exhaustion, deadline, lifespan, liveliness and lease transitions driven from
+the monotonic-time capability, equal-timestamp tie ordering, and the runtime
+incompatible-QoS event. Those need a plane that stalls deliberately and
+advances a clock, which is a new image and fixture rather than an assertion.
+
+One inversion is already recorded: P5.4.10 made an incompatible QoS pair a
+*refusal at admission*, correct for a root with no QoS plane, but it means the
+runtime event C8.5 requires is unreachable here until this slice lands. The
+call site in `slime-root/src/generation.rs` says so.
+
+#### Exit condition
+
+Every item in C8.5's required-checks list has an observed seL4 gate.
 
 ### P5.4.10 — The recorded partials
 

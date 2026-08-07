@@ -248,6 +248,37 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
             r"\[fabric-subscriber-b\] done",
         ),
     ),
+    # C8.5 (P5.4.5), the arms this plane already exercises. `fabric_qos_check`
+    # is the oracle's dedicated QoS gate; P5.4.1 recorded C8.5 as having no
+    # seL4 coverage at all. It turns out three of its properties already run
+    # here unasserted, on the same four components — matching before data,
+    # bounded loss under a stall, and peer death as a distinct event — because
+    # the QoS logic lives in `fabric-service`, which this plane boots
+    # unmodified.
+    #
+    # Asserted rather than left implicit: a marker that is emitted but checked
+    # by nothing is not coverage, and P5.4.5 must not later be credited for
+    # behaviour no gate would notice losing.
+    (
+        "QoS is matched before any sample moves",
+        (
+            # The fabric matches offered against requested, and the subscriber
+            # is told. Ordered ahead of the first publish below, which is the
+            # C8.5 property: matching *precedes* data.
+            r"\[fabric\] QoS matched",
+            r"\[fabric-subscriber\] QoS matched",
+            r"\[fabric-publisher\] inline samples published",
+        ),
+    ),
+    (
+        "peer death is a distinct structured event",
+        (
+            # Not inferred from a delivery failure or a timeout: C8.5 requires
+            # loss, expiry, retry exhaustion, and peer death to stay
+            # distinguishable, and this is the one this plane reaches.
+            r"\[fabric\] QoS peer dead",
+        ),
+    ),
     (
         "one participant's stall does not disturb an unrelated stream",
         (
@@ -673,6 +704,25 @@ SEL4_ONLY: dict[str, str] = {
     r"\[fabric-publisher\] narrowed transfer role cannot widen": (
         "B17's subset-test arm, which needs a spawn-granted send+transfer "
         "endpoint; the x86 graph declares none, so the arm skips there"
+    ),
+    # C8.5 (P5.4.5). These are not drift: they are required by the oracle's
+    # *QoS* gate, `check-fabric-qos.py`, rather than its stream gate, and this
+    # comparison only reads the stream gate's chain list. The behaviour is the
+    # same `fabric-service` logic on the same components; only the oracle-side
+    # gate that asserts it differs.
+    r"\[fabric\] QoS matched": (
+        "asserted by the oracle's `check-fabric-qos.py`, not its stream gate; "
+        "the seL4 stream plane reaches the same matching path because it boots "
+        "the same fabric-service"
+    ),
+    r"\[fabric-subscriber\] QoS matched": (
+        "emitted by fabric-subscriber and required by *no* oracle gate -- "
+        "checked here because the subscriber learning it matched is the half "
+        "of C8.5's matching property that the fabric-side marker cannot show"
+    ),
+    r"\[fabric\] QoS peer dead": (
+        "C8.5's distinct peer-death event, asserted by the oracle's QoS gate; "
+        "this plane reaches it when a participant exits"
     ),
 }
 
