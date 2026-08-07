@@ -199,6 +199,14 @@ impl ParkedReplies {
     }
 
     /// Deliver `response` to a parked task and forget the reply.
+    ///
+    /// The CSlot is released after the send, not merely counted. `recycled` used
+    /// to be bumped here without a `delete_slot`, which made this the one path
+    /// of three that leaked: `answer_saved` and `discard` both go through
+    /// [`Self::release_slot`], and only this one did its own accounting. A boot
+    /// that parks and wakes repeatedly therefore burned one root CSlot per wake
+    /// while reporting them all as recycled, so the terminal `replies=` figure
+    /// asserted the opposite of what happened.
     pub fn wake(&mut self, task: TaskId, response: Response) -> bool {
         let Some(entry) = self
             .entries
@@ -210,7 +218,7 @@ impl ParkedReplies {
         let held = entry.take().expect("just matched");
         self.len -= 1;
         send_reply(held.slot, response);
-        self.recycled += 1;
+        self.release_slot(held.slot);
         true
     }
 

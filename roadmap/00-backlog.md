@@ -458,6 +458,39 @@ binary perturbed neither contract validation nor generation identity. See
 
 ## Resolved
 
+### B29 — `ParkedReplies::wake` never deleted the reply CSlot it counted as recycled — **resolved 2026-08-07**
+
+**Problem:** `slime-root/src/parked.rs` has three paths that finish with a saved
+reply capability, and only two released it. `answer_saved` and `discard` both go
+through `release_slot`, which calls `delete_slot` *and* bumps `recycled`. `wake`
+— the path every parked task takes — called `send_reply` and then bumped
+`recycled` directly, with no `delete_slot`. So each parked wake left a root CSlot
+holding a spent reply capability while reporting it as recycled.
+
+**Found by** reading the three paths side by side while chasing B28. Not by a
+failure: the boot's own counters cannot see it. `recycled` was already
+incremented, so the terminal `replies=` figure is identical before and after the
+fix (323 on the QoS plane both ways), and `tasks reclaimed … slots=` is unchanged
+too (517). That is exactly what makes it worth recording — the accounting said
+"recycled" and the CSlot was still occupied, so the number that exists to prove
+the save path is not a leak was the number hiding one.
+
+**Severity:** Latent, and bounded per boot rather than per operation only because
+the graphs are short-lived. A long-running graph that parks and wakes repeatedly
+consumes one root CSlot per wake with nothing reclaiming it; the QoS plane alone
+parks 33 times. It is the same shape as B22, B23, and B24 — a table with no free
+path — one level down, in the allocator rather than a table.
+
+**Resolved by** `wake` calling `release_slot(held.slot)` after `send_reply`,
+which is the path the other two already took. `recycled` is bumped by
+`release_slot`, so the counter's meaning is now uniform across all three.
+
+**Exit condition observed.** All nine seL4 plane gates, `sel4_boot_layout_check`,
+and `test_sel4_root` (109/109) pass with the fix; the five C8.5 arms on the QoS
+plane are unchanged. The counters are identical by construction, so the guard
+against regression is that all three paths now call one function — a future
+fourth path leaks only by not calling it.
+
 ### B27 — the manifest→flag table set and scrubbed in one pass, so two manifests could not share a flag — **resolved 2026-08-07**
 
 **Problem:** `build_sel4_generation`'s manifest→flag loop
