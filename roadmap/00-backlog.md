@@ -16,102 +16,77 @@ at the bottom rather than deleting it.
 
 ## Open
 
-### B17 — the capability transfer's subset test has no coverage
+### B22 — `ChannelTable` never reclaims, so `MAX_CHANNELS` is a lifetime bound
 
-**Problem:** `slime-root/src/main.rs::serve_cap_transfer` enforces four rules,
-and `just sel4_fabric_check` observes three: transfer authority at the source,
-the per-kind mask, and the descriptor/kind agreement. The fourth — the **subset
-test**, `rights & !source.rights != 0`, which is what makes the move
-narrow-only against *what the holder actually has* — is not observed. Deleting
-it leaves every marker in that gate intact.
+**Problem:** B16's exact defect shape in a second table.
+`slime-root/src/channel.rs` never frees an entry: `push` derives its key as
+`self.len`, `mark_dead` marks both queues of a dying task's channels dead but
+frees nothing, and `recall_channel_ends` reassigns ends rather than releasing
+them. So `MAX_CHANNELS` (32) bounds the channels a boot may **ever** mint, not
+those live at once.
 
-Not reachable from any graph this cutover can declare, because the four rules
-are one disjunction and every candidate subject fails an earlier one first:
+Worse than B16 in one respect: because `mark_dead` marks the queues dead in both
+directions and nothing revives them, an exhausted table cannot be worked around
+by reusing a dead peer's channel. Every channel a long-running graph mints is
+spent permanently.
 
-- a **provisioned role** carries no `RIGHT_TRANSFER`, so rule 1 refuses it —
-  which is exactly why `fabric-publisher`'s own widening arm proves the
-  *per-kind* rule rather than this one;
-- a **factory** is granted its single operation right and no transfer bit, so
-  rule 1 again;
-- an **endpoint** minted by `endpoint_create` holds `send|recv|transfer`, which
-  is precisely what `valid_rights` admits for its kind, so no mask widens it
-  without the per-kind rule refusing the same mask.
+**Evidence:** `channel.rs:120` (`MAX_CHANNELS`), `:446` (`key = self.len`),
+`:339-354` (`mark_dead`), `main.rs:3180-3203` (`recall_channel_ends`). Found
+while fixing B16, which is also what made it load-bearing: the supervision
+plane's loop child had to be written channel-free
+(`components/bins/src/bin/supervision-child.rs`) because a channel-per-child
+loop would have hit this bound before B16's. The gate asserts `endpoints=1` for
+exactly that reason, so the plane avoids this bound rather than deferring it.
 
-Reaching it needs a capability holding transfer authority that is strictly
-narrower than its kind admits. `cap_transfer` itself is the only thing that
-produces one — a role moved with `FLAG_RETAIN_TRANSFER` — and a component cannot
-move a capability to itself, because the two ends of a channel it holds alone
-are a loopback the root refuses to split.
+**Why deferred rather than fixed with B16:** the fix is a second derived
+predicate, over channel *ends* held in live capability tables, and it needs its
+own gate and its own fault injection. Bundling it would have doubled a slice
+that was already large, and the one-line routing around it is the
+eight-line child.
 
-So this is a property of the *graph*, not of the root. A latent gap rather than
-a defect: the check is present and correct, and nothing observes it.
+**Scheduled under P5.4.1**, whose inventory audits lifetime-vs-live bounds as a
+class. That is the right place: B16 and this were each found one at a time, and
+a sweep of `slime-root/src` during the B16 fix established they are the only two
+*per-task* tables that never free — every other table either frees on reclaim
+(`WindowTable::release`, `ParkedReplies`, `SupervisionWaits::clear`, the
+shared-buffer orphan and charge tables) or is boot-time and deliberately
+monotonic (`generation.rs`, `object_allocator.rs`, `child_vspace.rs`).
 
-**Evidence:** found by fault injection while landing P5.5.1 — the subset test
-was removed and `just sel4_fabric_check` still passed. Two attempts at an
-in-fixture probe were written and withdrawn, each caught by a different earlier
-rule; the reasoning is recorded in `check-sel4-fabric-plane.py`'s module doc
-rather than left as an arm that looks like coverage. See
-`devlog/2026-08-05-p5-5-1-typed-fabric/`.
+**Exit condition:** a graph that mints more than `MAX_CHANNELS` channels over
+its lifetime still sends and receives correctly on every live channel, observed
+under a named seL4 gate, and fault-injected to show that removing the reclaim
+fails it.
 
-**Proposed fix:** a composition where one broker provisions another, so a role
-moved with `FLAG_RETAIN_TRANSFER` becomes a subject holding `send|transfer`
-where its kind admits `send|recv|transfer`. Asking to move that with `recv`
-restored is a widening only the subset test can refuse. P5.5.2's two-route graph
-with a declared interposition chain is that shape.
+### B23 — `slime-root`'s unit tests are run by no gate
 
-**Exit condition:** a widening refused by the subset test alone, observed under
-a named seL4 gate, and fault-injected to show that removing the test fails it.
+**Problem:** 98 `#[test]` functions across 13 modules — channel 7, child_vspace
+3, fault 4, generation 9, graph 7, ipc 7, object_allocator 3, supervision 9,
+task 4, timer 14, transit 6, shared_buffer 17, transfer_window 8 — are compiled
+by nothing and run by nothing, while `slime-root/src/main.rs` describes those
+modules as "bounded, pure, and unit-tested in place".
 
-### B16 — a supervision termination record is never reclaimed, so a long-lived graph exhausts the table
+Two independent reasons, so this is a crate-structure change rather than a test
+change:
 
-**Problem:** `slime-root/src/supervision.rs::Terminations` records how each child
-ended and never removes the record, because two parents may hold handles to one
-child and each is owed the answer. `MAX_RECORDS` is `MAX_TASKS` (32), which
-bounds the tasks *alive at once* — but `TaskTable::reclaim` frees its entries
-while `TaskId`'s `next_id` keeps counting, so a graph that spawns and reaps
-repeatedly creates far more than 32 tasks while never holding more than a few.
+- **Nothing invokes them.** `just test_host` runs `boot-contracts` and
+  `slime-proto` only; none of the Justfile's `cargo test` invocations names
+  `slime-root`, which appears only in its fmt and clippy targets. CI runs
+  `just test_host` and omits `slime-root` from `cargo-machete` too.
+- **They cannot run as configured.** `main.rs` is unconditionally `#![no_std]`
+  and `#![no_main]` with no `cfg_attr(test, …)` escape, `Cargo.toml` declares no
+  lib target, and the crate only compiles for a custom seL4 JSON target that has
+  no `libtest`. Building `--all-targets` fails with 103 instances of
+  `can't find crate for 'test'` — verified 2026-08-07, all 103 that same error.
 
-Past the bound, `record` drops silently and every later
-`supervision_status` on that child answers `WouldBlock` forever: the
-parent-waits-forever failure the module exists to prevent, arriving by the
-module's own bookkeeping rather than by a missed wake. The retired kernel's
-`sched.terminated` is an unbounded `Vec` and has no equivalent limit.
+**Why this matters beyond the tests themselves:** every `slime-root` change
+inherits the blind spot. B16's fix added four unit tests that document the
+sweep's contract and **cannot be claimed as verification**; the whole burden
+falls on `just sel4_supervision_check`, which is why that gate carries two fault
+injections rather than one.
 
-Not reachable by any declared seL4 generation — each creates a handful of tasks
-and exits — so it is a latent bound rather than an observed defect.
-
-**Evidence:** `supervision.rs::MAX_RECORDS` against `task.rs::TaskTable::reclaim`,
-which decrements `len` but not `next_id`. Noted in the P5.3.3 review; see
-`devlog/2026-08-05-p5-3-3-spawn-plane/`.
-
-**Proposed fix:** reclaim a record once every holder of a handle naming that
-child has collected or dropped it, which needs a reference count incremented at
-each `Supervision` capability install and decremented at each collect, drop, and
-table release. Alternatively fail the *spawn* when the record table is full,
-which turns a silent wrong answer into a bounded refusal at the point of
-allocation — the same shape `construct_child` already uses for `MAX_GRAPH_TASKS`.
-
-**Deferral re-reviewed 2026-08-05, before opening P5.5.2's gate.** Still
-deferred, on the same observation, and this is the largest graph the cutover
-declares: P5.5.2's stream plane creates thirteen tasks — seven launched, six
-spawned — against `MAX_RECORDS = 32`. The bound is approached more closely than
-by any earlier slice and still not reached. See
-`devlog/2026-08-05-p5-5-2-stream-plane/`.
-
-Worth stating plainly, since the margin is now under 3×: this stays a latent
-bound rather than a defect only because every declared generation runs to
-completion and exits. A long-lived graph that spawns and reaps repeatedly is
-what makes it bite, and P5.4 — which retires the oracle — is the point at which
-"every declared generation" stops being a safe quantifier.
-
-**Why deferred rather than fixed in P5.3.3:** the counting version touches every
-path that installs or releases a capability, and the refusal version needs a
-gate whose graph spawns past the record table to prove it. Neither is a line;
-both want the multi-child graph P5.3.4 composes.
-
-**Exit condition:** a graph that creates more than `MAX_RECORDS` tasks over its
-lifetime still answers `supervision_status` correctly for every live handle,
-observed under a named seL4 gate, with the five existing seL4 gates passing.
+**Exit condition:** `slime-root`'s unit tests run in some gate — most likely by
+splitting the pure modules into a host-testable lib target — with the count
+asserted so a module that stops being covered is visible.
 
 ### B12 — the component build's `--remap-path-prefix` names a path that does not exist
 
@@ -193,6 +168,14 @@ x86 gates assert against — a blast radius larger than the defect, and orthogon
 to the seL4 cutover. It should be scheduled against the x86 oracle deliberately,
 not folded into a portability slice.
 
+**Deferral re-reviewed 2026-08-07, before opening P5.4.1's gate.** Still
+deferred, on the same reasoning. B16's fix adds an eighth seL4 generation and a
+new component binary built through the same JSON-target path, which the
+rustflags this defect concerns do not match, so the reach is unchanged once
+again. `just generation_check` and `just contracts_check` were run to confirm
+the new binary perturbed neither contract validation nor generation identity.
+See `devlog/2026-08-07-b16-supervision-records/`.
+
 ## Resolved
 
 ### B21 — the toolchain was pinned by name, so each host resolved a different binary — **resolved 2026-08-06**
@@ -243,6 +226,90 @@ already the cross form, so the change is expected to be a no-op there
 (**[INFERENCE]**). Both hosts are on one machine, one virtualized — the right
 test for toolchain and `PATH` independence and no evidence about physical
 boards. See `devlog/2026-08-06-b21-cross-toolchain-binary-selection/`.
+
+### B16 — a supervision termination record was never reclaimed, so a long-lived graph exhausted the table — **resolved 2026-08-07**
+
+**Problem:** `slime-root/src/supervision.rs::Terminations` records how each child
+ended and never removes the record, because two parents may hold handles to one
+child and each is owed the answer. `MAX_RECORDS` is `MAX_TASKS` (32), which
+bounds the tasks *alive at once* — but `TaskTable::reclaim` frees its entries
+while `TaskId`'s `next_id` keeps counting, so a graph that spawns and reaps
+repeatedly creates far more than 32 tasks while never holding more than a few.
+
+Past the bound, `record` drops silently and every later
+`supervision_status` on that child answers `WouldBlock` forever: the
+parent-waits-forever failure the module exists to prevent, arriving by the
+module's own bookkeeping rather than by a missed wake. The retired kernel's
+`sched.terminated` is an unbounded `Vec` and has no equivalent limit.
+
+Not reachable by any declared seL4 generation — each creates a handful of tasks
+and exits — so it is a latent bound rather than an observed defect.
+
+**Evidence:** `supervision.rs::MAX_RECORDS` against `task.rs::TaskTable::reclaim`,
+which decrements `len` but not `next_id`. Noted in the P5.3.3 review; see
+`devlog/2026-08-05-p5-3-3-spawn-plane/`.
+
+**Proposed fix:** reclaim a record once every holder of a handle naming that
+child has collected or dropped it, which needs a reference count incremented at
+each `Supervision` capability install and decremented at each collect, drop, and
+table release. Alternatively fail the *spawn* when the record table is full,
+which turns a silent wrong answer into a bounded refusal at the point of
+allocation — the same shape `construct_child` already uses for `MAX_GRAPH_TASKS`.
+
+**Deferral re-reviewed 2026-08-05, before opening P5.5.2's gate.** Still
+deferred, on the same observation, and this is the largest graph the cutover
+declares: P5.5.2's stream plane creates thirteen tasks — seven launched, six
+spawned — against `MAX_RECORDS = 32`. The bound is approached more closely than
+by any earlier slice and still not reached. See
+`devlog/2026-08-05-p5-5-2-stream-plane/`.
+
+Worth stating plainly, since the margin is now under 3×: this stays a latent
+bound rather than a defect only because every declared generation runs to
+completion and exits. A long-lived graph that spawns and reaps repeatedly is
+what makes it bite, and P5.4 — which retires the oracle — is the point at which
+"every declared generation" stops being a safe quantifier.
+
+**Why deferred rather than fixed in P5.3.3:** the counting version touches every
+path that installs or releases a capability, and the refusal version needs a
+gate whose graph spawns past the record table to prove it. Neither is a line;
+both want the multi-child graph P5.3.4 composes.
+
+**Exit condition (observed 2026-08-07):** a graph that creates more than
+`MAX_RECORDS` tasks over its lifetime still answers `supervision_status`
+correctly for every live handle, observed under `just sel4_supervision_check`,
+with the nine existing seL4 gates passing. (The entry said *five*; there were
+nine by the time it was closed.)
+
+**Fix: a derived sweep, which is neither option this entry proposed.** The
+refusal was rejected on the entry's own terms — refusing the spawn makes the
+graph the exit condition requires impossible to observe, so choosing it would
+mean amending the condition in the same change that claimed to meet it. The
+reference count was unnecessary: the live-holder set is already represented, so
+`supervision::sweep` derives it, reclaiming every record no live holder can
+name. Same choice, same reason, as `TaskTable::live_children`, and it fails
+safe — a sweep that does not run leaves a record that still answers correctly,
+whereas a missed decrement loses one forever.
+
+The predicate reads **two** holders. A supervision handle in flight is held by
+no capability table at all, so a sweep consulting only `GraphTables` would free
+a record mid-transfer and leave the receiver waiting forever: this defect,
+reintroduced by its own fix. `Transit::holds_supervision` is the second half,
+and fault injection #2 below is what proves it is load-bearing.
+
+The residual case is now reported rather than silent: if every record has a live
+holder, `record_termination` emits
+`SLIME_GRAPH FAIL termination lost task={} reason=records-full`, matching
+`unland_caps`'s convention. That is what closes the *silent*-loss defect rather
+than merely raising the bound.
+
+**Observed:** 35 tasks created over one boot, `terminated=38` against
+`MAX_RECORDS = 32`, with `freed=30 live=3` at the sweep — the retained handle,
+the in-flight handle, and the current record all preserved. Two fault
+injections, both confirmed failing: removing the sweep fails at
+`termination lost task=33 reason=records-full`; removing only the `Transit` half
+of the predicate fails at `a handle parked across the crossing lost its
+outcome`, with every earlier marker still passing. See
+`devlog/2026-08-07-b16-supervision-records/`.
 
 ### B20 — the prefix pin held for one platform at a time — **resolved 2026-08-06**
 

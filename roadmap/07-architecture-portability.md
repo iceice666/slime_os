@@ -1094,13 +1094,114 @@ structural. The gate passes ten consecutive runs.
 
 ### P5.4 — Retire the custom kernel
 
-**Status:** Not started.
+**Status:** Decomposed; see P5.4.1 onward. Not started.
 
 **Depends on:** P5.3 and P5.5.
 
 `kernel/` is deleted only once seL4 carries every behavior it currently proves.
 Until then it is the frozen oracle: its gates keep running, its code does not
 change, and the two are never claimed to be one system.
+
+Decomposed 2026-08-07, on the evidence that its exit condition is not close to
+met and its scope was larger than one milestone. seL4 has equivalents through
+C8.4; **C8.5–C8.10 have none recorded** — reliable/retained/timed QoS
+([C8.5](02-core-runtime.md)), bounded native calls (C8.6), native operations
+(C8.7), filtered introspection and declared interposition (C8.8), typed
+full-profile closure (C8.9), and collision-free full-graph bootstrap (C8.10).
+Deleting `kernel/` now would drop that coverage silently, which is exactly what
+the frozen-oracle rule above exists to prevent.
+
+The legacy surface is also wider than the roadmap text suggested: eight Justfile
+recipes run a named `kernel/tests/*` binary via `cargo test --test`, 31 shell out
+to `cd kernel` at all, and a further set reach the oracle *indirectly* through
+`scripts/lib/harness.py`, which 34 of 43 `scripts/check/*.py` import. Eight of
+the nineteen `kernel/tests/*.rs` files have no named gate at all and are
+reachable only via `just test`:
+`boot.rs`, `component_image.rs`, `generation_manager.rs`, `isolation.rs`,
+`kernel_foundation.rs`, `object_store.rs`, `should_panic.rs`, and
+`task_reclamation.rs`. Those are where coverage would disappear without any gate
+turning red, which is why the inventory below comes before any deletion.
+
+#### Exit condition
+
+Every sub-slice below is complete, which carries this milestone's original
+condition: every acceptance check the custom kernel guards has an observed seL4
+equivalent, and `kernel/` plus its legacy-only gates are removed in one
+reviewable change.
+
+### P5.4.1 — The oracle equivalence inventory
+
+**Status:** Not started.
+
+**Depends on:** P5.3 and P5.5.
+
+Maps every acceptance check the frozen oracle guards to its observed seL4
+equivalent, or records an explicit gap. This is the artifact P5.4's exit
+condition asks for and no one has produced: without it, "every acceptance check
+has an equivalent" is a claim rather than a finding.
+
+Must cover all three legacy surfaces named above — the direct `kernel/tests/*`
+targets, the harness-mediated gates, and the eight kernel tests with no named
+gate — because the third is invisible to any audit that reads the Justfile
+alone.
+
+#### Required checks
+
+- every named `kernel/*` Justfile target is listed with its seL4 equivalent or
+  an explicit gap;
+- every `kernel/tests/*.rs` file is accounted for, including the eight with no
+  named gate;
+- every harness-mediated checker is classified as legacy-only or portable;
+- lifetime-vs-live resource bounds in `slime-root` are audited as a class,
+  closing [B22](00-backlog.md) — B16 and B22 were found one at a time, and the
+  inventory is where the remaining ones surface if any exist.
+
+#### Verification target
+
+```sh
+just devlog_check
+```
+
+`devlog_check` validates that every `Gates` entry resolves to a real Justfile
+target and every `Roadmap` id to a real heading, which is most of what the
+inventory asserts structurally. It does **not** check that a claimed equivalence
+is true; that is the reviewable content of the entry. If a cross-referencing
+script turns out to be needed, it is written as part of this slice rather than
+assumed here.
+
+#### Exit condition
+
+An **Audit**-kind devlog entry recording the full mapping, with every gap named
+and assigned to a P5.4.2+ slice below, and `just devlog_check` passing.
+
+No architectural invariant in [`README.md`](README.md) changes under this
+decomposition: it adds no kernel object and no right (invariant 4), introduces
+no protocol (invariant 5), and preserves rather than alters the semantics
+invariant 10 names — the point of the inventory is to establish that the seL4
+port *has* preserved them before the oracle proving it is deleted.
+
+### P5.4.2 … P5.4.n — Close the recorded gaps
+
+**Status:** Not started.
+
+**Depends on:** P5.4.1.
+
+One slice per uncovered oracle milestone — C8.5 through C8.10 on today's
+evidence, in that order, since the later ones compose the earlier. They are
+deliberately **not** specified here: P5.4.1's output determines what each one
+must prove, and writing their deliverables before the inventory exists would be
+the same implement-by-inference this decomposition replaces.
+
+#### Exit condition
+
+Every gap P5.4.1 recorded has an observed seL4 gate, each with its own devlog
+entry.
+
+### P5.4.final — Delete `kernel/`
+
+**Status:** Not started.
+
+**Depends on:** every P5.4.2+ slice.
 
 #### Exit condition
 
