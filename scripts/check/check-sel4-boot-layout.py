@@ -72,6 +72,13 @@ PLANES: tuple[tuple[str, str, str], ...] = (
     ("sel4-stream", "--stream-plane", "slime-sel4-stream.elf"),
     ("sel4-supervision", "--supervision-plane", "slime-sel4-supervision.elf"),
     ("sel4-crossing", "--crossing-plane", "slime-sel4-crossing.elf"),
+    # P5.4.6. Frozen even though the plane does not pass its own scenario: the
+    # layout is emitted between channel materialization and activation, so it
+    # is complete and observable long before the deadlock B25 records. What
+    # this guards is exactly what B10 exists for — that the table
+    # `SEL4_CALL_LAYOUT` declares is the table the root fills — and that claim
+    # is independent of whether the broker later completes provisioning.
+    ("sel4-call", "--call-plane", "slime-sel4-call.elf"),
 )
 
 

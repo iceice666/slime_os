@@ -106,22 +106,28 @@ constructible either, because no component ever holds a handle naming itself.
 
 ## Regression guards
 
-**None, and that is the finding rather than an omission.** The plane does not
-pass, so a gate would be a red one.
+**One, and it is narrower than the milestone.** The C8.6 protocol has no gate,
+because the plane does not reach it and a gate that cannot pass is not a gate.
+What *is* now guarded is the layout: `sel4-call` joined
+`check-sel4-boot-layout.py`'s `PLANES` and
+`contracts/boot-layout/v1/fixtures/sel4-call.layout` is blessed, so
+`just sel4_boot_layout_check` freezes the seven slots the root actually fills.
+That claim is independent of the deadlock — the dump is emitted between channel
+materialization and activation, long before the broker blocks.
 
 It is worth stating precisely what is *not* guarded, because an earlier draft of
 this entry claimed two guards that do not exist. `check-contracts.py` validates
-`fixtures/valid.zti` and never reads `sel4-call.zti`; `check-boot-layout-
-resource.py`'s `FIXTURE_PROFILES` contains no generation 18, so `SEL4_CALL_LAYOUT`
-is never encoded or compared; and `check-sel4-boot-layout.py`'s `PLANES` omits
-`sel4-call`, with no `sel4-call.layout` fixture on disk. All three pass before
-and after this change for reasons unrelated to it.
+`fixtures/valid.zti` and never reads `sel4-call.zti`;
+`check-boot-layout-resource.py`'s `FIXTURE_PROFILES` contains no generation 18,
+so `SEL4_CALL_LAYOUT` is never encoded or compared there. Both pass before and
+after this change for reasons unrelated to it.
 
 | Risk | Guard | Failure signal |
 |---|---|---|
+| The generation-18 layout drifts from what the root places | `just sel4_boot_layout_check` | `sel4-call: layout differs from …/sel4-call.layout`, with the moved rows printed |
+| A layout row declares *more* authority than its grant confers | none — the dump prints the grant's rights, not the layout's (**B26**) | — |
 | The reshaped fixture stops encoding | none — reached only through `build-sel4.py --call-plane` | The image build fails |
-| The generation-18 layout drifts from what the root places | none until `sel4-call` joins `check-sel4-boot-layout.py`'s `PLANES` | — |
-| The call plane silently runs a different broker | none — this is what the missing gate would catch | — |
+| The call plane silently runs a different broker | none — this is what the missing C8.6 gate would catch | — |
 
 ## Verification
 
@@ -130,6 +136,9 @@ and after this change for reasons unrelated to it.
 | `python3 scripts/build/build-sel4.py --call-plane --skip-pin-check` | Builds — `wrote build/slime-sel4-call.elf` | Direct |
 | Boot under the pinned QEMU line | Generation 18 admitted, `[layout] 0..6` matching `SEL4_CALL_LAYOUT` slot for slot, 4 pairs minted, 5 components spawned, role request delivered, then deadlock | Direct — [`boot.log`](boot.log) |
 | The nine existing seL4 plane gates | All pass, re-run after the change | Direct |
+| `just sel4_boot_layout_check` | Passes — **9** plane layouts now, `sel4-call: 7 slots match` | Direct |
+| Fault injection: swap the `fabric-call-server` and `fabric-call-time` rows in `SEL4_CALL_LAYOUT`, rebuild, re-run | **Fails as intended** — `sel4-call: layout differs …`, printing both moved rows. Restored and re-verified green | Direct |
+| Fault injection: change that same row's rights `0x10008`→`0x1000c`, rebuild, re-run | **Passes — the gate is blind to it.** The generation bytes do change (md5 differs), but the dump prints the *grant's* rights, so the row still reads `0x10008`. Filed as **B26** | Direct |
 | `python3 scripts/check/check-contracts.py` | Passes — but does not read this fixture | Direct |
 | `python3 scripts/check/check-boot-layout-resource.py` | Passes — 19 fixtures, 18 generation/profile pairs, **none of them generation 18**; unchanged by this diff | Direct |
 | `just test_sel4_root` | 109/109 across 13 modules | Direct |
@@ -178,9 +187,12 @@ and after this change for reasons unrelated to it.
       admits, the layout matches the root slot for slot, every channel is minted
       and bound, and the broker receives a role request — and the remaining
       failure is one named mechanism.
-- [ ] **`sel4-call` is absent from `check-sel4-boot-layout.py`'s `PLANES`** and
-      has no blessed `.layout` fixture. Adding both is part of closing P5.4.6,
-      and until then the generation-18 table has no guard.
+- [x] **`sel4-call` now has a layout guard.** It joined
+      `check-sel4-boot-layout.py`'s `PLANES` and its `.layout` fixture is
+      blessed, with the slot-swap fault injection confirmed failing.
+- [ ] **B26** — the layout dump reports grant rights rather than layout rights,
+      so `sel4_boot_layout_check` cannot see a row that declares *more*
+      authority than its grant confers. Found while fault-injecting this plane.
 - [ ] **P5.4.6 is not closed.** C8.6's required checks — correlated replies,
       duplicate/stale rejection, one execution of a non-idempotent operation,
       seven distinct terminal events, reclamation on client or server death —

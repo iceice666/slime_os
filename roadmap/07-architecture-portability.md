@@ -1398,7 +1398,13 @@ Tracked as B25, rewritten from the numbering claim to this one. It is a
 decision about the capability model rather than a bug fix, and it touches the
 path all nine passing planes take.
 
-No gate is registered: a gate that cannot pass is not a gate. See
+No C8.6 gate is registered: a gate that cannot pass is not a gate. The plane's
+*layout* is guarded, though — `sel4-call` joined
+`check-sel4-boot-layout.py`'s `PLANES` and its fixture is blessed, so
+`just sel4_boot_layout_check` now freezes nine plane layouts rather than eight.
+That claim survives the deadlock because the dump is emitted between channel
+materialization and activation. Fault-injecting a slot swap fails the gate as
+intended; injecting a *rights* widening does not, which is filed as B26. See
 [`devlog/2026-08-07-p5-4-6-call-spawn-semantics/`](../devlog/2026-08-07-p5-4-6-call-spawn-semantics/index.md).
 
 #### Exit condition

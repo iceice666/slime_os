@@ -16,6 +16,52 @@ at the bottom rather than deleting it.
 
 ## Open
 
+### B26 — the `[layout]` dump reports the grant's rights, so a too-permissive layout row is unobservable
+
+**Problem:** `slime-root/src/main.rs:1255-1260` prints each row's rights from
+the *installed capability* — `capability.rights`, which
+`launch_component_graph` fills from the **generation grant** — rather than from
+the boot-layout entry the row is supposed to freeze. `bootstrap_executable_slot`
+and `bootstrap_slot` (`slime-root/src/channel.rs`) then test *containment*
+(`rights & !entry.rights != 0`), not equality, deliberately and correctly: the
+layout states what a slot may carry and the grant states what the generation
+confers, and requiring equality rejected a well-formed graph once already.
+
+The consequence is that `just sel4_boot_layout_check` cannot see a layout row
+that grants *more* than the generation uses. B10's whole purpose is keeping the
+table that declares a slot and the table that fills it in agreement, and this is
+the one direction of disagreement the gate is blind to.
+
+**Evidence:** Found by fault-injecting the P5.4.6 call plane. Changing
+`SEL4_CALL_LAYOUT`'s `fabric-call-server` row from `0x10008` to `0x1000c`
+(adding `RIGHT_TRANSFER`) rebuilds the generation to different bytes — verified
+by md5 — and the boot still prints `[layout] 5 executable fabric-call-server
+0x10008`, so all nine plane layouts match and the gate passes. Swapping two
+slot *numbers* in the same table is caught immediately and reported line by
+line, which is what shows the gap is specific to rights rather than general.
+
+This was reached honestly rather than theoretically: the first blessing of
+`sel4-call.layout` carried `0x20004`/`0x1000004` on the two factory rows,
+copied from generation 17, and the gate accepted them. The reviewer caught it
+by reading, not by running.
+
+**Severity:** Latent. It cannot produce a wrong boot on its own — the grant
+still bounds the authority actually installed — but it silently weakens every
+`.layout` fixture as a record of declared authority, and it defeats the gate
+for exactly the class of edit a careless layout change makes.
+
+**Proposed fix:** Emit the layout entry's own rights alongside the installed
+ones for bootstrap rows, so the dump states both what was declared and what was
+placed. That keeps the containment rule intact — the two are allowed to differ
+— while making the difference visible, which is what a frozen fixture needs. It
+re-blesses all nine seL4 fixtures and the nineteen x86 ones, so it is filed
+rather than fixed in passing.
+
+**Exit condition:** A layout row declaring strictly more authority than its
+generation grant confers is caught by `just sel4_boot_layout_check`, with a
+fault injection showing the previously-invisible `0x10008`→`0x1000c` edit now
+failing the gate.
+
 ### B25 — a spawn-granted endpoint moves on seL4 and copies on x86, so a parent cannot broker a later introduction
 
 **Problem:** `slime-root`'s `distribute_channel_ends` (`slime-root/src/main.rs`)
