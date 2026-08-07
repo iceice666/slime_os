@@ -188,3 +188,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-07 | [P5.4.10 — C8.1's tag collision and C8.3's graph provenance](2026-08-07-p5-4-10-collision-and-provenance/index.md) | Change | Verified | P5.4.10, P5.4, P5.4.1, C8.1, C8.3 |
 | 2026-08-07 | [P5.4.2 (part) — M5.4's superblock validator, made portable](2026-08-07-p5-4-2-store-superblock/index.md) | Change | Verified | P5.4.2, P5.4, P5.4.1, M5.4 |
 | 2026-08-07 | [P5.4.5 (part) — C8.5's arms that already ran, now asserted](2026-08-07-p5-4-5-qos-arms/index.md) | Change | Verified | P5.4.5, P5.4, P5.4.1, C8.5 |
+| 2026-08-07 | [P5.4.6 (part) — the C8.6 call plane builds and boots; the broker's slot model does not fit](2026-08-07-p5-4-6-call-plane/index.md) | Change | Root-caused | P5.4.6, P5.4, P5.4.1, C8.6 |

@@ -1240,7 +1240,7 @@ compose the earlier.
 | P5.4.3 | M6.1–M6.7 | Five gaps (directory, dango, generation commands, powerbox, transfer) and two partials (M6.1 v2 determinism, M6.2 protocol surface) |
 | P5.4.4 | C8.2 | **Complete** — aggregate fabric-graph admission before component launch; see below |
 | P5.4.5 | C8.5 | **In progress** — reliable/retained/timed QoS, plus the two C8.5 assertions colocated in `kernel/tests/fabric_stream.rs`. Three arms already ran on the seL4 stream plane unasserted (matching-before-data, bounded loss under a stall, peer death as a distinct event) and are now gated; the arms needing simulated time — retry exhaustion, deadline, lifespan, liveliness, lease, tie ordering — remain. See [`devlog/2026-08-07-p5-4-5-qos-arms/`](../devlog/2026-08-07-p5-4-5-qos-arms/index.md) |
-| P5.4.6 | C8.6 | Bounded native calls |
+| P5.4.6 | C8.6 | **In progress** — bounded native calls. The `sel4-call` image builds, admits its graph, and mints every control channel; the call broker resolves its endpoint factory at a literal slot 0, which the seL4 slot model does not produce. No gate yet. See [`devlog/2026-08-07-p5-4-6-call-plane/`](../devlog/2026-08-07-p5-4-6-call-plane/index.md) |
 | P5.4.7 | C8.7 | Native operations |
 | P5.4.8 | C8.8 | Filtered introspection and declared interposition |
 | P5.4.9 | C8.9, C8.10 | Typed full-profile closure and collision-free full-graph bootstrap |
@@ -1353,6 +1353,30 @@ call site in `slime-root/src/generation.rs` says so.
 #### Exit condition
 
 Every item in C8.5's required-checks list has an observed seL4 gate.
+
+### P5.4.6 — C8.6 bounded native calls
+
+**Status:** In progress.
+
+**Depends on:** P5.4.1.
+
+A tenth image, `sel4-call`, carrying a one-route `ParameterCall` graph with two
+clients, a server, and a time source. It builds, admits, and mints every
+declared control channel; it does not yet run the C8.6 protocol.
+
+The blocker is named and specific: `fabric-service` resolves `FACTORY_SLOT = 0`
+and `BUFFER_FACTORY_SLOT = 1` as literals, which is the x86 boot layout. On
+seL4 a non-bootstrap component's runtime slots start at `executables + 1`, so a
+fabric with no executables receives its factories at 1 and 2 while slot 0 goes
+to its first channel. Resolving both from the generated profile — as
+`FABRIC_FIRST_CONTROL_SLOT` already is — is the fix, and it touches the working
+stream plane, so it carries its own fault injection.
+
+No gate is registered: a gate that cannot pass is not a gate.
+
+#### Exit condition
+
+Every item in C8.6's required-checks list has an observed seL4 gate.
 
 ### P5.4.10 — The recorded partials
 

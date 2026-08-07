@@ -222,6 +222,12 @@ SEL4_MANIFESTS = {
     / "v1"
     / "fixtures"
     / "sel4-crossing.zti",
+    "sel4-call": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-call.zti",
 }
 COMPONENTS_TARGET_DIR = Path(
     os.environ.get("CARGO_TARGET_DIR") or ROOT / "target" / "components"
@@ -2495,6 +2501,10 @@ def build_sel4_generation(output: Path, manifest: dict, target_profile: TargetPr
         ("sel4-stream", "SLIME_SEL4_STREAM_CHECK"),
         ("sel4-supervision", "SLIME_SEL4_SUPERVISION_CHECK"),
         ("sel4-crossing", "SLIME_SEL4_CROSSING_CHECK"),
+        # C8.6 reuses the oracle's own plane flag rather than a new
+        # seL4-only one: the call broker is the same code, and a separate
+        # flag would let the two planes diverge without anything noticing.
+        ("sel4-call", "SLIME_FABRIC_CALL_CHECK"),
     ):
         if selected == manifest_name:
             os.environ[flag] = "1"

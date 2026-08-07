@@ -45,6 +45,8 @@ SUPERVISION_IMAGE = BUILD_ROOT / "slime-sel4-supervision.elf"
 SUPERVISION_MANIFEST = BUILD_ROOT / "slime-sel4-supervision.identity.json"
 CROSSING_IMAGE = BUILD_ROOT / "slime-sel4-crossing.elf"
 CROSSING_MANIFEST = BUILD_ROOT / "slime-sel4-crossing.identity.json"
+CALL_IMAGE = BUILD_ROOT / "slime-sel4-call.elf"
+CALL_MANIFEST = BUILD_ROOT / "slime-sel4-call.identity.json"
 
 # Which generation the root task embeds. That is the only difference between the
 # images this script builds; see `build_application`.
@@ -57,6 +59,7 @@ SAMPLE_VARIANT = "sample"
 STREAM_VARIANT = "stream"
 SUPERVISION_VARIANT = "supervision"
 CROSSING_VARIANT = "crossing"
+CALL_VARIANT = "call"
 VARIANT_MANIFESTS = {
     GRAPH_VARIANT: "sel4",
     CHANNEL_VARIANT: "sel4-channel",
@@ -66,6 +69,7 @@ VARIANT_MANIFESTS = {
     STREAM_VARIANT: "sel4-stream",
     SUPERVISION_VARIANT: "sel4-supervision",
     CROSSING_VARIANT: "sel4-crossing",
+    CALL_VARIANT: "sel4-call",
 }
 VARIANT_TARGET_DIRS = {
     FIXTURE_VARIANT: "root",
@@ -77,6 +81,7 @@ VARIANT_TARGET_DIRS = {
     STREAM_VARIANT: "root-stream",
     SUPERVISION_VARIANT: "root-supervision",
     CROSSING_VARIANT: "root-crossing",
+    CALL_VARIANT: "root-call",
 }
 VARIANT_IMAGES = {
     FIXTURE_VARIANT: (IMAGE, MANIFEST),
@@ -88,6 +93,7 @@ VARIANT_IMAGES = {
     STREAM_VARIANT: (STREAM_IMAGE, STREAM_MANIFEST),
     SUPERVISION_VARIANT: (SUPERVISION_IMAGE, SUPERVISION_MANIFEST),
     CROSSING_VARIANT: (CROSSING_IMAGE, CROSSING_MANIFEST),
+    CALL_VARIANT: (CALL_IMAGE, CALL_MANIFEST),
 }
 
 CHILD_MANIFEST = ROOT / "slime-root" / "child" / "Cargo.toml"
@@ -916,6 +922,11 @@ def main() -> None:
             "embed the channel-crossing generation (B22), writing a separate image"
         ),
     )
+    parser.add_argument(
+        "--call-plane",
+        action="store_true",
+        help="embed the bounded-call generation (C8.6), writing a separate image",
+    )
     arguments = parser.parse_args()
     selected = [
         variant
@@ -928,6 +939,7 @@ def main() -> None:
             (STREAM_VARIANT, arguments.stream_plane),
             (SUPERVISION_VARIANT, arguments.supervision_plane),
             (CROSSING_VARIANT, arguments.crossing_plane),
+            (CALL_VARIANT, arguments.call_plane),
         )
         if chosen
     ]

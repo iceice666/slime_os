@@ -1,0 +1,13 @@
+SLIME_ROOT fabric graph=admitted schemas=1 routes=1 participants=3 interpositions=0
+SLIME_GRAPH factory placed task=4 component=fabric-service slot=1 kind=endpoint-factory
+SLIME_GRAPH factory placed task=4 component=fabric-service slot=2 kind=shared-buffer-factory
+SLIME_GRAPH channel end task=4 slot=0 key=0 rights=0x3
+SLIME_GRAPH channel end task=4 slot=3 key=1 rights=0x3
+SLIME_GRAPH channel end task=4 slot=4 key=2 rights=0x3
+SLIME_GRAPH channel end task=4 slot=5 key=3 rights=0x3
+SLIME_GRAPH channel end task=4 slot=6 key=4 rights=0x3
+[fabric] fail: call role request
+[fabric-call] fail: time phase peer died
+[fabric-call] fail: call send
+[fabric-call] fail: call send
+[fabric-call] fail: call send
