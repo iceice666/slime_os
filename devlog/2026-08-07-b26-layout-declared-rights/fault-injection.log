@@ -1,0 +1,26 @@
+# B26 fault injection — 2026-08-07
+
+## Before the fix: the rights injection is invisible
+$ # SEL4_CALL_LAYOUT row 5: 0x10008 -> 0x1000c, rebuilt
+$ python3 scripts/check/check-sel4-boot-layout.py --no-build
+sel4-call: 7 slots match
+seL4 boot layout check: 9 plane layouts match their fixtures
+GATE_RC=0   <-- the defect: a widened layout row passed
+
+## Control: a slot swap in the same table IS caught
+sel4-call: layout differs from contracts/boot-layout/v1/fixtures/sel4-call.layout
+    was: [layout] 5 executable fabric-call-server 0x10008
+    now: [layout] 5 executable fabric-call-time 0x10008
+    was: [layout] 6 executable fabric-call-time 0x10008
+    now: [layout] 6 executable fabric-call-server 0x10008
+seL4 boot layout check: layouts moved
+
+## After the fix: the same rights injection now fails
+sel4-call: layout differs from contracts/boot-layout/v1/fixtures/sel4-call.layout
+    was: [layout] 5 executable fabric-call-server 0x10008
+    now: [layout] 5 executable fabric-call-server 0x10008 declared=0x1000c
+GATE_RC=1
+
+## Restored, all planes rebuilt, gate green
+$ python3 scripts/check/check-sel4-boot-layout.py --no-build
+seL4 boot layout check: 9 plane layouts match their fixtures

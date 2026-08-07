@@ -1252,12 +1252,42 @@ fn launch_component_graph(
             let Some(capability) = capability else {
                 continue;
             };
-            sel4::debug_println!(
-                "[layout] {slot} {} {} {:#x}",
-                capability.resource.kind(),
-                resource_label(generation, &capability.resource),
-                capability.rights,
-            );
+            let label = resource_label(generation, &capability.resource);
+            // B26. The four fields above are the retired kernel's line shape and
+            // stay exactly that, so the two dumps remain comparable slot for
+            // slot. `rights` among them is the *installed* capability's, which
+            // comes from the generation grant.
+            //
+            // That alone cannot express what B10 exists to freeze. The layout
+            // states what a slot may carry and the grant states what the
+            // generation confers, and `bootstrap_slot` deliberately tests
+            // containment rather than equality — requiring equality rejected a
+            // well-formed graph once already, because a layout marks a channel
+            // half `RIGHT_TRANSFER` for init to hand on while the grant is not
+            // about delegation at all. So the two legitimately differ, and a
+            // dump carrying only one of them cannot show a layout row that
+            // declares strictly more authority than anything uses.
+            //
+            // Appended rather than substituted, and only when they differ, so
+            // every row that agrees keeps the oracle's exact four fields and the
+            // twenty-eight existing fixtures that record agreement are unmoved.
+            // A row that disagrees gains one trailing field naming the declared
+            // value, which is the fact a frozen fixture needs and the one the
+            // gate was previously blind to.
+            match declared_layout_rights(boot_layout.as_ref(), &capability.resource, label)
+                .filter(|declared| *declared != capability.rights)
+            {
+                Some(declared) => sel4::debug_println!(
+                    "[layout] {slot} {} {label} {:#x} declared={declared:#x}",
+                    capability.resource.kind(),
+                    capability.rights,
+                ),
+                None => sel4::debug_println!(
+                    "[layout] {slot} {} {label} {:#x}",
+                    capability.resource.kind(),
+                    capability.rights,
+                ),
+            }
         }
     }
     sel4::debug_println!("[layout] end");
@@ -2922,6 +2952,53 @@ fn resource_label<'a>(generation: &Generation<'a>, resource: &graph::Resource) -
             .component(*component)
             .map_or("?", |record| record.name),
         _ => "-",
+    }
+}
+
+/// The rights the boot layout *declares* for the entry this capability came
+/// from, when the layout names one (B26).
+///
+/// Distinct from the rights the capability carries: those come from the
+/// generation grant, and the two are related by containment rather than
+/// equality — see `channel::bootstrap_slot`. Only the bootstrap component's
+/// table is numbered by a layout at all, which is the only table this is called
+/// for.
+///
+/// `None` when the layout names no entry for this resource: a factory role the
+/// layout omits, a channel init minted at runtime rather than one the layout
+/// placed, or no layout resource in the generation. Absent is not a
+/// disagreement, so the caller prints the oracle's four-field line unchanged.
+fn declared_layout_rights(
+    layout: Option<&boot_contracts::boot_layout::BootLayout<'_>>,
+    resource: &graph::Resource,
+    label: &str,
+) -> Option<u64> {
+    use boot_contracts::boot_layout::Role;
+
+    let layout = layout?;
+    let entries = || (0..layout.entry_count()).filter_map(|index| layout.entry(index));
+    match resource {
+        // Named by identity, exactly as `bootstrap_executable_slot` resolves it.
+        graph::Resource::Executable { .. } => {
+            let identity = boot_contracts::boot_layout::component_identity(label);
+            entries()
+                .find(|entry| entry.role == Role::Executable && entry.name_identity == identity)
+                .map(|entry| entry.rights)
+        }
+        // Singular roles carry no name, so they resolve by role — the rule
+        // `bootstrap_role_slot` follows.
+        graph::Resource::EndpointFactory => entries()
+            .find(|entry| entry.role == Role::EndpointFactory)
+            .map(|entry| entry.rights),
+        graph::Resource::SharedBufferFactory => entries()
+            .find(|entry| entry.role == Role::SharedBufferFactory)
+            .map(|entry| entry.rights),
+        // A channel end is named by its *grant*, which this dump does not carry
+        // — `resource_label` reports `-` for it, because one capability can be
+        // reached by more than one grant name. Reporting a declared value here
+        // would require picking one, so the row keeps the four-field shape and
+        // the endpoint half of B26 stays open.
+        _ => None,
     }
 }
 

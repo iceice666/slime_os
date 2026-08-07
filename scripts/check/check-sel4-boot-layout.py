@@ -188,8 +188,18 @@ def capture(name: str, image: Path, profile: dict[str, object]) -> str:
 
 # Every line a layout block may carry. Anchored so a malformed line is a
 # failure rather than something the diff silently accepts.
+#
+# The optional `declared=` tail is B26's: a bootstrap row whose *layout* rights
+# differ from the *grant* rights installed at that slot reports both, because
+# the two are related by containment rather than equality and a row carrying
+# only the installed value cannot show a layout that declares more authority
+# than anything uses. Rows where they agree — every row in every fixture today
+# — keep the retired kernel's exact four fields, so the two dumps stay
+# comparable slot for slot.
 HEADER = re.compile(r"^\[layout\] path=\S+ slots=\d+ max=\d+$")
-ENTRY = re.compile(r"^\[layout\] \d+ [a-z-]+ \S+ 0x[0-9a-f]+$")
+ENTRY = re.compile(
+    r"^\[layout\] \d+ [a-z-]+ \S+ 0x[0-9a-f]+( declared=0x[0-9a-f]+)?$"
+)
 
 
 def check_shape(name: str, block: str) -> None:

@@ -16,52 +16,6 @@ at the bottom rather than deleting it.
 
 ## Open
 
-### B26 — the `[layout]` dump reports the grant's rights, so a too-permissive layout row is unobservable
-
-**Problem:** `slime-root/src/main.rs:1255-1260` prints each row's rights from
-the *installed capability* — `capability.rights`, which
-`launch_component_graph` fills from the **generation grant** — rather than from
-the boot-layout entry the row is supposed to freeze. `bootstrap_executable_slot`
-and `bootstrap_slot` (`slime-root/src/channel.rs`) then test *containment*
-(`rights & !entry.rights != 0`), not equality, deliberately and correctly: the
-layout states what a slot may carry and the grant states what the generation
-confers, and requiring equality rejected a well-formed graph once already.
-
-The consequence is that `just sel4_boot_layout_check` cannot see a layout row
-that grants *more* than the generation uses. B10's whole purpose is keeping the
-table that declares a slot and the table that fills it in agreement, and this is
-the one direction of disagreement the gate is blind to.
-
-**Evidence:** Found by fault-injecting the P5.4.6 call plane. Changing
-`SEL4_CALL_LAYOUT`'s `fabric-call-server` row from `0x10008` to `0x1000c`
-(adding `RIGHT_TRANSFER`) rebuilds the generation to different bytes — verified
-by md5 — and the boot still prints `[layout] 5 executable fabric-call-server
-0x10008`, so all nine plane layouts match and the gate passes. Swapping two
-slot *numbers* in the same table is caught immediately and reported line by
-line, which is what shows the gap is specific to rights rather than general.
-
-This was reached honestly rather than theoretically: the first blessing of
-`sel4-call.layout` carried `0x20004`/`0x1000004` on the two factory rows,
-copied from generation 17, and the gate accepted them. The reviewer caught it
-by reading, not by running.
-
-**Severity:** Latent. It cannot produce a wrong boot on its own — the grant
-still bounds the authority actually installed — but it silently weakens every
-`.layout` fixture as a record of declared authority, and it defeats the gate
-for exactly the class of edit a careless layout change makes.
-
-**Proposed fix:** Emit the layout entry's own rights alongside the installed
-ones for bootstrap rows, so the dump states both what was declared and what was
-placed. That keeps the containment rule intact — the two are allowed to differ
-— while making the difference visible, which is what a frozen fixture needs. It
-re-blesses all nine seL4 fixtures and the nineteen x86 ones, so it is filed
-rather than fixed in passing.
-
-**Exit condition:** A layout row declaring strictly more authority than its
-generation grant confers is caught by `just sel4_boot_layout_check`, with a
-fault injection showing the previously-invisible `0x10008`→`0x1000c` edit now
-failing the gate.
-
 ### B25 — a spawn-granted endpoint moves on seL4 and copies on x86, so a parent cannot broker a later introduction
 
 **Problem:** `slime-root`'s `distribute_channel_ends` (`slime-root/src/main.rs`)
@@ -232,6 +186,53 @@ binary perturbed neither contract validation nor generation identity. See
 `devlog/2026-08-07-p5-4-1-oracle-inventory/`.
 
 ## Resolved
+
+### B26 — the `[layout]` dump reported the grant's rights, so a too-permissive layout row was unobservable — **resolved 2026-08-07**
+
+**Problem:** `slime-root/src/main.rs` printed each layout row's rights from the
+*installed capability*, which `launch_component_graph` fills from the
+**generation grant**, rather than from the boot-layout entry the row exists to
+freeze. `bootstrap_executable_slot` and `bootstrap_slot` test *containment*
+(`rights & !entry.rights != 0`) rather than equality, deliberately and
+correctly — a layout marks a channel half `RIGHT_TRANSFER` because init hands
+it on, while the grant is not about delegation at all, and requiring equality
+rejected a well-formed graph once already. So the two legitimately differ, and
+a dump carrying only one of them could not show a layout declaring strictly
+more authority than anything uses. B10 exists to keep the table that declares a
+slot and the table that fills it in agreement; this was the one direction of
+disagreement the gate was blind to.
+
+**Found by** fault-injecting P5.4.6's call plane: changing
+`SEL4_CALL_LAYOUT`'s `fabric-call-server` row from `0x10008` to `0x1000c`
+rebuilt the generation to different bytes (verified by md5) and the gate still
+passed, while swapping two slot *numbers* in the same table was caught
+immediately. That contrast is what localized the gap to rights.
+
+**Resolved by** `declared_layout_rights`, which resolves the layout entry
+behind a bootstrap row — by identity for an executable, by role for the two
+singular factories — and appends `declared=0x…` when it differs from the
+installed value. Appended and only on disagreement, so every row that agrees
+keeps the retired kernel's exact four fields and stays comparable to
+`dump_boot_layout`'s output slot for slot. `check-sel4-boot-layout.py`'s
+`ENTRY` pattern admits the optional tail.
+
+A channel end is deliberately not covered: it is named by its *grant*, and one
+capability can be reached by more than one grant name, so reporting a declared
+value would mean picking one. Executables and the two factories are where a
+layout row's rights are unambiguous, and they are the rows a layout edit
+touches.
+
+**Exit condition observed.** The previously-invisible `0x10008`→`0x1000c`
+injection now fails the gate, reporting
+`now: [layout] 5 executable fabric-call-server 0x10008 declared=0x1000c`
+against the frozen row. Restored and re-verified green.
+
+The fix immediately earned itself: re-blessing surfaced three *pre-existing*
+disagreements nothing had ever reported — `sel4-loan`, `sel4-sample`, and
+`sel4-stream` each declare `0x1000004` on their shared-buffer-factory row while
+the root installs `0x1000000`. Those are legitimate containment differences,
+now recorded rather than invisible. See
+`devlog/2026-08-07-b26-layout-declared-rights/`.
 
 ### B24 — `SharedBufferTable::quotas` never reclaimed, so `MAX_CHARGE_HOLDERS` was a lifetime bound — **resolved 2026-08-07**
 

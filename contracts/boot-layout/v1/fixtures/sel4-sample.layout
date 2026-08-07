@@ -1,6 +1,6 @@
 [layout] path=init slots=4 max=64
 [layout] 0 endpoint-factory - 0x20000
-[layout] 14 shared-buffer-factory - 0x1000000
+[layout] 14 shared-buffer-factory - 0x1000000 declared=0x1000004
 [layout] 15 executable sample-lender 0x10008
 [layout] 16 executable sample-receiver 0x10008
 [layout] end
