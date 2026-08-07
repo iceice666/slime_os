@@ -1,0 +1,9 @@
+test store_disk::tests::a_blank_sector_is_not_a_superblock ... ok
+test store_disk::tests::a_corrupted_checksum_field_is_refused ... ok
+test store_disk::tests::a_superblock_from_a_different_partition_is_refused ... ok
+test store_disk::tests::a_well_formed_superblock_round_trips ... ok
+test store_disk::tests::each_out_of_range_field_is_refused_on_its_own ... ok
+test store_disk::tests::every_malformed_class_is_refused_with_its_own_error ... ok
+test store_disk::tests::the_extreme_legal_values_are_admitted ... ok
+test store_disk::tests::the_generated_layout_is_self_consistent ... ok
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 108 filtered out; finished in 0.00s

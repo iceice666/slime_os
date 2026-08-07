@@ -11,7 +11,7 @@ r ::= import wire.rust;
 Format :: type {
   formatVersion : Int; superblockHeaderLen : Int; recordHeaderLen : Int;
   recordAreaStart : Int; slotALba : Int; slotBLba : Int;
-  maxObjects : Int; maxObjectPayload : Int;
+  maxObjects : Int; maxObjectPayload : Int; sectorBytes : Int;
   superblockFields : List refl.SchemaField; recordFields : List refl.SchemaField;
   superblockLayout : List w.WireField; recordLayout : List w.WireField;
 };
@@ -29,6 +29,7 @@ pythonBindings :: Format -> Text = format => w.join {
   "STORE_SLOT_B_LBA = "; n.toText format.slotBLba; "\n";
   "STORE_MAX_OBJECTS = "; n.toText format.maxObjects; "\n";
   "STORE_MAX_OBJECT_PAYLOAD = "; n.toText format.maxObjectPayload; "\n";
+  "STORE_SECTOR_BYTES = "; n.toText format.sectorBytes; "\n";
   w.renderRecords (records format);
 };
 
@@ -57,6 +58,7 @@ rustBindings :: Format -> Text = format => r.join {
   r.u64Const "SLOT_B_LBA" format.slotBLba;
   r.usizeConst "MAX_OBJECTS" format.maxObjects;
   r.usizeConst "MAX_OBJECT_PAYLOAD" format.maxObjectPayload;
+  r.usizeConst "SECTOR_BYTES" format.sectorBytes;
   rustOffsets "SUPERBLOCK" 0 format.superblockLayout;
   rustOffsets "RECORD" 0 format.recordLayout;
 };

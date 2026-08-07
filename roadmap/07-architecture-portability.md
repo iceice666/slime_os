@@ -1236,7 +1236,7 @@ compose the earlier.
 
 | Slice | Uncovered | Shape |
 | --- | --- | --- |
-| P5.4.2 | M5.1–M5.9 | Ten storage/rollback/recovery gaps. Structural: five of the nine `Mediation::Unavailable` planes are M5's surface. Carries `object_store.rs`'s 32 ungated assertions |
+| P5.4.2 | M5.1–M5.9 | **In progress** — ten storage/rollback/recovery gaps. Structural: five of the nine `Mediation::Unavailable` planes are M5's surface. Carries `object_store.rs`'s 32 ungated assertions, of which the eight superblock-shaped ones are now portable and host-tested in `boot-contracts` (see [`devlog/2026-08-07-p5-4-2-store-superblock/`](../devlog/2026-08-07-p5-4-2-store-superblock/index.md)); the rest need a block device `slime-root` does not have |
 | P5.4.3 | M6.1–M6.7 | Five gaps (directory, dango, generation commands, powerbox, transfer) and two partials (M6.1 v2 determinism, M6.2 protocol surface) |
 | P5.4.4 | C8.2 | **Complete** — aggregate fabric-graph admission before component launch; see below |
 | P5.4.5 | C8.5 | Reliable/retained/timed QoS, plus the two C8.5 assertions colocated in `kernel/tests/fabric_stream.rs` |
