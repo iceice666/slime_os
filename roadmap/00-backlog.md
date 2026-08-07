@@ -321,14 +321,33 @@ Its saved context is consistent with a live component rather than a fresh one:
 capability the kernel identifies as a live `cap_reply_cap`. Sixteen readings
 excluded; every layer above the scheduler checks out.
 
-**Exit condition unchanged.** What is left is a single question inside seL4: what
-transition leaves a thread Running and unqueued on the reply path. Two shapes are
-possible and they need different fixes — the kernel's `setThreadState(Running)`
-without a following `SCHED_ENQUEUE` for a thread that was `BlockedOnReceive`, or a
-root invocation sequence that drives the thread out of its blocked state without
-completing the send. Reading `deps/sel4/src/object/endpoint.c`'s reply path against
-this state is the next step, and it is a source read rather than another
-measurement.
+**The kernel's reply path was read and it explains the state without being wrong.**
+Non-MCS `doReplyTransfer` (`deps/sel4/src/kernel/thread.c:133`) opens with
+`assert(thread_state_get_tsType(receiver->tcbState) == ThreadState_BlockedOnReply)`.
+On success it does `cteDeleteOne(slot)`, `setThreadState(receiver, Running)`, then
+`possibleSwitchTo(receiver)` — so the enqueue is not missing from the kernel.
+
+`possibleSwitchTo` is where a Running thread can legitimately end up in no queue:
+when the target shares the current domain and `ksSchedulerAction` is
+`ResumeCurrentThread`, it takes neither `SCHED_ENQUEUE` branch and instead sets
+`ksSchedulerAction = target` — a *pending switch* held outside the ready queues.
+`schedule()` consumes that correctly, so the design is sound; but the measured state
+at the deadlock is `ksSchedulerAction = 0` (`ResumeCurrentThread`) with the target
+Running and unqueued, which is that pending switch having been **cleared without
+being honoured**.
+
+**So the shape of the bug is now pinned even though the culprit is not.** Something
+between `possibleSwitchTo` recording the switch and `schedule()` acting on it reset
+`ksSchedulerAction` to `ResumeCurrentThread` — plausibly a second
+`possibleSwitchTo`/`rescheduleRequired` interleaving from another root operation in
+the same kernel entry, which the root's single-threaded dispatch makes possible when
+one syscall replies to two different tasks. That is consistent with B28 appearing
+only when the retained diagnostics route adds a second reply-bearing path.
+
+**Exit condition unchanged**, and the remaining work is a narrow read rather than a
+search: instrument or step `ksSchedulerAction` across the root's reply sequence for
+task 10 and find the write that clears it. Everything above the scheduler is
+verified; sixteen readings are excluded.
 
 **One wider finding stands regardless of B28**, and it is worth its own slice:
 `sel4_transport::wait` returns `()`, so its staging-failure branch can only
