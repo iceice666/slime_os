@@ -86,13 +86,24 @@ without issuing another root call — which is why it emits nothing further and 
 no root-side accounting shows it as outstanding. That excludes every lost-wake and
 lost-reply reading, including the two this entry previously carried.
 
-What remains is a *component-side* question rather than a root one: what
-`fabric-publisher` does after `request_role` returns two capabilities, on a graph
-where a second retained route exists, that leaves it blocked without a syscall the
-root can see. Its next act is `recv(route_slot)` expecting `ERR_BAD_CAP`
-(`route receive denied`) — a non-blocking call — so the candidate is that the role
-capabilities it received are not the pair it expects when the fabric has minted an
-extra endpoint pair for the late subscriber.
+**The precise state, from the root's own accounting.** `parked=1` at teardown and
+the owed list names task 6 alone, so task 10 left the parked table — it was woken.
+It then issued **no further root call at all**: the transcript carries zero
+`received task=10` lines after the wake, and `recv` is the only thing
+`receive_role` does between waking and returning.
+
+That is the contradiction to resolve. `receive_role` loops `recv` then
+`wait(Endpoint(CONTROL_SLOT))`, both root operations, so a woken task must either
+call `recv` again or park again. Task 10 does neither, and it prints nothing — not
+even `publish role received`, which is the next statement after the two-capability
+loop completes. A task that returns from `wait` and then makes no syscall is
+either faulting silently or looping in userspace on a path with no root call in
+it.
+
+The next step is therefore a fault check rather than more transcript reading: the
+root reports task faults, so establishing whether task 10 took one — and if not,
+attaching to it — separates a component fault from a userspace spin. Nothing
+further can be concluded from the boot log alone.
 
 **Severity:** Blocks P5.4.5's exit condition and nothing else. Latent for every
 other plane: no other seL4 graph declares two retained routes on one publisher.
