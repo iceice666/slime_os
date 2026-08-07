@@ -193,8 +193,9 @@ def capture(name: str, image: Path, profile: dict[str, object]) -> str:
 # differ from the *grant* rights installed at that slot reports both, because
 # the two are related by containment rather than equality and a row carrying
 # only the installed value cannot show a layout that declares more authority
-# than anything uses. Rows where they agree — every row in every fixture today
-# — keep the retired kernel's exact four fields, so the two dumps stay
+# than anything uses. Three fixtures carry such a row today — `sel4-loan`,
+# `sel4-sample`, and `sel4-stream`, each on its shared-buffer-factory. Every
+# other row keeps the retired kernel's exact four fields, so the two dumps stay
 # comparable slot for slot.
 HEADER = re.compile(r"^\[layout\] path=\S+ slots=\d+ max=\d+$")
 ENTRY = re.compile(

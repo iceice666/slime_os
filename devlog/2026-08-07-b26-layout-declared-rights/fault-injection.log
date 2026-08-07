@@ -1,4 +1,11 @@
 # B26 fault injection — 2026-08-07
+#
+# ASSEMBLED, not a single verbatim session. Each block below is quoted from a
+# separate `check-sel4-boot-layout.py` run, in the order they were performed;
+# the surrounding `#` lines are annotation added when this file was written.
+# Nothing inside a quoted block was edited. The runs differ in the source-tree
+# state described by each heading, which is the whole point of the comparison,
+# so they could not have been one continuous capture.
 
 ## Before the fix: the rights injection is invisible
 $ # SEL4_CALL_LAYOUT row 5: 0x10008 -> 0x1000c, rebuilt

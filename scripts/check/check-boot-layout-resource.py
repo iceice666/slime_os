@@ -126,7 +126,15 @@ def fixture_rows(stem: str) -> list[tuple[int, str, str, int]]:
     rows = []
     for line in (FIXTURES / f"{stem}.layout").read_text().splitlines():
         parts = line.split()
-        if len(parts) == 5 and parts[1].isdigit():
+        # `>= 5`, not `== 5`: B26 appends a sixth `declared=0x…` field to a row
+        # whose layout rights differ from the installed ones. Only the four
+        # leading fields are this check's subject, so a row carrying the tail is
+        # read rather than silently dropped — an exact-length filter would make
+        # such a row vanish and this function would compare a short table
+        # against a full one. Unreachable today, since `FIXTURE_PROFILES` names
+        # only the nineteen x86 stems and the x86 dump does not emit the field;
+        # widened here so porting it at P5.4.final does not have to remember.
+        if len(parts) >= 5 and parts[1].isdigit():
             rows.append((int(parts[1]), parts[2], parts[3], int(parts[4], 16)))
     return rows
 

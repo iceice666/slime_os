@@ -132,7 +132,12 @@ def check_no_scaffolding(output: str) -> None:
 
 def check_layout(output: str) -> None:
     rows = [line.split() for line in output.splitlines() if line.startswith("[layout] ")]
-    slots = [row for row in rows if len(row) == 5 and row[1].isdigit()]
+    # `>= 5`, not `== 5`: B26 appends a sixth `declared=0x…` field to a row
+    # whose layout rights differ from the installed ones, and a row carrying it
+    # is still a slot this check must see — dropping it would let a scaffolding
+    # component hide from the label scan below. Unreachable today, since this
+    # parses an x86 boot and `dump_boot_layout` does not emit the field.
+    slots = [row for row in rows if len(row) >= 5 and row[1].isdigit()]
     if not slots:
         fail("product boot emitted no layout dump")
     labels = {row[3] for row in slots}

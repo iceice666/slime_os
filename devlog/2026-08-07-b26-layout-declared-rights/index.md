@@ -46,7 +46,7 @@ surfaced three pre-existing disagreements in already-frozen fixtures.
 | 3 | Booting the perturbed image directly prints `[layout] 5 executable fabric-call-server 0x10008` | The dump never carries the layout's value at all, so no fixture could record it |
 | 4 | `slime-root/src/main.rs` printed `capability.rights`, filled by `launch_component_graph` from the generation grant | The dump reports what was *installed*, not what the layout *declared* |
 | 5 | `bootstrap_executable_slot`/`bootstrap_slot` test `rights & !entry.rights != 0` | Containment, not equality — and deliberately so, so the two values are *allowed* to differ and one of them cannot stand in for the other |
-| 6 | The predecessor: `sel4-call.layout`'s first blessing carried `0x20004`/`0x1000004` on its two factory rows, copied from generation 17, and the gate accepted them | The gap had already produced a wrong fixture once, caught by a reviewer reading rather than by anything running |
+| 6 | The predecessor: `SEL4_CALL_LAYOUT`'s first draft carried `0x20004`/`0x1000004` on its two factory rows, copied from generation 17's table, and nothing running would have objected — the blessed fixture records the *installed* `0x20000`/`0x1000000` either way, so the too-permissive declaration would have been frozen invisibly | The gap had already produced a wrong layout table once, caught by a reviewer reading rather than by anything running |
 
 ## Root cause
 
@@ -78,10 +78,18 @@ disagreement nothing could observe.
 | `scripts/check/check-sel4-boot-layout.py` | `ENTRY` admits the optional `declared=0x…` tail | A row carrying the new field is well formed rather than malformed |
 | `sel4-{loan,sample,stream}.layout` | Re-blessed: each records `declared=0x1000004` on its shared-buffer-factory row | Three real, previously invisible disagreements are now frozen |
 
-Appended rather than substituted, and only on disagreement. Every row where the
-two agree — which is every row of every other fixture — keeps the retired
-kernel's exact four fields, so the two dumps stay comparable slot for slot and
-twenty-five of the twenty-eight fixtures are untouched.
+Appended rather than substituted, and only on disagreement, so every row where
+the two agree keeps the retired kernel's exact four fields and the two dumps
+stay comparable slot for slot.
+
+The fixture accounting is worth stating exactly, because the two families move
+for different reasons. Only the **nine** seL4 fixtures are captured from this
+dump (`check-sel4-boot-layout.py`'s `PLANES`); of those, six were unmoved by
+introducing the field and three gained one row each. The **nineteen** x86
+fixtures come from `kernel/src/runtime/bootstrap.rs::dump_boot_layout` through
+`check-boot-layout.py`'s own `PROFILES`, which this change does not touch at
+all — they are untouched because they are unreachable from here, not because
+their rows agree.
 
 A channel end is deliberately excluded. It is named by its *grant*, and one
 capability can be reached by more than one grant name, so reporting a declared
@@ -121,7 +129,7 @@ entry is unambiguous, and they are the rows a layout edit actually touches.
 
 - Decision: emit `declared=` only when the two differ.
 - Rationale: a fixture should read as the exception it records. Emitting it on
-  every row would move all twenty-eight fixtures to say "these agree", which is
+  every row would move all nine seL4 fixtures to say "these agree", which is
   the default and not worth freezing, and would bury the three rows that
   actually disagree.
 
@@ -145,12 +153,32 @@ entry is unambiguous, and they are the rows a layout edit actually touches.
 - [ ] **The x86 dump is unchanged**, so the nineteen oracle fixtures retain the
       original blindness. `kernel/` is frozen until P5.4.final, and its gate
       cannot run on this host, so this is recorded rather than fixed.
+- [ ] **A four-field row conflates "declared equals installed" with "the layout
+      names no entry".** `.filter(|declared| *declared != capability.rights)`
+      collapses `Some(equal)` and `None` into the same line, so the resolution
+      logic is self-checking only on the disagreeing path: if
+      `declared_layout_rights` ever stopped resolving an entry it resolves today
+      — an identity-domain change, a role moved into the `_ => None` arm, a
+      generation losing its layout resource — every agreeing row would stay
+      byte-identical and the gate would stay green. Three rows across the nine
+      seL4 fixtures exercise the `Some` arm; the rest do not. Accepted as the
+      cost of the emit-on-disagreement decision above, and recorded rather than
+      left implicit.
+- [x] **Two downstream `[layout]` parsers assumed exactly five fields** and
+      would have silently dropped a six-field row:
+      `check-boot-layout-resource.py::fixture_rows` and
+      `check-product-boot.py::check_layout`. Both now accept `>= 5`.
+      Unreachable today — both read x86 artifacts, whose dump does not emit the
+      field — but either follow-up above would reach them.
 
 ## Artifacts and provenance
 
 - Focused report: this entry.
-- Raw transcript: [`fault-injection.log`](fault-injection.log).
-- Serial/debugger/model output: [`fault-injection.log`](fault-injection.log).
+- Raw transcript: [`fault-injection.log`](fault-injection.log) — an **assembled**
+  record, labelled as such in its own header: each block is quoted verbatim from
+  a separate gate run, because the runs differ in source-tree state and could
+  not have been one capture. No quoted block was edited.
+- Serial/debugger/model output: the gate transcripts quoted in the same file.
 - Related roadmap item:
   [B26](../../roadmap/00-backlog.md),
   [B10](../../roadmap/00-backlog.md),

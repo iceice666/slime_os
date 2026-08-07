@@ -1269,11 +1269,13 @@ fn launch_component_graph(
             // declares strictly more authority than anything uses.
             //
             // Appended rather than substituted, and only when they differ, so
-            // every row that agrees keeps the oracle's exact four fields and the
-            // twenty-eight existing fixtures that record agreement are unmoved.
-            // A row that disagrees gains one trailing field naming the declared
-            // value, which is the fact a frozen fixture needs and the one the
-            // gate was previously blind to.
+            // every row that agrees keeps the oracle's exact four fields and
+            // stays comparable to `dump_boot_layout`'s output slot for slot. Of
+            // the nine seL4 fixtures this dump feeds, six were unmoved by
+            // introducing the field and three gained one row each, which is the
+            // disagreement it exists to surface. A row that disagrees gains one
+            // trailing field naming the declared value — the fact a frozen
+            // fixture needs and the one the gate was previously blind to.
             match declared_layout_rights(boot_layout.as_ref(), &capability.resource, label)
                 .filter(|declared| *declared != capability.rights)
             {
