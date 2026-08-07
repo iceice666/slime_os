@@ -273,10 +273,31 @@ different bugs:
   Running state belongs to something else entirely — in which case walking
   `tcbDebugNext` to identify each thread is the remaining read.
 
-The second must be settled before the first can be claimed: `ksDebugTCBs` was read
-as a bare address without confirming *which* task it names, and `tcbDebugNext`
-offsets were not resolved. That is the next measurement, and it is still a pure
-gdbstub read.
+**The second candidate is now settled: it is a real child thread.** This build has
+no `tcbDebugNext` field, so `ksDebugTCBs` is not a walkable list here — but the TCB it
+points at can be identified directly. At `0x80604f6c00`, `tcbPriority` (offset 920)
+reads **254**, which is `task::CHILD_PRIORITY`. The idle thread is a different object
+at `0x8060270000`-ish with `tcbPriority = 0`. So the Running TCB is one of the
+graph's own components, not the idle thread and not the root.
+
+**The inconsistency is therefore confirmed at the kernel level:** a child thread at
+priority 254 in `ThreadState_Running`, absent from `ksReadyQueues[254]` (and from
+every other priority's queue), while `ksCurThread` is the idle TCB and
+`ksSchedulerAction` is `ResumeCurrentThread`. A Running thread that is neither
+current nor enqueued cannot be scheduled again, which is exactly the observed hang.
+
+Fifteen readings excluded, and the defect is now located to one transition rather
+than a subsystem: something set a child's state to Running without enqueuing it, on
+the path a reply to a parked task takes. That is either seL4's own
+`setThreadState`/`possibleSwitchTo` sequence for a reply-send to a thread blocked in
+`Recv`, or a root-side invocation that leaves the thread in Running without the
+kernel completing the switch.
+
+**Exit condition unchanged, and the remaining work is bounded:** identify *which*
+component that TCB is (the root names its threads, so `seL4_DebugNameThread` on each
+child at spawn would label them in every future dump — a small, permanent
+improvement worth making regardless), then read seL4's reply path for the enqueue
+that does not happen.
 
 **One wider finding stands regardless of B28**, and it is worth its own slice:
 `sel4_transport::wait` returns `()`, so its staging-failure branch can only
