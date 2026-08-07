@@ -1130,13 +1130,29 @@ impl ChannelTable {
     }
 }
 
+/// Test-only conveniences.
+///
+/// `push` grew a `transferable` parameter in P5.3.2 and every call in the test
+/// module below kept the three-argument form, because nothing compiled them
+/// (B23). Rather than thread a fourth literal through nine call sites that do
+/// not care about delegation, the shim supplies the value those tests were
+/// written against: `false`, since none of them mints a loan.
+#[cfg(test)]
+impl ChannelTable {
+    fn push_undelegated(
+        &mut self,
+        producer: TaskId,
+        consumer: TaskId,
+        rights: u64,
+    ) -> Result<(ChannelKey, usize), ChannelError> {
+        self.push(producer, consumer, rights, false)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{ChannelTable, DeathWakes, SlotCursors, WaitTarget};
+    use super::{ChannelTable, DeathWakes, SlotCursors};
     use crate::generation::{RIGHT_RECV, RIGHT_SEND};
-    /// Authority to observe a spawned child's termination; see
-    /// `main.rs::RIGHT_SUPERVISE`, which this must agree with.
-    const RIGHT_SUPERVISE: u64 = 1 << 18;
     use crate::task::TaskId;
 
     const PRODUCER: TaskId = TaskId(1);
@@ -1145,7 +1161,9 @@ mod tests {
     #[test]
     fn a_one_directional_grant_gives_the_consumer_no_way_to_reply() {
         let mut channels = ChannelTable::new();
-        let (key, queues) = channels.push(PRODUCER, CONSUMER, RIGHT_SEND).expect("push");
+        let (key, queues) = channels
+            .push_undelegated(PRODUCER, CONSUMER, RIGHT_SEND)
+            .expect("push");
         assert_eq!(queues, 1);
 
         assert!(channels.send_queue(key, PRODUCER).is_some());
@@ -1162,7 +1180,9 @@ mod tests {
         // A `recv` grant is the same shape with the ends labelled the other way
         // round -- one queue, from whichever end the generation made the
         // producer -- not a channel that runs backwards.
-        let (recv_key, recv_queues) = channels.push(PRODUCER, CONSUMER, RIGHT_RECV).expect("push");
+        let (recv_key, recv_queues) = channels
+            .push_undelegated(PRODUCER, CONSUMER, RIGHT_RECV)
+            .expect("push");
         assert_eq!(recv_queues, 1);
         assert!(channels.send_queue(recv_key, PRODUCER).is_some());
         assert!(channels.recv_queue(recv_key, CONSUMER).is_some());
@@ -1172,7 +1192,7 @@ mod tests {
     fn a_bidirectional_grant_is_one_channel_carrying_two_queues() {
         let mut channels = ChannelTable::new();
         let (key, queues) = channels
-            .push(PRODUCER, CONSUMER, RIGHT_SEND | RIGHT_RECV)
+            .push_undelegated(PRODUCER, CONSUMER, RIGHT_SEND | RIGHT_RECV)
             .expect("push");
         assert_eq!(queues, 2);
         assert_eq!(channels.len(), 1, "one slot number at each end, not two");
@@ -1196,7 +1216,7 @@ mod tests {
     fn a_task_holding_neither_end_resolves_to_nothing() {
         let mut channels = ChannelTable::new();
         let (key, _) = channels
-            .push(PRODUCER, CONSUMER, RIGHT_SEND | RIGHT_RECV)
+            .push_undelegated(PRODUCER, CONSUMER, RIGHT_SEND | RIGHT_RECV)
             .expect("push");
         assert!(channels.send_queue(key, TaskId(9)).is_none());
         assert!(channels.recv_queue(key, TaskId(9)).is_none());
@@ -1208,9 +1228,11 @@ mod tests {
     #[test]
     fn keys_are_dense_and_deterministic_in_declaration_order() {
         let mut channels = ChannelTable::new();
-        let (first, _) = channels.push(PRODUCER, CONSUMER, RIGHT_SEND).expect("push");
+        let (first, _) = channels
+            .push_undelegated(PRODUCER, CONSUMER, RIGHT_SEND)
+            .expect("push");
         let (second, _) = channels
-            .push(CONSUMER, TaskId(3), RIGHT_SEND)
+            .push_undelegated(CONSUMER, TaskId(3), RIGHT_SEND)
             .expect("push");
         assert_eq!((first, second), (0, 1));
         assert_eq!(channels.len(), 2);
@@ -1222,10 +1244,10 @@ mod tests {
     fn a_dead_task_kills_every_queue_it_held_an_end_of() {
         let mut channels = ChannelTable::new();
         let (rpc, _) = channels
-            .push(PRODUCER, CONSUMER, RIGHT_SEND | RIGHT_RECV)
+            .push_undelegated(PRODUCER, CONSUMER, RIGHT_SEND | RIGHT_RECV)
             .expect("push");
         let (other, _) = channels
-            .push(TaskId(3), TaskId(4), RIGHT_SEND)
+            .push_undelegated(TaskId(3), TaskId(4), RIGHT_SEND)
             .expect("push");
         assert_eq!(channels.live_queues(), 3);
 
@@ -1248,7 +1270,9 @@ mod tests {
     #[test]
     fn a_parked_receiver_is_woken_by_its_peers_death() {
         let mut channels = ChannelTable::new();
-        let (key, _) = channels.push(PRODUCER, CONSUMER, RIGHT_SEND).expect("push");
+        let (key, _) = channels
+            .push_undelegated(PRODUCER, CONSUMER, RIGHT_SEND)
+            .expect("push");
         channels
             .recv_queue_mut(key, CONSUMER)
             .expect("queue")

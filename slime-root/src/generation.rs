@@ -334,8 +334,24 @@ mod tests {
         TargetProfile::by_name("aarch64-sel4-qemu-virt").expect("declared profile")
     }
 
-    fn elf_header(class: u8, data: u8, machine: u16) -> [u8; 20] {
-        let mut bytes = [0u8; 20];
+    /// Bytes an [`elf_header`] fixture occupies. Named so [`qualified`] sizes
+    /// its tail from the same constant rather than from a literal.
+    const ELF_TAIL: usize = wire::LEGACY_HEADER_LEN + 8;
+
+    /// A bare ELF64 header prefix, padded past `LEGACY_HEADER_LEN`.
+    ///
+    /// The padding is load-bearing, and it is what B23's first host run
+    /// surfaced. `classify` reaches its bare-ELF test only when
+    /// `component_image::target` answers `BadMagic`; a blob shorter than
+    /// `LEGACY_HEADER_LEN` (32) answers `Truncated` instead and falls straight
+    /// to `Unrecognized`. These fixtures were 20 bytes and had been asserting
+    /// against the wrong arm since `target` gained that guard — invisibly,
+    /// because nothing compiled them.
+    ///
+    /// No production path is affected: every real ELF is far longer than 32
+    /// bytes, and a payload that short is not one this root could load anyway.
+    fn elf_header(class: u8, data: u8, machine: u16) -> [u8; ELF_TAIL] {
+        let mut bytes = [0u8; ELF_TAIL];
         bytes[..4].copy_from_slice(&[0x7f, b'E', b'L', b'F']);
         bytes[4] = class;
         bytes[5] = data;
@@ -344,8 +360,13 @@ mod tests {
     }
 
     /// A qualified component image for `profile`, under `magic`.
-    fn qualified(magic: u64, profile: &TargetProfile) -> [u8; wire::HEADER_LEN + 20] {
-        let mut bytes = [0u8; wire::HEADER_LEN + 20];
+    ///
+    /// The tail is sized from [`elf_header`] rather than by a literal, so
+    /// widening that fixture cannot silently truncate this one. It was a
+    /// literal `20`, and the mismatch was invisible while nothing compiled
+    /// these tests (B23).
+    fn qualified(magic: u64, profile: &TargetProfile) -> [u8; wire::HEADER_LEN + ELF_TAIL] {
+        let mut bytes = [0u8; wire::HEADER_LEN + ELF_TAIL];
         bytes[wire::OFF_HEADER_MAGIC..][..8].copy_from_slice(&magic.to_le_bytes());
         bytes[wire::OFF_HEADER_FORMAT_VERSION..][..4]
             .copy_from_slice(&wire::FORMAT_VERSION.to_le_bytes());
@@ -460,6 +481,21 @@ mod tests {
         );
         assert_eq!(
             PayloadFormat::classify(&[], sel4_profile()),
+            PayloadFormat::Unrecognized
+        );
+        // The band between `classify`'s own 20-byte discriminator and
+        // `LEGACY_HEADER_LEN` (32): long enough to answer every class, data,
+        // and machine test, short enough that `component_image::target`
+        // answers `Truncated` and never yields `BadMagic`. A well-formed
+        // AArch64 ELF *prefix* in that band must still be unrecognized.
+        //
+        // Pinned explicitly because widening `elf_header` past the guard is
+        // what made the two tests above it meaningful, and would otherwise
+        // have vacated this band entirely — removing the guard or moving
+        // `LEGACY_HEADER_LEN` would then leave the suite green.
+        let elf = elf_header(2, 1, 183);
+        assert_eq!(
+            PayloadFormat::classify(&elf[..wire::LEGACY_HEADER_LEN - 1], sel4_profile()),
             PayloadFormat::Unrecognized
         );
     }
