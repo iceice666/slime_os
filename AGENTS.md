@@ -72,6 +72,7 @@ Use the Justfile targets from the repository root:
 - `just machete` — unused-dependency scan of workspace crates.
 - `just miri` — UB check of host-testable crates (boot-contracts, slime-proto).
 - `just test_host` — host-side unit tests for boot-contracts and slime-proto.
+- `just test_sel4_root` — `slime-root`'s 102 host unit tests, with the count asserted (B23). A gate of its own rather than a `test_host` arm: it compiles against the installed seL4 prefix, so it needs `just sel4_qemu_image_check` first and does not run in CI.
 - `just ruff` — Python lint for `scripts/` (ruff.toml).
 - `just typos` — spell-check sources and docs (_typos.toml).
 

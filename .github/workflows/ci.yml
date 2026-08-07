@@ -62,6 +62,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: extractions/setup-just@v2
       - run: just test_host
+      # `just test_sel4_root` is deliberately absent, for `lint_sel4_root`'s
+      # reason: `slime-root`'s tests compile against the installed seL4 prefix,
+      # which this runner does not build. They run in the pinned `nix develop`
+      # shell alongside the image and the seL4 gates. Listed here so the
+      # omission reads as a decision rather than an oversight.
 
   miri:
     name: Miri (boot-contracts, slime-proto)

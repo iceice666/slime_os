@@ -691,10 +691,76 @@ miri:
     cd boot-contracts && cargo miri test --all-features --target x86_64-unknown-linux-gnu
     cd components && cargo miri test --target x86_64-unknown-linux-gnu -p slime-proto
 
-# Host-side unit tests for the crates that do not need QEMU.
+# Host-side unit tests for the crates that need neither QEMU nor a built seL4
+# prefix.
+#
+# `slime-root`'s tests are deliberately *not* here: they need the installed
+# libsel4 headers to compile at all, which this job's CI runner does not have.
+# `just test_sel4_root` is their gate, and it runs on the machine that builds
+# the image.
 test_host:
     cd boot-contracts && cargo test --all-features
     cd components && cargo test --target x86_64-unknown-linux-gnu -p slime-proto
+
+# B23: `slime-root`'s mechanism modules, run on the host.
+#
+# They were compiled by nothing and run by nothing until the crate grew a lib
+# target: `main.rs` is unconditionally `no_std`/`no_main`, and the package built
+# only for a seL4 JSON target with no `libtest`. The library is the same code
+# the seL4 image links, so a pass here is evidence about the shipped root.
+#
+# Needs the installed seL4 prefix because `sel4` reads `libsel4`'s generated
+# config at build time even on a host target; the gate refuses rather than
+# silently skipping, on `lint_sel4_root`'s rule. It runs no seL4 syscall — the
+# tests exercise the state machines, and behavior needing a live kernel stays
+# the `sel4_*` gates' job.
+#
+# The count is asserted so a module that stops being covered is visible, which
+# is B23's exit condition. Raise it deliberately when tests are added.
+test_sel4_root:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    prefix="$PWD/build/sel4-prefix"
+    if [ ! -f "$prefix/libsel4/include/kernel/gen_config.json" ]; then
+        echo "test_sel4_root: no installed seL4 prefix at $prefix; run 'just sel4_qemu_image_check' first" >&2
+        exit 1
+    fi
+    expected=102
+    # Pinned rather than ambient, on `lint_sel4_root`'s rule: this build
+    # consumes the installed seL4 prefix, so it must use the toolchain that
+    # prefix was produced against. `rust-toolchain.toml`'s default is a
+    # different nightly, and a gate whose result depends on which shell you are
+    # in is the property `sel4_pin_check` exists to prevent.
+    toolchain="$(python3 -c "import pathlib,tomllib; print(tomllib.loads(pathlib.Path('sel4/pins.toml').read_text())['rust_sel4']['toolchain'])")"
+    host="$(rustc -vV | sed -n 's/^host: //p')"
+    mkdir -p build
+    capture="build/slime-root-host-tests.txt"
+    # Not captured by a command substitution: a build failure must surface as
+    # itself. `set -e` ends the recipe here rather than letting an empty capture
+    # become a count mismatch reporting "ran  tests" for a compile error. The
+    # transcript lands under `build/` rather than a fixed `/tmp` name, which two
+    # checkouts or two concurrent runs would share.
+    SEL4_PREFIX="$prefix" RUSTUP_TOOLCHAIN="$toolchain" \
+        cargo test -p slime-root --target "$host" --lib -- --format=terse \
+        | tee "$capture"
+    output="$(cat "$capture")"
+    actual="$(printf '%s\n' "$output" | sed -n 's/^running \([0-9]*\) test.*/\1/p' | head -1)"
+    if [ -z "$actual" ]; then
+        echo "test_sel4_root: cargo printed no 'running N tests' line; the harness did not start" >&2
+        exit 1
+    fi
+    if [ "$actual" != "$expected" ]; then
+        echo "test_sel4_root: ran $actual tests, expected $expected; a module lost or gained coverage (B23)" >&2
+        exit 1
+    fi
+    # Belt and braces: the count says the harness found them, this says they
+    # passed. `cargo test`'s own exit status covers it, but a filtered or
+    # ignored run would still print a count.
+    if ! printf '%s\n' "$output" | grep -q "^test result: ok\. $expected passed; 0 failed"; then
+        echo "test_sel4_root: the run did not report $expected passed and 0 failed" >&2
+        exit 1
+    fi
+    echo "slime-root host tests: $actual/$expected across 13 modules"
 
 # Python lint for the host-side build/check/generate scripts. Config in ruff.toml.
 ruff:
