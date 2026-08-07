@@ -267,3 +267,31 @@ a real regression while it was being written (below).
   the bisected one, and its severity is scoped: it blocks this plane's exit
   condition and nothing else, because no other seL4 graph declares two retained
   routes on one publisher.
+
+- **2026-08-07 (fifth correction).** B28 was chased to the limit of what the boot
+  log can say, and the answer excludes everything this entry previously suspected.
+
+  `ParkedReplies` is now instrumented: the root emits
+  `SLIME_GRAPH replies owed count=` and one `reply owed task=` per still-parked
+  task at teardown, on a separate line from the accounting line two gates match by
+  prefix, and only when the set is non-empty — so every healthy plane gains no
+  line and no fixture moved.
+
+  The owed reply belongs to task **6**, which is `init` waiting on its children.
+  `fabric-publisher` is task 10 and is **not** in the list, so it left the parked
+  table: its wake was delivered. It then made no further root call at all — zero
+  `received task=10` lines after the wake, no fault marker (the root reports
+  those, `SLIME_GRAPH component fault`), and not even its own next
+  `publish role received`.
+
+  So `receive_role` — which loops `recv` then `wait`, both root operations —
+  returned from `wait` and issued neither. That excludes a lost wake, a lost
+  reply, starvation, clock volume, boot duration, the `retainedSamples` bound, the
+  frame table, and a component fault. Six readings ruled out by experiment or
+  instrumentation.
+
+  What remains needs a debugger rather than a transcript: a task that returns from
+  `wait` and makes no syscall is looping in userspace on a path with no root call
+  in it. B28 records that as its next step. The instrumentation is worth keeping
+  regardless — `parked=` could say how many replies were owed but never which, and
+  that gap is what made the first three diagnoses plausible.
