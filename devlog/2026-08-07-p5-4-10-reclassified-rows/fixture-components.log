@@ -1,0 +1,50 @@
+=== components declared per seL4 fixture (the `components = [...]` block only) ===
+
+Grant names are excluded: they live in a separate `grants` block and are
+edges rather than components. B11 is about which *components* a graph
+declares, so counting grants would overstate every fixture.
+
+--- sel4-channel.zti: 2 components
+  init
+  console
+
+--- sel4-crossing.zti: 2 components
+  init
+  crossing-peer
+
+--- sel4-loan.zti: 3 components
+  init
+  sample-receiver
+  console
+
+--- sel4-sample.zti: 3 components
+  init
+  sample-lender
+  sample-receiver
+
+--- sel4-spawn.zti: 3 components
+  init
+  console
+  sysinfo
+
+--- sel4-stream.zti: 7 components
+  init
+  fabric-service
+  fabric-publisher
+  fabric-publisher-b
+  fabric-subscriber
+  fabric-subscriber-b
+  fabric-intruder
+
+--- sel4-supervision.zti: 3 components
+  init
+  supervision-child
+  sysinfo
+
+--- sel4.zti: 5 components
+  init
+  console
+  spawn-service
+  sysinfo
+  echo-agent
+
