@@ -2229,7 +2229,17 @@ const _: () = assert!(FABRIC_REQUIRED_CAPABILITY_SLOTS <= FABRIC_MAX_CAPABILITY_
 // but that is a boot-time failure on a graph the build could have refused: the
 // resolver rejects an over-wide partition, and this pins that same number here so
 // the two cannot disagree.
-const _: () = assert!(fabric_worker_wait_sources("stream") <= slime_rt::MAX_WAIT_SOURCES);
+//
+// `WORKER_ABSENT` is admitted for the same reason the call and operation
+// brokers admit it: a broker is a *module* of this binary and is compiled into
+// every graph, including ones that declare no route it carries. Without this
+// arm a call-only graph fails to build on `usize::MAX <= MAX_WAIT_SOURCES` —
+// a constant nothing in such a graph ever reads. Every graph that *does*
+// declare a stream route is checked exactly as before.
+const _: () = assert!(
+    matches!(fabric_worker_wait_sources("stream"), WORKER_ABSENT)
+        || fabric_worker_wait_sources("stream") <= slime_rt::MAX_WAIT_SOURCES
+);
 
 // The frame table must cover every reference the declared rings can hold at
 // once, or a full set of rings would leave the fabric with no free frame while
