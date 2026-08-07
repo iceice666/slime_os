@@ -232,13 +232,32 @@ capability the kernel confirms is a live reply cap, and the send returns. The CP
 then idles with no runnable thread and the child never resumes. **Twelve readings
 excluded.**
 
-What remains is inside the kernel: a non-MCS `cap_reply_cap` carries a `capTCBPtr`,
-so the remaining question is whether the cap this root saved names the thread it
-believes it does, or whether that thread is in a state where `seL4_Send` on a reply
-cap is a no-op. Answering it needs `seL4_DebugDumpScheduler` at the deadlock — which
-`KernelDebugBuild` also provides but `rust-sel4` does not currently bind (only
-`DebugCapIdentify` and `DebugNameThread` are exposed) — or reading the kernel's TCB
-state directly through the gdbstub, which is where the next attempt should start.
+**The kernel's own scheduler state confirms a true deadlock, not starvation.**
+Reading it through the gdbstub with the kernel ELF loaded as a symbol target:
+
+* `ksCurThread = 0x8060030c00`, the idle TCB — matching the `idle_thread` PC.
+* `ksSchedulerAction = 0`, i.e. `SchedulerAction_ResumeCurrentThread`: the kernel
+  has decided there is nothing to switch to.
+* `ksReadyQueues[0]`, `[1]`, `[254]`, and `[255]` all have `head = NULL`. Priority
+  254 is `CHILD_PRIORITY` and 255 is the root's, so **no thread at any priority is
+  runnable**.
+
+That closes the starvation question for good: every thread in the graph is blocked,
+including the root. It also means the missing wake is not a scheduling artifact — a
+runnable-but-never-selected thread would sit in `ksReadyQueues[254]`, and it does
+not.
+
+So the state is fully characterized and internally contradictory at the seL4
+boundary: the root sent a reply over a capability the kernel identifies as a live
+`cap_reply_cap` naming a blocked thread, and that thread did not become runnable.
+Thirteen readings excluded.
+
+The next step is the one measurement not yet taken: locating task 10's TCB (via the
+`capTCBPtr` in the saved reply cap, or by walking the root's CNode) and reading its
+`tcbState` to see *what* it is blocked on — `BlockedOnReceive` on which endpoint, or
+`BlockedOnReply`. That distinguishes "the reply went to the wrong thread" from "the
+thread is waiting on something else entirely", and it is a pure gdbstub read
+requiring no new build options.
 
 **One wider finding stands regardless of B28**, and it is worth its own slice:
 `sel4_transport::wait` returns `()`, so its staging-failure branch can only
