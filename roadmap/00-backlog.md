@@ -365,13 +365,38 @@ unexplained by any mechanism inspected so far: a `Running` child at priority 254
 absent from every ready queue, `ksSchedulerAction = ResumeCurrentThread`,
 `ksCurThread` idle, reached after a single reply send over a live `cap_reply_cap`.
 
-**Exit condition unchanged.** The remaining approaches are both heavier than anything
-tried so far, and choosing between them is the next decision rather than the next
-command: single-step the kernel from the reply send that targets task 10 (a gdbstub
-watchpoint on `ksSchedulerAction` plus a breakpoint on `possibleSwitchTo` would show
-the write and the caller), or rebuild seL4 with thread-name support so a
-`DebugDumpScheduler` names every thread and its state in one shot. The first needs no
-rebuild; the second makes every future seL4 investigation cheaper.
+**A kernel breakpoint identifies the branch and the caller.** Booting with `-S`,
+setting `breakpoint set -n possibleSwitchTo -c "(unsigned long)target ==
+0x80604f6c00"`, and continuing stops with:
+
+```
+frame #0: possibleSwitchTo(target=0x80604f6c00) at thread.c:562
+frame #1: restart(target=…) at thread.h:99 [inlined]
+frame #2: invokeTCB_Resume(thread=…) at tcb.c:1698 [inlined]
+```
+
+and, at that moment, `ksSchedulerAction == 0`, `ksCurDomain == 0`,
+`target->tcbDomain == 0`.
+
+So the call reaching task 10 is its **activation** — `TCB_Resume`, which is
+`tasks.activate(id)` from the root's launch loop — not a reply at all. And with the
+domains equal and `ksSchedulerAction` at `ResumeCurrentThread`,
+`possibleSwitchTo` takes its third branch: `NODE_STATE(ksSchedulerAction) = target`.
+The thread is left `Running`, **deliberately unqueued**, with the switch pending in
+`ksSchedulerAction` — exactly the state observed at the deadlock, and the reason
+`ksReadyQueues[254]` is empty while a child is Running.
+
+That reframes the whole defect: the question is not why a reply failed, but why a
+*pending activation switch* was dropped between `activate()` and the thread ever
+running. Eighteen readings excluded, and this is the first one that explains all
+three measured facts at once.
+
+**Exit condition unchanged**, and the next step is now precise: the root activates
+every task in a loop (`launch_component_graph`), so each `TCB_Resume` overwrites the
+previous `ksSchedulerAction` — only the last activated task keeps its pending switch,
+and the rest depend on being enqueued by something later. Reading that loop against
+`possibleSwitchTo`'s three branches, and checking whether the passing planes differ
+only in activation order, is the remaining work.
 
 **One wider finding stands regardless of B28**, and it is worth its own slice:
 `sel4_transport::wait` returns `()`, so its staging-failure branch can only
