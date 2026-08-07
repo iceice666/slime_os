@@ -252,12 +252,31 @@ boundary: the root sent a reply over a capability the kernel identifies as a liv
 `cap_reply_cap` naming a blocked thread, and that thread did not become runnable.
 Thirteen readings excluded.
 
-The next step is the one measurement not yet taken: locating task 10's TCB (via the
-`capTCBPtr` in the saved reply cap, or by walking the root's CNode) and reading its
-`tcbState` to see *what* it is blocked on — `BlockedOnReceive` on which endpoint, or
-`BlockedOnReply`. That distinguishes "the reply went to the wrong thread" from "the
-thread is waiting on something else entirely", and it is a pure gdbstub read
-requiring no new build options.
+**A TCB state read deepens the contradiction rather than resolving it.**
+`ksDebugTCBs` (the kernel's debug thread list, available because
+`KernelDebugBuild` is on) heads at `0x80604f6c00`, and `tcbState` is the first field
+of `tcb_t`. Reading it there gives word 0 = `0x1`, which is
+`ThreadState_Running` in `deps/sel4/include/object/structures.h:160`.
+
+So at the deadlock there is a thread the kernel considers **Running** while
+`ksReadyQueues` is empty at every priority and `ksCurThread` is the idle TCB. Those
+three facts cannot all be consistent with a healthy scheduler: a Running thread
+belongs in a ready queue or is current, and this one is neither.
+
+That is the sharpest statement available and it is worth stopping on rather than
+guessing past. Fourteen readings excluded. Two candidates remain, and they are
+different bugs:
+
+* the thread was made Running and then never enqueued — a missing
+  `SCHED_ENQUEUE`, which on this path would be inside seL4's own reply handling;
+* or the TCB at the head of `ksDebugTCBs` is not the thread this concerns, and the
+  Running state belongs to something else entirely — in which case walking
+  `tcbDebugNext` to identify each thread is the remaining read.
+
+The second must be settled before the first can be claimed: `ksDebugTCBs` was read
+as a bare address without confirming *which* task it names, and `tcbDebugNext`
+offsets were not resolved. That is the next measurement, and it is still a pure
+gdbstub read.
 
 **One wider finding stands regardless of B28**, and it is worth its own slice:
 `sel4_transport::wait` returns `()`, so its staging-failure branch can only
