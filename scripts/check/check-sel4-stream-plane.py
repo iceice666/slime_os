@@ -591,6 +591,8 @@ SEL4_CHECK_FLAGS = (
     "SLIME_SEL4_SPAWN_CHECK",
     "SLIME_SEL4_SAMPLE_CHECK",
     "SLIME_SEL4_STREAM_CHECK",
+    "SLIME_SEL4_SUPERVISION_CHECK",
+    "SLIME_SEL4_CROSSING_CHECK",
 )
 
 # Every component this graph runs. All six, with no exceptions and no allowance

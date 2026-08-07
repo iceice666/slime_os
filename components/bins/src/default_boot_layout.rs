@@ -15,6 +15,8 @@ pub const CONSOLE_SLOT: u32 = 1;
 #[allow(dead_code)]
 pub const CONSOLE_OUTPUT_SLOT: u32 = 2;
 #[allow(dead_code)]
+pub const CROSSING_PEER_SLOT: u32 = SLOT_ABSENT;
+#[allow(dead_code)]
 pub const DANGO_SLOT: u32 = 3;
 #[allow(dead_code)]
 pub const DANGO_OUTPUT_SLOT: u32 = 4;

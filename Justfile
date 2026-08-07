@@ -116,6 +116,16 @@ sel4_stream_check: sel4_pin_check
 sel4_supervision_check: sel4_pin_check
     python3 scripts/check/check-sel4-supervision-plane.py
 
+# B22: build the channel-crossing image, boot it, and require that a graph
+# minting more channels over its lifetime than `MAX_CHANNELS` holds at once
+# still sends and receives on every live channel — including a pair held across
+# the crossing and an end parked in `Transit` across it.
+#
+# A ninth image, on the same rule as the eight above: each gate boots the
+# artifact it asserts about.
+sel4_crossing_check: sel4_pin_check
+    python3 scripts/check/check-sel4-crossing-plane.py
+
 # Run the seL4 product image interactively on the pinned QEMU machine.
 run: sel4_qemu_image_check
     qemu-system-aarch64 -machine virt,virtualization=on -cpu cortex-a53 -smp 1 \

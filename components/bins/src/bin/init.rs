@@ -246,6 +246,12 @@ fn main() {
         slime_rt::debug_write(b"[init] supervision plane complete\n");
         slime_rt::exit(0);
     }
+    // B22's channel-crossing plane, on the same rule again.
+    if option_env!("SLIME_SEL4_CROSSING_CHECK") == Some("1") {
+        drive_crossing_plane();
+        slime_rt::debug_write(b"[init] crossing plane complete\n");
+        slime_rt::exit(0);
+    }
     slime_rt::debug_write(b"[init] launching component graph\n");
     if option_env!("SLIME_TRANSFER_RECEIVER") == Some("1") {
         if slime_rt::generation_receive(TRANSFER_RECEIVER_SLOT, TRANSFER_SOURCE_SLOT) == 0 {
@@ -2086,6 +2092,206 @@ fn drive_supervision_plane() {
         }
         _ => fail_supervision(b"a handle parked across the crossing lost its outcome"),
     }
+}
+
+/// How many channel pairs the crossing plane mints over the boot.
+///
+/// One more than `channel::MAX_CHANNELS` (32), for the reason
+/// `SUPERVISION_LOOP_CHILDREN` is one more than `MAX_RECORDS`: the bound this
+/// crosses is on channels *live at once*, and a graph that releases as it goes
+/// must be able to exceed it. A loop that stopped at 32 would pass against the
+/// unfixed root and prove nothing.
+const CHANNEL_LOOP_PAIRS: u32 = 33;
+
+/// Drive the channel-crossing plane: mint more channels over one boot than
+/// `MAX_CHANNELS` holds at once, and keep sending on every live one.
+///
+/// Only reachable under `SLIME_SEL4_CROSSING_CHECK`, whose generation is
+/// `contracts/generation/v1/fixtures/sel4-crossing.zti`.
+///
+/// This is backlog **B22**'s exit condition. Before the fix `ChannelTable`
+/// never freed an entry and derived each key from `self.len`, so `MAX_CHANNELS`
+/// bounded the channels a boot could **ever** mint; the 33rd `endpoint_create`
+/// was refused with `ERR_OUT_OF_MEMORY` however few were still held.
+///
+/// The loop drops both ends of each pair before minting the next, so live
+/// occupancy never exceeds three while the lifetime count sails past 32. Two
+/// arms then assert what a sweep could plausibly break:
+///
+/// - a pair **held** across the crossing still carries a message afterwards,
+///   which fails if the sweep is too aggressive;
+/// - an end **parked in transit** across the crossing is still collectable and
+///   still resolves to its queue — the half a predicate over live capability
+///   tables alone would miss, exactly as `Transit::holds_supervision` is for
+///   B16.
+fn drive_crossing_plane() {
+    // ---- a channel end parked in transit, across the crossing ----
+    //
+    // `crossing-peer` is spawned holding two edges: the carrier the end arrives
+    // on (slot 0) and a gate it blocks reading (slot 1). Init transfers the end
+    // over the carrier and then runs its loop while the peer is parked on the
+    // gate, so the capability sits in `Transit` — held by no capability table
+    // at all — across every sweep the loop triggers. A sweep reading only
+    // `GraphTables` frees that channel, and the end the peer eventually lands
+    // names a key the table no longer has.
+    //
+    // A purpose-built peer rather than init itself, and rather than an
+    // unmodified component: `cap_transfer` refuses `endpoint_slot ==
+    // capability_slot` and requires a distinct peer, while every unmodified
+    // component drains its only queue immediately — closing the in-flight
+    // window before the first sweep fires. `supervision-child` set the same
+    // precedent for B16's transit arm.
+    let (carrier_send, carrier_child) = slime_rt::endpoint_create(ENDPOINT_FACTORY_SLOT)
+        .unwrap_or_else(|_| fail_crossing(b"carrier endpoint"));
+    let (gate_send, gate_child) = slime_rt::endpoint_create(ENDPOINT_FACTORY_SLOT)
+        .unwrap_or_else(|_| fail_crossing(b"gate endpoint"));
+    let peer = slime_rt::spawn(
+        CROSSING_PEER_SLOT,
+        &[
+            grant(carrier_child, RIGHT_SEND | RIGHT_RECV),
+            grant(gate_child, RIGHT_SEND | RIGHT_RECV),
+        ],
+    )
+    .unwrap_or_else(|_| fail_crossing(b"crossing peer"));
+
+    // The pair whose end goes in flight. Init mints it as a loopback — both
+    // ends land in init's own table — moves one to the peer, and then **drops
+    // the other**.
+    //
+    // Dropping it is what makes this arm load-bearing rather than decorative.
+    // A capability transfer splits the loopback, so if init kept its half the
+    // channel would still be named by a live capability table and
+    // `GraphTables::holds_endpoint` alone would preserve it — the arm would
+    // pass with the `Transit` half of the predicate deleted, which is exactly
+    // the false confidence B16's retro warns about. With both of init's slots
+    // gone, the transit entry is the *only* thing naming this channel for the
+    // whole loop, so a sweep that does not consult `Transit` frees it.
+    let (in_flight_kept, in_flight_moved) = slime_rt::endpoint_create(ENDPOINT_FACTORY_SLOT)
+        .unwrap_or_else(|_| fail_crossing(b"in-flight endpoint"));
+    let descriptor = slime_proto::capability_transfer::WireCapabilityTransfer {
+        magic: slime_proto::capability_transfer::CAPABILITY_TRANSFER_MAGIC,
+        version: slime_proto::capability_transfer::FORMAT_VERSION,
+        status: 0,
+        flags: 0,
+        object_kind: slime_proto::capability_transfer::OBJECT_KIND_ENDPOINT,
+        direction: 0,
+        rights_mask: RIGHT_SEND | RIGHT_RECV,
+        route_identity: [0u8; 32],
+    };
+    if slime_rt::cap_transfer(carrier_send, in_flight_moved, &descriptor.encode())
+        != slime_rt::ERR_SUCCESS
+    {
+        fail_crossing(b"parking a channel end in transit");
+    }
+    // Gone from init's own table: a capability transfer is a move, so this slot
+    // no longer resolves.
+    if slime_rt::send(in_flight_moved, b"moved", &[]) != slime_rt::ERR_BAD_CAP {
+        fail_crossing(b"a transferred end stayed in the sender's table");
+    }
+    if slime_rt::cap_drop(in_flight_kept) != slime_rt::ERR_SUCCESS {
+        fail_crossing(b"releasing init's half of the in-flight pair");
+    }
+    slime_rt::debug_write(b"[init] channel end parked in transit\n");
+
+    // ---- a pair init keeps across the crossing ----
+    //
+    // A loopback: init holds both ends, so a send followed by a receive on the
+    // same key round-trips through the one queue a self-edge has. That makes
+    // "still works afterwards" observable without a second component.
+    let (retained, _retained_peer) = slime_rt::endpoint_create(ENDPOINT_FACTORY_SLOT)
+        .unwrap_or_else(|_| fail_crossing(b"retained endpoint"));
+    if slime_rt::send(retained, b"before", &[]) != slime_rt::ERR_SUCCESS {
+        fail_crossing(b"the retained pair did not carry before the crossing");
+    }
+    let mut payload = [0u8; slime_rt::MAX_MSG];
+    let mut caps = [0u64; slime_rt::MAX_CAPS_PER_MSG];
+    if slime_rt::recv(retained, &mut payload, &mut caps) != 6 {
+        fail_crossing(b"the retained pair did not deliver before the crossing");
+    }
+    slime_rt::debug_write(b"[init] channel pair retained\n");
+
+    // ---- the loop: more channels than MAX_CHANNELS, released as it goes ----
+    //
+    // Each pair is minted, used, and both of its ends dropped. `cap_drop` is
+    // what makes the channel unnameable, which is precisely the condition the
+    // sweep derives — the ends are gone from the only table that held them, and
+    // nothing is in flight.
+    //
+    // Against the unfixed root this stops at the 33rd `endpoint_create` with
+    // `ERR_OUT_OF_MEMORY`, because three channels are outstanding (carrier,
+    // in-flight, retained) and the loop's own are never returned.
+    let mut minted = 0u32;
+    for _ in 0..CHANNEL_LOOP_PAIRS {
+        let (ours, theirs) = slime_rt::endpoint_create(ENDPOINT_FACTORY_SLOT)
+            .unwrap_or_else(|_| fail_crossing(b"loop pair mint"));
+        // Used before it is released, so the loop exercises a real channel
+        // rather than churning table entries: a pair that was minted and never
+        // carried anything would not show that a swept table still works.
+        if slime_rt::send(ours, b"loop", &[]) != slime_rt::ERR_SUCCESS {
+            fail_crossing(b"a loop pair could not carry");
+        }
+        if slime_rt::recv(ours, &mut payload, &mut caps) != 4 {
+            fail_crossing(b"a loop pair did not deliver");
+        }
+        if slime_rt::cap_drop(ours) != slime_rt::ERR_SUCCESS
+            || slime_rt::cap_drop(theirs) != slime_rt::ERR_SUCCESS
+        {
+            fail_crossing(b"releasing a loop pair");
+        }
+        minted += 1;
+    }
+    if minted != CHANNEL_LOOP_PAIRS {
+        fail_crossing(b"the loop did not run to completion");
+    }
+    slime_rt::debug_write(b"[init] channel lifetime bound crossed\n");
+
+    // ---- the retained pair still carries, after the crossing ----
+    //
+    // A sweep that freed an entry a live capability still names would leave
+    // this slot resolving to nothing, and the send would answer `ERR_BAD_CAP`.
+    if slime_rt::send(retained, b"after", &[]) != slime_rt::ERR_SUCCESS {
+        fail_crossing(b"a retained pair lost its queue");
+    }
+    if slime_rt::recv(retained, &mut payload, &mut caps) != 5 {
+        fail_crossing(b"a retained pair stopped delivering");
+    }
+    slime_rt::debug_write(b"[init] retained pair carried after crossing\n");
+
+    // ---- the parked end is collectable, and still resolves ----
+    //
+    // Releasing the gate is what ends the in-flight window: the peer collects
+    // the transferred end only now, having held it in `Transit` across every
+    // sweep the loop triggered. A sweep ignoring `Transit` frees that channel
+    // while the end is in flight, because init dropped its own half at the
+    // start and the transit entry is the only thing naming it — B22's fix
+    // reintroducing B22.
+    //
+    // The claim is that the collected end still *resolves to a queue*, not
+    // merely that a slot number arrived. Init cannot observe that directly
+    // any more, having given up both of the pair's slots, so the peer proves
+    // it from its own side — the transfer split the loopback, giving the peer
+    // the consumer end whose send and receive resolve to the two distinct
+    // queues that split allocated — and reports the outcome as its exit
+    // status. A freed channel makes both answer `ERR_BAD_CAP` and it exits 1,
+    // naming which operation failed on its own line first.
+    if slime_rt::send(gate_send, b"go", &[]) != slime_rt::ERR_SUCCESS {
+        fail_crossing(b"releasing the transit peer");
+    }
+    loop {
+        match slime_rt::supervision_status(peer.supervision_slot) {
+            Ok(None) => slime_rt::wait(&[slime_rt::WaitSource::Supervision(peer.supervision_slot)]),
+            Ok(Some(slime_rt::Termination::Exit(0))) => break,
+            _ => fail_crossing(b"an end parked across the crossing stopped resolving"),
+        }
+    }
+    slime_rt::debug_write(b"[init] transit end survived crossing\n");
+}
+
+fn fail_crossing(reason: &[u8]) -> ! {
+    slime_rt::debug_write(b"[init] crossing plane fail: ");
+    slime_rt::debug_write(reason);
+    slime_rt::debug_write(b"\n");
+    slime_rt::exit(1)
 }
 
 fn fail_supervision(reason: &[u8]) -> ! {

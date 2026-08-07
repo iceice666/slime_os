@@ -43,6 +43,8 @@ STREAM_IMAGE = BUILD_ROOT / "slime-sel4-stream.elf"
 STREAM_MANIFEST = BUILD_ROOT / "slime-sel4-stream.identity.json"
 SUPERVISION_IMAGE = BUILD_ROOT / "slime-sel4-supervision.elf"
 SUPERVISION_MANIFEST = BUILD_ROOT / "slime-sel4-supervision.identity.json"
+CROSSING_IMAGE = BUILD_ROOT / "slime-sel4-crossing.elf"
+CROSSING_MANIFEST = BUILD_ROOT / "slime-sel4-crossing.identity.json"
 
 # Which generation the root task embeds. That is the only difference between the
 # images this script builds; see `build_application`.
@@ -54,6 +56,7 @@ SPAWN_VARIANT = "spawn"
 SAMPLE_VARIANT = "sample"
 STREAM_VARIANT = "stream"
 SUPERVISION_VARIANT = "supervision"
+CROSSING_VARIANT = "crossing"
 VARIANT_MANIFESTS = {
     GRAPH_VARIANT: "sel4",
     CHANNEL_VARIANT: "sel4-channel",
@@ -62,6 +65,7 @@ VARIANT_MANIFESTS = {
     SAMPLE_VARIANT: "sel4-sample",
     STREAM_VARIANT: "sel4-stream",
     SUPERVISION_VARIANT: "sel4-supervision",
+    CROSSING_VARIANT: "sel4-crossing",
 }
 VARIANT_TARGET_DIRS = {
     FIXTURE_VARIANT: "root",
@@ -72,6 +76,7 @@ VARIANT_TARGET_DIRS = {
     SAMPLE_VARIANT: "root-sample",
     STREAM_VARIANT: "root-stream",
     SUPERVISION_VARIANT: "root-supervision",
+    CROSSING_VARIANT: "root-crossing",
 }
 VARIANT_IMAGES = {
     FIXTURE_VARIANT: (IMAGE, MANIFEST),
@@ -82,6 +87,7 @@ VARIANT_IMAGES = {
     SAMPLE_VARIANT: (SAMPLE_IMAGE, SAMPLE_MANIFEST),
     STREAM_VARIANT: (STREAM_IMAGE, STREAM_MANIFEST),
     SUPERVISION_VARIANT: (SUPERVISION_IMAGE, SUPERVISION_MANIFEST),
+    CROSSING_VARIANT: (CROSSING_IMAGE, CROSSING_MANIFEST),
 }
 
 CHILD_MANIFEST = ROOT / "slime-root" / "child" / "Cargo.toml"
@@ -903,6 +909,13 @@ def main() -> None:
             "embed the supervision-plane generation (B16), writing a separate image"
         ),
     )
+    parser.add_argument(
+        "--crossing-plane",
+        action="store_true",
+        help=(
+            "embed the channel-crossing generation (B22), writing a separate image"
+        ),
+    )
     arguments = parser.parse_args()
     selected = [
         variant
@@ -914,6 +927,7 @@ def main() -> None:
             (SAMPLE_VARIANT, arguments.sample_plane),
             (STREAM_VARIANT, arguments.stream_plane),
             (SUPERVISION_VARIANT, arguments.supervision_plane),
+            (CROSSING_VARIANT, arguments.crossing_plane),
         )
         if chosen
     ]

@@ -1,0 +1,61 @@
+{
+  formatVersion = 1;
+  generation = 1;
+  target = "aarch64-sel4-qemu-virt";
+  kernelObject = "sha256:kernel";
+  bootstrapComponent = "init";
+  interfaceSchemas = [];
+
+  objects = [
+    { id = "sha256:kernel"; kind = "kernel"; size = 1048576; };
+    { id = "sha256:init"; kind = "bootstrap"; size = 65536; };
+    { id = "sha256:crossing-peer"; kind = "component"; size = 65536; };
+    { id = "shared-buffer-budget"; kind = "resource"; size = 4096; };
+    { id = "boot-layout"; kind = "resource"; size = 4096; };
+  ];
+
+  sharedBufferBudget = [];
+
+  components = [
+    {
+      name = "init";
+      object = "sha256:init";
+      role = "init";
+      dependencies = [];
+      spawnBudget = 2;
+      commandProfile = [];
+    };
+    {
+      name = "crossing-peer";
+      object = "sha256:crossing-peer";
+      role = "application";
+      dependencies = ["init";];
+      spawnBudget = 0;
+      commandProfile = [];
+    };
+  ];
+
+  grants = [
+    {
+      name = "init-crossing-peer";
+      source = "init";
+      target = "crossing-peer";
+      rights = ["exec"; "spawn";];
+      transferable = false;
+    };
+    {
+      name = "init-endpoint-factory";
+      source = "init";
+      target = "init";
+      rights = ["endpointCreate";];
+      transferable = false;
+    };
+  ];
+
+  state = [];
+
+  health = {
+    bootAttempts = 3;
+    requiredComponents = ["init"; "crossing-peer";];
+  };
+}

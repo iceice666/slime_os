@@ -139,14 +139,24 @@ BASE_LAYOUT = (
     # slots byte-for-byte. Only `sel4-supervision.zti` declares it, and that
     # profile prunes to 17 slots.
     #
-    # This takes the unpruned table to 62 of `MAX_BOOT_LAYOUT_ENTRIES` (64).
-    # The next two appends are the last; past that a new plane needs an
-    # override or a replacement rather than a base-layout row.
     # `0x1000c`, not the usual `0x10008`: the extra `0x4` is `RIGHT_TRANSFER`,
     # which is what makes the supervision handle this executable's spawns return
     # movable. The layout and the fixture must agree bit for bit (B10), so the
     # grant's `transferable = true` has to be matched here.
     (61, 'executable', 'supervision-child', 0x1000c),
+    # B22's channel-crossing plane, appended last on the same rule: only
+    # `sel4-crossing.zti` declares `crossing-peer`, every other profile drops
+    # this row, and dropping the highest slot renumbers nothing. That profile
+    # prunes to 16 slots — the role rows and channel halves belong to no
+    # component and are always kept, so this row lands renumbered at 15, which
+    # is the slot the gate's `spawn authorized` marker records.
+    #
+    # This takes the unpruned table to **63 of `MAX_BOOT_LAYOUT_ENTRIES` (64)**.
+    # One slot remains, so the next base-layout append is the last one possible;
+    # past that a new plane needs an override or a replacement row rather than
+    # an append. The warning lives here, on the highest row, because that is
+    # where the next author adds one.
+    (62, 'executable', 'crossing-peer', 0x10008),
 )
 
 # generation 2 (storage-write)

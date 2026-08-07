@@ -233,6 +233,11 @@ path = "src/bin/supervision-child.rs"
 test = false
 
 [[bin]]
+name = "crossing-peer"
+path = "src/bin/crossing-peer.rs"
+test = false
+
+[[bin]]
 name = "sysinfo"
 path = "src/bin/sysinfo.rs"
 test = false
