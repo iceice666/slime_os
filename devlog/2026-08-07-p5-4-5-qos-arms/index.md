@@ -118,3 +118,26 @@ anything. A suffix mutation is not a mutation for a substring matcher.
   [C8.5](../../roadmap/02-core-runtime.md),
   [P5.4.1](../../roadmap/07-architecture-portability.md) (which recorded C8.5 as
   uncovered).
+
+## Corrections
+
+- **2026-08-07.** The third open risk proposed anchoring every marker pattern
+  to end-of-line, describing it as "a change to eleven gates" deferred for
+  scope. I tried it: `re.compile(f"{pattern}(?=$|\n)", re.MULTILINE)` applied to
+  the ordered-marker matcher in all nine gates that have one. **Seven of the
+  nine failed**, and the reason is that the suggestion was simply wrong for
+  this codebase.
+
+  Many patterns deliberately match a line *prefix* — for example
+  `check-sel4-channel-plane.py`'s `SLIME_ROOT generation admitted number=\d+
+  components=2 grants=2 ` ends in a space because the line continues with
+  fields that gate does not constrain. Anchoring turns every such pattern into
+  a false negative. The change was reverted; all nine gates pass as before.
+
+  The underlying weakness is still real and still unfixed: a marker that gains
+  a *suffix* is matched by `re.search`, so a fault injection appending to a
+  marker will silently pass. But the fix is not a blanket anchor. It would have
+  to be per-pattern — anchoring only those that are intended to be whole lines
+  — which is a judgement call across roughly five hundred patterns and belongs
+  to its own slice with its own evidence. Recorded so the next attempt starts
+  from the measurement rather than repeating it.
