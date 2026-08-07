@@ -2167,14 +2167,23 @@ fn serve_component_graph(
     // held, shows up here rather than as memory quietly retained. `transit` is
     // capabilities in flight — one still parked at teardown is one no task can
     // ever name.
+    //
+    // `quotas` is appended last, for the reason `minted` is on the channel
+    // line: the five gates that assert this marker match a prefix ending at
+    // `aliases`. It is the count of ceilings still bound at teardown, and it is
+    // not zero — the root-launched components' quotas are declared at boot and
+    // released only when their tasks die, so a healthy boot ends with the
+    // launched set still bound. What it makes visible is B24's shape: a graph
+    // that spawns and reaps repeatedly must not leave this climbing.
     sel4::debug_println!(
-        "SLIME_GRAPH loans served={loans_served} loans={} mappings={} regions={} transit={} orphans={} aliases={}",
+        "SLIME_GRAPH loans served={loans_served} loans={} mappings={} regions={} transit={} orphans={} aliases={} quotas={}",
         buffers.loan_count(),
         buffers.mapping_count(),
         buffers.live_count(),
         transit.len(),
         buffers.orphan_count(),
         buffer_adapter::live_frame_aliases(),
+        buffers.quota_count(),
     );
     // The spawn plane's accounting, on its own line for the same reason the two
     // above are: each earlier gate asserts its own line by exact shape.
@@ -4136,6 +4145,21 @@ fn reclaim_dead_task(
                 buffer_error_class(error),
             ),
         }
+    }
+    // The ceiling last, after every charge against it is settled: a quota
+    // dropped before `reclaim_holder` would leave the table charging a holder
+    // it can no longer bound. Nothing can be charged again once the task is
+    // gone, so this is the point at which the entry becomes unreachable.
+    //
+    // B24: `quotas` had no free path, and its key derives from a task id that
+    // never rewinds, so `MAX_CHARGE_HOLDERS` counted the holders a boot ever
+    // constructed rather than those live at once.
+    if buffers.release_quota(holder) {
+        sel4::debug_println!(
+            "SLIME_GRAPH quota released task={} live={}",
+            id.0,
+            buffers.quota_count(),
+        );
     }
 }
 

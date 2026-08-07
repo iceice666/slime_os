@@ -586,6 +586,43 @@ impl SharedBufferTable {
         Ok(())
     }
 
+    /// Drop the ceiling bound to `holder`, reporting whether one was held.
+    ///
+    /// This closes backlog **B24**. `quotas` had no free path at all, and its
+    /// key is a `HolderId` derived from a task id that `TaskTable::next_id`
+    /// never rewinds — so a graph that spawned and reaped repeatedly presented
+    /// a fresh holder every time, `declare_quota`'s same-holder reuse never
+    /// fired, and `MAX_CHARGE_HOLDERS` bounded the holders a boot could *ever*
+    /// construct rather than those live at once.
+    ///
+    /// Unlike [`crate::channel::sweep`] and [`crate::supervision::sweep`] this
+    /// is a direct release rather than a derived predicate, because a quota has
+    /// exactly one holder and that holder is a task: when the task is gone the
+    /// entry is unreachable, with no second place it could still be named from.
+    /// Channels and termination records both needed a sweep precisely because
+    /// they can be named by a capability that outlives, or travels
+    /// independently of, the task they concern. A quota cannot.
+    ///
+    /// Called from `reclaim_dead_task` beside the charge settlement, so the
+    /// ceiling outlives every charge made against it and is dropped only once
+    /// nothing can be charged again.
+    pub fn release_quota(&mut self, holder: HolderId) -> bool {
+        let Some(slot) = self
+            .quotas
+            .iter()
+            .position(|entry| entry.is_some_and(|entry| entry.holder == holder))
+        else {
+            return false;
+        };
+        self.quotas[slot] = None;
+        true
+    }
+
+    /// Ceilings currently bound. Reported at teardown so a leak is visible.
+    pub fn quota_count(&self) -> usize {
+        self.quotas.iter().flatten().count()
+    }
+
     /// The ceiling a generation declared for `holder`. An undeclared holder
     /// receives [`HolderQuota::DENY`]: authority is never ambient.
     pub fn quota(&self, holder: HolderId) -> HolderQuota {
