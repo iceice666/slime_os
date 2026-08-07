@@ -240,6 +240,12 @@ fn main() {
         slime_rt::debug_write(b"[init] fabric stream complete\n");
         slime_rt::exit(0);
     }
+    // B16's supervision plane, on the same rule again.
+    if option_env!("SLIME_SEL4_SUPERVISION_CHECK") == Some("1") {
+        drive_supervision_plane();
+        slime_rt::debug_write(b"[init] supervision plane complete\n");
+        slime_rt::exit(0);
+    }
     slime_rt::debug_write(b"[init] launching component graph\n");
     if option_env!("SLIME_TRANSFER_RECEIVER") == Some("1") {
         if slime_rt::generation_receive(TRANSFER_RECEIVER_SLOT, TRANSFER_SOURCE_SLOT) == 0 {
@@ -1917,6 +1923,176 @@ fn drive_spawn_plane() {
         fail_spawn(b"a dropped handle still answered");
     }
     slime_rt::debug_write(b"[init] dropped handle released\n");
+}
+
+/// How many children the supervision plane creates over the boot.
+///
+/// One more than `supervision::MAX_RECORDS` (32), which is the whole point: the
+/// bound this crosses is on records *awaiting collection*, and a graph that
+/// collects as it goes must be able to exceed it. A loop that stopped at 32
+/// would pass against the unfixed root and prove nothing.
+const SUPERVISION_LOOP_CHILDREN: u32 = 33;
+
+/// Drive the supervision plane: create more children over one boot than
+/// `MAX_RECORDS` can hold at once, and answer correctly for every live handle.
+///
+/// Only reachable under `SLIME_SEL4_SUPERVISION_CHECK`, whose generation is
+/// `contracts/generation/v1/fixtures/sel4-supervision.zti`.
+///
+/// This is backlog B16's exit condition. Before the fix, `Terminations` never
+/// reclaimed, so the 33rd child's outcome was dropped silently and its parent
+/// waited forever. The gate crosses the bound and then asserts the two things a
+/// sweep could plausibly break:
+///
+/// - a handle held *across* the crossing still answers afterwards, and
+/// - a handle **parked in transit** across the crossing is still collectable,
+///   which is the half a predicate over live tables alone would miss.
+///
+/// The loop child is `supervision-child`, which takes no channel:
+/// `ChannelTable` never reclaims (B22), so a child needing one would exhaust
+/// channels before the loop reached the record bound.
+fn drive_supervision_plane() {
+    // ---- a handle parked in transit, across the crossing ----
+    //
+    // Init holds *both* ends of this pair and moves the handle to itself,
+    // deferring the matching `recv` until after the loop. A capability is
+    // parked in `Transit` from the move until the receive, so this puts a
+    // supervision handle in the one state where no table holds it — the case a
+    // sweep reading only `GraphTables` frees by mistake, and the reason
+    // `Transit::holds_supervision` exists.
+    //
+    // `cap_transfer`, not `send`'s capability attachment: `send` gates on
+    // `Resource::is_transferable`, which is `true` for a loan and nothing else,
+    // deliberately — that path lets a component redistribute authority at
+    // runtime to whoever holds a channel. `cap_transfer` gates on
+    // `RIGHT_TRANSFER` held on the capability itself, which is authority the
+    // generation placed, and it is the path `transfer_supervision` already uses
+    // to hand fabric participants' handles to their workers. The handle carries
+    // that right because `sel4-supervision.zti` declares the executable grant
+    // transferable.
+    //
+    // Init as its own receiver, rather than a second component: `cap_transfer`
+    // needs a peer that *collects* a capability, and every unmodified component
+    // either ignores the caps array or never receives at all.
+    let (transit_send, transit_recv) = slime_rt::endpoint_create(ENDPOINT_FACTORY_SLOT)
+        .unwrap_or_else(|_| fail_supervision(b"transit endpoint"));
+    let in_flight = slime_rt::spawn(SUPERVISION_CHILD_SLOT, &[])
+        .unwrap_or_else(|_| fail_supervision(b"transit child"));
+    // Parked on until it dies, but *not* collected: `wait` is woken by the
+    // termination and leaves the handle in place, where `supervision_status`
+    // would consume it. That is what this arm needs — a record that exists,
+    // owed to a holder, while the loop below runs. A child still running has no
+    // record at all, so there would be nothing for the sweep to get wrong.
+    slime_rt::wait(&[slime_rt::WaitSource::Supervision(
+        in_flight.supervision_slot,
+    )]);
+    let descriptor = slime_proto::capability_transfer::WireCapabilityTransfer {
+        magic: slime_proto::capability_transfer::CAPABILITY_TRANSFER_MAGIC,
+        version: slime_proto::capability_transfer::FORMAT_VERSION,
+        status: 0,
+        flags: 0,
+        object_kind: slime_proto::capability_transfer::OBJECT_KIND_SUPERVISION,
+        direction: 0,
+        rights_mask: RIGHT_SUPERVISE,
+        route_identity: [0u8; 32],
+    };
+    if slime_rt::cap_transfer(
+        transit_send,
+        in_flight.supervision_slot,
+        &descriptor.encode(),
+    ) != slime_rt::ERR_SUCCESS
+    {
+        fail_supervision(b"parking a handle in transit");
+    }
+    // The handle is gone from init's own table: a capability send is a move,
+    // so from here until the `recv` below it is held by `Transit` alone.
+    if slime_rt::supervision_status(in_flight.supervision_slot).is_ok() {
+        fail_supervision(b"a sent handle stayed in the sender's table");
+    }
+    slime_rt::debug_write(b"[init] supervision handle parked in transit\n");
+
+    // ---- a handle init keeps across the crossing ----
+    //
+    // Waited on but deliberately not collected, for the same reason: the record
+    // must exist, and be owed to a live holder, throughout the loop. `wait`
+    // leaves the handle installed; only `supervision_status` consumes it.
+    //
+    // Spawned *after* the transfer above, and that ordering matters: the
+    // transfer frees the slot the first handle occupied, and slot assignment
+    // takes the lowest free slot, so a spawn before the transfer would be
+    // handed the same number and the two handles would alias.
+    let retained = slime_rt::spawn(SUPERVISION_CHILD_SLOT, &[])
+        .unwrap_or_else(|_| fail_supervision(b"retained child"));
+    slime_rt::wait(&[slime_rt::WaitSource::Supervision(retained.supervision_slot)]);
+    slime_rt::debug_write(b"[init] supervision handle retained\n");
+
+    // ---- the loop: more tasks than MAX_RECORDS, collected as it goes ----
+    //
+    // Each child is spawned, waited on, collected, and its handle consumed by
+    // the collection. Two handles (above) stay outstanding throughout, so the
+    // live record count never approaches the bound while the lifetime count
+    // sails past it.
+    let mut collected = 0u32;
+    for _ in 0..SUPERVISION_LOOP_CHILDREN {
+        let child = slime_rt::spawn(SUPERVISION_CHILD_SLOT, &[])
+            .unwrap_or_else(|_| fail_supervision(b"loop child spawn"));
+        loop {
+            match slime_rt::supervision_status(child.supervision_slot) {
+                Ok(None) => {
+                    slime_rt::wait(&[slime_rt::WaitSource::Supervision(child.supervision_slot)])
+                }
+                Ok(Some(slime_rt::Termination::Exit(0))) => break,
+                // The failure B16 produces: a dropped record makes the child
+                // look permanently live, so this arm is the one that fires if
+                // the sweep is removed and the wait stops being answerable.
+                _ => fail_supervision(b"a loop child did not exit cleanly"),
+            }
+        }
+        collected += 1;
+    }
+    if collected != SUPERVISION_LOOP_CHILDREN {
+        fail_supervision(b"the loop did not run to completion");
+    }
+    slime_rt::debug_write(b"[init] supervision lifetime bound crossed\n");
+
+    // ---- the retained handle still answers, after the crossing ----
+    match slime_rt::supervision_status(retained.supervision_slot) {
+        Ok(Some(slime_rt::Termination::Exit(0))) => {
+            slime_rt::debug_write(b"[init] retained handle answered after crossing\n");
+        }
+        _ => fail_supervision(b"a retained handle lost its outcome"),
+    }
+
+    // ---- the parked handle is collectable, after the crossing ----
+    //
+    // Collected only now, having sat in `Transit` across every sweep the loop
+    // triggered. A sweep ignoring `Transit` would have freed this record while
+    // it was in flight, and the query below would answer `WouldBlock` forever:
+    // B16, reintroduced by its own fix. This is the arm fault injection #2
+    // removes the `Transit` predicate to check.
+    let mut payload = [0u8; slime_rt::MAX_MSG];
+    let mut caps = [0u64; slime_rt::MAX_CAPS_PER_MSG];
+    let received = slime_rt::recv(transit_recv, &mut payload, &mut caps);
+    if received < 0 {
+        fail_supervision(b"collecting the parked handle");
+    }
+    let landed = caps[0] as u32;
+    if landed == 0 {
+        fail_supervision(b"the parked handle landed in no slot");
+    }
+    match slime_rt::supervision_status(landed) {
+        Ok(Some(slime_rt::Termination::Exit(0))) => {
+            slime_rt::debug_write(b"[init] transit handle survived crossing\n");
+        }
+        _ => fail_supervision(b"a handle parked across the crossing lost its outcome"),
+    }
+}
+
+fn fail_supervision(reason: &[u8]) -> ! {
+    slime_rt::debug_write(b"[init] supervision plane fail: ");
+    slime_rt::debug_write(reason);
+    slime_rt::debug_write(b"\n");
+    slime_rt::exit(1)
 }
 
 /// Launch the C7.7 sample plane: two real components exchanging a payload

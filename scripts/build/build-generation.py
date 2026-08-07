@@ -210,6 +210,12 @@ SEL4_MANIFESTS = {
     / "v1"
     / "fixtures"
     / "sel4-stream.zti",
+    "sel4-supervision": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-supervision.zti",
 }
 COMPONENTS_TARGET_DIR = Path(
     os.environ.get("CARGO_TARGET_DIR") or ROOT / "target" / "components"
@@ -1845,6 +1851,11 @@ def build_rust_components(
         environment["SLIME_SEL4_STREAM_CHECK"] = "1"
     else:
         environment.pop("SLIME_SEL4_STREAM_CHECK", None)
+    # B16's supervision plane, likewise.
+    if environment.get("SLIME_SEL4_SUPERVISION_CHECK") == "1":
+        environment["SLIME_SEL4_SUPERVISION_CHECK"] = "1"
+    else:
+        environment.pop("SLIME_SEL4_SUPERVISION_CHECK", None)
     if recovery:
         environment["SLIME_RECOVERY_IMAGE"] = "1"
     if environment.get("SLIME_GENERATION_CMD_CHECK") == "1" and candidate_identity is not None:
@@ -2471,6 +2482,7 @@ def build_sel4_generation(output: Path, manifest: dict, target_profile: TargetPr
         ("sel4-spawn", "SLIME_SEL4_SPAWN_CHECK"),
         ("sel4-sample", "SLIME_SEL4_SAMPLE_CHECK"),
         ("sel4-stream", "SLIME_SEL4_STREAM_CHECK"),
+        ("sel4-supervision", "SLIME_SEL4_SUPERVISION_CHECK"),
     ):
         if selected == manifest_name:
             os.environ[flag] = "1"

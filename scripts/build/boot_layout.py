@@ -133,6 +133,20 @@ BASE_LAYOUT = (
     (58, 'endpoint-service', 'fabric-intruder-service', 0x7),
     (59, 'endpoint-service', 'fabric-publisher-b-service', 0x7),
     (60, 'endpoint-service', 'fabric-subscriber-b-service', 0x7),
+    # B16's supervision plane. Appended last, and deliberately: every profile
+    # that does not declare `supervision-child` drops this entry, and dropping
+    # the highest slot renumbers nothing, so the nine existing gates keep their
+    # slots byte-for-byte. Only `sel4-supervision.zti` declares it, and that
+    # profile prunes to 17 slots.
+    #
+    # This takes the unpruned table to 62 of `MAX_BOOT_LAYOUT_ENTRIES` (64).
+    # The next two appends are the last; past that a new plane needs an
+    # override or a replacement rather than a base-layout row.
+    # `0x1000c`, not the usual `0x10008`: the extra `0x4` is `RIGHT_TRANSFER`,
+    # which is what makes the supervision handle this executable's spawns return
+    # movable. The layout and the fixture must agree bit for bit (B10), so the
+    # grant's `transferable = true` has to be matched here.
+    (61, 'executable', 'supervision-child', 0x1000c),
 )
 
 # generation 2 (storage-write)

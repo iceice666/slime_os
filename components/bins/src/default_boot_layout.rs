@@ -239,6 +239,8 @@ pub const STORAGE_STORE_PROBE_SLOT: u32 = SLOT_ABSENT;
 #[allow(dead_code)]
 pub const STORAGE_WRITER_SLOT: u32 = SLOT_ABSENT;
 #[allow(dead_code)]
+pub const SUPERVISION_CHILD_SLOT: u32 = SLOT_ABSENT;
+#[allow(dead_code)]
 pub const SYSINFO_SLOT: u32 = 6;
 
 #[allow(dead_code)]

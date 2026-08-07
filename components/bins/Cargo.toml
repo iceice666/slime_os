@@ -228,6 +228,11 @@ path = "src/bin/storage-writer.rs"
 test = false
 
 [[bin]]
+name = "supervision-child"
+path = "src/bin/supervision-child.rs"
+test = false
+
+[[bin]]
 name = "sysinfo"
 path = "src/bin/sysinfo.rs"
 test = false

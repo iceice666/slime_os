@@ -106,6 +106,16 @@ sel4_sample_check: sel4_pin_check
 sel4_stream_check: sel4_pin_check
     python3 scripts/check/check-sel4-stream-plane.py
 
+# B16: build the supervision-plane image, boot it, and require that a graph
+# creating more tasks over its lifetime than `MAX_RECORDS` can hold at once
+# still answers `supervision_status` correctly for every live handle —
+# including one held across the crossing and one parked in `Transit` across it.
+#
+# An eighth image, on the same rule as the seven above: each gate boots the
+# artifact it asserts about.
+sel4_supervision_check: sel4_pin_check
+    python3 scripts/check/check-sel4-supervision-plane.py
+
 # Run the seL4 product image interactively on the pinned QEMU machine.
 run: sel4_qemu_image_check
     qemu-system-aarch64 -machine virt,virtualization=on -cpu cortex-a53 -smp 1 \

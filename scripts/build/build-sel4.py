@@ -41,6 +41,8 @@ SAMPLE_IMAGE = BUILD_ROOT / "slime-sel4-sample.elf"
 SAMPLE_MANIFEST = BUILD_ROOT / "slime-sel4-sample.identity.json"
 STREAM_IMAGE = BUILD_ROOT / "slime-sel4-stream.elf"
 STREAM_MANIFEST = BUILD_ROOT / "slime-sel4-stream.identity.json"
+SUPERVISION_IMAGE = BUILD_ROOT / "slime-sel4-supervision.elf"
+SUPERVISION_MANIFEST = BUILD_ROOT / "slime-sel4-supervision.identity.json"
 
 # Which generation the root task embeds. That is the only difference between the
 # images this script builds; see `build_application`.
@@ -51,6 +53,7 @@ LOAN_VARIANT = "loan"
 SPAWN_VARIANT = "spawn"
 SAMPLE_VARIANT = "sample"
 STREAM_VARIANT = "stream"
+SUPERVISION_VARIANT = "supervision"
 VARIANT_MANIFESTS = {
     GRAPH_VARIANT: "sel4",
     CHANNEL_VARIANT: "sel4-channel",
@@ -58,6 +61,7 @@ VARIANT_MANIFESTS = {
     SPAWN_VARIANT: "sel4-spawn",
     SAMPLE_VARIANT: "sel4-sample",
     STREAM_VARIANT: "sel4-stream",
+    SUPERVISION_VARIANT: "sel4-supervision",
 }
 VARIANT_TARGET_DIRS = {
     FIXTURE_VARIANT: "root",
@@ -67,6 +71,7 @@ VARIANT_TARGET_DIRS = {
     SPAWN_VARIANT: "root-spawn",
     SAMPLE_VARIANT: "root-sample",
     STREAM_VARIANT: "root-stream",
+    SUPERVISION_VARIANT: "root-supervision",
 }
 VARIANT_IMAGES = {
     FIXTURE_VARIANT: (IMAGE, MANIFEST),
@@ -76,6 +81,7 @@ VARIANT_IMAGES = {
     SPAWN_VARIANT: (SPAWN_IMAGE, SPAWN_MANIFEST),
     SAMPLE_VARIANT: (SAMPLE_IMAGE, SAMPLE_MANIFEST),
     STREAM_VARIANT: (STREAM_IMAGE, STREAM_MANIFEST),
+    SUPERVISION_VARIANT: (SUPERVISION_IMAGE, SUPERVISION_MANIFEST),
 }
 
 CHILD_MANIFEST = ROOT / "slime-root" / "child" / "Cargo.toml"
@@ -890,6 +896,13 @@ def main() -> None:
         action="store_true",
         help="embed the stream-plane generation (P5.5.2), writing a separate image",
     )
+    parser.add_argument(
+        "--supervision-plane",
+        action="store_true",
+        help=(
+            "embed the supervision-plane generation (B16), writing a separate image"
+        ),
+    )
     arguments = parser.parse_args()
     selected = [
         variant
@@ -900,6 +913,7 @@ def main() -> None:
             (SPAWN_VARIANT, arguments.spawn_plane),
             (SAMPLE_VARIANT, arguments.sample_plane),
             (STREAM_VARIANT, arguments.stream_plane),
+            (SUPERVISION_VARIANT, arguments.supervision_plane),
         )
         if chosen
     ]
