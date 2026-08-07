@@ -1,6 +1,6 @@
 {
   formatVersion = 1;
-  generation = 1;
+  generation = 18;
   target = "aarch64-sel4-qemu-virt";
   kernelObject = "sha256:kernel";
   bootstrapComponent = "init";
@@ -85,7 +85,7 @@
       source = "init";
       target = "fabric-service";
       rights = ["exec"; "spawn";];
-      transferable = false;
+      transferable = true;
     };
     {
       name = "init-fabric-call-client";
@@ -112,7 +112,7 @@
       name = "init-fabric-call-time";
       source = "init";
       target = "fabric-call-time";
-      rights = ["exec";];
+      rights = ["exec"; "spawn";];
       transferable = false;
     };
     {
@@ -123,30 +123,9 @@
       transferable = false;
     };
     {
-      name = "fabric-service-endpoint-factory";
+      name = "init-shared-buffer-factory";
       source = "init";
-      target = "fabric-service";
-      rights = ["endpointCreate";];
-      transferable = false;
-    };
-    {
-      name = "fabric-service-shared-buffer-factory";
-      source = "init";
-      target = "fabric-service";
-      rights = ["bufferCreate";];
-      transferable = false;
-    };
-    {
-      name = "fabric-call-client-shared-buffer-factory";
-      source = "init";
-      target = "fabric-call-client";
-      rights = ["bufferCreate";];
-      transferable = false;
-    };
-    {
-      name = "fabric-call-server-shared-buffer-factory";
-      source = "init";
-      target = "fabric-call-server";
+      target = "init";
       rights = ["bufferCreate";];
       transferable = false;
     };
@@ -173,13 +152,6 @@
     };
     {
       name = "fabric-call-time-control";
-      source = "fabric-call-time";
-      target = "fabric-service";
-      rights = ["send"; "recv";];
-      transferable = false;
-    };
-    {
-      name = "fabric-call-time-phase";
       source = "fabric-call-time";
       target = "fabric-service";
       rights = ["send"; "recv";];

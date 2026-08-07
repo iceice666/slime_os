@@ -273,7 +273,13 @@ fn main() {
         visibility_broker::run();
         return;
     }
-    if option_env!("SLIME_FABRIC_CALL_CHECK") == Some("1") {
+    // P5.4.6 sets its own flag rather than reusing the oracle's, because
+    // `init.rs` composes the two planes differently — see the branch in
+    // `init::main`. The *broker* is the same code either way, which is the
+    // property the seL4 gate exists to demonstrate, so both flags select it.
+    if option_env!("SLIME_FABRIC_CALL_CHECK") == Some("1")
+        || option_env!("SLIME_SEL4_CALL_CHECK") == Some("1")
+    {
         let controls = request_response_controls(FABRIC_CALL_CLIENTS);
         call_broker::Broker::new(
             FACTORY_SLOT,

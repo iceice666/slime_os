@@ -1873,6 +1873,14 @@ def build_rust_components(
         environment["SLIME_SEL4_CROSSING_CHECK"] = "1"
     else:
         environment.pop("SLIME_SEL4_CROSSING_CHECK", None)
+    # P5.4.6's call plane, likewise. Its own flag rather than the oracle's
+    # `SLIME_FABRIC_CALL_CHECK`: the two planes share the broker but not init's
+    # composition, so one flag would make the seL4 generation walk the x86
+    # boot layout.
+    if environment.get("SLIME_SEL4_CALL_CHECK") == "1":
+        environment["SLIME_SEL4_CALL_CHECK"] = "1"
+    else:
+        environment.pop("SLIME_SEL4_CALL_CHECK", None)
     if recovery:
         environment["SLIME_RECOVERY_IMAGE"] = "1"
     if environment.get("SLIME_GENERATION_CMD_CHECK") == "1" and candidate_identity is not None:
@@ -2501,10 +2509,14 @@ def build_sel4_generation(output: Path, manifest: dict, target_profile: TargetPr
         ("sel4-stream", "SLIME_SEL4_STREAM_CHECK"),
         ("sel4-supervision", "SLIME_SEL4_SUPERVISION_CHECK"),
         ("sel4-crossing", "SLIME_SEL4_CROSSING_CHECK"),
-        # C8.6 reuses the oracle's own plane flag rather than a new
-        # seL4-only one: the call broker is the same code, and a separate
-        # flag would let the two planes diverge without anything noticing.
-        ("sel4-call", "SLIME_FABRIC_CALL_CHECK"),
+        # P5.4.6: its own flag rather than the oracle's
+        # `SLIME_FABRIC_CALL_CHECK`. The call *broker* is the same code on both
+        # planes — `fabric-service` selects it on either flag, which is what
+        # keeps them from diverging — but init's composition differs, because
+        # this plane mints its control channels instead of reading them from
+        # the base boot layout. Sharing one flag made generation 18 walk
+        # generation 14's layout.
+        ("sel4-call", "SLIME_SEL4_CALL_CHECK"),
     ):
         if selected == manifest_name:
             os.environ[flag] = "1"

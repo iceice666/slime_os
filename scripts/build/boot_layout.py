@@ -276,6 +276,47 @@ FABRIC_BOOT_LAYOUT = (
     (52, 'endpoint-service', 'fabric-op-client-b-restart-control-service', 0x7),
 )
 
+# The seL4 C8.6 call plane (P5.4.6). A fabric-only layout sharing nothing with
+# the base, so it replaces rather than overrides.
+#
+# Only init's *executables* and its two factories are numbered here. Every
+# control channel is minted at runtime by `init.rs::drive_call_plane` through
+# `endpoint_create`, exactly as `drive_stream_plane` mints the stream plane's —
+# which is what makes the fabric's own slots come out in spawn-grant order
+# (`FACTORY_SLOT` 0, `BUFFER_FACTORY_SLOT` 1, controls from
+# `FABRIC_FIRST_CONTROL_SLOT`) rather than from the root's channel cursor.
+#
+# Declaring those controls as *generation* grants instead is what left the
+# fabric's ends numbered around its factory grants (`[0, 3, 4, 5, 6]`), because
+# the root's channel cursor resumes above everything staging installed. The
+# grants themselves stay in the manifest: `_control_sources` derives
+# `FABRIC_CALL_CLIENTS` — the table the broker authenticates a caller by — from
+# exactly those four names, in `FABRIC_CALL_CONTROL_GRANTS` order rather than in
+# the builder's `(name, source, target)` sort. They are the naming source; the
+# endpoints init mints are the authority.
+#
+# Rights match what the root actually places, not what generation 17 declares.
+# The two factories carry no `RIGHT_TRANSFER` (`0x4`) because `staging` installs
+# them at `RIGHT_ENDPOINT_CREATE`/`RIGHT_BUFFER_CREATE` alone — every other seL4
+# plane fixture records `0x20000`/`0x1000000` for the same reason, and
+# `bootstrap_role_slot` tests containment rather than equality, so a too-
+# permissive row would pass here and then disagree with a blessed fixture.
+#
+# `0x1000c` on `fabric-service` alone: its supervision handle is the one init
+# passes on, granting it to the client and the server so each can name the
+# fabric as a loan receiver. `SpawnPlan::transferable_supervision` reads
+# `RIGHT_TRANSFER` off the *executable*, so the bit belongs on the component
+# whose handle is delegated — not on the three whose handles never move.
+SEL4_CALL_LAYOUT = (
+    (0, 'endpoint-factory', None, 0x20000),
+    (1, 'shared-buffer-factory', None, 0x1000000),
+    (2, 'executable', 'fabric-service', 0x1000c),
+    (3, 'executable', 'fabric-call-client', 0x10008),
+    (4, 'executable', 'fabric-call-client-b', 0x10008),
+    (5, 'executable', 'fabric-call-server', 0x10008),
+    (6, 'executable', 'fabric-call-time', 0x10008),
+)
+
 
 # Per-generation overrides, applied over `BASE_LAYOUT` by slot. A generation
 # absent here resolves the base layout unchanged.
@@ -295,8 +336,9 @@ OVERRIDES = {
 }
 
 # Generation 17 is the C8.10 full-graph boot: a fabric-only layout sharing
-# nothing with the base, so it replaces rather than overrides.
-REPLACEMENTS = {17: FABRIC_BOOT_LAYOUT}
+# nothing with the base, so it replaces rather than overrides. Generation 18 is
+# the seL4 C8.6 call plane, on the same rule.
+REPLACEMENTS = {17: FABRIC_BOOT_LAYOUT, 18: SEL4_CALL_LAYOUT}
 
 
 def component_identity(name: str) -> bytes:
