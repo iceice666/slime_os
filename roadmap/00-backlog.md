@@ -100,10 +100,34 @@ loop completes. A task that returns from `wait` and then makes no syscall is
 either faulting silently or looping in userspace on a path with no root call in
 it.
 
-The next step is therefore a fault check rather than more transcript reading: the
-root reports task faults, so establishing whether task 10 took one — and if not,
-attaching to it — separates a component fault from a userspace spin. Nothing
-further can be concluded from the boot log alone.
+**The fault check is done and the path is found.** No fault marker appears — the
+root reports them (`SLIME_GRAPH component fault`) — so task 10 did not fault. And
+there *is* a userspace loop with no root-visible call in it, in the runtime rather
+than the component:
+
+`sel4_transport::wait` (`components/runtime/src/syscall/sel4_transport.rs:264`)
+stages its source set through the transfer window, and on a staging failure it
+calls `yield_now()` and **returns silently** — no `SYS_WAIT`, no error to the
+caller, because `wait` returns `()`. `yield_now` is `sel4::r#yield()`, a kernel
+primitive that never reaches the root. `receive_role` then loops back to `recv`,
+and a caller that keeps failing to stage spins between the two forever while the
+root sees nothing at all. That is exactly task 10's signature: woken, no further
+root call, no fault, no output.
+
+The comment there says "the caller re-polls either way", which is true only if the
+next poll can succeed. When it cannot, the silent return converts a bounded error
+into an invisible hang — and `wait`'s `()` return type is what makes it
+unreportable.
+
+**What is still unexplained** is *why* staging fails for this task on this graph.
+Its window is bound (`window bound task=10 base=0x238000 len=4096`) and one wait
+record is 8 bytes, so the size check in `reserve`/`stage` should pass. Reading it
+needs a debugger on the child, or a temporary marker on that arm — the latter is
+the cheaper next step and is what closes B28.
+
+The wider finding stands on its own regardless of B28: **a silent `yield` return
+inside `wait` can hang any component invisibly**, and it should either report or
+be unreachable.
 
 **Severity:** Blocks P5.4.5's exit condition and nothing else. Latent for every
 other plane: no other seL4 graph declares two retained routes on one publisher.
