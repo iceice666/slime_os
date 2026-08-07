@@ -217,15 +217,28 @@ with no runnable thread, and the child never resumes. Every layer reports succes
 and the thread stays blocked. Eleven readings are now excluded, including the
 debugger-motivated one.
 
-What is left is the seL4-level object: whether the `Unspecified` slot still names a
-live reply capability for that thread at the moment of the send, or whether it was
-invalidated — by the child's own second `save_caller`, by a `delete_slot` on a
-recycled index, or by the transfer path having answered it once already. Reading it
-needs the kernel's own view: `seL4_DebugCapIdentify` on the saved slot before the
-send, or a `seL4_DebugDumpScheduler` at the deadlock to see what state the thread is
-actually in. Both are seL4 debug syscalls that this build does not currently enable,
-so the next step is turning them on rather than another experiment against the
-transcript.
+**The reply capability is live — measured, not assumed.** `KernelDebugBuild` is
+already `ON` in `sel4/config/qemu-arm-virt.cmake`, so `seL4_DebugCapIdentify` is
+available; `Cap::debug_identify` was called on the saved slot immediately before the
+send. Task 10's slot reports `kind=8`, which is `cap_reply_cap` in
+`build/sel4-qemu/generated/arch/object/structures_gen.h:635` — and it is the *same*
+kind reported for tasks 4, 5, 7, 8, 9, 11, and 12, every one of which wakes
+correctly in the same boot.
+
+So every root-side link is now measured and sound: the task parks, its reply is
+saved as a genuine `cap_reply_cap`, two messages are enqueued on the queue it polls,
+`deliver_wake` fires while the root agrees it is parked, the send is performed over a
+capability the kernel confirms is a live reply cap, and the send returns. The CPU
+then idles with no runnable thread and the child never resumes. **Twelve readings
+excluded.**
+
+What remains is inside the kernel: a non-MCS `cap_reply_cap` carries a `capTCBPtr`,
+so the remaining question is whether the cap this root saved names the thread it
+believes it does, or whether that thread is in a state where `seL4_Send` on a reply
+cap is a no-op. Answering it needs `seL4_DebugDumpScheduler` at the deadlock — which
+`KernelDebugBuild` also provides but `rust-sel4` does not currently bind (only
+`DebugCapIdentify` and `DebugNameThread` are exposed) — or reading the kernel's TCB
+state directly through the gdbstub, which is where the next attempt should start.
 
 **One wider finding stands regardless of B28**, and it is worth its own slice:
 `sel4_transport::wait` returns `()`, so its staging-failure branch can only
