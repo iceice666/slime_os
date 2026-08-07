@@ -447,8 +447,9 @@ One named Raspberry Pi 5 profile runs the verified isolated Slime vertical slice
 
 ## P5: seL4 microkernel substitution
 
-**Status:** In progress — P5.1, P5.2, all of P5.3, all of P5.5, and P5.4.1
-complete, plus P5.4.4; P5.4.2, P5.4.3, P5.4.5–P5.4.10, and P5.4.final planned.
+**Status:** In progress — P5.1, P5.2, all of P5.3, all of P5.5, P5.4.1,
+P5.4.4, and P5.4.10 complete; P5.4.2, P5.4.3, P5.4.5–P5.4.9, and P5.4.final
+planned.
 
 **Depends on:** P0 and P1. Supersedes the custom-kernel half of P2.2–P2.6 if it
 completes; P2.1 AArch64 boot evidence is retained and not re-claimed here.
@@ -1243,7 +1244,7 @@ compose the earlier.
 | P5.4.7 | C8.7 | Native operations |
 | P5.4.8 | C8.8 | Filtered introspection and declared interposition |
 | P5.4.9 | C8.9, C8.10 | Typed full-profile closure and collision-free full-graph bootstrap |
-| P5.4.10 | the partials | **In progress** — the `component_image.rs` segment corpus is done; see below |
+| P5.4.10 | the partials | **Done** — nine rows: six closed by gates or tests, two reclassified, one partial for a structural reason; see below |
 
 Their individual deliverables stay unwritten until each is opened: the
 inventory fixes *what* each must prove, not how, and specifying the mechanism
@@ -1299,16 +1300,17 @@ compatibility over the booted graph. Those stay with P5.4.10's partials.
 
 ### P5.4.10 — The recorded partials
 
-**Status:** Done. Five rows closed by gates or tests (the `component_image.rs`
-segment corpus, C8.2's live-graph assertions, B10's seL4 layout fixtures,
-C8.4's structural arm, and C8.1/C8.3); two reclassified as needing no seL4
-gate, with the evidence and the conditions that would reopen them (C7.1's
-retained-v2 arm, B11's product-vs-test pair); and `task_reclamation.rs`'s row
-carried as far as a monotonic CSlot allocator permits, which is exact range
-accounting rather than the per-cycle drift its three properties measure.
+**Status:** Done. Nine rows in the table below: **six** closed by gates or
+tests (the `component_image.rs` segment corpus, C8.1's tag collision, C8.2's
+live-graph assertions, C8.3's graph provenance, C8.4's structural arm, and
+B10's seL4 layout fixtures); **two** reclassified as needing no seL4 gate, with
+the evidence and the conditions that would reopen them (C7.1's retained-v2 arm,
+B11's product-vs-test pair); and **one** — `task_reclamation.rs` — carried as
+far as a monotonic CSlot allocator permits, which is exact range accounting
+rather than the per-cycle drift its three properties measure.
 
 Each row's reasoning is in its own devlog entry rather than summarised here,
-because two of the eight resolutions are "this cannot happen on this path" and
+because two of the nine resolutions are "this cannot happen on this path" and
 that claim is only worth what its evidence is.
 
 **Depends on:** P5.4.1.
@@ -1322,16 +1324,27 @@ milestones; they are the residue of milestones otherwise covered.
 | `component_image.rs`'s malformed segment corpus | **Done** — `boot_contracts::component_image::validate_segments`, eleven host tests under `just test_host` and `just miri`; see [`devlog/2026-08-07-p5-4-10-segment-corpus/`](../devlog/2026-08-07-p5-4-10-segment-corpus/index.md) |
 | C8.1 collision rejection | **Done** — `distinct_schemas_may_share_no_type_tag` pins the rule (both halves); it was implemented in `FabricGraph::decode` and tested by nothing. See [`devlog/2026-08-07-p5-4-10-collision-and-provenance/`](../devlog/2026-08-07-p5-4-10-collision-and-provenance/index.md) |
 | C8.2 route-authority tuples, interposition termination, per-pair QoS | **Done** — the aggregate half closed as P5.4.4; membership and interposition are enforced by `FabricGraph::decode`, and per-pair QoS is now refused at admission. See [`devlog/2026-08-07-p5-4-10-qos-pair-admission/`](../devlog/2026-08-07-p5-4-10-qos-pair-admission/index.md) |
-| C8.3 graph provenance | **Done** — admission now refuses a graph naming a component the generation does not declare (`GenerationError::UndeclaredFabricParticipant`), closing the gap between the `@generated` `FABRIC_CLIENTS` table and the authenticated graph. See [`devlog/2026-08-07-p5-4-10-collision-and-provenance/`](../devlog/2026-08-07-p5-4-10-collision-and-provenance/index.md) |
+| C8.3 graph provenance | **Done** — admission refuses a graph naming a component the generation does not declare (`GenerationError::UndeclaredFabricParticipant`), across all three identity fields the resource carries: the fabric host, every participant, and every interposition hop. A participant the manifest dropped fails the boot closed instead of surfacing as a control endpoint that never arrives. Checked against the generation's component names, *not* against the fabric's `@generated` `FABRIC_CLIENTS` table, which lives in a crate the root does not link — both derive from the same fixture, so the check catches the drift that motivates C8.3, but it is not a direct comparison of the two artifacts. See [`devlog/2026-08-07-p5-4-10-collision-and-provenance/`](../devlog/2026-08-07-p5-4-10-collision-and-provenance/index.md) |
 | C8.4's structural arm | **Done** — the admission marker carries the shape the graph declares (`schemas=/routes=/participants=/interpositions=`) and `sel4_stream_check` asserts it, covering the fan-out half; the bounds half was closed by P5.4.4's `validate_against` wiring. See [`devlog/2026-08-07-p5-4-10-graph-shape/`](../devlog/2026-08-07-p5-4-10-graph-shape/index.md) |
-| C7.1's retained-v2 rollback arm | **Reclassified — needs no seL4 gate.** A v2 generation names its own kernel object, so a rollback boots the v2-era kernel rather than `slime-root`; and v2 predates the ELF component revision entirely, so every payload it carries is a SLIMECM image this root has no loader for. The decode path stays host-tested in `boot-contracts` (`retained_v2_generation_passes_stage0_admission` and four siblings). Booting one here would assert that an unloadable graph is reported unloadable, which `sel4_root_boot_check`'s `slimecm=[1-9]` marker already does |
+| C7.1's retained-v2 rollback arm | **Reclassified — needs no seL4 gate.** A v2 generation names its own kernel object, so a rollback boots the v2-era kernel rather than `slime-root`; and v2 predates the ELF component revision, so in practice every payload it carries is a SLIMECM image this root has no loader for — chronological rather than enforced, since no code couples the generation format version to the image revision, which is why the kernel-object argument above is the load-bearing half. The decode path stays host-tested in `boot-contracts` (`retained_v2_generation_passes_stage0_admission` and four siblings). Booting one here would assert that an unloadable graph is reported unloadable, which `sel4_root_boot_check`'s `slimecm=[1-9]` marker already does |
 | B10's seL4 layout fixture | **Done** — `just sel4_boot_layout_check` freezes all eight plane layouts; see [`devlog/2026-08-07-p5-4-10-sel4-boot-layout/`](../devlog/2026-08-07-p5-4-10-sel4-boot-layout/index.md) |
 | B11's product-vs-test profile pair | **Reclassified — structurally absent.** B11's defect is a *shared* manifest whose product graph declares probes and scenario doubles as peers of real services. The seL4 fixtures are per-scenario siblings rather than profiles of one manifest, so there is no shared graph to contaminate: `sel4.zti` declares five real components and no probe, and each scenario's doubles live only in its own fixture. Checked component-by-component across all eight. A product-vs-test pair would first require the shared manifest this design does not have |
 | `task_reclamation.rs`'s per-cycle drift, cost scaling, rejected-spawn conservation | **Partial — as far as this allocator allows.** `sel4_root_boot_check` now pins each task's reclaimed CSlot range exactly (`832..882`, `882..932`, aggregate `100`) instead of matching `\d+`, so a short or overlapping reclaim fails. The three named properties are *frame-count differentials*, and root CSlots are never returned to the allocator (`task.rs::CleanupRecord::revoke`), so a free-count comparison here is flat by construction and would pass whether or not reclamation ran. Closing them needs an allocator that reuses — see [`devlog/2026-08-07-p5-4-10-slot-conservation/`](../devlog/2026-08-07-p5-4-10-slot-conservation/index.md) |
 
-Two of the oracle's fifteen `component_image.rs` cases were deliberately not
-ported: the `stack_bytes` rules read a page constant in a header context rather
-than a segment one, and belong with a header validator if one is written.
+Six of the oracle's fifteen `component_image.rs` cases have no direct port —
+`rejects_bad_magic`, `rejects_unsupported_version`,
+`rejects_header_size_disagreeing_with_the_revision`,
+`retained_v1_reserved_field_must_be_zero`, `rejects_bad_stack_sizes`, and
+`rejects_abi_mismatch` — and the eleven ported `boot-contracts` tests map onto
+the other nine. Five of the six are header-shape assertions already covered by
+`boot-contracts`' own header tests; `rejects_bad_stack_sizes` reads a page
+constant in a header context rather than a segment one, and belongs with a
+header validator if one is written. `rejects_abi_mismatch` is covered by
+`each_qualification_axis_is_reported_separately`.
+
+This list is exact because P5.4.final's deletion of `kernel/` depends on it. An
+earlier count here said "two of fifteen", which an independent review of this
+milestone corrected.
 
 #### Exit condition
 

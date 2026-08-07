@@ -1232,17 +1232,22 @@ fn launch_component_graph(
     //
     // Emitted after materialization and before activation: that is the moment
     // the table is complete and nothing has run against it yet.
-    if let Some(bootstrap_id) = bootstrap
-        && let Some(table) = graph.get(bootstrap_id)
-    {
-        sel4::debug_println!(
-            "[layout] path={} slots={} max={}",
-            generation
-                .component(admission.bootstrap)
-                .map_or("?", |record| record.name),
-            table.len(),
-            graph::MAX_TASK_CAPS,
-        );
+    //
+    // Emitted unconditionally. `bootstrap` is `None` whenever init's own
+    // payload was not loadable, and a guarded dump would then produce a boot
+    // with launched components and no layout record at all — indistinguishable
+    // from the dump having been deleted. A header with `slots=0` says "init
+    // has no table", which is a fact worth reading.
+    let table = bootstrap.and_then(|bootstrap_id| graph.get(bootstrap_id));
+    sel4::debug_println!(
+        "[layout] path={} slots={} max={}",
+        generation
+            .component(admission.bootstrap)
+            .map_or("?", |record| record.name),
+        table.map_or(0, |table| table.len()),
+        graph::MAX_TASK_CAPS,
+    );
+    if let Some(table) = table {
         for (slot, capability) in table.slots() {
             let Some(capability) = capability else {
                 continue;
@@ -1254,8 +1259,8 @@ fn launch_component_graph(
                 capability.rights,
             );
         }
-        sel4::debug_println!("[layout] end");
     }
+    sel4::debug_println!("[layout] end");
 
     // Every allocation for every component has succeeded, so activation is
     // safe. Ordered by task id so the serial record is deterministic.

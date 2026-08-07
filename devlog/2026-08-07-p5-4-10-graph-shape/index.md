@@ -96,3 +96,25 @@ still looked plausible.
   [C8.4](../../roadmap/02-core-runtime.md),
   [P5.4.4](../../roadmap/07-architecture-portability.md) (which wired the
   admission path this extends).
+
+## Corrections
+
+- **2026-08-07.** The Verification table's row "The other nine seL4 gates | All
+  pass — they assert `fabric graph=absent`" states a false reason. **No gate
+  asserted that marker at all**; grepping `SLIME_ROOT fabric` across
+  `scripts/check/` matched only `check-sel4-stream-plane.py`. The other planes
+  were unaffected because they assert nothing about the marker, not because
+  they pin `absent`, and the row's "Direct" evidence label was therefore
+  applied to a property that had not been observed. Found by an independent
+  documentation review of this milestone.
+
+  The gap the false reason concealed is real: a generation that silently
+  started or stopped declaring a fabric graph would have changed no gate's
+  verdict. It is now closed — `check-sel4-root-boot.py` pins the retained
+  generation's own shape, `fabric graph=admitted schemas=3 routes=4
+  participants=7 interpositions=1`, read from a boot. Note this also corrects
+  an assumption in the original investigation: the P5.1 plane does **not**
+  report `absent`; it carries the retained x86 generation's graph, which is a
+  different and larger one than any `sel4-*` fixture declares, and the only one
+  with an interposition hop. Fault-injected by incrementing `route_count()`:
+  the gate reports the missing marker.

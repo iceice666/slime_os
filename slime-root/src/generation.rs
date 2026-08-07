@@ -262,11 +262,16 @@ pub fn fabric_graph_is_satisfiable(graph: &FabricGraph<'_>) -> Result<(), Genera
 /// reporting whether one was present.
 ///
 /// A no-op for a generation that declares no graph, which is every `sel4-*`
-/// fixture but the stream plane's. That is deliberate rather than incidental:
-/// the check must be silent on graphs that make no fabric promise, and refuse
-/// exactly those whose promises this mechanism cannot keep. The `bool` is what
-/// lets a boot marker distinguish "checked and satisfiable" from "nothing to
-/// check", which is the difference a gate needs to see.
+/// fixture but the stream plane's — though *not* the retained x86 generation
+/// the P5.1 fixture variant boots, which carries a larger graph than any
+/// `sel4-*` fixture and the only interposition hop of the set. That is
+/// deliberate rather than incidental: the check must be silent on graphs that
+/// make no fabric promise, and refuse exactly those whose promises this
+/// mechanism cannot keep.
+///
+/// `None` versus `Some(shape)` is what lets a boot marker distinguish
+/// "checked and satisfiable" from "nothing to check", which is the difference
+/// a gate needs to see; the shape itself is C8.4's structural arm.
 fn fabric_graph_admission(
     generation: &Generation<'_>,
 ) -> Result<Option<FabricShape>, GenerationError> {
@@ -305,16 +310,28 @@ fn fabric_graph_participants_are_declared(
     generation: &Generation<'_>,
     graph: &FabricGraph<'_>,
 ) -> Result<(), GenerationError> {
-    let mut names = [None; MAX_ADMITTED_COMPONENTS];
-    let mut count = 0;
-    for slot in 0..generation.component_count().min(MAX_ADMITTED_COMPONENTS) {
-        let component = generation
-            .component(slot)
-            .map_err(|_| GenerationError::UnsatisfiableFabricGraph)?;
-        names[count] = Some(component.name);
-        count += 1;
+    // `Admission::admit` refuses `declared > MAX_ADMITTED_COMPONENTS` before
+    // reaching this call, so the array always holds every component. Refusing
+    // again rather than truncating with `.min()`: a silent truncation would
+    // drop names and refuse a *legitimate* participant, turning a ceiling
+    // breach into a provenance error that points at the wrong thing.
+    let declared = generation.component_count();
+    if declared > MAX_ADMITTED_COMPONENTS {
+        return Err(GenerationError::TooManyComponents {
+            declared,
+            limit: MAX_ADMITTED_COMPONENTS,
+        });
     }
-    participants_are_declared(&names[..count], graph)
+    let mut names = [None; MAX_ADMITTED_COMPONENTS];
+    for (slot, name) in names.iter_mut().enumerate().take(declared) {
+        // `?` rather than mapping onto `UnsatisfiableFabricGraph`: a failure
+        // decoding the *component table* has nothing to do with the fabric
+        // graph, and reporting it as one points the reader at the wrong
+        // resource. `GenerationError` already carries `Decode`.
+        let component = generation.component(slot)?;
+        *name = Some(component.name);
+    }
+    participants_are_declared(&names[..declared], graph)
 }
 
 /// The set half of [`fabric_graph_participants_are_declared`], over the
@@ -326,15 +343,38 @@ fn participants_are_declared(
     names: &[Option<&str>],
     graph: &FabricGraph<'_>,
 ) -> Result<(), GenerationError> {
+    let declares = |identity: [u8; 32]| {
+        names
+            .iter()
+            .flatten()
+            .any(|name| fabric_graph::component_identity(name) == identity)
+    };
+    // The fabric host itself. `decode` only rejects an all-zero value, and a
+    // graph naming a host the manifest dropped fits every ceiling — but no
+    // participant would receive anything, because the host that mints every
+    // route half does not exist. Checked first: it is the failure that
+    // disables the whole graph rather than one edge of it.
+    if !declares(graph.fabric_component_identity()) {
+        return Err(GenerationError::UndeclaredFabricParticipant);
+    }
     for index in 0..graph.participant_count() {
         let participant = graph
             .participant(index)
             .ok_or(GenerationError::UnsatisfiableFabricGraph)?;
-        let declared = names
-            .iter()
-            .flatten()
-            .any(|name| fabric_graph::component_identity(name) == participant.component_identity);
-        if !declared {
+        if !declares(participant.component_identity) {
+            return Err(GenerationError::UndeclaredFabricParticipant);
+        }
+    }
+    // Interposition hops. `validate_interposition` checks chain termination,
+    // revisits, and self-bypass, never membership — and a hop is a *mandatory*
+    // proxy on its route, so a dropped one silently breaks the route it was
+    // added to mediate. The retained generation this root boots by default
+    // carries one, so this arm is exercised on every fixture-variant boot.
+    for index in 0..graph.interposition_count() {
+        let hop = graph
+            .interposition(index)
+            .ok_or(GenerationError::UnsatisfiableFabricGraph)?;
+        if !declares(hop.component_identity) {
             return Err(GenerationError::UndeclaredFabricParticipant);
         }
     }
@@ -626,6 +666,13 @@ mod tests {
         bytes
     }
 
+    /// The components `qos_graph` names: the fabric host and its two
+    /// participants. Derived identities, not raw bytes, so a provenance test
+    /// can declare the same components by name.
+    const QOS_FABRIC: &str = "fabric-service";
+    const QOS_PUBLISHER: &str = "fabric-publisher";
+    const QOS_SUBSCRIBER: &str = "fabric-subscriber";
+
     /// A one-route stream graph with a publisher and a subscriber, each
     /// carrying the reliability the caller names.
     ///
@@ -633,11 +680,6 @@ mod tests {
     /// [`graph_with`]'s empty participant table cannot: with no pairs the
     /// predicate is vacuously true, so a graph built there proves nothing about
     /// QoS either way.
-    /// The two components `qos_graph` names. Derived identities, not raw
-    /// bytes, so a provenance test can declare the same components by name.
-    const QOS_PUBLISHER: &str = "fabric-publisher";
-    const QOS_SUBSCRIBER: &str = "fabric-subscriber";
-
     fn qos_graph(offered: u8, requested: u8) -> alloc::vec::Vec<u8> {
         use boot_contracts::fabric_graph::{
             CONTRACT_KIND_STREAM, DIRECTION_PUBLISH, DIRECTION_SUBSCRIBE, DURABILITY_VOLATILE,
@@ -661,7 +703,12 @@ mod tests {
         bytes[28..32].copy_from_slice(&1u32.to_le_bytes()); // schemas
         bytes[32..36].copy_from_slice(&1u32.to_le_bytes()); // routes
         bytes[36..40].copy_from_slice(&2u32.to_le_bytes()); // participants
-        bytes[48..80].copy_from_slice(&[0xab; 32]);
+        // The fabric host, named rather than arbitrary: admission now checks
+        // this identity against the generation too, so a raw constant would
+        // make every graph built here unadmittable.
+        bytes[48..80].copy_from_slice(&boot_contracts::fabric_graph::component_identity(
+            QOS_FABRIC,
+        ));
         for (index, value) in SATISFIABLE.iter().enumerate() {
             bytes[80 + index * 4..][..4].copy_from_slice(&value.to_le_bytes());
         }
@@ -784,22 +831,37 @@ mod tests {
         let bytes = qos_graph(RELIABILITY_RELIABLE as u8, RELIABILITY_RELIABLE as u8);
         let graph = FabricGraph::decode(&bytes).expect("well-formed graph");
 
-        // Both participants declared: admitted. Without this half the test
-        // would pass on a check that refused every graph.
-        let complete = [Some(QOS_PUBLISHER), Some(QOS_SUBSCRIBER), Some("init")];
+        // Host and both participants declared: admitted. Without this half the
+        // test would pass on a check that refused every graph.
+        let complete = [
+            Some(QOS_FABRIC),
+            Some(QOS_PUBLISHER),
+            Some(QOS_SUBSCRIBER),
+            Some("init"),
+        ];
         assert_eq!(participants_are_declared(&complete, &graph), Ok(()));
 
         // The subscriber dropped from the generation, its participant left in
         // the graph: refused before anything launches.
-        let missing = [Some(QOS_PUBLISHER), Some("init")];
+        let missing = [Some(QOS_FABRIC), Some(QOS_PUBLISHER), Some("init")];
         assert_eq!(
             participants_are_declared(&missing, &graph),
+            Err(GenerationError::UndeclaredFabricParticipant)
+        );
+
+        // The fabric host itself dropped. Every participant is still declared,
+        // so only the host arm can catch this — and nothing would receive a
+        // route half if it booted.
+        let hostless = [Some(QOS_PUBLISHER), Some(QOS_SUBSCRIBER), Some("init")];
+        assert_eq!(
+            participants_are_declared(&hostless, &graph),
             Err(GenerationError::UndeclaredFabricParticipant)
         );
 
         // A component no participant names is ordinary, not an error: most
         // components are not on the fabric at all.
         let extra = [
+            Some(QOS_FABRIC),
             Some(QOS_PUBLISHER),
             Some(QOS_SUBSCRIBER),
             Some("console"),

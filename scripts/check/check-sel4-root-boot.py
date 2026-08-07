@@ -41,6 +41,21 @@ BOOT_TIMEOUT_SECONDS = 120
 # the terminal `live=0`.
 REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     ("generation admitted", r"SLIME_ROOT generation admitted number=\d+"),
+    # C8.2/C8.4 on the retained generation. `check-sel4-stream-plane.py` pins
+    # the shape of the graph the *seL4* fixtures declare; this is the x86
+    # generation P5.1 retained, and its graph is a different one — three
+    # schemas, four routes, and the only interposition hop any plane boots.
+    #
+    # Worth pinning separately: this graph was authored for the retired kernel
+    # and is admitted here by `slime-root`'s own ceilings, so it is the one
+    # case where admission judges a graph it did not co-evolve with. Until
+    # this, the marker was asserted on exactly one plane and so could not
+    # distinguish "checked" from "not emitted at all".
+    (
+        "the retained generation's fabric graph is admitted with its declared shape",
+        r"SLIME_ROOT fabric graph=admitted schemas=3 routes=4 "
+        r"participants=7 interpositions=1",
+    ),
     ("authority manifest reported", r"SLIME_ROOT authority manifest=\["),
     (
         "legacy component images not activated",

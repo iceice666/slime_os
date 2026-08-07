@@ -100,3 +100,50 @@ crate — the tests do fail, and the exit code is what the gate reads.
   [P5.4.10](../../roadmap/07-architecture-portability.md),
   [C8.1](../../roadmap/02-core-runtime.md),
   [C8.3](../../roadmap/02-core-runtime.md).
+
+## Corrections
+
+- **2026-08-07.** The Changes table claims "`Justfile`, `AGENTS.md` | Host test
+  count 107 → 109". Only the `Justfile` was updated; `AGENTS.md:76` still read
+  "107 host unit tests" when this entry was committed. The earlier edit pass
+  matched the string "107 host tests", which does not occur — the gate index
+  words it "107 host **unit** tests". Now corrected to 109. This is the same
+  count-drift failure mode a previous review round caught on this exact gate,
+  which is why the entry recorded the change as landing in both places.
+
+- **2026-08-07.** The Verification row citing `tests.log` for "Pass, 109/109
+  across 13 modules" over-reads its artifact: `tests.log` is a *filtered* run of
+  the two new tests ("2 passed … 107 filtered out"). The arithmetic corroborates
+  the 109 total and the full suite does pass, but the cited log does not show
+  it. The sibling QoS entry's log does show its full run; this one should have.
+
+- **2026-08-07.** "The other ten seL4 gates | Pass" should read *nine*: the row
+  above it already accounts for `sel4_stream_check` separately, and ten is the
+  total including it.
+
+  All three found by an independent documentation review of this milestone.
+
+- **2026-08-07.** The C8.3 provenance check as first committed covered only
+  `ParticipantEntry::component_identity`. An independent code review of this
+  milestone found two further component identities in the same authenticated
+  resource that cross the same trust boundary and were never compared against
+  the generation:
+
+  - `FabricGraph::fabric_component_identity()` — the fabric host. `decode` only
+    rejects an all-zero value. A graph naming a host the manifest dropped fits
+    every ceiling and passes the participant arm, and *no* participant would
+    receive anything, because the component that mints every route half does
+    not exist.
+  - `InterpositionEntry::component_identity` — `validate_interposition` checks
+    chain termination, revisits, and self-bypass, never membership. A hop is a
+    mandatory proxy on its route, so a dropped one silently breaks the route it
+    was added to mediate.
+
+  Both are now checked by `participants_are_declared`, host arm first since it
+  disables the whole graph rather than one edge. Not hypothetical: the retained
+  generation this root boots by default carries `interpositions=1`, so the hop
+  arm is exercised on every fixture-variant boot — confirmed by
+  `sel4_root_boot_check` still admitting that graph after the change. The
+  fixture's fabric identity became name-derived rather than `[0xab; 32]` so the
+  test builds an admittable graph, and a fourth case pins the host arm
+  specifically: every participant declared, host dropped, refused.

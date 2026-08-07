@@ -23,7 +23,7 @@ reviewable diff rather than a silent renumbering.
 
 Each plane boots a different generation, and `layout_for` prunes the base table
 by which components that generation declares. The pruning is the interesting
-part -- it renumbers -- so freezing one plane would leave the other eight
+part -- it renumbers -- so freezing one plane would leave the other seven
 unguarded against exactly the change most likely to break them.
 
 # Relationship to the boot itself
@@ -188,6 +188,10 @@ ENTRY = re.compile(r"^\[layout\] \d+ [a-z-]+ \S+ 0x[0-9a-f]+$")
 def check_shape(name: str, block: str) -> None:
     """The block is well formed and its declared count matches its rows."""
     lines = block.splitlines()
+    # Independently total rather than depending on `capture`'s StopIteration
+    # path thirty lines away: a block too short to index is a malformed block.
+    if len(lines) < 2:
+        fail(f"{name}: layout block has no header and terminator")
     if not HEADER.match(lines[0]):
         fail(f"{name}: malformed header {lines[0]!r}")
     if lines[-1] != "[layout] end":

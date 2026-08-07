@@ -109,3 +109,29 @@ granule, so the caller supplies its profile's.
   [P5.4.1](../../roadmap/07-architecture-portability.md) (the inventory that
   recorded the gap), [P0](../../roadmap/07-architecture-portability.md) (whose
   required check says the corpus must reject regardless of producer).
+
+## Corrections
+
+- **2026-08-07.** This entry's accounting of which oracle cases were not ported
+  is wrong in three ways, found by an independent documentation review. The
+  oracle's `kernel/tests/component_image.rs` has fifteen `#[test_case]` fns —
+  that figure is right — but:
+
+  1. The `stack_bytes` rules are **one** case, `rejects_bad_stack_sizes`, which
+     covers three inputs `[0, 4095, MAX_STACK_BYTES + 4096]`, not two cases.
+  2. **Six** oracle cases have no direct port, not two: `rejects_bad_magic`,
+     `rejects_unsupported_version`,
+     `rejects_header_size_disagreeing_with_the_revision`,
+     `retained_v1_reserved_field_must_be_zero`, `rejects_bad_stack_sizes`, and
+     `rejects_abi_mismatch`. The eleven ported `boot-contracts` tests map onto
+     the other nine.
+  3. `rejects_abi_mismatch` was accounted for by neither this entry nor the
+     roadmap row. It **is** covered — `boot-contracts/src/component_image.rs`'s
+     `each_qualification_axis_is_reported_separately` asserts
+     `Err(ComponentTargetError::Target(TargetError::AbiMismatch))` for a header
+     with a bad ABI field. Verified after the review flagged it; the coverage
+     was real and only the bookkeeping was missing.
+
+  This matters beyond tidiness: P5.4.final deletes `kernel/`, and that decision
+  is only safe if the list of oracle coverage replaced elsewhere is exact. The
+  corrected list above is the one to check against.
