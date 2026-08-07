@@ -127,3 +127,29 @@ a real regression while it was being written (below).
   [B25](../../roadmap/00-backlog.md).
 - Extends the three arms asserted in
   [`devlog/2026-08-07-p5-4-5-qos-arms/`](../2026-08-07-p5-4-5-qos-arms/index.md).
+
+## Corrections
+
+- **2026-08-07.** The first Open-risk item above names the retained-publisher
+  shape as the remaining blocker. That is right, but the transcript also shows a
+  *second* ordering fact worth recording, because the obvious fix for it makes
+  things worse.
+
+  `fabric-publisher` — the graph's inline retained publisher — reaches
+  `publish role received` at boot.log:333, *after* the fabric fails at :304. So
+  when `create_late_subscriber` runs, that publisher is still parked awaiting its
+  role and no retained inline head exists yet. It reads like a race that one
+  `yield_now` before the clock driver's spawn would settle.
+
+  It does not. Adding exactly that yield removed **all** QoS activity: the
+  re-run showed zero `reliable retry accounted`, zero `QoS deadline missed`, and
+  zero `QoS liveliness lost`, where the committed order shows two, one, and
+  three. Perturbing the ready-queue order costs the arms that currently work
+  rather than buying the one that does not, so the yield was reverted and the
+  committed plane keeps its order.
+
+  Recorded because it narrows the follow-up: the gap is not a scheduling nudge
+  away. `create_late_subscriber` runs when the fabric's scheduled boundaries run,
+  and the graph must have an inline retained head by then — which the fixture has
+  to guarantee structurally, by declaring a retained publisher that publishes
+  small, rather than by any ordering of the existing one.
