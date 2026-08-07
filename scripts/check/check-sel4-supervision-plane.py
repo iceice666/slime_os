@@ -113,6 +113,22 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"\[init\] supervision plane complete",
     ),
     (
+        # B24: every one of the 38 holders this plane constructs releases its
+        # generation-declared ceiling when its task dies. `quotas` is the
+        # shared-buffer table's own live count, so a `MAX_CHARGE_HOLDERS`
+        # (96) that measured holders a boot *ever* built rather than those live
+        # at once reads 38 here instead of 0 — fault-injected exactly that way.
+        #
+        # Asserted on this plane rather than a tenth image because it is
+        # already the deepest spawn/reap loop in the corpus, which is the shape
+        # the defect needs. Reaching the 96 bound itself is out of reach: root
+        # CSlots are deliberately never returned, so a boot exhausts them near
+        # 52 tasks. Zero-at-teardown is the observable the graph can carry.
+        "every constructed holder released its declared quota",
+        r"SLIME_GRAPH loans served=\d+ loans=0 mappings=0 regions=0 transit=0 "
+        r"orphans=0 aliases=0 quotas=0",
+    ),
+    (
         # The root's *own* accounting, and the numerically strongest evidence in
         # the gate: every marker above is a string the driver chose to print,
         # whereas `terminated` is counted by `Terminations::recorded` inside the
