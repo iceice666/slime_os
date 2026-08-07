@@ -293,11 +293,22 @@ the path a reply to a parked task takes. That is either seL4's own
 `Recv`, or a root-side invocation that leaves the thread in Running without the
 kernel completing the switch.
 
-**Exit condition unchanged, and the remaining work is bounded:** identify *which*
-component that TCB is (the root names its threads, so `seL4_DebugNameThread` on each
-child at spawn would label them in every future dump — a small, permanent
-improvement worth making regardless), then read seL4's reply path for the enqueue
-that does not happen.
+**Thread naming was tried and does not help on this build.** `seL4_DebugNameThread`
+is exposed by `rust-sel4` as `cap::Tcb::debug_name`, and calling it at spawn compiles
+and boots cleanly — but this kernel has no `tcbName` field at all, so nothing stores
+the label and no dump can report it. `KernelDebugBuild ON` gives `DebugCapIdentify`
+and the `ksDebugTCBs` pointer without the naming storage that
+`CONFIG_DEBUG_BUILD`'s thread-name support would add. The change was reverted rather
+than left as a call whose effect is unobservable.
+
+So identifying *which* of the six children that TCB is needs either a kernel rebuilt
+with thread-name support, or matching its `tcbVTable`/`tcbCTable` against the root's
+own per-task records — the latter needs no new build options and is the cheaper
+route.
+
+**Exit condition unchanged, and the remaining work is bounded:** identify that
+thread by its VSpace or CNode root, then read seL4's reply path for the enqueue that
+does not happen.
 
 **One wider finding stands regardless of B28**, and it is worth its own slice:
 `sel4_transport::wait` returns `()`, so its staging-failure branch can only
