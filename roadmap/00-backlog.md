@@ -386,17 +386,40 @@ The thread is left `Running`, **deliberately unqueued**, with the switch pending
 `ksSchedulerAction` — exactly the state observed at the deadlock, and the reason
 `ksReadyQueues[254]` is empty while a child is Running.
 
-That reframes the whole defect: the question is not why a reply failed, but why a
-*pending activation switch* was dropped between `activate()` and the thread ever
-running. Eighteen readings excluded, and this is the first one that explains all
-three measured facts at once.
+**Two corrections, both refuting the paragraphs above.** They are recorded rather
+than deleted because each looked conclusive and each is a trap the next reader would
+fall into.
 
-**Exit condition unchanged**, and the next step is now precise: the root activates
-every task in a loop (`launch_component_graph`), so each `TCB_Resume` overwrites the
-previous `ksSchedulerAction` — only the last activated task keeps its pending switch,
-and the rest depend on being enqueued by something later. Reading that loop against
-`possibleSwitchTo`'s three branches, and checking whether the passing planes differ
-only in activation order, is the remaining work.
+*The TCB was not identified.* The IPC-buffer match is ambiguous: **three** tasks in
+this boot bind window `0x238000` — task 6 (`init`), task 1 (the root-launched
+`fabric-publisher`), and task 10 (the one init spawned). `child_vspace` lays every
+component out identically, so `tcbIPCBuffer` cannot distinguish them, and the claim
+that the Running TCB is task 10 does not follow. The `tcbPriority = 254` reading
+still holds, so it is *a* child rather than the root or the idle thread — nothing
+finer.
+
+*No activation switch is dropped.* `rescheduleRequired`
+(`deps/sel4/src/kernel/thread.c`) **enqueues** the pending target before overwriting
+the action:
+`if (action != ResumeCurrentThread && action != ChooseNewThread) SCHED_ENQUEUE(action)`.
+So the second `possibleSwitchTo` in the root's activation loop takes exactly that
+branch and the first target is enqueued, not lost. The transcript agrees:
+`activated components=7`, and six of the seven root-launched instances go on to print
+their own failure line, so they demonstrably ran. The breakpoint that fired was one
+of those early activations, before task 10 existed at all.
+
+**So the state is measured and the mechanism is still unknown.** Nineteen readings
+excluded. What remains true: some child thread is `Running` at priority 254, absent
+from every ready queue, with `ksCurThread` idle and `ksSchedulerAction` at
+`ResumeCurrentThread`; and `fabric-publisher`'s spawned instance never resumes after
+its role reply.
+
+**Exit condition unchanged.** The next step must first establish *which* thread is
+the Running one, and the only unambiguous discriminator available without a kernel
+rebuild is the VSpace root: the root holds `ChildVSpace::vspace` per task, so
+comparing the stranded TCB's `tcbVTable` cap against those is decisive where the IPC
+buffer is not. Doing that before any further theory is the lesson these two
+corrections teach.
 
 **One wider finding stands regardless of B28**, and it is worth its own slice:
 `sel4_transport::wait` returns `()`, so its staging-failure branch can only
