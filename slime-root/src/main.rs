@@ -304,16 +304,27 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         admission.bootstrap_objects,
     );
     // C8.2: the declared fabric graph, checked against this root's own ceilings
-    // before any component launches.  for the generations that
-    // declare none;  is the wiring being observable, which no
-    // unit test over a hand-built graph can show.
+    // before any component launches. `absent` for the generations that declare
+    // none; `admitted` is the wiring being observable, which no unit test over
+    // a hand-built graph can show.
+    //
+    // The counts are C8.4's structural arm (P5.4.10). A transcript proves
+    // samples moved; only reading the authenticated resource proves they moved
+    // along edges the *generation* fixed. `kernel/tests/fabric_stream.rs` says
+    // exactly this about itself — "the two things a transcript cannot show" —
+    // and reports the shape rather than asserting a number here, because the
+    // number is a property of the generation rather than of the root.
     sel4::debug_println!(
-        "SLIME_ROOT fabric graph={}",
+        "SLIME_ROOT fabric graph={} schemas={} routes={} participants={} interpositions={}",
         if admission.fabric_graph_admitted {
             "admitted"
         } else {
             "absent"
         },
+        admission.fabric_schemas,
+        admission.fabric_routes,
+        admission.fabric_participants,
+        admission.fabric_interpositions,
     );
     sel4::debug_println!(
         "SLIME_ROOT authority manifest={:02x?}",

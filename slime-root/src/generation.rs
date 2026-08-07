@@ -259,16 +259,32 @@ pub fn fabric_graph_is_satisfiable(graph: &FabricGraph<'_>) -> Result<(), Genera
 /// exactly those whose promises this mechanism cannot keep. The `bool` is what
 /// lets a boot marker distinguish "checked and satisfiable" from "nothing to
 /// check", which is the difference a gate needs to see.
-fn fabric_graph_admission(generation: &Generation<'_>) -> Result<bool, GenerationError> {
+fn fabric_graph_admission(
+    generation: &Generation<'_>,
+) -> Result<Option<FabricShape>, GenerationError> {
     let Some(graph) = fabric_graph_object(generation) else {
-        return Ok(false);
+        return Ok(None);
     };
     // A graph that will not decode is refused here rather than surfaced as a
     // decode error, because the generation is otherwise well formed: it is the
     // graph that is wrong, and the caller's marker should say so.
     let graph = graph.map_err(|_| GenerationError::UnsatisfiableFabricGraph)?;
     fabric_graph_is_satisfiable(&graph)?;
-    Ok(true)
+    Ok(Some(FabricShape {
+        schemas: graph.schema_count(),
+        routes: graph.route_count(),
+        participants: graph.participant_count(),
+        interpositions: graph.interposition_count(),
+    }))
+}
+
+/// The shape a declared fabric graph fixes. See [`Admission::fabric_schemas`].
+#[derive(Clone, Copy)]
+struct FabricShape {
+    schemas: usize,
+    routes: usize,
+    participants: usize,
+    interpositions: usize,
 }
 
 /// Locate the fabric-graph resource object, if the generation declares one.
@@ -315,6 +331,17 @@ pub struct Admission {
     /// what a boot marker can show and a unit test over a hand-built graph
     /// cannot.
     pub fabric_graph_admitted: bool,
+    /// The shape the declared graph fixes: schema, route, participant, and
+    /// interposition counts (P5.4.10, C8.4's structural arm).
+    ///
+    /// Reported rather than asserted. A transcript proves samples moved; only
+    /// reading the authenticated resource proves they moved along edges the
+    /// *generation* declared, which is what `kernel/tests/fabric_stream.rs`
+    /// exists to check and no seL4 gate could. Zero when no graph is declared.
+    pub fabric_schemas: usize,
+    pub fabric_routes: usize,
+    pub fabric_participants: usize,
+    pub fabric_interpositions: usize,
 }
 
 impl Admission {
@@ -349,7 +376,7 @@ impl Admission {
         // implementation's rather than that one's. That is the whole point of
         // validating here as well: identical bytes can be satisfiable for one
         // mechanism and impossible for another.
-        let fabric_graph_admitted = fabric_graph_admission(generation)?;
+        let fabric = fabric_graph_admission(generation)?;
 
         let mut kernel_objects = 0;
         let mut bootstrap_objects = 0;
@@ -422,7 +449,11 @@ impl Admission {
             slime_component_images,
             unrecognized_images,
             wrong_target_images,
-            fabric_graph_admitted,
+            fabric_graph_admitted: fabric.is_some(),
+            fabric_schemas: fabric.map_or(0, |shape| shape.schemas),
+            fabric_routes: fabric.map_or(0, |shape| shape.routes),
+            fabric_participants: fabric.map_or(0, |shape| shape.participants),
+            fabric_interpositions: fabric.map_or(0, |shape| shape.interpositions),
         })
     }
 

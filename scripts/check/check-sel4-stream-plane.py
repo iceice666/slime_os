@@ -113,7 +113,17 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
             # `absent` on every other plane, since this is the one seL4 fixture
             # declaring a graph, so the marker also distinguishes "checked" from
             # "nothing to check" rather than merely appearing.
-            r"SLIME_ROOT fabric graph=admitted",
+            #
+            # The counts are C8.4's structural arm (P5.4.10): the oracle's
+            # `kernel/tests/fabric_stream.rs` exists to check "the graph the
+            # boot admitted really declares the fan-out", because counting
+            # transcript markers proves samples moved but not that they moved
+            # along edges the generation fixed. Asserting the shape here is
+            # that same question against the authenticated resource -- a
+            # participant silently dropped from the graph would still produce a
+            # passing transcript from the participants that remain.
+            r"SLIME_ROOT fabric graph=admitted schemas=2 routes=2 "
+            r"participants=6 interpositions=0",
             r"SLIME_ROOT graph admitted; legacy SLIMECM images not activated "
             r"components=7 slimecm=0 elf=7 unrecognized=0",
             # Six pairs, one per participant plus B17's probe. Init holds both
