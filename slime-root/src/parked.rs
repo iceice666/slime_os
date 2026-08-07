@@ -117,6 +117,17 @@ impl ParkedReplies {
             .map(|held| held.reason)
     }
 
+    /// Every task still holding a parked reply, in table order.
+    ///
+    /// For the terminal marker only. A healthy graph ends with this empty: a
+    /// task parked at teardown is one the root owes an answer it never
+    /// delivered, which is invisible in the `parked=` count alone — that number
+    /// says *how many* are owed, and diagnosing one needs to know *which*.
+    /// Backlog **B28** is exactly that case.
+    pub fn tasks(&self) -> impl Iterator<Item = TaskId> + '_ {
+        self.entries.iter().flatten().map(|held| held.task)
+    }
+
     /// Save the calling thread's implicit reply authority into a fresh root
     /// CSlot.
     ///

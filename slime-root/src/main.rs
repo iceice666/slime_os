@@ -2256,6 +2256,24 @@ fn serve_component_graph(
         parked.recycled(),
         channels.minted(),
     );
+    // Which tasks are still owed an answer, when any are (B28).
+    //
+    // A separate line rather than a field on the one above, because two gates
+    // match that line by a prefix ending at `replies` and would stop matching if
+    // it grew. Emitted only when the set is non-empty, so a healthy boot — every
+    // one of the nine passing planes — gains no line at all and no fixture
+    // moves.
+    //
+    // `parked=` already says *how many* replies the root still holds; it cannot
+    // say *which*, which is the datum B28 needs. A task parked at teardown was
+    // woken and never resumed, or never woken at all, and the two are
+    // indistinguishable from a count.
+    if !parked.is_empty() {
+        sel4::debug_println!("SLIME_GRAPH replies owed count={}", parked.len());
+        for task in parked.tasks() {
+            sel4::debug_println!("SLIME_GRAPH reply owed task={}", task.0);
+        }
+    }
     // The loan plane's accounting, on its own line for the same reason: P5.3.1's
     // gate asserts the line above by its exact shape.
     //

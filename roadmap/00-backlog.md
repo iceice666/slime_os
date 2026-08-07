@@ -72,12 +72,27 @@ produces the `QoS lifespan expired` arm. The fabric's capability slots peak at 2
 of 32, so it is not out of slots either. The broker is healthy and simply parks on
 its stream sources with `fabric-publisher`'s request never served.
 
-What remains is therefore narrower than "the broker's control flow": every actor
-looks correct in isolation, the reply capability was saved, `deliver_wake` ran,
-and the task never resumed. The next step is instrumenting `ParkedReplies` — the
-root parks 33 times and recycles 323 replies across this boot, so establishing
-whether task 10's entry is still held at teardown, or was answered to a slot that
-no longer names its caller, is what separates a lost reply from an unserved one.
+**The reply is not lost.** `ParkedReplies` is now instrumented: the root emits
+`SLIME_GRAPH replies owed count=` and one `reply owed task=` per still-parked task
+at teardown, and only when the set is non-empty, so every healthy plane gains no
+line. On this boot the answer is a single owed reply belonging to task **6**,
+which is `init` waiting on its children — expected and correct. `fabric-publisher`
+is **not** in the list, although the transcript shows `parked task=10 reason=wait`
+and no later activity from it.
+
+So its wake *was* delivered: 33 park events across the boot, one owed at
+teardown. The task resumed, consumed its reply, and then blocked inside seL4
+without issuing another root call — which is why it emits nothing further and why
+no root-side accounting shows it as outstanding. That excludes every lost-wake and
+lost-reply reading, including the two this entry previously carried.
+
+What remains is a *component-side* question rather than a root one: what
+`fabric-publisher` does after `request_role` returns two capabilities, on a graph
+where a second retained route exists, that leaves it blocked without a syscall the
+root can see. Its next act is `recv(route_slot)` expecting `ERR_BAD_CAP`
+(`route receive denied`) — a non-blocking call — so the candidate is that the role
+capabilities it received are not the pair it expects when the fabric has minted an
+extra endpoint pair for the late subscriber.
 
 **Severity:** Blocks P5.4.5's exit condition and nothing else. Latent for every
 other plane: no other seL4 graph declares two retained routes on one publisher.
