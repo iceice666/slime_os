@@ -414,12 +414,34 @@ from every ready queue, with `ksCurThread` idle and `ksSchedulerAction` at
 `ResumeCurrentThread`; and `fabric-publisher`'s spawned instance never resumes after
 its role reply.
 
-**Exit condition unchanged.** The next step must first establish *which* thread is
-the Running one, and the only unambiguous discriminator available without a kernel
-rebuild is the VSpace root: the root holds `ChildVSpace::vspace` per task, so
-comparing the stranded TCB's `tcbVTable` cap against those is decisive where the IPC
-buffer is not. Doing that before any further theory is the lesson these two
-corrections teach.
+**The VSpace route was tried and does not close the gap either.** The stranded TCB's
+`tcbVTable` entry reads a VSpace root of `0x80604b8000` — a kernel object address.
+Logging `task.vspace.vspace.bits()` per task gives `0x2c7`, `0x305`, `0x345`, `0x386`,
+`0x3cb`, `0x40c`, `0x44d`: distinct per task, and therefore a genuine discriminator,
+but they are *root CSpace slot numbers*, not the kernel addresses the TCB stores. The
+two namespaces cannot be compared without resolving each cap to its object, which is
+what a kernel with thread-name support would have made unnecessary. The
+instrumentation was reverted.
+
+**So B28 stops here, root-caused only as far as the evidence allows.** Nineteen
+readings excluded. Established beyond doubt:
+
+* `fabric-publisher`'s spawned instance parks once for its role reply and never
+  resumes; the plane cannot reach `[init] fabric stream complete`.
+* Every root-side layer is correct and measured: park entry, a live `cap_reply_cap`
+  (`debug_identify` = 8), `deliver_wake` firing against a task the root agrees is
+  parked, the send performed and returning.
+* At the deadlock the kernel holds *a* child thread (priority 254) in
+  `ThreadState_Running`, absent from `ksReadyQueues` at every priority, with
+  `ksCurThread` idle and `ksSchedulerAction` at `ResumeCurrentThread`.
+* It is triggered by one fixture field — `retained` on the diagnostics participant —
+  and that same field buys two of the five observed C8.5 arms.
+
+**Exit condition unchanged**, and the next step is now a build change rather than
+another read: rebuild seL4 with thread-name support (`tcbName` is absent from this
+configuration, so `seL4_DebugNameThread` stores nothing and `ksDebugTCBs` is not
+walkable) so a scheduler dump names every thread and its state at once. Every
+cheaper avenue is exhausted and recorded above.
 
 **One wider finding stands regardless of B28**, and it is worth its own slice:
 `sel4_transport::wait` returns `()`, so its staging-failure branch can only
