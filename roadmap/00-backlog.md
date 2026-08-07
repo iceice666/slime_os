@@ -354,17 +354,24 @@ rather than `ResumeCurrentThread` — the branch that then fires is
 `rescheduleRequired()` plus `SCHED_ENQUEUE`, which enqueues the *first* target and
 requests a reschedule.
 
-That is self-consistent with everything measured, and it is where the next author
-should start: the two-wake path is the only place the root issues two reply sends
-without an intervening `seL4_Recv`, it exists on this plane and not on the ones that
-pass, and it is reached from `reclaim_dead_task` — which the retained diagnostics
-route makes reachable earlier by ending a subscriber sooner.
+**But the timing refutes it as task 10's cause.** The only `woken=2` line in the
+transcript is at boot-log line 184, and task 10 does not park until line 283. A
+pending switch that never existed cannot have been cleared, so this interleaving —
+real as it is — is not what strands `fabric-publisher`. Every later wake in that boot
+is `woken=0` or `woken=1`, i.e. one reply per kernel entry.
 
-**Exit condition unchanged**, and the remaining work is one targeted experiment
-rather than a search: make `reclaim_dead_task` deliver its wakes one kernel entry
-apart (or read `ksSchedulerAction` between the two sends) and see whether task 10
-then runs. Everything above the scheduler is verified; sixteen readings are
-excluded.
+Seventeen readings excluded. That leaves the contradiction fully measured and
+unexplained by any mechanism inspected so far: a `Running` child at priority 254,
+absent from every ready queue, `ksSchedulerAction = ResumeCurrentThread`,
+`ksCurThread` idle, reached after a single reply send over a live `cap_reply_cap`.
+
+**Exit condition unchanged.** The remaining approaches are both heavier than anything
+tried so far, and choosing between them is the next decision rather than the next
+command: single-step the kernel from the reply send that targets task 10 (a gdbstub
+watchpoint on `ksSchedulerAction` plus a breakpoint on `possibleSwitchTo` would show
+the write and the caller), or rebuild seL4 with thread-name support so a
+`DebugDumpScheduler` names every thread and its state in one shot. The first needs no
+rebuild; the second makes every future seL4 investigation cheaper.
 
 **One wider finding stands regardless of B28**, and it is worth its own slice:
 `sel4_transport::wait` returns `()`, so its staging-failure branch can only
