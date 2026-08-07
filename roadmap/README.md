@@ -12,7 +12,7 @@ A milestone is complete only when its exit condition is observed. Compiled code,
 
 | Track | Status | Next open gate |
 | --- | --- | --- |
-| [Backlog](00-backlog.md) | B1–B23 resolved; B12 and B24 open | B24 is the third lifetime-vs-live table, found by P5.4.1's class audit and scheduled after it; B12 stays deferred with reason |
+| [Backlog](00-backlog.md) | B1–B11 and B13–B24 resolved; B12 open | B12 stays deferred with reason: fixing it rebuilds every frozen x86 component image. P5.4.1's class audit closed the lifetime-vs-live bounds as a class (B22, B24) |
 | [Foundations](01-foundations.md) | M1–M4 and M6 complete; M5 mechanisms complete except M5.7 physical Framework evidence | Preserve as regression history; do not block RPi5 work on Framework-only evidence unless storage safety is touched |
 | [Core runtime](02-core-runtime.md) | C7 and C8.1–C8.10 complete; C8.11–C8.15 and C10 are planned | For the demo, prioritize only the C8/C10 slices required by two ROS 2 nodes over minimal DDS/RTPS |
 | [RPi5 ROS 2 demo](09-rpi5-ros2-demo.md) | RP0 and RP1 complete; RP2–RP8 planned | RP2 is the next open gate, but its deliverables specify exception vectors, `svc`, translation tables, GICv3, and the generic timer — the mechanisms P5 delegates to seL4 — so it needs rewriting before it can be implemented |

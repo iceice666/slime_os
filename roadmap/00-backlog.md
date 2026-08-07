@@ -16,51 +16,6 @@ at the bottom rather than deleting it.
 
 ## Open
 
-### B24 — `SharedBufferTable::quotas` never reclaims, so `MAX_CHARGE_HOLDERS` is a lifetime bound
-
-**Problem:** B16's and B22's defect shape in a third table, and the one B16's
-sweep implicitly cleared. `slime-root/src/shared_buffer.rs:502` declares
-`quotas: [Option<QuotaEntry>; MAX_CHARGE_HOLDERS]` one line below `charges`,
-which B16 named among the correct tables. `charges` **is** correct — `uncharge`
-frees it at `:1782-1784`. `quotas` has no free path anywhere:
-`declare_quota` (`:574-587`) reuses a slot only for the *same* `HolderId` and
-otherwise takes a fresh one, while `commit_teardown` (`:1590-1614`),
-`reclaim_holder` (`:1120-1143`), and `advance_epoch` (`:1144-1173`) never
-mention it. Grep across the crate returns only declare, init, insert, and read.
-
-Because `construct_child` (`main.rs:3092`) keys it `HolderId(task_id)` and
-`TaskTable::next_id` never rewinds (`task.rs:311`, `:420`), a graph that spawns
-and reaps repeatedly presents a fresh holder every time, so the same-holder
-reuse never fires. The 96 slots bound the holders a boot may **ever** construct.
-
-**Evidence:** found by P5.4.1's class audit of every bounded table in
-`slime-root/src`, which is the check that milestone exists to perform. B16's
-sweep was correct within its literal scope of *per-task* tables and missed this
-one because `quotas` is only *keyed* per-task — it is declared per-component at
-boot (`main.rs:1267`) and per-task only on the runtime spawn path.
-
-**Failure mode:** `declare_quota` returns `ChargesExhausted`, which
-`construct_child` (`main.rs:3091-3097`) turns into a released child and
-`DestinationSlotsExhausted`. A bounded refusal of the spawn, not a silent drop
-— but it refuses for a reason unrelated to what the caller did, and it is
-indistinguishable at the wire from real slot exhaustion. At boot the same error
-is `fatal!` (`main.rs:1267`).
-
-**Reachable today?** No. 96 is triple `MAX_TASKS`, and the deepest declared
-graph is the supervision plane's 35 spawns. But that is already 36% of the way
-there and it is the newest gate, which is exactly B16's trajectory: a bound
-nothing crosses until one loop-shaped plane does.
-
-**Why opened rather than fixed with B22:** the fix is a third derived
-predicate, over a different key space (`HolderId`, not `ChannelKey`), and it
-needs its own gate and its own fault injection. Bundling it into P5.4.1 would
-repeat exactly what B22's own deferral note describes.
-
-**Exit condition:** a graph that constructs more than `MAX_CHARGE_HOLDERS`
-shared-buffer holders over its lifetime still resolves the declared quota for
-every live holder, observed under a named seL4 gate, and fault-injected to show
-that removing the reclaim fails it.
-
 ### B12 — the component build's `--remap-path-prefix` names a path that does not exist
 
 **Problem:** `components/.cargo/config.toml` passes
@@ -158,6 +113,54 @@ binary perturbed neither contract validation nor generation identity. See
 `devlog/2026-08-07-p5-4-1-oracle-inventory/`.
 
 ## Resolved
+
+### B24 — `SharedBufferTable::quotas` never reclaimed, so `MAX_CHARGE_HOLDERS` was a lifetime bound — **resolved 2026-08-07**
+
+**Problem:** B16's and B22's defect shape in a third table, and the one B16's
+sweep implicitly cleared. `slime-root/src/shared_buffer.rs:502` declares
+`quotas` one line below `charges`, which B16 named among the correct tables.
+`charges` **is** correct — `uncharge` frees it at `:1782-1784`. `quotas` had no
+free path anywhere: `declare_quota` reuses a slot only for the same `HolderId`
+and otherwise takes a fresh one, while `commit_teardown`, `reclaim_holder`, and
+`advance_epoch` never mentioned it. Because `construct_child` keys it by task id
+and `TaskTable::next_id` never rewinds, a spawn/reap graph presented a fresh
+holder every time and the 96 slots bounded the holders a boot could **ever**
+construct.
+
+Found by P5.4.1's lifetime-vs-live class audit rather than one at a time, which
+is the reason that audit was scoped as a class: `quotas` is *keyed* per-task but
+*declared* per-component at boot, so it does not read as a per-task table at a
+glance and B16's per-task sweep passed over it.
+
+**Resolved by** `release_quota`, called from `reclaim_dead_task` after charge
+settlement — the ceiling outlives every charge made against it and is dropped
+only once nothing can be charged again. A **direct release rather than a derived
+sweep**, unlike B16 and B22: a quota has exactly one holder and that holder is a
+task, so "the task is gone" is complete information. Those two needed predicates
+because a supervision handle or a channel end can be named by a capability that
+outlives the task; a quota cannot.
+
+**Exit condition amended, and why.** The condition recorded when this item was
+opened asked for a graph constructing more than `MAX_CHARGE_HOLDERS` holders.
+That is unreachable: root CSlots are deliberately never returned
+(`task.rs:165-167`), and the supervision plane's 35 spawns consume 2321 of 3457,
+so a boot exhausts CSlots near 52 tasks and cannot reach 97. Stretching the
+evidence to fit the original wording would have been the wrong move; the
+condition is restated to what the platform can carry.
+
+**Exit condition (observed 2026-08-07):** every constructed holder releases its
+declared ceiling when its task dies, observed under `just sel4_supervision_check`
+— 38 holders constructed over one boot, 38 `SLIME_GRAPH quota released` lines,
+and `quotas=0` on the terminal accounting — and fault-injected to show that
+disabling the release leaves `quotas=38`. Asserted on that existing plane rather
+than a tenth image, since it is already the deepest spawn/reap loop in the
+corpus. See
+[`devlog/2026-08-07-b24-shared-buffer-quotas/`](../devlog/2026-08-07-b24-shared-buffer-quotas/index.md).
+
+**Follow-up recorded, not opened:** root CSlot non-reuse is now the binding
+lifetime constraint on graph longevity, ahead of every table this class audit
+examined. Deliberate and documented rather than a defect, but P5.4.1 classified
+it as acceptable-monotonic without quantifying it.
 
 ### B23 — `slime-root`'s unit tests were run by no gate — **resolved 2026-08-07**
 

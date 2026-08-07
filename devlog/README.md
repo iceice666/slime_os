@@ -176,3 +176,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-07 | [P5.4 — decomposed into an equivalence inventory before deletion](2026-08-07-p5-4-decomposition/index.md) | Decision | Proposed | P5.4, P5.4.1, B12, B16, B22, B23 |
 | 2026-08-07 | [P5.4.1 — the oracle equivalence inventory](2026-08-07-p5-4-1-oracle-inventory/index.md) | Audit | Verified | P5.4.1, P5.4, B22, B12, B23 |
 | 2026-08-07 | [B23 — `slime-root`'s unit tests were run by no gate](2026-08-07-b23-slime-root-host-tests/index.md) | Defect | Verified | B23, P5.4.1, P5.4 |
+| 2026-08-07 | [B24 — a shared-buffer quota was never released](2026-08-07-b24-shared-buffer-quotas/index.md) | Defect | Verified | B24, B22, B16, P5.4.1 |

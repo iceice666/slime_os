@@ -1205,8 +1205,11 @@ assigned to a P5.4.2–P5.4.10 slice below. `just devlog_check` passes.
 The bounds audit closed [B22](00-backlog.md) — `ChannelTable` now reclaims
 through `channel::sweep`, gated by `just sel4_crossing_check` with three fault
 injections confirmed failing — and found a third table of the same shape,
-`SharedBufferTable::quotas`, opened as [B24](00-backlog.md) rather than fixed
-here.
+`SharedBufferTable::quotas`, opened as [B24](00-backlog.md) and closed
+immediately after under `just sel4_supervision_check`. With those two the
+lifetime-vs-live class is closed: every bounded table in `slime-root/src` is now
+live-bounded with a named freeing function, deliberately monotonic with a typed
+overflow refusal, or recorded as the weaker `orphans` case.
 
 No architectural invariant in [`README.md`](README.md) changed: the slice adds
 no kernel object and no right (invariant 4), introduces no protocol
