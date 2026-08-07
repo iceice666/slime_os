@@ -271,8 +271,24 @@ pub fn wait(sources: &[WaitSource]) {
     }
     let bytes = &encoded[..count * WAIT_RECORD_BYTES];
     let Ok(transfer) = stage(bytes, &[]) else {
-        // The source set cannot cross intact without a window. Yield rather
-        // than park on a truncated set: the caller re-polls either way.
+        // The source set cannot cross intact without a window, and `wait`
+        // returns `()` so there is no error to hand back. Yielding lets the
+        // caller re-poll, which is right when the next poll can succeed.
+        //
+        // It announces itself because when the next poll *cannot* succeed this
+        // is an invisible hang: the caller loops between `recv` and `wait`, and
+        // `yield_now` is `sel4::r#yield()`, a kernel primitive the root task
+        // never observes — so the graph deadlocks with no marker anywhere. B28
+        // was characterized across eight refuted readings partly because this
+        // arm could not be ruled out by reading a transcript; instrumenting it
+        // is what excluded it, and the marker is kept so the next reader does
+        // not have to add it again.
+        //
+        // Unreachable on every current plane: a component binds a window before
+        // its first parking operation, and one wait record is eight bytes
+        // against a `MIN_TRANSFER_WINDOW` of a page. That is why this costs
+        // nothing to leave in.
+        crate::debug_write(b"[rt] wait source set could not be staged\n");
         yield_now();
         return;
     };
