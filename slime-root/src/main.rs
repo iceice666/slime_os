@@ -303,6 +303,18 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         admission.kernel_objects,
         admission.bootstrap_objects,
     );
+    // C8.2: the declared fabric graph, checked against this root's own ceilings
+    // before any component launches.  for the generations that
+    // declare none;  is the wiring being observable, which no
+    // unit test over a hand-built graph can show.
+    sel4::debug_println!(
+        "SLIME_ROOT fabric graph={}",
+        if admission.fabric_graph_admitted {
+            "admitted"
+        } else {
+            "absent"
+        },
+    );
     sel4::debug_println!(
         "SLIME_ROOT authority manifest={:02x?}",
         generation.authority_manifest_identity()

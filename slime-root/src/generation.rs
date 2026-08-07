@@ -9,8 +9,10 @@
 //! send on.
 
 use boot_contracts::component_image::{self, ComponentTargetError};
+use boot_contracts::fabric_graph::{self, FabricGraph};
 use boot_contracts::generation::{
-    DecodeError, Generation, KIND_BOOTSTRAP, KIND_COMPONENT, KIND_KERNEL, RIGHT_TRANSFER, Rights,
+    DecodeError, Generation, KIND_BOOTSTRAP, KIND_COMPONENT, KIND_KERNEL, KIND_RESOURCE,
+    RIGHT_TRANSFER, Rights,
 };
 use boot_contracts::target_profile::TargetProfile;
 
@@ -46,6 +48,13 @@ pub enum GenerationError {
     DanglingComponent {
         component: usize,
     },
+    /// The generation carries a fabric graph whose declared limits this root
+    /// cannot satisfy, or which contradicts itself (C8.2).
+    ///
+    /// Distinct from [`Self::Decode`] because the bytes are well formed: the
+    /// graph says what it needs and the answer is no. The whole generation
+    /// fails closed, before the fabric or any participant launches.
+    UnsatisfiableFabricGraph,
 }
 
 impl From<DecodeError> for GenerationError {
@@ -196,6 +205,69 @@ pub fn inbound_authority(
     Ok(authority)
 }
 
+/// Whether this root can satisfy a declared fabric graph (C8.2).
+///
+/// Separated from the generation walk so it is reachable without constructing
+/// a generation blob: the interesting content is *which ceilings* are passed,
+/// and those are this implementation's rather than the retired kernel's. The
+/// predicate itself is `boot_contracts`, shared byte-for-byte with the oracle,
+/// so the two can disagree only where their mechanisms genuinely differ —
+/// which is the reason validating in both places is not redundant.
+pub fn fabric_graph_is_satisfiable(graph: &FabricGraph<'_>) -> Result<(), GenerationError> {
+    graph
+        .validate_against(
+            crate::ipc::MAX_WAIT_SOURCES as u32,
+            crate::graph::MAX_TASK_CAPS as u32,
+            crate::shared_buffer::MAX_TOTAL_PAGES as u32,
+            crate::shared_buffer::MAX_SHARED_BUFFERS as u32,
+            crate::shared_buffer::MAX_MAPPINGS as u32,
+            crate::shared_buffer::MAX_LOANS as u32,
+            crate::ipc::MAX_MESSAGE_BYTES as u32,
+            crate::ipc::CHANNEL_CAPACITY as u32,
+        )
+        .map_err(|_| GenerationError::UnsatisfiableFabricGraph)
+}
+
+/// Validate a declared fabric graph against this root's own ceilings (C8.2),
+/// reporting whether one was present.
+///
+/// A no-op for a generation that declares no graph, which is every `sel4-*`
+/// fixture but the stream plane's. That is deliberate rather than incidental:
+/// the check must be silent on graphs that make no fabric promise, and refuse
+/// exactly those whose promises this mechanism cannot keep. The `bool` is what
+/// lets a boot marker distinguish "checked and satisfiable" from "nothing to
+/// check", which is the difference a gate needs to see.
+fn fabric_graph_admission(generation: &Generation<'_>) -> Result<bool, GenerationError> {
+    let Some(graph) = fabric_graph_object(generation) else {
+        return Ok(false);
+    };
+    // A graph that will not decode is refused here rather than surfaced as a
+    // decode error, because the generation is otherwise well formed: it is the
+    // graph that is wrong, and the caller's marker should say so.
+    let graph = graph.map_err(|_| GenerationError::UnsatisfiableFabricGraph)?;
+    fabric_graph_is_satisfiable(&graph)?;
+    Ok(true)
+}
+
+/// Locate the fabric-graph resource object, if the generation declares one.
+///
+/// The same shape as the retired kernel's: a `KIND_RESOURCE` object whose
+/// payload carries the fabric-graph magic, first match wins.
+fn fabric_graph_object<'a>(
+    generation: &Generation<'a>,
+) -> Option<Result<FabricGraph<'a>, fabric_graph::DecodeError>> {
+    for index in 0..generation.object_count() {
+        let object = generation.object(index).ok()?;
+        if object.kind == KIND_RESOURCE
+            && object.bytes.len() >= fabric_graph::MAGIC.len()
+            && object.bytes[..fabric_graph::MAGIC.len()] == fabric_graph::MAGIC
+        {
+            return Some(FabricGraph::decode(object.bytes));
+        }
+    }
+    None
+}
+
 /// The result of admitting a generation graph.
 pub struct Admission {
     plans: [Option<ComponentPlan>; MAX_ADMITTED_COMPONENTS],
@@ -213,6 +285,14 @@ pub struct Admission {
     /// carries an executable built for another target, which is refused before
     /// mapping rather than after.
     pub wrong_target_images: usize,
+    /// Whether the generation declared a fabric graph, and this root checked
+    /// it against its own ceilings (C8.2).
+    ///
+    /// Reported so the *wiring* is observable, not only the predicate. The
+    /// predicate has unit tests; that the admission path consults it at all is
+    /// what a boot marker can show and a unit test over a hand-built graph
+    /// cannot.
+    pub fabric_graph_admitted: bool,
 }
 
 impl Admission {
@@ -230,6 +310,24 @@ impl Admission {
                 limit: MAX_ADMITTED_COMPONENTS,
             });
         }
+
+        // C8.2: a declared fabric graph is validated against *this* root's own
+        // ceilings before any component launches, so a graph promising more
+        // than the mechanism can deliver fails the whole generation closed
+        // rather than failing a participant halfway through a boot.
+        //
+        // The retired kernel does this in `kernel/src/runtime/generation.rs`
+        // and `slime-root` did not, which P5.4.1's inventory recorded as C8.2
+        // having no seL4 equivalent at all rather than a partial one. The
+        // resource already rode along in every generation the builder emits;
+        // nothing read it.
+        //
+        // The predicate itself is `boot_contracts`, shared byte-for-byte with
+        // the oracle — only the ceilings differ, because they are this
+        // implementation's rather than that one's. That is the whole point of
+        // validating here as well: identical bytes can be satisfiable for one
+        // mechanism and impossible for another.
+        let fabric_graph_admitted = fabric_graph_admission(generation)?;
 
         let mut kernel_objects = 0;
         let mut bootstrap_objects = 0;
@@ -302,6 +400,7 @@ impl Admission {
             slime_component_images,
             unrecognized_images,
             wrong_target_images,
+            fabric_graph_admitted,
         })
     }
 
@@ -325,7 +424,10 @@ impl Admission {
 
 #[cfg(test)]
 mod tests {
-    use super::{Authority, PayloadFormat, RIGHT_RECV, RIGHT_SEND};
+    use super::{
+        Authority, FabricGraph, GenerationError, PayloadFormat, RIGHT_RECV, RIGHT_SEND,
+        fabric_graph_is_satisfiable,
+    };
     use boot_contracts::component_image::wire;
     use boot_contracts::generation::RIGHT_TRANSFER;
     use boot_contracts::target_profile::TargetProfile;
@@ -382,6 +484,101 @@ mod tests {
             .copy_from_slice(&profile.required_features.to_le_bytes());
         bytes[wire::HEADER_LEN..].copy_from_slice(&elf_header(2, 1, 183));
         bytes
+    }
+
+    /// A minimal well-formed fabric graph carrying `limits`, with no schemas,
+    /// routes, participants, or interposition hops.
+    ///
+    /// Hand-built rather than borrowed from `boot_contracts`, whose encoder is
+    /// `#[cfg(test)]` and so not reachable from here. The empty tables are what
+    /// make it minimal: `validate_against` reads only the limits block, so an
+    /// empty graph isolates the ceiling comparison from everything else the
+    /// decoder checks.
+    fn graph_with(limits: [u32; 19]) -> alloc::vec::Vec<u8> {
+        use boot_contracts::fabric_graph::{FORMAT_VERSION, HEADER_BYTES, MAGIC};
+        let mut bytes = alloc::vec![0u8; HEADER_BYTES];
+        bytes[..8].copy_from_slice(&MAGIC);
+        bytes[8..12].copy_from_slice(&FORMAT_VERSION.to_le_bytes());
+        bytes[12..16].copy_from_slice(&(HEADER_BYTES as u32).to_le_bytes());
+        bytes[24..28].copy_from_slice(&(HEADER_BYTES as u32).to_le_bytes());
+        // The fabric component's identity. Non-zero or the decoder answers
+        // `MissingReference`: a graph naming no fabric describes no plane.
+        bytes[48..80].copy_from_slice(&[0xab; 32]);
+        for (index, value) in limits.iter().enumerate() {
+            bytes[80 + index * 4..][..4].copy_from_slice(&value.to_le_bytes());
+        }
+        bytes
+    }
+
+    /// Limits every ceiling admits. Field order is the wire order:
+    /// routes, ingress_sources, publishers, subscribers, clients, servers,
+    /// sample_bytes, queue_depth, history_depth, event_depth, retained_samples,
+    /// retries, in_flight_calls, in_flight_operations, buffer_pages, buffers,
+    /// mappings, loans, capability_slots.
+    const SATISFIABLE: [u32; 19] = [1, 4, 1, 1, 0, 0, 64, 8, 4, 4, 2, 2, 0, 0, 8, 2, 4, 4, 16];
+
+    /// C8.2's exit condition on this side: a graph the root can satisfy is
+    /// admitted, so the check is not refusing everything.
+    #[test]
+    fn a_satisfiable_fabric_graph_is_admitted() {
+        let bytes = graph_with(SATISFIABLE);
+        let graph = FabricGraph::decode(&bytes).expect("well-formed graph");
+        assert_eq!(fabric_graph_is_satisfiable(&graph), Ok(()));
+    }
+
+    /// The other half, and the one that matters: no graph exceeding a ceiling
+    /// this root owns is ever admitted. Exercised one field at a time so a
+    /// ceiling wired to the wrong constant is visible rather than masked by a
+    /// sibling that happens to refuse.
+    ///
+    /// Either refusal point counts. Some of these values are also structurally
+    /// impossible against the format's *own* maxima, so the decoder rejects
+    /// them before `validate_against` is reached — `ingress_sources` is one:
+    /// `MAX_WAIT_SOURCES + 1` exceeds the wire format's ceiling too. What must
+    /// hold is that no such graph reaches a running fabric, not which of the
+    /// two guards catches it, and asserting on the guard would make this test
+    /// fail if the format's maxima ever moved independently.
+    #[test]
+    fn no_graph_exceeding_a_ceiling_is_admitted() {
+        // (index into the limits block, a value past this root's ceiling)
+        let over = [
+            (1, crate::ipc::MAX_WAIT_SOURCES as u32 + 1),
+            (7, crate::ipc::CHANNEL_CAPACITY as u32 + 1),
+            (14, crate::shared_buffer::MAX_TOTAL_PAGES as u32 + 1),
+            (15, crate::shared_buffer::MAX_SHARED_BUFFERS as u32 + 1),
+            (16, crate::shared_buffer::MAX_MAPPINGS as u32 + 1),
+            (17, crate::shared_buffer::MAX_LOANS as u32 + 1),
+            (18, crate::graph::MAX_TASK_CAPS as u32 + 1),
+        ];
+        for (index, value) in over {
+            let mut limits = SATISFIABLE;
+            limits[index] = value;
+            let bytes = graph_with(limits);
+            let admitted = FabricGraph::decode(&bytes)
+                .is_ok_and(|graph| fabric_graph_is_satisfiable(&graph).is_ok());
+            assert!(
+                !admitted,
+                "limit {index} at {value} exceeds this root's ceiling and was admitted",
+            );
+        }
+    }
+
+    /// A graph is refused for contradicting itself, not only for exceeding a
+    /// ceiling: the fabric brokers one loan and one mapping per matched
+    /// subscriber, so promising more subscribers than either cannot be
+    /// delivered however small the numbers are.
+    #[test]
+    fn a_self_contradicting_graph_is_refused_within_every_ceiling() {
+        let mut limits = SATISFIABLE;
+        limits[3] = 8; // subscribers
+        limits[16] = 4; // mappings
+        limits[17] = 4; // loans
+        let bytes = graph_with(limits);
+        let graph = FabricGraph::decode(&bytes).expect("well-formed graph");
+        assert_eq!(
+            fabric_graph_is_satisfiable(&graph),
+            Err(GenerationError::UnsatisfiableFabricGraph),
+        );
     }
 
     #[test]
