@@ -19,30 +19,19 @@
 
 #![no_main]
 #![no_std]
-// The modules below are `slime-root`'s mechanism surface: bounded, pure, and
-// unit-tested in place. Startup exercises the allocation, task, IPC, and fault
-// paths; the scheduling, timer, and shared-buffer state machines are owned here
-// but driven by callers a parent integration adds, so not every item is
-// reachable from `main`.
+// Startup exercises the allocation, task, IPC, and fault paths; the scheduling,
+// timer, and shared-buffer state machines are owned by the library but driven
+// by callers a parent integration adds, so not every item is reachable here.
 #![allow(dead_code)]
 
-mod buffer_adapter;
-mod channel;
-mod child_vspace;
-mod event;
-mod fault;
-mod generation;
-mod graph;
-mod ipc;
-mod object_allocator;
-mod parked;
-mod platform_timer;
-mod shared_buffer;
-mod supervision;
-mod task;
-mod timer;
-mod transfer_window;
-mod transit;
+// The mechanism modules live in `slime_root`, the library half of this package
+// (B23), so their unit tests can run under `just test_host`. This binary links
+// that library rather than recompiling the modules, which is what makes a host
+// test result evidence about the root the seL4 image boots.
+use slime_root::{
+    buffer_adapter, channel, child_vspace, event, fault, generation, graph, ipc, object_allocator,
+    parked, platform_timer, shared_buffer, supervision, task, timer, transfer_window, transit,
+};
 
 use core::ptr;
 

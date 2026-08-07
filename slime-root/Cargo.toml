@@ -4,15 +4,42 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+# B23: the mechanism modules live in a library so their unit tests can run on
+# the host, and the root task is a thin binary over it.
+#
+# The library is `no_std` and identical in both configurations — it is the same
+# code the seL4 image links, not a host-only reimplementation, which is what
+# makes a host test result evidence about the shipped root. `sel4` itself
+# builds for the host given `SEL4_PREFIX`, so no module had to be excluded to
+# make this work.
+#
+# The binary keeps the `.elf` name `build-sel4.py` and the loader expect;
+# `[[bin]]` is required because a package that declares a lib target no longer
+# infers one from `src/main.rs` alone.
+[lib]
+name = "slime_root"
+path = "src/lib.rs"
+
+[[bin]]
+name = "slime-root"
+path = "src/main.rs"
+
 [dependencies]
 boot-contracts = { path = "../boot-contracts" }
 sel4 = { path = "../deps/rust-sel4/crates/sel4" }
-sel4-root-task = { path = "../deps/rust-sel4/crates/sel4-root-task" }
 # C8.3 capability-transfer descriptor (P5.5.1). The wire form is generated from
 # `contracts/capability-transfer/v1/schema.zt`, and the root parses exactly the
 # bytes the receiving peer parses — the same crate the retired kernel reads it
 # through, so a descriptor cannot mean one thing here and another there.
 slime-proto = { path = "../components/proto" }
+
+# `sel4-root-task` supplies the entry shim and pulls in `sel4-alloca`, whose
+# inline `.section … %progbits` directive is ELF-only and fails to assemble on
+# a Mach-O host. Only the binary needs it, and only on the seL4 target, so it
+# is scoped rather than made optional: the library — which is what
+# `just test_sel4_root` builds — never links it, and the seL4 build is unchanged.
+[target.'cfg(target_os = "none")'.dependencies]
+sel4-root-task = { path = "../deps/rust-sel4/crates/sel4-root-task" }
 
 # ELF64 reading only: `read_core` plus `elf`, without `std`, `compression`, or
 # any writer. The root task loads AArch64 ELF child images and nothing else.
