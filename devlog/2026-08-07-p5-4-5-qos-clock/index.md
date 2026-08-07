@@ -217,12 +217,17 @@ a real regression while it was being written (below).
   root-launched instances `check-sel4-stream-plane.py` budgets exactly one of
   each for, and `fabric-publisher-b` and `fabric-intruder` both exit 0.
 
-  The plane still does not reach `[init] fabric stream complete`. The fabric
-  parks on `idle: parked on stream sources` after the clock finishes, because
-  `fabric-publisher` and the two subscribers are waiting on routes it never
-  retires. That is a different and later problem than the one this entry was
-  filed for, and the Verification table's `boot.log` has been re-captured
-  against this state.
+  The plane still does not reach `[init] fabric stream complete`, and the reason
+  is now filed as backlog **B28**: `fabric-publisher` parks once waiting for its
+  role reply and never runs again, although the fabric delivers both role
+  capabilities to it and `serve_cap_transfer` calls `deliver_wake` for each. The
+  stream plane runs the identical sequence and that task wakes. The difference
+  after the transfers is that this plane's clock driver performs seven root
+  round-trips, each re-waking the fabric; wake accounting differs measurably
+  between the two boots, and extending the window from 200s to 700s changes
+  nothing. Whether a wake is dropped or the receiver is never selected is not
+  yet diagnosed to a line — B28 records both readings. The Verification table's
+  `boot.log` has been re-captured against this state.
 
   Lease and tie ordering remain unobserved, and no gate is registered while the
   plane cannot reach its final marker.

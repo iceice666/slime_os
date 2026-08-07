@@ -16,6 +16,50 @@ at the bottom rather than deleting it.
 
 ## Open
 
+### B28 — a task parked on a channel can starve while a busy peer keeps the root scheduling it
+
+**Problem:** On the P5.4.5 QoS plane, `fabric-publisher` parks once in `recv`
+waiting for its role reply and never runs again, although the fabric delivers
+both role capabilities to it — the transcript carries
+`SLIME_GRAPH capability transferred task=9 channel=5 to=10 kind=endpoint` twice,
+and `serve_cap_transfer` calls `deliver_wake` for each. The task is still parked
+at teardown (`peer death … woken=1`).
+
+The stream plane runs the identical sequence and the same task wakes: it
+receives both capabilities and prints `publish role received`. The two boots are
+byte-comparable up to and past the transfers; the only difference afterwards is
+that the QoS plane's `fabric-publisher-b` performs seven
+`advance_time`/`await_time_credit` round-trips, each of which re-wakes the
+fabric.
+
+**Evidence:** `devlog/2026-08-07-p5-4-5-qos-clock/boot.log`. Wake accounting
+differs measurably between the planes: the QoS boot reports `woken=` totals of
+six zeros, one 1, and one 2, where the stream boot reports eleven zeros and two
+2s. The fabric parks 13 times on the QoS plane against 11 on the stream plane,
+and `fabric-publisher` parks exactly once on both. Extending the boot window
+from 200s to 700s changes nothing, so this is a lost or unconsumed wake rather
+than slow progress.
+
+**Not diagnosed to a line.** Two readings remain open and they imply different
+fixes: either a wake is genuinely dropped when a second capability transfer
+lands on a queue whose receiver is already owed one, or the receiver is woken
+and then never selected because the root serves the fabric's re-arriving
+requests ahead of it. The wake path itself
+(`serve_cap_transfer` → `deliver_wake`) is common to both planes and looks
+correct on inspection, which is why the accounting difference above is the more
+promising lead than the code.
+
+**Severity:** Blocks P5.4.5's exit condition. Five C8.5 arms are observed
+regardless — the clock advances, and `fabric-publisher-b` reaches `done` — but
+the plane cannot reach `[init] fabric stream complete` while three participants
+wait on a fabric that never retires their routes. Latent for every other plane:
+no other seL4 graph has a component that re-wakes the root in a loop while a
+sibling is parked.
+
+**Exit condition:** On a plane where one component drives a loop of root
+round-trips, a sibling parked on a channel transfer still runs, asserted by a
+gate, with a fault injection showing the starved case caught.
+
 ### B25 — a spawn-granted endpoint moves on seL4 and copies on x86, so a parent cannot broker a later introduction
 
 **Problem:** `slime-root`'s `distribute_channel_ends` (`slime-root/src/main.rs`)

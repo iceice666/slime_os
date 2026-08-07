@@ -1360,10 +1360,12 @@ runs its full seven-step advance to `done`, and no configured component fails â€
 the transcript's `fail:` lines are the unconfigured root-launched instances the
 stream gate budgets one of each for.
 
-It still does not reach `[init] fabric stream complete`: the fabric parks on
-`idle: parked on stream sources` after the clock finishes, because
-`fabric-publisher` and the two subscribers wait on routes it never retires. Lease
-and tie ordering sit past that point.
+It still does not reach `[init] fabric stream complete`, and that is now backlog
+**B28**: `fabric-publisher` parks once for its role reply and never runs again
+even though the fabric delivers both role capabilities and wakes it, while the
+stream plane's identical sequence wakes the same task. The clock driver's seven
+root round-trips are the only difference afterwards. Lease and tie ordering sit
+past that point.
 No gate is registered while the plane cannot reach its final marker. See
 [`devlog/2026-08-07-p5-4-5-qos-clock/`](../devlog/2026-08-07-p5-4-5-qos-clock/index.md).
 
