@@ -344,10 +344,27 @@ the same kernel entry, which the root's single-threaded dispatch makes possible 
 one syscall replies to two different tasks. That is consistent with B28 appearing
 only when the retained diagnostics route adds a second reply-bearing path.
 
-**Exit condition unchanged**, and the remaining work is a narrow read rather than a
-search: instrument or step `ksSchedulerAction` across the root's reply sequence for
-task 10 and find the write that clears it. Everything above the scheduler is
-verified; sixteen readings are excluded.
+**The multi-reply interleaving exists and is observable.** `reclaim_dead_task`
+(`slime-root/src/main.rs:4281`) loops over `DeathWakes` and calls `deliver_wake` — so
+`send_reply` — once per wake, all inside one kernel entry. The QoS transcript records
+`peer death task=3 channels=5 woken=2`: two tasks replied to in a single root
+operation. Each `seL4_Send` on a reply cap runs `possibleSwitchTo` for its receiver,
+and the second one's call sees `ksSchedulerAction` already holding the first target
+rather than `ResumeCurrentThread` — the branch that then fires is
+`rescheduleRequired()` plus `SCHED_ENQUEUE`, which enqueues the *first* target and
+requests a reschedule.
+
+That is self-consistent with everything measured, and it is where the next author
+should start: the two-wake path is the only place the root issues two reply sends
+without an intervening `seL4_Recv`, it exists on this plane and not on the ones that
+pass, and it is reached from `reclaim_dead_task` — which the retained diagnostics
+route makes reachable earlier by ending a subscriber sooner.
+
+**Exit condition unchanged**, and the remaining work is one targeted experiment
+rather than a search: make `reclaim_dead_task` deliver its wakes one kernel entry
+apart (or read `ksSchedulerAction` between the two sends) and see whether task 10
+then runs. Everything above the scheduler is verified; sixteen readings are
+excluded.
 
 **One wider finding stands regardless of B28**, and it is worth its own slice:
 `sel4_transport::wait` returns `()`, so its staging-failure branch can only
