@@ -1,0 +1,5 @@
+[layout] path=init slots=3 max=64
+[layout] 0 endpoint-factory - 0x20000
+[layout] 3 executable sysinfo 0x10008
+[layout] 16 executable supervision-child 0x1000c
+[layout] end

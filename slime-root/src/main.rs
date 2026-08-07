@@ -1208,6 +1208,44 @@ fn launch_component_graph(
         materialized.unplaced,
     );
 
+    // B10 (P5.4.10): init's resolved layout, in the retired kernel's own line
+    // shape so the two are comparable slot for slot.
+    //
+    // The layout is a contract between three readers — the root that fills the
+    // table, the component images that address slots by number, and the gates
+    // that assert on what those components do — and nothing else fails when
+    // they disagree. The oracle makes it observable
+    // (`kernel/src/runtime/bootstrap.rs::dump_boot_layout`) and freezes the
+    // result as a fixture; on seL4 it was implied by source order alone, which
+    // P5.4.1 recorded as B10 being only obliquely covered here.
+    //
+    // Emitted after materialization and before activation: that is the moment
+    // the table is complete and nothing has run against it yet.
+    if let Some(bootstrap_id) = bootstrap
+        && let Some(table) = graph.get(bootstrap_id)
+    {
+        sel4::debug_println!(
+            "[layout] path={} slots={} max={}",
+            generation
+                .component(admission.bootstrap)
+                .map_or("?", |record| record.name),
+            table.len(),
+            graph::MAX_TASK_CAPS,
+        );
+        for (slot, capability) in table.slots() {
+            let Some(capability) = capability else {
+                continue;
+            };
+            sel4::debug_println!(
+                "[layout] {slot} {} {} {:#x}",
+                capability.resource.kind(),
+                resource_label(generation, &capability.resource),
+                capability.rights,
+            );
+        }
+        sel4::debug_println!("[layout] end");
+    }
+
     // Every allocation for every component has succeeded, so activation is
     // safe. Ordered by task id so the serial record is deterministic.
     let ids: [Option<TaskId>; MAX_TASKS] = {
@@ -2853,6 +2891,22 @@ struct SpawnPlan {
     /// passed on. Read from the executable rather than from any grant, matching
     /// `spawn_from_cap`'s `transferable_supervision`.
     transferable_supervision: bool,
+}
+
+/// What a layout line names a resource by (B10).
+///
+/// An executable carries its component name, matching the oracle's
+/// `dump_boot_layout`. Everything else is identified by kind and rights alone,
+/// because that is all a layout needs to be comparable: a channel end's *key*
+/// is an allocation detail that differs between two correct boots, so printing
+/// it would make the fixture record noise rather than shape.
+fn resource_label<'a>(generation: &Generation<'a>, resource: &graph::Resource) -> &'a str {
+    match resource {
+        graph::Resource::Executable { component } => generation
+            .component(*component)
+            .map_or("?", |record| record.name),
+        _ => "-",
+    }
 }
 
 /// The rights a resource kind can meaningfully carry.

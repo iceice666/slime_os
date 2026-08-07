@@ -1299,8 +1299,9 @@ compatibility over the booted graph. Those stay with P5.4.10's partials.
 
 ### P5.4.10 — The recorded partials
 
-**Status:** In progress — two rows closed (the `component_image.rs` segment
-corpus, and C8.2's live-graph assertions); seven remain.
+**Status:** In progress — three rows closed (the `component_image.rs` segment
+corpus, C8.2's live-graph assertions, and B10's seL4 layout fixtures); six
+remain.
 
 **Depends on:** P5.4.1.
 
@@ -1316,7 +1317,7 @@ milestones; they are the residue of milestones otherwise covered.
 | C8.3 graph provenance | Open — the rights algebra is observed; that the fabric answers from the *authenticated* graph rather than a compile-time table is not |
 | C8.4's structural arm | Open — the transcript is reproduced exactly; `kernel/tests/fabric_stream.rs`'s "what a transcript cannot show" assertions are not |
 | C7.1's retained-v2 rollback arm | Open — no seL4 gate admits a v2 generation |
-| B10's seL4 layout fixture | Open — slot numbers are asserted in three gates; no frozen-fixture diff exists for any seL4 layout |
+| B10's seL4 layout fixture | **Done** — `just sel4_boot_layout_check` freezes all eight plane layouts; see [`devlog/2026-08-07-p5-4-10-sel4-boot-layout/`](../devlog/2026-08-07-p5-4-10-sel4-boot-layout/index.md) |
 | B11's product-vs-test profile pair | Open — the seL4 fixtures are per-scenario siblings, not profiles of one manifest |
 | `task_reclamation.rs`'s per-cycle drift, cost scaling, rejected-spawn conservation | Open — teardown-to-zero is covered; these three are not |
 

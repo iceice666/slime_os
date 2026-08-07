@@ -65,6 +65,7 @@ Use the Justfile targets from the repository root:
 - `just generation_check` — build and validate the deterministic generation binary.
 - `just contracts_check` — validate generation manifest contracts.
 - `just devlog_check` — validate devlog structure, front matter, and links.
+- `just sel4_boot_layout_check` — init's resolved capability layout on every seL4 plane, against frozen fixtures (B10). Bless with `just sel4_boot_layout_bless`.
 - `just fmt_check_all` — check Rust formatting for every workspace crate.
 - `just lint_all` — run clippy with warnings denied for every workspace crate (kernel, components, stage0, boot-contracts).
 - `just lint_pedantic` — advisory-only clippy pass (missing SAFETY comments, lossy casts); has known existing hits and is not a gate.

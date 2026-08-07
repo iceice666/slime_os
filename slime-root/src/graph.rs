@@ -175,6 +175,18 @@ impl CapabilityTable {
         self.len == 0
     }
 
+    /// Every slot in numbering order, filled or not.
+    ///
+    /// For the boot-layout dump (B10): a layout is a statement about *which*
+    /// numbers hold what, so the empty ones are part of the shape and an
+    /// iterator that skipped them would report a different table.
+    pub fn slots(&self) -> impl Iterator<Item = (u32, Option<&Capability>)> {
+        self.slots
+            .iter()
+            .enumerate()
+            .map(|(slot, entry)| (slot as u32, entry.as_ref()))
+    }
+
     /// Install `capability` at exactly `slot`.
     ///
     /// The slot is chosen by the generation's boot layout, not allocated here,

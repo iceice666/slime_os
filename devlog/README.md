@@ -181,3 +181,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-07 | [P5.4.4 — C8.2 aggregate fabric-graph admission on seL4](2026-08-07-p5-4-4-fabric-graph-admission/index.md) | Change | Verified | P5.4.4, P5.4, P5.4.1, C8.2 |
 | 2026-08-07 | [P5.4.10 (part) — the component-image segment corpus, made portable](2026-08-07-p5-4-10-segment-corpus/index.md) | Change | Verified | P5.4.10, P5.4, P5.4.1, P0 |
 | 2026-08-07 | [P5.4.10 (part) — per-pair QoS compatibility at admission](2026-08-07-p5-4-10-qos-pair-admission/index.md) | Change | Verified | P5.4.10, P5.4.4, P5.4, C8.2 |
+| 2026-08-07 | [P5.4.10 (part) — B10's boot layout, frozen on seL4](2026-08-07-p5-4-10-sel4-boot-layout/index.md) | Change | Verified | P5.4.10, P5.4, P5.4.1, B10 |

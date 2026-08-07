@@ -1,0 +1,20 @@
+python3 scripts/check/check-sel4-pins.py
+seL4 pin check: exact source, toolchain, target, config, and host pins verified
+python3 scripts/check/check-sel4-boot-layout.py
+[build] /nix/store/9mgrdlpmsfi67aiw677pqfnrjl0jcsrk-python3-3.14.6-env/bin/python3 /Users/iceice666/code/slime_os/scripts/build/build-sel4.py --component-graph --skip-pin-check
+sel4: 1 slots match
+[build] /nix/store/9mgrdlpmsfi67aiw677pqfnrjl0jcsrk-python3-3.14.6-env/bin/python3 /Users/iceice666/code/slime_os/scripts/build/build-sel4.py --channel-plane --skip-pin-check
+sel4-channel: 2 slots match
+[build] /nix/store/9mgrdlpmsfi67aiw677pqfnrjl0jcsrk-python3-3.14.6-env/bin/python3 /Users/iceice666/code/slime_os/scripts/build/build-sel4.py --loan-plane --skip-pin-check
+sel4-loan: 4 slots match
+[build] /nix/store/9mgrdlpmsfi67aiw677pqfnrjl0jcsrk-python3-3.14.6-env/bin/python3 /Users/iceice666/code/slime_os/scripts/build/build-sel4.py --spawn-plane --skip-pin-check
+sel4-spawn: 3 slots match
+[build] /nix/store/9mgrdlpmsfi67aiw677pqfnrjl0jcsrk-python3-3.14.6-env/bin/python3 /Users/iceice666/code/slime_os/scripts/build/build-sel4.py --sample-plane --skip-pin-check
+sel4-sample: 4 slots match
+[build] /nix/store/9mgrdlpmsfi67aiw677pqfnrjl0jcsrk-python3-3.14.6-env/bin/python3 /Users/iceice666/code/slime_os/scripts/build/build-sel4.py --stream-plane --skip-pin-check
+sel4-stream: 8 slots match
+[build] /nix/store/9mgrdlpmsfi67aiw677pqfnrjl0jcsrk-python3-3.14.6-env/bin/python3 /Users/iceice666/code/slime_os/scripts/build/build-sel4.py --supervision-plane --skip-pin-check
+sel4-supervision: 3 slots match
+[build] /nix/store/9mgrdlpmsfi67aiw677pqfnrjl0jcsrk-python3-3.14.6-env/bin/python3 /Users/iceice666/code/slime_os/scripts/build/build-sel4.py --crossing-plane --skip-pin-check
+sel4-crossing: 2 slots match
+seL4 boot layout check: 8 plane layouts match their fixtures

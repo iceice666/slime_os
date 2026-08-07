@@ -126,6 +126,24 @@ sel4_supervision_check: sel4_pin_check
 sel4_crossing_check: sel4_pin_check
     python3 scripts/check/check-sel4-crossing-plane.py
 
+# B10 on seL4 (P5.4.10): init's resolved capability layout, per plane, against
+# frozen fixtures. `boot_layout_check` does this for nineteen x86 profiles by
+# booting the retired kernel; no seL4 equivalent existed, so a layout change
+# here was only caught obliquely by three gates that assert specific slot
+# numbers in passing.
+#
+# Boots every plane and reads one `[layout]` block each — a layout diff should
+# be readable as a layout diff rather than inferred from a component failing,
+# which is why this is separate from the planes' own gates.
+#
+# Regenerate with `just sel4_boot_layout_bless`; the resulting diff is the
+# evidence that a layout change was intended.
+sel4_boot_layout_check: sel4_pin_check
+    python3 scripts/check/check-sel4-boot-layout.py
+
+sel4_boot_layout_bless: sel4_pin_check
+    python3 scripts/check/check-sel4-boot-layout.py --bless
+
 # Run the seL4 product image interactively on the pinned QEMU machine.
 run: sel4_qemu_image_check
     qemu-system-aarch64 -machine virt,virtualization=on -cpu cortex-a53 -smp 1 \

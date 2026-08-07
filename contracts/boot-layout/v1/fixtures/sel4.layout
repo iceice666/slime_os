@@ -1,0 +1,3 @@
+[layout] path=init slots=1 max=64
+[layout] 0 endpoint-factory - 0x20000
+[layout] end
