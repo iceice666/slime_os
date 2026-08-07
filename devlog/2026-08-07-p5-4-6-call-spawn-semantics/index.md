@@ -212,3 +212,42 @@ after this change for reasons unrelated to it.
 - Supersedes the diagnosis in
   [`devlog/2026-08-07-p5-4-6-call-plane/`](../2026-08-07-p5-4-6-call-plane/index.md),
   whose body and two corrections all name `SlotCursors`.
+
+## Corrections
+
+- **2026-08-07.** The Root cause above says the cycle "cannot be cut from the
+  component side", and the Decisions section rejects working around the
+  divergence inside the components. Both are too strong for the supervision
+  half, and the experiment that shows it is worth recording rather than
+  re-deriving.
+
+  Inverting the spawn order **does** carry the supervision handoff. Spawning the
+  participants first with the *participant* half of each control pair, keeping
+  the *service* half in init, transferring each participant's handle over it,
+  and spawning the fabric last with the service halves reaches
+  `[init] call supervision delegated`. Every half is still granted exactly once,
+  so no `drop_slot` removes anything init needs afterwards. The endpoint-move
+  semantics are therefore not what blocks the handoff.
+
+  What that order cannot deliver is the **fabric's own** handle, for a second and
+  independent reason. Two participants lend to the broker, so both need a
+  `RIGHT_SUPERVISE` capability naming the fabric. A spawn grant *copies* — which
+  is how `drive_sample_plane` hands one to a lender — but requires the fabric to
+  exist first, the very order this inverts. A `cap_transfer` *moves*, and
+  `FLAG_RETAIN_TRANSFER` keeps the delegation bit at the destination without
+  making the move a copy, so one handle reaches one receiver. Init cannot obtain
+  a second: `bootstrap_executable_slot` resolves an executable by component
+  identity to exactly one slot, and each spawn returns one handle.
+
+  So the two requirements are order-incompatible as the components are written —
+  the control ends want the fabric spawned last, its handle wants it spawned
+  first. That is sharper than "the grant moves", and B25 has been updated with a
+  third candidate fix it suggests: a way to obtain a second handle naming a task
+  the caller already supervises, which is a copy of authority it already holds
+  and widens nothing.
+
+  Recorded rather than applied. The experiment was reverted and the committed
+  plane is unchanged, because a plane that reached the C8.6 transcript by a
+  route the oracle does not take would assert about a different composition —
+  which is the reason the original decision stands for everything except the
+  claim that no component-side cut exists.

@@ -448,8 +448,8 @@ One named Raspberry Pi 5 profile runs the verified isolated Slime vertical slice
 ## P5: seL4 microkernel substitution
 
 **Status:** In progress — P5.1, P5.2, all of P5.3, all of P5.5, P5.4.1,
-P5.4.4, and P5.4.10 complete; P5.4.2, P5.4.3, P5.4.5–P5.4.9, and P5.4.final
-planned.
+P5.4.4, and P5.4.10 complete; P5.4.2, P5.4.5, and P5.4.6 in progress; P5.4.3,
+P5.4.7–P5.4.9, and P5.4.final planned.
 
 **Depends on:** P0 and P1. Supersedes the custom-kernel half of P2.2–P2.6 if it
 completes; P2.1 AArch64 boot evidence is retained and not re-claimed here.

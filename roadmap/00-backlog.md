@@ -71,6 +71,36 @@ not constructible. `serve_spawn` installs a supervision handle only into the
 (`slime-root/src/main.rs:3586-3603`), so no component ever holds a handle
 naming itself.
 
+**Narrowed by experiment, 2026-08-07.** Inverting the call plane's spawn order
+*does* carry the supervision handoff, so the endpoint-move semantics alone are
+not the whole blocker. Spawning the participants first with the *participant*
+half of each control pair, keeping the *service* half in init, transferring each
+participant's handle over it, and spawning the fabric last with the service
+halves reached `[init] call supervision delegated` — the step this entry was
+filed for. Both halves of a pair are still granted exactly once, so no
+`drop_slot` takes anything init needs later.
+
+What that order cannot then deliver is the **fabric's own** handle, and for a
+second, independent reason. Two participants lend to the broker
+(`fabric_call_scenario`'s `send_large_request` and `send_large_reply`), so both
+need a `RIGHT_SUPERVISE` capability naming the fabric at their
+`FABRIC_SUPERVISION_SLOT`. A *spawn grant* copies (`preflight_spawn_grants`
+installs `held.resource` and leaves the parent's slot), which is how
+`drive_sample_plane` hands one handle to a lender — but it requires the fabric
+to exist first, which is the order this experiment inverted. A *transfer* moves
+(`serve_cap_transfer` calls `table.drop_slot` on the source), and
+`FLAG_RETAIN_TRANSFER` keeps the delegation bit at the destination without
+making the move a copy — so one handle reaches one receiver. Init cannot obtain
+a second, because `bootstrap_executable_slot` resolves an executable by
+component identity to exactly one slot and each spawn returns one handle.
+
+So the two requirements are order-incompatible as the components are written:
+the control ends want the fabric spawned last, the fabric handle wants it
+spawned first. That is a sharper statement than "the grant moves", and it means
+the fix is still a model decision rather than a composition detail. Observed
+directly; the experiment was reverted and the tree is back to the committed
+plane.
+
 **Severity:** Latent for every current plane, and a hard blocker for any plane
 whose parent must broker an introduction after spawning. It is a genuine
 *semantic* divergence from the frozen oracle, not a numbering accident, so it
@@ -84,10 +114,21 @@ holder model that admits more than one. A move is the cheaper invariant and is
 arguably the more capability-honest one, but then the oracle's own call plane
 is not portable as written and `launch_fabric_calls` needs restructuring.
 
+The experiment above adds a third option, cheaper than either and worth
+weighing first: let a component obtain a **second** handle naming a task it
+already supervises, so a broker's handle can reach both of its lenders without
+the fabric having to be spawned before the participants. The narrow form is a
+`supervision_derive`-style operation returning a fresh capability naming the
+same task, which is a copy of authority the caller already holds and widens
+nothing. That would make the inverted order carry the whole plane, leaving the
+endpoint move/copy question a real but no longer blocking difference.
+
 **Exit condition:** A parent grants one end of a minted pair at spawn, uses the
 other end afterwards to deliver a capability to that child, and the child
 observes it — asserted on a plane that declares such a composition, with a
-fault injection showing the parent's end going missing is caught.
+fault injection showing the parent's end going missing is caught. The call
+plane's `[init] call supervision delegated` marker is that composition, already
+observed; what remains is for the plane to get past it.
 
 ### B12 — the component build's `--remap-path-prefix` names a path that does not exist
 
