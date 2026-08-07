@@ -1485,7 +1485,13 @@ fn serve_component_graph(
                     u64::MAX
                 }
             };
-            terminations.record(id, supervision::Termination::Fault(reason));
+            record_termination(
+                &mut terminations,
+                graph,
+                &transit,
+                id,
+                supervision::Termination::Fault(reason),
+            );
             wake_supervisors(&mut parked, &mut supervision_waits, id);
             if let Some(task) = tasks.get(id) {
                 let _ = task.suspend();
@@ -1583,7 +1589,13 @@ fn serve_component_graph(
                 // about this task, and before the parked-supervision wake
                 // below, so a parent woken by this death finds the outcome
                 // already there rather than racing it.
-                terminations.record(id, supervision::Termination::Exit(status));
+                record_termination(
+                    &mut terminations,
+                    graph,
+                    &transit,
+                    id,
+                    supervision::Termination::Exit(status),
+                );
                 wake_supervisors(&mut parked, &mut supervision_waits, id);
                 if let Some(task) = tasks.get(id) {
                     let _ = task.suspend();
@@ -2172,12 +2184,18 @@ fn serve_component_graph(
     // `waits=0` is the teardown property here: no task is still registered on a
     // child's termination, which would mean a wake that can never arrive.
     // `terminated` is deliberately *not* zero — it is one record per child that
-    // ended, and those records outlive the tasks by design (see
-    // `supervision.rs`), so a zero here on a boot that spawned would mean the
-    // supervision path recorded nothing.
+    // ended, so a zero here on a boot that spawned would mean the supervision
+    // path recorded nothing.
+    //
+    // Cumulative, not live: records are reclaimed once no holder can name them
+    // (`supervision::sweep`), so the live count would read zero on any graph
+    // that collected its outcomes, which is the healthy case rather than the
+    // broken one. Below `MAX_RECORDS` the two are equal — a task terminates at
+    // most once and `next_id` never reuses an id — so every gate written
+    // against the live count reads the same number here.
     sel4::debug_println!(
         "SLIME_GRAPH spawns served={spawns} drops={drops} endpoints={endpoints} terminated={} waits={}",
-        terminations.len(),
+        terminations.recorded(),
         supervision_waits.len(),
     );
     // The C8.3 transfer plane, on its own line for the same reason: five
@@ -2646,6 +2664,41 @@ fn serve_wait(
 /// task re-polls `supervision_status` immediately, and a wake that arrived
 /// before the record would send it straight back to parking on a child that is
 /// already gone.
+/// Record how `child` ended, reclaiming unobservable records if the table is
+/// full.
+///
+/// The sweep runs lazily, on full, rather than on every death: one trigger
+/// condition is one thing to keep correct, and a sweep that does not run leaves
+/// records that still answer correctly. See [`supervision::sweep`].
+///
+/// A record lost after the sweep means every slot has a live holder — a real
+/// resource limit rather than a bookkeeping bug — but the consequence is still
+/// a parent that waits forever, so it is reported rather than dropped silently.
+/// Matches `unland_caps`'s `SLIME_GRAPH FAIL capability lost … reason=` line.
+fn record_termination(
+    terminations: &mut supervision::Terminations,
+    graph: &GraphTables,
+    transit: &Transit,
+    child: TaskId,
+    termination: supervision::Termination,
+) {
+    if terminations.record(child, termination) {
+        return;
+    }
+    let freed = supervision::sweep(terminations, graph, transit);
+    if terminations.record(child, termination) {
+        sel4::debug_println!(
+            "SLIME_GRAPH supervision swept freed={freed} live={}",
+            terminations.len()
+        );
+        return;
+    }
+    sel4::debug_println!(
+        "SLIME_GRAPH FAIL termination lost task={} reason=records-full",
+        child.0
+    );
+}
+
 fn wake_supervisors(
     parked: &mut ParkedReplies,
     supervision_waits: &mut supervision::SupervisionWaits,

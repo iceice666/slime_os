@@ -291,6 +291,28 @@ impl GraphTables {
             .map(|(_, table)| table)
     }
 
+    /// Whether any live table holds a supervision handle naming `task`.
+    ///
+    /// The live half of the predicate
+    /// [`crate::supervision::sweep`] uses to decide whether a termination
+    /// record can still be observed. It scans rather than consulting an index
+    /// because a supervision handle moves — it is granted at spawn, may be
+    /// transferred, and is dropped when its outcome is collected — so any index
+    /// would be one more thing to keep correct across all three paths.
+    ///
+    /// Bounded by `MAX_GRAPH_TASKS * MAX_TASK_CAPS`, and run only when
+    /// `Terminations` is full, so the cost is paid once per record reclaimed
+    /// rather than per spawn.
+    pub fn holds_supervision(&self, task: TaskId) -> bool {
+        self.tables.iter().flatten().any(|(_, table)| {
+            table
+                .slots
+                .iter()
+                .flatten()
+                .any(|capability| capability.resource == Resource::Supervision { task })
+        })
+    }
+
     /// Drop a task's whole table as part of reclaiming it.
     pub fn release(&mut self, task: TaskId) -> bool {
         let Some(slot) = self

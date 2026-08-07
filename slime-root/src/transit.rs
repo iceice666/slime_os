@@ -38,7 +38,7 @@
 //! settles the lender's loans — and a capability is a name for a resource, not
 //! the resource.
 
-use crate::graph::Capability;
+use crate::graph::{Capability, Resource};
 use crate::ipc::{IpcError, LogicalCap};
 use crate::task::TaskId;
 
@@ -122,6 +122,25 @@ impl Transit {
         self.next = next;
         self.len += 1;
         Ok(token)
+    }
+
+    /// Whether any parked capability is a supervision handle naming `task`.
+    ///
+    /// The second half of [`crate::supervision::sweep`]'s predicate, and the
+    /// half whose absence would be invisible. A capability in transit is held
+    /// by no table by construction — that is what this module owns — so a sweep
+    /// consulting only [`crate::graph::GraphTables`] would find no holder for a
+    /// handle mid-transfer, free the record, and leave the receiver's
+    /// `supervision_status` answering `WouldBlock` forever. That is backlog B16
+    /// exactly, reintroduced by its own fix.
+    ///
+    /// Keyed by resource rather than by token, unlike every other method here:
+    /// the sweep asks what is in flight, not which transfer is which.
+    pub fn holds_supervision(&self, task: TaskId) -> bool {
+        self.entries
+            .iter()
+            .flatten()
+            .any(|entry| entry.capability.resource == Resource::Supervision { task })
     }
 
     /// Take the capability `token` names, if `receiver` is the task it was sent
