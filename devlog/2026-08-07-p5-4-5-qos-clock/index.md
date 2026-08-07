@@ -231,3 +231,39 @@ a real regression while it was being written (below).
 
   Lease and tie ordering remain unobserved, and no gate is registered while the
   plane cannot reach its final marker.
+
+- **2026-08-07 (fourth correction).** B28's first diagnosis, quoted in the third
+  correction above, blamed the clock driver's seven root round-trips for starving
+  `fabric-publisher`. Two experiments refute that, and the real trigger is the
+  retained declaration this entry's third correction introduced.
+
+  Reducing the clock to a **single** advance changes nothing: both role
+  capabilities still land, `fabric-publisher` still parks once, and it still never
+  runs. So clock volume is not the variable, and the plane is not starving behind
+  it.
+
+  Bisecting the fixture instead isolates one field. With
+  `fabric-publisher-b`'s *diagnostics* participant `volatile`/`retainedDepth = 0`,
+  `fabric-publisher` wakes and prints `publish role received`. With it
+  `retained`/`2`, it parks forever. Nothing else differs between the two builds.
+
+  So the retained declaration that bought two C8.5 arms is also what stops a
+  *different* publisher on a *different* route from taking its role reply. The
+  tradeoff is quantified rather than assumed:
+
+  | | `volatile` diagnostics | `retained` diagnostics |
+  |---|---|---|
+  | `reliable retry accounted` | 2 | **4** |
+  | `QoS retry exhausted` | 0 | **1** |
+  | `QoS lifespan expired` | 0 | **1** |
+  | `QoS deadline missed` | 1 | 1 |
+  | `QoS liveliness lost` | 3 | 3 |
+  | `no inline retained publisher` | **1 (fails)** | 0 |
+  | `fabric-publisher` wakes | **yes** | no |
+  | `fabric stream complete` | no | no |
+
+  Neither reaches the final marker, and `retained` observes strictly more, so the
+  committed fixture keeps it. B28 has been rewritten from the starvation claim to
+  the bisected one, and its severity is scoped: it blocks this plane's exit
+  condition and nothing else, because no other seL4 graph declares two retained
+  routes on one publisher.

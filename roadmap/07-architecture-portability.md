@@ -1361,10 +1361,13 @@ the transcript's `fail:` lines are the unconfigured root-launched instances the
 stream gate budgets one of each for.
 
 It still does not reach `[init] fabric stream complete`, and that is now backlog
-**B28**: `fabric-publisher` parks once for its role reply and never runs again
-even though the fabric delivers both role capabilities and wakes it, while the
-stream plane's identical sequence wakes the same task. The clock driver's seven
-root round-trips are the only difference afterwards. Lease and tie ordering sit
+**B28**, bisected to one fixture field: the same `retained` diagnostics
+declaration that buys two of those arms is what stops `fabric-publisher` — a
+different component on a different route — from ever taking its parked role
+reply. Flipping that participant back to `volatile` wakes it and loses two arms;
+reducing the clock to a single advance changes nothing, so it is not starvation
+behind the clock. The committed fixture keeps `retained` because it observes
+strictly more and neither setting reaches the marker. Lease and tie ordering sit
 past that point.
 No gate is registered while the plane cannot reach its final marker. See
 [`devlog/2026-08-07-p5-4-5-qos-clock/`](../devlog/2026-08-07-p5-4-5-qos-clock/index.md).
