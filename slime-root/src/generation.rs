@@ -55,6 +55,14 @@ pub enum GenerationError {
     /// graph says what it needs and the answer is no. The whole generation
     /// fails closed, before the fabric or any participant launches.
     UnsatisfiableFabricGraph,
+    /// The fabric graph names a participant this generation does not declare
+    /// as a component (C8.3).
+    ///
+    /// Distinct from [`Self::UnsatisfiableFabricGraph`]: the graph is
+    /// internally consistent and fits every ceiling, but it promises an edge
+    /// to a component that will never exist, so the promise cannot be kept by
+    /// any mechanism.
+    UndeclaredFabricParticipant,
 }
 
 impl From<DecodeError> for GenerationError {
@@ -270,12 +278,67 @@ fn fabric_graph_admission(
     // graph that is wrong, and the caller's marker should say so.
     let graph = graph.map_err(|_| GenerationError::UnsatisfiableFabricGraph)?;
     fabric_graph_is_satisfiable(&graph)?;
+    fabric_graph_participants_are_declared(generation, &graph)?;
     Ok(Some(FabricShape {
         schemas: graph.schema_count(),
         routes: graph.route_count(),
         participants: graph.participant_count(),
         interpositions: graph.interposition_count(),
     }))
+}
+
+/// Every participant in the graph must name a component this generation
+/// declares (C8.3).
+///
+/// The graph identifies participants by a hash of the component name, and the
+/// fabric service answers requests from a *build-time* table generated from the
+/// same manifest. Nothing checked that the two agreed: a graph naming a
+/// component the generation had since dropped would decode, satisfy every
+/// ceiling, and launch — and the mismatch would surface only as a participant
+/// whose control endpoint never arrives, which reads as a hang rather than as
+/// the provenance failure it is.
+///
+/// Checked in the direction that can actually be wrong. A component with no
+/// participant is ordinary (most components are not on the fabric); a
+/// participant with no component is a graph promising an edge to nobody.
+fn fabric_graph_participants_are_declared(
+    generation: &Generation<'_>,
+    graph: &FabricGraph<'_>,
+) -> Result<(), GenerationError> {
+    let mut names = [None; MAX_ADMITTED_COMPONENTS];
+    let mut count = 0;
+    for slot in 0..generation.component_count().min(MAX_ADMITTED_COMPONENTS) {
+        let component = generation
+            .component(slot)
+            .map_err(|_| GenerationError::UnsatisfiableFabricGraph)?;
+        names[count] = Some(component.name);
+        count += 1;
+    }
+    participants_are_declared(&names[..count], graph)
+}
+
+/// The set half of [`fabric_graph_participants_are_declared`], over the
+/// component names rather than the generation that carries them.
+///
+/// Split out so the property is testable: building a whole `Generation` by
+/// hand would make the fixture the thing under test.
+fn participants_are_declared(
+    names: &[Option<&str>],
+    graph: &FabricGraph<'_>,
+) -> Result<(), GenerationError> {
+    for index in 0..graph.participant_count() {
+        let participant = graph
+            .participant(index)
+            .ok_or(GenerationError::UnsatisfiableFabricGraph)?;
+        let declared = names
+            .iter()
+            .flatten()
+            .any(|name| fabric_graph::component_identity(name) == participant.component_identity);
+        if !declared {
+            return Err(GenerationError::UndeclaredFabricParticipant);
+        }
+    }
+    Ok(())
 }
 
 /// The shape a declared fabric graph fixes. See [`Admission::fabric_schemas`].
@@ -479,7 +542,7 @@ impl Admission {
 mod tests {
     use super::{
         Authority, FabricGraph, GenerationError, PayloadFormat, RIGHT_RECV, RIGHT_SEND,
-        fabric_graph_is_satisfiable,
+        fabric_graph_is_satisfiable, participants_are_declared,
     };
     use boot_contracts::component_image::wire;
     use boot_contracts::generation::RIGHT_TRANSFER;
@@ -570,6 +633,11 @@ mod tests {
     /// [`graph_with`]'s empty participant table cannot: with no pairs the
     /// predicate is vacuously true, so a graph built there proves nothing about
     /// QoS either way.
+    /// The two components `qos_graph` names. Derived identities, not raw
+    /// bytes, so a provenance test can declare the same components by name.
+    const QOS_PUBLISHER: &str = "fabric-publisher";
+    const QOS_SUBSCRIBER: &str = "fabric-subscriber";
+
     fn qos_graph(offered: u8, requested: u8) -> alloc::vec::Vec<u8> {
         use boot_contracts::fabric_graph::{
             CONTRACT_KIND_STREAM, DIRECTION_PUBLISH, DIRECTION_SUBSCRIBE, DURABILITY_VOLATILE,
@@ -614,8 +682,16 @@ mod tests {
         // duplicate, and `encode` sorts, so a hand-built graph must too.
         let mut placed = [([0u8; 32], [0u8; 32], 0u32, 0u8); 2];
         for (slot, (component, direction, reliability)) in [
-            ([0x41u8; 32], DIRECTION_PUBLISH, offered),
-            ([0x42u8; 32], DIRECTION_SUBSCRIBE, requested),
+            (
+                boot_contracts::fabric_graph::component_identity(QOS_PUBLISHER),
+                DIRECTION_PUBLISH,
+                offered,
+            ),
+            (
+                boot_contracts::fabric_graph::component_identity(QOS_SUBSCRIBER),
+                DIRECTION_SUBSCRIBE,
+                requested,
+            ),
         ]
         .into_iter()
         .enumerate()
@@ -647,12 +723,114 @@ mod tests {
         bytes
     }
 
+    /// A two-schema graph whose schemas carry distinct full identities and the
+    /// tags given (C8.1). No route or participant: `validate_schemas` runs
+    /// before anything references a schema, so a collision is refusable on the
+    /// schema table alone.
+    ///
+    /// The generation-local tag is a *lookup key*. Two distinct interfaces
+    /// sharing one tag makes every later resolution ambiguous, and the wrong
+    /// answer is a message decoded against the wrong schema rather than an
+    /// error, which is why this is refused at decode rather than reported.
+    fn two_schema_graph(first_tag: u64, second_tag: u64) -> alloc::vec::Vec<u8> {
+        use boot_contracts::fabric_graph::{
+            CONTRACT_KIND_STREAM, FORMAT_VERSION, HEADER_BYTES, MAGIC, SCHEMA_ENTRY_BYTES,
+        };
+        let total = HEADER_BYTES + 2 * SCHEMA_ENTRY_BYTES;
+        let mut bytes = alloc::vec![0u8; total];
+        bytes[..8].copy_from_slice(&MAGIC);
+        bytes[8..12].copy_from_slice(&FORMAT_VERSION.to_le_bytes());
+        bytes[12..16].copy_from_slice(&(HEADER_BYTES as u32).to_le_bytes());
+        bytes[24..28].copy_from_slice(&(total as u32).to_le_bytes());
+        bytes[28..32].copy_from_slice(&2u32.to_le_bytes()); // schemas
+        bytes[48..80].copy_from_slice(&[0xab; 32]);
+        for (index, value) in SATISFIABLE.iter().enumerate() {
+            bytes[80 + index * 4..][..4].copy_from_slice(&value.to_le_bytes());
+        }
+        // Schema identities must ascend: the decoder checks the ordering
+        // separately from the tag collision, so a descending pair would fail
+        // for the wrong reason and the test would prove nothing.
+        for (slot, (identity, tag)) in [([0x11u8; 32], first_tag), ([0x22u8; 32], second_tag)]
+            .into_iter()
+            .enumerate()
+        {
+            let at = HEADER_BYTES + slot * SCHEMA_ENTRY_BYTES;
+            bytes[at..at + 32].copy_from_slice(&identity);
+            bytes[at + 32..at + 40].copy_from_slice(&tag.to_le_bytes());
+            bytes[at + 40..at + 44].copy_from_slice(&CONTRACT_KIND_STREAM.to_le_bytes());
+            bytes[at + 44..at + 48].copy_from_slice(&64u32.to_le_bytes());
+        }
+        bytes
+    }
+
     /// Limits every ceiling admits. Field order is the wire order:
     /// routes, ingress_sources, publishers, subscribers, clients, servers,
     /// sample_bytes, queue_depth, history_depth, event_depth, retained_samples,
     /// retries, in_flight_calls, in_flight_operations, buffer_pages, buffers,
     /// mappings, loans, capability_slots.
     const SATISFIABLE: [u32; 19] = [1, 4, 1, 1, 0, 0, 64, 8, 4, 4, 2, 2, 0, 0, 8, 2, 4, 4, 16];
+
+    /// C8.3 (P5.4.10): a graph may only name participants the generation
+    /// declares as components.
+    ///
+    /// The fabric answers requests from a build-time table generated from the
+    /// same manifest, and nothing checked the two still agreed. A graph naming
+    /// a dropped component decodes, fits every ceiling, and launches; the
+    /// mismatch then surfaces as a control endpoint that never arrives, which
+    /// reads as a hang rather than as a provenance failure.
+    #[test]
+    fn a_graph_may_not_name_a_component_the_generation_lacks() {
+        use boot_contracts::fabric_graph::RELIABILITY_RELIABLE;
+        let bytes = qos_graph(RELIABILITY_RELIABLE as u8, RELIABILITY_RELIABLE as u8);
+        let graph = FabricGraph::decode(&bytes).expect("well-formed graph");
+
+        // Both participants declared: admitted. Without this half the test
+        // would pass on a check that refused every graph.
+        let complete = [Some(QOS_PUBLISHER), Some(QOS_SUBSCRIBER), Some("init")];
+        assert_eq!(participants_are_declared(&complete, &graph), Ok(()));
+
+        // The subscriber dropped from the generation, its participant left in
+        // the graph: refused before anything launches.
+        let missing = [Some(QOS_PUBLISHER), Some("init")];
+        assert_eq!(
+            participants_are_declared(&missing, &graph),
+            Err(GenerationError::UndeclaredFabricParticipant)
+        );
+
+        // A component no participant names is ordinary, not an error: most
+        // components are not on the fabric at all.
+        let extra = [
+            Some(QOS_PUBLISHER),
+            Some(QOS_SUBSCRIBER),
+            Some("console"),
+            Some("sysinfo"),
+        ];
+        assert_eq!(participants_are_declared(&extra, &graph), Ok(()));
+    }
+
+    /// C8.1 (P5.4.10): two distinct interfaces may not share one
+    /// generation-local type tag.
+    ///
+    /// The positive half is load-bearing. Without it this test would pass on a
+    /// decoder that refused every two-schema graph, which is the failure mode
+    /// a negative-only test cannot see.
+    #[test]
+    fn distinct_schemas_may_share_no_type_tag() {
+        let distinct = two_schema_graph(0xAAAA, 0xBBBB);
+        assert!(
+            FabricGraph::decode(&distinct).is_ok(),
+            "two schemas with distinct tags are a legal graph"
+        );
+
+        let collided = two_schema_graph(0xAAAA, 0xAAAA);
+        assert!(
+            matches!(
+                FabricGraph::decode(&collided),
+                Err(boot_contracts::fabric_graph::DecodeError::IdentityMismatch)
+            ),
+            "a shared type tag must be refused at decode, not resolved later"
+        );
+    }
 
     /// C8.2's exit condition on this side: a graph the root can satisfy is
     /// admitted, so the check is not refusing everything.

@@ -1299,11 +1299,17 @@ compatibility over the booted graph. Those stay with P5.4.10's partials.
 
 ### P5.4.10 — The recorded partials
 
-**Status:** In progress — three rows closed (the `component_image.rs` segment
-corpus, C8.2's live-graph assertions, and B10's seL4 layout fixtures) and two
-reclassified as needing no seL4 gate (C7.1's retained-v2 arm, B11's
-product-vs-test pair); `task_reclamation.rs`'s row is partial for a structural reason
-recorded there; C8.1 and C8.3 remain.
+**Status:** Done. Five rows closed by gates or tests (the `component_image.rs`
+segment corpus, C8.2's live-graph assertions, B10's seL4 layout fixtures,
+C8.4's structural arm, and C8.1/C8.3); two reclassified as needing no seL4
+gate, with the evidence and the conditions that would reopen them (C7.1's
+retained-v2 arm, B11's product-vs-test pair); and `task_reclamation.rs`'s row
+carried as far as a monotonic CSlot allocator permits, which is exact range
+accounting rather than the per-cycle drift its three properties measure.
+
+Each row's reasoning is in its own devlog entry rather than summarised here,
+because two of the eight resolutions are "this cannot happen on this path" and
+that claim is only worth what its evidence is.
 
 **Depends on:** P5.4.1.
 
@@ -1314,9 +1320,9 @@ milestones; they are the residue of milestones otherwise covered.
 | Partial | State |
 | --- | --- |
 | `component_image.rs`'s malformed segment corpus | **Done** — `boot_contracts::component_image::validate_segments`, eleven host tests under `just test_host` and `just miri`; see [`devlog/2026-08-07-p5-4-10-segment-corpus/`](../devlog/2026-08-07-p5-4-10-segment-corpus/index.md) |
-| C8.1 collision rejection | Open — the artifact rides along; identity determinism and pre-artifact collision are unobserved on seL4 |
+| C8.1 collision rejection | **Done** — `distinct_schemas_may_share_no_type_tag` pins the rule (both halves); it was implemented in `FabricGraph::decode` and tested by nothing. See [`devlog/2026-08-07-p5-4-10-collision-and-provenance/`](../devlog/2026-08-07-p5-4-10-collision-and-provenance/index.md) |
 | C8.2 route-authority tuples, interposition termination, per-pair QoS | **Done** — the aggregate half closed as P5.4.4; membership and interposition are enforced by `FabricGraph::decode`, and per-pair QoS is now refused at admission. See [`devlog/2026-08-07-p5-4-10-qos-pair-admission/`](../devlog/2026-08-07-p5-4-10-qos-pair-admission/index.md) |
-| C8.3 graph provenance | Open — the rights algebra is observed; that the fabric answers from the *authenticated* graph rather than a compile-time table is not |
+| C8.3 graph provenance | **Done** — admission now refuses a graph naming a component the generation does not declare (`GenerationError::UndeclaredFabricParticipant`), closing the gap between the `@generated` `FABRIC_CLIENTS` table and the authenticated graph. See [`devlog/2026-08-07-p5-4-10-collision-and-provenance/`](../devlog/2026-08-07-p5-4-10-collision-and-provenance/index.md) |
 | C8.4's structural arm | **Done** — the admission marker carries the shape the graph declares (`schemas=/routes=/participants=/interpositions=`) and `sel4_stream_check` asserts it, covering the fan-out half; the bounds half was closed by P5.4.4's `validate_against` wiring. See [`devlog/2026-08-07-p5-4-10-graph-shape/`](../devlog/2026-08-07-p5-4-10-graph-shape/index.md) |
 | C7.1's retained-v2 rollback arm | **Reclassified — needs no seL4 gate.** A v2 generation names its own kernel object, so a rollback boots the v2-era kernel rather than `slime-root`; and v2 predates the ELF component revision entirely, so every payload it carries is a SLIMECM image this root has no loader for. The decode path stays host-tested in `boot-contracts` (`retained_v2_generation_passes_stage0_admission` and four siblings). Booting one here would assert that an unloadable graph is reported unloadable, which `sel4_root_boot_check`'s `slimecm=[1-9]` marker already does |
 | B10's seL4 layout fixture | **Done** — `just sel4_boot_layout_check` freezes all eight plane layouts; see [`devlog/2026-08-07-p5-4-10-sel4-boot-layout/`](../devlog/2026-08-07-p5-4-10-sel4-boot-layout/index.md) |
