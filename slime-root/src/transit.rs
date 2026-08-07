@@ -143,6 +143,28 @@ impl Transit {
             .any(|entry| entry.capability.resource == Resource::Supervision { task })
     }
 
+    /// Whether any parked capability is an endpoint end naming `channel`.
+    ///
+    /// The in-flight half of [`crate::channel::sweep`]'s predicate, and the
+    /// half whose absence would be invisible — for exactly the reason
+    /// [`Self::holds_supervision`] gives. `serve_cap_transfer` drops the
+    /// capability from the sender's table and only then parks it here, so a
+    /// sweep firing in that window and reading only
+    /// [`GraphTables`](crate::graph::GraphTables) would free the channel the
+    /// transfer is moving. The receiver would then collect a capability
+    /// resolving to no queue and park on it forever.
+    ///
+    /// This also covers an endpoint riding as a *message* payload: a queued
+    /// message carries the transit token, and the entry behind it stands until
+    /// [`Self::arrive`] takes it, so a scan here sees the end while it sits in
+    /// some third channel's queue.
+    pub fn holds_endpoint(&self, channel: u32) -> bool {
+        self.entries
+            .iter()
+            .flatten()
+            .any(|entry| entry.capability.resource == Resource::Endpoint { channel })
+    }
+
     /// Take the capability `token` names, if `receiver` is the task it was sent
     /// to.
     ///

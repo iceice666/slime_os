@@ -313,6 +313,28 @@ impl GraphTables {
         })
     }
 
+    /// Whether any live table holds an endpoint capability naming `channel`.
+    ///
+    /// The live half of the predicate [`crate::channel::sweep`] uses to decide
+    /// whether a channel entry can still be named. The sibling of
+    /// [`Self::holds_supervision`], and a scan for the same reason: a channel
+    /// end is placed at materialization, moved at spawn, moved again by
+    /// `cap_transfer`, and dropped by `CapDrop` — four paths an index would
+    /// have to stay correct across.
+    ///
+    /// Bounded by `MAX_GRAPH_TASKS * MAX_TASK_CAPS`, and run only when
+    /// `ChannelTable` is full, so the cost is paid once per channel reclaimed
+    /// rather than per mint.
+    pub fn holds_endpoint(&self, channel: u32) -> bool {
+        self.tables.iter().flatten().any(|(_, table)| {
+            table
+                .slots
+                .iter()
+                .flatten()
+                .any(|capability| capability.resource == Resource::Endpoint { channel })
+        })
+    }
+
     /// Drop a task's whole table as part of reclaiming it.
     pub fn release(&mut self, task: TaskId) -> bool {
         let Some(slot) = self

@@ -1670,7 +1670,7 @@ fn serve_component_graph(
                     Ok(graph::Capability {
                         resource: graph::Resource::EndpointFactory,
                         ..
-                    }) => match channels.mint(id, id) {
+                    }) => match mint_channel(channels, graph, &transit, id) {
                         Ok(key) => {
                             // Both slots reserved before either is installed:
                             // a pair with one end placed is a channel the
@@ -2154,11 +2154,20 @@ fn serve_component_graph(
     // task is still blocked on a reply the root owes it, and no queue still
     // believes it has a live peer. `replies` is every saved CSlot handed back,
     // which is what shows the save path is not a leak.
+    //
+    // `minted` is cumulative and appended last, for the reason
+    // `terminated` is: `channel::sweep` reclaims entries once no holder can
+    // name them (B22), so a live count reads low on any graph that released as
+    // it went — the healthy case rather than the broken one. Appended rather
+    // than inserted because the two gates that assert this line match a prefix
+    // ending at `replies`, and below `MAX_CHANNELS` a boot mints exactly as
+    // many as it ever held.
     sel4::debug_println!(
-        "SLIME_GRAPH channels served sends={sends} receives={receives} parks={parks} settled={peer_deaths} parked={} queues={} replies={}",
+        "SLIME_GRAPH channels served sends={sends} receives={receives} parks={parks} settled={peer_deaths} parked={} queues={} replies={} minted={}",
         parked.len(),
         channels.live_queues(),
         parked.recycled(),
+        channels.minted(),
     );
     // The loan plane's accounting, on its own line for the same reason: P5.3.1's
     // gate asserts the line above by its exact shape.
@@ -3252,6 +3261,48 @@ fn recall_channel_ends(
                 child.0,
             );
         }
+    }
+}
+
+/// Mint a channel pair for `id`, sweeping reclaimable channels first if the
+/// table is full.
+///
+/// Backlog **B22**'s fix, and lazily-on-full for the same reason
+/// `record_termination` sweeps lazily: one trigger condition is one thing to
+/// keep correct, a channel that stays is a channel that still works, and
+/// sweeping on every mint would add a two-table scan to a hot path for no
+/// benefit.
+///
+/// The sweep is safe here because dispatch is single-threaded and each
+/// operation is served to completion: `EndpointCreate` and `Spawn` are separate
+/// arms of one loop, so a sweep fired from this one cannot interleave with a
+/// spawn's multi-step distribution at all. That is the invariant to preserve if
+/// a second trigger is ever added — it is checkable, where "no window is open"
+/// would have to be re-argued per call site.
+///
+/// Worth recording, because it is the property a reader will look for:
+/// `distribute_channel_ends` never opens such a window even in principle. The
+/// child's capability is installed by `construct_child` before that function
+/// runs, and within it the parent's `drop_slot` follows the `reassign`, so a
+/// granted endpoint is named by some live table at every instant.
+fn mint_channel(
+    channels: &mut ChannelTable,
+    graph: &GraphTables,
+    transit: &Transit,
+    id: TaskId,
+) -> Result<u32, channel::ChannelError> {
+    match channels.mint(id, id) {
+        Ok(key) => Ok(key),
+        Err(channel::ChannelError::TableFull) => {
+            let freed = channel::sweep(channels, graph, transit);
+            sel4::debug_println!(
+                "SLIME_GRAPH channels swept freed={freed} live={} minted={}",
+                channels.len(),
+                channels.minted(),
+            );
+            channels.mint(id, id)
+        }
+        Err(error) => Err(error),
     }
 }
 

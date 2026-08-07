@@ -85,6 +85,7 @@ use crate::generation::{RIGHT_RECV, RIGHT_SEND};
 use crate::graph::{self, GraphTables};
 use crate::ipc::{Channel, ChannelKey, IpcError};
 use crate::task::TaskId;
+use crate::transit::Transit;
 
 /// Authority to observe a spawned child's termination; see
 /// `main.rs::RIGHT_SUPERVISE`, which this must agree with.
@@ -117,6 +118,12 @@ const RIGHT_SUPERVISE: u64 = 1 << 18;
 /// a `static`: constructing something this size in a stack frame overflows it
 /// silently, exactly the failure backlog B3 records for the retired kernel's
 /// `SharedBufferTable`.
+///
+/// This bounds the channels **live at once**, not the channels a boot may ever
+/// mint. [`sweep`] reclaims every entry no live holder can name, which is what
+/// closes backlog **B22**: before it, `push` never freed and `key = self.len`
+/// meant a long-running graph spent one of these permanently per
+/// `endpoint_create`, however short-lived the pair.
 pub const MAX_CHANNELS: usize = 32;
 
 /// One logical channel: the two tasks holding it, and the directed queues
@@ -254,6 +261,26 @@ pub struct Materialized {
 pub struct ChannelTable {
     entries: [Option<Entry>; MAX_CHANNELS],
     len: usize,
+    /// Next [`ChannelKey`]. Monotonic and never reused, so a key from a
+    /// reclaimed channel names nothing rather than something new.
+    ///
+    /// This was `self.len` until B22. That derivation is only unique while
+    /// `len` never decreases: once [`sweep`] frees an entry, the next `push`
+    /// would reissue a key some live capability already names, and
+    /// `Resource::Endpoint { channel }` is the only handle a component holds —
+    /// so an aliased key silently redirects one component's sends into
+    /// another's queue. A confused deputy is strictly worse than the
+    /// exhaustion the sweep exists to remove, which is why the counter is a
+    /// precondition for the sweep rather than tidying beside it.
+    next_key: ChannelKey,
+    /// Channels ever minted, never decremented.
+    ///
+    /// Split from `len` for the reason `supervision::Terminations` splits
+    /// `recorded`: once entries are reclaimed, `len` measures what is held now,
+    /// and a boot's transcript needs what happened. A graph that minted forty
+    /// channels and released them all ends at `len == 0`, indistinguishable
+    /// from one that never minted any.
+    minted: usize,
 }
 
 impl ChannelTable {
@@ -261,6 +288,8 @@ impl ChannelTable {
         Self {
             entries: [const { None }; MAX_CHANNELS],
             len: 0,
+            next_key: 0,
+            minted: 0,
         }
     }
 
@@ -270,6 +299,11 @@ impl ChannelTable {
 
     pub const fn is_empty(&self) -> bool {
         self.len == 0
+    }
+
+    /// How many channels this boot has created, including ones since reclaimed.
+    pub const fn minted(&self) -> usize {
+        self.minted
     }
 
     /// Directed queues that still have a live peer. Reaching zero is what the
@@ -443,7 +477,13 @@ impl ChannelTable {
         rights: u64,
         transferable: bool,
     ) -> Result<(ChannelKey, usize), ChannelError> {
-        let key = self.len as ChannelKey;
+        let key = self.next_key;
+        // Refused rather than wrapped. A wrapped key would alias a live
+        // channel, which is the failure the monotonic counter exists to
+        // prevent; `TableFull` is the same bounded refusal the caller already
+        // handles, and at one key per `endpoint_create` a `u32` is unreachable
+        // for any graph this cutover boots.
+        let next_key = key.checked_add(1).ok_or(ChannelError::TableFull)?;
         let slot = self
             .entries
             .iter_mut()
@@ -472,7 +512,9 @@ impl ChannelTable {
             reverse,
             transferable,
         });
+        self.next_key = next_key;
         self.len += 1;
+        self.minted += 1;
         Ok((key, queues))
     }
 }
@@ -481,6 +523,69 @@ impl Default for ChannelTable {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Reclaim every channel no live holder can name, returning how many were freed.
+///
+/// This closes backlog **B22**, and it is [`crate::supervision::sweep`]'s exact
+/// shape applied to the second table that never freed. The reasoning carries
+/// over unchanged, so only what differs is restated here.
+///
+/// # The predicate is capability-derived, never task-derived
+///
+/// A channel is observable exactly when some live
+/// [`CapabilityTable`](crate::graph::CapabilityTable) holds a
+/// `Resource::Endpoint` naming it, or one is parked in
+/// [`Transit`](crate::transit::Transit) mid-transfer. Both halves are required,
+/// for B16's reason: `serve_cap_transfer` removes the capability from the
+/// sender's table *before* parking it, so between those two steps the end is
+/// held by no table at all. A sweep reading only the graph would free the
+/// channel a transfer is in the middle of moving, and the receiver would land
+/// a capability resolving to no queue — the same failure
+/// `distribute_channel_ends` documents for the spawn path.
+///
+/// [`Entry::producer`] and [`Entry::consumer`] are deliberately **not** inputs.
+/// They are a cache of who holds each end, maintained by [`ChannelTable::reassign`]
+/// with no capability check of its own, so both directions of a task-derived
+/// predicate are wrong: "names no live task" would free a channel a live
+/// component still holds a slot for, and "names a live task" would never
+/// collect the loopback a dead minter left behind — which is the garbage this
+/// exists to remove.
+///
+/// A dead peer is likewise not a reason to free. `mark_dead` marks both queues,
+/// and [`ChannelTable::is_ready`] treats a dead peer as *ready* so a parked
+/// receive returns `PeerDead` rather than hanging. Freeing an entry whose
+/// holder still names it would turn that clean answer into an unresolvable
+/// slot.
+///
+/// # Waits are not consulted
+///
+/// A registration lives on the queue, not in a table, and a waiter necessarily
+/// resolved a held capability one syscall earlier to build its
+/// [`WaitTarget`] — so a wait implies a holder rather than adding one. Any
+/// registration on a channel this frees belongs to a task whose capability is
+/// already gone, and [`ChannelTable::clear_waits`] runs before reclamation on
+/// every path that removes one.
+pub fn sweep(channels: &mut ChannelTable, graph: &GraphTables, transit: &Transit) -> usize {
+    let mut freed = 0;
+    for slot in channels.entries.iter_mut() {
+        let Some(entry) = slot.as_ref() else {
+            continue;
+        };
+        if graph.holds_endpoint(entry.key) || transit.holds_endpoint(entry.key) {
+            continue;
+        }
+        *slot = None;
+        freed += 1;
+    }
+    // `saturating_sub`, not `-=`, for `supervision::sweep`'s reason: `freed`
+    // counts only entries that were `Some` and every one of those was counted
+    // in `len`, so the two provably cannot disagree — but this is a `no_std`
+    // root task where a wrap would not panic. It would make `len` enormous and
+    // `is_empty` permanently false, turning a bookkeeping slip into a boot that
+    // misreports its own teardown.
+    channels.len = channels.len.saturating_sub(freed);
+    freed
 }
 
 /// Wakes owed after a task died, each with the channel that produced it.
