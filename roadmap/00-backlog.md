@@ -49,13 +49,23 @@ case. The stream plane, which is the same graph without the clock or the retaine
 diagnostics route, runs a byte-comparable transfer sequence and wakes the same
 task at the same point.
 
-**Not diagnosed to a line.** What a second retained route changes inside
-`fabric-service` is the untraced step: it adds a retained history the broker
-maintains, and `create_late_subscriber` now finds a satisfying publisher where it
-previously failed — so the broker takes a path it did not take before, between
-the transfer and the point where the parked task would be served. Whether the
-wake is consumed there, or the reply is answered to a stale saved capability, or
-the broker simply never returns to the request, is unresolved.
+**Not diagnosed to a line**, but the search is narrowed. What a second retained
+route changes inside `fabric-service` is the untraced step: it adds a retained
+history the broker maintains, and `create_late_subscriber` now finds a satisfying
+publisher where it previously failed — so the broker takes a path it did not take
+before, between the transfer and the point where the parked task would be served.
+
+Two resource-exhaustion readings are also ruled out, so a bound is not the cause:
+
+* *`retainedSamples` too small.* The graph declares `2` while two publishers now
+  retain depth 2 each, which looks like the obvious ceiling. Raising it to `4` and
+  rebuilding changes nothing — the task still parks forever.
+* *Frame-table exhaustion.* `FABRIC_FRAME_CAPACITY` is 32 against a retained
+  demand of 4, and the transcript carries no frame-exhaustion marker.
+
+What remains is the broker's control flow rather than its sizing: whether the
+wake is consumed on the new path, the reply is answered to a stale saved
+capability, or the broker never returns to the pending request.
 
 **Severity:** Blocks P5.4.5's exit condition and nothing else. Latent for every
 other plane: no other seL4 graph declares two retained routes on one publisher.
