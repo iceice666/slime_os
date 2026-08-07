@@ -186,3 +186,43 @@ a real regression while it was being written (below).
 
   Recorded because the two experiments bracket the option: the committed plane is
   a local maximum for scheduling, and the remaining work is a fixture change.
+
+- **2026-08-07 (third correction).** The follow-up the two experiments above
+  point to has been applied, and it works. The gap was a fixture declaration,
+  exactly as they predicted.
+
+  `fabric-publisher-b`'s **diagnostics** participant was `durability = volatile`,
+  `retainedDepth = 0`. It is the one sample any publisher sends *inline and
+  first* — before `publish_large`, before any clock advance — so declaring it
+  `retained` with `retainedDepth = 2` gives the fabric an inline retained head
+  independently of when either publisher runs. That is the structural guarantee
+  the corrections above said was needed, rather than any reordering.
+
+  Two arms this entry recorded as unobserved now fire, and one more doubles:
+
+  | Marker | Before | After |
+  |---|---|---|
+  | `[fabric] reliable retry accounted` | 2 | **4** |
+  | `[fabric] QoS retry exhausted` | 0 | **1** |
+  | `[fabric] QoS deadline missed` | 1 | 1 |
+  | `[fabric] QoS lifespan expired` | 0 | **1** |
+  | `[fabric] QoS liveliness lost` | 3 | 3 |
+  | `[fabric-publisher-b] simulated time advanced` | 0 | **1** |
+  | `[fabric] fail: no inline retained publisher` | 1 | **0** |
+
+  So five C8.5 arms are now observed on seL4 — RELIABLE retry accounting, retry
+  exhaustion, deadline miss, lifespan expiry, and liveliness loss — and the clock
+  driver runs its full seven-step advance to `done`. **No configured component
+  fails**: the six `fail:` lines in the transcript are the unconfigured
+  root-launched instances `check-sel4-stream-plane.py` budgets exactly one of
+  each for, and `fabric-publisher-b` and `fabric-intruder` both exit 0.
+
+  The plane still does not reach `[init] fabric stream complete`. The fabric
+  parks on `idle: parked on stream sources` after the clock finishes, because
+  `fabric-publisher` and the two subscribers are waiting on routes it never
+  retires. That is a different and later problem than the one this entry was
+  filed for, and the Verification table's `boot.log` has been re-captured
+  against this state.
+
+  Lease and tie ordering remain unobserved, and no gate is registered while the
+  plane cannot reach its final marker.

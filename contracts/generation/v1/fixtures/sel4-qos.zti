@@ -280,10 +280,10 @@
             visibility = "graph";
             interposition = [];
             reliability = "reliable";
-            durability = "volatile";
+            durability = "retained";
             liveliness = "manual";
             historyDepth = 2;
-            retainedDepth = 0;
+            retainedDepth = 2;
             deadlineNs = 100;
             lifespanNs = 0;
             leaseNs = 200;

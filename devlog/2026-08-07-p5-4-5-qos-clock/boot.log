@@ -5,9 +5,9 @@ SLIME_ROOT authority manifest=[bc, 61, e4, d1, b7, bc, 2d, 02, d6, dc, e2, 2c, 3
 SLIME_ROOT graph admitted; legacy SLIMECM images not activated components=7 slimecm=0 elf=7 unrecognized=0
 SLIME_ROOT allocator slots=3389 untypeds=25 bytes=531831152
 SLIME_TIMER acquired irq=30 freq_hz=62500000
-SLIME_TIMER delivered badge=0x1 polls=13276
+SLIME_TIMER delivered badge=0x1 polls=14125
 SLIME_TIMER serviced events=1 programming=Disarm
-SLIME_TIMER advanced start=1543750 end=2287875 delta=744125
+SLIME_TIMER advanced start=1582625 end=2347062 delta=764437
 SLIME_TIMER OK
 SLIME_GRAPH staged task=0 component=fabric-intruder grants=1 executables=0 window=0x236000 frames=55 tables=3 entry=0x211598
 SLIME_GRAPH staged task=1 component=fabric-publisher grants=1 executables=0 window=0x238000 frames=57 tables=3 entry=0x211e48
@@ -301,49 +301,57 @@ SLIME_GRAPH sent task=9 channel=16 bytes=64 caps=0 queued=3
 SLIME_GRAPH sent task=9 channel=14 bytes=64 caps=0 queued=4
 [fabric] QoS liveliness lost
 SLIME_GRAPH sent task=9 channel=11 bytes=64 caps=0 queued=1
-[fabric] fail: no inline retained publisher
-SLIME_GRAPH component exit task=9 status=1
-SLIME_GRAPH peer death task=9 channels=18 woken=0
-SLIME_GRAPH holder reclaimed task=9 charges=3 actions=4 stranded=4
-SLIME_GRAPH quota released task=9 live=5
+SLIME_GRAPH endpoint minted task=9 key=24 slots=22,24
+[fabric] retained history offered to late subscriber
+SLIME_GRAPH sent task=9 channel=24 bytes=64 caps=0 queued=1
+SLIME_GRAPH received task=9 channel=24 bytes=64 caps=0
+[fabric] retained history replayed to late subscriber
+[fabric] QoS lifespan expired
+[fabric] retained history expired for late subscriber
+[fabric] idle: parked on stream sources
+SLIME_GRAPH parked task=9 reason=wait
 SLIME_GRAPH received task=11 channel=11 bytes=64 caps=0
-[fabric-publisher-b] fail: time advance
-SLIME_GRAPH component exit task=11 status=1
-SLIME_GRAPH peer death task=11 channels=6 woken=0
-SLIME_GRAPH quota released task=11 live=4
-SLIME_GRAPH received task=7 channel=16 bytes=64 caps=0
-[fabric-subscriber] QoS matched
-SLIME_GRAPH capability expired task=7 bytes=64
-SLIME_GRAPH received task=7 channel=16 bytes=64 caps=0
-[fabric-subscriber] fail: descriptor arrived without its loan
-SLIME_GRAPH component exit task=7 status=1
-SLIME_GRAPH peer death task=7 channels=3 woken=0
-SLIME_GRAPH quota released task=7 live=3
-SLIME_GRAPH received task=8 channel=12 bytes=64 caps=0
-SLIME_GRAPH capability expired task=8 bytes=64
-SLIME_GRAPH received task=8 channel=12 bytes=64 caps=0
-[fabric-subscriber-b] fail: descriptor failed validation
-SLIME_GRAPH component exit task=8 status=1
-SLIME_GRAPH peer death task=8 channels=5 woken=0
-SLIME_GRAPH quota released task=8 live=2
-SLIME_GRAPH capability expired task=10 bytes=64
-SLIME_GRAPH received task=10 channel=5 bytes=64 caps=0
-SLIME_GRAPH capability expired task=10 bytes=64
-SLIME_GRAPH received task=10 channel=5 bytes=64 caps=0
-[fabric-publisher] publish role received
-[fabric-publisher] fail: publisher could receive on its route
-SLIME_GRAPH component exit task=10 status=1
-SLIME_GRAPH supervision woken task=6 child=10
-SLIME_GRAPH peer death task=10 channels=4 woken=0
-SLIME_GRAPH quota released task=10 live=1
-SLIME_GRAPH supervision collected task=6 child=10 kind=0
-[init] stream plane fail: a fabric component did not exit cleanly
-SLIME_GRAPH component exit task=6 status=1
-SLIME_GRAPH peer death task=6 channels=1 woken=0
-SLIME_GRAPH quota released task=6 live=0
-SLIME_GRAPH served live=0 unsupported=0 unimplemented=0 buffers=10 windows=0 tables=0
-SLIME_GRAPH tasks reclaimed live=0 slots=844
-SLIME_GRAPH channels served sends=30 receives=34 parks=24 settled=48 parked=0 queues=0 replies=171 minted=24
-SLIME_GRAPH loans served=5 loans=0 mappings=0 regions=0 transit=0 orphans=0 aliases=0 quotas=0
-SLIME_GRAPH spawns served=6 drops=0 endpoints=19 terminated=13 waits=0
+SLIME_GRAPH sent task=11 channel=11 bytes=64 caps=0 queued=1
+SLIME_GRAPH parked task=11 reason=wait
+SLIME_GRAPH received task=9 channel=11 bytes=64 caps=0
+[fabric] reliable retry accounted
+SLIME_GRAPH sent task=9 channel=11 bytes=64 caps=0 queued=1
+[fabric] idle: parked on stream sources
+SLIME_GRAPH parked task=9 reason=wait
+SLIME_GRAPH received task=11 channel=11 bytes=64 caps=0
+SLIME_GRAPH sent task=11 channel=11 bytes=64 caps=0 queued=1
+SLIME_GRAPH parked task=11 reason=wait
+SLIME_GRAPH received task=9 channel=11 bytes=64 caps=0
+[fabric] reliable retry accounted
+SLIME_GRAPH sent task=9 channel=14 bytes=64 caps=0 queued=5
+[fabric] QoS retry exhausted
+SLIME_GRAPH sent task=9 channel=11 bytes=64 caps=0 queued=1
+SLIME_GRAPH sent task=9 channel=14 bytes=64 caps=0 queued=6
+[fabric] idle: parked on stream sources
+SLIME_GRAPH parked task=9 reason=wait
+SLIME_GRAPH received task=11 channel=11 bytes=64 caps=0
+SLIME_GRAPH sent task=11 channel=11 bytes=64 caps=0 queued=1
+SLIME_GRAPH parked task=11 reason=wait
+SLIME_GRAPH received task=9 channel=11 bytes=64 caps=0
+SLIME_GRAPH sent task=9 channel=11 bytes=64 caps=0 queued=1
+[fabric] idle: parked on stream sources
+SLIME_GRAPH parked task=9 reason=wait
+SLIME_GRAPH received task=11 channel=11 bytes=64 caps=0
+SLIME_GRAPH sent task=11 channel=11 bytes=64 caps=0 queued=1
+SLIME_GRAPH parked task=11 reason=wait
+SLIME_GRAPH received task=9 channel=11 bytes=64 caps=0
+SLIME_GRAPH sent task=9 channel=11 bytes=64 caps=0 queued=1
+[fabric] idle: parked on stream sources
+SLIME_GRAPH parked task=9 reason=wait
+SLIME_GRAPH received task=11 channel=11 bytes=64 caps=0
+[fabric-publisher-b] simulated time advanced
+[fabric-publisher-b] done
+SLIME_GRAPH component exit task=11 status=0
+SLIME_GRAPH peer death task=11 channels=6 woken=1
+SLIME_GRAPH quota released task=11 live=5
+SLIME_GRAPH served live=5 unsupported=0 unimplemented=0 buffers=10 windows=5 tables=5
+SLIME_GRAPH tasks reclaimed live=5 slots=517
+SLIME_GRAPH channels served sends=41 receives=37 parks=33 settled=17 parked=1 queues=25 replies=323 minted=25
+SLIME_GRAPH loans served=5 loans=2 mappings=0 regions=1 transit=4 orphans=0 aliases=0 quotas=5
+SLIME_GRAPH spawns served=6 drops=2 endpoints=20 terminated=8 waits=1
 SLIME_GRAPH transfers served=12
