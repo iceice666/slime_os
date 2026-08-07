@@ -204,11 +204,28 @@ failed would leave the child blocked forever with no trace anywhere. That is exa
 the observed combination: consistent root bookkeeping, an idle CPU, and a child that
 never resumes.
 
-**Next step, and it is now narrow:** check that `send` result and report a failure.
-If the send is the loss, the fix is that check plus deciding what a failed reply
-means (retry, or record the task as unanswerable); if it succeeds, the loss is in
-seL4's reply-capability lifetime and the saved `Unspecified` slot is the next thing
-to read.
+**The send is not the loss either.** `sel4::cap::Unspecified::send` returns `()` —
+seL4's `Send` reports nothing, so there was no discarded error to find. Bracketing
+the call with markers shows `SLIME_DBG wake replying task=10` followed by
+`wake replied task=10`: the root reaches the send, performs it, and returns. The
+same bracket fires and *works* for tasks 4, 5, 7, 8, and 9 in the same boot, so the
+save/park/wake/reply path is sound in general.
+
+**So the defect is narrower than any structure the root can inspect.** Task 10's
+reply is sent over its saved capability, the send returns, the CPU then goes idle
+with no runnable thread, and the child never resumes. Every layer reports success
+and the thread stays blocked. Eleven readings are now excluded, including the
+debugger-motivated one.
+
+What is left is the seL4-level object: whether the `Unspecified` slot still names a
+live reply capability for that thread at the moment of the send, or whether it was
+invalidated — by the child's own second `save_caller`, by a `delete_slot` on a
+recycled index, or by the transfer path having answered it once already. Reading it
+needs the kernel's own view: `seL4_DebugCapIdentify` on the saved slot before the
+send, or a `seL4_DebugDumpScheduler` at the deadlock to see what state the thread is
+actually in. Both are seL4 debug syscalls that this build does not currently enable,
+so the next step is turning them on rather than another experiment against the
+transcript.
 
 **One wider finding stands regardless of B28**, and it is worth its own slice:
 `sel4_transport::wait` returns `()`, so its staging-failure branch can only
