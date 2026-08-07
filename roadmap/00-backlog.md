@@ -132,10 +132,32 @@ the root or the runtime can report.
 
 Seven readings are now excluded: lost wake, lost reply, starvation, clock volume,
 boot duration, the `retainedSamples` bound, the frame table, a component fault, and
-the runtime's silent-yield arm. Closing B28 needs a debugger attached to the child
-— `xd://debug` with the `dlv`-equivalent for this target, or a marker compiled into
-`fabric-publisher` between `role requested` and its two-capability loop. Nothing
-further follows from the boot log.
+the runtime's silent-yield arm.
+
+**Localized to the first `receive_role` iteration.** A marker compiled into
+`fabric-publisher` between `role requested` and its two-capability loop prints
+`awaiting role cap` and then nothing: the task blocks inside the *first* iteration,
+never reaching `role cap arrived`. It is not stuck on the second capability, and it
+is not past the loop.
+
+The wiring is right, which is what makes this narrow. Task 10 holds the control
+channel at the slot it reads — `channel handed parent=6 child=10 key=5 slot=0`
+against `CONTROL_SLOT = 0` — and the fabric transferred both capabilities to that
+exact channel (`capability transferred task=9 channel=5 to=10`, twice, rights
+`0x1` then `0x2`). So the transfers targeted the queue the receiver polls, the
+receiver polled it, and it saw nothing.
+
+That points at `serve_cap_transfer`'s enqueue-plus-wake against a receiver that is
+parked *at that moment*: the fabric's two transfers land back to back while task 10
+is parked from its `wait`, and the second finds `deliver_wake` a no-op because the
+first already un-parked it — but the first wake races the enqueue of the second
+capability. On the stream plane the same pair lands and the receiver drains both,
+so the ordering that breaks is graph-dependent, which is consistent with the
+retained bisect.
+
+Closing it needs the transit/enqueue order in `serve_cap_transfer` read against
+`ipc::send_atomic`'s wake decision, or a debugger on the child. Nothing further
+follows from the boot log.
 
 **One wider finding stands regardless of B28**, and it is worth its own slice:
 `sel4_transport::wait` returns `()`, so its staging-failure branch can only
