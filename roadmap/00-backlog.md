@@ -61,37 +61,6 @@ shared-buffer holders over its lifetime still resolves the declared quota for
 every live holder, observed under a named seL4 gate, and fault-injected to show
 that removing the reclaim fails it.
 
-### B23 — `slime-root`'s unit tests are run by no gate
-
-**Problem:** 98 `#[test]` functions across 13 modules — channel 7, child_vspace
-3, fault 4, generation 9, graph 7, ipc 7, object_allocator 3, supervision 9,
-task 4, timer 14, transit 6, shared_buffer 17, transfer_window 8 — are compiled
-by nothing and run by nothing, while `slime-root/src/main.rs` describes those
-modules as "bounded, pure, and unit-tested in place".
-
-Two independent reasons, so this is a crate-structure change rather than a test
-change:
-
-- **Nothing invokes them.** `just test_host` runs `boot-contracts` and
-  `slime-proto` only; none of the Justfile's `cargo test` invocations names
-  `slime-root`, which appears only in its fmt and clippy targets. CI runs
-  `just test_host` and omits `slime-root` from `cargo-machete` too.
-- **They cannot run as configured.** `main.rs` is unconditionally `#![no_std]`
-  and `#![no_main]` with no `cfg_attr(test, …)` escape, `Cargo.toml` declares no
-  lib target, and the crate only compiles for a custom seL4 JSON target that has
-  no `libtest`. Building `--all-targets` fails with 103 instances of
-  `can't find crate for 'test'` — verified 2026-08-07, all 103 that same error.
-
-**Why this matters beyond the tests themselves:** every `slime-root` change
-inherits the blind spot. B16's fix added four unit tests that document the
-sweep's contract and **cannot be claimed as verification**; the whole burden
-falls on `just sel4_supervision_check`, which is why that gate carries two fault
-injections rather than one.
-
-**Exit condition:** `slime-root`'s unit tests run in some gate — most likely by
-splitting the pure modules into a host-testable lib target — with the count
-asserted so a module that stops being covered is visible.
-
 ### B12 — the component build's `--remap-path-prefix` names a path that does not exist
 
 **Problem:** `components/.cargo/config.toml` passes
@@ -189,6 +158,49 @@ binary perturbed neither contract validation nor generation identity. See
 `devlog/2026-08-07-p5-4-1-oracle-inventory/`.
 
 ## Resolved
+
+### B23 — `slime-root`'s unit tests were run by no gate — **resolved 2026-08-07**
+
+**Problem:** 102 `#[test]` functions across 13 modules were compiled by nothing
+and run by nothing, while `slime-root/src/main.rs` described those modules as
+"bounded, pure, and unit-tested in place". Two independent blockers: no Justfile
+target named the crate, and it could not have run anyway — `main.rs` is
+unconditionally `#![no_std]`/`#![no_main]`, the package declared no lib target,
+and the crate built only for a seL4 JSON target with no `libtest`.
+
+**Resolved by** splitting the mechanism modules into a `slime_root` library the
+binary links, rather than a `cfg(test)` escape (which neither blocker admits) or
+a separate test crate (whose passing tests would be evidence about a copy). The
+`sel4` crate builds for a host target given `SEL4_PREFIX`, so nothing had to be
+excluded: all 13 covered modules run, including the seL4-touching ones.
+`sel4-root-task` is scoped to `cfg(target_os = "none")` because it pulls
+`sel4-alloca`, whose inline ELF section directive will not assemble on Mach-O;
+only the binary needs it and the seL4 build is unchanged.
+
+**What the first run found, which is the point:** three latent defects, every
+one a test silently wrong since something changed under it. Nine `push` call
+sites had been stale since P5.3.2 added a `transferable` parameter. An
+`elf_header` fixture was 20 bytes against `LEGACY_HEADER_LEN`'s 32, so it had
+been asserting `Unrecognized` rather than the bare-ELF arm ever since
+`component_image::target` gained its length guard. A `qualified` fixture sized
+its tail with a literal that no longer matched. All three are test bugs rather
+than production bugs — the good case, but not evidence that nothing was hiding.
+
+**Exit condition (observed 2026-08-07):** `just test_sel4_root` runs 102 tests
+across 13 modules and asserts the count, so a module that stops being covered is
+visible. It is a gate of its own rather than a `test_host` arm, because it needs
+the installed seL4 prefix that `test_host`'s CI runner does not build — the same
+reason `lint_sel4_root` stands apart. Fault-injected by removing one `transit`
+test: the gate fails with `ran 101 tests, expected 102`. The nine seL4 gates,
+`just generation_check`, and `just contracts_check` are unchanged, so the lib
+split did not disturb the image. See
+[`devlog/2026-08-07-b23-slime-root-host-tests/`](../devlog/2026-08-07-b23-slime-root-host-tests/index.md).
+
+**Noted, not fixed:** `just test_host`'s `slime-proto` arm pins
+`x86_64-unknown-linux-gnu` and therefore fails on an `aarch64-apple-darwin`
+host, which was true before this change and is confirmed by stashing it.
+`test_host` is left untouched — this fix adds no arm to it, and
+`test_sel4_root` uses the host triple.
 
 ### B22 — `ChannelTable` never reclaimed, so `MAX_CHANNELS` was a lifetime bound — **resolved 2026-08-07**
 

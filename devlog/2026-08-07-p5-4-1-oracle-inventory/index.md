@@ -218,10 +218,13 @@ rather than inheriting a sweep done while fixing something else.
       same JSON-target path, whose rustflags are keyed by triple and match none
       of the stale literal's, so it neither touches the defect nor extends its
       reach.
-- [ ] **B23** — `slime-root`'s unit tests run in no gate. This slice adds no unit
+- [x] **B23** — `slime-root`'s unit tests run in no gate. This slice adds no unit
       test for exactly that reason; `just sel4_crossing_check` is the sole
       observation point for the B22 fix, which is why it carries two fault
-      injections.
+      injections. **Resolved 2026-08-07**, immediately after this entry, by
+      splitting the mechanism modules into a host-testable library:
+      `just test_sel4_root` runs 102 tests with the count asserted. See
+      [`2026-08-07-b23-slime-root-host-tests/`](../2026-08-07-b23-slime-root-host-tests/index.md).
 - [ ] The inventory's per-milestone verdicts are read from checkers' assertion
       lists and test bodies at one point in time. Nothing enforces that a later
       gate edit keeps a claimed equivalence true; whether a cross-referencing
@@ -244,3 +247,12 @@ rather than inheriting a sweep done while fixing something else.
   [B22](../../roadmap/00-backlog.md) (resolved),
   [B12](../../roadmap/00-backlog.md) and
   [B23](../../roadmap/00-backlog.md) (deferred, re-reviewed).
+
+## Corrections
+
+**2026-08-07** — the *Open risks* B23 bullet says `just sel4_crossing_check`
+"carries two fault injections". It carries **three**: the review that followed
+this entry asked for the monotonic-`next_key` invariant to be observed too, and
+a third source check plus its injection were added. The body above is left as
+written — it was accurate when observed — and the count in this entry's
+*Verification* table already lists all three.
