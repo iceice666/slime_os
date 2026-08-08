@@ -959,12 +959,36 @@ Observed: `[fabric-call] fail: time phase receive` is gone and replaced by
 `[fabric-call-time] boot idle without a role`. All eight other plane gates re-run
 green.
 
-**The plane still does not complete.** It now wedges with no component failure at
-all — `graph iterations exhausted live=11 parked=9` — which is the same shape as
-B28 and a different problem from either of B25's two reasons. So B25's endpoint
-move/copy divergence remains real and unresolved, and it is still not what the call
-plane is waiting on; the next step there is identifying which of the nine parked
-tasks is owed a reply nobody sends.
+**The plane still does not complete, and the remaining gap is now located exactly.**
+It wedges with no component failure — `graph iterations exhausted live=11 parked=9`.
+Tracing it:
+
+* The broker is task 6. It receives once on channel 4 and then goes silent — it
+  never replies and never parks, so it is spinning inside
+  `call_broker.rs::consume_supervision`, whose `ERR_WOULDBLOCK` arm is
+  `yield_now()` — invisible to the root, which is why the graph exhausts its
+  budget rather than reporting anything.
+* `consume_supervision` waits for a descriptor carrying a `RIGHT_SUPERVISE`
+  handle naming the *participant*, on that participant's control channel.
+* **Nothing on this plane sends one.** `drive_call_plane` (the seL4 path;
+  `launch_fabric_calls` is the x86 one, keyed on a different flag) never calls
+  `transfer_supervision` at all. Its own comment at `init.rs:1901` describes the
+  intended cut — "each participant delivers its **own** handle over its own
+  control channel, as its first act" — but the grants below it hand each
+  participant a handle naming the **fabric** (`init.rs:1917`), never one naming
+  itself. So the plan in the comment was never implemented, and it *cannot* be as
+  written: `serve_spawn` installs a supervision handle only into the **parent's**
+  table, so no component ever holds one naming itself.
+
+**That is precisely what `supervision_derive` unblocks**, and it is the first time
+the operation's purpose lines up with the defect: init holds a handle naming each
+participant, needs the fabric to have one too, and the fabric's control ends were
+moved away by its own spawn. Init can now derive a second handle per participant
+and deliver it — but the delivery needs a channel to the fabric that init still
+holds, which the moving endpoint grant took away. So the endpoint move/copy
+question is back on the path after all, one level deeper: either init keeps a
+control end (needs a copying endpoint grant, or a fourth minted pair reserved for
+delegation), or the fabric asks for the handles over a channel it already has.
 
 **Exit condition:** A parent grants one end of a minted pair at spawn, uses the
 other end afterwards to deliver a capability to that child, and the child
