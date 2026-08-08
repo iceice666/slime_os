@@ -87,8 +87,14 @@ property — distinct inputs give distinct digests — without a dictionary word
 
 ## Open risks and follow-ups
 
-`boot-contracts/src/handoff.rs` remains at zero tests (134 lines) and is the last
-module in this crate with logic and no coverage.
+`boot-contracts/src/handoff.rs` remains at zero *runtime* tests and needs none:
+it is `#[repr(C)]` struct declarations plus a `const _: () = { … }` block asserting
+every `size_of` and `offset_of` against the schema-generated constants. That is
+strictly stronger than a unit test, and it was verified rather than assumed —
+widening `HandoffFramebuffer::bpp` from `u16` to `u32` fails
+`cargo build --manifest-path boot-contracts/Cargo.toml` with three errors, and the
+tree builds clean again once reverted. With that, no module in this crate has
+logic without coverage.
 
 `sha256` has no test for a length crossing `u32`, because `update` accumulates
 into a `u64` and reaching that boundary needs 4 GiB of input — not something a
