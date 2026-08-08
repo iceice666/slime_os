@@ -722,14 +722,48 @@ created`, the stream plane keeps serving (`received task=9 channel=21`) while th
 plane immediately emits `[fabric] idle: parked on stream sources` and
 `parked task=9 reason=wait`. The broker parks with two loans outstanding and undelivered.
 
-**Exit condition unchanged.** Twenty-five readings excluded. The lead is now specific:
-the broker parks while loans 2 and 3 are outstanding, so either its park set omits the
-sources those two loans would become ready on, or `deliver` declines to hand them over
-and reports no progress. `park_on_streams` was already found to include two
-always-ready sources (fixed in `d69cd8e`); this is the same function's opposite failure
-mode — a *missing* source — and `deliver`'s early-return paths are where a silent
-"no progress" would come from. B28 stays open; the two park-set spins fixed under it
-were real and are kept. B28 stays open; the two park-set spins fixed under it (`d69cd8e`) were real
+**`deliver`'s decline was instrumented, and it is correct behaviour, not the bug.**
+Every refusal comes from one arm: `history.entry_at(subscriber.in_flight)` returning
+`None`. That is by design — `entry_at` documents `offset >= len => None`, and the
+stuck subscribers sit at `in_flight = 1` with `len = 1`, meaning everything the ring
+holds has already been sent and is awaiting an ack. `deliver` is right to stop, and the
+`in_flight >= history.depth()` gate above it is not involved either (the subscribers
+declare `historyDepth = 8`).
+
+**The eviction bookkeeping is also correct**: `history.push` returning an evicted entry
+decrements `in_flight` and releases the frame, so a stalled subscriber cannot ratchet
+`in_flight` past its depth.
+
+**The subscribers are alive, not dead.** This corrects an assumption three earlier
+paragraphs shared. `peer death task=4` / `task=5` name the *root-launched* subscribers,
+which hold one channel each and are never provisioned into the graph. The broker's real
+subscribers are tasks **7 and 8**, and on the QoS plane they never die at all — they are
+`parked`, waiting for samples. On the stream plane they do eventually die
+(`channels=3`, `channels=5`). So no `ERR_PEER_DEAD` is owed on their ack channels, and
+`drain_acks`' peer-death arm is right not to fire.
+
+**Which puts the whole chain back on one fact:** `fabric-publisher` (task 10) sends
+**2** messages on the QoS plane and then blocks in the `SYS_WAIT` that never returns.
+Task 11 sends 10, so the broker keeps working; the subscribers ack twice
+(against 18 on the stream plane) and then park because no further sample arrives. Every
+downstream symptom — the two unmapped loans, `hist/inflight=1/1`, `announce_end`
+refusing, the broker spinning — follows from that single hang, and none of them is an
+independent defect.
+
+**One candidate fix was written, verified not to fire, and reverted.** `deliver`
+collapsed `ERR_WOULDBLOCK | ERR_PEER_DEAD => false` on both send paths, so a dead peer
+was retried like a busy one; splitting the arms to retire the subscriber built clean and
+kept all nine planes green, but the new arm was never reached on *any* plane — the QoS
+plane returns earlier at `entry_at`, and the stream plane's two `[fabric] QoS peer dead`
+lines both come from the pre-existing `drain_acks` path. Unobserved code is not a fix,
+so it was reverted rather than committed.
+
+**Exit condition unchanged.** Twenty-six readings excluded, and the surface is now a
+single unexplained event with every surrounding layer verified: task 10's `SYS_WAIT`
+does not return although the root answers it on the matching reply CSlot, on a plane
+whose only fixture difference is `durability`/`retainedDepth` on a *different*
+component's *different* route. B28 stays open; the two park-set spins fixed under it
+(`d69cd8e`) were real and are kept. B28 stays open; the two park-set spins fixed under it (`d69cd8e`) were real
 and are kept.
 Re-check this entry after B25 lands rather than investigating it further on its own.
 
