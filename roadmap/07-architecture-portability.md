@@ -1532,6 +1532,17 @@ entry.
 
 **Depends on:** every P5.4.2+ slice.
 
+One recorded prerequisite is already discharged. P5.4.1 flagged that
+`sel4_root_boot_check` boots the retained x86 blob
+`slime-root/fixtures/generation.bin`, and that its `slimecm=[1-9]\d*` non-vacuity
+assertion might break if `kernel/` deletion removed whatever produced that blob.
+Tested rather than argued: with `kernel/` moved out of the tree and dropped from
+the workspace members, the product image rebuilds and that gate **passes**. The
+blob is a tracked binary no script regenerates, and the classification counting a
+legacy image reads a generated `boot-contracts` constant — neither `slime-root`
+nor `boot-contracts` depends on the `kernel` crate. See
+[`devlog/2026-08-07-p5-4-1-oracle-inventory/`](../devlog/2026-08-07-p5-4-1-oracle-inventory/index.md).
+
 #### Exit condition
 
 Every acceptance check the custom kernel guards has an observed seL4 equivalent,

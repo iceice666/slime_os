@@ -211,11 +211,22 @@ rather than inheriting a sweep done while fixing something else.
       marker appended — and pins each gate's required-marker count so a gate
       losing coverage is a red gate rather than a smaller number. See
       [`2026-08-07-sel4-gate-negative-control/`](../2026-08-07-sel4-gate-negative-control/index.md).
-- [ ] **`sel4_root_boot_check` boots no repository fixture.** Its generation is
+- [x] **`sel4_root_boot_check` boots no repository fixture.** Its generation is
       `slime-root/fixtures/generation.bin`, the retained x86 blob. P5.1's
       `slimecm=[1-9]\d*` non-vacuity assertion depends on that blob carrying
-      legacy images; if `kernel/` deletion removes whatever produced it, the
-      argument breaks. Must be resolved before P5.4.final.
+      legacy images; the worry was that `kernel/` deletion removes whatever
+      produced it. **Resolved by test, not by argument, 2026-08-07:** `kernel/` was
+      moved out of the tree and dropped from the workspace members, the product
+      image rebuilt, and `check-sel4-root-boot.py` **passed** — including its
+      `slimecm=[1-9]\d*` assertion. The blob is a tracked binary
+      (`git ls-files` lists it) that no script regenerates, `slime-root` embeds it
+      with `include_bytes!` as the fallback when `SLIME_GENERATION` is unset, and
+      the classification that counts a legacy image reads `LEGACY_IMAGE_MAGIC`
+      from `boot-contracts/src/generated/component_image.rs`. Neither
+      `slime-root` nor `boot-contracts` declares a dependency on the `kernel`
+      crate. So nothing on that path can break when `kernel/` is deleted, and
+      P5.4.final does not need to touch this. `kernel/` and `Cargo.toml` were
+      restored; the tree is unchanged.
 - [ ] **B12** — the component build's stale `--remap-path-prefix`. Deferral
       re-reviewed 2026-08-07 before opening this gate, on the unchanged
       reasoning: `sel4-crossing.zti` is a ninth seL4 generation built through the
