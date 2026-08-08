@@ -19,8 +19,8 @@ observable at all. The seL4 side had no equivalent, so the only thing standing
 between a silently-vacuous gate and a real one was per-slice fault injection:
 per-change discipline, not a standing guard.
 
-`just sel4_gate_control_check` is that guard. Nine gates, 434 mutated
-transcripts, all rejected.
+`just sel4_gate_control_check` is that guard. All ten gates, 439 mutated
+transcripts and layouts, all rejected.
 
 ## Changes
 
@@ -55,7 +55,7 @@ import.
 
 ## Verification
 
-`just sel4_gate_control_check` — "9 gates reject 434 mutated transcripts".
+`just sel4_gate_control_check` — "10 gates reject 439 mutated transcripts and layouts".
 `just ruff` and `just typos` pass.
 
 Three fault injections, each reverted after being observed:
@@ -64,6 +64,8 @@ Three fault injections, each reverted after being observed:
 |---|---|
 | delete one `REQUIRED_MARKERS` entry from the channel gate | `declares 26 required markers, expected 27` |
 | delete one marker from a stream-gate `CHAINS` entry | `declares 55 required markers, expected 56` |
+| stub `check_shape`'s declared-count check | control fails on the count mutation |
+| stub `check_shape`'s ascending-slot check | `accepted a layout whose slot numbers descend` |
 | empty the channel gate's `FAILURE_MARKERS` | `no failure markers declared` |
 | make the control's own ordering non-strict (search from 0) | `accepted a transcript missing 'console parked on an empty channel'` |
 
@@ -84,10 +86,12 @@ that a real boot emits them. The plane gates themselves cover that.
 **Pin the counts.** See the first injection above. A derived count cannot detect
 its own erosion.
 
-**One gate excluded, named rather than skipped.**
-`check-sel4-boot-layout.py` compares frozen fixtures rather than markers, so it
-does not expose the surface this control drives; the reason is in the script's
-`GATES` comment.
+**The boot-layout gate is covered through `check_shape`, not through markers.**
+Its claim is fixture *equality*, so there is no marker table to mutate. But it
+also runs `check_shape` over every captured layout before comparing, and that
+validator has five properties worth guarding: a header, a terminator, well-formed
+rows, a declared count matching the rows carried, and ascending slot numbers.
+Each is driven from a real blessed fixture, so no boot is needed.
 
 **The stream gate is covered by flattening `CHAINS`.** It declares its markers as
 twelve per-causal-chain groups rather than one flat table, because its claim is
@@ -104,10 +108,12 @@ from coupling to each gate's private helper set.
 
 ## Open risks and follow-ups
 
-`check-sel4-boot-layout.py` has no negative control. Its claim is fixture
-equality rather than marker presence, so the analogous guard would mutate a
-blessed layout fixture and assert the comparison fails — a different mechanism
-than this control, and worth its own slice.
+Every seL4 gate now has a negative control. What remains uncovered is narrower:
+the boot-layout gate's *equality* comparison itself — that a layout differing from
+its fixture is reported — is not driven here, only its structural validator. That
+comparison is four lines of `observed == expected`, and exercising it would mean
+mutating a blessed fixture on disk during a check, which trades a real risk of
+leaving the tree dirty for very little.
 
 The control proves a gate rejects a transcript *missing* evidence. It does not
 prove the gate's markers correspond to the behaviour their descriptions claim;

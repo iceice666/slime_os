@@ -221,15 +221,67 @@ def check_gate(name: str, relative_path: str, expected_required: int) -> int:
     return len(lines) + 1 + len(failures)
 
 
+def check_layout_gate() -> int:
+    """The boot-layout gate's structural validator, driven with broken fixtures.
+
+    That gate's claim is fixture *equality*, so it has no marker table to mutate.
+    But it also runs `check_shape` over every captured layout before comparing,
+    and that validator has properties worth guarding: a header, a terminator,
+    well-formed rows, a declared count matching the rows carried, and ascending
+    slot numbers. Each is driven here from a real blessed fixture, so a
+    `check_shape` that stopped enforcing one would be caught without a boot.
+    """
+    gate = load_script("sel4_boot_layout", "check/check-sel4-boot-layout.py")
+    fixture = (
+        ROOT / "contracts" / "boot-layout" / "v1" / "fixtures" / "sel4-channel.layout"
+    )
+    if not fixture.is_file():
+        fail(f"missing blessed fixture: {fixture}")
+    baseline = fixture.read_text(encoding="utf-8")
+
+    def rejects_shape(text: str) -> bool:
+        try:
+            gate.check_shape("control", text)
+        except SystemExit:
+            return True
+        return False
+
+    if rejects_shape(baseline):
+        fail("boot-layout gate rejected its own blessed fixture")
+
+    lines = baseline.splitlines()
+    mutations: tuple[tuple[str, str], ...] = (
+        ("header removed", "\n".join(lines[1:]) + "\n"),
+        ("terminator removed", "\n".join(lines[:-1]) + "\n"),
+        (
+            "declared count disagrees with the rows carried",
+            baseline.replace("slots=2", "slots=3", 1),
+        ),
+        (
+            "row is malformed",
+            baseline.replace("[layout] 3 endpoint", "[layout] endpoint", 1),
+        ),
+        (
+            "slot numbers descend",
+            "\n".join([lines[0], lines[2], lines[1], *lines[3:]]) + "\n",
+        ),
+    )
+    for description, text in mutations:
+        if not rejects_shape(text):
+            fail(f"boot-layout gate accepted a layout whose {description}")
+    return len(mutations)
+
+
 def main() -> None:
     if Path_cwd() != ROOT:
         fail(f"run from repository root: {ROOT}")
     total = 0
     for name, relative_path, expected_required in GATES:
         total += check_gate(name, relative_path, expected_required)
+    total += check_layout_gate()
     print(
-        f"seL4 gate control check: {len(GATES)} gates reject "
-        f"{total} mutated transcripts"
+        f"seL4 gate control check: {len(GATES) + 1} gates reject "
+        f"{total} mutated transcripts and layouts"
     )
 
 

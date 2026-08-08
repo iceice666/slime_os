@@ -206,7 +206,7 @@ rather than inheriting a sweep done while fixing something else.
       proof that a failing assertion is observable at all. The ten seL4 gates
       are marker-matching Python checkers, and nothing in-repo demonstrated that
       a missing marker fails one. **Closed** by `just sel4_gate_control_check`,
-      which drives eight gates' own marker tables with 356 transcripts that are
+      which drives all ten gates with 439 transcripts and layouts that are
       wrong in one specific way — a marker deleted, two transposed, a failure
       marker appended — and pins each gate's required-marker count so a gate
       losing coverage is a red gate rather than a smaller number. See
