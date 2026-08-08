@@ -437,11 +437,58 @@ readings excluded. Established beyond doubt:
 * It is triggered by one fixture field — `retained` on the diagnostics participant —
   and that same field buys two of the five observed C8.5 arms.
 
-**Exit condition unchanged**, and the next step is now a build change rather than
-another read: rebuild seL4 with thread-name support (`tcbName` is absent from this
-configuration, so `seL4_DebugNameThread` stores nothing and `ksDebugTCBs` is not
-walkable) so a scheduler dump names every thread and its state at once. Every
-cheaper avenue is exhausted and recorded above.
+**The kernel state was misread, and reading it correctly changes the diagnosis.**
+`CONFIG_DEBUG_BUILD` *is* set in `build/sel4-qemu/gen_config/kernel/gen_config.h`, so
+`tcbDebugNext`/`tcbName` do exist; lldb could not see them because they live in a
+separate `debug_tcb` struct placed inside the TCB's CTE array
+(`TCB_PTR_DEBUG_PTR(p) = TCB_PTR_CTE_PTR(p, tcbArchCNodeEntries)`), not in `tcb_t`.
+The list is walkable at `(tcb & ~0x7ff) + 0xa0`, and walking it finds seven threads.
+
+An earlier hand-rolled `state` read reported all of them `Running`, which is
+impossible on one core and was the tell that the offset arithmetic was wrong. Reading
+`tcbState.words[0] & 0xf` through the debug info instead — the same expression
+`thread_state_get_tsType` uses — gives:
+
+|TCB|`tsType`|Meaning|
+|---|---|---|
+|`0x80604f6c00`|4|`BlockedOnSend`|
+|`0x80604b7c00`|4|`BlockedOnSend`|
+|`0x8060473c00`|4|`BlockedOnSend`|
+|`0x8060433c00`|4|`BlockedOnSend`|
+|`0x80603f2c00`|5|`BlockedOnReply`|
+|`0x8060030c00`|7|`IdleThreadState` (prio 0)|
+|`0x807fd8a400`|0|**`Inactive`** — the root task|
+
+The idle thread reading `IdleThreadState` rather than `Inactive` is the control that
+confirms the typed read is right and the raw one was not. **So there is no Running
+unqueued thread and no scheduler inconsistency.** Every prior paragraph resting on
+that — the "kernel-level inconsistency", the dropped pending switch, the
+`possibleSwitchTo` third-branch theory — is void. The ready queues are empty because
+every thread is legitimately blocked.
+
+**The root task is `Inactive`: it returned.** And the transcript shows why that is
+fatal — the last lines are the root's own accounting, printed *after* the serve loop
+fell out, including `replies owed count=1` / `reply owed task=6`. The serve loop
+(`slime-root/src/main.rs:1522`) is `for _ in 0..MAX_GRAPH_ITERATIONS { if live == 0
+{ break } … }`. With `sends=41 receives=37 parks=33`, roughly 111 operations ran
+against a bound of 512, so the loop did **not** exhaust its iteration budget — it left
+by `live == 0`.
+
+**That is the defect, and it is in the root, not in seL4.** `init` (task 6) parks at
+transcript line 224 (`parked task=6 reason=wait`) and is never woken; meanwhile the
+root's live count reaches zero and it exits *while still owing that reply*, then goes
+`Inactive` so nothing can ever answer. The four `BlockedOnSend` children are blocked
+sending to a root that is gone. `fabric-publisher` never resuming is a *symptom* of
+the root's early exit, not an independent fault — which is why nineteen readings aimed
+at the reply path all came back clean.
+
+**Exit condition unchanged**, and the remaining work is now well-posed and local:
+`live == 0` must not be treated as a healthy exit while `parked` is non-empty. The
+loop already computes both. Either condition is a bug worth its own marker — a graph
+that settles with replies owed is not a graph that completed — and the fix belongs
+beside the `replies owed` accounting that already detects it. Note this also explains
+why `live == 0` was reachable at all: every *other* task had been reclaimed, so the
+only thing keeping the graph alive was a parked task the loop does not count.
 
 **One wider finding stands regardless of B28**, and it is worth its own slice:
 `sel4_transport::wait` returns `()`, so its staging-failure branch can only
