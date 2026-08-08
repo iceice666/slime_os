@@ -1328,7 +1328,17 @@ rule, and a SHA-256 state root. Thirteen are now host-tested and Miri-clean with
 three fault injections confirmed; see
 [`devlog/2026-08-07-p5-4-2-recovery-index/`](../devlog/2026-08-07-p5-4-2-recovery-index/index.md).
 
-The rest need a block device. `slime-root` has none: its object allocator
+The store itself moved too, and P5.4.1's "the rest need a block device" was half
+wrong: `ObjectStore` reads and writes through a three-method `BlockIo` trait, not a
+device handle, so an in-memory disk satisfies it — including one that fails at a
+chosen write. Append/commit, crash consistency at every commit boundary, slot
+alternation, monotonic sequence, and content-addressed integrity are now ten host
+tests in `boot-contracts::object_store`; see
+[`devlog/2026-08-07-p5-4-2-object-store/`](../devlog/2026-08-07-p5-4-2-object-store/index.md).
+Flush *ordering* stays uncovered, because an in-memory disk makes every write
+durable immediately.
+
+What is left needs a real block device. `slime-root` has none: its object allocator
 skips every device untyped (`object_allocator.rs`, `descriptor.is_device()`),
 so it holds no MMIO region and no DMA-capable frame, and its only interrupt
 surface is `IRQControl` for the timer. Append/commit behaviour, GPT partition
