@@ -1338,6 +1338,15 @@ tests in `boot-contracts::object_store`; see
 Flush *ordering* stays uncovered, because an in-memory disk makes every write
 durable immediately.
 
+**M5's portable surface is now exhausted**, which is worth stating so the next
+author does not re-audit it. Every module in `boot-contracts` with logic carries
+tests, and the storage modules that remain in `kernel/src/storage/` are device-bound
+by their entry points rather than by convention: `recovery.rs::reconstruct` takes a
+`PciFunctionInfo` and initialises a `BlockDevice` before doing anything, and
+`transfer.rs` does the same. Neither has a byte-decidable core left to lift — the
+recovery *index* decoder was already the portable half and is tested in
+`boot-contracts::recovery`.
+
 What is left needs a real block device. `slime-root` has none: its object allocator
 skips every device untyped (`object_allocator.rs`, `descriptor.is_device()`),
 so it holds no MMIO region and no DMA-capable frame, and its only interrupt
