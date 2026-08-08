@@ -1124,10 +1124,17 @@ fn consume_supervision(control: u32, route: &[u8; 32], direction: u32) -> u32 {
     let mut caps = [0u64; MAX_CAPS_PER_MSG];
     loop {
         match slime_rt::recv(control, &mut bytes, &mut caps) {
-            ERR_WOULDBLOCK => {
-                slime_rt::yield_now();
-                continue;
-            }
+            // Park, not `yield_now`. A yield is `seL4_Yield`, which the root task
+            // never observes, so a broker waiting here for a handle that never
+            // arrives burned the root's iteration budget and the graph died with
+            // `graph iterations exhausted` naming no cause. Parking makes the same
+            // wait visible: the root records `parked task=N reason=wait` and its
+            // owed-reply accounting names the broker.
+            //
+            // `consume_request` in this same file already parks on this identical
+            // channel, and `operation_broker.rs::consume_supervision` parks too —
+            // this was the one arm that did not.
+            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(control)]),
             value if value < 0 => fail(b"supervision receive"),
             value => {
                 if value as usize != MAX_MSG || caps[0] == 0 {

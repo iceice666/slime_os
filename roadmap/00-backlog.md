@@ -960,14 +960,19 @@ Observed: `[fabric-call] fail: time phase receive` is gone and replaced by
 green.
 
 **The plane still does not complete, and the remaining gap is now located exactly.**
-It wedges with no component failure — `graph iterations exhausted live=11 parked=9`.
+It wedged with no component failure — `graph iterations exhausted live=11 parked=9`.
 Tracing it:
 
-* The broker is task 6. It receives once on channel 4 and then goes silent — it
-  never replies and never parks, so it is spinning inside
-  `call_broker.rs::consume_supervision`, whose `ERR_WOULDBLOCK` arm is
-  `yield_now()` — invisible to the root, which is why the graph exhausts its
-  budget rather than reporting anything.
+* The broker is task 6. It received once on channel 4 and then went silent — it
+  never replied and never parked, because
+  `call_broker.rs::consume_supervision`'s `ERR_WOULDBLOCK` arm was `yield_now()`,
+  which is `seL4_Yield` and invisible to the root. **Fixed:** that arm now parks
+  with `wait(&[WaitSource::Endpoint(control)])`, matching `consume_request` in the
+  same file and `operation_broker.rs::consume_supervision`, both of which already
+  parked — this was the one arm that did not. The plane now reports
+  `parked task=6 reason=wait` and reaches a genuine all-parked deadlock instead of
+  burning the root's iteration budget, which is a strictly better failure: the
+  root's accounting can name the waiter. All eight other plane gates re-run green.
 * `consume_supervision` waits for a descriptor carrying a `RIGHT_SUPERVISE`
   handle naming the *participant*, on that participant's control channel.
 * **Nothing on this plane sends one.** `drive_call_plane` (the seL4 path;
