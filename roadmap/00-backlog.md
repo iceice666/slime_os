@@ -1049,6 +1049,36 @@ the same participant handle to the fabric *and* keep its own for the termination
 wait. But B25's core question is unavoidable, and it is a model decision the way
 the entry always said.
 
+**A third route was looked for and does not exist.** The obvious workaround is for
+init to mint a *fifth* pair as a private delegation channel — grant one half to the
+fabric, keep the other, and deliver the derived handles over it. That fails on a
+stated constraint rather than a mechanism: the broker reads each participant's
+supervision handle from `client_control[index]`
+(`call_broker.rs:273-275`), the participant's *own* control channel, and
+`init.rs:1907` records that `consume_supervision` "cannot tell the two paths
+apart, which is what keeps the broker unmodified". Routing delegation over a
+different channel means changing the broker, and an altered broker is no longer
+the same composition the oracle's gate asserts — which is the property P5.4 exists
+to preserve.
+
+**Sizing the two real options, so the decision is informed:**
+
+* *Copying endpoint grant.* `ChannelTable` resolves a queue by holder through two
+  fields, `producer` and `consumer` (`channel.rs:134-137`), with `recv_queue_mut`
+  matching a task against them. Admitting two holders per end means changing that
+  representation and every path that reads it — the widest change of the three, and
+  it touches all nine passing planes.
+* *Self-naming supervision handle at spawn.* `construct_child` builds the child's
+  table and `serve_spawn` installs the parent's handle after it; adding one more
+  install is mechanically small. The cost is semantic, not structural: a component
+  would hold `RIGHT_SUPERVISE` naming itself, which makes `supervision_status` on
+  oneself reachable and needs an argument about what that means before it is
+  admitted.
+
+Neither is written here, because both change what a capability *means* on every
+plane and that is a decision to take deliberately rather than as a side effect of
+unblocking one gate.
+
 **Exit condition:** A parent grants one end of a minted pair at spawn, uses the
 other end afterwards to deliver a capability to that child, and the child
 observes it — asserted on a plane that declares such a composition, with a
