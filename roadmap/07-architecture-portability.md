@@ -1236,7 +1236,7 @@ compose the earlier.
 
 | Slice | Uncovered | Shape |
 | --- | --- | --- |
-| P5.4.2 | M5.1–M5.9 | **In progress** — ten storage/rollback/recovery gaps. Structural: five of the nine `Mediation::Unavailable` planes are M5's surface. Carries `object_store.rs`'s 32 ungated assertions, of which the eight superblock-shaped ones are now portable and host-tested in `boot-contracts` (see [`devlog/2026-08-07-p5-4-2-store-superblock/`](../devlog/2026-08-07-p5-4-2-store-superblock/index.md)); the rest need a block device `slime-root` does not have |
+| P5.4.2 | M5.1–M5.9 | **In progress** — ten storage/rollback/recovery gaps. Structural: five of the nine `Mediation::Unavailable` planes are M5's surface. Carries `object_store.rs`'s 32 ungated assertions, of which the eight superblock-shaped ones are now portable and host-tested in `boot-contracts` (see [`devlog/2026-08-07-p5-4-2-store-superblock/`](../devlog/2026-08-07-p5-4-2-store-superblock/index.md)). The recovery index decoder had no tests either; thirteen added (see [`devlog/2026-08-07-p5-4-2-recovery-index/`](../devlog/2026-08-07-p5-4-2-recovery-index/index.md)). The rest need a block device `slime-root` does not have |
 | P5.4.3 | M6.1–M6.7 | **In progress** — five gaps (directory, dango, generation commands, powerbox, transfer) and two partials (M6.1 v2 determinism, M6.2 protocol surface). M6.7's manifest decoder had no tests at all; thirteen are now host-tested and Miri-clean with three fault injections confirmed, which is unit evidence only. See below |
 | P5.4.4 | C8.2 | **Complete** — aggregate fabric-graph admission before component launch; see below |
 | P5.4.5 | C8.5 | **In progress** — reliable/retained/timed QoS, plus the two C8.5 assertions colocated in `kernel/tests/fabric_stream.rs`. Three arms already ran on the seL4 stream plane unasserted (matching-before-data, bounded loss under a stall, peer death as a distinct event) and are now gated. An eleventh image, `sel4-qos`, adds the monotonic-time channel those arms needed, and five more now fire — RELIABLE retry accounting, retry exhaustion, deadline miss, lifespan expiry, liveliness loss. `no inline retained publisher` is gone, resolved by giving `fabric-publisher-b`'s diagnostics participant a `retained` route so the fabric holds an inline retained head independent of publisher timing. Lease and tie ordering stay unobserved and no gate is registered: the plane wedges before its final marker, because `fabric-publisher` blocks in one `SYS_WAIT` that never returns even though the root answers it on the correct reply CSlot. Tracked as B28. See [`devlog/2026-08-07-p5-4-5-qos-arms/`](../devlog/2026-08-07-p5-4-5-qos-arms/index.md) and [`devlog/2026-08-07-p5-4-5-qos-clock/`](../devlog/2026-08-07-p5-4-5-qos-clock/index.md) |
@@ -1312,6 +1312,13 @@ Split by what the property actually needs. Eight of those assertions are
 from bytes alone — and are now portable, host-tested, and Miri-clean in
 `boot-contracts::store_disk`; see
 [`devlog/2026-08-07-p5-4-2-store-superblock/`](../devlog/2026-08-07-p5-4-2-store-superblock/index.md).
+
+The recovery index — which generation to recover to, the LBA span holding its
+state objects, and a content-addressed root over every state binding — likewise
+had **no tests at all**, despite eight error variants, a strict ascending-order
+rule, and a SHA-256 state root. Thirteen are now host-tested and Miri-clean with
+three fault injections confirmed; see
+[`devlog/2026-08-07-p5-4-2-recovery-index/`](../devlog/2026-08-07-p5-4-2-recovery-index/index.md).
 
 The rest need a block device. `slime-root` has none: its object allocator
 skips every device untyped (`object_allocator.rs`, `descriptor.is_device()`),
