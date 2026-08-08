@@ -800,11 +800,32 @@ which only the broker fills; `init` waits on a supervision handle. Nothing can
 move because the one task that would break the cycle — task 10 — is parked and
 **is not owed a reply by the root**, having been answered already.
 
-Twenty-eight readings excluded. **Exit condition unchanged**, and the remaining
-question is the narrowest it has been: `fabric-publisher` was answered, holds the
-send half of channel 22, and did not send. Its own code between the role reply and
-its first publish is now the entire search space — no root layer, no kernel layer,
-and no other component is implicated. B28 stays open; the two park-set spins fixed under it
+**Narrowed once more, to a two-line difference between the two transcripts.**
+`fabric-publisher`'s `receive_role` loop runs **twice** — a publisher role is two
+capabilities, a send-only data endpoint and a receive-only credit endpoint
+(`fabric-publisher.rs:126-143`). Both planes deliver exactly two transfers to task
+10. The difference is what happens next:
+
+| | stream (passes) | QoS (wedges) |
+|---|---|---|
+| `parked task=10 reason=wait` | line 280 | line 283 |
+| `capability transferred … to=10` ×2 | 283, 285 | 286, 288 |
+| **`received task=10 channel=5`** | **299, 300** | **never** |
+| `[fabric-publisher] publish role received` | printed | never |
+
+So the transfers land identically and the *receives* do not happen on the QoS
+plane. Task 10 is parked, is owed nothing by the root (it is absent from the
+`wedged waiter` list), and never performs the `recv` that would collect the
+capabilities already delivered to it.
+
+Twenty-nine readings excluded. **Exit condition unchanged.** The remaining question
+is why the wake for a `cap_transfer`-delivered capability reaches task 10 on one
+plane and not the other, given that `send_atomic` reports
+`xfer wake present=true target=10` on both and the reply CSlot matches its park.
+Every layer has now been measured on the failing plane; the untried measurement is
+the same one on the *passing* plane, so the two can be diffed rather than reasoned
+about — which is the technique that produced this table and the `wedged waiter`
+list before it. B28 stays open; the two park-set spins fixed under it
 (`d69cd8e`) were real and are kept. B28 stays open; the two park-set spins fixed under it (`d69cd8e`) were real
 and are kept.
 Re-check this entry after B25 lands rather than investigating it further on its own.
