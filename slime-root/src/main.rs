@@ -1519,8 +1519,23 @@ fn serve_component_graph(
     // here rather than in either task's table, because in flight they belong to
     // neither; see `transit.rs`.
     let mut transit = Transit::new();
+    let mut iterations = 0;
     for _ in 0..MAX_GRAPH_ITERATIONS {
+        iterations += 1;
         if live == 0 {
+            // A graph that runs out of live tasks while a park is outstanding
+            // did not settle: the parked task is blocked on a reply only this
+            // loop can send, and leaving here makes the root return, which
+            // marks it `Inactive` and strands every child still sending to it.
+            // Reported rather than broken out of silently, because the boot
+            // otherwise ends with an ordinary accounting summary and looks
+            // healthy — that is precisely how B28 hid.
+            if !parked.is_empty() {
+                fatal!(
+                    "SLIME_GRAPH FAIL graph settled with replies owed count={}",
+                    parked.len(),
+                )
+            }
             break;
         }
         // Through `recv_request` rather than a hand-rolled register read, so the
@@ -2216,6 +2231,17 @@ fn serve_component_graph(
                 ipc::reply(response);
             }
         }
+    }
+    // The loop's bound is a wedge detector, not a schedule: a graph that
+    // settles leaves by `live == 0` well inside it. Reaching the last
+    // iteration with tasks still live means no arrival advanced the graph, and
+    // the accounting below would otherwise print an ordinary-looking summary —
+    // exactly how B28 stayed invisible while `init` sat parked forever.
+    if iterations == MAX_GRAPH_ITERATIONS && live != 0 {
+        fatal!(
+            "SLIME_GRAPH FAIL graph iterations exhausted live={live} parked={}",
+            parked.len(),
+        )
     }
     sel4::debug_println!(
         "SLIME_GRAPH served live={live} unsupported={unsupported} unimplemented={unimplemented} buffers={buffers_served} windows={} tables={}",

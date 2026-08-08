@@ -474,21 +474,35 @@ fell out, including `replies owed count=1` / `reply owed task=6`. The serve loop
 against a bound of 512, so the loop did **not** exhaust its iteration budget — it left
 by `live == 0`.
 
-**That is the defect, and it is in the root, not in seL4.** `init` (task 6) parks at
-transcript line 224 (`parked task=6 reason=wait`) and is never woken; meanwhile the
-root's live count reaches zero and it exits *while still owing that reply*, then goes
-`Inactive` so nothing can ever answer. The four `BlockedOnSend` children are blocked
-sending to a root that is gone. `fabric-publisher` never resuming is a *symptom* of
-the root's early exit, not an independent fault — which is why nineteen readings aimed
-at the reply path all came back clean.
+**The `live == 0` reading was wrong too, and the loop's own marker says so.** A guard
+was added making an owed reply at `live == 0` fatal; it did **not** fire. The
+post-loop line then gave the answer directly: `served live=5`. The loop leaves with
+**five tasks still live** and one reply owed, so it exits by exhausting
+`MAX_GRAPH_ITERATIONS` — the root spins 512 times without any arrival advancing the
+graph, then returns, which is what marks it `Inactive`.
 
-**Exit condition unchanged**, and the remaining work is now well-posed and local:
-`live == 0` must not be treated as a healthy exit while `parked` is non-empty. The
-loop already computes both. Either condition is a bug worth its own marker — a graph
-that settles with replies owed is not a graph that completed — and the fix belongs
-beside the `replies owed` accounting that already detects it. Note this also explains
-why `live == 0` was reachable at all: every *other* task had been reclaimed, so the
-only thing keeping the graph alive was a parked task the loop does not count.
+**So the defect is a genuine wedge, and it was silent.** Falling out of the bound was
+indistinguishable from settling: the root printed its ordinary accounting summary and
+the boot looked healthy apart from a missing final marker. That is exactly how B28
+stayed invisible through nineteen readings aimed at the reply path — `fabric-publisher`
+never resuming is a *symptom* of the root going away, not an independent fault, and the
+four `BlockedOnSend` children are blocked sending to a root that is gone.
+
+**Fixed to that extent: the wedge is now reported.** `serve_component_graph` counts its
+iterations and, on reaching the bound with tasks still live, fails with
+`SLIME_GRAPH FAIL graph iterations exhausted live=5 parked=1` — observed on the QoS
+plane. All nine passing planes were re-run and stay green, so the detector
+distinguishes a wedged graph from a settled one rather than tripping on both. The
+`live == 0` guard is kept beside it: unreachable today, but it is the other way a
+graph can end owing a reply.
+
+**Exit condition unchanged, and what remains is now a bounded question rather than a
+search:** which arrival should have advanced the graph and does not. The loop serves
+~111 operations and then spins, so the next step is to log the operation label seen on
+the final few iterations — the wedge marker gives a precise place to attach that.
+`init` parks at transcript line 224 (`parked task=6 reason=wait`) and nothing ever
+wakes it; with the root confirmed to be spinning rather than absent, that wake is the
+single thing missing.
 
 **One wider finding stands regardless of B28**, and it is worth its own slice:
 `sel4_transport::wait` returns `()`, so its staging-failure branch can only
