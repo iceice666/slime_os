@@ -844,10 +844,35 @@ send is served.** That is the same class as the two park-set spins fixed in
 plane depends on one fixture field: `retained` diagnostics add the route whose
 source never quiesces.
 
-Thirty readings excluded. **Exit condition unchanged**, and the remaining work is
-bounded: instrument `park_on_streams` to print which slot it returns on, on the pass
-after each `idle: parked` line. The set is at most five entries and one of them is
-ready when it should not be. B28 stays open; the two park-set spins fixed under it
+**The park set was printed, and it narrows the candidate to one slot without yet
+convicting it.** Instrumenting `park_on_streams` to dump its contents gives, across
+the ten cycles:
+
+```
+20 11 13 15 09  <- park set   (×5)
+20 11 15 09     <- park set   (×3)
+20 11 15        <- park set   (×1)
+```
+
+Slots 09 and 13 correctly drop out as their peers retire. **Slot 20 is present in
+every set including the last.** It is the broker's half of channel key 22
+(`endpoint minted task=9 key=22 slots=20,21`) — `fabric-publisher`'s route, the same
+channel the wedge diagnostic reports the broker waiting to receive on.
+
+**But that does not by itself explain the wake**, and the distinction matters:
+`ChannelTable::is_ready` for a `Receive` target is `len != 0 || !peer_alive`, and
+task 10 is alive and has sent nothing, so key 22 should be *not* ready. Being
+present in the park set is not the same as being ready.
+
+So the remaining question is one predicate on one channel: what makes the root
+answer `wait` immediately when key 22 is in the set. Either `receive_ready` sees a
+queued message that the broker's `recv` then fails to take, or the set contains a
+second target on key 22 whose readiness differs — the broker pushes a publisher's
+data slot and a subscriber's *ack* slot, and slot 21 is key 22's other half.
+
+Thirty-one readings excluded. Every layer above this predicate is now measured:
+task 10 answered and unparked, the kernel's per-thread states, the root's iteration
+accounting, the broker's own loop not spinning, and the park set's exact contents. B28 stays open; the two park-set spins fixed under it
 (`d69cd8e`) were real and are kept. B28 stays open; the two park-set spins fixed under it (`d69cd8e`) were real
 and are kept.
 Re-check this entry after B25 lands rather than investigating it further on its own.
