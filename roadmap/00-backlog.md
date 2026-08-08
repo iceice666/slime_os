@@ -893,6 +893,35 @@ same task, which is a copy of authority the caller already holds and widens
 nothing. That would make the inverted order carry the whole plane, leaving the
 endpoint move/copy question a real but no longer blocking difference.
 
+**Third option implemented, 2026-08-07.** `supervision_derive` (operation 32)
+exists and is gated. A caller holding `RIGHT_SUPERVISE` on a supervision handle
+receives a second capability naming the same task at the same rights, in a fresh
+slot, keeping the source. Root side is `serve_supervision_derive`
+(`slime-root/src/main.rs`); the ABI is mirrored in both component transports.
+
+It widens nothing by construction — same task, same rights, `RIGHT_SUPERVISE`
+required to ask — so it cannot mint authority the caller could not already have
+transferred. `graph::holds_supervision` already scanned every live table for *any*
+holder, because a handle has always been movable, so reclamation needed no change.
+
+**Observed on the supervision plane**, which is the one plane where init holds a
+handle it has not yet given away:
+`SLIME_GRAPH supervision derived task=0 child=3 slot=5`, then the *derived* handle
+answers the child's outcome, then the source is still intact for the existing
+transit transfer. Both markers are gated in
+`check-sel4-supervision-plane.py`. Two fault injections confirmed: returning the
+source slot instead of a new one, and installing the derived handle with no
+rights, each trip a distinct component assertion. A third — dropping the
+`RIGHT_SUPERVISE` gate — is **not** covered, because every caller on this plane
+holds that right; recorded rather than claimed.
+
+**This does not yet close B25.** The operation removes the *second* reason the call
+plane could not be composed (init needing two `RIGHT_SUPERVISE` handles naming the
+fabric, one per lender). The first reason stands: the endpoint move/copy divergence
+is still real, and `launch_fabric_calls` still has to be restructured to the
+inverted spawn order for the derive to be useful there. That restructuring is the
+remaining work, and it is now a composition change rather than a model decision.
+
 **Exit condition:** A parent grants one end of a minted pair at spawn, uses the
 other end afterwards to deliver a capability to that child, and the child
 observes it — asserted on a plane that declares such a composition, with a

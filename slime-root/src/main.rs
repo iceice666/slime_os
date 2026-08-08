@@ -1854,6 +1854,22 @@ fn serve_component_graph(
                     Response::error(IpcError::BadCapability)
                 });
             }
+            // B25: a second supervision handle naming a task the caller already
+            // supervises.
+            //
+            // Each spawn returns exactly one handle, and neither route places it
+            // twice — a spawn grant copies but must run before the child exists,
+            // and `CapTransfer` moves. So a parent that must introduce one child
+            // to two others could not, despite holding the authority.
+            //
+            // Authority is unchanged by construction: the new capability names
+            // the same task, and its rights are the source's own, so this can
+            // only ever produce a handle the caller could already have passed on.
+            // `RIGHT_SUPERVISE` is required to ask, which is the same gate
+            // `serve_supervision_status` gates a query behind.
+            Operation::SupervisionDerive => {
+                ipc::reply(serve_supervision_derive(graph, id, &words));
+            }
             // Emit a component's diagnostic line as one uninterruptible unit
             // (B18).
             //
@@ -3806,6 +3822,71 @@ fn serve_supervision_status(
         task.0,
     );
     Response::success(kind, detail)
+}
+
+/// Install a second capability naming a task the caller already supervises (B25).
+///
+/// The oracle has no counterpart: on x86 a spawn grant *copies*, so a parent can
+/// hand the same handle to any number of children by granting it at each spawn.
+/// On seL4 a grant must run before the child exists and `cap_transfer` moves, so
+/// a parent that must introduce one child to two later siblings has no route —
+/// which is B25's blocking half.
+///
+/// Widens nothing, and that is the whole argument for adding an operation rather
+/// than changing the move/copy semantics of an existing one:
+///
+/// * the result names the *same* task, so no new subject becomes reachable;
+/// * its rights are the source's own, so no new verb becomes permitted;
+/// * `RIGHT_SUPERVISE` on the source is required to ask, the same gate
+///   `serve_supervision_status` puts in front of a query.
+///
+/// So a caller can only ever mint a handle it could already have transferred.
+/// `Terminations` is unaffected: `graph::holds_supervision` already scans every
+/// live table for *any* holder, because a handle has always been movable, and a
+/// second holder is the same shape as the first.
+fn serve_supervision_derive(
+    graph: &mut GraphTables,
+    id: TaskId,
+    words: &[sel4::Word; ipc::FAST_MESSAGE_REGISTERS],
+) -> Response {
+    let slot = words[0] as u32;
+    let Ok(capability) = graph
+        .get(id)
+        .ok_or(IpcError::InvalidOperation)
+        .and_then(|table| table.resolve(slot, RIGHT_SUPERVISE))
+    else {
+        return Response::error(IpcError::BadCapability);
+    };
+    let graph::Capability {
+        resource: graph::Resource::Supervision { task },
+        rights,
+    } = capability
+    else {
+        return Response::error(IpcError::BadCapability);
+    };
+    // From slot 1 for the same reason spawn's own install does: slot 0 is the
+    // component's control endpoint and is never handed out by the root.
+    let Some(derived) = graph.get_mut(id).and_then(|table| {
+        let free = table.free_slot_from(1)?;
+        table
+            .install(
+                free,
+                graph::Capability {
+                    resource: graph::Resource::Supervision { task },
+                    rights,
+                },
+            )
+            .ok()?;
+        Some(free)
+    }) else {
+        return Response::error(IpcError::DestinationSlotsExhausted);
+    };
+    sel4::debug_println!(
+        "SLIME_GRAPH supervision derived task={} child={} slot={derived}",
+        id.0,
+        task.0,
+    );
+    Response::success(0, sel4::Word::from(derived))
 }
 
 /// Move one capability to a channel's peer, narrowed to exactly the mask its

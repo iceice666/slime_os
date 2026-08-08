@@ -20,7 +20,7 @@ pub const MAX_WAIT_SOURCES: usize = 9;
 /// Message registers the AArch64 fast path carries in architectural registers.
 pub const FAST_MESSAGE_REGISTERS: usize = sel4::NUM_FAST_MESSAGE_REGISTERS;
 /// Highest label an operation may carry; see [`Operation`].
-pub const MAX_OPERATION_LABEL: u16 = Operation::TransferWindowBind as u16;
+pub const MAX_OPERATION_LABEL: u16 = Operation::SupervisionDerive as u16;
 
 // The four-MR fast path and the four-capability logical bound are independent
 // facts that happen to agree on AArch64. Pin the transport side so a profile
@@ -125,6 +125,19 @@ pub enum Operation {
     /// oversized payloads through. Only the native transport emits it; the
     /// legacy trap ABI addresses caller memory directly and has no window.
     TransferWindowBind = 31,
+    /// Obtain a second capability naming a task the caller already supervises.
+    ///
+    /// B25: each spawn returns exactly one supervision handle, and both a
+    /// spawn grant and a `CapTransfer` can place it with only one receiver — a
+    /// grant because it must run before the child exists, a transfer because it
+    /// moves. A parent that must introduce one child to two others therefore
+    /// cannot, even though it holds the authority to do so.
+    ///
+    /// This widens nothing: the result names the same task at rights the caller
+    /// already holds, and `RIGHT_SUPERVISE` on the source is required to ask.
+    /// It is the supervision analogue of `EndpointCreate` — the caller mints
+    /// from authority it has rather than acquiring any.
+    SupervisionDerive = 32,
 }
 
 impl Operation {
@@ -162,6 +175,7 @@ impl Operation {
             29 => Self::SharedBufferRevoke,
             30 => Self::CapTransfer,
             31 => Self::TransferWindowBind,
+            32 => Self::SupervisionDerive,
             _ => return Err(IpcError::InvalidOperation),
         })
     }
@@ -200,7 +214,8 @@ impl Operation {
             | Self::SharedBufferReturn
             | Self::SharedBufferRevoke
             | Self::CapTransfer
-            | Self::TransferWindowBind => Mediation::RootService,
+            | Self::TransferWindowBind
+            | Self::SupervisionDerive => Mediation::RootService,
             // Storage, directory, input, recovery, and generation planes have
             // no seL4 mechanism owner in this cutover. They answer with the
             // ordinary Slime error rather than faulting the caller.

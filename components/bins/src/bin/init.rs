@@ -2288,6 +2288,27 @@ fn drive_supervision_plane() {
         rights_mask: RIGHT_SUPERVISE,
         route_identity: [0u8; 32],
     };
+    // ---- B25: a second handle naming a task already supervised ----
+    //
+    // Asserted here because this is the one plane where init holds a supervision
+    // handle it has not yet given away. The derived handle must be usable on its
+    // own *and* leave the source usable, which is the whole point: a spawn grant
+    // copies but must precede the child, and `cap_transfer` moves, so before this
+    // operation a parent could not introduce one child to two others.
+    let derived = slime_rt::supervision_derive(in_flight.supervision_slot)
+        .unwrap_or_else(|_| fail_supervision(b"derive a second supervision handle"));
+    if derived == in_flight.supervision_slot {
+        fail_supervision(b"derive returned the source slot");
+    }
+    // Both name the same child, and that child has already terminated above, so
+    // each handle independently reports the same outcome. Querying the derived
+    // one first proves it carries real authority rather than being a placeholder;
+    // `supervision_status` consumes the slot it answers, which is why the source
+    // is still intact for the transfer below.
+    if !matches!(slime_rt::supervision_status(derived), Ok(Some(_))) {
+        fail_supervision(b"derived handle reported no outcome");
+    }
+    slime_rt::debug_write(b"[init] second supervision handle derived\n");
     if slime_rt::cap_transfer(
         transit_send,
         in_flight.supervision_slot,

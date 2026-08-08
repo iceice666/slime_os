@@ -81,6 +81,22 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"SLIME_ROOT allocator slots=\d+ untypeds=\d+ bytes=\d+",
     ),
     (
+        # B25: `supervision_derive` gives a parent a second handle naming a task
+        # it already supervises. Before it, each spawn returned exactly one and
+        # neither a spawn grant nor a `cap_transfer` could place it twice — a
+        # grant because it must precede the child, a transfer because it moves.
+        # Init derives here while it still holds the source, queries the *derived*
+        # handle for the child's outcome, and then transfers the source, so the
+        # marker proves the copy carries real authority and leaves the original
+        # intact.
+        "the root recorded the derive",
+        r"SLIME_GRAPH supervision derived task=\d+ child=\d+ slot=\d+",
+    ),
+    (
+        "a second supervision handle was derived and carried real authority",
+        r"\[init\] second supervision handle derived",
+    ),
+    (
         # Parked before the loop and collected only after it. From the send
         # until the matching recv the capability is held by no table at all.
         "a supervision handle was parked in transit before the crossing",

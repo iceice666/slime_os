@@ -18,8 +18,8 @@ pub use syscall::{
     generation_transact, health_confirm, input_read, recovery_reconstruct, recv, send,
     shared_buffer_create, shared_buffer_loan, shared_buffer_loan_map, shared_buffer_map,
     shared_buffer_release, shared_buffer_return, shared_buffer_revoke, shared_buffer_seal,
-    shared_buffer_unmap, spawn, store_transact, supervision_status, transfer_window_bind,
-    unhealthy, wait, yield_now,
+    shared_buffer_unmap, spawn, store_transact, supervision_derive, supervision_status,
+    transfer_window_bind, unhealthy, wait, yield_now,
 };
 
 /// The CSpace slot holding this component's root service endpoint — its only

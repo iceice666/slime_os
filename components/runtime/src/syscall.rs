@@ -80,6 +80,8 @@ const SYS_SHARED_BUFFER_REVOKE: u64 = 29;
 const SYS_CAP_TRANSFER: u64 = 30;
 #[cfg(feature = "sel4")]
 const SYS_TRANSFER_WINDOW_BIND: u64 = 31;
+/// B25: derive a second supervision handle naming a task already supervised.
+const SYS_SUPERVISION_DERIVE: u64 = 32;
 
 pub const ERR_SUCCESS: i64 = 0;
 pub const ERR_BAD_CAP: i64 = -1;
@@ -393,6 +395,21 @@ pub fn shared_buffer_revoke(buffer_slot: u32, loan_id: u64) -> i64 {
 
 /// Query a child supervision handle. `Ok(None)` means the child is live; a
 /// completed result consumes the handle slot so it can be reused.
+/// Obtain a second supervision handle naming the same task (B25).
+///
+/// Returns the slot the new capability landed in. The caller keeps `slot`: this
+/// is a derive, not a move, so a parent can introduce one child to several
+/// others. Rights are the source's own and the task named is the same, so this
+/// mints nothing the caller could not already have transferred.
+pub fn supervision_derive(slot: u32) -> Result<u32, i64> {
+    let (result, derived) = transport::supervision_derive(slot);
+    if result < 0 {
+        Err(result)
+    } else {
+        Ok(derived as u32)
+    }
+}
+
 pub fn supervision_status(slot: u32) -> Result<Option<Termination>, i64> {
     let (kind, detail) = transport::supervision_status(slot);
     match kind {

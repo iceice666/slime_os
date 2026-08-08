@@ -17,8 +17,8 @@ use super::{
     SYS_RECOVERY_RECONSTRUCT, SYS_RECV, SYS_SEND, SYS_SHARED_BUFFER_CREATE, SYS_SHARED_BUFFER_LOAN,
     SYS_SHARED_BUFFER_LOAN_MAP, SYS_SHARED_BUFFER_MAP, SYS_SHARED_BUFFER_RELEASE,
     SYS_SHARED_BUFFER_RETURN, SYS_SHARED_BUFFER_REVOKE, SYS_SHARED_BUFFER_SEAL,
-    SYS_SHARED_BUFFER_UNMAP, SYS_SPAWN, SYS_STORE_TRANSACT, SYS_SUPERVISION_STATUS, SYS_UNHEALTHY,
-    SYS_WAIT, SYS_YIELD, SpawnGrant, WaitSource,
+    SYS_SHARED_BUFFER_UNMAP, SYS_SPAWN, SYS_STORE_TRANSACT, SYS_SUPERVISION_DERIVE,
+    SYS_SUPERVISION_STATUS, SYS_UNHEALTHY, SYS_WAIT, SYS_YIELD, SpawnGrant, WaitSource,
 };
 use crate::arch::{raw_syscall, raw_syscall_pair};
 
@@ -199,6 +199,10 @@ pub fn shared_buffer_revoke(buffer_slot: u32, loan_id: u64) -> i64 {
             0,
         )
     }
+}
+
+pub fn supervision_derive(slot: u32) -> (i64, u64) {
+    unsafe { raw_syscall_pair(SYS_SUPERVISION_DERIVE, slot as u64, 0, 0, 0, 0) }
 }
 
 pub fn supervision_status(slot: u32) -> (i64, u64) {

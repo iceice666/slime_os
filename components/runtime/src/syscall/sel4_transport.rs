@@ -44,8 +44,9 @@ use super::{
     SYS_RECOVERY_RECONSTRUCT, SYS_RECV, SYS_SEND, SYS_SHARED_BUFFER_CREATE, SYS_SHARED_BUFFER_LOAN,
     SYS_SHARED_BUFFER_LOAN_MAP, SYS_SHARED_BUFFER_MAP, SYS_SHARED_BUFFER_RELEASE,
     SYS_SHARED_BUFFER_RETURN, SYS_SHARED_BUFFER_REVOKE, SYS_SHARED_BUFFER_SEAL,
-    SYS_SHARED_BUFFER_UNMAP, SYS_SPAWN, SYS_STORE_TRANSACT, SYS_SUPERVISION_STATUS,
-    SYS_TRANSFER_WINDOW_BIND, SYS_UNHEALTHY, SYS_WAIT, SpawnGrant, WaitSource,
+    SYS_SHARED_BUFFER_UNMAP, SYS_SPAWN, SYS_STORE_TRANSACT, SYS_SUPERVISION_DERIVE,
+    SYS_SUPERVISION_STATUS, SYS_TRANSFER_WINDOW_BIND, SYS_UNHEALTHY, SYS_WAIT, SpawnGrant,
+    WaitSource,
 };
 
 /// The child CSpace slot holding the badged root service endpoint. Slot 0 is
@@ -450,6 +451,10 @@ pub fn shared_buffer_revoke(buffer_slot: u32, loan_id: u64) -> i64 {
 
 pub fn supervision_status(slot: u32) -> (i64, u64) {
     pair_of(SYS_SUPERVISION_STATUS, &[slot as Word])
+}
+
+pub fn supervision_derive(slot: u32) -> (i64, u64) {
+    pair_of(SYS_SUPERVISION_DERIVE, &[slot as Word])
 }
 
 pub fn cap_drop(slot: u32) -> i64 {
