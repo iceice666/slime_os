@@ -672,13 +672,32 @@ detector — `fatal!` fires and the root exits — so that snapshot describes th
 post-mortem, not the hang. Any future kernel reading of this defect must be taken with
 the detector disabled, or it measures the detector.
 
-**Exit condition unchanged.** With the root exhausted, the remaining surface is the
-component side of the reply: `slime_rt::wait` blocks in `call(SYS_WAIT, …)` →
-`root_service().call_with_mrs(…)`, and the question is whether that thread is waiting on
-the endpoint the root's saved reply capability actually answers. Comparing
-`root_service()`'s resolved capability in task 10 against the working tasks in the same
-boot is the next measurement, and it needs no kernel work. Twenty-three readings
-excluded. B28 stays open; the two park-set spins fixed under it (`d69cd8e`) were real
+**Two more candidates checked and both refuted, by reading rather than by running.**
+
+`root_service()` cannot differ per task: it is
+`cap::Endpoint::from_bits(ROOT_SERVICE_SLOT)` with `ROOT_SERVICE_SLOT = 1`, a
+compile-time constant every component shares. Task 10 calls the same endpoint as the
+tasks that are answered correctly in the same boot.
+
+The endpoint's *rights* looked more promising, because
+`task.rs:348` gates the `grant` right on the generation declaring the grant
+transferable — and `init-fabric-publisher` in `sel4-qos.zti` is
+`rights = ["exec"; "spawn"]` with `transferable = false`, so task 10's service endpoint
+carries `grant_reply` but not `grant`. That would plausibly stop a reply that conveys a
+capability. But the *stream* fixture declares that grant identically —
+same rights, same `transferable = false` — and delivers the same two transfers to the
+same task successfully. So it is not the difference either.
+
+**Exit condition unchanged.** Twenty-four readings excluded, and the honest position is
+that the difference between the two planes has still not been found on either side. What
+has never been done is a direct fixture diff: the two `.zti` files are the only inputs
+that differ, and the defect has already been bisected to a single field in one of them
+(`fabric-publisher-b`'s diagnostics participant, `volatile`/`0` vs `retained`/`2`).
+Enumerating every field that differs between `sel4-stream.zti` and `sel4-qos.zti` — and
+in particular what a *second* retained route on a different publisher changes about the
+broker's frame and loan accounting for the *first* — is the remaining lead, and it is a
+read rather than another boot. B28 stays open; the two park-set spins fixed under it
+(`d69cd8e`) were real and are kept. B28 stays open; the two park-set spins fixed under it (`d69cd8e`) were real
 and are kept.
 Re-check this entry after B25 lands rather than investigating it further on its own.
 
