@@ -1953,6 +1953,23 @@ def build_rust_components(
             ]
         )
         environment = sel4_component_environment(environment)
+    else:
+        # B12: `components/.cargo/config.toml` carried a hardcoded
+        # `--remap-path-prefix` naming one developer's checkout. Any other
+        # checkout made it a no-op — or worse, when the stale literal was a
+        # *prefix* of the real path it rewrote the leading portion and left the
+        # remainder, mangling recorded paths instead of normalizing them.
+        #
+        # Appended through `--config` rather than `RUSTFLAGS`, which would
+        # *replace* the config's rustflags and silently drop the
+        # relocation-model, code-model, and link-arg settings the x86 link
+        # depends on. The JSON-target branch above can set `RUSTFLAGS` freely
+        # because a JSON target inherits none of those to begin with.
+        remap = f"--remap-path-prefix={ROOT}=."
+        command += [
+            "--config",
+            f'target.{target_profile.cargo_target}.rustflags=["{remap}"]',
+        ]
     subprocess.run(
         command,
         cwd=ROOT / "components",

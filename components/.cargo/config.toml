@@ -1,3 +1,10 @@
+# `--remap-path-prefix` is deliberately absent here and supplied by
+# `scripts/build/build-generation.py` instead, which computes the repository root
+# at build time. A hardcoded literal named one developer's checkout: it was a
+# no-op in any other, and worse when it happened to be a *prefix* of the real
+# path, because it rewrote the leading portion and left the remainder — mangling
+# recorded paths rather than normalizing them. See B12.
+
 [build]
 target = "x86_64-unknown-none"
 
@@ -8,7 +15,6 @@ rustflags = [
     "-C", "link-arg=--build-id=none",
     "-C", "link-arg=-z",
     "-C", "link-arg=max-page-size=4096",
-    "--remap-path-prefix", "/home/iceice666/projects/slime_os=.",
 ]
 
 [target.aarch64-unknown-none]
@@ -18,5 +24,4 @@ rustflags = [
     "-C", "link-arg=--build-id=none",
     "-C", "link-arg=-z",
     "-C", "link-arg=max-page-size=4096",
-    "--remap-path-prefix", "/home/iceice666/projects/slime_os=.",
 ]

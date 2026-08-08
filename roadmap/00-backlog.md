@@ -900,7 +900,46 @@ fault injection showing the parent's end going missing is caught. The call
 plane's `[init] call supervision delegated` marker is that composition, already
 observed; what remains is for the plane to get past it.
 
+## Resolved
+
 ### B12 — the component build's `--remap-path-prefix` names a path that does not exist
+
+**Resolved 2026-08-07.** Devlog:
+[`devlog/2026-08-07-b12-component-remap/`](../devlog/2026-08-07-b12-component-remap/index.md).
+The hardcoded literal is gone from `components/.cargo/config.toml`;
+`build-rust-components` now appends `--remap-path-prefix={ROOT}=.` for triple
+targets through `--config`, mirroring what the JSON-target branch already did
+through `RUSTFLAGS`.
+
+**`--config` and not `RUSTFLAGS`, which is the whole difficulty.** Setting
+`RUSTFLAGS` *replaces* the config's rustflags rather than adding to them, so it
+would have silently dropped `relocation-model`, `code-model`, and three link args
+the x86 link depends on. The JSON branch can set `RUSTFLAGS` freely only because a
+JSON target inherits none of those to begin with.
+
+**Two corrections to this entry, both material.** First, the checkout is now
+`/Users/iceice666/code/slime_os`, so the stale literal is not even a *prefix* of
+the real path — the mangling this entry describes stopped happening at some point
+and the flag became an outright no-op. Second, and more importantly, **the
+severity was overstated**: these are release builds, and the x86 component ELFs
+embed *zero* absolute source paths (`strings … | grep -c '/Users/iceice666'` is 0
+for every component). So the flag had nothing to remap either way.
+
+That is why the deferral's central fear — that fixing this would alter every
+component ELF and therefore every generation identity the oracle's gates assert
+against — turned out to be empty. Measured directly: the generation identities
+before and after the fix are **byte-identical**
+(`df40ce7a…13e5`, `ebdf06d0…b092`), `just generation_check` passes, and the seL4
+channel, stream, and component-graph plane gates are unaffected.
+
+**Exit condition partially met, and the remainder is now argued rather than
+observed.** Two builds from two different checkout directories were *not* run —
+that needs a second clone, which this environment cannot usefully provide. What
+was established instead is stronger than the original worry and weaker than the
+original exit condition: the flag is no longer wrong, it is computed from the
+actual root, and the artifacts it guards contain no paths for it to affect. If a
+future build turns on debug info for components, the flag becomes load-bearing and
+the two-checkout comparison becomes worth running for real.
 
 **Problem:** `components/.cargo/config.toml` passes
 `--remap-path-prefix /home/iceice666/projects/slime_os=.` for both the
@@ -995,8 +1034,6 @@ rustflags this defect does not match, so the reach is unchanged.
 `just generation_check` and `just contracts_check` were run to confirm the new
 binary perturbed neither contract validation nor generation identity. See
 `devlog/2026-08-07-p5-4-1-oracle-inventory/`.
-
-## Resolved
 
 ### B30 — `release_trust_check` was red, unregistered, and its rotation refusals never reached Rust
 
