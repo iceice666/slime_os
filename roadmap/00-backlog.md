@@ -758,11 +758,53 @@ plane returns earlier at `entry_at`, and the stream plane's two `[fabric] QoS pe
 lines both come from the pre-existing `drain_acks` path. Unobserved code is not a fix,
 so it was reverted rather than committed.
 
-**Exit condition unchanged.** Twenty-six readings excluded, and the surface is now a
-single unexplained event with every surrounding layer verified: task 10's `SYS_WAIT`
-does not return although the root answers it on the matching reply CSlot, on a plane
-whose only fixture difference is `durability`/`retainedDepth` on a *different*
-component's *different* route. B28 stays open; the two park-set spins fixed under it
+**The root now names its wedged waiters, and the answer is not task 10.** The wedge
+`fatal!` fired *before* the owed-reply accounting further down the function — and
+`fatal!` does not return — so the one path that most needed the diagnosis printed
+only counts. Fixed: the exhaustion arm iterates `parked.tasks()` first and emits
+`SLIME_GRAPH wedged waiter task=N` per entry.
+
+On the QoS plane that gives, in order: **7, 8, 9, 6** — `fabric-subscriber`,
+`fabric-subscriber-b`, `fabric-service`, and `init`. **Task 10 is absent.**
+
+That overturns the reading this entry was built on. `fabric-publisher` (task 10)
+sends twice, parks once, is never reclaimed, and is *not* among the tasks the root
+is holding a reply for. So its `SYS_WAIT` was **answered** — the root is not owing
+it anything — and it still did not resume. The four tasks actually stuck are the
+broker and its two subscribers, which is a different shape entirely: the broker is
+waiting on sources the subscribers would make ready, and the subscribers are waiting
+on samples the broker would deliver.
+
+**The root now prints the whole deadlock.** `ChannelTable::registered_waits` and
+`Channel::waits_for` were added — diagnostic-only scans — so the exhaustion arm
+emits each waiter's park reason and every channel it is registered on:
+
+```
+wedged waiter task=7 reason=Some(Wait)   channel=16 receive=true
+wedged waiter task=8 reason=Some(Wait)   channel=12 receive=true
+wedged waiter task=9 reason=Some(Wait)   channel=13 receive=true
+wedged waiter task=9 reason=Some(Wait)   channel=17 receive=true
+wedged waiter task=9 reason=Some(Wait)   channel=22 receive=true
+wedged waiter task=6 reason=Some(Wait)   (no channel — a supervision wait)
+```
+
+All five channels are broker-minted role endpoints. Channel 22 is the interesting
+one: it is minted at transcript line 285 and *is* transferred to task 10 at line
+286 (`capability transferred task=9 channel=5 to=10`), so the broker holds one half
+and `fabric-publisher` the other. The broker is waiting to receive a sample on it;
+task 10 parked without ever sending one.
+
+So the cycle is: the broker waits on the publisher's route (22) and both
+subscribers' acks (13, 17); the subscribers wait on their data channels (16, 12)
+which only the broker fills; `init` waits on a supervision handle. Nothing can
+move because the one task that would break the cycle — task 10 — is parked and
+**is not owed a reply by the root**, having been answered already.
+
+Twenty-eight readings excluded. **Exit condition unchanged**, and the remaining
+question is the narrowest it has been: `fabric-publisher` was answered, holds the
+send half of channel 22, and did not send. Its own code between the role reply and
+its first publish is now the entire search space — no root layer, no kernel layer,
+and no other component is implicated. B28 stays open; the two park-set spins fixed under it
 (`d69cd8e`) were real and are kept. B28 stays open; the two park-set spins fixed under it (`d69cd8e`) were real
 and are kept.
 Re-check this entry after B25 lands rather than investigating it further on its own.

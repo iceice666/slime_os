@@ -2254,6 +2254,25 @@ fn serve_component_graph(
     // the accounting below would otherwise print an ordinary-looking summary —
     // exactly how B28 stayed invisible while `init` sat parked forever.
     if iterations == MAX_GRAPH_ITERATIONS && live != 0 {
+        // Name the waiters *before* failing. The owed-reply accounting further
+        // down never runs on this path — `fatal!` does not return — so a wedge
+        // reported only its counts and the transcript had to be read backwards
+        // to work out which task was stuck. That is the diagnosis this marker
+        // exists to hand over, and withholding it on the one path that needs it
+        // was the defect.
+        for task in parked.tasks() {
+            sel4::debug_println!(
+                "SLIME_GRAPH wedged waiter task={} reason={:?}",
+                task.0,
+                parked.reason(task),
+            );
+            for (key, receive) in channels.registered_waits(task) {
+                sel4::debug_println!(
+                    "SLIME_GRAPH wedged waiter task={} channel={key} receive={receive}",
+                    task.0,
+                );
+            }
+        }
         fatal!(
             "SLIME_GRAPH FAIL graph iterations exhausted live={live} parked={}",
             parked.len(),

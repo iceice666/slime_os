@@ -584,6 +584,21 @@ impl Channel {
         register_waiter(&mut self.send_waiter, task)
     }
 
+    /// Whether `task` is registered on this queue, and in which direction:
+    /// `Some(true)` for a receive waiter, `Some(false)` for a send waiter.
+    ///
+    /// Diagnostic only. The root uses it to explain a wedge rather than merely
+    /// report one; nothing on the serving path reads it.
+    pub const fn waits_for(&self, task: TaskKey) -> Option<bool> {
+        if matches!(self.recv_waiter, Some(waiter) if waiter == task) {
+            return Some(true);
+        }
+        if matches!(self.send_waiter, Some(waiter) if waiter == task) {
+            return Some(false);
+        }
+        None
+    }
+
     pub fn clear_waiter(&mut self, task: TaskKey) {
         if self.recv_waiter == Some(task) {
             self.recv_waiter = None;

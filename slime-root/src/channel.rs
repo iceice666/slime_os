@@ -206,6 +206,11 @@ impl Entry {
         self.forward.iter_mut().chain(self.reverse.iter_mut())
     }
 
+    /// The read-only sibling of [`Self::queues_mut`], for the wedge diagnostic.
+    fn queues(&self) -> impl Iterator<Item = &Channel> {
+        self.forward.iter().chain(self.reverse.iter())
+    }
+
     fn involves(&self, task: TaskId) -> bool {
         self.producer == task || self.consumer == task
     }
@@ -1127,6 +1132,22 @@ impl ChannelTable {
                 queue.clear_waiter(task.0);
             }
         }
+    }
+
+    /// Every channel key `task` is registered to wake on, with the direction.
+    ///
+    /// Diagnostic only, and deliberately a scan: a wedge is already fatal, so
+    /// the cost is paid once on a boot that is ending. It exists because the
+    /// root could name *which* tasks were stuck (`wedged waiter task=N`) but not
+    /// what each was waiting for, which is the difference between reporting a
+    /// deadlock and explaining it.
+    pub fn registered_waits(&self, task: TaskId) -> impl Iterator<Item = (ChannelKey, bool)> + '_ {
+        self.entries.iter().flatten().flat_map(move |entry| {
+            let key = entry.key;
+            entry
+                .queues()
+                .filter_map(move |queue| queue.waits_for(task.0).map(|receive| (key, receive)))
+        })
     }
 }
 
