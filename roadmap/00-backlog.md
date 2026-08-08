@@ -688,16 +688,48 @@ capability. But the *stream* fixture declares that grant identically —
 same rights, same `transferable = false` — and delivers the same two transfers to the
 same task successfully. So it is not the difference either.
 
-**Exit condition unchanged.** Twenty-four readings excluded, and the honest position is
-that the difference between the two planes has still not been found on either side. What
-has never been done is a direct fixture diff: the two `.zti` files are the only inputs
-that differ, and the defect has already been bisected to a single field in one of them
-(`fabric-publisher-b`'s diagnostics participant, `volatile`/`0` vs `retained`/`2`).
-Enumerating every field that differs between `sel4-stream.zti` and `sel4-qos.zti` — and
-in particular what a *second* retained route on a different publisher changes about the
-broker's frame and loan accounting for the *first* — is the remaining lead, and it is a
-read rather than another boot. B28 stays open; the two park-set spins fixed under it
-(`d69cd8e`) were real and are kept. B28 stays open; the two park-set spins fixed under it (`d69cd8e`) were real
+**The fixture diff was done and it is remarkably small.** `sel4-stream.zti` and
+`sel4-qos.zti` differ in exactly **three** fields: `generation` (1 vs 19), and on
+`fabric-publisher-b`'s *diagnostics* participant `durability`
+(`volatile` → `retained`) and `retainedDepth` (`0` → `2`). Nothing else — same
+components, same grants, same telemetry route, same capacities
+(`FABRIC_FRAME_CAPACITY = 32` on both). The wedged task is `fabric-publisher` on the
+*telemetry* route, a different component and a different route from the one field that
+changed.
+
+**And the observable consequence is in the loan table, not the frame table.** Both
+planes create five loans. The stream plane maps and returns **three**; the QoS plane maps
+and returns **one**. Per-loan:
+
+|Plane|`id=1`|`id=2`|`id=3`|
+|---|---|---|---|
+|stream|mapped by task 9|mapped by task 7|mapped by task 8|
+|QoS|mapped by task 9|**never mapped**|**never mapped**|
+
+Loans 2 and 3 are created by the broker and never taken by the subscribers — which is
+exactly the `hist/inflight=1/1` state the subscribers are stuck in, seen from the other
+side.
+
+**Two tempting explanations for that are already excluded.** It is not frame
+exhaustion: instrumenting `pump_publisher`'s `!frames.iter().any(|f| f.refs == 0)` guard
+produced **zero** lines. And it is not queue backpressure: the *stream* plane runs
+deeper queues (`queued=` up to 11) than QoS (up to 6), so a full channel cannot be what
+stops the QoS delivery.
+
+What the transcripts do show at the divergence is a scheduling difference in the broker
+itself. After the same `capability transfer task=9 … to=8` and `[fabric] downstream loan
+created`, the stream plane keeps serving (`received task=9 channel=21`) while the QoS
+plane immediately emits `[fabric] idle: parked on stream sources` and
+`parked task=9 reason=wait`. The broker parks with two loans outstanding and undelivered.
+
+**Exit condition unchanged.** Twenty-five readings excluded. The lead is now specific:
+the broker parks while loans 2 and 3 are outstanding, so either its park set omits the
+sources those two loans would become ready on, or `deliver` declines to hand them over
+and reports no progress. `park_on_streams` was already found to include two
+always-ready sources (fixed in `d69cd8e`); this is the same function's opposite failure
+mode — a *missing* source — and `deliver`'s early-return paths are where a silent
+"no progress" would come from. B28 stays open; the two park-set spins fixed under it
+were real and are kept. B28 stays open; the two park-set spins fixed under it (`d69cd8e`) were real
 and are kept.
 Re-check this entry after B25 lands rather than investigating it further on its own.
 
