@@ -943,10 +943,28 @@ grants. So the component was handed a slot naming nothing. Minting the pair in
 create the publisher that was never written. The change was reverted rather than
 committed as a partial fix that changes no observable outcome.
 
-**So the remaining work for the call plane is C8.6 scenario code**: a time-phase
-publisher in `fabric_call_scenario.rs`, plus the phase channel plumbed from
-`init`. That is ordinary milestone work, not a capability-model decision, and B25's
-endpoint move/copy divergence — real, and still unresolved — is not on its path.
+**Fixed, and the failure is gone.** `fabric-call-time`'s own comment already said
+"no phase channel in the boot layout" and it already had a `park_only` path for
+exactly this — but the guard was `fabric_boot::active()`, which keys on
+`SLIME_FABRIC_BOOT_CHECK`. The x86 boot generation sets that; the seL4 call plane
+does not, so the component took the phase path on a plane with no phase publisher.
+
+The component now also parks when `FABRIC_CALL_PHASE_TIME_SLOT == SLOT_ABSENT`,
+read from the generated boot layout it already includes. Testing the *slot* rather
+than adding a second flag is deliberate: the condition that matters is whether a
+phase channel exists, the layout already answers that, and a flag would have to be
+kept in step with every future generation.
+
+Observed: `[fabric-call] fail: time phase receive` is gone and replaced by
+`[fabric-call-time] boot idle without a role`. All eight other plane gates re-run
+green.
+
+**The plane still does not complete.** It now wedges with no component failure at
+all — `graph iterations exhausted live=11 parked=9` — which is the same shape as
+B28 and a different problem from either of B25's two reasons. So B25's endpoint
+move/copy divergence remains real and unresolved, and it is still not what the call
+plane is waiting on; the next step there is identifying which of the nine parked
+tasks is owed a reply nobody sends.
 
 **Exit condition:** A parent grants one end of a minted pair at spawn, uses the
 other end afterwards to deliver a capability to that child, and the child

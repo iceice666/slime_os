@@ -8,8 +8,28 @@ use slime_rt::{ERR_PEER_DEAD, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG, WaitSou
 
 slime_rt::entry!(main);
 
+// The generation's resolved capability layout, generated into `OUT_DIR` by
+// `scripts/build/boot_layout.py`. Read here so the phase-channel test below is a
+// fact about this build rather than a flag someone has to remember to set.
+include!(concat!(env!("OUT_DIR"), "/boot_layout.rs"));
+
 fn main() {
-    if slime_components::fabric_boot::active() {
+    // Park whenever this build has no phase channel to be driven over, not only
+    // on the full-graph boot generation.
+    //
+    // `fabric_boot::active()` keys on `SLIME_FABRIC_BOOT_CHECK`, which the x86
+    // boot generation sets and the seL4 call plane does not — yet the seL4 plane
+    // has the same property the guard exists for: `sel4-call.zti` declares no
+    // phase grants, so `FABRIC_CALL_PHASE_TIME_SLOT` is `SLOT_ABSENT` and no
+    // component on that plane publishes a time phase. Taking the phase path there
+    // parked this component on a slot naming nothing and killed the boot with
+    // `fail: time phase receive`.
+    //
+    // Testing the slot rather than adding a second flag: the condition that
+    // actually matters is whether a phase channel exists, and the boot layout
+    // already answers that. A flag would have to be kept in step with every
+    // future generation; this cannot drift.
+    if slime_components::fabric_boot::active() || FABRIC_CALL_PHASE_TIME_SLOT == SLOT_ABSENT {
         // As `fabric-op-time`: no phase channel in the boot layout, and a graph
         // at rest must not have its clock advanced underneath it.
         slime_components::fabric_boot::park_only(b"fabric-call-time");
