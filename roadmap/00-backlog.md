@@ -818,14 +818,36 @@ plane. Task 10 is parked, is owed nothing by the root (it is absent from the
 `wedged waiter` list), and never performs the `recv` that would collect the
 capabilities already delivered to it.
 
-Twenty-nine readings excluded. **Exit condition unchanged.** The remaining question
-is why the wake for a `cap_transfer`-delivered capability reaches task 10 on one
-plane and not the other, given that `send_atomic` reports
-`xfer wake present=true target=10` on both and the reply CSlot matches its park.
-Every layer has now been measured on the failing plane; the untried measurement is
-the same one on the *passing* plane, so the two can be diffed rather than reasoned
-about — which is the technique that produced this table and the `wedged waiter`
-list before it. B28 stays open; the two park-set spins fixed under it
+**The mechanism is now confirmed, and it is starvation rather than a lost wake.**
+Three measurements settle it:
+
+1. **Task 10 is not parked.** `live=5 parked=4`, and task 10 is the one live,
+   unparked, unreclaimed task. Its `SYS_WAIT` *was* answered.
+2. **The kernel says it is blocked sending.** Walking `ksDebugTCBs` with typed reads
+   gives one child in `BlockedOnSend` and four in `BlockedOnReply`. The four are
+   normal parked-awaiting-root; the one is a task whose call into the root never
+   got received.
+3. **The root never reaches it.** Logging the operation on the loop's final twelve
+   passes gives `task=9 op=Recv` for eleven of them. The broker consumes the entire
+   512-iteration budget, so task 10's send is still queued when the budget ends.
+
+The broker's own loop is *not* spinning — instrumenting its `progressed` branch past
+400 passes produced **zero** lines, and it emits
+`[fabric] idle: parked on stream sources` **ten** times. So it parks, is woken,
+serves a handful of `Recv` calls, and parks again — repeatedly. Each cycle costs
+root iterations, and ten cycles at ~50 operations each is the budget.
+
+So B28 is: **an always-ready wake source makes the broker cycle park→wake→park, and
+those cycles starve the root's iteration budget before `fabric-publisher`'s queued
+send is served.** That is the same class as the two park-set spins fixed in
+`d69cd8e` — a third source is still permanently ready — and it explains why the
+plane depends on one fixture field: `retained` diagnostics add the route whose
+source never quiesces.
+
+Thirty readings excluded. **Exit condition unchanged**, and the remaining work is
+bounded: instrument `park_on_streams` to print which slot it returns on, on the pass
+after each `idle: parked` line. The set is at most five entries and one of them is
+ready when it should not be. B28 stays open; the two park-set spins fixed under it
 (`d69cd8e`) were real and are kept. B28 stays open; the two park-set spins fixed under it (`d69cd8e`) were real
 and are kept.
 Re-check this entry after B25 lands rather than investigating it further on its own.
