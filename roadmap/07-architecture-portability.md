@@ -1237,7 +1237,7 @@ compose the earlier.
 | Slice | Uncovered | Shape |
 | --- | --- | --- |
 | P5.4.2 | M5.1–M5.9 | **In progress** — ten storage/rollback/recovery gaps. Structural: five of the nine `Mediation::Unavailable` planes are M5's surface. Carries `object_store.rs`'s 32 ungated assertions, of which the eight superblock-shaped ones are now portable and host-tested in `boot-contracts` (see [`devlog/2026-08-07-p5-4-2-store-superblock/`](../devlog/2026-08-07-p5-4-2-store-superblock/index.md)); the rest need a block device `slime-root` does not have |
-| P5.4.3 | M6.1–M6.7 | Five gaps (directory, dango, generation commands, powerbox, transfer) and two partials (M6.1 v2 determinism, M6.2 protocol surface) |
+| P5.4.3 | M6.1–M6.7 | **In progress** — five gaps (directory, dango, generation commands, powerbox, transfer) and two partials (M6.1 v2 determinism, M6.2 protocol surface). M6.7's manifest decoder had no tests at all; thirteen are now host-tested and Miri-clean with three fault injections confirmed, which is unit evidence only. See below |
 | P5.4.4 | C8.2 | **Complete** — aggregate fabric-graph admission before component launch; see below |
 | P5.4.5 | C8.5 | **In progress** — reliable/retained/timed QoS, plus the two C8.5 assertions colocated in `kernel/tests/fabric_stream.rs`. Three arms already ran on the seL4 stream plane unasserted (matching-before-data, bounded loss under a stall, peer death as a distinct event) and are now gated. An eleventh image, `sel4-qos`, adds the monotonic-time channel those arms needed, and five more now fire — RELIABLE retry accounting, retry exhaustion, deadline miss, lifespan expiry, liveliness loss. `no inline retained publisher` is gone, resolved by giving `fabric-publisher-b`'s diagnostics participant a `retained` route so the fabric holds an inline retained head independent of publisher timing. Lease and tie ordering stay unobserved and no gate is registered: the plane wedges before its final marker, because `fabric-publisher` blocks in one `SYS_WAIT` that never returns even though the root answers it on the correct reply CSlot. Tracked as B28. See [`devlog/2026-08-07-p5-4-5-qos-arms/`](../devlog/2026-08-07-p5-4-5-qos-arms/index.md) and [`devlog/2026-08-07-p5-4-5-qos-clock/`](../devlog/2026-08-07-p5-4-5-qos-clock/index.md) |
 | P5.4.6 | C8.6 | **In progress** — bounded native calls. The `sel4-call` image builds, admits its graph, mints and binds every control channel, spawns all five components, and delivers each role request to the broker; it then deadlocks. `slime-root` treats a spawn-granted endpoint as a *move* while the oracle treats it as a *copy*, so init cannot hand the broker the supervision handles the x86 plane transfers after spawning; but inverting the spawn order was shown to carry that handoff, so the move/copy difference is not the whole blocker. The two requirements are order-incompatible as the components are written: the control ends want the fabric spawned last, its own supervision handle wants it spawned first. Tracked as B25. No gate yet. See [`devlog/2026-08-07-p5-4-6-call-spawn-semantics/`](../devlog/2026-08-07-p5-4-6-call-spawn-semantics/index.md) |
@@ -1325,6 +1325,34 @@ declared blocked: the device surface is buildable, just not small.
 
 Every M5 gap has an observed seL4 gate, including the store's behaviour under
 interruption at each append/commit boundary.
+
+### P5.4.3 — M6 service, directory, and transfer
+
+**Status:** In progress.
+
+**Depends on:** P5.4.1.
+
+Five gaps (M6.3 directory, M6.4 dango, M6.5 generation commands, M6.6 powerbox,
+M6.7 transfer) and two partials (M6.1 generation-v2 determinism, M6.2 protocol
+surface).
+
+The transfer manifest decoder — the format carrying a generation, its object and
+state tables, its release record, and its metadata across a persistence
+boundary — had **no tests at all**, despite defining seven error variants and a
+self-excluding SHA-256 over the whole manifest. Thirteen are now host-tested and
+Miri-clean, with three fault injections confirmed; see
+[`devlog/2026-08-07-p5-4-3-transfer-manifest/`](../devlog/2026-08-07-p5-4-3-transfer-manifest/index.md).
+
+What remains needs a mechanism `slime-root` does not have. Nine operations
+answer `Mediation::Unavailable` (`slime-root/src/ipc.rs:207-215`), and the
+directory plane alone owns three of them. That is the same shape as P5.4.2's
+block-device dependency: buildable, but not small, and not closable by adding
+unit evidence to a decoder.
+
+#### Exit condition
+
+Every M6 gap has an observed seL4 gate, including a transfer that actually
+crosses a boundary rather than a manifest that merely decodes.
 
 ### P5.4.5 — C8.5 reliable, retained, and timed QoS
 
