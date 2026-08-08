@@ -19,7 +19,7 @@ observable at all. The seL4 side had no equivalent, so the only thing standing
 between a silently-vacuous gate and a real one was per-slice fault injection:
 per-change discipline, not a standing guard.
 
-`just sel4_gate_control_check` is that guard. Eight gates, 356 mutated
+`just sel4_gate_control_check` is that guard. Nine gates, 434 mutated
 transcripts, all rejected.
 
 ## Changes
@@ -55,7 +55,7 @@ import.
 
 ## Verification
 
-`just sel4_gate_control_check` — "8 gates reject 356 mutated transcripts".
+`just sel4_gate_control_check` — "9 gates reject 434 mutated transcripts".
 `just ruff` and `just typos` pass.
 
 Three fault injections, each reverted after being observed:
@@ -63,6 +63,7 @@ Three fault injections, each reverted after being observed:
 | Injection | Result |
 |---|---|
 | delete one `REQUIRED_MARKERS` entry from the channel gate | `declares 26 required markers, expected 27` |
+| delete one marker from a stream-gate `CHAINS` entry | `declares 55 required markers, expected 56` |
 | empty the channel gate's `FAILURE_MARKERS` | `no failure markers declared` |
 | make the control's own ordering non-strict (search from 0) | `accepted a transcript missing 'console parked on an empty channel'` |
 
@@ -83,11 +84,18 @@ that a real boot emits them. The plane gates themselves cover that.
 **Pin the counts.** See the first injection above. A derived count cannot detect
 its own erosion.
 
-**Two gates excluded, named rather than skipped.**
-`check-sel4-stream-plane.py` composes its required set at runtime instead of
-declaring one table, and `check-sel4-boot-layout.py` compares fixtures rather
-than markers, so neither exposes the surface this control drives. Both are listed
-in the script's `GATES` comment with the reason.
+**One gate excluded, named rather than skipped.**
+`check-sel4-boot-layout.py` compares frozen fixtures rather than markers, so it
+does not expose the surface this control drives; the reason is in the script's
+`GATES` comment.
+
+**The stream gate is covered by flattening `CHAINS`.** It declares its markers as
+twelve per-causal-chain groups rather than one flat table, because its claim is
+that each chain is internally ordered — not that all 56 markers are globally
+ordered. `required_of` flattens them, which is sound here because every mutation
+this control makes is *within* a chain, so a gate enforcing per-chain order
+rejects them exactly as a flat gate does. Verified: deleting one marker from a
+chain makes the control red.
 
 **Drive the marker logic directly.** Calling `check_transcript` would drag in
 per-gate content assertions that a synthetic transcript cannot satisfy. The
@@ -96,10 +104,10 @@ from coupling to each gate's private helper set.
 
 ## Open risks and follow-ups
 
-The two excluded gates have no negative control. The stream gate is the more
-valuable of the two, and giving it one means having it declare its required set
-as data rather than composing it inline — a refactor of that checker, not of this
-control.
+`check-sel4-boot-layout.py` has no negative control. Its claim is fixture
+equality rather than marker presence, so the analogous guard would mutate a
+blessed layout fixture and assert the comparison fails — a different mechanism
+than this control, and worth its own slice.
 
 The control proves a gate rejects a transcript *missing* evidence. It does not
 prove the gate's markers correspond to the behaviour their descriptions claim;

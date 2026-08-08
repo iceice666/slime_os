@@ -39,11 +39,10 @@ from harness import ROOT, load_script  # noqa: E402
 # Gate module name -> checker path, for every plane gate that shares the
 # `REQUIRED_MARKERS` / `FAILURE_MARKERS` / `check_transcript` shape.
 #
-# `check-sel4-stream-plane.py` and `check-sel4-boot-layout.py` are absent
-# deliberately: the stream gate composes its required set at runtime rather than
-# declaring one table, and the layout gate compares fixtures instead of markers,
-# so neither exposes the surface this control drives. Both are noted in the
-# devlog rather than silently skipped.
+# `check-sel4-boot-layout.py` is absent deliberately: it compares frozen fixtures
+# rather than markers, so it does not expose the surface this control drives. The
+# stream gate declares `CHAINS` instead of a flat table and is handled by
+# `required_of`.
 # Third element is the number of required markers the gate is expected to declare.
 #
 # Pinned rather than derived, because the whole point is to notice when a gate
@@ -59,6 +58,7 @@ GATES: tuple[tuple[str, str, int], ...] = (
     ("sel4_sample_plane", "check/check-sel4-sample-plane.py", 19),
     ("sel4_spawn_plane", "check/check-sel4-spawn-plane.py", 32),
     ("sel4_supervision_plane", "check/check-sel4-supervision-plane.py", 9),
+    ("sel4_stream_plane", "check/check-sel4-stream-plane.py", 56),
 )
 
 
@@ -119,8 +119,28 @@ def literal_for(pattern: str) -> str:
     return text
 
 
+def required_of(gate) -> tuple[tuple[str, str], ...]:
+    """The gate's ordered markers as `(description, pattern)` pairs.
+
+    Two shapes exist. Most gates declare one flat `REQUIRED_MARKERS` table; the
+    stream gate declares `CHAINS`, a per-causal-chain grouping, because its claim
+    is that each chain is internally ordered rather than that all 56 markers are
+    globally ordered. Flattening is sound for this control: every mutation it
+    makes is within a chain, so a gate that enforces per-chain order rejects them
+    exactly as a flat gate does.
+    """
+    chains = getattr(gate, "CHAINS", None)
+    if chains is not None:
+        return tuple(
+            (f"{label}: {pattern}", pattern)
+            for label, chain in chains
+            for pattern in chain
+        )
+    return tuple(gate.REQUIRED_MARKERS)
+
+
 def transcript_for(gate) -> str:
-    lines = [literal_for(pattern) for _, pattern in gate.REQUIRED_MARKERS]
+    lines = [literal_for(pattern) for _, pattern in required_of(gate)]
     return "\n".join(lines) + "\n"
 
 
@@ -138,7 +158,7 @@ def marker_check(gate, transcript: str) -> None:
         if re.search(pattern, transcript) is not None:
             raise SystemExit(f"failure marker: {pattern}")
     position = 0
-    for description, pattern in gate.REQUIRED_MARKERS:
+    for description, pattern in required_of(gate):
         match = re.compile(pattern).search(transcript, position)
         if match is None:
             raise SystemExit(f"missing or out-of-order marker: {description}")
@@ -156,7 +176,7 @@ def rejects(gate, transcript: str) -> bool:
 
 def check_gate(name: str, relative_path: str, expected_required: int) -> int:
     gate = load_script(name, relative_path)
-    required = getattr(gate, "REQUIRED_MARKERS", ())
+    required = required_of(gate)
     failures = getattr(gate, "FAILURE_MARKERS", ())
     if len(required) != expected_required:
         fail(
