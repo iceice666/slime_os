@@ -496,13 +496,43 @@ distinguishes a wedged graph from a settled one rather than tripping on both. Th
 `live == 0` guard is kept beside it: unreachable today, but it is the other way a
 graph can end owing a reply.
 
-**Exit condition unchanged, and what remains is now a bounded question rather than a
-search:** which arrival should have advanced the graph and does not. The loop serves
-~111 operations and then spins, so the next step is to log the operation label seen on
-the final few iterations — the wedge marker gives a precise place to attach that.
-`init` parks at transcript line 224 (`parked task=6 reason=wait`) and nothing ever
-wakes it; with the root confirmed to be spinning rather than absent, that wake is the
-single thing missing.
+**It is a livelock in `fabric-service`, not a deadlock anywhere.** Logging the
+operation label on the loop's final iterations shows task 9 — `fabric-service` — in a
+fixed cycle: five `Recv` then one `Wait`, repeating to the bound. A `wait` that
+returns immediately is a park on a source that is permanently ready, so the broker
+burns the root's iteration budget instead of blocking.
+
+**Two always-ready sources found and fixed** (`d69cd8e`). `park_on_streams` already
+skips finished publishers and its own comment states the rule — a dead source is
+always ready, so leaving one in the set turns the park into a spin — but never applied
+it to:
+
+* a subscriber whose peer is gone (`ended` is set both on a clean end event and on
+  `ERR_PEER_DEAD`);
+* the QoS clock (`TIME_SLOT` was pushed on the flag alone, though the worker already
+  probes `time_peer_dead()` before asking it to advance).
+
+With both exclusions the cycle widens from five `Recv` per park to about eleven, so
+the always-ready wake is gone. All nine passing planes re-run green, so neither
+exclusion changes a settled graph.
+
+**The plane still wedges, and the remaining cause is now located to one condition.**
+The stream worker returns only when *every* subscriber has `ended` **and** the clock
+peer is dead (`components/bins/src/bin/fabric-service.rs`, the
+`all(|subscriber| subscriber.ended)` block). The clock's client half is granted to
+`fabric-publisher-b` (`init.rs:1748`), and that component reaches
+`[fabric-publisher-b] done`; the root then reports
+`peer death task=11 channels=6 woken=1` at transcript line 394, *before* the spin
+window opens at 396. So the clock peer does die, the fabric is woken for it, and the
+broker still does not take its exit — which places the defect in the broker's handling
+of that wake rather than in the wake's delivery.
+
+**Exit condition unchanged.** The next step is narrow and local: instrument that exit
+block to print `ended` per subscriber and the `time_peer_dead()` result on each pass
+after line 394, and find which conjunct stays false. Note `time_peer_dead()` consumes
+a message when one is pending (`_ => fail(b"unapplied time advance")` shows it expects
+none), so a probe that races an in-flight advance is a candidate the instrumentation
+should distinguish.
 
 **One wider finding stands regardless of B28**, and it is worth its own slice:
 `sel4_transport::wait` returns `()`, so its staging-failure branch can only
