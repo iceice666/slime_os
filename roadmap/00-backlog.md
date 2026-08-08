@@ -527,12 +527,47 @@ window opens at 396. So the clock peer does die, the fabric is woken for it, and
 broker still does not take its exit — which places the defect in the broker's handling
 of that wake rather than in the wake's delivery.
 
-**Exit condition unchanged.** The next step is narrow and local: instrument that exit
-block to print `ended` per subscriber and the `time_peer_dead()` result on each pass
-after line 394, and find which conjunct stays false. Note `time_peer_dead()` consumes
-a message when one is pending (`_ => fail(b"unapplied time advance")` shows it expects
-none), so a probe that races an in-flight advance is a candidate the instrumentation
-should distinguish.
+**Instrumented, and the causal chain is now complete.** Printing the exit block's
+conjuncts on every pass gives `subs ended=3/0` then `3/1`, held forever: the broker
+carries **three** subscribers and only **one** ever reaches `ended`. The clock probe is
+never even attempted, because the first conjunct never becomes true — so the earlier
+suspicion about `time_peer_dead()` racing an advance is void.
+
+Instrumenting `announce_end`'s guard shows why. It refuses to end a subscriber that
+still holds history or unacknowledged samples
+(`if !subscriber.terminal && (!subscriber.history.is_empty() || subscriber.in_flight
+!= 0)`), and the two stuck subscribers sit at `hist/inflight=1/1` permanently: one
+sample delivered, never acknowledged.
+
+**And the reason they never acknowledge is already on the transcript, upstream of
+everything QoS.** `[fabric-subscriber] fail: role reply` and
+`[fabric-subscriber-b] fail: role reply` — both subscribers die at role
+provisioning, before they can ack anything, and the root duly reports
+`peer death task=4` / `peer death task=5`. Their samples stay in flight forever, so
+`announce_end` never fires for them, so the broker's exit condition is unreachable, so
+it spins to the iteration bound.
+
+**So B28 is a downstream symptom of the same defect as B25.** `fail: role reply` is
+the spawn-granted-endpoint semantics gap: an endpoint granted at spawn *moves* on seL4
+where the frozen oracle *copies* it, so a parent cannot broker a later introduction.
+The QoS plane is simply the first plane whose completion depends on a subscriber
+surviving that introduction. Twenty readings excluded, and the remaining chain has no
+gap left in it:
+
+```
+B25 spawn-grant moves the endpoint
+  -> subscriber fails its role reply and dies
+  -> its sample stays in_flight=1 forever
+  -> announce_end refuses to end it
+  -> broker exit condition (all ended && clock dead) unreachable
+  -> broker spins, root exhausts MAX_GRAPH_ITERATIONS
+  -> no `[init] fabric stream complete`
+```
+
+**Exit condition unchanged**, and B28 is now **blocked on B25** rather than
+independently open: the two park-set spins fixed under it (`d69cd8e`) were real and are
+worth keeping, but the plane cannot complete until spawn-grant semantics are settled.
+Re-check this entry after B25 lands rather than investigating it further on its own.
 
 **One wider finding stands regardless of B28**, and it is worth its own slice:
 `sel4_transport::wait` returns `()`, so its staging-failure branch can only
