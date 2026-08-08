@@ -564,13 +564,47 @@ So the two subscribers stuck at `hist/inflight=1/1` are stuck because the broker
 takes `drain_acks`' `ERR_PEER_DEAD` arm for them, not because they died at role
 provisioning — which they do on both planes.
 
-**Exit condition unchanged.** The next step is to find why the QoS plane's broker never
-sees `ERR_PEER_DEAD` on those two ack channels while the stream plane's does, given
-that the root reports `peer death task=4` and `peer death task=5` on both. The
-`SLIME_SEL4_STREAM_CHECK`-vs-`SLIME_FABRIC_QOS_CHECK` split in the worker's sweep, and
-the extra retained-diagnostics participant the QoS fixture adds, are the two structural
-differences to check first. B28 stays independently open; the two park-set spins fixed
-under it (`d69cd8e`) were real and are kept.
+**Traced further, and the ack channels are a red herring too.** `drain_acks` is called
+unconditionally for every present subscriber — no flag gates it — so the flag-split
+suspicion is void. Instrumenting the publisher sweep shows the broker pumps exactly one
+publisher, index 2 / slot 20, which is `fabric-publisher`'s own route: publishers 0 and
+1 are already `finished` when `broker` starts. Its `recv` returns `WOULDBLOCK` on every
+pass because **`fabric-publisher` (task 10) never resumes to publish anything**. The
+subscribers are stuck at `hist/inflight=1/1` waiting on samples that task 10 would have
+sent. So the whole QoS-side chain reduces back to the original symptom.
+
+**The root's side of that wake is now fully instrumented and is correct.** Four
+measurements, each reverted after being taken:
+
+* `deliver_wake`'s silent `parked.reason(task).is_none()` early return — added a marker;
+  **zero** lines. No wake is ever dropped for being unparked.
+* `send_atomic`'s wake for the transfer that carries the role — `xfer wake
+  present=true target=10`. The wake *is* generated.
+* `deliver_wake` reaching its answer — `wake answering task=10` fires. The task is
+  answered.
+* `ParkedReplies::wake` ordering — `send_reply(held.slot, …)` completes before
+  `release_slot` deletes the slot, so the B29 fix does not invalidate the reply it just
+  sent.
+
+**And the plane comparison rules out composition.** Byte-for-byte against the *passing*
+stream plane, task 10 parks at the same point, receives exactly the same two
+`capability transferred … to=10` records on the same channel (key 5 = its
+`CONTROL_SLOT = 0`), and the same `sent … queued=1` / `QoS matched` pairs follow. The
+two planes are indistinguishable through the entire role handoff; the stream plane then
+shows `received task=10` twice and QoS shows it **zero** times.
+
+**So the defect is isolated to one transition with everything around it verified:** the
+root sends a reply over a live `cap_reply_cap` to a task the kernel has in
+`BlockedOnReply`, on a plane whose every preceding step matches a plane where the same
+send works, and the task does not run. Twenty-one readings excluded.
+
+**Exit condition unchanged.** The next step is the one measurement not yet taken:
+compare the *stream* plane's kernel state at the same instant. Every seL4 reading so far
+was taken on the failing plane only, so there is no baseline distinguishing "this state
+is wrong" from "this state is normal and the difference is elsewhere". Breaking on
+`possibleSwitchTo` conditioned on task 10's TCB on *both* planes, and diffing the
+caller and `ksSchedulerAction`, is what would show which side diverges. B28 stays open;
+the two park-set spins fixed under it (`d69cd8e`) were real and are kept.
 Re-check this entry after B25 lands rather than investigating it further on its own.
 
 **One wider finding stands regardless of B28**, and it is worth its own slice:
