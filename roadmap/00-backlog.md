@@ -610,15 +610,46 @@ ResumeCurrentThread` and empty ready queues is *also* the healthy end state, so 
 those three readings ever indicated a fault. This is the control that should have been
 taken before any of the seL4 work.
 
-**Exit condition unchanged**, and the remaining question is back in the components with
-a much smaller surface: task 10 is answered (`wake answering task=10`) and does not run,
-on a plane whose role handoff is byte-identical to one where it does. The two candidates
-left are `sel4_transport`'s receive path on the component side — the reply lands but the
-component's `recv` does not return it — and the retained-diagnostics participant that
-`bisect` already showed toggles the defect. The next measurement is a marker inside
-`fabric-publisher`'s `receive_role` loop *after* the `wait` returns, which distinguishes
-"never woken" from "woken and looped". B28 stays open; the two park-set spins fixed
-under it (`d69cd8e`) were real and are kept.
+**The component-side marker was taken and it settles what task 10 is doing.**
+Bracketing `receive_role`'s wait arm in `fabric-publisher` prints
+`[dbg] role: parking` and **never** `[dbg] role: wait returned`. So task 10 is not
+looping between `recv` and `wait`, and it is not mis-decoding an answer: it is blocked
+inside one `slime_rt::wait` that never returns. The staging-failure arm above it
+(`[rt] wait source set could not be staged`) does not fire either, so the wait set did
+cross intact.
+
+**And the root's reply is provably aimed at that exact wait.** Instrumenting
+`ParkedReplies::commit`/`wake` to print the CSlot index gives, in order:
+
+```
+[dbg] role: parking                        <- component enters wait
+SLIME_DBG park task=10 slot=1667           <- root saves the reply cap
+SLIME_GRAPH parked task=10 reason=wait     <- committed as a Wait, not a Recv
+SLIME_DBG wake task=10 slot=1667           <- answered on the same slot
+```
+
+`slot=1667` appears exactly twice in the whole boot, so the index is neither reused nor
+recycled between the park and the send, and the park is committed with
+`ParkReason::Wait` — the operation the component is actually blocked in. Combined with
+the earlier readings, every link is now individually verified: the wake is generated
+(`xfer wake present=true target=10`), it is not dropped as unparked, `deliver_wake`
+reaches `wake answering task=10`, the slot identity matches, `send_reply` runs before
+`release_slot`, and the kernel calls the cap a live `cap_reply_cap`.
+
+**So B28 is isolated to a single unexplained transition:** the root invokes
+`slot.cap().send(info)` on a live reply capability naming a task the kernel has parked
+in `SYS_WAIT`, on the correct CSlot, and that task never resumes — while the *same*
+code path answers tasks 4, 5, 7, 8, 9, 11 and 12 correctly in the same boot, and
+answers task 10 itself correctly on the stream plane. Twenty-two readings excluded.
+
+**Exit condition unchanged.** What has *not* been tried is comparing the two planes
+under the debugger at the same instant. Every kernel reading so far was taken on the
+failing plane alone, and the one baseline that was taken (stream at completion, two
+threads) proved three earlier "faults" were the healthy end state. The next step is to
+break on the reply send for task 10 on *both* planes and diff what the kernel does with
+it — which is the only remaining way to tell a bad capability from a bad thread state.
+B28 stays open; the two park-set spins fixed under it (`d69cd8e`) were real and are
+kept.
 Re-check this entry after B25 lands rather than investigating it further on its own.
 
 **One wider finding stands regardless of B28**, and it is worth its own slice:
