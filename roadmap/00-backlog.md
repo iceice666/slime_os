@@ -16,7 +16,284 @@ at the bottom rather than deleting it.
 
 ## Open
 
+### B25 — a spawn-granted endpoint moves on seL4 and copies on x86, so a parent cannot broker a later introduction
+
+**Problem:** `slime-root`'s `distribute_channel_ends` (`slime-root/src/main.rs`)
+treats an endpoint named by a spawn grant as a **move**: it reassigns the
+channel's holder to the child and calls `table.drop_slot` on the parent's slot.
+The retired kernel copies: `preflight_spawn_grant`
+(`kernel/src/task/mod.rs:286`) performs `cap.derive(grant.rights)` at `:320`
+into a fresh vector that `spawn_with_caps_for` (`:402`) installs into the
+child, and neither reads nor mutates the parent's table — so the parent keeps
+its end.
+
+That difference is invisible to every component that hands an end away and
+never touches it again — which is every component in the nine passing planes —
+and fatal to any composition where a parent grants one end at spawn and then
+*uses* that channel itself. The x86 call plane is exactly such a composition:
+`init.rs::launch_fabric_calls` spawns `fabric-service` with all four service
+halves, keeps them, and afterwards moves each participant's supervision handle
+to the broker with `cap_transfer` over the matching half.
+
+**Not a slot-numbering defect.** Two earlier versions of this entry blamed
+`SlotCursors::take`'s `used_slot_zero`, first as a slot *collision* and then as
+a slot *gap*. The gap is real, but it was a consequence of declaring the
+control channels as **generation grants** — the root then numbers a launched
+component's ends from its own cursor, which resumes above the factory grants
+staging installed. Having `init` mint the pairs and hand them out at spawn
+removes it, because `construct_child` installs a child's grants at `0..count`
+in the requested order. Observed with the pairs minted: the fabric's four
+controls arrive as `channel handed parent=5 child=6 … slot=2,3,4,5`,
+contiguous above the two factory grants at the head of its grant array.
+
+The grants themselves stay in the manifest, which the first attempt at this got
+wrong by deleting them. `_control_sources`
+(`scripts/build/build-generation.py:833`) derives `FABRIC_CALL_CLIENTS` — the
+table the broker maps a control slot to a caller identity with — from exactly
+those four grant *names*, and in `FABRIC_CALL_CONTROL_GRANTS` order rather than
+the builder's `(name, source, target)` sort. Removing them emptied the table
+and tripped `request_response_controls`' four-control assert before the broker
+read a slot. They are the naming source; the minted endpoints are the
+authority.
+
+**Evidence:** `devlog/2026-08-07-p5-4-6-call-spawn-semantics/`. With the plane
+rebuilt to mint its control pairs, the boot reaches
+`SLIME_GRAPH channel handed parent=5 child=6 key=4 slot=2` — the fabric's end
+arriving *and* init's slot being dropped in one step. Every participant's role
+request then reaches the broker (`SLIME_GRAPH received task=4 channel=2`) and
+is never answered: `Broker::provision` blocks in `consume_supervision` awaiting
+a handle no one on this plane can send, and the graph ends `live=10`,
+`parked=8`, `transfers served=0`.
+
+The obvious alternative — each participant sending a handle naming itself — is
+not constructible. `serve_spawn` installs a supervision handle only into the
+**parent's** table, and only after `construct_child` has built the child's
+(`slime-root/src/main.rs:3586-3603`), so no component ever holds a handle
+naming itself.
+
+**Narrowed by experiment, 2026-08-07.** Inverting the call plane's spawn order
+*does* carry the supervision handoff, so the endpoint-move semantics alone are
+not the whole blocker. Spawning the participants first with the *participant*
+half of each control pair, keeping the *service* half in init, transferring each
+participant's handle over it, and spawning the fabric last with the service
+halves reached `[init] call supervision delegated` — the step this entry was
+filed for. Both halves of a pair are still granted exactly once, so no
+`drop_slot` takes anything init needs later.
+
+What that order cannot then deliver is the **fabric's own** handle, and for a
+second, independent reason. Two participants lend to the broker
+(`fabric_call_scenario`'s `send_large_request` and `send_large_reply`), so both
+need a `RIGHT_SUPERVISE` capability naming the fabric at their
+`FABRIC_SUPERVISION_SLOT`. A *spawn grant* copies (`preflight_spawn_grants`
+installs `held.resource` and leaves the parent's slot), which is how
+`drive_sample_plane` hands one handle to a lender — but it requires the fabric
+to exist first, which is the order this experiment inverted. A *transfer* moves
+(`serve_cap_transfer` calls `table.drop_slot` on the source), and
+`FLAG_RETAIN_TRANSFER` keeps the delegation bit at the destination without
+making the move a copy — so one handle reaches one receiver. Init cannot obtain
+a second, because `bootstrap_executable_slot` resolves an executable by
+component identity to exactly one slot and each spawn returns one handle.
+
+So the two requirements are order-incompatible as the components are written:
+the control ends want the fabric spawned last, the fabric handle wants it
+spawned first. That is a sharper statement than "the grant moves", and it means
+the fix is still a model decision rather than a composition detail. Observed
+directly; the experiment was reverted and the tree is back to the committed
+plane.
+
+**Severity:** Latent for every current plane, and a hard blocker for any plane
+whose parent must broker an introduction after spawning. It is a genuine
+*semantic* divergence from the frozen oracle, not a numbering accident, so it
+cannot be resolved by re-blessing a fixture.
+
+**Proposed fix:** Decide which semantics the model wants and make both
+implementations agree, rather than working around it per plane. A copy matches
+the oracle and keeps `init.rs` portable, but it means two tasks name one
+channel end and `ChannelTable` resolves queues by holder — so the copy needs a
+holder model that admits more than one. A move is the cheaper invariant and is
+arguably the more capability-honest one, but then the oracle's own call plane
+is not portable as written and `launch_fabric_calls` needs restructuring.
+
+The experiment above adds a third option, cheaper than either and worth
+weighing first: let a component obtain a **second** handle naming a task it
+already supervises, so a broker's handle can reach both of its lenders without
+the fabric having to be spawned before the participants. The narrow form is a
+`supervision_derive`-style operation returning a fresh capability naming the
+same task, which is a copy of authority the caller already holds and widens
+nothing. That would make the inverted order carry the whole plane, leaving the
+endpoint move/copy question a real but no longer blocking difference.
+
+**Third option implemented, 2026-08-07.** `supervision_derive` (operation 32)
+exists and is gated. A caller holding `RIGHT_SUPERVISE` on a supervision handle
+receives a second capability naming the same task at the same rights, in a fresh
+slot, keeping the source. Root side is `serve_supervision_derive`
+(`slime-root/src/main.rs`); the ABI is mirrored in both component transports.
+
+It widens nothing by construction — same task, same rights, `RIGHT_SUPERVISE`
+required to ask — so it cannot mint authority the caller could not already have
+transferred. `graph::holds_supervision` already scanned every live table for *any*
+holder, because a handle has always been movable, so reclamation needed no change.
+
+**Observed on the supervision plane**, which is the one plane where init holds a
+handle it has not yet given away:
+`SLIME_GRAPH supervision derived task=0 child=3 slot=5`, then the *derived* handle
+answers the child's outcome, then the source is still intact for the existing
+transit transfer. Both markers are gated in
+`check-sel4-supervision-plane.py`. Two fault injections confirmed: returning the
+source slot instead of a new one, and installing the derived handle with no
+rights, each trip a distinct component assertion. A third — dropping the
+`RIGHT_SUPERVISE` gate — is **not** covered, because every caller on this plane
+holds that right; recorded rather than claimed.
+
+**This does not yet close B25**, and investigating the call plane afterwards found
+that B25 is no longer what stops it.
+
+**The supervision grant already works.** `launch_fabric_calls` grants
+`service.supervision_slot` to *both* `fabric-call-client` and
+`fabric-call-server` (`init.rs:841` and `:860` — the same slot, twice), and the
+boot shows all five components spawning. So a *supervision* spawn grant copies:
+`distribute_channel_ends`' move applies to channel ends only. B25's two blocking
+reasons were both about supervision handles, and neither is what the plane hits.
+
+**What the plane actually hits is a missing component, not a missing operation.**
+The boot reaches `[init] call participants spawned` and then dies with
+`[fabric-call] fail: time phase receive`. `fabric-call-time` waits on
+`recv(1, …)` for a phase byte, and *nothing on this plane sends one*: only
+`fabric_operation_scenario.rs` has a time-phase publisher (`PHASE_TIME_SLOT = 2`,
+`send` at `:648`), while `fabric_call_scenario.rs` has only a **client** phase
+channel (`CLIENT_PHASE_SLOT = 1`). There is no time-phase sender in the call
+scenario at all.
+
+A contributing defect was found and fixed-then-reverted along the way:
+`init.rs` grants `FABRIC_CALL_PHASE_TIME_SLOT` to `fabric-call-time`, and that
+constant is `SLOT_ABSENT` (`u32::MAX`) because `sel4-call.zti` declares no phase
+grants. So the component was handed a slot naming nothing. Minting the pair in
+`init` and granting the service half to the fabric was written, built, and booted
+— and the plane *still* fails identically, because plumbing a channel does not
+create the publisher that was never written. The change was reverted rather than
+committed as a partial fix that changes no observable outcome.
+
+**Fixed, and the failure is gone.** `fabric-call-time`'s own comment already said
+"no phase channel in the boot layout" and it already had a `park_only` path for
+exactly this — but the guard was `fabric_boot::active()`, which keys on
+`SLIME_FABRIC_BOOT_CHECK`. The x86 boot generation sets that; the seL4 call plane
+does not, so the component took the phase path on a plane with no phase publisher.
+
+The component now also parks when `FABRIC_CALL_PHASE_TIME_SLOT == SLOT_ABSENT`,
+read from the generated boot layout it already includes. Testing the *slot* rather
+than adding a second flag is deliberate: the condition that matters is whether a
+phase channel exists, the layout already answers that, and a flag would have to be
+kept in step with every future generation.
+
+Observed: `[fabric-call] fail: time phase receive` is gone and replaced by
+`[fabric-call-time] boot idle without a role`. All eight other plane gates re-run
+green.
+
+**The plane still does not complete, and the remaining gap is now located exactly.**
+It wedged with no component failure — `graph iterations exhausted live=11 parked=9`.
+Tracing it:
+
+* The broker is task 6. It received once on channel 4 and then went silent — it
+  never replied and never parked, because
+  `call_broker.rs::consume_supervision`'s `ERR_WOULDBLOCK` arm was `yield_now()`,
+  which is `seL4_Yield` and invisible to the root. **Fixed:** that arm now parks
+  with `wait(&[WaitSource::Endpoint(control)])`, matching `consume_request` in the
+  same file and `operation_broker.rs::consume_supervision`, both of which already
+  parked — this was the one arm that did not. The plane now reports
+  `parked task=6 reason=wait` and reaches a genuine all-parked deadlock instead of
+  burning the root's iteration budget, which is a strictly better failure: the
+  root's accounting can name the waiter. All eight other plane gates re-run green.
+* `consume_supervision` waits for a descriptor carrying a `RIGHT_SUPERVISE`
+  handle naming the *participant*, on that participant's control channel.
+* **Nothing on this plane sends one.** `drive_call_plane` (the seL4 path;
+  `launch_fabric_calls` is the x86 one, keyed on a different flag) never calls
+  `transfer_supervision` at all. Its own comment at `init.rs:1901` describes the
+  intended cut — "each participant delivers its **own** handle over its own
+  control channel, as its first act" — but the grants below it hand each
+  participant a handle naming the **fabric** (`init.rs:1917`), never one naming
+  itself. So the plan in the comment was never implemented, and it *cannot* be as
+  written: `serve_spawn` installs a supervision handle only into the **parent's**
+  table, so no component ever holds one naming itself.
+
+**And `supervision_derive` does *not* close it**, which is worth stating plainly
+after adding the operation: the derive copies a handle the **caller** holds, and
+what is missing here is a handle naming the **participant itself**, held by that
+participant. Init holds one naming each participant, but init has no channel left
+to the fabric — the endpoint grant moved every service half away at spawn.
+
+Traced to the exact shape the broker expects: `consume_request` then
+`consume_supervision` on the **same** control channel
+(`call_broker.rs:273-275`). The participant already holds that channel
+bidirectionally (`RIGHT_SEND | RIGHT_RECV`, `init.rs:1915`) and sends the request
+over it, so the channel is not the obstacle. The obstacle is that no component can
+obtain a supervision capability naming *itself*: `serve_spawn` installs one only
+into the parent's table.
+
+**So the options narrow to two, and both are real design choices rather than
+plumbing:**
+
+1. Let a spawn place a self-naming supervision handle in the *child*, so a
+   participant can present its own identity. That is a new authority shape —
+   a component holding a handle to itself — and needs its own argument about what
+   it permits (`supervision_status` on oneself, notably).
+2. Keep an endpoint grant from moving for this one case, so init retains a service
+   half and can deliver the derived handles itself. That is the original move/copy
+   divergence, and it is where B25 started.
+
+The derive is still the right operation to have — it is what makes option 2 a
+two-line change once the endpoint question is settled, because init can then hand
+the same participant handle to the fabric *and* keep its own for the termination
+wait. But B25's core question is unavoidable, and it is a model decision the way
+the entry always said.
+
+**A third route was looked for and does not exist.** The obvious workaround is for
+init to mint a *fifth* pair as a private delegation channel — grant one half to the
+fabric, keep the other, and deliver the derived handles over it. That fails on a
+stated constraint rather than a mechanism: the broker reads each participant's
+supervision handle from `client_control[index]`
+(`call_broker.rs:273-275`), the participant's *own* control channel, and
+`init.rs:1907` records that `consume_supervision` "cannot tell the two paths
+apart, which is what keeps the broker unmodified". Routing delegation over a
+different channel means changing the broker, and an altered broker is no longer
+the same composition the oracle's gate asserts — which is the property P5.4 exists
+to preserve.
+
+**Sizing the two real options, so the decision is informed:**
+
+* *Copying endpoint grant.* `ChannelTable` resolves a queue by holder through two
+  fields, `producer` and `consumer` (`channel.rs:134-137`), with `recv_queue_mut`
+  matching a task against them. Admitting two holders per end means changing that
+  representation and every path that reads it — the widest change of the three, and
+  it touches all nine passing planes.
+* *Self-naming supervision handle at spawn.* `construct_child` builds the child's
+  table and `serve_spawn` installs the parent's handle after it; adding one more
+  install is mechanically small. The cost is semantic, not structural: a component
+  would hold `RIGHT_SUPERVISE` naming itself, which makes `supervision_status` on
+  oneself reachable and needs an argument about what that means before it is
+  admitted.
+
+Neither is written here, because both change what a capability *means* on every
+plane and that is a decision to take deliberately rather than as a side effect of
+unblocking one gate.
+
+**Exit condition:** A parent grants one end of a minted pair at spawn, uses the
+other end afterwards to deliver a capability to that child, and the child
+observes it — asserted on a plane that declares such a composition, with a
+fault injection showing the parent's end going missing is caught. The call
+plane's `[init] call supervision delegated` marker is that composition, already
+observed; what remains is for the plane to get past it.
+
+## Resolved
+
 ### B28 — a `retained` second route on one publisher stops a *different* publisher's parked role reply from ever being taken
+
+**Resolved 2026-08-07.** Devlog: [`devlog/2026-08-07-b28-iteration-budget/`](../devlog/2026-08-07-b28-iteration-budget/index.md).
+The cause was `MAX_GRAPH_ITERATIONS = 512`: the QoS plane needs more than 512 and
+fewer than 768 root round-trips, measured by bisection. No wake was lost, no
+capability was stale, no scheduler was inconsistent, and every component was
+correct. Bound raised to 2048 with the measurement recorded. Observed exit
+condition: `just sel4_qos_check` passes with fourteen markers across nine causal
+chains, and restoring 512 makes it red on its own `wedged waiter` signature.
 
 **Problem:** On the P5.4.5 QoS plane, `fabric-publisher` parks once in `recv`
 waiting for its role reply and never runs again, although the fabric delivers
@@ -928,275 +1205,6 @@ currently hiding anything.
 
 **Exit condition:** each of the three parks rather than yields, observed on a plane
 whose gate passes — so the conversion is proved not to lose a wake.
-
-### B25 — a spawn-granted endpoint moves on seL4 and copies on x86, so a parent cannot broker a later introduction
-
-**Problem:** `slime-root`'s `distribute_channel_ends` (`slime-root/src/main.rs`)
-treats an endpoint named by a spawn grant as a **move**: it reassigns the
-channel's holder to the child and calls `table.drop_slot` on the parent's slot.
-The retired kernel copies: `preflight_spawn_grant`
-(`kernel/src/task/mod.rs:286`) performs `cap.derive(grant.rights)` at `:320`
-into a fresh vector that `spawn_with_caps_for` (`:402`) installs into the
-child, and neither reads nor mutates the parent's table — so the parent keeps
-its end.
-
-That difference is invisible to every component that hands an end away and
-never touches it again — which is every component in the nine passing planes —
-and fatal to any composition where a parent grants one end at spawn and then
-*uses* that channel itself. The x86 call plane is exactly such a composition:
-`init.rs::launch_fabric_calls` spawns `fabric-service` with all four service
-halves, keeps them, and afterwards moves each participant's supervision handle
-to the broker with `cap_transfer` over the matching half.
-
-**Not a slot-numbering defect.** Two earlier versions of this entry blamed
-`SlotCursors::take`'s `used_slot_zero`, first as a slot *collision* and then as
-a slot *gap*. The gap is real, but it was a consequence of declaring the
-control channels as **generation grants** — the root then numbers a launched
-component's ends from its own cursor, which resumes above the factory grants
-staging installed. Having `init` mint the pairs and hand them out at spawn
-removes it, because `construct_child` installs a child's grants at `0..count`
-in the requested order. Observed with the pairs minted: the fabric's four
-controls arrive as `channel handed parent=5 child=6 … slot=2,3,4,5`,
-contiguous above the two factory grants at the head of its grant array.
-
-The grants themselves stay in the manifest, which the first attempt at this got
-wrong by deleting them. `_control_sources`
-(`scripts/build/build-generation.py:833`) derives `FABRIC_CALL_CLIENTS` — the
-table the broker maps a control slot to a caller identity with — from exactly
-those four grant *names*, and in `FABRIC_CALL_CONTROL_GRANTS` order rather than
-the builder's `(name, source, target)` sort. Removing them emptied the table
-and tripped `request_response_controls`' four-control assert before the broker
-read a slot. They are the naming source; the minted endpoints are the
-authority.
-
-**Evidence:** `devlog/2026-08-07-p5-4-6-call-spawn-semantics/`. With the plane
-rebuilt to mint its control pairs, the boot reaches
-`SLIME_GRAPH channel handed parent=5 child=6 key=4 slot=2` — the fabric's end
-arriving *and* init's slot being dropped in one step. Every participant's role
-request then reaches the broker (`SLIME_GRAPH received task=4 channel=2`) and
-is never answered: `Broker::provision` blocks in `consume_supervision` awaiting
-a handle no one on this plane can send, and the graph ends `live=10`,
-`parked=8`, `transfers served=0`.
-
-The obvious alternative — each participant sending a handle naming itself — is
-not constructible. `serve_spawn` installs a supervision handle only into the
-**parent's** table, and only after `construct_child` has built the child's
-(`slime-root/src/main.rs:3586-3603`), so no component ever holds a handle
-naming itself.
-
-**Narrowed by experiment, 2026-08-07.** Inverting the call plane's spawn order
-*does* carry the supervision handoff, so the endpoint-move semantics alone are
-not the whole blocker. Spawning the participants first with the *participant*
-half of each control pair, keeping the *service* half in init, transferring each
-participant's handle over it, and spawning the fabric last with the service
-halves reached `[init] call supervision delegated` — the step this entry was
-filed for. Both halves of a pair are still granted exactly once, so no
-`drop_slot` takes anything init needs later.
-
-What that order cannot then deliver is the **fabric's own** handle, and for a
-second, independent reason. Two participants lend to the broker
-(`fabric_call_scenario`'s `send_large_request` and `send_large_reply`), so both
-need a `RIGHT_SUPERVISE` capability naming the fabric at their
-`FABRIC_SUPERVISION_SLOT`. A *spawn grant* copies (`preflight_spawn_grants`
-installs `held.resource` and leaves the parent's slot), which is how
-`drive_sample_plane` hands one handle to a lender — but it requires the fabric
-to exist first, which is the order this experiment inverted. A *transfer* moves
-(`serve_cap_transfer` calls `table.drop_slot` on the source), and
-`FLAG_RETAIN_TRANSFER` keeps the delegation bit at the destination without
-making the move a copy — so one handle reaches one receiver. Init cannot obtain
-a second, because `bootstrap_executable_slot` resolves an executable by
-component identity to exactly one slot and each spawn returns one handle.
-
-So the two requirements are order-incompatible as the components are written:
-the control ends want the fabric spawned last, the fabric handle wants it
-spawned first. That is a sharper statement than "the grant moves", and it means
-the fix is still a model decision rather than a composition detail. Observed
-directly; the experiment was reverted and the tree is back to the committed
-plane.
-
-**Severity:** Latent for every current plane, and a hard blocker for any plane
-whose parent must broker an introduction after spawning. It is a genuine
-*semantic* divergence from the frozen oracle, not a numbering accident, so it
-cannot be resolved by re-blessing a fixture.
-
-**Proposed fix:** Decide which semantics the model wants and make both
-implementations agree, rather than working around it per plane. A copy matches
-the oracle and keeps `init.rs` portable, but it means two tasks name one
-channel end and `ChannelTable` resolves queues by holder — so the copy needs a
-holder model that admits more than one. A move is the cheaper invariant and is
-arguably the more capability-honest one, but then the oracle's own call plane
-is not portable as written and `launch_fabric_calls` needs restructuring.
-
-The experiment above adds a third option, cheaper than either and worth
-weighing first: let a component obtain a **second** handle naming a task it
-already supervises, so a broker's handle can reach both of its lenders without
-the fabric having to be spawned before the participants. The narrow form is a
-`supervision_derive`-style operation returning a fresh capability naming the
-same task, which is a copy of authority the caller already holds and widens
-nothing. That would make the inverted order carry the whole plane, leaving the
-endpoint move/copy question a real but no longer blocking difference.
-
-**Third option implemented, 2026-08-07.** `supervision_derive` (operation 32)
-exists and is gated. A caller holding `RIGHT_SUPERVISE` on a supervision handle
-receives a second capability naming the same task at the same rights, in a fresh
-slot, keeping the source. Root side is `serve_supervision_derive`
-(`slime-root/src/main.rs`); the ABI is mirrored in both component transports.
-
-It widens nothing by construction — same task, same rights, `RIGHT_SUPERVISE`
-required to ask — so it cannot mint authority the caller could not already have
-transferred. `graph::holds_supervision` already scanned every live table for *any*
-holder, because a handle has always been movable, so reclamation needed no change.
-
-**Observed on the supervision plane**, which is the one plane where init holds a
-handle it has not yet given away:
-`SLIME_GRAPH supervision derived task=0 child=3 slot=5`, then the *derived* handle
-answers the child's outcome, then the source is still intact for the existing
-transit transfer. Both markers are gated in
-`check-sel4-supervision-plane.py`. Two fault injections confirmed: returning the
-source slot instead of a new one, and installing the derived handle with no
-rights, each trip a distinct component assertion. A third — dropping the
-`RIGHT_SUPERVISE` gate — is **not** covered, because every caller on this plane
-holds that right; recorded rather than claimed.
-
-**This does not yet close B25**, and investigating the call plane afterwards found
-that B25 is no longer what stops it.
-
-**The supervision grant already works.** `launch_fabric_calls` grants
-`service.supervision_slot` to *both* `fabric-call-client` and
-`fabric-call-server` (`init.rs:841` and `:860` — the same slot, twice), and the
-boot shows all five components spawning. So a *supervision* spawn grant copies:
-`distribute_channel_ends`' move applies to channel ends only. B25's two blocking
-reasons were both about supervision handles, and neither is what the plane hits.
-
-**What the plane actually hits is a missing component, not a missing operation.**
-The boot reaches `[init] call participants spawned` and then dies with
-`[fabric-call] fail: time phase receive`. `fabric-call-time` waits on
-`recv(1, …)` for a phase byte, and *nothing on this plane sends one*: only
-`fabric_operation_scenario.rs` has a time-phase publisher (`PHASE_TIME_SLOT = 2`,
-`send` at `:648`), while `fabric_call_scenario.rs` has only a **client** phase
-channel (`CLIENT_PHASE_SLOT = 1`). There is no time-phase sender in the call
-scenario at all.
-
-A contributing defect was found and fixed-then-reverted along the way:
-`init.rs` grants `FABRIC_CALL_PHASE_TIME_SLOT` to `fabric-call-time`, and that
-constant is `SLOT_ABSENT` (`u32::MAX`) because `sel4-call.zti` declares no phase
-grants. So the component was handed a slot naming nothing. Minting the pair in
-`init` and granting the service half to the fabric was written, built, and booted
-— and the plane *still* fails identically, because plumbing a channel does not
-create the publisher that was never written. The change was reverted rather than
-committed as a partial fix that changes no observable outcome.
-
-**Fixed, and the failure is gone.** `fabric-call-time`'s own comment already said
-"no phase channel in the boot layout" and it already had a `park_only` path for
-exactly this — but the guard was `fabric_boot::active()`, which keys on
-`SLIME_FABRIC_BOOT_CHECK`. The x86 boot generation sets that; the seL4 call plane
-does not, so the component took the phase path on a plane with no phase publisher.
-
-The component now also parks when `FABRIC_CALL_PHASE_TIME_SLOT == SLOT_ABSENT`,
-read from the generated boot layout it already includes. Testing the *slot* rather
-than adding a second flag is deliberate: the condition that matters is whether a
-phase channel exists, the layout already answers that, and a flag would have to be
-kept in step with every future generation.
-
-Observed: `[fabric-call] fail: time phase receive` is gone and replaced by
-`[fabric-call-time] boot idle without a role`. All eight other plane gates re-run
-green.
-
-**The plane still does not complete, and the remaining gap is now located exactly.**
-It wedged with no component failure — `graph iterations exhausted live=11 parked=9`.
-Tracing it:
-
-* The broker is task 6. It received once on channel 4 and then went silent — it
-  never replied and never parked, because
-  `call_broker.rs::consume_supervision`'s `ERR_WOULDBLOCK` arm was `yield_now()`,
-  which is `seL4_Yield` and invisible to the root. **Fixed:** that arm now parks
-  with `wait(&[WaitSource::Endpoint(control)])`, matching `consume_request` in the
-  same file and `operation_broker.rs::consume_supervision`, both of which already
-  parked — this was the one arm that did not. The plane now reports
-  `parked task=6 reason=wait` and reaches a genuine all-parked deadlock instead of
-  burning the root's iteration budget, which is a strictly better failure: the
-  root's accounting can name the waiter. All eight other plane gates re-run green.
-* `consume_supervision` waits for a descriptor carrying a `RIGHT_SUPERVISE`
-  handle naming the *participant*, on that participant's control channel.
-* **Nothing on this plane sends one.** `drive_call_plane` (the seL4 path;
-  `launch_fabric_calls` is the x86 one, keyed on a different flag) never calls
-  `transfer_supervision` at all. Its own comment at `init.rs:1901` describes the
-  intended cut — "each participant delivers its **own** handle over its own
-  control channel, as its first act" — but the grants below it hand each
-  participant a handle naming the **fabric** (`init.rs:1917`), never one naming
-  itself. So the plan in the comment was never implemented, and it *cannot* be as
-  written: `serve_spawn` installs a supervision handle only into the **parent's**
-  table, so no component ever holds one naming itself.
-
-**And `supervision_derive` does *not* close it**, which is worth stating plainly
-after adding the operation: the derive copies a handle the **caller** holds, and
-what is missing here is a handle naming the **participant itself**, held by that
-participant. Init holds one naming each participant, but init has no channel left
-to the fabric — the endpoint grant moved every service half away at spawn.
-
-Traced to the exact shape the broker expects: `consume_request` then
-`consume_supervision` on the **same** control channel
-(`call_broker.rs:273-275`). The participant already holds that channel
-bidirectionally (`RIGHT_SEND | RIGHT_RECV`, `init.rs:1915`) and sends the request
-over it, so the channel is not the obstacle. The obstacle is that no component can
-obtain a supervision capability naming *itself*: `serve_spawn` installs one only
-into the parent's table.
-
-**So the options narrow to two, and both are real design choices rather than
-plumbing:**
-
-1. Let a spawn place a self-naming supervision handle in the *child*, so a
-   participant can present its own identity. That is a new authority shape —
-   a component holding a handle to itself — and needs its own argument about what
-   it permits (`supervision_status` on oneself, notably).
-2. Keep an endpoint grant from moving for this one case, so init retains a service
-   half and can deliver the derived handles itself. That is the original move/copy
-   divergence, and it is where B25 started.
-
-The derive is still the right operation to have — it is what makes option 2 a
-two-line change once the endpoint question is settled, because init can then hand
-the same participant handle to the fabric *and* keep its own for the termination
-wait. But B25's core question is unavoidable, and it is a model decision the way
-the entry always said.
-
-**A third route was looked for and does not exist.** The obvious workaround is for
-init to mint a *fifth* pair as a private delegation channel — grant one half to the
-fabric, keep the other, and deliver the derived handles over it. That fails on a
-stated constraint rather than a mechanism: the broker reads each participant's
-supervision handle from `client_control[index]`
-(`call_broker.rs:273-275`), the participant's *own* control channel, and
-`init.rs:1907` records that `consume_supervision` "cannot tell the two paths
-apart, which is what keeps the broker unmodified". Routing delegation over a
-different channel means changing the broker, and an altered broker is no longer
-the same composition the oracle's gate asserts — which is the property P5.4 exists
-to preserve.
-
-**Sizing the two real options, so the decision is informed:**
-
-* *Copying endpoint grant.* `ChannelTable` resolves a queue by holder through two
-  fields, `producer` and `consumer` (`channel.rs:134-137`), with `recv_queue_mut`
-  matching a task against them. Admitting two holders per end means changing that
-  representation and every path that reads it — the widest change of the three, and
-  it touches all nine passing planes.
-* *Self-naming supervision handle at spawn.* `construct_child` builds the child's
-  table and `serve_spawn` installs the parent's handle after it; adding one more
-  install is mechanically small. The cost is semantic, not structural: a component
-  would hold `RIGHT_SUPERVISE` naming itself, which makes `supervision_status` on
-  oneself reachable and needs an argument about what that means before it is
-  admitted.
-
-Neither is written here, because both change what a capability *means* on every
-plane and that is a decision to take deliberately rather than as a side effect of
-unblocking one gate.
-
-**Exit condition:** A parent grants one end of a minted pair at spawn, uses the
-other end afterwards to deliver a capability to that child, and the child
-observes it — asserted on a plane that declares such a composition, with a
-fault injection showing the parent's end going missing is caught. The call
-plane's `[init] call supervision delegated` marker is that composition, already
-observed; what remains is for the plane to get past it.
-
-## Resolved
 
 ### B12 — the component build's `--remap-path-prefix` names a path that does not exist
 

@@ -2,7 +2,7 @@
 
 **Purpose:** Preserve one Slime capability/component/generation architecture across target profiles while making AArch64 and Raspberry Pi 5 the near-term product path.
 
-**Status:** In progress - P0, P1, P2.1, P5.1, P5.2, all of P5.3, all of P5.5, P5.4.1, and P5.4.4 complete.
+**Status:** In progress - P0, P1, P2.1, P5.1, P5.2, all of P5.3, all of P5.5, P5.4.1, P5.4.4, and P5.4.5 complete.
 
 **Decision:** AArch64/Raspberry Pi 5 is now the near-term physical target because the current product goal is the RPi5 ROS 2 two-node demo. The existing x86-64 QEMU path remains the regression oracle for completed work until each semantic corpus is replayed on AArch64, but x86-64/Framework is no longer the product-leading roadmap. RV64 is deferred. As of P5, the AArch64 kernel-side mechanism is being substituted with upstream seL4 rather than hand-written: see [P5](#p5-sel4-microkernel-substitution), which supersedes the custom-kernel half of P2.2-P2.6 if it completes.
 
@@ -448,7 +448,7 @@ One named Raspberry Pi 5 profile runs the verified isolated Slime vertical slice
 ## P5: seL4 microkernel substitution
 
 **Status:** In progress — P5.1, P5.2, all of P5.3, all of P5.5, P5.4.1,
-P5.4.4, and P5.4.10 complete; P5.4.2, P5.4.5, and P5.4.6 in progress; P5.4.3,
+P5.4.4, P5.4.5, and P5.4.10 complete; P5.4.2 and P5.4.6 in progress; P5.4.3,
 P5.4.7–P5.4.9, and P5.4.final planned.
 
 **Depends on:** P0 and P1. Supersedes the custom-kernel half of P2.2–P2.6 if it
@@ -1239,7 +1239,7 @@ compose the earlier.
 | P5.4.2 | M5.1–M5.9 | **In progress** — ten storage/rollback/recovery gaps. Structural: five of the nine `Mediation::Unavailable` planes are M5's surface. Carries `object_store.rs`'s 32 ungated assertions, of which the eight superblock-shaped ones are now portable and host-tested in `boot-contracts` (see [`devlog/2026-08-07-p5-4-2-store-superblock/`](../devlog/2026-08-07-p5-4-2-store-superblock/index.md)). The recovery index decoder had no tests either; thirteen added (see [`devlog/2026-08-07-p5-4-2-recovery-index/`](../devlog/2026-08-07-p5-4-2-recovery-index/index.md)). The rest need a block device `slime-root` does not have |
 | P5.4.3 | M6.1–M6.7 | **In progress** — five gaps (directory, dango, generation commands, powerbox, transfer) and two partials (M6.1 v2 determinism, M6.2 protocol surface). M6.7's manifest decoder had no tests at all; thirteen are now host-tested and Miri-clean with three fault injections confirmed, which is unit evidence only. See below |
 | P5.4.4 | C8.2 | **Complete** — aggregate fabric-graph admission before component launch; see below |
-| P5.4.5 | C8.5 | **In progress** — reliable/retained/timed QoS, plus the two C8.5 assertions colocated in `kernel/tests/fabric_stream.rs`. Three arms already ran on the seL4 stream plane unasserted (matching-before-data, bounded loss under a stall, peer death as a distinct event) and are now gated. An eleventh image, `sel4-qos`, adds the monotonic-time channel those arms needed, and five more now fire — RELIABLE retry accounting, retry exhaustion, deadline miss, lifespan expiry, liveliness loss. `no inline retained publisher` is gone, resolved by giving `fabric-publisher-b`'s diagnostics participant a `retained` route so the fabric holds an inline retained head independent of publisher timing. Lease and tie ordering stay unobserved and no gate is registered: the plane wedges before its final marker, because `fabric-publisher` blocks in one `SYS_WAIT` that never returns even though the root answers it on the correct reply CSlot. Tracked as B28. See [`devlog/2026-08-07-p5-4-5-qos-arms/`](../devlog/2026-08-07-p5-4-5-qos-arms/index.md) and [`devlog/2026-08-07-p5-4-5-qos-clock/`](../devlog/2026-08-07-p5-4-5-qos-clock/index.md) |
+| P5.4.5 | C8.5 | **Complete** — `just sel4_qos_check` asserts fourteen markers across nine causal chains on the `sel4-qos` plane: RELIABLE retry accounting and exhaustion, missed deadline, expired lifespan, lost liveliness lease, peer-dead retirement, and a monotonic clock the generation grants. The blocker was B28, which was `MAX_GRAPH_ITERATIONS = 512` rather than a defect; see [`devlog/2026-08-07-b28-iteration-budget/`](../devlog/2026-08-07-b28-iteration-budget/index.md) |
 | P5.4.6 | C8.6 | **In progress** — bounded native calls. The `sel4-call` image builds, admits its graph, mints and binds every control channel, spawns all five components, and delivers each role request to the broker; it then deadlocks. `slime-root` treats a spawn-granted endpoint as a *move* while the oracle treats it as a *copy*, so init cannot hand the broker the supervision handles the x86 plane transfers after spawning; but inverting the spawn order was shown to carry that handoff, so the move/copy difference is not the whole blocker. The two requirements are order-incompatible as the components are written: the control ends want the fabric spawned last, its own supervision handle wants it spawned first. Tracked as B25. No gate yet. See [`devlog/2026-08-07-p5-4-6-call-spawn-semantics/`](../devlog/2026-08-07-p5-4-6-call-spawn-semantics/index.md) |
 | P5.4.7 | C8.7 | Native operations |
 | P5.4.8 | C8.8 | Filtered introspection and declared interposition |
@@ -1390,7 +1390,12 @@ crosses a boundary rather than a manifest that merely decodes.
 
 ### P5.4.5 — C8.5 reliable, retained, and timed QoS
 
-**Status:** In progress.
+**Status:** Complete — `just sel4_qos_check` asserts fourteen markers across nine
+causal chains on the `sel4-qos` plane, and the plane reaches
+`[init] fabric stream complete`. The blocker was B28, which turned out to be
+`MAX_GRAPH_ITERATIONS = 512` rather than a defect: the QoS plane needs between 512
+and 768 root round-trips. See
+[`devlog/2026-08-07-b28-iteration-budget/`](../devlog/2026-08-07-b28-iteration-budget/index.md).
 
 **Depends on:** P5.4.1.
 

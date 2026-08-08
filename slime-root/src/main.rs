@@ -1462,13 +1462,23 @@ fn declared_quota(budget: Option<&SharedBufferBudget<'_>>, component: &str) -> H
 ///
 /// **Headroom is measured, not assumed.** P5.5.1 made `recv` non-blocking, so a
 /// component that blocks now costs two iterations where it cost one — the
-/// `recv` that reports `WouldBlock` and the `wait` that parks. The densest
-/// graph this cutover declares is the typed fabric, whose nine tasks provision
-/// four route roles and broker seven samples: it used **136** of these 512, so
-/// the change spent headroom rather than exhausting it. A graph that reached
-/// the bound would drain incompletely and fail its gate on a missing terminal
-/// marker, which is the wedge this exists to catch.
-const MAX_GRAPH_ITERATIONS: usize = 512;
+/// `recv` that reports `WouldBlock` and the `wait` that parks.
+///
+/// The stream plane's nine tasks provision four route roles and broker seven
+/// samples in **136** iterations. The **QoS** plane is far denser and is what
+/// set this number: it drives a simulated clock through scheduled deadline,
+/// lifespan, liveliness, and retry boundaries, and each boundary is a park/wake
+/// cycle for the broker plus a sweep of every participant. At 512 it exhausted
+/// the bound with `fabric-publisher`'s send still queued — diagnosed at length
+/// as B28 and mistaken in turn for a lost wake, a scheduler fault, and an
+/// always-ready park source before the cause turned out to be this constant.
+/// Measured directly: **768 completes, 512 does not.** 2048 is that floor with
+/// room for a denser graph, and the wedge detector below still bounds a real
+/// livelock to seconds.
+///
+/// A graph that reached the bound would drain incompletely and fail its gate on
+/// a missing terminal marker, which is the wedge this exists to catch.
+const MAX_GRAPH_ITERATIONS: usize = 2048;
 
 /// Serve the root operation surface for the component graph.
 ///

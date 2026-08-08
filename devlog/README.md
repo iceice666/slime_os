@@ -197,6 +197,7 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-07 | [B25 (part) — a second supervision handle for one task](2026-08-07-b25-supervision-derive/index.md) | Change | Verified | B25, P5.4.6, P5.4 |
 | 2026-08-07 | [P5.4.2 (part) — GPT redundancy and recovery precedence, made portable](2026-08-07-p5-4-2-gpt-validation/index.md) | Change | Verified | P5.4.2, P5.4, P5.4.1, M5.4 |
 | 2026-08-07 | [P5.4.2 (part) — the object store's crash consistency, made portable](2026-08-07-p5-4-2-object-store/index.md) | Change | Verified | P5.4.2, P5.4, P5.4.1, M5.4 |
+| 2026-08-07 | [B28 — the QoS plane needed more root iterations, not a bug fix](2026-08-07-b28-iteration-budget/index.md) | Defect | Verified | B28, P5.4.5 |
 | 2026-08-07 | [P5.4.5 (part) — C8.5's arms that already ran, now asserted](2026-08-07-p5-4-5-qos-arms/index.md) | Change | Verified | P5.4.5, P5.4, P5.4.1, C8.5 |
 | 2026-08-07 | [P5.4.6 (part) — the C8.6 call plane builds and boots; the broker's slot model does not fit](2026-08-07-p5-4-6-call-plane/index.md) | Change | Root-caused | P5.4.6, P5.4, P5.4.1, C8.6 |
 | 2026-08-07 | [P5.4.6 — the C8.6 call plane's real blocker is spawn-grant semantics, not slot numbering](2026-08-07-p5-4-6-call-spawn-semantics/index.md) | Defect | Root-caused | P5.4.6, B25, C8.6 |

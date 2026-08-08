@@ -59,6 +59,7 @@ GATES: tuple[tuple[str, str, int], ...] = (
     ("sel4_spawn_plane", "check/check-sel4-spawn-plane.py", 32),
     ("sel4_supervision_plane", "check/check-sel4-supervision-plane.py", 11),
     ("sel4_stream_plane", "check/check-sel4-stream-plane.py", 56),
+    ("sel4_qos_plane", "check/check-sel4-qos-plane.py", 14),
 )
 
 

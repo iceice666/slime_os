@@ -154,6 +154,14 @@ sel4_boot_layout_bless: sel4_pin_check
 #
 # Needs no build and no QEMU: it asserts that the assertions have teeth, not that
 # any image boots. The planes' own gates cover the latter.
+# P5.4.5 on seL4: C8.5's declared QoS policy, on the `sel4-qos` plane.
+#
+# Separate from `sel4_stream_check` because `sel4-stream.zti` grants no time
+# capability, so its simulated-time clause is structurally unreachable — the arms
+# this asserts cannot fire there at all.
+sel4_qos_check: sel4_pin_check
+    python3 scripts/check/check-sel4-qos-plane.py
+
 sel4_gate_control_check:
     python3 scripts/check/check-sel4-gate-controls.py
 

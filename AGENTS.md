@@ -67,6 +67,7 @@ Use the Justfile targets from the repository root:
 - `just release_trust_check` — signed release staging, replay refusal, trust-root rotation continuity, rollback, and promotion.
 - `just devlog_check` — validate devlog structure, front matter, and links.
 - `just sel4_boot_layout_check` — init's resolved capability layout on every seL4 plane, against frozen fixtures (B10). Bless with `just sel4_boot_layout_bless`.
+- `just sel4_qos_check` — C8.5's declared QoS policy on the `sel4-qos` plane: RELIABLE retry accounting and exhaustion, missed deadline, expired lifespan, lost liveliness lease, peer-dead retirement (P5.4.5).
 - `just sel4_gate_control_check` — proves the seL4 plane gates fail when a required marker is missing, out of order, or a failure marker appears. The seL4 analogue of the oracle's `should_panic.rs`; needs no build or QEMU.
 - `just fmt_check_all` — check Rust formatting for every workspace crate.
 - `just lint_all` — run clippy with warnings denied for every workspace crate (kernel, components, stage0, boot-contracts).
