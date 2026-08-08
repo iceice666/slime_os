@@ -915,12 +915,38 @@ rights, each trip a distinct component assertion. A third — dropping the
 `RIGHT_SUPERVISE` gate — is **not** covered, because every caller on this plane
 holds that right; recorded rather than claimed.
 
-**This does not yet close B25.** The operation removes the *second* reason the call
-plane could not be composed (init needing two `RIGHT_SUPERVISE` handles naming the
-fabric, one per lender). The first reason stands: the endpoint move/copy divergence
-is still real, and `launch_fabric_calls` still has to be restructured to the
-inverted spawn order for the derive to be useful there. That restructuring is the
-remaining work, and it is now a composition change rather than a model decision.
+**This does not yet close B25**, and investigating the call plane afterwards found
+that B25 is no longer what stops it.
+
+**The supervision grant already works.** `launch_fabric_calls` grants
+`service.supervision_slot` to *both* `fabric-call-client` and
+`fabric-call-server` (`init.rs:841` and `:860` — the same slot, twice), and the
+boot shows all five components spawning. So a *supervision* spawn grant copies:
+`distribute_channel_ends`' move applies to channel ends only. B25's two blocking
+reasons were both about supervision handles, and neither is what the plane hits.
+
+**What the plane actually hits is a missing component, not a missing operation.**
+The boot reaches `[init] call participants spawned` and then dies with
+`[fabric-call] fail: time phase receive`. `fabric-call-time` waits on
+`recv(1, …)` for a phase byte, and *nothing on this plane sends one*: only
+`fabric_operation_scenario.rs` has a time-phase publisher (`PHASE_TIME_SLOT = 2`,
+`send` at `:648`), while `fabric_call_scenario.rs` has only a **client** phase
+channel (`CLIENT_PHASE_SLOT = 1`). There is no time-phase sender in the call
+scenario at all.
+
+A contributing defect was found and fixed-then-reverted along the way:
+`init.rs` grants `FABRIC_CALL_PHASE_TIME_SLOT` to `fabric-call-time`, and that
+constant is `SLOT_ABSENT` (`u32::MAX`) because `sel4-call.zti` declares no phase
+grants. So the component was handed a slot naming nothing. Minting the pair in
+`init` and granting the service half to the fabric was written, built, and booted
+— and the plane *still* fails identically, because plumbing a channel does not
+create the publisher that was never written. The change was reverted rather than
+committed as a partial fix that changes no observable outcome.
+
+**So the remaining work for the call plane is C8.6 scenario code**: a time-phase
+publisher in `fabric_call_scenario.rs`, plus the phase channel plumbed from
+`init`. That is ordinary milestone work, not a capability-model decision, and B25's
+endpoint move/copy divergence — real, and still unresolved — is not on its path.
 
 **Exit condition:** A parent grants one end of a minted pair at spawn, uses the
 other end afterwards to deliver a capability to that child, and the child
