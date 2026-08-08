@@ -1863,12 +1863,25 @@ fn park_on_streams(
         push(publisher.slot);
     }
     for subscriber in subscribers.iter().flatten() {
+        // A subscriber whose peer is gone is excluded for the same reason a
+        // finished publisher is: its endpoint is permanently ready, so leaving
+        // it in the set makes `wait` return immediately and turns this park
+        // into a spin. `ended` is set both on a clean end event and on
+        // `ERR_PEER_DEAD`, and in the second case nothing will ever arrive.
+        if subscriber.ended {
+            continue;
+        }
         // The ack channel, not the data channel: the fabric only ever sends on
         // the data endpoint, so waiting there would never wake. A subscriber
         // becomes interesting when it releases a slot or dies.
         push(subscriber.ack_slot);
     }
-    if option_env!("SLIME_FABRIC_QOS_CHECK") == Some("1") {
+    // The clock is excluded once its peer is gone, for the same reason a
+    // finished publisher and a retired subscriber are: a dead endpoint is
+    // permanently ready, so leaving it in the set makes `wait` return at once
+    // and turns this park into a spin. `time_peer_dead` is the same probe the
+    // stream worker already uses before asking the clock to advance.
+    if qos_check() && !time_peer_dead() {
         push(TIME_SLOT);
     }
     if count == 0 {
