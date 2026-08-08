@@ -6,6 +6,9 @@ publish = false
 
 [features]
 release-crypto = ["dep:ed25519-dalek"]
+# GPT partition validation. Off by default: it needs an allocator, and component
+# binaries link this crate without one.
+gpt = []
 
 [dependencies]
 ed25519-dalek = { version = "2.2.0", default-features = false, optional = true }

@@ -1313,6 +1313,14 @@ from bytes alone — and are now portable, host-tested, and Miri-clean in
 `boot-contracts::store_disk`; see
 [`devlog/2026-08-07-p5-4-2-store-superblock/`](../devlog/2026-08-07-p5-4-2-store-superblock/index.md).
 
+GPT partition validation is likewise portable and likewise had no tests:
+`kernel/src/storage/gpt.rs` is 336 lines of pure byte parsing — protective MBR,
+both header copies, entry-array CRCs, bounds, overlap, store selection — reachable
+only from the frozen oracle. It is now `boot-contracts::gpt` behind a default-off
+`gpt` feature, host-tested and Miri-clean with twelve tests covering M5.4's
+redundancy and recovery-precedence properties; see
+[`devlog/2026-08-07-p5-4-2-gpt-validation/`](../devlog/2026-08-07-p5-4-2-gpt-validation/index.md).
+
 The recovery index — which generation to recover to, the LBA span holding its
 state objects, and a content-addressed root over every state binding — likewise
 had **no tests at all**, despite eight error variants, a strict ascending-order
