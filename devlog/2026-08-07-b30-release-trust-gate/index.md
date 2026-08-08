@@ -106,9 +106,33 @@ entry is about.
 
 `verify_signatures`, `verify_generation`, and `verify_for_staging` still have no
 negative case reaching Rust — the same shape as the rotation defect, in the same
-file. `apply_rotation`'s `replacement.validate()?` also has no fixture: deleting
-it left the gate green, because every replacement root in the corpus is
-well-formed. A fixture with a malformed replacement root would close that.
+file.
+
+**`apply_rotation`'s `replacement.validate()?` was investigated and is redundant
+rather than untested.** Deleting the call leaves the gate green, which first
+looked like a coverage hole. Three fixtures were built to close it and all three
+were reverted, because each is refused with the call deleted:
+
+| Fixture | Refused without `validate` by |
+|---|---|
+| replacement declaring 3 keys, carrying 2 | key-id lookup: `sha256([0; 32])` matches nothing |
+| replacement `key_count = 3` with 2 keys written | same |
+| correct 2-key set with `threshold = 3` | `verify_signature_entries`: `count < root.threshold` |
+
+The third required parameterising `build_rotation`'s hardcoded threshold, and it
+is the strongest candidate — signature-valid, `validate`-invalid — yet still
+shadowed, because the replacement root is handed to `verify_signature_entries`
+immediately after and that function repeats the quorum check.
+
+So every malformation `TrustRoot::validate` catches is also caught downstream on
+this path, and no black-box fixture can distinguish the call's presence. It is
+defence in depth. `validate` itself is directly covered by fifteen unit tests in
+`boot-contracts/src/release.rs`. If a future `apply_rotation` ever uses the
+replacement root *before* signing, the call becomes load-bearing and will need
+the third fixture above.
+
+Shipping any of the three would have been a test that passes with and without the
+code it names — coverage theatre, and precisely the defect this entry is about.
 
 ## Artifacts and provenance
 

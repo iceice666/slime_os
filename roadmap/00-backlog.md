@@ -944,6 +944,42 @@ removing the replacement check fails with `apply_rotation accepted version-skip`
 removing the previous check fails with `apply_rotation accepted stale-previous`.
 Both observed, then reverted.
 
+**One guard attempted and deliberately not shipped.** `apply_rotation`'s
+`replacement.validate()?` still has no fixture that isolates it: deleting the call
+leaves the gate green. Two candidate fixtures were built and both failed to
+discriminate, because the signature loop rejects them first —
+`verify_signature_entries` resolves each key-id by `sha256(key)` against
+`root.keys[..key_count]`, so any replacement root malformed enough to fail
+`validate` also fails to match a signature. Shipping a fixture that passes with
+and without the call would have looked like coverage while proving nothing, so it
+was reverted rather than committed.
+
+**A third attempt established *why*, and the answer is that the call is
+redundant on this path rather than untested.** `build_rotation` was
+parameterised to take the replacement threshold, and a fixture built with a
+correct two-key set and `threshold = 3` — signature-valid, `validate`-invalid.
+It is still refused with the call deleted, because
+`verify_signature_entries` independently returns `MissingSignatures` when
+`count < root.threshold`, and the replacement root is passed to it immediately
+after. Every malformation `TrustRoot::validate` catches is therefore also caught
+downstream on this path:
+
+* threshold above key count → `count < threshold` in `verify_signature_entries`
+* zero, duplicate, or trailing keys → no `sha256(key)` matches the entry's key-id
+
+So `replacement.validate()?` is defence in depth, not a live guard, and no
+black-box fixture can distinguish its presence. Three candidate fixtures were
+built and all three were reverted rather than committed, because a test that
+passes with and without the code it names looks like coverage while proving
+nothing.
+
+**Recorded as accepted, not open.** The honest statement is that `validate` is
+directly covered by the fifteen `TrustRoot::validate` unit tests in
+`boot-contracts/src/release.rs`, and its use inside `apply_rotation` is
+unreachable-by-construction given the checks that follow it. If that ordering ever
+changes — if a future `apply_rotation` uses the replacement root before signing —
+the call becomes load-bearing and will need the fixture this note describes.
+
 ### B12 — the component build's `--remap-path-prefix` names a path that does not exist
 
 **Problem:** `components/.cargo/config.toml` passes
