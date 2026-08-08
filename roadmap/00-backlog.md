@@ -980,15 +980,36 @@ Tracing it:
   written: `serve_spawn` installs a supervision handle only into the **parent's**
   table, so no component ever holds one naming itself.
 
-**That is precisely what `supervision_derive` unblocks**, and it is the first time
-the operation's purpose lines up with the defect: init holds a handle naming each
-participant, needs the fabric to have one too, and the fabric's control ends were
-moved away by its own spawn. Init can now derive a second handle per participant
-and deliver it — but the delivery needs a channel to the fabric that init still
-holds, which the moving endpoint grant took away. So the endpoint move/copy
-question is back on the path after all, one level deeper: either init keeps a
-control end (needs a copying endpoint grant, or a fourth minted pair reserved for
-delegation), or the fabric asks for the handles over a channel it already has.
+**And `supervision_derive` does *not* close it**, which is worth stating plainly
+after adding the operation: the derive copies a handle the **caller** holds, and
+what is missing here is a handle naming the **participant itself**, held by that
+participant. Init holds one naming each participant, but init has no channel left
+to the fabric — the endpoint grant moved every service half away at spawn.
+
+Traced to the exact shape the broker expects: `consume_request` then
+`consume_supervision` on the **same** control channel
+(`call_broker.rs:273-275`). The participant already holds that channel
+bidirectionally (`RIGHT_SEND | RIGHT_RECV`, `init.rs:1915`) and sends the request
+over it, so the channel is not the obstacle. The obstacle is that no component can
+obtain a supervision capability naming *itself*: `serve_spawn` installs one only
+into the parent's table.
+
+**So the options narrow to two, and both are real design choices rather than
+plumbing:**
+
+1. Let a spawn place a self-naming supervision handle in the *child*, so a
+   participant can present its own identity. That is a new authority shape —
+   a component holding a handle to itself — and needs its own argument about what
+   it permits (`supervision_status` on oneself, notably).
+2. Keep an endpoint grant from moving for this one case, so init retains a service
+   half and can deliver the derived handles itself. That is the original move/copy
+   divergence, and it is where B25 started.
+
+The derive is still the right operation to have — it is what makes option 2 a
+two-line change once the endpoint question is settled, because init can then hand
+the same participant handle to the fabric *and* keep its own for the termination
+wait. But B25's core question is unavoidable, and it is a model decision the way
+the entry always said.
 
 **Exit condition:** A parent grants one end of a minted pair at spawn, uses the
 other end afterwards to deliver a capability to that child, and the child
