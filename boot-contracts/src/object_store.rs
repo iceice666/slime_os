@@ -769,6 +769,92 @@ mod tests {
         assert_eq!(disk.outside_partition(), before);
     }
 
+    /// GPT resolution and store opening composed, which is the shape a real mount
+    /// takes. Tested together because each is correct alone and they still have
+    /// to agree on one thing: `validate_store_partition` returns absolute LBAs,
+    /// and `ObjectStore::open` adds `partition.first_lba` to every offset. A
+    /// partition resolved at a non-zero origin is the case where a double-add or
+    /// a missing add would show up, and neither module can catch that by itself.
+    #[test]
+    fn a_gpt_resolved_partition_opens_as_a_store() {
+        use crate::gpt::{SLIME_STORE_TYPE_GUID, validate_store_partition};
+
+        const CAPACITY: u64 = FIRST_LBA + SECTORS + 8;
+        const ENTRY_SIZE: u32 = 128;
+        const ENTRY_COUNT: u32 = 4;
+        const ENTRIES_LBA: u64 = 2;
+        const BACKUP_ENTRIES_LBA: u64 = CAPACITY - 2;
+
+        let mut disk = MemoryDisk::new();
+        disk.sectors.resize(CAPACITY as usize, [0u8; SECTOR_SIZE]);
+
+        // Protective MBR.
+        disk.sectors[0][446 + 4] = 0xEE;
+        disk.sectors[0][510..512].copy_from_slice(&[0x55, 0xAA]);
+
+        // One store partition, placed at the same origin the store tests use.
+        let mut entries = alloc::vec![0u8; (ENTRY_COUNT * ENTRY_SIZE) as usize];
+        entries[..16].copy_from_slice(&SLIME_STORE_TYPE_GUID);
+        entries[32..40].copy_from_slice(&FIRST_LBA.to_le_bytes());
+        entries[40..48].copy_from_slice(&(FIRST_LBA + SECTORS - 1).to_le_bytes());
+
+        for lba in [ENTRIES_LBA, BACKUP_ENTRIES_LBA] {
+            for (index, chunk) in entries.chunks(SECTOR_SIZE).enumerate() {
+                disk.sectors[lba as usize + index][..chunk.len()].copy_from_slice(chunk);
+            }
+        }
+
+        let write_header = |disk: &mut MemoryDisk, my_lba: u64, backup: u64, entries_lba: u64| {
+            let mut sector = [0u8; SECTOR_SIZE];
+            sector[..8].copy_from_slice(b"EFI PART");
+            sector[8..12].copy_from_slice(&0x0001_0000u32.to_le_bytes());
+            sector[12..16].copy_from_slice(&92u32.to_le_bytes());
+            sector[24..32].copy_from_slice(&my_lba.to_le_bytes());
+            sector[32..40].copy_from_slice(&backup.to_le_bytes());
+            sector[40..48].copy_from_slice(&FIRST_LBA.to_le_bytes());
+            sector[48..56].copy_from_slice(&(CAPACITY - 3).to_le_bytes());
+            sector[56..72].copy_from_slice(b"SLIMEDISKGUID!!!");
+            sector[72..80].copy_from_slice(&entries_lba.to_le_bytes());
+            sector[80..84].copy_from_slice(&ENTRY_COUNT.to_le_bytes());
+            sector[84..88].copy_from_slice(&ENTRY_SIZE.to_le_bytes());
+            sector[88..92].copy_from_slice(&crc32(&entries).to_le_bytes());
+            let mut covered = sector;
+            covered[16..20].fill(0);
+            sector[16..20].copy_from_slice(&crc32(&covered[..92]).to_le_bytes());
+            disk.sectors[my_lba as usize] = sector;
+        };
+        write_header(&mut disk, 1, CAPACITY - 1, ENTRIES_LBA);
+        write_header(&mut disk, CAPACITY - 1, 1, BACKUP_ENTRIES_LBA);
+
+        // Genesis the store inside the partition GPT will resolve.
+        let genesis = Superblock {
+            sequence: 1,
+            append_lba: RECORD_AREA_START,
+            object_count: 0,
+        };
+        disk.sectors[(FIRST_LBA + SLOT_A_LBA) as usize] = encode_superblock(&genesis, SECTORS);
+
+        let resolved = {
+            let snapshot = disk.sectors.clone();
+            let mut reader = move |lba: u64, out: &mut [u8; SECTOR_SIZE]| {
+                out.copy_from_slice(
+                    snapshot
+                        .get(lba as usize)
+                        .ok_or(crate::gpt::GptError::OutOfBounds)?,
+                );
+                Ok(())
+            };
+            validate_store_partition(&mut reader, CAPACITY).expect("GPT resolves the store")
+        };
+        assert_eq!(resolved.partition.first_lba, FIRST_LBA);
+
+        let mut store =
+            ObjectStore::open(&mut disk, &resolved.partition).expect("store opens in it");
+        let hash = store.put(&mut disk, 3, b"mounted").expect("put");
+        let reopened = ObjectStore::open(&mut disk, &resolved.partition).expect("store reopens");
+        assert_eq!(reopened.stat(&hash), Some((3, b"mounted".len() as u32)));
+    }
+
     /// A partition too small to hold two superblocks and one record is refused
     /// rather than opened into an unusable state.
     #[test]

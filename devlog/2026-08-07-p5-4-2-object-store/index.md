@@ -52,7 +52,7 @@ each boundary can now be interrupted in turn.
 
 ## Verification
 
-`just test_host` — **190 passed**, up from 180. `just lint_all`,
+`just test_host` — **191 passed**, up from 180. `just lint_all`,
 `just fmt_check_all`, `just typos`, `just machete` pass.
 
 | Injection | ok-count |
@@ -97,13 +97,21 @@ unit evidence, and nothing on seL4 calls the store: `slime-root`'s object alloca
 skips every device untyped, so there is no MMIO region and no DMA-capable frame to
 reach a disk with.
 
-Flush ordering is untested, as above. So is the interaction between GPT recovery
-and store opening — `validate_store_partition` and `ObjectStore::open` are tested
-separately but never composed, which is the shape a real mount would take.
+Flush ordering is untested, as above.
+
+**The composed mount path is now covered** (added after this entry's first draft,
+which listed it as a follow-up). `validate_store_partition` and
+`ObjectStore::open` are each correct alone but must agree on one thing: GPT returns
+absolute LBAs and the store adds `partition.first_lba` to every offset. An
+eleventh test resolves a real GPT disk at a non-zero origin, opens the store in the
+partition it returns, writes an object, and reopens it. Injecting the double-add
+class — dropping `first_lba` from the superblock read — takes the suite from 11
+passing to **1**, so the composition is genuinely guarded and neither module could
+have caught it alone.
 
 ## Artifacts and provenance
 
-Ten tests in `boot-contracts/src/object_store.rs` under `#[cfg(test)] mod tests`.
+Eleven tests in `boot-contracts/src/object_store.rs` under `#[cfg(test)] mod tests`.
 Counts from `just test_host` on `aarch64-apple-darwin` at this entry's date.
 Injections were made by editing the module, running
 `cargo test --manifest-path boot-contracts/Cargo.toml --features gpt
