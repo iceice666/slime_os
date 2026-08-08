@@ -786,6 +786,39 @@ more coverage.
 takes its role reply and the plane reaches `[init] fabric stream complete`,
 asserted by a gate, with a fault injection showing the parked case caught.
 
+### B31 — three `expect_terminal_yielding` receive spins remain invisible to the root
+
+**Problem:** auditing for the class of defect fixed in `call_broker.rs`
+(a `recv` whose `ERR_WOULDBLOCK` arm is `yield_now()`, which is `seL4_Yield` and
+therefore invisible to the root task) found three more, all in scenario code:
+
+* `fabric_call_scenario.rs:542` — `expect_terminal_yielding`
+* `fabric_operation_scenario.rs:612` — `expect_terminal_yielding`
+* `fabric_operation_scenario.rs:158` — a backup-route probe
+
+**Not fixed here, and the reason is evidence rather than preference.** The first
+guess was that these must yield because they await `STATUS_PEER_DEAD` and
+`STATUS_TIMEOUT`, which a park on the endpoint might miss. That guess is **wrong**:
+`ipc.rs::Channel::mark_peer_dead` takes `recv_waiter` and wakes it, so a parked
+receiver does observe peer death.
+
+So they are probably convertible, exactly as the broker's arm was. What stops the
+change is verification, not correctness: all three sit on the call and operation
+scenarios, and the only plane that exercises them end to end is the seL4 call
+plane — which currently deadlocks for an unrelated reason (see B25), and the x86
+operation gate cannot run in this environment. Converting them would be an
+unobserved change to a path with no green gate, which is the failure mode
+`d69cd8e` and this session's reverted `deliver` arm both illustrate.
+
+**Severity:** latent. A spin costs the root's iteration budget and makes any wedge
+it causes report `graph iterations exhausted` with no named waiter — which is
+precisely what made the call plane's failure unreadable until the broker's arm was
+fixed. None of the three is on a plane with a passing gate today, so none is
+currently hiding anything.
+
+**Exit condition:** each of the three parks rather than yields, observed on a plane
+whose gate passes — so the conversion is proved not to lose a wake.
+
 ### B25 — a spawn-granted endpoint moves on seL4 and copies on x86, so a parent cannot broker a later introduction
 
 **Problem:** `slime-root`'s `distribute_channel_ends` (`slime-root/src/main.rs`)
