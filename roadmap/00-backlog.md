@@ -547,26 +547,30 @@ provisioning, before they can ack anything, and the root duly reports
 `announce_end` never fires for them, so the broker's exit condition is unreachable, so
 it spins to the iteration bound.
 
-**So B28 is a downstream symptom of the same defect as B25.** `fail: role reply` is
-the spawn-granted-endpoint semantics gap: an endpoint granted at spawn *moves* on seL4
-where the frozen oracle *copies* it, so a parent cannot broker a later introduction.
-The QoS plane is simply the first plane whose completion depends on a subscriber
-surviving that introduction. Twenty readings excluded, and the remaining chain has no
-gap left in it:
+**Attributing this to B25 was wrong, and the passing plane disproves it.** Booting the
+**stream** plane — which reaches `[init] fabric stream complete` — shows the *same two*
+`fail: role reply` lines from `fabric-subscriber` and `fabric-subscriber-b`. They are
+expected negative-control assertions on both planes, not the defect, and B28 is not a
+B25 symptom.
 
-```
-B25 spawn-grant moves the endpoint
-  -> subscriber fails its role reply and dies
-  -> its sample stays in_flight=1 forever
-  -> announce_end refuses to end it
-  -> broker exit condition (all ended && clock dead) unreachable
-  -> broker spins, root exhausts MAX_GRAPH_ITERATIONS
-  -> no `[init] fabric stream complete`
-```
+**The real differentiator is the retire path.** The stream plane logs
+`[fabric] QoS peer dead` **twice** — the broker observes both dead subscribers on their
+ack channels and calls `retire_subscriber`, which is what lets its exit condition
+become true. The QoS plane logs it **zero** times, both before and after the park-set
+fixes, so the exclusion in `d69cd8e` is not the cause. Counts: `QoS matched` 7 on the
+stream plane vs 6 on QoS.
 
-**Exit condition unchanged**, and B28 is now **blocked on B25** rather than
-independently open: the two park-set spins fixed under it (`d69cd8e`) were real and are
-worth keeping, but the plane cannot complete until spawn-grant semantics are settled.
+So the two subscribers stuck at `hist/inflight=1/1` are stuck because the broker never
+takes `drain_acks`' `ERR_PEER_DEAD` arm for them, not because they died at role
+provisioning — which they do on both planes.
+
+**Exit condition unchanged.** The next step is to find why the QoS plane's broker never
+sees `ERR_PEER_DEAD` on those two ack channels while the stream plane's does, given
+that the root reports `peer death task=4` and `peer death task=5` on both. The
+`SLIME_SEL4_STREAM_CHECK`-vs-`SLIME_FABRIC_QOS_CHECK` split in the worker's sweep, and
+the extra retained-diagnostics participant the QoS fixture adds, are the two structural
+differences to check first. B28 stays independently open; the two park-set spins fixed
+under it (`d69cd8e`) were real and are kept.
 Re-check this entry after B25 lands rather than investigating it further on its own.
 
 **One wider finding stands regardless of B28**, and it is worth its own slice:
