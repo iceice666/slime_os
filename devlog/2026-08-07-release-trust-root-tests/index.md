@@ -110,3 +110,21 @@ All fifteen tests live in `boot-contracts/src/release.rs` under
 observed by editing `release.rs`, running
 `cargo test --manifest-path boot-contracts/Cargo.toml release::tests`, and
 restoring from a copy — no injection remains in the tree.
+
+## Corrections
+
+**The follow-up above was wrong: `apply_rotation` was not untested.**
+`scripts/check/check-release-trust.py` already built real Ed25519 rotations and
+asserted three continuity cases. What this entry should have said is narrower and
+worse: that gate was **red** — it aborted with
+`AttributeError: module 'release_trust' has no attribute 'ROTATION_BYTES'` before
+asserting anything — it was **absent from `AGENTS.md`'s gate index**, and its
+rotation refusals only ever ran against a Python reimplementation of the rules,
+never against `apply_rotation` itself.
+
+Filed and fixed as B30; see
+[`devlog/2026-08-07-b30-release-trust-gate/`](../2026-08-07-b30-release-trust-gate/index.md).
+
+The claim that `verify_signatures`, `verify_generation`, and `verify_for_staging`
+lack coverage still stands, and B30 sharpens it: they have no negative case that
+reaches Rust, which is the same defect shape in the same file.

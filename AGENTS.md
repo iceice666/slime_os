@@ -64,6 +64,7 @@ Use the Justfile targets from the repository root:
 - `just test` — run kernel and integration tests under QEMU.
 - `just generation_check` — build and validate the deterministic generation binary.
 - `just contracts_check` — validate generation manifest contracts.
+- `just release_trust_check` — signed release staging, replay refusal, trust-root rotation continuity, rollback, and promotion.
 - `just devlog_check` — validate devlog structure, front matter, and links.
 - `just sel4_boot_layout_check` — init's resolved capability layout on every seL4 plane, against frozen fixtures (B10). Bless with `just sel4_boot_layout_bless`.
 - `just fmt_check_all` — check Rust formatting for every workspace crate.

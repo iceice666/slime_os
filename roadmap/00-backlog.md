@@ -900,6 +900,50 @@ fault injection showing the parent's end going missing is caught. The call
 plane's `[init] call supervision delegated` marker is that composition, already
 observed; what remains is for the plane to get past it.
 
+### B30 — `release_trust_check` was red, unregistered, and its rotation refusals never reached Rust
+
+**Problem:** three separate defects in one gate, found by running it.
+
+1. **It could not run at all.** `scripts/lib/release_trust.py` re-exports generated
+   constants from `boot_contracts`, but never imported `ROTATION_BYTES`,
+   `ROTATION_HEADER_BYTES`, `ROTATION_MAGIC`, `ROTATION_VERSION`, or
+   `MAX_TRUST_KEYS`. `just release_trust_check` died with
+   `AttributeError: module 'release_trust' has no attribute 'ROTATION_BYTES'`
+   before asserting anything, so all thirteen of its `expect_error` cases were
+   dead code.
+2. **It was not in the gate index.** `AGENTS.md:61-77` is canonical, and this
+   target was absent — which is why a red gate went unnoticed.
+3. **Its rotation refusals tested Python, not the kernel's decoder.**
+   `verify_rotation` (`check-release-trust.py:181`) is a pure-Python
+   reimplementation of the same rules. Only the *valid* rotation was ever handed
+   to `apply_rotation` through the `verify_release` example, so all three
+   continuity assertions proved the fixture was malformed, never that
+   `release.rs` refuses it.
+
+**Evidence:** with the import fixed, deleting the
+`replacement_version != current.version + 1` branch from `apply_rotation` left
+the entire gate **green**. So did deleting `previous_version != current.version`.
+
+**Fixed.** The four rotation constants and `MAX_TRUST_KEYS` are now loaded from
+`boot_contracts` directly in the check (`CONTRACTS`), rather than widening
+`release_trust`'s imports to names its own body does not use — which ruff
+correctly flags as F401. Every rotation refusal now goes through
+`apply_rotation` as well as the Python mirror, via
+`expect_rust_rotation_refused`. A fixture for stale `previous_version` was added,
+because the two existing continuity cases vary the *signature counts* and never
+reach that branch.
+
+The new fixture is `(previous=2, replacement=2)` and not `(2, 3)`: the
+replacement version must stay at `current.version + 1` or the replacement branch
+fires first and masks the branch under test. Getting that wrong is why the first
+attempt at this fixture still passed under injection.
+
+**Exit condition met.** `just release_trust_check` passes, is registered in
+`AGENTS.md`, and each continuity branch is now guarded by its own fixture:
+removing the replacement check fails with `apply_rotation accepted version-skip`,
+removing the previous check fails with `apply_rotation accepted stale-previous`.
+Both observed, then reverted.
+
 ### B12 — the component build's `--remap-path-prefix` names a path that does not exist
 
 **Problem:** `components/.cargo/config.toml` passes

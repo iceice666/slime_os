@@ -23,6 +23,11 @@ WORK = Path("/tmp/slime-os-release-trust")
 
 CHECK = load_script("check_generation", "check/check-generation.py")
 TRUST = load_script("release_trust", "lib/release_trust.py")
+# The generated Zutai constants, loaded directly rather than re-exported through
+# `release_trust`: that module only imports the names its own body uses, and
+# widening it to forward these would be an unused-import the linter is right to
+# flag.
+CONTRACTS = load_script("boot_contracts", "lib/boot_contracts.py")
 
 
 def run(arguments: list[str], *, environment: dict[str, str] | None = None) -> str:
@@ -148,9 +153,9 @@ def build_rotation(
     previous_version: int,
     replacement_version: int,
 ) -> bytes:
-    rotation = bytearray(TRUST.ROTATION_BYTES)
-    rotation[:8] = TRUST.ROTATION_MAGIC
-    struct.pack_into("<IIQ", rotation, 8, TRUST.ROTATION_VERSION, TRUST.ROTATION_HEADER_BYTES, 0)
+    rotation = bytearray(CONTRACTS.ROTATION_BYTES)
+    rotation[:8] = CONTRACTS.ROTATION_MAGIC
+    struct.pack_into("<IIQ", rotation, 8, CONTRACTS.ROTATION_VERSION, CONTRACTS.ROTATION_HEADER_BYTES, 0)
     struct.pack_into(
         "<IIIIII",
         rotation,
@@ -164,9 +169,9 @@ def build_rotation(
     )
     replacement_public = tuple(TRUST.ssh_public_key(path) for path in replacement_keys)
     for index, public in enumerate(replacement_public):
-        offset = TRUST.ROTATION_HEADER_BYTES + index * 32
+        offset = CONTRACTS.ROTATION_HEADER_BYTES + index * 32
         rotation[offset : offset + 32] = public
-    previous_offset = TRUST.ROTATION_HEADER_BYTES + TRUST.MAX_TRUST_KEYS * 32
+    previous_offset = CONTRACTS.ROTATION_HEADER_BYTES + CONTRACTS.MAX_TRUST_KEYS * 32
     replacement_offset = previous_offset + TRUST.MAX_RELEASE_SIGNATURES * TRUST.RELEASE_SIGNATURE_BYTES
     payload = bytes(rotation[:previous_offset])
     for base, paths in ((previous_offset, current_keys), (replacement_offset, replacement_keys)):
@@ -179,37 +184,37 @@ def build_rotation(
 
 
 def verify_rotation(rotation: bytes, *, current_version: int = 1) -> None:
-    if len(rotation) != TRUST.ROTATION_BYTES or rotation[:8] != TRUST.ROTATION_MAGIC:
+    if len(rotation) != CONTRACTS.ROTATION_BYTES or rotation[:8] != CONTRACTS.ROTATION_MAGIC:
         raise CHECK.CheckError("BadRotation")
     version, header, flags = struct.unpack_from("<IIQ", rotation, 8)
     previous, replacement, threshold, key_count, previous_count, replacement_count = struct.unpack_from("<IIIIII", rotation, 24)
     if (
-        version != TRUST.ROTATION_VERSION
-        or header != TRUST.ROTATION_HEADER_BYTES
+        version != CONTRACTS.ROTATION_VERSION
+        or header != CONTRACTS.ROTATION_HEADER_BYTES
         or flags != 0
         or previous != current_version
         or replacement != current_version + 1
         or threshold == 0
         or threshold > key_count
-        or key_count > TRUST.MAX_TRUST_KEYS
+        or key_count > CONTRACTS.MAX_TRUST_KEYS
         or previous_count < 2
         or replacement_count < threshold
         or previous_count > TRUST.MAX_RELEASE_SIGNATURES
         or replacement_count > TRUST.MAX_RELEASE_SIGNATURES
-        or any(rotation[48:TRUST.ROTATION_HEADER_BYTES])
+        or any(rotation[48:CONTRACTS.ROTATION_HEADER_BYTES])
     ):
         raise CHECK.CheckError("BadRotation")
     replacement_keys = []
     for index in range(key_count):
-        offset = TRUST.ROTATION_HEADER_BYTES + index * 32
+        offset = CONTRACTS.ROTATION_HEADER_BYTES + index * 32
         replacement_keys.append(rotation[offset : offset + 32])
     if any(not key for key in replacement_keys) or len(set(replacement_keys)) != len(replacement_keys):
         raise CHECK.CheckError("BadRotation")
-    if any(rotation[TRUST.ROTATION_HEADER_BYTES + key_count * 32 : TRUST.ROTATION_HEADER_BYTES + TRUST.MAX_TRUST_KEYS * 32]):
+    if any(rotation[CONTRACTS.ROTATION_HEADER_BYTES + key_count * 32 : CONTRACTS.ROTATION_HEADER_BYTES + CONTRACTS.MAX_TRUST_KEYS * 32]):
         raise CHECK.CheckError("BadRotation")
     current_by_id = {TRUST.sha256(key): key for key in TRUST.initial_public_keys()}
     replacement_by_id = {TRUST.sha256(key): key for key in replacement_keys}
-    previous_offset = TRUST.ROTATION_HEADER_BYTES + TRUST.MAX_TRUST_KEYS * 32
+    previous_offset = CONTRACTS.ROTATION_HEADER_BYTES + CONTRACTS.MAX_TRUST_KEYS * 32
     replacement_offset = previous_offset + TRUST.MAX_RELEASE_SIGNATURES * TRUST.RELEASE_SIGNATURE_BYTES
     payload = rotation[:previous_offset]
     for name, base, count, keys in (
@@ -241,27 +246,70 @@ def verify_rotation(rotation: bytes, *, current_version: int = 1) -> None:
         raise CHECK.CheckError("BadRotation")
 
 
-def test_rotation() -> None:
-    valid = build_rotation(TRUST.KEY_PATHS[:2], TRUST.KEY_PATHS, 1, 2)
-    rotation_path = WORK / "valid-rotation.bin"
-    rotation_path.write_bytes(valid)
-    run(
+def rust_rotation(rotation: bytes, name: str) -> subprocess.CompletedProcess[str]:
+    """Run `apply_rotation` over one rotation blob and return the outcome.
+
+    The Python `verify_rotation` below reimplements the same rules, so on its own
+    it can only prove the *fixture* is malformed — not that `release.rs` refuses
+    it. Every refusal therefore goes through both.
+    """
+    path = WORK / f"rotation-{name}.bin"
+    path.write_bytes(rotation)
+    return subprocess.run(
         [
             "cargo", "run", "--quiet", "--manifest-path", str(ROOT / "boot-contracts" / "Cargo.toml"),
             "--features", "release-crypto", "--example", "verify_release", "--",
-            "rotation", str(rotation_path),
-        ]
+            "rotation", str(path),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
     )
+
+
+def expect_rust_rotation_refused(name: str, rotation: bytes) -> None:
+    """`apply_rotation` must refuse this blob, not merely the Python mirror.
+
+    Without this the three continuity cases below asserted only against
+    `verify_rotation`, so deleting the replacement-version check from
+    `release.rs` left the whole gate green.
+    """
+    outcome = rust_rotation(rotation, name)
+    if outcome.returncode == 0:
+        raise CHECK.CheckError(f"apply_rotation accepted {name}")
+
+
+def test_rotation() -> None:
+    valid = build_rotation(TRUST.KEY_PATHS[:2], TRUST.KEY_PATHS, 1, 2)
+    if rust_rotation(valid, "valid").returncode != 0:
+        raise CHECK.CheckError("apply_rotation refused a well-formed rotation")
     verify_rotation(valid)
 
     skipped = build_rotation(TRUST.KEY_PATHS[:2], TRUST.KEY_PATHS, 1, 3)
     expect_error("rotation version skip", "BadRotation", lambda: verify_rotation(skipped))
+    expect_rust_rotation_refused("version-skip", skipped)
 
     no_previous_continuity = build_rotation(TRUST.KEY_PATHS[:1], TRUST.KEY_PATHS, 1, 2)
     expect_error("rotation previous continuity", "BadRotation", lambda: verify_rotation(no_previous_continuity))
+    expect_rust_rotation_refused("previous-continuity", no_previous_continuity)
 
     no_replacement_continuity = build_rotation(TRUST.KEY_PATHS[:2], TRUST.KEY_PATHS[:1], 1, 2)
     expect_error("rotation replacement continuity", "BadRotation", lambda: verify_rotation(no_replacement_continuity))
+    expect_rust_rotation_refused("replacement-continuity", no_replacement_continuity)
+
+    # A rotation naming a `previous_version` other than the root it is applied
+    # against must be refused, or an old rotation could be replayed to advance
+    # the trust root a second time.
+    #
+    # `(2, 2)` and not `(2, 3)`: the replacement version must stay at
+    # `current.version + 1` so the *replacement* branch does not fire first and
+    # mask the one under test. The two continuity cases above vary the signature
+    # counts instead, so neither reaches this branch — deleting
+    # `previous_version != current.version` from `release.rs` left the whole gate
+    # green until this fixture existed.
+    stale_previous = build_rotation(TRUST.KEY_PATHS[:2], TRUST.KEY_PATHS, 2, 2)
+    expect_rust_rotation_refused("stale-previous", stale_previous)
 
 
 def main() -> None:
