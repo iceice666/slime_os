@@ -144,7 +144,9 @@ text never named it.
       explicitly says cannot be QEMU evidence and must remain unit evidence.
 - [ ] **P5.4.3 — the M6 service class.** M6.3–M6.7 are gaps (directory, dango,
       generation commands, powerbox, transfer); M6.1 and M6.2 are partials.
-- [ ] **P5.4.4 — C8.2 aggregate admission.** `slime-root` decodes only
+- [x] **P5.4.4 — C8.2 aggregate admission.** *Closed after this inventory was
+      written; see `roadmap/07-architecture-portability.md`'s P5.4.4 section.*
+      `slime-root` decodes only
       `BootLayout` and `SharedBufferBudget`; a `sel4-stream` generation whose
       graph declared unsatisfiable limits would launch. The bytes ride along
       (`build-generation.py:2464`) and are never read.
