@@ -598,13 +598,27 @@ root sends a reply over a live `cap_reply_cap` to a task the kernel has in
 `BlockedOnReply`, on a plane whose every preceding step matches a plane where the same
 send works, and the task does not run. Twenty-one readings excluded.
 
-**Exit condition unchanged.** The next step is the one measurement not yet taken:
-compare the *stream* plane's kernel state at the same instant. Every seL4 reading so far
-was taken on the failing plane only, so there is no baseline distinguishing "this state
-is wrong" from "this state is normal and the difference is elsewhere". Breaking on
-`possibleSwitchTo` conditioned on task 10's TCB on *both* planes, and diffing the
-caller and `ksSchedulerAction`, is what would show which side diverges. B28 stays open;
-the two park-set spins fixed under it (`d69cd8e`) were real and are kept.
+**The baseline was taken, and it retires the kernel-state line of inquiry.** Walking
+`ksDebugTCBs` on the *passing* stream plane at `[init] fabric stream complete` gives
+`idle=0x8060030c00 cur=0x8060030c00 action=0x0` and only **two** threads on the list:
+the idle thread and the root. Every one of the six children is gone, properly reclaimed.
+
+So the healthy terminal state has *no* children, and the QoS plane's five survivors are
+the anomaly — which is exactly what a livelocked broker produces and needs no kernel
+explanation at all. `ksCurThread == ksIdleThread` with `ksSchedulerAction ==
+ResumeCurrentThread` and empty ready queues is *also* the healthy end state, so none of
+those three readings ever indicated a fault. This is the control that should have been
+taken before any of the seL4 work.
+
+**Exit condition unchanged**, and the remaining question is back in the components with
+a much smaller surface: task 10 is answered (`wake answering task=10`) and does not run,
+on a plane whose role handoff is byte-identical to one where it does. The two candidates
+left are `sel4_transport`'s receive path on the component side — the reply lands but the
+component's `recv` does not return it — and the retained-diagnostics participant that
+`bisect` already showed toggles the defect. The next measurement is a marker inside
+`fabric-publisher`'s `receive_role` loop *after* the `wait` returns, which distinguishes
+"never woken" from "woken and looped". B28 stays open; the two park-set spins fixed
+under it (`d69cd8e`) were real and are kept.
 Re-check this entry after B25 lands rather than investigating it further on its own.
 
 **One wider finding stands regardless of B28**, and it is worth its own slice:
