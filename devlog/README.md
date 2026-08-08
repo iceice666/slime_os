@@ -192,6 +192,7 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-07 | [The release record and trust root had no tests](2026-08-07-release-trust-root-tests/index.md) | Change | Verified | P5.4.1, P5.4 |
 | 2026-08-07 | [B30 — `release_trust_check` was red, unregistered, and half-blind](2026-08-07-b30-release-trust-gate/index.md) | Defect | Verified | B30 |
 | 2026-08-07 | [The hash primitives everything trusts had no conformance tests](2026-08-07-hash-primitive-conformance/index.md) | Change | Verified | P5.4.1, P5.4 |
+| 2026-08-07 | [The seL4 gates had no negative control](2026-08-07-sel4-gate-negative-control/index.md) | Change | Verified | P5.4.1, P5.4 |
 | 2026-08-07 | [P5.4.5 (part) — C8.5's arms that already ran, now asserted](2026-08-07-p5-4-5-qos-arms/index.md) | Change | Verified | P5.4.5, P5.4, P5.4.1, C8.5 |
 | 2026-08-07 | [P5.4.6 (part) — the C8.6 call plane builds and boots; the broker's slot model does not fit](2026-08-07-p5-4-6-call-plane/index.md) | Change | Root-caused | P5.4.6, P5.4, P5.4.1, C8.6 |
 | 2026-08-07 | [P5.4.6 — the C8.6 call plane's real blocker is spawn-grant semantics, not slot numbering](2026-08-07-p5-4-6-call-spawn-semantics/index.md) | Defect | Root-caused | P5.4.6, B25, C8.6 |

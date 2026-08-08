@@ -144,6 +144,19 @@ sel4_boot_layout_check: sel4_pin_check
 sel4_boot_layout_bless: sel4_pin_check
     python3 scripts/check/check-sel4-boot-layout.py --bless
 
+# Prove the seL4 plane gates fail when their evidence is absent.
+#
+# Every plane gate is a marker-matching checker, and nothing demonstrated that a
+# *missing* marker makes one red — the oracle had `should_panic.rs` for exactly
+# that and the seL4 side had no equivalent. This drives each gate's own marker
+# table with transcripts that are wrong in one specific way: a marker deleted,
+# two transposed, a failure marker appended.
+#
+# Needs no build and no QEMU: it asserts that the assertions have teeth, not that
+# any image boots. The planes' own gates cover the latter.
+sel4_gate_control_check:
+    python3 scripts/check/check-sel4-gate-controls.py
+
 # Run the seL4 product image interactively on the pinned QEMU machine.
 run: sel4_qemu_image_check
     qemu-system-aarch64 -machine virt,virtualization=on -cpu cortex-a53 -smp 1 \

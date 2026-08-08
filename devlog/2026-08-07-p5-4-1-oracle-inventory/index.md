@@ -202,11 +202,15 @@ rather than inheriting a sweep done while fixing something else.
 
 ### Other risks
 
-- [ ] **No seL4 gate has a negative control.** `should_panic.rs` is the oracle's
+- [x] **No seL4 gate has a negative control.** `should_panic.rs` is the oracle's
       proof that a failing assertion is observable at all. The ten seL4 gates
-      are marker-matching Python checkers, and nothing in-repo demonstrates that
-      a missing marker fails one. Mitigated only by per-slice fault injection,
-      which is per-change discipline rather than a standing guard.
+      are marker-matching Python checkers, and nothing in-repo demonstrated that
+      a missing marker fails one. **Closed** by `just sel4_gate_control_check`,
+      which drives eight gates' own marker tables with 356 transcripts that are
+      wrong in one specific way — a marker deleted, two transposed, a failure
+      marker appended — and pins each gate's required-marker count so a gate
+      losing coverage is a red gate rather than a smaller number. See
+      [`2026-08-07-sel4-gate-negative-control/`](../2026-08-07-sel4-gate-negative-control/index.md).
 - [ ] **`sel4_root_boot_check` boots no repository fixture.** Its generation is
       `slime-root/fixtures/generation.bin`, the retained x86 blob. P5.1's
       `slimecm=[1-9]\d*` non-vacuity assertion depends on that blob carrying

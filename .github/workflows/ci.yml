@@ -100,6 +100,10 @@ jobs:
       - uses: extractions/setup-just@v2
       - run: just contracts_check
       - run: just devlog_check
+      # No build and no QEMU: it drives each seL4 gate's own marker table with
+      # transcripts that are wrong in one specific way, so it runs anywhere the
+      # checkers import.
+      - run: just sel4_gate_control_check
 
   deps:
     name: cargo-deny and machete
