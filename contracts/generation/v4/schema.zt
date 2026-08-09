@@ -1,0 +1,277 @@
+-- Slime OS boot-time generation binary format, version 4.
+--
+-- Version 4 separates executable catalogue entries from launched instances and
+-- carries explicit per-instance dependency and capability binding tables.
+--
+-- Logical records and concrete packed little-endian layouts live together.
+-- The renderer reflects every record, checks field order against its layout,
+-- derives struct.Struct format strings and offsets, and writes the Python
+-- binding fragment consumed by the boot binding assembler.
+
+env ::= import stdlib.env;
+fs ::= import stdlib.fs;
+gen ::= import "gen_rust.zt";
+t ::= import stdlib.text;
+
+formatVersion :: Int = 4;
+headerLen :: Int = 256;
+objectLen :: Int = 64;
+executableLen :: Int = 32;
+instanceLen :: Int = 48;
+dependencyLen :: Int = 4;
+bindingLen :: Int = 8;
+grantLen :: Int = 32;
+stateLen :: Int = 24;
+healthLen :: Int = 4;
+maxGenerationBytes :: Int = 16777216;
+maxObjects :: Int = 64;
+-- Fixed bounds used before reading untrusted section counts.
+maxExecutables :: Int = 48;
+maxInstances :: Int = 48;
+maxBindings :: Int = 128;
+maxGrants :: Int = 128;
+maxStates :: Int = 32;
+maxDependencies :: Int = 128;
+maxHealthInstances :: Int = 32;
+maxStringBytes :: Int = 255;
+maxStringTableBytes :: Int = 65536;
+maxObjectPayloadBytes :: Int = 8388608;
+
+WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
+
+GenerationHeader :: type {
+  magic : Int;
+  format_version : Int;
+  header_size : Int;
+  required_flags : Int;
+  identity : Int;
+  generation_number : Int;
+  parent : Int;
+  target_offset : Int;
+  reserved : Int;
+  bootstrap_instance : Int;
+  boot_attempts : Int;
+  object_count : Int;
+  executable_count : Int;
+  instance_count : Int;
+  dependency_count : Int;
+  binding_count : Int;
+  grant_count : Int;
+  state_count : Int;
+  health_count : Int;
+  object_offset : Int;
+  executable_offset : Int;
+  instance_offset : Int;
+  dependency_offset : Int;
+  binding_offset : Int;
+  grant_offset : Int;
+  state_offset : Int;
+  health_offset : Int;
+  string_offset : Int;
+  string_len : Int;
+  payload_offset : Int;
+  total_len : Int;
+};
+
+ObjectRecord :: type {
+  id_offset : Int;
+  kind : Int;
+  payload_offset : Int;
+  payload_len : Int;
+  digest : Int;
+};
+
+ExecutableRecord :: type {
+  name_offset : Int;
+  object_index : Int;
+  role : Int;
+  spawn_budget : Int;
+};
+
+InstanceRecord :: type {
+  name_offset : Int;
+  executable_index : Int;
+  owner_kind : Int;
+  owner_index : Int;
+  autostart : Int;
+  dependency_start : Int;
+  dependency_count : Int;
+  binding_start : Int;
+  binding_count : Int;
+  health : Int;
+};
+
+DependencyRecord :: type { instance : Int; };
+BindingRecord :: type { grant : Int; slot : Int; };
+
+CapabilityGrantRecord :: type {
+  name_offset : Int;
+  source : Int;
+  target : Int;
+  rights : Int;
+  transferable : Int;
+};
+
+StateBindingRecord :: type {
+  name_offset : Int;
+  owner : Int;
+  schema_version : Int;
+  policy : Int;
+};
+
+HealthRecord :: type { instance : Int; };
+
+generationHeaderSchema ::= schema GenerationHeader;
+objectRecordSchema ::= schema ObjectRecord;
+executableRecordSchema ::= schema ExecutableRecord;
+instanceRecordSchema ::= schema InstanceRecord;
+dependencyRecordSchema ::= schema DependencyRecord;
+bindingRecordSchema ::= schema BindingRecord;
+capabilityGrantRecordSchema ::= schema CapabilityGrantRecord;
+stateBindingRecordSchema ::= schema StateBindingRecord;
+healthRecordSchema ::= schema HealthRecord;
+
+generationHeaderLayout :: List WireField = {
+  { name = "magic"; width = 8; signed = false; byteArray = true; };
+  { name = "format_version"; width = 4; signed = false; byteArray = false; };
+  { name = "header_size"; width = 4; signed = false; byteArray = false; };
+  { name = "required_flags"; width = 8; signed = false; byteArray = false; };
+  { name = "identity"; width = 32; signed = false; byteArray = true; };
+  { name = "generation_number"; width = 8; signed = false; byteArray = false; };
+  { name = "parent"; width = 32; signed = false; byteArray = true; };
+  { name = "target_offset"; width = 4; signed = false; byteArray = false; };
+  { name = "reserved"; width = 4; signed = false; byteArray = false; };
+  { name = "bootstrap_instance"; width = 4; signed = false; byteArray = false; };
+  { name = "boot_attempts"; width = 4; signed = false; byteArray = false; };
+  { name = "object_count"; width = 4; signed = false; byteArray = false; };
+  { name = "executable_count"; width = 4; signed = false; byteArray = false; };
+  { name = "instance_count"; width = 4; signed = false; byteArray = false; };
+  { name = "dependency_count"; width = 4; signed = false; byteArray = false; };
+  { name = "binding_count"; width = 4; signed = false; byteArray = false; };
+  { name = "grant_count"; width = 4; signed = false; byteArray = false; };
+  { name = "state_count"; width = 4; signed = false; byteArray = false; };
+  { name = "health_count"; width = 4; signed = false; byteArray = false; };
+  { name = "object_offset"; width = 8; signed = false; byteArray = false; };
+  { name = "executable_offset"; width = 8; signed = false; byteArray = false; };
+  { name = "instance_offset"; width = 8; signed = false; byteArray = false; };
+  { name = "dependency_offset"; width = 8; signed = false; byteArray = false; };
+  { name = "binding_offset"; width = 8; signed = false; byteArray = false; };
+  { name = "grant_offset"; width = 8; signed = false; byteArray = false; };
+  { name = "state_offset"; width = 8; signed = false; byteArray = false; };
+  { name = "health_offset"; width = 8; signed = false; byteArray = false; };
+  { name = "string_offset"; width = 8; signed = false; byteArray = false; };
+  { name = "string_len"; width = 8; signed = false; byteArray = false; };
+  { name = "payload_offset"; width = 8; signed = false; byteArray = false; };
+  { name = "total_len"; width = 8; signed = false; byteArray = false; };
+};
+
+objectLayout :: List WireField = {
+  { name = "id_offset"; width = 4; signed = false; byteArray = false; };
+  { name = "kind"; width = 4; signed = false; byteArray = false; };
+  { name = "payload_offset"; width = 8; signed = false; byteArray = false; };
+  { name = "payload_len"; width = 8; signed = false; byteArray = false; };
+  { name = "digest"; width = 32; signed = false; byteArray = true; };
+};
+
+executableLayout :: List WireField = {
+  { name = "name_offset"; width = 4; signed = false; byteArray = false; };
+  { name = "object_index"; width = 4; signed = false; byteArray = false; };
+  { name = "role"; width = 4; signed = false; byteArray = false; };
+  { name = "spawn_budget"; width = 4; signed = false; byteArray = false; };
+};
+
+instanceLayout :: List WireField = {
+  { name = "name_offset"; width = 4; signed = false; byteArray = false; };
+  { name = "executable_index"; width = 4; signed = false; byteArray = false; };
+  { name = "owner_kind"; width = 4; signed = false; byteArray = false; };
+  { name = "owner_index"; width = 4; signed = false; byteArray = false; };
+  { name = "autostart"; width = 4; signed = false; byteArray = false; };
+  { name = "dependency_start"; width = 4; signed = false; byteArray = false; };
+  { name = "dependency_count"; width = 4; signed = false; byteArray = false; };
+  { name = "binding_start"; width = 4; signed = false; byteArray = false; };
+  { name = "binding_count"; width = 4; signed = false; byteArray = false; };
+  { name = "health"; width = 4; signed = false; byteArray = false; };
+};
+
+dependencyLayout :: List WireField = {
+  { name = "instance"; width = 4; signed = false; byteArray = false; };
+};
+
+bindingLayout :: List WireField = {
+  { name = "grant"; width = 4; signed = false; byteArray = false; };
+  { name = "slot"; width = 4; signed = false; byteArray = false; };
+};
+
+grantLayout :: List WireField = {
+  { name = "name_offset"; width = 4; signed = false; byteArray = false; };
+  { name = "source"; width = 4; signed = false; byteArray = false; };
+  { name = "target"; width = 4; signed = false; byteArray = false; };
+  { name = "rights"; width = 8; signed = false; byteArray = false; };
+  { name = "transferable"; width = 4; signed = false; byteArray = false; };
+};
+
+stateLayout :: List WireField = {
+  { name = "name_offset"; width = 4; signed = false; byteArray = false; };
+  { name = "owner"; width = 4; signed = false; byteArray = false; };
+  { name = "schema_version"; width = 4; signed = false; byteArray = false; };
+  { name = "policy"; width = 4; signed = false; byteArray = false; };
+};
+
+healthLayout :: List WireField = {
+  { name = "instance"; width = 4; signed = false; byteArray = false; };
+};
+
+format ::= {
+  formatVersion = formatVersion;
+  headerLen = headerLen;
+  objectLen = objectLen;
+  executableLen = executableLen;
+  instanceLen = instanceLen;
+  dependencyLen = dependencyLen;
+  bindingLen = bindingLen;
+  grantLen = grantLen;
+  stateLen = stateLen;
+  healthLen = healthLen;
+  maxGenerationBytes = maxGenerationBytes;
+  maxObjects = maxObjects;
+  maxExecutables = maxExecutables;
+  maxInstances = maxInstances;
+  maxBindings = maxBindings;
+  maxGrants = maxGrants;
+  maxStates = maxStates;
+  maxDependencies = maxDependencies;
+  maxHealthInstances = maxHealthInstances;
+  maxStringBytes = maxStringBytes;
+  maxStringTableBytes = maxStringTableBytes;
+  maxObjectPayloadBytes = maxObjectPayloadBytes;
+  headerFields = generationHeaderSchema.fields ?? {;};
+  objectFields = objectRecordSchema.fields ?? {;};
+  executableFields = executableRecordSchema.fields ?? {;};
+  instanceFields = instanceRecordSchema.fields ?? {;};
+  dependencyFields = dependencyRecordSchema.fields ?? {;};
+  bindingFields = bindingRecordSchema.fields ?? {;};
+  grantFields = capabilityGrantRecordSchema.fields ?? {;};
+  stateFields = stateBindingRecordSchema.fields ?? {;};
+  healthFields = healthRecordSchema.fields ?? {;};
+  headerLayout = generationHeaderLayout;
+  objectLayout = objectLayout;
+  executableLayout = executableLayout;
+  instanceLayout = instanceLayout;
+  dependencyLayout = dependencyLayout;
+  bindingLayout = bindingLayout;
+  grantLayout = grantLayout;
+  stateLayout = stateLayout;
+  healthLayout = healthLayout;
+};
+
+main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }
+  = caps => [
+    root := env.get caps.env "SLIME_BOOT_BINDINGS_ROOT" ?? ".";
+    bindings := gen.render format;
+    pythonPath := t.join "" { root; "/generation.py"; };
+    rustPath := t.join "" { root; "/generation.rs"; };
+    fs.writeAll caps.write pythonPath bindings.python;
+    fs.writeAll caps.write rustPath bindings.rust
+  ];
+
+main

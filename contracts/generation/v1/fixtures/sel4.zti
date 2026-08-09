@@ -1,132 +1,303 @@
 {
-  formatVersion = 1;
-  generation = 1;
-  target = "aarch64-sel4-qemu-virt";
-  kernelObject = "sha256:kernel";
-  bootstrapComponent = "init";
-  interfaceSchemas = [];
-
-  objects = [
-    { id = "sha256:kernel"; kind = "kernel"; size = 1048576; };
-    { id = "sha256:init"; kind = "bootstrap"; size = 65536; };
-    { id = "sha256:console"; kind = "component"; size = 65536; };
-    { id = "sha256:spawn-service"; kind = "component"; size = 65536; };
-    { id = "sha256:sysinfo"; kind = "component"; size = 65536; };
-    { id = "sha256:echo-agent"; kind = "component"; size = 65536; };
-    { id = "shared-buffer-budget"; kind = "resource"; size = 4096; };
-    { id = "boot-layout"; kind = "resource"; size = 4096; };
-  ];
-
-  sharedBufferBudget = [
-    { holder = "spawn-service"; bytePages = 4; bufferCount = 1; mappingCount = 2; loanCount = 1; };
-  ];
-
-  components = [
+  bootstrapInstance = "init";
+  executables = [
     {
+      commandProfile = [];
       name = "init";
       object = "sha256:init";
       role = "init";
-      dependencies = [];
       spawnBudget = 18;
-      commandProfile = [];
     };
     {
+      commandProfile = [];
       name = "console";
       object = "sha256:console";
       role = "service";
-      dependencies = ["init";];
       spawnBudget = 0;
-      commandProfile = [];
     };
     {
+      commandProfile = [
+        "echo";
+        "sysinfo";
+      ];
       name = "spawn-service";
       object = "sha256:spawn-service";
       role = "service";
-      dependencies = ["init";];
       spawnBudget = 8;
-      commandProfile = ["echo"; "sysinfo";];
     };
     {
+      commandProfile = [];
       name = "sysinfo";
       object = "sha256:sysinfo";
       role = "application";
-      dependencies = [];
       spawnBudget = 0;
-      commandProfile = [];
     };
     {
+      commandProfile = [];
       name = "echo-agent";
       object = "sha256:echo-agent";
       role = "application";
-      dependencies = [];
       spawnBudget = 0;
-      commandProfile = [];
     };
   ];
-
+  formatVersion = 1;
+  generation = 1;
   grants = [
     {
-      name = "endpoint-factory";
+      name = "init-console";
+      rights = [
+        "exec";
+        "spawn";
+      ];
       source = "init";
-      target = "init";
-      rights = ["endpointCreate";];
+      target = "console";
+      transferable = false;
+    };
+    {
+      name = "init-spawn-service";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "spawn-service";
       transferable = false;
     };
     {
       name = "console-output";
-      source = "console";
-      target = "spawn-service";
-      rights = ["send";];
-      transferable = false;
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "init";
+      target = "console";
+      transferable = true;
     };
     {
       name = "spawn-service-rpc";
+      rights = [
+        "send";
+        "recv";
+      ];
       source = "init";
       target = "spawn-service";
-      rights = ["send"; "recv";];
-      transferable = false;
+      transferable = true;
     };
     {
-      name = "spawn-service-sysinfo";
-      source = "spawn-service";
+      name = "init-spawn-service-sysinfo";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
       target = "sysinfo";
-      rights = ["exec"; "spawn";];
       transferable = false;
     };
     {
-      name = "spawn-service-echo";
-      source = "spawn-service";
-      target = "echo-agent";
-      rights = ["exec"; "spawn";];
-      transferable = false;
-    };
-    {
-      name = "spawn-service-endpoint-factory";
+      name = "init-spawn-service-echo";
+      rights = [
+        "exec";
+        "spawn";
+      ];
       source = "init";
-      target = "spawn-service";
-      rights = ["endpointCreate";];
+      target = "echo-agent";
       transferable = false;
     };
     {
       name = "spawn-service-shared-buffer-factory";
+      rights = [
+        "bufferCreate";
+      ];
       source = "init";
       target = "spawn-service";
-      rights = ["bufferCreate";];
+      transferable = false;
+    };
+    {
+      name = "init-endpoint-factory";
+      rights = [
+        "endpointCreate";
+      ];
+      source = "init";
+      target = "init";
       transferable = false;
     };
   ];
-
+  health = {
+    bootAttempts = 3;
+    requiredInstances = [
+      "console";
+      "init";
+      "spawn-service";
+    ];
+  };
+  instances = [
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "init-endpoint-factory";
+          slot = 0;
+        };
+        {
+          grant = "init-console";
+          slot = 1;
+        };
+        {
+          grant = "console-output";
+          slot = 2;
+        };
+        {
+          grant = "init-spawn-service";
+          slot = 5;
+        };
+        {
+          grant = "init-spawn-service-sysinfo";
+          slot = 6;
+        };
+        {
+          grant = "init-spawn-service-echo";
+          slot = 7;
+        };
+        {
+          grant = "spawn-service-rpc";
+          slot = 13;
+        };
+        {
+          grant = "spawn-service-shared-buffer-factory";
+          slot = 37;
+        };
+      ];
+      dependencies = [];
+      executable = "init";
+      health = "required";
+      name = "init";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "console-output";
+          slot = 0;
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "console";
+      health = "required";
+      name = "console";
+      owner = "init";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "spawn-service-rpc";
+          slot = 0;
+        };
+        {
+          grant = "init-spawn-service-sysinfo";
+          slot = 1;
+        };
+        {
+          grant = "init-spawn-service-echo";
+          slot = 2;
+        };
+        {
+          grant = "init-endpoint-factory";
+          slot = 3;
+        };
+        {
+          grant = "spawn-service-shared-buffer-factory";
+          slot = 4;
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "spawn-service";
+      health = "required";
+      name = "spawn-service";
+      owner = "init";
+    };
+    {
+      autostart = false;
+      bindings = [];
+      dependencies = [
+        "spawn-service";
+      ];
+      executable = "sysinfo";
+      health = "optional";
+      name = "sysinfo";
+      owner = "spawn-service";
+    };
+    {
+      autostart = false;
+      bindings = [];
+      dependencies = [
+        "spawn-service";
+      ];
+      executable = "echo-agent";
+      health = "optional";
+      name = "echo-agent";
+      owner = "spawn-service";
+    };
+  ];
+  interfaceSchemas = [];
+  objects = [
+    {
+      id = "sha256:init";
+      kind = "bootstrap";
+      size = 65536;
+    };
+    {
+      id = "sha256:console";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:spawn-service";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:sysinfo";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:echo-agent";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "shared-buffer-budget";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "boot-layout";
+      kind = "resource";
+      size = 4096;
+    };
+  ];
+  sharedBufferBudget = [
+    {
+      bufferCount = 1;
+      bytePages = 4;
+      holder = "spawn-service";
+      loanCount = 1;
+      mappingCount = 2;
+    };
+  ];
   state = [
     {
       name = "echo-agent-session";
       owner = "echo-agent";
-      schemaVersion = 1;
       policy = "ephemeral";
+      schemaVersion = 1;
     };
   ];
-
-  health = {
-    bootAttempts = 3;
-    requiredComponents = ["init"; "console"; "spawn-service";];
-  };
+  target = "aarch64-sel4-qemu-virt";
 }

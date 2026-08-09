@@ -12,8 +12,9 @@ use core::ptr;
 
 use object::read::elf::ElfFile64;
 use object::{Architecture, Endianness, Object, ObjectSegment, SegmentFlags};
+use sel4::CapTypeForObjectOfFixedSize;
 
-use crate::object_allocator::{AllocError, ObjectAllocator};
+use crate::object_allocator::{AllocError, ArenaPlan, ObjectAllocator, TaskArenaId};
 
 /// seL4 base page size for this configuration.
 pub const GRANULE_SIZE: usize = sel4::FrameObjectType::GRANULE.bytes();
@@ -129,6 +130,29 @@ impl<'a> ChildImage<'a> {
     pub fn image_pages(&self) -> usize {
         self.footprint.len() / GRANULE_SIZE
     }
+    /// Exact kernel-memory plan for the VSpace portion of this image.
+    pub fn vspace_arena_plan(&self) -> Result<ArenaPlan, ImageError> {
+        let mut plan = ArenaPlan::new();
+        plan.add(sel4::cap_type::VSpace::object_blueprint())
+            .ok_or(ImageError::FootprintOutOfRange)?;
+        let mapped = self.footprint.start..(self.footprint.end + 2 * GRANULE_SIZE);
+        for level in 1..sel4::vspace_levels::NUM_LEVELS {
+            let span_bytes = 1usize << sel4::vspace_levels::span_bits(level);
+            let coarse = coarsen(&mapped, span_bytes);
+            let Some(ty) = sel4::TranslationTableObjectType::from_level(level) else {
+                continue;
+            };
+            for _ in 0..(coarse.len() / span_bytes) {
+                plan.add(ty.blueprint())
+                    .ok_or(ImageError::FootprintOutOfRange)?;
+            }
+        }
+        for _ in 0..(self.image_pages() + 2) {
+            plan.add(sel4::cap_type::Granule::object_blueprint())
+                .ok_or(ImageError::FootprintOutOfRange)?;
+        }
+        Ok(plan)
+    }
 
     /// The entry point must fall inside a mapped executable segment; otherwise
     /// activation would immediately fault on its first instruction fetch.
@@ -221,13 +245,16 @@ fn user_image_frame(
 /// Build a child VSpace containing the image and its IPC buffer.
 pub fn create_child_vspace(
     allocator: &mut ObjectAllocator,
+    arena: TaskArenaId,
     image: &ChildImage<'_>,
     caller_vspace: sel4::cap::VSpace,
     scratch: &ScratchPage,
     asid_pool: sel4::cap::AsidPool,
 ) -> Result<ChildVSpace, VSpaceError> {
     let footprint = image.footprint();
-    let vspace = allocator.allocate_fixed::<sel4::cap_type::VSpace>()?.cap();
+    let vspace = allocator
+        .allocate_fixed_in::<sel4::cap_type::VSpace>(arena)?
+        .cap();
     asid_pool
         .asid_pool_assign(vspace)
         .map_err(VSpaceError::AsidAssign)?;
@@ -236,7 +263,7 @@ pub fn create_child_vspace(
     // startup transfer window in the granule above that, so the translation
     // tables must cover two pages more than the image footprint.
     let mapped = footprint.start..(footprint.end + 2 * GRANULE_SIZE);
-    let tables_mapped = map_intermediate_tables(allocator, vspace, &mapped)?;
+    let tables_mapped = map_intermediate_tables(allocator, arena, vspace, &mapped)?;
 
     let mut pages = [EMPTY_PAGE; MAX_CHILD_IMAGE_PAGES];
     let page_count = image.image_pages();
@@ -248,7 +275,9 @@ pub fn create_child_vspace(
                 limit: MAX_CHILD_IMAGE_PAGES,
             }))?
     {
-        entry.cap = allocator.allocate_fixed::<sel4::cap_type::Granule>()?.cap();
+        entry.cap = allocator
+            .allocate_fixed_in::<sel4::cap_type::Granule>(arena)?
+            .cap();
     }
 
     accumulate_rights(image, &footprint, &mut pages)?;
@@ -273,7 +302,9 @@ pub fn create_child_vspace(
     unify_instruction_cache(&pages, page_count)?;
 
     let ipc_buffer_addr = footprint.end;
-    let ipc_buffer = allocator.allocate_fixed::<sel4::cap_type::Granule>()?.cap();
+    let ipc_buffer = allocator
+        .allocate_fixed_in::<sel4::cap_type::Granule>(arena)?
+        .cap();
     ipc_buffer
         .frame_map(
             vspace,
@@ -294,7 +325,9 @@ pub fn create_child_vspace(
     // property of the address space the root built, not an authority the child
     // had to be given.
     let transfer_window_addr = ipc_buffer_addr + GRANULE_SIZE;
-    let transfer_window = allocator.allocate_fixed::<sel4::cap_type::Granule>()?.cap();
+    let transfer_window = allocator
+        .allocate_fixed_in::<sel4::cap_type::Granule>(arena)?
+        .cap();
     transfer_window
         .frame_map(
             vspace,
@@ -315,7 +348,9 @@ pub fn create_child_vspace(
     // Allocated from the same cursor as every other object this task owns, so
     // the task's cleanup record already covers it and teardown still reaches
     // zero.
-    let transfer_window_alias = allocator.reserve_slot::<sel4::cap_type::Granule>()?.cap();
+    let transfer_window_alias = allocator
+        .reserve_slot_in::<sel4::cap_type::Granule>(arena)?
+        .cap();
     let root_cnode = sel4::init_thread::slot::CNODE.cap();
     root_cnode
         .absolute_cptr(transfer_window_alias)
@@ -342,6 +377,7 @@ pub fn create_child_vspace(
 
 fn map_intermediate_tables(
     allocator: &mut ObjectAllocator,
+    arena: TaskArenaId,
     vspace: sel4::cap::VSpace,
     footprint: &Range<usize>,
 ) -> Result<usize, VSpaceError> {
@@ -355,7 +391,7 @@ fn map_intermediate_tables(
         for index in 0..(coarse.len() / span_bytes) {
             let addr = coarse.start + index * span_bytes;
             allocator
-                .allocate(ty.blueprint())?
+                .allocate_in(arena, ty.blueprint())?
                 .cap()
                 .cast::<sel4::cap_type::UnspecifiedIntermediateTranslationTable>()
                 .generic_intermediate_translation_table_map(
@@ -581,9 +617,12 @@ const fn round_down(value: usize, granularity: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use sel4::CapTypeForObjectOfFixedSize;
+
     use super::{
-        CHILD_ADDRESS_CEILING, FLAG_EXEC, FLAG_READ, FLAG_WRITE, GRANULE_SIZE, ImageError, coarsen,
-        reject_writable_executable, round_down, validate_footprint_span,
+        CHILD_ADDRESS_CEILING, FLAG_EXEC, FLAG_READ, FLAG_WRITE, GRANULE_SIZE, ImageError,
+        MAX_CHILD_IMAGE_PAGES, coarsen, reject_writable_executable, round_down,
+        validate_footprint_span,
     };
 
     #[test]
@@ -625,5 +664,21 @@ mod tests {
             validate_footprint_span(&one_page_short),
             Err(ImageError::FootprintOutOfRange)
         );
+    }
+
+    #[test]
+    fn maximum_image_arena_plan_is_bounded_and_deterministic() {
+        let mut plan = crate::object_allocator::ArenaPlan::new();
+        plan.add_size_bits(sel4::cap_type::VSpace::object_blueprint().physical_size_bits())
+            .unwrap();
+        for _ in 0..(MAX_CHILD_IMAGE_PAGES + 3) {
+            plan.add_size_bits(12).unwrap();
+        }
+        let first = plan.required_size_bits().unwrap();
+        assert!(
+            first <= 22,
+            "accepted image arena unexpectedly exceeds 4 MiB"
+        );
+        assert_eq!(plan.required_size_bits(), Some(first));
     }
 }

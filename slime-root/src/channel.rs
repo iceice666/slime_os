@@ -79,8 +79,7 @@
 //! unplaced count stays what it was: a statement that this root cannot map a
 //! grant name onto a layout channel label, which is still true.
 
-use boot_contracts::boot_layout::{BootLayout, Role, channel_identity};
-use boot_contracts::generation::Generation;
+use boot_contracts::generation::{Generation, GrantEndpoint};
 
 use crate::generation::{RIGHT_RECV, RIGHT_SEND};
 use crate::graph::{self, GraphTables, Side};
@@ -147,14 +146,18 @@ pub const MAX_CHANNELS: usize = 48;
 /// entry. That is B25's copy semantics and matches x86's cloned endpoint.
 struct Entry {
     key: ChannelKey,
-    /// Queue carrying producer → consumer. Always present: every channel has at
-    /// least one direction, whichever right named it.
     forward: Option<Channel>,
-    /// Queue carrying consumer → producer, present only for a bidirectional
-    /// non-loopback channel. A declared loopback uses `forward` both ways.
     reverse: Option<Channel>,
-    /// Whether the generation declared this grant `transferable`.
     transferable: bool,
+}
+
+#[derive(Clone, Copy)]
+struct DeclaredEndpoint {
+    instance: usize,
+    grant: usize,
+    key: ChannelKey,
+    side: Side,
+    rights: u64,
 }
 
 impl Entry {
@@ -202,10 +205,9 @@ impl Entry {
 pub enum ChannelError {
     /// More logical channels than [`MAX_CHANNELS`].
     TableFull,
-    /// A grant names a component that was not launched.
+    /// A grant names an instance that was not launched.
     UnlaunchedEndpoint,
-    /// A slot resolved once and then did not resolve the second time. A
-    /// bookkeeping defect in this module, not a property of any generation.
+    /// A launched instance has no explicit binding for a grant it receives.
     UnlaidSlot,
     /// The layout's rights for a slot are not the rights the grant declares.
     RightsMismatch { declared: u64, layout: u64 },
@@ -244,30 +246,15 @@ pub struct Materialized {
     pub unplaced: usize,
 }
 
-/// Every logical channel this generation declared, and who holds each end.
+/// Every logical channel this generation declared, including endpoint halves
+/// whose declared instance has not yet been spawned.
 pub struct ChannelTable {
     entries: [Option<Entry>; MAX_CHANNELS],
     len: usize,
-    /// Next [`ChannelKey`]. Monotonic and never reused, so a key from a
-    /// reclaimed channel names nothing rather than something new.
-    ///
-    /// This was `self.len` until B22. That derivation is only unique while
-    /// `len` never decreases: once [`sweep`] frees an entry, the next `push`
-    /// would reissue a key some live capability already names, and
-    /// `Resource::Endpoint { channel }` is the only handle a component holds —
-    /// so an aliased key silently redirects one component's sends into
-    /// another's queue. A confused deputy is strictly worse than the
-    /// exhaustion the sweep exists to remove, which is why the counter is a
-    /// precondition for the sweep rather than tidying beside it.
     next_key: ChannelKey,
-    /// Channels ever minted, never decremented.
-    ///
-    /// Split from `len` for the reason `supervision::Terminations` splits
-    /// `recorded`: once entries are reclaimed, `len` measures what is held now,
-    /// and a boot's transcript needs what happened. A graph that minted forty
-    /// channels and released them all ends at `len == 0`, indistinguishable
-    /// from one that never minted any.
     minted: usize,
+    declared: [Option<DeclaredEndpoint>; MAX_CHANNELS * 2],
+    declared_len: usize,
 }
 
 impl ChannelTable {
@@ -277,6 +264,8 @@ impl ChannelTable {
             len: 0,
             next_key: 0,
             minted: 0,
+            declared: [const { None }; MAX_CHANNELS * 2],
+            declared_len: 0,
         }
     }
 
@@ -308,7 +297,11 @@ impl ChannelTable {
         self.entries
             .iter()
             .flatten()
-            .filter(|entry| graph.holds_endpoint(entry.key) || transit.holds_endpoint(entry.key))
+            .filter(|entry| {
+                graph.holds_endpoint(entry.key)
+                    || transit.holds_endpoint(entry.key)
+                    || self.has_declared(entry.key)
+            })
             .flat_map(|entry| entry.forward.iter().chain(entry.reverse.iter()))
             .filter(|queue| queue.peer_alive())
             .count()
@@ -340,6 +333,66 @@ impl ChannelTable {
         self.entry(key).map(|entry| entry.transferable)
     }
 
+    fn declare_endpoint(&mut self, endpoint: DeclaredEndpoint) -> Result<(), ChannelError> {
+        let slot = self
+            .declared
+            .get_mut(self.declared_len)
+            .ok_or(ChannelError::TableFull)?;
+        *slot = Some(endpoint);
+        self.declared_len += 1;
+        Ok(())
+    }
+
+    fn has_declared(&self, key: ChannelKey) -> bool {
+        self.declared[..self.declared_len]
+            .iter()
+            .flatten()
+            .any(|endpoint| endpoint.key == key)
+    }
+
+    fn has_declared_side(&self, key: ChannelKey, side: Side) -> bool {
+        self.declared[..self.declared_len]
+            .iter()
+            .flatten()
+            .any(|endpoint| endpoint.key == key && endpoint.side == side)
+    }
+
+    /// Install every pre-created channel end declared for an instance. The
+    /// descriptor remains reusable for repeatable instance templates.
+    pub fn install_instance(
+        &mut self,
+        generation: &Generation<'_>,
+        instance: usize,
+        task: TaskId,
+        graph: &mut GraphTables,
+    ) -> Result<usize, ChannelError> {
+        let mut installed = 0;
+        for index in 0..self.declared_len {
+            let Some(endpoint) = self.declared[index] else {
+                continue;
+            };
+            if endpoint.instance != instance {
+                continue;
+            }
+            let slot = binding_slot(generation, instance, endpoint.grant)?;
+            graph
+                .get_mut(task)
+                .ok_or(ChannelError::UnlaunchedEndpoint)?
+                .install(
+                    slot,
+                    graph::Capability {
+                        resource: graph::Resource::Endpoint {
+                            channel: endpoint.key,
+                            side: endpoint.side,
+                        },
+                        rights: endpoint.rights,
+                    },
+                )?;
+            installed += 1;
+        }
+        Ok(installed)
+    }
+
     /// Mark queues whose last holder died as having a dead peer.
     ///
     /// An end can have more than one holder since B25. A task dying abandons a
@@ -350,8 +403,10 @@ impl ChannelTable {
     /// The dying task's table is still installed, so every holder query excludes
     /// it explicitly.
     pub fn mark_dead(&mut self, graph: &GraphTables, task: TaskId, wakes: &mut DeathWakes) {
-        for entry in self.entries.iter_mut().flatten() {
-            let key = entry.key;
+        for index in 0..MAX_CHANNELS {
+            let Some(key) = self.entries[index].as_ref().map(|entry| entry.key) else {
+                continue;
+            };
             let abandoned = [Side::Producer, Side::Consumer, Side::Loopback]
                 .into_iter()
                 .filter(|side| {
@@ -359,10 +414,16 @@ impl ChannelTable {
                         .get(task)
                         .is_some_and(|table| table.reaches_endpoint(key, *side))
                 })
-                .any(|side| !graph.holds_endpoint_side(key, side, Some(task)));
+                .any(|side| {
+                    !graph.holds_endpoint_side(key, side, Some(task))
+                        && !self.has_declared_side(key, side)
+                });
             if !abandoned {
                 continue;
             }
+            let Some(entry) = self.entries[index].as_mut() else {
+                continue;
+            };
             for queue in entry.queues_mut() {
                 let batch = queue.mark_peer_dead();
                 for index in 0..batch.len() {
@@ -478,14 +539,14 @@ impl Default for ChannelTable {
 /// every path that removes one.
 pub fn sweep(channels: &mut ChannelTable, graph: &GraphTables, transit: &Transit) -> usize {
     let mut freed = 0;
-    for slot in channels.entries.iter_mut() {
-        let Some(entry) = slot.as_ref() else {
+    for index in 0..MAX_CHANNELS {
+        let Some(key) = channels.entries[index].as_ref().map(|entry| entry.key) else {
             continue;
         };
-        if graph.holds_endpoint(entry.key) || transit.holds_endpoint(entry.key) {
+        if graph.holds_endpoint(key) || transit.holds_endpoint(key) || channels.has_declared(key) {
             continue;
         }
-        *slot = None;
+        channels.entries[index] = None;
         freed += 1;
     }
     // `saturating_sub`, not `-=`, for `supervision::sweep`'s reason: `freed`
@@ -533,25 +594,20 @@ impl Default for DeathWakes {
     }
 }
 
-/// Where each component's runtime-numbered slots start, and which it takes
-/// next. See the module doc's slot rule.
-///
-/// One fixed-size table rather than a slice of per-task cursors, so the caller
-/// records a task's executable count as it stages the task and hands the whole
-/// table to [`materialize`] without an intermediate collection.
-pub struct SlotCursors {
-    entries: [Option<Cursor>; MAX_CHANNELS],
+/// Which launched generation instance and executable each task represents.
+pub struct LaunchedInstances {
+    entries: [Option<LaunchedInstance>; MAX_CHANNELS],
     len: usize,
 }
 
-#[derive(Clone, Copy)]
-struct Cursor {
-    task: TaskId,
-    next: u32,
-    used_slot_zero: bool,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LaunchedInstance {
+    pub instance: usize,
+    pub executable: usize,
+    pub task: TaskId,
 }
 
-impl SlotCursors {
+impl LaunchedInstances {
     pub const fn new() -> Self {
         Self {
             entries: [None; MAX_CHANNELS],
@@ -559,76 +615,55 @@ impl SlotCursors {
         }
     }
 
-    /// Record that `task` already holds executable grants at slots
-    /// `1..=executables`, so its channels are numbered clear of them.
-    pub fn declare(&mut self, task: TaskId, executables: u32) -> Result<(), ChannelError> {
+    pub fn record(
+        &mut self,
+        instance: usize,
+        executable: usize,
+        task: TaskId,
+    ) -> Result<(), ChannelError> {
+        if self.task_for_instance(instance).is_some() {
+            return Err(ChannelError::UnlaidSlot);
+        }
         let slot = self
             .entries
             .iter_mut()
             .find(|entry| entry.is_none())
             .ok_or(ChannelError::TableFull)?;
-        *slot = Some(Cursor {
+        *slot = Some(LaunchedInstance {
+            instance,
+            executable,
             task,
-            next: executables + 1,
-            used_slot_zero: false,
         });
         self.len += 1;
         Ok(())
     }
 
-    fn take(&mut self, task: TaskId) -> Option<u32> {
-        let cursor = self
-            .entries
-            .iter_mut()
-            .flatten()
-            .find(|cursor| cursor.task == task)?;
-        if !cursor.used_slot_zero {
-            cursor.used_slot_zero = true;
-            return Some(0);
-        }
-        let slot = cursor.next;
-        cursor.next += 1;
-        Some(slot)
-    }
-}
-
-impl Default for SlotCursors {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Which launched task each generation component index became.
-pub struct LaunchedComponents {
-    entries: [Option<(usize, TaskId)>; MAX_CHANNELS],
-    len: usize,
-}
-
-impl LaunchedComponents {
-    pub const fn new() -> Self {
-        Self {
-            entries: [None; MAX_CHANNELS],
-            len: 0,
-        }
-    }
-
-    pub fn record(&mut self, component: usize, task: TaskId) -> Result<(), ChannelError> {
-        let slot = self
-            .entries
-            .iter_mut()
-            .find(|entry| entry.is_none())
-            .ok_or(ChannelError::TableFull)?;
-        *slot = Some((component, task));
-        self.len += 1;
-        Ok(())
-    }
-
-    pub fn task_for(&self, component: usize) -> Option<TaskId> {
+    pub fn task_for_instance(&self, instance: usize) -> Option<TaskId> {
         self.entries
             .iter()
             .flatten()
-            .find(|(index, _)| *index == component)
-            .map(|(_, task)| *task)
+            .find(|launched| launched.instance == instance)
+            .map(|launched| launched.task)
+    }
+
+    pub fn instance_for_task(&self, task: TaskId) -> Option<usize> {
+        self.entries
+            .iter()
+            .flatten()
+            .find(|launched| launched.task == task)
+            .map(|launched| launched.instance)
+    }
+
+    pub fn release_by_task(&mut self, task: TaskId) -> Option<LaunchedInstance> {
+        let entry = self
+            .entries
+            .iter_mut()
+            .find(|entry| entry.is_some_and(|launched| launched.task == task))?;
+        let released = entry.take();
+        if released.is_some() {
+            self.len = self.len.saturating_sub(1);
+        }
+        released
     }
 
     pub const fn len(&self) -> usize {
@@ -639,296 +674,112 @@ impl LaunchedComponents {
         self.len == 0
     }
 
-    /// Every launched component and the task it became, in launch order. The
-    /// component index is what resolves back to the generation's own record, so
-    /// a caller can reach the declared name rather than only the task id.
-    pub fn iter(&self) -> impl Iterator<Item = (usize, TaskId)> + '_ {
+    pub fn iter(&self) -> impl Iterator<Item = LaunchedInstance> + '_ {
         self.entries.iter().flatten().copied()
     }
 }
 
-impl Default for LaunchedComponents {
+impl Default for LaunchedInstances {
     fn default() -> Self {
         Self::new()
     }
 }
 
-/// Create every logical channel the generation's send/recv grants declare, and
-/// install both ends into the holding tasks' capability tables.
-///
-/// Ordering is the generation's grant order, which the builder sorts by
-/// `(name, source, target)`, so channel keys are deterministic across boots of
-/// one generation.
+/// Create every declared channel exactly once. Ends belonging to already
+/// launched instances are installed immediately; the rest remain as explicit
+/// descriptors until that declared instance is spawned.
 pub fn materialize(
     generation: &Generation<'_>,
-    layout: Option<&BootLayout<'_>>,
-    bootstrap: Option<TaskId>,
-    launched: &LaunchedComponents,
+    launched: &LaunchedInstances,
     channels: &mut ChannelTable,
     graph: &mut GraphTables,
-    cursors: &mut SlotCursors,
 ) -> Result<Materialized, ChannelError> {
     let mut report = Materialized::default();
-    for index in 0..generation.grant_count() {
-        let Ok(grant) = generation.grant(index) else {
-            continue;
-        };
+    for grant_index in 0..generation.grant_count() {
+        let grant = generation
+            .grant(grant_index)
+            .map_err(|_| ChannelError::UnlaunchedEndpoint)?;
         let carries = grant.rights & (RIGHT_SEND | RIGHT_RECV);
         if carries == 0 {
             continue;
         }
-        // A grant between components this boot did not launch declares nothing
-        // about this graph. Not a defect: a generation may name a component
-        // whose payload this root task cannot load, and admission already
-        // reports those separately.
-        // The rights describe the target, so a `send` grant makes the target
-        // the producer and a `recv` grant makes it the consumer. A grant naming
-        // both is bidirectional and the assignment is only a labelling of which
-        // end is which.
-        let (Some(target), Some(source)) = (
-            launched.task_for(grant.target),
-            launched.task_for(grant.source),
-        ) else {
+        let (GrantEndpoint::Instance(source), GrantEndpoint::Instance(target)) =
+            (grant.source, grant.target)
+        else {
             continue;
         };
+        let loopback = source == target;
         let (producer, consumer) = if carries == RIGHT_RECV {
             (source, target)
         } else {
             (target, source)
         };
-        report.grants += 1;
-
-        // One slot per holder. A grant naming one component as both endpoints
-        // takes a single slot: installing twice would be refused as a layout
-        // defect, and a loopback is not one.
-        //
-        // A grant this slice cannot place is skipped whole, so placeability is
-        // decided before any slot is handed out. Only the bootstrap lookup can
-        // fail, and it is a pure table read; a cursor `take` is not, so taking
-        // one for the first endpoint and then abandoning the grant would push
-        // that component's *next* channel off slot 0 — which is the one slot
-        // number `console` and `spawn-service` compile against.
-        let second = (consumer != producer).then_some(consumer);
-        let mut unplaceable = false;
-        for task in core::iter::once(producer).chain(second) {
-            // Checked against the rights this end will actually be installed
-            // with, not the grant's literal bits. They differ — see `held_rights`
-            // — and validating the grant's while installing the derived ones
-            // would let the containment check pass for authority the layout
-            // never declared, which is exactly the case it exists to catch.
-            if bootstrap == Some(task)
-                && bootstrap_slot(
-                    layout,
-                    grant.name,
-                    held_rights(grant.rights, task, producer),
-                )?
-                .is_none()
-            {
-                unplaceable = true;
-            }
-        }
-        if unplaceable {
-            report.unplaced += 1;
-            sel4::debug_println!(
-                "SLIME_GRAPH channel unplaced grant={} reason=no-layout-slot",
-                grant.name,
-            );
-            continue;
-        }
-
-        let loopback = consumer == producer;
-        let mut slots = [None; 2];
-        for (destination, (task, side)) in slots.iter_mut().zip(
-            core::iter::once((
-                producer,
-                if loopback {
-                    Side::Loopback
-                } else {
-                    Side::Producer
-                },
-            ))
-            .chain(second.map(|task| (task, Side::Consumer))),
-        ) {
-            let held = held_rights(grant.rights, task, producer);
-            let slot = channel_slot(layout, bootstrap, cursors, task, grant.name, held)?
-                .ok_or(ChannelError::UnlaidSlot)?;
-            *destination = Some((task, slot, held, side));
-        }
-
         let (key, queues) = channels.push(carries, grant.transferable, loopback)?;
+        report.grants += 1;
         report.channels += 1;
         report.queues += queues;
-        sel4::debug_println!(
-            "SLIME_GRAPH channel grant={} key={key} producer={} consumer={} queues={queues}",
-            grant.name,
-            producer.0,
-            consumer.0,
-        );
-        for (task, slot, held, side) in slots.into_iter().flatten() {
-            let table = graph
-                .get_mut(task)
-                .ok_or(ChannelError::UnlaunchedEndpoint)?;
-            table.install(
-                slot,
-                graph::Capability {
-                    resource: graph::Resource::Endpoint { channel: key, side },
-                    rights: held,
-                },
-            )?;
-            sel4::debug_println!(
-                "SLIME_GRAPH channel end task={} slot={slot} key={key} side={} rights={held:#x}",
-                task.0,
-                side.name(),
-            );
-            report.slots += 1;
+        let producer_side = if loopback {
+            Side::Loopback
+        } else {
+            Side::Producer
+        };
+
+        channels.declare_endpoint(DeclaredEndpoint {
+            instance: producer,
+            grant: grant_index,
+            key,
+            side: producer_side,
+            rights: held_rights(grant.rights, producer, producer),
+        })?;
+        if !loopback {
+            channels.declare_endpoint(DeclaredEndpoint {
+                instance: consumer,
+                grant: grant_index,
+                key,
+                side: Side::Consumer,
+                rights: held_rights(grant.rights, consumer, producer),
+            })?;
         }
+        sel4::debug_println!(
+            "SLIME_GRAPH channel grant={} key={key} producer_instance={} consumer_instance={} queues={queues}",
+            grant.name,
+            producer,
+            consumer,
+        );
+    }
+
+    for launched in launched.iter() {
+        report.slots +=
+            channels.install_instance(generation, launched.instance, launched.task, graph)?;
     }
     Ok(report)
 }
 
-/// The slot this task addresses this grant's channel by.
-/// The rights one end of a channel actually holds.
-///
-/// Not the grant's literal bits. The grant states what its *target* may do; the
-/// other end necessarily holds the complement, and a bidirectional grant gives
-/// both ends both. Installing the grant's bits verbatim on both ends would leave
-/// the producer of a `recv` grant unable to send on the queue the generation
-/// created for exactly that.
-fn held_rights(declared: u64, task: TaskId, producer: TaskId) -> u64 {
+fn binding_slot(
+    generation: &Generation<'_>,
+    instance_index: usize,
+    grant_index: usize,
+) -> Result<u32, ChannelError> {
+    let instance = generation
+        .instance(instance_index)
+        .map_err(|_| ChannelError::UnlaunchedEndpoint)?;
+    (0..instance.binding_count())
+        .filter_map(|index| generation.binding(instance, index).ok())
+        .find(|binding| binding.grant == grant_index)
+        .and_then(|binding| u32::try_from(binding.slot).ok())
+        .ok_or(ChannelError::UnlaidSlot)
+}
+
+/// The rights one end actually holds. A grant states what its target may do;
+/// the source holds the complementary end unless the grant is bidirectional.
+fn held_rights(declared: u64, instance: usize, producer: usize) -> u64 {
     if declared & (RIGHT_SEND | RIGHT_RECV) == RIGHT_SEND | RIGHT_RECV {
         RIGHT_SEND | RIGHT_RECV
-    } else if task == producer {
+    } else if instance == producer {
         RIGHT_SEND
     } else {
         RIGHT_RECV
     }
-}
-
-/// `None` means "this slice cannot know the number", which is a skip rather
-/// than a failure; see the module doc.
-fn channel_slot(
-    layout: Option<&BootLayout<'_>>,
-    bootstrap: Option<TaskId>,
-    cursors: &mut SlotCursors,
-    task: TaskId,
-    name: &str,
-    rights: u64,
-) -> Result<Option<u32>, ChannelError> {
-    if bootstrap == Some(task) {
-        return bootstrap_slot(layout, name, rights);
-    }
-    cursors
-        .take(task)
-        .map(Some)
-        .ok_or(ChannelError::UnlaunchedEndpoint)
-}
-
-/// The bootstrap component's slot for a singular role, from the boot layout.
-///
-/// The endpoint and shared-buffer factories carry no name — there is one of
-/// each — so they are addressed by role rather than by identity, exactly as
-/// `LayoutPlacer::role` does in the retired kernel. `init.rs` reads them
-/// through the generated `ENDPOINT_FACTORY_SLOT` and
-/// `SHARED_BUFFER_FACTORY_SLOT`, so as with every other slot the number it
-/// compiles against and the number filled here are one number.
-pub fn bootstrap_role_slot(layout: Option<&BootLayout<'_>>, role: Role) -> Option<u32> {
-    let layout = layout?;
-    (0..layout.entry_count())
-        .filter_map(|index| layout.entry(index))
-        .find(|entry| entry.role == role && !entry.role.is_named())
-        .map(|entry| entry.slot)
-}
-
-/// The bootstrap component's slot for the executable named `component`, from
-/// the boot layout.
-///
-/// The same rule the channel halves follow, applied to the other kind of thing
-/// a layout numbers. `init.rs` addresses every executable it spawns through a
-/// constant generated from this table — `CONSOLE_SLOT`, `SYSINFO_SLOT` — so the
-/// number it compiles against and the number the root fills must be one number.
-/// Numbering init's executables `1..=N` from a cursor instead is what P5.2 did,
-/// and it happened to agree only because `sel4.zti` grants init no executable at
-/// all; the moment one is granted, a cursor puts `sysinfo` at 2 while `init.rs`
-/// reads 4, and the spawn resolves to whatever else landed there. That is
-/// precisely the positional coupling B10 exists to remove.
-///
-/// `None` when the layout names no executable for this component, which the
-/// caller reports as unplaced rather than guessing a number.
-pub fn bootstrap_executable_slot(
-    layout: Option<&BootLayout<'_>>,
-    component: &str,
-    rights: u64,
-) -> Result<Option<u32>, ChannelError> {
-    let Some(layout) = layout else {
-        return Ok(None);
-    };
-    let identity = boot_contracts::boot_layout::component_identity(component);
-    let Some(entry) = (0..layout.entry_count())
-        .filter_map(|index| layout.entry(index))
-        .filter(|entry| entry.role == Role::Executable)
-        .find(|entry| entry.name_identity == identity)
-    else {
-        return Ok(None);
-    };
-    // Containment, for the reason `bootstrap_slot` documents below: the layout
-    // states what the slot may carry and the grant states what the generation
-    // confers, and a grant may not exceed the layout.
-    if rights & !entry.rights != 0 {
-        return Err(ChannelError::RightsMismatch {
-            declared: rights,
-            layout: entry.rights,
-        });
-    }
-    Ok(Some(entry.slot))
-}
-
-/// The bootstrap component's slot for the channel grant `name` authorizes, from
-/// the boot layout.
-///
-/// `None` when the layout labels no such channel — the grant names a channel
-/// `init` brokers through spawn, which this slice does not have. That is not
-/// the same as a wrong number, so it is reported as absent rather than as an
-/// error.
-///
-/// When the layout *does* name it, the layout's rights bound what this end may
-/// do, and the grant may not exceed them.
-///
-/// Containment rather than equality, because the two describe different things.
-/// A layout entry states the authority the slot carries — and it carries
-/// `RIGHT_TRANSFER` for every channel half the retired kernel's `init` brokers,
-/// because init hands that half on to a child. A grant states the authority the
-/// channel confers on its endpoints. Requiring the two to be equal would demand
-/// that every generation restate the layout's delegation bit on a right it is
-/// not about, which is how the first version of this check rejected a
-/// well-formed graph.
-///
-/// What must hold is that the generation cannot grant an end more than the
-/// layout gives that slot: a grant naming `send | recv` on a slot the layout
-/// declares receive-only is a real disagreement between the two readers, and it
-/// fails here rather than silently widening init's authority.
-fn bootstrap_slot(
-    layout: Option<&BootLayout<'_>>,
-    name: &str,
-    rights: u64,
-) -> Result<Option<u32>, ChannelError> {
-    let Some(layout) = layout else {
-        return Ok(None);
-    };
-    let identity = channel_identity(name);
-    let Some(entry) = (0..layout.entry_count())
-        .filter_map(|index| layout.entry(index))
-        .filter(|entry| matches!(entry.role, Role::EndpointClient | Role::EndpointService))
-        .find(|entry| entry.name_identity == identity)
-    else {
-        return Ok(None);
-    };
-    if rights & !entry.rights != 0 {
-        return Err(ChannelError::RightsMismatch {
-            declared: rights,
-            layout: entry.rights,
-        });
-    }
-    Ok(Some(entry.slot))
 }
 
 /// A component's `wait` source set, resolved against one task's capability
@@ -1090,7 +941,7 @@ impl ChannelTable {
 
 #[cfg(test)]
 mod tests {
-    use super::{ChannelTable, DeathWakes, SlotCursors};
+    use super::{ChannelError, ChannelTable, DeathWakes, LaunchedInstances};
     use crate::generation::{RIGHT_RECV, RIGHT_SEND};
     use crate::graph::{Capability, GraphTables, Resource, Side};
     use crate::task::TaskId;
@@ -1114,6 +965,34 @@ mod tests {
                 },
             )
             .expect("install");
+    }
+
+    #[test]
+    fn a_live_declared_instance_cannot_be_recorded_twice() {
+        let mut launched = LaunchedInstances::new();
+        launched.record(3, 2, TaskId(7)).expect("first launch");
+        assert_eq!(
+            launched.record(3, 2, TaskId(8)),
+            Err(ChannelError::UnlaidSlot)
+        );
+        assert_eq!(launched.task_for_instance(3), Some(TaskId(7)));
+        assert_eq!(launched.len(), 1);
+    }
+
+    #[test]
+    fn a_reclaimed_instance_can_be_recorded_again_without_multiplying_entries() {
+        let mut launched = LaunchedInstances::new();
+        launched.record(3, 2, TaskId(7)).expect("first launch");
+        assert_eq!(
+            launched.release_by_task(TaskId(7)).map(|v| v.instance),
+            Some(3)
+        );
+        assert_eq!(launched.len(), 0);
+        launched.record(3, 2, TaskId(8)).expect("respawn");
+        assert_eq!(launched.task_for_instance(3), Some(TaskId(8)));
+        assert_eq!(launched.len(), 1);
+        assert!(launched.release_by_task(TaskId(7)).is_none());
+        assert_eq!(launched.len(), 1);
     }
 
     #[test]
@@ -1272,33 +1151,5 @@ mod tests {
         let mut wakes = DeathWakes::new();
         channels.mark_dead(&graph, PRODUCER, &mut wakes);
         assert_eq!(wakes.drain().count(), 1);
-    }
-
-    /// Slot 0 is what `console.rs`, `spawn-service.rs`, and `launch_context`
-    /// all address, so a component's first channel must land there whatever its
-    /// executable count is.
-    #[test]
-    fn the_first_channel_is_slot_zero_and_later_ones_clear_the_executables() {
-        let mut cursors = SlotCursors::new();
-        cursors.declare(TaskId(0), 2).expect("declare");
-        cursors.declare(TaskId(1), 0).expect("declare");
-
-        assert_eq!(cursors.take(TaskId(0)), Some(0));
-        assert_eq!(
-            cursors.take(TaskId(0)),
-            Some(3),
-            "slots 1 and 2 hold executable grants"
-        );
-        assert_eq!(cursors.take(TaskId(0)), Some(4));
-
-        // One task's numbering says nothing about another's.
-        assert_eq!(cursors.take(TaskId(1)), Some(0));
-        assert_eq!(cursors.take(TaskId(1)), Some(1));
-
-        assert_eq!(
-            cursors.take(TaskId(9)),
-            None,
-            "a task that was never staged has no slots to hand out"
-        );
     }
 }

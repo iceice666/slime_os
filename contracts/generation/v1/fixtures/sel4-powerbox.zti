@@ -1,91 +1,165 @@
 {
-  formatVersion = 1;
-  generation = 32;
-  target = "aarch64-sel4-qemu-virt";
-  kernelObject = "sha256:kernel";
-  bootstrapComponent = "init";
-
-  interfaceSchemas = [];
-
-  objects = [
-    { id = "sha256:kernel"; kind = "kernel"; size = 1048576; };
-    { id = "sha256:init"; kind = "bootstrap"; size = 65536; };
-    { id = "sha256:powerbox-chooser"; kind = "component"; size = 65536; };
-    { id = "sha256:powerbox-probe"; kind = "component"; size = 65536; };
-    { id = "boot-layout"; kind = "resource"; size = 4096; };
-  ];
-
-  sharedBufferBudget = [];
-
-  components = [
+  bootstrapInstance = "init";
+  executables = [
     {
+      commandProfile = [];
       name = "init";
       object = "sha256:init";
       role = "init";
-      dependencies = [];
       spawnBudget = 2;
-      commandProfile = [];
     };
     {
+      commandProfile = [];
       name = "powerbox-chooser";
       object = "sha256:powerbox-chooser";
       role = "service";
-      dependencies = ["init";];
       spawnBudget = 0;
-      commandProfile = [];
     };
     {
+      commandProfile = [];
       name = "powerbox-probe";
       object = "sha256:powerbox-probe";
       role = "application";
-      dependencies = ["init";];
       spawnBudget = 0;
-      commandProfile = [];
     };
   ];
-
+  formatVersion = 1;
+  generation = 32;
   grants = [
     {
       name = "init-powerbox-chooser";
+      rights = [
+        "exec";
+        "spawn";
+      ];
       source = "init";
       target = "powerbox-chooser";
-      rights = ["exec"; "spawn";];
       transferable = false;
     };
     {
       name = "init-powerbox-probe";
+      rights = [
+        "exec";
+        "spawn";
+      ];
       source = "init";
       target = "powerbox-probe";
-      rights = ["exec"; "spawn";];
       transferable = false;
     };
     {
       name = "powerbox-a-root";
+      rights = [
+        "directoryRead";
+        "directoryDerive";
+      ];
       source = "powerbox-chooser";
       target = "powerbox-chooser";
-      rights = ["directoryRead"; "directoryDerive";];
       transferable = true;
     };
     {
       name = "powerbox-b-input";
+      rights = [
+        "inputRead";
+      ];
       source = "powerbox-chooser";
       target = "powerbox-chooser";
-      rights = ["inputRead";];
       transferable = false;
     };
     {
       name = "init-endpoint-factory";
+      rights = [
+        "endpointCreate";
+      ];
       source = "init";
       target = "init";
-      rights = ["endpointCreate";];
       transferable = false;
     };
   ];
-
-  state = [];
-
   health = {
     bootAttempts = 3;
-    requiredComponents = ["init";];
+    requiredInstances = [
+      "init";
+    ];
   };
+  instances = [
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "init-endpoint-factory";
+          slot = 3;
+        };
+        {
+          grant = "init-powerbox-chooser";
+          slot = 1;
+        };
+        {
+          grant = "init-powerbox-probe";
+          slot = 2;
+        };
+      ];
+      dependencies = [];
+      executable = "init";
+      health = "required";
+      name = "init";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "powerbox-a-root";
+          slot = 1;
+        };
+        {
+          grant = "powerbox-b-input";
+          slot = 2;
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "powerbox-chooser";
+      health = "optional";
+      name = "powerbox-chooser";
+      owner = "init";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [
+        "init";
+      ];
+      executable = "powerbox-probe";
+      health = "optional";
+      name = "powerbox-probe";
+      owner = "init";
+    };
+  ];
+  interfaceSchemas = [];
+  objects = [
+    {
+      id = "sha256:init";
+      kind = "bootstrap";
+      size = 65536;
+    };
+    {
+      id = "sha256:powerbox-chooser";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:powerbox-probe";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "boot-layout";
+      kind = "resource";
+      size = 4096;
+    };
+  ];
+  sharedBufferBudget = [];
+  state = [];
+  target = "aarch64-sel4-qemu-virt";
 }

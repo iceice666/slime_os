@@ -19,7 +19,7 @@ from harness import ROOT
 OUTPUT = ROOT / "scripts" / "lib" / "boot_contracts.py"
 RUST_OUTPUT_DIR = ROOT / "boot-contracts" / "src" / "generated"
 GENERATORS = (
-    (ROOT / "contracts" / "generation" / "v3" / "schema.zt", "generation.py", "generation.rs"),
+    (ROOT / "contracts" / "generation" / "v4" / "schema.zt", "generation.py", "generation.rs"),
     (ROOT / "contracts" / "kernel-image" / "v2" / "schema.zt", "kernel_image.py", "kernel_image.rs"),
     (
         ROOT / "contracts" / "target-profile" / "v1" / "schema.zt",

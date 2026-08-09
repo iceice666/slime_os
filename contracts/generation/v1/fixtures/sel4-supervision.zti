@@ -1,77 +1,144 @@
 {
-  formatVersion = 1;
-  generation = 1;
-  target = "aarch64-sel4-qemu-virt";
-  kernelObject = "sha256:kernel";
-  bootstrapComponent = "init";
-  interfaceSchemas = [];
-
-  objects = [
-    { id = "sha256:kernel"; kind = "kernel"; size = 1048576; };
-    { id = "sha256:init"; kind = "bootstrap"; size = 65536; };
-    { id = "sha256:supervision-child"; kind = "component"; size = 65536; };
-    { id = "sha256:sysinfo"; kind = "component"; size = 65536; };
-    { id = "shared-buffer-budget"; kind = "resource"; size = 4096; };
-    { id = "boot-layout"; kind = "resource"; size = 4096; };
-  ];
-
-  sharedBufferBudget = [];
-
-  components = [
+  bootstrapInstance = "init";
+  executables = [
     {
+      commandProfile = [];
       name = "init";
       object = "sha256:init";
       role = "init";
-      dependencies = [];
       spawnBudget = 4;
-      commandProfile = [];
     };
     {
+      commandProfile = [];
       name = "supervision-child";
       object = "sha256:supervision-child";
       role = "application";
-      dependencies = ["init";];
       spawnBudget = 0;
-      commandProfile = [];
     };
     {
+      commandProfile = [];
       name = "sysinfo";
       object = "sha256:sysinfo";
       role = "application";
-      dependencies = ["init";];
       spawnBudget = 0;
-      commandProfile = [];
     };
   ];
-
+  formatVersion = 1;
+  generation = 1;
   grants = [
     {
       name = "init-supervision-child";
+      rights = [
+        "exec";
+        "spawn";
+      ];
       source = "init";
       target = "supervision-child";
-      rights = ["exec"; "spawn";];
       transferable = true;
     };
     {
       name = "init-sysinfo";
+      rights = [
+        "exec";
+        "spawn";
+      ];
       source = "init";
       target = "sysinfo";
-      rights = ["exec"; "spawn";];
       transferable = false;
     };
     {
       name = "init-endpoint-factory";
+      rights = [
+        "endpointCreate";
+      ];
       source = "init";
       target = "init";
-      rights = ["endpointCreate";];
       transferable = false;
     };
   ];
-
-  state = [];
-
   health = {
     bootAttempts = 3;
-    requiredComponents = ["init"; "supervision-child"; "sysinfo";];
+    requiredInstances = [
+      "init";
+      "supervision-child";
+      "sysinfo";
+    ];
   };
+  instances = [
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "init-endpoint-factory";
+          slot = 3;
+        };
+        {
+          grant = "init-supervision-child";
+          slot = 1;
+        };
+        {
+          grant = "init-sysinfo";
+          slot = 2;
+        };
+      ];
+      dependencies = [];
+      executable = "init";
+      health = "required";
+      name = "init";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [
+        "init";
+      ];
+      executable = "supervision-child";
+      health = "required";
+      name = "supervision-child";
+      owner = "init";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [
+        "init";
+      ];
+      executable = "sysinfo";
+      health = "required";
+      name = "sysinfo";
+      owner = "init";
+    };
+  ];
+  interfaceSchemas = [];
+  objects = [
+    {
+      id = "sha256:init";
+      kind = "bootstrap";
+      size = 65536;
+    };
+    {
+      id = "sha256:supervision-child";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:sysinfo";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "shared-buffer-budget";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "boot-layout";
+      kind = "resource";
+      size = 4096;
+    };
+  ];
+  sharedBufferBudget = [];
+  state = [];
+  target = "aarch64-sel4-qemu-virt";
 }

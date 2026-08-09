@@ -221,6 +221,8 @@ pub const POWERBOX_PROBE_SLOT: u32 = SLOT_ABSENT;
 #[allow(dead_code)]
 pub const POWERBOX_SERVICE_SLOT: u32 = 36;
 #[allow(dead_code)]
+pub const RECLAMATION_FAULT_SLOT: u32 = SLOT_ABSENT;
+#[allow(dead_code)]
 pub const SAMPLE_LENDER_SLOT: u32 = SLOT_ABSENT;
 #[allow(dead_code)]
 pub const SAMPLE_LENDER_SIDE_SLOT: u32 = SLOT_ABSENT;

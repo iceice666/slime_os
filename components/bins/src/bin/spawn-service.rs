@@ -16,7 +16,6 @@ use slime_rt::{
 
 slime_rt::entry!(main);
 
-const RPC_SLOT: u32 = 0;
 const STATUS_OK: i32 = 0;
 const STATUS_BAD_REQUEST: i32 = ERR_INVALID_ARG as i32;
 const STATUS_NOT_ALLOWED: i32 = ERR_BAD_CAP as i32;
@@ -24,8 +23,6 @@ const STATUS_BUDGET_EXHAUSTED: i32 = ERR_OUT_OF_MEMORY as i32;
 const RIGHT_SEND: Rights = 1;
 const RIGHT_RECV: Rights = 2;
 const RIGHT_DIRECTORY_READ: Rights = 1 << 19;
-// C7.2 shared-buffer factory, granted by init as the fifth spawn grant.
-const SHARED_BUFFER_FACTORY_SLOT: u32 = 4;
 // A free page-aligned user address, borrowed only for the startup self-check.
 const SHARED_BUFFER_PROBE_BASE: u64 = 0x0000_0004_0000_0000;
 

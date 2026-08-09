@@ -96,6 +96,7 @@ VARIANTS = [
     # device. The receiver uses the `happy` variant: it needs a validated
     # partition for its BootState slots and nothing else.
     "transfer",
+    "boot-selection",
 ]
 
 # Fixture-only regions are fixed by the probes. They are not object-store
@@ -297,6 +298,46 @@ def transfer_manifest() -> bytes:
     body[TRANSFER_HEADER_HASH_OFFSET:TRANSFER_HEADER_HASH_END] = hasher.digest()
     return bytes(body)
 
+def boot_selection_image(bootstore: bytes) -> bytearray:
+    """Build a GPT disk whose store partition is exactly one boot-store image."""
+    partition_sectors = len(bootstore) // SECTOR
+    if len(bootstore) % SECTOR or partition_sectors == 0:
+        raise SystemExit("boot store must be non-empty and sector aligned")
+    capacity = STORE_FIRST + partition_sectors + 34
+    store_last = STORE_FIRST + partition_sectors - 1
+    last_usable = capacity - 34
+    backup_header_lba = capacity - 1
+    backup_entries_lba = backup_header_lba - (ENTRY_COUNT * ENTRY_SIZE) // SECTOR
+    if store_last > last_usable:
+        raise SystemExit("boot store exceeds selector disk geometry")
+
+    image = bytearray(capacity * SECTOR)
+    struct.pack_into("<B", image, 446 + 4, 0xEE)
+    struct.pack_into("<I", image, 446 + 8, 1)
+    struct.pack_into("<I", image, 446 + 12, min(capacity - 1, 0xFFFFFFFF))
+    struct.pack_into("<H", image, 510, 0xAA55)
+    entries = bytearray(ENTRY_COUNT * ENTRY_SIZE)
+    struct.pack_into("<16s", entries, 0, STORE_TYPE_GUID)
+    struct.pack_into("<16s", entries, 16, b"SLIMEOSBOOTSTORE")
+    struct.pack_into("<Q", entries, 32, STORE_FIRST)
+    struct.pack_into("<Q", entries, 40, store_last)
+    entries_crc = zlib.crc32(entries)
+
+    def header(current: int, backup: int, table_lba: int) -> bytes:
+        sector = bytearray(SECTOR)
+        struct.pack_into("<8sII", sector, 0, b"EFI PART", 0x00010000, 92)
+        struct.pack_into("<QQQQ", sector, 24, current, backup, FIRST_USABLE, last_usable)
+        struct.pack_into("<16sQIII", sector, 56, DISK_GUID, table_lba, ENTRY_COUNT, ENTRY_SIZE, entries_crc)
+        struct.pack_into("<I", sector, 16, zlib.crc32(bytes(sector[:92])))
+        return bytes(sector)
+
+    place(image, 1, header(1, backup_header_lba, PRIMARY_ENTRIES_LBA))
+    place(image, PRIMARY_ENTRIES_LBA, bytes(entries))
+    place(image, backup_entries_lba, bytes(entries))
+    place(image, backup_header_lba, header(backup_header_lba, 1, backup_entries_lba))
+    place(image, STORE_FIRST, bootstore)
+    return image
+
 
 def build(variant: str) -> bytearray:
     image = bytearray(CAPACITY * SECTOR)
@@ -376,8 +417,16 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("image", type=Path)
     parser.add_argument("variant", choices=VARIANTS)
+    parser.add_argument("--boot-store", type=Path)
     arguments = parser.parse_args()
-    image = build(arguments.variant)
+    if arguments.variant == "boot-selection":
+        if arguments.boot_store is None:
+            raise SystemExit("boot-selection requires --boot-store")
+        image = boot_selection_image(arguments.boot_store.read_bytes())
+    else:
+        if arguments.boot_store is not None:
+            raise SystemExit("--boot-store is only valid with boot-selection")
+        image = build(arguments.variant)
     arguments.image.write_bytes(image)
     print(
         f"Built {arguments.image} variant={arguments.variant} "

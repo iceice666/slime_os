@@ -21,7 +21,7 @@
 //! buffer, and status byte take a second granule.
 
 use core::ptr;
-use core::sync::atomic::{Ordering, compiler_fence};
+use core::sync::atomic::{Ordering, fence};
 
 use crate::device::{DeviceError, DmaPage, MappedGranule};
 
@@ -91,7 +91,7 @@ const DESC_F_WRITE: u16 = 2;
 /// Generous against QEMU, which completes synchronously in practice, while
 /// still bounding a wedged device to a failure rather than a hang. The root is
 /// single-threaded, so a spin here blocks the whole graph.
-const COMPLETION_POLLS: u32 = 1_000_000;
+const COMPLETION_POLLS: u32 = 100_000_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BlockError {
@@ -309,21 +309,34 @@ impl VirtioBlock {
             self.avail_index = self.avail_index.wrapping_add(1);
             // Descriptor and ring-entry stores must be visible before the
             // release publication of `avail.idx` and the MMIO doorbell.
-            compiler_fence(Ordering::Release);
+            fence(Ordering::Release);
             volatile_write_u16(queue, AVAIL_OFFSET + 2, self.avail_index);
-            compiler_fence(Ordering::Release);
+            fence(Ordering::Release);
         }
         // The device may read the rings from this point.
         self.region.write32(self.offset + reg::QUEUE_NOTIFY, 0);
         self.await_completion()?;
-        // SAFETY: the used ring advanced, so the device has finished with the
-        // buffer.
-        let bytes = unsafe { self.buffer.bytes_mut() };
-        let status = unsafe { ptr::read_volatile(bytes.as_ptr().add(STATUS_OFFSET)) };
-        match status {
-            request::STATUS_OK => Ok(()),
-            other => Err(BlockError::Device(other)),
+        // QEMU may publish the used index before the status byte becomes
+        // visible to this CPU. The virtio ordering contract says both belong
+        // to one completion; wait boundedly for the sentinel to be replaced
+        // instead of misclassifying the transient 0xff as a device error.
+        for _ in 0..COMPLETION_POLLS {
+            fence(Ordering::Acquire);
+            let status = unsafe {
+                let bytes = self.buffer.bytes_mut();
+                ptr::read_volatile(bytes.as_ptr().add(STATUS_OFFSET))
+            };
+            if status != 0xff {
+                return if status == request::STATUS_OK {
+                    Ok(())
+                } else {
+                    Err(BlockError::Device(status))
+                };
+            }
+            core::hint::spin_loop();
         }
+        self.poisoned = true;
+        Err(BlockError::Timeout)
     }
 
     /// Spin until the used ring's index advances past what was last seen.
@@ -341,7 +354,7 @@ impl VirtioBlock {
             if index != self.used_index {
                 // Acquire orders the device's used-ring, status, and data
                 // writes before the driver consumes any of them.
-                compiler_fence(Ordering::Acquire);
+                fence(Ordering::Acquire);
                 self.used_index = index;
                 let pending = self
                     .region

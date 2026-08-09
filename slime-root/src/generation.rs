@@ -1,24 +1,20 @@
 //! Bounded generation preflight and authority derivation for `slime-root`.
 //!
-//! Admission is a pure decision over already-decoded generation data: it
-//! re-checks the closure `slime-root` depends on, classifies each component's
-//! payload so a non-ELF image can never reach the loader, and derives each
-//! task's endpoint authority from declared grants only. No ambient authority is
-//! synthesized here: a component with no declared inbound grant receives an
-//! endpoint capability with no rights at all, which the kernel will refuse to
-//! send on.
+//! Admission is a pure decision over decoded v4 generation data: it classifies
+//! executable payloads and preserves the explicit instance launch model.
+//! Initial authority comes only from per-instance bindings; executables are
+//! never inferred to be instances.
 
 use boot_contracts::component_image::{self, ComponentTargetError};
 use boot_contracts::fabric_graph::{self, FabricGraph};
 use boot_contracts::generation::{
-    DecodeError, Generation, KIND_BOOTSTRAP, KIND_COMPONENT, KIND_KERNEL, KIND_RESOURCE,
-    RIGHT_TRANSFER, Rights,
+    DecodeError, Generation, Instance, InstanceBinding, KIND_BOOTSTRAP, KIND_COMPONENT,
+    KIND_RESOURCE, RIGHT_TRANSFER, Rights,
 };
 use boot_contracts::target_profile::TargetProfile;
 
-/// Components `slime-root` will track in one generation. Matches the generation
-/// format's own `MAX_COMPONENTS`; a larger graph fails closed.
-pub const MAX_ADMITTED_COMPONENTS: usize = 48;
+pub const MAX_ADMITTED_EXECUTABLES: usize = 48;
+pub const MAX_ADMITTED_INSTANCES: usize = 48;
 
 /// Logical IPC rights, numbered as in `kernel/src/capability/mod.rs`. The
 /// generation format owns `RIGHT_TRANSFER`; the send/receive bits it shares
@@ -33,24 +29,24 @@ pub const RIGHT_EXEC: Rights = 1 << 3;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GenerationError {
     Decode(DecodeError),
-    /// The graph declares no kernel object, several, or no bootstrap/component.
+    UnsupportedGenerationVersion,
     MalformedClosure {
-        kernel: usize,
         bootstrap: usize,
-        components: usize,
+        executables: usize,
     },
-    /// More components than [`MAX_ADMITTED_COMPONENTS`].
-    TooManyComponents {
+    TooManyExecutables {
         declared: usize,
         limit: usize,
     },
-    /// A component names an object the graph does not contain.
-    DanglingComponent {
-        component: usize,
+    TooManyInstances {
+        declared: usize,
+        limit: usize,
     },
-    /// A generation component carried a bare ELF without target qualification.
+    DanglingExecutable {
+        executable: usize,
+    },
     BareElfPayload {
-        component: usize,
+        executable: usize,
     },
     /// The generation carries a fabric graph whose declared limits this root
     /// cannot satisfy, or which contradicts itself (C8.2).
@@ -158,12 +154,10 @@ impl PayloadFormat {
     }
 }
 
-/// One admitted component and the shape of its payload.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ComponentPlan {
-    pub component: usize,
+pub struct ExecutablePlan {
+    pub executable: usize,
     pub format: PayloadFormat,
-    pub inbound_grants: usize,
 }
 
 /// The endpoint authority a task receives, derived from declared grants.
@@ -199,16 +193,22 @@ impl Authority {
     }
 }
 
-/// Accumulated inbound authority for one component: the union of the rights of
-/// every grant that names it as target.
-pub fn inbound_authority(
+pub fn bound_authority(
     generation: &Generation<'_>,
-    component: usize,
+    instance: Instance<'_>,
 ) -> Result<Authority, GenerationError> {
+    let instance_index = (0..generation.instance_count())
+        .find(|index| {
+            generation
+                .instance(*index)
+                .is_ok_and(|candidate| candidate.name == instance.name)
+        })
+        .ok_or(GenerationError::Decode(DecodeError::BadIndex))?;
     let mut authority = Authority::NONE;
-    for index in 0..generation.grant_count() {
-        let grant = generation.grant(index)?;
-        if grant.target == component {
+    for index in 0..instance.binding_count() {
+        let InstanceBinding { grant, .. } = generation.binding(instance, index)?;
+        let grant = generation.grant(grant)?;
+        if generation.grant_applies_to_instance(grant, instance_index) {
             authority.rights |= grant.rights;
             authority.grants += 1;
         }
@@ -313,26 +313,16 @@ fn fabric_graph_participants_are_declared(
     generation: &Generation<'_>,
     graph: &FabricGraph<'_>,
 ) -> Result<(), GenerationError> {
-    // `Admission::admit` refuses `declared > MAX_ADMITTED_COMPONENTS` before
-    // reaching this call, so the array always holds every component. Refusing
-    // again rather than truncating with `.min()`: a silent truncation would
-    // drop names and refuse a *legitimate* participant, turning a ceiling
-    // breach into a provenance error that points at the wrong thing.
-    let declared = generation.component_count();
-    if declared > MAX_ADMITTED_COMPONENTS {
-        return Err(GenerationError::TooManyComponents {
+    let declared = generation.instance_count();
+    if declared > MAX_ADMITTED_INSTANCES {
+        return Err(GenerationError::TooManyInstances {
             declared,
-            limit: MAX_ADMITTED_COMPONENTS,
+            limit: MAX_ADMITTED_INSTANCES,
         });
     }
-    let mut names = [None; MAX_ADMITTED_COMPONENTS];
+    let mut names = [None; MAX_ADMITTED_INSTANCES];
     for (slot, name) in names.iter_mut().enumerate().take(declared) {
-        // `?` rather than mapping onto `UnsatisfiableFabricGraph`: a failure
-        // decoding the *component table* has nothing to do with the fabric
-        // graph, and reporting it as one points the reader at the wrong
-        // resource. `GenerationError` already carries `Decode`.
-        let component = generation.component(slot)?;
-        *name = Some(component.name);
+        *name = Some(generation.instance(slot)?.name);
     }
     participants_are_declared(&names[..declared], graph)
 }
@@ -412,12 +402,13 @@ fn fabric_graph_object<'a>(
     None
 }
 
-/// The result of admitting a generation graph.
+/// The result of admitting a v4 generation graph.
 pub struct Admission {
-    plans: [Option<ComponentPlan>; MAX_ADMITTED_COMPONENTS],
-    len: usize,
-    pub bootstrap: usize,
-    pub kernel_objects: usize,
+    executable_plans: [Option<ExecutablePlan>; MAX_ADMITTED_EXECUTABLES],
+    executable_len: usize,
+    instance_indices: [usize; MAX_ADMITTED_INSTANCES],
+    instance_len: usize,
+    pub bootstrap_instance: usize,
     pub bootstrap_objects: usize,
     pub component_objects: usize,
     pub grants: usize,
@@ -425,25 +416,8 @@ pub struct Admission {
     pub loadable: usize,
     pub slime_component_images: usize,
     pub unrecognized_images: usize,
-    /// Qualified images refused for this profile. Non-zero means the generation
-    /// carries an executable built for another target, which is refused before
-    /// mapping rather than after.
     pub wrong_target_images: usize,
-    /// Whether the generation declared a fabric graph, and this root checked
-    /// it against its own ceilings (C8.2).
-    ///
-    /// Reported so the *wiring* is observable, not only the predicate. The
-    /// predicate has unit tests; that the admission path consults it at all is
-    /// what a boot marker can show and a unit test over a hand-built graph
-    /// cannot.
     pub fabric_graph_admitted: bool,
-    /// The shape the declared graph fixes: schema, route, participant, and
-    /// interposition counts (P5.4.10, C8.4's structural arm).
-    ///
-    /// Reported rather than asserted. A transcript proves samples moved; only
-    /// reading the authenticated resource proves they moved along edges the
-    /// *generation* declared, which is what `kernel/tests/fabric_stream.rs`
-    /// exists to check and no seL4 gate could. Zero when no graph is declared.
     pub fabric_schemas: usize,
     pub fabric_routes: usize,
     pub fabric_participants: usize,
@@ -451,105 +425,84 @@ pub struct Admission {
 }
 
 impl Admission {
-    /// Re-check the closure and classify every component payload against
-    /// `profile`, so a wrong-target executable is refused before the loader can
-    /// be offered it.
     pub fn admit(
         generation: &Generation<'_>,
         profile: &TargetProfile,
     ) -> Result<Self, GenerationError> {
-        let declared = generation.component_count();
-        if declared > MAX_ADMITTED_COMPONENTS {
-            return Err(GenerationError::TooManyComponents {
-                declared,
-                limit: MAX_ADMITTED_COMPONENTS,
+        if !generation.is_v4() {
+            return Err(GenerationError::UnsupportedGenerationVersion);
+        }
+        let executable_len = generation.executable_count();
+        if executable_len > MAX_ADMITTED_EXECUTABLES {
+            return Err(GenerationError::TooManyExecutables {
+                declared: executable_len,
+                limit: MAX_ADMITTED_EXECUTABLES,
             });
         }
-
-        // C8.2: a declared fabric graph is validated against *this* root's own
-        // ceilings before any component launches, so a graph promising more
-        // than the mechanism can deliver fails the whole generation closed
-        // rather than failing a participant halfway through a boot.
-        //
-        // The retired kernel does this in `kernel/src/runtime/generation.rs`
-        // and `slime-root` did not, which P5.4.1's inventory recorded as C8.2
-        // having no seL4 equivalent at all rather than a partial one. The
-        // resource already rode along in every generation the builder emits;
-        // nothing read it.
-        //
-        // The predicate itself is `boot_contracts`, shared byte-for-byte with
-        // the oracle — only the ceilings differ, because they are this
-        // implementation's rather than that one's. That is the whole point of
-        // validating here as well: identical bytes can be satisfiable for one
-        // mechanism and impossible for another.
+        let instance_len = generation.instance_count();
+        if instance_len > MAX_ADMITTED_INSTANCES {
+            return Err(GenerationError::TooManyInstances {
+                declared: instance_len,
+                limit: MAX_ADMITTED_INSTANCES,
+            });
+        }
         let fabric = fabric_graph_admission(generation)?;
-
-        let mut kernel_objects = 0;
         let mut bootstrap_objects = 0;
         let mut component_objects = 0;
         for index in 0..generation.object_count() {
             match generation.object(index)?.kind {
-                KIND_KERNEL => kernel_objects += 1,
                 KIND_BOOTSTRAP => bootstrap_objects += 1,
                 KIND_COMPONENT => component_objects += 1,
                 _ => {}
             }
         }
-        if kernel_objects != 1 || bootstrap_objects == 0 || component_objects == 0 {
+        if bootstrap_objects == 0 || executable_len == 0 {
             return Err(GenerationError::MalformedClosure {
-                kernel: kernel_objects,
                 bootstrap: bootstrap_objects,
-                components: component_objects,
+                executables: executable_len,
             });
         }
 
-        let mut plans = [None; MAX_ADMITTED_COMPONENTS];
-        let mut len = 0;
+        let mut executable_plans = [None; MAX_ADMITTED_EXECUTABLES];
         let mut loadable = 0;
         let mut slime_component_images = 0;
         let mut unrecognized_images = 0;
         let mut wrong_target_images = 0;
-        for component in 0..declared {
-            let record = generation.component(component)?;
+        for (executable, plan) in executable_plans.iter_mut().enumerate().take(executable_len) {
+            let record = generation.executable(executable)?;
             let object = generation
                 .object(record.object)
-                .map_err(|_| GenerationError::DanglingComponent { component })?;
+                .map_err(|_| GenerationError::DanglingExecutable { executable })?;
             let format = PayloadFormat::classify(object.bytes, profile);
             match format {
                 PayloadFormat::QualifiedElf => loadable += 1,
                 PayloadFormat::Aarch64Elf => {
-                    return Err(GenerationError::BareElfPayload { component });
+                    return Err(GenerationError::BareElfPayload { executable });
                 }
                 PayloadFormat::SlimeComponent => slime_component_images += 1,
                 PayloadFormat::WrongTarget => wrong_target_images += 1,
                 PayloadFormat::Unrecognized => unrecognized_images += 1,
             }
-            let Some(slot) = plans.get_mut(len) else {
-                return Err(GenerationError::TooManyComponents {
-                    declared,
-                    limit: MAX_ADMITTED_COMPONENTS,
-                });
-            };
-            *slot = Some(ComponentPlan {
-                component,
-                format,
-                inbound_grants: inbound_authority(generation, component)?.grants,
-            });
-            len += 1;
+            *plan = Some(ExecutablePlan { executable, format });
         }
-
+        let mut instance_indices = [0; MAX_ADMITTED_INSTANCES];
+        for (index, slot) in instance_indices.iter_mut().enumerate().take(instance_len) {
+            generation.instance(index)?;
+            *slot = index;
+        }
         for index in 0..generation.grant_count() {
             generation.grant(index)?;
         }
         for index in 0..generation.health_count() {
-            generation.health_component(index)?;
+            generation.health_instance(index)?;
         }
 
         Ok(Self {
-            plans,
-            len,
-            bootstrap: generation.bootstrap,
-            kernel_objects,
+            executable_plans,
+            executable_len,
+            instance_indices,
+            instance_len,
+            bootstrap_instance: generation.bootstrap_instance,
             bootstrap_objects,
             component_objects,
             grants: generation.grant_count(),
@@ -566,21 +519,44 @@ impl Admission {
         })
     }
 
-    pub fn len(&self) -> usize {
-        self.len
+    pub const fn executable_len(&self) -> usize {
+        self.executable_len
     }
-
-    pub fn is_empty(&self) -> bool {
-        self.len == 0
+    pub const fn instance_len(&self) -> usize {
+        self.instance_len
     }
-
-    pub fn plans(&self) -> impl Iterator<Item = &ComponentPlan> {
-        self.plans.iter().take(self.len).flatten()
+    pub const fn is_empty(&self) -> bool {
+        self.instance_len == 0
     }
-
-    /// Every admitted component whose payload this root task could load.
-    pub fn loadable_plans(&self) -> impl Iterator<Item = &ComponentPlan> {
-        self.plans().filter(|plan| plan.format.is_loadable())
+    pub fn executable_plans(&self) -> impl Iterator<Item = &ExecutablePlan> {
+        self.executable_plans
+            .iter()
+            .take(self.executable_len)
+            .flatten()
+    }
+    pub fn loadable_executables(&self) -> impl Iterator<Item = &ExecutablePlan> {
+        self.executable_plans()
+            .filter(|plan| plan.format.is_loadable())
+    }
+    pub fn executable_plan(&self, executable: usize) -> Option<&ExecutablePlan> {
+        self.executable_plans
+            .get(executable)
+            .and_then(Option::as_ref)
+    }
+    pub fn instances<'a>(
+        &'a self,
+        generation: &'a Generation<'a>,
+    ) -> impl Iterator<Item = Instance<'a>> + 'a {
+        self.instance_indices[..self.instance_len]
+            .iter()
+            .filter_map(|index| generation.instance(*index).ok())
+    }
+    pub fn root_autostart_instances<'a>(
+        &'a self,
+        generation: &'a Generation<'a>,
+    ) -> impl Iterator<Item = Instance<'a>> + 'a {
+        self.instances(generation)
+            .filter(|instance| instance.is_root_autostart())
     }
 }
 

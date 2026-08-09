@@ -91,19 +91,26 @@ fn main() {
         first_lba: partition.first_lba,
     };
 
-    // Genesis, written by the manager because it is the only component that
-    // can. A client asking LIST before this would see no root at all.
-    let genesis = BootState {
-        sequence: 1,
-        known_good: KNOWN_GOOD,
-        pending: None,
-        remaining_attempts: 0,
-        generation_root: GENERATION_ROOT,
-        state_root: empty_state_root(),
-        accepted_release_sequence: 1,
-    };
-    if slots.write(&mut io, Slot::A, &genesis).is_err() {
-        fail(b"genesis");
+    // Initialize genesis only when neither redundant slot contains a valid
+    // BootState. Rewriting slot A on every process start destroys the durable
+    // attempt/promotion history the selector and manager share across boots.
+    match slots.select(&mut io) {
+        Ok(_) => {}
+        Err(SelectionError::NoValidBootState) => {
+            let genesis = BootState {
+                sequence: 1,
+                known_good: KNOWN_GOOD,
+                pending: None,
+                remaining_attempts: 0,
+                generation_root: GENERATION_ROOT,
+                state_root: empty_state_root(),
+                accepted_release_sequence: 1,
+            };
+            if slots.write(&mut io, Slot::A, &genesis).is_err() {
+                fail(b"genesis");
+            }
+        }
+        Err(SelectionError::ConflictingSlots) => fail(b"conflicting bootstate"),
     }
     slime_rt::debug_write(b"[sel4-generation-manager] ready\n");
 

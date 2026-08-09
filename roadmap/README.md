@@ -12,9 +12,9 @@ A milestone is complete only when its exit condition is observed. Compiled code,
 
 | Track | Status | Next open gate |
 | --- | --- | --- |
-| [Backlog](00-backlog.md) | No open items | B31 closed with P5.4.final; open a new item before advancing if verification exposes a regression |
-| [Foundations](01-foundations.md) | M1–M4 and M6 complete; M5 mechanisms complete except M5.7 physical Framework evidence | M5.7 remains blocked until a seL4 NVMe path and observed removable-media Framework boot exist |
-| [Core runtime](02-core-runtime.md) | C7 and C8.1–C8.10 complete; C8.11–C8.15 and C10 are planned | For the demo, prioritize only the C8/C10 slices required by two ROS 2 nodes over minimal DDS/RTPS |
+| [Backlog](00-backlog.md) | Clear through B38 | No open defect blocks the next roadmap gate |
+| [Foundations](01-foundations.md) | M1–M4 and M6 complete; M5 mechanisms complete except M5.7 physical Framework evidence | M5.7 requires observed removable-media Framework boot without internal-NVMe writes |
+| [Core runtime](02-core-runtime.md) | C7 and C8.1–C8.10 complete; B34–B38 restored the single declared graph, durable boot selection, and bounded task lifetimes | No backlog gate remains; advance only through the next declared roadmap item |
 | [RPi5 ROS 2 demo](09-rpi5-ros2-demo.md) | RP0 and RP1 complete; RP2–RP8 planned | Rewrite RP2 around the seL4 product boundary before implementation; its current low-level deliverables describe the retired custom kernel |
 | [Architecture portability](07-architecture-portability.md) | P0, P1, P2.1, and P5 complete; P2.2–P2.6 superseded by P5 | P4 physical Raspberry Pi 5 qualification is the next architecture evidence gate |
 | [ROS 2 compatibility](03-ros2-compatibility.md) | Not started | R0 minimal DDS/RTPS topic profile is first; broader external/multi-vendor compatibility follows after the RPi5 demo path |
@@ -43,7 +43,7 @@ The [backlog](00-backlog.md) still sits ahead of all lanes: resolve or explicitl
 
 ```mermaid
 flowchart TD
-    Backlog["Backlog clear"]
+    Backlog["Backlog clear through B38"]
     Foundations["M1–M6 foundations\nexisting x86/QEMU evidence"]
     C7["C7 sample plane\ncomplete"]
     C8["C8.1–C8.10 fabric\ncomplete baseline"]

@@ -163,22 +163,20 @@ def expected_identity(role: str, label: str | None) -> bytes:
     return component_identity(label) if role == "executable" else channel_identity(label)
 
 
-def profile_components(profile: str) -> set[str]:
-    """The component set one boot profile declares (B11)."""
-    return {
-        component["name"]
-        for component in builder.resolve_boot_profile(MANIFEST, profile)["components"]
-    }
+def profile_executables(profile: str) -> set[str]:
+    """Executables the resolved initial graph addresses through boot slots."""
+    resolved = builder.resolve_boot_profile(MANIFEST, profile)
+    return builder.layout_executables(resolved)
 
 
 def check_generation(number: int, profile: str) -> None:
     """Encode and decode one generation's resource, and check its header."""
-    components = profile_components(profile)
-    blob = build_boot_layout(number, fail, components)
+    executables = profile_executables(profile)
+    blob = build_boot_layout(number, fail, executables)
     decoded_number, entries = decode(blob)
     if decoded_number != number:
         fail(f"generation {number} resource carries number {decoded_number}")
-    declared = layout_for(number, components)
+    declared = layout_for(number, executables)
     if len(entries) != len(declared):
         fail(f"generation {number}: encoded {len(entries)} entries, declared {len(declared)}")
     for (slot, role, identity, rights), (want_slot, want_role, want_label, want_rights) in zip(
@@ -194,7 +192,7 @@ def check_fixture(stem: str, number: int, profile: str) -> None:
     """Compare one generation's emitted layout against what the kernel resolved."""
     declared = {
         slot: (role, label, rights)
-        for slot, role, label, rights in layout_for(number, profile_components(profile))
+        for slot, role, label, rights in layout_for(number, profile_executables(profile))
     }
     observed = fixture_rows(stem)
     if len(observed) != len(declared):
@@ -255,10 +253,10 @@ def check_sel4_fixtures() -> int:
             fixture = FIXTURES / f"{stem}.layout"
             if not fixture.is_file():
                 fail(f"missing seL4 layout fixture {fixture.relative_to(ROOT)}")
-            components = {component["name"] for component in manifest["components"]}
+            executables = builder.layout_executables(manifest)
             declared = {
                 slot: (role, label, rights)
-                for slot, role, label, rights in layout_for(manifest["generation"], components)
+                for slot, role, label, rights in layout_for(manifest["generation"], executables)
             }
             observed = fixture_rows(stem)
             if len(observed) != len(declared):
@@ -300,7 +298,7 @@ def check_component_fallback() -> None:
     so.
     """
     path = ROOT / "components" / "bins" / "src" / "default_boot_layout.rs"
-    expected = render_boot_layout_rust(1, profile_components("default"))
+    expected = render_boot_layout_rust(1, profile_executables("default"))
     if path.read_text() != expected:
         fail(
             f"{path.relative_to(ROOT)} is stale; regenerate it from the product "
@@ -308,9 +306,49 @@ def check_component_fallback() -> None:
         )
 
 
+def check_bootstrap_binding_projection() -> None:
+    """Compile-time semantic slots must equal the explicit bootstrap bindings."""
+    prior_target = os.environ.get("SLIME_TARGET_PROFILE")
+    prior_manifest = os.environ.get("SLIME_SEL4_MANIFEST")
+    os.environ["SLIME_TARGET_PROFILE"] = "aarch64-sel4-qemu-virt"
+    os.environ["SLIME_SEL4_MANIFEST"] = "sel4"
+    try:
+        manifest = builder.load_manifest()
+    finally:
+        if prior_target is None:
+            os.environ.pop("SLIME_TARGET_PROFILE", None)
+        else:
+            os.environ["SLIME_TARGET_PROFILE"] = prior_target
+        if prior_manifest is None:
+            os.environ.pop("SLIME_SEL4_MANIFEST", None)
+        else:
+            os.environ["SLIME_SEL4_MANIFEST"] = prior_manifest
+    bindings, roles = builder.bootstrap_binding_projection(manifest)
+    rendered = render_boot_layout_rust(
+        manifest["generation"],
+        {item["name"] for item in manifest["executables"]},
+        bindings,
+        roles,
+    )
+    expected = {
+        "CONSOLE_SLOT": bindings["console"],
+        "CONSOLE_OUTPUT_SLOT": bindings["console-output"],
+        "SPAWN_SERVICE_SLOT": bindings["spawn-service"],
+        "SERVICE_SPAWN_SLOT": bindings["service-spawn"],
+        "ENDPOINT_FACTORY_SLOT": roles["endpoint-factory"],
+        "SHARED_BUFFER_FACTORY_SLOT": roles["shared-buffer-factory"],
+    }
+    for constant, slot in expected.items():
+        declaration = f"pub const {constant}: u32 = {slot};"
+        if declaration not in rendered:
+            fail(f"bootstrap binding projection did not emit {declaration}")
+
+
 def main() -> None:
     check_component_fallback()
     print("boot layout resource: component fallback table is current")
+    check_bootstrap_binding_projection()
+    print("boot layout resource: bootstrap binding projection is current")
     pairs = sorted(set(FIXTURE_PROFILES.values()))
     for number, profile in pairs:
         check_generation(number, profile)
@@ -320,7 +358,7 @@ def main() -> None:
     # layout resource must be recomputed for each. Every generation's resource
     # therefore differs from generation 1's, if only in the header number —
     # which is what makes a builder that emitted one into both detectable.
-    scaffolding = profile_components("test")
+    scaffolding = profile_executables("test")
     baseline = build_boot_layout(1, fail, scaffolding)
     for number, profile in pairs:
         if profile != "test":

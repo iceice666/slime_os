@@ -101,8 +101,10 @@ from boot_contracts import (
     COMPONENT_SEGMENT_FLAG_EXEC,
     COMPONENT_SEGMENT_FLAG_WRITE,
     MAX_COMPONENT_IMAGE_BYTES,
-    GENERATION_COMPONENT,
+    GENERATION_BINDING,
     GENERATION_DEPENDENCY,
+    GENERATION_EXECUTABLE,
+    GENERATION_INSTANCE,
     GENERATION_GRANT,
     GENERATION_HEADER,
     GENERATION_HEALTH,
@@ -112,11 +114,13 @@ from boot_contracts import (
     GENERATION_VERSION,
     TARGET_PROFILES_BY_NAME,
     TargetProfile,
-    MAX_COMPONENTS,
+    MAX_BINDINGS,
     MAX_DEPENDENCIES,
+    MAX_EXECUTABLES,
+    MAX_INSTANCES,
     MAX_GENERATION_BYTES,
     MAX_GRANTS,
-    MAX_HEALTH_COMPONENTS,
+    MAX_HEALTH_INSTANCES,
     MAX_OBJECT_PAYLOAD_BYTES,
     MAX_OBJECTS,
     MAX_STATES,
@@ -198,6 +202,12 @@ SEL4_MANIFESTS = {
     / "v1"
     / "fixtures"
     / "sel4-supervision.zti",
+    "sel4-reclamation": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-reclamation.zti",
     "sel4-crossing": ROOT
     / "contracts"
     / "generation"
@@ -771,43 +781,32 @@ def boot_profile(manifest: dict, name: str) -> dict:
 
 
 def resolve_boot_profile(manifest: dict, name: str) -> dict:
-    """Narrow the manifest to the components one boot profile declares (B11).
-
-    The product profile names no scaffolding, so the generation it builds
-    declares only components the product needs; a test profile adds exactly the
-    probes and scenario doubles its gate family exercises.
-
-    A profile is closed over its component set rather than listing every
-    consequence: an object, grant, state binding, shared-buffer holder, route
-    participant, or interposition hop naming a component this profile does not
-    declare is dropped with it. Stating those separately would let the two
-    drift, and every one of them fails late inside `build_generation` with a
-    message naming the symptom rather than the cause.
-    """
+    """Narrow the manifest to the instances one boot profile declares."""
     profile = boot_profile(manifest, name)
-    scaffolding = profile["components"]
+    scaffolding = profile["instances"]
     if len(set(scaffolding)) != len(scaffolding):
-        fail(f"boot profile {name}: duplicate component")
-    declared = {component["name"] for component in manifest["components"]}
+        fail(f"boot profile {name}: duplicate instance")
+    declared = {instance["name"] for instance in manifest["instances"]}
     unknown = sorted(set(scaffolding) - declared)
     if unknown:
-        fail(f"boot profile {name}: undeclared component(s) {', '.join(unknown)}")
-    # Every component no profile names is product surface. Deriving the product
-    # set by subtraction rather than listing it means a component added to the
-    # manifest is a product component until some profile claims it, which fails
-    # towards declaring too much rather than silently dropping a real service.
+        fail(f"boot profile {name}: undeclared instance(s) {', '.join(unknown)}")
     scaffolding_everywhere = {
-        component
+        instance
         for entry in manifest.get("bootProfiles", [])
-        for component in entry["components"]
+        for instance in entry["instances"]
     }
     kept = (declared - scaffolding_everywhere) | set(scaffolding)
     resolved = copy.deepcopy(manifest)
     resolved.pop("bootProfiles", None)
-    resolved["components"] = [
-        component for component in manifest["components"] if component["name"] in kept
+    resolved["instances"] = [
+        instance for instance in manifest["instances"] if instance["name"] in kept
     ]
-    kept_objects = {component["object"] for component in resolved["components"]}
+    # Boot profiles select initial instances. The executable catalogue is
+    # independent and remains complete so an initial instance may spawn any
+    # executable its explicit exec grant authorizes.
+    used_executables = {executable["name"] for executable in manifest["executables"]}
+    resolved["executables"] = copy.deepcopy(manifest["executables"])
+    kept_objects = {executable["object"] for executable in resolved["executables"]}
     resolved["objects"] = [
         object_
         for object_ in manifest["objects"]
@@ -816,17 +815,23 @@ def resolve_boot_profile(manifest: dict, name: str) -> dict:
     resolved["grants"] = [
         grant
         for grant in manifest["grants"]
-        if grant["source"] in kept and grant["target"] in kept
+        if grant["source"] in kept
+        and (grant["target"] in kept or grant["target"] in used_executables)
     ]
+    retained_grants = {grant["name"] for grant in resolved["grants"]}
+    for instance in resolved["instances"]:
+        instance["bindings"] = [
+            binding for binding in instance["bindings"] if binding["grant"] in retained_grants
+        ]
     resolved["state"] = [binding for binding in manifest["state"] if binding["owner"] in kept]
     resolved["sharedBufferBudget"] = [
         entry for entry in manifest["sharedBufferBudget"] if entry["holder"] in kept
     ]
-    required = profile["requiredComponents"] or manifest["health"]["requiredComponents"]
+    required = profile["requiredInstances"] or manifest["health"]["requiredInstances"]
     missing = sorted(set(required) - kept)
     if missing:
-        fail(f"boot profile {name}: required component(s) {', '.join(missing)} not declared")
-    resolved["health"] = dict(manifest["health"], requiredComponents = list(required))
+        fail(f"boot profile {name}: required instance(s) {', '.join(missing)} not declared")
+    resolved["health"] = dict(manifest["health"], requiredInstances=list(required))
     graph = resolved.get("fabricGraph")
     if graph is not None:
         graph["profiles"] = [
@@ -1039,8 +1044,8 @@ def resolve_fabric_profile(manifest: dict, interfaces: list, profile_name: str) 
     else:
         fabric_profile_name = profile_name
     graph = resolve_fabric_graph(manifest["fabricGraph"], fabric_profile_name)
-    component_names = {component["name"] for component in manifest["components"]}
-    graph_bytes = build_fabric_graph(graph, component_names, interfaces)
+    executable_names = {executable["name"] for executable in manifest["executables"]}
+    graph_bytes = build_fabric_graph(graph, executable_names, interfaces)
     by_interface = {interface.name: interface for interface in interfaces}
     used_schemas = {route["interface"]: by_interface[route["interface"]] for route in graph["routes"]}
     schemas = sorted(used_schemas.values(), key=lambda interface: interface.identity)
@@ -1791,9 +1796,15 @@ def build_rust_components(
     recovery: bool = False,
     candidate_identity: bytes | None = None,
     components: set[str] | None = None,
+    binding_slots: dict[str, int] | None = None,
+    role_bindings: dict[str, int] | None = None,
 ) -> Path:
     environment = os.environ.copy()
     environment["SLIME_GENERATION_NUMBER"] = str(generation_number)
+    if environment.get("SLIME_BOOT_SELECTION_FAIL") == "1":
+        environment["SLIME_BOOT_SELECTION_FAIL"] = "1"
+    else:
+        environment.pop("SLIME_BOOT_SELECTION_FAIL", None)
     environment["SLIME_DATA_FABRIC_PROFILE"] = str(profile_path)
     # The components are compiled before the generation is assembled, so they
     # cannot read the layout resource out of it. Emit the same table as Rust
@@ -1804,7 +1815,8 @@ def build_rust_components(
     # will place.
     layout_path = profile_path.parent / f"boot-layout-{generation_number}.rs"
     layout_path.write_text(
-        render_boot_layout_rust(generation_number, components), encoding="utf-8"
+        render_boot_layout_rust(generation_number, components, binding_slots, role_bindings),
+        encoding="utf-8",
     )
     environment["SLIME_BOOT_LAYOUT"] = str(layout_path)
     environment["SLIME_TARGET_PROFILE"] = target_profile.name
@@ -1870,6 +1882,11 @@ def build_rust_components(
         environment["SLIME_SEL4_SUPERVISION_CHECK"] = "1"
     else:
         environment.pop("SLIME_SEL4_SUPERVISION_CHECK", None)
+    # B38 task-arena and root-CSlot reclamation plane.
+    if environment.get("SLIME_SEL4_RECLAMATION_CHECK") == "1":
+        environment["SLIME_SEL4_RECLAMATION_CHECK"] = "1"
+    else:
+        environment.pop("SLIME_SEL4_RECLAMATION_CHECK", None)
     # B22's channel-crossing plane, likewise.
     if environment.get("SLIME_SEL4_CROSSING_CHECK") == "1":
         environment["SLIME_SEL4_CROSSING_CHECK"] = "1"
@@ -1948,8 +1965,8 @@ def build_rust_components(
         # *this* generation's: the profile's executable slots are spawn-grant
         # positions, so a profile built from the oracle's manifest would name
         # slots this generation never grants.
-        if components is not None and "dango" in components:
-            environment["SLIME_COMMAND_PROFILE_MANIFEST"] = "sel4-dango.zti"
+        command_manifest = sel4_manifest or "sel4"
+        environment["SLIME_COMMAND_PROFILE_MANIFEST"] = f"{command_manifest}.zti"
         # GPT validation and the object store come from `boot-contracts/gpt`,
         # which needs an allocator. `extern crate alloc` in a dependency makes
         # every binary in the crate require a `#[global_allocator]`, so the
@@ -2143,165 +2160,271 @@ def unique_sorted(items: list[dict], key: str, label: str) -> list[dict]:
     return sorted(items, key=lambda item: item[key])
 
 
-def validate_acyclic(components: list[dict]) -> None:
-    graph = {component["name"]: component["dependencies"] for component in components}
+def validate_acyclic(instances: list[dict]) -> None:
+    graph = {instance["name"]: instance["dependencies"] for instance in instances}
     for name, dependencies in graph.items():
         if name in dependencies or len(set(dependencies)) != len(dependencies):
-            fail(f"component {name}: invalid dependencies")
+            fail(f"instance {name}: invalid dependencies")
         for dependency in dependencies:
             if dependency not in graph:
-                fail(f"component {name}: missing dependency {dependency}")
+                fail(f"instance {name}: missing dependency {dependency}")
     active: set[str] = set()
     complete: set[str] = set()
+
     def visit(name: str) -> None:
-        if name in complete: return
-        if name in active: fail("component dependency cycle")
+        if name in complete:
+            return
+        if name in active:
+            fail("instance dependency cycle")
         active.add(name)
-        for dependency in graph[name]: visit(dependency)
-        active.remove(name); complete.add(name)
-    for name in graph: visit(name)
+        for dependency in graph[name]:
+            visit(dependency)
+        active.remove(name)
+        complete.add(name)
+
+    for name in graph:
+        visit(name)
+
+
+def layout_executables(manifest: dict) -> set[str]:
+    """Executables the initial graph addresses through its boot slot table."""
+    initial = {instance["name"] for instance in manifest["instances"]}
+    names = {instance["executable"] for instance in manifest["instances"]}
+    names.update(
+        grant["target"]
+        for grant in manifest["grants"]
+        if grant["source"] in initial and "exec" in grant["rights"]
+    )
+    return names
 
 
 def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes | None, number: int, profile: TargetProfile) -> bytes:
-    # The boot layout is per generation number, and two generations are built
-    # from one manifest. Encode it here, where the number is in hand, rather
-    # than into the shared `payloads` — sharing one layout across both would
-    # make generation 1 boot the policy generation's slot table, failing far
-    # from its cause.
-    #
-    # Narrowed to the components this manifest declares (B11). Taking the set
-    # from the manifest being encoded rather than from the profile means the
-    # layout cannot name a component the generation does not carry: the recovery
-    # manifest gets the recovery layout for the same reason, without a second
-    # selector saying so.
-    declared_components = {component["name"] for component in manifest["components"]}
+    declared_layout_executables = layout_executables(manifest)
     if "boot-layout" in {object_["id"] for object_ in manifest["objects"]}:
         payloads = dict(payloads)
-        payloads["boot-layout"] = build_boot_layout(number, fail, declared_components)
+        payloads["boot-layout"] = build_boot_layout(number, fail, declared_layout_executables)
     objects = unique_sorted(manifest["objects"], "id", "object ids")
-    components = unique_sorted(manifest["components"], "name", "component names")
+    executables = unique_sorted(manifest["executables"], "name", "executable names")
+    instances = unique_sorted(manifest["instances"], "name", "instance names")
     grants = sorted(manifest["grants"], key=lambda grant: (grant["name"], grant["source"], grant["target"]))
     states = unique_sorted(manifest["state"], "name", "state names")
-    if len({(grant["name"], grant["source"], grant["target"]) for grant in grants}) != len(grants): fail("grant identities must be unique")
-    if not 1 <= len(objects) <= MAX_OBJECTS or not 1 <= len(components) <= MAX_COMPONENTS or len(grants) > MAX_GRANTS or len(states) > MAX_STATES:
+    if len({(grant["name"], grant["source"], grant["target"]) for grant in grants}) != len(grants):
+        fail("grant identities must be unique")
+    if not 1 <= len(objects) <= MAX_OBJECTS or not 1 <= len(executables) <= MAX_EXECUTABLES or not 1 <= len(instances) <= MAX_INSTANCES or len(grants) > MAX_GRANTS or len(states) > MAX_STATES:
         fail("manifest count exceeds bound")
-    validate_acyclic(components)
-    object_index = {obj["id"]: index for index, obj in enumerate(objects)}
-    component_index = {component["name"]: index for index, component in enumerate(components)}
+    validate_acyclic(instances)
+    object_index = {object_["id"]: index for index, object_ in enumerate(objects)}
+    executable_index = {executable["name"]: index for index, executable in enumerate(executables)}
+    instance_index = {instance["name"]: index for index, instance in enumerate(instances)}
+    grant_index = {grant["name"]: index for index, grant in enumerate(grants)}
+    if len(grant_index) != len(grants):
+        fail("grant names must be unique")
     if manifest["target"] != profile.name:
         fail(f"manifest target {manifest['target']!r} does not match resolved profile {profile.name!r}")
-    if object_index.get(manifest["kernelObject"]) is None or objects[object_index[manifest["kernelObject"]]]["kind"] != "kernel": fail("kernelObject must name kernel")
-    bootstrap = component_index.get(manifest["bootstrapComponent"])
-    if bootstrap is None or components[bootstrap]["role"] != "init": fail("bootstrapComponent must name init")
+    bootstrap = instance_index.get(manifest["bootstrapInstance"])
+    if bootstrap is None:
+        fail("bootstrapInstance must name an instance")
 
     strings = bytearray()
     offsets: dict[str, int] = {}
     def string_offset(value: str) -> int:
-        if value in offsets: return offsets[value]
+        if value in offsets:
+            return offsets[value]
         encoded = value.encode("utf-8")
-        if len(encoded) > MAX_STRING_BYTES: fail("string exceeds bound")
-        offset = len(strings); strings.extend(struct.pack("<H", len(encoded))); strings.extend(encoded); offsets[value] = offset
-        if len(strings) > MAX_STRING_TABLE_BYTES: fail("string table exceeds bound")
+        if len(encoded) > MAX_STRING_BYTES:
+            fail("string exceeds bound")
+        offset = len(strings)
+        strings.extend(struct.pack("<H", len(encoded)))
+        strings.extend(encoded)
+        offsets[value] = offset
+        if len(strings) > MAX_STRING_TABLE_BYTES:
+            fail("string table exceeds bound")
         return offset
 
     target_offset = string_offset(manifest["target"])
-    object_records = bytearray()
-    component_records = bytearray()
+    for object_ in objects: string_offset(object_["id"])
+    for executable in executables: string_offset(executable["name"])
+    for instance in instances: string_offset(instance["name"])
+    for grant in grants: string_offset(grant["name"])
+    for state in states: string_offset(state["name"])
+
+    grant_rights: list[int] = []
+    for grant in grants:
+        rights = 0
+        for right in grant["rights"]:
+            if right not in RIGHT:
+                fail(f"unsupported right {right}")
+            rights |= RIGHT[right]
+        transferable = int(bool(grant["transferable"]))
+        rights |= RIGHT_TRANSFER if transferable else 0
+        if rights == 0 or rights & ~RIGHT_ALL:
+            fail(f"invalid rights for {grant['name']}")
+        grant_rights.append(rights)
+
+    expected_bindings: dict[str, set[str]] = {name: set() for name in instance_index}
+    for grant, rights in zip(grants, grant_rights, strict=True):
+        source = instance_index.get(grant["source"])
+        if source is None:
+            fail(f"grant source missing: {grant['name']}")
+        if rights & RIGHT["exec"]:
+            expected_bindings[grant["source"]].add(grant["name"])
+            if executable_index.get(grant["target"]) is None:
+                fail(f"executable grant target missing: {grant['name']}")
+        else:
+            target = instance_index.get(grant["target"])
+            if target is None:
+                fail(f"grant target missing: {grant['name']}")
+            if rights & (RIGHT["send"] | RIGHT["recv"]):
+                expected_bindings[grant["source"]].add(grant["name"])
+            expected_bindings[grant["target"]].add(grant["name"])
+
     dependency_records = bytearray()
+    binding_records = bytearray()
+    instance_rows: list[tuple] = []
+    dependency_count = 0
+    binding_count = 0
+    required_from_instances: set[str] = set()
+    for instance in instances:
+        executable = executable_index.get(instance["executable"])
+        if executable is None:
+            fail(f"instance {instance['name']}: missing executable")
+        owner = instance["owner"]
+        if owner == "root":
+            owner_kind, owner_index = 0, 0
+        else:
+            owner_kind, owner_index = 1, instance_index.get(owner, -1)
+            if owner_index < 0 or owner == instance["name"]:
+                fail(f"instance {instance['name']}: invalid owner")
+        autostart = instance["autostart"]
+        if not isinstance(autostart, bool):
+            fail(f"instance {instance['name']}: invalid autostart")
+        dependencies = sorted(instance["dependencies"])
+        if autostart:
+            for dependency in dependencies:
+                depended = instances[instance_index[dependency]]
+                if depended["owner"] == "root" and not depended["autostart"]:
+                    fail(f"instance {instance['name']}: autostart dependency is inactive")
+        dependency_start = dependency_count
+        for dependency in dependencies:
+            dependency_records += GENERATION_DEPENDENCY.pack(instance_index[dependency])
+            dependency_count += 1
+        declared = instance["bindings"]
+        names = [binding["grant"] for binding in declared]
+        slots = [binding["slot"] for binding in declared]
+        if len(set(names)) != len(names) or len(set(slots)) != len(slots):
+            fail(f"instance {instance['name']}: duplicate binding grant or slot")
+        if any(not isinstance(slot, int) or not 0 <= slot < 64 for slot in slots):
+            fail(f"instance {instance['name']}: binding slot outside capability table")
+        expected = expected_bindings[instance["name"]]
+        extra = set(names) - expected
+        for name in extra:
+            grant = grants[grant_index[name]] if name in grant_index else None
+            if grant is None or grant["source"] not in (instance["name"], owner):
+                fail(f"instance {instance['name']}: binding names unrelated grant")
+            rights = grant_rights[grant_index[name]]
+            delegated_to_instance = grant["target"] == instance["name"]
+            delegated_from_owner = grant["source"] == owner
+            delegated_to_owned_instance = any(
+                child["owner"] == instance["name"] and child["name"] == grant["target"]
+                for child in instances
+            )
+            delegated_to_owned_executable = bool(rights & RIGHT["exec"]) and any(
+                child["owner"] == instance["name"] and child["executable"] == grant["target"]
+                for child in instances
+            )
+            if not delegated_from_owner and not delegated_to_instance and not delegated_to_owned_instance and not delegated_to_owned_executable:
+                fail(f"instance {instance['name']}: binding names unrelated grant")
+        if not expected.issubset(names):
+            fail(f"instance {instance['name']}: bindings do not close over related grants")
+        binding_start = binding_count
+        for binding in sorted(declared, key=lambda binding: binding["slot"]):
+            grant = grant_index.get(binding["grant"])
+            if grant is None:
+                fail(f"instance {instance['name']}: binding names unknown grant")
+            binding_records += GENERATION_BINDING.pack(grant, binding["slot"])
+            binding_count += 1
+        if instance["health"] not in ("required", "optional"):
+            fail(f"instance {instance['name']}: invalid health")
+        health = int(instance["health"] == "required")
+        if health:
+            required_from_instances.add(instance["name"])
+        instance_rows.append((string_offset(instance["name"]), executable, owner_kind, owner_index, int(autostart), dependency_start, len(dependencies), binding_start, len(declared), health))
+    if dependency_count > MAX_DEPENDENCIES or binding_count > MAX_BINDINGS:
+        fail("dependency or binding count exceeds bound")
+
+    health = manifest["health"]
+    required = sorted(health["requiredInstances"])
+    if health["bootAttempts"] <= 0 or len(required) > MAX_HEALTH_INSTANCES or len(set(required)) != len(required) or set(required) != required_from_instances:
+        fail("invalid health policy")
+
+    object_records = bytearray()
+    executable_records = bytearray()
+    instance_records = bytearray()
     grant_records = bytearray()
     state_records = bytearray()
     health_records = bytearray()
     blobs = bytearray()
-    payload_start = (
-        GENERATION_HEADER.size + len(objects) * GENERATION_OBJECT.size + len(components) * GENERATION_COMPONENT.size
-        + sum(len(component["dependencies"]) for component in components) * GENERATION_DEPENDENCY.size
-        + len(grants) * GENERATION_GRANT.size + len(states) * GENERATION_STATE.size
-        + len(manifest["health"]["requiredComponents"]) * GENERATION_HEALTH.size
-    )
-    # Strings are visited canonically before payload offsets are frozen.
-    for obj in objects: string_offset(obj["id"])
-    for component in components: string_offset(component["name"])
-    for grant in grants: string_offset(grant["name"])
-    for state in states: string_offset(state["name"])
-    payload_start += len(strings)
-    for obj in objects:
-        if obj["kind"] not in KIND: fail(f"unsupported object kind {obj['kind']}")
-        payload = payloads.get(obj["id"])
-        if payload is None: fail(f"missing payload for {obj['id']}")
-        if len(payload) > MAX_OBJECT_PAYLOAD_BYTES: fail(f"payload too large for {obj['id']}")
-        object_records += GENERATION_OBJECT.pack(string_offset(obj["id"]), KIND[obj["kind"]], payload_start + len(blobs), len(payload), sha256(payload))
-        blobs += payload
-    dependency_count = 0
-    for component in components:
-        obj = object_index.get(component["object"])
-        if obj is None: fail(f"component {component['name']}: missing object")
-        if component["role"] not in ROLE: fail("unsupported component role")
-        spawn_budget = component["spawnBudget"]
-        if not isinstance(spawn_budget, int) or not 0 <= spawn_budget <= MAX_SPAWN_BUDGET:
-            fail(f"component {component['name']}: invalid spawn budget")
-        dependencies = sorted(component["dependencies"])
-        start = dependency_count
-        for dependency in dependencies:
-            dependency_records += GENERATION_DEPENDENCY.pack(component_index[dependency])
-            dependency_count += 1
-        component_records += GENERATION_COMPONENT.pack(
-            string_offset(component["name"]), obj, ROLE[component["role"]], start,
-            len(dependencies), spawn_budget,
+    payload_start = (GENERATION_HEADER.size + len(objects) * GENERATION_OBJECT.size + len(executables) * GENERATION_EXECUTABLE.size + len(instances) * GENERATION_INSTANCE.size + len(dependency_records) + len(binding_records) + len(grants) * GENERATION_GRANT.size + len(states) * GENERATION_STATE.size + len(required) * GENERATION_HEALTH.size + len(strings))
+    for object_ in objects:
+        if object_["kind"] not in KIND:
+            fail(f"unsupported object kind {object_['kind']}")
+        payload = payloads.get(object_["id"])
+        if payload is None or len(payload) > MAX_OBJECT_PAYLOAD_BYTES:
+            fail(f"missing or oversized payload for {object_['id']}")
+        object_records += GENERATION_OBJECT.pack(
+            string_offset(object_["id"]),
+            KIND[object_["kind"]],
+            payload_start + len(blobs),
+            len(payload),
+            sha256(payload),
         )
-    if dependency_count > MAX_DEPENDENCIES: fail("dependency count exceeds bound")
-    for grant in grants:
-        source = component_index.get(grant["source"])
-        target = component_index.get(grant["target"])
-        if source is None or target is None: fail(f"grant endpoint missing: {grant['name']}")
-        rights = 0
-        for right in grant["rights"]:
-            if right not in RIGHT: fail(f"unsupported right {right}")
-            rights |= RIGHT[right]
-        transferable = int(bool(grant["transferable"])); rights |= RIGHT_TRANSFER if transferable else 0
-        if rights == 0 or rights & ~RIGHT_ALL: fail(f"invalid rights for {grant['name']}")
-        grant_records += GENERATION_GRANT.pack(string_offset(grant["name"]), source, target, rights, transferable)
+        blobs += payload
+    for executable in executables:
+        object_ = object_index.get(executable["object"])
+        if object_ is None or objects[object_]["kind"] not in ("bootstrap", "component"):
+            fail(f"executable {executable['name']}: invalid object")
+        if executable["role"] not in ROLE:
+            fail(f"executable {executable['name']}: unsupported role")
+        spawn_budget = executable["spawnBudget"]
+        if not isinstance(spawn_budget, int) or not 0 <= spawn_budget <= MAX_SPAWN_BUDGET:
+            fail(f"executable {executable['name']}: invalid spawn budget")
+        executable_records += GENERATION_EXECUTABLE.pack(
+            string_offset(executable["name"]), object_, ROLE[executable["role"]], spawn_budget
+        )
+    bootstrap_instance = instances[bootstrap]
+    bootstrap_executable = executables[executable_index[bootstrap_instance["executable"]]]
+    if bootstrap_instance["owner"] != "root" or not bootstrap_instance["autostart"] or bootstrap_executable["role"] != "init" or objects[object_index[bootstrap_executable["object"]]]["kind"] != "bootstrap":
+        fail("bootstrap instance must be root-owned autostart init/bootstrap")
+    for row in instance_rows: instance_records += GENERATION_INSTANCE.pack(*row)
+    for grant, rights in zip(grants, grant_rights, strict=True):
+        source = instance_index[grant["source"]]
+        target = executable_index[grant["target"]] if rights & RIGHT["exec"] else instance_index[grant["target"]]
+        grant_records += GENERATION_GRANT.pack(string_offset(grant["name"]), source, target, rights, int(bool(grant["transferable"])))
     for state in states:
-        owner = component_index.get(state["owner"])
-        if owner is None or state["schemaVersion"] <= 0 or state["policy"] not in POLICY: fail(f"invalid state {state['name']}")
+        owner = instance_index.get(state["owner"])
+        if owner is None or state["schemaVersion"] <= 0 or state["policy"] not in POLICY:
+            fail(f"invalid state {state['name']}")
         state_records += GENERATION_STATE.pack(string_offset(state["name"]), owner, state["schemaVersion"], POLICY[state["policy"]])
-    health = manifest["health"]
-    required = sorted(health["requiredComponents"])
-    if health["bootAttempts"] <= 0 or len(required) > MAX_HEALTH_COMPONENTS or len(set(required)) != len(required): fail("invalid health policy")
-    for component in required:
-        if component not in component_index: fail(f"missing health component {component}")
-        health_records += GENERATION_HEALTH.pack(component_index[component])
+    for name in required: health_records += GENERATION_HEALTH.pack(instance_index[name])
 
     object_offset = GENERATION_HEADER.size
-    component_offset = object_offset + len(object_records)
-    dependency_offset = component_offset + len(component_records)
-    grant_offset = dependency_offset + len(dependency_records)
+    executable_offset = object_offset + len(object_records)
+    instance_offset = executable_offset + len(executable_records)
+    dependency_offset = instance_offset + len(instance_records)
+    binding_offset = dependency_offset + len(dependency_records)
+    grant_offset = binding_offset + len(binding_records)
     state_offset = grant_offset + len(grant_records)
     health_offset = state_offset + len(state_records)
     string_table_offset = health_offset + len(health_records)
     actual_payload_offset = string_table_offset + len(strings)
-    if actual_payload_offset != payload_start: fail("internal payload offset mismatch")
+    if actual_payload_offset != payload_start:
+        fail("internal payload offset mismatch")
     total_len = actual_payload_offset + len(blobs)
-    if total_len > MAX_GENERATION_BYTES: fail("generation exceeds bound")
-    parent_bytes = parent or bytes(32)
-    header = GENERATION_HEADER.pack(
-        GENERATION_MAGIC, GENERATION_VERSION, GENERATION_HEADER.size, 0, bytes(32), number, parent_bytes,
-        target_offset, object_index[manifest["kernelObject"]], bootstrap, health["bootAttempts"], len(objects), len(components),
-        dependency_count, len(grants), len(states), len(required), object_offset, component_offset, dependency_offset,
-        grant_offset, state_offset, health_offset, string_table_offset, len(strings), actual_payload_offset, total_len,
-    )
-    generation = bytearray(
-        header
-        + object_records
-        + component_records
-        + dependency_records
-        + grant_records
-        + state_records
-        + health_records
-        + strings
-        + blobs
-    )
-    identity = generation_identity(generation)
-    generation[24:56] = identity
+    if total_len > MAX_GENERATION_BYTES:
+        fail("generation exceeds bound")
+    header = GENERATION_HEADER.pack(GENERATION_MAGIC, GENERATION_VERSION, GENERATION_HEADER.size, 0, bytes(32), number, parent or bytes(32), target_offset, 0, bootstrap, health["bootAttempts"], len(objects), len(executables), len(instances), dependency_count, binding_count, len(grants), len(states), len(required), object_offset, executable_offset, instance_offset, dependency_offset, binding_offset, grant_offset, state_offset, health_offset, string_table_offset, len(strings), actual_payload_offset, total_len)
+    generation = bytearray(header + object_records + executable_records + instance_records + dependency_records + binding_records + grant_records + state_records + health_records + strings + blobs)
+    generation[24:56] = generation_identity(generation)
     return bytes(generation)
 
 
@@ -2328,15 +2451,32 @@ def encode_bootstate(
     return bytes(slot)
 
 
+SELECTOR_GENERATION_BYTES = 8 * 1024 * 1024
+
+
 def build_bootstore(generations: list[bytes]) -> bytes:
+    if any(len(generation) > SELECTOR_GENERATION_BYTES for generation in generations):
+        fail(f"generation exceeds selector ceiling ({SELECTOR_GENERATION_BYTES} bytes)")
     release_sequences = [index + 1 for index in range(len(generations))]
     pending_sequence = os.environ.get("SLIME_PENDING_RELEASE_SEQUENCE")
     if pending_sequence is not None:
         release_sequences[-1] = int(pending_sequence)
+    boot_bundle_hex = os.environ.get("SLIME_BOOT_BUNDLE_IDENTITY")
+    try:
+        boot_bundle = bytes.fromhex(boot_bundle_hex) if boot_bundle_hex is not None else None
+    except ValueError:
+        fail("SLIME_BOOT_BUNDLE_IDENTITY must be a nonzero 32-byte hex digest")
+    if boot_bundle is not None and (len(boot_bundle) != 32 or boot_bundle == bytes(32)):
+        fail("SLIME_BOOT_BUNDLE_IDENTITY must be a nonzero 32-byte hex digest")
     entries = sorted(
-        ((generation[24:56], generation, build_release(generation, release_sequences[index])) for index, generation in enumerate(generations)),
-        key=lambda item: item[0],
+        (
+            generation[24:56],
+            generation,
+            build_release(generation, release_sequences[index], boot_bundle_identity=boot_bundle),
+        )
+        for index, generation in enumerate(generations)
     )
+    entries.sort(key=lambda item: item[0])
     generation_root = sha256(b"".join(identity for identity, _, _ in entries))
     known_good = generations[-1][24:56]
     pending = None
@@ -2412,6 +2552,34 @@ def build_bootstore(generations: list[bytes]) -> bytes:
 
 
 
+def bootstrap_binding_projection(manifest: dict) -> tuple[dict[str, int], dict[str, int]]:
+    """Project explicit bootstrap bindings onto the compile-time slot API."""
+    bootstrap = manifest["bootstrapInstance"]
+    instance = next(item for item in manifest["instances"] if item["name"] == bootstrap)
+    grants_by_name = {grant["name"]: grant for grant in manifest["grants"]}
+    binding_slots: dict[str, int] = {}
+    role_bindings: dict[str, int] = {}
+    right_roles = {
+        "endpointCreate": "endpoint-factory",
+        "bufferCreate": "shared-buffer-factory",
+        "inputRead": "input",
+    }
+    for binding in instance["bindings"]:
+        grant = grants_by_name[binding["grant"]]
+        if "exec" in grant["rights"]:
+            binding_slots[grant["target"]] = binding["slot"]
+        elif set(grant["rights"]) & {"send", "recv"}:
+            binding_slots[grant["name"]] = binding["slot"]
+        for right, role in right_roles.items():
+            if right in grant["rights"]:
+                role_bindings[role] = binding["slot"]
+    channel_aliases = {"spawn-service-rpc": "service-spawn"}
+    for source, alias in channel_aliases.items():
+        if source in binding_slots:
+            binding_slots[alias] = binding_slots[source]
+    return binding_slots, role_bindings
+
+
 def build_sel4_generation(output: Path, manifest: dict, target_profile: TargetProfile) -> None:
     """Build the `aarch64-sel4-qemu-virt` generation (P5.2).
 
@@ -2474,6 +2642,7 @@ def build_sel4_generation(output: Path, manifest: dict, target_profile: TargetPr
         ("sel4-stream", ("SLIME_SEL4_STREAM_CHECK",)),
         ("sel4-qos", ("SLIME_SEL4_STREAM_CHECK", "SLIME_FABRIC_QOS_CHECK")),
         ("sel4-supervision", ("SLIME_SEL4_SUPERVISION_CHECK",)),
+        ("sel4-reclamation", ("SLIME_SEL4_RECLAMATION_CHECK",)),
         ("sel4-crossing", ("SLIME_SEL4_CROSSING_CHECK",)),
         # P5.4.6: its own flag rather than the oracle's
         # `SLIME_FABRIC_CALL_CHECK`. The call *broker* is the same code on both
@@ -2541,22 +2710,21 @@ def build_sel4_generation(output: Path, manifest: dict, target_profile: TargetPr
             os.environ[flag] = "1"
         else:
             os.environ.pop(flag, None)
-    components = {component["name"] for component in manifest["components"]}
+    executable_names = {executable["name"] for executable in manifest["executables"]}
+    binding_slots, role_bindings = bootstrap_binding_projection(manifest)
     built = build_rust_components(
         manifest["generation"],
         profile_path,
         target_profile,
         candidate_identity=None,
-        components=components,
+        components=executable_names,
+        binding_slots=binding_slots,
+        role_bindings=role_bindings,
     )
-
     payloads: dict[str, bytes] = {}
     object_ids = {object_["id"] for object_ in manifest["objects"]}
-    # seL4 is the kernel and is not carried in the generation. The object is
-    # declared because the format requires exactly one and the root task
-    # re-checks that closure; its payload is never mapped, so it names the
-    # pinned image rather than pretending to be one.
-    payloads[manifest["kernelObject"]] = b"SLIME-SEL4-KERNEL-EXTERNAL\0"
+    # seL4 is external to the generation-v4 object closure; there is no
+    # kernel-object header field or synthetic marker payload.
     # The authenticated C8.2 graph, byte-identical to what an x86 generation
     # carries for the same declaration. `slime-root` does not read it — the
     # fabric is userspace policy and the root knows nothing of routes — but it
@@ -2573,20 +2741,20 @@ def build_sel4_generation(output: Path, manifest: dict, target_profile: TargetPr
         payloads["shared-buffer-budget"] = build_shared_buffer_budget(
             manifest.get("sharedBufferBudget", [])
         )
-    for component in manifest["components"]:
-        stack = component.get("stackBytes", COMPONENT_DEFAULT_STACK_BYTES)
+    for executable in manifest["executables"]:
+        stack = executable.get("stackBytes", COMPONENT_DEFAULT_STACK_BYTES)
         if (
             not isinstance(stack, int)
             or stack <= 0
             or stack % target_profile.page_bytes
             or stack > COMPONENT_MAX_STACK_BYTES
         ):
-            fail(f"component {component['name']}: invalid stack")
-        if component["object"] not in object_ids:
-            fail(f"component {component['name']}: missing object")
-        payloads[component["object"]] = component_image(
-            component["name"],
-            component_executable(built, component["name"], target_profile),
+            fail(f"executable {executable['name']}: invalid stack")
+        if executable["object"] not in object_ids:
+            fail(f"executable {executable['name']}: missing object")
+        payloads[executable["object"]] = component_image(
+            executable["name"],
+            component_executable(built, executable["name"], target_profile),
             stack,
             target_profile,
         )
@@ -2617,6 +2785,15 @@ def main() -> None:
     requested_target = os.environ.get("SLIME_TARGET_PROFILE")
     if requested_target:
         manifest["target"] = requested_target
+    requested_generation = os.environ.get("SLIME_GENERATION_NUMBER")
+    if requested_generation is not None:
+        try:
+            generation_number = int(requested_generation)
+        except ValueError:
+            fail("SLIME_GENERATION_NUMBER must be a positive integer")
+        if generation_number <= 0:
+            fail("SLIME_GENERATION_NUMBER must be a positive integer")
+        manifest["generation"] = generation_number
     target_profile = resolve_target_profile(manifest.get("target"))
     if manifest["formatVersion"] != 1:
         fail("unsupported source formatVersion")

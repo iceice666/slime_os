@@ -1,68 +1,115 @@
 {
-  formatVersion = 1;
-  generation = 24;
-  target = "aarch64-sel4-qemu-virt";
-  kernelObject = "sha256:kernel";
-  bootstrapComponent = "init";
-
-  interfaceSchemas = [];
-
-  objects = [
-    { id = "sha256:kernel"; kind = "kernel"; size = 1048576; };
-    { id = "sha256:init"; kind = "bootstrap"; size = 65536; };
-    { id = "sha256:sel4-store-probe"; kind = "component"; size = 65536; };
-    { id = "boot-layout"; kind = "resource"; size = 4096; };
-  ];
-
-  sharedBufferBudget = [];
-
-  components = [
+  bootstrapInstance = "init";
+  executables = [
     {
+      commandProfile = [];
       name = "init";
       object = "sha256:init";
       role = "init";
-      dependencies = [];
       spawnBudget = 1;
-      commandProfile = [];
     };
     {
+      commandProfile = [];
       name = "sel4-store-probe";
       object = "sha256:sel4-store-probe";
       role = "application";
-      dependencies = ["init";];
       spawnBudget = 0;
-      commandProfile = [];
     };
   ];
-
+  formatVersion = 1;
+  generation = 24;
   grants = [
     {
       name = "init-sel4-store-probe";
+      rights = [
+        "exec";
+        "spawn";
+      ];
       source = "init";
       target = "sel4-store-probe";
-      rights = ["exec"; "spawn";];
       transferable = false;
     };
     {
       name = "store-probe-device";
+      rights = [
+        "blockRead";
+        "blockWrite";
+      ];
       source = "sel4-store-probe";
       target = "sel4-store-probe";
-      rights = ["blockRead"; "blockWrite";];
       transferable = false;
     };
     {
       name = "init-endpoint-factory";
+      rights = [
+        "endpointCreate";
+      ];
       source = "init";
       target = "init";
-      rights = ["endpointCreate";];
       transferable = false;
     };
   ];
-
-  state = [];
-
   health = {
     bootAttempts = 3;
-    requiredComponents = ["init";];
+    requiredInstances = [
+      "init";
+    ];
   };
+  instances = [
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "init-endpoint-factory";
+          slot = 2;
+        };
+        {
+          grant = "init-sel4-store-probe";
+          slot = 1;
+        };
+      ];
+      dependencies = [];
+      executable = "init";
+      health = "required";
+      name = "init";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "store-probe-device";
+          slot = 1;
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "sel4-store-probe";
+      health = "optional";
+      name = "sel4-store-probe";
+      owner = "init";
+    };
+  ];
+  interfaceSchemas = [];
+  objects = [
+    {
+      id = "sha256:init";
+      kind = "bootstrap";
+      size = 65536;
+    };
+    {
+      id = "sha256:sel4-store-probe";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "boot-layout";
+      kind = "resource";
+      size = 4096;
+    };
+  ];
+  sharedBufferBudget = [];
+  state = [];
+  target = "aarch64-sel4-qemu-virt";
 }

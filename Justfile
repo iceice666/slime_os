@@ -113,6 +113,11 @@ sel4_stream_check: sel4_pin_check
 sel4_supervision_check: sel4_pin_check
     python3 scripts/check/check-sel4-supervision-plane.py
 
+# B38: repeatedly spawn and reclaim more task lifetimes than the old monotonic
+# root CSlot and ordinary-untyped watermarks could sustain.
+sel4_reclamation_check: sel4_pin_check
+    python3 scripts/check/check-sel4-reclamation-plane.py
+
 # B22: build the channel-crossing image, boot it, and require that a graph
 # minting more channels over its lifetime than `MAX_CHANNELS` holds at once
 # still sends and receives on every live channel — including a pair held across
@@ -224,6 +229,12 @@ sel4_recovery_plane_check: sel4_pin_check
 # because no slot it holds names a device.
 sel4_generation_check: sel4_pin_check
     python3 scripts/check/check-sel4-generation-plane.py
+
+# B35: build the immutable selector once, then boot fresh QEMU processes
+# against one retained raw disk to prove durable attempt consumption,
+# exhaustion rollback, health-only promotion, and sector-scoped mutation.
+sel4_boot_selection_check: sel4_pin_check
+    python3 scripts/check/check-sel4-boot-selection.py
 
 # P5.4.3 and M6.3: boot the directory image and require a component holding one
 # unscoped directory capability to derive narrower views that can neither escape
@@ -642,7 +653,7 @@ test_sel4_root:
         echo "test_sel4_root: no installed seL4 prefix at $prefix; run 'just sel4_qemu_image_check' first" >&2
         exit 1
     fi
-    expected=124
+    expected=130
     # Pinned rather than ambient, on `lint_sel4_root`'s rule: this build
     # consumes the installed seL4 prefix, so it must use the toolchain that
     # prefix was produced against. `rust-toolchain.toml`'s default is a

@@ -52,7 +52,7 @@ from sel4_gate_markers import chains_from_gate, match_marker_contract  # noqa: E
 # deliberate act that shows up in review; silently losing coverage is not.
 GATES: tuple[tuple[str, str, int], ...] = (
     ("sel4_channel_plane", "check/check-sel4-channel-plane.py", 27),
-    ("sel4_component_graph", "check/check-sel4-component-graph.py", 19),
+    ("sel4_component_graph", "check/check-sel4-component-graph.py", 22),
     ("sel4_crossing_plane", "check/check-sel4-crossing-plane.py", 10),
     ("sel4_loan_plane", "check/check-sel4-loan-plane.py", 44),
     ("sel4_device_plane", "check/check-sel4-device-plane.py", 7),
@@ -65,7 +65,7 @@ GATES: tuple[tuple[str, str, int], ...] = (
     ("sel4_call_plane", "check/check-sel4-call-plane.py", 50),
     ("sel4_operation_plane", "check/check-sel4-operation-plane.py", 53),
     ("sel4_visibility_plane", "check/check-sel4-visibility-plane.py", 25),
-    ("sel4_boot_plane", "check/check-sel4-boot-plane.py", 44),
+    ("sel4_boot_plane", "check/check-sel4-boot-plane.py", 47),
     ("sel4_storage_plane", "check/check-sel4-storage-plane.py", 10),
     ("sel4_store_plane", "check/check-sel4-store-plane.py", 15),
     ("sel4_rollback_plane", "check/check-sel4-rollback-plane.py", 17),
@@ -96,6 +96,7 @@ def literal_for(pattern: str) -> str:
     # Anchors and whitespace-tolerance constructs carry no content.
     text = text.replace(r"\s+", " ").replace(r"\s*", "")
     text = text.replace("^", "").replace("$", "")
+    text = text.replace("-?", "-")
     # Character classes and repetitions, narrowest first.
     text = re.sub(r"\[0-9a-fx\]\+", "0x10", text)
     text = re.sub(r"\[0-9a-f\]\+", "abc123", text)
@@ -151,6 +152,45 @@ def transcript_for(gate) -> str:
     return "\n".join(lines) + "\n"
 
 
+def boot_plane_transcript(gate, marker_transcript: str) -> str:
+    """Add the structural composition evidence required by the boot-plane gate."""
+    lines = marker_transcript.splitlines()
+    service_line = next(
+        (line for line in lines if "component=fabric-service " in line), None
+    )
+    call_line = next((line for line in lines if "component=fabric-call-worker " in line), None)
+    op_line = next((line for line in lines if "component=fabric-op-worker " in line), None)
+    init_spawns = [
+        f"SLIME_GRAPH spawned task=100 child={201 + index} component={component} "
+        "grants=1 channels=1 handle=1"
+        for index, component in enumerate(gate.EXPECTED_INIT_CHILDREN)
+    ]
+    expanded: list[str] = []
+    for line in lines:
+        if service_line is not None and line == service_line:
+            expanded.extend(init_spawns)
+        elif line == call_line:
+            expanded.append(
+                "SLIME_GRAPH spawned task=204 child=301 component=fabric-call-worker "
+                "grants=1 channels=1 handle=1"
+            )
+        elif line == op_line:
+            expanded.append(
+                "SLIME_GRAPH spawned task=204 child=302 component=fabric-op-worker "
+                "grants=1 channels=1 handle=1"
+            )
+        else:
+            expanded.append(line)
+    expanded.extend(
+        [
+            "[layout] path=init slots=1 max=64",
+            "[layout] 1 endpoint control",
+            *(f"[{component}] boot idle without a role" for component in gate.EXPECTED_IDLE_WITHOUT_ROLE),
+        ]
+    )
+    return "\n".join(expanded) + "\n"
+
+
 def marker_check(gate, transcript: str) -> None:
     """Invoke the exact matcher used by chain-aware product gates."""
     match_marker_contract(
@@ -162,9 +202,12 @@ def marker_check(gate, transcript: str) -> None:
 
 
 def rejects(gate, transcript: str) -> bool:
-    """True when the product gate's shared marker contract refuses this transcript."""
+    """True when the product gate refuses this transcript."""
     try:
-        marker_check(gate, transcript)
+        if gate.__name__ == "sel4_boot_plane":
+            gate.check_transcript(transcript)
+        else:
+            marker_check(gate, transcript)
     except SystemExit:
         return True
     return False
@@ -186,14 +229,19 @@ def check_gate(name: str, relative_path: str, expected_required: int) -> int:
     if not failures:
         fail(f"{name}: no failure markers declared")
 
-    baseline = transcript_for(gate)
+    marker_baseline = transcript_for(gate)
+
+    def complete(text: str) -> str:
+        return boot_plane_transcript(gate, text) if name == "sel4_boot_plane" else text
+
+    baseline = complete(marker_baseline)
     if rejects(gate, baseline):
         fail(
             f"{name}: rejected a transcript built from its own REQUIRED_MARKERS; "
             "the control cannot distinguish a real absence from its own synthesis"
         )
 
-    lines = baseline.splitlines()
+    lines = marker_baseline.splitlines()
 
     # Delete every occurrence of the selected concrete marker. A regex shared by
     # two chains may legitimately use either occurrence, so deleting only one
@@ -201,7 +249,7 @@ def check_gate(name: str, relative_path: str, expected_required: int) -> int:
     evaluated = 0
     for index, removed in enumerate(lines):
         without = "\n".join(line for line in lines if line != removed) + "\n"
-        if not rejects(gate, without):
+        if not rejects(gate, complete(without)):
             description = required[index][0]
             fail(f"{name}: accepted a transcript missing all evidence for {description!r}")
         evaluated += 1
@@ -217,7 +265,7 @@ def check_gate(name: str, relative_path: str, expected_required: int) -> int:
             remaining = [line for line in lines if line != first and line != second]
             transposed_lines = remaining[:insertion] + [second, first] + remaining[insertion:]
             transposed = "\n".join(transposed_lines) + "\n"
-            if not rejects(gate, transposed):
+            if not rejects(gate, complete(transposed)):
                 fail(f"{name}: accepted the first two markers of a causal chain out of order")
             evaluated += 1
         offset += len(patterns)
@@ -227,6 +275,38 @@ def check_gate(name: str, relative_path: str, expected_required: int) -> int:
         poisoned = baseline + literal_for(pattern) + "\n"
         if not rejects(gate, poisoned):
             fail(f"{name}: accepted a transcript containing failure marker {pattern!r}")
+
+    if name == "sel4_boot_plane":
+        baseline_lines = baseline.splitlines()
+        idle = literal_for(r"\[fabric\] idle: parked on control endpoints")
+        terminal = literal_for(gate.TERMINAL_MARKER)
+        if idle not in baseline_lines or terminal not in baseline_lines:
+            fail(f"{name}: synthetic transcript lacks its idle or healthy supervisor marker")
+        terminal_index = baseline_lines.index(terminal)
+        early_idle_then_exit = "\n".join(
+            [
+                *baseline_lines[:terminal_index],
+                idle,
+                "SLIME_GRAPH component exit task=17 status=-9",
+                *baseline_lines[terminal_index:],
+            ]
+        ) + "\n"
+        if not rejects(gate, early_idle_then_exit):
+            fail(
+                f"{name}: accepted early fabric idle followed by nonzero component exit "
+                "before the healthy supervisor terminal"
+            )
+        nonzero_exit = next(
+            pattern for pattern in failures if pattern.startswith("SLIME_GRAPH component exit")
+        )
+        if re.search(nonzero_exit, "SLIME_GRAPH component exit task=17 status=0"):
+            fail(f"{name}: generic nonzero-exit failure marker also matches status zero")
+        for status in ("7", "-9"):
+            if re.search(
+                nonzero_exit, f"SLIME_GRAPH component exit task=17 status={status}"
+            ) is None:
+                fail(f"{name}: generic nonzero-exit failure marker misses status {status}")
+        evaluated += 1
 
     return evaluated + len(failures)
 

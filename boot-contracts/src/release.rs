@@ -36,7 +36,7 @@ pub struct Release<'a> {
     pub sequence: u64,
     pub target: &'a str,
     pub trust_root_version: u32,
-    pub kernel: [u8; 32],
+    pub boot_bundle: [u8; 32],
     pub authority_manifest: [u8; 32],
     signature_count: usize,
 }
@@ -53,7 +53,7 @@ pub enum ReleaseError {
     WrongGeneration,
     WrongParent,
     WrongTarget,
-    WrongKernel,
+    WrongBootBundle,
     WrongAuthorityManifest,
     WrongTrustRoot,
     StaleSequence,
@@ -93,26 +93,32 @@ impl<'a> Release<'a> {
         if bytes[..8] != RELEASE_MAGIC {
             return Err(ReleaseError::BadMagic);
         }
-        if read_u32(bytes, 8) != RELEASE_VERSION
-            || read_u32(bytes, 12) as usize != RELEASE_HEADER_BYTES
+        let version = read_u32(bytes, RELEASE_HEADER_FORMAT_VERSION_OFFSET);
+        if version != RELEASE_VERSION
+            || read_u32(bytes, RELEASE_HEADER_HEADER_SIZE_OFFSET) as usize != RELEASE_HEADER_BYTES
         {
             return Err(ReleaseError::UnsupportedVersion);
         }
-        if read_u64(bytes, 16) != 0 {
+        if read_u64(bytes, RELEASE_HEADER_REQUIRED_FLAGS_OFFSET) != 0 {
             return Err(ReleaseError::UnknownRequiredFlags);
         }
-        let target_len = read_u32(bytes, 96) as usize;
+        let target_len = read_u32(bytes, RELEASE_HEADER_TARGET_LEN_OFFSET) as usize;
         if target_len == 0 || target_len > MAX_TARGET_BYTES {
             return Err(ReleaseError::BadBounds);
         }
-        let target_bytes = &bytes[104..104 + target_len];
+        let target_bytes =
+            &bytes[RELEASE_HEADER_TARGET_OFFSET..RELEASE_HEADER_TARGET_OFFSET + target_len];
         let target = str::from_utf8(target_bytes).map_err(|_| ReleaseError::BadTarget)?;
-        if bytes[104 + target_len..136].iter().any(|byte| *byte != 0) {
+        if bytes
+            [RELEASE_HEADER_TARGET_OFFSET + target_len..RELEASE_HEADER_BOOT_BUNDLE_IDENTITY_OFFSET]
+            .iter()
+            .any(|byte| *byte != 0)
+        {
             return Err(ReleaseError::NonZeroReserved);
         }
-        let signature_count = read_u32(bytes, 200) as usize;
+        let signature_count = read_u32(bytes, RELEASE_HEADER_SIGNATURE_COUNT_OFFSET) as usize;
         if signature_count > MAX_RELEASE_SIGNATURES
-            || bytes[204..RELEASE_HEADER_BYTES]
+            || bytes[RELEASE_HEADER_RESERVED_OFFSET..RELEASE_HEADER_BYTES]
                 .iter()
                 .any(|byte| *byte != 0)
             || bytes[RELEASE_HEADER_BYTES + signature_count * RELEASE_SIGNATURE_BYTES..]
@@ -121,16 +127,32 @@ impl<'a> Release<'a> {
         {
             return Err(ReleaseError::NonZeroReserved);
         }
-        let parent: [u8; 32] = bytes[56..88].try_into().unwrap();
+        let parent: [u8; 32] = bytes
+            [RELEASE_HEADER_PARENT_IDENTITY_OFFSET..RELEASE_HEADER_RELEASE_SEQUENCE_OFFSET]
+            .try_into()
+            .unwrap();
+        let boot_bundle: [u8; 32] = bytes
+            [RELEASE_HEADER_BOOT_BUNDLE_IDENTITY_OFFSET..RELEASE_HEADER_AUTHORITY_MANIFEST_OFFSET]
+            .try_into()
+            .unwrap();
+        if version == RELEASE_VERSION && boot_bundle == [0; 32] {
+            return Err(ReleaseError::WrongBootBundle);
+        }
         Ok(Self {
             bytes,
-            generation: bytes[24..56].try_into().unwrap(),
+            generation: bytes
+                [RELEASE_HEADER_GENERATION_IDENTITY_OFFSET..RELEASE_HEADER_PARENT_IDENTITY_OFFSET]
+                .try_into()
+                .unwrap(),
             parent: (parent != [0; 32]).then_some(parent),
-            sequence: read_u64(bytes, 88),
+            sequence: read_u64(bytes, RELEASE_HEADER_RELEASE_SEQUENCE_OFFSET),
             target,
-            trust_root_version: read_u32(bytes, 100),
-            kernel: bytes[136..168].try_into().unwrap(),
-            authority_manifest: bytes[168..200].try_into().unwrap(),
+            trust_root_version: read_u32(bytes, RELEASE_HEADER_TRUST_ROOT_VERSION_OFFSET),
+            boot_bundle,
+            authority_manifest: bytes
+                [RELEASE_HEADER_AUTHORITY_MANIFEST_OFFSET..RELEASE_HEADER_SIGNATURE_COUNT_OFFSET]
+                .try_into()
+                .unwrap(),
             signature_count,
         })
     }
@@ -154,16 +176,26 @@ impl<'a> Release<'a> {
         if self.target != generation.target {
             return Err(ReleaseError::WrongTarget);
         }
-        let kernel = generation
-            .object(generation.kernel_object)
-            .map_err(|_| ReleaseError::WrongKernel)?;
-        if self.kernel != kernel.digest {
-            return Err(ReleaseError::WrongKernel);
+        if !generation.is_v4() {
+            let kernel = generation
+                .object(generation.kernel_object)
+                .map_err(|_| ReleaseError::WrongBootBundle)?;
+            if self.boot_bundle != kernel.digest {
+                return Err(ReleaseError::WrongBootBundle);
+            }
         }
         if self.authority_manifest != generation.authority_manifest_identity() {
             return Err(ReleaseError::WrongAuthorityManifest);
         }
         self.verify_signatures(root)
+    }
+
+    #[cfg(feature = "release-crypto")]
+    pub fn verify_boot_bundle(&self, expected: &[u8; 32]) -> Result<(), ReleaseError> {
+        if self.boot_bundle != *expected {
+            return Err(ReleaseError::WrongBootBundle);
+        }
+        Ok(())
     }
 
     #[cfg(feature = "release-crypto")]
@@ -412,7 +444,7 @@ mod tests {
         assert_eq!(release.sequence, 42);
         assert_eq!(release.target, "x86_64-qemu-virtio");
         assert_eq!(release.trust_root_version, 1);
-        assert_eq!(release.kernel, [0xE3; 32]);
+        assert_eq!(release.boot_bundle, [0xE3; 32]);
         assert_eq!(release.authority_manifest, [0xF4; 32]);
         assert_eq!(release.signed_payload().len(), RELEASE_HEADER_BYTES);
     }
@@ -465,6 +497,17 @@ mod tests {
                 "offset {offset}",
             );
         }
+    }
+
+    #[test]
+    fn release_v1_is_rejected_after_v2_cutover() {
+        let mut bytes = valid();
+        bytes[RELEASE_HEADER_FORMAT_VERSION_OFFSET..RELEASE_HEADER_FORMAT_VERSION_OFFSET + 4]
+            .copy_from_slice(&RELEASE_VERSION_V1.to_le_bytes());
+        assert_eq!(
+            Release::decode(&bytes).err(),
+            Some(ReleaseError::UnsupportedVersion)
+        );
     }
 
     /// A target is what binds a release to the hardware it may boot. An empty

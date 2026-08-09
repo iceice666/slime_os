@@ -17,7 +17,158 @@ at the bottom rather than deleting it.
 ## Open
 
 
+
 ## Resolved
+### B34 — generation component records conflate executable catalogue entries with initial instances
+
+**Status:** Resolved 2026-08-10.
+
+**Problem:** `slime-root` constructs and activates every loadable component in
+the generation, while `init` also receives those executable capabilities and
+spawns the graph it owns. The full C8.10 image therefore runs a root-launched
+copy and an init-spawned copy of the same fabric, workers, and participants.
+The first copy has no matching spawn-time composition: its fabric service is
+refused when it tries to spawn its route workers, and that graph exits nonzero.
+The generation format has one `Component` record for two different concepts —
+an executable available to spawn and an initial instance that must exist at
+boot — and has no launch-owner or autostart field with which to distinguish
+them.
+
+**Evidence:** `just sel4_boot_check` failed on 2026-08-09. Continuing the same
+image past the checker's early terminal showed root-launched fabric task 16
+report `spawn refused ... ungranted`, then the root-launched graph exited with
+status 1; init task 19 subsequently transferred supervision and continued a
+second graph. `slime-root/src/main.rs::launch_component_graph` walks every
+`Admission::loadable_plans()` entry and activates them all.
+
+**Fix:** Introduce a clean generation-format cutover separating
+`Executable` records from `Instance` records. Initial instances explicitly
+declare their executable, launch owner (`root` or another instance), autostart
+state, dependency barrier, health policy, quota, and capability bindings. Root
+launches only root-owned autostart instances; executable catalogue entries are
+inert until an authorized spawn. Do not retain a runtime v1 compatibility shim.
+
+**Exit condition observed:** A fixture can carry executable-only images without creating
+tasks; every declared initial instance is constructed exactly once by its
+declared owner; the full graph contains no duplicate component identities or
+unintended nonzero exits; and `just sel4_boot_check` observes the single graph's
+complete healthy-idle chain. Audit and closure records: [`devlog/2026-08-09-b34-b38-sel4-model-audit/`](../devlog/2026-08-09-b34-b38-sel4-model-audit/index.md) and [`devlog/2026-08-10-b34-b38-model-cutover/`](../devlog/2026-08-10-b34-b38-model-cutover/index.md).
+
+### B35 — BootState does not select the generation the seL4 product boots
+
+**Status:** Resolved 2026-08-10.
+
+**Problem:** The generation admitted by `slime-root` is selected at build time
+with `SLIME_GENERATION` and compiled into the root ELF through `include_bytes!`.
+The generation-management, rollback, and recovery planes can correctly mutate
+durable BootState sectors, but the next seL4 boot never reads those sectors to
+choose which generation to launch. The generation also retains a required
+`kernelObject` whose seL4 payload is an inert placeholder that is validated but
+never loaded.
+
+**Evidence:** `slime-root/build.rs` states that the root task admits generation
+bytes compiled into it; `scripts/build/build-sel4.py::build_application` builds
+a distinct root ELF per manifest. `just sel4_generation_check` proves authority
+and disk transitions but boots an image that already embeds generation 27, so
+it cannot prove that the committed selection controls a later boot.
+
+**Fix:** Add a minimal immutable seL4 boot selector that reads the
+explicitly granted boot device, selects and updates the two BootState slots,
+verifies release/target/generation/object closure, and launches the selected
+runtime generation. Move seL4 kernel, loader, and boot-selector identity into
+the signed boot bundle or release record; remove the unused generation
+`kernelObject` in the same format cutover.
+
+**Exit condition observed:** One QEMU campaign stages a pending generation, reboots into
+that exact generation, durably consumes failed attempts across fresh boots,
+returns to known-good when exhausted, and promotes only after health
+confirmation. Changing only the root build's embedded bytes cannot satisfy the
+gate. Audit and closure records: [`devlog/2026-08-09-b34-b38-sel4-model-audit/`](../devlog/2026-08-09-b34-b38-sel4-model-audit/index.md) and [`devlog/2026-08-10-b34-b38-model-cutover/`](../devlog/2026-08-10-b34-b38-model-cutover/index.md).
+
+### B36 — the full-graph gate stops at a non-unique component idle marker
+
+**Status:** Resolved 2026-08-10.
+
+**Problem:** `check-sel4-boot-plane.py` treats the generic fabric line
+`[fabric] idle: parked on control endpoints` as the whole system's terminal
+marker and terminates QEMU immediately. Any fabric instance can emit it. With
+B34's duplicate graph, the checker stops on the wrong instance before init's
+supervision transfer, later component exits, and the actual graph outcome.
+
+**Evidence:** Both `just sel4_boot_check` and
+`python3 scripts/check/check-sel4-boot-plane.py --no-build` exited 1 with the
+same missing init marker immediately after the first fabric-idle line. Manually
+continuing the identical image produced the missing init marker only after the
+first graph had reported multiple status-1 exits.
+
+**Fix:** Define one supervisor-emitted terminal record binding the
+generation identity or instance-set digest, required/live/idle counts, and zero
+failed instances. Collect serial until that record or a failure marker; treat
+every required component's nonzero exit as failure. Extend gate-control
+mutations with an early duplicate fabric-idle line and a later failed instance.
+
+**Exit condition observed:** `just sel4_boot_check` reaches the unique supervisor terminal
+only after every causal chain, fails on any required nonzero exit, and the gate
+control proves that an injected early component-idle line cannot truncate or
+pass the check. Closing B36 by hiding B34's duplicate graph is forbidden. Audit
+record: [`devlog/2026-08-09-b34-b38-sel4-model-audit/`](../devlog/2026-08-09-b34-b38-sel4-model-audit/index.md).
+
+### B37 — dependency activation and non-bootstrap slot ABI are implicit contracts
+
+**Status:** Resolved 2026-08-10.
+
+**Problem:** Generation dependencies are decoded and structurally validated but
+the seL4 launch path does not consult them; root stages component-table order and
+activates every task. Actual dependency barriers live as imperative spawn/yield
+sequences in `init`. Bootstrap slots have an authenticated layout resource, but
+other component slots are inferred from grant iteration order, making manifest
+ordering an undocumented ABI shared by the builder, root, and binaries.
+
+**Evidence:** `boot-contracts/src/generation.rs` validates dependency bounds and
+self-reference, while `launch_component_graph` uses only
+`Admission::loadable_plans()`. `slime-root/src/channel.rs` documents that
+non-bootstrap channels and executables take positional slots; prior Dango and
+powerbox fixes already found boot/spawn and multi-kind ordering disagreements.
+
+**Fix:** Bind dependencies and capabilities to explicit instance
+records. The builder rejects cycles and unsatisfied dependency barriers, emits a
+fixture-checked per-instance capability layout, and generates each component's
+startup bindings from that same data. Root activates the declared DAG rather
+than component-table order; grant order grants no ABI meaning.
+
+**Exit condition observed:** Cyclic, missing, and impossible dependencies fail the build;
+permuting grant declarations leaves every component's local bindings unchanged;
+boot and spawn use the same generated layout; and a QEMU graph proves activation
+occurs only after each declared dependency barrier. Audit and closure records: [`devlog/2026-08-09-b34-b38-sel4-model-audit/`](../devlog/2026-08-09-b34-b38-sel4-model-audit/index.md) and [`devlog/2026-08-10-b34-b38-model-cutover/`](../devlog/2026-08-10-b34-b38-model-cutover/index.md).
+
+### B38 — task reclamation cannot reuse root CSlots or untyped memory
+
+**Status:** Resolved 2026-08-10.
+
+**Problem:** `ObjectAllocator` advances root CSlots and ordinary-untyped
+watermarks monotonically. Task cleanup revokes and deletes each task's
+capabilities but records those slots only as reclaimed; it returns neither slot
+indices nor the task's TCB, CNode, page tables, and frames to allocatable pools.
+A long-running component manager can therefore exhaust boot-lifetime resources
+through repeated bounded spawn/exit cycles even when simultaneous live usage
+never exceeds its generation budget.
+
+**Evidence:** `slime-root/src/object_allocator.rs` explicitly states that slots
+are never reused, and `CleanupRecord::revoke` states root CSlots are not returned
+to the allocator. seL4 resets an untyped cap's free index when it has no children,
+but the root does not allocate tasks from reclaimable per-task untyped subtrees.
+
+**Fix:** Give each task or task group a derived untyped arena that owns
+its CNode, TCB, VSpace objects, and ordinary frames; revoke the arena on death so
+the parent can be retyped again. Add a free-list or bitmap for emptied root
+CSlots. Keep device untyped and DMA ownership on their separate monotonic path.
+
+**Exit condition observed:** A live QEMU stress graph completes more spawn/exit cycles
+than the current root CSlot and untyped watermarks permit, with bounded and
+stable live slot/object/byte counts, no capability alias surviving reclamation,
+and successful reuse after clean exit, fault, and construction unwind. Audit
+record: [`devlog/2026-08-09-b34-b38-sel4-model-audit/`](../devlog/2026-08-09-b34-b38-sel4-model-audit/index.md).
+
 ### B33 — seL4 cutover review findings
 
 **Status:** Resolved 2026-08-09.

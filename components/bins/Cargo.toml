@@ -305,6 +305,11 @@ path = "src/bin/supervision-child.rs"
 test = false
 
 [[bin]]
+name = "reclamation-fault"
+path = "src/bin/reclamation-fault.rs"
+test = false
+
+[[bin]]
 name = "crossing-peer"
 path = "src/bin/crossing-peer.rs"
 test = false

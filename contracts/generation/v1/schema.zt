@@ -12,21 +12,29 @@ Object :: type {
   size : Int;
 };
 
-Component :: type {
+Executable :: type {
   name : Text;
   object : Text;
   role : Text;
-  dependencies : List Text;
-  -- Optional per-component stack size in bytes for the component image
-  -- header (contracts/component/v1). Must be a positive page multiple
-  -- within the component format's stack bound; the builder substitutes its
-  -- default when absent.
+  -- Optional per-executable stack size in bytes for the component image.
   stackBytes? : Int;
-  -- Maximum simultaneous children this component may spawn. Zero disables
-  -- spawning; the bootstrap component receives the declared graph budget.
   spawnBudget : Int;
-  -- Command names this component may resolve through the spawn service.
   commandProfile : List Text;
+};
+
+InstanceBinding :: type {
+  grant : Text;
+  slot : Int;
+};
+
+Instance :: type {
+  name : Text;
+  executable : Text;
+  owner : Text;
+  autostart : Bool;
+  dependencies : List Text;
+  health : Text;
+  bindings : List InstanceBinding;
 };
 
 CapabilityGrant :: type {
@@ -68,25 +76,13 @@ FabricProfile :: type {
   interpositions : List FabricProfileInterposition;
 };
 
--- One named boot profile: which components the generation declares beyond the
+-- One named boot profile: which instances the generation declares beyond the
 -- product set, and which fabric interposition chains apply (B11).
---
--- `components` names verification scaffolding -- probes and scenario doubles --
--- that only a test profile declares. The product profile names none, so a
--- generation built for the product declares only components the product needs.
--- A profile is closed over its own scaffolding: every object, grant, state
--- binding, shared-buffer holder, fabric participant, and interposition hop that
--- names a component this profile does not declare is dropped with it, and
--- `health` is resolved per profile rather than shared.
---
--- `fabricProfile` names the `fabricGraph.profiles` entry this boot profile
--- resolves, so interposition selection stays where the fabric graph declares
--- it rather than being restated here.
 BootProfile :: type {
   name : Text;
   fabricProfile : Text;
-  components : List Text;
-  requiredComponents : List Text;
+  instances : List Text;
+  requiredInstances : List Text;
 };
 
 -- One participant's exact role on one fabric route (C8.2). `interposition` is
@@ -145,7 +141,7 @@ FabricGraph :: type {
 
 HealthPolicy :: type {
   bootAttempts : Int;
-  requiredComponents : List Text;
+  requiredInstances : List Text;
 };
 
 GenerationManifest :: type {
@@ -153,20 +149,17 @@ GenerationManifest :: type {
   generation : Int;
   target : Text;
   parent? : Int;
-  kernelObject : Text;
-  bootstrapComponent : Text;
+  bootstrapInstance : Text;
   interfaceSchemas : List Text;
   sharedBufferBudget : List SharedBufferBudgetEntry;
   objects : List Object;
-  components : List Component;
+  executables : List Executable;
+  instances : List Instance;
   grants : List CapabilityGrant;
   state : List StateBinding;
   -- Fallback health policy, used by a profile that declares no required set of
   -- its own.
   health : HealthPolicy;
-  -- Named boot profiles (B11). The builder resolves exactly one per build and
-  -- declares only the components that profile names, so verification
-  -- scaffolding never reaches the product generation.
   bootProfiles : List BootProfile;
   -- Optional C8.2 fabric graph. Absent means the generation declares no
   -- native data fabric; no component then receives any route authority.
@@ -174,7 +167,9 @@ GenerationManifest :: type {
 };
 
 FromData @Object :: derive
-FromData @Component :: derive
+FromData @Executable :: derive
+FromData @InstanceBinding :: derive
+FromData @Instance :: derive
 FromData @CapabilityGrant :: derive
 FromData @StateBinding :: derive
 FromData @HealthPolicy :: derive
@@ -193,7 +188,9 @@ decodeManifest :: Data -> Validation DecodeIssue GenerationManifest
 
 {
   Object = Object;
-  Component = Component;
+  Executable = Executable;
+  InstanceBinding = InstanceBinding;
+  Instance = Instance;
   SharedBufferBudgetEntry = SharedBufferBudgetEntry;
   FabricProfileInterposition = FabricProfileInterposition;
   FabricProfile = FabricProfile;

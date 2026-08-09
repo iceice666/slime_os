@@ -22,11 +22,11 @@
 //! leaves a task that has never run, plus a cleanup record naming exactly the
 //! root CSlots to revoke and delete.
 
-use core::ops::Range;
+use sel4::{CapTypeForObjectOfFixedSize, CapTypeForObjectOfVariableSize};
 
 use crate::child_vspace::{ChildImage, ChildVSpace, ScratchPage, VSpaceError, create_child_vspace};
 use crate::generation::Authority;
-use crate::object_allocator::{AllocError, ObjectAllocator};
+use crate::object_allocator::{AllocError, ObjectAllocator, TaskArenaId};
 
 /// Child tasks one generation may run.
 ///
@@ -137,13 +137,11 @@ pub enum TaskError {
     EntryOutOfRange {
         entry: u64,
     },
-    /// No task carries this identity.
+    /// B38 fixture-only failure after arena-backed objects exist.
+    ForcedConstructionFailure,
     UnknownTask(TaskId),
-    /// Revoking or deleting a recorded CSlot failed.
-    Cleanup {
-        slot: usize,
-        error: sel4::Error,
-    },
+    /// Revoking or deleting the task arena failed. No slot is reused on error.
+    Cleanup(AllocError),
 }
 
 impl From<AllocError> for TaskError {
@@ -188,43 +186,39 @@ impl ConstructionStage {
         Self::Entry,
         Self::WriteRegisters,
     ];
+    pub const fn index(self) -> usize {
+        match self {
+            Self::VSpace => 0,
+            Self::CNode => 1,
+            Self::Tcb => 2,
+            Self::ServiceMint => 3,
+            Self::FaultMint => 4,
+            Self::SelfTcbMint => 5,
+            Self::Configure => 6,
+            Self::SchedParams => 7,
+            Self::Entry => 8,
+            Self::WriteRegisters => 9,
+        }
+    }
 }
 
-/// Exactly the root CSlots one task's objects occupy.
-///
-/// Slots are handed out in increasing order and never reused, so a task's
-/// objects always form one contiguous range. Revoking the range revokes every
-/// derived capability the child holds — including the badged endpoints in its
-/// own CSpace — and deleting it returns the slots to an empty state.
+/// Sole lifetime anchor for every root capability and kernel object of a task.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CleanupRecord {
     pub task: TaskId,
-    pub first_slot: usize,
-    pub slot_end: usize,
+    pub arena: TaskArenaId,
+    slots: usize,
 }
 
 impl CleanupRecord {
-    pub const fn slots(&self) -> Range<usize> {
-        self.first_slot..self.slot_end
-    }
-
     pub const fn slot_count(&self) -> usize {
-        self.slot_end.saturating_sub(self.first_slot)
+        self.slots
     }
 
-    /// Revoke every capability derived from this task's objects and empty its
-    /// slots. Root CSlots are not returned to the allocator: they are recorded
-    /// as reclaimed so accounting stays monotonic and auditable.
-    pub fn revoke(&self) -> Result<usize, TaskError> {
-        let cnode = sel4::init_thread::slot::CNODE.cap();
-        for slot in self.slots() {
-            let cptr = cnode.absolute_cptr(sel4::CPtr::from_bits(slot as sel4::CPtrBits));
-            cptr.revoke()
-                .map_err(|error| TaskError::Cleanup { slot, error })?;
-            cptr.delete()
-                .map_err(|error| TaskError::Cleanup { slot, error })?;
-        }
-        Ok(self.slot_count())
+    pub fn revoke(&self, allocator: &mut ObjectAllocator) -> Result<usize, TaskError> {
+        allocator
+            .release_task_arena(self.arena)
+            .map_err(TaskError::Cleanup)
     }
 }
 
@@ -249,14 +243,10 @@ pub struct Task {
     /// generation declared. Counting the table is O(MAX_TASKS) on a path that
     /// already allocates a VSpace.
     pub spawner: Option<TaskId>,
-    /// The generation component index this task was built from.
-    ///
-    /// Recorded because a task's *component* is what the manifest makes
-    /// statements about — its spawn budget, its shared-buffer ceiling — and
-    /// `LaunchedComponents` maps only the components the root launched. A
-    /// spawned task would otherwise resolve to no component at all, and every
-    /// per-component bound would read as zero for it.
-    pub component: Option<usize>,
+    /// Generation executable catalogue index used to build this task.
+    pub executable: Option<usize>,
+    /// Root instance index, absent for dynamically spawned tasks and fixtures.
+    pub instance: Option<usize>,
 }
 
 impl Task {
@@ -353,20 +343,47 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
         scratch: &ScratchPage,
         asid_pool: sel4::cap::AsidPool,
         spawner: Option<TaskId>,
-        component: Option<usize>,
+        executable: Option<usize>,
+        instance: Option<usize>,
     ) -> Result<TaskId, TaskError> {
         let Some(index) = self.tasks.iter().position(Option::is_none) else {
             return Err(TaskError::TableFull { limit: CAPACITY });
         };
         let id = TaskId(self.next_id);
-        let first_slot = allocator.next_slot_index();
+        let mut plan = image.vspace_arena_plan().map_err(VSpaceError::Image)?;
+        plan.add(sel4::cap_type::CNode::object_blueprint(
+            CHILD_CNODE_SIZE_BITS,
+        ))
+        .ok_or(TaskError::Alloc(AllocError::UntypedExhausted {
+            size_bits: usize::BITS as usize,
+            remaining: 0,
+        }))?;
+        plan.add(sel4::cap_type::Tcb::object_blueprint())
+            .ok_or(TaskError::Alloc(AllocError::UntypedExhausted {
+                size_bits: usize::BITS as usize,
+                remaining: 0,
+            }))?;
+        let arena_bits =
+            plan.required_size_bits()
+                .ok_or(TaskError::Alloc(AllocError::UntypedExhausted {
+                    size_bits: usize::BITS as usize,
+                    remaining: 0,
+                }))?;
+        let arena = allocator.begin_task_arena(arena_bits)?;
 
         let construction = (|| {
-            let vspace = create_child_vspace(allocator, image, caller_vspace, scratch, asid_pool)?;
+            let vspace =
+                create_child_vspace(allocator, arena, image, caller_vspace, scratch, asid_pool)?;
             let cnode = allocator
-                .allocate_variable::<sel4::cap_type::CNode>(CHILD_CNODE_SIZE_BITS)?
+                .allocate_variable_in::<sel4::cap_type::CNode>(arena, CHILD_CNODE_SIZE_BITS)?
                 .cap();
-            let tcb = allocator.allocate_fixed::<sel4::cap_type::Tcb>()?.cap();
+            let tcb = allocator
+                .allocate_fixed_in::<sel4::cap_type::Tcb>(arena)?
+                .cap();
+            #[cfg(slime_b38_force_unwind)]
+            if spawner.is_some() && crate::object_allocator::take_forced_unwind() {
+                return Err(TaskError::ForcedConstructionFailure);
+            }
 
             let root_cnode = sel4::init_thread::slot::CNODE.cap();
             // Slot 1 is invocation-only transport. In particular it must never
@@ -435,16 +452,14 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
         let (vspace, cnode, tcb, entry) = match construction {
             Ok(task) => task,
             Err(error) => {
-                // Ownership begins at `first_slot`, before the first fallible
-                // allocation. Whatever stage failed, this record names the
-                // exact prefix allocated by the attempt and is the sole owner
-                // responsible for revoking it before the error escapes.
-                construction_record(id, first_slot, allocator.next_slot_index()).revoke()?;
+                let cleanup =
+                    construction_record(id, arena, allocator.arena_slot_count(arena).unwrap_or(0));
+                cleanup.revoke(allocator)?;
                 return Err(error);
             }
         };
 
-        let cleanup = construction_record(id, first_slot, allocator.next_slot_index());
+        let cleanup = construction_record(id, arena, allocator.arena_slot_count(arena)?);
         self.tasks[index] = Some(Task {
             id,
             cnode,
@@ -456,7 +471,8 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
             activated: false,
             cleanup,
             spawner,
-            component,
+            executable,
+            instance,
         });
         self.len += 1;
         self.next_id += 1;
@@ -498,22 +514,29 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
     }
 
     /// Suspend a task, revoke everything derived from its objects, and drop it.
-    pub fn reclaim(&mut self, id: TaskId) -> Result<CleanupRecord, TaskError> {
+    pub fn reclaim(
+        &mut self,
+        allocator: &mut ObjectAllocator,
+        id: TaskId,
+    ) -> Result<CleanupRecord, TaskError> {
         let index = self
             .tasks
             .iter()
             .position(|task| task.as_ref().is_some_and(|task| task.id == id))
             .ok_or(TaskError::UnknownTask(id))?;
-        let task = self.tasks[index].take().ok_or(TaskError::UnknownTask(id))?;
+        let task = self.tasks[index]
+            .as_ref()
+            .copied()
+            .ok_or(TaskError::UnknownTask(id))?;
+        // Failed arena cleanup stays owned by the table and is retryable.
+        let _ = task.suspend();
+        let reclaimed = task.cleanup.revoke(allocator)?;
+        self.tasks[index] = None;
         self.len -= 1;
         if task.activated {
             self.activated -= 1;
         }
-        // A faulted or exited thread may already be suspended; the kernel
-        // accepts a redundant suspend, and a failure here must not strand the
-        // task's objects, so cleanup proceeds regardless.
-        let _ = task.suspend();
-        self.reclaimed_slots += task.cleanup.revoke()?;
+        self.reclaimed_slots += reclaimed;
         Ok(task.cleanup)
     }
 }
@@ -531,12 +554,8 @@ fn child_service_rights(_authority: Authority) -> sel4::CapRights {
         .build()
 }
 
-fn construction_record(task: TaskId, first_slot: usize, slot_end: usize) -> CleanupRecord {
-    CleanupRecord {
-        task,
-        first_slot,
-        slot_end,
-    }
+fn construction_record(task: TaskId, arena: TaskArenaId, slots: usize) -> CleanupRecord {
+    CleanupRecord { task, arena, slots }
 }
 
 fn mint_child_slot(
@@ -559,6 +578,7 @@ mod tests {
         child_service_rights, construction_record,
     };
     use crate::generation::Authority;
+    use crate::object_allocator::TaskArenaId;
 
     #[test]
     fn badges_are_nonzero_and_round_trip() {
@@ -612,12 +632,11 @@ mod tests {
     #[test]
     fn construction_cleanup_owns_every_failure_transition() {
         let task = TaskId(7);
-        let first = 100;
+        let arena = TaskArenaId::from_raw(2, 9);
         for (transition, stage) in ConstructionStage::ALL.into_iter().enumerate() {
-            let slot_end = first + transition;
-            let cleanup = construction_record(task, first, slot_end);
+            let cleanup = construction_record(task, arena, transition);
             assert_eq!(cleanup.task, task, "stage {stage:?}");
-            assert_eq!(cleanup.slots(), first..slot_end, "stage {stage:?}");
+            assert_eq!(cleanup.arena, arena, "stage {stage:?}");
             assert_eq!(cleanup.slot_count(), transition, "stage {stage:?}");
         }
     }

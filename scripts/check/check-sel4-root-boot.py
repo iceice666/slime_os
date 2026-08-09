@@ -40,32 +40,6 @@ BOOT_TIMEOUT_SECONDS = 120
 # role identities, the operation number, the exit status, the fault kind, and
 # the terminal `live=0`.
 REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
-    ("generation admitted", r"SLIME_ROOT generation admitted number=\d+"),
-    # C8.2/C8.4 on the retained generation. `check-sel4-stream-plane.py` pins
-    # the shape of the graph the *seL4* fixtures declare; this is the x86
-    # generation P5.1 retained, and its graph is a different one — three
-    # schemas, four routes, and the only interposition hop any plane boots.
-    #
-    # Worth pinning separately: this graph was authored for the retired kernel
-    # and is admitted here by `slime-root`'s own ceilings, so it is the one
-    # case where admission judges a graph it did not co-evolve with. Until
-    # this, the marker was asserted on exactly one plane and so could not
-    # distinguish "checked" from "not emitted at all".
-    (
-        "the retained generation's fabric graph is admitted with its declared shape",
-        r"SLIME_ROOT fabric graph=admitted schemas=3 routes=4 "
-        r"participants=7 interpositions=1",
-    ),
-    ("authority manifest reported", r"SLIME_ROOT authority manifest=\["),
-    (
-        "legacy component images not activated",
-        # `slimecm` must be non-zero: with no legacy image present the claim
-        # would be vacuously true. `elf=1` and the `tasks=2` marker below pin
-        # that every task the root activated came from the native fixture, so
-        # the count is a behavioral assertion rather than a self-report.
-        r"SLIME_ROOT graph admitted; legacy SLIMECM images not activated "
-        r"components=\d+ slimecm=[1-9]\d* elf=\d+ unrecognized=0",
-    ),
     (
         "allocator admitted nonzero kernel resources",
         r"SLIME_ROOT allocator slots=[1-9]\d* untypeds=[1-9]\d* bytes=[1-9]\d*",
@@ -116,6 +90,21 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     (
         "every declared virtio transport was mapped and probed, and none is attached",
         r"SLIME_ROOT virtio probed granules=4 slots=32 found=0",
+    ),
+    ("generation admitted", r"SLIME_ROOT generation admitted number=\d+"),
+    # The default seL4 fixture now embeds the same synthetic v4 generation as
+    # every other seL4 build variant. Its small launch catalogue has no fabric
+    # graph; the standalone native child exercise below remains independent.
+    (
+        "the v4 fixture declares no fabric graph",
+        r"SLIME_ROOT fabric graph=absent schemas=0 routes=0 "
+        r"participants=0 interpositions=0",
+    ),
+    ("authority manifest reported", r"SLIME_ROOT authority manifest=\["),
+    (
+        "the v4 executable catalogue is admitted",
+        r"SLIME_ROOT graph admitted executables=5 instances=5 "
+        r"slimecm=0 elf=5 unrecognized=0",
     ),
     (
         "clean-exit task staged",
@@ -232,31 +221,28 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     # tables moved it 832 → 839, P5.4.2a's device probe — which retypes ten
     # granules to reach four scattered MMIO pages — moved it 839 → 849, and
     # P5.4.2b's IRQ binding took four more for 853, and P5.4.3's namespace, device, and
-    # scope tables moved it to 860. What is
-    # pinned is each range's width (50) and that the second adjoins the first
-    # exactly. A repin here is expected when the root's boot-time allocation
-    # changes and suspicious otherwise.
-    #
+    # Reclaim records now report an explicit slot count and arena generation;
+    # reusable root CSlots are intentionally noncontiguous across lifetimes.
     # Interleaved with the settle markers rather than grouped after them: each
     # task is reclaimed as it settles, and this list is order-sensitive, so
     # grouping would assert a sequence the root does not produce.
     ("clean-exit task settled", r"SLIME_ROOT task settled task=0 role=clean-exit termination=Exit\(0\)"),
     (
-        "the clean-exit task's slots are all accounted for",
-        r"SLIME_ROOT task reclaimed task=0 source=fabric-service slots=(\d+)\.\.(\d+)",
+        "the clean-exit task's arena-owned slots are accounted for",
+        r"SLIME_ROOT task reclaimed task=0 source=generation slots=(\d+) arena=\d+",
     ),
     (
         "deliberate-fault task settled",
         r"SLIME_ROOT task settled task=1 role=deliberate-fault termination=Fault\(",
     ),
     (
-        "the faulted task's slots adjoin them with no gap and no overlap",
-        r"SLIME_ROOT task reclaimed task=1 source=generation-manager slots=(\d+)\.\.(\d+)",
+        "the faulted task's arena-owned slots are accounted for",
+        r"SLIME_ROOT task reclaimed task=1 source=generation slots=(\d+) arena=\d+",
     ),
-    ("both tasks reclaimed", r"SLIME_ROOT cleanup tasks=2 slots=100 live=0"),
+    ("both tasks reclaimed", r"SLIME_ROOT cleanup tasks=2 slots=(\d+) live=0"),
     (
         "root reached ready",
-        r"SLIME_ROOT READY tasks=2 grants=\d+ declared_grants=\d+ reclaimed_slots=100",
+        r"SLIME_ROOT READY tasks=2 grants=\d+ declared_grants=\d+ reclaimed_slots=(\d+)",
     ),
 )
 
@@ -485,22 +471,20 @@ def check_transcript(transcript: str) -> None:
         position = match.end()
 
     clean = re.search(
-        r"SLIME_ROOT task reclaimed task=0 source=fabric-service slots=(\d+)\.\.(\d+)",
+        r"SLIME_ROOT task reclaimed task=0 source=generation slots=(\d+) arena=\d+",
         transcript,
     )
     faulted = re.search(
-        r"SLIME_ROOT task reclaimed task=1 source=generation-manager slots=(\d+)\.\.(\d+)",
+        r"SLIME_ROOT task reclaimed task=1 source=generation slots=(\d+) arena=\d+",
         transcript,
     )
-    if clean is None or faulted is None:
-        fail("task reclaim ranges disappeared after marker matching")
-    clean_start, clean_end = (int(value) for value in clean.groups())
-    fault_start, fault_end = (int(value) for value in faulted.groups())
-    if clean_end - clean_start != 50 or fault_end - fault_start != 50 or fault_start != clean_end:
-        fail(
-            "task reclaim ranges are not two adjoining 50-slot allocations: "
-            f"{clean_start}..{clean_end}, {fault_start}..{fault_end}"
-        )
+    cleanup = re.search(r"SLIME_ROOT cleanup tasks=2 slots=(\d+) live=0", transcript)
+    ready = re.search(r"SLIME_ROOT READY .* reclaimed_slots=(\d+)", transcript)
+    if clean is None or faulted is None or cleanup is None or ready is None:
+        fail("task reclaim accounting disappeared after marker matching")
+    total = int(clean.group(1)) + int(faulted.group(1))
+    if total != int(cleanup.group(1)) or total != int(ready.group(1)):
+        fail(f"task reclaim totals disagree: tasks={total} cleanup={cleanup.group(1)} ready={ready.group(1)}")
 
 
 def main() -> None:

@@ -1,61 +1,111 @@
 {
-  formatVersion = 1;
-  generation = 1;
-  target = "aarch64-sel4-qemu-virt";
-  kernelObject = "sha256:kernel";
-  bootstrapComponent = "init";
-  interfaceSchemas = [];
-
-  objects = [
-    { id = "sha256:kernel"; kind = "kernel"; size = 1048576; };
-    { id = "sha256:init"; kind = "bootstrap"; size = 65536; };
-    { id = "sha256:console"; kind = "component"; size = 65536; };
-    { id = "shared-buffer-budget"; kind = "resource"; size = 4096; };
-    { id = "boot-layout"; kind = "resource"; size = 4096; };
-  ];
-
-  sharedBufferBudget = [];
-
-  components = [
+  bootstrapInstance = "init";
+  executables = [
     {
+      commandProfile = [];
       name = "init";
       object = "sha256:init";
       role = "init";
-      dependencies = [];
       spawnBudget = 0;
-      commandProfile = [];
     };
     {
+      commandProfile = [];
       name = "console";
       object = "sha256:console";
       role = "service";
-      dependencies = ["init";];
       spawnBudget = 0;
-      commandProfile = [];
     };
   ];
-
+  formatVersion = 1;
+  generation = 1;
   grants = [
     {
       name = "dango-output";
+      rights = [
+        "recv";
+      ];
       source = "init";
       target = "console";
-      rights = ["recv";];
       transferable = true;
     };
     {
       name = "service-spawn";
+      rights = [
+        "send";
+        "recv";
+      ];
       source = "init";
       target = "init";
-      rights = ["send"; "recv";];
       transferable = true;
     };
   ];
-
-  state = [];
-
   health = {
     bootAttempts = 3;
-    requiredComponents = ["init"; "console";];
+    requiredInstances = [
+      "console";
+      "init";
+    ];
   };
+  instances = [
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "dango-output";
+          slot = 0;
+        };
+        {
+          grant = "service-spawn";
+          slot = 1;
+        };
+      ];
+      dependencies = [];
+      executable = "init";
+      health = "required";
+      name = "init";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "dango-output";
+          slot = 0;
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "console";
+      health = "required";
+      name = "console";
+      owner = "init";
+    };
+  ];
+  interfaceSchemas = [];
+  objects = [
+    {
+      id = "sha256:init";
+      kind = "bootstrap";
+      size = 65536;
+    };
+    {
+      id = "sha256:console";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "shared-buffer-budget";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "boot-layout";
+      kind = "resource";
+      size = 4096;
+    };
+  ];
+  sharedBufferBudget = [];
+  state = [];
+  target = "aarch64-sel4-qemu-virt";
 }

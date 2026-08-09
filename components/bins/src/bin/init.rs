@@ -167,6 +167,10 @@ fn storage_executable_slot() -> u32 {
 }
 
 fn main() {
+    if option_env!("SLIME_BOOT_SELECTION_FAIL") == Some("1") {
+        slime_rt::debug_write(b"[init] reporting unhealthy boot\n");
+        slime_rt::unhealthy();
+    }
     if option_env!("SLIME_RECOVERY_IMAGE") == Some("1") {
         slime_rt::debug_write(b"[init] launching recovery graph\n");
         spawn_or_fail(1, &RECOVERY_CAPS);
@@ -276,6 +280,13 @@ fn main() {
     if option_env!("SLIME_SEL4_SUPERVISION_CHECK") == Some("1") {
         drive_supervision_plane();
         slime_rt::debug_write(b"[init] supervision plane complete\n");
+        slime_rt::exit(0);
+    }
+    // B38: the same bounded spawn/reap shape, but deep enough to cross the old
+    // root CSlot and ordinary-untyped lifetime watermarks after reclamation.
+    if option_env!("SLIME_SEL4_RECLAMATION_CHECK") == Some("1") {
+        drive_reclamation_plane();
+        slime_rt::debug_write(b"[init] reclamation plane complete\n");
         slime_rt::exit(0);
     }
     // B22's channel-crossing plane, on the same rule again.
@@ -3155,6 +3166,55 @@ fn drive_spawn_plane() {
         fail_spawn(b"a dropped handle still answered");
     }
     slime_rt::debug_write(b"[init] dropped handle released\n");
+}
+
+/// More lifetimes than the old monotonic root allocator could sustain while
+/// keeping only one child live at a time.
+const RECLAMATION_LOOP_CHILDREN: u32 = 80;
+
+fn drive_reclamation_plane() {
+    if slime_rt::spawn(SUPERVISION_CHILD_SLOT, &[]).is_ok() {
+        fail_reclamation(b"forced construction unwind unexpectedly succeeded");
+    }
+    slime_rt::debug_write(b"[init] reclamation construction unwind returned\n");
+    let mut completed = 0u32;
+    for _ in 0..RECLAMATION_LOOP_CHILDREN {
+        let child = slime_rt::spawn(SUPERVISION_CHILD_SLOT, &[])
+            .unwrap_or_else(|_| fail_reclamation(b"loop child spawn"));
+        loop {
+            match slime_rt::supervision_status(child.supervision_slot) {
+                Ok(None) => {
+                    slime_rt::wait(&[slime_rt::WaitSource::Supervision(child.supervision_slot)])
+                }
+                Ok(Some(slime_rt::Termination::Exit(0))) => break,
+                _ => fail_reclamation(b"loop child termination"),
+            }
+        }
+        completed += 1;
+    }
+    if completed != RECLAMATION_LOOP_CHILDREN {
+        fail_reclamation(b"lifetime loop incomplete");
+    }
+    slime_rt::debug_write(b"[init] reclamation lifetime bound crossed\n");
+    let fault = slime_rt::spawn(RECLAMATION_FAULT_SLOT, &[])
+        .unwrap_or_else(|_| fail_reclamation(b"fault child spawn"));
+    loop {
+        match slime_rt::supervision_status(fault.supervision_slot) {
+            Ok(None) => {
+                slime_rt::wait(&[slime_rt::WaitSource::Supervision(fault.supervision_slot)])
+            }
+            Ok(Some(slime_rt::Termination::Fault(_))) => break,
+            _ => fail_reclamation(b"fault child termination"),
+        }
+    }
+    slime_rt::debug_write(b"[init] reclamation fault path reused\n");
+}
+
+fn fail_reclamation(reason: &[u8]) -> ! {
+    slime_rt::debug_write(b"[init] reclamation plane fail: ");
+    slime_rt::debug_write(reason);
+    slime_rt::debug_write(b"\n");
+    slime_rt::exit(1)
 }
 
 /// How many children the supervision plane creates over the boot.

@@ -28,6 +28,8 @@
 // (B23), so their unit tests can run under `just test_host`. This binary links
 // that library rather than recompiling the modules, which is what makes a host
 // test result evidence about the root the seL4 image boots.
+#[cfg(slime_boot_selector)]
+use slime_root::boot_selector;
 use slime_root::{
     buffer_adapter, channel, child_vspace, device, event, fault, generation, graph, ipc,
     object_allocator, parked, platform_timer, shared_buffer, supervision, task, timer,
@@ -36,17 +38,18 @@ use slime_root::{
 
 use core::ptr;
 
-use boot_contracts::boot_layout::BootLayout;
-use boot_contracts::generation::{Generation, KIND_RESOURCE};
+use boot_contracts::generation::{
+    Generation, GrantEndpoint, InstanceHealth, InstanceOwner, KIND_RESOURCE,
+};
 use boot_contracts::shared_buffer_budget::{self as budget_magic, SharedBufferBudget};
 use sel4_root_task::root_task;
 
 use buffer_adapter::BufferAdapter;
-use channel::{ChannelTable, LaunchedComponents, SlotCursors, WaitTarget};
+use channel::{ChannelTable, LaunchedInstances, WaitTarget};
 use child_vspace::{ChildImage, GRANULE_SIZE, ScratchPage};
 use event::TaskEpoch;
 use fault::{LifecycleEventKind, SupervisionTable};
-use generation::{Admission, Authority, RIGHT_EXEC, RIGHT_RECV, RIGHT_SEND, inbound_authority};
+use generation::{Admission, Authority, RIGHT_EXEC, RIGHT_RECV, RIGHT_SEND, bound_authority};
 use graph::GraphTables;
 use ipc::{IpcError, Operation, Response, poll_notification};
 use object_allocator::ObjectAllocator;
@@ -89,22 +92,27 @@ macro_rules! fatal {
 /// value — can never disagree about which file they read. A `match` cannot do
 /// this: the two arms are arrays of different lengths, so they have different
 /// types and will not unify.
-#[cfg(slime_generation_supplied)]
+#[cfg(all(not(slime_boot_selector), slime_generation_supplied))]
 macro_rules! generation_bytes {
     () => {
         include_bytes!(env!("SLIME_GENERATION"))
     };
 }
-#[cfg(not(slime_generation_supplied))]
+#[cfg(all(not(slime_boot_selector), not(slime_generation_supplied)))]
 macro_rules! generation_bytes {
     () => {
         include_bytes!("../fixtures/generation.bin")
     };
 }
 
+#[cfg(not(slime_boot_selector))]
 static GENERATION: Aligned<{ generation_bytes!().len() }> = Aligned(*generation_bytes!());
 
+#[cfg(not(slime_boot_selector))]
 const GENERATION_BYTES: &[u8] = &GENERATION.0;
+
+#[cfg(slime_boot_selector)]
+const BOOT_BUNDLE_IDENTITY: [u8; 32] = decode_hex32(env!("SLIME_BOOT_BUNDLE_IDENTITY"));
 
 /// The target profile this root task admits executables for. Named rather than
 /// inferred: an image is admitted by equality on every axis the profile
@@ -118,6 +126,27 @@ const TARGET_PROFILE: &str = "aarch64-sel4-qemu-virt";
 /// buffer; `Aligned` forces that without a runtime copy into a new allocation.
 #[repr(align(8))]
 struct Aligned<const N: usize>([u8; N]);
+
+const fn decode_hex32(value: &str) -> [u8; 32] {
+    let bytes = value.as_bytes();
+    assert!(bytes.len() == 64);
+    let mut out = [0u8; 32];
+    let mut index = 0;
+    while index < 32 {
+        out[index] = (hex_nibble(bytes[index * 2]) << 4) | hex_nibble(bytes[index * 2 + 1]);
+        index += 1;
+    }
+    out
+}
+
+const fn hex_nibble(byte: u8) -> u8 {
+    match byte {
+        b'0'..=b'9' => byte - b'0',
+        b'a'..=b'f' => byte - b'a' + 10,
+        b'A'..=b'F' => byte - b'A' + 10,
+        _ => panic!("invalid boot bundle identity"),
+    }
+}
 
 static CHILD_ELF: Aligned<{ include_bytes!(env!("CHILD_ELF")).len() }> =
     Aligned(*include_bytes!(env!("CHILD_ELF")));
@@ -309,6 +338,8 @@ const SHARED_QUOTA: HolderQuota = HolderQuota {
     mapping_count: 2,
     loan_count: 0,
 };
+static mut OBJECT_ALLOCATOR: core::mem::MaybeUninit<ObjectAllocator> =
+    core::mem::MaybeUninit::uninit();
 
 /// Supervised protection probes the shared-buffer phase expects. One store to
 /// a read-only mapping, one branch into an execute-never page. A third fault
@@ -346,71 +377,15 @@ struct BufferPhase {
 // bound is stated here rather than discovered again.
 #[root_task(stack_size = 1024 * 1024, heap_size = 1024 * 128)]
 fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
-    let generation = match Generation::decode(GENERATION_BYTES) {
-        Ok(generation) => generation,
-        Err(error) => fatal!("generation rejected: {error:?}"),
-    };
-    // The profile this root task runs. Every component payload is admitted
-    // against it before the loader is offered a byte, so an executable built
-    // for another target is refused rather than mapped (roadmap invariant 9).
-    let profile = match boot_contracts::target_profile::TargetProfile::by_name(TARGET_PROFILE) {
-        Ok(profile) => profile,
-        Err(error) => fatal!("target profile {TARGET_PROFILE} unavailable: {error:?}"),
-    };
-    let admission = match Admission::admit(&generation, profile) {
-        Ok(admission) => admission,
-        Err(error) => fatal!("generation admission rejected: {error:?}"),
-    };
-
-    sel4::debug_println!(
-        "SLIME_ROOT generation admitted number={} components={} grants={} health={} kernel={} bootstrap={}",
-        generation.number,
-        admission.len(),
-        admission.grants,
-        admission.health,
-        admission.kernel_objects,
-        admission.bootstrap_objects,
-    );
-    // C8.2: the declared fabric graph, checked against this root's own ceilings
-    // before any component launches. `absent` for the generations that declare
-    // none; `admitted` is the wiring being observable, which no unit test over
-    // a hand-built graph can show.
-    //
-    // The counts are C8.4's structural arm (P5.4.10). A transcript proves
-    // samples moved; only reading the authenticated resource proves they moved
-    // along edges the *generation* fixed. `kernel/tests/fabric_stream.rs` says
-    // exactly this about itself — "the two things a transcript cannot show" —
-    // and reports the shape rather than asserting a number here, because the
-    // number is a property of the generation rather than of the root.
-    sel4::debug_println!(
-        "SLIME_ROOT fabric graph={} schemas={} routes={} participants={} interpositions={}",
-        if admission.fabric_graph_admitted {
-            "admitted"
-        } else {
-            "absent"
+    let allocator = match ObjectAllocator::new(bootinfo) {
+        Ok(value) => unsafe {
+            // SAFETY: root startup is single-threaded and initializes this storage exactly once.
+            (&raw mut OBJECT_ALLOCATOR).write(core::mem::MaybeUninit::new(value));
+            (&raw mut OBJECT_ALLOCATOR)
+                .cast::<ObjectAllocator>()
+                .as_mut()
+                .unwrap()
         },
-        admission.fabric_schemas,
-        admission.fabric_routes,
-        admission.fabric_participants,
-        admission.fabric_interpositions,
-    );
-    sel4::debug_println!(
-        "SLIME_ROOT authority manifest={:02x?}",
-        generation.authority_manifest_identity()
-    );
-    // The generation's component payloads are the retired Slime kernel's custom
-    // images. Their graph is authoritative for authority derivation; their code
-    // is not loadable by this root task and is deliberately never activated.
-    sel4::debug_println!(
-        "SLIME_ROOT graph admitted; legacy SLIMECM images not activated components={} slimecm={} elf={} unrecognized={}",
-        admission.len(),
-        admission.slime_component_images,
-        admission.loadable,
-        admission.unrecognized_images,
-    );
-
-    let mut allocator = match ObjectAllocator::new(bootinfo) {
-        Ok(allocator) => allocator,
         Err(error) => fatal!("allocator rejected bootinfo: {error:?}"),
     };
     let initial_slots = allocator.slots_remaining();
@@ -433,7 +408,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
     // confirm the monotonic counter it reads actually advanced. The wait is
     // bounded by wall-clock ticks read directly from hardware rather than by
     // IRQ delivery, so a broken wiring fails loudly instead of hanging boot.
-    let mut timer_adapter = match PhysicalTimerAdapter::acquire(&mut allocator) {
+    let mut timer_adapter = match PhysicalTimerAdapter::acquire(allocator) {
         Ok(adapter) => adapter,
         Err(error) => fatal!("timer source unavailable: {error:?}"),
     };
@@ -532,7 +507,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         allocator.slots_allocated(),
         allocator.bytes_allocated(),
     );
-    let mut foundation_adapter = BufferAdapter::new(&mut allocator);
+    let mut foundation_adapter = BufferAdapter::new(allocator);
     if let Err(error) = foundation_adapter.prove_frame_independence(
         sel4::init_thread::slot::VSPACE.cap(),
         foundation_first,
@@ -569,7 +544,91 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
     //
     // Every seL4 gate boots this path, so the markers are unconditional and
     // every plane's transcript carries them.
-    let mut block_devices = probe_devices(bootinfo, &mut allocator);
+    let mut block_devices = probe_devices(bootinfo, allocator);
+    #[cfg(slime_boot_selector)]
+    let selected = {
+        let device = block_devices
+            .get_mut(0)
+            .unwrap_or_else(|| fatal!("boot selector has no boot device"));
+        match boot_selector::select(device, &BOOT_BUNDLE_IDENTITY) {
+            Ok(selected) => selected,
+            Err(error) => fatal!("boot selection rejected: {error:?}"),
+        }
+    };
+    #[cfg(slime_boot_selector)]
+    let boot_selector::SelectedGeneration {
+        generation,
+        runtime: mut boot_runtime,
+    } = selected;
+    #[cfg(not(slime_boot_selector))]
+    let generation = match Generation::decode(GENERATION_BYTES) {
+        Ok(generation) => generation,
+        Err(error) => fatal!("generation rejected: {error:?}"),
+    };
+    #[cfg(slime_boot_selector)]
+    sel4::debug_println!(
+        "SLIME_BOOT selected identity={:02x?} number={} pending={} attempts={}",
+        boot_runtime.running_identity(),
+        generation.number,
+        usize::from(boot_runtime.running_pending()),
+        boot_runtime.remaining_attempts(),
+    );
+    // The profile this root task runs. Every component payload is admitted
+    // against it before the loader is offered a byte, so an executable built
+    // for another target is refused rather than mapped (roadmap invariant 9).
+    let profile = match boot_contracts::target_profile::TargetProfile::by_name(TARGET_PROFILE) {
+        Ok(profile) => profile,
+        Err(error) => fatal!("target profile {TARGET_PROFILE} unavailable: {error:?}"),
+    };
+    let admission = match Admission::admit(&generation, profile) {
+        Ok(admission) => admission,
+        Err(error) => fatal!("generation admission rejected: {error:?}"),
+    };
+
+    sel4::debug_println!(
+        "SLIME_ROOT generation admitted number={} executables={} instances={} grants={} health={} bootstrap={}",
+        generation.number,
+        admission.executable_len(),
+        admission.instance_len(),
+        admission.grants,
+        admission.health,
+        admission.bootstrap_objects,
+    );
+    // C8.2: the declared fabric graph, checked against this root's own ceilings
+    // before any component launches. `absent` for the generations that declare
+    // none; `admitted` is the wiring being observable, which no unit test over
+    // a hand-built graph can show.
+    //
+    // The counts are C8.4's structural arm (P5.4.10). A transcript proves
+    // samples moved; only reading the authenticated resource proves they moved
+    // along edges the *generation* fixed. `kernel/tests/fabric_stream.rs` says
+    // exactly this about itself — "the two things a transcript cannot show" —
+    // and reports the shape rather than asserting a number here, because the
+    // number is a property of the generation rather than of the root.
+    sel4::debug_println!(
+        "SLIME_ROOT fabric graph={} schemas={} routes={} participants={} interpositions={}",
+        if admission.fabric_graph_admitted {
+            "admitted"
+        } else {
+            "absent"
+        },
+        admission.fabric_schemas,
+        admission.fabric_routes,
+        admission.fabric_participants,
+        admission.fabric_interpositions,
+    );
+    sel4::debug_println!(
+        "SLIME_ROOT authority manifest={:02x?}",
+        generation.authority_manifest_identity()
+    );
+    sel4::debug_println!(
+        "SLIME_ROOT graph admitted executables={} instances={} slimecm={} elf={} unrecognized={}",
+        admission.executable_len(),
+        admission.instance_len(),
+        admission.slime_component_images,
+        admission.loadable,
+        admission.unrecognized_images,
+    );
     // ---- end device phase ----
     let image = match ChildImage::parse(&CHILD_ELF.0) {
         Ok(image) => image,
@@ -580,58 +639,44 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         Err(error) => fatal!("service endpoint unavailable: {error:?}"),
     };
 
-    // ---- component graph phase (P5.2) ----
-    //
-    // A generation whose payloads this root task can load gets its declared
-    // components launched from those payloads, and that is the whole boot: the
-    // graph is the proof, so there is nothing for the native fixture to add.
-    //
-    // A generation whose payloads are the retired kernel's segment-carrying
-    // images cannot be launched, and the fixture path below runs instead. The
-    // two are told apart by what the generation actually carries rather than by
-    // a build flag, so one root task binary serves both and each says which it
-    // took.
+    // A v4 generation launches only explicitly declared root-owned autostart
+    // instances. Catalogue-only executables remain inert until a bound exec
+    // capability authorizes a userspace spawn.
+    #[cfg(not(slime_root_fixture))]
     if admission.loadable > 0 {
-        launch_component_graph(
+        launch_instance_graph(
             &generation,
             &admission,
-            &mut allocator,
+            allocator,
             &scratch,
             service_endpoint,
             &mut block_devices,
+            #[cfg(slime_boot_selector)]
+            &mut boot_runtime,
         );
-        sel4::init_thread::suspend_self()
     }
-    // ---- end component graph phase ----
+    // ---- end generation graph phase ----
 
-    // Fixture authority is generation-derived: each task carries the inbound
-    // service authority of a declared component the generation grants both send
-    // and receive rights to. With no such declaration there is no authority to
-    // convey, and startup fails closed rather than inventing one.
-    let mut authorities: [Option<(&str, Authority)>; FIXTURE_TASKS] = [None; FIXTURE_TASKS];
+    // The native fallback fixtures borrow endpoint authority from declared
+    // instances only when no executable in the generation is loadable.
+    let mut authorities: [Option<Authority>; FIXTURE_TASKS] = [None; FIXTURE_TASKS];
     let mut found = 0;
-    for plan in admission.plans() {
+    for instance in admission.instances(&generation) {
         if found == FIXTURE_TASKS {
             break;
         }
-        let record = match generation.component(plan.component) {
-            Ok(record) => record,
-            Err(error) => fatal!("component rejected: {error:?}"),
-        };
-        let authority = match inbound_authority(&generation, plan.component) {
+        let authority = match bound_authority(&generation, instance) {
             Ok(authority) => authority,
             Err(error) => fatal!("grant closure rejected: {error:?}"),
         };
         if authority.rights & RIGHT_SEND == 0 || authority.rights & RIGHT_RECV == 0 {
             continue;
         }
-        authorities[found] = Some((record.name, authority));
+        authorities[found] = Some(authority);
         found += 1;
     }
     if found != FIXTURE_TASKS {
-        fatal!(
-            "generation declares {found} components with service authority, need {FIXTURE_TASKS}"
-        )
+        fatal!("generation declares {found} instances with service authority, need {FIXTURE_TASKS}")
     }
 
     let mut tasks = TaskTable::<MAX_TASKS>::new();
@@ -642,11 +687,11 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         .into_iter()
         .enumerate()
     {
-        let Some((source, authority)) = authorities[index] else {
+        let Some(authority) = authorities[index] else {
             fatal!("fixture {index} lost its declared authority")
         };
         let id = match tasks.create(
-            &mut allocator,
+            allocator,
             &image,
             service_endpoint,
             authority,
@@ -658,6 +703,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
             // from a generation component, so it carries neither. Every
             // per-component bound reads as absent for it, which is correct —
             // no manifest describes this task.
+            None,
             None,
             None,
         ) {
@@ -674,7 +720,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
             "SLIME_ROOT native fixture staged task={} role={} source={} badge={:#x} fault_badge={:#x} grants={} child_slots={} root_slots={} frames={} tables={} entry={:#x}",
             id.0,
             role.name(),
-            source,
+            "generation",
             id.service_badge(),
             id.fault_badge(),
             authority.grants,
@@ -687,7 +733,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         fixtures[index] = Some(Fixture {
             id,
             role,
-            source,
+            source: "generation",
             authority,
             terminated: false,
         });
@@ -723,7 +769,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
 
     let mut buffer_phase = BufferPhase::default();
     let (rw_handle, rw_frame, ro_handle) = {
-        let mut adapter = BufferAdapter::new(&mut allocator);
+        let mut adapter = BufferAdapter::new(allocator);
         let (rw, rw_frame) = match setup_shared_region(
             &mut buffers,
             &mut adapter,
@@ -819,7 +865,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
     // nothing observes the removal. This is also the first real exercise of the
     // unmap path: the mapping count must drop while the region stays live.
     {
-        let mut adapter = BufferAdapter::new(&mut allocator);
+        let mut adapter = BufferAdapter::new(allocator);
         if let Err(error) = buffers.unmap(
             &mut adapter,
             SHARED_HOLDER,
@@ -842,7 +888,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
     // Teardown: reclaim every frame and mapping the phase created, then confirm
     // the accounting is genuinely back at zero rather than merely unreferenced.
     {
-        let mut adapter = BufferAdapter::new(&mut allocator);
+        let mut adapter = BufferAdapter::new(allocator);
         if let Err(error) = buffers.release(&mut adapter, SHARED_HOLDER, rw_handle) {
             fatal!("SLIME_BUF FAIL rw release: {error:?}")
         }
@@ -896,16 +942,16 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
                 fixture.id.0
             ),
         }
-        match tasks.reclaim(fixture.id) {
+        match tasks.reclaim(allocator, fixture.id) {
             Ok(record) => {
                 reclaimed_tasks += 1;
                 reclaimed_slots += record.slot_count();
                 sel4::debug_println!(
-                    "SLIME_ROOT task reclaimed task={} source={} slots={}..{}",
+                    "SLIME_ROOT task reclaimed task={} source={} slots={} arena={}",
                     fixture.id.0,
                     fixture.source,
-                    record.first_slot,
-                    record.slot_end,
+                    record.slot_count(),
+                    record.arena.index(),
                 );
             }
             Err(error) => fatal!("task reclamation failed: {error:?}"),
@@ -914,6 +960,14 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
     sel4::debug_println!(
         "SLIME_ROOT cleanup tasks={reclaimed_tasks} slots={reclaimed_slots} live={}",
         tasks.len()
+    );
+    sel4::debug_println!(
+        "SLIME_ROOT allocator live_slots={} live_objects={} live_bytes={} slot_reuses={} arena_reuses={}",
+        allocator.live_slots(),
+        allocator.live_objects(),
+        allocator.live_bytes(),
+        allocator.slots_reused(),
+        allocator.arena_reuses(),
     );
 
     let granted: usize = fixtures
@@ -1187,18 +1241,26 @@ fn probe_devices(bootinfo: &sel4::BootInfo, allocator: &mut ObjectAllocator) -> 
         let Some(transport) = *entry else {
             continue;
         };
-        let irq = virtio_irq(transport.paddr);
-        match device::DeviceIrq::acquire(allocator, irq, VIRTIO_IRQ_BADGE, true) {
-            Ok(binding) => sel4::debug_println!(
-                "SLIME_ROOT virtio irq bound transport={:#x} irq={} badge={:#x}",
-                transport.paddr,
-                binding.irq(),
-                VIRTIO_IRQ_BADGE,
-            ),
-            Err(error) => {
-                sel4::debug_println!("SLIME_ROOT virtio irq unavailable irq={irq} {error:?}");
+        #[cfg(not(slime_boot_selector))]
+        {
+            let irq = virtio_irq(transport.paddr);
+            match device::DeviceIrq::acquire(allocator, irq, VIRTIO_IRQ_BADGE, true) {
+                Ok(binding) => sel4::debug_println!(
+                    "SLIME_ROOT virtio irq bound transport={:#x} irq={} badge={:#x}",
+                    transport.paddr,
+                    binding.irq(),
+                    VIRTIO_IRQ_BADGE,
+                ),
+                Err(error) => {
+                    sel4::debug_println!("SLIME_ROOT virtio irq unavailable irq={irq} {error:?}");
+                }
             }
         }
+        #[cfg(slime_boot_selector)]
+        sel4::debug_println!(
+            "SLIME_ROOT virtio irq polled transport={:#x}",
+            transport.paddr,
+        );
         let granule = transport.paddr & !(GRANULE_SIZE - 1);
         // A granule another driver already stands in? Then borrow that mapping
         // at this transport's own offset (B29). QEMU packs eight transports
@@ -1357,17 +1419,20 @@ fn bring_up_shared_block(
         transport.paddr,
         block.capacity_sectors(),
     );
-    let mut sector = [0u8; virtio_blk::SECTOR_BYTES];
-    match block.read_sector(0, &mut sector) {
-        Ok(()) => sel4::debug_println!(
-            "SLIME_ROOT block read lba=0 bytes={} head={:02x}{:02x}{:02x}{:02x}",
-            sector.len(),
-            sector[0],
-            sector[1],
-            sector[2],
-            sector[3],
-        ),
-        Err(error) => sel4::debug_println!("SLIME_ROOT block read failed lba=0 {error:?}"),
+    #[cfg(not(slime_boot_selector))]
+    {
+        let mut sector = [0u8; virtio_blk::SECTOR_BYTES];
+        match block.read_sector(0, &mut sector) {
+            Ok(()) => sel4::debug_println!(
+                "SLIME_ROOT block read lba=0 bytes={} head={:02x}{:02x}{:02x}{:02x}",
+                sector.len(),
+                sector[0],
+                sector[1],
+                sector[2],
+                sector[3],
+            ),
+            Err(error) => sel4::debug_println!("SLIME_ROOT block read failed lba=0 {error:?}"),
+        }
     }
     Some(block)
 }
@@ -1460,17 +1525,20 @@ fn bring_up_block(
         transport.paddr,
         block.capacity_sectors(),
     );
-    let mut sector = [0u8; virtio_blk::SECTOR_BYTES];
-    match block.read_sector(0, &mut sector) {
-        Ok(()) => sel4::debug_println!(
-            "SLIME_ROOT block read lba=0 bytes={} head={:02x}{:02x}{:02x}{:02x}",
-            sector.len(),
-            sector[0],
-            sector[1],
-            sector[2],
-            sector[3],
-        ),
-        Err(error) => sel4::debug_println!("SLIME_ROOT block read failed lba=0 {error:?}"),
+    #[cfg(not(slime_boot_selector))]
+    {
+        let mut sector = [0u8; virtio_blk::SECTOR_BYTES];
+        match block.read_sector(0, &mut sector) {
+            Ok(()) => sel4::debug_println!(
+                "SLIME_ROOT block read lba=0 bytes={} head={:02x}{:02x}{:02x}{:02x}",
+                sector.len(),
+                sector[0],
+                sector[1],
+                sector[2],
+                sector[3],
+            ),
+            Err(error) => sel4::debug_println!("SLIME_ROOT block read failed lba=0 {error:?}"),
+        }
     }
     // Bring-up reads. It does not write.
     //
@@ -1704,32 +1772,6 @@ const fn declared_resource(rights: u64) -> Option<(u64, graph::Resource)> {
     None
 }
 
-/// The boot-layout role a declared resource is placed by, for the bootstrap
-/// component whose table a layout numbers.
-const fn declared_role(resource: &graph::Resource) -> boot_contracts::boot_layout::Role {
-    use boot_contracts::boot_layout::Role;
-
-    match resource {
-        graph::Resource::Directory { .. } => Role::DirectoryRoot,
-        graph::Resource::Input => Role::Input,
-        graph::Resource::EndpointFactory => Role::EndpointFactory,
-        graph::Resource::SharedBufferFactory => Role::SharedBufferFactory,
-        // `Role::StorageCapability` is the boot-layout role the contract
-        // already carries for a block device.
-        _ => Role::StorageCapability,
-    }
-}
-
-/// The shared filesystem namespaces (M6.3, P5.4.3).
-///
-/// One root identity per namespace, and this cutover has exactly one. It lives
-/// in the root because it is *shared*: two tasks holding views of the same
-/// namespace must see each other's commits, and the compare-and-swap that makes
-/// concurrent writers safe has to happen somewhere neither of them controls.
-///
-/// The root identity is opaque here — thirty-two bytes the root never
-/// interprets. What it names is a directory object in the content-addressed
-/// store, and resolving it is a filesystem component's job.
 pub struct Namespaces {
     roots: [[u8; 32]; MAX_NAMESPACES],
 }
@@ -2148,100 +2190,83 @@ fn serve_block_transact(
 /// Construction is staged exactly as the fixture path stages it: every task is
 /// built and every window declared before any of them runs, so a failure part
 /// way through leaves tasks that never ran rather than a half-started graph.
-fn launch_component_graph(
+/// Stage and activate exactly the root-owned autostart instances in a v4
+/// generation. Executables are a catalogue: a loadable catalogue entry is not
+/// itself a request to construct a task.
+fn launch_instance_graph(
     generation: &Generation<'_>,
     admission: &Admission,
     allocator: &mut ObjectAllocator,
     scratch: &ScratchPage,
     service_endpoint: sel4::cap::Endpoint,
     block_devices: &mut BlockDevices,
+    #[cfg(slime_boot_selector)] boot_runtime: &mut boot_selector::BootRuntime,
 ) {
     let mut tasks = TaskTable::<MAX_TASKS>::new();
     let mut windows = WindowTable::<MAX_TASKS>::new();
     let mut graph = GraphTables::new();
-    // The channel table holds every queued message inline — sixteen channels of
-    // two sixteen-deep queues of 64-byte messages — so it is tens of kilobytes
-    // and must never be constructed in a stack frame. `const`-initialized into
-    // `.bss` and taken by reference here, which is the fix backlog B3 records
-    // for the identical overflow in the retired kernel's `SharedBufferTable`:
-    // there the table was published through a `LazyLock` and first built on a
-    // 32 KiB task stack, overflowing it silently so the boot simply wedged.
-    //
-    // SAFETY: the root task is single-threaded and this is the only reference
-    // taken to `CHANNELS`. It is held for the rest of this function, which does
-    // not return until the graph is served.
     let channels = unsafe { &mut *ptr::addr_of_mut!(CHANNELS) };
-    // Which component index each task came from, and how many executable slots
-    // it already holds. Both are needed after the staging loop, by the channel
-    // materialization that turns declared send/recv grants into queues.
-    let mut launched_components = LaunchedComponents::new();
-    let mut cursors = SlotCursors::new();
-    let mut launched = 0;
-    // Decoded once, before the staging loop, because the bootstrap component's
-    // executable slots are numbered from it — see the two numbering rules in
-    // that loop. `channel::materialize` reads the same value below.
-    let boot_layout = boot_layout_resource(generation);
-    // Which admitted component is the bootstrap one, by generation index. The
-    // task id is not known until that component is staged, so the comparison
-    // that selects the numbering rule is by index rather than by task.
-    let bootstrap_component = Some(admission.bootstrap);
-    // The generation format packs object payloads without padding, so an ELF's
-    // address inside the blob is whatever the preceding objects left it at,
-    // while `object`'s ELF64 parser requires 8-byte alignment. Aligning the
-    // generation as a whole is therefore not enough — only the first few images
-    // land aligned. Each image is copied through this aligned buffer instead,
-    // which keeps the wire format unchanged: the generation is also read by the
-    // frozen x86 oracle, so adding padding to it would be a format change made
-    // for one reader's parser.
-    //
-    // SAFETY: the root task is single-threaded and this is the only reference
-    // taken to `ELF_SCRATCH`, held for the duration of this loop and released
-    // before the function returns.
+    let mut launched_instances = LaunchedInstances::new();
     let aligned = unsafe { &mut *ptr::addr_of_mut!(ELF_SCRATCH) };
+    let mut launched = 0;
 
-    for plan in admission.loadable_plans() {
-        let record = match generation.component(plan.component) {
-            Ok(record) => record,
-            Err(error) => fatal!("SLIME_GRAPH FAIL component rejected: {error:?}"),
+    for instance_index in 0..generation.instance_count() {
+        let instance = match generation.instance(instance_index) {
+            Ok(instance) => instance,
+            Err(error) => fatal!("SLIME_GRAPH FAIL instance rejected: {error:?}"),
         };
-        let object = match generation.object(record.object) {
+        if !instance.is_root_autostart() {
+            continue;
+        }
+        let executable = match generation.executable(instance.executable) {
+            Ok(executable) => executable,
+            Err(error) => fatal!("SLIME_GRAPH FAIL executable rejected: {error:?}"),
+        };
+        let Some(plan) = admission.executable_plan(instance.executable) else {
+            fatal!(
+                "SLIME_GRAPH FAIL executable {} was not admitted",
+                executable.name
+            )
+        };
+        if !plan.format.is_loadable() {
+            fatal!(
+                "SLIME_GRAPH FAIL root instance {} executable {} is not loadable",
+                instance.name,
+                executable.name
+            )
+        }
+        let object = match generation.object(executable.object) {
             Ok(object) => object,
             Err(error) => fatal!("SLIME_GRAPH FAIL object rejected: {error:?}"),
         };
-        // Target admission happens again here, at the point of use, and its
-        // result is what yields the bytes: the ELF cannot be reached without
-        // passing it, so a wrong-target payload is refused before mapping
-        // rather than by a check a caller could skip.
-        let elf = match boot_contracts::component_image::admit_elf(
-            object.bytes,
-            match boot_contracts::target_profile::TargetProfile::by_name(TARGET_PROFILE) {
-                Ok(profile) => profile,
-                Err(error) => fatal!("SLIME_GRAPH FAIL profile unavailable: {error:?}"),
-            },
-        ) {
+        let profile = match boot_contracts::target_profile::TargetProfile::by_name(TARGET_PROFILE) {
+            Ok(profile) => profile,
+            Err(error) => fatal!("SLIME_GRAPH FAIL profile unavailable: {error:?}"),
+        };
+        let elf = match boot_contracts::component_image::admit_elf(object.bytes, profile) {
             Ok(elf) => elf,
             Err(error) => fatal!(
-                "SLIME_GRAPH FAIL component {} refused: {error:?}",
-                record.name
+                "SLIME_GRAPH FAIL executable {} refused: {error:?}",
+                executable.name
             ),
         };
         let elf = match aligned.hold(elf) {
             Ok(elf) => elf,
             Err(len) => fatal!(
-                "SLIME_GRAPH FAIL component {} is {len} bytes, over the load bound",
-                record.name
+                "SLIME_GRAPH FAIL executable {} is {len} bytes, over the load bound",
+                executable.name
             ),
         };
         let image = match ChildImage::parse(elf) {
             Ok(image) => image,
             Err(error) => fatal!(
-                "SLIME_GRAPH FAIL component {} image rejected: {error:?}",
-                record.name
+                "SLIME_GRAPH FAIL executable {} image rejected: {error:?}",
+                executable.name
             ),
         };
-        let authority = match inbound_authority(generation, plan.component) {
+        let authority = match bound_authority(generation, instance) {
             Ok(authority) => authority,
-            Err(error) => fatal!("SLIME_GRAPH FAIL grant closure rejected: {error:?}"),
+            Err(error) => fatal!("SLIME_GRAPH FAIL binding authority rejected: {error:?}"),
         };
         let id = match tasks.create(
             allocator,
@@ -2252,15 +2277,14 @@ fn launch_component_graph(
             sel4::init_thread::slot::VSPACE.cap(),
             scratch,
             sel4::init_thread::slot::ASID_POOL.cap(),
-            // Launched by the root from the generation, so no spawner: its
-            // existence is the manifest's, not another component's.
             None,
-            Some(plan.component),
+            Some(instance.executable),
+            Some(instance_index),
         ) {
             Ok(id) => id,
             Err(error) => fatal!(
-                "SLIME_GRAPH FAIL component {} construction failed: {error:?}",
-                record.name
+                "SLIME_GRAPH FAIL instance {} construction failed: {error:?}",
+                instance.name
             ),
         };
         let Some(task) = tasks.get(id) else {
@@ -2274,201 +2298,97 @@ fn launch_component_graph(
         ) {
             fatal!("SLIME_GRAPH FAIL window declaration rejected: {error:?}")
         }
-        // Install the executables this component's outbound `exec | spawn`
-        // grants name, at the slots its boot layout numbers them by. This is
-        // what makes "launches its declared components with their declared
-        // grants" a property of the table rather than a claim: `spawn-service`
-        // can start exactly the two executables the generation grants it, and a
-        // slot naming anything else resolves to nothing.
         let Ok(table) = graph.create(id) else {
             fatal!(
                 "SLIME_GRAPH FAIL capability table unavailable for task {}",
                 id.0
             )
         };
-        let mut executables = 0;
-        for index in 0..generation.grant_count() {
-            let Ok(grant) = generation.grant(index) else {
-                continue;
+
+        let mut block_index = 0u8;
+        for binding_index in 0..instance.binding_count() {
+            let binding = match generation.binding(instance, binding_index) {
+                Ok(binding) => binding,
+                Err(error) => fatal!(
+                    "SLIME_GRAPH FAIL instance {} binding rejected: {error:?}",
+                    instance.name
+                ),
             };
-            if grant.source != plan.component || grant.rights & RIGHT_EXEC == 0 {
+            let grant = match generation.grant(binding.grant) {
+                Ok(grant) => grant,
+                Err(error) => fatal!("SLIME_GRAPH FAIL bound grant rejected: {error:?}"),
+            };
+            if grant.rights & (RIGHT_SEND | RIGHT_RECV) != 0 {
                 continue;
             }
-            // Two numbering rules, the same split `channel::materialize` makes
-            // for channel ends and for the same reason.
-            //
-            // The **bootstrap component** takes the boot layout's slot for the
-            // executable, because `init.rs` addresses each one through a
-            // constant generated from that same table (`CONSOLE_SLOT`,
-            // `SYSINFO_SLOT`). Numbering init's executables from a cursor
-            // instead — which is what P5.2 did — agreed only because `sel4.zti`
-            // grants init no executable at all. The moment one is granted the
-            // two readers disagree, and the spawn resolves to whatever else
-            // landed at that number. B10 exists to remove exactly that.
-            //
-            // Every **other** component keeps the `1..=N` cursor numbering:
-            // `spawn-service`'s generated command profile compiles against
-            // those numbers, they are what P5.2's gate observes, and no layout
-            // numbers a non-bootstrap component's table.
-            let layout_slot = if bootstrap_component == Some(plan.component) {
-                match channel::bootstrap_executable_slot(
-                    boot_layout.as_ref(),
-                    match generation.component(grant.target) {
-                        Ok(target) => target.name,
-                        Err(error) => {
-                            fatal!("SLIME_GRAPH FAIL executable target unreadable: {error:?}")
-                        }
-                    },
-                    grant.rights,
-                ) {
-                    Ok(slot) => slot,
-                    Err(error) => fatal!(
-                        "SLIME_GRAPH FAIL executable grant {} rejected: {error:?}",
+            if !generation.grant_applies_to_instance(grant, instance_index) {
+                fatal!(
+                    "SLIME_GRAPH FAIL binding {} is unrelated to instance {}",
+                    grant.name,
+                    instance.name
+                )
+            }
+            let capability = if grant.rights & RIGHT_EXEC != 0 {
+                let GrantEndpoint::Executable(executable) = grant.target else {
+                    fatal!(
+                        "SLIME_GRAPH FAIL binding {} executable target rejected",
                         grant.name
-                    ),
+                    )
+                };
+                graph::Capability {
+                    resource: graph::Resource::Executable { executable },
+                    rights: grant.rights,
                 }
             } else {
-                None
-            };
-            executables += 1;
-            let slot = layout_slot.unwrap_or(executables);
-            if let Err(error) = table.install(
-                slot,
+                let Some((valid, resource)) = declared_resource(grant.rights) else {
+                    fatal!(
+                        "SLIME_GRAPH FAIL binding {} names no installable resource",
+                        grant.name
+                    )
+                };
+                if grant.rights & valid & !RIGHT_TRANSFER == 0 {
+                    fatal!(
+                        "SLIME_GRAPH FAIL binding {} carries invalid rights",
+                        grant.name
+                    )
+                }
+                let resource = match resource {
+                    graph::Resource::Block { .. } => {
+                        let device = block_index;
+                        block_index = block_index.saturating_add(1);
+                        graph::Resource::Block { device }
+                    }
+                    other => other,
+                };
                 graph::Capability {
-                    resource: graph::Resource::Executable {
-                        component: grant.target,
-                    },
-                    rights: grant.rights,
-                },
-            ) {
+                    resource,
+                    rights: grant.rights & valid,
+                }
+            };
+            let slot = match u32::try_from(binding.slot) {
+                Ok(slot) => slot,
+                Err(_) => fatal!(
+                    "SLIME_GRAPH FAIL binding {} slot is out of range",
+                    grant.name
+                ),
+            };
+            if let Err(error) = table.install(slot, capability) {
                 fatal!(
-                    "SLIME_GRAPH FAIL executable grant {} rejected: {error:?}",
+                    "SLIME_GRAPH FAIL binding {} slot={slot} rejected: {error:?}",
                     grant.name
                 )
             }
         }
-        // The two singular factories, placed for the bootstrap component from
-        // the layout's role entries. A component holds one only when a grant
-        // names it as target, so this installs authority the generation
-        // declared rather than authority the layout implies — the layout
-        // decides *where*, the generation decides *whether*.
-        //
-        // Where a non-bootstrap component's runtime-numbered slots start:
-        // above its executables, which occupy `1..=executables`.
-        let mut next_runtime_slot = executables + 1;
-        // The bootstrap component takes the layout's role slot, because
-        // `init.rs` reads `ENDPOINT_FACTORY_SLOT` and
-        // `SHARED_BUFFER_FACTORY_SLOT` from the generated table. Every other
-        // component takes the next cursor slot above its executables, on the
-        // same rule its channel ends follow — `spawn-service.rs` compiles
-        // `SHARED_BUFFER_FACTORY_SLOT = 4` against the order init grants them.
-        //
-        // B13: before this, a `bufferCreate` grant was decoded into the
-        // authority mask and then never installed anywhere, so
-        // `serve_buffer_create` had nothing to resolve and the budget was the
-        // only bound on allocation. The grant authorizes and the budget bounds;
-        // they are independent, and this is what makes the first half real.
-        // Successive block grants name successive devices (B29, M6.7).
-        let mut block_index = 0u8;
-        // The component's declared non-executable authority, in **manifest
-        // grant order** — the same rule `construct_child` follows, so the two
-        // copies of one component agree.
-        //
-        // Not a fixed kind order. A component's slot layout *is* the order its
-        // generation declares its grants, which is what the oracle does and
-        // what lets two components disagree about kinds without either being
-        // wrong: `powerbox-chooser.rs` reads a directory then input,
-        // `dango.rs` reads input then a cwd root, and each generation declares
-        // them accordingly. A fixed order cost three separate boot failures,
-        // one per component holding more than one kind.
-        for index in 0..generation.grant_count() {
-            let Ok(grant) = generation.grant(index) else {
-                continue;
-            };
-            if grant.target != plan.component {
-                continue;
-            }
-            let Some((right, resource)) = declared_resource(grant.rights) else {
-                continue;
-            };
-            let role = declared_role(&resource);
-            // A component may hold more than one device — M6.7's transfer holds
-            // a source and a receiver — and each declared block grant names the
-            // next brought-up device in order.
-            let resource = match resource {
-                graph::Resource::Block { .. } => {
-                    let device = block_index;
-                    block_index += 1;
-                    graph::Resource::Block { device }
-                }
-                other => other,
-            };
-            // `RIGHT_TRANSFER` is not a *kind* — every resource may carry it —
-            // so it must not be what decides that a component was granted one.
-            // The directory mask includes it so a declared `transferable = true`
-            // survives the intersection below, and without this mask-out any
-            // component with a transferable grant of any kind was handed a
-            // namespace view it never declared. Observed: the loan plane's
-            // console, whose only grants are `bufferCreate` and two `recv`.
-            if grant.rights & right & !RIGHT_TRANSFER == 0 {
-                continue;
-            }
-            // **This grant's** rights, not the component's union.
-            //
-            // `inbound_authority` unions every grant naming the component,
-            // which is right for deciding *whether* it holds a kind and wrong
-            // for deciding *how much*. M6.7 hands one component a read-only
-            // source and a writable receiver; against the union both came out
-            // writable, and the source accepted a write.
-            let right = grant.rights & right;
-            let slot = if bootstrap_component == Some(plan.component) {
-                match channel::bootstrap_role_slot(boot_layout.as_ref(), role) {
-                    Some(slot) => slot,
-                    None => fatal!(
-                        "SLIME_GRAPH FAIL component {} was granted authority the layout does not place: {}",
-                        record.name,
-                        resource.kind(),
-                    ),
-                }
-            } else {
-                // The next runtime slot above this component's executables.
-                // Counted separately from `executables`, which is the number of
-                // *executable* grants and is what the staging marker reports —
-                // folding factories into it would misreport the authority the
-                // generation gave, which is the one claim that marker makes.
-                next_runtime_slot += 1;
-                next_runtime_slot - 1
-            };
-            if let Err(error) = table.install(
-                slot,
-                graph::Capability {
-                    resource,
-                    rights: right,
-                },
-            ) {
-                fatal!(
-                    "SLIME_GRAPH FAIL factory grant for {} rejected: {error:?}",
-                    record.name
-                )
-            }
-            sel4::debug_println!(
-                "SLIME_GRAPH factory placed task={} component={} slot={slot} kind={}",
-                id.0,
-                record.name,
-                resource.kind(),
-            );
-        }
-        if let Err(error) = launched_components.record(plan.component, id) {
-            fatal!("SLIME_GRAPH FAIL component index unrecorded: {error:?}")
-        }
-        if let Err(error) = cursors.declare(id, next_runtime_slot - 1) {
-            fatal!("SLIME_GRAPH FAIL slot cursor unavailable: {error:?}")
+        if let Err(error) = launched_instances.record(instance_index, instance.executable, id) {
+            fatal!("SLIME_GRAPH FAIL instance mapping rejected: {error:?}")
         }
         sel4::debug_println!(
-            "SLIME_GRAPH staged task={} component={} grants={} executables={executables} window={:#x} frames={} tables={} entry={:#x}",
+            "SLIME_GRAPH staged task={} instance={} executable={} grants={} bindings={} window={:#x} frames={} tables={} entry={:#x}",
             id.0,
-            record.name,
+            instance.name,
+            executable.name,
             authority.grants,
+            instance.binding_count(),
             task.vspace.transfer_window_addr,
             task.vspace.frames_mapped,
             task.vspace.tables_mapped,
@@ -2478,30 +2398,19 @@ fn launch_component_graph(
     }
 
     sel4::debug_println!(
-        "SLIME_GRAPH staged components={launched} loadable={} slimecm={} wrong_target={} unrecognized={}",
+        "SLIME_GRAPH staged instances={launched} root_autostart={} loadable_executables={} slimecm={} wrong_target={} unrecognized={}",
+        admission.root_autostart_instances(generation).count(),
         admission.loadable,
         admission.slime_component_images,
         admission.wrong_target_images,
         admission.unrecognized_images,
     );
 
-    // Turn the generation's declared send/recv grants into root-owned queues,
-    // before any task runs. A component's first `recv` therefore finds either a
-    // channel the generation declared for it or nothing at all — never a
-    // half-built graph, and never a channel it was not granted.
-    let bootstrap = launched_components.task_for(admission.bootstrap);
-    let materialized = match channel::materialize(
-        generation,
-        boot_layout.as_ref(),
-        bootstrap,
-        &launched_components,
-        channels,
-        &mut graph,
-        &mut cursors,
-    ) {
-        Ok(report) => report,
-        Err(error) => fatal!("SLIME_GRAPH FAIL channel materialization rejected: {error:?}"),
-    };
+    let materialized =
+        match channel::materialize(generation, &launched_instances, channels, &mut graph) {
+            Ok(report) => report,
+            Err(error) => fatal!("SLIME_GRAPH FAIL channel materialization rejected: {error:?}"),
+        };
     sel4::debug_println!(
         "SLIME_GRAPH channels grants={} channels={} queues={} slots={} unplaced={}",
         materialized.grants,
@@ -2511,31 +2420,13 @@ fn launch_component_graph(
         materialized.unplaced,
     );
 
-    // B10 (P5.4.10): init's resolved layout, in the retired kernel's own line
-    // shape so the two are comparable slot for slot.
-    //
-    // The layout is a contract between three readers — the root that fills the
-    // table, the component images that address slots by number, and the gates
-    // that assert on what those components do — and nothing else fails when
-    // they disagree. The oracle makes it observable
-    // (`kernel/src/runtime/bootstrap.rs::dump_boot_layout`) and freezes the
-    // result as a fixture; on seL4 it was implied by source order alone, which
-    // P5.4.1 recorded as B10 being only obliquely covered here.
-    //
-    // Emitted after materialization and before activation: that is the moment
-    // the table is complete and nothing has run against it yet.
-    //
-    // Emitted unconditionally. `bootstrap` is `None` whenever init's own
-    // payload was not loadable, and a guarded dump would then produce a boot
-    // with launched components and no layout record at all — indistinguishable
-    // from the dump having been deleted. A header with `slots=0` says "init
-    // has no table", which is a fact worth reading.
-    let table = bootstrap.and_then(|bootstrap_id| graph.get(bootstrap_id));
+    let bootstrap = launched_instances.task_for_instance(admission.bootstrap_instance);
+    let table = bootstrap.and_then(|id| graph.get(id));
     sel4::debug_println!(
         "[layout] path={} slots={} max={}",
         generation
-            .component(admission.bootstrap)
-            .map_or("?", |record| record.name),
+            .instance(admission.bootstrap_instance)
+            .map_or("?", |instance| instance.name),
         table.map_or(0, |table| table.len()),
         graph::MAX_TASK_CAPS,
     );
@@ -2544,127 +2435,98 @@ fn launch_component_graph(
             let Some(capability) = capability else {
                 continue;
             };
-            let label = resource_label(generation, &capability.resource);
-            // B26. The four fields above are the retired kernel's line shape and
-            // stay exactly that, so the two dumps remain comparable slot for
-            // slot. `rights` among them is the *installed* capability's, which
-            // comes from the generation grant.
-            //
-            // That alone cannot express what B10 exists to freeze. The layout
-            // states what a slot may carry and the grant states what the
-            // generation confers, and `bootstrap_slot` deliberately tests
-            // containment rather than equality — requiring equality rejected a
-            // well-formed graph once already, because a layout marks a channel
-            // half `RIGHT_TRANSFER` for init to hand on while the grant is not
-            // about delegation at all. So the two legitimately differ, and a
-            // dump carrying only one of them cannot show a layout row that
-            // declares strictly more authority than anything uses.
-            //
-            // Appended rather than substituted, and only when they differ, so
-            // every row that agrees keeps the oracle's exact four fields and
-            // stays comparable to `dump_boot_layout`'s output slot for slot. Of
-            // the nine seL4 fixtures this dump feeds, six were unmoved by
-            // introducing the field and three gained one row each, which is the
-            // disagreement it exists to surface. A row that disagrees gains one
-            // trailing field naming the declared value — the fact a frozen
-            // fixture needs and the one the gate was previously blind to.
-            match declared_layout_rights(boot_layout.as_ref(), &capability.resource, label)
-                .filter(|declared| *declared != capability.rights)
-            {
-                Some(declared) => sel4::debug_println!(
-                    "[layout] {slot} {} {label} {:#x} declared={declared:#x}",
-                    capability.resource.kind(),
-                    capability.rights,
-                ),
-                None => sel4::debug_println!(
-                    "[layout] {slot} {} {label} {:#x}",
-                    capability.resource.kind(),
-                    capability.rights,
-                ),
-            }
+            sel4::debug_println!(
+                "[layout] {slot} {} {} {:#x}",
+                capability.resource.kind(),
+                resource_label(generation, &capability.resource),
+                capability.rights,
+            );
         }
     }
     sel4::debug_println!("[layout] end");
 
-    // Every allocation for every component has succeeded, so activation is
-    // safe. Ordered by task id so the serial record is deterministic.
-    let ids: [Option<TaskId>; MAX_TASKS] = {
-        let mut ids = [None; MAX_TASKS];
-        for (slot, task) in ids.iter_mut().zip(tasks.tasks()) {
-            *slot = Some(task.id);
+    let mut active = [false; MAX_TASKS];
+    let mut activated = 0;
+    while activated < launched {
+        let before = activated;
+        for launched_instance in launched_instances.iter() {
+            if active[launched_instance.instance] {
+                continue;
+            }
+            let instance = match generation.instance(launched_instance.instance) {
+                Ok(instance) => instance,
+                Err(error) => fatal!("SLIME_GRAPH FAIL activation instance rejected: {error:?}"),
+            };
+            let mut ready = true;
+            for dependency_index in 0..instance.dependency_count() {
+                let dependency = match generation.dependency(instance, dependency_index) {
+                    Ok(dependency) => dependency,
+                    Err(error) => fatal!("SLIME_GRAPH FAIL dependency rejected: {error:?}"),
+                };
+                let dependency_index = (0..generation.instance_count())
+                    .find(|index| {
+                        generation
+                            .instance(*index)
+                            .is_ok_and(|candidate| candidate.name == dependency.name)
+                    })
+                    .unwrap_or(usize::MAX);
+                if dependency_index >= active.len()
+                    || launched_instances
+                        .task_for_instance(dependency_index)
+                        .is_none()
+                {
+                    fatal!(
+                        "SLIME_GRAPH FAIL instance {} has non-root dependency {}",
+                        instance.name,
+                        dependency.name
+                    )
+                }
+                ready &= active[dependency_index];
+            }
+            if !ready {
+                continue;
+            }
+            if let Err(error) = tasks.activate(launched_instance.task) {
+                fatal!(
+                    "SLIME_GRAPH FAIL activation failed instance={}: {error:?}",
+                    instance.name
+                )
+            }
+            active[launched_instance.instance] = true;
+            activated += 1;
         }
-        ids
-    };
-    for id in ids.iter().flatten().copied() {
-        if let Err(error) = tasks.activate(id) {
-            fatal!(
-                "SLIME_GRAPH FAIL activation failed task={}: {error:?}",
-                id.0
-            )
+        if activated == before {
+            fatal!("SLIME_GRAPH FAIL root instance dependency barrier unsatisfied")
         }
     }
-    sel4::debug_println!("SLIME_GRAPH activated components={}", tasks.activated());
+    sel4::debug_println!("SLIME_GRAPH activated instances={activated}");
 
-    // Every launched task gets the ceiling its generation declared for it,
-    // before it can ask for a page, so an allocation is admitted against
-    // generation-declared state rather than against whatever the caller asked
-    // for — or against a constant compiled into the root task.
-    //
-    // Keyed by component *name* through `holder_identity`, which is the same
-    // derivation `scripts/build/build-generation.py::holder_identity` writes
-    // into the budget and the retired kernel reads back
-    // (`kernel/src/runtime/generation.rs::shared_buffer_quota`). A component the
-    // budget does not name gets `DENY` rather than a default: omission from the
-    // table is a statement, not a gap.
     let mut buffers = SharedBufferTable::new(GenerationEpoch(generation.number));
     let budget = shared_buffer_budget(generation);
-    // A budget promising more than this root task's fixed tables can ever grant
-    // is rejected before any component runs, rather than discovered at runtime
-    // by whichever component happens to allocate last. Same check the retired
-    // kernel performs at admission (`kernel/src/runtime/generation.rs::decode`),
-    // against this crate's own ceilings.
-    if let Some(budget) = budget.as_ref()
-        && let Err(error) = budget.validate_against(
-            shared_buffer::MAX_BUFFER_PAGES as u32,
-            shared_buffer::MAX_TOTAL_PAGES as u32,
-            shared_buffer::MAX_SHARED_BUFFERS as u32,
-            shared_buffer::MAX_MAPPINGS as u32,
-            shared_buffer::MAX_LOANS as u32,
-        )
-    {
-        fatal!("SLIME_GRAPH FAIL shared-buffer budget unsatisfiable: {error:?}")
-    }
     let mut budgeted = 0;
-    for (component, id) in launched_components.iter() {
-        let Ok(record) = generation.component(component) else {
-            fatal!("SLIME_GRAPH FAIL launched component {component} is unreadable")
-        };
-        let quota = declared_quota(budget.as_ref(), record.name);
+    for launched_instance in launched_instances.iter() {
+        let instance = generation.instance(launched_instance.instance).unwrap();
+        let quota = declared_quota(budget.as_ref(), instance.name);
         if quota != HolderQuota::DENY {
             budgeted += 1;
         }
-        if let Err(error) = buffers.declare_quota(HolderId(u64::from(id.0)), quota) {
-            fatal!("SLIME_GRAPH FAIL quota rejected task={}: {error:?}", id.0)
+        if let Err(error) =
+            buffers.declare_quota(HolderId(u64::from(launched_instance.task.0)), quota)
+        {
+            fatal!(
+                "SLIME_GRAPH FAIL quota rejected task={}: {error:?}",
+                launched_instance.task.0
+            )
         }
-        sel4::debug_println!(
-            "SLIME_GRAPH quota task={} component={} pages={} buffers={} mappings={} loans={}",
-            id.0,
-            record.name,
-            quota.byte_pages,
-            quota.buffer_count,
-            quota.mapping_count,
-            quota.loan_count,
-        );
     }
     sel4::debug_println!(
         "SLIME_GRAPH quotas declared={} budgeted={budgeted} holders={}",
-        launched_components.len(),
+        launched_instances.len(),
         budget.as_ref().map_or(0, SharedBufferBudget::holder_count),
     );
-
-    serve_component_graph(
+    serve_instance_graph(
         generation,
-        &launched_components,
+        &mut launched_instances,
         service_endpoint,
         &mut tasks,
         &mut windows,
@@ -2674,28 +2536,9 @@ fn launch_component_graph(
         allocator,
         scratch,
         block_devices,
+        #[cfg(slime_boot_selector)]
+        boot_runtime,
     );
-}
-
-/// Decode the generation's boot-layout resource, if it carries one.
-///
-/// The layout is what numbers the bootstrap component's capability slots, and
-/// `init.rs` compiles against constants generated from the same table, so the
-/// slot a component addresses and the slot the root fills are one number. A
-/// generation without the resource is not an error here — only a graph whose
-/// bootstrap component holds a declared channel needs it, and
-/// `channel::materialize` reports that case as `UnlaidSlot` rather than
-/// guessing a number.
-///
-/// A malformed resource *is* an error, but it is not this function's to raise:
-/// returning `None` lets a graph that never consults the layout boot, and one
-/// that does fails at the point of use with the channel it could not place.
-fn boot_layout_resource<'a>(generation: &Generation<'a>) -> Option<BootLayout<'a>> {
-    (0..generation.object_count())
-        .filter_map(|index| generation.object(index).ok())
-        .filter(|object| object.kind == KIND_RESOURCE)
-        .find_map(|object| BootLayout::decode(object.bytes).ok())
-        .filter(|layout| layout.generation_number() == generation.number)
 }
 
 /// Decode the generation's shared-buffer budget resource, if it carries one.
@@ -2766,12 +2609,6 @@ fn declared_quota(budget: Option<&SharedBufferBudget<'_>>, component: &str) -> H
 /// as B28 and mistaken in turn for a lost wake, a scheduler fault, and an
 /// always-ready park source before the cause turned out to be this constant.
 /// Measured directly: **768 completes, 512 does not.** 2048 is that floor with
-/// room for a denser graph, and the wedge detector below still bounds a real
-/// livelock to seconds.
-///
-/// A graph that reached the bound would drain incompletely and fail its gate on
-/// a missing terminal marker, which is the wedge this exists to catch.
-///
 /// Raised for P5.4.3's dango plane, which is the densest composition
 /// this port runs: a scripted console session is one round trip *per keystroke*
 /// — 96 bytes of script — on top of four components' startup, every command's
@@ -2786,9 +2623,9 @@ const MAX_GRAPH_ITERATIONS: usize = 32768;
 /// not mediate returns its ordinary Slime error rather than faulting the caller,
 /// which is P5.2's third required check.
 #[allow(clippy::too_many_arguments)]
-fn serve_component_graph(
+fn serve_instance_graph(
     generation: &Generation<'_>,
-    launched: &LaunchedComponents,
+    launched: &mut LaunchedInstances,
     endpoint: sel4::cap::Endpoint,
     tasks: &mut TaskTable<MAX_TASKS>,
     windows: &mut WindowTable<MAX_TASKS>,
@@ -2801,7 +2638,14 @@ fn serve_component_graph(
     // every machine without a disk — a `BlockTransact` then answers a bounded
     // refusal — and up to `MAX_BLOCK_DEVICES` when M6.7's two are present.
     block_devices: &mut BlockDevices,
+    #[cfg(slime_boot_selector)] boot_runtime: &mut boot_selector::BootRuntime,
 ) {
+    sel4::debug_println!(
+        "SLIME_ROOT allocator baseline live_slots={} live_objects={} live_bytes={}",
+        allocator.live_slots(),
+        allocator.live_objects(),
+        allocator.live_bytes(),
+    );
     // The shared filesystem namespaces (M6.3). Local to the serve loop, like
     // every other table here: nothing outlives the graph it belongs to.
     let mut namespaces = Namespaces::new();
@@ -2843,6 +2687,15 @@ fn serve_component_graph(
     // neither; see `transit.rs`.
     let mut transit = Transit::new();
     let mut iterations = 0;
+    let required = (0..generation.instance_count())
+        .filter(|index| {
+            generation.instance(*index).is_ok_and(|instance| {
+                instance.autostart && instance.health == InstanceHealth::Required
+            })
+        })
+        .count();
+    let mut completed_required = [false; generation::MAX_ADMITTED_INSTANCES];
+    let mut healthy_emitted = false;
     for _ in 0..MAX_GRAPH_ITERATIONS {
         iterations += 1;
         if live == 0 {
@@ -2859,6 +2712,12 @@ fn serve_component_graph(
                     parked.len(),
                 )
             }
+            sel4::debug_println!(
+                "SLIME_ROOT allocator quiescent live_slots={} live_objects={} live_bytes={}",
+                allocator.live_slots(),
+                allocator.live_objects(),
+                allocator.live_bytes(),
+            );
             break;
         }
         // Through `recv_request` rather than a hand-rolled register read, so the
@@ -2880,15 +2739,12 @@ fn serve_component_graph(
             continue;
         }
         if arrival == Arrival::Fault {
-            // A fault the root cannot decode is still a fault: the thread is
-            // stopped in the kernel and will never run again. Continuing without
-            // tearing it down would leave `live` counting a task that can never
-            // exit, so the loop would spin to its iteration bound and the graph
-            // would look wedged rather than faulted.
-            // The reason code a supervising parent will read back. Only the
-            // kind, never the address: an address is the child's memory layout,
-            // and a parent is owed the fact of the fault rather than a map of
-            // where it happened.
+            if let Some(instance_index) = tasks.get(id).and_then(|task| task.instance)
+                && let Ok(instance) = generation.instance(instance_index)
+                && instance.health == InstanceHealth::Required
+            {
+                fatal!("SLIME_GRAPH FAIL required instance {} fault", instance.name)
+            }
             let reason = match fault::decode_fault(&info) {
                 Ok(detail) => {
                     sel4::debug_println!(
@@ -2904,9 +2760,6 @@ fn serve_component_graph(
                         "SLIME_GRAPH fault undecodable task={} error={error:?}",
                         id.0
                     );
-                    // An undecodable fault is still a fault, and a parent
-                    // waiting on this child is owed an answer rather than an
-                    // eternal `WouldBlock`.
                     u64::MAX
                 }
             };
@@ -2921,11 +2774,6 @@ fn serve_component_graph(
             if let Some(task) = tasks.get(id) {
                 let _ = task.suspend();
             }
-            // A faulted task is as dead as an exited one to everything holding a
-            // channel to it, and its authority and window are as reclaimable.
-            // The two paths do the same teardown for the same reason: a peer
-            // blocked on a crashed producer would otherwise wait forever, and a
-            // table left behind would misreport the terminal marker.
             reclaim_dead_task(
                 channels,
                 &mut parked,
@@ -2939,7 +2787,7 @@ fn serve_component_graph(
             );
             graph.release(id);
             windows.release(id);
-            reclaim_task_objects(tasks, &mut reclaimed_slots, id);
+            reclaim_task_objects(launched, tasks, allocator, &mut reclaimed_slots, id);
             live -= 1;
             continue;
         }
@@ -3073,6 +2921,25 @@ fn serve_component_graph(
             Operation::Exit => {
                 let status = words[0] as i64;
                 sel4::debug_println!("SLIME_GRAPH component exit task={} status={status}", id.0);
+                if status != 0
+                    && let Some(instance_index) = tasks.get(id).and_then(|task| task.instance)
+                    && let Ok(instance) = generation.instance(instance_index)
+                    && instance.health == InstanceHealth::Required
+                {
+                    fatal!(
+                        "SLIME_GRAPH FAIL required instance {} exit status={status}",
+                        instance.name
+                    )
+                }
+                if status == 0
+                    && let Some(instance_index) = tasks.get(id).and_then(|task| task.instance)
+                    && generation
+                        .instance(instance_index)
+                        .is_ok_and(|instance| instance.health == InstanceHealth::Required)
+                    && let Some(completed) = completed_required.get_mut(instance_index)
+                {
+                    *completed = true;
+                }
                 // Recorded before the reclamation that erases everything else
                 // about this task, and before the parked-supervision wake
                 // below, so a parent woken by this death finds the outcome
@@ -3101,7 +2968,7 @@ fn serve_component_graph(
                 );
                 graph.release(id);
                 windows.release(id);
-                reclaim_task_objects(tasks, &mut reclaimed_slots, id);
+                reclaim_task_objects(launched, tasks, allocator, &mut reclaimed_slots, id);
                 live -= 1;
             }
             // Spawn the executable a declared grant named. The slot resolves
@@ -3603,28 +3470,56 @@ fn serve_component_graph(
                     }
                 }
             }
-            // Every other label resolves to a bounded answer, but the two
-            // reasons an operation goes unanswered are kept apart.
-            //
-            // `unmediated_response()` returning `Some` means the plane has no
-            // seL4 mechanism owner in this cutover — storage, directory, input,
-            // generation management, recovery. That is the designed answer, and
-            // it is P5.2's third required check: the caller gets an ordinary
-            // Slime error and keeps running.
-            //
-            // `None` means the operation *is* root-mediated and this dispatcher
-            // simply has no handler for it yet. Collapsing the two would report
-            // a gap in this slice as a property of the cutover, so it is
-            // counted and named separately. Two `RootService` operations still
-            // land here — `HealthConfirm` and `Unhealthy` — so this is a live
-            // description rather than a standing guard. Both are the health
-            // plane, which no seL4 milestone has opened. `CapTransfer` left
-            // this list in P5.5.1 and has a handler above.
-            //
-            // No component in any declared seL4 graph invokes one, which is why
-            // every gate observes `unimplemented=0` — that zero is a fact about
-            // these fixtures, not about the dispatcher, and reading it as
-            // "every operation has a handler" would be reading it backwards.
+            #[cfg(slime_boot_selector)]
+            Operation::HealthConfirm => {
+                let authorized = launched.instance_for_task(id).is_some_and(|index| {
+                    generation.instance(index).is_ok_and(|instance| {
+                        instance.autostart && instance.health == InstanceHealth::Required
+                    })
+                });
+                let response = if !authorized {
+                    Response::error(IpcError::BadCapability)
+                } else {
+                    match block_devices
+                        .get_mut(0)
+                        .ok_or(boot_selector::SelectorError::NoBootDevice)
+                        .and_then(|device| boot_runtime.confirm(device))
+                    {
+                        Ok(()) => {
+                            sel4::debug_println!("SLIME_BOOT promoted");
+                            Response::success(0, 0)
+                        }
+                        Err(error) => {
+                            sel4::debug_println!("SLIME_BOOT promotion refused error={error:?}");
+                            Response::error(IpcError::InvalidOperation)
+                        }
+                    }
+                };
+                ipc::reply(response);
+            }
+            #[cfg(slime_boot_selector)]
+            Operation::Unhealthy => {
+                let authorized = launched.instance_for_task(id).is_some_and(|index| {
+                    generation
+                        .instance(index)
+                        .is_ok_and(|instance| instance.health == InstanceHealth::Required)
+                });
+                let response = if !authorized {
+                    Response::error(IpcError::BadCapability)
+                } else {
+                    match boot_runtime.mark_unhealthy() {
+                        Ok(()) => {
+                            sel4::debug_println!("SLIME_BOOT unhealthy");
+                            Response::success(0, 0)
+                        }
+                        Err(error) => {
+                            sel4::debug_println!("SLIME_BOOT unhealthy refused error={error:?}");
+                            Response::error(IpcError::InvalidOperation)
+                        }
+                    }
+                };
+                ipc::reply(response);
+            }
             other => {
                 let response = match other.unmediated_response() {
                     Some(response) => {
@@ -3649,6 +3544,72 @@ fn serve_component_graph(
                     }
                 };
                 ipc::reply(response);
+            }
+        }
+        if !healthy_emitted && required != 0 {
+            let mut live_required = 0;
+            let mut completed = 0;
+            for instance_index in 0..generation.instance_count() {
+                let Ok(instance) = generation.instance(instance_index) else {
+                    continue;
+                };
+                if !instance.autostart || instance.health != InstanceHealth::Required {
+                    continue;
+                }
+                if completed_required
+                    .get(instance_index)
+                    .copied()
+                    .unwrap_or(false)
+                {
+                    completed += 1;
+                    continue;
+                }
+                if tasks
+                    .tasks()
+                    .find(|task| task.instance == Some(instance_index))
+                    .is_some_and(|task| parked.is_parked(task.id))
+                {
+                    live_required += 1;
+                }
+            }
+            if live_required + completed == required {
+                #[cfg(slime_boot_selector)]
+                if boot_runtime.running_pending() {
+                    let device = block_devices
+                        .get_mut(0)
+                        .unwrap_or_else(|| fatal!("boot promotion has no boot device"));
+                    match boot_runtime.confirm(device) {
+                        Ok(()) => sel4::debug_println!("SLIME_BOOT promoted"),
+                        Err(error) => fatal!("boot promotion rejected: {error:?}"),
+                    }
+                }
+                if required == 1 {
+                    let digest = generation.identity;
+                    sel4::debug_println!(
+                        "SLIME_GRAPH healthy generation={} instances={:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x} required={} live={} idle={} failed=0",
+                        generation.number,
+                        digest[0],
+                        digest[1],
+                        digest[2],
+                        digest[3],
+                        digest[4],
+                        digest[5],
+                        digest[6],
+                        digest[7],
+                        required,
+                        live_required,
+                        live_required,
+                    );
+                } else {
+                    sel4::debug_println!(
+                        "SLIME_GRAPH HEALTHY generation={} required={} live={} completed={} failed=0",
+                        generation.number,
+                        required,
+                        live_required,
+                        completed,
+                    );
+                }
+                healthy_emitted = true;
             }
         }
     }
@@ -3795,6 +3756,14 @@ fn serve_component_graph(
     // broker provisioned a role, so the number distinguishes a graph whose
     // authority was placed from one whose authority was handed on.
     sel4::debug_println!("SLIME_GRAPH transfers served={transfers}");
+    sel4::debug_println!(
+        "SLIME_ROOT allocator live_slots={} live_objects={} live_bytes={} slot_reuses={} arena_reuses={}",
+        allocator.live_slots(),
+        allocator.live_objects(),
+        allocator.live_bytes(),
+        allocator.slots_reused(),
+        allocator.arena_reuses(),
+    );
 }
 
 /// Whether this operation may end with the caller parked, and so needs its
@@ -4397,12 +4366,12 @@ struct SpawnGrant {
 /// the same one `serve_buffer_create` learned the hard way — a failure after
 /// allocation is a leak unless every step before it was checked.
 struct SpawnPlan {
-    /// The generation component index of the executable to construct.
-    component: usize,
-    /// Derived capabilities, in the order the child's slots take them, paired
-    /// with the parent slot they were copied from for diagnostics and grant
-    /// validation. Spawn never consumes the parent slot.
-    granted: [Option<(u32, graph::Capability)>; MAX_SPAWN_GRANTS],
+    /// The generation executable index and declared instance to construct.
+    executable: usize,
+    instance: usize,
+    /// Derived capabilities paired with their caller source slot and explicit
+    /// child-local destination slot. Spawn never consumes the parent slot.
+    granted: [Option<(u32, u32, graph::Capability)>; MAX_SPAWN_GRANTS],
     count: usize,
     /// Whether the executable capability carried `RIGHT_TRANSFER`, which is
     /// what decides if the supervision handle the parent receives may itself be
@@ -4420,57 +4389,10 @@ struct SpawnPlan {
 /// it would make the fixture record noise rather than shape.
 fn resource_label<'a>(generation: &Generation<'a>, resource: &graph::Resource) -> &'a str {
     match resource {
-        graph::Resource::Executable { component } => generation
-            .component(*component)
+        graph::Resource::Executable { executable } => generation
+            .executable(*executable)
             .map_or("?", |record| record.name),
         _ => "-",
-    }
-}
-
-/// The rights the boot layout *declares* for the entry this capability came
-/// from, when the layout names one (B26).
-///
-/// Distinct from the rights the capability carries: those come from the
-/// generation grant, and the two are related by containment rather than
-/// equality — see `channel::bootstrap_slot`. Only the bootstrap component's
-/// table is numbered by a layout at all, which is the only table this is called
-/// for.
-///
-/// `None` when the layout names no entry for this resource: a factory role the
-/// layout omits, a channel init minted at runtime rather than one the layout
-/// placed, or no layout resource in the generation. Absent is not a
-/// disagreement, so the caller prints the oracle's four-field line unchanged.
-fn declared_layout_rights(
-    layout: Option<&boot_contracts::boot_layout::BootLayout<'_>>,
-    resource: &graph::Resource,
-    label: &str,
-) -> Option<u64> {
-    use boot_contracts::boot_layout::Role;
-
-    let layout = layout?;
-    let entries = || (0..layout.entry_count()).filter_map(|index| layout.entry(index));
-    match resource {
-        // Named by identity, exactly as `bootstrap_executable_slot` resolves it.
-        graph::Resource::Executable { .. } => {
-            let identity = boot_contracts::boot_layout::component_identity(label);
-            entries()
-                .find(|entry| entry.role == Role::Executable && entry.name_identity == identity)
-                .map(|entry| entry.rights)
-        }
-        // Singular roles carry no name, so they resolve by role — the rule
-        // `bootstrap_role_slot` follows.
-        graph::Resource::EndpointFactory => entries()
-            .find(|entry| entry.role == Role::EndpointFactory)
-            .map(|entry| entry.rights),
-        graph::Resource::SharedBufferFactory => entries()
-            .find(|entry| entry.role == Role::SharedBufferFactory)
-            .map(|entry| entry.rights),
-        // A channel end is named by its *grant*, which this dump does not carry
-        // — `resource_label` reports `-` for it, because one capability can be
-        // reached by more than one grant name. Reporting a declared value here
-        // would require picking one, so the row keeps the four-field shape and
-        // the endpoint half of B26 stays open.
-        _ => None,
     }
 }
 
@@ -4506,25 +4428,22 @@ const fn valid_rights(resource: &graph::Resource) -> u64 {
     }
 }
 
-/// Decode and validate a spawn's grant list against the caller's own table.
+/// Decode and validate a spawn against its declared child instance.
 ///
-/// Every rule here is `preflight_spawn_grant`'s, restated against this crate's
-/// table type:
+/// The executable capability chooses an executable catalogue entry, but it is
+/// not itself an instance declaration. The caller's declared instance and that
+/// executable must name exactly one child instance through `owner`. That child
+/// fixes both the complete grant set and every child-local slot. Request order
+/// therefore cannot change layout: records correspond to the child's canonical
+/// binding slice, and each capability is installed at `binding.slot`.
 ///
-/// - the executable slot must resolve to an `Executable` carrying both
-///   `RIGHT_EXEC` and `RIGHT_SPAWN` — holding an image is not authority to run
-///   it;
-/// - a grant naming the executable slot itself, or naming a slot another grant
-///   in the same list already named, is refused. A duplicate would make the
-///   child's slot numbering depend on how the list was written;
-/// - a grant is a **narrowing** copy: its rights must be a subset of what the
-///   caller holds at that slot, so a parent cannot manufacture authority it was
-///   never granted by asking for more of it on its child's behalf.
-///
-/// The copy is non-consuming — the caller keeps its own capability — which is
-/// what lets `init` hand one channel half to each of two children and keep
-/// neither.
+/// Each requested capability remains a narrowing copy of authority the caller
+/// holds. In addition, its rights must be covered by the grant named by the
+/// corresponding child binding. Missing, extra, duplicate, or unrelated grant
+/// records refuse the whole spawn before allocation.
 fn preflight_spawn_grants(
+    generation: &Generation<'_>,
+    caller_instance: usize,
     table: &graph::CapabilityTable,
     executable_slot: u32,
     records: &[u8],
@@ -4532,18 +4451,40 @@ fn preflight_spawn_grants(
     let Some(executable) = table.get(executable_slot) else {
         return Err(IpcError::BadCapability);
     };
-    let graph::Resource::Executable { component } = executable.resource else {
+    let graph::Resource::Executable {
+        executable: executable_index,
+    } = executable.resource
+    else {
         return Err(IpcError::BadCapability);
     };
     if !executable.allows(RIGHT_EXEC | RIGHT_SPAWN) {
         return Err(IpcError::BadCapability);
     }
+    let mut child_instance = None;
+    for index in 0..generation.instance_count() {
+        let instance = generation
+            .instance(index)
+            .map_err(|_| IpcError::BadCapability)?;
+        if instance.owner == InstanceOwner::Instance(caller_instance)
+            && instance.executable == executable_index
+            && child_instance.replace(index).is_some()
+        {
+            return Err(IpcError::BadCapability);
+        }
+    }
+    let child_instance = child_instance.ok_or(IpcError::BadCapability)?;
+    let child = generation
+        .instance(child_instance)
+        .map_err(|_| IpcError::BadCapability)?;
     if !records.len().is_multiple_of(SPAWN_GRANT_RECORD_BYTES) {
         return Err(IpcError::InvalidLength);
     }
     let count = records.len() / SPAWN_GRANT_RECORD_BYTES;
     if count > MAX_SPAWN_GRANTS {
         return Err(IpcError::InvalidLength);
+    }
+    if count != child.binding_count() {
+        return Err(IpcError::BadCapability);
     }
 
     let mut requested = [None; MAX_SPAWN_GRANTS];
@@ -4567,49 +4508,79 @@ fn preflight_spawn_grants(
 
     let mut granted = [None; MAX_SPAWN_GRANTS];
     for index in 0..count {
-        let grant = requested[index].ok_or(IpcError::InvalidLength)?;
-        // The executable slot is not grantable to the child: it is the
-        // authority to *create* this child, and passing it on would let the
-        // child re-spawn its own image outside its parent's budget.
-        if grant.slot == executable_slot {
+        let request = requested[index].ok_or(IpcError::InvalidLength)?;
+        if request.slot == executable_slot {
             return Err(IpcError::BadCapability);
         }
         if requested[..index]
             .iter()
             .flatten()
-            .any(|seen| seen.slot == grant.slot)
+            .any(|seen| seen.slot == request.slot)
         {
             return Err(IpcError::BadCapability);
         }
-        let Some(held) = table.get(grant.slot) else {
+        let binding = generation
+            .binding(child, index)
+            .map_err(|_| IpcError::BadCapability)?;
+        let declared = generation
+            .grant(binding.grant)
+            .map_err(|_| IpcError::BadCapability)?;
+        let owner_bound = generation
+            .instance(caller_instance)
+            .map_err(|_| IpcError::BadCapability)?;
+        if !(0..owner_bound.binding_count()).any(|owner_binding| {
+            generation
+                .binding(owner_bound, owner_binding)
+                .is_ok_and(|candidate| candidate.grant == binding.grant)
+        }) {
+            sel4::debug_println!(
+                "SLIME_GRAPH spawn preflight binding={} index={index} reason=owner-missing",
+                declared.name,
+            );
+            return Err(IpcError::BadCapability);
+        }
+        if request.rights & !declared.rights != 0 {
+            sel4::debug_println!(
+                "SLIME_GRAPH spawn preflight binding={} index={index} reason=declared-rights requested={:#x} declared={:#x}",
+                declared.name,
+                request.rights,
+                declared.rights,
+            );
+            return Err(IpcError::BadCapability);
+        }
+        let Some(held) = table.get(request.slot) else {
+            sel4::debug_println!(
+                "SLIME_GRAPH spawn preflight binding={} index={index} reason=source-empty slot={}",
+                declared.name,
+                request.slot,
+            );
             return Err(IpcError::BadCapability);
         };
-        // Narrowing only. `allows` is the same containment test `resolve` uses,
-        // read in the other direction: the caller must hold every right it is
-        // handing on.
-        if !held.allows(grant.rights) {
+        if !held.allows(request.rights) || request.rights & !valid_rights(&held.resource) != 0 {
+            sel4::debug_println!(
+                "SLIME_GRAPH spawn preflight binding={} index={index} reason=held-rights slot={} requested={:#x} held={:#x} valid={:#x}",
+                declared.name,
+                request.slot,
+                request.rights,
+                held.rights,
+                valid_rights(&held.resource),
+            );
             return Err(IpcError::BadCapability);
         }
-        // And meaningful for the kind. The oracle enforces this at insert
-        // (`CapabilityTable::insert` rejects `rights & !object.valid_rights()`),
-        // so a supervision handle carrying `RIGHT_SEND` is refused there and
-        // must be here. It grants nothing on its own — the rights are still a
-        // subset of the parent's — but a capability whose bits do not describe
-        // its object is a table this root cannot reason about.
-        if grant.rights & !valid_rights(&held.resource) != 0 {
-            return Err(IpcError::BadCapability);
-        }
+        let destination = u32::try_from(binding.slot).map_err(|_| IpcError::BadCapability)?;
         granted[index] = Some((
-            grant.slot,
+            request.slot,
+            destination,
             graph::Capability {
                 resource: held.resource,
-                rights: grant.rights,
+                rights: request.rights,
             },
         ));
     }
 
     Ok(SpawnPlan {
-        component,
+        executable: executable_index,
+        instance: child_instance,
         granted,
         count,
         transferable_supervision: executable.allows(RIGHT_TRANSFER),
@@ -4623,12 +4594,9 @@ fn preflight_spawn_grants(
 /// allocated until every check has passed, and the two failure points that
 /// remain after allocation each tear down what they made.
 ///
-/// The child's slot numbering is `0..count` in the parent's declared order.
-/// That is the retired kernel's numbering exactly — `spawn_with_caps_for`
-/// inserts each derived capability into a fresh table, and
-/// `CapabilityTable::insert` takes the lowest free slot — which is why
-/// `console.rs`'s slot 0, `spawn-service.rs::RPC_SLOT`, and
-/// `launch_context::CONTEXT_SLOT` are all 0: they are each their component's
+/// The child's slot numbering comes only from its declared instance bindings.
+/// Request order is merely the canonical binding-slice traversal used to pair
+/// caller capabilities with declarations; it never becomes a destination slot.
 /// first spawn grant.
 #[allow(clippy::too_many_arguments)]
 fn construct_child(
@@ -4644,35 +4612,25 @@ fn construct_child(
     plan: &SpawnPlan,
 ) -> Result<TaskId, IpcError> {
     let record = generation
-        .component(plan.component)
+        .executable(plan.executable)
+        .map_err(|_| IpcError::BadCapability)?;
+    let instance = generation
+        .instance(plan.instance)
         .map_err(|_| IpcError::BadCapability)?;
     let object = generation
         .object(record.object)
         .map_err(|_| IpcError::BadCapability)?;
     let profile = boot_contracts::target_profile::TargetProfile::by_name(TARGET_PROFILE)
         .map_err(|_| IpcError::BadCapability)?;
-    // Target admission at the point of use, exactly as the boot loader does it:
-    // the ELF cannot be reached without passing it, so a wrong-target payload
-    // is refused before any frame is mapped rather than by a check a caller
-    // could skip.
     let elf = boot_contracts::component_image::admit_elf(object.bytes, profile)
         .map_err(|_| IpcError::BadCapability)?;
 
     // SAFETY: the root task is single-threaded and this is the only reference
-    // taken to `ELF_SCRATCH`. It is released before this function returns, and
-    // the service loop takes no other reference to it.
+    // taken to `ELF_SCRATCH`. It is released before this function returns.
     let aligned = unsafe { &mut *ptr::addr_of_mut!(ELF_SCRATCH) };
     let elf = aligned.hold(elf).map_err(|_| IpcError::InvalidLength)?;
     let image = ChildImage::parse(elf).map_err(|_| IpcError::BadCapability)?;
-
-    // The child's authority is its generation's, not its parent's: the endpoint
-    // rights the root mints into the child's CSpace come from the grants that
-    // name it as target. A parent cannot widen them by asking, because this
-    // reads the generation rather than the request.
-    let authority = inbound_authority(generation, plan.component).map_err(|_| {
-        // A component the generation does not describe cannot be constructed.
-        IpcError::BadCapability
-    })?;
+    let authority = bound_authority(generation, instance).map_err(|_| IpcError::BadCapability)?;
 
     let id = tasks
         .create(
@@ -4685,22 +4643,13 @@ fn construct_child(
             scratch,
             sel4::init_thread::slot::ASID_POOL.cap(),
             Some(parent),
-            Some(plan.component),
+            Some(plan.executable),
+            Some(plan.instance),
         )
         .map_err(|_| IpcError::DestinationSlotsExhausted)?;
 
-    // From here on a failure must tear the task back down: its frames, CNode,
-    // and TCB are already allocated, so an early return without this leaks a
-    // whole task — the leak shape `serve_buffer_create` had.
-    //
-    // `MAX_GRAPH_TASKS` used to be 16 against `MAX_TASKS`'s 32, which made this
-    // table exhaustible *before* the task table and so made that unwind
-    // reachable by ordinary graph growth rather than only by a real failure.
-    // P5.5.2 raised it to `MAX_TASKS`, so there is now one ceiling on how many
-    // tasks a graph may hold, and reaching it refuses at the task table where
-    // nothing has been allocated yet.
     let Some(task) = tasks.get(id) else {
-        release_child(tasks, windows, graph, buffers, id);
+        release_child(tasks, windows, graph, buffers, allocator, id);
         return Err(IpcError::DestinationSlotsExhausted);
     };
     let (window_addr, window, window_alias) = (
@@ -4712,35 +4661,22 @@ fn construct_child(
         .declare(id, window_addr, window, window_alias)
         .is_err()
     {
-        release_child(tasks, windows, graph, buffers, id);
+        release_child(tasks, windows, graph, buffers, allocator, id);
         return Err(IpcError::DestinationSlotsExhausted);
     }
-    // The child's shared-buffer ceiling, from the generation's budget and keyed
-    // by the component *name* — the same derivation `launch_component_graph`
-    // uses for a root-launched task, and the same one
-    // `scripts/build/build-generation.py::holder_identity` writes into the
-    // budget.
-    //
-    // Without this a spawned child holds `HolderQuota::DENY`, because absent
-    // holders deny by default, and its first `shared_buffer_create` fails. That
-    // is not a bound the generation declared: the budget names a *component*,
-    // and whether that component's task was launched by the root or spawned by
-    // a parent is not something the manifest says or should have to.
-    //
-    // A quota that cannot be declared is fatal to the spawn rather than to the
-    // boot, because the parent is owed a bounded error and the rest of the
-    // graph is still running.
-    let quota = declared_quota(shared_buffer_budget(generation).as_ref(), record.name);
+
+    let quota = declared_quota(shared_buffer_budget(generation).as_ref(), instance.name);
     if buffers
         .declare_quota(HolderId(u64::from(id.0)), quota)
         .is_err()
     {
-        release_child(tasks, windows, graph, buffers, id);
+        release_child(tasks, windows, graph, buffers, allocator, id);
         return Err(IpcError::DestinationSlotsExhausted);
     }
     sel4::debug_println!(
-        "SLIME_GRAPH quota task={} component={} pages={} buffers={} mappings={} loans={}",
+        "SLIME_GRAPH quota task={} instance={} executable={} pages={} buffers={} mappings={} loans={}",
         id.0,
+        instance.name,
         record.name,
         quota.byte_pages,
         quota.buffer_count,
@@ -4748,149 +4684,25 @@ fn construct_child(
         quota.loan_count,
     );
     let Ok(child_table) = graph.create(id) else {
-        release_child(tasks, windows, graph, buffers, id);
+        release_child(tasks, windows, graph, buffers, allocator, id);
         return Err(IpcError::DestinationSlotsExhausted);
     };
-    for (slot, granted) in plan.granted.iter().take(plan.count).enumerate() {
-        let Some((_, capability)) = granted else {
+    for granted in plan.granted.iter().take(plan.count) {
+        let Some((_, destination, capability)) = granted else {
             continue;
         };
-        if child_table.install(slot as u32, *capability).is_err() {
-            release_child(tasks, windows, graph, buffers, id);
+        // Declared channel bindings are installed from ChannelTable's single
+        // pre-created generation edge after construction. The request record
+        // still validates the parent's held authority in preflight, but copying
+        // that parent end here would both install the wrong side and collide
+        // with the child's explicit binding slot.
+        if matches!(capability.resource, graph::Resource::Endpoint { .. }) {
+            continue;
+        }
+        if child_table.install(*destination, *capability).is_err() {
+            release_child(tasks, windows, graph, buffers, allocator, id);
             return Err(IpcError::DestinationSlotsExhausted);
         }
-        // The distribution step, per endpoint grant. The child names the end at
-        // *its own* slot, fixed by the order of the parent's grant list, and the
-        // parent keeps its slot because since B25 this is a copy. A root that
-        // admitted a wide grant array but installed a prefix of it reaches the
-        // aggregate `spawned` marker and is only caught here.
-        if let graph::Resource::Endpoint { channel, side } = capability.resource {
-            sel4::debug_println!(
-                "SLIME_GRAPH channel copied parent={} child={} key={channel} side={} slot={slot}",
-                parent.0,
-                id.0,
-                side.name(),
-            );
-        }
-    }
-    // The child's *own* declared authority, above the parent's grants
-    // (P5.4.2c).
-    //
-    // A spawned child received only what its parent handed it. That was
-    // invisible while every declared non-channel authority went to components
-    // the root launches — a factory grant names its holder, and the root-launched
-    // instance got it. The storage plane is the first composition where the
-    // spawned instance is the subject: both copies of the component are declared
-    // the same block capability, and only the launched one had it.
-    //
-    // Placed above the grant list rather than at a layout slot, on the same rule
-    // `launch_component_graph` follows for a non-bootstrap component: a boot
-    // layout numbers the bootstrap component's table, and everyone else is
-    // numbered from a cursor. Here the cursor starts past the parent's grants,
-    // which is what makes the two numberings composable.
-    let mut next = plan.count as u32;
-    // The child's declared *executables*, first and in generation order
-    // (P5.4.3).
-    //
-    // A spawned child received its parent's grants and its declared factories,
-    // but never the executables the generation declared it may spawn. A spawned
-    // `spawn-service` found its two empty and refused every request with
-    // `slot=1 ungranted` — the same defect class as P5.4.2c's missing declared
-    // authority, in the one kind that slice did not cover.
-    //
-    // Placed *above* the parent's grant list rather than at `1..=n`, which is
-    // where `launch_component_graph` puts them. The two differ, and the
-    // difference is forced: a spawn grant list starts at 0 because every
-    // component compiles against that, so executables cannot also start at 1
-    // without renumbering every plane. What makes it work is that a component
-    // holding both is spawned with a *fixed* grant list, so `plan.count` is a
-    // constant its constants can be written against —
-    // `spawn-service.rs` names slots 1 and 2 with exactly one channel grant
-    // ahead of them.
-    for index in 0..generation.grant_count() {
-        let Ok(grant) = generation.grant(index) else {
-            continue;
-        };
-        // `source` holds the executable, `target` names it — the grant reads
-        // "this component may spawn that one".
-        if grant.source != plan.component || grant.rights & RIGHT_EXEC == 0 {
-            continue;
-        }
-        let capability = graph::Capability {
-            resource: graph::Resource::Executable {
-                component: grant.target,
-            },
-            rights: grant.rights,
-        };
-        if child_table.install(next, capability).is_err() {
-            release_child(tasks, windows, graph, buffers, id);
-            return Err(IpcError::DestinationSlotsExhausted);
-        }
-        sel4::debug_println!(
-            "SLIME_GRAPH declared executable task={} child={} slot={next}",
-            parent.0,
-            id.0,
-        );
-        next += 1;
-    }
-    // Successive block grants name successive devices (B29, M6.7).
-    let mut block_index = 0u8;
-    // The child's declared non-executable authority, in **manifest grant
-    // order** (P5.4.3).
-    //
-    // Not a fixed kind order. A component's slot layout is the order its
-    // generation declares the grants, which is what the oracle does and what
-    // lets two components disagree about kinds without either being wrong:
-    // `powerbox-chooser.rs` reads a directory then input, `dango.rs` reads
-    // input then a cwd root, and each generation declares them accordingly.
-    //
-    // A fixed order here cost three separate boot failures before this — one
-    // per component that held more than one kind — each found by booting rather
-    // than by a check.
-    for index in 0..generation.grant_count() {
-        let Ok(grant) = generation.grant(index) else {
-            continue;
-        };
-        if grant.target != plan.component {
-            continue;
-        }
-        let Some((right, resource)) = declared_resource(grant.rights) else {
-            continue;
-        };
-        // As the boot path: this grant's rights, not the component's union.
-        let granted = grant.rights & right;
-        if granted & !RIGHT_TRANSFER == 0 {
-            continue;
-        }
-        // As the boot path: successive block grants name successive devices.
-        let resource = match resource {
-            graph::Resource::Block { .. } => {
-                let device = block_index;
-                block_index += 1;
-                graph::Resource::Block { device }
-            }
-            other => other,
-        };
-        if child_table
-            .install(
-                next,
-                graph::Capability {
-                    resource,
-                    rights: granted,
-                },
-            )
-            .is_err()
-        {
-            release_child(tasks, windows, graph, buffers, id);
-            return Err(IpcError::DestinationSlotsExhausted);
-        }
-        sel4::debug_println!(
-            "SLIME_GRAPH declared placed task={} child={} slot={next} kind={}",
-            parent.0,
-            id.0,
-            resource.kind(),
-        );
-        next += 1;
     }
     Ok(id)
 }
@@ -4934,16 +4746,18 @@ fn release_child(
     windows: &mut WindowTable<MAX_TASKS>,
     graph: &mut GraphTables,
     buffers: &mut SharedBufferTable,
+    allocator: &mut ObjectAllocator,
     id: TaskId,
 ) {
     graph.release(id);
     windows.release(id);
     buffers.release_quota(HolderId(u64::from(id.0)));
-    match tasks.reclaim(id) {
+    match tasks.reclaim(allocator, id) {
         Ok(cleanup) => sel4::debug_println!(
-            "SLIME_GRAPH spawn unwound task={} slots={}",
+            "SLIME_GRAPH spawn unwound task={} slots={} arena={}",
             id.0,
             cleanup.slot_count(),
+            cleanup.arena.index(),
         ),
         Err(error) => sel4::debug_println!(
             "SLIME_GRAPH spawn unwind incomplete task={} error={error:?}",
@@ -4960,25 +4774,14 @@ fn release_child(
 /// manifest gives no budget spawns nothing.
 fn spawner_budget(
     generation: &Generation<'_>,
-    launched: &LaunchedComponents,
+    _launched: &LaunchedInstances,
     tasks: &TaskTable<MAX_TASKS>,
     task: TaskId,
 ) -> usize {
-    // The component this task was built from, whether the root launched it or a
-    // parent spawned it. `LaunchedComponents` holds only the former, so
-    // resolving through it alone would give every *spawned* component a budget
-    // of zero — a service that declares `spawnBudget = 2` and is itself spawned
-    // could then never start a child, which is not what its manifest says.
     tasks
         .get(task)
-        .and_then(|task| task.component)
-        .or_else(|| {
-            launched
-                .iter()
-                .find(|(_, id)| *id == task)
-                .map(|(component, _)| component)
-        })
-        .and_then(|component| generation.component(component).ok())
+        .and_then(|task| task.executable)
+        .and_then(|executable| generation.executable(executable).ok())
         .map_or(0, |record| usize::from(record.spawn_budget))
 }
 
@@ -4987,11 +4790,11 @@ fn spawner_budget(
 #[allow(clippy::too_many_arguments)]
 fn serve_spawn(
     generation: &Generation<'_>,
-    launched: &LaunchedComponents,
+    launched: &mut LaunchedInstances,
     tasks: &mut TaskTable<MAX_TASKS>,
     windows: &mut WindowTable<MAX_TASKS>,
     graph: &mut GraphTables,
-    _channels: &mut ChannelTable,
+    channels: &mut ChannelTable,
     buffers: &mut SharedBufferTable,
     allocator: &mut ObjectAllocator,
     scratch: &ScratchPage,
@@ -5020,13 +4823,22 @@ fn serve_spawn(
     let Some(table) = graph.get(id) else {
         return Response::error(IpcError::InvalidOperation);
     };
-    let plan = match preflight_spawn_grants(table, executable_slot, frame.bytes()) {
+    let Some(caller_instance) = tasks.get(id).and_then(|task| task.instance) else {
+        sel4::debug_println!(
+            "SLIME_GRAPH spawn refused task={} slot={executable_slot} undeclared-instance",
+            id.0,
+        );
+        return Response::error(IpcError::BadCapability);
+    };
+    let plan = match preflight_spawn_grants(
+        generation,
+        caller_instance,
+        table,
+        executable_slot,
+        frame.bytes(),
+    ) {
         Ok(plan) => plan,
         Err(error) => {
-            // One marker for every refusal, and deliberately without naming
-            // which rule refused: a parent probing its own table by watching
-            // the reason is exactly what `CapabilityTable::resolve` refuses to
-            // enable, and a spawn is the widest surface for it.
             sel4::debug_println!(
                 "SLIME_GRAPH spawn refused task={} slot={executable_slot} ungranted",
                 id.0,
@@ -5035,19 +4847,16 @@ fn serve_spawn(
         }
     };
     let name = generation
-        .component(plan.component)
+        .instance(plan.instance)
         .map_or("<unknown>", |record| record.name);
-
-    // B14: the caller's own declared live-child budget, checked before anything
-    // is allocated. The generation states how many children a component may
-    // have at once, and without this the only bound is a global task table no
-    // manifest named — authority arriving from a table size rather than from a
-    // declaration, which is the shape B13 had.
-    //
-    // Keyed by the caller's *component*, not its task: the budget is a
-    // statement about the component the generation declared.
-    //
     // `DestinationSlotsExhausted`, whose status is -5 — `ERR_OUT_OF_MEMORY`,
+    if launched.task_for_instance(plan.instance).is_some() {
+        sel4::debug_println!(
+            "SLIME_GRAPH spawn refused task={} child={name} class=instance-live",
+            id.0,
+        );
+        return Response::error(IpcError::BadCapability);
+    }
     // matching `sys_spawn`, which maps `BudgetExhausted` and
     // `TooManyTasks` alike to `ERR_OUT_OF_MEMORY` and everything else to
     // `ERR_BAD_CAP`. That distinction is the caller's business here in a way the
@@ -5094,17 +4903,27 @@ fn serve_spawn(
             return Response::error(error);
         }
     };
+    let installed_channels = match channels.install_instance(
+        generation,
+        plan.instance,
+        child,
+        graph,
+    ) {
+        Ok(installed) => installed,
+        Err(error) => {
+            release_child(tasks, windows, graph, buffers, allocator, child);
+            sel4::debug_println!(
+                "SLIME_GRAPH spawn failed task={} component={name} error=ChannelInstall({error:?})",
+                id.0,
+            );
+            return Response::error(IpcError::BadCapability);
+        }
+    };
 
-    // Endpoint grants need no distribution step: `construct_child` copied the
-    // capability including its side, so parent and child both resolve the same
-    // queue exactly as the x86 oracle's cloned endpoint does.
-    let copied = plan
-        .granted
-        .iter()
-        .take(plan.count)
-        .flatten()
-        .filter(|(_, capability)| matches!(capability.resource, graph::Resource::Endpoint { .. }))
-        .count();
+    // Declared channel ends come exclusively from the pre-created generation
+    // catalogue. Request endpoint records authorize the delegation but do not
+    // copy the parent's complementary side into the child.
+    let copied = installed_channels;
 
     // The parent's handle, installed before the child runs. A child that exited
     // before its parent held a handle would leave the parent waiting on a task
@@ -5131,7 +4950,7 @@ fn serve_spawn(
     let Some(handle) = handle else {
         // The parent's table is full. The copied child table can simply be
         // released; the parent's grants were never consumed.
-        release_child(tasks, windows, graph, buffers, child);
+        release_child(tasks, windows, graph, buffers, allocator, child);
         sel4::debug_println!(
             "SLIME_GRAPH spawn failed task={} component={name} error=NoHandleSlot",
             id.0,
@@ -5143,12 +4962,22 @@ fn serve_spawn(
         if let Some(table) = graph.get_mut(id) {
             table.drop_slot(handle);
         }
-        release_child(tasks, windows, graph, buffers, child);
+        release_child(tasks, windows, graph, buffers, allocator, child);
         sel4::debug_println!(
             "SLIME_GRAPH spawn failed task={} component={name} error=Activate",
             id.0,
         );
         return Response::error(IpcError::DestinationSlotsExhausted);
+    }
+    if launched
+        .record(plan.instance, plan.executable, child)
+        .is_err()
+    {
+        if let Some(table) = graph.get_mut(id) {
+            table.drop_slot(handle);
+        }
+        release_child(tasks, windows, graph, buffers, allocator, child);
+        return Response::error(IpcError::BadCapability);
     }
     *spawns += 1;
     sel4::debug_println!(
@@ -5572,8 +5401,15 @@ fn descriptor_names(object_kind: u32, resource: &graph::Resource) -> bool {
 /// state and the terminal marker's count is what surfaces them, and a graph
 /// whose other components are still running should not be stopped over one
 /// task's cleanup.
-fn reclaim_task_objects(tasks: &mut TaskTable<MAX_TASKS>, reclaimed: &mut usize, id: TaskId) {
-    match tasks.reclaim(id) {
+fn reclaim_task_objects(
+    launched: &mut LaunchedInstances,
+    tasks: &mut TaskTable<MAX_TASKS>,
+    allocator: &mut ObjectAllocator,
+    reclaimed: &mut usize,
+    id: TaskId,
+) {
+    launched.release_by_task(id);
+    match tasks.reclaim(allocator, id) {
         Ok(record) => *reclaimed += record.slot_count(),
         Err(error) => sel4::debug_println!(
             "SLIME_GRAPH task reclaim incomplete task={} error={error:?}",

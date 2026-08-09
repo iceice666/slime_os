@@ -41,149 +41,36 @@ BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
 
 BOOT_TIMEOUT_SECONDS = 120
 
-# Components the `aarch64-sel4-qemu-virt` generation declares, and the number of
-# executables each one's outbound `exec | spawn` grants name. Pinned as a table
-# rather than as a count, because the distinguishing claim of required check 1
-# is *which* component holds *which* authority: `spawn-service` holds exactly
-# the two executables the generation grants it and every other component holds
-# none. A regression that granted everything to everyone would still produce
-# five staged components, so the counts are what make the claim non-vacuous.
-DECLARED_COMPONENTS: tuple[tuple[int, str, int], ...] = (
-    (0, "console", 0),
-    (1, "echo-agent", 0),
-    (2, "init", 0),
-    (3, "spawn-service", 2),
-    (4, "sysinfo", 0),
+# The v4 generation carries five executable catalogue entries and five instance
+# declarations, but root owns and autostarts only init. Init then exercises its
+# explicit executable bindings by spawning console and spawn-service.
+TERMINAL_MARKER = (
+    r"SLIME_GRAPH HEALTHY generation=1 required=3 live=2 completed=1 failed=0"
 )
 
 REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
-    (
-        "generation admitted",
-        r"SLIME_ROOT generation admitted number=\d+ components=5 grants=\d+",
-    ),
+    ("generation admitted", r"SLIME_ROOT generation admitted number=1 executables=5 instances=5 grants=\d+ "),
     ("authority manifest reported", r"SLIME_ROOT authority manifest=\["),
-    (
-        # The inverse of P5.1's assertion. There `slimecm` had to be non-zero to
-        # prove the "not activated" claim was not vacuous; here `elf=5` with
-        # `slimecm=0` proves every payload this generation carries is a native
-        # image, so the components launched below could only have come from
-        # them.
-        "every payload is a native ELF image",
-        r"SLIME_ROOT graph admitted; legacy SLIMECM images not activated "
-        r"components=5 slimecm=0 elf=5 unrecognized=0",
-    ),
-    # -- required check 1: declared components, declared grants --
-    *(
-        (
-            f"{name} staged with its declared grants",
-            rf"SLIME_GRAPH staged task={task} component={name} grants=\d+ "
-            rf"executables={executables} window=0x[0-9a-f]+ "
-            rf"frames=[1-9]\d* tables=[1-9]\d* entry=0x[0-9a-f]+",
-        )
-        for task, name, executables in DECLARED_COMPONENTS
-    ),
-    (
-        "no payload was refused or unrecognized",
-        r"SLIME_GRAPH staged components=5 loadable=5 slimecm=0 "
-        r"wrong_target=0 unrecognized=0",
-    ),
-    ("every component activated", r"SLIME_GRAPH activated components=5"),
-    # -- required check 2: the root answers the surface components invoke --
-    #
-    # The window bind is the load-bearing one: `recv`, `spawn`, and `wait` all
-    # stage through the transfer window and refuse to truncate, so a component
-    # that could not bind one could issue none of them. It is answered against
-    # the mapping the loader actually made, not the caller's word.
-    (
-        "spawn-service bound the window the loader mapped for it",
-        r"SLIME_GRAPH window bound task=3 base=0x237000 len=4096",
-    ),
+    ("all catalogue payloads are native ELF images", r"SLIME_ROOT graph admitted executables=5 instances=5 slimecm=0 elf=5 unrecognized=0"),
+    ("only root-owned init was staged", r"SLIME_GRAPH staged task=0 instance=init executable=init grants=8 bindings=8 window=0x[0-9a-f]+ frames=[1-9]\d* tables=[1-9]\d* entry=0x[0-9a-f]+"),
+    ("the executable catalogue remained available to spawn", r"SLIME_GRAPH staged instances=1 root_autostart=1 loadable_executables=5 slimecm=0 wrong_target=0 unrecognized=0"),
+    ("only init was root-activated", r"SLIME_GRAPH activated instances=1"),
+    ("init bound its transfer window", r"SLIME_GRAPH window bound task=0 base=0x236000 len=4096"),
+    ("init began the declared graph", r"\[init\] launching component graph"),
+    ("init authorized console through its executable binding", r"SLIME_GRAPH spawn authorized task=0 slot=1 component=console grants=1"),
+    ("init spawned console as instance task 1", r"SLIME_GRAPH spawned task=0 child=1 component=console grants=1 channels=1 handle=\d+"),
+    ("init authorized spawn-service through its executable binding", r"SLIME_GRAPH spawn authorized task=0 slot=5 component=spawn-service grants=5"),
+    ("init spawned spawn-service as instance task 2", r"SLIME_GRAPH spawned task=0 child=2 component=spawn-service grants=5 channels=1 handle=\d+"),
+    ("init completed the causal launch", r"\[init\] spawn graph launched"),
+    ("init completed cleanly", r"SLIME_GRAPH component exit task=0 status=0"),
+    ("spawn-service bound its mapped window", r"SLIME_GRAPH window bound task=2 base=0x237000 len=4096"),
     ("spawn-service reached its service loop", r"\[spawn-service\] ready"),
-    (
-        "a real shared region was allocated against the declared quota",
-        r"SLIME_GRAPH buffer created task=3 slot=\d+ id=\d+ pages=1",
-    ),
-    (
-        # spawn-service runs create/map/write/seal/unmap/release at startup and
-        # exits non-zero if any step fails, so this single line is the whole
-        # shared-buffer lifecycle observed end to end through real seL4 frames.
-        "the full shared-buffer lifecycle completed",
-        r"\[spawn-service\] shared-buffer quota live",
-    ),
-    # -- required check 3: an unanswered operation is bounded, not fatal --
-    #
-    # Two distinct reasons an operation goes unanswered, and the root task keeps
-    # them apart rather than reporting both as the same thing:
-    #
-    #   `unsupported`   the plane has no seL4 mechanism owner in this cutover
-    #                   (storage, directory, input, generation management,
-    #                   recovery). This is the designed answer.
-    #   `unimplemented` the operation IS root-mediated and this slice has no
-    #                   handler for it yet.
-    #
-    # Until P5.3.1 this gate asserted at least one `unimplemented` marker,
-    # because `send`, `recv`, and `wait` had no handler and every declared
-    # component reached one. P5.3.1 implemented them, so this boot no longer
-    # emits that line -- the components now get real answers instead of bounded
-    # errors, which is the point of that slice. Asserting the marker still
-    # appears would be asserting that the channel plane is *missing*.
-    #
-    # Relaxing an assertion in the same change that alters the behaviour it
-    # covered is how evidence gets lost, so the property is re-evidenced rather
-    # than dropped. Four things assert it now, and each names a different half:
-    #
-    #   - the `spawn refused` / `spawn failed slot=N error=-4` pair below is a
-    #     *live* bounded refusal on this boot -- an operation the root declines
-    #     and the caller survives, observed rather than argued;
-    #   - `check_operation_surface` asserts the nine unmediated planes are still
-    #     classified `Unavailable`, statically, against `Operation::mediation`;
-    #   - the terminal marker pins `unimplemented=0` exactly, so an operation
-    #     losing its handler fails this gate rather than passing quietly;
-    #   - FAILURE_MARKERS fails on any fault, panic, or abort, which is what
-    #     "bounded rather than fatal" means.
-    ("init ran and drove the graph", r"\[init\] launching component graph"),
-    (
-        # The negative half of required check 1: authority is resolved from the
-        # caller's own table, so a component asking for an executable its
-        # generation did not grant it is refused rather than served.
-        "an ungranted executable slot is refused",
-        r"SLIME_GRAPH spawn refused task=2 slot=\d+ ungranted",
-    ),
-    (
-        # `-1` is `ERR_BAD_CAP`, tightened from `-4` (`ERR_INVALID_ARG`) by
-        # P5.3.3. Until that slice the arm answered `InvalidOperation` because
-        # nothing resolved the slot; now `preflight_spawn_grants` resolves it
-        # and refuses, which is a capability answer -- and it is the code
-        # `kernel/src/syscall/mod.rs::sys_spawn` returns for every
-        # `SpawnError` but the two exhaustion cases.
-        #
-        # That agreement is load-bearing rather than cosmetic:
-        # `init.rs::spawn_optional_storage` matches on exactly
-        # `Err(slime_rt::ERR_BAD_CAP)` to distinguish "no block device" from a
-        # real failure, so a seL4 root answering -4 there would abort a graph
-        # the retired kernel launches.
-        "the refusal reached the component as an ordinary Slime error",
-        r"\[init\] spawn failed slot=\d+ error=-1",
-    ),
-    (
-        # `unimplemented=0` is pinned exactly rather than left open: with the
-        # channel plane landed, every operation these five components reach now
-        # has a handler, and an operation losing one would show up here.
-        "the graph drained with every window and table reclaimed",
-        r"SLIME_GRAPH served live=0 unsupported=0 unimplemented=0 "
-        r"buffers=[1-9]\d* windows=0 tables=0",
-    ),
-    (
-        # P5.3.1. The channel plane's own accounting for this graph. `parked=0`
-        # and `queues=0` are the teardown property: no component is still
-        # blocked on a reply the root owes it, and no queue still believes it
-        # has a live peer -- either would be a graph that drained only because
-        # the loop hit its iteration bound. `replies` counts every saved reply
-        # CSlot handed back, so the parking path is shown not to leak.
-        "every channel and held reply was reclaimed",
-        r"SLIME_GRAPH channels served sends=\d+ receives=\d+ parks=\d+ "
-        r"settled=\d+ parked=0 queues=0 replies=\d+",
-    ),
+    ("spawn-service allocated against its quota", r"SLIME_GRAPH buffer created task=2 slot=\d+ id=\d+ pages=1 writable=1"),
+    ("the shared-buffer lifecycle became live", r"\[spawn-service\] shared-buffer quota live"),
+    ("spawn-service parked live", r"SLIME_GRAPH parked task=2 reason=wait"),
+    ("console bound its mapped window", r"SLIME_GRAPH window bound task=1 base=0x236000 len=4096"),
+    ("console parked live", r"SLIME_GRAPH parked task=1 reason=wait"),
+    ("the supervisor certified the graph", TERMINAL_MARKER),
 )
 
 # Every operation the root task must answer with a bounded error rather than a
@@ -214,6 +101,7 @@ IPC_SOURCE = ROOT / "slime-root" / "src" / "ipc.rs"
 FAILURE_MARKERS: tuple[str, ...] = (
     r"SLIME_ROOT FATAL .*",
     r"SLIME_GRAPH FAIL .*",
+    r"SLIME_GRAPH component exit .*status=-?[1-9]\d*",
     # A component that could not bind its transfer window would issue no
     # windowed operation at all, and the graph would look quiet rather than
     # broken.
@@ -354,7 +242,7 @@ def boot(profile: dict[str, object]) -> str:
         str(IMAGE),
     ]
     print(f"[boot] {' '.join(command)}", flush=True)
-    terminal = re.compile(REQUIRED_MARKERS[-1][1])
+    terminal = re.compile(TERMINAL_MARKER)
     failures = re.compile("|".join(FAILURE_MARKERS))
     lines: list[str] = []
     try:
@@ -457,6 +345,9 @@ def check_transcript(transcript: str) -> None:
                 fail(f"marker out of order: {description} ({pattern})")
             fail(f"missing marker: {description} ({pattern})")
         position = match.end()
+    terminals = re.findall(TERMINAL_MARKER, transcript)
+    if len(terminals) != 1:
+        fail(f"expected exactly one healthy supervisor terminal, saw {len(terminals)}")
 
 
 def main() -> None:
@@ -481,9 +372,9 @@ def main() -> None:
     assert isinstance(profile, dict)
     check_transcript(boot(profile))
     print(
-        "seL4 component graph check: 5 native ELF components launched with their "
-        "declared grants, the root answered their operation surface, and an "
-        "unanswered operation returned a bounded error with the caller running"
+        "seL4 component graph check: init launched the two required spawned instances; "
+        "spawn-service exercised its bounded operation surface; console and spawn-service "
+        "parked live; the supervisor certified the required graph"
     )
 
 

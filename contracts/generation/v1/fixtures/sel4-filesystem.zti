@@ -1,98 +1,185 @@
 {
-  formatVersion = 1;
-  generation = 29;
-  target = "aarch64-sel4-qemu-virt";
-  kernelObject = "sha256:kernel";
-  bootstrapComponent = "init";
-
-  interfaceSchemas = [];
-
-  objects = [
-    { id = "sha256:kernel"; kind = "kernel"; size = 1048576; };
-    { id = "sha256:init"; kind = "bootstrap"; size = 65536; };
-    { id = "sha256:sel4-filesystem-service"; kind = "component"; size = 131072; };
-    { id = "sha256:directory-probe"; kind = "component"; size = 65536; };
-    { id = "boot-layout"; kind = "resource"; size = 4096; };
-  ];
-
-  sharedBufferBudget = [];
-
-  components = [
+  bootstrapInstance = "init";
+  executables = [
     {
+      commandProfile = [];
       name = "init";
       object = "sha256:init";
       role = "init";
-      dependencies = [];
       spawnBudget = 2;
-      commandProfile = [];
     };
     {
+      commandProfile = [];
       name = "sel4-filesystem-service";
       object = "sha256:sel4-filesystem-service";
       role = "service";
-      dependencies = ["init";];
       spawnBudget = 0;
-      commandProfile = [];
     };
     {
+      commandProfile = [];
       name = "directory-probe";
       object = "sha256:directory-probe";
       role = "application";
-      dependencies = ["init";];
       spawnBudget = 0;
-      commandProfile = [];
     };
   ];
-
+  formatVersion = 1;
+  generation = 29;
   grants = [
     {
       name = "init-sel4-filesystem-service";
+      rights = [
+        "exec";
+        "spawn";
+      ];
       source = "init";
       target = "sel4-filesystem-service";
-      rights = ["exec"; "spawn";];
       transferable = false;
     };
     {
       name = "init-directory-probe";
+      rights = [
+        "exec";
+        "spawn";
+      ];
       source = "init";
       target = "directory-probe";
-      rights = ["exec"; "spawn";];
       transferable = false;
     };
     {
       name = "filesystem-service-a-namespace";
+      rights = [
+        "directoryRead";
+        "directoryWrite";
+        "directoryList";
+        "directoryDerive";
+      ];
       source = "sel4-filesystem-service";
       target = "sel4-filesystem-service";
-      rights = ["directoryRead"; "directoryWrite"; "directoryList"; "directoryDerive";];
       transferable = false;
     };
     {
       name = "filesystem-service-b-device";
+      rights = [
+        "blockRead";
+        "blockWrite";
+      ];
       source = "sel4-filesystem-service";
       target = "sel4-filesystem-service";
-      rights = ["blockRead"; "blockWrite";];
       transferable = false;
     };
     {
       name = "directory-probe-namespace";
+      rights = [
+        "directoryRead";
+        "directoryWrite";
+        "directoryList";
+        "directoryDerive";
+      ];
       source = "directory-probe";
       target = "directory-probe";
-      rights = ["directoryRead"; "directoryWrite"; "directoryList"; "directoryDerive";];
       transferable = true;
     };
     {
       name = "init-endpoint-factory";
+      rights = [
+        "endpointCreate";
+      ];
       source = "init";
       target = "init";
-      rights = ["endpointCreate";];
       transferable = false;
     };
   ];
-
-  state = [];
-
   health = {
     bootAttempts = 3;
-    requiredComponents = ["init";];
+    requiredInstances = [
+      "init";
+    ];
   };
+  instances = [
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "init-directory-probe";
+          slot = 1;
+        };
+        {
+          grant = "init-endpoint-factory";
+          slot = 3;
+        };
+        {
+          grant = "init-sel4-filesystem-service";
+          slot = 2;
+        };
+      ];
+      dependencies = [];
+      executable = "init";
+      health = "required";
+      name = "init";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "filesystem-service-a-namespace";
+          slot = 1;
+        };
+        {
+          grant = "filesystem-service-b-device";
+          slot = 2;
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "sel4-filesystem-service";
+      health = "optional";
+      name = "sel4-filesystem-service";
+      owner = "init";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "directory-probe-namespace";
+          slot = 1;
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "directory-probe";
+      health = "optional";
+      name = "directory-probe";
+      owner = "init";
+    };
+  ];
+  interfaceSchemas = [];
+  objects = [
+    {
+      id = "sha256:init";
+      kind = "bootstrap";
+      size = 65536;
+    };
+    {
+      id = "sha256:sel4-filesystem-service";
+      kind = "component";
+      size = 131072;
+    };
+    {
+      id = "sha256:directory-probe";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "boot-layout";
+      kind = "resource";
+      size = 4096;
+    };
+  ];
+  sharedBufferBudget = [];
+  state = [];
+  target = "aarch64-sel4-qemu-virt";
 }

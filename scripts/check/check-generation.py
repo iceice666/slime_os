@@ -140,32 +140,31 @@ def check_generation(data: bytes, expected_identity: bytes | None = None) -> dic
     fields = GENERATION_HEADER.unpack_from(data)
     (
         magic, version, header, required_flags, identity, number, parent,
-        target_offset, kernel_index, bootstrap, boot_attempts,
-        objects, components, dependencies, grants, states, health,
-        object_offset, component_offset, dependency_offset, grant_offset,
-        state_offset, health_offset, strings_offset, strings_len, payload_offset, total_len,
+        target_offset, reserved, bootstrap, boot_attempts,
+        objects, executables, instances, dependencies, bindings, grants, states, health,
+        object_offset, executable_offset, instance_offset, dependency_offset, binding_offset,
+        grant_offset, state_offset, health_offset, strings_offset, strings_len, payload_offset, total_len,
     ) = fields
     require(magic == GENERATION_MAGIC, "BadGenerationMagic")
     require(version == GENERATION_VERSION and header == GENERATION_HEADER.size, "UnsupportedGenerationVersion")
-    require(required_flags == 0, "UnknownGenerationFlags")
+    require(required_flags == 0 and reserved == 0, "UnknownGenerationFlags")
     require(total_len == len(data) and generation_identity(data) == identity, "BadGenerationHash")
     if expected_identity is not None:
         require(identity == expected_identity, "GenerationIdentityMismatch")
-    require(1 <= objects <= MAX_OBJECTS and 1 <= components <= MAX_COMPONENTS, "ExcessiveGenerationCount")
-    require(dependencies <= MAX_DEPENDENCIES and grants <= MAX_GRANTS and states <= MAX_STATES and health <= MAX_HEALTH_COMPONENTS, "ExcessiveGenerationCount")
+    require(1 <= objects <= MAX_OBJECTS and 1 <= executables <= MAX_EXECUTABLES and 1 <= instances <= MAX_INSTANCES, "ExcessiveGenerationCount")
+    require(dependencies <= MAX_DEPENDENCIES and bindings <= MAX_BINDINGS and grants <= MAX_GRANTS and states <= MAX_STATES and health <= MAX_HEALTH_INSTANCES, "ExcessiveGenerationCount")
     require(strings_len <= MAX_STRING_TABLE_BYTES and target_offset < strings_len, "BadStringTable")
     require(object_offset == GENERATION_HEADER.size, "BadGenerationBounds")
-    require(component_offset == object_offset + objects * GENERATION_OBJECT.size, "BadGenerationBounds")
-    require(dependency_offset == component_offset + components * GENERATION_COMPONENT.size, "BadGenerationBounds")
-    require(grant_offset == dependency_offset + dependencies * GENERATION_DEPENDENCY.size, "BadGenerationBounds")
+    require(executable_offset == object_offset + objects * GENERATION_OBJECT.size, "BadGenerationBounds")
+    require(instance_offset == executable_offset + executables * GENERATION_EXECUTABLE.size, "BadGenerationBounds")
+    require(dependency_offset == instance_offset + instances * GENERATION_INSTANCE.size, "BadGenerationBounds")
+    require(binding_offset == dependency_offset + dependencies * GENERATION_DEPENDENCY.size, "BadGenerationBounds")
+    require(grant_offset == binding_offset + bindings * GENERATION_BINDING.size, "BadGenerationBounds")
     require(state_offset == grant_offset + grants * GENERATION_GRANT.size, "BadGenerationBounds")
     require(health_offset == state_offset + states * GENERATION_STATE.size, "BadGenerationBounds")
     require(strings_offset == health_offset + health * GENERATION_HEALTH.size, "BadGenerationBounds")
     require(payload_offset == strings_offset + strings_len, "BadGenerationBounds")
     target = read_string(data, strings_offset, strings_len, target_offset)
-    # The generation names exactly one admitted profile. An unrecognized name
-    # is refused here rather than resolving to a nearby target, so every
-    # executable below is checked against the profile the generation claims.
     profile = TARGET_PROFILES_BY_NAME.get(target)
     require(profile is not None, "UnknownGenerationTarget")
     object_rows = []
@@ -182,57 +181,67 @@ def check_generation(data: bytes, expected_identity: bytes | None = None) -> dic
         object_rows.append((object_id, kind, blob))
         previous_id, previous_payload = object_id, offset + length
     require(previous_payload == len(data), "TrailingGenerationBytes")
-    require(kernel_index < objects and object_rows[kernel_index][1] == 1, "BadKernelObject")
-    if profile.name == "aarch64-sel4-qemu-virt":
-        require(object_rows[kernel_index][2] == SEL4_EXTERNAL_KERNEL, "BadExternalKernelObject")
-    else:
-        check_kernel_image(object_rows[kernel_index][2], profile)
-    component_rows = []
+    executable_rows = []
     previous_name = ""
-    for index in range(components):
-        name_offset, object_index, role, dependency_start, dependency_count, spawn_budget = GENERATION_COMPONENT.unpack_from(data, component_offset + index * GENERATION_COMPONENT.size)
+    for index in range(executables):
+        name_offset, object_index, role, spawn_budget = GENERATION_EXECUTABLE.unpack_from(data, executable_offset + index * GENERATION_EXECUTABLE.size)
         name = read_string(data, strings_offset, strings_len, name_offset)
-        require(name > previous_name and object_index < objects and 1 <= role <= 4, "BadComponent")
-        require(dependency_start + dependency_count <= dependencies, "BadDependencyBounds")
-        require(0 <= spawn_budget <= MAX_SPAWN_BUDGET, "BadSpawnBudget")
-        component_rows.append((name, object_index, role, dependency_start, dependency_count, spawn_budget))
-        previous_name = name
-        # Every component record must resolve to an executable object admitted
-        # for this generation's profile. Iterating component records rather
-        # than objects of executable kind is deliberate: only the bootstrap
-        # component's object kind is otherwise constrained, so a component
-        # pointing at a resource object would never be target-checked at all.
-        component_kind = object_rows[object_index][1]
-        require(component_kind in (2, 3), "ComponentObjectNotExecutable")
+        require(name > previous_name and object_index < objects and 1 <= role <= 4, "BadExecutable")
+        require(object_rows[object_index][1] in (2, 3) and 0 <= spawn_budget <= MAX_SPAWN_BUDGET, "BadExecutable")
         check_component_image(object_rows[object_index][2], profile, name)
-    require(bootstrap < components and component_rows[bootstrap][2] == 1 and object_rows[component_rows[bootstrap][1]][1] == 2, "BadBootstrap")
-    for index, (_, _, _, start, count, _) in enumerate(component_rows):
+        executable_rows.append((name, object_index, role, spawn_budget))
+        previous_name = name
+    instance_rows = []
+    previous_name = ""
+    for index in range(instances):
+        row = GENERATION_INSTANCE.unpack_from(data, instance_offset + index * GENERATION_INSTANCE.size)
+        name = read_string(data, strings_offset, strings_len, row[0])
+        _, executable, owner_kind, owner_index, autostart, dependency_start, dependency_count, binding_start, binding_count, required = row
+        require(name > previous_name and executable < executables, "BadInstance")
+        require(owner_kind in (0, 1) and (owner_kind == 0 or owner_index < instances) and owner_index != index, "BadInstanceOwner")
+        require(autostart in (0, 1) and required in (0, 1), "BadInstance")
+        require(dependency_start + dependency_count <= dependencies and binding_start + binding_count <= bindings, "BadInstanceBounds")
+        instance_rows.append((name, executable, owner_kind, owner_index, autostart, dependency_start, dependency_count, binding_start, binding_count, required))
+        previous_name = name
+    require(bootstrap < instances, "BadBootstrap")
+    bootstrap_row = instance_rows[bootstrap]
+    bootstrap_executable = executable_rows[bootstrap_row[1]]
+    require(bootstrap_row[2] == 0 and bootstrap_row[4] == 1 and bootstrap_executable[2] == 1 and object_rows[bootstrap_executable[1]][1] == 2, "BadBootstrap")
+    dependency_rows = [GENERATION_DEPENDENCY.unpack_from(data, dependency_offset + index * GENERATION_DEPENDENCY.size)[0] for index in range(dependencies)]
+    binding_rows = [GENERATION_BINDING.unpack_from(data, binding_offset + index * GENERATION_BINDING.size) for index in range(bindings)]
+    for index, row in enumerate(instance_rows):
         previous_dependency = -1
-        for dependency_index in range(start, start + count):
-            dependency = GENERATION_DEPENDENCY.unpack_from(data, dependency_offset + dependency_index * GENERATION_DEPENDENCY.size)[0]
-            require(dependency < components and dependency != index and dependency > previous_dependency, "BadDependency")
+        for dependency in dependency_rows[row[5] : row[5] + row[6]]:
+            require(dependency < instances and dependency != index and dependency > previous_dependency, "BadDependency")
             previous_dependency = dependency
+        previous_slot = -1
+        for grant, slot in binding_rows[row[7] : row[7] + row[8]]:
+            require(grant < grants and slot < 64 and slot > previous_slot, "BadBinding")
+            previous_slot = slot
+    grant_rows = []
     previous_grant = None
     for index in range(grants):
         name_offset, source, destination, rights, transferable = GENERATION_GRANT.unpack_from(data, grant_offset + index * GENERATION_GRANT.size)
         name = read_string(data, strings_offset, strings_len, name_offset)
         key = (name, source, destination)
         require(previous_grant is None or key > previous_grant, "NonCanonicalGrants")
-        require(source < components and destination < components and rights and not rights & ~RIGHT_ALL and transferable in (0, 1) and bool(rights & RIGHT_TRANSFER) == bool(transferable), "BadGrant")
+        require(source < instances and rights and not rights & ~RIGHT_ALL and transferable in (0, 1) and bool(rights & RIGHT_TRANSFER) == bool(transferable), "BadGrant")
+        require(destination < (executables if rights & (1 << 3) else instances), "BadGrant")
+        grant_rows.append((name, source, destination, rights))
         previous_grant = key
+    for row in instance_rows:
+        require(len({grant for grant, _ in binding_rows[row[7] : row[7] + row[8]]}) == row[8], "BadBinding")
     previous_state = ""
     for index in range(states):
         name_offset, owner, schema_version, policy = GENERATION_STATE.unpack_from(data, state_offset + index * GENERATION_STATE.size)
         name = read_string(data, strings_offset, strings_len, name_offset)
-        require(name > previous_state and owner < components and schema_version > 0 and policy in (1, 2, 3, 4, 5), "BadState")
+        require(name > previous_state and owner < instances and schema_version > 0 and policy in (1, 2, 3, 4, 5), "BadState")
         previous_state = name
     require(boot_attempts > 0, "BadHealthPolicy")
-    previous_health = -1
-    for index in range(health):
-        component = GENERATION_HEALTH.unpack_from(data, health_offset + index * GENERATION_HEALTH.size)[0]
-        require(component < components and component > previous_health, "BadHealthComponent")
-        previous_health = component
-    return {"identity": identity, "number": number, "parent": None if parent == bytes(32) else parent, "target": target, "kernel_len": len(object_rows[kernel_index][2]), "total_len": total_len}
+    health_rows = [GENERATION_HEALTH.unpack_from(data, health_offset + index * GENERATION_HEALTH.size)[0] for index in range(health)]
+    require(all(instance < instances for instance in health_rows) and health_rows == sorted(set(health_rows)), "BadHealthInstance")
+    require(set(health_rows) == {index for index, row in enumerate(instance_rows) if row[9]}, "BadHealthPolicy")
+    return {"identity": identity, "number": number, "parent": None if parent == bytes(32) else parent, "target": target, "kernel_len": 0, "total_len": total_len}
 
 
 def decode_bootstate(slot: bytes) -> dict:
@@ -269,8 +278,14 @@ def check_release(data: bytes, generation: bytes, accepted_sequence: int | None 
     fields = GENERATION_HEADER.unpack_from(generation)
     object_offset = fields[17]
     kernel_index = fields[8]
-    kernel_digest = GENERATION_OBJECT.unpack_from(generation, object_offset + kernel_index * GENERATION_OBJECT.size)[4]
-    require(data[RELEASE_HEADER_KERNEL_IDENTITY_OFFSET:RELEASE_HEADER_KERNEL_IDENTITY_END] == kernel_digest, "WrongReleaseKernel")
+    version = struct.unpack_from("<I", generation, 8)[0]
+    bundle = data[RELEASE_HEADER_BOOT_BUNDLE_IDENTITY_OFFSET:RELEASE_HEADER_BOOT_BUNDLE_IDENTITY_END]
+    if version >= 4:
+        require(bundle != bytes(32), "MissingReleaseBootBundle")
+    else:
+        kernel_index = struct.unpack_from("<I", generation, 100)[0]
+        kernel_digest = GENERATION_OBJECT.unpack_from(generation, object_offset + kernel_index * GENERATION_OBJECT.size)[4]
+        require(bundle == kernel_digest, "WrongReleaseBootBundle")
     require(data[RELEASE_HEADER_AUTHORITY_MANIFEST_OFFSET:RELEASE_HEADER_AUTHORITY_MANIFEST_END] == authority_manifest_identity(generation), "WrongReleaseAuthority")
     if accepted_sequence is not None:
         require(sequence > accepted_sequence, "StaleRelease")

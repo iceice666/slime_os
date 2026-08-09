@@ -2,16 +2,16 @@
 
 """P5.4.9/C8.10 gate: the full C8 graph in one seL4 generation.
 
-The x86 gate (`just data_fabric_boot_check`) proves that every C8 role can
-coexist in one boot. This gate boots the `sel4-boot` image and proves the same
-of `slime-root`: one generation, all three planes at once, in disjoint slots
+The x86 gate (``just data_fabric_boot_check``) proves that every C8 role can
+coexist in one boot. This gate boots the ``sel4-boot`` image and proves the same
+of ``slime-root``: one generation, all three planes at once, in disjoint slots
 with no profile-dependent rewrite, every participant reaching a checked role or
-a declared role-less idle, and the graph coming to rest rather than finishing.
+a declared role-less idle, and the supervisor certifying the complete graph.
 
-The exit condition is **idle, not exit**. Every task in the composition is still
-alive when the gate stops reading, which is what "healthy blocked idle" means —
-a composition task that exited would be a failure, so the lifecycle check here is
-the inverse of every other seL4 plane's.
+Fabric idle is required evidence, but it is not terminal: independently
+scheduled tasks may still exit after the fabric parks. Capture continues until
+the root supervisor emits its unique healthy record, and any preceding nonzero
+component exit poisons the transcript.
 """
 
 from __future__ import annotations
@@ -43,10 +43,12 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
         # all five routes and the declared interposition admitted together.
         "one generation admitted every C8 role and route",
         (
-            r"SLIME_ROOT generation admitted number=22 components=20 grants=39 ",
+            r"SLIME_ROOT generation admitted number=22 executables=20 instances=1 grants=39 ",
             r"SLIME_ROOT fabric graph=admitted schemas=4 routes=5 participants=15 "
             r"interpositions=1",
-            r"SLIME_GRAPH activated components=20",
+            r"SLIME_GRAPH staged task=\d+ instance=init executable=init grants=\d+ bindings=\d+ ",
+            r"SLIME_GRAPH staged instances=1 root_autostart=1 ",
+            r"SLIME_GRAPH activated instances=1",
             r"\[init\] fabric boot control channels minted",
         ),
     ),
@@ -174,8 +176,9 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
         ),
     ),
     (
-        # The fabric reaching its own idle is the stream worker's terminal
-        # state: every declared edge minted, nothing left to answer.
+        # Fabric idle is required causal evidence that every declared edge was
+        # minted and the worker has nothing left to answer. It is deliberately
+        # not terminal: the supervisor must still observe the whole graph.
         "the stream worker came to rest",
         (
             r"\[fabric\] idle: parked on control endpoints",
@@ -183,15 +186,18 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ),
 )
 
-# The fabric idle marker is causally after every role has been provisioned. A
-# participant role is not terminal because independently scheduled operation
-# participants may still be running when it appears.
-TERMINAL_MARKER = CHAINS[-1][1][-1]
+# The supervisor record is the sole terminal. The instance digest is deliberately
+# shape-checked rather than pinned: it changes when the generation changes.
+TERMINAL_MARKER = (
+    r"SLIME_GRAPH healthy generation=\d+ instances=[0-9a-f]+ "
+    r"required=1 live=1 idle=1 failed=0"
+)
+CHAINS = CHAINS + (("the supervisor certified the complete graph", (TERMINAL_MARKER,)),)
 
 FAILURE_MARKERS: tuple[str, ...] = (
     r"SLIME_ROOT FATAL",
     r"SLIME_ROOT FAIL",
-    r"SLIME_GRAPH FAIL",
+    r"SLIME_GRAPH component exit .*status=-?[1-9]\d*",
     r"SLIME_GRAPH wedged waiter",
     r"\[init\] fabric boot fail: .*",
     r"SLIME_GRAPH spawn (?:failed|refused|unwound|unwind incomplete) .*",
@@ -214,6 +220,10 @@ SPAWN_PATTERN = re.compile(
     r"grants=(\d+) channels=(\d+) handle=(\d+)"
 )
 EXIT_PATTERN = re.compile(r"SLIME_GRAPH component exit task=(\d+) status=(-?\d+)")
+STAGE_PATTERN = re.compile(
+    r"SLIME_GRAPH staged task=(\d+) instance=([^ ]+) executable=([^ ]+) "
+    r"grants=(\d+) bindings=(\d+) "
+)
 LAYOUT_HEADER = re.compile(r"\[layout\] path=init slots=(\d+) max=(\d+)")
 
 # The sixteen participants init spawns, in boot-layout order, plus the fabric.
@@ -338,7 +348,7 @@ def check_manifest() -> None:
 
 
 def boot(profile: dict[str, object]) -> str:
-    """Boot until the whole fabric is idle, or stop on a failure marker."""
+    """Boot until the supervisor certifies the graph, or a failure appears."""
     qemu = shutil.which("qemu-system-aarch64")
     if qemu is None:
         fail("qemu-system-aarch64 is not on PATH")
@@ -406,8 +416,8 @@ def boot(profile: dict[str, object]) -> str:
     if outcome != "terminal":
         report_transcript(transcript)
         if timed_out:
-            fail(f"boot exceeded {BOOT_TIMEOUT_SECONDS}s without reaching fabric idle")
-        fail("QEMU exited before the fabric reached its terminal idle marker")
+            fail(f"boot exceeded {BOOT_TIMEOUT_SECONDS}s without supervisor certification")
+        fail("QEMU exited before the supervisor certified the graph healthy")
     return transcript
 
 
@@ -421,12 +431,7 @@ def report_transcript(transcript: str) -> None:
 
 
 def check_layout(transcript: str) -> int:
-    """Init's table is one collision-free layout, strictly under the ceiling.
-
-    C8.10's point is that the three planes coexist in disjoint slots rather than
-    aliasing one range a profile rewrite selects between, so there is exactly one
-    layout report and its slots must all be distinct.
-    """
+    """Init's table is one collision-free layout, strictly under the ceiling."""
     headers = LAYOUT_HEADER.findall(transcript)
     if len(headers) != 1:
         fail(f"expected exactly one init layout report, saw {len(headers)}")
@@ -441,6 +446,20 @@ def check_layout(transcript: str) -> int:
     return used
 
 
+def check_root_instances(transcript: str) -> None:
+    """Exactly the declared root-owned autostart instance is launched once."""
+    stages = STAGE_PATTERN.findall(transcript)
+    if len(stages) != 1:
+        fail(f"expected exactly one staged root instance, saw {len(stages)}")
+    _task, instance, executable, _grants, _bindings = stages[0]
+    if instance != "init" or executable != "init":
+        fail(
+            f"root staged instance={instance!r} executable={executable!r}, expected init/init"
+        )
+    if len(re.findall(TERMINAL_MARKER, transcript)) != 1:
+        fail("expected exactly one healthy supervisor terminal")
+
+
 def check_composition(transcript: str) -> None:
     """Every declared role is a distinct live task, and none of them exited."""
     spawns = SPAWN_PATTERN.findall(transcript)
@@ -449,23 +468,25 @@ def check_composition(transcript: str) -> None:
         fail(f"expected two spawning parents (init and the fabric), saw {sorted(parents)}")
     by_parent: dict[str, list[str]] = {}
     children: dict[str, str] = {}
+    spawn_tasks: set[str] = set()
+    child_tasks: set[str] = set()
     for parent, child, component, *_ in spawns:
         by_parent.setdefault(parent, []).append(component)
+        if child in child_tasks:
+            fail(f"child identity {child} was reused by multiple spawns")
         if component in children:
-            fail(f"{component} was spawned twice; every role is one task")
+            fail(f"{component} was spawned twice; every executable identity is one task")
+        spawn_tasks.add(parent)
+        child_tasks.add(child)
         children[component] = child
+    if spawn_tasks & child_tasks != {next(p for p in parents if p != max(parents, key=lambda p: len(by_parent[p])))}:
+        fail("spawn task identities do not form exactly the init/fabric composition tree")
     init = max(parents, key=lambda p: len(by_parent[p]))
     fabric = next(p for p in parents if p != init)
     if tuple(by_parent[init]) != EXPECTED_INIT_CHILDREN:
-        fail(
-            f"init spawned {tuple(by_parent[init])!r}, expected {EXPECTED_INIT_CHILDREN!r}"
-        )
+        fail(f"init spawned {tuple(by_parent[init])!r}, expected {EXPECTED_INIT_CHILDREN!r}")
     if tuple(by_parent[fabric]) != EXPECTED_WORKERS:
         fail(f"the fabric spawned {tuple(by_parent[fabric])!r}, expected {EXPECTED_WORKERS!r}")
-
-    # Idle, not exit. A composition task that terminated would mean the graph
-    # finished rather than came to rest, which is the opposite of C8.10's
-    # exit condition.
     exited = {
         component: task
         for component, task in children.items()
@@ -475,7 +496,6 @@ def check_composition(transcript: str) -> None:
     if exited:
         report_transcript(transcript)
         fail(f"composition tasks exited before the graph came to rest: {sorted(exited)}")
-
     roles = len(re.findall(r"\[fabric[^\]]*\] boot role provisioned", transcript))
     if roles != EXPECTED_ROLES:
         fail(f"{roles} participants took a checked role, expected {EXPECTED_ROLES}")
@@ -500,12 +520,13 @@ def check_transcript(transcript: str) -> None:
                     fail(f"{label}: marker out of order: {pattern}")
                 fail(f"{label}: missing marker: {pattern}")
             position = match.end()
+    check_root_instances(transcript)
     used = check_layout(transcript)
     check_composition(transcript)
     print(
         f"transcript: {sum(len(chain) for _, chain in CHAINS)} markers observed across "
-        f"{len(CHAINS)} causal chains; init's layout used {used} slots; 19 composition "
-        f"tasks reached {EXPECTED_ROLES} checked roles plus "
+        f"{len(CHAINS)} causal chains; init's layout used {used} slots; one root instance "
+        f"and 19 composition tasks reached {EXPECTED_ROLES} checked roles plus "
         f"{len(EXPECTED_IDLE_WITHOUT_ROLE)} declared idles, and none exited",
         flush=True,
     )

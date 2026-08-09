@@ -142,6 +142,9 @@ BASE_LAYOUT = (
     # movable. The layout and the fixture must agree bit for bit (B10), so the
     # grant's `transferable = true` has to be matched here.
     (61, 'executable', 'supervision-child', 0x1000c),
+    # B38 deliberate-fault executable. Only the reclamation fixture declares
+    # it, so every other layout prunes the row without renumbering survivors.
+    (63, 'executable', 'reclamation-fault', 0x10008),
     # B22's channel-crossing plane, appended last on the same rule: only
     # `sel4-crossing.zti` declares `crossing-peer`, every other profile drops
     # this row, and dropping the highest slot renumbers nothing. That profile
@@ -149,11 +152,8 @@ BASE_LAYOUT = (
     # component and are always kept, so this row lands renumbered at 15, which
     # is the slot the gate's `spawn authorized` marker records.
     #
-    # This takes the unpruned table to **63 of `MAX_BOOT_LAYOUT_ENTRIES` (64)**.
-    # One slot remains, so the next base-layout append is the last one possible;
-    # past that a new plane needs an override or a replacement row rather than
-    # an append. The warning lives here, on the highest row, because that is
-    # where the next author adds one.
+    # Together with B38's row this fills all `MAX_BOOT_LAYOUT_ENTRIES` (64).
+    # Further executable rows require raising the format ceiling deliberately.
     (62, 'executable', 'crossing-peer', 0x10008),
 )
 
@@ -761,8 +761,13 @@ def rust_identifier(label: str) -> str:
     return label.replace("-", "_").upper() + "_SLOT"
 
 
-def render_rust(number: int, components: set[str] | None = None) -> str:
-    """The slot table for one generation, as a Rust constant per label.
+def render_rust(
+    number: int,
+    components: set[str] | None = None,
+    binding_slots: dict[str, int] | None = None,
+    role_bindings: dict[str, int] | None = None,
+) -> str:
+    """The slot table for one generation, including explicit init bindings.
 
     `init.rs` addresses slots by these names rather than by literal numbers, so
     the kernel that places a capability and the component that uses it read one
@@ -780,6 +785,8 @@ def render_rust(number: int, components: set[str] | None = None) -> str:
         for slot, _, label, _ in layout_for(number, components)
         if label is not None
     }
+    if binding_slots is not None:
+        declared.update(binding_slots)
     lines = [
         "// @generated from contracts/boot-layout/v1 by scripts/build/boot_layout.py;",
         "// do not edit. Regenerate through `just generation_check`.",
@@ -808,6 +815,9 @@ def render_rust(number: int, components: set[str] | None = None) -> str:
     for slot, role, label, _ in layout_for(number, components):
         if label is None:
             by_role.setdefault(role, []).append(slot)
+    if role_bindings is not None:
+        for role, slot in role_bindings.items():
+            by_role[role] = [slot]
     # A role can repeat: generation 4 declares an object store in both the
     # storage and filesystem slots. Every role therefore emits `_0`.._N` for a
     # fixed N in every generation, plus an unsuffixed alias for the first, so a

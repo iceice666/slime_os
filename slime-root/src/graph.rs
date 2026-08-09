@@ -118,8 +118,8 @@ impl Side {
 /// and mediates. A child never holds one, it names one.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Resource {
-    /// An executable this task may spawn, named by generation component index.
-    Executable { component: usize },
+    /// An executable this task may spawn, named by generation executable index.
+    Executable { executable: usize },
     /// One end of a logical channel: which channel, and which end of it.
     Endpoint { channel: u32, side: Side },
     /// Authority to mint channel pairs.

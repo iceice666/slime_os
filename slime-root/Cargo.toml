@@ -25,7 +25,7 @@ name = "slime-root"
 path = "src/main.rs"
 
 [dependencies]
-boot-contracts = { path = "../boot-contracts" }
+boot-contracts = { path = "../boot-contracts", features = ["gpt", "release-crypto"] }
 sel4 = { path = "../deps/rust-sel4/crates/sel4" }
 # C8.3 capability-transfer descriptor (P5.5.1). The wire form is generated from
 # `contracts/capability-transfer/v1/schema.zt`, and the root parses exactly the

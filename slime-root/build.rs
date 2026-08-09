@@ -1,18 +1,30 @@
-//! Selects which generation `slime-root` embeds.
-//!
-//! The root task admits and launches its generation from bytes compiled into
-//! it, so the choice has to be made at build time. `SLIME_GENERATION` names one
-//! — `scripts/build/build-sel4.py` points it at the `aarch64-sel4-qemu-virt`
-//! generation it just built — and without it the checked-in fixture is used.
-//!
-//! This is a `cfg` rather than a `match` in the source because the two
-//! `include_bytes!` produce arrays of different lengths, which are different
-//! types and will not unify in a match arm.
+//! Selects whether `slime-root` boots a compile-time fixture or the immutable
+//! disk-backed selector path used by the product image.
 
 fn main() {
     println!("cargo:rerun-if-env-changed=SLIME_GENERATION");
     println!("cargo::rustc-check-cfg=cfg(slime_generation_supplied)");
-    if let Ok(path) = std::env::var("SLIME_GENERATION") {
+    println!("cargo:rerun-if-env-changed=SLIME_BOOT_SELECTOR");
+    println!("cargo:rerun-if-env-changed=SLIME_ROOT_FIXTURE");
+    println!("cargo:rerun-if-env-changed=SLIME_BOOT_BUNDLE_IDENTITY");
+    println!("cargo::rustc-check-cfg=cfg(slime_boot_selector)");
+    println!("cargo::rustc-check-cfg=cfg(slime_b38_force_unwind)");
+    println!("cargo::rustc-check-cfg=cfg(slime_root_fixture)");
+    if std::env::var("SLIME_BOOT_SELECTOR").as_deref() == Ok("1") {
+        let identity = std::env::var("SLIME_BOOT_BUNDLE_IDENTITY")
+            .expect("selector build requires SLIME_BOOT_BUNDLE_IDENTITY");
+        if identity.len() != 64 || !identity.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            panic!("SLIME_BOOT_BUNDLE_IDENTITY must be 32-byte lowercase hex");
+        }
+        println!("cargo:rustc-cfg=slime_boot_selector");
+        println!("cargo:rustc-env=SLIME_BOOT_BUNDLE_IDENTITY={identity}");
+    }
+    if std::env::var("SLIME_ROOT_FIXTURE").as_deref() == Ok("1") {
+        println!("cargo:rustc-cfg=slime_root_fixture");
+    }
+    if std::env::var("SLIME_BOOT_SELECTOR").as_deref() != Ok("1")
+        && let Ok(path) = std::env::var("SLIME_GENERATION")
+    {
         println!("cargo:rerun-if-changed={path}");
         println!("cargo:rustc-cfg=slime_generation_supplied");
     }
