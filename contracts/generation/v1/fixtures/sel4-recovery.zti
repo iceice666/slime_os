@@ -1,0 +1,68 @@
+{
+  formatVersion = 1;
+  generation = 26;
+  target = "aarch64-sel4-qemu-virt";
+  kernelObject = "sha256:kernel";
+  bootstrapComponent = "init";
+
+  interfaceSchemas = [];
+
+  objects = [
+    { id = "sha256:kernel"; kind = "kernel"; size = 1048576; };
+    { id = "sha256:init"; kind = "bootstrap"; size = 65536; };
+    { id = "sha256:sel4-recovery-probe"; kind = "component"; size = 65536; };
+    { id = "boot-layout"; kind = "resource"; size = 4096; };
+  ];
+
+  sharedBufferBudget = [];
+
+  components = [
+    {
+      name = "init";
+      object = "sha256:init";
+      role = "init";
+      dependencies = [];
+      spawnBudget = 1;
+      commandProfile = [];
+    };
+    {
+      name = "sel4-recovery-probe";
+      object = "sha256:sel4-recovery-probe";
+      role = "application";
+      dependencies = ["init";];
+      spawnBudget = 0;
+      commandProfile = [];
+    };
+  ];
+
+  grants = [
+    {
+      name = "init-sel4-recovery-probe";
+      source = "init";
+      target = "sel4-recovery-probe";
+      rights = ["exec"; "spawn";];
+      transferable = false;
+    };
+    {
+      name = "recovery-probe-device";
+      source = "sel4-recovery-probe";
+      target = "sel4-recovery-probe";
+      rights = ["blockRead"; "blockWrite";];
+      transferable = false;
+    };
+    {
+      name = "init-endpoint-factory";
+      source = "init";
+      target = "init";
+      rights = ["endpointCreate";];
+      transferable = false;
+    };
+  ];
+
+  state = [];
+
+  health = {
+    bootAttempts = 3;
+    requiredComponents = ["init";];
+  };
+}

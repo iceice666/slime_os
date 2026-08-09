@@ -535,12 +535,12 @@ pub fn expect_reply(slot: u32, session: u64, request_id: u64, status: i32) -> Wi
     reply
 }
 
-pub fn expect_terminal_yielding(slot: u32, session: u64, request_id: u64, status: i32) {
+pub fn expect_terminal_parked(slot: u32, session: u64, request_id: u64, status: i32) {
     let mut bytes = [0u8; MAX_MSG];
     let mut caps = [0u64; MAX_CAPS_PER_MSG];
     loop {
         match slime_rt::recv(slot, &mut bytes, &mut caps) {
-            ERR_WOULDBLOCK => slime_rt::yield_now(),
+            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(slot)]),
             ERR_PEER_DEAD => fail(b"terminal peer died"),
             value if value < 0 => fail(b"terminal receive"),
             value => {

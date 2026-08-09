@@ -20,6 +20,32 @@ use core::ops::Range;
 /// closed instead of silently ignoring memory.
 pub const MAX_KERNEL_UNTYPEDS: usize = 64;
 
+/// Device untyped regions this allocator will track (P5.4.2a).
+///
+/// Separate from [`MAX_KERNEL_UNTYPEDS`] because these are never allocated
+/// *from*: a device untyped names a fixed physical range, so the only thing
+/// asked of it is "retype the page containing this address". They are held in
+/// their own table so no ordinary allocation can ever land in MMIO, which is
+/// what the `is_device()` skip below achieved by discarding them entirely.
+///
+/// qemu-arm-virt declares well under this; a BootInfo with more fails closed.
+pub const MAX_DEVICE_UNTYPEDS: usize = 64;
+
+/// Bytes in one AArch64 granule, the size a device frame is retyped at.
+const GRANULE_BYTES: usize = 4096;
+
+/// Granules [`ObjectAllocator::allocate_device_frame`] will retype to reach a
+/// target page.
+///
+/// seL4 has no "retype at this offset" invocation: the page at index `n` inside
+/// a device untyped is reached by retyping `n + 1` of them and keeping the last,
+/// so a target deep inside a large region costs that many CSlots. qemu-arm-virt
+/// puts the virtio-mmio transports at `0x0a00_0000 + n * 0x200`, all inside one
+/// granule, so a correct target is at a small offset from its region's base.
+/// A large one means the address is wrong, and consuming hundreds of CSlots to
+/// discover that is worse than refusing.
+const MAX_DEVICE_FRAME_SKIP: usize = 64;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AllocError {
     /// BootInfo declared no non-device untyped memory.
@@ -35,11 +61,24 @@ pub enum AllocError {
         size_bits: usize,
         error: sel4::Error,
     },
+    /// More device untypeds than [`MAX_DEVICE_UNTYPEDS`].
+    DeviceTableFull { limit: usize, declared: usize },
+    /// No device untyped covers the requested physical address.
+    NoDeviceUntyped { paddr: usize },
+    /// The requested address is not granule-aligned.
+    UnalignedDeviceFrame { paddr: usize },
+    /// The device untyped's watermark is already past this page. seL4's retype
+    /// only advances, so the page can no longer be reached this boot.
+    DeviceFramePassed { paddr: usize },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct UntypedRegion {
     cap: sel4::cap::Untyped,
+    /// Physical base, so an allocation can report the guest-physical address of
+    /// what it retyped. Discarded before P5.4.2a, which is why the root could
+    /// map a frame but never name it to a device.
+    paddr: usize,
     size_bits: usize,
     watermark: usize,
 }
@@ -51,6 +90,33 @@ impl UntypedRegion {
 
     fn remaining(&self) -> usize {
         self.capacity().saturating_sub(self.watermark)
+    }
+}
+
+/// One device untyped, named by the physical range it covers.
+///
+/// No watermark: this is never allocated from in order, only asked for the page
+/// containing a specific address.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DeviceRegion {
+    cap: sel4::cap::Untyped,
+    paddr: usize,
+    size_bits: usize,
+    /// Granules already retyped out of this region, mirroring the kernel's own
+    /// monotonic watermark. Without it, a second `allocate_device_frame` on one
+    /// region computes its count from the base and lands past its target.
+    retyped: usize,
+}
+
+impl DeviceRegion {
+    fn contains(&self, paddr: usize, len: usize) -> bool {
+        let Some(end) = paddr.checked_add(len) else {
+            return false;
+        };
+        let Some(region_end) = self.paddr.checked_add(1usize << self.size_bits) else {
+            return false;
+        };
+        paddr >= self.paddr && end <= region_end
     }
 }
 
@@ -70,13 +136,27 @@ pub struct ObjectAllocator {
     empty: Range<usize>,
     untypeds: [Option<UntypedRegion>; MAX_KERNEL_UNTYPEDS],
     untyped_len: usize,
+    devices: [Option<DeviceRegion>; MAX_DEVICE_UNTYPEDS],
+    device_len: usize,
     slots_allocated: usize,
     objects_allocated: usize,
     bytes_allocated: usize,
+    /// Physical base of the most recent [`ObjectAllocator::allocate`], for the
+    /// DMA case: a virtqueue descriptor must carry the guest-physical address of
+    /// a frame the root just retyped.
+    last_paddr: usize,
 }
 
 impl ObjectAllocator {
-    /// Record every non-device untyped region and the empty CSlot range.
+    /// Record every untyped region BootInfo names and the empty CSlot range.
+    ///
+    /// Two tables, because the two kinds are used differently: ordinary
+    /// untypeds are allocated *from* in watermark order, while a device untyped
+    /// names a fixed physical range and is only ever asked for the page
+    /// containing a given address. Keeping them apart is what makes it
+    /// impossible for an ordinary allocation to land in MMIO — the property the
+    /// old `is_device()` skip achieved by discarding device untypeds outright,
+    /// which also made the root unable to reach a device at all (P5.4.2a).
     pub fn new(bootinfo: &sel4::BootInfo) -> Result<Self, AllocError> {
         let kernel_untypeds = bootinfo.kernel_untyped_range();
         let declared = kernel_untypeds.len();
@@ -93,6 +173,8 @@ impl ObjectAllocator {
             let Some(descriptor) = descriptors.get(index) else {
                 continue;
             };
+            // Belt and braces: `kernel_untyped_range` already excludes these,
+            // and a device untyped reaching the general pool would be silent.
             if descriptor.is_device() {
                 continue;
             }
@@ -104,6 +186,7 @@ impl ObjectAllocator {
             };
             *slot = Some(UntypedRegion {
                 cap: bootinfo.untyped().index(index).cap(),
+                paddr: descriptor.paddr(),
                 size_bits: descriptor.size_bits(),
                 watermark: 0,
             });
@@ -112,13 +195,40 @@ impl ObjectAllocator {
         if untyped_len == 0 {
             return Err(AllocError::NoKernelUntyped);
         }
+        let device_untypeds = bootinfo.device_untyped_range();
+        let device_declared = device_untypeds.len();
+        let mut devices = [None; MAX_DEVICE_UNTYPEDS];
+        let mut device_len = 0;
+        for index in device_untypeds {
+            let Some(descriptor) = descriptors.get(index) else {
+                continue;
+            };
+            let Some(slot) = devices.get_mut(device_len) else {
+                return Err(AllocError::DeviceTableFull {
+                    limit: MAX_DEVICE_UNTYPEDS,
+                    declared: device_declared,
+                });
+            };
+            *slot = Some(DeviceRegion {
+                cap: bootinfo.untyped().index(index).cap(),
+                paddr: descriptor.paddr(),
+                size_bits: descriptor.size_bits(),
+                retyped: 0,
+            });
+            device_len += 1;
+        }
+        // No `NoDeviceUntyped` at construction: a graph that never touches a
+        // device must still boot on a machine that declares none.
         Ok(Self {
             empty: bootinfo.empty().range(),
             untypeds,
             untyped_len,
+            devices,
+            device_len,
             slots_allocated: 0,
             objects_allocated: 0,
             bytes_allocated: 0,
+            last_paddr: 0,
         })
     }
 
@@ -169,7 +279,7 @@ impl ObjectAllocator {
                 allocated: self.slots_allocated,
             });
         }
-        let (region_index, watermark) = self
+        let (region_index, start, watermark) = self
             .untypeds
             .iter()
             .take(self.untyped_len)
@@ -177,7 +287,7 @@ impl ObjectAllocator {
             .find_map(|(index, region)| {
                 let region = region.as_ref()?;
                 plan_allocation(region.watermark, region.capacity(), size_bits)
-                    .map(|(_, end)| (index, end))
+                    .map(|(start, end)| (index, start, end))
             })
             .ok_or(AllocError::UntypedExhausted {
                 size_bits,
@@ -202,6 +312,12 @@ impl ObjectAllocator {
             .map_err(|error| AllocError::Retype { size_bits, error })?;
         if let Some(Some(region)) = self.untypeds.get_mut(region_index) {
             region.watermark = watermark;
+            // `plan_allocation` already models the kernel's alignment rule, so
+            // this is where the object actually lands. Recorded rather than
+            // discarded because a DMA buffer must be nameable to a device by
+            // guest-physical address, and nothing else in the root can derive
+            // it (P5.4.2a).
+            self.last_paddr = region.paddr.saturating_add(start);
         }
         self.empty.start = slot_index + 1;
         self.slots_allocated += 1;
@@ -221,6 +337,102 @@ impl ObjectAllocator {
         size_bits: usize,
     ) -> Result<sel4::init_thread::Slot<T>, AllocError> {
         Ok(self.allocate(T::object_blueprint(size_bits))?.cast())
+    }
+
+    /// Physical base of the most recent [`Self::allocate`].
+    ///
+    /// Only meaningful immediately after one succeeds. A DMA buffer's whole
+    /// purpose is to be named to a device by guest-physical address, and seL4
+    /// exposes no way to ask a frame cap where it lives — the allocator is the
+    /// only place that knows.
+    pub fn last_physical_address(&self) -> usize {
+        self.last_paddr
+    }
+
+    pub fn device_untyped_count(&self) -> usize {
+        self.device_len
+    }
+
+    /// Retype the device granule containing `paddr` into a fresh CSlot.
+    ///
+    /// Not an allocation in the watermark sense the ordinary path means, but it
+    /// does keep a watermark, and that is the subtle part.
+    ///
+    /// **`seL4_Untyped_Retype` has no offset argument.** Each call places its
+    /// objects at the untyped's own internal watermark, which only ever
+    /// advances. So the granule at index `n` is reached by retyping enough
+    /// pages to arrive there and keeping the last — the same trimming the
+    /// upstream `serial-device` example performs — and a *second* call on the
+    /// same region starts where the first stopped rather than at the base.
+    /// Computing the count from the region base every time therefore works
+    /// exactly once; the second call silently lands past its target, which is a
+    /// mapping that faults rather than an error.
+    ///
+    /// The per-region `retyped` count is what makes repeated calls correct: it
+    /// tracks where the kernel's watermark actually is, so the count asked for
+    /// is the distance from there. Going backwards is impossible and is
+    /// refused.
+    ///
+    /// The skipped caps are left in their slots rather than deleted: they name
+    /// real MMIO pages, and deleting them would return the space to an untyped
+    /// this root has no second use for.
+    pub fn allocate_device_frame(
+        &mut self,
+        paddr: usize,
+    ) -> Result<sel4::init_thread::Slot<sel4::cap_type::Granule>, AllocError> {
+        if !paddr.is_multiple_of(GRANULE_BYTES) {
+            return Err(AllocError::UnalignedDeviceFrame { paddr });
+        }
+        let (region_index, region) = self
+            .devices
+            .iter()
+            .take(self.device_len)
+            .enumerate()
+            .find_map(|(index, region)| {
+                let region = region.as_ref()?;
+                region
+                    .contains(paddr, GRANULE_BYTES)
+                    .then_some((index, *region))
+            })
+            .ok_or(AllocError::NoDeviceUntyped { paddr })?;
+        let target = (paddr - region.paddr) / GRANULE_BYTES;
+        // The kernel's watermark only advances, so a page already passed is
+        // unreachable. Refused rather than retyped past.
+        let count = target
+            .checked_sub(region.retyped)
+            .and_then(|distance| distance.checked_add(1))
+            .ok_or(AllocError::DeviceFramePassed { paddr })?;
+        if count > MAX_DEVICE_FRAME_SKIP {
+            return Err(AllocError::NoDeviceUntyped { paddr });
+        }
+        let slot_index = self.empty.start;
+        if slot_index + count > self.empty.end {
+            return Err(AllocError::SlotsExhausted {
+                allocated: self.slots_allocated,
+            });
+        }
+        region
+            .cap
+            .untyped_retype(
+                &sel4::ObjectBlueprint::Arch(sel4::ObjectBlueprintArch::SmallPage),
+                &sel4::init_thread::slot::CNODE
+                    .cap()
+                    .absolute_cptr_for_self(),
+                slot_index,
+                count,
+            )
+            .map_err(|error| AllocError::Retype {
+                size_bits: 12,
+                error,
+            })?;
+        if let Some(Some(region)) = self.devices.get_mut(region_index) {
+            region.retyped = target + 1;
+        }
+        self.empty.start = slot_index + count;
+        self.slots_allocated += count;
+        self.objects_allocated += count;
+        self.last_paddr = paddr;
+        Ok(sel4::init_thread::Slot::from_index(slot_index + count - 1))
     }
 
     /// Reserve one empty root CSlot without retyping any untyped memory.

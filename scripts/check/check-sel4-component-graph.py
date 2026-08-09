@@ -196,14 +196,15 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
 # catch-all cannot turn one into a fault. Pinning the list here means a plane
 # silently reclassified as `RootService` -- and therefore falling through to the
 # unimplemented path -- fails this gate rather than passing quietly.
+#
+# `BlockTransact` left this list with P5.4.2c: the root owns the device untyped
+# and the DMA frames, so it owns the driver, and the operation is now
+# `RootService`. Storage *policy* — partitioning, the object store, generations,
+# recovery — stays in userspace and stays unmediated, which is why the eight
+# below did not move with it.
 UNMEDIATED_OPERATIONS: tuple[tuple[str, int], ...] = (
-    ("BlockTransact", 6),
     ("StoreTransact", 7),
     ("RecoveryReconstruct", 10),
-    ("DirectoryInspect", 14),
-    ("DirectoryDerive", 15),
-    ("DirectoryCommit", 16),
-    ("InputRead", 17),
     ("GenerationTransact", 18),
     ("GenerationReceive", 19),
 )

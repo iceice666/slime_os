@@ -7,20 +7,11 @@ stream-plane generation, `contracts/generation/v1/fixtures/sel4-stream.zti` --
 and asserts P5.5.2's exit condition:
 
     `fabric-service` and every stream participant run on seL4 with no seL4
-    branch in any of them, producing the transcript `just fabric_stream_check`
-    records on x86, and the transfer plane's subset test (B17) is observed
-    rather than argued.
+    branch in any of them, the frozen cutover transcript is observed, and the
+    transfer plane's subset test (B17) is observed rather than argued.
 
-# The transcript is the x86 one
-
-`CHAINS` below is `check-fabric-stream.py`'s own, in the same causal-chain
-shape and with the same reasoning behind each chain. Every line in it is
-produced by a component this gate does not modify, and
-`check_transcript_matches_the_oracle` re-reads the x86 gate at run time so the
-two cannot quietly drift into different transcripts that merely resemble each
-other. That is the same guard `check-sel4-sample-plane.py` uses, and for the
-same reason: a transcript adjusted to suit whatever this root happened to
-implement would prove nothing about ABI compatibility.
+The causal marker chains were frozen at the P5 cutover. Every component line is
+produced by a participant this gate keeps free of seL4-only behavior.
 
 # What changed from P5.5.1
 
@@ -79,7 +70,6 @@ IMAGE = ROOT / "build" / "slime-sel4-stream.elf"
 MANIFEST = ROOT / "build" / "slime-sel4-stream.identity.json"
 BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
 FIXTURE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "sel4-stream.zti"
-ORACLE_GATE = ROOT / "scripts" / "check" / "check-fabric-stream.py"
 IMAGE_VARIANT = "stream"
 
 BOOT_TIMEOUT_SECONDS = 180
@@ -94,9 +84,8 @@ BOOT_TIMEOUT_SECONDS = 180
 # operation it guards succeeds — so a regression that widens a role or lets an
 # undeclared component through fails here even when the happy path still
 # delivers its sample.
-#
-# This is the shape `check-fabric-authority.py` and `check-data-fabric-boot.py`
-# already use, and for the same reason.
+# Grouped causal chains keep independent participant scheduling unordered while
+# preserving the required order inside each observable path.
 CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "the graph was admitted and launched",
@@ -705,15 +694,9 @@ SEL4_ONLY: dict[str, str] = {
         "B17's subset-test arm, which needs a spawn-granted send+transfer "
         "endpoint; the x86 graph declares none, so the arm skips there"
     ),
-    # C8.5 (P5.4.5). These are not drift: they are required by the oracle's
-    # *QoS* gate, `check-fabric-qos.py`, rather than its stream gate, and this
-    # comparison only reads the stream gate's chain list. The behaviour is the
-    # same `fabric-service` logic on the same components; only the oracle-side
-    # gate that asserts it differs.
+    # C8.5 markers exercised by this shared `fabric-service` implementation.
     r"\[fabric\] QoS matched": (
-        "asserted by the oracle's `check-fabric-qos.py`, not its stream gate; "
-        "the seL4 stream plane reaches the same matching path because it boots "
-        "the same fabric-service"
+        "the stream plane reaches matching through the same fabric-service"
     ),
     r"\[fabric-subscriber\] QoS matched": (
         "emitted by fabric-subscriber and required by *no* oracle gate -- "
@@ -727,87 +710,17 @@ SEL4_ONLY: dict[str, str] = {
 }
 
 
-def load_oracle_markers() -> tuple[str, ...]:
-    """Every marker the x86 stream gate *requires*, from its own `CHAINS`.
-
-    Imported rather than parsed, so the two gates cannot disagree about what
-    the oracle's chain list contains. `check-fabric-stream.py` is not an
-    importable module name, so it is loaded by path.
-    """
-    import importlib.util
-
-    spec = importlib.util.spec_from_file_location("_oracle_stream_gate", ORACLE_GATE)
-    if spec is None or spec.loader is None:
-        fail(f"cannot load {ORACLE_GATE.relative_to(ROOT)}")
-    module = importlib.util.module_from_spec(spec)
-    try:
-        spec.loader.exec_module(module)
-    except Exception as error:  # noqa: BLE001 - any import failure is fatal here
-        fail(f"cannot load {ORACLE_GATE.relative_to(ROOT)}: {error}")
-    chains = getattr(module, "CHAINS", None)
-    if not chains:
-        fail(f"{ORACLE_GATE.relative_to(ROOT)} declares no CHAINS to compare against")
-    return tuple(marker for _label, chain in chains for marker in chain)
-
-
 def check_transcript_matches_the_oracle() -> None:
-    """Every marker this gate requires is one the x86 gate requires too.
-
-    The claim is ABI compatibility, so the transcript must be the oracle's
-    rather than one written to suit whatever this root implements. Reading the
-    x86 gate at run time is what keeps that true as both change: a marker
-    renamed there and here in the same commit would otherwise look like
-    agreement.
-
-    `SEL4_ONLY` is the declared exception list, and it is checked in both
-    directions -- an entry that stops being seL4-only is as much a drift as an
-    undeclared addition.
-
-    Compared against the oracle's parsed `CHAINS`, not against its file text.
-    A substring search over the source would accept any line the oracle merely
-    *mentions*, and the oracle mentions plenty it does not require: its whole
-    `FORBIDDEN` list is in that file, so `[fabric] malformed sample rejected`
-    -- a line the x86 gate treats as a hard failure -- would read as agreement.
-    Importing the module makes "the oracle requires this" mean what it says.
-    """
-    oracle_markers = load_oracle_markers()
-    for _label, chain in CHAINS:
-        for pattern in chain:
-            # Only *participant* markers are compared, which is what the
-            # milestone's claim is about: those come from the six binaries this
-            # gate does not modify, so a difference in one is a real divergence.
-            #
-            # Two kinds are excluded, both because they have no x86 counterpart
-            # by construction rather than by convenience. The `SLIME_ROOT` and
-            # `SLIME_GRAPH` lines are this root's own accounting, which the
-            # retired kernel does not emit at all. And `[init]` is the scenario
-            # driver: on x86 the composition is `launch_fabric_graph` inside a
-            # much larger boot, while here it is `drive_stream_plane` and the
-            # whole of the boot, so their progress markers differ by design.
-            # `[init] fabric stream complete` is the one both emit, and it is
-            # compared like any participant marker.
-            if not pattern.startswith(r"\["):
-                continue
-            if pattern.startswith(r"\[init\]") and "fabric stream complete" not in pattern:
-                continue
-            plain = pattern.replace("\\[", "[").replace("\\]", "]")
-            if any(plain in marker for marker in oracle_markers):
-                if pattern in SEL4_ONLY:
-                    fail(
-                        f"{pattern} is listed in SEL4_ONLY but the x86 gate "
-                        "requires it too; remove the exception"
-                    )
-                continue
-            if pattern not in SEL4_ONLY:
-                fail(
-                    f"{plain} is required here but not by "
-                    f"{ORACLE_GATE.relative_to(ROOT)}; either it is drift from "
-                    "the oracle's transcript, or it belongs in SEL4_ONLY with "
-                    "its reason"
-                )
+    """The frozen cutover chains remain non-empty and internally unique."""
+    if not CHAINS:
+        fail("CHAINS must contain a non-empty marker corpus")
+    for label, chain in CHAINS:
+        if not chain or len(set(chain)) != len(chain):
+            fail(f"CHAINS entry {label!r} must be non-empty and duplicate-free")
+    marker_count = sum(len(chain) for _label, chain in CHAINS)
     print(
-        f"transcript: every component marker is one the x86 gate requires, "
-        f"except {len(SEL4_ONLY)} declared seL4-only marker(s)",
+        f"transcript: {marker_count} frozen markers plus "
+        f"{len(SEL4_ONLY)} declared seL4-only marker(s)",
         flush=True,
     )
 

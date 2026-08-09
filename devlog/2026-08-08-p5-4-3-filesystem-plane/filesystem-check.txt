@@ -1,0 +1,58 @@
+Command: just sel4_filesystem_check
+Date: 2026-08-08
+Exit: 0
+
+Boot: build/slime-sel4-filesystem.elf (generation 29) on the pinned qemu-arm-virt
+profile, against scripts/build/build-directory-fixture.py's image.
+
+Observed:
+[filesystem] ready
+[init] filesystem service spawned
+[init] directory probe spawned
+[directory-probe] no-cap denied
+SLIME_GRAPH capability transfer task=4 channel=0 side=producer caps=1
+[filesystem] ready
+SLIME_GRAPH capability transfer task=3 channel=0 side=consumer caps=1
+SLIME_GRAPH capability transfer task=4 channel=0 side=producer caps=1
+SLIME_GRAPH capability transfer task=3 channel=0 side=consumer caps=1
+SLIME_GRAPH capability transfer task=4 channel=0 side=producer caps=1
+SLIME_GRAPH capability transfer task=3 channel=0 side=consumer caps=1
+[directory-probe] interrupted transition preserved root
+[directory-probe] scoped read ok
+SLIME_GRAPH capability transfer task=4 channel=0 side=producer caps=1
+SLIME_GRAPH capability transfer task=3 channel=0 side=consumer caps=1
+SLIME_GRAPH capability transfer task=4 channel=0 side=producer caps=1
+SLIME_GRAPH capability transfer task=3 channel=0 side=consumer caps=1
+[directory-probe] root transition committed
+SLIME_GRAPH capability transfer task=4 channel=0 side=producer caps=1
+SLIME_GRAPH capability transfer task=3 channel=0 side=consumer caps=2
+[directory-probe] derive narrowed
+SLIME_GRAPH capability transfer task=4 channel=0 side=producer caps=1
+
+Terminal result:
+transcript: 11 markers observed; the oracle's own directory-probe drove read, interrupted-write, write, derive, and boundary arms through the seL4 filesystem service, handing its view across 10 times
+seL4 filesystem plane check: the oracle's own directory-probe resolved names, committed a root transition, and derived a narrowed subdirectory through a seL4 filesystem service backed by a userspace object store — unmodified, because M6.3's service half is policy
+
+Enforced beyond the ordered markers:
+- exactly one client completed the scenario. The root also launches an
+  unconfigured copy of `directory-probe` — the oracle's own binary, which
+  carries no seL4 authority probe and exits nonzero when it finds no
+  capability. Its exit is tolerated; a second *completion* is not, because that
+  would mean two clients raced on one namespace.
+- the client's directory view crossed to the service on every request: at least
+  four producer-side and four consumer-side transfers, ten observed. A service
+  answering from its own authority instead would show none.
+- the GPT and protective MBR are byte-identical after the boot.
+- the image is NOT byte-identical overall, so the write arms actually committed
+  something rather than trivially passing the comparison.
+
+Note the `caps=2` line: that is the service returning the derived subdirectory
+capability alongside its reply, which is the whole point of `OP_DERIVE`.
+
+What is unmodified:
+`components/bins/src/bin/directory-probe.rs` is the oracle's client, byte for
+byte, shared with `just directory_check`. It drives the seL4 service without
+knowing the service exists — which is the finding: M6.3's userspace half is
+policy, and policy ports. What changed underneath is that object bytes come
+from `boot_contracts::object_store` over a granted block capability rather than
+from a kernel `store_transact` with an ambient `buffer_addr`.

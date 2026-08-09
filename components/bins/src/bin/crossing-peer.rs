@@ -32,12 +32,11 @@ const GATE_SLOT: u32 = 1;
 /// that skips `Transit` frees it, and both operations then answer `ERR_BAD_CAP`
 /// because `resolve_channel` finds no entry for the key the capability carries.
 ///
-/// A send **and** a non-blocking receive, but not a round trip. `cap_transfer`
-/// ran `ChannelTable::reassign` on a loopback, which takes the split branch:
-/// init stays `producer`, this task becomes `consumer`, and the `reverse` queue
-/// is allocated at that moment. So this task's send resolves to `reverse` and
-/// its receive resolves to `forward` — two distinct queues, and init is the
-/// only task that could ever enqueue on `forward`, which it no longer can.
+/// A send **and** a non-blocking receive, but not a round trip. The transferred
+/// capability carries its channel side, so its send and receive resolve to the
+/// two distinct queues the pair was minted with. Init dropped the opposite half
+/// before the loop and is the only task that could have enqueued on this task's
+/// receive queue.
 /// The receive therefore expects `ERR_WOULDBLOCK`, and getting it proves the
 /// entry resolves in the direction the send does not exercise. Delivery is the
 /// channel plane's property and `sel4_channel_check` owns it.

@@ -20,26 +20,25 @@
 //! outside the root ever sees one — the component reads only the slot number
 //! step 3 assigns.
 //!
-//! # Why an entry records both ends
+//! # Why an entry records the sender and destination end
 //!
 //! A parked capability is owned by no task, which is exactly what makes it a
-//! leak if either end dies while it sits here. Both are recorded so
-//! [`Transit::reclaim`] can drop it in both cases:
+//! leak if the sender dies or the destination end disappears while it sits
+//! here. The destination is a **channel end**, not a receiver task: since B25
+//! more than one task may hold one end, and whoever dequeues the message is the
+//! receiver. Binding its attached capabilities to the same queue end preserves
+//! that one delivery decision instead of trying to predict a winning task at
+//! send time.
 //!
-//! - the **sender** dying means the loan it parked is being settled by the
-//!   shared-buffer table's own holder reclamation, so the entry names a
-//!   capability that no longer exists;
-//! - the **receiver** dying means nothing will ever collect it, so the entry
-//!   would sit here until the epoch ended.
-//!
-//! Dropping the entry is all this table owes in either case. The underlying
-//! resource is reclaimed by whoever owns it —
+//! [`Transit::reclaim`] drops an entry when its sender dies or the last holder
+//! of its destination end dies. Dropping the entry is all this table owes. The
+//! underlying resource is reclaimed by whoever owns it —
 //! [`SharedBufferTable::reclaim_holder`](crate::shared_buffer::SharedBufferTable::reclaim_holder)
 //! settles the lender's loans — and a capability is a name for a resource, not
 //! the resource.
 
-use crate::graph::{Capability, Resource};
-use crate::ipc::{IpcError, LogicalCap};
+use crate::graph::{Capability, GraphTables, Resource, Side};
+use crate::ipc::{ChannelKey, IpcError, LogicalCap};
 use crate::task::TaskId;
 
 /// Capabilities that may be in flight across the whole graph at once.
@@ -59,10 +58,9 @@ struct Entry {
     capability: Capability,
     /// The task that parked it. Its table no longer holds the capability.
     sender: TaskId,
-    /// The task whose `recv` will collect it — the peer on the channel the
-    /// message was sent over, resolved at send time so a later change of who is
-    /// receiving cannot redirect a capability already in flight.
-    receiver: TaskId,
+    /// The queue end whose `recv` may collect it.
+    channel: ChannelKey,
+    receiving_side: Side,
 }
 
 /// Capabilities parked between their send and their receive.
@@ -91,8 +89,8 @@ impl Transit {
         self.len == 0
     }
 
-    /// Park `capability` on its way from `sender` to `receiver`, returning the
-    /// token the message carries.
+    /// Park `capability` on its way from `sender` to one channel end, returning
+    /// the token the message carries.
     ///
     /// The caller must already have removed it from `sender`'s table: this
     /// takes ownership of a capability no table holds, and a caller that parked
@@ -101,7 +99,8 @@ impl Transit {
         &mut self,
         capability: Capability,
         sender: TaskId,
-        receiver: TaskId,
+        channel: ChannelKey,
+        receiving_side: Side,
     ) -> Result<LogicalCap, IpcError> {
         let token = self.next;
         let next = self
@@ -117,7 +116,8 @@ impl Transit {
             token,
             capability,
             sender,
-            receiver,
+            channel,
+            receiving_side,
         });
         self.next = next;
         self.len += 1;
@@ -159,25 +159,30 @@ impl Transit {
     /// [`Self::arrive`] takes it, so a scan here sees the end while it sits in
     /// some third channel's queue.
     pub fn holds_endpoint(&self, channel: u32) -> bool {
-        self.entries
-            .iter()
-            .flatten()
-            .any(|entry| entry.capability.resource == Resource::Endpoint { channel })
+        self.entries.iter().flatten().any(|entry| {
+            matches!(entry.capability.resource, Resource::Endpoint { channel: key, .. } if key == channel)
+        })
     }
 
-    /// Take the capability `token` names, if `receiver` is the task it was sent
+    /// Take the capability `token` names if it arrived on the end it was sent
     /// to.
     ///
-    /// The receiver check is what stops a token leaking through some other path
-    /// from delivering a capability to a task it was never sent to. It is
-    /// redundant with the queue — a message reaches exactly one receiver — and
-    /// it is kept anyway, because it is the check that would still hold if a
-    /// message were ever requeued or forwarded.
-    pub fn arrive(&mut self, token: LogicalCap, receiver: TaskId) -> Option<Capability> {
+    /// The check follows the queue, not a preselected task. Two holders of one
+    /// receive end already race to dequeue a message; the task that wins that
+    /// single race receives both the bytes and their capabilities. Supplying a
+    /// different channel or side cannot redirect a leaked or requeued token.
+    pub fn arrive(
+        &mut self,
+        token: LogicalCap,
+        channel: ChannelKey,
+        receiving_side: Side,
+    ) -> Option<Capability> {
         let slot = self.entries.iter_mut().find(|entry| {
-            entry
-                .as_ref()
-                .is_some_and(|entry| entry.token == token && entry.receiver == receiver)
+            entry.as_ref().is_some_and(|entry| {
+                entry.token == token
+                    && entry.channel == channel
+                    && entry.receiving_side.reaches(receiving_side)
+            })
         })?;
         let entry = slot.take()?;
         self.len -= 1;
@@ -200,17 +205,25 @@ impl Transit {
         Some(entry.capability)
     }
 
-    /// Drop every entry either end of which is `task`, reporting how many.
+    /// Drop every entry whose sender is `task` or whose destination end loses
+    /// its last holder, reporting how many.
     ///
-    /// See the module doc: the entry is forgotten, not settled. The resource it
-    /// named is reclaimed by its own owner.
-    pub fn reclaim(&mut self, task: TaskId) -> usize {
+    /// The dying task's table is still installed, so the holder query excludes
+    /// it explicitly. A co-holder keeps the entry collectible.
+    pub fn reclaim(&mut self, graph: &GraphTables, task: TaskId) -> usize {
         let mut dropped = 0;
         for slot in self.entries.iter_mut() {
-            if slot
-                .as_ref()
-                .is_some_and(|entry| entry.sender == task || entry.receiver == task)
-            {
+            let should_drop = slot.as_ref().is_some_and(|entry| {
+                entry.sender == task
+                    || (graph.get(task).is_some_and(|table| {
+                        table.reaches_endpoint(entry.channel, entry.receiving_side)
+                    }) && !graph.holds_endpoint_side(
+                        entry.channel,
+                        entry.receiving_side,
+                        Some(task),
+                    ))
+            });
+            if should_drop {
                 *slot = None;
                 self.len -= 1;
                 dropped += 1;
@@ -229,11 +242,13 @@ impl Default for Transit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::Resource;
+    use crate::graph::{GraphTables, Resource, Side};
     use crate::shared_buffer::{BufferId, GenerationEpoch, HolderId, LoanHandle, LoanId};
 
     const SENDER: TaskId = TaskId(1);
     const RECEIVER: TaskId = TaskId(2);
+    const COHOLDER: TaskId = TaskId(3);
+    const CHANNEL: ChannelKey = 7;
 
     fn loan(id: u64) -> Capability {
         Capability {
@@ -249,67 +264,130 @@ mod tests {
         }
     }
 
+    fn hold(graph: &mut GraphTables, task: TaskId, side: Side) {
+        if graph.get(task).is_none() {
+            graph.create(task).expect("create");
+        }
+        let table = graph.get_mut(task).expect("table");
+        let slot = table.free_slot_from(0).expect("slot");
+        table
+            .install(
+                slot,
+                Capability {
+                    resource: Resource::Endpoint {
+                        channel: CHANNEL,
+                        side,
+                    },
+                    rights: 0,
+                },
+            )
+            .expect("install");
+    }
+
     #[test]
-    fn a_parked_capability_reaches_the_task_it_was_sent_to() {
+    fn a_parked_capability_reaches_the_destination_end() {
         let mut transit = Transit::new();
-        let token = transit.depart(loan(7), SENDER, RECEIVER).unwrap();
+        let token = transit
+            .depart(loan(7), SENDER, CHANNEL, Side::Consumer)
+            .unwrap();
         assert_eq!(transit.len(), 1);
-        assert_eq!(transit.arrive(token, RECEIVER), Some(loan(7)));
-        assert_eq!(transit.len(), 0, "collecting empties the entry");
         assert_eq!(
-            transit.arrive(token, RECEIVER),
-            None,
-            "a token settles exactly once"
+            transit.arrive(token, CHANNEL, Side::Consumer),
+            Some(loan(7))
+        );
+        assert_eq!(transit.len(), 0, "collecting empties the entry");
+        assert_eq!(transit.arrive(token, CHANNEL, Side::Consumer), None);
+    }
+
+    #[test]
+    fn the_wrong_channel_or_side_cannot_collect_a_capability() {
+        let mut transit = Transit::new();
+        let token = transit
+            .depart(loan(7), SENDER, CHANNEL, Side::Consumer)
+            .unwrap();
+        assert_eq!(transit.arrive(token, CHANNEL + 1, Side::Consumer), None);
+        assert_eq!(transit.arrive(token, CHANNEL, Side::Producer), None);
+        assert_eq!(transit.len(), 1, "refusal leaves the capability parked");
+        assert_eq!(
+            transit.arrive(token, CHANNEL, Side::Consumer),
+            Some(loan(7))
         );
     }
 
     #[test]
-    fn a_capability_is_not_delivered_to_another_task() {
+    fn either_coholder_can_collect_from_the_same_destination_end() {
         let mut transit = Transit::new();
-        let token = transit.depart(loan(7), SENDER, RECEIVER).unwrap();
-        assert_eq!(transit.arrive(token, TaskId(3)), None);
+        let token = transit
+            .depart(loan(7), SENDER, CHANNEL, Side::Consumer)
+            .unwrap();
+        let mut graph = GraphTables::new();
+        hold(&mut graph, RECEIVER, Side::Consumer);
+        hold(&mut graph, COHOLDER, Side::Consumer);
+        assert!(graph.holds_endpoint_side(CHANNEL, Side::Consumer, None));
         assert_eq!(
-            transit.len(),
-            1,
-            "a refused collection leaves the capability parked"
+            transit.arrive(token, CHANNEL, Side::Consumer),
+            Some(loan(7)),
+            "delivery follows the queue end, not a task chosen at send time"
         );
     }
 
     #[test]
     fn tokens_are_never_reused() {
         let mut transit = Transit::new();
-        let first = transit.depart(loan(1), SENDER, RECEIVER).unwrap();
-        transit.arrive(first, RECEIVER).unwrap();
-        let second = transit.depart(loan(2), SENDER, RECEIVER).unwrap();
+        let first = transit
+            .depart(loan(1), SENDER, CHANNEL, Side::Consumer)
+            .unwrap();
+        transit
+            .arrive(first, CHANNEL, Side::Consumer)
+            .expect("arrive");
+        let second = transit
+            .depart(loan(2), SENDER, CHANNEL, Side::Consumer)
+            .unwrap();
         assert_ne!(first, second, "a settled token never names a fresh entry");
-        assert_eq!(transit.arrive(first, RECEIVER), None);
+        assert_eq!(transit.arrive(first, CHANNEL, Side::Consumer), None);
     }
 
     #[test]
     fn a_failed_send_recalls_to_its_sender_only() {
         let mut transit = Transit::new();
-        let token = transit.depart(loan(7), SENDER, RECEIVER).unwrap();
+        let token = transit
+            .depart(loan(7), SENDER, CHANNEL, Side::Consumer)
+            .unwrap();
         assert_eq!(transit.recall(token, RECEIVER), None, "recall is by sender");
         assert_eq!(transit.recall(token, SENDER), Some(loan(7)));
         assert_eq!(transit.len(), 0);
     }
 
     #[test]
-    fn either_end_dying_reclaims_the_entry() {
+    fn destination_death_reclaims_only_after_the_last_holder_dies() {
+        let mut graph = GraphTables::new();
+        hold(&mut graph, RECEIVER, Side::Consumer);
+        hold(&mut graph, COHOLDER, Side::Consumer);
         let mut transit = Transit::new();
-        transit.depart(loan(1), SENDER, RECEIVER).unwrap();
-        transit.depart(loan(2), SENDER, RECEIVER).unwrap();
+        transit
+            .depart(loan(1), SENDER, CHANNEL, Side::Consumer)
+            .unwrap();
         assert_eq!(
-            transit.reclaim(TaskId(9)),
+            transit.reclaim(&graph, RECEIVER),
             0,
-            "an unrelated task drops none"
+            "co-holder keeps it collectible"
         );
-        assert_eq!(transit.reclaim(RECEIVER), 2, "nothing will collect these");
+        graph.release(RECEIVER);
+        assert_eq!(
+            transit.reclaim(&graph, COHOLDER),
+            1,
+            "last holder removes destination"
+        );
         assert!(transit.is_empty());
+    }
 
+    #[test]
+    fn sender_death_reclaims_the_entry() {
         let mut transit = Transit::new();
-        transit.depart(loan(3), SENDER, RECEIVER).unwrap();
-        assert_eq!(transit.reclaim(SENDER), 1);
+        transit
+            .depart(loan(3), SENDER, CHANNEL, Side::Consumer)
+            .unwrap();
+        assert_eq!(transit.reclaim(&GraphTables::new(), SENDER), 1);
         assert!(transit.is_empty());
     }
 
@@ -318,11 +396,11 @@ mod tests {
         let mut transit = Transit::new();
         for index in 0..MAX_TRANSIT {
             transit
-                .depart(loan(index as u64), SENDER, RECEIVER)
+                .depart(loan(index as u64), SENDER, CHANNEL, Side::Consumer)
                 .unwrap();
         }
         assert_eq!(
-            transit.depart(loan(99), SENDER, RECEIVER),
+            transit.depart(loan(99), SENDER, CHANNEL, Side::Consumer),
             Err(IpcError::DestinationSlotsExhausted),
         );
         assert_eq!(transit.len(), MAX_TRANSIT);

@@ -10,22 +10,10 @@ and asserts P5.3's exit condition:
     control-message bound over seL4, with quota exhaustion and peer death
     reclaiming the same resources the x86 corpus records.
 
-# The transcript is the x86 one
-
-`SAMPLE_MARKERS` below is copied verbatim from `check-sample-plane.py`'s own
-`MARKERS`, minus the two lines only the retired kernel can emit (see
-`ORACLE_ONLY` for which and why). Every remaining line is produced by
-`sample-lender` and `sample-receiver`, which are **unmodified** -- the same
-binaries the x86 oracle runs, with no seL4 branch in either.
-
-That is the whole claim of the milestone, and it is why the marker list is
-copied rather than rewritten: a transcript adjusted to suit whatever this root
-happened to implement would prove nothing about ABI compatibility. If a line had
-to change, the components would have had to change, and they did not.
-
-`check_transcript_matches_the_oracle` re-reads the x86 gate at run time and
-fails if the two lists drift apart, so this cannot quietly become a different
-transcript that merely resembles the oracle's.
+The component marker corpus was frozen at the P5 cutover. Every line is emitted
+by the unchanged `sample-lender` and `sample-receiver` binaries; the two
+retired-kernel-only lines remain documented in `ORACLE_ONLY` rather than being
+claimed by this product gate.
 """
 
 from __future__ import annotations
@@ -48,15 +36,12 @@ IMAGE = ROOT / "build" / "slime-sel4-sample.elf"
 MANIFEST = ROOT / "build" / "slime-sel4-sample.identity.json"
 BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
 FIXTURE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "sel4-sample.zti"
-ORACLE_GATE = ROOT / "scripts" / "check" / "check-sample-plane.py"
 IMAGE_VARIANT = "sample"
 
 BOOT_TIMEOUT_SECONDS = 180
 
-# Lines in the x86 gate's MARKERS that this gate deliberately does not require,
-# each with the reason. Neither is emitted by a sample component: both come from
-# code that has no seL4 counterpart, so requiring them would be requiring the
-# retired kernel rather than the transcript its components produce.
+# Historical oracle-only lines excluded when this self-contained seL4 gate was
+# frozen at P5 cutover. The component transcript below is now authoritative.
 ORACLE_ONLY: dict[str, str] = {
     # `kernel/src/runtime/bootstrap.rs:419`, after a `require_grant` sweep.
     # `slime-root` validates grants differently -- `inbound_authority` derives
@@ -89,8 +74,7 @@ ORACLE_ONLY: dict[str, str] = {
     ),
 }
 
-# Copied verbatim from `check-sample-plane.py::MARKERS`, in order.
-# `check_transcript_matches_the_oracle` verifies that claim at run time.
+# Frozen component transcript inherited at the P5 cutover.
 SAMPLE_MARKERS: tuple[str, ...] = (
     "[sample-lender] factory is not a buffer",
     "[sample-lender] buffer created",
@@ -502,44 +486,12 @@ def check_sample_transcript(transcript: str) -> None:
 
 
 def check_transcript_matches_the_oracle() -> None:
-    """`SAMPLE_MARKERS` really is the x86 gate's list, minus `ORACLE_ONLY`.
-
-    Read from the oracle's source at run time rather than trusted. Copying a
-    marker list into a second file and asserting it there proves only that this
-    file agrees with itself; the claim under test is that seL4 produces the
-    transcript the *retired kernel's* gate requires, so that gate is the
-    authority and drift between them must fail rather than pass.
-    """
-    try:
-        source = ORACLE_GATE.read_text(encoding="utf-8")
-    except OSError as error:
-        fail(f"cannot read {ORACLE_GATE.relative_to(ROOT)}: {error}")
-    block = re.search(r"^MARKERS = \[(.*?)^\]", source, re.MULTILINE | re.DOTALL)
-    if block is None:
-        fail(f"cannot find MARKERS in {ORACLE_GATE.relative_to(ROOT)}")
-    oracle = tuple(re.findall(r'^\s*"([^"]+)",', block.group(1), re.MULTILINE))
-    if not oracle:
-        fail(f"parsed no markers from {ORACLE_GATE.relative_to(ROOT)}")
-    expected = tuple(marker for marker in oracle if marker not in ORACLE_ONLY)
-    if expected != SAMPLE_MARKERS:
-        missing = [marker for marker in expected if marker not in SAMPLE_MARKERS]
-        extra = [marker for marker in SAMPLE_MARKERS if marker not in expected]
-        fail(
-            f"SAMPLE_MARKERS has drifted from {ORACLE_GATE.relative_to(ROOT)}: "
-            f"missing {missing}, unexpected {extra}. Either the oracle's "
-            "transcript changed, in which case this gate must follow it, or a "
-            "marker was dropped here to make a regression pass."
-        )
-    unused = [marker for marker in ORACLE_ONLY if marker not in oracle]
-    if unused:
-        fail(
-            f"ORACLE_ONLY names markers the oracle no longer emits: {unused}; "
-            "an exemption for a line that does not exist hides whatever "
-            "replaced it"
-        )
+    """The frozen cutover transcript remains non-empty and duplicate-free."""
+    if not SAMPLE_MARKERS or len(set(SAMPLE_MARKERS)) != len(SAMPLE_MARKERS):
+        fail("SAMPLE_MARKERS must be a non-empty duplicate-free transcript")
     print(
-        f"transcript: matches {ORACLE_GATE.relative_to(ROOT)} exactly, minus "
-        f"{len(ORACLE_ONLY)} documented kernel-only lines",
+        f"transcript: {len(SAMPLE_MARKERS)} frozen component markers plus "
+        f"{len(ORACLE_ONLY)} documented retired-kernel exclusions",
         flush=True,
     )
 

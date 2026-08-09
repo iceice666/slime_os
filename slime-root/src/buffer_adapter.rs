@@ -295,6 +295,97 @@ impl<'a> BufferAdapter<'a> {
         Ok(FrameCap(slot.index()))
     }
 
+    /// Prove two fresh frame objects are independent before either is handed to
+    /// the shared-buffer state machine.
+    ///
+    /// The root maps both into its scratch VSpace, writes distinct sentinels,
+    /// and reads them back after both writes. Aliased backing would overwrite
+    /// one value. Both mappings and root capabilities are then removed, while
+    /// the allocator's untyped watermark remains cumulative by design.
+    pub fn prove_frame_independence(
+        &mut self,
+        vspace: sel4::cap::VSpace,
+        first_vaddr: usize,
+        second_vaddr: usize,
+    ) -> Result<(), BufferAdapterError> {
+        if first_vaddr == second_vaddr
+            || !first_vaddr.is_multiple_of(PAGE_SIZE)
+            || !second_vaddr.is_multiple_of(PAGE_SIZE)
+        {
+            return Err(BufferAdapterError::Map {
+                vaddr: first_vaddr,
+                error: sel4::Error::AlignmentError,
+            });
+        }
+        let first = self.allocate_frame()?;
+        let second = self.allocate_frame()?;
+        let first_cap = frame_cap(first);
+        let second_cap = frame_cap(second);
+        first_cap
+            .frame_map(
+                vspace,
+                first_vaddr,
+                sel4::CapRights::read_write(),
+                sel4::VmAttributes::default() | sel4::VmAttributes::EXECUTE_NEVER,
+            )
+            .map_err(|error| BufferAdapterError::Map {
+                vaddr: first_vaddr,
+                error,
+            })?;
+        second_cap
+            .frame_map(
+                vspace,
+                second_vaddr,
+                sel4::CapRights::read_write(),
+                sel4::VmAttributes::default() | sel4::VmAttributes::EXECUTE_NEVER,
+            )
+            .map_err(|error| BufferAdapterError::Map {
+                vaddr: second_vaddr,
+                error,
+            })?;
+        const FIRST: u64 = 0x4652_414d_455f_4f4e;
+        const SECOND: u64 = 0x4652_414d_455f_5457;
+        // SAFETY: both virtual pages were mapped read-write immediately above,
+        // and the volatile accesses stay within the first word of each page.
+        unsafe {
+            (first_vaddr as *mut u64).write_volatile(FIRST);
+            (second_vaddr as *mut u64).write_volatile(SECOND);
+            if (first_vaddr as *const u64).read_volatile() != FIRST
+                || (second_vaddr as *const u64).read_volatile() != SECOND
+            {
+                return Err(BufferAdapterError::Map {
+                    vaddr: first_vaddr,
+                    error: sel4::Error::InvalidArgument,
+                });
+            }
+        }
+        first_cap
+            .frame_unmap()
+            .map_err(|error| BufferAdapterError::Unmap {
+                vaddr: first_vaddr,
+                error,
+            })?;
+        second_cap
+            .frame_unmap()
+            .map_err(|error| BufferAdapterError::Unmap {
+                vaddr: second_vaddr,
+                error,
+            })?;
+        root_cptr(first)
+            .delete()
+            .map_err(|error| BufferAdapterError::Release {
+                slot: first.0,
+                error,
+            })?;
+        root_cptr(second)
+            .delete()
+            .map_err(|error| BufferAdapterError::Release {
+                slot: second.0,
+                error,
+            })?;
+        Ok(())
+    }
+
     /// Ensure every intermediate translation table covering `vaddr` exists in
     /// `vspace`, allocating and recording the ones that do not.
     ///

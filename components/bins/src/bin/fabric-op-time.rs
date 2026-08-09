@@ -13,7 +13,7 @@
 #[path = "../fabric_operation_scenario.rs"]
 mod scenario;
 
-use slime_rt::{ERR_PEER_DEAD, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
+use slime_rt::{ERR_BAD_CAP, ERR_PEER_DEAD, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
 
 slime_rt::entry!(main);
 
@@ -48,6 +48,13 @@ fn try_wait_phase(expected: u8) -> Option<()> {
     let mut caps = [0u64; MAX_CAPS_PER_MSG];
     match slime_rt::recv(PHASE_SLOT, &mut bytes, &mut caps) {
         ERR_WOULDBLOCK => None,
+        // No phase channel at all. The seL4 root launches every component the
+        // generation declares, so this boot also starts one *unconfigured*
+        // instance that `init` never spawned; only the spawned copy holds the
+        // runtime-minted phase end. Probing the authority distinguishes the two
+        // — neither an env flag nor the manifest-derived layout can, since both
+        // tasks are built from the same image and the same generation.
+        ERR_BAD_CAP => slime_components::fabric_boot::park_only(b"fabric-op-time"),
         ERR_PEER_DEAD => scenario::fail(b"time phase peer died"),
         value if value < 0 => scenario::fail(b"time phase receive"),
         1 if bytes[0] == expected => Some(()),

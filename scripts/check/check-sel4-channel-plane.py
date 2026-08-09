@@ -92,11 +92,11 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         # the slot the boot layout numbers for it; `console` holds recv (0x2) at
         # slot 0, which is the slot `console.rs` compiles against.
         "init holds the send end at its layout slot",
-        r"SLIME_GRAPH channel end task=1 slot=3 key=0 rights=0x1",
+        r"SLIME_GRAPH channel end task=1 slot=3 key=0 side=producer rights=0x1",
     ),
     (
         "console holds the receive end at slot 0",
-        r"SLIME_GRAPH channel end task=0 slot=0 key=0 rights=0x2",
+        r"SLIME_GRAPH channel end task=0 slot=0 key=0 side=consumer rights=0x2",
     ),
     (
         # A bidirectional grant whose two ends are the same component is a
@@ -114,7 +114,7 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     ),
     (
         "init holds both directions at one slot",
-        r"SLIME_GRAPH channel end task=1 slot=7 key=1 rights=0x3",
+        r"SLIME_GRAPH channel end task=1 slot=7 key=1 side=loopback rights=0x3",
     ),
     (
         # Every declared channel placed, nothing left unplaced. A generation

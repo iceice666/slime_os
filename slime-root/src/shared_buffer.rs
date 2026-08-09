@@ -834,7 +834,12 @@ impl SharedBufferTable {
         let absolute_offset_pages = (loan.offset_pages as usize)
             .checked_add(relative_pages.0)
             .ok_or(SharedBufferError::BadRange)?;
-        let region = self.live_region(loan.buffer)?;
+        // Direct owner authority is gone after `release`, but an outstanding
+        // loan deliberately retains the region and remains independently
+        // usable by its receiver. The live loan above is the authority check;
+        // requiring an unreleased owner entry here would make release revoke
+        // the loan implicitly, unlike the x86 table and `release`'s contract.
+        let region = self.live_region_any(loan.buffer)?;
         let absolute_offset = absolute_offset_pages
             .checked_mul(PAGE_SIZE)
             .ok_or(SharedBufferError::BadRange)?;
@@ -2021,6 +2026,17 @@ mod tests {
             .expect("loan");
         table.release(&mut adapter, OWNER, handle).expect("release");
         assert_eq!(table.total_pages(), 2);
+        table
+            .map_loan(
+                &mut adapter,
+                RECEIVER,
+                loan,
+                VSpaceCap(7),
+                PAGE_SIZE * 4,
+                0,
+                PAGE_SIZE * 2,
+            )
+            .expect("released owner region remains mappable through live loan");
         assert_eq!(
             table.return_loan(&mut adapter, HolderId(99), loan),
             Err(SharedBufferError::WrongReceiver)

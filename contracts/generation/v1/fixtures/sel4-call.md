@@ -9,11 +9,11 @@ A tenth seL4 generation, beside [`sel4.zti`](sel4.md),
 [`valid.zti`](valid.zti). It declares the C8.6 call graph — one `ParameterCall`
 route, two clients, a server, and a capability-routed clock — for P5.4.6.
 
-**It does not pass.** The plane builds, admits its graph, mints and binds every
-control channel, spawns all five components, and delivers each role request to
-the broker; it then deadlocks on backlog **B25**. The fixture is committed in
-that state deliberately, and the reason is in
-[`devlog/2026-08-07-p5-4-6-call-spawn-semantics/`](../../../../devlog/2026-08-07-p5-4-6-call-spawn-semantics/index.md).
+The plane uses parent-vouched post-spawn introduction: `init` retains the
+participant half of each minted control pair, spawns the broker and
+participants, then transfers each participant's supervision handle to the
+broker over that participant's authenticated channel. This is the seL4
+composition that closes backlog **B25** while preserving the x86 call model.
 
 ## Why generation 18
 
@@ -55,20 +55,22 @@ Both halves of that arrangement are load-bearing:
 So the grants name and the minted endpoints authorize. That split is the whole
 reason this fixture looks like it declares edges it does not use.
 
-## Why `fabric-service` alone is `transferable`
+## Why four executables are `transferable`
 
-`init-fabric-service` declares `transferable = true`; the four participant
-executables do not. `SpawnPlan::transferable_supervision` reads `RIGHT_TRANSFER`
-off the **executable**, and the fabric's supervision handle is the one init
-passes on — granted to the client and the server so each can name the fabric as
-a loan receiver. No participant's handle is delegated, so no participant's
-executable needs the bit.
+`init-fabric-service` and the three call participant executable grants declare
+`transferable = true`; the clock does not. `SpawnPlan::transferable_supervision`
+reads `RIGHT_TRANSFER` off the **executable**, so the returned supervision
+handle is movable only when its composition requires delegation.
 
-The layout and the fixture must agree bit for bit (B10): `SEL4_CALL_LAYOUT` gives
-`fabric-service` `0x1000c` and the four participants `0x10008`, matching these
-flags. The first draft had it inverted, and nothing running objected — the dump
-reported the grant's rights rather than the layout's, which is backlog **B26**,
-now fixed.
+The fabric handle is passed to the client and server so each can name the
+fabric as a loan receiver. Each participant handle is passed by init to the
+broker after that participant sends its role request, authenticating the caller
+without ambient task ids or requiring a component to hold authority naming
+itself. The clock handle remains with init and needs no transfer authority.
+
+The layout and the fixture agree bit for bit (B10): `SEL4_CALL_LAYOUT` gives
+`fabric-service` and the three participants `0x1000c`, while
+`fabric-call-time` remains `0x10008`.
 
 ## The shared-buffer budget
 
@@ -88,9 +90,9 @@ terminal-backpressure arms, all inline, and the clock sends only
 `scripts/build/boot_layout.py`'s `SEL4_CALL_LAYOUT`, seven rows: the two
 factories, then the fabric and the four participants. Frozen as
 [`sel4-call.layout`](../../../boot-layout/v1/fixtures/sel4-call.layout) and
-checked by `just sel4_boot_layout_check`, which is the one gate this plane does
-pass — the layout is dumped between channel materialization and activation, long
-before the deadlock, so B10's property is observable even though C8.6's is not.
+checked by `just sel4_boot_layout_check`. The layout is dumped between channel
+materialization and activation, so a transferability mismatch is rejected
+before runtime provisioning begins.
 
 No control channel appears in the layout, for the reason above: they are minted
 at runtime, so the table numbers only what the generation places.

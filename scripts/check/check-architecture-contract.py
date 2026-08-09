@@ -49,12 +49,6 @@ EXPECTED_PROFILES = {
 }
 UNKNOWN_TARGET = "unknown-architecture-profile"
 NEUTRAL_RESOURCE = b"architecture-neutral-resource-v1"
-EXPECTED_RELATIVE_RELOCATIONS = {
-    "x86_64-qemu-virtio": 8,
-    "aarch64-qemu-virt": 1027,
-    "aarch64-rpi5": 1027,
-    "riscv64-qemu-virt": 3,
-}
 MANIFEST = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "valid.zti"
 
 
@@ -130,33 +124,6 @@ def check_cross_profile_rejection() -> None:
     if same_isa_pairs == 0:
         fail("no same-ISA profiles exercise exact profile-id separation")
 
-
-def synthetic_elf(profile, relocation: int) -> bytes:
-    data = bytearray(152)
-    data[:6] = b"\x7fELF\x02\x01"
-    struct.pack_into("<HH", data, 16, 3, profile.elf_machine)
-    struct.pack_into("<QQQ", data, 24, 0, 0, 64)
-    struct.pack_into("<HHHHH", data, 52, 64, 0, 0, 64, 1)
-    struct.pack_into("<I", data, 68, 4)
-    struct.pack_into("<QQ", data, 88, 128, 24)
-    struct.pack_into("<Q", data, 120, 24)
-    struct.pack_into("<QQq", data, 128, 0, relocation, 0)
-    return bytes(data)
-
-
-def check_profile_relocations() -> None:
-    for profile in TARGET_PROFILES:
-        expected = EXPECTED_RELATIVE_RELOCATIONS.get(profile.name)
-        if expected is None or profile.relative_relocation != expected:
-            fail(f"target profile {profile.name!r} has the wrong relative relocation")
-        BUILD_GENERATION.parse_elf64(synthetic_elf(profile, expected), profile)
-        wrong = 1027 if expected != 1027 else 8
-        try:
-            BUILD_GENERATION.parse_elf64(synthetic_elf(profile, wrong), profile)
-        except SystemExit:
-            pass
-        else:
-            fail(f"target profile {profile.name!r} admitted relocation {wrong}")
 
 
 def kernel_image(profile) -> bytes:
@@ -333,7 +300,6 @@ def run() -> None:
     check_profiles()
     check_unknown_target()
     check_cross_profile_rejection()
-    check_profile_relocations()
     check_target_identity_and_neutral_resources()
     check_generated_bindings()
     check_rollback_window()

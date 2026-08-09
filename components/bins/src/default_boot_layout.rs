@@ -229,6 +229,26 @@ pub const SAMPLE_RECEIVER_SLOT: u32 = SLOT_ABSENT;
 #[allow(dead_code)]
 pub const SAMPLE_RECEIVER_SIDE_SLOT: u32 = SLOT_ABSENT;
 #[allow(dead_code)]
+pub const SEL4_DIRECTORY_PROBE_SLOT: u32 = SLOT_ABSENT;
+#[allow(dead_code)]
+pub const SEL4_FILESYSTEM_SERVICE_SLOT: u32 = SLOT_ABSENT;
+#[allow(dead_code)]
+pub const SEL4_GENERATION_CLIENT_SLOT: u32 = SLOT_ABSENT;
+#[allow(dead_code)]
+pub const SEL4_GENERATION_MANAGER_SLOT: u32 = SLOT_ABSENT;
+#[allow(dead_code)]
+pub const SEL4_INPUT_PROBE_SLOT: u32 = SLOT_ABSENT;
+#[allow(dead_code)]
+pub const SEL4_RECOVERY_PROBE_SLOT: u32 = SLOT_ABSENT;
+#[allow(dead_code)]
+pub const SEL4_ROLLBACK_PROBE_SLOT: u32 = SLOT_ABSENT;
+#[allow(dead_code)]
+pub const SEL4_STORAGE_PROBE_SLOT: u32 = SLOT_ABSENT;
+#[allow(dead_code)]
+pub const SEL4_STORE_PROBE_SLOT: u32 = SLOT_ABSENT;
+#[allow(dead_code)]
+pub const SEL4_TRANSFER_PROBE_SLOT: u32 = SLOT_ABSENT;
+#[allow(dead_code)]
 pub const SERVICE_SPAWN_SLOT: u32 = 12;
 #[allow(dead_code)]
 pub const SPAWN_SERVICE_SLOT: u32 = 5;

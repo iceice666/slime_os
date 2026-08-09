@@ -1,0 +1,61 @@
+Command: just sel4_dango_check
+Date: 2026-08-08
+Exit: 0
+
+Boot: build/slime-sel4-dango.elf (generation 30) on the pinned qemu-arm-virt
+profile. No disk: M6.4 is a console session, not storage.
+
+Observed (the scripted session; the root also launches unconfigured copies):
+[spawn-service] ready
+[spawn-service] shared-buffer quota live
+SLIME_GRAPH declared executable task=3 child=7 slot=1
+SLIME_GRAPH declared executable task=3 child=7 slot=2
+[init] spawn service spawned
+SLIME_GRAPH declared placed task=3 child=8 slot=2 kind=input
+SLIME_GRAPH declared placed task=3 child=8 slot=3 kind=directory
+SLIME_GRAPH declared placed task=3 child=8 slot=4 kind=endpoint-factory
+SLIME_GRAPH declared placed task=3 child=8 slot=5 kind=shared-buffer-factory
+[init] dango spawned
+[dango] shared-buffer quota live
+[spawn-service] ready
+[spawn-service] shared-buffer quota live
+[spawn-service] request
+[spawn-service] spawning child
+[spawn-service] request
+echo-agent{tool=echo,value=,env=}
+[dango] native runtime ready
+resolved:profile
+spawn-request:accepted
+[spawn-service] request
+result:exit:0
+[spawn-service] request
+[spawn-service] spawning child
+
+Terminal result:
+transcript: 14 markers observed; 2 commands resolved through the profile and 2 launched through the spawn service, an undeclared command was denied at resolution, and a malformed line was a parse error
+seL4 dango plane check: a scripted console session resolved two commands through the generation's profile and launched both through the spawn service with explicit environment, working directory, and stdin; an undeclared command was denied at resolution and a malformed line was a parse error
+
+Enforced beyond the ordered markers:
+- exactly TWO profile resolutions and TWO accepted spawn requests. A third of
+  either would mean a denied or malformed line reached the spawn service, which
+  is what `resolve-denied` and `parse-error` assert from the shell's side and
+  this asserts from the service's.
+- both launched children reported the context they were given: `sysinfo` its
+  command, `echo-agent` its arguments — so the composition passed explicit
+  environment, working directory, and stdin rather than an ambient one.
+
+Placement, which is what B30 turned out to be about:
+  SLIME_GRAPH declared executable task=3 child=7 slot=1
+  SLIME_GRAPH declared executable task=3 child=7 slot=2
+  SLIME_GRAPH declared placed task=3 child=8 slot=2 kind=input
+  SLIME_GRAPH declared placed task=3 child=8 slot=3 kind=directory
+  SLIME_GRAPH declared placed task=3 child=8 slot=4 kind=endpoint-factory
+  SLIME_GRAPH declared placed task=3 child=8 slot=5 kind=shared-buffer-factory
+
+The spawn service's two executables land at 1 and 2 — the slots its generated
+command profile names — because init gives it exactly one grant ahead of them.
+Dango's input lands at 2 and its cwd root at 3, matching its constants, because
+the generation declares those grants in that order.
+
+Every component here is the oracle's, unmodified: dango.rs, spawn-service.rs,
+sysinfo.rs, echo-agent.rs, console.rs.

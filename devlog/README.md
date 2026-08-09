@@ -203,3 +203,23 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-07 | [P5.4.6 — the C8.6 call plane's real blocker is spawn-grant semantics, not slot numbering](2026-08-07-p5-4-6-call-spawn-semantics/index.md) | Defect | Root-caused | P5.4.6, B25, C8.6 |
 | 2026-08-07 | [B26 — the boot-layout dump reported the grant's rights, hiding a too-permissive layout row](2026-08-07-b26-layout-declared-rights/index.md) | Defect | Verified | B26, B10, P5.4.6 |
 | 2026-08-07 | [P5.4.5 (part) — a monotonic-time channel makes three C8.5 arms fire on seL4](2026-08-07-p5-4-5-qos-clock/index.md) | Change | Root-caused | P5.4.5, C8.5, B25 |
+| 2026-08-08 | [B25 and P5.4.6 — endpoint copies close the seL4 native-call plane](2026-08-08-b25-endpoint-copy-call-plane/index.md) | Defect | Verified | B25, P5.4.6, P5.4, C8.6 |
+| 2026-08-08 | [P5.4.7 — C8.7 bounded native operations on seL4](2026-08-08-p5-4-7-operation-plane/index.md) | Change | Verified | P5.4.7, P5.4, C8.7 |
+| 2026-08-08 | [P5.4.8 — C8.8 filtered introspection and declared interposition on seL4](2026-08-08-p5-4-8-visibility-plane/index.md) | Change | Verified | P5.4.8, P5.4, C8.8 |
+| 2026-08-08 | [P5.4.9 — C8.9 and C8.10 on seL4: the full C8 graph in one generation](2026-08-08-p5-4-9-full-graph-boot/index.md) | Change | Verified | P5.4.9, P5.4, C8.9, C8.10 |
+| 2026-08-08 | [P5.4.2a — a device resource substrate for `slime-root`](2026-08-08-p5-4-2a-device-substrate/index.md) | Change | Verified | P5.4.2, P5.4, M5.1 |
+| 2026-08-08 | [P5.4.2b — a virtio-blk transport for `slime-root`](2026-08-08-p5-4-2b-virtio-blk/index.md) | Change | Verified | P5.4.2, P5.4, M5.2, M5.3 |
+| 2026-08-08 | [P5.4.2c (part) — a userspace component reaches the disk](2026-08-08-p5-4-2c-storage-plane/index.md) | Change | Verified | P5.4.2, P5.4, M5.2, M5.3 |
+| 2026-08-08 | [P5.4.2c — M5.4's object store, moved to userspace](2026-08-08-p5-4-2c-object-store/index.md) | Change | Verified | P5.4.2, P5.4, M5.4 |
+| 2026-08-08 | [P5.4.2c — M5.6's rollback contract, in userspace](2026-08-08-p5-4-2c-rollback-plane/index.md) | Change | Verified | P5.4.2, P5.4, M5.6 |
+| 2026-08-08 | [P5.4.2c — M5.9's recovery reconstruction, in userspace](2026-08-08-p5-4-2c-recovery-plane/index.md) | Change | Verified | P5.4.2, P5.4, M5.9 |
+| 2026-08-08 | [P5.4.3 — M6.5's generation commands, in userspace](2026-08-08-p5-4-3-generation-plane/index.md) | Change | Verified | P5.4.3, P5.4, M6.5 |
+| 2026-08-08 | [P5.4.3 — M6.3's directory mechanism, in the root](2026-08-08-p5-4-3-directory-plane/index.md) | Change | Verified | P5.4.3, P5.4, M6.3 |
+| 2026-08-08 | [P5.4.3 — M6.3's filesystem service, and the oracle's client unmodified](2026-08-08-p5-4-3-filesystem-plane/index.md) | Change | Verified | P5.4.3, P5.4, M6.3 |
+| 2026-08-08 | [P5.4.3 — input mediation, and four defects a console session exposed](2026-08-08-p5-4-3-input-mediation/index.md) | Change | Verified | P5.4.3, P5.4, M6.4 |
+| 2026-08-08 | [P5.4.3 — M6.6's powerbox, and a placement order that is an ABI](2026-08-08-p5-4-3-powerbox-plane/index.md) | Change | Verified | P5.4.3, P5.4, M6.6 |
+| 2026-08-08 | [P5.4.3 — M6.4's Dango session, and slot layout as declared data](2026-08-08-p5-4-3-dango-plane/index.md) | Defect | Verified | P5.4.3, P5.4, M6.4 |
+| 2026-08-08 | [P5.4.3 — M6.7's generation transfer, and two devices in one granule](2026-08-08-p5-4-3-transfer-plane/index.md) | Change | Verified | P5.4.3, P5.4, M6.7 |
+| 2026-08-08 | [P5.4.final — auditing whether `kernel/` can be deleted](2026-08-08-p5-4-final-deletion-audit/index.md) | Audit | Verified | P5.4.final, P5.4 |
+| 2026-08-09 | [P5.4.final — retire the custom kernel](2026-08-09-p5-4-final-kernel-retirement/index.md) | Change | Verified | P5, P5.4, P5.4.final, B31 |
+| 2026-08-09 | [B32 — park scenario receivers on their endpoints](2026-08-09-b32-parked-scenario-receivers/index.md) | Defect | Verified | P5.4.6, P5.4.7, B32 |

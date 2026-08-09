@@ -1,0 +1,5 @@
+[layout] path=init slots=3 max=64
+[layout] 0 endpoint-factory - 0x20000
+[layout] 1 executable sel4-generation-manager 0x10008
+[layout] 2 executable sel4-generation-client 0x10008
+[layout] end

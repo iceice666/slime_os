@@ -1,0 +1,5 @@
+[layout] path=init slots=3 max=64
+[layout] 0 endpoint-factory - 0x20000
+[layout] 1 executable powerbox-chooser 0x10008
+[layout] 2 executable powerbox-probe 0x10008
+[layout] end

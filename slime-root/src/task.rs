@@ -29,7 +29,25 @@ use crate::generation::Authority;
 use crate::object_allocator::{AllocError, ObjectAllocator};
 
 /// Child tasks one generation may run.
-pub const MAX_TASKS: usize = 32;
+///
+/// Thirty-two until P5.4.9. The C8.10 full-graph boot runs every C8 role at
+/// once, and on this root that is **thirty-seven** live tasks rather than the
+/// oracle's twenty: the root launches all twenty components the generation
+/// declares (P5.2), and `init` then spawns seventeen of them again as the
+/// composition's own children — the fabric plus sixteen participants — because
+/// a spawned child is the only one holding a control endpoint init minted.
+///
+/// Forty-eight, with headroom rather than exactly 37, on `channel::MAX_CHANNELS`
+/// and B28's shared rule: a bound raised to the first passing number moves again
+/// at the next graph, and exhaustion here is not a clean refusal — `serve_spawn`
+/// answers `DestinationSlotsExhausted` and the parent reports a spawn failure,
+/// which reads as a composition defect rather than an exhausted table.
+///
+/// The cost is the per-task graph table this bounds alongside it:
+/// `GraphTables` holds `MAX_GRAPH_TASKS` (== this) tables of `MAX_TASK_CAPS`
+/// capabilities, about 1.5 KiB each, so the sixteen added entries cost ~24 KiB
+/// of `.bss`. Both tables live in `static`s for backlog B3's reason.
+pub const MAX_TASKS: usize = 48;
 
 /// Slots in a child CNode: null, service endpoint, own TCB, fault handler.
 pub const CHILD_CNODE_SIZE_BITS: usize = 2;

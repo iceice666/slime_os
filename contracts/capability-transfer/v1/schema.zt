@@ -49,6 +49,11 @@ objectKindEndpoint :: Int = 1;
 objectKindSharedBuffer :: Int = 2;
 objectKindSharedBufferLoan :: Int = 3;
 objectKindSupervision :: Int = 4;
+-- M6.3 (P5.4.3): a scoped view of a filesystem namespace. Transferable because
+-- a filesystem client hands its view to the service with each request, and a
+-- powerbox hands a requester one narrowed view on selection; the root refuses
+-- to widen either, so the descriptor names authority the sender already holds.
+objectKindDirectory :: Int = 5;
 
 -- Transfer authority is omitted at the destination unless it was both held at
 -- the source and explicitly retained by this flag. A rights mask naming the
@@ -123,6 +128,7 @@ format ::= {
   objectKindSharedBuffer = objectKindSharedBuffer;
   objectKindSharedBufferLoan = objectKindSharedBufferLoan;
   objectKindSupervision = objectKindSupervision;
+  objectKindDirectory = objectKindDirectory;
   flagRetainTransfer = flagRetainTransfer;
   knownFlags = knownFlags;
   directionPublish = directionPublish;

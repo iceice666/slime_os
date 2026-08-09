@@ -47,6 +47,71 @@ pub const MAX_TASK_CAPS: usize = 64;
 /// a `static` instead.
 pub const MAX_GRAPH_TASKS: usize = crate::task::MAX_TASKS;
 
+/// Which end of a logical channel a capability names.
+///
+/// The side lives in the *capability* rather than in the channel entry, and that
+/// placement is the whole point: it is what lets an endpoint grant be an
+/// ordinary copy. `ChannelTable` used to carry `producer`/`consumer` fields
+/// naming the holding tasks, and every queue lookup compared a `TaskId` against
+/// them — so a capability alone did not say which queue it reached, a second
+/// holder was unrepresentable, and handing an end to a child had to *move* the
+/// record. With the side carried here, two tasks may hold the same end and each
+/// resolves to the same queue, which is what the retired kernel gets for free by
+/// cloning an `Arc<Endpoint>` (`kernel/src/ipc/mod.rs::Clone for Endpoint`).
+///
+/// Closes backlog **B25**.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Side {
+    /// Sends on the forward queue, receives on the reverse.
+    Producer,
+    /// Sends on the reverse queue, receives on the forward.
+    Consumer,
+    /// Both ends at one slot, for a declared self-edge.
+    ///
+    /// Not a third end: it resolves to the forward queue in *both* directions,
+    /// which is what a task sending to itself must mean, and it is why
+    /// `ChannelTable::push` allocates a single queue for such a channel. Only
+    /// `materialize` ever creates one — a *minted* pair gets a real side per slot,
+    /// so its two halves are distinguishable and separately grantable.
+    Loopback,
+}
+
+impl Side {
+    /// The end facing this one across the channel.
+    ///
+    /// A loopback faces itself, which is what makes a self-edge deliver what it
+    /// sent.
+    pub const fn opposite(self) -> Self {
+        match self {
+            Self::Producer => Self::Consumer,
+            Self::Consumer => Self::Producer,
+            Self::Loopback => Self::Loopback,
+        }
+    }
+
+    /// Whether a capability naming `self` reaches `other`.
+    ///
+    /// A loopback names both real sides. A real side does not reach loopback:
+    /// loopback is a holder representation, not a third physical end.
+    pub const fn reaches(self, other: Self) -> bool {
+        matches!(
+            (self, other),
+            (Self::Producer, Self::Producer)
+                | (Self::Consumer, Self::Consumer)
+                | (Self::Loopback, _)
+        )
+    }
+
+    /// A short name for markers.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Producer => "producer",
+            Self::Consumer => "consumer",
+            Self::Loopback => "loopback",
+        }
+    }
+}
+
 /// What a logical slot resolves to.
 ///
 /// Deliberately not a seL4 capability: these are the objects `slime-root` owns
@@ -55,12 +120,28 @@ pub const MAX_GRAPH_TASKS: usize = crate::task::MAX_TASKS;
 pub enum Resource {
     /// An executable this task may spawn, named by generation component index.
     Executable { component: usize },
-    /// One end of a logical channel, by channel key.
-    Endpoint { channel: u32 },
+    /// One end of a logical channel: which channel, and which end of it.
+    Endpoint { channel: u32, side: Side },
     /// Authority to mint channel pairs.
     EndpointFactory,
     /// Authority to allocate shared buffers.
     SharedBufferFactory,
+    /// Authority over the block device (P5.4.2c).
+    ///
+    /// Singular: this cutover brings up at most one, so the resource names no
+    /// index. What distinguishes read from write authority is the capability's
+    /// *rights*, exactly as the generation declares them — `blockRead` and
+    /// `blockWrite` are separate bits, and a grant carrying only the first
+    /// cannot reach `OP_WRITE`.
+    Block {
+        /// Which brought-up device, in the root's stable physical-address
+        /// order (P5.4.3).
+        ///
+        /// In the capability, not the request: M6.7 hands one component a
+        /// source it may only read and a receiver it may write, and an index
+        /// the *caller* supplied would let either reach the other.
+        device: u8,
+    },
     /// A supervision handle for a spawned child.
     Supervision { task: TaskId },
     /// A shared buffer this task holds.
@@ -83,6 +164,219 @@ pub enum Resource {
     Loan {
         handle: crate::shared_buffer::LoanHandle,
     },
+    /// A scoped view of one shared filesystem namespace (M6.3, P5.4.3).
+    ///
+    /// Two fields, and the split between them is the whole design. `namespace`
+    /// names a root the tasks holding it *share* — committing through one is
+    /// visible through every other — while `scope` is this capability's own
+    /// view of it, a bounded relative path that derivation may only lengthen.
+    ///
+    /// The scope is what makes the authority narrow: a holder of `docs` cannot
+    /// name `..`, cannot reach a sibling, and — because a commit requires an
+    /// *unscoped* writer — cannot replace the namespace-wide root with a
+    /// subtree snapshot. Rights (`directoryRead`, `directoryWrite`,
+    /// `directoryList`, `directoryDerive`) narrow it further and independently.
+    ///
+    /// The root owns this because it is unforgeable shared state with an atomic
+    /// transition, which is mechanism. What a directory *contains* — entries,
+    /// names, object identities — is a filesystem component's business, built
+    /// over the object store, and none of it is here.
+    /// Authority to read decoded key events (M6.4, P5.4.3).
+    ///
+    /// Singular and indexless: this cutover has one scripted source. Mechanism
+    /// rather than policy for the same reason the block device is — the events
+    /// come from somewhere a component cannot reach — and just as thin: what a
+    /// key *means* is Dango's business.
+    Input,
+    Directory {
+        namespace: u32,
+        /// An index into [`ScopeTable`], not the path itself.
+        ///
+        /// A `Resource` is copied into every capability slot, and there are
+        /// `MAX_TASKS * MAX_CAPS` of them — so inlining a 128-byte path here
+        /// grew the capability tables from ~96 KiB to ~432 KiB and cost the
+        /// root its stack. Measured, not guessed: the loan plane started
+        /// faulting on `init`'s exit path the moment the variant landed.
+        ///
+        /// Interning also makes the common case free. Almost every directory
+        /// capability is unscoped, and every unscoped one shares
+        /// [`ScopeTable::ROOT`].
+        scope: ScopeId,
+    },
+}
+
+/// A handle naming a path in the [`ScopeTable`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScopeId(u16);
+
+/// The interned directory scopes.
+///
+/// Append-only for the life of a graph, like every other table here. Scopes are
+/// created by derivation and a derivation is a deliberate act, so the table
+/// grows with composition rather than with traffic; exhausting it refuses the
+/// derive rather than dropping a path.
+pub struct ScopeTable {
+    paths: [DirectoryScope; MAX_SCOPES],
+    len: usize,
+}
+
+/// Distinct scopes one boot may name. Generous against the deepest composition
+/// any plane builds, and bounded because the root allocates nothing.
+pub const MAX_SCOPES: usize = 64;
+
+impl Default for ScopeTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ScopeTable {
+    /// The unscoped view, interned at index 0 so it needs no lookup and every
+    /// namespace-root capability shares it.
+    pub const ROOT: ScopeId = ScopeId(0);
+
+    pub const fn new() -> Self {
+        Self {
+            paths: [DirectoryScope::root(); MAX_SCOPES],
+            len: 1,
+        }
+    }
+
+    pub fn path(&self, id: ScopeId) -> &[u8] {
+        self.paths
+            .get(id.0 as usize)
+            .map_or(&[][..], DirectoryScope::path)
+    }
+
+    pub fn is_root(&self, id: ScopeId) -> bool {
+        id == Self::ROOT || self.path(id).is_empty()
+    }
+
+    /// Intern the result of extending `base` by `relative`.
+    ///
+    /// `None` when the joined path is not valid or the table is full. An
+    /// existing identical scope is reused, so a plane that derives the same
+    /// view twice consumes one entry.
+    pub fn derive(&mut self, base: ScopeId, relative: &[u8]) -> Option<ScopeId> {
+        let derived = self.paths.get(base.0 as usize)?.derive(relative)?;
+        if let Some(index) = self.paths[..self.len]
+            .iter()
+            .position(|existing| *existing == derived)
+        {
+            return Some(ScopeId(index as u16));
+        }
+        if self.len >= MAX_SCOPES {
+            return None;
+        }
+        let index = self.len;
+        self.paths[index] = derived;
+        self.len = index + 1;
+        Some(ScopeId(index as u16))
+    }
+}
+
+/// A bounded relative path naming a capability's view into a namespace.
+///
+/// Inline rather than heap: a capability is copied on every spawn grant and
+/// derivation, and the root has no allocator. `MAX_DIRECTORY_PATH` matches the
+/// oracle's bound so a component's buffer sizing is the same on both.
+/// One interned path. Held only by the [`ScopeTable`]; capabilities carry a
+/// [`ScopeId`] instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DirectoryScope {
+    bytes: [u8; MAX_DIRECTORY_PATH],
+    len: u8,
+}
+
+/// The longest scope a capability may carry, matching the oracle's
+/// `capability::MAX_DIRECTORY_PATH`.
+pub const MAX_DIRECTORY_PATH: usize = 128;
+/// The deepest path a scope may name, matching the oracle's
+/// `capability::MAX_DIRECTORY_DEPTH`.
+pub const MAX_DIRECTORY_DEPTH: usize = 8;
+
+impl DirectoryScope {
+    /// The unscoped view: the namespace root itself, and the only view a commit
+    /// may be made through.
+    pub const fn root() -> Self {
+        Self {
+            bytes: [0; MAX_DIRECTORY_PATH],
+            len: 0,
+        }
+    }
+
+    pub fn path(&self) -> &[u8] {
+        &self.bytes[..self.len as usize]
+    }
+
+    pub const fn is_root(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Extend this scope by a relative path.
+    ///
+    /// Lengthen only: there is no operation that shortens a scope, which is why
+    /// derivation cannot widen authority. The joined result is re-validated as
+    /// a whole rather than only the suffix, so a pair of individually valid
+    /// halves cannot compose into an over-long or over-deep path.
+    pub fn derive(&self, relative: &[u8]) -> Option<Self> {
+        if !valid_directory_path(relative, true) {
+            return None;
+        }
+        let current = self.len as usize;
+        let separator = usize::from(current != 0 && !relative.is_empty());
+        let total = current
+            .checked_add(separator)?
+            .checked_add(relative.len())?;
+        if total > MAX_DIRECTORY_PATH {
+            return None;
+        }
+        let mut bytes = [0u8; MAX_DIRECTORY_PATH];
+        bytes[..current].copy_from_slice(&self.bytes[..current]);
+        if separator != 0 {
+            bytes[current] = b'/';
+        }
+        bytes[current + separator..total].copy_from_slice(relative);
+        if !valid_directory_path(&bytes[..total], true) {
+            return None;
+        }
+        Some(Self {
+            bytes,
+            len: total as u8,
+        })
+    }
+}
+
+/// Whether `path` is a legal relative directory path.
+///
+/// The same rule the oracle's `capability::valid_directory_path` applies, and
+/// for the same reason: a path is validated *before* it reaches a filesystem
+/// component, so no component has to defend itself against `..`, an absolute
+/// path, an empty segment, or an unbounded depth.
+pub fn valid_directory_path(path: &[u8], allow_empty: bool) -> bool {
+    if path.is_empty() {
+        return allow_empty;
+    }
+    if path.len() > MAX_DIRECTORY_PATH || path[0] == b'/' || path[path.len() - 1] == b'/' {
+        return false;
+    }
+    let mut depth = 0;
+    for segment in path.split(|byte| *byte == b'/') {
+        if segment.is_empty()
+            || segment == b"."
+            || segment == b".."
+            || !segment
+                .iter()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'.' | b'_' | b'-'))
+        {
+            return false;
+        }
+        depth += 1;
+        if depth > MAX_DIRECTORY_DEPTH {
+            return false;
+        }
+    }
+    true
 }
 
 impl Resource {
@@ -121,7 +415,37 @@ impl Resource {
     /// spawn cannot, because a spawn grant's destination is a task that does
     /// not exist yet.
     pub const fn is_transferable(&self) -> bool {
-        matches!(self, Self::Loan { .. })
+        // A directory joins the loan since P5.4.3, and for the same reason the
+        // loan qualified: the move is checkable against the *recipient*.
+        //
+        // A loan's handle names the receiver it was minted for. A directory
+        // carries its own scope and rights, and the root narrows both on every
+        // derivation — so a view that arrives over a channel grants exactly
+        // what the sender held and no more, whoever the sender chose. That is
+        // what M6.3's filesystem service needs: a client hands the service its
+        // view with each request, precisely so the service acts with the
+        // *client's* authority rather than its own.
+        //
+        // An endpoint end joins them for M6.4 (P5.4.3), and the earlier
+        // reasoning here was wrong rather than merely narrow.
+        //
+        // The claim was that nothing bounds where an endpoint lands. But
+        // nothing bounds where a *loan* lands either — the handle names its
+        // receiver, and the send path checks it, which is a check rather than a
+        // property of the kind. What actually bounds every move on this path is
+        // the same thing: the sender must hold `RIGHT_TRANSFER` on the
+        // capability, which the generation grants or a parent narrows at spawn.
+        // The oracle's `sys_send` gates on exactly that bit and no kind
+        // predicate, and this port refusing endpoints meant a shell could not
+        // give a child its stdin.
+        //
+        // What still cannot move is an executable or a factory, and for a
+        // reason that is not a policy choice: `contracts/capability-transfer`
+        // defines no descriptor for either, so there is nothing to send.
+        matches!(
+            self,
+            Self::Loan { .. } | Self::Directory { .. } | Self::Endpoint { .. }
+        )
     }
 
     /// A short name for markers, so a refusal states which kind was named
@@ -132,9 +456,12 @@ impl Resource {
             Self::Endpoint { .. } => "endpoint",
             Self::EndpointFactory => "endpoint-factory",
             Self::SharedBufferFactory => "shared-buffer-factory",
+            Self::Block { .. } => "block",
             Self::Supervision { .. } => "supervision",
             Self::SharedBuffer { .. } => "shared-buffer",
             Self::Loan { .. } => "loan",
+            Self::Directory { .. } => "directory",
+            Self::Input => "input",
         }
     }
 }
@@ -244,6 +571,55 @@ impl CapabilityTable {
             .find(|index| self.slots[*index].is_none())
             .map(|index| index as u32)
     }
+
+    /// Whether this table names any end of `channel`, at any side.
+    ///
+    /// Side-agnostic on purpose: reclamation asks whether the channel is still
+    /// reachable at all, not from which direction.
+    pub fn names_endpoint(&self, channel: u32) -> bool {
+        self.slots.iter().flatten().any(|capability| {
+            matches!(capability.resource, Resource::Endpoint { channel: key, .. } if key == channel)
+        })
+    }
+
+    /// Whether this table holds a capability that reaches `side` of `channel`.
+    ///
+    /// See [`Side::reaches`]: a loopback slot satisfies a query for either real
+    /// side, because it names both ends.
+    pub fn reaches_endpoint(&self, channel: u32, side: Side) -> bool {
+        self.slots.iter().flatten().any(|capability| {
+            matches!(
+                capability.resource,
+                Resource::Endpoint { channel: key, side: held }
+                    if key == channel && held.reaches(side)
+            )
+        })
+    }
+
+    /// How many distinct channels this table names an end of.
+    ///
+    /// Feeds the `peer death task=N channels=M` marker, which counted
+    /// `ChannelTable` entries by holder before B25 removed the holder fields. A
+    /// task holding *both* ends of one channel — a minted pair it has not granted
+    /// away — counts once, matching what the old per-entry filter reported.
+    ///
+    /// Counts a key at the first slot naming it, so duplicates are skipped without
+    /// a set: quadratic over 64 slots on a death path, against one more fixed-size
+    /// bound to keep in step with `MAX_TASK_CAPS`.
+    pub fn endpoints_held(&self) -> usize {
+        let channel_at = |index: usize| match self.slots.get(index)?.as_ref()?.resource {
+            Resource::Endpoint { channel, .. } => Some(channel),
+            _ => None,
+        };
+        (0..MAX_TASK_CAPS)
+            .filter(|index| {
+                let Some(channel) = channel_at(*index) else {
+                    return false;
+                };
+                !(0..*index).any(|earlier| channel_at(earlier) == Some(channel))
+            })
+            .count()
+    }
 }
 
 impl Default for CapabilityTable {
@@ -330,7 +706,7 @@ impl GraphTables {
     /// The live half of the predicate [`crate::channel::sweep`] uses to decide
     /// whether a channel entry can still be named. The sibling of
     /// [`Self::holds_supervision`], and a scan for the same reason: a channel
-    /// end is placed at materialization, moved at spawn, moved again by
+    /// end is placed at materialization, copied at spawn, moved by
     /// `cap_transfer`, and dropped by `CapDrop` — four paths an index would
     /// have to stay correct across.
     ///
@@ -338,13 +714,42 @@ impl GraphTables {
     /// `ChannelTable` is full, so the cost is paid once per channel reclaimed
     /// rather than per mint.
     pub fn holds_endpoint(&self, channel: u32) -> bool {
-        self.tables.iter().flatten().any(|(_, table)| {
-            table
-                .slots
-                .iter()
-                .flatten()
-                .any(|capability| capability.resource == Resource::Endpoint { channel })
-        })
+        self.tables
+            .iter()
+            .flatten()
+            .any(|(_, table)| table.names_endpoint(channel))
+    }
+
+    /// Whether any live table other than `except` reaches one particular side
+    /// of `channel`.
+    ///
+    /// The exclusion is what a death path needs: the dying task's table is
+    /// deliberately still installed while its queues and parked transfers are
+    /// reclaimed, so counting it would make every end look live until too late.
+    pub fn holds_endpoint_side(&self, channel: u32, side: Side, except: Option<TaskId>) -> bool {
+        self.tables
+            .iter()
+            .flatten()
+            .any(|(id, table)| Some(*id) != except && table.reaches_endpoint(channel, side))
+    }
+
+    /// The unique live task holding the requested side, excluding `except`.
+    ///
+    /// Used where the object being minted records a concrete task identity, as
+    /// a `LoanHandle` does. A shared channel end names a queue, not one of its
+    /// competing receivers, so ambiguity is refused rather than resolved by
+    /// table order.
+    pub fn unique_holder_of_endpoint_side(
+        &self,
+        channel: u32,
+        side: Side,
+        except: Option<TaskId>,
+    ) -> Option<TaskId> {
+        let mut holders = self.tables.iter().flatten().filter_map(|(id, table)| {
+            (Some(*id) != except && table.reaches_endpoint(channel, side)).then_some(*id)
+        });
+        let holder = holders.next()?;
+        holders.next().is_none().then_some(holder)
     }
 
     /// Drop a task's whole table as part of reclaiming it.
@@ -367,10 +772,9 @@ impl Default for GraphTables {
         Self::new()
     }
 }
-
 #[cfg(test)]
 mod tests {
-    use super::{Capability, CapabilityTable, GraphTables, MAX_TASK_CAPS, Resource};
+    use super::{Capability, CapabilityTable, GraphTables, MAX_TASK_CAPS, Resource, Side};
     use crate::ipc::IpcError;
     use crate::task::TaskId;
 
@@ -380,7 +784,10 @@ mod tests {
 
     fn endpoint(rights: u64) -> Capability {
         Capability {
-            resource: Resource::Endpoint { channel: 7 },
+            resource: Resource::Endpoint {
+                channel: 7,
+                side: Side::Producer,
+            },
             rights,
         }
     }

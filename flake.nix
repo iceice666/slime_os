@@ -20,9 +20,8 @@
         system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
-          # The retained legacy custom-kernel gates build with this toolchain.
-          # It is not the seL4 toolchain: `deps/rust-sel4` pins its own, and
-          # `sel4/pins.toml` is the single source of truth for that pin.
+          # Workspace host crates and stage0 use this toolchain. The seL4 root,
+          # child, and loader use the independent pin in `sel4/pins.toml`.
           rustToolchain = "nightly-2026-05-26";
           sel4Pins = builtins.fromTOML (builtins.readFile ./sel4/pins.toml);
           sel4RustToolchain = sel4Pins.rust_sel4.toolchain;
@@ -33,7 +32,6 @@
           rustTargets = [
             "x86_64-unknown-none"
             "x86_64-unknown-uefi"
-            "aarch64-unknown-none"
             "aarch64-unknown-uefi"
           ];
           # AArch64 UEFI firmware for `qemu-system-aarch64 -machine virt`.
@@ -73,20 +71,6 @@
                 qemu
                 rustup
               ]
-              # nixpkgs' `limine` package (the UEFI bootloader installer CLI,
-              # used only by the legacy x86_64 custom-kernel ISO build) is
-              # marked badPlatforms on Darwin. The seL4/AArch64 path this
-              # shell otherwise supports never invokes it, so it is dropped
-              # there rather than blocking the whole shell. Dropping it changes
-              # this shell's derivation hash, and therefore the `-frandom-seed`
-              # nixpkgs derives from it, but that no longer reaches the seL4
-              # kernel: `scripts/build/build-sel4.py` builds it with the shell's
-              # compiler flags removed and a fixed seed of its own (B19). Nor
-              # does the per-platform difference in what `crossCC` resolves to,
-              # since that build states its own frame-pointer policy (B20) —
-              # `aarch64-darwin` and `aarch64-linux` produce a byte-identical
-              # `kernel.elf`.
-              ++ lib.optional (!stdenv.isDarwin) limine
               ++ [
                 xorriso
                 OVMF

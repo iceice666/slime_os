@@ -244,12 +244,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "limine"
-version = "0.6.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "29363c0f37e66e18575fadf7141c56ee7ea04ae5fecbeb25eff303f77af203a9"
-
-[[package]]
 name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -285,12 +279,6 @@ dependencies = [
  "memchr",
  "minimal-lexical",
 ]
-
-[[package]]
-name = "noto-sans-mono-bitmap"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f102c477fd4ec864c149803bf606ecc23bc9329602ec0f99073a728abf454abc"
 
 [[package]]
 name = "object"
@@ -758,27 +746,6 @@ dependencies = [
  "boot-contracts",
  "sha2",
  "uefi",
-]
-
-[[package]]
-name = "slime_os-kernel"
-version = "0.1.0"
-dependencies = [
- "boot-contracts",
- "limine",
- "noto-sans-mono-bitmap",
- "sha2",
- "slime-proto",
- "spin",
-]
-
-[[package]]
-name = "spin"
-version = "0.12.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8abadc99fd9c7bbb7d0ca2b31d72a067d0c0dcd7aad25ab8cac71ba91417694b"
-dependencies = [
- "lock_api",
 ]
 
 [[package]]

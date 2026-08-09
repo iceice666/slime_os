@@ -16,7 +16,134 @@ at the bottom rather than deleting it.
 
 ## Open
 
+
+## Resolved
+### B31 — six oracle properties blocked `kernel/` deletion
+
+**Status:** Resolved 2026-08-09.
+
+**Was:** Two deletion audits found six acceptance properties that would have
+disappeared with the frozen custom-kernel oracle, plus orchestration coupling in
+the workspace, Justfile, check scripts, component transport, CI, and generation
+builder.
+
+**Resolution:** P5.4.final records each disposition. Complete component-wrapper
+admission moved to `boot-contracts`; the seL4 root boot gate now observes
+independent frame accounting, exact task and shared-buffer reclamation, clean
+exit beside deliberate fault isolation, and panic/fault failure markers; the
+global gate control proves missing, reordered, or contradictory evidence turns
+every seL4 plane red. Free-frame reuse, custom EL1 mechanism, and
+PMM/VMM/heap/APIC internals were reclassified where seL4 changes the mechanism.
+The retired NVMe QEMU path was not promoted into false product evidence:
+`storage_nvme_read_check` fails closed and M5.7 remains blocked on a seL4 NVMe
+driver plus physical Framework observation.
+
+**Exit condition observed:** `kernel/`, its workspace membership, custom-kernel
+build and check orchestration, legacy component syscall transport, and custom
+generation-builder path are removed together. The surviving repository gates
+exercise the seL4 product or portable host contracts. See
+[`devlog/2026-08-09-p5-4-final-kernel-retirement/`](../devlog/2026-08-09-p5-4-final-kernel-retirement/index.md).
+
+### B32 — three scenario receive spins were invisible to the root
+
+**Status:** Resolved 2026-08-09.
+
+**Was:** The call plane's terminal receiver and two operation-plane receive
+paths used `yield_now()` on `ERR_WOULDBLOCK`. `seL4_Yield` kept the components
+runnable, so the root could neither name their endpoint wait nor distinguish a
+real dependency from an iteration-budget spin.
+
+**Fix:** All three now call `wait(&[WaitSource::Endpoint(...)])`. This is valid
+for timeout and peer-death terminals: the brokers publish those records on the
+same route endpoints. Parking exposed a pre-existing operation teardown race,
+so client B now records its terminal before client A closes the backup route and
+lets the broker exit. The backup probe likewise waits on the route it receives
+from.
+
+**Exit condition observed:** `just sel4_call_check` and
+`just sel4_operation_check` both pass with every affected timeout, peer-death,
+and unrelated-route marker present. See
+[`devlog/2026-08-09-b32-parked-scenario-receivers/`](../devlog/2026-08-09-b32-parked-scenario-receivers/index.md).
+
+### B29 — one block device per granule
+
+**Status:** Resolved 2026-08-08.
+
+**Was:** `slime-root` brought up at most one virtio block device. QEMU packs
+eight virtio-mmio transports into one 4 KiB granule, so two attached disks land
+at `0xa003e00` and `0xa003c00` — the same page — and `DeviceRegion::remap` maps
+the frame to a driver's standing window, leaving nothing for the second.
+
+**Fix:** `device::MappedGranule`, a borrowed view carrying the virtual base and
+no capability. One owner maps the page; a second driver reads and writes its
+registers at its own offset through the borrow, and can neither remap nor
+unmap. `probe_devices` keeps a standing-granule table and `bring_up_shared_block`
+brings up a transport in a page another driver already stands in.
+
+**Exit condition observed:** `just sel4_transfer_check` boots with two disks and
+records `SLIME_ROOT block ready` for both, with a component holding one
+capability over each and the read-only one byte-identical afterwards.
+
+Two further defects surfaced on the way, both now fixed and gated:
+
+* declared placement hardcoded `Block { device: 0 }`, so a component holding two
+  devices reached the same one twice — successive block grants now name
+  successive devices;
+* placement intersected the component's *union* of rights rather than the
+  grant's own, so a read-only source came out writable and accepted a write.
+  Both paths now use the grant's rights, which is what "this grant declares this
+  much" means.
+
+See
+[`devlog/2026-08-08-p5-4-3-transfer-plane/`](../devlog/2026-08-08-p5-4-3-transfer-plane/index.md).
+
+
+### B30 — the dango plane launched no commands
+
+**Status:** Resolved 2026-08-08.
+
+**Was:** Dango booted, read its scripted keystrokes, and resolved commands, but
+no launch reached the spawn service.
+
+**Three causes, none of them the hypothesis recorded when this was opened.**
+
+1. `construct_child` never placed a child's declared **executables**. A spawned
+   `spawn-service` found slots 1 and 2 empty and refused every request with
+   `slot=1 ungranted`. The same defect class as P5.4.2c's missing declared
+   authority, in the one resource kind that slice did not cover.
+2. Declared authority was placed in a **fixed kind order**, and two components
+   disagreed about it: `powerbox-chooser.rs` reads a directory then input,
+   `dango.rs` reads input then a cwd root. Both placement paths now walk the
+   generation's own grant order, which is what the oracle does.
+3. `Resource::is_transferable` refused **endpoints** by kind, so a shell could
+   not give a child its stdin. The reasoning was wrong rather than narrow: what
+   bounds every move on that path is the sender holding `RIGHT_TRANSFER`, and
+   the oracle's `sys_send` gates on exactly that bit with no kind predicate.
+
+**Exit condition observed:** `just sel4_dango_check` — 14 markers, 2 profile
+resolutions, 2 accepted spawn requests, `resolve-denied`, `parse-error`, and
+`[dango] interactive session closed`. See
+[`devlog/2026-08-08-p5-4-3-dango-plane/`](../devlog/2026-08-08-p5-4-3-dango-plane/index.md).
+
 ### B25 — a spawn-granted endpoint moves on seL4 and copies on x86, so a parent cannot broker a later introduction
+
+**Resolved 2026-08-08.** Devlog:
+[`devlog/2026-08-08-b25-endpoint-copy-call-plane/`](../devlog/2026-08-08-b25-endpoint-copy-call-plane/index.md).
+Endpoint authority now carries `Side`, so a spawn grant is the same non-consuming
+narrowing copy as every other grant and `ChannelTable` no longer records a
+single task holder per end. Capability transit binds to the receiving *side*,
+not a task selected at send time; whichever co-holder dequeues the message may
+collect it, while task-naming loan creation refuses an ambiguous receiver.
+Observed exit condition: `just sel4_call_check` passes 50 markers across ten
+causal chains, including three parent-vouched post-spawn supervision transfers,
+all C8.6 outcomes, and clean exits for the five spawned tasks plus init.
+All twelve seL4 plane gates were re-run, not only the call gate: the change
+rewrote marker text four of them read. `sel4_channel_check`, `sel4_loan_check`,
+and `sel4_crossing_check` were red and are fixed, and
+`sel4_gate_control_check`'s spawn-plane pin correctly caught a deleted
+distribution assertion that had not been replaced. The crossing gate also
+surfaced a root defect: `ChannelTable::live_queues` counted entries no
+capability table names, which the retired per-end task cache had masked.
 
 **Problem:** `slime-root`'s `distribute_channel_ends` (`slime-root/src/main.rs`)
 treats an endpoint named by a spawn grant as a **move**: it reassigns the
@@ -258,21 +385,141 @@ different channel means changing the broker, and an altered broker is no longer
 the same composition the oracle's gate asserts — which is the property P5.4 exists
 to preserve.
 
-**Sizing the two real options, so the decision is informed:**
+**Sizing the two real options, so the decision is informed. Re-examined
+2026-08-08, and both earlier estimates were wrong in the same direction — they
+priced the shallow form of option 1 and the shallow objection to option 2.**
 
-* *Copying endpoint grant.* `ChannelTable` resolves a queue by holder through two
-  fields, `producer` and `consumer` (`channel.rs:134-137`), with `recv_queue_mut`
-  matching a task against them. Admitting two holders per end means changing that
-  representation and every path that reads it — the widest change of the three, and
-  it touches all nine passing planes.
-* *Self-naming supervision handle at spawn.* `construct_child` builds the child's
-  table and `serve_spawn` installs the parent's handle after it; adding one more
-  install is mechanically small. The cost is semantic, not structural: a component
-  would hold `RIGHT_SUPERVISE` naming itself, which makes `supervision_status` on
-  oneself reachable and needs an argument about what that means before it is
-  admitted.
+* *Copying endpoint grant.* The earlier sizing — "change `producer`/`consumer`
+  and every path that reads it, the widest change of the three" — prices only the
+  **shallow** form, where `Entry` grows a holder list. That form is as bad as
+  stated and worse: `mark_dead` (`channel.rs:378`) would have to become a
+  refcount, matching what the oracle gets for free from
+  `Arc::strong_count(&owner_alive) == 2` (`kernel/src/ipc/mod.rs:166`), and
+  `peer` (`channel.rs:362-369`) would return a *set*, which `Transit`'s
+  send-time receiver binding (`transit.rs:62-65`) cannot consume.
 
-Neither is written here, because both change what a capability *means* on every
+  There is a **deeper** form that is cheaper than either option, and it is the
+  one to weigh: put the *side* in the capability —
+  `Resource::Endpoint { channel, side }` — and resolve queues by side rather
+  than by task. Then `distribute_channel_ends` is deleted outright rather than
+  inverted, because a granted endpoint becomes an ordinary copy alongside every
+  other kind (`preflight_spawn_grants:3207` already copies; endpoints are the
+  one kind singled out for a move), and `Entry::producer`/`consumer` are deleted
+  with it. That is not a new representation but the *removal* of one: the field
+  doc at `channel.rs:552-556` already states these are "a cache of who holds
+  each end, maintained by `ChannelTable::reassign` with no capability check of
+  its own", and the only reason the cache exists is that the capability does not
+  say which end it is. Holder questions then become table scans of the shape
+  `channel::sweep` (`channel.rs:574`) already performs, bounded by
+  `MAX_TASKS * MAX_TASK_CAPS` = 32 × 64 on cold paths.
+
+  Two things this form must still answer, neither of them the representation:
+  `Transit` binds an in-flight capability to a receiver *task* at send time and
+  would bind to a *side* instead; and the declared self-edge
+  (`check-sel4-channel-plane.py:113-116` — `queues=1`, "init holds both
+  directions at one slot") needs a side that means *both*, because `materialize`
+  installs exactly one slot for a loopback (`channel.rs:806`).
+
+* *Self-naming supervision handle at spawn.* Mechanically small, as recorded.
+  But the semantic objection recorded here — that it "makes `supervision_status`
+  on oneself reachable" — is the weak one, and it is not what should decide.
+  Asking one's own status can only ever answer `WouldBlock`, a task can already
+  deadlock itself on a loopback channel, and `serve_buffer_loan` already refuses
+  a self-loan at `main.rs:4853`.
+
+  **The real objection is that it moves who vouches for an identity, and it
+  degrades the oracle.** `consume_supervision` (`call_broker.rs:1146-1157`)
+  checks magic, version, `object_kind`, `direction`, `rights_mask`, and
+  `route_identity` — it cannot check *which task* the handle names. Today the
+  broker is trusting the parent's introduction, because init is the sender. Under
+  option 1 that stays true. Under option 2 the participant vouches for itself,
+  and it is holding a second `RIGHT_SUPERVISE` handle naming the **fabric**
+  (`init.rs:1917`), which satisfies every field the broker checks. A participant
+  sending *that* one makes the broker treat the fabric as the loan receiver.
+  `slime-root` happens to catch the result at `main.rs:4853` (`peer == id`);
+  **the oracle does not** — neither `sys_shared_buffer_loan`
+  (`kernel/src/syscall/mod.rs:786-799`) nor `SharedBufferTable::loan`
+  (`kernel/src/memory/shared_buffer.rs:296-342`) compares lender against
+  receiver. So option 2 opens a hole on the frozen side to unblock a plane on
+  this one.
+
+**And there is no "parent keeps a third end" route, for an arithmetic reason
+worth stating so it is not re-attempted.** `endpoint_create` installs exactly
+two slots (`main.rs:1790-1806`), and the first grant of a minted loopback always
+moves the *consumer* side whichever slot named it (`channel.rs:426-435`). Three
+holders of a two-slot pair is therefore unconstructible, and the x86 plane's
+shape is exactly three: init's layout carries both
+`fabric-call-client-control` and `...-control-service`
+(`contracts/boot-layout/v1/fixtures/fabric-call.layout:53-56`), init grants the
+client half at `init.rs:839`, sends the descriptor over the *same* slot at
+`init.rs:883`, and only then drops it at `:884`. Whatever closes this must let
+one end have two holders, or let a participant name itself — the two options
+above and nothing else.
+
+One further constraint on any re-transfer variant: the participants' executable
+grants are declared `transferable = false` (`sel4-call.zti:95,102,109`), so the
+supervision handle a participant spawn returns carries no `RIGHT_TRANSFER`
+(`main.rs:3762`) and cannot be `cap_transfer`ed at all without a fixture change.
+
+**Option 1 was built as a spike, 2026-08-08, and it gets further than the entry
+expected before hitting one wall that is not a plumbing detail.** Reverted; the
+tree is back to the committed planes. What it established, all observed:
+
+* *`Side` in the capability works, and the deletion is real.*
+  `Resource::Endpoint { channel, side }` with `Side::{Producer,Consumer,Loopback}`
+  let `distribute_channel_ends`, `recall_channel_ends`, `ChannelTable::reassign`,
+  and `Entry::{producer,consumer}` all be **deleted**, and
+  `restore_transferred`'s `reassigned` rollback argument with them. An endpoint
+  grant became an ordinary copy beside every other kind. Total footprint was five
+  files: `slime-root/src/{channel,graph,main,transit}.rs` plus the two spawn-plane
+  assertions below.
+* *Holder questions are answerable from the graph.* `mark_dead` became a per-*side*
+  abandonment query (`holds_endpoint_side(key, side, except)`), and the
+  `peer death channels=N` marker's count became `CapabilityTable::endpoints_held`.
+  No refcount was needed, contradicting this entry's earlier sizing.
+* *`just sel4_channel_check` and `just sel4_spawn_check` pass*, as do
+  `sel4_root_boot_check`, `sel4_component_graph_check`, and `sel4_loan_check`.
+  Host tests went 109 → 112.
+* *Two spawn-plane assertions had to be inverted, and they are the honest cost.*
+  `init.rs:2085` asserted `send` on a granted end answers `ERR_BAD_CAP`, and
+  `:2159` asserted it for all six B15 grants; `check-sel4-spawn-plane.py` asserted
+  the `channel handed` marker. All three assert the *move*, so option 1 makes them
+  false by construction — they encode the divergence rather than a property the
+  oracle shares, and `devlog/2026-08-05-p5-3-3-spawn-plane/index.md:283` lists
+  "make the endpoint grant a copy" as an intended fault injection.
+* *A new test pins B25's actual property* — an end with two holders survives one
+  holder dying — and fault-injecting the pre-B25 `mark_dead` fails exactly that
+  test and nothing else.
+
+**The wall: `Transit` binds an in-flight capability to a receiver *task*, and with
+two holders per end there is no longer a unique one.** `just sel4_sample_check`
+wedges: `parked task=0 reason=wait` / `parked task=3 reason=wait`, boot exceeds
+180s. `drive_sample_plane` mints a pair, grants the consumer half to
+`sample-receiver` and the producer half to `sample-lender`, and — now that a grant
+copies — init keeps **both**. `serve_send` resolves the loan's destination through
+`channels.peer(channel, id)`, which became "the first live holder of the opposite
+side", and init is enumerated before the child. So `transit.depart` binds the loan
+to init, `land_caps` calls `transit.arrive(token, receiver)`, that returns `None`,
+and the receiver parks forever on a capability delivered to the wrong task.
+
+This is not a bug in the spike; it is the model question the spike surfaces, and it
+was written into `channel::peer_of`'s doc before the plane was run. A capability
+naming a *queue* cannot name a *recipient*, and message-carried capability transfer
+needs a recipient. Two ways out, neither attempted:
+
+1. *Bind transit to a side rather than a task*, and have `arrive` admit any holder
+   of that side. Then delivery is first-come between co-holders — fine for the
+   x86 call plane, where init sends and only the broker receives, but it makes
+   "who gets this capability" depend on scheduling wherever an end really is
+   shared.
+2. *Make the capability name its recipient*, the way `Resource::Loan`'s
+   `LoanHandle` already does (`main.rs:4616` refuses a loan sent to anyone but its
+   declared receiver). That is the principled answer and the larger change.
+
+So option 1's cost is now known concretely: the deletions are as clean as hoped,
+the passing planes survive, and what remains is *one* genuine design decision about
+transit binding — not the wide representation change this entry originally priced.
+Neither option is written, because both change what a capability *means* on every
 plane and that is a decision to take deliberately rather than as a side effect of
 unblocking one gate.
 
@@ -282,8 +529,6 @@ observes it — asserted on a plane that declares such a composition, with a
 fault injection showing the parent's end going missing is caught. The call
 plane's `[init] call supervision delegated` marker is that composition, already
 observed; what remains is for the plane to get past it.
-
-## Resolved
 
 ### B28 — a `retained` second route on one publisher stops a *different* publisher's parked role reply from ever being taken
 
@@ -1173,38 +1418,6 @@ more coverage.
 takes its role reply and the plane reaches `[init] fabric stream complete`,
 asserted by a gate, with a fault injection showing the parked case caught.
 
-### B31 — three `expect_terminal_yielding` receive spins remain invisible to the root
-
-**Problem:** auditing for the class of defect fixed in `call_broker.rs`
-(a `recv` whose `ERR_WOULDBLOCK` arm is `yield_now()`, which is `seL4_Yield` and
-therefore invisible to the root task) found three more, all in scenario code:
-
-* `fabric_call_scenario.rs:542` — `expect_terminal_yielding`
-* `fabric_operation_scenario.rs:612` — `expect_terminal_yielding`
-* `fabric_operation_scenario.rs:158` — a backup-route probe
-
-**Not fixed here, and the reason is evidence rather than preference.** The first
-guess was that these must yield because they await `STATUS_PEER_DEAD` and
-`STATUS_TIMEOUT`, which a park on the endpoint might miss. That guess is **wrong**:
-`ipc.rs::Channel::mark_peer_dead` takes `recv_waiter` and wakes it, so a parked
-receiver does observe peer death.
-
-So they are probably convertible, exactly as the broker's arm was. What stops the
-change is verification, not correctness: all three sit on the call and operation
-scenarios, and the only plane that exercises them end to end is the seL4 call
-plane — which currently deadlocks for an unrelated reason (see B25), and the x86
-operation gate cannot run in this environment. Converting them would be an
-unobserved change to a path with no green gate, which is the failure mode
-`d69cd8e` and this session's reverted `deliver` arm both illustrate.
-
-**Severity:** latent. A spin costs the root's iteration budget and makes any wedge
-it causes report `graph iterations exhausted` with no named waiter — which is
-precisely what made the call plane's failure unreadable until the broker's arm was
-fixed. None of the three is on a plane with a passing gate today, so none is
-currently hiding anything.
-
-**Exit condition:** each of the three parks rather than yields, observed on a plane
-whose gate passes — so the conversion is proved not to lose a wake.
 
 ### B12 — the component build's `--remap-path-prefix` names a path that does not exist
 

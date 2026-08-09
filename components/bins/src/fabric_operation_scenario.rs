@@ -133,7 +133,7 @@ pub fn run_client() {
     send(route, goal(session, 7, GOAL_NEVER_ANSWERS));
     expect_accepted(route, session, 7, STATUS_ACTIVE);
     signal_time_phase(3);
-    expect_terminal_yielding(route, session, 7, STATUS_TIMEOUT);
+    expect_terminal_parked(route, session, 7, STATUS_TIMEOUT);
     slime_rt::debug_write(b"[fabric-op-client] timeout distinct\n");
     // The retained identity remains as a bounded tombstone, so expiry is
     // distinguishable from an unknown or unauthorized operation.
@@ -149,14 +149,18 @@ pub fn run_client() {
 
     // Peer death settles the active operation and is distinct from a timeout.
     send(route, goal(session, 8, GOAL_KILLS_SERVER));
-    expect_terminal_yielding(route, session, 8, STATUS_PEER_DEAD);
+    expect_terminal_parked(route, session, 8, STATUS_PEER_DEAD);
+    // Client B's marker must land before A closes the backup route: closing it
+    // lets the broker finish and exit, which marks B's primary route peer dead
+    // even if B has not yet consumed its already queued terminal.
+    wait_phase(7);
     slime_rt::debug_write(b"[fabric-op-client] peer death distinct\n");
     send_raw(backup_route, &[0xa7]);
     let mut probe = [0u8; MAX_MSG];
     let mut probe_caps = [0u64; MAX_CAPS_PER_MSG];
     loop {
         match slime_rt::recv(backup_route, &mut probe, &mut probe_caps) {
-            ERR_WOULDBLOCK => slime_rt::yield_now(),
+            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(backup_route)]),
             1 if probe[0] == 0xa7 => break,
             _ => fail(b"backup operation liveness"),
         }
@@ -247,9 +251,9 @@ pub fn run_client_b_restarted() {
     send(route, goal(session, 13, GOAL_NEVER_ANSWERS));
     expect_accepted(route, session, 13, STATUS_ACTIVE);
     signal_phase(6);
-    expect_terminal_yielding(route, session, 13, STATUS_PEER_DEAD);
-    signal_phase(7);
+    expect_terminal_parked(route, session, 13, STATUS_PEER_DEAD);
     slime_rt::debug_write(b"[fabric-op-client-b] concurrent peer fault isolated\n");
+    signal_phase(7);
 }
 
 /// The operation server. Its policy is deliberately trivial and lives entirely
@@ -602,15 +606,14 @@ pub fn expect_terminal(slot: u32, session: u64, operation_id: u64, status: i32) 
     expect(slot, session, operation_id, KIND_TERMINAL, Some(status));
 }
 
-/// Await a terminal while yielding rather than parking. Used where the record is
-/// produced by another component's death, so there is no endpoint whose
-/// readiness would wake a parked receiver.
-pub fn expect_terminal_yielding(slot: u32, session: u64, operation_id: u64, status: i32) {
+/// Await a terminal while parking on the route endpoint. Peer-death settlement
+/// wakes the endpoint waiter before the broker publishes its terminal record.
+pub fn expect_terminal_parked(slot: u32, session: u64, operation_id: u64, status: i32) {
     let mut bytes = [0u8; MAX_MSG];
     let mut caps = [0u64; MAX_CAPS_PER_MSG];
     loop {
         match slime_rt::recv(slot, &mut bytes, &mut caps) {
-            ERR_WOULDBLOCK => slime_rt::yield_now(),
+            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(slot)]),
             ERR_PEER_DEAD => fail(b"terminal peer died"),
             value if value < 0 => fail(b"terminal receive"),
             value => {
@@ -672,6 +675,14 @@ fn wait_restart_start() {
     loop {
         match slime_rt::recv(RESTART_START_SLOT, &mut bytes, &mut caps) {
             ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(RESTART_START_SLOT)]),
+            // No barrier channel at all. On seL4 the root launches every
+            // component the generation declares, so an *unconfigured* copy of
+            // this replacement also starts, holding only its declared control
+            // endpoint. It is not the plane's subject: it parks rather than
+            // reporting a failure the gate would read as the restart arm
+            // breaking. The spawned copy resolves all three grants at
+            // construction, so it cannot reach here without the barrier.
+            ERR_BAD_CAP => slime_components::fabric_boot::park_only(b"fabric-op-client-b-restart"),
             1 if bytes[0] == 1 => return,
             _ => fail(b"restart start"),
         }

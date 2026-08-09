@@ -72,13 +72,36 @@ PLANES: tuple[tuple[str, str, str], ...] = (
     ("sel4-stream", "--stream-plane", "slime-sel4-stream.elf"),
     ("sel4-supervision", "--supervision-plane", "slime-sel4-supervision.elf"),
     ("sel4-crossing", "--crossing-plane", "slime-sel4-crossing.elf"),
-    # P5.4.6. Frozen even though the plane does not pass its own scenario: the
-    # layout is emitted between channel materialization and activation, so it
-    # is complete and observable long before the deadlock B25 records. What
-    # this guards is exactly what B10 exists for — that the table
-    # `SEL4_CALL_LAYOUT` declares is the table the root fills — and that claim
-    # is independent of whether the broker later completes provisioning.
+    # P5.4.6. The layout is emitted between channel materialization and
+    # activation, so it is complete and observable well before any scenario
+    # outcome. What this guards is exactly what B10 exists for — that the table
+    # `SEL4_CALL_LAYOUT` declares is the table the root fills.
     ("sel4-call", "--call-plane", "slime-sel4-call.elf"),
+    # P5.4.7, on the same rule. Six executables: the operation graph declares a
+    # restart replacement as its own identity.
+    ("sel4-operation", "--operation-plane", "slime-sel4-operation.elf"),
+    # P5.4.8, on the same rule. Six executables, the stream set with
+    # `fabric-intruder` as the declared proxy rather than an unauthorized probe.
+    ("sel4-visibility", "--visibility-plane", "slime-sel4-visibility.elf"),
+    # P5.4.9. Twenty-one rows: every C8 role's executable in disjoint slots,
+    # which is the half of C8.10 a boot layout can state.
+    ("sel4-boot", "--boot-plane", "slime-sel4-boot.elf"),
+    # P5.4.2c. Two rows: init holds an endpoint factory and the probe's
+    # executable. The block capability is *not* here — it is granted to the
+    # probe, so the root places it in the probe's own table.
+    ("sel4-storage", "--storage-plane", "slime-sel4-storage.elf"),
+    # Generation 24, the store plane. Same two rows and the same reason: the
+    # block capability is the probe's, not init's.
+    ("sel4-store", "--store-plane", "slime-sel4-store.elf"),
+    ("sel4-rollback", "--rollback-plane", "slime-sel4-rollback.elf"),
+    ("sel4-recovery", "--recovery-plane", "slime-sel4-recovery.elf"),
+    ("sel4-generation", "--generation-plane", "slime-sel4-generation.elf"),
+    ("sel4-directory", "--directory-plane", "slime-sel4-directory.elf"),
+    ("sel4-filesystem", "--filesystem-plane", "slime-sel4-filesystem.elf"),
+    ("sel4-input", "--input-plane", "slime-sel4-input.elf"),
+    ("sel4-powerbox", "--powerbox-plane", "slime-sel4-powerbox.elf"),
+    ("sel4-dango", "--dango-plane", "slime-sel4-dango.elf"),
+    ("sel4-transfer", "--transfer-plane", "slime-sel4-transfer.elf"),
 )
 
 

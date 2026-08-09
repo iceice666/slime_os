@@ -29,8 +29,9 @@
 // that library rather than recompiling the modules, which is what makes a host
 // test result evidence about the root the seL4 image boots.
 use slime_root::{
-    buffer_adapter, channel, child_vspace, event, fault, generation, graph, ipc, object_allocator,
-    parked, platform_timer, shared_buffer, supervision, task, timer, transfer_window, transit,
+    buffer_adapter, channel, child_vspace, device, event, fault, generation, graph, ipc,
+    object_allocator, parked, platform_timer, shared_buffer, supervision, task, timer,
+    transfer_window, transit, virtio_blk,
 };
 
 use core::ptr;
@@ -155,6 +156,73 @@ struct FreePage([u8; GRANULE_SIZE]);
 
 /// A root-image page whose virtual address becomes the loader's scratch window.
 static mut FREE_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
+
+/// Two root-image pages reclaimed as temporary mappings for the foundation
+/// non-alias probe. Separate from the loader scratch page: the proof needs both
+/// frames mapped simultaneously.
+static mut FOUNDATION_PAGES: [FreePage; 2] = [const { FreePage([0; GRANULE_SIZE]) }; 2];
+
+/// A second root-image page, whose virtual address becomes the standing window
+/// for one device's MMIO register bank (P5.4.2a).
+///
+/// Separate from `FREE_PAGE` rather than sharing it: the loader and every
+/// windowed syscall map and unmap a child frame at the scratch address on each
+/// use, so an MMIO frame left mapped there would be replaced by the next
+/// transfer. A device register bank must stay mapped for as long as the driver
+/// holds the device.
+static mut DEVICE_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
+
+/// Standing windows for each attached block device's register bank (P5.4.2b),
+/// one per device since P5.4.3.
+///
+/// Separate from `DEVICE_PAGE`, which the probe reuses granule by granule as it
+/// scans: a live device's registers must stay mapped, and two live devices need
+/// two windows.
+///
+/// Arrays rather than a second set of named statics: the bound is
+/// `MAX_BLOCK_DEVICES`, and duplicating three names per device would make the
+/// table's size a property of how many statics someone remembered to add.
+static mut BLOCK_MMIO_PAGES: [FreePage; MAX_BLOCK_DEVICES] =
+    [const { FreePage([0; GRANULE_SIZE]) }; MAX_BLOCK_DEVICES];
+/// Each block device's virtqueue rings.
+static mut BLOCK_QUEUE_PAGES: [FreePage; MAX_BLOCK_DEVICES] =
+    [const { FreePage([0; GRANULE_SIZE]) }; MAX_BLOCK_DEVICES];
+/// Each device's request header, data buffer, and status byte.
+static mut BLOCK_BUFFER_PAGES: [FreePage; MAX_BLOCK_DEVICES] =
+    [const { FreePage([0; GRANULE_SIZE]) }; MAX_BLOCK_DEVICES];
+
+/// Base of qemu-arm-virt's virtio-mmio transport window.
+///
+/// A *fixture* constant, not a discovery mechanism. The platform declares
+/// thirty-two identical transports at `0x0a00_0000 + n * 0x200` and its own
+/// device tree is the authority; the driver that eventually owns a device walks
+/// the FDT BootInfo extra to find it. This slice proves the mapping and probe
+/// mechanism, and for that the window only has to be one the machine declares.
+const VIRTIO_MMIO_BASE: usize = 0x0a00_0000;
+/// Bytes between consecutive transports.
+const VIRTIO_MMIO_STRIDE: usize = 0x200;
+/// How many fit in one granule: 4096 / 0x200.
+const VIRTIO_MMIO_SLOTS_PER_GRANULE: usize = 8;
+/// Granules covering all thirty-two declared transports: 32 / 8.
+const VIRTIO_MMIO_GRANULES: usize = 4;
+/// SPI number of the first transport's interrupt, from the platform's own
+/// device tree (`interrupts = <0x00 0x10 0x01>` on `virtio_mmio@a000000`).
+/// Transport `n` uses SPI `0x10 + n`.
+const VIRTIO_MMIO_FIRST_SPI: sel4::Word = 0x10;
+/// GIC SPIs are numbered from 32 in the kernel's IRQ space.
+const GIC_SPI_BASE: sel4::Word = 32;
+/// Badge the device notification carries, distinct from the timer's.
+const VIRTIO_IRQ_BADGE: sel4::Word = 0x2;
+
+/// The kernel IRQ number of the virtio-mmio transport at `paddr`.
+///
+/// The device tree is the authority and a driver will read it; this is the same
+/// arithmetic it encodes — transport `n` at `VIRTIO_MMIO_BASE + n * 0x200` takes
+/// SPI `VIRTIO_MMIO_FIRST_SPI + n`, and seL4 numbers an SPI from 32.
+const fn virtio_irq(paddr: usize) -> sel4::Word {
+    let index = ((paddr - VIRTIO_MMIO_BASE) / VIRTIO_MMIO_STRIDE) as sel4::Word;
+    GIC_SPI_BASE + VIRTIO_MMIO_FIRST_SPI + index
+}
 
 /// What one fixture task is expected to demonstrate.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -345,11 +413,16 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         Ok(allocator) => allocator,
         Err(error) => fatal!("allocator rejected bootinfo: {error:?}"),
     };
+    let initial_slots = allocator.slots_remaining();
+    let initial_untypeds = allocator.untyped_count();
+    let initial_bytes = allocator.untyped_bytes_remaining();
+    if initial_slots == 0 || initial_untypeds == 0 || initial_bytes == 0 {
+        fatal!(
+            "SLIME_FOUNDATION FAIL allocator slots={initial_slots} untypeds={initial_untypeds} bytes={initial_bytes}"
+        )
+    }
     sel4::debug_println!(
-        "SLIME_ROOT allocator slots={} untypeds={} bytes={}",
-        allocator.slots_remaining(),
-        allocator.untyped_count(),
-        allocator.untyped_bytes_remaining(),
+        "SLIME_ROOT allocator slots={initial_slots} untypeds={initial_untypeds} bytes={initial_bytes}",
     );
 
     // ---- timer phase ----
@@ -446,6 +519,58 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         Ok(scratch) => scratch,
         Err(error) => fatal!("scratch page unavailable: {error:?}"),
     };
+
+    let foundation_first = ptr::addr_of!(FOUNDATION_PAGES) as usize;
+    let foundation_second = foundation_first + GRANULE_SIZE;
+    for address in [foundation_first, foundation_second] {
+        if let Err(error) = ScratchPage::claim(bootinfo, address) {
+            fatal!("SLIME_FOUNDATION FAIL scratch unmap address={address:#x}: {error:?}")
+        }
+    }
+    let foundation_before = (
+        allocator.objects_allocated(),
+        allocator.slots_allocated(),
+        allocator.bytes_allocated(),
+    );
+    let mut foundation_adapter = BufferAdapter::new(&mut allocator);
+    if let Err(error) = foundation_adapter.prove_frame_independence(
+        sel4::init_thread::slot::VSPACE.cap(),
+        foundation_first,
+        foundation_second,
+    ) {
+        fatal!("SLIME_FOUNDATION FAIL frame independence: {error:?}")
+    }
+    let foundation_after = (
+        allocator.objects_allocated(),
+        allocator.slots_allocated(),
+        allocator.bytes_allocated(),
+    );
+    if foundation_after.0 != foundation_before.0 + 2
+        || foundation_after.1 != foundation_before.1 + 2
+        || foundation_after.2 != foundation_before.2 + 2 * GRANULE_SIZE
+    {
+        fatal!(
+            "SLIME_FOUNDATION FAIL accounting before={foundation_before:?} after={foundation_after:?}"
+        )
+    }
+    sel4::debug_println!(
+        "SLIME_FOUNDATION frames independent objects_delta=2 slots_delta=2 bytes_delta={} caps_deleted=2",
+        2 * GRANULE_SIZE,
+    );
+
+    // ---- device phase (P5.4.2a) ----
+    //
+    // Not conditional on a generation flag: the probe reports what BootInfo and
+    // the platform actually declare, and a machine with no device untyped or no
+    // attached transport reports exactly that. Storage *policy* stays userspace
+    // and stays absent until P5.4.2b; what this establishes is the mechanism —
+    // the root can name a device region, map it non-cacheably, and read a
+    // register out of it.
+    //
+    // Every seL4 gate boots this path, so the markers are unconditional and
+    // every plane's transcript carries them.
+    let mut block_devices = probe_devices(bootinfo, &mut allocator);
+    // ---- end device phase ----
     let image = match ChildImage::parse(&CHILD_ELF.0) {
         Ok(image) => image,
         Err(error) => fatal!("child image rejected: {error:?}"),
@@ -473,6 +598,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
             &mut allocator,
             &scratch,
             service_endpoint,
+            &mut block_devices,
         );
         sel4::init_thread::suspend_self()
     }
@@ -837,6 +963,35 @@ const RIGHT_ENDPOINT_CREATE: u64 = 1 << 17;
 /// operation and the budget bounds it (B13).
 const RIGHT_BUFFER_CREATE: u64 = 1 << 24;
 
+/// Authority to read sectors, held on a `Block` (P5.4.2c). Numbered as
+/// `blockRead` in the generation's own rights table
+/// (`scripts/build/build-generation.py`), which is the same numbering
+/// `kernel/src/capability/mod.rs` uses.
+const RIGHT_BLOCK_READ: u64 = 1 << 10;
+/// Authority to write sectors and to flush. One bit for both, matching the
+/// oracle: a caller that may change what is on the device may also ask for it
+/// to be made durable, and a flush without writes is a no-op.
+const RIGHT_BLOCK_WRITE: u64 = 1 << 11;
+
+/// Authority over a `Directory` (M6.3, P5.4.3), numbered as the oracle's
+/// `capability::RIGHT_DIRECTORY_*` and as `directoryRead` and friends in the
+/// generation's rights table.
+///
+/// Four independent bits rather than a read/write pair: listing a directory and
+/// resolving one name in it are different authorities, and derivation is a
+/// third — a component may be allowed to *use* a scope without being allowed to
+/// hand out narrower views of it.
+const RIGHT_DIRECTORY_READ: u64 = 1 << 19;
+const RIGHT_DIRECTORY_WRITE: u64 = 1 << 20;
+const RIGHT_DIRECTORY_LIST: u64 = 1 << 21;
+const RIGHT_DIRECTORY_DERIVE: u64 = 1 << 22;
+/// Authority to read one decoded key event, held on an `Input` (M6.4).
+const RIGHT_INPUT_READ: u64 = 1 << 23;
+
+/// Every right a directory capability may carry, for bounding a derive request.
+const RIGHTS_DIRECTORY_ALL: u64 =
+    RIGHT_DIRECTORY_READ | RIGHT_DIRECTORY_WRITE | RIGHT_DIRECTORY_LIST | RIGHT_DIRECTORY_DERIVE;
+
 /// Largest component ELF the loader will copy through [`ElfScratch`]. Generous
 /// against the five components this profile declares (the largest is ~44 KiB)
 /// while keeping the buffer a bounded, statically sized object like every other
@@ -886,6 +1041,1103 @@ impl ElfScratch {
     }
 }
 
+/// Report what device authority BootInfo gives this root, and probe the
+/// platform's virtio-mmio transports (P5.4.2a).
+///
+/// Three markers, and each is a distinct claim:
+///
+/// * `devices untypeds=` — BootInfo named this many device regions. Zero means
+///   the platform declares no device memory, which is a fact about the machine
+///   rather than a failure.
+/// * `device mapped=` — one granule was retyped out of a device untyped and
+///   mapped non-cacheably into the root's own VSpace. This is the mechanism
+///   P5.4.2's block device needs and the root did not have.
+/// * `virtio transport=` — a register read out of that mapping identified a
+///   present transport. Absent means the slot exists but nothing is attached,
+///   which is what all thirty-two report when QEMU is given no `-drive`.
+///
+/// Failure is reported and returned from, never fatal: no plane depends on a
+/// device yet, and a root that refused to boot without one would break twelve
+/// gates to prove nothing.
+fn probe_devices(bootinfo: &sel4::BootInfo, allocator: &mut ObjectAllocator) -> BlockDevices {
+    sel4::debug_println!(
+        "SLIME_ROOT devices untypeds={}",
+        allocator.device_untyped_count(),
+    );
+    let mut devices = BlockDevices::new();
+    if allocator.device_untyped_count() == 0 {
+        return devices;
+    }
+    // SAFETY: the root task is single-threaded and this is the only reference
+    // taken to `DEVICE_PAGE`. Its address is granule-aligned by the type's
+    // `repr(align(4096))`, and it is claimed exactly once.
+    let base = ptr::addr_of!(DEVICE_PAGE) as usize;
+    if let Err(error) = ScratchPage::claim(bootinfo, base) {
+        sel4::debug_println!("SLIME_ROOT device page unavailable: {error:?}");
+        return devices;
+    }
+    // Every transport the platform declares, a granule at a time. One claimed
+    // root-image page is enough because the mapping is released between
+    // granules — the frame capabilities stay, only the virtual window is
+    // reused.
+    //
+    // Scanning rather than reading one slot: QEMU declares thirty-two identical
+    // transports and attaches a device to the *highest* free one, so the
+    // occupied slot is a function of how many devices the command line names.
+    // A driver will read the FDT to enumerate them; the point here is that the
+    // answer comes from register reads rather than from a guess.
+    let mut found = 0;
+    let mut mapped = 0;
+    // Every attached transport, not merely the last one (P5.4.3). M6.7 crosses
+    // a persistence boundary, so it needs a source device and a receiver
+    // device at once — and a root that kept only the highest-numbered
+    // transport could express the milestone's central claim, that an ungranted
+    // device is untouched, only by having no second device to touch.
+    let mut attached: [Option<device::VirtioMmio>; MAX_BLOCK_DEVICES] = [None; MAX_BLOCK_DEVICES];
+    let mut regions: [Option<device::DeviceRegion>; MAX_BLOCK_DEVICES] =
+        [const { None }; MAX_BLOCK_DEVICES];
+    let mut attached_count = 0;
+    // Granules already remapped to a driver's standing window, so a second
+    // transport in the same page borrows rather than remaps (B29).
+    let mut standing: [Option<(usize, device::MappedGranule)>; MAX_BLOCK_DEVICES] =
+        [None; MAX_BLOCK_DEVICES];
+    for granule in 0..VIRTIO_MMIO_GRANULES {
+        let paddr = VIRTIO_MMIO_BASE + granule * GRANULE_SIZE;
+        let region = match device::DeviceRegion::map(
+            allocator,
+            sel4::init_thread::slot::VSPACE.cap(),
+            base,
+            paddr,
+        ) {
+            Ok(region) => region,
+            Err(error) => {
+                sel4::debug_println!("SLIME_ROOT device map failed paddr={paddr:#x} {error:?}");
+                return devices;
+            }
+        };
+        mapped += 1;
+        for slot in 0..VIRTIO_MMIO_SLOTS_PER_GRANULE {
+            let Some(transport) = device::VirtioMmio::probe(&region, slot * VIRTIO_MMIO_STRIDE)
+            else {
+                continue;
+            };
+            found += 1;
+            sel4::debug_println!(
+                "SLIME_ROOT virtio transport={:#x} version={} device={} vendor={:#x}",
+                transport.paddr,
+                transport.version,
+                transport.device_id,
+                transport.vendor_id,
+            );
+            if attached_count < MAX_BLOCK_DEVICES {
+                attached[attached_count] = Some(transport);
+                attached_count += 1;
+            } else {
+                sel4::debug_println!(
+                    "SLIME_ROOT virtio transport ignored paddr={:#x} reason=table-full",
+                    transport.paddr,
+                );
+            }
+        }
+        // Keep the granule holding the attached transport rather than
+        // releasing it: seL4's retype is monotonic, so a device untyped's page
+        // can be reached exactly once per boot. Unmapping frees the virtual
+        // window; the frame capability stays in `region` and is handed to the
+        // driver below, which re-maps it at its own standing address.
+        // Keep the granule if *any* attached transport lives in it. Several
+        // can: the stride is 0x200 and a granule is 0x1000, so eight transports
+        // share one page — which is why the region is looked up by address
+        // below rather than owned by one transport.
+        let holds_attached = attached[..attached_count]
+            .iter()
+            .any(|entry| entry.is_some_and(|found| found.paddr & !(GRANULE_SIZE - 1) == paddr));
+        if holds_attached {
+            if let Some(slot) = regions.iter_mut().find(|slot| slot.is_none()) {
+                *slot = Some(region);
+            }
+            continue;
+        }
+        if let Err(error) = region.unmap() {
+            sel4::debug_println!("SLIME_ROOT device unmap failed paddr={paddr:#x} {error:?}");
+            return devices;
+        }
+    }
+    // Bind the interrupt of whichever transport is attached (P5.4.2b).
+    //
+    // Only for a device that exists: `irq_control_get_trigger` succeeds for any
+    // number the platform declares, so acquiring an unattached transport's line
+    // would report a binding that can never fire and prove nothing.
+    //
+    // Level-triggered, because virtio-mmio holds its line asserted until the
+    // driver writes `InterruptACK`. Nothing here acknowledges: there is no
+    // driver yet to clear the device condition first, and acknowledging before
+    // that is exactly the ordering mistake that storms. What this establishes
+    // is that the root can *acquire and bind* a device IRQ; servicing one is
+    // the transport's.
+    // Highest physical address first, which is QEMU command-line order.
+    //
+    // QEMU fills virtio-mmio slots downward from the highest free one, so the
+    // *first* `-device` on the command line lands at the highest address. A
+    // generation naming "device 0" therefore means the first disk the operator
+    // attached, which is the only ordering an operator can predict.
+    attached[..attached_count].sort_unstable_by_key(|entry| {
+        core::cmp::Reverse(entry.map_or(0, |transport| transport.paddr))
+    });
+    for entry in attached.iter().take(attached_count) {
+        let Some(transport) = *entry else {
+            continue;
+        };
+        let irq = virtio_irq(transport.paddr);
+        match device::DeviceIrq::acquire(allocator, irq, VIRTIO_IRQ_BADGE, true) {
+            Ok(binding) => sel4::debug_println!(
+                "SLIME_ROOT virtio irq bound transport={:#x} irq={} badge={:#x}",
+                transport.paddr,
+                binding.irq(),
+                VIRTIO_IRQ_BADGE,
+            ),
+            Err(error) => {
+                sel4::debug_println!("SLIME_ROOT virtio irq unavailable irq={irq} {error:?}");
+            }
+        }
+        let granule = transport.paddr & !(GRANULE_SIZE - 1);
+        // A granule another driver already stands in? Then borrow that mapping
+        // at this transport's own offset (B29). QEMU packs eight transports
+        // into one page, so two attached disks routinely share one, and the
+        // frame can be mapped exactly once.
+        let block = if let Some(shared) = standing
+            .iter()
+            .find_map(|entry| entry.filter(|(paddr, _)| *paddr == granule).map(|(_, g)| g))
+        {
+            bring_up_shared_block(allocator, bootinfo, transport, shared, devices.len())
+        } else {
+            let region = regions.iter_mut().find_map(|slot| {
+                let holds = slot
+                    .as_ref()
+                    .is_some_and(|region| region.paddr() == granule);
+                if holds { slot.take() } else { None }
+            });
+            let Some(region) = region else {
+                sel4::debug_println!(
+                    "SLIME_ROOT virtio transport skipped paddr={:#x} reason=no-region",
+                    transport.paddr,
+                );
+                continue;
+            };
+            match bring_up_block(allocator, bootinfo, transport, region, devices.len()) {
+                Some((block, borrowed)) => {
+                    if let Some(slot) = standing.iter_mut().find(|slot| slot.is_none()) {
+                        *slot = Some((granule, borrowed));
+                    }
+                    Some(block)
+                }
+                None => None,
+            }
+        };
+        if let Some(block) = block {
+            devices.push(block);
+        }
+    }
+    sel4::debug_println!(
+        "SLIME_ROOT virtio probed granules={mapped} slots={} found={found}",
+        mapped * VIRTIO_MMIO_SLOTS_PER_GRANULE,
+    );
+    devices
+}
+
+/// Block devices this cutover brings up, in stable physical-address order.
+///
+/// Two, because M6.7 transfers a generation from a source device to a receiver
+/// and needs both at once. The bound is a table size rather than a policy: a
+/// generation grants authority over a device by index, and an index the boot
+/// did not fill is authority the root cannot back.
+pub const MAX_BLOCK_DEVICES: usize = 2;
+
+/// The brought-up devices.
+pub struct BlockDevices {
+    devices: [Option<virtio_blk::VirtioBlock>; MAX_BLOCK_DEVICES],
+    len: usize,
+}
+
+impl Default for BlockDevices {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl BlockDevices {
+    pub const fn new() -> Self {
+        Self {
+            devices: [const { None }; MAX_BLOCK_DEVICES],
+            len: 0,
+        }
+    }
+
+    fn push(&mut self, device: virtio_blk::VirtioBlock) {
+        if self.len < MAX_BLOCK_DEVICES {
+            self.devices[self.len] = Some(device);
+            self.len += 1;
+        }
+    }
+
+    pub const fn len(&self) -> usize {
+        self.len
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    pub fn get_mut(&mut self, index: usize) -> Option<&mut virtio_blk::VirtioBlock> {
+        self.devices.get_mut(index)?.as_mut()
+    }
+}
+
+/// Bring up a second transport in a granule another driver already mapped
+/// (B29, P5.4.3).
+///
+/// Everything `bring_up_block` does except the mapping: the frame is already
+/// standing at a driver's window, so this allocates only the DMA pages and
+/// hands the driver a borrow at its own offset.
+fn bring_up_shared_block(
+    allocator: &mut ObjectAllocator,
+    bootinfo: &sel4::BootInfo,
+    transport: device::VirtioMmio,
+    shared: device::MappedGranule,
+    index: usize,
+) -> Option<virtio_blk::VirtioBlock> {
+    let granule = transport.paddr & !(GRANULE_SIZE - 1);
+    let offset = transport.paddr - granule;
+    if index >= MAX_BLOCK_DEVICES {
+        return None;
+    }
+    let queue_base = ptr::addr_of!(BLOCK_QUEUE_PAGES) as usize + index * GRANULE_SIZE;
+    let buffer_base = ptr::addr_of!(BLOCK_BUFFER_PAGES) as usize + index * GRANULE_SIZE;
+    for address in [queue_base, buffer_base] {
+        if let Err(error) = ScratchPage::claim(bootinfo, address) {
+            sel4::debug_println!("SLIME_ROOT block page unavailable: {error:?}");
+            return None;
+        }
+    }
+    let queue = match device::DmaPage::allocate(
+        allocator,
+        sel4::init_thread::slot::VSPACE.cap(),
+        queue_base,
+    ) {
+        Ok(page) => page,
+        Err(error) => {
+            sel4::debug_println!("SLIME_ROOT block queue unavailable: {error:?}");
+            return None;
+        }
+    };
+    let buffer = match device::DmaPage::allocate(
+        allocator,
+        sel4::init_thread::slot::VSPACE.cap(),
+        buffer_base,
+    ) {
+        Ok(page) => page,
+        Err(error) => {
+            sel4::debug_println!("SLIME_ROOT block buffer unavailable: {error:?}");
+            return None;
+        }
+    };
+    sel4::debug_println!(
+        "SLIME_ROOT block dma queue={:#x} buffer={:#x}",
+        queue.physical_address(),
+        buffer.physical_address(),
+    );
+    let mut block = match virtio_blk::VirtioBlock::new(shared, offset, queue, buffer) {
+        Ok(block) => block,
+        Err(error) => {
+            sel4::debug_println!("SLIME_ROOT block bring-up failed {error:?}");
+            return None;
+        }
+    };
+    sel4::debug_println!(
+        "SLIME_ROOT block ready transport={:#x} sectors={}",
+        transport.paddr,
+        block.capacity_sectors(),
+    );
+    let mut sector = [0u8; virtio_blk::SECTOR_BYTES];
+    match block.read_sector(0, &mut sector) {
+        Ok(()) => sel4::debug_println!(
+            "SLIME_ROOT block read lba=0 bytes={} head={:02x}{:02x}{:02x}{:02x}",
+            sector.len(),
+            sector[0],
+            sector[1],
+            sector[2],
+            sector[3],
+        ),
+        Err(error) => sel4::debug_println!("SLIME_ROOT block read failed lba=0 {error:?}"),
+    }
+    Some(block)
+}
+
+/// Bring up the attached virtio block device and read one sector (P5.4.2b).
+///
+/// The transport's registers are re-mapped here rather than kept from the
+/// probe: the probe unmaps each granule as it scans, so one claimed page can
+/// cover all thirty-two slots. This maps the granule the attached transport
+/// lives in and keeps it, which is what a live device needs.
+///
+/// Two DMA pages, both ordinary RAM the allocator can name physically: one for
+/// the virtqueue rings, one for the request header, data buffer, and status
+/// byte.
+///
+/// Reading sector 0 is the proof. A driver that negotiated the handshake but
+/// never moved a byte would report a capacity and nothing else; a completed
+/// read means descriptors the device followed, a buffer it wrote through DMA,
+/// and a status byte it set.
+fn bring_up_block(
+    allocator: &mut ObjectAllocator,
+    bootinfo: &sel4::BootInfo,
+    transport: device::VirtioMmio,
+    region: device::DeviceRegion,
+    index: usize,
+) -> Option<(virtio_blk::VirtioBlock, device::MappedGranule)> {
+    let granule = transport.paddr & !(GRANULE_SIZE - 1);
+    let offset = transport.paddr - granule;
+    if index >= MAX_BLOCK_DEVICES {
+        return None;
+    }
+    // Address arithmetic on the array base rather than indexing the static:
+    // indexing reads it, and a mutable static may not be read outside `unsafe`.
+    // Each element is exactly one granule, so the offset is exact.
+    let base = ptr::addr_of!(BLOCK_MMIO_PAGES) as usize + index * GRANULE_SIZE;
+    let queue_base = ptr::addr_of!(BLOCK_QUEUE_PAGES) as usize + index * GRANULE_SIZE;
+    let buffer_base = ptr::addr_of!(BLOCK_BUFFER_PAGES) as usize + index * GRANULE_SIZE;
+    for address in [base, queue_base, buffer_base] {
+        if let Err(error) = ScratchPage::claim(bootinfo, address) {
+            sel4::debug_println!("SLIME_ROOT block page unavailable: {error:?}");
+            return None;
+        }
+    }
+    // The frame the probe already retyped, moved to its own standing address so
+    // the scan's shared window stays free.
+    let region = match region.remap(sel4::init_thread::slot::VSPACE.cap(), base) {
+        Ok(region) => region,
+        Err(error) => {
+            sel4::debug_println!("SLIME_ROOT block map failed paddr={granule:#x} {error:?}");
+            return None;
+        }
+    };
+    let queue = match device::DmaPage::allocate(
+        allocator,
+        sel4::init_thread::slot::VSPACE.cap(),
+        queue_base,
+    ) {
+        Ok(page) => page,
+        Err(error) => {
+            sel4::debug_println!("SLIME_ROOT block queue unavailable: {error:?}");
+            return None;
+        }
+    };
+    let buffer = match device::DmaPage::allocate(
+        allocator,
+        sel4::init_thread::slot::VSPACE.cap(),
+        buffer_base,
+    ) {
+        Ok(page) => page,
+        Err(error) => {
+            sel4::debug_println!("SLIME_ROOT block buffer unavailable: {error:?}");
+            return None;
+        }
+    };
+    sel4::debug_println!(
+        "SLIME_ROOT block dma queue={:#x} buffer={:#x}",
+        queue.physical_address(),
+        buffer.physical_address(),
+    );
+    let borrowed = region.granule();
+    let mut block = match virtio_blk::VirtioBlock::new(borrowed, offset, queue, buffer) {
+        Ok(block) => block,
+        Err(error) => {
+            sel4::debug_println!("SLIME_ROOT block bring-up failed {error:?}");
+            return None;
+        }
+    };
+    sel4::debug_println!(
+        "SLIME_ROOT block ready transport={:#x} sectors={}",
+        transport.paddr,
+        block.capacity_sectors(),
+    );
+    let mut sector = [0u8; virtio_blk::SECTOR_BYTES];
+    match block.read_sector(0, &mut sector) {
+        Ok(()) => sel4::debug_println!(
+            "SLIME_ROOT block read lba=0 bytes={} head={:02x}{:02x}{:02x}{:02x}",
+            sector.len(),
+            sector[0],
+            sector[1],
+            sector[2],
+            sector[3],
+        ),
+        Err(error) => sel4::debug_println!("SLIME_ROOT block read failed lba=0 {error:?}"),
+    }
+    // Bring-up reads. It does not write.
+    //
+    // It used to: a write/flush/read-back round trip on sector 1 proved the
+    // other DMA direction at boot. Sector 1 is the GPT primary header, so on
+    // any partitioned disk the root silently destroyed the partition table
+    // before userspace ran — the store plane found it as a `bad-magic` primary
+    // recovering from the backup on a *freshly built* fixture.
+    //
+    // The round trip was not worth a device-wide write from boot code that has
+    // no idea what the disk holds. `sel4_storage_check` proves both directions
+    // and a flush from userspace, on a sector the fixture designates, through a
+    // capability — which is where a write belongs.
+    //
+    // The borrowed handle is returned beside the driver so the probe can give
+    // it to another transport in the same granule (B29). `region` falls out of
+    // scope here and releases nothing: `DeviceRegion` has no `Drop`, and a
+    // bound device stays bound for the boot.
+    Some((block, borrowed))
+}
+
+/// Answer one `BlockTransact` (P5.4.2c).
+///
+/// Three checks before a sector moves, in the order the oracle's
+/// `sys_block_transact` makes them:
+///
+/// 1. the caller's slot must resolve to a `Block` capability — holding a slot
+///    number is not authority;
+/// 2. the request must decode as a `WireBlockRequest` with the right magic and
+///    version, so a malformed frame is refused rather than interpreted;
+/// 3. the operation must be covered by the capability's own rights —
+///    `blockRead` for `OP_READ`, `blockWrite` for `OP_WRITE` and `OP_FLUSH`.
+///
+/// The payload travels through the caller's transfer window, like every other
+/// windowed operation. One sector per request: `sector_count` above one is
+/// refused rather than partially served, because a partial completion has no
+/// The namespace root the boot starts from (M6.3, P5.4.3).
+///
+/// The identity of the directory snapshot `scripts/build/build-directory-fixture.py`
+/// commits to the object store, hardcoded exactly as the oracle's
+/// `bootstrap::directory_fixture_root` hardcodes it. The root task cannot
+/// compute it: resolving a snapshot means reading the store, which is
+/// userspace's. What it can do is start the namespace at a root a component
+/// will recognise.
+///
+/// Zero on every plane whose fixture has no directory tree, which is every
+/// plane but the filesystem one — and a zero root is what "nothing committed
+/// yet" means, so the directory plane's empty-namespace arm still holds.
+const DIRECTORY_FIXTURE_ROOT: [u8; 32] = [
+    0xe8, 0xcd, 0xd1, 0x45, 0x6f, 0xe5, 0x4e, 0x59, 0xe3, 0xb6, 0x1a, 0x65, 0x5a, 0x2f, 0xbb, 0xfa,
+    0xf1, 0x6d, 0x89, 0xa8, 0x77, 0x0a, 0xa1, 0x08, 0x05, 0x51, 0xbd, 0x84, 0xf6, 0x6b, 0x0f, 0xf2,
+];
+
+/// The key script a generation runs (M6.4, P5.4.3).
+///
+/// Selected by generation number, exactly as the oracle's `bootstrap` selects
+/// its own. A generation with no entry here gets an empty script, so
+/// `InputRead` on every other plane answers `WouldBlock` — which is what "no
+/// key has been pressed" means, and is why holding the capability on a plane
+/// with no session is harmless.
+const fn input_script(generation: u64) -> &'static [u8] {
+    match generation {
+        // The dango plane: the oracle's generation-7 session, byte for byte, so
+        // the same component produces the same transcript.
+        30 => b"$(sysinfo)\n(with-env {MODE=ci} (with-cwd docs (with-stdin data $(echo ok))))\n$(inject)\n$(echo a b c)\n\x1b",
+        // The input plane's own script: two characters, a space, a character,
+        // and a newline — enough to prove ordering, the character encoding, the
+        // named-key encoding, and exhaustion.
+        31 => b"ab c\n",
+        // The powerbox plane: the oracle's generation-9 session — a newline to
+        // confirm the selection, then escape.
+        32 => b"\n\x1b",
+        _ => b"",
+    }
+}
+
+/// The scripted key source (M6.4, P5.4.3).
+///
+/// A byte string and a cursor, exactly as the oracle's
+/// `drivers::input::ScriptInput` is. There is no keyboard on the pinned QEMU
+/// profile and a gate needs a deterministic session, so the "device" is a
+/// script the generation selects — which is honest about what is being proved:
+/// the *authority* path and the event encoding, not a PS/2 decoder.
+pub struct ScriptedInput {
+    bytes: &'static [u8],
+    /// Per-task cursors, because the script is a *session* rather than a shared
+    /// queue.
+    ///
+    /// The root launches every declared component, so two copies of a console
+    /// component run and both read input. One cursor would let the
+    /// root-launched copy drain the script before the spawned one asked, and
+    /// the spawned session would park on an exhausted source — which is exactly
+    /// what happened, and read as a hung component rather than a shared cursor.
+    cursors: [usize; MAX_TASKS],
+}
+
+impl ScriptedInput {
+    const fn new(bytes: &'static [u8]) -> Self {
+        Self {
+            bytes,
+            cursors: [0; MAX_TASKS],
+        }
+    }
+
+    /// The next event, or `None` when the script is spent. A spent script is
+    /// `WouldBlock` rather than an error: no key has been pressed *yet* is the
+    /// same answer a real keyboard gives.
+    /// The next event for `task`.
+    ///
+    /// A spent script yields `Escape` forever rather than `None`. That is not a
+    /// convenience: `dango.rs` loops on `WouldBlock` with a `wait` that this
+    /// source always satisfies, so a reader whose script ran out would spin
+    /// until the graph's iteration budget died — and it *would* run out, because
+    /// the root launches an unconfigured copy of every declared component and
+    /// that copy reads its own cursor to the end.
+    ///
+    /// Escape is the session's own quit key, so an exhausted script ends the
+    /// reader exactly as the scripted `\x1b` ends the configured one.
+    fn next_event(&mut self, task: TaskId) -> Option<u64> {
+        let cursor = self.cursors.get_mut(task.0 as usize)?;
+        let byte = self.bytes.get(*cursor).copied();
+        match byte {
+            Some(byte) => {
+                *cursor += 1;
+                Some(encode_key(byte))
+            }
+            None => Some(encode_key(0x1b)),
+        }
+    }
+}
+
+/// Encode one scripted byte as the runtime's key event, matching the oracle's
+/// `syscall::encode_key_event` numbering so `slime_rt::input_read` decodes it
+/// unchanged.
+const fn encode_key(byte: u8) -> u64 {
+    // The numbering is `syscall::decode` in `components/runtime`, read from the
+    // decoder rather than guessed: 1..=13 are named keys, and a printable
+    // character is `0x100 | ch`. Getting this wrong produced a session where
+    // every keystroke arrived as a space, which is a decoder disagreement that
+    // looks like a broken keyboard.
+    let code: u64 = match byte {
+        0x1b => 1,
+        0x08 => 2,
+        b'\t' => 3,
+        b'\n' => 4,
+        b' ' => 9,
+        printable => 0x100 | printable as u64,
+    };
+    // Bit 32 is `pressed`. A script byte is a keypress, and without this every
+    // event decoded as a *release* — which `dango.rs` discards, so the session
+    // consumed its whole script and typed nothing.
+    code | (1 << 32)
+}
+
+/// Answer `InputRead`: one decoded key event, if the caller may read them.
+fn serve_input_read(
+    graph: &GraphTables,
+    input: &mut ScriptedInput,
+    id: TaskId,
+    words: &[sel4::Word],
+) -> Response {
+    let Some(table) = graph.get(id) else {
+        return Response::error(IpcError::BadCapability);
+    };
+    let Ok(capability) = table.resolve(words[0] as u32, RIGHT_INPUT_READ) else {
+        return Response::error(IpcError::BadCapability);
+    };
+    if !matches!(capability.resource, graph::Resource::Input) {
+        return Response::error(IpcError::BadCapability);
+    }
+    match input.next_event(id) {
+        Some(event) => Response::success(0, event),
+        // Only a task id past the cursor table, which cannot happen for a task
+        // the dispatcher is serving.
+        None => Response::error(IpcError::WouldBlock),
+    }
+}
+
+/// Which resource a declared grant names, and the rights mask that bounds it.
+///
+/// # Slot order comes from the grant's name
+///
+/// `build-generation.py` sorts grants by `(name, source, target)` before
+/// encoding, so the manifest's *declaration* order is not preserved — the
+/// encoded order is alphabetical by grant name, and that is what both placement
+/// loops walk.
+///
+/// So a component holding several kinds fixes its slot layout by naming its
+/// grants in the order it reads them. `sel4-powerbox.zti` names
+/// `powerbox-a-root` and `powerbox-b-input` for exactly that reason:
+/// `powerbox-chooser.rs` reads a directory at 1 and input at 2.
+///
+/// That is a sharp edge, and it is recorded as a follow-up rather than
+/// defended: a component's expected layout should be declared data checked at
+/// build time, the way the bootstrap component's boot layout already is.
+///
+/// One grant names one kind: a manifest that mixed `inputRead` with
+/// `blockRead` in a single grant would be declaring two capabilities as one,
+/// and the first match wins rather than silently installing both.
+///
+/// Executables are absent because they are placed by their own loop, at
+/// `1..=n`, before anything here.
+const fn declared_resource(rights: u64) -> Option<(u64, graph::Resource)> {
+    if rights & RIGHTS_DIRECTORY_ALL != 0 {
+        return Some((
+            RIGHTS_DIRECTORY_ALL | RIGHT_TRANSFER,
+            graph::Resource::Directory {
+                namespace: 0,
+                scope: graph::ScopeTable::ROOT,
+            },
+        ));
+    }
+    if rights & RIGHT_INPUT_READ != 0 {
+        return Some((RIGHT_INPUT_READ, graph::Resource::Input));
+    }
+    if rights & RIGHT_ENDPOINT_CREATE != 0 {
+        return Some((RIGHT_ENDPOINT_CREATE, graph::Resource::EndpointFactory));
+    }
+    if rights & RIGHT_BUFFER_CREATE != 0 {
+        return Some((RIGHT_BUFFER_CREATE, graph::Resource::SharedBufferFactory));
+    }
+    if rights & (RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE) != 0 {
+        // Device 0; a component declared several gets them renumbered by the
+        // caller, which is the only place that knows how many it has already
+        // placed.
+        return Some((
+            RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE,
+            graph::Resource::Block { device: 0 },
+        ));
+    }
+    None
+}
+
+/// The boot-layout role a declared resource is placed by, for the bootstrap
+/// component whose table a layout numbers.
+const fn declared_role(resource: &graph::Resource) -> boot_contracts::boot_layout::Role {
+    use boot_contracts::boot_layout::Role;
+
+    match resource {
+        graph::Resource::Directory { .. } => Role::DirectoryRoot,
+        graph::Resource::Input => Role::Input,
+        graph::Resource::EndpointFactory => Role::EndpointFactory,
+        graph::Resource::SharedBufferFactory => Role::SharedBufferFactory,
+        // `Role::StorageCapability` is the boot-layout role the contract
+        // already carries for a block device.
+        _ => Role::StorageCapability,
+    }
+}
+
+/// The shared filesystem namespaces (M6.3, P5.4.3).
+///
+/// One root identity per namespace, and this cutover has exactly one. It lives
+/// in the root because it is *shared*: two tasks holding views of the same
+/// namespace must see each other's commits, and the compare-and-swap that makes
+/// concurrent writers safe has to happen somewhere neither of them controls.
+///
+/// The root identity is opaque here — thirty-two bytes the root never
+/// interprets. What it names is a directory object in the content-addressed
+/// store, and resolving it is a filesystem component's job.
+pub struct Namespaces {
+    roots: [[u8; 32]; MAX_NAMESPACES],
+}
+
+/// Namespaces this cutover supports. One, and the resource carries an index so
+/// raising it later is a table change rather than a representation change.
+const MAX_NAMESPACES: usize = 1;
+
+impl Namespaces {
+    const fn new() -> Self {
+        Self {
+            roots: [DIRECTORY_FIXTURE_ROOT; MAX_NAMESPACES],
+        }
+    }
+
+    fn root(&self, namespace: u32) -> Option<[u8; 32]> {
+        self.roots.get(namespace as usize).copied()
+    }
+
+    /// Replace a namespace root, but only if it still holds `expected`.
+    ///
+    /// The compare is the point. A writer builds a new tree from the root it
+    /// read; if another writer committed in between, that tree is built on a
+    /// stale parent and installing it would silently discard the other's work.
+    /// A failed compare is `false`, not an error: the caller re-reads and
+    /// retries, which is the ordinary path rather than a fault.
+    fn commit(&mut self, namespace: u32, expected: [u8; 32], new: [u8; 32]) -> Option<bool> {
+        let slot = self.roots.get_mut(namespace as usize)?;
+        if *slot != expected {
+            return Some(false);
+        }
+        *slot = new;
+        Some(true)
+    }
+}
+
+/// Answer `DirectoryInspect`: the namespace root this capability sees, and the
+/// scope it sees it through.
+///
+/// `words[0]` is the capability slot and `words[1]` the rights the caller
+/// claims to need — checked as a subset of what the capability carries, so a
+/// component asking for `directoryWrite` on a read-only view is refused here
+/// rather than discovering it at commit time.
+///
+/// The reply is the 32-byte root followed by the scope path, written through
+/// the caller's transfer window because a scope can exceed a message.
+fn serve_directory_inspect(
+    graph: &GraphTables,
+    namespaces: &Namespaces,
+    scopes: &graph::ScopeTable,
+    window: Option<transfer_window::Window>,
+    scratch: &ScratchPage,
+    id: TaskId,
+    words: &[sel4::Word],
+) -> Response {
+    let Some(table) = graph.get(id) else {
+        return Response::error(IpcError::BadCapability);
+    };
+    // `words[0]` packs the slot and the required rights, as `wire::slot_pair`
+    // encodes them: slot low, rights high. One word because the operation's
+    // argument list would otherwise exceed the fast registers.
+    let slot = words[0] as u32;
+    let required = words[0] >> 32;
+    // A zero request is not "no requirement": it is a caller that did not say
+    // what it needs, which the oracle refuses too.
+    if required == 0 || required & !RIGHTS_DIRECTORY_ALL != 0 {
+        return Response::error(IpcError::InvalidOperation);
+    }
+    let Ok(capability) = table.resolve(slot, required) else {
+        return Response::error(IpcError::BadCapability);
+    };
+    let graph::Resource::Directory { namespace, scope } = capability.resource else {
+        return Response::error(IpcError::BadCapability);
+    };
+    let Some(root) = namespaces.root(namespace) else {
+        return Response::error(IpcError::BadCapability);
+    };
+    let path = scopes.path(scope);
+    let mut reply = [0u8; 32 + graph::MAX_DIRECTORY_PATH];
+    reply[..32].copy_from_slice(&root);
+    reply[32..32 + path.len()].copy_from_slice(path);
+    let descriptor =
+        match transfer_window::write_staged_region(window, &reply[..32 + path.len()], scratch) {
+            Ok(descriptor) => descriptor,
+            Err(error) => return Response::error(error),
+        };
+    sel4::debug_println!(
+        "SLIME_GRAPH directory inspected task={} slot={slot} namespace={namespace} scope={}",
+        id.0,
+        DisplayPath(path),
+    );
+    Response::success(path.len() as i64, descriptor)
+}
+
+/// Answer `DirectoryDerive`: a narrower view of the same namespace.
+///
+/// Two narrowings at once, and both are one-directional:
+///
+/// * the **scope** may only lengthen — the request's path is appended to the
+///   source's, so a holder of `docs` derives `docs/notes` and can express no
+///   path that escapes it. There is no syntax for `..`, because
+///   `valid_directory_path` rejects the segment outright;
+/// * the **rights** must be a subset of the source's, and `RIGHT_TRANSFER` is
+///   checked separately so a view that may not be handed on cannot derive one
+///   that may.
+///
+/// Non-consuming: the source capability stays exactly as it was, matching every
+/// other derive-copy in this crate since B25.
+fn serve_directory_derive(
+    graph: &mut GraphTables,
+    scopes: &mut graph::ScopeTable,
+    window: Option<transfer_window::Window>,
+    scratch: &ScratchPage,
+    id: TaskId,
+    words: &[sel4::Word],
+) -> Response {
+    // Same packing as inspect. The path's length is not a word: it comes from
+    // the staged descriptor, so a caller cannot claim one length and stage
+    // another.
+    let slot = words[0] as u32;
+    let rights = words[0] >> 32;
+    if rights == 0 || rights & !(RIGHTS_DIRECTORY_ALL | RIGHT_TRANSFER) != 0 {
+        return Response::error(IpcError::InvalidOperation);
+    }
+    let Some(transfer) = words.get(1).copied() else {
+        return Response::error(IpcError::InvalidLength);
+    };
+    let frame = match transfer_window::read_staged_array(window, transfer, words, scratch) {
+        Ok(frame) => frame,
+        Err(error) => return Response::error(error),
+    };
+    let staged = frame.bytes();
+    if staged.len() > graph::MAX_DIRECTORY_PATH {
+        return Response::error(IpcError::InvalidLength);
+    }
+    let path_len = staged.len();
+    let mut path = [0u8; graph::MAX_DIRECTORY_PATH];
+    path[..path_len].copy_from_slice(staged);
+    let Some(table) = graph.get_mut(id) else {
+        return Response::error(IpcError::BadCapability);
+    };
+    // Resolved on `RIGHT_DIRECTORY_DERIVE` alone: holding a view is not
+    // authority to hand out narrower ones.
+    let Ok(source) = table.resolve(slot, RIGHT_DIRECTORY_DERIVE) else {
+        return Response::error(IpcError::BadCapability);
+    };
+    let graph::Resource::Directory { namespace, scope } = source.resource else {
+        return Response::error(IpcError::BadCapability);
+    };
+    // No widening, and `RIGHT_TRANSFER` is not implied by the rest.
+    if rights & !source.rights != 0 {
+        return Response::error(IpcError::BadCapability);
+    }
+    let Some(derived) = scopes.derive(scope, &path[..path_len]) else {
+        return Response::error(IpcError::InvalidOperation);
+    };
+    let capability = graph::Capability {
+        resource: graph::Resource::Directory {
+            namespace,
+            scope: derived,
+        },
+        rights,
+    };
+    let Some(free) = table.free_slot_from(1) else {
+        return Response::error(IpcError::DestinationSlotsExhausted);
+    };
+    if table.install(free, capability).is_err() {
+        return Response::error(IpcError::DestinationSlotsExhausted);
+    }
+    sel4::debug_println!(
+        "SLIME_GRAPH directory derived task={} from={slot} to={free} namespace={namespace} scope={} rights={rights:#x}",
+        id.0,
+        DisplayPath(scopes.path(derived)),
+    );
+    Response::success(free as i64, 0)
+}
+
+/// Answer `DirectoryCommit`: replace the namespace root, atomically.
+///
+/// Two gates the oracle also applies, and each rules out a different attack:
+///
+/// * `RIGHT_DIRECTORY_WRITE`, so a reader cannot install anything;
+/// * an **unscoped** capability, so a holder of `docs` cannot replace the
+///   namespace-wide root with its own subtree — which would promote a subtree
+///   snapshot to the whole filesystem and delete everything beside it.
+///
+/// The staged payload is two 32-byte identities: the root the caller believes
+/// is live, and the one it built. A mismatch answers `WouldBlock`, which is the
+/// retry signal rather than a failure.
+fn serve_directory_commit(
+    graph: &GraphTables,
+    namespaces: &mut Namespaces,
+    scopes: &graph::ScopeTable,
+    window: Option<transfer_window::Window>,
+    scratch: &ScratchPage,
+    id: TaskId,
+    words: &[sel4::Word],
+) -> Response {
+    let slot = words[0] as u32;
+    let Some(transfer) = words.get(1).copied() else {
+        return Response::error(IpcError::InvalidLength);
+    };
+    let frame = match transfer_window::read_staged_array(window, transfer, words, scratch) {
+        Ok(frame) => frame,
+        Err(error) => return Response::error(error),
+    };
+    let staged = frame.bytes();
+    if staged.len() != 64 {
+        return Response::error(IpcError::InvalidLength);
+    }
+    let mut expected = [0u8; 32];
+    let mut new = [0u8; 32];
+    expected.copy_from_slice(&staged[..32]);
+    new.copy_from_slice(&staged[32..64]);
+    let Some(table) = graph.get(id) else {
+        return Response::error(IpcError::BadCapability);
+    };
+    let Ok(capability) = table.resolve(slot, RIGHT_DIRECTORY_WRITE) else {
+        return Response::error(IpcError::BadCapability);
+    };
+    let graph::Resource::Directory { namespace, scope } = capability.resource else {
+        return Response::error(IpcError::BadCapability);
+    };
+    if !scopes.is_root(scope) {
+        sel4::debug_println!(
+            "SLIME_GRAPH directory commit refused task={} slot={slot} namespace={namespace} reason=scoped scope={}",
+            id.0,
+            DisplayPath(scopes.path(scope)),
+        );
+        return Response::error(IpcError::BadCapability);
+    }
+    match namespaces.commit(namespace, expected, new) {
+        Some(true) => {
+            sel4::debug_println!(
+                "SLIME_GRAPH directory committed task={} namespace={namespace} root={:02x}{:02x}{:02x}{:02x}",
+                id.0,
+                new[0],
+                new[1],
+                new[2],
+                new[3],
+            );
+            Response::success(0, 0)
+        }
+        // The root moved under the caller. Not an error: re-read and retry.
+        Some(false) => {
+            sel4::debug_println!(
+                "SLIME_GRAPH directory commit stale task={} namespace={namespace}",
+                id.0,
+            );
+            Response::error(IpcError::WouldBlock)
+        }
+        None => Response::error(IpcError::BadCapability),
+    }
+}
+
+/// A scope path in a marker, printed as text when it is text and as `-` when it
+/// is empty, so an unscoped view is visibly distinct from a missing field.
+struct DisplayPath<'a>(&'a [u8]);
+
+impl core::fmt::Display for DisplayPath<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        if self.0.is_empty() {
+            return formatter.write_str("-");
+        }
+        for byte in self.0 {
+            formatter.write_str(
+                core::str::from_utf8(core::slice::from_ref(byte)).map_err(|_| core::fmt::Error)?,
+            )?;
+        }
+        Ok(())
+    }
+}
+
+/// representation in the reply this cutover answers with.
+#[allow(clippy::too_many_lines)]
+fn serve_block_transact(
+    graph: &GraphTables,
+    devices: &mut BlockDevices,
+    window: Option<transfer_window::Window>,
+    scratch: &ScratchPage,
+    id: TaskId,
+    words: &[sel4::Word],
+) -> Response {
+    use slime_proto::block::{
+        BLOCK_MAGIC, FORMAT_VERSION, OFF_REPLY_MAGIC, OFF_REPLY_SECTORS_DONE, OFF_REPLY_STATUS,
+        OFF_REPLY_VERSION, OP_FLUSH, OP_READ, OP_WRITE, REPLY_LEN, WireBlockRequest,
+    };
+
+    let Some(slot) = words.first().map(|slot| *slot as u32) else {
+        return Response::error(IpcError::InvalidLength);
+    };
+    let Some(table) = graph.get(id) else {
+        return Response::error(IpcError::BadCapability);
+    };
+    let Some(capability) = table.get(slot) else {
+        return Response::error(IpcError::BadCapability);
+    };
+    let graph::Resource::Block { device: index } = capability.resource else {
+        return Response::error(IpcError::BadCapability);
+    };
+    let index = index as usize;
+    // Which device: the capability's own index, placed by the generation. A
+    // component holding the source cannot name the receiver, because the index
+    // is in the capability rather than in the request.
+    let Some(device) = devices.get_mut(index) else {
+        // Authority the boot could not back: the generation granted the device
+        // but none was attached. A bounded refusal, not a fault.
+        return Response::error(IpcError::UnsupportedOperation);
+    };
+    let Some(transfer) = words.get(1).copied() else {
+        return Response::error(IpcError::InvalidLength);
+    };
+    // The wide reader: a write carries its sector behind the 64-byte record, so
+    // the request is 576 bytes and the *message* reader's 64-byte bound would
+    // refuse it. `read_staged_array` refuses any descriptor naming a
+    // capability, which is the rule this operation needs anyway.
+    let frame = match transfer_window::read_staged_array(window, transfer, words, scratch) {
+        Ok(frame) => frame,
+        Err(error) => return Response::error(error),
+    };
+    let Some(request) = WireBlockRequest::decode(frame.bytes()) else {
+        return Response::error(IpcError::InvalidLength);
+    };
+    if request.magic != BLOCK_MAGIC || request.version != FORMAT_VERSION {
+        return Response::error(IpcError::InvalidLength);
+    }
+    let required = match request.op {
+        OP_READ => RIGHT_BLOCK_READ,
+        OP_WRITE | OP_FLUSH => RIGHT_BLOCK_WRITE,
+        _ => return Response::error(IpcError::InvalidLength),
+    };
+    if capability.rights & required == 0 {
+        sel4::debug_println!(
+            "SLIME_GRAPH block refused task={} op={} class=rights",
+            id.0,
+            request.op,
+        );
+        return Response::error(IpcError::BadCapability);
+    }
+    // One sector per request. The reply carries `sectors_done`, so a partial
+    // completion is representable — but nothing in this cutover produces one,
+    // and accepting a count this driver would silently truncate is worse than
+    // refusing it.
+    if request.op != OP_FLUSH && request.sector_count != 1 {
+        return Response::error(IpcError::InvalidLength);
+    }
+
+    let mut sector = [0u8; virtio_blk::SECTOR_BYTES];
+    let outcome = match request.op {
+        OP_READ => device.read_sector(request.lba, &mut sector),
+        OP_WRITE => {
+            let bytes = frame.bytes();
+            let start = slime_proto::block::REQUEST_LEN;
+            match bytes.get(start..start + virtio_blk::SECTOR_BYTES) {
+                Some(payload) => {
+                    sector.copy_from_slice(payload);
+                    device.write_sector(request.lba, &sector)
+                }
+                None => return Response::error(IpcError::InvalidLength),
+            }
+        }
+        _ => device.flush(),
+    };
+    let (status, sectors_done) = match outcome {
+        Ok(()) => (0i32, if request.op == OP_FLUSH { 0 } else { 1u32 }),
+        Err(error) => {
+            sel4::debug_println!(
+                "SLIME_GRAPH block failed task={} op={} lba={} {error:?}",
+                id.0,
+                request.op,
+                request.lba,
+            );
+            (-1i32, 0)
+        }
+    };
+    sel4::debug_println!(
+        "SLIME_GRAPH block served task={} op={} lba={} status={status} sectors={sectors_done}",
+        id.0,
+        request.op,
+        request.lba,
+    );
+
+    // The reply is the 64-byte record, and for a successful read the sector
+    // follows it in the caller's window.
+    //
+    // Written as one region rather than a `StagedFrame`, whose bound is
+    // `MAX_STAGED_BYTES` — the *message* bound, 64 bytes. A sector is not a
+    // message: it crosses no channel and is bounded by the window, exactly as
+    // `DebugWrite`'s line is. `write_staged_region` is the same write path
+    // without the message-shaped ceiling.
+    let mut reply = [0u8; REPLY_LEN + virtio_blk::SECTOR_BYTES];
+    reply[OFF_REPLY_MAGIC..OFF_REPLY_MAGIC + 4].copy_from_slice(&BLOCK_MAGIC.to_le_bytes());
+    reply[OFF_REPLY_VERSION..OFF_REPLY_VERSION + 4].copy_from_slice(&FORMAT_VERSION.to_le_bytes());
+    reply[OFF_REPLY_STATUS..OFF_REPLY_STATUS + 4].copy_from_slice(&status.to_le_bytes());
+    reply[OFF_REPLY_SECTORS_DONE..OFF_REPLY_SECTORS_DONE + 4]
+        .copy_from_slice(&sectors_done.to_le_bytes());
+    let length = if request.op == OP_READ && status == 0 {
+        reply[REPLY_LEN..].copy_from_slice(&sector);
+        reply.len()
+    } else {
+        REPLY_LEN
+    };
+    match transfer_window::write_staged_region(window, &reply[..length], scratch) {
+        Ok(descriptor) => Response::success(length as i64, descriptor),
+        Err(error) => Response::error(error),
+    }
+}
+
 /// Launch every component whose payload this root task can load (P5.2).
 ///
 /// Each component is built from the ELF its own generation object carries — not
@@ -902,6 +2154,7 @@ fn launch_component_graph(
     allocator: &mut ObjectAllocator,
     scratch: &ScratchPage,
     service_endpoint: sel4::cap::Endpoint,
+    block_devices: &mut BlockDevices,
 ) {
     let mut tasks = TaskTable::<MAX_TASKS>::new();
     let mut windows = WindowTable::<MAX_TASKS>::new();
@@ -1115,27 +2368,66 @@ fn launch_component_graph(
         // `serve_buffer_create` had nothing to resolve and the budget was the
         // only bound on allocation. The grant authorizes and the budget bounds;
         // they are independent, and this is what makes the first half real.
-        for (right, role, resource) in [
-            (
-                RIGHT_ENDPOINT_CREATE,
-                boot_contracts::boot_layout::Role::EndpointFactory,
-                graph::Resource::EndpointFactory,
-            ),
-            (
-                RIGHT_BUFFER_CREATE,
-                boot_contracts::boot_layout::Role::SharedBufferFactory,
-                graph::Resource::SharedBufferFactory,
-            ),
-        ] {
-            if authority.rights & right == 0 {
+        // Successive block grants name successive devices (B29, M6.7).
+        let mut block_index = 0u8;
+        // The component's declared non-executable authority, in **manifest
+        // grant order** — the same rule `construct_child` follows, so the two
+        // copies of one component agree.
+        //
+        // Not a fixed kind order. A component's slot layout *is* the order its
+        // generation declares its grants, which is what the oracle does and
+        // what lets two components disagree about kinds without either being
+        // wrong: `powerbox-chooser.rs` reads a directory then input,
+        // `dango.rs` reads input then a cwd root, and each generation declares
+        // them accordingly. A fixed order cost three separate boot failures,
+        // one per component holding more than one kind.
+        for index in 0..generation.grant_count() {
+            let Ok(grant) = generation.grant(index) else {
+                continue;
+            };
+            if grant.target != plan.component {
                 continue;
             }
+            let Some((right, resource)) = declared_resource(grant.rights) else {
+                continue;
+            };
+            let role = declared_role(&resource);
+            // A component may hold more than one device — M6.7's transfer holds
+            // a source and a receiver — and each declared block grant names the
+            // next brought-up device in order.
+            let resource = match resource {
+                graph::Resource::Block { .. } => {
+                    let device = block_index;
+                    block_index += 1;
+                    graph::Resource::Block { device }
+                }
+                other => other,
+            };
+            // `RIGHT_TRANSFER` is not a *kind* — every resource may carry it —
+            // so it must not be what decides that a component was granted one.
+            // The directory mask includes it so a declared `transferable = true`
+            // survives the intersection below, and without this mask-out any
+            // component with a transferable grant of any kind was handed a
+            // namespace view it never declared. Observed: the loan plane's
+            // console, whose only grants are `bufferCreate` and two `recv`.
+            if grant.rights & right & !RIGHT_TRANSFER == 0 {
+                continue;
+            }
+            // **This grant's** rights, not the component's union.
+            //
+            // `inbound_authority` unions every grant naming the component,
+            // which is right for deciding *whether* it holds a kind and wrong
+            // for deciding *how much*. M6.7 hands one component a read-only
+            // source and a writable receiver; against the union both came out
+            // writable, and the source accepted a write.
+            let right = grant.rights & right;
             let slot = if bootstrap_component == Some(plan.component) {
                 match channel::bootstrap_role_slot(boot_layout.as_ref(), role) {
                     Some(slot) => slot,
                     None => fatal!(
-                        "SLIME_GRAPH FAIL component {} was granted a factory the layout does not place",
-                        record.name
+                        "SLIME_GRAPH FAIL component {} was granted authority the layout does not place: {}",
+                        record.name,
+                        resource.kind(),
                     ),
                 }
             } else {
@@ -1381,6 +2673,7 @@ fn launch_component_graph(
         &mut buffers,
         allocator,
         scratch,
+        block_devices,
     );
 }
 
@@ -1478,7 +2771,13 @@ fn declared_quota(budget: Option<&SharedBufferBudget<'_>>, component: &str) -> H
 ///
 /// A graph that reached the bound would drain incompletely and fail its gate on
 /// a missing terminal marker, which is the wedge this exists to catch.
-const MAX_GRAPH_ITERATIONS: usize = 2048;
+///
+/// Raised for P5.4.3's dango plane, which is the densest composition
+/// this port runs: a scripted console session is one round trip *per keystroke*
+/// — 96 bytes of script — on top of four components' startup, every command's
+/// profile resolution, and a spawn plus a supervised wait per launch. Measured
+/// the same way B28 was: 2048 exhausted with the session still parked.
+const MAX_GRAPH_ITERATIONS: usize = 32768;
 
 /// Serve the root operation surface for the component graph.
 ///
@@ -1498,7 +2797,21 @@ fn serve_component_graph(
     buffers: &mut SharedBufferTable,
     allocator: &mut ObjectAllocator,
     scratch: &ScratchPage,
+    // The block devices attached and brought up (P5.4.2c, P5.4.3). Empty on
+    // every machine without a disk — a `BlockTransact` then answers a bounded
+    // refusal — and up to `MAX_BLOCK_DEVICES` when M6.7's two are present.
+    block_devices: &mut BlockDevices,
 ) {
+    // The shared filesystem namespaces (M6.3). Local to the serve loop, like
+    // every other table here: nothing outlives the graph it belongs to.
+    let mut namespaces = Namespaces::new();
+    // The scripted key source, selected by generation number exactly as the
+    // oracle's `bootstrap` selects it.
+    let mut input = ScriptedInput::new(input_script(generation.number));
+    // Interned directory scopes. A capability carries an index into this, not
+    // a path: inlining 128 bytes into every `Resource` grew the capability
+    // tables past the root's stack.
+    let mut scopes = graph::ScopeTable::new();
     let mut live = tasks.len();
     let mut unsupported = 0;
     let mut unimplemented = 0;
@@ -1617,6 +2930,7 @@ fn serve_component_graph(
                 channels,
                 &mut parked,
                 &mut transit,
+                graph,
                 buffers,
                 allocator,
                 &mut supervision_waits,
@@ -1692,6 +3006,68 @@ fn serve_component_graph(
                     };
                 ipc::reply(response);
             }
+            // M6.3: the three directory operations (P5.4.3).
+            //
+            // Mechanism, not policy. What a directory *contains* is a
+            // filesystem component's business, built over the object store;
+            // what the root owns is the unforgeable part — a shared namespace
+            // root, scoped views that derivation may only narrow, and an atomic
+            // compare-and-swap that keeps two writers from losing an update.
+            // M6.4: one scripted key event, gated on an `Input` capability.
+            Operation::InputRead => {
+                ipc::reply(serve_input_read(graph, &mut input, id, &words));
+            }
+            Operation::DirectoryInspect => {
+                ipc::reply(serve_directory_inspect(
+                    graph,
+                    &namespaces,
+                    &scopes,
+                    windows.bound(id),
+                    scratch,
+                    id,
+                    &words,
+                ));
+            }
+            Operation::DirectoryDerive => {
+                ipc::reply(serve_directory_derive(
+                    graph,
+                    &mut scopes,
+                    windows.bound(id),
+                    scratch,
+                    id,
+                    &words,
+                ));
+            }
+            Operation::DirectoryCommit => {
+                ipc::reply(serve_directory_commit(
+                    graph,
+                    &mut namespaces,
+                    &scopes,
+                    windows.bound(id),
+                    scratch,
+                    id,
+                    &words,
+                ));
+            }
+            // P5.4.2c: sectors, mediated.
+            //
+            // The root owns the driver because it owns the device untyped and
+            // the DMA frames; what it does *not* own is any policy about what
+            // the sectors mean. This arm authenticates the caller's capability,
+            // checks the operation against its rights, and hands the request to
+            // the driver. Partitioning, the object store, generations, and
+            // recovery all sit above it in userspace, exactly as they do on the
+            // oracle.
+            Operation::BlockTransact => {
+                ipc::reply(serve_block_transact(
+                    graph,
+                    block_devices,
+                    windows.bound(id),
+                    scratch,
+                    id,
+                    &words,
+                ));
+            }
             // A clean exit is a send, not a call: the task is suspended rather
             // than replied to.
             Operation::Exit => {
@@ -1716,6 +3092,7 @@ fn serve_component_graph(
                     channels,
                     &mut parked,
                     &mut transit,
+                    graph,
                     buffers,
                     allocator,
                     &mut supervision_waits,
@@ -1762,17 +3139,10 @@ fn serve_component_graph(
             }
             // Mint a channel pair through a declared `EndpointFactory`.
             //
-            // Both ends land in the caller's own table, which is what makes the
-            // pair useful: the caller keeps one and hands the other to a child
-            // at spawn. That is how a component gives a child a channel the
-            // generation could not have declared — a per-request context
-            // channel — and it is what `spawn-service` does on every x86 boot
-            // before sending a launch context.
-            //
-            // A loopback until one end moves. The caller is at both ends, so
-            // `ChannelTable::push` allocates the single queue a task sending to
-            // itself must have; `distribute_channel_ends` reassigns one end at
-            // spawn, and the channel becomes a real pair at that moment.
+            // Both ends land in the caller's own table as distinct sides, which
+            // is what makes the pair useful: the caller keeps one and copies or
+            // moves the other to a child. Both directed queues exist from the
+            // mint; no holder reassignment changes what a capability means.
             Operation::EndpointCreate => {
                 let response = match graph
                     .get(id)
@@ -1789,16 +3159,26 @@ fn serve_component_graph(
                             // caller can never finish setting up.
                             let placed = graph.get_mut(id).and_then(|table| {
                                 let first = table.free_slot_from(1)?;
-                                let capability = graph::Capability {
-                                    resource: graph::Resource::Endpoint { channel: key },
+                                let producer = graph::Capability {
+                                    resource: graph::Resource::Endpoint {
+                                        channel: key,
+                                        side: graph::Side::Producer,
+                                    },
                                     rights: RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
                                 };
-                                table.install(first, capability).ok()?;
+                                table.install(first, producer).ok()?;
                                 let Some(second) = table.free_slot_from(first + 1) else {
                                     table.drop_slot(first);
                                     return None;
                                 };
-                                if table.install(second, capability).is_err() {
+                                let consumer = graph::Capability {
+                                    resource: graph::Resource::Endpoint {
+                                        channel: key,
+                                        side: graph::Side::Consumer,
+                                    },
+                                    rights: RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
+                                };
+                                if table.install(second, consumer).is_err() {
                                     table.drop_slot(first);
                                     return None;
                                 }
@@ -1904,14 +3284,25 @@ fn serve_component_graph(
             // — every launched component binds one before it runs, and a task
             // that has not is not yet in a state where its output would be
             // attributable anyway.
+            //
+            // Read with the *wide* reader rather than the message reader. A
+            // diagnostic line is not a message: it crosses no channel, is
+            // bounded by nothing the IPC contract states, and
+            // `MAX_MESSAGE_BYTES` is 64. The visibility broker's
+            // `write_record` emits a 64-byte record as 128 hex characters, so
+            // under the narrow reader every one of C8.8's view and trace
+            // records was refused as `InvalidLength` and the line vanished
+            // from the transcript. `MAX_STAGED_ARRAY_BYTES` (1 KiB) is the
+            // same bound the wide spawn-grant array already crosses this
+            // window with.
             Operation::DebugWrite => {
-                let response = match transfer_window::read_staged(
+                let response = match transfer_window::read_staged_array(
                     windows.bound(id),
                     words[1],
                     &words,
                     scratch,
                 ) {
-                    Ok(frame) if frame.cap_count() == 0 => {
+                    Ok(frame) => {
                         // One `debug_print!` for the whole payload. Not
                         // `debug_println!`: the component's bytes carry their
                         // own newline, and adding one would reflow every
@@ -1931,8 +3322,9 @@ fn serve_component_graph(
                         }
                         Response::success(bytes.len() as i64, 0)
                     }
-                    // A diagnostic line carries no capabilities.
-                    Ok(_) => Response::error(IpcError::InvalidLength),
+                    // `read_staged_array` refuses a descriptor naming any
+                    // capability, which is the same rule the narrow path
+                    // enforced explicitly: a diagnostic line carries none.
                     Err(error) => Response::error(error),
                 };
                 ipc::reply(response);
@@ -2158,7 +3550,9 @@ fn serve_component_graph(
                     channels,
                     graph,
                     windows,
+                    &mut parked,
                     &mut transit,
+                    &mut supervision_waits,
                     scratch,
                     id,
                     &words,
@@ -2323,7 +3717,7 @@ fn serve_component_graph(
     sel4::debug_println!(
         "SLIME_GRAPH channels served sends={sends} receives={receives} parks={parks} settled={peer_deaths} parked={} queues={} replies={} minted={}",
         parked.len(),
-        channels.live_queues(),
+        channels.live_queues(graph, &transit),
         parked.recycled(),
         channels.minted(),
     );
@@ -2438,14 +3832,14 @@ fn resolve_channel(
     id: TaskId,
     slot: u32,
     rights: u64,
-) -> Result<ipc::ChannelKey, IpcError> {
+) -> Result<(ipc::ChannelKey, graph::Side), IpcError> {
     let table = graph.get(id).ok_or(IpcError::BadCapability)?;
     match table
         .resolve(slot, rights)
         .map_err(|_| IpcError::BadCapability)?
         .resource
     {
-        graph::Resource::Endpoint { channel } => Ok(channel),
+        graph::Resource::Endpoint { channel, side } => Ok((channel, side)),
         // A slot the task holds but that names something else — an executable,
         // a factory, a buffer — is refused exactly as an ungranted one is.
         _ => Err(IpcError::BadCapability),
@@ -2472,21 +3866,18 @@ fn serve_send(
     words: &[sel4::Word; ipc::FAST_MESSAGE_REGISTERS],
     served: &mut usize,
 ) -> Response {
-    let channel = match resolve_channel(graph, id, words[0] as u32, RIGHT_SEND) {
-        Ok(channel) => channel,
+    let (channel, side) = match resolve_channel(graph, id, words[0] as u32, RIGHT_SEND) {
+        Ok(endpoint) => endpoint,
         Err(error) => return Response::error(error),
     };
     let frame = match transfer_window::read_staged(windows.bound(id), words[1], words, scratch) {
         Ok(frame) => frame,
         Err(error) => return Response::error(error),
     };
-    // Whoever receives on this channel is who the capabilities are bound to,
-    // fixed here rather than at collection time: a capability in flight names
-    // the task it was sent to, so a later change to who is receiving cannot
-    // redirect it.
-    let Some(peer) = channels.peer(channel, id) else {
-        return Response::error(IpcError::InvalidOperation);
-    };
+    // Capabilities ride to the same receiving end as the bytes. Since B25 an
+    // end may have more than one holder, choosing a task here would predict the
+    // winner of a future dequeue and can bind the capability to the wrong one.
+    let receiving_side = side.opposite();
     let slots = match frame.cap_slots() {
         Ok(slots) => slots,
         Err(error) => return Response::error(error),
@@ -2497,7 +3888,7 @@ fn serve_send(
     };
     let len = message.len();
     let caps = message.cap_count();
-    let Some(queue) = channels.send_queue_mut(channel, id) else {
+    let Some(queue) = channels.send_queue_mut(channel, side) else {
         return Response::error(IpcError::InvalidOperation);
     };
     // Preflight, capability move, and commit are one atomic step over a queue
@@ -2507,7 +3898,8 @@ fn serve_send(
         graph,
         transit,
         sender: id,
-        receiver: peer,
+        channel,
+        receiving_side,
         departed: [None; ipc::MAX_MESSAGE_CAPS],
         refusal: None,
     };
@@ -2539,14 +3931,14 @@ fn serve_send(
         "SLIME_GRAPH sent task={} channel={channel} bytes={len} caps={moved} queued={}",
         id.0,
         channels
-            .send_queue(channel, id)
+            .send_queue(channel, side)
             .map_or(0, ipc::Channel::len),
     );
     if moved != 0 {
         sel4::debug_println!(
-            "SLIME_GRAPH capability transfer task={} channel={channel} to={} caps={moved}",
+            "SLIME_GRAPH capability transfer task={} channel={channel} side={} caps={moved}",
             id.0,
-            peer.0,
+            receiving_side.name(),
         );
     }
     // A receiver parked in `wait` on this queue is owed its wake now: nothing
@@ -2568,17 +3960,19 @@ fn serve_recv(
     channels: &mut ChannelTable,
     graph: &mut GraphTables,
     windows: &WindowTable<MAX_TASKS>,
+    parked: &mut ParkedReplies,
     transit: &mut Transit,
+    supervision_waits: &mut supervision::SupervisionWaits,
     scratch: &ScratchPage,
     id: TaskId,
     words: &[sel4::Word; ipc::FAST_MESSAGE_REGISTERS],
     served: &mut usize,
 ) -> Result<Response, ipc::ChannelKey> {
-    let channel = match resolve_channel(graph, id, words[0] as u32, RIGHT_RECV) {
-        Ok(channel) => channel,
+    let (channel, side) = match resolve_channel(graph, id, words[0] as u32, RIGHT_RECV) {
+        Ok(endpoint) => endpoint,
         Err(error) => return Ok(Response::error(error)),
     };
-    let Some(queue) = channels.recv_queue_mut(channel, id) else {
+    let Some(queue) = channels.recv_queue_mut(channel, side) else {
         return Ok(Response::error(IpcError::InvalidOperation));
     };
     // The message's capabilities are transit tokens, not slot numbers, so
@@ -2594,12 +3988,21 @@ fn serve_recv(
         Err(IpcError::WouldBlock) => return Err(channel),
         Err(error) => return Ok(Response::error(error)),
     };
+    // Dequeue is the transition that makes a full queue writable. The channel
+    // has consumed its send-capacity waiter and returned the wake with the
+    // message, so deliver it now; dropping it leaves a sender parked forever
+    // even though this receive created room. This precedes capability landing
+    // deliberately: the dequeue already committed, so a later landing failure
+    // must not erase the capacity transition.
+    if let Some(wake) = outcome.wake {
+        deliver_wake(channels, parked, supervision_waits, wake);
+    }
     // Land the capabilities before the reply is built, because the reply must
     // report the slots they landed at. A landing that fails is not silently
     // dropped: the message is already dequeued, so the capabilities are handed
     // back to the transit table's reclamation rather than lost — see
     // `land_caps`.
-    let landed = match land_caps(graph, transit, id, &outcome.message) {
+    let landed = match land_caps(graph, transit, id, channel, side, &outcome.message) {
         Ok(landed) => landed,
         Err(error) => return Ok(Response::error(error)),
     };
@@ -2636,38 +4039,26 @@ impl LandedCaps {
 /// Install each capability a received message carries into the receiver's
 /// table, and report the slots.
 ///
-/// The message carries transit tokens; the receiver learns slot numbers. That
-/// substitution is the whole point of the transit table — a sender's slot
-/// number means nothing in the receiver's table — and it happens here, once,
-/// after the message has been dequeued and before the reply names anything.
-///
-/// All or none. A token that resolves and is then followed by one that does not
-/// would otherwise leave the receiver holding half a transfer with no way to
-/// learn what it got. On failure every capability already installed is returned
-/// to the transit table bound to the same receiver, so it is still reclaimed
-/// when either end dies rather than stranded in a table nobody reads.
+/// Tokens are bound to the queue end this message was dequeued from. The task
+/// that wins the dequeue receives both bytes and capabilities; no sender-side
+/// task prediction participates.
 fn land_caps(
     graph: &mut GraphTables,
     transit: &mut Transit,
     id: TaskId,
+    channel: ipc::ChannelKey,
+    side: graph::Side,
     message: &ipc::Message,
 ) -> Result<LandedCaps, IpcError> {
     let mut landed = LandedCaps::default();
     for token in message.caps().iter().flatten().copied() {
-        let Some(capability) = transit.arrive(token, id) else {
-            // The token names nothing. That means the capability was reclaimed
-            // while this message sat in its queue — its sender or its intended
-            // receiver died — and the message has already been dequeued by the
-            // time this runs, so refusing here would consume the payload and
-            // report only a failure.
-            //
-            // The bytes are delivered anyway, minus the capability. A message
-            // is not void because authority that rode alongside it went away,
-            // and a receiver told "transfer failed" would have lost a payload
-            // it could still have read.
+        let Some(capability) = transit.arrive(token, channel, side) else {
+            // Authority may expire while the bytes remain readable. A token
+            // collected from a different end is rejected by the same path.
             sel4::debug_println!(
-                "SLIME_GRAPH capability expired task={} bytes={}",
+                "SLIME_GRAPH capability expired task={} channel={channel} side={} bytes={}",
                 id.0,
+                side.name(),
                 message.len(),
             );
             continue;
@@ -2688,22 +4079,13 @@ fn land_caps(
                 landed.len += 1;
             }
             Err(error) => {
-                // This one never landed, so put it back before unwinding the
-                // ones that did; otherwise it would be the single capability
-                // this path lost.
-                //
-                // A re-park that itself fails — the transit table full — has
-                // nowhere left to put the capability, so it is reported rather
-                // than dropped in silence. The terminal `transit=` count cannot
-                // show it: a capability that never got back into the table is
-                // exactly the one that count stops seeing.
-                if transit.depart(capability, id, id).is_err() {
+                if transit.depart(capability, id, channel, side).is_err() {
                     sel4::debug_println!(
                         "SLIME_GRAPH FAIL capability lost task={} reason=transit-full",
                         id.0,
                     );
                 }
-                unland_caps(graph, transit, id, &landed);
+                unland_caps(graph, transit, id, channel, side, &landed);
                 return Err(error);
             }
         }
@@ -2713,24 +4095,24 @@ fn land_caps(
 
 /// Take back every capability [`land_caps`] installed, re-parking each one.
 ///
-/// Re-parked as `id -> id`: the transfer did not complete, and the receiver is
-/// the only task that could still legitimately be handed it, so binding it to
-/// anyone else would be inventing a destination. It is unreachable either way —
-/// no message names its new token — and [`Transit::reclaim`] drops it when the
-/// task ends, which is the property that matters: the terminal marker still
-/// reaches zero.
-fn unland_caps(graph: &mut GraphTables, transit: &mut Transit, id: TaskId, landed: &LandedCaps) {
+/// No message names the new tokens, so they are deliberately unreachable; the
+/// destination end is retained only so [`Transit::reclaim`] can drop them when
+/// its last holder dies and terminal accounting still reaches zero.
+fn unland_caps(
+    graph: &mut GraphTables,
+    transit: &mut Transit,
+    id: TaskId,
+    channel: ipc::ChannelKey,
+    side: graph::Side,
+    landed: &LandedCaps,
+) {
     let Some(table) = graph.get_mut(id) else {
         return;
     };
     for slot in landed.slots() {
         if let Some(capability) = table.get(*slot) {
             table.drop_slot(*slot);
-            // As in `land_caps`: a re-park with nowhere to go is reported. It
-            // cannot happen on this path — every entry being returned came out
-            // of this table moments ago, so the room is there — but a silent
-            // drop is not the failure to choose if it ever does.
-            if transit.depart(capability, id, id).is_err() {
+            if transit.depart(capability, id, channel, side).is_err() {
                 sel4::debug_println!(
                     "SLIME_GRAPH FAIL capability lost task={} reason=transit-full",
                     id.0,
@@ -2822,11 +4204,11 @@ fn serve_wait(
         targets: &[Option<WaitTarget>; ipc::MAX_WAIT_SOURCES],
         channels: &ChannelTable,
         terminations: &supervision::Terminations,
-        id: TaskId,
+        _id: TaskId,
     ) -> bool {
         targets.iter().flatten().any(|target| match target {
             WaitTarget::Supervision(child) => terminations.get(*child).is_some(),
-            other => channels.is_ready(id, *other),
+            other => channels.is_ready(*other),
         })
     }
 
@@ -3017,10 +4399,9 @@ struct SpawnGrant {
 struct SpawnPlan {
     /// The generation component index of the executable to construct.
     component: usize,
-    /// Derived capabilities, in the order the child's slots take them, each
-    /// paired with the parent slot it was derived from. The parent slot is kept
-    /// because an endpoint grant is a move: the parent gives up exactly the
-    /// slot it granted from, and nothing else naming that channel.
+    /// Derived capabilities, in the order the child's slots take them, paired
+    /// with the parent slot they were copied from for diagnostics and grant
+    /// validation. Spawn never consumes the parent slot.
     granted: [Option<(u32, graph::Capability)>; MAX_SPAWN_GRANTS],
     count: usize,
     /// Whether the executable capability carried `RIGHT_TRANSFER`, which is
@@ -3108,6 +4489,20 @@ const fn valid_rights(resource: &graph::Resource) -> u64 {
         graph::Resource::SharedBufferFactory => RIGHT_BUFFER_CREATE | RIGHT_TRANSFER,
         graph::Resource::Supervision { .. } => RIGHT_SUPERVISE | RIGHT_TRANSFER,
         graph::Resource::SharedBuffer { .. } | graph::Resource::Loan { .. } => RIGHT_BUFFER_ALL,
+        // No `RIGHT_TRANSFER`: the device is singular and its authority is
+        // placed by the generation, so there is no composition that would need
+        // to hand it on. Adding the bit later is a deliberate act.
+        graph::Resource::Block { .. } => RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE,
+        // `RIGHT_TRANSFER` *is* allowed here, unlike the block device: M6.3
+        // requires narrow-only directory derivation and transfer, and a
+        // powerbox handing a requester one narrowed view is the whole point of
+        // the resource. `serve_directory_derive` refuses to add the bit to a
+        // capability that does not already carry it, so the delegation cannot
+        // be manufactured by the holder.
+        graph::Resource::Directory { .. } => RIGHTS_DIRECTORY_ALL | RIGHT_TRANSFER,
+        // No `RIGHT_TRANSFER`: the source is singular and its authority is
+        // placed by the generation, so nothing needs to hand it on.
+        graph::Resource::Input => RIGHT_INPUT_READ,
     }
 }
 
@@ -3367,179 +4762,157 @@ fn construct_child(
             windows.release(id);
             return Err(IpcError::DestinationSlotsExhausted);
         }
+        // The distribution step, per endpoint grant. The child names the end at
+        // *its own* slot, fixed by the order of the parent's grant list, and the
+        // parent keeps its slot because since B25 this is a copy. A root that
+        // admitted a wide grant array but installed a prefix of it reaches the
+        // aggregate `spawned` marker and is only caught here.
+        if let graph::Resource::Endpoint { channel, side } = capability.resource {
+            sel4::debug_println!(
+                "SLIME_GRAPH channel copied parent={} child={} key={channel} side={} slot={slot}",
+                parent.0,
+                id.0,
+                side.name(),
+            );
+        }
+    }
+    // The child's *own* declared authority, above the parent's grants
+    // (P5.4.2c).
+    //
+    // A spawned child received only what its parent handed it. That was
+    // invisible while every declared non-channel authority went to components
+    // the root launches — a factory grant names its holder, and the root-launched
+    // instance got it. The storage plane is the first composition where the
+    // spawned instance is the subject: both copies of the component are declared
+    // the same block capability, and only the launched one had it.
+    //
+    // Placed above the grant list rather than at a layout slot, on the same rule
+    // `launch_component_graph` follows for a non-bootstrap component: a boot
+    // layout numbers the bootstrap component's table, and everyone else is
+    // numbered from a cursor. Here the cursor starts past the parent's grants,
+    // which is what makes the two numberings composable.
+    let mut next = plan.count as u32;
+    // The child's declared *executables*, first and in generation order
+    // (P5.4.3).
+    //
+    // A spawned child received its parent's grants and its declared factories,
+    // but never the executables the generation declared it may spawn. A spawned
+    // `spawn-service` found its two empty and refused every request with
+    // `slot=1 ungranted` — the same defect class as P5.4.2c's missing declared
+    // authority, in the one kind that slice did not cover.
+    //
+    // Placed *above* the parent's grant list rather than at `1..=n`, which is
+    // where `launch_component_graph` puts them. The two differ, and the
+    // difference is forced: a spawn grant list starts at 0 because every
+    // component compiles against that, so executables cannot also start at 1
+    // without renumbering every plane. What makes it work is that a component
+    // holding both is spawned with a *fixed* grant list, so `plan.count` is a
+    // constant its constants can be written against —
+    // `spawn-service.rs` names slots 1 and 2 with exactly one channel grant
+    // ahead of them.
+    for index in 0..generation.grant_count() {
+        let Ok(grant) = generation.grant(index) else {
+            continue;
+        };
+        // `source` holds the executable, `target` names it — the grant reads
+        // "this component may spawn that one".
+        if grant.source != plan.component || grant.rights & RIGHT_EXEC == 0 {
+            continue;
+        }
+        let capability = graph::Capability {
+            resource: graph::Resource::Executable {
+                component: grant.target,
+            },
+            rights: grant.rights,
+        };
+        if child_table.install(next, capability).is_err() {
+            release_child(tasks, graph, id);
+            windows.release(id);
+            return Err(IpcError::DestinationSlotsExhausted);
+        }
+        sel4::debug_println!(
+            "SLIME_GRAPH declared executable task={} child={} slot={next}",
+            parent.0,
+            id.0,
+        );
+        next += 1;
+    }
+    // Successive block grants name successive devices (B29, M6.7).
+    let mut block_index = 0u8;
+    // The child's declared non-executable authority, in **manifest grant
+    // order** (P5.4.3).
+    //
+    // Not a fixed kind order. A component's slot layout is the order its
+    // generation declares the grants, which is what the oracle does and what
+    // lets two components disagree about kinds without either being wrong:
+    // `powerbox-chooser.rs` reads a directory then input, `dango.rs` reads
+    // input then a cwd root, and each generation declares them accordingly.
+    //
+    // A fixed order here cost three separate boot failures before this — one
+    // per component that held more than one kind — each found by booting rather
+    // than by a check.
+    for index in 0..generation.grant_count() {
+        let Ok(grant) = generation.grant(index) else {
+            continue;
+        };
+        if grant.target != plan.component {
+            continue;
+        }
+        let Some((right, resource)) = declared_resource(grant.rights) else {
+            continue;
+        };
+        // As the boot path: this grant's rights, not the component's union.
+        let granted = grant.rights & right;
+        if granted & !RIGHT_TRANSFER == 0 {
+            continue;
+        }
+        // As the boot path: successive block grants name successive devices.
+        let resource = match resource {
+            graph::Resource::Block { .. } => {
+                let device = block_index;
+                block_index += 1;
+                graph::Resource::Block { device }
+            }
+            other => other,
+        };
+        if child_table
+            .install(
+                next,
+                graph::Capability {
+                    resource,
+                    rights: granted,
+                },
+            )
+            .is_err()
+        {
+            release_child(tasks, graph, id);
+            windows.release(id);
+            return Err(IpcError::DestinationSlotsExhausted);
+        }
+        sel4::debug_println!(
+            "SLIME_GRAPH declared placed task={} child={} slot={next} kind={}",
+            parent.0,
+            id.0,
+            resource.kind(),
+        );
+        next += 1;
     }
     Ok(id)
 }
 
-/// Hand the child every channel end its spawn grants named, and take those ends
-/// away from the parent.
+/// Mint a channel pair, sweeping reclaimable channels first if the table is
+/// full.
 ///
-/// Run after the child's table is built and before it is activated, so the
-/// child's first `recv` finds a channel it holds rather than one still recorded
-/// against its parent. See [`ChannelTable::reassign`] for why an endpoint grant
-/// is a move rather than a copy.
-///
-/// Reports the count so the marker can state it. A grant this cannot move —
-/// a loopback, or an end the parent does not actually hold — is refused by the
-/// caller before anything is activated, because a child holding an endpoint
-/// capability that resolves to no queue would block in `recv` forever.
-fn distribute_channel_ends(
-    channels: &mut ChannelTable,
-    graph: &mut GraphTables,
-    parent: TaskId,
-    child: TaskId,
-    plan: &SpawnPlan,
-) -> Result<usize, IpcError> {
-    let mut moved = 0;
-    // Which channels have already moved, so a failure part way through can put
-    // them back. Without this a refused grant would leave the earlier ends
-    // assigned to a child the caller is about to tear down, and those channels
-    // would name a dead task — reachable by nobody and reclaimed by nothing,
-    // since `reclaim_dead_task` never runs for a child that was never
-    // activated. Bounded by the grant list, which `preflight_spawn_grants`
-    // already caps at `MAX_SPAWN_GRANTS`.
-    let mut rollback = [None; MAX_SPAWN_GRANTS];
-    for (slot, granted) in plan.granted.iter().take(plan.count).enumerate() {
-        let Some((granted_slot, granted_capability)) = granted else {
-            continue;
-        };
-        let graph::Resource::Endpoint { channel } = &granted_capability.resource else {
-            continue;
-        };
-        // Both halves of one minted pair are two slots naming one channel, and
-        // `preflight_spawn_grants` dedupes slots rather than channels. Moving
-        // the second would make the child both ends — a self-loopback, with the
-        // reverse queue the first move allocated left unnameable. Refused, so a
-        // parent hands on at most one end of any channel.
-        if rollback
-            .iter()
-            .take(moved)
-            .flatten()
-            .any(|(key, _, _)| key == channel)
-        {
-            for (key, parent_slot, capability) in
-                rollback.iter().take(moved).flatten().rev().copied()
-            {
-                if let Some(table) = graph.get_mut(parent) {
-                    let _ = table.install(parent_slot, capability);
-                }
-                let _ = channels.reassign(key, child, parent);
-            }
-            return Err(IpcError::BadCapability);
-        }
-        if !channels.reassign(*channel, parent, child) {
-            // Put back every end this call moved, newest first, so a channel
-            // granted twice unwinds in the order it was split.
-            for (key, parent_slot, capability) in
-                rollback.iter().take(moved).flatten().rev().copied()
-            {
-                if let Some(table) = graph.get_mut(parent) {
-                    let _ = table.install(parent_slot, capability);
-                }
-                if !channels.reassign(key, child, parent) {
-                    // Unreachable by construction — the move that put this here
-                    // succeeded moments ago and nothing else has run — but a
-                    // silent failure would leave a channel naming a task about
-                    // to be destroyed, so it is stated rather than assumed.
-                    sel4::debug_println!(
-                        "SLIME_GRAPH channel rollback failed parent={} child={} key={key}",
-                        parent.0,
-                        child.0,
-                    );
-                }
-            }
-            return Err(IpcError::BadCapability);
-        }
-        if let Some(entry) = rollback.get_mut(moved) {
-            // The channel and the parent slot it came from, so a rollback puts
-            // both back: the holder record and the capability naming it.
-            *entry = Some((*channel, *granted_slot, *granted_capability));
-        }
-        // The parent gives up the slot it granted from. Exactly one slot: the
-        // one the grant named.
-        //
-        // A **declared** edge leaves the parent with nothing, because it held
-        // one end and has now handed it over. A **minted pair** leaves the
-        // parent its other slot, because it held both and gave one away — that
-        // is the entire point of minting, and dropping every slot naming the
-        // channel would take back the half the parent kept to talk to its child
-        // with.
-        if let Some(table) = graph.get_mut(parent) {
-            table.drop_slot(*granted_slot);
-        }
-        sel4::debug_println!(
-            "SLIME_GRAPH channel handed parent={} child={} key={channel} slot={slot}",
-            parent.0,
-            child.0,
-        );
-        moved += 1;
-    }
-    Ok(moved)
-}
-
-/// Put back every channel end a spawn handed a child that will not run.
-///
-/// The mirror of [`distribute_channel_ends`], for the failure paths *after* it
-/// succeeded — a parent table too full for the supervision handle, or an
-/// activation that failed. A channel left naming a task that is about to be
-/// destroyed is reachable by nobody and reclaimed by nothing, because
-/// `reclaim_dead_task` only ever runs for a task that actually ran.
-///
-/// Best-effort by construction: every move being undone succeeded moments ago,
-/// and there is nothing useful to do with a failure here beyond saying so.
-fn recall_channel_ends(
-    channels: &mut ChannelTable,
-    graph: &mut GraphTables,
-    parent: TaskId,
-    child: TaskId,
-    plan: &SpawnPlan,
-) {
-    for granted in plan.granted.iter().take(plan.count).flatten() {
-        let (granted_slot, capability) = granted;
-        let graph::Resource::Endpoint { channel } = &capability.resource else {
-            continue;
-        };
-        if let Some(table) = graph.get_mut(parent) {
-            let _ = table.install(*granted_slot, *capability);
-        }
-        if !channels.reassign(*channel, child, parent) {
-            sel4::debug_println!(
-                "SLIME_GRAPH channel recall failed parent={} child={} key={channel}",
-                parent.0,
-                child.0,
-            );
-        }
-    }
-}
-
-/// Mint a channel pair for `id`, sweeping reclaimable channels first if the
-/// table is full.
-///
-/// Backlog **B22**'s fix, and lazily-on-full for the same reason
-/// `record_termination` sweeps lazily: one trigger condition is one thing to
-/// keep correct, a channel that stays is a channel that still works, and
-/// sweeping on every mint would add a two-table scan to a hot path for no
-/// benefit.
-///
-/// The sweep is safe here because dispatch is single-threaded and each
-/// operation is served to completion: `EndpointCreate` and `Spawn` are separate
-/// arms of one loop, so a sweep fired from this one cannot interleave with a
-/// spawn's multi-step distribution at all. That is the invariant to preserve if
-/// a second trigger is ever added — it is checkable, where "no window is open"
-/// would have to be re-argued per call site.
-///
-/// Worth recording, because it is the property a reader will look for:
-/// `distribute_channel_ends` never opens such a window even in principle. The
-/// child's capability is installed by `construct_child` before that function
-/// runs, and within it the parent's `drop_slot` follows the `reassign`, so a
-/// granted endpoint is named by some live table at every instant.
+/// Backlog **B22**'s fix, lazily on full. Dispatch is single-threaded and a
+/// spawned endpoint is an ordinary copied capability since B25, so there is no
+/// multi-step holder transition for a sweep to interleave with.
 fn mint_channel(
     channels: &mut ChannelTable,
     graph: &GraphTables,
     transit: &Transit,
-    id: TaskId,
+    _id: TaskId,
 ) -> Result<u32, channel::ChannelError> {
-    match channels.mint(id, id) {
+    match channels.mint() {
         Ok(key) => Ok(key),
         Err(channel::ChannelError::TableFull) => {
             let freed = channel::sweep(channels, graph, transit);
@@ -3548,7 +4921,7 @@ fn mint_channel(
                 channels.len(),
                 channels.minted(),
             );
-            channels.mint(id, id)
+            channels.mint()
         }
         Err(error) => Err(error),
     }
@@ -3626,7 +4999,7 @@ fn serve_spawn(
     tasks: &mut TaskTable<MAX_TASKS>,
     windows: &mut WindowTable<MAX_TASKS>,
     graph: &mut GraphTables,
-    channels: &mut ChannelTable,
+    _channels: &mut ChannelTable,
     buffers: &mut SharedBufferTable,
     allocator: &mut ObjectAllocator,
     scratch: &ScratchPage,
@@ -3730,22 +5103,16 @@ fn serve_spawn(
         }
     };
 
-    // Every channel end the grant list named moves to the child now, before it
-    // is activated. A failure here tears the child down: a component holding an
-    // endpoint capability whose queue still belongs to its parent would park in
-    // `recv` on a channel nothing can ever deliver to.
-    let handed = match distribute_channel_ends(channels, graph, id, child, &plan) {
-        Ok(handed) => handed,
-        Err(error) => {
-            release_child(tasks, graph, child);
-            windows.release(child);
-            sel4::debug_println!(
-                "SLIME_GRAPH spawn failed task={} component={name} error={error:?}",
-                id.0,
-            );
-            return Response::error(error);
-        }
-    };
+    // Endpoint grants need no distribution step: `construct_child` copied the
+    // capability including its side, so parent and child both resolve the same
+    // queue exactly as the x86 oracle's cloned endpoint does.
+    let copied = plan
+        .granted
+        .iter()
+        .take(plan.count)
+        .flatten()
+        .filter(|(_, capability)| matches!(capability.resource, graph::Resource::Endpoint { .. }))
+        .count();
 
     // The parent's handle, installed before the child runs. A child that exited
     // before its parent held a handle would leave the parent waiting on a task
@@ -3770,15 +5137,8 @@ fn serve_spawn(
         Some(slot)
     });
     let Some(handle) = handle else {
-        // The parent's table is full. Tear the child down rather than starting
-        // one nobody can supervise: an unsupervised child would run, exit, and
-        // leave its parent blocked forever on a handle it never received.
-        //
-        // The ends handed over above come back first: a channel whose holder is
-        // a task about to be destroyed is reachable by nobody, and nothing
-        // reclaims it, since `reclaim_dead_task` never runs for a child that
-        // was never activated.
-        recall_channel_ends(channels, graph, id, child, &plan);
+        // The parent's table is full. The copied child table can simply be
+        // released; the parent's grants were never consumed.
         release_child(tasks, graph, child);
         windows.release(child);
         sel4::debug_println!(
@@ -3792,7 +5152,6 @@ fn serve_spawn(
         if let Some(table) = graph.get_mut(id) {
             table.drop_slot(handle);
         }
-        recall_channel_ends(channels, graph, id, child, &plan);
         release_child(tasks, graph, child);
         windows.release(child);
         sel4::debug_println!(
@@ -3803,7 +5162,7 @@ fn serve_spawn(
     }
     *spawns += 1;
     sel4::debug_println!(
-        "SLIME_GRAPH spawned task={} child={} component={name} grants={} channels={handed} handle={handle}",
+        "SLIME_GRAPH spawned task={} child={} component={name} grants={} channels={copied} handle={handle}",
         id.0,
         child.0,
         plan.count,
@@ -3983,9 +5342,6 @@ fn serve_cap_transfer(
         Ok(frame) => frame,
         Err(error) => return Response::error(error),
     };
-    // The descriptor is the payload, so a staged frame carrying capabilities is
-    // malformed rather than a transfer of several: this operation moves exactly
-    // the one capability `capability_slot` names.
     if frame.cap_count() != 0 || frame.bytes().len() != TRANSFER_LEN {
         return Response::error(IpcError::InvalidLength);
     }
@@ -3995,47 +5351,30 @@ fn serve_cap_transfer(
     if !valid_transfer_descriptor(&descriptor) {
         return Response::error(IpcError::InvalidLength);
     }
-    // Rule 3, applied before anything is checked against the source: the
-    // destination mask is what the receiver will hold, and it is what rule 2
-    // narrows against. Computing it later would test the declared mask rather
-    // than the installed one.
     let rights = if descriptor.flags & FLAG_RETAIN_TRANSFER != 0 {
         descriptor.rights_mask
     } else {
         descriptor.rights_mask & !RIGHT_TRANSFER
     };
     if rights == 0 {
-        // A move granting nothing is a drop, and `CapDrop` already spells that.
         return Response::error(IpcError::InvalidLength);
     }
 
-    // The channel first, at the right the delivery will need. A transfer is a
-    // send that happens to carry a capability, so an end this component could
-    // not send on names a peer it could never deliver to.
-    let channel = match resolve_channel(graph, id, endpoint_slot, RIGHT_SEND) {
-        Ok(channel) => channel,
+    let (channel, side) = match resolve_channel(graph, id, endpoint_slot, RIGHT_SEND) {
+        Ok(endpoint) => endpoint,
         Err(error) => return Response::error(error),
     };
-    let Some(peer) = channels.peer(channel, id) else {
-        return Response::error(IpcError::InvalidOperation);
-    };
-    // Naming one slot twice would move the endpoint out from under the message
-    // carrying it. Refused for the same reason the oracle refuses it.
+    let receiving_side = side.opposite();
     if endpoint_slot == capability_slot {
         return Response::error(IpcError::BadCapability);
     }
 
-    // Resolve, validate, and consume under one borrow, so no window exists
-    // where the capability is neither held nor moved.
     let Some(table) = graph.get_mut(id) else {
         return Response::error(IpcError::InvalidOperation);
     };
     let Some(source) = table.get(capability_slot) else {
         return Response::error(IpcError::BadCapability);
     };
-    // Rules 1, 2, and 4. All three answer `BadCapability`, and
-    // indistinguishably: a component must not be able to map its own table, or
-    // another's authority, by watching which refusal comes back.
     if !source.allows(RIGHT_TRANSFER)
         || !descriptor_names(descriptor.object_kind, &source.resource)
         || rights & !source.rights != 0
@@ -4047,12 +5386,9 @@ fn serve_cap_transfer(
         resource: source.resource,
         rights,
     };
-    // Removed before it is parked, so the capability is in exactly one place at
-    // every point: the sender's table, then the transit table, then the
-    // receiver's. Restored at its original rights if the send fails.
     let original = source;
     table.drop_slot(capability_slot);
-    let token = match transit.depart(moved, id, peer) {
+    let token = match transit.depart(moved, id, channel, receiving_side) {
         Ok(token) => token,
         Err(error) => {
             let _ = graph
@@ -4062,111 +5398,37 @@ fn serve_cap_transfer(
         }
     };
 
-    // An endpoint's *holder* moves with its capability, because a channel's
-    // queues are resolved by which task holds each end rather than by anything
-    // the capability carries (`channel::Entry::send_queue`). Without this the
-    // receiver would land a capability that resolves to no queue at all — the
-    // failure `distribute_channel_ends` records for the spawn path, and the
-    // reason a route endpoint provisioned by a broker would leave its
-    // participant parked forever on a channel nothing can deliver to.
-    //
-    // The reassign happens here rather than at collection because `peer` is
-    // fixed at this moment: the transit entry binds the capability to exactly
-    // this receiver, so a later change to who is receiving cannot redirect it.
-    // Until the receiver collects, it holds the end record but no capability
-    // naming it, and every operation resolves through the table — so the window
-    // grants nothing.
-    //
-    // A loopback splits here, which is the case that matters: a broker mints
-    // both halves through its own factory (`ChannelTable::mint`, a loopback)
-    // and hands one away, so this is the split that makes the pair real.
-    // What the rollback below must undo, recorded as it is done rather than
-    // re-derived. `None` when the moved capability is not an endpoint and no
-    // holder record moved at all.
-    let mut reassigned = None;
-    if let graph::Resource::Endpoint {
-        channel: moved_channel,
-    } = moved.resource
-    {
-        // Refused rather than partially applied. Moving the end the message
-        // rides on would leave the caller unable to deliver the very message
-        // carrying it, and an end the caller does not hold is one it cannot
-        // give away.
-        if moved_channel == channel || !channels.reassign(moved_channel, id, peer) {
-            // Nothing to unwind here: the reassign either was not attempted or
-            // reported that it did not happen.
-            restore_transferred(
-                channels,
-                graph,
-                transit,
-                id,
-                capability_slot,
-                token,
-                original,
-                None,
-            );
-            return Response::error(IpcError::BadCapability);
-        }
-        reassigned = Some((moved_channel, peer));
+    // The carrier endpoint cannot be consumed by the message it must enqueue.
+    // Other endpoint capabilities move without holder bookkeeping: their side
+    // travels inside the capability itself.
+    if matches!(moved.resource, graph::Resource::Endpoint { channel: key, .. } if key == channel) {
+        restore_transferred(graph, transit, id, capability_slot, token, original);
+        return Response::error(IpcError::BadCapability);
     }
 
-    // The descriptor rides as the message body, so the peer reads the same
-    // bytes this enforced. `CarryCapabilities` is the right adapter here rather
-    // than `DepartingCaps`: the move already happened above, atomically with
-    // the rights check, and the message carries the transit token it produced.
     let message = match ipc::Message::new(frame.bytes(), &[token]) {
         Ok(message) => message,
         Err(error) => {
-            restore_transferred(
-                channels,
-                graph,
-                transit,
-                id,
-                capability_slot,
-                token,
-                original,
-                reassigned,
-            );
+            restore_transferred(graph, transit, id, capability_slot, token, original);
             return Response::error(error);
         }
     };
-    let Some(queue) = channels.send_queue_mut(channel, id) else {
-        restore_transferred(
-            channels,
-            graph,
-            transit,
-            id,
-            capability_slot,
-            token,
-            original,
-            reassigned,
-        );
+    let Some(queue) = channels.send_queue_mut(channel, side) else {
+        restore_transferred(graph, transit, id, capability_slot, token, original);
         return Response::error(IpcError::InvalidOperation);
     };
     let wake = match ipc::send_atomic(queue, message, &mut CarryCapabilities) {
         Ok(wake) => wake,
         Err(error) => {
-            // Nothing crossed, so the move did not happen: the source comes
-            // back at its original rights rather than the narrowed ones, and
-            // the caller may retry.
-            restore_transferred(
-                channels,
-                graph,
-                transit,
-                id,
-                capability_slot,
-                token,
-                original,
-                reassigned,
-            );
+            restore_transferred(graph, transit, id, capability_slot, token, original);
             return Response::error(error);
         }
     };
     *transfers += 1;
     sel4::debug_println!(
-        "SLIME_GRAPH capability transferred task={} channel={channel} to={} kind={} rights={rights:#x}",
+        "SLIME_GRAPH capability transferred task={} channel={channel} side={} kind={} rights={rights:#x}",
         id.0,
-        peer.0,
+        receiving_side.name(),
         moved.resource.kind(),
     );
     if let Some(wake) = wake {
@@ -4175,67 +5437,24 @@ fn serve_cap_transfer(
     Response::success(0, 0)
 }
 
-/// Put a capability back after a transfer that did not cross.
-///
-/// At its **original** rights, not the narrowed ones the descriptor asked for:
-/// the move did not happen, so the holder is owed exactly what it had. Handing
-/// back the narrowed copy would let a failed send silently attenuate a
-/// capability its holder never gave up.
-///
-/// `reassigned` names the channel whose holder record was moved and the task it
-/// went to, when one was, so the channel end comes back with it. Restoring the
-/// capability without the end would leave the caller holding a slot that
-/// resolves to no queue — the same failure the move exists to prevent, arriving
-/// on the rollback path instead.
-///
-/// The channel key is **passed in** rather than re-derived from `original`. The
-/// two agree today — `moved` copies `source.resource` verbatim — but the
-/// forward path reassigns the key it read from `moved`, so a rollback reading
-/// `original` would depend on that equality silently continuing to hold. A
-/// change that let a transfer re-key a channel on move would break the undo
-/// while both sides still compiled.
+/// Put a capability back after a transfer that did not cross, at its original
+/// rights. The endpoint side is part of `original`, so rollback needs no
+/// channel-table mutation.
 fn restore_transferred(
-    channels: &mut ChannelTable,
     graph: &mut GraphTables,
     transit: &mut Transit,
     id: TaskId,
     slot: u32,
     token: ipc::LogicalCap,
     original: graph::Capability,
-    reassigned: Option<(ipc::ChannelKey, TaskId)>,
 ) {
-    if let Some((channel, peer)) = reassigned
-        && !channels.reassign(channel, peer, id)
-    {
-        // The end did not come back, so the caller's restored slot would name a
-        // channel it no longer holds an end of — a capability resolving to no
-        // queue. Unreachable as written (this runs only after the forward
-        // reassign reported success, and nothing ran in between), but a silent
-        // pass would leave the caller parked forever on a channel nothing can
-        // deliver to.
-        sel4::debug_println!(
-            "SLIME_GRAPH FAIL channel end stranded task={} channel={channel}",
-            id.0,
-        );
-    }
-    // Unparked before the capability is reinstalled, so it is not left in two
-    // places.
     if transit.recall(token, id).is_none() {
-        // Nothing to restore: the token named no parked capability, so the
-        // slot stays empty rather than being filled with a copy of something
-        // that may be elsewhere.
         sel4::debug_println!(
             "SLIME_GRAPH FAIL capability lost task={} slot={slot} reason=transit-empty",
             id.0,
         );
         return;
     }
-    // Reinstalling at the slot it came from cannot collide: only this transfer
-    // emptied it, and nothing ran in between. Reported rather than assumed, for
-    // the reason `land_caps` reports the same shape — a capability now out of
-    // the transit table and not in any other is one the terminal `transit=`
-    // count stops seeing, so a silent drop here is exactly the failure no
-    // marker would surface.
     let restored = graph
         .get_mut(id)
         .is_some_and(|table| table.install(slot, original).is_ok());
@@ -4292,8 +5511,8 @@ fn valid_transfer_descriptor(
 /// legitimately hands to a participant.
 const fn is_object_kind(object_kind: u32) -> bool {
     use slime_proto::capability_transfer::{
-        OBJECT_KIND_ENDPOINT, OBJECT_KIND_SHARED_BUFFER, OBJECT_KIND_SHARED_BUFFER_LOAN,
-        OBJECT_KIND_SUPERVISION,
+        OBJECT_KIND_DIRECTORY, OBJECT_KIND_ENDPOINT, OBJECT_KIND_SHARED_BUFFER,
+        OBJECT_KIND_SHARED_BUFFER_LOAN, OBJECT_KIND_SUPERVISION,
     };
 
     matches!(
@@ -4302,6 +5521,7 @@ const fn is_object_kind(object_kind: u32) -> bool {
             | OBJECT_KIND_SHARED_BUFFER
             | OBJECT_KIND_SHARED_BUFFER_LOAN
             | OBJECT_KIND_SUPERVISION
+            | OBJECT_KIND_DIRECTORY
     )
 }
 
@@ -4321,8 +5541,8 @@ const fn is_object_kind(object_kind: u32) -> bool {
 /// enumerates.
 fn descriptor_names(object_kind: u32, resource: &graph::Resource) -> bool {
     use slime_proto::capability_transfer::{
-        OBJECT_KIND_ENDPOINT, OBJECT_KIND_SHARED_BUFFER, OBJECT_KIND_SHARED_BUFFER_LOAN,
-        OBJECT_KIND_SUPERVISION,
+        OBJECT_KIND_DIRECTORY, OBJECT_KIND_ENDPOINT, OBJECT_KIND_SHARED_BUFFER,
+        OBJECT_KIND_SHARED_BUFFER_LOAN, OBJECT_KIND_SUPERVISION,
     };
 
     match resource {
@@ -4330,9 +5550,12 @@ fn descriptor_names(object_kind: u32, resource: &graph::Resource) -> bool {
         graph::Resource::SharedBuffer { .. } => object_kind == OBJECT_KIND_SHARED_BUFFER,
         graph::Resource::Loan { .. } => object_kind == OBJECT_KIND_SHARED_BUFFER_LOAN,
         graph::Resource::Supervision { .. } => object_kind == OBJECT_KIND_SUPERVISION,
+        graph::Resource::Directory { .. } => object_kind == OBJECT_KIND_DIRECTORY,
         graph::Resource::Executable { .. }
         | graph::Resource::EndpointFactory
-        | graph::Resource::SharedBufferFactory => false,
+        | graph::Resource::SharedBufferFactory
+        | graph::Resource::Block { .. }
+        | graph::Resource::Input => false,
     }
 }
 
@@ -4396,6 +5619,7 @@ fn reclaim_dead_task(
     channels: &mut ChannelTable,
     parked: &mut ParkedReplies,
     transit: &mut Transit,
+    graph: &GraphTables,
     buffers: &mut SharedBufferTable,
     allocator: &mut ObjectAllocator,
     supervision_waits: &mut supervision::SupervisionWaits,
@@ -4409,9 +5633,11 @@ fn reclaim_dead_task(
     // would be clearing another task's wait set.
     supervision_waits.clear(id);
 
-    let held = channels.held_by(id);
+    let held = graph
+        .get(id)
+        .map_or(0, graph::CapabilityTable::endpoints_held);
     let mut wakes = channel::DeathWakes::new();
-    channels.mark_dead(id, &mut wakes);
+    channels.mark_dead(graph, id, &mut wakes);
 
     let mut woken = 0;
     for (_, wake) in wakes.drain() {
@@ -4433,7 +5659,7 @@ fn reclaim_dead_task(
     // After the wakes, not before: a wake can complete a parked `recv` that
     // lands a capability, and reclaiming in-flight entries first would drop one
     // the woken task was about to receive.
-    let stranded = transit.reclaim(id);
+    let stranded = transit.reclaim(graph, id);
 
     // Settle everything the shared-buffer table charged this holder. Reported
     // whenever it did anything, so the terminal accounting can be read against
@@ -4528,21 +5754,12 @@ struct DepartingCaps<'a> {
     graph: &'a mut GraphTables,
     transit: &'a mut Transit,
     sender: TaskId,
-    receiver: TaskId,
+    channel: ipc::ChannelKey,
+    receiving_side: graph::Side,
     /// Every `(original slot, token)` this transfer parked. Recorded because
-    /// `send_atomic` can still fail *after* `transfer_atomic` returns — its
-    /// commit re-checks the queue — and a capability parked for a message that
-    /// was never enqueued belongs to nobody. [`Self::recall_all`] is what the
-    /// caller runs on that path.
+    /// `send_atomic` can still fail after `transfer_atomic` returns.
     departed: [Option<(ipc::LogicalCap, ipc::LogicalCap)>; ipc::MAX_MESSAGE_CAPS],
     /// Why this transfer refused, if it did.
-    ///
-    /// `send_atomic` collapses every adapter failure to
-    /// `IpcError::TransferFailed`, because the trait's error type is the
-    /// adapter's own and it cannot know what one means. That is right for the
-    /// queue, and wrong for the caller: a component that named a
-    /// non-transferable capability should learn that, not "the transfer
-    /// failed". So the reason is kept here and read back by `serve_send`.
     refusal: Option<IpcError>,
 }
 
@@ -4599,13 +5816,11 @@ impl DepartingCaps<'_> {
     /// standing precondition rather than removed, because a future kind minted
     /// without it must not become movable by default.
     fn depart_one(&mut self, slot: ipc::LogicalCap) -> Result<ipc::LogicalCap, IpcError> {
-        // A loan is bound to its receiver at the mint, so sending it to anyone
-        // else produces a capability the recipient can hold and never use —
-        // every operation on it fails `authorize_loan` — while the loan stays
-        // charged against the lender until it revokes or dies. Refusing the
-        // send instead keeps the lender's own accounting honest, and costs
-        // nothing: a loan sent to its declared receiver is the only send that
-        // was ever going to work.
+        // A loan remains bound to its declared receiver. The send destination
+        // is now a channel end rather than one guessed task, so require that
+        // declared receiver to hold that end. A co-holder may dequeue the bytes,
+        // but cannot use a loan not naming it; the intended receiver remains
+        // authorized exactly as on x86.
         if let Some(graph::Capability {
             resource: graph::Resource::Loan { handle },
             ..
@@ -4613,9 +5828,17 @@ impl DepartingCaps<'_> {
             .graph
             .get(self.sender)
             .and_then(|table| table.get(slot))
-            && handle.receiver != HolderId(u64::from(self.receiver.0))
         {
-            return Err(IpcError::UnsupportedCapabilityTransfer);
+            let Ok(receiver) = u32::try_from(handle.receiver.0) else {
+                return Err(IpcError::UnsupportedCapabilityTransfer);
+            };
+            if !self
+                .graph
+                .get(TaskId(receiver))
+                .is_some_and(|table| table.reaches_endpoint(self.channel, self.receiving_side))
+            {
+                return Err(IpcError::UnsupportedCapabilityTransfer);
+            }
         }
         // Both failures answer `BadCapability`, which is `ERR_BAD_CAP` — what
         // `sys_send` answers for the same two cases, and what a component
@@ -4634,12 +5857,12 @@ impl DepartingCaps<'_> {
         // every point: the sender's table, then the transit table, then the
         // receiver's. `rollback` puts it back at the same slot on failure.
         table.drop_slot(slot);
-        match self.transit.depart(capability, self.sender, self.receiver) {
+        match self
+            .transit
+            .depart(capability, self.sender, self.channel, self.receiving_side)
+        {
             Ok(token) => Ok(token),
             Err(error) => {
-                // The transit table refused, so nothing holds the capability.
-                // Reinstalling at the slot it just left cannot collide: this is
-                // the only path that emptied it, and nothing ran in between.
                 let _ = table.install(slot, capability);
                 Err(error)
             }
@@ -4826,55 +6049,28 @@ fn serve_buffer_loan(
                 _ => None,
             })
             .or_else(|| {
-                // `RIGHT_SEND` on the end, not merely possession of it. A loan
-                // exists to be transferred, and it reaches its receiver over
-                // this same channel — so a receive-only end names a peer this
-                // component could never deliver to, and minting against it
-                // would burn a `loan_count` on a loan nobody can collect.
                 let capability = table.resolve(receiver_slot, RIGHT_SEND).ok()?;
                 match capability.resource {
-                    graph::Resource::Endpoint { channel } => {
-                        Some((channels.peer(channel, id)?, Some(channel)))
-                    }
+                    graph::Resource::Endpoint { channel, side } => graph
+                        .unique_holder_of_endpoint_side(channel, side.opposite(), Some(id))
+                        .map(|task| (task, Some(channel))),
                     _ => None,
                 }
             })
     });
     let Some((peer, edge)) = resolved else {
         sel4::debug_println!(
-            "SLIME_GRAPH loan refused task={} slot={receiver_slot} class=absent",
+            "SLIME_GRAPH loan refused task={} slot={receiver_slot} class=absent-or-ambiguous",
             id.0,
         );
         return Response::error(IpcError::BadCapability);
     };
-    // A loopback channel names the lender itself. Loaning to oneself would
-    // charge a loan against a receiver that already owns the region, so it is
-    // refused rather than admitted as a degenerate transfer.
     if peer == id {
         return Response::error(IpcError::BadCapability);
     }
-    // The generation's delegation bit, on the edge the loan will cross.
-    //
-    // A loan exists to be transferred — it reaches its receiver over this
-    // channel and nowhere else — so an edge the generation did not mark
-    // `transferable` cannot carry one, and minting it would produce a
-    // capability whose only destination is closed. Refusing at the mint is what
-    // makes the bit load-bearing rather than decorative: without this check the
-    // *kind* alone decides, and `transferable = false` in a manifest would
-    // change nothing observable.
-    //
-    // Only a channel end carries this question. A supervision handle names a
-    // task rather than an edge, so there is no `transferable` bit to read — and
-    // the delegation it rests on is a different one: the caller *created* the
-    // receiver, from an executable the generation granted it, which is the
-    // authority the spawn already checked. Requiring an edge bit as well would
-    // demand a manifest restate a delegation it made by granting the
-    // executable.
-    //
-    // The send that carries the loan is still checked. `DepartingCaps` refuses
-    // to move a capability over a channel the loan was not minted for, and the
-    // loan handle names its receiver, so a lender cannot mint against a
-    // supervision handle and then deliver somewhere else.
+    // A channel-derived receiver is admitted only over a declared delegable
+    // edge. A supervision handle already names its task directly and needs no
+    // channel transferability statement.
     if let Some(channel) = edge
         && channels.transferable(channel) != Some(true)
     {
@@ -4882,16 +6078,6 @@ fn serve_buffer_loan(
             "SLIME_GRAPH loan refused task={} slot={buffer_slot} class=undelegated",
             id.0,
         );
-        // `BadCapability`, the same answer as an absent slot and a wrong-kind
-        // one — and deliberately so. A distinct code here would be a free
-        // oracle: this check runs before `buffers.loan()`, so it consumes no
-        // quota and leaves no state, and a component could sweep every slot
-        // number learning which hold channel ends. That is exactly what
-        // `CapabilityTable::resolve` refuses to leak, and what
-        // `sys_shared_buffer_loan` answers `ERR_BAD_CAP` for.
-        //
-        // The marker above keeps the distinction where only the root can read
-        // it.
         return Response::error(IpcError::BadCapability);
     }
     let receiver = HolderId(u64::from(peer.0));

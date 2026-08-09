@@ -1,0 +1,10 @@
+[layout] path=init slots=8 max=64
+[layout] 0 endpoint-factory - 0x20000
+[layout] 1 shared-buffer-factory - 0x1000000
+[layout] 2 executable fabric-service 0x10008
+[layout] 3 executable fabric-publisher 0x10008
+[layout] 4 executable fabric-subscriber 0x10008
+[layout] 5 executable fabric-intruder 0x10008
+[layout] 6 executable fabric-publisher-b 0x10008
+[layout] 7 executable fabric-subscriber-b 0x10008
+[layout] end

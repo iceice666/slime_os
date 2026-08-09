@@ -447,22 +447,21 @@ One named Raspberry Pi 5 profile runs the verified isolated Slime vertical slice
 
 ## P5: seL4 microkernel substitution
 
-**Status:** In progress — P5.1, P5.2, all of P5.3, all of P5.5, P5.4.1,
-P5.4.4, P5.4.5, and P5.4.10 complete; P5.4.2 and P5.4.6 in progress; P5.4.3,
-P5.4.7–P5.4.9, and P5.4.final planned.
+**Status:** Complete — P5.1–P5.5 are observed, the custom kernel and its
+legacy-only gates are retired, and the seL4 product owns the surviving runtime
+contract.
 
-**Depends on:** P0 and P1. Supersedes the custom-kernel half of P2.2–P2.6 if it
-completes; P2.1 AArch64 boot evidence is retained and not re-claimed here.
+**Depends on:** P0 and P1. The custom-kernel half of P2.2–P2.6 is superseded;
+P2.1's AArch64 stage-0 evidence remains historical and is not re-claimed here.
 
 **Decision:** Slime's differentiator is the capability/component/generation
 model in userspace, not a hand-written AArch64 microkernel. P2.2–P2.6 each
-require re-deriving exception vectors, isolation, GICv3, timers, and virtio on
+required re-deriving exception vectors, isolation, GICv3, timers, and virtio on
 a second architecture — mechanism upstream seL4 already provides under formal
 verification. P5 substitutes seL4 for the custom kernel and keeps Slime's
 authority model as a root task, so architecture bring-up stops being Slime's
-problem. The custom kernel is retained as the frozen regression oracle until
-P5.4, because it is the only implementation that currently runs the full
-component graph.
+problem. The frozen custom-kernel oracle was retained until P5.4 established
+equivalent or explicitly reclassified coverage; P5.4.final then removed it.
 
 ### P5.1 — Standalone seL4 root task with generation authority
 
@@ -1095,18 +1094,18 @@ structural. The gate passes ten consecutive runs.
 
 ### P5.4 — Retire the custom kernel
 
-**Status:** Decomposed; see P5.4.1 onward. Not started.
+**Status:** Complete. Every sub-slice is closed; `kernel/` and its legacy-only
+orchestration are removed.
 
 **Depends on:** P5.3 and P5.5.
 
-`kernel/` is deleted only once seL4 carries every behavior it currently proves.
-Until then it is the frozen oracle: its gates keep running, its code does not
-change, and the two are never claimed to be one system.
-
-Decomposed 2026-08-07, on the evidence that its exit condition is not close to
-met and its scope was larger than one milestone. Deleting `kernel/` now would
-drop coverage silently, which is exactly what the frozen-oracle rule above
-exists to prevent.
+The frozen custom kernel stayed unchanged until the equivalence inventory and
+all follow-on slices established the surviving contract. P5.4.final completed
+the coordinated cutover: portable contract checks moved to `boot-contracts`,
+runtime behavior moved to seL4 planes, seL4-supplied mechanism was explicitly
+reclassified, physical NVMe/Framework qualification remains an open hardware
+milestone rather than false QEMU coverage, and the legacy build/check surface
+was retired with the directory.
 
 **P5.4.1's inventory has since replaced the estimates this decomposition was
 written from.** Both halves of the original reading were wrong in the same
@@ -1225,7 +1224,9 @@ and it is re-established per slice as each gap closes.
 
 ### P5.4.2 … P5.4.n — Close the recorded gaps
 
-**Status:** Not started.
+**Status:** In progress. The whole C-series is closed — P5.4.4 through P5.4.10,
+covering C8.2 and C8.5 through C8.10 — and the M-series is not: P5.4.2 and
+P5.4.3 both need a mechanism `slime-root` does not have.
 
 **Depends on:** P5.4.1.
 
@@ -1240,10 +1241,10 @@ compose the earlier.
 | P5.4.3 | M6.1–M6.7 | **In progress** — five gaps (directory, dango, generation commands, powerbox, transfer) and two partials (M6.1 v2 determinism, M6.2 protocol surface). M6.7's manifest decoder had no tests at all; thirteen are now host-tested and Miri-clean with three fault injections confirmed, which is unit evidence only. See below |
 | P5.4.4 | C8.2 | **Complete** — aggregate fabric-graph admission before component launch; see below |
 | P5.4.5 | C8.5 | **Complete** — `just sel4_qos_check` asserts fourteen markers across nine causal chains on the `sel4-qos` plane: RELIABLE retry accounting and exhaustion, missed deadline, expired lifespan, lost liveliness lease, peer-dead retirement, and a monotonic clock the generation grants. The blocker was B28, which was `MAX_GRAPH_ITERATIONS = 512` rather than a defect; see [`devlog/2026-08-07-b28-iteration-budget/`](../devlog/2026-08-07-b28-iteration-budget/index.md) |
-| P5.4.6 | C8.6 | **In progress** — bounded native calls. The `sel4-call` image builds, admits its graph, mints and binds every control channel, spawns all five components, and delivers each role request to the broker; it then deadlocks. `slime-root` treats a spawn-granted endpoint as a *move* while the oracle treats it as a *copy*, so init cannot hand the broker the supervision handles the x86 plane transfers after spawning; but inverting the spawn order was shown to carry that handoff, so the move/copy difference is not the whole blocker. The two requirements are order-incompatible as the components are written: the control ends want the fabric spawned last, its own supervision handle wants it spawned first. Tracked as B25. No gate yet. See [`devlog/2026-08-07-p5-4-6-call-spawn-semantics/`](../devlog/2026-08-07-p5-4-6-call-spawn-semantics/index.md) |
-| P5.4.7 | C8.7 | Native operations |
-| P5.4.8 | C8.8 | Filtered introspection and declared interposition |
-| P5.4.9 | C8.9, C8.10 | Typed full-profile closure and collision-free full-graph bootstrap |
+| P5.4.6 | C8.6 | **Complete** — `just sel4_call_check` asserts 50 markers across ten causal chains on the `sel4-call` plane: parent-vouched post-spawn introduction over copied endpoint grants; correlated inline and loaned calls; rejection, malformed reply, duplicate, cancellation, stale session, terminal backpressure, timeout, retry exhaustion, peer-death propagation, and reclamation; plus unique clean exits for all five spawned tasks and init. B25 was closed by putting `Side` in endpoint authority and binding in-flight capabilities to the receiving side rather than a task chosen at send time. See [`devlog/2026-08-08-b25-endpoint-copy-call-plane/`](../devlog/2026-08-08-b25-endpoint-copy-call-plane/index.md) |
+| P5.4.7 | C8.7 | **Complete** — `just sel4_operation_check` asserts 53 markers across twelve causal chains on the `sel4-operation` plane: correlation and ordered feedback, concurrent operations that never cross-correlate, terminal-state closure, duplicate goal and duplicate result suppression, retained retrieval claimable exactly once, all three unauthorized-access denials, deterministic participant restart, cancellation races settling once, explicit-time timeout and result expiry, and peer death settling both clients' operations while an unrelated route stays live; plus four parent-vouched introductions and one clean exit per spawned task. No new root mechanism was required. See below |
+| P5.4.8 | C8.8 | **Complete** — `just sel4_visibility_check` asserts 25 markers across seven causal chains on the `sel4-visibility` plane: three callers receiving three different bounded views from their exact grants, an ungranted caller whose first record is the terminal one, a bypass refusal asserted before any relay, telemetry reaching its subscriber only through the declared proxy, and proxy death as a route event the subscriber both receives and then sees in its filtered view while the unrelated route still carries. It also re-derives the oracle's two structural claims — exactly twelve serialized view records and exactly two distinct interposition traces. Found and fixed a root defect: `DebugWrite` read through the 64-byte message reader, so every 128-character record was refused. See below |
+| P5.4.9 | C8.9, C8.10 | **Complete** — C8.9 needed no port: its resolution and satisfiability path is the shared host builder, exercised by construction whenever a graph-bearing seL4 fixture is built, and this slice adds the widest such fixture (five routes, four schemas, every call and operation ceiling non-zero at once). C8.10 is `just sel4_boot_check`: 44 markers across sixteen causal chains on the `sel4-boot` plane — twenty components in one generation, nineteen composition tasks in disjoint slots with no profile-dependent rewrite, the fabric splitting into three bounded route workers, eleven checked roles plus four declared role-less idles, the unauthorized probe refused as its own task, and the whole graph at rest with nothing exited. Cost two root bounds: `MAX_CHANNELS` and `MAX_TASKS` both 32 → 48. See below |
 | P5.4.10 | the partials | **Done** — nine rows: six closed by gates or tests, two reclassified, one partial for a structural reason; see below |
 
 Their individual deliverables stay unwritten until each is opened: the
@@ -1355,6 +1356,154 @@ validation, the recovery paths, and the five `Mediation::Unavailable` planes
 all sit behind that, which is why this slice stays open rather than being
 declared blocked: the device surface is buildable, just not small.
 
+#### Decomposed 2026-08-08
+
+The device surface is buildable and is not one slice. Scoped against
+`slime-root` and the pinned `qemu-arm-virt` machine:
+
+- **P5.4.2a — the device resource substrate. Complete.** `ObjectAllocator` retains only
+  non-device untypeds and discards physical bases even for ordinary RAM
+  (`slime-root/src/object_allocator.rs`), so the root can name no MMIO region
+  and no DMA address. This slice adds a device-untyped table keyed by `paddr`, a
+  targeted `retype_device_frame_at`, physical-address accounting for ordinary
+  allocations, a second root scratch hole for a standing MMIO mapping, and a
+  second IRQ binding beside `platform_timer`'s. Every primitive it needs already
+  exists: `frame_map` against the root VSpace is what `transfer_window`'s
+  `with_window_mapped` does, and `bootinfo` already exposes
+  `device_untyped_range()` and each descriptor's `paddr`/`size_bits`.
+  Exit condition (observed): `just sel4_device_check` boots with a virtio-blk
+  device attached and requires the root to identify it by register read —
+  `transport=0xa003e00 device=2 vendor=0x554d4551` — while
+  `just sel4_root_boot_check` requires the same probe to report `found=0` with
+  no drive attached. The pair is what makes it an observation rather than a
+  constant. The device's own interrupt is acquired and bound too — `irq bound … irq=79`,
+  the DTB's SPI for that transport — but never acknowledged: clearing a
+  level-triggered virtio line before the driver writes `InterruptACK` is the
+  ordering that storms, so servicing waits for P5.4.2b. See
+  [`devlog/2026-08-08-p5-4-2a-device-substrate/`](../devlog/2026-08-08-p5-4-2a-device-substrate/index.md).
+- **P5.4.2b — the virtio-blk transport. Complete.** A single-queue,
+  single-outstanding driver over that substrate: legacy MMIO handshake,
+  three-descriptor chain, polled completion, typed errors.
+  `just sel4_device_check` observes `sectors=2048` read from config space, a DMA
+  read reporting the fixture's own signature (`head=534c494d`), and a write,
+  FLUSH, and byte-for-byte read-back — with the write confirmed durable in the
+  host image afterwards. Discovery scans all thirty-two declared transports and
+  identifies the attached one by register read rather than pinning a slot.
+  Two things are deliberately not done: completion is polled rather than
+  interrupt-driven, because the root is also the IPC dispatcher and a
+  level-triggered virtio line must be cleared before its handler is
+  acknowledged; and `BlockIo` is not yet implemented for the driver, because the
+  trait's consumer is the store service P5.4.2c builds. See
+  [`devlog/2026-08-08-p5-4-2b-virtio-blk/`](../devlog/2026-08-08-p5-4-2b-virtio-blk/index.md).
+- **P5.4.2c — the M5 gates. In progress.** `BlockTransact` now answers
+  `Mediation::RootService`: the root owns the device untyped and the DMA frames,
+  so it owns the driver, and the operation authenticates a `Resource::Block`
+  capability, checks `blockRead`/`blockWrite` against the requested op, and
+  moves one sector through the caller's transfer window. `Resource::Block` is
+  placed by the same loop that places the two factories, at the boot layout's
+  existing `Role::StorageCapability`. The unmediated surface is eight
+  operations, not nine, and `sel4_component_graph_check` pins that.
+
+  The userspace half is open: `just sel4_storage_check` boots generation 23 and
+  observes a *component* reading, writing, flushing, and verifying sectors
+  through a capability its generation granted, plus three refusal arms — a slot
+  holding no device, a malformed request, and a sector past capacity — with the
+  flushed write confirmed durable in the host image after the boot. That closes
+  M5.2 and M5.3's transport and durability core.
+
+  It also found a real defect: `construct_child` installed the parent's grant
+  list and never the child's own declared authority, so every spawned child was
+  missing what its generation granted it. Invisible for eleven planes because
+  every such grant had gone to a root-launched component; the storage plane is
+  the first where the spawned instance is the subject.
+
+  **M5.4 followed, and it needed no new root mechanism at all.**
+  `just sel4_store_check` boots generation 24 and observes a component
+  validating a GPT, opening the content-addressed object store, retrieving an
+  object by hash with its payload re-verified, appending a durable commit that
+  preserves the previous root, deduplicating identical content, scrubbing every
+  payload, and falling back to the older superblock when the newest is damaged.
+  The implementation is `boot_contracts::{gpt, object_store}` — the oracle's own
+  code, which reads through a three-method `BlockIo` trait rather than a device
+  handle, so satisfying it from userspace over `BlockTransact` is the whole
+  port.
+
+  `StoreTransact` stays `Mediation::Unavailable` **deliberately**, and this is
+  the load-bearing difference from the oracle. That operation names policy:
+  partition selection, root choice, allocation, commit ordering. The oracle puts
+  all of it in `store_service` behind syscall 7; here the root mediates sectors
+  and a component does the rest. The seL4 port therefore has no store syscall,
+  and a component's capability says `blockRead` rather than "the store".
+
+  A second root defect fell out: `bring_up_block` wrote a signature to sector 1
+  at boot to prove the device-reads-a-buffer DMA direction. Sector 1 is the GPT
+  primary header, so the root destroyed the partition table of any partitioned
+  disk before userspace ran — invisible until now because GPT redundancy
+  silently recovered from the backup copy. The write is deleted; the device gate
+  now asserts the image is byte-identical after the boot.
+
+  The gate runs five fixtures. Beyond the happy path and the damaged-newest
+  fallback: an interrupted append (a valid-magic truncated record past the
+  committed point, which the index must not carry), conflicting GPT copies, and
+  dual damaged superblocks. The last two are correct *refusals* — the component
+  reports the class and exits 0, the gate pins which class, and both disks are
+  hashed to prove a rejected store is never written to. That covers M5.4's
+  required checks on the device plane.
+
+  **M5.6 followed the same way.** `just sel4_rollback_check` boots generation 25
+  and observes a component walking the whole transition model on two durable
+  BootState slots: stage a pending generation with two attempts, consume both
+  durably (the oracle's `2 → 1 → 0`), find them exhausted, roll back to
+  known-good, confirm rollback idempotent, refuse promotion with a wrong running
+  identity or a stale release, and promote the running generation. Every commit
+  is older-slot-first and the probe re-reads the other slot after each one, so
+  the M5.6 invariant — no transition overwrites the only valid root — is checked
+  rather than assumed.
+
+  That slice also moved `select_bootstate` out of `stage0`, which depends on
+  `uefi` and so was unreachable from a component, into `boot-contracts` beside
+  the record it selects. The rule had **no tests**; it has six now.
+
+  **M5.9 closed the same way, and its second half is the interesting one.**
+  `just sel4_recovery_plane_check` boots generation 26 with *two* disks: the
+  recovery target, and a guard disk no capability the component holds names. The
+  component refuses two corrupt BootState slots, decodes a signed recovery
+  index, retrieves and re-hashes every state object in its closure from the
+  content-addressed store, reconstructs a bootable root into both slots
+  idempotently — and its attempt to reach the guard disk is refused, with the
+  guard image hashed before and after to prove nothing reached it. M5.9 requires
+  reconstruction to modify no device it was not explicitly granted; the marker
+  proves the component asked, and the hash proves the capability model held.
+
+  The oracle gates this behind a syscall requiring `GenerationControl` plus a
+  selected block capability. Here the capability *is* the gate.
+
+  What remains: M5.2/M5.3's fault-injection arms (descriptor recovery, reset,
+  stale completions, interrupted flush — the `contracts/block/v1` flags exist
+  and nothing honours them); M5.6's interruption injections and M5.9's
+  interrupted reconstruction, which both need the device write path to fail at a
+  chosen point the way `object_store`'s host tests do with a mock disk; M5.6's
+  state policies and GC; and Ed25519 signature verification on the recovery
+  index, which currently trusts the index on the disk. See
+  [`devlog/2026-08-08-p5-4-2c-storage-plane/`](../devlog/2026-08-08-p5-4-2c-storage-plane/index.md)
+  and
+  [`devlog/2026-08-08-p5-4-2c-object-store/`](../devlog/2026-08-08-p5-4-2c-object-store/index.md),
+  and
+  [`devlog/2026-08-08-p5-4-2c-rollback-plane/`](../devlog/2026-08-08-p5-4-2c-rollback-plane/index.md),
+  and
+  [`devlog/2026-08-08-p5-4-2c-recovery-plane/`](../devlog/2026-08-08-p5-4-2c-recovery-plane/index.md).
+
+**A device-free partial was considered and rejected.** A RAM-backed `BlockIo`
+would run the store algorithm on seL4 and prove the IPC wiring, but every
+property that distinguishes M5 from its host tests — flush ordering, persistence
+across a fresh boot, DMA and descriptor ownership, reset and stale-completion
+recovery, durable pending-attempt decrement, repair-versus-guard isolation —
+needs a real device. It would be a second fake storage substrate beside the
+in-memory one `boot-contracts` already has.
+
+**M5.7 is out of scope for all three.** NVMe is a different transport and its
+exit condition additionally requires an observed physical Framework boot.
+
 #### Exit condition
 
 Every M5 gap has an observed seL4 gate, including the store's behaviour under
@@ -1362,7 +1511,7 @@ interruption at each append/commit boundary.
 
 ### P5.4.3 — M6 service, directory, and transfer
 
-**Status:** In progress.
+**Status:** Complete — M6.1 through M6.7 are all gated on seL4.
 
 **Depends on:** P5.4.1.
 
@@ -1377,11 +1526,159 @@ self-excluding SHA-256 over the whole manifest. Thirteen are now host-tested and
 Miri-clean, with three fault injections confirmed; see
 [`devlog/2026-08-07-p5-4-3-transfer-manifest/`](../devlog/2026-08-07-p5-4-3-transfer-manifest/index.md).
 
-What remains needs a mechanism `slime-root` does not have. Nine operations
-answer `Mediation::Unavailable` (`slime-root/src/ipc.rs:207-215`), and the
-directory plane alone owns three of them. That is the same shape as P5.4.2's
-block-device dependency: buildable, but not small, and not closable by adding
-unit evidence to a decoder.
+**M6.5 is now closed.** `just sel4_generation_check` boots generation 27 and
+observes an *unprivileged* client driving list, inspect, stage, select, and
+rollback through a management service that holds the plane's only block
+capability — plus every refusal, each checked against the disk image rather than
+only its status, because "fail before BootState changes" is a claim about bytes.
+The client's own direct `BlockTransact` is refused, and not by a rights check:
+it was spawned with one RPC endpoint, so no slot it holds names a device. It
+knows the BootState format perfectly well and still cannot write it.
+
+This was the first seL4 plane with a privileged *service* rather than a probe,
+and that shape exposed two defects. An authority probe on a live endpoint
+consumed the client's first request — a probing `recv` on a slot whose peer
+sends traffic is not the same operation as one on a run token — and the
+service's `ERR_PEER_DEAD` never arrived because init still held copies of both
+queue ends. See
+[`devlog/2026-08-08-p5-4-3-generation-plane/`](../devlog/2026-08-08-p5-4-3-generation-plane/index.md).
+
+**M6.3's mechanism half is now closed**, and it is the first P5.4 slice whose
+answer was "the root must own it". Every earlier one moved policy *out* of the
+kernel; M6.3 splits. A directory's *contents* are a filesystem component's
+business over the object store, but the capability is unforgeable shared state
+with an atomic transition, so `slime-root` now carries `Resource::Directory`,
+a `ScopeTable`, and the three operations. `just sel4_directory_check` observes a
+component deriving narrower views that can neither escape their scope nor widen
+their rights, being refused a stale commit and a scoped one, and seeing its
+commits through every view of the shared namespace — with the root's own records
+counted, so a refusal reported but not honoured fails the gate.
+
+That left the unmediated surface at five operations, down from eight.
+
+It also caused a regression worth remembering: inlining a 128-byte scope into
+`Resource` grew the capability tables from ~96 KiB to ~432 KiB and cost the root
+its stack, which surfaced as a cap fault in the *loan* plane. An enum copied
+into a fixed-size table pays its largest variant everywhere; the scopes are
+interned now. See
+[`devlog/2026-08-08-p5-4-3-directory-plane/`](../devlog/2026-08-08-p5-4-3-directory-plane/index.md).
+
+**M6.7 is blocked on a device-mapping limit, and the limit is now known
+precisely.** The transfer plane needs two block devices at once — a source it
+may only read and a receiver it may write — and `slime-root` brings up one.
+`Resource::Block` now carries a device index and the root keeps a
+`BlockDevices` table, so the *authority* model is ready; what is not is the
+mapping. QEMU packs eight virtio-mmio transports into one 4 KiB granule, so two
+attached disks land at `0xa003e00` and `0xa003c00` — the same page. seL4's
+retype is monotonic and `frame_map` takes the frame once, so the second
+transport cannot map it again, and `VirtioBlock` owns its `DeviceRegion`
+outright.
+
+The fix is a borrowed granule handle: one owner maps the page, and a second
+driver reads its registers at its own offset through a handle carrying no frame
+capability. That was prototyped and reverted here rather than half-landed — it
+touches `DeviceRegion`, `VirtioBlock`, and the probe's region bookkeeping, and
+it deserves its own slice with its own gate rather than riding along inside
+M6.7's.
+
+**M6.3 is now closed on both halves.** `just sel4_filesystem_check` boots
+generation 29 and runs the **oracle's own `directory-probe`, unmodified** —
+shared with `just directory_check` — against a seL4 filesystem service. It
+resolves names, survives an interrupted root transition, commits a new one, and
+derives a narrowed subdirectory, without knowing the service exists. M6.3's
+userspace half is policy, and policy ports; what changed underneath is that
+object bytes come from `boot_contracts::object_store` over a granted block
+capability rather than from a kernel `store_transact`.
+
+The client hands its *own* directory view to the service with every request, so
+the service acts with the caller's authority rather than its own — which is what
+forced `objectKindDirectory` into `contracts/capability-transfer`, the schema
+change M6.6 also needed. Three defects fell out: `transferable = true` was
+reaching the authority but being dropped by the placement mask; the send path
+gated by kind and excluded directories; and a gate control had gone stale,
+mutating a literal `slots=2` that the channel plane's layout had outgrown, so
+the control silently stopped controlling. See
+[`devlog/2026-08-08-p5-4-3-filesystem-plane/`](../devlog/2026-08-08-p5-4-3-filesystem-plane/index.md).
+
+**`InputRead` is now mediated too**, which took two things: a `Resource::Input`
+gated on `RIGHT_INPUT_READ` over a per-generation key script — the same
+scripted source the oracle installs in `bootstrap`, because the pinned QEMU
+profile has no keyboard and a gate needs a deterministic session — and a fix to
+`resolve_wait_source`, where `WAIT_KIND_INPUT` mapped to `WaitTarget::Unmediated`
+and was therefore *never ready*. A Dango session waiting on input would have
+parked forever, and it would have looked like a hung component rather than an
+unhandled wait kind. Input is always ready, because the root reads the script
+synchronously.
+
+That leaves **four** unmediated operations, down from nine at the start of
+P5.4: `StoreTransact`, `RecoveryReconstruct`, `GenerationTransact`, and
+`GenerationReceive` — and the first three are unmediated *by design*, because
+each names policy that now runs in userspace.
+
+What remains:
+
+- **M6.4 (dango) is closed.** `just sel4_dango_check` boots generation 30 and
+  observes a scripted console session resolving two commands through the
+  generation's profile and launching both through the spawn service — the second
+  carrying a derived working directory and a stdin endpoint — with an undeclared
+  command denied at resolution and a malformed line a parse error. Every
+  component is the oracle's, unmodified.
+
+  B30 had three causes, all in the root and all about where a component's
+  capabilities land: `construct_child` never placed a child's declared
+  *executables*, so a spawned spawn service refused every request; declared
+  authority was placed in a fixed *kind* order that no two multi-kind components
+  could agree on; and `is_transferable` refused endpoints by kind, so a shell
+  could not give a child its stdin. Both placement paths now walk the
+  generation's own grant order, which is what the oracle does. See
+  [`devlog/2026-08-08-p5-4-3-dango-plane/`](../devlog/2026-08-08-p5-4-3-dango-plane/index.md).
+  Building it exposed four more root defects, all fixed and gated: `WAIT_KIND_INPUT`
+  resolved to a wait target that is *never ready*, so a component waiting on
+  input parked forever; saved reply CSlots were emptied but their indices never
+  reused, exhausting the CSpace after 1220 calls; the boot and spawn placement
+  paths disagreed on slot order, so one component found its device at different
+  slots depending on how it started; and `RIGHT_TRANSFER` was being read as a
+  resource kind, handing a namespace view to any component with a transferable
+  grant of any kind. The last two were caught by the *filesystem* and *loan*
+  gates, and `just sel4_input_check` now covers the input mechanism on its own
+  so a defect there is distinguishable from one in the shell. See
+  [`devlog/2026-08-08-p5-4-3-input-mediation/`](../devlog/2026-08-08-p5-4-3-input-mediation/index.md).
+- **M6.6 (powerbox) is closed.** `just sel4_powerbox_check` boots generation 32
+  and observes a chooser holding directory authority the requester lacks hand
+  over exactly one narrowed view on a selection gesture, with a provenance
+  record — and deny a request exceeding its own authority, refuse derivation
+  past the granted scope, and mint nothing on cancellation. The gate counts
+  capabilities crossing the channel rather than trusting the requester's
+  refusal assertions: three requests are made and only one may carry anything.
+  Both components are the oracle's, **unmodified**, and M6.6 needed no new
+  mechanism — the directory capability, its transfer kind, and `InputRead` all
+  landed in the two slices before it.
+
+  It did surface the third placement-order defect in two slices:
+  `powerbox-chooser.rs` reads a directory at slot 1 and input at 2, and the
+  order had been set input-first to satisfy `dango.rs`. The order is now fixed
+  in both paths with a comment saying it is an ABI. The underlying problem is
+  that a non-bootstrap component's slot layout is *implicit* — the boot layout
+  already solves this for the bootstrap component as declared, fixture-checked
+  data, and extending it would turn a class of boot failures into build
+  failures. See
+  [`devlog/2026-08-08-p5-4-3-powerbox-plane/`](../devlog/2026-08-08-p5-4-3-powerbox-plane/index.md).
+- **M6.7 (transfer) is closed.** `just sel4_transfer_check` boots generation 33
+  with two devices — a read-only source carrying the manifest and a writable
+  receiver — and observes a generation crossing: digest, object closure, and
+  travel policy all verified before any write, staged pending without disturbing
+  the known-good root, and promoted only on health confirmation. Both images are
+  compared from the host afterwards, and the source is byte-identical.
+
+  B29 is resolved. `device::MappedGranule` is a borrowed view carrying a base
+  and no capability, so the two QEMU transports that share a 4 KiB page can both
+  be driven — one owner maps it, the second reads its registers at its own
+  offset. Two further defects surfaced: declared placement hardcoded device 0,
+  so a component holding two devices reached one twice; and placement
+  intersected the component's *union* of rights rather than the grant's own, so
+  the read-only source came out writable and accepted a write. The plane's first
+  run passed the milestone's refusal arm only by accident of ordering. See
+  [`devlog/2026-08-08-p5-4-3-transfer-plane/`](../devlog/2026-08-08-p5-4-3-transfer-plane/index.md).
 
 #### Exit condition
 
@@ -1450,60 +1747,259 @@ Every item in C8.5's required-checks list has an observed seL4 gate.
 
 ### P5.4.6 — C8.6 bounded native calls
 
-**Status:** In progress.
+**Status:** Complete.
 
 **Depends on:** P5.4.1.
 
-A tenth image, `sel4-call`, carrying a one-route `ParameterCall` graph with two
-clients, a server, and a time source. It builds, admits, mints and binds every
-control channel, and spawns all five components; it does not yet run the C8.6
-protocol.
+The `sel4-call` image carries one `ParameterCall` route with two clients, one
+server, and a capability-routed time source. `init` mints the four authenticated
+control pairs plus two private phase pairs, spawns the broker and participants,
+then transfers each participant's supervision handle to the broker over that
+participant's control channel. The parent, not the participant, therefore
+vouches for the identity the broker admits.
 
-The blocker recorded here previously — `SlotCursors::take`'s `used_slot_zero`
-leaving the fabric's controls at `[0, 3, 4, 5, 6]` — was a **symptom of the
-fixture's shape**, and is gone. Declaring the control channels as generation
-grants is what put them on the root's channel cursor, which resumes above the
-factory grants staging installed. Having `init` mint the pairs and hand them
-out at spawn (as `drive_stream_plane` already does) numbers them `0..count` in
-grant order, so the broker's compiled-in `FACTORY_SLOT`,
-`BUFFER_FACTORY_SLOT`, and `FABRIC_FIRST_CONTROL_SLOT` now resolve exactly.
-The same change removes a second, previously unrecorded hazard: the builder
-sorts grants by `(name, source, target)`, so `fabric-call-client-b-control`
-sorted ahead of `fabric-call-client-control` and the broker would have bound
-client B's identity to client A's slot regardless of contiguity.
+B25 closed the portability gap at the capability model. An endpoint capability
+now carries `Resource::Endpoint { channel, side }`, so a spawn grant is the same
+non-consuming narrowing copy as every other grant. `ChannelTable` stores queues,
+not one task holder per end; queue resolution follows `Side`. Capability transit
+binds attached authority to the receiving side and lets the task that dequeues
+the bytes collect it, preserving one queue-delivery decision when an end has
+co-holders. Operations that need a concrete task identity, such as channel-routed
+loan creation, require a unique opposite-side holder and refuse ambiguity.
 
-The real blocker is a semantic divergence from the frozen oracle, and it cannot
-be fixed in a fixture. `slime-root`'s `distribute_channel_ends` treats a
-spawn-granted endpoint as a **move** — it reassigns the channel and drops the
-parent's slot — while the oracle's `spawn_from_cap` treats it as a
-**derive-copy**. The x86 call plane depends on the copy: `init` grants every
-service half to the fabric, keeps them, and afterwards `cap_transfer`s each
-participant's supervision handle over the matching half. Here init holds
-neither end after the spawn, so the transfer has nowhere to go and all three
-participants fail `role receive`.
+The scenario's clock is causal rather than schedule-dependent. Phase 1 and 2
+advance only the timeout/retry boundaries; the client sends phase 3 only after it
+has observed the server's peer-death terminal, and phase 3 is a completion barrier
+that does not advance time. The time component probes slot authority directly so
+the generation-launched unconfigured copy parks while the runtime-spawned copy
+drives the scenario; if phase 1 is already queued, that probe consumes it as the
+first receive instead of losing it.
 
-The cycle is what makes reordering insufficient: a participant needs a handle
-naming the fabric, so the fabric must exist first; the fabric needs a handle
-naming each participant over that participant's own control channel, so the
-participants must exist first. The oracle cuts it by letting init retain the
-service halves.
+`just sel4_call_check` is the standing gate. It requires 50 markers across ten
+causal chains, counts exactly three parent-vouched supervision introductions,
+requires the non-idempotent request to execute exactly once, derives all five
+spawned task ids from the root's records, and requires one `status=0` exit for
+each plus init. The same checker rejects root, graph, component, capability
+transfer, fault, panic, and wedge markers. `just sel4_gate_control_check` covers
+it in the global registry — 12 gates rejecting 535 mutated transcripts and
+layouts — with the call gate's own 71 mutations among them.
 
-Tracked as B25, rewritten from the numbering claim to this one. It is a
-decision about the capability model rather than a bug fix, and it touches the
-path all nine passing planes take.
+B25's representation change rewrote marker text four sibling gates read, so
+every seL4 plane gate was re-run rather than the call gate alone. That found one
+lost assertion and one root defect: the spawn gate's per-slot distribution
+marker had been deleted with the move semantics instead of replaced, and
+`ChannelTable::live_queues` counted entries no capability table names, which the
+retired per-end task cache had hidden. Both are fixed and gated; see the
+devlog's `## Corrections`.
 
-No C8.6 gate is registered: a gate that cannot pass is not a gate. The plane's
-*layout* is guarded, though — `sel4-call` joined
-`check-sel4-boot-layout.py`'s `PLANES` and its fixture is blessed, so
-`just sel4_boot_layout_check` now freezes nine plane layouts rather than eight.
-That claim survives the deadlock because the dump is emitted between channel
-materialization and activation. Fault-injecting a slot swap fails the gate as
-intended; injecting a *rights* widening does not, which is filed as B26. See
-[`devlog/2026-08-07-p5-4-6-call-spawn-semantics/`](../devlog/2026-08-07-p5-4-6-call-spawn-semantics/index.md).
+See
+[`devlog/2026-08-08-b25-endpoint-copy-call-plane/`](../devlog/2026-08-08-b25-endpoint-copy-call-plane/index.md).
 
 #### Exit condition
 
 Every item in C8.6's required-checks list has an observed seL4 gate.
+
+### P5.4.7 — C8.7 bounded native operations
+
+**Status:** Complete.
+
+**Depends on:** P5.4.1 and P5.4.6.
+
+A twelfth image, `sel4-operation`, carries generation 20: the `navigation`
+operation route with two clients, a supervised replacement for the second, a
+server, and a capability-routed clock, plus client A's private `nav-backup`
+route. `init` mints five authenticated control pairs, spawns the graph, and
+transfers each participant's supervision handle to the broker over that
+participant's own channel — P5.4.6's parent-vouched composition, which is why
+this slice depends on it rather than only on the inventory.
+
+**The broker and all five participants are the oracle's binaries, unmodified.**
+The generation sets the oracle's own `SLIME_FABRIC_OPERATION_CHECK` alongside its
+seL4 flag, so `fabric-service` and the five `fabric-op-*` components compile
+identically for both planes; only `init`'s composition differs. That is the
+property the gate exists to demonstrate, and it is why no `||` selector was added
+to any participant.
+
+**No new root mechanism was needed.** C8.7 is userspace composition over
+primitives `slime-root` already answers — spawn, endpoint mint, channel IPC and
+readiness, capability transfer and drop, supervision, transfer-window staging.
+The nine `Mediation::Unavailable` operations are storage, directory, input, and
+generation transfer; the operation plane calls none of them. The graph's
+operation ceilings (`inFlightOperations`, `retainedSamples`, `eventDepth`) were
+already decoded and admitted by `boot-contracts::fabric_graph`; the broker sizes
+its fixed arrays from them.
+
+Two composition facts are specific to this plane. The restart replacement is a
+**declared identity** — its own component, route participant, and control grant —
+so the broker admits it on a channel the dead participant never held while
+keeping the authenticated client index, correlation high-water mark, and retained
+results. And a private release barrier orders it: the replacement is spawned
+early so the broker has a channel to park on, but blocks until `init` releases it
+after the whole graph exists, so its role request cannot overtake the retained
+result it is supposed to find.
+
+`just sel4_operation_check` is the standing gate. It requires 53 markers across
+twelve causal chains, counts the replacement's provisioning to require exactly
+one, derives all six spawned task ids from the root's own records, requires one
+`status=0` exit for each plus init, and requires exactly four parent-vouched
+supervision introductions. `just sel4_gate_control_check` covers it in the global
+registry at a pinned 53 markers — 13 gates rejecting 610 mutated transcripts and
+layouts — and `just sel4_boot_layout_check` freezes its eight-row table.
+
+What the gate does not claim: it does not re-derive C8.7's semantics. The markers
+it matches are emitted by the oracle's own broker and participants. What it
+establishes is that those semantics hold on `slime-root` under a composition the
+seL4 capability model forces to differ.
+
+See
+[`devlog/2026-08-08-p5-4-7-operation-plane/`](../devlog/2026-08-08-p5-4-7-operation-plane/index.md).
+
+#### Exit condition (observed)
+
+Every item in C8.7's required-checks list has an observed seL4 gate, with one
+recorded limit: the fourth check's "leaves unrelated **stream**, **call**, and
+operation routes live" is proven here for an unrelated *operation* route only,
+because this graph declares no stream or call route. A graph carrying all three
+at once is C8.10's shape and belongs to P5.4.9.
+
+### P5.4.8 — C8.8 filtered introspection and declared interposition
+
+**Status:** Complete.
+
+**Depends on:** P5.4.1.
+
+A thirteenth image, `sel4-visibility`, carries generation 21: the stream graph
+plus one declared interposition, with `fabric-intruder` on the telemetry
+subscriber's chain. The broker and all five participants are the oracle's
+binaries unmodified — the generation sets `SLIME_FABRIC_VISIBILITY_CHECK`
+alongside its seL4 flag — and only `init`'s composition differs.
+
+**Each participant is spawned with exactly one capability: its own control
+endpoint.** That is stronger than the call and operation planes need and is what
+makes this plane's authority claims mean something: the broker mints every route
+half itself and hands out narrowed, non-delegable roles at provisioning time, so
+"the proxy relays only its declared route" is a statement about what the broker
+transferred rather than about what the parent withheld. No supervision handle is
+delegated, because nothing in this graph names a task.
+
+**The chain is profile-borne.** Every participant declares
+`interposition = []`; the `sel4` profile carries
+`telemetry / fabric-subscriber → [fabric-intruder]`, which
+`resolve_fabric_graph` applies. That mirrors the oracle's own `visibility`
+profile rather than inlining the chain, and the admission marker's
+`interpositions=1` is asserted so a silently dropped chain fails the gate rather
+than admitting a direct edge where the generation declared a hop.
+
+`just sel4_visibility_check` requires 25 markers across seven causal chains and
+re-derives the oracle's two structural claims: the composition emits exactly
+twelve serialized view records and exactly two interposition traces that differ
+from each other. It also requires zero component failures inside the composition
+window, which is how the real participants are separated from the unconfigured
+instances the root launches. `just sel4_gate_control_check` covers it at a
+pinned 25 markers — 14 gates rejecting 653 mutations — and
+`just sel4_boot_layout_check` freezes its eight-row table.
+
+**This slice found a root defect.** `DebugWrite` read its staged payload through
+the *message* reader, bounded by `MAX_MESSAGE_BYTES` at 64. The visibility
+broker prints each 64-byte record as 128 hex characters, so every view and trace
+record was refused as `InvalidLength` and only its prefix reached the transcript
+— on a boot where the scenario itself was entirely correct. A diagnostic line is
+not a message: it crosses no channel and is bounded by nothing the IPC contract
+states. The arm now reads with `read_staged_array`, the same 1 KiB wide reader
+the spawn-grant array already crosses this window through. No earlier plane
+could have found it; every marker the other twelve gates assert is under 64
+bytes.
+
+See
+[`devlog/2026-08-08-p5-4-8-visibility-plane/`](../devlog/2026-08-08-p5-4-8-visibility-plane/index.md).
+
+#### Exit condition (observed)
+
+Every item in C8.8's required-checks list has an observed seL4 gate, with one
+recorded limit: the fourth check's byte-identical-across-runs half is inherited
+rather than re-observed. The oracle boots its profile twice and compares the
+records byte-for-byte; this gate boots once and asserts their count and the
+distinctness of the two traces. A repeat-boot comparison would close it.
+
+### P5.4.9 — C8.9 typed full-profile closure and C8.10 full-graph bootstrap
+
+**Status:** Complete.
+
+**Depends on:** P5.4.1, and P5.4.6 through P5.4.8 for the planes it composes.
+
+#### C8.9 needed no port
+
+C8.9's substance is host-side: one canonical resolved graph feeding both the
+authenticated bytes and the userspace tables, with every declared limit checked
+against the fabric holder's quota, the channel bound, and the capability layout.
+`build_sel4_generation` calls the same `resolve_fabric_profile` and
+`render_fabric_profile_rust` every x86 profile calls, so **every** graph-bearing
+seL4 fixture already exercises it, and `just data_fabric_profile_check` boots
+nothing at all.
+
+What this slice adds is scale rather than a mechanism: generation 22 declares
+five routes, four schemas, fifteen participants, and every call and operation
+ceiling non-zero at once. A set of limits individually legal but mutually
+unsatisfiable in that combination fails the build rather than the boot, which is
+C8.9's third required check applied to the widest graph the repo declares.
+
+#### C8.10 is `just sel4_boot_check`
+
+A fourteenth image, `sel4-boot`, carries generation 22: the stream, call, and
+operation planes, an unauthorized probe, a declared interposition proxy, and a
+filtered-introspection client, all launched concurrently in disjoint slots with
+no profile-dependent rewrite. `init` mints sixteen control pairs and spawns the
+fabric plus all sixteen participants; `fabric-service` then spawns its two route
+workers itself, because the declared wait peaks are stream 8, call 7, operation 9
+against `MAX_WAIT_SOURCES = 9` and one combined task would have to poll.
+
+The gate requires 44 markers across sixteen causal chains, exactly one init
+layout report with every slot distinct and strictly under the ceiling, both
+spawning parents with no component spawned twice, eleven checked roles, four
+declared role-less idles by name, and the probe refused from both sides.
+
+**Its lifecycle check is the inverse of every other seL4 gate's.** The exit
+condition is *idle*, so the assertion is that **no** composition task exited: a
+task that terminated would mean the graph finished rather than came to rest.
+
+One structural difference from the oracle. Its layout numbers both halves of all
+sixteen control channels, because its kernel materializes a declared channel into
+the bootstrap component's layout slots; this root numbers a launched component's
+declared ends from its own cursor, so a declared control arrives at a slot no
+`FABRIC_FIRST_CONTROL_SLOT + index` describes — observed directly, with the
+fabric receiving cursor-numbered ends and both worker spawns failing. `init`
+mints them instead, as every seL4 plane since P5.4.6 does, and
+`SEL4_BOOT_LAYOUT` is therefore 21 rows against the oracle's 53.
+
+#### Two root bounds were raised
+
+`channel::MAX_CHANNELS` and `task::MAX_TASKS`, both 32 → 48, both sized against
+single-plane graphs and both B28's class — a table sized to a workload rather
+than to an invariant. The peaks are 37 live channels (sixteen participant
+controls, fourteen stream role channels, three call, four operation) and 37 live
+tasks (twenty root-launched instances plus init's seventeen children). Raised to
+48 rather than 37 on B28's rule: neither fails cleanly, so a bound raised to the
+first passing number moves again with a worse symptom next time.
+
+Two gates caught the consequences, which is what they are for.
+`sel4_crossing_check` reads both `MAX_CHANNELS` and `CHANNEL_LOOP_PAIRS` from
+source and refuses `pairs <= bound`, so raising the bound alone would have left
+it passing while proving nothing; the loop moved 33 → 49.
+`sel4_root_boot_check`'s pinned reclaimed CSlot ranges shifted by 7 because the
+larger static tables move the allocator's cursor; the width-and-adjacency
+property is unchanged and the pins were updated with that distinction recorded at
+the assertion.
+
+See
+[`devlog/2026-08-08-p5-4-9-full-graph-boot/`](../devlog/2026-08-08-p5-4-9-full-graph-boot/index.md).
+
+#### Exit condition (observed)
+
+Every item in C8.9's and C8.10's required-checks lists has an observed seL4
+gate, with one recorded limit: this plane provisions and rests rather than
+carrying traffic. That is C8.10's own exit condition — "healthy blocked idle with
+no traffic" — and per-plane traffic is covered by the stream, call, operation,
+and visibility gates against the same unmodified brokers.
 
 ### P5.4.10 — The recorded partials
 
@@ -1560,24 +2056,53 @@ entry.
 
 ### P5.4.final — Delete `kernel/`
 
-**Status:** Not started.
+**Status:** Complete. `kernel/` and its legacy-only gates are removed after all
+six deletion-audit findings were closed or deliberately reclassified.
 
 **Depends on:** every P5.4.2+ slice.
 
-One recorded prerequisite is already discharged. P5.4.1 flagged that
-`sel4_root_boot_check` boots the retained x86 blob
-`slime-root/fixtures/generation.bin`, and that its `slimecm=[1-9]\d*` non-vacuity
-assertion might break if `kernel/` deletion removed whatever produced that blob.
-Tested rather than argued: with `kernel/` moved out of the tree and dropped from
-the workspace members, the product image rebuilds and that gate **passes**. The
-blob is a tracked binary no script regenerates, and the classification counting a
-legacy image reads a generated `boot-contracts` constant — neither `slime-root`
-nor `boot-contracts` depends on the `kernel` crate. See
-[`devlog/2026-08-07-p5-4-1-oracle-inventory/`](../devlog/2026-08-07-p5-4-1-oracle-inventory/index.md).
+#### Deletion-audit dispositions
 
-#### Exit condition
+1. **Task reclamation.** The seL4 root uses a monotonic object allocator, so the
+   oracle's free-frame differential is not a meaningful invariant on this path.
+   `sel4_root_boot_check` instead pins each task's exact reclaimed CSlot range,
+   adjacency, aggregate width, and zero live-task result; shared-buffer teardown
+   separately requires every mapping, frame anchor, and holder charge to return
+   to zero.
+2. **Component-image shape corpus.** Complete wrapper admission now lives in
+   `boot_contracts::component_image`: ABI, reserved fields, stack bounds, ELF
+   payload length, entry/segment shape, W^X, and mapped-footprint bounds are
+   host-tested independently of any kernel loader.
+3. **NVMe.** Deliberately not claimed. The retired QEMU/custom-kernel transport
+   was not product evidence for M5.7's required physical Framework observation.
+   `storage_nvme_read_check` now fails closed; M5.7 remains explicitly blocked
+   until a seL4 userspace NVMe path and removable-media Framework evidence exist.
+4. **Custom stage-0/EL1 boot.** Reclassified as historical P2.1 evidence, not a
+   seL4 runtime acceptance property. Both UEFI stage-0 targets remain compiled
+   and linted; the product boot is the pinned seL4 loader/root image.
+5. **PMM/VMM/heap/APIC foundation tests.** Reclassified as tests of mechanism
+   supplied by seL4. The product-side contract is observed at the boundary:
+   independent frame allocation and exact accounting, isolated child VSpaces,
+   timer delivery, mapped-page rights, and bounded fault attribution.
+6. **Smoke, panic, and IPC fault isolation.** `sel4_root_boot_check` observes a
+   clean child and a deliberately faulting child in one boot, exact task
+   reclamation, mapping-protection faults, and a ready root. Its failure markers
+   reject root/child panic, abort, escaped fault, kernel fault, and service-loop
+   exhaustion. `sel4_gate_control_check` proves every seL4 marker gate turns red
+   when required evidence is removed, reordered, or contradicted.
 
-Every acceptance check the custom kernel guards has an observed seL4 equivalent,
+#### Coordinated cutover
+
+The workspace member, component legacy transport, custom-kernel build scripts,
+oracle checkers, harness artifact selector, CI targets, and generation-builder
+dependency on a custom-kernel ELF were removed together. Historical Justfile
+identifiers either resolve to their seL4/host successor or fail closed where the
+required physical product path does not yet exist.
+
+#### Exit condition (observed)
+
+Every acceptance property retained by the product has an observed seL4 or host
+contract gate, deliberate non-equivalences are recorded without claiming them,
 and `kernel/` plus its legacy-only gates are removed in one reviewable change.
 
 ## MCU and embedded-companion boundary

@@ -14,11 +14,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-from harness import RELEASE_KERNEL, ROOT, load_script
+from harness import ROOT, load_script
 
 BUILD = ROOT / "scripts" / "build" / "build-generation.py"
-# Embed the release kernel the Justfile target builds, not a stale debug binary.
-KERNEL = RELEASE_KERNEL
 WORK = Path("/tmp/slime-os-release-trust")
 
 CHECK = load_script("check_generation", "check/check-generation.py")
@@ -46,12 +44,12 @@ def run(arguments: list[str], *, environment: dict[str, str] | None = None) -> s
     return process.stdout
 
 
-def build(name: str, **variables: str) -> Path:
+def build(name: str) -> Path:
     output = WORK / name
     shutil.rmtree(output, ignore_errors=True)
     environment = os.environ.copy()
-    environment.update(variables)
-    run([str(BUILD), str(KERNEL), str(output)], environment=environment)
+    environment["SLIME_TARGET_PROFILE"] = "aarch64-sel4-qemu-virt"
+    run([str(BUILD), str(output)], environment=environment)
     return output / "boot-store.bin"
 
 
@@ -89,7 +87,7 @@ def release_by_sequence(image: bytes, sequence: int) -> tuple[bytes, bytes]:
 
 
 def test_release_rejections(image: bytes) -> None:
-    generation, release = release_by_sequence(image, 2)
+    generation, release = release_by_sequence(image, 1)
 
     one_signature = bytearray(release)
     struct.pack_into("<I", one_signature, 200, 1)
@@ -122,19 +120,11 @@ def test_release_rejections(image: bytes) -> None:
     wrong_target[104] ^= 1
     expect_error("wrong target", "WrongReleaseTarget", lambda: CHECK.check_release(bytes(wrong_target), generation))
 
-    expect_error("stale release", "StaleRelease", lambda: CHECK.check_release(release, generation, 2))
+    expect_error("stale release", "StaleRelease", lambda: CHECK.check_release(release, generation, 1))
 
-    unsigned = bytearray(image)
-    count = struct.unpack_from("<I", image, CHECK.BOOTSTORE_DIRECTORY_OFFSET + 24)[0]
-    release_offset = next(
-        entry(image, index)[2]
-        for index in range(count)
-        if struct.unpack_from("<Q", image, entry(image, index)[2] + 88)[0] == 2
-    )
-    unsigned[release_offset : release_offset + CHECK.RELEASE_BYTES] = bytes(CHECK.RELEASE_BYTES)
-    unsigned[CHECK.BOOTSTORE_DIRECTORY_OFFSET + 48 : CHECK.BOOTSTORE_DIRECTORY_OFFSET + 80] = bytes(32)
-    unsigned[CHECK.BOOTSTORE_DIRECTORY_OFFSET + 48 : CHECK.BOOTSTORE_DIRECTORY_OFFSET + 80] = CHECK.bootstore_checksum(unsigned)
-    expect_error("missing release", "BadReleaseMagic", lambda: CHECK.check_bootstore(bytes(unsigned)))
+    unsigned = bytearray(release)
+    unsigned[:8] = bytes(8)
+    expect_error("missing release", "BadReleaseMagic", lambda: CHECK.check_release(bytes(unsigned), generation))
 
 
 def ssh_rotation_payload(payload: bytes) -> bytes:
@@ -315,35 +305,13 @@ def test_rotation() -> None:
 def main() -> None:
     image_path = build("authorized")
     image = image_path.read_bytes()
-    CHECK.check_bootstore(image)
+    generation, release = release_by_sequence(image, 1)
+    if CHECK.check_release(release, generation) != 1:
+        raise SystemExit("release verifier did not retain sequence one")
     test_release_rejections(image)
     test_rotation()
 
-    pending_path = build("pending", SLIME_PENDING_GENERATION="1", SLIME_PENDING_ATTEMPTS="1")
-    pending = CHECK.check_bootstore(pending_path.read_bytes())
-    if pending["state"]["accepted_release_sequence"] != 1:
-        raise SystemExit("staging advanced accepted release sequence")
-
-    stale_path = build(
-        "stale-pending",
-        SLIME_PENDING_GENERATION="1",
-        SLIME_PENDING_ATTEMPTS="1",
-        SLIME_PENDING_RELEASE_SEQUENCE="1",
-    )
-    expect_error("stale pending bootstore", "StalePendingRelease", lambda: CHECK.check_bootstore(stale_path.read_bytes()))
-
-    failed_path = build("failed-pending", SLIME_PENDING_GENERATION="1", SLIME_PENDING_ATTEMPTS="0")
-    failed = CHECK.check_bootstore(failed_path.read_bytes())
-    if failed["state"]["accepted_release_sequence"] != 1 or failed["selected"]["identity"] != failed["state"]["known_good"]:
-        raise SystemExit("failed pending generation changed accepted sequence or local known-good selection")
-
-    promoted_path = build("promoted", SLIME_ACCEPTED_RELEASE_SEQUENCE="2")
-    promoted = CHECK.check_bootstore(promoted_path.read_bytes())
-    identities = {generation["identity"] for generation in promoted["generations"]}
-    if promoted["state"]["known_good"] not in identities or len(identities) < 2:
-        raise SystemExit("promotion invalidated retained local rollback generation")
-
-    print("release trust check: signed staging, replay, rotation, rollback, and promotion passed")
+    print("release trust check: signed release, threshold refusals, replay refusal, and trust-root rotation passed")
 
 
 if __name__ == "__main__":

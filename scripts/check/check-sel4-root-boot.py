@@ -66,7 +66,10 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"SLIME_ROOT graph admitted; legacy SLIMECM images not activated "
         r"components=\d+ slimecm=[1-9]\d* elf=\d+ unrecognized=0",
     ),
-    ("allocator took untyped memory", r"SLIME_ROOT allocator slots=\d+ untypeds=\d+ bytes=\d+"),
+    (
+        "allocator admitted nonzero kernel resources",
+        r"SLIME_ROOT allocator slots=[1-9]\d* untypeds=[1-9]\d* bytes=[1-9]\d*",
+    ),
     (
         "timer source acquired",
         r"SLIME_TIMER acquired irq=30 freq_hz=\d+",
@@ -88,6 +91,32 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"SLIME_TIMER advanced start=\d+ end=\d+ delta=[1-9]\d*",
     ),
     ("timer phase complete", r"SLIME_TIMER OK"),
+    (
+        "two typed frame allocations were independent and exactly accounted",
+        r"SLIME_FOUNDATION frames independent objects_delta=2 slots_delta=2 "
+        r"bytes_delta=8192 caps_deleted=2",
+    ),
+    # P5.4.2a: the root can reach a device. Placed after the timer phase
+    # because that is where the device probe runs — the ordering in this list
+    # is the boot's, not a grouping by subject.
+    #
+    # `untypeds=[1-9]` is BootInfo naming device regions at all: before this
+    # slice the allocator discarded them, so the count was structurally zero.
+    # `granules=4 slots=32` is thirty-two register banks mapped non-cacheably
+    # into the root's own VSpace and read back; a mapping that faulted, or a
+    # watermark mistake landing past its target, produces no line at all.
+    #
+    # `found=0` is asserted, not tolerated. This gate boots with no `-drive`,
+    # so every transport must report device id 0 — a probe that "found"
+    # something here would be reading a constant rather than a register.
+    (
+        "BootInfo named device untyped memory",
+        r"SLIME_ROOT devices untypeds=[1-9]\d*",
+    ),
+    (
+        "every declared virtio transport was mapped and probed, and none is attached",
+        r"SLIME_ROOT virtio probed granules=4 slots=32 found=0",
+    ),
     (
         "clean-exit task staged",
         r"SLIME_ROOT native fixture staged task=0 role=clean-exit \S+ badge=\S+",
@@ -197,6 +226,16 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     # (`task.rs::CleanupRecord::revoke`), so the property here is "every slot a
     # task took is accounted for", not "the free count returns to its start" —
     # the drift B9 measures cannot exist on a monotonic allocator.
+    # The absolute base is *not* the property: it is wherever the allocator's
+    # cursor stands once the root's static tables are placed and its boot-time
+    # allocations are made, so it moves whenever either changes. P5.4.9's larger
+    # tables moved it 832 → 839, P5.4.2a's device probe — which retypes ten
+    # granules to reach four scattered MMIO pages — moved it 839 → 849, and
+    # P5.4.2b's IRQ binding took four more for 853, and P5.4.3's namespace, device, and
+    # scope tables moved it to 860. What is
+    # pinned is each range's width (50) and that the second adjoins the first
+    # exactly. A repin here is expected when the root's boot-time allocation
+    # changes and suspicious otherwise.
     #
     # Interleaved with the settle markers rather than grouped after them: each
     # task is reclaimed as it settles, and this list is order-sensitive, so
@@ -204,7 +243,7 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     ("clean-exit task settled", r"SLIME_ROOT task settled task=0 role=clean-exit termination=Exit\(0\)"),
     (
         "the clean-exit task's slots are all accounted for",
-        r"SLIME_ROOT task reclaimed task=0 source=fabric-service slots=832\.\.882",
+        r"SLIME_ROOT task reclaimed task=0 source=fabric-service slots=865\.\.915",
     ),
     (
         "deliberate-fault task settled",
@@ -212,7 +251,7 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     ),
     (
         "the faulted task's slots adjoin them with no gap and no overlap",
-        r"SLIME_ROOT task reclaimed task=1 source=generation-manager slots=882\.\.932",
+        r"SLIME_ROOT task reclaimed task=1 source=generation-manager slots=915\.\.965",
     ),
     ("both tasks reclaimed", r"SLIME_ROOT cleanup tasks=2 slots=100 live=0"),
     (
@@ -260,6 +299,7 @@ FAILURE_MARKERS: tuple[str, ...] = (
     # marker. `SLIME_ROOT FATAL` above already catches these, but naming the
     # family explicitly keeps the failure legible in the transcript.
     r"SLIME_BUF FAIL .*",
+    r"SLIME_FOUNDATION FAIL .*",
 )
 
 

@@ -5,9 +5,7 @@ import sys as _sys
 from pathlib import Path as _Path
 
 _sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "lib"))
-# This script's own directory, for sibling modules. Python only adds it
-# implicitly when the script is invoked by path from the directory holding it,
-# and `check-transfer.py` runs it from elsewhere.
+# This script's own directory, for sibling modules when imported by host checks.
 _sys.path.insert(0, str(_Path(__file__).resolve().parent))
 
 import copy
@@ -112,12 +110,6 @@ from boot_contracts import (
     GENERATION_OBJECT,
     GENERATION_STATE,
     GENERATION_VERSION,
-    KERNEL_ABI_VERSION,
-    KERNEL_HEADER,
-    KERNEL_MAGIC,
-    KERNEL_RELOCATION,
-    KERNEL_SEGMENT,
-    KERNEL_VERSION,
     TARGET_PROFILES_BY_NAME,
     TargetProfile,
     MAX_COMPONENTS,
@@ -125,15 +117,7 @@ from boot_contracts import (
     MAX_GENERATION_BYTES,
     MAX_GRANTS,
     MAX_HEALTH_COMPONENTS,
-    MAX_KERNEL_IMAGE_BYTES,
-    MAX_KERNEL_RELOCATIONS,
-    MAX_KERNEL_SEGMENTS,
     MAX_OBJECT_PAYLOAD_BYTES,
-    MAX_RECOVERY_STATE_OBJECTS,
-    RECOVERY_INDEX_HEADER,
-    RECOVERY_INDEX_MAGIC,
-    RECOVERY_INDEX_VERSION,
-    RECOVERY_STATE_ENTRY,
     MAX_OBJECTS,
     MAX_STATES,
     MAX_STRING_BYTES,
@@ -152,8 +136,6 @@ from boot_contracts import (
     NORMALIZED_SCHEMAS_HEADER_BYTES,
     NORMALIZED_SCHEMAS_MAGIC,
     NORMALIZED_SCHEMAS_VERSION,
-    SEGMENT_EXEC,
-    SEGMENT_WRITE,
     bootstate_checksum,
     bootstore_checksum,
     generation_identity,
@@ -234,6 +216,90 @@ SEL4_MANIFESTS = {
     / "v1"
     / "fixtures"
     / "sel4-qos.zti",
+    "sel4-operation": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-operation.zti",
+    "sel4-visibility": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-visibility.zti",
+    "sel4-boot": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-boot.zti",
+    "sel4-storage": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-storage.zti",
+    "sel4-store": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-store.zti",
+    "sel4-rollback": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-rollback.zti",
+    "sel4-recovery": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-recovery.zti",
+    "sel4-generation": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-generation.zti",
+    "sel4-directory": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-directory.zti",
+    "sel4-filesystem": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-filesystem.zti",
+    "sel4-dango": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-dango.zti",
+    "sel4-input": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-input.zti",
+    "sel4-powerbox": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-powerbox.zti",
+    "sel4-transfer": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-transfer.zti",
 }
 COMPONENTS_TARGET_DIR = Path(
     os.environ.get("CARGO_TARGET_DIR") or ROOT / "target" / "components"
@@ -445,34 +511,6 @@ def resolve_target_profile(target: object) -> TargetProfile:
         fail(f"unknown target {target!r}; admitted targets: {', '.join(sorted(TARGET_PROFILES_BY_NAME))}")
     return profile
 
-def recovery_manifest(manifest: dict) -> dict:
-    recovery = copy.deepcopy(manifest)
-    recovery["objects"] = [
-        object_ for object_ in recovery["objects"] if object_["id"] in {manifest["kernelObject"], "sha256:init"}
-    ] + [
-        {"id": "sha256:recovery", "kind": "component", "size": 65536},
-        {"id": "recovery-index", "kind": "resource", "size": 4096},
-    ]
-    recovery["components"] = [
-        {"name": "init", "object": "sha256:init", "role": "init", "dependencies": [], "spawnBudget": 1, "commandProfile": []},
-        {"name": "recovery", "object": "sha256:recovery", "role": "service", "dependencies": ["init"], "spawnBudget": 0, "commandProfile": []},
-    ]
-    recovery["grants"] = [
-        {"name": "endpoint-factory", "source": "init", "target": "init", "rights": ["endpointCreate"], "transferable": False},
-        {"name": "recovery-control", "source": "init", "target": "recovery", "rights": ["bootUpdate"], "transferable": False},
-        {"name": "recovery-target", "source": "init", "target": "recovery", "rights": ["blockRead", "blockWrite"], "transferable": False},
-    ]
-    recovery["state"] = []
-    # Recovery boots two components with no data fabric; leaving the graph in
-    # would declare route authority for components that do not exist there.
-    recovery.pop("fabricGraph", None)
-    recovery["health"] = {"bootAttempts": 1, "requiredComponents": ["init", "recovery"]}
-    return recovery
-
-
-def binding_identity(name: str) -> bytes:
-    encoded = name.encode("utf-8")
-    return sha256(b"slime-state-binding-v1" + struct.pack("<H", len(encoded)) + encoded)
 
 
 def holder_identity(name: str) -> bytes:
@@ -1664,49 +1702,6 @@ def build_fabric_graph(graph: dict, component_names: set[str], interfaces: list)
     return header + schema_records + route_records + participant_records + hop_records
 
 
-def build_recovery_index(
-    target_generation: bytes,
-    generation_root: bytes,
-    accepted_release_sequence: int,
-    target_pci_bdf: int,
-    state_entries: list[tuple[str, bytes, int]],
-    state_first_lba: int,
-    state_last_lba: int,
-) -> bytes:
-    if len(state_entries) > MAX_RECOVERY_STATE_OBJECTS:
-        fail("recovery state closure exceeds bound")
-    entries = sorted(
-        ((binding_identity(name), identity, schema) for name, identity, schema in state_entries),
-        key=lambda entry: entry[0],
-    )
-    if any(identity == bytes(32) or schema <= 0 for _, identity, schema in entries):
-        fail("invalid recovery state entry")
-    encoded = b"".join(
-        RECOVERY_STATE_ENTRY.pack(binding, identity, schema, bytes(4))
-        for binding, identity, schema in entries
-    )
-    state_root = sha256(
-        b"".join(binding + identity + struct.pack("<I", schema) for binding, identity, schema in entries)
-    )
-    header = RECOVERY_INDEX_HEADER.pack(
-        RECOVERY_INDEX_MAGIC,
-        RECOVERY_INDEX_VERSION,
-        RECOVERY_INDEX_HEADER.size,
-        0,
-        target_generation,
-        generation_root,
-        state_root,
-        accepted_release_sequence,
-        target_pci_bdf,
-        len(entries),
-        RECOVERY_INDEX_HEADER.size + len(encoded),
-        state_first_lba,
-        state_last_lba,
-        bytes(4),
-    )
-    return header + encoded
-
-
 def component_target_dir(root: Path, target_profile: TargetProfile, name: str) -> Path:
     """Keep profiles sharing one Cargo target from reusing executable outputs."""
     return root / target_profile.name / name
@@ -1887,6 +1882,34 @@ def build_rust_components(
         environment["SLIME_SEL4_CALL_CHECK"] = "1"
     else:
         environment.pop("SLIME_SEL4_CALL_CHECK", None)
+    # P5.4.7's operation plane. Two flags, on the QoS row's rule: the seL4 flag
+    # selects init's composition while the oracle's `SLIME_FABRIC_OPERATION_CHECK`
+    # keeps `fabric-service` and the five participants byte-identical with the
+    # x86 plane. `init.rs` requires the seL4 flag to be absent before it takes
+    # the oracle branch, so generation 20 cannot walk generation 15's layout.
+    if environment.get("SLIME_SEL4_OPERATION_CHECK") == "1":
+        environment["SLIME_SEL4_OPERATION_CHECK"] = "1"
+    else:
+        environment.pop("SLIME_SEL4_OPERATION_CHECK", None)
+    # P5.4.8's visibility plane, on the operation row's rule: the seL4 flag
+    # composes the plane while the oracle's `SLIME_FABRIC_VISIBILITY_CHECK`
+    # selects the unmodified visibility broker and the five participants.
+    if environment.get("SLIME_SEL4_VISIBILITY_CHECK") == "1":
+        environment["SLIME_SEL4_VISIBILITY_CHECK"] = "1"
+    else:
+        environment.pop("SLIME_SEL4_VISIBILITY_CHECK", None)
+    # P5.4.9's full-graph boot, on the same rule. Its oracle counterpart is
+    # `SLIME_FABRIC_BOOT_CHECK`, which every participant reads through
+    # `fabric_boot::active`.
+    if environment.get("SLIME_SEL4_BOOT_CHECK") == "1":
+        environment["SLIME_SEL4_BOOT_CHECK"] = "1"
+    else:
+        environment.pop("SLIME_SEL4_BOOT_CHECK", None)
+    # P5.4.2c's storage plane, on the same rule.
+    if environment.get("SLIME_SEL4_STORAGE_CHECK") == "1":
+        environment["SLIME_SEL4_STORAGE_CHECK"] = "1"
+    else:
+        environment.pop("SLIME_SEL4_STORAGE_CHECK", None)
     if recovery:
         environment["SLIME_RECOVERY_IMAGE"] = "1"
     if environment.get("SLIME_GENERATION_CMD_CHECK") == "1" and candidate_identity is not None:
@@ -1919,10 +1942,30 @@ def build_rust_components(
         "slime-components",
     ]
     if is_json_target(target_profile):
-        # The seL4 transport is a Cargo feature, not something `cfg(target_arch)`
-        # can infer: the seL4 target spec reports `aarch64` exactly as the legacy
-        # AArch64 target does.
-        command += ["--no-default-features", "--features", "sel4"]
+        features = ["sel4"]
+        # The Dango command profile is generated from a manifest, and it must be
+        # *this* generation's: the profile's executable slots are spawn-grant
+        # positions, so a profile built from the oracle's manifest would name
+        # slots this generation never grants.
+        if components is not None and "dango" in components:
+            environment["SLIME_COMMAND_PROFILE_MANIFEST"] = "sel4-dango.zti"
+        # GPT validation and the object store come from `boot-contracts/gpt`,
+        # which needs an allocator. `extern crate alloc` in a dependency makes
+        # every binary in the crate require a `#[global_allocator]`, so the
+        # feature is enabled only for the build whose components declare a heap.
+        if components is not None and any(
+            name in components
+            for name in (
+                "sel4-store-probe",
+                "sel4-rollback-probe",
+                "sel4-recovery-probe",
+                "sel4-generation-manager",
+                "sel4-filesystem-service",
+                "sel4-transfer-probe",
+            )
+        ):
+            features.append("store")
+        command += ["--no-default-features", "--features", ",".join(features)]
         # Build exactly the binaries this generation declares, rather than every
         # binary in the crate. The fabric components are compiled against a
         # generated C8 profile this target has no graph for, so building them
@@ -2076,114 +2119,6 @@ def component_image(name: str, elf: Path, stack_bytes: int, profile: TargetProfi
         profile.required_features,
     )
     return header + records + payload
-
-
-def parse_elf64(data: bytes, profile: TargetProfile) -> tuple[int, list[tuple[int, int, int, int, int]], list[tuple[int, int]]]:
-    if len(data) < 64 or data[:4] != b"\x7fELF" or data[4] != 2 or data[5] != 1:
-        fail("kernel: not a 64-bit little-endian ELF")
-    elf_type, machine = struct.unpack_from("<HH", data, 16)
-    if elf_type != 3 or machine != profile.elf_machine:
-        fail(f"kernel: expected PIE ELF for target {profile.name}")
-    entry, phoff, shoff = struct.unpack_from("<QQQ", data, 24)
-    _, phentsize, phnum, shentsize, shnum = struct.unpack_from("<HHHHH", data, 52)
-    segments: list[tuple[int, int, int, int, int]] = []
-    for index in range(phnum):
-        offset = phoff + index * phentsize
-        if offset + phentsize > len(data):
-            fail("kernel: truncated program header")
-        p_type, p_flags = struct.unpack_from("<II", data, offset)
-        p_offset, p_vaddr, _, p_filesz, p_memsz = struct.unpack_from("<QQQQQ", data, offset + 8)
-        if p_type == 1 and p_memsz:
-            segments.append((p_vaddr, p_offset, p_filesz, p_memsz, p_flags))
-    segments.sort()
-    relocations: list[tuple[int, int]] = []
-    for index in range(shnum):
-        offset = shoff + index * shentsize
-        if offset + shentsize > len(data):
-            fail("kernel: truncated section header")
-        sh_type = struct.unpack_from("<I", data, offset + 4)[0]
-        sh_offset, sh_size = struct.unpack_from("<QQ", data, offset + 24)
-        sh_entsize = struct.unpack_from("<Q", data, offset + 56)[0]
-        if sh_type != 4 or sh_size == 0:  # SHT_RELA
-            continue
-        if sh_entsize != 24 or sh_offset + sh_size > len(data):
-            fail("kernel: malformed RELA section")
-        for rela_offset in range(sh_offset, sh_offset + sh_size, sh_entsize):
-            target, info, addend = struct.unpack_from("<QQq", data, rela_offset)
-            if info & 0xFFFF_FFFF != profile.relative_relocation or info >> 32 != 0:
-                fail(f"kernel: unsupported relocation for target {profile.name}")
-            relocations.append((target, addend))
-    relocations.sort()
-    return entry, segments, relocations
-
-
-def kernel_image(path: Path, profile: TargetProfile) -> bytes:
-    data = path.read_bytes()
-    entry, segments, relocations = parse_elf64(data, profile)
-    if not 1 <= len(segments) <= MAX_KERNEL_SEGMENTS or len(relocations) > MAX_KERNEL_RELOCATIONS:
-        fail("kernel: segment or relocation count exceeds bound")
-    if not segments or segments[0][0] != profile.kernel_preferred_base or entry < profile.kernel_preferred_base:
-        fail("kernel: unexpected preferred base")
-    records = bytearray()
-    payload = bytearray()
-    previous_end = profile.kernel_preferred_base
-    entry_ok = False
-    writable: list[tuple[int, int]] = []
-    image_end = profile.kernel_preferred_base
-    table_bytes = KERNEL_HEADER.size + len(segments) * KERNEL_SEGMENT.size + len(relocations) * KERNEL_RELOCATION.size
-    payload_cursor = table_bytes
-    for vaddr, file_offset, file_len, mem_len, elf_flags in segments:
-        if vaddr % profile.page_bytes or vaddr < previous_end or file_len > mem_len or file_offset + file_len > len(data):
-            fail("kernel: invalid or overlapping segment")
-        flags = (SEGMENT_EXEC if elf_flags & 1 else 0) | (SEGMENT_WRITE if elf_flags & 2 else 0)
-        if flags == SEGMENT_EXEC | SEGMENT_WRITE:
-            fail("kernel: writable executable segment")
-        relative = vaddr - profile.kernel_preferred_base
-        entry_ok |= bool(flags & SEGMENT_EXEC and vaddr <= entry < vaddr + mem_len)
-        if flags & SEGMENT_WRITE:
-            writable.append((relative, relative + mem_len))
-        records += KERNEL_SEGMENT.pack(relative, mem_len, payload_cursor, file_len, flags, 0)
-        payload += data[file_offset : file_offset + file_len]
-        payload_cursor += file_len
-        previous_end = vaddr + mem_len
-        image_end = max(image_end, previous_end)
-    if not entry_ok or image_end - profile.kernel_preferred_base > MAX_KERNEL_IMAGE_BYTES:
-        fail("kernel: entry or image footprint invalid")
-    relocation_records = bytearray()
-    for target, addend in relocations:
-        if target < profile.kernel_preferred_base or target % 8:
-            fail("kernel: relocation target invalid")
-        relative = target - profile.kernel_preferred_base
-        if not any(start <= relative and relative + 8 <= end for start, end in writable):
-            fail("kernel: relocation target outside writable segment")
-        absolute_addend = addend if addend >= profile.kernel_preferred_base else (1 << 64) + addend
-        if not profile.kernel_preferred_base <= absolute_addend <= align_up(image_end, profile.page_bytes):
-            fail("kernel: relocation addend outside image")
-        signed_addend = absolute_addend - (1 << 64) if absolute_addend >= 1 << 63 else absolute_addend
-        relocation_records += KERNEL_RELOCATION.pack(relative, signed_addend)
-    image_len = table_bytes + len(payload)
-    if image_len > MAX_KERNEL_IMAGE_BYTES:
-        fail("kernel: image bytes exceed bound")
-    header = KERNEL_HEADER.pack(
-        KERNEL_MAGIC,
-        KERNEL_VERSION,
-        KERNEL_HEADER.size,
-        KERNEL_ABI_VERSION,
-        0,
-        profile.architecture,
-        profile.abi,
-        profile.page_profile,
-        profile.id,
-        profile.required_features,
-        profile.kernel_preferred_base,
-        entry - profile.kernel_preferred_base,
-        len(segments),
-        len(relocations),
-        table_bytes,
-        image_len,
-    )
-    return header + records + relocation_records + payload
-
 
 def validate_interface_schemas(entries: object) -> list:
     """Admit the manifest's declared interface set and return it compiled.
@@ -2479,15 +2414,10 @@ def build_bootstore(generations: list[bytes]) -> bytes:
 def build_sel4_generation(output: Path, manifest: dict, target_profile: TargetProfile) -> None:
     """Build the `aarch64-sel4-qemu-virt` generation (P5.2).
 
-    A separate path from the custom-kernel build below rather than a set of
-    conditionals threaded through it, because three of that build's assumptions
-    simply do not hold here:
-
-    * there is no Slime kernel ELF to convert — seL4 is the kernel, pinned and
-      built by `scripts/build/build-sel4.py`, so `kernelObject` carries a
-      placeholder the root task's closure check counts but never maps;
-    * there is no recovery generation, because recovery drives block storage
-      through a plane this cutover does not mediate.
+    This is the product generation path. seL4 is the kernel, so the generation
+    carries the pinned external-kernel identity required by the format but no
+    custom-kernel executable. Recovery, storage, and generation management run
+    as userspace planes selected by their manifests.
 
     A fabric graph is *conditional* rather than absent (P5.5.2). Four of the
     five seL4 manifests declare none, and for those the C8 resolution has
@@ -2552,6 +2482,48 @@ def build_sel4_generation(output: Path, manifest: dict, target_profile: TargetPr
         # the base boot layout. Sharing one flag made generation 18 walk
         # generation 14's layout.
         ("sel4-call", ("SLIME_SEL4_CALL_CHECK",)),
+        # P5.4.7: the seL4 flag composes the plane in `init.rs`, and the
+        # oracle's flag selects the unmodified operation broker and
+        # participants — the property this gate exists to demonstrate.
+        (
+            "sel4-operation",
+            ("SLIME_SEL4_OPERATION_CHECK", "SLIME_FABRIC_OPERATION_CHECK"),
+        ),
+        # P5.4.8, on the operation row's rule.
+        (
+            "sel4-visibility",
+            ("SLIME_SEL4_VISIBILITY_CHECK", "SLIME_FABRIC_VISIBILITY_CHECK"),
+        ),
+        # P5.4.9, on the same rule. Every participant's full-graph behaviour is
+        # selected by the oracle's `SLIME_FABRIC_BOOT_CHECK` through
+        # `fabric_boot::active`; only init's composition is seL4's.
+        ("sel4-boot", ("SLIME_SEL4_BOOT_CHECK", "SLIME_FABRIC_BOOT_CHECK")),
+        # P5.4.2c: its own flag, and no oracle counterpart. The x86 storage
+        # probe reads through `buffer_phys`, an ambient pointer the retired
+        # kernel dereferences; the seL4 payload crosses in the transfer window,
+        # so the two components do not share a body.
+        ("sel4-storage", ("SLIME_SEL4_STORAGE_CHECK",)),
+        # P5.4.2c's second half, and likewise no oracle counterpart: M5.4 policy
+        # runs in userspace here, where the oracle keeps it in `store_service`.
+        ("sel4-store", ("SLIME_SEL4_STORE_CHECK",)),
+        # M5.6, likewise userspace: the transition model is `boot_contracts`.
+        ("sel4-rollback", ("SLIME_SEL4_ROLLBACK_CHECK",)),
+        # M5.9, likewise.
+        ("sel4-recovery", ("SLIME_SEL4_RECOVERY_PLANE_CHECK",)),
+        # M6.5, P5.4.3: the generation service moves to userspace too.
+        ("sel4-generation", ("SLIME_SEL4_GENERATION_CHECK",)),
+        # M6.3: the directory capability mechanism the root now owns.
+        ("sel4-directory", ("SLIME_SEL4_DIRECTORY_CHECK",)),
+        # M6.3's other half: the filesystem service over that mechanism.
+        ("sel4-filesystem", ("SLIME_SEL4_FILESYSTEM_CHECK",)),
+        # M6.4: a Dango session over the scripted key source.
+        ("sel4-dango", ("SLIME_SEL4_DANGO_CHECK",)),
+        # The input mechanism M6.4 sits on, gated on its own.
+        ("sel4-input", ("SLIME_SEL4_INPUT_CHECK",)),
+        # M6.6: a chooser handing one narrowed view to a requester.
+        ("sel4-powerbox", ("SLIME_SEL4_POWERBOX_CHECK",)),
+        # M6.7: a generation crossing a persistence boundary.
+        ("sel4-transfer", ("SLIME_SEL4_TRANSFER_CHECK",)),
     ):
         # Set-then-scrub in one pass would let a later row pop a flag an earlier
         # row set: `sel4-qos` and `sel4-stream` share
@@ -2628,132 +2600,23 @@ def build_sel4_generation(output: Path, manifest: dict, target_profile: TargetPr
 
 
 def main() -> None:
-    if len(sys.argv) != 3:
-        fail("usage: build-generation.py <kernel-elf> <output-dir>")
-    kernel = Path(sys.argv[1]).resolve()
-    output = Path(sys.argv[2]).resolve()
+    if len(sys.argv) != 2:
+        fail("usage: build-generation.py <output-dir>")
+    output = Path(sys.argv[1]).resolve()
     manifest = load_manifest()
-    # The manifest names the profile a generation is built for.
-    # `SLIME_TARGET_PROFILE` retargets it so one component graph can produce a
-    # generation for another admitted profile without a second source of truth.
-    # The override rewrites the manifest's own field rather than bypassing it,
-    # so every downstream target check — including the manifest/profile
-    # agreement assertion — still runs against one value. The name is resolved
-    # against the closed profile table, so an unknown or misspelled target fails
-    # here rather than producing an unqualified artifact.
+    # The manifest names the profile a generation is built for. The optional
+    # override rewrites that declaration before the closed profile lookup, so
+    # downstream admission still sees one authoritative target value.
     requested_target = os.environ.get("SLIME_TARGET_PROFILE")
     if requested_target:
         manifest["target"] = requested_target
     target_profile = resolve_target_profile(manifest.get("target"))
     if manifest["formatVersion"] != 1:
         fail("unsupported source formatVersion")
+    if target_profile.name != SEL4_TARGET_PROFILE:
+        fail("custom-kernel generation builds were retired with P5; select a seL4 manifest")
     output.mkdir(parents=True, exist_ok=True)
-    if target_profile.name == SEL4_TARGET_PROFILE:
-        build_sel4_generation(output, manifest, target_profile)
-        return
-    interfaces = validate_interface_schemas(manifest["interfaceSchemas"])
-    resolved_profile = resolve_fabric_profile(manifest, interfaces, selected_profile_name())
-    # Everything below builds from the profile-resolved manifest (B11): the
-    # component set, and therefore the objects, grants, state bindings,
-    # shared-buffer holders, and health policy the generation declares, are
-    # whatever the selected profile resolved. The source manifest is the union
-    # of every profile and is never encoded.
-    manifest = resolved_profile.manifest
-    _, profile_rust_path, _ = write_resolved_profile(output, resolved_profile)
-    policy_number = int(os.environ.get("SLIME_GENERATION_NUMBER") or manifest["generation"])
-    # Generation 1 is the known-good baseline: its components must carry their own
-    # generation number (1) so the generation-manager runs the known-good path,
-    # not the pending/failing path baked for `policy_number`. Booting the two
-    # generations from one build (rollback/bootstate) otherwise makes the
-    # known-good recovery boot report the pending generation's unhealthy status.
-    # The transfer receiver is the exception: there generation 1 *is* the
-    # policy-numbered receiver generation, built with the receiver flag.
-    generation1_number = policy_number if os.environ.get("SLIME_TRANSFER_RECEIVER") == "1" else 1
-    profile_components = {component["name"] for component in manifest["components"]}
-    generation1_components = build_rust_components(
-        generation1_number,
-        profile_rust_path,
-        target_profile,
-        candidate_identity=None,
-        components=profile_components,
-    )
-    payloads: dict[str, bytes] = {manifest["kernelObject"]: kernel_image(kernel, target_profile)}
-    object_by_id = {obj["id"]: obj for obj in manifest["objects"]}
-    if "shared-buffer-budget" in object_by_id:
-        payloads["shared-buffer-budget"] = build_shared_buffer_budget(
-            manifest.get("sharedBufferBudget", [])
-        )
-    if "fabric-graph" in object_by_id:
-        payloads["fabric-graph"] = resolved_profile.graph_bytes
-    elif manifest.get("fabricGraph") is not None:
-        fail("fabricGraph declared without a fabric-graph resource object")
-    for component in manifest["components"]:
-        stack = component.get("stackBytes", COMPONENT_DEFAULT_STACK_BYTES)
-        if not isinstance(stack, int) or stack <= 0 or stack % target_profile.page_bytes or stack > COMPONENT_MAX_STACK_BYTES:
-            fail(f"component {component['name']}: invalid stack")
-        if component["object"] not in object_by_id:
-            fail(f"component {component['name']}: missing object")
-        payloads[component["object"]] = component_image(
-            component["name"], generation1_components / component["name"], stack, target_profile
-        )
-    generation1 = build_generation(manifest, payloads, None, 1, target_profile)
-    generation2_components = build_rust_components(
-        policy_number,
-        profile_rust_path,
-        target_profile,
-        candidate_identity=generation1[24:56],
-        components=profile_components,
-    )
-    for component in manifest["components"]:
-        stack = component.get("stackBytes", COMPONENT_DEFAULT_STACK_BYTES)
-        if not isinstance(stack, int) or stack <= 0 or stack % target_profile.page_bytes or stack > COMPONENT_MAX_STACK_BYTES:
-            fail(f"component {component['name']}: invalid stack")
-        payloads[component["object"]] = component_image(
-            component["name"], generation2_components / component["name"], stack, target_profile
-        )
-    parent_override = os.environ.get("SLIME_GENERATION_PARENT")
-    generation2_parent = bytes.fromhex(parent_override) if parent_override else generation1[24:56]
-    generation2 = build_generation(manifest, payloads, generation2_parent, policy_number, target_profile)
-    recovery = recovery_manifest(manifest)
-    recovery_components = build_rust_components(
-        5,
-        profile_rust_path,
-        target_profile,
-        recovery=True,
-        components={component["name"] for component in recovery["components"]},
-    )
-    state_first_lba = int(os.environ.get("SLIME_RECOVERY_STATE_FIRST_LBA") or BOOTSTORE_CAPACITY // 512)
-    state_last_lba = int(os.environ.get("SLIME_RECOVERY_STATE_LAST_LBA") or state_first_lba + 127)
-    target_bdf = int(os.environ.get("SLIME_RECOVERY_TARGET_BDF") or "0x000018", 0)
-    state_entries: list[tuple[str, bytes, int]] = []
-    generation_root = sha256(b"".join(sorted((generation1[24:56], generation2[24:56]))))
-    recovery_payloads = {
-        manifest["kernelObject"]: payloads[manifest["kernelObject"]],
-        "sha256:init": component_image("init", recovery_components / "init", COMPONENT_DEFAULT_STACK_BYTES, target_profile),
-        "sha256:recovery": component_image("recovery", recovery_components / "recovery", COMPONENT_DEFAULT_STACK_BYTES, target_profile),
-        "recovery-index": build_recovery_index(
-            generation2[24:56],
-            generation_root,
-            2,
-            target_bdf,
-            state_entries,
-            state_first_lba,
-            state_last_lba,
-        ),
-    }
-    recovery_generation = build_generation(recovery, recovery_payloads, None, 5, target_profile)
-    recovery_bootstore = build_bootstore([recovery_generation])
-    bootstore = build_bootstore([generation1, generation2])
-    (output / "generation-1.bin").write_bytes(generation1)
-    (output / "generation-2.bin").write_bytes(generation2)
-    (output / "generation.bin").write_bytes(generation2)
-    (output / "boot-store.bin").write_bytes(bootstore)
-    (output / "recovery-generation.bin").write_bytes(recovery_generation)
-    (output / "recovery-boot-store.bin").write_bytes(recovery_bootstore)
-    print(f"Built generation 1 {generation1[24:56].hex()}")
-    print(f"Built generation 2 {generation2[24:56].hex()} parent={generation1[24:56].hex()}")
-    print(f"Built boot-store.bin ({len(bootstore)} bytes)")
-    print(f"Built recovery generation {recovery_generation[24:56].hex()}")
+    build_sel4_generation(output, manifest, target_profile)
 
 
 if __name__ == "__main__":

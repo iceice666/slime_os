@@ -619,10 +619,8 @@ mod tests {
 
     /// A qualified component image for `profile`, under `magic`.
     ///
-    /// The tail is sized from [`elf_header`] rather than by a literal, so
-    /// widening that fixture cannot silently truncate this one. It was a
-    /// literal `20`, and the mismatch was invisible while nothing compiled
-    /// these tests (B23).
+    /// The helper writes every canonical admission field so mutations below
+    /// isolate the field they intend to test.
     fn qualified(magic: u64, profile: &TargetProfile) -> [u8; wire::HEADER_LEN + ELF_TAIL] {
         let mut bytes = [0u8; wire::HEADER_LEN + ELF_TAIL];
         bytes[wire::OFF_HEADER_MAGIC..][..8].copy_from_slice(&magic.to_le_bytes());
@@ -630,11 +628,15 @@ mod tests {
             .copy_from_slice(&wire::FORMAT_VERSION.to_le_bytes());
         bytes[wire::OFF_HEADER_HEADER_SIZE..][..4]
             .copy_from_slice(&(wire::HEADER_LEN as u32).to_le_bytes());
+        bytes[wire::OFF_HEADER_KERNEL_ABI..][..4]
+            .copy_from_slice(&wire::KERNEL_ABI_VERSION.to_le_bytes());
         bytes[wire::OFF_HEADER_ARCHITECTURE..][..4]
             .copy_from_slice(&profile.architecture.to_le_bytes());
         bytes[wire::OFF_HEADER_ABI..][..4].copy_from_slice(&profile.abi.to_le_bytes());
         bytes[wire::OFF_HEADER_PAGE_PROFILE..][..4]
             .copy_from_slice(&profile.page_profile.to_le_bytes());
+        bytes[wire::OFF_HEADER_STACK_BYTES..][..4]
+            .copy_from_slice(&wire::DEFAULT_STACK_BYTES.to_le_bytes());
         bytes[wire::OFF_HEADER_TARGET_PROFILE..][..4].copy_from_slice(&profile.id.to_le_bytes());
         bytes[wire::OFF_HEADER_REQUIRED_FEATURES..][..8]
             .copy_from_slice(&profile.required_features.to_le_bytes());
@@ -1028,6 +1030,27 @@ mod tests {
         let format = PayloadFormat::classify(&image, sel4_profile());
         assert_eq!(format, PayloadFormat::WrongTarget);
         assert!(!format.is_loadable());
+    }
+
+    #[test]
+    fn malformed_qualified_elf_headers_are_not_loadable() {
+        let profile = sel4_profile();
+        let mut wrong_abi = qualified(wire::ELF_IMAGE_MAGIC, profile);
+        wrong_abi[wire::OFF_HEADER_KERNEL_ABI..][..4]
+            .copy_from_slice(&(wire::KERNEL_ABI_VERSION + 1).to_le_bytes());
+        let mut bad_stack = qualified(wire::ELF_IMAGE_MAGIC, profile);
+        bad_stack[wire::OFF_HEADER_STACK_BYTES..][..4].copy_from_slice(&0u32.to_le_bytes());
+        let mut nonzero_entry = qualified(wire::ELF_IMAGE_MAGIC, profile);
+        nonzero_entry[wire::OFF_HEADER_ENTRY_OFFSET..][..4].copy_from_slice(&1u32.to_le_bytes());
+        let mut nonzero_segments = qualified(wire::ELF_IMAGE_MAGIC, profile);
+        nonzero_segments[wire::OFF_HEADER_SEGMENT_COUNT..][..2]
+            .copy_from_slice(&1u16.to_le_bytes());
+
+        for bytes in [wrong_abi, bad_stack, nonzero_entry, nonzero_segments] {
+            let format = PayloadFormat::classify(&bytes, profile);
+            assert_eq!(format, PayloadFormat::Unrecognized);
+            assert!(!format.is_loadable());
+        }
     }
 
     #[test]

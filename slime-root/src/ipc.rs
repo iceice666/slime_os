@@ -215,17 +215,27 @@ impl Operation {
             | Self::SharedBufferRevoke
             | Self::CapTransfer
             | Self::TransferWindowBind
-            | Self::SupervisionDerive => Mediation::RootService,
-            // Storage, directory, input, recovery, and generation planes have
-            // no seL4 mechanism owner in this cutover. They answer with the
-            // ordinary Slime error rather than faulting the caller.
-            Self::BlockTransact
-            | Self::StoreTransact
-            | Self::RecoveryReconstruct
+            | Self::SupervisionDerive
+            | Self::BlockTransact
+            // M6.3 (P5.4.3). The root owns these three because a namespace root
+            // is unforgeable shared state with an atomic transition — which is
+            // mechanism. What a directory *contains* stays in userspace, built
+            // over the object store, exactly as `StoreTransact` does.
             | Self::DirectoryInspect
             | Self::DirectoryDerive
             | Self::DirectoryCommit
-            | Self::InputRead
+            // M6.4 (P5.4.3): the events come from somewhere a component cannot
+            // reach, which makes delivery mechanism. What a key *means* is
+            // Dango's business and stays in userspace.
+            | Self::InputRead => Mediation::RootService,
+            // Storage, directory, input, recovery, and generation planes have
+            // no seL4 mechanism owner in this cutover. They answer with the
+            // ordinary Slime error rather than faulting the caller.
+            // `BlockTransact` moved to `RootService` with P5.4.2c: the root
+            // owns the device untyped, the DMA frames, and therefore the
+            // driver. Storage *policy* stays in userspace.
+            Self::StoreTransact
+            | Self::RecoveryReconstruct
             | Self::GenerationTransact
             | Self::GenerationReceive => Mediation::Unavailable,
         }

@@ -49,6 +49,34 @@ CALL_IMAGE = BUILD_ROOT / "slime-sel4-call.elf"
 CALL_MANIFEST = BUILD_ROOT / "slime-sel4-call.identity.json"
 QOS_IMAGE = BUILD_ROOT / "slime-sel4-qos.elf"
 QOS_MANIFEST = BUILD_ROOT / "slime-sel4-qos.identity.json"
+OPERATION_IMAGE = BUILD_ROOT / "slime-sel4-operation.elf"
+OPERATION_MANIFEST = BUILD_ROOT / "slime-sel4-operation.identity.json"
+VISIBILITY_IMAGE = BUILD_ROOT / "slime-sel4-visibility.elf"
+VISIBILITY_MANIFEST = BUILD_ROOT / "slime-sel4-visibility.identity.json"
+BOOT_IMAGE = BUILD_ROOT / "slime-sel4-boot.elf"
+BOOT_MANIFEST = BUILD_ROOT / "slime-sel4-boot.identity.json"
+STORAGE_IMAGE = BUILD_ROOT / "slime-sel4-storage.elf"
+STORAGE_MANIFEST = BUILD_ROOT / "slime-sel4-storage.identity.json"
+STORE_IMAGE = BUILD_ROOT / "slime-sel4-store.elf"
+STORE_MANIFEST = BUILD_ROOT / "slime-sel4-store.identity.json"
+ROLLBACK_IMAGE = BUILD_ROOT / "slime-sel4-rollback.elf"
+ROLLBACK_MANIFEST = BUILD_ROOT / "slime-sel4-rollback.identity.json"
+RECOVERY_IMAGE = BUILD_ROOT / "slime-sel4-recovery.elf"
+RECOVERY_MANIFEST = BUILD_ROOT / "slime-sel4-recovery.identity.json"
+GENERATION_IMAGE = BUILD_ROOT / "slime-sel4-generation.elf"
+GENERATION_MANIFEST = BUILD_ROOT / "slime-sel4-generation.identity.json"
+DIRECTORY_IMAGE = BUILD_ROOT / "slime-sel4-directory.elf"
+DIRECTORY_MANIFEST = BUILD_ROOT / "slime-sel4-directory.identity.json"
+FILESYSTEM_IMAGE = BUILD_ROOT / "slime-sel4-filesystem.elf"
+FILESYSTEM_MANIFEST = BUILD_ROOT / "slime-sel4-filesystem.identity.json"
+DANGO_IMAGE = BUILD_ROOT / "slime-sel4-dango.elf"
+DANGO_MANIFEST = BUILD_ROOT / "slime-sel4-dango.identity.json"
+INPUT_IMAGE = BUILD_ROOT / "slime-sel4-input.elf"
+INPUT_MANIFEST = BUILD_ROOT / "slime-sel4-input.identity.json"
+POWERBOX_IMAGE = BUILD_ROOT / "slime-sel4-powerbox.elf"
+POWERBOX_MANIFEST = BUILD_ROOT / "slime-sel4-powerbox.identity.json"
+TRANSFER_IMAGE = BUILD_ROOT / "slime-sel4-transfer.elf"
+TRANSFER_MANIFEST = BUILD_ROOT / "slime-sel4-transfer.identity.json"
 
 # Which generation the root task embeds. That is the only difference between the
 # images this script builds; see `build_application`.
@@ -63,6 +91,20 @@ SUPERVISION_VARIANT = "supervision"
 CROSSING_VARIANT = "crossing"
 CALL_VARIANT = "call"
 QOS_VARIANT = "qos"
+OPERATION_VARIANT = "operation"
+VISIBILITY_VARIANT = "visibility"
+BOOT_VARIANT = "boot"
+STORAGE_VARIANT = "storage"
+STORE_VARIANT = "store"
+ROLLBACK_VARIANT = "rollback"
+RECOVERY_VARIANT = "recovery"
+GENERATION_VARIANT = "generation"
+DIRECTORY_VARIANT = "directory"
+FILESYSTEM_VARIANT = "filesystem"
+DANGO_VARIANT = "dango"
+INPUT_VARIANT = "input"
+POWERBOX_VARIANT = "powerbox"
+TRANSFER_VARIANT = "transfer"
 VARIANT_MANIFESTS = {
     GRAPH_VARIANT: "sel4",
     CHANNEL_VARIANT: "sel4-channel",
@@ -74,6 +116,20 @@ VARIANT_MANIFESTS = {
     CROSSING_VARIANT: "sel4-crossing",
     CALL_VARIANT: "sel4-call",
     QOS_VARIANT: "sel4-qos",
+    OPERATION_VARIANT: "sel4-operation",
+    VISIBILITY_VARIANT: "sel4-visibility",
+    BOOT_VARIANT: "sel4-boot",
+    STORAGE_VARIANT: "sel4-storage",
+    STORE_VARIANT: "sel4-store",
+    ROLLBACK_VARIANT: "sel4-rollback",
+    RECOVERY_VARIANT: "sel4-recovery",
+    GENERATION_VARIANT: "sel4-generation",
+    DIRECTORY_VARIANT: "sel4-directory",
+    FILESYSTEM_VARIANT: "sel4-filesystem",
+    DANGO_VARIANT: "sel4-dango",
+    INPUT_VARIANT: "sel4-input",
+    POWERBOX_VARIANT: "sel4-powerbox",
+    TRANSFER_VARIANT: "sel4-transfer",
 }
 VARIANT_TARGET_DIRS = {
     FIXTURE_VARIANT: "root",
@@ -87,6 +143,20 @@ VARIANT_TARGET_DIRS = {
     CROSSING_VARIANT: "root-crossing",
     CALL_VARIANT: "root-call",
     QOS_VARIANT: "root-qos",
+    OPERATION_VARIANT: "root-operation",
+    VISIBILITY_VARIANT: "root-visibility",
+    BOOT_VARIANT: "root-boot",
+    STORAGE_VARIANT: "root-storage",
+    STORE_VARIANT: "root-store",
+    ROLLBACK_VARIANT: "root-rollback",
+    RECOVERY_VARIANT: "root-recovery",
+    GENERATION_VARIANT: "root-generation",
+    DIRECTORY_VARIANT: "root-directory",
+    FILESYSTEM_VARIANT: "root-filesystem",
+    DANGO_VARIANT: "root-dango",
+    INPUT_VARIANT: "root-input",
+    POWERBOX_VARIANT: "root-powerbox",
+    TRANSFER_VARIANT: "root-transfer",
 }
 VARIANT_IMAGES = {
     FIXTURE_VARIANT: (IMAGE, MANIFEST),
@@ -100,6 +170,20 @@ VARIANT_IMAGES = {
     CROSSING_VARIANT: (CROSSING_IMAGE, CROSSING_MANIFEST),
     CALL_VARIANT: (CALL_IMAGE, CALL_MANIFEST),
     QOS_VARIANT: (QOS_IMAGE, QOS_MANIFEST),
+    OPERATION_VARIANT: (OPERATION_IMAGE, OPERATION_MANIFEST),
+    VISIBILITY_VARIANT: (VISIBILITY_IMAGE, VISIBILITY_MANIFEST),
+    BOOT_VARIANT: (BOOT_IMAGE, BOOT_MANIFEST),
+    STORAGE_VARIANT: (STORAGE_IMAGE, STORAGE_MANIFEST),
+    STORE_VARIANT: (STORE_IMAGE, STORE_MANIFEST),
+    ROLLBACK_VARIANT: (ROLLBACK_IMAGE, ROLLBACK_MANIFEST),
+    RECOVERY_VARIANT: (RECOVERY_IMAGE, RECOVERY_MANIFEST),
+    GENERATION_VARIANT: (GENERATION_IMAGE, GENERATION_MANIFEST),
+    DIRECTORY_VARIANT: (DIRECTORY_IMAGE, DIRECTORY_MANIFEST),
+    FILESYSTEM_VARIANT: (FILESYSTEM_IMAGE, FILESYSTEM_MANIFEST),
+    DANGO_VARIANT: (DANGO_IMAGE, DANGO_MANIFEST),
+    INPUT_VARIANT: (INPUT_IMAGE, INPUT_MANIFEST),
+    POWERBOX_VARIANT: (POWERBOX_IMAGE, POWERBOX_MANIFEST),
+    TRANSFER_VARIANT: (TRANSFER_IMAGE, TRANSFER_MANIFEST),
 }
 
 CHILD_MANIFEST = ROOT / "slime-root" / "child" / "Cargo.toml"
@@ -631,9 +715,6 @@ def build_sel4_generation(manifest: str = "sel4") -> Path:
         [
             sys.executable,
             str(ROOT / "scripts" / "build" / "build-generation.py"),
-            # The seL4 path builds no Slime kernel image: seL4 is the kernel,
-            # and the argument is positional only.
-            os.devnull,
             str(output),
         ],
         environment=environment,
@@ -941,6 +1022,124 @@ def main() -> None:
             "monotonic-time channel, writing a separate image"
         ),
     )
+    parser.add_argument(
+        "--operation-plane",
+        action="store_true",
+        help="embed the native-operation generation (C8.7), writing a separate image",
+    )
+    parser.add_argument(
+        "--visibility-plane",
+        action="store_true",
+        help=(
+            "embed the filtered-introspection and declared-interposition "
+            "generation (C8.8), writing a separate image"
+        ),
+    )
+    parser.add_argument(
+        "--boot-plane",
+        action="store_true",
+        help=(
+            "embed the full-graph bootstrap generation (C8.10): every C8 role "
+            "in one collision-free layout, writing a separate image"
+        ),
+    )
+    parser.add_argument(
+        "--storage-plane",
+        action="store_true",
+        help=(
+            "embed the M5 storage generation (P5.4.2c): a probe holding a block "
+            "capability, writing a separate image"
+        ),
+    )
+    parser.add_argument(
+        "--transfer-plane",
+        action="store_true",
+        help=(
+            "embed the M6.7 transfer generation (P5.4.3): a probe holding a "
+            "read-only source device and a writable receiver, writing a "
+            "separate image"
+        ),
+    )
+    parser.add_argument(
+        "--powerbox-plane",
+        action="store_true",
+        help=(
+            "embed the M6.6 powerbox generation (P5.4.3): a chooser holding "
+            "directory authority the requester lacks, handing over one narrowed "
+            "view on selection, writing a separate image"
+        ),
+    )
+    parser.add_argument(
+        "--input-plane",
+        action="store_true",
+        help=(
+            "embed the input generation (P5.4.3): a probe reading the scripted "
+            "key source through a granted capability, writing a separate image"
+        ),
+    )
+    parser.add_argument(
+        "--dango-plane",
+        action="store_true",
+        help=(
+            "embed the M6.4 dango generation (P5.4.3): a scripted console "
+            "session launching commands through the spawn service, writing a "
+            "separate image"
+        ),
+    )
+    parser.add_argument(
+        "--filesystem-plane",
+        action="store_true",
+        help=(
+            "embed the M6.3 filesystem generation (P5.4.3): a service resolving "
+            "names in a snapshot tree over the object store, and a client that "
+            "must ask it, writing a separate image"
+        ),
+    )
+    parser.add_argument(
+        "--directory-plane",
+        action="store_true",
+        help=(
+            "embed the M6.3 directory generation (P5.4.3): a probe exercising "
+            "scoped views, narrow-only derivation, and the atomic namespace "
+            "commit, writing a separate image"
+        ),
+    )
+    parser.add_argument(
+        "--generation-plane",
+        action="store_true",
+        help=(
+            "embed the M6.5 generation-command generation (P5.4.3): a "
+            "management service holding the only block capability and an "
+            "unprivileged client that must ask, writing a separate image"
+        ),
+    )
+    parser.add_argument(
+        "--recovery-plane",
+        action="store_true",
+        help=(
+            "embed the M5.9 recovery generation (P5.4.2c): a probe "
+            "reconstructing a verified root from a signed index while an "
+            "ungranted disk stays untouched, writing a separate image"
+        ),
+    )
+    parser.add_argument(
+        "--rollback-plane",
+        action="store_true",
+        help=(
+            "embed the M5.6 rollback generation (P5.4.2c): a probe walking the "
+            "BootState transition model on two durable slots, writing a "
+            "separate image"
+        ),
+    )
+    parser.add_argument(
+        "--store-plane",
+        action="store_true",
+        help=(
+            "embed the M5.4 object-store generation (P5.4.2c): a probe running "
+            "GPT validation and the object store in userspace over a block "
+            "capability, writing a separate image"
+        ),
+    )
     arguments = parser.parse_args()
     selected = [
         variant
@@ -955,6 +1154,20 @@ def main() -> None:
             (CROSSING_VARIANT, arguments.crossing_plane),
             (CALL_VARIANT, arguments.call_plane),
             (QOS_VARIANT, arguments.qos_plane),
+            (OPERATION_VARIANT, arguments.operation_plane),
+            (VISIBILITY_VARIANT, arguments.visibility_plane),
+            (BOOT_VARIANT, arguments.boot_plane),
+            (STORAGE_VARIANT, arguments.storage_plane),
+            (STORE_VARIANT, arguments.store_plane),
+            (ROLLBACK_VARIANT, arguments.rollback_plane),
+            (RECOVERY_VARIANT, arguments.recovery_plane),
+            (GENERATION_VARIANT, arguments.generation_plane),
+            (DIRECTORY_VARIANT, arguments.directory_plane),
+            (FILESYSTEM_VARIANT, arguments.filesystem_plane),
+            (DANGO_VARIANT, arguments.dango_plane),
+            (INPUT_VARIANT, arguments.input_plane),
+            (POWERBOX_VARIANT, arguments.powerbox_plane),
+            (TRANSFER_VARIANT, arguments.transfer_plane),
         )
         if chosen
     ]

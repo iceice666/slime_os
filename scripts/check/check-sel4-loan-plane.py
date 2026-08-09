@@ -141,11 +141,11 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         # both refused; the second is the sharper one, since it is the buffer's
         # own slot -- authority this component genuinely holds.
         "an empty slot cannot name a receiver",
-        r"SLIME_GRAPH loan refused task=\d+ slot=\d+ class=absent",
+        r"SLIME_GRAPH loan refused task=\d+ slot=\d+ class=absent-or-ambiguous",
     ),
     (
         "a slot holding the wrong kind cannot name a receiver",
-        r"SLIME_GRAPH loan refused task=\d+ slot=\d+ class=absent",
+        r"SLIME_GRAPH loan refused task=\d+ slot=\d+ class=absent-or-ambiguous",
     ),
     ("init observed both refusals", r"\[init\] unnamed receiver denied"),
     (
@@ -179,8 +179,12 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         # The transfer. This is the mechanism P5.3.1 refused outright and this
         # slice adds, and it is narrow by construction: a loan is the only
         # resource kind the root will move.
-        "the loan capability moved to the receiver",
-        r"SLIME_GRAPH capability transfer task=\d+ channel=\d+ to=\d+ caps=1",
+        #
+        # `side=` rather than `to=` since B25: an end may have co-holders, so
+        # the transfer binds to the receiving *side* of the channel and is
+        # collected by whichever holder dequeues the message.
+        "the loan capability moved to the receiving side",
+        r"SLIME_GRAPH capability transfer task=\d+ channel=\d+ side=\w+ caps=1",
     ),
     ("init sent the descriptor", r"\[init\] loan transferred"),
     (

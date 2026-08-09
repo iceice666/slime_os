@@ -549,6 +549,76 @@ pub fn block_transact(slot: u32, request: &[u8; 64], reply: &mut [u8; 64]) -> i6
     transact(SYS_BLOCK_TRANSACT, slot, request, reply)
 }
 
+/// A block request whose reply carries a sector behind the record (P5.4.2c).
+///
+/// [`transact`]'s reply is exactly 64 bytes, which is right for the store,
+/// generation, and directory protocols and wrong for a read: the sector has
+/// nowhere to go. On the retired kernel the caller passed a buffer pointer in
+/// `buffer_phys` and the kernel wrote through it; there is no such ambient
+/// addressing here, so the sector comes back in the same window the request
+/// went out through, immediately after the reply record.
+pub fn block_transact_sector(
+    slot: u32,
+    request: &[u8; 64],
+    reply_out: &mut [u8; 64],
+    sector: &mut [u8; 512],
+) -> i64 {
+    let mut staged = [0u8; 64 + 512];
+    staged[..64].copy_from_slice(request);
+    let transfer = match stage(staged[..64].as_ref(), &[]) {
+        Ok(transfer) => transfer,
+        Err(error) => return error,
+    };
+    let (result, returned) =
+        match outcome(&call(SYS_BLOCK_TRANSACT, &[slot as Word, transfer as Word])) {
+            Ok(pair) => pair,
+            Err(error) => return error,
+        };
+    if result < 0 {
+        return result;
+    }
+    match collect(returned, staged.as_mut_slice(), None) {
+        Ok(length) if length >= TRANSACT_BYTES => {
+            reply_out.copy_from_slice(&staged[..TRANSACT_BYTES]);
+            if length == TRANSACT_BYTES + 512 {
+                sector.copy_from_slice(&staged[TRANSACT_BYTES..TRANSACT_BYTES + 512]);
+            }
+            result
+        }
+        Ok(_) => ERR_INVALID_ARG,
+        Err(error) => error,
+    }
+}
+
+/// A block write, whose sector crosses in the request rather than the reply.
+pub fn block_transact_write(
+    slot: u32,
+    request: &[u8; 64],
+    sector: &[u8; 512],
+    reply_out: &mut [u8; 64],
+) -> i64 {
+    let mut staged = [0u8; 64 + 512];
+    staged[..64].copy_from_slice(request);
+    staged[64..].copy_from_slice(sector);
+    let transfer = match stage(staged.as_slice(), &[]) {
+        Ok(transfer) => transfer,
+        Err(error) => return error,
+    };
+    let (result, returned) =
+        match outcome(&call(SYS_BLOCK_TRANSACT, &[slot as Word, transfer as Word])) {
+            Ok(pair) => pair,
+            Err(error) => return error,
+        };
+    if result < 0 {
+        return result;
+    }
+    match collect(returned, reply_out.as_mut_slice(), None) {
+        Ok(TRANSACT_BYTES) => result,
+        Ok(_) => ERR_INVALID_ARG,
+        Err(error) => error,
+    }
+}
+
 pub fn store_transact(slot: u32, request: &[u8; 64], reply: &mut [u8; 64]) -> i64 {
     transact(SYS_STORE_TRANSACT, slot, request, reply)
 }

@@ -1,0 +1,51 @@
+Root defect found by the C8.8 plane: DebugWrite was bounded at 64 bytes
+Date: 2026-08-08
+
+Symptom, first boot of the sel4-visibility image:
+
+  [fabric-view]
+  [fabric-view]
+  [fabric-view]
+
+Every C8.8 view and trace record printed as a bare prefix with no payload.
+The scenario itself was correct — the transcript reached
+`[fabric] visibility plane complete` and every participant exited zero — so the
+records were being written and then discarded.
+
+Mechanism:
+
+  visibility_broker::write_record serializes a 64-byte record as 128 hex
+  characters and calls slime_rt::debug_write on prefix, then payload, then
+  newline.
+
+  slime-root's DebugWrite arm read the staged payload with
+  transfer_window::read_staged, whose bound is MAX_STAGED_BYTES ==
+  ipc::MAX_MESSAGE_BYTES == 64. A 128-byte write was refused as
+  InvalidLength, the arm replied with an error, and debug_write returned a
+  negative value the component ignores.
+
+  So the prefix (13 bytes) printed and the payload did not.
+
+Why the narrow reader was wrong here:
+
+  A diagnostic line is not a message. It crosses no channel, is delivered to no
+  component, and is bounded by nothing the IPC contract states. MAX_MESSAGE_BYTES
+  is the channel-message bound, and DebugWrite was the only windowed operation
+  reading a non-message payload through it.
+
+  The wide reader already exists for exactly this shape: read_staged_array
+  bounds at MAX_STAGED_ARRAY_BYTES (1 KiB) and refuses any descriptor naming a
+  capability, which is the same rule the narrow path enforced by hand for this
+  arm. The spawn-grant array (B15's six-grant case, 96 bytes) already crosses
+  the same window through it.
+
+Fix: slime-root/src/main.rs, Operation::DebugWrite now reads with
+read_staged_array.
+
+Observed after the fix, same image:
+
+  [fabric-view] 46565254010001010900000074656c656d6574727900000000000000f6e9...
+  [fabric-view] 4656514f0100020074656c656d65747279000000000000000102010104...
+
+No other seL4 gate was affected — every marker any of them asserts is well
+under 64 bytes — and all thirteen were re-run to confirm it.

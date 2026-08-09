@@ -1,0 +1,11 @@
+Command: just test_sel4_root
+Date: 2026-08-08
+Exit: 0
+
+Terminal result:
+slime-root host tests: 113/113 across 13 modules
+
+Note:
+The Justfile's pinned expectation (B23) moved 112 -> 113 with this change. The
+added test is `channel::tests::an_entry_no_table_names_counts_no_live_queue`,
+which pins the `live_queues` nameability fix found by `just sel4_crossing_check`.

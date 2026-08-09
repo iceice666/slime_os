@@ -122,12 +122,13 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"SLIME_GRAPH spawn authorized task=\d+ slot=1 component=console grants=1",
     ),
     (
-        # The distribution step. The end moves to the child at *the child's*
+        # The distribution step. The end is copied to the child at *the child's*
         # slot 0, which is the only slot `console.rs` addresses -- and that
         # component never learns the number, because the order of the parent's
-        # grant list is what fixes it.
+        # grant list is what fixes it. Since B25 the parent keeps its own slot,
+        # so this asserts placement rather than a move.
         "console received its channel end at slot 0",
-        r"SLIME_GRAPH channel handed parent=\d+ child=\d+ key=\d+ slot=0",
+        r"SLIME_GRAPH channel copied parent=\d+ child=\d+ key=\d+ side=\w+ slot=0",
     ),
     (
         "console was constructed with its declared capabilities",
@@ -142,13 +143,11 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"\[init\] live child reports no outcome",
     ),
     (
-        # An endpoint grant is a move, not a copy: a channel's queues are
-        # resolved by which task holds each end, so a parent that kept a
-        # working copy would hold an end the child also holds. Init keeps the
-        # half it did not grant, and the gate asserts both halves of that --
-        # the granted slot stops resolving, the retained one still works.
-        "the granted end left the parent and the retained end still works",
-        r"\[init\] handed channel end released",
+        # A spawn grant is a copy, matching the x86 oracle: the child receives
+        # the endpoint side and the parent can still resolve the original slot.
+        # The peer half working proves the pair itself was not disturbed.
+        "the granted end remained usable beside the child",
+        r"\[init\] granted channel end copied",
     ),
     # -- required check: termination observed through a supervision handle --
     (
@@ -169,23 +168,19 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     (
         # The other half of B15's exit condition: the child holds all six at
         # the slots its numbering fixes. A root that admitted the wide array
-        # but distributed only the first four would reach the marker above and
-        # fail here.
-        "all six grants moved to the child",
+        # but installed only the first four reaches the authorization marker
+        # and fails in the component.
+        "all six grants were copied to the child",
         r"SLIME_GRAPH spawned task=\d+ child=\d+ component=sysinfo grants=6 "
         r"channels=6 handle=\d+",
     ),
     ("sysinfo was constructed", r"\[init\] sysinfo spawned"),
     (
-        # The same fact from the parent's side, which is the side that can
-        # observe it: `sysinfo` runs unmodified and reads only slot 0. An
-        # endpoint grant is a move, so every granted slot has left init's table
-        # -- each answers `ERR_BAD_CAP`, which is what an unresolvable channel
-        # slot answers on both kernels -- while every retained half still sends.
-        # That distinguishes six ends genuinely handed over from six counted in
-        # a marker.
-        "the parent observed all six ends move",
-        r"\[init\] six grants delivered",
+        # The parent directly reuses every source slot after spawn. Success or
+        # queue-full is accepted in the component; either means the slot still
+        # resolves, which is the B25 copy property.
+        "the parent reused all six copied ends",
+        r"\[init\] six grants copied",
     ),
     (
         # The launch context, sent down the half init kept. `sysinfo` is

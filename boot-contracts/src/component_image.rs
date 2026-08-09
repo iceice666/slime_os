@@ -1,19 +1,11 @@
-//! Component image target qualification (`contracts/component/v2`).
+//! Component-image admission (`contracts/component/v2`).
 //!
-//! The kernel owns full component-image decoding: segment bounds, entry
-//! placement, W^X, and the mapped footprint are its concern because it is the
-//! thing that maps them. Stage-0 never maps a component, but it does copy a
-//! whole generation — executable payloads included — and hand it to a kernel
-//! that will. So it needs one narrower answer before that copy: *which target
-//! is this executable admitted for?*
+//! This module owns the byte-level contract shared by stage-0 and `slime-root`:
+//! revision and target qualification, canonical header fields, declared stack
+//! bounds, native-ELF wrapper shape, and the retained segment-table rules that
+//! survive the custom loader's retirement.
 //!
-//! This module answers exactly that and nothing more. It reads the header,
-//! establishes the revision, and reports the declared qualification. Keeping it
-//! beside the kernel-image reader rather than duplicating a second structural
-//! decoder is deliberate: two full decoders would be two chances to disagree
-//! about what a byte means, and the kernel's is authoritative.
-//!
-//! A retained v1 image is not an unqualified image. It is an
+//! A retained v1 image is not architecture-neutral. It is an
 //! `x86_64-qemu-virtio` image whose target was implied by the only builder that
 //! could produce it, and it is reported as exactly that.
 
@@ -37,9 +29,16 @@ pub enum ComponentTargetError {
     BadMagic,
     /// The magic is known but paired with a version that revision never used.
     UnsupportedVersion,
-    /// A v2 reserved field is nonzero, so the image was written by something
-    /// that does not agree with this contract.
+    /// The component contract ABI does not match this decoder.
+    KernelAbiMismatch,
+    /// A reserved field is nonzero, so the writer disagrees with the contract.
     NonZeroReserved,
+    /// The declared stack is zero, misaligned, or above the contract ceiling.
+    BadStack,
+    /// A revision carries fields that must be canonical for its payload shape.
+    BadHeaderShape,
+    /// A native ELF body exceeds the component-image ceiling.
+    ImageTooLarge,
     /// The image is qualified, but not for the profile it was offered to.
     Target(TargetError),
 }
@@ -117,12 +116,11 @@ pub fn target(blob: &[u8]) -> Result<(Revision, ImageTarget), ComponentTargetErr
     }
 }
 
-/// The native ELF an [`Revision::Elf`] image carries, after its target has been
-/// admitted for `profile`.
+/// The native ELF an [`Revision::Elf`] image carries, after its complete wrapper
+/// has been admitted for `profile`.
 ///
-/// Admission runs first and its failure is returned unchanged, so a wrong-target
-/// image never yields bytes a caller could map — the qualification check is not
-/// something the caller can forget to do before reaching the payload.
+/// Admission runs first and its failure is returned unchanged, so malformed or
+/// wrong-target bytes never reach a loader.
 pub fn admit_elf<'a>(
     blob: &'a [u8],
     profile: &TargetProfile,
@@ -130,18 +128,60 @@ pub fn admit_elf<'a>(
     if admit(blob, profile)? != Revision::Elf {
         return Err(ComponentTargetError::UnsupportedVersion);
     }
-    blob.get(ELF_HEADER_LEN..)
+    let elf = blob
+        .get(ELF_HEADER_LEN..)
         .filter(|elf| !elf.is_empty())
-        .ok_or(ComponentTargetError::Truncated)
+        .ok_or(ComponentTargetError::Truncated)?;
+    validate_elf_len(elf.len())?;
+    Ok(elf)
 }
 
-/// Admit an image for `profile`, or report the axis that disagrees.
+/// Admit an image for `profile`, including the canonical fields shared by every
+/// consumer of the wrapper.
 pub fn admit(blob: &[u8], profile: &TargetProfile) -> Result<Revision, ComponentTargetError> {
     let (revision, declared) = target(blob)?;
     profile
         .admit(&declared)
         .map_err(ComponentTargetError::Target)?;
+    validate_header(blob, revision, profile)?;
     Ok(revision)
+}
+
+fn validate_header(
+    blob: &[u8],
+    revision: Revision,
+    profile: &TargetProfile,
+) -> Result<(), ComponentTargetError> {
+    if u32_at(blob, wire::OFF_HEADER_KERNEL_ABI)? != wire::KERNEL_ABI_VERSION {
+        return Err(ComponentTargetError::KernelAbiMismatch);
+    }
+    let stack_offset = if revision == Revision::V1 {
+        wire::OFF_LEGACY_HEADER_STACK_BYTES
+    } else {
+        wire::OFF_HEADER_STACK_BYTES
+    };
+    let stack_bytes = u32_at(blob, stack_offset)?;
+    if stack_bytes == 0
+        || u64::from(stack_bytes) % profile.page_bytes != 0
+        || stack_bytes > MAX_STACK_BYTES
+    {
+        return Err(ComponentTargetError::BadStack);
+    }
+    if revision == Revision::Elf
+        && (u32_at(blob, wire::OFF_HEADER_ENTRY_OFFSET)? != 0
+            || u16_at(blob, wire::OFF_HEADER_SEGMENT_COUNT)? != 0)
+    {
+        return Err(ComponentTargetError::BadHeaderShape);
+    }
+    Ok(())
+}
+
+fn validate_elf_len(len: usize) -> Result<(), ComponentTargetError> {
+    if u64::try_from(len).map_or(true, |len| len > MAX_IMAGE_BYTES) {
+        Err(ComponentTargetError::ImageTooLarge)
+    } else {
+        Ok(())
+    }
 }
 
 fn u16_at(bytes: &[u8], offset: usize) -> Result<u16, ComponentTargetError> {
@@ -180,6 +220,8 @@ pub enum SegmentError {
     BadSegmentCount,
     /// A flag outside the defined set, or `WRITE | EXEC` together (W^X).
     BadFlags,
+    /// A reserved field is nonzero.
+    NonZeroReserved,
     /// A misaligned load offset, an empty memory range, `file_len` past
     /// `mem_len`, or ranges out of order or overlapping.
     BadSegment,
@@ -236,6 +278,9 @@ pub fn validate_segments(
             .get(index * SEGMENT_LEN..)
             .and_then(WireSegmentRecord::decode)
             .ok_or(SegmentError::Truncated)?;
+        if record.reserved != 0 {
+            return Err(SegmentError::NonZeroReserved);
+        }
         // W^X, and no undefined bits: a segment that is both writable and
         // executable is refused as an image property, before any loader has
         // the chance to map it that way.
@@ -309,6 +354,8 @@ mod tests {
         bytes[wire::OFF_HEADER_ABI..][..4].copy_from_slice(&profile.abi.to_le_bytes());
         bytes[wire::OFF_HEADER_PAGE_PROFILE..][..4]
             .copy_from_slice(&profile.page_profile.to_le_bytes());
+        bytes[wire::OFF_HEADER_STACK_BYTES..][..4]
+            .copy_from_slice(&wire::DEFAULT_STACK_BYTES.to_le_bytes());
         bytes[wire::OFF_HEADER_TARGET_PROFILE..][..4].copy_from_slice(&profile.id.to_le_bytes());
         bytes[wire::OFF_HEADER_REQUIRED_FEATURES..][..8]
             .copy_from_slice(&profile.required_features.to_le_bytes());
@@ -340,6 +387,10 @@ mod tests {
             .copy_from_slice(&LEGACY_FORMAT_VERSION.to_le_bytes());
         bytes[wire::OFF_HEADER_HEADER_SIZE..][..4]
             .copy_from_slice(&(LEGACY_HEADER_LEN as u32).to_le_bytes());
+        bytes[wire::OFF_HEADER_KERNEL_ABI..][..4]
+            .copy_from_slice(&wire::KERNEL_ABI_VERSION.to_le_bytes());
+        bytes[wire::OFF_LEGACY_HEADER_STACK_BYTES..][..4]
+            .copy_from_slice(&wire::DEFAULT_STACK_BYTES.to_le_bytes());
         bytes
     }
 
@@ -430,6 +481,14 @@ mod tests {
     }
 
     #[test]
+    fn retained_v1_header_size_mismatch_fails_closed() {
+        let mut header = v1_header();
+        header[wire::OFF_HEADER_HEADER_SIZE..][..4]
+            .copy_from_slice(&(HEADER_LEN as u32).to_le_bytes());
+        assert_eq!(target(&header), Err(ComponentTargetError::Truncated));
+    }
+
+    #[test]
     fn a_wrong_target_image_is_refused_for_the_profile_that_named_it() {
         let board = TargetProfile::by_name("aarch64-rpi5").expect("declared profile");
         let x86 = TargetProfile::legacy().expect("legacy profile");
@@ -481,6 +540,63 @@ mod tests {
             Err(ComponentTargetError::Target(
                 TargetError::PageProfileMismatch
             ))
+        );
+    }
+
+    #[test]
+    fn wrong_component_abi_is_refused_before_loading() {
+        let profile = TargetProfile::by_name("aarch64-sel4-qemu-virt").expect("declared profile");
+        let (mut image, len) = elf_image(profile, ELF_BODY);
+        image[wire::OFF_HEADER_KERNEL_ABI..][..4]
+            .copy_from_slice(&(wire::KERNEL_ABI_VERSION + 1).to_le_bytes());
+        assert_eq!(
+            admit_elf(&image[..len], profile),
+            Err(ComponentTargetError::KernelAbiMismatch)
+        );
+    }
+
+    #[test]
+    fn stack_declaration_is_bounded_and_page_aligned() {
+        let profile = TargetProfile::by_name("aarch64-sel4-qemu-virt").expect("declared profile");
+        for stack in [0, PAGE - 1, MAX_STACK_BYTES + PAGE] {
+            let (mut image, len) = elf_image(profile, ELF_BODY);
+            image[wire::OFF_HEADER_STACK_BYTES..][..4].copy_from_slice(&stack.to_le_bytes());
+            assert_eq!(
+                admit_elf(&image[..len], profile),
+                Err(ComponentTargetError::BadStack)
+            );
+        }
+        let (mut image, len) = elf_image(profile, ELF_BODY);
+        image[wire::OFF_HEADER_STACK_BYTES..][..4].copy_from_slice(&MAX_STACK_BYTES.to_le_bytes());
+        assert_eq!(admit_elf(&image[..len], profile), Ok(ELF_BODY));
+    }
+
+    #[test]
+    fn elf_wrapper_requires_zero_segment_fields() {
+        let profile = TargetProfile::by_name("aarch64-sel4-qemu-virt").expect("declared profile");
+        for (offset, value) in [
+            (wire::OFF_HEADER_ENTRY_OFFSET, 1u32),
+            (wire::OFF_HEADER_SEGMENT_COUNT, 1u32),
+        ] {
+            let (mut image, len) = elf_image(profile, ELF_BODY);
+            if offset == wire::OFF_HEADER_SEGMENT_COUNT {
+                image[offset..][..2].copy_from_slice(&(value as u16).to_le_bytes());
+            } else {
+                image[offset..][..4].copy_from_slice(&value.to_le_bytes());
+            }
+            assert_eq!(
+                admit_elf(&image[..len], profile),
+                Err(ComponentTargetError::BadHeaderShape)
+            );
+        }
+    }
+
+    #[test]
+    fn elf_body_size_is_bounded_without_allocating_the_body() {
+        assert_eq!(validate_elf_len(MAX_IMAGE_BYTES as usize), Ok(()));
+        assert_eq!(
+            validate_elf_len(MAX_IMAGE_BYTES as usize + 1),
+            Err(ComponentTargetError::ImageTooLarge)
         );
     }
 
@@ -634,6 +750,16 @@ mod tests {
                 Err(SegmentError::BadFlags),
             );
         }
+    }
+
+    #[test]
+    fn nonzero_segment_reserved_field_is_refused() {
+        let mut records = segment(0, PAGE, 0, 32, SEGMENT_FLAG_EXEC);
+        records[wire::OFF_SEGMENT_RESERVED..][..2].copy_from_slice(&1u16.to_le_bytes());
+        assert_eq!(
+            validate_segments(&records, &[0u8; 64], 1, 0, PAGE),
+            Err(SegmentError::NonZeroReserved),
+        );
     }
 
     /// Misaligned, empty, and file-longer-than-memory, which are the three

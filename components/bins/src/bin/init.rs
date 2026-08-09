@@ -195,12 +195,27 @@ fn main() {
         slime_rt::debug_write(b"[init] fabric call complete\n");
         slime_rt::exit(0);
     }
-    if option_env!("SLIME_FABRIC_OPERATION_CHECK") == Some("1") {
+    // Both halves of the guard, on the QoS branch's rule. P5.4.7's seL4 plane
+    // sets this same flag so `fabric-service` and the five participants select
+    // their operation behaviour from the oracle's own switch and stay
+    // byte-identical between the planes — but its *composition* is
+    // `drive_operation_plane`, which mints its control channels rather than
+    // reading them from the base boot layout. Without the second half this
+    // branch would claim generation 20 and walk generation 15's layout.
+    if option_env!("SLIME_FABRIC_OPERATION_CHECK") == Some("1")
+        && option_env!("SLIME_SEL4_OPERATION_CHECK") != Some("1")
+    {
         launch_fabric_operations();
         slime_rt::debug_write(b"[init] fabric operation complete\n");
         slime_rt::exit(0);
     }
-    if option_env!("SLIME_FABRIC_VISIBILITY_CHECK") == Some("1") {
+    // Both halves of the guard, on the two branches above. P5.4.8's seL4 plane
+    // sets this same flag so the visibility broker and the five participants
+    // stay byte-identical between the planes; its composition is
+    // `drive_visibility_plane`, which mints its control channels.
+    if option_env!("SLIME_FABRIC_VISIBILITY_CHECK") == Some("1")
+        && option_env!("SLIME_SEL4_VISIBILITY_CHECK") != Some("1")
+    {
         launch_fabric_graph();
         slime_rt::debug_write(b"[init] fabric visibility complete\n");
         slime_rt::exit(0);
@@ -209,6 +224,15 @@ fn main() {
     // hands init a different capability layout for this generation, so keying on
     // the env alone would make generation 1 — built with the same env by
     // `build-generation.py` — walk a layout it was not given.
+    //
+    // P5.4.9 adds generation 22, the seL4 full-graph boot. It runs
+    // `drive_boot_plane` rather than this one: the composition is the oracle's,
+    // but this root numbers a launched component's declared channel ends from
+    // its own cursor, so the sixteen control channels must be minted here
+    // exactly as every other seL4 plane mints its own.
+    if option_env!("SLIME_SEL4_BOOT_CHECK") == Some("1") {
+        drive_boot_plane();
+    }
     if option_env!("SLIME_FABRIC_BOOT_CHECK") == Some("1")
         && option_env!("SLIME_GENERATION_NUMBER") == Some("17")
     {
@@ -269,6 +293,98 @@ fn main() {
     if option_env!("SLIME_SEL4_CALL_CHECK") == Some("1") {
         drive_call_plane();
         slime_rt::debug_write(b"[init] call plane complete\n");
+        slime_rt::exit(0);
+    }
+    // P5.4.7's C8.7 operation plane, on the call plane's rule: the participants
+    // and the broker are the oracle's, selected by `SLIME_FABRIC_OPERATION_CHECK`
+    // which this generation also sets; only init's composition is seL4's.
+    if option_env!("SLIME_SEL4_OPERATION_CHECK") == Some("1") {
+        drive_operation_plane();
+        slime_rt::debug_write(b"[init] operation plane complete\n");
+        slime_rt::exit(0);
+    }
+    // P5.4.2c's M5 storage plane, on the same rule again. The probe holds the
+    // block capability the generation grants it and nothing else it needs; init
+    // spawns it and waits.
+    if option_env!("SLIME_SEL4_TRANSFER_CHECK") == Some("1") {
+        drive_probe_plane(
+            SEL4_TRANSFER_PROBE_SLOT,
+            b"[init] transfer probe spawned\n",
+            b"transfer",
+        );
+        slime_rt::debug_write(b"[init] transfer plane complete\n");
+        return;
+    }
+    if option_env!("SLIME_SEL4_POWERBOX_CHECK") == Some("1") {
+        drive_powerbox_plane();
+        slime_rt::debug_write(b"[init] powerbox plane complete\n");
+        return;
+    }
+    if option_env!("SLIME_SEL4_INPUT_CHECK") == Some("1") {
+        drive_probe_plane(
+            SEL4_INPUT_PROBE_SLOT,
+            b"[init] input probe spawned\n",
+            b"input",
+        );
+        slime_rt::debug_write(b"[init] input plane complete\n");
+        return;
+    }
+    if option_env!("SLIME_SEL4_DANGO_CHECK") == Some("1") {
+        drive_dango_plane();
+        slime_rt::debug_write(b"[init] dango plane complete\n");
+        return;
+    }
+    if option_env!("SLIME_SEL4_FILESYSTEM_CHECK") == Some("1") {
+        drive_filesystem_plane();
+        slime_rt::debug_write(b"[init] filesystem plane complete\n");
+        return;
+    }
+    if option_env!("SLIME_SEL4_DIRECTORY_CHECK") == Some("1") {
+        drive_probe_plane(
+            SEL4_DIRECTORY_PROBE_SLOT,
+            b"[init] directory probe spawned\n",
+            b"directory",
+        );
+        slime_rt::debug_write(b"[init] directory plane complete\n");
+        return;
+    }
+    if option_env!("SLIME_SEL4_GENERATION_CHECK") == Some("1") {
+        drive_generation_plane();
+        slime_rt::debug_write(b"[init] generation plane complete\n");
+        return;
+    }
+    if option_env!("SLIME_SEL4_RECOVERY_PLANE_CHECK") == Some("1") {
+        drive_probe_plane(
+            SEL4_RECOVERY_PROBE_SLOT,
+            b"[init] recovery probe spawned\n",
+            b"recovery",
+        );
+        slime_rt::debug_write(b"[init] recovery plane complete\n");
+        return;
+    }
+    if option_env!("SLIME_SEL4_ROLLBACK_CHECK") == Some("1") {
+        drive_probe_plane(
+            SEL4_ROLLBACK_PROBE_SLOT,
+            b"[init] rollback probe spawned\n",
+            b"rollback",
+        );
+        slime_rt::debug_write(b"[init] rollback plane complete\n");
+        return;
+    }
+    if option_env!("SLIME_SEL4_STORE_CHECK") == Some("1") {
+        drive_store_plane();
+        slime_rt::debug_write(b"[init] store plane complete\n");
+        return;
+    }
+    if option_env!("SLIME_SEL4_STORAGE_CHECK") == Some("1") {
+        drive_storage_plane();
+        slime_rt::debug_write(b"[init] storage plane complete\n");
+        slime_rt::exit(0);
+    }
+    // P5.4.8's C8.8 visibility plane, on the same rule again.
+    if option_env!("SLIME_SEL4_VISIBILITY_CHECK") == Some("1") {
+        drive_visibility_plane();
+        slime_rt::debug_write(b"[init] visibility plane complete\n");
         slime_rt::exit(0);
     }
     slime_rt::debug_write(b"[init] launching component graph\n");
@@ -645,6 +761,151 @@ fn spawn_boot_participant(participant: usize) -> u32 {
         slime_rt::exit(1)
     });
     spawned.supervision_slot
+}
+
+/// Drive the P5.4.9 full-graph boot: every C8 role in one generation.
+///
+/// Only reachable under `SLIME_SEL4_BOOT_CHECK`, whose generation is
+/// `contracts/generation/v1/fixtures/sel4-boot.zti`. That generation also sets
+/// the oracle's `SLIME_FABRIC_BOOT_CHECK`, so all sixteen participants, the
+/// fabric, and its two route workers are the x86 binaries unmodified — every one
+/// of them selects its full-graph behaviour through `fabric_boot::active`.
+///
+/// **What differs from `launch_fabric_boot`, and why.** The oracle's boot layout
+/// numbers both halves of all sixteen control channels, because its kernel
+/// materializes a declared channel into the bootstrap component's layout slots.
+/// This root numbers a launched component's declared ends from its own cursor,
+/// which resumes above the factory grants staging installed — so a declared
+/// control reaches the fabric at a slot no `FABRIC_FIRST_CONTROL_SLOT + index`
+/// describes. Every other seL4 plane mints its controls for exactly this reason;
+/// this one mints sixteen instead of four or five.
+///
+/// Everything else is the oracle's composition, in its order: subscribers first
+/// so the fabric can be granted their supervision handles, the fabric next with
+/// the two worker executables it spawns itself, then the remaining participants,
+/// then one yield so every role request is enqueued before any supervision
+/// descriptor follows it on the same channel.
+///
+/// Init does not exit. The gate's exit condition is the whole graph at healthy
+/// blocked idle, so init parks on the fabric's handle — a component terminating
+/// here is a failure, not something to wait for.
+fn drive_boot_plane() -> ! {
+    let mut service_sides = [0u32; BOOT_PARTICIPANTS];
+    let mut client_sides = [0u32; BOOT_PARTICIPANTS];
+    for index in 0..BOOT_PARTICIPANTS {
+        let (service_side, client_side) = slime_rt::endpoint_create(ENDPOINT_FACTORY_SLOT)
+            .unwrap_or_else(|_| fail_boot(b"control endpoint"));
+        service_sides[index] = service_side;
+        client_sides[index] = client_side;
+    }
+    slime_rt::debug_write(b"[init] fabric boot control channels minted\n");
+
+    let mut supervision = [0u32; BOOT_PARTICIPANTS];
+    for participant in BOOT_SUBSCRIBERS {
+        supervision[participant] = spawn_boot_child(participant, client_sides[participant]);
+    }
+    slime_rt::debug_write(b"[init] fabric boot subscribers spawned\n");
+
+    // Grant order *is* the fabric's slot layout, read from the resolved profile
+    // rather than from constants of its own: the two factories, one control per
+    // stream participant, the subscriber supervision handles, then the call and
+    // operation planes' controls, and last the two worker executables.
+    const BOOT_FABRIC_GRANTS: usize = 2 + BOOT_PARTICIPANTS + BOOT_SUBSCRIBERS.len() + 2;
+    let mut grants = [SpawnGrant { slot: 0, rights: 0 }; BOOT_FABRIC_GRANTS];
+    let mut count = 0;
+    let mut push = |slot: u32, rights: Rights| {
+        grants[count] = grant(slot, rights);
+        count += 1;
+    };
+    push(ENDPOINT_FACTORY_SLOT, RIGHT_ENDPOINT_CREATE);
+    push(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE);
+    for side in service_sides.iter().take(BOOT_STREAM_PARTICIPANTS) {
+        push(*side, RIGHT_SEND | RIGHT_RECV);
+    }
+    for participant in BOOT_SUBSCRIBERS {
+        push(supervision[participant], RIGHT_SUPERVISE);
+    }
+    for side in service_sides.iter().skip(BOOT_STREAM_PARTICIPANTS) {
+        push(*side, RIGHT_SEND | RIGHT_RECV);
+    }
+    push(BOOT_CALL_WORKER_SLOT, RIGHT_EXEC | RIGHT_SPAWN);
+    push(BOOT_OP_WORKER_SLOT, RIGHT_EXEC | RIGHT_SPAWN);
+    let fabric = slime_rt::spawn(FABRIC_SERVICE_SLOT, &grants[..count])
+        .unwrap_or_else(|_| fail_boot(b"spawn fabric"));
+    slime_rt::debug_write(b"[init] fabric boot service spawned\n");
+
+    // The fabric holds derived copies now. Init releases every service-side
+    // half and the subscriber handles it only held to hand on: a spawn grant is
+    // a copy, so keeping them would leave sixteen channels with a holder that
+    // never reads them and sixteen handles init has no claim on.
+    for slot in service_sides {
+        if slime_rt::cap_drop(slot) < 0 {
+            fail_boot(b"drop copied service side");
+        }
+    }
+    for participant in BOOT_SUBSCRIBERS {
+        if slime_rt::cap_drop(supervision[participant]) < 0 {
+            fail_boot(b"drop subscriber handle");
+        }
+        supervision[participant] = 0;
+    }
+
+    for participant in 0..BOOT_PARTICIPANTS {
+        if !BOOT_SUBSCRIBERS.contains(&participant) {
+            supervision[participant] = spawn_boot_child(participant, client_sides[participant]);
+        }
+    }
+    slime_rt::debug_write(b"[init] fabric boot participants spawned\n");
+
+    // One yield, so every participant's role request is enqueued before any
+    // supervision descriptor follows it. The brokers read one request then one
+    // descriptor per client on the same channel, and a channel is a queue — a
+    // descriptor that arrives first is consumed *as* the request.
+    slime_rt::yield_now();
+
+    for (participant, handle) in supervision.iter_mut().enumerate() {
+        if let Some((direction, route)) = boot_supervision_edge(participant) {
+            transfer_supervision(client_sides[participant], *handle, direction, route);
+            // `cap_transfer` moves, so the slot is empty; marking it keeps the
+            // release below from dropping a handle that no longer exists.
+            *handle = 0;
+        }
+    }
+    slime_rt::debug_write(b"[init] fabric boot supervision transferred\n");
+
+    for (participant, handle) in supervision.iter().enumerate() {
+        for slot in [boot_executable_slot(participant), client_sides[participant]] {
+            if slime_rt::cap_drop(slot) < 0 {
+                fail_boot(b"release a bootstrap-only capability");
+            }
+        }
+        if *handle != 0 && slime_rt::cap_drop(*handle) < 0 {
+            fail_boot(b"release a participant handle");
+        }
+    }
+    slime_rt::debug_write(b"[init] fabric boot graph launched\n");
+
+    loop {
+        slime_rt::wait(&[slime_rt::WaitSource::Supervision(fabric.supervision_slot)]);
+    }
+}
+
+/// Spawn one full-graph participant with its own minted control endpoint and
+/// nothing else, returning the supervision handle init keeps.
+fn spawn_boot_child(participant: usize, control: u32) -> u32 {
+    slime_rt::spawn(
+        boot_executable_slot(participant),
+        &[grant(control, RIGHT_SEND | RIGHT_RECV)],
+    )
+    .unwrap_or_else(|_| fail_boot(b"spawn a boot participant"))
+    .supervision_slot
+}
+
+fn fail_boot(reason: &[u8]) -> ! {
+    slime_rt::debug_write(b"[init] fabric boot fail: ");
+    slime_rt::debug_write(reason);
+    slime_rt::debug_write(b"\n");
+    slime_rt::exit(1)
 }
 
 /// Launch the C8.7 operation plane: one fabric brokering two clients and one
@@ -1828,24 +2089,12 @@ const CALL_TIME: usize = 3;
 /// controls from `FABRIC_FIRST_CONTROL_SLOT` — exactly what the broker
 /// compiles against, and exactly how `drive_stream_plane` already works.
 ///
-/// **Spawn order is load-bearing, and it is not the x86 order.** On x86 a spawn
-/// grant is a non-consuming derive-copy, so `launch_fabric_calls` spawns the
-/// fabric first, keeps every service half, and later moves each participant's
-/// supervision handle over it with `cap_transfer`. Here a granted *endpoint* is
-/// a **move** — `distribute_channel_ends` reassigns the channel and drops the
-/// parent's slot — so init holding a service half after granting it is not
-/// available at all.
-///
-/// So the delegation runs the other way: the participants are spawned **first**
-/// and the fabric **last**, and each participant's supervision handle is
-/// handed over as one of the fabric's own spawn grants rather than transferred
-/// afterwards. A supervision handle is not an endpoint, so granting one *is* a
-/// copy, and init keeps nothing it must later give away.
-///
-/// The authority argument is unchanged, which is the point: the broker still
-/// learns each caller's identity from the control slot the grant bound it to,
-/// and still receives a `RIGHT_SUPERVISE` handle naming the exact task behind
-/// that slot. Only the moment of delegation moved.
+/// **Spawn order matches the x86 oracle.** A spawn grant is a non-consuming
+/// copy on both kernels. Init therefore spawns the fabric first, keeps the
+/// participant half of every control pair, spawns each participant, and moves
+/// its supervision handle to the broker over that authenticated half. The
+/// broker still receives the request first and the matching identity second;
+/// no participant needs authority naming itself.
 fn drive_call_plane() {
     // One control pair per participant, all minted before anything is spawned,
     // so the spawn order below is free to differ from the slot order above.
@@ -1874,11 +2123,8 @@ fn drive_call_plane() {
     //
     // Grant order *is* the fabric's slot layout, and the broker reads every one
     // of these numbers out of the generated profile rather than a literal.
-    //
-    // Granting an endpoint **moves** it (`distribute_channel_ends`), so from
-    // here init no longer holds any service half. That is why the supervision
-    // handles below cannot travel over these channels the way the x86 plane
-    // sends them, and why each participant carries its own instead.
+    // Spawn copies each service side, so init can discard its extra copy while
+    // retaining the opposite `client_side` used for the introduction below.
     let mut grants = [grant(ENDPOINT_FACTORY_SLOT, RIGHT_ENDPOINT_CREATE); 2 + CALL_PLANE_CLIENTS];
     grants[1] = grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE);
     for (index, service_side) in service_sides.iter().enumerate() {
@@ -1887,24 +2133,19 @@ fn drive_call_plane() {
     let service = slime_rt::spawn(FABRIC_SERVICE_SLOT, &grants)
         .unwrap_or_else(|_| fail_call(b"spawn fabric"));
     slime_rt::debug_write(b"[init] call fabric spawned\n");
+    for slot in service_sides {
+        if slime_rt::cap_drop(slot) < 0 {
+            fail_call(b"drop copied service side");
+        }
+    }
 
-    // ---- the participants, each delivering its own supervision handle ----
+    // ---- participants, introduced by their parent ----
     //
-    // The circular dependency this resolves is real and is specific to this
-    // mechanism. A participant needs a `RIGHT_SUPERVISE` handle naming the
-    // *fabric*, so the fabric must exist first; the fabric needs a handle
-    // naming each *participant*, so the participants must exist first. On x86
-    // the cycle is cut by init keeping every service half and transferring the
-    // participant handles after both ends exist — which a moving grant makes
-    // impossible here.
-    //
-    // It is cut instead by having each participant deliver its **own** handle
-    // over its own control channel, as its first act. The handle is a spawn
-    // grant naming the participant itself (`spawn` returns one to the parent,
-    // and granting a supervision handle is a copy rather than a move), so the
-    // fabric receives exactly the same descriptor from exactly the same
-    // authenticated channel as on x86 — `consume_supervision` cannot tell the
-    // two paths apart, which is what keeps the broker unmodified.
+    // The participants send their role requests first. Init then sends each
+    // participant's supervision handle from the copied participant half of
+    // that same control channel. This preserves the broker's trust boundary:
+    // the parent vouches for the task identity, and the participant never
+    // receives a self-naming handle.
     //
     // Each participant's own slot order is the scenario's:
     // `CONTROL_SLOT` 0, `FACTORY_SLOT` 1, `FABRIC_SUPERVISION_SLOT` 2, then
@@ -1938,6 +2179,30 @@ fn drive_call_plane() {
     )
     .unwrap_or_else(|_| fail_call(b"spawn call server"));
     slime_rt::debug_write(b"[init] call participants spawned\n");
+    slime_rt::yield_now();
+    for (control, supervision, direction) in [
+        (
+            client_sides[CALL_CLIENT],
+            client.supervision_slot,
+            boot_contracts::fabric_graph::DIRECTION_CLIENT,
+        ),
+        (
+            client_sides[CALL_CLIENT_B],
+            client_b.supervision_slot,
+            boot_contracts::fabric_graph::DIRECTION_CLIENT,
+        ),
+        (
+            client_sides[CALL_SERVER],
+            server.supervision_slot,
+            boot_contracts::fabric_graph::DIRECTION_SERVER,
+        ),
+    ] {
+        transfer_supervision(control, supervision, direction, call_route_identity());
+        if slime_rt::cap_drop(control) < 0 {
+            fail_call(b"drop introduction side");
+        }
+    }
+    slime_rt::debug_write(b"[init] call supervision delegated\n");
 
     // The clock last: it advances time only on a phase marker, so nothing it
     // does can fire before the participants are ready to observe it.
@@ -1950,28 +2215,17 @@ fn drive_call_plane() {
     )
     .unwrap_or_else(|_| fail_call(b"spawn call time"));
 
-    // No release loop, and its absence is load-bearing rather than an
-    // oversight. Every endpoint minted above was named by exactly one spawn
-    // grant, and on this mechanism a granted endpoint is a **move**:
-    // `distribute_channel_ends` reassigns the channel and drops init's slot as
-    // part of the spawn. Init therefore already holds none of them, and a
-    // `cap_drop` here would answer `ERR_BAD_CAP` on a slot that is correctly
-    // gone — failing the plane over the very property it wants.
-    //
-    // That is the whole of B25 in one line of consequence: the x86 plane
-    // releases these slots explicitly because there a grant is a copy and init
-    // really does still hold them.
+    // The time component needs no supervision introduction. Drop init's copied
+    // participant half after the spawn; the fabric and time task retain the two
+    // live ends.
+    if slime_rt::cap_drop(client_sides[CALL_TIME]) < 0 {
+        fail_call(b"drop time control copy");
+    }
 
     // Every participant runs to a clean exit. Waiting rather than spinning is
     // also what makes a component that dies wake init instead of going
     // unnoticed.
-    for handle in [
-        client.supervision_slot,
-        client_b.supervision_slot,
-        server.supervision_slot,
-        time.supervision_slot,
-        service.supervision_slot,
-    ] {
+    for handle in [time.supervision_slot, service.supervision_slot] {
         loop {
             match slime_rt::supervision_status(handle) {
                 Ok(None) => slime_rt::wait(&[slime_rt::WaitSource::Supervision(handle)]),
@@ -1989,8 +2243,679 @@ fn fail_call(reason: &[u8]) -> ! {
     slime_rt::exit(1)
 }
 
+/// Which control pair each operation participant is handed, by index into the
+/// arrays [`drive_operation_plane`] mints.
+///
+/// The order **is** the fabric's control-slot layout: the broker resolves a
+/// control by `FABRIC_FIRST_CONTROL_SLOT + index` into `FABRIC_OPERATION_CLIENTS`,
+/// which the generated profile emits in `FABRIC_OPERATION_CONTROL_GRANTS` order.
+/// The replacement's channel follows them at
+/// `FABRIC_FIRST_CONTROL_SLOT + OP_PLANE_CONTROLS`, which is the literal
+/// `fabric-service.rs` passes as `replacement_control`.
+const OP_PLANE_CONTROLS: usize = 4;
+const OP_CLIENT: usize = 0;
+const OP_CLIENT_B: usize = 1;
+const OP_SERVER: usize = 2;
+const OP_TIME: usize = 3;
+
+/// Drive the P5.4.7 operation plane: the C8.7 bounded-native-operation graph
+/// the x86 oracle builds — two clients, a supervised replacement for the
+/// second, a server, and a capability-routed clock over the `navigation` route
+/// plus client A's private `nav-backup` route.
+///
+/// Only reachable under `SLIME_SEL4_OPERATION_CHECK`, whose generation is
+/// `contracts/generation/v1/fixtures/sel4-operation.zti`. That generation also
+/// sets the oracle's `SLIME_FABRIC_OPERATION_CHECK`, so the broker and all five
+/// participants are the x86 binaries unmodified; only this composition differs.
+///
+/// **Why init mints the control channels.** `drive_call_plane`'s reason, which
+/// applies unchanged: the root numbers a launched component's channel ends from
+/// its own cursor, which resumes above the factory grants staging installed, so
+/// a declared control grant reaches the fabric at a slot no `base + index`
+/// describes. The grants stay in the manifest because `_control_sources` derives
+/// `FABRIC_OPERATION_CLIENTS` — the table the broker maps a control slot to a
+/// caller identity with — from exactly those grant names. They name; the minted
+/// endpoints authorize.
+///
+/// **The replacement is the restart arm.** C8.7 requires a participant restart
+/// to be deterministic: the broker keeps client B's authenticated index, its
+/// correlation high-water mark, and its retained results, while the replacement
+/// receives a *fresh* non-delegable role. Init spawns the replacement on its own
+/// authenticated control and vouches for it exactly as for the others, then
+/// releases it through a private barrier so its role request cannot reach the
+/// broker before the original client has produced the retained result the
+/// replacement is supposed to find.
+fn drive_operation_plane() {
+    let mut service_sides = [0u32; OP_PLANE_CONTROLS];
+    let mut client_sides = [0u32; OP_PLANE_CONTROLS];
+    for index in 0..OP_PLANE_CONTROLS {
+        let (service_side, client_side) = slime_rt::endpoint_create(ENDPOINT_FACTORY_SLOT)
+            .unwrap_or_else(|_| fail_operation(b"control endpoint"));
+        service_sides[index] = service_side;
+        client_sides[index] = client_side;
+    }
+    // The replacement's control channel. Distinct from client B's, because the
+    // broker must be able to admit the replacement on an endpoint the dead
+    // participant never held — that is what makes the restarted identity a
+    // parent-vouched fact rather than an inherited one.
+    let (replacement_service, replacement_control) =
+        slime_rt::endpoint_create(ENDPOINT_FACTORY_SLOT)
+            .unwrap_or_else(|_| fail_operation(b"replacement endpoint"));
+    // Client A and client B interleave over a private pair the broker never
+    // sees. The replacement inherits client B's half by copy, which is how the
+    // restarted participant resumes the phase conversation its predecessor left.
+    let (phase_a, phase_b) = slime_rt::endpoint_create(ENDPOINT_FACTORY_SLOT)
+        .unwrap_or_else(|_| fail_operation(b"client phase endpoint"));
+    // Client A's release for the clock, kept separate from the A/B pair so a
+    // phase meant for the clock can never be consumed by client B.
+    let (phase_time_client, phase_time_service) = slime_rt::endpoint_create(ENDPOINT_FACTORY_SLOT)
+        .unwrap_or_else(|_| fail_operation(b"time phase endpoint"));
+    let (restart_start_send, restart_start_recv) = slime_rt::endpoint_create(ENDPOINT_FACTORY_SLOT)
+        .unwrap_or_else(|_| fail_operation(b"restart barrier endpoint"));
+    slime_rt::debug_write(b"[init] operation control channels minted\n");
+
+    // ---- the fabric, holding one control end per participant ----
+    //
+    // Grant order *is* the fabric's slot layout, and the broker reads every one
+    // of these numbers out of the generated profile rather than a literal. The
+    // buffer factory occupies slot 1 for the same reason it does on the call
+    // plane: the control block begins at `FABRIC_FIRST_CONTROL_SLOT`.
+    let mut grants = [grant(ENDPOINT_FACTORY_SLOT, RIGHT_ENDPOINT_CREATE); 3 + OP_PLANE_CONTROLS];
+    grants[1] = grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE);
+    for (index, service_side) in service_sides.iter().enumerate() {
+        grants[2 + index] = grant(*service_side, RIGHT_SEND | RIGHT_RECV);
+    }
+    grants[2 + OP_PLANE_CONTROLS] = grant(replacement_service, RIGHT_SEND | RIGHT_RECV);
+    let service = slime_rt::spawn(FABRIC_SERVICE_SLOT, &grants)
+        .unwrap_or_else(|_| fail_operation(b"spawn fabric"));
+    slime_rt::debug_write(b"[init] operation fabric spawned\n");
+    for slot in service_sides {
+        if slime_rt::cap_drop(slot) < 0 {
+            fail_operation(b"drop copied service side");
+        }
+    }
+    if slime_rt::cap_drop(replacement_service) < 0 {
+        fail_operation(b"drop copied replacement side");
+    }
+
+    // ---- participants, introduced by their parent ----
+    //
+    // Each participant's own slot order is the scenario's: `CONTROL_SLOT` 0,
+    // then whatever phase channels that component uses.
+    let client = slime_rt::spawn(
+        FABRIC_OP_CLIENT_SLOT,
+        &[
+            grant(client_sides[OP_CLIENT], RIGHT_SEND | RIGHT_RECV),
+            grant(phase_a, RIGHT_SEND | RIGHT_RECV),
+            grant(phase_time_client, RIGHT_SEND),
+        ],
+    )
+    .unwrap_or_else(|_| fail_operation(b"spawn operation client"));
+    let client_b = slime_rt::spawn(
+        FABRIC_OP_CLIENT_B_SLOT,
+        &[
+            grant(client_sides[OP_CLIENT_B], RIGHT_SEND | RIGHT_RECV),
+            grant(phase_b, RIGHT_SEND | RIGHT_RECV),
+        ],
+    )
+    .unwrap_or_else(|_| fail_operation(b"spawn operation client-b"));
+    let server = slime_rt::spawn(
+        FABRIC_OP_SERVER_SLOT,
+        &[grant(client_sides[OP_SERVER], RIGHT_SEND | RIGHT_RECV)],
+    )
+    .unwrap_or_else(|_| fail_operation(b"spawn operation server"));
+    slime_rt::debug_write(b"[init] operation participants spawned\n");
+    slime_rt::yield_now();
+    for (control, supervision) in [
+        (client_sides[OP_CLIENT], client.supervision_slot),
+        (client_sides[OP_CLIENT_B], client_b.supervision_slot),
+    ] {
+        transfer_supervision(
+            control,
+            supervision,
+            boot_contracts::fabric_graph::DIRECTION_CLIENT,
+            operation_route_identity(),
+        );
+        if slime_rt::cap_drop(control) < 0 {
+            fail_operation(b"drop introduction side");
+        }
+    }
+    transfer_supervision(
+        client_sides[OP_SERVER],
+        server.supervision_slot,
+        boot_contracts::fabric_graph::DIRECTION_SERVER,
+        operation_route_identity(),
+    );
+    if slime_rt::cap_drop(client_sides[OP_SERVER]) < 0 {
+        fail_operation(b"drop server introduction side");
+    }
+    slime_rt::debug_write(b"[init] operation supervision delegated\n");
+
+    // ---- the replacement, vouched for before it may speak ----
+    let replacement = slime_rt::spawn(
+        FABRIC_OP_CLIENT_B_RESTART_SLOT,
+        &[
+            grant(replacement_control, RIGHT_SEND | RIGHT_RECV),
+            grant(phase_b, RIGHT_SEND | RIGHT_RECV),
+            grant(restart_start_recv, RIGHT_RECV),
+        ],
+    )
+    .unwrap_or_else(|_| fail_operation(b"spawn operation replacement"));
+    transfer_supervision(
+        replacement_control,
+        replacement.supervision_slot,
+        boot_contracts::fabric_graph::DIRECTION_CLIENT,
+        operation_route_identity(),
+    );
+    if slime_rt::cap_drop(replacement_control) < 0 {
+        fail_operation(b"drop replacement introduction side");
+    }
+    slime_rt::debug_write(b"[init] operation replacement introduced\n");
+
+    // The clock last: it advances time only on a phase marker, so nothing it
+    // does can fire before the participants are ready to observe it.
+    let time = slime_rt::spawn(
+        FABRIC_OP_TIME_SLOT,
+        &[
+            grant(client_sides[OP_TIME], RIGHT_SEND | RIGHT_RECV),
+            grant(phase_time_service, RIGHT_RECV),
+        ],
+    )
+    .unwrap_or_else(|_| fail_operation(b"spawn operation time"));
+
+    // Release the replacement. Sent only now, so its role request cannot reach
+    // the broker before the whole graph exists and before the original client B
+    // has had the chance to produce the retained result the replacement claims.
+    loop {
+        match slime_rt::send(restart_start_send, &[1], &[]) {
+            slime_rt::ERR_SUCCESS => break,
+            slime_rt::ERR_WOULDBLOCK => slime_rt::yield_now(),
+            _ => fail_operation(b"release the replacement"),
+        }
+    }
+    slime_rt::debug_write(b"[init] operation replacement released\n");
+
+    // Init holds no route capability and no phase end it still needs: every
+    // participant received its own copy at spawn. Releasing them here is what
+    // makes each channel's liveness a property of its participants rather than
+    // of the parent outliving them.
+    for slot in [
+        client_sides[OP_TIME],
+        phase_a,
+        phase_b,
+        phase_time_client,
+        phase_time_service,
+        restart_start_send,
+        restart_start_recv,
+    ] {
+        if slime_rt::cap_drop(slot) < 0 {
+            fail_operation(b"release a retained plane end");
+        }
+    }
+
+    // The two handles init still holds: every other one moved to the broker as
+    // that participant's parent-vouched identity.
+    for handle in [time.supervision_slot, service.supervision_slot] {
+        loop {
+            match slime_rt::supervision_status(handle) {
+                Ok(None) => slime_rt::wait(&[slime_rt::WaitSource::Supervision(handle)]),
+                Ok(Some(slime_rt::Termination::Exit(0))) => break,
+                _ => fail_operation(b"an operation component did not exit cleanly"),
+            }
+        }
+    }
+}
+
+fn fail_operation(reason: &[u8]) -> ! {
+    slime_rt::debug_write(b"[init] operation plane fail: ");
+    slime_rt::debug_write(reason);
+    slime_rt::debug_write(b"\n");
+    slime_rt::exit(1)
+}
+
 fn fail_stream(reason: &[u8]) -> ! {
     slime_rt::debug_write(b"[init] stream plane fail: ");
+    slime_rt::debug_write(reason);
+    slime_rt::debug_write(b"\n");
+    slime_rt::exit(1)
+}
+
+/// Drive the P5.4.8 visibility plane: the C8.8 filtered-introspection and
+/// declared-interposition graph the x86 oracle builds — the telemetry and
+/// diagnostics routes with `fabric-intruder` as the *declared proxy* on the
+/// telemetry subscriber's chain.
+///
+/// Only reachable under `SLIME_SEL4_VISIBILITY_CHECK`, whose generation is
+/// `contracts/generation/v1/fixtures/sel4-visibility.zti`. That generation also
+/// sets the oracle's `SLIME_FABRIC_VISIBILITY_CHECK`, so the broker and all five
+/// participants are the x86 binaries unmodified; only this composition differs.
+///
+/// This is `drive_stream_plane`'s shape with two differences, both consequences
+/// of what the visibility broker does rather than choices made here:
+///
+/// * **No supervision handles.** The stream fabric is granted one per subscriber
+///   so it can name a loan receiver. The visibility broker mints every route
+///   half itself and hands out narrowed, non-delegable roles, so it needs no
+///   handle and init keeps all six.
+/// * **No spawn ordering constraint.** Nothing in this plane requires a task to
+///   exist before another's grants are built, because no grant names a task.
+///   Participants are spawned in control-slot order purely so the transcript
+///   reads in the order the broker will answer them.
+fn drive_visibility_plane() {
+    let mut service_sides = [0u32; STREAM_PLANE_CLIENTS];
+    let mut client_sides = [0u32; STREAM_PLANE_CLIENTS];
+    for index in 0..STREAM_PLANE_CLIENTS {
+        let (service_side, client_side) = slime_rt::endpoint_create(ENDPOINT_FACTORY_SLOT)
+            .unwrap_or_else(|_| fail_visibility(b"control endpoint"));
+        service_sides[index] = service_side;
+        client_sides[index] = client_side;
+    }
+    slime_rt::debug_write(b"[init] visibility control channels minted\n");
+
+    // The fabric's own authority. Grant order *is* its slot layout:
+    // `FACTORY_SLOT` 0, the buffer factory at 1, then the five controls from
+    // `FABRIC_FIRST_CONTROL_SLOT` in `FABRIC_STREAM_CONTROL_GRANTS` order —
+    // which is the order `STREAM_PUBLISHER..STREAM_SUBSCRIBER_B` name.
+    //
+    // The buffer factory is granted even though `visibility_broker::run` drops
+    // it immediately: the slot must exist for the controls to start at 2, and
+    // dropping authority it will not use is the broker being explicit rather
+    // than holding a factory through a plane that allocates nothing.
+    let mut grants =
+        [grant(ENDPOINT_FACTORY_SLOT, RIGHT_ENDPOINT_CREATE); 2 + STREAM_PLANE_CLIENTS];
+    grants[1] = grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE);
+    for (index, service_side) in service_sides.iter().enumerate() {
+        grants[2 + index] = grant(*service_side, RIGHT_SEND | RIGHT_RECV);
+    }
+    let fabric = slime_rt::spawn(FABRIC_SERVICE_SLOT, &grants)
+        .unwrap_or_else(|_| fail_visibility(b"spawn fabric"));
+    slime_rt::debug_write(b"[init] visibility fabric spawned\n");
+    for slot in service_sides {
+        if slime_rt::cap_drop(slot) < 0 {
+            fail_visibility(b"drop copied service side");
+        }
+    }
+
+    // Each participant holds exactly one capability: its own control endpoint.
+    // Every route half it ends up with arrives from the broker at runtime, which
+    // is what makes "the proxy relays only its declared route" a statement about
+    // provisioning rather than about what init handed out.
+    let mut spawned = [None; STREAM_PLANE_CLIENTS];
+    for (index, executable) in [
+        (STREAM_PUBLISHER, FABRIC_PUBLISHER_SLOT),
+        (STREAM_SUBSCRIBER, FABRIC_SUBSCRIBER_SLOT),
+        (STREAM_INTRUDER, FABRIC_INTRUDER_SLOT),
+        (STREAM_PUBLISHER_B, FABRIC_PUBLISHER_B_SLOT),
+        (STREAM_SUBSCRIBER_B, FABRIC_SUBSCRIBER_B_SLOT),
+    ] {
+        let child = slime_rt::spawn(
+            executable,
+            &[grant(client_sides[index], RIGHT_SEND | RIGHT_RECV)],
+        )
+        .unwrap_or_else(|_| fail_visibility(b"spawn visibility participant"));
+        if slime_rt::cap_drop(client_sides[index]) < 0 {
+            fail_visibility(b"drop copied client side");
+        }
+        spawned[index] = Some(child.supervision_slot);
+    }
+    slime_rt::debug_write(b"[init] visibility participants spawned\n");
+
+    // Every participant exits cleanly, the proxy included. C8.8's third check
+    // needs the proxy to *die* mid-plane, but a declared relay that completed
+    // and then exited is a clean exit — the loss the subscriber observes is the
+    // broker seeing its chain endpoint close, not a fault.
+    for handle in spawned.iter().chain(&[Some(fabric.supervision_slot)]) {
+        let Some(handle) = handle else {
+            fail_visibility(b"a participant was never spawned");
+        };
+        loop {
+            match slime_rt::supervision_status(*handle) {
+                Ok(None) => slime_rt::wait(&[slime_rt::WaitSource::Supervision(*handle)]),
+                Ok(Some(slime_rt::Termination::Exit(0))) => break,
+                _ => fail_visibility(b"a visibility component did not exit cleanly"),
+            }
+        }
+    }
+}
+
+/// Drive the P5.4.3 powerbox plane (M6.6): a chooser holding directory
+/// authority the requester lacks, handing over one narrowed view on selection.
+///
+/// The probe's single grant is the RPC endpoint. It holds no directory
+/// capability at all, which is the milestone's point: the only way it can name
+/// an object is for the chooser to mint one and transfer it, and the chooser
+/// mints only what the user's selection gesture named.
+fn drive_powerbox_plane() {
+    let plane: &[u8] = b"powerbox";
+    let (chooser_side, probe_side) = slime_rt::endpoint_create(ENDPOINT_FACTORY_SLOT)
+        .unwrap_or_else(|_| fail_plane(plane, b"rpc endpoint"));
+
+    let chooser = slime_rt::spawn(
+        POWERBOX_CHOOSER_SLOT,
+        &[grant(chooser_side, RIGHT_SEND | RIGHT_RECV)],
+    )
+    .unwrap_or_else(|_| fail_plane(plane, b"spawn the chooser"));
+    slime_rt::debug_write(b"[init] powerbox chooser spawned\n");
+
+    let probe = slime_rt::spawn(
+        POWERBOX_PROBE_SLOT,
+        &[grant(probe_side, RIGHT_SEND | RIGHT_RECV)],
+    )
+    .unwrap_or_else(|_| fail_plane(plane, b"spawn the probe"));
+    slime_rt::debug_write(b"[init] powerbox probe spawned\n");
+
+    // Dropped so the chooser's serve loop ends when the probe exits.
+    for slot in [chooser_side, probe_side] {
+        if slime_rt::cap_drop(slot) < 0 {
+            fail_plane(plane, b"release the rpc ends");
+        }
+    }
+
+    for handle in [probe.supervision_slot, chooser.supervision_slot] {
+        loop {
+            match slime_rt::supervision_status(handle) {
+                Ok(None) => slime_rt::wait(&[slime_rt::WaitSource::Supervision(handle)]),
+                Ok(Some(slime_rt::Termination::Exit(0))) => break,
+                _ => fail_plane(plane, b"a powerbox component did not exit cleanly"),
+            }
+        }
+    }
+}
+
+/// Drive the P5.4.3 dango plane (M6.4): a scripted console session that
+/// launches commands through the spawn service.
+///
+/// Four components and two channels. The grant lists are the components' own
+/// slot layouts — `spawn-service.rs` and `dango.rs` compile against fixed
+/// positions, and the *order of these lists* is what fixes them, exactly as
+/// `drive_sample_plane` fixes the lender's three.
+fn drive_dango_plane() {
+    let plane: &[u8] = b"dango";
+    // This plane's layout places the shared-buffer factory at 4; the base
+    // layout's `SHARED_BUFFER_FACTORY_SLOT` is a different number, and passing
+    // it would hand children a slot init does not hold.
+    const DANGO_BUFFER_FACTORY_SLOT: u32 = 4;
+
+    // Console first: dango sends its output there, and the channel must exist
+    // before either end is granted.
+    let (console_side, dango_console) = slime_rt::endpoint_create(ENDPOINT_FACTORY_SLOT)
+        .unwrap_or_else(|_| fail_plane(plane, b"console endpoint"));
+    let (spawn_side, dango_spawn) = slime_rt::endpoint_create(ENDPOINT_FACTORY_SLOT)
+        .unwrap_or_else(|_| fail_plane(plane, b"spawn endpoint"));
+
+    // `console.rs`: RPC end, then the shared-buffer factory.
+    let console = slime_rt::spawn(
+        CONSOLE_SLOT,
+        &[
+            grant(console_side, RIGHT_SEND | RIGHT_RECV),
+            grant(DANGO_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
+        ],
+    )
+    .unwrap_or_else(|_| fail_plane(plane, b"spawn the console"));
+
+    // `spawn-service.rs`: RPC at 0, then the endpoint factory, then the
+    // shared-buffer factory.
+    //
+    // Its two *executables* are not here. The generation grants them to the
+    // spawn service directly, so the root places them in its table above this
+    // list — which is what puts them at 1 and 2, the positions
+    // `component_slot` bakes into the command profile. Init could not pass them
+    // on if it wanted to: it does not hold them.
+    // Exactly one grant, and the count is load-bearing: `spawn-service.rs`
+    // names its two executables at slots 1 and 2, and the root numbers declared
+    // executables above the parent's grant list. One channel end ahead of them
+    // is what puts them there. Its endpoint and shared-buffer factories are its
+    // own declared grants, landing above the executables at 3 and 4 — which is
+    // exactly what `SHARED_BUFFER_FACTORY_SLOT = 4` in that component says.
+    let spawn_service = slime_rt::spawn(
+        SPAWN_SERVICE_SLOT,
+        &[grant(spawn_side, RIGHT_SEND | RIGHT_RECV)],
+    )
+    .unwrap_or_else(|_| fail_plane(plane, b"spawn the spawn service"));
+    slime_rt::debug_write(b"[init] spawn service spawned\n");
+
+    // `dango.rs` compiles against six fixed slots: spawn RPC, console, input,
+    // cwd root, endpoint factory, shared-buffer factory.
+    //
+    // Init places the first two; the rest are the generation's own grants to
+    // dango, installed by the root *above* this list in its fixed order —
+    // directory, input, factories. That order suits `powerbox-chooser.rs`,
+    // which reads a directory before input, and it is the reverse of what
+    // dango wants.
+    //
+    // The two are reconciled by the grant list's *length*, not by the root's
+    // order: three entries here push the declared authority to 3..=6, so
+    // dango's input lands at 4 rather than 2 — which would be wrong. Two
+    // entries put directory at 2 and input at 3, and dango reads input at 2.
+    //
+    // So this composition cannot satisfy dango with the current order, and the
+    // gap is recorded as B30 rather than papered over by renumbering a
+    // component the oracle also builds.
+    let dango = slime_rt::spawn(
+        DANGO_SLOT,
+        &[
+            grant(dango_spawn, RIGHT_SEND | RIGHT_RECV),
+            grant(dango_console, RIGHT_SEND),
+        ],
+    )
+    .unwrap_or_else(|_| fail_plane(plane, b"spawn dango"));
+    slime_rt::debug_write(b"[init] dango spawned\n");
+
+    for slot in [console_side, dango_console, spawn_side, dango_spawn] {
+        if slime_rt::cap_drop(slot) < 0 {
+            fail_plane(plane, b"release the plane's endpoints");
+        }
+    }
+
+    // Dango exits when its script reaches the escape byte, and its status is
+    // *nonzero by design*: the scripted session includes a refused launch
+    // (`$(inject)`, denied at profile resolution) and a parse error, so the
+    // oracle's own `check-dango.py` expects both and the component reports the
+    // last failure. What matters is that it terminated rather than faulted.
+    loop {
+        match slime_rt::supervision_status(dango.supervision_slot) {
+            Ok(None) => {
+                slime_rt::wait(&[slime_rt::WaitSource::Supervision(dango.supervision_slot)]);
+            }
+            Ok(Some(slime_rt::Termination::Exit(_))) => break,
+            _ => fail_plane(plane, b"dango faulted rather than exiting"),
+        }
+    }
+    // The services follow once their peer is gone.
+    for handle in [spawn_service.supervision_slot, console.supervision_slot] {
+        loop {
+            match slime_rt::supervision_status(handle) {
+                Ok(None) => slime_rt::wait(&[slime_rt::WaitSource::Supervision(handle)]),
+                Ok(Some(slime_rt::Termination::Exit(0))) => break,
+                _ => fail_plane(plane, b"a dango service did not exit cleanly"),
+            }
+        }
+    }
+}
+
+/// Drive the P5.4.3 filesystem plane (M6.3's other half): a service that
+/// resolves names in a snapshot tree, and a client that must ask it.
+///
+/// The same shape as the generation plane — mint one channel, spawn the service
+/// first so it is listening, then the client — and for the same reason: the
+/// authority each holds is placed by the generation, and init composes only the
+/// channel between them.
+fn drive_filesystem_plane() {
+    let plane: &[u8] = b"filesystem";
+    let (service_side, client_side) = slime_rt::endpoint_create(ENDPOINT_FACTORY_SLOT)
+        .unwrap_or_else(|_| fail_plane(plane, b"rpc endpoint"));
+
+    let service = slime_rt::spawn(
+        SEL4_FILESYSTEM_SERVICE_SLOT,
+        &[grant(service_side, RIGHT_SEND | RIGHT_RECV)],
+    )
+    .unwrap_or_else(|_| fail_plane(plane, b"spawn the service"));
+    slime_rt::debug_write(b"[init] filesystem service spawned\n");
+
+    let client = slime_rt::spawn(
+        DIRECTORY_PROBE_SLOT,
+        &[grant(client_side, RIGHT_SEND | RIGHT_RECV)],
+    )
+    .unwrap_or_else(|_| fail_plane(plane, b"spawn the client"));
+    slime_rt::debug_write(b"[init] directory probe spawned\n");
+
+    // Dropped so the service sees `ERR_PEER_DEAD` when the client exits: while
+    // init still names an end, the peer looks alive.
+    for slot in [service_side, client_side] {
+        if slime_rt::cap_drop(slot) < 0 {
+            fail_plane(plane, b"release the rpc ends");
+        }
+    }
+
+    for handle in [client.supervision_slot, service.supervision_slot] {
+        loop {
+            match slime_rt::supervision_status(handle) {
+                Ok(None) => slime_rt::wait(&[slime_rt::WaitSource::Supervision(handle)]),
+                Ok(Some(slime_rt::Termination::Exit(0))) => break,
+                _ => fail_plane(plane, b"a filesystem component did not exit cleanly"),
+            }
+        }
+    }
+
+    // The root also launches an unconfigured copy of every declared component
+    // (P5.2), and `directory-probe` is the oracle's own binary — shared with
+    // `just directory_check`, so it carries no seL4 authority probe and fails
+    // rather than parking when it finds no capability.
+    //
+    // That copy is not this plane's subject, and init never held a handle on
+    // it, so nothing here observes it. The gate scopes its lifecycle assertion
+    // the same way; what is required is the *spawned* client's clean exit,
+    // which the loop above waits for.
+}
+
+/// Drive the P5.4.3 generation plane (M6.5): a management service holding the
+/// only block capability, and a client that must ask it.
+///
+/// Two components and one channel, so unlike the storage planes init composes
+/// rather than merely spawns. What it does *not* do is hand the client any
+/// device authority — that is the plane's whole claim, and init could not do it
+/// anyway: the block capability is granted to the manager by the generation, so
+/// init never holds it.
+fn drive_generation_plane() {
+    let plane: &[u8] = b"generation";
+    let (manager_side, client_side) = slime_rt::endpoint_create(ENDPOINT_FACTORY_SLOT)
+        .unwrap_or_else(|_| fail_plane(plane, b"rpc endpoint"));
+
+    // The manager first, so the service is listening before the client's first
+    // send. Its single grant is the client-facing end, which doubles as its run
+    // token: a root-launched copy holds nothing there and parks.
+    let manager = slime_rt::spawn(
+        SEL4_GENERATION_MANAGER_SLOT,
+        &[grant(manager_side, RIGHT_SEND | RIGHT_RECV)],
+    )
+    .unwrap_or_else(|_| fail_plane(plane, b"spawn the manager"));
+    slime_rt::debug_write(b"[init] generation manager spawned\n");
+
+    let client = slime_rt::spawn(
+        SEL4_GENERATION_CLIENT_SLOT,
+        &[grant(client_side, RIGHT_SEND | RIGHT_RECV)],
+    )
+    .unwrap_or_else(|_| fail_plane(plane, b"spawn the client"));
+    slime_rt::debug_write(b"[init] generation client spawned\n");
+
+    // Init drops its copies now that both children hold theirs.
+    //
+    // Not tidiness: `peer_alive` is a property of who still names a queue end,
+    // so an init that kept its copies would keep the manager's peer looking
+    // alive forever after the client exited — and the manager's serve loop
+    // ends on `ERR_PEER_DEAD`. Since B25 a spawn grant is a copy, so dropping
+    // here removes only init's name for the ends, not the children's.
+    for slot in [manager_side, client_side] {
+        if slime_rt::cap_drop(slot) < 0 {
+            fail_plane(plane, b"release the rpc ends");
+        }
+    }
+
+    for handle in [client.supervision_slot, manager.supervision_slot] {
+        loop {
+            match slime_rt::supervision_status(handle) {
+                Ok(None) => slime_rt::wait(&[slime_rt::WaitSource::Supervision(handle)]),
+                Ok(Some(slime_rt::Termination::Exit(0))) => break,
+                _ => fail_plane(plane, b"a generation component did not exit cleanly"),
+            }
+        }
+    }
+}
+
+/// Drive the P5.4.2c store plane: the same composition as the storage plane,
+/// over the probe that runs M5.4 policy in userspace.
+///
+/// Separate generation and separate probe, one driver: what differs between the
+/// two planes is which component is spawned and what it proves, not how init
+/// composes it.
+fn drive_store_plane() {
+    drive_probe_plane(
+        SEL4_STORE_PROBE_SLOT,
+        b"[init] store probe spawned\n",
+        b"store",
+    );
+}
+
+/// Drive the P5.4.2c storage plane: spawn the probe holding its block
+/// capability and require a clean exit.
+fn drive_storage_plane() {
+    drive_probe_plane(
+        SEL4_STORAGE_PROBE_SLOT,
+        b"[init] storage probe spawned\n",
+        b"storage",
+    );
+}
+
+/// Spawn one probe holding its generation-granted device capability and require
+/// a clean exit.
+///
+/// The composition is deliberately the smallest one that proves the authority
+/// path: one child, one grant list, no channels. Everything the plane asserts
+/// happens inside the probe, against a real device, through a capability the
+/// generation placed — so init's part is to hand it over and observe the
+/// outcome.
+fn drive_probe_plane(executable: u32, spawned_marker: &[u8], plane: &'static [u8]) {
+    // One grant, and it is not the device: the probe's block capability is
+    // granted to *it* by the generation, so the root places it in the probe's
+    // own table before it runs. Init never holds the device and could not pass
+    // it on — which is the authority claim this plane makes.
+    //
+    // What init does hand over is a run token. The root launches every declared
+    // component, so an unconfigured copy of the probe also starts holding the
+    // same device capability; the token is the one thing only the spawned
+    // instance has, and probing it is how that instance knows to run.
+    let (init_side, run_token) = slime_rt::endpoint_create(ENDPOINT_FACTORY_SLOT)
+        .unwrap_or_else(|_| fail_plane(plane, b"run token endpoint"));
+    let probe = slime_rt::spawn(executable, &[grant(run_token, RIGHT_SEND | RIGHT_RECV)])
+        .unwrap_or_else(|_| fail_plane(plane, b"spawn the probe"));
+    for slot in [init_side, run_token] {
+        if slime_rt::cap_drop(slot) < 0 {
+            fail_plane(plane, b"release the run token");
+        }
+    }
+    slime_rt::debug_write(spawned_marker);
+    loop {
+        match slime_rt::supervision_status(probe.supervision_slot) {
+            Ok(None) => {
+                slime_rt::wait(&[slime_rt::WaitSource::Supervision(probe.supervision_slot)])
+            }
+            Ok(Some(slime_rt::Termination::Exit(0))) => break,
+            _ => fail_plane(plane, b"the probe did not exit cleanly"),
+        }
+    }
+}
+
+fn fail_plane(plane: &[u8], reason: &[u8]) -> ! {
+    slime_rt::debug_write(b"[init] ");
+    slime_rt::debug_write(plane);
+    slime_rt::debug_write(b" plane fail: ");
+    slime_rt::debug_write(reason);
+    slime_rt::debug_write(b"\n");
+    slime_rt::exit(1)
+}
+
+fn fail_visibility(reason: &[u8]) -> ! {
+    slime_rt::debug_write(b"[init] visibility plane fail: ");
     slime_rt::debug_write(reason);
     slime_rt::debug_write(b"\n");
     slime_rt::exit(1)
@@ -2079,24 +3004,19 @@ fn drive_spawn_plane() {
         _ => fail_spawn(b"a live child reported an outcome"),
     };
 
-    // The slot init granted from is gone from init's own table: an endpoint
-    // grant is a move, because a channel's queues are resolved by which task
-    // holds each end. Init keeps `console_side`, the half it did not grant.
-    if slime_rt::send(console_child_side, b"after", &[]) != slime_rt::ERR_BAD_CAP {
-        // `ERR_BAD_CAP` is what an unresolvable channel slot answers, matching
-        // `sys_send`, and it is deliberately the same answer an ungranted slot
-        // and a slot of the wrong kind both give: which one it was is not the
-        // caller's business.
-        fail_spawn(b"a handed-off channel end still resolved");
+    // Spawn grants copy authority, matching the x86 oracle. The parent may
+    // still use the exact endpoint slot it granted while the child receives
+    // the same side at its slot 0.
+    match slime_rt::send(console_child_side, b"after", &[]) {
+        slime_rt::ERR_SUCCESS | slime_rt::ERR_WOULDBLOCK => {}
+        _ => fail_spawn(b"a copied channel end stopped resolving"),
     }
-    // The half init kept still works, which is what makes the move a move
-    // rather than a revocation: the pair exists to talk over.
     if slime_rt::send(console_side, b"[console] spawned child reached\n", &[])
         != slime_rt::ERR_SUCCESS
     {
-        fail_spawn(b"the retained half stopped working");
+        fail_spawn(b"the peer half stopped working");
     }
-    slime_rt::debug_write(b"[init] handed channel end released\n");
+    slime_rt::debug_write(b"[init] granted channel end copied\n");
 
     // ---- spawn and wait: sysinfo runs to completion ----
     //
@@ -2127,8 +3047,8 @@ fn drive_spawn_plane() {
     //
     // Six is B15's own exit-condition number, not a round one. Five more pairs
     // are minted so the list is six *distinct* slots: `preflight_spawn_grants`
-    // refuses a repeated slot, and an endpoint grant is a move, so no channel
-    // can supply two of them.
+    // refuses a repeated slot, and the child must receive six independently
+    // addressable capabilities.
     //
     // `child_side` stays first because that is the slot ordering fixes:
     // `sysinfo` reads its launch context from slot 0 and knows nothing of the
@@ -2146,22 +3066,22 @@ fn drive_spawn_plane() {
         slime_rt::spawn(SYSINFO_SLOT, &granted).unwrap_or_else(|_| fail_spawn(b"sysinfo"));
     slime_rt::debug_write(b"[init] sysinfo spawned\n");
 
-    // Every one of the six landed: an endpoint grant is a move, so each granted
-    // slot is gone from init's own table while the half it kept still works.
-    // That is the observation B15's exit condition asks for — "the child holds
-    // all six at the slots its numbering fixes" — made from the one side that
-    // can make it, since `sysinfo` runs unmodified and reads only slot 0.
+    // Every one of the six landed and remains usable by the parent. Filling a
+    // copied end may answer success until its queue fills, then `WouldBlock`;
+    // either result proves the slot still resolves. The retained peer halves
+    // must continue to send as well.
     for slot in granted.iter().map(|record| record.slot) {
-        if slime_rt::send(slot, b"moved", &[]) != slime_rt::ERR_BAD_CAP {
-            fail_spawn(b"a granted end stayed in the parent's table");
+        match slime_rt::send(slot, b"copied", &[]) {
+            slime_rt::ERR_SUCCESS | slime_rt::ERR_WOULDBLOCK => {}
+            _ => fail_spawn(b"a copied grant stopped resolving"),
         }
     }
     for slot in retained {
         if slime_rt::send(slot, b"kept", &[]) != slime_rt::ERR_SUCCESS {
-            fail_spawn(b"a retained half stopped working");
+            fail_spawn(b"a peer half stopped working");
         }
     }
-    slime_rt::debug_write(b"[init] six grants delivered\n");
+    slime_rt::debug_write(b"[init] six grants copied\n");
 
     // The launch context the child is blocked reading. Sent after the spawn, so
     // it lands on a task that exists; `sysinfo` parks in `recv` until it does.
@@ -2403,12 +3323,17 @@ fn drive_supervision_plane() {
 
 /// How many channel pairs the crossing plane mints over the boot.
 ///
-/// One more than `channel::MAX_CHANNELS` (32), for the reason
+/// One more than `channel::MAX_CHANNELS`, for the reason
 /// `SUPERVISION_LOOP_CHILDREN` is one more than `MAX_RECORDS`: the bound this
 /// crosses is on channels *live at once*, and a graph that releases as it goes
-/// must be able to exceed it. A loop that stopped at 32 would pass against the
-/// unfixed root and prove nothing.
-const CHANNEL_LOOP_PAIRS: u32 = 33;
+/// must be able to exceed it. A loop that stopped at the bound would pass
+/// against the unfixed root and prove nothing.
+///
+/// Moved 33 → 49 with P5.4.9's raise of `MAX_CHANNELS` to 48. The gate reads
+/// both constants from source and refuses `pairs <= bound`, which is what
+/// caught this: raising the bound alone would have left a gate that still
+/// passes while proving nothing.
+const CHANNEL_LOOP_PAIRS: u32 = 49;
 
 /// Drive the channel-crossing plane: mint more channels over one boot than
 /// `MAX_CHANNELS` holds at once, and keep sending on every live one.
@@ -2461,18 +3386,17 @@ fn drive_crossing_plane() {
     )
     .unwrap_or_else(|_| fail_crossing(b"crossing peer"));
 
-    // The pair whose end goes in flight. Init mints it as a loopback — both
-    // ends land in init's own table — moves one to the peer, and then **drops
-    // the other**.
+    // The pair whose end goes in flight. Init mints it — both ends land in
+    // init's own table — moves one to the peer, and then **drops the other**.
     //
     // Dropping it is what makes this arm load-bearing rather than decorative.
-    // A capability transfer splits the loopback, so if init kept its half the
-    // channel would still be named by a live capability table and
-    // `GraphTables::holds_endpoint` alone would preserve it — the arm would
-    // pass with the `Transit` half of the predicate deleted, which is exactly
-    // the false confidence B16's retro warns about. With both of init's slots
-    // gone, the transit entry is the *only* thing naming this channel for the
-    // whole loop, so a sweep that does not consult `Transit` frees it.
+    // If init kept its half the channel would still be named by a live
+    // capability table and `GraphTables::holds_endpoint` alone would preserve
+    // it — the arm would pass with the `Transit` half of the predicate deleted,
+    // which is exactly the false confidence B16's retro warns about. With both
+    // of init's slots gone, the transit entry is the *only* thing naming this
+    // channel for the whole loop, so a sweep that does not consult `Transit`
+    // frees it.
     let (in_flight_kept, in_flight_moved) = slime_rt::endpoint_create(ENDPOINT_FACTORY_SLOT)
         .unwrap_or_else(|_| fail_crossing(b"in-flight endpoint"));
     let descriptor = slime_proto::capability_transfer::WireCapabilityTransfer {
@@ -2502,17 +3426,19 @@ fn drive_crossing_plane() {
 
     // ---- a pair init keeps across the crossing ----
     //
-    // A loopback: init holds both ends, so a send followed by a receive on the
-    // same key round-trips through the one queue a self-edge has. That makes
-    // "still works afterwards" observable without a second component.
-    let (retained, _retained_peer) = slime_rt::endpoint_create(ENDPOINT_FACTORY_SLOT)
+    // Init holds both ends, so a send on one and a receive on the other
+    // round-trips through the forward queue. Both slots rather than one: since
+    // B25 a minted pair is the oracle's `ipc::channel()` — two endpoints with
+    // two directed queues — so a send and a receive on the *same* end address
+    // opposite queues and could never meet.
+    let (retained, retained_peer) = slime_rt::endpoint_create(ENDPOINT_FACTORY_SLOT)
         .unwrap_or_else(|_| fail_crossing(b"retained endpoint"));
     if slime_rt::send(retained, b"before", &[]) != slime_rt::ERR_SUCCESS {
         fail_crossing(b"the retained pair did not carry before the crossing");
     }
     let mut payload = [0u8; slime_rt::MAX_MSG];
     let mut caps = [0u64; slime_rt::MAX_CAPS_PER_MSG];
-    if slime_rt::recv(retained, &mut payload, &mut caps) != 6 {
+    if slime_rt::recv(retained_peer, &mut payload, &mut caps) != 6 {
         fail_crossing(b"the retained pair did not deliver before the crossing");
     }
     slime_rt::debug_write(b"[init] channel pair retained\n");
@@ -2537,7 +3463,7 @@ fn drive_crossing_plane() {
         if slime_rt::send(ours, b"loop", &[]) != slime_rt::ERR_SUCCESS {
             fail_crossing(b"a loop pair could not carry");
         }
-        if slime_rt::recv(ours, &mut payload, &mut caps) != 4 {
+        if slime_rt::recv(theirs, &mut payload, &mut caps) != 4 {
             fail_crossing(b"a loop pair did not deliver");
         }
         if slime_rt::cap_drop(ours) != slime_rt::ERR_SUCCESS
@@ -2559,7 +3485,7 @@ fn drive_crossing_plane() {
     if slime_rt::send(retained, b"after", &[]) != slime_rt::ERR_SUCCESS {
         fail_crossing(b"a retained pair lost its queue");
     }
-    if slime_rt::recv(retained, &mut payload, &mut caps) != 5 {
+    if slime_rt::recv(retained_peer, &mut payload, &mut caps) != 5 {
         fail_crossing(b"a retained pair stopped delivering");
     }
     slime_rt::debug_write(b"[init] retained pair carried after crossing\n");

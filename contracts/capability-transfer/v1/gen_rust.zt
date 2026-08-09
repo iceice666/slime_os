@@ -18,6 +18,7 @@ Protocol :: type {
   objectKindSharedBuffer : Int;
   objectKindSharedBufferLoan : Int;
   objectKindSupervision : Int;
+  objectKindDirectory : Int;
   flagRetainTransfer : Int;
   knownFlags : Int;
   directionPublish : Int;
@@ -146,6 +147,7 @@ rustBindings :: Protocol -> Text
     "pub const OBJECT_KIND_SHARED_BUFFER: u32 = "; n.toText protocol.objectKindSharedBuffer; ";\n";
     "pub const OBJECT_KIND_SHARED_BUFFER_LOAN: u32 = "; n.toText protocol.objectKindSharedBufferLoan; ";\n";
     "pub const OBJECT_KIND_SUPERVISION: u32 = "; n.toText protocol.objectKindSupervision; ";\n";
+    "pub const OBJECT_KIND_DIRECTORY: u32 = "; n.toText protocol.objectKindDirectory; ";\n";
     "pub const FLAG_RETAIN_TRANSFER: u32 = "; n.toText protocol.flagRetainTransfer; ";\n";
     "pub const KNOWN_FLAGS: u32 = "; n.toText protocol.knownFlags; ";\n";
     "pub const DIRECTION_PUBLISH: u32 = "; n.toText protocol.directionPublish; ";\n";

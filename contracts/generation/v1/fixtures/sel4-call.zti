@@ -92,21 +92,21 @@
       source = "init";
       target = "fabric-call-client";
       rights = ["exec"; "spawn";];
-      transferable = false;
+      transferable = true;
     };
     {
       name = "init-fabric-call-client-b";
       source = "init";
       target = "fabric-call-client-b";
       rights = ["exec"; "spawn";];
-      transferable = false;
+      transferable = true;
     };
     {
       name = "init-fabric-call-server";
       source = "init";
       target = "fabric-call-server";
       rights = ["exec"; "spawn";];
-      transferable = false;
+      transferable = true;
     };
     {
       name = "init-fabric-call-time";

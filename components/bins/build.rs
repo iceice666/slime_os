@@ -44,6 +44,10 @@ fn main() {
     println!("cargo:rerun-if-env-changed=SLIME_SEL4_SUPERVISION_CHECK");
     println!("cargo:rerun-if-env-changed=SLIME_SEL4_CROSSING_CHECK");
     println!("cargo:rerun-if-env-changed=SLIME_SEL4_CALL_CHECK");
+    println!("cargo:rerun-if-env-changed=SLIME_SEL4_OPERATION_CHECK");
+    println!("cargo:rerun-if-env-changed=SLIME_SEL4_VISIBILITY_CHECK");
+    println!("cargo:rerun-if-env-changed=SLIME_SEL4_BOOT_CHECK");
+    println!("cargo:rerun-if-env-changed=SLIME_SEL4_STORAGE_CHECK");
     println!("cargo:rerun-if-env-changed=SLIME_FABRIC_AUTHORITY_CHECK");
     println!("cargo:rerun-if-env-changed=SLIME_FABRIC_STREAM_CHECK");
     println!("cargo:rerun-if-env-changed=SLIME_FABRIC_QOS_CHECK");
@@ -101,6 +105,48 @@ fn main() {
     if let Ok(value) = std::env::var("SLIME_SEL4_CALL_CHECK") {
         println!("cargo:rustc-env=SLIME_SEL4_CALL_CHECK={value}");
     }
+    if let Ok(value) = std::env::var("SLIME_SEL4_OPERATION_CHECK") {
+        println!("cargo:rustc-env=SLIME_SEL4_OPERATION_CHECK={value}");
+    }
+    if let Ok(value) = std::env::var("SLIME_SEL4_VISIBILITY_CHECK") {
+        println!("cargo:rustc-env=SLIME_SEL4_VISIBILITY_CHECK={value}");
+    }
+    if let Ok(value) = std::env::var("SLIME_SEL4_BOOT_CHECK") {
+        println!("cargo:rustc-env=SLIME_SEL4_BOOT_CHECK={value}");
+    }
+    if let Ok(value) = std::env::var("SLIME_SEL4_STORAGE_CHECK") {
+        println!("cargo:rustc-env=SLIME_SEL4_STORAGE_CHECK={value}");
+    }
+    if let Ok(value) = std::env::var("SLIME_SEL4_STORE_CHECK") {
+        println!("cargo:rustc-env=SLIME_SEL4_STORE_CHECK={value}");
+    }
+    if let Ok(value) = std::env::var("SLIME_SEL4_ROLLBACK_CHECK") {
+        println!("cargo:rustc-env=SLIME_SEL4_ROLLBACK_CHECK={value}");
+    }
+    if let Ok(value) = std::env::var("SLIME_SEL4_RECOVERY_PLANE_CHECK") {
+        println!("cargo:rustc-env=SLIME_SEL4_RECOVERY_PLANE_CHECK={value}");
+    }
+    if let Ok(value) = std::env::var("SLIME_SEL4_GENERATION_CHECK") {
+        println!("cargo:rustc-env=SLIME_SEL4_GENERATION_CHECK={value}");
+    }
+    if let Ok(value) = std::env::var("SLIME_SEL4_DIRECTORY_CHECK") {
+        println!("cargo:rustc-env=SLIME_SEL4_DIRECTORY_CHECK={value}");
+    }
+    if let Ok(value) = std::env::var("SLIME_SEL4_FILESYSTEM_CHECK") {
+        println!("cargo:rustc-env=SLIME_SEL4_FILESYSTEM_CHECK={value}");
+    }
+    if let Ok(value) = std::env::var("SLIME_SEL4_DANGO_CHECK") {
+        println!("cargo:rustc-env=SLIME_SEL4_DANGO_CHECK={value}");
+    }
+    if let Ok(value) = std::env::var("SLIME_SEL4_INPUT_CHECK") {
+        println!("cargo:rustc-env=SLIME_SEL4_INPUT_CHECK={value}");
+    }
+    if let Ok(value) = std::env::var("SLIME_SEL4_POWERBOX_CHECK") {
+        println!("cargo:rustc-env=SLIME_SEL4_POWERBOX_CHECK={value}");
+    }
+    if let Ok(value) = std::env::var("SLIME_SEL4_TRANSFER_CHECK") {
+        println!("cargo:rustc-env=SLIME_SEL4_TRANSFER_CHECK={value}");
+    }
     if let Ok(value) = std::env::var("SLIME_FABRIC_AUTHORITY_CHECK") {
         println!("cargo:rustc-env=SLIME_FABRIC_AUTHORITY_CHECK={value}");
     }
@@ -152,8 +198,19 @@ fn generate_boot_layout(manifest_dir: &str) {
 }
 
 fn generate_command_profile(manifest_dir: &str) {
-    let manifest_path =
-        std::path::Path::new(manifest_dir).join("../../contracts/generation/v1/fixtures/valid.zti");
+    // Which manifest the profile comes from.
+    //
+    // `valid.zti` is the oracle's, and was the only one until P5.4.3: a seL4
+    // plane running Dango needs the profile generated from *its* generation,
+    // because the command names must resolve to executables that generation
+    // declares. The builder sets `SLIME_COMMAND_PROFILE_MANIFEST` when the
+    // selected manifest is not the oracle's.
+    println!("cargo:rerun-if-env-changed=SLIME_COMMAND_PROFILE_MANIFEST");
+    let manifest_name =
+        std::env::var("SLIME_COMMAND_PROFILE_MANIFEST").unwrap_or_else(|_| "valid.zti".to_string());
+    let manifest_path = std::path::Path::new(manifest_dir)
+        .join("../../contracts/generation/v1/fixtures")
+        .join(&manifest_name);
     println!("cargo:rerun-if-changed={}", manifest_path.display());
     let manifest = std::fs::read_to_string(&manifest_path).expect("read generation manifest");
     let dango = component_block(&manifest, "dango").expect("dango component");

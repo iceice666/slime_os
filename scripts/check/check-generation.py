@@ -15,6 +15,8 @@ from boot_contracts import *
 from harness import ROOT
 from release_trust import authority_manifest_identity, initial_public_keys, ssh_signed_payload
 
+SEL4_EXTERNAL_KERNEL = b"SLIME-SEL4-KERNEL-EXTERNAL\0"
+
 class CheckError(ValueError):
     pass
 
@@ -109,7 +111,10 @@ def check_component_image(blob: bytes, profile, name: str) -> None:
         target_profile,
         required_features,
     ) = COMPONENT_IMAGE_HEADER.unpack_from(blob)
-    require(magic == COMPONENT_IMAGE_MAGIC, f"BadComponentMagic:{name}")
+    require(
+        magic in (COMPONENT_IMAGE_MAGIC, COMPONENT_IMAGE_ELF_MAGIC),
+        f"BadComponentMagic:{name}",
+    )
     require(
         version == COMPONENT_IMAGE_VERSION
         and header == COMPONENT_IMAGE_HEADER.size
@@ -178,7 +183,10 @@ def check_generation(data: bytes, expected_identity: bytes | None = None) -> dic
         previous_id, previous_payload = object_id, offset + length
     require(previous_payload == len(data), "TrailingGenerationBytes")
     require(kernel_index < objects and object_rows[kernel_index][1] == 1, "BadKernelObject")
-    check_kernel_image(object_rows[kernel_index][2], profile)
+    if profile.name == "aarch64-sel4-qemu-virt":
+        require(object_rows[kernel_index][2] == SEL4_EXTERNAL_KERNEL, "BadExternalKernelObject")
+    else:
+        check_kernel_image(object_rows[kernel_index][2], profile)
     component_rows = []
     previous_name = ""
     for index in range(components):

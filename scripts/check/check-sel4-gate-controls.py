@@ -54,12 +54,27 @@ GATES: tuple[tuple[str, str, int], ...] = (
     ("sel4_component_graph", "check/check-sel4-component-graph.py", 19),
     ("sel4_crossing_plane", "check/check-sel4-crossing-plane.py", 10),
     ("sel4_loan_plane", "check/check-sel4-loan-plane.py", 44),
-    ("sel4_root_boot", "check/check-sel4-root-boot.py", 40),
+    ("sel4_root_boot", "check/check-sel4-root-boot.py", 43),
     ("sel4_sample_plane", "check/check-sel4-sample-plane.py", 19),
     ("sel4_spawn_plane", "check/check-sel4-spawn-plane.py", 32),
     ("sel4_supervision_plane", "check/check-sel4-supervision-plane.py", 11),
     ("sel4_stream_plane", "check/check-sel4-stream-plane.py", 56),
     ("sel4_qos_plane", "check/check-sel4-qos-plane.py", 14),
+    ("sel4_call_plane", "check/check-sel4-call-plane.py", 50),
+    ("sel4_operation_plane", "check/check-sel4-operation-plane.py", 53),
+    ("sel4_visibility_plane", "check/check-sel4-visibility-plane.py", 25),
+    ("sel4_boot_plane", "check/check-sel4-boot-plane.py", 44),
+    ("sel4_storage_plane", "check/check-sel4-storage-plane.py", 10),
+    ("sel4_store_plane", "check/check-sel4-store-plane.py", 15),
+    ("sel4_rollback_plane", "check/check-sel4-rollback-plane.py", 17),
+    ("sel4_recovery_plane", "check/check-sel4-recovery-plane.py", 12),
+    ("sel4_generation_plane", "check/check-sel4-generation-plane.py", 20),
+    ("sel4_directory_plane", "check/check-sel4-directory-plane.py", 17),
+    ("sel4_filesystem_plane", "check/check-sel4-filesystem-plane.py", 11),
+    ("sel4_input_plane", "check/check-sel4-input-plane.py", 8),
+    ("sel4_powerbox_plane", "check/check-sel4-powerbox-plane.py", 11),
+    ("sel4_dango_plane", "check/check-sel4-dango-plane.py", 14),
+    ("sel4_transfer_plane", "check/check-sel4-transfer-plane.py", 12),
 )
 
 
@@ -255,8 +270,17 @@ def check_layout_gate() -> int:
         ("header removed", "\n".join(lines[1:]) + "\n"),
         ("terminator removed", "\n".join(lines[:-1]) + "\n"),
         (
+            # Derived from the fixture rather than hardcoded: the channel
+            # plane's layout has grown before and will again, and a literal
+            # `slots=N` that no longer appears makes this mutation a no-op —
+            # a control that silently stops controlling.
             "declared count disagrees with the rows carried",
-            baseline.replace("slots=2", "slots=3", 1),
+            re.sub(
+                r"slots=(\d+)",
+                lambda match: f"slots={int(match.group(1)) + 1}",
+                baseline,
+                count=1,
+            ),
         ),
         (
             "row is malformed",

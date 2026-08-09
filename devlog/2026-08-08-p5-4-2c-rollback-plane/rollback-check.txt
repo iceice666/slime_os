@@ -1,0 +1,54 @@
+Command: just sel4_rollback_check
+Date: 2026-08-08
+Exit: 0
+
+Boot: build/slime-sel4-rollback.elf (generation 25) on the pinned qemu-arm-virt
+profile, against a fresh store fixture (its validated GPT partition; the two
+BootState slots sit above the object store's record area on the same partition).
+
+Observed:
+[sel4-rollback-probe] idle without a run token
+SLIME_GRAPH declared placed task=0 child=2 slot=1 kind=block
+[init] rollback probe spawned
+[sel4-rollback-probe] empty slots refused
+[sel4-rollback-probe] genesis seq=1 pending=0 attempts=0 release=0
+[sel4-rollback-probe] staged seq=2 pending=1 attempts=2 release=0
+[sel4-rollback-probe] attempt seq=3 pending=1 attempts=1 release=0
+[sel4-rollback-probe] attempt seq=4 pending=1 attempts=0 release=0
+[sel4-rollback-probe] attempts exhausted
+[sel4-rollback-probe] rolled-back seq=5 pending=0 attempts=0 release=0
+[sel4-rollback-probe] rollback is idempotent
+[sel4-rollback-probe] unauthorized promotion refused
+[sel4-rollback-probe] promoted seq=7 pending=0 attempts=0 release=1
+[sel4-rollback-probe] both slots decode
+[sel4-rollback-probe] rollback plane complete
+[init] rollback plane complete
+
+Terminal result:
+transcript: 16 markers observed; 6 durable transitions at strictly increasing sequences [1, 2, 3, 4, 5, 7], exhausted attempts rolled back to known-good, rollback is idempotent, and promotion advanced the accepted release
+image: both BootState slots carry a record after the boot, so every transition reached the device
+seL4 rollback plane check: a component walked the BootState transition model on two durable slots — staged a pending generation, consumed both attempts, rolled back to known-good when they were exhausted, found rollback idempotent, refused unauthorized promotion, and promoted the running generation — with M5.6 policy entirely in userspace and every commit written older-slot-first
+
+Enforced beyond the ordered markers:
+- committed sequences are strictly increasing (observed [1, 2, 3, 4, 5, 7]; the
+  gap at 6 is the staging commit before the two refused promotions, which do not
+  commit). A transition that reported the right shape at a repeated sequence
+  would mean the write never reached the device.
+- both BootState slots carry the record magic in the host image after the boot,
+  checked from outside the guest. A device that acknowledged writes it never
+  persisted passes every in-boot assertion and fails here.
+- the transitions wrote ONLY their two slots: the GPT, the protective MBR, the
+  object store's superblocks, and the disk beyond the slots are all compared
+  byte for byte before and after.
+- exactly one instance ran the scenario.
+
+The older-slot-first invariant:
+Each commit targets the slot the boot did NOT select, and the probe re-reads the
+other slot after every attempt commit. That is where a commit writing its own
+slot would be caught: it would pass the sequence pins and leave a moment with
+one root instead of two.
+
+Note on re-running by hand:
+The plane requires the BootState region to start empty, so a second boot against
+the same disk image fails at `empty slots refused` — correctly. The gate builds
+a fresh fixture per run.

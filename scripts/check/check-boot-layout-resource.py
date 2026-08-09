@@ -52,9 +52,8 @@ FIXTURES = ROOT / "contracts" / "boot-layout" / "v1" / "fixtures"
 builder = load_script("build_generation", "build/build-generation.py")
 MANIFEST = builder.load_manifest()
 
-# Fixture stem -> (generation number, boot profile) that boots it. Mirrors
-# `PROFILES` in check-boot-layout.py; the storage fixtures differ only in
-# attached hardware, so several map to the same number.
+# Fixture stem -> (generation number, boot profile) used by the retained
+# contract corpus; storage fixtures differ only in attached hardware.
 #
 # B11: every fixture below `product` boots a profile that declares verification
 # scaffolding, which is why their slot tables are unchanged by that milestone.

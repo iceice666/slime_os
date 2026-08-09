@@ -485,6 +485,39 @@ pub fn read_staged_array(
     Ok(array)
 }
 
+/// Write a reply larger than one message into a caller's window (P5.4.2c).
+///
+/// [`write_staged`] carries a [`StagedFrame`], whose bound is
+/// [`MAX_STAGED_BYTES`] — the *message* bound. A block reply is a 64-byte
+/// record plus a 512-byte sector, and a sector is not a message: it crosses no
+/// channel and is bounded by the window it is written into. This is the same
+/// write path with the window as the only ceiling, mirroring
+/// [`read_staged_array`] on the read side.
+///
+/// Returns the descriptor the caller's `collect` reads the region back at.
+pub fn write_staged_region(
+    window: Option<Window>,
+    bytes: &[u8],
+    scratch: &crate::child_vspace::ScratchPage,
+) -> Result<u64, IpcError> {
+    if bytes.len() > MAX_STAGED_ARRAY_BYTES {
+        return Err(IpcError::InvalidLength);
+    }
+    let window = window.ok_or(IpcError::InvalidLength)?;
+    if frame_len(bytes.len(), 0) > window.len {
+        return Err(IpcError::InvalidLength);
+    }
+    with_window_mapped(window, scratch, |base| {
+        // SAFETY: `base` is the scratch address, where `window.frame` is mapped
+        // read-write for the duration of this closure and aliased by no live
+        // Rust reference. The length was bounded by `window.len` above.
+        unsafe {
+            core::ptr::copy_nonoverlapping(bytes.as_ptr(), base, bytes.len());
+        }
+    })?;
+    Ok(descriptor(bytes.len(), 0, FORM_WINDOW))
+}
+
 /// Write a reply frame into a caller's window. The caller's `collect` reads it
 /// back at the descriptor [`StagedFrame::reply_descriptor`] reports.
 pub fn write_staged(

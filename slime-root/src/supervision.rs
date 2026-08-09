@@ -427,7 +427,12 @@ mod tests {
         let graph = crate::graph::GraphTables::new();
         let mut transit = crate::transit::Transit::new();
         transit
-            .depart(handle(TaskId(7)), TaskId(2), TaskId(3))
+            .depart(
+                handle(TaskId(7)),
+                TaskId(2),
+                11,
+                crate::graph::Side::Consumer,
+            )
             .expect("transit has room");
 
         assert_eq!(super::sweep(&mut terminations, &graph, &transit), 0);

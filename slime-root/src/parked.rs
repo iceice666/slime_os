@@ -75,6 +75,19 @@ pub struct SavedReply {
 
 /// Replies the root holds on behalf of blocked tasks.
 pub struct ParkedReplies {
+    /// CSlots emptied by a completed reply, ready to hold the next one.
+    ///
+    /// The object allocator's slot cursor is monotonic, which is right for
+    /// every *object* the root retypes: those live for the boot. A saved reply
+    /// does not — it is emptied the moment the answer is sent, and its index is
+    /// immediately reusable.
+    ///
+    /// Without this, a long session exhausts the CSpace: a Dango plane makes
+    /// one parkable call per keystroke, and P5.4.3 observed 1220 consecutive
+    /// `reply authority unavailable` refusals before the graph wedged. Nothing
+    /// was leaking capabilities — `delete_slot` ran every time — but the index
+    /// was never handed back.
+    free: [Option<sel4::init_thread::Slot<sel4::cap_type::Unspecified>>; MAX_PARKED],
     entries: [Option<Held>; MAX_PARKED],
     len: usize,
     /// CSlots handed back after a discarded or delivered reply, so the boot's
@@ -85,6 +98,7 @@ pub struct ParkedReplies {
 impl ParkedReplies {
     pub const fn new() -> Self {
         Self {
+            free: [const { None }; MAX_PARKED],
             entries: [None; MAX_PARKED],
             len: 0,
             recycled: 0,
@@ -138,9 +152,14 @@ impl ParkedReplies {
         allocator: &mut ObjectAllocator,
         task: TaskId,
     ) -> Result<SavedReply, IpcError> {
-        let slot = allocator
-            .reserve_slot::<sel4::cap_type::Unspecified>()
-            .map_err(|_| IpcError::DestinationSlotsExhausted)?;
+        // A recycled slot first: it is empty, and reusing it is what keeps a
+        // long session from walking the CSpace cursor off its end.
+        let slot = match self.free.iter_mut().find_map(Option::take) {
+            Some(slot) => slot,
+            None => allocator
+                .reserve_slot::<sel4::cap_type::Unspecified>()
+                .map_err(|_| IpcError::DestinationSlotsExhausted)?,
+        };
         sel4::init_thread::slot::CNODE
             .cap()
             .absolute_cptr(slot.cptr())
@@ -242,6 +261,13 @@ impl ParkedReplies {
     fn release_slot(&mut self, slot: sel4::init_thread::Slot<sel4::cap_type::Unspecified>) {
         delete_slot(slot);
         self.recycled += 1;
+        // Kept for the next save. The table is `MAX_PARKED` wide and at most
+        // that many replies are ever outstanding, so a slot that finds no room
+        // here cannot exist — but dropping one would only cost an index, not
+        // correctness, so this does not fail.
+        if let Some(entry) = self.free.iter_mut().find(|entry| entry.is_none()) {
+            *entry = Some(slot);
+        }
     }
 }
 

@@ -92,9 +92,9 @@ fn main() {
         route,
         scenario::envelope(session, 11, KIND_REQUEST, 0, STATUS_SUCCESS, 11),
     );
-    signal_phase(3);
-    scenario::expect_terminal_yielding(route, session, 11, STATUS_PEER_DEAD);
+    scenario::expect_terminal_parked(route, session, 11, STATUS_PEER_DEAD);
     slime_rt::debug_write(b"[fabric-call-client] peer death distinct\n");
+    signal_phase(3);
 }
 
 fn signal_phase(phase: u8) {

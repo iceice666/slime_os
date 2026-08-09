@@ -1,0 +1,7 @@
+[layout] path=init slots=5 max=64
+[layout] 0 endpoint-factory - 0x20000
+[layout] 1 executable spawn-service 0x10008
+[layout] 2 executable dango 0x10008
+[layout] 3 executable console 0x10008
+[layout] 4 shared-buffer-factory - 0x1000000
+[layout] end

@@ -1,0 +1,46 @@
+Command: just sel4_recovery_plane_check
+Date: 2026-08-08
+Exit: 0
+
+Boot: build/slime-sel4-recovery.elf (generation 26) on the pinned qemu-arm-virt
+profile, with TWO disks attached: the recovery fixture, and a 1 MiB guard disk
+signed GUARDDSK that no capability the component holds names.
+
+Observed:
+[sel4-recovery-probe] idle without a run token
+SLIME_GRAPH declared placed task=0 child=2 slot=1 kind=block
+[init] recovery probe spawned
+[sel4-recovery-probe] dual corruption refused
+[sel4-recovery-probe] index states=1 release=3
+[sel4-recovery-probe] closure verified objects=1 of=1
+[sel4-recovery-probe] reconstructed seq=2 release=3
+[sel4-recovery-probe] both slots decode
+[sel4-recovery-probe] reconstruction is idempotent
+[sel4-recovery-probe] ungranted device refused
+[sel4-recovery-probe] recovery plane complete
+[init] recovery plane complete
+
+Terminal result:
+transcript: 12 markers observed; two corrupt slots refused, a signed index decoded, 1 state object verified against the store, and a reconstructed root selected at sequence 2
+image: both BootState slots carry a record, so reconstruction left redundancy rather than a single root
+guard: the second disk, which no capability names, is byte-identical after the boot
+seL4 recovery plane check: a component refused two corrupt BootState slots, decoded a signed recovery index, verified its whole state closure against the content-addressed store, reconstructed a bootable root into both slots idempotently, and left an attached disk that no capability names byte-identical
+
+Enforced beyond the ordered markers:
+- the GUARD DISK is hashed before and after the boot and must be byte-identical,
+  and must still carry its signature. This is M5.9's containment requirement:
+  the serial marker proves the component *asked* for a device it was not
+  granted; only the image proves nothing reached it.
+- both BootState slots carry the record magic in the host image after the boot,
+  so reconstruction left redundancy rather than a single root.
+- reconstruction wrote ONLY the two slots: the GPT, the protective MBR, the
+  object store's superblocks and records, and the recovery index it read are all
+  compared byte for byte before and after.
+- exactly one instance ran the scenario.
+
+Why the second disk is attached at all:
+M5.9's exit condition is "reconstructs a verified bootable root without
+modifying any device not named by an explicit capability". A plane with one disk
+cannot test the second half. The component holds exactly one block capability,
+so there is no slot number that reaches the guard disk — the refusal is the
+capability model, not a check inside the component.

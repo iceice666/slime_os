@@ -32,12 +32,13 @@
 //!
 //! A bidirectional grant whose two ends are the *same* component is a loopback,
 //! and that is one queue rather than two: a task sending to itself must receive
-//! what it sent. See [`ChannelTable::push`].
+//! what it sent. A second queue would have no distinct peer end that could
+//! reach it.
 //!
 //! # Slot numbering
 //!
-//! Two rules, because two kinds of component learn their slot numbers
-//! differently:
+//! Two numbering rules preserve the slot contracts the component binaries
+//! compile against:
 //!
 //! - The **bootstrap component** takes its slots from the generation's
 //!   boot-layout resource, the way `LayoutPlacer` does in the retired kernel.
@@ -82,7 +83,7 @@ use boot_contracts::boot_layout::{BootLayout, Role, channel_identity};
 use boot_contracts::generation::Generation;
 
 use crate::generation::{RIGHT_RECV, RIGHT_SEND};
-use crate::graph::{self, GraphTables};
+use crate::graph::{self, GraphTables, Side};
 use crate::ipc::{Channel, ChannelKey, IpcError};
 use crate::task::TaskId;
 use crate::transit::Transit;
@@ -111,94 +112,79 @@ const RIGHT_SUPERVISE: u64 = 1 << 18;
 /// downstream of that, which reads as four broken components rather than one
 /// exhausted table.
 ///
-/// Thirty-two is `task::MAX_TASKS`, chosen because the growth is driven by
-/// route roles rather than by task pairs and a bound that tracks the wrong
-/// quantity would have to move again at the next graph. At ~1.3 KiB per queue
-/// it costs about 40 KiB of additional `.data`, which is why the table lives in
-/// a `static`: constructing something this size in a stack frame overflows it
-/// silently, exactly the failure backlog B3 records for the retired kernel's
-/// `SharedBufferTable`.
+/// Thirty-two was `task::MAX_TASKS`, chosen because the growth is driven by
+/// route roles rather than by task pairs. P5.4.9 disproved that too, in the
+/// same direction P5.5.2 disproved the first bound: the C8.10 full-graph boot
+/// runs every plane at once and needs **thirty-seven** live at its peak — 16
+/// participant controls, 14 stream role channels, 3 call, and 4 operation — so
+/// a bound tracking the task count is again tracking the wrong quantity.
+///
+/// Forty-eight, with headroom rather than exactly 37, for B28's reason: a bound
+/// raised to the first passing number is a bound that moves again at the next
+/// graph, and the failure it produces is not a clean refusal — the fabric's
+/// eleventh `endpoint_create` fails and every participant downstream of it
+/// fails too, which reads as four broken components rather than one exhausted
+/// table.
+///
+/// At ~4.2 KiB per entry (two queues of `CHANNEL_CAPACITY` ×
+/// `MAX_MESSAGE_BYTES` messages) this costs about 66 KiB of additional `.bss`
+/// over the previous bound, against a root task whose `.bss` is already
+/// measured in megabytes. It lives in a `static` for that reason: constructing
+/// something this size in a stack frame overflows it silently, exactly the
+/// failure backlog B3 records for the retired kernel's `SharedBufferTable`.
 ///
 /// This bounds the channels **live at once**, not the channels a boot may ever
 /// mint. [`sweep`] reclaims every entry no live holder can name, which is what
 /// closes backlog **B22**: before it, `push` never freed and `key = self.len`
 /// meant a long-running graph spent one of these permanently per
 /// `endpoint_create`, however short-lived the pair.
-pub const MAX_CHANNELS: usize = 32;
+pub const MAX_CHANNELS: usize = 48;
 
-/// One logical channel: the two tasks holding it, and the directed queues
-/// between them. A one-directional grant leaves `reverse` absent, so a task
-/// cannot receive on a channel the generation only let it produce to.
+/// One logical channel: one or two directed queues.
+///
+/// Holders are deliberately absent. Each endpoint capability carries its
+/// [`Side`], so any number of tables may name either end without changing this
+/// entry. That is B25's copy semantics and matches x86's cloned endpoint.
 struct Entry {
     key: ChannelKey,
-    /// The end the grant made the producer; see the module doc's direction rule.
-    producer: TaskId,
-    /// The opposite end. Equal to `producer` for a loopback.
-    consumer: TaskId,
     /// Queue carrying producer → consumer. Always present: every channel has at
     /// least one direction, whichever right named it.
     forward: Option<Channel>,
-    /// Queue carrying consumer → producer, present only when the grant is
-    /// bidirectional *and* the two ends are different tasks. A loopback has no
-    /// reverse: both accessors resolve to `forward` for the one task holding it.
+    /// Queue carrying consumer → producer, present only for a bidirectional
+    /// non-loopback channel. A declared loopback uses `forward` both ways.
     reverse: Option<Channel>,
     /// Whether the generation declared this grant `transferable`.
-    ///
-    /// Recorded on the channel rather than folded into the ends' rights bits,
-    /// because it is not authority over the *channel*: it does not widen what
-    /// either end may send or receive. It is the generation's statement that
-    /// this edge may carry delegated authority, and the only thing that reads
-    /// it is the loan plane, which refuses to mint a loan over an edge the
-    /// generation did not mark — see `main.rs::serve_buffer_loan`.
     transferable: bool,
 }
 
 impl Entry {
-    /// The queue `task` may enqueue onto, if the grant gave it one.
-    ///
-    /// Note the order of the two comparisons here and in [`Self::recv_queue`]:
-    /// when both ends are one task — a loopback — `producer` matches first in
-    /// both, so sending and receiving resolve to the same queue. That is what a
-    /// task sending to itself must mean, and [`ChannelTable::push`] allocates
-    /// only that one queue for such a channel.
-    fn send_queue(&self, task: TaskId) -> Option<&Channel> {
-        if task == self.producer {
-            self.forward.as_ref()
-        } else if task == self.consumer {
-            self.reverse.as_ref()
-        } else {
-            None
+    /// The queue `side` may enqueue onto, if the grant created that direction.
+    fn send_queue(&self, side: Side) -> Option<&Channel> {
+        match side {
+            Side::Producer | Side::Loopback => self.forward.as_ref(),
+            Side::Consumer => self.reverse.as_ref(),
         }
     }
 
-    fn send_queue_mut(&mut self, task: TaskId) -> Option<&mut Channel> {
-        if task == self.producer {
-            self.forward.as_mut()
-        } else if task == self.consumer {
-            self.reverse.as_mut()
-        } else {
-            None
+    fn send_queue_mut(&mut self, side: Side) -> Option<&mut Channel> {
+        match side {
+            Side::Producer | Side::Loopback => self.forward.as_mut(),
+            Side::Consumer => self.reverse.as_mut(),
         }
     }
 
-    /// The queue `task` may dequeue from: the one its peer sends on.
-    fn recv_queue(&self, task: TaskId) -> Option<&Channel> {
-        if task == self.consumer {
-            self.forward.as_ref()
-        } else if task == self.producer {
-            self.reverse.as_ref()
-        } else {
-            None
+    /// The queue `side` may dequeue from: the one its opposite sends on.
+    fn recv_queue(&self, side: Side) -> Option<&Channel> {
+        match side {
+            Side::Consumer | Side::Loopback => self.forward.as_ref(),
+            Side::Producer => self.reverse.as_ref(),
         }
     }
 
-    fn recv_queue_mut(&mut self, task: TaskId) -> Option<&mut Channel> {
-        if task == self.consumer {
-            self.forward.as_mut()
-        } else if task == self.producer {
-            self.reverse.as_mut()
-        } else {
-            None
+    fn recv_queue_mut(&mut self, side: Side) -> Option<&mut Channel> {
+        match side {
+            Side::Consumer | Side::Loopback => self.forward.as_mut(),
+            Side::Producer => self.reverse.as_mut(),
         }
     }
 
@@ -209,10 +195,6 @@ impl Entry {
     /// The read-only sibling of [`Self::queues_mut`], for the wedge diagnostic.
     fn queues(&self) -> impl Iterator<Item = &Channel> {
         self.forward.iter().chain(self.reverse.iter())
-    }
-
-    fn involves(&self, task: TaskId) -> bool {
-        self.producer == task || self.consumer == task
     }
 }
 
@@ -311,42 +293,43 @@ impl ChannelTable {
         self.minted
     }
 
-    /// Directed queues that still have a live peer. Reaching zero is what the
-    /// service loop's termination condition reads.
-    pub fn live_queues(&self) -> usize {
+    /// Directed queues that are still usable: something can still name the
+    /// channel, and its peer is alive. Reaching zero is what the service loop's
+    /// termination condition reads.
+    ///
+    /// Nameability is part of the question since B25. An entry survives until a
+    /// [`sweep`] frees it, and sweeping is lazy-on-full, so a boot that released
+    /// every end can still hold entries no capability reaches — queues with no
+    /// peer at all rather than a live one. Before B25 the entry cached a task
+    /// per end and `mark_dead` killed those queues when that task died, which
+    /// hid the difference; a copied end has holders rather than a holder, so the
+    /// count has to be derived from the same predicate [`sweep`] uses.
+    pub fn live_queues(&self, graph: &GraphTables, transit: &Transit) -> usize {
         self.entries
             .iter()
             .flatten()
+            .filter(|entry| graph.holds_endpoint(entry.key) || transit.holds_endpoint(entry.key))
             .flat_map(|entry| entry.forward.iter().chain(entry.reverse.iter()))
             .filter(|queue| queue.peer_alive())
             .count()
     }
 
-    /// The queue `task` may send on over `key`.
-    pub fn send_queue(&self, key: ChannelKey, task: TaskId) -> Option<&Channel> {
-        self.entry(key)?.send_queue(task)
+    /// The queue `side` may send on over `key`.
+    pub fn send_queue(&self, key: ChannelKey, side: Side) -> Option<&Channel> {
+        self.entry(key)?.send_queue(side)
     }
 
-    pub fn send_queue_mut(&mut self, key: ChannelKey, task: TaskId) -> Option<&mut Channel> {
-        self.entry_mut(key)?.send_queue_mut(task)
+    pub fn send_queue_mut(&mut self, key: ChannelKey, side: Side) -> Option<&mut Channel> {
+        self.entry_mut(key)?.send_queue_mut(side)
     }
 
-    /// The queue `task` may receive from over `key`.
-    pub fn recv_queue(&self, key: ChannelKey, task: TaskId) -> Option<&Channel> {
-        self.entry(key)?.recv_queue(task)
+    /// The queue `side` may receive from over `key`.
+    pub fn recv_queue(&self, key: ChannelKey, side: Side) -> Option<&Channel> {
+        self.entry(key)?.recv_queue(side)
     }
 
-    pub fn recv_queue_mut(&mut self, key: ChannelKey, task: TaskId) -> Option<&mut Channel> {
-        self.entry_mut(key)?.recv_queue_mut(task)
-    }
-
-    /// How many channels `task` holds an end of.
-    pub fn held_by(&self, task: TaskId) -> usize {
-        self.entries
-            .iter()
-            .flatten()
-            .filter(|entry| entry.involves(task))
-            .count()
+    pub fn recv_queue_mut(&mut self, key: ChannelKey, side: Side) -> Option<&mut Channel> {
+        self.entry_mut(key)?.recv_queue_mut(side)
     }
 
     /// Whether the generation declared this channel's grant `transferable`.
@@ -357,30 +340,29 @@ impl ChannelTable {
         self.entry(key).map(|entry| entry.transferable)
     }
 
-    /// The task at the other end of `key` from `task`.
-    pub fn peer(&self, key: ChannelKey, task: TaskId) -> Option<TaskId> {
-        let entry = self.entry(key)?;
-        if entry.producer == task {
-            Some(entry.consumer)
-        } else if entry.consumer == task {
-            Some(entry.producer)
-        } else {
-            None
-        }
-    }
-
-    /// Mark every queue `task` held an end of as having a dead peer, so a
-    /// parked receive returns `PeerDead` instead of waiting forever.
+    /// Mark queues whose last holder died as having a dead peer.
     ///
-    /// Returns the wakes the caller must deliver, paired with the channel they
-    /// came from. Both queues of a bidirectional channel die together: the peer
-    /// is gone in both directions.
-    pub fn mark_dead(&mut self, task: TaskId, wakes: &mut DeathWakes) {
+    /// An end can have more than one holder since B25. A task dying abandons a
+    /// side only when no other live table reaches that side; killing the queue
+    /// for the first co-holder would strand the survivor on a channel whose
+    /// opposite end is still alive.
+    ///
+    /// The dying task's table is still installed, so every holder query excludes
+    /// it explicitly.
+    pub fn mark_dead(&mut self, graph: &GraphTables, task: TaskId, wakes: &mut DeathWakes) {
         for entry in self.entries.iter_mut().flatten() {
-            if !entry.involves(task) {
+            let key = entry.key;
+            let abandoned = [Side::Producer, Side::Consumer, Side::Loopback]
+                .into_iter()
+                .filter(|side| {
+                    graph
+                        .get(task)
+                        .is_some_and(|table| table.reaches_endpoint(key, *side))
+                })
+                .any(|side| !graph.holds_endpoint_side(key, side, Some(task)));
+            if !abandoned {
                 continue;
             }
-            let key = entry.key;
             for queue in entry.queues_mut() {
                 let batch = queue.mark_peer_dead();
                 for index in 0..batch.len() {
@@ -389,58 +371,6 @@ impl ChannelTable {
                     }
                 }
             }
-        }
-    }
-
-    /// Move the end `from` holds on `key` to `to`.
-    ///
-    /// A channel's queues are resolved by *which task* holds each end — see
-    /// [`Entry::send_queue`] — rather than by anything carried in the
-    /// capability. So handing a child a channel end at spawn is not complete
-    /// until the table agrees the child is the holder: a capability alone would
-    /// resolve to no queue at all, because the child matches neither
-    /// `producer` nor `consumer`.
-    ///
-    /// That makes this a **move**, where the retired kernel's spawn grant is a
-    /// non-consuming copy. The difference is real but narrow, and it falls on
-    /// the side of less authority: there, parent and child would both hold a
-    /// working end; here the parent gives its end up. Every x86 caller already
-    /// behaves that way — `launch_sample_plane` grants each half to exactly one
-    /// child, and `launch_fabric_graph`'s comment states outright that init
-    /// "releases the control endpoint as soon as the spawn that needed them
-    /// returns". A parent that tried to keep a granted end would find it gone
-    /// rather than find it silently shared.
-    ///
-    /// `false` when `from` holds no end of this channel, which the caller turns
-    /// into a refused spawn rather than a partially distributed graph.
-    pub fn reassign(&mut self, key: ChannelKey, from: TaskId, to: TaskId) -> bool {
-        let Some(entry) = self.entry_mut(key) else {
-            return false;
-        };
-        // A loopback is the case [`Self::mint`] creates: both ends start with
-        // the minting task, and handing one to a child is the whole point.
-        // Splitting it makes the pair real — the consumer end moves, the task
-        // keeps the producer end, and the reverse queue the two-task shape
-        // needs is allocated here rather than at mint, because until now there
-        // was only one task to carry it.
-        if entry.producer == entry.consumer {
-            if entry.producer != from || from == to {
-                return false;
-            }
-            entry.consumer = to;
-            if entry.reverse.is_none() {
-                entry.reverse = Some(Channel::new(entry.key));
-            }
-            return true;
-        }
-        if entry.producer == from {
-            entry.producer = to;
-            true
-        } else if entry.consumer == from {
-            entry.consumer = to;
-            true
-        } else {
-            false
         }
     }
 
@@ -455,32 +385,21 @@ impl ChannelTable {
             .find(|entry| entry.key == key)
     }
 
-    /// Mint a bidirectional channel between `first` and `second` at runtime.
+    /// Mint a bidirectional runtime pair.
     ///
-    /// The generation declares the graph's *standing* edges; this is how a
-    /// component that holds an `EndpointFactory` makes one the generation could
-    /// not have named — a per-request context channel, whose two ends exist
-    /// only for as long as the request does. `spawn-service` does exactly this
-    /// on every x86 boot (`endpoint_create(3)` then `send_context`), which is
-    /// why the operation must exist before any component can hand a child its
-    /// launch context.
-    ///
-    /// Marked `transferable`, matching the retired kernel's
-    /// `sys_endpoint_create`: a freshly minted pair carries `RIGHT_TRANSFER` on
-    /// both ends because handing one half away is the only reason to mint one.
-    /// That is not a widening of the generation's authority — the authority to
-    /// mint at all came from a declared `endpointCreate` grant.
-    pub fn mint(&mut self, first: TaskId, second: TaskId) -> Result<ChannelKey, ChannelError> {
-        let (key, _) = self.push(first, second, RIGHT_SEND | RIGHT_RECV, true)?;
+    /// Both queues exist immediately. The caller receives distinct Producer and
+    /// Consumer capabilities; no holder transition is needed later to "split"
+    /// the pair.
+    pub fn mint(&mut self) -> Result<ChannelKey, ChannelError> {
+        let (key, _) = self.push(RIGHT_SEND | RIGHT_RECV, true, false)?;
         Ok(key)
     }
 
     fn push(
         &mut self,
-        producer: TaskId,
-        consumer: TaskId,
         rights: u64,
         transferable: bool,
+        loopback: bool,
     ) -> Result<(ChannelKey, usize), ChannelError> {
         let key = self.next_key;
         // Refused rather than wrapped. A wrapped key would alias a live
@@ -494,25 +413,15 @@ impl ChannelTable {
             .iter_mut()
             .find(|entry| entry.is_none())
             .ok_or(ChannelError::TableFull)?;
-        // `rights` here has already been resolved against the producer/consumer
-        // assignment: a one-directional grant always yields the producer's
-        // forward queue, whichever right named it, and only a bidirectional one
-        // adds the reverse.
-        //
-        // A loopback is the exception. When both ends are one task, that task
-        // matches `producer` in every accessor and so reaches `forward` for both
-        // sending and receiving — which is right, since a task sending to itself
-        // must receive what it sent. Allocating a reverse queue there would
-        // build one nothing can ever name, and would make the boot marker report
-        // two queues where the graph has one.
+        // A one-directional grant has only producer → consumer. A bidirectional
+        // non-loopback has one queue per direction. A declared self-edge uses
+        // the forward queue both ways and would make the reverse unreachable.
         let bidirectional = rights == RIGHT_SEND | RIGHT_RECV;
         let forward = Some(Channel::new(key));
-        let reverse = (bidirectional && producer != consumer).then(|| Channel::new(key));
+        let reverse = (bidirectional && !loopback).then(|| Channel::new(key));
         let queues = usize::from(forward.is_some()) + usize::from(reverse.is_some());
         *slot = Some(Entry {
             key,
-            producer,
-            consumer,
             forward,
             reverse,
             transferable,
@@ -546,16 +455,12 @@ impl Default for ChannelTable {
 /// sender's table *before* parking it, so between those two steps the end is
 /// held by no table at all. A sweep reading only the graph would free the
 /// channel a transfer is in the middle of moving, and the receiver would land
-/// a capability resolving to no queue — the same failure
-/// `distribute_channel_ends` documents for the spawn path.
+/// a capability resolving to no queue.
 ///
-/// [`Entry::producer`] and [`Entry::consumer`] are deliberately **not** inputs.
-/// They are a cache of who holds each end, maintained by [`ChannelTable::reassign`]
-/// with no capability check of its own, so both directions of a task-derived
-/// predicate are wrong: "names no live task" would free a channel a live
-/// component still holds a slot for, and "names a live task" would never
-/// collect the loopback a dead minter left behind — which is the garbage this
-/// exists to remove.
+/// No task identity is stored in [`Entry`]. Since B25, each endpoint capability
+/// carries its [`Side`], so reachability comes only from live capability tables
+/// and in-flight transfers. A task-derived cache would be both redundant and
+/// wrong once two tables may name the same end.
 ///
 /// A dead peer is likewise not a reason to free. `mark_dead` marks both queues,
 /// and [`ChannelTable::is_ready`] treats a dead peer as *ready* so a parked
@@ -831,18 +736,26 @@ pub fn materialize(
             continue;
         }
 
+        let loopback = consumer == producer;
         let mut slots = [None; 2];
-        for (destination, task) in slots
-            .iter_mut()
-            .zip(core::iter::once(producer).chain(second))
-        {
+        for (destination, (task, side)) in slots.iter_mut().zip(
+            core::iter::once((
+                producer,
+                if loopback {
+                    Side::Loopback
+                } else {
+                    Side::Producer
+                },
+            ))
+            .chain(second.map(|task| (task, Side::Consumer))),
+        ) {
             let held = held_rights(grant.rights, task, producer);
             let slot = channel_slot(layout, bootstrap, cursors, task, grant.name, held)?
                 .ok_or(ChannelError::UnlaidSlot)?;
-            *destination = Some((task, slot, held));
+            *destination = Some((task, slot, held, side));
         }
 
-        let (key, queues) = channels.push(producer, consumer, carries, grant.transferable)?;
+        let (key, queues) = channels.push(carries, grant.transferable, loopback)?;
         report.channels += 1;
         report.queues += queues;
         sel4::debug_println!(
@@ -851,20 +764,21 @@ pub fn materialize(
             producer.0,
             consumer.0,
         );
-        for (task, slot, held) in slots.into_iter().flatten() {
+        for (task, slot, held, side) in slots.into_iter().flatten() {
             let table = graph
                 .get_mut(task)
                 .ok_or(ChannelError::UnlaunchedEndpoint)?;
             table.install(
                 slot,
                 graph::Capability {
-                    resource: graph::Resource::Endpoint { channel: key },
+                    resource: graph::Resource::Endpoint { channel: key, side },
                     rights: held,
                 },
             )?;
             sel4::debug_println!(
-                "SLIME_GRAPH channel end task={} slot={slot} key={key} rights={held:#x}",
+                "SLIME_GRAPH channel end task={} slot={slot} key={key} side={} rights={held:#x}",
                 task.0,
+                side.name(),
             );
             report.slots += 1;
         }
@@ -1035,21 +949,16 @@ pub const WAIT_RECORD_BYTES: usize = 8;
 /// One resolved wait source.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WaitTarget {
-    /// Ready when the task's receive queue on this channel has a message, or
-    /// its peer has died.
-    Receive(ChannelKey),
-    /// Ready when the task's send queue on this channel has room, or its peer
-    /// has died.
-    SendCapacity(ChannelKey),
+    /// Ready when this receive end has a message, or its peer has died.
+    Receive(ChannelKey, Side),
+    /// Ready when this send end has room, or its peer has died.
+    SendCapacity(ChannelKey, Side),
     /// Ready when the named child has terminated.
-    ///
-    /// Not a queue, unlike the two above: the readiness event is a task dying,
-    /// which no channel observes. `main.rs` holds the registration and the
-    /// termination record, and this only carries which child was named.
     Supervision(TaskId),
-    /// A source this cutover has no mechanism for. Never ready, and never
-    /// registered — a task waiting only on one of these would block forever, so
-    /// the dispatcher refuses the wait rather than parking on it.
+    /// Always ready (M6.4): the key source is a script the root reads
+    /// synchronously, so there is nothing to park for.
+    Input,
+    /// A source this cutover has no mechanism for.
     Unmediated,
 }
 
@@ -1060,15 +969,21 @@ pub fn resolve_wait_source(
 ) -> Result<WaitTarget, IpcError> {
     let kind = record >> 32;
     let slot = (record & 0xffff_ffff) as u32;
-    let channel = |required: u64| -> Result<ChannelKey, IpcError> {
+    let endpoint = |required: u64| -> Result<(ChannelKey, Side), IpcError> {
         match table.resolve(slot, required)?.resource {
-            graph::Resource::Endpoint { channel } => Ok(channel),
+            graph::Resource::Endpoint { channel, side } => Ok((channel, side)),
             _ => Err(IpcError::InvalidOperation),
         }
     };
     Ok(match kind {
-        WAIT_KIND_ENDPOINT => WaitTarget::Receive(channel(RIGHT_RECV)?),
-        WAIT_KIND_SEND_CAPACITY => WaitTarget::SendCapacity(channel(RIGHT_SEND)?),
+        WAIT_KIND_ENDPOINT => {
+            let (channel, side) = endpoint(RIGHT_RECV)?;
+            WaitTarget::Receive(channel, side)
+        }
+        WAIT_KIND_SEND_CAPACITY => {
+            let (channel, side) = endpoint(RIGHT_SEND)?;
+            WaitTarget::SendCapacity(channel, side)
+        }
         // Resolved through the caller's own table with the right the query
         // itself requires, so a task can only wait on a child it may also ask
         // about. Before P5.3.3 this was `Unmediated`, because no spawn existed
@@ -1077,28 +992,37 @@ pub fn resolve_wait_source(
             graph::Resource::Supervision { task } => WaitTarget::Supervision(task),
             _ => return Err(IpcError::InvalidOperation),
         },
-        WAIT_KIND_INPUT => WaitTarget::Unmediated,
+        // M6.4 (P5.4.3). Always ready, because the source is a script the root
+        // reads synchronously: there is no interrupt to park for, and the next
+        // `InputRead` answers immediately — with an event, or `WouldBlock` when
+        // the script is spent.
+        //
+        // Not `Unmediated`, which is never ready: a Dango session waiting on
+        // input would have parked forever, and the mistake would have looked
+        // like a hung component rather than an unhandled wait kind.
+        WAIT_KIND_INPUT => WaitTarget::Input,
         _ => return Err(IpcError::InvalidOperation),
     })
 }
 
 impl ChannelTable {
-    /// Whether `task` would find `target` ready right now.
-    ///
-    /// A dead peer counts as ready for both directions: the operation the task
-    /// retries after waking returns `PeerDead`, which is an answer. Parking on
-    /// a channel whose peer is gone would be a hang.
-    pub fn is_ready(&self, task: TaskId, target: WaitTarget) -> bool {
+    /// Whether `target` is ready right now.
+    pub fn is_ready(&self, target: WaitTarget) -> bool {
         match target {
-            WaitTarget::Receive(key) => self
-                .recv_queue(key, task)
+            WaitTarget::Receive(key, side) => self
+                .recv_queue(key, side)
                 .is_some_and(Channel::receive_ready),
-            WaitTarget::SendCapacity(key) => {
-                self.send_queue(key, task).is_some_and(Channel::send_ready)
+            WaitTarget::SendCapacity(key, side) => {
+                self.send_queue(key, side).is_some_and(Channel::send_ready)
             }
-            // Never ready *here*: a child's death is not a queue event, so
-            // the dispatcher tests it against the termination record instead.
-            // Returning `false` is what makes it fall through to registration.
+            // Always ready: `InputRead` answers immediately, with an event or
+            // with `WouldBlock` when the script is spent. A source that
+            // reported "not ready" once exhausted would park its reader
+            // forever — which is exactly what the root-launched copy of a
+            // console component does, since it drains its own cursor and then
+            // waits. Readiness here means "asking is worthwhile", and asking
+            // always terminates.
+            WaitTarget::Input => true,
             WaitTarget::Supervision(_) | WaitTarget::Unmediated => false,
         }
     }
@@ -1107,17 +1031,17 @@ impl ChannelTable {
     /// it.
     pub fn register_wait(&mut self, task: TaskId, target: WaitTarget) -> Result<(), IpcError> {
         match target {
-            WaitTarget::Receive(key) => self
-                .recv_queue_mut(key, task)
+            WaitTarget::Receive(key, side) => self
+                .recv_queue_mut(key, side)
                 .ok_or(IpcError::InvalidOperation)?
                 .register_receive_waiter(task.0),
-            WaitTarget::SendCapacity(key) => self
-                .send_queue_mut(key, task)
+            WaitTarget::SendCapacity(key, side) => self
+                .send_queue_mut(key, side)
                 .ok_or(IpcError::InvalidOperation)?
                 .register_send_waiter(task.0),
-            // Registered in `main.rs::SupervisionWaits` rather than on a
-            // queue, because no queue observes a task dying.
-            WaitTarget::Supervision(_) | WaitTarget::Unmediated => Ok(()),
+            // Input needs no registration: it is always ready, so `arm` never
+            // reaches this for it after the readiness probe.
+            WaitTarget::Input | WaitTarget::Supervision(_) | WaitTarget::Unmediated => Ok(()),
         }
     }
 
@@ -1153,20 +1077,14 @@ impl ChannelTable {
 
 /// Test-only conveniences.
 ///
-/// `push` grew a `transferable` parameter in P5.3.2 and every call in the test
-/// module below kept the three-argument form, because nothing compiled them
-/// (B23). Rather than thread a fourth literal through nine call sites that do
-/// not care about delegation, the shim supplies the value those tests were
-/// written against: `false`, since none of them mints a loan.
 #[cfg(test)]
 impl ChannelTable {
     fn push_undelegated(
         &mut self,
-        producer: TaskId,
-        consumer: TaskId,
         rights: u64,
+        loopback: bool,
     ) -> Result<(ChannelKey, usize), ChannelError> {
-        self.push(producer, consumer, rights, false)
+        self.push(rights, false, loopback)
     }
 }
 
@@ -1174,142 +1092,186 @@ impl ChannelTable {
 mod tests {
     use super::{ChannelTable, DeathWakes, SlotCursors};
     use crate::generation::{RIGHT_RECV, RIGHT_SEND};
+    use crate::graph::{Capability, GraphTables, Resource, Side};
     use crate::task::TaskId;
+    use crate::transit::Transit;
 
     const PRODUCER: TaskId = TaskId(1);
     const CONSUMER: TaskId = TaskId(2);
 
+    fn hold(graph: &mut GraphTables, task: TaskId, channel: u32, side: Side) {
+        if graph.get(task).is_none() {
+            graph.create(task).expect("create");
+        }
+        let table = graph.get_mut(task).expect("table");
+        let slot = table.free_slot_from(0).expect("slot");
+        table
+            .install(
+                slot,
+                Capability {
+                    resource: Resource::Endpoint { channel, side },
+                    rights: RIGHT_SEND | RIGHT_RECV,
+                },
+            )
+            .expect("install");
+    }
+
     #[test]
     fn a_one_directional_grant_gives_the_consumer_no_way_to_reply() {
         let mut channels = ChannelTable::new();
-        let (key, queues) = channels
-            .push_undelegated(PRODUCER, CONSUMER, RIGHT_SEND)
-            .expect("push");
+        let (key, queues) = channels.push_undelegated(RIGHT_SEND, false).expect("push");
         assert_eq!(queues, 1);
+        assert!(channels.send_queue(key, Side::Producer).is_some());
+        assert!(channels.recv_queue(key, Side::Consumer).is_some());
+        assert!(channels.send_queue(key, Side::Consumer).is_none());
+        assert!(channels.recv_queue(key, Side::Producer).is_none());
 
-        assert!(channels.send_queue(key, PRODUCER).is_some());
-        assert!(channels.recv_queue(key, CONSUMER).is_some());
-        assert!(
-            channels.send_queue(key, CONSUMER).is_none(),
-            "a one-directional grant does not let the consumer produce"
-        );
-        assert!(
-            channels.recv_queue(key, PRODUCER).is_none(),
-            "and gives the producer nothing to dequeue"
-        );
-
-        // A `recv` grant is the same shape with the ends labelled the other way
-        // round -- one queue, from whichever end the generation made the
-        // producer -- not a channel that runs backwards.
-        let (recv_key, recv_queues) = channels
-            .push_undelegated(PRODUCER, CONSUMER, RIGHT_RECV)
-            .expect("push");
+        let (recv_key, recv_queues) = channels.push_undelegated(RIGHT_RECV, false).expect("push");
         assert_eq!(recv_queues, 1);
-        assert!(channels.send_queue(recv_key, PRODUCER).is_some());
-        assert!(channels.recv_queue(recv_key, CONSUMER).is_some());
+        assert!(channels.send_queue(recv_key, Side::Producer).is_some());
+        assert!(channels.recv_queue(recv_key, Side::Consumer).is_some());
     }
 
     #[test]
     fn a_bidirectional_grant_is_one_channel_carrying_two_queues() {
         let mut channels = ChannelTable::new();
         let (key, queues) = channels
-            .push_undelegated(PRODUCER, CONSUMER, RIGHT_SEND | RIGHT_RECV)
+            .push_undelegated(RIGHT_SEND | RIGHT_RECV, false)
             .expect("push");
         assert_eq!(queues, 2);
-        assert_eq!(channels.len(), 1, "one slot number at each end, not two");
-
-        for task in [PRODUCER, CONSUMER] {
-            assert!(channels.send_queue(key, task).is_some());
-            assert!(channels.recv_queue(key, task).is_some());
+        for side in [Side::Producer, Side::Consumer] {
+            assert!(channels.send_queue(key, side).is_some());
+            assert!(channels.recv_queue(key, side).is_some());
         }
-        // The two directions are distinct queues: filling one leaves the other
-        // empty, which is what makes a request/reply pair work over one slot.
-        let forward = channels.send_queue_mut(key, PRODUCER).expect("forward");
+        let forward = channels
+            .send_queue_mut(key, Side::Producer)
+            .expect("forward");
         let plan = forward.preflight_send().expect("capacity");
         forward
             .commit_send(plan, crate::ipc::Message::default())
             .expect("send");
-        assert_eq!(channels.recv_queue(key, CONSUMER).expect("queue").len(), 1);
-        assert_eq!(channels.recv_queue(key, PRODUCER).expect("queue").len(), 0);
+        assert_eq!(
+            channels
+                .recv_queue(key, Side::Consumer)
+                .expect("queue")
+                .len(),
+            1
+        );
+        assert_eq!(
+            channels
+                .recv_queue(key, Side::Producer)
+                .expect("queue")
+                .len(),
+            0
+        );
     }
 
     #[test]
-    fn a_task_holding_neither_end_resolves_to_nothing() {
+    fn a_declared_self_edge_is_its_own_peer() {
         let mut channels = ChannelTable::new();
-        let (key, _) = channels
-            .push_undelegated(PRODUCER, CONSUMER, RIGHT_SEND | RIGHT_RECV)
+        let (key, queues) = channels
+            .push_undelegated(RIGHT_SEND | RIGHT_RECV, true)
             .expect("push");
-        assert!(channels.send_queue(key, TaskId(9)).is_none());
-        assert!(channels.recv_queue(key, TaskId(9)).is_none());
-        assert_eq!(channels.peer(key, TaskId(9)), None);
-        assert_eq!(channels.peer(key, PRODUCER), Some(CONSUMER));
-        assert_eq!(channels.peer(key, CONSUMER), Some(PRODUCER));
+        assert_eq!(queues, 1);
+        assert!(channels.send_queue(key, Side::Loopback).is_some());
+        assert!(channels.recv_queue(key, Side::Loopback).is_some());
     }
 
     #[test]
     fn keys_are_dense_and_deterministic_in_declaration_order() {
         let mut channels = ChannelTable::new();
-        let (first, _) = channels
-            .push_undelegated(PRODUCER, CONSUMER, RIGHT_SEND)
-            .expect("push");
-        let (second, _) = channels
-            .push_undelegated(CONSUMER, TaskId(3), RIGHT_SEND)
-            .expect("push");
+        let (first, _) = channels.push_undelegated(RIGHT_SEND, false).expect("push");
+        let (second, _) = channels.push_undelegated(RIGHT_SEND, false).expect("push");
         assert_eq!((first, second), (0, 1));
-        assert_eq!(channels.len(), 2);
     }
 
-    /// Peer death has to reach *both* directions and *both* channels a task
-    /// holds, or a parked receive on the untouched one waits forever.
     #[test]
-    fn a_dead_task_kills_every_queue_it_held_an_end_of() {
+    fn a_dead_task_kills_every_queue_it_was_the_last_holder_of() {
         let mut channels = ChannelTable::new();
         let (rpc, _) = channels
-            .push_undelegated(PRODUCER, CONSUMER, RIGHT_SEND | RIGHT_RECV)
+            .push_undelegated(RIGHT_SEND | RIGHT_RECV, false)
             .expect("push");
-        let (other, _) = channels
-            .push_undelegated(TaskId(3), TaskId(4), RIGHT_SEND)
-            .expect("push");
-        assert_eq!(channels.live_queues(), 3);
-
-        channels.mark_dead(PRODUCER, &mut DeathWakes::new());
-        assert_eq!(channels.live_queues(), 1, "only the unrelated queue lives");
+        let (other, _) = channels.push_undelegated(RIGHT_SEND, false).expect("push");
+        let mut graph = GraphTables::new();
+        hold(&mut graph, PRODUCER, rpc, Side::Producer);
+        hold(&mut graph, CONSUMER, rpc, Side::Consumer);
+        hold(&mut graph, TaskId(3), other, Side::Producer);
+        hold(&mut graph, TaskId(4), other, Side::Consumer);
+        channels.mark_dead(&graph, PRODUCER, &mut DeathWakes::new());
+        let transit = Transit::new();
+        assert_eq!(
+            channels.live_queues(&graph, &transit),
+            1,
+            "only the unrelated queue lives"
+        );
         assert!(
             !channels
-                .recv_queue(rpc, CONSUMER)
+                .recv_queue(rpc, Side::Consumer)
                 .expect("queue")
                 .peer_alive()
         );
         assert!(
             channels
-                .recv_queue(other, TaskId(4))
+                .recv_queue(other, Side::Consumer)
                 .expect("queue")
                 .peer_alive()
+        );
+    }
+
+    #[test]
+    fn an_end_with_a_second_holder_survives_the_first_ones_death() {
+        let mut channels = ChannelTable::new();
+        let key = channels.mint().expect("mint");
+        let mut graph = GraphTables::new();
+        hold(&mut graph, PRODUCER, key, Side::Producer);
+        hold(&mut graph, TaskId(7), key, Side::Producer);
+        hold(&mut graph, CONSUMER, key, Side::Consumer);
+        channels.mark_dead(&graph, PRODUCER, &mut DeathWakes::new());
+        let transit = Transit::new();
+        assert_eq!(
+            channels.live_queues(&graph, &transit),
+            2,
+            "co-holder keeps both directions live"
+        );
+    }
+
+    #[test]
+    fn an_entry_no_table_names_counts_no_live_queue() {
+        // The sweep is lazy-on-full, so a boot that released every end still
+        // holds the entry until the table next fills. Its queues have no peer
+        // rather than a live one, and counting them would report a graph that
+        // never finished tearing down.
+        let mut channels = ChannelTable::new();
+        let key = channels.mint().expect("mint");
+        let mut graph = GraphTables::new();
+        hold(&mut graph, PRODUCER, key, Side::Producer);
+        hold(&mut graph, CONSUMER, key, Side::Consumer);
+        let transit = Transit::new();
+        assert_eq!(channels.live_queues(&graph, &transit), 2, "both held");
+        graph.release(PRODUCER);
+        graph.release(CONSUMER);
+        assert_eq!(
+            channels.live_queues(&graph, &transit),
+            0,
+            "an unnameable entry is not a live queue"
         );
     }
 
     #[test]
     fn a_parked_receiver_is_woken_by_its_peers_death() {
         let mut channels = ChannelTable::new();
-        let (key, _) = channels
-            .push_undelegated(PRODUCER, CONSUMER, RIGHT_SEND)
-            .expect("push");
+        let (key, _) = channels.push_undelegated(RIGHT_SEND, false).expect("push");
+        let mut graph = GraphTables::new();
+        hold(&mut graph, PRODUCER, key, Side::Producer);
+        hold(&mut graph, CONSUMER, key, Side::Consumer);
         channels
-            .recv_queue_mut(key, CONSUMER)
+            .recv_queue_mut(key, Side::Consumer)
             .expect("queue")
             .register_receive_waiter(CONSUMER.0)
             .expect("register");
-
         let mut wakes = DeathWakes::new();
-        channels.mark_dead(PRODUCER, &mut wakes);
-        let woken: usize = wakes.drain().count();
-        assert_eq!(
-            woken, 1,
-            "the parked receiver must be told, not left blocked"
-        );
-        assert!(wakes.drain().all(|(channel, wake)| channel == key
-            && wake.task == CONSUMER.0
-            && matches!(wake.cause, crate::ipc::WakeCause::PeerDeath(_))));
+        channels.mark_dead(&graph, PRODUCER, &mut wakes);
+        assert_eq!(wakes.drain().count(), 1);
     }
 
     /// Slot 0 is what `console.rs`, `spawn-service.rs`, and `launch_context`

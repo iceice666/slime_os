@@ -72,17 +72,7 @@ pub struct BootDirectory<'a> {
     entry_offset: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Slot {
-    A,
-    B,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct SelectedBootState {
-    pub slot: Slot,
-    pub state: BootState,
-}
+pub use boot_contracts::bootstate::{SelectedBootState, Slot};
 
 impl<'a> BootDirectory<'a> {
     pub fn count(&self) -> usize {
@@ -203,36 +193,20 @@ pub fn decode_directory(bytes: &[u8]) -> Result<BootDirectory<'_>, BootError> {
     Ok(directory)
 }
 
+/// Select the live root from two slots.
+///
+/// The rule itself is `boot_contracts::bootstate::select_bootstate`: the
+/// generation-management component applies the same one, so it belongs beside
+/// the record rather than in stage-0. This maps its two refusals onto
+/// `BootError`.
 pub fn select_bootstate(
     a: &[u8; SLOT_BYTES],
     b: &[u8; SLOT_BYTES],
 ) -> Result<SelectedBootState, BootError> {
-    let a = BootState::decode(a);
-    let b = BootState::decode(b);
-    match (a, b) {
-        (Ok(a), Ok(b)) if a.sequence > b.sequence => Ok(SelectedBootState {
-            slot: Slot::A,
-            state: a,
-        }),
-        (Ok(a), Ok(b)) if b.sequence > a.sequence => Ok(SelectedBootState {
-            slot: Slot::B,
-            state: b,
-        }),
-        (Ok(a), Ok(b)) if a == b => Ok(SelectedBootState {
-            slot: Slot::A,
-            state: a,
-        }),
-        (Ok(_), Ok(_)) => Err(BootError::ConflictingSlots),
-        (Ok(a), Err(_)) => Ok(SelectedBootState {
-            slot: Slot::A,
-            state: a,
-        }),
-        (Err(_), Ok(b)) => Ok(SelectedBootState {
-            slot: Slot::B,
-            state: b,
-        }),
-        (Err(_), Err(_)) => Err(BootError::NoValidBootState),
-    }
+    boot_contracts::bootstate::select_bootstate(a, b).map_err(|error| match error {
+        boot_contracts::bootstate::SelectionError::ConflictingSlots => BootError::ConflictingSlots,
+        boot_contracts::bootstate::SelectionError::NoValidBootState => BootError::NoValidBootState,
+    })
 }
 
 pub fn select_bootstate_for_directory(

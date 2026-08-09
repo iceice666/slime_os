@@ -1,56 +1,28 @@
 //! The Slime operation API components program against.
 //!
 //! Operation numbers, arguments, errors, bounds, and transfer semantics are
-//! defined once here and are identical on every transport. What differs is how
-//! an operation reaches its implementation:
-//!
-//! - [`sel4_transport`] (feature `sel4`) calls the badged root service endpoint
-//!   in child CSpace slot 1. The operation number is the message label, at most
-//!   four fast message registers cross in each direction, and larger payloads
-//!   go through the component's bound transfer window.
-//! - [`legacy`] traps directly into the custom Slime kernel
-//!   (`kernel/src/syscall/mod.rs`), which addresses caller memory by pointer.
-//!   It serves the frozen oracle build and retires with that kernel.
-//!
-//! Callers see neither. They see the wrappers below, which return the same
-//! named `ERR_*` values and the same typed results whichever transport is
-//! compiled in — no raw `sel4` type, capability, or `MessageInfo` escapes into
-//! component code.
+//! defined once here. [`sel4_transport`] calls the badged root service endpoint
+//! in child CSpace slot 1: the operation number is the message label, at most
+//! four fast message registers cross in each direction, and larger payloads use
+//! the component's bound transfer window.
 
-#[cfg(feature = "sel4")]
 use sel4_transport as transport;
 
-#[cfg(not(feature = "sel4"))]
-use legacy as transport;
-
-#[cfg(not(feature = "sel4"))]
-mod legacy;
-#[cfg(feature = "sel4")]
 mod sel4_transport;
-#[cfg(feature = "sel4")]
 mod wire;
 
-#[cfg(feature = "sel4")]
 pub use sel4_transport::ROOT_SERVICE_SLOT;
 
 /// Declare the root-mapped startup transfer window. Called once by
 /// [`crate::runtime::start`], before the component body runs, so that `recv`,
 /// `spawn` and `wait` have somewhere to stage payloads.
-#[cfg(feature = "sel4")]
 pub(crate) fn bind_startup_window(base: usize) -> i64 {
     sel4_transport::bind_startup_window(base)
 }
-
-#[cfg(not(feature = "sel4"))]
-const SYS_YIELD: u64 = 0;
 const SYS_SEND: u64 = 1;
 const SYS_RECV: u64 = 2;
 const SYS_EXIT: u64 = 3;
 const SYS_SPAWN: u64 = 4;
-// Under `sel4` with kernel printing, `debug_write` reaches the debug log
-// directly and never labels a root-service call, so the number is unused in
-// that one configuration. It stays the wire identity for every other build.
-#[cfg_attr(feature = "sel4", allow(dead_code))]
 const SYS_DEBUG_WRITE: u64 = 5;
 const SYS_BLOCK_TRANSACT: u64 = 6;
 const SYS_STORE_TRANSACT: u64 = 7;
@@ -78,7 +50,6 @@ const SYS_SHARED_BUFFER_LOAN_MAP: u64 = 27;
 const SYS_SHARED_BUFFER_RETURN: u64 = 28;
 const SYS_SHARED_BUFFER_REVOKE: u64 = 29;
 const SYS_CAP_TRANSFER: u64 = 30;
-#[cfg(feature = "sel4")]
 const SYS_TRANSFER_WINDOW_BIND: u64 = 31;
 /// B25: derive a second supervision handle naming a task already supervised.
 const SYS_SUPERVISION_DERIVE: u64 = 32;
@@ -94,14 +65,11 @@ pub const MAX_MSG: usize = 64;
 pub const MAX_CAPS_PER_MSG: usize = 4;
 
 /// Smallest transfer window [`transfer_window_bind`] accepts: enough for the
-/// largest single frame any operation stages, which is the up-to-64-grant
-/// spawn payload (matching the kernel's per-task capability capacity); every
-/// other frame — a [`MAX_MSG`]-byte message, the 80-byte directory-inspect
-/// reply, a 64-byte transact protocol — fits with room to spare.
+/// largest single frame any operation stages. Every other frame fits with room
+/// to spare.
 pub const MIN_TRANSFER_WINDOW: usize = 4096;
 
-/// A capability rights bitset. Flat `u64`, matching the kernel ABI
-/// (`kernel/src/capability/mod.rs`) and generation format v3.
+/// A capability rights bitset shared with generation format v3.
 pub type Rights = u64;
 
 #[repr(C)]
@@ -159,20 +127,8 @@ pub struct InputEvent {
 /// bytes at `base`. Until then, operations whose payload exceeds the inline
 /// bound fail with [`ERR_INVALID_ARG`] — the transport never truncates a
 /// payload to make it fit.
-///
-/// On the legacy trap transport the kernel reads caller memory directly, so no
-/// window is required; the call validates its arguments and succeeds, letting
-/// one component source build against either transport.
 pub fn transfer_window_bind(buffer_slot: u32, base: u64, len: usize) -> i64 {
-    #[cfg(feature = "sel4")]
-    {
-        transport::transfer_window_bind(buffer_slot, base, len)
-    }
-    #[cfg(not(feature = "sel4"))]
-    {
-        let _ = buffer_slot;
-        transport::transfer_window_bind(base, len)
-    }
+    transport::transfer_window_bind(buffer_slot, base, len)
 }
 
 /// Relinquishes the CPU for the rest of this time slice. The only operation
@@ -431,6 +387,11 @@ pub fn cap_drop(slot: u32) -> i64 {
 pub const MAX_DIRECTORY_PATH: usize = 48;
 
 /// Returns the current immutable root and this capability's enforced scope.
+/// A namespace root identity: a SHA-256 over the directory object it names.
+/// The mechanism never interprets it; the bound is here so a caller can size
+/// its buffer without knowing that.
+pub const DIRECTORY_ROOT_BYTES: usize = 32;
+
 pub fn directory_inspect(
     slot: u32,
     required_rights: u32,
@@ -509,6 +470,27 @@ pub fn debug_write(bytes: &[u8]) -> i64 {
 /// (`OFF_REPLY_STATUS`), not in the return value.
 pub fn block_transact(slot: u32, request: &[u8; 64], reply: &mut [u8; 64]) -> i64 {
     transport::block_transact(slot, request, reply)
+}
+
+/// A read whose sector returns through the caller's transfer window behind the
+/// 64-byte reply record.
+pub fn block_transact_sector(
+    slot: u32,
+    request: &[u8; 64],
+    reply: &mut [u8; 64],
+    sector: &mut [u8; 512],
+) -> i64 {
+    transport::block_transact_sector(slot, request, reply, sector)
+}
+
+/// A write whose sector crosses with the request, on the same rule.
+pub fn block_transact_write(
+    slot: u32,
+    request: &[u8; 64],
+    sector: &[u8; 512],
+    reply: &mut [u8; 64],
+) -> i64 {
+    transport::block_transact_write(slot, request, sector, reply)
 }
 
 /// Issues a 64-byte store-protocol request/reply pair against the object
