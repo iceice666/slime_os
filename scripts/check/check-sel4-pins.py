@@ -15,6 +15,7 @@ from typing import NoReturn
 ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
 QEMU_CONFIG_PATH = ROOT / "sel4" / "config" / "qemu-arm-virt.cmake"
+RPI5_CONFIG_PATH = ROOT / "sel4" / "config" / "bcm2712-rpi5.cmake"
 SEL4_PATH = ROOT / "deps" / "sel4"
 RUST_SEL4_PATH = ROOT / "deps" / "rust-sel4"
 PREFIX_PATH = ROOT / "build" / "sel4-prefix"
@@ -173,6 +174,8 @@ def parse_cmake_cache(path: Path) -> dict[str, str]:
     for line_number, raw_line in enumerate(lines, 1):
         line = raw_line.strip()
         if not line or line.startswith("#"):
+            continue
+        if line.startswith("include(") and line.endswith(")"):
             continue
         match = CMAKE_SET.fullmatch(line)
         if match is None:
@@ -354,6 +357,29 @@ def check_profile(pins: dict[str, object]) -> None:
         fail("qemu-arm-virt QEMU CPU count must be one")
     if integer(profile, "memory_mib", "qemu_arm_virt") != 2048:
         fail("qemu-arm-virt QEMU memory must be 2048 MiB")
+
+    rpi5 = parse_cmake_cache(RPI5_CONFIG_PATH)
+    include = "${CMAKE_CURRENT_LIST_DIR}/../../deps/sel4/configs/AARCH64_bcm2712_verified.cmake"
+    # The inherited verified profile supplies platform/architecture and turns
+    # printing off; this product overlay must explicitly restore every runtime
+    # mechanism slime-root consumes.
+    required_rpi5 = {
+        "KernelIsMCS": "OFF",
+        "KernelMaxNumNodes": "1",
+        "KernelPrinting": "ON",
+        "KernelArmExportPCNTUser": "ON",
+        "KernelArmExportPTMRUser": "ON",
+    }
+    source = RPI5_CONFIG_PATH.read_text(encoding="utf-8").splitlines()
+    if not source or source[0].strip() != f"include({include})":
+        fail("bcm2712-rpi5 CMake config does not inherit the pinned verified profile")
+    if rpi5 != required_rpi5:
+        details = [
+            f"{key}: expected {required_rpi5.get(key)!r}, got {rpi5.get(key)!r}"
+            for key in sorted(set(required_rpi5) | set(rpi5))
+            if required_rpi5.get(key) != rpi5.get(key)
+        ]
+        fail("bcm2712-rpi5 CMake config is incomplete:\n" + "\n".join(details))
 
 
 def check_rustup_policy(pins: dict[str, object]) -> None:

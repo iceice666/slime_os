@@ -625,17 +625,18 @@ def check_no_participant_failed(transcript: str) -> None:
     )
 
 
-# Every compile-time scenario flag any seL4 gate sets. A stream component
-# branching on any of them would be tailoring itself to this root.
-SEL4_CHECK_FLAGS = (
-    "SLIME_SEL4_CHANNEL_CHECK",
-    "SLIME_SEL4_LOAN_CHECK",
-    "SLIME_SEL4_SPAWN_CHECK",
-    "SLIME_SEL4_SAMPLE_CHECK",
-    "SLIME_SEL4_STREAM_CHECK",
-    "SLIME_SEL4_SUPERVISION_CHECK",
-    "SLIME_SEL4_CROSSING_CHECK",
-)
+# Derive every compile-time seL4 scenario flag from the builder's authoritative
+# manifest-to-flag table. A hand-maintained subset silently misses new planes.
+def sel4_check_flags() -> tuple[str, ...]:
+    source = ROOT / "scripts" / "build" / "build-generation.py"
+    try:
+        text = source.read_text(encoding="utf-8")
+    except OSError as error:
+        fail(f"cannot read {source.relative_to(ROOT)}: {error}")
+    flags = tuple(sorted(set(re.findall(r'"(SLIME_SEL4_[A-Z_]+_CHECK)"', text))))
+    if not flags:
+        fail(f"{source.relative_to(ROOT)} declares no seL4 scenario flags")
+    return flags
 
 # Every component this graph runs. All six, with no exceptions and no allowance
 # table -- which is the difference between this milestone and P5.5.1.
@@ -667,7 +668,7 @@ def check_components_are_unmodified() -> None:
             text = source.read_text(encoding="utf-8")
         except OSError as error:
             fail(f"cannot read {source.relative_to(ROOT)}: {error}")
-        for flag in SEL4_CHECK_FLAGS:
+        for flag in sel4_check_flags():
             if flag in text:
                 fail(
                     f"{source.relative_to(ROOT)} branches on {flag}; this "

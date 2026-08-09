@@ -18,8 +18,9 @@ use crate::object_allocator::{AllocError, ObjectAllocator};
 /// seL4 base page size for this configuration.
 pub const GRANULE_SIZE: usize = sel4::FrameObjectType::GRANULE.bytes();
 
-/// Pages one child image footprint may span, including its IPC buffer page.
-/// A larger payload fails closed rather than silently truncating.
+/// Pages one child image footprint may span, including the IPC buffer and
+/// startup transfer-window pages. A larger payload fails closed rather than
+/// silently truncating.
 pub const MAX_CHILD_IMAGE_PAGES: usize = 512;
 
 /// Highest child virtual address this root task will map. AArch64 user VAs are
@@ -47,6 +48,9 @@ pub enum ImageError {
     FootprintTooLarge { pages: usize, limit: usize },
     /// The image would be mapped above [`CHILD_ADDRESS_CEILING`].
     FootprintOutOfRange,
+    /// Segment rights accumulated on one granule would make it writable and
+    /// executable, even if no individual segment requested both.
+    WritableExecutablePage,
     /// The entry point lies outside every executable segment.
     EntryNotExecutable { entry: u64 },
 }
@@ -101,7 +105,7 @@ impl<'a> ChildImage<'a> {
             return Err(ImageError::WrongTarget);
         }
         let footprint = footprint(&file)?;
-        let pages = footprint.len() / GRANULE_SIZE + 1;
+        let pages = footprint.len() / GRANULE_SIZE + 2;
         if pages > MAX_CHILD_IMAGE_PAGES {
             return Err(ImageError::FootprintTooLarge {
                 pages,
@@ -395,6 +399,7 @@ fn accumulate_rights(
             entry.flags |= flags;
         }
     }
+    reject_writable_executable(pages.iter().map(|entry| entry.flags))?;
     Ok(())
 }
 
@@ -497,10 +502,31 @@ fn footprint(file: &ElfFile64<'_, Endianness>) -> Result<Range<usize>, ImageErro
         return Err(ImageError::NoLoadableSegment);
     }
     let span = coarsen(&(start..end), GRANULE_SIZE);
-    if span.end + GRANULE_SIZE > CHILD_ADDRESS_CEILING || span.start == 0 {
-        return Err(ImageError::FootprintOutOfRange);
-    }
+    validate_footprint_span(&span)?;
     Ok(span)
+}
+
+fn validate_footprint_span(span: &Range<usize>) -> Result<(), ImageError> {
+    let mapped_end = span
+        .end
+        .checked_add(2 * GRANULE_SIZE)
+        .ok_or(ImageError::FootprintOutOfRange)?;
+    if mapped_end > CHILD_ADDRESS_CEILING || span.start == 0 {
+        Err(ImageError::FootprintOutOfRange)
+    } else {
+        Ok(())
+    }
+}
+
+fn reject_writable_executable(flags: impl IntoIterator<Item = u8>) -> Result<(), ImageError> {
+    if flags
+        .into_iter()
+        .any(|flags| flags & (FLAG_WRITE | FLAG_EXEC) == (FLAG_WRITE | FLAG_EXEC))
+    {
+        Err(ImageError::WritableExecutablePage)
+    } else {
+        Ok(())
+    }
 }
 
 fn segment_flags(flags: SegmentFlags) -> Result<u8, ImageError> {
@@ -555,7 +581,10 @@ const fn round_down(value: usize, granularity: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{FLAG_EXEC, FLAG_READ, FLAG_WRITE, coarsen, round_down};
+    use super::{
+        CHILD_ADDRESS_CEILING, FLAG_EXEC, FLAG_READ, FLAG_WRITE, GRANULE_SIZE, ImageError, coarsen,
+        reject_writable_executable, round_down, validate_footprint_span,
+    };
 
     #[test]
     fn coarsening_covers_partial_pages_at_both_ends() {
@@ -572,5 +601,29 @@ mod tests {
     #[test]
     fn flags_are_distinct_bits() {
         assert_eq!(FLAG_READ | FLAG_WRITE | FLAG_EXEC, 0b111);
+    }
+
+    #[test]
+    fn accumulated_writable_executable_page_is_rejected() {
+        assert_eq!(
+            reject_writable_executable([FLAG_READ | FLAG_EXEC, FLAG_WRITE | FLAG_EXEC]),
+            Err(ImageError::WritableExecutablePage)
+        );
+        assert_eq!(
+            reject_writable_executable([FLAG_READ | FLAG_EXEC, FLAG_READ | FLAG_WRITE]),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn loader_headroom_reserves_two_granules_below_ceiling() {
+        let highest_valid = 0x1000..CHILD_ADDRESS_CEILING - 2 * GRANULE_SIZE;
+        assert_eq!(validate_footprint_span(&highest_valid), Ok(()));
+
+        let one_page_short = 0x1000..CHILD_ADDRESS_CEILING - GRANULE_SIZE;
+        assert_eq!(
+            validate_footprint_span(&one_page_short),
+            Err(ImageError::FootprintOutOfRange)
+        );
     }
 }

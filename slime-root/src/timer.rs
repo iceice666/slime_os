@@ -189,6 +189,7 @@ pub struct TimerScheduler<const CAPACITY: usize> {
     next_tie_order: u64,
     next_event_sequence: u64,
     last_observed: Option<MonotonicInstant>,
+    pending_programming: Option<DeadlineProgramming>,
 }
 
 impl<const CAPACITY: usize> TimerScheduler<CAPACITY> {
@@ -200,6 +201,7 @@ impl<const CAPACITY: usize> TimerScheduler<CAPACITY> {
             next_tie_order: 0,
             next_event_sequence: 0,
             last_observed: None,
+            pending_programming: None,
         }
     }
 
@@ -455,12 +457,17 @@ impl<const CAPACITY: usize> TimerScheduler<CAPACITY> {
         F: FnMut(TaskEpoch) -> bool,
     {
         let now = platform.monotonic_now().map_err(ServiceTimerError::Clock)?;
-        let transition = self
+        let mut transition = self
             .on_timer_expiry(now, epoch_is_live)
             .map_err(ServiceTimerError::Scheduler)?;
+        if let Some(pending) = self.pending_programming {
+            transition.programming = pending;
+        }
         if let Err(error) = apply_deadline_programming(platform, transition.programming) {
+            self.pending_programming = Some(transition.programming);
             return Err(ServiceTimerError::Program { error, transition });
         }
+        self.pending_programming = None;
         if let Err(error) = platform.acknowledge_timer_irq() {
             return Err(ServiceTimerError::Acknowledge { error, transition });
         }
@@ -956,6 +963,69 @@ mod tests {
         // failed, which is exactly why its wake event had to travel inside
         // the error above instead of being recomputed later.
         assert!(scheduler.is_empty());
+    }
+
+    #[derive(Debug, Default)]
+    struct FailingProgramTimer {
+        inner: FakeTimer,
+        fail_program: bool,
+    }
+
+    impl PlatformTimer for FailingProgramTimer {
+        type Error = ();
+
+        fn monotonic_now(&mut self) -> Result<MonotonicInstant, Self::Error> {
+            self.inner.monotonic_now()
+        }
+
+        fn program_deadline(&mut self, deadline: MonotonicInstant) -> Result<(), Self::Error> {
+            if self.fail_program {
+                return Err(());
+            }
+            self.inner.program_deadline(deadline)
+        }
+
+        fn disarm_timer(&mut self) -> Result<(), Self::Error> {
+            self.inner.disarm_timer()
+        }
+
+        fn acknowledge_timer_irq(&mut self) -> Result<(), Self::Error> {
+            self.inner.acknowledge_timer_irq()
+        }
+    }
+
+    #[test]
+    fn failed_programming_is_retried_even_when_queue_deadline_is_unchanged() {
+        let mut scheduler = TimerScheduler::<4>::new();
+        let mut platform = FailingProgramTimer {
+            fail_program: true,
+            ..FailingProgramTimer::default()
+        };
+        scheduler.schedule_at(A, at(0), at(10)).unwrap();
+        scheduler.schedule_at(B, at(0), at(40)).unwrap();
+        platform.inner.now = 10;
+
+        let first = scheduler
+            .service_timer_source(&mut platform, live_all)
+            .unwrap_err();
+        assert!(matches!(
+            first,
+            ServiceTimerError::Program {
+                transition: TimerTransition {
+                    programming: DeadlineProgramming::Program(deadline),
+                    ..
+                },
+                ..
+            } if deadline == at(40)
+        ));
+
+        platform.fail_program = false;
+        platform.inner.now = 11;
+        let retried = scheduler
+            .service_timer_source(&mut platform, live_all)
+            .expect("retry reprograms hardware");
+        assert_eq!(retried.programming, DeadlineProgramming::Program(at(40)));
+        assert_eq!(platform.inner.programmed, Some(at(40)));
     }
 
     #[test]

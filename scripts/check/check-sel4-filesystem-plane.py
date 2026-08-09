@@ -63,10 +63,6 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"\[directory-probe\] interrupted transition preserved root",
     ),
     (
-        "a read through a scoped view resolved",
-        r"\[directory-probe\] scoped read ok",
-    ),
-    (
         # Write, then read back: the service built a new snapshot, sealed it in
         # the store, and committed the namespace root to it.
         "a root transition committed and is visible",
@@ -77,6 +73,10 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         # the client — narrower in scope and in rights.
         "a narrowed subdirectory capability was derived",
         r"\[directory-probe\] derive narrowed",
+    ),
+    (
+        "a read through a scoped view resolved",
+        r"\[directory-probe\] scoped read ok",
     ),
     (
         # The derived view cannot name anything outside its subtree.

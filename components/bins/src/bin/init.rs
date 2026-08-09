@@ -1865,8 +1865,10 @@ fn drive_stream_plane() {
     }
     // B17's subject, minted here for the same reason: it must be granted at
     // spawn, and the arm that uses it runs in the child. See the grant below.
-    let (probe_retained, probe_narrowed) = slime_rt::endpoint_create(ENDPOINT_FACTORY_SLOT)
+    let (_probe_anchor, probe_narrowed) = slime_rt::endpoint_create(ENDPOINT_FACTORY_SLOT)
         .unwrap_or_else(|_| fail_stream(b"transfer probe endpoint"));
+    let (probe_carrier_send, probe_carrier_recv) = slime_rt::endpoint_create(ENDPOINT_FACTORY_SLOT)
+        .unwrap_or_else(|_| fail_stream(b"transfer probe carrier"));
     // P5.4.5's clock. Minted only for the QoS plane, and with the same
     // `endpoint_create` every other control pair uses, so the plane that does
     // not declare it mints nothing and its channel count is unchanged.
@@ -1988,10 +1990,11 @@ fn drive_stream_plane() {
         &[
             grant(client_sides[STREAM_PUBLISHER], RIGHT_SEND | RIGHT_RECV),
             grant(probe_narrowed, RIGHT_SEND | RIGHT_TRANSFER),
+            grant(probe_carrier_send, RIGHT_SEND | RIGHT_RECV),
+            grant(probe_carrier_recv, RIGHT_SEND | RIGHT_RECV),
         ],
     )
     .unwrap_or_else(|_| fail_stream(b"spawn publisher"));
-    let _ = probe_retained;
     // `fabric-publisher-b` originates the `>MAX_INLINE_BYTES` sample, so it
     // needs a buffer factory of its own and a supervision handle naming the
     // fabric: its upstream loan names the fabric as receiver by capability.
@@ -2025,6 +2028,23 @@ fn drive_stream_plane() {
         )],
     )
     .unwrap_or_else(|_| fail_stream(b"spawn intruder"));
+
+    // Spawn grants are copies. Drop init's retained control ends and the
+    // private subset-test endpoints now that every child holds its copy; if
+    // init keeps them, peer-death cannot retire the fabric's last queues and
+    // the service remains parked forever after all participants finish.
+    for slot in
+        client_sides
+            .into_iter()
+            .chain([probe_narrowed, probe_carrier_send, probe_carrier_recv])
+    {
+        if slime_rt::cap_drop(slot) != slime_rt::ERR_SUCCESS {
+            fail_stream(b"drop retained participant authority");
+        }
+    }
+    if qos_plane() && slime_rt::cap_drop(time_client) != slime_rt::ERR_SUCCESS {
+        fail_stream(b"drop retained time authority");
+    }
     slime_rt::debug_write(b"[init] fabric participants spawned\n");
 
     // Init waits on every participant and on the fabric itself. Waiting rather
@@ -3139,11 +3159,11 @@ fn drive_spawn_plane() {
 
 /// How many children the supervision plane creates over the boot.
 ///
-/// One more than `supervision::MAX_RECORDS` (32), which is the whole point: the
-/// bound this crosses is on records *awaiting collection*, and a graph that
-/// collects as it goes must be able to exceed it. A loop that stopped at 32
-/// would pass against the unfixed root and prove nothing.
-const SUPERVISION_LOOP_CHILDREN: u32 = 33;
+/// One more than `slime-root`'s current `MAX_RECORDS` (48), which is the whole
+/// point: the bound this crosses is on records *awaiting collection*, and a
+/// graph that collects as it goes must be able to exceed it. A loop that
+/// stopped at the bound would pass against the unfixed root and prove nothing.
+const SUPERVISION_LOOP_CHILDREN: u32 = 49;
 
 /// Drive the supervision plane: create more children over one boot than
 /// `MAX_RECORDS` can hold at once, and answer correctly for every live handle.

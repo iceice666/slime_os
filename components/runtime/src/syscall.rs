@@ -19,6 +19,10 @@ pub use sel4_transport::ROOT_SERVICE_SLOT;
 pub(crate) fn bind_startup_window(base: usize) -> i64 {
     sel4_transport::bind_startup_window(base)
 }
+
+pub(crate) fn early_debug_write(bytes: &[u8]) {
+    sel4_transport::early_debug_write(bytes)
+}
 const SYS_SEND: u64 = 1;
 const SYS_RECV: u64 = 2;
 const SYS_EXIT: u64 = 3;
@@ -64,10 +68,9 @@ pub const ERR_OUT_OF_MEMORY: i64 = -5;
 pub const MAX_MSG: usize = 64;
 pub const MAX_CAPS_PER_MSG: usize = 4;
 
-/// Smallest transfer window [`transfer_window_bind`] accepts: enough for the
-/// largest single frame any operation stages. Every other frame fits with room
-/// to spare.
-pub const MIN_TRANSFER_WINDOW: usize = 4096;
+/// Size of the root-mapped startup transfer window: enough for the largest
+/// single frame any operation stages.
+pub(crate) const MIN_TRANSFER_WINDOW: usize = 4096;
 
 /// A capability rights bitset shared with generation format v3.
 pub type Rights = u64;
@@ -117,18 +120,6 @@ pub enum InputKey {
 pub struct InputEvent {
     pub key: InputKey,
     pub pressed: bool,
-}
-
-/// Declares an already-mapped shared buffer as this component's transfer
-/// window, the bounded region through which payloads too large for the
-/// transport's inline registers cross.
-///
-/// Bind it once, after mapping a buffer of at least [`MIN_TRANSFER_WINDOW`]
-/// bytes at `base`. Until then, operations whose payload exceeds the inline
-/// bound fail with [`ERR_INVALID_ARG`] — the transport never truncates a
-/// payload to make it fit.
-pub fn transfer_window_bind(buffer_slot: u32, base: u64, len: usize) -> i64 {
-    transport::transfer_window_bind(buffer_slot, base, len)
 }
 
 /// Relinquishes the CPU for the rest of this time slice. The only operation

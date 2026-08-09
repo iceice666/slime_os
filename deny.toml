@@ -18,6 +18,7 @@ private = { ignore = true }
 allow = [
     "MIT",
     "Apache-2.0",
+    "ISC",
     "Apache-2.0 WITH LLVM-exception",
     "BSD-1-Clause",
     "BSD-2-Clause",
@@ -32,6 +33,14 @@ confidence-threshold = 0.8
 multiple-versions = "warn"
 wildcards = "deny"
 allow-wildcard-paths = true
+# `deps/rust-sel4` is a source-pinned upstream workspace. Its public crates use
+# internal path dependencies, so skip every root through which that vendored
+# workspace enters the product graph; registry wildcard policy is inapplicable.
+skip-tree = [
+    { name = "sel4", depth = 20 },
+    { name = "sel4-root-task", depth = 20 },
+    { name = "sel4-runtime-common", depth = 20 },
+]
 
 [sources]
 unknown-registry = "deny"

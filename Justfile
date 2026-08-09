@@ -275,20 +275,18 @@ sel4_transfer_check: sel4_pin_check
 sel4_filesystem_check: sel4_pin_check
     python3 scripts/check/check-sel4-filesystem-plane.py
 
-# Prove the seL4 plane gates fail when their evidence is absent. This drives
-# each gate's own marker table with a deleted marker, a transposition, and an
-# appended failure marker.
-#
-# Needs no build and no QEMU: it asserts that the assertions have teeth, not that
-# any image boots. The planes' own gates cover the latter.
 # P5.4.5 on seL4: C8.5's declared QoS policy, on the `sel4-qos` plane.
-#
 # Separate from `sel4_stream_check` because `sel4-stream.zti` grants no time
-# capability, so its simulated-time clause is structurally unreachable — the arms
-# this asserts cannot fire there at all.
+# capability, so its simulated-time clause is structurally unreachable — the
+# arms this asserts cannot fire there at all.
 sel4_qos_check: sel4_pin_check
     python3 scripts/check/check-sel4-qos-plane.py
 
+
+# Prove the seL4 plane gates fail when their evidence is absent. This drives
+# each gate's own marker table with a deleted marker, a transposition, and an
+# appended failure marker. Needs no build and no QEMU: it asserts that the
+# assertions have teeth, not that any image boots.
 sel4_gate_control_check:
     python3 scripts/check/check-sel4-gate-controls.py
 
@@ -429,16 +427,17 @@ architecture_contract_check: contracts_check
 rpi5_artifact_check: architecture_contract_check rpi5_ros2_demo_contract_check
     python3 scripts/check/check-rpi5-artifacts.py
 
-# Historical architecture and generation gate names resolve to the product
-# checks that superseded them.
+# Historical architecture gate backed by a real neutral-source boundary scan.
 aarch64_boot_check: sel4_root_boot_check
 
-x86_portability_check: sel4_pin_check
+x86_portability_check:
+    python3 scripts/check/check-architecture-portability.py
 
 generation_check: contracts_check sel4_component_graph_check
     python3 scripts/check/check-generation-determinism.py
 
-framework_safety_check: contracts_check
+framework_safety_check:
+    python3 scripts/check/check-framework-authority.py
 
 # Physical Framework image production is intentionally unavailable. P4 remains
 # blocked until a seL4 hardware image and observed removable-media boot exist.
@@ -539,6 +538,14 @@ lint_stage0:
 lint_boot_contracts:
     cd boot-contracts && cargo clippy --all-features -- -D warnings
 
+# Host-target clippy for every cutover component crate that does not require a
+# built seL4 prefix. The product-target pass remains `lint_sel4_root`.
+lint_components_host:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    host="$(rustc -vV | sed -n 's/^host: //p')"
+    cargo clippy -p slime-proto --target "$host" -- -D warnings
+
 # Clippy for the seL4 product crates: the root task, its child, and the
 # seL4-enabled component runtime. Unlike the format gates these compile, so
 # they need the installed seL4 prefix (libsel4 headers and config), the
@@ -546,7 +553,7 @@ lint_boot_contracts:
 # task embeds at compile time. `sel4_qemu_image_check` produces both; this gate
 # refuses to run against a missing one rather than silently linting a
 # different configuration.
-lint_sel4_root:
+lint_sel4_root clippy_flags='-D warnings':
     #!/usr/bin/env bash
     set -euo pipefail
     prefix="$PWD/build/sel4-prefix"
@@ -564,18 +571,18 @@ lint_sel4_root:
     export SEL4_PREFIX="$prefix" RUSTUP_TOOLCHAIN="$toolchain" CHILD_ELF="$child_elf"
     build_std=(-Z json-target-spec -Z build-std=core,alloc,compiler_builtins -Z build-std-features=compiler-builtins-mem)
     cargo clippy -p slime-root --target "$targets/aarch64-sel4-roottask-minimal.json" \
-        --target-dir build/sel4-cargo/lint-root "${build_std[@]}" -- -D warnings
+        --target-dir build/sel4-cargo/lint-root "${build_std[@]}" -- {{clippy_flags}}
     cargo clippy --manifest-path slime-root/child/Cargo.toml -p slime-root-child \
         --target "$targets/aarch64-sel4-minimal.json" \
-        --target-dir build/sel4-cargo/lint-child "${build_std[@]}" -- -D warnings
+        --target-dir build/sel4-cargo/lint-child "${build_std[@]}" -- {{clippy_flags}}
     cd components
     SLIME_TARGET_PROFILE=aarch64-sel4-qemu-virt \
         cargo clippy -p slime-rt -p slime-proto -p slime-components \
         --target "$targets/aarch64-sel4-minimal.json" \
-        --target-dir ../build/sel4-cargo/lint-components "${build_std[@]}" -- -D warnings
+        --target-dir ../build/sel4-cargo/lint-components "${build_std[@]}" -- {{clippy_flags}}
 
 # Every surviving workspace crate plus the seL4 product crates.
-lint_all: lint_stage0 lint_boot_contracts lint_sel4_root
+lint_all: lint_stage0 lint_boot_contracts lint_components_host lint_sel4_root
 
 # Historical component lint identifiers now resolve to the product lint.
 lint_components: lint_sel4_root
@@ -635,7 +642,7 @@ test_sel4_root:
         echo "test_sel4_root: no installed seL4 prefix at $prefix; run 'just sel4_qemu_image_check' first" >&2
         exit 1
     fi
-    expected=114
+    expected=124
     # Pinned rather than ambient, on `lint_sel4_root`'s rule: this build
     # consumes the installed seL4 prefix, so it must use the toolchain that
     # prefix was produced against. `rust-toolchain.toml`'s default is a
@@ -683,6 +690,6 @@ ruff_fix:
 typos:
     typos
 
-# Advisory-only lint pass for the product mechanism owner.
+# Advisory correctness lint set documented by the workspace policy.
 lint_pedantic:
-    just lint_sel4_root
+    just lint_sel4_root '-D warnings -W clippy::undocumented_unsafe_blocks -W clippy::cast_possible_truncation'

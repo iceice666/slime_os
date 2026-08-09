@@ -48,6 +48,16 @@ fn main() {
     println!("cargo:rerun-if-env-changed=SLIME_SEL4_VISIBILITY_CHECK");
     println!("cargo:rerun-if-env-changed=SLIME_SEL4_BOOT_CHECK");
     println!("cargo:rerun-if-env-changed=SLIME_SEL4_STORAGE_CHECK");
+    println!("cargo:rerun-if-env-changed=SLIME_SEL4_STORE_CHECK");
+    println!("cargo:rerun-if-env-changed=SLIME_SEL4_ROLLBACK_CHECK");
+    println!("cargo:rerun-if-env-changed=SLIME_SEL4_RECOVERY_PLANE_CHECK");
+    println!("cargo:rerun-if-env-changed=SLIME_SEL4_GENERATION_CHECK");
+    println!("cargo:rerun-if-env-changed=SLIME_SEL4_DIRECTORY_CHECK");
+    println!("cargo:rerun-if-env-changed=SLIME_SEL4_FILESYSTEM_CHECK");
+    println!("cargo:rerun-if-env-changed=SLIME_SEL4_DANGO_CHECK");
+    println!("cargo:rerun-if-env-changed=SLIME_SEL4_INPUT_CHECK");
+    println!("cargo:rerun-if-env-changed=SLIME_SEL4_POWERBOX_CHECK");
+    println!("cargo:rerun-if-env-changed=SLIME_SEL4_TRANSFER_CHECK");
     println!("cargo:rerun-if-env-changed=SLIME_FABRIC_AUTHORITY_CHECK");
     println!("cargo:rerun-if-env-changed=SLIME_FABRIC_STREAM_CHECK");
     println!("cargo:rerun-if-env-changed=SLIME_FABRIC_QOS_CHECK");
@@ -278,19 +288,27 @@ fn generate_fabric_profile(manifest_dir: &str) {
 }
 
 fn component_slot(manifest: &str, wanted: &str) -> Option<usize> {
-    let present = manifest
+    // A command executable is a grant held by spawn-service. The root places
+    // executable grants first, in encoded grant-name order, starting at slot 1.
+    // Derive that order from the selected manifest so a broader command profile
+    // cannot silently fall outside a two-name hard-coded map.
+    let mut executable_grants = manifest
         .split("    {")
         .skip(1)
-        .filter(|block| field(block, "name").is_some() && field(block, "object").is_some())
-        .any(|block| field(block, "name") == Some(wanted));
-    if !present {
-        return None;
-    }
-    match wanted {
-        "sysinfo" => Some(1),
-        "echo-agent" => Some(2),
-        _ => None,
-    }
+        .filter_map(|block| {
+            let name = field(block, "name")?;
+            let source = field(block, "source")?;
+            let target = field(block, "target")?;
+            let rights = field_list(block, "rights")?;
+            (source == "spawn-service" && rights.contains(&"exec") && rights.contains(&"spawn"))
+                .then_some((name, target))
+        })
+        .collect::<Vec<_>>();
+    executable_grants.sort_unstable_by_key(|(name, _)| *name);
+    executable_grants
+        .iter()
+        .position(|(_, target)| *target == wanted)
+        .map(|index| index + 1)
 }
 
 fn component_block<'a>(manifest: &'a str, wanted: &str) -> Option<&'a str> {
@@ -327,4 +345,51 @@ fn field_list<'a>(block: &'a str, key: &str) -> Option<Vec<&'a str>> {
         .lines()
         .find(|line| line.trim_start().starts_with(&prefix))?;
     Some(value.split('"').skip(1).step_by(2).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::component_slot;
+
+    #[test]
+    fn command_slots_follow_sorted_spawn_service_grants() {
+        let manifest = r#"
+    { name = "sysinfo"; object = "sha256:sysinfo"; }
+    { name = "echo-agent"; object = "sha256:echo"; }
+    {
+      name = "z-sysinfo";
+      source = "spawn-service";
+      target = "sysinfo";
+      rights = ["exec"; "spawn";];
+    };
+    {
+      name = "a-echo";
+      source = "spawn-service";
+      target = "echo-agent";
+      rights = ["exec"; "spawn";];
+    };
+"#;
+        assert_eq!(component_slot(manifest, "echo-agent"), Some(1));
+        assert_eq!(component_slot(manifest, "sysinfo"), Some(2));
+    }
+
+    #[test]
+    fn non_executable_grants_do_not_consume_command_slots() {
+        let manifest = r#"
+    {
+      name = "a-factory";
+      source = "spawn-service";
+      target = "spawn-service";
+      rights = ["endpointCreate";];
+    };
+    {
+      name = "b-command";
+      source = "spawn-service";
+      target = "custom-command";
+      rights = ["exec"; "spawn";];
+    };
+"#;
+        assert_eq!(component_slot(manifest, "custom-command"), Some(1));
+        assert_eq!(component_slot(manifest, "missing"), None);
+    }
 }

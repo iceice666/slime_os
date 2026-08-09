@@ -183,9 +183,10 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ),
 )
 
-# The last marker of the last participant to take its role. Reading stops here
-# rather than at an exit, because nothing in this composition exits.
-TERMINAL_MARKER = r"\[fabric-call-client\] boot role provisioned"
+# The fabric idle marker is causally after every role has been provisioned. A
+# participant role is not terminal because independently scheduled operation
+# participants may still be running when it appears.
+TERMINAL_MARKER = CHAINS[-1][1][-1]
 
 FAILURE_MARKERS: tuple[str, ...] = (
     r"SLIME_ROOT FATAL",
@@ -193,7 +194,7 @@ FAILURE_MARKERS: tuple[str, ...] = (
     r"SLIME_GRAPH FAIL",
     r"SLIME_GRAPH wedged waiter",
     r"\[init\] fabric boot fail: .*",
-    r"SLIME_GRAPH spawn (?:failed|refused|unwound|unwind incomplete) task=19 .*",
+    r"SLIME_GRAPH spawn (?:failed|refused|unwound|unwind incomplete) .*",
     r"SLIME_GRAPH channel (?:recall|rollback) failed .*",
     r"SLIME_GRAPH capability transfer rolled back .*",
     r"SLIME_GRAPH debug write refused .*",
@@ -337,12 +338,7 @@ def check_manifest() -> None:
 
 
 def boot(profile: dict[str, object]) -> str:
-    """Boot until the last role is taken, or stop on a failure marker.
-
-    There is no exit to wait for: the graph's terminal state is idle. Reading
-    stops at the last participant's role marker and the checks below then assert
-    that nothing in the composition has exited.
-    """
+    """Boot until the whole fabric is idle, or stop on a failure marker."""
     qemu = shutil.which("qemu-system-aarch64")
     if qemu is None:
         fail("qemu-system-aarch64 is not on PATH")
@@ -380,17 +376,22 @@ def boot(profile: dict[str, object]) -> str:
         fail(f"cannot run QEMU: {error}")
     watchdog = threading.Timer(BOOT_TIMEOUT_SECONDS, process.kill)
     watchdog.start()
-    reached = False
+    outcome = "eof"
+    failure: str | None = None
     try:
         assert process.stdout is not None
         for line in process.stdout:
             lines.append(line.rstrip("\r\n"))
-            if failures.search(line):
+            matched_failure = failures.search(line)
+            if matched_failure is not None:
+                outcome = "failure"
+                failure = matched_failure.group(0)
                 break
             if terminal.search(line):
-                reached = True
+                outcome = "terminal"
                 break
     finally:
+        timed_out = not watchdog.is_alive()
         watchdog.cancel()
         process.terminate()
         try:
@@ -399,9 +400,14 @@ def boot(profile: dict[str, object]) -> str:
             process.kill()
             process.wait()
     transcript = "\n".join(lines)
-    if not reached:
+    if outcome == "failure":
         report_transcript(transcript)
-        fail(f"boot exceeded {BOOT_TIMEOUT_SECONDS}s without reaching the final role")
+        fail(f"boot stopped at failure marker: {failure!r}")
+    if outcome != "terminal":
+        report_transcript(transcript)
+        if timed_out:
+            fail(f"boot exceeded {BOOT_TIMEOUT_SECONDS}s without reaching fabric idle")
+        fail("QEMU exited before the fabric reached its terminal idle marker")
     return transcript
 
 

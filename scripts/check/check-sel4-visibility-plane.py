@@ -298,6 +298,8 @@ def boot(profile: dict[str, object]) -> str:
     component_exit = re.compile(TERMINAL_MARKER)
     lines: list[str] = []
     saw_init_complete = False
+    init_task: str | None = None
+    saw_init_exit = False
     try:
         process = subprocess.Popen(
             command,
@@ -318,9 +320,19 @@ def boot(profile: dict[str, object]) -> str:
             lines.append(line.rstrip("\r\n"))
             if failures.search(line):
                 break
+            spawn = SPAWN_PATTERN.search(line)
+            if spawn is not None:
+                parent = spawn.group(1)
+                if init_task is None:
+                    init_task = parent
+                elif init_task != parent:
+                    fail(f"visibility spawn records named multiple init tasks: {init_task}, {parent}")
             if init_complete.search(line):
                 saw_init_complete = True
-            elif saw_init_complete and component_exit.search(line):
+                continue
+            exit_match = component_exit.search(line)
+            if saw_init_complete and exit_match is not None and exit_match.group(1) == init_task:
+                saw_init_exit = int(exit_match.group(2)) == 0
                 break
     finally:
         timed_out = not watchdog.is_alive()
@@ -332,9 +344,12 @@ def boot(profile: dict[str, object]) -> str:
             process.kill()
             process.wait()
     transcript = "\n".join(lines)
-    if timed_out and not saw_init_complete:
+    if timed_out and not saw_init_exit:
         report_transcript(transcript)
-        fail(f"boot exceeded {BOOT_TIMEOUT_SECONDS}s without reaching the final marker")
+        fail(f"boot exceeded {BOOT_TIMEOUT_SECONDS}s without init's clean exit")
+    if saw_init_complete and not saw_init_exit:
+        report_transcript(transcript)
+        fail("init reported visibility completion but no clean exit record followed")
     return transcript
 
 
@@ -348,15 +363,26 @@ def report_transcript(transcript: str) -> None:
 
 
 def composition(transcript: str) -> str:
-    """The transcript up to init's completion.
+    """The composition through init's clean exit.
 
-    The root launches every component the generation declares, so an
-    unconfigured instance of each also runs and pages its own (empty) view. Those
-    records are not this composition's, and counting them would make the record
-    total depend on how far the unconfigured instances got before init exited.
+    The terminal reader stops on init's own exit record, so the slice retains
+    lifecycle evidence while excluding later failures from unconfigured copies.
     """
-    head, _, _ = transcript.partition("[init] visibility plane complete")
-    return head
+    complete = re.search(INIT_COMPLETE, transcript)
+    if complete is None:
+        return transcript
+    spawns = SPAWN_PATTERN.findall(transcript[: complete.end()])
+    parent_ids = {spawn[0] for spawn in spawns}
+    if len(parent_ids) != 1:
+        return transcript
+    init_task = next(iter(parent_ids))
+    exit_match = re.search(
+        rf"SLIME_GRAPH component exit task={re.escape(init_task)} status=0",
+        transcript[complete.end() :],
+    )
+    if exit_match is None:
+        return transcript
+    return transcript[: complete.end() + exit_match.end()]
 
 
 def check_records(transcript: str) -> None:
@@ -406,13 +432,16 @@ def check_task_lifecycle(transcript: str) -> None:
     parent_ids = {match[0] for match in spawns}
     if len(parent_ids) != 1:
         fail(f"spawn records name multiple parents: {sorted(parent_ids)}")
+    init_task = next(iter(parent_ids))
     children = {match[2]: match[1] for match in spawns}
     exits: dict[str, list[int]] = {}
-    for task, status in EXIT_PATTERN.findall(head):
+    for task, status in EXIT_PATTERN.findall(transcript):
         exits.setdefault(task, []).append(int(status))
     for component, task in children.items():
         if exits.get(task) != [0]:
             fail(f"{component} task {task} exit statuses were {exits.get(task, [])}, expected [0]")
+    if exits.get(init_task) != [0]:
+        fail(f"init task {init_task} exit statuses were {exits.get(init_task, [])}, expected [0]")
 
     # No component reported a failure while the composition ran. This is where
     # the unconfigured instances are separated from the real ones: theirs land

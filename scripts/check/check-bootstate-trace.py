@@ -261,9 +261,12 @@ def check_transition_shape(record: dict) -> None:
             raise TraceError("collect checker records must not change BootState sequence")
 
 
-def validate_record(record: dict, oracle: Oracle) -> None:
+def validate_record(record: dict, oracle: Oracle, retained: set[bytes] | None = None) -> None:
     check_transition_shape(record)
     if record["action"] == "collect":
+        if retained is None:
+            raise TraceError("collect validation requires the retained-root set")
+        check_collect(record["generation_root"], retained)
         return
     if not oracle.reachable(
         record["action"],
@@ -272,6 +275,16 @@ def validate_record(record: dict, oracle: Oracle) -> None:
         record["attempts_after"],
     ):
         raise TraceError(f"{record['action']} post-state is not reachable in the model")
+
+
+def select_state(states: list[dict]) -> dict:
+    if not states:
+        raise TraceError("neither durable BootState slot decodes")
+    highest = max(state["sequence"] for state in states)
+    newest = [state for state in states if state["sequence"] == highest]
+    if len(newest) == 2 and newest[0] != newest[1]:
+        raise TraceError("equal-sequence BootState slots conflict")
+    return newest[0]
 
 
 def selected_state(disk: Path) -> dict:
@@ -285,9 +298,7 @@ def selected_state(disk: Path) -> dict:
             states.append(CHECK_GENERATION.decode_bootstate(slot))
         except CHECK_GENERATION.CheckError:
             pass
-    if not states:
-        raise TraceError("neither durable BootState slot decodes")
-    return max(states, key=lambda state: state["sequence"])
+    return select_state(states)
 
 
 def check_trace_chain(records: list[dict], final: dict, oracle: Oracle) -> None:
@@ -447,12 +458,29 @@ def main() -> None:
     )
 
     roots = retained_roots(records, final)
+    collect = dict(records[-1])
+    collect.update(
+        action="collect",
+        commit="none",
+        target_slot=None,
+        sequence_after=collect["sequence_before"],
+    )
     for root in roots:
+        retained_collect = dict(collect, generation_root=root)
         assert_rejected(
-            "collection of a retained root",
-            lambda root=root: check_collect(root, roots),
+            "collection of a retained root through trace dispatch",
+            lambda retained_collect=retained_collect: validate_record(
+                retained_collect, oracle, roots
+            ),
         )
-    check_collect(sha256(b"orphan-object"), roots)
+    validate_record(dict(collect, generation_root=sha256(b"orphan-object")), oracle, roots)
+
+    conflict = dict(final)
+    conflict["known_good"] = sha256(b"conflicting-known-good")
+    assert_rejected(
+        "equal-sequence divergent BootState slots",
+        lambda: select_state([final, conflict]),
+    )
     malformed_trace_corpus(records[0]["raw"])
 
     print(

@@ -4700,7 +4700,7 @@ fn construct_child(
     // tasks a graph may hold, and reaching it refuses at the task table where
     // nothing has been allocated yet.
     let Some(task) = tasks.get(id) else {
-        release_child(tasks, graph, id);
+        release_child(tasks, windows, graph, buffers, id);
         return Err(IpcError::DestinationSlotsExhausted);
     };
     let (window_addr, window, window_alias) = (
@@ -4712,7 +4712,7 @@ fn construct_child(
         .declare(id, window_addr, window, window_alias)
         .is_err()
     {
-        release_child(tasks, graph, id);
+        release_child(tasks, windows, graph, buffers, id);
         return Err(IpcError::DestinationSlotsExhausted);
     }
     // The child's shared-buffer ceiling, from the generation's budget and keyed
@@ -4735,8 +4735,7 @@ fn construct_child(
         .declare_quota(HolderId(u64::from(id.0)), quota)
         .is_err()
     {
-        release_child(tasks, graph, id);
-        windows.release(id);
+        release_child(tasks, windows, graph, buffers, id);
         return Err(IpcError::DestinationSlotsExhausted);
     }
     sel4::debug_println!(
@@ -4749,8 +4748,7 @@ fn construct_child(
         quota.loan_count,
     );
     let Ok(child_table) = graph.create(id) else {
-        release_child(tasks, graph, id);
-        windows.release(id);
+        release_child(tasks, windows, graph, buffers, id);
         return Err(IpcError::DestinationSlotsExhausted);
     };
     for (slot, granted) in plan.granted.iter().take(plan.count).enumerate() {
@@ -4758,8 +4756,7 @@ fn construct_child(
             continue;
         };
         if child_table.install(slot as u32, *capability).is_err() {
-            release_child(tasks, graph, id);
-            windows.release(id);
+            release_child(tasks, windows, graph, buffers, id);
             return Err(IpcError::DestinationSlotsExhausted);
         }
         // The distribution step, per endpoint grant. The child names the end at
@@ -4826,8 +4823,7 @@ fn construct_child(
             rights: grant.rights,
         };
         if child_table.install(next, capability).is_err() {
-            release_child(tasks, graph, id);
-            windows.release(id);
+            release_child(tasks, windows, graph, buffers, id);
             return Err(IpcError::DestinationSlotsExhausted);
         }
         sel4::debug_println!(
@@ -4885,8 +4881,7 @@ fn construct_child(
             )
             .is_err()
         {
-            release_child(tasks, graph, id);
-            windows.release(id);
+            release_child(tasks, windows, graph, buffers, id);
             return Err(IpcError::DestinationSlotsExhausted);
         }
         sel4::debug_println!(
@@ -4929,30 +4924,27 @@ fn mint_channel(
 
 /// Tear a partially constructed child back down.
 ///
-/// Only reachable from the failure arms of [`construct_child`], where the task
-/// has been created but has never run: it was never activated, so nothing holds
-/// a channel to it, nothing is parked on it, and it has charged no buffer
-/// quota. That is why this is a suspend-and-release rather than the full
-/// `reclaim_dead_task` — there is no peer to wake and no holder to settle, and
-/// running the full path would emit death markers for a task that never lived.
-fn release_child(tasks: &mut TaskTable<MAX_TASKS>, graph: &mut GraphTables, id: TaskId) {
+/// This is the single unwind owner after `TaskTable::create` succeeds. Each
+/// resource release is idempotent, so every later failure can call it without
+/// tracking which construction stages completed. Quota is released before the
+/// task identity becomes unreachable, and the task's object span is revoked
+/// last.
+fn release_child(
+    tasks: &mut TaskTable<MAX_TASKS>,
+    windows: &mut WindowTable<MAX_TASKS>,
+    graph: &mut GraphTables,
+    buffers: &mut SharedBufferTable,
+    id: TaskId,
+) {
     graph.release(id);
-    // Through `reclaim`, not a bare suspend: the child's VSpace, frames, CNode,
-    // and TCB are already allocated, and suspending the thread returns none of
-    // them. `reclaim` suspends, revokes every capability derived from the
-    // task's objects, empties its CSlots, and frees the table entry — without
-    // it a refused spawn leaks a whole task, and `MAX_TASKS` spawn failures
-    // would fill a table nothing can empty.
+    windows.release(id);
+    buffers.release_quota(HolderId(u64::from(id.0)));
     match tasks.reclaim(id) {
         Ok(cleanup) => sel4::debug_println!(
             "SLIME_GRAPH spawn unwound task={} slots={}",
             id.0,
             cleanup.slot_count(),
         ),
-        // Reported rather than fatal: the objects stay recorded as the table's
-        // own state, and the terminal accounting is what surfaces them. A
-        // partial unwind is worse than a loud one, but neither is a reason to
-        // stop serving a graph whose other components are still running.
         Err(error) => sel4::debug_println!(
             "SLIME_GRAPH spawn unwind incomplete task={} error={error:?}",
             id.0
@@ -5139,8 +5131,7 @@ fn serve_spawn(
     let Some(handle) = handle else {
         // The parent's table is full. The copied child table can simply be
         // released; the parent's grants were never consumed.
-        release_child(tasks, graph, child);
-        windows.release(child);
+        release_child(tasks, windows, graph, buffers, child);
         sel4::debug_println!(
             "SLIME_GRAPH spawn failed task={} component={name} error=NoHandleSlot",
             id.0,
@@ -5152,8 +5143,7 @@ fn serve_spawn(
         if let Some(table) = graph.get_mut(id) {
             table.drop_slot(handle);
         }
-        release_child(tasks, graph, child);
-        windows.release(child);
+        release_child(tasks, windows, graph, buffers, child);
         sel4::debug_println!(
             "SLIME_GRAPH spawn failed task={} component={name} error=Activate",
             id.0,

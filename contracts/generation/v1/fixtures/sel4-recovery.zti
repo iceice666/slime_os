@@ -44,10 +44,17 @@
       transferable = false;
     };
     {
-      name = "recovery-probe-device";
+      name = "recovery-a-primary-device";
       source = "sel4-recovery-probe";
       target = "sel4-recovery-probe";
       rights = ["blockRead"; "blockWrite";];
+      transferable = false;
+    };
+    {
+      name = "recovery-b-guard-device";
+      source = "sel4-recovery-probe";
+      target = "sel4-recovery-probe";
+      rights = ["blockRead";];
       transferable = false;
     };
     {

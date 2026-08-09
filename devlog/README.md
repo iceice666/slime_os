@@ -223,3 +223,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-08 | [P5.4.final — auditing whether `kernel/` can be deleted](2026-08-08-p5-4-final-deletion-audit/index.md) | Audit | Verified | P5.4.final, P5.4 |
 | 2026-08-09 | [P5.4.final — retire the custom kernel](2026-08-09-p5-4-final-kernel-retirement/index.md) | Change | Verified | P5, P5.4, P5.4.final, B31 |
 | 2026-08-09 | [B32 — park scenario receivers on their endpoints](2026-08-09-b32-parked-scenario-receivers/index.md) | Defect | Verified | P5.4.6, P5.4.7, B32 |
+| 2026-08-09 | [B33 — seL4 kernel cutover review remediation](2026-08-09-b33-cutover-review-remediation/index.md) | Audit | Verified | P5.4.final, B33 |

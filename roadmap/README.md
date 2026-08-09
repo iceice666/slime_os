@@ -18,7 +18,7 @@ A milestone is complete only when its exit condition is observed. Compiled code,
 | [RPi5 ROS 2 demo](09-rpi5-ros2-demo.md) | RP0 and RP1 complete; RP2–RP8 planned | Rewrite RP2 around the seL4 product boundary before implementation; its current low-level deliverables describe the retired custom kernel |
 | [Architecture portability](07-architecture-portability.md) | P0, P1, P2.1, and P5 complete; P2.2–P2.6 superseded by P5 | P4 physical Raspberry Pi 5 qualification is the next architecture evidence gate |
 | [ROS 2 compatibility](03-ros2-compatibility.md) | Not started | R0 minimal DDS/RTPS topic profile is first; broader external/multi-vendor compatibility follows after the RPi5 demo path |
-| [Platform hardware](04-platform-hardware.md) | Framework track deferred; H1 implementation complete but physical evidence pending | Do not advance Framework daily-driver hardware unless needed for shared mechanisms or evidence preservation |
+| [Platform hardware](04-platform-hardware.md) | Deferred; H1 is blocked and no current seL4 Framework inventory or physical evidence exists | H1 remains blocked until a seL4 Framework image and observed inventory/no-write record exist |
 | [Foreign workloads](05-foreign-workloads.md) | Deferred | Use only if the chosen ROS 2 node route requires a Linux userspace personality |
 | [Authority and trust](06-authority-trust.md) | Deferred | Resume after the demo unless a demo milestone needs a specific authority primitive |
 | [Native development](08-native-development.md) | Deferred | Resume after the demo; D2/D3 may be useful later for on-device ROS node builds |

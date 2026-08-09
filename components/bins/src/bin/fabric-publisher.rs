@@ -37,10 +37,12 @@ slime_rt::entry!(main);
 const CONTROL_SLOT: u32 = 0;
 
 /// B17's subject, when the graph declares one: an endpoint end this component
-/// was *spawn-granted* at `send`+`transfer`. Slot 1, the first free number
-/// after the control endpoint. A graph that grants no such end leaves it empty,
-/// and [`subset_test_arm`] detects that rather than assuming it.
+/// was *spawn-granted* at `send`+`transfer`. The two following slots are a
+/// private carrier pair used to send the narrowed authority back to this same
+/// component, so the fabric never consumes the proof message.
 const PROBE_SLOT: u32 = 1;
+const PROBE_CARRIER_SEND_SLOT: u32 = 2;
+const PROBE_CARRIER_RECV_SLOT: u32 = 3;
 
 const RIGHT_SEND: u64 = 1;
 const RIGHT_RECV: u64 = 2;
@@ -343,9 +345,27 @@ fn subset_test_arm(route: &[u8; 32]) {
         // No probe in this graph. Nothing to test, and nothing claimed.
         _ => return,
     }
-    // The mask restores `recv`, which this end does not hold and its kind does
-    // admit, and keeps the transfer bit so the request is a strict superset of
-    // the source's rights in both.
+    // First prove a genuine subset operation succeeds: moving the capability
+    // with exactly the rights it already holds. Retaining transfer authority
+    // keeps the moved capability usable for the widening attempt below.
+    let narrowing = WireCapabilityTransfer {
+        magic: CAPABILITY_TRANSFER_MAGIC,
+        version: FORMAT_VERSION,
+        status: 0,
+        flags: FLAG_RETAIN_TRANSFER,
+        object_kind: OBJECT_KIND_ENDPOINT,
+        direction: DIRECTION_PUBLISH,
+        rights_mask: RIGHT_SEND | RIGHT_TRANSFER,
+        route_identity: *route,
+    };
+    if slime_rt::cap_transfer(PROBE_CARRIER_SEND_SLOT, PROBE_SLOT, &narrowing.encode())
+        != ERR_SUCCESS
+    {
+        fail(b"a valid narrowed transfer was refused");
+    }
+    let narrowed_slot = recv_cap(PROBE_CARRIER_RECV_SLOT);
+
+    // Restoring `recv` is a strict widening relative to that proven source.
     let widening = WireCapabilityTransfer {
         magic: CAPABILITY_TRANSFER_MAGIC,
         version: FORMAT_VERSION,
@@ -356,10 +376,24 @@ fn subset_test_arm(route: &[u8; 32]) {
         rights_mask: RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
         route_identity: *route,
     };
-    if slime_rt::cap_transfer(CONTROL_SLOT, PROBE_SLOT, &widening.encode()) != ERR_BAD_CAP {
+    if slime_rt::cap_transfer(PROBE_CARRIER_SEND_SLOT, narrowed_slot, &widening.encode())
+        != ERR_BAD_CAP
+    {
         fail(b"a spawn-granted role widened past its own rights");
     }
-    slime_rt::debug_write(b"[fabric-publisher] narrowed transfer role cannot widen\n");
+    slime_rt::debug_write(b"[fabric-publisher] narrowing succeeded and widening was refused\n");
+}
+
+fn recv_cap(slot: u32) -> u32 {
+    let mut bytes = [0u8; MAX_MSG];
+    let mut caps = [0u64; MAX_CAPS_PER_MSG];
+    loop {
+        match slime_rt::recv(slot, &mut bytes, &mut caps) {
+            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(slot)]),
+            value if value >= 0 && caps[0] != 0 => return caps[0] as u32,
+            _ => fail(b"collect narrowed transfer"),
+        }
+    }
 }
 
 fn publish(route_slot: u32, message: &[u8; MAX_MSG]) {

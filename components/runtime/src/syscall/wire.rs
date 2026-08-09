@@ -3,10 +3,9 @@
 //! A Slime operation crosses the root service endpoint as a message label (the
 //! operation number) plus at most [`FAST_REGISTERS`] fast message registers.
 //! Bytes and capability slots that do not fit in those registers travel through
-//! the caller's bound transfer window (see
-//! [`transfer_window_bind`](crate::transfer_window_bind)); they are never
-//! silently truncated. These helpers do the packing and hold no transport
-//! state, so they can be reasoned about — and tested — on their own.
+//! the caller's startup transfer window; they are never silently truncated.
+//! These helpers do the packing and hold no transport state, so they can be
+//! reasoned about — and tested — on their own.
 
 /// Fast message registers available to one request or one reply.
 pub const FAST_REGISTERS: usize = 4;
@@ -22,8 +21,9 @@ pub const FORM_WINDOW: u64 = 1;
 /// Largest byte count a transfer descriptor can name.
 pub const MAX_DESCRIPTOR_LEN: usize = 0xffff;
 
-/// Largest capability count a transfer descriptor can name.
-pub const MAX_DESCRIPTOR_CAPS: usize = 0xff;
+/// Largest capability count a staged transfer may name. The descriptor field is
+/// wider, but the transport contract admits only [`super::MAX_CAPS_PER_MSG`].
+pub const MAX_DESCRIPTOR_CAPS: usize = super::MAX_CAPS_PER_MSG;
 
 /// Builds the transfer descriptor register: payload byte count, capability
 /// count, and which carrier holds them.
@@ -98,5 +98,25 @@ pub fn pack_bytes(bytes: &[u8]) -> [u64; 2] {
 pub fn clear_unnamed_slots(slots: &mut [u64], named: usize) {
     for slot in slots.iter_mut().skip(named) {
         *slot = 0;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn descriptor_cap_bound_matches_transport_contract() {
+        assert_eq!(MAX_DESCRIPTOR_CAPS, crate::MAX_CAPS_PER_MSG);
+        let encoded = descriptor(7, MAX_DESCRIPTOR_CAPS, FORM_WINDOW);
+        assert_eq!(descriptor_len(encoded), 7);
+        assert_eq!(descriptor_caps(encoded), crate::MAX_CAPS_PER_MSG);
+    }
+
+    #[test]
+    fn inline_fit_never_accepts_capabilities() {
+        assert!(fits_inline(INLINE_BYTES, 0));
+        assert!(!fits_inline(0, 1));
+        assert!(!fits_inline(INLINE_BYTES + 1, 0));
     }
 }

@@ -243,7 +243,7 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     ("clean-exit task settled", r"SLIME_ROOT task settled task=0 role=clean-exit termination=Exit\(0\)"),
     (
         "the clean-exit task's slots are all accounted for",
-        r"SLIME_ROOT task reclaimed task=0 source=fabric-service slots=865\.\.915",
+        r"SLIME_ROOT task reclaimed task=0 source=fabric-service slots=(\d+)\.\.(\d+)",
     ),
     (
         "deliberate-fault task settled",
@@ -251,7 +251,7 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     ),
     (
         "the faulted task's slots adjoin them with no gap and no overlap",
-        r"SLIME_ROOT task reclaimed task=1 source=generation-manager slots=915\.\.965",
+        r"SLIME_ROOT task reclaimed task=1 source=generation-manager slots=(\d+)\.\.(\d+)",
     ),
     ("both tasks reclaimed", r"SLIME_ROOT cleanup tasks=2 slots=100 live=0"),
     (
@@ -483,6 +483,24 @@ def check_transcript(transcript: str) -> None:
                 fail(f"marker out of order: {description} ({pattern})")
             fail(f"missing marker: {description} ({pattern})")
         position = match.end()
+
+    clean = re.search(
+        r"SLIME_ROOT task reclaimed task=0 source=fabric-service slots=(\d+)\.\.(\d+)",
+        transcript,
+    )
+    faulted = re.search(
+        r"SLIME_ROOT task reclaimed task=1 source=generation-manager slots=(\d+)\.\.(\d+)",
+        transcript,
+    )
+    if clean is None or faulted is None:
+        fail("task reclaim ranges disappeared after marker matching")
+    clean_start, clean_end = (int(value) for value in clean.groups())
+    fault_start, fault_end = (int(value) for value in faulted.groups())
+    if clean_end - clean_start != 50 or fault_end - fault_start != 50 or fault_start != clean_end:
+        fail(
+            "task reclaim ranges are not two adjoining 50-slot allocations: "
+            f"{clean_start}..{clean_end}, {fault_start}..{fault_end}"
+        )
 
 
 def main() -> None:

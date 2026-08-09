@@ -1,13 +1,10 @@
-"""Build a recovery index (M5.9).
+"""Canonical recovery-index encoder used by fixture builders.
 
-Hand-written, beside the generated `boot_contracts` constants it uses rather
-than inside them: `scripts/lib/boot_contracts.py` carries an `@generated`
-banner, so anything added there is erased by the next `just boot_gen`.
-
-Shared by `scripts/build/build-generation.py`, which embeds an index as a
-generation resource, and `scripts/build/build-store-fixture.py`, which seeds one
-on a disk for the seL4 recovery plane. One encoder, so a fixture the gate builds
-and an index the product builds cannot drift.
+This hand-written module sits beside generated ``boot_contracts`` constants;
+it is currently consumed by ``build-store-fixture.py``. Product generations
+are assembled independently by ``build-generation.py``, so changes here must
+continue to mirror the Rust decoder rather than claiming a shared product
+encoding path.
 """
 
 from __future__ import annotations
@@ -43,10 +40,12 @@ def build_recovery_index(
     state_first_lba: int,
     state_last_lba: int,
 ) -> bytes:
+    if len(target_generation) != 32 or target_generation == bytes(32):
+        raise ValueError("target generation must be a nonzero 32-byte identity")
+    if len(generation_root) != 32 or generation_root == bytes(32):
+        raise ValueError("generation root must be a nonzero 32-byte identity")
     if len(state_entries) > MAX_RECOVERY_STATE_OBJECTS:
         raise ValueError("recovery state closure exceeds bound")
-    # Ascending by binding identity: the decoder enforces the order, so the
-    # encoder must produce it rather than rely on declaration order.
     entries = sorted(
         (
             (binding_identity(name), identity, schema)
@@ -54,8 +53,10 @@ def build_recovery_index(
         ),
         key=lambda entry: entry[0],
     )
-    if any(identity == bytes(32) or schema <= 0 for _, identity, schema in entries):
+    if any(len(identity) != 32 or identity == bytes(32) or schema <= 0 for _, identity, schema in entries):
         raise ValueError("invalid recovery state entry")
+    if any(left[0] == right[0] for left, right in zip(entries, entries[1:], strict=False)):
+        raise ValueError("duplicate recovery state binding")
     encoded = b"".join(
         RECOVERY_STATE_ENTRY.pack(binding, identity, schema, bytes(4))
         for binding, identity, schema in entries
@@ -85,3 +86,26 @@ def build_recovery_index(
         bytes(4),
     )
     return header + encoded
+
+
+def _test_validation_parity() -> None:
+    nonzero = bytes([1]) * 32
+    arguments = (nonzero, nonzero, 1, 0, 2, 3)
+    for entries in [
+        [("same", nonzero, 1), ("same", bytes([2]) * 32, 1)],
+        [("zero-root", bytes(32), 1)],
+    ]:
+        try:
+            build_recovery_index(
+                arguments[0],
+                arguments[1],
+                arguments[2],
+                arguments[3],
+                entries,
+                arguments[4],
+                arguments[5],
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("invalid recovery index input was accepted")

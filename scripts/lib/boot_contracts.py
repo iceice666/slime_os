@@ -231,7 +231,6 @@ class TargetProfile(typing.NamedTuple):
     page_profile: int
     required_features: int
     elf_machine: int
-    relative_relocation: int
     page_bytes: int
     kernel_preferred_base: int
     kernel_load_base: int
@@ -249,7 +248,6 @@ TARGET_PROFILES = (
         page_profile=1,
         required_features=1,
         elf_machine=62,
-        relative_relocation=8,
         page_bytes=4096,
         kernel_preferred_base=0xFFFF_FFFF_8000_0000,
         kernel_load_base=0xFFFF_FFFF_9000_0000,
@@ -265,7 +263,6 @@ TARGET_PROFILES = (
         page_profile=2,
         required_features=14,
         elf_machine=183,
-        relative_relocation=1027,
         page_bytes=4096,
         kernel_preferred_base=0xFFFF_FFFF_8000_0000,
         kernel_load_base=0xFFFF_FFFF_9000_0000,
@@ -281,7 +278,6 @@ TARGET_PROFILES = (
         page_profile=2,
         required_features=42,
         elf_machine=183,
-        relative_relocation=1027,
         page_bytes=4096,
         kernel_preferred_base=0xFFFF_FFFF_8000_0000,
         kernel_load_base=0xFFFF_FFFF_9000_0000,
@@ -297,7 +293,6 @@ TARGET_PROFILES = (
         page_profile=2,
         required_features=66,
         elf_machine=183,
-        relative_relocation=1027,
         page_bytes=4096,
         kernel_preferred_base=0xFFFF_FFFF_8000_0000,
         kernel_load_base=0xFFFF_FFFF_9000_0000,
@@ -313,7 +308,6 @@ TARGET_PROFILES = (
         page_profile=3,
         required_features=16,
         elf_machine=243,
-        relative_relocation=3,
         page_bytes=4096,
         kernel_preferred_base=0xFFFF_FFFF_8000_0000,
         kernel_load_base=0xFFFF_FFFF_9000_0000,

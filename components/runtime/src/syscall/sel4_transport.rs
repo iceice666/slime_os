@@ -17,10 +17,9 @@
 //!   the trap ABI returns — and its auxiliary value, or reply descriptor, in
 //!   `MR1`.
 //!
-//! Payloads that do not fit the inline registers travel through the transfer
-//! window: a shared buffer the component mapped itself and declared with
-//! [`transfer_window_bind`]. Nothing is ever truncated to fit — an operation
-//! whose payload needs the window while none is bound fails with
+//! Payloads that do not fit the inline registers travel through the startup
+//! transfer window bound once before component code runs. Nothing is ever
+//! truncated to fit — an operation whose frame exceeds the window fails with
 //! [`ERR_INVALID_ARG`] and transfers nothing.
 //!
 //! `yield_now` carries no policy, so it maps straight onto `seL4_Yield` instead
@@ -86,15 +85,7 @@ fn window() -> Result<(*mut u8, usize), i64> {
     Ok((WINDOW_BASE.load(Ordering::Acquire) as *mut u8, len))
 }
 
-/// Declares an already-mapped shared buffer as this component's transfer
-/// window, giving operations whose payload exceeds the inline registers a
-/// bounded place to put it. `base` must be the address a prior
-/// [`shared_buffer_map`] established for `buffer_slot`, and the mapping must
-/// cover at least [`MIN_TRANSFER_WINDOW`] bytes.
-///
-/// The root service records the same buffer against this child, so both ends
-/// address exactly the declared region and nothing else.
-pub fn transfer_window_bind(buffer_slot: u32, base: u64, len: usize) -> i64 {
+fn transfer_window_bind(buffer_slot: u32, base: u64, len: usize) -> i64 {
     if base == 0 || len < MIN_TRANSFER_WINDOW {
         return ERR_INVALID_ARG;
     }
@@ -116,13 +107,9 @@ pub fn transfer_window_bind(buffer_slot: u32, base: u64, len: usize) -> i64 {
 pub const STARTUP_WINDOW_SLOT: u32 = 0;
 
 /// Declare the root-mapped startup window at `base` as this component's
-/// transfer window.
-///
-/// Called once from [`crate::runtime::start`] before the component body runs.
-/// Unlike [`transfer_window_bind`], the region is not a shared buffer this
-/// component allocated: `slime-root` mapped it when it built the VSpace, which
-/// is what lets a component with no `SharedBufferFactory` grant use `recv`.
-pub fn bind_startup_window(base: usize) -> i64 {
+/// transfer window. Called once from [`crate::runtime::start`] before component
+/// code runs; there is intentionally no public rebinding API.
+pub(crate) fn bind_startup_window(base: usize) -> i64 {
     transfer_window_bind(STARTUP_WINDOW_SLOT, base as u64, MIN_TRANSFER_WINDOW)
 }
 
@@ -273,23 +260,10 @@ pub fn wait(sources: &[WaitSource]) {
     let bytes = &encoded[..count * WAIT_RECORD_BYTES];
     let Ok(transfer) = stage(bytes, &[]) else {
         // The source set cannot cross intact without a window, and `wait`
-        // returns `()` so there is no error to hand back. Yielding lets the
-        // caller re-poll, which is right when the next poll can succeed.
-        //
-        // It announces itself because when the next poll *cannot* succeed this
-        // is an invisible hang: the caller loops between `recv` and `wait`, and
-        // `yield_now` is `sel4::r#yield()`, a kernel primitive the root task
-        // never observes — so the graph deadlocks with no marker anywhere. B28
-        // was characterized across eight refuted readings partly because this
-        // arm could not be ruled out by reading a transcript; instrumenting it
-        // is what excluded it, and the marker is kept so the next reader does
-        // not have to add it again.
-        //
-        // Unreachable on every current plane: a component binds a window before
-        // its first parking operation, and one wait record is eight bytes
-        // against a `MIN_TRANSFER_WINDOW` of a page. That is why this costs
-        // nothing to leave in.
-        crate::debug_write(b"[rt] wait source set could not be staged\n");
+        // returns `()` so there is no error to hand back. The diagnostic must
+        // itself remain inline: this arm exists precisely because no usable
+        // transfer window is available.
+        early_debug_write(b"[rt] wait source set could not be staged\n");
         yield_now();
         return;
     };
@@ -557,6 +531,10 @@ pub fn block_transact(slot: u32, request: &[u8; 64], reply: &mut [u8; 64]) -> i6
 /// `buffer_phys` and the kernel wrote through it; there is no such ambient
 /// addressing here, so the sector comes back in the same window the request
 /// went out through, immediately after the reply record.
+const fn exact_sector_reply_len(length: usize) -> bool {
+    length == TRANSACT_BYTES + 512
+}
+
 pub fn block_transact_sector(
     slot: u32,
     request: &[u8; 64],
@@ -578,11 +556,9 @@ pub fn block_transact_sector(
         return result;
     }
     match collect(returned, staged.as_mut_slice(), None) {
-        Ok(length) if length >= TRANSACT_BYTES => {
+        Ok(length) if exact_sector_reply_len(length) => {
             reply_out.copy_from_slice(&staged[..TRANSACT_BYTES]);
-            if length == TRANSACT_BYTES + 512 {
-                sector.copy_from_slice(&staged[TRANSACT_BYTES..TRANSACT_BYTES + 512]);
-            }
+            sector.copy_from_slice(&staged[TRANSACT_BYTES..TRANSACT_BYTES + 512]);
             result
         }
         Ok(_) => ERR_INVALID_ARG,
@@ -650,8 +626,19 @@ pub fn generation_receive(receiver_slot: u32, transfer_slot: u32) -> i64 {
 
 pub fn unhealthy() -> ! {
     let _ = call(SYS_UNHEALTHY, &[]);
-    loop {
-        core::hint::spin_loop();
+    // `Unhealthy` is not implemented by every root revision. Falling back to
+    // the universally supported exit path prevents an unsupported reply from
+    // turning a failed component into a permanently running spinner.
+    exit(1)
+}
+
+/// Emit diagnostics without relying on the transfer window. Startup and
+/// staging failures use this path because every chunk fits in MR2/MR3.
+pub(crate) fn early_debug_write(bytes: &[u8]) {
+    for chunk in bytes.chunks(wire::INLINE_BYTES) {
+        let transfer = descriptor(chunk.len(), 0, FORM_INLINE);
+        let (operands, used) = payload_operands(0, transfer, chunk);
+        let _ = result_of(super::SYS_DEBUG_WRITE, &operands[..used]);
     }
 }
 
@@ -679,4 +666,16 @@ pub fn debug_write(bytes: &[u8]) -> i64 {
     };
     let (operands, used) = payload_operands(0, transfer, bytes);
     result_of(super::SYS_DEBUG_WRITE, &operands[..used])
+}
+#[cfg(test)]
+mod tests {
+    use super::exact_sector_reply_len;
+
+    #[test]
+    fn sector_reply_requires_record_and_sector() {
+        assert!(exact_sector_reply_len(64 + 512));
+        assert!(!exact_sector_reply_len(64));
+        assert!(!exact_sector_reply_len(64 + 511));
+        assert!(!exact_sector_reply_len(64 + 513));
+    }
 }

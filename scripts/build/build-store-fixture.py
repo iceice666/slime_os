@@ -4,9 +4,9 @@
 Every variant shares one layout: a 2048-sector raw image with a protective
 MBR, primary and backup GPT copies, and a single Slime OS object-store
 partition (type GUID "SLIMEOSSTOREGPT!") at LBA 40..2014. The store carries
-genesis superblock slot B (sequence 1, empty), committed slot A (sequence 2,
-one seeded object), and the seeded record. Fault variants corrupt exactly one
-structure so the guest must recover or reject per the documented rules.
+genesis superblock slot B, committed slot A with one seeded object, and the
+seeded record. Fault variants corrupt exactly one structure so the guest must
+recover or reject per the documented rules.
 """
 
 from __future__ import annotations
@@ -98,22 +98,39 @@ VARIANTS = [
     "transfer",
 ]
 
-# The BootState slots and the recovery index, partition-relative. Above the
-# store's record area so the two structures share a partition without
-# overlapping; kept in step with the probes that read them.
+# Fixture-only regions are fixed by the probes. They are not object-store
+# records and fixture images are immutable test inputs; keep them mutually
+# disjoint and within the partition while documenting that a writable consumer
+# must reserve them before appending through this synthetic layout.
 STATE_SLOT_A = 1024
 STATE_SLOT_B = 1025
 RECOVERY_INDEX_LBA = 1026
 RECOVERY_INDEX_SECTORS = 4
+TRANSFER_MANIFEST_LBA = 1030
+TRANSFER_MANIFEST_SECTORS = 16
+FIXTURE_REGIONS = (
+    (STATE_SLOT_A, STATE_SLOT_A + 1, "BootState A"),
+    (STATE_SLOT_B, STATE_SLOT_B + 1, "BootState B"),
+    (RECOVERY_INDEX_LBA, RECOVERY_INDEX_LBA + RECOVERY_INDEX_SECTORS, "recovery index"),
+    (TRANSFER_MANIFEST_LBA, TRANSFER_MANIFEST_LBA + TRANSFER_MANIFEST_SECTORS, "transfer manifest"),
+)
+for index, (start, end, name) in enumerate(FIXTURE_REGIONS):
+    if start < RECORD_AREA_START or end > PARTITION_SECTORS or start >= end:
+        raise RuntimeError(f"invalid fixture region: {name}")
+    for other_start, other_end, other_name in FIXTURE_REGIONS[:index]:
+        if start < other_end and other_start < end:
+            raise RuntimeError(f"overlapping fixture regions: {other_name} and {name}")
+
+SEEDED_APPEND_LBA = RECORD_AREA_START + SEEDED_RECORD_SECTORS
+if SEEDED_APPEND_LBA > min(start for start, _, _ in FIXTURE_REGIONS):
+    raise RuntimeError("seeded store records overlap fixture regions")
 RECOVERY_TARGET = bytes([0x55]) * 32
 RECOVERY_GENERATION_ROOT = bytes([0x66]) * 32
 RECOVERY_RELEASE_SEQUENCE = 3
 RECOVERY_BINDING = "recovered-state"
 RECOVERY_SCHEMA_VERSION = 1
 
-# M6.7: where the source carries its transfer manifest, and what it carries.
-TRANSFER_MANIFEST_LBA = 1030
-TRANSFER_MANIFEST_SECTORS = 16
+# M6.7: what the source transfer manifest carries.
 TRANSFER_GENERATION = bytes([0x77]) * 32
 TRANSFER_GENERATION_ROOT = bytes([0x88]) * 32
 TRANSFER_RELEASE_SEQUENCE = 5
@@ -194,11 +211,7 @@ def place(image: bytearray, lba: int, data: bytes) -> None:
 
 
 def recovery_index(state_object: bytes) -> bytes:
-    """A recovery index naming one state object: the store's seeded record.
-
-    Built with the same `build_recovery_index` the generation builder uses, so
-    the fixture and the product encode one format rather than two.
-    """
+    """A recovery index naming the store's seeded state object."""
     return build_recovery_index(
         RECOVERY_TARGET,
         RECOVERY_GENERATION_ROOT,
@@ -308,15 +321,16 @@ def build(variant: str) -> bytearray:
     place(image, BACKUP_ENTRIES_LBA, entries)
     place(image, BACKUP_HEADER_LBA, backup)
 
-    # Object store genesis: slot B sequence 1 (empty), slot A sequence 2 with
-    # the seeded object committed; the record lives at record area start.
+    # Object store genesis: slot A commits the seeded object and leaves the
+    # append pointer at the first free record sector, before every fixture-only
+    # region asserted above.
     seeded = seeded_payload()
-    place(image, STORE_FIRST + 0, superblock(2, RECORD_AREA_START + SEEDED_RECORD_SECTORS, 1))
+    place(image, STORE_FIRST + 0, superblock(2, SEEDED_APPEND_LBA, 1))
     place(image, STORE_FIRST + 1, superblock(1, RECORD_AREA_START, 0))
     place(image, STORE_FIRST + RECORD_AREA_START, record(SEEDED_TYPE, seeded))
 
     if variant == "superblock-newest-damaged":
-        damaged = bytearray(superblock(2, RECORD_AREA_START + SEEDED_RECORD_SECTORS, 1))
+        damaged = bytearray(superblock(2, SEEDED_APPEND_LBA, 1))
         damaged[60] ^= 0xFF
         place(image, STORE_FIRST + 0, bytes(damaged))
     elif variant == "superblock-both-damaged":
@@ -331,7 +345,7 @@ def build(variant: str) -> bytearray:
         struct.pack_into("<8s", garbage, 0, RECORD_MAGIC)
         struct.pack_into("<I", garbage, 8, FORMAT_VERSION)
         struct.pack_into("<I", garbage, 24, 0xFFFF_FFFF)
-        place(image, STORE_FIRST + RECORD_AREA_START + SEEDED_RECORD_SECTORS, bytes(garbage))
+        place(image, STORE_FIRST + SEEDED_APPEND_LBA, bytes(garbage))
 
     if variant == "recovery":
         # Both BootState slots corrupt: not merely absent, but present-and-bad,

@@ -200,7 +200,7 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
 # `BlockTransact` left this list with P5.4.2c: the root owns the device untyped
 # and the DMA frames, so it owns the driver, and the operation is now
 # `RootService`. Storage *policy* — partitioning, the object store, generations,
-# recovery — stays in userspace and stays unmediated, which is why the eight
+# recovery — stays in userspace and stays unmediated, which is why the four
 # below did not move with it.
 UNMEDIATED_OPERATIONS: tuple[tuple[str, int], ...] = (
     ("StoreTransact", 7),

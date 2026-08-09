@@ -34,10 +34,6 @@
             "x86_64-unknown-uefi"
             "aarch64-unknown-uefi"
           ];
-          # AArch64 UEFI firmware for `qemu-system-aarch64 -machine virt`.
-          # `pkgs.OVMF` is built for the host, so the AArch64 build has to be
-          # named explicitly even when the host is already AArch64.
-          aavmf = pkgs.pkgsCross.aarch64-multiplatform.OVMF.fd;
           # The exact GNU AArch64 cross toolchain the pinned seL4 kernel and
           # kernel loader are built with (`CROSS_COMPILER_PREFIX`, `CC`).
           #
@@ -72,10 +68,6 @@
                 rustup
               ]
               ++ [
-                xorriso
-                OVMF
-                mtools
-                dosfstools
                 cargo-deny
                 cargo-machete
                 ruff
@@ -91,10 +83,6 @@
                 sel4Python
               ];
 
-            OVMF_CODE = "${pkgs.OVMF.fd}/FV/OVMF_CODE.fd";
-            OVMF_VARS = "${pkgs.OVMF.fd}/FV/OVMF_VARS.fd";
-            AAVMF_CODE = "${aavmf}/FV/AAVMF_CODE.fd";
-            AAVMF_VARS = "${aavmf}/FV/AAVMF_VARS.fd";
 
             # `sel4-sys` generates the libsel4 bindings with bindgen, which
             # resolves libclang at run time rather than at link time.

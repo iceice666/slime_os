@@ -26,8 +26,6 @@ pub struct TargetProfile {
     pub required_features: u64,
     /// `e_machine` a host ELF intermediate must carry for this profile.
     pub elf_machine: u32,
-    /// Architecture-specific ELF `R_*_RELATIVE` relocation number.
-    pub relative_relocation: u32,
     pub page_bytes: u64,
     pub kernel_preferred_base: u64,
     pub kernel_load_base: u64,

@@ -217,10 +217,12 @@ test = false
 [[bin]]
 name = "sel4-storage-probe"
 path = "src/bin/sel4-storage-probe.rs"
+test = false
 
 [[bin]]
 name = "sel4-store-probe"
 path = "src/bin/sel4-store-probe.rs"
+test = false
 # The only binary that needs GPT validation and the object store, and so the
 # only one that needs an allocator. `store` also switches the runtime's heap on
 # for every binary in the build, because `extern crate alloc` in the dependency
@@ -230,6 +232,7 @@ required-features = ["store"]
 [[bin]]
 name = "sel4-filesystem-service"
 path = "src/bin/sel4-filesystem-service.rs"
+test = false
 # Opens the object store over a block capability, so it needs the same feature
 # the store plane does.
 required-features = ["store"]
@@ -237,6 +240,7 @@ required-features = ["store"]
 [[bin]]
 name = "sel4-transfer-probe"
 path = "src/bin/sel4-transfer-probe.rs"
+test = false
 # GPT validation, BootState, and the transfer manifest decoder, plus the
 # allocator they need.
 required-features = ["store"]
@@ -244,14 +248,17 @@ required-features = ["store"]
 [[bin]]
 name = "sel4-input-probe"
 path = "src/bin/sel4-input-probe.rs"
+test = false
 
 [[bin]]
 name = "sel4-directory-probe"
 path = "src/bin/sel4-directory-probe.rs"
+test = false
 
 [[bin]]
 name = "sel4-generation-manager"
 path = "src/bin/sel4-generation-manager.rs"
+test = false
 # Holds the plane's only block capability, so it needs the GPT and BootState
 # code and therefore the allocator.
 required-features = ["store"]
@@ -259,10 +266,12 @@ required-features = ["store"]
 [[bin]]
 name = "sel4-generation-client"
 path = "src/bin/sel4-generation-client.rs"
+test = false
 
 [[bin]]
 name = "sel4-recovery-probe"
 path = "src/bin/sel4-recovery-probe.rs"
+test = false
 # Same feature again: GPT validation, the object store, and the allocator all
 # three, since reconstruction verifies the state closure out of the store.
 required-features = ["store"]
@@ -270,6 +279,7 @@ required-features = ["store"]
 [[bin]]
 name = "sel4-rollback-probe"
 path = "src/bin/sel4-rollback-probe.rs"
+test = false
 # Same feature: it validates a GPT to locate its partition, and shares the
 # store plane's allocator for the same crate-wide reason.
 required-features = ["store"]

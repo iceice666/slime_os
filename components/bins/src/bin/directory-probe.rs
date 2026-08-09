@@ -41,7 +41,6 @@ fn main() {
         fail();
     }
     slime_rt::debug_write(b"[directory-probe] interrupted transition preserved root\n");
-    slime_rt::debug_write(b"[directory-probe] scoped read ok\n");
 
     let (write, _) = call(
         request(fs::OP_WRITE, b"new.txt", PAYLOAD_LEN, PAYLOAD_HASH),
@@ -78,6 +77,7 @@ fn main() {
     if scoped_read.status != 0 || reply_hash(scoped_read) != PAYLOAD_HASH {
         fail();
     }
+    slime_rt::debug_write(b"[directory-probe] scoped read ok\n");
     let (outside_scope, _) = call(request(fs::OP_READ, b"new.txt", 0, [0; 32]), derived_slot);
     if outside_scope.status != -3 {
         fail();

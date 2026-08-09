@@ -158,6 +158,38 @@ impl From<VSpaceError> for TaskError {
     }
 }
 
+/// Fallible transitions after task allocation ownership begins. Kept explicit
+/// so fault-injection harnesses can stop at every boundary and assert that the
+/// same cleanup owner covers the allocated prefix.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConstructionStage {
+    VSpace,
+    CNode,
+    Tcb,
+    ServiceMint,
+    FaultMint,
+    SelfTcbMint,
+    Configure,
+    SchedParams,
+    Entry,
+    WriteRegisters,
+}
+
+impl ConstructionStage {
+    pub const ALL: [Self; 10] = [
+        Self::VSpace,
+        Self::CNode,
+        Self::Tcb,
+        Self::ServiceMint,
+        Self::FaultMint,
+        Self::SelfTcbMint,
+        Self::Configure,
+        Self::SchedParams,
+        Self::Entry,
+        Self::WriteRegisters,
+    ];
+}
+
 /// Exactly the root CSlots one task's objects occupy.
 ///
 /// Slots are handed out in increasing order and never reused, so a task's
@@ -329,98 +361,90 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
         let id = TaskId(self.next_id);
         let first_slot = allocator.next_slot_index();
 
-        let vspace = create_child_vspace(allocator, image, caller_vspace, scratch, asid_pool)?;
-        let cnode = allocator
-            .allocate_variable::<sel4::cap_type::CNode>(CHILD_CNODE_SIZE_BITS)?
-            .cap();
-        let tcb = allocator.allocate_fixed::<sel4::cap_type::Tcb>()?.cap();
+        let construction = (|| {
+            let vspace = create_child_vspace(allocator, image, caller_vspace, scratch, asid_pool)?;
+            let cnode = allocator
+                .allocate_variable::<sel4::cap_type::CNode>(CHILD_CNODE_SIZE_BITS)?
+                .cap();
+            let tcb = allocator.allocate_fixed::<sel4::cap_type::Tcb>()?.cap();
 
-        let root_cnode = sel4::init_thread::slot::CNODE.cap();
-        // Slot 1: the root service endpoint, badged with this task's identity.
-        //
-        // This is the task's *transport*, not one of its grants: it is how a
-        // component reaches `exit`, `debug_write`, and the window bind that
-        // every other operation stages through. So it carries send and
-        // grant-reply unconditionally — a component that could not invoke it
-        // could not run at all, and seL4 refuses a call on a read-only
-        // endpoint.
-        //
-        // Conveying no authority by doing so is what makes that safe. What a
-        // component may *ask for* is decided by the root when it dispatches:
-        // each request resolves against that task's logical capability table
-        // (`graph.rs`), which holds exactly the grants its generation
-        // declared. An ungranted component can therefore call the root and be
-        // told no, which is the bounded error P5.2 requires, rather than being
-        // unable to speak and faulting instead.
-        //
-        // `grant` — the right to pass capabilities through the endpoint — is
-        // still gated on the generation declaring a transferable grant.
-        mint_child_slot(
-            cnode,
-            CHILD_SLOT_SERVICE,
-            &root_cnode.absolute_cptr(service_endpoint),
-            sel4::CapRightsBuilder::none()
-                .write(true)
-                .read(true)
-                .grant_reply(true)
-                .grant(authority.rights & boot_contracts::generation::RIGHT_TRANSFER != 0)
-                .build(),
-            id.service_badge(),
-        )?;
-        // Slot 3: the same endpoint object under this task's fault badge. The
-        // kernel requires a fault handler endpoint to carry send plus grant or
-        // grant-reply authority, and resolves this CPtr in the child's CSpace.
-        mint_child_slot(
-            cnode,
-            CHILD_SLOT_FAULT,
-            &root_cnode.absolute_cptr(service_endpoint),
-            sel4::CapRightsBuilder::none()
-                .write(true)
-                .grant_reply(true)
-                .build(),
-            id.fault_badge(),
-        )?;
-        if supervision == Supervision::SelfManaged {
+            let root_cnode = sel4::init_thread::slot::CNODE.cap();
+            // Slot 1 is invocation-only transport. In particular it must never
+            // carry receive authority: all children share the root endpoint,
+            // so a receiver could dequeue and answer another child's request
+            // before the root dispatcher saw it.
             mint_child_slot(
                 cnode,
-                CHILD_SLOT_TCB,
-                &root_cnode.absolute_cptr(tcb),
-                sel4::CapRights::all(),
-                0,
+                CHILD_SLOT_SERVICE,
+                &root_cnode.absolute_cptr(service_endpoint),
+                child_service_rights(authority),
+                id.service_badge(),
             )?;
-        }
+            // Slot 3: the same endpoint object under this task's fault badge.
+            // The kernel requires a fault handler endpoint to carry send plus
+            // grant or grant-reply authority, and resolves this CPtr in the
+            // child's CSpace.
+            mint_child_slot(
+                cnode,
+                CHILD_SLOT_FAULT,
+                &root_cnode.absolute_cptr(service_endpoint),
+                sel4::CapRightsBuilder::none()
+                    .write(true)
+                    .grant_reply(true)
+                    .build(),
+                id.fault_badge(),
+            )?;
+            if supervision == Supervision::SelfManaged {
+                mint_child_slot(
+                    cnode,
+                    CHILD_SLOT_TCB,
+                    &root_cnode.absolute_cptr(tcb),
+                    sel4::CapRights::all(),
+                    0,
+                )?;
+            }
 
-        tcb.tcb_configure(
-            sel4::CPtr::from_bits(CHILD_SLOT_FAULT),
-            cnode,
-            sel4::CNodeCapData::new(0, sel4::WORD_SIZE - CHILD_CNODE_SIZE_BITS),
-            vspace.vspace,
-            vspace.ipc_buffer_addr as sel4::Word,
-            vspace.ipc_buffer,
-        )
-        .map_err(TaskError::Configure)?;
-        tcb.tcb_set_sched_params(
-            sel4::init_thread::slot::TCB.cap(),
-            CHILD_PRIORITY,
-            CHILD_PRIORITY,
-        )
-        .map_err(TaskError::SchedParams)?;
+            tcb.tcb_configure(
+                sel4::CPtr::from_bits(CHILD_SLOT_FAULT),
+                cnode,
+                sel4::CNodeCapData::new(0, sel4::WORD_SIZE - CHILD_CNODE_SIZE_BITS),
+                vspace.vspace,
+                vspace.ipc_buffer_addr as sel4::Word,
+                vspace.ipc_buffer,
+            )
+            .map_err(TaskError::Configure)?;
+            tcb.tcb_set_sched_params(
+                sel4::init_thread::slot::TCB.cap(),
+                CHILD_PRIORITY,
+                CHILD_PRIORITY,
+            )
+            .map_err(TaskError::SchedParams)?;
 
-        let entry = image.entry();
-        let mut context = sel4::UserContext::default();
-        *context.pc_mut() =
-            sel4::Word::try_from(entry).map_err(|_| TaskError::EntryOutOfRange { entry })?;
-        // `resume = false`: nothing runs until every allocation for every task
-        // in this generation has succeeded. The child runtime establishes its
-        // own stack pointer at `_start`, so no initial SP is written here.
-        tcb.tcb_write_all_registers(false, &mut context)
-            .map_err(TaskError::WriteRegisters)?;
+            let entry = image.entry();
+            let mut context = sel4::UserContext::default();
+            *context.pc_mut() =
+                sel4::Word::try_from(entry).map_err(|_| TaskError::EntryOutOfRange { entry })?;
+            // `resume = false`: nothing runs until every allocation for every
+            // task in this generation has succeeded. The child runtime
+            // establishes its own stack pointer at `_start`.
+            tcb.tcb_write_all_registers(false, &mut context)
+                .map_err(TaskError::WriteRegisters)?;
+            Ok((vspace, cnode, tcb, entry))
+        })();
 
-        let cleanup = CleanupRecord {
-            task: id,
-            first_slot,
-            slot_end: allocator.next_slot_index(),
+        let (vspace, cnode, tcb, entry) = match construction {
+            Ok(task) => task,
+            Err(error) => {
+                // Ownership begins at `first_slot`, before the first fallible
+                // allocation. Whatever stage failed, this record names the
+                // exact prefix allocated by the attempt and is the sole owner
+                // responsible for revoking it before the error escapes.
+                construction_record(id, first_slot, allocator.next_slot_index()).revoke()?;
+                return Err(error);
+            }
         };
+
+        let cleanup = construction_record(id, first_slot, allocator.next_slot_index());
         self.tasks[index] = Some(Task {
             id,
             cnode,
@@ -500,6 +524,21 @@ impl<const CAPACITY: usize> Default for TaskTable<CAPACITY> {
     }
 }
 
+fn child_service_rights(_authority: Authority) -> sel4::CapRights {
+    sel4::CapRightsBuilder::none()
+        .write(true)
+        .grant_reply(true)
+        .build()
+}
+
+fn construction_record(task: TaskId, first_slot: usize, slot_end: usize) -> CleanupRecord {
+    CleanupRecord {
+        task,
+        first_slot,
+        slot_end,
+    }
+}
+
 fn mint_child_slot(
     cnode: sel4::cap::CNode,
     slot: sel4::CPtrBits,
@@ -515,7 +554,11 @@ fn mint_child_slot(
 
 #[cfg(test)]
 mod tests {
-    use super::{Arrival, CHILD_CNODE_SIZE_BITS, CHILD_SLOT_FAULT, TaskId};
+    use super::{
+        Arrival, CHILD_CNODE_SIZE_BITS, CHILD_SLOT_FAULT, ConstructionStage, TaskId,
+        child_service_rights, construction_record,
+    };
+    use crate::generation::Authority;
 
     #[test]
     fn badges_are_nonzero_and_round_trip() {
@@ -546,6 +589,37 @@ mod tests {
     fn an_unbadged_arrival_belongs_to_no_task() {
         assert_eq!(TaskId::from_badge(0), None);
         assert_eq!(TaskId::from_badge(1), None);
+    }
+
+    #[test]
+    fn child_service_transport_is_send_and_grant_reply_only() {
+        let ordinary = child_service_rights(Authority::NONE);
+        assert_eq!(
+            ordinary,
+            sel4::CapRightsBuilder::none()
+                .write(true)
+                .grant_reply(true)
+                .build()
+        );
+
+        let declared_transfer = child_service_rights(Authority {
+            rights: boot_contracts::generation::RIGHT_TRANSFER,
+            grants: 1,
+        });
+        assert_eq!(declared_transfer, ordinary);
+    }
+
+    #[test]
+    fn construction_cleanup_owns_every_failure_transition() {
+        let task = TaskId(7);
+        let first = 100;
+        for (transition, stage) in ConstructionStage::ALL.into_iter().enumerate() {
+            let slot_end = first + transition;
+            let cleanup = construction_record(task, first, slot_end);
+            assert_eq!(cleanup.task, task, "stage {stage:?}");
+            assert_eq!(cleanup.slots(), first..slot_end, "stage {stage:?}");
+            assert_eq!(cleanup.slot_count(), transition, "stage {stage:?}");
+        }
     }
 
     #[test]

@@ -23,17 +23,11 @@ SECTIONS
     .data : { *(.data) *(.data.*) }
     . = ALIGN(4096);
     .bss : { *(.bss) *(.bss.*) *(COMMON) }
-    /* rust-lld synthesizes `_end` as a reserved symbol even under `-T`, so
-     * defining it here changes no address. It is stated explicitly because the
-     * runtime derives real addresses from it — `slime-rt`'s seL4 transport
-     * places the IPC buffer on the first granule past `_end` and the transfer
-     * window on the next — and an address that load-bearing should be visible
-     * in the script that fixes it rather than inherited silently.
-     *
-     * The page alignment is what makes those two derived addresses land on the
-     * granules `slime-root/src/child_vspace.rs` maps, instead of inside the
-     * last page of `.bss`.
-     */
+    /* This script serves the retired bare-metal AArch64 target only. Native
+     * seL4 components use rust-lld's default layout, and `slime-rt` rounds its
+     * `_end` address up to the configured granule before locating the IPC
+     * buffer and startup transfer window. Keep `_end` page-aligned here for the
+     * legacy loader's fixed layout; it is not the seL4 invariant. */
     . = ALIGN(4096);
     _end = .;
     /DISCARD/ : { *(.note*) *(.comment) *(.eh_frame) *(.eh_frame_hdr) }

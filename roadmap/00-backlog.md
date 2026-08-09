@@ -18,6 +18,26 @@ at the bottom rather than deleting it.
 
 
 ## Resolved
+### B33 — seL4 cutover review findings
+
+**Status:** Resolved 2026-08-09.
+
+**Was:** The post-cutover static review recorded CUT-001 through CUT-077 across
+capability isolation, lifecycle cleanup, shared-memory aliases, storage,
+userspace services, gate integrity, CI/profile policy, and project records.
+Several defects were merge blockers, and several gates could pass without the
+current artifact or without the evidence named by their target.
+
+**Fix:** Every finding was re-grounded and repaired. Final integration also
+separated the capability-subset proof from the fabric control protocol and
+dropped init's retained endpoint copies after spawn so peer-death retirement
+can drain the QoS graph.
+
+**Exit condition observed:** focused root and host tests pass; the supervision,
+QoS, root-boot, gate-control, and layout-resource checks pass; formatting,
+Clippy, Python lint, and dependency policy pass. See
+[`devlog/2026-08-09-b33-cutover-review-remediation/`](../devlog/2026-08-09-b33-cutover-review-remediation/index.md).
+
 ### B31 — six oracle properties blocked `kernel/` deletion
 
 **Status:** Resolved 2026-08-09.

@@ -48,17 +48,20 @@ pub const MAX_TOTAL_PAGES: usize = 256;
 pub const MAX_SHARED_BUFFERS: usize = 32;
 /// Hard ceiling on exact live mappings.
 pub const MAX_MAPPINGS: usize = 64;
+/// Maximum page mappings admitted across committed mappings and rollback
+/// orphans. This is also the exact worst-case alias-record state space.
+pub const MAX_MAPPING_PAGES: usize = MAX_MAPPINGS * MAX_BUFFER_PAGES;
 /// Hard ceiling on outstanding receiver-bound loans.
 pub const MAX_LOANS: usize = 64;
 /// One frame-cap anchor is retained for every page of every live buffer.
 pub const MAX_FRAME_ANCHORS: usize = MAX_TOTAL_PAGES;
 /// A teardown can unmap every mapping, revoke every frame, then release every
 /// frame anchor. The fixed bound is deliberately independent of stack growth.
-pub const MAX_TEARDOWN_ACTIONS: usize = MAX_MAPPINGS * MAX_BUFFER_PAGES + MAX_FRAME_ANCHORS * 2;
+pub const MAX_TEARDOWN_ACTIONS: usize = MAX_MAPPING_PAGES + MAX_FRAME_ANCHORS * 2;
 /// Pages whose unmap the adapter failed to complete and which are therefore
-/// still live in some VSpace. Every page of every mapping could in principle
-/// orphan, so the bound matches the mapping table's total page capacity.
-pub const MAX_ORPHANS: usize = MAX_MAPPINGS;
+/// still live in some VSpace. Admission reserves this same per-page state
+/// space across committed mappings and orphans before any adapter call.
+pub const MAX_ORPHANS: usize = MAX_MAPPING_PAGES;
 const MAX_CHARGE_HOLDERS: usize = MAX_SHARED_BUFFERS + MAX_MAPPINGS;
 const AARCH64_USER_TOP: usize = 1usize << 40;
 
@@ -365,20 +368,22 @@ pub enum SharedBufferError {
     /// alias one physical frame into two independently accounted regions.
     DuplicateFrameAnchor,
     /// The orphan table cannot record another page the adapter failed to
-    /// unmap, so reclamation state would silently lose a live mapping.
+    /// unmap. Rollback still attempts every earlier page before reporting this
+    /// aggregate failure.
     OrphansExhausted,
     Adapter(AdapterError),
     Rollback {
         cause: AdapterError,
         rollback: AdapterError,
     },
-    /// A rollback unmap failed and the still-mapped page has been recorded as
-    /// an orphan. The region stays live and unreclaimable until the exact
-    /// orphaned page is retried through [`SharedBufferTable::retry_orphans`].
+    /// Rollback unmaps failed. `orphans` pages were retained for exact retry;
+    /// `unrecorded` is normally zero because admission reserves sufficient
+    /// orphan space, but records defensive exhaustion without aborting cleanup.
     Orphaned {
         cause: AdapterError,
         rollback: AdapterError,
         orphans: usize,
+        unrecorded: usize,
     },
 }
 
@@ -726,7 +731,7 @@ impl SharedBufferTable {
         let rights = if plan.writable {
             BufferRights::ALL
         } else {
-            BufferRights(BufferRights::MAP.0 | BufferRights::LOAN.0)
+            BufferRights::MAP
         };
         self.regions[plan.slot] = Some(Region {
             id: plan.id,
@@ -1264,6 +1269,20 @@ impl SharedBufferTable {
             .iter()
             .position(Option::is_none)
             .ok_or(SharedBufferError::MappingsExhausted)?;
+        let admitted_pages = self
+            .mappings
+            .iter()
+            .flatten()
+            .try_fold(self.orphan_count(), |total, mapping| {
+                total.checked_add(mapping.page_count as usize)
+            })
+            .ok_or(SharedBufferError::MappingsExhausted)?;
+        if admitted_pages
+            .checked_add(page_count)
+            .is_none_or(|total| total > MAX_MAPPING_PAGES)
+        {
+            return Err(SharedBufferError::MappingsExhausted);
+        }
         self.preflight_charge_slot(holder)?;
         Ok(MappingPlan {
             slot,
@@ -1310,6 +1329,7 @@ impl SharedBufferTable {
                 // in the table that names it.
                 let mut rollback_error = None;
                 let mut orphaned = 0usize;
+                let mut unrecorded = 0usize;
                 for rollback_page in (0..page).rev() {
                     let rollback_frame = plan
                         .anchors
@@ -1322,12 +1342,15 @@ impl SharedBufferTable {
                         vaddr: rollback_vaddr,
                     }) {
                         rollback_error.get_or_insert(rollback);
-                        self.record_orphan(Orphan {
+                        match self.record_orphan(Orphan {
                             frame: rollback_frame,
                             vspace: plan.record.vspace,
                             vaddr: rollback_vaddr,
-                        })?;
-                        orphaned += 1;
+                        }) {
+                            Ok(()) => orphaned += 1,
+                            Err(SharedBufferError::OrphansExhausted) => unrecorded += 1,
+                            Err(error) => return Err(error),
+                        }
                     }
                 }
                 if let Some(rollback) = rollback_error {
@@ -1335,6 +1358,7 @@ impl SharedBufferTable {
                         cause,
                         rollback,
                         orphans: orphaned,
+                        unrecorded,
                     });
                 }
                 return Err(Self::map_adapter_error(cause));
@@ -2191,7 +2215,7 @@ mod tests {
     fn caller_cannot_widen_rights_by_forging_a_handle() {
         let mut table = table();
         // A read-only region: `created_writable` is false, so the table records
-        // MAP|LOAN and never WRITE.
+        // MAP only, without WRITE or unreachable LOAN authority.
         let handle = table.create(OWNER, anchors(10, 1), false).expect("create");
         assert!(!handle.rights.contains(BufferRights::WRITE));
 
@@ -2338,6 +2362,7 @@ mod tests {
                     cause: AdapterError::MapConflict,
                     rollback: AdapterError::MapConflict,
                     orphans: 1,
+                    unrecorded: 0,
                 }
             ),
             "expected an Orphaned error, got {error:?}"
@@ -2387,7 +2412,120 @@ mod tests {
         assert_eq!(table.orphan_count(), 1);
     }
 
-    /// Finding 4: the module contract states unmap, then every revoke, then
+    /// Read-only creation grants only the authority its lifecycle can use:
+    /// mapping, without an unreachable loan bit that can never be sealed.
+    #[test]
+    fn read_only_regions_do_not_advertise_unreachable_loan_authority() {
+        let mut table = table();
+        let handle = table
+            .create(OWNER, anchors(10, 1), false)
+            .expect("create read-only");
+        assert_eq!(handle.rights, BufferRights::MAP);
+        assert_eq!(
+            table.loan(OWNER, RECEIVER, handle, 0, PAGE_SIZE),
+            Err(SharedBufferError::RightsDenied)
+        );
+    }
+
+    #[test]
+    fn mapping_page_admission_accepts_exact_capacity_and_reopens_after_retry() {
+        let mut table = table();
+        let handle = table.create(OWNER, anchors(10, 1), true).expect("create");
+        for index in 0..MAX_MAPPING_PAGES - 1 {
+            table.orphans[index] = Some(Orphan {
+                frame: FrameCap(100 + index),
+                vspace: VSpaceCap(200),
+                vaddr: index * PAGE_SIZE,
+            });
+        }
+        let mut adapter = RecordingAdapter::new();
+        table
+            .map(
+                &mut adapter,
+                OWNER,
+                handle,
+                VSpaceCap(40),
+                0x20_000,
+                0,
+                PAGE_SIZE,
+                MappingRights::ReadWrite,
+            )
+            .expect("exact capacity is admitted");
+        assert_eq!(table.mapping_count(), 1);
+
+        let mut overflow = RecordingAdapter::new();
+        assert_eq!(
+            table.map(
+                &mut overflow,
+                OWNER,
+                handle,
+                VSpaceCap(41),
+                0x30_000,
+                0,
+                PAGE_SIZE,
+                MappingRights::ReadWrite,
+            ),
+            Err(SharedBufferError::MappingsExhausted)
+        );
+        assert_eq!(overflow.calls, 0);
+
+        let mut retry = RecordingAdapter::new();
+        assert_eq!(table.retry_orphans(&mut retry), 0);
+        let mut after_retry = RecordingAdapter::new();
+        table
+            .map(
+                &mut after_retry,
+                OWNER,
+                handle,
+                VSpaceCap(41),
+                0x30_000,
+                0,
+                PAGE_SIZE,
+                MappingRights::ReadWrite,
+            )
+            .expect("released capacity is reusable");
+    }
+
+    #[test]
+    fn rollback_continues_after_orphan_table_exhaustion() {
+        let mut table = table();
+        let handle = table.create(OWNER, anchors(10, 3), true).expect("create");
+        let region = table.live_region(handle.id).expect("region");
+        let plan = table
+            .preflight_mapping(
+                OWNER,
+                region,
+                VSpaceCap(40),
+                0x20_000,
+                0,
+                3,
+                MappingRights::ReadWrite,
+                None,
+            )
+            .expect("preflight before exhaustion");
+        for index in 0..MAX_ORPHANS {
+            table.orphans[index] = Some(Orphan {
+                frame: FrameCap(100 + index),
+                vspace: VSpaceCap(200),
+                vaddr: index * PAGE_SIZE,
+            });
+        }
+        // Two maps succeed, the third fails, then both rollback unmaps fail.
+        let mut adapter = RecordingAdapter::failing_from(2);
+        assert_eq!(
+            table.execute_mapping(&mut adapter, plan),
+            Err(SharedBufferError::Orphaned {
+                cause: AdapterError::MapConflict,
+                rollback: AdapterError::MapConflict,
+                orphans: 0,
+                unrecorded: 2,
+            })
+        );
+        assert_eq!(adapter.calls, 5);
+        assert_eq!(table.mapping_count(), 0);
+        assert_eq!(table.orphan_count(), MAX_ORPHANS);
+    }
+
     /// every release. With two regions torn down together, a per-region loop
     /// would emit Revoke(A) Release(A) Revoke(B) Release(B); the contract
     /// requires Revoke(A) Revoke(B) Release(A) Release(B).

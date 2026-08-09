@@ -70,6 +70,7 @@ PLANES: tuple[tuple[str, str, str], ...] = (
     ("sel4-spawn", "--spawn-plane", "slime-sel4-spawn.elf"),
     ("sel4-sample", "--sample-plane", "slime-sel4-sample.elf"),
     ("sel4-stream", "--stream-plane", "slime-sel4-stream.elf"),
+    ("sel4-qos", "--qos-plane", "slime-sel4-qos.elf"),
     ("sel4-supervision", "--supervision-plane", "slime-sel4-supervision.elf"),
     ("sel4-crossing", "--crossing-plane", "slime-sel4-crossing.elf"),
     # P5.4.6. The layout is emitted between channel materialization and

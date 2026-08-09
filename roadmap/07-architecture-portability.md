@@ -217,17 +217,16 @@ contract and boundary work; this is where the profile either boots or does not.
 just aarch64_boot_check
 ```
 
-#### Exit condition (observed)
+#### Exit condition (historical)
 
-Observed 2026-08-03; see [`devlog/2026-08-03-p2-1-aarch64-boot/`](../devlog/2026-08-03-p2-1-aarch64-boot/index.md).
+Observed 2026-08-03 on the retired custom-kernel path; see [`devlog/2026-08-03-p2-1-aarch64-boot/`](../devlog/2026-08-03-p2-1-aarch64-boot/index.md).
 
-`qemu-system-aarch64 -machine virt` boots a verified `aarch64-qemu-virt`
-generation to EL1 under AArch64 UEFI firmware with the MMU and both caches
-enabled, brings up physical and virtual memory over the direct map, allocates
-from a working heap, reports the generation identity and BootState stage-0
-selected, and ends through the profile's semihosting exit rather than a timeout
-— all asserted as ordered PL011 markers by `just aarch64_boot_check`. The x86
-corpus is unchanged at 191 assertions.
+That historical gate booted `qemu-system-aarch64 -machine virt` to the retired
+custom kernel's EL1 path. The current `aarch64_boot_check` target validates the
+seL4 product image instead: it must not be cited as current proof of the former
+PL011, custom stage-1 translation-table, direct-map, heap, or semihosting path.
+Those observations remain historical evidence only; current architecture claims
+must name the seL4 gate and the markers it actually asserts.
 
 No component runs and no syscall is served; those are P2.3 and P2.2. This is the
 first non-x86 execution in the project, and it is QEMU only — it establishes

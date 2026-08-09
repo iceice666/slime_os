@@ -20,6 +20,7 @@ BUILD = ROOT / "scripts" / "build" / "build-generation.py"
 WORK = Path("/tmp/slime-os-release-trust")
 
 CHECK = load_script("check_generation", "check/check-generation.py")
+BUILD_GENERATION = load_script("release_trust_builder", "build/build-generation.py")
 TRUST = load_script("release_trust", "lib/release_trust.py")
 # The generated Zutai constants, loaded directly rather than re-exported through
 # `release_trust`: that module only imports the names its own body uses, and
@@ -44,13 +45,13 @@ def run(arguments: list[str], *, environment: dict[str, str] | None = None) -> s
     return process.stdout
 
 
-def build(name: str) -> Path:
+def build(name: str) -> tuple[Path, Path]:
     output = WORK / name
     shutil.rmtree(output, ignore_errors=True)
     environment = os.environ.copy()
     environment["SLIME_TARGET_PROFILE"] = "aarch64-sel4-qemu-virt"
     run([str(BUILD), str(output)], environment=environment)
-    return output / "boot-store.bin"
+    return output / "generation.bin", output / "boot-store.bin"
 
 
 def expect_error(name: str, expected: str, action) -> None:
@@ -84,6 +85,90 @@ def release_by_sequence(image: bytes, sequence: int) -> tuple[bytes, bytes]:
         if struct.unpack_from("<Q", release, 88)[0] == sequence:
             return generation, release
     raise SystemExit(f"missing release sequence {sequence}")
+
+def variant_generation(generation: bytes, number: int) -> bytes:
+    variant = bytearray(generation)
+    struct.pack_into("<Q", variant, 56, number)
+    variant[24:56] = bytes(32)
+    variant[24:56] = CONTRACTS.generation_identity(variant)
+    return bytes(variant)
+
+
+def bootstore(generations: list[bytes], **settings: str) -> bytes:
+    names = (
+        "SLIME_PENDING_RELEASE_SEQUENCE",
+        "SLIME_KNOWN_GOOD_FIRST",
+        "SLIME_PENDING_GENERATION",
+        "SLIME_PENDING_ATTEMPTS",
+        "SLIME_ACCEPTED_RELEASE_SEQUENCE",
+    )
+    previous = {name: os.environ.get(name) for name in names}
+    try:
+        for name in names:
+            os.environ.pop(name, None)
+        os.environ.update(settings)
+        return BUILD_GENERATION.build_bootstore(generations)
+    finally:
+        for name, value in previous.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
+def test_durable_bootstores(generation: bytes) -> None:
+    first = variant_generation(generation, 1)
+    second = variant_generation(generation, 2)
+    pending = CHECK.check_bootstore(
+        bootstore(
+            [first, second],
+            SLIME_PENDING_GENERATION="1",
+            SLIME_PENDING_ATTEMPTS="3",
+            SLIME_ACCEPTED_RELEASE_SEQUENCE="1",
+        )
+    )["state"]
+    if pending["known_good"] != first[24:56] or pending["pending"] != second[24:56]:
+        raise SystemExit("pending store did not retain known-good and candidate identities")
+    if pending["accepted_release_sequence"] != 1 or pending["remaining_attempts"] != 3:
+        raise SystemExit("staging changed accepted sequence or pending attempt budget")
+
+    stale = bootstore(
+        [first, second],
+        SLIME_PENDING_GENERATION="1",
+        SLIME_PENDING_RELEASE_SEQUENCE="1",
+        SLIME_ACCEPTED_RELEASE_SEQUENCE="1",
+    )
+    expect_error("stale pending release", "StalePendingRelease", lambda: CHECK.check_bootstore(stale))
+
+    exhausted = CHECK.check_bootstore(
+        bootstore(
+            [first, second],
+            SLIME_PENDING_GENERATION="1",
+            SLIME_PENDING_ATTEMPTS="0",
+            SLIME_ACCEPTED_RELEASE_SEQUENCE="1",
+        )
+    )["state"]
+    if exhausted["known_good"] != first[24:56] or exhausted["pending"] != second[24:56]:
+        raise SystemExit("exhausted pending store lost retained identities")
+
+    promoted = CHECK.check_bootstore(bootstore([first, second]))
+    if promoted["state"]["known_good"] != second[24:56] or promoted["state"]["pending"] is not None:
+        raise SystemExit("promoted store did not select and clear the candidate")
+    directory = {item["identity"]: item["release_sequence"] for item in promoted["generations"]}
+    if directory != {first[24:56]: 1, second[24:56]: 2}:
+        raise SystemExit("boot-store directory did not bind generations to releases")
+
+    conflicting = bytearray(bootstore([first, second]))
+    slot_b = bytearray(conflicting[CHECK.BOOTSTATE_SLOT_BYTES : 2 * CHECK.BOOTSTATE_SLOT_BYTES])
+    struct.pack_into("<Q", slot_b, 24, 2)
+    slot_b[CHECK.BOOTSTATE_KNOWN_GOOD_OFFSET] ^= 1
+    slot_b[CHECK.BOOTSTATE_CHECKSUM_OFFSET : CHECK.BOOTSTATE_CHECKSUM_END] = CONTRACTS.bootstate_checksum(slot_b)
+    conflicting[CHECK.BOOTSTATE_SLOT_BYTES : 2 * CHECK.BOOTSTATE_SLOT_BYTES] = slot_b
+    expect_error(
+        "conflicting BootState slots",
+        "ConflictingBootStateSlots",
+        lambda: CHECK.check_bootstore(bytes(conflicting)),
+    )
 
 
 def test_release_rejections(image: bytes) -> None:
@@ -268,6 +353,9 @@ def expect_rust_rotation_refused(name: str, rotation: bytes) -> None:
     outcome = rust_rotation(rotation, name)
     if outcome.returncode == 0:
         raise CHECK.CheckError(f"apply_rotation accepted {name}")
+    if "rotation verification failed" not in outcome.stderr:
+        detail = outcome.stderr.strip() or outcome.stdout.strip() or f"exit {outcome.returncode}"
+        raise SystemExit(f"apply_rotation infrastructure/build failure for {name}: {detail}")
 
 
 def test_rotation() -> None:
@@ -303,15 +391,19 @@ def test_rotation() -> None:
 
 
 def main() -> None:
-    image_path = build("authorized")
+    generation_path, image_path = build("authorized")
     image = image_path.read_bytes()
     generation, release = release_by_sequence(image, 1)
     if CHECK.check_release(release, generation) != 1:
         raise SystemExit("release verifier did not retain sequence one")
     test_release_rejections(image)
+    test_durable_bootstores(generation_path.read_bytes())
     test_rotation()
 
-    print("release trust check: signed release, threshold refusals, replay refusal, and trust-root rotation passed")
+    print(
+        "release trust check: signed release, pending/stale/exhausted/promotion/directory/conflict "
+        "stores, threshold refusals, replay refusal, and trust-root rotation passed"
+    )
 
 
 if __name__ == "__main__":

@@ -213,9 +213,18 @@ fn parse_partitions(
     header: &Header,
     capacity: u64,
 ) -> Result<Vec<Partition>, GptError> {
-    if header.first_usable < 2
+    let array_bytes = u64::from(header.entry_count)
+        .checked_mul(u64::from(header.entry_size))
+        .ok_or(GptError::Overflow)?;
+    let array_sectors = array_bytes.div_ceil(SECTOR_SIZE as u64);
+    let primary_entries_end = 2u64.checked_add(array_sectors).ok_or(GptError::Overflow)?;
+    let backup_header = capacity.checked_sub(1).ok_or(GptError::OutOfBounds)?;
+    let backup_entries_start = backup_header
+        .checked_sub(array_sectors)
+        .ok_or(GptError::OutOfBounds)?;
+    if header.first_usable < primary_entries_end
         || header.last_usable < header.first_usable
-        || header.last_usable >= capacity
+        || header.last_usable >= backup_entries_start
     {
         return Err(GptError::OutOfBounds);
     }
@@ -610,6 +619,26 @@ mod tests {
                 Err(GptError::OutOfBounds),
                 "range {first}..={last}",
             );
+        }
+    }
+
+    #[test]
+    fn usable_span_cannot_include_either_gpt_entry_array() {
+        for (first, last) in [
+            (PRIMARY_ENTRIES_LBA, LAST_USABLE),
+            (FIRST_USABLE, BACKUP_ENTRIES_LBA),
+        ] {
+            let mut disk = valid_disk();
+            for my_lba in [1, CAPACITY - 1] {
+                let mut sector = disk.sectors[my_lba as usize];
+                sector[40..48].copy_from_slice(&first.to_le_bytes());
+                sector[48..56].copy_from_slice(&last.to_le_bytes());
+                sector[16..20].fill(0);
+                let crc = crc32(&sector[..MIN_HEADER_SIZE as usize]);
+                sector[16..20].copy_from_slice(&crc.to_le_bytes());
+                disk.sectors[my_lba as usize] = sector;
+            }
+            assert_eq!(disk.validate(), Err(GptError::OutOfBounds));
         }
     }
 

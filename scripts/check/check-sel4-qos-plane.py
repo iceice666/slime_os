@@ -31,6 +31,9 @@ import tomllib
 from pathlib import Path
 from typing import NoReturn
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+
+from sel4_gate_markers import match_marker_contract  # noqa: E402
 ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
 IMAGE = ROOT / "build" / "slime-sel4-qos.elf"
@@ -38,6 +41,19 @@ MANIFEST = ROOT / "build" / "slime-sel4-qos.identity.json"
 BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
 FIXTURE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "sel4-qos.zti"
 IMAGE_VARIANT = "qos"
+SPAWN_PATTERN = re.compile(
+    r"SLIME_GRAPH spawned task=(\d+) child=(\d+) component=([^ ]+) "
+    r"grants=(\d+) channels=(\d+) handle=(\d+)"
+)
+EXIT_PATTERN = re.compile(r"SLIME_GRAPH component exit task=(\d+) status=(-?\d+)")
+EXPECTED_PARTICIPANTS = {
+    "fabric-service",
+    "fabric-publisher",
+    "fabric-publisher-b",
+    "fabric-subscriber",
+    "fabric-subscriber-b",
+    "fabric-intruder",
+}
 
 BOOT_TIMEOUT_SECONDS = 240
 
@@ -173,7 +189,7 @@ def sha256_file(path: Path) -> str:
 
 
 def build_image() -> None:
-    command = [sys.executable, str(BUILD_SCRIPT), "--stream-plane"]
+    command = [sys.executable, str(BUILD_SCRIPT), "--qos-plane"]
     print(f"[build] {' '.join(command)}", flush=True)
     try:
         process = subprocess.run(command, cwd=ROOT, check=False)
@@ -187,7 +203,7 @@ def check_manifest() -> None:
     if not MANIFEST.is_file():
         fail(
             f"missing identity manifest {MANIFEST.relative_to(ROOT)}; "
-            "run `just sel4_stream_check`"
+            "run `just sel4_qos_check`"
         )
     try:
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
@@ -203,7 +219,7 @@ def check_manifest() -> None:
         fail(
             f"{MANIFEST.relative_to(ROOT)} records variant "
             f"{manifest.get('variant')!r}, not {IMAGE_VARIANT!r}; "
-            "rebuild with `--stream-plane`"
+            "rebuild with `--qos-plane`"
         )
     image = manifest.get("image")
     if not isinstance(image, dict) or not isinstance(image.get("sha256"), str):
@@ -297,26 +313,58 @@ def report_transcript(transcript: str) -> None:
 
 
 def check_transcript(transcript: str) -> None:
-    for pattern in FAILURE_MARKERS:
-        match = re.search(pattern, transcript)
-        if match is not None:
-            report_transcript(transcript)
-            fail(f"failure marker in serial transcript: {match.group(0)!r}")
-    for label, chain in CHAINS:
-        position = 0
-        for pattern in chain:
-            match = re.compile(pattern).search(transcript, position)
-            if match is None:
-                report_transcript(transcript)
-                if re.search(pattern, transcript) is not None:
-                    fail(f"{label}: marker out of order: {pattern}")
-                fail(f"{label}: missing marker: {pattern}")
-            position = match.end()
+    match_marker_contract(
+        transcript,
+        CHAINS,
+        FAILURE_MARKERS,
+        fail,
+        before_reject=lambda: report_transcript(transcript),
+    )
+    check_participant_lifecycle(transcript)
     print(
         f"transcript: {sum(len(chain) for _, chain in CHAINS)} markers observed "
-        f"across {len(CHAINS)} causal chains",
+        f"across {len(CHAINS)} causal chains; all six spawned participants exited "
+        "cleanly and only the six unconfigured instances reported failure",
         flush=True,
     )
+
+
+def check_participant_lifecycle(transcript: str) -> None:
+    spawns = SPAWN_PATTERN.findall(transcript)
+    spawned = {match[2] for match in spawns}
+    if spawned != EXPECTED_PARTICIPANTS:
+        report_transcript(transcript)
+        fail(
+            f"init spawned {sorted(spawned)}, expected the six QoS participants "
+            f"{sorted(EXPECTED_PARTICIPANTS)}"
+        )
+    children = {component: child for _parent, child, component, *_ in spawns}
+    exits: dict[str, list[int]] = {}
+    for task, status in EXIT_PATTERN.findall(transcript):
+        exits.setdefault(task, []).append(int(status))
+    for component, task in children.items():
+        if exits.get(task) != [0]:
+            report_transcript(transcript)
+            fail(
+                f"{component} task {task} exit statuses were {exits.get(task, [])}, "
+                "expected [0]"
+            )
+
+    for component, prefix in (
+        ("fabric-service", r"\[fabric\]"),
+        ("fabric-publisher", r"\[fabric-publisher\]"),
+        ("fabric-publisher-b", r"\[fabric-publisher-b\]"),
+        ("fabric-subscriber", r"\[fabric-subscriber\]"),
+        ("fabric-subscriber-b", r"\[fabric-subscriber-b\]"),
+        ("fabric-intruder", r"\[fabric-intruder\]"),
+    ):
+        failures = re.findall(rf"{prefix} fail: .*", transcript)
+        if len(failures) != 1:
+            report_transcript(transcript)
+            fail(
+                f"{component} reported {len(failures)} failures; exactly one is "
+                f"expected from its unconfigured instance: {failures}"
+            )
 
 
 def main() -> None:

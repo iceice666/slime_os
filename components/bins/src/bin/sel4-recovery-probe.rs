@@ -25,9 +25,9 @@
 //! * the result is re-selected off the device and must be the index's target.
 //!
 //! Then the negative arm, which is the one M5.9 actually names: this component
-//! holds exactly one block capability. The gate attaches a *second* disk that
-//! no capability names, and the component's attempt to reach it is refused by
-//! the root — the guard disk is byte-identical afterwards.
+//! holds one writable recovery disk and a second, read-only guard-disk
+//! capability. Reading through the latter proves it reaches the attached guard
+//! disk; writing through the same capability is refused by rights.
 //!
 //! Kernel-resident in the oracle: `recovery::reconstruct` does all of the above
 //! behind a syscall gated on `GenerationControl` plus a selected block
@@ -43,14 +43,13 @@ use boot_contracts::object_store::{BlockIo, IoError, ObjectStore};
 use boot_contracts::recovery::RecoveryIndex;
 use slime_proto::block::{self, WireBlockReply, WireBlockRequest};
 
-/// The one device this component may reach.
+/// The primary device this component may reconstruct.
 const BLOCK_SLOT: u32 = 1;
+/// A real second device capability, deliberately read-only. Its write path can
+/// reach the attached guard disk if authority is accidentally widened.
+const GUARD_BLOCK_SLOT: u32 = 2;
 /// The endpoint `init` grants only to the instance it spawns.
 const RUN_TOKEN_SLOT: u32 = 0;
-/// A slot naming no device at all. Standing in for "the other disk": the
-/// component cannot name what it was not granted, which is precisely the
-/// property — there is no slot number that reaches the guard disk.
-const UNGRANTED_SLOT: u32 = RUN_TOKEN_SLOT;
 
 const SECTOR_BYTES: usize = 512;
 
@@ -157,35 +156,7 @@ fn main() {
         index.state_count() as u64,
     );
 
-    // Reconstruct. Sequence 1 to slot A, flush; sequence 2 to slot B, flush.
-    // Two writes rather than one, so an interruption after the first still
-    // leaves a fully verified root — which is why recovery is idempotent.
-    for (slot, sequence) in [(Slot::A, 1u64), (Slot::B, 2)] {
-        let state = BootState {
-            sequence,
-            known_good: index.target_generation,
-            pending: None,
-            remaining_attempts: 0,
-            generation_root: index.generation_root,
-            state_root: if index.state_count() == 0 {
-                empty_state_root()
-            } else {
-                index.state_root
-            },
-            accepted_release_sequence: index.accepted_release_sequence,
-        };
-        let Ok(encoded) = state.encode() else {
-            fail(b"reconstructed state encode");
-        };
-        let lba = first
-            + match slot {
-                Slot::A => STATE_SLOT_A,
-                Slot::B => STATE_SLOT_B,
-            };
-        if io.write_sector(lba, &encoded).is_err() || io.flush().is_err() {
-            fail(b"reconstruction write");
-        }
-    }
+    reconstruct(&mut io, &partition, first, &index, b"reconstruction");
 
     // Re-selected off the device: the root a fresh boot would pick must be the
     // index's target, at the higher of the two sequences.
@@ -215,8 +186,95 @@ fn main() {
     }
     slime_rt::debug_write(b"[sel4-recovery-probe] both slots decode\n");
 
-    // Idempotent: running the same reconstruction again produces the same
-    // selected root. Recovery interrupted and retried must converge.
+    // Idempotent: re-run the complete algorithm from the durable index and the
+    // disk state it just produced, rather than rewriting copied expected bytes.
+    let durable_bytes = read_index(&mut io, first);
+    let durable_index =
+        RecoveryIndex::decode(&durable_bytes).unwrap_or_else(|_| fail(b"durable index decode"));
+    reconstruct(
+        &mut io,
+        &partition,
+        first,
+        &durable_index,
+        b"repeat reconstruction",
+    );
+    let repeated_a = read_slot(&mut io, first + STATE_SLOT_A);
+    let repeated_b = read_slot(&mut io, first + STATE_SLOT_B);
+    let repeated = select_bootstate(&repeated_a, &repeated_b)
+        .unwrap_or_else(|_| fail(b"repeat reconstructed selection"));
+    if repeated.state != selected.state || repeated_a != a || repeated_b != b {
+        fail(b"reconstruction is not idempotent");
+    }
+    slime_rt::debug_write(b"[sel4-recovery-probe] recovery rerun from durable index converged\n");
+
+    // The negative arm uses a real capability for device 1. A read proves the
+    // slot reaches the attached guard disk; a write must then fail specifically
+    // because that capability carries no block-write right.
+    let mut guard_sector = [0u8; SECTOR_BYTES];
+    let read = request(block::OP_READ, 0);
+    let mut reply = [0u8; block::REPLY_LEN];
+    if slime_rt::block_transact_sector(
+        GUARD_BLOCK_SLOT,
+        &read.encode(),
+        &mut reply,
+        &mut guard_sector,
+    ) < 0
+        || decode_reply(&reply).sectors_done != 1
+    {
+        fail(b"guard disk capability was not reachable");
+    }
+    let write = request(block::OP_WRITE, 0);
+    if slime_rt::block_transact_write(GUARD_BLOCK_SLOT, &write.encode(), &guard_sector, &mut reply)
+        >= 0
+    {
+        fail(b"guard disk accepted a write");
+    }
+    slime_rt::debug_write(b"[sel4-recovery-probe] reachable guard disk write refused\n");
+
+    slime_rt::debug_write(b"[sel4-recovery-probe] recovery plane complete\n");
+}
+
+fn read_index(io: &mut BlockCapability, first: u64) -> alloc::vec::Vec<u8> {
+    let mut bytes = alloc::vec![0u8; (INDEX_SECTORS as usize) * SECTOR_BYTES];
+    for sector in 0..INDEX_SECTORS {
+        let start = sector as usize * SECTOR_BYTES;
+        let chunk: &mut [u8; SECTOR_BYTES] = bytes[start..start + SECTOR_BYTES]
+            .try_into()
+            .expect("sector-sized");
+        io.read_sector(first + INDEX_LBA + sector, chunk)
+            .unwrap_or_else(|_| fail(b"durable index read"));
+    }
+    let declared = u32::from_le_bytes(
+        bytes[INDEX_BYTES_OFFSET..INDEX_BYTES_OFFSET + 4]
+            .try_into()
+            .unwrap(),
+    ) as usize;
+    if declared > bytes.len() {
+        fail(b"durable index length");
+    }
+    bytes.truncate(declared);
+    bytes
+}
+
+fn reconstruct(
+    io: &mut BlockCapability,
+    partition: &gpt::Partition,
+    first: u64,
+    index: &RecoveryIndex<'_>,
+    context: &[u8],
+) {
+    let store = ObjectStore::open(io, partition).unwrap_or_else(|_| fail(context));
+    for position in 0..index.state_count() {
+        let entry = index.state(position).unwrap_or_else(|| fail(context));
+        let (_, payload_len) = store
+            .stat(&entry.object_identity)
+            .unwrap_or_else(|| fail(context));
+        let mut payload = alloc::vec![0u8; payload_len as usize];
+        store
+            .get(io, &entry.object_identity, &mut payload)
+            .unwrap_or_else(|_| fail(context));
+    }
+    drop(store);
     for (slot, sequence) in [(Slot::A, 1u64), (Slot::B, 2)] {
         let state = BootState {
             sequence,
@@ -231,37 +289,17 @@ fn main() {
             },
             accepted_release_sequence: index.accepted_release_sequence,
         };
-        let Ok(encoded) = state.encode() else {
-            fail(b"repeat encode");
-        };
+        let encoded = state.encode().unwrap_or_else(|_| fail(context));
         let lba = first
-            + match slot {
-                Slot::A => STATE_SLOT_A,
-                Slot::B => STATE_SLOT_B,
+            + if slot == Slot::A {
+                STATE_SLOT_A
+            } else {
+                STATE_SLOT_B
             };
-        if io.write_sector(lba, &encoded).is_err() || io.flush().is_err() {
-            fail(b"repeat write");
-        }
+        io.write_sector(lba, &encoded)
+            .unwrap_or_else(|_| fail(context));
+        io.flush().unwrap_or_else(|_| fail(context));
     }
-    let repeated_a = read_slot(&mut io, first + STATE_SLOT_A);
-    let repeated_b = read_slot(&mut io, first + STATE_SLOT_B);
-    if repeated_a != a || repeated_b != b {
-        fail(b"reconstruction is not idempotent");
-    }
-    slime_rt::debug_write(b"[sel4-recovery-probe] reconstruction is idempotent\n");
-
-    // The negative arm M5.9 names. A second disk is attached that no capability
-    // this component holds names; there is no slot number that reaches it, and
-    // an operation on a slot holding no device is refused by the root.
-    let probe = request(block::OP_WRITE, 0);
-    let mut reply = [0u8; block::REPLY_LEN];
-    let sector = [0xAAu8; SECTOR_BYTES];
-    if slime_rt::block_transact_write(UNGRANTED_SLOT, &probe.encode(), &sector, &mut reply) >= 0 {
-        fail(b"an ungranted device was written");
-    }
-    slime_rt::debug_write(b"[sel4-recovery-probe] ungranted device refused\n");
-
-    slime_rt::debug_write(b"[sel4-recovery-probe] recovery plane complete\n");
 }
 
 fn read_slot(io: &mut BlockCapability, lba: u64) -> [u8; SLOT_BYTES] {

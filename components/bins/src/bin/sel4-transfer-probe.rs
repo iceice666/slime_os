@@ -34,6 +34,7 @@ use boot_contracts::bootstate::{
 };
 use boot_contracts::gpt::{self, GptError};
 use boot_contracts::object_store::{BlockIo, IoError};
+use boot_contracts::recovery::binding_identity;
 use boot_contracts::transfer::{
     self, STATE_FLAG_READ_ONLY, STATE_FLAG_TRAVEL, TransferError, TransferManifest,
 };
@@ -192,24 +193,47 @@ fn main() {
         manifest.object_count() as u64,
     );
 
-    // State travels by declared policy. Nothing the source marked as not
-    // travelling may be shipped.
+    // Validate the manifest against the source's state set, not against its own
+    // already-filtered entries. One source binding travels read-only and one is
+    // explicitly local; omission of either policy from this table changes the
+    // proof rather than silently shrinking the universe being checked.
+    let source_states = [
+        (binding_identity("transferred-state"), true, true),
+        (binding_identity("ephemeral-state"), false, false),
+    ];
+    let mut seen = [false; 2];
     let mut travelling = 0;
     let mut read_only = 0;
     for index in 0..manifest.state_count() {
         let Ok(state) = manifest.state(index) else {
             fail(b"manifest state entry");
         };
-        if state.flags & STATE_FLAG_TRAVEL == 0 {
-            fail(b"a state entry that does not travel was shipped");
+        let Some(source_index) = source_states
+            .iter()
+            .position(|entry| entry.0 == state.binding)
+        else {
+            fail(b"manifest shipped state absent from the source set");
+        };
+        if !source_states[source_index].1 || seen[source_index] {
+            fail(b"manifest violated source travel policy");
         }
+        seen[source_index] = true;
         travelling += 1;
-        if state.flags & STATE_FLAG_READ_ONLY != 0 {
-            read_only += 1;
+        let is_read_only = state.flags & STATE_FLAG_READ_ONLY != 0;
+        if is_read_only != source_states[source_index].2 {
+            fail(b"manifest changed source read-only policy");
         }
+        read_only += is_read_only as u64;
+    }
+    if source_states
+        .iter()
+        .enumerate()
+        .any(|(index, entry)| entry.1 != seen[index])
+    {
+        fail(b"manifest omitted travelling source state");
     }
     write_pair(
-        b"[sel4-transfer-probe] state travels entries=",
+        b"[sel4-transfer-probe] source-state travel entries=",
         travelling,
         b" read-only=",
         read_only,

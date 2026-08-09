@@ -25,22 +25,19 @@
 
 use alloc::vec::Vec;
 
+#[cfg(test)]
 use crate::crc32::crc32;
 use crate::gpt::Partition;
 use crate::sha256;
-use crate::store_disk::SECTOR_BYTES as SECTOR_SIZE;
 
 pub use crate::store_disk::{
     FORMAT_VERSION, MAX_OBJECT_PAYLOAD, MAX_OBJECTS, RECORD_AREA_START, RECORD_HEADER,
-    RECORD_MAGIC, SUPERBLOCK_HEADER, SUPERBLOCK_MAGIC,
+    RECORD_MAGIC, Superblock, SuperblockError, decode_superblock, encode_superblock,
 };
 use crate::store_disk::{
     RECORD_CONTENT_HASH_OFFSET, RECORD_FORMAT_VERSION_OFFSET, RECORD_HEADER_SIZE_OFFSET,
-    RECORD_OBJ_TYPE_OFFSET, RECORD_PAYLOAD_LEN_OFFSET, SLOT_A_LBA, SLOT_B_LBA,
-    SUPERBLOCK_APPEND_LBA_OFFSET, SUPERBLOCK_CRC32_OFFSET, SUPERBLOCK_FLAGS_OFFSET,
-    SUPERBLOCK_FORMAT_VERSION_OFFSET, SUPERBLOCK_HEADER_SIZE_OFFSET,
-    SUPERBLOCK_OBJECT_COUNT_OFFSET, SUPERBLOCK_PARTITION_SECTORS_OFFSET,
-    SUPERBLOCK_RECORD_AREA_START_OFFSET, SUPERBLOCK_RESERVED_OFFSET, SUPERBLOCK_SEQUENCE_OFFSET,
+    RECORD_OBJ_TYPE_OFFSET, RECORD_PAYLOAD_LEN_OFFSET, SECTOR_BYTES as SECTOR_SIZE, SLOT_A_LBA,
+    SLOT_B_LBA,
 };
 
 /// The device surface the store needs. Implemented by `VirtioBlock` for the
@@ -55,17 +52,6 @@ pub trait BlockIo {
 pub enum IoError {
     Device,
     Timeout,
-}
-
-/// Why one superblock slot failed to decode. Reported for observability; a
-/// store opens as long as one slot is valid.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SuperblockError {
-    BadMagic,
-    UnsupportedVersion,
-    BadHeaderSize,
-    BadCrc,
-    BadBounds,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,14 +73,6 @@ impl From<IoError> for StoreError {
     fn from(value: IoError) -> Self {
         StoreError::Io(value)
     }
-}
-
-/// Committed store metadata carried by each superblock slot.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Superblock {
-    pub sequence: u64,
-    pub append_lba: u64,
-    pub object_count: u32,
 }
 
 /// One indexed object: where it starts and how to address it by content.
@@ -133,66 +111,6 @@ fn record_sectors(payload_len: u64) -> Result<u64, StoreError> {
         .checked_add(payload_len as usize)
         .ok_or(StoreError::CorruptRecord)?;
     Ok(bytes.div_ceil(SECTOR_SIZE) as u64)
-}
-
-pub fn encode_superblock(superblock: &Superblock, partition_sectors: u64) -> [u8; SECTOR_SIZE] {
-    let mut sector = [0u8; SECTOR_SIZE];
-    sector[..8].copy_from_slice(&SUPERBLOCK_MAGIC);
-    sector[SUPERBLOCK_FORMAT_VERSION_OFFSET..SUPERBLOCK_HEADER_SIZE_OFFSET]
-        .copy_from_slice(&FORMAT_VERSION.to_le_bytes());
-    sector[SUPERBLOCK_HEADER_SIZE_OFFSET..SUPERBLOCK_SEQUENCE_OFFSET]
-        .copy_from_slice(&(SUPERBLOCK_HEADER as u32).to_le_bytes());
-    sector[SUPERBLOCK_SEQUENCE_OFFSET..SUPERBLOCK_APPEND_LBA_OFFSET]
-        .copy_from_slice(&superblock.sequence.to_le_bytes());
-    sector[SUPERBLOCK_APPEND_LBA_OFFSET..SUPERBLOCK_OBJECT_COUNT_OFFSET]
-        .copy_from_slice(&superblock.append_lba.to_le_bytes());
-    sector[SUPERBLOCK_OBJECT_COUNT_OFFSET..SUPERBLOCK_FLAGS_OFFSET]
-        .copy_from_slice(&superblock.object_count.to_le_bytes());
-    sector[SUPERBLOCK_FLAGS_OFFSET..SUPERBLOCK_RECORD_AREA_START_OFFSET]
-        .copy_from_slice(&0u32.to_le_bytes());
-    sector[SUPERBLOCK_RECORD_AREA_START_OFFSET..SUPERBLOCK_PARTITION_SECTORS_OFFSET]
-        .copy_from_slice(&RECORD_AREA_START.to_le_bytes());
-    sector[SUPERBLOCK_PARTITION_SECTORS_OFFSET..SUPERBLOCK_RESERVED_OFFSET]
-        .copy_from_slice(&partition_sectors.to_le_bytes());
-    let crc = crc32(&sector[..SUPERBLOCK_CRC32_OFFSET]);
-    sector[SUPERBLOCK_CRC32_OFFSET..SUPERBLOCK_HEADER].copy_from_slice(&crc.to_le_bytes());
-    sector
-}
-
-pub fn decode_superblock(
-    sector: &[u8; SECTOR_SIZE],
-    partition_sectors: u64,
-) -> Result<Superblock, SuperblockError> {
-    if sector[..8] != SUPERBLOCK_MAGIC {
-        return Err(SuperblockError::BadMagic);
-    }
-    if u32_field(sector, SUPERBLOCK_FORMAT_VERSION_OFFSET) != FORMAT_VERSION {
-        return Err(SuperblockError::UnsupportedVersion);
-    }
-    if u32_field(sector, SUPERBLOCK_HEADER_SIZE_OFFSET) != SUPERBLOCK_HEADER as u32 {
-        return Err(SuperblockError::BadHeaderSize);
-    }
-    let stored_crc = u32_field(sector, SUPERBLOCK_CRC32_OFFSET);
-    if crc32(&sector[..SUPERBLOCK_CRC32_OFFSET]) != stored_crc {
-        return Err(SuperblockError::BadCrc);
-    }
-    let superblock = Superblock {
-        sequence: u64_field(sector, SUPERBLOCK_SEQUENCE_OFFSET),
-        append_lba: u64_field(sector, SUPERBLOCK_APPEND_LBA_OFFSET),
-        object_count: u32_field(sector, SUPERBLOCK_OBJECT_COUNT_OFFSET),
-    };
-    let record_area_start = u64_field(sector, SUPERBLOCK_RECORD_AREA_START_OFFSET);
-    let recorded_partition = u64_field(sector, SUPERBLOCK_PARTITION_SECTORS_OFFSET);
-    if record_area_start != RECORD_AREA_START
-        || recorded_partition != partition_sectors
-        || superblock.append_lba < RECORD_AREA_START
-        || superblock.append_lba > partition_sectors
-        || superblock.object_count as usize > MAX_OBJECTS
-        || superblock.sequence == u64::MAX
-    {
-        return Err(SuperblockError::BadBounds);
-    }
-    Ok(superblock)
 }
 
 pub fn encode_record_header(obj_type: u32, payload: &[u8], hash: &[u8; 32]) -> [u8; RECORD_HEADER] {
@@ -429,6 +347,12 @@ impl ObjectStore {
         io.flush()?;
 
         let target = self.active.other();
+        let entry = Entry {
+            hash,
+            obj_type,
+            payload_len: payload.len() as u32,
+            lba: self.append_lba,
+        };
         let superblock = Superblock {
             sequence: next_sequence,
             append_lba: end,
@@ -436,17 +360,16 @@ impl ObjectStore {
         };
         let sector = encode_superblock(&superblock, self.partition_sectors);
         io.write_sector(self.first_lba + target.lba(), &sector)?;
-        io.flush()?;
 
+        // Once the superblock write has completed, a flush failure is
+        // ambiguous: the new root may already be durable. Advance the live
+        // handle before reporting that error so a caller that retries cannot
+        // overwrite the record the on-disk root may now reference.
         self.sequence = superblock.sequence;
         self.append_lba = end;
         self.active = target;
-        self.entries.push(Entry {
-            hash,
-            obj_type,
-            payload_len: payload.len() as u32,
-            lba: superblock.append_lba - sectors,
-        });
+        self.entries.push(entry);
+        io.flush()?;
         Ok(hash)
     }
 
@@ -483,6 +406,7 @@ mod tests {
         writes: usize,
         fail_write_after: Option<usize>,
         flushes: usize,
+        fail_flush_after: Option<usize>,
     }
 
     impl MemoryDisk {
@@ -492,6 +416,7 @@ mod tests {
                 writes: 0,
                 fail_write_after: None,
                 flushes: 0,
+                fail_flush_after: None,
             }
         }
 
@@ -528,7 +453,11 @@ mod tests {
         }
 
         fn flush(&mut self) -> Result<(), IoError> {
+            let flush = self.flushes;
             self.flushes += 1;
+            if self.fail_flush_after == Some(flush) {
+                return Err(IoError::Device);
+            }
             Ok(())
         }
     }
@@ -640,6 +569,31 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_post_superblock_flush_failure_advances_the_live_handle() {
+        let mut disk = formatted();
+        let mut store = open(&mut disk);
+        disk.fail_flush_after = Some(1);
+
+        assert_eq!(
+            store.put(&mut disk, 1, b"possibly durable"),
+            Err(StoreError::Io(IoError::Device)),
+        );
+        let committed_end = store.append_lba();
+        assert_eq!(store.object_count(), 1);
+        assert_eq!(store.sequence(), 2);
+
+        disk.fail_flush_after = None;
+        store
+            .put(&mut disk, 2, b"retry safely")
+            .expect("later append");
+        assert!(store.append_lba() > committed_end);
+
+        let reopened = open(&mut disk);
+        assert_eq!(reopened.object_count(), 2);
+        assert_eq!(reopened.sequence(), 3);
+    }
+
     /// Two superblock slots alternate, so the newest valid root wins and a
     /// half-written slot cannot outrank a complete one.
     #[test]
@@ -679,6 +633,7 @@ mod tests {
             writes: 0,
             fail_write_after: None,
             flushes: 0,
+            fail_flush_after: None,
         };
         let newest_lba = if slot_a.sequence > slot_b.sequence {
             SLOT_A_LBA

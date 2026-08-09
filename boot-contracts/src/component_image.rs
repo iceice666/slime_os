@@ -37,7 +37,11 @@ pub enum ComponentTargetError {
     BadStack,
     /// A revision carries fields that must be canonical for its payload shape.
     BadHeaderShape,
-    /// A native ELF body exceeds the component-image ceiling.
+    /// A native ELF body is not ELF64 little-endian for the qualified target.
+    BadElfIdentity,
+    /// A native ELF header or load segment is malformed.
+    BadElfShape,
+    /// A native ELF body's file bytes or mapped footprint exceed the ceiling.
     ImageTooLarge,
     /// The image is qualified, but not for the profile it was offered to.
     Target(TargetError),
@@ -132,7 +136,7 @@ pub fn admit_elf<'a>(
         .get(ELF_HEADER_LEN..)
         .filter(|elf| !elf.is_empty())
         .ok_or(ComponentTargetError::Truncated)?;
-    validate_elf_len(elf.len())?;
+    validate_elf(elf, profile)?;
     Ok(elf)
 }
 
@@ -172,6 +176,63 @@ fn validate_header(
             || u16_at(blob, wire::OFF_HEADER_SEGMENT_COUNT)? != 0)
     {
         return Err(ComponentTargetError::BadHeaderShape);
+    }
+    Ok(())
+}
+
+fn validate_elf(elf: &[u8], profile: &TargetProfile) -> Result<(), ComponentTargetError> {
+    validate_elf_len(elf.len())?;
+    let header = elf.get(..64).ok_or(ComponentTargetError::BadElfShape)?;
+    if header[..4] != [0x7f, b'E', b'L', b'F']
+        || header[4] != 2
+        || header[5] != 1
+        || header[6] != 1
+        || u16::from_le_bytes([header[18], header[19]]) != profile.elf_machine as u16
+    {
+        return Err(ComponentTargetError::BadElfIdentity);
+    }
+    let phoff = usize::try_from(u64::from_le_bytes(header[32..40].try_into().unwrap()))
+        .map_err(|_| ComponentTargetError::BadElfShape)?;
+    let phentsize = usize::from(u16::from_le_bytes([header[54], header[55]]));
+    let phnum = usize::from(u16::from_le_bytes([header[56], header[57]]));
+    if phentsize < 56 || phnum == 0 {
+        return Err(ComponentTargetError::BadElfShape);
+    }
+    let mut mapped = 0u64;
+    for index in 0..phnum {
+        let offset = phoff
+            .checked_add(
+                index
+                    .checked_mul(phentsize)
+                    .ok_or(ComponentTargetError::BadElfShape)?,
+            )
+            .ok_or(ComponentTargetError::BadElfShape)?;
+        let program = elf
+            .get(offset..offset + 56)
+            .ok_or(ComponentTargetError::BadElfShape)?;
+        if u32::from_le_bytes(program[..4].try_into().unwrap()) != 1 {
+            continue;
+        }
+        let file_offset = u64::from_le_bytes(program[8..16].try_into().unwrap());
+        let file_size = u64::from_le_bytes(program[32..40].try_into().unwrap());
+        let mem_size = u64::from_le_bytes(program[40..48].try_into().unwrap());
+        if file_size > mem_size
+            || file_offset
+                .checked_add(file_size)
+                .is_none_or(|end| end > elf.len() as u64)
+        {
+            return Err(ComponentTargetError::BadElfShape);
+        }
+        let segment_mapped = mem_size
+            .div_ceil(profile.page_bytes)
+            .checked_mul(profile.page_bytes)
+            .ok_or(ComponentTargetError::ImageTooLarge)?;
+        mapped = mapped
+            .checked_add(segment_mapped)
+            .ok_or(ComponentTargetError::ImageTooLarge)?;
+        if mapped > MAX_IMAGE_BYTES {
+            return Err(ComponentTargetError::ImageTooLarge);
+        }
     }
     Ok(())
 }
@@ -267,6 +328,9 @@ pub fn validate_segments(
     entry_offset: u32,
     page_size: u32,
 ) -> Result<(), SegmentError> {
+    if page_size == 0 {
+        return Err(SegmentError::BadSegment);
+    }
     if count == 0 || count > MAX_SEGMENTS {
         return Err(SegmentError::BadSegmentCount);
     }
@@ -334,6 +398,7 @@ pub fn validate_segments(
 
 #[cfg(test)]
 mod tests {
+    extern crate alloc;
     use super::*;
     use crate::target_profile::{
         ABI_SLIME_AARCH64_V1, ARCH_AARCH64, ARCH_X86_64, FEATURE_AARCH64_BASELINE,
@@ -362,22 +427,32 @@ mod tests {
         bytes
     }
 
-    /// Bytes of the stand-in ELF body the tests below carry.
-    const ELF_BODY: &[u8] = b"\x7fELF-body";
+    fn elf_body(profile: &TargetProfile, mem_size: u64) -> alloc::vec::Vec<u8> {
+        let mut elf = alloc::vec![0u8; 120];
+        elf[..4].copy_from_slice(b"\x7fELF");
+        elf[4] = 2;
+        elf[5] = 1;
+        elf[6] = 1;
+        elf[16..18].copy_from_slice(&2u16.to_le_bytes());
+        elf[18..20].copy_from_slice(&(profile.elf_machine as u16).to_le_bytes());
+        elf[20..24].copy_from_slice(&1u32.to_le_bytes());
+        elf[32..40].copy_from_slice(&64u64.to_le_bytes());
+        elf[52..54].copy_from_slice(&64u16.to_le_bytes());
+        elf[54..56].copy_from_slice(&56u16.to_le_bytes());
+        elf[56..58].copy_from_slice(&1u16.to_le_bytes());
+        elf[64..68].copy_from_slice(&1u32.to_le_bytes());
+        elf[72..80].copy_from_slice(&120u64.to_le_bytes());
+        elf[96..104].copy_from_slice(&0u64.to_le_bytes());
+        elf[104..112].copy_from_slice(&mem_size.to_le_bytes());
+        elf
+    }
 
-    /// An ELF-revision image: the shared qualification header under the ELF
-    /// magic, followed by `body` standing in for a native executable. Returns a
-    /// fixed-size buffer and its used length, because `boot-contracts` is
-    /// `no_std` without `alloc`.
-    fn elf_image(
-        profile: &TargetProfile,
-        body: &[u8],
-    ) -> ([u8; ELF_HEADER_LEN + ELF_BODY.len()], usize) {
-        let mut bytes = [0u8; ELF_HEADER_LEN + ELF_BODY.len()];
+    fn elf_image(profile: &TargetProfile, body: &[u8]) -> alloc::vec::Vec<u8> {
+        let mut bytes = alloc::vec![0u8; ELF_HEADER_LEN + body.len()];
         bytes[..HEADER_LEN].copy_from_slice(&v2_header(profile));
         bytes[wire::OFF_HEADER_MAGIC..][..8].copy_from_slice(&ELF_IMAGE_MAGIC.to_le_bytes());
-        bytes[ELF_HEADER_LEN..][..body.len()].copy_from_slice(body);
-        (bytes, ELF_HEADER_LEN + body.len())
+        bytes[ELF_HEADER_LEN..].copy_from_slice(body);
+        bytes
     }
 
     fn v1_header() -> [u8; LEGACY_HEADER_LEN] {
@@ -412,45 +487,36 @@ mod tests {
     #[test]
     fn an_elf_image_is_qualified_by_the_same_header_as_v2() {
         for profile in crate::target_profile::PROFILES.iter() {
-            let (image, len) = elf_image(profile, ELF_BODY);
-            let image = &image[..len];
-            let (revision, declared) = target(image).expect("well-formed header");
+            let body = elf_body(profile, profile.page_bytes);
+            let image = elf_image(profile, &body);
+            let (revision, declared) = target(&image).expect("well-formed header");
             assert_eq!(revision, Revision::Elf);
             assert!(revision.carries_elf());
-            // The distinguishing fact: identical offsets yield identical
-            // qualification, so one layout describes both revisions.
             let (_, from_v2) = target(&v2_header(profile)).expect("well-formed header");
             assert_eq!(declared, from_v2);
-            assert_eq!(admit(image, profile), Ok(Revision::Elf));
+            assert_eq!(admit(&image, profile), Ok(Revision::Elf));
         }
     }
 
     #[test]
     fn an_elf_payload_is_only_reachable_after_its_target_is_admitted() {
         let sel4 = TargetProfile::by_name("aarch64-sel4-qemu-virt").expect("declared profile");
-        let (buffer, len) = elf_image(sel4, ELF_BODY);
-        let image = &buffer[..len];
-        assert_eq!(admit_elf(image, sel4), Ok(ELF_BODY));
+        let body = elf_body(sel4, sel4.page_bytes);
+        let image = elf_image(sel4, &body);
+        assert_eq!(admit_elf(&image, sel4), Ok(body.as_slice()));
 
-        // Offered to another profile, the bytes are never handed back: the
-        // qualification failure is returned instead, so a wrong-target image
-        // cannot be mapped by a caller that forgot to check first.
         let board = TargetProfile::by_name("aarch64-rpi5").expect("declared profile");
         assert_eq!(
-            admit_elf(image, board),
+            admit_elf(&image, board),
             Err(ComponentTargetError::Target(TargetError::ProfileMismatch))
         );
-
-        // A segment-carrying image is not an ELF image even when its target is
-        // admitted, so the two loaders can never be handed each other's body.
         assert_eq!(
             admit_elf(&v2_header(sel4), sel4),
             Err(ComponentTargetError::UnsupportedVersion)
         );
-        // A header with no payload has nothing to load.
-        let (empty, empty_len) = elf_image(sel4, b"");
+        let empty = elf_image(sel4, b"");
         assert_eq!(
-            admit_elf(&empty[..empty_len], sel4),
+            admit_elf(&empty, sel4),
             Err(ComponentTargetError::Truncated)
         );
     }
@@ -546,11 +612,12 @@ mod tests {
     #[test]
     fn wrong_component_abi_is_refused_before_loading() {
         let profile = TargetProfile::by_name("aarch64-sel4-qemu-virt").expect("declared profile");
-        let (mut image, len) = elf_image(profile, ELF_BODY);
+        let body = elf_body(profile, profile.page_bytes);
+        let mut image = elf_image(profile, &body);
         image[wire::OFF_HEADER_KERNEL_ABI..][..4]
             .copy_from_slice(&(wire::KERNEL_ABI_VERSION + 1).to_le_bytes());
         assert_eq!(
-            admit_elf(&image[..len], profile),
+            admit_elf(&image, profile),
             Err(ComponentTargetError::KernelAbiMismatch)
         );
     }
@@ -558,34 +625,36 @@ mod tests {
     #[test]
     fn stack_declaration_is_bounded_and_page_aligned() {
         let profile = TargetProfile::by_name("aarch64-sel4-qemu-virt").expect("declared profile");
+        let body = elf_body(profile, profile.page_bytes);
         for stack in [0, PAGE - 1, MAX_STACK_BYTES + PAGE] {
-            let (mut image, len) = elf_image(profile, ELF_BODY);
+            let mut image = elf_image(profile, &body);
             image[wire::OFF_HEADER_STACK_BYTES..][..4].copy_from_slice(&stack.to_le_bytes());
             assert_eq!(
-                admit_elf(&image[..len], profile),
+                admit_elf(&image, profile),
                 Err(ComponentTargetError::BadStack)
             );
         }
-        let (mut image, len) = elf_image(profile, ELF_BODY);
+        let mut image = elf_image(profile, &body);
         image[wire::OFF_HEADER_STACK_BYTES..][..4].copy_from_slice(&MAX_STACK_BYTES.to_le_bytes());
-        assert_eq!(admit_elf(&image[..len], profile), Ok(ELF_BODY));
+        assert_eq!(admit_elf(&image, profile), Ok(body.as_slice()));
     }
 
     #[test]
     fn elf_wrapper_requires_zero_segment_fields() {
         let profile = TargetProfile::by_name("aarch64-sel4-qemu-virt").expect("declared profile");
+        let body = elf_body(profile, profile.page_bytes);
         for (offset, value) in [
             (wire::OFF_HEADER_ENTRY_OFFSET, 1u32),
             (wire::OFF_HEADER_SEGMENT_COUNT, 1u32),
         ] {
-            let (mut image, len) = elf_image(profile, ELF_BODY);
+            let mut image = elf_image(profile, &body);
             if offset == wire::OFF_HEADER_SEGMENT_COUNT {
                 image[offset..][..2].copy_from_slice(&(value as u16).to_le_bytes());
             } else {
                 image[offset..][..4].copy_from_slice(&value.to_le_bytes());
             }
             assert_eq!(
-                admit_elf(&image[..len], profile),
+                admit_elf(&image, profile),
                 Err(ComponentTargetError::BadHeaderShape)
             );
         }
@@ -597,6 +666,23 @@ mod tests {
         assert_eq!(
             validate_elf_len(MAX_IMAGE_BYTES as usize + 1),
             Err(ComponentTargetError::ImageTooLarge)
+        );
+    }
+
+    #[test]
+    fn elf_identity_and_mapped_footprint_are_enforced() {
+        let profile = TargetProfile::by_name("aarch64-sel4-qemu-virt").expect("declared profile");
+        let mut wrong_machine = elf_body(profile, profile.page_bytes);
+        wrong_machine[18..20].copy_from_slice(&0u16.to_le_bytes());
+        assert_eq!(
+            admit_elf(&elf_image(profile, &wrong_machine), profile),
+            Err(ComponentTargetError::BadElfIdentity),
+        );
+
+        let oversized = elf_body(profile, MAX_IMAGE_BYTES + profile.page_bytes);
+        assert_eq!(
+            admit_elf(&elf_image(profile, &oversized), profile),
+            Err(ComponentTargetError::ImageTooLarge),
         );
     }
 
@@ -728,6 +814,15 @@ mod tests {
                 Err(SegmentError::BadSegmentCount),
             );
         }
+    }
+
+    #[test]
+    fn zero_page_size_is_refused_without_panicking() {
+        let (records, data) = one_executable_segment();
+        assert_eq!(
+            validate_segments(&records, &data, 1, 0, 0),
+            Err(SegmentError::BadSegment),
+        );
     }
 
     /// W^X as an image property. A segment claiming both is refused before any

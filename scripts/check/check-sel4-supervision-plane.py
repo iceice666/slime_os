@@ -10,17 +10,14 @@ markers for backlog B16's exit condition: *a graph that creates more than
 correctly for every live handle.*
 
 Before the fix, `supervision::Terminations` never reclaimed a record, so
-`MAX_RECORDS` (32, from `MAX_TASKS`) bounded the tasks a boot could **ever**
-create rather than the outcomes owed at once. Past the bound `record` dropped
-silently and the parent's `supervision_status` answered `WouldBlock` forever --
-the parent-waits-forever failure the module exists to prevent, arriving through
-the module's own bookkeeping.
+`MAX_RECORDS` bounded the tasks a boot could ever create rather than the outcomes
+owed at once. This checker derives the current record bound from root source and
+requires the scenario to exceed it while retaining two handles across the
+crossing.
 
-The fix reclaims records no live holder can name. This gate is what makes that
-observable, and it asserts the two properties a sweep could plausibly break:
+The fix reclaims records no live holder can name. This gate asserts:
 
-1. the loop crosses the bound at all -- 33 loop children, one more than
-   `MAX_RECORDS`, plus the two held across it for a boot total of 35;
+1. the configured loop is strictly greater than the current `MAX_RECORDS`;
 2. a handle held by init *across* the crossing still answers afterwards;
 3. a handle parked in `Transit` across the crossing is still collectable.
 
@@ -67,6 +64,8 @@ FIXTURE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "sel4-supervis
 IMAGE_VARIANT = "supervision"
 
 BOOT_TIMEOUT_SECONDS = 180
+MAX_TASKS_SOURCE = ROOT / "slime-root" / "src" / "task.rs"
+INIT_SOURCE = ROOT / "components" / "bins" / "src" / "bin" / "init.rs"
 
 REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     (
@@ -107,9 +106,8 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"\[init\] supervision handle retained",
     ),
     (
-        # The whole point: 33 children, one more than MAX_RECORDS. Against the
-        # unfixed root the 33rd record is dropped and its wait never answers,
-        # so this marker is unreachable and the boot times out.
+        # The source-derived check below proves the loop exceeds the current
+        # MAX_RECORDS; this marker proves that configured loop actually ran.
         "the graph created more tasks over its lifetime than MAX_RECORDS holds",
         r"\[init\] supervision lifetime bound crossed",
     ),
@@ -163,8 +161,8 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         # drain incompletely and never print this line, so iteration exhaustion
         # cannot pass as success.
         "the root's own accounting recorded more terminations than MAX_RECORDS",
-        r"SLIME_GRAPH spawns served=35 drops=0 endpoints=1 "
-        r"terminated=(?:3[3-9]|[4-9]\d) waits=0",
+        r"SLIME_GRAPH spawns served=\d+ drops=0 endpoints=1 "
+        r"terminated=\d+ waits=0",
     ),
 )
 
@@ -194,6 +192,22 @@ FAILURE_MARKERS: tuple[str, ...] = (
     r"aborted at ",
     r"\(aborted\)",
 )
+
+def check_loop_crosses_current_bound() -> tuple[int, int]:
+    try:
+        task_source = MAX_TASKS_SOURCE.read_text(encoding="utf-8")
+        init_source = INIT_SOURCE.read_text(encoding="utf-8")
+    except OSError as error:
+        fail(f"cannot read supervision bound source: {error}")
+    task_match = re.search(r"pub const MAX_TASKS: usize = (\d+);", task_source)
+    loop_match = re.search(r"const SUPERVISION_LOOP_CHILDREN: u32 = (\d+);", init_source)
+    if task_match is None or loop_match is None:
+        fail("cannot derive MAX_RECORDS or SUPERVISION_LOOP_CHILDREN")
+    bound = int(task_match.group(1))
+    children = int(loop_match.group(1))
+    if children <= bound:
+        fail(f"supervision loop creates {children} children, not more than MAX_RECORDS={bound}")
+    return bound, children
 
 
 def fail(message: str) -> NoReturn:
@@ -378,6 +392,28 @@ def check_transcript(transcript: str) -> None:
                 fail(f"marker out of order: {description} ({pattern})")
             fail(f"missing marker: {description} ({pattern})")
         position = match.end()
+    bound, children = check_loop_crosses_current_bound()
+    accounting = re.search(
+        r"SLIME_GRAPH spawns served=(\d+) drops=0 endpoints=1 terminated=(\d+) waits=0",
+        transcript,
+    )
+    if accounting is None:
+        fail("missing supervision accounting values")
+    spawns, terminated = (int(value) for value in accounting.groups())
+    expected_spawns = children + 2
+    # The root's termination counter covers the spawned scenario tasks plus
+    # every generation-launched component: init and the two deliberately
+    # unconfigured component instances declared by this fixture.
+    expected_terminated = expected_spawns + 3
+    if spawns != expected_spawns or terminated != expected_terminated:
+        fail(
+            f"supervision accounting was spawns={spawns} terminated={terminated}, "
+            f"expected spawns={expected_spawns} and terminated={expected_terminated} "
+            f"from {children} loop children, two retained tasks, and three "
+            "generation-launched components"
+        )
+    if terminated <= bound:
+        fail(f"root recorded {terminated} terminations, not more than MAX_RECORDS={bound}")
     check_loop_child_is_channel_free()
 
 

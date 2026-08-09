@@ -24,9 +24,25 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: extractions/setup-just@v2
       - run: just fmt_check_all
-      # Host-buildable crates only. Product component/runtime lint runs on the
-      # seL4 image builder through `just lint_sel4_root`.
-      - run: just lint_stage0 lint_boot_contracts
+      # Host-capable cutover crates stay on the ordinary runner. The seL4
+      # target crates additionally run against the pinned product prefix below.
+      - run: just lint_stage0 lint_boot_contracts lint_components_host
+
+  sel4_builder:
+    name: Pinned seL4 lint and root tests
+    runs-on: [self-hosted, linux, sel4-builder]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: extractions/setup-just@v2
+      # The labelled builder is provisioned through this repository's pinned
+      # Nix shell; build the exact prefix/child artifacts before consuming them.
+      - run: nix develop --command just sel4_qemu_image_check
+      - run: nix develop --command just lint_sel4_root
+      - run: nix develop --command just test_sel4_root
+      - run: nix develop --command just release_trust_check
+      - run: nix develop --command just bootstate_trace_check
 
   sel4_pins:
     name: seL4 pins
@@ -57,11 +73,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: extractions/setup-just@v2
       - run: just test_host
-      # `just test_sel4_root` is deliberately absent, for `lint_sel4_root`'s
-      # reason: `slime-root`'s tests compile against the installed seL4 prefix,
-      # which this runner does not build. They run in the pinned `nix develop`
-      # shell alongside the image and the seL4 gates. Listed here so the
-      # omission reads as a decision rather than an oversight.
 
   miri:
     name: Miri (boot-contracts, slime-proto)
@@ -92,6 +103,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: extractions/setup-just@v2
       - run: just contracts_check
+      - run: just x86_portability_check
+      - run: just framework_safety_check
       - run: just devlog_check
       # No build and no QEMU: it drives each seL4 gate's own marker table with
       # transcripts that are wrong in one specific way, so it runs anywhere the
@@ -103,6 +116,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check

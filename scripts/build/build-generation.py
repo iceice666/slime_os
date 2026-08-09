@@ -1317,23 +1317,22 @@ def render_fabric_profile_rust(resolved: ResolvedFabricProfile) -> str:
         f"    ({rust_string(row['name'])}, {rust_string(row['interface'])}, {rust_string(row['identity'])}, {row['contractKind']}),\n"
         for row in artifact["routes"]
     )
+    deadline_absent = (1 << 64) - 1
+
     def deadline(route: str) -> int:
         """The tightest deadline any request/response participant declares.
 
-        Zero when the graph declares no such route at all. A stream-only graph
-        — P5.5.2's seL4 stream plane — has no `parameters` or `navigation`
-        route, and the brokers those constants belong to are not in it. The
-        value is only
-        read by `call_broker` and `operation_broker`, so a graph without them
-        emits a constant nothing compiles against; emitting *no* constant would
-        instead break every graph that has them.
+        `FABRIC_DEADLINE_ABSENT`, not zero, denotes a graph with no such route.
+        Zero remains available as a real immediate deadline and cannot be
+        conflated with absence by generated consumers.
         """
         deadlines = [
             row["deadlineNs"]
             for row in participants
-            if row["route"] == route and row["direction"] in (FABRIC_DIRECTION_CLIENT, FABRIC_DIRECTION_SERVER)
+            if row["route"] == route
+            and row["direction"] in (FABRIC_DIRECTION_CLIENT, FABRIC_DIRECTION_SERVER)
         ]
-        return min(deadlines, default=0)
+        return min(deadlines, default=deadline_absent)
     return f'''// @generated from the canonical C8.9 resolved fabric profile; do not edit.
 #[allow(dead_code)]
 pub const FABRIC_PROFILE_NAME: &str = {rust_string(artifact['name'])};
@@ -1430,6 +1429,8 @@ pub const FABRIC_MAX_CAPABILITY_SLOTS: usize = {limits['capabilitySlots']};
 pub const FABRIC_REQUIRED_CAPABILITY_SLOTS: usize = {artifact['requiredCapabilitySlots']};
 pub const FABRIC_FRAME_CAPACITY: usize = {artifact['frameCapacity']};
 pub const FABRIC_COPY_PAGES: usize = {artifact['copyPages']};
+/// No request/response route of this class exists in the resolved graph.
+pub const FABRIC_DEADLINE_ABSENT: u64 = u64::MAX;
 pub const FABRIC_CALL_DEADLINE_NS: u64 = {deadline('parameters')};
 pub const FABRIC_OPERATION_DEADLINE_NS: u64 = {deadline('navigation')};
 pub const FABRIC_FIRST_CONTROL_SLOT: u32 = {artifact['firstControlSlot']};
@@ -2591,9 +2592,15 @@ def build_sel4_generation(output: Path, manifest: dict, target_profile: TargetPr
         )
 
     generation = build_generation(manifest, payloads, None, manifest["generation"], target_profile)
+    # Build the compatibility alias independently from the same resolved inputs.
+    # Determinism checks can then detect hidden mutable builder state instead of
+    # comparing a file copied from the bytes beside it.
+    generation_one = build_generation(
+        manifest, payloads, None, manifest["generation"], target_profile
+    )
     bootstore = build_bootstore([generation])
     (output / "generation.bin").write_bytes(generation)
-    (output / "generation-1.bin").write_bytes(generation)
+    (output / "generation-1.bin").write_bytes(generation_one)
     (output / "boot-store.bin").write_bytes(bootstore)
     print(f"Built seL4 generation {generation[24:56].hex()} target={target_profile.name}")
     print(f"Built boot-store.bin ({len(bootstore)} bytes)")

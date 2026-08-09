@@ -13,11 +13,10 @@ with its payload re-hashed; the reconstructed root is written to both slots at
 sequences 1 and 2, each flushed; and the result is re-selected off the device
 and must be the index's target. Running it twice must converge.
 
-The containment: a **second disk** is attached to the machine that no capability
-the component holds names. The component tries to write it, the root refuses,
-and the gate hashes the guard image before and after. That comparison is the
-assertion M5.9 actually names — a serial marker saying "refused" proves the
-component asked, not that nothing happened.
+The containment: a **second disk** is attached and exposed only through a
+read-only block capability. The component tries to write it, the root refuses
+on rights, and the gate hashes the guard image before and after. That comparison
+is the assertion M5.9 names — a serial marker alone cannot prove no mutation.
 """
 
 from __future__ import annotations
@@ -42,8 +41,8 @@ IMAGE = ROOT / "build" / "slime-sel4-recovery.elf"
 FIXTURE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "sel4-recovery.zti"
 BOOT_TIMEOUT_SECONDS = 240
 
-# The guard disk: attached to the machine, named by no capability. Signed so a
-# comparison distinguishes "unchanged" from "both empty".
+# The guard disk: attached and granted read-only. Signed so a comparison
+# distinguishes "unchanged" from "both empty".
 GUARD_BYTES = 1 << 20
 GUARD_SIGNATURE = b"GUARDDSK"
 
@@ -101,14 +100,14 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"\[sel4-recovery-probe\] both slots decode",
     ),
     (
-        "running the reconstruction again converges",
-        r"\[sel4-recovery-probe\] reconstruction is idempotent",
+        "rerunning recovery from the durable index converged",
+        r"\[sel4-recovery-probe\] recovery rerun from durable index converged",
     ),
     (
-        # The component asked for a device it was not granted and was refused.
-        # The guard-image comparison below is what proves nothing happened.
-        "an ungranted device was refused",
-        r"\[sel4-recovery-probe\] ungranted device refused",
+        # A real read-only block capability names the guard disk; the attempted
+        # write must be rejected by rights, not by an unrelated endpoint kind.
+        "the reachable guard disk refused a write",
+        r"\[sel4-recovery-probe\] reachable guard disk write refused",
     ),
     (
         "the probe ran every arm and exited cleanly",
@@ -216,10 +215,9 @@ def boot(profile: dict[str, object], disk: Path, guard: Path) -> str:
         f"if=none,id=slimedisk,format=raw,file={disk}",
         "-device",
         "virtio-blk-device,drive=slimedisk",
-        # The guard disk. Attached to the machine, named by no capability the
-        # component holds — which is the point: M5.9 requires reconstruction to
-        # modify no device the caller was not explicitly granted, and the only
-        # honest way to check that is to give the machine one and compare it.
+        # The guard disk. Attached to the machine and named only by a read-only
+        # capability, so the attempted write reaches the correct object and is
+        # refused on authority. The image comparison proves containment.
         "-drive",
         f"if=none,id=guarddisk,format=raw,file={guard}",
         "-device",
@@ -329,23 +327,22 @@ def check_reconstructed(disk: Path, partition_first_lba: int) -> None:
 
 
 def check_guard_untouched(guard: Path, before: str) -> None:
-    """The device no capability named is byte-identical.
+    """The read-only guard device is byte-identical.
 
-    This is M5.9's containment requirement, and it is the reason the gate
-    attaches a second disk at all. A serial marker saying the write was refused
-    proves the component asked; only the image proves nothing reached the device.
+    This is M5.9's containment requirement. A serial refusal is insufficient
+    without comparing the reachable device before and after.
     """
     after = hashlib.sha256(guard.read_bytes()).hexdigest()
     if after != before:
         fail(
-            "the ungranted guard disk changed during recovery: "
+            "the read-only guard disk changed during recovery: "
             f"{before[:16]} -> {after[:16]}"
         )
     if guard.read_bytes()[: len(GUARD_SIGNATURE)] != GUARD_SIGNATURE:
         fail("the guard disk lost its signature")
     print(
-        "guard: the second disk, which no capability names, is byte-identical "
-        "after the boot",
+        "guard: the second disk, reachable only through a read-only capability, "
+        "is byte-identical after the boot",
         flush=True,
     )
 

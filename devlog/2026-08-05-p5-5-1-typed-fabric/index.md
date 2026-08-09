@@ -62,19 +62,19 @@ vacuous.
 
 | Risk | Guard | Failure signal |
 |---|---|---|
-| A provisioned role becomes re-delegable | `just sel4_fabric_check` | `[fabric-publisher] re-delegation denied` missing |
-| A role carries both directions | `just sel4_fabric_check` | `rights=0x1`/`rights=0x2` markers, and the publisher's/subscriber's own denial arms |
-| An undeclared component obtains an edge | `just sel4_fabric_check` | `[fabric] ungranted component denied: fabric-intruder` missing |
-| A moved endpoint resolves to no queue | `just sel4_fabric_check` | The graph deadlocks; no sample is delivered |
+| A provisioned role becomes re-delegable | `just sel4_stream_check` | `[fabric-publisher] re-delegation denied` missing |
+| A role carries both directions | `just sel4_stream_check` | `rights=0x1`/`rights=0x2` markers, and the publisher's/subscriber's own denial arms |
+| An undeclared component obtains an edge | `just sel4_stream_check` | `[fabric] ungranted component denied: fabric-intruder` missing |
+| A moved endpoint resolves to no queue | `just sel4_stream_check` | The graph deadlocks; no sample is delivered |
 | A spawn silently drops grants past four | `just sel4_spawn_check` | `grants=6 channels=6` and `[init] six grants delivered` |
-| `recv` parks again | `just sel4_fabric_check` | The fabric parks holding samples its subscriber waits for |
-| A component grows an undocumented seL4 branch | `just sel4_fabric_check` | `check_components_are_minimally_branched` asserts exact counts |
+| `recv` parks again | `just sel4_stream_check` | The fabric parks holding samples its subscriber waits for |
+| A component grows an undocumented seL4 branch | `just sel4_stream_check` | `check_components_are_minimally_branched` asserts exact counts |
 
 ## Verification
 
 | Command/scenario | Result | Evidence class |
 |---|---|---|
-| `just sel4_fabric_check` | Pass — 33 markers across 7 causal chains | Direct |
+| `just sel4_stream_check` | Pass — 33 markers across 7 causal chains | Direct |
 | `just sel4_spawn_check` | Pass — six-grant spawn observed | Direct |
 | `just sel4_channel_check` | Pass — park markers updated to `reason=wait` | Direct |
 | `just sel4_root_boot_check`, `sel4_component_graph_check`, `sel4_loan_check`, `sel4_sample_check` | Pass, unchanged | Direct |

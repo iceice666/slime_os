@@ -253,8 +253,7 @@ impl ParkedReplies {
         };
         let held = entry.take().expect("just matched");
         self.len -= 1;
-        delete_slot(held.slot);
-        self.recycled += 1;
+        self.release_slot(held.slot);
         true
     }
 

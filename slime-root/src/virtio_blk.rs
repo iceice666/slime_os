@@ -20,6 +20,9 @@
 //! below with the alignment virtio 1.0 requires, and the request header, data
 //! buffer, and status byte take a second granule.
 
+use core::ptr;
+use core::sync::atomic::{Ordering, compiler_fence};
+
 use crate::device::{DeviceError, DmaPage, MappedGranule};
 
 /// Sector size the store contract fixes.
@@ -102,6 +105,9 @@ pub enum BlockError {
     Resource(DeviceError),
     /// The request did not complete within [`COMPLETION_POLLS`].
     Timeout,
+    /// Queue ownership became ambiguous after a timeout; only device reset may
+    /// make this transport usable again.
+    Poisoned,
     /// The device reported a non-zero status byte.
     Device(u8),
     /// The caller named a sector past the device's declared capacity.
@@ -121,6 +127,7 @@ pub struct VirtioBlock {
     /// it last observed. Equal at rest.
     avail_index: u16,
     used_index: u16,
+    poisoned: bool,
 }
 
 impl VirtioBlock {
@@ -205,6 +212,7 @@ impl VirtioBlock {
             capacity: (high << 32) | low,
             avail_index: 0,
             used_index: 0,
+            poisoned: false,
         })
     }
 
@@ -257,6 +265,9 @@ impl VirtioBlock {
     /// device-writable status byte. A flush carries the data descriptor too —
     /// harmless, and it keeps one chain shape rather than two.
     fn submit(&mut self, kind: u32, lba: u64) -> Result<(), BlockError> {
+        if self.poisoned {
+            return Err(BlockError::Poisoned);
+        }
         let header_paddr = self.buffer.physical_address() + HEADER_OFFSET;
         let data_paddr = self.buffer.physical_address() + DATA_OFFSET;
         let status_paddr = self.buffer.physical_address() + STATUS_OFFSET;
@@ -293,15 +304,14 @@ impl VirtioBlock {
                 2,
             );
             write_descriptor(queue, 2, status_paddr as u64, 1, DESC_F_WRITE, 0);
-            // Available ring: entry, then index. The device reads the index
-            // last, so publishing it after the entry is what makes the
-            // descriptor visible only once it is complete.
             let slot = (self.avail_index as usize) % QUEUE_SIZE;
-            let entry = AVAIL_OFFSET + 4 + slot * 2;
-            queue[entry..entry + 2].copy_from_slice(&0u16.to_le_bytes());
+            volatile_write_u16(queue, AVAIL_OFFSET + 4 + slot * 2, 0);
             self.avail_index = self.avail_index.wrapping_add(1);
-            queue[AVAIL_OFFSET + 2..AVAIL_OFFSET + 4]
-                .copy_from_slice(&self.avail_index.to_le_bytes());
+            // Descriptor and ring-entry stores must be visible before the
+            // release publication of `avail.idx` and the MMIO doorbell.
+            compiler_fence(Ordering::Release);
+            volatile_write_u16(queue, AVAIL_OFFSET + 2, self.avail_index);
+            compiler_fence(Ordering::Release);
         }
         // The device may read the rings from this point.
         self.region.write32(self.offset + reg::QUEUE_NOTIFY, 0);
@@ -309,7 +319,8 @@ impl VirtioBlock {
         // SAFETY: the used ring advanced, so the device has finished with the
         // buffer.
         let bytes = unsafe { self.buffer.bytes_mut() };
-        match bytes[STATUS_OFFSET] {
+        let status = unsafe { ptr::read_volatile(bytes.as_ptr().add(STATUS_OFFSET)) };
+        match status {
             request::STATUS_OK => Ok(()),
             other => Err(BlockError::Device(other)),
         }
@@ -325,9 +336,12 @@ impl VirtioBlock {
         for _ in 0..COMPLETION_POLLS {
             let index = {
                 let queue = unsafe { self.queue.bytes_mut() };
-                u16::from_le_bytes([queue[USED_OFFSET + 2], queue[USED_OFFSET + 3]])
+                volatile_read_u16(queue, USED_OFFSET + 2)
             };
             if index != self.used_index {
+                // Acquire orders the device's used-ring, status, and data
+                // writes before the driver consumes any of them.
+                compiler_fence(Ordering::Acquire);
                 self.used_index = index;
                 let pending = self
                     .region
@@ -341,16 +355,47 @@ impl VirtioBlock {
             }
             core::hint::spin_loop();
         }
+        // The device may still own descriptors and buffers. Fail the transport
+        // permanently rather than allowing stale completion to satisfy a new
+        // request that reused those bytes.
+        self.poisoned = true;
+        self.region
+            .write32(self.offset + reg::STATUS, status::FAILED);
         Err(BlockError::Timeout)
+    }
+}
+
+fn volatile_write_u16(bytes: &mut [u8], offset: usize, value: u16) {
+    debug_assert!(offset + 2 <= bytes.len());
+    // SAFETY: bounds are established above and byte pointers permit unaligned
+    // accesses; each byte is volatile because the peer is an asynchronous DMA
+    // device rather than Rust code.
+    unsafe {
+        ptr::write_volatile(bytes.as_mut_ptr().add(offset), value as u8);
+        ptr::write_volatile(bytes.as_mut_ptr().add(offset + 1), (value >> 8) as u8);
+    }
+}
+
+fn volatile_read_u16(bytes: &mut [u8], offset: usize) -> u16 {
+    debug_assert!(offset + 2 <= bytes.len());
+    unsafe {
+        u16::from(ptr::read_volatile(bytes.as_ptr().add(offset)))
+            | (u16::from(ptr::read_volatile(bytes.as_ptr().add(offset + 1))) << 8)
     }
 }
 
 fn write_descriptor(queue: &mut [u8], index: usize, addr: u64, len: u32, flags: u16, next: u16) {
     let base = DESC_OFFSET + index * 16;
-    queue[base..base + 8].copy_from_slice(&addr.to_le_bytes());
-    queue[base + 8..base + 12].copy_from_slice(&len.to_le_bytes());
-    queue[base + 12..base + 14].copy_from_slice(&flags.to_le_bytes());
-    queue[base + 14..base + 16].copy_from_slice(&next.to_le_bytes());
+    for (offset, byte) in addr
+        .to_le_bytes()
+        .into_iter()
+        .chain(len.to_le_bytes())
+        .chain(flags.to_le_bytes())
+        .chain(next.to_le_bytes())
+        .enumerate()
+    {
+        unsafe { ptr::write_volatile(queue.as_mut_ptr().add(base + offset), byte) };
+    }
 }
 
 const GRANULE_BYTES: usize = 4096;

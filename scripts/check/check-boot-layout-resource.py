@@ -21,6 +21,7 @@ exists to abstract.
 """
 
 from __future__ import annotations
+import os
 import sys as _sys
 from pathlib import Path as _Path
 
@@ -45,6 +46,24 @@ from boot_layout import (
 )
 from harness import ROOT, load_script
 
+SEL4_RESOLVER_STEMS = {
+    "sel4-qos",
+    "sel4-call",
+    "sel4-operation",
+    "sel4-visibility",
+    "sel4-boot",
+    "sel4-storage",
+    "sel4-store",
+    "sel4-rollback",
+    "sel4-recovery",
+    "sel4-generation",
+    "sel4-directory",
+    "sel4-filesystem",
+    "sel4-dango",
+    "sel4-input",
+    "sel4-powerbox",
+    "sel4-transfer",
+}
 FIXTURES = ROOT / "contracts" / "boot-layout" / "v1" / "fixtures"
 
 # The boot profiles are declared in the generation manifest, so this check reads
@@ -220,6 +239,58 @@ def kind_for(role: str) -> str:
     }.get(role, role)
 
 
+def check_sel4_fixtures() -> int:
+    """Cross-check seL4 replacement tables against the resolver fixtures."""
+    previous_target = os.environ.get("SLIME_TARGET_PROFILE")
+    previous_manifest = os.environ.get("SLIME_SEL4_MANIFEST")
+    checked = 0
+    try:
+        os.environ["SLIME_TARGET_PROFILE"] = builder.SEL4_TARGET_PROFILE
+        for manifest_name in sorted(builder.SEL4_MANIFESTS):
+            stem = "sel4" if manifest_name == "sel4" else manifest_name
+            if stem not in SEL4_RESOLVER_STEMS:
+                continue
+            os.environ["SLIME_SEL4_MANIFEST"] = manifest_name
+            manifest = builder.load_manifest()
+            fixture = FIXTURES / f"{stem}.layout"
+            if not fixture.is_file():
+                fail(f"missing seL4 layout fixture {fixture.relative_to(ROOT)}")
+            components = {component["name"] for component in manifest["components"]}
+            declared = {
+                slot: (role, label, rights)
+                for slot, role, label, rights in layout_for(manifest["generation"], components)
+            }
+            observed = fixture_rows(stem)
+            if len(observed) != len(declared):
+                fail(
+                    f"{stem}: frozen layout has {len(observed)} rows, resolver expects "
+                    f"{len(declared)}"
+                )
+            for slot, kind, label, rights in observed:
+                expected = declared.get(slot)
+                if expected is None:
+                    fail(f"{stem}: frozen slot {slot} is absent from layout_for()")
+                role, expected_label, expected_rights = expected
+                observed_label = None if label == "-" else label
+                if (observed_label, rights) != (expected_label, expected_rights):
+                    fail(
+                        f"{stem} slot {slot}: frozen {(observed_label, rights)!r}, "
+                        f"resolver {(expected_label, expected_rights)!r}"
+                    )
+                if kind != kind_for(role):
+                    fail(f"{stem} slot {slot}: frozen kind {kind!r}, resolver role {role!r}")
+            checked += 1
+    finally:
+        if previous_target is None:
+            os.environ.pop("SLIME_TARGET_PROFILE", None)
+        else:
+            os.environ["SLIME_TARGET_PROFILE"] = previous_target
+        if previous_manifest is None:
+            os.environ.pop("SLIME_SEL4_MANIFEST", None)
+        else:
+            os.environ["SLIME_SEL4_MANIFEST"] = previous_manifest
+    return checked
+
 def check_component_fallback() -> None:
     """The checked-in slot table must match what the emitter renders.
 
@@ -260,6 +331,8 @@ def main() -> None:
     for stem, (number, profile) in sorted(FIXTURE_PROFILES.items()):
         check_fixture(stem, number, profile)
     print(f"boot layout resource: {len(FIXTURE_PROFILES)} fixtures agree with the resource")
+    sel4_checked = check_sel4_fixtures()
+    print(f"boot layout resource: {sel4_checked} seL4 fixtures agree with layout_for()")
     print("boot layout resource check: ok")
 
 

@@ -42,7 +42,6 @@ Profile :: type {
   pageProfile : Int;
   requiredFeatures : Int;
   elfMachine : Int;
-  relativeRelocation : Int;
   pageBytes : Int;
   kernelPreferredBaseText : Text;
   kernelLoadBaseText : Text;
@@ -109,7 +108,6 @@ profiles :: List Profile = {
     pageProfile = 1;
     requiredFeatures = 1;
     elfMachine = 62;
-    relativeRelocation = 8;
     pageBytes = 4096;
     kernelPreferredBaseText = "0xFFFF_FFFF_8000_0000";
     kernelLoadBaseText = "0xFFFF_FFFF_9000_0000";
@@ -126,7 +124,6 @@ profiles :: List Profile = {
     pageProfile = 2;
     requiredFeatures = 14;
     elfMachine = 183;
-    relativeRelocation = 1027;
     pageBytes = 4096;
     kernelPreferredBaseText = "0xFFFF_FFFF_8000_0000";
     kernelLoadBaseText = "0xFFFF_FFFF_9000_0000";
@@ -143,7 +140,6 @@ profiles :: List Profile = {
     pageProfile = 2;
     requiredFeatures = 42;
     elfMachine = 183;
-    relativeRelocation = 1027;
     pageBytes = 4096;
     kernelPreferredBaseText = "0xFFFF_FFFF_8000_0000";
     kernelLoadBaseText = "0xFFFF_FFFF_9000_0000";
@@ -163,7 +159,6 @@ profiles :: List Profile = {
     -- naming them would reject every image this profile actually builds.
     requiredFeatures = 66;
     elfMachine = 183;
-    relativeRelocation = 1027;
     pageBytes = 4096;
     -- No Slime kernel image exists for this profile: seL4 is the kernel, built
     -- and pinned separately under `sel4/pins.toml`. The bases are retained at
@@ -188,7 +183,6 @@ profiles :: List Profile = {
     pageProfile = 3;
     requiredFeatures = 16;
     elfMachine = 243;
-    relativeRelocation = 3;
     pageBytes = 4096;
     kernelPreferredBaseText = "0xFFFF_FFFF_8000_0000";
     kernelLoadBaseText = "0xFFFF_FFFF_9000_0000";

@@ -48,6 +48,10 @@ pub enum GenerationError {
     DanglingComponent {
         component: usize,
     },
+    /// A generation component carried a bare ELF without target qualification.
+    BareElfPayload {
+        component: usize,
+    },
     /// The generation carries a fabric graph whose declared limits this root
     /// cannot satisfy, or which contradicts itself (C8.2).
     ///
@@ -77,10 +81,9 @@ pub enum PayloadFormat {
     /// A target-qualified image carrying a native AArch64 ELF (P5.2), admitted
     /// for this root task's profile. Loadable.
     QualifiedElf,
-    /// A bare AArch64 little-endian ELF64 image, carrying no target
-    /// qualification. Loadable, and used by the native fixture the root task
-    /// embeds at compile time; a generation payload is expected to be
-    /// qualified.
+    /// A bare AArch64 little-endian ELF64 image carrying no target
+    /// qualification. Recognized for diagnostics, but never loadable from a
+    /// generation: only target-qualified component images cross admission.
     Aarch64Elf,
     /// A Slime component image whose payload is a segment table
     /// (`SLIMECMP`/`SLIMECM2`). These are the custom format the retired Slime
@@ -97,7 +100,7 @@ pub enum PayloadFormat {
 
 impl PayloadFormat {
     pub const fn is_loadable(self) -> bool {
-        matches!(self, Self::QualifiedElf | Self::Aarch64Elf)
+        matches!(self, Self::QualifiedElf)
     }
 
     /// Classify a payload, admitting a qualified image against `profile`.
@@ -513,7 +516,10 @@ impl Admission {
                 .map_err(|_| GenerationError::DanglingComponent { component })?;
             let format = PayloadFormat::classify(object.bytes, profile);
             match format {
-                PayloadFormat::QualifiedElf | PayloadFormat::Aarch64Elf => loadable += 1,
+                PayloadFormat::QualifiedElf => loadable += 1,
+                PayloadFormat::Aarch64Elf => {
+                    return Err(GenerationError::BareElfPayload { component });
+                }
                 PayloadFormat::SlimeComponent => slime_component_images += 1,
                 PayloadFormat::WrongTarget => wrong_target_images += 1,
                 PayloadFormat::Unrecognized => unrecognized_images += 1,
@@ -1054,13 +1060,11 @@ mod tests {
     }
 
     #[test]
-    fn aarch64_elf64_is_loadable() {
+    fn bare_aarch64_elf64_is_recognized_but_refused_for_loading() {
         let bytes = elf_header(2, 1, 183);
-        assert_eq!(
-            PayloadFormat::classify(&bytes, sel4_profile()),
-            PayloadFormat::Aarch64Elf
-        );
-        assert!(PayloadFormat::classify(&bytes, sel4_profile()).is_loadable());
+        let format = PayloadFormat::classify(&bytes, sel4_profile());
+        assert_eq!(format, PayloadFormat::Aarch64Elf);
+        assert!(!format.is_loadable());
     }
 
     #[test]

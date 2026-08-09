@@ -35,6 +35,7 @@ from pathlib import Path as _Path
 _sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "lib"))
 
 from harness import ROOT, load_script  # noqa: E402
+from sel4_gate_markers import chains_from_gate, match_marker_contract  # noqa: E402
 
 # Gate module name -> checker path, for every plane gate that shares the
 # `REQUIRED_MARKERS` / `FAILURE_MARKERS` / `check_transcript` shape.
@@ -54,6 +55,7 @@ GATES: tuple[tuple[str, str, int], ...] = (
     ("sel4_component_graph", "check/check-sel4-component-graph.py", 19),
     ("sel4_crossing_plane", "check/check-sel4-crossing-plane.py", 10),
     ("sel4_loan_plane", "check/check-sel4-loan-plane.py", 44),
+    ("sel4_device_plane", "check/check-sel4-device-plane.py", 7),
     ("sel4_root_boot", "check/check-sel4-root-boot.py", 43),
     ("sel4_sample_plane", "check/check-sel4-sample-plane.py", 19),
     ("sel4_spawn_plane", "check/check-sel4-spawn-plane.py", 32),
@@ -136,23 +138,12 @@ def literal_for(pattern: str) -> str:
 
 
 def required_of(gate) -> tuple[tuple[str, str], ...]:
-    """The gate's ordered markers as `(description, pattern)` pairs.
-
-    Two shapes exist. Most gates declare one flat `REQUIRED_MARKERS` table; the
-    stream gate declares `CHAINS`, a per-causal-chain grouping, because its claim
-    is that each chain is internally ordered rather than that all 56 markers are
-    globally ordered. Flattening is sound for this control: every mutation it
-    makes is within a chain, so a gate that enforces per-chain order rejects them
-    exactly as a flat gate does.
-    """
-    chains = getattr(gate, "CHAINS", None)
-    if chains is not None:
-        return tuple(
-            (f"{label}: {pattern}", pattern)
-            for label, chain in chains
-            for pattern in chain
-        )
-    return tuple(gate.REQUIRED_MARKERS)
+    """Flatten declarations for synthesis and count pins, not matching."""
+    return tuple(
+        (f"{label}: {pattern}", pattern)
+        for label, chain in chains_from_gate(gate)
+        for pattern in chain
+    )
 
 
 def transcript_for(gate) -> str:
@@ -161,28 +152,17 @@ def transcript_for(gate) -> str:
 
 
 def marker_check(gate, transcript: str) -> None:
-    """The gate's own marker contract, isolated from its content assertions.
-
-    `check_transcript` also calls per-gate helpers such as `check_queue_depth`
-    that read counters a synthetic transcript does not carry. Those are the gate
-    asserting things *about* a real boot, which is not what this control guards,
-    so the ordered-marker and failure-marker logic is driven directly instead.
-    Copied rather than called because it is four lines and importing it would
-    couple this control to each gate's private helper set.
-    """
-    for pattern in gate.FAILURE_MARKERS:
-        if re.search(pattern, transcript) is not None:
-            raise SystemExit(f"failure marker: {pattern}")
-    position = 0
-    for description, pattern in required_of(gate):
-        match = re.compile(pattern).search(transcript, position)
-        if match is None:
-            raise SystemExit(f"missing or out-of-order marker: {description}")
-        position = match.end()
+    """Invoke the exact matcher used by chain-aware product gates."""
+    match_marker_contract(
+        transcript,
+        chains_from_gate(gate),
+        gate.FAILURE_MARKERS,
+        lambda message: (_ for _ in ()).throw(SystemExit(message)),
+    )
 
 
 def rejects(gate, transcript: str) -> bool:
-    """True when the gate's marker contract refuses this transcript."""
+    """True when the product gate's shared marker contract refuses this transcript."""
     try:
         marker_check(gate, transcript)
     except SystemExit:
@@ -200,8 +180,9 @@ def check_gate(name: str, relative_path: str, expected_required: int) -> int:
             f"{expected_required}. A gate that lost a marker lost coverage; "
             "update the pin here only alongside the gate change that justifies it"
         )
-    if len(required) < 2:
-        fail(f"{name}: fewer than two required markers, nothing to transpose")
+    chains = chains_from_gate(gate)
+    if not any(len(patterns) >= 2 for _, patterns in chains):
+        fail(f"{name}: no causal chain has two markers, nothing to transpose")
     if not failures:
         fail(f"{name}: no failure markers declared")
 
@@ -214,19 +195,32 @@ def check_gate(name: str, relative_path: str, expected_required: int) -> int:
 
     lines = baseline.splitlines()
 
-    # A missing marker must be caught. This is the property the whole control
-    # exists for: a gate that passes without its evidence proves nothing.
-    for index in range(len(lines)):
-        without = "\n".join(lines[:index] + lines[index + 1 :]) + "\n"
+    # Delete every occurrence of the selected concrete marker. A regex shared by
+    # two chains may legitimately use either occurrence, so deleting only one
+    # physical line is not evidence removal; deleting them all is.
+    evaluated = 0
+    for index, removed in enumerate(lines):
+        without = "\n".join(line for line in lines if line != removed) + "\n"
         if not rejects(gate, without):
             description = required[index][0]
-            fail(f"{name}: accepted a transcript missing {description!r}")
+            fail(f"{name}: accepted a transcript missing all evidence for {description!r}")
+        evaluated += 1
 
-    # Order is part of the claim: these gates assert a *sequence*, so a
-    # transcript with the right lines in the wrong order must fail too.
-    transposed = "\n".join([lines[1], lines[0], *lines[2:]]) + "\n"
-    if not rejects(gate, transposed):
-        fail(f"{name}: accepted its first two required markers out of order")
+    offset = 0
+    for _label, patterns in chains:
+        if len(patterns) >= 2:
+            first = lines[offset]
+            second = lines[offset + 1]
+            insertion = next(
+                index for index, line in enumerate(lines) if line == first or line == second
+            )
+            remaining = [line for line in lines if line != first and line != second]
+            transposed_lines = remaining[:insertion] + [second, first] + remaining[insertion:]
+            transposed = "\n".join(transposed_lines) + "\n"
+            if not rejects(gate, transposed):
+                fail(f"{name}: accepted the first two markers of a causal chain out of order")
+            evaluated += 1
+        offset += len(patterns)
 
     # A failure marker must veto an otherwise-complete transcript.
     for pattern in failures:
@@ -234,7 +228,7 @@ def check_gate(name: str, relative_path: str, expected_required: int) -> int:
         if not rejects(gate, poisoned):
             fail(f"{name}: accepted a transcript containing failure marker {pattern!r}")
 
-    return len(lines) + 1 + len(failures)
+    return evaluated + len(failures)
 
 
 def check_layout_gate() -> int:

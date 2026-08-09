@@ -364,11 +364,25 @@ SEL4_VISIBILITY_LAYOUT = (
     (7, 'executable', 'fabric-subscriber-b', 0x10008),
 )
 
+# The seL4 QoS plane has the stream composition's init table. Its clock is a
+# runtime-minted capability routed through participant control channels, not a
+# bootstrap slot.
+SEL4_QOS_LAYOUT = (
+    (0, 'endpoint-factory', None, 0x20000),
+    (14, 'shared-buffer-factory', None, 0x1000000),
+    (15, 'executable', 'fabric-service', 0x10008),
+    (16, 'executable', 'fabric-publisher', 0x10008),
+    (17, 'executable', 'fabric-subscriber', 0x10008),
+    (18, 'executable', 'fabric-intruder', 0x10008),
+    (19, 'executable', 'fabric-publisher-b', 0x10008),
+    (20, 'executable', 'fabric-subscriber-b', 0x10008),
+)
 
-# The seL4 C8.10 full-graph boot (P5.4.9). Fifty-three rows, the same shape as
-# `FABRIC_BOOT_LAYOUT` above and for the same reason: every C8 role coexists in
-# one generation, so the stream, call, and operation planes occupy disjoint
-# slots rather than aliasing one range a profile rewrite selects between.
+
+# The seL4 C8.10 full-graph boot (P5.4.9). Twenty-one rows: the two
+# factories, the fabric, sixteen participants, and two fabric-spawned workers.
+# Every C8 role coexists in one generation, so the stream, call, and operation
+# planes occupy disjoint slots rather than aliasing a profile-selected range.
 #
 # The control channels are minted at runtime by `init.rs::drive_boot_plane`, as
 # on every other seL4 plane and for the same reason: the root numbers a launched
@@ -531,6 +545,7 @@ OVERRIDES = {
 REPLACEMENTS = {
     17: FABRIC_BOOT_LAYOUT,
     18: SEL4_CALL_LAYOUT,
+    19: SEL4_QOS_LAYOUT,
     20: SEL4_OPERATION_LAYOUT,
     21: SEL4_VISIBILITY_LAYOUT,
     22: SEL4_BOOT_LAYOUT,

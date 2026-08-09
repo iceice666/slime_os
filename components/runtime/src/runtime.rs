@@ -81,11 +81,10 @@ pub unsafe fn start(main: fn()) -> ! {
         );
     }
     // A failure here would leave every windowed operation returning
-    // `ERR_INVALID_ARG` for reasons the component cannot see, so it is fatal
-    // rather than silent. `debug_write` reaches the log without the window, so
-    // the reason is still reportable.
+    // `ERR_INVALID_ARG`, so it is fatal. The marker is emitted in register-sized
+    // chunks because the missing window is exactly what failed to bind.
     if crate::syscall::bind_startup_window(transfer_window_addr()) != crate::ERR_SUCCESS {
-        crate::debug_write(b"[slime-rt] transfer window bind failed\n");
+        crate::syscall::early_debug_write(b"[slime-rt] transfer window bind failed\n");
         crate::exit(1)
     }
     main();

@@ -425,7 +425,7 @@ fn boot_graph() {
     // which all of them do answer still parks on its live stream sources rather
     // than falling out of the boot arm.
     loop {
-        park_on_streams(&publishers, &subscribers);
+        park_on_streams(&publishers, &subscribers, false);
     }
 }
 
@@ -846,6 +846,7 @@ fn broker(
     let mut parked = false;
     let mut now_ns = 0u64;
     let mut pending_time = None;
+    let mut time_dead = false;
     let mut late_subscriber = None;
     let mut late_replay_done = false;
     loop {
@@ -883,7 +884,7 @@ fn broker(
         // Deterministic tie order: ingress data first, then acknowledgements and
         // delivery, then exactly one explicit monotonic-time transition.
         if qos_check() {
-            receive_time(&mut pending_time);
+            receive_time(&mut pending_time, &mut time_dead);
             if apply_time(
                 &mut now_ns,
                 &mut pending_time,
@@ -928,7 +929,7 @@ fn broker(
             // The QoS check owns one explicit time channel. Its peer closes only
             // after every scheduled boundary has been acknowledged; until then
             // the broker stays alive even when all stream routes have ended.
-            if !qos_check() || time_peer_dead() {
+            if !qos_check() || time_dead {
                 release_retained(publishers, frames);
                 return;
             }
@@ -942,7 +943,7 @@ fn broker(
             slime_rt::debug_write(b"[fabric] idle: parked on stream sources\n");
             parked = true;
         }
-        park_on_streams(publishers, subscribers);
+        park_on_streams(publishers, subscribers, time_dead);
     }
 }
 
@@ -1846,6 +1847,7 @@ fn park_on_controls(clients: &[Client]) {
 fn park_on_streams(
     publishers: &[Option<Publisher>; MAX_PARTICIPANTS],
     subscribers: &[Option<Subscriber>; MAX_PARTICIPANTS],
+    time_dead: bool,
 ) {
     let mut sources = [WaitSource::Endpoint(0); slime_rt::MAX_WAIT_SOURCES];
     let mut count = 0;
@@ -1876,12 +1878,11 @@ fn park_on_streams(
         // becomes interesting when it releases a slot or dies.
         push(subscriber.ack_slot);
     }
-    // The clock is excluded once its peer is gone, for the same reason a
-    // finished publisher and a retired subscriber are: a dead endpoint is
-    // permanently ready, so leaving it in the set makes `wait` return at once
-    // and turns this park into a spin. `time_peer_dead` is the same probe the
-    // stream worker already uses before asking the clock to advance.
-    if qos_check() && !time_peer_dead() {
+    // Liveness is learned only while receiving normal clock traffic. Probing
+    // here with `recv` would consume a queued advance and lose application
+    // data; a live clock remains in the wait set until its ordinary receive
+    // reports `ERR_PEER_DEAD`.
+    if qos_check() && !time_dead {
         push(TIME_SLOT);
     }
     if count == 0 {
@@ -1995,14 +1996,40 @@ fn refresh_matches(
     }
 }
 
-fn receive_time(pending_time: &mut Option<u64>) {
-    if pending_time.is_some() {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TimeReceive {
+    WouldBlock,
+    PeerDead,
+    Advance(u64),
+}
+
+const fn update_time_liveness(
+    pending_time: &mut Option<u64>,
+    time_dead: &mut bool,
+    received: TimeReceive,
+) {
+    match received {
+        TimeReceive::WouldBlock => {}
+        TimeReceive::PeerDead => *time_dead = true,
+        TimeReceive::Advance(now) => *pending_time = Some(now),
+    }
+}
+
+fn receive_time(pending_time: &mut Option<u64>, time_dead: &mut bool) {
+    if pending_time.is_some() || *time_dead {
         return;
     }
     let mut bytes = [0u8; MAX_MSG];
     let mut caps = [0u64; MAX_CAPS_PER_MSG];
     let length = match slime_rt::recv(TIME_SLOT, &mut bytes, &mut caps) {
-        ERR_WOULDBLOCK | ERR_PEER_DEAD => return,
+        ERR_WOULDBLOCK => {
+            update_time_liveness(pending_time, time_dead, TimeReceive::WouldBlock);
+            return;
+        }
+        ERR_PEER_DEAD => {
+            update_time_liveness(pending_time, time_dead, TimeReceive::PeerDead);
+            return;
+        }
         n if n < 0 => fail(b"time recv"),
         n => n as usize,
     };
@@ -2013,18 +2040,7 @@ fn receive_time(pending_time: &mut Option<u64>) {
     if !slime_proto::valid_time_advance(&value) {
         fail(b"non-monotonic time")
     }
-    *pending_time = Some(value.now_ns);
-}
-
-fn time_peer_dead() -> bool {
-    let mut bytes = [0u8; MAX_MSG];
-    let mut caps = [0u64; MAX_CAPS_PER_MSG];
-    match slime_rt::recv(TIME_SLOT, &mut bytes, &mut caps) {
-        ERR_PEER_DEAD => true,
-        ERR_WOULDBLOCK => false,
-        n if n < 0 => fail(b"time peer probe"),
-        _ => fail(b"unapplied time advance"),
-    }
+    update_time_liveness(pending_time, time_dead, TimeReceive::Advance(value.now_ns));
 }
 
 fn apply_time(
@@ -2294,3 +2310,27 @@ const DECLARED_RING_CAPACITY: usize = {
     }
     total
 };
+
+#[cfg(test)]
+mod tests {
+    use super::{TimeReceive, update_time_liveness};
+
+    #[test]
+    fn queued_advance_is_preserved_as_application_data() {
+        let mut pending = None;
+        let mut dead = false;
+        update_time_liveness(&mut pending, &mut dead, TimeReceive::Advance(42));
+        assert_eq!(pending, Some(42));
+        assert!(!dead);
+    }
+
+    #[test]
+    fn only_peer_dead_marks_clock_dead() {
+        let mut pending = None;
+        let mut dead = false;
+        update_time_liveness(&mut pending, &mut dead, TimeReceive::WouldBlock);
+        assert!(!dead);
+        update_time_liveness(&mut pending, &mut dead, TimeReceive::PeerDead);
+        assert!(dead);
+    }
+}

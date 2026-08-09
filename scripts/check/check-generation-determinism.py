@@ -25,6 +25,7 @@ def fail(message: str) -> None:
 def build(output: Path, target_dir: Path) -> None:
     environment = os.environ.copy()
     environment["SLIME_TARGET_PROFILE"] = "aarch64-sel4-qemu-virt"
+    environment["SLIME_SEL4_MANIFEST"] = "sel4"
     environment["CARGO_TARGET_DIR"] = str(target_dir)
     process = subprocess.run(
         [str(BUILD), str(output)],
@@ -56,7 +57,10 @@ def main() -> None:
         build(first, root / "target-first")
         build(second, root / "target-second")
         generation = compare(first, second, "generation.bin")
-        compare(first, second, "generation-1.bin")
+        first_generation_one = (first / "generation-1.bin").read_bytes()
+        second_generation_one = (second / "generation-1.bin").read_bytes()
+        if first_generation_one != generation or second_generation_one != generation:
+            fail("generation-1.bin is not the independently written generation.bin alias")
         bootstore = compare(first, second, "boot-store.bin")
         checked_generation = CHECK.check_generation(generation)
         checked_store = CHECK.check_bootstore(bootstore)
@@ -64,8 +68,9 @@ def main() -> None:
             fail("boot store did not select the independently admitted generation")
 
     print(
-        "generation determinism check: two isolated seL4 builds produced "
-        "byte-identical generation.bin, generation-1.bin, and boot-store.bin; "
+        "generation determinism check: two isolated builds forced the sel4 manifest "
+        "and produced byte-identical generation.bin and boot-store.bin; each build's "
+        "independently written generation-1.bin alias matched its generation, and "
         "generation and boot store admission passed"
     )
 

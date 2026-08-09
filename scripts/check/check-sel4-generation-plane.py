@@ -303,21 +303,39 @@ def check_transcript(transcript: str) -> None:
     if completions != 1:
         report_transcript(transcript)
         fail(f"{completions} clients ran the scenario, expected 1")
-    # The refused operations must not have committed. Every marker the manager
-    # prints carries the BootState it left behind, so a refusal that advanced
-    # the sequence is visible here even though the client only saw a status.
-    refusals = re.findall(
-        r"\[sel4-generation-manager\] (\w[\w-]*-(?:refused|unknown|nothing)) seq=(\d+)",
-        transcript,
-    )
-    if not refusals:
-        fail("no refusal carried a BootState sequence")
-    commits = [
-        int(value)
-        for value in re.findall(
-            r"\[sel4-generation-manager\] (?:stage|select|rollback) seq=(\d+)", transcript
+    # A refusal must report the exact sequence of the immediately preceding
+    # committed (or initial ready) state. Merely collecting refusal sequences
+    # cannot prove the root was left untouched.
+    events = [
+        (match.group("op"), int(match.group("seq")))
+        for match in re.finditer(
+            r"\[sel4-generation-manager\] "
+            r"(?P<op>stage|select|rollback|inspect-unknown|stage-refused|"
+            r"select-refused|rollback-nothing) seq=(?P<seq>\d+)",
+            transcript,
         )
     ]
+    refusal_names = {"inspect-unknown", "stage-refused", "select-refused", "rollback-nothing"}
+    commit_names = {"stage", "select", "rollback"}
+    refusals: list[tuple[str, int]] = []
+    commits: list[int] = []
+    # The fixture's admitted BootState starts at sequence 1; the first successful
+    # stage required above advances it to 2.
+    committed_sequence = 1
+    for operation, sequence in events:
+        if operation in commit_names:
+            committed_sequence = sequence
+            commits.append(sequence)
+        elif operation in refusal_names:
+            refusals.append((operation, sequence))
+            if sequence != committed_sequence:
+                fail(
+                    f"{operation} mutated BootState sequence from {committed_sequence} "
+                    f"to {sequence}"
+                )
+    expected_refusals = {"inspect-unknown", "stage-refused", "select-refused", "rollback-nothing"}
+    if {name for name, _ in refusals} != expected_refusals or len(refusals) != 4:
+        fail(f"refusal evidence was {refusals}, expected one of each {sorted(expected_refusals)}")
     if commits != sorted(set(commits)):
         fail(f"committed sequences are not strictly increasing: {commits}")
     print(
