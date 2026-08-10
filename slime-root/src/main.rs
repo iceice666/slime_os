@@ -4098,8 +4098,13 @@ fn land_caps(
             .get_mut(id)
             .ok_or(IpcError::InvalidOperation)
             .and_then(|table| {
+                // From 1, never 0: a received slot number is reported to the
+                // receiver, and every protocol that carries them — the spawn
+                // request's `received_caps` among them — reads 0 as "no
+                // capability". Landing one there makes it invisible to the
+                // component that was just given it.
                 let slot = table
-                    .free_slot_from(0)
+                    .free_slot_from(1)
                     .ok_or(IpcError::DestinationSlotsExhausted)?;
                 table.install(slot, capability)?;
                 Ok(slot)
