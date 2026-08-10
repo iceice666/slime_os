@@ -238,7 +238,9 @@ fn read_index(io: &mut BlockCapability, first: u64) -> alloc::vec::Vec<u8> {
     let mut bytes = alloc::vec![0u8; (INDEX_SECTORS as usize) * SECTOR_BYTES];
     for sector in 0..INDEX_SECTORS {
         let start = sector as usize * SECTOR_BYTES;
-        let chunk: &mut [u8; SECTOR_BYTES] = bytes[start..start + SECTOR_BYTES]
+        // `&mut [u8]` -> `&mut [u8; N]`, so the borrow has to be mutable
+        // before `try_into` can reach that impl.
+        let chunk: &mut [u8; SECTOR_BYTES] = (&mut bytes[start..start + SECTOR_BYTES])
             .try_into()
             .expect("sector-sized");
         io.read_sector(first + INDEX_LBA + sector, chunk)

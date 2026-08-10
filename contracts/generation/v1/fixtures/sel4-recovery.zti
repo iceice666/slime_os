@@ -41,12 +41,31 @@
       transferable = false;
     };
     {
+      name = "recovery-a-primary-device-idle";
+      rights = [
+        "blockRead";
+        "blockWrite";
+      ];
+      source = "sel4-recovery-probe-idle";
+      target = "sel4-recovery-probe-idle";
+      transferable = false;
+    };
+    {
       name = "recovery-b-guard-device";
       rights = [
         "blockRead";
       ];
       source = "sel4-recovery-probe";
       target = "sel4-recovery-probe";
+      transferable = false;
+    };
+    {
+      name = "recovery-b-guard-device-idle";
+      rights = [
+        "blockRead";
+      ];
+      source = "sel4-recovery-probe-idle";
+      target = "sel4-recovery-probe-idle";
       transferable = false;
     };
     {
@@ -104,8 +123,40 @@
       name = "sel4-recovery-probe";
       owner = "init";
     };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "recovery-a-primary-device-idle";
+          slot = 1;
+        };
+        {
+          grant = "recovery-b-guard-device-idle";
+          slot = 2;
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "sel4-recovery-probe";
+      health = "optional";
+      name = "sel4-recovery-probe-idle";
+      owner = "root";
+    };
   ];
-  mintedBindings = [];
+  mintedBindings = [
+    {
+      name = "sel4-recovery-probe-run-token";
+      owner = "init";
+      holder = "sel4-recovery-probe";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 0;
+      transferable = false;
+    };
+  ];
   interfaceSchemas = [];
   objects = [
     {

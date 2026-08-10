@@ -41,6 +41,16 @@
       transferable = false;
     };
     {
+      name = "rollback-probe-device-idle";
+      rights = [
+        "blockRead";
+        "blockWrite";
+      ];
+      source = "sel4-rollback-probe-idle";
+      target = "sel4-rollback-probe-idle";
+      transferable = false;
+    };
+    {
       name = "init-endpoint-factory";
       rights = [
         "endpointCreate";
@@ -91,8 +101,36 @@
       name = "sel4-rollback-probe";
       owner = "init";
     };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "rollback-probe-device-idle";
+          slot = 1;
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "sel4-rollback-probe";
+      health = "optional";
+      name = "sel4-rollback-probe-idle";
+      owner = "root";
+    };
   ];
-  mintedBindings = [];
+  mintedBindings = [
+    {
+      name = "sel4-rollback-probe-run-token";
+      owner = "init";
+      holder = "sel4-rollback-probe";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 0;
+      transferable = false;
+    };
+  ];
   interfaceSchemas = [];
   objects = [
     {
