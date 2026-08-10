@@ -24,94 +24,6 @@ mechanism; and B50 deletes the dual-model residue. Each item is a clean cutover:
 its old ABI and fallback are removed in the same change that makes its exit
 condition observable.
 
-### B43 — block and durable-store clients still transact through root operation labels
-
-**Status:** Open. **Class:** Unmasked architectural debt. **Depends on:** B40.
-
-**Problem:** `BlockTransact`, `StoreTransact`, and recovery storage operations
-share the universal dispatcher even though generation data can provision a
-specific device or storage service. Root remains both IPC broker and driver
-dispatcher, so unrelated clients share latency and failure scope.
-
-**Evidence:** The labels remain in `slime-root/src/ipc.rs::Operation`; block,
-store, rollback, recovery, and transfer components reach storage through
-`components/runtime/src/syscall.rs` wrappers rather than a dedicated service
-Endpoint installed in their CSpaces.
-
-**Fix:** Provision explicit block-driver and durable-store service endpoints,
-move each client to direct typed request/reply IPC, and preserve device/DMA
-authority only in the owning service. Remove the root labels and handlers as
-each storage slice cuts over; do not leave a universal-dispatch fallback.
-
-**Exit condition:** Block/store requests cannot be issued without the declared
-service capability; unrelated root operations make no progress on their behalf;
-read-only device authority remains read-only; multi-device selection remains
-exact. `just sel4_device_check`, `just sel4_storage_check`, `just
-sel4_store_check`, `just sel4_rollback_check`, `just
-sel4_recovery_plane_check`, and `just sel4_transfer_check` pass against the
-direct service path.
-
-**All six gates green (2026-08-10), but the exit condition is not met.** The
-gates pass "against the direct service path" only in the sense that the paths
-they exercise are correct; `BlockTransact` and `StoreTransact` are still labels
-on the universal dispatcher (`slime-root/src/ipc.rs:99-100`), so the first
-clause — a request cannot be issued without the declared service capability —
-is still false. Moving them off shares B41's blocker: nothing receives on a
-second endpoint until the `WindowTable` contract is settled.
-
-What the gate work did establish, and what it found:
-
-- **Block devices were not renumbered on the spawn path.** `declared_resource`
-  answers `Block { device: 0 }` for every block grant because only the
-  installer knows how many it has placed; the boot-graph path renumbers per
-  binding and the spawn path's self-loop install did not. A component holding
-  two device capabilities saw both resolve to device 0. The transfer plane is
-  the only one holding two, and it read its manifest off the receiver instead
-  of the source — sixteen sectors served `status=0`, every byte zero.
-- **`SLIME_GRAPH block served` now carries the device index**, without which
-  the record cannot say which of a plane's devices answered. That is precisely
-  what multi-device selection claims, and it is what made the above
-  diagnosable.
-- Read-only device authority is verified byte-identical from the host
-  (`source_before` in the transfer gate), and multi-device selection is now
-  exact.
-
-**Gate repairs (2026-08-10).** `sel4_device_check` and
-`sel4_storage_check` already passed; `sel4_store_check`,
-`sel4_rollback_check`, and `sel4_recovery_plane_check` were red for reasons
-outside B43's scope and now pass. Each storage plane makes the same claim every
-probe plane does — generation-declared device authority alone does not run a
-probe, only the instance `init` hands a run token proceeds — and neither the
-token nor the idle instance the claim compares against was declared. The
-recovery probe additionally did not compile: `&mut [u8]` reaches the
-`&mut [u8; N]` conversion only through a mutable borrow.
-
-**`sel4_transfer_check` remains red, and not on declarations.** The probe reads
-all sixteen manifest sectors successfully (`block served task=1 op=1 lba=1070
-status=0 sectors=1`, sixteen times) and then decodes `declared=0` where the
-same bytes read `1030` from the host. The manifest on disk is well-formed —
-magic `SLIMETR\0`, `total_len` 1030 at offset 232, metadata and payload offsets
-consistent — and the probe's slot layout, LBA constants, and `read_sector`
-implementation all match the recovery probe's, which now works. What differs is
-that this is the only plane reading through a *second* device capability, so
-the sector payload is not reaching the caller's buffer on the source device's
-path. The `SLIME_GRAPH block served` record carries no device index, which is
-the first thing to fix in diagnosing it.
-
-**B43's own work has not started, but is no longer blocked (2026-08-10).**
-`BlockTransact` and `StoreTransact` remain labels on the universal dispatcher.
-The prerequisite — something to receive on a second endpoint — is solved: B41's
-console dispatcher is a second root thread that names its own IPC buffer
-through `Cap::with`, needing no thread-local state and no vendor change. The
-same pattern applies here.
-
-Storage is not the same shape as console, though. A console write is one-way
-and touches only the caller's window; a block or store transaction returns a
-reply and needs the device tables, the DMA frames, and the graph's capability
-table, all owned by the main dispatcher. Either those move behind the storage
-endpoint with the service, or the storage thread coordinates with the main one
-— and that ownership split is the design decision, not the threading.
-
 ### B44 — generation and recovery policy still crosses the universal root dispatcher
 
 **Status:** Open. **Class:** Unmasked architectural debt. **Depends on:** B43.
@@ -322,6 +234,57 @@ fmt_check_all`, and `just lint_all` pass after the deletion.
 
 
 ## Resolved
+### B43 — block and durable-store clients still transact through root operation labels
+
+**Status:** Resolved 2026-08-10.
+
+**Problem:** `BlockTransact` and `StoreTransact` shared the universal
+dispatcher, so root was both IPC broker and driver dispatcher and unrelated
+clients shared latency and failure scope. A block request needed no declared
+service capability, only a label.
+
+**Exit condition observed:** neither label exists in
+`slime-root/src/ipc.rs::Operation`. Block requests reach the console thread on
+the per-process console endpoint, which owns the device tables — so a component
+without that capability has no path to a device at all, and the service loop
+makes no progress on a block client's behalf because it never sees the request.
+`just sel4_device_check`, `just sel4_storage_check`, `just sel4_store_check`,
+`just sel4_rollback_check`, `just sel4_recovery_plane_check`, and `just
+sel4_transfer_check` all pass against that path, along with ten further planes.
+Read-only device authority is verified byte-identical from the host, and the
+transfer gate now asserts that no write was ever *served* on the source rather
+than only that one was refused. Multi-device selection is asserted exactly —
+requests reached both device 0 and device 1 under their own indices — and the
+assertion was proven load-bearing by pinning the handler's index to 0 and
+observing the plane fail to complete.
+
+**The tables moved with the handler.** Whoever answers block requests is the
+driver, so leaving `BlockDevices` with the main dispatcher and passing a borrow
+would have split that authority across two threads and needed a lock the root
+does not have. `BlockDevices` and `MAX_BLOCK_DEVICES` moved into `device.rs`,
+the handler and the block rights constants into `console.rs`, and
+`serve_instance_graph`'s device parameter is now selector-only — that variant
+launches no components and never constructs the second thread.
+
+**The two labels left in opposite directions.** Block requests moved because a
+slow disk must not hold up lifecycle, supervision, or fabric traffic.
+`StoreTransact` was deleted because it never had a handler: it answered
+`UnsupportedOperation` from `Mediation::Unavailable`, which is ABI surface for
+an operation the root does not perform. A durable store is userspace policy
+built over block authority, which `sel4-store-probe` and
+`sel4-filesystem-service` already do; its two remaining clients predated the
+seL4 cutover, appeared in no seL4 manifest, and could only ever fail, so they
+were deleted rather than ported.
+
+**One endpoint, three kinds.** A dedicated block endpoint would need a second
+blocking receive and so a third thread. The console endpoint already carries a
+Call kind with reply authority and a per-process badge, so a third label costs
+nothing. Labels 6, 7, and 17 are left as holes, as label 5 was.
+
+Record: [`devlog/2026-08-10-b43-block-service-endpoint/`](../devlog/2026-08-10-b43-block-service-endpoint/index.md),
+with the earlier renumbering defect at
+[`devlog/2026-08-10-b43-block-device-renumbering/`](../devlog/2026-08-10-b43-block-device-renumbering/index.md).
+
 ### B41 — console and debug traffic still enters the universal root dispatcher
 
 **Status:** Resolved 2026-08-10.

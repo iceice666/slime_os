@@ -234,4 +234,5 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-10 | [B41 — a console endpoint per process](2026-08-10-b41-console-endpoint/index.md) | Change | Verified | B41 |
 | 2026-08-10 | [B42 — the supervision handle becomes the lifecycle identity](2026-08-10-b42-lifecycle-identity/index.md) | Change | Verified | B42 |
 | 2026-08-10 | [B43 — a component's second block device was silently its first](2026-08-10-b43-block-device-renumbering/index.md) | Defect | Verified | B43 |
+| 2026-08-10 | [B43 — block requests answered where the devices live](2026-08-10-b43-block-service-endpoint/index.md) | Change | Verified | B43 |
 | 2026-08-10 | [B41 — why the root cannot yet have a second dispatcher](2026-08-10-b41-second-dispatcher-blocker/index.md) | Audit | Verified | B41, B43, B44, B45 |
