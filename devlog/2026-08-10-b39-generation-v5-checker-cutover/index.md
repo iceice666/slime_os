@@ -366,3 +366,50 @@ masked rather than caught.
 | `is_v4()` returned a hardcoded `false` with no callers, and `kernel_object` was set to `usize::MAX` and read by nothing — both `pub`, so `dead_code` could not flag them | Deleted |
 | The rank selector's slot comparison is unreachable once duplicate holder slots are rejected | Replaced with an explicit uniqueness assertion that fails the spawn, since a collision would mean the decoder admitted something it should not have |
 | `build_sel4_plan` took an `executables` parameter it never read | Removed |
+
+**2026-08-10 — the full graph reaches its healthy-idle terminal, and a minted
+endpoint never actually reached its holder.**
+
+*Root cause.* Child construction skipped every endpoint grant, on the rule that
+`ChannelTable` re-installs a declared channel end from the generation's single
+pre-created edge — copying the parent's end would install the wrong side. A
+*minted* endpoint has no such edge: its object exists only because the parent
+created it at runtime, which is exactly what the declaration defers. So the
+skip silently dropped it and the holder's slot stayed empty, which surfaced as
+`fabric-op-client-b-restart` failing its own `recv` on slot 0. The plan now
+records which grants a minted declaration authorized, and those are copied
+rather than skipped.
+
+*Rule relaxed.* `exec` was barred on a minted binding, a rule chosen when the
+record only carried channels. An owner may legitimately hand a child an
+executable it holds — that is how the fabric spawns its two bounded route
+workers — so `exec` is admissible, paired with `spawn`, in the decoder, the
+builder, and the checker alike. The pairing is what keeps a minted executable
+from reaching a holder the graph did not authorize to spawn.
+
+*Fixture.* `sel4-boot.zti` needed the control edges to be **real grants**, not
+minted ones: `build-generation.py` derives the fabric's entire control-slot
+layout by scanning grants named `<participant>-control` with
+`source = participant, target = fabric-service`, so declaring them minted left
+the generated profile empty and the fabric read its slots from nothing. Control
+edges and the fabric's two factories are now grants; the subscriber supervision
+handles, the worker executables, and each route worker's own control set are
+minted. Slot layout follows the generated profile exactly: factories 0–1,
+stream controls 2–8, supervision 9–11, call/operation controls 12–20, worker
+executables 21–22.
+
+*Result.* `sel4_boot_check` moves from refusing generation admission outright
+to the supervisor's terminal record —
+`SLIME_GRAPH healthy generation=22 instances=11d74d026c7321ec required=1 live=1
+idle=1 failed=0` — with all sixteen participants provisioned across five
+routes and both bounded route workers spawned holding their six declared
+capabilities each. The gate's frozen `instances=1` becomes `instances=20`,
+which is the migration itself: `init`, the fabric, its two workers, and the
+sixteen participants are each declared so the generation can state what its
+owner hands it at spawn. The gate still fails, now on the call plane's role
+provisioning rather than anywhere in the capability path.
+
+The stream plane's residual `Caught cap fault` is unrelated to declarations: it
+follows a shared-buffer frame alias (`ARMPageMap: Attempting to remap a frame
+that does not belong to the passed address space`) after `loan mapped`
+succeeds. Present at `3228eb6` as well.

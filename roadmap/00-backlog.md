@@ -95,22 +95,28 @@ two builds of one component image cannot select different boot graphs.
 const-assert per variant, so a renumbering fails the build.
 
 **Remaining:** the seL4 fixtures must declare what `init` actually hands each
-child before their planes go green again. `sel4-stream.zti` and
-`sel4-boot.zti` are the migrated templates — real grants for authority backed
-by concrete objects, `mintedBindings` for anything the owner mints at runtime.
+child before their planes go green again. `sel4-boot.zti` is the completed
+template: control edges are real grants (`build-generation.py` derives the
+fabric's whole control-slot layout by scanning grants named
+`<participant>-control`, so these cannot be minted), the fabric's factories are
+grants, and the supervision handles, worker executables, and each route
+worker's own control set are `mintedBindings`. Under it `sel4_boot_check`
+reaches the supervisor's terminal record — `required=1 live=1 idle=1 failed=0`,
+the complete healthy-idle graph — with all sixteen participants provisioned
+across five routes and both bounded route workers spawned; it now fails on the
+call plane's role provisioning rather than anywhere in the capability path.
+`sel4-stream.zti` is migrated the same way.
 
 Every plane gate was re-run at `3228eb6`, the pre-session commit, to separate
 inherited failures from regressions. No gate regressed:
 `sel4_root_boot_check`, `sel4_component_graph_check`, and
 `sel4_reclamation_check` passed then and pass now; `sel4_channel_check`,
 `sel4_sample_check`, `sel4_supervision_check`, and `sel4_crossing_check` fail
-with signatures identical to their baseline; and three improved —
-`sel4_stream_check` now provisions the whole fabric graph, `sel4_boot_check`
-spawns the fabric and all sixteen participants, and `sel4_spawn_check` spawns
-both children. `sel4_boot_layout_check` was red at baseline too and now fails
-later, at the `--recovery-plane` image rather than the `sel4-boot` layout
-block. The residual failures are fixture declaration and component-level
-conditions past every capability boundary, not decoder or dispatch defects.
+with signatures identical to their baseline. The remaining fixtures
+(`sel4-channel`, `sel4-sample`, `sel4-supervision`, `sel4-crossing`,
+`sel4-spawn`, `sel4-qos`) need the same treatment. `sel4_stream_check`'s
+residual `Caught cap fault` is a shared-buffer frame alias after `loan mapped`
+succeeds, not a declaration defect, and is present at baseline.
 
 ### B40 — child CSpaces are fixed four-slot shells rather than admitted authority
 
