@@ -90,7 +90,29 @@ is now identified by which instance runs the spawn service, giving `RPC_SLOT`
 2 and `SHARED_BUFFER_FACTORY_SLOT` 1 on the dango manifest, which is what that
 fixture declares.
 
-**Remaining, and why it is not landed:** `init` holds two of the five
+**Landed 2026-08-10.** The plane now runs end to end for the first launch:
+the shell reaches its prompt, `$(sysinfo)` resolves through the profile,
+`spawn-service` launches it, the child reports `result:exit:0`, and `init`
+prints `dango plane complete` with every component exiting 0. What was
+undeclared: `spawn-service`'s executables resolved in the wrong CSpace, the
+dango RPC channel pre-created twice (declared edge shadowing init's minted
+halves), the per-launch context endpoint, and the composed launch's forwarded
+working directory and stdin. `sysinfo` and `echo-agent` are now owned by
+`spawn-service`, which is what admits its exec bindings.
+
+The gate asserted `spawn-request:accepted` before the child's own marker. The
+child runs first by construction — `spawn` starts the thread, then the service
+sends the launch context and only afterwards replies — so that ordering
+asserted a race; the child's marker is required for presence, not position.
+
+**Remaining:** the composed second launch (`with-env`/`with-cwd`/`with-stdin`)
+is refused by `spawn-service` in `valid_request` before it spawns. Both
+forwarded capabilities arrive (`received task=2 channel=1 bytes=64 caps=2`) and
+`received_caps` is zeroed per iteration, so the mismatch is in the request
+record's own fields rather than the capability transfer — a spawn-protocol
+defect, not a declaration one.
+
+**Superseded note — `init` holds two of the five
 capabilities `spawn-service` declares — its factories — while the RPC end and
 the two executables are root-installed, so spawn preflight's declared-count
 rule refuses the spawn. The working `sel4` fixture avoids this by sourcing
