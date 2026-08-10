@@ -226,7 +226,32 @@ sel4_store_check`, `just sel4_rollback_check`, `just
 sel4_recovery_plane_check`, and `just sel4_transfer_check` pass against the
 direct service path.
 
-**Five of six gates green (2026-08-10).** `sel4_device_check` and
+**All six gates green (2026-08-10), but the exit condition is not met.** The
+gates pass "against the direct service path" only in the sense that the paths
+they exercise are correct; `BlockTransact` and `StoreTransact` are still labels
+on the universal dispatcher (`slime-root/src/ipc.rs:99-100`), so the first
+clause — a request cannot be issued without the declared service capability —
+is still false. Moving them off shares B41's blocker: nothing receives on a
+second endpoint until the `WindowTable` contract is settled.
+
+What the gate work did establish, and what it found:
+
+- **Block devices were not renumbered on the spawn path.** `declared_resource`
+  answers `Block { device: 0 }` for every block grant because only the
+  installer knows how many it has placed; the boot-graph path renumbers per
+  binding and the spawn path's self-loop install did not. A component holding
+  two device capabilities saw both resolve to device 0. The transfer plane is
+  the only one holding two, and it read its manifest off the receiver instead
+  of the source — sixteen sectors served `status=0`, every byte zero.
+- **`SLIME_GRAPH block served` now carries the device index**, without which
+  the record cannot say which of a plane's devices answered. That is precisely
+  what multi-device selection claims, and it is what made the above
+  diagnosable.
+- Read-only device authority is verified byte-identical from the host
+  (`source_before` in the transfer gate), and multi-device selection is now
+  exact.
+
+**Gate repairs (2026-08-10).** `sel4_device_check` and
 `sel4_storage_check` already passed; `sel4_store_check`,
 `sel4_rollback_check`, and `sel4_recovery_plane_check` were red for reasons
 outside B43's scope and now pass. Each storage plane makes the same claim every
