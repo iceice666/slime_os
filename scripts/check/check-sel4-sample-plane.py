@@ -98,19 +98,18 @@ SAMPLE_MARKERS: tuple[str, ...] = (
 REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     (
         "the sample generation was admitted",
-        r"SLIME_ROOT generation admitted number=\d+ components=3 grants=4 ",
+        r"SLIME_ROOT generation admitted number=\d+ executables=3 instances=3 grants=4 ",
     ),
     (
         "every payload is a native ELF image",
-        r"SLIME_ROOT graph admitted; legacy SLIMECM images not activated "
-        r"components=3 slimecm=0 elf=3 unrecognized=0",
+        r"SLIME_ROOT graph admitted executables=3 instances=3 slimecm=0 elf=3 unrecognized=0",
     ),
     (
         # Both factories at the slots the boot layout names, which is what
         # `init.rs`'s generated `ENDPOINT_FACTORY_SLOT` and
         # `SHARED_BUFFER_FACTORY_SLOT` compile against (B10).
         "init holds its endpoint factory at its layout slot",
-        r"SLIME_GRAPH factory placed task=\d+ component=init slot=0 "
+        r"SLIME_GRAPH factory placed task=\d+ component=init slot=3 "
         r"kind=endpoint-factory",
     ),
     (

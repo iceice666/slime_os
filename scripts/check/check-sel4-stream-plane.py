@@ -90,7 +90,7 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "the graph was admitted and launched",
         (
-            r"SLIME_ROOT generation admitted number=\d+ components=7 grants=13 ",
+            r"SLIME_ROOT generation admitted number=\d+ executables=7 instances=7 grants=13 ",
             # C8.2 (P5.4.4): the root validated this generation's declared
             # fabric graph against its *own* ceilings before any participant
             # launched. `slime-root` did not read the resource at all until
@@ -114,7 +114,7 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
             r"SLIME_ROOT fabric graph=admitted schemas=2 routes=2 "
             r"participants=6 interpositions=0",
             r"SLIME_ROOT graph admitted; legacy SLIMECM images not activated "
-            r"components=7 slimecm=0 elf=7 unrecognized=0",
+            r"executables=7 instances=7 slimecm=0 elf=7 unrecognized=0",
             # Six pairs, one per participant plus B17's probe. Init holds both
             # halves of each and gives one away, so the binding between a
             # control endpoint and a component identity is established here and

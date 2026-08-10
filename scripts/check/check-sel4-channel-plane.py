@@ -67,15 +67,14 @@ INLINE_BYTES = 16
 REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     (
         "the channel generation was admitted",
-        r"SLIME_ROOT generation admitted number=\d+ components=2 grants=2 ",
+        r"SLIME_ROOT generation admitted number=\d+ executables=2 instances=2 grants=2 ",
     ),
     (
         "both payloads are native ELF and no legacy image was activated",
-        r"SLIME_ROOT graph admitted; legacy SLIMECM images not activated "
-        r"components=2 slimecm=0 elf=2 unrecognized=0",
+        r"SLIME_ROOT graph admitted executables=2 instances=2 slimecm=0 elf=2 unrecognized=0",
     ),
-    ("console was staged", r"SLIME_GRAPH staged task=0 component=console grants=1 "),
-    ("init was staged", r"SLIME_GRAPH staged task=1 component=init grants=1 "),
+    ("console was staged", r"SLIME_GRAPH staged task=0 instance=console executable=console grants=1 "),
+    ("init was staged", r"SLIME_GRAPH staged task=1 instance=init executable=init grants=1 "),
     (
         # Required check 1. The direction is the claim: the generation declares
         # `dango-output` with `console` as the grant's target and `recv` as its
@@ -123,7 +122,7 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         "every declared channel was placed before any component ran",
         r"SLIME_GRAPH channels grants=2 channels=2 queues=2 slots=3 unplaced=0",
     ),
-    ("both components were activated", r"SLIME_GRAPH activated components=2"),
+    ("both components were activated", r"SLIME_GRAPH activated instances=\d+"),
     (
         # Required check 2, first half. `console` reaches its `recv` on an
         # empty queue, is told `ERR_WOULDBLOCK`, and parks in the `wait` it

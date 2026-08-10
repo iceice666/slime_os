@@ -86,13 +86,12 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         # channel this plane uses is minted at runtime through that factory
         # rather than declared, so the sweep sees only holder state.
         "the root admitted the crossing graph",
-        r"SLIME_ROOT generation admitted number=1 components=2 grants=2 "
+        r"SLIME_ROOT generation admitted number=1 executables=2 instances=2 grants=2 "
         r"health=2 kernel=1 bootstrap=1",
     ),
     (
         "the root launched both components from native ELFs and no legacy image",
-        r"SLIME_ROOT graph admitted; legacy SLIMECM images not activated "
-        r"components=2 slimecm=0 elf=2 unrecognized=0",
+        r"SLIME_ROOT graph admitted executables=2 instances=2 slimecm=0 elf=2 unrecognized=0",
     ),
     (
         # Parked before the loop and collected only after it. From the transfer

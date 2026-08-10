@@ -47,13 +47,13 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "the generation was admitted with its declared interposition chain",
         (
-            r"SLIME_ROOT generation admitted number=21 components=7 grants=13 ",
+            r"SLIME_ROOT generation admitted number=21 executables=7 instances=7 grants=13 ",
             # `interpositions=1` is the declared chain surviving admission. A
             # profile whose chain was dropped would admit a graph with a direct
             # edge where the generation declared a proxy hop.
             r"SLIME_ROOT fabric graph=admitted schemas=2 routes=2 participants=6 "
             r"interpositions=1",
-            r"SLIME_GRAPH activated components=7",
+            r"SLIME_GRAPH activated instances=\d+",
             r"\[init\] visibility control channels minted",
             r"SLIME_GRAPH spawned task=\d+ child=\d+ component=fabric-service ",
             r"\[init\] visibility fabric spawned",

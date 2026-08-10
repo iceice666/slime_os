@@ -2443,6 +2443,21 @@ fn launch_instance_graph(
                     grant.name
                 )
             }
+            // A factory is authority to mint objects, so where it lands is the
+            // difference between a component reaching its own declared factory
+            // and reaching none. The boot layout names the slot and this
+            // records that the root honoured it.
+            if matches!(
+                capability.resource,
+                graph::Resource::EndpointFactory | graph::Resource::SharedBufferFactory
+            ) {
+                sel4::debug_println!(
+                    "SLIME_GRAPH factory placed task={} component={} slot={slot} kind={}",
+                    id.0,
+                    instance.name,
+                    capability.resource.kind_name(),
+                );
+            }
         }
         if let Err(error) = launched_instances.record(instance_index, instance.executable, id) {
             fatal!("SLIME_GRAPH FAIL instance mapping rejected: {error:?}")
@@ -4985,6 +5000,18 @@ fn construct_child(
             release_child(tasks, windows, graph, buffers, allocator, id);
             return Err(IpcError::DestinationSlotsExhausted);
         }
+        // A channel end crossing a spawn boundary is the one capability the
+        // parent hands over that the child cannot name in advance, so where it
+        // lands is worth recording.
+        if let graph::Resource::Endpoint { channel, side } = capability.resource {
+            sel4::debug_println!(
+                "SLIME_GRAPH channel copied parent={} child={} key={channel} side={} slot={}",
+                parent.0,
+                id.0,
+                side.name(),
+                destination,
+            );
+        }
     }
     // A self-loop grant declares authority the child holds in its own right,
     // so no parent passes it and the loop above never sees it. The root is
@@ -5252,10 +5279,22 @@ fn serve_spawn(
         }
     };
 
-    // Declared channel ends come exclusively from the pre-created generation
-    // catalogue. Request endpoint records authorize the delegation but do not
-    // copy the parent's complementary side into the child.
-    let copied = installed_channels;
+    // Two ways a channel end reaches a child, and this counts both. A
+    // generation-declared end is re-installed from the pre-created catalogue by
+    // `install_instance`; a *minted* end has no catalogue entry — its object
+    // exists only because the parent created it at runtime — so the copy in
+    // `construct_child` is the only way it arrives.
+    let minted_channels = plan
+        .granted
+        .iter()
+        .take(plan.count)
+        .filter(|granted| {
+            granted.is_some_and(|(_, _, capability, minted)| {
+                minted && matches!(capability.resource, graph::Resource::Endpoint { .. })
+            })
+        })
+        .count();
+    let copied = installed_channels + minted_channels;
 
     // The parent's handle, installed before the child runs. A child that exited
     // before its parent held a handle would leave the parent waiting on a task

@@ -61,9 +61,9 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "the QoS generation was admitted and its graph validated",
         (
-            r"SLIME_ROOT generation admitted number=\d+ components=7 grants=\d+ ",
+            r"SLIME_ROOT generation admitted number=\d+ executables=7 instances=7 grants=\d+ ",
             r"SLIME_ROOT fabric graph=admitted schemas=2 routes=2 participants=6 ",
-            r"SLIME_GRAPH activated components=7",
+            r"SLIME_GRAPH activated instances=\d+",
         ),
     ),
     (

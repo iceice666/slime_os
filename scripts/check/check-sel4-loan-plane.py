@@ -60,12 +60,11 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         # P5.3.3 made load-bearing. Before that slice the factory slot was
         # discarded and the budget alone admitted an allocation (B13), so this
         # graph reached its loan with no factory grant declared at all.
-        r"SLIME_ROOT generation admitted number=\d+ components=3 grants=5 ",
+        r"SLIME_ROOT generation admitted number=\d+ executables=3 instances=3 grants=5 ",
     ),
     (
         "all three payloads are native ELF and no legacy image was activated",
-        r"SLIME_ROOT graph admitted; legacy SLIMECM images not activated "
-        r"components=3 slimecm=0 elf=3 unrecognized=0",
+        r"SLIME_ROOT graph admitted executables=3 instances=3 slimecm=0 elf=3 unrecognized=0",
     ),
     (
         # The quota half's precondition: every holder's ceiling read from the

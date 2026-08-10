@@ -59,12 +59,11 @@ BOOT_TIMEOUT_SECONDS = 120
 REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     (
         "the spawn generation was admitted",
-        r"SLIME_ROOT generation admitted number=\d+ components=3 grants=3 ",
+        r"SLIME_ROOT generation admitted number=\d+ executables=3 instances=3 grants=3 ",
     ),
     (
         "every payload is a native ELF image",
-        r"SLIME_ROOT graph admitted; legacy SLIMECM images not activated "
-        r"components=3 slimecm=0 elf=3 unrecognized=0",
+        r"SLIME_ROOT graph admitted executables=3 instances=3 slimecm=0 elf=3 unrecognized=0",
     ),
     (
         # B10: init's factory sits at the slot the boot layout names, not at a
@@ -72,7 +71,7 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         # generated `ENDPOINT_FACTORY_SLOT`, so the two readers agree by
         # construction rather than by inspection.
         "init's endpoint factory was placed at its layout slot",
-        r"SLIME_GRAPH factory placed task=\d+ component=init slot=0 "
+        r"SLIME_GRAPH factory placed task=\d+ component=init slot=3 "
         r"kind=endpoint-factory",
     ),
     (
@@ -82,7 +81,7 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         # exists to remove, and it only became observable once init held an
         # executable grant at all.
         "init was staged holding both declared executables",
-        r"SLIME_GRAPH staged task=\d+ component=init grants=\d+ executables=2 ",
+        r"SLIME_GRAPH staged task=\d+ instance=init executable=init grants=3 bindings=3 ",
     ),
     # -- required check: an ungranted or over-wide spawn is refused --
     (
@@ -91,10 +90,10 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     ),
     (
         # A slot holding real authority of another kind. Init genuinely holds
-        # its endpoint factory at slot 0, so this is a check on kind rather
-        # than on possession.
+        # its endpoint factory at the slot the fixture declares (3), so this is
+        # a check on kind rather than on possession.
         "a factory slot cannot name an executable",
-        r"SLIME_GRAPH spawn refused task=\d+ slot=0 ungranted",
+        r"SLIME_GRAPH spawn refused task=\d+ slot=3 ungranted",
     ),
     ("both refusals reached the component", r"\[init\] ungranted executable refused"),
     (
@@ -163,7 +162,7 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         # largest real grant lists (`GENERATION_MANAGER_CAPS`, `dango_caps()`),
         # so the arm is the oracle's shape rather than a synthetic width.
         "sysinfo was authorized from its layout-named executable slot with six grants",
-        r"SLIME_GRAPH spawn authorized task=\d+ slot=4 component=sysinfo grants=6",
+        r"SLIME_GRAPH spawn authorized task=\d+ slot=2 component=sysinfo grants=6",
     ),
     (
         # The other half of B15's exit condition: the child holds all six at

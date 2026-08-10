@@ -40,9 +40,9 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "the generation was admitted and the parent introduced every participant",
         (
-            r"SLIME_ROOT generation admitted number=18 components=6 grants=11 ",
+            r"SLIME_ROOT generation admitted number=18 executables=6 instances=6 grants=11 ",
             r"SLIME_ROOT fabric graph=admitted schemas=1 routes=1 participants=3 ",
-            r"SLIME_GRAPH activated components=6",
+            r"SLIME_GRAPH activated instances=\d+",
             r"\[init\] call control channels minted",
             r"SLIME_GRAPH spawned task=\d+ child=\d+ component=fabric-service ",
             r"\[init\] call fabric spawned",

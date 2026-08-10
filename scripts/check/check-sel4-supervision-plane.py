@@ -402,15 +402,17 @@ def check_transcript(transcript: str) -> None:
     spawns, terminated = (int(value) for value in accounting.groups())
     expected_spawns = children + 2
     # The root's termination counter covers the spawned scenario tasks plus
-    # every generation-launched component: init and the two deliberately
-    # unconfigured component instances declared by this fixture.
-    expected_terminated = expected_spawns + 3
+    # every *root*-launched instance. This fixture declares three instances but
+    # only `init` is root-owned; the other two are init-spawned and so are
+    # already inside `expected_spawns`. Counting them again assumed the
+    # pre-B34 model where the root launched every declared instance.
+    expected_terminated = expected_spawns + 1
     if spawns != expected_spawns or terminated != expected_terminated:
         fail(
             f"supervision accounting was spawns={spawns} terminated={terminated}, "
             f"expected spawns={expected_spawns} and terminated={expected_terminated} "
-            f"from {children} loop children, two retained tasks, and three "
-            "generation-launched components"
+            f"from {children} loop children, two retained tasks, and one "
+            "root-launched instance"
         )
     if terminated <= bound:
         fail(f"root recorded {terminated} terminations, not more than MAX_RECORDS={bound}")
