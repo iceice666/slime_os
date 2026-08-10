@@ -75,13 +75,15 @@ real design decision:
   path touches none: it needs its endpoint, its scratch page, and the window
   table. The blanket "root task is single-threaded" comment overstates the
   coupling.
-- **`WindowTable` — the actual blocker.** `DebugWrite` resolves the caller's
-  window through `WindowTable::bound` (`&self`), while the main dispatcher
-  mutates the same table at five sites (`declare`, `release`). One concurrent
-  reader against five writers needs a stated synchronization contract — whether
-  the console thread gets its own view, the table becomes lock-protected, or
-  window binding moves behind the console endpoint too. That choice is the work,
-  and it should be made deliberately rather than improvised.
+- **`WindowTable` — the actual blocker, and narrower than it looks.**
+  `DebugWrite` resolves the caller's window through `WindowTable::bound`
+  (`&self`), while the main dispatcher mutates the table at four sites. But a
+  window is *declared once at construction and released once at teardown* —
+  never per request — so a console thread racing the main dispatcher is racing
+  spawn and reclamation, not steady traffic. The contract needed is therefore
+  narrow: a console reader must not observe a window mid-release, which a
+  generation counter or a release handshake settles without locking the table.
+  That choice is the remaining work.
 
 A bound notification does not substitute: it signals, and the console still
 needs its own receive to carry the payload.
