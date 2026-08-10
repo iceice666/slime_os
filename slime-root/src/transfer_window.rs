@@ -452,37 +452,7 @@ pub fn read_staged_array(
     words: &[sel4::Word],
     scratch: &crate::child_vspace::ScratchPage,
 ) -> Result<StagedArray, IpcError> {
-    let len = descriptor_len(transfer);
-    if len > MAX_STAGED_ARRAY_BYTES || descriptor_caps(transfer) != 0 {
-        return Err(IpcError::InvalidLength);
-    }
-    let mut array = StagedArray {
-        bytes: [0; MAX_STAGED_ARRAY_BYTES],
-        len,
-    };
-    if descriptor_form(transfer) == FORM_INLINE {
-        // The narrow reader's own inline path, which is unchanged by this
-        // widening: the fast registers carry what they always carried, and a
-        // descriptor claiming more than they hold is refused rather than read
-        // past.
-        let inline = read_staged(window, transfer, words, scratch)?;
-        array.bytes[..len].copy_from_slice(inline.bytes());
-        return Ok(array);
-    }
-    let window = window.ok_or(IpcError::InvalidLength)?;
-    if frame_len(len, 0) > window.len {
-        return Err(IpcError::InvalidLength);
-    }
-    with_window_mapped(window, scratch, |base| {
-        // SAFETY: `base` is the scratch address, where `window.frame` is mapped
-        // read-write for the duration of this closure and aliased by no live
-        // Rust reference. `len` was bounded by `window.len` above, and the
-        // window is one granule, so every read is in bounds.
-        unsafe {
-            core::ptr::copy_nonoverlapping(base, array.bytes.as_mut_ptr(), len);
-        }
-    })?;
-    Ok(array)
+    read_staged_array_in(window, transfer, words, scratch, None)
 }
 
 /// Write a reply larger than one message into a caller's window (P5.4.2c).
@@ -500,6 +470,25 @@ pub fn write_staged_region(
     bytes: &[u8],
     scratch: &crate::child_vspace::ScratchPage,
 ) -> Result<u64, IpcError> {
+    write_staged_region_in(window, bytes, scratch, None)
+}
+
+/// [`write_staged_region`] naming the console thread's own IPC buffer (B43).
+pub fn write_staged_region_with(
+    window: Option<Window>,
+    bytes: &[u8],
+    scratch: &crate::child_vspace::ScratchPage,
+    buffer: &mut sel4::IpcBuffer,
+) -> Result<u64, IpcError> {
+    write_staged_region_in(window, bytes, scratch, Some(buffer))
+}
+
+fn write_staged_region_in(
+    window: Option<Window>,
+    bytes: &[u8],
+    scratch: &crate::child_vspace::ScratchPage,
+    buffer: Option<&mut sel4::IpcBuffer>,
+) -> Result<u64, IpcError> {
     if bytes.len() > MAX_STAGED_ARRAY_BYTES {
         return Err(IpcError::InvalidLength);
     }
@@ -507,7 +496,7 @@ pub fn write_staged_region(
     if frame_len(bytes.len(), 0) > window.len {
         return Err(IpcError::InvalidLength);
     }
-    with_window_mapped(window, scratch, |base| {
+    with_window_mapped_in(window, scratch, buffer, |base| {
         // SAFETY: `base` is the scratch address, where `window.frame` is mapped
         // read-write for the duration of this closure and aliased by no live
         // Rust reference. The length was bounded by `window.len` above.
@@ -567,6 +556,16 @@ pub fn read_staged_array_with(
     scratch: &crate::child_vspace::ScratchPage,
     buffer: &mut sel4::IpcBuffer,
 ) -> Result<StagedArray, IpcError> {
+    read_staged_array_in(window, transfer, words, scratch, Some(buffer))
+}
+
+fn read_staged_array_in(
+    window: Option<Window>,
+    transfer: u64,
+    words: &[sel4::Word],
+    scratch: &crate::child_vspace::ScratchPage,
+    buffer: Option<&mut sel4::IpcBuffer>,
+) -> Result<StagedArray, IpcError> {
     let len = descriptor_len(transfer);
     if len > MAX_STAGED_ARRAY_BYTES || descriptor_caps(transfer) != 0 {
         return Err(IpcError::InvalidLength);
@@ -586,28 +585,15 @@ pub fn read_staged_array_with(
     if frame_len(len, 0) > window.len {
         return Err(IpcError::InvalidLength);
     }
-    let vspace = sel4::init_thread::slot::VSPACE.cap();
-    window
-        .alias
-        .with(&mut *buffer)
-        .frame_map(
-            vspace,
-            scratch.addr(),
-            sel4::CapRights::read_write(),
-            sel4::VmAttributes::DEFAULT | sel4::VmAttributes::EXECUTE_NEVER,
-        )
-        .map_err(|_| IpcError::TransferFailed)?;
-    // SAFETY: `window.frame` is mapped read-write at the scratch address for
-    // the span below and aliased by no live Rust reference; `len` was bounded
-    // by `window.len`, and the window is one granule.
-    unsafe {
-        core::ptr::copy_nonoverlapping(scratch.addr() as *mut u8, array.bytes.as_mut_ptr(), len);
-    }
-    window
-        .alias
-        .with(buffer)
-        .frame_unmap()
-        .map_err(|_| IpcError::TransferFailed)?;
+    with_window_mapped_in(window, scratch, buffer, |base| {
+        // SAFETY: `base` is the scratch address, where `window.frame` is
+        // mapped read-write for the duration of this closure and aliased by no
+        // live Rust reference. `len` was bounded by `window.len` above, and
+        // the window is one granule.
+        unsafe {
+            core::ptr::copy_nonoverlapping(base, array.bytes.as_mut_ptr(), len);
+        }
+    })?;
     Ok(array)
 }
 
@@ -616,20 +602,52 @@ fn with_window_mapped(
     scratch: &crate::child_vspace::ScratchPage,
     body: impl FnOnce(*mut u8),
 ) -> Result<(), IpcError> {
-    window
-        .alias
-        .frame_map(
-            sel4::init_thread::slot::VSPACE.cap(),
-            scratch.addr(),
-            sel4::CapRights::read_write(),
-            sel4::VmAttributes::DEFAULT | sel4::VmAttributes::EXECUTE_NEVER,
-        )
-        .map_err(|_| IpcError::TransferFailed)?;
-    body(scratch.addr() as *mut u8);
-    window
-        .alias
-        .frame_unmap()
-        .map_err(|_| IpcError::TransferFailed)
+    with_window_mapped_in(window, scratch, None, body)
+}
+
+/// Map a caller's window at `scratch`, run `body` over it, and unmap.
+///
+/// `buffer` names the IPC buffer the two `frame_map`/`frame_unmap`
+/// invocations use. The main dispatcher passes `None` and gets the crate's
+/// ambient slot; the console thread passes its own, because there is one
+/// ambient slot per address space and a blocked receive holds it borrowed —
+/// so a second thread reaching for it deadlocks on the borrow rather than on
+/// the endpoint (B41, B43).
+fn with_window_mapped_in(
+    window: Window,
+    scratch: &crate::child_vspace::ScratchPage,
+    buffer: Option<&mut sel4::IpcBuffer>,
+    body: impl FnOnce(*mut u8),
+) -> Result<(), IpcError> {
+    let vspace = sel4::init_thread::slot::VSPACE.cap();
+    let rights = sel4::CapRights::read_write();
+    let attributes = sel4::VmAttributes::DEFAULT | sel4::VmAttributes::EXECUTE_NEVER;
+    match buffer {
+        Some(buffer) => {
+            window
+                .alias
+                .with(&mut *buffer)
+                .frame_map(vspace, scratch.addr(), rights, attributes)
+                .map_err(|_| IpcError::TransferFailed)?;
+            body(scratch.addr() as *mut u8);
+            window
+                .alias
+                .with(buffer)
+                .frame_unmap()
+                .map_err(|_| IpcError::TransferFailed)
+        }
+        None => {
+            window
+                .alias
+                .frame_map(vspace, scratch.addr(), rights, attributes)
+                .map_err(|_| IpcError::TransferFailed)?;
+            body(scratch.addr() as *mut u8);
+            window
+                .alias
+                .frame_unmap()
+                .map_err(|_| IpcError::TransferFailed)
+        }
+    }
 }
 
 /// Payload bytes the two inline registers carry. Mirrors

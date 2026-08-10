@@ -27,8 +27,6 @@ const SYS_SEND: u64 = 1;
 const SYS_RECV: u64 = 2;
 const SYS_EXIT: u64 = 3;
 const SYS_SPAWN: u64 = 4;
-const SYS_BLOCK_TRANSACT: u64 = 6;
-const SYS_STORE_TRANSACT: u64 = 7;
 const SYS_HEALTH_CONFIRM: u64 = 8;
 const SYS_UNHEALTHY: u64 = 9;
 const SYS_RECOVERY_RECONSTRUCT: u64 = 10;
@@ -481,13 +479,6 @@ pub fn block_transact_write(
     reply: &mut [u8; 64],
 ) -> i64 {
     transport::block_transact_write(slot, request, sector, reply)
-}
-
-/// Issues a 64-byte store-protocol request/reply pair against the object
-/// store capability in slot `slot`. Same delivered-vs-outcome distinction as
-/// [`block_transact`].
-pub fn store_transact(slot: u32, request: &[u8; 64], reply: &mut [u8; 64]) -> i64 {
-    transport::store_transact(slot, request, reply)
 }
 
 /// Issues a fixed generation-management request/reply pair through the

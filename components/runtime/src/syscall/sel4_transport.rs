@@ -37,15 +37,14 @@ use super::wire::{
 };
 use super::{
     ERR_INVALID_ARG, ERR_SUCCESS, MAX_CAPS_PER_MSG, MAX_DIRECTORY_PATH, MAX_MSG, MAX_WAIT_SOURCES,
-    MIN_TRANSFER_WINDOW, SYS_BLOCK_TRANSACT, SYS_CAP_DROP, SYS_CAP_TRANSFER, SYS_DIRECTORY_COMMIT,
+    MIN_TRANSFER_WINDOW, SYS_CAP_DROP, SYS_CAP_TRANSFER, SYS_DIRECTORY_COMMIT,
     SYS_DIRECTORY_DERIVE, SYS_DIRECTORY_INSPECT, SYS_ENDPOINT_CREATE, SYS_EXIT,
     SYS_GENERATION_RECEIVE, SYS_GENERATION_TRANSACT, SYS_HEALTH_CONFIRM, SYS_RECOVERY_RECONSTRUCT,
     SYS_RECV, SYS_SEND, SYS_SHARED_BUFFER_CREATE, SYS_SHARED_BUFFER_LOAN,
     SYS_SHARED_BUFFER_LOAN_MAP, SYS_SHARED_BUFFER_MAP, SYS_SHARED_BUFFER_RELEASE,
     SYS_SHARED_BUFFER_RETURN, SYS_SHARED_BUFFER_REVOKE, SYS_SHARED_BUFFER_SEAL,
-    SYS_SHARED_BUFFER_UNMAP, SYS_SPAWN, SYS_STORE_TRANSACT, SYS_SUPERVISION_DERIVE,
-    SYS_SUPERVISION_STATUS, SYS_TRANSFER_WINDOW_BIND, SYS_UNHEALTHY, SYS_WAIT, SpawnGrant,
-    WaitSource,
+    SYS_SHARED_BUFFER_UNMAP, SYS_SPAWN, SYS_SUPERVISION_DERIVE, SYS_SUPERVISION_STATUS,
+    SYS_TRANSFER_WINDOW_BIND, SYS_UNHEALTHY, SYS_WAIT, SpawnGrant, WaitSource,
 };
 
 /// The child CSpace slot holding the badged root service endpoint. Slot 0 is
@@ -65,6 +64,7 @@ pub const CONSOLE_SERVICE_SLOT: sel4::CPtrBits = 32;
 /// one root thread serves them; the label says which (B41).
 const CONSOLE_LABEL_WRITE: u64 = 0;
 const CONSOLE_LABEL_INPUT_READ: u64 = 1;
+const CONSOLE_LABEL_BLOCK_TRANSACT: u64 = 2;
 
 /// Bytes of a spawn grant record in the transfer window: slot word, then rights
 /// word.
@@ -208,6 +208,12 @@ fn collect(
 
 /// Issues one root service call with `operands` in the fast registers.
 fn call(label: u64, operands: &[Word]) -> CallWithMRs {
+    call_on(root_service(), label, operands)
+}
+
+/// A Call on a named endpoint. Block requests go to the console endpoint
+/// rather than the root's (B43), so the endpoint is a parameter here.
+fn call_on(endpoint: cap::Endpoint, label: u64, operands: &[Word]) -> CallWithMRs {
     debug_assert!(operands.len() <= wire::FAST_REGISTERS);
     let mut mrs = [0 as Word; wire::FAST_REGISTERS];
     mrs[..operands.len()].copy_from_slice(operands);
@@ -215,7 +221,7 @@ fn call(label: u64, operands: &[Word]) -> CallWithMRs {
         .label(label as Word)
         .length(operands.len())
         .build();
-    root_service().call_with_mrs(info, mrs)
+    endpoint.call_with_mrs(info, mrs)
 }
 
 /// Splits a reply into its logical result and auxiliary word. A reply carrying
@@ -538,14 +544,25 @@ pub fn input_read(slot: u32) -> (i64, u64) {
 /// The shared shape of the three 64-byte request/reply protocols: the request
 /// crosses in the transfer window and the reply is written back over it.
 fn transact(label: u64, slot: u32, request: &[u8; 64], reply_out: &mut [u8; 64]) -> i64 {
+    transact_on(root_service(), label, slot, request, reply_out)
+}
+
+fn transact_on(
+    endpoint: cap::Endpoint,
+    label: u64,
+    slot: u32,
+    request: &[u8; 64],
+    reply_out: &mut [u8; 64],
+) -> i64 {
     let transfer = match stage(request.as_slice(), &[]) {
         Ok(transfer) => transfer,
         Err(error) => return error,
     };
-    let (result, returned) = match outcome(&call(label, &[slot as Word, transfer as Word])) {
-        Ok(pair) => pair,
-        Err(error) => return error,
-    };
+    let (result, returned) =
+        match outcome(&call_on(endpoint, label, &[slot as Word, transfer as Word])) {
+            Ok(pair) => pair,
+            Err(error) => return error,
+        };
     if result < 0 {
         return result;
     }
@@ -557,7 +574,16 @@ fn transact(label: u64, slot: u32, request: &[u8; 64], reply_out: &mut [u8; 64])
 }
 
 pub fn block_transact(slot: u32, request: &[u8; 64], reply: &mut [u8; 64]) -> i64 {
-    transact(SYS_BLOCK_TRANSACT, slot, request, reply)
+    // The console endpoint, not the root's: a block request is a device
+    // request, and the device tables live with whoever answers them (B43).
+    // Without this capability there is no path to a device at all.
+    transact_on(
+        console_service(),
+        CONSOLE_LABEL_BLOCK_TRANSACT,
+        slot,
+        request,
+        reply,
+    )
 }
 
 /// A block request whose reply carries a sector behind the record (P5.4.2c).
@@ -584,11 +610,14 @@ pub fn block_transact_sector(
         Ok(transfer) => transfer,
         Err(error) => return error,
     };
-    let (result, returned) =
-        match outcome(&call(SYS_BLOCK_TRANSACT, &[slot as Word, transfer as Word])) {
-            Ok(pair) => pair,
-            Err(error) => return error,
-        };
+    let (result, returned) = match outcome(&call_on(
+        console_service(),
+        CONSOLE_LABEL_BLOCK_TRANSACT,
+        &[slot as Word, transfer as Word],
+    )) {
+        Ok(pair) => pair,
+        Err(error) => return error,
+    };
     if result < 0 {
         return result;
     }
@@ -617,11 +646,14 @@ pub fn block_transact_write(
         Ok(transfer) => transfer,
         Err(error) => return error,
     };
-    let (result, returned) =
-        match outcome(&call(SYS_BLOCK_TRANSACT, &[slot as Word, transfer as Word])) {
-            Ok(pair) => pair,
-            Err(error) => return error,
-        };
+    let (result, returned) = match outcome(&call_on(
+        console_service(),
+        CONSOLE_LABEL_BLOCK_TRANSACT,
+        &[slot as Word, transfer as Word],
+    )) {
+        Ok(pair) => pair,
+        Err(error) => return error,
+    };
     if result < 0 {
         return result;
     }
@@ -630,10 +662,6 @@ pub fn block_transact_write(
         Ok(_) => ERR_INVALID_ARG,
         Err(error) => error,
     }
-}
-
-pub fn store_transact(slot: u32, request: &[u8; 64], reply: &mut [u8; 64]) -> i64 {
-    transact(SYS_STORE_TRANSACT, slot, request, reply)
 }
 
 pub fn generation_transact(slot: u32, request: &[u8; 64], reply: &mut [u8; 64]) -> i64 {

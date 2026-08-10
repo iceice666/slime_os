@@ -89,13 +89,16 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
 # silently reclassified as `RootService` -- and therefore falling through to the
 # unimplemented path -- fails this gate rather than passing quietly.
 #
-# `BlockTransact` left this list with P5.4.2c: the root owns the device untyped
-# and the DMA frames, so it owns the driver, and the operation is now
-# `RootService`. Storage *policy* — partitioning, the object store, generations,
-# recovery — stays in userspace and stays unmediated, which is why the four
-# below did not move with it.
+# `BlockTransact` and `StoreTransact` left this list entirely with B43, in
+# opposite directions. Block requests are answered by the console thread, which
+# owns the device tables — a driver's authority belongs with whoever answers —
+# so the label is gone from this ABI rather than reclassified. `StoreTransact`
+# is gone because it never had a handler: it answered `UnsupportedOperation`
+# from this very list, which is ABI surface for an operation the root does not
+# perform. A durable store is userspace policy built over block authority.
+# Storage *policy* — partitioning, generations, recovery — stays in userspace
+# and stays unmediated, which is why the three below did not move.
 UNMEDIATED_OPERATIONS: tuple[tuple[str, int], ...] = (
-    ("StoreTransact", 7),
     ("RecoveryReconstruct", 10),
     ("GenerationTransact", 18),
     ("GenerationReceive", 19),

@@ -415,3 +415,51 @@ impl DmaPage {
         unsafe { core::slice::from_raw_parts_mut(self.base as *mut u8, GRANULE_BYTES) }
     }
 }
+
+/// Block devices this cutover brings up, in stable physical-address order.
+///
+/// Two, because M6.7 transfers a generation from a source device to a receiver
+/// and needs both at once. The bound is a table size rather than a policy: a
+/// generation grants authority over a device by index, and an index the boot
+/// did not fill is authority the root cannot back.
+pub const MAX_BLOCK_DEVICES: usize = 2;
+
+/// The brought-up devices.
+pub struct BlockDevices {
+    devices: [Option<crate::virtio_blk::VirtioBlock>; MAX_BLOCK_DEVICES],
+    len: usize,
+}
+
+impl Default for BlockDevices {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl BlockDevices {
+    pub const fn new() -> Self {
+        Self {
+            devices: [const { None }; MAX_BLOCK_DEVICES],
+            len: 0,
+        }
+    }
+
+    pub fn push(&mut self, device: crate::virtio_blk::VirtioBlock) {
+        if self.len < MAX_BLOCK_DEVICES {
+            self.devices[self.len] = Some(device);
+            self.len += 1;
+        }
+    }
+
+    pub const fn len(&self) -> usize {
+        self.len
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    pub fn get_mut(&mut self, index: usize) -> Option<&mut crate::virtio_blk::VirtioBlock> {
+        self.devices.get_mut(index)?.as_mut()
+    }
+}

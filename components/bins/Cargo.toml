@@ -50,11 +50,6 @@ path = "src/bin/echo-agent.rs"
 test = false
 
 [[bin]]
-name = "filesystem-service"
-path = "src/bin/filesystem-service.rs"
-test = false
-
-[[bin]]
 name = "generation-manager"
 path = "src/bin/generation-manager.rs"
 test = false
@@ -287,11 +282,6 @@ required-features = ["store"]
 [[bin]]
 name = "storage-probe"
 path = "src/bin/storage-probe.rs"
-test = false
-
-[[bin]]
-name = "storage-store-probe"
-path = "src/bin/storage-store-probe.rs"
 test = false
 
 [[bin]]

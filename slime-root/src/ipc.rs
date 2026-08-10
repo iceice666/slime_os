@@ -29,6 +29,21 @@ pub const MAX_OPERATION_LABEL: u16 = Operation::SupervisionDerive as u16;
 /// operation moved into slot 17. Input is a Call on the console endpoint now.
 pub const RETIRED_INPUT_READ_LABEL: sel4::Word = 17;
 
+/// The label `StoreTransact` used to carry, retired with B43.
+///
+/// Never had a root handler: it answered `UnsupportedOperation` from
+/// `Mediation::Unavailable`, so it was ABI surface for an operation the root
+/// does not perform. A durable store is userspace policy built over block
+/// authority, so there is nothing here for it to become.
+pub const RETIRED_STORE_TRANSACT_LABEL: sel4::Word = 7;
+
+/// The label `BlockTransact` used to carry, retired with B43.
+///
+/// A hole for the same reason: block requests are a Call on the console
+/// endpoint now, where the device tables live, and a component still speaking
+/// label 6 must be refused rather than routed somewhere else.
+pub const RETIRED_BLOCK_TRANSACT_LABEL: sel4::Word = 6;
+
 // The four-MR fast path and the four-capability logical bound are independent
 // facts that happen to agree on AArch64. Pin the transport side so a profile
 // with fewer fast registers fails here instead of silently truncating.
@@ -107,8 +122,6 @@ pub enum Operation {
     FixtureDirective = 5,
     Exit = 3,
     Spawn = 4,
-    BlockTransact = 6,
-    StoreTransact = 7,
     HealthConfirm = 8,
     Unhealthy = 9,
     RecoveryReconstruct = 10,
@@ -159,8 +172,6 @@ impl Operation {
             3 => Self::Exit,
             4 => Self::Spawn,
             5 => Self::FixtureDirective,
-            6 => Self::BlockTransact,
-            7 => Self::StoreTransact,
             8 => Self::HealthConfirm,
             9 => Self::Unhealthy,
             10 => Self::RecoveryReconstruct,
@@ -225,7 +236,6 @@ impl Operation {
             | Self::CapTransfer
             | Self::TransferWindowBind
             | Self::SupervisionDerive
-            | Self::BlockTransact
             // M6.3 (P5.4.3). The root owns these three because a namespace root
             // is unforgeable shared state with an atomic transition — which is
             // mechanism. What a directory *contains* stays in userspace, built
@@ -243,8 +253,7 @@ impl Operation {
             // `BlockTransact` moved to `RootService` with P5.4.2c: the root
             // owns the device untyped, the DMA frames, and therefore the
             // driver. Storage *policy* stays in userspace.
-            Self::StoreTransact
-            | Self::RecoveryReconstruct
+            Self::RecoveryReconstruct
             | Self::GenerationTransact
             | Self::GenerationReceive => Mediation::Unavailable,
         }
@@ -344,16 +353,22 @@ pub enum ConsoleKind {
     Write,
     /// A read returning one decoded key event.
     InputRead,
+    /// One sector-granular block-device request (B43). On this thread because
+    /// a slow disk must not hold up lifecycle or fabric traffic, and because
+    /// the device tables live with whoever answers block requests.
+    BlockTransact,
 }
 
 impl ConsoleKind {
     const WRITE: sel4::Word = 0;
     const INPUT_READ: sel4::Word = 1;
+    const BLOCK_TRANSACT: sel4::Word = 2;
 
     const fn from_label(label: sel4::Word) -> Option<Self> {
         match label {
             Self::WRITE => Some(Self::Write),
             Self::INPUT_READ => Some(Self::InputRead),
+            Self::BLOCK_TRANSACT => Some(Self::BlockTransact),
             _ => None,
         }
     }
@@ -1122,11 +1137,17 @@ mod tests {
     /// satisfy this by renaming.
     #[test]
     fn no_console_operation_is_reachable_on_the_universal_abi() {
-        assert_eq!(
-            Operation::from_label(RETIRED_INPUT_READ_LABEL),
-            Err(IpcError::InvalidOperation),
-            "input reads are answerable on the root endpoint again"
-        );
+        for (label, what) in [
+            (RETIRED_INPUT_READ_LABEL, "input reads"),
+            (RETIRED_BLOCK_TRANSACT_LABEL, "block requests"),
+            (RETIRED_STORE_TRANSACT_LABEL, "store requests"),
+        ] {
+            assert_eq!(
+                Operation::from_label(label),
+                Err(IpcError::InvalidOperation),
+                "{what} are answerable on the root endpoint again"
+            );
+        }
         for label in 0..=sel4::Word::from(MAX_OPERATION_LABEL) {
             let Ok(operation) = Operation::from_label(label) else {
                 continue;
@@ -1135,8 +1156,11 @@ mod tests {
             // what a reader checks this against.
             let name = alloc::format!("{operation:?}");
             assert!(
-                !name.contains("Debug") && !name.contains("Input"),
-                "{name} is a console operation on the universal dispatcher"
+                !name.contains("Debug")
+                    && !name.contains("Input")
+                    && !name.contains("Block")
+                    && !name.contains("Store"),
+                "{name} is a console-thread operation on the universal dispatcher"
             );
         }
     }
@@ -1144,7 +1168,13 @@ mod tests {
     #[test]
     fn every_legacy_label_resolves_to_a_bounded_answer() {
         for label in 0..=sel4::Word::from(MAX_OPERATION_LABEL) {
-            if label == RETIRED_INPUT_READ_LABEL {
+            if [
+                RETIRED_INPUT_READ_LABEL,
+                RETIRED_BLOCK_TRANSACT_LABEL,
+                RETIRED_STORE_TRANSACT_LABEL,
+            ]
+            .contains(&label)
+            {
                 assert_eq!(
                     Operation::from_label(label),
                     Err(IpcError::InvalidOperation)

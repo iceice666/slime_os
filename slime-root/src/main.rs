@@ -48,6 +48,8 @@ use sel4_root_task::root_task;
 use buffer_adapter::BufferAdapter;
 use channel::{ChannelTable, LaunchedInstances, WaitTarget};
 use child_vspace::{ChildImage, GRANULE_SIZE, ScratchPage};
+use console::{RIGHT_BLOCK_READ, RIGHT_BLOCK_WRITE};
+use device::{BlockDevices, MAX_BLOCK_DEVICES};
 use event::TaskEpoch;
 use fault::{LifecycleEventKind, SupervisionTable};
 use generation::{Admission, Authority, RIGHT_EXEC, RIGHT_RECV, RIGHT_SEND, bound_authority};
@@ -1041,16 +1043,6 @@ const RIGHT_ENDPOINT_CREATE: u64 = 1 << 17;
 /// operation and the budget bounds it (B13).
 const RIGHT_BUFFER_CREATE: u64 = 1 << 24;
 
-/// Authority to read sectors, held on a `Block` (P5.4.2c). Numbered as
-/// `blockRead` in the generation's own rights table
-/// (`scripts/build/build-generation.py`), which is the same numbering
-/// `kernel/src/capability/mod.rs` uses.
-const RIGHT_BLOCK_READ: u64 = 1 << 10;
-/// Authority to write sectors and to flush. One bit for both, matching the
-/// oracle: a caller that may change what is on the device may also ask for it
-/// to be made durable, and a flush without writes is a no-op.
-const RIGHT_BLOCK_WRITE: u64 = 1 << 11;
-
 /// Authority over a `Directory` (M6.3, P5.4.3), numbered as the oracle's
 /// `capability::RIGHT_DIRECTORY_*` and as `directoryRead` and friends in the
 /// generation's rights table.
@@ -1328,54 +1320,6 @@ fn probe_devices(bootinfo: &sel4::BootInfo, allocator: &mut ObjectAllocator) -> 
         mapped * VIRTIO_MMIO_SLOTS_PER_GRANULE,
     );
     devices
-}
-
-/// Block devices this cutover brings up, in stable physical-address order.
-///
-/// Two, because M6.7 transfers a generation from a source device to a receiver
-/// and needs both at once. The bound is a table size rather than a policy: a
-/// generation grants authority over a device by index, and an index the boot
-/// did not fill is authority the root cannot back.
-pub const MAX_BLOCK_DEVICES: usize = 2;
-
-/// The brought-up devices.
-pub struct BlockDevices {
-    devices: [Option<virtio_blk::VirtioBlock>; MAX_BLOCK_DEVICES],
-    len: usize,
-}
-
-impl Default for BlockDevices {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl BlockDevices {
-    pub const fn new() -> Self {
-        Self {
-            devices: [const { None }; MAX_BLOCK_DEVICES],
-            len: 0,
-        }
-    }
-
-    fn push(&mut self, device: virtio_blk::VirtioBlock) {
-        if self.len < MAX_BLOCK_DEVICES {
-            self.devices[self.len] = Some(device);
-            self.len += 1;
-        }
-    }
-
-    pub const fn len(&self) -> usize {
-        self.len
-    }
-
-    pub const fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-
-    pub fn get_mut(&mut self, index: usize) -> Option<&mut virtio_blk::VirtioBlock> {
-        self.devices.get_mut(index)?.as_mut()
-    }
 }
 
 /// Bring up a second transport in a granule another driver already mapped
@@ -1967,144 +1911,6 @@ impl core::fmt::Display for DisplayPath<'_> {
     }
 }
 
-/// representation in the reply this cutover answers with.
-#[allow(clippy::too_many_lines)]
-fn serve_block_transact(
-    graph: &GraphTables,
-    devices: &mut BlockDevices,
-    window: Option<transfer_window::Window>,
-    scratch: &ScratchPage,
-    id: TaskId,
-    words: &[sel4::Word],
-) -> Response {
-    use slime_proto::block::{
-        BLOCK_MAGIC, FORMAT_VERSION, OFF_REPLY_MAGIC, OFF_REPLY_SECTORS_DONE, OFF_REPLY_STATUS,
-        OFF_REPLY_VERSION, OP_FLUSH, OP_READ, OP_WRITE, REPLY_LEN, WireBlockRequest,
-    };
-
-    let Some(slot) = words.first().map(|slot| *slot as u32) else {
-        return Response::error(IpcError::InvalidLength);
-    };
-    let Some(table) = graph.get(id) else {
-        return Response::error(IpcError::BadCapability);
-    };
-    let Some(capability) = table.get(slot) else {
-        return Response::error(IpcError::BadCapability);
-    };
-    let graph::Resource::Block { device: index } = capability.resource else {
-        return Response::error(IpcError::BadCapability);
-    };
-    let index = index as usize;
-    // Which device: the capability's own index, placed by the generation. A
-    // component holding the source cannot name the receiver, because the index
-    // is in the capability rather than in the request.
-    let Some(device) = devices.get_mut(index) else {
-        // Authority the boot could not back: the generation granted the device
-        // but none was attached. A bounded refusal, not a fault.
-        return Response::error(IpcError::UnsupportedOperation);
-    };
-    let Some(transfer) = words.get(1).copied() else {
-        return Response::error(IpcError::InvalidLength);
-    };
-    // The wide reader: a write carries its sector behind the 64-byte record, so
-    // the request is 576 bytes and the *message* reader's 64-byte bound would
-    // refuse it. `read_staged_array` refuses any descriptor naming a
-    // capability, which is the rule this operation needs anyway.
-    let frame = match transfer_window::read_staged_array(window, transfer, words, scratch) {
-        Ok(frame) => frame,
-        Err(error) => return Response::error(error),
-    };
-    let Some(request) = WireBlockRequest::decode(frame.bytes()) else {
-        return Response::error(IpcError::InvalidLength);
-    };
-    if request.magic != BLOCK_MAGIC || request.version != FORMAT_VERSION {
-        return Response::error(IpcError::InvalidLength);
-    }
-    let required = match request.op {
-        OP_READ => RIGHT_BLOCK_READ,
-        OP_WRITE | OP_FLUSH => RIGHT_BLOCK_WRITE,
-        _ => return Response::error(IpcError::InvalidLength),
-    };
-    if capability.rights & required == 0 {
-        sel4::debug_println!(
-            "SLIME_GRAPH block refused task={} op={} class=rights",
-            id.0,
-            request.op,
-        );
-        return Response::error(IpcError::BadCapability);
-    }
-    // One sector per request. The reply carries `sectors_done`, so a partial
-    // completion is representable — but nothing in this cutover produces one,
-    // and accepting a count this driver would silently truncate is worse than
-    // refusing it.
-    if request.op != OP_FLUSH && request.sector_count != 1 {
-        return Response::error(IpcError::InvalidLength);
-    }
-
-    let mut sector = [0u8; virtio_blk::SECTOR_BYTES];
-    let outcome = match request.op {
-        OP_READ => device.read_sector(request.lba, &mut sector),
-        OP_WRITE => {
-            let bytes = frame.bytes();
-            let start = slime_proto::block::REQUEST_LEN;
-            match bytes.get(start..start + virtio_blk::SECTOR_BYTES) {
-                Some(payload) => {
-                    sector.copy_from_slice(payload);
-                    device.write_sector(request.lba, &sector)
-                }
-                None => return Response::error(IpcError::InvalidLength),
-            }
-        }
-        _ => device.flush(),
-    };
-    let (status, sectors_done) = match outcome {
-        Ok(()) => (0i32, if request.op == OP_FLUSH { 0 } else { 1u32 }),
-        Err(error) => {
-            sel4::debug_println!(
-                "SLIME_GRAPH block failed task={} op={} lba={} {error:?}",
-                id.0,
-                request.op,
-                request.lba,
-            );
-            (-1i32, 0)
-        }
-    };
-    // The device index is part of the record: a plane holding two device
-    // capabilities cannot otherwise tell which one answered, and "the right
-    // device served this" is exactly what multi-device selection claims.
-    sel4::debug_println!(
-        "SLIME_GRAPH block served task={} device={index} op={} lba={} status={status} sectors={sectors_done}",
-        id.0,
-        request.op,
-        request.lba,
-    );
-
-    // The reply is the 64-byte record, and for a successful read the sector
-    // follows it in the caller's window.
-    //
-    // Written as one region rather than a `StagedFrame`, whose bound is
-    // `MAX_STAGED_BYTES` — the *message* bound, 64 bytes. A sector is not a
-    // message: it crosses no channel and is bounded by the window, exactly as
-    // a console line is on its own endpoint. `write_staged_region` is the same
-    // write path without the message-shaped ceiling.
-    let mut reply = [0u8; REPLY_LEN + virtio_blk::SECTOR_BYTES];
-    reply[OFF_REPLY_MAGIC..OFF_REPLY_MAGIC + 4].copy_from_slice(&BLOCK_MAGIC.to_le_bytes());
-    reply[OFF_REPLY_VERSION..OFF_REPLY_VERSION + 4].copy_from_slice(&FORMAT_VERSION.to_le_bytes());
-    reply[OFF_REPLY_STATUS..OFF_REPLY_STATUS + 4].copy_from_slice(&status.to_le_bytes());
-    reply[OFF_REPLY_SECTORS_DONE..OFF_REPLY_SECTORS_DONE + 4]
-        .copy_from_slice(&sectors_done.to_le_bytes());
-    let length = if request.op == OP_READ && status == 0 {
-        reply[REPLY_LEN..].copy_from_slice(&sector);
-        reply.len()
-    } else {
-        REPLY_LEN
-    };
-    match transfer_window::write_staged_region(window, &reply[..length], scratch) {
-        Ok(descriptor) => Response::success(length as i64, descriptor),
-        Err(error) => Response::error(error),
-    }
-}
-
 /// Launch every component whose payload this root task can load (P5.2).
 ///
 /// Each component is built from the ELF its own generation object carries — not
@@ -2147,6 +1953,7 @@ fn start_console_dispatcher(
     windows: &WindowTable<MAX_TASKS>,
     graph: &GraphTables,
     script: &'static [u8],
+    devices: &mut BlockDevices,
 ) {
     let scratch_addr = ptr::addr_of!(CONSOLE_PAGE) as usize;
     let scratch = match ScratchPage::claim(bootinfo, scratch_addr) {
@@ -2177,6 +1984,7 @@ fn start_console_dispatcher(
             buffer: ptr::addr_of_mut!(CONSOLE_IPC_BUFFER) as *mut sel4::IpcBuffer,
             input,
             graph: graph as *const _,
+            devices: ptr::addr_of_mut!(*devices),
         });
         match slot.as_ref() {
             Some(context) => ptr::addr_of!(*context),
@@ -2640,6 +2448,7 @@ fn launch_instance_graph(
         &windows,
         &graph,
         input_script(generation.number),
+        block_devices,
     );
 
     serve_instance_graph(
@@ -2654,6 +2463,7 @@ fn launch_instance_graph(
         &mut buffers,
         allocator,
         scratch,
+        #[cfg(slime_boot_selector)]
         block_devices,
         #[cfg(slime_boot_selector)]
         boot_runtime,
@@ -2754,10 +2564,10 @@ fn serve_instance_graph(
     buffers: &mut SharedBufferTable,
     allocator: &mut ObjectAllocator,
     scratch: &ScratchPage,
-    // The block devices attached and brought up (P5.4.2c, P5.4.3). Empty on
-    // every machine without a disk — a `BlockTransact` then answers a bounded
-    // refusal — and up to `MAX_BLOCK_DEVICES` when M6.7's two are present.
-    block_devices: &mut BlockDevices,
+    // The block devices, needed here only by the selector variant's promotion
+    // path. Component block traffic reaches the console thread, which owns
+    // the tables (B43), so the service loop no longer touches them.
+    #[cfg(slime_boot_selector)] block_devices: &mut BlockDevices,
     #[cfg(slime_boot_selector)] boot_runtime: &mut boot_selector::BootRuntime,
 ) {
     sel4::debug_println!(
@@ -3022,16 +2832,6 @@ fn serve_instance_graph(
             // the driver. Partitioning, the object store, generations, and
             // recovery all sit above it in userspace, exactly as they do on the
             // oracle.
-            Operation::BlockTransact => {
-                ipc::reply(serve_block_transact(
-                    graph,
-                    block_devices,
-                    windows.bound(id),
-                    scratch,
-                    id,
-                    &words,
-                ));
-            }
             // A clean exit is a send, not a call: the task is suspended rather
             // than replied to.
             Operation::Exit => {
