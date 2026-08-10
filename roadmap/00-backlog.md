@@ -63,12 +63,26 @@ CSpace audit caught immediately. Child CNodes are six bits.
 The root has one blocking dispatcher (`ipc::recv_request(endpoint)` at
 `slime-root/src/main.rs`), so routing `debug_write` there was tried and hangs
 every component on its first line — reverted. Closing this needs a second
-dispatcher, and the obstacle is concrete rather than a blanket "single-threaded"
-caveat: the `DebugWrite` handler reads the caller's transfer window and the
-root's single `ScratchPage`, both shared with the main dispatcher. A console
-thread therefore needs its own scratch mapping and a rule for concurrent window
-reads before it can serve anything. Two `SAFETY` comments and eleven statics in
-`main.rs` rest on the current assumption and would need re-auditing alongside.
+dispatcher. Two of the three obstacles turn out to be small; the third is a
+real design decision:
+
+- **Scratch page — solved by construction.** `with_window_mapped` maps a
+  caller's frame into the root's own VSpace at `ScratchPage::addr()`, so two
+  threads sharing one scratch address would collide. But scratch pages are just
+  claimed root-image pages and the root already claims four (`FREE_PAGE`, two
+  `FOUNDATION_PAGES`, `DEVICE_PAGE`). A console thread claims its own.
+- **The statics — mostly not shared.** Of the eleven in `main.rs`, the console
+  path touches none: it needs its endpoint, its scratch page, and the window
+  table. The blanket "root task is single-threaded" comment overstates the
+  coupling.
+- **`WindowTable` — the actual blocker.** `DebugWrite` resolves the caller's
+  window through `WindowTable::bound` (`&self`), while the main dispatcher
+  mutates the same table at five sites (`declare`, `release`). One concurrent
+  reader against five writers needs a stated synchronization contract — whether
+  the console thread gets its own view, the table becomes lock-protected, or
+  window binding moves behind the console endpoint too. That choice is the work,
+  and it should be made deliberately rather than improvised.
+
 A bound notification does not substitute: it signals, and the console still
 needs its own receive to carry the payload.
 
