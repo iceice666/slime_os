@@ -138,25 +138,46 @@ The CSpace guard was then computed correctly —
 observed as `guard_bits=52` against an endpoint CPtr of `0x418`, both right —
 and the thread still cap-faults on its first invocation.
 
-**The remaining requirement is thread-local storage, and it needs upstream
-work.** With `has-thread-local` the crate's IPC-buffer slot is
-`#[thread_local]`, so it is addressed through `tpidr`. `sel4-runtime-common`
-installs a TLS region for the *initial* thread only, from `PT_TLS`, and its
-`tls` module exposes no public API — a second thread has no TLS block, so the
-slot it writes and the slot the syscall reads are not the same memory.
+**The remaining requirement is thread-local storage, and the blocker is in the
+image loader.** With `has-thread-local` the crate's IPC-buffer slot is
+`#[thread_local]`, addressed through `tpidr`, and only the initial thread gets
+a TLS block. `sel4-runtime-common::tls` has no public API for a second one —
+but `sel4-initialize-tls` does: `TlsImage::with_initialize_on_stack` allocates
+the reservation on the calling thread's stack and sets the thread pointer,
+which is exactly what the runtime itself calls. An earlier note here said no
+such API existed; that was wrong.
+
+Wired up (deps added, `PT_TLS` located, thread pointer installed through
+`seL4_TCB_SetTLSBase` because `seL4_SetTLSBase` is gated on
+`SET_TLS_BASE_SELF`, which this kernel config does not set), the thread gets
+one step further and fails with:
+
+    SLIME_ROOT FATAL console thread: no PT_TLS segment among 5 headers
+
+The built ELF has six program headers and `PT_TLS` is among them
+(`readelf -l` shows `TLS 0x178b00 0x378b00`). The *running image* has five.
+`sel4-kernel-loader-add-payload` copies only `PT_LOAD` segments
+(`crates/sel4-kernel-loader/add-payload/src/utils.rs:29`), so the root task's
+TLS *data* is inside a loaded segment but the header describing its size and
+alignment is gone, and nothing at runtime can reconstruct the reservation
+layout.
 
 So B41 needs one of:
 
-- a way to install a TLS region for a second thread, which means a public API
-  in `sel4-runtime-common::tls` (upstream change);
+- `add-payload` to carry `PT_TLS` through (upstream change), after which the
+  console thread should work as written;
+- or the TLS image described some other way the root can read — the layout is
+  four words, so a build-time constant is conceivable but duplicates what the
+  ELF already says;
 - or `non-thread-local-state` *plus* an IPC-buffer slot per thread, which the
-  crate does not model — the feature selects the token guarding one global
+  crate does not model: the feature selects the token guarding one global
   slot, not the number of slots.
 
 Everything on the slime side is done and was verified working: the console
 endpoint is provisioned per process and audited, the thread starts and is
-scheduled, its stack, IPC buffer frame, scratch page, CSpace guard, and
-endpoint CPtr are all correct. What is missing is beneath them.
+scheduled, and its stack, IPC buffer frame, scratch page, CSpace guard
+(`guard_bits=52`), endpoint CPtr (`0x418`), and TLS installation path are all
+correct. What is missing is beneath them.
 
 The dispatcher experiment was reverted, and so was the target pin: with
 `has-thread-local` the IPC-buffer slot becomes `#[thread_local]`, which is what
