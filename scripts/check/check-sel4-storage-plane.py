@@ -270,7 +270,7 @@ def check_transcript(transcript: str) -> None:
         fail(f"{completions} instances ran the scenario, expected 1")
     # The root's own record of what it served, so the component's claims are
     # corroborated by the mediation rather than only self-reported.
-    served = re.findall(r"SLIME_GRAPH block served task=\d+ op=(\d+) lba=\d+ status=(-?\d+)", transcript)
+    served = re.findall(r"SLIME_GRAPH block served task=\d+ device=\d+ op=(\d+) lba=\d+ status=(-?\d+)", transcript)
     if not any(op == "1" and status == "0" for op, status in served):
         fail("the root served no successful read")
     if not any(op == "2" and status == "0" for op, status in served):

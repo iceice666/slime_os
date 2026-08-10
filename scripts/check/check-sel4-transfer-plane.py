@@ -97,7 +97,7 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     (
         # `ephemeral` state does not travel; `immutable` travels read-only.
         "state travelled only where the source declared it may",
-        r"\[sel4-transfer-probe\] state travels entries=1 read-only=1",
+        r"\[sel4-transfer-probe\] source-state travel entries=1 read-only=1",
     ),
     (
         # Pending, not promoted: the known-good root is intact, which is what

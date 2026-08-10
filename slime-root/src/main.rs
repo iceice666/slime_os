@@ -2162,8 +2162,11 @@ fn serve_block_transact(
             (-1i32, 0)
         }
     };
+    // The device index is part of the record: a plane holding two device
+    // capabilities cannot otherwise tell which one answered, and "the right
+    // device served this" is exactly what multi-device selection claims.
     sel4::debug_println!(
-        "SLIME_GRAPH block served task={} op={} lba={} status={status} sectors={sectors_done}",
+        "SLIME_GRAPH block served task={} device={index} op={} lba={} status={status} sectors={sectors_done}",
         id.0,
         request.op,
         request.lba,
@@ -5021,6 +5024,8 @@ fn construct_child(
         release_child(tasks, windows, graph, buffers, allocator, id);
         return Err(IpcError::BadCapability);
     };
+    // Counts the block devices placed into *this* child, in declaration order.
+    let mut block_index = 0u8;
     for index in 0..child.binding_count() {
         let Ok(binding) = generation.binding(child, index) else {
             release_child(tasks, windows, graph, buffers, allocator, id);
@@ -5035,9 +5040,22 @@ fn construct_child(
         {
             continue;
         }
-        // Same construction the boot path uses for a declared binding.
+        // Same construction the boot path uses for a declared binding,
+        // including its device renumbering: `declared_resource` answers
+        // `Block { device: 0 }` for every block grant, because only the
+        // installer knows how many it has already placed. A component holding
+        // two device capabilities would otherwise see both resolve to device
+        // 0, and its second device would silently be its first.
         let Some((_, resource)) = declared_resource(grant.rights) else {
             continue;
+        };
+        let resource = match resource {
+            graph::Resource::Block { .. } => {
+                let device = block_index;
+                block_index = block_index.saturating_add(1);
+                graph::Resource::Block { device }
+            }
+            other => other,
         };
         let capability = graph::Capability {
             resource,

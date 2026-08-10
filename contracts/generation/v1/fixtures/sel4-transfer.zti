@@ -41,12 +41,31 @@
       transferable = false;
     };
     {
+      name = "transfer-a-receiver-idle";
+      rights = [
+        "blockRead";
+        "blockWrite";
+      ];
+      source = "sel4-transfer-probe-idle";
+      target = "sel4-transfer-probe-idle";
+      transferable = false;
+    };
+    {
       name = "transfer-b-source";
       rights = [
         "blockRead";
       ];
       source = "sel4-transfer-probe";
       target = "sel4-transfer-probe";
+      transferable = false;
+    };
+    {
+      name = "transfer-b-source-idle";
+      rights = [
+        "blockRead";
+      ];
+      source = "sel4-transfer-probe-idle";
+      target = "sel4-transfer-probe-idle";
       transferable = false;
     };
     {
@@ -103,6 +122,26 @@
       health = "optional";
       name = "sel4-transfer-probe";
       owner = "init";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "transfer-a-receiver-idle";
+          slot = 1;
+        };
+        {
+          grant = "transfer-b-source-idle";
+          slot = 2;
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "sel4-transfer-probe";
+      health = "optional";
+      name = "sel4-transfer-probe-idle";
+      owner = "root";
     };
   ];
   mintedBindings = [
