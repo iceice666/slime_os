@@ -4687,7 +4687,11 @@ fn preflight_spawn_grants(
                 (minted.slot, minted.rights, minted.name)
             }
         };
-        if request.rights & !ceiling != 0 {
+        // A request carrying no rights would install an inert capability into
+        // the slot the declaration reserved, consuming it without conveying
+        // authority. A declaration always names a nonzero ceiling, so an empty
+        // request is a malformed spawn rather than a narrowing.
+        if request.rights == 0 || request.rights & !ceiling != 0 {
             sel4::debug_println!(
                 "SLIME_GRAPH spawn preflight binding={label} index={index} reason=declared-rights requested={:#x} declared={:#x}",
                 request.rights,

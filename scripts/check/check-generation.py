@@ -346,7 +346,11 @@ def check_generation(data: bytes, expected_identity: bytes | None = None) -> dic
     previous_minted = ""
     seen_minted_slots: set[tuple[int, int]] = set()
     for index in range(minted_bindings):
-        name_offset, owner, holder, slot, rights, flags = GENERATION_MINTED_BINDING.unpack_from(data, minted_binding_offset + index * GENERATION_MINTED_BINDING.size)
+        record = minted_binding_offset + index * GENERATION_MINTED_BINDING.size
+        name_offset, owner, holder, slot, rights, flags = GENERATION_MINTED_BINDING.unpack_from(data, record)
+        # The struct's `4x` pad discards the reserved tail, which the decoder
+        # requires to be zero. Assert it here so the two agree.
+        require(not any(data[record + 28 : record + GENERATION_MINTED_BINDING.size]), "BadMintedBinding")
         name = read_string(data, strings_offset, strings_len, name_offset)
         require(name > previous_minted, "NonCanonicalMintedBindings")
         require(owner < instances and holder < instances and slot < 64 and flags == 0, "BadMintedBinding")
