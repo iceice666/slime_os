@@ -263,16 +263,30 @@ fn generate_command_profile(manifest_dir: &str) {
             (*command, object, slot)
         })
         .collect::<Vec<_>>();
-    let rpc_slot = related_binding_slot(
-        &manifest,
-        profile_instance_name,
-        launcher,
-        &["send", "recv"],
-    )
-    .expect("command RPC binding");
-    let shared_buffer_factory_slot =
-        binding_with_right_slot(&manifest, profile_instance_name, "bufferCreate")
-            .expect("command shared-buffer binding");
+    // `spawn-service.rs` is the only consumer of this file and resolves both
+    // slots in its own CSpace, so they must come from whichever instance runs
+    // it. Where the spawn service owns the command profile that is the profile
+    // instance; where a client owns one, the spawn service is the launcher
+    // serving it. Deriving from the wrong side yields another instance's slot
+    // numbering, which agrees only while the two share one layout.
+    // Identify the consumer by the executable it runs, not by its role in the
+    // profile: `launcher` is whoever *sources* the executable grants, which may
+    // be the instance that spawned the service rather than the service itself.
+    let consumer = manifest
+        .split("\n    {\n")
+        .skip(1)
+        .find(|block| field(block, "executable") == Some("spawn-service"))
+        .and_then(|block| field(block, "name"))
+        .unwrap_or(profile_instance_name);
+    let peer = if consumer == profile_instance_name {
+        launcher
+    } else {
+        profile_instance_name
+    };
+    let rpc_slot = related_binding_slot(&manifest, consumer, peer, &["send", "recv"])
+        .expect("command RPC binding");
+    let shared_buffer_factory_slot = binding_with_right_slot(&manifest, consumer, "bufferCreate")
+        .expect("command shared-buffer binding");
     let generated = entries
         .iter()
         .map(|(name, object, slot)| format!("    (b\"{name}\", b\"{object}\", {slot}),\n"))
