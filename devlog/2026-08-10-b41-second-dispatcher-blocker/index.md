@@ -4,7 +4,7 @@
 |---|---|
 | Date | 2026-08-10 |
 | Kind | Audit |
-| Status | Root-caused |
+| Status | Verified |
 | Scope | `deps/rust-sel4/crates/sel4/src/{state/mod.rs,state/token.rs,syscalls.rs}`, `deps/rust-sel4/crates/sel4-kernel-loader/{add-payload/src/utils.rs,payload-types/src/lib.rs}`, `deps/rust-sel4/support/targets/aarch64-sel4-roottask*.json`, `slime-root/src/main.rs` |
 | Roadmap | B41, B43, B44, B45 |
 | Gates | `just sel4_boot_check` |
@@ -13,11 +13,16 @@
 
 ## Summary
 
-Four backlog items need a second receiver in the root task. This entry records
-why there cannot be one yet, with the experiment run to the point of failure on
-both candidate targets. The obstruction is in `deps/rust-sel4`, a pinned
-vendored dependency, and it is different on each target. Everything on the
-slime side works; the tree carries none of the experiment.
+Four backlog items need a second receiver in the root task. This entry recorded
+why there could not be one, with the experiment run to failure on both
+candidate targets — and then found the route that works. The three failures
+below are all real and all avoidable: none of them was the problem, because the
+ambient IPC-buffer slot never had to be used at all.
+
+**Resolved.** `Cap::with` attaches an invocation context to a capability, so
+the console thread names its own IPC buffer on every invocation and touches no
+ambient state. No target change, no TLS, no vendor patch. See the correction at
+the end.
 
 ## Observable symptom
 
@@ -68,10 +73,10 @@ effectively never available.
 
 ## Changes
 
-None. The experiment was reverted in full, including a target pin that was
-briefly committed and then reverted: `has-thread-local` is precisely what
-creates the TLS requirement, so keeping it would have left a dependency change
-that helps nothing and moves the ground under the other route.
+The three attempts described above were reverted in full, including a target
+pin that was briefly committed and then reverted: `has-thread-local` is
+precisely what creates the TLS requirement. The working route landed
+separately; see the correction.
 
 ## Verification
 
@@ -89,8 +94,9 @@ that helps nothing and moves the ground under the other route.
   **Rationale:** both fixes are real and neither is large in isolation — a
   payload-format field, or a narrower borrow around the receive syscall — but
   both change a pinned dependency's behaviour or wire format, and the pin
-  exists so that the kernel, toolchain, and target are reproducible. Changing
-  it is a decision about the project's dependency posture, not a coding step.
+  exists so that the kernel, toolchain, and target are reproducible.
+  **Outcome:** correct call, and it forced the search that found `Cap::with`.
+  Patching the vendor would have worked and been worse.
 
 - **Decision:** record the whole experiment rather than only its conclusion.
   **Rationale:** three separate walls were hit, and two of my own earlier notes
@@ -118,3 +124,28 @@ that helps nothing and moves the ground under the other route.
   `sel4-kernel-loader/add-payload/src/utils.rs:29` (segment filter),
   `sel4-kernel-loader/payload-types/src/lib.rs:56` (`UserImageInfo`).
 - Related roadmap items: `roadmap/00-backlog.md` B41, B43, B44, B45.
+
+## Corrections
+
+**2026-08-10 — the blocker was avoidable, and this entry's conclusion was
+wrong.** Every attempt above assumed the console thread had to use the `sel4`
+crate's *ambient* IPC-buffer slot, and then fought over how that slot is
+discovered: per-thread via TLS, or globally via a token. Both framings accept
+the premise.
+
+`Cap::with(context)` rejects it. A `Cap` is generic over an invocation context,
+`&mut IpcBuffer` implements `InvocationContext`, and `Cap::with` is public — so
+a capability can carry the buffer to use, and the ambient slot is never
+consulted. Two call sites needed it: `ipc::recv_console`, and
+`transfer_window::read_staged_array_with` for mapping the caller's staged
+window, which is itself a capability invocation.
+
+With that, the console dispatcher runs on the unmodified `-minimal` target with
+no TLS, no vendor patch, and no target pin. `DebugWrite` is now absent from the
+universal ABI and sixteen plane gates pass.
+
+The three failures above are left as recorded. They are why the search
+continued, and each names a real property of the runtime worth knowing: the
+loader drops `PT_TLS`, the state features select a token rather than a slot
+count, and a blocked receive holds the ambient borrow. What was wrong was the
+conclusion drawn from them.

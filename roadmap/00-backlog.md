@@ -26,22 +26,13 @@ condition observable.
 
 ### B41 — console and debug traffic still enters the universal root dispatcher
 
-**Status:** Open. **Class:** Unmasked architectural debt. **Depends on:** B40.
+**Status:** Open, console half landed 2026-08-10. **Class:** Unmasked
+architectural debt. **Depends on:** B40.
 
-**Problem:** `DebugWrite` and console/input-adjacent control share the same
+**Problem:** `DebugWrite` and console/input-adjacent control shared the same
 badged root endpoint and dispatcher as lifecycle, storage, and fabric traffic.
-A noisy client therefore consumes the highest-priority root service loop and a
-console defect shares the system-wide dispatcher fault domain.
-
-**Evidence:** `slime-root/src/ipc.rs::Operation` includes `DebugWrite` and
-`InputRead`; components call the matching wrappers in
-`components/runtime/src/syscall.rs` rather than a declared console/input
-service endpoint.
-
-**Fix:** Provision dedicated console/debug and input service endpoints through
-generation v5 and cut clients to direct `Call`/`ReplyRecv` or one-way endpoint
-traffic as appropriate. Remove the migrated operation labels, root handlers,
-and runtime fallback in the same change.
+A noisy client therefore consumed the highest-priority root service loop and a
+console defect shared the system-wide dispatcher fault domain.
 
 **Exit condition:** `DebugWrite` and `InputRead` are absent from the universal
 root operation ABI; capability denial is enforced by missing service CPtrs;
@@ -49,281 +40,47 @@ console output, refused input, scripted Dango input, and root boot diagnostics
 pass `just sel4_root_boot_check`, `just sel4_input_check`, and `just
 sel4_dango_check`. A gate-control mutation that restores a root fallback fails.
 
-**Half landed 2026-08-10.** Every process now has a console/debug endpoint
-object of its own: the plan declares it as a `SERVICE_CONSOLE` service binding,
-the decoder resolves it into `ChildSlotPlan`, and the root mints it into each
-child at construction. Write-only on both sides of the trust boundary, since
-every process shares one console dispatcher and a receiver could dequeue
-another's output. The slot is 32, above every slot a generation grant can name
-— grant slots are the component's own numbering and start at 0, so a low fixed
-slot collided with declared authority in every migrated fixture, which the B40
-CSpace audit caught immediately. Child CNodes are six bits.
+**Console half landed 2026-08-10.** `DebugWrite` is gone from `Operation`, from
+both root handlers, and from the runtime's root-endpoint path. Every process
+holds a write-only console endpoint at a declared slot, and a second root
+thread receives on it. `just sel4_root_boot_check`, `just sel4_input_check`,
+`just sel4_dango_check`, and thirteen other plane gates pass.
 
-**Remaining, and why it is not landed:** nothing receives on the new endpoint.
-The root has one blocking dispatcher (`ipc::recv_request(endpoint)` at
-`slime-root/src/main.rs`), so routing `debug_write` there was tried and hangs
-every component on its first line — reverted. Closing this needs a second
-dispatcher. Two of the three obstacles turn out to be small; the third is a
-real design decision:
+The obstacle was never scheduling or capabilities — it was the `sel4` crate's
+ambient IPC-buffer slot. There is one per address space and `recv_with_mrs`
+holds it borrowed for as long as it blocks, so a second thread using it
+deadlocks on the borrow rather than on the endpoint. Three routes were tried
+and abandoned first: a thread-local target (whose images lose their `PT_TLS`
+header in the loader), `non-thread-local-state` (which selects the token
+guarding the slot, not the number of slots), and `set_ipc_buffer` on the new
+thread (which contends for the same slot). The answer is `Cap::with`: a
+capability can carry its own invocation context, so the console thread names
+its buffer on every invocation and touches no ambient state.
 
-- **Scratch page — solved by construction.** `with_window_mapped` maps a
-  caller's frame into the root's own VSpace at `ScratchPage::addr()`, so two
-  threads sharing one scratch address would collide. But scratch pages are just
-  claimed root-image pages and the root already claims four (`FREE_PAGE`, two
-  `FOUNDATION_PAGES`, `DEVICE_PAGE`). A console thread claims its own.
-- **The statics — mostly not shared.** Of the eleven in `main.rs`, the console
-  path touches none: it needs its endpoint, its scratch page, and the window
-  table. The blanket "root task is single-threaded" comment overstates the
-  coupling.
-- **`WindowTable` — the actual blocker, and narrower than it looks.**
-  `DebugWrite` resolves the caller's window through `WindowTable::bound`
-  (`&self`), while the main dispatcher mutates the table at four sites. But a
-  window is *declared once at construction and released once at teardown* —
-  never per request — so a console thread racing the main dispatcher is racing
-  spawn and reclamation, not steady traffic. The contract needed is therefore
-  narrow: a console reader must not observe a window mid-release, which a
-  generation counter or a release handshake settles without locking the table.
-  That choice is the remaining work.
+The console does not reuse the universal operation table — `ipc::recv_console`
+decodes a descriptor and the fast registers, nothing else. Reusing `Operation`
+would have kept console traffic inside the ABI this removes it from. Label 5 is
+not a hole: the P5.1 fixture child was using it to collect the root's
+directive, never to write to a console, so it is `Operation::FixtureDirective`
+now.
 
-**Two single-threaded routes were tried and rejected on their merits
-(2026-08-10),** so the second dispatcher is not incidental:
+**Remaining: `InputRead`.** It is still a universal label, and it is not the
+same shape as `DebugWrite`. A console write is one-way and touches only the
+caller's window; an input read returns a value and needs `ScriptedInput`'s
+mutable per-task cursor plus the graph's capability table, both owned by the
+main dispatcher. Moving it to the console thread would recreate exactly the
+shared-mutable-state problem the `Cap::with` route avoided. The tractable
+shape is probably a third endpoint served by the main loop with the input
+cursor moved behind it, or input delivery inverted so the root pushes events
+to a declared notification rather than answering polls — the second is closer
+to what B46 wants for streams anyway, so it is worth deciding once.
 
-- *Poll the console endpoint with `seL4_NBRecv` before the blocking receive.*
-  The console is then starved whenever the main endpoint is busy, and a client
-  blocks on its send until the next poll — the same hang, less often.
-- *Send with `seL4_NBSend` so a client never blocks.* `nb_send` drops the
-  message when no receiver is waiting, which loses debug output. A console
-  that silently discards lines is worse than one that shares a dispatcher.
+A gate-control mutation proving a restored root fallback fails is also still
+owed; it cannot be written for `DebugWrite` alone while `InputRead` keeps the
+universal path alive.
 
-Inline-only routing was also measured and does not help: `fits_inline` carries
-16 bytes, and 548 of the 643 `debug_write` call sites in `components/bins`
-exceed that, so the window path cannot be avoided.
-
-**The second dispatcher was built, and the blocker is in rust-sel4, not slime
-(2026-08-10).** A `slime-root/src/console.rs` thread was written end to end —
-its own claimed scratch page, its own root-image stack and IPC buffer frame,
-`tcb_configure` against the root's own CSpace and VSpace, the root's priority
-so it round-robins with the service loop rather than starving. It *starts*:
-`SLIME_ROOT console dispatcher started` appears, and the graph continues.
-
-It then panics on its first invocation, at
-`deps/rust-sel4/crates/sel4/src/state/mod.rs:167`. The cause is structural:
-
-- `aarch64-sel4-roottask-minimal.json` sets no `has-thread-local`, so the
-  crate's IPC-buffer slot is one *global* rather than thread-local.
-- That global is guarded by a borrow flag (`SyncToken`, an `AtomicIsize`), not
-  a lock, and every syscall in `sel4/src/syscalls.rs` borrows it. A second
-  thread calling `set_ipc_buffer` gets `BorrowMutError` because the slot is
-  already owned.
-- `non-thread-local-state` was tried and does not help: it selects which token
-  type guards the slot, not how many slots exist.
-
-**The target half is fixed and landed.** `aarch64-sel4-roottask.json` differs
-from `-minimal` in exactly one key, `has-thread-local`, so the root task is now
-pinned to it (`sel4/pins.toml`). That is behaviour-neutral on its own — the pin
-check verifies the new hash and every gate still passes — and with it the
-console thread registers its IPC buffer successfully and the panic is gone.
-
-**What remains is the thread's CSpace guard.** With the buffer registered, the
-thread starts (`SLIME_ROOT console dispatcher started`, two tasks staged behind
-it) and then takes `Caught cap fault in send phase at address 0` on its first
-receive. `tcb_configure` was given `CNodeCapData::new(0, 0)` for the CSpace
-root; the child path computes `CNodeCapData::new(0, WORD_SIZE - size_bits)`
-from the CNode's own size, and the root CNode's size lives in bootinfo's
-`initThreadCNodeSizeBits`, which `sel4::BootInfo` exposes no accessor for. The
-fault endpoint was also left null, so the fault is fatal rather than reported.
-
-The CSpace guard was then computed correctly —
-`CNodeCapData::new(0, WORD_SIZE - bootinfo.inner().initThreadCNodeSizeBits)`,
-observed as `guard_bits=52` against an endpoint CPtr of `0x418`, both right —
-and the thread still cap-faults on its first invocation.
-
-**The remaining requirement is thread-local storage, and the blocker is in the
-image loader.** With `has-thread-local` the crate's IPC-buffer slot is
-`#[thread_local]`, addressed through `tpidr`, and only the initial thread gets
-a TLS block. `sel4-runtime-common::tls` has no public API for a second one —
-but `sel4-initialize-tls` does: `TlsImage::with_initialize_on_stack` allocates
-the reservation on the calling thread's stack and sets the thread pointer,
-which is exactly what the runtime itself calls. An earlier note here said no
-such API existed; that was wrong.
-
-Wired up (deps added, `PT_TLS` located, thread pointer installed through
-`seL4_TCB_SetTLSBase` because `seL4_SetTLSBase` is gated on
-`SET_TLS_BASE_SELF`, which this kernel config does not set), the thread gets
-one step further and fails with:
-
-    SLIME_ROOT FATAL console thread: no PT_TLS segment among 5 headers
-
-The built ELF has six program headers and `PT_TLS` is among them
-(`readelf -l` shows `TLS 0x178b00 0x378b00`). The *running image* has five.
-`sel4-kernel-loader-add-payload` copies only `PT_LOAD` segments
-(`crates/sel4-kernel-loader/add-payload/src/utils.rs:29`), so the root task's
-TLS *data* is inside a loaded segment but the header describing its size and
-alignment is gone, and nothing at runtime can reconstruct the reservation
-layout.
-
-**Both targets fail, for opposite reasons — this is the complete picture.**
-The `-minimal` target was retried after establishing that `single-threaded` is
-*not* enabled, so its token is a `SyncToken` two threads could share. It fails
-anyway, at the same `state/mod.rs:167`, and the reason is structural: there is
-one global IPC-buffer slot, and `recv_with_mrs` holds it *borrowed across the
-blocking syscall* (`syscalls.rs:151`). The main dispatcher is parked in
-`seL4_Recv` holding the borrow, so the console thread can never take it. On the
-thread-local target the slot would be per-thread and this would not arise — but
-there the thread has no TLS block, because the loader drops `PT_TLS`.
-
-So B41 needs one of:
-
-- `add-payload` to carry the TLS image description through (upstream change).
-  This is a payload *format* change, not a filter fix: `loadable_segments`
-  correctly copies only `PT_LOAD` — a `PT_TLS` segment is not separately
-  loadable — and the gap is that `PayloadInfo::user_image`
-  (`crates/sel4-kernel-loader/payload-types/src/lib.rs:56`) carries only the
-  region bounds, entry, and offset, with no field for the TLS image's vaddr,
-  filesz, memsz, and align. Adding one touches the payload types, the
-  `add-payload` writer, and the loader that hands the root task its bootinfo.
-  After that the console thread should work as written;
-- or the TLS image described some other way the root can read — the layout is
-  four words, so a build-time constant is conceivable but duplicates what the
-  ELF already says;
-- or an IPC-buffer slot per thread on a non-thread-local target, which the
-  crate does not model: the features select the *token* guarding one global
-  slot, not the number of slots, and a blocked receiver holds that slot's
-  borrow for as long as it waits.
-
-Both routes are changes to `deps/rust-sel4`, which is a pinned vendored
-dependency. That is the honest scope of B41's remainder, and of B43/B44/B45,
-which need the same second dispatcher.
-
-Everything on the slime side is done and was verified working: the console
-endpoint is provisioned per process and audited, the thread starts and is
-scheduled, and its stack, IPC buffer frame, scratch page, CSpace guard
-(`guard_bits=52`), endpoint CPtr (`0x418`), and TLS installation path are all
-correct. What is missing is beneath them.
-
-The dispatcher experiment was reverted, and so was the target pin: with
-`has-thread-local` the IPC-buffer slot becomes `#[thread_local]`, which is what
-makes a second thread need a TLS region it cannot get. Reverting leaves the
-root on `-minimal`, where the slot is one global — the configuration that will
-matter if the non-thread-local route is taken instead. Neither target helps
-without the missing piece, and the pin is a real dependency change, so the tree
-keeps the one that has been booting all along.
-
-A bound notification does not substitute: it signals, and the console still
-needs its own receive to carry the payload.
-
-Until then `DebugWrite` and `InputRead` remain on the universal ABI, so the
-exit condition is unmet — the endpoint exists and is enforced, but nothing
-uses it yet.
-
-**Gates unblocked 2026-08-10.** Both gates this exit condition names now pass, along
-with `just sel4_directory_check` and `just sel4_storage_check`, which shared
-one of the same causes. B41's own work — moving `DebugWrite` and `InputRead`
-off the universal root dispatcher — has not started.
-
-The three causes, none in the behaviour the gates test:
-
-- **The run token was undeclared.** Every probe plane's claim is that
-  generation-declared device authority alone does not run a probe; only the
-  instance `init` hands a run token proceeds. That token crosses a spawn
-  boundary, so it is a `MintedBinding`, and it was not declared — preflight
-  refused the spawn outright.
-- **The idle instance was undeclared.** The claim needs two instances of one
-  executable: the token-holding one and a root-launched copy that parks. Only
-  the first was declared, so `[<probe>] idle without a run token` could never
-  appear. `SLIME_GRAPH declared placed`, asserted by three gates, had no
-  emitter anywhere in the tree; it now comes from the root's self-loop install
-  path, the only point at which a child's own declared authority is placed.
-- **A received capability could land in slot 0.** The receive path allocated
-  from `free_slot_from(0)`, that slot number is reported to the receiver, and
-  every protocol carrying one reads 0 as "no capability". A forwarded
-  capability landing there was invisible to its new holder, which is what made
-  dango's composed launch fail validation with both capabilities transferred.
-
-Records: [`devlog/2026-08-10-b41-dango-plane-declarations/`](../devlog/2026-08-10-b41-dango-plane-declarations/index.md)
-and [`devlog/2026-08-10-probe-plane-run-tokens/`](../devlog/2026-08-10-probe-plane-run-tokens/index.md).
-
-**Historical — the two reds as first observed:**
-
-- `just sel4_dango_check` dies in `components/bins/build.rs:272`,
-  `expect("command RPC binding")` — `related_binding_slot` finds no send/recv
-  grant between the command launcher and its profile instance in
-  `contracts/generation/v1/fixtures/valid.zti`. Confirmed inherited by running
-  the gate with `valid.zti` restored from `3228eb6`: identical failure. The
-  file's only session change is two additive fields (`bootAction`,
-  `mintedBindings = []`), and `build.rs` last changed in `c489edf`.
-- `just sel4_input_check` exceeds its 180s bound without completing the plane.
-
-`sel4-dango.zti` and `sel4-input.zti` are also among the fixtures B39 left
-unmigrated. Resolve both reds before starting B41, so its own gate results mean
-something; a green suite is a precondition for milestone work.
-
-**Dango migration, partially landed 2026-08-10.** The fixture now declares what
-`init` actually hands each child, and the plane gets four components spawned
-and running where it previously could not build at all:
-
-- The `dango`↔`spawn-service` RPC edge was never declared, though `dango`
-  declares a `commandProfile` that can only be served over it. It is now a
-  grant bound by both ends, and `init` no longer mints a second channel that
-  would shadow it.
-- The console channel stays runtime-minted, declared as two `mintedBindings`.
-- `init` passed `spawn-service` its factories from a hardcoded slot 4, which
-  this plane's layout assigns to the endpoint factory; both now come from the
-  generated boot layout.
-- Slots are ordered by provenance: what the parent passes occupies the lowest
-  declared slots, since a spawn grant array is positional and the root ranks
-  requests against declarations by destination slot.
-
-**Build-script derivation, fixed 2026-08-10.** `components/bins/build.rs`
-derived `RPC_SLOT` and `SHARED_BUFFER_FACTORY_SLOT` from the instance owning
-the command profile, while `spawn-service.rs` — the only consumer of the
-generated `command_profile.rs` — resolves both in its own CSpace. Those
-coincide only while launcher and client share one slot numbering. The consumer
-is now identified by which instance runs the spawn service, giving `RPC_SLOT`
-2 and `SHARED_BUFFER_FACTORY_SLOT` 1 on the dango manifest, which is what that
-fixture declares.
-
-**Landed 2026-08-10.** The plane now runs end to end for the first launch:
-the shell reaches its prompt, `$(sysinfo)` resolves through the profile,
-`spawn-service` launches it, the child reports `result:exit:0`, and `init`
-prints `dango plane complete` with every component exiting 0. What was
-undeclared: `spawn-service`'s executables resolved in the wrong CSpace, the
-dango RPC channel pre-created twice (declared edge shadowing init's minted
-halves), the per-launch context endpoint, and the composed launch's forwarded
-working directory and stdin. `sysinfo` and `echo-agent` are now owned by
-`spawn-service`, which is what admits its exec bindings.
-
-The gate asserted `spawn-request:accepted` before the child's own marker. The
-child runs first by construction — `spawn` starts the thread, then the service
-sends the launch context and only afterwards replies — so that ordering
-asserted a race; the child's marker is required for presence, not position.
-
-**`just sel4_dango_check` passes (2026-08-10).** The composed second launch was
-refused because a received capability could land in slot 0: the receive path
-allocated with `free_slot_from(0)`, that slot number is reported to the
-receiver, and every protocol carrying one reads 0 as "no capability" — the
-spawn request's `received_caps` among them. The forwarded working directory or
-stdin endpoint was therefore invisible to the component it had just been given
-to. Every other runtime slot allocation in the root already searched from 1.
-
-**Superseded note — `init` holds two of the five
-capabilities `spawn-service` declares — its factories — while the RPC end and
-the two executables are root-installed, so spawn preflight's declared-count
-rule refuses the spawn. The working `sel4` fixture avoids this by sourcing
-those executables from `init`, which then holds and passes all five. Copying
-that shape into `sel4-dango.zti` is refused by the decoder at
-`grant_applies_to_instance`: `init` is root-owned, so it may not bind an `exec`
-grant targeting an instance it does not own, and the `sel4` fixture's
-equivalent grants target *executables* rather than instances. Closing this
-means restating dango's executable grants against executables, which changes
-which slots `spawn-service` and `dango` resolve and so needs their layouts
-re-derived together rather than edited slot by slot.
-
-Attempts to relax the preflight count rule instead were all refused by a
-sibling plane: excluding pre-created channels breaks `sel4_component_graph_check`
-(its `init` legitimately passes its own end of one), and excluding executables
-breaks it the other way (its `spawn-service` receives five). The rule is right;
-the dango fixture is what disagrees with it.
+Records: [`devlog/2026-08-10-b41-console-endpoint/`](../devlog/2026-08-10-b41-console-endpoint/index.md)
+and [`devlog/2026-08-10-b41-second-dispatcher-blocker/`](../devlog/2026-08-10-b41-second-dispatcher-blocker/index.md).
 
 ### B43 — block and durable-store clients still transact through root operation labels
 
