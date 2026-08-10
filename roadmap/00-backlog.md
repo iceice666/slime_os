@@ -226,6 +226,33 @@ sel4_store_check`, `just sel4_rollback_check`, `just
 sel4_recovery_plane_check`, and `just sel4_transfer_check` pass against the
 direct service path.
 
+**Five of six gates green (2026-08-10).** `sel4_device_check` and
+`sel4_storage_check` already passed; `sel4_store_check`,
+`sel4_rollback_check`, and `sel4_recovery_plane_check` were red for reasons
+outside B43's scope and now pass. Each storage plane makes the same claim every
+probe plane does — generation-declared device authority alone does not run a
+probe, only the instance `init` hands a run token proceeds — and neither the
+token nor the idle instance the claim compares against was declared. The
+recovery probe additionally did not compile: `&mut [u8]` reaches the
+`&mut [u8; N]` conversion only through a mutable borrow.
+
+**`sel4_transfer_check` remains red, and not on declarations.** The probe reads
+all sixteen manifest sectors successfully (`block served task=1 op=1 lba=1070
+status=0 sectors=1`, sixteen times) and then decodes `declared=0` where the
+same bytes read `1030` from the host. The manifest on disk is well-formed —
+magic `SLIMETR\0`, `total_len` 1030 at offset 232, metadata and payload offsets
+consistent — and the probe's slot layout, LBA constants, and `read_sector`
+implementation all match the recovery probe's, which now works. What differs is
+that this is the only plane reading through a *second* device capability, so
+the sector payload is not reaching the caller's buffer on the source device's
+path. The `SLIME_GRAPH block served` record carries no device index, which is
+the first thing to fix in diagnosing it.
+
+**B43's own work has not started:** `BlockTransact` and `StoreTransact` remain
+labels on the universal dispatcher, and moving them off shares B41's blocker —
+nothing receives on a second endpoint until the `WindowTable` contract is
+settled.
+
 ### B44 — generation and recovery policy still crosses the universal root dispatcher
 
 **Status:** Open. **Class:** Unmasked architectural debt. **Depends on:** B43.
