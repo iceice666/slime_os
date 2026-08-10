@@ -49,6 +49,53 @@ console output, refused input, scripted Dango input, and root boot diagnostics
 pass `just sel4_root_boot_check`, `just sel4_input_check`, and `just
 sel4_dango_check`. A gate-control mutation that restores a root fallback fails.
 
+**Blocked on two inherited reds (observed 2026-08-10).** Both gates this exit
+condition names fail before any B41 work, for reasons outside B41's scope:
+
+- `just sel4_dango_check` dies in `components/bins/build.rs:272`,
+  `expect("command RPC binding")` — `related_binding_slot` finds no send/recv
+  grant between the command launcher and its profile instance in
+  `contracts/generation/v1/fixtures/valid.zti`. Confirmed inherited by running
+  the gate with `valid.zti` restored from `3228eb6`: identical failure. The
+  file's only session change is two additive fields (`bootAction`,
+  `mintedBindings = []`), and `build.rs` last changed in `c489edf`.
+- `just sel4_input_check` exceeds its 180s bound without completing the plane.
+
+`sel4-dango.zti` and `sel4-input.zti` are also among the fixtures B39 left
+unmigrated. Resolve both reds before starting B41, so its own gate results mean
+something; a green suite is a precondition for milestone work.
+
+**Dango migration, partially landed 2026-08-10.** The fixture now declares what
+`init` actually hands each child, and the plane gets four components spawned
+and running where it previously could not build at all:
+
+- The `dango`↔`spawn-service` RPC edge was never declared, though `dango`
+  declares a `commandProfile` that can only be served over it. It is now a
+  grant bound by both ends, and `init` no longer mints a second channel that
+  would shadow it.
+- The console channel stays runtime-minted, declared as two `mintedBindings`.
+- `init` passed `spawn-service` its factories from a hardcoded slot 4, which
+  this plane's layout assigns to the endpoint factory; both now come from the
+  generated boot layout.
+- Slots are ordered by provenance: what the parent passes occupies the lowest
+  declared slots, since a spawn grant array is positional and the root ranks
+  requests against declarations by destination slot.
+
+**Remaining, and why it is not landed:** `components/bins/build.rs` derives
+`RPC_SLOT` and `SHARED_BUFFER_FACTORY_SLOT` from the *client* instance
+(`profile_instance_name`), while `spawn-service.rs` — the only consumer of the
+generated `command_profile.rs` — resolves both in its own CSpace. The two agree
+only while launcher and client share one slot numbering. Deriving them from the
+launcher instead fixes the dango plane and breaks `sel4_component_graph_check`,
+whose `sel4` manifest has a different launcher topology; a fallback that
+prefers the launcher's bindings also failed. Closing this needs the build
+script to identify the launcher's own bindings correctly in both fixtures,
+which is a build-time derivation change rather than a fixture edit.
+
+With the derivation fixed, the dango plane reaches all four components spawned,
+`[spawn-service] shared-buffer quota live`, and console exiting 0; `dango`
+then exits 1, which this plane expects by design.
+
 ### B42 — spawn and lifecycle control use ambient task IDs and the universal dispatcher
 
 **Status:** Open. **Class:** Unmasked architectural debt. **Depends on:** B40.

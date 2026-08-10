@@ -139,6 +139,16 @@
       transferable = false;
     };
     {
+      name = "dango-e-spawn-service-rpc";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "dango";
+      target = "spawn-service";
+      transferable = false;
+    };
+    {
       name = "spawn-service-shared-buffer-factory";
       rights = [
         "bufferCreate";
@@ -208,18 +218,22 @@
       bindings = [
         {
           grant = "spawn-service-echo-agent";
-          slot = 1;
-        };
-        {
-          grant = "init-endpoint-factory";
           slot = 3;
         };
         {
+          grant = "init-endpoint-factory";
+          slot = 0;
+        };
+        {
           grant = "spawn-service-shared-buffer-factory";
-          slot = 4;
+          slot = 1;
         };
         {
           grant = "spawn-service-sysinfo";
+          slot = 4;
+        };
+        {
+          grant = "dango-e-spawn-service-rpc";
           slot = 2;
         };
       ];
@@ -236,19 +250,23 @@
       bindings = [
         {
           grant = "dango-a-input";
-          slot = 1;
-        };
-        {
-          grant = "dango-b-cwd-root";
           slot = 2;
         };
         {
-          grant = "dango-c-endpoint-factory";
+          grant = "dango-b-cwd-root";
           slot = 3;
         };
         {
-          grant = "dango-d-shared-buffer-factory";
+          grant = "dango-c-endpoint-factory";
           slot = 4;
+        };
+        {
+          grant = "dango-d-shared-buffer-factory";
+          slot = 5;
+        };
+        {
+          grant = "dango-e-spawn-service-rpc";
+          slot = 0;
         };
       ];
       dependencies = [
@@ -289,7 +307,39 @@
       owner = "init";
     };
   ];
-  mintedBindings = [];
+  mintedBindings = [
+    {
+      name = "console-rpc-half";
+      owner = "init";
+      holder = "console";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 0;
+      transferable = false;
+    };
+    {
+      name = "console-buffer-factory";
+      owner = "init";
+      holder = "console";
+      rights = [
+        "bufferCreate";
+      ];
+      slot = 1;
+      transferable = false;
+    };
+    {
+      name = "dango-console-half";
+      owner = "init";
+      holder = "dango";
+      rights = [
+        "send";
+      ];
+      slot = 1;
+      transferable = false;
+    };
+  ];
   interfaceSchemas = [];
   objects = [
     {

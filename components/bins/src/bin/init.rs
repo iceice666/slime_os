@@ -2465,24 +2465,21 @@ fn drive_powerbox_plane() {
 /// `drive_sample_plane` fixes the lender's three.
 fn drive_dango_plane() {
     let plane: &[u8] = b"dango";
-    // This plane's layout places the shared-buffer factory at 4; the base
-    // layout's `SHARED_BUFFER_FACTORY_SLOT` is a different number, and passing
-    // it would hand children a slot init does not hold.
-    const DANGO_BUFFER_FACTORY_SLOT: u32 = 4;
+    // The generation places this plane's factories at ENDPOINT_FACTORY_SLOT
+    // and SHARED_BUFFER_FACTORY_SLOT; both come from the generated boot layout
+    // so init cannot pass a child a slot it does not itself hold.
 
     // Console first: dango sends its output there, and the channel must exist
     // before either end is granted.
     let (console_side, dango_console) = slime_rt::endpoint_create(ENDPOINT_FACTORY_SLOT)
         .unwrap_or_else(|_| fail_plane(plane, b"console endpoint"));
-    let (spawn_side, dango_spawn) = slime_rt::endpoint_create(ENDPOINT_FACTORY_SLOT)
-        .unwrap_or_else(|_| fail_plane(plane, b"spawn endpoint"));
 
     // `console.rs`: RPC end, then the shared-buffer factory.
     let console = slime_rt::spawn(
         CONSOLE_SLOT,
         &[
             grant(console_side, RIGHT_SEND | RIGHT_RECV),
-            grant(DANGO_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
+            grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
         ],
     )
     .unwrap_or_else(|_| fail_plane(plane, b"spawn the console"));
@@ -2501,9 +2498,16 @@ fn drive_dango_plane() {
     // is what puts them there. Its endpoint and shared-buffer factories are its
     // own declared grants, landing above the executables at 3 and 4 — which is
     // exactly what `SHARED_BUFFER_FACTORY_SLOT = 4` in that component says.
+    // The dango<->spawn-service channel is a generation-declared edge, so the
+    // root pre-creates it and installs both ends from the grant. Init passes
+    // nothing: a runtime-minted half would land in the same slot and shadow
+    // the declared one.
     let spawn_service = slime_rt::spawn(
         SPAWN_SERVICE_SLOT,
-        &[grant(spawn_side, RIGHT_SEND | RIGHT_RECV)],
+        &[
+            grant(ENDPOINT_FACTORY_SLOT, RIGHT_ENDPOINT_CREATE),
+            grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
+        ],
     )
     .unwrap_or_else(|_| fail_plane(plane, b"spawn the spawn service"));
     slime_rt::debug_write(b"[init] spawn service spawned\n");
@@ -2525,17 +2529,11 @@ fn drive_dango_plane() {
     // So this composition cannot satisfy dango with the current order, and the
     // gap is recorded as B30 rather than papered over by renumbering a
     // component the oracle also builds.
-    let dango = slime_rt::spawn(
-        DANGO_SLOT,
-        &[
-            grant(dango_spawn, RIGHT_SEND | RIGHT_RECV),
-            grant(dango_console, RIGHT_SEND),
-        ],
-    )
-    .unwrap_or_else(|_| fail_plane(plane, b"spawn dango"));
+    let dango = slime_rt::spawn(DANGO_SLOT, &[grant(dango_console, RIGHT_SEND)])
+        .unwrap_or_else(|_| fail_plane(plane, b"spawn dango"));
     slime_rt::debug_write(b"[init] dango spawned\n");
 
-    for slot in [console_side, dango_console, spawn_side, dango_spawn] {
+    for slot in [console_side, dango_console] {
         if slime_rt::cap_drop(slot) < 0 {
             fail_plane(plane, b"release the plane's endpoints");
         }
