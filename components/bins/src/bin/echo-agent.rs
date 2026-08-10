@@ -7,7 +7,7 @@ use slime_rt::{ERR_PEER_DEAD, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_DIRECTORY_PA
 
 slime_rt::entry!(main);
 
-fn main() {
+fn main(_startup_arg: u32) {
     let context = launch_context::receive();
     let cwd_slot = 1;
     let stdin_slot =

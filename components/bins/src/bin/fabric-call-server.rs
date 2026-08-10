@@ -6,6 +6,6 @@ mod scenario;
 
 slime_rt::entry!(main);
 
-fn main() {
+fn main(_startup_arg: u32) {
     scenario::run_server();
 }

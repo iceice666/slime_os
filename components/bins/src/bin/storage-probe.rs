@@ -15,7 +15,7 @@ const EXPECTED_DIGEST: [u8; 32] = [
 
 slime_rt::entry!(main);
 
-fn main() {
+fn main(_startup_arg: u32) {
     let mut sector = [0u8; 512];
 
     let request = WireBlockRequest {

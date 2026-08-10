@@ -41,7 +41,7 @@ fn fail(reason: &[u8]) -> ! {
     slime_rt::exit(1)
 }
 
-fn main() {
+fn main(_startup_arg: u32) {
     let mut route_name = [0u8; 32];
     route_name[..ROUTE_NAME.len()].copy_from_slice(ROUTE_NAME.as_bytes());
     let request = WireFabricRequest {

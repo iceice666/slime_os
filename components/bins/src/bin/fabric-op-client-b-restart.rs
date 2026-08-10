@@ -6,7 +6,7 @@ mod scenario;
 
 slime_rt::entry!(main);
 
-fn main() {
+fn main(_startup_arg: u32) {
     if slime_components::fabric_boot::active() {
         // The replacement exists so the operation worker has a channel to park
         // on while client B's slot is vacant — that source is part of the

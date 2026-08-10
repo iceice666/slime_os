@@ -26,7 +26,7 @@ const FACTORY_SLOT: u32 = 0;
 /// the server, the clock, then client B's replacement channel.
 const FIRST_CONTROL_SLOT: u32 = 1;
 
-fn main() {
+fn main(_startup_arg: u32) {
     operation_broker::Broker::new(
         FACTORY_SLOT,
         [FIRST_CONTROL_SLOT, FIRST_CONTROL_SLOT + 1],

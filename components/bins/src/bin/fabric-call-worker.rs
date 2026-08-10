@@ -35,7 +35,7 @@ const BUFFER_FACTORY_SLOT: u32 = 1;
 /// *is* the caller's identity.
 const FIRST_CONTROL_SLOT: u32 = 2;
 
-fn main() {
+fn main(_startup_arg: u32) {
     call_broker::Broker::new(
         FACTORY_SLOT,
         BUFFER_FACTORY_SLOT,

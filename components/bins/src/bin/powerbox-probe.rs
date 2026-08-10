@@ -14,7 +14,7 @@ const RIGHT_TRANSFER: u32 = 1 << 2;
 const RIGHT_DIRECTORY_READ: u32 = 1 << 19;
 const RIGHT_DIRECTORY_WRITE: u32 = 1 << 20;
 
-fn main() {
+fn main(_startup_arg: u32) {
     let mut root = [0u8; 32];
     let mut scope = [0u8; slime_rt::MAX_DIRECTORY_PATH];
     if slime_rt::directory_inspect(RPC_SLOT, RIGHT_DIRECTORY_READ, &mut root, &mut scope)

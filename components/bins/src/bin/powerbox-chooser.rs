@@ -17,7 +17,7 @@ const RIGHT_DIRECTORY_READ: u32 = 1 << 19;
 const ALLOWED_FILE_RIGHTS: u32 = RIGHT_DIRECTORY_READ | RIGHT_TRANSFER;
 const SELECTED_PATH: &[u8] = b"note";
 
-fn main() {
+fn main(_startup_arg: u32) {
     slime_rt::debug_write(b"[powerbox] chooser ready\n");
     let mut event_id = 1u64;
     for _ in 0..3 {

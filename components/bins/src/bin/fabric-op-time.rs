@@ -22,7 +22,7 @@ const CONTROL_SLOT: u32 = 0;
 /// Its half of the phase channel client A signals on.
 const PHASE_SLOT: u32 = 1;
 
-fn main() {
+fn main(_startup_arg: u32) {
     if slime_components::fabric_boot::active() {
         // The full-graph boot carries no phase channel: phases exist to order a
         // scenario's transcript, and the boot gate runs no scenario. The clock

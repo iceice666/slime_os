@@ -55,7 +55,12 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     ("only root-owned init was staged", r"SLIME_GRAPH staged task=0 instance=init executable=init grants=8 bindings=8 window=0x[0-9a-f]+ frames=[1-9]\d* tables=[1-9]\d* entry=0x[0-9a-f]+"),
     ("the executable catalogue remained available to spawn", r"SLIME_GRAPH staged instances=1 root_autostart=1 loadable_executables=5 slimecm=0 wrong_target=0 unrecognized=0"),
     ("only init was root-activated", r"SLIME_GRAPH activated instances=1"),
-    ("init bound its transfer window", r"SLIME_GRAPH window bound task=0 base=0x236000 len=4096"),
+    # Init's window sits above its own image, so the address is a function of
+    # how large `init.rs` compiles to and moves whenever its code changes. The
+    # property under test is that init bound a one-page window at all; the two
+    # child addresses below stay exact, because those images are not edited by
+    # work on init's composition.
+    ("init bound its transfer window", r"SLIME_GRAPH window bound task=0 base=0x[0-9a-f]+ len=4096"),
     ("init began the declared graph", r"\[init\] launching component graph"),
     ("init authorized console through its executable binding", r"SLIME_GRAPH spawn authorized task=0 slot=1 component=console grants=1"),
     ("init spawned console as instance task 1", r"SLIME_GRAPH spawned task=0 child=1 component=console grants=1 channels=1 handle=\d+"),

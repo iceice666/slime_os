@@ -166,7 +166,192 @@ fn storage_executable_slot() -> u32 {
     }
 }
 
-fn main() {
+/// The authenticated boot action, as the root delivers it in this thread's
+/// first C parameter. The numbering is `boot_contracts::generation::BootAction`
+/// and is fixed by the generation contract, not by this file.
+mod boot_action {
+    pub const PRODUCT: u32 = 1;
+    pub const BOOT: u32 = 2;
+    pub const CALL: u32 = 3;
+    pub const CHANNEL: u32 = 4;
+    pub const CROSSING: u32 = 5;
+    pub const DANGO: u32 = 6;
+    pub const DIRECTORY: u32 = 7;
+    pub const FILESYSTEM: u32 = 8;
+    pub const GENERATION: u32 = 9;
+    pub const INPUT: u32 = 10;
+    pub const LOAN: u32 = 11;
+    pub const OPERATION: u32 = 12;
+    pub const POWERBOX: u32 = 13;
+    pub const QOS: u32 = 14;
+    pub const RECLAMATION: u32 = 15;
+    pub const RECOVERY: u32 = 16;
+    pub const ROLLBACK: u32 = 17;
+    pub const SAMPLE: u32 = 18;
+    pub const SPAWN: u32 = 19;
+    pub const STORAGE: u32 = 20;
+    pub const STORE: u32 = 21;
+    pub const STREAM: u32 = 22;
+    pub const SUPERVISION: u32 = 23;
+    pub const TRANSFER: u32 = 24;
+    pub const VISIBILITY: u32 = 25;
+}
+
+/// Compose the graph the generation selected.
+///
+/// The selector is authenticated generation data delivered at activation, so
+/// two builds of this image cannot disagree about which graph they boot: the
+/// image is byte-identical across every manifest and only the admitted
+/// `bootAction` differs.
+///
+/// Returns for `PRODUCT`, whose graph the caller launches; every other action
+/// runs its plane to completion and exits.
+fn compose_declared_graph(startup_arg: u32) {
+    use boot_action as action;
+    match startup_arg {
+        action::BOOT => drive_boot_plane(),
+        action::CHANNEL => {
+            drive_channel_plane();
+            slime_rt::debug_write(b"[init] channel plane complete\n");
+            slime_rt::exit(0)
+        }
+        action::LOAN => {
+            drive_loan_plane();
+            slime_rt::debug_write(b"[init] loan plane complete\n");
+            slime_rt::exit(0)
+        }
+        action::SPAWN => {
+            drive_spawn_plane();
+            slime_rt::debug_write(b"[init] spawn plane complete\n");
+            slime_rt::exit(0)
+        }
+        action::SAMPLE => {
+            drive_sample_plane();
+            slime_rt::debug_write(b"[init] sample plane complete\n");
+            slime_rt::exit(0)
+        }
+        action::STREAM | action::QOS => {
+            drive_stream_plane(startup_arg == boot_action::QOS);
+            slime_rt::debug_write(b"[init] fabric stream complete\n");
+            slime_rt::exit(0)
+        }
+        action::SUPERVISION => {
+            drive_supervision_plane();
+            slime_rt::debug_write(b"[init] supervision plane complete\n");
+            slime_rt::exit(0)
+        }
+        action::RECLAMATION => {
+            drive_reclamation_plane();
+            slime_rt::debug_write(b"[init] reclamation plane complete\n");
+            slime_rt::exit(0)
+        }
+        action::CROSSING => {
+            drive_crossing_plane();
+            slime_rt::debug_write(b"[init] crossing plane complete\n");
+            slime_rt::exit(0)
+        }
+        action::CALL => {
+            drive_call_plane();
+            slime_rt::debug_write(b"[init] call plane complete\n");
+            slime_rt::exit(0)
+        }
+        action::OPERATION => {
+            drive_operation_plane();
+            slime_rt::debug_write(b"[init] operation plane complete\n");
+            slime_rt::exit(0)
+        }
+        action::VISIBILITY => {
+            drive_visibility_plane();
+            slime_rt::debug_write(b"[init] visibility plane complete\n");
+            slime_rt::exit(0)
+        }
+        action::STORAGE => {
+            drive_storage_plane();
+            slime_rt::debug_write(b"[init] storage plane complete\n");
+            slime_rt::exit(0)
+        }
+        action::STORE => {
+            drive_store_plane();
+            slime_rt::debug_write(b"[init] store plane complete\n");
+            slime_rt::exit(0)
+        }
+        action::POWERBOX => {
+            drive_powerbox_plane();
+            slime_rt::debug_write(b"[init] powerbox plane complete\n");
+            slime_rt::exit(0)
+        }
+        action::DANGO => {
+            drive_dango_plane();
+            slime_rt::debug_write(b"[init] dango plane complete\n");
+            slime_rt::exit(0)
+        }
+        action::FILESYSTEM => {
+            drive_filesystem_plane();
+            slime_rt::debug_write(b"[init] filesystem plane complete\n");
+            slime_rt::exit(0)
+        }
+        action::GENERATION => {
+            drive_generation_plane();
+            slime_rt::debug_write(b"[init] generation plane complete\n");
+            slime_rt::exit(0)
+        }
+        action::TRANSFER => {
+            drive_probe_plane(
+                SEL4_TRANSFER_PROBE_SLOT,
+                b"[init] transfer probe spawned\n",
+                b"transfer",
+            );
+            slime_rt::debug_write(b"[init] transfer plane complete\n");
+            slime_rt::exit(0)
+        }
+        action::INPUT => {
+            drive_probe_plane(
+                SEL4_INPUT_PROBE_SLOT,
+                b"[init] input probe spawned\n",
+                b"input",
+            );
+            slime_rt::debug_write(b"[init] input plane complete\n");
+            slime_rt::exit(0)
+        }
+        action::DIRECTORY => {
+            drive_probe_plane(
+                SEL4_DIRECTORY_PROBE_SLOT,
+                b"[init] directory probe spawned\n",
+                b"directory",
+            );
+            slime_rt::debug_write(b"[init] directory plane complete\n");
+            slime_rt::exit(0)
+        }
+        action::RECOVERY => {
+            drive_probe_plane(
+                SEL4_RECOVERY_PROBE_SLOT,
+                b"[init] recovery probe spawned\n",
+                b"recovery",
+            );
+            slime_rt::debug_write(b"[init] recovery plane complete\n");
+            slime_rt::exit(0)
+        }
+        action::ROLLBACK => {
+            drive_probe_plane(
+                SEL4_ROLLBACK_PROBE_SLOT,
+                b"[init] rollback probe spawned\n",
+                b"rollback",
+            );
+            slime_rt::debug_write(b"[init] rollback plane complete\n");
+            slime_rt::exit(0)
+        }
+        action::PRODUCT => {}
+        // An action this image does not implement is a generation the graph
+        // cannot compose, which is a boot failure rather than a silent
+        // fallthrough to some other graph.
+        _ => {
+            slime_rt::debug_write(b"[init] unknown boot action\n");
+            slime_rt::exit(1)
+        }
+    }
+}
+
+fn main(startup_arg: u32) {
     if option_env!("SLIME_BOOT_SELECTION_FAIL") == Some("1") {
         slime_rt::debug_write(b"[init] reporting unhealthy boot\n");
         slime_rt::unhealthy();
@@ -176,15 +361,10 @@ fn main() {
         spawn_or_fail(1, &RECOVERY_CAPS);
         return;
     }
-    // Both halves of the guard. P5.4.5's seL4 QoS plane sets this same flag —
-    // deliberately, so `fabric-service` and the two participants select their
-    // QoS behaviour from the oracle's own switch and stay byte-identical
-    // between the planes — but its *composition* is `drive_stream_plane` plus a
-    // clock, not `launch_fabric_graph`. Without the second half this branch
-    // would claim that plane and walk the x86 boot layout.
-    if option_env!("SLIME_FABRIC_QOS_CHECK") == Some("1")
-        && option_env!("SLIME_SEL4_STREAM_CHECK") != Some("1")
-    {
+    // The x86 oracle's QoS composition. Its seL4 counterpart is selected by the
+    // `QOS` boot action and composed by `compose_declared_graph`, so this flag
+    // now names exactly one plane.
+    if option_env!("SLIME_FABRIC_QOS_CHECK") == Some("1") {
         for slot in 1..FABRIC_SERVICE_SLOT {
             if slot != SHARED_BUFFER_FACTORY_SLOT {
                 let _ = slime_rt::cap_drop(slot);
@@ -199,205 +379,25 @@ fn main() {
         slime_rt::debug_write(b"[init] fabric call complete\n");
         slime_rt::exit(0);
     }
-    // Both halves of the guard, on the QoS branch's rule. P5.4.7's seL4 plane
-    // sets this same flag so `fabric-service` and the five participants select
-    // their operation behaviour from the oracle's own switch and stay
-    // byte-identical between the planes — but its *composition* is
-    // `drive_operation_plane`, which mints its control channels rather than
-    // reading them from the base boot layout. Without the second half this
-    // branch would claim generation 20 and walk generation 15's layout.
-    if option_env!("SLIME_FABRIC_OPERATION_CHECK") == Some("1")
-        && option_env!("SLIME_SEL4_OPERATION_CHECK") != Some("1")
-    {
+    // The x86 oracle's operation composition; the seL4 plane is the
+    // `OPERATION` boot action.
+    if option_env!("SLIME_FABRIC_OPERATION_CHECK") == Some("1") {
         launch_fabric_operations();
         slime_rt::debug_write(b"[init] fabric operation complete\n");
         slime_rt::exit(0);
     }
-    // Both halves of the guard, on the two branches above. P5.4.8's seL4 plane
-    // sets this same flag so the visibility broker and the five participants
-    // stay byte-identical between the planes; its composition is
-    // `drive_visibility_plane`, which mints its control channels.
-    if option_env!("SLIME_FABRIC_VISIBILITY_CHECK") == Some("1")
-        && option_env!("SLIME_SEL4_VISIBILITY_CHECK") != Some("1")
-    {
+    // The x86 oracle's visibility composition; the seL4 plane is the
+    // `VISIBILITY` boot action.
+    if option_env!("SLIME_FABRIC_VISIBILITY_CHECK") == Some("1") {
         launch_fabric_graph();
         slime_rt::debug_write(b"[init] fabric visibility complete\n");
         slime_rt::exit(0);
     }
-    // Both halves of the guard, matching `launch_fabric_boot_init`. The kernel
-    // hands init a different capability layout for this generation, so keying on
-    // the env alone would make generation 1 — built with the same env by
-    // `build-generation.py` — walk a layout it was not given.
-    //
-    // P5.4.9 adds generation 22, the seL4 full-graph boot. It runs
-    // `drive_boot_plane` rather than this one: the composition is the oracle's,
-    // but this root numbers a launched component's declared channel ends from
-    // its own cursor, so the sixteen control channels must be minted here
-    // exactly as every other seL4 plane mints its own.
-    if option_env!("SLIME_SEL4_BOOT_CHECK") == Some("1") {
-        drive_boot_plane();
-    }
-    if option_env!("SLIME_FABRIC_BOOT_CHECK") == Some("1")
-        && option_env!("SLIME_GENERATION_NUMBER") == Some("17")
-    {
-        launch_fabric_boot();
-    }
-    // P5.3.1. Before the graph-launching block below, because this generation
-    // declares no spawnable executable at all — its two components are both
-    // launched by the root — so init would exit on a failed spawn before ever
-    // reaching a scenario placed after it.
-    if option_env!("SLIME_SEL4_CHANNEL_CHECK") == Some("1") {
-        drive_channel_plane();
-        slime_rt::debug_write(b"[init] channel plane complete\n");
-        slime_rt::exit(0);
-    }
-    if option_env!("SLIME_SEL4_LOAN_CHECK") == Some("1") {
-        drive_loan_plane();
-        slime_rt::debug_write(b"[init] loan plane complete\n");
-        slime_rt::exit(0);
-    }
-    // P5.3.3, before the graph-launching block for the same reason the two
-    // above are: this generation's scenario is the whole boot, and the block
-    // below would spawn a different graph.
-    if option_env!("SLIME_SEL4_SPAWN_CHECK") == Some("1") {
-        drive_spawn_plane();
-        slime_rt::debug_write(b"[init] spawn plane complete\n");
-        slime_rt::exit(0);
-    }
-    // P5.3.4, on the same rule as the three above.
-    if option_env!("SLIME_SEL4_SAMPLE_CHECK") == Some("1") {
-        drive_sample_plane();
-        slime_rt::debug_write(b"[init] sample plane complete\n");
-        slime_rt::exit(0);
-    }
-    // P5.5.2, on the same rule again.
-    if option_env!("SLIME_SEL4_STREAM_CHECK") == Some("1") {
-        drive_stream_plane();
-        slime_rt::debug_write(b"[init] fabric stream complete\n");
-        slime_rt::exit(0);
-    }
-    // B16's supervision plane, on the same rule again.
-    if option_env!("SLIME_SEL4_SUPERVISION_CHECK") == Some("1") {
-        drive_supervision_plane();
-        slime_rt::debug_write(b"[init] supervision plane complete\n");
-        slime_rt::exit(0);
-    }
-    // B38: the same bounded spawn/reap shape, but deep enough to cross the old
-    // root CSlot and ordinary-untyped lifetime watermarks after reclamation.
-    if option_env!("SLIME_SEL4_RECLAMATION_CHECK") == Some("1") {
-        drive_reclamation_plane();
-        slime_rt::debug_write(b"[init] reclamation plane complete\n");
-        slime_rt::exit(0);
-    }
-    // B22's channel-crossing plane, on the same rule again.
-    if option_env!("SLIME_SEL4_CROSSING_CHECK") == Some("1") {
-        drive_crossing_plane();
-        slime_rt::debug_write(b"[init] crossing plane complete\n");
-        slime_rt::exit(0);
-    }
-    // P5.4.6's C8.6 call plane, on the same rule again. A seL4-only flag rather
-    // than the oracle's `SLIME_FABRIC_CALL_CHECK`: the *components* are shared
-    // with the x86 plane unchanged, but init's composition is not — the oracle
-    // reads its control endpoints from the base boot layout, while this plane
-    // mints them so the fabric's slots come out in spawn-grant order. One flag
-    // for both would make generation 18 walk generation 14's layout.
-    if option_env!("SLIME_SEL4_CALL_CHECK") == Some("1") {
-        drive_call_plane();
-        slime_rt::debug_write(b"[init] call plane complete\n");
-        slime_rt::exit(0);
-    }
-    // P5.4.7's C8.7 operation plane, on the call plane's rule: the participants
-    // and the broker are the oracle's, selected by `SLIME_FABRIC_OPERATION_CHECK`
-    // which this generation also sets; only init's composition is seL4's.
-    if option_env!("SLIME_SEL4_OPERATION_CHECK") == Some("1") {
-        drive_operation_plane();
-        slime_rt::debug_write(b"[init] operation plane complete\n");
-        slime_rt::exit(0);
-    }
-    // P5.4.2c's M5 storage plane, on the same rule again. The probe holds the
-    // block capability the generation grants it and nothing else it needs; init
-    // spawns it and waits.
-    if option_env!("SLIME_SEL4_TRANSFER_CHECK") == Some("1") {
-        drive_probe_plane(
-            SEL4_TRANSFER_PROBE_SLOT,
-            b"[init] transfer probe spawned\n",
-            b"transfer",
-        );
-        slime_rt::debug_write(b"[init] transfer plane complete\n");
-        return;
-    }
-    if option_env!("SLIME_SEL4_POWERBOX_CHECK") == Some("1") {
-        drive_powerbox_plane();
-        slime_rt::debug_write(b"[init] powerbox plane complete\n");
-        return;
-    }
-    if option_env!("SLIME_SEL4_INPUT_CHECK") == Some("1") {
-        drive_probe_plane(
-            SEL4_INPUT_PROBE_SLOT,
-            b"[init] input probe spawned\n",
-            b"input",
-        );
-        slime_rt::debug_write(b"[init] input plane complete\n");
-        return;
-    }
-    if option_env!("SLIME_SEL4_DANGO_CHECK") == Some("1") {
-        drive_dango_plane();
-        slime_rt::debug_write(b"[init] dango plane complete\n");
-        return;
-    }
-    if option_env!("SLIME_SEL4_FILESYSTEM_CHECK") == Some("1") {
-        drive_filesystem_plane();
-        slime_rt::debug_write(b"[init] filesystem plane complete\n");
-        return;
-    }
-    if option_env!("SLIME_SEL4_DIRECTORY_CHECK") == Some("1") {
-        drive_probe_plane(
-            SEL4_DIRECTORY_PROBE_SLOT,
-            b"[init] directory probe spawned\n",
-            b"directory",
-        );
-        slime_rt::debug_write(b"[init] directory plane complete\n");
-        return;
-    }
-    if option_env!("SLIME_SEL4_GENERATION_CHECK") == Some("1") {
-        drive_generation_plane();
-        slime_rt::debug_write(b"[init] generation plane complete\n");
-        return;
-    }
-    if option_env!("SLIME_SEL4_RECOVERY_PLANE_CHECK") == Some("1") {
-        drive_probe_plane(
-            SEL4_RECOVERY_PROBE_SLOT,
-            b"[init] recovery probe spawned\n",
-            b"recovery",
-        );
-        slime_rt::debug_write(b"[init] recovery plane complete\n");
-        return;
-    }
-    if option_env!("SLIME_SEL4_ROLLBACK_CHECK") == Some("1") {
-        drive_probe_plane(
-            SEL4_ROLLBACK_PROBE_SLOT,
-            b"[init] rollback probe spawned\n",
-            b"rollback",
-        );
-        slime_rt::debug_write(b"[init] rollback plane complete\n");
-        return;
-    }
-    if option_env!("SLIME_SEL4_STORE_CHECK") == Some("1") {
-        drive_store_plane();
-        slime_rt::debug_write(b"[init] store plane complete\n");
-        return;
-    }
-    if option_env!("SLIME_SEL4_STORAGE_CHECK") == Some("1") {
-        drive_storage_plane();
-        slime_rt::debug_write(b"[init] storage plane complete\n");
-        slime_rt::exit(0);
-    }
-    // P5.4.8's C8.8 visibility plane, on the same rule again.
-    if option_env!("SLIME_SEL4_VISIBILITY_CHECK") == Some("1") {
-        drive_visibility_plane();
-        slime_rt::debug_write(b"[init] visibility plane complete\n");
-        slime_rt::exit(0);
-    }
+    // Every seL4 plane is selected by the authenticated boot action the root
+    // delivered at activation, not by a build flag. `PRODUCT` returns here and
+    // launches the declared graph below; every other action composes its plane
+    // and exits.
+    compose_declared_graph(startup_arg);
     slime_rt::debug_write(b"[init] launching component graph\n");
     if option_env!("SLIME_TRANSFER_RECEIVER") == Some("1") {
         if slime_rt::generation_receive(TRANSFER_RECEIVER_SLOT, TRANSFER_SOURCE_SLOT) == 0 {
@@ -508,9 +508,6 @@ fn main() {
 // C8.10 full-graph boot layout, matching `launch_fabric_boot_init`'s vector.
 // Init's own factories first, then the three executables the fabric needs, then
 // one executable per participant, then both halves of each control channel.
-const BOOT_ENDPOINT_FACTORY_SLOT: u32 = 0;
-const BOOT_BUFFER_FACTORY_SLOT: u32 = 1;
-const BOOT_FABRIC_SERVICE_SLOT: u32 = 2;
 const BOOT_CALL_WORKER_SLOT: u32 = 3;
 const BOOT_OP_WORKER_SLOT: u32 = 4;
 /// Participants in the exact order the kernel laid them out. Index into this
@@ -521,7 +518,6 @@ const BOOT_PARTICIPANTS: usize = 16;
 /// are the call and operation planes and the operation replacement channel.
 const BOOT_STREAM_PARTICIPANTS: usize = 7;
 const BOOT_FIRST_EXECUTABLE_SLOT: u32 = 5;
-const BOOT_FIRST_CONTROL_SLOT: u32 = BOOT_FIRST_EXECUTABLE_SLOT + BOOT_PARTICIPANTS as u32;
 /// Subscribers, by participant index. Their supervision handles must exist
 /// before the fabric starts: a downstream loan names its receiver through a
 /// `RIGHT_SUPERVISE` capability rather than an ambient task id.
@@ -529,198 +525,6 @@ const BOOT_SUBSCRIBERS: [usize; 3] = [1, 3, 4];
 
 const fn boot_executable_slot(participant: usize) -> u32 {
     BOOT_FIRST_EXECUTABLE_SLOT + participant as u32
-}
-
-/// Participant's own half of its control channel.
-const fn boot_client_slot(participant: usize) -> u32 {
-    BOOT_FIRST_CONTROL_SLOT + (participant as u32) * 2
-}
-
-/// Fabric's half of the same channel.
-const fn boot_service_slot(participant: usize) -> u32 {
-    boot_client_slot(participant) + 1
-}
-
-/// Launch the C8.10 full graph: every declared C8 role in one generation.
-///
-/// **What makes this the milestone rather than a bigger scenario.** Before this,
-/// the stream, call, and operation planes were mutually exclusive generation
-/// profiles that physically aliased one range of init's capability slots — only
-/// one could exist per boot, and "which plane" was chosen by rewriting slots at
-/// bootstrap. Here all three coexist in disjoint slots, so no profile-dependent
-/// rewrite happens at all, and the roles that were one binary switching on an
-/// env flag (`fabric-intruder`) are three separate component identities.
-///
-/// **Spawn order is load-bearing, in two directions that must both hold.**
-/// Subscribers first, because the fabric needs their supervision handles to
-/// exist before it starts. The fabric next, so no participant can send a role
-/// request before there is a worker to answer it. Everyone else after.
-///
-/// **Init keeps no route authority.** It mints the control channels and hands
-/// out both halves, and that spawn-time binding is the whole basis on which a
-/// worker later decides "which component is asking". The two route workers are
-/// spawned by the fabric rather than here, so the component that binds their
-/// control endpoints is the component that created them.
-///
-/// Init does not exit. The gate's exit condition is a fully provisioned graph at
-/// healthy blocked idle, so init parks on a supervision handle it never expects
-/// to fire — a component terminating is a failure the kernel reports, not
-/// something init waits for.
-fn launch_fabric_boot() -> ! {
-    let mut supervision = [0u32; BOOT_PARTICIPANTS];
-    for participant in BOOT_SUBSCRIBERS {
-        supervision[participant] = spawn_boot_participant(participant);
-    }
-    slime_rt::debug_write(b"[init] fabric boot subscribers spawned\n");
-
-    // The fabric's authority: its two factories, the two worker executables it
-    // spawns, and one service-side control endpoint per participant. Nothing
-    // here is a route capability — it mints those itself.
-    // Grant order *is* the fabric's slot layout, and the fabric derives its
-    // numbering from the resolved profile rather than from constants of its own:
-    // its two factories, one control endpoint per stream participant, the
-    // subscriber supervision handles, then the call and operation planes'
-    // controls, and last the two worker executables. A grant is a
-    // non-consuming derive-copy into a fresh table, so these land at 0, 1, 2...
-    // in the fabric regardless of which slots they occupy here.
-    const BOOT_FABRIC_GRANTS: usize = 2 + BOOT_PARTICIPANTS + BOOT_SUBSCRIBERS.len() + 2;
-    let mut grants = [SpawnGrant { slot: 0, rights: 0 }; BOOT_FABRIC_GRANTS];
-    let mut count = 0;
-    let mut push = |slot: u32, rights: Rights| {
-        grants[count] = grant(slot, rights);
-        count += 1;
-    };
-    push(BOOT_ENDPOINT_FACTORY_SLOT, RIGHT_ENDPOINT_CREATE);
-    push(BOOT_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE);
-    for participant in 0..BOOT_STREAM_PARTICIPANTS {
-        push(boot_service_slot(participant), RIGHT_SEND | RIGHT_RECV);
-    }
-    // Subscriber supervision handles, directly after the stream controls: a
-    // downstream loan names its receiver through one of these, and the resolved
-    // profile numbers them at exactly this offset.
-    for participant in BOOT_SUBSCRIBERS {
-        push(supervision[participant], RIGHT_SUPERVISE);
-    }
-    for participant in BOOT_STREAM_PARTICIPANTS..BOOT_PARTICIPANTS {
-        push(boot_service_slot(participant), RIGHT_SEND | RIGHT_RECV);
-    }
-    push(BOOT_CALL_WORKER_SLOT, RIGHT_EXEC | RIGHT_SPAWN);
-    push(BOOT_OP_WORKER_SLOT, RIGHT_EXEC | RIGHT_SPAWN);
-    let fabric =
-        slime_rt::spawn(BOOT_FABRIC_SERVICE_SLOT, &grants[..count]).unwrap_or_else(|error| {
-            slime_rt::debug_write(b"[init] fabric boot service spawn failed error=");
-            write_i64(error);
-            slime_rt::debug_write(b"\n");
-            slime_rt::exit(1)
-        });
-    slime_rt::debug_write(b"[init] fabric boot service spawned\n");
-
-    // The fabric holds its own derived copies now, so init releases the
-    // service-side halves, the worker executables, and the buffer factory it
-    // only held to hand on. Released here rather than at the end because the
-    // remaining participants each add a supervision handle: init launches with
-    // 53 of 64 slots occupied, and holding all sixteen handles on top of every
-    // control half would exhaust the table partway through the graph — a
-    // failure that looks like a spawn error rather than a leak.
-    for participant in 0..BOOT_PARTICIPANTS {
-        if slime_rt::cap_drop(boot_service_slot(participant)) < 0 {
-            slime_rt::exit(1);
-        }
-    }
-    for slot in [
-        BOOT_FABRIC_SERVICE_SLOT,
-        BOOT_CALL_WORKER_SLOT,
-        BOOT_OP_WORKER_SLOT,
-        BOOT_BUFFER_FACTORY_SLOT,
-    ] {
-        if slime_rt::cap_drop(slot) < 0 {
-            slime_rt::exit(1);
-        }
-    }
-    // The subscribers' supervision handles are the fabric's now; init keeps no
-    // claim on components it has finished launching.
-    for participant in BOOT_SUBSCRIBERS {
-        if slime_rt::cap_drop(supervision[participant]) < 0 {
-            slime_rt::exit(1);
-        }
-        supervision[participant] = 0;
-    }
-
-    // Everyone else.
-    for (participant, handle) in supervision.iter_mut().enumerate() {
-        if !BOOT_SUBSCRIBERS.contains(&participant) {
-            *handle = spawn_boot_participant(participant);
-        }
-    }
-    slime_rt::debug_write(b"[init] fabric boot participants spawned\n");
-
-    // Let every participant run far enough to send its role request before any
-    // supervision descriptor follows it.
-    //
-    // **This ordering is load-bearing.** The request/response brokers read one
-    // role request and then one supervision descriptor per client, on the same
-    // control channel, and a channel is a queue. `consume_request` accepts
-    // whatever arrives first — so a supervision descriptor sent ahead of the
-    // request is silently consumed *as* the request, its capability released,
-    // and the request behind it then fails the supervision shape check. Both
-    // messages are well-formed; only their order is wrong.
-    //
-    // One yield is sufficient, and deterministically so rather than by luck.
-    // Scheduling is cooperative — the APIC timer handler advances ticks and
-    // never preempts — and `SYS_YIELD` pushes the caller onto the back of a FIFO
-    // ready queue. So every participant spawned above runs before init resumes,
-    // and each runs until it blocks. Their first act is a send on a control
-    // channel whose queue is empty, and a send blocks only on a full queue, so
-    // each request is enqueued before its sender parks in `recv`.
-    slime_rt::yield_now();
-
-    // The request/response brokers name a peer by capability rather than by an
-    // identity claimed in a message, so each call and operation participant's
-    // supervision handle is moved to its worker over that participant's own
-    // authenticated control channel. Stream participants need none: the stream
-    // broker binds a subscriber through the handle init already granted it.
-    for (participant, handle) in supervision.iter_mut().enumerate() {
-        if let Some((direction, route)) = boot_supervision_edge(participant) {
-            transfer_supervision(boot_client_slot(participant), *handle, direction, route);
-            // `cap_transfer` *moves* the capability, so the slot is empty now.
-            // Marking it here is what keeps the release loop below from trying
-            // to drop a handle that no longer exists.
-            *handle = 0;
-        }
-    }
-    slime_rt::debug_write(b"[init] fabric boot supervision transferred\n");
-
-    // Release everything init only held to hand on: each participant's
-    // executable, its control half, and its supervision handle. The kernel's own
-    // health sweep reports a component that dies, so a handle retained here would
-    // buy nothing and cost a slot.
-    for (participant, handle) in supervision.iter().enumerate() {
-        for slot in [
-            boot_executable_slot(participant),
-            boot_client_slot(participant),
-        ] {
-            if slime_rt::cap_drop(slot) < 0 {
-                slime_rt::exit(1);
-            }
-        }
-        // Zero means init no longer holds that handle: a subscriber's was
-        // released with the fabric's grants above, and a call or operation
-        // participant's was consumed by the move to its worker.
-        if *handle != 0 && slime_rt::cap_drop(*handle) < 0 {
-            slime_rt::exit(1);
-        }
-    }
-    slime_rt::debug_write(b"[init] fabric boot graph launched\n");
-
-    // Park on the fabric's supervision handle — the one capability init keeps.
-    // Init must not exit: the gate's exit condition is the whole graph at
-    // healthy blocked idle, and a terminated init would make this a finished
-    // generation rather than an idle one. Waiting on the fabric rather than
-    // spinning also means a fabric that dies wakes init instead of going
-    // unnoticed.
-    loop {
-        slime_rt::wait(&[slime_rt::WaitSource::Supervision(fabric.supervision_slot)]);
-    }
 }
 
 /// The (direction, route) a participant's supervision handle belongs to, or
@@ -751,27 +555,6 @@ fn boot_supervision_edge(participant: usize) -> Option<(u32, [u8; 32])> {
         13 => Some((DIRECTION_SERVER, operation_route_identity())),
         _ => None,
     }
-}
-
-/// Spawn one full-graph participant with its own control endpoint and nothing
-/// else, returning the supervision handle init keeps.
-fn spawn_boot_participant(participant: usize) -> u32 {
-    let spawned = slime_rt::spawn(
-        boot_executable_slot(participant),
-        &[grant(
-            boot_client_slot(participant),
-            RIGHT_SEND | RIGHT_RECV,
-        )],
-    )
-    .unwrap_or_else(|error| {
-        slime_rt::debug_write(b"[init] fabric boot spawn failed participant=");
-        write_u32(participant as u32);
-        slime_rt::debug_write(b" error=");
-        write_i64(error);
-        slime_rt::debug_write(b"\n");
-        slime_rt::exit(1)
-    });
-    spawned.supervision_slot
 }
 
 /// Drive the P5.4.9 full-graph boot: every C8 role in one generation.
@@ -1691,25 +1474,6 @@ const STREAM_INTRUDER: usize = 2;
 const STREAM_PUBLISHER_B: usize = 3;
 const STREAM_SUBSCRIBER_B: usize = 4;
 
-/// Whether this build is P5.4.5's seL4 QoS plane.
-///
-/// Keyed on the **oracle's own** `SLIME_FABRIC_QOS_CHECK` rather than a
-/// seL4-only flag, and that is the point rather than a shortcut:
-/// `fabric-service`, `fabric-publisher-b`, and `fabric-subscriber-b` all select
-/// their QoS behaviour from it, so a separate flag would mean init built the
-/// clock while the components ignored it. Reusing the oracle's keeps the three
-/// participants byte-identical between the two planes, which is what
-/// `check-sel4-stream-plane.py`'s unmodified-component assertion demands.
-///
-/// Both halves of the guard, matching `launch_fabric_boot`: the seL4 QoS
-/// generation is the only one that pairs this flag with the stream driver, so
-/// keying on the env alone would make the x86 QoS generation — built with the
-/// same flag — mint a clock inside a composition that already has one.
-fn qos_plane() -> bool {
-    option_env!("SLIME_FABRIC_QOS_CHECK") == Some("1")
-        && option_env!("SLIME_SEL4_STREAM_CHECK") == Some("1")
-}
-
 /// Grants the spawn plane's widest spawn carries (B15).
 ///
 /// Six, which is B15's own exit-condition number and the size of this file's
@@ -1856,7 +1620,15 @@ fn fail_sample(reason: &[u8]) -> ! {
 ///
 /// `fabric-intruder` is spawned holding a real control endpoint on purpose.
 /// The denial under test is not "no channel" but "no declared edge".
-fn drive_stream_plane() {
+/// `qos` selects the QoS plane rather than the plain stream plane. Both
+/// compose here; the QoS boot additionally mints a capability-routed clock.
+/// The distinction is the generation's own `bootAction`, delivered at
+/// activation, so the x86 and seL4 QoS generations no longer have to be told
+/// apart by pairing two build flags. `fabric-service`, `fabric-publisher-b`,
+/// and `fabric-subscriber-b` still select their QoS *behaviour* from the
+/// oracle's `SLIME_FABRIC_QOS_CHECK`, which keeps the three participants
+/// byte-identical between the planes as `check-sel4-stream-plane.py` demands.
+fn drive_stream_plane(qos: bool) {
     // One control pair per participant, all minted before anything is spawned.
     // Init keeps the service half of each to hand the fabric and gives each
     // client its own half, so no two clients share an identity.
@@ -1888,7 +1660,7 @@ fn drive_stream_plane() {
     // client half is grant 3 to `fabric-publisher-b`, which is what drives the
     // scheduled boundaries. Both are ordinary spawn grants, so nothing here
     // depends on B25's post-spawn introduction.
-    let (time_service, time_client) = if qos_plane() {
+    let (time_service, time_client) = if qos {
         slime_rt::endpoint_create(ENDPOINT_FACTORY_SLOT)
             .unwrap_or_else(|_| fail_stream(b"qos time endpoint"))
     } else {
@@ -1951,7 +1723,7 @@ fn drive_stream_plane() {
     // observed layout byte-for-byte unchanged.
     let fabric = slime_rt::spawn(
         FABRIC_SERVICE_SLOT,
-        if qos_plane() {
+        if qos {
             &grants[..]
         } else {
             &grants[..STREAM_GRANTS]
@@ -2024,7 +1796,7 @@ fn drive_stream_plane() {
     ];
     let publisher_b = slime_rt::spawn(
         FABRIC_PUBLISHER_B_SLOT,
-        if qos_plane() {
+        if qos {
             &publisher_b_grants[..]
         } else {
             &publisher_b_grants[..3]
@@ -2053,7 +1825,7 @@ fn drive_stream_plane() {
             fail_stream(b"drop retained participant authority");
         }
     }
-    if qos_plane() && slime_rt::cap_drop(time_client) != slime_rt::ERR_SUCCESS {
+    if qos && slime_rt::cap_drop(time_client) != slime_rt::ERR_SUCCESS {
         fail_stream(b"drop retained time authority");
     }
     slime_rt::debug_write(b"[init] fabric participants spawned\n");

@@ -27,7 +27,7 @@ include!(concat!(env!("OUT_DIR"), "/dango_profile.rs"));
 
 slime_rt::entry!(main);
 
-fn main() {
+fn main(_startup_arg: u32) {
     console(b"[dango] native runtime ready\n");
     // C7.2/C7.3: prove the generation-declared shared-buffer quota is live
     // before accepting input. Fatal on failure — the generation granted

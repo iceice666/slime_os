@@ -264,7 +264,7 @@ impl Frame {
     };
 }
 
-fn main() {
+fn main(_startup_arg: u32) {
     if option_env!("SLIME_FABRIC_BOOT_CHECK") == Some("1") {
         boot_graph();
         return;

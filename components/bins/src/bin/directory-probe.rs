@@ -16,7 +16,7 @@ const PAYLOAD_LEN: u32 = 30;
 const RIGHT_DIRECTORY_READ: u32 = 1 << 19;
 const RIGHT_DIRECTORY_LIST: u32 = 1 << 21;
 const ZERO_HASH: [u8; 32] = [0; 32];
-fn main() {
+fn main(_startup_arg: u32) {
     let denied = slime_rt::directory_derive(RPC_SLOT, b"docs", RIGHT_DIRECTORY_READ);
     if denied != Err(ERR_BAD_CAP) {
         fail();

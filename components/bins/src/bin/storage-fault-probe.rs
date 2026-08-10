@@ -7,7 +7,7 @@ const BLOCK_SLOT: u32 = 0;
 
 slime_rt::entry!(main);
 
-fn main() {
+fn main(_startup_arg: u32) {
     let mut sector = [0x5au8; 512];
     let buffer_ptr = sector.as_mut_ptr() as u64;
 

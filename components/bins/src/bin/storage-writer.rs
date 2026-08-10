@@ -9,7 +9,7 @@ const MARKER: [u8; 16] = *b"LSM5.3 MABLE\x00\x00\x00\x00";
 
 slime_rt::entry!(main);
 
-fn main() {
+fn main(_startup_arg: u32) {
     let mut sector = [0u8; 512];
 
     // Read sector 2 first. Existing content means this is boot #2: verify only.

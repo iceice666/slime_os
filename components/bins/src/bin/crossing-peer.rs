@@ -46,7 +46,7 @@ const GATE_SLOT: u32 = 1;
 /// itself. Every failure names itself first: init reports one message for a
 /// non-zero exit, and that message is the string B22's second fault injection
 /// is identified by, so a wrong-cause failure must not be able to impersonate it.
-fn main() {
+fn main(_startup_arg: u32) {
     let mut payload = [0u8; MAX_MSG];
     let mut caps = [0u64; MAX_CAPS_PER_MSG];
 

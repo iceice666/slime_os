@@ -66,7 +66,7 @@ const SCRATCH_SIGNATURE: &[u8; 8] = b"SLIMEWR1";
 
 slime_rt::entry!(main);
 
-fn main() {
+fn main(_startup_arg: u32) {
     // The root launches every component the generation declares (P5.2), so this
     // boot also starts one *unconfigured* instance that `init` never spawned.
     // Both hold the block capability — it is granted to the component, not to a

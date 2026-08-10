@@ -8,7 +8,7 @@ use slime_rt::{ERR_BAD_CAP, ERR_PEER_DEAD, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX
 
 slime_rt::entry!(main);
 
-fn main() {
+fn main(_startup_arg: u32) {
     // A generation-launched copy has only control slot 0. The seL4 call driver
     // later spawns a second copy with the runtime-minted phase end at slot 1.
     // Probe the authority itself rather than guessing from an env flag or the

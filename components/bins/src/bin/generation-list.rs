@@ -6,7 +6,7 @@ mod command;
 
 slime_rt::entry!(main);
 
-fn main() {
+fn main(_startup_arg: u32) {
     let reply = command::run(slime_proto::generation::OP_LIST, command::zero_identity());
     if reply.status != 0 {
         slime_rt::debug_write(b"[generation-list] status=");

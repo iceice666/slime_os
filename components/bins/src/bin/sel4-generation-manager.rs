@@ -62,7 +62,7 @@ const STATUS_NO_PENDING: i32 = -3;
 
 slime_rt::entry!(main);
 
-fn main() {
+fn main(_startup_arg: u32) {
     // The authority probe, and the one message it may consume.
     //
     // Unlike the storage probes, the manager's run token is a *live* endpoint

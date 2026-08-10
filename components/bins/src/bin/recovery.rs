@@ -7,7 +7,7 @@ const GENERATION_CONTROL_SLOT: u32 = 0;
 const REPAIR_BLOCK_SLOT: u32 = 1;
 const INTERRUPT_AFTER_FIRST_SLOT: u32 = 1;
 
-fn main() {
+fn main(_startup_arg: u32) {
     let flags = if option_env!("SLIME_RECOVERY_INTERRUPT") == Some("1") {
         INTERRUPT_AFTER_FIRST_SLOT
     } else {

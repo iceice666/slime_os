@@ -16,6 +16,6 @@ slime_rt::entry!(main);
 /// and `ChannelTable` never reclaims (backlog B22), so a child that used the
 /// launch context would run out of channels one iteration before the loop
 /// reached the bound it exists to cross.
-fn main() {
+fn main(_startup_arg: u32) {
     slime_rt::debug_write(b"[supervision-child] ran\n");
 }

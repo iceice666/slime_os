@@ -70,7 +70,7 @@ fn fail(reason: &[u8]) -> ! {
     slime_rt::exit(1)
 }
 
-fn main() {
+fn main(_startup_arg: u32) {
     if option_env!("SLIME_FABRIC_VISIBILITY_CHECK") == Some("1") {
         visibility_main();
         return;

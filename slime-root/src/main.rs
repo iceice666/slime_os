@@ -706,6 +706,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
             None,
             None,
             None,
+            0,
         ) {
             Ok(id) => id,
             Err(error) => fatal!("child task construction failed: {error:?}"),
@@ -2280,6 +2281,13 @@ fn launch_instance_graph(
             None,
             Some(instance.executable),
             Some(instance_index),
+            // Only the bootstrap instance composes a boot graph, so only it is
+            // told which one. Every other instance starts with zero.
+            if instance_index == generation.bootstrap() {
+                generation.boot_action.id()
+            } else {
+                0
+            },
         ) {
             Ok(id) => id,
             Err(error) => fatal!(
@@ -4704,6 +4712,8 @@ fn construct_child(
             Some(parent),
             Some(plan.executable),
             Some(plan.instance),
+            // A dynamically spawned child is never the bootstrap instance.
+            0,
         )
         .map_err(|_| IpcError::DestinationSlotsExhausted)?;
 

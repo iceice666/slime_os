@@ -42,7 +42,7 @@ fn fail(reason: &[u8]) -> ! {
     slime_rt::exit(1)
 }
 
-fn main() {
+fn main(_startup_arg: u32) {
     // A payload larger than the control-message bound is the whole point.
     if PAYLOAD_LEN <= MAX_MSG as u64 {
         fail(b"payload must exceed MAX_MSG");

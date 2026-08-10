@@ -70,7 +70,7 @@ fn transfer_window_addr() -> usize {
 /// # Safety
 ///
 /// Must be called once, from the runtime entrypoint, on the initial thread.
-pub unsafe fn start(main: fn()) -> ! {
+pub unsafe fn start(main: fn(u32), startup_arg: u32) -> ! {
     // SAFETY: called once during startup, before any seL4 invocation, and the
     // buffer is mapped for this thread's exclusive use.
     unsafe {
@@ -87,6 +87,6 @@ pub unsafe fn start(main: fn()) -> ! {
         crate::syscall::early_debug_write(b"[slime-rt] transfer window bind failed\n");
         crate::exit(1)
     }
-    main();
+    main(startup_arg);
     crate::exit(0)
 }

@@ -345,6 +345,10 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
         spawner: Option<TaskId>,
         executable: Option<usize>,
         instance: Option<usize>,
+        // The authenticated boot action, delivered in the thread's first C
+        // parameter. Only the bootstrap instance reads it; every other
+        // component receives zero and ignores it.
+        startup_arg: u32,
     ) -> Result<TaskId, TaskError> {
         let Some(index) = self.tasks.iter().position(Option::is_none) else {
             return Err(TaskError::TableFull { limit: CAPACITY });
@@ -441,6 +445,7 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
             let mut context = sel4::UserContext::default();
             *context.pc_mut() =
                 sel4::Word::try_from(entry).map_err(|_| TaskError::EntryOutOfRange { entry })?;
+            *context.c_param_mut(0) = sel4::Word::from(startup_arg);
             // `resume = false`: nothing runs until every allocation for every
             // task in this generation has succeeded. The child runtime
             // establishes its own stack pointer at `_start`.

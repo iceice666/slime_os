@@ -22,7 +22,7 @@ const UNKNOWN_IDENTITY: u64 = 0xdeadbeefdeadbeef;
 
 slime_rt::entry!(main);
 
-fn main() {
+fn main(_startup_arg: u32) {
     let mut get_buf = [0u8; 512];
     let mut put_buf = [0u8; 512];
     for (i, byte) in put_buf.iter_mut().enumerate() {

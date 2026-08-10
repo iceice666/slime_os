@@ -11,7 +11,7 @@ const GENERATION_CONTROL_SLOT: u32 = 1;
 const FAILING_PENDING_GENERATION: u64 = 99;
 const KNOWN_GOOD_GENERATION: u64 = 1;
 
-fn main() {
+fn main(_startup_arg: u32) {
     let generation = option_env!("SLIME_GENERATION_NUMBER")
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(KNOWN_GOOD_GENERATION);

@@ -77,7 +77,7 @@ impl Entry {
     };
 }
 
-fn main() {
+fn main(_startup_arg: u32) {
     if open_store().is_err() {
         slime_rt::debug_write(b"[filesystem] fail: store open\n");
         slime_rt::exit(1);

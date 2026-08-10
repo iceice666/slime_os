@@ -29,7 +29,7 @@ fn fail(reason: &[u8]) -> ! {
     slime_rt::exit(1)
 }
 
-fn main() {
+fn main(_startup_arg: u32) {
     let mut message = [0u8; MAX_MSG];
     let mut received = [0u64; MAX_CAPS_PER_MSG];
     let length = loop {

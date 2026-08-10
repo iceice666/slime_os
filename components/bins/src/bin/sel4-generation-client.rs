@@ -40,7 +40,7 @@ const STATUS_NO_PENDING: i32 = -3;
 
 slime_rt::entry!(main);
 
-fn main() {
+fn main(_startup_arg: u32) {
     // The root launches every declared component, so an unconfigured copy of
     // this one starts too. It holds no endpoint, so its first send answers
     // `ERR_BAD_CAP` and it parks.

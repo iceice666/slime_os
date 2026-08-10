@@ -11,7 +11,7 @@ use slime_proto::fabric_call::{
 
 slime_rt::entry!(main);
 
-fn main() {
+fn main(_startup_arg: u32) {
     scenario::boot_park(
         boot_contracts::fabric_graph::DIRECTION_CLIENT,
         b"fabric-call-client",

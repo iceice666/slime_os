@@ -66,7 +66,7 @@ const RECEIVER_GENERATION_ROOT: [u8; 32] = [0x44; 32];
 
 slime_rt::entry!(main);
 
-fn main() {
+fn main(_startup_arg: u32) {
     if !spawned_instance() {
         slime_rt::debug_write(b"[sel4-transfer-probe] idle without a run token\n");
         slime_rt::exit(0);

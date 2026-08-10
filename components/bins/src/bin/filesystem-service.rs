@@ -47,7 +47,7 @@ impl Entry {
     };
 }
 
-fn main() {
+fn main(_startup_arg: u32) {
     slime_rt::debug_write(b"[filesystem] ready\n");
     loop {
         let mut message = [0u8; MAX_MSG];

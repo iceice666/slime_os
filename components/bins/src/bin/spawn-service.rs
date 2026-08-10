@@ -35,7 +35,7 @@ struct LiveChild {
     termination: Option<Termination>,
 }
 
-fn main() {
+fn main(_startup_arg: u32) {
     slime_rt::debug_write(b"[spawn-service] ready\n");
     // C7.2/C7.3: prove this component's generation-declared shared-buffer
     // quota is live before serving requests. A failure here is fatal: the

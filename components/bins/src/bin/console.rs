@@ -18,7 +18,7 @@ const QUOTA_PROBE_BASE: u64 = 0x0000_0006_0000_0000;
 /// quota alone admitted the allocation.
 const SHARED_BUFFER_FACTORY_SLOT: u32 = 1;
 
-fn main() {
+fn main(_startup_arg: u32) {
     let mut buf = [0u8; MAX_MSG];
     let mut caps = [0u64; MAX_CAPS_PER_MSG];
     loop {

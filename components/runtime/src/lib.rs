@@ -37,18 +37,23 @@ fn panic(_info: &PanicInfo) -> ! {
 /// Defines the component's seL4 entry point, calling `$main` and exiting 0 if
 /// it returns. Startup installs the stack, Rust language runtime, IPC buffer,
 /// and bound transfer window before component code runs.
+///
+/// `$main` takes the authenticated startup argument the root placed in this
+/// thread's first C parameter. It is the generation's boot action for the
+/// bootstrap instance and zero for every other component, so a component
+/// composes its graph from admitted data rather than from a build flag.
 #[macro_export]
 macro_rules! entry {
     ($main:path) => {
         $crate::_private::declare_stack!($crate::_private::STACK_SIZE);
         $crate::_private::declare_entrypoint_with_stack_init!();
         $crate::_private::declare_rust_entrypoint! {
-            __slime_rt_entrypoint()
+            __slime_rt_entrypoint(startup_arg: u32)
         }
 
-        fn __slime_rt_entrypoint() -> ! {
-            let main: fn() = $main;
-            unsafe { $crate::_private::start(main) }
+        fn __slime_rt_entrypoint(startup_arg: u32) -> ! {
+            let main: fn(u32) = $main;
+            unsafe { $crate::_private::start(main, startup_arg) }
         }
     };
 }
