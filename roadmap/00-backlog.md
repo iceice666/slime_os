@@ -49,7 +49,30 @@ console output, refused input, scripted Dango input, and root boot diagnostics
 pass `just sel4_root_boot_check`, `just sel4_input_check`, and `just
 sel4_dango_check`. A gate-control mutation that restores a root fallback fails.
 
-**Unblocked 2026-08-10.** Both gates this exit condition names now pass, along
+**Half landed 2026-08-10.** Every process now has a console/debug endpoint
+object of its own: the plan declares it as a `SERVICE_CONSOLE` service binding,
+the decoder resolves it into `ChildSlotPlan`, and the root mints it into each
+child at construction. Write-only on both sides of the trust boundary, since
+every process shares one console dispatcher and a receiver could dequeue
+another's output. The slot is 32, above every slot a generation grant can name
+— grant slots are the component's own numbering and start at 0, so a low fixed
+slot collided with declared authority in every migrated fixture, which the B40
+CSpace audit caught immediately. Child CNodes are six bits.
+
+**Remaining, and why it is not landed:** nothing receives on the new endpoint.
+The root has one blocking dispatcher (`ipc::recv_request(endpoint)` at
+`slime-root/src/main.rs`), so routing `debug_write` there was tried and hangs
+every component on its first line — reverted. Closing this needs a second
+dispatcher, which is not a small change: two `SAFETY` comments in `main.rs`
+and eleven statics are justified by "the root task is single-threaded", and
+each would have to be re-audited. A bound notification does not substitute:
+it signals, and the console still needs its own receive to carry the payload.
+
+Until then `DebugWrite` and `InputRead` remain on the universal ABI, so the
+exit condition is unmet — the endpoint exists and is enforced, but nothing
+uses it yet.
+
+**Gates unblocked 2026-08-10.** Both gates this exit condition names now pass, along
 with `just sel4_directory_check` and `just sel4_storage_check`, which shared
 one of the same causes. B41's own work — moving `DebugWrite` and `InputRead`
 off the universal root dispatcher — has not started.
