@@ -124,7 +124,50 @@
       owner = "init";
     };
   ];
-  mintedBindings = [];
+  mintedBindings = [
+    {
+      name = "sample-lender-receiver-supervision";
+      owner = "init";
+      holder = "sample-lender";
+      rights = [
+        "supervise";
+      ];
+      slot = 2;
+      transferable = false;
+    };
+    {
+      name = "sample-receiver-half";
+      owner = "init";
+      holder = "sample-receiver";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 0;
+      transferable = false;
+    };
+    {
+      name = "sample-lender-half";
+      owner = "init";
+      holder = "sample-lender";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 0;
+      transferable = false;
+    };
+    {
+      name = "sample-lender-buffer-factory";
+      owner = "init";
+      holder = "sample-lender";
+      rights = [
+        "bufferCreate";
+      ];
+      slot = 1;
+      transferable = false;
+    };
+  ];
   interfaceSchemas = [];
   objects = [
     {

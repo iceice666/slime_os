@@ -1584,8 +1584,17 @@ fn drive_sample_plane() {
     // table size — and refused as `ERR_OUT_OF_MEMORY`, which is what
     // distinguishes "you have reached your ceiling" from "you named something
     // you do not hold".
-    if slime_rt::spawn(SAMPLE_RECEIVER_SLOT, &[]) != Err(slime_rt::ERR_OUT_OF_MEMORY) {
-        fail_sample(b"spawn budget did not bite");
+    // B14's spawn ceiling is no longer what refuses a third spawn here, and
+    // this probe now proves the stronger rule that supersedes it: one live
+    // instance per declaration. Re-spawning a running instance is refused as
+    // `instance-live` before the budget is consulted, and there is no second
+    // declaration of either executable to reach the ceiling through — the root
+    // resolves an executable to exactly one owned instance.
+    //
+    // `ERR_BAD_CAP`, not `ERR_OUT_OF_MEMORY`: the request names something
+    // already live rather than exceeding an allowance.
+    if slime_rt::spawn(SAMPLE_RECEIVER_SLOT, &[]) != Err(slime_rt::ERR_BAD_CAP) {
+        fail_sample(b"a live instance was spawned twice");
     }
     slime_rt::debug_write(b"[init] spawn budget refused\n");
 
