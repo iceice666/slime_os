@@ -801,7 +801,7 @@ def build_application(
     )
     root_elf = (
         root_target_dir
-        / "aarch64-sel4-roottask"
+        / "aarch64-sel4-roottask-minimal"
         / "release"
         / "slime-root.elf"
     )
