@@ -311,6 +311,24 @@
       target = "fabric-service";
       transferable = false;
     };
+    {
+      name = "fabric-service-endpoint-factory";
+      rights = [
+        "endpointCreate";
+      ];
+      source = "init";
+      target = "fabric-service";
+      transferable = false;
+    };
+    {
+      name = "fabric-service-shared-buffer-factory";
+      rights = [
+        "bufferCreate";
+      ];
+      source = "init";
+      target = "fabric-service";
+      transferable = false;
+    };
   ];
   health = {
     bootAttempts = 3;
@@ -367,23 +385,31 @@
       bindings = [
         {
           grant = "fabric-intruder-control";
-          slot = 0;
+          slot = 4;
         };
         {
           grant = "fabric-publisher-b-control";
-          slot = 1;
+          slot = 5;
         };
         {
           grant = "fabric-publisher-control";
           slot = 2;
         };
         {
+          grant = "fabric-service-endpoint-factory";
+          slot = 0;
+        };
+        {
+          grant = "fabric-service-shared-buffer-factory";
+          slot = 1;
+        };
+        {
           grant = "fabric-subscriber-b-control";
-          slot = 3;
+          slot = 6;
         };
         {
           grant = "fabric-subscriber-control";
-          slot = 4;
+          slot = 3;
         };
       ];
       dependencies = [
@@ -475,7 +501,80 @@
       owner = "init";
     };
   ];
-  mintedBindings = [];
+  mintedBindings = [
+    {
+      name = "fabric-publisher-b-fabric-supervision";
+      owner = "init";
+      holder = "fabric-publisher-b";
+      rights = [
+        "supervise";
+      ];
+      slot = 2;
+      transferable = false;
+    };
+    {
+      name = "fabric-publisher-b-shared-buffer-factory";
+      owner = "init";
+      holder = "fabric-publisher-b";
+      rights = [
+        "bufferCreate";
+      ];
+      slot = 1;
+      transferable = false;
+    };
+    {
+      name = "fabric-publisher-probe-carrier-recv";
+      owner = "init";
+      holder = "fabric-publisher";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 3;
+      transferable = false;
+    };
+    {
+      name = "fabric-publisher-probe-carrier-send";
+      owner = "init";
+      holder = "fabric-publisher";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 2;
+      transferable = false;
+    };
+    {
+      name = "fabric-publisher-probe-narrowed";
+      owner = "init";
+      holder = "fabric-publisher";
+      rights = [
+        "send";
+      ];
+      slot = 1;
+      transferable = true;
+    };
+    {
+      name = "fabric-subscriber-b-supervision";
+      owner = "init";
+      holder = "fabric-service";
+      rights = [
+        "supervise";
+      ];
+      slot = 8;
+      transferable = false;
+    };
+    {
+      name = "fabric-subscriber-supervision";
+      owner = "init";
+      holder = "fabric-service";
+      rights = [
+        "supervise";
+      ];
+      slot = 7;
+      transferable = false;
+    };
+  ];
   interfaceSchemas = [
     "contracts/interface-schema/v1/interfaces/telemetry-stream.zti";
     "contracts/interface-schema/v1/interfaces/diagnostics-stream.zti";

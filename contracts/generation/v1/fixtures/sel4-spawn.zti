@@ -121,6 +121,7 @@
         "recv";
       ];
       slot = 0;
+      transferable = false;
     };
     {
       name = "sysinfo-context";
@@ -131,6 +132,7 @@
         "recv";
       ];
       slot = 0;
+      transferable = false;
     };
     {
       name = "sysinfo-wide-1";
@@ -141,6 +143,7 @@
         "recv";
       ];
       slot = 1;
+      transferable = false;
     };
     {
       name = "sysinfo-wide-2";
@@ -151,6 +154,7 @@
         "recv";
       ];
       slot = 2;
+      transferable = false;
     };
     {
       name = "sysinfo-wide-3";
@@ -161,6 +165,7 @@
         "recv";
       ];
       slot = 3;
+      transferable = false;
     };
     {
       name = "sysinfo-wide-4";
@@ -171,6 +176,7 @@
         "recv";
       ];
       slot = 4;
+      transferable = false;
     };
     {
       name = "sysinfo-wide-5";
@@ -181,6 +187,7 @@
         "recv";
       ];
       slot = 5;
+      transferable = false;
     };
   ];
   interfaceSchemas = [];

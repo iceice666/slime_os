@@ -2342,13 +2342,30 @@ def build_sel4_plan(
         instance["name"]: index for index, instance in enumerate(planned_instances)
     }
     for grant_index, (grant, rights) in enumerate(zip(grants, grant_rights, strict=True)):
-        source_process = process_for_instance[grant["source"]]
-        bound = next(
-            (binding for binding in instances[instance_index[grant["source"]]]["bindings"] if binding["grant"] == grant["name"]),
+        # A grant materializes in whichever instance declares a binding for it.
+        # An `exec` or channel grant is bound by its source; a delegated
+        # authority such as `bufferCreate` is bound only by its target, which is
+        # the instance that actually holds the capability.
+        holder = next(
+            (
+                name
+                for name in (grant["source"], grant["target"])
+                if name in instance_index
+                and any(
+                    binding["grant"] == grant["name"]
+                    for binding in instances[instance_index[name]]["bindings"]
+                )
+            ),
             None,
         )
-        if bound is None:
+        if holder is None:
             fail(f"authority-bearing grant {grant['name']} has no concrete binding")
+        source_process = process_for_instance[holder]
+        bound = next(
+            binding
+            for binding in instances[instance_index[holder]]["bindings"]
+            if binding["grant"] == grant["name"]
+        )
         if rights & RIGHT["exec"]:
             target = executable_index[grant["target"]]
             spawn_records.extend(
@@ -2392,12 +2409,12 @@ def build_sel4_plan(
         if (holder, slot) in seen_holder_slots:
             fail(f"minted binding {minted['name']}: duplicate holder slot")
         seen_holder_slots.add((holder, slot))
-        rights = 0
+        rights = RIGHT_TRANSFER if minted["transferable"] else 0
         for right in minted["rights"]:
             if right not in RIGHT:
                 fail(f"minted binding {minted['name']}: unknown right {right}")
             rights |= RIGHT[right]
-        if rights == 0 or rights & RIGHT["exec"]:
+        if rights == 0 or rights & RIGHT["exec"] or rights & ~RIGHT_ALL:
             fail(f"minted binding {minted['name']}: invalid rights")
         minted_records.extend(
             GENERATION_MINTED_BINDING.pack(

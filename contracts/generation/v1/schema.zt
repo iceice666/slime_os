@@ -64,6 +64,7 @@ MintedBinding :: type {
   holder : Text;
   slot : Int;
   rights : List Text;
+  transferable : Bool;
 };
 
 -- Per-holder C7 shared-buffer quota carried by the authenticated generation.

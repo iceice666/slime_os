@@ -39,7 +39,7 @@ use slime_root::{
 use core::ptr;
 
 use boot_contracts::generation::{
-    Generation, GrantEndpoint, InstanceHealth, InstanceOwner, KIND_RESOURCE,
+    Generation, GrantEndpoint, InstanceHealth, InstanceOwner, KIND_RESOURCE, MintedBinding,
 };
 use boot_contracts::shared_buffer_budget::{self as budget_magic, SharedBufferBudget};
 use sel4_root_task::root_task;
@@ -4495,6 +4495,11 @@ fn preflight_spawn_grants(
         })
         .count();
     if count != child.binding_count() + minted_count {
+        sel4::debug_println!(
+            "SLIME_GRAPH spawn preflight instance={} reason=declared-count requested={count} bindings={} minted={minted_count}",
+            child.name,
+            child.binding_count(),
+        );
         return Err(IpcError::BadCapability);
     }
 
@@ -4564,10 +4569,28 @@ fn preflight_spawn_grants(
             // The destination is the declared slot, never a number the caller
             // chose, so a spawner cannot place a capability where the plan does
             // not say it goes.
+            // Matched in ascending destination-slot order, which is the order
+            // a caller lists them: a spawn grant array is positional, and the
+            // child's capability table is addressed by slot. Record order in
+            // the generation is canonical-by-name and deliberately not relied
+            // on here.
+            let rank = index - child.binding_count();
             let minted = (0..generation.minted_binding_count())
                 .filter_map(|at| generation.minted_binding(at).ok())
                 .filter(|minted| minted.holder == child_instance)
-                .nth(index - child.binding_count())
+                .fold(None, |selected: Option<MintedBinding<'_>>, candidate| {
+                    let below = (0..generation.minted_binding_count())
+                        .filter_map(|at| generation.minted_binding(at).ok())
+                        .filter(|other| {
+                            other.holder == child_instance && other.slot < candidate.slot
+                        })
+                        .count();
+                    if below == rank {
+                        Some(candidate)
+                    } else {
+                        selected
+                    }
+                })
                 .ok_or(IpcError::BadCapability)?;
             if minted.owner != caller_instance {
                 sel4::debug_println!(
