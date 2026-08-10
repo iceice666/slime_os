@@ -513,6 +513,22 @@ graphs retain behavior. `just test_sel4_root`, `just sel4_spawn_check`, `just
 sel4_supervision_check`, `just sel4_reclamation_check`, and `just
 sel4_boot_check` pass.
 
+**Two clauses already hold (2026-08-10).** "Remove `TaskId` from every
+cross-process contract" and "lifecycle authority remains capability-based" were
+delivered by B42: no schema, generated protocol record, or public runtime type
+names a task id, and `scripts/check/check-lifecycle-identity.py` keeps it that
+way. All five named gates currently pass. What remains is the split itself —
+one process owning CSpace/VSpace with several threads each owning a TCB, IPC
+buffer, fault endpoint, and schedule.
+
+Note that a *second thread in one address space* is exactly what B41's audit
+found the vendored runtime cannot yet support: the `sel4` crate holds one
+IPC-buffer slot per address space unless the target is thread-local, and the
+thread-local target's images lose their `PT_TLS` header in the loader. B47's
+central claim therefore inherits that blocker even though its dependency chain
+does not name it. See
+[`devlog/2026-08-10-b41-second-dispatcher-blocker/`](../devlog/2026-08-10-b41-second-dispatcher-blocker/index.md).
+
 ### B48 — all child execution shares one fixed priority and no scheduling authority
 
 **Status:** Open. **Class:** Unmasked architectural debt. **Depends on:** B47.
