@@ -39,7 +39,8 @@ use slime_root::{
 use core::ptr;
 
 use boot_contracts::generation::{
-    Generation, GrantEndpoint, InstanceHealth, InstanceOwner, KIND_RESOURCE, MintedBinding,
+    Generation, Grant, GrantEndpoint, Instance, InstanceHealth, InstanceOwner, KIND_RESOURCE,
+    MintedBinding,
 };
 use boot_contracts::shared_buffer_budget::{self as budget_magic, SharedBufferBudget};
 use sel4_root_task::root_task;
@@ -4436,19 +4437,120 @@ const fn valid_rights(resource: &graph::Resource) -> u64 {
     }
 }
 
+/// One capability the generation declares a child receives at spawn.
+///
+/// A grant-backed binding names a concrete authority edge; a minted binding
+/// names the same edge with the object identity deferred to its minter. Both
+/// fix the destination slot and the rights ceiling before activation.
+enum DeclaredCapability<'a> {
+    Granted(usize, Grant<'a>),
+    Minted(MintedBinding<'a>),
+}
+
+impl DeclaredCapability<'_> {
+    const fn slot(&self) -> usize {
+        match self {
+            Self::Granted(slot, _) => *slot,
+            Self::Minted(minted) => minted.slot,
+        }
+    }
+}
+
+/// The child's `index`-th declared capability in ascending destination-slot
+/// order, across grant-backed and minted declarations together.
+///
+/// Declaration *kind* is invisible to a spawning component: it lists grants in
+/// the order its child's slots run. Ordering by slot here is what lets a caller
+/// interleave the two without knowing which is which.
+fn nth_declared_capability<'a>(
+    generation: &Generation<'a>,
+    child: Instance<'a>,
+    child_instance: usize,
+    index: usize,
+) -> Result<DeclaredCapability<'a>, IpcError> {
+    let mut selected: Option<DeclaredCapability<'a>> = None;
+    let mut each = |candidate: DeclaredCapability<'a>| -> Result<(), IpcError> {
+        // The candidate's rank is how many declarations sit below it, so the
+        // one wanted here is the candidate with exactly `index` below it. Slots
+        // are unique per child — the decoder rejects duplicates in both
+        // sections — so the rank is total and exactly one candidate matches.
+        let below = declarations_below(generation, child, child_instance, candidate.slot())?;
+        if below == index {
+            consider(candidate, &mut selected);
+        }
+        Ok(())
+    };
+    for at in 0..child.binding_count() {
+        let binding = generation
+            .binding(child, at)
+            .map_err(|_| IpcError::BadCapability)?;
+        let declared = generation
+            .grant(binding.grant)
+            .map_err(|_| IpcError::BadCapability)?;
+        each(DeclaredCapability::Granted(binding.slot, declared))?;
+    }
+    for at in 0..generation.minted_binding_count() {
+        let minted = generation
+            .minted_binding(at)
+            .map_err(|_| IpcError::BadCapability)?;
+        if minted.holder != child_instance {
+            continue;
+        }
+        each(DeclaredCapability::Minted(minted))?;
+    }
+    selected.ok_or(IpcError::BadCapability)
+}
+
+/// How many of the child's declared capabilities land below `slot`.
+fn declarations_below(
+    generation: &Generation<'_>,
+    child: Instance<'_>,
+    child_instance: usize,
+    slot: usize,
+) -> Result<usize, IpcError> {
+    let mut below = 0;
+    for at in 0..child.binding_count() {
+        let binding = generation
+            .binding(child, at)
+            .map_err(|_| IpcError::BadCapability)?;
+        below += usize::from(binding.slot < slot);
+    }
+    for at in 0..generation.minted_binding_count() {
+        let minted = generation
+            .minted_binding(at)
+            .map_err(|_| IpcError::BadCapability)?;
+        below += usize::from(minted.holder == child_instance && minted.slot < slot);
+    }
+    Ok(below)
+}
+
+/// Keep `candidate` when it is a better fit for slot rank `index` than what is
+/// already selected: the smallest slot strictly greater than the `index`
+/// previous ranks. Implemented as a running selection because the root holds no
+/// allocator on this path and the count is bounded by the child's table.
+fn consider<'a>(candidate: DeclaredCapability<'a>, selected: &mut Option<DeclaredCapability<'a>>) {
+    let keep = match selected {
+        Some(existing) => candidate.slot() < existing.slot(),
+        None => true,
+    };
+    if keep {
+        *selected = Some(candidate);
+    }
+}
+
 /// Decode and validate a spawn against its declared child instance.
 ///
 /// The executable capability chooses an executable catalogue entry, but it is
 /// not itself an instance declaration. The caller's declared instance and that
 /// executable must name exactly one child instance through `owner`. That child
-/// fixes both the complete grant set and every child-local slot. Request order
-/// therefore cannot change layout: records correspond to the child's canonical
-/// binding slice, and each capability is installed at `binding.slot`.
+/// fixes both the complete capability set and every child-local slot, so
+/// request order cannot change layout: each capability is installed at the slot
+/// its declaration names.
 ///
 /// Each requested capability remains a narrowing copy of authority the caller
-/// holds. In addition, its rights must be covered by the grant named by the
-/// corresponding child binding. Missing, extra, duplicate, or unrelated grant
-/// records refuse the whole spawn before allocation.
+/// holds, and its rights must be covered by the declaration's ceiling. Missing,
+/// extra, duplicate, or unrelated records refuse the whole spawn before
+/// allocation.
 fn preflight_spawn_grants(
     generation: &Generation<'_>,
     caller_instance: usize,
@@ -4543,71 +4645,47 @@ fn preflight_spawn_grants(
         {
             return Err(IpcError::BadCapability);
         }
-        // Each request resolves to exactly one generation declaration. Indexes
-        // below `binding_count` are grant-backed bindings, in canonical slot
-        // order; the rest are the owner-minted capabilities this child is
-        // declared to receive, matched by their destination slot.
-        let (destination, ceiling, label) = if index < child.binding_count() {
-            let binding = generation
-                .binding(child, index)
-                .map_err(|_| IpcError::BadCapability)?;
-            let declared = generation
-                .grant(binding.grant)
-                .map_err(|_| IpcError::BadCapability)?;
-            // The grant must be one the *child* legitimately carries. Its
-            // binding list is generation-declared and already validated against
-            // `grant_applies_to_instance`, and `child_instance` was resolved as
-            // an instance this caller owns, so provenance is established
-            // without requiring the spawner to hold the grant too. Requiring
-            // that would force init to retain route authority over every
-            // channel it mints and hands on, which is exactly the property the
-            // fabric planes deny it.
-            if !generation.grant_applies_to_instance(declared, child_instance) {
-                sel4::debug_println!(
-                    "SLIME_GRAPH spawn preflight binding={} index={index} reason=child-provenance",
-                    declared.name,
-                );
-                return Err(IpcError::BadCapability);
+        // Each request resolves to exactly one generation declaration, matched
+        // in ascending destination-slot order across both kinds together. A
+        // spawn grant array is positional and the child's capability table is
+        // addressed by slot, so the caller's Nth grant is the declaration with
+        // the Nth-lowest destination slot — whether that is a grant-backed
+        // binding or an owner-minted one. Splitting the two kinds into separate
+        // positional runs would force a caller to order its array by
+        // declaration kind, which no component knows about.
+        let declaration = nth_declared_capability(generation, child, child_instance, index)?;
+        let (destination, ceiling, label) = match declaration {
+            DeclaredCapability::Granted(binding_slot, declared) => {
+                // The grant must be one the *child* legitimately carries. Its
+                // binding list is generation-declared, and `child_instance` was
+                // resolved as an instance this caller owns, so provenance holds
+                // without requiring the spawner to hold the grant too.
+                // Requiring that would force init to retain route authority
+                // over every channel it mints and hands on, which is exactly
+                // the property the fabric planes deny it.
+                if !generation.grant_applies_to_instance(declared, child_instance) {
+                    sel4::debug_println!(
+                        "SLIME_GRAPH spawn preflight binding={} index={index} reason=child-provenance",
+                        declared.name,
+                    );
+                    return Err(IpcError::BadCapability);
+                }
+                (binding_slot, declared.rights, declared.name)
             }
-            (binding.slot, declared.rights, declared.name)
-        } else {
-            // A minted capability: the generation fixed the holder, the
-            // destination slot, and the rights ceiling before activation, and
-            // deferred only the object identity to the owner that mints it.
-            // The destination is the declared slot, never a number the caller
-            // chose, so a spawner cannot place a capability where the plan does
-            // not say it goes.
-            // Matched in ascending destination-slot order, which is the order
-            // a caller lists them: a spawn grant array is positional, and the
-            // child's capability table is addressed by slot. Record order in
-            // the generation is canonical-by-name and deliberately not relied
-            // on here.
-            let rank = index - child.binding_count();
-            let minted = (0..generation.minted_binding_count())
-                .filter_map(|at| generation.minted_binding(at).ok())
-                .filter(|minted| minted.holder == child_instance)
-                .fold(None, |selected: Option<MintedBinding<'_>>, candidate| {
-                    let below = (0..generation.minted_binding_count())
-                        .filter_map(|at| generation.minted_binding(at).ok())
-                        .filter(|other| {
-                            other.holder == child_instance && other.slot < candidate.slot
-                        })
-                        .count();
-                    if below == rank {
-                        Some(candidate)
-                    } else {
-                        selected
-                    }
-                })
-                .ok_or(IpcError::BadCapability)?;
-            if minted.owner != caller_instance {
-                sel4::debug_println!(
-                    "SLIME_GRAPH spawn preflight minted={} index={index} reason=not-minter",
-                    minted.name,
-                );
-                return Err(IpcError::BadCapability);
+            DeclaredCapability::Minted(minted) => {
+                // A minted capability's object identity is deferred to its
+                // minter, so only that minter may hand it over. Everything else
+                // about the edge — holder, slot, rights ceiling — was fixed
+                // before activation.
+                if minted.owner != caller_instance {
+                    sel4::debug_println!(
+                        "SLIME_GRAPH spawn preflight minted={} index={index} reason=not-minter",
+                        minted.name,
+                    );
+                    return Err(IpcError::BadCapability);
+                }
+                (minted.slot, minted.rights, minted.name)
             }
-            (minted.slot, minted.rights, minted.name)
         };
         if request.rights & !ceiling != 0 {
             sel4::debug_println!(
