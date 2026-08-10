@@ -43,7 +43,11 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
         # all five routes and the declared interposition admitted together.
         "one generation admitted every C8 role and route",
         (
-            r"SLIME_ROOT generation admitted number=22 executables=20 instances=1 grants=39 ",
+            # Twenty instances: `init`, the fabric, its two route workers, and
+            # the sixteen participants. Each is declared so the generation can
+            # state the capabilities its owner hands it at spawn; only `init`
+            # is root-autostart, which the staging line below asserts.
+            r"SLIME_ROOT generation admitted number=22 executables=20 instances=20 grants=39 ",
             r"SLIME_ROOT fabric graph=admitted schemas=4 routes=5 participants=15 "
             r"interpositions=1",
             r"SLIME_GRAPH staged task=\d+ instance=init executable=init grants=\d+ bindings=\d+ ",

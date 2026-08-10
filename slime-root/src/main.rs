@@ -4378,9 +4378,16 @@ struct SpawnPlan {
     /// The generation executable index and declared instance to construct.
     executable: usize,
     instance: usize,
-    /// Derived capabilities paired with their caller source slot and explicit
-    /// child-local destination slot. Spawn never consumes the parent slot.
-    granted: [Option<(u32, u32, graph::Capability)>; MAX_SPAWN_GRANTS],
+    /// Derived capabilities paired with their caller source slot, explicit
+    /// child-local destination slot, and whether the declaration authorizing
+    /// them is a minted binding. Spawn never consumes the parent slot.
+    ///
+    /// A generation-declared channel end is re-installed after construction
+    /// from `ChannelTable`'s single pre-created edge, so copying the parent's
+    /// end here would install the wrong side. A *minted* endpoint has no such
+    /// declared edge — its object exists only because the parent created it at
+    /// runtime — so the copy is the only way it reaches the child.
+    granted: [Option<(u32, u32, graph::Capability, bool)>; MAX_SPAWN_GRANTS],
     count: usize,
     /// Whether the executable capability carried `RIGHT_TRANSFER`, which is
     /// what decides if the supervision handle the parent receives may itself be
@@ -4657,6 +4664,7 @@ fn preflight_spawn_grants(
         // positional runs would force a caller to order its array by
         // declaration kind, which no component knows about.
         let declaration = nth_declared_capability(generation, child, child_instance, index)?;
+        let minted_declaration = matches!(declaration, DeclaredCapability::Minted(_));
         let (destination, ceiling, label) = match declaration {
             DeclaredCapability::Granted(binding_slot, declared) => {
                 // The grant must be one the *child* legitimately carries. Its
@@ -4727,6 +4735,7 @@ fn preflight_spawn_grants(
                 resource: held.resource,
                 rights: request.rights,
             },
+            minted_declaration,
         ));
     }
 
@@ -4842,15 +4851,19 @@ fn construct_child(
         return Err(IpcError::DestinationSlotsExhausted);
     };
     for granted in plan.granted.iter().take(plan.count) {
-        let Some((_, destination, capability)) = granted else {
+        let Some((_, destination, capability, minted)) = granted else {
             continue;
         };
-        // Declared channel bindings are installed from ChannelTable's single
-        // pre-created generation edge after construction. The request record
-        // still validates the parent's held authority in preflight, but copying
-        // that parent end here would both install the wrong side and collide
-        // with the child's explicit binding slot.
-        if matches!(capability.resource, graph::Resource::Endpoint { .. }) {
+        // A generation-declared channel binding is installed from
+        // ChannelTable's single pre-created edge after construction. The
+        // request record still validates the parent's held authority in
+        // preflight, but copying that parent end here would install the wrong
+        // side and collide with the child's explicit binding slot.
+        //
+        // A minted endpoint has no pre-created edge — the parent created the
+        // object at runtime, which is exactly what its declaration defers — so
+        // for those the copy is the only way the capability reaches the child.
+        if !minted && matches!(capability.resource, graph::Resource::Endpoint { .. }) {
             continue;
         }
         if child_table.install(*destination, *capability).is_err() {

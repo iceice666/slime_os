@@ -19,6 +19,9 @@ pub const ROLE_INIT: u32 = 1;
 pub type Rights = u64;
 pub const RIGHT_TRANSFER: Rights = 1 << 2;
 pub const RIGHT_EXEC: Rights = 1 << 3;
+/// Authority to launch an instance from an executable. Always travels with
+/// [`RIGHT_EXEC`]: naming an image conveys nothing without it.
+pub const RIGHT_SPAWN: Rights = 1 << 16;
 pub const RIGHT_ALL: Rights = (1 << 26) - 1;
 pub const MAX_SPAWN_BUDGET: u16 = 32;
 pub const POLICY_IMMUTABLE: u32 = 1;
@@ -1571,12 +1574,17 @@ impl<'a> Generation<'a> {
         let mut previous_name = None;
         for index in 0..self.minted_binding_count {
             let minted = self.minted_binding(index)?;
+            // `exec` is admissible here: an owner may hand a child one of the
+            // executables it holds, and the child then spawns instances it
+            // owns from it. It still travels with `RIGHT_SPAWN`, exactly as a
+            // static exec grant does, so a minted executable cannot be
+            // launched by a holder the graph did not authorize to spawn.
             if minted.owner >= self.instance_count
                 || minted.holder >= self.instance_count
                 || minted.slot >= MAX_TASK_CAPS
                 || minted.rights == 0
                 || minted.rights & !RIGHT_ALL != 0
-                || minted.rights & RIGHT_EXEC != 0
+                || (minted.rights & RIGHT_EXEC != 0) != (minted.rights & RIGHT_SPAWN != 0)
                 || minted.flags != 0
             {
                 return Err(DecodeError::BadBinding);

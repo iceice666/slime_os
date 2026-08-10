@@ -132,6 +132,7 @@ def check_component_image(blob: bytes, profile, name: str) -> None:
 
 RIGHT_TRANSFER = 1 << 2
 RIGHT_EXEC = 1 << 3
+RIGHT_SPAWN = 1 << 16
 RIGHT_ALL = (1 << 26) - 1
 MAX_SPAWN_BUDGET = 32
 PLAN_NONE = 0xFFFFFFFF
@@ -354,7 +355,10 @@ def check_generation(data: bytes, expected_identity: bytes | None = None) -> dic
         name = read_string(data, strings_offset, strings_len, name_offset)
         require(name > previous_minted, "NonCanonicalMintedBindings")
         require(owner < instances and holder < instances and slot < 64 and flags == 0, "BadMintedBinding")
-        require(rights and not rights & ~RIGHT_ALL and not rights & RIGHT_EXEC, "BadMintedBinding")
+        require(rights and not rights & ~RIGHT_ALL, "BadMintedBinding")
+        # `exec` is admissible, paired with `spawn`, so a minted executable
+        # cannot be launched by a holder the graph did not authorize to spawn.
+        require(bool(rights & RIGHT_EXEC) == bool(rights & RIGHT_SPAWN), "BadMintedBinding")
         # The holder must be owned by the minter, so a minted capability cannot
         # cross an ownership edge the instance graph does not declare.
         require(instance_rows[holder][2] == 1 and instance_rows[holder][3] == owner, "BadMintedBindingOwner")

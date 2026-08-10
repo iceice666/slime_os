@@ -2413,8 +2413,12 @@ def build_sel4_plan(
             if right not in RIGHT:
                 fail(f"minted binding {minted['name']}: unknown right {right}")
             rights |= RIGHT[right]
-        if rights == 0 or rights & RIGHT["exec"] or rights & ~RIGHT_ALL:
+        # `exec` is admissible, paired with `spawn`: an owner may hand a child
+        # an executable it holds, and the child spawns instances it owns.
+        if rights == 0 or rights & ~RIGHT_ALL:
             fail(f"minted binding {minted['name']}: invalid rights")
+        if bool(rights & RIGHT["exec"]) != bool(rights & RIGHT["spawn"]):
+            fail(f"minted binding {minted['name']}: exec must travel with spawn")
         minted_records.extend(
             GENERATION_MINTED_BINDING.pack(
                 string_offset(minted["name"]), owner, holder, slot, rights, 0
