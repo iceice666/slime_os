@@ -9,6 +9,12 @@ fn main() {
     println!("cargo:rerun-if-env-changed=SLIME_BOOT_BUNDLE_IDENTITY");
     println!("cargo::rustc-check-cfg=cfg(slime_boot_selector)");
     println!("cargo::rustc-check-cfg=cfg(slime_b38_force_unwind)");
+    println!("cargo::rustc-check-cfg=cfg(slime_b40_mutate_missing)");
+    println!("cargo::rustc-check-cfg=cfg(slime_b40_mutate_extra)");
+    println!("cargo::rustc-check-cfg=cfg(slime_b40_mutate_aliased)");
+    println!("cargo::rustc-check-cfg=cfg(slime_b40_mutate_wrong_slot)");
+    println!("cargo::rustc-check-cfg=cfg(slime_b40_mutate_wrong_type)");
+    println!("cargo::rustc-check-cfg=cfg(slime_b40_mutate_wrong_rights)");
     println!("cargo::rustc-check-cfg=cfg(slime_root_fixture)");
     if std::env::var("SLIME_BOOT_SELECTOR").as_deref() == Ok("1") {
         let identity = std::env::var("SLIME_BOOT_BUNDLE_IDENTITY")

@@ -13,6 +13,17 @@ const GRANT_POLICY_ONLY: u32 = 1;
 /// A send/recv grant whose channel object its source mints at runtime.
 const GRANT_MINTED: u32 = 1;
 
+/// Kernel-object kind discriminant for a CNode, matching `KERNEL_OBJECT_CNODE`
+/// in `scripts/build/build-generation.py`.
+const KERNEL_OBJECT_CNODE: u32 = 1;
+/// Kernel-object kind discriminant for a TCB.
+const KERNEL_OBJECT_TCB: u32 = 3;
+/// Kernel-object kind discriminant for an endpoint.
+const KERNEL_OBJECT_ENDPOINT: u32 = 5;
+/// Service discriminant for the root dispatch endpoint, matching
+/// `SERVICE_ROOT_DISPATCH` in `scripts/build/build-generation.py`.
+const SERVICE_ROOT_DISPATCH: u32 = 1;
+
 pub const KIND_KERNEL: u32 = 1;
 pub const KIND_BOOTSTRAP: u32 = 2;
 pub const KIND_COMPONENT: u32 = 3;
@@ -262,6 +273,16 @@ pub struct Mapping {
     pub attributes: u64,
     pub source_object: usize,
     pub flags: u32,
+}
+
+/// The slots a plan declares for a child's own TCB and fault endpoint. Either
+/// may be absent; the caller decides whether that is admissible for the path
+/// it is constructing.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct ChildSlotPlan {
+    pub service: Option<usize>,
+    pub tcb: Option<usize>,
+    pub fault: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -979,6 +1000,94 @@ impl<'a> Generation<'a> {
             source_object: u32_at(self.bytes, offset + 20)? as usize,
             flags: u32_at(self.bytes, offset + 24)?,
         })
+    }
+
+    /// CNode size in bits for the process owning `instance`, from the admitted
+    /// plan. This is the authority the generation declared the child's CSpace
+    /// must hold, so the root sizes the real CNode from it rather than from a
+    /// compiled-in constant.
+    ///
+    /// `None` when no process claims the instance, which is the fixture paths:
+    /// they construct tasks outside the plan and keep the minimum shell.
+    pub fn instance_cspace_size_bits(&self, instance: usize) -> Result<Option<u32>, DecodeError> {
+        for index in 0..self.process_count {
+            let process = self.process(index)?;
+            if process.instance != instance {
+                continue;
+            }
+            let object = self.kernel_object_record(process.cspace_object)?;
+            if object.kind != KERNEL_OBJECT_CNODE {
+                return Err(DecodeError::BadBinding);
+            }
+            return Ok(Some(object.size_bits));
+        }
+        Ok(None)
+    }
+
+    /// The CSpace slots the plan declares for a child's own TCB and fault
+    /// endpoint. Classified by the bound object's kind rather than its name,
+    /// so a renamed object still resolves.
+    ///
+    /// `None` when no process claims the instance.
+    pub fn instance_child_slots(
+        &self,
+        instance: usize,
+    ) -> Result<Option<ChildSlotPlan>, DecodeError> {
+        let mut found = None;
+        for index in 0..self.process_count {
+            if self.process(index)?.instance == instance {
+                found = Some(index);
+                break;
+            }
+        }
+        let Some(process_index) = found else {
+            return Ok(None);
+        };
+        let (mut tcb, mut fault) = (None, None);
+        for index in 0..self.cap_binding_count {
+            let binding = self.cap_binding(index)?;
+            if binding.process != process_index {
+                continue;
+            }
+            // Only the process's own bindings name a slot the root installs.
+            // A grant-derived binding carries its grant index and is filled by
+            // whoever holds the authority, against a placeholder object whose
+            // kind says nothing about what lands there.
+            if binding.grant != PLAN_NONE {
+                continue;
+            }
+            let object = self.kernel_object_record(binding.object)?;
+            let target = match object.kind {
+                KERNEL_OBJECT_TCB => &mut tcb,
+                KERNEL_OBJECT_ENDPOINT => &mut fault,
+                _ => continue,
+            };
+            // Two bindings of one kind would leave the installed slot
+            // ambiguous, so the plan is refused rather than guessed at.
+            if target.is_some() {
+                return Err(DecodeError::BadBinding);
+            }
+            *target = Some(binding.slot);
+        }
+        // The root service endpoint is declared as a service binding rather
+        // than a cap binding, because it is the child's route to the root
+        // rather than an object the child owns.
+        let mut service = None;
+        for index in 0..self.service_binding_count {
+            let binding = self.service_binding(index)?;
+            if binding.process != process_index || binding.service != SERVICE_ROOT_DISPATCH {
+                continue;
+            }
+            if service.is_some() {
+                return Err(DecodeError::BadBinding);
+            }
+            service = Some(binding.slot);
+        }
+        Ok(Some(ChildSlotPlan {
+            service,
+            tcb,
+            fault,
+        }))
     }
     pub fn mapping(&self, index: usize) -> Result<Mapping, DecodeError> {
         if index >= self.mapping_count {

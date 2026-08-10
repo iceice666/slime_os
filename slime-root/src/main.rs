@@ -60,7 +60,7 @@ use shared_buffer::{
     BufferHandle, GenerationEpoch, HolderId, HolderQuota, MappingRights, PAGE_SIZE,
     SharedBufferAdapter, SharedBufferTable, VSpaceCap,
 };
-use task::{Arrival, MAX_TASKS, Supervision, TaskId, TaskTable};
+use task::{Arrival, CHILD_CNODE_SIZE_BITS, MAX_TASKS, Supervision, TaskId, TaskTable};
 use timer::{PlatformTimer, ServiceTimerError, TimerScheduler, apply_deadline_programming};
 use transfer_window::WindowTable;
 use transit::Transit;
@@ -708,6 +708,10 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
             None,
             None,
             0,
+            // The fixture path constructs tasks outside any admitted plan,
+            // so it keeps the minimum four-slot shell.
+            CHILD_CNODE_SIZE_BITS,
+            task::ChildSlots::SHELL,
         ) {
             Ok(id) => id,
             Err(error) => fatal!("child task construction failed: {error:?}"),
@@ -2270,6 +2274,43 @@ fn launch_instance_graph(
             Ok(authority) => authority,
             Err(error) => fatal!("SLIME_GRAPH FAIL binding authority rejected: {error:?}"),
         };
+        // The child's CSpace is exactly as large as the admitted plan says its
+        // declared authority needs, not a compiled-in shell.
+        let cspace_size_bits = match generation.instance_cspace_size_bits(instance_index) {
+            Ok(Some(bits)) => bits as usize,
+            Ok(None) => fatal!(
+                "SLIME_GRAPH FAIL instance {} has no planned CSpace",
+                instance.name
+            ),
+            Err(error) => fatal!("SLIME_GRAPH FAIL CSpace plan rejected: {error:?}"),
+        };
+        // The child's own TCB and fault endpoint go where the plan declared
+        // them. A plan that omits either leaves the root nowhere to install
+        // authority the child needs, so it is refused rather than defaulted.
+        let child_slots = match generation.instance_child_slots(instance_index) {
+            Ok(Some(boot_contracts::generation::ChildSlotPlan {
+                service: Some(service),
+                tcb: Some(tcb),
+                fault: Some(fault),
+            })) => match (task::ChildSlots {
+                service: service as sel4::CPtrBits,
+                tcb: tcb as sel4::CPtrBits,
+                fault: fault as sel4::CPtrBits,
+            })
+            .validate()
+            {
+                Ok(slots) => slots,
+                Err(error) => fatal!(
+                    "SLIME_GRAPH FAIL instance {} declares an unusable child layout: {error:?}",
+                    instance.name
+                ),
+            },
+            Ok(_) => fatal!(
+                "SLIME_GRAPH FAIL instance {} has no planned service, TCB, or fault slot",
+                instance.name
+            ),
+            Err(error) => fatal!("SLIME_GRAPH FAIL child slot plan rejected: {error:?}"),
+        };
         let id = match tasks.create(
             allocator,
             &image,
@@ -2289,6 +2330,8 @@ fn launch_instance_graph(
             } else {
                 0
             },
+            cspace_size_bits,
+            child_slots,
         ) {
             Ok(id) => id,
             Err(error) => fatal!(
@@ -4818,6 +4861,26 @@ fn construct_child(
             Some(plan.instance),
             // A dynamically spawned child is never the bootstrap instance.
             0,
+            // A spawned child is a declared instance too, so its CSpace comes
+            // from the same plan the boot graph reads.
+            generation
+                .instance_cspace_size_bits(plan.instance)
+                .map_err(|_| IpcError::BadCapability)?
+                .ok_or(IpcError::BadCapability)? as usize,
+            match generation.instance_child_slots(plan.instance) {
+                Ok(Some(boot_contracts::generation::ChildSlotPlan {
+                    service: Some(service),
+                    tcb: Some(tcb),
+                    fault: Some(fault),
+                })) => (task::ChildSlots {
+                    service: service as sel4::CPtrBits,
+                    tcb: tcb as sel4::CPtrBits,
+                    fault: fault as sel4::CPtrBits,
+                })
+                .validate()
+                .map_err(|_| IpcError::BadCapability)?,
+                _ => return Err(IpcError::BadCapability),
+            },
         )
         .map_err(|_| IpcError::DestinationSlotsExhausted)?;
 

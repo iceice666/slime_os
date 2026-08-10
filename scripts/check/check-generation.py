@@ -136,6 +136,10 @@ RIGHT_SPAWN = 1 << 16
 RIGHT_ALL = (1 << 26) - 1
 MAX_SPAWN_BUDGET = 32
 PLAN_NONE = 0xFFFFFFFF
+# Service discriminant for the root dispatch endpoint, and the one slot every
+# component's runtime resolves it from.
+SERVICE_ROOT_DISPATCH = 1
+ROOT_SERVICE_SLOT = 1
 GRANT_POLICY_ONLY = 1
 GRANT_MINTED = 1
 BOOT_ACTIONS = {
@@ -295,9 +299,12 @@ def check_generation(data: bytes, expected_identity: bytes | None = None) -> dic
         name_offset, kind, owner_process, size_bits, count, source_object, flags = GENERATION_KERNEL_OBJECT.unpack_from(data, kernel_object_offset + index * GENERATION_KERNEL_OBJECT.size)
         require(owner_process < processes and 1 <= kind <= 6 and count > 0 and flags == 0, "BadKernelObject")
         require(source_object == PLAN_NONE or source_object < objects, "BadKernelObject")
-        kernel_object_rows.append({"kind": kind})
+        kernel_object_rows.append({"kind": kind, "size_bits": size_bits})
     for process in process_rows:
         require(kernel_object_rows[process["cspace_object"]]["kind"] == 1, "BadKernel")
+        # The root sizes the real CNode from this, so a zero-bit CSpace would
+        # leave nowhere to install even the null slot.
+        require(kernel_object_rows[process["cspace_object"]]["size_bits"] > 0, "BadKernel")
         require(kernel_object_rows[process["vspace_object"]]["kind"] == 2, "BadKernel")
     thread_rows = []
     for index in range(threads):
@@ -315,7 +322,11 @@ def check_generation(data: bytes, expected_identity: bytes | None = None) -> dic
     policy_only_grants = set()
     for index in range(cap_bindings):
         process, slot, obj, rights, badge, grant, flags = GENERATION_CAP_BINDING.unpack_from(data, cap_binding_offset + index * GENERATION_CAP_BINDING.size)
-        require(process < processes and slot < 64 and obj < kernel_objects and rights and flags & ~GRANT_POLICY_ONLY == 0, "BadCapBinding")
+        # Every declared slot must be addressable in the CNode the plan sized
+        # for that process: the root installs at exactly this slot, so one
+        # outside the CSpace has no destination.
+        cspace_bits = kernel_object_rows[process_rows[process]["cspace_object"]]["size_bits"] if process < processes else 0
+        require(process < processes and slot < (1 << cspace_bits) and obj < kernel_objects and rights and flags & ~GRANT_POLICY_ONLY == 0, "BadCapBinding")
         require(grant == PLAN_NONE or grant < grants, "BadCapBinding")
         if grant != PLAN_NONE:
             if flags & GRANT_POLICY_ONLY == 0:
@@ -323,6 +334,36 @@ def check_generation(data: bytes, expected_identity: bytes | None = None) -> dic
             else:
                 policy_only_grants.add(grant)
             require(rights == grant_rows[grant][3], "BadCapBinding")
+    # The root reads a process's own TCB and fault slots out of these bindings
+    # and refuses a plan naming either twice, so the twin refuses it here too.
+    own_slots = {}
+    for index in range(cap_bindings):
+        process, slot, obj, rights, badge, grant, flags = GENERATION_CAP_BINDING.unpack_from(data, cap_binding_offset + index * GENERATION_CAP_BINDING.size)
+        if grant != PLAN_NONE:
+            continue
+        kind = kernel_object_rows[obj]["kind"]
+        if kind not in (3, 5):
+            continue
+        key = (process, kind)
+        require(key not in own_slots, "BadCapBinding")
+        own_slots[key] = slot
+    # Every component resolves the root endpoint from a compiled-in constant
+    # (`ROOT_SERVICE_SLOT` in components/runtime/src/syscall/sel4_transport.rs),
+    # so a plan declaring it anywhere else builds and admits cleanly and then
+    # produces children whose first syscall invokes an empty slot. Pinned here
+    # until the runtime reads the slot from the boot layout.
+    for index in range(service_bindings):
+        process, service, slot, obj, rights, badge, flags = GENERATION_SERVICE_BINDING.unpack_from(data, service_binding_offset + index * GENERATION_SERVICE_BINDING.size)
+        if service == SERVICE_ROOT_DISPATCH:
+            require(slot == ROOT_SERVICE_SLOT, "BadServiceBinding")
+
+    for process_index in range(processes):
+        # Both are required: the root has nowhere to put the child's TCB or its
+        # fault endpoint otherwise, and refuses the instance at construction.
+        require((process_index, 3) in own_slots, "BadCapBinding")
+        require((process_index, 5) in own_slots, "BadCapBinding")
+        require(own_slots[(process_index, 3)] != own_slots[(process_index, 5)], "BadCapBinding")
+
     for index, grant_row in enumerate(grant_rows):
         # A minted grant's object does not exist at admission, so the plan
         # carries no capability for it; its two minted bindings state where

@@ -358,8 +358,17 @@ def check_manifest() -> None:
         )
 
 
+# The most recent boot transcript, whatever its outcome. Set by `boot`.
+LAST_TRANSCRIPT = ""
+
+
 def boot(profile: dict[str, object]) -> str:
     """Boot until the supervisor certifies the graph, or a failure appears."""
+    # Cleared up front so a caller that recovers `LAST_TRANSCRIPT` after a
+    # failure cannot read the previous boot's output: every exit path from
+    # here on either overwrites it or leaves it empty.
+    global LAST_TRANSCRIPT
+    LAST_TRANSCRIPT = ""
     qemu = shutil.which("qemu-system-aarch64")
     if qemu is None:
         fail("qemu-system-aarch64 is not on PATH")
@@ -421,6 +430,9 @@ def boot(profile: dict[str, object]) -> str:
             process.kill()
             process.wait()
     transcript = "\n".join(lines)
+    # Published so a gate that boots this image expecting a refusal can read
+    # what the root actually said, rather than only that it failed.
+    LAST_TRANSCRIPT = transcript
     if outcome == "failure":
         report_transcript(transcript)
         fail(f"boot stopped at failure marker: {failure!r}")

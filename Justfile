@@ -143,6 +143,20 @@ sel4_boot_layout_check: sel4_pin_check
 sel4_boot_layout_bless: sel4_pin_check
     python3 scripts/check/check-sel4-boot-layout.py --bless
 
+# B40: every child's CSpace against the generation's admitted plan.
+#
+# Boots the unmutated boot plane, then rebuilds the root once per injected
+# mutation and requires the audit to refuse each. Here a boot that *succeeds*
+# under a mutation is the failure: it means the audit cannot see that
+# deviation. Covers a declared capability missing, an extra one in an
+# undeclared slot, one at the wrong slot, one aliased into two slots, and one
+# carrying broader rights than admitted.
+#
+# Six root builds and six boots, so it is slower than the plane gates and is
+# not part of `just test`.
+sel4_capability_layout_check: sel4_pin_check
+    python3 scripts/check/check-sel4-capability-layout.py
+
 # B25 and P5.4.6: build the bounded-call image, boot it, and require the full
 # C8.6 native-call plane plus the seL4 composition that makes it possible:
 # init mints authenticated control pairs and transfers each participant's
@@ -653,7 +667,7 @@ test_sel4_root:
         echo "test_sel4_root: no installed seL4 prefix at $prefix; run 'just sel4_qemu_image_check' first" >&2
         exit 1
     fi
-    expected=130
+    expected=140
     # Pinned rather than ambient, on `lint_sel4_root`'s rule: this build
     # consumes the installed seL4 prefix, so it must use the toolchain that
     # prefix was produced against. `rust-toolchain.toml`'s default is a

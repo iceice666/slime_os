@@ -4,15 +4,18 @@
 //! seL4 capability in the child's CSpace. The whole operation surface takes
 //! `u32` slots — `spawn(executable_slot, …)`, `endpoint_create(factory_slot)`,
 //! `send(slot, …)` — and `ipc::decode_request` refuses a message carrying real
-//! seL4 extra-caps outright. So a child CSpace holds only the four capabilities
+//! seL4 extra-caps outright. So a child CSpace holds only the capabilities
 //! `task.rs` installs (null, service endpoint, own TCB, fault endpoint), and
 //! every grant the generation declares lives here instead.
 //!
-//! That is what keeps `CHILD_CNODE_SIZE_BITS = 2` correct while `init`'s boot
-//! layout reaches slot 18: the layout numbers *logical* slots, and the root
+//! That is why `init`'s boot layout can reach slot 18 while the child's CSpace
+//! holds four capabilities: the layout numbers *logical* slots, and the root
 //! resolves each one to the object it names. A component cannot forge a slot it
 //! was not granted, because the resolution is a table lookup here rather than a
 //! CSpace address the child controls.
+//!
+//! The CSpace itself is sized from the generation's admitted plan (B40), not
+//! from a constant, so its size and this table's size are independent.
 //!
 //! Slot numbers come from the generation's boot-layout resource, so the
 //! component that uses a slot and the root that fills it read one source (B10).

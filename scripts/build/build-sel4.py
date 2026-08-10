@@ -93,6 +93,17 @@ SAMPLE_VARIANT = "sample"
 STREAM_VARIANT = "stream"
 SUPERVISION_VARIANT = "supervision"
 RECLAMATION_VARIANT = "reclamation"
+
+# B40 child-CSpace mutations, one per failure mode the capability-layout gate
+# asserts the audit refuses.
+B40_MUTATIONS = (
+    "missing",
+    "extra",
+    "aliased",
+    "wrong_slot",
+    "wrong_type",
+    "wrong_rights",
+)
 CROSSING_VARIANT = "crossing"
 CALL_VARIANT = "call"
 QOS_VARIANT = "qos"
@@ -765,6 +776,17 @@ def build_application(
     if variant == RECLAMATION_VARIANT:
         rustflags = root_environment.get("RUSTFLAGS", "")
         root_environment["RUSTFLAGS"] = f"{rustflags} --cfg slime_b38_force_unwind".strip()
+    # B40 negative mutations: perturb one child CSpace in exactly one way so
+    # the capability-layout audit's refusal is observed rather than assumed.
+    # Never set for a product variant.
+    mutation = os.environ.get("SLIME_B40_MUTATION")
+    if mutation:
+        if mutation not in B40_MUTATIONS:
+            fail(f"unknown B40 mutation {mutation!r}")
+        rustflags = root_environment.get("RUSTFLAGS", "")
+        root_environment["RUSTFLAGS"] = (
+            f"{rustflags} --cfg slime_b40_mutate_{mutation}".strip()
+        )
     # Separate target directories: the images embed different generations, so
     # sharing one would make each build invalidate the others' artifacts and
     # whichever gate ran last would boot a rebuilt image.

@@ -59,6 +59,57 @@ pub const CHILD_SLOT_TCB: sel4::CPtrBits = 2;
 /// Child CSpace slot holding the task's badged fault-handler endpoint.
 pub const CHILD_SLOT_FAULT: sel4::CPtrBits = 3;
 
+/// Destination slots in a child's CSpace, resolved from the admitted plan.
+///
+/// The root installs three capabilities it owns rather than the child: the
+/// badged service endpoint, the child's own TCB when self-managed, and the
+/// badged fault endpoint. Their addresses are the generation's to declare, so
+/// this carries what the plan said rather than what the root assumed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ChildSlots {
+    pub service: sel4::CPtrBits,
+    pub tcb: sel4::CPtrBits,
+    pub fault: sel4::CPtrBits,
+}
+
+impl ChildSlots {
+    /// The four-slot shell the fixture paths construct outside any plan.
+    pub const SHELL: Self = Self {
+        service: CHILD_SLOT_SERVICE,
+        tcb: CHILD_SLOT_TCB,
+        fault: CHILD_SLOT_FAULT,
+    };
+
+    /// Refuse a layout the child could not actually use.
+    ///
+    /// Every component resolves the root endpoint from a compiled-in constant
+    /// (`ROOT_SERVICE_SLOT` in the runtime's seL4 transport), so a plan that
+    /// puts the service endpoint anywhere else yields a child whose first
+    /// syscall invokes an empty slot. The plan does not get to move it until
+    /// the runtime reads the slot from the boot layout too.
+    ///
+    /// The slots must also be distinct and non-null, or one install silently
+    /// overwrites another and an unbadged arrival stops being distinguishable.
+    pub fn validate(self) -> Result<Self, TaskError> {
+        let mismatch = |slot| {
+            Err(TaskError::CSpaceMismatch {
+                slot,
+                occupied: false,
+            })
+        };
+        if self.service != CHILD_SLOT_SERVICE {
+            return mismatch(self.service);
+        }
+        if self.tcb == 0 || self.fault == 0 {
+            return mismatch(0);
+        }
+        if self.tcb == self.fault || self.tcb == self.service || self.fault == self.service {
+            return mismatch(self.fault);
+        }
+        Ok(self)
+    }
+}
+
 /// Child scheduling priority. Strictly below the root task's own priority so
 /// the root service loop always preempts a child that becomes runnable.
 pub const CHILD_PRIORITY: sel4::Word = 254;
@@ -124,6 +175,12 @@ pub enum TaskError {
     Mint {
         slot: sel4::CPtrBits,
         error: sel4::Error,
+    },
+    /// The constructed CSpace does not match the admitted plan: a slot the
+    /// plan declared is empty, or a slot it did not declare is occupied.
+    CSpaceMismatch {
+        slot: sel4::CPtrBits,
+        occupied: bool,
     },
     /// `seL4_TCB_Configure` failed.
     Configure(sel4::Error),
@@ -349,19 +406,24 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
         // parameter. Only the bootstrap instance reads it; every other
         // component receives zero and ignores it.
         startup_arg: u32,
+        // CNode size in bits from the generation's admitted plan, so a child's
+        // CSpace is exactly as large as its declared authority needs. Falls
+        // back to the minimum shell for the fixture paths, which carry no plan.
+        cnode_size_bits: usize,
+        // Destination slots for the child's own TCB and fault endpoint, from
+        // the same plan. The fixture paths pass the compiled-in shell slots.
+        child_slots: ChildSlots,
     ) -> Result<TaskId, TaskError> {
         let Some(index) = self.tasks.iter().position(Option::is_none) else {
             return Err(TaskError::TableFull { limit: CAPACITY });
         };
         let id = TaskId(self.next_id);
         let mut plan = image.vspace_arena_plan().map_err(VSpaceError::Image)?;
-        plan.add(sel4::cap_type::CNode::object_blueprint(
-            CHILD_CNODE_SIZE_BITS,
-        ))
-        .ok_or(TaskError::Alloc(AllocError::UntypedExhausted {
-            size_bits: usize::BITS as usize,
-            remaining: 0,
-        }))?;
+        plan.add(sel4::cap_type::CNode::object_blueprint(cnode_size_bits))
+            .ok_or(TaskError::Alloc(AllocError::UntypedExhausted {
+                size_bits: usize::BITS as usize,
+                remaining: 0,
+            }))?;
         plan.add(sel4::cap_type::Tcb::object_blueprint())
             .ok_or(TaskError::Alloc(AllocError::UntypedExhausted {
                 size_bits: usize::BITS as usize,
@@ -379,7 +441,7 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
             let vspace =
                 create_child_vspace(allocator, arena, image, caller_vspace, scratch, asid_pool)?;
             let cnode = allocator
-                .allocate_variable_in::<sel4::cap_type::CNode>(arena, CHILD_CNODE_SIZE_BITS)?
+                .allocate_variable_in::<sel4::cap_type::CNode>(arena, cnode_size_bits)?
                 .cap();
             let tcb = allocator
                 .allocate_fixed_in::<sel4::cap_type::Tcb>(arena)?
@@ -390,16 +452,31 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
             }
 
             let root_cnode = sel4::init_thread::slot::CNODE.cap();
+            let mut ledger = InstallLedger::default();
             // Slot 1 is invocation-only transport. In particular it must never
             // carry receive authority: all children share the root endpoint,
             // so a receiver could dequeue and answer another child's request
             // before the root dispatcher saw it.
             mint_child_slot(
                 cnode,
-                CHILD_SLOT_SERVICE,
+                cnode_size_bits,
+                child_slots.service,
                 &root_cnode.absolute_cptr(service_endpoint),
-                child_service_rights(authority),
+                {
+                    // Wrong rights: grant read on the shared root endpoint,
+                    // which would let this child dequeue another's request.
+                    #[cfg(slime_b40_mutate_wrong_rights)]
+                    {
+                        sel4::CapRights::all()
+                    }
+                    #[cfg(not(slime_b40_mutate_wrong_rights))]
+                    {
+                        child_service_rights(authority)
+                    }
+                },
                 id.service_badge(),
+                true,
+                &mut ledger,
             )?;
             // Slot 3: the same endpoint object under this task's fault badge.
             // The kernel requires a fault handler endpoint to carry send plus
@@ -407,28 +484,78 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
             // child's CSpace.
             mint_child_slot(
                 cnode,
-                CHILD_SLOT_FAULT,
+                cnode_size_bits,
+                {
+                    #[cfg(slime_b40_mutate_wrong_slot)]
+                    {
+                        child_slots.fault.wrapping_add(1) % (1 << cnode_size_bits)
+                    }
+                    #[cfg(not(slime_b40_mutate_wrong_slot))]
+                    {
+                        child_slots.fault
+                    }
+                },
                 &root_cnode.absolute_cptr(service_endpoint),
                 sel4::CapRightsBuilder::none()
                     .write(true)
                     .grant_reply(true)
                     .build(),
-                id.fault_badge(),
+                {
+                    // Aliased: reuse the service badge so the fault slot holds
+                    // a capability indistinguishable from the service one.
+                    #[cfg(slime_b40_mutate_aliased)]
+                    {
+                        id.service_badge()
+                    }
+                    #[cfg(not(slime_b40_mutate_aliased))]
+                    {
+                        id.fault_badge()
+                    }
+                },
+                true,
+                &mut ledger,
             )?;
             if supervision == Supervision::SelfManaged {
                 mint_child_slot(
                     cnode,
-                    CHILD_SLOT_TCB,
+                    cnode_size_bits,
+                    child_slots.tcb,
                     &root_cnode.absolute_cptr(tcb),
                     sel4::CapRights::all(),
                     0,
+                    false,
+                    &mut ledger,
                 )?;
+                #[cfg(slime_b40_mutate_wrong_type)]
+                {
+                    // Wrong type: the plan binds a TCB here, so replace it
+                    // with the CNode. Occupancy is unchanged, which is exactly
+                    // why the audit must check the installed type and not only
+                    // whether something is present.
+                    let cptr =
+                        cnode.absolute_cptr_from_bits_with_depth(child_slots.tcb, cnode_size_bits);
+                    let _ = cptr.delete();
+                    let _ = cptr.copy(&root_cnode.absolute_cptr(cnode), sel4::CapRights::all());
+                }
             }
 
+            // Audit the constructed CSpace against what the plan declared, by
+            // asking the kernel rather than trusting the loop above. Every
+            // slot the plan named must be occupied and every slot it did not
+            // must be empty; a `Delete` on an empty slot succeeds and on a
+            // full one is refused, which is the only way to observe occupancy
+            // without destroying it.
+            //
+            // This catches an install that silently landed elsewhere — a wrong
+            // depth, a stale constant, a plan naming a slot outside the CNode.
+            audit_child_cspace(cnode, cnode_size_bits, child_slots, supervision)?;
+            // Type is not an occupancy question, so it is probed separately.
+            audit_child_types(cnode, cnode_size_bits, child_slots, supervision)?;
+
             tcb.tcb_configure(
-                sel4::CPtr::from_bits(CHILD_SLOT_FAULT),
+                sel4::CPtr::from_bits(child_slots.fault),
                 cnode,
-                sel4::CNodeCapData::new(0, sel4::WORD_SIZE - CHILD_CNODE_SIZE_BITS),
+                sel4::CNodeCapData::new(0, sel4::WORD_SIZE - cnode_size_bits),
                 vspace.vspace,
                 vspace.ipc_buffer_addr as sel4::Word,
                 vspace.ipc_buffer,
@@ -563,15 +690,227 @@ fn construction_record(task: TaskId, arena: TaskArenaId, slots: usize) -> Cleanu
     CleanupRecord { task, arena, slots }
 }
 
+/// Verify each installed capability has the type the plan declared.
+///
+/// Occupancy says a slot is full; it does not say what filled it. seL4 exposes
+/// no "read this slot's type", but it does refuse a type-specific invocation
+/// against the wrong object: `decodeInvocation` dispatches on the capability's
+/// type and answers `InvalidCapability` when no branch matches. Suspending a
+/// TCB is such an invocation, and it is idempotent on a thread the root has
+/// not yet resumed, so it costs nothing to ask.
+///
+/// This catches the confusion that matters: a CNode or endpoint sitting where
+/// the plan declared the child's own TCB would hand the child authority of an
+/// entirely different shape.
+fn audit_child_types(
+    cnode: sel4::cap::CNode,
+    cnode_size_bits: usize,
+    slots: ChildSlots,
+    supervision: Supervision,
+) -> Result<(), TaskError> {
+    if supervision != Supervision::SelfManaged {
+        return Ok(());
+    }
+    // The slot lives in the child's CSpace, which the root cannot invoke
+    // through directly, so copy it into a root slot and probe that. Slot 0 of
+    // the child CNode is the null slot the plan never binds \u2014 the occupancy
+    // audit that runs first has already established it is empty \u2014 so it is
+    // available as scratch, and the copy is deleted before returning.
+    let root_cnode = sel4::init_thread::slot::CNODE.cap();
+    let scratch_bits = sel4::init_thread::slot::NULL.cptr().bits();
+    let scratch = root_cnode.absolute_cptr_from_bits_with_depth(scratch_bits, sel4::WORD_SIZE);
+    let source = cnode.absolute_cptr_from_bits_with_depth(slots.tcb, cnode_size_bits);
+    if scratch.copy(&source, sel4::CapRights::all()).is_err() {
+        return Err(TaskError::CSpaceMismatch {
+            slot: slots.tcb,
+            occupied: false,
+        });
+    }
+    // `tcb_suspend` is refused with `InvalidCapability` for every non-TCB
+    // type, and the thread has not been resumed yet, so it is a no-op here.
+    let is_tcb = sel4::cap::Tcb::from_bits(scratch_bits)
+        .tcb_suspend()
+        .is_ok();
+    let _ = scratch.delete();
+    if !is_tcb {
+        return Err(TaskError::CSpaceMismatch {
+            slot: slots.tcb,
+            occupied: true,
+        });
+    }
+    Ok(())
+}
+
+/// Compare a constructed child CSpace to the slots the plan declared.
+///
+/// Occupancy is probed with `seL4_CNode_Move` onto the slot itself: the kernel
+/// refuses a move whose destination is occupied and refuses one whose source
+/// is empty, and in neither case is anything moved. That makes it a read-only
+/// occupancy question with no scratch slot and no risk of destroying the
+/// capability under audit.
+fn audit_child_cspace(
+    cnode: sel4::cap::CNode,
+    cnode_size_bits: usize,
+    slots: ChildSlots,
+    supervision: Supervision,
+) -> Result<(), TaskError> {
+    let expect_tcb = supervision == Supervision::SelfManaged;
+    // Negative-mutation probes for `just sel4_capability_layout_check`. Each
+    // perturbs the constructed CSpace in one of the ways B40 names, so the
+    // audit's refusal is observed rather than assumed. None is compiled into
+    // the product image.
+    #[cfg(slime_b40_mutate_missing)]
+    {
+        // Missing: delete a capability the plan declared.
+        let _ = cnode
+            .absolute_cptr_from_bits_with_depth(slots.fault, cnode_size_bits)
+            .delete();
+    }
+    #[cfg(slime_b40_mutate_extra)]
+    {
+        // Extra: install a capability into a slot the plan left empty.
+        let free = (0..(1u64 << cnode_size_bits) as sel4::CPtrBits)
+            .find(|slot| {
+                *slot != slots.service && *slot != slots.fault && *slot != slots.tcb && *slot != 0
+            })
+            .unwrap_or(0);
+        let _ = cnode
+            .absolute_cptr_from_bits_with_depth(free, cnode_size_bits)
+            .copy(
+                &cnode.absolute_cptr_from_bits_with_depth(slots.service, cnode_size_bits),
+                sel4::CapRights::all(),
+            );
+    }
+
+    for slot in 0..(1u64 << cnode_size_bits) {
+        let slot = slot as sel4::CPtrBits;
+        let declared =
+            slot == slots.service || slot == slots.fault || (expect_tcb && slot == slots.tcb);
+        let cptr = cnode.absolute_cptr_from_bits_with_depth(slot, cnode_size_bits);
+        // `Move` onto itself: `DeleteFirst` means occupied, `FailedLookup`
+        // means empty. Any other answer is the slot not being addressable,
+        // which is itself a layout defect.
+        let occupied = match cptr.move_(&cptr) {
+            Err(sel4::Error::DeleteFirst) => true,
+            Err(sel4::Error::FailedLookup) => false,
+            _ => {
+                return Err(TaskError::CSpaceMismatch {
+                    slot,
+                    occupied: false,
+                });
+            }
+        };
+        if occupied != declared {
+            return Err(TaskError::CSpaceMismatch { slot, occupied });
+        }
+    }
+    Ok(())
+}
+
+/// A source capability's address: root CNode, index, and resolution depth.
+/// Two installs naming the same path under the same badge are indistinguishable
+/// to the child, which is what makes them an alias.
+type SourcePath = (sel4::CPtrBits, sel4::CPtrBits, usize);
+
+/// Records what the root installed into a child CSpace, so an alias — the same
+/// object under the same badge reachable at two addresses — is refused.
+///
+/// The kernel cannot answer "what is in this slot": occupancy is observable,
+/// identity is not. So identity is tracked on the way in. Every install goes
+/// through `mint_child_slot`, which is the only path that writes a child slot,
+/// making this ledger complete by construction rather than by convention.
+#[derive(Default)]
+struct InstallLedger {
+    entries: [Option<(SourcePath, sel4::Badge)>; MAX_CHILD_INSTALLS],
+    len: usize,
+}
+
+/// Distinct capabilities the root installs into one child: service, fault, TCB.
+const MAX_CHILD_INSTALLS: usize = 3;
+
+impl InstallLedger {
+    /// Record one install, refusing a source/badge pair already present.
+    ///
+    /// Two slots may legitimately hold the same *object* — the service and
+    /// fault endpoints are one endpoint under two badges — so identity here is
+    /// the pair, not the object alone. Equal pairs are indistinguishable to
+    /// the child and to the kernel, which is what makes them an alias.
+    fn record(
+        &mut self,
+        slot: sel4::CPtrBits,
+        source: SourcePath,
+        badge: sel4::Badge,
+        rights: &sel4::CapRights,
+        // Whether this install targets the shared root service endpoint. The
+        // child's own TCB legitimately carries every right, so the receive ban
+        // below applies only to the endpoint every child shares.
+        shared_endpoint: bool,
+    ) -> Result<(), TaskError> {
+        // Rights are checked here rather than by probing the installed slot,
+        // because seL4 masks a copy's rights silently and never reports back
+        // what a capability carries. This is the single chokepoint every
+        // child install passes through, so the check is complete.
+        //
+        // No child may hold receive authority on the root service endpoint:
+        // all children share it, so a receiver could dequeue and answer
+        // another child's request before the root dispatcher saw it. That is
+        // a confinement property, not a policy, so it holds regardless of
+        // what the grant asked for.
+        if shared_endpoint && rights.clone().into_inner().get_capAllowRead() != 0 {
+            return Err(TaskError::CSpaceMismatch {
+                slot,
+                occupied: true,
+            });
+        }
+        for entry in self.entries.iter().flatten() {
+            if *entry == (source, badge) {
+                return Err(TaskError::CSpaceMismatch {
+                    slot,
+                    occupied: true,
+                });
+            }
+        }
+        if self.len >= MAX_CHILD_INSTALLS {
+            return Err(TaskError::CSpaceMismatch {
+                slot,
+                occupied: true,
+            });
+        }
+        self.entries[self.len] = Some((source, badge));
+        self.len += 1;
+        Ok(())
+    }
+}
+
 fn mint_child_slot(
     cnode: sel4::cap::CNode,
+    // Depth must match the CNode's own size: the child's CSpace is sized from
+    // the admitted plan, so a fixed depth here would resolve the slot against
+    // a guard the CNode does not have and install at the wrong address.
+    cnode_size_bits: usize,
     slot: sel4::CPtrBits,
     source: &sel4::AbsoluteCPtr,
     rights: sel4::CapRights,
     badge: sel4::Badge,
+    shared_endpoint: bool,
+    ledger: &mut InstallLedger,
 ) -> Result<(), TaskError> {
+    ledger.record(
+        slot,
+        // Identity is the full source path, not just its bits: two sources
+        // addressed through different roots or at different depths can carry
+        // colliding bits without naming the same capability.
+        (
+            source.root().bits(),
+            source.path().bits(),
+            source.path().depth(),
+        ),
+        badge,
+        &rights,
+        shared_endpoint,
+    )?;
     cnode
-        .absolute_cptr_from_bits_with_depth(slot, CHILD_CNODE_SIZE_BITS)
+        .absolute_cptr_from_bits_with_depth(slot, cnode_size_bits)
         .mint(source, rights, badge)
         .map_err(|error| TaskError::Mint { slot, error })
 }
@@ -579,7 +918,8 @@ fn mint_child_slot(
 #[cfg(test)]
 mod tests {
     use super::{
-        Arrival, CHILD_CNODE_SIZE_BITS, CHILD_SLOT_FAULT, ConstructionStage, TaskId,
+        Arrival, CHILD_CNODE_SIZE_BITS, CHILD_SLOT_FAULT, CHILD_SLOT_SERVICE, ChildSlots,
+        ConstructionStage, InstallLedger, MAX_CHILD_INSTALLS, TaskError, TaskId,
         child_service_rights, construction_record,
     };
     use crate::generation::Authority;
@@ -649,5 +989,160 @@ mod tests {
     #[test]
     fn every_granted_slot_fits_the_child_cnode() {
         assert!(CHILD_SLOT_FAULT < (1 << CHILD_CNODE_SIZE_BITS));
+    }
+
+    /// Record an install of a non-shared capability carrying no rights, which
+    /// is the shape the ledger's identity rules are about.
+    fn record(
+        ledger: &mut InstallLedger,
+        slot: sel4::CPtrBits,
+        source: sel4::CPtrBits,
+        badge: sel4::Badge,
+    ) -> Result<(), TaskError> {
+        ledger.record(
+            slot,
+            (0, source, sel4::WORD_SIZE),
+            badge,
+            &sel4::CapRights::none(),
+            false,
+        )
+    }
+
+    /// The ledger's whole purpose: two slots holding a capability the child
+    /// cannot tell apart is an alias, and the second install is refused.
+    #[test]
+    fn ledger_refuses_an_identical_source_and_badge() {
+        let mut ledger = InstallLedger::default();
+        assert!(record(&mut ledger, 1, 7, 0x20).is_ok());
+        assert!(matches!(
+            record(&mut ledger, 3, 7, 0x20),
+            Err(TaskError::CSpaceMismatch { slot: 3, .. })
+        ));
+    }
+
+    /// The service and fault slots are one endpoint under two badges, which is
+    /// the intended layout rather than an alias.
+    #[test]
+    fn ledger_admits_one_object_under_distinct_badges() {
+        let mut ledger = InstallLedger::default();
+        assert!(record(&mut ledger, 1, 7, 0x20).is_ok());
+        assert!(record(&mut ledger, 3, 7, 0x21).is_ok());
+    }
+
+    /// A different object under a badge already used is still distinguishable,
+    /// so it is not an alias.
+    #[test]
+    fn ledger_admits_distinct_objects_under_one_badge() {
+        let mut ledger = InstallLedger::default();
+        assert!(record(&mut ledger, 1, 7, 0).is_ok());
+        assert!(record(&mut ledger, 2, 9, 0).is_ok());
+    }
+
+    /// More installs than a child CSpace can legitimately receive means the
+    /// construction path grew a case the ledger was never sized for.
+    #[test]
+    fn ledger_refuses_more_installs_than_a_child_receives() {
+        let mut ledger = InstallLedger::default();
+        for index in 0..MAX_CHILD_INSTALLS {
+            assert!(
+                record(
+                    &mut ledger,
+                    index as sel4::CPtrBits,
+                    index as sel4::CPtrBits,
+                    0
+                )
+                .is_ok()
+            );
+        }
+        assert!(record(&mut ledger, 9, 99, 0).is_err());
+    }
+
+    /// The confinement property the ledger enforces: no child may hold receive
+    /// authority on the endpoint every child shares, whatever the grant asked
+    /// for. A child that could receive would dequeue another child's request
+    /// before the root dispatcher saw it.
+    #[test]
+    fn ledger_refuses_receive_on_the_shared_endpoint() {
+        let mut ledger = InstallLedger::default();
+        assert!(matches!(
+            ledger.record(
+                1,
+                (0, 7, sel4::WORD_SIZE),
+                0x20,
+                &sel4::CapRights::all(),
+                true
+            ),
+            Err(TaskError::CSpaceMismatch { slot: 1, .. })
+        ));
+    }
+
+    /// The child's own TCB is not shared, so it legitimately carries every
+    /// right; the ban must not reach it.
+    #[test]
+    fn ledger_admits_full_rights_on_an_unshared_capability() {
+        let mut ledger = InstallLedger::default();
+        assert!(
+            ledger
+                .record(
+                    2,
+                    (0, 7, sel4::WORD_SIZE),
+                    0,
+                    &sel4::CapRights::all(),
+                    false
+                )
+                .is_ok()
+        );
+    }
+
+    /// A plan may not move the service endpoint: every component resolves it
+    /// from a compiled-in constant, so a child given it anywhere else would
+    /// invoke an empty slot on its first syscall.
+    #[test]
+    fn a_moved_service_slot_is_refused() {
+        let moved = ChildSlots {
+            service: CHILD_SLOT_SERVICE + 1,
+            ..ChildSlots::SHELL
+        };
+        assert!(moved.validate().is_err());
+        assert!(ChildSlots::SHELL.validate().is_ok());
+    }
+
+    /// Two capabilities in one slot means one silently overwrote the other.
+    #[test]
+    fn colliding_child_slots_are_refused() {
+        let collided = ChildSlots {
+            tcb: CHILD_SLOT_FAULT,
+            ..ChildSlots::SHELL
+        };
+        assert!(collided.validate().is_err());
+    }
+
+    /// Slot 0 stays null so an unbadged arrival is distinguishable.
+    #[test]
+    fn a_null_child_slot_is_refused() {
+        let nulled = ChildSlots {
+            tcb: 0,
+            ..ChildSlots::SHELL
+        };
+        assert!(nulled.validate().is_err());
+    }
+
+    /// The fixture shell must address every slot it names inside the smallest
+    /// CNode the root builds, or the fixture paths install out of bounds.
+    #[test]
+    fn the_shell_slots_fit_the_shell_cnode() {
+        let shell = ChildSlots::SHELL;
+        let bound = 1 << CHILD_CNODE_SIZE_BITS;
+        assert!(shell.service < bound);
+        assert!(shell.tcb < bound);
+        assert!(shell.fault < bound);
+        // Distinct, or one install would silently overwrite another.
+        assert_ne!(shell.service, shell.tcb);
+        assert_ne!(shell.service, shell.fault);
+        assert_ne!(shell.tcb, shell.fault);
+        // Slot 0 stays null: an unbadged arrival must be distinguishable.
+        assert_ne!(shell.service, 0);
+        assert_ne!(shell.tcb, 0);
+        assert_ne!(shell.fault, 0);
     }
 }
