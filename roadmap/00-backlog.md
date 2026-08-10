@@ -118,14 +118,28 @@ It then panics on its first invocation, at
 - `non-thread-local-state` was tried and does not help: it selects which token
   type guards the slot, not how many slots exist.
 
-So a second root thread needs per-thread IPC-buffer state that neither this
-target nor this runtime provides. Closing B41 means either enabling
-thread-local support in the root task's target and runtime, or keeping one
-dispatcher and giving console traffic a lane within it — and the second is what
-the `NBRecv`/`NBSend` analysis above already rules out. This is a rust-sel4
-configuration change, which is why it is not a small edit.
+**The target half is fixed and landed.** `aarch64-sel4-roottask.json` differs
+from `-minimal` in exactly one key, `has-thread-local`, so the root task is now
+pinned to it (`sel4/pins.toml`). That is behaviour-neutral on its own — the pin
+check verifies the new hash and every gate still passes — and with it the
+console thread registers its IPC buffer successfully and the panic is gone.
 
-The experiment was reverted; the tree carries none of it.
+**What remains is the thread's CSpace guard.** With the buffer registered, the
+thread starts (`SLIME_ROOT console dispatcher started`, two tasks staged behind
+it) and then takes `Caught cap fault in send phase at address 0` on its first
+receive. `tcb_configure` was given `CNodeCapData::new(0, 0)` for the CSpace
+root; the child path computes `CNodeCapData::new(0, WORD_SIZE - size_bits)`
+from the CNode's own size, and the root CNode's size lives in bootinfo's
+`initThreadCNodeSizeBits`, which `sel4::BootInfo` exposes no accessor for. The
+fault endpoint was also left null, so the fault is fatal rather than reported.
+
+Closing B41 therefore needs: the root CNode's guard computed correctly (reading
+the raw bootinfo field, or adding the accessor upstream), and a fault endpoint
+for the console thread so a defect in it is a reported fault rather than a dead
+root. Both are tractable; neither is a one-line edit.
+
+The dispatcher experiment was reverted. The target pin was kept, committed
+separately, and is independently correct.
 
 A bound notification does not substitute: it signals, and the console still
 needs its own receive to carry the payload.
