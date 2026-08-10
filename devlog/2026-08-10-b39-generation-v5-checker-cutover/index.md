@@ -4,10 +4,10 @@
 |---|---|
 | Date | 2026-08-10 |
 | Kind | Defect |
-| Status | Root-caused |
-| Scope | `boot-contracts/src/generation.rs`, `stage0/src/lib.rs`, `slime-root/src/generation.rs`, `scripts/check/check-generation.py`, `scripts/lib/release_trust.py`, `just contracts_check`, `just generation_check`, `just sel4_boot_check` |
+| Status | Verified |
+| Scope | `boot-contracts/src/generation.rs`, `stage0/src/lib.rs`, `slime-root/src/{generation,channel,main,task}.rs`, `components/bins/src/bin/init.rs`, `components/runtime/src/{lib,runtime}.rs`, `contracts/generation/v5/`, `scripts/check/check-generation.py`, `scripts/lib/release_trust.py` |
 | Roadmap | B39 |
-| Gates | `just contracts_check`, `just generation_check`, `just test_sel4_root`, `just test_host` |
+| Gates | `just contracts_check`, `just generation_check`, `just sel4_boot_check`, `just test_sel4_root`, `just test_host` |
 | Trigger | The in-flight generation v4→v5 cutover for B39 left the host-side checkers, stage-0 consumer, and fabric provenance check on the retired v4 header layout and instance model. |
 | Baseline | Before the v5 header grew its process/thread/kernel-object/mapping/binding/schedule/quota plan sections, `just generation_check` passed and every consumer read a 31-field header whose string table began at byte 208. |
 
@@ -423,3 +423,42 @@ The stream plane's residual `Caught cap fault` is unrelated to declarations: it
 follows a shared-buffer frame alias (`ARMPageMap: Attempting to remap a frame
 that does not belong to the passed address space`) after `loan mapped`
 succeeds. Present at `3228eb6` as well.
+
+**2026-08-10 — `sel4_boot_check` passes; B39 is closed.** Two defects stood
+between the graph and its terminal, and both were real.
+
+*A declared channel shadowed the minted one.* Every send/recv grant
+materialized one pre-created channel whose two ends the root installed at
+admission. A bootstrap that mints its own control channels therefore gave each
+participant *two* endpoints: the declared one, installed at the holder's slot,
+shadowing the minted half `init` actually handed it. The call and operation
+workers consumed a role request on one channel while `init` sent the
+supervision descriptor on another — traced by observing the worker read channel
+1 while the transfers went to channels 23–29 — so no worker ever provisioned a
+role. `CapabilityGrant` gains `minted`: the edge, its rights, and both
+endpoints stay declared and only the object is deferred to the source, exactly
+as a `MintedBinding` defers one. The root skips pre-creating it, and neither
+endpoint is required to bind a pre-created end. This could not be solved in the
+fixture alone: the builder derives the fabric's entire control-slot layout by
+scanning grants named `<participant>-control`, so those grants must exist —
+what had to change was what a grant *means*.
+
+*The supervisor certified an incomplete graph.* The idle record was emitted
+only when `required == 1`, so a migrated graph whose participants are declared
+instances could never produce it, and with `init` alone required the supervisor
+certified while workers were still provisioning — which B36 forbids. The record
+now depends on the property it always meant: every required instance parked,
+none completed, none failed. `sel4-boot.zti` declares all twenty instances
+required, so the supervisor waits for the whole graph. The gate's terminal
+shape-checks the counts with a backreference (`required=(\d+) live=\1 idle=\1`)
+rather than pinning `required=1`, which asserted the pre-migration graph shape
+instead of the property.
+
+`just sel4_boot_check` now passes: *"one generation launched every C8 role at
+once through a collision-free layout, the fabric split into three bounded route
+workers, the unauthorized probe was refused as a distinct task, and the whole
+graph came to rest without any participant exiting."* With `contracts_check`
+and `generation_check` green and `MAGIC_V4` surviving only to reject, every
+clause of B39's exit condition is observed. `sel4_root_boot_check`,
+`sel4_component_graph_check`, and `sel4_reclamation_check` still pass;
+`sel4_stream_check` and `sel4_qos_check` fail exactly as before this change.

@@ -24,100 +24,6 @@ mechanism; and B50 deletes the dual-model residue. Each item is a clean cutover:
 its old ABI and fallback are removed in the same change that makes its exit
 condition observable.
 
-### B39 — Generation v5 must describe the exact seL4 object and authority plan
-
-**Status:** Open, partially landed 2026-08-10. **Class:** Unmasked
-architectural debt. **Depends on:** none.
-
-**Problem:** Generation v4 separates executables from instances, but still
-declares logical objects and grants that `slime-root` reinterprets. It cannot
-prove the process/thread topology, concrete kernel objects, mappings, CSpace
-bindings, scheduling policy, fault policy, spawn templates, or dynamic reserve
-that the admitted graph will consume. `init` also still selects scenario graphs
-through `SLIME_GENERATION_NUMBER` and `SLIME_*_CHECK` build flags.
-
-**Evidence:** `contracts/generation/v4/schema.zt` has `Object`, `Executable`,
-`Instance`, and `CapabilityGrant`, but no process, thread, kernel-object,
-mapping, schedule, or quota-plan records. `components/bins/src/bin/init.rs`
-branches on compile-time generation and check flags. The handoff is
-[`devlog/2026-08-10-sel4-native-model-handoff/`](../devlog/2026-08-10-sel4-native-model-handoff/index.md).
-
-**Fix:** Add `contracts/generation/v5/` as a clean required-field version with
-`Process`, `Thread`, `KernelObject`, `Mapping`, `CapBinding`, `ServiceBinding`,
-`Schedule`, `FaultPolicy`, `SpawnTemplate`, and `ResourceQuota`. Every grant
-must either materialize one concrete capability or be explicitly policy-only.
-Migrate every seL4 fixture, builder, generated binding, decoder, and consumer;
-remove v4 runtime admission and all compile-time graph-selection branches.
-
-**Exit condition:** `just contracts_check` and `just generation_check` prove all
-bindings and object references resolve, every authority-bearing grant maps to a
-planned capability, malformed/unsatisfiable plans fail before output, and two
-builds of one component image cannot select different boot graphs. A QEMU full
-graph selected only by authenticated generation data passes `just
-sel4_boot_check`; no product code admits generation v4.
-
-**Landed so far (2026-08-10):** the v5 header carries an authenticated
-`bootAction` decoded into `BootAction`; `check-generation.py` validates the
-51-field v5 header and every plan section, including "every grant materializes
-exactly once or is explicitly policy-only"; `release_trust.py` and `stage0`
-read the v5 layout and API; the execution plan covers every declared instance
-rather than only root-owned ones, which had left owner-spawned children with no
-process, thread, schedule, fault policy, or quota and made every grant sourced
-from one materialize nothing (`BadBinding` before boot); and spawn preflight no
-longer requires the spawner to hold the grant it hands a child, which
-contradicted the fabric planes' invariant that init keeps no route authority.
-`just contracts_check`, `just generation_check`, `just sel4_root_boot_check`,
-`just sel4_component_graph_check`, `just test_host`, `just test_sel4_root`, and
-`just lint_all` pass. See [`devlog/2026-08-10-b39-generation-v5-checker-cutover/`](../devlog/2026-08-10-b39-generation-v5-checker-cutover/index.md).
-
-**Declaration model (settled 2026-08-10):** a runtime-minted channel
-capability is declared by a v5 `MintedBinding` record — owner, holder,
-destination slot, exact rights ceiling, and `transferable` — so
-`CapabilityGrant` keeps meaning a concrete authority edge and only the object
-identity is deferred to its minter. The decoder rejects a binding whose holder
-its owner does not own, whose rights are empty, carry `exec`, or leave the
-vocabulary, and any two claiming the same holder slot. Spawn preflight
-resolves each request against exactly one declaration, and the destination is
-always the declared slot.
-
-**Boot-graph selection (landed 2026-08-10):** the root delivers the
-authenticated `bootAction` in the bootstrap thread's first C parameter, and
-`init` composes its graph from that value before any build flag is consulted.
-Every `SLIME_SEL4_*_CHECK` branch is gone from `init.rs`, along with the
-x86-only full-graph composition keyed on `SLIME_GENERATION_NUMBER == 17`. The
-three x86 oracle flags remain, because the *participants* read them to stay
-byte-identical across the two planes; what those branches used to spell as a
-second build flag — "and not the seL4 plane sharing this flag" — is now the
-action itself, since anything other than `PRODUCT` composes and does not
-return. An unimplemented action is a boot failure rather than a fallthrough, so
-two builds of one component image cannot select different boot graphs.
-`init`'s copy of the action numbering is pinned to the contract by a
-const-assert per variant, so a renumbering fails the build.
-
-**Remaining:** the seL4 fixtures must declare what `init` actually hands each
-child before their planes go green again. `sel4-boot.zti` is the completed
-template: control edges are real grants (`build-generation.py` derives the
-fabric's whole control-slot layout by scanning grants named
-`<participant>-control`, so these cannot be minted), the fabric's factories are
-grants, and the supervision handles, worker executables, and each route
-worker's own control set are `mintedBindings`. Under it `sel4_boot_check`
-reaches the supervisor's terminal record — `required=1 live=1 idle=1 failed=0`,
-the complete healthy-idle graph — with all sixteen participants provisioned
-across five routes and both bounded route workers spawned; it now fails on the
-call plane's role provisioning rather than anywhere in the capability path.
-`sel4-stream.zti` is migrated the same way.
-
-Every plane gate was re-run at `3228eb6`, the pre-session commit, to separate
-inherited failures from regressions. No gate regressed:
-`sel4_root_boot_check`, `sel4_component_graph_check`, and
-`sel4_reclamation_check` passed then and pass now; `sel4_channel_check`,
-`sel4_sample_check`, `sel4_supervision_check`, and `sel4_crossing_check` fail
-with signatures identical to their baseline. The remaining fixtures
-(`sel4-channel`, `sel4-sample`, `sel4-supervision`, `sel4-crossing`,
-`sel4-spawn`, `sel4-qos`) need the same treatment. `sel4_stream_check`'s
-residual `Caught cap fault` is a shared-buffer frame alias after `loan mapped`
-succeeds, not a declaration defect, and is present at baseline.
-
 ### B40 — child CSpaces are fixed four-slot shells rather than admitted authority
 
 **Status:** Open. **Class:** Unmasked architectural debt. **Depends on:** B39.
@@ -416,6 +322,47 @@ fmt_check_all`, and `just lint_all` pass after the deletion.
 
 
 ## Resolved
+### B39 — Generation v5 must describe the exact seL4 object and authority plan
+
+**Status:** Resolved 2026-08-10.
+
+**Problem:** Generation v4 declared logical objects and grants that
+`slime-root` reinterpreted, so it could not prove the process/thread topology,
+kernel objects, mappings, CSpace bindings, scheduling policy, fault policy,
+spawn templates, or dynamic reserve the admitted graph would consume. `init`
+also selected its scenario graph through `SLIME_GENERATION_NUMBER` and
+`SLIME_*_CHECK` build flags.
+
+**Exit condition observed:** `just contracts_check` and `just generation_check`
+pass, proving every binding and object reference resolves, every
+authority-bearing grant maps to a planned capability or is explicitly deferred,
+and two isolated builds are byte-identical. `just sel4_boot_check` passes: the
+full graph — twenty declared instances across five routes, split into three
+bounded route workers — comes to rest at the supervisor's terminal record with
+every required instance parked and none completed or failed, selected only by
+the generation's authenticated `bootAction`. No product code admits generation
+v4: `MAGIC_V4` survives solely to reject it, with
+`rejects_v4_product_generations` proving so.
+
+**What the format gained.** Ten plan record types (`Process`, `Thread`,
+`KernelObject`, `Mapping`, `CapBinding`, `ServiceBinding`, `Schedule`,
+`FaultPolicy`, `SpawnTemplate`, `ResourceQuota`) plus two deferral records for
+authority whose object does not exist until runtime: a `MintedBinding`, and a
+`CapabilityGrant` marked `minted`. Both fix the edge, its endpoints, the
+destination slot, and an exact rights ceiling before activation, deferring only
+object identity — which is intrinsic, since the object's creator runs after
+admission. A relationship needing identity pinned uses an ordinary grant
+against a concrete object.
+
+**Boot-graph selection.** The root delivers the authenticated `bootAction` in
+the bootstrap thread's first C parameter and `init` composes from it before any
+build flag is read. Every `SLIME_SEL4_*_CHECK` branch is gone; an unimplemented
+action is a boot failure rather than a fallthrough. `init`'s copy of the action
+numbering is pinned to the contract by a const-assert per variant.
+
+Audit and closure record:
+[`devlog/2026-08-10-b39-generation-v5-checker-cutover/`](../devlog/2026-08-10-b39-generation-v5-checker-cutover/index.md).
+
 ### B34 — generation component records conflate executable catalogue entries with initial instances
 
 **Status:** Resolved 2026-08-10.
