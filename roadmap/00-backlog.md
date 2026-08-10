@@ -85,6 +85,20 @@ real design decision:
   generation counter or a release handshake settles without locking the table.
   That choice is the remaining work.
 
+**Two single-threaded routes were tried and rejected on their merits
+(2026-08-10),** so the second dispatcher is not incidental:
+
+- *Poll the console endpoint with `seL4_NBRecv` before the blocking receive.*
+  The console is then starved whenever the main endpoint is busy, and a client
+  blocks on its send until the next poll — the same hang, less often.
+- *Send with `seL4_NBSend` so a client never blocks.* `nb_send` drops the
+  message when no receiver is waiting, which loses debug output. A console
+  that silently discards lines is worse than one that shares a dispatcher.
+
+Inline-only routing was also measured and does not help: `fits_inline` carries
+16 bytes, and 548 of the 643 `debug_write` call sites in `components/bins`
+exceed that, so the window path cannot be avoided.
+
 A bound notification does not substitute: it signals, and the console still
 needs its own receive to carry the payload.
 
