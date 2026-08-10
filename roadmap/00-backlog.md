@@ -26,7 +26,8 @@ condition observable.
 
 ### B39 — Generation v5 must describe the exact seL4 object and authority plan
 
-**Status:** Open. **Class:** Unmasked architectural debt. **Depends on:** none.
+**Status:** Open, partially landed 2026-08-10. **Class:** Unmasked
+architectural debt. **Depends on:** none.
 
 **Problem:** Generation v4 separates executables from instances, but still
 declares logical objects and grants that `slime-root` reinterprets. It cannot
@@ -54,6 +55,26 @@ planned capability, malformed/unsatisfiable plans fail before output, and two
 builds of one component image cannot select different boot graphs. A QEMU full
 graph selected only by authenticated generation data passes `just
 sel4_boot_check`; no product code admits generation v4.
+
+**Landed so far (2026-08-10):** the v5 header carries an authenticated
+`bootAction` decoded into `BootAction`; `check-generation.py` validates the
+51-field v5 header and every plan section, including "every grant materializes
+exactly once or is explicitly policy-only"; `release_trust.py` and `stage0`
+read the v5 layout and API; and fabric participant provenance resolves against
+the executable catalogue rather than the instance list, which had made every
+fabric-bearing generation unadmittable. `just contracts_check`, `just
+generation_check`, `just test_host`, `just test_sel4_root`, and `just lint_all`
+pass. See [`devlog/2026-08-10-b39-generation-v5-checker-cutover/`](../devlog/2026-08-10-b39-generation-v5-checker-cutover/index.md).
+
+**Remaining:** `just sel4_boot_check` fails at `SLIME_GRAPH spawn refused
+task=0 slot=6 ungranted`. `preflight_spawn_grants` requires every dynamically
+spawned child to have a declared instance owned by the caller, with the
+transferred grant bound on both parent and child, while the seL4 fixtures still
+declare only `init`; each `contracts/generation/v1/fixtures/sel4-*.zti` needs
+its instance model migrated. `init.rs` also still selects its composition
+through `option_env!("SLIME_GENERATION_NUMBER")` and the `SLIME_*_CHECK` flags,
+so `Generation::boot_action` is decoded but not yet delivered to the bootstrap
+thread or consumed.
 
 ### B40 — child CSpaces are fixed four-slot shells rather than admitted authority
 
