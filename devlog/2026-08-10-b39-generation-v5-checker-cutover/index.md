@@ -115,3 +115,44 @@ fixture.
 - Raw transcript: none retained.
 - Serial/debugger/model output: quoted inline under *Observable symptom* from `just sel4_boot_check`.
 - Related roadmap item: [`roadmap/00-backlog.md` B39](../../roadmap/00-backlog.md)
+
+## Corrections
+
+**2026-08-10 — the fabric-provenance change in *Changes* was wrong and has been reverted.**
+
+`fabric_graph_participants_are_declared` was changed to resolve participants
+against the executable catalogue on the reasoning that participants are
+executable-only. Enumerating the fixtures disproved that: `sel4-stream`,
+`sel4-qos`, `sel4-call`, `sel4-operation`, and `sel4-visibility` all declare
+every fabric participant as an instance, and only `sel4-boot.zti` does not.
+The instance-based check was correct; the function is restored to it.
+
+The real defect was one layer down and is fixed in
+`fix(sel4/generation): plan every declared instance`. The v5 plan builder
+emitted process, thread, schedule, fault-policy, and quota records only for
+**root-owned** instances, so an owner-spawned child had no process at all and
+every grant sourced from one materialized no capability — refused as
+`BadBinding` before boot. The plan now covers every declared instance. This is
+what B39's "prove the object plan before activation" clause actually requires:
+an owner-spawned process consumes kernel objects exactly as a root-autostart
+one does.
+
+A second rule was also wrong. `preflight_spawn_grants` required the *spawner*
+to hold every grant it hands a child (`reason=owner-missing`). That
+contradicts the fabric planes' stated invariant that init keeps no route
+authority over channels it mints and passes on. Provenance now comes from the
+child's own declared binding via `grant_applies_to_instance`; the declared
+rights ceiling and the parent's held capability at the requested slot still
+bound what may be transferred, so authority cannot be amplified.
+
+**2026-08-10 — `just sel4_spawn_check` is red, and was already red before this
+work.** Verified by checking out `3228eb6` (the pre-session commit) and by
+re-running the gate at each intermediate commit: the failure and its serial
+signature are identical throughout. Its fixture declares `console` and
+`sysinfo` with empty binding lists while `init.rs` spawns them with one and
+six runtime-minted grants respectively, and `preflight_spawn_grants` requires
+`count == child.binding_count()`. Declaring those grants in the fixture is
+rejected by the builder's own closure rule
+(`bindings do not close over related grants`), so closing it needs a decision
+about how runtime-minted channel capabilities are declared, not just fixture
+content. Recorded as B39 remaining work rather than fixed here.

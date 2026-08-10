@@ -60,21 +60,35 @@ sel4_boot_check`; no product code admits generation v4.
 `bootAction` decoded into `BootAction`; `check-generation.py` validates the
 51-field v5 header and every plan section, including "every grant materializes
 exactly once or is explicitly policy-only"; `release_trust.py` and `stage0`
-read the v5 layout and API; and fabric participant provenance resolves against
-the executable catalogue rather than the instance list, which had made every
-fabric-bearing generation unadmittable. `just contracts_check`, `just
-generation_check`, `just test_host`, `just test_sel4_root`, and `just lint_all`
-pass. See [`devlog/2026-08-10-b39-generation-v5-checker-cutover/`](../devlog/2026-08-10-b39-generation-v5-checker-cutover/index.md).
+read the v5 layout and API; the execution plan covers every declared instance
+rather than only root-owned ones, which had left owner-spawned children with no
+process, thread, schedule, fault policy, or quota and made every grant sourced
+from one materialize nothing (`BadBinding` before boot); and spawn preflight no
+longer requires the spawner to hold the grant it hands a child, which
+contradicted the fabric planes' invariant that init keeps no route authority.
+`just contracts_check`, `just generation_check`, `just sel4_root_boot_check`,
+`just sel4_component_graph_check`, `just test_host`, `just test_sel4_root`, and
+`just lint_all` pass. See [`devlog/2026-08-10-b39-generation-v5-checker-cutover/`](../devlog/2026-08-10-b39-generation-v5-checker-cutover/index.md).
 
-**Remaining:** `just sel4_boot_check` fails at `SLIME_GRAPH spawn refused
-task=0 slot=6 ungranted`. `preflight_spawn_grants` requires every dynamically
-spawned child to have a declared instance owned by the caller, with the
-transferred grant bound on both parent and child, while the seL4 fixtures still
-declare only `init`; each `contracts/generation/v1/fixtures/sel4-*.zti` needs
-its instance model migrated. `init.rs` also still selects its composition
-through `option_env!("SLIME_GENERATION_NUMBER")` and the `SLIME_*_CHECK` flags,
-so `Generation::boot_action` is decoded but not yet delivered to the bootstrap
-thread or consumed.
+**Remaining:**
+
+1. `just sel4_spawn_check` is red, and was red before this work (verified
+   against `3228eb6`). Its fixture declares `console` and `sysinfo` with empty
+   binding lists while `init.rs` hands them one and six runtime-minted grants,
+   and `preflight_spawn_grants` requires `count == child.binding_count()`.
+   Declaring those grants is rejected by the builder's own closure rule
+   (`bindings do not close over related grants`), so this needs a decision on
+   how runtime-minted channel capabilities are declared in v5 — not just
+   fixture content.
+2. `just sel4_boot_check` needs `sel4-boot.zti` migrated to declare its
+   fourteen fabric participants as instances, the shape every other fabric
+   fixture already uses. It is the only fabric fixture still declaring `init`
+   alone.
+3. `init.rs` still selects its composition through
+   `option_env!("SLIME_GENERATION_NUMBER")` and the `SLIME_*_CHECK` flags, so
+   `Generation::boot_action` is decoded but not yet delivered to the bootstrap
+   thread or consumed. B39's "two builds of one component image cannot select
+   different boot graphs" clause is unproven until it is.
 
 ### B40 — child CSpaces are fixed four-slot shells rather than admitted authority
 
