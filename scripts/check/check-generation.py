@@ -131,8 +131,17 @@ def check_component_image(blob: bytes, profile, name: str) -> None:
 
 
 RIGHT_TRANSFER = 1 << 2
+RIGHT_EXEC = 1 << 3
 RIGHT_ALL = (1 << 26) - 1
 MAX_SPAWN_BUDGET = 32
+PLAN_NONE = 0xFFFFFFFF
+GRANT_POLICY_ONLY = 1
+BOOT_ACTIONS = {
+    "product", "boot", "call", "channel", "crossing", "dango", "directory",
+    "filesystem", "generation", "input", "loan", "operation", "powerbox",
+    "qos", "reclamation", "recovery", "rollback", "sample", "spawn",
+    "storage", "store", "stream", "supervision", "transfer", "visibility",
+}
 
 
 def check_generation(data: bytes, expected_identity: bytes | None = None) -> dict:
@@ -140,20 +149,29 @@ def check_generation(data: bytes, expected_identity: bytes | None = None) -> dic
     fields = GENERATION_HEADER.unpack_from(data)
     (
         magic, version, header, required_flags, identity, number, parent,
-        target_offset, reserved, bootstrap, boot_attempts,
+        target_offset, boot_action_offset, bootstrap, boot_attempts,
         objects, executables, instances, dependencies, bindings, grants, states, health,
+        processes, threads, kernel_objects, mappings, cap_bindings, service_bindings,
+        schedules, fault_policies, spawn_templates, resource_quotas,
         object_offset, executable_offset, instance_offset, dependency_offset, binding_offset,
-        grant_offset, state_offset, health_offset, strings_offset, strings_len, payload_offset, total_len,
+        grant_offset, state_offset, health_offset, process_offset, thread_offset,
+        kernel_object_offset, mapping_offset, cap_binding_offset, service_binding_offset,
+        schedule_offset, fault_policy_offset, spawn_template_offset, resource_quota_offset,
+        strings_offset, strings_len, payload_offset, total_len,
     ) = fields
     require(magic == GENERATION_MAGIC, "BadGenerationMagic")
     require(version == GENERATION_VERSION and header == GENERATION_HEADER.size, "UnsupportedGenerationVersion")
-    require(required_flags == 0 and reserved == 0, "UnknownGenerationFlags")
+    require(required_flags == 0, "UnknownGenerationFlags")
+    require(not any(data[360 : GENERATION_HEADER.size]), "UnknownGenerationFlags")
     require(total_len == len(data) and generation_identity(data) == identity, "BadGenerationHash")
     if expected_identity is not None:
         require(identity == expected_identity, "GenerationIdentityMismatch")
     require(1 <= objects <= MAX_OBJECTS and 1 <= executables <= MAX_EXECUTABLES and 1 <= instances <= MAX_INSTANCES, "ExcessiveGenerationCount")
     require(dependencies <= MAX_DEPENDENCIES and bindings <= MAX_BINDINGS and grants <= MAX_GRANTS and states <= MAX_STATES and health <= MAX_HEALTH_INSTANCES, "ExcessiveGenerationCount")
-    require(strings_len <= MAX_STRING_TABLE_BYTES and target_offset < strings_len, "BadStringTable")
+    require(1 <= processes <= MAX_PROCESSES and 1 <= threads <= MAX_THREADS and 1 <= kernel_objects <= MAX_KERNEL_OBJECTS, "ExcessiveGenerationCount")
+    require(mappings <= MAX_MAPPINGS and 1 <= cap_bindings <= MAX_CAP_BINDINGS and 1 <= service_bindings <= MAX_SERVICE_BINDINGS, "ExcessiveGenerationCount")
+    require(1 <= schedules <= MAX_SCHEDULES and 1 <= fault_policies <= MAX_FAULT_POLICIES and spawn_templates <= MAX_SPAWN_TEMPLATES and 1 <= resource_quotas <= MAX_RESOURCE_QUOTAS, "ExcessiveGenerationCount")
+    require(strings_len <= MAX_STRING_TABLE_BYTES and target_offset < strings_len and boot_action_offset < strings_len, "BadStringTable")
     require(object_offset == GENERATION_HEADER.size, "BadGenerationBounds")
     require(executable_offset == object_offset + objects * GENERATION_OBJECT.size, "BadGenerationBounds")
     require(instance_offset == executable_offset + executables * GENERATION_EXECUTABLE.size, "BadGenerationBounds")
@@ -162,11 +180,23 @@ def check_generation(data: bytes, expected_identity: bytes | None = None) -> dic
     require(grant_offset == binding_offset + bindings * GENERATION_BINDING.size, "BadGenerationBounds")
     require(state_offset == grant_offset + grants * GENERATION_GRANT.size, "BadGenerationBounds")
     require(health_offset == state_offset + states * GENERATION_STATE.size, "BadGenerationBounds")
-    require(strings_offset == health_offset + health * GENERATION_HEALTH.size, "BadGenerationBounds")
+    require(process_offset == health_offset + health * GENERATION_HEALTH.size, "BadGenerationBounds")
+    require(thread_offset == process_offset + processes * GENERATION_PROCESS.size, "BadGenerationBounds")
+    require(kernel_object_offset == thread_offset + threads * GENERATION_THREAD.size, "BadGenerationBounds")
+    require(mapping_offset == kernel_object_offset + kernel_objects * GENERATION_KERNEL_OBJECT.size, "BadGenerationBounds")
+    require(cap_binding_offset == mapping_offset + mappings * GENERATION_MAPPING.size, "BadGenerationBounds")
+    require(service_binding_offset == cap_binding_offset + cap_bindings * GENERATION_CAP_BINDING.size, "BadGenerationBounds")
+    require(schedule_offset == service_binding_offset + service_bindings * GENERATION_SERVICE_BINDING.size, "BadGenerationBounds")
+    require(fault_policy_offset == schedule_offset + schedules * GENERATION_SCHEDULE.size, "BadGenerationBounds")
+    require(spawn_template_offset == fault_policy_offset + fault_policies * GENERATION_FAULT_POLICY.size, "BadGenerationBounds")
+    require(resource_quota_offset == spawn_template_offset + spawn_templates * GENERATION_SPAWN_TEMPLATE.size, "BadGenerationBounds")
+    require(strings_offset == resource_quota_offset + resource_quotas * GENERATION_RESOURCE_QUOTA.size, "BadGenerationBounds")
     require(payload_offset == strings_offset + strings_len, "BadGenerationBounds")
     target = read_string(data, strings_offset, strings_len, target_offset)
     profile = TARGET_PROFILES_BY_NAME.get(target)
     require(profile is not None, "UnknownGenerationTarget")
+    boot_action = read_string(data, strings_offset, strings_len, boot_action_offset)
+    require(boot_action in BOOT_ACTIONS, "UnknownBootAction")
     object_rows = []
     previous_id = ""
     previous_payload = payload_offset
@@ -226,7 +256,7 @@ def check_generation(data: bytes, expected_identity: bytes | None = None) -> dic
         key = (name, source, destination)
         require(previous_grant is None or key > previous_grant, "NonCanonicalGrants")
         require(source < instances and rights and not rights & ~RIGHT_ALL and transferable in (0, 1) and bool(rights & RIGHT_TRANSFER) == bool(transferable), "BadGrant")
-        require(destination < (executables if rights & (1 << 3) else instances), "BadGrant")
+        require(destination < (executables if rights & RIGHT_EXEC else instances), "BadGrant")
         grant_rows.append((name, source, destination, rights))
         previous_grant = key
     for row in instance_rows:
@@ -241,6 +271,75 @@ def check_generation(data: bytes, expected_identity: bytes | None = None) -> dic
     health_rows = [GENERATION_HEALTH.unpack_from(data, health_offset + index * GENERATION_HEALTH.size)[0] for index in range(health)]
     require(all(instance < instances for instance in health_rows) and health_rows == sorted(set(health_rows)), "BadHealthInstance")
     require(set(health_rows) == {index for index, row in enumerate(instance_rows) if row[9]}, "BadHealthPolicy")
+    autostart_instances = {index for index, row in enumerate(instance_rows) if row[2] == 0 and row[4] == 1}
+    require(processes == len(autostart_instances) == threads == schedules == fault_policies == resource_quotas, "BadPlanShape")
+    process_rows = []
+    seen_instances = set()
+    for index in range(processes):
+        name_offset, instance, cspace_object, vspace_object, main_thread, quota, flags = GENERATION_PROCESS.unpack_from(data, process_offset + index * GENERATION_PROCESS.size)
+        name = read_string(data, strings_offset, strings_len, name_offset)
+        require(instance < instances and instance in autostart_instances and instance not in seen_instances, "BadProcess")
+        require(cspace_object < kernel_objects and vspace_object < kernel_objects and main_thread < threads and quota < resource_quotas and flags == 0, "BadProcess")
+        require(name == instance_rows[instance][0], "BadProcess")
+        seen_instances.add(instance)
+        process_rows.append({"instance": instance, "cspace_object": cspace_object, "vspace_object": vspace_object, "main_thread": main_thread, "quota": quota})
+    require(seen_instances == autostart_instances, "BadPlanShape")
+    kernel_object_rows = []
+    for index in range(kernel_objects):
+        name_offset, kind, owner_process, size_bits, count, source_object, flags = GENERATION_KERNEL_OBJECT.unpack_from(data, kernel_object_offset + index * GENERATION_KERNEL_OBJECT.size)
+        require(owner_process < processes and 1 <= kind <= 6 and count > 0 and flags == 0, "BadKernelObject")
+        require(source_object == PLAN_NONE or source_object < objects, "BadKernelObject")
+        kernel_object_rows.append({"kind": kind})
+    for process in process_rows:
+        require(kernel_object_rows[process["cspace_object"]]["kind"] == 1, "BadKernel")
+        require(kernel_object_rows[process["vspace_object"]]["kind"] == 2, "BadKernel")
+    thread_rows = []
+    for index in range(threads):
+        name_offset, process, tcb_object, schedule, fault_policy, ipc_buffer_object, ipc_buffer_vaddr, entry, flags = GENERATION_THREAD.unpack_from(data, thread_offset + index * GENERATION_THREAD.size)
+        require(process < processes and tcb_object < kernel_objects and schedule < schedules and fault_policy < fault_policies and ipc_buffer_object < kernel_objects and flags == 0, "BadThread")
+        require(kernel_object_rows[tcb_object]["kind"] == 3 and kernel_object_rows[ipc_buffer_object]["kind"] == 4, "BadKernel")
+        thread_rows.append({"process": process, "schedule": schedule, "fault_policy": fault_policy})
+    for index, process in enumerate(process_rows):
+        require(thread_rows[process["main_thread"]]["process"] == index, "BadProcess")
+    for index in range(mappings):
+        process, obj, vaddr, page_count, rights, attributes, source_object, flags = GENERATION_MAPPING.unpack_from(data, mapping_offset + index * GENERATION_MAPPING.size)
+        require(process < processes and obj < kernel_objects and page_count > 0 and rights and not rights & ~RIGHT_ALL and flags == 0, "BadMapping")
+        require(source_object == PLAN_NONE or source_object < objects, "BadMapping")
+    materialized = [0] * grants
+    policy_only_grants = set()
+    for index in range(cap_bindings):
+        process, slot, obj, rights, badge, grant, flags = GENERATION_CAP_BINDING.unpack_from(data, cap_binding_offset + index * GENERATION_CAP_BINDING.size)
+        require(process < processes and slot < 64 and obj < kernel_objects and rights and flags & ~GRANT_POLICY_ONLY == 0, "BadCapBinding")
+        require(grant == PLAN_NONE or grant < grants, "BadCapBinding")
+        if grant != PLAN_NONE:
+            if flags & GRANT_POLICY_ONLY == 0:
+                materialized[grant] += 1
+            else:
+                policy_only_grants.add(grant)
+            require(rights == grant_rows[grant][3], "BadCapBinding")
+    for index, grant_row in enumerate(grant_rows):
+        policy_only = index in policy_only_grants
+        require(materialized[index] + int(policy_only) == 1, "UnmaterializedGrant")
+        if policy_only:
+            require(grant_row[3] & (RIGHT_EXEC | 0b11) == 0, "BadCapBinding")
+    for index in range(service_bindings):
+        process, service, slot, obj, rights, badge, flags = GENERATION_SERVICE_BINDING.unpack_from(data, service_binding_offset + index * GENERATION_SERVICE_BINDING.size)
+        require(process < processes and slot < 64 and obj < kernel_objects and rights and flags == 0, "BadServiceBinding")
+    for index in range(schedules):
+        name_offset, thread, authority_process, priority, max_controlled_priority, budget_us, period_us, flags = GENERATION_SCHEDULE.unpack_from(data, schedule_offset + index * GENERATION_SCHEDULE.size)
+        require(thread < threads and (authority_process == PLAN_NONE or authority_process < processes) and priority <= max_controlled_priority and flags == 0, "BadSchedule")
+        require(thread_rows[thread]["schedule"] == index, "BadSchedule")
+    for index in range(fault_policies):
+        name_offset, thread, handler_process, endpoint_object, badge, action = GENERATION_FAULT_POLICY.unpack_from(data, fault_policy_offset + index * GENERATION_FAULT_POLICY.size)
+        require(thread < threads and (handler_process == PLAN_NONE or handler_process < processes) and endpoint_object < kernel_objects and action != 0, "BadFaultPolicy")
+        require(thread_rows[thread]["fault_policy"] == index, "BadFaultPolicy")
+    for index in range(spawn_templates):
+        name_offset, executable, owner_process, quota, schedule, fault_policy, max_instances, flags = GENERATION_SPAWN_TEMPLATE.unpack_from(data, spawn_template_offset + index * GENERATION_SPAWN_TEMPLATE.size)
+        require(executable < executables and owner_process < processes and quota < resource_quotas and schedule < schedules and fault_policy < fault_policies and max_instances > 0 and flags == 0, "BadSpawnTemplate")
+    for index in range(resource_quotas):
+        name_offset, owner_process, cnode_count, tcb_count, endpoint_count, notification_count, frame_count, page_table_count, mapping_count, irq_count, cslot_count, untyped_bytes, dynamic_reserve_bytes, flags = GENERATION_RESOURCE_QUOTA.unpack_from(data, resource_quota_offset + index * GENERATION_RESOURCE_QUOTA.size)
+        require(owner_process < processes and cnode_count > 0 and tcb_count > 0 and cslot_count > 0 and flags == 0, "BadResourceQuota")
+        require(process_rows[owner_process]["quota"] == index, "BadResourceQuota")
     return {"identity": identity, "number": number, "parent": None if parent == bytes(32) else parent, "target": target, "kernel_len": 0, "total_len": total_len}
 
 
@@ -275,17 +374,9 @@ def check_release(data: bytes, generation: bytes, accepted_sequence: int | None 
     require(data[RELEASE_HEADER_PARENT_IDENTITY_OFFSET:RELEASE_HEADER_PARENT_IDENTITY_END] == parent, "WrongReleaseParent")
     target = data[RELEASE_HEADER_TARGET_OFFSET : RELEASE_HEADER_TARGET_OFFSET + target_len].decode("utf-8")
     require(target == generation_info["target"] and not any(data[RELEASE_HEADER_TARGET_OFFSET + target_len : RELEASE_HEADER_TARGET_END]), "WrongReleaseTarget")
-    fields = GENERATION_HEADER.unpack_from(generation)
-    object_offset = fields[17]
-    kernel_index = fields[8]
     version = struct.unpack_from("<I", generation, 8)[0]
     bundle = data[RELEASE_HEADER_BOOT_BUNDLE_IDENTITY_OFFSET:RELEASE_HEADER_BOOT_BUNDLE_IDENTITY_END]
-    if version >= 4:
-        require(bundle != bytes(32), "MissingReleaseBootBundle")
-    else:
-        kernel_index = struct.unpack_from("<I", generation, 100)[0]
-        kernel_digest = GENERATION_OBJECT.unpack_from(generation, object_offset + kernel_index * GENERATION_OBJECT.size)[4]
-        require(bundle == kernel_digest, "WrongReleaseBootBundle")
+    require(version == GENERATION_VERSION and bundle != bytes(32), "MissingReleaseBootBundle")
     require(data[RELEASE_HEADER_AUTHORITY_MANIFEST_OFFSET:RELEASE_HEADER_AUTHORITY_MANIFEST_END] == authority_manifest_identity(generation), "WrongReleaseAuthority")
     if accepted_sequence is not None:
         require(sequence > accepted_sequence, "StaleRelease")

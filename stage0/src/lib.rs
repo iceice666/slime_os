@@ -303,20 +303,20 @@ pub fn admit_generation_closure<'a>(
     if profile.id != current.id {
         return Err(BootError::Target(TargetError::ProfileMismatch));
     }
-    let kernel = generation
-        .object(generation.kernel_object)
-        .map_err(|_| BootError::BadKernelImage)?;
-    if kernel.kind != KIND_KERNEL {
-        return Err(BootError::BadKernelImage);
-    }
+    // Generation v5 carries no kernel-object header field: the kernel is an
+    // ordinary `KIND_KERNEL` member of the object closure, located by kind.
+    let kernel = (0..generation.object_count())
+        .filter_map(|index| generation.object(index).ok())
+        .find(|object| object.kind == KIND_KERNEL)
+        .ok_or(BootError::BadKernelImage)?;
     let kernel =
         KernelImage::decode_for_profile(kernel.bytes, profile).map_err(BootError::KernelImage)?;
-    for index in 0..generation.component_count() {
-        let component = generation
-            .component(index)
+    for index in 0..generation.executable_count() {
+        let executable = generation
+            .executable(index)
             .map_err(|_| BootError::BadGenerationHash)?;
         let object = generation
-            .object(component.object)
+            .object(executable.object)
             .map_err(|_| BootError::BadGenerationHash)?;
         if !matches!(object.kind, KIND_BOOTSTRAP | KIND_COMPONENT) {
             return Err(BootError::BadExecutableKind);

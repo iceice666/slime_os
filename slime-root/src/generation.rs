@@ -313,16 +313,16 @@ fn fabric_graph_participants_are_declared(
     generation: &Generation<'_>,
     graph: &FabricGraph<'_>,
 ) -> Result<(), GenerationError> {
-    let declared = generation.instance_count();
-    if declared > MAX_ADMITTED_INSTANCES {
-        return Err(GenerationError::TooManyInstances {
+    let declared = generation.executable_count();
+    if declared > MAX_ADMITTED_EXECUTABLES {
+        return Err(GenerationError::TooManyExecutables {
             declared,
-            limit: MAX_ADMITTED_INSTANCES,
+            limit: MAX_ADMITTED_EXECUTABLES,
         });
     }
-    let mut names = [None; MAX_ADMITTED_INSTANCES];
+    let mut names = [None; MAX_ADMITTED_EXECUTABLES];
     for (slot, name) in names.iter_mut().enumerate().take(declared) {
-        *name = Some(generation.instance(slot)?.name);
+        *name = Some(generation.executable(slot)?.name);
     }
     participants_are_declared(&names[..declared], graph)
 }
@@ -402,7 +402,7 @@ fn fabric_graph_object<'a>(
     None
 }
 
-/// The result of admitting a v4 generation graph.
+/// The result of admitting a v5 generation graph.
 pub struct Admission {
     executable_plans: [Option<ExecutablePlan>; MAX_ADMITTED_EXECUTABLES],
     executable_len: usize,
@@ -429,7 +429,7 @@ impl Admission {
         generation: &Generation<'_>,
         profile: &TargetProfile,
     ) -> Result<Self, GenerationError> {
-        if !generation.is_v4() {
+        if !generation.is_v5() {
             return Err(GenerationError::UnsupportedGenerationVersion);
         }
         let executable_len = generation.executable_count();

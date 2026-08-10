@@ -1,4 +1,5 @@
 {
+  bootAction = "dango";
   bootstrapInstance = "init";
   executables = [
     {

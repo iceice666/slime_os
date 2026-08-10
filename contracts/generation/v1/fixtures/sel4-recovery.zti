@@ -1,4 +1,5 @@
 {
+  bootAction = "recovery";
   bootstrapInstance = "init";
   executables = [
     {

@@ -1,4 +1,5 @@
 {
+  bootAction = "rollback";
   bootstrapInstance = "init";
   executables = [
     {

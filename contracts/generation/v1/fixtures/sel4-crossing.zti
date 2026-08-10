@@ -1,4 +1,5 @@
 {
+  bootAction = "crossing";
   bootstrapInstance = "init";
   executables = [
     {

@@ -1,4 +1,5 @@
 {
+  bootAction = "powerbox";
   bootstrapInstance = "init";
   executables = [
     {

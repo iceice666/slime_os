@@ -175,8 +175,7 @@ def generation_release_fields(generation: bytes) -> tuple[bytes, bytes, str, byt
     identity = generation[24:56]
     parent = generation[64:96]
     target_offset = struct.unpack_from("<I", generation, 96)[0]
-    version = struct.unpack_from("<I", generation, 8)[0]
-    string_offset = struct.unpack_from("<Q", generation, 208 if version >= 4 else 184)[0]
+    string_offset = struct.unpack_from("<Q", generation, GENERATION_HEADER_STRING_OFFSET_OFFSET)[0]
     target_len = struct.unpack_from("<H", generation, string_offset + target_offset)[0]
     target = generation[string_offset + target_offset + 2 : string_offset + target_offset + 2 + target_len].decode()
     return identity, parent, target, authority_manifest_identity(generation)

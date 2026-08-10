@@ -91,6 +91,7 @@
       ];
     };
   ];
+  bootAction = "product";
   bootstrapInstance = "init";
   executables = [
     {

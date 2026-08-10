@@ -1,18 +1,15 @@
 use crate::sha256::Sha256;
 
+pub const MAGIC_V5: [u8; 8] = *b"SLIMEG5\0";
 pub const MAGIC_V4: [u8; 8] = *b"SLIMEG4\0";
 pub const MAGIC_V3: [u8; 8] = *b"SLIMEG3\0";
 pub const MAGIC_V2: [u8; 8] = *b"SLIMEG2\0";
-pub const MAGIC: [u8; 8] = MAGIC_V4;
-pub const FORMAT_VERSION_V3: u32 = 3;
-pub const FORMAT_VERSION_V2: u32 = 2;
+pub const MAGIC: [u8; 8] = MAGIC_V5;
 include!("generated/generation.rs");
 
-const LEGACY_HEADER_LEN: usize = 256;
-const LEGACY_COMPONENT_LEN: usize = 32;
-const LEGACY_DEPENDENCY_LEN: usize = 4;
-const MAX_COMPONENTS_V2: usize = 32;
 const MAX_TASK_CAPS: usize = 64;
+const PLAN_NONE: usize = u32::MAX as usize;
+const GRANT_POLICY_ONLY: u32 = 1;
 
 pub const KIND_KERNEL: u32 = 1;
 pub const KIND_BOOTSTRAP: u32 = 2;
@@ -22,7 +19,6 @@ pub const ROLE_INIT: u32 = 1;
 pub type Rights = u64;
 pub const RIGHT_TRANSFER: Rights = 1 << 2;
 pub const RIGHT_EXEC: Rights = 1 << 3;
-pub const RIGHT_ALL_V2: Rights = (1 << 24) - 1;
 pub const RIGHT_ALL: Rights = (1 << 26) - 1;
 pub const MAX_SPAWN_BUDGET: u16 = 32;
 pub const POLICY_IMMUTABLE: u32 = 1;
@@ -30,6 +26,77 @@ pub const POLICY_EPHEMERAL: u32 = 2;
 pub const POLICY_PRESERVE: u32 = 3;
 pub const POLICY_SNAPSHOT_BEFORE_UPGRADE: u32 = 4;
 pub const POLICY_DISCARD_ON_ROLLBACK: u32 = 5;
+/// Authenticated bootstrap composition selector.
+///
+/// The numeric ABI is passed in the bootstrap thread's first C parameter. It is
+/// deliberately independent of the source spelling so component images remain
+/// byte-identical across generation manifests.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BootAction {
+    Product = 1,
+    Boot = 2,
+    Call = 3,
+    Channel = 4,
+    Crossing = 5,
+    Dango = 6,
+    Directory = 7,
+    Filesystem = 8,
+    Generation = 9,
+    Input = 10,
+    Loan = 11,
+    Operation = 12,
+    Powerbox = 13,
+    Qos = 14,
+    Reclamation = 15,
+    Recovery = 16,
+    Rollback = 17,
+    Sample = 18,
+    Spawn = 19,
+    Storage = 20,
+    Store = 21,
+    Stream = 22,
+    Supervision = 23,
+    Transfer = 24,
+    Visibility = 25,
+}
+
+impl BootAction {
+    pub const fn id(self) -> u32 {
+        self as u32
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "product" => Self::Product,
+            "boot" => Self::Boot,
+            "call" => Self::Call,
+            "channel" => Self::Channel,
+            "crossing" => Self::Crossing,
+            "dango" => Self::Dango,
+            "directory" => Self::Directory,
+            "filesystem" => Self::Filesystem,
+            "generation" => Self::Generation,
+            "input" => Self::Input,
+            "loan" => Self::Loan,
+            "operation" => Self::Operation,
+            "powerbox" => Self::Powerbox,
+            "qos" => Self::Qos,
+            "reclamation" => Self::Reclamation,
+            "recovery" => Self::Recovery,
+            "rollback" => Self::Rollback,
+            "sample" => Self::Sample,
+            "spawn" => Self::Spawn,
+            "storage" => Self::Storage,
+            "store" => Self::Store,
+            "stream" => Self::Stream,
+            "supervision" => Self::Supervision,
+            "transfer" => Self::Transfer,
+            "visibility" => Self::Visibility,
+            _ => return None,
+        })
+    }
+}
 
 const IDENTITY_OFFSET: usize = 24;
 const IDENTITY_END: usize = 56;
@@ -73,17 +140,6 @@ pub struct Executable<'a> {
     pub object: usize,
     pub role: u32,
     pub spawn_budget: u16,
-}
-
-/// Retained only for decoding v2/v3 rollback generations.
-#[derive(Debug, Clone, Copy)]
-pub struct LegacyComponent<'a> {
-    pub name: &'a str,
-    pub object: usize,
-    pub role: u32,
-    pub spawn_budget: u16,
-    dependency_start: usize,
-    dependency_count: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -152,6 +208,127 @@ pub struct StateBinding<'a> {
     pub policy: u32,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct Process<'a> {
+    pub name: &'a str,
+    pub instance: usize,
+    pub cspace_object: usize,
+    pub vspace_object: usize,
+    pub main_thread: usize,
+    pub quota: usize,
+    pub flags: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Thread<'a> {
+    pub name: &'a str,
+    pub process: usize,
+    pub tcb_object: usize,
+    pub schedule: usize,
+    pub fault_policy: usize,
+    pub ipc_buffer_object: usize,
+    pub ipc_buffer_vaddr: u64,
+    pub entry: u64,
+    pub flags: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct KernelObject<'a> {
+    pub name: &'a str,
+    pub kind: u32,
+    pub owner_process: usize,
+    pub size_bits: u32,
+    pub count: u32,
+    pub source_object: usize,
+    pub flags: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Mapping {
+    pub process: usize,
+    pub object: usize,
+    pub virtual_address: u64,
+    pub page_count: u32,
+    pub rights: Rights,
+    pub attributes: u64,
+    pub source_object: usize,
+    pub flags: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct CapBinding {
+    pub process: usize,
+    pub slot: usize,
+    pub object: usize,
+    pub rights: Rights,
+    pub badge: u64,
+    pub grant: usize,
+    pub flags: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ServiceBinding {
+    pub process: usize,
+    pub service: u32,
+    pub slot: usize,
+    pub object: usize,
+    pub rights: Rights,
+    pub badge: u64,
+    pub flags: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Schedule<'a> {
+    pub name: &'a str,
+    pub thread: usize,
+    pub authority_process: usize,
+    pub priority: u32,
+    pub max_controlled_priority: u32,
+    pub budget_us: u64,
+    pub period_us: u64,
+    pub flags: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct FaultPolicy<'a> {
+    pub name: &'a str,
+    pub thread: usize,
+    pub handler_process: usize,
+    pub endpoint_object: usize,
+    pub badge: u64,
+    pub action: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SpawnTemplate<'a> {
+    pub name: &'a str,
+    pub executable: usize,
+    pub owner_process: usize,
+    pub quota: usize,
+    pub schedule: usize,
+    pub fault_policy: usize,
+    pub max_instances: u32,
+    pub flags: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ResourceQuota<'a> {
+    pub name: &'a str,
+    pub owner_process: usize,
+    pub cnode_count: u32,
+    pub tcb_count: u32,
+    pub endpoint_count: u32,
+    pub notification_count: u32,
+    pub frame_count: u32,
+    pub page_table_count: u32,
+    pub mapping_count: u32,
+    pub irq_count: u32,
+    pub cslot_count: u32,
+    pub untyped_bytes: u64,
+    pub dynamic_reserve_bytes: u64,
+    pub flags: u32,
+}
+
 pub struct Generation<'a> {
     bytes: &'a [u8],
     pub version: u32,
@@ -159,9 +336,8 @@ pub struct Generation<'a> {
     pub number: u64,
     pub parent: Option<[u8; 32]>,
     pub target: &'a str,
-    /// Only meaningful for retained v2/v3 generations.
+    pub boot_action: BootAction,
     pub kernel_object: usize,
-    /// v4 instance index; for v2/v3 this is the legacy bootstrap component index.
     pub bootstrap_instance: usize,
     pub boot_attempts: u32,
     object_count: usize,
@@ -172,6 +348,16 @@ pub struct Generation<'a> {
     grant_count: usize,
     state_count: usize,
     health_count: usize,
+    process_count: usize,
+    thread_count: usize,
+    kernel_object_count: usize,
+    mapping_count: usize,
+    cap_binding_count: usize,
+    service_binding_count: usize,
+    schedule_count: usize,
+    fault_policy_count: usize,
+    spawn_template_count: usize,
+    resource_quota_count: usize,
     object_offset: usize,
     executable_offset: usize,
     instance_offset: usize,
@@ -180,6 +366,16 @@ pub struct Generation<'a> {
     grant_offset: usize,
     state_offset: usize,
     health_offset: usize,
+    process_offset: usize,
+    thread_offset: usize,
+    kernel_object_offset: usize,
+    mapping_offset: usize,
+    cap_binding_offset: usize,
+    service_binding_offset: usize,
+    schedule_offset: usize,
+    fault_policy_offset: usize,
+    spawn_template_offset: usize,
+    resource_quota_offset: usize,
     string_offset: usize,
     string_len: usize,
 }
@@ -190,31 +386,25 @@ impl<'a> Generation<'a> {
             return Err(DecodeError::Truncated);
         }
         let magic: [u8; 8] = bytes[..8].try_into().unwrap();
-        let encoded_version = u32_at(bytes, 8)?;
-        let version = match (magic, encoded_version) {
-            (MAGIC_V4, FORMAT_VERSION) => FORMAT_VERSION,
-            (MAGIC_V3, FORMAT_VERSION_V3) => FORMAT_VERSION_V3,
-            (MAGIC_V2, FORMAT_VERSION_V2) => FORMAT_VERSION_V2,
-            (MAGIC_V4, _) | (MAGIC_V3, _) | (MAGIC_V2, _) => {
-                return Err(DecodeError::UnsupportedVersion);
-            }
-            _ => return Err(DecodeError::BadMagic),
-        };
-        if u32_at(bytes, 12)? as usize != HEADER_LEN || HEADER_LEN != LEGACY_HEADER_LEN {
+        let version = u32_at(bytes, 8)?;
+        if magic != MAGIC_V5 {
+            return if matches!(magic, MAGIC_V4 | MAGIC_V3 | MAGIC_V2) {
+                Err(DecodeError::UnsupportedVersion)
+            } else {
+                Err(DecodeError::BadMagic)
+            };
+        }
+        if version != FORMAT_VERSION {
+            return Err(DecodeError::UnsupportedVersion);
+        }
+        if u32_at(bytes, 12)? as usize != HEADER_LEN {
             return Err(DecodeError::BadHeader);
         }
         if u64_at(bytes, 16)? != 0 {
             return Err(DecodeError::UnknownRequiredFlags);
         }
-        let reserved_start = if version == FORMAT_VERSION { 240 } else { 216 };
-        if bytes[reserved_start..HEADER_LEN]
-            .iter()
-            .any(|byte| *byte != 0)
-        {
-            return Err(DecodeError::NonZeroReserved);
-        }
-        let total_len_offset = if version == FORMAT_VERSION { 232 } else { 208 };
-        let total_len = u64_at(bytes, total_len_offset)? as usize;
+        reserved_zero(bytes, 360, HEADER_LEN)?;
+        let total_len = u64_at(bytes, 352)? as usize;
         if total_len != bytes.len() || total_len > MAX_GENERATION_BYTES {
             return Err(DecodeError::BadBounds);
         }
@@ -224,174 +414,211 @@ impl<'a> Generation<'a> {
         }
         let parent_bytes: [u8; 32] = bytes[64..96].try_into().unwrap();
 
-        let (
-            kernel_object,
-            bootstrap_instance,
-            object_count,
-            executable_count,
-            instance_count,
-            dependency_count,
-            binding_count,
-            grant_count,
-            state_count,
-            health_count,
-            object_offset,
-            executable_offset,
-            instance_offset,
-            dependency_offset,
-            binding_offset,
-            grant_offset,
-            state_offset,
-            health_offset,
-            string_offset,
-            string_len,
-            payload_offset,
-        ) = if version == FORMAT_VERSION {
-            if u32_at(bytes, 100)? != 0 {
-                return Err(DecodeError::NonZeroReserved);
-            }
-            (
-                usize::MAX,
-                u32_at(bytes, 104)? as usize,
-                bounded_count(u32_at(bytes, 112)? as usize, 1, MAX_OBJECTS)?,
-                bounded_count(u32_at(bytes, 116)? as usize, 1, MAX_EXECUTABLES)?,
-                bounded_count(u32_at(bytes, 120)? as usize, 1, MAX_INSTANCES)?,
-                bounded_count(u32_at(bytes, 124)? as usize, 0, MAX_DEPENDENCIES)?,
-                bounded_count(u32_at(bytes, 128)? as usize, 0, MAX_BINDINGS)?,
-                bounded_count(u32_at(bytes, 132)? as usize, 0, MAX_GRANTS)?,
-                bounded_count(u32_at(bytes, 136)? as usize, 0, MAX_STATES)?,
-                bounded_count(u32_at(bytes, 140)? as usize, 0, MAX_HEALTH_INSTANCES)?,
-                u64_at(bytes, 144)? as usize,
-                u64_at(bytes, 152)? as usize,
-                u64_at(bytes, 160)? as usize,
-                u64_at(bytes, 168)? as usize,
-                u64_at(bytes, 176)? as usize,
-                u64_at(bytes, 184)? as usize,
-                u64_at(bytes, 192)? as usize,
-                u64_at(bytes, 200)? as usize,
-                u64_at(bytes, 208)? as usize,
-                u64_at(bytes, 216)? as usize,
-                u64_at(bytes, 224)? as usize,
-            )
-        } else {
-            let component_limit = if version == FORMAT_VERSION_V2 {
-                MAX_COMPONENTS_V2
-            } else {
-                48
-            };
-            (
-                u32_at(bytes, 100)? as usize,
-                u32_at(bytes, 104)? as usize,
-                bounded_count(u32_at(bytes, 112)? as usize, 1, MAX_OBJECTS)?,
-                bounded_count(u32_at(bytes, 116)? as usize, 1, component_limit)?,
-                0,
-                bounded_count(u32_at(bytes, 120)? as usize, 0, MAX_DEPENDENCIES)?,
-                0,
-                bounded_count(u32_at(bytes, 124)? as usize, 0, MAX_GRANTS)?,
-                bounded_count(u32_at(bytes, 128)? as usize, 0, MAX_STATES)?,
-                bounded_count(u32_at(bytes, 132)? as usize, 0, 32)?,
-                u64_at(bytes, 136)? as usize,
-                u64_at(bytes, 144)? as usize,
-                0,
-                u64_at(bytes, 152)? as usize,
-                0,
-                u64_at(bytes, 160)? as usize,
-                u64_at(bytes, 168)? as usize,
-                u64_at(bytes, 176)? as usize,
-                u64_at(bytes, 184)? as usize,
-                u64_at(bytes, 192)? as usize,
-                u64_at(bytes, 200)? as usize,
-            )
-        };
-        if string_len > MAX_STRING_TABLE_BYTES {
-            return Err(DecodeError::BadBounds);
-        }
-        if version == FORMAT_VERSION {
-            check_section(object_offset, object_count, OBJECT_LEN, executable_offset)?;
-            check_section(
-                executable_offset,
-                executable_count,
-                EXECUTABLE_LEN,
-                instance_offset,
-            )?;
-            check_section(
-                instance_offset,
-                instance_count,
-                INSTANCE_LEN,
-                dependency_offset,
-            )?;
-            check_section(
-                dependency_offset,
-                dependency_count,
-                DEPENDENCY_LEN,
-                binding_offset,
-            )?;
-            check_section(binding_offset, binding_count, BINDING_LEN, grant_offset)?;
-        } else {
-            check_section(object_offset, object_count, OBJECT_LEN, executable_offset)?;
-            check_section(
-                executable_offset,
-                executable_count,
-                LEGACY_COMPONENT_LEN,
-                dependency_offset,
-            )?;
-            check_section(
-                dependency_offset,
-                dependency_count,
-                LEGACY_DEPENDENCY_LEN,
-                grant_offset,
-            )?;
-        }
-        check_section(grant_offset, grant_count, GRANT_LEN, state_offset)?;
-        check_section(state_offset, state_count, STATE_LEN, health_offset)?;
-        check_section(health_offset, health_count, HEALTH_LEN, string_offset)?;
-        if object_offset != HEADER_LEN
-            || string_offset.checked_add(string_len) != Some(payload_offset)
-            || payload_offset > bytes.len()
-        {
-            return Err(DecodeError::BadBounds);
-        }
-        let target = read_string(
-            bytes,
-            string_offset,
-            string_len,
-            u32_at(bytes, 96)? as usize,
-        )?;
         let generation = Self {
             bytes,
             version,
             identity,
             number: u64_at(bytes, 56)?,
             parent: (parent_bytes != [0; 32]).then_some(parent_bytes),
-            target,
-            kernel_object,
-            bootstrap_instance,
+            target: "",
+            boot_action: BootAction::Product,
+            kernel_object: usize::MAX,
+            bootstrap_instance: u32_at(bytes, 104)? as usize,
             boot_attempts: u32_at(bytes, 108)?,
-            object_count,
-            executable_count,
-            instance_count,
-            dependency_count,
-            binding_count,
-            grant_count,
-            state_count,
-            health_count,
-            object_offset,
-            executable_offset,
-            instance_offset,
-            dependency_offset,
-            binding_offset,
-            grant_offset,
-            state_offset,
-            health_offset,
-            string_offset,
-            string_len,
+            object_count: bounded_count(u32_at(bytes, 112)? as usize, 1, MAX_OBJECTS)?,
+            executable_count: bounded_count(u32_at(bytes, 116)? as usize, 1, MAX_EXECUTABLES)?,
+            instance_count: bounded_count(u32_at(bytes, 120)? as usize, 1, MAX_INSTANCES)?,
+            dependency_count: bounded_count(u32_at(bytes, 124)? as usize, 0, MAX_DEPENDENCIES)?,
+            binding_count: bounded_count(u32_at(bytes, 128)? as usize, 0, MAX_BINDINGS)?,
+            grant_count: bounded_count(u32_at(bytes, 132)? as usize, 0, MAX_GRANTS)?,
+            state_count: bounded_count(u32_at(bytes, 136)? as usize, 0, MAX_STATES)?,
+            health_count: bounded_count(u32_at(bytes, 140)? as usize, 0, MAX_HEALTH_INSTANCES)?,
+            process_count: bounded_count(u32_at(bytes, 144)? as usize, 1, MAX_PROCESSES)?,
+            thread_count: bounded_count(u32_at(bytes, 148)? as usize, 1, MAX_THREADS)?,
+            kernel_object_count: bounded_count(
+                u32_at(bytes, 152)? as usize,
+                1,
+                MAX_KERNEL_OBJECTS,
+            )?,
+            mapping_count: bounded_count(u32_at(bytes, 156)? as usize, 0, MAX_MAPPINGS)?,
+            cap_binding_count: bounded_count(u32_at(bytes, 160)? as usize, 1, MAX_CAP_BINDINGS)?,
+            service_binding_count: bounded_count(
+                u32_at(bytes, 164)? as usize,
+                1,
+                MAX_SERVICE_BINDINGS,
+            )?,
+            schedule_count: bounded_count(u32_at(bytes, 168)? as usize, 1, MAX_SCHEDULES)?,
+            fault_policy_count: bounded_count(u32_at(bytes, 172)? as usize, 1, MAX_FAULT_POLICIES)?,
+            spawn_template_count: bounded_count(
+                u32_at(bytes, 176)? as usize,
+                0,
+                MAX_SPAWN_TEMPLATES,
+            )?,
+            resource_quota_count: bounded_count(
+                u32_at(bytes, 180)? as usize,
+                1,
+                MAX_RESOURCE_QUOTAS,
+            )?,
+            object_offset: u64_at(bytes, 184)? as usize,
+            executable_offset: u64_at(bytes, 192)? as usize,
+            instance_offset: u64_at(bytes, 200)? as usize,
+            dependency_offset: u64_at(bytes, 208)? as usize,
+            binding_offset: u64_at(bytes, 216)? as usize,
+            grant_offset: u64_at(bytes, 224)? as usize,
+            state_offset: u64_at(bytes, 232)? as usize,
+            health_offset: u64_at(bytes, 240)? as usize,
+            process_offset: u64_at(bytes, 248)? as usize,
+            thread_offset: u64_at(bytes, 256)? as usize,
+            kernel_object_offset: u64_at(bytes, 264)? as usize,
+            mapping_offset: u64_at(bytes, 272)? as usize,
+            cap_binding_offset: u64_at(bytes, 280)? as usize,
+            service_binding_offset: u64_at(bytes, 288)? as usize,
+            schedule_offset: u64_at(bytes, 296)? as usize,
+            fault_policy_offset: u64_at(bytes, 304)? as usize,
+            spawn_template_offset: u64_at(bytes, 312)? as usize,
+            resource_quota_offset: u64_at(bytes, 320)? as usize,
+            string_offset: u64_at(bytes, 328)? as usize,
+            string_len: u64_at(bytes, 336)? as usize,
         };
-        generation.validate(payload_offset)?;
+        if generation.string_len > MAX_STRING_TABLE_BYTES {
+            return Err(DecodeError::BadBounds);
+        }
+        generation.validate_sections(u64_at(bytes, 344)? as usize)?;
+        let target = generation.string(u32_at(bytes, 96)? as usize)?;
+        let boot_action = BootAction::parse(generation.string(u32_at(bytes, 100)? as usize)?)
+            .ok_or(DecodeError::UnknownEnum)?;
+        let generation = Self {
+            target,
+            boot_action,
+            ..generation
+        };
+        generation.validate(u64_at(bytes, 344)? as usize)?;
         Ok(generation)
     }
 
-    pub const fn is_v4(&self) -> bool {
+    fn validate_sections(&self, payload_offset: usize) -> Result<(), DecodeError> {
+        check_section(
+            self.object_offset,
+            self.object_count,
+            OBJECT_LEN,
+            self.executable_offset,
+        )?;
+        check_section(
+            self.executable_offset,
+            self.executable_count,
+            EXECUTABLE_LEN,
+            self.instance_offset,
+        )?;
+        check_section(
+            self.instance_offset,
+            self.instance_count,
+            INSTANCE_LEN,
+            self.dependency_offset,
+        )?;
+        check_section(
+            self.dependency_offset,
+            self.dependency_count,
+            DEPENDENCY_LEN,
+            self.binding_offset,
+        )?;
+        check_section(
+            self.binding_offset,
+            self.binding_count,
+            BINDING_LEN,
+            self.grant_offset,
+        )?;
+        check_section(
+            self.grant_offset,
+            self.grant_count,
+            GRANT_LEN,
+            self.state_offset,
+        )?;
+        check_section(
+            self.state_offset,
+            self.state_count,
+            STATE_LEN,
+            self.health_offset,
+        )?;
+        check_section(
+            self.health_offset,
+            self.health_count,
+            HEALTH_LEN,
+            self.process_offset,
+        )?;
+        check_section(
+            self.process_offset,
+            self.process_count,
+            PROCESS_LEN,
+            self.thread_offset,
+        )?;
+        check_section(
+            self.thread_offset,
+            self.thread_count,
+            THREAD_LEN,
+            self.kernel_object_offset,
+        )?;
+        check_section(
+            self.kernel_object_offset,
+            self.kernel_object_count,
+            KERNEL_OBJECT_LEN,
+            self.mapping_offset,
+        )?;
+        check_section(
+            self.mapping_offset,
+            self.mapping_count,
+            MAPPING_LEN,
+            self.cap_binding_offset,
+        )?;
+        check_section(
+            self.cap_binding_offset,
+            self.cap_binding_count,
+            CAP_BINDING_LEN,
+            self.service_binding_offset,
+        )?;
+        check_section(
+            self.service_binding_offset,
+            self.service_binding_count,
+            SERVICE_BINDING_LEN,
+            self.schedule_offset,
+        )?;
+        check_section(
+            self.schedule_offset,
+            self.schedule_count,
+            SCHEDULE_LEN,
+            self.fault_policy_offset,
+        )?;
+        check_section(
+            self.fault_policy_offset,
+            self.fault_policy_count,
+            FAULT_POLICY_LEN,
+            self.spawn_template_offset,
+        )?;
+        check_section(
+            self.spawn_template_offset,
+            self.spawn_template_count,
+            SPAWN_TEMPLATE_LEN,
+            self.resource_quota_offset,
+        )?;
+        check_section(
+            self.resource_quota_offset,
+            self.resource_quota_count,
+            RESOURCE_QUOTA_LEN,
+            self.string_offset,
+        )?;
+        if self.object_offset != HEADER_LEN
+            || self.string_offset.checked_add(self.string_len) != Some(payload_offset)
+            || payload_offset > self.bytes.len()
+        {
+            return Err(DecodeError::BadBounds);
+        }
+        Ok(())
+    }
+
+    pub const fn is_v5(&self) -> bool {
         self.version == FORMAT_VERSION
+    }
+    pub const fn is_v4(&self) -> bool {
+        false
     }
     pub const fn object_count(&self) -> usize {
         self.object_count
@@ -411,6 +638,36 @@ impl<'a> Generation<'a> {
     pub const fn health_count(&self) -> usize {
         self.health_count
     }
+    pub const fn process_count(&self) -> usize {
+        self.process_count
+    }
+    pub const fn thread_count(&self) -> usize {
+        self.thread_count
+    }
+    pub const fn kernel_object_count(&self) -> usize {
+        self.kernel_object_count
+    }
+    pub const fn mapping_count(&self) -> usize {
+        self.mapping_count
+    }
+    pub const fn cap_binding_count(&self) -> usize {
+        self.cap_binding_count
+    }
+    pub const fn service_binding_count(&self) -> usize {
+        self.service_binding_count
+    }
+    pub const fn schedule_count(&self) -> usize {
+        self.schedule_count
+    }
+    pub const fn fault_policy_count(&self) -> usize {
+        self.fault_policy_count
+    }
+    pub const fn spawn_template_count(&self) -> usize {
+        self.spawn_template_count
+    }
+    pub const fn resource_quota_count(&self) -> usize {
+        self.resource_quota_count
+    }
     pub const fn bootstrap(&self) -> usize {
         self.bootstrap_instance
     }
@@ -420,46 +677,32 @@ impl<'a> Generation<'a> {
             return Err(DecodeError::BadIndex);
         }
         let offset = self.object_offset + index * OBJECT_LEN;
-        let id = self.string(u32_at(self.bytes, offset)? as usize)?;
-        let kind = u32_at(self.bytes, offset + 4)?;
+        reserved_zero(self.bytes, offset + 56, offset + OBJECT_LEN)?;
         let payload_offset = u64_at(self.bytes, offset + 8)? as usize;
         let payload_len = u64_at(self.bytes, offset + 16)? as usize;
-        let digest = self.bytes[offset + 24..offset + 56].try_into().unwrap();
-        if self.bytes[offset + 56..offset + OBJECT_LEN]
-            .iter()
-            .any(|byte| *byte != 0)
-        {
-            return Err(DecodeError::NonZeroReserved);
-        }
         if payload_len > MAX_OBJECT_PAYLOAD_BYTES {
             return Err(DecodeError::BadBounds);
         }
         let end = payload_offset
             .checked_add(payload_len)
             .ok_or(DecodeError::BadBounds)?;
-        let payload = self
-            .bytes
-            .get(payload_offset..end)
-            .ok_or(DecodeError::BadBounds)?;
         Ok(Object {
-            id,
-            kind,
-            digest,
-            bytes: payload,
+            id: self.string(u32_at(self.bytes, offset)? as usize)?,
+            kind: u32_at(self.bytes, offset + 4)?,
+            digest: self.bytes[offset + 24..offset + 56].try_into().unwrap(),
+            bytes: self
+                .bytes
+                .get(payload_offset..end)
+                .ok_or(DecodeError::BadBounds)?,
         })
     }
 
     pub fn executable(&self, index: usize) -> Result<Executable<'a>, DecodeError> {
-        if !self.is_v4() || index >= self.executable_count {
+        if index >= self.executable_count {
             return Err(DecodeError::BadIndex);
         }
         let offset = self.executable_offset + index * EXECUTABLE_LEN;
-        if self.bytes[offset + 16..offset + EXECUTABLE_LEN]
-            .iter()
-            .any(|byte| *byte != 0)
-        {
-            return Err(DecodeError::NonZeroReserved);
-        }
+        reserved_zero(self.bytes, offset + 16, offset + EXECUTABLE_LEN)?;
         Ok(Executable {
             name: self.string(u32_at(self.bytes, offset)? as usize)?,
             object: u32_at(self.bytes, offset + 4)? as usize,
@@ -481,16 +724,11 @@ impl<'a> Generation<'a> {
     }
 
     pub fn instance(&self, index: usize) -> Result<Instance<'a>, DecodeError> {
-        if !self.is_v4() || index >= self.instance_count {
+        if index >= self.instance_count {
             return Err(DecodeError::BadIndex);
         }
         let offset = self.instance_offset + index * INSTANCE_LEN;
-        if self.bytes[offset + 40..offset + INSTANCE_LEN]
-            .iter()
-            .any(|byte| *byte != 0)
-        {
-            return Err(DecodeError::NonZeroReserved);
-        }
+        reserved_zero(self.bytes, offset + 40, offset + INSTANCE_LEN)?;
         let owner = match u32_at(self.bytes, offset + 8)? {
             0 => {
                 if u32_at(self.bytes, offset + 12)? != 0 {
@@ -562,46 +800,8 @@ impl<'a> Generation<'a> {
         })
     }
 
-    /// Retained v2/v3 accessor; v4 never synthesizes instances from this table.
-    pub fn component(&self, index: usize) -> Result<LegacyComponent<'a>, DecodeError> {
-        if self.is_v4() || index >= self.executable_count {
-            return Err(DecodeError::BadIndex);
-        }
-        let offset = self.executable_offset + index * LEGACY_COMPONENT_LEN;
-        Ok(LegacyComponent {
-            name: self.string(u32_at(self.bytes, offset)? as usize)?,
-            object: u32_at(self.bytes, offset + 4)? as usize,
-            role: u32_at(self.bytes, offset + 8)?,
-            dependency_start: u32_at(self.bytes, offset + 12)? as usize,
-            dependency_count: u32_at(self.bytes, offset + 16)? as usize,
-            spawn_budget: u32_at(self.bytes, offset + 20)?
-                .try_into()
-                .map_err(|_| DecodeError::BadBounds)?,
-        })
-    }
     pub const fn component_count(&self) -> usize {
-        if self.version == FORMAT_VERSION {
-            0
-        } else {
-            self.executable_count
-        }
-    }
-    pub fn legacy_dependency(
-        &self,
-        component: LegacyComponent<'a>,
-        index: usize,
-    ) -> Result<LegacyComponent<'a>, DecodeError> {
-        if index >= component.dependency_count {
-            return Err(DecodeError::BadIndex);
-        }
-        let absolute = component
-            .dependency_start
-            .checked_add(index)
-            .ok_or(DecodeError::BadIndex)?;
-        self.component(u32_at(
-            self.bytes,
-            self.dependency_offset + absolute * LEGACY_DEPENDENCY_LEN,
-        )? as usize)
+        0
     }
 
     pub fn grant(&self, index: usize) -> Result<Grant<'a>, DecodeError> {
@@ -609,29 +809,18 @@ impl<'a> Generation<'a> {
             return Err(DecodeError::BadIndex);
         }
         let offset = self.grant_offset + index * GRANT_LEN;
-        let (rights, transferable_offset) = if self.version == FORMAT_VERSION_V2 {
-            (u64::from(u32_at(self.bytes, offset + 12)?), offset + 16)
-        } else {
-            (u64_at(self.bytes, offset + 12)?, offset + 20)
-        };
-        if self.bytes[transferable_offset + 4..offset + GRANT_LEN]
-            .iter()
-            .any(|byte| *byte != 0)
-        {
-            return Err(DecodeError::NonZeroReserved);
-        }
-        let source = u32_at(self.bytes, offset + 4)? as usize;
-        let target = u32_at(self.bytes, offset + 8)? as usize;
+        reserved_zero(self.bytes, offset + 24, offset + GRANT_LEN)?;
+        let rights = u64_at(self.bytes, offset + 12)?;
         Ok(Grant {
             name: self.string(u32_at(self.bytes, offset)? as usize)?,
-            source: GrantEndpoint::Instance(source),
-            target: if self.is_v4() && rights & RIGHT_EXEC != 0 {
-                GrantEndpoint::Executable(target)
+            source: GrantEndpoint::Instance(u32_at(self.bytes, offset + 4)? as usize),
+            target: if rights & RIGHT_EXEC != 0 {
+                GrantEndpoint::Executable(u32_at(self.bytes, offset + 8)? as usize)
             } else {
-                GrantEndpoint::Instance(target)
+                GrantEndpoint::Instance(u32_at(self.bytes, offset + 8)? as usize)
             },
             rights,
-            transferable: bool_at(self.bytes, transferable_offset)?,
+            transferable: bool_at(self.bytes, offset + 20)?,
         })
     }
     pub fn grant_named(&self, name: &str) -> Option<Grant<'a>> {
@@ -647,20 +836,11 @@ impl<'a> Generation<'a> {
                 GrantEndpoint::Executable(i) => {
                     self.executable(i).expect("validated executable").name
                 }
-                GrantEndpoint::Instance(i) if self.is_v4() => {
-                    self.instance(i).expect("validated instance").name
-                }
-                GrantEndpoint::Instance(i) => {
-                    self.component(i).expect("validated legacy component").name
-                }
+                GrantEndpoint::Instance(i) => self.instance(i).expect("validated instance").name,
             };
             update_bounded_string(&mut hasher, endpoint_name(grant.source));
             update_bounded_string(&mut hasher, endpoint_name(grant.target));
-            if self.version == FORMAT_VERSION_V2 {
-                hasher.update(&(grant.rights as u32).to_le_bytes());
-            } else {
-                hasher.update(&grant.rights.to_le_bytes());
-            }
+            hasher.update(&grant.rights.to_le_bytes());
             hasher.update(&u32::from(grant.transferable).to_le_bytes());
         }
         hasher.finalize()
@@ -671,12 +851,7 @@ impl<'a> Generation<'a> {
             return Err(DecodeError::BadIndex);
         }
         let offset = self.state_offset + index * STATE_LEN;
-        if self.bytes[offset + 16..offset + STATE_LEN]
-            .iter()
-            .any(|byte| *byte != 0)
-        {
-            return Err(DecodeError::NonZeroReserved);
-        }
+        reserved_zero(self.bytes, offset + 16, offset + STATE_LEN)?;
         Ok(StateBinding {
             name: self.string(u32_at(self.bytes, offset)? as usize)?,
             owner: u32_at(self.bytes, offset + 4)? as usize,
@@ -685,10 +860,180 @@ impl<'a> Generation<'a> {
         })
     }
     pub fn health_instance(&self, index: usize) -> Result<Instance<'a>, DecodeError> {
-        if !self.is_v4() || index >= self.health_count {
+        if index >= self.health_count {
             return Err(DecodeError::BadIndex);
         }
         self.instance(u32_at(self.bytes, self.health_offset + index * HEALTH_LEN)? as usize)
+    }
+
+    pub fn process(&self, index: usize) -> Result<Process<'a>, DecodeError> {
+        if index >= self.process_count {
+            return Err(DecodeError::BadIndex);
+        }
+        let offset = self.process_offset + index * PROCESS_LEN;
+        reserved_zero(self.bytes, offset + 28, offset + PROCESS_LEN)?;
+        Ok(Process {
+            name: self.string(u32_at(self.bytes, offset)? as usize)?,
+            instance: u32_at(self.bytes, offset + 4)? as usize,
+            cspace_object: u32_at(self.bytes, offset + 8)? as usize,
+            vspace_object: u32_at(self.bytes, offset + 12)? as usize,
+            main_thread: u32_at(self.bytes, offset + 16)? as usize,
+            quota: u32_at(self.bytes, offset + 20)? as usize,
+            flags: u32_at(self.bytes, offset + 24)?,
+        })
+    }
+    pub fn thread(&self, index: usize) -> Result<Thread<'a>, DecodeError> {
+        if index >= self.thread_count {
+            return Err(DecodeError::BadIndex);
+        }
+        let offset = self.thread_offset + index * THREAD_LEN;
+        reserved_zero(self.bytes, offset + 44, offset + THREAD_LEN)?;
+        Ok(Thread {
+            name: self.string(u32_at(self.bytes, offset)? as usize)?,
+            process: u32_at(self.bytes, offset + 4)? as usize,
+            tcb_object: u32_at(self.bytes, offset + 8)? as usize,
+            schedule: u32_at(self.bytes, offset + 12)? as usize,
+            fault_policy: u32_at(self.bytes, offset + 16)? as usize,
+            ipc_buffer_object: u32_at(self.bytes, offset + 20)? as usize,
+            ipc_buffer_vaddr: u64_at(self.bytes, offset + 24)?,
+            entry: u64_at(self.bytes, offset + 32)?,
+            flags: u32_at(self.bytes, offset + 40)?,
+        })
+    }
+    pub fn kernel_object_record(&self, index: usize) -> Result<KernelObject<'a>, DecodeError> {
+        if index >= self.kernel_object_count {
+            return Err(DecodeError::BadIndex);
+        }
+        let offset = self.kernel_object_offset + index * KERNEL_OBJECT_LEN;
+        reserved_zero(self.bytes, offset + 28, offset + KERNEL_OBJECT_LEN)?;
+        Ok(KernelObject {
+            name: self.string(u32_at(self.bytes, offset)? as usize)?,
+            kind: u32_at(self.bytes, offset + 4)?,
+            owner_process: u32_at(self.bytes, offset + 8)? as usize,
+            size_bits: u32_at(self.bytes, offset + 12)?,
+            count: u32_at(self.bytes, offset + 16)?,
+            source_object: u32_at(self.bytes, offset + 20)? as usize,
+            flags: u32_at(self.bytes, offset + 24)?,
+        })
+    }
+    pub fn mapping(&self, index: usize) -> Result<Mapping, DecodeError> {
+        if index >= self.mapping_count {
+            return Err(DecodeError::BadIndex);
+        }
+        let offset = self.mapping_offset + index * MAPPING_LEN;
+        reserved_zero(self.bytes, offset + 44, offset + MAPPING_LEN)?;
+        Ok(Mapping {
+            process: u32_at(self.bytes, offset)? as usize,
+            object: u32_at(self.bytes, offset + 4)? as usize,
+            virtual_address: u64_at(self.bytes, offset + 8)?,
+            page_count: u32_at(self.bytes, offset + 16)?,
+            rights: u64_at(self.bytes, offset + 20)?,
+            attributes: u64_at(self.bytes, offset + 28)?,
+            source_object: u32_at(self.bytes, offset + 36)? as usize,
+            flags: u32_at(self.bytes, offset + 40)?,
+        })
+    }
+    pub fn cap_binding(&self, index: usize) -> Result<CapBinding, DecodeError> {
+        if index >= self.cap_binding_count {
+            return Err(DecodeError::BadIndex);
+        }
+        let offset = self.cap_binding_offset + index * CAP_BINDING_LEN;
+        reserved_zero(self.bytes, offset + 36, offset + CAP_BINDING_LEN)?;
+        Ok(CapBinding {
+            process: u32_at(self.bytes, offset)? as usize,
+            slot: u32_at(self.bytes, offset + 4)? as usize,
+            object: u32_at(self.bytes, offset + 8)? as usize,
+            rights: u64_at(self.bytes, offset + 12)?,
+            badge: u64_at(self.bytes, offset + 20)?,
+            grant: u32_at(self.bytes, offset + 28)? as usize,
+            flags: u32_at(self.bytes, offset + 32)?,
+        })
+    }
+    pub fn service_binding(&self, index: usize) -> Result<ServiceBinding, DecodeError> {
+        if index >= self.service_binding_count {
+            return Err(DecodeError::BadIndex);
+        }
+        let offset = self.service_binding_offset + index * SERVICE_BINDING_LEN;
+        reserved_zero(self.bytes, offset + 36, offset + SERVICE_BINDING_LEN)?;
+        Ok(ServiceBinding {
+            process: u32_at(self.bytes, offset)? as usize,
+            service: u32_at(self.bytes, offset + 4)?,
+            slot: u32_at(self.bytes, offset + 8)? as usize,
+            object: u32_at(self.bytes, offset + 12)? as usize,
+            rights: u64_at(self.bytes, offset + 16)?,
+            badge: u64_at(self.bytes, offset + 24)?,
+            flags: u32_at(self.bytes, offset + 32)?,
+        })
+    }
+    pub fn schedule(&self, index: usize) -> Result<Schedule<'a>, DecodeError> {
+        if index >= self.schedule_count {
+            return Err(DecodeError::BadIndex);
+        }
+        let offset = self.schedule_offset + index * SCHEDULE_LEN;
+        reserved_zero(self.bytes, offset + 40, offset + SCHEDULE_LEN)?;
+        Ok(Schedule {
+            name: self.string(u32_at(self.bytes, offset)? as usize)?,
+            thread: u32_at(self.bytes, offset + 4)? as usize,
+            authority_process: u32_at(self.bytes, offset + 8)? as usize,
+            priority: u32_at(self.bytes, offset + 12)?,
+            max_controlled_priority: u32_at(self.bytes, offset + 16)?,
+            budget_us: u64_at(self.bytes, offset + 20)?,
+            period_us: u64_at(self.bytes, offset + 28)?,
+            flags: u32_at(self.bytes, offset + 36)?,
+        })
+    }
+    pub fn fault_policy(&self, index: usize) -> Result<FaultPolicy<'a>, DecodeError> {
+        if index >= self.fault_policy_count {
+            return Err(DecodeError::BadIndex);
+        }
+        let offset = self.fault_policy_offset + index * FAULT_POLICY_LEN;
+        reserved_zero(self.bytes, offset + 28, offset + FAULT_POLICY_LEN)?;
+        Ok(FaultPolicy {
+            name: self.string(u32_at(self.bytes, offset)? as usize)?,
+            thread: u32_at(self.bytes, offset + 4)? as usize,
+            handler_process: u32_at(self.bytes, offset + 8)? as usize,
+            endpoint_object: u32_at(self.bytes, offset + 12)? as usize,
+            badge: u64_at(self.bytes, offset + 16)?,
+            action: u32_at(self.bytes, offset + 24)?,
+        })
+    }
+    pub fn spawn_template(&self, index: usize) -> Result<SpawnTemplate<'a>, DecodeError> {
+        if index >= self.spawn_template_count {
+            return Err(DecodeError::BadIndex);
+        }
+        let offset = self.spawn_template_offset + index * SPAWN_TEMPLATE_LEN;
+        Ok(SpawnTemplate {
+            name: self.string(u32_at(self.bytes, offset)? as usize)?,
+            executable: u32_at(self.bytes, offset + 4)? as usize,
+            owner_process: u32_at(self.bytes, offset + 8)? as usize,
+            quota: u32_at(self.bytes, offset + 12)? as usize,
+            schedule: u32_at(self.bytes, offset + 16)? as usize,
+            fault_policy: u32_at(self.bytes, offset + 20)? as usize,
+            max_instances: u32_at(self.bytes, offset + 24)?,
+            flags: u32_at(self.bytes, offset + 28)?,
+        })
+    }
+    pub fn resource_quota(&self, index: usize) -> Result<ResourceQuota<'a>, DecodeError> {
+        if index >= self.resource_quota_count {
+            return Err(DecodeError::BadIndex);
+        }
+        let offset = self.resource_quota_offset + index * RESOURCE_QUOTA_LEN;
+        Ok(ResourceQuota {
+            name: self.string(u32_at(self.bytes, offset)? as usize)?,
+            owner_process: u32_at(self.bytes, offset + 4)? as usize,
+            cnode_count: u32_at(self.bytes, offset + 8)?,
+            tcb_count: u32_at(self.bytes, offset + 12)?,
+            endpoint_count: u32_at(self.bytes, offset + 16)?,
+            notification_count: u32_at(self.bytes, offset + 20)?,
+            frame_count: u32_at(self.bytes, offset + 24)?,
+            page_table_count: u32_at(self.bytes, offset + 28)?,
+            mapping_count: u32_at(self.bytes, offset + 32)?,
+            irq_count: u32_at(self.bytes, offset + 36)?,
+            cslot_count: u32_at(self.bytes, offset + 40)?,
+            untyped_bytes: u64_at(self.bytes, offset + 44)?,
+            dynamic_reserve_bytes: u64_at(self.bytes, offset + 52)?,
+            flags: u32_at(self.bytes, offset + 60)?,
+        })
     }
 
     fn string(&self, offset: usize) -> Result<&'a str, DecodeError> {
@@ -706,7 +1051,7 @@ impl<'a> Generation<'a> {
             ) {
                 return Err(DecodeError::UnknownEnum);
             }
-            if previous_id.is_some_and(|p| p >= object.id) {
+            if previous_id.is_some_and(|previous| previous >= object.id) {
                 return Err(DecodeError::BadOrder);
             }
             let start = u64_at(self.bytes, self.object_offset + index * OBJECT_LEN + 8)? as usize;
@@ -729,14 +1074,11 @@ impl<'a> Generation<'a> {
         if self.boot_attempts == 0 {
             return Err(DecodeError::BadHealth);
         }
-        if self.is_v4() {
-            self.validate_v4()
-        } else {
-            self.validate_legacy()
-        }
+        self.validate_catalogue()?;
+        self.validate_plan()
     }
 
-    fn validate_v4(&self) -> Result<(), DecodeError> {
+    fn validate_catalogue(&self) -> Result<(), DecodeError> {
         let mut previous_name = None;
         for index in 0..self.executable_count {
             let executable = self.executable(index)?;
@@ -746,7 +1088,7 @@ impl<'a> Generation<'a> {
             {
                 return Err(DecodeError::BadIndex);
             }
-            if previous_name.is_some_and(|p| p >= executable.name) {
+            if previous_name.is_some_and(|previous| previous >= executable.name) {
                 return Err(DecodeError::BadOrder);
             }
             previous_name = Some(executable.name);
@@ -759,7 +1101,7 @@ impl<'a> Generation<'a> {
             if instance.executable >= self.executable_count {
                 return Err(DecodeError::BadIndex);
             }
-            if previous_name.is_some_and(|p| p >= instance.name) {
+            if previous_name.is_some_and(|previous| previous >= instance.name) {
                 return Err(DecodeError::BadOrder);
             }
             if matches!(instance.owner, InstanceOwner::Instance(owner) if owner >= self.instance_count || owner == index)
@@ -793,7 +1135,7 @@ impl<'a> Generation<'a> {
                     .instance_index(dependency.name)
                     .ok_or(DecodeError::BadDependency)?;
                 if dependency_index == index
-                    || previous_dependency.is_some_and(|p| p >= dependency_index)
+                    || previous_dependency.is_some_and(|previous| previous >= dependency_index)
                 {
                     return Err(DecodeError::BadDependency);
                 }
@@ -812,7 +1154,7 @@ impl<'a> Generation<'a> {
                 let binding = self.binding(instance, at)?;
                 if binding.grant >= self.grant_count
                     || binding.slot >= MAX_TASK_CAPS
-                    || previous_slot.is_some_and(|p| p >= binding.slot)
+                    || previous_slot.is_some_and(|previous| previous >= binding.slot)
                 {
                     return Err(DecodeError::BadBinding);
                 }
@@ -889,67 +1231,19 @@ impl<'a> Generation<'a> {
         self.validate_grants_states_health()
     }
 
-    fn validate_legacy(&self) -> Result<(), DecodeError> {
-        if self.kernel_object >= self.object_count
-            || self.bootstrap_instance >= self.executable_count
-        {
-            return Err(DecodeError::BadIndex);
-        }
-        if self.object(self.kernel_object)?.kind != KIND_KERNEL {
-            return Err(DecodeError::BadKernel);
-        }
-        let mut previous_name = None;
-        for index in 0..self.executable_count {
-            let component = self.component(index)?;
-            if component.object >= self.object_count
-                || !matches!(component.role, 1..=4)
-                || component.spawn_budget > MAX_SPAWN_BUDGET
-            {
-                return Err(DecodeError::BadIndex);
-            }
-            if previous_name.is_some_and(|p| p >= component.name) {
-                return Err(DecodeError::BadOrder);
-            }
-            if component
-                .dependency_start
-                .checked_add(component.dependency_count)
-                .is_none_or(|end| end > self.dependency_count)
-            {
-                return Err(DecodeError::BadDependency);
-            }
-            previous_name = Some(component.name);
-        }
-        let bootstrap = self.component(self.bootstrap_instance)?;
-        if bootstrap.role != ROLE_INIT || self.object(bootstrap.object)?.kind != KIND_BOOTSTRAP {
-            return Err(DecodeError::BadBootstrap);
-        }
-        self.validate_grants_states_health()
-    }
-
     fn validate_grants_states_health(&self) -> Result<(), DecodeError> {
-        let rights_mask = if self.version == FORMAT_VERSION_V2 {
-            RIGHT_ALL_V2
-        } else {
-            RIGHT_ALL
-        };
         let mut previous_grant = None;
         for index in 0..self.grant_count {
             let grant = self.grant(index)?;
             let valid_endpoint = |endpoint| match endpoint {
-                GrantEndpoint::Executable(i) => self.is_v4() && i < self.executable_count,
-                GrantEndpoint::Instance(i) => {
-                    i < if self.is_v4() {
-                        self.instance_count
-                    } else {
-                        self.executable_count
-                    }
-                }
+                GrantEndpoint::Executable(i) => i < self.executable_count,
+                GrantEndpoint::Instance(i) => i < self.instance_count,
             };
             if !valid_endpoint(grant.source)
                 || !valid_endpoint(grant.target)
                 || !matches!(grant.source, GrantEndpoint::Instance(_))
                 || grant.rights == 0
-                || grant.rights & !rights_mask != 0
+                || grant.rights & !RIGHT_ALL != 0
                 || (grant.rights & RIGHT_TRANSFER != 0) != grant.transferable
             {
                 return Err(DecodeError::BadIndex);
@@ -959,20 +1253,15 @@ impl<'a> Generation<'a> {
                 endpoint_key(grant.source),
                 endpoint_key(grant.target),
             );
-            if previous_grant.is_some_and(|p| p >= key) {
+            if previous_grant.is_some_and(|previous| previous >= key) {
                 return Err(DecodeError::BadOrder);
             }
             previous_grant = Some(key);
         }
-        let owner_limit = if self.is_v4() {
-            self.instance_count
-        } else {
-            self.executable_count
-        };
         let mut previous_state = None;
         for index in 0..self.state_count {
             let state = self.state(index)?;
-            if state.owner >= owner_limit
+            if state.owner >= self.instance_count
                 || state.schema_version == 0
                 || !matches!(
                     state.policy,
@@ -985,31 +1274,208 @@ impl<'a> Generation<'a> {
             {
                 return Err(DecodeError::BadState);
             }
-            if previous_state.is_some_and(|p| p >= state.name) {
+            if previous_state.is_some_and(|previous| previous >= state.name) {
                 return Err(DecodeError::BadOrder);
             }
             previous_state = Some(state.name);
         }
-        if self.is_v4() {
-            let mut previous_health = None;
-            let mut required = 0;
-            for index in 0..self.instance_count {
-                required += usize::from(self.instance(index)?.health == InstanceHealth::Required);
-            }
-            if required != self.health_count {
+        let mut previous_health = None;
+        let mut required = 0;
+        for index in 0..self.instance_count {
+            required += usize::from(self.instance(index)?.health == InstanceHealth::Required);
+        }
+        if required != self.health_count {
+            return Err(DecodeError::BadHealth);
+        }
+        for index in 0..self.health_count {
+            let instance = self.health_instance(index)?;
+            let instance_index = self
+                .instance_index(instance.name)
+                .ok_or(DecodeError::BadHealth)?;
+            if instance.health != InstanceHealth::Required
+                || previous_health.is_some_and(|previous| previous >= instance_index)
+            {
                 return Err(DecodeError::BadHealth);
             }
-            for index in 0..self.health_count {
-                let instance = self.health_instance(index)?;
-                let instance_index = self
-                    .instance_index(instance.name)
-                    .ok_or(DecodeError::BadHealth)?;
-                if instance.health != InstanceHealth::Required
-                    || previous_health.is_some_and(|p| p >= instance_index)
-                {
-                    return Err(DecodeError::BadHealth);
+            previous_health = Some(instance_index);
+        }
+        Ok(())
+    }
+
+    fn validate_plan(&self) -> Result<(), DecodeError> {
+        if self.process_count != self.thread_count
+            || self.process_count != self.schedule_count
+            || self.process_count != self.fault_policy_count
+            || self.process_count != self.resource_quota_count
+        {
+            return Err(DecodeError::BadBounds);
+        }
+        let mut seen_instances = [false; MAX_INSTANCES];
+        for index in 0..self.process_count {
+            let process = self.process(index)?;
+            if process.instance >= self.instance_count
+                || process.cspace_object >= self.kernel_object_count
+                || process.vspace_object >= self.kernel_object_count
+                || process.main_thread >= self.thread_count
+                || process.quota >= self.resource_quota_count
+                || process.flags != 0
+                || seen_instances[process.instance]
+            {
+                return Err(DecodeError::BadIndex);
+            }
+            let instance = self.instance(process.instance)?;
+            if !instance.is_root_autostart() || process.name != instance.name {
+                return Err(DecodeError::BadIndex);
+            }
+            seen_instances[process.instance] = true;
+            if self.kernel_object_record(process.cspace_object)?.kind != 1
+                || self.kernel_object_record(process.vspace_object)?.kind != 2
+            {
+                return Err(DecodeError::BadKernel);
+            }
+        }
+        for (index, seen) in seen_instances.iter().enumerate().take(self.instance_count) {
+            if self.instance(index)?.is_root_autostart() != *seen {
+                return Err(DecodeError::BadIndex);
+            }
+        }
+        for index in 0..self.thread_count {
+            let thread = self.thread(index)?;
+            if thread.process >= self.process_count
+                || thread.tcb_object >= self.kernel_object_count
+                || thread.schedule >= self.schedule_count
+                || thread.fault_policy >= self.fault_policy_count
+                || thread.ipc_buffer_object >= self.kernel_object_count
+                || thread.flags != 0
+            {
+                return Err(DecodeError::BadIndex);
+            }
+            if self.process(thread.process)?.main_thread != index
+                || self.kernel_object_record(thread.tcb_object)?.kind != 3
+                || self.kernel_object_record(thread.ipc_buffer_object)?.kind != 4
+            {
+                return Err(DecodeError::BadKernel);
+            }
+        }
+        for index in 0..self.kernel_object_count {
+            let object = self.kernel_object_record(index)?;
+            if object.owner_process >= self.process_count
+                || !matches!(object.kind, 1..=6)
+                || object.count == 0
+                || object.flags != 0
+                || (object.source_object != PLAN_NONE && object.source_object >= self.object_count)
+            {
+                return Err(DecodeError::BadKernel);
+            }
+        }
+        for index in 0..self.mapping_count {
+            let mapping = self.mapping(index)?;
+            if mapping.process >= self.process_count
+                || mapping.object >= self.kernel_object_count
+                || mapping.page_count == 0
+                || mapping.rights == 0
+                || mapping.rights & !RIGHT_ALL != 0
+                || mapping.flags != 0
+                || (mapping.source_object != PLAN_NONE
+                    && mapping.source_object >= self.object_count)
+            {
+                return Err(DecodeError::BadIndex);
+            }
+        }
+        let mut materialized = [0u8; MAX_GRANTS];
+        for index in 0..self.cap_binding_count {
+            let binding = self.cap_binding(index)?;
+            if binding.process >= self.process_count
+                || binding.slot >= MAX_TASK_CAPS
+                || binding.object >= self.kernel_object_count
+                || binding.rights == 0
+                || binding.flags & !GRANT_POLICY_ONLY != 0
+                || (binding.grant != PLAN_NONE && binding.grant >= self.grant_count)
+            {
+                return Err(DecodeError::BadBinding);
+            }
+            if binding.grant != PLAN_NONE {
+                if binding.flags & GRANT_POLICY_ONLY == 0 {
+                    materialized[binding.grant] = materialized[binding.grant].saturating_add(1);
                 }
-                previous_health = Some(instance_index);
+                let grant = self.grant(binding.grant)?;
+                if binding.rights != grant.rights {
+                    return Err(DecodeError::BadBinding);
+                }
+            }
+        }
+        for (index, count) in materialized.iter().enumerate().take(self.grant_count) {
+            let grant = self.grant(index)?;
+            let policy_only = (0..self.cap_binding_count).any(|binding| {
+                self.cap_binding(binding).is_ok_and(|binding| {
+                    binding.grant == index && binding.flags & GRANT_POLICY_ONLY != 0
+                })
+            });
+            if usize::from(*count) + usize::from(policy_only) != 1 {
+                return Err(DecodeError::BadBinding);
+            }
+            if policy_only && grant.rights & (RIGHT_EXEC | 0b11) != 0 {
+                return Err(DecodeError::BadBinding);
+            }
+        }
+        for index in 0..self.service_binding_count {
+            let binding = self.service_binding(index)?;
+            if binding.process >= self.process_count
+                || binding.slot >= MAX_TASK_CAPS
+                || binding.object >= self.kernel_object_count
+                || binding.rights == 0
+                || binding.flags != 0
+            {
+                return Err(DecodeError::BadBinding);
+            }
+        }
+        for index in 0..self.schedule_count {
+            let schedule = self.schedule(index)?;
+            if schedule.thread >= self.thread_count
+                || (schedule.authority_process != PLAN_NONE
+                    && schedule.authority_process >= self.process_count)
+                || schedule.priority > schedule.max_controlled_priority
+                || schedule.flags != 0
+                || self.thread(schedule.thread)?.schedule != index
+            {
+                return Err(DecodeError::BadIndex);
+            }
+        }
+        for index in 0..self.fault_policy_count {
+            let fault = self.fault_policy(index)?;
+            if fault.thread >= self.thread_count
+                || (fault.handler_process != PLAN_NONE
+                    && fault.handler_process >= self.process_count)
+                || fault.endpoint_object >= self.kernel_object_count
+                || fault.action == 0
+                || self.thread(fault.thread)?.fault_policy != index
+            {
+                return Err(DecodeError::BadIndex);
+            }
+        }
+        for index in 0..self.spawn_template_count {
+            let template = self.spawn_template(index)?;
+            if template.executable >= self.executable_count
+                || template.owner_process >= self.process_count
+                || template.quota >= self.resource_quota_count
+                || template.schedule >= self.schedule_count
+                || template.fault_policy >= self.fault_policy_count
+                || template.max_instances == 0
+                || template.flags != 0
+            {
+                return Err(DecodeError::BadIndex);
+            }
+        }
+        for index in 0..self.resource_quota_count {
+            let quota = self.resource_quota(index)?;
+            if quota.owner_process >= self.process_count
+                || self.process(quota.owner_process)?.quota != index
+                || quota.cnode_count == 0
+                || quota.tcb_count == 0
+                || quota.cslot_count == 0
+                || quota.flags != 0
+            {
+                return Err(DecodeError::BadIndex);
             }
         }
         Ok(())
@@ -1067,6 +1533,7 @@ impl<'a> Generation<'a> {
                     }
             })
     }
+
     fn instance_index(&self, name: &str) -> Option<usize> {
         (0..self.instance_count).find(|i| self.instance(*i).is_ok_and(|v| v.name == name))
     }
@@ -1089,13 +1556,11 @@ where
         }
         let mut depth = 1;
         nodes[0] = root;
-        edges[0] = 0;
         colors[root] = 1;
         while depth != 0 {
             let frame = depth - 1;
             let node = nodes[frame];
-            let edge_index = edges[frame];
-            match edge(node, edge_index)? {
+            match edge(node, edges[frame])? {
                 Some(next) => {
                     if next >= node_count {
                         return Err(cycle_error);
@@ -1107,7 +1572,6 @@ where
                                 return Err(cycle_error);
                             }
                             nodes[depth] = next;
-                            edges[depth] = 0;
                             colors[next] = 1;
                             depth += 1;
                         }
@@ -1184,6 +1648,18 @@ fn read_string(
     )
     .map_err(|_| DecodeError::BadUtf8)
 }
+fn reserved_zero(bytes: &[u8], start: usize, end: usize) -> Result<(), DecodeError> {
+    if bytes
+        .get(start..end)
+        .ok_or(DecodeError::Truncated)?
+        .iter()
+        .any(|byte| *byte != 0)
+    {
+        Err(DecodeError::NonZeroReserved)
+    } else {
+        Ok(())
+    }
+}
 fn bool_at(bytes: &[u8], offset: usize) -> Result<bool, DecodeError> {
     match u32_at(bytes, offset)? {
         0 => Ok(false),
@@ -1221,100 +1697,19 @@ fn u64_at(bytes: &[u8], offset: usize) -> Result<u64, DecodeError> {
 
 #[cfg(test)]
 mod tests {
-    extern crate alloc;
     use super::*;
 
-    fn seal(bytes: &mut [u8]) {
-        bytes[IDENTITY_OFFSET..IDENTITY_END].fill(0);
-        let identity = generation_identity(bytes);
-        bytes[IDENTITY_OFFSET..IDENTITY_END].copy_from_slice(&identity);
-    }
-
-    fn minimal() -> alloc::vec::Vec<u8> {
-        let strings = b"\x01\0t\x04\0boot\x06\0worker\x04\0init";
-        let object_offset = HEADER_LEN;
-        let executable_offset = object_offset + OBJECT_LEN;
-        let instance_offset = executable_offset + 2 * EXECUTABLE_LEN;
-        let dependency_offset = instance_offset + INSTANCE_LEN;
-        let binding_offset = dependency_offset;
-        let grant_offset = binding_offset;
-        let state_offset = grant_offset;
-        let health_offset = state_offset;
-        let string_offset = health_offset + HEALTH_LEN;
-        let payload_offset = string_offset + strings.len();
-        let total_len = payload_offset + 1;
-        let mut bytes = alloc::vec![0; total_len];
+    #[test]
+    fn rejects_v4_product_generations() {
+        let mut bytes = [0u8; HEADER_LEN];
         bytes[..8].copy_from_slice(&MAGIC_V4);
-        bytes[8..12].copy_from_slice(&FORMAT_VERSION.to_le_bytes());
-        bytes[12..16].copy_from_slice(&(HEADER_LEN as u32).to_le_bytes());
-        bytes[56..64].copy_from_slice(&1u64.to_le_bytes());
-        bytes[96..100].copy_from_slice(&0u32.to_le_bytes());
-        bytes[104..108].copy_from_slice(&0u32.to_le_bytes());
-        bytes[108..112].copy_from_slice(&1u32.to_le_bytes());
-        for (offset, value) in [(112, 1u32), (116, 2), (120, 1), (140, 1)] {
-            bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
-        }
-        for (offset, value) in [
-            (144, object_offset),
-            (152, executable_offset),
-            (160, instance_offset),
-            (168, dependency_offset),
-            (176, binding_offset),
-            (184, grant_offset),
-            (192, state_offset),
-            (200, health_offset),
-            (208, string_offset),
-            (216, strings.len()),
-            (224, payload_offset),
-            (232, total_len),
-        ] {
-            bytes[offset..offset + 8].copy_from_slice(&(value as u64).to_le_bytes());
-        }
-        let mut hasher = Sha256::new();
-        hasher.update(b"I");
-        bytes[object_offset..object_offset + 4].copy_from_slice(&3u32.to_le_bytes());
-        bytes[object_offset + 4..object_offset + 8].copy_from_slice(&KIND_BOOTSTRAP.to_le_bytes());
-        bytes[object_offset + 8..object_offset + 16]
-            .copy_from_slice(&(payload_offset as u64).to_le_bytes());
-        bytes[object_offset + 16..object_offset + 24].copy_from_slice(&1u64.to_le_bytes());
-        for (index, (name, role)) in [(17u32, ROLE_INIT), (9u32, 2)].into_iter().enumerate() {
-            let offset = executable_offset + index * EXECUTABLE_LEN;
-            bytes[offset..offset + 4].copy_from_slice(&name.to_le_bytes());
-            bytes[offset + 8..offset + 12].copy_from_slice(&role.to_le_bytes());
-        }
-        bytes[instance_offset..instance_offset + 4].copy_from_slice(&17u32.to_le_bytes());
-        bytes[instance_offset + 16..instance_offset + 20].copy_from_slice(&1u32.to_le_bytes());
-        bytes[instance_offset + 36..instance_offset + 40].copy_from_slice(&1u32.to_le_bytes());
-        bytes[string_offset..payload_offset].copy_from_slice(strings);
-        bytes[payload_offset] = b'I';
-        let mut hasher = Sha256::new();
-        hasher.update(&bytes[payload_offset..payload_offset + 1]);
-        bytes[object_offset + 24..object_offset + 56].copy_from_slice(&hasher.finalize());
-        seal(&mut bytes);
-        bytes
-    }
-
-    #[test]
-    fn v4_accepts_catalogue_only_executable() {
-        let bytes = minimal();
-        let generation = Generation::decode(&bytes).expect("valid v4");
-        assert_eq!(generation.executable_count(), 2);
-        assert_eq!(generation.instance_count(), 1);
-        assert!(generation.executable_named("worker").is_some());
-        assert!(generation.instance_named("worker").is_none());
-    }
-
-    #[test]
-    fn v4_rejects_malformed_owner() {
-        let mut bytes = minimal();
-        let instance = u64_at(&bytes, 160).unwrap() as usize;
-        bytes[instance + 8..instance + 12].copy_from_slice(&1u32.to_le_bytes());
-        seal(&mut bytes);
+        bytes[8..12].copy_from_slice(&4u32.to_le_bytes());
         assert!(matches!(
             Generation::decode(&bytes),
-            Err(DecodeError::BadOwner)
+            Err(DecodeError::UnsupportedVersion)
         ));
     }
+
     #[test]
     fn dependency_cycle_reachable_beyond_probe_is_rejected() {
         let edges = [Some(1usize), Some(2), Some(1)];
@@ -1322,7 +1717,7 @@ mod tests {
             validate_acyclic(
                 edges.len(),
                 |node, edge| Ok((edge == 0).then_some(edges[node]).flatten()),
-                DecodeError::BadDependency,
+                DecodeError::BadDependency
             ),
             Err(DecodeError::BadDependency)
         );
@@ -1335,7 +1730,7 @@ mod tests {
             validate_acyclic(
                 owners.len(),
                 |node, edge| Ok((edge == 0).then_some(owners[node]).flatten()),
-                DecodeError::BadOwner,
+                DecodeError::BadOwner
             ),
             Err(DecodeError::BadOwner)
         );

@@ -111,6 +111,16 @@ from boot_contracts import (
     GENERATION_MAGIC,
     GENERATION_OBJECT,
     GENERATION_STATE,
+    GENERATION_PROCESS,
+    GENERATION_THREAD,
+    GENERATION_KERNEL_OBJECT,
+    GENERATION_MAPPING,
+    GENERATION_CAP_BINDING,
+    GENERATION_SERVICE_BINDING,
+    GENERATION_SCHEDULE,
+    GENERATION_FAULT_POLICY,
+    GENERATION_SPAWN_TEMPLATE,
+    GENERATION_RESOURCE_QUOTA,
     GENERATION_VERSION,
     TARGET_PROFILES_BY_NAME,
     TargetProfile,
@@ -126,6 +136,16 @@ from boot_contracts import (
     MAX_STATES,
     MAX_STRING_BYTES,
     MAX_STRING_TABLE_BYTES,
+    MAX_PROCESSES,
+    MAX_THREADS,
+    MAX_KERNEL_OBJECTS,
+    MAX_MAPPINGS,
+    MAX_CAP_BINDINGS,
+    MAX_SERVICE_BINDINGS,
+    MAX_SCHEDULES,
+    MAX_FAULT_POLICIES,
+    MAX_SPAWN_TEMPLATES,
+    MAX_RESOURCE_QUOTAS,
     SHARED_BUFFER_BUDGET_ENTRY,
     SHARED_BUFFER_BUDGET_HEADER,
     SHARED_BUFFER_BUDGET_HEADER_BYTES,
@@ -2186,6 +2206,195 @@ def validate_acyclic(instances: list[dict]) -> None:
         visit(name)
 
 
+PLAN_NONE = 0xFFFFFFFF
+GRANT_POLICY_ONLY = 1
+SERVICE_ROOT_DISPATCH = 1
+KERNEL_OBJECT_CNODE = 1
+KERNEL_OBJECT_VSPACE = 2
+KERNEL_OBJECT_TCB = 3
+KERNEL_OBJECT_FRAME = 4
+KERNEL_OBJECT_ENDPOINT = 5
+KERNEL_OBJECT_PAGE_TABLE = 6
+CAP_RIGHT_ALL = (1 << 64) - 1
+
+
+def build_sel4_plan(
+    manifest: dict,
+    instances: list[dict],
+    executables: list[dict],
+    grants: list[dict],
+    grant_rights: list[int],
+    instance_index: dict[str, int],
+    executable_index: dict[str, int],
+    string_offset,
+) -> tuple[bytes, ...]:
+    """Materialize the required v5 process and authority plan.
+
+    The builder owns this expansion because it has the authenticated manifest
+    and the exact executable catalogue in hand. Counts and references are
+    checked here, before a byte is emitted; the decoder repeats the checks at
+    the trust boundary.
+    """
+    process_records = bytearray()
+    thread_records = bytearray()
+    kernel_records = bytearray()
+    mapping_records = bytearray()
+    cap_records = bytearray()
+    service_records = bytearray()
+    schedule_records = bytearray()
+    fault_records = bytearray()
+    spawn_records = bytearray()
+    quota_records = bytearray()
+    object_index: dict[tuple[str, str], int] = {}
+
+    root_instances = [instance for instance in instances if instance["owner"] == "root"]
+    if not root_instances or len(root_instances) > MAX_PROCESSES:
+        fail("seL4 process plan count exceeds bound")
+
+    for process, instance in enumerate(root_instances):
+        name = instance["name"]
+        quota = process
+        cspace = len(object_index)
+        object_index[(name, "cspace")] = cspace
+        kernel_records.extend(
+            GENERATION_KERNEL_OBJECT.pack(
+                string_offset(f"{name}:cspace"), KERNEL_OBJECT_CNODE, process, 6, 1, PLAN_NONE, 0
+            )
+        )
+        vspace = len(object_index)
+        object_index[(name, "vspace")] = vspace
+        kernel_records.extend(
+            GENERATION_KERNEL_OBJECT.pack(
+                string_offset(f"{name}:vspace"), KERNEL_OBJECT_VSPACE, process, 12, 1, PLAN_NONE, 0
+            )
+        )
+        tcb = len(object_index)
+        object_index[(name, "tcb")] = tcb
+        kernel_records.extend(
+            GENERATION_KERNEL_OBJECT.pack(
+                string_offset(f"{name}:tcb"), KERNEL_OBJECT_TCB, process, 11, 1, PLAN_NONE, 0
+            )
+        )
+        ipc = len(object_index)
+        object_index[(name, "ipc-buffer")] = ipc
+        kernel_records.extend(
+            GENERATION_KERNEL_OBJECT.pack(
+                string_offset(f"{name}:ipc-buffer"), KERNEL_OBJECT_FRAME, process, 12, 1, PLAN_NONE, 0
+            )
+        )
+        fault_endpoint = len(object_index)
+        object_index[(name, "fault-endpoint")] = fault_endpoint
+        kernel_records.extend(
+            GENERATION_KERNEL_OBJECT.pack(
+                string_offset(f"{name}:fault-endpoint"), KERNEL_OBJECT_ENDPOINT, process, 4, 1, PLAN_NONE, 0
+            )
+        )
+
+        thread = process
+        schedule = process
+        fault = process
+        thread_records.extend(
+            GENERATION_THREAD.pack(
+                string_offset(f"{name}:main"), process, tcb, schedule, fault, ipc, 0, 0, 0
+            )
+        )
+        process_records.extend(
+            GENERATION_PROCESS.pack(
+                string_offset(name), instance_index[name], cspace, vspace, thread, quota, 0
+            )
+        )
+        schedule_records.extend(
+            GENERATION_SCHEDULE.pack(
+                string_offset(f"{name}:schedule"), thread, PLAN_NONE, 100, 100, 0, 0, 0
+            )
+        )
+        fault_records.extend(
+            GENERATION_FAULT_POLICY.pack(
+                string_offset(f"{name}:fault"), thread, PLAN_NONE, fault_endpoint, process + 1, 1
+            )
+        )
+        service_records.extend(
+            GENERATION_SERVICE_BINDING.pack(
+                process, SERVICE_ROOT_DISPATCH, 1, fault_endpoint, 1, process + 1, 0
+            )
+        )
+        cap_records.extend(
+            GENERATION_CAP_BINDING.pack(process, 2, tcb, CAP_RIGHT_ALL, 0, PLAN_NONE, 0)
+        )
+        cap_records.extend(
+            GENERATION_CAP_BINDING.pack(process, 3, fault_endpoint, 1, process + 1, PLAN_NONE, 0)
+        )
+        quota_records.extend(
+            GENERATION_RESOURCE_QUOTA.pack(
+                string_offset(f"{name}:quota"), process, 1, 1, 2, 0, 2, 4, 6, 0, 64, 1 << 20, 0, 0
+            )
+        )
+
+    process_for_instance = {instance["name"]: index for index, instance in enumerate(root_instances)}
+    for grant_index, (grant, rights) in enumerate(zip(grants, grant_rights, strict=True)):
+        source_process = process_for_instance.get(grant["source"])
+        if source_process is None:
+            continue
+        bound = next(
+            (binding for binding in instances[instance_index[grant["source"]]]["bindings"] if binding["grant"] == grant["name"]),
+            None,
+        )
+        if bound is None:
+            fail(f"authority-bearing grant {grant['name']} has no concrete binding")
+        if rights & RIGHT["exec"]:
+            target = executable_index[grant["target"]]
+            spawn_records.extend(
+                GENERATION_SPAWN_TEMPLATE.pack(
+                    string_offset(grant["name"]), target, source_process, source_process, source_process, source_process, 1, 0
+                )
+            )
+            cap_records.extend(
+                GENERATION_CAP_BINDING.pack(source_process, bound["slot"], object_index[(grant["source"], "tcb")], rights, 0, grant_index, 0)
+            )
+        elif rights & (RIGHT["send"] | RIGHT["recv"]):
+            endpoint = len(object_index)
+            object_index[(grant["name"], "endpoint")] = endpoint
+            kernel_records.extend(
+                GENERATION_KERNEL_OBJECT.pack(
+                    string_offset(f"{grant['name']}:endpoint"), KERNEL_OBJECT_ENDPOINT, source_process, 4, 1, PLAN_NONE, 0
+                )
+            )
+            cap_records.extend(
+                GENERATION_CAP_BINDING.pack(source_process, bound["slot"], endpoint, rights, 0, grant_index, 0)
+            )
+        else:
+            cap_records.extend(
+                GENERATION_CAP_BINDING.pack(source_process, bound["slot"], object_index[(grant["source"], "tcb")], rights, 0, grant_index, GRANT_POLICY_ONLY)
+            )
+
+    counts = (
+        len(process_records) // GENERATION_PROCESS.size,
+        len(thread_records) // GENERATION_THREAD.size,
+        len(kernel_records) // GENERATION_KERNEL_OBJECT.size,
+        len(mapping_records) // GENERATION_MAPPING.size,
+        len(cap_records) // GENERATION_CAP_BINDING.size,
+        len(service_records) // GENERATION_SERVICE_BINDING.size,
+        len(schedule_records) // GENERATION_SCHEDULE.size,
+        len(fault_records) // GENERATION_FAULT_POLICY.size,
+        len(spawn_records) // GENERATION_SPAWN_TEMPLATE.size,
+        len(quota_records) // GENERATION_RESOURCE_QUOTA.size,
+    )
+    limits = (
+        MAX_PROCESSES, MAX_THREADS, MAX_KERNEL_OBJECTS, MAX_MAPPINGS, MAX_CAP_BINDINGS,
+        MAX_SERVICE_BINDINGS, MAX_SCHEDULES, MAX_FAULT_POLICIES, MAX_SPAWN_TEMPLATES,
+        MAX_RESOURCE_QUOTAS,
+    )
+    if any(count > limit for count, limit in zip(counts, limits, strict=True)):
+        fail("seL4 execution plan count exceeds bound")
+    return (
+        process_records, thread_records, kernel_records, mapping_records, cap_records,
+        service_records, schedule_records, fault_records, spawn_records, quota_records,
+        counts,
+    )
+
+
+
+
 def layout_executables(manifest: dict) -> set[str]:
     """Executables the initial graph addresses through its boot slot table."""
     initial = {instance["name"] for instance in manifest["instances"]}
@@ -2242,6 +2451,7 @@ def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes |
         return offset
 
     target_offset = string_offset(manifest["target"])
+    boot_action_offset = string_offset(manifest["bootAction"])
     for object_ in objects: string_offset(object_["id"])
     for executable in executables: string_offset(executable["name"])
     for instance in instances: string_offset(instance["name"])
@@ -2362,9 +2572,58 @@ def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes |
     instance_records = bytearray()
     grant_records = bytearray()
     state_records = bytearray()
+    (
+        process_records,
+        thread_records,
+        kernel_object_records,
+        mapping_records,
+        cap_binding_records,
+        service_binding_records,
+        schedule_records,
+        fault_policy_records,
+        spawn_template_records,
+        resource_quota_records,
+        plan_counts,
+    ) = build_sel4_plan(
+        manifest,
+        instances,
+        executables,
+        grants,
+        grant_rights,
+        instance_index,
+        executable_index,
+        string_offset,
+    )
     health_records = bytearray()
     blobs = bytearray()
-    payload_start = (GENERATION_HEADER.size + len(objects) * GENERATION_OBJECT.size + len(executables) * GENERATION_EXECUTABLE.size + len(instances) * GENERATION_INSTANCE.size + len(dependency_records) + len(binding_records) + len(grants) * GENERATION_GRANT.size + len(states) * GENERATION_STATE.size + len(required) * GENERATION_HEALTH.size + len(strings))
+    plan_bytes = sum(
+        len(records)
+        for records in (
+            process_records,
+            thread_records,
+            kernel_object_records,
+            mapping_records,
+            cap_binding_records,
+            service_binding_records,
+            schedule_records,
+            fault_policy_records,
+            spawn_template_records,
+            resource_quota_records,
+        )
+    )
+    payload_start = (
+        GENERATION_HEADER.size
+        + len(objects) * GENERATION_OBJECT.size
+        + len(executables) * GENERATION_EXECUTABLE.size
+        + len(instances) * GENERATION_INSTANCE.size
+        + len(dependency_records)
+        + len(binding_records)
+        + len(grants) * GENERATION_GRANT.size
+        + len(states) * GENERATION_STATE.size
+        + len(required) * GENERATION_HEALTH.size
+        + plan_bytes
+        + len(strings)
+    )
     for object_ in objects:
         if object_["kind"] not in KIND:
             fail(f"unsupported object kind {object_['kind']}")
@@ -2415,15 +2674,41 @@ def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes |
     grant_offset = binding_offset + len(binding_records)
     state_offset = grant_offset + len(grant_records)
     health_offset = state_offset + len(state_records)
-    string_table_offset = health_offset + len(health_records)
+    process_offset = health_offset + len(health_records)
+    thread_offset = process_offset + len(process_records)
+    kernel_object_offset = thread_offset + len(thread_records)
+    mapping_offset = kernel_object_offset + len(kernel_object_records)
+    cap_binding_offset = mapping_offset + len(mapping_records)
+    service_binding_offset = cap_binding_offset + len(cap_binding_records)
+    schedule_offset = service_binding_offset + len(service_binding_records)
+    fault_policy_offset = schedule_offset + len(schedule_records)
+    spawn_template_offset = fault_policy_offset + len(fault_policy_records)
+    resource_quota_offset = spawn_template_offset + len(spawn_template_records)
+    string_table_offset = resource_quota_offset + len(resource_quota_records)
     actual_payload_offset = string_table_offset + len(strings)
     if actual_payload_offset != payload_start:
         fail("internal payload offset mismatch")
     total_len = actual_payload_offset + len(blobs)
     if total_len > MAX_GENERATION_BYTES:
         fail("generation exceeds bound")
-    header = GENERATION_HEADER.pack(GENERATION_MAGIC, GENERATION_VERSION, GENERATION_HEADER.size, 0, bytes(32), number, parent or bytes(32), target_offset, 0, bootstrap, health["bootAttempts"], len(objects), len(executables), len(instances), dependency_count, binding_count, len(grants), len(states), len(required), object_offset, executable_offset, instance_offset, dependency_offset, binding_offset, grant_offset, state_offset, health_offset, string_table_offset, len(strings), actual_payload_offset, total_len)
-    generation = bytearray(header + object_records + executable_records + instance_records + dependency_records + binding_records + grant_records + state_records + health_records + strings + blobs)
+    header = GENERATION_HEADER.pack(
+        GENERATION_MAGIC, GENERATION_VERSION, GENERATION_HEADER.size, 0, bytes(32), number,
+        parent or bytes(32), target_offset, boot_action_offset, bootstrap, health["bootAttempts"], len(objects),
+        len(executables), len(instances), dependency_count, binding_count, len(grants),
+        len(states), len(required), *plan_counts, object_offset, executable_offset,
+        instance_offset, dependency_offset, binding_offset, grant_offset, state_offset,
+        health_offset, process_offset, thread_offset, kernel_object_offset, mapping_offset,
+        cap_binding_offset, service_binding_offset, schedule_offset, fault_policy_offset,
+        spawn_template_offset, resource_quota_offset, string_table_offset, len(strings),
+        actual_payload_offset, total_len,
+    )
+    generation = bytearray(
+        header + object_records + executable_records + instance_records + dependency_records
+        + binding_records + grant_records + state_records + health_records + process_records
+        + thread_records + kernel_object_records + mapping_records + cap_binding_records
+        + service_binding_records + schedule_records + fault_policy_records
+        + spawn_template_records + resource_quota_records + strings + blobs
+    )
     generation[24:56] = generation_identity(generation)
     return bytes(generation)
 

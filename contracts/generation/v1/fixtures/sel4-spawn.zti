@@ -1,4 +1,5 @@
 {
+  bootAction = "spawn";
   bootstrapInstance = "init";
   executables = [
     {

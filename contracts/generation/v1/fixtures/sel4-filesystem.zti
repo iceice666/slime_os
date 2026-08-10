@@ -1,4 +1,5 @@
 {
+  bootAction = "filesystem";
   bootstrapInstance = "init";
   executables = [
     {

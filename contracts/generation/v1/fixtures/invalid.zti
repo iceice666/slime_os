@@ -2,6 +2,7 @@
   formatVersion = "one";
   generation = 1;
   target = "x86_64-qemu-virtio";
+  bootAction = "product";
   bootstrapInstance = "init";
   objects = [];
   executables = [];

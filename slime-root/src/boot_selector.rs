@@ -160,7 +160,7 @@ pub fn select(
         return Err(SelectorError::Generation);
     }
     let generation = Generation::decode(generation_bytes).map_err(|_| SelectorError::Generation)?;
-    if !generation.is_v4() {
+    if !generation.is_v5() {
         return Err(SelectorError::Generation);
     }
 

@@ -149,6 +149,10 @@ GenerationManifest :: type {
   generation : Int;
   target : Text;
   parent? : Int;
+  -- Authenticated init composition selector. It travels in the v5 process
+  -- record and is passed to the bootstrap thread at activation; component
+  -- images never select a graph through build-time environment flags.
+  bootAction : Text;
   bootstrapInstance : Text;
   interfaceSchemas : List Text;
   sharedBufferBudget : List SharedBufferBudgetEntry;

@@ -176,13 +176,8 @@ impl<'a> Release<'a> {
         if self.target != generation.target {
             return Err(ReleaseError::WrongTarget);
         }
-        if !generation.is_v4() {
-            let kernel = generation
-                .object(generation.kernel_object)
-                .map_err(|_| ReleaseError::WrongBootBundle)?;
-            if self.boot_bundle != kernel.digest {
-                return Err(ReleaseError::WrongBootBundle);
-            }
+        if !generation.is_v5() {
+            return Err(ReleaseError::WrongBootBundle);
         }
         if self.authority_manifest != generation.authority_manifest_identity() {
             return Err(ReleaseError::WrongAuthorityManifest);

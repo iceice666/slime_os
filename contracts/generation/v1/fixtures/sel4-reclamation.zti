@@ -1,4 +1,5 @@
 {
+  bootAction = "reclamation";
   bootstrapInstance = "init";
   executables = [
     {
