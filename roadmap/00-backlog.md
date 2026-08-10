@@ -49,8 +49,34 @@ console output, refused input, scripted Dango input, and root boot diagnostics
 pass `just sel4_root_boot_check`, `just sel4_input_check`, and `just
 sel4_dango_check`. A gate-control mutation that restores a root fallback fails.
 
-**Blocked on two inherited reds (observed 2026-08-10).** Both gates this exit
-condition names fail before any B41 work, for reasons outside B41's scope:
+**Unblocked 2026-08-10.** Both gates this exit condition names now pass, along
+with `just sel4_directory_check` and `just sel4_storage_check`, which shared
+one of the same causes. B41's own work — moving `DebugWrite` and `InputRead`
+off the universal root dispatcher — has not started.
+
+The three causes, none in the behaviour the gates test:
+
+- **The run token was undeclared.** Every probe plane's claim is that
+  generation-declared device authority alone does not run a probe; only the
+  instance `init` hands a run token proceeds. That token crosses a spawn
+  boundary, so it is a `MintedBinding`, and it was not declared — preflight
+  refused the spawn outright.
+- **The idle instance was undeclared.** The claim needs two instances of one
+  executable: the token-holding one and a root-launched copy that parks. Only
+  the first was declared, so `[<probe>] idle without a run token` could never
+  appear. `SLIME_GRAPH declared placed`, asserted by three gates, had no
+  emitter anywhere in the tree; it now comes from the root's self-loop install
+  path, the only point at which a child's own declared authority is placed.
+- **A received capability could land in slot 0.** The receive path allocated
+  from `free_slot_from(0)`, that slot number is reported to the receiver, and
+  every protocol carrying one reads 0 as "no capability". A forwarded
+  capability landing there was invisible to its new holder, which is what made
+  dango's composed launch fail validation with both capabilities transferred.
+
+Records: [`devlog/2026-08-10-b41-dango-plane-declarations/`](../devlog/2026-08-10-b41-dango-plane-declarations/index.md)
+and [`devlog/2026-08-10-probe-plane-run-tokens/`](../devlog/2026-08-10-probe-plane-run-tokens/index.md).
+
+**Historical — the two reds as first observed:**
 
 - `just sel4_dango_check` dies in `components/bins/build.rs:272`,
   `expect("command RPC binding")` — `related_binding_slot` finds no send/recv
