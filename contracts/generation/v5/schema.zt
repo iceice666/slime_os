@@ -30,6 +30,7 @@ scheduleLen :: Int = 48;
 faultPolicyLen :: Int = 32;
 spawnTemplateLen :: Int = 32;
 resourceQuotaLen :: Int = 64;
+mintedBindingLen :: Int = 32;
 maxGenerationBytes :: Int = 16777216;
 maxObjects :: Int = 64;
 maxExecutables :: Int = 48;
@@ -49,6 +50,7 @@ maxSchedules :: Int = 48;
 maxFaultPolicies :: Int = 48;
 maxSpawnTemplates :: Int = 48;
 maxResourceQuotas :: Int = 48;
+maxMintedBindings :: Int = 256;
 maxStringBytes :: Int = 255;
 maxStringTableBytes :: Int = 65536;
 maxObjectPayloadBytes :: Int = 8388608;
@@ -65,12 +67,13 @@ GenerationHeader :: type {
   kernel_object_count : Int; mapping_count : Int; cap_binding_count : Int;
   service_binding_count : Int; schedule_count : Int; fault_policy_count : Int;
   spawn_template_count : Int; resource_quota_count : Int;
+  minted_binding_count : Int; header_reserved : Int;
   object_offset : Int; executable_offset : Int; instance_offset : Int;
   dependency_offset : Int; binding_offset : Int; grant_offset : Int;
   state_offset : Int; health_offset : Int; process_offset : Int; thread_offset : Int;
   kernel_object_offset : Int; mapping_offset : Int; cap_binding_offset : Int;
   service_binding_offset : Int; schedule_offset : Int; fault_policy_offset : Int;
-  spawn_template_offset : Int; resource_quota_offset : Int;
+  spawn_template_offset : Int; resource_quota_offset : Int; minted_binding_offset : Int;
   string_offset : Int; string_len : Int; payload_offset : Int; total_len : Int;
 };
 ObjectRecord :: type { id_offset : Int; kind : Int; payload_offset : Int; payload_len : Int; digest : Int; };
@@ -91,6 +94,11 @@ ScheduleRecord :: type { name_offset : Int; thread : Int; authority_process : In
 FaultPolicyRecord :: type { name_offset : Int; thread : Int; handler_process : Int; endpoint_object : Int; badge : Int; action : Int; };
 SpawnTemplateRecord :: type { name_offset : Int; executable : Int; owner_process : Int; quota : Int; schedule : Int; fault_policy : Int; max_instances : Int; flags : Int; };
 ResourceQuotaRecord :: type { name_offset : Int; owner_process : Int; cnode_count : Int; tcb_count : Int; endpoint_count : Int; notification_count : Int; frame_count : Int; page_table_count : Int; mapping_count : Int; irq_count : Int; cslot_count : Int; untyped_bytes : Int; dynamic_reserve_bytes : Int; flags : Int; };
+-- One capability the generation authorizes a holder to receive at spawn, whose
+-- concrete object its owner mints at runtime. The edge is named -- owner,
+-- holder, slot, and an exact rights ceiling -- so a minted capability is as
+-- authenticated as a static grant; only the object identity is deferred.
+MintedBindingRecord :: type { name_offset : Int; owner : Int; holder : Int; slot : Int; rights : Int; flags : Int; };
 
 headerFields ::= (schema GenerationHeader).fields ?? {;};
 objectFields ::= (schema ObjectRecord).fields ?? {;};
@@ -111,6 +119,7 @@ scheduleFields ::= (schema ScheduleRecord).fields ?? {;};
 faultPolicyFields ::= (schema FaultPolicyRecord).fields ?? {;};
 spawnTemplateFields ::= (schema SpawnTemplateRecord).fields ?? {;};
 resourceQuotaFields ::= (schema ResourceQuotaRecord).fields ?? {;};
+mintedBindingFields ::= (schema MintedBindingRecord).fields ?? {;};
 
 field :: Text -> Int -> Bool -> WireField = name width byteArray => { name = name; width = width; signed = false; byteArray = byteArray; };
 headerLayout :: List WireField = {
@@ -119,7 +128,8 @@ headerLayout :: List WireField = {
   field "boot_action_offset" 4 false; field "bootstrap_instance" 4 false; field "boot_attempts" 4 false;
   field "object_count" 4 false; field "executable_count" 4 false; field "instance_count" 4 false; field "dependency_count" 4 false; field "binding_count" 4 false; field "grant_count" 4 false; field "state_count" 4 false; field "health_count" 4 false;
   field "process_count" 4 false; field "thread_count" 4 false; field "kernel_object_count" 4 false; field "mapping_count" 4 false; field "cap_binding_count" 4 false; field "service_binding_count" 4 false; field "schedule_count" 4 false; field "fault_policy_count" 4 false; field "spawn_template_count" 4 false; field "resource_quota_count" 4 false;
-  field "object_offset" 8 false; field "executable_offset" 8 false; field "instance_offset" 8 false; field "dependency_offset" 8 false; field "binding_offset" 8 false; field "grant_offset" 8 false; field "state_offset" 8 false; field "health_offset" 8 false; field "process_offset" 8 false; field "thread_offset" 8 false; field "kernel_object_offset" 8 false; field "mapping_offset" 8 false; field "cap_binding_offset" 8 false; field "service_binding_offset" 8 false; field "schedule_offset" 8 false; field "fault_policy_offset" 8 false; field "spawn_template_offset" 8 false; field "resource_quota_offset" 8 false; field "string_offset" 8 false; field "string_len" 8 false; field "payload_offset" 8 false; field "total_len" 8 false;
+  field "minted_binding_count" 4 false; field "header_reserved" 4 false;
+  field "object_offset" 8 false; field "executable_offset" 8 false; field "instance_offset" 8 false; field "dependency_offset" 8 false; field "binding_offset" 8 false; field "grant_offset" 8 false; field "state_offset" 8 false; field "health_offset" 8 false; field "process_offset" 8 false; field "thread_offset" 8 false; field "kernel_object_offset" 8 false; field "mapping_offset" 8 false; field "cap_binding_offset" 8 false; field "service_binding_offset" 8 false; field "schedule_offset" 8 false; field "fault_policy_offset" 8 false; field "spawn_template_offset" 8 false; field "resource_quota_offset" 8 false; field "minted_binding_offset" 8 false; field "string_offset" 8 false; field "string_len" 8 false; field "payload_offset" 8 false; field "total_len" 8 false;
 };
 objectLayout :: List WireField = { field "id_offset" 4 false; field "kind" 4 false; field "payload_offset" 8 false; field "payload_len" 8 false; field "digest" 32 true; };
 executableLayout :: List WireField = { field "name_offset" 4 false; field "object_index" 4 false; field "role" 4 false; field "spawn_budget" 4 false; };
@@ -139,12 +149,13 @@ scheduleLayout :: List WireField = { field "name_offset" 4 false; field "thread"
 faultPolicyLayout :: List WireField = { field "name_offset" 4 false; field "thread" 4 false; field "handler_process" 4 false; field "endpoint_object" 4 false; field "badge" 8 false; field "action" 4 false; };
 spawnTemplateLayout :: List WireField = { field "name_offset" 4 false; field "executable" 4 false; field "owner_process" 4 false; field "quota" 4 false; field "schedule" 4 false; field "fault_policy" 4 false; field "max_instances" 4 false; field "flags" 4 false; };
 resourceQuotaLayout :: List WireField = { field "name_offset" 4 false; field "owner_process" 4 false; field "cnode_count" 4 false; field "tcb_count" 4 false; field "endpoint_count" 4 false; field "notification_count" 4 false; field "frame_count" 4 false; field "page_table_count" 4 false; field "mapping_count" 4 false; field "irq_count" 4 false; field "cslot_count" 4 false; field "untyped_bytes" 8 false; field "dynamic_reserve_bytes" 8 false; field "flags" 4 false; };
+mintedBindingLayout :: List WireField = { field "name_offset" 4 false; field "owner" 4 false; field "holder" 4 false; field "slot" 4 false; field "rights" 8 false; field "flags" 4 false; };
 
 format ::= {
-  formatVersion = formatVersion; headerLen = headerLen; objectLen = objectLen; executableLen = executableLen; instanceLen = instanceLen; dependencyLen = dependencyLen; bindingLen = bindingLen; grantLen = grantLen; stateLen = stateLen; healthLen = healthLen; processLen = processLen; threadLen = threadLen; kernelObjectLen = kernelObjectLen; mappingLen = mappingLen; capBindingLen = capBindingLen; serviceBindingLen = serviceBindingLen; scheduleLen = scheduleLen; faultPolicyLen = faultPolicyLen; spawnTemplateLen = spawnTemplateLen; resourceQuotaLen = resourceQuotaLen;
-  maxGenerationBytes = maxGenerationBytes; maxObjects = maxObjects; maxExecutables = maxExecutables; maxInstances = maxInstances; maxBindings = maxBindings; maxGrants = maxGrants; maxStates = maxStates; maxDependencies = maxDependencies; maxHealthInstances = maxHealthInstances; maxProcesses = maxProcesses; maxThreads = maxThreads; maxKernelObjects = maxKernelObjects; maxMappings = maxMappings; maxCapBindings = maxCapBindings; maxServiceBindings = maxServiceBindings; maxSchedules = maxSchedules; maxFaultPolicies = maxFaultPolicies; maxSpawnTemplates = maxSpawnTemplates; maxResourceQuotas = maxResourceQuotas; maxStringBytes = maxStringBytes; maxStringTableBytes = maxStringTableBytes; maxObjectPayloadBytes = maxObjectPayloadBytes;
-  headerFields = headerFields; objectFields = objectFields; executableFields = executableFields; instanceFields = instanceFields; dependencyFields = dependencyFields; bindingFields = bindingFields; grantFields = grantFields; stateFields = stateFields; healthFields = healthFields; processFields = processFields; threadFields = threadFields; kernelObjectFields = kernelObjectFields; mappingFields = mappingFields; capBindingFields = capBindingFields; serviceBindingFields = serviceBindingFields; scheduleFields = scheduleFields; faultPolicyFields = faultPolicyFields; spawnTemplateFields = spawnTemplateFields; resourceQuotaFields = resourceQuotaFields;
-  headerLayout = headerLayout; objectLayout = objectLayout; executableLayout = executableLayout; instanceLayout = instanceLayout; dependencyLayout = dependencyLayout; bindingLayout = bindingLayout; grantLayout = grantLayout; stateLayout = stateLayout; healthLayout = healthLayout; processLayout = processLayout; threadLayout = threadLayout; kernelObjectLayout = kernelObjectLayout; mappingLayout = mappingLayout; capBindingLayout = capBindingLayout; serviceBindingLayout = serviceBindingLayout; scheduleLayout = scheduleLayout; faultPolicyLayout = faultPolicyLayout; spawnTemplateLayout = spawnTemplateLayout; resourceQuotaLayout = resourceQuotaLayout;
+  formatVersion = formatVersion; headerLen = headerLen; objectLen = objectLen; executableLen = executableLen; instanceLen = instanceLen; dependencyLen = dependencyLen; bindingLen = bindingLen; grantLen = grantLen; stateLen = stateLen; healthLen = healthLen; processLen = processLen; threadLen = threadLen; kernelObjectLen = kernelObjectLen; mappingLen = mappingLen; capBindingLen = capBindingLen; serviceBindingLen = serviceBindingLen; scheduleLen = scheduleLen; faultPolicyLen = faultPolicyLen; spawnTemplateLen = spawnTemplateLen; resourceQuotaLen = resourceQuotaLen; mintedBindingLen = mintedBindingLen;
+  maxGenerationBytes = maxGenerationBytes; maxObjects = maxObjects; maxExecutables = maxExecutables; maxInstances = maxInstances; maxBindings = maxBindings; maxGrants = maxGrants; maxStates = maxStates; maxDependencies = maxDependencies; maxHealthInstances = maxHealthInstances; maxProcesses = maxProcesses; maxThreads = maxThreads; maxKernelObjects = maxKernelObjects; maxMappings = maxMappings; maxCapBindings = maxCapBindings; maxServiceBindings = maxServiceBindings; maxSchedules = maxSchedules; maxFaultPolicies = maxFaultPolicies; maxSpawnTemplates = maxSpawnTemplates; maxResourceQuotas = maxResourceQuotas; maxMintedBindings = maxMintedBindings; maxStringBytes = maxStringBytes; maxStringTableBytes = maxStringTableBytes; maxObjectPayloadBytes = maxObjectPayloadBytes;
+  headerFields = headerFields; objectFields = objectFields; executableFields = executableFields; instanceFields = instanceFields; dependencyFields = dependencyFields; bindingFields = bindingFields; grantFields = grantFields; stateFields = stateFields; healthFields = healthFields; processFields = processFields; threadFields = threadFields; kernelObjectFields = kernelObjectFields; mappingFields = mappingFields; capBindingFields = capBindingFields; serviceBindingFields = serviceBindingFields; scheduleFields = scheduleFields; faultPolicyFields = faultPolicyFields; spawnTemplateFields = spawnTemplateFields; resourceQuotaFields = resourceQuotaFields; mintedBindingFields = mintedBindingFields;
+  headerLayout = headerLayout; objectLayout = objectLayout; executableLayout = executableLayout; instanceLayout = instanceLayout; dependencyLayout = dependencyLayout; bindingLayout = bindingLayout; grantLayout = grantLayout; stateLayout = stateLayout; healthLayout = healthLayout; processLayout = processLayout; threadLayout = threadLayout; kernelObjectLayout = kernelObjectLayout; mappingLayout = mappingLayout; capBindingLayout = capBindingLayout; serviceBindingLayout = serviceBindingLayout; scheduleLayout = scheduleLayout; faultPolicyLayout = faultPolicyLayout; spawnTemplateLayout = spawnTemplateLayout; resourceQuotaLayout = resourceQuotaLayout; mintedBindingLayout = mintedBindingLayout;
 };
 
 main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }

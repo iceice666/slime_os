@@ -120,6 +120,7 @@ from boot_contracts import (
     GENERATION_SCHEDULE,
     GENERATION_FAULT_POLICY,
     GENERATION_SPAWN_TEMPLATE,
+    GENERATION_MINTED_BINDING,
     GENERATION_RESOURCE_QUOTA,
     GENERATION_VERSION,
     TARGET_PROFILES_BY_NAME,
@@ -145,6 +146,7 @@ from boot_contracts import (
     MAX_SCHEDULES,
     MAX_FAULT_POLICIES,
     MAX_SPAWN_TEMPLATES,
+    MAX_MINTED_BINDINGS,
     MAX_RESOURCE_QUOTAS,
     SHARED_BUFFER_BUDGET_ENTRY,
     SHARED_BUFFER_BUDGET_HEADER,
@@ -2372,6 +2374,37 @@ def build_sel4_plan(
             cap_records.extend(
                 GENERATION_CAP_BINDING.pack(source_process, bound["slot"], object_index[(grant["source"], "tcb")], rights, 0, grant_index, GRANT_POLICY_ONLY)
             )
+    # Minted bindings: a capability the owner creates at runtime and hands to
+    # an instance it owns at spawn. Sorted by name so the section is canonical,
+    # and validated here so an unsatisfiable declaration fails before output.
+    minted_records = bytearray()
+    seen_holder_slots: set[tuple[int, int]] = set()
+    for minted in sorted(manifest.get("mintedBindings", []), key=lambda entry: entry["name"]):
+        owner = instance_index.get(minted["owner"])
+        holder = instance_index.get(minted["holder"])
+        if owner is None or holder is None:
+            fail(f"minted binding {minted['name']}: unknown owner or holder")
+        if instances[holder]["owner"] != minted["owner"]:
+            fail(f"minted binding {minted['name']}: holder is not owned by its minter")
+        slot = minted["slot"]
+        if not isinstance(slot, int) or not 0 <= slot < 64:
+            fail(f"minted binding {minted['name']}: slot outside capability table")
+        if (holder, slot) in seen_holder_slots:
+            fail(f"minted binding {minted['name']}: duplicate holder slot")
+        seen_holder_slots.add((holder, slot))
+        rights = 0
+        for right in minted["rights"]:
+            if right not in RIGHT:
+                fail(f"minted binding {minted['name']}: unknown right {right}")
+            rights |= RIGHT[right]
+        if rights == 0 or rights & RIGHT["exec"]:
+            fail(f"minted binding {minted['name']}: invalid rights")
+        minted_records.extend(
+            GENERATION_MINTED_BINDING.pack(
+                string_offset(minted["name"]), owner, holder, slot, rights, 0
+            )
+        )
+
 
     counts = (
         len(process_records) // GENERATION_PROCESS.size,
@@ -2384,18 +2417,19 @@ def build_sel4_plan(
         len(fault_records) // GENERATION_FAULT_POLICY.size,
         len(spawn_records) // GENERATION_SPAWN_TEMPLATE.size,
         len(quota_records) // GENERATION_RESOURCE_QUOTA.size,
+        len(minted_records) // GENERATION_MINTED_BINDING.size,
     )
     limits = (
         MAX_PROCESSES, MAX_THREADS, MAX_KERNEL_OBJECTS, MAX_MAPPINGS, MAX_CAP_BINDINGS,
         MAX_SERVICE_BINDINGS, MAX_SCHEDULES, MAX_FAULT_POLICIES, MAX_SPAWN_TEMPLATES,
-        MAX_RESOURCE_QUOTAS,
+        MAX_RESOURCE_QUOTAS, MAX_MINTED_BINDINGS,
     )
     if any(count > limit for count, limit in zip(counts, limits, strict=True)):
         fail("seL4 execution plan count exceeds bound")
     return (
         process_records, thread_records, kernel_records, mapping_records, cap_records,
         service_records, schedule_records, fault_records, spawn_records, quota_records,
-        counts,
+        minted_records, counts,
     )
 
 
@@ -2589,6 +2623,7 @@ def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes |
         fault_policy_records,
         spawn_template_records,
         resource_quota_records,
+        minted_binding_records,
         plan_counts,
     ) = build_sel4_plan(
         manifest,
@@ -2615,6 +2650,7 @@ def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes |
             fault_policy_records,
             spawn_template_records,
             resource_quota_records,
+            minted_binding_records,
         )
     )
     payload_start = (
@@ -2690,7 +2726,8 @@ def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes |
     fault_policy_offset = schedule_offset + len(schedule_records)
     spawn_template_offset = fault_policy_offset + len(fault_policy_records)
     resource_quota_offset = spawn_template_offset + len(spawn_template_records)
-    string_table_offset = resource_quota_offset + len(resource_quota_records)
+    minted_binding_offset = resource_quota_offset + len(resource_quota_records)
+    string_table_offset = minted_binding_offset + len(minted_binding_records)
     actual_payload_offset = string_table_offset + len(strings)
     if actual_payload_offset != payload_start:
         fail("internal payload offset mismatch")
@@ -2701,11 +2738,12 @@ def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes |
         GENERATION_MAGIC, GENERATION_VERSION, GENERATION_HEADER.size, 0, bytes(32), number,
         parent or bytes(32), target_offset, boot_action_offset, bootstrap, health["bootAttempts"], len(objects),
         len(executables), len(instances), dependency_count, binding_count, len(grants),
-        len(states), len(required), *plan_counts, object_offset, executable_offset,
+        len(states), len(required), *plan_counts, 0, object_offset, executable_offset,
         instance_offset, dependency_offset, binding_offset, grant_offset, state_offset,
         health_offset, process_offset, thread_offset, kernel_object_offset, mapping_offset,
         cap_binding_offset, service_binding_offset, schedule_offset, fault_policy_offset,
-        spawn_template_offset, resource_quota_offset, string_table_offset, len(strings),
+        spawn_template_offset, resource_quota_offset, minted_binding_offset,
+        string_table_offset, len(strings),
         actual_payload_offset, total_len,
     )
     generation = bytearray(
@@ -2713,7 +2751,8 @@ def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes |
         + binding_records + grant_records + state_records + health_records + process_records
         + thread_records + kernel_object_records + mapping_records + cap_binding_records
         + service_binding_records + schedule_records + fault_policy_records
-        + spawn_template_records + resource_quota_records + strings + blobs
+        + spawn_template_records + resource_quota_records + minted_binding_records
+        + strings + blobs
     )
     generation[24:56] = generation_identity(generation)
     return bytes(generation)

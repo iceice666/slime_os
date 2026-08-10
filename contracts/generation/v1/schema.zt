@@ -52,6 +52,20 @@ StateBinding :: type {
   policy : Text;
 };
 
+-- One capability an owner mints at runtime and hands to an instance it owns at
+-- spawn. A CapabilityGrant names a concrete authority edge between two declared
+-- endpoints; a channel endpoint minted after activation has no object to name,
+-- so it is declared here instead of degrading a grant to a rights assertion.
+-- Owner, holder, destination slot, and the exact rights ceiling are all fixed
+-- before activation; only the object identity is deferred.
+MintedBinding :: type {
+  name : Text;
+  owner : Text;
+  holder : Text;
+  slot : Int;
+  rights : List Text;
+};
+
 -- Per-holder C7 shared-buffer quota carried by the authenticated generation.
 -- Omission is deny-by-default; each listed ceiling is absolute live usage.
 SharedBufferBudgetEntry :: type {
@@ -160,6 +174,7 @@ GenerationManifest :: type {
   executables : List Executable;
   instances : List Instance;
   grants : List CapabilityGrant;
+  mintedBindings : List MintedBinding;
   state : List StateBinding;
   -- Fallback health policy, used by a profile that declares no required set of
   -- its own.
@@ -175,6 +190,7 @@ FromData @Executable :: derive
 FromData @InstanceBinding :: derive
 FromData @Instance :: derive
 FromData @CapabilityGrant :: derive
+FromData @MintedBinding :: derive
 FromData @StateBinding :: derive
 FromData @HealthPolicy :: derive
 FromData @SharedBufferBudgetEntry :: derive
@@ -199,6 +215,7 @@ decodeManifest :: Data -> Validation DecodeIssue GenerationManifest
   FabricProfileInterposition = FabricProfileInterposition;
   FabricProfile = FabricProfile;
   CapabilityGrant = CapabilityGrant;
+  MintedBinding = MintedBinding;
   StateBinding = StateBinding;
   HealthPolicy = HealthPolicy;
   FabricParticipant = FabricParticipant;

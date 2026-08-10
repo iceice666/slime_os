@@ -157,6 +157,7 @@
       owner = "init";
     };
   ];
+  mintedBindings = [];
   interfaceSchemas = [];
   objects = [
     {

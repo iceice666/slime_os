@@ -376,6 +376,7 @@
       owner = "init";
     };
   ];
+  mintedBindings = [];
   interfaceSchemas = [
     "contracts/interface-schema/v1/interfaces/parameter-call.zti";
   ];

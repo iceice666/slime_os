@@ -153,16 +153,18 @@ def check_generation(data: bytes, expected_identity: bytes | None = None) -> dic
         objects, executables, instances, dependencies, bindings, grants, states, health,
         processes, threads, kernel_objects, mappings, cap_bindings, service_bindings,
         schedules, fault_policies, spawn_templates, resource_quotas,
+        minted_bindings, header_reserved,
         object_offset, executable_offset, instance_offset, dependency_offset, binding_offset,
         grant_offset, state_offset, health_offset, process_offset, thread_offset,
         kernel_object_offset, mapping_offset, cap_binding_offset, service_binding_offset,
         schedule_offset, fault_policy_offset, spawn_template_offset, resource_quota_offset,
+        minted_binding_offset,
         strings_offset, strings_len, payload_offset, total_len,
     ) = fields
     require(magic == GENERATION_MAGIC, "BadGenerationMagic")
     require(version == GENERATION_VERSION and header == GENERATION_HEADER.size, "UnsupportedGenerationVersion")
-    require(required_flags == 0, "UnknownGenerationFlags")
-    require(not any(data[360 : GENERATION_HEADER.size]), "UnknownGenerationFlags")
+    require(required_flags == 0 and header_reserved == 0, "UnknownGenerationFlags")
+    require(not any(data[376 : GENERATION_HEADER.size]), "UnknownGenerationFlags")
     require(total_len == len(data) and generation_identity(data) == identity, "BadGenerationHash")
     if expected_identity is not None:
         require(identity == expected_identity, "GenerationIdentityMismatch")
@@ -190,7 +192,9 @@ def check_generation(data: bytes, expected_identity: bytes | None = None) -> dic
     require(fault_policy_offset == schedule_offset + schedules * GENERATION_SCHEDULE.size, "BadGenerationBounds")
     require(spawn_template_offset == fault_policy_offset + fault_policies * GENERATION_FAULT_POLICY.size, "BadGenerationBounds")
     require(resource_quota_offset == spawn_template_offset + spawn_templates * GENERATION_SPAWN_TEMPLATE.size, "BadGenerationBounds")
-    require(strings_offset == resource_quota_offset + resource_quotas * GENERATION_RESOURCE_QUOTA.size, "BadGenerationBounds")
+    require(minted_bindings <= MAX_MINTED_BINDINGS, "ExcessiveGenerationCount")
+    require(minted_binding_offset == resource_quota_offset + resource_quotas * GENERATION_RESOURCE_QUOTA.size, "BadGenerationBounds")
+    require(strings_offset == minted_binding_offset + minted_bindings * GENERATION_MINTED_BINDING.size, "BadGenerationBounds")
     require(payload_offset == strings_offset + strings_len, "BadGenerationBounds")
     target = read_string(data, strings_offset, strings_len, target_offset)
     profile = TARGET_PROFILES_BY_NAME.get(target)
@@ -339,6 +343,20 @@ def check_generation(data: bytes, expected_identity: bytes | None = None) -> dic
         name_offset, owner_process, cnode_count, tcb_count, endpoint_count, notification_count, frame_count, page_table_count, mapping_count, irq_count, cslot_count, untyped_bytes, dynamic_reserve_bytes, flags = GENERATION_RESOURCE_QUOTA.unpack_from(data, resource_quota_offset + index * GENERATION_RESOURCE_QUOTA.size)
         require(owner_process < processes and cnode_count > 0 and tcb_count > 0 and cslot_count > 0 and flags == 0, "BadResourceQuota")
         require(process_rows[owner_process]["quota"] == index, "BadResourceQuota")
+    previous_minted = ""
+    seen_minted_slots: set[tuple[int, int]] = set()
+    for index in range(minted_bindings):
+        name_offset, owner, holder, slot, rights, flags = GENERATION_MINTED_BINDING.unpack_from(data, minted_binding_offset + index * GENERATION_MINTED_BINDING.size)
+        name = read_string(data, strings_offset, strings_len, name_offset)
+        require(name > previous_minted, "NonCanonicalMintedBindings")
+        require(owner < instances and holder < instances and slot < 64 and flags == 0, "BadMintedBinding")
+        require(rights and not rights & ~RIGHT_ALL and not rights & RIGHT_EXEC, "BadMintedBinding")
+        # The holder must be owned by the minter, so a minted capability cannot
+        # cross an ownership edge the instance graph does not declare.
+        require(instance_rows[holder][2] == 1 and instance_rows[holder][3] == owner, "BadMintedBindingOwner")
+        require((holder, slot) not in seen_minted_slots, "BadMintedBinding")
+        seen_minted_slots.add((holder, slot))
+        previous_minted = name
     return {"identity": identity, "number": number, "parent": None if parent == bytes(32) else parent, "target": target, "kernel_len": 0, "total_len": total_len}
 
 

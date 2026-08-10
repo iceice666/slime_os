@@ -329,6 +329,26 @@ pub struct ResourceQuota<'a> {
     pub flags: u32,
 }
 
+/// A capability the generation authorizes one instance to hand another at
+/// spawn, whose concrete object the owner mints at runtime.
+///
+/// A static [`Grant`] names both endpoints and a concrete object; a channel
+/// endpoint minted after activation has no object to name, so the plan would
+/// otherwise have to either omit it — leaving the child's slot unaccounted —
+/// or degrade the grant to a rights assertion. This record keeps the edge
+/// authenticated: owner, holder, destination slot, and an exact rights
+/// ceiling are all fixed before activation, and only the object identity is
+/// deferred.
+#[derive(Debug, Clone, Copy)]
+pub struct MintedBinding<'a> {
+    pub name: &'a str,
+    pub owner: usize,
+    pub holder: usize,
+    pub slot: usize,
+    pub rights: Rights,
+    pub flags: u32,
+}
+
 pub struct Generation<'a> {
     bytes: &'a [u8],
     pub version: u32,
@@ -358,6 +378,7 @@ pub struct Generation<'a> {
     fault_policy_count: usize,
     spawn_template_count: usize,
     resource_quota_count: usize,
+    minted_binding_count: usize,
     object_offset: usize,
     executable_offset: usize,
     instance_offset: usize,
@@ -376,6 +397,7 @@ pub struct Generation<'a> {
     fault_policy_offset: usize,
     spawn_template_offset: usize,
     resource_quota_offset: usize,
+    minted_binding_offset: usize,
     string_offset: usize,
     string_len: usize,
 }
@@ -403,8 +425,8 @@ impl<'a> Generation<'a> {
         if u64_at(bytes, 16)? != 0 {
             return Err(DecodeError::UnknownRequiredFlags);
         }
-        reserved_zero(bytes, 360, HEADER_LEN)?;
-        let total_len = u64_at(bytes, 352)? as usize;
+        reserved_zero(bytes, 376, HEADER_LEN)?;
+        let total_len = u64_at(bytes, 368)? as usize;
         if total_len != bytes.len() || total_len > MAX_GENERATION_BYTES {
             return Err(DecodeError::BadBounds);
         }
@@ -459,31 +481,37 @@ impl<'a> Generation<'a> {
                 1,
                 MAX_RESOURCE_QUOTAS,
             )?,
-            object_offset: u64_at(bytes, 184)? as usize,
-            executable_offset: u64_at(bytes, 192)? as usize,
-            instance_offset: u64_at(bytes, 200)? as usize,
-            dependency_offset: u64_at(bytes, 208)? as usize,
-            binding_offset: u64_at(bytes, 216)? as usize,
-            grant_offset: u64_at(bytes, 224)? as usize,
-            state_offset: u64_at(bytes, 232)? as usize,
-            health_offset: u64_at(bytes, 240)? as usize,
-            process_offset: u64_at(bytes, 248)? as usize,
-            thread_offset: u64_at(bytes, 256)? as usize,
-            kernel_object_offset: u64_at(bytes, 264)? as usize,
-            mapping_offset: u64_at(bytes, 272)? as usize,
-            cap_binding_offset: u64_at(bytes, 280)? as usize,
-            service_binding_offset: u64_at(bytes, 288)? as usize,
-            schedule_offset: u64_at(bytes, 296)? as usize,
-            fault_policy_offset: u64_at(bytes, 304)? as usize,
-            spawn_template_offset: u64_at(bytes, 312)? as usize,
-            resource_quota_offset: u64_at(bytes, 320)? as usize,
-            string_offset: u64_at(bytes, 328)? as usize,
-            string_len: u64_at(bytes, 336)? as usize,
+            minted_binding_count: bounded_count(
+                u32_at(bytes, 184)? as usize,
+                0,
+                MAX_MINTED_BINDINGS,
+            )?,
+            object_offset: u64_at(bytes, 192)? as usize,
+            executable_offset: u64_at(bytes, 200)? as usize,
+            instance_offset: u64_at(bytes, 208)? as usize,
+            dependency_offset: u64_at(bytes, 216)? as usize,
+            binding_offset: u64_at(bytes, 224)? as usize,
+            grant_offset: u64_at(bytes, 232)? as usize,
+            state_offset: u64_at(bytes, 240)? as usize,
+            health_offset: u64_at(bytes, 248)? as usize,
+            process_offset: u64_at(bytes, 256)? as usize,
+            thread_offset: u64_at(bytes, 264)? as usize,
+            kernel_object_offset: u64_at(bytes, 272)? as usize,
+            mapping_offset: u64_at(bytes, 280)? as usize,
+            cap_binding_offset: u64_at(bytes, 288)? as usize,
+            service_binding_offset: u64_at(bytes, 296)? as usize,
+            schedule_offset: u64_at(bytes, 304)? as usize,
+            fault_policy_offset: u64_at(bytes, 312)? as usize,
+            spawn_template_offset: u64_at(bytes, 320)? as usize,
+            resource_quota_offset: u64_at(bytes, 328)? as usize,
+            minted_binding_offset: u64_at(bytes, 336)? as usize,
+            string_offset: u64_at(bytes, 344)? as usize,
+            string_len: u64_at(bytes, 352)? as usize,
         };
         if generation.string_len > MAX_STRING_TABLE_BYTES {
             return Err(DecodeError::BadBounds);
         }
-        generation.validate_sections(u64_at(bytes, 344)? as usize)?;
+        generation.validate_sections(u64_at(bytes, 360)? as usize)?;
         let target = generation.string(u32_at(bytes, 96)? as usize)?;
         let boot_action = BootAction::parse(generation.string(u32_at(bytes, 100)? as usize)?)
             .ok_or(DecodeError::UnknownEnum)?;
@@ -492,7 +520,7 @@ impl<'a> Generation<'a> {
             boot_action,
             ..generation
         };
-        generation.validate(u64_at(bytes, 344)? as usize)?;
+        generation.validate(u64_at(bytes, 360)? as usize)?;
         Ok(generation)
     }
 
@@ -603,6 +631,12 @@ impl<'a> Generation<'a> {
             self.resource_quota_offset,
             self.resource_quota_count,
             RESOURCE_QUOTA_LEN,
+            self.minted_binding_offset,
+        )?;
+        check_section(
+            self.minted_binding_offset,
+            self.minted_binding_count,
+            MINTED_BINDING_LEN,
             self.string_offset,
         )?;
         if self.object_offset != HEADER_LEN
@@ -1034,6 +1068,39 @@ impl<'a> Generation<'a> {
             dynamic_reserve_bytes: u64_at(self.bytes, offset + 52)?,
             flags: u32_at(self.bytes, offset + 60)?,
         })
+    }
+    /// One capability the generation authorizes `holder` to receive at spawn,
+    /// minted at runtime by `owner`. The edge is named and the rights ceiling
+    /// exact; only the object identity is deferred, because the endpoint does
+    /// not exist until its owner mints it.
+    pub fn minted_binding(&self, index: usize) -> Result<MintedBinding<'a>, DecodeError> {
+        if index >= self.minted_binding_count {
+            return Err(DecodeError::BadIndex);
+        }
+        let offset = self.minted_binding_offset + index * MINTED_BINDING_LEN;
+        reserved_zero(self.bytes, offset + 24, offset + MINTED_BINDING_LEN)?;
+        Ok(MintedBinding {
+            name: self.string(u32_at(self.bytes, offset)? as usize)?,
+            owner: u32_at(self.bytes, offset + 4)? as usize,
+            holder: u32_at(self.bytes, offset + 8)? as usize,
+            slot: u32_at(self.bytes, offset + 12)? as usize,
+            rights: u64_at(self.bytes, offset + 16)?,
+            flags: u32_at(self.bytes, offset + 24)?,
+        })
+    }
+
+    /// The minted binding authorizing `holder` to receive a capability at
+    /// `slot`, if the generation declares one.
+    pub fn minted_binding_for(&self, holder: usize, slot: usize) -> Option<MintedBinding<'a>> {
+        (0..self.minted_binding_count).find_map(|index| {
+            self.minted_binding(index)
+                .ok()
+                .filter(|binding| binding.holder == holder && binding.slot == slot)
+        })
+    }
+
+    pub const fn minted_binding_count(&self) -> usize {
+        self.minted_binding_count
     }
 
     fn string(&self, offset: usize) -> Result<&'a str, DecodeError> {
@@ -1479,6 +1546,40 @@ impl<'a> Generation<'a> {
             {
                 return Err(DecodeError::BadIndex);
             }
+        }
+        // Minted bindings. Each names a real owner/holder pair, a slot inside
+        // the holder's CSpace, and a nonzero rights ceiling within the
+        // vocabulary. The holder must be an instance the owner actually owns,
+        // so a minted capability cannot cross an ownership edge the graph does
+        // not declare, and no two may claim the same holder slot.
+        let mut previous_name = None;
+        for index in 0..self.minted_binding_count {
+            let minted = self.minted_binding(index)?;
+            if minted.owner >= self.instance_count
+                || minted.holder >= self.instance_count
+                || minted.slot >= MAX_TASK_CAPS
+                || minted.rights == 0
+                || minted.rights & !RIGHT_ALL != 0
+                || minted.rights & RIGHT_EXEC != 0
+                || minted.flags != 0
+            {
+                return Err(DecodeError::BadBinding);
+            }
+            if self.instance(minted.holder)?.owner != InstanceOwner::Instance(minted.owner) {
+                return Err(DecodeError::BadOwner);
+            }
+            if previous_name.is_some_and(|previous| previous >= minted.name) {
+                return Err(DecodeError::BadOrder);
+            }
+            if (0..index).try_fold(false, |seen, earlier| {
+                let other = self.minted_binding(earlier)?;
+                Ok::<bool, DecodeError>(
+                    seen || (other.holder == minted.holder && other.slot == minted.slot),
+                )
+            })? {
+                return Err(DecodeError::BadBinding);
+            }
+            previous_name = Some(minted.name);
         }
         Ok(())
     }

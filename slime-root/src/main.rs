@@ -4483,7 +4483,18 @@ fn preflight_spawn_grants(
     if count > MAX_SPAWN_GRANTS {
         return Err(IpcError::InvalidLength);
     }
-    if count != child.binding_count() {
+    // The child's declared capability set is its grant-backed bindings plus the
+    // capabilities its owner mints at runtime. Both are generation-declared:
+    // a binding names a concrete authority edge, a minted binding names the
+    // same edge with the object deferred to its minter.
+    let minted_count = (0..generation.minted_binding_count())
+        .filter(|index| {
+            generation
+                .minted_binding(*index)
+                .is_ok_and(|minted| minted.holder == child_instance)
+        })
+        .count();
+    if count != child.binding_count() + minted_count {
         return Err(IpcError::BadCapability);
     }
 
@@ -4519,51 +4530,72 @@ fn preflight_spawn_grants(
         {
             return Err(IpcError::BadCapability);
         }
-        let binding = generation
-            .binding(child, index)
-            .map_err(|_| IpcError::BadCapability)?;
-        let declared = generation
-            .grant(binding.grant)
-            .map_err(|_| IpcError::BadCapability)?;
-        // The grant must be one the *child* legitimately carries. Its binding
-        // list is generation-declared and already validated against
-        // `grant_applies_to_instance`, and `child_instance` was resolved as an
-        // instance this caller owns, so provenance is established without
-        // requiring the spawner to hold the grant too. Requiring that would
-        // force init to retain route authority over every channel it mints and
-        // hands on, which is exactly the property the fabric planes deny it.
-        //
-        // Authority still cannot be amplified: the rights ceiling below is the
-        // declared grant's, and the parent must actually hold a capability at
-        // the requested slot that allows those rights.
-        if !generation.grant_applies_to_instance(declared, child_instance) {
+        // Each request resolves to exactly one generation declaration. Indexes
+        // below `binding_count` are grant-backed bindings, in canonical slot
+        // order; the rest are the owner-minted capabilities this child is
+        // declared to receive, matched by their destination slot.
+        let (destination, ceiling, label) = if index < child.binding_count() {
+            let binding = generation
+                .binding(child, index)
+                .map_err(|_| IpcError::BadCapability)?;
+            let declared = generation
+                .grant(binding.grant)
+                .map_err(|_| IpcError::BadCapability)?;
+            // The grant must be one the *child* legitimately carries. Its
+            // binding list is generation-declared and already validated against
+            // `grant_applies_to_instance`, and `child_instance` was resolved as
+            // an instance this caller owns, so provenance is established
+            // without requiring the spawner to hold the grant too. Requiring
+            // that would force init to retain route authority over every
+            // channel it mints and hands on, which is exactly the property the
+            // fabric planes deny it.
+            if !generation.grant_applies_to_instance(declared, child_instance) {
+                sel4::debug_println!(
+                    "SLIME_GRAPH spawn preflight binding={} index={index} reason=child-provenance",
+                    declared.name,
+                );
+                return Err(IpcError::BadCapability);
+            }
+            (binding.slot, declared.rights, declared.name)
+        } else {
+            // A minted capability: the generation fixed the holder, the
+            // destination slot, and the rights ceiling before activation, and
+            // deferred only the object identity to the owner that mints it.
+            // The destination is the declared slot, never a number the caller
+            // chose, so a spawner cannot place a capability where the plan does
+            // not say it goes.
+            let minted = (0..generation.minted_binding_count())
+                .filter_map(|at| generation.minted_binding(at).ok())
+                .filter(|minted| minted.holder == child_instance)
+                .nth(index - child.binding_count())
+                .ok_or(IpcError::BadCapability)?;
+            if minted.owner != caller_instance {
+                sel4::debug_println!(
+                    "SLIME_GRAPH spawn preflight minted={} index={index} reason=not-minter",
+                    minted.name,
+                );
+                return Err(IpcError::BadCapability);
+            }
+            (minted.slot, minted.rights, minted.name)
+        };
+        if request.rights & !ceiling != 0 {
             sel4::debug_println!(
-                "SLIME_GRAPH spawn preflight binding={} index={index} reason=child-provenance",
-                declared.name,
-            );
-            return Err(IpcError::BadCapability);
-        }
-        if request.rights & !declared.rights != 0 {
-            sel4::debug_println!(
-                "SLIME_GRAPH spawn preflight binding={} index={index} reason=declared-rights requested={:#x} declared={:#x}",
-                declared.name,
+                "SLIME_GRAPH spawn preflight binding={label} index={index} reason=declared-rights requested={:#x} declared={:#x}",
                 request.rights,
-                declared.rights,
+                ceiling,
             );
             return Err(IpcError::BadCapability);
         }
         let Some(held) = table.get(request.slot) else {
             sel4::debug_println!(
-                "SLIME_GRAPH spawn preflight binding={} index={index} reason=source-empty slot={}",
-                declared.name,
+                "SLIME_GRAPH spawn preflight binding={label} index={index} reason=source-empty slot={}",
                 request.slot,
             );
             return Err(IpcError::BadCapability);
         };
         if !held.allows(request.rights) || request.rights & !valid_rights(&held.resource) != 0 {
             sel4::debug_println!(
-                "SLIME_GRAPH spawn preflight binding={} index={index} reason=held-rights slot={} requested={:#x} held={:#x} valid={:#x}",
-                declared.name,
+                "SLIME_GRAPH spawn preflight binding={label} index={index} reason=held-rights slot={} requested={:#x} held={:#x} valid={:#x}",
                 request.slot,
                 request.rights,
                 held.rights,
@@ -4571,7 +4603,7 @@ fn preflight_spawn_grants(
             );
             return Err(IpcError::BadCapability);
         }
-        let destination = u32::try_from(binding.slot).map_err(|_| IpcError::BadCapability)?;
+        let destination = u32::try_from(destination).map_err(|_| IpcError::BadCapability)?;
         granted[index] = Some((
             request.slot,
             destination,

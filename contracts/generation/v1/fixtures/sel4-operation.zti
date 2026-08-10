@@ -461,6 +461,7 @@
       owner = "init";
     };
   ];
+  mintedBindings = [];
   interfaceSchemas = [
     "contracts/interface-schema/v1/interfaces/navigation-operation.zti";
   ];

@@ -111,6 +111,78 @@
       owner = "init";
     };
   ];
+  mintedBindings = [
+    {
+      name = "console-control";
+      owner = "init";
+      holder = "console";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 0;
+    };
+    {
+      name = "sysinfo-context";
+      owner = "init";
+      holder = "sysinfo";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 0;
+    };
+    {
+      name = "sysinfo-wide-1";
+      owner = "init";
+      holder = "sysinfo";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 1;
+    };
+    {
+      name = "sysinfo-wide-2";
+      owner = "init";
+      holder = "sysinfo";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 2;
+    };
+    {
+      name = "sysinfo-wide-3";
+      owner = "init";
+      holder = "sysinfo";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 3;
+    };
+    {
+      name = "sysinfo-wide-4";
+      owner = "init";
+      holder = "sysinfo";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 4;
+    };
+    {
+      name = "sysinfo-wide-5";
+      owner = "init";
+      holder = "sysinfo";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 5;
+    };
+  ];
   interfaceSchemas = [];
   objects = [
     {
