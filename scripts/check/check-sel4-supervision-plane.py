@@ -123,6 +123,13 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"\[init\] transit handle survived crossing",
     ),
     (
+        # B42: the handle is the identity, so its consumption has to be
+        # observable. A collected handle answering twice would mean the
+        # outcome lived somewhere the capability did not.
+        "a collected supervision handle no longer answers",
+        r"\[init\] collected handle refused",
+    ),
+    (
         "the supervision plane ran to completion",
         r"\[init\] supervision plane complete",
     ),

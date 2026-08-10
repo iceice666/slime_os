@@ -3233,6 +3233,18 @@ fn drive_supervision_plane() {
         }
         _ => fail_supervision(b"a handle parked across the crossing lost its outcome"),
     }
+
+    // ---- a collected handle is stale, and answers as gone ----
+    //
+    // B42: the handle *is* the identity, so its consumption has to be
+    // observable. Collecting an outcome consumes the record, and the same
+    // handle must then refuse rather than answer again from a stale table --
+    // which is what a numeric task id, reusable by anyone who guesses it,
+    // could not distinguish.
+    if slime_rt::supervision_status(landed) != Err(slime_rt::ERR_BAD_CAP) {
+        fail_supervision(b"a collected handle still answered");
+    }
+    slime_rt::debug_write(b"[init] collected handle refused\n");
 }
 
 /// How many channel pairs the crossing plane mints over the boot.
