@@ -158,8 +158,13 @@ endpoint is provisioned per process and audited, the thread starts and is
 scheduled, its stack, IPC buffer frame, scratch page, CSpace guard, and
 endpoint CPtr are all correct. What is missing is beneath them.
 
-The dispatcher experiment was reverted. The target pin was kept, committed
-separately, and is independently correct.
+The dispatcher experiment was reverted, and so was the target pin: with
+`has-thread-local` the IPC-buffer slot becomes `#[thread_local]`, which is what
+makes a second thread need a TLS region it cannot get. Reverting leaves the
+root on `-minimal`, where the slot is one global — the configuration that will
+matter if the non-thread-local route is taken instead. Neither target helps
+without the missing piece, and the pin is a real dependency change, so the tree
+keeps the one that has been booting all along.
 
 A bound notification does not substitute: it signals, and the console still
 needs its own receive to carry the payload.
