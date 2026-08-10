@@ -231,7 +231,7 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-10 | [B40 — child CSpaces sized and populated from the admitted plan](2026-08-10-b40-native-child-cspaces/index.md) | Change | Verified | B40 |
 | 2026-08-10 | [B41 prerequisite — the dango plane's declarations](2026-08-10-b41-dango-plane-declarations/index.md) | Defect | Verified | B41 |
 | 2026-08-10 | [Probe planes — the run token, the idle instance, and slot zero](2026-08-10-probe-plane-run-tokens/index.md) | Defect | Verified | B41 |
-| 2026-08-10 | [B41 — a console endpoint per process](2026-08-10-b41-console-endpoint/index.md) | Change | Monitoring | B41 |
+| 2026-08-10 | [B41 — a console endpoint per process](2026-08-10-b41-console-endpoint/index.md) | Change | Verified | B41 |
 | 2026-08-10 | [B42 — the supervision handle becomes the lifecycle identity](2026-08-10-b42-lifecycle-identity/index.md) | Change | Verified | B42 |
 | 2026-08-10 | [B43 — a component's second block device was silently its first](2026-08-10-b43-block-device-renumbering/index.md) | Defect | Verified | B43 |
 | 2026-08-10 | [B41 — why the root cannot yet have a second dispatcher](2026-08-10-b41-second-dispatcher-blocker/index.md) | Audit | Verified | B41, B43, B44, B45 |

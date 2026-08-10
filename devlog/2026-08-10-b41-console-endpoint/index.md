@@ -4,7 +4,7 @@
 |---|---|
 | Date | 2026-08-10 |
 | Kind | Change |
-| Status | Monitoring |
+| Status | Verified |
 | Scope | `scripts/build/build-generation.py`, `scripts/check/check-generation.py`, `boot-contracts/src/generation.rs`, `slime-root/src/{main,task}.rs` |
 | Roadmap | B41 |
 | Gates | `just sel4_boot_check`, `just sel4_capability_layout_check`, `just contracts_check`, `just generation_check`, `just test_sel4_root` |
@@ -12,6 +12,10 @@
 | Baseline | One endpoint object per system, one dispatcher loop, `Mediation::RootService` for `DebugWrite` and `InputRead`. |
 
 ## Summary
+
+**Resolved 2026-08-10.** This entry recorded the first half — the endpoint
+provisioned but nothing receiving on it. Both halves are done now: see the
+correction. Original text follows.
 
 Half of B41. Every process now holds a console/debug endpoint object distinct
 from the root service endpoint, declared in the plan, resolved by the decoder,
@@ -110,3 +114,26 @@ half is not in this change.
 - Related roadmap item: `roadmap/00-backlog.md` B41.
 - Prerequisites, both landed first: [`devlog/2026-08-10-b41-dango-plane-declarations/`](../2026-08-10-b41-dango-plane-declarations/index.md)
   and [`devlog/2026-08-10-probe-plane-run-tokens/`](../2026-08-10-probe-plane-run-tokens/index.md).
+
+## Corrections
+
+**2026-08-10 — B41 is complete.** This entry closed with "nothing receives on
+the console endpoint" and named the root's single blocking dispatcher as the
+obstacle. That was right about the symptom and wrong about the cause: the
+dispatcher could not be duplicated because the `sel4` crate keeps one ambient
+IPC-buffer slot per address space and a blocked receive holds it borrowed —
+not because of the statics, the scratch page, or the window table, all of which
+this entry worried about.
+
+`Cap::with` sidesteps the slot: a capability carries its own invocation
+context, so the console thread names its buffer per invocation. With that,
+`DebugWrite` and `InputRead` are both off `Operation`, one thread serves both
+kinds on the console endpoint distinguished by label, and
+`ipc::tests::no_console_operation_is_reachable_on_the_universal_abi` refuses a
+restored fallback.
+
+The `WindowTable` contract this entry called the real blocker turned out not to
+need solving: the console thread reads the table, and a window is declared once
+at construction and released once at teardown, so the race is with spawn and
+reclamation rather than steady traffic — and the copy is one map/copy/unmap
+that the kernel serialises against revocation.

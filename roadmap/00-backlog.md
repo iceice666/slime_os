@@ -24,64 +24,6 @@ mechanism; and B50 deletes the dual-model residue. Each item is a clean cutover:
 its old ABI and fallback are removed in the same change that makes its exit
 condition observable.
 
-### B41 — console and debug traffic still enters the universal root dispatcher
-
-**Status:** Open, console half landed 2026-08-10. **Class:** Unmasked
-architectural debt. **Depends on:** B40.
-
-**Problem:** `DebugWrite` and console/input-adjacent control shared the same
-badged root endpoint and dispatcher as lifecycle, storage, and fabric traffic.
-A noisy client therefore consumed the highest-priority root service loop and a
-console defect shared the system-wide dispatcher fault domain.
-
-**Exit condition:** `DebugWrite` and `InputRead` are absent from the universal
-root operation ABI; capability denial is enforced by missing service CPtrs;
-console output, refused input, scripted Dango input, and root boot diagnostics
-pass `just sel4_root_boot_check`, `just sel4_input_check`, and `just
-sel4_dango_check`. A gate-control mutation that restores a root fallback fails.
-
-**Console half landed 2026-08-10.** `DebugWrite` is gone from `Operation`, from
-both root handlers, and from the runtime's root-endpoint path. Every process
-holds a write-only console endpoint at a declared slot, and a second root
-thread receives on it. `just sel4_root_boot_check`, `just sel4_input_check`,
-`just sel4_dango_check`, and thirteen other plane gates pass.
-
-The obstacle was never scheduling or capabilities — it was the `sel4` crate's
-ambient IPC-buffer slot. There is one per address space and `recv_with_mrs`
-holds it borrowed for as long as it blocks, so a second thread using it
-deadlocks on the borrow rather than on the endpoint. Three routes were tried
-and abandoned first: a thread-local target (whose images lose their `PT_TLS`
-header in the loader), `non-thread-local-state` (which selects the token
-guarding the slot, not the number of slots), and `set_ipc_buffer` on the new
-thread (which contends for the same slot). The answer is `Cap::with`: a
-capability can carry its own invocation context, so the console thread names
-its buffer on every invocation and touches no ambient state.
-
-The console does not reuse the universal operation table — `ipc::recv_console`
-decodes a descriptor and the fast registers, nothing else. Reusing `Operation`
-would have kept console traffic inside the ABI this removes it from. Label 5 is
-not a hole: the P5.1 fixture child was using it to collect the root's
-directive, never to write to a console, so it is `Operation::FixtureDirective`
-now.
-
-**Remaining: `InputRead`.** It is still a universal label, and it is not the
-same shape as `DebugWrite`. A console write is one-way and touches only the
-caller's window; an input read returns a value and needs `ScriptedInput`'s
-mutable per-task cursor plus the graph's capability table, both owned by the
-main dispatcher. Moving it to the console thread would recreate exactly the
-shared-mutable-state problem the `Cap::with` route avoided. The tractable
-shape is probably a third endpoint served by the main loop with the input
-cursor moved behind it, or input delivery inverted so the root pushes events
-to a declared notification rather than answering polls — the second is closer
-to what B46 wants for streams anyway, so it is worth deciding once.
-
-A gate-control mutation proving a restored root fallback fails is also still
-owed; it cannot be written for `DebugWrite` alone while `InputRead` keeps the
-universal path alive.
-
-Records: [`devlog/2026-08-10-b41-console-endpoint/`](../devlog/2026-08-10-b41-console-endpoint/index.md)
-and [`devlog/2026-08-10-b41-second-dispatcher-blocker/`](../devlog/2026-08-10-b41-second-dispatcher-blocker/index.md).
-
 ### B43 — block and durable-store clients still transact through root operation labels
 
 **Status:** Open. **Class:** Unmasked architectural debt. **Depends on:** B40.
@@ -380,6 +322,57 @@ fmt_check_all`, and `just lint_all` pass after the deletion.
 
 
 ## Resolved
+### B41 — console and debug traffic still enters the universal root dispatcher
+
+**Status:** Resolved 2026-08-10.
+
+**Problem:** `DebugWrite` and console/input-adjacent control shared the same
+badged root endpoint and dispatcher as lifecycle, storage, and fabric traffic.
+A noisy client therefore consumed the highest-priority root service loop and a
+console defect shared the system-wide dispatcher fault domain.
+
+**Exit condition observed:** neither `DebugWrite` nor `InputRead` exists in
+`slime-root/src/ipc.rs::Operation`. Every process holds a console capability at
+a declared slot, minted write-plus-reply and never receive, so a component
+without one faults rather than falling back — denial is a missing CPtr.
+`just sel4_root_boot_check`, `just sel4_input_check`, and `just
+sel4_dango_check` pass, along with thirteen other plane gates. The control the
+exit condition asks for is
+`ipc::tests::no_console_operation_is_reachable_on_the_universal_abi`, verified
+by reintroducing `DebugWrite` with its `from_label` arm and observing the
+refusal.
+
+**What made it possible.** The obstacle was never scheduling or capabilities —
+it was the `sel4` crate's ambient IPC-buffer slot. There is one per address
+space and `recv_with_mrs` holds it borrowed for as long as it blocks, so a
+second thread using it deadlocks on the borrow rather than on the endpoint.
+Three routes were tried and abandoned: a thread-local target (whose images lose
+their `PT_TLS` header in the loader), `non-thread-local-state` (which selects
+the token guarding the slot, not the number of slots), and `set_ipc_buffer` on
+the new thread (which contends for the same slot). The answer is `Cap::with`: a
+capability can carry its own invocation context, so the console thread names
+its buffer on every invocation and touches no ambient state. Two call sites
+needed it — the receive, and mapping the caller's staged window.
+
+**Shape of the result.** One endpoint carries both kinds, distinguished by
+label. Input returns a value where a write is one-way, but a second endpoint
+would need a second blocking receive and so a third thread; console output and
+input are both "the terminal", so one queue between them is honest and the
+loop uses `ReplyRecv` to answer a read and wait for the next message in one
+syscall. `ScriptedInput` moved to the console thread whole rather than being
+shared: its per-task cursor is session state nothing else touches. The thread
+has its own scratch page, since staging maps a caller's frame at
+`ScratchPage::addr()`.
+
+Retired labels are holes, not renumbered: a component built against the old ABI
+is refused, where renumbering would have it silently invoke whichever operation
+moved into the slot. Label 5 is the exception — the P5.1 fixture child was
+using it to collect the root's directive, never to write to a console, so it is
+`Operation::FixtureDirective` under a name that says what it does.
+
+Records: [`devlog/2026-08-10-b41-console-endpoint/`](../devlog/2026-08-10-b41-console-endpoint/index.md)
+and [`devlog/2026-08-10-b41-second-dispatcher-blocker/`](../devlog/2026-08-10-b41-second-dispatcher-blocker/index.md).
+
 ### B42 — spawn and lifecycle control use ambient task IDs and the universal dispatcher
 
 **Status:** Resolved 2026-08-10.
