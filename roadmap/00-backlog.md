@@ -81,20 +81,33 @@ and running where it previously could not build at all:
   declared slots, since a spawn grant array is positional and the root ranks
   requests against declarations by destination slot.
 
-**Remaining, and why it is not landed:** `components/bins/build.rs` derives
-`RPC_SLOT` and `SHARED_BUFFER_FACTORY_SLOT` from the *client* instance
-(`profile_instance_name`), while `spawn-service.rs` — the only consumer of the
-generated `command_profile.rs` — resolves both in its own CSpace. The two agree
-only while launcher and client share one slot numbering. Deriving them from the
-launcher instead fixes the dango plane and breaks `sel4_component_graph_check`,
-whose `sel4` manifest has a different launcher topology; a fallback that
-prefers the launcher's bindings also failed. Closing this needs the build
-script to identify the launcher's own bindings correctly in both fixtures,
-which is a build-time derivation change rather than a fixture edit.
+**Build-script derivation, fixed 2026-08-10.** `components/bins/build.rs`
+derived `RPC_SLOT` and `SHARED_BUFFER_FACTORY_SLOT` from the instance owning
+the command profile, while `spawn-service.rs` — the only consumer of the
+generated `command_profile.rs` — resolves both in its own CSpace. Those
+coincide only while launcher and client share one slot numbering. The consumer
+is now identified by which instance runs the spawn service, giving `RPC_SLOT`
+2 and `SHARED_BUFFER_FACTORY_SLOT` 1 on the dango manifest, which is what that
+fixture declares.
 
-With the derivation fixed, the dango plane reaches all four components spawned,
-`[spawn-service] shared-buffer quota live`, and console exiting 0; `dango`
-then exits 1, which this plane expects by design.
+**Remaining, and why it is not landed:** `init` holds two of the five
+capabilities `spawn-service` declares — its factories — while the RPC end and
+the two executables are root-installed, so spawn preflight's declared-count
+rule refuses the spawn. The working `sel4` fixture avoids this by sourcing
+those executables from `init`, which then holds and passes all five. Copying
+that shape into `sel4-dango.zti` is refused by the decoder at
+`grant_applies_to_instance`: `init` is root-owned, so it may not bind an `exec`
+grant targeting an instance it does not own, and the `sel4` fixture's
+equivalent grants target *executables* rather than instances. Closing this
+means restating dango's executable grants against executables, which changes
+which slots `spawn-service` and `dango` resolve and so needs their layouts
+re-derived together rather than edited slot by slot.
+
+Attempts to relax the preflight count rule instead were all refused by a
+sibling plane: excluding pre-created channels breaks `sel4_component_graph_check`
+(its `init` legitimately passes its own end of one), and excluding executables
+breaks it the other way (its `spawn-service` receives five). The rule is right;
+the dango fixture is what disagrees with it.
 
 ### B42 — spawn and lifecycle control use ambient task IDs and the universal dispatcher
 
