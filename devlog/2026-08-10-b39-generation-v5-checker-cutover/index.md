@@ -409,6 +409,16 @@ sixteen participants are each declared so the generation can state what its
 owner hands it at spawn. The gate still fails, now on the call plane's role
 provisioning rather than anywhere in the capability path.
 
+Observed directly from the booted image: every one of the twenty tasks parks
+live — `init`, the fabric, the sixteen participants, and both route workers
+(18 and 19) — and `init` completes its whole sequence through
+`[init] fabric boot supervision transferred` and `[init] fabric boot graph
+launched`. Nine participants settle with an explicit role
+(`boot role provisioned`) or an explicit no-role (`boot idle without a role`);
+the call and operation participants are still parked awaiting their worker's
+role loop, which is what the gate's next unmet chain asserts. Nothing in that
+remainder is a capability refusal.
+
 The stream plane's residual `Caught cap fault` is unrelated to declarations: it
 follows a shared-buffer frame alias (`ARMPageMap: Attempting to remap a frame
 that does not belong to the passed address space`) after `loan mapped`
