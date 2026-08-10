@@ -4667,11 +4667,28 @@ fn preflight_spawn_grants(
                 .is_ok_and(|minted| minted.holder == child_instance)
         })
         .count();
-    if count != child.binding_count() + minted_count {
+    // A self-loop grant — source and target both this instance — declares
+    // authority the child holds in its own right, not a capability handed
+    // across a spawn boundary. The root installs it directly, so the parent
+    // neither passes it nor could: it does not hold it.
+    let mut parent_supplied = 0;
+    for index in 0..child.binding_count() {
+        let Ok(binding) = generation.binding(child, index) else {
+            return Err(IpcError::BadCapability);
+        };
+        let Ok(grant) = generation.grant(binding.grant) else {
+            return Err(IpcError::BadCapability);
+        };
+        if grant.source != GrantEndpoint::Instance(child_instance)
+            || grant.target != GrantEndpoint::Instance(child_instance)
+        {
+            parent_supplied += 1;
+        }
+    }
+    if count != parent_supplied + minted_count {
         sel4::debug_println!(
-            "SLIME_GRAPH spawn preflight instance={} reason=declared-count requested={count} bindings={} minted={minted_count}",
+            "SLIME_GRAPH spawn preflight instance={} reason=declared-count requested={count} bindings={parent_supplied} minted={minted_count}",
             child.name,
-            child.binding_count(),
         );
         return Err(IpcError::BadCapability);
     }

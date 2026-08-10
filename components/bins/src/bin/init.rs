@@ -2473,6 +2473,8 @@ fn drive_dango_plane() {
     // before either end is granted.
     let (console_side, dango_console) = slime_rt::endpoint_create(ENDPOINT_FACTORY_SLOT)
         .unwrap_or_else(|_| fail_plane(plane, b"console endpoint"));
+    let (spawn_side, dango_spawn) = slime_rt::endpoint_create(ENDPOINT_FACTORY_SLOT)
+        .unwrap_or_else(|_| fail_plane(plane, b"spawn endpoint"));
 
     // `console.rs`: RPC end, then the shared-buffer factory.
     let console = slime_rt::spawn(
@@ -2502,11 +2504,18 @@ fn drive_dango_plane() {
     // root pre-creates it and installs both ends from the grant. Init passes
     // nothing: a runtime-minted half would land in the same slot and shadow
     // the declared one.
+    // The full declared set in spawn-service's own slot order: its factories,
+    // then the two executables it may launch. Its RPC end to dango is a
+    // declared edge between those two instances, so the root pre-creates it
+    // and installs both ends; init is not an endpoint and passes nothing for
+    // it. The executables are init's because an exec grant binds to its source
+    // instance, which is what puts them in init's CSpace at 6 and 7.
     let spawn_service = slime_rt::spawn(
         SPAWN_SERVICE_SLOT,
         &[
             grant(ENDPOINT_FACTORY_SLOT, RIGHT_ENDPOINT_CREATE),
             grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
+            grant(spawn_side, RIGHT_SEND | RIGHT_RECV),
         ],
     )
     .unwrap_or_else(|_| fail_plane(plane, b"spawn the spawn service"));
@@ -2529,11 +2538,19 @@ fn drive_dango_plane() {
     // So this composition cannot satisfy dango with the current order, and the
     // gap is recorded as B30 rather than papered over by renumbering a
     // component the oracle also builds.
-    let dango = slime_rt::spawn(DANGO_SLOT, &[grant(dango_console, RIGHT_SEND)])
-        .unwrap_or_else(|_| fail_plane(plane, b"spawn dango"));
+    // dango.rs reads its spawn RPC end at 0 and its console at 1; its four
+    // self-loop grants are installed by the root above them.
+    let dango = slime_rt::spawn(
+        DANGO_SLOT,
+        &[
+            grant(dango_spawn, RIGHT_SEND | RIGHT_RECV),
+            grant(dango_console, RIGHT_SEND),
+        ],
+    )
+    .unwrap_or_else(|_| fail_plane(plane, b"spawn dango"));
     slime_rt::debug_write(b"[init] dango spawned\n");
 
-    for slot in [console_side, dango_console] {
+    for slot in [console_side, dango_console, spawn_side, dango_spawn] {
         if slime_rt::cap_drop(slot) < 0 {
             fail_plane(plane, b"release the plane's endpoints");
         }
