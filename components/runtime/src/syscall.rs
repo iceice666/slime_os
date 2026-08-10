@@ -27,9 +27,7 @@ const SYS_SEND: u64 = 1;
 const SYS_RECV: u64 = 2;
 const SYS_EXIT: u64 = 3;
 const SYS_SPAWN: u64 = 4;
-const SYS_HEALTH_CONFIRM: u64 = 8;
 const SYS_UNHEALTHY: u64 = 9;
-const SYS_RECOVERY_RECONSTRUCT: u64 = 10;
 const SYS_ENDPOINT_CREATE: u64 = 11;
 const SYS_SUPERVISION_STATUS: u64 = 12;
 const SYS_CAP_DROP: u64 = 13;
@@ -37,9 +35,7 @@ const SYS_DIRECTORY_INSPECT: u64 = 14;
 const SYS_DIRECTORY_DERIVE: u64 = 15;
 const SYS_DIRECTORY_COMMIT: u64 = 16;
 
-const SYS_GENERATION_TRANSACT: u64 = 18;
-pub const SYS_GENERATION_RECEIVE: u64 = 19;
-const SYS_WAIT: u64 = 20;
+pub const SYS_WAIT: u64 = 20;
 const SYS_SHARED_BUFFER_CREATE: u64 = 21;
 const SYS_SHARED_BUFFER_RELEASE: u64 = 22;
 const SYS_SHARED_BUFFER_MAP: u64 = 23;
@@ -479,27 +475,6 @@ pub fn block_transact_write(
     reply: &mut [u8; 64],
 ) -> i64 {
     transport::block_transact_write(slot, request, sector, reply)
-}
-
-/// Issues a fixed generation-management request/reply pair through the
-/// `GenerationControl` capability in `slot`.
-pub fn generation_transact(slot: u32, request: &[u8; 64], reply: &mut [u8; 64]) -> i64 {
-    transport::generation_transact(slot, request, reply)
-}
-
-/// Confirms the currently running pending generation using the
-/// `GenerationControl` capability in `slot`.
-pub fn health_confirm(slot: u32) -> i64 {
-    transport::health_confirm(slot)
-}
-
-/// Scrubs and reconstructs BootState on the explicitly granted repair target.
-pub fn recovery_reconstruct(generation_control_slot: u32, block_slot: u32, flags: u32) -> i64 {
-    transport::recovery_reconstruct(generation_control_slot, block_slot, flags)
-}
-
-pub fn generation_receive(receiver_slot: u32, transfer_slot: u32) -> i64 {
-    transport::generation_receive(receiver_slot, transfer_slot)
 }
 
 /// Terminates the current component with an explicit unhealthy status.

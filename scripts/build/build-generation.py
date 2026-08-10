@@ -1842,10 +1842,6 @@ def build_rust_components(
     )
     environment["SLIME_BOOT_LAYOUT"] = str(layout_path)
     environment["SLIME_TARGET_PROFILE"] = target_profile.name
-    if candidate_identity is None and os.environ.get("SLIME_TRANSFER_RECEIVER") == "1":
-        environment["SLIME_TRANSFER_RECEIVER"] = "1"
-    else:
-        environment.pop("SLIME_TRANSFER_RECEIVER", None)
     if candidate_identity is not None and os.environ.get("SLIME_TRANSFER_ACTIVATE") == "1":
         environment["SLIME_TRANSFER_ACTIVATE"] = "1"
     else:

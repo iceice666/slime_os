@@ -38,13 +38,12 @@ use super::wire::{
 use super::{
     ERR_INVALID_ARG, ERR_SUCCESS, MAX_CAPS_PER_MSG, MAX_DIRECTORY_PATH, MAX_MSG, MAX_WAIT_SOURCES,
     MIN_TRANSFER_WINDOW, SYS_CAP_DROP, SYS_CAP_TRANSFER, SYS_DIRECTORY_COMMIT,
-    SYS_DIRECTORY_DERIVE, SYS_DIRECTORY_INSPECT, SYS_ENDPOINT_CREATE, SYS_EXIT,
-    SYS_GENERATION_RECEIVE, SYS_GENERATION_TRANSACT, SYS_HEALTH_CONFIRM, SYS_RECOVERY_RECONSTRUCT,
-    SYS_RECV, SYS_SEND, SYS_SHARED_BUFFER_CREATE, SYS_SHARED_BUFFER_LOAN,
-    SYS_SHARED_BUFFER_LOAN_MAP, SYS_SHARED_BUFFER_MAP, SYS_SHARED_BUFFER_RELEASE,
-    SYS_SHARED_BUFFER_RETURN, SYS_SHARED_BUFFER_REVOKE, SYS_SHARED_BUFFER_SEAL,
-    SYS_SHARED_BUFFER_UNMAP, SYS_SPAWN, SYS_SUPERVISION_DERIVE, SYS_SUPERVISION_STATUS,
-    SYS_TRANSFER_WINDOW_BIND, SYS_UNHEALTHY, SYS_WAIT, SpawnGrant, WaitSource,
+    SYS_DIRECTORY_DERIVE, SYS_DIRECTORY_INSPECT, SYS_ENDPOINT_CREATE, SYS_EXIT, SYS_RECV, SYS_SEND,
+    SYS_SHARED_BUFFER_CREATE, SYS_SHARED_BUFFER_LOAN, SYS_SHARED_BUFFER_LOAN_MAP,
+    SYS_SHARED_BUFFER_MAP, SYS_SHARED_BUFFER_RELEASE, SYS_SHARED_BUFFER_RETURN,
+    SYS_SHARED_BUFFER_REVOKE, SYS_SHARED_BUFFER_SEAL, SYS_SHARED_BUFFER_UNMAP, SYS_SPAWN,
+    SYS_SUPERVISION_DERIVE, SYS_SUPERVISION_STATUS, SYS_TRANSFER_WINDOW_BIND, SYS_UNHEALTHY,
+    SYS_WAIT, SpawnGrant, WaitSource,
 };
 
 /// The child CSpace slot holding the badged root service endpoint. Slot 0 is
@@ -541,12 +540,12 @@ pub fn input_read(slot: u32) -> (i64, u64) {
     }
 }
 
-/// The shared shape of the three 64-byte request/reply protocols: the request
-/// crosses in the transfer window and the reply is written back over it.
-fn transact(label: u64, slot: u32, request: &[u8; 64], reply_out: &mut [u8; 64]) -> i64 {
-    transact_on(root_service(), label, slot, request, reply_out)
-}
-
+/// The shape of a 64-byte request/reply protocol: the request crosses in the
+/// transfer window and the reply is written back over it.
+///
+/// `endpoint` is a parameter because block requests go to the console
+/// endpoint rather than the root's (B43), and after B44 removed the
+/// generation and recovery labels they are the only caller left.
 fn transact_on(
     endpoint: cap::Endpoint,
     label: u64,
@@ -662,31 +661,6 @@ pub fn block_transact_write(
         Ok(_) => ERR_INVALID_ARG,
         Err(error) => error,
     }
-}
-
-pub fn generation_transact(slot: u32, request: &[u8; 64], reply: &mut [u8; 64]) -> i64 {
-    transact(SYS_GENERATION_TRANSACT, slot, request, reply)
-}
-
-pub fn health_confirm(slot: u32) -> i64 {
-    result_of(SYS_HEALTH_CONFIRM, &[slot as Word])
-}
-
-pub fn recovery_reconstruct(generation_control_slot: u32, block_slot: u32, flags: u32) -> i64 {
-    result_of(
-        SYS_RECOVERY_RECONSTRUCT,
-        &[
-            slot_pair(generation_control_slot, block_slot) as Word,
-            flags as Word,
-        ],
-    )
-}
-
-pub fn generation_receive(receiver_slot: u32, transfer_slot: u32) -> i64 {
-    result_of(
-        SYS_GENERATION_RECEIVE,
-        &[slot_pair(receiver_slot, transfer_slot) as Word],
-    )
 }
 
 pub fn unhealthy() -> ! {

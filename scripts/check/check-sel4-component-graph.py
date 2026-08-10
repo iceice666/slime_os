@@ -82,27 +82,13 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
 # handler, checked against `slime-root/src/ipc.rs` itself.
 #
 # The runtime half of required check 3 can only observe the operations these
-# five components happen to invoke. This half asserts the property for the whole
-# unmediated surface: each of these labels is classified `Unavailable`, so
-# `unmediated_response` returns a bounded error for it and the dispatcher's
-# catch-all cannot turn one into a fault. Pinning the list here means a plane
-# silently reclassified as `RootService` -- and therefore falling through to the
-# unimplemented path -- fails this gate rather than passing quietly.
-#
-# `BlockTransact` and `StoreTransact` left this list entirely with B43, in
-# opposite directions. Block requests are answered by the console thread, which
-# owns the device tables — a driver's authority belongs with whoever answers —
-# so the label is gone from this ABI rather than reclassified. `StoreTransact`
-# is gone because it never had a handler: it answered `UnsupportedOperation`
-# from this very list, which is ABI surface for an operation the root does not
-# perform. A durable store is userspace policy built over block authority.
-# Storage *policy* — partitioning, generations, recovery — stays in userspace
-# and stays unmediated, which is why the three below did not move.
-UNMEDIATED_OPERATIONS: tuple[tuple[str, int], ...] = (
-    ("RecoveryReconstruct", 10),
-    ("GenerationTransact", 18),
-    ("GenerationReceive", 19),
-)
+# five components happen to invoke. This half asserts the property for the
+# whole surface, statically: after B43 and B44 no label is classified
+# `Unavailable`, because every operation the root did not actually perform was
+# removed from the ABI rather than left answering `UnsupportedOperation`.
+# Block requests moved to the console thread with the device tables; store,
+# generation, recovery, and health were deleted as userspace policy built over
+# block authority. What remains must be refused, not resolved.
 
 IPC_SOURCE = ROOT / "slime-root" / "src" / "ipc.rs"
 
@@ -303,12 +289,17 @@ def report_transcript(transcript: str) -> None:
 def check_operation_surface() -> None:
     """The static half of required check 3.
 
-    Asserts that every plane this cutover does not own is still classified
-    `Mediation::Unavailable`, so `unmediated_response` yields a bounded error
-    for it. A plane quietly reclassified `RootService` would fall through the
-    dispatcher's unimplemented path instead — the same visible result today,
-    but a different claim, and one that would stop being true the moment a
-    handler landed.
+    Asserts that the mediation table has no unmediated class left. Until B44
+    it asserted the opposite: that each plane the cutover did not own stayed
+    `Mediation::Unavailable`, so a plane quietly reclassified `RootService`
+    would fail here rather than fall through the dispatcher's unimplemented
+    path.
+
+    Every member of that class is now gone from the ABI instead of
+    reclassified, because an operation whose only answer is
+    `UnsupportedOperation` is surface for something the root does not do.
+    So the claim inverts: every label the root still accepts must be one it
+    actually performs, and a reintroduced `Unavailable` arm is a regression.
     """
     if not IPC_SOURCE.is_file():
         fail(f"missing {IPC_SOURCE.relative_to(ROOT)}")
@@ -317,25 +308,36 @@ def check_operation_surface() -> None:
     if start < 0:
         fail(f"{IPC_SOURCE.relative_to(ROOT)} declares no mediation table")
     table = source[start:]
-    unavailable = table.find("Mediation::Unavailable")
-    if unavailable < 0:
-        fail("the mediation table declares no Unavailable plane")
-    # The arm listing the unavailable operations is whatever precedes the
-    # `Mediation::Unavailable` result.
-    arm = table[:unavailable]
-    arm = arm[arm.rfind("Mediation::RootService") :]
-    for name, label in UNMEDIATED_OPERATIONS:
-        if f"Self::{name}" not in arm:
-            fail(
-                f"operation {name} (label {label}) is no longer classified "
-                "Unavailable; required check 3 covers a different surface than "
-                "this gate asserts"
-            )
+    end = table.find("\n    }\n")
+    if end < 0:
+        fail("the mediation table has no discernible end")
+    table = table[:end]
+    if "Mediation::Unavailable" in table:
+        fail(
+            "the mediation table classifies a plane Unavailable again; such an "
+            "operation answers UnsupportedOperation and nothing else, which is "
+            "ABI surface for something the root does not perform (B44)"
+        )
+    # Every retired label must stay retired: `from_label` refuses it rather
+    # than resolving it to whichever operation now sits at that number.
+    retired = re.findall(r"pub const RETIRED_\w+: sel4::Word = (\d+);", source)
+    retired += re.findall(r"pub const RETIRED_POLICY_LABELS: \[sel4::Word; \d+\] = \[([^\]]+)\]", source)
+    holes = set()
+    for entry in retired:
+        holes.update(part.strip() for part in entry.split(",") if part.strip())
+    if len(holes) < 6:
+        fail(f"expected at least six retired labels, found {sorted(holes)}")
+    resolver = source[source.find("const fn from_label"):]
+    resolver = resolver[: resolver.find("\n    }\n")]
+    for hole in sorted(holes, key=int):
+        if re.search(rf"^\s*{hole} => Self::", resolver, re.M):
+            fail(f"retired label {hole} resolves to an operation again")
     print(
-        f"operation surface: {len(UNMEDIATED_OPERATIONS)} unmediated planes "
-        "answer a bounded Slime error",
+        f"operation surface: no unmediated plane remains and {len(holes)} "
+        "retired labels stay refused",
         flush=True,
     )
+
 
 
 def check_transcript(transcript: str) -> None:

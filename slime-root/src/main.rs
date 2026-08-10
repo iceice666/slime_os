@@ -3354,33 +3354,6 @@ fn serve_instance_graph(
                 }
             }
             #[cfg(slime_boot_selector)]
-            Operation::HealthConfirm => {
-                let authorized = launched.instance_for_task(id).is_some_and(|index| {
-                    generation.instance(index).is_ok_and(|instance| {
-                        instance.autostart && instance.health == InstanceHealth::Required
-                    })
-                });
-                let response = if !authorized {
-                    Response::error(IpcError::BadCapability)
-                } else {
-                    match block_devices
-                        .get_mut(0)
-                        .ok_or(boot_selector::SelectorError::NoBootDevice)
-                        .and_then(|device| boot_runtime.confirm(device))
-                    {
-                        Ok(()) => {
-                            sel4::debug_println!("SLIME_BOOT promoted");
-                            Response::success(0, 0)
-                        }
-                        Err(error) => {
-                            sel4::debug_println!("SLIME_BOOT promotion refused error={error:?}");
-                            Response::error(IpcError::InvalidOperation)
-                        }
-                    }
-                };
-                ipc::reply(response);
-            }
-            #[cfg(slime_boot_selector)]
             Operation::Unhealthy => {
                 let authorized = launched.instance_for_task(id).is_some_and(|index| {
                     generation

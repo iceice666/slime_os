@@ -130,19 +130,6 @@ const POWERBOX_CHOOSER_CAPS: [SpawnGrant; 3] = [
 // compiles under every profile; only the values differ.
 include!(concat!(env!("OUT_DIR"), "/boot_layout.rs"));
 
-// The transfer pair is not in the layout: bootstrap appends it past the
-// layout's high-water mark, and only when the platform enumerates both block
-// devices, so no generation can declare its slots.
-//
-// 61 and 62 are also where generation 13 puts the fabric clock channel and 14
-// puts the call phase channels. There is no conflict: transfer runs under
-// generation 9, whose table gives all four of those labels `SLOT_ABSENT`, and
-// the two profiles that do declare 61/62 never carry a transfer pair — their
-// layouts already reach 63 slots, so bootstrap's append would exceed
-// `MAX_CAPS` and trip the assert rather than overwrite anything.
-const TRANSFER_RECEIVER_SLOT: u32 = 61;
-const TRANSFER_SOURCE_SLOT: u32 = 62;
-
 const POWERBOX_PROBE_CAPS: [SpawnGrant; 1] = [grant(POWERBOX_CLIENT_SLOT, RIGHT_SEND | RIGHT_RECV)];
 
 const fn grant(slot: u32, rights: Rights) -> SpawnGrant {
@@ -430,13 +417,6 @@ fn main(startup_arg: u32) {
         slime_rt::exit(0);
     }
     slime_rt::debug_write(b"[init] launching component graph\n");
-    if option_env!("SLIME_TRANSFER_RECEIVER") == Some("1") {
-        if slime_rt::generation_receive(TRANSFER_RECEIVER_SLOT, TRANSFER_SOURCE_SLOT) == 0 {
-            slime_rt::debug_write(b"[init] generation transfer installed\n");
-            slime_rt::exit(0);
-        }
-        slime_rt::exit(1);
-    }
     if option_env!("SLIME_TRANSFER_ACTIVATE") == Some("1") {
         slime_rt::debug_write(b"[init] transferred generation healthy\n");
         slime_rt::exit(0);

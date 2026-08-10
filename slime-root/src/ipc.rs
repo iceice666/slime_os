@@ -29,6 +29,16 @@ pub const MAX_OPERATION_LABEL: u16 = Operation::SupervisionDerive as u16;
 /// operation moved into slot 17. Input is a Call on the console endpoint now.
 pub const RETIRED_INPUT_READ_LABEL: sel4::Word = 17;
 
+/// The labels generation, recovery, and health policy used to carry, retired
+/// with B44.
+///
+/// None of them had a handler either — `HealthConfirm`'s arm existed but was
+/// never reached, because boot promotion happens from the supervisor's idle
+/// path once every required instance parks, not from a component asking. The
+/// rest answered `UnsupportedOperation`. Generation management and recovery
+/// are userspace policy built over block authority.
+pub const RETIRED_POLICY_LABELS: [sel4::Word; 4] = [8, 10, 18, 19];
+
 /// The label `StoreTransact` used to carry, retired with B43.
 ///
 /// Never had a root handler: it answered `UnsupportedOperation` from
@@ -122,17 +132,13 @@ pub enum Operation {
     FixtureDirective = 5,
     Exit = 3,
     Spawn = 4,
-    HealthConfirm = 8,
     Unhealthy = 9,
-    RecoveryReconstruct = 10,
     EndpointCreate = 11,
     SupervisionStatus = 12,
     CapDrop = 13,
     DirectoryInspect = 14,
     DirectoryDerive = 15,
     DirectoryCommit = 16,
-    GenerationTransact = 18,
-    GenerationReceive = 19,
     Wait = 20,
     SharedBufferCreate = 21,
     SharedBufferRelease = 22,
@@ -172,17 +178,13 @@ impl Operation {
             3 => Self::Exit,
             4 => Self::Spawn,
             5 => Self::FixtureDirective,
-            8 => Self::HealthConfirm,
             9 => Self::Unhealthy,
-            10 => Self::RecoveryReconstruct,
             11 => Self::EndpointCreate,
             12 => Self::SupervisionStatus,
             13 => Self::CapDrop,
             14 => Self::DirectoryInspect,
             15 => Self::DirectoryDerive,
             16 => Self::DirectoryCommit,
-            18 => Self::GenerationTransact,
-            19 => Self::GenerationReceive,
             20 => Self::Wait,
             21 => Self::SharedBufferCreate,
             22 => Self::SharedBufferRelease,
@@ -218,7 +220,6 @@ impl Operation {
             | Self::Exit
             | Self::FixtureDirective
             | Self::Spawn
-            | Self::HealthConfirm
             | Self::Unhealthy
             | Self::EndpointCreate
             | Self::SupervisionStatus
@@ -247,15 +248,6 @@ impl Operation {
             // reach, which makes delivery mechanism. What a key *means* is
             // Dango's business and stays in userspace.
             => Mediation::RootService,
-            // Storage, directory, input, recovery, and generation planes have
-            // no seL4 mechanism owner in this cutover. They answer with the
-            // ordinary Slime error rather than faulting the caller.
-            // `BlockTransact` moved to `RootService` with P5.4.2c: the root
-            // owns the device untyped, the DMA frames, and therefore the
-            // driver. Storage *policy* stays in userspace.
-            Self::RecoveryReconstruct
-            | Self::GenerationTransact
-            | Self::GenerationReceive => Mediation::Unavailable,
         }
     }
 
@@ -264,9 +256,7 @@ impl Operation {
     pub const fn unmediated_response(self) -> Option<Response> {
         match self.mediation() {
             Mediation::RootService => None,
-            Mediation::DirectKernel | Mediation::Unavailable => {
-                Some(Response::error(IpcError::UnsupportedOperation))
-            }
+            Mediation::DirectKernel => Some(Response::error(IpcError::UnsupportedOperation)),
         }
     }
 }
@@ -277,9 +267,13 @@ pub enum Mediation {
     /// Answered by the root service loop over the child's slot-1 endpoint.
     RootService,
     /// Performed by the component against the kernel with no root round trip.
+    ///
+    /// B44 removed a third class, `Unavailable`: an operation the root
+    /// classified as carrying no mechanism answered `UnsupportedOperation`
+    /// and nothing else, which is ABI surface for something the root does not
+    /// do. Every such label is gone rather than reclassified, so the class
+    /// has no members and no reason to exist.
     DirectKernel,
-    /// Carries no mechanism in this cutover; answered with a bounded error.
-    Unavailable,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1141,7 +1135,13 @@ mod tests {
             (RETIRED_INPUT_READ_LABEL, "input reads"),
             (RETIRED_BLOCK_TRANSACT_LABEL, "block requests"),
             (RETIRED_STORE_TRANSACT_LABEL, "store requests"),
-        ] {
+        ]
+        .into_iter()
+        .chain(
+            RETIRED_POLICY_LABELS
+                .into_iter()
+                .map(|label| (label, "generation, recovery, or health requests")),
+        ) {
             assert_eq!(
                 Operation::from_label(label),
                 Err(IpcError::InvalidOperation),
@@ -1174,6 +1174,7 @@ mod tests {
                 RETIRED_STORE_TRANSACT_LABEL,
             ]
             .contains(&label)
+                || RETIRED_POLICY_LABELS.contains(&label)
             {
                 assert_eq!(
                     Operation::from_label(label),
@@ -1185,7 +1186,7 @@ mod tests {
             assert_eq!(operation.label(), label);
             match operation.mediation() {
                 Mediation::RootService => assert_eq!(operation.unmediated_response(), None),
-                Mediation::DirectKernel | Mediation::Unavailable => assert_eq!(
+                Mediation::DirectKernel => assert_eq!(
                     operation.unmediated_response(),
                     Some(Response::error(IpcError::UnsupportedOperation))
                 ),

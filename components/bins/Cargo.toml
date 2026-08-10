@@ -50,16 +50,6 @@ path = "src/bin/echo-agent.rs"
 test = false
 
 [[bin]]
-name = "generation-manager"
-path = "src/bin/generation-manager.rs"
-test = false
-
-[[bin]]
-name = "generation-list"
-path = "src/bin/generation-list.rs"
-test = false
-
-[[bin]]
 name = "generation-inspect"
 path = "src/bin/generation-inspect.rs"
 test = false
@@ -192,11 +182,6 @@ test = false
 [[bin]]
 name = "init"
 path = "src/bin/init.rs"
-test = false
-
-[[bin]]
-name = "recovery"
-path = "src/bin/recovery.rs"
 test = false
 
 [[bin]]
