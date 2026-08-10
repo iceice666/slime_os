@@ -30,7 +30,6 @@ include!(concat!(env!("OUT_DIR"), "/command_profile.rs"));
 
 #[derive(Clone, Copy)]
 struct LiveChild {
-    task_id: u64,
     supervision_slot: u32,
     termination: Option<Termination>,
 }
@@ -81,26 +80,26 @@ fn handle_inner(
     live: &mut [Option<LiveChild>; CLIENT_BUDGET],
 ) -> WireSpawnReply {
     let Some(request) = WireSpawnRequest::decode(message) else {
-        return reply(STATUS_BAD_REQUEST, 0, 0);
+        return reply(STATUS_BAD_REQUEST, 0);
     };
     if !valid_request(&request, received_caps) {
-        return reply(STATUS_BAD_REQUEST, 0, 0);
+        return reply(STATUS_BAD_REQUEST, 0);
     }
     if request.flags == REQUEST_FLAG_WAIT {
-        return wait_reply(request_task_id(&request), live);
+        return wait_reply(request_handle(&request), live);
     }
     let command = &request.command[..request.command_len as usize];
     let Some(profile_index) = COMMAND_PROFILE.iter().position(|entry| entry.0 == command) else {
-        return reply(STATUS_NOT_ALLOWED, 0, 0);
+        return reply(STATUS_NOT_ALLOWED, 0);
     };
     let Some(slot) = live.iter().position(Option::is_none) else {
-        return reply(STATUS_BUDGET_EXHAUSTED, 0, 0);
+        return reply(STATUS_BUDGET_EXHAUSTED, 0);
     };
 
     let mut grants = [SpawnGrant { slot: 0, rights: 0 }; MAX_CAPS_PER_MSG + 1];
     let (context_send, context_recv) = match slime_rt::endpoint_create(3) {
         Ok(pair) => pair,
-        Err(error) => return reply(error as i32, 0, 0),
+        Err(error) => return reply(error as i32, 0),
     };
     grants[0] = SpawnGrant {
         slot: context_recv,
@@ -134,21 +133,22 @@ fn handle_inner(
                 while let Ok(None) = slime_rt::supervision_status(spawned.supervision_slot) {
                     slime_rt::wait(&[slime_rt::WaitSource::Supervision(spawned.supervision_slot)]);
                 }
-                return reply(STATUS_BAD_REQUEST, 0, 0);
+                return reply(STATUS_BAD_REQUEST, 0);
             }
             let _ = slime_rt::cap_drop(context_send);
             let _ = slime_rt::cap_drop(context_recv);
             live[slot] = Some(LiveChild {
-                task_id: spawned.task_id,
                 supervision_slot: spawned.supervision_slot,
                 termination: None,
             });
-            reply(STATUS_OK, spawned.task_id, 0)
+            // The handle *is* the result: the client waits, kills, and derives
+            // through this capability, and never learns a task id (B42).
+            reply(STATUS_OK, spawned.supervision_slot)
         }
         Err(error) => {
             let _ = slime_rt::cap_drop(context_send);
             let _ = slime_rt::cap_drop(context_recv);
-            reply(error as i32, 0, 0)
+            reply(error as i32, 0)
         }
     }
 }
@@ -194,34 +194,42 @@ fn valid_request(request: &WireSpawnRequest, received_caps: &[u64; MAX_CAPS_PER_
             .all(|slot| *slot == 0)
 }
 
-fn request_task_id(request: &WireSpawnRequest) -> u64 {
-    u64::from_le_bytes(request.arguments)
+/// The supervision handle a wait request names. The client holds this
+/// capability; the numeric task id it used to send is not authority and is
+/// gone from the protocol (B42).
+fn request_handle(request: &WireSpawnRequest) -> u32 {
+    u32::from_le_bytes([
+        request.arguments[0],
+        request.arguments[1],
+        request.arguments[2],
+        request.arguments[3],
+    ])
 }
 
-fn wait_reply(task_id: u64, live: &mut [Option<LiveChild>; CLIENT_BUDGET]) -> WireSpawnReply {
+fn wait_reply(handle: u32, live: &mut [Option<LiveChild>; CLIENT_BUDGET]) -> WireSpawnReply {
     let Some(index) = live
         .iter()
-        .position(|child| child.is_some_and(|child| child.task_id == task_id))
+        .position(|child| child.is_some_and(|child| child.supervision_slot == handle))
     else {
-        return reply(STATUS_NOT_ALLOWED, 0, 0);
+        return reply(STATUS_NOT_ALLOWED, 0);
     };
     let Some(child) = live[index] else {
-        return reply(STATUS_NOT_ALLOWED, 0, 0);
+        return reply(STATUS_NOT_ALLOWED, 0);
     };
     let Some(termination) = child.termination else {
-        return reply(ERR_WOULDBLOCK as i32, task_id, 0);
+        return reply(ERR_WOULDBLOCK as i32, handle);
     };
     live[index] = None;
-    termination_reply(task_id, termination)
+    termination_reply(handle, termination)
 }
 
-fn termination_reply(task_id: u64, termination: Termination) -> WireSpawnReply {
+fn termination_reply(handle: u32, termination: Termination) -> WireSpawnReply {
     match termination {
-        Termination::Exit(status) => detailed_reply(0, 1, task_id, status as u64),
-        Termination::Fault(detail) => detailed_reply(0, 2, task_id, detail),
-        Termination::Timeout => detailed_reply(0, 3, task_id, 0),
-        Termination::PeerLoss => detailed_reply(0, 4, task_id, 0),
-        Termination::Unhealthy => detailed_reply(0, 5, task_id, 0),
+        Termination::Exit(status) => detailed_reply(0, 1, handle, status as u64),
+        Termination::Fault(detail) => detailed_reply(0, 2, handle, detail),
+        Termination::Timeout => detailed_reply(0, 3, handle, 0),
+        Termination::PeerLoss => detailed_reply(0, 4, handle, 0),
+        Termination::Unhealthy => detailed_reply(0, 5, handle, 0),
     }
 }
 
@@ -250,14 +258,14 @@ fn send_reply(reply: WireSpawnReply) {
     }
 }
 
-const fn reply(status: i32, task_id: u64, supervision_slot: u32) -> WireSpawnReply {
-    detailed_reply(status, 0, task_id, supervision_slot as u64)
+const fn reply(status: i32, supervision_slot: u32) -> WireSpawnReply {
+    detailed_reply(status, 0, supervision_slot, 0)
 }
 
 const fn detailed_reply(
     status: i32,
     termination_kind: u32,
-    task_id: u64,
+    handle: u32,
     detail: u64,
 ) -> WireSpawnReply {
     WireSpawnReply {
@@ -265,8 +273,7 @@ const fn detailed_reply(
         version: slime_proto::spawn::FORMAT_VERSION,
         status,
         termination_kind,
-        task_id,
-        supervision_slot: 0,
+        supervision_slot: handle,
         detail,
     }
 }

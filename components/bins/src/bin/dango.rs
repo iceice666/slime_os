@@ -108,7 +108,7 @@ fn evaluate(line: &[u8]) {
         return;
     }
     console(b"spawn-request:accepted\n");
-    match wait(reply.task_id) {
+    match wait(reply.supervision_slot) {
         Termination::Exit(0) => console(b"result:exit:0\n"),
         Termination::Exit(_) => console(b"IO.Exit:status\n"),
         Termination::Fault(_) => console(b"result:fault\n"),
@@ -196,7 +196,6 @@ const fn error_reply(status: i32) -> WireSpawnReply {
         version: slime_proto::spawn::FORMAT_VERSION,
         status,
         termination_kind: 0,
-        task_id: 0,
         supervision_slot: 0,
         detail: 0,
     }
@@ -230,7 +229,9 @@ fn send_request(request: WireSpawnRequest, caps: &[u32]) -> WireSpawnReply {
     }
 }
 
-fn wait(task_id: u64) -> Termination {
+/// Wait on the supervision capability the spawn service handed back. The
+/// handle is the identity: no task id crosses this boundary (B42).
+fn wait(handle: u32) -> Termination {
     let request = WireSpawnRequest {
         magic: slime_proto::spawn::SPAWN_MAGIC,
         version: slime_proto::spawn::FORMAT_VERSION,
@@ -241,7 +242,15 @@ fn wait(task_id: u64) -> Termination {
         capability_roles: 0,
         client_budget: CLIENT_BUDGET,
         command: [0; 16],
-        arguments: task_id.to_le_bytes(),
+        arguments: {
+            let mut bytes = [0u8; 8];
+            let handle = handle.to_le_bytes();
+            bytes[0] = handle[0];
+            bytes[1] = handle[1];
+            bytes[2] = handle[2];
+            bytes[3] = handle[3];
+            bytes
+        },
         environment: [0; 8],
         grant_rights: 0,
         reserved: [0; 6],

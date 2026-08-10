@@ -84,7 +84,6 @@ pub struct SpawnGrant {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Spawned {
-    pub task_id: u64,
     pub supervision_slot: u32,
 }
 
@@ -199,12 +198,14 @@ pub fn exit(status: i64) -> ! {
 /// narrow copy; the source capability remains in the spawner. Success returns
 /// both the child task id and a supervision capability slot.
 pub fn spawn(executable_slot: u32, grants: &[SpawnGrant]) -> Result<Spawned, i64> {
-    let (task_id, supervision_slot) = transport::spawn(executable_slot, grants);
-    if task_id < 0 {
-        Err(task_id)
+    // The root still answers with a result word and the supervision slot; the
+    // word is an error code or a success marker, never an identity the caller
+    // keeps (B42).
+    let (result, supervision_slot) = transport::spawn(executable_slot, grants);
+    if result < 0 {
+        Err(result)
     } else {
         Ok(Spawned {
-            task_id: task_id as u64,
             supervision_slot: supervision_slot as u32,
         })
     }

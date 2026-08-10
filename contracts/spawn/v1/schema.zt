@@ -47,7 +47,6 @@ SpawnReply :: type {
   version : Int;
   status : Int;
   termination_kind : Int;
-  task_id : Int;
   supervision_slot : Int;
   detail : Int;
 };
@@ -76,7 +75,6 @@ replyLayout :: List WireField = {
   { name = "version"; width = 4; signed = false; byteArray = false; };
   { name = "status"; width = 4; signed = true; byteArray = false; };
   { name = "termination_kind"; width = 4; signed = false; byteArray = false; };
-  { name = "task_id"; width = 8; signed = false; byteArray = false; };
   { name = "supervision_slot"; width = 4; signed = false; byteArray = false; };
   { name = "detail"; width = 8; signed = false; byteArray = false; };
 };

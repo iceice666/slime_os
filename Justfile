@@ -444,6 +444,9 @@ contracts_check: bootstate_model_check
     python3 scripts/check/check-contracts.py
     python3 scripts/generate/generate-spawn-bindings.py --check
     python3 scripts/check/check-boot-layout-resource.py
+    # B42: lifecycle authority is a capability, so no wire record or public
+    # runtime type may name a bare task id.
+    python3 scripts/check/check-lifecycle-identity.py
 
 # P0 target-profile and executable-artifact contract matrix.
 architecture_contract_check: contracts_check
