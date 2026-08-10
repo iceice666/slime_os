@@ -99,6 +99,34 @@ Inline-only routing was also measured and does not help: `fits_inline` carries
 16 bytes, and 548 of the 643 `debug_write` call sites in `components/bins`
 exceed that, so the window path cannot be avoided.
 
+**The second dispatcher was built, and the blocker is in rust-sel4, not slime
+(2026-08-10).** A `slime-root/src/console.rs` thread was written end to end —
+its own claimed scratch page, its own root-image stack and IPC buffer frame,
+`tcb_configure` against the root's own CSpace and VSpace, the root's priority
+so it round-robins with the service loop rather than starving. It *starts*:
+`SLIME_ROOT console dispatcher started` appears, and the graph continues.
+
+It then panics on its first invocation, at
+`deps/rust-sel4/crates/sel4/src/state/mod.rs:167`. The cause is structural:
+
+- `aarch64-sel4-roottask-minimal.json` sets no `has-thread-local`, so the
+  crate's IPC-buffer slot is one *global* rather than thread-local.
+- That global is guarded by a borrow flag (`SyncToken`, an `AtomicIsize`), not
+  a lock, and every syscall in `sel4/src/syscalls.rs` borrows it. A second
+  thread calling `set_ipc_buffer` gets `BorrowMutError` because the slot is
+  already owned.
+- `non-thread-local-state` was tried and does not help: it selects which token
+  type guards the slot, not how many slots exist.
+
+So a second root thread needs per-thread IPC-buffer state that neither this
+target nor this runtime provides. Closing B41 means either enabling
+thread-local support in the root task's target and runtime, or keeping one
+dispatcher and giving console traffic a lane within it — and the second is what
+the `NBRecv`/`NBSend` analysis above already rules out. This is a rust-sel4
+configuration change, which is why it is not a small edit.
+
+The experiment was reverted; the tree carries none of it.
+
 A bound notification does not substitute: it signals, and the console still
 needs its own receive to carry the payload.
 
