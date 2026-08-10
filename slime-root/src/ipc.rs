@@ -1111,6 +1111,36 @@ mod tests {
         assert_eq!(probe.clears, 2);
     }
 
+    /// B41: no console or input operation may be reachable on the universal
+    /// dispatcher. This is the "a restored root fallback fails" control —
+    /// restoring one means adding an arm to `from_label` or a variant to
+    /// `Operation`, and this test is what refuses both.
+    ///
+    /// `InputRead`'s label is checked directly because it is now a hole.
+    /// `DebugWrite`'s number was reused by `FixtureDirective`, which is why
+    /// the *variant* names are checked too: a reader should not be able to
+    /// satisfy this by renaming.
+    #[test]
+    fn no_console_operation_is_reachable_on_the_universal_abi() {
+        assert_eq!(
+            Operation::from_label(RETIRED_INPUT_READ_LABEL),
+            Err(IpcError::InvalidOperation),
+            "input reads are answerable on the root endpoint again"
+        );
+        for label in 0..=sel4::Word::from(MAX_OPERATION_LABEL) {
+            let Ok(operation) = Operation::from_label(label) else {
+                continue;
+            };
+            // `Debug` rather than a bespoke name table: the variant name is
+            // what a reader checks this against.
+            let name = alloc::format!("{operation:?}");
+            assert!(
+                !name.contains("Debug") && !name.contains("Input"),
+                "{name} is a console operation on the universal dispatcher"
+            );
+        }
+    }
+
     #[test]
     fn every_legacy_label_resolves_to_a_bounded_answer() {
         for label in 0..=sel4::Word::from(MAX_OPERATION_LABEL) {
