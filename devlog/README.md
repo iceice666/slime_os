@@ -226,3 +226,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-09 | [B33 — seL4 kernel cutover review remediation](2026-08-09-b33-cutover-review-remediation/index.md) | Audit | Verified | P5.4.final, B33 |
 | 2026-08-09 | [B34–B38 — seL4 model-cutover audit](2026-08-09-b34-b38-sel4-model-audit/index.md) | Audit | Root-caused | P5.4.9, B34, B35, B36, B37, B38 |
 | 2026-08-10 | [B34–B38 — seL4 model cutover and lifecycle closure](2026-08-10-b34-b38-model-cutover/index.md) | Change | Verified | P5.4.9, B34, B35, B36, B37, B38 |
+| 2026-08-10 | [seL4 native-capability-model handoff](2026-08-10-sel4-native-model-handoff/index.md) | Decision | Proposed | P5, P5.4, P5.5, C8, B34, B35, B36, B37, B38 |
