@@ -2210,6 +2210,8 @@ def validate_acyclic(instances: list[dict]) -> None:
 
 PLAN_NONE = 0xFFFFFFFF
 GRANT_POLICY_ONLY = 1
+# A send/recv grant whose channel object its source creates at runtime.
+GRANT_MINTED = 1
 SERVICE_ROOT_DISPATCH = 1
 KERNEL_OBJECT_CNODE = 1
 KERNEL_OBJECT_VSPACE = 2
@@ -2357,6 +2359,11 @@ def build_sel4_plan(
             ),
             None,
         )
+        if grant.get("minted"):
+            # The object does not exist at admission, so there is no capability
+            # to place in the plan. The `mintedBindings` entries naming this
+            # edge's two slots are what the plan carries instead.
+            continue
         if holder is None:
             fail(f"authority-bearing grant {grant['name']} has no concrete binding")
         source_process = process_for_instance[holder]
@@ -2544,6 +2551,12 @@ def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes |
             target = instance_index.get(grant["target"])
             if target is None:
                 fail(f"grant target missing: {grant['name']}")
+            # A minted grant declares the edge but not its object: the source
+            # creates the channel at runtime and hands the far half over at
+            # spawn, so neither endpoint has a pre-created end to bind. Each
+            # side's actual slot is stated by a `mintedBindings` entry.
+            if grant.get("minted"):
+                continue
             if rights & (RIGHT["send"] | RIGHT["recv"]):
                 expected_bindings[grant["source"]].add(grant["name"])
             expected_bindings[grant["target"]].add(grant["name"])
@@ -2719,7 +2732,14 @@ def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes |
     for grant, rights in zip(grants, grant_rights, strict=True):
         source = instance_index[grant["source"]]
         target = executable_index[grant["target"]] if rights & RIGHT["exec"] else instance_index[grant["target"]]
-        grant_records += GENERATION_GRANT.pack(string_offset(grant["name"]), source, target, rights, int(bool(grant["transferable"])))
+        grant_records += GENERATION_GRANT.pack(
+            string_offset(grant["name"]),
+            source,
+            target,
+            rights,
+            int(bool(grant["transferable"])),
+            GRANT_MINTED if grant.get("minted") else 0,
+        )
     for state in states:
         owner = instance_index.get(state["owner"])
         if owner is None or state["schemaVersion"] <= 0 or state["policy"] not in POLICY:

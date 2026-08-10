@@ -3592,7 +3592,17 @@ fn serve_instance_graph(
                         Err(error) => fatal!("boot promotion rejected: {error:?}"),
                     }
                 }
-                if required == 1 {
+                // The idle record is the supervisor's certification that the
+                // whole declared graph came to rest: every required instance
+                // parked, none completed, none failed. It is emitted whenever
+                // that holds, not only for a single-instance graph — a
+                // migrated graph whose participants are declared instances
+                // reaches the same state with more of them.
+                //
+                // `completed` is reported separately below when any required
+                // instance ran to completion instead of parking, which is a
+                // finished generation rather than an idle one.
+                if completed == 0 {
                     let digest = generation.identity;
                     sel4::debug_println!(
                         "SLIME_GRAPH healthy generation={} instances={:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x} required={} live={} idle={} failed=0",

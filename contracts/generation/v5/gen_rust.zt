@@ -103,7 +103,7 @@ records :: Format -> List w.WireRecord
     { pythonName = "GENERATION_INSTANCE"; constPrefix = "GENERATION_INSTANCE"; size = format.instanceLen; trailingPadding = 8; fields = format.instanceFields; layout = format.instanceLayout; };
     { pythonName = "GENERATION_DEPENDENCY"; constPrefix = "GENERATION_DEPENDENCY"; size = format.dependencyLen; trailingPadding = 0; fields = format.dependencyFields; layout = format.dependencyLayout; };
     { pythonName = "GENERATION_BINDING"; constPrefix = "GENERATION_BINDING"; size = format.bindingLen; trailingPadding = 0; fields = format.bindingFields; layout = format.bindingLayout; };
-    { pythonName = "GENERATION_GRANT"; constPrefix = "GENERATION_GRANT"; size = format.grantLen; trailingPadding = 8; fields = format.grantFields; layout = format.grantLayout; };
+    { pythonName = "GENERATION_GRANT"; constPrefix = "GENERATION_GRANT"; size = format.grantLen; trailingPadding = 4; fields = format.grantFields; layout = format.grantLayout; };
     { pythonName = "GENERATION_STATE"; constPrefix = "GENERATION_STATE"; size = format.stateLen; trailingPadding = 8; fields = format.stateFields; layout = format.stateLayout; };
     { pythonName = "GENERATION_HEALTH"; constPrefix = "GENERATION_HEALTH"; size = format.healthLen; trailingPadding = 0; fields = format.healthFields; layout = format.healthLayout; };
     { pythonName = "GENERATION_PROCESS"; constPrefix = "GENERATION_PROCESS"; size = format.processLen; trailingPadding = 4; fields = format.processFields; layout = format.processLayout; };

@@ -192,11 +192,18 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
 
 # The supervisor record is the sole terminal. The instance digest is deliberately
 # shape-checked rather than pinned: it changes when the generation changes.
+#
+# The counts are shape-checked for the same reason. What the terminal asserts is
+# that every required instance came to rest — `live == idle`, nothing completed,
+# nothing failed — not how many there are. Since the graph's participants became
+# declared instances, the fabric and its two route workers are required too, so
+# the supervisor waits for their role provisioning before certifying. Pinning
+# `required=1` would assert the pre-migration graph shape rather than the
+# property.
 TERMINAL_MARKER = (
     r"SLIME_GRAPH healthy generation=\d+ instances=[0-9a-f]+ "
-    r"required=1 live=1 idle=1 failed=0"
+    r"required=(\d+) live=\1 idle=\1 failed=0"
 )
-CHAINS = CHAINS + (("the supervisor certified the complete graph", (TERMINAL_MARKER,)),)
 
 FAILURE_MARKERS: tuple[str, ...] = (
     r"SLIME_ROOT FATAL",

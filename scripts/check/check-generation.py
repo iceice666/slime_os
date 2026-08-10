@@ -137,6 +137,7 @@ RIGHT_ALL = (1 << 26) - 1
 MAX_SPAWN_BUDGET = 32
 PLAN_NONE = 0xFFFFFFFF
 GRANT_POLICY_ONLY = 1
+GRANT_MINTED = 1
 BOOT_ACTIONS = {
     "product", "boot", "call", "channel", "crossing", "dango", "directory",
     "filesystem", "generation", "input", "loan", "operation", "powerbox",
@@ -256,13 +257,14 @@ def check_generation(data: bytes, expected_identity: bytes | None = None) -> dic
     grant_rows = []
     previous_grant = None
     for index in range(grants):
-        name_offset, source, destination, rights, transferable = GENERATION_GRANT.unpack_from(data, grant_offset + index * GENERATION_GRANT.size)
+        name_offset, source, destination, rights, transferable, grant_flags = GENERATION_GRANT.unpack_from(data, grant_offset + index * GENERATION_GRANT.size)
+        require(grant_flags & ~GRANT_MINTED == 0, "UnknownGrantFlags")
         name = read_string(data, strings_offset, strings_len, name_offset)
         key = (name, source, destination)
         require(previous_grant is None or key > previous_grant, "NonCanonicalGrants")
         require(source < instances and rights and not rights & ~RIGHT_ALL and transferable in (0, 1) and bool(rights & RIGHT_TRANSFER) == bool(transferable), "BadGrant")
         require(destination < (executables if rights & RIGHT_EXEC else instances), "BadGrant")
-        grant_rows.append((name, source, destination, rights))
+        grant_rows.append((name, source, destination, rights, bool(grant_flags & GRANT_MINTED)))
         previous_grant = key
     for row in instance_rows:
         require(len({grant for grant, _ in binding_rows[row[7] : row[7] + row[8]]}) == row[8], "BadBinding")
@@ -322,6 +324,12 @@ def check_generation(data: bytes, expected_identity: bytes | None = None) -> dic
                 policy_only_grants.add(grant)
             require(rights == grant_rows[grant][3], "BadCapBinding")
     for index, grant_row in enumerate(grant_rows):
+        # A minted grant's object does not exist at admission, so the plan
+        # carries no capability for it; its two minted bindings state where
+        # each end lands instead.
+        if grant_row[4]:
+            require(materialized[index] == 0, "UnmaterializedGrant")
+            continue
         policy_only = index in policy_only_grants
         require(materialized[index] + int(policy_only) == 1, "UnmaterializedGrant")
         if policy_only:

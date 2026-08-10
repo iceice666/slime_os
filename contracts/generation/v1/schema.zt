@@ -43,6 +43,14 @@ CapabilityGrant :: type {
   target : Text;
   rights : List Text;
   transferable : Bool;
+  -- A send/recv grant normally materializes one pre-created channel whose two
+  -- ends the root installs at admission. `minted` says the relationship is
+  -- authenticated here but the channel object is created at runtime by the
+  -- source, which is how a bootstrap composes a graph whose participant count
+  -- it knows only from this manifest. The edge, its rights, and its two
+  -- endpoints are still declared; only the object is deferred, exactly as a
+  -- `MintedBinding` defers one. Absent means the root pre-creates the channel.
+  minted? : Bool;
 };
 
 StateBinding :: type {

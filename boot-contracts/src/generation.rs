@@ -10,6 +10,8 @@ include!("generated/generation.rs");
 const MAX_TASK_CAPS: usize = 64;
 const PLAN_NONE: usize = u32::MAX as usize;
 const GRANT_POLICY_ONLY: u32 = 1;
+/// A send/recv grant whose channel object its source mints at runtime.
+const GRANT_MINTED: u32 = 1;
 
 pub const KIND_KERNEL: u32 = 1;
 pub const KIND_BOOTSTRAP: u32 = 2;
@@ -201,6 +203,10 @@ pub struct Grant<'a> {
     pub target: GrantEndpoint,
     pub rights: Rights,
     pub transferable: bool,
+    /// The channel object is created at runtime by `source` rather than
+    /// pre-created by the root at admission. The edge, its rights, and both
+    /// endpoints are still declared; only the object is deferred.
+    pub minted: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -862,8 +868,12 @@ impl<'a> Generation<'a> {
             return Err(DecodeError::BadIndex);
         }
         let offset = self.grant_offset + index * GRANT_LEN;
-        reserved_zero(self.bytes, offset + 24, offset + GRANT_LEN)?;
+        reserved_zero(self.bytes, offset + 28, offset + GRANT_LEN)?;
         let rights = u64_at(self.bytes, offset + 12)?;
+        let flags = u32_at(self.bytes, offset + 24)?;
+        if flags & !GRANT_MINTED != 0 {
+            return Err(DecodeError::UnknownRequiredFlags);
+        }
         Ok(Grant {
             name: self.string(u32_at(self.bytes, offset)? as usize)?,
             source: GrantEndpoint::Instance(u32_at(self.bytes, offset + 4)? as usize),
@@ -874,6 +884,7 @@ impl<'a> Generation<'a> {
             },
             rights,
             transferable: bool_at(self.bytes, offset + 20)?,
+            minted: flags & GRANT_MINTED != 0,
         })
     }
     pub fn grant_named(&self, name: &str) -> Option<Grant<'a>> {
@@ -1494,6 +1505,15 @@ impl<'a> Generation<'a> {
         }
         for (index, count) in materialized.iter().enumerate().take(self.grant_count) {
             let grant = self.grant(index)?;
+            // A minted grant's object does not exist at admission, so the plan
+            // carries no capability for it. Its two `MintedBinding` entries
+            // state where each end lands and under what ceiling instead.
+            if grant.minted {
+                if *count != 0 {
+                    return Err(DecodeError::BadBinding);
+                }
+                continue;
+            }
             let policy_only = (0..self.cap_binding_count).any(|binding| {
                 self.cap_binding(binding).is_ok_and(|binding| {
                     binding.grant == index && binding.flags & GRANT_POLICY_ONLY != 0
@@ -1620,6 +1640,12 @@ impl<'a> Generation<'a> {
     }
 
     fn grant_requires_instance_binding(&self, grant: Grant<'_>, instance: usize) -> bool {
+        // A minted grant's object is created at runtime, so neither endpoint
+        // holds a pre-created end to bind. Its `MintedBinding` entries state
+        // where each side lands.
+        if grant.minted {
+            return false;
+        }
         if grant.rights & RIGHT_EXEC != 0 {
             grant.source == GrantEndpoint::Instance(instance)
         } else if grant.rights & 0b11 != 0 {

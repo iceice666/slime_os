@@ -703,6 +703,13 @@ pub fn materialize(
         if carries == 0 {
             continue;
         }
+        // A minted grant declares the edge but not its object: the source
+        // creates the channel at runtime and hands the far half to the target
+        // at spawn. Pre-creating one here would install a second endpoint at
+        // the target's declared slot, shadowing the one it is actually given.
+        if grant.minted {
+            continue;
+        }
         let (GrantEndpoint::Instance(source), GrantEndpoint::Instance(target)) =
             (grant.source, grant.target)
         else {

@@ -159,7 +159,7 @@ def authority_manifest_identity(generation: bytes) -> bytes:
     hasher = hashlib.sha256()
     hasher.update(b"slime-authority-manifest-v1")
     for index in range(grant_count):
-        name_offset, source, target, rights, transferable = GENERATION_GRANT.unpack_from(
+        name_offset, source, target, rights, transferable, _flags = GENERATION_GRANT.unpack_from(
             generation, grant_offset + index * GENERATION_GRANT.size
         )
         target_names = executable_names if version >= 4 and rights & (1 << 3) else instance_names
