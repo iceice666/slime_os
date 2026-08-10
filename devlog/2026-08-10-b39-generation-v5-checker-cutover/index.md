@@ -330,3 +330,39 @@ deliberate and is now documented on the record: one representation cannot
 disagree with itself, whereas `Grant`'s two must be cross-checked for
 coherence. The devlog sentence claiming `MintedBinding` "carries
 `transferable`" was loose — it carries the property, as a rights bit.
+
+**2026-08-10 — independent correctness review, and the regression it caught.**
+A second reviewer checked the layout arithmetic and the boot-action cutover.
+
+*Confirmed sound.* All 51 header field offsets were recomputed from the schema
+field widths and compared against the decoder's 41 hardcoded byte literals and
+the generated Python: all three agree, including `minted_binding_count` at 184,
+`header_reserved` at 188, `minted_binding_offset` at 336, and `total_len` at
+368. Fields sum to 376, plus 136 pad, equals the declared 512. All twenty
+record layouts satisfy `used + trailingPadding == declared length`.
+
+*P0 — three seL4 planes were made unreachable, and the earlier claim in this
+entry that "each flag now names exactly one composition" was false.* Deleting
+the second guard half from the three x86 oracle branches assumed the seL4
+planes no longer set the oracle flag. They still do, deliberately:
+`build-generation.py` maps `sel4-qos`, `sel4-operation`, and `sel4-visibility`
+to both their seL4 flag *and* the oracle's, because the participants read the
+oracle flag to select their QoS behaviour and must stay byte-identical between
+the planes. So those images compiled with the oracle flag set, took the x86
+branch, and exited before `compose_declared_graph` ran. Observed directly: the
+seL4 QoS image died at `SLIME_ROOT FATAL`; after the fix it reaches
+`drive_stream_plane`, its own composition. The fix moves the dispatch *above*
+the oracle branches, so the exclusion is the authenticated action rather than a
+second build flag — anything other than `PRODUCT` composes and does not return.
+These three gates are in the known-red set, so the regression would have been
+masked rather than caught.
+
+*Also fixed.*
+
+| Finding | Fix |
+|---|---|
+| `init`'s `boot_action` table is a hand copy of the contract's numbering with nothing tying them together; the new `boot_action_numbering_is_frozen` test pins the enum but not the copy | A `const _: () = assert!(...)` per variant in `init.rs`, verified by renumbering `QOS` and observing `assertion failed` at build time |
+| Header byte 188 (`header_reserved`) was checked by the Python twin but not the decoder | `reserved_zero(bytes, 188, 192)` in `decode` |
+| `is_v4()` returned a hardcoded `false` with no callers, and `kernel_object` was set to `usize::MAX` and read by nothing — both `pub`, so `dead_code` could not flag them | Deleted |
+| The rank selector's slot comparison is unreachable once duplicate holder slots are rejected | Replaced with an explicit uniqueness assertion that fails the spawn, since a collision would mean the decoder admitted something it should not have |
+| `build_sel4_plan` took an `executables` parameter it never read | Removed |

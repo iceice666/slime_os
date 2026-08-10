@@ -82,12 +82,17 @@ always the declared slot.
 
 **Boot-graph selection (landed 2026-08-10):** the root delivers the
 authenticated `bootAction` in the bootstrap thread's first C parameter, and
-`init` composes its graph from that value. Every `SLIME_SEL4_*_CHECK` branch is
-gone from `init.rs`, along with the three x86 oracle guards whose second halves
-existed only to exclude a seL4 plane and the x86-only full-graph composition
-keyed on `SLIME_GENERATION_NUMBER == 17`. An unimplemented action is a boot
-failure rather than a fallthrough, so two builds of one component image cannot
-select different boot graphs.
+`init` composes its graph from that value before any build flag is consulted.
+Every `SLIME_SEL4_*_CHECK` branch is gone from `init.rs`, along with the
+x86-only full-graph composition keyed on `SLIME_GENERATION_NUMBER == 17`. The
+three x86 oracle flags remain, because the *participants* read them to stay
+byte-identical across the two planes; what those branches used to spell as a
+second build flag — "and not the seL4 plane sharing this flag" — is now the
+action itself, since anything other than `PRODUCT` composes and does not
+return. An unimplemented action is a boot failure rather than a fallthrough, so
+two builds of one component image cannot select different boot graphs.
+`init`'s copy of the action numbering is pinned to the contract by a
+const-assert per variant, so a renumbering fails the build.
 
 **Remaining:** the seL4 fixtures must declare what `init` actually hands each
 child before their planes go green again. `sel4-stream.zti` and
