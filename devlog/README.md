@@ -228,3 +228,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-10 | [B34–B38 — seL4 model cutover and lifecycle closure](2026-08-10-b34-b38-model-cutover/index.md) | Change | Verified | P5.4.9, B34, B35, B36, B37, B38 |
 | 2026-08-10 | [seL4 native-capability-model handoff](2026-08-10-sel4-native-model-handoff/index.md) | Decision | Proposed | P5, P5.4, P5.5, C8, B34, B35, B36, B37, B38 |
 | 2026-08-10 | [B39 — generation v5 header cutover: boot action, host checkers, fabric provenance](2026-08-10-b39-generation-v5-checker-cutover/index.md) | Defect | Verified | B39 |
+| 2026-08-10 | [B40 — child CSpaces sized and populated from the admitted plan](2026-08-10-b40-native-child-cspaces/index.md) | Change | Verified | B40 |

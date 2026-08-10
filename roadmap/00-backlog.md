@@ -24,31 +24,6 @@ mechanism; and B50 deletes the dual-model residue. Each item is a clean cutover:
 its old ABI and fallback are removed in the same change that makes its exit
 condition observable.
 
-### B40 — child CSpaces are fixed four-slot shells rather than admitted authority
-
-**Status:** Open. **Class:** Unmasked architectural debt. **Depends on:** B39.
-
-**Problem:** Every child CNode has four slots — null, root service endpoint,
-own TCB, and fault endpoint — while actual authority remains in a root-side
-`CapabilityTable`. The kernel therefore cannot enforce the generation's
-declared service, notification, frame, and lifecycle authority directly.
-
-**Evidence:** `slime-root/src/task.rs` fixes `CHILD_CNODE_SIZE_BITS = 2` and
-defines only `CHILD_SLOT_SERVICE`, `CHILD_SLOT_TCB`, and `CHILD_SLOT_FAULT`;
-`slime-root/src/graph.rs` stores logical `(Resource, rights)` entries per task.
-
-**Fix:** Size each process CNode from B39's admitted plan and install the exact
-Endpoint, Notification, Frame, TCB/lifecycle, and service capabilities at the
-declared CPtrs. Runtime slot arguments become real CPtrs. Remove fixed child
-slot constants and stop inserting kernel-object-backed authority into the
-root-side logical table.
-
-**Exit condition:** A new `just sel4_capability_layout_check` compares every
-child's actual CSpace to the admitted v5 plan, including negative mutations for
-missing, extra, wrong-type, wrong-rights, and aliased capabilities. Existing
-boot and spawn paths use the same layout and pass `just test_sel4_root`, `just
-sel4_boot_layout_check`, `just sel4_spawn_check`, and `just sel4_boot_check`.
-
 ### B41 — console and debug traffic still enters the universal root dispatcher
 
 **Status:** Open. **Class:** Unmasked architectural debt. **Depends on:** B40.
@@ -322,6 +297,50 @@ fmt_check_all`, and `just lint_all` pass after the deletion.
 
 
 ## Resolved
+### B40 — child CSpaces are fixed four-slot shells rather than admitted authority
+
+**Status:** Resolved 2026-08-10.
+
+**Problem:** Every child CNode had four slots — null, root service endpoint,
+own TCB, and fault endpoint — with those slots compiled in, while actual
+authority stayed in a root-side `CapabilityTable`. The v5 plan already declared
+each process's CNode size, its own TCB and fault bindings, and its service
+binding, and the root ignored all of it, so the kernel could not enforce the
+declared layout.
+
+**Exit condition observed:** `just sel4_capability_layout_check` boots the
+twenty-instance graph and requires every child's CSpace to match the admitted
+plan, then rebuilds the root once per injected mutation and requires each to be
+refused — missing, extra, wrong type, wrong slot, aliased, and wrong rights. A
+mutation that still boots is the gate's failure condition. `just
+sel4_boot_check`, `just sel4_root_boot_check`, `just sel4_component_graph_check`,
+`just sel4_reclamation_check`, `just contracts_check`, `just generation_check`,
+and `just test_sel4_root` (140) all pass on the same layout.
+
+**What the kernel can be asked.** seL4 exposes no "read this slot", so each
+property needed its own probe and one could not be answered at the slot at all.
+Occupancy is a self-`Move`: `ensureEmptySlot` runs before the source lookup
+(`deps/seL4/src/object/cnode.c:93`), so occupied answers `DeleteFirst`, empty
+answers `FailedLookup`, and neither mutates. Type is a `tcb_suspend` on a
+root-side copy, refused with `InvalidCapability` for any non-TCB. Rights and
+identity are *not* observable — `maskCapRights` masks silently and never
+reports back — so both are checked at `InstallLedger::record`, the single
+chokepoint every child install passes through.
+
+**Service-slot pin.** Making the slot plan-driven newly created drift against
+`ROOT_SERVICE_SLOT`, the constant every component's runtime resolves the root
+endpoint from: a plan naming another slot would build clean, admit clean, pass
+an audit that validates against that same plan, and produce children whose
+first syscall invokes an empty slot. The root (`ChildSlots::validate`) and the
+host checker both pin it until the runtime reads the slot from the boot layout.
+
+**Not covered.** The P5.1 fixture paths construct tasks outside any plan and
+keep the four-slot shell, now passed explicitly as `ChildSlots::SHELL` rather
+than inherited.
+
+Closure record:
+[`devlog/2026-08-10-b40-native-child-cspaces/`](../devlog/2026-08-10-b40-native-child-cspaces/index.md).
+
 ### B39 — Generation v5 must describe the exact seL4 object and authority plan
 
 **Status:** Resolved 2026-08-10.
