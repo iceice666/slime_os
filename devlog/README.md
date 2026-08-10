@@ -232,3 +232,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-10 | [B41 prerequisite — the dango plane's declarations](2026-08-10-b41-dango-plane-declarations/index.md) | Defect | Verified | B41 |
 | 2026-08-10 | [Probe planes — the run token, the idle instance, and slot zero](2026-08-10-probe-plane-run-tokens/index.md) | Defect | Verified | B41 |
 | 2026-08-10 | [B41 — a console endpoint per process](2026-08-10-b41-console-endpoint/index.md) | Change | Monitoring | B41 |
+| 2026-08-10 | [B42 — the supervision handle becomes the lifecycle identity](2026-08-10-b42-lifecycle-identity/index.md) | Change | Verified | B42 |

@@ -199,33 +199,6 @@ sibling plane: excluding pre-created channels breaks `sel4_component_graph_check
 breaks it the other way (its `spawn-service` receives five). The rule is right;
 the dango fixture is what disagrees with it.
 
-### B42 — spawn and lifecycle control use ambient task IDs and the universal dispatcher
-
-**Status:** Open. **Class:** Unmasked architectural debt. **Depends on:** B40.
-
-**Problem:** Spawn, exit, health, supervision, and capability-copy operations
-are labels on the universal root endpoint. `spawn` returns both a numeric
-`task_id` and a supervision slot, and the spawn protocol sends that numeric ID
-across a process boundary to wait for termination.
-
-**Evidence:** `components/runtime/src/syscall.rs::Spawned` exposes `task_id`;
-`components/bins/src/bin/spawn-service.rs` stores and returns it;
-`slime-root/src/ipc.rs::Operation` carries `Spawn`, `Exit`, health,
-`SupervisionStatus`, `SupervisionDerive`, and `CapDrop`.
-
-**Fix:** Introduce a dedicated lifecycle service endpoint and capability-based
-spawn result. The result carries a lifecycle capability and declared initial
-service capabilities, never a public task ID. Waiting, killing, deriving, and
-health reporting operate through that lifecycle capability. Remove all migrated
-labels and the numeric-ID wire fields without a compatibility shim.
-
-**Exit condition:** No Zutai wire record or public runtime type exposes a bare
-task ID; spawn/wait/kill/health work using only capabilities; stale, attenuated,
-and transferred lifecycle handles are covered. `just sel4_spawn_check`, `just
-sel4_supervision_check`, `just sel4_reclamation_check`, and `just
-sel4_dango_check` pass, and a schema lint rejects reintroduction of task-ID-
-shaped lifecycle fields.
-
 ### B43 — block and durable-store clients still transact through root operation labels
 
 **Status:** Open. **Class:** Unmasked architectural debt. **Depends on:** B40.
@@ -447,6 +420,49 @@ fmt_check_all`, and `just lint_all` pass after the deletion.
 
 
 ## Resolved
+### B42 — spawn and lifecycle control use ambient task IDs and the universal dispatcher
+
+**Status:** Resolved 2026-08-10.
+
+**Problem:** `spawn` returned both a numeric `task_id` and a supervision slot,
+and the spawn protocol sent that number across a process boundary to wait for
+termination. A numeric task id is not authority — it is a name anyone can forge
+by counting — so lifecycle identity was ambient.
+
+**Exit condition observed:** no Zutai wire record or public runtime type
+exposes a bare task id. `task_id` is gone from `contracts/spawn/v1/schema.zt`,
+from the generated `WireSpawnReply`, and from `slime_rt::Spawned`, with no
+compatibility shim. The spawn service keys its live table on the supervision
+slot it handed back, and dango waits on the handle it holds, so spawn, wait,
+and health all work through the capability alone.
+
+Handle coverage: derived (attenuated), transferred, parked in transit across a
+sweep, retained across the crossing, and — added here — stale. Collecting an
+outcome consumes the record, and the same handle then refuses rather than
+answering twice from a stale table, which is the distinction a reusable number
+could not make.
+
+`just sel4_spawn_check`, `just sel4_supervision_check`, `just
+sel4_reclamation_check`, and `just sel4_dango_check` all pass.
+`scripts/check/check-lifecycle-identity.py`, wired into `just contracts_check`,
+refuses the reintroduction: it matches task-id-shaped *declarations* in
+schemas, generated protocol Rust, and the runtime's public surface. A comment
+explaining the ban is not a breach, and the root's own in-memory `TaskId` is
+out of scope because it crosses no boundary. Verified by reinstating `task_id`
+in the spawn schema and observing the refusal.
+
+**Gate repairs this required.** B34 renamed the markers reporting the
+executable/instance split and ten plane gates still asserted `components=N`,
+failing on the first marker so everything behind it went untested. Three
+assertions could never have matched — spliced prose in the marker text, a
+field the staged record never had, and a frozen `activated` count that only
+ever covered root-launched instances. Two markers had no emitter at all:
+`factory placed` now comes from the boot graph's binding install, and
+`channel copied` from the parent's channel-end copy. `spawned … channels=N`
+counted only generation-declared re-installs and now counts minted ends too.
+
+Closure record: [`devlog/2026-08-10-b42-lifecycle-identity/`](../devlog/2026-08-10-b42-lifecycle-identity/index.md).
+
 ### B40 — child CSpaces are fixed four-slot shells rather than admitted authority
 
 **Status:** Resolved 2026-08-10.
