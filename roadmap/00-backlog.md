@@ -164,8 +164,15 @@ layout.
 
 So B41 needs one of:
 
-- `add-payload` to carry `PT_TLS` through (upstream change), after which the
-  console thread should work as written;
+- `add-payload` to carry the TLS image description through (upstream change).
+  This is a payload *format* change, not a filter fix: `loadable_segments`
+  correctly copies only `PT_LOAD` — a `PT_TLS` segment is not separately
+  loadable — and the gap is that `PayloadInfo::user_image`
+  (`crates/sel4-kernel-loader/payload-types/src/lib.rs:56`) carries only the
+  region bounds, entry, and offset, with no field for the TLS image's vaddr,
+  filesz, memsz, and align. Adding one touches the payload types, the
+  `add-payload` writer, and the loader that hands the root task its bootinfo.
+  After that the console thread should work as written;
 - or the TLS image described some other way the root can read — the layout is
   four words, so a build-time constant is conceivable but duplicates what the
   ELF already says;
