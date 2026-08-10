@@ -72,14 +72,20 @@ contradicted the fabric planes' invariant that init keeps no route authority.
 
 **Remaining:**
 
-1. `just sel4_spawn_check` is red, and was red before this work (verified
-   against `3228eb6`). Its fixture declares `console` and `sysinfo` with empty
-   binding lists while `init.rs` hands them one and six runtime-minted grants,
-   and `preflight_spawn_grants` requires `count == child.binding_count()`.
-   Declaring those grants is rejected by the builder's own closure rule
-   (`bindings do not close over related grants`), so this needs a decision on
-   how runtime-minted channel capabilities are declared in v5 — not just
-   fixture content.
+1. **Blocking decision — how v5 declares a runtime-minted channel
+   capability.** `just sel4_spawn_check` is red, and was red before this work
+   (verified against `3228eb6`). Its fixture declares `console` and `sysinfo`
+   with empty binding lists while `init.rs` hands them one and six
+   runtime-minted grants, and `preflight_spawn_grants` requires
+   `count == child.binding_count()`. Two shapes were built and booted, then
+   reverted: a grant with `source = child; target = init` is rejected by the
+   builder's closure rule, because `expected_bindings` adds it to both
+   endpoints and so forces `init` to bind a channel it must not retain; a
+   self-targeted grant (`source = target = child`) builds and both children
+   spawn correctly, but makes a grant record mean "some capability of these
+   rights at this slot" rather than a concrete authority edge, weakening the
+   property B39 exists to establish. The choice binds B40–B50, so it needs
+   settling before the remaining fixtures are migrated.
 2. `just sel4_boot_check` needs `sel4-boot.zti` migrated to declare its
    fourteen fabric participants as instances, the shape every other fabric
    fixture already uses. It is the only fabric fixture still declaring `init`

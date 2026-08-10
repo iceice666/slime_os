@@ -156,3 +156,25 @@ rejected by the builder's own closure rule
 (`bindings do not close over related grants`), so closing it needs a decision
 about how runtime-minted channel capabilities are declared, not just fixture
 content. Recorded as B39 remaining work rather than fixed here.
+
+**2026-08-10 — probing the spawn plane's declaration model, and why it was not
+committed.** Two candidate shapes for declaring runtime-minted channel
+capabilities were built and booted, then reverted:
+
+| Shape | Builder | Boot |
+|---|---|---|
+| Grant `source = child; target = init` | Rejected: `bindings do not close over related grants` — `expected_bindings` adds the grant to *both* endpoints, so `init` must bind a channel it is meant not to retain | not reached |
+| Grant `source = target = child` (self-targeted) | Accepted | `console` and `sysinfo` both spawn and receive their declared slots; `console` then exits 1 |
+
+Widening `console-control` from `recv` to `send`+`recv` removed the exit-1 but
+the plane then reached `SLIME_GRAPH HEALTHY generation=1 required=3 live=3` and
+parked without producing `[init] spawn plane complete`, timing out at 120s.
+That is a *different* scenario outcome, not a fix: the gate's subject is the
+two children `init` spawns, and this graph left three live tasks parked rather
+than running the scenario to its terminal marker.
+
+Both were reverted. The self-targeted shape is mechanically viable but makes a
+grant record mean "this child receives some capability of these rights at this
+slot" instead of naming a concrete authority edge, which weakens the exact
+property B39 exists to establish. The choice binds B40–B50, so it is recorded
+as an open decision rather than settled by whichever spelling boots.
