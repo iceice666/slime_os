@@ -105,12 +105,13 @@ child runs first by construction — `spawn` starts the thread, then the service
 sends the launch context and only afterwards replies — so that ordering
 asserted a race; the child's marker is required for presence, not position.
 
-**Remaining:** the composed second launch (`with-env`/`with-cwd`/`with-stdin`)
-is refused by `spawn-service` in `valid_request` before it spawns. Both
-forwarded capabilities arrive (`received task=2 channel=1 bytes=64 caps=2`) and
-`received_caps` is zeroed per iteration, so the mismatch is in the request
-record's own fields rather than the capability transfer — a spawn-protocol
-defect, not a declaration one.
+**`just sel4_dango_check` passes (2026-08-10).** The composed second launch was
+refused because a received capability could land in slot 0: the receive path
+allocated with `free_slot_from(0)`, that slot number is reported to the
+receiver, and every protocol carrying one reads 0 as "no capability" — the
+spawn request's `received_caps` among them. The forwarded working directory or
+stdin endpoint was therefore invisible to the component it had just been given
+to. Every other runtime slot allocation in the root already searched from 1.
 
 **Superseded note — `init` holds two of the five
 capabilities `spawn-service` declares — its factories — while the RPC end and
