@@ -162,6 +162,16 @@ TLS *data* is inside a loaded segment but the header describing its size and
 alignment is gone, and nothing at runtime can reconstruct the reservation
 layout.
 
+**Both targets fail, for opposite reasons — this is the complete picture.**
+The `-minimal` target was retried after establishing that `single-threaded` is
+*not* enabled, so its token is a `SyncToken` two threads could share. It fails
+anyway, at the same `state/mod.rs:167`, and the reason is structural: there is
+one global IPC-buffer slot, and `recv_with_mrs` holds it *borrowed across the
+blocking syscall* (`syscalls.rs:151`). The main dispatcher is parked in
+`seL4_Recv` holding the borrow, so the console thread can never take it. On the
+thread-local target the slot would be per-thread and this would not arise — but
+there the thread has no TLS block, because the loader drops `PT_TLS`.
+
 So B41 needs one of:
 
 - `add-payload` to carry the TLS image description through (upstream change).
@@ -176,9 +186,14 @@ So B41 needs one of:
 - or the TLS image described some other way the root can read — the layout is
   four words, so a build-time constant is conceivable but duplicates what the
   ELF already says;
-- or `non-thread-local-state` *plus* an IPC-buffer slot per thread, which the
-  crate does not model: the feature selects the token guarding one global
-  slot, not the number of slots.
+- or an IPC-buffer slot per thread on a non-thread-local target, which the
+  crate does not model: the features select the *token* guarding one global
+  slot, not the number of slots, and a blocked receiver holds that slot's
+  borrow for as long as it waits.
+
+Both routes are changes to `deps/rust-sel4`, which is a pinned vendored
+dependency. That is the honest scope of B41's remainder, and of B43/B44/B45,
+which need the same second dispatcher.
 
 Everything on the slime side is done and was verified working: the console
 endpoint is provisioned per process and audited, the thread starts and is
