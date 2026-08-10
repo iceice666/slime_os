@@ -107,9 +107,10 @@ inherited failures from regressions. No gate regressed:
 with signatures identical to their baseline; and three improved —
 `sel4_stream_check` now provisions the whole fabric graph, `sel4_boot_check`
 spawns the fabric and all sixteen participants, and `sel4_spawn_check` spawns
-both children. The residual failures are fixture declaration and
-component-level conditions past every capability boundary, not decoder or
-dispatch defects.
+both children. `sel4_boot_layout_check` was red at baseline too and now fails
+later, at the `--recovery-plane` image rather than the `sel4-boot` layout
+block. The residual failures are fixture declaration and component-level
+conditions past every capability boundary, not decoder or dispatch defects.
 
 ### B40 — child CSpaces are fixed four-slot shells rather than admitted authority
 
