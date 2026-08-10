@@ -335,10 +335,27 @@ pub struct ResourceQuota<'a> {
 /// A static [`Grant`] names both endpoints and a concrete object; a channel
 /// endpoint minted after activation has no object to name, so the plan would
 /// otherwise have to either omit it — leaving the child's slot unaccounted —
-/// or degrade the grant to a rights assertion. This record keeps the edge
-/// authenticated: owner, holder, destination slot, and an exact rights
-/// ceiling are all fixed before activation, and only the object identity is
-/// deferred.
+/// or degrade the grant to a bare rights assertion.
+///
+/// What this record fixes before activation: the minter, the holder, the
+/// destination slot, and an exact rights ceiling. A spawn is refused unless
+/// the caller *is* the declared minter, the destination is the declared slot
+/// rather than one the caller chose, and the transferred rights fall within
+/// both the ceiling and what the caller itself holds.
+///
+/// What it deliberately does **not** fix is object identity, which does not
+/// exist until the minter creates it. A minter can therefore satisfy a minted
+/// declaration with a capability of the right kind and rights but a different
+/// underlying object — a supervision handle naming another of its children, or
+/// a directory capability at a broader scope than intended. The declaration
+/// bounds *who may hand what class of authority to whom, and where it lands*;
+/// it is not an object binding. A relationship that must pin identity needs a
+/// [`Grant`] against a concrete object instead.
+///
+/// `transferable` is folded into [`Self::rights`] as `RIGHT_TRANSFER` rather
+/// than carried as a separate field, so the two cannot disagree — unlike
+/// [`Grant`], whose separate flag must be checked for coherence against its
+/// rights word.
 #[derive(Debug, Clone, Copy)]
 pub struct MintedBinding<'a> {
     pub name: &'a str,

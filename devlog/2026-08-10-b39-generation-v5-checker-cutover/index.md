@@ -290,3 +290,43 @@ pre-session commit, by checking the tree out and building from it:
 
 No gate regressed. Four are unchanged and were already red before this work;
 three improved materially; three that passed still pass.
+
+**2026-08-10 — independent security review of the v5 work, and the three
+defects it found.** A read-only reviewer traced `preflight_spawn_grants` end to
+end against five questions. Two positive results and three defects:
+
+*Confirmed sound.* A spawning component cannot place a capability at an
+undeclared slot or exceed the declared ceiling. The destination comes only from
+the declaration, never the request; rights are bounded by both the ceiling and
+what the parent actually holds; declaration count, duplicate source slots, and
+re-passing the executable slot are each refused; and installing into an
+occupied slot fails. Authority also remains un-amplifiable after the
+`owner-missing` removal, bounded by `min(ceiling, parent's held rights)`.
+
+*Fixed.*
+
+| Defect | Fix |
+|---|---|
+| The decoder rejected duplicate holder slots only *within* the minted section, so a minted binding could collide with one of the holder's own grant-backed bindings, making the slot ranking ambiguous | Cross-section collision now rejected in both the decoder and its Python twin (`7c28812`) |
+| A zero-rights request passed both the ceiling and held-rights tests, installing an inert capability into the slot its declaration reserved | Refused as malformed (`703eac7`) |
+| The Python checker discarded the minted record's reserved tail via its struct pad, so a record the decoder rejects passed the independent checker | Tail asserted zero (`703eac7`) |
+
+*Accepted as a documented limit, not a defect.* `MintedBinding` does not bind
+object identity — it cannot, since the object does not exist until the minter
+creates it. A minter may satisfy a declaration with a capability of the right
+kind and rights but a different underlying object: a supervision handle naming
+another of its children, or a directory capability at a broader scope. Endpoint
+substitution is incidentally neutralized because `construct_child` re-installs
+declared channel ends from the `ChannelTable` rather than the passed grant, but
+the other kinds are not covered. The earlier claim in this entry that the
+record keeps the edge "authenticated" overstated it; the doc comment on
+`MintedBinding` now states precisely what is and is not fixed before
+activation, and says that a relationship needing identity pinned must use a
+`Grant` against a concrete object.
+
+The reviewer also read `transferable` as drift, since `Grant` carries a
+separate flag and `MintedBinding` folds it into the rights word. That is
+deliberate and is now documented on the record: one representation cannot
+disagree with itself, whereas `Grant`'s two must be cross-checked for
+coherence. The devlog sentence claiming `MintedBinding` "carries
+`transferable`" was loose — it carries the property, as a rights bit.
