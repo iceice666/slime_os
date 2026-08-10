@@ -2247,11 +2247,17 @@ def build_sel4_plan(
     quota_records = bytearray()
     object_index: dict[tuple[str, str], int] = {}
 
-    root_instances = [instance for instance in instances if instance["owner"] == "root"]
-    if not root_instances or len(root_instances) > MAX_PROCESSES:
+    # Every declared instance is a process in the plan. A child instance is
+    # constructed by its owner rather than by root, but its CSpace, VSpace,
+    # TCB, IPC buffer, fault endpoint, schedule, and quota are all fixed here:
+    # B39's whole point is that the generation proves the object plan before
+    # anything activates, and an owner-spawned process consumes kernel objects
+    # exactly as a root-autostart one does.
+    planned_instances = list(instances)
+    if not planned_instances or len(planned_instances) > MAX_PROCESSES:
         fail("seL4 process plan count exceeds bound")
 
-    for process, instance in enumerate(root_instances):
+    for process, instance in enumerate(planned_instances):
         name = instance["name"]
         quota = process
         cspace = len(object_index)
@@ -2330,11 +2336,11 @@ def build_sel4_plan(
             )
         )
 
-    process_for_instance = {instance["name"]: index for index, instance in enumerate(root_instances)}
+    process_for_instance = {
+        instance["name"]: index for index, instance in enumerate(planned_instances)
+    }
     for grant_index, (grant, rights) in enumerate(zip(grants, grant_rights, strict=True)):
-        source_process = process_for_instance.get(grant["source"])
-        if source_process is None:
-            continue
+        source_process = process_for_instance[grant["source"]]
         bound = next(
             (binding for binding in instances[instance_index[grant["source"]]]["bindings"] if binding["grant"] == grant["name"]),
             None,

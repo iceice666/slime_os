@@ -271,19 +271,18 @@ def check_generation(data: bytes, expected_identity: bytes | None = None) -> dic
     health_rows = [GENERATION_HEALTH.unpack_from(data, health_offset + index * GENERATION_HEALTH.size)[0] for index in range(health)]
     require(all(instance < instances for instance in health_rows) and health_rows == sorted(set(health_rows)), "BadHealthInstance")
     require(set(health_rows) == {index for index, row in enumerate(instance_rows) if row[9]}, "BadHealthPolicy")
-    autostart_instances = {index for index, row in enumerate(instance_rows) if row[2] == 0 and row[4] == 1}
-    require(processes == len(autostart_instances) == threads == schedules == fault_policies == resource_quotas, "BadPlanShape")
+    require(processes == instances == threads == schedules == fault_policies == resource_quotas, "BadPlanShape")
     process_rows = []
     seen_instances = set()
     for index in range(processes):
         name_offset, instance, cspace_object, vspace_object, main_thread, quota, flags = GENERATION_PROCESS.unpack_from(data, process_offset + index * GENERATION_PROCESS.size)
         name = read_string(data, strings_offset, strings_len, name_offset)
-        require(instance < instances and instance in autostart_instances and instance not in seen_instances, "BadProcess")
+        require(instance < instances and instance not in seen_instances, "BadProcess")
         require(cspace_object < kernel_objects and vspace_object < kernel_objects and main_thread < threads and quota < resource_quotas and flags == 0, "BadProcess")
         require(name == instance_rows[instance][0], "BadProcess")
         seen_instances.add(instance)
         process_rows.append({"instance": instance, "cspace_object": cspace_object, "vspace_object": vspace_object, "main_thread": main_thread, "quota": quota})
-    require(seen_instances == autostart_instances, "BadPlanShape")
+    require(len(seen_instances) == instances, "BadPlanShape")
     kernel_object_rows = []
     for index in range(kernel_objects):
         name_offset, kind, owner_process, size_bits, count, source_object, flags = GENERATION_KERNEL_OBJECT.unpack_from(data, kernel_object_offset + index * GENERATION_KERNEL_OBJECT.size)

@@ -4525,16 +4525,20 @@ fn preflight_spawn_grants(
         let declared = generation
             .grant(binding.grant)
             .map_err(|_| IpcError::BadCapability)?;
-        let owner_bound = generation
-            .instance(caller_instance)
-            .map_err(|_| IpcError::BadCapability)?;
-        if !(0..owner_bound.binding_count()).any(|owner_binding| {
-            generation
-                .binding(owner_bound, owner_binding)
-                .is_ok_and(|candidate| candidate.grant == binding.grant)
-        }) {
+        // The grant must be one the *child* legitimately carries. Its binding
+        // list is generation-declared and already validated against
+        // `grant_applies_to_instance`, and `child_instance` was resolved as an
+        // instance this caller owns, so provenance is established without
+        // requiring the spawner to hold the grant too. Requiring that would
+        // force init to retain route authority over every channel it mints and
+        // hands on, which is exactly the property the fabric planes deny it.
+        //
+        // Authority still cannot be amplified: the rights ceiling below is the
+        // declared grant's, and the parent must actually hold a capability at
+        // the requested slot that allows those rights.
+        if !generation.grant_applies_to_instance(declared, child_instance) {
             sel4::debug_println!(
-                "SLIME_GRAPH spawn preflight binding={} index={index} reason=owner-missing",
+                "SLIME_GRAPH spawn preflight binding={} index={index} reason=child-provenance",
                 declared.name,
             );
             return Err(IpcError::BadCapability);

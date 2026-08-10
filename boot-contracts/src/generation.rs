@@ -1324,7 +1324,7 @@ impl<'a> Generation<'a> {
                 return Err(DecodeError::BadIndex);
             }
             let instance = self.instance(process.instance)?;
-            if !instance.is_root_autostart() || process.name != instance.name {
+            if process.name != instance.name {
                 return Err(DecodeError::BadIndex);
             }
             seen_instances[process.instance] = true;
@@ -1334,10 +1334,12 @@ impl<'a> Generation<'a> {
                 return Err(DecodeError::BadKernel);
             }
         }
-        for (index, seen) in seen_instances.iter().enumerate().take(self.instance_count) {
-            if self.instance(index)?.is_root_autostart() != *seen {
-                return Err(DecodeError::BadIndex);
-            }
+        if seen_instances
+            .iter()
+            .take(self.instance_count)
+            .any(|seen| !*seen)
+        {
+            return Err(DecodeError::BadIndex);
         }
         for index in 0..self.thread_count {
             let thread = self.thread(index)?;

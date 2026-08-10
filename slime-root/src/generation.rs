@@ -313,16 +313,16 @@ fn fabric_graph_participants_are_declared(
     generation: &Generation<'_>,
     graph: &FabricGraph<'_>,
 ) -> Result<(), GenerationError> {
-    let declared = generation.executable_count();
-    if declared > MAX_ADMITTED_EXECUTABLES {
-        return Err(GenerationError::TooManyExecutables {
+    let declared = generation.instance_count();
+    if declared > MAX_ADMITTED_INSTANCES {
+        return Err(GenerationError::TooManyInstances {
             declared,
-            limit: MAX_ADMITTED_EXECUTABLES,
+            limit: MAX_ADMITTED_INSTANCES,
         });
     }
-    let mut names = [None; MAX_ADMITTED_EXECUTABLES];
+    let mut names = [None; MAX_ADMITTED_INSTANCES];
     for (slot, name) in names.iter_mut().enumerate().take(declared) {
-        *name = Some(generation.executable(slot)?.name);
+        *name = Some(generation.instance(slot)?.name);
     }
     participants_are_declared(&names[..declared], graph)
 }
