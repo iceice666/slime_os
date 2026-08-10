@@ -374,7 +374,6 @@ pub struct Generation<'a> {
     pub parent: Option<[u8; 32]>,
     pub target: &'a str,
     pub boot_action: BootAction,
-    pub kernel_object: usize,
     pub bootstrap_instance: usize,
     pub boot_attempts: u32,
     object_count: usize,
@@ -442,6 +441,10 @@ impl<'a> Generation<'a> {
         if u64_at(bytes, 16)? != 0 {
             return Err(DecodeError::UnknownRequiredFlags);
         }
+        // The reserved word beside `minted_binding_count`, and the header's
+        // trailing pad. Both must be zero, so a future field cannot be smuggled
+        // past a decoder that predates it.
+        reserved_zero(bytes, 188, 192)?;
         reserved_zero(bytes, 376, HEADER_LEN)?;
         let total_len = u64_at(bytes, 368)? as usize;
         if total_len != bytes.len() || total_len > MAX_GENERATION_BYTES {
@@ -461,7 +464,6 @@ impl<'a> Generation<'a> {
             parent: (parent_bytes != [0; 32]).then_some(parent_bytes),
             target: "",
             boot_action: BootAction::Product,
-            kernel_object: usize::MAX,
             bootstrap_instance: u32_at(bytes, 104)? as usize,
             boot_attempts: u32_at(bytes, 108)?,
             object_count: bounded_count(u32_at(bytes, 112)? as usize, 1, MAX_OBJECTS)?,
@@ -667,9 +669,6 @@ impl<'a> Generation<'a> {
 
     pub const fn is_v5(&self) -> bool {
         self.version == FORMAT_VERSION
-    }
-    pub const fn is_v4(&self) -> bool {
-        false
     }
     pub const fn object_count(&self) -> usize {
         self.object_count

@@ -2223,7 +2223,6 @@ CAP_RIGHT_ALL = (1 << 64) - 1
 def build_sel4_plan(
     manifest: dict,
     instances: list[dict],
-    executables: list[dict],
     grants: list[dict],
     grant_rights: list[int],
     instance_index: dict[str, int],
@@ -2645,7 +2644,6 @@ def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes |
     ) = build_sel4_plan(
         manifest,
         instances,
-        executables,
         grants,
         grant_rights,
         instance_index,

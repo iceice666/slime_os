@@ -195,6 +195,38 @@ mod boot_action {
     pub const SUPERVISION: u32 = 23;
     pub const TRANSFER: u32 = 24;
     pub const VISIBILITY: u32 = 25;
+
+    // The table above is a hand copy of the contract's numbering, and the two
+    // are an ABI: the root passes one of these words to this thread and this
+    // file matches on it. Renumbering a variant in the contract without
+    // updating this table would silently compose a different plane, so the
+    // agreement is asserted at compile time rather than left to review.
+    use boot_contracts::generation::BootAction;
+    const _: () = assert!(PRODUCT == BootAction::Product.id());
+    const _: () = assert!(BOOT == BootAction::Boot.id());
+    const _: () = assert!(CALL == BootAction::Call.id());
+    const _: () = assert!(CHANNEL == BootAction::Channel.id());
+    const _: () = assert!(CROSSING == BootAction::Crossing.id());
+    const _: () = assert!(DANGO == BootAction::Dango.id());
+    const _: () = assert!(DIRECTORY == BootAction::Directory.id());
+    const _: () = assert!(FILESYSTEM == BootAction::Filesystem.id());
+    const _: () = assert!(GENERATION == BootAction::Generation.id());
+    const _: () = assert!(INPUT == BootAction::Input.id());
+    const _: () = assert!(LOAN == BootAction::Loan.id());
+    const _: () = assert!(OPERATION == BootAction::Operation.id());
+    const _: () = assert!(POWERBOX == BootAction::Powerbox.id());
+    const _: () = assert!(QOS == BootAction::Qos.id());
+    const _: () = assert!(RECLAMATION == BootAction::Reclamation.id());
+    const _: () = assert!(RECOVERY == BootAction::Recovery.id());
+    const _: () = assert!(ROLLBACK == BootAction::Rollback.id());
+    const _: () = assert!(SAMPLE == BootAction::Sample.id());
+    const _: () = assert!(SPAWN == BootAction::Spawn.id());
+    const _: () = assert!(STORAGE == BootAction::Storage.id());
+    const _: () = assert!(STORE == BootAction::Store.id());
+    const _: () = assert!(STREAM == BootAction::Stream.id());
+    const _: () = assert!(SUPERVISION == BootAction::Supervision.id());
+    const _: () = assert!(TRANSFER == BootAction::Transfer.id());
+    const _: () = assert!(VISIBILITY == BootAction::Visibility.id());
 }
 
 /// Compose the graph the generation selected.
@@ -361,9 +393,17 @@ fn main(startup_arg: u32) {
         spawn_or_fail(1, &RECOVERY_CAPS);
         return;
     }
-    // The x86 oracle's QoS composition. Its seL4 counterpart is selected by the
-    // `QOS` boot action and composed by `compose_declared_graph`, so this flag
-    // now names exactly one plane.
+    // The authenticated action first. A seL4 plane's generation still sets the
+    // oracle flag its *components* read — that is what keeps `fabric-service`
+    // and the participants byte-identical between the two planes — so the x86
+    // branches below would otherwise claim the seL4 QoS, operation, and
+    // visibility boots and exit before their own composition ever ran. The
+    // exclusion those branches used to spell as a second build flag is now the
+    // boot action itself: anything other than `PRODUCT` composes here and does
+    // not return.
+    compose_declared_graph(startup_arg);
+    // Past this point the action is `PRODUCT`, so each oracle flag below names
+    // exactly one composition: the x86 plane that set it.
     if option_env!("SLIME_FABRIC_QOS_CHECK") == Some("1") {
         for slot in 1..FABRIC_SERVICE_SLOT {
             if slot != SHARED_BUFFER_FACTORY_SLOT {
@@ -379,25 +419,16 @@ fn main(startup_arg: u32) {
         slime_rt::debug_write(b"[init] fabric call complete\n");
         slime_rt::exit(0);
     }
-    // The x86 oracle's operation composition; the seL4 plane is the
-    // `OPERATION` boot action.
     if option_env!("SLIME_FABRIC_OPERATION_CHECK") == Some("1") {
         launch_fabric_operations();
         slime_rt::debug_write(b"[init] fabric operation complete\n");
         slime_rt::exit(0);
     }
-    // The x86 oracle's visibility composition; the seL4 plane is the
-    // `VISIBILITY` boot action.
     if option_env!("SLIME_FABRIC_VISIBILITY_CHECK") == Some("1") {
         launch_fabric_graph();
         slime_rt::debug_write(b"[init] fabric visibility complete\n");
         slime_rt::exit(0);
     }
-    // Every seL4 plane is selected by the authenticated boot action the root
-    // delivered at activation, not by a build flag. `PRODUCT` returns here and
-    // launches the declared graph below; every other action composes its plane
-    // and exits.
-    compose_declared_graph(startup_arg);
     slime_rt::debug_write(b"[init] launching component graph\n");
     if option_env!("SLIME_TRANSFER_RECEIVER") == Some("1") {
         if slime_rt::generation_receive(TRANSFER_RECEIVER_SLOT, TRANSFER_SOURCE_SLOT) == 0 {

@@ -4476,7 +4476,7 @@ fn nth_declared_capability<'a>(
         // sections — so the rank is total and exactly one candidate matches.
         let below = declarations_below(generation, child, child_instance, candidate.slot())?;
         if below == index {
-            consider(candidate, &mut selected);
+            claim_rank(candidate, &mut selected)?;
         }
         Ok(())
     };
@@ -4524,18 +4524,21 @@ fn declarations_below(
     Ok(below)
 }
 
-/// Keep `candidate` when it is a better fit for slot rank `index` than what is
-/// already selected: the smallest slot strictly greater than the `index`
-/// previous ranks. Implemented as a running selection because the root holds no
-/// allocator on this path and the count is bounded by the child's table.
-fn consider<'a>(candidate: DeclaredCapability<'a>, selected: &mut Option<DeclaredCapability<'a>>) {
-    let keep = match selected {
-        Some(existing) => candidate.slot() < existing.slot(),
-        None => true,
-    };
-    if keep {
-        *selected = Some(candidate);
+/// Record `candidate` as the declaration for its rank, refusing a second one.
+///
+/// Ranks are a bijection: the decoder rejects two declarations claiming one
+/// holder slot, in either section or across them, so exactly one candidate can
+/// have any given count of declarations below it. A collision here would mean
+/// the decoder admitted a generation it should not have, so it fails the spawn
+/// rather than silently picking a winner.
+fn claim_rank<'a>(
+    candidate: DeclaredCapability<'a>,
+    selected: &mut Option<DeclaredCapability<'a>>,
+) -> Result<(), IpcError> {
+    if selected.replace(candidate).is_some() {
+        return Err(IpcError::BadCapability);
     }
+    Ok(())
 }
 
 /// Decode and validate a spawn against its declared child instance.
