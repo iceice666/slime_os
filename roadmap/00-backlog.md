@@ -63,10 +63,14 @@ CSpace audit caught immediately. Child CNodes are six bits.
 The root has one blocking dispatcher (`ipc::recv_request(endpoint)` at
 `slime-root/src/main.rs`), so routing `debug_write` there was tried and hangs
 every component on its first line — reverted. Closing this needs a second
-dispatcher, which is not a small change: two `SAFETY` comments in `main.rs`
-and eleven statics are justified by "the root task is single-threaded", and
-each would have to be re-audited. A bound notification does not substitute:
-it signals, and the console still needs its own receive to carry the payload.
+dispatcher, and the obstacle is concrete rather than a blanket "single-threaded"
+caveat: the `DebugWrite` handler reads the caller's transfer window and the
+root's single `ScratchPage`, both shared with the main dispatcher. A console
+thread therefore needs its own scratch mapping and a rule for concurrent window
+reads before it can serve anything. Two `SAFETY` comments and eleven statics in
+`main.rs` rest on the current assumption and would need re-auditing alongside.
+A bound notification does not substitute: it signals, and the console still
+needs its own receive to carry the payload.
 
 Until then `DebugWrite` and `InputRead` remain on the universal ABI, so the
 exit condition is unmet — the endpoint exists and is enforced, but nothing
