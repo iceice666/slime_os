@@ -35,8 +35,8 @@ const SLOT_SERVICE: sel4::CPtrBits = 1;
 /// self-managed. `slime-root/src/task.rs::CHILD_SLOT_TCB`.
 const SLOT_TCB: sel4::CPtrBits = 2;
 
-/// `slime-root/src/ipc.rs::Operation::DebugWrite`.
-const OP_DEBUG_WRITE: sel4::Word = 5;
+/// `slime-root/src/ipc.rs::Operation::FixtureDirective`.
+const OP_FIXTURE_DIRECTIVE: sel4::Word = 5;
 /// `slime-root/src/ipc.rs::Operation::Exit`.
 const OP_EXIT: sel4::Word = 3;
 /// `slime-root/src/ipc.rs::Operation::SharedBufferMap`, reused as this
@@ -95,10 +95,10 @@ const REPORT_RO_WRITE_REFUSED: sel4::Word = 1 << 1;
 pub(crate) fn main() -> ! {
     let service = sel4::cap::Endpoint::from_bits(SLOT_SERVICE);
 
-    sel4::debug_println!("SLIME_CHILD request op={OP_DEBUG_WRITE} tag={REQUEST_TAG:#x}");
+    sel4::debug_println!("SLIME_CHILD request op={OP_FIXTURE_DIRECTIVE} tag={REQUEST_TAG:#x}");
     let reply = service.call_with_mrs(
         sel4::MessageInfoBuilder::default()
-            .label(OP_DEBUG_WRITE)
+            .label(OP_FIXTURE_DIRECTIVE)
             .length(2)
             .build(),
         [REQUEST_TAG, 0],

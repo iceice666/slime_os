@@ -107,18 +107,17 @@ pub unsafe fn serve(context: &ConsoleContext) -> ! {
     // referenced by nothing else, so the reborrow each iteration is unique.
     let buffer = unsafe { &mut *context.buffer };
     loop {
-        let reception = ipc::recv_request_with(context.endpoint, buffer);
-        let Some((id, _)) = TaskId::from_badge(reception.badge) else {
+        let Ok(message) = ipc::recv_console(context.endpoint, buffer) else {
             continue;
         };
-        let Ok(request) = reception.request else {
+        let Some((id, _)) = TaskId::from_badge(message.badge) else {
             continue;
         };
         // SAFETY: the caller's contract. The table is only read.
         let windows = unsafe { &*context.windows };
         write_payload(
             windows.bound(id),
-            &request.mrs[..request.len],
+            &message.mrs[..message.len],
             &context.scratch,
             buffer,
         );
@@ -135,11 +134,14 @@ fn write_payload(
     if words.len() < 2 {
         return;
     }
-    let Ok(frame) =
-        transfer_window::read_staged_array_with(window, words[1], words, scratch, buffer)
-    else {
-        return;
-    };
+    let frame =
+        match transfer_window::read_staged_array_with(window, words[1], words, scratch, buffer) {
+            Ok(frame) => frame,
+            Err(error) => {
+                sel4::debug_println!("SLIME_ROOT console staging refused: {error:?}");
+                return;
+            }
+        };
     let bytes = frame.bytes();
     // One `debug_print!` for the whole payload, not `debug_println!`: the
     // component's bytes carry their own newline, and adding one would reflow

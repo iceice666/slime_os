@@ -2187,8 +2187,8 @@ fn serve_block_transact(
     // Written as one region rather than a `StagedFrame`, whose bound is
     // `MAX_STAGED_BYTES` — the *message* bound, 64 bytes. A sector is not a
     // message: it crosses no channel and is bounded by the window, exactly as
-    // `DebugWrite`'s line is. `write_staged_region` is the same write path
-    // without the message-shaped ceiling.
+    // a console line is on its own endpoint. `write_staged_region` is the same
+    // write path without the message-shaped ceiling.
     let mut reply = [0u8; REPLY_LEN + virtio_blk::SECTOR_BYTES];
     reply[OFF_REPLY_MAGIC..OFF_REPLY_MAGIC + 4].copy_from_slice(&BLOCK_MAGIC.to_le_bytes());
     reply[OFF_REPLY_VERSION..OFF_REPLY_VERSION + 4].copy_from_slice(&FORMAT_VERSION.to_le_bytes());
@@ -3365,40 +3365,6 @@ fn serve_instance_graph(
             // from the transcript. `MAX_STAGED_ARRAY_BYTES` (1 KiB) is the
             // same bound the wide spawn-grant array already crosses this
             // window with.
-            Operation::DebugWrite => {
-                let response = match transfer_window::read_staged_array(
-                    windows.bound(id),
-                    words[1],
-                    &words,
-                    scratch,
-                ) {
-                    Ok(frame) => {
-                        // One `debug_print!` for the whole payload. Not
-                        // `debug_println!`: the component's bytes carry their
-                        // own newline, and adding one would reflow every
-                        // marker the x86 corpus records.
-                        let bytes = frame.bytes();
-                        if let Ok(text) = core::str::from_utf8(bytes) {
-                            sel4::debug_print!("{text}");
-                        } else {
-                            // Not text. Printed as an explicit refusal rather
-                            // than lossily, so a component cannot inject
-                            // arbitrary bytes into a transcript gates parse.
-                            sel4::debug_println!(
-                                "SLIME_GRAPH debug write refused task={} bytes={} reason=not-utf8",
-                                id.0,
-                                bytes.len(),
-                            );
-                        }
-                        Response::success(bytes.len() as i64, 0)
-                    }
-                    // `read_staged_array` refuses a descriptor naming any
-                    // capability, which is the same rule the narrow path
-                    // enforced explicitly: a diagnostic line carries none.
-                    Err(error) => Response::error(error),
-                };
-                ipc::reply(response);
-            }
             // C8.3's narrow-on-transfer move (P5.5.1). The one mechanism a
             // userspace fabric needs that neither `send` nor `spawn` provides:
             // `send` moves only a loan, whose handle names its own recipient,
@@ -6944,7 +6910,10 @@ fn serve_request(
     match operation {
         // The fixture's request. Answering it with the task's directive is what
         // proves a grant-derived endpoint carries real service authority.
-        Operation::DebugWrite => {
+        // The clean-exit fixture's shared-buffer report. The root records what
+        // the child claims and answers immediately; adjudication happens once,
+        // after the fixture has finished, in `report_buffer_phase`.
+        Operation::FixtureDirective => {
             if info.length() < 2 || words[0] != REQUEST_TAG {
                 sel4::debug_println!(
                     "SLIME_ROOT request malformed task={} len={} tag={:#x}",
@@ -6972,8 +6941,6 @@ fn serve_request(
             ipc::reply(Response::success(0, role.directive()));
         }
         // The clean-exit fixture's shared-buffer report. The root records what
-        // the child claims and answers immediately; adjudication happens once,
-        // after the fixture has finished, in `report_buffer_phase`.
         Operation::SharedBufferMap => {
             if info.length() < 3 || words[0] != REQUEST_TAG {
                 sel4::debug_println!(

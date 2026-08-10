@@ -93,9 +93,13 @@ pub enum Operation {
     Yield = 0,
     Send = 1,
     Recv = 2,
+    /// The P5.1 fixture's directive request. Was `DebugWrite`'s label until
+    /// B41 moved console traffic to its own endpoint and dispatcher; the
+    /// fixture never wrote to a console, it used that call to collect the
+    /// root's directive, so it keeps the number under an honest name.
+    FixtureDirective = 5,
     Exit = 3,
     Spawn = 4,
-    DebugWrite = 5,
     BlockTransact = 6,
     StoreTransact = 7,
     HealthConfirm = 8,
@@ -148,7 +152,7 @@ impl Operation {
             2 => Self::Recv,
             3 => Self::Exit,
             4 => Self::Spawn,
-            5 => Self::DebugWrite,
+            5 => Self::FixtureDirective,
             6 => Self::BlockTransact,
             7 => Self::StoreTransact,
             8 => Self::HealthConfirm,
@@ -196,8 +200,8 @@ impl Operation {
             Self::Send
             | Self::Recv
             | Self::Exit
+            | Self::FixtureDirective
             | Self::Spawn
-            | Self::DebugWrite
             | Self::HealthConfirm
             | Self::Unhealthy
             | Self::EndpointCreate
@@ -310,6 +314,44 @@ pub struct Reception {
 /// operation and answers it with [`reply`]. Raw seL4 extra-cap transfer is not
 /// part of this fast ABI; logical capability transfer goes through the bounded
 /// preflight/commit path below.
+/// One console message: the payload descriptor and the fast registers behind
+/// it, with no operation label.
+///
+/// The console endpoint carries exactly one kind of message, so a label would
+/// be a constant. It deliberately does not reuse [`Operation`]: that table is
+/// the *universal dispatcher's* ABI, and B41's point is that console traffic
+/// is no longer part of it.
+pub struct ConsoleMessage {
+    pub badge: sel4::Badge,
+    pub mrs: [sel4::Word; FAST_MESSAGE_REGISTERS],
+    pub len: usize,
+}
+
+/// Receive one console message through an explicit IPC buffer.
+///
+/// The `sel4` crate keeps one IPC-buffer slot per address space, and a receive
+/// holds it borrowed for as long as it blocks — so the console dispatcher,
+/// being a second root thread, names its buffer here rather than using the
+/// ambient slot (B41).
+pub fn recv_console(
+    endpoint: sel4::cap::Endpoint,
+    buffer: &mut sel4::IpcBuffer,
+) -> Result<ConsoleMessage, IpcError> {
+    let reception = endpoint.with(buffer).recv_with_mrs(());
+    let len = reception.info.length();
+    if len > FAST_MESSAGE_REGISTERS {
+        return Err(IpcError::InvalidLength);
+    }
+    if reception.info.extra_caps() != 0 || reception.info.caps_unwrapped() != 0 {
+        return Err(IpcError::UnsupportedCapabilityTransfer);
+    }
+    Ok(ConsoleMessage {
+        badge: reception.badge,
+        mrs: reception.msg,
+        len,
+    })
+}
+
 /// Receive through an explicit IPC buffer rather than the ambient one.
 ///
 /// The `sel4` crate keeps one IPC-buffer slot per address space on this

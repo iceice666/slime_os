@@ -555,12 +555,14 @@ mod tests {
         let mut table = SupervisionTable::<2>::new();
         table.register(10, 100).unwrap();
         table.register(11, 101).unwrap();
-        let ipc = table.ipc_completed(10, Operation::DebugWrite, 0).unwrap();
+        let ipc = table
+            .ipc_completed(10, Operation::FixtureDirective, 0)
+            .unwrap();
         let fault = table.fault(11, FAULT).unwrap().event;
         assert_eq!(
             ipc.kind,
             LifecycleEventKind::IpcCompleted {
-                operation: Operation::DebugWrite,
+                operation: Operation::FixtureDirective,
                 result: 0,
             }
         );
