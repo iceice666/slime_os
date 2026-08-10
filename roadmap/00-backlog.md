@@ -70,26 +70,30 @@ contradicted the fabric planes' invariant that init keeps no route authority.
 `just sel4_component_graph_check`, `just test_host`, `just test_sel4_root`, and
 `just lint_all` pass. See [`devlog/2026-08-10-b39-generation-v5-checker-cutover/`](../devlog/2026-08-10-b39-generation-v5-checker-cutover/index.md).
 
+**Declaration model (settled 2026-08-10):** a runtime-minted channel
+capability is declared by a v5 `MintedBinding` record — owner, holder,
+destination slot, exact rights ceiling, and `transferable` — so
+`CapabilityGrant` keeps meaning a concrete authority edge and only the object
+identity is deferred to its minter. The decoder rejects a binding whose holder
+its owner does not own, whose rights are empty, carry `exec`, or leave the
+vocabulary, and any two claiming the same holder slot. Spawn preflight
+resolves each request against exactly one declaration, and the destination is
+always the declared slot.
+
 **Remaining:**
 
-1. **Blocking decision — how v5 declares a runtime-minted channel
-   capability.** `just sel4_spawn_check` is red, and was red before this work
-   (verified against `3228eb6`). Its fixture declares `console` and `sysinfo`
-   with empty binding lists while `init.rs` hands them one and six
-   runtime-minted grants, and `preflight_spawn_grants` requires
-   `count == child.binding_count()`. Two shapes were built and booted, then
-   reverted: a grant with `source = child; target = init` is rejected by the
-   builder's closure rule, because `expected_bindings` adds it to both
-   endpoints and so forces `init` to bind a channel it must not retain; a
-   self-targeted grant (`source = target = child`) builds and both children
-   spawn correctly, but makes a grant record mean "some capability of these
-   rights at this slot" rather than a concrete authority edge, weakening the
-   property B39 exists to establish. The choice binds B40–B50, so it needs
-   settling before the remaining fixtures are migrated.
-2. `just sel4_boot_check` needs `sel4-boot.zti` migrated to declare its
-   fourteen fabric participants as instances, the shape every other fabric
-   fixture already uses. It is the only fabric fixture still declaring `init`
-   alone.
+1. Migrate the remaining seL4 fixtures to declare what `init` actually hands
+   each child. `sel4-stream.zti` is the migrated template: real grants for
+   authority backed by concrete objects, `mintedBindings` for anything the
+   owner mints at runtime. Under it the stream plane now provisions the entire
+   graph (`[fabric] every declared stream edge provisioned`) and fails later in
+   a shared-buffer remap, past every declaration boundary. `sel4-spawn.zti` and
+   `sel4-boot.zti` are declared but not yet green; the other fabric fixtures
+   carry `mintedBindings = []` and need the same treatment.
+2. `just sel4_spawn_check` remains red. It was red before this work (verified
+   against `3228eb6`); with its minted bindings declared, both children now
+   spawn and receive their declared slots, and `sysinfo` fails afterwards on a
+   component-level condition rather than a capability refusal.
 3. `init.rs` still selects its composition through
    `option_env!("SLIME_GENERATION_NUMBER")` and the `SLIME_*_CHECK` flags, so
    `Generation::boot_action` is decoded but not yet delivered to the bootstrap

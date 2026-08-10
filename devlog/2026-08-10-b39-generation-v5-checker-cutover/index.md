@@ -178,3 +178,36 @@ grant record mean "this child receives some capability of these rights at this
 slot" instead of naming a concrete authority edge, which weakens the exact
 property B39 exists to establish. The choice binds B40–B50, so it is recorded
 as an open decision rather than settled by whichever spelling boots.
+
+**2026-08-10 — the declaration model was settled: a new `MintedBinding`
+record.** The open decision above was resolved in favour of a distinct v5
+record rather than either probed spelling, so `CapabilityGrant` keeps meaning
+a concrete authority edge between two declared endpoints.
+
+`MintedBinding` names the owner, the holder, the destination slot, an exact
+rights ceiling, and a `transferable` flag. Everything about the edge is fixed
+before activation; only the object identity is deferred to the owner that mints
+it. The decoder rejects a binding whose holder its owner does not own, whose
+rights are empty, carry `exec`, or fall outside the vocabulary, and any two
+claiming the same holder slot. Spawn preflight resolves each request against
+exactly one declaration — grant-backed bindings first, then minted ones in
+ascending destination-slot order — and the destination is always the declared
+slot, never a number the caller chose.
+
+Two further defects surfaced while wiring it, both from the plan-coverage
+commit and both fixed here:
+
+| Defect | Symptom | Fix |
+|---|---|---|
+| A grant was materialized only in its `source` instance | `authority-bearing grant console-shared-buffer-factory has no concrete binding`, failing every loan-plane build | Materialize in whichever instance declares a binding; a delegated authority such as `bufferCreate` is bound only by its target |
+| `transfer` was declared as a named right | `unknown right transfer` | `MintedBinding` carries `transferable`, matching `CapabilityGrant`; transfer is a property of the edge, not a right |
+
+The stream fixture is migrated as the template: the fabric's endpoint and
+shared-buffer factories become real grants against concrete objects, and the
+probe channels, per-publisher buffer factory, and supervision handles become
+minted bindings. Under it the stream plane advances from refusing the very
+first spawn to provisioning the entire graph — `[fabric] every declared stream
+edge provisioned`, with all four authority denials observed — before failing
+later in a shared-buffer remap (`ARMPageMap: Attempting to remap a frame that
+does not belong to the passed address space`). That residual fault is past
+every capability-declaration boundary this entry concerns.
