@@ -53,6 +53,14 @@ use super::{
 /// module addresses neither.
 pub const ROOT_SERVICE_SLOT: sel4::CPtrBits = 1;
 
+/// The child CSpace slot holding the badged console/debug endpoint (B41).
+///
+/// A separate object from the root service endpoint with its own dispatcher
+/// thread, so console traffic neither queues behind lifecycle traffic nor
+/// shares its fault domain. Above every slot a generation grant can name:
+/// grant slots are the component's own numbering and start at 0.
+pub const CONSOLE_SERVICE_SLOT: sel4::CPtrBits = 32;
+
 /// Bytes of a spawn grant record in the transfer window: slot word, then rights
 /// word.
 const GRANT_RECORD_BYTES: usize = 16;
@@ -70,6 +78,16 @@ const TRANSACT_BYTES: usize = 64;
 /// no capability is cached in component-writable state.
 fn root_service() -> cap::Endpoint {
     cap::Endpoint::from_bits(ROOT_SERVICE_SLOT)
+}
+
+/// The console/debug endpoint. Reconstructed per call from a constant slot, so
+/// no capability is cached in component-writable state.
+///
+/// A component granted no console capability holds an empty slot here and its
+/// invocation faults, rather than falling back to the root dispatcher — which
+/// is what makes the denial a capability property (B41).
+fn console_service() -> cap::Endpoint {
+    cap::Endpoint::from_bits(CONSOLE_SERVICE_SLOT)
 }
 
 /// The bound transfer window. `WINDOW_LEN == 0` means none is bound, which is
@@ -665,7 +683,18 @@ pub fn debug_write(bytes: &[u8]) -> i64 {
         Err(error) => return error,
     };
     let (operands, used) = payload_operands(0, transfer, bytes);
-    result_of(super::SYS_DEBUG_WRITE, &operands[..used])
+    // One-way, on the console endpoint rather than the root's: the console has
+    // nothing to say back, and a reply would put a round trip on every debug
+    // line. The dispatcher thread on the other side is what makes a blocking
+    // send safe here.
+    let info = MessageInfoBuilder::default()
+        .label(super::SYS_DEBUG_WRITE as Word)
+        .length(used)
+        .build();
+    let mut mrs = [0 as Word; wire::FAST_REGISTERS];
+    mrs[..used].copy_from_slice(&operands[..used]);
+    console_service().send_with_mrs(info, mrs);
+    bytes.len() as i64
 }
 #[cfg(test)]
 mod tests {

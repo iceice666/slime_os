@@ -31,7 +31,7 @@
 #[cfg(slime_boot_selector)]
 use slime_root::boot_selector;
 use slime_root::{
-    buffer_adapter, channel, child_vspace, device, event, fault, generation, graph, ipc,
+    buffer_adapter, channel, child_vspace, console, device, event, fault, generation, graph, ipc,
     object_allocator, parked, platform_timer, shared_buffer, supervision, task, timer,
     transfer_window, transit, virtio_blk,
 };
@@ -186,6 +186,14 @@ struct FreePage([u8; GRANULE_SIZE]);
 
 /// A root-image page whose virtual address becomes the loader's scratch window.
 static mut FREE_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
+
+/// A root-image page whose virtual address becomes the console dispatcher's
+/// scratch window (B41).
+///
+/// Separate from the loader's: the console thread maps a caller's window into
+/// its own address while the main dispatcher may be mapping another into
+/// [`FREE_PAGE`], and one shared virtual address cannot hold both.
+static mut CONSOLE_PAGE: FreePage = FreePage([0; GRANULE_SIZE]);
 
 /// Two root-image pages reclaimed as temporary mappings for the foundation
 /// non-alias probe. Separate from the loader scratch page: the proof needs both
@@ -655,6 +663,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         launch_instance_graph(
             &generation,
             &admission,
+            bootinfo,
             allocator,
             &scratch,
             service_endpoint,
@@ -2211,9 +2220,112 @@ fn serve_block_transact(
 /// Stage and activate exactly the root-owned autostart instances in a v4
 /// generation. Executables are a catalogue: a loadable catalogue entry is not
 /// itself a request to construct a task.
+/// The console dispatcher's stack and IPC buffer, both root-image pages so
+/// they are mapped before the thread runs (B41).
+static mut CONSOLE_STACK: console::ConsoleStack = console::ConsoleStack::new();
+static mut CONSOLE_IPC_BUFFER: FreePage = FreePage([0; GRANULE_SIZE]);
+
+/// Everything the console loop reads, in a `static` so the thread can hold a
+/// pointer to it for as long as it runs.
+static mut CONSOLE_CONTEXT: Option<console::ConsoleContext> = None;
+
+/// Start the console dispatcher (B41).
+///
+/// A second root thread, sharing the root's CSpace and VSpace and running at
+/// the root's own priority, so it round-robins with the service loop rather
+/// than starving behind it or preempting it.
+///
+/// The thread names its own IPC buffer on every invocation rather than using
+/// the crate's ambient slot, so it needs no thread-local state: there is one
+/// such slot per address space, and a blocked receive holds it borrowed for as
+/// long as it waits.
+fn start_console_dispatcher(
+    bootinfo: &sel4::BootInfo,
+    allocator: &mut ObjectAllocator,
+    endpoint: sel4::cap::Endpoint,
+    windows: &WindowTable<MAX_TASKS>,
+) {
+    let scratch_addr = ptr::addr_of!(CONSOLE_PAGE) as usize;
+    let scratch = match ScratchPage::claim(bootinfo, scratch_addr) {
+        Ok(scratch) => scratch,
+        Err(error) => fatal!("console scratch unavailable: {error:?}"),
+    };
+    let tcb = match allocator.allocate_fixed::<sel4::cap_type::Tcb>() {
+        Ok(slot) => slot.cap(),
+        Err(error) => fatal!("console TCB unavailable: {error:?}"),
+    };
+    let ipc_addr = ptr::addr_of!(CONSOLE_IPC_BUFFER) as usize;
+    let ipc_frame = child_vspace::image_frame(bootinfo, ipc_addr);
+
+    // SAFETY: single-threaded until the resume below, and this is the only
+    // reference taken to either static.
+    let context = unsafe {
+        let slot = &mut *ptr::addr_of_mut!(CONSOLE_CONTEXT);
+        *slot = Some(console::ConsoleContext {
+            endpoint,
+            scratch,
+            windows: windows as *const _,
+            buffer: ptr::addr_of_mut!(CONSOLE_IPC_BUFFER) as *mut sel4::IpcBuffer,
+        });
+        match slot.as_ref() {
+            Some(context) => ptr::addr_of!(*context),
+            None => fatal!("console context unset"),
+        }
+    };
+
+    let configured = tcb.tcb_configure(
+        // No fault handler: a fault in this thread is a root defect, and a
+        // null handler makes the kernel report it rather than deliver it
+        // somewhere that would swallow it.
+        sel4::CPtr::from_bits(0),
+        sel4::init_thread::slot::CNODE.cap(),
+        // The root CNode's own guard. A zero guard faults every lookup: a CPtr
+        // resolves to `WORD_SIZE` bits and the CNode holds fewer.
+        child_vspace::root_cspace_guard(bootinfo),
+        sel4::init_thread::slot::VSPACE.cap(),
+        ipc_addr as sel4::Word,
+        ipc_frame,
+    );
+    if let Err(error) = configured {
+        fatal!("console thread configure failed: {error:?}")
+    }
+    // The root's own priority: this thread answers on equal terms with the
+    // service loop rather than starving behind it.
+    let scheduled = tcb.tcb_set_sched_params(sel4::init_thread::slot::TCB.cap(), 255, 255);
+    if let Err(error) = scheduled {
+        fatal!("console thread priority failed: {error:?}")
+    }
+
+    let stack_top = ptr::addr_of!(CONSOLE_STACK) as usize + size_of::<console::ConsoleStack>();
+    let mut registers = sel4::UserContext::default();
+    // Through a fn pointer rather than casting the item directly, which
+    // clippy refuses: the address is the same, the intent is explicit.
+    let entry: extern "C" fn(usize) -> ! = console_entry;
+    *registers.pc_mut() = entry as usize as sel4::Word;
+    // AArch64 requires a 16-byte aligned stack pointer.
+    *registers.sp_mut() = (stack_top & !0xf) as sel4::Word;
+    *registers.c_param_mut(0) = context as usize as sel4::Word;
+    let started = tcb.tcb_write_all_registers(true, &mut registers);
+    if let Err(error) = started {
+        fatal!("console thread start failed: {error:?}")
+    }
+    sel4::debug_println!("SLIME_ROOT console dispatcher started");
+}
+
+/// The console thread's entry point.
+extern "C" fn console_entry(context: usize) -> ! {
+    // No `set_ipc_buffer`: this thread names its buffer on every invocation
+    // instead, so it touches none of the crate's ambient state.
+    //
+    // SAFETY: `context` is the `CONSOLE_CONTEXT` pointer written by
+    // `start_console_dispatcher`, which lives in a `static`.
+    unsafe { console::serve(&*(context as *const console::ConsoleContext)) }
+}
+
 fn launch_instance_graph(
     generation: &Generation<'_>,
     admission: &Admission,
+    bootinfo: &sel4::BootInfo,
     allocator: &mut ObjectAllocator,
     scratch: &ScratchPage,
     service_endpoint: sel4::cap::Endpoint,
@@ -2607,6 +2719,11 @@ fn launch_instance_graph(
         launched_instances.len(),
         budget.as_ref().map_or(0, SharedBufferBudget::holder_count),
     );
+    // B41: the console dispatcher starts before the service loop, so console
+    // traffic has a receiver for as long as any child can send. `windows`
+    // outlives it — `serve_instance_graph` does not return.
+    start_console_dispatcher(bootinfo, allocator, console_endpoint, &windows);
+
     serve_instance_graph(
         generation,
         &mut launched_instances,

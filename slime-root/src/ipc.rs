@@ -310,6 +310,22 @@ pub struct Reception {
 /// operation and answers it with [`reply`]. Raw seL4 extra-cap transfer is not
 /// part of this fast ABI; logical capability transfer goes through the bounded
 /// preflight/commit path below.
+/// Receive through an explicit IPC buffer rather than the ambient one.
+///
+/// The `sel4` crate keeps one IPC-buffer slot per address space on this
+/// target, and a receive holds it borrowed for as long as it blocks — so a
+/// second root thread using the ambient slot would find it permanently taken
+/// by whichever thread is parked in `seL4_Recv`. Naming the buffer on the
+/// capability sidesteps the slot entirely (B41).
+pub fn recv_request_with(endpoint: sel4::cap::Endpoint, buffer: &mut sel4::IpcBuffer) -> Reception {
+    let reception = endpoint.with(buffer).recv_with_mrs(());
+    Reception {
+        info: reception.info.clone(),
+        badge: reception.badge,
+        request: decode_request(&reception),
+    }
+}
+
 pub fn recv_request(endpoint: sel4::cap::Endpoint) -> Reception {
     let reception = endpoint.recv_with_mrs(());
     Reception {

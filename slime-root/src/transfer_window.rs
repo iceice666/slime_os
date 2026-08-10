@@ -554,6 +554,63 @@ pub fn write_staged(
 /// The alias is unmapped again on both paths: a standing root mapping of a page
 /// a child can write is an alias the root does not need, and it would break the
 /// next caller that needs the scratch address.
+/// [`read_staged_array`] against an explicit IPC buffer.
+///
+/// The console dispatcher (B41) runs on a second root thread and names its own
+/// buffer rather than the crate's ambient slot, which a blocked receive holds
+/// borrowed. Mapping the caller's frame is a capability invocation, so it
+/// needs the same treatment.
+pub fn read_staged_array_with(
+    window: Option<Window>,
+    transfer: u64,
+    words: &[sel4::Word],
+    scratch: &crate::child_vspace::ScratchPage,
+    buffer: &mut sel4::IpcBuffer,
+) -> Result<StagedArray, IpcError> {
+    let len = descriptor_len(transfer);
+    if len > MAX_STAGED_ARRAY_BYTES || descriptor_caps(transfer) != 0 {
+        return Err(IpcError::InvalidLength);
+    }
+    let mut array = StagedArray {
+        bytes: [0; MAX_STAGED_ARRAY_BYTES],
+        len,
+    };
+    if descriptor_form(transfer) == FORM_INLINE {
+        // Inline payloads ride the fast registers the receive already copied
+        // out, so nothing is invoked and no buffer is needed.
+        let inline = read_staged(window, transfer, words, scratch)?;
+        array.bytes[..len].copy_from_slice(inline.bytes());
+        return Ok(array);
+    }
+    let window = window.ok_or(IpcError::InvalidLength)?;
+    if frame_len(len, 0) > window.len {
+        return Err(IpcError::InvalidLength);
+    }
+    let vspace = sel4::init_thread::slot::VSPACE.cap();
+    window
+        .alias
+        .with(&mut *buffer)
+        .frame_map(
+            vspace,
+            scratch.addr(),
+            sel4::CapRights::read_write(),
+            sel4::VmAttributes::DEFAULT | sel4::VmAttributes::EXECUTE_NEVER,
+        )
+        .map_err(|_| IpcError::TransferFailed)?;
+    // SAFETY: `window.frame` is mapped read-write at the scratch address for
+    // the span below and aliased by no live Rust reference; `len` was bounded
+    // by `window.len`, and the window is one granule.
+    unsafe {
+        core::ptr::copy_nonoverlapping(scratch.addr() as *mut u8, array.bytes.as_mut_ptr(), len);
+    }
+    window
+        .alias
+        .with(buffer)
+        .frame_unmap()
+        .map_err(|_| IpcError::TransferFailed)?;
+    Ok(array)
+}
+
 fn with_window_mapped(
     window: Window,
     scratch: &crate::child_vspace::ScratchPage,

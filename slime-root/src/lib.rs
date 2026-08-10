@@ -50,6 +50,7 @@ pub mod boot_selector;
 pub mod buffer_adapter;
 pub mod channel;
 pub mod child_vspace;
+pub mod console;
 pub mod device;
 pub mod event;
 pub mod fault;
