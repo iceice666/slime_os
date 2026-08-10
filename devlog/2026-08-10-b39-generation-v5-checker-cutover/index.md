@@ -251,3 +251,42 @@ peer`). Verified by stashing this work and re-running each gate at `99f6c45`:
 the failure strings match exactly. They follow from the plan-coverage commit's
 requirement that every declared instance be planned, and are fixture-migration
 work, not regressions from the boot-action cutover.
+
+**2026-08-10 — declarations are matched by destination slot, and the seL4
+planes' baseline was established at `3228eb6`.**
+
+Matching ran in two positional runs — grant-backed bindings, then minted ones —
+which forced a spawning component to order its grant array by declaration kind.
+No component knows about that distinction: `init` lists grants in the order its
+child's slots run. Both kinds are now ranked together by destination slot,
+which is a total order because the decoder rejects duplicate holder slots in
+either section.
+
+`sel4-boot.zti` is migrated on the stream template: nineteen instances for the
+components `init` and the fabric construct, thirty-seven minted bindings for
+the control channels and supervision handles `init` mints at runtime, and the
+two worker executables bound on `fabric-service` at the slots the fabric reads.
+`fabric-service` joins `requiredInstances`, since a required instance must be
+listed there. The plane moves from refusing generation admission outright
+(`UndeclaredFabricParticipant`) to `[init] fabric boot participants spawned` —
+the fabric service and all sixteen participants constructed — before a
+participant exits non-zero.
+
+**Baseline audit.** Every seL4 plane gate was re-run at `3228eb6`, the
+pre-session commit, by checking the tree out and building from it:
+
+| Gate | At `3228eb6` | Now |
+|---|---|---|
+| `sel4_root_boot_check` | pass | pass |
+| `sel4_component_graph_check` | pass | pass |
+| `sel4_reclamation_check` | pass | pass |
+| `sel4_channel_check` | `declares 1 instances with service authority, need 2` | identical |
+| `sel4_sample_check` | `spawn receiver` | identical |
+| `sel4_supervision_check` | `the parked handle landed in no slot` | identical |
+| `sel4_crossing_check` | `crossing peer` | identical |
+| `sel4_spawn_check` | `spawn plane fail: console` | both children spawn; `sysinfo` exits later |
+| `sel4_stream_check` | `spawn subscriber` | whole graph provisioned; later buffer remap |
+| `sel4_boot_check` | `SLIME_ROOT FATAL` | fabric and all sixteen participants spawn |
+
+No gate regressed. Four are unchanged and were already red before this work;
+three improved materially; three that passed still pass.

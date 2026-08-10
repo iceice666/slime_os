@@ -90,17 +90,21 @@ failure rather than a fallthrough, so two builds of one component image cannot
 select different boot graphs.
 
 **Remaining:** the seL4 fixtures must declare what `init` actually hands each
-child before their planes go green again. `sel4-stream.zti` is the migrated
-template — real grants for authority backed by concrete objects,
-`mintedBindings` for anything the owner mints at runtime — and under it the
-stream plane provisions the entire graph (`[fabric] every declared stream edge
-provisioned`) before failing in an unrelated shared-buffer remap.
-`sel4-spawn.zti` and `sel4-boot.zti` are partly declared;
-`sel4_channel_check`, `sel4_sample_check`, `sel4_supervision_check`, and
-`sel4_crossing_check` fail with signatures identical to those observed at
-`99f6c45` before this work, all following from the requirement that every
-declared instance be planned. This is fixture content, not a decoder or
-dispatch defect.
+child before their planes go green again. `sel4-stream.zti` and
+`sel4-boot.zti` are the migrated templates — real grants for authority backed
+by concrete objects, `mintedBindings` for anything the owner mints at runtime.
+
+Every plane gate was re-run at `3228eb6`, the pre-session commit, to separate
+inherited failures from regressions. No gate regressed:
+`sel4_root_boot_check`, `sel4_component_graph_check`, and
+`sel4_reclamation_check` passed then and pass now; `sel4_channel_check`,
+`sel4_sample_check`, `sel4_supervision_check`, and `sel4_crossing_check` fail
+with signatures identical to their baseline; and three improved —
+`sel4_stream_check` now provisions the whole fabric graph, `sel4_boot_check`
+spawns the fabric and all sixteen participants, and `sel4_spawn_check` spawns
+both children. The residual failures are fixture declaration and
+component-level conditions past every capability boundary, not decoder or
+dispatch defects.
 
 ### B40 — child CSpaces are fixed four-slot shells rather than admitted authority
 
