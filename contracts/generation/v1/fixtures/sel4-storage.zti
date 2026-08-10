@@ -41,6 +41,16 @@
       transferable = false;
     };
     {
+      name = "storage-probe-device-idle";
+      rights = [
+        "blockRead";
+        "blockWrite";
+      ];
+      source = "sel4-storage-probe-idle";
+      target = "sel4-storage-probe-idle";
+      transferable = false;
+    };
+    {
       name = "init-endpoint-factory";
       rights = [
         "endpointCreate";
@@ -91,8 +101,36 @@
       name = "sel4-storage-probe";
       owner = "init";
     };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "storage-probe-device-idle";
+          slot = 1;
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "sel4-storage-probe";
+      health = "optional";
+      name = "sel4-storage-probe-idle";
+      owner = "root";
+    };
   ];
-  mintedBindings = [];
+  mintedBindings = [
+    {
+      name = "sel4-storage-probe-run-token";
+      owner = "init";
+      holder = "sel4-storage-probe";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 0;
+      transferable = false;
+    };
+  ];
   interfaceSchemas = [];
   objects = [
     {

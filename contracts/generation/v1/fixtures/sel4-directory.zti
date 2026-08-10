@@ -43,6 +43,18 @@
       transferable = false;
     };
     {
+      name = "directory-probe-root-idle";
+      rights = [
+        "directoryRead";
+        "directoryWrite";
+        "directoryList";
+        "directoryDerive";
+      ];
+      source = "sel4-directory-probe-idle";
+      target = "sel4-directory-probe-idle";
+      transferable = false;
+    };
+    {
       name = "init-endpoint-factory";
       rights = [
         "endpointCreate";
@@ -93,8 +105,36 @@
       name = "sel4-directory-probe";
       owner = "init";
     };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "directory-probe-root-idle";
+          slot = 1;
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "sel4-directory-probe";
+      health = "optional";
+      name = "sel4-directory-probe-idle";
+      owner = "root";
+    };
   ];
-  mintedBindings = [];
+  mintedBindings = [
+    {
+      name = "sel4-directory-probe-run-token";
+      owner = "init";
+      holder = "sel4-directory-probe";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 0;
+      transferable = false;
+    };
+  ];
   interfaceSchemas = [];
   objects = [
     {
