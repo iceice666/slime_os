@@ -48,6 +48,16 @@
       transferable = false;
     };
     {
+      name = "generation-manager-device-idle";
+      rights = [
+        "blockRead";
+        "blockWrite";
+      ];
+      source = "sel4-generation-manager-idle";
+      target = "sel4-generation-manager-idle";
+      transferable = false;
+    };
+    {
       name = "generation-manager-device";
       rights = [
         "blockRead";
@@ -123,8 +133,58 @@
       name = "sel4-generation-client";
       owner = "init";
     };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [
+        "init";
+      ];
+      executable = "sel4-generation-client";
+      health = "optional";
+      name = "sel4-generation-client-idle";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "generation-manager-device-idle";
+          slot = 1;
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "sel4-generation-manager";
+      health = "optional";
+      name = "sel4-generation-manager-idle";
+      owner = "root";
+    };
   ];
-  mintedBindings = [];
+  mintedBindings = [
+    {
+      name = "generation-manager-rpc";
+      owner = "init";
+      holder = "sel4-generation-manager";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 0;
+      transferable = false;
+    };
+    {
+      name = "generation-client-rpc";
+      owner = "init";
+      holder = "sel4-generation-client";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 0;
+      transferable = false;
+    };
+  ];
   interfaceSchemas = [];
   objects = [
     {
