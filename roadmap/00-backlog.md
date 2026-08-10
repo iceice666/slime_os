@@ -16,6 +16,340 @@ at the bottom rather than deleting it.
 
 ## Open
 
+The native-capability-model cutover is tracked as ordered unmasked-debt work,
+not as a new roadmap track. B39 establishes the authenticated contract; B40
+establishes the CSpace substrate; B41–B45 remove the universal root dispatcher
+one service slice at a time; B46–B49 replace the remaining compatibility
+mechanism; and B50 deletes the dual-model residue. Each item is a clean cutover:
+its old ABI and fallback are removed in the same change that makes its exit
+condition observable.
+
+### B39 — Generation v5 must describe the exact seL4 object and authority plan
+
+**Status:** Open. **Class:** Unmasked architectural debt. **Depends on:** none.
+
+**Problem:** Generation v4 separates executables from instances, but still
+declares logical objects and grants that `slime-root` reinterprets. It cannot
+prove the process/thread topology, concrete kernel objects, mappings, CSpace
+bindings, scheduling policy, fault policy, spawn templates, or dynamic reserve
+that the admitted graph will consume. `init` also still selects scenario graphs
+through `SLIME_GENERATION_NUMBER` and `SLIME_*_CHECK` build flags.
+
+**Evidence:** `contracts/generation/v4/schema.zt` has `Object`, `Executable`,
+`Instance`, and `CapabilityGrant`, but no process, thread, kernel-object,
+mapping, schedule, or quota-plan records. `components/bins/src/bin/init.rs`
+branches on compile-time generation and check flags. The handoff is
+[`devlog/2026-08-10-sel4-native-model-handoff/`](../devlog/2026-08-10-sel4-native-model-handoff/index.md).
+
+**Fix:** Add `contracts/generation/v5/` as a clean required-field version with
+`Process`, `Thread`, `KernelObject`, `Mapping`, `CapBinding`, `ServiceBinding`,
+`Schedule`, `FaultPolicy`, `SpawnTemplate`, and `ResourceQuota`. Every grant
+must either materialize one concrete capability or be explicitly policy-only.
+Migrate every seL4 fixture, builder, generated binding, decoder, and consumer;
+remove v4 runtime admission and all compile-time graph-selection branches.
+
+**Exit condition:** `just contracts_check` and `just generation_check` prove all
+bindings and object references resolve, every authority-bearing grant maps to a
+planned capability, malformed/unsatisfiable plans fail before output, and two
+builds of one component image cannot select different boot graphs. A QEMU full
+graph selected only by authenticated generation data passes `just
+sel4_boot_check`; no product code admits generation v4.
+
+### B40 — child CSpaces are fixed four-slot shells rather than admitted authority
+
+**Status:** Open. **Class:** Unmasked architectural debt. **Depends on:** B39.
+
+**Problem:** Every child CNode has four slots — null, root service endpoint,
+own TCB, and fault endpoint — while actual authority remains in a root-side
+`CapabilityTable`. The kernel therefore cannot enforce the generation's
+declared service, notification, frame, and lifecycle authority directly.
+
+**Evidence:** `slime-root/src/task.rs` fixes `CHILD_CNODE_SIZE_BITS = 2` and
+defines only `CHILD_SLOT_SERVICE`, `CHILD_SLOT_TCB`, and `CHILD_SLOT_FAULT`;
+`slime-root/src/graph.rs` stores logical `(Resource, rights)` entries per task.
+
+**Fix:** Size each process CNode from B39's admitted plan and install the exact
+Endpoint, Notification, Frame, TCB/lifecycle, and service capabilities at the
+declared CPtrs. Runtime slot arguments become real CPtrs. Remove fixed child
+slot constants and stop inserting kernel-object-backed authority into the
+root-side logical table.
+
+**Exit condition:** A new `just sel4_capability_layout_check` compares every
+child's actual CSpace to the admitted v5 plan, including negative mutations for
+missing, extra, wrong-type, wrong-rights, and aliased capabilities. Existing
+boot and spawn paths use the same layout and pass `just test_sel4_root`, `just
+sel4_boot_layout_check`, `just sel4_spawn_check`, and `just sel4_boot_check`.
+
+### B41 — console and debug traffic still enters the universal root dispatcher
+
+**Status:** Open. **Class:** Unmasked architectural debt. **Depends on:** B40.
+
+**Problem:** `DebugWrite` and console/input-adjacent control share the same
+badged root endpoint and dispatcher as lifecycle, storage, and fabric traffic.
+A noisy client therefore consumes the highest-priority root service loop and a
+console defect shares the system-wide dispatcher fault domain.
+
+**Evidence:** `slime-root/src/ipc.rs::Operation` includes `DebugWrite` and
+`InputRead`; components call the matching wrappers in
+`components/runtime/src/syscall.rs` rather than a declared console/input
+service endpoint.
+
+**Fix:** Provision dedicated console/debug and input service endpoints through
+generation v5 and cut clients to direct `Call`/`ReplyRecv` or one-way endpoint
+traffic as appropriate. Remove the migrated operation labels, root handlers,
+and runtime fallback in the same change.
+
+**Exit condition:** `DebugWrite` and `InputRead` are absent from the universal
+root operation ABI; capability denial is enforced by missing service CPtrs;
+console output, refused input, scripted Dango input, and root boot diagnostics
+pass `just sel4_root_boot_check`, `just sel4_input_check`, and `just
+sel4_dango_check`. A gate-control mutation that restores a root fallback fails.
+
+### B42 — spawn and lifecycle control use ambient task IDs and the universal dispatcher
+
+**Status:** Open. **Class:** Unmasked architectural debt. **Depends on:** B40.
+
+**Problem:** Spawn, exit, health, supervision, and capability-copy operations
+are labels on the universal root endpoint. `spawn` returns both a numeric
+`task_id` and a supervision slot, and the spawn protocol sends that numeric ID
+across a process boundary to wait for termination.
+
+**Evidence:** `components/runtime/src/syscall.rs::Spawned` exposes `task_id`;
+`components/bins/src/bin/spawn-service.rs` stores and returns it;
+`slime-root/src/ipc.rs::Operation` carries `Spawn`, `Exit`, health,
+`SupervisionStatus`, `SupervisionDerive`, and `CapDrop`.
+
+**Fix:** Introduce a dedicated lifecycle service endpoint and capability-based
+spawn result. The result carries a lifecycle capability and declared initial
+service capabilities, never a public task ID. Waiting, killing, deriving, and
+health reporting operate through that lifecycle capability. Remove all migrated
+labels and the numeric-ID wire fields without a compatibility shim.
+
+**Exit condition:** No Zutai wire record or public runtime type exposes a bare
+task ID; spawn/wait/kill/health work using only capabilities; stale, attenuated,
+and transferred lifecycle handles are covered. `just sel4_spawn_check`, `just
+sel4_supervision_check`, `just sel4_reclamation_check`, and `just
+sel4_dango_check` pass, and a schema lint rejects reintroduction of task-ID-
+shaped lifecycle fields.
+
+### B43 — block and durable-store clients still transact through root operation labels
+
+**Status:** Open. **Class:** Unmasked architectural debt. **Depends on:** B40.
+
+**Problem:** `BlockTransact`, `StoreTransact`, and recovery storage operations
+share the universal dispatcher even though generation data can provision a
+specific device or storage service. Root remains both IPC broker and driver
+dispatcher, so unrelated clients share latency and failure scope.
+
+**Evidence:** The labels remain in `slime-root/src/ipc.rs::Operation`; block,
+store, rollback, recovery, and transfer components reach storage through
+`components/runtime/src/syscall.rs` wrappers rather than a dedicated service
+Endpoint installed in their CSpaces.
+
+**Fix:** Provision explicit block-driver and durable-store service endpoints,
+move each client to direct typed request/reply IPC, and preserve device/DMA
+authority only in the owning service. Remove the root labels and handlers as
+each storage slice cuts over; do not leave a universal-dispatch fallback.
+
+**Exit condition:** Block/store requests cannot be issued without the declared
+service capability; unrelated root operations make no progress on their behalf;
+read-only device authority remains read-only; multi-device selection remains
+exact. `just sel4_device_check`, `just sel4_storage_check`, `just
+sel4_store_check`, `just sel4_rollback_check`, `just
+sel4_recovery_plane_check`, and `just sel4_transfer_check` pass against the
+direct service path.
+
+### B44 — generation and recovery policy still crosses the universal root dispatcher
+
+**Status:** Open. **Class:** Unmasked architectural debt. **Depends on:** B43.
+
+**Problem:** Generation management and recovery are userspace policy, but
+`GenerationTransact`, `GenerationReceive`, health, and reconstruction requests
+still enter the universal root dispatcher. This leaves policy clients coupled
+to root's global request ABI after B35 made the durable boot selector
+authoritative.
+
+**Evidence:** `slime-root/src/ipc.rs::Operation` retains generation and recovery
+labels; the `sel4-generation-*`, rollback, recovery, and transfer components use
+the root syscall transport even when an owning userspace manager exists.
+
+**Fix:** Give the generation manager and recovery service dedicated endpoints
+and the minimum block/BootState capabilities they need. Move typed requests to
+those services, keep only irreducible boot-selector mechanism outside them, and
+remove the universal operation labels and runtime wrappers.
+
+**Exit condition:** Stage, inspect, select, rollback, recovery reconstruction,
+transfer, and health promotion traverse declared service endpoints; a client
+without those caps is denied by seL4 lookup, not a root-side resource table.
+`just sel4_generation_check`, `just sel4_boot_selection_check`, `just
+sel4_rollback_check`, `just sel4_recovery_plane_check`, and `just
+sel4_transfer_check` pass with no dispatcher fallback.
+
+### B45 — directory, filesystem, and store services still depend on universal root IPC
+
+**Status:** Open. **Class:** Unmasked architectural debt. **Depends on:** B43.
+
+**Problem:** Directory inspection/derivation/commit and filesystem/store
+requests are service policy, yet their public path remains operation labels on
+the root endpoint. Capability provenance is therefore checked in a global
+software table rather than expressed by a client holding the service endpoint
+and an attenuated directory or store capability.
+
+**Evidence:** `DirectoryInspect`, `DirectoryDerive`, `DirectoryCommit`, and
+`StoreTransact` remain in `slime-root/src/ipc.rs::Operation`; the directory,
+filesystem, powerbox, Dango, and store components use the shared syscall ABI.
+
+**Fix:** Provision dedicated directory, filesystem, and store endpoints with
+Zutai request/reply contracts. Pass attenuated directory/store capabilities
+through real CSpace bindings and seL4 transfer. Remove each root operation label
+and wrapper as its service becomes direct.
+
+**Exit condition:** Directory derivation and filesystem/store access succeed
+only through declared service capabilities; attenuation, provenance, malformed
+requests, and service death remain observable. `just sel4_directory_check`,
+`just sel4_filesystem_check`, `just sel4_store_check`, `just
+sel4_powerbox_check`, and `just sel4_dango_check` pass with the corresponding
+root labels absent.
+
+### B46 — logical ChannelTable, Transit, ParkedReplies, and WaitSet duplicate seL4 IPC
+
+**Status:** Open. **Class:** Unmasked architectural debt. **Depends on:**
+B39–B45.
+
+**Problem:** Slime channels are root-owned queues with userspace-managed
+blocking, wait sets, reply slots, peer death, and up-to-four-cap transit. Every
+message crosses root twice and `slime-root` re-proves atomicity and lifetime
+properties already supplied by Endpoints, Reply objects, and Notifications.
+
+**Evidence:** `slime-root/src/channel.rs`, `transit.rs`, and `parked.rs` own the
+compatibility mechanism; `Send`, `Recv`, `Wait`, `EndpointCreate`,
+`CapTransfer`, and `TransferWindowBind` remain universal root operations.
+
+**Fix:** Cut synchronous RPC to Endpoint `Call`/`ReplyRecv`, rendezvous messages
+to Endpoint send/receive, and buffered asynchronous streams to a new
+`contracts/fabric-stream/v2/` shared-ring contract with Notification badge bits
+for availability and credit. Use real seL4 cap transfer, at most one capability
+per IPC message; make bundle provisioning an explicit typed transaction. Delete
+the logical channel, transit, parked-reply, and wait-set implementations in the
+same cutover.
+
+**Exit condition:** `channel.rs`, `transit.rs`, `parked.rs`, `WaitSet`, and the
+migrated universal labels no longer exist. Backpressure, bounded queues,
+timeouts, peer death, cap-transfer attenuation, unrelated-route progress, and
+buffered-stream recovery pass `just sel4_channel_check`, `just
+sel4_crossing_check`, `just sel4_stream_check`, `just sel4_qos_check`, `just
+sel4_call_check`, `just sel4_operation_check`, and `just
+sel4_visibility_check` on native Endpoint/Notification paths.
+
+### B47 — package, process, thread, service instance, and lifecycle are one Task model
+
+**Status:** Open. **Class:** Unmasked architectural debt. **Depends on:** B42,
+B46.
+
+**Problem:** One `Task` currently means image instance, CSpace/VSpace owner,
+single TCB, service identity, scheduling unit, and lifecycle identity. This
+forces single-threaded components and makes lifecycle and scheduling policy
+ambient task-ID concerns rather than capability-owned process/thread state.
+
+**Evidence:** `components/runtime/src/runtime.rs` assumes one thread;
+`slime-root/src/task.rs::create` allocates one CNode and one TCB and returns a
+`TaskId`; the public spawn ABI mirrors that identity.
+
+**Fix:** Split package/image, service template, process, thread, service
+instance, and lifecycle handle in generation v5 and root mechanism. A process
+owns CSpace/VSpace; each thread owns TCB, IPC buffer, fault endpoint, and
+scheduling state; service endpoints and lifecycle capabilities are separately
+delegable. Remove `TaskId` from every cross-process contract.
+
+**Exit condition:** A fixture can declare two threads in one process without
+duplicating its CSpace/VSpace; one thread fault is reported under the declared
+fault policy; lifecycle authority remains capability-based; single-threaded
+graphs retain behavior. `just test_sel4_root`, `just sel4_spawn_check`, `just
+sel4_supervision_check`, `just sel4_reclamation_check`, and `just
+sel4_boot_check` pass.
+
+### B48 — all child execution shares one fixed priority and no scheduling authority
+
+**Status:** Open. **Class:** Unmasked architectural debt. **Depends on:** B47.
+
+**Problem:** Every child uses `CHILD_PRIORITY = 254`, root runs above it, and
+`KernelIsMCS` is disabled. Generation policy cannot bound CPU budget or period,
+differentiate service priorities, donate scheduling context to passive servers,
+or bind timeout faults per thread.
+
+**Evidence:** `slime-root/src/task.rs` defines one child priority and
+`sel4/config/qemu-arm-virt.cmake` disables MCS. Generation v4 has no schedule
+record.
+
+**Fix:** First remove the all-services-one-priority fallback by applying v5's
+declared per-thread priorities. Then resolve the assurance gate and enable MCS,
+install per-thread scheduling contexts and timeout endpoints, and use scheduling
+context donation for passive RPC servers. If MCS cannot be admitted, explicitly
+defer only the MCS half with recorded assurance evidence; do not restore one
+maximal child priority.
+
+**Exit condition:** Priority, budget, and period are authenticated generation
+data and observed in the running graph; one budget-exhausting client cannot
+starve an unrelated higher-criticality service; timeout faults reach the
+declared handler. `just sel4_qos_check`, the platform-timer assertions in `just
+sel4_root_boot_check`, and the full direct-IPC graph pass under the selected
+scheduling configuration, with a recorded MCS assurance decision.
+
+### B49 — resource ceilings are reactive tables rather than an admitted object budget
+
+**Status:** Open. **Class:** Unmasked architectural debt. **Depends on:**
+B39–B48.
+
+**Problem:** Static table constants bound tasks, capabilities, channels,
+transit, scopes, and graph iterations according to the largest graph seen so
+far. The generation cannot prove before activation that its TCBs, CNodes,
+CSlots, endpoints, notifications, frames, mappings, IRQs, untyped size classes,
+and dynamic reserves fit.
+
+**Evidence:** `MAX_TASKS`, `MAX_TASK_CAPS`, `MAX_CHANNELS`, `MAX_TRANSIT`, and
+related comments describe ceilings raised for prior test graphs; generation v4
+contains partial fabric/shared-buffer limits but no complete seL4 object plan.
+
+**Fix:** Compute exact static requirements and bounded dynamic reserves from
+generation v5 during construction. Admission fails closed before any task
+activates when the plan is unsatisfiable. Dynamic factories consume and release
+delegated quota capabilities; remove compatibility-table watermarks that no
+longer own mechanism.
+
+**Exit condition:** A QEMU stress graph at the admitted ceiling boots and stays
+bounded; the same graph one object, slot, mapping, IRQ, or untyped size class
+over is rejected before activation. Observed live and reclaimed counts match the
+plan through clean exit, fault, and construction unwind. `just
+contracts_check`, `just generation_check`, `just sel4_reclamation_check`, and
+`just sel4_boot_check` pass.
+
+### B50 — the logical capability and universal syscall compatibility model remains deletable residue
+
+**Status:** Open. **Class:** Unmasked architectural debt. **Depends on:**
+B39–B49.
+
+**Problem:** Even after native replacements land, leaving `GraphTables` as an
+authority database, the universal `Operation` dispatcher, public task IDs,
+generic cross-kind `u64` rights, name-only grants, or compile-time plane flags
+would preserve two competing authority/IPC models and invite fallback drift.
+
+**Evidence:** The handoff identifies these as the retained custom-kernel model
+implemented above seL4. B39–B49 each have a narrower removal boundary; this
+item is the final repository-wide proof that no compatibility path survived.
+
+**Fix:** Delete the global logical authority database, universal operation ABI,
+public task identity, generic rights vocabulary where seL4 cap rights or typed
+policy now apply, name-only grants, fixed-slot constants, and all product graph
+selection flags. Remove obsolete tests, fixtures, comments, and generated
+bindings rather than aliasing them.
+
+**Exit condition:** Exact-source guards find no deleted model symbols or build
+flags; every surviving syscall is either a direct seL4 primitive or a narrowly
+owned root mechanism with a declared v5 capability; every fixture uses v5.
+`just test_sel4_root`, `just contracts_check`, `just generation_check`, all
+affected `just sel4_*_check` targets, `just sel4_gate_control_check`, `just
+fmt_check_all`, and `just lint_all` pass after the deletion.
+
 
 
 ## Resolved
