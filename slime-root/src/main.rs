@@ -4961,6 +4961,44 @@ fn construct_child(
             return Err(IpcError::DestinationSlotsExhausted);
         }
     }
+    // A self-loop grant declares authority the child holds in its own right,
+    // so no parent passes it and the loop above never sees it. The root is
+    // the only party that can install it, and preflight has already excluded
+    // these from the count the parent must satisfy.
+    let Ok(child) = generation.instance(plan.instance) else {
+        release_child(tasks, windows, graph, buffers, allocator, id);
+        return Err(IpcError::BadCapability);
+    };
+    for index in 0..child.binding_count() {
+        let Ok(binding) = generation.binding(child, index) else {
+            release_child(tasks, windows, graph, buffers, allocator, id);
+            return Err(IpcError::BadCapability);
+        };
+        let Ok(grant) = generation.grant(binding.grant) else {
+            release_child(tasks, windows, graph, buffers, allocator, id);
+            return Err(IpcError::BadCapability);
+        };
+        if grant.source != GrantEndpoint::Instance(plan.instance)
+            || grant.target != GrantEndpoint::Instance(plan.instance)
+        {
+            continue;
+        }
+        // Same construction the boot path uses for a declared binding.
+        let Some((_, resource)) = declared_resource(grant.rights) else {
+            continue;
+        };
+        let capability = graph::Capability {
+            resource,
+            rights: grant.rights,
+        };
+        if child_table
+            .install(binding.slot as u32, capability)
+            .is_err()
+        {
+            release_child(tasks, windows, graph, buffers, allocator, id);
+            return Err(IpcError::DestinationSlotsExhausted);
+        }
+    }
     Ok(id)
 }
 

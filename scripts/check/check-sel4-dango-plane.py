@@ -42,6 +42,16 @@ IMAGE = ROOT / "build" / "slime-sel4-dango.elf"
 FIXTURE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "sel4-dango.zti"
 BOOT_TIMEOUT_SECONDS = 300
 
+# Markers whose presence is required but whose position is not, because they
+# come from a component running concurrently with the shell.
+UNORDERED_MARKERS: tuple[tuple[str, str], ...] = (
+    (
+        # The child saw the context Dango gave it, and only that.
+        "the launched command ran with the profile's authority",
+        r"\[sysinfo\] spawned through profile",
+    ),
+)
+
 REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     (
         "init spawned the spawn service",
@@ -68,11 +78,6 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     (
         "the launched command reported a structured exit",
         r"result:exit:0",
-    ),
-    (
-        # The child saw the context Dango gave it, and only that.
-        "the launched command ran with the profile's authority",
-        r"\[sysinfo\] spawned through profile",
     ),
     (
         # The composition: a derived cwd capability and a stdin endpoint both
@@ -256,6 +261,15 @@ def check_transcript(transcript: str) -> None:
                 fail(f"marker out of order: {label} ({pattern})")
             fail(f"missing marker: {label} ({pattern})")
         position = match.end()
+    # Asserted for presence but not position. This is a different component's
+    # output, and the spawned child runs before its requester hears back:
+    # `spawn` starts the thread, then the spawn service sends the launch
+    # context and only afterwards replies. Ordering it against the shell's own
+    # lines would assert a race rather than the authority this plane is about.
+    for label, pattern in UNORDERED_MARKERS:
+        if re.search(pattern, transcript) is None:
+            report_transcript(transcript)
+            fail(f"missing marker: {label} ({pattern})")
     # Every launch is traced to a resolution and a request, and there are
     # exactly two of each. A third would mean a denied or malformed line
     # reached the spawn service, which is the property `resolve-denied` and

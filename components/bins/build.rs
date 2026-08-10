@@ -250,19 +250,6 @@ fn generate_command_profile(manifest_dir: &str) {
         })
         .collect::<Vec<_>>();
     let launcher = executable_launcher(&manifest, &targets).expect("command launcher instance");
-    let entries = profile
-        .iter()
-        .zip(targets.iter())
-        .map(|(command, target)| {
-            let grant =
-                executable_grant(&manifest, launcher, target).expect("profile executable grant");
-            let slot =
-                binding_slot(&manifest, launcher, grant).expect("profile executable binding");
-            let block = executable_block(&manifest, target).expect("profile executable");
-            let object = field(block, "object").expect("executable object");
-            (*command, object, slot)
-        })
-        .collect::<Vec<_>>();
     // `spawn-service.rs` is the only consumer of this file and resolves both
     // slots in its own CSpace, so they must come from whichever instance runs
     // it. Where the spawn service owns the command profile that is the profile
@@ -278,12 +265,34 @@ fn generate_command_profile(manifest_dir: &str) {
         .find(|block| field(block, "executable") == Some("spawn-service"))
         .and_then(|block| field(block, "name"))
         .unwrap_or(profile_instance_name);
+    let entries = profile
+        .iter()
+        .zip(targets.iter())
+        .map(|(command, target)| {
+            let grant =
+                executable_grant(&manifest, launcher, target).expect("profile executable grant");
+            // The consumer's binding, not the launcher's: `spawn-service.rs`
+            // resolves these in its own CSpace, and the instance that sources
+            // the grant may be whoever spawned it.
+            let slot = binding_slot(&manifest, consumer, grant)
+                .or_else(|| binding_slot(&manifest, launcher, grant))
+                .expect("profile executable binding");
+            let block = executable_block(&manifest, target).expect("profile executable");
+            let object = field(block, "object").expect("executable object");
+            (*command, object, slot)
+        })
+        .collect::<Vec<_>>();
     let peer = if consumer == profile_instance_name {
         launcher
     } else {
         profile_instance_name
     };
+    // A runtime-minted channel declares the consumer's slot as a
+    // `mintedBindings` entry rather than a grant binding: the edge and slot are
+    // fixed, only the object waits for its minter. Either spelling answers the
+    // same question, so both are consulted.
     let rpc_slot = related_binding_slot(&manifest, consumer, peer, &["send", "recv"])
+        .or_else(|| minted_binding_slot(&manifest, consumer, &["send", "recv"]))
         .expect("command RPC binding");
     let shared_buffer_factory_slot = binding_with_right_slot(&manifest, consumer, "bufferCreate")
         .expect("command shared-buffer binding");
@@ -394,6 +403,20 @@ fn related_binding_slot(
             && rights.iter().all(|right| declared.contains(right)))
         .then(|| binding_slot(manifest, holder, name))
         .flatten()
+    })
+}
+
+/// The slot a `mintedBindings` entry declares for `holder`, for a capability
+/// carrying every one of `rights`. The object is created by the owner at
+/// runtime; the destination slot is fixed here.
+fn minted_binding_slot(manifest: &str, holder: &str, rights: &[&str]) -> Option<usize> {
+    let section = manifest.split("mintedBindings = [").nth(1)?;
+    let section = section.split("\n  ];").next()?;
+    section.split("\n    {\n").skip(1).find_map(|block| {
+        let declared = field_list(block, "rights")?;
+        (field(block, "holder")? == holder && rights.iter().all(|r| declared.contains(r)))
+            .then(|| field_int(block, "slot"))
+            .flatten()
     })
 }
 

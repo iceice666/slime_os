@@ -2465,6 +2465,11 @@ fn drive_powerbox_plane() {
 /// `drive_sample_plane` fixes the lender's three.
 fn drive_dango_plane() {
     let plane: &[u8] = b"dango";
+    // Init's own slots for the two executables spawn-service may launch. An
+    // exec grant binds to its source, and init is the source, so the root
+    // installs them here above init's base layout.
+    const SPAWN_SERVICE_SYSINFO_SLOT: u32 = 6;
+    const SPAWN_SERVICE_ECHO_SLOT: u32 = 7;
     // The generation places this plane's factories at ENDPOINT_FACTORY_SLOT
     // and SHARED_BUFFER_FACTORY_SLOT; both come from the generated boot layout
     // so init cannot pass a child a slot it does not itself hold.
@@ -2513,9 +2518,11 @@ fn drive_dango_plane() {
     let spawn_service = slime_rt::spawn(
         SPAWN_SERVICE_SLOT,
         &[
-            grant(ENDPOINT_FACTORY_SLOT, RIGHT_ENDPOINT_CREATE),
             grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
             grant(spawn_side, RIGHT_SEND | RIGHT_RECV),
+            grant(ENDPOINT_FACTORY_SLOT, RIGHT_ENDPOINT_CREATE),
+            grant(SPAWN_SERVICE_SYSINFO_SLOT, RIGHT_EXEC | RIGHT_SPAWN),
+            grant(SPAWN_SERVICE_ECHO_SLOT, RIGHT_EXEC | RIGHT_SPAWN),
         ],
     )
     .unwrap_or_else(|_| fail_plane(plane, b"spawn the spawn service"));

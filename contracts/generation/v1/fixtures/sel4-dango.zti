@@ -139,6 +139,7 @@
       transferable = false;
     };
     {
+      minted = true;
       name = "dango-e-spawn-service-rpc";
       rights = [
         "send";
@@ -226,15 +227,19 @@
       bindings = [
         {
           grant = "init-endpoint-factory";
-          slot = 0;
+          slot = 3;
+        };
+        {
+          grant = "spawn-service-sysinfo";
+          slot = 4;
+        };
+        {
+          grant = "spawn-service-echo-agent";
+          slot = 5;
         };
         {
           grant = "spawn-service-shared-buffer-factory";
           slot = 1;
-        };
-        {
-          grant = "dango-e-spawn-service-rpc";
-          slot = 2;
         };
       ];
       dependencies = [
@@ -264,10 +269,6 @@
           grant = "dango-d-shared-buffer-factory";
           slot = 5;
         };
-        {
-          grant = "dango-e-spawn-service-rpc";
-          slot = 0;
-        };
       ];
       dependencies = [
         "init";
@@ -284,7 +285,7 @@
       executable = "sysinfo";
       health = "optional";
       name = "sysinfo";
-      owner = "init";
+      owner = "spawn-service";
     };
     {
       autostart = true;
@@ -293,7 +294,7 @@
       executable = "echo-agent";
       health = "optional";
       name = "echo-agent";
-      owner = "init";
+      owner = "spawn-service";
     };
     {
       autostart = true;
@@ -308,6 +309,68 @@
     };
   ];
   mintedBindings = [
+    {
+      name = "echo-agent-cwd";
+      owner = "spawn-service";
+      holder = "echo-agent";
+      rights = [
+        "directoryRead";
+      ];
+      slot = 1;
+      transferable = false;
+    };
+    {
+      name = "echo-agent-stdin";
+      owner = "spawn-service";
+      holder = "echo-agent";
+      rights = [
+        "recv";
+      ];
+      slot = 2;
+      transferable = false;
+    };
+    {
+      name = "sysinfo-context-half";
+      owner = "spawn-service";
+      holder = "sysinfo";
+      rights = [
+        "recv";
+      ];
+      slot = 0;
+      transferable = false;
+    };
+    {
+      name = "echo-agent-context-half";
+      owner = "spawn-service";
+      holder = "echo-agent";
+      rights = [
+        "recv";
+      ];
+      slot = 0;
+      transferable = false;
+    };
+    {
+      name = "dango-spawn-rpc-half";
+      owner = "init";
+      holder = "dango";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 0;
+      transferable = false;
+    };
+    {
+      name = "spawn-service-rpc-half";
+      owner = "init";
+      holder = "spawn-service";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 2;
+      transferable = false;
+    };
     {
       name = "console-rpc-half";
       owner = "init";
