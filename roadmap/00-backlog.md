@@ -133,10 +133,30 @@ from the CNode's own size, and the root CNode's size lives in bootinfo's
 `initThreadCNodeSizeBits`, which `sel4::BootInfo` exposes no accessor for. The
 fault endpoint was also left null, so the fault is fatal rather than reported.
 
-Closing B41 therefore needs: the root CNode's guard computed correctly (reading
-the raw bootinfo field, or adding the accessor upstream), and a fault endpoint
-for the console thread so a defect in it is a reported fault rather than a dead
-root. Both are tractable; neither is a one-line edit.
+The CSpace guard was then computed correctly —
+`CNodeCapData::new(0, WORD_SIZE - bootinfo.inner().initThreadCNodeSizeBits)`,
+observed as `guard_bits=52` against an endpoint CPtr of `0x418`, both right —
+and the thread still cap-faults on its first invocation.
+
+**The remaining requirement is thread-local storage, and it needs upstream
+work.** With `has-thread-local` the crate's IPC-buffer slot is
+`#[thread_local]`, so it is addressed through `tpidr`. `sel4-runtime-common`
+installs a TLS region for the *initial* thread only, from `PT_TLS`, and its
+`tls` module exposes no public API — a second thread has no TLS block, so the
+slot it writes and the slot the syscall reads are not the same memory.
+
+So B41 needs one of:
+
+- a way to install a TLS region for a second thread, which means a public API
+  in `sel4-runtime-common::tls` (upstream change);
+- or `non-thread-local-state` *plus* an IPC-buffer slot per thread, which the
+  crate does not model — the feature selects the token guarding one global
+  slot, not the number of slots.
+
+Everything on the slime side is done and was verified working: the console
+endpoint is provisioned per process and audited, the thread starts and is
+scheduled, its stack, IPC buffer frame, scratch page, CSpace guard, and
+endpoint CPtr are all correct. What is missing is beneath them.
 
 The dispatcher experiment was reverted. The target pin was kept, committed
 separately, and is independently correct.
