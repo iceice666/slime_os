@@ -80,25 +80,27 @@ vocabulary, and any two claiming the same holder slot. Spawn preflight
 resolves each request against exactly one declaration, and the destination is
 always the declared slot.
 
-**Remaining:**
+**Boot-graph selection (landed 2026-08-10):** the root delivers the
+authenticated `bootAction` in the bootstrap thread's first C parameter, and
+`init` composes its graph from that value. Every `SLIME_SEL4_*_CHECK` branch is
+gone from `init.rs`, along with the three x86 oracle guards whose second halves
+existed only to exclude a seL4 plane and the x86-only full-graph composition
+keyed on `SLIME_GENERATION_NUMBER == 17`. An unimplemented action is a boot
+failure rather than a fallthrough, so two builds of one component image cannot
+select different boot graphs.
 
-1. Migrate the remaining seL4 fixtures to declare what `init` actually hands
-   each child. `sel4-stream.zti` is the migrated template: real grants for
-   authority backed by concrete objects, `mintedBindings` for anything the
-   owner mints at runtime. Under it the stream plane now provisions the entire
-   graph (`[fabric] every declared stream edge provisioned`) and fails later in
-   a shared-buffer remap, past every declaration boundary. `sel4-spawn.zti` and
-   `sel4-boot.zti` are declared but not yet green; the other fabric fixtures
-   carry `mintedBindings = []` and need the same treatment.
-2. `just sel4_spawn_check` remains red. It was red before this work (verified
-   against `3228eb6`); with its minted bindings declared, both children now
-   spawn and receive their declared slots, and `sysinfo` fails afterwards on a
-   component-level condition rather than a capability refusal.
-3. `init.rs` still selects its composition through
-   `option_env!("SLIME_GENERATION_NUMBER")` and the `SLIME_*_CHECK` flags, so
-   `Generation::boot_action` is decoded but not yet delivered to the bootstrap
-   thread or consumed. B39's "two builds of one component image cannot select
-   different boot graphs" clause is unproven until it is.
+**Remaining:** the seL4 fixtures must declare what `init` actually hands each
+child before their planes go green again. `sel4-stream.zti` is the migrated
+template — real grants for authority backed by concrete objects,
+`mintedBindings` for anything the owner mints at runtime — and under it the
+stream plane provisions the entire graph (`[fabric] every declared stream edge
+provisioned`) before failing in an unrelated shared-buffer remap.
+`sel4-spawn.zti` and `sel4-boot.zti` are partly declared;
+`sel4_channel_check`, `sel4_sample_check`, `sel4_supervision_check`, and
+`sel4_crossing_check` fail with signatures identical to those observed at
+`99f6c45` before this work, all following from the requirement that every
+declared instance be planned. This is fixture content, not a decoder or
+dispatch defect.
 
 ### B40 — child CSpaces are fixed four-slot shells rather than admitted authority
 

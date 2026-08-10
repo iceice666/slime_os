@@ -211,3 +211,43 @@ edge provisioned`, with all four authority denials observed — before failing
 later in a shared-buffer remap (`ARMPageMap: Attempting to remap a frame that
 does not belong to the passed address space`). That residual fault is past
 every capability-declaration boundary this entry concerns.
+
+**2026-08-10 — `bootAction` is now delivered and consumed; every
+`SLIME_SEL4_*_CHECK` branch is gone from `init.rs`.** The decoded action
+reaches the bootstrap thread in its first C parameter (`c_param_mut(0)`,
+available on every architecture), and `sel4-runtime-common`'s
+`declare_rust_entrypoint!` already forwards typed C parameters, so no assembly
+or link-time change was required. `slime_rt::entry!` forwards it to `main`,
+whose signature gains the argument across all 56 component binaries; only
+`init` reads it. Non-bootstrap instances and dynamically spawned children
+receive zero.
+
+`compose_declared_graph` replaces twenty-two `option_env!` branches with a
+match on the authenticated value. An action the image does not implement exits
+non-zero rather than falling through to another graph, which is the property
+B39's "two builds of one component image cannot select different boot graphs"
+clause asks for: the image is byte-identical across every manifest and only the
+admitted action differs.
+
+Three x86 oracle guards (`SLIME_FABRIC_QOS_CHECK`,
+`SLIME_FABRIC_OPERATION_CHECK`, `SLIME_FABRIC_VISIBILITY_CHECK`) carried a
+second half whose only job was to exclude the seL4 plane sharing the flag;
+those halves are deleted, and each flag now names exactly one composition.
+`qos_plane()` became a `qos` parameter threaded from the action.
+`launch_fabric_boot` and its four helpers — the x86-only full-graph
+composition keyed on `SLIME_GENERATION_NUMBER == 17` — are deleted as dead.
+
+`check-sel4-component-graph.py` no longer asserts init's exact transfer-window
+base. That address sits above init's own image and moves whenever `init.rs`
+changes size; the property under test is that init bound a one-page window at
+all. The two child window addresses stay exact, since those images are not
+edited by work on init's composition.
+
+**Four planes fail identically before and after this change** —
+`sel4_channel_check` (`generation declares 1 instances with service authority,
+need 2`), `sel4_sample_check` (`spawn receiver`), `sel4_supervision_check`
+(`the parked handle landed in no slot`), and `sel4_crossing_check` (`crossing
+peer`). Verified by stashing this work and re-running each gate at `99f6c45`:
+the failure strings match exactly. They follow from the plan-coverage commit's
+requirement that every declared instance be planned, and are fixture-migration
+work, not regressions from the boot-action cutover.
