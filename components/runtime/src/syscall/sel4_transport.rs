@@ -39,8 +39,8 @@ use super::{
     ERR_INVALID_ARG, ERR_SUCCESS, MAX_CAPS_PER_MSG, MAX_DIRECTORY_PATH, MAX_MSG, MAX_WAIT_SOURCES,
     MIN_TRANSFER_WINDOW, SYS_BLOCK_TRANSACT, SYS_CAP_DROP, SYS_CAP_TRANSFER, SYS_DIRECTORY_COMMIT,
     SYS_DIRECTORY_DERIVE, SYS_DIRECTORY_INSPECT, SYS_ENDPOINT_CREATE, SYS_EXIT,
-    SYS_GENERATION_RECEIVE, SYS_GENERATION_TRANSACT, SYS_HEALTH_CONFIRM, SYS_INPUT_READ,
-    SYS_RECOVERY_RECONSTRUCT, SYS_RECV, SYS_SEND, SYS_SHARED_BUFFER_CREATE, SYS_SHARED_BUFFER_LOAN,
+    SYS_GENERATION_RECEIVE, SYS_GENERATION_TRANSACT, SYS_HEALTH_CONFIRM, SYS_RECOVERY_RECONSTRUCT,
+    SYS_RECV, SYS_SEND, SYS_SHARED_BUFFER_CREATE, SYS_SHARED_BUFFER_LOAN,
     SYS_SHARED_BUFFER_LOAN_MAP, SYS_SHARED_BUFFER_MAP, SYS_SHARED_BUFFER_RELEASE,
     SYS_SHARED_BUFFER_RETURN, SYS_SHARED_BUFFER_REVOKE, SYS_SHARED_BUFFER_SEAL,
     SYS_SHARED_BUFFER_UNMAP, SYS_SPAWN, SYS_STORE_TRANSACT, SYS_SUPERVISION_DERIVE,
@@ -60,6 +60,11 @@ pub const ROOT_SERVICE_SLOT: sel4::CPtrBits = 1;
 /// shares its fault domain. Above every slot a generation grant can name:
 /// grant slots are the component's own numbering and start at 0.
 pub const CONSOLE_SERVICE_SLOT: sel4::CPtrBits = 32;
+
+/// Console-endpoint message labels. One endpoint carries both kinds because
+/// one root thread serves them; the label says which (B41).
+const CONSOLE_LABEL_WRITE: u64 = 0;
+const CONSOLE_LABEL_INPUT_READ: u64 = 1;
 
 /// Bytes of a spawn grant record in the transfer window: slot word, then rights
 /// word.
@@ -513,7 +518,21 @@ pub fn directory_commit(slot: u32, expected: &[u8; 32], new: &[u8; 32]) -> i64 {
 }
 
 pub fn input_read(slot: u32) -> (i64, u64) {
-    pair_of(SYS_INPUT_READ, &[slot as Word])
+    // A Call on the console endpoint, not the root's: input and console
+    // output are both "the terminal" and share one dispatcher, distinguished
+    // by label (B41). The console capability carries reply authority for
+    // exactly this.
+    let info = MessageInfoBuilder::default()
+        .label(CONSOLE_LABEL_INPUT_READ)
+        .length(1)
+        .build();
+    let mut mrs = [0 as Word; wire::FAST_REGISTERS];
+    mrs[0] = slot as Word;
+    let reply = console_service().call_with_mrs(info, mrs);
+    match outcome(&reply) {
+        Ok(pair) => pair,
+        Err(error) => (error, 0),
+    }
 }
 
 /// The shared shape of the three 64-byte request/reply protocols: the request
@@ -656,7 +675,16 @@ pub(crate) fn early_debug_write(bytes: &[u8]) {
     for chunk in bytes.chunks(wire::INLINE_BYTES) {
         let transfer = descriptor(chunk.len(), 0, FORM_INLINE);
         let (operands, used) = payload_operands(0, transfer, chunk);
-        let _ = result_of(super::SYS_DEBUG_WRITE, &operands[..used]);
+        // Inline chunks on the console endpoint, same as `debug_write`: this
+        // path exists for output before a transfer window is bound, so it
+        // never stages through one.
+        let info = MessageInfoBuilder::default()
+            .label(CONSOLE_LABEL_WRITE as Word)
+            .length(used)
+            .build();
+        let mut mrs = [0 as Word; wire::FAST_REGISTERS];
+        mrs[..used].copy_from_slice(&operands[..used]);
+        console_service().send_with_mrs(info, mrs);
     }
 }
 
@@ -688,7 +716,7 @@ pub fn debug_write(bytes: &[u8]) -> i64 {
     // line. The dispatcher thread on the other side is what makes a blocking
     // send safe here.
     let info = MessageInfoBuilder::default()
-        .label(super::SYS_DEBUG_WRITE as Word)
+        .label(CONSOLE_LABEL_WRITE as Word)
         .length(used)
         .build();
     let mut mrs = [0 as Word; wire::FAST_REGISTERS];

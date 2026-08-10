@@ -22,6 +22,13 @@ pub const FAST_MESSAGE_REGISTERS: usize = sel4::NUM_FAST_MESSAGE_REGISTERS;
 /// Highest label an operation may carry; see [`Operation`].
 pub const MAX_OPERATION_LABEL: u16 = Operation::SupervisionDerive as u16;
 
+/// The label `InputRead` used to carry, retired with B41.
+///
+/// Left as a hole rather than renumbered: a component built against the old
+/// ABI is refused, where renumbering would have it silently invoke whichever
+/// operation moved into slot 17. Input is a Call on the console endpoint now.
+pub const RETIRED_INPUT_READ_LABEL: sel4::Word = 17;
+
 // The four-MR fast path and the four-capability logical bound are independent
 // facts that happen to agree on AArch64. Pin the transport side so a profile
 // with fewer fast registers fails here instead of silently truncating.
@@ -111,7 +118,6 @@ pub enum Operation {
     DirectoryInspect = 14,
     DirectoryDerive = 15,
     DirectoryCommit = 16,
-    InputRead = 17,
     GenerationTransact = 18,
     GenerationReceive = 19,
     Wait = 20,
@@ -164,7 +170,6 @@ impl Operation {
             14 => Self::DirectoryInspect,
             15 => Self::DirectoryDerive,
             16 => Self::DirectoryCommit,
-            17 => Self::InputRead,
             18 => Self::GenerationTransact,
             19 => Self::GenerationReceive,
             20 => Self::Wait,
@@ -231,7 +236,7 @@ impl Operation {
             // M6.4 (P5.4.3): the events come from somewhere a component cannot
             // reach, which makes delivery mechanism. What a key *means* is
             // Dango's business and stays in userspace.
-            | Self::InputRead => Mediation::RootService,
+            => Mediation::RootService,
             // Storage, directory, input, recovery, and generation planes have
             // no seL4 mechanism owner in this cutover. They answer with the
             // ordinary Slime error rather than faulting the caller.
@@ -323,8 +328,35 @@ pub struct Reception {
 /// is no longer part of it.
 pub struct ConsoleMessage {
     pub badge: sel4::Badge,
+    pub kind: ConsoleKind,
     pub mrs: [sel4::Word; FAST_MESSAGE_REGISTERS],
     pub len: usize,
+}
+
+/// What a console-endpoint message asks for.
+///
+/// Two kinds share one endpoint because one thread serves them and a second
+/// endpoint would need a second blocking receive. They are both "the
+/// terminal", so one queue between them is the honest shape.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum ConsoleKind {
+    /// One-way debug output.
+    Write,
+    /// A read returning one decoded key event.
+    InputRead,
+}
+
+impl ConsoleKind {
+    const WRITE: sel4::Word = 0;
+    const INPUT_READ: sel4::Word = 1;
+
+    const fn from_label(label: sel4::Word) -> Option<Self> {
+        match label {
+            Self::WRITE => Some(Self::Write),
+            Self::INPUT_READ => Some(Self::InputRead),
+            _ => None,
+        }
+    }
 }
 
 /// Receive one console message through an explicit IPC buffer.
@@ -345,9 +377,49 @@ pub fn recv_console(
     if reception.info.extra_caps() != 0 || reception.info.caps_unwrapped() != 0 {
         return Err(IpcError::UnsupportedCapabilityTransfer);
     }
+    let Some(kind) = ConsoleKind::from_label(reception.info.label()) else {
+        return Err(IpcError::InvalidOperation);
+    };
     Ok(ConsoleMessage {
         badge: reception.badge,
+        kind,
         mrs: reception.msg,
+        len,
+    })
+}
+
+/// Answer the previous input read and wait for the next message, in one
+/// syscall — the console loop's steady state once a read has been served.
+pub fn reply_recv_console(
+    endpoint: sel4::cap::Endpoint,
+    response: Response,
+    buffer: &mut sel4::IpcBuffer,
+) -> Result<ConsoleMessage, IpcError> {
+    let words = [response.result as sel4::Word, response.aux];
+    let info = sel4::MessageInfoBuilder::default()
+        .length(words.len())
+        .build();
+    // `reply_recv` carries its payload in the buffer's message registers
+    // rather than the fast ones, so the reply is staged there and the next
+    // request is read back out of them.
+    buffer.msg_regs_mut()[..words.len()].copy_from_slice(&words);
+    let (received, badge) = endpoint.with(&mut *buffer).reply_recv(info, ());
+    let len = received.length();
+    if len > FAST_MESSAGE_REGISTERS {
+        return Err(IpcError::InvalidLength);
+    }
+    if received.extra_caps() != 0 || received.caps_unwrapped() != 0 {
+        return Err(IpcError::UnsupportedCapabilityTransfer);
+    }
+    let Some(kind) = ConsoleKind::from_label(received.label()) else {
+        return Err(IpcError::InvalidOperation);
+    };
+    let mut mrs = [0 as sel4::Word; FAST_MESSAGE_REGISTERS];
+    mrs[..len].copy_from_slice(&buffer.msg_regs()[..len]);
+    Ok(ConsoleMessage {
+        badge,
+        kind,
+        mrs,
         len,
     })
 }
@@ -1042,6 +1114,13 @@ mod tests {
     #[test]
     fn every_legacy_label_resolves_to_a_bounded_answer() {
         for label in 0..=sel4::Word::from(MAX_OPERATION_LABEL) {
+            if label == RETIRED_INPUT_READ_LABEL {
+                assert_eq!(
+                    Operation::from_label(label),
+                    Err(IpcError::InvalidOperation)
+                );
+                continue;
+            }
             let operation = Operation::from_label(label).expect("legacy label is known");
             assert_eq!(operation.label(), label);
             match operation.mediation() {

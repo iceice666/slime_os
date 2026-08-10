@@ -543,7 +543,14 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
                 cnode_size_bits,
                 child_slots.console,
                 &root_cnode.absolute_cptr(console_endpoint),
-                sel4::CapRightsBuilder::none().write(true).build(),
+                // Write plus reply: a console write is one-way, but an input
+                // read on the same endpoint is a Call. Never recv — every
+                // child shares this dispatcher, so a receiver could answer
+                // another child's read.
+                sel4::CapRightsBuilder::none()
+                    .write(true)
+                    .grant_reply(true)
+                    .build(),
                 id.service_badge(),
                 true,
                 &mut ledger,
@@ -861,7 +868,8 @@ struct InstallLedger {
 }
 
 /// Distinct capabilities the root installs into one child: service, console,
-/// fault, TCB.
+/// fault, TCB. The input slot names the console's endpoint, so it is not a
+/// separate install.
 const MAX_CHILD_INSTALLS: usize = 4;
 
 impl InstallLedger {

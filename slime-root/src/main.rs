@@ -1639,108 +1639,6 @@ const fn input_script(generation: u64) -> &'static [u8] {
     }
 }
 
-/// The scripted key source (M6.4, P5.4.3).
-///
-/// A byte string and a cursor, exactly as the oracle's
-/// `drivers::input::ScriptInput` is. There is no keyboard on the pinned QEMU
-/// profile and a gate needs a deterministic session, so the "device" is a
-/// script the generation selects — which is honest about what is being proved:
-/// the *authority* path and the event encoding, not a PS/2 decoder.
-pub struct ScriptedInput {
-    bytes: &'static [u8],
-    /// Per-task cursors, because the script is a *session* rather than a shared
-    /// queue.
-    ///
-    /// The root launches every declared component, so two copies of a console
-    /// component run and both read input. One cursor would let the
-    /// root-launched copy drain the script before the spawned one asked, and
-    /// the spawned session would park on an exhausted source — which is exactly
-    /// what happened, and read as a hung component rather than a shared cursor.
-    cursors: [usize; MAX_TASKS],
-}
-
-impl ScriptedInput {
-    const fn new(bytes: &'static [u8]) -> Self {
-        Self {
-            bytes,
-            cursors: [0; MAX_TASKS],
-        }
-    }
-
-    /// The next event, or `None` when the script is spent. A spent script is
-    /// `WouldBlock` rather than an error: no key has been pressed *yet* is the
-    /// same answer a real keyboard gives.
-    /// The next event for `task`.
-    ///
-    /// A spent script yields `Escape` forever rather than `None`. That is not a
-    /// convenience: `dango.rs` loops on `WouldBlock` with a `wait` that this
-    /// source always satisfies, so a reader whose script ran out would spin
-    /// until the graph's iteration budget died — and it *would* run out, because
-    /// the root launches an unconfigured copy of every declared component and
-    /// that copy reads its own cursor to the end.
-    ///
-    /// Escape is the session's own quit key, so an exhausted script ends the
-    /// reader exactly as the scripted `\x1b` ends the configured one.
-    fn next_event(&mut self, task: TaskId) -> Option<u64> {
-        let cursor = self.cursors.get_mut(task.0 as usize)?;
-        let byte = self.bytes.get(*cursor).copied();
-        match byte {
-            Some(byte) => {
-                *cursor += 1;
-                Some(encode_key(byte))
-            }
-            None => Some(encode_key(0x1b)),
-        }
-    }
-}
-
-/// Encode one scripted byte as the runtime's key event, matching the oracle's
-/// `syscall::encode_key_event` numbering so `slime_rt::input_read` decodes it
-/// unchanged.
-const fn encode_key(byte: u8) -> u64 {
-    // The numbering is `syscall::decode` in `components/runtime`, read from the
-    // decoder rather than guessed: 1..=13 are named keys, and a printable
-    // character is `0x100 | ch`. Getting this wrong produced a session where
-    // every keystroke arrived as a space, which is a decoder disagreement that
-    // looks like a broken keyboard.
-    let code: u64 = match byte {
-        0x1b => 1,
-        0x08 => 2,
-        b'\t' => 3,
-        b'\n' => 4,
-        b' ' => 9,
-        printable => 0x100 | printable as u64,
-    };
-    // Bit 32 is `pressed`. A script byte is a keypress, and without this every
-    // event decoded as a *release* — which `dango.rs` discards, so the session
-    // consumed its whole script and typed nothing.
-    code | (1 << 32)
-}
-
-/// Answer `InputRead`: one decoded key event, if the caller may read them.
-fn serve_input_read(
-    graph: &GraphTables,
-    input: &mut ScriptedInput,
-    id: TaskId,
-    words: &[sel4::Word],
-) -> Response {
-    let Some(table) = graph.get(id) else {
-        return Response::error(IpcError::BadCapability);
-    };
-    let Ok(capability) = table.resolve(words[0] as u32, RIGHT_INPUT_READ) else {
-        return Response::error(IpcError::BadCapability);
-    };
-    if !matches!(capability.resource, graph::Resource::Input) {
-        return Response::error(IpcError::BadCapability);
-    }
-    match input.next_event(id) {
-        Some(event) => Response::success(0, event),
-        // Only a task id past the cursor table, which cannot happen for a task
-        // the dispatcher is serving.
-        None => Response::error(IpcError::WouldBlock),
-    }
-}
-
 /// Which resource a declared grant names, and the rights mask that bounds it.
 ///
 /// # Slot order comes from the grant's name
@@ -2229,6 +2127,9 @@ static mut CONSOLE_IPC_BUFFER: FreePage = FreePage([0; GRANULE_SIZE]);
 /// pointer to it for as long as it runs.
 static mut CONSOLE_CONTEXT: Option<console::ConsoleContext> = None;
 
+/// The scripted key source, owned by the console thread (B41).
+static mut CONSOLE_INPUT: Option<console::ScriptedInput> = None;
+
 /// Start the console dispatcher (B41).
 ///
 /// A second root thread, sharing the root's CSpace and VSpace and running at
@@ -2244,6 +2145,8 @@ fn start_console_dispatcher(
     allocator: &mut ObjectAllocator,
     endpoint: sel4::cap::Endpoint,
     windows: &WindowTable<MAX_TASKS>,
+    graph: &GraphTables,
+    script: &'static [u8],
 ) {
     let scratch_addr = ptr::addr_of!(CONSOLE_PAGE) as usize;
     let scratch = match ScratchPage::claim(bootinfo, scratch_addr) {
@@ -2261,11 +2164,19 @@ fn start_console_dispatcher(
     // reference taken to either static.
     let context = unsafe {
         let slot = &mut *ptr::addr_of_mut!(CONSOLE_CONTEXT);
+        let input = &mut *ptr::addr_of_mut!(CONSOLE_INPUT);
+        *input = Some(console::ScriptedInput::new(script));
+        let input = match input.as_mut() {
+            Some(input) => ptr::addr_of_mut!(*input),
+            None => fatal!("console input unset"),
+        };
         *slot = Some(console::ConsoleContext {
             endpoint,
             scratch,
             windows: windows as *const _,
             buffer: ptr::addr_of_mut!(CONSOLE_IPC_BUFFER) as *mut sel4::IpcBuffer,
+            input,
+            graph: graph as *const _,
         });
         match slot.as_ref() {
             Some(context) => ptr::addr_of!(*context),
@@ -2722,7 +2633,14 @@ fn launch_instance_graph(
     // B41: the console dispatcher starts before the service loop, so console
     // traffic has a receiver for as long as any child can send. `windows`
     // outlives it — `serve_instance_graph` does not return.
-    start_console_dispatcher(bootinfo, allocator, console_endpoint, &windows);
+    start_console_dispatcher(
+        bootinfo,
+        allocator,
+        console_endpoint,
+        &windows,
+        &graph,
+        input_script(generation.number),
+    );
 
     serve_instance_graph(
         generation,
@@ -2853,7 +2771,6 @@ fn serve_instance_graph(
     let mut namespaces = Namespaces::new();
     // The scripted key source, selected by generation number exactly as the
     // oracle's `bootstrap` selects it.
-    let mut input = ScriptedInput::new(input_script(generation.number));
     // Interned directory scopes. A capability carries an index into this, not
     // a path: inlining 128 bytes into every `Resource` grew the capability
     // tables past the root's stack.
@@ -3064,9 +2981,6 @@ fn serve_instance_graph(
             // root, scoped views that derivation may only narrow, and an atomic
             // compare-and-swap that keeps two writers from losing an update.
             // M6.4: one scripted key event, gated on an `Input` capability.
-            Operation::InputRead => {
-                ipc::reply(serve_input_read(graph, &mut input, id, &words));
-            }
             Operation::DirectoryInspect => {
                 ipc::reply(serve_directory_inspect(
                     graph,

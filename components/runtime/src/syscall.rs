@@ -27,7 +27,6 @@ const SYS_SEND: u64 = 1;
 const SYS_RECV: u64 = 2;
 const SYS_EXIT: u64 = 3;
 const SYS_SPAWN: u64 = 4;
-const SYS_DEBUG_WRITE: u64 = 5;
 const SYS_BLOCK_TRANSACT: u64 = 6;
 const SYS_STORE_TRANSACT: u64 = 7;
 const SYS_HEALTH_CONFIRM: u64 = 8;
@@ -39,7 +38,6 @@ const SYS_CAP_DROP: u64 = 13;
 const SYS_DIRECTORY_INSPECT: u64 = 14;
 const SYS_DIRECTORY_DERIVE: u64 = 15;
 const SYS_DIRECTORY_COMMIT: u64 = 16;
-const SYS_INPUT_READ: u64 = 17;
 
 const SYS_GENERATION_TRANSACT: u64 = 18;
 pub const SYS_GENERATION_RECEIVE: u64 = 19;
