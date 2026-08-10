@@ -156,10 +156,19 @@ the sector payload is not reaching the caller's buffer on the source device's
 path. The `SLIME_GRAPH block served` record carries no device index, which is
 the first thing to fix in diagnosing it.
 
-**B43's own work has not started:** `BlockTransact` and `StoreTransact` remain
-labels on the universal dispatcher, and moving them off shares B41's blocker —
-nothing receives on a second endpoint until the `WindowTable` contract is
-settled.
+**B43's own work has not started, but is no longer blocked (2026-08-10).**
+`BlockTransact` and `StoreTransact` remain labels on the universal dispatcher.
+The prerequisite — something to receive on a second endpoint — is solved: B41's
+console dispatcher is a second root thread that names its own IPC buffer
+through `Cap::with`, needing no thread-local state and no vendor change. The
+same pattern applies here.
+
+Storage is not the same shape as console, though. A console write is one-way
+and touches only the caller's window; a block or store transaction returns a
+reply and needs the device tables, the DMA frames, and the graph's capability
+table, all owned by the main dispatcher. Either those move behind the storage
+endpoint with the service, or the storage thread coordinates with the main one
+— and that ownership split is the design decision, not the threading.
 
 ### B44 — generation and recovery policy still crosses the universal root dispatcher
 
