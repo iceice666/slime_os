@@ -1571,6 +1571,11 @@ impl<'a> Generation<'a> {
             if previous_name.is_some_and(|previous| previous >= minted.name) {
                 return Err(DecodeError::BadOrder);
             }
+            // No two declarations may claim one holder slot — neither two
+            // minted bindings, nor a minted binding and one of the holder's
+            // own grant-backed bindings. A collision would leave the holder's
+            // slot naming two different capabilities, and would make the
+            // spawn-time ordering by destination slot ambiguous.
             if (0..index).try_fold(false, |seen, earlier| {
                 let other = self.minted_binding(earlier)?;
                 Ok::<bool, DecodeError>(
@@ -1578,6 +1583,12 @@ impl<'a> Generation<'a> {
                 )
             })? {
                 return Err(DecodeError::BadBinding);
+            }
+            let holder = self.instance(minted.holder)?;
+            for at in 0..holder.binding_count() {
+                if self.binding(holder, at)?.slot == minted.slot {
+                    return Err(DecodeError::BadBinding);
+                }
             }
             previous_name = Some(minted.name);
         }
@@ -1837,5 +1848,61 @@ mod tests {
             ),
             Err(DecodeError::BadOwner)
         );
+    }
+
+    /// `BootAction`'s numeric values are an ABI: the root passes one in the
+    /// bootstrap thread's first C parameter, and `init` matches on the same
+    /// numbers from its own table. Renumbering a variant here would silently
+    /// select a different graph in an image built before the change, so the
+    /// mapping is pinned rather than left to declaration order.
+    #[test]
+    fn boot_action_numbering_is_frozen() {
+        for (action, id) in [
+            (BootAction::Product, 1),
+            (BootAction::Boot, 2),
+            (BootAction::Call, 3),
+            (BootAction::Channel, 4),
+            (BootAction::Crossing, 5),
+            (BootAction::Dango, 6),
+            (BootAction::Directory, 7),
+            (BootAction::Filesystem, 8),
+            (BootAction::Generation, 9),
+            (BootAction::Input, 10),
+            (BootAction::Loan, 11),
+            (BootAction::Operation, 12),
+            (BootAction::Powerbox, 13),
+            (BootAction::Qos, 14),
+            (BootAction::Reclamation, 15),
+            (BootAction::Recovery, 16),
+            (BootAction::Rollback, 17),
+            (BootAction::Sample, 18),
+            (BootAction::Spawn, 19),
+            (BootAction::Storage, 20),
+            (BootAction::Store, 21),
+            (BootAction::Stream, 22),
+            (BootAction::Supervision, 23),
+            (BootAction::Transfer, 24),
+            (BootAction::Visibility, 25),
+        ] {
+            assert_eq!(action.id(), id, "{action:?} changed its ABI number");
+        }
+    }
+
+    /// Every spelling the source manifest may carry resolves, and nothing else
+    /// does. A manifest naming an action this decoder does not know must fail
+    /// admission rather than fall back to a default graph.
+    #[test]
+    fn every_declared_boot_action_spelling_resolves() {
+        for (spelling, expected) in [
+            ("product", BootAction::Product),
+            ("boot", BootAction::Boot),
+            ("qos", BootAction::Qos),
+            ("visibility", BootAction::Visibility),
+        ] {
+            assert_eq!(BootAction::parse(spelling), Some(expected));
+        }
+        for unknown in ["", "Product", "prod", "unknown", "product "] {
+            assert_eq!(BootAction::parse(unknown), None, "{unknown:?} resolved");
+        }
     }
 }

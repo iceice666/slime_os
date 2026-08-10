@@ -354,7 +354,17 @@ def check_generation(data: bytes, expected_identity: bytes | None = None) -> dic
         # The holder must be owned by the minter, so a minted capability cannot
         # cross an ownership edge the instance graph does not declare.
         require(instance_rows[holder][2] == 1 and instance_rows[holder][3] == owner, "BadMintedBindingOwner")
+        # No two declarations may claim one holder slot — neither two minted
+        # bindings, nor a minted binding and one of the holder's own
+        # grant-backed bindings. A collision would leave the slot naming two
+        # capabilities and make the spawn-time slot ordering ambiguous.
         require((holder, slot) not in seen_minted_slots, "BadMintedBinding")
+        holder_row = instance_rows[holder]
+        bound_slots = {
+            bound_slot
+            for _, bound_slot in binding_rows[holder_row[7] : holder_row[7] + holder_row[8]]
+        }
+        require(slot not in bound_slots, "BadMintedBinding")
         seen_minted_slots.add((holder, slot))
         previous_minted = name
     return {"identity": identity, "number": number, "parent": None if parent == bytes(32) else parent, "target": target, "kernel_len": 0, "total_len": total_len}
