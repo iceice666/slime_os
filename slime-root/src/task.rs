@@ -49,8 +49,10 @@ use crate::object_allocator::{AllocError, ObjectAllocator, TaskArenaId};
 /// of `.bss`. Both tables live in `static`s for backlog B3's reason.
 pub const MAX_TASKS: usize = 48;
 
-/// Slots in a child CNode: null, service endpoint, own TCB, fault handler.
-pub const CHILD_CNODE_SIZE_BITS: usize = 2;
+/// Slots in a child CNode for the fixture paths: null, service endpoint, own
+/// TCB, fault handler, and the console endpoint at [`CHILD_SLOT_CONSOLE`].
+/// Six bits, since that slot sits above every grant-nameable one.
+pub const CHILD_CNODE_SIZE_BITS: usize = 6;
 
 /// Child CSpace slot holding the badged root service endpoint.
 pub const CHILD_SLOT_SERVICE: sel4::CPtrBits = 1;
@@ -58,6 +60,12 @@ pub const CHILD_SLOT_SERVICE: sel4::CPtrBits = 1;
 pub const CHILD_SLOT_TCB: sel4::CPtrBits = 2;
 /// Child CSpace slot holding the task's badged fault-handler endpoint.
 pub const CHILD_SLOT_FAULT: sel4::CPtrBits = 3;
+/// Child CSpace slot holding the badged console/debug endpoint (B41).
+///
+/// Above every slot a generation grant can name: grant slots are the
+/// component's own numbering and start at 0, so a low fixed slot would collide
+/// with declared authority in every migrated fixture.
+pub const CHILD_SLOT_CONSOLE: sel4::CPtrBits = 32;
 
 /// Destination slots in a child's CSpace, resolved from the admitted plan.
 ///
@@ -68,6 +76,10 @@ pub const CHILD_SLOT_FAULT: sel4::CPtrBits = 3;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ChildSlots {
     pub service: sel4::CPtrBits,
+    /// The console/debug endpoint (B41). Separate from `service` so console
+    /// traffic neither consumes the root's lifecycle dispatcher nor shares its
+    /// fault domain.
+    pub console: sel4::CPtrBits,
     pub tcb: sel4::CPtrBits,
     pub fault: sel4::CPtrBits,
 }
@@ -76,6 +88,7 @@ impl ChildSlots {
     /// The four-slot shell the fixture paths construct outside any plan.
     pub const SHELL: Self = Self {
         service: CHILD_SLOT_SERVICE,
+        console: CHILD_SLOT_CONSOLE,
         tcb: CHILD_SLOT_TCB,
         fault: CHILD_SLOT_FAULT,
     };
@@ -100,11 +113,14 @@ impl ChildSlots {
         if self.service != CHILD_SLOT_SERVICE {
             return mismatch(self.service);
         }
-        if self.tcb == 0 || self.fault == 0 {
+        if self.tcb == 0 || self.fault == 0 || self.console == 0 {
             return mismatch(0);
         }
-        if self.tcb == self.fault || self.tcb == self.service || self.fault == self.service {
-            return mismatch(self.fault);
+        let slots = [self.service, self.console, self.tcb, self.fault];
+        for (index, slot) in slots.iter().enumerate() {
+            if slots[index + 1..].contains(slot) {
+                return mismatch(*slot);
+            }
         }
         Ok(self)
     }
@@ -394,6 +410,10 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
         allocator: &mut ObjectAllocator,
         image: &ChildImage<'_>,
         service_endpoint: sel4::cap::Endpoint,
+        // The console/debug endpoint (B41). A separate object from the root
+        // service endpoint, so console traffic has its own queue and its own
+        // fault domain.
+        console_endpoint: sel4::cap::Endpoint,
         authority: Authority,
         supervision: Supervision,
         caller_vspace: sel4::cap::VSpace,
@@ -512,6 +532,19 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
                         id.fault_badge()
                     }
                 },
+                true,
+                &mut ledger,
+            )?;
+            // Write-only, and never receive: every child shares the console
+            // dispatcher, so a receiver could dequeue another child's output
+            // before the console saw it.
+            mint_child_slot(
+                cnode,
+                cnode_size_bits,
+                child_slots.console,
+                &root_cnode.absolute_cptr(console_endpoint),
+                sel4::CapRightsBuilder::none().write(true).build(),
+                id.service_badge(),
                 true,
                 &mut ledger,
             )?;
@@ -784,8 +817,10 @@ fn audit_child_cspace(
 
     for slot in 0..(1u64 << cnode_size_bits) {
         let slot = slot as sel4::CPtrBits;
-        let declared =
-            slot == slots.service || slot == slots.fault || (expect_tcb && slot == slots.tcb);
+        let declared = slot == slots.service
+            || slot == slots.console
+            || slot == slots.fault
+            || (expect_tcb && slot == slots.tcb);
         let cptr = cnode.absolute_cptr_from_bits_with_depth(slot, cnode_size_bits);
         // `Move` onto itself: `DeleteFirst` means occupied, `FailedLookup`
         // means empty. Any other answer is the slot not being addressable,
@@ -825,8 +860,9 @@ struct InstallLedger {
     len: usize,
 }
 
-/// Distinct capabilities the root installs into one child: service, fault, TCB.
-const MAX_CHILD_INSTALLS: usize = 3;
+/// Distinct capabilities the root installs into one child: service, console,
+/// fault, TCB.
+const MAX_CHILD_INSTALLS: usize = 4;
 
 impl InstallLedger {
     /// Record one install, refusing a source/badge pair already present.
@@ -918,8 +954,8 @@ fn mint_child_slot(
 #[cfg(test)]
 mod tests {
     use super::{
-        Arrival, CHILD_CNODE_SIZE_BITS, CHILD_SLOT_FAULT, CHILD_SLOT_SERVICE, ChildSlots,
-        ConstructionStage, InstallLedger, MAX_CHILD_INSTALLS, TaskError, TaskId,
+        Arrival, CHILD_CNODE_SIZE_BITS, CHILD_SLOT_CONSOLE, CHILD_SLOT_FAULT, CHILD_SLOT_SERVICE,
+        ChildSlots, ConstructionStage, InstallLedger, MAX_CHILD_INSTALLS, TaskError, TaskId,
         child_service_rights, construction_record,
     };
     use crate::generation::Authority;
@@ -1127,12 +1163,34 @@ mod tests {
         assert!(nulled.validate().is_err());
     }
 
+    /// The console slot must sit above every slot a generation grant can name,
+    /// or it collides with declared authority in a migrated fixture.
+    #[test]
+    fn the_console_slot_clears_grant_numbering() {
+        // 22 is the highest slot any seL4 fixture declares today; the bound is
+        // what matters, not the exact figure.
+        assert!(CHILD_SLOT_CONSOLE > 22);
+        assert!(CHILD_SLOT_CONSOLE < (1 << CHILD_CNODE_SIZE_BITS));
+    }
+
+    /// A layout naming one slot twice is refused: one install would silently
+    /// overwrite another.
+    #[test]
+    fn a_console_slot_colliding_with_another_is_refused() {
+        let collided = ChildSlots {
+            console: CHILD_SLOT_FAULT,
+            ..ChildSlots::SHELL
+        };
+        assert!(collided.validate().is_err());
+    }
+
     /// The fixture shell must address every slot it names inside the smallest
     /// CNode the root builds, or the fixture paths install out of bounds.
     #[test]
     fn the_shell_slots_fit_the_shell_cnode() {
         let shell = ChildSlots::SHELL;
         let bound = 1 << CHILD_CNODE_SIZE_BITS;
+        assert!(shell.console < bound);
         assert!(shell.service < bound);
         assert!(shell.tcb < bound);
         assert!(shell.fault < bound);

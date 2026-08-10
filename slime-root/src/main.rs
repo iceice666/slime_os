@@ -639,6 +639,13 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         Ok(slot) => slot.cap(),
         Err(error) => fatal!("service endpoint unavailable: {error:?}"),
     };
+    // B41: console and debug traffic gets its own endpoint object. A noisy or
+    // faulting console client then cannot consume the lifecycle dispatcher's
+    // queue, and the two no longer share a fault domain.
+    let console_endpoint = match allocator.allocate_fixed::<sel4::cap_type::Endpoint>() {
+        Ok(slot) => slot.cap(),
+        Err(error) => fatal!("console endpoint unavailable: {error:?}"),
+    };
 
     // A v4 generation launches only explicitly declared root-owned autostart
     // instances. Catalogue-only executables remain inert until a bound exec
@@ -651,6 +658,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
             allocator,
             &scratch,
             service_endpoint,
+            console_endpoint,
             &mut block_devices,
             #[cfg(slime_boot_selector)]
             &mut boot_runtime,
@@ -695,6 +703,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
             allocator,
             &image,
             service_endpoint,
+            console_endpoint,
             authority,
             Supervision::SelfManaged,
             sel4::init_thread::slot::VSPACE.cap(),
@@ -2205,6 +2214,7 @@ fn launch_instance_graph(
     allocator: &mut ObjectAllocator,
     scratch: &ScratchPage,
     service_endpoint: sel4::cap::Endpoint,
+    console_endpoint: sel4::cap::Endpoint,
     block_devices: &mut BlockDevices,
     #[cfg(slime_boot_selector)] boot_runtime: &mut boot_selector::BootRuntime,
 ) {
@@ -2290,10 +2300,12 @@ fn launch_instance_graph(
         let child_slots = match generation.instance_child_slots(instance_index) {
             Ok(Some(boot_contracts::generation::ChildSlotPlan {
                 service: Some(service),
+                console: Some(console),
                 tcb: Some(tcb),
                 fault: Some(fault),
             })) => match (task::ChildSlots {
                 service: service as sel4::CPtrBits,
+                console: console as sel4::CPtrBits,
                 tcb: tcb as sel4::CPtrBits,
                 fault: fault as sel4::CPtrBits,
             })
@@ -2306,7 +2318,7 @@ fn launch_instance_graph(
                 ),
             },
             Ok(_) => fatal!(
-                "SLIME_GRAPH FAIL instance {} has no planned service, TCB, or fault slot",
+                "SLIME_GRAPH FAIL instance {} has no planned service, console, TCB, or fault slot",
                 instance.name
             ),
             Err(error) => fatal!("SLIME_GRAPH FAIL child slot plan rejected: {error:?}"),
@@ -2315,6 +2327,7 @@ fn launch_instance_graph(
             allocator,
             &image,
             service_endpoint,
+            console_endpoint,
             authority,
             Supervision::SelfManaged,
             sel4::init_thread::slot::VSPACE.cap(),
@@ -2580,6 +2593,7 @@ fn launch_instance_graph(
         generation,
         &mut launched_instances,
         service_endpoint,
+        console_endpoint,
         &mut tasks,
         &mut windows,
         &mut graph,
@@ -2679,6 +2693,7 @@ fn serve_instance_graph(
     generation: &Generation<'_>,
     launched: &mut LaunchedInstances,
     endpoint: sel4::cap::Endpoint,
+    console_endpoint: sel4::cap::Endpoint,
     tasks: &mut TaskTable<MAX_TASKS>,
     windows: &mut WindowTable<MAX_TASKS>,
     graph: &mut GraphTables,
@@ -3047,6 +3062,7 @@ fn serve_instance_graph(
                     allocator,
                     scratch,
                     endpoint,
+                    console_endpoint,
                     id,
                     &words,
                     &mut spawns,
@@ -4844,6 +4860,7 @@ fn construct_child(
     allocator: &mut ObjectAllocator,
     scratch: &ScratchPage,
     service_endpoint: sel4::cap::Endpoint,
+    console_endpoint: sel4::cap::Endpoint,
     parent: TaskId,
     plan: &SpawnPlan,
 ) -> Result<TaskId, IpcError> {
@@ -4873,6 +4890,7 @@ fn construct_child(
             allocator,
             &image,
             service_endpoint,
+            console_endpoint,
             authority,
             Supervision::SelfManaged,
             sel4::init_thread::slot::VSPACE.cap(),
@@ -4892,10 +4910,12 @@ fn construct_child(
             match generation.instance_child_slots(plan.instance) {
                 Ok(Some(boot_contracts::generation::ChildSlotPlan {
                     service: Some(service),
+                    console: Some(console),
                     tcb: Some(tcb),
                     fault: Some(fault),
                 })) => (task::ChildSlots {
                     service: service as sel4::CPtrBits,
+                    console: console as sel4::CPtrBits,
                     tcb: tcb as sel4::CPtrBits,
                     fault: fault as sel4::CPtrBits,
                 })
@@ -5109,6 +5129,7 @@ fn serve_spawn(
     allocator: &mut ObjectAllocator,
     scratch: &ScratchPage,
     service_endpoint: sel4::cap::Endpoint,
+    console_endpoint: sel4::cap::Endpoint,
     id: TaskId,
     words: &[sel4::Word; ipc::FAST_MESSAGE_REGISTERS],
     spawns: &mut usize,
@@ -5201,6 +5222,7 @@ fn serve_spawn(
         allocator,
         scratch,
         service_endpoint,
+        console_endpoint,
         id,
         &plan,
     ) {

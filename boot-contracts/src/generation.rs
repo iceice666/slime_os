@@ -23,6 +23,10 @@ const KERNEL_OBJECT_ENDPOINT: u32 = 5;
 /// Service discriminant for the root dispatch endpoint, matching
 /// `SERVICE_ROOT_DISPATCH` in `scripts/build/build-generation.py`.
 const SERVICE_ROOT_DISPATCH: u32 = 1;
+/// Service discriminant for the console/debug endpoint (B41), which every
+/// process holds separately from the root dispatcher so console traffic
+/// neither consumes the lifecycle loop nor shares its fault domain.
+const SERVICE_CONSOLE: u32 = 2;
 
 pub const KIND_KERNEL: u32 = 1;
 pub const KIND_BOOTSTRAP: u32 = 2;
@@ -281,6 +285,7 @@ pub struct Mapping {
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct ChildSlotPlan {
     pub service: Option<usize>,
+    pub console: Option<usize>,
     pub tcb: Option<usize>,
     pub fault: Option<usize>,
 }
@@ -1083,8 +1088,26 @@ impl<'a> Generation<'a> {
             }
             service = Some(binding.slot);
         }
+        let mut console = None;
+        for index in 0..self.service_binding_count {
+            let binding = self.service_binding(index)?;
+            if binding.process != process_index || binding.service != SERVICE_CONSOLE {
+                continue;
+            }
+            if console.is_some() {
+                return Err(DecodeError::BadBinding);
+            }
+            // Write-only, enforced here as well as in the host twin: a console
+            // client that could receive would dequeue another process's output
+            // before the console dispatcher saw it.
+            if binding.rights & 0b10 != 0 {
+                return Err(DecodeError::BadBinding);
+            }
+            console = Some(binding.slot);
+        }
         Ok(Some(ChildSlotPlan {
             service,
+            console,
             tcb,
             fault,
         }))

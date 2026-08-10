@@ -140,6 +140,10 @@ PLAN_NONE = 0xFFFFFFFF
 # component's runtime resolves it from.
 SERVICE_ROOT_DISPATCH = 1
 ROOT_SERVICE_SLOT = 1
+# B41: the console/debug endpoint, and the one slot every component's runtime
+# resolves it from.
+SERVICE_CONSOLE = 2
+CONSOLE_SERVICE_SLOT = 32
 GRANT_POLICY_ONLY = 1
 GRANT_MINTED = 1
 BOOT_ACTIONS = {
@@ -356,6 +360,14 @@ def check_generation(data: bytes, expected_identity: bytes | None = None) -> dic
         process, service, slot, obj, rights, badge, flags = GENERATION_SERVICE_BINDING.unpack_from(data, service_binding_offset + index * GENERATION_SERVICE_BINDING.size)
         if service == SERVICE_ROOT_DISPATCH:
             require(slot == ROOT_SERVICE_SLOT, "BadServiceBinding")
+        elif service == SERVICE_CONSOLE:
+            # Same pin, same reason: the runtime resolves this from a constant.
+            require(slot == CONSOLE_SERVICE_SLOT, "BadServiceBinding")
+            # Write-only. Every process shares the console dispatcher, so a
+            # receiver could dequeue another's output before the console saw it.
+            require(rights & 0b10 == 0, "BadServiceBinding")
+        else:
+            require(False, "UnknownService")
 
     for process_index in range(processes):
         # Both are required: the root has nowhere to put the child's TCB or its

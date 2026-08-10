@@ -2213,6 +2213,19 @@ GRANT_POLICY_ONLY = 1
 # A send/recv grant whose channel object its source creates at runtime.
 GRANT_MINTED = 1
 SERVICE_ROOT_DISPATCH = 1
+# B41: console and debug traffic gets its own endpoint object per process, so a
+# noisy or faulting console client cannot consume the root's lifecycle
+# dispatcher or share its fault domain.
+SERVICE_CONSOLE = 2
+# The child CSpace slot the console endpoint is installed at. Fixed rather than
+# per-plane: `components/runtime` resolves it from a constant, exactly as it
+# does the root endpoint, and the checker pins both.
+#
+# Above every slot a generation grant can name, because grant slots are the
+# component's own numbering and start at 0. 32 is the first power of two clear
+# of the highest declared slot in any fixture (22), which keeps the CNode a
+# round six bits.
+CONSOLE_SERVICE_SLOT = 32
 KERNEL_OBJECT_CNODE = 1
 KERNEL_OBJECT_VSPACE = 2
 KERNEL_OBJECT_TCB = 3
@@ -2322,9 +2335,25 @@ def build_sel4_plan(
                 string_offset(f"{name}:fault"), thread, PLAN_NONE, fault_endpoint, process + 1, 1
             )
         )
+        console_endpoint = len(object_index)
+        object_index[(name, "console-endpoint")] = console_endpoint
+        kernel_records.extend(
+            GENERATION_KERNEL_OBJECT.pack(
+                string_offset(f"{name}:console-endpoint"), KERNEL_OBJECT_ENDPOINT, process, 4, 1, PLAN_NONE, 0
+            )
+        )
         service_records.extend(
             GENERATION_SERVICE_BINDING.pack(
                 process, SERVICE_ROOT_DISPATCH, 1, fault_endpoint, 1, process + 1, 0
+            )
+        )
+        # Write-only: a console client must never be able to receive on this
+        # endpoint. Every process shares the console dispatcher, so a receiver
+        # could dequeue another process's output before the console saw it —
+        # the same confinement the root endpoint needs, for the same reason.
+        service_records.extend(
+            GENERATION_SERVICE_BINDING.pack(
+                process, SERVICE_CONSOLE, CONSOLE_SERVICE_SLOT, console_endpoint, 1, process + 1, 0
             )
         )
         cap_records.extend(
