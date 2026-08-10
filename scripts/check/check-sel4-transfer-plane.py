@@ -307,9 +307,49 @@ def check_transcript(transcript: str) -> None:
     # The root refused the write the probe attempted on its read-only source.
     if not re.search(r"SLIME_GRAPH block refused task=\d+ op=2 class=rights", transcript):
         fail("the root recorded no rights refusal on the read-only source")
+    # B43: multi-device selection is exact. This is the only plane holding two
+    # device capabilities, so it is the only place the claim can be observed —
+    # and the defect it guards against was real: `declared_resource` answers
+    # `Block { device: 0 }` for every grant, because only the installer knows
+    # how many it has placed, so a path that forgets to renumber gives a
+    # component two capabilities that both name device 0.
+    served = re.findall(
+        r"SLIME_GRAPH block served task=\d+ device=(\d+) op=(\d+) lba=\d+ status=(-?\d+)",
+        transcript,
+    )
+    if not served:
+        report_transcript(transcript)
+        fail("no block request was served; the console thread answered nothing")
+    devices = {device for device, _, _ in served}
+    if devices != {"0", "1"}:
+        report_transcript(transcript)
+        fail(
+            f"block requests reached devices {sorted(devices)}, expected both 0 and 1; "
+            "a capability that should name the source resolved to the receiver"
+        )
+    # Reads on the source (device 1) must have *mostly* succeeded, or the
+    # transfer read zeroes and every later digest check compared nothing
+    # against nothing. Not "all": the probe sizes each device by reading past
+    # its end on purpose, so a handful of refusals are the capacity search
+    # working, and demanding zero of them would assert the search never ran.
+    source_reads = [status for device, op, status in served if device == "1" and op == "1"]
+    successful = sum(1 for status in source_reads if status == "0")
+    if successful < 2:
+        report_transcript(transcript)
+        fail(
+            f"only {successful} reads on the source device succeeded; "
+            "the transfer had no source bytes to copy"
+        )
+    # Writes must never have reached the source: it is the read-only device,
+    # and a rights refusal is recorded above rather than a served write.
+    source_writes = [op for device, op, _ in served if device == "1" and op == "2"]
+    if source_writes:
+        report_transcript(transcript)
+        fail(f"{len(source_writes)} writes were served on the read-only source device")
     print(
         f"transcript: {len(REQUIRED_MARKERS)} markers observed; both devices came "
-        "up from one shared granule, the read-only source refused a write, a "
+        "up from one shared granule and each answered under its own index, the "
+        "read-only source refused a write, a "
         "tampered manifest failed its digest, and the transferred generation "
         "staged pending before health confirmation promoted it",
         flush=True,
