@@ -24,32 +24,6 @@ mechanism; and B50 deletes the dual-model residue. Each item is a clean cutover:
 its old ABI and fallback are removed in the same change that makes its exit
 condition observable.
 
-### B44 — generation and recovery policy still crosses the universal root dispatcher
-
-**Status:** Open. **Class:** Unmasked architectural debt. **Depends on:** B43.
-
-**Problem:** Generation management and recovery are userspace policy, but
-`GenerationTransact`, `GenerationReceive`, health, and reconstruction requests
-still enter the universal root dispatcher. This leaves policy clients coupled
-to root's global request ABI after B35 made the durable boot selector
-authoritative.
-
-**Evidence:** `slime-root/src/ipc.rs::Operation` retains generation and recovery
-labels; the `sel4-generation-*`, rollback, recovery, and transfer components use
-the root syscall transport even when an owning userspace manager exists.
-
-**Fix:** Give the generation manager and recovery service dedicated endpoints
-and the minimum block/BootState capabilities they need. Move typed requests to
-those services, keep only irreducible boot-selector mechanism outside them, and
-remove the universal operation labels and runtime wrappers.
-
-**Exit condition:** Stage, inspect, select, rollback, recovery reconstruction,
-transfer, and health promotion traverse declared service endpoints; a client
-without those caps is denied by seL4 lookup, not a root-side resource table.
-`just sel4_generation_check`, `just sel4_boot_selection_check`, `just
-sel4_rollback_check`, `just sel4_recovery_plane_check`, and `just
-sel4_transfer_check` pass with no dispatcher fallback.
-
 ### B45 — directory, filesystem, and store services still depend on universal root IPC
 
 **Status:** Open. **Class:** Unmasked architectural debt. **Depends on:** B43.
@@ -234,6 +208,48 @@ fmt_check_all`, and `just lint_all` pass after the deletion.
 
 
 ## Resolved
+### B44 — generation and recovery policy still crosses the universal root dispatcher
+
+**Status:** Resolved 2026-08-10.
+
+**Problem:** `HealthConfirm`, `RecoveryReconstruct`, `GenerationTransact`, and
+`GenerationReceive` entered the universal root dispatcher, coupling policy
+clients to root's global request ABI after B35 made the durable boot selector
+authoritative.
+
+**Exit condition observed:** all four labels are gone from
+`slime-root/src/ipc.rs::Operation`, so a client is denied by seL4 lookup
+because there is no root-side path at all — the strongest form of the property
+the exit condition asks for. `just sel4_generation_check`, `just
+sel4_boot_selection_check`, `just sel4_rollback_check`, `just
+sel4_recovery_plane_check`, and `just sel4_transfer_check` all pass, with no
+dispatcher fallback anywhere behind them.
+
+**The fix was removal, not endpoints.** None of the four was reachable. Three
+answered `UnsupportedOperation` from `Mediation::Unavailable`. The fourth had a
+real handler arm that never ran: boot promotion happens from the supervisor's
+idle path once every required instance parks, not from a component asking for
+it. That was measured — a `debug_println!` in the arm, then a full
+`sel4_boot_selection_check`, zero hits — rather than reasoned about. Building a
+service for four operations nobody invokes would have been the worse answer.
+
+`Mediation::Unavailable` went with them, since B43's `StoreTransact` had been
+its last other member, and `check-sel4-component-graph.py`'s assertion inverted
+accordingly: it asserted each unmediated plane stayed unmediated, and now
+asserts none remains and that all seven retired labels refuse rather than
+resolve. Deleted alongside: `recovery.rs` (in no manifest at all),
+`generation-list.rs`, `generation-manager.rs`, init's `SLIME_TRANSFER_RECEIVER`
+branch (nothing set the flag), and the root-endpoint `transact` helper whose
+last caller left with B43.
+
+**`sel4_generation_check` was red on arrival** and is green now, for the same
+two reasons the probe planes were: `mintedBindings` was empty, so the spawn
+preflight saw one requested run token against zero declared; and the plane's
+two idle markers had no emitter without a second root-owned copy of each
+executable. Both are declared.
+
+Record: [`devlog/2026-08-10-b44-policy-labels-deleted/`](../devlog/2026-08-10-b44-policy-labels-deleted/index.md).
+
 ### B43 — block and durable-store clients still transact through root operation labels
 
 **Status:** Resolved 2026-08-10.
