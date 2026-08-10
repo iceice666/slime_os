@@ -5003,6 +5003,16 @@ fn construct_child(
             release_child(tasks, windows, graph, buffers, allocator, id);
             return Err(IpcError::DestinationSlotsExhausted);
         }
+        // The evidence that a child's own declared authority reached it. Only
+        // the root can place these — the parent holds no copy — so this is the
+        // only point at which it is observable.
+        sel4::debug_println!(
+            "SLIME_GRAPH declared placed task={} child={} slot={} kind={}",
+            parent.0,
+            id.0,
+            binding.slot,
+            resource.kind_name(),
+        );
     }
     Ok(id)
 }

@@ -383,6 +383,23 @@ pub fn valid_directory_path(path: &[u8], allow_empty: bool) -> bool {
 }
 
 impl Resource {
+    /// A stable one-word name for serial evidence. Not a wire format: it names
+    /// the kind for a reader, and carries none of the resource's identity.
+    pub const fn kind_name(self) -> &'static str {
+        match self {
+            Self::Executable { .. } => "executable",
+            Self::Endpoint { .. } => "endpoint",
+            Self::EndpointFactory => "endpoint-factory",
+            Self::SharedBufferFactory => "shared-buffer-factory",
+            Self::Block { .. } => "block",
+            Self::Supervision { .. } => "supervision",
+            Self::SharedBuffer { .. } => "shared-buffer",
+            Self::Loan { .. } => "loan",
+            Self::Input => "input",
+            Self::Directory { .. } => "directory",
+        }
+    }
+
     /// Whether this cutover can move the resource between capability tables
     /// **over a channel**, as a `send` attachment.
     ///

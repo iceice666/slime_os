@@ -40,6 +40,15 @@
       transferable = false;
     };
     {
+      name = "input-probe-idle-source";
+      rights = [
+        "inputRead";
+      ];
+      source = "sel4-input-probe-idle";
+      target = "sel4-input-probe-idle";
+      transferable = false;
+    };
+    {
       name = "init-endpoint-factory";
       rights = [
         "endpointCreate";
@@ -90,8 +99,36 @@
       name = "sel4-input-probe";
       owner = "init";
     };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "input-probe-idle-source";
+          slot = 1;
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "sel4-input-probe";
+      health = "optional";
+      name = "sel4-input-probe-idle";
+      owner = "root";
+    };
   ];
-  mintedBindings = [];
+  mintedBindings = [
+    {
+      name = "sel4-input-probe-run-token";
+      owner = "init";
+      holder = "sel4-input-probe";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 0;
+      transferable = false;
+    };
+  ];
   interfaceSchemas = [];
   objects = [
     {
