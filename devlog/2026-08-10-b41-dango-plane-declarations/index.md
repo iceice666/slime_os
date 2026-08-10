@@ -4,7 +4,7 @@
 |---|---|
 | Date | 2026-08-10 |
 | Kind | Defect |
-| Status | Root-caused |
+| Status | Verified |
 | Scope | `contracts/generation/v1/fixtures/sel4-dango.zti`, `components/bins/build.rs`, `components/bins/src/bin/init.rs`, `slime-root/src/main.rs`, `scripts/check/check-sel4-dango-plane.py` |
 | Roadmap | B41 |
 | Gates | `just sel4_dango_check`, `just sel4_component_graph_check`, `just sel4_boot_check` |
@@ -28,8 +28,10 @@ a different problem in a different layer.
 - Expected: the four-line scripted session completes.
 - Observed, at session start: `seL4 image build failed with exit status 1`,
   `thread 'main' panicked at components/bins/build.rs:272:6: command RPC binding`.
-- Observed now: `marker out of order: the second request was accepted`, after
-  the first launch chain passes in full.
+- Observed now: pass. "a scripted console session resolved two commands
+  through the generation's profile and launched both through the spawn service
+  with explicit environment, working directory, and stdin; an undeclared
+  command was denied at resolution and a malformed line was a parse error".
 
 ## Investigation log
 
@@ -42,6 +44,9 @@ a different problem in a different layer.
 | 5 | `spawn preflight instance=dango requested=1 bindings=5 minted=1` | Self-loop grants were counted as the parent's to pass |
 | 6 | `spawn refused task=2 slot=4` after the count matched | Executable slots resolved in init's CSpace, not the spawn service's |
 | 7 | `[sysinfo] spawned through profile` precedes `spawn-request:accepted` | The gate ordered a race |
+| 8 | Composed launch refused with both caps transferred (`caps=2`) | Not a transfer failure |
+| 9 | Bisected `valid_request` by instrumenting each predicate: `reject: cap zero` | One forwarded capability arrived as slot 0 |
+| 10 | `main.rs:4102` allocated the receive slot with `free_slot_from(0)`; every other runtime allocation uses `free_slot_from(1)` | Root cause |
 
 ## Root cause
 
@@ -67,6 +72,16 @@ Five distinct declaration defects, each masking the next:
    minted launch context, and the composed launch also forwards a derived
    working directory and a stdin endpoint.
 
+And one defect underneath all of them, in the root rather than the fixture:
+
+6. **A received capability could land in slot 0.** The receive path allocated
+   the destination with `free_slot_from(0)`. That slot number is reported to
+   the receiver, and every protocol carrying one reads 0 as "no capability" —
+   `valid_request` requires each of the first `capability_count` entries of
+   `received_caps` to be non-zero. A forwarded capability landing there was
+   therefore invisible to the component it had just been given to. Every other
+   runtime slot allocation in the root already searched from 1.
+
 ## Changes
 
 | Area | Change | Restored invariant |
@@ -75,6 +90,7 @@ Five distinct declaration defects, each masking the next:
 | `sel4-dango.zti` | `sysinfo` and `echo-agent` owned by `spawn-service` | The instance that spawns a child owns it, which is what admits its exec bindings |
 | `components/bins/build.rs` | Consumer identified by which instance runs `spawn-service`; executable slots and the RPC slot read from its bindings; minted bindings consulted alongside grant bindings | A component's compiled slots are its own |
 | `slime-root/src/main.rs` | Self-loop grants excluded from the spawn count and installed by the root | A parent is charged only for what it holds |
+| `slime-root/src/main.rs` | Received capabilities allocate from slot 1 | A capability handed to a component is visible to it |
 | `check-sel4-dango-plane.py` | The child's marker is required for presence, not position | The gate asserts authority rather than scheduling |
 
 ## Regression guards
@@ -90,7 +106,7 @@ Five distinct declaration defects, each masking the next:
 
 | Command/scenario | Result | Evidence class |
 |---|---|---|
-| `just sel4_dango_check` | First launch chain passes; fails on the composed second launch | Direct |
+| `just sel4_dango_check` | Pass | Direct |
 | `just sel4_component_graph_check` | Pass | Direct |
 | `just sel4_boot_check`, `just sel4_root_boot_check`, `just sel4_reclamation_check` | Pass | Direct |
 | `just sel4_capability_layout_check` | Pass | Direct |
@@ -120,11 +136,6 @@ Five distinct declaration defects, each masking the next:
 
 ## Open risks and follow-ups
 
-- [ ] The composed launch is refused in `valid_request` before spawning. Both
-      forwarded capabilities arrive (`received task=2 channel=1 bytes=64
-      caps=2`) and `received_caps` is zeroed per iteration, so the mismatch is
-      in the request record's own fields. `valid_spawn_request` is shared with
-      the oracle path unchanged, so what differs is what dango packs here.
 - [ ] `sel4_input_check` — B41's other named gate — exceeds its 180s bound
       without completing the plane. Not investigated.
 - [ ] B41 itself is untouched: `DebugWrite` and `InputRead` are still labels on
