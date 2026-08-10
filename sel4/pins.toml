@@ -10,8 +10,8 @@ repository = "https://github.com/seL4/rust-sel4.git"
 release = "v5.0.0"
 commit = "d441a880938209f661201704dfbee7b91c5aa905"
 toolchain = "nightly-2026-04-04"
-root_target = "deps/rust-sel4/support/targets/aarch64-sel4-roottask-minimal.json"
-root_target_sha256 = "84fcb8cd021b032041f1e2b0c4996cafc8d7aa0f7ba2ae56d5868a313c53956e"
+root_target = "deps/rust-sel4/support/targets/aarch64-sel4-roottask.json"
+root_target_sha256 = "3e772835c6387c69849f43d8846b6107a27425fa4d4175ecfe777516ebf0554d"
 loader_target = "aarch64-unknown-none"
 
 [qemu_arm_virt]
