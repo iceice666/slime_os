@@ -24,32 +24,6 @@ mechanism; and B50 deletes the dual-model residue. Each item is a clean cutover:
 its old ABI and fallback are removed in the same change that makes its exit
 condition observable.
 
-### B45 — directory, filesystem, and store services still depend on universal root IPC
-
-**Status:** Open. **Class:** Unmasked architectural debt. **Depends on:** B43.
-
-**Problem:** Directory inspection/derivation/commit and filesystem/store
-requests are service policy, yet their public path remains operation labels on
-the root endpoint. Capability provenance is therefore checked in a global
-software table rather than expressed by a client holding the service endpoint
-and an attenuated directory or store capability.
-
-**Evidence:** `DirectoryInspect`, `DirectoryDerive`, `DirectoryCommit`, and
-`StoreTransact` remain in `slime-root/src/ipc.rs::Operation`; the directory,
-filesystem, powerbox, Dango, and store components use the shared syscall ABI.
-
-**Fix:** Provision dedicated directory, filesystem, and store endpoints with
-Zutai request/reply contracts. Pass attenuated directory/store capabilities
-through real CSpace bindings and seL4 transfer. Remove each root operation label
-and wrapper as its service becomes direct.
-
-**Exit condition:** Directory derivation and filesystem/store access succeed
-only through declared service capabilities; attenuation, provenance, malformed
-requests, and service death remain observable. `just sel4_directory_check`,
-`just sel4_filesystem_check`, `just sel4_store_check`, `just
-sel4_powerbox_check`, and `just sel4_dango_check` pass with the corresponding
-root labels absent.
-
 ### B46 — logical ChannelTable, Transit, ParkedReplies, and WaitSet duplicate seL4 IPC
 
 **Status:** Open. **Class:** Unmasked architectural debt. **Depends on:**
@@ -208,6 +182,51 @@ fmt_check_all`, and `just lint_all` pass after the deletion.
 
 
 ## Resolved
+### B45 — directory, filesystem, and store services still depend on universal root IPC
+
+**Status:** Resolved 2026-08-10.
+
+**Problem:** Directory inspection, derivation, and commit, and store requests,
+reached clients as operation labels on the root endpoint, so capability
+provenance was checked in a global software table rather than expressed by
+holding a service endpoint.
+
+**Exit condition observed:** `just sel4_directory_check`, `just
+sel4_filesystem_check`, `just sel4_store_check`, `just sel4_powerbox_check`,
+and `just sel4_dango_check` all pass. `DirectoryInspect`, `DirectoryCommit`,
+and `StoreTransact` are absent from `slime-root/src/ipc.rs::Operation` — the
+last of those left with B43. Attenuation, provenance, malformed requests, and
+service death remain observable: the directory gate records two commits, a
+stale refusal, and a scoped-commit refusal across three derivations, and the
+powerbox gate observes exactly one capability crossing at rights `0x80004`
+with a widening request denied.
+
+**`DirectoryDerive` did not move, and should not have.** It is the only writer
+of the caller's `GraphTables` entry, and the main dispatcher writes that same
+entry on `cap_drop` and on a spawn's result. Two threads writing one task's
+capability table is a data race, not a decoupling. The alternatives were a lock
+— which would make the second dispatcher block on the first, the exact coupling
+B41 removed — or moving `GraphTables` wholesale, which is B50's item, since the
+global authority database is what forces the choice. `ScopeTable` stays with
+derive for the same reason and is read from the console thread; a scope, once
+interned, is never mutated or freed, so a concurrent read observes the old
+table or the new one and never a torn scope. That is weaker than the device
+tables' exclusive ownership and is recorded as such.
+
+The handlers, `Namespaces`, `DisplayPath`, and the directory rights moved into
+a new `slime-root/src/directory.rs`. `RIGHT_TRANSFER` now comes from
+`boot-contracts`, its canonical definition, instead of being restated in the
+binary beside a comment saying it was restated.
+
+**Two of the five gates were red on arrival**, both for the omission the
+generation plane had: init mints an endpoint pair as each child's run token,
+and `mintedBindings` was `[]`, so the spawn preflight saw one requested grant
+against zero declared and refused before either plane ran a scenario.
+`sel4_powerbox_check` — red since the start of this backlog run — and
+`sel4_filesystem_check` are green.
+
+Record: [`devlog/2026-08-10-b45-directory-service-split/`](../devlog/2026-08-10-b45-directory-service-split/index.md).
+
 ### B44 — generation and recovery policy still crosses the universal root dispatcher
 
 **Status:** Resolved 2026-08-10.
