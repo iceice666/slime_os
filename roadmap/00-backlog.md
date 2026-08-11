@@ -207,6 +207,46 @@ context donation for passive RPC servers. If MCS cannot be admitted, explicitly
 defer only the MCS half with recorded assurance evidence; do not restore one
 maximal child priority.
 
+**Progress (2026-08-10): the priority half is done.** B48's fix names it
+first — "remove the all-services-one-priority fallback by applying v5's
+declared per-thread priorities" — and that fallback is gone.
+
+The v5 wire format has carried a `ScheduleRecord` with `priority`, `budget_us`,
+and `period_us` per thread since the cutover, and the decoder has read it the
+whole time. Nothing wrote one: the builder packed a constant 100 and
+`slime-root` ignored the record entirely, using its own compiled-in 254. Both
+halves are real now — `Instance.priority` is the manifest's side,
+`instance_priority` resolves it through process/thread/schedule, and both the
+boot-graph and spawn paths pass it to `tcb_set_sched_params`. It is per-thread
+rather than per-instance because the record already is, so a process with
+several threads can differentiate them.
+
+Bounded at 254 in the builder *and* in the root, refused rather than clamped:
+a child at or above the root cannot be preempted by the service loop, so every
+other child blocks behind it on a root that never answers. The builder catches
+a manifest and `task::admit_priority` catches a generation from elsewhere.
+
+Observed, not merely declared: `SLIME_GRAPH schedule` records what each
+instance got, and the QoS plane declares `fabric-intruder` at 100 and is
+observed running it there while its five peers run at 254. All 30 seL4 gates
+pass.
+
+**The MCS half is deferred, with the decision recorded** in
+`sel4/config/qemu-arm-virt.cmake` rather than left blank: seL4's
+functional-correctness proofs do not cover the MCS configuration on AArch64,
+and this repository's claim is upstream seL4 with its assurance intact.
+Turning it on would trade a verified kernel for a scheduling feature in a
+config file. What that costs is stated there — the kernel has no notion of
+budget or period, so those fields stay zero rather than carrying figures it
+cannot enforce.
+
+**What that leaves open.** Two exit clauses need MCS and cannot be met without
+it: budget and period as authenticated data, and one budget-exhausting client
+not starving an unrelated higher-criticality service. Timeout faults likewise
+have no kernel mechanism to reach a declared handler. Those are the item's
+remaining scope, and B48 stays open on them rather than being closed on the
+half that is done.
+
 **Exit condition:** Priority, budget, and period are authenticated generation
 data and observed in the running graph; one budget-exhausting client cannot
 starve an unrelated higher-criticality service; timeout faults reach the

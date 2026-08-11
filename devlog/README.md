@@ -241,4 +241,5 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-10 | [B46 — a declared grant and a minted one at the same slot](2026-08-10-b46-minted-control-channels/index.md) | Defect | Verified | B46 |
 | 2026-08-10 | [B51 — a collected instance is not a new one](2026-08-10-b51-respawn-provenance/index.md) | Defect | Verified | B51 |
 | 2026-08-10 | [Blessing the layouts found two controls that were not controlling](2026-08-10-boot-layout-and-gate-controls/index.md) | Defect | Verified | none |
+| 2026-08-10 | [B48 — the schedule record was there all along](2026-08-10-b48-declared-priority/index.md) | Change | Verified | B48 |
 | 2026-08-10 | [B41 — why the root cannot yet have a second dispatcher](2026-08-10-b41-second-dispatcher-blocker/index.md) | Audit | Verified | B41, B43, B44, B45 |
