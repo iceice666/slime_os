@@ -195,13 +195,25 @@ Verified by declaring `extraThreads = 1` on the channel plane's console: two
 processes, three threads, decodes clean, `sel4_channel_check` passes. All 30
 seL4 gates pass.
 
-**What that leaves open.** `slime-root` still constructs only the main thread,
-so a declared second one is planned and not run — the exit condition's "a
-fixture can declare two threads in one process" holds for the declaration and
-not yet for the execution, and "one thread fault is reported under the declared
-fault policy" needs the thread to exist at runtime first. The fixture is
-reverted rather than left declaring a thread nothing starts. `runtime.rs` also
-still assumes one thread per component.
+**What that leaves open, and why it is the larger half.** `slime-root` still
+constructs only the main thread, so a declared second one is planned and not
+run. The exit condition's "a fixture can declare two threads in one process"
+holds for the declaration and not the execution, and "one thread fault is
+reported under the declared fault policy" needs the thread to exist at runtime
+first. The fixture is reverted rather than left declaring a thread nothing
+starts.
+
+Running one is not a small addition. The root's own console dispatcher shows
+the shape — `tcb_configure`, `tcb_set_sched_params`, `tcb_write_all_registers`
+— but a child's second thread needs three things the component side does not
+have: its own stack, its own entry point, and its own IPC buffer at a distinct
+address. `slime_rt::entry!` declares exactly one of each, and `runtime::start`
+calls `sel4::set_ipc_buffer`, which claims the crate's single ambient slot per
+address space. That is precisely the obstacle B41 hit in the root and solved
+with `Cap::with`: a capability carrying its own invocation context. The same
+answer applies here, but applying it means restructuring `slime-rt`'s startup
+so a thread names its buffer rather than installing it globally — every
+component's entry path.
 
 **Two clauses already hold (2026-08-10).** "Remove `TaskId` from every
 cross-process contract" and "lifecycle authority remains capability-based" were
