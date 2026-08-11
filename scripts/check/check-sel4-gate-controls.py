@@ -75,7 +75,7 @@ GATES: tuple[tuple[str, str, int], ...] = (
     ("sel4_filesystem_plane", "check/check-sel4-filesystem-plane.py", 11),
     ("sel4_input_plane", "check/check-sel4-input-plane.py", 8),
     ("sel4_powerbox_plane", "check/check-sel4-powerbox-plane.py", 11),
-    ("sel4_dango_plane", "check/check-sel4-dango-plane.py", 14),
+    ("sel4_dango_plane", "check/check-sel4-dango-plane.py", 13),
     ("sel4_transfer_plane", "check/check-sel4-transfer-plane.py", 12),
 )
 
@@ -108,6 +108,14 @@ def literal_for(pattern: str) -> str:
     text = re.sub(r"\\d\*", "7", text)
     text = re.sub(r"\\d\+", "7", text)
     text = re.sub(r"\\d", "7", text)
+    # Backreferences hold two fields equal, which is the assertion rather than
+    # decoration -- `required=(\d+) live=\1` says a healthy graph has every
+    # required instance live. Replaying the group's own instantiated text keeps
+    # that true in the synthetic line; dropping it would emit a literal `\1`
+    # and fail the round-trip check below.
+    groups = re.findall(r"\((?!\?)([^()]*)\)", text)
+    for index, group in enumerate(groups, start=1):
+        text = text.replace(f"\\{index}", group)
     text = re.sub(r"\\w\+", "word", text)
     text = re.sub(r"\.\+", "text", text)
     text = re.sub(r"\.\*", "", text)
@@ -186,6 +194,12 @@ def boot_plane_transcript(gate, marker_transcript: str) -> str:
             "[layout] path=init slots=1 max=64",
             "[layout] 1 endpoint control",
             *(f"[{component}] boot idle without a role" for component in gate.EXPECTED_IDLE_WITHOUT_ROLE),
+            # `check_transcript` requires exactly one healthy-supervisor
+            # terminal, but `TERMINAL_MARKER` is not in `REQUIRED_MARKERS`, so
+            # the marker synthesis never produces one. Instantiated from the
+            # gate's own pattern rather than written out here, so a change to
+            # it cannot leave this stale.
+            literal_for(gate.TERMINAL_MARKER),
         ]
     )
     return "\n".join(expanded) + "\n"
@@ -357,8 +371,13 @@ def check_layout_gate() -> int:
             ),
         ),
         (
+            # Derived, for the reason the mutation above is: this hardcoded
+            # `[layout] 3 endpoint`, and the channel plane's layout no longer
+            # reaches slot 3, so the mutation replaced nothing and the control
+            # passed a transcript it had not mutated. Dropping the slot number
+            # from whichever row is first is malformed in every layout.
             "row is malformed",
-            baseline.replace("[layout] 3 endpoint", "[layout] endpoint", 1),
+            re.sub(r"\[layout\] \d+ ", "[layout] ", baseline, count=1),
         ),
         (
             "slot numbers descend",
