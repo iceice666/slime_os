@@ -1,10 +1,10 @@
 [layout] path=init slots=8 max=64
-[layout] 0 endpoint-factory - 0x20000
-[layout] 14 shared-buffer-factory - 0x1000000 declared=0x1000004
-[layout] 15 executable fabric-service 0x10008
-[layout] 16 executable fabric-publisher 0x10008
-[layout] 17 executable fabric-subscriber 0x10008
-[layout] 18 executable fabric-intruder 0x10008
-[layout] 19 executable fabric-publisher-b 0x10008
-[layout] 20 executable fabric-subscriber-b 0x10008
+[layout] 1 executable fabric-intruder 0x10008
+[layout] 2 executable fabric-publisher 0x10008
+[layout] 3 executable fabric-publisher-b 0x10008
+[layout] 4 executable fabric-service 0x10008
+[layout] 5 executable fabric-subscriber 0x10008
+[layout] 6 executable fabric-subscriber-b 0x10008
+[layout] 7 endpoint-factory - 0x20000
+[layout] 8 shared-buffer-factory - 0x1000000
 [layout] end

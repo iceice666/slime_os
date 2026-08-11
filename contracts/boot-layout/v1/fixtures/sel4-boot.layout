@@ -1,4 +1,4 @@
-[layout] path=init slots=21 max=64
+[layout] path=init slots=23 max=64
 [layout] 0 endpoint-factory - 0x20000
 [layout] 1 shared-buffer-factory - 0x1000000
 [layout] 2 executable fabric-service 0x10008
@@ -20,4 +20,6 @@
 [layout] 18 executable fabric-op-server 0x1000c
 [layout] 19 executable fabric-op-time 0x1000c
 [layout] 20 executable fabric-op-client-b-restart 0x1000c
+[layout] 21 endpoint-factory - 0x20000
+[layout] 22 shared-buffer-factory - 0x1000000
 [layout] end

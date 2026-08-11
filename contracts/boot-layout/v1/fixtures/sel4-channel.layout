@@ -1,4 +1,4 @@
 [layout] path=init slots=2 max=64
-[layout] 3 endpoint - 0x1
-[layout] 7 endpoint - 0x3
+[layout] 0 endpoint - 0x1
+[layout] 1 endpoint - 0x3
 [layout] end
