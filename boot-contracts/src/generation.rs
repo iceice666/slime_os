@@ -1040,12 +1040,17 @@ impl<'a> Generation<'a> {
     /// so that a process with several can differentiate them, and reading it
     /// from the instance would flatten that the first time one does.
     pub fn instance_priority(&self, instance: usize) -> Result<Option<u32>, DecodeError> {
-        for index in 0..self.thread_count {
-            let thread = self.thread(index)?;
-            let process = self.process(thread.process)?;
+        for index in 0..self.process_count {
+            let process = self.process(index)?;
             if process.instance != instance {
                 continue;
             }
+            // The process's *main* thread, not whichever thread happens to
+            // appear first in the table. They were the same while a process
+            // had exactly one thread; with B47's extra threads, scanning the
+            // thread table would return a priority belonging to some other
+            // thread of the same process, depending on record order.
+            let thread = self.thread(process.main_thread)?;
             return Ok(Some(self.schedule(thread.schedule)?.priority));
         }
         Ok(None)
