@@ -275,6 +275,38 @@ activates when the plan is unsatisfiable. Dynamic factories consume and release
 delegated quota capabilities; remove compatibility-table watermarks that no
 longer own mechanism.
 
+**Progress (2026-08-10): the plan is computed and admission fails closed.**
+
+Both halves of the resource quota were fiction. The builder packed a literal
+`1, 1, 2, 0, 2, 4, 6, ..., 64, 1 << 20` that nothing derived — the process loop
+declares exactly one CNode, one VSpace, one TCB, one IPC-buffer frame, and two
+endpoints, so `frame_count=2`, `page_table_count=4`, and `mapping_count=6`
+described no plan — and `slime-root` never read the record, so nothing would
+have noticed. The counts now come from the loop that declares them, and
+`cslot_count` from the same `cnode_size_bits` the CSpace object is given, named
+once so the two cannot disagree.
+
+Admission refuses a quota that exceeds what the root can place, per class
+rather than as a total. Checking it there rather than during construction is
+the difference between a graph refused whole and one that half-activates and
+then cannot place a capability, with children already running. Verified by
+building a generation one CSlot over its CNode and observing
+`QuotaExceedsCeiling { instance: 0, kind: "cslot", declared: 65, limit: 64 }`
+before any component started — the exit condition's "one slot over is rejected
+before activation", for that class.
+
+`just contracts_check`, `just generation_check`, `just sel4_reclamation_check`,
+and `just sel4_boot_check` pass, along with the other 26 seL4 gates.
+
+**What that leaves open.** The image's frames and page tables are deliberately
+uncounted: the root maps those from its own untyped when it loads the ELF, so
+they are the root's accounting rather than the child's plan — which means IRQs,
+untyped size classes, and dynamic reserves are still unmodelled, and the
+"one object, mapping, IRQ, or untyped size class over" clause holds only for
+CSlots, TCBs, and CNodes. The static table constants B49 names
+(`MAX_TASKS`, `MAX_CHANNELS`, `MAX_TRANSIT`) are still watermarks rather than
+derived from the plan, and no stress graph exercises the admitted ceiling.
+
 **Exit condition:** A QEMU stress graph at the admitted ceiling boots and stays
 bounded; the same graph one object, slot, mapping, IRQ, or untyped size class
 over is rejected before activation. Observed live and reclaimed counts match the
