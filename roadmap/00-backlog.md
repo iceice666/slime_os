@@ -247,6 +247,19 @@ root re-checking a rights word per message. `grant` on the producer and
 `grant_reply` on the consumer ride along: without them an endpoint silently
 cannot carry the one capability an IPC message may hold, or answer a `Call`.
 
+**The endpoints are created at runtime**, one per declared channel, paired
+with the channel each replaces — observed on the channel plane as
+`SLIME_GRAPH peer endpoints created=2 channels=2`. Paired rather than swapped
+because the cutover cannot land in one commit; `for_channel` makes a
+component's migration a lookup instead of a second materialization pass.
+
+The object comes from the root's global pool while the minted capabilities are
+arena-owned, which is the lifetime the model already has: a declared channel
+outlives both peers — that is what lets a service whose launcher exited keep
+serving — but a capability belongs to its holder's CSpace. `sel4_stress_check`
+still passes, so 48 more endpoints at the 23-instance ceiling fit inside the
+budget B49 admitted.
+
 **What remains is one indivisible change.** `slime_rt::wait` has 115 call
 sites, `recv` 104, and `send` 93, across 41 component files. Each becomes a
 different primitive: rendezvous to Endpoint send/receive, synchronous RPC to
