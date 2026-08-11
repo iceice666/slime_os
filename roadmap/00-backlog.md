@@ -222,6 +222,31 @@ makes it visible, so removing it and re-running the suite proved nothing
 depended on it. `SLOT_CLAIMED` stays in the contract because `valid_ring_slot`
 must keep refusing it.
 
+**Both replacement kernel objects now exist** (`slime-root/src/peer_endpoint.rs`
+and `notification.rs`, 8 tests).
+
+The multi-source wait turned out to be the real obstacle, not the message
+transport. `fabric-service::park_on_controls` parks across up to nine endpoints
+at once and seL4 receives on exactly one, so `wait` has no Endpoint equivalent
+at all — the kernel object for "several sources, one waiter" is a Notification
+with badge bits. Nothing in the tree could hold one: notifications existed only
+for IRQs, and `graph::Resource` had no variant, so a child could not be given
+one. It has both now, plus `RIGHT_NOTIFY`, kept separate from `RIGHT_RECV`
+because observing a signal is not permission to consume the message that caused
+it.
+
+The bit is authority rather than convention: each source gets a capability
+minted with its bit as the badge and write rights only, so a holder sets
+exactly that bit and cannot consume the wake. Bits are never reused within a
+notification's life, because a signal already in flight from a released source
+would otherwise arrive as the new one.
+
+`peer_endpoint.rs` mints one capability per side with the rights that side
+declares, so the *kernel* enforces direction on every invocation instead of the
+root re-checking a rights word per message. `grant` on the producer and
+`grant_reply` on the consumer ride along: without them an endpoint silently
+cannot carry the one capability an IPC message may hold, or answer a `Call`.
+
 **What remains is one indivisible change.** `slime_rt::wait` has 115 call
 sites, `recv` 104, and `send` 93, across 41 component files. Each becomes a
 different primitive: rendezvous to Endpoint send/receive, synchronous RPC to
