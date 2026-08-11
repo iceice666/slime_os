@@ -175,26 +175,46 @@ def component_image(profile) -> bytes:
 def target_manifest(name: str) -> dict:
     return {
         "target": name,
+        "bootAction": "graph",
         "kernelObject": "kernel",
-        "bootstrapComponent": "init",
+        "bootstrapInstance": "init",
         "objects": [
             {"id": "init-image", "kind": "bootstrap"},
             {"id": "kernel", "kind": "kernel"},
             {"id": "neutral", "kind": "resource"},
         ],
-        "components": [
-            {"name": "init", "object": "init-image", "role": "init", "dependencies": [], "spawnBudget": 0}
+        # v5 splits the v4 `components` list into an executable catalogue and
+        # the instances constructed from it. This manifest still used the v4
+        # key, so the builder raised `KeyError: 'instances'` and this gate
+        # could not run at all -- the cutover moved every real fixture and
+        # left the one synthesized here behind.
+        "executables": [
+            {"name": "init", "object": "init-image", "role": "init", "spawnBudget": 0}
+        ],
+        "instances": [
+            {
+                "name": "init",
+                "executable": "init",
+                "owner": "root",
+                "autostart": True,
+                "dependencies": [],
+                "health": "required",
+                "bindings": [],
+            }
         ],
         "grants": [],
         "state": [],
-        "health": {"bootAttempts": 2, "requiredComponents": ["init"]},
+        "health": {"bootAttempts": 2, "requiredInstances": ["init"]},
     }
 
 
 def object_payload(generation: bytes, object_id: str) -> bytes:
+    # Header offsets from `boot-contracts/src/generation.rs::decode`, which is
+    # the authority. These were 136 and 184, from the v4 header; v5 grew the
+    # plan sections and moved everything after the counts.
     object_count = struct.unpack_from("<I", generation, 112)[0]
-    object_offset = struct.unpack_from("<Q", generation, 136)[0]
-    string_offset = struct.unpack_from("<Q", generation, 184)[0]
+    object_offset = struct.unpack_from("<Q", generation, 192)[0]
+    string_offset = struct.unpack_from("<Q", generation, 344)[0]
     for index in range(object_count):
         name_offset, _kind, payload_offset, payload_len, _digest = GENERATION_OBJECT.unpack_from(
             generation, object_offset + index * GENERATION_OBJECT.size
