@@ -401,6 +401,10 @@ capability_transfer_gen:
 fabric_stream_gen:
     python3 scripts/generate/generate-fabric-stream-bindings.py
 
+# B46: regenerate the v2 shared-ring bindings from their contract.
+fabric_ring_gen:
+    python3 scripts/generate/generate-fabric-ring-bindings.py
+
 # Regenerate the fabric-graph resource bindings (C8.2); part of the boot set.
 fabric_graph_gen: boot_gen
 
@@ -460,6 +464,10 @@ contracts_check: bootstate_model_check
     # `formatVersion` is the *manifest* schema's version and says nothing
     # about the wire format, so this builds each one and reads the magic.
     python3 scripts/check/check-generation-v5.py
+    # B46: the v2 shared-ring bindings match their contract. Generated code
+    # that has drifted from its schema is a hand-written wire format wearing a
+    # `@generated` header.
+    python3 scripts/generate/generate-fabric-ring-bindings.py --check
 
 # P0 target-profile and executable-artifact contract matrix.
 architecture_contract_check: contracts_check

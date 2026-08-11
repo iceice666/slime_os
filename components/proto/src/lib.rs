@@ -7,6 +7,7 @@ pub mod component;
 pub mod fabric_call;
 pub mod fabric_operation;
 pub mod fabric_qos;
+pub mod fabric_ring;
 pub mod fabric_stream;
 pub mod fabric_time;
 pub mod fabric_visibility;
