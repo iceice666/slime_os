@@ -62,6 +62,7 @@ pub mod launched;
 pub mod notification;
 pub mod object_allocator;
 pub mod parked;
+pub mod peer_endpoint;
 pub mod platform_timer;
 pub mod shared_buffer;
 pub mod supervision;
