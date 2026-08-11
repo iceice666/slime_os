@@ -269,48 +269,52 @@ owned root mechanism with a declared v5 capability; every fixture uses v5.
 affected `just sel4_*_check` targets, `just sel4_gate_control_check`, `just
 fmt_check_all`, and `just lint_all` pass after the deletion.
 
+## Resolved
 ### B51 — the spawn preflight cannot tell a respawn from a first launch
 
-**Status:** Open. **Class:** Latent defect, gate-visible. **Depends on:** none.
+**Status:** Resolved 2026-08-10.
 
-**Problem:** `spawn_preflight` refuses a request whose grant count differs from
-the child instance's declared bindings plus minted bindings. That rule assumes
-one spawn per declared instance. A *respawn* — the same instance, after the
-first died and was collected — is a second spawn of the same declaration, and
-the root has no way to say so.
+**Problem:** `spawn_preflight` checked a request against the child instance's
+declared bindings plus minted bindings, which assumes one spawn per
+declaration. A respawn — the same instance, after the first died and was
+collected — is that declaration launched again, and the root could not tell:
+`task_for_instance` answers liveness and `release_by_task` clears it, which is
+right for liveness and destroys provenance.
 
-**Evidence:** `just sel4_sample_check` fails at
-`[init] sample plane fail: budget did not recover after a child exited`. The
-plane spawns `sample-receiver` three times on purpose: once with its declared
-grant, once refused as `instance-live`, and once after the child exits, to
-prove the spawn budget is a live-child count rather than a table that never
-releases its dead. The third passes no grants, because the point is whether
-the ceiling admits it; the preflight answers
-`reason=declared-count requested=0 bindings=0 minted=1` and refuses before the
-budget is consulted.
+**Exit condition observed:** `just sel4_sample_check` passes, with the plane's
+third spawn admitted and the respawned child reaching a clean exit. `just
+sel4_spawn_check`, `just sel4_reclamation_check`, and `just
+sel4_component_graph_check` pass, along with twenty-three further plane gates.
+The gate-control mutation the exit condition asks for is a respawn carrying one
+grant instead of none: it is refused on the declared count, verified by making
+the plane do exactly that.
 
-**Two shapes were tried and neither is right.** Passing the declared grant on
-the respawn satisfies the preflight, and then the child blocks on a `recv` for
-a lender that has already exited, so it can never exit 0 and its `required`
-health makes that fatal. Relaxing the count rule for a respawn weakens the
-property that a spawn request must match what the generation declared — the
-rule B39 and B40 exist to enforce.
+**A respawn brings nothing, not merely fewer.** The first shape allowed at most
+the declared count, which is unsound — declaration matching is positional, so
+request N binds to the declaration with the Nth-lowest destination slot, and a
+partial request installs the caller's first capability at another
+declaration's slot under that declaration's rights ceiling with no error. An
+empty request has no such ambiguity, and a full one is checked exactly as a
+first launch is.
 
-**Fix:** Decide what a respawn *is*. Either the generation declares it (a
-restart policy on the instance, so the second launch has its own declaration),
-or the preflight distinguishes a collected instance from a never-launched one
-and applies the count rule only to the declared launch. The first is closer to
-what B47's lifecycle model wants.
+`LaunchedInstances` keeps a per-instance bitmap that outlives collection, which
+answers the question the preflight actually asks. B51's own text suggested a
+restart policy declared on the instance; that is the better long-term answer,
+belongs with B47's lifecycle model, and would have invented a contract field
+B47 may shape differently.
 
-**Exit condition:** `just sel4_sample_check` passes with the plane's third
-spawn admitted on a budget check rather than refused on a count check, and the
-respawned child reaches a clean exit. `just sel4_spawn_check`, `just
-sel4_reclamation_check`, and `just sel4_component_graph_check` still pass, and
-a gate-control mutation proves an *undeclared* grant set is still refused.
+`sample-receiver` exits 0 when its peer slot holds nothing. It is a `required`
+instance, so the throwaway retry's deliberate emptiness was otherwise fatal; a
+component with no channel has nothing to verify.
 
+**Three assertions on that gate had never been reached:** init's shared-buffer
+factory pinned at slot 14 where the fixture declares 4, `quota` markers naming
+a `component=` field that is now `instance=`/`executable=`, and B14's budget
+probe, which the root answers `instance-live` before any ceiling is consulted —
+as `init.rs`'s own comment already recorded.
 
+Record: [`devlog/2026-08-10-b51-respawn-provenance/`](../devlog/2026-08-10-b51-respawn-provenance/index.md).
 
-## Resolved
 ### B45 — directory, filesystem, and store services still depend on universal root IPC
 
 **Status:** Resolved 2026-08-10.
