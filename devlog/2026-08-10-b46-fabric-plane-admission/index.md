@@ -127,3 +127,33 @@ installs from it. What changed is whether it is still *owed*.
   them.
 - Every "was red" claim was verified by stashing the work and re-running, not
   inferred.
+
+## Corrections
+
+**2026-08-10 — the stream and QoS faults were a stack overflow, not aliasing.**
+This entry's open-risks section said stream and QoS "fault inside the root
+during their scenarios — the same aliasing class `sel4_sample_check` shows".
+That was a guess from the `frame aliased` lines immediately preceding the
+fault, and it was wrong.
+
+`ActionList` is 147,464 bytes: `MAX_MAPPING_PAGES + MAX_FRAME_ANCHORS * 2`
+slots of `Option<AdapterAction>`, built as a local in `build_actions` and
+returned by value, so each teardown put two copies on the root's 1 MiB stack
+from an already-deep dispatch frame. Symbolizing the faulting PC against the
+stream plane's own root ELF named `build_actions` directly, and every stack
+slot in the dump read `INVALID`. The constant's own comment claimed the bound
+was "deliberately independent of stack growth"; the array was a local.
+
+The list is heap-allocated now and `execute_teardown` takes it by value so the
+return moves a pointer rather than copying 144 KiB back through the caller.
+`sel4_stream_check` and `sel4_qos_check` are green.
+
+`sel4_sample_check` was also unblocked by the same change — it no longer
+faults — but fails a real assertion behind it, recorded as B51: the spawn
+preflight cannot distinguish a respawn from a first launch.
+
+**The "four defect classes" count was low.** Two more of the same kind were
+behind the fault: a stale `grants=13` admission count, prose spliced into a
+marker pattern, a marker no component emits, and a failure budget written for
+the P5.2 launch model. All four were on gates that had never run far enough to
+reach them.
