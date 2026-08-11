@@ -136,6 +136,36 @@ first, which is the right order: they are what will show the cutover preserved
 backpressure, bounded queues, timeouts, peer death, and cap-transfer
 attenuation rather than merely compiling.
 
+**Scope measured (2026-08-10).** The root-side figure understates it. The
+components are the bulk: 378 call sites across 41 files under
+`components/bins/src/` use `slime_rt::send`, `recv`, or `wait`, and every one
+is a rendezvous, a synchronous RPC, or a stream read that becomes a different
+primitive under the cutover.
+
+Two findings that make the cutover *more* tractable than the item's text
+suggests, both worth knowing before it starts:
+
+- **The four-capability message bound is nearly free to give up.** seL4 carries
+  one capability per IPC. Exactly one call site in the tree reads a second —
+  `directory-probe.rs:153`, which treats `caps[1]` as an optional derived
+  handle. Everything else already sends at most one, so "at most one capability
+  per IPC message" costs a single component change rather than a transit
+  redesign.
+- **`WaitSet` is already gone.** It was deleted with the readiness cluster
+  earlier in this run. What survives is vocabulary: `IpcError::WaitSetFull` and
+  `WaiterConflict` now name ordinary table-full and double-insert conditions in
+  `graph.rs` and `transfer_window.rs`. They cannot be renamed yet because
+  `parked.rs` still raises both, and `parked.rs` has 78 references in
+  `main.rs`.
+
+That last point is the shape of the whole item: nothing in it is separable.
+`channel.rs` also owns `LaunchedInstances`, which B51 made load-bearing for
+respawn provenance and which has nothing to do with logical channels. The
+deletion has to move that out, cut over every component, and land the v2 ring
+contract in one change, because the labels, the tables, and the components all
+reference each other. There is no partial state where the tree builds and the
+gates mean anything.
+
 **Exit condition:** `channel.rs`, `transit.rs`, `parked.rs`, `WaitSet`, and the
 migrated universal labels no longer exist. Backpressure, bounded queues,
 timeouts, peer death, cap-transfer attenuation, unrelated-route progress, and
