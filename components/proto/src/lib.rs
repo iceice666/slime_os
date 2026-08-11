@@ -15,6 +15,7 @@ pub mod fs;
 pub mod generation;
 pub mod interface_schema;
 pub mod powerbox;
+pub mod ring;
 pub mod sample_descriptor;
 pub mod spawn;
 pub mod store;
