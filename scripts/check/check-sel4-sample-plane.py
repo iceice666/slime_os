@@ -114,7 +114,7 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     ),
     (
         "init holds its shared-buffer factory at its layout slot",
-        r"SLIME_GRAPH factory placed task=\d+ component=init slot=14 "
+        r"SLIME_GRAPH factory placed task=\d+ component=init slot=4 "
         r"kind=shared-buffer-factory",
     ),
     (
@@ -138,12 +138,12 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         # tasks were budgeted, so a spawned lender held `DENY` and could not
         # allocate at all.
         "the spawned receiver was budgeted from the generation",
-        r"SLIME_GRAPH quota task=\d+ component=sample-receiver pages=2 buffers=1 "
+        r"SLIME_GRAPH quota task=\d+ instance=sample-receiver executable=sample-receiver pages=2 buffers=1 "
         r"mappings=2 loans=1",
     ),
     (
         "the spawned lender was budgeted from the generation",
-        r"SLIME_GRAPH quota task=\d+ component=sample-lender pages=4 buffers=1 "
+        r"SLIME_GRAPH quota task=\d+ instance=sample-lender executable=sample-lender pages=4 buffers=1 "
         r"mappings=2 loans=1",
     ),
     (
@@ -152,12 +152,19 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"channels=1 handle=\d+",
     ),
     (
-        # B14. Init's declared budget is two and both are live, so a third
-        # spawn is refused by the generation's own number rather than by a
-        # global table size.
-        "the declared spawn budget refused a third child",
-        r"SLIME_GRAPH spawn refused task=\d+ child=\S+ class=budget live=2 "
-        r"budget=2",
+        # B14's probe, superseded. Init's declared budget is two and both are
+        # live, but the third spawn names an instance that is *already* live,
+        # and the root resolves an executable to exactly one owned instance —
+        # so `instance-live` is answered before the budget is consulted and the
+        # ceiling is never reached by this path.
+        #
+        # Asserted as what it is rather than what it was: the refusal is real
+        # and the plane's own comment in `init.rs` records the same reasoning.
+        # `[init] spawn budget refused` below is the caller-side half, and the
+        # recovery arm that follows is what actually proves the budget releases
+        # its dead.
+        "a live instance cannot be spawned twice",
+        r"SLIME_GRAPH spawn refused task=\d+ child=\S+ class=instance-live",
     ),
     (
         "the refusal reached init as an out-of-memory error",

@@ -79,7 +79,7 @@
 //! unplaced count stays what it was: a statement that this root cannot map a
 //! grant name onto a layout channel label, which is still true.
 
-use boot_contracts::generation::{Generation, GrantEndpoint};
+use boot_contracts::generation::{Generation, GrantEndpoint, MAX_INSTANCES};
 
 use crate::generation::{RIGHT_RECV, RIGHT_SEND};
 use crate::graph::{self, GraphTables, Side};
@@ -636,6 +636,18 @@ impl Default for DeathWakes {
 pub struct LaunchedInstances {
     entries: [Option<LaunchedInstance>; MAX_CHANNELS],
     len: usize,
+    /// Which instances have ever been launched, kept past their collection.
+    ///
+    /// `entries` answers "is this instance live"; releasing a dead task clears
+    /// it, which is right for liveness and wrong for provenance. A *respawn*
+    /// is the same declaration launched again, and the spawn preflight has to
+    /// tell it from a first launch: the declared grant set describes the first
+    /// one, and a retry after collection carries whatever its owner still
+    /// holds (B51).
+    ///
+    /// A bitmap rather than a list, because the only question is yes/no and
+    /// the answer must outlive every table entry the instance had.
+    launched_once: [bool; MAX_INSTANCES],
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -650,7 +662,13 @@ impl LaunchedInstances {
         Self {
             entries: [None; MAX_CHANNELS],
             len: 0,
+            launched_once: [false; MAX_INSTANCES],
         }
+    }
+
+    /// Whether `instance` has been launched at least once, live or not.
+    pub fn ever_launched(&self, instance: usize) -> bool {
+        self.launched_once.get(instance).copied().unwrap_or(false)
     }
 
     pub fn record(
@@ -673,6 +691,9 @@ impl LaunchedInstances {
             task,
         });
         self.len += 1;
+        if let Some(seen) = self.launched_once.get_mut(instance) {
+            *seen = true;
+        }
         Ok(())
     }
 
@@ -995,6 +1016,40 @@ mod tests {
     use crate::graph::{Capability, GraphTables, Resource, Side};
     use crate::task::TaskId;
     use crate::transit::Transit;
+
+    /// B51: a collected instance is still one that *has been* launched.
+    ///
+    /// `task_for_instance` answers liveness and is cleared by
+    /// `release_by_task`, which is right for liveness and wrong for
+    /// provenance. The spawn preflight applies the declared-grant-count rule
+    /// only to a first launch, so the two questions must not be the same one:
+    /// if collection cleared this too, a respawn would be indistinguishable
+    /// from a first launch and the rule would bind it again.
+    #[test]
+    fn collecting_a_task_does_not_unlaunch_its_instance() {
+        let mut launched = LaunchedInstances::new();
+        assert!(!launched.ever_launched(3));
+
+        launched.record(3, 0, TaskId(7)).expect("record");
+        assert!(launched.ever_launched(3));
+        assert_eq!(launched.task_for_instance(3), Some(TaskId(7)));
+
+        launched.release_by_task(TaskId(7)).expect("release");
+        assert_eq!(
+            launched.task_for_instance(3),
+            None,
+            "a collected instance is not live"
+        );
+        assert!(
+            launched.ever_launched(3),
+            "a collected instance has still been launched once"
+        );
+
+        // A neighbouring index is untouched: the bitmap is per-instance, not a
+        // single flag that any launch would set.
+        assert!(!launched.ever_launched(2));
+        assert!(!launched.ever_launched(4));
+    }
 
     const PRODUCER: TaskId = TaskId(1);
     const CONSUMER: TaskId = TaskId(2);

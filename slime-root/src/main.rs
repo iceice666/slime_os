@@ -4115,6 +4115,7 @@ fn preflight_spawn_grants(
     table: &graph::CapabilityTable,
     executable_slot: u32,
     records: &[u8],
+    launched: &LaunchedInstances,
 ) -> Result<SpawnPlan, IpcError> {
     let Some(executable) = table.get(executable_slot) else {
         return Err(IpcError::BadCapability);
@@ -4180,10 +4181,28 @@ fn preflight_spawn_grants(
             parent_supplied += 1;
         }
     }
-    if count != parent_supplied + minted_count {
+    // The declared set describes a launch: every declaration, in ascending
+    // destination-slot order, matched positionally against the request. A
+    // *respawn* — the same instance, after the first died and was collected —
+    // may instead bring nothing at all, which is what a supervisor retrying a
+    // child it can no longer equip does (B51).
+    //
+    // Nothing, not fewer. The matching is positional: request N binds to the
+    // declaration with the Nth-lowest destination slot, so a partial request
+    // would silently install the caller's first capability at some other
+    // declaration's slot with that declaration's rights ceiling. An empty
+    // request has no such ambiguity, and a full one is checked exactly as a
+    // first launch is.
+    //
+    // The count rule itself is unchanged for every first launch, which is what
+    // B39 and B40 added it for.
+    let declared_total = parent_supplied + minted_count;
+    let respawn = launched.ever_launched(child_instance);
+    if count != declared_total && !(respawn && count == 0) {
         sel4::debug_println!(
-            "SLIME_GRAPH spawn preflight instance={} reason=declared-count requested={count} bindings={parent_supplied} minted={minted_count}",
+            "SLIME_GRAPH spawn preflight instance={} reason=declared-count requested={count} bindings={parent_supplied} minted={minted_count} respawn={}",
             child.name,
+            u8::from(respawn),
         );
         return Err(IpcError::BadCapability);
     }
@@ -4668,6 +4687,7 @@ fn serve_spawn(
         table,
         executable_slot,
         frame.bytes(),
+        launched,
     ) {
         Ok(plan) => plan,
         Err(error) => {

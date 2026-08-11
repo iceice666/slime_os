@@ -35,6 +35,17 @@ fn main(_startup_arg: u32) {
     let length = loop {
         match slime_rt::recv(PEER_SLOT, &mut message, &mut received) {
             ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(PEER_SLOT)]),
+            // No channel at all, which is not a failure: the plane respawns
+            // this component once, after the first copy exits, purely to show
+            // the spawn budget released its dead. That retry is granted
+            // nothing — the point is whether the ceiling admits it, not what
+            // the child does — so there is no peer to hear from and nothing to
+            // verify. Exiting 0 says so; failing would make a `required`
+            // instance's deliberate emptiness fatal (B51).
+            ERR_BAD_CAP => {
+                slime_rt::debug_write(b"[sample-receiver] no peer granted\n");
+                slime_rt::exit(0)
+            }
             n if n < 0 => fail(b"recv"),
             n => break n,
         }
