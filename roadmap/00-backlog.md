@@ -209,11 +209,32 @@ the shape — `tcb_configure`, `tcb_set_sched_params`, `tcb_write_all_registers`
 have: its own stack, its own entry point, and its own IPC buffer at a distinct
 address. `slime_rt::entry!` declares exactly one of each, and `runtime::start`
 calls `sel4::set_ipc_buffer`, which claims the crate's single ambient slot per
-address space. That is precisely the obstacle B41 hit in the root and solved
-with `Cap::with`: a capability carrying its own invocation context. The same
-answer applies here, but applying it means restructuring `slime-rt`'s startup
-so a thread names its buffer rather than installing it globally — every
-component's entry path.
+address space — `ipc_buffer_is_thread_local()` is false in this build, as B41
+recorded.
+
+**The route is known; it is the breadth that makes it a milestone.** Four
+layers change together:
+
+- **VSpace.** `child_vspace` places the IPC buffer at `footprint.end` and the
+  transfer window one granule above. A second thread's pair extends that to
+  `+2` and `+3`, which is a layout both images agree on by construction —
+  `runtime::ipc_buffer_addr` derives from `_end`, so the runtime needs the same
+  arithmetic.
+- **Root construction.** `task::create` allocates one TCB and configures it.
+  A second needs the same four invocations against the *same* CSpace and
+  VSpace, with the plan's `ThreadRecord` supplying entry, IPC buffer vaddr, and
+  schedule — all three of which v5 already carries and the builder now emits.
+- **Runtime entry.** `entry!` declares one stack and one `__slime_rt_entrypoint`.
+  A second thread needs its own of each, and `runtime::start`'s
+  `set_ipc_buffer` must not run on it.
+- **Transport.** Only four call sites reach the ambient buffer —
+  `call_with_mrs` at `sel4_transport.rs:224`, and three console sends — and 29
+  public wrappers funnel through them. `Cap::with` at those four is the whole
+  change, which is how the root's second dispatcher already works.
+
+Plus a fixture component that actually runs two threads, since a declared
+thread the root starts and nothing exercises would pass every gate while
+proving nothing.
 
 **Two clauses already hold (2026-08-10).** "Remove `TaskId` from every
 cross-process contract" and "lifecycle authority remains capability-based" were
