@@ -46,32 +46,54 @@ per IPC message; make bundle provisioning an explicit typed transaction. Delete
 the logical channel, transit, parked-reply, and wait-set implementations in the
 same cutover.
 
-**Progress (2026-08-10).** `sel4_crossing_check` is green — it was red — and
-call, operation, visibility, and QoS now boot, spawn their whole participant
-set, and reach their own scenario logic instead of being refused at admission.
-Every one of those planes had the omission the probe planes and `sel4-generation`
-had: init mints control endpoints, factories, supervision handles, and phase
-channels and hands them over at spawn, while `mintedBindings` was empty, so the
-preflight refused before a scenario ran. Three of them also disagreed with
-`fabric-service` about its own slot layout — declared controls at 0.. against a
-service that compiles in `FACTORY_SLOT = 0`, `BUFFER_FACTORY_SLOT = 1`, and
-reads controls from `FABRIC_FIRST_CONTROL_SLOT = 2`.
+**Progress (2026-08-10).** Three of the seven named gates pass:
+`sel4_channel_check`, `sel4_crossing_check`, and `sel4_visibility_check`, all
+three of which were red. The remaining four — stream, QoS, call, operation —
+now boot, spawn their whole participant set, and reach their own scenario
+logic instead of being refused at admission.
 
-Two gates asserted markers with no emitter anywhere in the tree:
-`check-sel4-crossing-plane.py` wanted a `kernel=` field the admission marker
-does not carry, and `check-sel4-channel-plane.py` wanted four `SLIME_GRAPH
-channel end` lines. Both are fixed — the second by emitting the marker from the
-install path — and with `channel end` visible, three more of that gate's
-assertions proved stale rather than merely unreachable.
+Four classes of defect were found and fixed on the way, none of them the
+cutover itself:
 
-**The channel plane's remaining failure is the item itself.** A declared
-channel side reads as permanently held, so when init exits, `mark_dead` finds
-nothing abandoned, wakes nobody, and the console blocks forever on a channel
-whose only peer is gone. Retiring the declaration — at install, or when its
-holder dies — fixes this plane and breaks `sel4_component_graph_check`, whose
-two long-lived components stay parked *because* of that exemption. Both
-directions were measured, not reasoned about. The trade is exactly what
-deleting `channel.rs` dissolves, so it is left for the cutover.
+- **Undeclared run tokens.** Every fabric plane has init mint control
+  endpoints, factories, supervision handles, and phase channels and hand them
+  over at spawn, while `mintedBindings` was empty — so the preflight, which
+  expects `parent_supplied + minted`, refused before any scenario ran. Same
+  omission the probe planes and `sel4-generation` carried.
+- **Control slots numbered wrongly.** The declared bindings sat at 0.., over
+  the fabric's own `FACTORY_SLOT = 0` and `BUFFER_FACTORY_SLOT = 1`. Shifting
+  them by two was necessary but not sufficient: `fabric-service` identifies a
+  caller *by the slot the request arrived on*, against `FABRIC_CLIENTS`, which
+  is built from explicit tuples rather than sorted. Numbering them
+  alphabetically put the intruder in the publisher's slot, and the visibility
+  broker answered it as the publisher — handing the unauthorized caller a
+  populated route page, the exact leak that plane exists to refuse.
+- **Markers with no emitter.** `check-sel4-crossing-plane.py` asserted a
+  `kernel=` field the admission marker does not carry;
+  `check-sel4-channel-plane.py` asserted four `SLIME_GRAPH channel end` lines
+  nothing emitted. The second is emitted now, from the install path, and with
+  it visible three more of that gate's assertions proved stale rather than
+  merely unreachable.
+- **A gate that could not pass.** `check-sel4-visibility-plane.py`'s
+  `TERMINAL_MARKER` has no capture groups while `boot` calls `.group(1)` and
+  `.group(2)` on it — dead code that only ran once the plane got far enough to
+  exit cleanly.
+
+**The channel plane's real defect is fixed.** A declared channel side read as
+permanently held, so when its holder exited, `mark_dead` found nothing
+abandoned, woke nobody, and the surviving peer blocked forever. Keyed on the
+holder's own death — rather than retired at install, which also destroys the
+exemption's real purpose of covering the window before an end is placed — both
+`sel4_channel_check` and `sel4_component_graph_check` pass. The graph gate's
+expectations were the stale half: init holds the consumer end of both declared
+channels and exits, so both services observe `PeerDead` and exit 0, which is
+what `console.rs` and `spawn-service.rs` are written to do via an
+`ERR_PEER_DEAD` arm that was previously unreachable.
+
+**What remains is the cutover.** Stream and QoS fault inside the root during
+their scenarios (the aliasing class `sel4_sample_check` also shows); call and
+operation stall with participants parked. Those are `channel.rs`, `transit.rs`,
+and `parked.rs` behaviour, which this item deletes rather than repairs.
 
 **Exit condition:** `channel.rs`, `transit.rs`, `parked.rs`, `WaitSet`, and the
 migrated universal labels no longer exist. Backpressure, bounded queues,
