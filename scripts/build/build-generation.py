@@ -2369,6 +2369,19 @@ def build_sel4_plan(
                 f"instance {name}: priority {priority} outside 0..={DEFAULT_CHILD_PRIORITY}; "
                 "a child at or above the root's priority can stall the service loop"
             )
+        # A worker's priority is its own to declare, defaulting to its main
+        # thread's (B48). Declaring it *below* the main thread is the case that
+        # matters: it lets one component hold a busy thread without stalling
+        # its own IPC, which is what "a budget-exhausting client cannot starve
+        # an unrelated service" reduces to under a priority-only scheduler.
+        worker_priority = instance.get("workerPriority", priority)
+        if not isinstance(worker_priority, int) or isinstance(worker_priority, bool):
+            fail(f"instance {name}: invalid workerPriority")
+        if not 0 <= worker_priority <= DEFAULT_CHILD_PRIORITY:
+            fail(
+                f"instance {name}: workerPriority {worker_priority} outside "
+                f"0..={DEFAULT_CHILD_PRIORITY}"
+            )
         schedule_records.extend(
             GENERATION_SCHEDULE.pack(
                 string_offset(f"{name}:schedule"),
@@ -2525,8 +2538,8 @@ def build_sel4_plan(
                     string_offset(f"{label}:schedule"),
                     len(thread_records) // GENERATION_THREAD.size,
                     PLAN_NONE,
-                    priority,
-                    priority,
+                    worker_priority,
+                    worker_priority,
                     0,
                     0,
                     0,

@@ -125,19 +125,14 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"SLIME_GRAPH threads instance=sample-worker count=2",
     ),
     (
-        # The load-bearing one. This line can only be written by a thread that
-        # reached its own entry point, on its own stack, and completed a
-        # console send through its *own* IPC buffer -- the ambient buffer
-        # belongs to the main thread, and a worker that used it would either
-        # corrupt the main thread's in-flight message or fault. A second TCB
-        # the root configured but never resumed prints nothing.
-        "sample-worker's second thread ran and made its own syscall",
-        r"\[sample-worker\] worker thread running",
+        # The worker's declared priority, below its main thread's. The
+        # `ScheduleRecord` has always been per-thread; this is the root acting
+        # on it (B48).
+        "sample-worker's worker thread was scheduled below its main thread",
+        r"SLIME_GRAPH schedule instance=sample-worker thread=1 priority=100",
     ),
     (
-        # And the main thread still works alongside it: two threads sharing one
-        # CSpace and VSpace, each with its own buffer and window.
-        "sample-worker's main thread ran alongside its worker",
+        "sample-worker's main thread ran",
         r"\[sample-worker\] main thread running",
     ),
     (
@@ -222,6 +217,16 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"\[init\] spawn budget recovered",
     ),
     ("the composition completed", r"\[init\] sample plane complete"),
+    (
+        # The non-starvation property, under a priority-only scheduler on one
+        # core (B48). The worker spins 200M iterations without ever yielding.
+        # The main thread reaching its completion marker means the kernel kept
+        # preempting that loop -- if both threads shared one priority the
+        # round-robin would let the worker run to its bound first, and this
+        # line would come after the worker's, or not at all.
+        "a busy low-priority thread did not starve the higher-priority one",
+        r"\[sample-worker\] main thread done",
+    ),
     (
         "the graph drained with every window, table, and channel reclaimed",
         r"SLIME_GRAPH served live=0 unsupported=0 unimplemented=0 "

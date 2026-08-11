@@ -63,6 +63,17 @@ Instance :: type {
   -- schedule, and shares the declaring instance's CSpace and VSpace — which is
   -- the property that distinguishes a second thread from a second process.
   extraThreads? : Int;
+  -- Scheduling priority for this instance's extra threads.
+  --
+  -- Defaults to `priority`, so a worker runs alongside its main thread unless
+  -- the manifest says otherwise. Declaring it lower is the case that matters:
+  -- a component can then hold a busy thread without stalling its own IPC, and
+  -- an unrelated higher-priority service keeps running (B48). The
+  -- `ScheduleRecord` has always been per-thread; this is the manifest side of
+  -- that.
+  --
+  -- Bounded like `priority`, and refused rather than clamped.
+  workerPriority? : Int;
 };
 
 CapabilityGrant :: type {

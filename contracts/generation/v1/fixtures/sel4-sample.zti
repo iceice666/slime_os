@@ -140,6 +140,7 @@
       health = "required";
       name = "sample-worker";
       owner = "root";
+      workerPriority = 100;
     };
   ];
   mintedBindings = [

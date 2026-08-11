@@ -1059,6 +1059,49 @@ impl<'a> Generation<'a> {
         Ok(None)
     }
 
+    /// The priority the plan declares for thread `thread_index` of
+    /// `instance`, counting from zero for the main thread (B48).
+    ///
+    /// Per thread, not per instance: the `ScheduleRecord` is already
+    /// per-thread, so a process can run its worker below its main thread —
+    /// which is what lets one component hold a busy low-priority thread while
+    /// its own IPC stays responsive.
+    ///
+    /// `None` when no process claims the instance or it declares no such
+    /// thread.
+    pub fn thread_priority(
+        &self,
+        instance: usize,
+        thread_index: usize,
+    ) -> Result<Option<u32>, DecodeError> {
+        for index in 0..self.process_count {
+            let process = self.process(index)?;
+            if process.instance != instance {
+                continue;
+            }
+            // The main thread is whichever the process names; the rest follow
+            // in table order, which is the order the builder emits them and
+            // the order the root constructs them.
+            if thread_index == 0 {
+                let thread = self.thread(process.main_thread)?;
+                return Ok(Some(self.schedule(thread.schedule)?.priority));
+            }
+            let mut seen = 0;
+            for candidate in 0..self.thread_count {
+                let thread = self.thread(candidate)?;
+                if thread.process != index || candidate == process.main_thread {
+                    continue;
+                }
+                seen += 1;
+                if seen == thread_index {
+                    return Ok(Some(self.schedule(thread.schedule)?.priority));
+                }
+            }
+            return Ok(None);
+        }
+        Ok(None)
+    }
+
     /// How many threads the plan declares for `instance` (B47).
     ///
     /// Counted from the thread table rather than read from a field, because

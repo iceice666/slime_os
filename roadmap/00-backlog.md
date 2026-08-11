@@ -227,12 +227,39 @@ config file. What that costs is stated there — the kernel has no notion of
 budget or period, so those fields stay zero rather than carrying figures it
 cannot enforce.
 
-**What that leaves open.** Two exit clauses need MCS and cannot be met without
-it: budget and period as authenticated data, and one budget-exhausting client
-not starving an unrelated higher-criticality service. Timeout faults likewise
-have no kernel mechanism to reach a declared handler. Those are the item's
-remaining scope, and B48 stays open on them rather than being closed on the
-half that is done.
+**The starvation clause is met, and did not need MCS (2026-08-10).** It was
+listed as MCS-dependent; it is not. Under a priority-only scheduler "one
+client cannot starve an unrelated higher-criticality service" reduces to
+preemption, which seL4 does without MCS — what MCS adds is *budget*
+enforcement, which is a different guarantee.
+
+Making it testable took two things. Priority is now per **thread**, not per
+instance: the `ScheduleRecord` has been per-thread since the v5 cutover, and
+reading one priority per instance flattened a distinction the format already
+made. `Instance.workerPriority` is the manifest side, `thread_priority`
+resolves it, and the root applies it to each worker TCB.
+
+And it needed B47's second thread, because the spinner has to be *concurrently
+runnable* with the thread it must not starve. A first attempt used
+`fabric-intruder`, already declared at 100 against peers at 254, and proved
+nothing — it is blocked on IPC for most of the plane and only reaches its
+scenario after the publisher has finished. That probe was reverted rather than
+kept.
+
+The control is direct. At `workerPriority = 254` the two threads round-robin
+and the console output interleaves mid-line
+(`main thread running[sample-worker] main thread done`); at 100 the worker
+never runs and the main thread completes cleanly. Same binary, one manifest
+field. `just sel4_sample_check` asserts the high-priority thread's completion
+*while* the worker spins 200M iterations without yielding — the positive form,
+since the low thread's silence alone would prove nothing.
+
+**What that leaves open.** Two exit clauses genuinely need MCS: budget and
+period as authenticated data, and timeout faults reaching a declared handler.
+Those are the item's remaining scope, and B48 stays open on them rather than
+being closed on the three-quarters that are done. The proof is also
+single-core; the platform is `-smp 1` and priority preemption on SMP is a
+different argument.
 
 **Exit condition:** Priority, budget, and period are authenticated generation
 data and observed in the running graph; one budget-exhausting client cannot

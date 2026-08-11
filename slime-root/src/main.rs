@@ -754,6 +754,8 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
             task::CHILD_PRIORITY,
             // The fixture path predates the thread plan and runs one thread.
             1,
+            // No workers, so no worker priorities.
+            [task::CHILD_PRIORITY; child_vspace::MAX_CHILD_THREADS],
         ) {
             Ok(id) => id,
             Err(error) => fatal!("child task construction failed: {error:?}"),
@@ -1873,6 +1875,27 @@ fn launch_instance_graph(
             "SLIME_GRAPH threads instance={} count={declared_threads}",
             instance.name,
         );
+        // Each worker's own declared priority (B48). Resolved here rather than
+        // in `task::create` so the transcript records what the plan asked for,
+        // the same way the main thread's priority is recorded above.
+        let mut declared_worker_priorities = [declared_priority; child_vspace::MAX_CHILD_THREADS];
+        for (thread_index, slot) in declared_worker_priorities
+            .iter_mut()
+            .enumerate()
+            .take(declared_threads)
+            .skip(1)
+        {
+            let resolved = match generation.thread_priority(instance_index, thread_index) {
+                Ok(Some(priority)) => sel4::Word::from(priority),
+                Ok(None) => declared_priority,
+                Err(error) => fatal!("SLIME_GRAPH FAIL thread schedule rejected: {error:?}"),
+            };
+            *slot = resolved;
+            sel4::debug_println!(
+                "SLIME_GRAPH schedule instance={} thread={thread_index} priority={resolved}",
+                instance.name,
+            );
+        }
         // The child's own TCB and fault endpoint go where the plan declared
         // them. A plan that omits either leaves the root nowhere to install
         // authority the child needs, so it is refused rather than defaulted.
@@ -1926,6 +1949,7 @@ fn launch_instance_graph(
             child_slots,
             declared_priority,
             declared_threads,
+            declared_worker_priorities,
         ) {
             Ok(id) => id,
             Err(error) => fatal!(
@@ -4510,6 +4534,23 @@ fn construct_child(
                 Ok(Some(threads)) => threads,
                 Ok(None) => 1,
                 Err(_) => return Err(IpcError::BadCapability),
+            },
+            // As the boot path: each worker's own declared priority (B48).
+            {
+                let main_priority = match generation.instance_priority(plan.instance) {
+                    Ok(Some(priority)) => sel4::Word::from(priority),
+                    Ok(None) => task::CHILD_PRIORITY,
+                    Err(_) => return Err(IpcError::BadCapability),
+                };
+                let mut priorities = [main_priority; child_vspace::MAX_CHILD_THREADS];
+                for (thread_index, slot) in priorities.iter_mut().enumerate().skip(1) {
+                    match generation.thread_priority(plan.instance, thread_index) {
+                        Ok(Some(priority)) => *slot = sel4::Word::from(priority),
+                        Ok(None) => {}
+                        Err(_) => return Err(IpcError::BadCapability),
+                    }
+                }
+                priorities
             },
         )
         .map_err(|_| IpcError::DestinationSlotsExhausted)?;

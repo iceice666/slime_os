@@ -469,6 +469,10 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
         // Threads this process runs, from the plan's process record. One for
         // every component that does not declare `extraThreads` (B47).
         threads: usize,
+        // Each thread's declared priority, indexed by thread number. Index 0
+        // is unused -- the main thread takes `priority` above -- and the rest
+        // come from the plan's per-thread schedule records (B48).
+        worker_priorities: [sel4::Word; MAX_CHILD_THREADS],
     ) -> Result<TaskId, TaskError> {
         admit_priority(priority)?;
         let Some(index) = self.tasks.iter().position(Option::is_none) else {
@@ -688,8 +692,17 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
                         vspace.pages[index].ipc_buffer,
                     )
                     .map_err(TaskError::Configure)?;
+                // The worker's own declared priority, not its main thread's
+                // (B48). Below it, a component can hold a busy thread while
+                // its own IPC stays responsive and unrelated services keep
+                // running; the `ScheduleRecord` has always been per-thread.
+                let worker_priority = admit_priority(worker_priorities[index])?;
                 worker_tcb
-                    .tcb_set_sched_params(sel4::init_thread::slot::TCB.cap(), priority, priority)
+                    .tcb_set_sched_params(
+                        sel4::init_thread::slot::TCB.cap(),
+                        worker_priority,
+                        worker_priority,
+                    )
                     .map_err(TaskError::SchedParams)?;
                 // The thread index, in the register the runtime reads through
                 // `TPIDR_EL0`. This is what lets a thread find its own IPC
