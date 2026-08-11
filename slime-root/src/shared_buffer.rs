@@ -36,6 +36,7 @@
 //! likewise unit-tested but has never been triggered by a real seL4 error in
 //! the boot record.
 
+use alloc::boxed::Box;
 use core::fmt;
 
 /// seL4's base-page size for the AArch64 configuration used by Slime.
@@ -271,6 +272,47 @@ impl ActionList {
         Self {
             actions: [None; MAX_TEARDOWN_ACTIONS],
             len: 0,
+        }
+    }
+
+    /// An empty list on the heap.
+    ///
+    /// The array is 144 KiB. Built in a stack frame it overflowed the root's
+    /// 1 MiB stack during the stream plane's loan teardown — the frame is
+    /// entered from an already-deep dispatch path, and every by-value return
+    /// stacked a second copy in the caller. Exactly the failure `main.rs`
+    /// records for the graph tables and B3 records for this table's
+    /// predecessor.
+    ///
+    /// The bound itself is unchanged: it is still the fixed worst case of
+    /// every mapping unmapped, every frame revoked, and every anchor released.
+    /// What changed is where those bytes live.
+    pub fn boxed() -> Box<Self> {
+        // `vec![None; N]` fills the allocation in place; `Box::new(Self::new())`
+        // would build the whole array in a stack frame first and then copy it,
+        // which is the thing being avoided.
+        // Written through the heap allocation rather than built in a frame.
+        // `Box::new(Self::new())` would construct the whole 144 KiB array on
+        // the stack and then copy it, which is the thing being avoided, and
+        // zeroing is not an option: `None` is not the all-zero pattern for
+        // `Option<AdapterAction>` here, as `an_empty_list_is_all_zero_bytes`
+        // records.
+        let layout = core::alloc::Layout::new::<Self>();
+        // SAFETY: the layout is non-zero-sized, and every field is written
+        // before the value is used as a `Self` — `len` directly, and each
+        // action slot by the loop below, so no uninitialized byte is ever
+        // read.
+        unsafe {
+            let raw = alloc::alloc::alloc(layout).cast::<Self>();
+            if raw.is_null() {
+                alloc::alloc::handle_alloc_error(layout);
+            }
+            let actions = core::ptr::addr_of_mut!((*raw).actions).cast::<Option<AdapterAction>>();
+            for index in 0..MAX_TEARDOWN_ACTIONS {
+                actions.add(index).write(None);
+            }
+            core::ptr::addr_of_mut!((*raw).len).write(0);
+            Box::from_raw(raw)
         }
     }
 
@@ -969,10 +1011,10 @@ impl SharedBufferTable {
             })
             .ok_or(SharedBufferError::NotFound)?;
         let mut plan = TeardownPlan::new();
-        let mut actions = ActionList::new();
+        let mut actions = ActionList::boxed();
         plan.remove_mappings[slot] = true;
         self.append_mapping_actions(&mut actions, slot)?;
-        self.execute_teardown(adapter, &actions, plan).map(|_| ())
+        self.execute_teardown(adapter, actions, plan).map(|_| ())
     }
 
     /// Irreversibly seal a writable region. Every extant writable mapping is
@@ -1101,7 +1143,7 @@ impl SharedBufferTable {
         let loan = self.authorize_loan(receiver, handle)?;
         let plan = self.plan_settle_loans(|candidate| candidate.id == loan.id)?;
         let actions = self.build_actions(&plan)?;
-        self.execute_teardown(adapter, &actions, plan).map(|_| ())
+        self.execute_teardown(adapter, actions, plan).map(|_| ())
     }
 
     /// Explicitly revoke one loan as its lender. The recorded loan decides who
@@ -1122,7 +1164,7 @@ impl SharedBufferTable {
         }
         let plan = self.plan_settle_loans(|candidate| candidate.id == loan.id)?;
         let actions = self.build_actions(&plan)?;
-        self.execute_teardown(adapter, &actions, plan).map(|_| ())
+        self.execute_teardown(adapter, actions, plan).map(|_| ())
     }
 
     /// Drop direct ownership. Outstanding loans retain the root frame anchors
@@ -1137,7 +1179,7 @@ impl SharedBufferTable {
         let slot = self.live_region_slot(handle.id)?;
         let has_loans = self.has_region_loans(region.id);
         let mut plan = TeardownPlan::new();
-        let mut actions = ActionList::new();
+        let mut actions = ActionList::boxed();
         for mapping_slot in 0..self.mappings.len() {
             if self.mappings[mapping_slot].is_some_and(|mapping| {
                 mapping.buffer == region.id && (mapping.loan.is_none() || !has_loans)
@@ -1168,7 +1210,7 @@ impl SharedBufferTable {
         &mut self,
         adapter: &mut A,
         holder: HolderId,
-    ) -> Result<ActionList, SharedBufferError> {
+    ) -> Result<Box<ActionList>, SharedBufferError> {
         let mut plan =
             self.plan_settle_loans(|loan| loan.lender == holder || loan.receiver == holder)?;
         for slot in 0..self.mappings.len() {
@@ -1183,7 +1225,7 @@ impl SharedBufferTable {
         }
         self.complete_region_removals(&mut plan)?;
         let actions = self.build_actions(&plan)?;
-        self.execute_teardown(adapter, &actions, plan)
+        self.execute_teardown(adapter, actions, plan)
     }
 
     /// Retire the whole epoch in deterministic order. On success the table is
@@ -1192,12 +1234,12 @@ impl SharedBufferTable {
         &mut self,
         adapter: &mut A,
         next: GenerationEpoch,
-    ) -> Result<ActionList, SharedBufferError> {
+    ) -> Result<Box<ActionList>, SharedBufferError> {
         if next.0 <= self.epoch.0 {
             return Err(SharedBufferError::EpochMismatch);
         }
         let mut plan = TeardownPlan::new();
-        let mut actions = ActionList::new();
+        let mut actions = ActionList::boxed();
         for slot in 0..self.mappings.len() {
             if self.mappings[slot].is_some() {
                 plan.remove_mappings[slot] = true;
@@ -1211,7 +1253,7 @@ impl SharedBufferTable {
             plan.remove_regions[slot] = self.regions[slot].is_some();
         }
         self.append_region_reclamation(&plan, &mut actions)?;
-        let actions = self.execute_teardown(adapter, &actions, plan)?;
+        let actions = self.execute_teardown(adapter, actions, plan)?;
         self.epoch = next;
         Ok(actions)
     }
@@ -1523,8 +1565,8 @@ impl SharedBufferTable {
     /// revoked across all regions, then every anchor released. Building the
     /// list in one pass from the closed plan is what makes that ordering
     /// structural rather than dependent on the order callers marked slots.
-    fn build_actions(&self, plan: &TeardownPlan) -> Result<ActionList, SharedBufferError> {
-        let mut actions = ActionList::new();
+    fn build_actions(&self, plan: &TeardownPlan) -> Result<Box<ActionList>, SharedBufferError> {
+        let mut actions = ActionList::boxed();
         for slot in 0..self.mappings.len() {
             if plan.remove_mappings[slot] {
                 self.append_mapping_actions(&mut actions, slot)?;
@@ -1631,15 +1673,21 @@ impl SharedBufferTable {
         self.orphan_count()
     }
 
+    /// Run the batch, commit the plan, and hand the batch back.
+    ///
+    /// Takes the box by value rather than by reference so the caller's
+    /// `Ok(actions)` moves a pointer. Returning the list itself would copy
+    /// 144 KiB through the caller's frame, which is what overflowed the root's
+    /// stack.
     fn execute_teardown<A: SharedBufferAdapter>(
         &mut self,
         adapter: &mut A,
-        actions: &ActionList,
+        actions: Box<ActionList>,
         plan: TeardownPlan,
-    ) -> Result<ActionList, SharedBufferError> {
-        self.run_actions(adapter, actions)?;
+    ) -> Result<Box<ActionList>, SharedBufferError> {
+        self.run_actions(adapter, &actions)?;
         self.commit_teardown(plan)?;
-        Ok(*actions)
+        Ok(actions)
     }
 
     fn run_actions<A: SharedBufferAdapter>(
@@ -1867,6 +1915,28 @@ impl SharedBufferTable {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `ActionList::boxed` writes every slot through a raw allocation rather
+    /// than building the 144 KiB array in a stack frame. A missed slot would
+    /// leave uninitialized memory that reads as a bogus action, so this walks
+    /// the whole array rather than spot-checking the ends.
+    ///
+    /// The first attempt at `boxed` used `alloc_zeroed`, on the assumption
+    /// that `None` is the all-zero pattern. It is not, and this test is what
+    /// caught it.
+    #[test]
+    fn a_boxed_list_is_empty_in_every_slot() {
+        let boxed = ActionList::boxed();
+        assert_eq!(boxed.len(), 0);
+        assert!(boxed.is_empty());
+        for index in 0..MAX_TEARDOWN_ACTIONS {
+            assert!(
+                boxed.actions[index].is_none(),
+                "slot {index} of a fresh list is not empty"
+            );
+            assert!(boxed.get(index).is_none());
+        }
+    }
 
     const OWNER: HolderId = HolderId(1);
     const RECEIVER: HolderId = HolderId(2);

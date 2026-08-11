@@ -378,17 +378,22 @@ struct BufferPhase {
 }
 
 // The stack must clear the deepest frame the service loop reaches, which is a
-// shared-buffer teardown: `SharedBufferTable::unmap` builds a `TeardownPlan`
-// and an `ActionList` as locals, and both are fixed-size arrays sized for the
-// whole table. At 256 KiB that frame ran off the bottom of the stack and the
-// root task took a VM fault on `FREE_PAGE` — the scratch page `ScratchPage`
-// deliberately leaves unmapped, which is the only reason the overflow was
-// visible rather than silent corruption of whatever `.bss` lay below.
+// shared-buffer teardown. At 256 KiB that frame ran off the bottom of the
+// stack and the root task took a VM fault on `FREE_PAGE` — the scratch page
+// `ScratchPage` deliberately leaves unmapped, which is the only reason the
+// overflow was visible rather than silent corruption of whatever `.bss` lay
+// below.
 //
-// This is backlog B3's failure mode a second time, in the same repository, for
-// the same reason: a table sized for the graph, built in a stack frame. The
-// bound is stated here rather than discovered again.
-#[root_task(stack_size = 1024 * 1024, heap_size = 1024 * 128)]
+// This is backlog B3's failure mode, in the same repository, for the same
+// reason: a table sized for the graph, built in a stack frame. Raising the
+// stack to 1 MiB was not enough — `ActionList` reached 144 KiB and every
+// by-value return stacked a second copy, so the stream plane's loan teardown
+// overflowed again, this time faulting inside `build_actions` itself. It lives
+// on the heap now (`ActionList::boxed`), which is why the heap is sized for
+// two of them plus room: one held by a teardown in progress, one being built.
+//
+// The bound is stated here rather than discovered a third time.
+#[root_task(stack_size = 1024 * 1024, heap_size = 1024 * 512)]
 fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
     let allocator = match ObjectAllocator::new(bootinfo) {
         Ok(value) => unsafe {

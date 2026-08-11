@@ -324,7 +324,7 @@ def check_transcript(transcript: str) -> None:
     print(
         f"transcript: {sum(len(chain) for _, chain in CHAINS)} markers observed "
         f"across {len(CHAINS)} causal chains; all six spawned participants exited "
-        "cleanly and only the six unconfigured instances reported failure",
+        "cleanly and none reported a failure",
         flush=True,
     )
 
@@ -350,6 +350,13 @@ def check_participant_lifecycle(transcript: str) -> None:
                 "expected [0]"
             )
 
+    # No failure from any of the six. This was a per-component budget of
+    # exactly one, from the P5.2 model where the root launched every declared
+    # instance and each participant therefore also ran an unconfigured copy
+    # that failed its first operation. A v4 generation launches only
+    # root-owned autostart instances -- this fixture declares one, init -- so
+    # there are no unconfigured copies and every `fail:` line belongs to a
+    # participant init spawned.
     for component, prefix in (
         ("fabric-service", r"\[fabric\]"),
         ("fabric-publisher", r"\[fabric-publisher\]"),
@@ -359,12 +366,9 @@ def check_participant_lifecycle(transcript: str) -> None:
         ("fabric-intruder", r"\[fabric-intruder\]"),
     ):
         failures = re.findall(rf"{prefix} fail: .*", transcript)
-        if len(failures) != 1:
+        if failures:
             report_transcript(transcript)
-            fail(
-                f"{component} reported {len(failures)} failures; exactly one is "
-                f"expected from its unconfigured instance: {failures}"
-            )
+            fail(f"{component} reported {len(failures)} failures: {failures}")
 
 
 def main() -> None:
