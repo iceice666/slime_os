@@ -302,11 +302,19 @@ one is how a v4 producer survives a cutover. Verified by setting
 on B39–B49 and is "the final repository-wide proof that no compatibility path
 survived" — deleting `GraphTables`, the universal `Operation` dispatcher,
 public task identity, generic `u64` rights, name-only grants, fixed-slot
-constants, and the plane selection flags. B46 still owns `channel.rs`,
-`transit.rs`, and `parked.rs` along with `Send`, `Recv`, `Wait`,
-`EndpointCreate`, `CapTransfer`, and `TransferWindowBind`; B47 still has
-`slime-rt` assuming one thread. Deleting the model while those hold it up would
-be removing the proof rather than the residue.
+constants, and the plane selection flags.
+
+B47 and B49 are resolved, so the remaining dependency is B46 alone — and it is
+a real one, not a formality. `GraphTables` has 25 references in `main.rs` and
+is the table `DirectoryDerive` and the main dispatch loop both write; the
+universal labels it would delete are the ones `channel.rs`, `transit.rs`, and
+`parked.rs` implement. The 41 `SLIME_*_CHECK` compile-time plane flags are the
+one clause that looks separable, and is not: each selects a scenario inside a
+component that B46 rewrites against a different IPC model, so deleting them
+first would mean rewriting the same 41 sites twice.
+
+Deleting the model while B46 holds it up would be removing the proof rather
+than the residue.
 
 **Exit condition:** Exact-source guards find no deleted model symbols or build
 flags; every surviving syscall is either a direct seL4 primitive or a narrowly
