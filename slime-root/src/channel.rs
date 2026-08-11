@@ -575,6 +575,16 @@ impl Default for ChannelTable {
 /// registration on a channel this frees belongs to a task whose capability is
 /// already gone, and [`ChannelTable::clear_waits`] runs before reclamation on
 /// every path that removes one.
+impl ChannelTable {
+    /// Every channel key the table holds, in table order.
+    ///
+    /// For B46's migration: each declared channel gets one seL4 Endpoint, and
+    /// this is what enumerates them without exposing `Entry`.
+    pub fn keys(&self) -> impl Iterator<Item = u32> + '_ {
+        self.entries.iter().flatten().map(|entry| entry.key)
+    }
+}
+
 pub fn sweep(channels: &mut ChannelTable, graph: &GraphTables, transit: &Transit) -> usize {
     let mut freed = 0;
     for index in 0..MAX_CHANNELS {
@@ -899,7 +909,7 @@ impl ChannelTable {
 
 #[cfg(test)]
 mod tests {
-    use super::{ChannelError, ChannelTable, DeathWakes};
+    use super::{ChannelTable, DeathWakes};
     use crate::generation::{RIGHT_RECV, RIGHT_SEND};
     use crate::graph::{Capability, GraphTables, Resource, Side};
     use crate::launched::LaunchedInstances;

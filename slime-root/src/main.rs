@@ -32,8 +32,8 @@
 use slime_root::boot_selector;
 use slime_root::{
     buffer_adapter, channel, child_vspace, console, device, directory, event, fault, generation,
-    graph, ipc, launched, object_allocator, parked, platform_timer, shared_buffer, supervision,
-    task, timer, transfer_window, transit, virtio_blk,
+    graph, ipc, launched, object_allocator, parked, peer_endpoint, platform_timer, shared_buffer,
+    supervision, task, timer, transfer_window, transit, virtio_blk,
 };
 
 use core::ptr;
@@ -1110,6 +1110,12 @@ const _: () = assert!(MAX_COMPONENT_ELF_BYTES >= 64 * 1024);
 /// non-zero discriminant. That costs image size and nothing else; what matters
 /// is that it is not on the stack.
 static mut CHANNELS: ChannelTable = ChannelTable::new();
+/// The seL4 Endpoints replacing those channels (B46).
+///
+/// Static for the same reason `CHANNELS` is: 48 entries is more than a
+/// dispatch frame should carry, and the root's stack is 1 MiB.
+static mut PEER_ENDPOINTS: peer_endpoint::PeerEndpointTable =
+    peer_endpoint::PeerEndpointTable::new();
 
 impl ElfScratch {
     /// Copy `elf` into the buffer and return it at a guaranteed 8-byte
@@ -1781,6 +1787,7 @@ fn launch_instance_graph(
     let mut windows = WindowTable::<MAX_TASKS>::new();
     let mut graph = GraphTables::new();
     let channels = unsafe { &mut *ptr::addr_of_mut!(CHANNELS) };
+    let peers = unsafe { &mut *ptr::addr_of_mut!(PEER_ENDPOINTS) };
     let mut launched_instances = LaunchedInstances::new();
     let aligned = unsafe { &mut *ptr::addr_of_mut!(ELF_SCRATCH) };
     let mut launched = 0;
@@ -2116,6 +2123,27 @@ fn launch_instance_graph(
         materialized.queues,
         materialized.slots,
         materialized.unplaced,
+    );
+
+    // One seL4 Endpoint per declared channel (B46). The cutover from logical
+    // channels to kernel objects cannot land in a single commit -- 312 call
+    // sites across 41 component files -- so the objects are created now,
+    // paired with the channel each replaces, and components move onto them one
+    // at a time. Until a component does, its endpoint is unused: created,
+    // counted, and reachable through `for_channel`, which is what makes the
+    // migration a lookup rather than a second materialization pass.
+    let mut peer_endpoints = 0;
+    for key in channels.keys() {
+        match peers.create(allocator, key) {
+            Ok(_) => peer_endpoints += 1,
+            Err(error) => {
+                fatal!("SLIME_GRAPH FAIL peer endpoint creation rejected: {error:?}")
+            }
+        }
+    }
+    sel4::debug_println!(
+        "SLIME_GRAPH peer endpoints created={peer_endpoints} channels={}",
+        materialized.channels,
     );
 
     let bootstrap = launched_instances.task_for_instance(admission.bootstrap_instance);

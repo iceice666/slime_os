@@ -92,6 +92,14 @@ struct Entry {
     /// The endpoint itself, root-held so it outlives either peer's capability
     /// and can be reclaimed with the arena that owns it.
     object: sel4::cap::Endpoint,
+    /// The logical channel this endpoint replaces, while both exist.
+    ///
+    /// The cutover cannot happen in one commit -- 312 call sites across 41
+    /// component files -- so each declared channel gets its kernel object now
+    /// and components move onto it one at a time. This is the pairing that
+    /// lets a migrated component find the endpoint for the channel its
+    /// declaration names.
+    channel: u32,
 }
 
 /// Peer endpoints the root has created.
@@ -118,13 +126,15 @@ impl PeerEndpointTable {
 
     /// Create an endpoint two components will share.
     ///
-    /// Allocated from `arena` so the task that owns the arena reclaims it;
-    /// for a declared channel that is the generation's own arena, which
-    /// outlives both peers.
+    /// From the root's global pool, not a task arena: a declared channel
+    /// outlives both its peers -- that is what lets a service whose launcher
+    /// exited keep serving, and what makes a respawned instance find its
+    /// channel still there. An arena-owned endpoint would be revoked with
+    /// whichever task happened to own the arena.
     pub fn create(
         &mut self,
         allocator: &mut ObjectAllocator,
-        arena: TaskArenaId,
+        channel: u32,
     ) -> Result<u32, PeerEndpointError> {
         let index = self
             .entries
@@ -132,9 +142,9 @@ impl PeerEndpointTable {
             .position(Option::is_none)
             .ok_or(PeerEndpointError::TableFull)?;
         let object = allocator
-            .allocate_fixed_in::<sel4::cap_type::Endpoint>(arena)?
+            .allocate_fixed::<sel4::cap_type::Endpoint>()?
             .cap();
-        self.entries[index] = Some(Entry { object });
+        self.entries[index] = Some(Entry { object, channel });
         self.len += 1;
         Ok(index as u32)
     }
@@ -152,6 +162,9 @@ impl PeerEndpointTable {
         endpoint: u32,
         side: Side,
     ) -> Result<sel4::cap::Endpoint, PeerEndpointError> {
+        // The *minted capability* is arena-owned even though the object is
+        // not: a capability belongs to the holder's CSpace and must go when
+        // the holder does, while the endpoint behind it survives.
         let entry = self
             .entries
             .get(endpoint as usize)
@@ -174,6 +187,20 @@ impl PeerEndpointTable {
             )
             .map_err(PeerEndpointError::Mint)?;
         Ok(minted)
+    }
+
+    /// The endpoint standing in for a logical channel, if one was created.
+    ///
+    /// Linear over a table bounded by `MAX_PEER_ENDPOINTS`: this runs once per
+    /// migrated operation, and an index would be a second structure to keep
+    /// consistent with the first for no measurable gain at 48 entries.
+    pub fn for_channel(&self, channel: u32) -> Option<u32> {
+        self.entries.iter().enumerate().find_map(|(index, entry)| {
+            entry
+                .as_ref()
+                .filter(|entry| entry.channel == channel)
+                .map(|_| index as u32)
+        })
     }
 
     /// The root-held object, for teardown and for signalling.
