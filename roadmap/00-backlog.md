@@ -405,53 +405,54 @@ owned root mechanism with a declared v5 capability; every fixture uses v5.
 affected `just sel4_*_check` targets, `just sel4_gate_control_check`, `just
 fmt_check_all`, and `just lint_all` pass after the deletion.
 
+## Resolved
 ### B52 — the loan plane never launches the receiver it loans to
 
-**Status:** Open. **Class:** Latent defect, gate-visible. **Depends on:** none.
+**Status:** Resolved 2026-08-10.
 
-**Problem:** `just sel4_loan_check` fails at `[init] loan plane fail: loan`.
-The root refuses with
-`SLIME_GRAPH loan refused task=0 slot=3 class=absent-or-ambiguous`: a loan
-names its receiver by the unique live holder of the channel's other end, and
-`sample-receiver` is declared but never spawned, so there is no holder to name.
+**Problem:** `just sel4_loan_check` failed at `[init] loan plane fail: loan`
+with `SLIME_GRAPH loan refused class=absent-or-ambiguous`. A loan names its
+receiver as the unique live holder of the channel's other end, and
+`sample-receiver` was declared and never spawned. The strand arm had the same
+defect one arm later against `console`.
 
-**Evidence:** `drive_loan_plane`'s own docstring records the reason — the
-receiver "is spawned by init on x86 and receives its peer through a spawn
-grant, which this cutover has no mechanism for until P5.3.3". Init stands in as
-the lender so the loan plane can run without the spawn plane, and the receiver
-half was left behind.
+**Not caused by the v5 cutover:** verified red at `8745d18~1`.
 
-**Why the obvious fix does not work.** Spawning it from `drive_loan_plane` is
-refused as `ungranted`: init's declared bindings in `sel4-loan.zti` are
-`dango-output`, `init-shared-buffer-factory`, `powerbox-client`, and
-`sample-receiver-side` — no `exec` grant over `sample-receiver`, so init has no
-authority to launch it. The fixture has to declare that authority, which also
-means deciding whether the receiver's channel end arrives as a declared binding
-or a spawn grant.
+**Exit condition observed:** `just sel4_loan_check` passes — "a sealed subrange
+was loaned to a receiver named by capability, mapped read-only, returned once,
+and reclaimed; all four declared quota classes refused at ceiling+1 without
+disturbing an unrelated holder". `just sel4_sample_check`, `just
+sel4_spawn_check`, and `just sel4_reclamation_check` pass, along with the other
+28 plane gates and `contracts_check`, `sel4_boot_layout_check`, and
+`sel4_gate_control_check`.
 
-**Not caused by the v5 cutover.** Verified red at `8745d18~1`, before it.
+**The two peers needed different answers.** `sample-receiver`'s channel end is
+a binding init holds and can pass, so init spawns it with that one grant —
+which is what `drive_loan_plane`'s docstring said the cutover lacked "until
+P5.3.3", and now has. `console`'s two ends are the opposite: init holds the
+*producer* side of each and cannot hand over a consumer end it does not have,
+so console is root-owned autostart instead. Spawned-but-idle is also exactly
+what the strand needs: a deterministic queue nobody collects, rather than an
+absent peer the root refuses before recording the loan at all.
 
-**Progress (2026-08-10): the receiver half is done.** Init declares `exec` and
-`spawn` over `sample-receiver`, holds a `spawnBudget` of 1, and passes the one
-declared binding the preflight expects. The whole receiver scenario runs — the
-unmodified `sample-receiver` maps the loan, holds it read-only, verifies the
-payload, and returns it once — and the docstring's P5.3.3 caveat is gone,
-because that mechanism exists.
+The unsealed probe moved after the receiver spawn. It loans deliberately to
+prove an unsealed region is refused, and with no receiver it was refused
+`absent-or-ambiguous` instead — the right outcome for the wrong reason,
+passing vacuously.
 
-**What remains is the same defect one arm later.** The strand arm loans to
-`console` to prove a stranded loan is reclaimed, and the plane never spawns
-`console` either, so it fails at `[init] loan plane fail: strand loan` with the
-same `absent-or-ambiguous`. Fixing it needs the same three declarations — an
-`exec` grant, a binding to pass, and budget for a second child — and a decision
-about whether the strand arm wants a live peer at all: its point is a loan
-nobody collects, which a spawned-but-idle console gives and an absent one does
-not.
+**Four of the gate's own assertions had never run**, because it failed before
+reaching them. Its shared-buffer budget parse required `holder` as the first
+field while Zutai renders record fields alphabetically, so it matched nothing
+and would have reported "declares no budget entries" for any fixture at all.
+Its quota parse still read the `component=` field, renamed to
+`instance=`/`executable=`. The admitted grant count and the `quotas declared=`
+count both moved with this change.
 
-**Exit condition:** `just sel4_loan_check` passes with the receiver spawned and
-the loan delivered to a live holder; `just sel4_sample_check`, `just
-sel4_spawn_check`, and `just sel4_reclamation_check` still pass.
+The last of those found a real asymmetry rather than a stale pin: the boot path
+declared its quotas silently and printed only the aggregate, so a per-instance
+ceiling could be wrong in the generation and invisible in every transcript. It
+emits the same per-instance record the spawn path does now.
 
-## Resolved
 ### B51 — the spawn preflight cannot tell a respawn from a first launch
 
 **Status:** Resolved 2026-08-10.
