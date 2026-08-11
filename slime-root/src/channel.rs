@@ -388,6 +388,17 @@ impl ChannelTable {
                         rights: endpoint.rights,
                     },
                 )?;
+            // Where a declared end actually landed. The slot is the
+            // generation's to choose and the component compiles against it, so
+            // a mismatch is silent until the first send goes nowhere; naming
+            // it here is what lets a gate assert the two agree.
+            sel4::debug_println!(
+                "SLIME_GRAPH channel end task={} slot={slot} key={} side={} rights={:#x}",
+                task.0,
+                endpoint.key,
+                endpoint.side.name(),
+                endpoint.rights,
+            );
             installed += 1;
         }
         Ok(installed)

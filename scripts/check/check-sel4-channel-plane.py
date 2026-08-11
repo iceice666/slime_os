@@ -74,7 +74,7 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"SLIME_ROOT graph admitted executables=2 instances=2 slimecm=0 elf=2 unrecognized=0",
     ),
     ("console was staged", r"SLIME_GRAPH staged task=0 instance=console executable=console grants=1 "),
-    ("init was staged", r"SLIME_GRAPH staged task=1 instance=init executable=init grants=1 "),
+    ("init was staged", r"SLIME_GRAPH staged task=1 instance=init executable=init grants=2 "),
     (
         # Required check 1. The direction is the claim: the generation declares
         # `dango-output` with `console` as the grant's target and `recv` as its
@@ -84,18 +84,7 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         # graph materialized backwards would still report one channel, and
         # would then deadlock with both ends waiting to receive.
         "the declared channel was materialized with init producing to console",
-        r"SLIME_GRAPH channel grant=dango-output key=0 producer=1 consumer=0 queues=1",
-    ),
-    (
-        # Each end holds only what that end can do. `init` holds send (0x1) at
-        # the slot the boot layout numbers for it; `console` holds recv (0x2) at
-        # slot 0, which is the slot `console.rs` compiles against.
-        "init holds the send end at its layout slot",
-        r"SLIME_GRAPH channel end task=1 slot=3 key=0 side=producer rights=0x1",
-    ),
-    (
-        "console holds the receive end at slot 0",
-        r"SLIME_GRAPH channel end task=0 slot=0 key=0 side=consumer rights=0x2",
+        r"SLIME_GRAPH channel grant=dango-output key=0 producer_instance=1 consumer_instance=0 queues=1",
     ),
     (
         # A bidirectional grant whose two ends are the same component is a
@@ -109,11 +98,26 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         # graph; it arrives with the spawn-time capability distribution in
         # P5.3.3, which is what gives a second component a channel to reply on.
         "the bidirectional self-edge became one loopback queue",
-        r"SLIME_GRAPH channel grant=service-spawn key=1 producer=1 consumer=1 queues=1",
+        r"SLIME_GRAPH channel grant=service-spawn key=1 producer_instance=1 consumer_instance=1 queues=1",
+    ),
+    # Both channels are materialized from the generation before any component
+    # launches, so every `channel grant=` marker precedes every `channel end=`
+    # one: an end is recorded where it is installed, which is per-task at
+    # staging time. These assertions are ordered, so they follow that split.
+    (
+        # Each end holds only what that end can do. `console` holds recv (0x2)
+        # at slot 0, the slot `console.rs` compiles against, and is asserted
+        # first because it is task 0 and stages first.
+        "console holds the receive end at slot 0",
+        r"SLIME_GRAPH channel end task=0 slot=0 key=0 side=consumer rights=0x2",
+    ),
+    (
+        "init holds the send end at its layout slot",
+        r"SLIME_GRAPH channel end task=1 slot=0 key=0 side=producer rights=0x1",
     ),
     (
         "init holds both directions at one slot",
-        r"SLIME_GRAPH channel end task=1 slot=7 key=1 side=loopback rights=0x3",
+        r"SLIME_GRAPH channel end task=1 slot=1 key=1 side=loopback rights=0x3",
     ),
     (
         # Every declared channel placed, nothing left unplaced. A generation
