@@ -166,6 +166,31 @@ contract in one change, because the labels, the tables, and the components all
 reference each other. There is no partial state where the tree builds and the
 gates mean anything.
 
+**Two separable pieces landed (2026-08-10), and they were the only two.**
+
+`LaunchedInstances` moved out of `channel.rs` into `launched.rs`. It was never
+a channel concern — it answers "which declaration is this task" and "has this
+declaration ever run", both of which outlive any IPC model — and leaving it
+there would have meant rescuing it mid-deletion. Two of its couplings were
+wrong on their own terms: it was sized by `MAX_CHANNELS`, which bounds
+something unrelated, and `record` returned `ChannelError`, so a full instance
+table reported `UnlaidSlot`. `channel.rs` no longer imports `MAX_INSTANCES`,
+which is the evidence the move decoupled rather than relocated.
+
+`contracts/fabric-stream/v2/` exists: schema, renderer, generator, generated
+bindings, and a `contracts_check` guard that refuses a layout whose field order
+disagrees with its schema. Both records are exactly 64 bytes. Three design
+points are settled and recorded there — slots carry a `claimed` state between
+empty and ready so a torn write is unobservable; sequences are absolute rather
+than slot indices so a lagging subscriber counts drops instead of mistaking a
+wrapped slot for a new sample; and `producer_state` lives in the ring so peer
+death needs no root round trip. The badge carries only "something changed",
+because a notification word coalesces and nothing that must not coalesce can
+travel on it.
+
+No component reads the ring yet. That is the cutover, and it is the whole
+remainder.
+
 **Exit condition:** `channel.rs`, `transit.rs`, `parked.rs`, `WaitSet`, and the
 migrated universal labels no longer exist. Backpressure, bounded queues,
 timeouts, peer death, cap-transfer attenuation, unrelated-route progress, and
