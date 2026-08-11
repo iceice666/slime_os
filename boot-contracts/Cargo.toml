@@ -13,6 +13,14 @@ gpt = []
 [dependencies]
 ed25519-dalek = { version = "2.2.0", default-features = false, optional = true }
 
+# `verify_release` calls `apply_rotation` and `verify_ed25519`, both behind
+# `release-crypto`. Without this it is auto-discovered and built with default
+# features, so `cargo test -p boot-contracts` fails to compile it -- which no
+# gate ran, because the Justfile's `test_host` target builds `--lib` only.
+[[example]]
+name = "verify_release"
+required-features = ["release-crypto"]
+
 [lib]
 doctest = false
 
