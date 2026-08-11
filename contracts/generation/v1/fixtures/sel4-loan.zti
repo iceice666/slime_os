@@ -161,7 +161,7 @@
       executable = "console";
       health = "required";
       name = "console";
-      owner = "init";
+      owner = "root";
     };
   ];
   mintedBindings = [];

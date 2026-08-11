@@ -60,7 +60,7 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         # P5.3.3 made load-bearing. Before that slice the factory slot was
         # discarded and the budget alone admitted an allocation (B13), so this
         # graph reached its loan with no factory grant declared at all.
-        r"SLIME_ROOT generation admitted number=\d+ executables=3 instances=3 grants=5 ",
+        r"SLIME_ROOT generation admitted number=\d+ executables=3 instances=3 grants=6 ",
     ),
     (
         "all three payloads are native ELF and no legacy image was activated",
@@ -76,8 +76,14 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         # rather than here, because the root prints them in task-id order and
         # task ids are assigned by staging order -- so requiring a particular
         # order among them would pin something the milestone does not claim.
+        # Two *launched* instances at this point -- console and init, both
+        # root-owned autostart -- and three holders, because the budget covers
+        # `sample-receiver` too, which init spawns later. `declared` counts
+        # what the root has launched when it prints, not what the generation
+        # declares; the two were the same number while every instance was
+        # root-owned (B52).
         "every declared holder was budgeted",
-        r"SLIME_GRAPH quotas declared=3 budgeted=3 holders=3",
+        r"SLIME_GRAPH quotas declared=2 budgeted=2 holders=3",
     ),
     (
         # B13. The factory grant and the budget are independent gates: the
@@ -537,14 +543,27 @@ def fixture_quotas() -> dict[str, tuple[int, int, int, int]]:
         text = FIXTURE.read_text(encoding="utf-8")
     except OSError as error:
         fail(f"cannot read {FIXTURE.relative_to(ROOT)}: {error}")
-    entries = re.findall(
-        r"\{\s*holder\s*=\s*\"([^\"]+)\"\s*;\s*"
-        r"bytePages\s*=\s*(\d+)\s*;\s*"
-        r"bufferCount\s*=\s*(\d+)\s*;\s*"
-        r"mappingCount\s*=\s*(\d+)\s*;\s*"
-        r"loanCount\s*=\s*(\d+)\s*;",
-        text,
-    )
+    # Field order is the fixture's, and Zutai renders record fields
+    # alphabetically -- `bufferCount`, `bytePages`, `holder`, `loanCount`,
+    # `mappingCount`. This pattern assumed `holder` came first and so matched
+    # nothing; the gate never reached it, because it failed earlier.
+    entries = [
+        (
+            match["holder"],
+            match["bytePages"],
+            match["bufferCount"],
+            match["mappingCount"],
+            match["loanCount"],
+        )
+        for match in re.finditer(
+            r"\{\s*bufferCount\s*=\s*(?P<bufferCount>\d+)\s*;\s*"
+            r"bytePages\s*=\s*(?P<bytePages>\d+)\s*;\s*"
+            r"holder\s*=\s*\"(?P<holder>[^\"]+)\"\s*;\s*"
+            r"loanCount\s*=\s*(?P<loanCount>\d+)\s*;\s*"
+            r"mappingCount\s*=\s*(?P<mappingCount>\d+)\s*;",
+            text,
+        )
+    ]
     if not entries:
         fail(f"{FIXTURE.relative_to(ROOT)} declares no shared-buffer budget entries")
     return {name: tuple(int(value) for value in limits) for name, *limits in entries}
@@ -562,7 +581,7 @@ def check_declared_quotas(transcript: str) -> None:
     reported = {
         name: tuple(int(value) for value in limits)
         for name, *limits in re.findall(
-            r"SLIME_GRAPH quota task=\d+ component=(\S+) pages=(\d+) buffers=(\d+) "
+            r"SLIME_GRAPH quota task=\d+ instance=(\S+) executable=\S+ pages=(\d+) buffers=(\d+) "
             r"mappings=(\d+) loans=(\d+)",
             transcript,
         )

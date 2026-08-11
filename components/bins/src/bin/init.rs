@@ -1199,6 +1199,26 @@ fn drive_loan_plane() {
     }
     slime_rt::debug_write(b"[init] payload written\n");
 
+    // The receiver has to be running before it can be loaned to: a loan names
+    // its receiver as the unique live holder of the channel's other end, so
+    // with nothing spawned the root answers `absent-or-ambiguous` (B52) --
+    // including for the unsealed probe below, which would otherwise be
+    // refused for the wrong reason and pass vacuously.
+    //
+    // One grant: the receiver's own end of the channel init keeps the other
+    // half of. That edge is generation-declared, so the preflight expects
+    // exactly it -- which is what the docstring above says this cutover lacked
+    // "until P5.3.3", and now has.
+    if slime_rt::spawn(
+        SAMPLE_RECEIVER_SLOT,
+        &[grant(RECEIVER_SLOT, RIGHT_SEND | RIGHT_RECV)],
+    )
+    .is_err()
+    {
+        fail_loan(b"spawn the receiver");
+    }
+    slime_rt::debug_write(b"[init] loan receiver spawned\n");
+
     // A loan requires an irreversibly sealed source, so an unsealed one must be
     // refused. Checked before sealing, because afterwards it is unobservable.
     if slime_rt::shared_buffer_loan(buffer.slot, RECEIVER_SLOT, 0, PAYLOAD_LEN).is_ok() {
@@ -1238,24 +1258,6 @@ fn drive_loan_plane() {
         fail_loan(b"an undelegated channel carried a loan");
     }
     slime_rt::debug_write(b"[init] undelegated loan denied\n");
-
-    // The receiver has to be running before it can be loaned to: a loan names
-    // its receiver as the unique live holder of the channel's other end, so
-    // with nothing spawned the root answers `absent-or-ambiguous` (B52).
-    //
-    // One grant: the receiver's own end of the channel init keeps the other
-    // half of. That edge is generation-declared, so the preflight expects
-    // exactly it -- which is what the docstring above says this cutover lacked
-    // "until P5.3.3", and now has.
-    if slime_rt::spawn(
-        SAMPLE_RECEIVER_SLOT,
-        &[grant(RECEIVER_SLOT, RIGHT_SEND | RIGHT_RECV)],
-    )
-    .is_err()
-    {
-        fail_loan(b"spawn the receiver");
-    }
-    slime_rt::debug_write(b"[init] loan receiver spawned\n");
 
     let loan = match slime_rt::shared_buffer_loan(buffer.slot, RECEIVER_SLOT, 0, PAYLOAD_LEN) {
         Ok(loan) => loan,

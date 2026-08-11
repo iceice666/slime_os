@@ -2151,6 +2151,23 @@ fn launch_instance_graph(
                 launched_instance.task.0
             )
         }
+        // The same record the spawn path emits. The boot path declared its
+        // quotas silently and printed only the aggregate, so a per-instance
+        // ceiling could be wrong in the generation and invisible in the
+        // transcript -- and a gate checking the declared ceilings against the
+        // observed ones saw only the spawned children (B52).
+        sel4::debug_println!(
+            "SLIME_GRAPH quota task={} instance={} executable={} pages={} buffers={} mappings={} loans={}",
+            launched_instance.task.0,
+            instance.name,
+            generation
+                .executable(launched_instance.executable)
+                .map_or("<unknown>", |record| record.name),
+            quota.byte_pages,
+            quota.buffer_count,
+            quota.mapping_count,
+            quota.loan_count,
+        );
     }
     sel4::debug_println!(
         "SLIME_GRAPH quotas declared={} budgeted={budgeted} holders={}",
