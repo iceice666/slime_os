@@ -90,10 +90,28 @@ channels and exits, so both services observe `PeerDead` and exit 0, which is
 what `console.rs` and `spawn-service.rs` are written to do via an
 `ERR_PEER_DEAD` arm that was previously unreachable.
 
-**What remains is the cutover.** Stream and QoS fault inside the root during
-their scenarios (the aliasing class `sel4_sample_check` also shows); call and
-operation stall with participants parked. Those are `channel.rs`, `transit.rs`,
-and `parked.rs` behaviour, which this item deletes rather than repairs.
+**The stream and QoS faults were one bug, and not in the fabric.**
+`ActionList` is 147,464 bytes — `MAX_MAPPING_PAGES + MAX_FRAME_ANCHORS * 2`
+slots of `Option<AdapterAction>` — built as a local and returned by value, so
+a shared-buffer teardown put two copies on the root's 1 MiB stack from an
+already-deep dispatch frame. The stream plane's loan teardown overflowed it and
+faulted inside `build_actions`. The list lives on the heap now and
+`execute_teardown` takes it by value so the return moves a pointer. This is
+backlog B3's failure mode a third time in this repository.
+
+Four more assertions on those two gates had never been reached: a `grants=13`
+count stale since the stream fixture declared its minted capabilities, prose
+spliced into a marker pattern, a `narrowed transfer role cannot widen` line no
+component emits, and a per-component failure budget of "exactly one, from the
+unconfigured instance" — a P5.2 rule from when the root launched every declared
+instance. A v4 generation launches only root-owned autostart ones.
+
+**What remains is the cutover.** `sel4_call_check` and `sel4_operation_check`
+deadlock: every participant spawns and parks, the broker consumes one client
+request and then blocks in `consume_supervision`, and init completes its
+delegation and parks too. That is `call_broker.rs`/`operation_broker.rs`
+protocol over `channel.rs`, `transit.rs`, and `parked.rs` — the machinery this
+item deletes rather than repairs.
 
 **Exit condition:** `channel.rs`, `transit.rs`, `parked.rs`, `WaitSet`, and the
 migrated universal labels no longer exist. Backpressure, bounded queues,
