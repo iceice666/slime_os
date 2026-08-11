@@ -236,6 +236,27 @@ Plus a fixture component that actually runs two threads, since a declared
 thread the root starts and nothing exercises would pass every gate while
 proving nothing.
 
+**A design constraint found by attempting it (2026-08-10).** The transport's
+per-thread state is not just the IPC buffer: `WINDOW_BASE` and `WINDOW_LEN` are
+process-global statics that 29 call sites read through `window()`, and each
+thread stages through its own window. Making those arrays needs an index, and
+there are only three ways to get one without `#[thread_local]`, which
+`aarch64-sel4-minimal` does not support:
+
+- **A `CURRENT_THREAD` static.** Unsound. Two runnable threads race it, and the
+  failure is a thread staging through another's window — silent corruption, not
+  a fault.
+- **Derive it from the stack pointer.** Works, and couples every syscall to the
+  runtime's stack layout, which `sel4-runtime-common` owns and can change.
+- **Thread an explicit context through the transport**, as `Cap::with` does for
+  the IPC buffer. Sound and layout-independent, and it means every one of the
+  29 wrappers takes a parameter its callers must supply — which is the real
+  cost, and why this is a cutover rather than an addition.
+
+The third is the right answer. It is recorded here rather than half-applied,
+because a partial version — arrays indexed by a racy static — would pass every
+current gate, since no component runs two threads yet.
+
 **Two clauses already hold (2026-08-10).** "Remove `TaskId` from every
 cross-process contract" and "lifecycle authority remains capability-based" were
 delivered by B42: no schema, generated protocol record, or public runtime type
