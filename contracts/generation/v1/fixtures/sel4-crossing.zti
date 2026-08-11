@@ -78,7 +78,30 @@
       owner = "init";
     };
   ];
-  mintedBindings = [];
+  mintedBindings = [
+    {
+      name = "crossing-peer-carrier";
+      owner = "init";
+      holder = "crossing-peer";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 0;
+      transferable = false;
+    };
+    {
+      name = "crossing-peer-gate";
+      owner = "init";
+      holder = "crossing-peer";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 1;
+      transferable = false;
+    };
+  ];
   interfaceSchemas = [];
   objects = [
     {

@@ -288,19 +288,19 @@
       bindings = [
         {
           grant = "fabric-call-client-b-control";
-          slot = 0;
-        };
-        {
-          grant = "fabric-call-client-control";
-          slot = 1;
-        };
-        {
-          grant = "fabric-call-server-control";
           slot = 2;
         };
         {
-          grant = "fabric-call-time-control";
+          grant = "fabric-call-client-control";
           slot = 3;
+        };
+        {
+          grant = "fabric-call-server-control";
+          slot = 4;
+        };
+        {
+          grant = "fabric-call-time-control";
+          slot = 5;
         };
       ];
       dependencies = [
@@ -376,7 +376,110 @@
       owner = "init";
     };
   ];
-  mintedBindings = [];
+  mintedBindings = [
+    {
+      name = "fabric-call-client-b-phase";
+      owner = "init";
+      holder = "fabric-call-client-b";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 1;
+      transferable = false;
+    };
+    {
+      name = "fabric-call-server-factory";
+      owner = "init";
+      holder = "fabric-call-server";
+      rights = [
+        "bufferCreate";
+      ];
+      slot = 1;
+      transferable = false;
+    };
+    {
+      name = "fabric-call-server-supervision";
+      owner = "init";
+      holder = "fabric-call-server";
+      rights = [
+        "supervise";
+      ];
+      slot = 2;
+      transferable = false;
+    };
+    {
+      name = "fabric-call-time-phase";
+      owner = "init";
+      holder = "fabric-call-time";
+      rights = [
+        "recv";
+      ];
+      slot = 1;
+      transferable = false;
+    };
+    {
+      name = "fabric-call-client-factory";
+      owner = "init";
+      holder = "fabric-call-client";
+      rights = [
+        "bufferCreate";
+      ];
+      slot = 1;
+      transferable = false;
+    };
+    {
+      name = "fabric-call-client-supervision";
+      owner = "init";
+      holder = "fabric-call-client";
+      rights = [
+        "supervise";
+      ];
+      slot = 2;
+      transferable = false;
+    };
+    {
+      name = "fabric-call-client-phase";
+      owner = "init";
+      holder = "fabric-call-client";
+      rights = [
+        "send";
+      ];
+      slot = 3;
+      transferable = false;
+    };
+    {
+      name = "fabric-call-client-phase-a";
+      owner = "init";
+      holder = "fabric-call-client";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 4;
+      transferable = false;
+    };
+    {
+      name = "fabric-service-endpoint-factory";
+      owner = "init";
+      holder = "fabric-service";
+      rights = [
+        "endpointCreate";
+      ];
+      slot = 0;
+      transferable = false;
+    };
+    {
+      name = "fabric-service-shared-buffer-factory";
+      owner = "init";
+      holder = "fabric-service";
+      rights = [
+        "bufferCreate";
+      ];
+      slot = 1;
+      transferable = false;
+    };
+  ];
   interfaceSchemas = [
     "contracts/interface-schema/v1/interfaces/parameter-call.zti";
   ];

@@ -353,23 +353,23 @@
       bindings = [
         {
           grant = "fabric-op-client-b-control";
-          slot = 0;
-        };
-        {
-          grant = "fabric-op-client-b-restart-control";
-          slot = 1;
-        };
-        {
-          grant = "fabric-op-client-control";
           slot = 2;
         };
         {
-          grant = "fabric-op-server-control";
+          grant = "fabric-op-client-b-restart-control";
           slot = 3;
         };
         {
-          grant = "fabric-op-time-control";
+          grant = "fabric-op-client-control";
           slot = 4;
+        };
+        {
+          grant = "fabric-op-server-control";
+          slot = 5;
+        };
+        {
+          grant = "fabric-op-time-control";
+          slot = 6;
         };
       ];
       dependencies = [
@@ -461,7 +461,91 @@
       owner = "init";
     };
   ];
-  mintedBindings = [];
+  mintedBindings = [
+    {
+      name = "fabric-op-client-phase-a";
+      owner = "init";
+      holder = "fabric-op-client";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 1;
+      transferable = false;
+    };
+    {
+      name = "fabric-op-client-phase-time";
+      owner = "init";
+      holder = "fabric-op-client";
+      rights = [
+        "send";
+      ];
+      slot = 2;
+      transferable = false;
+    };
+    {
+      name = "fabric-op-client-b-phase";
+      owner = "init";
+      holder = "fabric-op-client-b";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 1;
+      transferable = false;
+    };
+    {
+      name = "fabric-op-client-b-restart-phase";
+      owner = "init";
+      holder = "fabric-op-client-b-restart";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 1;
+      transferable = false;
+    };
+    {
+      name = "fabric-op-client-b-restart-start";
+      owner = "init";
+      holder = "fabric-op-client-b-restart";
+      rights = [
+        "recv";
+      ];
+      slot = 2;
+      transferable = false;
+    };
+    {
+      name = "fabric-op-time-phase";
+      owner = "init";
+      holder = "fabric-op-time";
+      rights = [
+        "recv";
+      ];
+      slot = 1;
+      transferable = false;
+    };
+    {
+      name = "fabric-service-endpoint-factory";
+      owner = "init";
+      holder = "fabric-service";
+      rights = [
+        "endpointCreate";
+      ];
+      slot = 0;
+      transferable = false;
+    };
+    {
+      name = "fabric-service-shared-buffer-factory";
+      owner = "init";
+      holder = "fabric-service";
+      rights = [
+        "bufferCreate";
+      ];
+      slot = 1;
+      transferable = false;
+    };
+  ];
   interfaceSchemas = [
     "contracts/interface-schema/v1/interfaces/navigation-operation.zti";
   ];
