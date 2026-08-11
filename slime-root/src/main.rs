@@ -32,8 +32,8 @@
 use slime_root::boot_selector;
 use slime_root::{
     buffer_adapter, channel, child_vspace, console, device, directory, event, fault, generation,
-    graph, ipc, object_allocator, parked, platform_timer, shared_buffer, supervision, task, timer,
-    transfer_window, transit, virtio_blk,
+    graph, ipc, launched, object_allocator, parked, platform_timer, shared_buffer, supervision,
+    task, timer, transfer_window, transit, virtio_blk,
 };
 
 use core::ptr;
@@ -47,7 +47,7 @@ use sel4_root_task::root_task;
 
 use boot_contracts::generation::RIGHT_TRANSFER;
 use buffer_adapter::BufferAdapter;
-use channel::{ChannelTable, LaunchedInstances, WaitTarget};
+use channel::{ChannelTable, WaitTarget};
 use child_vspace::{ChildImage, GRANULE_SIZE, ScratchPage};
 use console::{RIGHT_BLOCK_READ, RIGHT_BLOCK_WRITE};
 use device::{BlockDevices, MAX_BLOCK_DEVICES};
@@ -57,6 +57,7 @@ use fault::{LifecycleEventKind, SupervisionTable};
 use generation::{Admission, Authority, RIGHT_EXEC, RIGHT_RECV, RIGHT_SEND, bound_authority};
 use graph::GraphTables;
 use ipc::{IpcError, Operation, Response, poll_notification};
+use launched::LaunchedInstances;
 use object_allocator::ObjectAllocator;
 use parked::{ParkReason, ParkedReplies};
 use platform_timer::{PhysicalTimerAdapter, TIMER_IRQ};
