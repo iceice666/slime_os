@@ -29,6 +29,13 @@ pub const MAX_OPERATION_LABEL: u16 = Operation::SupervisionDerive as u16;
 /// operation moved into slot 17. Input is a Call on the console endpoint now.
 pub const RETIRED_INPUT_READ_LABEL: sel4::Word = 17;
 
+/// The labels directory inspect and commit used to carry, retired with B45.
+///
+/// `DirectoryDerive` keeps label 15: it is the only writer of the caller's
+/// capability table, which the main dispatcher also writes, so moving it to
+/// the second thread would be a data race rather than a decoupling.
+pub const RETIRED_DIRECTORY_LABELS: [sel4::Word; 2] = [14, 16];
+
 /// The labels generation, recovery, and health policy used to carry, retired
 /// with B44.
 ///
@@ -136,9 +143,7 @@ pub enum Operation {
     EndpointCreate = 11,
     SupervisionStatus = 12,
     CapDrop = 13,
-    DirectoryInspect = 14,
     DirectoryDerive = 15,
-    DirectoryCommit = 16,
     Wait = 20,
     SharedBufferCreate = 21,
     SharedBufferRelease = 22,
@@ -182,9 +187,7 @@ impl Operation {
             11 => Self::EndpointCreate,
             12 => Self::SupervisionStatus,
             13 => Self::CapDrop,
-            14 => Self::DirectoryInspect,
             15 => Self::DirectoryDerive,
-            16 => Self::DirectoryCommit,
             20 => Self::Wait,
             21 => Self::SharedBufferCreate,
             22 => Self::SharedBufferRelease,
@@ -241,9 +244,7 @@ impl Operation {
             // is unforgeable shared state with an atomic transition — which is
             // mechanism. What a directory *contains* stays in userspace, built
             // over the object store, exactly as `StoreTransact` does.
-            | Self::DirectoryInspect
             | Self::DirectoryDerive
-            | Self::DirectoryCommit
             // M6.4 (P5.4.3): the events come from somewhere a component cannot
             // reach, which makes delivery mechanism. What a key *means* is
             // Dango's business and stays in userspace.
@@ -347,6 +348,16 @@ pub enum ConsoleKind {
     Write,
     /// A read returning one decoded key event.
     InputRead,
+    /// A directory inspect, derive, or commit (B45). Here for the same
+    /// reason block requests are: the namespace and scope tables came with
+    /// the handlers, and a commit racing a lifecycle syscall on one queue
+    /// makes each wait for the other for no reason.
+    ///
+    /// Derive is *not* here: it is the only writer of the caller's capability
+    /// table, which the main dispatcher also writes, and two threads writing
+    /// one task's table is a data race.
+    DirectoryInspect,
+    DirectoryCommit,
     /// One sector-granular block-device request (B43). On this thread because
     /// a slow disk must not hold up lifecycle or fabric traffic, and because
     /// the device tables live with whoever answers block requests.
@@ -357,12 +368,16 @@ impl ConsoleKind {
     const WRITE: sel4::Word = 0;
     const INPUT_READ: sel4::Word = 1;
     const BLOCK_TRANSACT: sel4::Word = 2;
+    const DIRECTORY_INSPECT: sel4::Word = 3;
+    const DIRECTORY_COMMIT: sel4::Word = 4;
 
     const fn from_label(label: sel4::Word) -> Option<Self> {
         match label {
             Self::WRITE => Some(Self::Write),
             Self::INPUT_READ => Some(Self::InputRead),
             Self::BLOCK_TRANSACT => Some(Self::BlockTransact),
+            Self::DIRECTORY_INSPECT => Some(Self::DirectoryInspect),
+            Self::DIRECTORY_COMMIT => Some(Self::DirectoryCommit),
             _ => None,
         }
     }
@@ -1141,6 +1156,11 @@ mod tests {
             RETIRED_POLICY_LABELS
                 .into_iter()
                 .map(|label| (label, "generation, recovery, or health requests")),
+        )
+        .chain(
+            RETIRED_DIRECTORY_LABELS
+                .into_iter()
+                .map(|label| (label, "directory inspect or commit requests")),
         ) {
             assert_eq!(
                 Operation::from_label(label),
@@ -1175,6 +1195,7 @@ mod tests {
             ]
             .contains(&label)
                 || RETIRED_POLICY_LABELS.contains(&label)
+                || RETIRED_DIRECTORY_LABELS.contains(&label)
             {
                 assert_eq!(
                     Operation::from_label(label),

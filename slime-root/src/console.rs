@@ -109,6 +109,18 @@ pub struct ConsoleContext {
     /// variant launches no components, so it keeps its own direct access and
     /// never constructs this thread.
     pub devices: *mut crate::device::BlockDevices,
+    /// The namespace roots (B45). Owned here because inspect and commit are
+    /// the only writers and both live here.
+    pub namespaces: *mut crate::directory::Namespaces,
+    /// The interned scopes, read-only here.
+    ///
+    /// `DirectoryDerive` stayed on the main dispatcher precisely because it is
+    /// the only writer of *both* this table and the caller's `GraphTables`
+    /// entry — and the main loop already writes that entry on `cap_drop` and
+    /// on a spawn's result. Two threads writing one task's capability table
+    /// is a data race, so derive did not move; a scope, once interned, is
+    /// never mutated or freed, so reading it from here is sound.
+    pub scopes: *const crate::graph::ScopeTable,
 }
 
 /// The scripted key source, owned by this thread (B41).
@@ -176,6 +188,8 @@ pub unsafe fn serve(context: &ConsoleContext) -> ! {
     let graph = unsafe { &*context.graph };
     let input = unsafe { &mut *context.input };
     let devices = unsafe { &mut *context.devices };
+    let namespaces = unsafe { &mut *context.namespaces };
+    let scopes = unsafe { &*context.scopes };
 
     // Both endpoints are bound to one notification so a single blocking wait
     // covers the pair: only one thread serves them, and a second blocking
@@ -205,6 +219,30 @@ pub unsafe fn serve(context: &ConsoleContext) -> ! {
             ),
             ipc::ConsoleKind::InputRead => {
                 pending = Some(serve_input_read(graph, input, id, &message.mrs));
+            }
+            ipc::ConsoleKind::DirectoryInspect => {
+                pending = Some(crate::directory::serve_directory_inspect(
+                    graph,
+                    namespaces,
+                    scopes,
+                    windows.bound(id),
+                    &context.scratch,
+                    id,
+                    &message.mrs[..message.len],
+                    buffer,
+                ));
+            }
+            ipc::ConsoleKind::DirectoryCommit => {
+                pending = Some(crate::directory::serve_directory_commit(
+                    graph,
+                    namespaces,
+                    scopes,
+                    windows.bound(id),
+                    &context.scratch,
+                    id,
+                    &message.mrs[..message.len],
+                    buffer,
+                ));
             }
             ipc::ConsoleKind::BlockTransact => {
                 pending = Some(serve_block_transact(

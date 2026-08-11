@@ -157,7 +157,30 @@
       owner = "init";
     };
   ];
-  mintedBindings = [];
+  mintedBindings = [
+    {
+      name = "filesystem-service-rpc";
+      owner = "init";
+      holder = "sel4-filesystem-service";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 0;
+      transferable = false;
+    };
+    {
+      name = "directory-probe-rpc";
+      owner = "init";
+      holder = "directory-probe";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 0;
+      transferable = false;
+    };
+  ];
   interfaceSchemas = [];
   objects = [
     {

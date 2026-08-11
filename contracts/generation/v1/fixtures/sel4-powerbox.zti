@@ -137,7 +137,30 @@
       owner = "init";
     };
   ];
-  mintedBindings = [];
+  mintedBindings = [
+    {
+      name = "powerbox-chooser-rpc";
+      owner = "init";
+      holder = "powerbox-chooser";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 0;
+      transferable = false;
+    };
+    {
+      name = "powerbox-probe-rpc";
+      owner = "init";
+      holder = "powerbox-probe";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 0;
+      transferable = false;
+    };
+  ];
   interfaceSchemas = [];
   objects = [
     {

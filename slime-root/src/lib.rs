@@ -52,6 +52,7 @@ pub mod channel;
 pub mod child_vspace;
 pub mod console;
 pub mod device;
+pub mod directory;
 pub mod event;
 pub mod fault;
 pub mod generation;

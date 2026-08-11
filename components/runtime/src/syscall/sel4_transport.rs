@@ -37,13 +37,12 @@ use super::wire::{
 };
 use super::{
     ERR_INVALID_ARG, ERR_SUCCESS, MAX_CAPS_PER_MSG, MAX_DIRECTORY_PATH, MAX_MSG, MAX_WAIT_SOURCES,
-    MIN_TRANSFER_WINDOW, SYS_CAP_DROP, SYS_CAP_TRANSFER, SYS_DIRECTORY_COMMIT,
-    SYS_DIRECTORY_DERIVE, SYS_DIRECTORY_INSPECT, SYS_ENDPOINT_CREATE, SYS_EXIT, SYS_RECV, SYS_SEND,
-    SYS_SHARED_BUFFER_CREATE, SYS_SHARED_BUFFER_LOAN, SYS_SHARED_BUFFER_LOAN_MAP,
-    SYS_SHARED_BUFFER_MAP, SYS_SHARED_BUFFER_RELEASE, SYS_SHARED_BUFFER_RETURN,
-    SYS_SHARED_BUFFER_REVOKE, SYS_SHARED_BUFFER_SEAL, SYS_SHARED_BUFFER_UNMAP, SYS_SPAWN,
-    SYS_SUPERVISION_DERIVE, SYS_SUPERVISION_STATUS, SYS_TRANSFER_WINDOW_BIND, SYS_UNHEALTHY,
-    SYS_WAIT, SpawnGrant, WaitSource,
+    MIN_TRANSFER_WINDOW, SYS_CAP_DROP, SYS_CAP_TRANSFER, SYS_DIRECTORY_DERIVE, SYS_ENDPOINT_CREATE,
+    SYS_EXIT, SYS_RECV, SYS_SEND, SYS_SHARED_BUFFER_CREATE, SYS_SHARED_BUFFER_LOAN,
+    SYS_SHARED_BUFFER_LOAN_MAP, SYS_SHARED_BUFFER_MAP, SYS_SHARED_BUFFER_RELEASE,
+    SYS_SHARED_BUFFER_RETURN, SYS_SHARED_BUFFER_REVOKE, SYS_SHARED_BUFFER_SEAL,
+    SYS_SHARED_BUFFER_UNMAP, SYS_SPAWN, SYS_SUPERVISION_DERIVE, SYS_SUPERVISION_STATUS,
+    SYS_TRANSFER_WINDOW_BIND, SYS_UNHEALTHY, SYS_WAIT, SpawnGrant, WaitSource,
 };
 
 /// The child CSpace slot holding the badged root service endpoint. Slot 0 is
@@ -64,6 +63,8 @@ pub const CONSOLE_SERVICE_SLOT: sel4::CPtrBits = 32;
 const CONSOLE_LABEL_WRITE: u64 = 0;
 const CONSOLE_LABEL_INPUT_READ: u64 = 1;
 const CONSOLE_LABEL_BLOCK_TRANSACT: u64 = 2;
+const CONSOLE_LABEL_DIRECTORY_INSPECT: u64 = 3;
+const CONSOLE_LABEL_DIRECTORY_COMMIT: u64 = 4;
 
 /// Bytes of a spawn grant record in the transfer window: slot word, then rights
 /// word.
@@ -473,8 +474,11 @@ pub fn directory_inspect(
         Ok(transfer) => transfer,
         Err(error) => return error,
     };
-    let (result, returned) = match outcome(&call(
-        SYS_DIRECTORY_INSPECT,
+    // The console endpoint, not the root's: directory inspect and commit are
+    // served by the second dispatcher, which owns the namespace table (B45).
+    let (result, returned) = match outcome(&call_on(
+        console_service(),
+        CONSOLE_LABEL_DIRECTORY_INSPECT,
         &[slot_pair(slot, required_rights) as Word, transfer as Word],
     )) {
         Ok(pair) => pair,
@@ -519,7 +523,14 @@ pub fn directory_commit(slot: u32, expected: &[u8; 32], new: &[u8; 32]) -> i64 {
         Ok(transfer) => transfer,
         Err(error) => return error,
     };
-    result_of(SYS_DIRECTORY_COMMIT, &[slot as Word, transfer as Word])
+    match outcome(&call_on(
+        console_service(),
+        CONSOLE_LABEL_DIRECTORY_COMMIT,
+        &[slot as Word, transfer as Word],
+    )) {
+        Ok((result, _)) => result,
+        Err(error) => error,
+    }
 }
 
 pub fn input_read(slot: u32) -> (i64, u64) {
