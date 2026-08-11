@@ -127,6 +127,24 @@ pub enum Resource {
     Endpoint { channel: u32, side: Side },
     /// Authority to mint channel pairs.
     EndpointFactory,
+    /// A seL4 Notification this task may wait on (B46).
+    ///
+    /// The kernel object the logical wait set is being replaced by. A
+    /// component that must park across several sources at once cannot do that
+    /// with Endpoints — seL4 receives on exactly one — so each source signals
+    /// a distinct badge bit into one Notification and the component waits
+    /// there. `bits` is the mask it may legitimately observe, so a badge
+    /// carrying anything else is a peer signalling something this component
+    /// was never told about.
+    ///
+    /// Held by the child directly: the whole point is that the wait does not
+    /// go through the root.
+    Notification {
+        /// Which notification object, in the root's own table.
+        notification: u32,
+        /// Badge bits this holder may observe.
+        bits: u64,
+    },
     /// Authority to allocate shared buffers.
     SharedBufferFactory,
     /// Authority over the block device (P5.4.2c).
@@ -390,6 +408,7 @@ impl Resource {
             Self::Executable { .. } => "executable",
             Self::Endpoint { .. } => "endpoint",
             Self::EndpointFactory => "endpoint-factory",
+            Self::Notification { .. } => "notification",
             Self::SharedBufferFactory => "shared-buffer-factory",
             Self::Block { .. } => "block",
             Self::Supervision { .. } => "supervision",
@@ -475,6 +494,7 @@ impl Resource {
             Self::Executable { .. } => "executable",
             Self::Endpoint { .. } => "endpoint",
             Self::EndpointFactory => "endpoint-factory",
+            Self::Notification { .. } => "notification",
             Self::SharedBufferFactory => "shared-buffer-factory",
             Self::Block { .. } => "block",
             Self::Supervision { .. } => "supervision",

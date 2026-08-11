@@ -1065,6 +1065,13 @@ const RIGHT_BUFFER_CREATE: u64 = 1 << 24;
 
 /// Authority to read one decoded key event, held on an `Input` (M6.4).
 const RIGHT_INPUT_READ: u64 = 1 << 23;
+/// Wait on a Notification and observe its badge (B46).
+///
+/// Separate from `RIGHT_RECV`: receiving on an endpoint takes a message, while
+/// waiting on a notification takes only the fact that bits were set. A
+/// component that may observe a signal is not thereby allowed to consume the
+/// message that caused it.
+const RIGHT_NOTIFY: u64 = 1 << 25;
 
 /// Largest component ELF the loader will copy through [`ElfScratch`]. Generous
 /// against the five components this profile declares (the largest is ~44 KiB)
@@ -4066,6 +4073,7 @@ const fn valid_rights(resource: &graph::Resource) -> u64 {
         graph::Resource::Executable { .. } => RIGHT_EXEC | RIGHT_SPAWN | RIGHT_TRANSFER,
         graph::Resource::Endpoint { .. } => RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
         graph::Resource::EndpointFactory => RIGHT_ENDPOINT_CREATE | RIGHT_TRANSFER,
+        graph::Resource::Notification { .. } => RIGHT_NOTIFY | RIGHT_TRANSFER,
         graph::Resource::SharedBufferFactory => RIGHT_BUFFER_CREATE | RIGHT_TRANSFER,
         graph::Resource::Supervision { .. } => RIGHT_SUPERVISE | RIGHT_TRANSFER,
         graph::Resource::SharedBuffer { .. } | graph::Resource::Loan { .. } => RIGHT_BUFFER_ALL,
@@ -5376,6 +5384,10 @@ fn descriptor_names(object_kind: u32, resource: &graph::Resource) -> bool {
         | graph::Resource::EndpointFactory
         | graph::Resource::SharedBufferFactory
         | graph::Resource::Block { .. }
+        // A notification names no generation object: the root creates it
+        // alongside the sources that signal it, so there is nothing for a
+        // declared object kind to match against (B46).
+        | graph::Resource::Notification { .. }
         | graph::Resource::Input => false,
     }
 }

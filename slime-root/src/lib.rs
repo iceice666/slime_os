@@ -59,6 +59,7 @@ pub mod generation;
 pub mod graph;
 pub mod ipc;
 pub mod launched;
+pub mod notification;
 pub mod object_allocator;
 pub mod parked;
 pub mod platform_timer;
