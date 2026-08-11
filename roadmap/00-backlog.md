@@ -205,6 +205,23 @@ and each is proven load-bearing by reverting it:
   behind on — structurally perfect, carrying a real sample from `slot_count`
   ago.
 
+**The ring's own machinery is complete** — `components/proto/src/ring.rs`,
+19 tests. `publish` refuses at capacity rather than overwriting, which is
+backpressure with the unread samples still readable; `consume` returns the
+sample at `tail + 1` or nothing; peer death is a header field, so a subscriber
+learns a producer died without a root round trip, and marking a death never
+relabels a clean end.
+
+Two pieces were removed for being unearned. The `Lost` variant was
+unreachable: one reader owns `tail` and `publish` refuses at capacity, so the
+slot at `tail + 1` is the awaited sample or unwritten, and anything else is a
+mapping the reader should refuse. BEST_EFFORT drops need a publisher that
+overwrites, which is a policy above this cursor. The separate claim step was
+redundant too — `WireRingSlot::encode` writes the whole slot and `head` is what
+makes it visible, so removing it and re-running the suite proved nothing
+depended on it. `SLOT_CLAIMED` stays in the contract because `valid_ring_slot`
+must keep refusing it.
+
 **What remains is one indivisible change.** `slime_rt::wait` has 115 call
 sites, `recv` 104, and `send` 93, across 41 component files. Each becomes a
 different primitive: rendezvous to Endpoint send/receive, synchronous RPC to
