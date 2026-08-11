@@ -171,6 +171,38 @@ graphs retain behavior. `just test_sel4_root`, `just sel4_spawn_check`, `just
 sel4_supervision_check`, `just sel4_reclamation_check`, and `just
 sel4_boot_check` pass.
 
+**The format half landed (2026-08-10).** A generation can declare extra
+threads in a process and the decoder admits them. Three things had kept v5's
+process/thread split notional:
+
+- the builder emitted one thread per process and indexed the tables
+  `thread = process`, which held only while they grew in lockstep;
+- `validate_plan` required `process_count == thread_count`, so a second thread
+  was refused `BadBounds` before anything else was checked;
+- the per-thread check required `process(thread.process).main_thread == index`,
+  so *every* thread had to be its process's main one.
+
+All three are fixed. Indices are counted from the records; a quota stays per
+process while schedules and fault policies are per thread; a thread is checked
+for belonging to a real process and owning objects of the right kind, and
+`main_thread` is validated separately against the thread table so a process
+cannot name someone else's. `Instance.extraThreads` is the manifest's side, and
+each extra thread gets its own TCB, IPC buffer, fault endpoint, fault policy,
+and schedule while sharing the declaring instance's CSpace and VSpace — which
+is the property that makes it a thread rather than a process.
+
+Verified by declaring `extraThreads = 1` on the channel plane's console: two
+processes, three threads, decodes clean, `sel4_channel_check` passes. All 30
+seL4 gates pass.
+
+**What that leaves open.** `slime-root` still constructs only the main thread,
+so a declared second one is planned and not run — the exit condition's "a
+fixture can declare two threads in one process" holds for the declaration and
+not yet for the execution, and "one thread fault is reported under the declared
+fault policy" needs the thread to exist at runtime first. The fixture is
+reverted rather than left declaring a thread nothing starts. `runtime.rs` also
+still assumes one thread per component.
+
 **Two clauses already hold (2026-08-10).** "Remove `TaskId` from every
 cross-process contract" and "lifecycle authority remains capability-based" were
 delivered by B42: no schema, generated protocol record, or public runtime type
