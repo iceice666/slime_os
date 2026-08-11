@@ -52,6 +52,17 @@ Instance :: type {
   -- has no notion of either, and a number the kernel cannot enforce would be
   -- authenticated fiction.
   priority? : Int;
+  -- Extra threads in this instance's process, beyond its main one.
+  --
+  -- A process owns the CSpace and VSpace; a thread owns a TCB, an IPC buffer,
+  -- a fault policy, and a schedule. v5 has separated them since the cutover,
+  -- but the builder emitted exactly one thread per process and indexed the two
+  -- tables 1:1, so the split existed in the format and nowhere else (B47).
+  --
+  -- Each extra thread gets its own TCB, IPC buffer, fault policy, and
+  -- schedule, and shares the declaring instance's CSpace and VSpace — which is
+  -- the property that distinguishes a second thread from a second process.
+  extraThreads? : Int;
 };
 
 CapabilityGrant :: type {

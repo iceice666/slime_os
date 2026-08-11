@@ -2323,9 +2323,13 @@ def build_sel4_plan(
             )
         )
 
-        thread = process
-        schedule = process
-        fault = process
+        # Indices into the thread, schedule, and fault tables. These used to be
+        # `= process`, which held only while every process had exactly one
+        # thread and all four tables grew in lockstep. Counting them lets a
+        # process declare more without the tables silently misaligning (B47).
+        thread = len(thread_records) // GENERATION_THREAD.size
+        schedule = len(schedule_records) // GENERATION_SCHEDULE.size
+        fault = len(fault_records) // GENERATION_FAULT_POLICY.size
         thread_records.extend(
             GENERATION_THREAD.pack(
                 string_offset(f"{name}:main"), process, tcb, schedule, fault, ipc, 0, 0, 0
@@ -2435,6 +2439,92 @@ def build_sel4_plan(
                 0,
             )
         )
+
+        # Extra threads, if the instance declares any (B47). Each gets its own
+        # TCB, IPC buffer, fault endpoint, fault policy, and schedule, and
+        # shares this process's CSpace and VSpace -- which is exactly what
+        # makes it a second *thread* rather than a second process.
+        #
+        # Appended after the main thread's records so the indices above stay
+        # the ones the process names, and counted from the tables themselves
+        # so a plan with several multi-threaded processes still lines up.
+        extra_threads = instance.get("extraThreads", 0)
+        if not isinstance(extra_threads, int) or isinstance(extra_threads, bool):
+            fail(f"instance {name}: invalid extraThreads")
+        if extra_threads < 0:
+            fail(f"instance {name}: extraThreads {extra_threads} is negative")
+        for extra in range(extra_threads):
+            label = f"{name}:thread{extra + 1}"
+            extra_tcb = len(object_index)
+            object_index[(name, f"tcb{extra + 1}")] = extra_tcb
+            kernel_records.extend(
+                GENERATION_KERNEL_OBJECT.pack(
+                    string_offset(f"{label}:tcb"), KERNEL_OBJECT_TCB, process, 11, 1, PLAN_NONE, 0
+                )
+            )
+            extra_ipc = len(object_index)
+            object_index[(name, f"ipc-buffer{extra + 1}")] = extra_ipc
+            kernel_records.extend(
+                GENERATION_KERNEL_OBJECT.pack(
+                    string_offset(f"{label}:ipc-buffer"),
+                    KERNEL_OBJECT_FRAME,
+                    process,
+                    12,
+                    1,
+                    PLAN_NONE,
+                    0,
+                )
+            )
+            extra_fault_endpoint = len(object_index)
+            object_index[(name, f"fault-endpoint{extra + 1}")] = extra_fault_endpoint
+            kernel_records.extend(
+                GENERATION_KERNEL_OBJECT.pack(
+                    string_offset(f"{label}:fault-endpoint"),
+                    KERNEL_OBJECT_ENDPOINT,
+                    process,
+                    4,
+                    1,
+                    PLAN_NONE,
+                    0,
+                )
+            )
+            extra_schedule = len(schedule_records) // GENERATION_SCHEDULE.size
+            schedule_records.extend(
+                GENERATION_SCHEDULE.pack(
+                    string_offset(f"{label}:schedule"),
+                    len(thread_records) // GENERATION_THREAD.size,
+                    PLAN_NONE,
+                    priority,
+                    priority,
+                    0,
+                    0,
+                    0,
+                )
+            )
+            extra_fault = len(fault_records) // GENERATION_FAULT_POLICY.size
+            fault_records.extend(
+                GENERATION_FAULT_POLICY.pack(
+                    string_offset(f"{label}:fault"),
+                    len(thread_records) // GENERATION_THREAD.size,
+                    PLAN_NONE,
+                    extra_fault_endpoint,
+                    process + 1,
+                    1,
+                )
+            )
+            thread_records.extend(
+                GENERATION_THREAD.pack(
+                    string_offset(label),
+                    process,
+                    extra_tcb,
+                    extra_schedule,
+                    extra_fault,
+                    extra_ipc,
+                    0,
+                    0,
+                    0,
+                )
+            )
 
     process_for_instance = {
         instance["name"]: index for index, instance in enumerate(planned_instances)

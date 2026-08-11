@@ -1554,9 +1554,18 @@ impl<'a> Generation<'a> {
     }
 
     fn validate_plan(&self) -> Result<(), DecodeError> {
-        if self.process_count != self.thread_count
-            || self.process_count != self.schedule_count
-            || self.process_count != self.fault_policy_count
+        // A quota is per *process*; a schedule and a fault policy are per
+        // *thread*. Those were the same count while every process had exactly
+        // one thread, and requiring them equal is what made the v5 split
+        // exist in the format and nowhere else (B47).
+        //
+        // Threads are still bounded: every process must have at least one, no
+        // thread may name a process that does not exist, and each schedule and
+        // fault policy is reached through the thread that names it — checked
+        // per record below.
+        if self.process_count > self.thread_count
+            || self.thread_count != self.schedule_count
+            || self.thread_count != self.fault_policy_count
             || self.process_count != self.resource_quota_count
         {
             return Err(DecodeError::BadBounds);
@@ -1603,10 +1612,25 @@ impl<'a> Generation<'a> {
             {
                 return Err(DecodeError::BadIndex);
             }
-            if self.process(thread.process)?.main_thread != index
-                || self.kernel_object_record(thread.tcb_object)?.kind != 3
+            // Its objects are the right kinds, and it belongs to a process
+            // that agrees it exists. The check used to be
+            // `main_thread != index`, which required *every* thread to be its
+            // process's main one — the same one-thread-per-process assumption
+            // `validate_plan`'s count equality carried (B47).
+            if self.kernel_object_record(thread.tcb_object)?.kind != 3
                 || self.kernel_object_record(thread.ipc_buffer_object)?.kind != 4
+                || self.kernel_object_record(thread.tcb_object)?.owner_process != thread.process
             {
+                return Err(DecodeError::BadKernel);
+            }
+        }
+        // Every process's declared main thread is a real thread of that
+        // process. Checked here rather than in the loop above, which walks
+        // threads and so cannot see a process whose `main_thread` names one
+        // belonging to someone else.
+        for index in 0..self.process_count {
+            let main = self.process(index)?.main_thread;
+            if main >= self.thread_count || self.thread(main)?.process != index {
                 return Err(DecodeError::BadKernel);
             }
         }
