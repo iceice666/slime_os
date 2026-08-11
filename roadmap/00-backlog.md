@@ -46,6 +46,33 @@ per IPC message; make bundle provisioning an explicit typed transaction. Delete
 the logical channel, transit, parked-reply, and wait-set implementations in the
 same cutover.
 
+**Progress (2026-08-10).** `sel4_crossing_check` is green — it was red — and
+call, operation, visibility, and QoS now boot, spawn their whole participant
+set, and reach their own scenario logic instead of being refused at admission.
+Every one of those planes had the omission the probe planes and `sel4-generation`
+had: init mints control endpoints, factories, supervision handles, and phase
+channels and hands them over at spawn, while `mintedBindings` was empty, so the
+preflight refused before a scenario ran. Three of them also disagreed with
+`fabric-service` about its own slot layout — declared controls at 0.. against a
+service that compiles in `FACTORY_SLOT = 0`, `BUFFER_FACTORY_SLOT = 1`, and
+reads controls from `FABRIC_FIRST_CONTROL_SLOT = 2`.
+
+Two gates asserted markers with no emitter anywhere in the tree:
+`check-sel4-crossing-plane.py` wanted a `kernel=` field the admission marker
+does not carry, and `check-sel4-channel-plane.py` wanted four `SLIME_GRAPH
+channel end` lines. Both are fixed — the second by emitting the marker from the
+install path — and with `channel end` visible, three more of that gate's
+assertions proved stale rather than merely unreachable.
+
+**The channel plane's remaining failure is the item itself.** A declared
+channel side reads as permanently held, so when init exits, `mark_dead` finds
+nothing abandoned, wakes nobody, and the console blocks forever on a channel
+whose only peer is gone. Retiring the declaration — at install, or when its
+holder dies — fixes this plane and breaks `sel4_component_graph_check`, whose
+two long-lived components stay parked *because* of that exemption. Both
+directions were measured, not reasoned about. The trade is exactly what
+deleting `channel.rs` dissolves, so it is left for the cutover.
+
 **Exit condition:** `channel.rs`, `transit.rs`, `parked.rs`, `WaitSet`, and the
 migrated universal labels no longer exist. Backpressure, bounded queues,
 timeouts, peer death, cap-transfer attenuation, unrelated-route progress, and
