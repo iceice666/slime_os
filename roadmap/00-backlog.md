@@ -431,9 +431,21 @@ or a spawn grant.
 
 **Not caused by the v5 cutover.** Verified red at `8745d18~1`, before it.
 
-**Fix:** Declare init's exec authority over `sample-receiver` in
-`sel4-loan.zti`, spawn it before the first loan, and delete the docstring's
-P5.3.3 caveat — the spawn mechanism it waits for now exists.
+**Progress (2026-08-10): the receiver half is done.** Init declares `exec` and
+`spawn` over `sample-receiver`, holds a `spawnBudget` of 1, and passes the one
+declared binding the preflight expects. The whole receiver scenario runs — the
+unmodified `sample-receiver` maps the loan, holds it read-only, verifies the
+payload, and returns it once — and the docstring's P5.3.3 caveat is gone,
+because that mechanism exists.
+
+**What remains is the same defect one arm later.** The strand arm loans to
+`console` to prove a stranded loan is reclaimed, and the plane never spawns
+`console` either, so it fails at `[init] loan plane fail: strand loan` with the
+same `absent-or-ambiguous`. Fixing it needs the same three declarations — an
+`exec` grant, a binding to pass, and budget for a second child — and a decision
+about whether the strand arm wants a live peer at all: its point is a loan
+nobody collects, which a spawned-but-idle console gives and an absent one does
+not.
 
 **Exit condition:** `just sel4_loan_check` passes with the receiver spawned and
 the loan delivered to a live holder; `just sel4_sample_check`, `just
