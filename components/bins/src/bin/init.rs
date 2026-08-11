@@ -1142,9 +1142,8 @@ fn drive_channel_plane() {
 ///
 /// This is `sample-lender`'s shape, and deliberately not `sample-lender`
 /// itself: that component is spawned by init on x86 and receives its peer
-/// through a spawn grant, which this cutover has no mechanism for until P5.3.3.
-/// Init stands in as the lender so the *loan* plane can be exercised without
-/// the *spawn* plane. The receiver is the real `sample-receiver`, unmodified —
+/// through a spawn grant. Init stands in as the lender so the *loan* plane can
+/// be exercised without depending on the *spawn* plane's composition. The receiver is the real `sample-receiver`, unmodified —
 /// which is the point: a component written against the retired kernel's loan
 /// ABI runs unchanged on seL4.
 fn drive_loan_plane() {
@@ -1239,6 +1238,24 @@ fn drive_loan_plane() {
         fail_loan(b"an undelegated channel carried a loan");
     }
     slime_rt::debug_write(b"[init] undelegated loan denied\n");
+
+    // The receiver has to be running before it can be loaned to: a loan names
+    // its receiver as the unique live holder of the channel's other end, so
+    // with nothing spawned the root answers `absent-or-ambiguous` (B52).
+    //
+    // One grant: the receiver's own end of the channel init keeps the other
+    // half of. That edge is generation-declared, so the preflight expects
+    // exactly it -- which is what the docstring above says this cutover lacked
+    // "until P5.3.3", and now has.
+    if slime_rt::spawn(
+        SAMPLE_RECEIVER_SLOT,
+        &[grant(RECEIVER_SLOT, RIGHT_SEND | RIGHT_RECV)],
+    )
+    .is_err()
+    {
+        fail_loan(b"spawn the receiver");
+    }
+    slime_rt::debug_write(b"[init] loan receiver spawned\n");
 
     let loan = match slime_rt::shared_buffer_loan(buffer.slot, RECEIVER_SLOT, 0, PAYLOAD_LEN) {
         Ok(loan) => loan,

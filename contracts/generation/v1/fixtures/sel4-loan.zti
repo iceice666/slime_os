@@ -7,7 +7,7 @@
       name = "init";
       object = "sha256:init";
       role = "init";
-      spawnBudget = 0;
+      spawnBudget = 1;
     };
     {
       commandProfile = [];
@@ -27,6 +27,16 @@
   formatVersion = 1;
   generation = 1;
   grants = [
+    {
+      name = "init-sample-receiver";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "sample-receiver";
+      transferable = false;
+    };
     {
       name = "init-shared-buffer-factory";
       rights = [
@@ -91,16 +101,20 @@
           slot = 0;
         };
         {
-          grant = "init-shared-buffer-factory";
+          grant = "init-sample-receiver";
           slot = 1;
         };
         {
-          grant = "powerbox-client";
+          grant = "init-shared-buffer-factory";
           slot = 2;
         };
         {
-          grant = "sample-receiver-side";
+          grant = "powerbox-client";
           slot = 3;
+        };
+        {
+          grant = "sample-receiver-side";
+          slot = 4;
         };
       ];
       dependencies = [];

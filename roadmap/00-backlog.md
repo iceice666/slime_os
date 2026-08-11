@@ -405,6 +405,40 @@ owned root mechanism with a declared v5 capability; every fixture uses v5.
 affected `just sel4_*_check` targets, `just sel4_gate_control_check`, `just
 fmt_check_all`, and `just lint_all` pass after the deletion.
 
+### B52 — the loan plane never launches the receiver it loans to
+
+**Status:** Open. **Class:** Latent defect, gate-visible. **Depends on:** none.
+
+**Problem:** `just sel4_loan_check` fails at `[init] loan plane fail: loan`.
+The root refuses with
+`SLIME_GRAPH loan refused task=0 slot=3 class=absent-or-ambiguous`: a loan
+names its receiver by the unique live holder of the channel's other end, and
+`sample-receiver` is declared but never spawned, so there is no holder to name.
+
+**Evidence:** `drive_loan_plane`'s own docstring records the reason — the
+receiver "is spawned by init on x86 and receives its peer through a spawn
+grant, which this cutover has no mechanism for until P5.3.3". Init stands in as
+the lender so the loan plane can run without the spawn plane, and the receiver
+half was left behind.
+
+**Why the obvious fix does not work.** Spawning it from `drive_loan_plane` is
+refused as `ungranted`: init's declared bindings in `sel4-loan.zti` are
+`dango-output`, `init-shared-buffer-factory`, `powerbox-client`, and
+`sample-receiver-side` — no `exec` grant over `sample-receiver`, so init has no
+authority to launch it. The fixture has to declare that authority, which also
+means deciding whether the receiver's channel end arrives as a declared binding
+or a spawn grant.
+
+**Not caused by the v5 cutover.** Verified red at `8745d18~1`, before it.
+
+**Fix:** Declare init's exec authority over `sample-receiver` in
+`sel4-loan.zti`, spawn it before the first loan, and delete the docstring's
+P5.3.3 caveat — the spawn mechanism it waits for now exists.
+
+**Exit condition:** `just sel4_loan_check` passes with the receiver spawned and
+the loan delivered to a live holder; `just sel4_sample_check`, `just
+sel4_spawn_check`, and `just sel4_reclamation_check` still pass.
+
 ## Resolved
 ### B51 — the spawn preflight cannot tell a respawn from a first launch
 
