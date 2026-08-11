@@ -447,6 +447,10 @@ contracts_check: bootstate_model_check
     # B42: lifecycle authority is a capability, so no wire record or public
     # runtime type may name a bare task id.
     python3 scripts/check/check-lifecycle-identity.py
+    # B50: every generation this repository builds is v5. The manifest's own
+    # `formatVersion` is the *manifest* schema's version and says nothing
+    # about the wire format, so this builds each one and reads the magic.
+    python3 scripts/check/check-generation-v5.py
 
 # P0 target-profile and executable-artifact contract matrix.
 architecture_contract_check: contracts_check
