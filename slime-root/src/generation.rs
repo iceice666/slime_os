@@ -34,6 +34,14 @@ pub enum GenerationError {
         bootstrap: usize,
         executables: usize,
     },
+    /// A declared resource quota exceeds what the root can actually place
+    /// (B49). Named per class so a refusal says which ceiling was hit.
+    QuotaExceedsCeiling {
+        instance: usize,
+        kind: &'static str,
+        declared: u32,
+        limit: u32,
+    },
     TooManyExecutables {
         declared: usize,
         limit: usize,
@@ -445,6 +453,38 @@ impl Admission {
                 declared: instance_len,
                 limit: MAX_ADMITTED_INSTANCES,
             });
+        }
+        // B49: the object plan is proven to fit before anything activates.
+        //
+        // The quota record says how many CNodes, TCBs, endpoints, frames, and
+        // CSlots each process needs. Checking it here rather than discovering
+        // it during construction is the difference between a graph refused
+        // whole and one that half-activates and then fails to place a
+        // capability -- at which point some children are already running.
+        //
+        // Per class, not as a total: a plan that needs one CSlot too many is a
+        // different defect from one that needs an extra TCB, and a single
+        // "too big" would say neither.
+        for index in 0..generation.resource_quota_count() {
+            let quota = generation.resource_quota(index)?;
+            for (kind, declared, limit) in [
+                (
+                    "cslot",
+                    quota.cslot_count,
+                    crate::graph::MAX_TASK_CAPS as u32,
+                ),
+                ("tcb", quota.tcb_count, 1),
+                ("cnode", quota.cnode_count, 1),
+            ] {
+                if declared > limit {
+                    return Err(GenerationError::QuotaExceedsCeiling {
+                        instance: quota.owner_process,
+                        kind,
+                        declared,
+                        limit,
+                    });
+                }
+            }
         }
         let fabric = fabric_graph_admission(generation)?;
         let mut bootstrap_objects = 0;

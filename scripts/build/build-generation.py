@@ -2276,11 +2276,22 @@ def build_sel4_plan(
     for process, instance in enumerate(planned_instances):
         name = instance["name"]
         quota = process
+        # Named once so the CSpace object and the quota's `cslot_count` cannot
+        # disagree about how many slots the child has. Six bits, matching
+        # `slime-root`'s `task::CHILD_CNODE_SIZE_BITS`: the console endpoint
+        # sits at slot 32, above every slot a generation grant can name.
+        cnode_size_bits = 6
         cspace = len(object_index)
         object_index[(name, "cspace")] = cspace
         kernel_records.extend(
             GENERATION_KERNEL_OBJECT.pack(
-                string_offset(f"{name}:cspace"), KERNEL_OBJECT_CNODE, process, 6, 1, PLAN_NONE, 0
+                string_offset(f"{name}:cspace"),
+                KERNEL_OBJECT_CNODE,
+                process,
+                cnode_size_bits,
+                1,
+                PLAN_NONE,
+                0,
             )
         )
         vspace = len(object_index)
@@ -2386,9 +2397,42 @@ def build_sel4_plan(
         cap_records.extend(
             GENERATION_CAP_BINDING.pack(process, 3, fault_endpoint, 1, process + 1, PLAN_NONE, 0)
         )
+        # Counted from the objects this loop just declared for the process,
+        # not guessed. The row used to be a literal `1, 1, 2, 0, 2, 4, 6, ...`
+        # that no builder derived and no root read; `frame_count=2` and
+        # `mapping_count=6` in particular described no plan (B49).
+        #
+        # One CNode, one VSpace, one TCB, one IPC-buffer frame, and two
+        # endpoints — the fault endpoint and the console endpoint — are exactly
+        # what the six `object_index` entries above name. The image's own
+        # frames and page tables are not here: they are mapped by the root from
+        # its own untyped when it loads the ELF, so they belong to the root's
+        # accounting rather than the child's declared plan.
+        process_objects = {
+            "cnode": 1,
+            "vspace": 1,
+            "tcb": 1,
+            "frame": 1,
+            "endpoint": 2,
+        }
         quota_records.extend(
             GENERATION_RESOURCE_QUOTA.pack(
-                string_offset(f"{name}:quota"), process, 1, 1, 2, 0, 2, 4, 6, 0, 64, 1 << 20, 0, 0
+                string_offset(f"{name}:quota"),
+                process,
+                process_objects["cnode"],
+                process_objects["tcb"],
+                process_objects["endpoint"],
+                0,
+                process_objects["frame"],
+                0,
+                0,
+                0,
+                # CSlots the child's own CNode holds, from the same size the
+                # CSpace object above was given.
+                1 << cnode_size_bits,
+                0,
+                0,
+                0,
             )
         )
 
