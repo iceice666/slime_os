@@ -197,6 +197,7 @@
       transferable = false;
     };
     {
+      minted = true;
       name = "fabric-call-client-control";
       rights = [
         "send";
@@ -207,6 +208,7 @@
       transferable = false;
     };
     {
+      minted = true;
       name = "fabric-call-client-b-control";
       rights = [
         "send";
@@ -217,6 +219,7 @@
       transferable = false;
     };
     {
+      minted = true;
       name = "fabric-call-server-control";
       rights = [
         "send";
@@ -227,6 +230,7 @@
       transferable = false;
     };
     {
+      minted = true;
       name = "fabric-call-time-control";
       rights = [
         "send";
@@ -286,22 +290,6 @@
     {
       autostart = true;
       bindings = [
-        {
-          grant = "fabric-call-client-b-control";
-          slot = 3;
-        };
-        {
-          grant = "fabric-call-client-control";
-          slot = 2;
-        };
-        {
-          grant = "fabric-call-server-control";
-          slot = 4;
-        };
-        {
-          grant = "fabric-call-time-control";
-          slot = 5;
-        };
       ];
       dependencies = [
         "init";
@@ -314,10 +302,6 @@
     {
       autostart = true;
       bindings = [
-        {
-          grant = "fabric-call-client-control";
-          slot = 0;
-        };
       ];
       dependencies = [
         "fabric-service";
@@ -330,10 +314,6 @@
     {
       autostart = true;
       bindings = [
-        {
-          grant = "fabric-call-client-b-control";
-          slot = 0;
-        };
       ];
       dependencies = [
         "fabric-service";
@@ -346,10 +326,6 @@
     {
       autostart = true;
       bindings = [
-        {
-          grant = "fabric-call-server-control";
-          slot = 0;
-        };
       ];
       dependencies = [
         "fabric-service";
@@ -362,10 +338,6 @@
     {
       autostart = true;
       bindings = [
-        {
-          grant = "fabric-call-time-control";
-          slot = 0;
-        };
       ];
       dependencies = [
         "fabric-service";
@@ -377,6 +349,94 @@
     };
   ];
   mintedBindings = [
+    {
+      name = "fabric-call-client-b-control-fabric-service";
+      owner = "init";
+      holder = "fabric-service";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 3;
+      transferable = false;
+    };
+    {
+      name = "fabric-call-client-control-fabric-service";
+      owner = "init";
+      holder = "fabric-service";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 2;
+      transferable = false;
+    };
+    {
+      name = "fabric-call-server-control-fabric-service";
+      owner = "init";
+      holder = "fabric-service";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 4;
+      transferable = false;
+    };
+    {
+      name = "fabric-call-time-control-fabric-service";
+      owner = "init";
+      holder = "fabric-service";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 5;
+      transferable = false;
+    };
+    {
+      name = "fabric-call-client-control-fabric-call-client";
+      owner = "init";
+      holder = "fabric-call-client";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 0;
+      transferable = false;
+    };
+    {
+      name = "fabric-call-client-b-control-fabric-call-client-b";
+      owner = "init";
+      holder = "fabric-call-client-b";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 0;
+      transferable = false;
+    };
+    {
+      name = "fabric-call-server-control-fabric-call-server";
+      owner = "init";
+      holder = "fabric-call-server";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 0;
+      transferable = false;
+    };
+    {
+      name = "fabric-call-time-control-fabric-call-time";
+      owner = "init";
+      holder = "fabric-call-time";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 0;
+      transferable = false;
+    };
     {
       name = "fabric-call-client-b-phase";
       owner = "init";

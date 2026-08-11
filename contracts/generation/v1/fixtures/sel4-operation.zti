@@ -248,6 +248,7 @@
       transferable = false;
     };
     {
+      minted = true;
       name = "fabric-op-client-control";
       rights = [
         "send";
@@ -258,6 +259,7 @@
       transferable = false;
     };
     {
+      minted = true;
       name = "fabric-op-client-b-control";
       rights = [
         "send";
@@ -268,6 +270,7 @@
       transferable = false;
     };
     {
+      minted = true;
       name = "fabric-op-client-b-restart-control";
       rights = [
         "send";
@@ -278,6 +281,7 @@
       transferable = false;
     };
     {
+      minted = true;
       name = "fabric-op-server-control";
       rights = [
         "send";
@@ -288,6 +292,7 @@
       transferable = false;
     };
     {
+      minted = true;
       name = "fabric-op-time-control";
       rights = [
         "send";
@@ -351,26 +356,6 @@
     {
       autostart = true;
       bindings = [
-        {
-          grant = "fabric-op-client-b-control";
-          slot = 3;
-        };
-        {
-          grant = "fabric-op-client-b-restart-control";
-          slot = 6;
-        };
-        {
-          grant = "fabric-op-client-control";
-          slot = 2;
-        };
-        {
-          grant = "fabric-op-server-control";
-          slot = 4;
-        };
-        {
-          grant = "fabric-op-time-control";
-          slot = 5;
-        };
       ];
       dependencies = [
         "init";
@@ -383,10 +368,6 @@
     {
       autostart = true;
       bindings = [
-        {
-          grant = "fabric-op-client-control";
-          slot = 0;
-        };
       ];
       dependencies = [
         "fabric-service";
@@ -399,10 +380,6 @@
     {
       autostart = true;
       bindings = [
-        {
-          grant = "fabric-op-client-b-control";
-          slot = 0;
-        };
       ];
       dependencies = [
         "fabric-service";
@@ -415,10 +392,6 @@
     {
       autostart = true;
       bindings = [
-        {
-          grant = "fabric-op-client-b-restart-control";
-          slot = 0;
-        };
       ];
       dependencies = [
         "fabric-service";
@@ -431,10 +404,6 @@
     {
       autostart = true;
       bindings = [
-        {
-          grant = "fabric-op-server-control";
-          slot = 0;
-        };
       ];
       dependencies = [
         "fabric-service";
@@ -447,10 +416,6 @@
     {
       autostart = true;
       bindings = [
-        {
-          grant = "fabric-op-time-control";
-          slot = 0;
-        };
       ];
       dependencies = [
         "fabric-service";
@@ -462,6 +427,116 @@
     };
   ];
   mintedBindings = [
+    {
+      name = "fabric-op-client-b-control-fabric-service";
+      owner = "init";
+      holder = "fabric-service";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 3;
+      transferable = false;
+    };
+    {
+      name = "fabric-op-client-b-restart-control-fabric-service";
+      owner = "init";
+      holder = "fabric-service";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 6;
+      transferable = false;
+    };
+    {
+      name = "fabric-op-client-control-fabric-service";
+      owner = "init";
+      holder = "fabric-service";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 2;
+      transferable = false;
+    };
+    {
+      name = "fabric-op-server-control-fabric-service";
+      owner = "init";
+      holder = "fabric-service";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 4;
+      transferable = false;
+    };
+    {
+      name = "fabric-op-time-control-fabric-service";
+      owner = "init";
+      holder = "fabric-service";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 5;
+      transferable = false;
+    };
+    {
+      name = "fabric-op-client-control-fabric-op-client";
+      owner = "init";
+      holder = "fabric-op-client";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 0;
+      transferable = false;
+    };
+    {
+      name = "fabric-op-client-b-control-fabric-op-client-b";
+      owner = "init";
+      holder = "fabric-op-client-b";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 0;
+      transferable = false;
+    };
+    {
+      name = "fabric-op-client-b-restart-control-fabric-op-client-b-restart";
+      owner = "init";
+      holder = "fabric-op-client-b-restart";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 0;
+      transferable = false;
+    };
+    {
+      name = "fabric-op-server-control-fabric-op-server";
+      owner = "init";
+      holder = "fabric-op-server";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 0;
+      transferable = false;
+    };
+    {
+      name = "fabric-op-time-control-fabric-op-time";
+      owner = "init";
+      holder = "fabric-op-time";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 0;
+      transferable = false;
+    };
     {
       name = "fabric-op-client-phase-a";
       owner = "init";

@@ -135,7 +135,7 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
             r"\[fabric\] call state reclaimed",
             r"\[fabric\] call plane complete",
             r"\[fabric-call-client\] peer death distinct",
-            r"\[fabric-call-time\] bounded time advanced",
+            r"\[fabric-call-time\] bounded time completed",
             r"\[init\] call plane complete",
             r"SLIME_GRAPH component exit task=\d+ status=0",
         ),
