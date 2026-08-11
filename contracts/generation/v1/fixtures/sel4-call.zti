@@ -288,11 +288,11 @@
       bindings = [
         {
           grant = "fabric-call-client-b-control";
-          slot = 2;
+          slot = 3;
         };
         {
           grant = "fabric-call-client-control";
-          slot = 3;
+          slot = 2;
         };
         {
           grant = "fabric-call-server-control";

@@ -375,23 +375,23 @@
       bindings = [
         {
           grant = "fabric-intruder-control";
-          slot = 2;
-        };
-        {
-          grant = "fabric-publisher-b-control";
-          slot = 3;
-        };
-        {
-          grant = "fabric-publisher-control";
           slot = 4;
         };
         {
-          grant = "fabric-subscriber-b-control";
+          grant = "fabric-publisher-b-control";
           slot = 5;
         };
         {
-          grant = "fabric-subscriber-control";
+          grant = "fabric-publisher-control";
+          slot = 2;
+        };
+        {
+          grant = "fabric-subscriber-b-control";
           slot = 6;
+        };
+        {
+          grant = "fabric-subscriber-control";
+          slot = 3;
         };
       ];
       dependencies = [

@@ -128,7 +128,9 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 INIT_COMPLETE = r"\[init\] visibility plane complete"
-TERMINAL_MARKER = r"SLIME_GRAPH component exit task=\d+ status=0"
+# Grouped: `boot` matches init's own exit against the task id the spawn
+# records named, so a *participant* exiting cannot end the capture early.
+TERMINAL_MARKER = r"SLIME_GRAPH component exit task=(\d+) status=(-?\d+)"
 
 FAILURE_MARKERS: tuple[str, ...] = (
     r"SLIME_ROOT FATAL",

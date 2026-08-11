@@ -353,23 +353,23 @@
       bindings = [
         {
           grant = "fabric-op-client-b-control";
-          slot = 2;
-        };
-        {
-          grant = "fabric-op-client-b-restart-control";
           slot = 3;
         };
         {
+          grant = "fabric-op-client-b-restart-control";
+          slot = 6;
+        };
+        {
           grant = "fabric-op-client-control";
-          slot = 4;
+          slot = 2;
         };
         {
           grant = "fabric-op-server-control";
-          slot = 5;
+          slot = 4;
         };
         {
           grant = "fabric-op-time-control";
-          slot = 6;
+          slot = 5;
         };
       ];
       dependencies = [
