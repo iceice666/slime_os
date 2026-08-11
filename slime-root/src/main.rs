@@ -602,6 +602,18 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
         Ok(admission) => admission,
         Err(error) => fatal!("generation admission rejected: {error:?}"),
     };
+    // The plan's total against the root's actual CSpace, which only the
+    // allocator knows (B49). Per-instance ceilings say each process fits; this
+    // says they all fit together, before any component starts rather than
+    // partway through construction with children already running.
+    let planned_slots = match generation::admit_total_slots(&generation, allocator.free_slots()) {
+        Ok(required) => required,
+        Err(error) => fatal!("generation admission rejected: {error:?}"),
+    };
+    sel4::debug_println!(
+        "SLIME_ROOT plan slots required={planned_slots} available={}",
+        allocator.free_slots(),
+    );
 
     sel4::debug_println!(
         "SLIME_ROOT generation admitted number={} executables={} instances={} grants={} health={} bootstrap={}",

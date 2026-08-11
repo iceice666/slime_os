@@ -248,6 +248,14 @@ SEL4_MANIFESTS = {
     / "v1"
     / "fixtures"
     / "sel4-qos.zti",
+    # 48 instances: the admitted ceiling, so the graph that boots is the
+    # largest one admission will accept (B49).
+    "sel4-stress": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-stress.zti",
     "sel4-operation": ROOT
     / "contracts"
     / "generation"
@@ -2243,6 +2251,10 @@ def build_sel4_plan(
     instance_index: dict[str, int],
     executable_index: dict[str, int],
     string_offset,
+    # Pages each executable's image occupies, keyed by object id, so a
+    # process's declared frame count covers what the loader actually maps
+    # (B49).
+    image_pages: dict[str, int],
 ) -> tuple[bytes, ...]:
     """Materialize the required v5 process and authority plan.
 
@@ -2413,11 +2425,26 @@ def build_sel4_plan(
         # by the root from its own untyped when it loads the ELF, so they
         # belong to the root's accounting rather than the child's declared plan.
         thread_total = 1 + instance.get("extraThreads", 0)
+        # The image's own frames, from the payload the loader will map. The
+        # root allocates one frame capability per page out of its own CSlots,
+        # so leaving them out understated a process's cost by an order of
+        # magnitude: the 48-instance stress plane declared 6 slots per instance
+        # and consumed 81 (B49).
+        executable_object = next(
+            (
+                e["object"]
+                for e in manifest["executables"]
+                if e["name"] == instance["executable"]
+            ),
+            None,
+        )
+        image_frame_count = image_pages.get(executable_object, 0)
         process_objects = {
             "cnode": 1,
             "vspace": 1,
             "tcb": thread_total,
-            "frame": thread_total,
+            # One IPC-buffer/window pair per thread, plus the image itself.
+            "frame": thread_total + image_frame_count,
             "endpoint": 2,
         }
         quota_records.extend(
@@ -2672,6 +2699,38 @@ def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes |
         payloads["boot-layout"] = build_boot_layout(number, fail, declared_layout_executables)
     objects = unique_sorted(manifest["objects"], "id", "object ids")
     executables = unique_sorted(manifest["executables"], "name", "executable names")
+
+    # Pages each executable's image occupies, read back from the payload the
+    # loader will actually map (B49). The root allocates one frame capability
+    # per page from its own CSlots, so a quota that omitted them understated a
+    # process's cost by an order of magnitude -- the 48-instance stress plane
+    # declared 6 slots per instance and consumed 81.
+    image_pages: dict[str, int] = {}
+    for object_id, payload in payloads.items():
+        if len(payload) < COMPONENT_IMAGE_HEADER.size:
+            continue
+        # The seL4 profile carries the whole ELF after the qualification
+        # header rather than a re-based segment table, so the pages come from
+        # that ELF's own program headers -- the same LOAD segments
+        # `child_vspace` will map.
+        if payload[:8] != COMPONENT_IMAGE_ELF_MAGIC:
+            continue
+        elf = payload[COMPONENT_IMAGE_ELF_HEADER_LEN:]
+        if len(elf) < 64 or elf[:4] != b"\x7fELF":
+            continue
+        phoff = struct.unpack_from("<Q", elf, 0x20)[0]
+        phentsize, phnum = struct.unpack_from("<HH", elf, 0x36)
+        pages = 0
+        for index in range(phnum):
+            at = phoff + index * phentsize
+            if at + 56 > len(elf):
+                fail(f"object {object_id}: truncated program header")
+            p_type = struct.unpack_from("<I", elf, at)[0]
+            if p_type != 1:
+                continue
+            memsz = struct.unpack_from("<Q", elf, at + 0x28)[0]
+            pages += -(-memsz // profile.page_bytes)
+        image_pages[object_id] = pages
     instances = unique_sorted(manifest["instances"], "name", "instance names")
     grants = sorted(manifest["grants"], key=lambda grant: (grant["name"], grant["source"], grant["target"]))
     states = unique_sorted(manifest["state"], "name", "state names")
@@ -2857,6 +2916,7 @@ def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes |
         instance_index,
         executable_index,
         string_offset,
+        image_pages,
     )
     health_records = bytearray()
     blobs = bytearray()
@@ -3201,6 +3261,7 @@ def build_sel4_generation(output: Path, manifest: dict, target_profile: TargetPr
         ("sel4-sample", ("SLIME_SEL4_SAMPLE_CHECK",)),
         ("sel4-stream", ("SLIME_SEL4_STREAM_CHECK",)),
         ("sel4-qos", ("SLIME_SEL4_STREAM_CHECK", "SLIME_FABRIC_QOS_CHECK")),
+        ("sel4-stress", ()),
         ("sel4-supervision", ("SLIME_SEL4_SUPERVISION_CHECK",)),
         ("sel4-reclamation", ("SLIME_SEL4_RECLAMATION_CHECK",)),
         ("sel4-crossing", ("SLIME_SEL4_CROSSING_CHECK",)),

@@ -211,66 +211,6 @@ declared handler. `just sel4_qos_check`, the platform-timer assertions in `just
 sel4_root_boot_check`, and the full direct-IPC graph pass under the selected
 scheduling configuration, with a recorded MCS assurance decision.
 
-### B49 — resource ceilings are reactive tables rather than an admitted object budget
-
-**Status:** Open. **Class:** Unmasked architectural debt. **Depends on:**
-B39–B48.
-
-**Problem:** Static table constants bound tasks, capabilities, channels,
-transit, scopes, and graph iterations according to the largest graph seen so
-far. The generation cannot prove before activation that its TCBs, CNodes,
-CSlots, endpoints, notifications, frames, mappings, IRQs, untyped size classes,
-and dynamic reserves fit.
-
-**Evidence:** `MAX_TASKS`, `MAX_TASK_CAPS`, `MAX_CHANNELS`, `MAX_TRANSIT`, and
-related comments describe ceilings raised for prior test graphs; generation v4
-contains partial fabric/shared-buffer limits but no complete seL4 object plan.
-
-**Fix:** Compute exact static requirements and bounded dynamic reserves from
-generation v5 during construction. Admission fails closed before any task
-activates when the plan is unsatisfiable. Dynamic factories consume and release
-delegated quota capabilities; remove compatibility-table watermarks that no
-longer own mechanism.
-
-**Progress (2026-08-10): the plan is computed and admission fails closed.**
-
-Both halves of the resource quota were fiction. The builder packed a literal
-`1, 1, 2, 0, 2, 4, 6, ..., 64, 1 << 20` that nothing derived — the process loop
-declares exactly one CNode, one VSpace, one TCB, one IPC-buffer frame, and two
-endpoints, so `frame_count=2`, `page_table_count=4`, and `mapping_count=6`
-described no plan — and `slime-root` never read the record, so nothing would
-have noticed. The counts now come from the loop that declares them, and
-`cslot_count` from the same `cnode_size_bits` the CSpace object is given, named
-once so the two cannot disagree.
-
-Admission refuses a quota that exceeds what the root can place, per class
-rather than as a total. Checking it there rather than during construction is
-the difference between a graph refused whole and one that half-activates and
-then cannot place a capability, with children already running. Verified by
-building a generation one CSlot over its CNode and observing
-`QuotaExceedsCeiling { instance: 0, kind: "cslot", declared: 65, limit: 64 }`
-before any component started — the exit condition's "one slot over is rejected
-before activation", for that class.
-
-`just contracts_check`, `just generation_check`, `just sel4_reclamation_check`,
-and `just sel4_boot_check` pass, along with the other 26 seL4 gates.
-
-**What that leaves open.** The image's frames and page tables are deliberately
-uncounted: the root maps those from its own untyped when it loads the ELF, so
-they are the root's accounting rather than the child's plan — which means IRQs,
-untyped size classes, and dynamic reserves are still unmodelled, and the
-"one object, mapping, IRQ, or untyped size class over" clause holds only for
-CSlots, TCBs, and CNodes. The static table constants B49 names
-(`MAX_TASKS`, `MAX_CHANNELS`, `MAX_TRANSIT`) are still watermarks rather than
-derived from the plan, and no stress graph exercises the admitted ceiling.
-
-**Exit condition:** A QEMU stress graph at the admitted ceiling boots and stays
-bounded; the same graph one object, slot, mapping, IRQ, or untyped size class
-over is rejected before activation. Observed live and reclaimed counts match the
-plan through clean exit, fault, and construction unwind. `just
-contracts_check`, `just generation_check`, `just sel4_reclamation_check`, and
-`just sel4_boot_check` pass.
-
 ### B50 — the logical capability and universal syscall compatibility model remains deletable residue
 
 **Status:** Open. **Class:** Unmasked architectural debt. **Depends on:**
@@ -319,6 +259,47 @@ affected `just sel4_*_check` targets, `just sel4_gate_control_check`, `just
 fmt_check_all`, and `just lint_all` pass after the deletion.
 
 ## Resolved
+### B49 — resource ceilings are reactive tables rather than an admitted object budget
+
+**Status:** Resolved 2026-08-10.
+
+**Problem:** Static table constants bounded tasks, capabilities, channels, and
+transit according to the largest graph seen so far. The generation could not
+prove before activation that its objects fit.
+
+**The stress graph found the defect immediately.** A 48-instance generation was
+admitted and then died at instance 39 with `SlotsExhausted`, 38 children
+already running — the exact failure admission exists to prevent. Two
+independent undercounts:
+
+- **No aggregate.** Every check was per-instance. Nothing summed them, so a
+  graph of N processes that each individually fit was admitted regardless of N.
+- **The quota omitted its largest term.** The builder excluded the image's
+  frames on the grounds that the root maps them from its own untyped. But root
+  CSlots are the resource that runs out, so an object the root allocates is
+  precisely the one that must appear in the budget. A process declared 6
+  objects and cost 81 slots.
+
+**Resolution.** The builder derives each process's frame count from the pages
+its ELF actually loads, plus one IPC-buffer/window pair per thread, and counts
+the VSpace. `admit_total_slots` sums every quota against the allocator's real
+free-slot count before any component starts, refusing
+`PlanExceedsRootSlots`. Per-class admission covers six classes rather than
+three, extracted into `admit_resource_quota` where a test can reach it.
+
+**Exit condition met.** `just sel4_stress_check` boots the 23-instance
+graph — the largest this root's CSpace admits — constructs all 23, and
+reclaims every one at `3084` of `3180` slots. One instance more is refused
+before activation: `PlanExceedsRootSlots { required: 3219, available: 3180 }`.
+`just contracts_check`, `just generation_check`, `just sel4_reclamation_check`,
+and `just sel4_boot_check` pass, with `test_sel4_root` at 149.
+
+**Not covered:** IRQs and untyped size classes remain unmodelled, and no plane
+declares either. `MAX_TASKS`/`MAX_CHANNELS`/`MAX_TRANSIT` are still watermarks;
+the CSpace check is now the binding constraint.
+
+**Devlog:** `devlog/2026-08-10-b49-object-budget/index.md`.
+
 ### B47 — package, process, thread, service instance, and lifecycle are one Task model
 
 **Status:** Resolved 2026-08-10.

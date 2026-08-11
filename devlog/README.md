@@ -246,3 +246,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-10 | [B52 — the loan plane loaned to peers that never launched](2026-08-10-b52-loan-plane-peers/index.md) | Defect | Verified | B52 |
 | 2026-08-10 | [B41 — why the root cannot yet have a second dispatcher](2026-08-10-b41-second-dispatcher-blocker/index.md) | Audit | Verified | B41, B43, B44, B45 |
 | 2026-08-10 | [B47 runtime threads: a process runs two of them](2026-08-10-b47-runtime-threads/index.md) | Change | Verified | B47 |
+| 2026-08-10 | [B49: the stress graph found the ceiling admission was not checking](2026-08-10-b49-object-budget/index.md) | Defect | Verified | B49 |

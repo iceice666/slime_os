@@ -36,6 +36,12 @@ pub enum GenerationError {
     },
     /// A declared resource quota exceeds what the root can actually place
     /// (B49). Named per class so a refusal says which ceiling was hit.
+    /// The plan's object counts, summed across every process, exceed the root
+    /// CSlots available to hold capabilities to them (B49).
+    PlanExceedsRootSlots {
+        required: usize,
+        available: usize,
+    },
     QuotaExceedsCeiling {
         instance: usize,
         kind: &'static str,
@@ -582,6 +588,63 @@ impl Admission {
     }
 }
 
+/// Root CSlots consumed per object a process declares.
+///
+/// Measured, not derived: the 48-instance stress plane consumed 3186 slots
+/// constructing 39 instances whose quotas declared 33 objects each. The excess
+/// is intermediate page tables, window aliases, and arena parent untypeds --
+/// root-side costs that belong to no child's plan.
+const ROOT_SLOTS_PER_DECLARED_OBJECT: usize = 3;
+
+/// Refuse a plan whose quotas, summed, exceed the root CSlots available
+/// (B49).
+///
+/// The per-instance ceilings say each process fits on its own; this says they
+/// all fit together. Without it a 48-instance graph admits and then dies
+/// mid-construction with children already running, which is exactly the
+/// failure admission exists to prevent — observed as
+/// `VSpace(Alloc(SlotsExhausted))` at instance 39 of the stress plane.
+///
+/// The root holds a capability per object it creates for a child, so a
+/// process's root-side cost is its own object count; the CSlots inside the
+/// child's CNode are the child's, carved from the arena rather than the
+/// root's pool.
+pub fn admit_total_slots(
+    generation: &Generation<'_>,
+    available: usize,
+) -> Result<usize, GenerationError> {
+    let mut required = 0usize;
+    for index in 0..generation.resource_quota_count() {
+        let quota = generation.resource_quota(index)?;
+        let per_process = (quota.cnode_count
+            + quota.tcb_count
+            + quota.endpoint_count
+            + quota.notification_count
+            + quota.frame_count
+            + quota.page_table_count) as usize;
+        required = required.saturating_add(per_process);
+    }
+    // Each declared object costs at least one root CSlot, and in practice
+    // more: intermediate page tables the loader creates, the window alias, and
+    // the arena's parent untyped are root-side costs no per-process quota
+    // names. Measured on the 48-instance stress plane, construction consumed
+    // 81 slots per instance against 33 declared objects.
+    //
+    // The factor is deliberately a measured constant rather than a model of
+    // every source: a model that claimed precision it does not have would
+    // admit graphs that then die mid-construction, which is the failure this
+    // check exists to prevent. Refusing a graph that would have fit is
+    // recoverable; admitting one that does not is not.
+    let required = required.saturating_mul(ROOT_SLOTS_PER_DECLARED_OBJECT);
+    if required > available {
+        return Err(GenerationError::PlanExceedsRootSlots {
+            required,
+            available,
+        });
+    }
+    Ok(required)
+}
+
 /// Refuse a declared quota that exceeds what the root can actually place
 /// (B49).
 ///
@@ -606,9 +669,12 @@ fn admit_resource_quota(quota: &ResourceQuota<'_>) -> Result<(), GenerationError
             crate::child_vspace::MAX_CHILD_THREADS as u32,
         ),
         (
+            // One IPC-buffer/window pair per thread plus the image's own
+            // pages, which the loader maps from root CSlots (B49).
             "frame",
             quota.frame_count,
-            crate::child_vspace::MAX_CHILD_THREADS as u32,
+            (crate::child_vspace::MAX_CHILD_THREADS + crate::child_vspace::MAX_CHILD_IMAGE_PAGES)
+                as u32,
         ),
         ("cnode", quota.cnode_count, 1),
         // The child's VSpace root. One per process by definition -- a
@@ -641,6 +707,7 @@ mod tests {
     use boot_contracts::generation::{RIGHT_TRANSFER, ResourceQuota};
 
     use super::admit_resource_quota;
+    use crate::child_vspace::{MAX_CHILD_IMAGE_PAGES, MAX_CHILD_THREADS};
 
     /// The quota a single-threaded process declares: one CNode, one VSpace,
     /// one TCB, one IPC-buffer frame, two endpoints, and a full CNode of
@@ -691,7 +758,12 @@ mod tests {
             ("cnode", |q| q.cnode_count = 2, 2, 1),
             ("tcb", |q| q.tcb_count = 3, 3, 2),
             ("endpoint", |q| q.endpoint_count = 3, 3, 2),
-            ("frame", |q| q.frame_count = 3, 3, 2),
+            (
+                "frame",
+                |q| q.frame_count = (MAX_CHILD_THREADS + MAX_CHILD_IMAGE_PAGES + 1) as u32,
+                (MAX_CHILD_THREADS + MAX_CHILD_IMAGE_PAGES + 1) as u32,
+                (MAX_CHILD_THREADS + MAX_CHILD_IMAGE_PAGES) as u32,
+            ),
             ("vspace", |q| q.page_table_count = 2, 2, 1),
             ("cslot", |q| q.cslot_count = 65, 65, 64),
         ];

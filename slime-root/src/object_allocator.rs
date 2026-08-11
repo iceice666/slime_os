@@ -199,6 +199,11 @@ impl SlotPool {
         })
     }
 
+    /// Slots this pool can still issue.
+    fn free(&self) -> usize {
+        self.len - self.live
+    }
+
     fn allocate(&mut self, total_allocated: usize) -> Result<(usize, bool), AllocError> {
         for offset in 0..self.len {
             let word = offset / SLOT_WORD_BITS;
@@ -685,6 +690,15 @@ impl ObjectAllocator {
             return Err(error);
         }
         Ok(sel4::init_thread::Slot::from_index(slot))
+    }
+
+    /// Root CSlots still available to issue.
+    ///
+    /// Admission compares the plan's total against this before any component
+    /// starts (B49): the per-instance ceilings say each process fits, and this
+    /// says they all fit together.
+    pub fn free_slots(&self) -> usize {
+        self.slots.free()
     }
 
     pub fn arena_slot_count(&self, id: TaskArenaId) -> Result<usize, AllocError> {

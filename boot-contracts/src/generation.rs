@@ -79,6 +79,8 @@ pub enum BootAction {
     Supervision = 23,
     Transfer = 24,
     Visibility = 25,
+    /// The 48-instance graph at the admitted ceiling (B49).
+    Stress = 26,
 }
 
 impl BootAction {
@@ -102,6 +104,7 @@ impl BootAction {
             "operation" => Self::Operation,
             "powerbox" => Self::Powerbox,
             "qos" => Self::Qos,
+            "stress" => Self::Stress,
             "reclamation" => Self::Reclamation,
             "recovery" => Self::Recovery,
             "rollback" => Self::Rollback,
@@ -2132,6 +2135,7 @@ mod tests {
             (BootAction::Operation, 12),
             (BootAction::Powerbox, 13),
             (BootAction::Qos, 14),
+            (BootAction::Stress, 26),
             (BootAction::Reclamation, 15),
             (BootAction::Recovery, 16),
             (BootAction::Rollback, 17),
@@ -2157,6 +2161,7 @@ mod tests {
             ("product", BootAction::Product),
             ("boot", BootAction::Boot),
             ("qos", BootAction::Qos),
+            ("stress", BootAction::Stress),
             ("visibility", BootAction::Visibility),
         ] {
             assert_eq!(BootAction::parse(spelling), Some(expected));

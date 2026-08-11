@@ -182,6 +182,8 @@ mod boot_action {
     pub const SUPERVISION: u32 = 23;
     pub const TRANSFER: u32 = 24;
     pub const VISIBILITY: u32 = 25;
+    /// The 48-instance ceiling graph (B49).
+    pub const STRESS: u32 = 26;
 
     // The table above is a hand copy of the contract's numbering, and the two
     // are an ABI: the root passes one of these words to this thread and this
@@ -214,6 +216,7 @@ mod boot_action {
     const _: () = assert!(SUPERVISION == BootAction::Supervision.id());
     const _: () = assert!(TRANSFER == BootAction::Transfer.id());
     const _: () = assert!(VISIBILITY == BootAction::Visibility.id());
+    const _: () = assert!(STRESS == BootAction::Stress.id());
 }
 
 /// Compose the graph the generation selected.
@@ -357,6 +360,14 @@ fn compose_declared_graph(startup_arg: u32) {
                 b"rollback",
             );
             slime_rt::debug_write(b"[init] rollback plane complete\n");
+            slime_rt::exit(0)
+        }
+        // The stress plane declares the largest graph the root's CSpace
+        // admits and nothing else: what it proves is that every instance is
+        // constructed and stays bounded, which the root reports itself. init
+        // has no scenario to drive (B49).
+        action::STRESS => {
+            slime_rt::debug_write(b"[init] stress plane complete\n");
             slime_rt::exit(0)
         }
         action::PRODUCT => {}

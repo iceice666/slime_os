@@ -39,6 +39,15 @@ sel4_root_boot_check: sel4_pin_check
 # A separate image from `sel4_root_boot_check`'s: the two differ only in which
 # generation the root task embeds, and each gate boots the artifact it asserts
 # about so neither invalidates the other's evidence by being built last.
+# B49: build the 23-instance image -- the largest graph the root's CSpace
+# admits once every declared object is counted at its real root-side cost --
+# boot it, and require every instance to be constructed and reclaimed. A graph
+# that does not fit is refused before activation rather than partway through
+# construction with children already running.
+sel4_stress_check: sel4_pin_check
+    python3 scripts/build/build-sel4.py --stress-plane
+    python3 scripts/check/check-sel4-stress-plane.py
+
 sel4_component_graph_check: sel4_pin_check
     python3 scripts/check/check-sel4-component-graph.py
 

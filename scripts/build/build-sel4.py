@@ -50,6 +50,8 @@ CROSSING_MANIFEST = BUILD_ROOT / "slime-sel4-crossing.identity.json"
 CALL_IMAGE = BUILD_ROOT / "slime-sel4-call.elf"
 CALL_MANIFEST = BUILD_ROOT / "slime-sel4-call.identity.json"
 QOS_IMAGE = BUILD_ROOT / "slime-sel4-qos.elf"
+STRESS_IMAGE = BUILD_ROOT / "slime-sel4-stress.elf"
+STRESS_MANIFEST = BUILD_ROOT / "slime-sel4-stress.identity.json"
 QOS_MANIFEST = BUILD_ROOT / "slime-sel4-qos.identity.json"
 OPERATION_IMAGE = BUILD_ROOT / "slime-sel4-operation.elf"
 OPERATION_MANIFEST = BUILD_ROOT / "slime-sel4-operation.identity.json"
@@ -107,6 +109,7 @@ B40_MUTATIONS = (
 CROSSING_VARIANT = "crossing"
 CALL_VARIANT = "call"
 QOS_VARIANT = "qos"
+STRESS_VARIANT = "stress"
 OPERATION_VARIANT = "operation"
 VISIBILITY_VARIANT = "visibility"
 BOOT_VARIANT = "boot"
@@ -134,6 +137,7 @@ VARIANT_MANIFESTS = {
     CROSSING_VARIANT: "sel4-crossing",
     CALL_VARIANT: "sel4-call",
     QOS_VARIANT: "sel4-qos",
+    STRESS_VARIANT: "sel4-stress",
     OPERATION_VARIANT: "sel4-operation",
     VISIBILITY_VARIANT: "sel4-visibility",
     BOOT_VARIANT: "sel4-boot",
@@ -163,6 +167,7 @@ VARIANT_TARGET_DIRS = {
     CROSSING_VARIANT: "root-crossing",
     CALL_VARIANT: "root-call",
     QOS_VARIANT: "root-qos",
+    STRESS_VARIANT: "root-stress",
     OPERATION_VARIANT: "root-operation",
     VISIBILITY_VARIANT: "root-visibility",
     BOOT_VARIANT: "root-boot",
@@ -192,6 +197,7 @@ VARIANT_IMAGES = {
     CROSSING_VARIANT: (CROSSING_IMAGE, CROSSING_MANIFEST),
     CALL_VARIANT: (CALL_IMAGE, CALL_MANIFEST),
     QOS_VARIANT: (QOS_IMAGE, QOS_MANIFEST),
+    STRESS_VARIANT: (STRESS_IMAGE, STRESS_MANIFEST),
     OPERATION_VARIANT: (OPERATION_IMAGE, OPERATION_MANIFEST),
     VISIBILITY_VARIANT: (VISIBILITY_IMAGE, VISIBILITY_MANIFEST),
     BOOT_VARIANT: (BOOT_IMAGE, BOOT_MANIFEST),
@@ -1062,6 +1068,14 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--stress-plane",
+        action="store_true",
+        help=(
+            "embed the 48-instance generation (B49): the admitted ceiling, so "
+            "the largest graph admission accepts actually boots"
+        ),
+    )
+    parser.add_argument(
         "--operation-plane",
         action="store_true",
         help="embed the native-operation generation (C8.7), writing a separate image",
@@ -1194,6 +1208,7 @@ def main() -> None:
             (CROSSING_VARIANT, arguments.crossing_plane),
             (CALL_VARIANT, arguments.call_plane),
             (QOS_VARIANT, arguments.qos_plane),
+            (STRESS_VARIANT, arguments.stress_plane),
             (OPERATION_VARIANT, arguments.operation_plane),
             (VISIBILITY_VARIANT, arguments.visibility_plane),
             (BOOT_VARIANT, arguments.boot_plane),
