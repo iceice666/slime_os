@@ -228,6 +228,45 @@ owned root mechanism with a declared v5 capability; every fixture uses v5.
 affected `just sel4_*_check` targets, `just sel4_gate_control_check`, `just
 fmt_check_all`, and `just lint_all` pass after the deletion.
 
+### B51 — the spawn preflight cannot tell a respawn from a first launch
+
+**Status:** Open. **Class:** Latent defect, gate-visible. **Depends on:** none.
+
+**Problem:** `spawn_preflight` refuses a request whose grant count differs from
+the child instance's declared bindings plus minted bindings. That rule assumes
+one spawn per declared instance. A *respawn* — the same instance, after the
+first died and was collected — is a second spawn of the same declaration, and
+the root has no way to say so.
+
+**Evidence:** `just sel4_sample_check` fails at
+`[init] sample plane fail: budget did not recover after a child exited`. The
+plane spawns `sample-receiver` three times on purpose: once with its declared
+grant, once refused as `instance-live`, and once after the child exits, to
+prove the spawn budget is a live-child count rather than a table that never
+releases its dead. The third passes no grants, because the point is whether
+the ceiling admits it; the preflight answers
+`reason=declared-count requested=0 bindings=0 minted=1` and refuses before the
+budget is consulted.
+
+**Two shapes were tried and neither is right.** Passing the declared grant on
+the respawn satisfies the preflight, and then the child blocks on a `recv` for
+a lender that has already exited, so it can never exit 0 and its `required`
+health makes that fatal. Relaxing the count rule for a respawn weakens the
+property that a spawn request must match what the generation declared — the
+rule B39 and B40 exist to enforce.
+
+**Fix:** Decide what a respawn *is*. Either the generation declares it (a
+restart policy on the instance, so the second launch has its own declaration),
+or the preflight distinguishes a collected instance from a never-launched one
+and applies the count rule only to the declared launch. The first is closer to
+what B47's lifecycle model wants.
+
+**Exit condition:** `just sel4_sample_check` passes with the plane's third
+spawn admitted on a budget check rather than refused on a count check, and the
+respawned child reaches a clean exit. `just sel4_spawn_check`, `just
+sel4_reclamation_check`, and `just sel4_component_graph_check` still pass, and
+a gate-control mutation proves an *undeclared* grant set is still refused.
+
 
 
 ## Resolved
