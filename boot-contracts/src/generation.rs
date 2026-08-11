@@ -1029,6 +1029,28 @@ impl<'a> Generation<'a> {
         Ok(None)
     }
 
+    /// The scheduling priority the plan declares for an instance's initial
+    /// thread.
+    ///
+    /// `None` when no process claims the instance, which is the fixture paths:
+    /// they construct tasks outside the plan and take the root's default.
+    ///
+    /// Resolved through the plan rather than read off the instance, because
+    /// priority is a property of a *thread*: the record is already per-thread
+    /// so that a process with several can differentiate them, and reading it
+    /// from the instance would flatten that the first time one does.
+    pub fn instance_priority(&self, instance: usize) -> Result<Option<u32>, DecodeError> {
+        for index in 0..self.thread_count {
+            let thread = self.thread(index)?;
+            let process = self.process(thread.process)?;
+            if process.instance != instance {
+                continue;
+            }
+            return Ok(Some(self.schedule(thread.schedule)?.priority));
+        }
+        Ok(None)
+    }
+
     /// The CSpace slots the plan declares for a child's own TCB and fault
     /// endpoint. Classified by the bound object's kind rather than its name,
     /// so a renamed object still resolves.

@@ -739,6 +739,7 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
             // so it keeps the minimum four-slot shell.
             CHILD_CNODE_SIZE_BITS,
             task::ChildSlots::SHELL,
+            task::CHILD_PRIORITY,
         ) {
             Ok(id) => id,
             Err(error) => fatal!("child task construction failed: {error:?}"),
@@ -1828,6 +1829,23 @@ fn launch_instance_graph(
             ),
             Err(error) => fatal!("SLIME_GRAPH FAIL CSpace plan rejected: {error:?}"),
         };
+        // Priority likewise. An instance that declares none resolves to the
+        // root's default, which is what every child ran at before the plan's
+        // `ScheduleRecord` was consulted at all (B48).
+        let declared_priority = match generation.instance_priority(instance_index) {
+            Ok(Some(priority)) => sel4::Word::from(priority),
+            Ok(None) => task::CHILD_PRIORITY,
+            Err(error) => fatal!("SLIME_GRAPH FAIL schedule plan rejected: {error:?}"),
+        };
+        // Its own record rather than a field on `staged`: the priority a
+        // thread runs at is not observable from anything else in the
+        // transcript, and a declaration nothing can check is indistinguishable
+        // from the constant it replaced (B48).
+        sel4::debug_println!(
+            "SLIME_GRAPH schedule instance={} priority={declared_priority} default={}",
+            instance.name,
+            task::CHILD_PRIORITY,
+        );
         // The child's own TCB and fault endpoint go where the plan declared
         // them. A plan that omits either leaves the root nowhere to install
         // authority the child needs, so it is refused rather than defaulted.
@@ -1879,6 +1897,7 @@ fn launch_instance_graph(
             },
             cspace_size_bits,
             child_slots,
+            declared_priority,
         ) {
             Ok(id) => id,
             Err(error) => fatal!(
@@ -4415,6 +4434,25 @@ fn construct_child(
                 .validate()
                 .map_err(|_| IpcError::BadCapability)?,
                 _ => return Err(IpcError::BadCapability),
+            },
+            // As the boot path: a spawned child is a declared instance, so its
+            // priority comes from the same plan, and is recorded for the same
+            // reason -- a priority nothing reports is indistinguishable from
+            // the constant it replaced (B48).
+            {
+                let priority = match generation.instance_priority(plan.instance) {
+                    Ok(Some(priority)) => sel4::Word::from(priority),
+                    Ok(None) => task::CHILD_PRIORITY,
+                    Err(_) => return Err(IpcError::BadCapability),
+                };
+                sel4::debug_println!(
+                    "SLIME_GRAPH schedule instance={} priority={priority} default={}",
+                    generation
+                        .instance(plan.instance)
+                        .map_or("<unknown>", |record| record.name),
+                    task::CHILD_PRIORITY,
+                );
+                priority
             },
         )
         .map_err(|_| IpcError::DestinationSlotsExhausted)?;

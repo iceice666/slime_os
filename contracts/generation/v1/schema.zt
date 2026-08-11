@@ -35,6 +35,23 @@ Instance :: type {
   dependencies : List Text;
   health : Text;
   bindings : List InstanceBinding;
+  -- Scheduling priority for this instance's initial thread.
+  --
+  -- The v5 wire format has carried a `ScheduleRecord` with `priority`,
+  -- `budget_us`, and `period_us` per thread since the cutover, but nothing
+  -- declared one: the builder wrote a constant and the root ignored it,
+  -- running every child at one fixed number. This is the manifest's side of
+  -- that record.
+  --
+  -- Absent means the root's default, one below its own so the service loop
+  -- always preempts a runnable child. Bounded by that default rather than by
+  -- seL4's 255: a child at or above the root's priority can keep the service
+  -- loop from running and stall every other child behind it.
+  --
+  -- Budget and period stay undeclared until MCS is admitted; without it seL4
+  -- has no notion of either, and a number the kernel cannot enforce would be
+  -- authenticated fiction.
+  priority? : Int;
 };
 
 CapabilityGrant :: type {

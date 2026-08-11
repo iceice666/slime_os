@@ -471,6 +471,7 @@
       ];
       executable = "fabric-intruder";
       health = "optional";
+      priority = 100;
       name = "fabric-intruder";
       owner = "init";
     };

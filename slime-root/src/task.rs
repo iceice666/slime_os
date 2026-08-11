@@ -126,6 +126,20 @@ impl ChildSlots {
     }
 }
 
+/// Refuse a declared priority the root cannot safely run a child at.
+///
+/// Refused rather than clamped: a child at or above the root's priority can
+/// keep the service loop from running, and every other child would then block
+/// behind it on a root that never answers. `build-generation.py` bounds this
+/// too, so a manifest never reaches here carrying one; this is the side that
+/// holds when a generation arrives from somewhere else (B48).
+pub const fn admit_priority(priority: sel4::Word) -> Result<sel4::Word, TaskError> {
+    if priority > CHILD_PRIORITY {
+        return Err(TaskError::PriorityAboveRoot { priority });
+    }
+    Ok(priority)
+}
+
 /// Child scheduling priority. Strictly below the root task's own priority so
 /// the root service loop always preempts a child that becomes runnable.
 pub const CHILD_PRIORITY: sel4::Word = 254;
@@ -182,6 +196,11 @@ pub enum Supervision {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TaskError {
     Alloc(AllocError),
+    /// A plan declared a child priority at or above the root's own, which
+    /// would let the child keep the service loop from running (B48).
+    PriorityAboveRoot {
+        priority: sel4::Word,
+    },
     VSpace(VSpaceError),
     /// [`MAX_TASKS`] child tasks already exist.
     TableFull {
@@ -433,7 +452,12 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
         // Destination slots for the child's own TCB and fault endpoint, from
         // the same plan. The fixture paths pass the compiled-in shell slots.
         child_slots: ChildSlots,
+        // Scheduling priority from the plan's `ScheduleRecord`. The fixture
+        // paths pass `CHILD_PRIORITY`, which is also what an instance that
+        // declares none resolves to (B48).
+        priority: sel4::Word,
     ) -> Result<TaskId, TaskError> {
+        admit_priority(priority)?;
         let Some(index) = self.tasks.iter().position(Option::is_none) else {
             return Err(TaskError::TableFull { limit: CAPACITY });
         };
@@ -601,12 +625,8 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
                 vspace.ipc_buffer,
             )
             .map_err(TaskError::Configure)?;
-            tcb.tcb_set_sched_params(
-                sel4::init_thread::slot::TCB.cap(),
-                CHILD_PRIORITY,
-                CHILD_PRIORITY,
-            )
-            .map_err(TaskError::SchedParams)?;
+            tcb.tcb_set_sched_params(sel4::init_thread::slot::TCB.cap(), priority, priority)
+                .map_err(TaskError::SchedParams)?;
 
             let entry = image.entry();
             let mut context = sel4::UserContext::default();
@@ -962,12 +982,36 @@ fn mint_child_slot(
 #[cfg(test)]
 mod tests {
     use super::{
-        Arrival, CHILD_CNODE_SIZE_BITS, CHILD_SLOT_CONSOLE, CHILD_SLOT_FAULT, CHILD_SLOT_SERVICE,
-        ChildSlots, ConstructionStage, InstallLedger, MAX_CHILD_INSTALLS, TaskError, TaskId,
-        child_service_rights, construction_record,
+        Arrival, CHILD_CNODE_SIZE_BITS, CHILD_PRIORITY, CHILD_SLOT_CONSOLE, CHILD_SLOT_FAULT,
+        CHILD_SLOT_SERVICE, ChildSlots, ConstructionStage, InstallLedger, MAX_CHILD_INSTALLS,
+        TaskError, TaskId, admit_priority, child_service_rights, construction_record,
     };
     use crate::generation::Authority;
     use crate::object_allocator::TaskArenaId;
+
+    /// B48: a declared priority at or above the root's is refused, not clamped.
+    ///
+    /// The builder bounds this too, so a manifest cannot carry one. This is
+    /// the root's own guard, which is what holds for a generation that did not
+    /// come from `build-generation.py` — and clamping instead would let such a
+    /// generation silently run at a priority it did not ask for.
+    #[test]
+    fn a_priority_at_or_above_the_root_is_refused() {
+        assert_eq!(admit_priority(0), Ok(0));
+        assert_eq!(admit_priority(100), Ok(100));
+        assert_eq!(
+            admit_priority(CHILD_PRIORITY),
+            Ok(CHILD_PRIORITY),
+            "the default is itself admissible"
+        );
+        for priority in [CHILD_PRIORITY + 1, 255, sel4::Word::MAX] {
+            assert_eq!(
+                admit_priority(priority),
+                Err(TaskError::PriorityAboveRoot { priority }),
+                "priority {priority} would outrank the root's service loop"
+            );
+        }
+    }
 
     #[test]
     fn badges_are_nonzero_and_round_trip() {

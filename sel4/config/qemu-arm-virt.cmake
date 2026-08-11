@@ -1,6 +1,26 @@
 set(KernelPlatform "qemu-arm-virt" CACHE STRING "")
 set(KernelSel4Arch "aarch64" CACHE STRING "")
 set(KernelArmHypervisorSupport ON CACHE BOOL "")
+# B48's MCS half, deferred with the reason recorded rather than left blank.
+#
+# MCS replaces seL4's priority-only scheduler with scheduling contexts,
+# budgets, periods, and timeout faults — which is exactly what a generation
+# would need to bound CPU the way it already bounds memory and capabilities.
+# It is off because this repository's whole claim is upstream seL4 with its
+# assurance intact, and the functional-correctness proofs do not cover the MCS
+# configuration on AArch64. Turning it on would trade a verified kernel for a
+# scheduling feature, silently, in a config file.
+#
+# What that costs is stated rather than hidden: without MCS the kernel has no
+# notion of budget or period, so `ScheduleRecord`'s `budget_us` and
+# `period_us` are written zero and a generation cannot declare them. Priority
+# *is* enforced and is declared data — see `Instance.priority` and
+# `SLIME_GRAPH schedule` — so the "one maximal child priority" fallback B48
+# names is gone either way.
+#
+# Revisiting this means an assurance decision, not a config edit: either the
+# proofs extend to MCS on this platform, or the project accepts an unverified
+# kernel for a stated reason.
 set(KernelIsMCS OFF CACHE BOOL "")
 set(KernelMaxNumNodes 1 CACHE STRING "")
 set(KernelVerificationBuild OFF CACHE BOOL "")

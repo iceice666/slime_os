@@ -2205,6 +2205,10 @@ def validate_acyclic(instances: list[dict]) -> None:
 
 
 PLAN_NONE = 0xFFFFFFFF
+# One below the root task's own priority, matching `slime-root`'s
+# `task::CHILD_PRIORITY`. A child at or above the root cannot be preempted by
+# the service loop, so this is a ceiling as well as a default.
+DEFAULT_CHILD_PRIORITY = 254
 GRANT_POLICY_ONLY = 1
 # A send/recv grant whose channel object its source creates at runtime.
 GRANT_MINTED = 1
@@ -2321,9 +2325,33 @@ def build_sel4_plan(
                 string_offset(name), instance_index[name], cspace, vspace, thread, quota, 0
             )
         )
+        # Priority is the instance's to declare. Absent, it is the root's
+        # default: one below the root's own, so the service loop always
+        # preempts a runnable child.
+        #
+        # Bounded here as well as in the root, because a manifest is the wrong
+        # place to learn that a number was silently clamped. `budget_us` and
+        # `period_us` stay zero until MCS is admitted -- seL4 without it has no
+        # notion of either, and writing a figure the kernel cannot enforce
+        # would make the record say more than the system does.
+        priority = instance.get("priority", DEFAULT_CHILD_PRIORITY)
+        if not isinstance(priority, int) or isinstance(priority, bool):
+            fail(f"instance {name}: invalid priority")
+        if not 0 <= priority <= DEFAULT_CHILD_PRIORITY:
+            fail(
+                f"instance {name}: priority {priority} outside 0..={DEFAULT_CHILD_PRIORITY}; "
+                "a child at or above the root's priority can stall the service loop"
+            )
         schedule_records.extend(
             GENERATION_SCHEDULE.pack(
-                string_offset(f"{name}:schedule"), thread, PLAN_NONE, 100, 100, 0, 0, 0
+                string_offset(f"{name}:schedule"),
+                thread,
+                PLAN_NONE,
+                priority,
+                priority,
+                0,
+                0,
+                0,
             )
         )
         fault_records.extend(
