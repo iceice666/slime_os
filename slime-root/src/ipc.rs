@@ -1,8 +1,8 @@
 //! Bounded root-side IPC and readiness state.
 //!
 //! The service loop uses [`recv_request`] and [`reply`] for the non-MCS seL4
-//! fast path. Task/channel management uses [`Channel`] and [`WaitSet`] before
-//! touching CSpace state: a logical send or receive is first preflighted, then
+//! fast path. Task/channel management uses [`Channel`] before touching CSpace
+//! state: a logical send or receive is first preflighted, then
 //! its four-capability transfer is committed by the task-owned cap adapter, and
 //! only then is the queue mutated. This keeps failed operations atomic and
 //! leaves capability authority with its original owner.
@@ -869,109 +869,6 @@ pub fn receive_atomic<T: CapabilityTransfer>(
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ReadinessSource {
-    EndpointReceive(ChannelKey),
-    EndpointSend(ChannelKey),
-    NotificationBadge(sel4::Badge),
-    Supervision(SupervisionKey),
-}
-
-pub trait ReadinessProbe {
-    fn is_ready(&self, source: ReadinessSource) -> bool;
-
-    fn register(&mut self, task: TaskKey, source: ReadinessSource) -> Result<(), IpcError>;
-
-    fn clear(&mut self, task: TaskKey, source: ReadinessSource);
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum WaitDecision {
-    Ready(ReadinessSource),
-    Registered,
-}
-
-/// Bounded multi-source wait descriptor. `arm` probes, registers, and probes
-/// again, closing the lost-wakeup window without assuming that one wake means
-/// one source is consumable; callers re-poll every source after waking.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct WaitSet {
-    sources: [Option<ReadinessSource>; MAX_WAIT_SOURCES],
-    len: usize,
-}
-
-impl WaitSet {
-    pub const fn new() -> Self {
-        Self {
-            sources: [None; MAX_WAIT_SOURCES],
-            len: 0,
-        }
-    }
-
-    pub const fn len(&self) -> usize {
-        self.len
-    }
-
-    pub const fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-
-    pub fn push(&mut self, source: ReadinessSource) -> Result<(), IpcError> {
-        if self.len == MAX_WAIT_SOURCES {
-            return Err(IpcError::WaitSetFull);
-        }
-        if self.sources[..self.len].contains(&Some(source)) {
-            return Ok(());
-        }
-        self.sources[self.len] = Some(source);
-        self.len += 1;
-        Ok(())
-    }
-
-    pub fn arm<P: ReadinessProbe>(
-        &self,
-        task: TaskKey,
-        probe: &mut P,
-    ) -> Result<WaitDecision, IpcError> {
-        if let Some(source) = self.first_ready(probe) {
-            return Ok(WaitDecision::Ready(source));
-        }
-        for (registered, source) in self.iter().enumerate() {
-            if let Err(error) = probe.register(task, source) {
-                for rollback in self.iter().take(registered) {
-                    probe.clear(task, rollback);
-                }
-                return Err(error);
-            }
-        }
-        if let Some(source) = self.first_ready(probe) {
-            self.clear(task, probe);
-            return Ok(WaitDecision::Ready(source));
-        }
-        Ok(WaitDecision::Registered)
-    }
-
-    pub fn clear<P: ReadinessProbe>(&self, task: TaskKey, probe: &mut P) {
-        for source in self.iter() {
-            probe.clear(task, source);
-        }
-    }
-
-    fn first_ready<P: ReadinessProbe>(&self, probe: &P) -> Option<ReadinessSource> {
-        self.iter().find(|source| probe.is_ready(*source))
-    }
-
-    fn iter(&self) -> impl Iterator<Item = ReadinessSource> + '_ {
-        self.sources[..self.len].iter().flatten().copied()
-    }
-}
-
-impl Default for WaitSet {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct WakeBatch<const CAPACITY: usize> {
     entries: [Option<WakeDecision>; CAPACITY],
     len: usize,
@@ -1090,49 +987,6 @@ mod tests {
         }
         assert_eq!(channel.len(), CHANNEL_CAPACITY);
         assert_eq!(channel.preflight_send(), Err(IpcError::QueueFull));
-    }
-
-    struct RaceProbe {
-        ready_on_second_pass: bool,
-        probes: usize,
-        registrations: usize,
-        clears: usize,
-    }
-
-    impl ReadinessProbe for RaceProbe {
-        fn is_ready(&self, _source: ReadinessSource) -> bool {
-            self.ready_on_second_pass && self.probes >= 1
-        }
-
-        fn register(&mut self, _task: TaskKey, _source: ReadinessSource) -> Result<(), IpcError> {
-            self.registrations += 1;
-            self.probes += 1;
-            Ok(())
-        }
-
-        fn clear(&mut self, _task: TaskKey, _source: ReadinessSource) {
-            self.clears += 1;
-        }
-    }
-
-    #[test]
-    fn wait_set_rechecks_after_registration() {
-        let mut set = WaitSet::new();
-        set.push(ReadinessSource::EndpointReceive(4)).unwrap();
-        set.push(ReadinessSource::Supervision(8)).unwrap();
-        let mut probe = RaceProbe {
-            ready_on_second_pass: true,
-            probes: 0,
-            registrations: 0,
-            clears: 0,
-        };
-        let decision = set.arm(3, &mut probe).unwrap();
-        assert_eq!(
-            decision,
-            WaitDecision::Ready(ReadinessSource::EndpointReceive(4))
-        );
-        assert_eq!(probe.registrations, 2);
-        assert_eq!(probe.clears, 2);
     }
 
     /// B41: no console or input operation may be reachable on the universal
