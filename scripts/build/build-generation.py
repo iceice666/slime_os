@@ -2406,17 +2406,18 @@ def build_sel4_plan(
         # that no builder derived and no root read; `frame_count=2` and
         # `mapping_count=6` in particular described no plan (B49).
         #
-        # One CNode, one VSpace, one TCB, one IPC-buffer frame, and two
-        # endpoints — the fault endpoint and the console endpoint — are exactly
-        # what the six `object_index` entries above name. The image's own
-        # frames and page tables are not here: they are mapped by the root from
-        # its own untyped when it loads the ELF, so they belong to the root's
-        # accounting rather than the child's declared plan.
+        # One CNode, one VSpace, and two endpoints — the fault endpoint and the
+        # console endpoint — plus one TCB and one IPC-buffer frame *per thread*,
+        # which is what the loop below declares for the extra threads (B47).
+        # The image's own frames and page tables are not here: they are mapped
+        # by the root from its own untyped when it loads the ELF, so they
+        # belong to the root's accounting rather than the child's declared plan.
+        thread_total = 1 + instance.get("extraThreads", 0)
         process_objects = {
             "cnode": 1,
             "vspace": 1,
-            "tcb": 1,
-            "frame": 1,
+            "tcb": thread_total,
+            "frame": thread_total,
             "endpoint": 2,
         }
         quota_records.extend(
@@ -2428,7 +2429,10 @@ def build_sel4_plan(
                 process_objects["endpoint"],
                 0,
                 process_objects["frame"],
-                0,
+                # The child's VSpace root, which the loop declares alongside
+                # the CNode. Counted here rather than left zero so admission
+                # has a class to refuse (B49).
+                process_objects["vspace"],
                 0,
                 0,
                 # CSlots the child's own CNode holds, from the same size the

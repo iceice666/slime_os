@@ -9,7 +9,7 @@ use boot_contracts::component_image::{self, ComponentTargetError};
 use boot_contracts::fabric_graph::{self, FabricGraph};
 use boot_contracts::generation::{
     DecodeError, Generation, Instance, InstanceBinding, KIND_BOOTSTRAP, KIND_COMPONENT,
-    KIND_RESOURCE, RIGHT_TRANSFER, Rights,
+    KIND_RESOURCE, RIGHT_TRANSFER, ResourceQuota, Rights,
 };
 use boot_contracts::target_profile::TargetProfile;
 
@@ -466,25 +466,7 @@ impl Admission {
         // different defect from one that needs an extra TCB, and a single
         // "too big" would say neither.
         for index in 0..generation.resource_quota_count() {
-            let quota = generation.resource_quota(index)?;
-            for (kind, declared, limit) in [
-                (
-                    "cslot",
-                    quota.cslot_count,
-                    crate::graph::MAX_TASK_CAPS as u32,
-                ),
-                ("tcb", quota.tcb_count, 1),
-                ("cnode", quota.cnode_count, 1),
-            ] {
-                if declared > limit {
-                    return Err(GenerationError::QuotaExceedsCeiling {
-                        instance: quota.owner_process,
-                        kind,
-                        declared,
-                        limit,
-                    });
-                }
-            }
+            admit_resource_quota(&generation.resource_quota(index)?)?;
         }
         let fabric = fabric_graph_admission(generation)?;
         let mut bootstrap_objects = 0;
@@ -600,6 +582,55 @@ impl Admission {
     }
 }
 
+/// Refuse a declared quota that exceeds what the root can actually place
+/// (B49).
+///
+/// Per class, not as a total: a plan needing one CSlot too many is a different
+/// defect from one needing an extra TCB, and a single "too big" would say
+/// neither. Checked at admission rather than during construction, which is the
+/// difference between a graph refused whole and one that half-activates and
+/// then cannot place a capability, with children already running.
+fn admit_resource_quota(quota: &ResourceQuota<'_>) -> Result<(), GenerationError> {
+    for (kind, declared, limit) in [
+        (
+            "cslot",
+            quota.cslot_count,
+            crate::graph::MAX_TASK_CAPS as u32,
+        ),
+        // One TCB and one IPC-buffer frame per thread, bounded by what
+        // the child VSpace maps buffer/window pairs for (B47). A plan
+        // asking for more would have a thread with no buffer.
+        (
+            "tcb",
+            quota.tcb_count,
+            crate::child_vspace::MAX_CHILD_THREADS as u32,
+        ),
+        (
+            "frame",
+            quota.frame_count,
+            crate::child_vspace::MAX_CHILD_THREADS as u32,
+        ),
+        ("cnode", quota.cnode_count, 1),
+        // The child's VSpace root. One per process by definition -- a
+        // second would be a second address space, which is a second
+        // process.
+        ("vspace", quota.page_table_count, 1),
+        // The fault endpoint and the console endpoint. A third would
+        // be an endpoint the root never creates for a child.
+        ("endpoint", quota.endpoint_count, 2),
+    ] {
+        if declared > limit {
+            return Err(GenerationError::QuotaExceedsCeiling {
+                instance: quota.owner_process,
+                kind,
+                declared,
+                limit,
+            });
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -607,7 +638,82 @@ mod tests {
         fabric_graph_is_satisfiable, participants_are_declared,
     };
     use boot_contracts::component_image::wire;
-    use boot_contracts::generation::RIGHT_TRANSFER;
+    use boot_contracts::generation::{RIGHT_TRANSFER, ResourceQuota};
+
+    use super::admit_resource_quota;
+
+    /// The quota a single-threaded process declares: one CNode, one VSpace,
+    /// one TCB, one IPC-buffer frame, two endpoints, and a full CNode of
+    /// slots. Matches what `build-generation.py` packs.
+    fn single_threaded_quota() -> ResourceQuota<'static> {
+        ResourceQuota {
+            name: "fixture:quota",
+            owner_process: 0,
+            cnode_count: 1,
+            tcb_count: 1,
+            endpoint_count: 2,
+            notification_count: 0,
+            frame_count: 1,
+            page_table_count: 1,
+            mapping_count: 0,
+            irq_count: 0,
+            cslot_count: 64,
+            untyped_bytes: 0,
+            dynamic_reserve_bytes: 0,
+            flags: 0,
+        }
+    }
+
+    #[test]
+    fn the_quota_a_single_threaded_process_declares_is_admitted() {
+        admit_resource_quota(&single_threaded_quota())
+            .expect("the plan the builder emits must be placeable");
+    }
+
+    #[test]
+    fn a_two_thread_process_may_declare_a_tcb_and_frame_per_thread() {
+        // B47: threads own a TCB and an IPC buffer each, so the ceiling is per
+        // thread rather than one. A ceiling of 1 here would refuse every
+        // multi-threaded process.
+        let mut quota = single_threaded_quota();
+        quota.tcb_count = 2;
+        quota.frame_count = 2;
+        admit_resource_quota(&quota).expect("two threads declare two of each");
+    }
+
+    #[test]
+    fn one_object_over_any_ceiling_is_refused_naming_its_class() {
+        // Every class the root places, each raised by exactly one. A ceiling
+        // that admitted one over would let a graph activate and then fail to
+        // place a capability, with children already running -- which is the
+        // failure admission exists to prevent.
+        let cases: [(&str, fn(&mut ResourceQuota<'_>), u32, u32); 6] = [
+            ("cnode", |q| q.cnode_count = 2, 2, 1),
+            ("tcb", |q| q.tcb_count = 3, 3, 2),
+            ("endpoint", |q| q.endpoint_count = 3, 3, 2),
+            ("frame", |q| q.frame_count = 3, 3, 2),
+            ("vspace", |q| q.page_table_count = 2, 2, 1),
+            ("cslot", |q| q.cslot_count = 65, 65, 64),
+        ];
+        for (class, mutate, declared, limit) in cases {
+            let mut quota = single_threaded_quota();
+            mutate(&mut quota);
+            match admit_resource_quota(&quota) {
+                Err(GenerationError::QuotaExceedsCeiling {
+                    instance,
+                    kind,
+                    declared: reported,
+                    limit: reported_limit,
+                }) => {
+                    assert_eq!(kind, class, "the refusal must name the class it hit");
+                    assert_eq!(instance, 0, "and the process whose plan it was");
+                    assert_eq!(reported, declared);
+                    assert_eq!(reported_limit, limit);
+                }
+                other => panic!("{class}: one over its ceiling was not refused: {other:?}"),
+            }
+        }
+    }
     use boot_contracts::target_profile::TargetProfile;
 
     fn sel4_profile() -> &'static TargetProfile {
