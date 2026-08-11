@@ -188,8 +188,38 @@ death needs no root round trip. The badge carries only "something changed",
 because a notification word coalesces and nothing that must not coalesce can
 travel on it.
 
-No component reads the ring yet. That is the cutover, and it is the whole
-remainder.
+No component reads the ring yet, but the reader's side of the contract is
+enforced: `valid_ring_header`, `valid_ring_slot`, `ring_slot_index`, and
+`valid_ring_badge` in `components/proto/src/lib.rs`, with 20 tests. The
+generated bindings are only a codec, and a ring is memory a peer writes — a
+publisher with a stale mapping produces bytes, not an error. Four checks matter
+and each is proven load-bearing by reverting it:
+
+- the slot bound comes from provisioning, never from the header, so an inflated
+  `slot_count` cannot walk a reader off its own mapping;
+- `head - tail` is refused when inverted rather than subtracted, since unsigned
+  subtraction yields a huge count the reader would try to consume;
+- only `SLOT_READY` is readable, which is what makes a torn write unobservable
+  rather than merely unlikely;
+- a slot whose sequence is not the expected one is a wrap the reader fell
+  behind on — structurally perfect, carrying a real sample from `slot_count`
+  ago.
+
+**What remains is one indivisible change.** `slime_rt::wait` has 115 call
+sites, `recv` 104, and `send` 93, across 41 component files. Each becomes a
+different primitive: rendezvous to Endpoint send/receive, synchronous RPC to
+`Call`/`ReplyRecv`, buffered streams to the ring above. The root side deletes
+`channel.rs`, `transit.rs`, and `parked.rs` — 1,844 lines after
+`LaunchedInstances` moved out — along with six universal labels, and `parked.rs`
+alone has 78 references in `main.rs`.
+
+There is no intermediate state where the tree builds and the gates mean
+anything: a component half-migrated has neither a logical channel nor an
+endpoint for the operation it is mid-call on, and the labels cannot be removed
+while any caller uses them. The behavioural gates are green first, which is the
+right order — they are what will show the cutover preserved backpressure,
+bounded queues, timeouts, peer death, and cap-transfer attenuation rather than
+merely compiling.
 
 **Exit condition:** `channel.rs`, `transit.rs`, `parked.rs`, `WaitSet`, and the
 migrated universal labels no longer exist. Backpressure, bounded queues,
