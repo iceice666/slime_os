@@ -106,12 +106,35 @@ component emits, and a per-component failure budget of "exactly one, from the
 unconfigured instance" — a P5.2 rule from when the root launched every declared
 instance. A v4 generation launches only root-owned autostart ones.
 
-**What remains is the cutover.** `sel4_call_check` and `sel4_operation_check`
-deadlock: every participant spawns and parks, the broker consumes one client
-request and then blocks in `consume_supervision`, and init completes its
-delegation and parks too. That is `call_broker.rs`/`operation_broker.rs`
-protocol over `channel.rs`, `transit.rs`, and `parked.rs` — the machinery this
-item deletes rather than repairs.
+**All seven named gates pass (2026-08-10).** `sel4_channel_check`,
+`sel4_crossing_check`, `sel4_stream_check`, `sel4_qos_check`,
+`sel4_call_check`, `sel4_operation_check`, and `sel4_visibility_check`, every
+one of which was red when this item was opened, alongside nineteen other plane
+gates.
+
+The call and operation deadlocks were fixture defects, not broker ones. Both
+planes have init mint one control pair per participant at runtime and hand each
+side out at spawn, while the fixtures declared those same edges as ordinary
+grants — so the root *also* pre-created a channel per edge and installed its
+ends at the very slots the minted ones were meant to occupy. Two disjoint
+channel sets: the broker consumed one client request off a declared channel,
+blocked waiting for a supervision handle init had sent over a minted one, and
+init parked waiting for a plane that could not proceed. `minted = true` is
+exactly this case and B39 added it; the eighteen bindings on those nine grants
+moved to `mintedBindings`.
+
+**The remaining work is the deletion itself**, which is the larger half of this
+item: `channel.rs`, `transit.rs`, and `parked.rs` are 1,912 lines with 41 call
+sites in `main.rs`, `WaitSet` is threaded through `graph.rs`, `task.rs`,
+`supervision.rs`, and `shared_buffer.rs`, and `Send`, `Recv`, `Wait`,
+`EndpointCreate`, `CapTransfer`, and `TransferWindowBind` remain universal
+labels. Cutting them over means rendezvous messages to Endpoint send/receive,
+synchronous RPC to `Call`/`ReplyRecv`, and buffered streams to a new
+`contracts/fabric-stream/v2/` ring contract with notification badge bits —
+every fabric component rewritten against it. The behavioural gates are green
+first, which is the right order: they are what will show the cutover preserved
+backpressure, bounded queues, timeouts, peer death, and cap-transfer
+attenuation rather than merely compiling.
 
 **Exit condition:** `channel.rs`, `transit.rs`, `parked.rs`, `WaitSet`, and the
 migrated universal labels no longer exist. Backpressure, bounded queues,

@@ -238,4 +238,5 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-10 | [B44 — the generation and recovery labels were never reachable](2026-08-10-b44-policy-labels-deleted/index.md) | Change | Verified | B44 |
 | 2026-08-10 | [B45 — directory inspect and commit move; derive cannot](2026-08-10-b45-directory-service-split/index.md) | Change | Verified | B45 |
 | 2026-08-10 | [B46 — four defect classes between the fabric planes and their scenarios](2026-08-10-b46-fabric-plane-admission/index.md) | Defect | Root-caused | B46 |
+| 2026-08-10 | [B46 — a declared grant and a minted one at the same slot](2026-08-10-b46-minted-control-channels/index.md) | Defect | Verified | B46 |
 | 2026-08-10 | [B41 — why the root cannot yet have a second dispatcher](2026-08-10-b41-second-dispatcher-blocker/index.md) | Audit | Verified | B41, B43, B44, B45 |
