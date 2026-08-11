@@ -378,6 +378,26 @@ policy now apply, name-only grants, fixed-slot constants, and all product graph
 selection flags. Remove obsolete tests, fixtures, comments, and generated
 bindings rather than aliasing them.
 
+**One clause is now checked (2026-08-10).** "Every fixture uses v5" is
+asserted by `just contracts_check` through `scripts/check/check-generation-v5.py`,
+which builds all 25 seL4 manifests and reads the magic and version word out of
+the bytes the root decodes. Checked by building rather than reading, because a
+manifest's own `formatVersion` field is the *manifest* schema's version and
+says nothing about the wire format — the two are one word apart in a fixture.
+The guard also pins the builder to a single version constant, since a second
+one is how a v4 producer survives a cutover. Verified by setting
+`GENERATION_VERSION = 4` and observing the refusal.
+
+**The rest of this item is not startable yet, by its own terms.** B50 depends
+on B39–B49 and is "the final repository-wide proof that no compatibility path
+survived" — deleting `GraphTables`, the universal `Operation` dispatcher,
+public task identity, generic `u64` rights, name-only grants, fixed-slot
+constants, and the plane selection flags. B46 still owns `channel.rs`,
+`transit.rs`, and `parked.rs` along with `Send`, `Recv`, `Wait`,
+`EndpointCreate`, `CapTransfer`, and `TransferWindowBind`; B47 still has
+`slime-rt` assuming one thread. Deleting the model while those hold it up would
+be removing the proof rather than the residue.
+
 **Exit condition:** Exact-source guards find no deleted model symbols or build
 flags; every surviving syscall is either a direct seL4 primitive or a narrowly
 owned root mechanism with a declared v5 capability; every fixture uses v5.
