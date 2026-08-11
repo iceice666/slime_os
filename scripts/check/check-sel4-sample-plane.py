@@ -98,11 +98,11 @@ SAMPLE_MARKERS: tuple[str, ...] = (
 REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     (
         "the sample generation was admitted",
-        r"SLIME_ROOT generation admitted number=\d+ executables=3 instances=3 grants=4 ",
+        r"SLIME_ROOT generation admitted number=\d+ executables=4 instances=4 grants=4 ",
     ),
     (
         "every payload is a native ELF image",
-        r"SLIME_ROOT graph admitted executables=3 instances=3 slimecm=0 elf=3 unrecognized=0",
+        r"SLIME_ROOT graph admitted executables=4 instances=4 slimecm=0 elf=4 unrecognized=0",
     ),
     (
         # Both factories at the slots the boot layout names, which is what
@@ -116,6 +116,29 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         "init holds its shared-buffer factory at its layout slot",
         r"SLIME_GRAPH factory placed task=\d+ component=init slot=4 "
         r"kind=shared-buffer-factory",
+    ),
+    (
+        # A process with two threads (B47). The root builds one TCB per
+        # declared thread, and this is the count it acted on -- a plan that
+        # declared a thread the root skipped would report 1 here.
+        "the root built both of sample-worker's declared threads",
+        r"SLIME_GRAPH threads instance=sample-worker count=2",
+    ),
+    (
+        # The load-bearing one. This line can only be written by a thread that
+        # reached its own entry point, on its own stack, and completed a
+        # console send through its *own* IPC buffer -- the ambient buffer
+        # belongs to the main thread, and a worker that used it would either
+        # corrupt the main thread's in-flight message or fault. A second TCB
+        # the root configured but never resumed prints nothing.
+        "sample-worker's second thread ran and made its own syscall",
+        r"\[sample-worker\] worker thread running",
+    ),
+    (
+        # And the main thread still works alongside it: two threads sharing one
+        # CSpace and VSpace, each with its own buffer and window.
+        "sample-worker's main thread ran alongside its worker",
+        r"\[sample-worker\] main thread running",
     ),
     (
         # No declared channel edge: init mints the pair at runtime through the

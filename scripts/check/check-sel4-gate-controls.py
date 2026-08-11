@@ -57,7 +57,9 @@ GATES: tuple[tuple[str, str, int], ...] = (
     ("sel4_loan_plane", "check/check-sel4-loan-plane.py", 44),
     ("sel4_device_plane", "check/check-sel4-device-plane.py", 7),
     ("sel4_root_boot", "check/check-sel4-root-boot.py", 43),
-    ("sel4_sample_plane", "check/check-sel4-sample-plane.py", 19),
+    # 22 since B47: the sample plane also proves a process runs two threads --
+    # the declared count, the worker's own syscall, and the main thread beside it.
+    ("sel4_sample_plane", "check/check-sel4-sample-plane.py", 22),
     ("sel4_spawn_plane", "check/check-sel4-spawn-plane.py", 32),
     ("sel4_supervision_plane", "check/check-sel4-supervision-plane.py", 12),
     ("sel4_stream_plane", "check/check-sel4-stream-plane.py", 55),

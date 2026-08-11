@@ -1056,6 +1056,33 @@ impl<'a> Generation<'a> {
         Ok(None)
     }
 
+    /// How many threads the plan declares for `instance` (B47).
+    ///
+    /// Counted from the thread table rather than read from a field, because
+    /// the thread records are what the root must construct: a count that
+    /// disagreed with them would build a TCB with no schedule or leave a
+    /// declared thread unbuilt.
+    ///
+    /// `None` when no process claims the instance.
+    pub fn instance_threads(&self, instance: usize) -> Result<Option<usize>, DecodeError> {
+        let mut found = None;
+        for index in 0..self.process_count {
+            let process = self.process(index)?;
+            if process.instance != instance {
+                continue;
+            }
+            let mut threads = 0;
+            for thread_index in 0..self.thread_count {
+                if self.thread(thread_index)?.process == index {
+                    threads += 1;
+                }
+            }
+            found = Some(threads);
+            break;
+        }
+        Ok(found)
+    }
+
     /// The CSpace slots the plan declares for a child's own TCB and fault
     /// endpoint. Classified by the bound object's kind rather than its name,
     /// so a renamed object still resolves.

@@ -43,6 +43,48 @@ fn panic(_info: &PanicInfo) -> ! {
 /// composes its graph from admitted data rather than from a build flag.
 #[macro_export]
 macro_rules! entry {
+    ($main:path, worker = $worker:path) => {
+        $crate::entry!($main);
+
+        /// The worker thread's stack.
+        ///
+        /// Its own, not a slice of the main thread's: two threads sharing a
+        /// stack is immediate corruption. `declare_stack!` hardcodes the symbol
+        /// `sel4-runtime-common`'s assembly entry reads, so this declares a
+        /// separate one the root points the second TCB's stack pointer at.
+        ///
+        /// `#[used]` because nothing in the image references either symbol: the
+        /// root resolves both from the symbol table and writes them into a TCB.
+        /// Without it the linker's `--gc-sections` drops them and the root
+        /// refuses the instance with `MissingWorkerImage`.
+        #[used]
+        #[unsafe(no_mangle)]
+        static __slime_rt_worker_stack: $crate::_private::WorkerStack =
+            $crate::_private::WorkerStack::new();
+
+        /// The worker thread's entry point.
+        ///
+        /// The root writes this address into the second TCB's program counter,
+        /// so it must be a plain `extern "C"` symbol with no prologue
+        /// expectations — the stack-init shim the main thread uses runs once
+        /// per process, not once per thread.
+        #[unsafe(no_mangle)]
+        extern "C" fn __slime_rt_worker_entrypoint(startup_arg: u32) -> ! {
+            let worker: fn(u32) = $worker;
+            unsafe { $crate::_private::start_thread(worker, startup_arg) }
+        }
+
+        /// Anchors the entry point against `--gc-sections`.
+        ///
+        /// `#[used]` applies to statics only, and nothing in the image calls
+        /// the worker entry — the root resolves it from the symbol table and
+        /// writes it into a TCB's program counter. Holding its address in a
+        /// retained static is what keeps the function itself alive; without
+        /// this the linker drops it and the root refuses the instance with
+        /// `MissingWorkerImage`.
+        #[used]
+        static __slime_rt_worker_anchor: extern "C" fn(u32) -> ! = __slime_rt_worker_entrypoint;
+    };
     ($main:path) => {
         $crate::_private::declare_stack!($crate::_private::STACK_SIZE);
         $crate::_private::declare_entrypoint_with_stack_init!();
@@ -62,5 +104,5 @@ pub mod _private {
         declare_entrypoint_with_stack_init, declare_rust_entrypoint, declare_stack,
     };
 
-    pub use crate::runtime::{STACK_SIZE, start};
+    pub use crate::runtime::{STACK_SIZE, WorkerStack, start, start_thread};
 }

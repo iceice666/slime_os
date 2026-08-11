@@ -76,7 +76,11 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     ("init spawned spawn-service as instance task 2", r"SLIME_GRAPH spawned task=0 child=2 component=spawn-service grants=5 channels=1 handle=\d+"),
     ("init completed the causal launch", r"\[init\] spawn graph launched"),
     ("init completed cleanly", r"SLIME_GRAPH component exit task=0 status=0"),
-    ("spawn-service bound its mapped window", r"SLIME_GRAPH window bound task=2 base=0x237000 len=4096"),
+    # The base is whatever the image's footprint rounds up to, so it moves
+    # whenever component code changes size; what matters is that this task
+    # bound a window of the mapped length, at its own base rather than another
+    # task's. The distinctness is asserted below, after both are known.
+    ("spawn-service bound its mapped window", r"SLIME_GRAPH window bound task=2 base=0x[0-9a-f]+ len=4096"),
     ("spawn-service reached its service loop", r"\[spawn-service\] ready"),
     ("spawn-service allocated against its quota", r"SLIME_GRAPH buffer created task=2 slot=\d+ id=\d+ pages=1 writable=1"),
     ("the shared-buffer lifecycle became live", r"\[spawn-service\] shared-buffer quota live"),
@@ -86,7 +90,7 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     # peer-death propagation observable: before B46 a declared side outlived
     # its holder, so init's exit was invisible and both parked forever.
     ("spawn-service exited on peer death", r"SLIME_GRAPH component exit task=2 status=0"),
-    ("console bound its mapped window", r"SLIME_GRAPH window bound task=1 base=0x236000 len=4096"),
+    ("console bound its mapped window", r"SLIME_GRAPH window bound task=1 base=0x[0-9a-f]+ len=4096"),
     ("console exited on peer death", r"SLIME_GRAPH component exit task=1 status=0"),
     ("the supervisor certified the graph", TERMINAL_MARKER),
 )
@@ -368,6 +372,19 @@ def check_transcript(transcript: str) -> None:
                 fail(f"marker out of order: {description} ({pattern})")
             fail(f"missing marker: {description} ({pattern})")
         position = match.end()
+    # Each task's window is its own region, which is the property the pinned
+    # addresses used to carry before component code size made them brittle. Two
+    # tasks bound at one base would mean one staging area serving both, and a
+    # payload one wrote appearing in the other's `recv`.
+    bases = dict(re.findall(r"SLIME_GRAPH window bound task=(\d+) base=(0x[0-9a-f]+)", transcript))
+    if len(set(bases.values())) != len(bases):
+        fail(f"two tasks bound the same transfer window base: {bases}")
+    print(
+        f"windows: {len(bases)} tasks each bound a distinct region "
+        f"({', '.join(f'task {t}@{b}' for t, b in sorted(bases.items()))})",
+        flush=True,
+    )
+
     terminals = re.findall(TERMINAL_MARKER, transcript)
     if len(terminals) != 1:
         fail(f"expected exactly one healthy supervisor terminal, saw {len(terminals)}")

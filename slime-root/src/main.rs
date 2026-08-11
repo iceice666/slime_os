@@ -740,6 +740,8 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
             CHILD_CNODE_SIZE_BITS,
             task::ChildSlots::SHELL,
             task::CHILD_PRIORITY,
+            // The fixture path predates the thread plan and runs one thread.
+            1,
         ) {
             Ok(id) => id,
             Err(error) => fatal!("child task construction failed: {error:?}"),
@@ -1846,6 +1848,19 @@ fn launch_instance_graph(
             instance.name,
             task::CHILD_PRIORITY,
         );
+        // Threads the plan declares for this instance (B47). One unless the
+        // manifest asked for more; the root builds exactly this many TCBs, so
+        // a declared thread that never runs would be visible here as a count
+        // the transcript disagrees with.
+        let declared_threads = match generation.instance_threads(instance_index) {
+            Ok(Some(threads)) => threads,
+            Ok(None) => 1,
+            Err(error) => fatal!("SLIME_GRAPH FAIL thread plan rejected: {error:?}"),
+        };
+        sel4::debug_println!(
+            "SLIME_GRAPH threads instance={} count={declared_threads}",
+            instance.name,
+        );
         // The child's own TCB and fault endpoint go where the plan declared
         // them. A plan that omits either leaves the root nowhere to install
         // authority the child needs, so it is refused rather than defaulted.
@@ -1898,6 +1913,7 @@ fn launch_instance_graph(
             cspace_size_bits,
             child_slots,
             declared_priority,
+            declared_threads,
         ) {
             Ok(id) => id,
             Err(error) => fatal!(
@@ -1908,13 +1924,18 @@ fn launch_instance_graph(
         let Some(task) = tasks.get(id) else {
             fatal!("SLIME_GRAPH FAIL constructed task {} is missing", id.0)
         };
-        if let Err(error) = windows.declare(
-            id,
-            task.vspace.transfer_window_addr,
-            task.vspace.transfer_window,
-            task.vspace.transfer_window_alias,
-        ) {
-            fatal!("SLIME_GRAPH FAIL window declaration rejected: {error:?}")
+        // One window per thread (B47): each stages its own payloads, and a
+        // thread whose window was never declared is refused at bind and cannot
+        // receive anything.
+        for pages in task.vspace.pages.iter().take(task.vspace.threads) {
+            if let Err(error) = windows.declare(
+                id,
+                pages.transfer_window_addr,
+                pages.transfer_window,
+                pages.transfer_window_alias,
+            ) {
+                fatal!("SLIME_GRAPH FAIL window declaration rejected: {error:?}")
+            }
         }
         let Ok(table) = graph.create(id) else {
             fatal!(
@@ -2022,7 +2043,7 @@ fn launch_instance_graph(
             executable.name,
             authority.grants,
             instance.binding_count(),
-            task.vspace.transfer_window_addr,
+            task.vspace.main().transfer_window_addr,
             task.vspace.frames_mapped,
             task.vspace.tables_mapped,
             task.entry,
@@ -4471,6 +4492,13 @@ fn construct_child(
                 );
                 priority
             },
+            // As the boot path: the thread count comes from the same plan, so
+            // a spawned instance declaring a worker gets one (B47).
+            match generation.instance_threads(plan.instance) {
+                Ok(Some(threads)) => threads,
+                Ok(None) => 1,
+                Err(_) => return Err(IpcError::BadCapability),
+            },
         )
         .map_err(|_| IpcError::DestinationSlotsExhausted)?;
 
@@ -4479,9 +4507,9 @@ fn construct_child(
         return Err(IpcError::DestinationSlotsExhausted);
     };
     let (window_addr, window, window_alias) = (
-        task.vspace.transfer_window_addr,
-        task.vspace.transfer_window,
-        task.vspace.transfer_window_alias,
+        task.vspace.main().transfer_window_addr,
+        task.vspace.main().transfer_window,
+        task.vspace.main().transfer_window_alias,
     );
     if windows
         .declare(id, window_addr, window, window_alias)

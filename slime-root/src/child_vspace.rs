@@ -11,7 +11,7 @@ use core::ops::Range;
 use core::ptr;
 
 use object::read::elf::ElfFile64;
-use object::{Architecture, Endianness, Object, ObjectSegment, SegmentFlags};
+use object::{Architecture, Endianness, Object, ObjectSegment, ObjectSymbol, SegmentFlags};
 use sel4::CapTypeForObjectOfFixedSize;
 
 use crate::object_allocator::{AllocError, ArenaPlan, ObjectAllocator, TaskArenaId};
@@ -58,6 +58,11 @@ pub enum ImageError {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VSpaceError {
+    /// The plan declares more threads than the runtime maps pages for.
+    ThreadCount {
+        requested: usize,
+        limit: usize,
+    },
     Image(ImageError),
     Alloc(AllocError),
     /// Assigning an ASID to the child VSpace failed.
@@ -126,6 +131,43 @@ impl<'a> ChildImage<'a> {
         self.footprint.clone()
     }
 
+    /// The worker thread's entry point and stack, if the image declares them
+    /// (B47).
+    ///
+    /// Resolved from the symbol table rather than a second ELF entry point,
+    /// because ELF has exactly one. `slime_rt::entry!(main, worker = ...)`
+    /// emits both symbols with `#[unsafe(no_mangle)]`; an image built without
+    /// the worker form has neither, and returns `None` here.
+    ///
+    /// Both or neither: a stack with no entry point is unreachable, and an
+    /// entry point with no stack would run on whatever the register held.
+    pub fn worker(&self) -> Option<WorkerImage> {
+        let entry = self.symbol(WORKER_ENTRY_SYMBOL)?;
+        let (stack_base, stack_size) = self.symbol_with_size(WORKER_STACK_SYMBOL)?;
+        Some(WorkerImage {
+            entry,
+            // The stack grows down, so the initial pointer is the top. Aligned
+            // to 16 because AArch64's ABI requires it of `sp` at a public
+            // interface, and the symbol's own alignment only guarantees its
+            // base.
+            stack_top: (stack_base + stack_size) & !0xf,
+        })
+    }
+
+    fn symbol(&self, name: &str) -> Option<u64> {
+        self.file
+            .symbols()
+            .find(|symbol| symbol.name() == Ok(name))
+            .map(|symbol| symbol.address())
+    }
+
+    fn symbol_with_size(&self, name: &str) -> Option<(u64, u64)> {
+        self.file
+            .symbols()
+            .find(|symbol| symbol.name() == Ok(name))
+            .map(|symbol| (symbol.address(), symbol.size()))
+    }
+
     /// Pages the image itself occupies, excluding the IPC buffer page.
     pub fn image_pages(&self) -> usize {
         self.footprint.len() / GRANULE_SIZE
@@ -175,23 +217,74 @@ impl<'a> ChildImage<'a> {
     }
 }
 
-/// A constructed child address space. Every capability named here is held in
-/// root CSpace; the child never receives any of them.
+/// The symbol `slime_rt::entry!`'s worker form emits for the second thread's
+/// entry point.
+const WORKER_ENTRY_SYMBOL: &str = "__slime_rt_worker_entrypoint";
+
+/// The symbol for the second thread's stack.
+const WORKER_STACK_SYMBOL: &str = "__slime_rt_worker_stack";
+
+/// Where a component's second thread starts, resolved from its image.
 #[derive(Clone, Copy, Debug)]
-pub struct ChildVSpace {
-    pub vspace: sel4::cap::VSpace,
+pub struct WorkerImage {
+    pub entry: u64,
+    pub stack_top: u64,
+}
+
+/// Threads one child process may run (B47).
+///
+/// Matches `slime_rt::runtime::MAX_THREADS`: the runtime declares one worker
+/// stack and one worker entry point, and this maps one buffer/window pair per
+/// thread at addresses the runtime derives from the same arithmetic. Raising it
+/// means raising both.
+pub const MAX_CHILD_THREADS: usize = 2;
+
+/// The IPC buffer and transfer window belonging to one thread (B47).
+///
+/// One pair per thread, because each is thread-private by definition: the
+/// kernel writes message registers into the buffer of whichever thread made the
+/// call, and each thread stages its own payloads through its own window.
+#[derive(Clone, Copy, Debug)]
+pub struct ThreadPages {
     pub ipc_buffer_addr: usize,
     pub ipc_buffer: sel4::cap::Granule,
-    /// Where this child's startup transfer window is mapped. The seL4 transport
-    /// stages payloads too large for the fast registers here; see
+    /// Where this thread's transfer window is mapped. The seL4 transport stages
+    /// payloads too large for the fast registers here; see
     /// [`crate::transfer_window`].
     pub transfer_window_addr: usize,
     pub transfer_window: sel4::cap::Granule,
     /// A root-held second capability to the window frame, for the root's own
     /// transient staging mapping. See [`crate::transfer_window::Window::alias`].
     pub transfer_window_alias: sel4::cap::Granule,
+}
+
+const EMPTY_THREAD_PAGES: ThreadPages = ThreadPages {
+    ipc_buffer_addr: 0,
+    ipc_buffer: sel4::cap::Granule::from_bits(0),
+    transfer_window_addr: 0,
+    transfer_window: sel4::cap::Granule::from_bits(0),
+    transfer_window_alias: sel4::cap::Granule::from_bits(0),
+};
+
+/// A constructed child address space. Every capability named here is held in
+/// root CSpace; the child never receives any of them.
+#[derive(Clone, Copy, Debug)]
+pub struct ChildVSpace {
+    pub vspace: sel4::cap::VSpace,
+    /// One entry per thread this child runs, in thread order. `threads` says
+    /// how many are live; the rest are zeroed.
+    pub pages: [ThreadPages; MAX_CHILD_THREADS],
+    pub threads: usize,
     pub frames_mapped: usize,
     pub tables_mapped: usize,
+}
+
+impl ChildVSpace {
+    /// The main thread's pages. Every child has a thread 0, so this is the
+    /// accessor for the paths that predate multi-threading.
+    pub fn main(&self) -> &ThreadPages {
+        &self.pages[0]
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -271,7 +364,17 @@ pub fn create_child_vspace(
     caller_vspace: sel4::cap::VSpace,
     scratch: &ScratchPage,
     asid_pool: sel4::cap::AsidPool,
+    threads: usize,
 ) -> Result<ChildVSpace, VSpaceError> {
+    // A child always has a main thread, and the runtime declares storage for at
+    // most `MAX_CHILD_THREADS`. A plan asking for more is refused rather than
+    // truncated: the extra thread would run with no buffer mapped.
+    if threads == 0 || threads > MAX_CHILD_THREADS {
+        return Err(VSpaceError::ThreadCount {
+            requested: threads,
+            limit: MAX_CHILD_THREADS,
+        });
+    }
     let footprint = image.footprint();
     let vspace = allocator
         .allocate_fixed_in::<sel4::cap_type::VSpace>(arena)?
@@ -322,7 +425,34 @@ pub fn create_child_vspace(
     // `IllegalOperation`.
     unify_instruction_cache(&pages, page_count)?;
 
-    let ipc_buffer_addr = footprint.end;
+    let mut thread_pages = [EMPTY_THREAD_PAGES; MAX_CHILD_THREADS];
+    for (index, slot) in thread_pages.iter_mut().enumerate().take(threads) {
+        *slot = map_thread_pages(allocator, arena, vspace, footprint.end, index)?;
+    }
+
+    Ok(ChildVSpace {
+        vspace,
+        pages: thread_pages,
+        threads,
+        frames_mapped: page_count + 2 * threads,
+        tables_mapped,
+    })
+}
+
+/// Maps thread `index`'s IPC buffer and transfer window.
+///
+/// The pairs sit above the image in thread order — buffer at `base`, window one
+/// granule up, then the next thread's pair — which is the arithmetic
+/// `slime_rt::runtime::thread_ipc_buffer_addr` performs from its own `_end`.
+/// Neither image holds a table the other could disagree with.
+fn map_thread_pages(
+    allocator: &mut ObjectAllocator,
+    arena: TaskArenaId,
+    vspace: sel4::cap::VSpace,
+    base: usize,
+    index: usize,
+) -> Result<ThreadPages, VSpaceError> {
+    let ipc_buffer_addr = base + index * 2 * GRANULE_SIZE;
     let ipc_buffer = allocator
         .allocate_fixed_in::<sel4::cap_type::Granule>(arena)?
         .cap();
@@ -384,15 +514,12 @@ pub fn create_child_vspace(
             error,
         })?;
 
-    Ok(ChildVSpace {
-        vspace,
+    Ok(ThreadPages {
         ipc_buffer_addr,
         ipc_buffer,
         transfer_window_addr,
         transfer_window,
         transfer_window_alias,
-        frames_mapped: page_count + 2,
-        tables_mapped,
     })
 }
 

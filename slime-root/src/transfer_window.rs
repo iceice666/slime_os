@@ -100,7 +100,15 @@ impl<const CAPACITY: usize> WindowTable<CAPACITY> {
         frame: sel4::cap::Granule,
         alias: sel4::cap::Granule,
     ) -> Result<(), IpcError> {
-        if self.entries.iter().flatten().any(|(w, _)| w.task == task) {
+        // Keyed by base, not by task: a multi-threaded process declares one
+        // window per thread, and the bases are distinct by construction (B47).
+        // Two declarations at the same base would be the actual conflict.
+        if self
+            .entries
+            .iter()
+            .flatten()
+            .any(|(w, _)| w.task == task && w.base == base)
+        {
             return Err(IpcError::WaiterConflict);
         }
         let Some(slot) = self.entries.iter_mut().find(|entry| entry.is_none()) else {
@@ -136,15 +144,24 @@ impl<const CAPACITY: usize> WindowTable<CAPACITY> {
         if slot != STARTUP_WINDOW_SLOT {
             return Err(IpcError::InvalidOperation);
         }
+        // A task with no window at all cannot bind one; that is a different
+        // refusal from naming a region it was not given.
+        if !self.entries.iter().flatten().any(|(w, _)| w.task == task) {
+            return Err(IpcError::InvalidOperation);
+        }
+        // Matched on base as well as task: with several threads declaring
+        // windows, the caller's base is what says which thread is binding
+        // (B47). A base no thread was given is refused the same way an
+        // oversized length is — the caller named a region it does not have.
         let Some((window, bound)) = self
             .entries
             .iter_mut()
             .flatten()
-            .find(|(w, _)| w.task == task)
+            .find(|(w, _)| w.task == task && w.base == base)
         else {
-            return Err(IpcError::InvalidOperation);
+            return Err(IpcError::InvalidLength);
         };
-        if window.base != base || window.len != len {
+        if window.len != len {
             return Err(IpcError::InvalidLength);
         }
         // Rebinding would let a task point the root at a different region after
@@ -171,16 +188,18 @@ impl<const CAPACITY: usize> WindowTable<CAPACITY> {
     /// released by the task's cleanup record, which revokes the whole CSlot
     /// range; this only forgets the binding.
     pub fn release(&mut self, task: TaskId) -> bool {
-        let Some(slot) = self
-            .entries
-            .iter_mut()
-            .find(|entry| entry.is_some_and(|(w, _)| w.task == task))
-        else {
-            return false;
-        };
-        *slot = None;
-        self.len -= 1;
-        true
+        // Every window the task declared, not just the first: a multi-threaded
+        // process has one per thread, and leaving the others behind would keep
+        // the table's count above the entries actually in use (B47).
+        let mut released = 0;
+        for entry in self.entries.iter_mut() {
+            if entry.is_some_and(|(w, _)| w.task == task) {
+                *entry = None;
+                released += 1;
+            }
+        }
+        self.len -= released;
+        released > 0
     }
 }
 
@@ -775,11 +794,35 @@ mod tests {
     }
 
     #[test]
-    fn a_task_cannot_hold_two_windows() {
+    fn a_task_cannot_declare_two_windows_at_one_base() {
         let mut table = table();
         assert_eq!(
-            table.declare(TaskId(0), BASE + 0x8000, frame(), alias()),
-            Err(IpcError::WaiterConflict)
+            table.declare(TaskId(0), BASE, frame(), alias()),
+            Err(IpcError::WaiterConflict),
+            "the fixture already declared this task's window at BASE"
         );
+    }
+
+    #[test]
+    fn a_multi_threaded_task_declares_one_window_per_thread() {
+        // Each thread of a process stages through its own window, so a second
+        // declaration at a different base is the normal case, not a conflict
+        // (B47). Binding follows the base, which is what says which thread is
+        // asking.
+        let mut table = table();
+        table
+            .declare(TaskId(0), BASE + 0x8000, frame(), alias())
+            .expect("a second thread's window is not a conflict");
+
+        table
+            .bind(TaskId(0), STARTUP_WINDOW_SLOT, BASE + 0x8000, WINDOW_BYTES)
+            .expect("the second thread binds its own window");
+
+        // Releasing the task takes every thread's window with it, and the
+        // table's count drops by both.
+        let before = table.len();
+        assert!(table.release(TaskId(0)));
+        assert_eq!(before - table.len(), 2, "both windows were forgotten");
+        assert_eq!(table.bound(TaskId(0)), None);
     }
 }

@@ -30,6 +30,8 @@ use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use sel4::{CallWithMRs, MessageInfoBuilder, Word, cap};
 
+use crate::runtime::MAX_THREADS;
+
 use super::wire::{
     self, FORM_INLINE, FORM_WINDOW, MAX_DESCRIPTOR_CAPS, MAX_DESCRIPTOR_LEN, clear_unnamed_slots,
     descriptor, descriptor_caps, descriptor_form, descriptor_len, fits_inline, frame_caps_offset,
@@ -85,6 +87,34 @@ fn root_service() -> cap::Endpoint {
     cap::Endpoint::from_bits(ROOT_SERVICE_SLOT)
 }
 
+/// This thread's IPC buffer, as an explicit invocation context (B47).
+///
+/// `sel4`'s ambient buffer is one process-wide static — `has-thread-local` is
+/// absent from `aarch64-sel4-minimal`, so there is no per-thread slot to set.
+/// The main thread installs its own and uses the ambient path; every other
+/// thread reaches its buffer through this, because overwriting the static
+/// would repoint the main thread's syscalls at the wrong buffer.
+///
+/// # Safety
+///
+/// The returned reference aliases the buffer the kernel writes message
+/// registers into for this thread. It is handed to exactly one invocation at a
+/// time and never escapes, and no other thread has this address — the root
+/// maps one buffer per thread.
+unsafe fn thread_context() -> &'static mut sel4::IpcBuffer {
+    let addr = crate::runtime::thread_ipc_buffer_addr(crate::runtime::thread_index());
+    // SAFETY: the root mapped a granule at this address for this thread's
+    // exclusive use before the thread was resumed.
+    unsafe { &mut *(addr as *mut sel4::IpcBuffer) }
+}
+
+/// Whether this thread uses the ambient buffer.
+///
+/// Only the main thread does: it is the one that called `set_ipc_buffer`.
+fn uses_ambient_buffer() -> bool {
+    crate::runtime::thread_index() == 0
+}
+
 /// The console/debug endpoint. Reconstructed per call from a constant slot, so
 /// no capability is cached in component-writable state.
 ///
@@ -95,17 +125,25 @@ fn console_service() -> cap::Endpoint {
     cap::Endpoint::from_bits(CONSOLE_SERVICE_SLOT)
 }
 
-/// The bound transfer window. `WINDOW_LEN == 0` means none is bound, which is
-/// every component's initial state.
-static WINDOW_BASE: AtomicU64 = AtomicU64::new(0);
-static WINDOW_LEN: AtomicUsize = AtomicUsize::new(0);
+/// The bound transfer window, one entry per thread. `WINDOW_LEN == 0` means
+/// none is bound, which is every thread's initial state.
+///
+/// Per thread rather than per process (B47): each thread stages payloads
+/// through its own window, so sharing one entry would let a `recv` on one
+/// thread overwrite a `send` staging on the other. Every access indexes by
+/// `runtime::thread_index()`, which comes from `TPIDR_EL0` — per-thread in
+/// hardware — so no two threads ever touch the same entry and the atomics
+/// carry no contention.
+static WINDOW_BASE: [AtomicU64; MAX_THREADS] = [const { AtomicU64::new(0) }; MAX_THREADS];
+static WINDOW_LEN: [AtomicUsize; MAX_THREADS] = [const { AtomicUsize::new(0) }; MAX_THREADS];
 
 fn window() -> Result<(*mut u8, usize), i64> {
-    let len = WINDOW_LEN.load(Ordering::Acquire);
+    let thread = crate::runtime::thread_index();
+    let len = WINDOW_LEN[thread].load(Ordering::Acquire);
     if len == 0 {
         return Err(ERR_INVALID_ARG);
     }
-    Ok((WINDOW_BASE.load(Ordering::Acquire) as *mut u8, len))
+    Ok((WINDOW_BASE[thread].load(Ordering::Acquire) as *mut u8, len))
 }
 
 fn transfer_window_bind(buffer_slot: u32, base: u64, len: usize) -> i64 {
@@ -117,8 +155,9 @@ fn transfer_window_bind(buffer_slot: u32, base: u64, len: usize) -> i64 {
         &[buffer_slot as Word, base as Word, len as Word],
     );
     if result == ERR_SUCCESS {
-        WINDOW_BASE.store(base, Ordering::Release);
-        WINDOW_LEN.store(len, Ordering::Release);
+        let thread = crate::runtime::thread_index();
+        WINDOW_BASE[thread].store(base, Ordering::Release);
+        WINDOW_LEN[thread].store(len, Ordering::Release);
     }
     result
 }
@@ -221,7 +260,17 @@ fn call_on(endpoint: cap::Endpoint, label: u64, operands: &[Word]) -> CallWithMR
         .label(label as Word)
         .length(operands.len())
         .build();
-    endpoint.call_with_mrs(info, mrs)
+    // The main thread invokes through the ambient buffer it installed; every
+    // other thread supplies its own, because the ambient one is process-wide
+    // (B47).
+    if uses_ambient_buffer() {
+        endpoint.call_with_mrs(info, mrs)
+    } else {
+        // SAFETY: this thread's own buffer, borrowed for one invocation.
+        endpoint
+            .with(unsafe { thread_context() })
+            .call_with_mrs(info, mrs)
+    }
 }
 
 /// Splits a reply into its logical result and auxiliary word. A reply carrying
@@ -544,7 +593,14 @@ pub fn input_read(slot: u32) -> (i64, u64) {
         .build();
     let mut mrs = [0 as Word; wire::FAST_REGISTERS];
     mrs[0] = slot as Word;
-    let reply = console_service().call_with_mrs(info, mrs);
+    let reply = if uses_ambient_buffer() {
+        console_service().call_with_mrs(info, mrs)
+    } else {
+        // SAFETY: this thread's own buffer, borrowed for one invocation.
+        console_service()
+            .with(unsafe { thread_context() })
+            .call_with_mrs(info, mrs)
+    };
     match outcome(&reply) {
         Ok(pair) => pair,
         Err(error) => (error, 0),
@@ -697,7 +753,21 @@ pub(crate) fn early_debug_write(bytes: &[u8]) {
             .build();
         let mut mrs = [0 as Word; wire::FAST_REGISTERS];
         mrs[..used].copy_from_slice(&operands[..used]);
-        console_service().send_with_mrs(info, mrs);
+        if uses_ambient_buffer() {
+            if uses_ambient_buffer() {
+                console_service().send_with_mrs(info, mrs);
+            } else {
+                // SAFETY: this thread's own buffer, borrowed for one invocation.
+                console_service()
+                    .with(unsafe { thread_context() })
+                    .send_with_mrs(info, mrs);
+            }
+        } else {
+            // SAFETY: this thread's own buffer, borrowed for one invocation.
+            console_service()
+                .with(unsafe { thread_context() })
+                .send_with_mrs(info, mrs);
+        }
     }
 }
 
@@ -734,7 +804,14 @@ pub fn debug_write(bytes: &[u8]) -> i64 {
         .build();
     let mut mrs = [0 as Word; wire::FAST_REGISTERS];
     mrs[..used].copy_from_slice(&operands[..used]);
-    console_service().send_with_mrs(info, mrs);
+    if uses_ambient_buffer() {
+        console_service().send_with_mrs(info, mrs);
+    } else {
+        // SAFETY: this thread's own buffer, borrowed for one invocation.
+        console_service()
+            .with(unsafe { thread_context() })
+            .send_with_mrs(info, mrs);
+    }
     bytes.len() as i64
 }
 #[cfg(test)]

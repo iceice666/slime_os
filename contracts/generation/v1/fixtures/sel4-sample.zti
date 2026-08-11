@@ -23,6 +23,13 @@
       role = "service";
       spawnBudget = 0;
     };
+    {
+      commandProfile = [];
+      name = "sample-worker";
+      object = "sha256:sample-worker";
+      role = "service";
+      spawnBudget = 0;
+    };
   ];
   formatVersion = 1;
   generation = 1;
@@ -72,6 +79,7 @@
       "init";
       "sample-lender";
       "sample-receiver";
+      "sample-worker";
     ];
   };
   instances = [
@@ -122,6 +130,16 @@
       health = "required";
       name = "sample-receiver";
       owner = "init";
+    };
+    {
+      autostart = true;
+      bindings = [];
+      dependencies = [];
+      executable = "sample-worker";
+      extraThreads = 1;
+      health = "required";
+      name = "sample-worker";
+      owner = "root";
     };
   ];
   mintedBindings = [
@@ -182,6 +200,11 @@
     };
     {
       id = "sha256:sample-receiver";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:sample-worker";
       kind = "component";
       size = 65536;
     };

@@ -90,6 +90,11 @@ path = "src/bin/sample-receiver.rs"
 test = false
 
 [[bin]]
+name = "sample-worker"
+path = "src/bin/sample-worker.rs"
+test = false
+
+[[bin]]
 name = "fabric-service"
 path = "src/bin/fabric-service.rs"
 test = false

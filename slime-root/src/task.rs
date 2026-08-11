@@ -24,7 +24,9 @@
 
 use sel4::{CapTypeForObjectOfFixedSize, CapTypeForObjectOfVariableSize};
 
-use crate::child_vspace::{ChildImage, ChildVSpace, ScratchPage, VSpaceError, create_child_vspace};
+use crate::child_vspace::{
+    ChildImage, ChildVSpace, MAX_CHILD_THREADS, ScratchPage, VSpaceError, create_child_vspace,
+};
 use crate::generation::Authority;
 use crate::object_allocator::{AllocError, ObjectAllocator, TaskArenaId};
 
@@ -195,6 +197,10 @@ pub enum Supervision {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TaskError {
+    /// The plan declares a worker thread the image cannot run: it was built
+    /// without `slime_rt::entry!`'s worker form, so it has no second entry
+    /// point or stack.
+    MissingWorkerImage,
     Alloc(AllocError),
     /// A plan declared a child priority at or above the root's own, which
     /// would let the child keep the service loop from running (B48).
@@ -320,6 +326,10 @@ pub struct Task {
     pub id: TaskId,
     pub cnode: sel4::cap::CNode,
     pub tcb: sel4::cap::Tcb,
+    /// Additional threads of this process, indexed by thread number; index 0
+    /// is always `None` because that is `tcb` above (B47). Allocated from the
+    /// task's own arena, so teardown reclaims them with everything else.
+    pub workers: [Option<sel4::cap::Tcb>; MAX_CHILD_THREADS],
     pub vspace: ChildVSpace,
     pub authority: Authority,
     pub supervision: Supervision,
@@ -456,6 +466,9 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
         // paths pass `CHILD_PRIORITY`, which is also what an instance that
         // declares none resolves to (B48).
         priority: sel4::Word,
+        // Threads this process runs, from the plan's process record. One for
+        // every component that does not declare `extraThreads` (B47).
+        threads: usize,
     ) -> Result<TaskId, TaskError> {
         admit_priority(priority)?;
         let Some(index) = self.tasks.iter().position(Option::is_none) else {
@@ -468,11 +481,16 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
                 size_bits: usize::BITS as usize,
                 remaining: 0,
             }))?;
-        plan.add(sel4::cap_type::Tcb::object_blueprint())
-            .ok_or(TaskError::Alloc(AllocError::UntypedExhausted {
-                size_bits: usize::BITS as usize,
-                remaining: 0,
-            }))?;
+        // One TCB per thread: a thread is exactly a TCB, a stack, an IPC
+        // buffer, and a schedule, and the arena must cover all of them before
+        // any is allocated.
+        for _ in 0..threads {
+            plan.add(sel4::cap_type::Tcb::object_blueprint())
+                .ok_or(TaskError::Alloc(AllocError::UntypedExhausted {
+                    size_bits: usize::BITS as usize,
+                    remaining: 0,
+                }))?;
+        }
         let arena_bits =
             plan.required_size_bits()
                 .ok_or(TaskError::Alloc(AllocError::UntypedExhausted {
@@ -482,8 +500,15 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
         let arena = allocator.begin_task_arena(arena_bits)?;
 
         let construction = (|| {
-            let vspace =
-                create_child_vspace(allocator, arena, image, caller_vspace, scratch, asid_pool)?;
+            let vspace = create_child_vspace(
+                allocator,
+                arena,
+                image,
+                caller_vspace,
+                scratch,
+                asid_pool,
+                threads,
+            )?;
             let cnode = allocator
                 .allocate_variable_in::<sel4::cap_type::CNode>(arena, cnode_size_bits)?
                 .cap();
@@ -621,8 +646,8 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
                 cnode,
                 sel4::CNodeCapData::new(0, sel4::WORD_SIZE - cnode_size_bits),
                 vspace.vspace,
-                vspace.ipc_buffer_addr as sel4::Word,
-                vspace.ipc_buffer,
+                vspace.main().ipc_buffer_addr as sel4::Word,
+                vspace.main().ipc_buffer,
             )
             .map_err(TaskError::Configure)?;
             tcb.tcb_set_sched_params(sel4::init_thread::slot::TCB.cap(), priority, priority)
@@ -638,10 +663,64 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
             // establishes its own stack pointer at `_start`.
             tcb.tcb_write_all_registers(false, &mut context)
                 .map_err(TaskError::WriteRegisters)?;
-            Ok((vspace, cnode, tcb, entry))
+
+            // Every thread beyond the main one (B47). Same CSpace and VSpace —
+            // that is what makes them threads of one process rather than
+            // separate tasks — with its own TCB, IPC buffer, stack, and
+            // schedule.
+            let mut workers = [None; MAX_CHILD_THREADS];
+            #[allow(clippy::never_loop)]
+            for (index, slot) in workers.iter_mut().enumerate().take(threads).skip(1) {
+                // The image must declare a worker entry point and stack. A
+                // plan asking for a thread an image cannot run is refused
+                // rather than started at a garbage PC.
+                let worker = image.worker().ok_or(TaskError::MissingWorkerImage)?;
+                let worker_tcb = allocator
+                    .allocate_fixed_in::<sel4::cap_type::Tcb>(arena)?
+                    .cap();
+                worker_tcb
+                    .tcb_configure(
+                        sel4::CPtr::from_bits(child_slots.fault),
+                        cnode,
+                        sel4::CNodeCapData::new(0, sel4::WORD_SIZE - cnode_size_bits),
+                        vspace.vspace,
+                        vspace.pages[index].ipc_buffer_addr as sel4::Word,
+                        vspace.pages[index].ipc_buffer,
+                    )
+                    .map_err(TaskError::Configure)?;
+                worker_tcb
+                    .tcb_set_sched_params(sel4::init_thread::slot::TCB.cap(), priority, priority)
+                    .map_err(TaskError::SchedParams)?;
+                // The thread index, in the register the runtime reads through
+                // `TPIDR_EL0`. This is what lets a thread find its own IPC
+                // buffer and transfer window without any shared state: the
+                // kernel context-switches this register, so no two threads can
+                // observe each other's value.
+
+                let mut worker_context = sel4::UserContext::default();
+                *worker_context.pc_mut() = worker.entry;
+                *worker_context.sp_mut() = worker.stack_top;
+                *worker_context.c_param_mut(0) = sel4::Word::from(startup_arg);
+                // The thread index, in `TPIDR_EL0`. Set here rather than
+                // through `seL4_TCB_SetTLSBase` because seL4 counts that
+                // register in the general-purpose set: a later
+                // `WriteRegisters` writes the whole set, so a separately
+                // invoked TLS base is overwritten with this context's zero.
+                //
+                // This is what lets a thread find its own IPC buffer and
+                // transfer window with no shared state — the kernel
+                // context-switches the register, so no two threads can observe
+                // each other's value.
+                worker_context.inner_mut().tpidr_el0 = index as sel4::Word;
+                worker_tcb
+                    .tcb_write_all_registers(false, &mut worker_context)
+                    .map_err(TaskError::WriteRegisters)?;
+                *slot = Some(worker_tcb);
+            }
+            Ok((vspace, cnode, tcb, entry, workers))
         })();
 
-        let (vspace, cnode, tcb, entry) = match construction {
+        let (vspace, cnode, tcb, entry, workers) = match construction {
             Ok(task) => task,
             Err(error) => {
                 let cleanup =
@@ -653,6 +732,7 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
 
         let cleanup = construction_record(id, arena, allocator.arena_slot_count(arena)?);
         self.tasks[index] = Some(Task {
+            workers,
             id,
             cnode,
             tcb,
@@ -683,6 +763,11 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
             return Ok(());
         }
         task.tcb.tcb_resume().map_err(TaskError::Resume)?;
+        // Workers start with the main thread. Their TLS base is already set,
+        // so each finds its own IPC buffer on its first syscall (B47).
+        for worker in task.workers.iter().flatten() {
+            worker.tcb_resume().map_err(TaskError::Resume)?;
+        }
         task.activated = true;
         self.activated += 1;
         Ok(())

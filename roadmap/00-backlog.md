@@ -144,135 +144,6 @@ sel4_crossing_check`, `just sel4_stream_check`, `just sel4_qos_check`, `just
 sel4_call_check`, `just sel4_operation_check`, and `just
 sel4_visibility_check` on native Endpoint/Notification paths.
 
-### B47 — package, process, thread, service instance, and lifecycle are one Task model
-
-**Status:** Open. **Class:** Unmasked architectural debt. **Depends on:** B42,
-B46.
-
-**Problem:** One `Task` currently means image instance, CSpace/VSpace owner,
-single TCB, service identity, scheduling unit, and lifecycle identity. This
-forces single-threaded components and makes lifecycle and scheduling policy
-ambient task-ID concerns rather than capability-owned process/thread state.
-
-**Evidence:** `components/runtime/src/runtime.rs` assumes one thread;
-`slime-root/src/task.rs::create` allocates one CNode and one TCB and returns a
-`TaskId`; the public spawn ABI mirrors that identity.
-
-**Fix:** Split package/image, service template, process, thread, service
-instance, and lifecycle handle in generation v5 and root mechanism. A process
-owns CSpace/VSpace; each thread owns TCB, IPC buffer, fault endpoint, and
-scheduling state; service endpoints and lifecycle capabilities are separately
-delegable. Remove `TaskId` from every cross-process contract.
-
-**Exit condition:** A fixture can declare two threads in one process without
-duplicating its CSpace/VSpace; one thread fault is reported under the declared
-fault policy; lifecycle authority remains capability-based; single-threaded
-graphs retain behavior. `just test_sel4_root`, `just sel4_spawn_check`, `just
-sel4_supervision_check`, `just sel4_reclamation_check`, and `just
-sel4_boot_check` pass.
-
-**The format half landed (2026-08-10).** A generation can declare extra
-threads in a process and the decoder admits them. Three things had kept v5's
-process/thread split notional:
-
-- the builder emitted one thread per process and indexed the tables
-  `thread = process`, which held only while they grew in lockstep;
-- `validate_plan` required `process_count == thread_count`, so a second thread
-  was refused `BadBounds` before anything else was checked;
-- the per-thread check required `process(thread.process).main_thread == index`,
-  so *every* thread had to be its process's main one.
-
-All three are fixed. Indices are counted from the records; a quota stays per
-process while schedules and fault policies are per thread; a thread is checked
-for belonging to a real process and owning objects of the right kind, and
-`main_thread` is validated separately against the thread table so a process
-cannot name someone else's. `Instance.extraThreads` is the manifest's side, and
-each extra thread gets its own TCB, IPC buffer, fault endpoint, fault policy,
-and schedule while sharing the declaring instance's CSpace and VSpace — which
-is the property that makes it a thread rather than a process.
-
-Verified by declaring `extraThreads = 1` on the channel plane's console: two
-processes, three threads, decodes clean, `sel4_channel_check` passes. All 30
-seL4 gates pass.
-
-**What that leaves open, and why it is the larger half.** `slime-root` still
-constructs only the main thread, so a declared second one is planned and not
-run. The exit condition's "a fixture can declare two threads in one process"
-holds for the declaration and not the execution, and "one thread fault is
-reported under the declared fault policy" needs the thread to exist at runtime
-first. The fixture is reverted rather than left declaring a thread nothing
-starts.
-
-Running one is not a small addition. The root's own console dispatcher shows
-the shape — `tcb_configure`, `tcb_set_sched_params`, `tcb_write_all_registers`
-— but a child's second thread needs three things the component side does not
-have: its own stack, its own entry point, and its own IPC buffer at a distinct
-address. `slime_rt::entry!` declares exactly one of each, and `runtime::start`
-calls `sel4::set_ipc_buffer`, which claims the crate's single ambient slot per
-address space — `ipc_buffer_is_thread_local()` is false in this build, as B41
-recorded.
-
-**The route is known; it is the breadth that makes it a milestone.** Four
-layers change together:
-
-- **VSpace.** `child_vspace` places the IPC buffer at `footprint.end` and the
-  transfer window one granule above. A second thread's pair extends that to
-  `+2` and `+3`, which is a layout both images agree on by construction —
-  `runtime::ipc_buffer_addr` derives from `_end`, so the runtime needs the same
-  arithmetic.
-- **Root construction.** `task::create` allocates one TCB and configures it.
-  A second needs the same four invocations against the *same* CSpace and
-  VSpace, with the plan's `ThreadRecord` supplying entry, IPC buffer vaddr, and
-  schedule — all three of which v5 already carries and the builder now emits.
-- **Runtime entry.** `entry!` declares one stack and one `__slime_rt_entrypoint`.
-  A second thread needs its own of each, and `runtime::start`'s
-  `set_ipc_buffer` must not run on it.
-- **Transport.** Only four call sites reach the ambient buffer —
-  `call_with_mrs` at `sel4_transport.rs:224`, and three console sends — and 29
-  public wrappers funnel through them. `Cap::with` at those four is the whole
-  change, which is how the root's second dispatcher already works.
-
-Plus a fixture component that actually runs two threads, since a declared
-thread the root starts and nothing exercises would pass every gate while
-proving nothing.
-
-**A design constraint found by attempting it (2026-08-10).** The transport's
-per-thread state is not just the IPC buffer: `WINDOW_BASE` and `WINDOW_LEN` are
-process-global statics that 29 call sites read through `window()`, and each
-thread stages through its own window. Making those arrays needs an index, and
-there are only three ways to get one without `#[thread_local]`, which
-`aarch64-sel4-minimal` does not support:
-
-- **A `CURRENT_THREAD` static.** Unsound. Two runnable threads race it, and the
-  failure is a thread staging through another's window — silent corruption, not
-  a fault.
-- **Derive it from the stack pointer.** Works, and couples every syscall to the
-  runtime's stack layout, which `sel4-runtime-common` owns and can change.
-- **Thread an explicit context through the transport**, as `Cap::with` does for
-  the IPC buffer. Sound and layout-independent, and it means every one of the
-  29 wrappers takes a parameter its callers must supply — which is the real
-  cost, and why this is a cutover rather than an addition.
-
-The third is the right answer. It is recorded here rather than half-applied,
-because a partial version — arrays indexed by a racy static — would pass every
-current gate, since no component runs two threads yet.
-
-**Two clauses already hold (2026-08-10).** "Remove `TaskId` from every
-cross-process contract" and "lifecycle authority remains capability-based" were
-delivered by B42: no schema, generated protocol record, or public runtime type
-names a task id, and `scripts/check/check-lifecycle-identity.py` keeps it that
-way. All five named gates currently pass. What remains is the split itself —
-one process owning CSpace/VSpace with several threads each owning a TCB, IPC
-buffer, fault endpoint, and schedule.
-
-Note that a *second thread in one address space* is exactly what B41's audit
-found the vendored runtime cannot yet support: the `sel4` crate holds one
-IPC-buffer slot per address space unless the target is thread-local, and the
-thread-local target's images lose their `PT_TLS` header in the loader. B47's
-central claim therefore inherits that blocker even though its dependency chain
-does not name it. See
-[`devlog/2026-08-10-b41-second-dispatcher-blocker/`](../devlog/2026-08-10-b41-second-dispatcher-blocker/index.md).
-
 ### B48 — all child execution shares one fixed priority and no scheduling authority
 
 **Status:** Open. **Class:** Unmasked architectural debt. **Depends on:** B47.
@@ -448,6 +319,43 @@ affected `just sel4_*_check` targets, `just sel4_gate_control_check`, `just
 fmt_check_all`, and `just lint_all` pass after the deletion.
 
 ## Resolved
+### B47 — package, process, thread, service instance, and lifecycle are one Task model
+
+**Status:** Resolved 2026-08-10.
+
+**Problem:** One `Task` meant image instance, CSpace/VSpace owner, single TCB,
+service identity, scheduling unit, and lifecycle identity at once, which forced
+every component to be single-threaded.
+
+**Resolution.** A process runs up to `MAX_CHILD_THREADS` threads sharing one
+CSpace and VSpace, each owning a TCB, stack, IPC buffer, transfer window, and
+schedule. The format half landed first (`f93a55b`, `8e49b5e`): the builder
+indexed threads as processes, `validate_plan` required equal counts, and the
+per-thread check demanded `main_thread == index`. The runtime half followed.
+
+**The real obstacle was the IPC buffer, not the TCB.** Components build for
+`aarch64-sel4-minimal`, which declares no `has-thread-local`, so `sel4`'s
+buffer slot is one process-wide static. Five transport sites reached it; each
+now branches, with non-main threads supplying their own through `Cap::with` —
+the answer B41 reached in the root. `WINDOW_BASE`/`WINDOW_LEN` became
+per-thread arrays for the same reason.
+
+**A thread's identity lives in `TPIDR_EL0`,** because the kernel
+context-switches it and no two threads can observe each other's value. It must
+be set in the register context, not through `seL4_TCB_SetTLSBase`: seL4 counts
+that register in the general-purpose set, so a later `WriteRegisters`
+overwrites a separately invoked TLS base with zero.
+
+**Exit condition met.** `sample-worker` declares `extraThreads = 1` and both
+threads print; the plane refuses a transcript missing either line. Two
+mutations were observed to fail — never resuming the worker, and giving it the
+main thread's index (which faults, rather than silently sharing a buffer).
+`just test_sel4_root` (146), `just sel4_spawn_check`, `just
+sel4_supervision_check`, `just sel4_reclamation_check`, and `just
+sel4_boot_check` all pass, alongside the full 31-plane sweep.
+
+**Devlog:** `devlog/2026-08-10-b47-runtime-threads/index.md`.
+
 ### B52 — the loan plane never launches the receiver it loans to
 
 **Status:** Resolved 2026-08-10.
