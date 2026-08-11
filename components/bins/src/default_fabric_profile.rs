@@ -156,6 +156,8 @@ pub const FABRIC_MAX_CAPABILITY_SLOTS: usize = 48;
 pub const FABRIC_REQUIRED_CAPABILITY_SLOTS: usize = 27;
 pub const FABRIC_FRAME_CAPACITY: usize = 32;
 pub const FABRIC_COPY_PAGES: usize = 2;
+/// No request/response route of this class exists in the resolved graph.
+pub const FABRIC_DEADLINE_ABSENT: u64 = u64::MAX;
 pub const FABRIC_CALL_DEADLINE_NS: u64 = 1000000;
 pub const FABRIC_OPERATION_DEADLINE_NS: u64 = 1000000;
 pub const FABRIC_FIRST_CONTROL_SLOT: u32 = 2;

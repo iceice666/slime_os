@@ -82,7 +82,11 @@ def rejected(label: str, mutate) -> None:
 manifest = builder.load_manifest()
 INTERFACES = builder.validate_interface_schemas(manifest["interfaceSchemas"])
 GRAPH = manifest["fabricGraph"]
-COMPONENT_NAMES = {component["name"] for component in manifest["components"]}
+# v5 split `components` into an executable catalogue and the instances built
+# from it. A fabric participant is an *instance* -- a route names something
+# that runs, not something that could be launched -- so this is the instance
+# names, which is what `build_fabric_graph` validates against.
+COMPONENT_NAMES = {instance["name"] for instance in manifest["instances"]}
 INTERFACE_BY_NAME = {interface.name: interface for interface in INTERFACES}
 
 # --- determinism -------------------------------------------------------------
