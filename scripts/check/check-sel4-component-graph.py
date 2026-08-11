@@ -44,8 +44,16 @@ BOOT_TIMEOUT_SECONDS = 120
 # The v4 generation carries five executable catalogue entries and five instance
 # declarations, but root owns and autostarts only init. Init then exercises its
 # explicit executable bindings by spawning console and spawn-service.
+#
+# All three complete. Init holds the *consumer* end of both declared channels
+# and exits when its launch sequence is done, so both services observe
+# `PeerDead` on their next receive and exit 0 -- which is exactly what
+# `console.rs` and `spawn-service.rs` are written to do. This gate previously
+# asserted `live=2`, from before a declared side could ever be abandoned: the
+# declaration outlived its holder, so the peer's exit was invisible and the two
+# services parked forever on channels with no other end (B46).
 TERMINAL_MARKER = (
-    r"SLIME_GRAPH HEALTHY generation=1 required=3 live=2 completed=1 failed=0"
+    r"SLIME_GRAPH HEALTHY generation=1 required=3 live=0 completed=3 failed=0"
 )
 
 REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
@@ -72,9 +80,14 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     ("spawn-service reached its service loop", r"\[spawn-service\] ready"),
     ("spawn-service allocated against its quota", r"SLIME_GRAPH buffer created task=2 slot=\d+ id=\d+ pages=1 writable=1"),
     ("the shared-buffer lifecycle became live", r"\[spawn-service\] shared-buffer quota live"),
-    ("spawn-service parked live", r"SLIME_GRAPH parked task=2 reason=wait"),
+    # Each service ran its whole scenario and then exited on `PeerDead`, which
+    # is what `spawn-service.rs` and `console.rs` do when a receive reports the
+    # other end is gone. Asserting the exit rather than a park is what makes
+    # peer-death propagation observable: before B46 a declared side outlived
+    # its holder, so init's exit was invisible and both parked forever.
+    ("spawn-service exited on peer death", r"SLIME_GRAPH component exit task=2 status=0"),
     ("console bound its mapped window", r"SLIME_GRAPH window bound task=1 base=0x236000 len=4096"),
-    ("console parked live", r"SLIME_GRAPH parked task=1 reason=wait"),
+    ("console exited on peer death", r"SLIME_GRAPH component exit task=1 status=0"),
     ("the supervisor certified the graph", TERMINAL_MARKER),
 )
 
@@ -384,7 +397,8 @@ def main() -> None:
     print(
         "seL4 component graph check: init launched the two required spawned instances; "
         "spawn-service exercised its bounded operation surface; console and spawn-service "
-        "parked live; the supervisor certified the required graph"
+        "each ran their scenario and exited on peer death; the supervisor certified the "
+        "required graph"
     )
 
 

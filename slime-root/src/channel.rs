@@ -158,6 +158,22 @@ struct DeclaredEndpoint {
     key: ChannelKey,
     side: Side,
     rights: u64,
+    /// Set once the declared holder has run and exited.
+    ///
+    /// A declaration keeps its side alive so a peer's exit cannot tear down a
+    /// channel whose other end is about to be installed — and so a service
+    /// whose launcher exits keeps serving, which is what a `required`
+    /// instance means. Neither reason survives the holder's own death: from
+    /// then on the declaration would make the side permanently
+    /// un-abandonable, so `mark_dead` would find nothing abandoned, wake
+    /// nobody, and leave a peer blocked on a channel with no other end (B46).
+    ///
+    /// The descriptor stays either way, because a repeatable instance
+    /// template installs from it again.
+    holder_exited: bool,
+    /// The task the end was installed into, so the death above can be
+    /// attributed to the right declaration.
+    installed: Option<TaskId>,
 }
 
 impl Entry {
@@ -354,7 +370,7 @@ impl ChannelTable {
         self.declared[..self.declared_len]
             .iter()
             .flatten()
-            .any(|endpoint| endpoint.key == key && endpoint.side == side)
+            .any(|endpoint| endpoint.key == key && endpoint.side == side && !endpoint.holder_exited)
     }
 
     /// Install every pre-created channel end declared for an instance. The
@@ -399,6 +415,9 @@ impl ChannelTable {
                 endpoint.side.name(),
                 endpoint.rights,
             );
+            if let Some(entry) = self.declared[index].as_mut() {
+                entry.installed = Some(task);
+            }
             installed += 1;
         }
         Ok(installed)
@@ -414,6 +433,14 @@ impl ChannelTable {
     /// The dying task's table is still installed, so every holder query excludes
     /// it explicitly.
     pub fn mark_dead(&mut self, graph: &GraphTables, task: TaskId, wakes: &mut DeathWakes) {
+        // Retire this task's declarations before looking for abandoned sides:
+        // while one stands, its side reads as held and nothing below can see
+        // the channel as abandoned.
+        for entry in self.declared[..self.declared_len].iter_mut().flatten() {
+            if entry.installed == Some(task) {
+                entry.holder_exited = true;
+            }
+        }
         for index in 0..MAX_CHANNELS {
             let Some(key) = self.entries[index].as_ref().map(|entry| entry.key) else {
                 continue;
@@ -748,6 +775,8 @@ pub fn materialize(
             key,
             side: producer_side,
             rights: held_rights(grant.rights, producer, producer),
+            holder_exited: false,
+            installed: None,
         })?;
         if !loopback {
             channels.declare_endpoint(DeclaredEndpoint {
@@ -756,6 +785,8 @@ pub fn materialize(
                 key,
                 side: Side::Consumer,
                 rights: held_rights(grant.rights, consumer, producer),
+                holder_exited: false,
+                installed: None,
             })?;
         }
         sel4::debug_println!(
