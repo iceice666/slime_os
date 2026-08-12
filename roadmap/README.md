@@ -12,9 +12,9 @@ A milestone is complete only when its exit condition is observed. Compiled code,
 
 | Track | Status | Next open gate |
 | --- | --- | --- |
-| [Backlog](00-backlog.md) | Clear through B38 | No open defect blocks the next roadmap gate |
+| [Backlog](00-backlog.md) | B39–B45 and B47–B49 resolved; **B46 and B50 open** | B46's native-IPC cutover has landed but five of its seven plane gates do not pass; B50 follows it |
 | [Foundations](01-foundations.md) | M1–M4 and M6 complete; M5 mechanisms complete except M5.7 physical Framework evidence | M5.7 requires observed removable-media Framework boot without internal-NVMe writes |
-| [Core runtime](02-core-runtime.md) | C7 and C8.1–C8.10 complete; B34–B38 restored the single declared graph, durable boot selection, and bounded task lifetimes | No backlog gate remains; advance only through the next declared roadmap item |
+| [Core runtime](02-core-runtime.md) | C7 and C8.1–C8.10 complete; B34–B38 restored the single declared graph, durable boot selection, and bounded task lifetimes | B46 is open again over C8's fabric planes: the logical channel mechanism is deleted, and the stream, QoS, call, operation, and visibility gates must come back on native Endpoint paths |
 | [RPi5 ROS 2 demo](09-rpi5-ros2-demo.md) | RP0 and RP1 complete; RP2–RP8 planned | Rewrite RP2 around the seL4 product boundary before implementation; its current low-level deliverables describe the retired custom kernel |
 | [Architecture portability](07-architecture-portability.md) | P0, P1, P2.1, and P5 complete; P2.2–P2.6 superseded by P5 | P4 physical Raspberry Pi 5 qualification is the next architecture evidence gate |
 | [ROS 2 compatibility](03-ros2-compatibility.md) | Not started | R0 minimal DDS/RTPS topic profile is first; broader external/multi-vendor compatibility follows after the RPi5 demo path |
@@ -43,7 +43,7 @@ The [backlog](00-backlog.md) still sits ahead of all lanes: resolve or explicitl
 
 ```mermaid
 flowchart TD
-    Backlog["Backlog clear through B38"]
+    Backlog["Backlog: B46, B50 open"]
     Foundations["M1–M6 foundations\nexisting x86/QEMU evidence"]
     C7["C7 sample plane\ncomplete"]
     C8["C8.1–C8.10 fabric\ncomplete baseline"]
