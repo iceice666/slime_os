@@ -31,6 +31,20 @@ use crate::object_allocator::{AllocError, ObjectAllocator, TaskArenaId};
 /// still fits during the cutover while both exist.
 pub const MAX_PEER_ENDPOINTS: usize = 48;
 
+/// Where a channel's native endpoint sits in the holder's CSpace, relative to
+/// the logical slot its grant declares.
+///
+/// A component migrating off the logical channel finds its endpoint at
+/// `NATIVE_ENDPOINT_BASE + declared_slot`, so the mapping needs no table on
+/// either side and no second declaration in the manifest. The base is above
+/// `CHILD_SLOT_CONSOLE` because grant slots start at zero and the console is
+/// the highest fixed slot the root installs.
+///
+/// A CNode too small to hold the offset slot is refused rather than wrapped:
+/// `absolute_cptr_from_bits_with_depth` would otherwise resolve a slot inside
+/// the declared region and the endpoint would land on top of real authority.
+pub const NATIVE_ENDPOINT_BASE: sel4::CPtrBits = 33;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PeerEndpointError {
     TableFull,
@@ -39,6 +53,11 @@ pub enum PeerEndpointError {
     UnknownSide,
     Alloc(AllocError),
     Mint(sel4::Error),
+    /// The holder's CNode cannot hold the offset slot.
+    SlotOutOfRange {
+        slot: sel4::CPtrBits,
+        limit: sel4::CPtrBits,
+    },
 }
 
 impl From<AllocError> for PeerEndpointError {
@@ -189,6 +208,24 @@ impl PeerEndpointTable {
         Ok(minted)
     }
 
+    /// Where a declared slot's native endpoint goes, or why it cannot.
+    pub fn native_slot(
+        declared: sel4::CPtrBits,
+        cnode_size_bits: usize,
+    ) -> Result<sel4::CPtrBits, PeerEndpointError> {
+        let slot = NATIVE_ENDPOINT_BASE.checked_add(declared).ok_or(
+            PeerEndpointError::SlotOutOfRange {
+                slot: declared,
+                limit: 0,
+            },
+        )?;
+        let limit: sel4::CPtrBits = 1 << cnode_size_bits;
+        if slot >= limit {
+            return Err(PeerEndpointError::SlotOutOfRange { slot, limit });
+        }
+        Ok(slot)
+    }
+
     /// The endpoint standing in for a logical channel, if one was created.
     ///
     /// Linear over a table bounded by `MAX_PEER_ENDPOINTS`: this runs once per
@@ -221,7 +258,7 @@ impl Default for PeerEndpointTable {
 
 #[cfg(test)]
 mod tests {
-    use super::Side;
+    use super::{NATIVE_ENDPOINT_BASE, PeerEndpointError, PeerEndpointTable, Side};
 
     /// `CapRights::new` takes them in this order, which is easy to get
     /// backwards; naming the arguments here keeps each test readable.
@@ -252,6 +289,42 @@ mod tests {
             rights(true, false, true, false),
             "consumer: grant_reply + read only"
         );
+    }
+
+    #[test]
+    fn a_native_slot_sits_above_every_fixed_root_slot() {
+        // Grant slots start at zero and the console is the highest slot the
+        // root installs, so a base below it would put an endpoint on top of
+        // declared authority in every migrated fixture.
+        assert!(
+            NATIVE_ENDPOINT_BASE > crate::task::CHILD_SLOT_CONSOLE,
+            "the native region must not overlap the fixed slots"
+        );
+        assert_eq!(
+            PeerEndpointTable::native_slot(0, 6).expect("slot 0 in a 64-slot CNode"),
+            NATIVE_ENDPOINT_BASE
+        );
+        assert_eq!(
+            PeerEndpointTable::native_slot(2, 6).expect("slot 2"),
+            NATIVE_ENDPOINT_BASE + 2
+        );
+    }
+
+    #[test]
+    fn a_cnode_too_small_for_the_offset_refuses_rather_than_wrapping() {
+        // The failure this prevents is silent: `absolute_cptr_from_bits_with_depth`
+        // resolves a slot inside the declared region, so the endpoint would
+        // land on top of real authority rather than fail to install.
+        assert!(matches!(
+            PeerEndpointTable::native_slot(0, 5),
+            Err(PeerEndpointError::SlotOutOfRange { .. })
+        ));
+        // The boundary: a 64-slot CNode holds base + 30 and not base + 31.
+        assert!(PeerEndpointTable::native_slot(30, 6).is_ok());
+        assert!(matches!(
+            PeerEndpointTable::native_slot(31, 6),
+            Err(PeerEndpointError::SlotOutOfRange { .. })
+        ));
     }
 
     #[test]
