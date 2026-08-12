@@ -98,7 +98,7 @@ SAMPLE_MARKERS: tuple[str, ...] = (
 REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     (
         "the sample generation was admitted",
-        r"SLIME_ROOT generation admitted number=\d+ executables=4 instances=4 grants=4 ",
+        r"SLIME_ROOT generation admitted number=\d+ executables=4 instances=4 grants=5 ",
     ),
     (
         "every payload is a native ELF image",
@@ -217,6 +217,14 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"\[init\] spawn budget recovered",
     ),
     ("the composition completed", r"\[init\] sample plane complete"),
+    (
+        # B46's first message outside the root. The worker sends on the native
+        # loopback endpoint, the main thread receives, and this marker appears
+        # only after the payload matches byte-for-byte. No `Send`, `Recv`,
+        # `Wait`, parked reply, transit entry, or root queue is in that path.
+        "two threads exchanged a message on a native endpoint",
+        r"\[sample-worker\] native endpoint carried a message",
+    ),
     (
         # The non-starvation property, under a priority-only scheduler on one
         # core (B48). The worker spins 200M iterations without ever yielding.

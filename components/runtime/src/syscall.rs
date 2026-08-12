@@ -180,6 +180,26 @@ pub fn recv(slot: u32, buf: &mut [u8; MAX_MSG], cap_out: &mut [u64; MAX_CAPS_PER
     transport::recv(slot, buf, cap_out)
 }
 
+/// Send over a channel's *native* seL4 Endpoint, with the root not in the path
+/// (B46).
+///
+/// The root installs one at `NATIVE_ENDPOINT_BASE + slot` for every declared
+/// channel, so `slot` is the same number the component's declaration names.
+/// Blocking: `seL4_Send` waits for a receiver, which is the backpressure the
+/// logical channel emulated with a bounded queue and a park.
+pub fn native_send(slot: u32, payload: &[u8]) -> i64 {
+    transport::native_send(slot, payload)
+}
+
+/// Receive from a channel's native seL4 Endpoint (B46).
+///
+/// Blocking, unlike [`recv`]: the kernel parks the caller until a sender
+/// arrives, so a component using this needs neither the poll/park split nor
+/// `wait`.
+pub fn native_recv(slot: u32, buf: &mut [u8]) -> i64 {
+    transport::native_recv(slot, buf)
+}
+
 pub fn exit(status: i64) -> ! {
     transport::exit(status)
 }

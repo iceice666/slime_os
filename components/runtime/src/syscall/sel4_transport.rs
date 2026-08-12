@@ -87,6 +87,100 @@ fn root_service() -> cap::Endpoint {
     cap::Endpoint::from_bits(ROOT_SERVICE_SLOT)
 }
 
+/// Where a channel's native endpoint sits, relative to its declared slot.
+///
+/// Mirrors `slime_root::peer_endpoint::NATIVE_ENDPOINT_BASE`. The two are a
+/// compile-time agreement between the images, like the IPC buffer address: the
+/// root installs at this offset and the component invokes there, with no table
+/// on either side (B46).
+pub const NATIVE_ENDPOINT_BASE: u32 = 33;
+/// Child CNode depth, shared with `slime_root::task::CHILD_CNODE_SIZE_BITS`.
+///
+/// This transport cannot import the root crate, so the native-slot ABI keeps
+/// the same literal on both sides. The bound is security-relevant: seL4 masks a
+/// CPtr to the configured depth, so an unchecked slot above the CNode would
+/// alias a fixed capability instead of failing lookup.
+const CHILD_CNODE_SIZE_BITS: usize = 6;
+
+fn native_endpoint(slot: u32) -> Result<cap::Endpoint, i64> {
+    let absolute = NATIVE_ENDPOINT_BASE
+        .checked_add(slot)
+        .filter(|absolute| (*absolute as usize) < (1 << CHILD_CNODE_SIZE_BITS))
+        .ok_or(ERR_INVALID_ARG)?;
+    Ok(cap::Endpoint::from_bits(absolute as u64))
+}
+
+/// Send `payload` over a channel's *native* seL4 Endpoint.
+///
+/// The root is not in this path. `seL4_Send` blocks until a receiver takes the
+/// message, which is the backpressure the logical channel emulated with a
+/// bounded queue and a park.
+///
+/// Payload is bounded by the fast registers: this is the rendezvous path, and
+/// anything larger travels through the transfer window as it does today.
+pub fn native_send(slot: u32, payload: &[u8]) -> i64 {
+    if payload.len() > wire::FAST_REGISTERS * core::mem::size_of::<Word>() {
+        return ERR_INVALID_ARG;
+    }
+    let endpoint = match native_endpoint(slot) {
+        Ok(endpoint) => endpoint,
+        Err(error) => return error,
+    };
+    let mut mrs = [0 as Word; wire::FAST_REGISTERS];
+    for (index, chunk) in payload.chunks(core::mem::size_of::<Word>()).enumerate() {
+        let mut word = [0u8; core::mem::size_of::<Word>()];
+        word[..chunk.len()].copy_from_slice(chunk);
+        mrs[index] = Word::from_le_bytes(word);
+    }
+    let info = MessageInfoBuilder::default()
+        .label(payload.len() as Word)
+        .length(payload.len().div_ceil(core::mem::size_of::<Word>()))
+        .build();
+    if uses_ambient_buffer() {
+        endpoint.send_with_mrs(info, mrs);
+    } else {
+        // SAFETY: this thread's own buffer, borrowed for one invocation.
+        endpoint
+            .with(unsafe { thread_context() })
+            .send_with_mrs(info, mrs);
+    }
+    payload.len() as i64
+}
+
+/// Receive from a channel's native seL4 Endpoint into `buf`.
+///
+/// Blocking, unlike `recv`: the kernel parks the caller until a sender
+/// arrives, which is what makes the root's park/reply bookkeeping unnecessary.
+/// The length rides in the message label, since the register count only says
+/// how many words crossed.
+pub fn native_recv(slot: u32, buf: &mut [u8]) -> i64 {
+    let endpoint = match native_endpoint(slot) {
+        Ok(endpoint) => endpoint,
+        Err(error) => return error,
+    };
+    let reply = if uses_ambient_buffer() {
+        endpoint.recv_with_mrs(())
+    } else {
+        // SAFETY: this thread's own buffer, borrowed for one invocation.
+        endpoint.with(unsafe { thread_context() }).recv_with_mrs(())
+    };
+    let length = reply.info.label() as usize;
+    if length > buf.len()
+        || length > reply.info.length() * core::mem::size_of::<Word>()
+        || length > wire::FAST_REGISTERS * core::mem::size_of::<Word>()
+    {
+        return ERR_INVALID_ARG;
+    }
+    for (index, chunk) in buf[..length]
+        .chunks_mut(core::mem::size_of::<Word>())
+        .enumerate()
+    {
+        let word = reply.msg[index].to_le_bytes();
+        chunk.copy_from_slice(&word[..chunk.len()]);
+    }
+    length as i64
+}
+
 /// This thread's IPC buffer, as an explicit invocation context (B47).
 ///
 /// `sel4`'s ambient buffer is one process-wide static — `has-thread-local` is
@@ -754,14 +848,7 @@ pub(crate) fn early_debug_write(bytes: &[u8]) {
         let mut mrs = [0 as Word; wire::FAST_REGISTERS];
         mrs[..used].copy_from_slice(&operands[..used]);
         if uses_ambient_buffer() {
-            if uses_ambient_buffer() {
-                console_service().send_with_mrs(info, mrs);
-            } else {
-                // SAFETY: this thread's own buffer, borrowed for one invocation.
-                console_service()
-                    .with(unsafe { thread_context() })
-                    .send_with_mrs(info, mrs);
-            }
+            console_service().send_with_mrs(info, mrs);
         } else {
             // SAFETY: this thread's own buffer, borrowed for one invocation.
             console_service()

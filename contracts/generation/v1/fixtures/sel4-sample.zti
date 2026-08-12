@@ -55,6 +55,16 @@
       transferable = false;
     };
     {
+      name = "sample-worker-loopback";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "sample-worker";
+      target = "sample-worker";
+      transferable = false;
+    };
+    {
       name = "init-endpoint-factory";
       rights = [
         "endpointCreate";
@@ -133,7 +143,12 @@
     };
     {
       autostart = true;
-      bindings = [];
+      bindings = [
+        {
+          grant = "sample-worker-loopback";
+          slot = 0;
+        };
+      ];
       dependencies = [];
       executable = "sample-worker";
       extraThreads = 1;

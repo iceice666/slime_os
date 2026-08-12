@@ -16,10 +16,10 @@ pub use syscall::{
     MAX_DIRECTORY_PATH, MAX_MSG, MAX_WAIT_SOURCES, Rights, SharedBuffer, SpawnGrant, Spawned,
     Termination, WaitSource, block_transact, block_transact_sector, block_transact_write, cap_drop,
     cap_transfer, debug_write, directory_commit, directory_derive, directory_inspect,
-    endpoint_create, exit, input_read, recv, send, shared_buffer_create, shared_buffer_loan,
-    shared_buffer_loan_map, shared_buffer_map, shared_buffer_release, shared_buffer_return,
-    shared_buffer_revoke, shared_buffer_seal, shared_buffer_unmap, spawn, supervision_derive,
-    supervision_status, unhealthy, wait, yield_now,
+    endpoint_create, exit, input_read, native_recv, native_send, recv, send, shared_buffer_create,
+    shared_buffer_loan, shared_buffer_loan_map, shared_buffer_map, shared_buffer_release,
+    shared_buffer_return, shared_buffer_revoke, shared_buffer_seal, shared_buffer_unmap, spawn,
+    supervision_derive, supervision_status, unhealthy, wait, yield_now,
 };
 
 /// The CSpace slot holding this component's root service endpoint — its only

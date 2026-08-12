@@ -25,8 +25,38 @@ slime_rt::entry!(main, worker = worker);
 /// reached the TCB.
 const HANDOVER_SPINS: u32 = 64;
 
+/// The declared loopback channel, whose native endpoint the root installs at
+/// `33 + LOOPBACK_SLOT` (B46).
+const LOOPBACK_SLOT: u32 = 0;
+
+/// What the worker sends and the main thread expects back.
+const NATIVE_MESSAGE: &[u8] = b"native!";
+
 fn main(_startup_arg: u32) {
     slime_rt::debug_write(b"[sample-worker] main thread running\n");
+
+    // Receive over the *native* seL4 Endpoint the root installed for this
+    // component's declared loopback (B46). The root is not in this path: the
+    // kernel parks this thread until the worker sends, and hands the message
+    // straight across.
+    //
+    // Blocking, unlike the logical `recv`, which is why this is the first
+    // message in the tree that needs no root round trip and no reply
+    // bookkeeping. A loopback is the case that can migrate first -- one
+    // component holds both ends, so nothing depends on a peer having moved --
+    // and B47's second thread is what makes it possible at all, since a single
+    // thread cannot both send and receive on one endpoint.
+    let mut received = [0u8; 32];
+    let length = slime_rt::native_recv(LOOPBACK_SLOT, &mut received);
+    if length < 0 {
+        slime_rt::debug_write(b"[sample-worker] native receive failed\n");
+        slime_rt::exit(1)
+    }
+    if &received[..length as usize] != NATIVE_MESSAGE {
+        slime_rt::debug_write(b"[sample-worker] native payload differed\n");
+        slime_rt::exit(1)
+    }
+    slime_rt::debug_write(b"[sample-worker] native endpoint carried a message\n");
 
     // Let the worker run. Without this the main thread could reach its exit
     // before the worker was ever scheduled, and the plane would be asserting
@@ -46,6 +76,16 @@ fn main(_startup_arg: u32) {
 /// the other thread's in-flight message rather than print.
 fn worker(_startup_arg: u32) {
     slime_rt::debug_write(b"[sample-worker] worker thread running\n");
+
+    // Send over the native endpoint before the spin below. `native_send`
+    // blocks until a receiver takes the message, and the main thread is
+    // already parked in `native_recv`, so this completes as a rendezvous --
+    // the kernel copying registers directly between two threads of one
+    // process, with no queue and no root.
+    if slime_rt::native_send(LOOPBACK_SLOT, NATIVE_MESSAGE) < 0 {
+        slime_rt::debug_write(b"[sample-worker] native send failed\n");
+        slime_rt::exit(1)
+    }
 
     // Burn CPU without yielding, at this thread's declared priority (B48).
     //
