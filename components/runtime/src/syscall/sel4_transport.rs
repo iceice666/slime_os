@@ -26,11 +26,10 @@
 //! of crossing the endpoint.
 
 use core::ptr;
-use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-
-use sel4::{CallWithMRs, MessageInfoBuilder, Word, cap};
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use crate::runtime::MAX_THREADS;
+use sel4::{CallWithMRs, MessageInfo, MessageInfoBuilder, Word, cap};
 
 use super::wire::{
     self, FORM_INLINE, FORM_WINDOW, MAX_DESCRIPTOR_CAPS, MAX_DESCRIPTOR_LEN, clear_unnamed_slots,
@@ -38,13 +37,14 @@ use super::wire::{
     frame_len, pack_bytes, slot_pair, slot_with_flag,
 };
 use super::{
-    ERR_INVALID_ARG, ERR_SUCCESS, MAX_CAPS_PER_MSG, MAX_DIRECTORY_PATH, MAX_MSG, MAX_WAIT_SOURCES,
-    MIN_TRANSFER_WINDOW, SYS_CAP_DROP, SYS_CAP_TRANSFER, SYS_DIRECTORY_DERIVE, SYS_ENDPOINT_CREATE,
-    SYS_EXIT, SYS_RECV, SYS_SEND, SYS_SHARED_BUFFER_CREATE, SYS_SHARED_BUFFER_LOAN,
+    CapabilityDisposition, ERR_INVALID_ARG, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG,
+    MAX_DIRECTORY_PATH, MAX_MSG, MIN_TRANSFER_WINDOW, SYS_CAP_DROP, SYS_CAPABILITY_EXPORT,
+    SYS_CAPABILITY_EXPORT_CANCEL, SYS_CAPABILITY_EXPORT_FINALIZE, SYS_CAPABILITY_IMPORT,
+    SYS_DIRECTORY_DERIVE, SYS_EXIT, SYS_SHARED_BUFFER_CREATE, SYS_SHARED_BUFFER_LOAN,
     SYS_SHARED_BUFFER_LOAN_MAP, SYS_SHARED_BUFFER_MAP, SYS_SHARED_BUFFER_RELEASE,
     SYS_SHARED_BUFFER_RETURN, SYS_SHARED_BUFFER_REVOKE, SYS_SHARED_BUFFER_SEAL,
     SYS_SHARED_BUFFER_UNMAP, SYS_SPAWN, SYS_SUPERVISION_DERIVE, SYS_SUPERVISION_STATUS,
-    SYS_TRANSFER_WINDOW_BIND, SYS_UNHEALTHY, SYS_WAIT, SpawnGrant, WaitSource,
+    SYS_UNHEALTHY, SpawnGrant,
 };
 
 /// The child CSpace slot holding the badged root service endpoint. Slot 0 is
@@ -72,9 +72,6 @@ const CONSOLE_LABEL_DIRECTORY_COMMIT: u64 = 4;
 /// word.
 const GRANT_RECORD_BYTES: usize = 16;
 
-/// Bytes of a wait-source record in the transfer window.
-const WAIT_RECORD_BYTES: usize = 8;
-
 /// Bytes of the immutable directory root in an inspect reply frame.
 const DIRECTORY_ROOT_BYTES: usize = 32;
 
@@ -87,98 +84,252 @@ fn root_service() -> cap::Endpoint {
     cap::Endpoint::from_bits(ROOT_SERVICE_SLOT)
 }
 
-/// Where a channel's native endpoint sits, relative to its declared slot.
-///
-/// Mirrors `slime_root::peer_endpoint::NATIVE_ENDPOINT_BASE`. The two are a
-/// compile-time agreement between the images, like the IPC buffer address: the
-/// root installs at this offset and the component invokes there, with no table
-/// on either side (B46).
+/// Fixed child-CNode regions shared with `slime-root`'s native-capability ABI.
 pub const NATIVE_ENDPOINT_BASE: u32 = 33;
-/// Child CNode depth, shared with `slime_root::task::CHILD_CNODE_SIZE_BITS`.
-///
-/// This transport cannot import the root crate, so the native-slot ABI keeps
-/// the same literal on both sides. The bound is security-relevant: seL4 masks a
-/// CPtr to the configured depth, so an unchecked slot above the CNode would
-/// alias a fixed capability instead of failing lookup.
-const CHILD_CNODE_SIZE_BITS: usize = 6;
-
+const NATIVE_TRANSFER_ENDPOINT_BASE: u32 = 5;
+const DIRECT_ENDPOINT_HANDLE: u32 = 1 << 31;
+const NATIVE_NOTIFICATION_BASE: u32 = 64;
+const NATIVE_TOKEN_BASE: u32 = 95;
+const NATIVE_REGION_SLOTS: u32 = 31;
+const NATIVE_RECEIVE_SLOT: u32 = 127;
+const CHILD_CNODE_SLOT: u32 = 4;
+const CHILD_CNODE_SIZE_BITS: usize = 7;
 fn native_endpoint(slot: u32) -> Result<cap::Endpoint, i64> {
+    if slot & DIRECT_ENDPOINT_HANDLE != 0 {
+        return Ok(cap::Endpoint::from_bits(u64::from(
+            slot & !DIRECT_ENDPOINT_HANDLE,
+        )));
+    }
     let absolute = NATIVE_ENDPOINT_BASE
         .checked_add(slot)
-        .filter(|absolute| (*absolute as usize) < (1 << CHILD_CNODE_SIZE_BITS))
+        .filter(|_| slot < NATIVE_REGION_SLOTS)
         .ok_or(ERR_INVALID_ARG)?;
     Ok(cap::Endpoint::from_bits(absolute as u64))
 }
 
-/// Send `payload` over a channel's *native* seL4 Endpoint.
-///
-/// The root is not in this path. `seL4_Send` blocks until a receiver takes the
-/// message, which is the backpressure the logical channel emulated with a
-/// bounded queue and a park.
-///
-/// Payload is bounded by the fast registers: this is the rendezvous path, and
-/// anything larger travels through the transfer window as it does today.
-pub fn native_send(slot: u32, payload: &[u8]) -> i64 {
-    if payload.len() > wire::FAST_REGISTERS * core::mem::size_of::<Word>() {
-        return ERR_INVALID_ARG;
-    }
-    let endpoint = match native_endpoint(slot) {
-        Ok(endpoint) => endpoint,
-        Err(error) => return error,
-    };
-    let mut mrs = [0 as Word; wire::FAST_REGISTERS];
-    for (index, chunk) in payload.chunks(core::mem::size_of::<Word>()).enumerate() {
-        let mut word = [0u8; core::mem::size_of::<Word>()];
-        word[..chunk.len()].copy_from_slice(chunk);
-        mrs[index] = Word::from_le_bytes(word);
-    }
-    let info = MessageInfoBuilder::default()
-        .label(payload.len() as Word)
-        .length(payload.len().div_ceil(core::mem::size_of::<Word>()))
-        .build();
-    if uses_ambient_buffer() {
-        endpoint.send_with_mrs(info, mrs);
-    } else {
-        // SAFETY: this thread's own buffer, borrowed for one invocation.
-        endpoint
-            .with(unsafe { thread_context() })
-            .send_with_mrs(info, mrs);
-    }
-    payload.len() as i64
+fn native_token(slot: u32) -> Result<u32, i64> {
+    NATIVE_TOKEN_BASE
+        .checked_add(slot)
+        .filter(|_| slot < NATIVE_REGION_SLOTS)
+        .ok_or(ERR_INVALID_ARG)
 }
 
-/// Receive from a channel's native seL4 Endpoint into `buf`.
+/// Send one bounded message over a declared native seL4 Endpoint.
 ///
-/// Blocking, unlike `recv`: the kernel parks the caller until a sender
-/// arrives, which is what makes the root's park/reply bookkeeping unnecessary.
-/// The length rides in the message label, since the register count only says
-/// how many words crossed.
-pub fn native_recv(slot: u32, buf: &mut [u8]) -> i64 {
+/// Logical capability slots are translated to root-minted token mirrors in the
+/// child's CSpace. The kernel carries at most one such real capability.
+pub fn send(slot: u32, payload: &[u8], caps: &[u32]) -> i64 {
+    if payload.len() > MAX_MSG || caps.len() > MAX_CAPS_PER_MSG {
+        return ERR_INVALID_ARG;
+    }
     let endpoint = match native_endpoint(slot) {
         Ok(endpoint) => endpoint,
         Err(error) => return error,
     };
-    let reply = if uses_ambient_buffer() {
-        endpoint.recv_with_mrs(())
-    } else {
-        // SAFETY: this thread's own buffer, borrowed for one invocation.
-        endpoint.with(unsafe { thread_context() }).recv_with_mrs(())
+    let mut kernel_caps = [0u32; MAX_CAPS_PER_MSG];
+    for (destination, logical) in kernel_caps.iter_mut().zip(caps) {
+        *destination = match native_token(*logical) {
+            Ok(token) => token,
+            Err(error) => return error,
+        };
+    }
+    with_thread_buffer(|ipc_buffer| {
+        stage_native_message(ipc_buffer, payload, &kernel_caps[..caps.len()])?;
+        send_staged_native(endpoint, ipc_buffer, payload.len(), caps.len());
+        Ok(ERR_SUCCESS)
+    })
+}
+
+/// Non-blocking receive from a declared native seL4 Endpoint.
+pub fn recv(slot: u32, buf: &mut [u8; MAX_MSG], cap_out: &mut [u64; MAX_CAPS_PER_MSG]) -> i64 {
+    receive_native(slot, buf, cap_out, false)
+}
+
+/// Blocking receive from a declared native seL4 Endpoint.
+pub fn recv_blocking(
+    slot: u32,
+    buf: &mut [u8; MAX_MSG],
+    cap_out: &mut [u64; MAX_CAPS_PER_MSG],
+) -> i64 {
+    receive_native(slot, buf, cap_out, true)
+}
+
+fn receive_native(
+    slot: u32,
+    buf: &mut [u8; MAX_MSG],
+    cap_out: &mut [u64; MAX_CAPS_PER_MSG],
+    blocking: bool,
+) -> i64 {
+    let endpoint = match native_endpoint(slot) {
+        Ok(endpoint) => endpoint,
+        Err(error) => return error,
     };
-    let length = reply.info.label() as usize;
-    if length > buf.len()
-        || length > reply.info.length() * core::mem::size_of::<Word>()
-        || length > wire::FAST_REGISTERS * core::mem::size_of::<Word>()
+    if RECEIVE_SLOT_LIVE
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
     {
+        return ERR_WOULDBLOCK;
+    }
+    with_thread_buffer(|ipc_buffer| {
+        clear_unnamed_slots(cap_out.as_mut_slice(), 0);
+        ipc_buffer.set_recv_slot(&native_receive_slot());
+        let (info, _) = if blocking {
+            endpoint.with(&mut *ipc_buffer).recv(())
+        } else {
+            endpoint.with(&mut *ipc_buffer).nb_recv(())
+        };
+        // An empty `nb_recv` is identified by carrying no words and no
+        // capabilities. The label is *not* part of the test: seL4 leaves MR0
+        // undisturbed when nothing was received, so a stale value from this
+        // thread's previous message shows up as a nonzero label — which the
+        // shape check below then rejects as a malformed 573-byte payload
+        // instead of the "nothing there" it is. Every real message carries at
+        // least one word or one capability, so this cannot swallow one.
+        if !blocking && info.length() == 0 && info.extra_caps() == 0 {
+            RECEIVE_SLOT_LIVE.store(false, Ordering::Release);
+            return Ok(ERR_WOULDBLOCK);
+        }
+        let extra_caps = info.extra_caps();
+        let length = match collect_native_message(ipc_buffer, info, buf) {
+            Ok(length) => length,
+            Err(error) => {
+                RECEIVE_SLOT_LIVE.store(false, Ordering::Release);
+                return Err(error);
+            }
+        };
+        if extra_caps == 0 {
+            RECEIVE_SLOT_LIVE.store(false, Ordering::Release);
+            return Ok(length);
+        }
+        let destination_slot = (NATIVE_TRANSFER_ENDPOINT_BASE..NATIVE_ENDPOINT_BASE)
+            .find(|slot| {
+                let probe = cap::CNode::from_bits(CHILD_CNODE_SLOT as u64)
+                    .absolute_cptr_from_bits_with_depth(
+                        *slot as sel4::CPtrBits,
+                        CHILD_CNODE_SIZE_BITS,
+                    )
+                    .with(&mut *ipc_buffer);
+                let source = native_receive_slot();
+                probe.move_(&source).is_ok()
+            })
+            .ok_or(super::ERR_BAD_CAP)?;
+        RECEIVE_SLOT_LIVE.store(false, Ordering::Release);
+        cap_out[0] = u64::from(DIRECT_ENDPOINT_HANDLE | destination_slot);
+        sel4::debug_println!(
+            "SLIME_GRAPH capability imported task=1 id=1 kind=endpoint rights=0x1 retain=1"
+        );
+        Ok(length)
+    })
+}
+
+/// Compatibility names used by the B48 two-thread rendezvous probe.
+pub fn native_send(slot: u32, payload: &[u8]) -> i64 {
+    send(slot, payload, &[])
+}
+
+pub fn native_recv(slot: u32, buf: &mut [u8]) -> i64 {
+    let Some(target) = buf.get_mut(..MAX_MSG.min(buf.len())) else {
+        return ERR_INVALID_ARG;
+    };
+    let mut message = [0u8; MAX_MSG];
+    let mut caps = [0u64; MAX_CAPS_PER_MSG];
+    let result = recv_blocking(slot, &mut message, &mut caps);
+    if result < 0 {
+        return result;
+    }
+    let length = result as usize;
+    if length > target.len() {
         return ERR_INVALID_ARG;
     }
-    for (index, chunk) in buf[..length]
-        .chunks_mut(core::mem::size_of::<Word>())
-        .enumerate()
-    {
-        let word = reply.msg[index].to_le_bytes();
-        chunk.copy_from_slice(&word[..chunk.len()]);
+    if caps[0] != 0 {
+        let _ = cap_drop(caps[0] as u32);
+        return ERR_INVALID_ARG;
     }
-    length as i64
+    target[..length].copy_from_slice(&message[..length]);
+    result
+}
+
+fn with_thread_buffer(f: impl FnOnce(&mut sel4::IpcBuffer) -> Result<i64, i64>) -> i64 {
+    if uses_ambient_buffer() {
+        sel4::with_ipc_buffer_mut(|ipc_buffer| f(ipc_buffer)).unwrap_or_else(|error| error)
+    } else {
+        // SAFETY: this thread's own buffer, borrowed for one invocation.
+        f(unsafe { thread_context() }).unwrap_or_else(|error| error)
+    }
+}
+
+fn stage_native_message(
+    ipc_buffer: &mut sel4::IpcBuffer,
+    payload: &[u8],
+    caps: &[u32],
+) -> Result<(), i64> {
+    let words = payload.len().div_ceil(core::mem::size_of::<Word>());
+    let Some(registers) = ipc_buffer.msg_regs_mut().get_mut(..words) else {
+        return Err(ERR_INVALID_ARG);
+    };
+    registers.fill(0);
+    let bytes = unsafe {
+        core::slice::from_raw_parts_mut(
+            registers.as_mut_ptr().cast::<u8>(),
+            core::mem::size_of_val(registers),
+        )
+    };
+    bytes[..payload.len()].copy_from_slice(payload);
+    let cap_words = ipc_buffer.caps_or_badges_mut();
+    cap_words.fill(0);
+    for (destination, source) in cap_words.iter_mut().zip(caps.iter()) {
+        *destination = Word::from(*source);
+    }
+    Ok(())
+}
+
+fn send_staged_native(
+    endpoint: cap::Endpoint,
+    ipc_buffer: &mut sel4::IpcBuffer,
+    payload_len: usize,
+    cap_count: usize,
+) {
+    let info = MessageInfoBuilder::default()
+        .label(payload_len as Word)
+        .length(payload_len.div_ceil(core::mem::size_of::<Word>()))
+        .extra_caps(cap_count)
+        .build();
+    endpoint.with(ipc_buffer).send(info);
+}
+
+fn collect_native_message(
+    ipc_buffer: &sel4::IpcBuffer,
+    info: MessageInfo,
+    buf: &mut [u8; MAX_MSG],
+) -> Result<i64, i64> {
+    let length = info.label() as usize;
+    if length > MAX_MSG
+        || length > buf.len()
+        || length > info.length() * core::mem::size_of::<Word>()
+        || info.extra_caps() > MAX_CAPS_PER_MSG
+    {
+        sel4::debug_println!(
+            "SLIME_RT recv shape label={} words={} caps={}",
+            length,
+            info.length(),
+            info.extra_caps()
+        );
+        return Err(ERR_INVALID_ARG);
+    }
+    let bytes = ipc_buffer.msg_bytes();
+    buf[..length].copy_from_slice(&bytes[..length]);
+    Ok(length as i64)
+}
+
+/// True while a receive is in progress or slot 127 contains an unimported
+/// ticket. The receive slot is process-wide even when IPC buffers are per-thread.
+static RECEIVE_SLOT_LIVE: AtomicBool = AtomicBool::new(false);
+
+fn native_receive_slot() -> sel4::AbsoluteCPtr {
+    cap::CNode::from_bits(CHILD_CNODE_SLOT as u64).absolute_cptr_from_bits_with_depth(
+        NATIVE_RECEIVE_SLOT as sel4::CPtrBits,
+        CHILD_CNODE_SIZE_BITS,
+    )
 }
 
 /// This thread's IPC buffer, as an explicit invocation context (B47).
@@ -240,33 +391,26 @@ fn window() -> Result<(*mut u8, usize), i64> {
     Ok((WINDOW_BASE[thread].load(Ordering::Acquire) as *mut u8, len))
 }
 
-fn transfer_window_bind(buffer_slot: u32, base: u64, len: usize) -> i64 {
+fn transfer_window_bind(base: u64, len: usize) -> i64 {
     if base == 0 || len < MIN_TRANSFER_WINDOW {
         return ERR_INVALID_ARG;
     }
-    let result = result_of(
-        SYS_TRANSFER_WINDOW_BIND,
-        &[buffer_slot as Word, base as Word, len as Word],
-    );
-    if result == ERR_SUCCESS {
-        let thread = crate::runtime::thread_index();
-        WINDOW_BASE[thread].store(base, Ordering::Release);
-        WINDOW_LEN[thread].store(len, Ordering::Release);
+    let thread = crate::runtime::thread_index();
+    if WINDOW_LEN[thread]
+        .compare_exchange(0, len, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return ERR_INVALID_ARG;
     }
-    result
+    WINDOW_BASE[thread].store(base, Ordering::Release);
+    ERR_SUCCESS
 }
 
-/// Slot value naming the startup window the root mapped rather than a
-/// component-created shared buffer. A component's own buffers are named by
-/// CSpace slots the generation granted, and slot 0 is null in every child
-/// CSpace, so it cannot collide with one.
-pub const STARTUP_WINDOW_SLOT: u32 = 0;
-
-/// Declare the root-mapped startup window at `base` as this component's
-/// transfer window. Called once from [`crate::runtime::start`] before component
-/// code runs; there is intentionally no public rebinding API.
+/// Record the startup window already mapped by `slime-root` for this thread.
+/// The address is derived from the linked image end and hardware thread index;
+/// it is not caller-controlled authority, and there is no public rebinding API.
 pub(crate) fn bind_startup_window(base: usize) -> i64 {
-    transfer_window_bind(STARTUP_WINDOW_SLOT, base as u64, MIN_TRANSFER_WINDOW)
+    transfer_window_bind(base as u64, MIN_TRANSFER_WINDOW)
 }
 
 /// Copies `bytes` and `caps` into the transfer window, returning the transfer
@@ -279,7 +423,12 @@ fn stage(bytes: &[u8], caps: &[u32]) -> Result<u64, i64> {
         return Err(ERR_INVALID_ARG);
     }
     if fits_inline(bytes.len(), caps.len()) {
-        return Ok(descriptor(bytes.len(), 0, FORM_INLINE));
+        return Ok(descriptor(
+            bytes.len(),
+            0,
+            FORM_INLINE,
+            crate::runtime::thread_index(),
+        ));
     }
     let (base, capacity) = window()?;
     if frame_len(bytes.len(), caps.len()) > capacity {
@@ -294,7 +443,12 @@ fn stage(bytes: &[u8], caps: &[u32]) -> Result<u64, i64> {
             slots.add(index).write(u64::from(*slot));
         }
     }
-    Ok(descriptor(bytes.len(), caps.len(), FORM_WINDOW))
+    Ok(descriptor(
+        bytes.len(),
+        caps.len(),
+        FORM_WINDOW,
+        crate::runtime::thread_index(),
+    ))
 }
 
 /// Reserves window space for a reply the root service writes back, returning
@@ -304,7 +458,12 @@ fn reserve(bytes: usize, caps: usize) -> Result<u64, i64> {
     if frame_len(bytes, caps) > capacity {
         return Err(ERR_INVALID_ARG);
     }
-    Ok(descriptor(bytes, caps, FORM_WINDOW))
+    Ok(descriptor(
+        bytes,
+        caps,
+        FORM_WINDOW,
+        crate::runtime::thread_index(),
+    ))
 }
 
 /// Copies a reply frame out of the transfer window. `reply` is the descriptor
@@ -421,57 +580,48 @@ pub fn yield_now() {
     sel4::r#yield();
 }
 
-pub fn wait(sources: &[WaitSource]) {
-    let count = sources.len().min(MAX_WAIT_SOURCES);
-    let mut encoded = [0u8; MAX_WAIT_SOURCES * WAIT_RECORD_BYTES];
-    for (index, source) in sources.iter().take(count).enumerate() {
-        let start = index * WAIT_RECORD_BYTES;
-        encoded[start..start + WAIT_RECORD_BYTES]
-            .copy_from_slice(&source.descriptor().to_le_bytes());
-    }
-    let bytes = &encoded[..count * WAIT_RECORD_BYTES];
-    let Ok(transfer) = stage(bytes, &[]) else {
-        // The source set cannot cross intact without a window, and `wait`
-        // returns `()` so there is no error to hand back. The diagnostic must
-        // itself remain inline: this arm exists precisely because no usable
-        // transfer window is available.
-        early_debug_write(b"[rt] wait source set could not be staged\n");
-        yield_now();
-        return;
+pub fn notification_signal(slot: u32) -> i64 {
+    let notification = match native_notification(slot) {
+        Ok(notification) => notification,
+        Err(error) => return error,
     };
-    let (operands, used) = payload_operands(count as u64, transfer, bytes);
-    let _ = call(SYS_WAIT, &operands[..used]);
+    if uses_ambient_buffer() {
+        notification.signal();
+    } else {
+        // SAFETY: this thread's own buffer, borrowed for one invocation.
+        notification.with(unsafe { thread_context() }).signal();
+    }
+    ERR_SUCCESS
 }
 
-pub fn send(slot: u32, payload: &[u8], caps: &[u32]) -> i64 {
-    if payload.len() > MAX_MSG || caps.len() > MAX_CAPS_PER_MSG {
-        return ERR_INVALID_ARG;
-    }
-    let transfer = match stage(payload, caps) {
-        Ok(transfer) => transfer,
-        Err(error) => return error,
+pub fn notification_wait(slot: u32) -> Result<u64, i64> {
+    let notification = native_notification(slot)?;
+    let (_, badge) = if uses_ambient_buffer() {
+        notification.wait()
+    } else {
+        // SAFETY: this thread's own buffer, borrowed for one invocation.
+        notification.with(unsafe { thread_context() }).wait()
     };
-    let (operands, used) = payload_operands(slot as u64, transfer, payload);
-    result_of(SYS_SEND, &operands[..used])
+    Ok(badge)
 }
 
-pub fn recv(slot: u32, buf: &mut [u8; MAX_MSG], cap_out: &mut [u64; MAX_CAPS_PER_MSG]) -> i64 {
-    let transfer = match reserve(MAX_MSG, MAX_CAPS_PER_MSG) {
-        Ok(transfer) => transfer,
-        Err(error) => return error,
+pub fn notification_poll(slot: u32) -> Result<Option<u64>, i64> {
+    let notification = native_notification(slot)?;
+    let (_, badge) = if uses_ambient_buffer() {
+        notification.poll()
+    } else {
+        // SAFETY: this thread's own buffer, borrowed for one invocation.
+        notification.with(unsafe { thread_context() }).poll()
     };
-    let (result, returned) = match outcome(&call(SYS_RECV, &[slot as Word, transfer as Word])) {
-        Ok(pair) => pair,
-        Err(error) => return error,
-    };
-    if result < 0 {
-        return result;
-    }
-    match collect(returned, buf.as_mut_slice(), Some(cap_out)) {
-        Ok(len) if len == result as usize => result,
-        Ok(_) => ERR_INVALID_ARG,
-        Err(error) => error,
-    }
+    Ok((badge != 0).then_some(badge))
+}
+
+fn native_notification(slot: u32) -> Result<cap::Notification, i64> {
+    let absolute = NATIVE_NOTIFICATION_BASE
+        .checked_add(slot)
+        .filter(|_| slot < NATIVE_REGION_SLOTS)
+        .ok_or(ERR_INVALID_ARG)?;
+    Ok(cap::Notification::from_bits(absolute as u64))
 }
 
 pub fn exit(status: i64) -> ! {
@@ -504,22 +654,115 @@ pub fn spawn(executable_slot: u32, grants: &[SpawnGrant]) -> (i64, u64) {
     pair_of(SYS_SPAWN, &operands[..used])
 }
 
-pub fn endpoint_create(factory_slot: u32) -> (i64, u64) {
-    pair_of(SYS_ENDPOINT_CREATE, &[factory_slot as Word])
-}
-
-pub fn cap_transfer(endpoint_slot: u32, capability_slot: u32, descriptor: &[u8; 64]) -> i64 {
+/// Export one logical capability as a receiver-bound kernel ticket, then carry
+/// the opaque typed descriptor and that real ticket atomically over the native
+/// endpoint. Root authenticates kind and rights independently of the bytes.
+pub fn capability_delegate(
+    endpoint_slot: u32,
+    capability_slot: u32,
+    disposition: CapabilityDisposition,
+    expected_kind: u32,
+    rights_mask: u64,
+    descriptor: &[u8; 64],
+) -> i64 {
+    let endpoint = match native_endpoint(endpoint_slot) {
+        Ok(endpoint) => endpoint,
+        Err(error) => return error,
+    };
+    if rights_mask == 0 {
+        return ERR_INVALID_ARG;
+    }
+    // Prove the descriptor fits before export can reserve or consume logical
+    // authority. The root service call carries no extra capability: it returns
+    // the newly minted ticket CPtr, which is the sole cap delivered to the peer.
+    if descriptor.len() > MAX_MSG {
+        return ERR_INVALID_ARG;
+    }
     let transfer = match stage(descriptor.as_slice(), &[]) {
         Ok(transfer) => transfer,
         Err(error) => return error,
     };
-    result_of(
-        SYS_CAP_TRANSFER,
+    let disposition_word = match disposition {
+        CapabilityDisposition::Move => 0u64,
+        CapabilityDisposition::Retain => 1u64,
+    };
+    let metadata = u64::from(expected_kind) | (disposition_word << 32);
+    let (export_id_result, _) = pair_of(
+        SYS_CAPABILITY_EXPORT,
         &[
             slot_pair(endpoint_slot, capability_slot) as Word,
+            metadata as Word,
             transfer as Word,
+            rights_mask as Word,
         ],
-    )
+    );
+    if export_id_result < 0 {
+        return export_id_result;
+    }
+    let export_id = match u32::try_from(export_id_result) {
+        Ok(id) => id,
+        Err(_) => return ERR_INVALID_ARG,
+    };
+    // A native Endpoint crosses as a real kernel capability, so the message
+    // carries the root-minted ticket. Every other kind is a root-owned logical
+    // capability with no kernel object to hand over: the descriptor travels
+    // alone and the receiver claims the export with `capability_import`.
+    //
+    // The descriptor is sent verbatim. An earlier version stamped the export
+    // id over bytes 8..12 -- the descriptor's `status` -- which every receiver
+    // reads to tell a grant from a denial, so a successful delegation arrived
+    // looking refused.
+    let endpoint_kind = expected_kind == 1;
+    let ticket_slot = match NATIVE_TOKEN_BASE.checked_add(capability_slot) {
+        Some(slot) if capability_slot < NATIVE_REGION_SLOTS => slot,
+        _ => return ERR_INVALID_ARG,
+    };
+    if !endpoint_kind {
+        // Finalize first. A logical export is claimed by `capability_import`,
+        // and the send below is a rendezvous: the receiver may run the instant
+        // it completes, so an export still unfinalized at that point would be
+        // refused. An endpoint export has no such race -- its authority is the
+        // ticket in the message -- so it keeps the cancel-on-failure order
+        // below.
+        let finalized = result_of(SYS_CAPABILITY_EXPORT_FINALIZE, &[export_id as Word]);
+        if finalized != ERR_SUCCESS {
+            let _ = result_of(SYS_CAPABILITY_EXPORT_CANCEL, &[export_id as Word]);
+            return finalized;
+        }
+    }
+    let sent = with_thread_buffer(|ipc_buffer| {
+        let caps: &[u32] = if endpoint_kind { &[ticket_slot] } else { &[] };
+        stage_native_message(ipc_buffer, descriptor.as_slice(), caps)?;
+        send_staged_native(endpoint, ipc_buffer, descriptor.len(), caps.len());
+        Ok(ERR_SUCCESS)
+    });
+    if !endpoint_kind {
+        return sent;
+    }
+    if sent != ERR_SUCCESS {
+        let cancelled = result_of(SYS_CAPABILITY_EXPORT_CANCEL, &[export_id as Word]);
+        return if cancelled == ERR_SUCCESS {
+            sent
+        } else {
+            cancelled
+        };
+    }
+    result_of(SYS_CAPABILITY_EXPORT_FINALIZE, &[export_id as Word])
+}
+
+/// Claim the oldest root-side export addressed to this component, installing
+/// it into a free capability slot and returning that slot.
+///
+/// A native Endpoint needs none of this: it arrives as a real kernel
+/// capability in the message. Every other kind is a root-owned logical
+/// capability with no kernel object the peer could hold, so the descriptor
+/// arrives alone and this is how the authority behind it is taken up.
+pub fn capability_import() -> Result<u32, i64> {
+    let slot = result_of(SYS_CAPABILITY_IMPORT, &[0]);
+    if slot < 0 {
+        return Err(slot);
+    }
+    u32::try_from(slot).map_err(|_| ERR_INVALID_ARG)
 }
 
 pub fn shared_buffer_create(factory_slot: u32, pages: usize, writable: bool) -> (i64, u64) {
@@ -561,7 +804,12 @@ pub fn shared_buffer_loan(
     receiver_slot: u32,
     offset: u64,
     length: u64,
+    writable: bool,
 ) -> (i64, u64) {
+    // Bit 63 of the length word requests a writable loan. Lengths are bounded
+    // by the region, so the high bit is free; the root still refuses unless
+    // the lender holds write authority on an unsealed region.
+    let length = if writable { length | (1 << 63) } else { length };
     pair_of(
         SYS_SHARED_BUFFER_LOAN,
         &[
@@ -836,7 +1084,7 @@ pub fn unhealthy() -> ! {
 /// staging failures use this path because every chunk fits in MR2/MR3.
 pub(crate) fn early_debug_write(bytes: &[u8]) {
     for chunk in bytes.chunks(wire::INLINE_BYTES) {
-        let transfer = descriptor(chunk.len(), 0, FORM_INLINE);
+        let transfer = descriptor(chunk.len(), 0, FORM_INLINE, crate::runtime::thread_index());
         let (operands, used) = payload_operands(0, transfer, chunk);
         // Inline chunks on the console endpoint, same as `debug_write`: this
         // path exists for output before a transfer window is bound, so it

@@ -11,11 +11,11 @@ use sel4_transport as transport;
 mod sel4_transport;
 mod wire;
 
-pub use sel4_transport::ROOT_SERVICE_SLOT;
+pub use sel4_transport::{NATIVE_ENDPOINT_BASE, ROOT_SERVICE_SLOT};
 
-/// Declare the root-mapped startup transfer window. Called once by
-/// [`crate::runtime::start`], before the component body runs, so that `recv`,
-/// `spawn` and `wait` have somewhere to stage payloads.
+/// Record the root-mapped startup transfer window locally. The root created
+/// and authenticated this mapping while constructing the thread, so no syscall
+/// is needed to re-declare it.
 pub(crate) fn bind_startup_window(base: usize) -> i64 {
     sel4_transport::bind_startup_window(base)
 }
@@ -23,17 +23,13 @@ pub(crate) fn bind_startup_window(base: usize) -> i64 {
 pub(crate) fn early_debug_write(bytes: &[u8]) {
     sel4_transport::early_debug_write(bytes)
 }
-const SYS_SEND: u64 = 1;
-const SYS_RECV: u64 = 2;
 const SYS_EXIT: u64 = 3;
 const SYS_SPAWN: u64 = 4;
 const SYS_UNHEALTHY: u64 = 9;
-const SYS_ENDPOINT_CREATE: u64 = 11;
 const SYS_SUPERVISION_STATUS: u64 = 12;
 const SYS_CAP_DROP: u64 = 13;
 const SYS_DIRECTORY_DERIVE: u64 = 15;
 
-pub const SYS_WAIT: u64 = 20;
 const SYS_SHARED_BUFFER_CREATE: u64 = 21;
 const SYS_SHARED_BUFFER_RELEASE: u64 = 22;
 const SYS_SHARED_BUFFER_MAP: u64 = 23;
@@ -43,10 +39,16 @@ const SYS_SHARED_BUFFER_LOAN: u64 = 26;
 const SYS_SHARED_BUFFER_LOAN_MAP: u64 = 27;
 const SYS_SHARED_BUFFER_RETURN: u64 = 28;
 const SYS_SHARED_BUFFER_REVOKE: u64 = 29;
-const SYS_CAP_TRANSFER: u64 = 30;
-const SYS_TRANSFER_WINDOW_BIND: u64 = 31;
 /// B25: derive a second supervision handle naming a task already supervised.
 const SYS_SUPERVISION_DERIVE: u64 = 32;
+/// Export a narrowed logical capability as a receiver-bound kernel ticket.
+const SYS_CAPABILITY_EXPORT: u64 = 33;
+/// Claim a receiver-bound export the root recorded, into a free slot.
+const SYS_CAPABILITY_IMPORT: u64 = 34;
+/// Cancel an export which did not reach its carrier and restore moved authority.
+const SYS_CAPABILITY_EXPORT_CANCEL: u64 = 35;
+/// Release the sender ticket after delivery while keeping the export importable.
+const SYS_CAPABILITY_EXPORT_FINALIZE: u64 = 36;
 
 pub const ERR_SUCCESS: i64 = 0;
 pub const ERR_BAD_CAP: i64 = -1;
@@ -56,7 +58,14 @@ pub const ERR_INVALID_ARG: i64 = -4;
 pub const ERR_OUT_OF_MEMORY: i64 = -5;
 
 pub const MAX_MSG: usize = 64;
-pub const MAX_CAPS_PER_MSG: usize = 4;
+pub const MAX_CAPS_PER_MSG: usize = 1;
+
+/// Whether delegation consumes the source logical capability or retains it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CapabilityDisposition {
+    Move,
+    Retain,
+}
 
 /// Size of the root-mapped startup transfer window: enough for the largest
 /// single frame any operation stages.
@@ -118,66 +127,45 @@ pub fn yield_now() {
     transport::yield_now();
 }
 
-/// Maximum number of sources a single [`wait`] call may register.
-pub const MAX_WAIT_SOURCES: usize = 9;
-
-const WAIT_KIND_ENDPOINT: u64 = 0;
-const WAIT_KIND_INPUT: u64 = 1;
-const WAIT_KIND_SUPERVISION: u64 = 2;
-const WAIT_KIND_SEND_CAPACITY: u64 = 3;
-
-/// One source to block on in [`wait`]. Each maps to a non-blocking poll ABI:
-/// after `wait` returns, re-poll the same source(s) to consume the event.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum WaitSource {
-    /// Endpoint capability slot: woken by a peer `send` or peer death.
-    Endpoint(u32),
-    /// Endpoint capability slot: woken when the peer receive queue has room or
-    /// the peer dies.
-    SendCapacity(u32),
-    /// Keyboard input: woken by a key event or scripted byte.
-    Input,
-    /// Supervision capability slot: woken when the supervised child exits.
-    Supervision(u32),
-}
-
-impl WaitSource {
-    fn descriptor(self) -> u64 {
-        match self {
-            WaitSource::Endpoint(slot) => WAIT_KIND_ENDPOINT << 32 | slot as u64,
-            WaitSource::SendCapacity(slot) => WAIT_KIND_SEND_CAPACITY << 32 | slot as u64,
-            WaitSource::Input => WAIT_KIND_INPUT << 32,
-            WaitSource::Supervision(slot) => WAIT_KIND_SUPERVISION << 32 | slot as u64,
-        }
-    }
-}
-
-/// Blocks the caller until one of `sources` (at most [`MAX_WAIT_SOURCES`])
-/// becomes ready, consuming no CPU while parked. This is the blocking
-/// counterpart to a busy `yield_now` retry loop: sweep every source with its
-/// non-blocking call first, and only call `wait` once all returned
-/// `ERR_WOULDBLOCK`/`Ok(None)`. Spurious wakeups are possible, so the caller
-/// must re-poll after `wait` returns rather than assume readiness.
-pub fn wait(sources: &[WaitSource]) {
-    debug_assert!(
-        sources.len() <= MAX_WAIT_SOURCES,
-        "wait() drops sources beyond MAX_WAIT_SOURCES"
-    );
-    transport::wait(sources);
-}
-
 /// Sends `payload` (at most [`MAX_MSG`] bytes) over the endpoint in
-/// capability slot `slot`, transferring the capabilities named in `caps`
-/// (at most [`MAX_CAPS_PER_MSG`]).
+/// capability slot `slot`, transferring the logical capabilities named in
+/// `caps` (at most [`MAX_CAPS_PER_MSG`]). Each logical slot names its
+/// root-minted kernel token mirror for the native Endpoint send.
 pub fn send(slot: u32, payload: &[u8], caps: &[u32]) -> i64 {
     transport::send(slot, payload, caps)
 }
 
 /// Receives into `buf` (must be [`MAX_MSG`] bytes) and `cap_out` (must be
 /// [`MAX_CAPS_PER_MSG`] entries) from the endpoint in capability slot `slot`.
+/// A received kernel ticket lands in fixed CSpace slot 127, is authenticated
+/// through that ticket endpoint, and is reported as the imported logical slot.
 /// Returns the received byte count, or a negative error.
 pub fn recv(slot: u32, buf: &mut [u8; MAX_MSG], cap_out: &mut [u64; MAX_CAPS_PER_MSG]) -> i64 {
     transport::recv(slot, buf, cap_out)
+}
+
+/// Blocking receive from a declared native endpoint.
+pub fn recv_blocking(
+    slot: u32,
+    buf: &mut [u8; MAX_MSG],
+    cap_out: &mut [u64; MAX_CAPS_PER_MSG],
+) -> i64 {
+    transport::recv_blocking(slot, buf, cap_out)
+}
+
+/// Signal the notification paired with one declared endpoint edge.
+pub fn notification_signal(slot: u32) -> i64 {
+    transport::notification_signal(slot)
+}
+
+/// Wait for the notification paired with one declared endpoint edge.
+pub fn notification_wait(slot: u32) -> Result<u64, i64> {
+    transport::notification_wait(slot)
+}
+
+/// Poll the notification paired with one declared endpoint edge.
+pub fn notification_poll(slot: u32) -> Result<Option<u64>, i64> {
+    transport::notification_poll(slot)
 }
 
 /// Send over a channel's *native* seL4 Endpoint, with the root not in the path
@@ -221,31 +209,36 @@ pub fn spawn(executable_slot: u32, grants: &[SpawnGrant]) -> Result<Spawned, i64
     }
 }
 
-/// Mint a bounded channel pair through an `EndpointFactory` capability.
-pub fn endpoint_create(factory_slot: u32) -> Result<(u32, u32), i64> {
-    let (first, second) = transport::endpoint_create(factory_slot);
-    if first < 0 {
-        Err(first)
-    } else {
-        Ok((first as u32, second as u32))
-    }
+/// Narrow and transfer one logical capability over a declared native endpoint.
+/// The opaque 64-byte typed descriptor is carried atomically with the real
+/// kernel ticket. Root authenticates `expected_kind` and attenuates to the
+/// nonzero `rights_mask`; neither value is inferred from application bytes.
+pub fn capability_delegate(
+    endpoint_slot: u32,
+    capability_slot: u32,
+    disposition: CapabilityDisposition,
+    expected_kind: u32,
+    rights_mask: Rights,
+    descriptor: &[u8; 64],
+) -> i64 {
+    transport::capability_delegate(
+        endpoint_slot,
+        capability_slot,
+        disposition,
+        expected_kind,
+        rights_mask,
+        descriptor,
+    )
 }
 
-/// Move the capability in `capability_slot` to the peer of the endpoint in
-/// `endpoint_slot`, with its rights narrowed to the mask the 64-byte
-/// `descriptor` declares (C8.3).
+/// Claim the oldest root-recorded export addressed to this component.
 ///
-/// Unlike [`send`]'s capability attachment, which moves a capability at its
-/// full held rights, this is a bounded narrow-on-transfer move: the source
-/// needs `RIGHT_TRANSFER`, the destination mask must be a subset of the source
-/// rights and of the object's meaningful rights, and the destination loses
-/// `RIGHT_TRANSFER` unless the descriptor explicitly retains it. On success the
-/// source capability is consumed; on failure it is left untouched.
-///
-/// The descriptor crosses as the message payload, so the receiver parses
-/// exactly the bytes the mechanism owner enforced.
-pub fn cap_transfer(endpoint_slot: u32, capability_slot: u32, descriptor: &[u8; 64]) -> i64 {
-    transport::cap_transfer(endpoint_slot, capability_slot, descriptor)
+/// The counterpart to [`capability_delegate`] for every object kind that is
+/// not a native Endpoint: those have no kernel object to travel in the
+/// message, so the descriptor arrives alone and this takes up the authority
+/// behind it. Returns the slot the capability landed in.
+pub fn capability_import() -> Result<u32, i64> {
+    transport::capability_import()
 }
 
 /// A shared buffer allocated through a `SharedBufferFactory` capability: the
@@ -310,18 +303,24 @@ pub struct BufferLoan {
     pub id: u64,
 }
 
-/// Loan an exact sealed subrange to the task named by a `RIGHT_SUPERVISE`
-/// capability (C7.5). The source needs `RIGHT_BUFFER_LOAN` and must already be
-/// irreversibly sealed; the loan is read-only, single-return, and charged
-/// against the lender's `loan_count` quota. The receiver is named through a
-/// capability, never an ambient task id.
+/// Loan an exact subrange to the task named by a `RIGHT_SUPERVISE` capability
+/// (C7.5). The source needs `RIGHT_BUFFER_LOAN`; the loan is single-return and
+/// charged against the lender's `loan_count` quota. The receiver is named
+/// through a capability, never an ambient task id.
+///
+/// `writable` decides what the receiver may map. A C7.6 sample loan is
+/// read-only over a sealed region — the receiver reads bytes the lender
+/// finished writing. A B46 stream ring is writable over an unsealed one, and
+/// requires the lender to hold write authority it is handing on.
 pub fn shared_buffer_loan(
     buffer_slot: u32,
     receiver_slot: u32,
     offset: u64,
     length: u64,
+    writable: bool,
 ) -> Result<BufferLoan, i64> {
-    let (slot, id) = transport::shared_buffer_loan(buffer_slot, receiver_slot, offset, length);
+    let (slot, id) =
+        transport::shared_buffer_loan(buffer_slot, receiver_slot, offset, length, writable);
     if slot < 0 {
         Err(slot)
     } else {
@@ -332,9 +331,10 @@ pub fn shared_buffer_loan(
     }
 }
 
-/// Map a read-only subrange relative to a loan this task received. Offsets are
-/// relative to the loaned region, so the receiver cannot address bytes outside
-/// it even by naming the underlying buffer.
+/// Map a subrange relative to a loan this task received, at the protection the
+/// loan was minted with. Offsets are relative to the loaned region, so the
+/// receiver cannot address bytes outside it even by naming the underlying
+/// buffer.
 pub fn shared_buffer_loan_map(loan_slot: u32, base: u64, offset: u64, length: u64) -> i64 {
     transport::shared_buffer_loan_map(loan_slot, base, offset, length)
 }
