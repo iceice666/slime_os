@@ -29,17 +29,15 @@ however long it runs.
 ### `supervision-child` — the loop child, and why it is new
 
 Thirty-five of these are created over the boot: the 33-iteration loop plus the
-two whose handles are held across it (one retained, one parked in transit). It writes one marker and
-returns, and it is the only component in the tree that takes **no channel**.
+two whose handles are held across it (one retained, one held by a native export
+ticket). It writes one marker and returns, and it is the only component in the
+tree that takes **no endpoint**.
 
 That is the whole reason it exists rather than reusing `sysinfo`. A child that
-reads a launch context needs a channel, and `ChannelTable` never reclaims
-either — `MAX_CHANNELS` is a *lifetime* bound of 32, recorded as
-[B22](../../../../roadmap/00-backlog.md). A channel-per-child loop would hit
-that bound before reaching the record bound this fixture exists to cross, and
-the gate would fail for a reason unrelated to what it tests. With this child the
-whole plane mints exactly **one** channel — the gate asserts `endpoints=1` — so
-B22 is avoided rather than merely deferred.
+reads a launch context needs an endpoint. A per-child endpoint loop would spend
+unrelated kernel objects while this fixture is intended to cross the bounded
+supervision-record lifetime. With this child, the only dynamic endpoint is the
+carrier used to export and later import the held supervision capability.
 
 The cost is stated plainly: this weakens the "no new component binary" property
 the other planes have. It does not touch the frozen oracle, which is `kernel/`

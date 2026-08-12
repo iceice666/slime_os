@@ -140,7 +140,7 @@ FAILURE_MARKERS: tuple[str, ...] = (
     r"\[init\] visibility plane fail: .*",
     r"SLIME_GRAPH spawn (?:failed|unwound|unwind incomplete) .*",
     r"SLIME_GRAPH channel (?:recall|rollback) failed .*",
-    r"SLIME_GRAPH capability transfer rolled back .*",
+    r"SLIME_GRAPH capability (?:export|import|cancel) (?:failed|refused) .*",
     r"SLIME_GRAPH debug write refused .*",
     r"<<seL4\(CPU 0\) \[decodeInvocation",
     r"Caught cap fault",

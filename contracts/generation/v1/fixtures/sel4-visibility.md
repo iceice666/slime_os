@@ -50,17 +50,19 @@ is the oracle's arrangement, kept rather than modernized: C8.10's `fabric-proxy`
 is a later, distinct identity, and porting it would be porting the unified plane
 rather than C8.8.
 
-## No executable is transferable, and no participant holds a route
+## Static endpoint authority
 
-Every `init-*` executable grant declares `transferable = false`, and each
-participant is spawned with exactly **one** capability: its own control endpoint.
+Every `init-*` executable grant declares `transferable = false`. Control and
+route endpoints are generation-declared objects installed through
+`mintedBindings`: the fabric holds slots 2–13, while each participant holds only
+the fixed control and route roles its authenticated descriptor describes.
 
-That is stronger than the call and operation planes need and is the point. The
-visibility broker mints every route half itself and hands out narrowed,
-non-delegable roles at provisioning time. So "the proxy relays only its declared
-route and direction" is a statement about what the broker transferred, not about
-what the parent withheld — and no supervision handle is ever delegated, because
-nothing here names a task.
+The proxy chain is therefore attenuated by construction. `fabric-intruder`
+holds receive/send/send/receive at slots 1–4 for upstream data, upstream ack,
+downstream data, and downstream ack; no direct fabric-to-subscriber telemetry
+binding exists. Diagnostics uses a separate service/publisher/subscriber triple,
+so proxy loss cannot remove that unrelated route. No endpoint factory or runtime
+capability handoff participates in visibility provisioning.
 
 ## The shared-buffer budget
 
@@ -81,8 +83,7 @@ counts the edges rather than the worker's park set, which is why it is 7 and not
 
 ## The boot layout
 
-`scripts/build/boot_layout.py`'s `SEL4_VISIBILITY_LAYOUT`, eight rows: the two
-factories, then the fabric and the five participants. Frozen as
-[`sel4-visibility.layout`](../../../boot-layout/v1/fixtures/sel4-visibility.layout)
-and checked by `just sel4_boot_layout_check`. No control channel appears: they
-are minted at runtime, so the table numbers only what the generation places.
+`scripts/build/boot_layout.py`'s `SEL4_VISIBILITY_LAYOUT` records the generation
+objects. Native controls and route endpoints are declared in the fixture and
+installed into the fixed slots named by `mintedBindings`; component startup does
+not construct or transfer endpoint pairs at runtime.

@@ -26,22 +26,17 @@ assert a new failure marker. B22's was already a bounded refusal --
 only be satisfied by the graph *succeeding* past 32, which is why the loop's
 completion marker is unreachable against the unfixed root.
 
-The three properties a sweep could plausibly break, in the order the transcript
-shows them:
+The three properties a reclaim crossing could plausibly break, in transcript
+order, are:
 
-1. the loop crosses the bound at all -- 33 pairs minted and released, plus the
-   four held across them (carrier, gate, in-flight, retained), for a boot total
-   of 37;
-2. a pair **held** across the crossing still carries afterwards (too aggressive);
-3. an end parked in `Transit` across the crossing still resolves to its queue.
+1. the loop crosses the historical live-object bound;
+2. a retained endpoint capability still carries afterwards;
+3. an endpoint exported before the crossing still imports with the same kind
+   and rights afterwards.
 
-(3) is the one a predicate over live capability tables alone would break: a
-capability mid-transfer is held by no table by construction, so a sweep reading
-only `GraphTables` frees its channel and the eventual receiver lands an endpoint
-naming a key the table no longer has -- B22's fix reintroducing B22, exactly the
-shape `Transit::holds_supervision` exists to prevent for B16. Removing
-`Transit::holds_endpoint` must fail this gate; that fault injection is recorded
-in the devlog entry.
+The third property is the native bridge invariant. The export ticket owns the
+reservation while no receiver CSpace contains the capability, and terminal
+accounting proves no reservation or ticket leaks after import or cancellation.
 
 A ninth image beside the eight before it, on the same rule: each gate boots the
 artifact it asserts about, so none invalidates another's evidence by being built
@@ -72,19 +67,8 @@ IMAGE_VARIANT = "crossing"
 
 BOOT_TIMEOUT_SECONDS = 180
 
-# `channel::MAX_CHANNELS`, read from the source rather than restated, so a
-# change to the constant either updates this gate's arithmetic or fails it
-# loudly instead of silently making the crossing vacuous.
-CHANNEL_SOURCE = ROOT / "slime-root" / "src" / "channel.rs"
-DRIVER_SOURCE = ROOT / "components" / "bins" / "src" / "bin" / "init.rs"
-
 REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     (
-        # Two components declared: `init` and `crossing-peer`, the purpose-built
-        # peer that holds a channel end in `Transit` across the whole loop.
-        # `grants=2` is the executable grant plus the endpoint factory; every
-        # channel this plane uses is minted at runtime through that factory
-        # rather than declared, so the sweep sees only holder state.
         "the root admitted the crossing graph",
         r"SLIME_ROOT generation admitted number=1 executables=2 instances=2 grants=\d+ "
         r"health=2 bootstrap=1",
@@ -94,72 +78,43 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"SLIME_ROOT graph admitted executables=2 instances=2 slimecm=0 elf=2 unrecognized=0",
     ),
     (
-        # Parked before the loop and collected only after it. From the transfer
-        # until the matching recv the end is held by no capability table at all.
-        "a channel end was parked in transit before the crossing",
-        r"\[init\] channel end parked in transit",
+        # Root records the export before returning success to the component.
+        "the root recorded an endpoint capability export",
+        r"SLIME_GRAPH capability exported task=\d+ id=\d+ kind=endpoint "
+        r"rights=0x[0-9a-f]+ retain=1",
     ),
     (
-        "a channel pair was retained across the crossing",
-        r"\[init\] channel pair retained",
+        # The receive installs the kernel capability before the receiver can use it.
+        "the root recorded the matching endpoint import",
+        r"SLIME_GRAPH capability imported task=\d+ id=\d+ kind=endpoint "
+        r"rights=0x[0-9a-f]+ retain=1",
     ),
     (
-        # The sweep fired at least once, and reported what it collected. This is
-        # the root's own line rather than the driver's, so a loop that somehow
-        # completed without the table ever filling could not match it.
-        "the root swept reclaimable channels when the table filled",
-        r"SLIME_GRAPH channels swept freed=[1-9]\d* live=\d+ minted=\d+",
+        "an endpoint capability was exported before the crossing",
+        r"\[init\] endpoint capability exported before crossing",
     ),
     (
-        # The whole point: 33 pairs, one more than MAX_CHANNELS. Against the
-        # unfixed root the 33rd `endpoint_create` is refused and the driver
-        # exits through `crossing plane fail`, which is a failure marker.
-        "the graph minted more channels over its lifetime than MAX_CHANNELS holds",
+        "the sender retained its narrowed endpoint authority across the crossing",
+        r"\[init\] sender retained delegated authority",
+    ),
+    (
+        "the exported endpoint still imported and carried after the crossing",
+        r"\[init\] imported endpoint survived crossing",
+    ),
+    (
+        "the graph sustained more exchanges than the retired channel lifetime bound",
         r"\[init\] channel lifetime bound crossed",
-    ),
-    (
-        "a pair held across the crossing still carried",
-        r"\[init\] retained pair carried after crossing",
-    ),
-    (
-        # Fault injection #2 targets exactly this: drop `Transit::holds_endpoint`
-        # from the sweep predicate and this marker disappears while every marker
-        # above it still passes.
-        "an end parked in transit across the crossing still resolved",
-        r"\[init\] transit end survived crossing",
     ),
     (
         "the crossing plane ran to completion",
         r"\[init\] crossing plane complete",
     ),
     (
-        # The root's *own* accounting, and the numerically strongest evidence in
-        # the gate: every marker above is a string the driver chose to print,
-        # whereas `minted` is counted by `ChannelTable::push` inside the root.
-        # B22's exit condition is "more than MAX_CHANNELS channels over its
-        # lifetime", and MAX_CHANNELS is 32, so the pattern admits 33..=99 only.
-        #
-        # `queues=0` and `parked=0` on the same line are teardown completeness,
-        # inherited from the sibling channel gates: no task is still blocked on
-        # a reply and no queue still believes it has a live peer.
-        #
-        # Deliberately *not* read as evidence the sweep was non-destructive.
-        # `live_queues()` counts queues whose peer is alive, and `mark_dead`
-        # clears that flag for every channel a dying task held — so `queues=0`
-        # is reached once every task has exited, whether or not anything was
-        # swept and whether or not a sweep freed something it should not have.
-        # What carries non-destructiveness is the pair of positive markers above
-        # (`retained pair carried`, `transit end survived`) and fault injection 2.
-        #
-        # Terminal, and asserted last for a second reason: `MAX_GRAPH_ITERATIONS`
-        # bounds the root's dispatch loop, and a graph that reached it would
-        # drain incompletely and never print this line, so iteration exhaustion
-        # cannot pass as success.
-        "the root's own accounting recorded more channels minted than MAX_CHANNELS",
-        # `(?!\d)` so the alternation really means 33..=99: unanchored,
-        # `minted=330` shares the `33` prefix and would match.
-        r"SLIME_GRAPH channels served sends=\d+ receives=\d+ parks=\d+ settled=\d+ "
-        r"parked=0 queues=0 replies=\d+ minted=(?:3[3-9]|[4-9]\d)(?!\d)",
+        # Native terminal accounting replaces queue/park/reply internals. Every
+        # export ticket must have landed, been cancelled, or been finalized.
+        "the root finalized every native capability export",
+        r"SLIME_GRAPH capabilities exports=[1-9]\d* imports=[1-9]\d* "
+        r"cancels=\d+ finalized=\d+ outstanding=0 tickets=0",
     ),
 )
 
@@ -172,12 +127,8 @@ FAILURE_MARKERS: tuple[str, ...] = (
     # The peer names its own cause before exiting, so a wrong-cause failure
     # cannot impersonate the transit-predicate one that init reports.
     r"\[crossing-peer\] fail: .*",
-    # This is the first seL4 gate whose driver calls `cap_transfer` on the
-    # critical path, so the root's own refusal marker matters here in a way it
-    # does not for the others. `[init] crossing plane fail: parking a channel
-    # end in transit` would catch the same failure, but this line names the
-    # cause the root saw rather than the symptom the driver reported.
-    r"SLIME_GRAPH capability transfer refused .*",
+    # Native capability bridge failures must be explicit and terminal.
+    r"SLIME_GRAPH capability (?:export|import|cancel) (?:failed|refused) .*",
     r"SLIME_GRAPH spawn unwound .*",
     r"SLIME_GRAPH spawn failed .*",
     r"SLIME_GRAPH spawn unwind incomplete .*",
@@ -380,103 +331,20 @@ def check_transcript(transcript: str) -> None:
                 fail(f"marker out of order: {description} ({pattern})")
             fail(f"missing marker: {description} ({pattern})")
         position = match.end()
-    check_loop_crosses_the_bound()
-    check_keys_are_monotonic()
-
-
-def source_constant(path: Path, pattern: str, description: str) -> int:
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as error:
-        fail(f"cannot read {path.relative_to(ROOT)}: {error}")
-    match = re.search(pattern, text)
-    if match is None:
-        fail(f"cannot find {description} in {path.relative_to(ROOT)}")
-    return int(match.group(1))
-
-
-def check_loop_crosses_the_bound() -> None:
-    """The loop must mint strictly more pairs than the table holds at once.
-
-    The transcript cannot show this: a loop of 32 would produce every marker
-    above except the root's own `minted=` count, and that count is a regex
-    written against today's constant. Reading both from source is what keeps the
-    *loop length* non-vacuous if either moves -- raising `MAX_CHANNELS` without
-    raising the loop would leave a gate that passes while proving nothing, which
-    is the exact failure mode a hardcoded number invites.
-
-    It says nothing about key derivation; `check_keys_are_monotonic` owns that.
-    """
-    bound = source_constant(
-        CHANNEL_SOURCE,
-        r"pub const MAX_CHANNELS: usize = (\d+);",
-        "`MAX_CHANNELS`",
+    exports = re.findall(
+        r"SLIME_GRAPH capability exported task=\d+ id=(\d+) kind=endpoint "
+        r"rights=(0x[0-9a-f]+) retain=1",
+        transcript,
     )
-    pairs = source_constant(
-        DRIVER_SOURCE,
-        r"const CHANNEL_LOOP_PAIRS: u32 = (\d+);",
-        "`CHANNEL_LOOP_PAIRS`",
+    imports = re.findall(
+        r"SLIME_GRAPH capability imported task=\d+ id=(\d+) kind=endpoint "
+        r"rights=(0x[0-9a-f]+) retain=1",
+        transcript,
     )
-    if pairs <= bound:
-        fail(
-            f"the crossing loop mints {pairs} pairs against MAX_CHANNELS={bound}; "
-            "it must exceed the bound or the gate proves nothing"
-        )
-    print(
-        f"source: the loop mints {pairs} pairs against MAX_CHANNELS={bound}, "
-        "so the lifetime count crosses a bound the live count never reaches",
-        flush=True,
-    )
+    if len(exports) != 1 or exports != imports:
+        fail(f"endpoint export/import evidence was {exports!r}/{imports!r}, expected one exact pair")
 
 
-def check_keys_are_monotonic() -> None:
-    """`push` must derive its key from a monotonic counter, not from `self.len`.
-
-    The B22 fix rests on two invariants, and the transcript only shows one. The
-    sweep is observed by the crossing itself; this one is not observable in any
-    plane, and that is not an oversight in the driver -- it is a property of the
-    defect. With four channels live across the sweep and every loop pair dropped
-    before the next mint, a reverted `key = self.len` reissues keys that never
-    collide with the four live ones, so this exact scenario passes either way.
-
-    What it would break is a graph that holds a *high-keyed* channel across a
-    sweep that frees a lower-numbered one: the next `push` then reissues a key
-    some live capability already names, and `Resource::Endpoint { channel }` is
-    the only handle a component holds -- so one component's sends land in
-    another's queue. That is a confused deputy, strictly worse than the
-    exhaustion the sweep removes, and it is exactly the failure a plane designed
-    to exercise the sweep does not produce.
-
-    So it is checked against the source, in the same idiom as the constants
-    above, rather than left to a reviewer noticing. Following the repository's
-    rule that each derived invariant carries its own observation.
-    """
-    try:
-        text = CHANNEL_SOURCE.read_text(encoding="utf-8")
-    except OSError as error:
-        fail(f"cannot read {CHANNEL_SOURCE.relative_to(ROOT)}: {error}")
-    # Comments are stripped first: the field's own doc-comment explains why the
-    # old derivation was wrong, and naming `self.len` there must not read as
-    # using it.
-    code = "\n".join(
-        line for line in text.splitlines() if not line.lstrip().startswith(("//", "//!"))
-    )
-    if "let key = self.next_key;" not in code:
-        fail(
-            f"{CHANNEL_SOURCE.relative_to(ROOT)}::push no longer derives its key from "
-            "`next_key`; a key derived from `len` aliases a live channel as soon as "
-            "the sweep frees one"
-        )
-    if "let key = self.len as ChannelKey;" in code:
-        fail(
-            f"{CHANNEL_SOURCE.relative_to(ROOT)}::push derives its key from `len`, "
-            "which the sweep makes non-unique (B22)"
-        )
-    print(
-        "source: channel keys come from a monotonic counter, so a reclaimed key "
-        "names nothing rather than aliasing a live channel",
-        flush=True,
-    )
 
 
 def main() -> None:
@@ -502,9 +370,8 @@ def main() -> None:
     assert isinstance(profile, dict)
     check_transcript(boot(profile))
     print(
-        "seL4 crossing plane check: a graph minted more channels over its lifetime "
-        "than MAX_CHANNELS holds at once, and still sent and received on every live "
-        "channel -- including one parked in transit across the crossing"
+        "seL4 crossing plane check: native endpoint authority survived an "
+        "allocation crossing both while retained and while held by an export ticket"
     )
 
 

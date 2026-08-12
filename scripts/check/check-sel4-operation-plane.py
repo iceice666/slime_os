@@ -2,18 +2,11 @@
 
 """P5.4.7/C8.7 gate: bounded native operations on the seL4 operation plane.
 
-The x86 gate (`just fabric_operation_check`) proves the native-operation
-semantics against the frozen oracle. This gate boots the `sel4-operation` image
-and proves the same broker and the same five participants run **unmodified** on
-`slime-root` after `init` mints private authenticated control pairs, spawns the
-graph, and vouches for each participant's identity by transferring its
-supervision handle to the broker.
-
-What this adds over the x86 gate is the seL4 composition: four parent-vouched
-post-spawn introductions plus a fifth for the restart replacement, and a task
-lifecycle in which every spawned participant reaches exactly one clean exit. What
-it does not do is re-derive C8.7's semantics — the causal chains below are the
-oracle's own markers, emitted by the oracle's own code.
+The x86 gate proves the native-operation semantics against the frozen oracle.
+This gate boots the same broker and participants on `slime-root`, where init
+exports attenuated supervision capabilities and the broker imports them. The
+paired native evidence preserves parent-vouched identity without logical
+channel-transfer state.
 """
 
 from __future__ import annotations
@@ -56,6 +49,10 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
             r"SLIME_GRAPH spawned task=\d+ child=\d+ component=fabric-op-client-b ",
             r"SLIME_GRAPH spawned task=\d+ child=\d+ component=fabric-op-server ",
             r"\[init\] operation participants spawned",
+            r"SLIME_GRAPH capability exported task=\d+ id=\d+ kind=supervision "
+            r"rights=0x40000 retain=0",
+            r"SLIME_GRAPH capability imported task=\d+ id=\d+ kind=supervision "
+            r"rights=0x40000 retain=0",
             r"\[init\] operation supervision delegated",
             r"SLIME_GRAPH spawned task=\d+ child=\d+ component=fabric-op-client-b-restart ",
             r"\[init\] operation replacement introduced",
@@ -192,7 +189,7 @@ FAILURE_MARKERS: tuple[str, ...] = (
     r"operation role missing one direction",
     r"SLIME_GRAPH spawn (?:failed|unwound|unwind incomplete) .*",
     r"SLIME_GRAPH channel (?:recall|rollback) failed .*",
-    r"SLIME_GRAPH capability transfer rolled back .*",
+    r"SLIME_GRAPH capability (?:export|import|cancel) (?:failed|refused) .*",
     r"<<seL4\(CPU 0\) \[decodeInvocation",
     r"Caught cap fault",
     r"Caught vm fault",
@@ -413,15 +410,20 @@ def check_task_lifecycle(transcript: str) -> None:
     # The composition's own claim: the parent, not the participant, established
     # every admitted identity. A plane that let a participant vouch for itself
     # would reach every C8.7 marker above and fail here.
-    introductions = re.findall(
-        rf"SLIME_GRAPH capability transferred task={parent} channel=\d+ "
-        r"side=producer kind=supervision rights=0x40000",
+    exports = re.findall(
+        rf"SLIME_GRAPH capability exported task={parent} id=(\d+) kind=supervision "
+        r"rights=0x40000 retain=0",
         transcript,
     )
-    if len(introductions) != EXPECTED_INTRODUCTIONS:
+    imports = re.findall(
+        r"SLIME_GRAPH capability imported task=\d+ id=(\d+) kind=supervision "
+        r"rights=0x40000 retain=0",
+        transcript,
+    )
+    if len(exports) != EXPECTED_INTRODUCTIONS or sorted(exports) != sorted(imports):
         fail(
-            f"parent delivered {len(introductions)} supervision introductions, "
-            f"expected {EXPECTED_INTRODUCTIONS}"
+            f"parent export/import ids were {exports!r}/{imports!r}, expected "
+            f"{EXPECTED_INTRODUCTIONS} matching introductions"
         )
 
 

@@ -6,6 +6,9 @@ mod scenario;
 
 slime_rt::entry!(main);
 
-fn main(_startup_arg: u32) {
+fn main(startup_arg: u32) {
+    if startup_arg == 0 {
+        slime_components::fabric_boot::park_only(b"fabric-op-client");
+    }
     scenario::run_client();
 }

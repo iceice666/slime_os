@@ -13,6 +13,7 @@ pub const MAX_GRANTS: usize = 1;
 pub const MAX_COMMAND_BYTES: usize = 16;
 
 pub const REQUEST_FLAG_WAIT: u32 = 1;
+pub const REQUEST_FLAG_SHUTDOWN: u32 = 2;
 pub const CAPABILITY_ROLE_WORKING_DIRECTORY: u8 = 1;
 pub const CAPABILITY_ROLE_STDIN: u8 = 2;
 pub const CAPABILITY_ROLE_STDOUT: u8 = 4;

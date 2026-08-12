@@ -11,11 +11,10 @@ use slime_proto::fabric_call::{
 
 slime_rt::entry!(main);
 
-fn main(_startup_arg: u32) {
-    scenario::boot_park(
-        boot_contracts::fabric_graph::DIRECTION_CLIENT,
-        b"fabric-call-client",
-    );
+fn main(startup_arg: u32) {
+    if startup_arg == 0 {
+        slime_components::fabric_boot::park_only(b"fabric-call-client");
+    }
     let route = scenario::request_role(boot_contracts::fabric_graph::DIRECTION_CLIENT);
     let session = scenario::client_session(0);
 
@@ -122,7 +121,7 @@ fn wait_client_b(expected: u8) {
     let mut caps = [0u64; slime_rt::MAX_CAPS_PER_MSG];
     loop {
         match slime_rt::recv(4, &mut bytes, &mut caps) {
-            slime_rt::ERR_WOULDBLOCK => slime_rt::wait(&[slime_rt::WaitSource::Endpoint(4)]),
+            slime_rt::ERR_WOULDBLOCK => slime_rt::yield_now(),
             value if value < 0 => scenario::fail(b"client phase receive"),
             1 if bytes[0] == expected => return,
             _ => scenario::fail(b"client phase mismatch"),

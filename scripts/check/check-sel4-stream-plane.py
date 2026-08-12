@@ -291,27 +291,15 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
             r"\[fabric\] every declared stream edge provisioned",
             r"\[fabric\] stream plane complete",
             r"\[init\] fabric stream complete",
-            # Every in-flight capability settled. A transfer parks its
-            # capability in the transit table between the send and the receive
-            # that collects it, so a nonzero `transit` would mean a role was
-            # moved and never landed -- authority belonging to nobody.
-            r"SLIME_GRAPH loans served=\d+ loans=0 mappings=0 regions=0 transit=0 "
+            # Buffer ownership and native exported authority are accounted
+            # independently. Both must be clean after every role lands.
+            r"SLIME_GRAPH loans served=\d+ loans=0 mappings=0 regions=0 "
             r"orphans=0 aliases=0",
-            # The root's own count of narrow-on-transfer moves, and a nonzero
-            # one: zero would mean every role was placed by the generation
-            # rather than provisioned by the fabric, which is the property C8.3
-            # exists to establish. Every seL4 gate before the typed fabric
-            # reports zero because no component in those graphs invokes the
-            # operation.
-            #
-            # Not pinned to an exact number, unlike P5.5.1's `served=4`. That
-            # graph provisioned four halves and nothing else could move a
-            # capability; here the count also covers the intruder's refused
-            # widening attempt and both routes' fan-in, so an exact number
-            # would encode this composition's arithmetic rather than the
-            # property, and would have to be recomputed whenever a participant
-            # is added. The chains above already assert *which* roles crossed.
-            r"SLIME_GRAPH transfers served=[1-9]\d*\b",
+            # A nonzero export/import count proves roles were provisioned at
+            # runtime rather than only placed by the generation. Outstanding
+            # exports and tickets must both be zero at terminal accounting.
+            r"SLIME_GRAPH capabilities exports=[1-9]\d* imports=[1-9]\d* "
+            r"cancels=\d+ finalized=\d+ outstanding=0 tickets=0",
         ),
     ),
 )

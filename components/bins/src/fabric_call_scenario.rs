@@ -1,33 +1,23 @@
 #![allow(dead_code)]
 
-use boot_contracts::fabric_graph::{
-    CONTRACT_KIND_CALL, DIRECTION_CLIENT, DIRECTION_SERVER, route_identity,
-};
-use slime_proto::capability_transfer::{
-    FABRIC_REQUEST_MAGIC, FORMAT_VERSION as TRANSFER_VERSION, OBJECT_KIND_ENDPOINT, REQUEST_LEN,
-    WireCapabilityTransfer, WireFabricRequest,
-};
+use boot_contracts::fabric_graph::{DIRECTION_CLIENT, DIRECTION_SERVER};
+use slime_proto::capability_transfer::OBJECT_KIND_SHARED_BUFFER_LOAN;
 use slime_proto::fabric_call::*;
 use slime_proto::interface_schema::parameter_call;
 use slime_proto::sample_descriptor::{
     CAPABILITY_KIND_LOAN, SAMPLE_DESCRIPTOR_MAGIC, WireSampleDescriptor,
 };
 use slime_rt::{
-    ERR_BAD_CAP, ERR_PEER_DEAD, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG, WaitSource,
+    CapabilityDisposition, ERR_PEER_DEAD, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG,
 };
-
-const CONTROL_SLOT: u32 = 0;
 const FACTORY_SLOT: u32 = 1;
+
 const FABRIC_SUPERVISION_SLOT: u32 = 2;
-const ROUTE_NAME: &str = "parameters";
-const RIGHT_SEND: u64 = 1;
-const RIGHT_RECV: u64 = 2;
 const PAGE: u64 = 4096;
 const BASE: u64 = 0x7100_0000;
 const CLIENT_PHASE_SLOT: u32 = 1;
 
 pub fn run_client_b() {
-    boot_park(DIRECTION_CLIENT, b"fabric-call-client-b");
     let route = request_role(DIRECTION_CLIENT);
     let session = client_session(1);
     send_call(
@@ -109,7 +99,6 @@ pub fn run_client_b() {
 }
 
 pub fn run_server() {
-    boot_park(DIRECTION_SERVER, b"fabric-call-server");
     let route = request_role(DIRECTION_SERVER);
     let mut executed_non_idempotent = false;
     loop {
@@ -117,7 +106,7 @@ pub fn run_server() {
         let mut caps = [0u64; MAX_CAPS_PER_MSG];
         let length = match slime_rt::recv(route, &mut bytes, &mut caps) {
             ERR_WOULDBLOCK => {
-                slime_rt::wait(&[WaitSource::Endpoint(route)]);
+                slime_rt::yield_now();
                 continue;
             }
             ERR_PEER_DEAD => return,
@@ -244,78 +233,17 @@ fn handle_inline(
     }
 }
 
-/// C8.10 full-graph boot arm: take the declared call role, then park forever.
-///
-/// A no-op outside the boot generation, so a caller writes `boot_park(..)` as
-/// the first line of its scenario. The boot gate asserts a provisioned graph at
-/// rest with no traffic; the call scenario's own correlation, duplicate,
-/// timeout, and peer-death arms stay `just fabric_call_check`'s to prove.
-pub fn boot_park(direction: u32, name: &'static [u8]) {
-    if !slime_components::fabric_boot::active() {
-        return;
+/// Full-graph boot copies hold their declared endpoint but do not drive the
+/// scenario transcript.
+pub fn boot_park(_direction: u32, name: &'static [u8]) {
+    if slime_components::fabric_boot::active() {
+        slime_components::fabric_boot::park(name)
     }
-    // `request_role` already verifies the descriptor names this exact
-    // (route, direction) edge and carries no more rights than declared, so the
-    // marker below reports a checked role rather than merely a received one.
-    let _route = request_role(direction);
-    slime_rt::debug_write(b"[");
-    slime_rt::debug_write(name);
-    slime_rt::debug_write(b"] boot role provisioned\n");
-    slime_components::fabric_boot::park(name)
 }
 
-pub fn request_role(direction: u32) -> u32 {
-    let route = route_identity(
-        ROUTE_NAME,
-        &parameter_call::INTERFACE_IDENTITY,
-        CONTRACT_KIND_CALL,
-    );
-    let mut route_name = [0u8; 32];
-    route_name[..ROUTE_NAME.len()].copy_from_slice(ROUTE_NAME.as_bytes());
-    let request = WireFabricRequest {
-        magic: FABRIC_REQUEST_MAGIC,
-        version: TRANSFER_VERSION,
-        flags: 0,
-        direction,
-        type_identity: parameter_call::TYPE_TAG,
-        route_name_len: ROUTE_NAME.len() as u32,
-        route_name,
-        reserved: [0; 4],
-    };
-    send_raw(CONTROL_SLOT, &request.encode());
-    let mut message = [0u8; MAX_MSG];
-    let mut caps = [0u64; MAX_CAPS_PER_MSG];
-    loop {
-        match slime_rt::recv(CONTROL_SLOT, &mut message, &mut caps) {
-            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(CONTROL_SLOT)]),
-            value if value < 0 => fail(b"role receive"),
-            value => {
-                if value as usize != MAX_MSG || caps[0] == 0 {
-                    fail(b"role shape")
-                }
-                let descriptor = WireCapabilityTransfer::decode(&message)
-                    .unwrap_or_else(|| fail(b"role decode"));
-                if !slime_proto::valid_capability_transfer(
-                    &descriptor,
-                    &route,
-                    direction,
-                    OBJECT_KIND_ENDPOINT,
-                ) || descriptor.rights_mask != RIGHT_SEND | RIGHT_RECV
-                {
-                    fail(b"role authority")
-                }
-                let slot = caps[0] as u32;
-                let mut discard = [0u8; MAX_MSG];
-                let mut no_caps = [0u64; MAX_CAPS_PER_MSG];
-                if slime_rt::recv(slot, &mut discard, &mut no_caps) == ERR_BAD_CAP
-                    || slime_rt::send(slot, b"probe", &[]) == ERR_BAD_CAP
-                {
-                    fail(b"call role missing one direction")
-                }
-                return slot;
-            }
-        }
-    }
+/// Every call participant receives its preinstalled route endpoint at slot 0.
+pub const fn request_role(_direction: u32) -> u32 {
+    0
 }
 
 pub fn client_session(index: usize) -> u64 {
@@ -379,7 +307,7 @@ pub fn send_large_request(route: u32, request_id: u64) {
     if slime_rt::shared_buffer_seal(buffer.slot) != ERR_SUCCESS {
         fail(b"large seal")
     }
-    let loan = slime_rt::shared_buffer_loan(buffer.slot, FABRIC_SUPERVISION_SLOT, 0, PAGE)
+    let loan = slime_rt::shared_buffer_loan(buffer.slot, FABRIC_SUPERVISION_SLOT, 0, PAGE, false)
         .unwrap_or_else(|_| fail(b"large loan"));
     let descriptor = WireSampleDescriptor {
         magic: SAMPLE_DESCRIPTOR_MAGIC,
@@ -417,7 +345,7 @@ fn send_large_reply(route: u32, request_id: u64) {
     if slime_rt::shared_buffer_seal(buffer.slot) != ERR_SUCCESS {
         fail(b"reply seal")
     }
-    let loan = slime_rt::shared_buffer_loan(buffer.slot, FABRIC_SUPERVISION_SLOT, 0, PAGE)
+    let loan = slime_rt::shared_buffer_loan(buffer.slot, FABRIC_SUPERVISION_SLOT, 0, PAGE, false)
         .unwrap_or_else(|_| fail(b"reply loan"));
     let descriptor = WireSampleDescriptor {
         magic: SAMPLE_DESCRIPTOR_MAGIC,
@@ -481,7 +409,7 @@ pub fn recv_call(slot: u32) -> WireCallEnvelope {
     let mut caps = [0u64; MAX_CAPS_PER_MSG];
     loop {
         match slime_rt::recv(slot, &mut bytes, &mut caps) {
-            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(slot)]),
+            ERR_WOULDBLOCK => slime_rt::yield_now(),
             ERR_PEER_DEAD => fail(b"call peer died"),
             value if value < 0 => fail(b"call receive"),
             value => {
@@ -500,7 +428,7 @@ fn recv_descriptor(slot: u32) -> (WireSampleDescriptor, u32) {
     let mut caps = [0u64; MAX_CAPS_PER_MSG];
     loop {
         match slime_rt::recv(slot, &mut bytes, &mut caps) {
-            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(slot)]),
+            ERR_WOULDBLOCK => slime_rt::yield_now(),
             value if value < 0 => fail(b"descriptor receive"),
             value => {
                 if value as usize != MAX_MSG || caps[0] == 0 {
@@ -540,7 +468,7 @@ pub fn expect_terminal_parked(slot: u32, session: u64, request_id: u64, status: 
     let mut caps = [0u64; MAX_CAPS_PER_MSG];
     loop {
         match slime_rt::recv(slot, &mut bytes, &mut caps) {
-            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(slot)]),
+            ERR_WOULDBLOCK => slime_rt::yield_now(),
             ERR_PEER_DEAD => fail(b"terminal peer died"),
             value if value < 0 => fail(b"terminal receive"),
             value => {
@@ -591,7 +519,7 @@ fn wait_client_phase(expected: u8) {
     let mut caps = [0u64; MAX_CAPS_PER_MSG];
     loop {
         match slime_rt::recv(CLIENT_PHASE_SLOT, &mut bytes, &mut caps) {
-            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(CLIENT_PHASE_SLOT)]),
+            ERR_WOULDBLOCK => slime_rt::yield_now(),
             value if value < 0 => fail(b"client phase receive"),
             1 if bytes[0] == expected => return,
             _ => fail(b"client phase mismatch"),
@@ -611,7 +539,14 @@ fn send_raw(slot: u32, bytes: &[u8; MAX_MSG]) {
 
 fn send_with_cap(slot: u32, bytes: &[u8; MAX_MSG], cap: u32) {
     loop {
-        match slime_rt::send(slot, bytes, &[cap]) {
+        match slime_rt::capability_delegate(
+            slot,
+            cap,
+            CapabilityDisposition::Move,
+            OBJECT_KIND_SHARED_BUFFER_LOAN,
+            1 << 9,
+            bytes,
+        ) {
             ERR_SUCCESS => return,
             ERR_WOULDBLOCK => slime_rt::yield_now(),
             _ => fail(b"call capability send"),
@@ -632,6 +567,5 @@ pub fn fail(reason: &[u8]) -> ! {
     slime_rt::exit(1)
 }
 
-const _: () = assert!(REQUEST_LEN == MAX_MSG);
 const _: () = assert!(CALL_LEN == MAX_MSG);
 const _: () = assert!(CALL_TIME_LEN == MAX_MSG);

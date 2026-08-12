@@ -40,12 +40,10 @@ const STATUS_NO_PENDING: i32 = -3;
 
 slime_rt::entry!(main);
 
-fn main(_startup_arg: u32) {
-    // The root launches every declared component, so an unconfigured copy of
-    // this one starts too. It holds no endpoint, so its first send answers
-    // `ERR_BAD_CAP` and it parks.
-    if !spawned_instance() {
-        slime_rt::debug_write(b"[sel4-generation-client] idle without an endpoint\n");
+fn main(startup_arg: u32) {
+    // Root-autostart copies are discovery-only; init-spawned bodies run.
+    if startup_arg == 0 {
+        slime_rt::debug_write(b"[sel4-generation-client] idle root copy\n");
         slime_rt::exit(0);
     }
 
@@ -154,7 +152,7 @@ fn call(op: u8, identity: [u8; 32]) -> WireGenerationReply {
     let mut caps = [0u64; slime_rt::MAX_CAPS_PER_MSG];
     loop {
         match slime_rt::recv(RPC_SLOT, &mut bytes, &mut caps) {
-            slime_rt::ERR_WOULDBLOCK => slime_rt::wait(&[slime_rt::WaitSource::Endpoint(RPC_SLOT)]),
+            slime_rt::ERR_WOULDBLOCK => slime_rt::yield_now(),
             result if result < 0 => fail(b"recv"),
             received => {
                 // The manager answers with data. A reply carrying a capability
@@ -174,14 +172,6 @@ fn call(op: u8, identity: [u8; 32]) -> WireGenerationReply {
             }
         }
     }
-}
-
-/// Whether this task is one `init` spawned: the root-launched copy holds no
-/// endpoint at all, so the slot answers `ERR_BAD_CAP`.
-fn spawned_instance() -> bool {
-    let mut bytes = [0u8; slime_rt::MAX_MSG];
-    let mut caps = [0u64; slime_rt::MAX_CAPS_PER_MSG];
-    slime_rt::recv(RPC_SLOT, &mut bytes, &mut caps) != slime_rt::ERR_BAD_CAP
 }
 
 fn identity_words(identity: [u8; 32]) -> [u64; 4] {

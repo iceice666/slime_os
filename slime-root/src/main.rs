@@ -31,9 +31,9 @@
 #[cfg(slime_boot_selector)]
 use slime_root::boot_selector;
 use slime_root::{
-    buffer_adapter, channel, child_vspace, console, device, directory, event, fault, generation,
-    graph, ipc, launched, object_allocator, parked, peer_endpoint, platform_timer, shared_buffer,
-    supervision, task, timer, transfer_window, transit, virtio_blk,
+    buffer_adapter, child_vspace, console, device, directory, event, fault, generation, graph, ipc,
+    launched, notification, object_allocator, peer_endpoint, platform_timer, shared_buffer,
+    supervision, task, timer, transfer_window, virtio_blk,
 };
 
 use core::ptr;
@@ -47,7 +47,6 @@ use sel4_root_task::root_task;
 
 use boot_contracts::generation::RIGHT_TRANSFER;
 use buffer_adapter::BufferAdapter;
-use channel::{ChannelTable, WaitTarget};
 use child_vspace::{ChildImage, GRANULE_SIZE, ScratchPage};
 use console::{RIGHT_BLOCK_READ, RIGHT_BLOCK_WRITE};
 use device::{BlockDevices, MAX_BLOCK_DEVICES};
@@ -59,7 +58,6 @@ use graph::GraphTables;
 use ipc::{IpcError, Operation, Response, poll_notification};
 use launched::LaunchedInstances;
 use object_allocator::ObjectAllocator;
-use parked::{ParkReason, ParkedReplies};
 use platform_timer::{PhysicalTimerAdapter, TIMER_IRQ};
 use shared_buffer::{
     BufferHandle, GenerationEpoch, HolderId, HolderQuota, MappingRights, PAGE_SIZE,
@@ -67,8 +65,10 @@ use shared_buffer::{
 };
 use task::{Arrival, CHILD_CNODE_SIZE_BITS, MAX_TASKS, Supervision, TaskId, TaskTable};
 use timer::{PlatformTimer, ServiceTimerError, TimerScheduler, apply_deadline_programming};
-use transfer_window::WindowTable;
-use transit::Transit;
+use transfer_window::{WindowTable, descriptor_thread};
+
+/// One staged transfer window per admitted component thread.
+const MAX_WINDOW_ENTRIES: usize = MAX_TASKS * child_vspace::MAX_CHILD_THREADS;
 
 /// Report an unrecoverable startup condition and park the root task. Every
 /// fallible step returns a typed error that ends up here; nothing panics.
@@ -694,6 +694,9 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
             #[cfg(slime_boot_selector)]
             &mut boot_runtime,
         );
+        loop {
+            core::hint::spin_loop();
+        }
     }
     // ---- end generation graph phase ----
 
@@ -1047,6 +1050,11 @@ const RIGHT_BUFFER_ALL: u64 = u64::MAX;
 /// handle it returns.
 const RIGHT_BUFFER_MAP: u64 = 1 << 9;
 
+/// Authority to map a loaned range writable (B46). A read-only C7.6 sample
+/// loan never carries it; a stream ring loan does, because two peers advance
+/// disjoint header fields of one region.
+const RIGHT_BUFFER_WRITE: u64 = 1 << 8;
+
 /// Authority to run an executable, held alongside `RIGHT_EXEC`. Holding an
 /// image is not authority to start it: `preflight_spawn_grants` requires both.
 const RIGHT_SPAWN: u64 = 1 << 16;
@@ -1055,9 +1063,6 @@ const RIGHT_SPAWN: u64 = 1 << 16;
 /// spawn returns carries, matching `kernel/src/capability/mod.rs`.
 const RIGHT_SUPERVISE: u64 = 1 << 18;
 
-/// Authority to mint a channel pair, held on an `EndpointFactory`.
-const RIGHT_ENDPOINT_CREATE: u64 = 1 << 17;
-
 /// Authority to allocate a shared buffer, held on a `SharedBufferFactory`.
 /// Independent of the holder's quota by design: the grant authorizes the
 /// operation and the budget bounds it (B13).
@@ -1065,13 +1070,6 @@ const RIGHT_BUFFER_CREATE: u64 = 1 << 24;
 
 /// Authority to read one decoded key event, held on an `Input` (M6.4).
 const RIGHT_INPUT_READ: u64 = 1 << 23;
-/// Wait on a Notification and observe its badge (B46).
-///
-/// Separate from `RIGHT_RECV`: receiving on an endpoint takes a message, while
-/// waiting on a notification takes only the fact that bits were set. A
-/// component that may observe a signal is not thereby allowed to consume the
-/// message that caused it.
-const RIGHT_NOTIFY: u64 = 1 << 25;
 
 /// Largest component ELF the loader will copy through [`ElfScratch`]. Generous
 /// against the five components this profile declares (the largest is ~44 KiB)
@@ -1098,25 +1096,62 @@ static mut ELF_SCRATCH: ElfScratch = ElfScratch {
 
 const _: () = assert!(MAX_COMPONENT_ELF_BYTES >= 64 * 1024);
 
-/// The graph's logical channels, as a static rather than a local.
-///
-/// Every queued message is stored inline, so this table is tens of kilobytes —
-/// far too large to construct in a stack frame. That is backlog B3's failure
-/// exactly: the retired kernel's `SharedBufferTable` was first built on a task
-/// stack, overflowed it silently, and the boot wedged with no diagnostic.
-///
-/// It lands in `.data` rather than `.bss`, because `Option<Message>::None` is
-/// not all-zero — the inline queue slots have no niche, so their `None` is a
-/// non-zero discriminant. That costs image size and nothing else; what matters
-/// is that it is not on the stack.
-static mut CHANNELS: ChannelTable = ChannelTable::new();
-/// The seL4 Endpoints replacing those channels (B46).
-///
-/// Static for the same reason `CHANNELS` is: 48 entries is more than a
-/// dispatch frame should carry, and the root's stack is 1 MiB.
+/// Generation-global native object catalogues. Objects live for the generation;
+/// child-local derived capabilities are charged to and reclaimed with each task.
 static mut PEER_ENDPOINTS: peer_endpoint::PeerEndpointTable =
     peer_endpoint::PeerEndpointTable::new();
+static mut NOTIFICATIONS: notification::NotificationTable = notification::NotificationTable::new();
 
+const MAX_CAPABILITY_EXPORTS: usize = 64;
+#[derive(Clone, Copy)]
+struct CapabilityExport {
+    id: u32,
+    sender: TaskId,
+    receiver: TaskId,
+    capability: graph::Capability,
+    /// The kernel ticket a native-Endpoint export minted, or `None` for a
+    /// root-owned logical capability, which has no kernel object to hand over.
+    ticket: Option<sel4::CPtrBits>,
+    retain: bool,
+    finalized: bool,
+}
+struct CapabilityExports {
+    entries: [Option<CapabilityExport>; MAX_CAPABILITY_EXPORTS],
+    next_id: u32,
+    exported: usize,
+    imported: usize,
+    cancelled: usize,
+    finalized: usize,
+}
+impl CapabilityExports {
+    const fn new() -> Self {
+        Self {
+            entries: [None; MAX_CAPABILITY_EXPORTS],
+            next_id: 1,
+            exported: 0,
+            imported: 0,
+            cancelled: 0,
+            finalized: 0,
+        }
+    }
+    fn len(&self) -> usize {
+        self.entries.iter().filter(|entry| entry.is_some()).count()
+    }
+    fn get_mut(&mut self, id: u32) -> Option<&mut CapabilityExport> {
+        self.entries
+            .iter_mut()
+            .flatten()
+            .find(|entry| entry.id == id)
+    }
+    fn remove(&mut self, id: u32) -> Option<CapabilityExport> {
+        let slot = self
+            .entries
+            .iter_mut()
+            .find(|entry| entry.is_some_and(|entry| entry.id == id))?;
+        slot.take()
+    }
+}
+static mut CAPABILITY_EXPORTS: CapabilityExports = CapabilityExports::new();
 impl ElfScratch {
     /// Copy `elf` into the buffer and return it at a guaranteed 8-byte
     /// alignment. Returns the payload's length when it does not fit, so the
@@ -1605,9 +1640,6 @@ const fn declared_resource(rights: u64) -> Option<(u64, graph::Resource)> {
     if rights & RIGHT_INPUT_READ != 0 {
         return Some((RIGHT_INPUT_READ, graph::Resource::Input));
     }
-    if rights & RIGHT_ENDPOINT_CREATE != 0 {
-        return Some((RIGHT_ENDPOINT_CREATE, graph::Resource::EndpointFactory));
-    }
     if rights & RIGHT_BUFFER_CREATE != 0 {
         return Some((RIGHT_BUFFER_CREATE, graph::Resource::SharedBufferFactory));
     }
@@ -1662,7 +1694,7 @@ static mut CONSOLE_INPUT: Option<console::ScriptedInput> = None;
 /// signature names one thing per concern rather than nine positional
 /// references.
 struct ConsoleTables<'a> {
-    windows: &'a WindowTable<MAX_TASKS>,
+    windows: &'a WindowTable<MAX_WINDOW_ENTRIES>,
     graph: &'a GraphTables,
     script: &'static [u8],
     devices: &'a mut BlockDevices,
@@ -1784,9 +1816,8 @@ fn launch_instance_graph(
     #[cfg(slime_boot_selector)] boot_runtime: &mut boot_selector::BootRuntime,
 ) {
     let mut tasks = TaskTable::<MAX_TASKS>::new();
-    let mut windows = WindowTable::<MAX_TASKS>::new();
+    let mut windows = WindowTable::<MAX_WINDOW_ENTRIES>::new();
     let mut graph = GraphTables::new();
-    let channels = unsafe { &mut *ptr::addr_of_mut!(CHANNELS) };
     let peers = unsafe { &mut *ptr::addr_of_mut!(PEER_ENDPOINTS) };
     let mut launched_instances = LaunchedInstances::new();
     let aligned = unsafe { &mut *ptr::addr_of_mut!(ELF_SCRATCH) };
@@ -1978,9 +2009,16 @@ fn launch_instance_graph(
         // One window per thread (B47): each stages its own payloads, and a
         // thread whose window was never declared is refused at bind and cannot
         // receive anything.
-        for pages in task.vspace.pages.iter().take(task.vspace.threads) {
+        for (thread, pages) in task
+            .vspace
+            .pages
+            .iter()
+            .take(task.vspace.threads)
+            .enumerate()
+        {
             if let Err(error) = windows.declare(
                 id,
+                thread,
                 pages.transfer_window_addr,
                 pages.transfer_window,
                 pages.transfer_window_alias,
@@ -2072,10 +2110,7 @@ fn launch_instance_graph(
             // difference between a component reaching its own declared factory
             // and reaching none. The boot layout names the slot and this
             // records that the root honoured it.
-            if matches!(
-                capability.resource,
-                graph::Resource::EndpointFactory | graph::Resource::SharedBufferFactory
-            ) {
+            if matches!(capability.resource, graph::Resource::SharedBufferFactory) {
                 sel4::debug_println!(
                     "SLIME_GRAPH factory placed task={} component={} slot={slot} kind={}",
                     id.0,
@@ -2110,36 +2145,46 @@ fn launch_instance_graph(
         admission.wrong_target_images,
         admission.unrecognized_images,
     );
-
-    // One seL4 Endpoint per declared channel, created before the ends are
-    // placed so each install can put the native capability beside the logical
-    // one (B46). The cutover cannot land in a single commit -- 312 call sites
-    // across 41 component files -- so both exist and components move over one
-    // at a time.
-    let materialized = match channel::materialize(
-        generation,
-        &launched_instances,
-        channels,
-        &mut graph,
-        peers,
-        allocator,
-        &tasks,
-    ) {
+    let materialized = match peers.materialize(generation, &launched_instances, allocator, &tasks) {
         Ok(report) => report,
-        Err(error) => fatal!("SLIME_GRAPH FAIL channel materialization rejected: {error:?}"),
+        Err(error) => fatal!("SLIME_GRAPH FAIL endpoint materialization rejected: {error:?}"),
     };
     sel4::debug_println!(
-        "SLIME_GRAPH peer endpoints created={} channels={}",
+        "SLIME_GRAPH peer endpoints created={} grants={} installed={}",
         peers.len(),
-        materialized.channels,
-    );
-    sel4::debug_println!(
-        "SLIME_GRAPH channels grants={} channels={} queues={} slots={} unplaced={}",
         materialized.grants,
-        materialized.channels,
-        materialized.queues,
-        materialized.slots,
-        materialized.unplaced,
+        materialized.installed,
+    );
+    let notifications = unsafe { &mut *ptr::addr_of_mut!(NOTIFICATIONS) };
+    let mut notification_report = match notifications.materialize(generation, allocator) {
+        Ok(report) => report,
+        Err(error) => fatal!("SLIME_GRAPH FAIL notification materialization rejected: {error:?}"),
+    };
+    for launched in launched_instances.iter() {
+        let Some(task) = tasks.get(launched.task) else {
+            fatal!(
+                "SLIME_GRAPH FAIL launched task {} is missing",
+                launched.task.0
+            )
+        };
+        let installed = match notifications.install_instance(
+            generation,
+            launched.instance,
+            launched.task,
+            allocator,
+            task.cleanup.arena,
+            task.cnode,
+            task.cnode_size_bits,
+        ) {
+            Ok(installed) => installed,
+            Err(error) => fatal!("SLIME_GRAPH FAIL notification install rejected: {error:?}"),
+        };
+        notification_report.bindings += installed;
+    }
+    sel4::debug_println!(
+        "SLIME_GRAPH notifications created={} bindings={}",
+        notification_report.created,
+        notification_report.bindings,
     );
 
     let bootstrap = launched_instances.task_for_instance(admission.bootstrap_instance);
@@ -2296,7 +2341,6 @@ fn launch_instance_graph(
         &mut tasks,
         &mut windows,
         &mut graph,
-        channels,
         &mut buffers,
         allocator,
         scratch,
@@ -2396,9 +2440,8 @@ fn serve_instance_graph(
     endpoint: sel4::cap::Endpoint,
     console_endpoint: sel4::cap::Endpoint,
     tasks: &mut TaskTable<MAX_TASKS>,
-    windows: &mut WindowTable<MAX_TASKS>,
+    windows: &mut WindowTable<MAX_WINDOW_ENTRIES>,
     graph: &mut GraphTables,
-    channels: &mut ChannelTable,
     buffers: &mut SharedBufferTable,
     allocator: &mut ObjectAllocator,
     scratch: &ScratchPage,
@@ -2423,31 +2466,10 @@ fn serve_instance_graph(
     let mut unimplemented = 0;
     let mut buffers_served = 0;
     let mut loans_served = 0;
-    let mut sends = 0;
-    let mut receives = 0;
-    let mut parks = 0;
-    let mut peer_deaths = 0;
     let mut spawns = 0;
     let mut drops = 0;
     let mut reclaimed_slots = 0;
-    let mut endpoints = 0;
-    // Narrow-on-transfer moves served (C8.3). Counted apart from `sends`
-    // because a transfer is the operation a broker provisions a role with, and
-    // a graph where every participant holds its own declared edge performs
-    // none.
-    let mut transfers = 0;
-    let mut parked = ParkedReplies::new();
-    // How each dead child ended, kept past the task's own reclamation because
-    // that is precisely when its parent asks. See `supervision.rs`.
     let mut terminations = supervision::Terminations::new();
-    // Which parked tasks are waiting on which child. A supervision wait has no
-    // queue to register on, so the registration lives here; see
-    // `supervision.rs`.
-    let mut supervision_waits = supervision::SupervisionWaits::new();
-    // Capabilities between their send and the receive that collects them. Held
-    // here rather than in either task's table, because in flight they belong to
-    // neither; see `transit.rs`.
-    let mut transit = Transit::new();
     let mut iterations = 0;
     let required = (0..generation.instance_count())
         .filter(|index| {
@@ -2461,19 +2483,6 @@ fn serve_instance_graph(
     for _ in 0..MAX_GRAPH_ITERATIONS {
         iterations += 1;
         if live == 0 {
-            // A graph that runs out of live tasks while a park is outstanding
-            // did not settle: the parked task is blocked on a reply only this
-            // loop can send, and leaving here makes the root return, which
-            // marks it `Inactive` and strands every child still sending to it.
-            // Reported rather than broken out of silently, because the boot
-            // otherwise ends with an ordinary accounting summary and looks
-            // healthy — that is precisely how B28 hid.
-            if !parked.is_empty() {
-                fatal!(
-                    "SLIME_GRAPH FAIL graph settled with replies owed count={}",
-                    parked.len(),
-                )
-            }
             sel4::debug_println!(
                 "SLIME_ROOT allocator quiescent live_slots={} live_objects={} live_bytes={}",
                 allocator.live_slots(),
@@ -2488,6 +2497,13 @@ fn serve_instance_graph(
         // is refused here instead of being silently truncated. Slime capability
         // transfer is by logical slot number in the payload; the transport never
         // moves a seL4 capability, and this is what makes that checkable.
+        sel4::with_ipc_buffer_mut(|buffer| {
+            buffer.set_recv_slot(
+                &sel4::init_thread::slot::CNODE
+                    .cap()
+                    .absolute_cptr(sel4::cap::Unspecified::from_bits(task::CHILD_SLOT_RECEIVE)),
+            );
+        });
         let reception = ipc::recv_request(endpoint);
         let (info, badge) = (reception.info, reception.badge);
         let Some((id, arrival)) = TaskId::from_badge(badge) else {
@@ -2528,25 +2544,13 @@ fn serve_instance_graph(
             record_termination(
                 &mut terminations,
                 graph,
-                &transit,
                 id,
                 supervision::Termination::Fault(reason),
             );
-            wake_supervisors(&mut parked, &mut supervision_waits, id);
             if let Some(task) = tasks.get(id) {
                 let _ = task.suspend();
             }
-            reclaim_dead_task(
-                channels,
-                &mut parked,
-                &mut transit,
-                graph,
-                buffers,
-                allocator,
-                &mut supervision_waits,
-                id,
-                &mut peer_deaths,
-            );
+            reclaim_dead_task(buffers, allocator, id);
             graph.release(id);
             windows.release(id);
             reclaim_task_objects(launched, tasks, allocator, &mut reclaimed_slots, id);
@@ -2568,54 +2572,7 @@ fn serve_instance_graph(
         };
         let (operation, words) = (request.operation, request.mrs);
 
-        // Every operation that can block is answered through a reply authority
-        // saved out of the implicit slot *before* anything else runs, because
-        // the implicit slot is transient and the next `recv` overwrites it. A
-        // save the operation turns out not to need is answered over and
-        // released on the same call, so the non-blocking path costs one CSlot
-        // that is handed straight back rather than leaking.
-        let saved = if parkable(operation) {
-            match parked.save(allocator, id) {
-                Ok(saved) => Some(saved),
-                Err(error) => {
-                    sel4::debug_println!(
-                        "SLIME_GRAPH reply authority unavailable task={} error={error:?}",
-                        id.0
-                    );
-                    ipc::reply(Response::error(error));
-                    continue;
-                }
-            }
-        } else {
-            None
-        };
-
         match operation {
-            // The startup declaration of the window the loader already mapped.
-            // Checked against that mapping rather than accepted on the caller's
-            // word, so a task cannot name a region it does not have.
-            Operation::TransferWindowBind => {
-                let response =
-                    match windows.bind(id, words[0] as u32, words[1] as usize, words[2] as usize) {
-                        Ok(window) => {
-                            sel4::debug_println!(
-                                "SLIME_GRAPH window bound task={} base={:#x} len={}",
-                                id.0,
-                                window.base,
-                                window.len
-                            );
-                            Response::success(0, 0)
-                        }
-                        Err(error) => {
-                            sel4::debug_println!(
-                                "SLIME_GRAPH window bind refused task={} error={error:?}",
-                                id.0
-                            );
-                            Response::error(error)
-                        }
-                    };
-                ipc::reply(response);
-            }
             // M6.3: the three directory operations (P5.4.3).
             //
             // Mechanism, not policy. What a directory *contains* is a
@@ -2628,7 +2585,7 @@ fn serve_instance_graph(
                 ipc::reply(directory::serve_directory_derive(
                     graph,
                     scopes,
-                    windows.bound(id),
+                    windows.bound(id, descriptor_thread(words[1])),
                     scratch,
                     id,
                     &words,
@@ -2667,32 +2624,16 @@ fn serve_instance_graph(
                 {
                     *completed = true;
                 }
-                // Recorded before the reclamation that erases everything else
-                // about this task, and before the parked-supervision wake
-                // below, so a parent woken by this death finds the outcome
-                // already there rather than racing it.
                 record_termination(
                     &mut terminations,
                     graph,
-                    &transit,
                     id,
                     supervision::Termination::Exit(status),
                 );
-                wake_supervisors(&mut parked, &mut supervision_waits, id);
                 if let Some(task) = tasks.get(id) {
                     let _ = task.suspend();
                 }
-                reclaim_dead_task(
-                    channels,
-                    &mut parked,
-                    &mut transit,
-                    graph,
-                    buffers,
-                    allocator,
-                    &mut supervision_waits,
-                    id,
-                    &mut peer_deaths,
-                );
+                reclaim_dead_task(buffers, allocator, id);
                 graph.release(id);
                 windows.release(id);
                 reclaim_task_objects(launched, tasks, allocator, &mut reclaimed_slots, id);
@@ -2717,7 +2658,6 @@ fn serve_instance_graph(
                     tasks,
                     windows,
                     graph,
-                    channels,
                     buffers,
                     allocator,
                     scratch,
@@ -2730,84 +2670,6 @@ fn serve_instance_graph(
                 if response.result >= 0 {
                     live += 1;
                 }
-                ipc::reply(response);
-            }
-            // Mint a channel pair through a declared `EndpointFactory`.
-            //
-            // Both ends land in the caller's own table as distinct sides, which
-            // is what makes the pair useful: the caller keeps one and copies or
-            // moves the other to a child. Both directed queues exist from the
-            // mint; no holder reassignment changes what a capability means.
-            Operation::EndpointCreate => {
-                let response = match graph
-                    .get(id)
-                    .ok_or(IpcError::InvalidOperation)
-                    .and_then(|table| table.resolve(words[0] as u32, RIGHT_ENDPOINT_CREATE))
-                {
-                    Ok(graph::Capability {
-                        resource: graph::Resource::EndpointFactory,
-                        ..
-                    }) => match mint_channel(channels, graph, &transit, id) {
-                        Ok(key) => {
-                            // Both slots reserved before either is installed:
-                            // a pair with one end placed is a channel the
-                            // caller can never finish setting up.
-                            let placed = graph.get_mut(id).and_then(|table| {
-                                let first = table.free_slot_from(1)?;
-                                let producer = graph::Capability {
-                                    resource: graph::Resource::Endpoint {
-                                        channel: key,
-                                        side: graph::Side::Producer,
-                                    },
-                                    rights: RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
-                                };
-                                table.install(first, producer).ok()?;
-                                let Some(second) = table.free_slot_from(first + 1) else {
-                                    table.drop_slot(first);
-                                    return None;
-                                };
-                                let consumer = graph::Capability {
-                                    resource: graph::Resource::Endpoint {
-                                        channel: key,
-                                        side: graph::Side::Consumer,
-                                    },
-                                    rights: RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
-                                };
-                                if table.install(second, consumer).is_err() {
-                                    table.drop_slot(first);
-                                    return None;
-                                }
-                                Some((first, second))
-                            });
-                            match placed {
-                                Some((first, second)) => {
-                                    endpoints += 1;
-                                    sel4::debug_println!(
-                                        "SLIME_GRAPH endpoint minted task={} key={key} slots={first},{second}",
-                                        id.0,
-                                    );
-                                    Response::success(i64::from(first), second as sel4::Word)
-                                }
-                                // `BadCapability` (-1), matching
-                                // `kernel/src/syscall/mod.rs::sys_endpoint_create`,
-                                // which folds `available_slots() >= 2` into the
-                                // same `allowed` test as the factory check and
-                                // answers `ERR_BAD_CAP` for both. Exact-code
-                                // parity matters here for the reason it did on
-                                // the spawn refusal: components compare against
-                                // literal values, and `spawn-service.rs`
-                                // returns this one straight to its client.
-                                None => Response::error(IpcError::BadCapability),
-                            }
-                        }
-                        // The channel table is full: a bounded resource
-                        // exhausted, not a capability the caller lacks.
-                        Err(_) => Response::error(IpcError::DestinationSlotsExhausted),
-                    },
-                    // An ungranted slot and a slot naming another kind are
-                    // refused identically, as everywhere else.
-                    _ => Response::error(IpcError::BadCapability),
-                };
                 ipc::reply(response);
             }
             // Collect a child's outcome through the handle its spawn returned.
@@ -2838,6 +2700,20 @@ fn serve_instance_graph(
                 } else {
                     Response::error(IpcError::BadCapability)
                 });
+            }
+            Operation::CapabilityExport => {
+                ipc::reply(serve_capability_export(
+                    generation, launched, graph, allocator, tasks, id, &words,
+                ));
+            }
+            Operation::CapabilityImport => {
+                ipc::reply(serve_capability_import(graph, id, &words));
+            }
+            Operation::CapabilityExportCancel => {
+                ipc::reply(serve_capability_cancel(graph, tasks, id, &words));
+            }
+            Operation::CapabilityExportFinalize => {
+                ipc::reply(serve_capability_finalize(id, &words));
             }
             // B25: a second supervision handle naming a task the caller already
             // supervises.
@@ -2890,32 +2766,6 @@ fn serve_instance_graph(
             // from the transcript. `MAX_STAGED_ARRAY_BYTES` (1 KiB) is the
             // same bound the wide spawn-grant array already crosses this
             // window with.
-            // C8.3's narrow-on-transfer move (P5.5.1). The one mechanism a
-            // userspace fabric needs that neither `send` nor `spawn` provides:
-            // `send` moves only a loan, whose handle names its own recipient,
-            // and a spawn grant's destination is a task that does not exist
-            // yet. A route role is neither — it goes to a task already running,
-            // chosen by a broker at runtime, narrowed to one direction and made
-            // non-delegable at the moment it crosses.
-            //
-            // Unparkable, like every other operation here except `send`,
-            // `recv`, and `wait`: a queue-full transfer answers `WouldBlock`
-            // and the broker retries, matching `sys_cap_transfer`.
-            Operation::CapTransfer => {
-                let response = serve_cap_transfer(
-                    channels,
-                    graph,
-                    windows,
-                    &mut parked,
-                    &mut transit,
-                    scratch,
-                    &mut supervision_waits,
-                    id,
-                    &words,
-                    &mut transfers,
-                );
-                ipc::reply(response);
-            }
             // The shared-buffer plane, answered from the table that already
             // owns rights, quota, and frame accounting. `spawn-service` runs a
             // full create/map/write/seal/unmap/release cycle at startup and
@@ -2945,69 +2795,63 @@ fn serve_instance_graph(
                         table.resolve((words[0] & 0xffff_ffff) as u32, RIGHT_BUFFER_CREATE)
                     });
                 let response = match factory {
-                    Err(_)
-                    | Ok(graph::Capability {
-                        resource:
-                            graph::Resource::Endpoint { .. }
-                            | graph::Resource::Executable { .. }
-                            | graph::Resource::EndpointFactory
-                            | graph::Resource::Supervision { .. }
-                            | graph::Resource::SharedBuffer { .. }
-                            | graph::Resource::Loan { .. },
+                    Ok(graph::Capability {
+                        resource: graph::Resource::SharedBufferFactory,
                         ..
                     }) => {
+                        match serve_buffer_create(buffers, allocator, holder, pages, writable) {
+                            Ok(handle) => match graph.get_mut(id).and_then(|table| {
+                                let slot = table.free_slot_from(1)?;
+                                table
+                                    .install(
+                                        slot,
+                                        graph::Capability {
+                                            resource: graph::Resource::SharedBuffer { handle },
+                                            rights: RIGHT_BUFFER_ALL,
+                                        },
+                                    )
+                                    .ok()?;
+                                Some(slot)
+                            }) {
+                                Some(slot) => {
+                                    buffers_served += 1;
+                                    sel4::debug_println!(
+                                        "SLIME_GRAPH buffer created task={} slot={slot} id={} pages={pages} writable={}",
+                                        id.0,
+                                        handle.id.0,
+                                        u8::from(writable),
+                                    );
+                                    Response::success(i64::from(slot), handle.id.0)
+                                }
+                                None => {
+                                    sel4::debug_println!(
+                                        "SLIME_GRAPH buffer slot unavailable task={}",
+                                        id.0
+                                    );
+                                    // As for `EndpointCreate` above:
+                                    // `sys_shared_buffer_create` folds
+                                    // `available_slots() >= 1` into its capability
+                                    // check and answers `ERR_BAD_CAP`.
+                                    Response::error(IpcError::BadCapability)
+                                }
+                            },
+                            Err(error) => {
+                                sel4::debug_println!(
+                                    "SLIME_GRAPH buffer create refused task={} pages={pages} class={}",
+                                    id.0,
+                                    buffer_error_class(error),
+                                );
+                                Response::error(buffer_error_status(error))
+                            }
+                        }
+                    }
+                    _ => {
                         sel4::debug_println!(
                             "SLIME_GRAPH buffer create refused task={} class=ungranted",
-                            id.0,
+                            id.0
                         );
                         Response::error(IpcError::BadCapability)
                     }
-                    Ok(_) => match serve_buffer_create(buffers, allocator, holder, pages, writable)
-                    {
-                        Ok(handle) => match graph.get_mut(id).and_then(|table| {
-                            let slot = table.free_slot_from(1)?;
-                            table
-                                .install(
-                                    slot,
-                                    graph::Capability {
-                                        resource: graph::Resource::SharedBuffer { handle },
-                                        rights: RIGHT_BUFFER_ALL,
-                                    },
-                                )
-                                .ok()?;
-                            Some(slot)
-                        }) {
-                            Some(slot) => {
-                                buffers_served += 1;
-                                sel4::debug_println!(
-                                    "SLIME_GRAPH buffer created task={} slot={slot} id={} pages={pages} writable={}",
-                                    id.0,
-                                    handle.id.0,
-                                    u8::from(writable),
-                                );
-                                Response::success(i64::from(slot), handle.id.0)
-                            }
-                            None => {
-                                sel4::debug_println!(
-                                    "SLIME_GRAPH buffer slot unavailable task={}",
-                                    id.0
-                                );
-                                // As for `EndpointCreate` above:
-                                // `sys_shared_buffer_create` folds
-                                // `available_slots() >= 1` into its capability
-                                // check and answers `ERR_BAD_CAP`.
-                                Response::error(IpcError::BadCapability)
-                            }
-                        },
-                        Err(error) => {
-                            sel4::debug_println!(
-                                "SLIME_GRAPH buffer create refused task={} pages={pages} class={}",
-                                id.0,
-                                buffer_error_class(error),
-                            );
-                            Response::error(buffer_error_status(error))
-                        }
-                    },
                 };
                 ipc::reply(response);
             }
@@ -3035,10 +2879,11 @@ fn serve_instance_graph(
             // through a capability, and settled exactly once.
             Operation::SharedBufferLoan => {
                 let response = serve_buffer_loan(
+                    generation,
+                    launched,
                     buffers,
                     allocator,
                     graph,
-                    channels,
                     id,
                     &words,
                     &mut loans_served,
@@ -3059,110 +2904,6 @@ fn serve_instance_graph(
                     &mut loans_served,
                 );
                 ipc::reply(response);
-            }
-            // The channel plane. A slot resolves through the caller's own table
-            // with the right the operation needs, so a component can only send
-            // on a channel it was granted `send` over and only receive on one it
-            // was granted `recv` over — and an ungranted slot is refused
-            // identically to an underpowered one, so the table cannot be probed.
-            Operation::Send => {
-                let saved = saved.expect("send is parkable");
-                let response = serve_send(
-                    channels,
-                    graph,
-                    windows,
-                    &mut parked,
-                    &mut transit,
-                    scratch,
-                    &mut supervision_waits,
-                    id,
-                    &words,
-                    &mut sends,
-                );
-                parked.answer_saved(saved, response);
-            }
-            // `recv` is **non-blocking**, exactly as `kernel/src/ipc/mod.rs`
-            // makes it: an empty queue whose peer is alive answers
-            // `ERR_WOULDBLOCK` and the component decides what to do next.
-            //
-            // P5.3.1 parked the caller here instead, on the reasoning that a
-            // component blocked in a call is blocked either way and answering
-            // would make it spin through `wait`. That reasoning holds for a
-            // component with **one** source — `console` — and is wrong for any
-            // component with several, which is what P5.5.1's fabric first
-            // showed: `provision` and `broker` sweep every control endpoint,
-            // ingress, and ack before parking across the whole set, and a park
-            // inside the sweep freezes it at the first empty source. The fabric
-            // ended up parked on its ack channel holding samples the subscriber
-            // was parked waiting for — a deadlock invisible to every one-source
-            // graph, and produced by the root rather than by the component.
-            //
-            // So the poll/park split is the component's to make, and the two
-            // steps stay separate: `recv` reports, `wait` parks. That is not a
-            // reversal of P5.3.1's property — a component blocked on an empty
-            // channel is still parked in the kernel and still woken by its
-            // peer's send — only of *which operation* holds the reply. It does
-            // not reintroduce a spin, because the component's next call is
-            // `wait`, which parks; the round trip costs one extra dispatcher
-            // iteration per park, not a busy loop.
-            Operation::Recv => {
-                let saved = saved.expect("recv is parkable");
-                let response = match serve_recv(
-                    channels,
-                    graph,
-                    windows,
-                    &mut parked,
-                    &mut transit,
-                    &mut supervision_waits,
-                    scratch,
-                    id,
-                    &words,
-                    &mut receives,
-                ) {
-                    Ok(response) => response,
-                    Err(_) => Response::error(IpcError::WouldBlock),
-                };
-                parked.answer_saved(saved, response);
-            }
-            Operation::Wait => {
-                let saved = saved.expect("wait is parkable");
-                match serve_wait(
-                    channels,
-                    graph,
-                    windows,
-                    scratch,
-                    &terminations,
-                    &mut supervision_waits,
-                    id,
-                    &words,
-                ) {
-                    // A source was already ready, so the wait is answered at
-                    // once and the caller re-polls, exactly as `slime_rt::wait`
-                    // documents.
-                    Ok(true) => parked.answer_saved(saved, Response::success(0, 0)),
-                    Ok(false) => match parked.commit(saved, ParkReason::Wait) {
-                        Ok(()) => {
-                            parks += 1;
-                            sel4::debug_println!("SLIME_GRAPH parked task={} reason=wait", id.0);
-                        }
-                        // As for `recv` above: a refused park must still answer
-                        // the blocked caller.
-                        Err((saved, error)) => {
-                            channels.clear_waits(id);
-                            supervision_waits.clear(id);
-                            sel4::debug_println!(
-                                "SLIME_GRAPH park refused task={} error={error:?}",
-                                id.0
-                            );
-                            parked.answer_saved(saved, Response::error(error));
-                        }
-                    },
-                    Err(error) => {
-                        channels.clear_waits(id);
-                        supervision_waits.clear(id);
-                        parked.answer_saved(saved, Response::error(error));
-                    }
-                }
             }
             #[cfg(slime_boot_selector)]
             Operation::Unhealthy => {
@@ -3213,7 +2954,7 @@ fn serve_instance_graph(
                 ipc::reply(response);
             }
         }
-        if !healthy_emitted && required != 0 {
+        if required != 0 {
             let mut live_required = 0;
             let mut completed = 0;
             for instance_index in 0..generation.instance_count() {
@@ -3233,15 +2974,14 @@ fn serve_instance_graph(
                 }
                 if tasks
                     .tasks()
-                    .find(|task| task.instance == Some(instance_index))
-                    .is_some_and(|task| parked.is_parked(task.id))
+                    .any(|task| task.instance == Some(instance_index))
                 {
                     live_required += 1;
                 }
             }
-            if live_required + completed == required {
+            if live_required + completed == required && (!healthy_emitted || live_required == 0) {
                 #[cfg(slime_boot_selector)]
-                if boot_runtime.running_pending() {
+                if !healthy_emitted && boot_runtime.running_pending() {
                     let device = block_devices
                         .get_mut(0)
                         .unwrap_or_else(|| fatal!("boot promotion has no boot device"));
@@ -3250,16 +2990,6 @@ fn serve_instance_graph(
                         Err(error) => fatal!("boot promotion rejected: {error:?}"),
                     }
                 }
-                // The idle record is the supervisor's certification that the
-                // whole declared graph came to rest: every required instance
-                // parked, none completed, none failed. It is emitted whenever
-                // that holds, not only for a single-instance graph — a
-                // migrated graph whose participants are declared instances
-                // reaches the same state with more of them.
-                //
-                // `completed` is reported separately below when any required
-                // instance ran to completion instead of parking, which is a
-                // finished generation rather than an idle one.
                 if completed == 0 {
                     let digest = generation.identity;
                     sel4::debug_println!(
@@ -3277,6 +3007,9 @@ fn serve_instance_graph(
                         live_required,
                         live_required,
                     );
+                } else if live_required == 0 {
+                    // Emitted after the accounting summary below: the QEMU
+                    // gates stop reading at this terminal certification.
                 } else {
                     sel4::debug_println!(
                         "SLIME_GRAPH HEALTHY generation={} required={} live={} completed={} failed=0",
@@ -3290,35 +3023,8 @@ fn serve_instance_graph(
             }
         }
     }
-    // The loop's bound is a wedge detector, not a schedule: a graph that
-    // settles leaves by `live == 0` well inside it. Reaching the last
-    // iteration with tasks still live means no arrival advanced the graph, and
-    // the accounting below would otherwise print an ordinary-looking summary —
-    // exactly how B28 stayed invisible while `init` sat parked forever.
     if iterations == MAX_GRAPH_ITERATIONS && live != 0 {
-        // Name the waiters *before* failing. The owed-reply accounting further
-        // down never runs on this path — `fatal!` does not return — so a wedge
-        // reported only its counts and the transcript had to be read backwards
-        // to work out which task was stuck. That is the diagnosis this marker
-        // exists to hand over, and withholding it on the one path that needs it
-        // was the defect.
-        for task in parked.tasks() {
-            sel4::debug_println!(
-                "SLIME_GRAPH wedged waiter task={} reason={:?}",
-                task.0,
-                parked.reason(task),
-            );
-            for (key, receive) in channels.registered_waits(task) {
-                sel4::debug_println!(
-                    "SLIME_GRAPH wedged waiter task={} channel={key} receive={receive}",
-                    task.0,
-                );
-            }
-        }
-        fatal!(
-            "SLIME_GRAPH FAIL graph iterations exhausted live={live} parked={}",
-            parked.len(),
-        )
+        fatal!("SLIME_GRAPH FAIL graph iterations exhausted live={live}")
     }
     sel4::debug_println!(
         "SLIME_GRAPH served live={live} unsupported={unsupported} unimplemented={unimplemented} buffers={buffers_served} windows={} tables={}",
@@ -3337,102 +3043,52 @@ fn serve_instance_graph(
         "SLIME_GRAPH tasks reclaimed live={} slots={reclaimed_slots}",
         tasks.len(),
     );
+    let exports = unsafe { &mut *ptr::addr_of_mut!(CAPABILITY_EXPORTS) };
+    for slot in &mut exports.entries {
+        let Some(export) = slot.take() else { continue };
+        if export.finalized {
+            exports.imported = exports.imported.saturating_add(1);
+            if let Some(bits) = export.ticket {
+                let ticket = sel4::init_thread::slot::CNODE
+                    .cap()
+                    .absolute_cptr(sel4::cap::Endpoint::from_bits(bits));
+                let _ = ticket.delete();
+            }
+        } else {
+            *slot = Some(export);
+        }
+    }
+    sel4::debug_println!(
+        "SLIME_GRAPH native task_caps={} exports={} tickets={}",
+        graph.len(),
+        exports.len(),
+        exports.len(),
+    );
+    sel4::debug_println!(
+        "SLIME_GRAPH capabilities exports={} imports={} cancels={} finalized={} outstanding={} tickets={}",
+        exports.exported,
+        exports.imported,
+        exports.cancelled,
+        exports.finalized,
+        exports.len(),
+        exports.len(),
+    );
     // The channel plane's own accounting, kept on its own line so P5.2's
     // terminal marker keeps the exact shape its gate already asserts.
     //
-    // `parked=0` and `queues=0` together are what make teardown complete: no
-    // task is still blocked on a reply the root owes it, and no queue still
-    // believes it has a live peer. `replies` is every saved CSlot handed back,
-    // which is what shows the save path is not a leak.
-    //
-    // `minted` is cumulative and appended last, for the reason
-    // `terminated` is: `channel::sweep` reclaims entries once no holder can
-    // name them (B22), so a live count reads low on any graph that released as
-    // it went — the healthy case rather than the broken one. Appended rather
-    // than inserted because the two gates that assert this line match a prefix
-    // ending at `replies`, and below `MAX_CHANNELS` a boot mints exactly as
-    // many as it ever held.
     sel4::debug_println!(
-        "SLIME_GRAPH channels served sends={sends} receives={receives} parks={parks} settled={peer_deaths} parked={} queues={} replies={} minted={}",
-        parked.len(),
-        channels.live_queues(graph, &transit),
-        parked.recycled(),
-        channels.minted(),
-    );
-    // Which tasks are still owed an answer, when any are (B28).
-    //
-    // A separate line rather than a field on the one above, because two gates
-    // match that line by a prefix ending at `replies` and would stop matching if
-    // it grew. Emitted only when the set is non-empty, so a healthy boot — every
-    // one of the nine passing planes — gains no line at all and no fixture
-    // moves.
-    //
-    // `parked=` already says *how many* replies the root still holds; it cannot
-    // say *which*, which is the datum B28 needs. A task parked at teardown was
-    // woken and never resumed, or never woken at all, and the two are
-    // indistinguishable from a count.
-    if !parked.is_empty() {
-        sel4::debug_println!("SLIME_GRAPH replies owed count={}", parked.len());
-        for task in parked.tasks() {
-            sel4::debug_println!("SLIME_GRAPH reply owed task={}", task.0);
-        }
-    }
-    // The loan plane's accounting, on its own line for the same reason: P5.3.1's
-    // gate asserts the line above by its exact shape.
-    //
-    // The four zeros are what make reclamation observable. `loans`, `mappings`,
-    // and `regions` are the shared-buffer table's own live counts, so a loan
-    // whose lender died without settling, or a mapping a dead receiver still
-    // held, shows up here rather than as memory quietly retained. `transit` is
-    // capabilities in flight — one still parked at teardown is one no task can
-    // ever name.
-    //
-    // `quotas` is appended last, for the reason `minted` is on the channel
-    // line: the five gates that assert this marker match a prefix ending at
-    // `aliases`. It is the count of ceilings still bound at teardown, and it is
-    // not zero — the root-launched components' quotas are declared at boot and
-    // released only when their tasks die, so a healthy boot ends with the
-    // launched set still bound. What it makes visible is B24's shape: a graph
-    // that spawns and reaps repeatedly must not leave this climbing.
-    sel4::debug_println!(
-        "SLIME_GRAPH loans served={loans_served} loans={} mappings={} regions={} transit={} orphans={} aliases={} quotas={}",
+        "SLIME_GRAPH loans served={loans_served} loans={} mappings={} regions={} orphans={} aliases={} quotas={}",
         buffers.loan_count(),
         buffers.mapping_count(),
         buffers.live_count(),
-        transit.len(),
         buffers.orphan_count(),
         buffer_adapter::live_frame_aliases(),
         buffers.quota_count(),
     );
-    // The spawn plane's accounting, on its own line for the same reason the two
-    // above are: each earlier gate asserts its own line by exact shape.
-    //
-    // `waits=0` is the teardown property here: no task is still registered on a
-    // child's termination, which would mean a wake that can never arrive.
-    // `terminated` is deliberately *not* zero — it is one record per child that
-    // ended, so a zero here on a boot that spawned would mean the supervision
-    // path recorded nothing.
-    //
-    // Cumulative, not live: records are reclaimed once no holder can name them
-    // (`supervision::sweep`), so the live count would read zero on any graph
-    // that collected its outcomes, which is the healthy case rather than the
-    // broken one. Below `MAX_RECORDS` the two are equal — a task terminates at
-    // most once and `next_id` never reuses an id — so every gate written
-    // against the live count reads the same number here.
     sel4::debug_println!(
-        "SLIME_GRAPH spawns served={spawns} drops={drops} endpoints={endpoints} terminated={} waits={}",
+        "SLIME_GRAPH spawns served={spawns} drops={drops} terminated={}",
         terminations.recorded(),
-        supervision_waits.len(),
     );
-    // The C8.3 transfer plane, on its own line for the same reason: five
-    // earlier gates assert the lines above by exact shape.
-    //
-    // `transfers` is how many narrow-on-transfer moves crossed. It is zero on
-    // every graph where each participant holds the edge the generation declared
-    // it — which is every seL4 gate before P5.5.1 — and nonzero exactly when a
-    // broker provisioned a role, so the number distinguishes a graph whose
-    // authority was placed from one whose authority was handed on.
-    sel4::debug_println!("SLIME_GRAPH transfers served={transfers}");
     sel4::debug_println!(
         "SLIME_ROOT allocator live_slots={} live_objects={} live_bytes={} slot_reuses={} arena_reuses={}",
         allocator.live_slots(),
@@ -3441,557 +3097,15 @@ fn serve_instance_graph(
         allocator.slots_reused(),
         allocator.arena_reuses(),
     );
-}
-
-/// Whether this operation may end with the caller parked, and so needs its
-/// reply authority saved before anything else runs.
-///
-/// `send` is included even though it never parks: it can still fail after the
-/// window read, and answering a caller whose implicit reply slot is intact
-/// while other operations answer over saved capabilities would make the reply
-/// path depend on which arm ran. One rule for the whole channel plane is easier
-/// to hold correct than three.
-const fn parkable(operation: Operation) -> bool {
-    matches!(
-        operation,
-        Operation::Send | Operation::Recv | Operation::Wait
-    )
-}
-
-/// Resolve a slot through the caller's own table to the channel it names,
-/// requiring `rights`.
-///
-/// Every failure is `BadCapability` — `ERR_BAD_CAP`, status -1 — matching
-/// `kernel/src/syscall/mod.rs::{sys_send,sys_recv}`, which answer it for all
-/// three cases alike: a slot holding nothing, a slot holding another kind, and
-/// a slot holding an endpoint without the right the operation needs. Components
-/// compare against the literal, so this is ABI rather than diagnostics:
-/// `fabric-publisher` asserts `recv(route_slot) == ERR_BAD_CAP` to prove its
-/// send-only role carries no receive authority, and answering anything else
-/// reads to it as "the denial did not fire".
-///
-/// Indistinguishable on purpose, too. Which of the three it was is not the
-/// caller's business, and separating them would let a component map its own
-/// table — or infer another's authority — by watching which refusal came back.
-fn resolve_channel(
-    graph: &GraphTables,
-    id: TaskId,
-    slot: u32,
-    rights: u64,
-) -> Result<(ipc::ChannelKey, graph::Side), IpcError> {
-    let table = graph.get(id).ok_or(IpcError::BadCapability)?;
-    match table
-        .resolve(slot, rights)
-        .map_err(|_| IpcError::BadCapability)?
-        .resource
-    {
-        graph::Resource::Endpoint { channel, side } => Ok((channel, side)),
-        // A slot the task holds but that names something else — an executable,
-        // a factory, a buffer — is refused exactly as an ungranted one is.
-        _ => Err(IpcError::BadCapability),
-    }
-}
-
-/// Enqueue one message onto the channel the caller named.
-///
-/// A capability the message carries is moved out of the caller's table and
-/// parked in the transit table, inside the same atomic step as the enqueue —
-/// see [`DepartingCaps`]. Only a loan can move; every other resource kind is
-/// authority the generation placed, and the refusal is a bounded Slime error
-/// with the caller still running.
-#[allow(clippy::too_many_arguments)]
-fn serve_send(
-    channels: &mut ChannelTable,
-    graph: &mut GraphTables,
-    windows: &WindowTable<MAX_TASKS>,
-    parked: &mut ParkedReplies,
-    transit: &mut Transit,
-    scratch: &ScratchPage,
-    supervision_waits: &mut supervision::SupervisionWaits,
-    id: TaskId,
-    words: &[sel4::Word; ipc::FAST_MESSAGE_REGISTERS],
-    served: &mut usize,
-) -> Response {
-    let (channel, side) = match resolve_channel(graph, id, words[0] as u32, RIGHT_SEND) {
-        Ok(endpoint) => endpoint,
-        Err(error) => return Response::error(error),
-    };
-    let frame = match transfer_window::read_staged(windows.bound(id), words[1], words, scratch) {
-        Ok(frame) => frame,
-        Err(error) => return Response::error(error),
-    };
-    // Capabilities ride to the same receiving end as the bytes. Since B25 an
-    // end may have more than one holder, choosing a task here would predict the
-    // winner of a future dequeue and can bind the capability to the wrong one.
-    let receiving_side = side.opposite();
-    let slots = match frame.cap_slots() {
-        Ok(slots) => slots,
-        Err(error) => return Response::error(error),
-    };
-    let message = match ipc::Message::new(frame.bytes(), &slots[..frame.cap_count()]) {
-        Ok(message) => message,
-        Err(error) => return Response::error(error),
-    };
-    let len = message.len();
-    let caps = message.cap_count();
-    let Some(queue) = channels.send_queue_mut(channel, side) else {
-        return Response::error(IpcError::InvalidOperation);
-    };
-    // Preflight, capability move, and commit are one atomic step over a queue
-    // whose revision has not moved, so a refused send enqueues nothing and
-    // moves nothing.
-    let mut departing = DepartingCaps {
-        graph,
-        transit,
-        sender: id,
-        channel,
-        receiving_side,
-        departed: [None; ipc::MAX_MESSAGE_CAPS],
-        refusal: None,
-    };
-    let wake = match ipc::send_atomic(queue, message, &mut departing) {
-        Ok(wake) => wake,
-        Err(error) => {
-            // `send_atomic` re-checks the queue after the move, so a commit can
-            // fail with capabilities already parked. They belong to nobody at
-            // that point; hand them back to the sender, which still holds them
-            // as far as it knows.
-            departing.recall_all();
-            // The adapter's own reason when it has one, because `send_atomic`
-            // reports every adapter failure as `TransferFailed` and a component
-            // that named an unmovable capability is owed the refusal rather
-            // than a generic failure.
-            let error = departing.refusal.unwrap_or(error);
-            if error == IpcError::UnsupportedCapabilityTransfer {
-                sel4::debug_println!(
-                    "SLIME_GRAPH capability transfer refused task={} channel={channel} caps={caps}",
-                    id.0,
-                );
-            }
-            return Response::error(error);
-        }
-    };
-    let moved = departing.departed();
-    *served += 1;
-    sel4::debug_println!(
-        "SLIME_GRAPH sent task={} channel={channel} bytes={len} caps={moved} queued={}",
-        id.0,
-        channels
-            .send_queue(channel, side)
-            .map_or(0, ipc::Channel::len),
-    );
-    if moved != 0 {
+    let completed = completed_required.iter().filter(|done| **done).count();
+    if live == 0 && required != 0 && completed == required {
         sel4::debug_println!(
-            "SLIME_GRAPH capability transfer task={} channel={channel} side={} caps={moved}",
-            id.0,
-            receiving_side.name(),
+            "SLIME_GRAPH HEALTHY generation={} required={} live=0 completed={} failed=0",
+            generation.number,
+            required,
+            completed,
         );
     }
-    // A receiver parked in `wait` on this queue is owed its wake now: nothing
-    // else will make it retry. The message it collects is counted when its own
-    // `recv` takes it, not here.
-    if let Some(wake) = wake {
-        deliver_wake(channels, parked, supervision_waits, wake);
-    }
-    Response::success(0, 0)
-}
-
-/// Dequeue one message for the caller, or report the channel it must park on.
-///
-/// `Err(channel)` is not a failure: it is "nothing queued and the peer is
-/// alive", which the dispatcher turns into a held reply. A dead peer is an
-/// answer and comes back as `Ok`.
-#[allow(clippy::too_many_arguments)]
-fn serve_recv(
-    channels: &mut ChannelTable,
-    graph: &mut GraphTables,
-    windows: &WindowTable<MAX_TASKS>,
-    parked: &mut ParkedReplies,
-    transit: &mut Transit,
-    supervision_waits: &mut supervision::SupervisionWaits,
-    scratch: &ScratchPage,
-    id: TaskId,
-    words: &[sel4::Word; ipc::FAST_MESSAGE_REGISTERS],
-    served: &mut usize,
-) -> Result<Response, ipc::ChannelKey> {
-    let (channel, side) = match resolve_channel(graph, id, words[0] as u32, RIGHT_RECV) {
-        Ok(endpoint) => endpoint,
-        Err(error) => return Ok(Response::error(error)),
-    };
-    let Some(queue) = channels.recv_queue_mut(channel, side) else {
-        return Ok(Response::error(IpcError::InvalidOperation));
-    };
-    // The message's capabilities are transit tokens, not slot numbers, so
-    // nothing here moves them: the tokens ride out on the dequeued message and
-    // `land_caps` resolves them below. The destination-capacity preflight is
-    // still real — the queue refuses to hand over a message this task has no
-    // room for, leaving it queued.
-    let available = graph
-        .get(id)
-        .map_or(0, |table| graph::MAX_TASK_CAPS - table.len());
-    let outcome = match ipc::receive_atomic(queue, available, &mut CarryCapabilities) {
-        Ok(outcome) => outcome,
-        Err(IpcError::WouldBlock) => return Err(channel),
-        Err(error) => return Ok(Response::error(error)),
-    };
-    // Dequeue is the transition that makes a full queue writable. The channel
-    // has consumed its send-capacity waiter and returned the wake with the
-    // message, so deliver it now; dropping it leaves a sender parked forever
-    // even though this receive created room. This precedes capability landing
-    // deliberately: the dequeue already committed, so a later landing failure
-    // must not erase the capacity transition.
-    if let Some(wake) = outcome.wake {
-        deliver_wake(channels, parked, supervision_waits, wake);
-    }
-    // Land the capabilities before the reply is built, because the reply must
-    // report the slots they landed at. A landing that fails is not silently
-    // dropped: the message is already dequeued, so the capabilities are handed
-    // back to the transit table's reclamation rather than lost — see
-    // `land_caps`.
-    let landed = match land_caps(graph, transit, id, channel, side, &outcome.message) {
-        Ok(landed) => landed,
-        Err(error) => return Ok(Response::error(error)),
-    };
-    let response = deliver_message(windows, scratch, id, &outcome.message, &landed);
-    if response.result >= 0 {
-        *served += 1;
-        sel4::debug_println!(
-            "SLIME_GRAPH received task={} channel={channel} bytes={} caps={}",
-            id.0,
-            outcome.message.len(),
-            landed.len(),
-        );
-    }
-    Ok(response)
-}
-
-/// Slots one received message's capabilities landed at, in message order.
-#[derive(Clone, Copy, Default)]
-struct LandedCaps {
-    slots: [u32; ipc::MAX_MESSAGE_CAPS],
-    len: usize,
-}
-
-impl LandedCaps {
-    const fn len(&self) -> usize {
-        self.len
-    }
-
-    fn slots(&self) -> &[u32] {
-        &self.slots[..self.len]
-    }
-}
-
-/// Install each capability a received message carries into the receiver's
-/// table, and report the slots.
-///
-/// Tokens are bound to the queue end this message was dequeued from. The task
-/// that wins the dequeue receives both bytes and capabilities; no sender-side
-/// task prediction participates.
-fn land_caps(
-    graph: &mut GraphTables,
-    transit: &mut Transit,
-    id: TaskId,
-    channel: ipc::ChannelKey,
-    side: graph::Side,
-    message: &ipc::Message,
-) -> Result<LandedCaps, IpcError> {
-    let mut landed = LandedCaps::default();
-    for token in message.caps().iter().flatten().copied() {
-        let Some(capability) = transit.arrive(token, channel, side) else {
-            // Authority may expire while the bytes remain readable. A token
-            // collected from a different end is rejected by the same path.
-            sel4::debug_println!(
-                "SLIME_GRAPH capability expired task={} channel={channel} side={} bytes={}",
-                id.0,
-                side.name(),
-                message.len(),
-            );
-            continue;
-        };
-        let outcome = graph
-            .get_mut(id)
-            .ok_or(IpcError::InvalidOperation)
-            .and_then(|table| {
-                // From 1, never 0: a received slot number is reported to the
-                // receiver, and every protocol that carries them — the spawn
-                // request's `received_caps` among them — reads 0 as "no
-                // capability". Landing one there makes it invisible to the
-                // component that was just given it.
-                let slot = table
-                    .free_slot_from(1)
-                    .ok_or(IpcError::DestinationSlotsExhausted)?;
-                table.install(slot, capability)?;
-                Ok(slot)
-            });
-        match outcome {
-            Ok(slot) => {
-                landed.slots[landed.len] = slot;
-                landed.len += 1;
-            }
-            Err(error) => {
-                if transit.depart(capability, id, channel, side).is_err() {
-                    sel4::debug_println!(
-                        "SLIME_GRAPH FAIL capability lost task={} reason=transit-full",
-                        id.0,
-                    );
-                }
-                unland_caps(graph, transit, id, channel, side, &landed);
-                return Err(error);
-            }
-        }
-    }
-    Ok(landed)
-}
-
-/// Take back every capability [`land_caps`] installed, re-parking each one.
-///
-/// No message names the new tokens, so they are deliberately unreachable; the
-/// destination end is retained only so [`Transit::reclaim`] can drop them when
-/// its last holder dies and terminal accounting still reaches zero.
-fn unland_caps(
-    graph: &mut GraphTables,
-    transit: &mut Transit,
-    id: TaskId,
-    channel: ipc::ChannelKey,
-    side: graph::Side,
-    landed: &LandedCaps,
-) {
-    let Some(table) = graph.get_mut(id) else {
-        return;
-    };
-    for slot in landed.slots() {
-        if let Some(capability) = table.get(*slot) {
-            table.drop_slot(*slot);
-            if transit.depart(capability, id, channel, side).is_err() {
-                sel4::debug_println!(
-                    "SLIME_GRAPH FAIL capability lost task={} reason=transit-full",
-                    id.0,
-                );
-            }
-        }
-    }
-}
-
-/// Write a received message into the caller's window and build its reply.
-///
-/// The frame carries the *landed* slot numbers, not the tokens the message
-/// held: the component's `recv` reads them back as capability slots it can name
-/// in a later operation, and a token would name nothing in its table.
-fn deliver_message(
-    windows: &WindowTable<MAX_TASKS>,
-    scratch: &ScratchPage,
-    id: TaskId,
-    message: &ipc::Message,
-    landed: &LandedCaps,
-) -> Response {
-    let frame = match transfer_window::StagedFrame::from_parts(message.bytes(), landed.slots()) {
-        Ok(frame) => frame,
-        Err(error) => return Response::error(error),
-    };
-    // The component's `collect` reads the frame back at the descriptor this
-    // reply names, so the two must agree byte for byte about where it is.
-    match transfer_window::write_staged(windows.bound(id), &frame, scratch) {
-        Ok(()) => Response::success(message.len() as i64, frame.reply_descriptor()),
-        Err(error) => Response::error(error),
-    }
-}
-
-/// Arm the caller's wait set, reporting whether a source was already ready.
-///
-/// Registration is all-or-nothing across the whole set, and every registration
-/// is dropped again when one fires, so a stale waiter can never make a later
-/// wake name a task that is no longer parked.
-#[allow(clippy::too_many_arguments)]
-fn serve_wait(
-    channels: &mut ChannelTable,
-    graph: &GraphTables,
-    windows: &WindowTable<MAX_TASKS>,
-    scratch: &ScratchPage,
-    terminations: &supervision::Terminations,
-    supervision_waits: &mut supervision::SupervisionWaits,
-    id: TaskId,
-    words: &[sel4::Word; ipc::FAST_MESSAGE_REGISTERS],
-) -> Result<bool, IpcError> {
-    let count = words[0] as usize;
-    if count == 0 || count > ipc::MAX_WAIT_SOURCES {
-        return Err(IpcError::InvalidLength);
-    }
-    let frame = transfer_window::read_staged(windows.bound(id), words[1], words, scratch)?;
-    let bytes = frame.bytes();
-    if bytes.len() != count * channel::WAIT_RECORD_BYTES {
-        return Err(IpcError::InvalidLength);
-    }
-    let table = graph.get(id).ok_or(IpcError::InvalidOperation)?;
-
-    let mut targets = [None; ipc::MAX_WAIT_SOURCES];
-    let mut mediated = 0;
-    for (slot, record) in targets
-        .iter_mut()
-        .zip(bytes.chunks_exact(channel::WAIT_RECORD_BYTES))
-    {
-        let record = u64::from_le_bytes(record.try_into().map_err(|_| IpcError::InvalidLength)?);
-        let target = channel::resolve_wait_source(record, table)?;
-        if target != WaitTarget::Unmediated {
-            mediated += 1;
-        }
-        *slot = Some(target);
-    }
-    // A set naming only planes this cutover does not mediate would park forever,
-    // because nothing can ever make one ready. Refuse it, so the caller gets a
-    // bounded error and keeps running.
-    if mediated == 0 {
-        return Err(IpcError::UnsupportedOperation);
-    }
-
-    // A supervision source is ready when its child has already ended. That is
-    // read from the termination record rather than from any queue, so it is
-    // tested here rather than inside `ChannelTable::is_ready`.
-    //
-    // A free function rather than a closure over `channels`: the registration
-    // loop below needs `channels` mutably, and a closure capturing it would
-    // hold a shared borrow across that loop.
-    fn any_ready(
-        targets: &[Option<WaitTarget>; ipc::MAX_WAIT_SOURCES],
-        channels: &ChannelTable,
-        terminations: &supervision::Terminations,
-        _id: TaskId,
-    ) -> bool {
-        targets.iter().flatten().any(|target| match target {
-            WaitTarget::Supervision(child) => terminations.get(*child).is_some(),
-            other => channels.is_ready(*other),
-        })
-    }
-
-    if any_ready(&targets, channels, terminations, id) {
-        return Ok(true);
-    }
-    for target in targets.iter().flatten() {
-        match target {
-            WaitTarget::Supervision(child) => supervision_waits.register(id, *child),
-            other => channels.register_wait(id, *other)?,
-        }
-    }
-    // Probe again after registering: a send that landed between the first probe
-    // and the registration would otherwise be a lost wakeup. A child cannot die
-    // in that window — the root is single-threaded and a death is observed in
-    // this same loop — but the same re-probe covers both, and asymmetry here
-    // would be a rule to remember rather than one the code enforces.
-    if any_ready(&targets, channels, terminations, id) {
-        channels.clear_waits(id);
-        supervision_waits.clear(id);
-        return Ok(true);
-    }
-    Ok(false)
-}
-
-/// Answer every parked `wait` that named `child`, now that it has ended.
-///
-/// The termination record must already be written when this runs: the woken
-/// task re-polls `supervision_status` immediately, and a wake that arrived
-/// before the record would send it straight back to parking on a child that is
-/// already gone.
-/// Record how `child` ended, reclaiming unobservable records if the table is
-/// full.
-///
-/// The sweep runs lazily, on full, rather than on every death: one trigger
-/// condition is one thing to keep correct, and a sweep that does not run leaves
-/// records that still answer correctly. See [`supervision::sweep`].
-///
-/// A record lost after the sweep means every slot has a live holder — a real
-/// resource limit rather than a bookkeeping bug — but the consequence is still
-/// a parent that waits forever, so it is reported rather than dropped silently.
-/// Matches `unland_caps`'s `SLIME_GRAPH FAIL capability lost … reason=` line.
-fn record_termination(
-    terminations: &mut supervision::Terminations,
-    graph: &GraphTables,
-    transit: &Transit,
-    child: TaskId,
-    termination: supervision::Termination,
-) {
-    if terminations.record(child, termination) {
-        return;
-    }
-    let freed = supervision::sweep(terminations, graph, transit);
-    if terminations.record(child, termination) {
-        sel4::debug_println!(
-            "SLIME_GRAPH supervision swept freed={freed} live={}",
-            terminations.len()
-        );
-        return;
-    }
-    sel4::debug_println!(
-        "SLIME_GRAPH FAIL termination lost task={} reason=records-full",
-        child.0
-    );
-}
-
-fn wake_supervisors(
-    parked: &mut ParkedReplies,
-    supervision_waits: &mut supervision::SupervisionWaits,
-    child: TaskId,
-) {
-    // Collected before answering, because clearing a registration mutates the
-    // table the iterator borrows.
-    //
-    // Bounded by `MAX_TASKS` rather than by `MAX_WAITS`: registration is
-    // idempotent per (waiter, child) pair, so one child has at most one waiter
-    // per task. Sizing this by the registration table's own bound would put
-    // eight times as much on a 256 KiB root stack for entries that cannot
-    // exist — and an oversized stack temporary is exactly backlog B3.
-    let mut woken = [None; MAX_TASKS];
-    let mut count = 0;
-    for waiter in supervision_waits.waiters_for(child) {
-        if let Some(slot) = woken.get_mut(count) {
-            *slot = Some(waiter);
-            count += 1;
-        }
-    }
-    for waiter in woken.iter().take(count).flatten().copied() {
-        // Every registration this waiter holds, not just the one that fired:
-        // a wait set is answered once, so its other sources must stop being
-        // able to answer it a second time.
-        supervision_waits.clear(waiter);
-        if parked.reason(waiter) == Some(ParkReason::Wait)
-            && parked.wake(waiter, Response::success(0, 0))
-        {
-            sel4::debug_println!(
-                "SLIME_GRAPH supervision woken task={} child={}",
-                waiter.0,
-                child.0,
-            );
-        }
-    }
-}
-
-/// Deliver one wake to whichever task is parked for it.
-///
-/// A wake naming a task that is not parked is not an error — its registration
-/// outlived the `wait` that made it — and answers nothing.
-///
-/// Every park is a `wait` since P5.5.1, so a wake carries only the wake:
-/// `slime_rt::wait` documents that the caller re-polls every source afterwards,
-/// and that re-poll is the `recv` that takes the message. Before this, `recv`
-/// parked too and this function had to *deliver* the message to it — dequeue,
-/// land the capabilities, and write the payload into the woken task's window —
-/// which was a second copy of `serve_recv`'s body reachable by two paths that
-/// had to stay in step. Making `recv` non-blocking removed it.
-fn deliver_wake(
-    channels: &mut ChannelTable,
-    parked: &mut ParkedReplies,
-    supervision_waits: &mut supervision::SupervisionWaits,
-    wake: ipc::WakeDecision,
-) {
-    let task = TaskId(wake.task);
-    if parked.reason(task).is_none() {
-        return;
-    }
-    // Both halves of the woken task's wait set, cleared together: a wait is
-    // answered once, so a supervision source in the same set must stop being
-    // able to answer it again.
-    channels.clear_waits(task);
-    supervision_waits.clear(task);
-    parked.wake(task, Response::success(0, 0));
 }
 
 /// Bytes one encoded spawn-grant record occupies in the caller's transfer
@@ -4055,11 +3169,8 @@ struct SpawnPlan {
     /// child-local destination slot, and whether the declaration authorizing
     /// them is a minted binding. Spawn never consumes the parent slot.
     ///
-    /// A generation-declared channel end is re-installed after construction
-    /// from `ChannelTable`'s single pre-created edge, so copying the parent's
-    /// end here would install the wrong side. A *minted* endpoint has no such
-    /// declared edge — its object exists only because the parent created it at
-    /// runtime — so the copy is the only way it reaches the child.
+    /// Root-mediated capabilities only. Native endpoint and notification
+    /// bindings are installed separately into the child's CSpace.
     granted: [Option<(u32, u32, graph::Capability, bool)>; MAX_SPAWN_GRANTS],
     count: usize,
     /// Whether the executable capability carried `RIGHT_TRANSFER`, which is
@@ -4095,11 +3206,9 @@ fn resource_label<'a>(generation: &Generation<'a>, resource: &graph::Resource) -
 const fn valid_rights(resource: &graph::Resource) -> u64 {
     match resource {
         graph::Resource::Executable { .. } => RIGHT_EXEC | RIGHT_SPAWN | RIGHT_TRANSFER,
-        graph::Resource::Endpoint { .. } => RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
-        graph::Resource::EndpointFactory => RIGHT_ENDPOINT_CREATE | RIGHT_TRANSFER,
-        graph::Resource::Notification { .. } => RIGHT_NOTIFY | RIGHT_TRANSFER,
         graph::Resource::SharedBufferFactory => RIGHT_BUFFER_CREATE | RIGHT_TRANSFER,
         graph::Resource::Supervision { .. } => RIGHT_SUPERVISE | RIGHT_TRANSFER,
+        graph::Resource::NativeEndpoint => RIGHT_SEND | RIGHT_RECV,
         graph::Resource::SharedBuffer { .. } | graph::Resource::Loan { .. } => RIGHT_BUFFER_ALL,
         // No `RIGHT_TRANSFER`: the device is singular and its authority is
         // placed by the generation, so there is no composition that would need
@@ -4168,7 +3277,11 @@ fn nth_declared_capability<'a>(
         let declared = generation
             .grant(binding.grant)
             .map_err(|_| IpcError::BadCapability)?;
-        each(DeclaredCapability::Granted(binding.slot, declared))?;
+        // Native Endpoint capabilities are materialized by the root from this
+        // declaration after construction; they never cross the spawn request.
+        if declared.rights & (RIGHT_SEND | RIGHT_RECV) == 0 {
+            each(DeclaredCapability::Granted(binding.slot, declared))?;
+        }
     }
     for at in 0..generation.minted_binding_count() {
         let minted = generation
@@ -4194,7 +3307,11 @@ fn declarations_below(
         let binding = generation
             .binding(child, at)
             .map_err(|_| IpcError::BadCapability)?;
-        below += usize::from(binding.slot < slot);
+        let declared = generation
+            .grant(binding.grant)
+            .map_err(|_| IpcError::BadCapability)?;
+        below +=
+            usize::from(declared.rights & (RIGHT_SEND | RIGHT_RECV) == 0 && binding.slot < slot);
     }
     for at in 0..generation.minted_binding_count() {
         let minted = generation
@@ -4278,10 +3395,10 @@ fn preflight_spawn_grants(
     if count > MAX_SPAWN_GRANTS {
         return Err(IpcError::InvalidLength);
     }
-    // The child's declared capability set is its grant-backed bindings plus the
-    // capabilities its owner mints at runtime. Both are generation-declared:
-    // a binding names a concrete authority edge, a minted binding names the
-    // same edge with the object deferred to its minter.
+    // The child's spawn-supplied set is its non-endpoint grant-backed bindings
+    // plus the capabilities its owner mints at runtime. Native Endpoints are
+    // generation-declared too, but the root materializes them directly after
+    // construction, so the parent neither supplies nor can counterfeit them.
     let minted_count = (0..generation.minted_binding_count())
         .filter(|index| {
             generation
@@ -4301,8 +3418,9 @@ fn preflight_spawn_grants(
         let Ok(grant) = generation.grant(binding.grant) else {
             return Err(IpcError::BadCapability);
         };
-        if grant.source != GrantEndpoint::Instance(child_instance)
-            || grant.target != GrantEndpoint::Instance(child_instance)
+        if grant.rights & (RIGHT_SEND | RIGHT_RECV) == 0
+            && (grant.source != GrantEndpoint::Instance(child_instance)
+                || grant.target != GrantEndpoint::Instance(child_instance))
         {
             parent_supplied += 1;
         }
@@ -4473,7 +3591,7 @@ fn preflight_spawn_grants(
 fn construct_child(
     generation: &Generation<'_>,
     tasks: &mut TaskTable<MAX_TASKS>,
-    windows: &mut WindowTable<MAX_TASKS>,
+    windows: &mut WindowTable<MAX_WINDOW_ENTRIES>,
     graph: &mut GraphTables,
     buffers: &mut SharedBufferTable,
     allocator: &mut ObjectAllocator,
@@ -4592,17 +3710,26 @@ fn construct_child(
         release_child(tasks, windows, graph, buffers, allocator, id);
         return Err(IpcError::DestinationSlotsExhausted);
     };
-    let (window_addr, window, window_alias) = (
-        task.vspace.main().transfer_window_addr,
-        task.vspace.main().transfer_window,
-        task.vspace.main().transfer_window_alias,
-    );
-    if windows
-        .declare(id, window_addr, window, window_alias)
-        .is_err()
+    for (thread, pages) in task
+        .vspace
+        .pages
+        .iter()
+        .take(task.vspace.threads)
+        .enumerate()
     {
-        release_child(tasks, windows, graph, buffers, allocator, id);
-        return Err(IpcError::DestinationSlotsExhausted);
+        if windows
+            .declare(
+                id,
+                thread,
+                pages.transfer_window_addr,
+                pages.transfer_window,
+                pages.transfer_window_alias,
+            )
+            .is_err()
+        {
+            release_child(tasks, windows, graph, buffers, allocator, id);
+            return Err(IpcError::DestinationSlotsExhausted);
+        }
     }
 
     let quota = declared_quota(shared_buffer_budget(generation).as_ref(), instance.name);
@@ -4628,39 +3755,15 @@ fn construct_child(
         return Err(IpcError::DestinationSlotsExhausted);
     };
     for granted in plan.granted.iter().take(plan.count) {
-        let Some((_, destination, capability, minted)) = granted else {
+        let Some((_, destination, capability, _minted)) = granted else {
             continue;
         };
-        // A generation-declared channel binding is installed from
-        // ChannelTable's single pre-created edge after construction. The
-        // request record still validates the parent's held authority in
-        // preflight, but copying that parent end here would install the wrong
-        // side and collide with the child's explicit binding slot.
-        //
-        // A minted endpoint has no pre-created edge — the parent created the
-        // object at runtime, which is exactly what its declaration defers — so
-        // for those the copy is the only way the capability reaches the child.
-        if !minted && matches!(capability.resource, graph::Resource::Endpoint { .. }) {
-            continue;
-        }
         if child_table.install(*destination, *capability).is_err() {
             release_child(tasks, windows, graph, buffers, allocator, id);
             return Err(IpcError::DestinationSlotsExhausted);
         }
-        // A channel end crossing a spawn boundary is the one capability the
-        // parent hands over that the child cannot name in advance, so where it
-        // lands is worth recording.
-        if let graph::Resource::Endpoint { channel, side } = capability.resource {
-            sel4::debug_println!(
-                "SLIME_GRAPH channel copied parent={} child={} key={channel} side={} slot={}",
-                parent.0,
-                id.0,
-                side.name(),
-                destination,
-            );
-        }
     }
-    // A self-loop grant declares authority the child holds in its own right,
+
     // so no parent passes it and the loop above never sees it. The root is
     // the only party that can install it, and preflight has already excluded
     // these from the count the parent must satisfy.
@@ -4726,33 +3829,6 @@ fn construct_child(
     Ok(id)
 }
 
-/// Mint a channel pair, sweeping reclaimable channels first if the table is
-/// full.
-///
-/// Backlog **B22**'s fix, lazily on full. Dispatch is single-threaded and a
-/// spawned endpoint is an ordinary copied capability since B25, so there is no
-/// multi-step holder transition for a sweep to interleave with.
-fn mint_channel(
-    channels: &mut ChannelTable,
-    graph: &GraphTables,
-    transit: &Transit,
-    _id: TaskId,
-) -> Result<u32, channel::ChannelError> {
-    match channels.mint() {
-        Ok(key) => Ok(key),
-        Err(channel::ChannelError::TableFull) => {
-            let freed = channel::sweep(channels, graph, transit);
-            sel4::debug_println!(
-                "SLIME_GRAPH channels swept freed={freed} live={} minted={}",
-                channels.len(),
-                channels.minted(),
-            );
-            channels.mint()
-        }
-        Err(error) => Err(error),
-    }
-}
-
 /// Tear a partially constructed child back down.
 ///
 /// This is the single unwind owner after `TaskTable::create` succeeds. Each
@@ -4762,7 +3838,7 @@ fn mint_channel(
 /// last.
 fn release_child(
     tasks: &mut TaskTable<MAX_TASKS>,
-    windows: &mut WindowTable<MAX_TASKS>,
+    windows: &mut WindowTable<MAX_WINDOW_ENTRIES>,
     graph: &mut GraphTables,
     buffers: &mut SharedBufferTable,
     allocator: &mut ObjectAllocator,
@@ -4811,9 +3887,8 @@ fn serve_spawn(
     generation: &Generation<'_>,
     launched: &mut LaunchedInstances,
     tasks: &mut TaskTable<MAX_TASKS>,
-    windows: &mut WindowTable<MAX_TASKS>,
+    windows: &mut WindowTable<MAX_WINDOW_ENTRIES>,
     graph: &mut GraphTables,
-    channels: &mut ChannelTable,
     buffers: &mut SharedBufferTable,
     allocator: &mut ObjectAllocator,
     scratch: &ScratchPage,
@@ -4834,11 +3909,15 @@ fn serve_spawn(
     // An empty grant list stages nothing, so a spawn granting no capabilities
     // still does not require a bound window: a zero-length transfer reports the
     // empty array, and `preflight_spawn_grants` reads zero records out of it.
-    let frame =
-        match transfer_window::read_staged_array(windows.bound(id), words[1], words, scratch) {
-            Ok(frame) => frame,
-            Err(error) => return Response::error(error),
-        };
+    let frame = match transfer_window::read_staged_array(
+        windows.bound(id, descriptor_thread(words[1])),
+        words[1],
+        words,
+        scratch,
+    ) {
+        Ok(frame) => frame,
+        Err(error) => return Response::error(error),
+    };
 
     let Some(table) = graph.get(id) else {
         return Response::error(IpcError::InvalidOperation);
@@ -4925,8 +4004,6 @@ fn serve_spawn(
             return Response::error(error);
         }
     };
-    // The spawned child's native endpoints go in beside its logical ends, from
-    // its own arena so they are reclaimed with it (B46).
     let (child_arena, child_cnode, child_cnode_bits) = match tasks.get(child) {
         Some(task) => (task.cleanup.arena, task.cnode, task.cnode_size_bits),
         None => {
@@ -4934,12 +4011,10 @@ fn serve_spawn(
             return Response::error(IpcError::DestinationSlotsExhausted);
         }
     };
-    let installed_channels = match channels.install_instance(
+    let copied = match unsafe { &*ptr::addr_of!(PEER_ENDPOINTS) }.install_instance(
         generation,
         plan.instance,
         child,
-        graph,
-        unsafe { &*ptr::addr_of!(PEER_ENDPOINTS) },
         allocator,
         child_arena,
         child_cnode,
@@ -4949,29 +4024,31 @@ fn serve_spawn(
         Err(error) => {
             release_child(tasks, windows, graph, buffers, allocator, child);
             sel4::debug_println!(
-                "SLIME_GRAPH spawn failed task={} component={name} error=ChannelInstall({error:?})",
-                id.0,
+                "SLIME_GRAPH spawn failed task={} component={name} error=EndpointInstall({error:?})",
+                id.0
             );
             return Response::error(IpcError::BadCapability);
         }
     };
-
-    // Two ways a channel end reaches a child, and this counts both. A
-    // generation-declared end is re-installed from the pre-created catalogue by
-    // `install_instance`; a *minted* end has no catalogue entry — its object
-    // exists only because the parent created it at runtime — so the copy in
-    // `construct_child` is the only way it arrives.
-    let minted_channels = plan
-        .granted
-        .iter()
-        .take(plan.count)
-        .filter(|granted| {
-            granted.is_some_and(|(_, _, capability, minted)| {
-                minted && matches!(capability.resource, graph::Resource::Endpoint { .. })
-            })
-        })
-        .count();
-    let copied = installed_channels + minted_channels;
+    let notification_copied = match unsafe { &*ptr::addr_of!(NOTIFICATIONS) }.install_instance(
+        generation,
+        plan.instance,
+        child,
+        allocator,
+        child_arena,
+        child_cnode,
+        child_cnode_bits,
+    ) {
+        Ok(installed) => installed,
+        Err(error) => {
+            release_child(tasks, windows, graph, buffers, allocator, child);
+            sel4::debug_println!(
+                "SLIME_GRAPH spawn failed task={} component={name} error=NotificationInstall({error:?})",
+                id.0
+            );
+            return Response::error(IpcError::BadCapability);
+        }
+    };
 
     // The parent's handle, installed before the child runs. A child that exited
     // before its parent held a handle would leave the parent waiting on a task
@@ -5029,7 +4106,7 @@ fn serve_spawn(
     }
     *spawns += 1;
     sel4::debug_println!(
-        "SLIME_GRAPH spawned task={} child={} component={name} grants={} channels={copied} handle={handle}",
+        "SLIME_GRAPH spawned task={} child={} component={name} grants={} endpoints={copied} notifications={notification_copied} handle={handle}",
         id.0,
         child.0,
         plan.count,
@@ -5144,294 +4221,60 @@ fn serve_supervision_derive(
     Response::success(0, sel4::Word::from(derived))
 }
 
-/// Move one capability to a channel's peer, narrowed to exactly the mask its
-/// descriptor declares (C8.3, P5.5.1).
-///
-/// The root's counterpart to `kernel/src/syscall/mod.rs::sys_cap_transfer`, and
-/// deliberately as generic: it knows nothing of routes, schemas, or graph roles.
-/// A userspace broker composes a typed fabric out of it, which is what makes
-/// "a participant never holds a route endpoint directly but is provisioned one
-/// by the fabric" a property of the graph rather than of this function.
-///
-/// Four rules, restated from the oracle against this crate's tables:
-///
-/// 1. **Transfer authority at the source.** The moved capability must carry
-///    `RIGHT_TRANSFER`, the same condition a `send` attachment applies.
-/// 2. **Narrow only.** The destination mask must be a subset of the source's
-///    rights *and* of the kind's meaningful rights. A widening mask is refused
-///    before anything moves.
-/// 3. **Transfer authority is not inherited.** `RIGHT_TRANSFER` is dropped at
-///    the destination unless the descriptor sets `FLAG_RETAIN_TRANSFER`, so a
-///    provisioned endpoint is non-delegable by default rather than by
-///    convention. That single bit is what makes `fabric-publisher`'s
-///    re-delegation arm fail rather than succeed.
-/// 4. **The descriptor describes the move.** Its declared `object_kind` must be
-///    the moved capability's real kind, and the peer parses the same bytes this
-///    enforced — through `slime_proto::capability_transfer`, the same generated
-///    module both ends read — so a descriptor cannot advertise authority the
-///    receiver did not get.
-///
-/// # Why this is not `Resource::is_transferable`
-///
-/// [`graph::Resource::is_transferable`] answers `true` only for a loan, and its
-/// doc explains why widening it would be wrong: it gates the **send** path,
-/// where a capability rides a message chosen at runtime by whoever holds a
-/// channel. This is a different question with a different gate. Here the mover
-/// must hold `RIGHT_TRANSFER` on the capability itself — authority the
-/// generation placed or a parent narrowed at spawn — and the oracle's own
-/// `sys_cap_transfer` gates on exactly that bit rather than on any kind
-/// predicate. So the kind gate on `send` stands unchanged and this path is
-/// authorized by rights, matching the retired kernel line for line.
-///
-/// The move consumes the source capability, so the object never has two
-/// holders, and a failed send restores the original at its full rights rather
-/// than dropping it.
-#[allow(clippy::too_many_arguments)]
-fn serve_cap_transfer(
-    channels: &mut ChannelTable,
-    graph: &mut GraphTables,
-    windows: &WindowTable<MAX_TASKS>,
-    parked: &mut ParkedReplies,
-    transit: &mut Transit,
-    scratch: &ScratchPage,
-    supervision_waits: &mut supervision::SupervisionWaits,
-    id: TaskId,
-    words: &[sel4::Word; ipc::FAST_MESSAGE_REGISTERS],
-    transfers: &mut usize,
-) -> Response {
-    use slime_proto::capability_transfer::{
-        FLAG_RETAIN_TRANSFER, TRANSFER_LEN, WireCapabilityTransfer,
-    };
-
-    let endpoint_slot = (words[0] & 0xffff_ffff) as u32;
-    let capability_slot = (words[0] >> 32) as u32;
-    let frame = match transfer_window::read_staged(windows.bound(id), words[1], words, scratch) {
-        Ok(frame) => frame,
-        Err(error) => return Response::error(error),
-    };
-    if frame.cap_count() != 0 || frame.bytes().len() != TRANSFER_LEN {
-        return Response::error(IpcError::InvalidLength);
-    }
-    let Some(descriptor) = WireCapabilityTransfer::decode(frame.bytes()) else {
-        return Response::error(IpcError::InvalidLength);
-    };
-    if !valid_transfer_descriptor(&descriptor) {
-        return Response::error(IpcError::InvalidLength);
-    }
-    let rights = if descriptor.flags & FLAG_RETAIN_TRANSFER != 0 {
-        descriptor.rights_mask
-    } else {
-        descriptor.rights_mask & !RIGHT_TRANSFER
-    };
-    if rights == 0 {
-        return Response::error(IpcError::InvalidLength);
-    }
-
-    let (channel, side) = match resolve_channel(graph, id, endpoint_slot, RIGHT_SEND) {
-        Ok(endpoint) => endpoint,
-        Err(error) => return Response::error(error),
-    };
-    let receiving_side = side.opposite();
-    if endpoint_slot == capability_slot {
-        return Response::error(IpcError::BadCapability);
-    }
-
-    let Some(table) = graph.get_mut(id) else {
-        return Response::error(IpcError::InvalidOperation);
-    };
-    let Some(source) = table.get(capability_slot) else {
-        return Response::error(IpcError::BadCapability);
-    };
-    if !source.allows(RIGHT_TRANSFER)
-        || !descriptor_names(descriptor.object_kind, &source.resource)
-        || rights & !source.rights != 0
-        || rights & !valid_rights(&source.resource) != 0
-    {
-        return Response::error(IpcError::BadCapability);
-    }
-    let moved = graph::Capability {
-        resource: source.resource,
-        rights,
-    };
-    let original = source;
-    table.drop_slot(capability_slot);
-    let token = match transit.depart(moved, id, channel, receiving_side) {
-        Ok(token) => token,
-        Err(error) => {
-            let _ = graph
-                .get_mut(id)
-                .map(|table| table.install(capability_slot, original));
-            return Response::error(error);
-        }
-    };
-
-    // The carrier endpoint cannot be consumed by the message it must enqueue.
-    // Other endpoint capabilities move without holder bookkeeping: their side
-    // travels inside the capability itself.
-    if matches!(moved.resource, graph::Resource::Endpoint { channel: key, .. } if key == channel) {
-        restore_transferred(graph, transit, id, capability_slot, token, original);
-        return Response::error(IpcError::BadCapability);
-    }
-
-    let message = match ipc::Message::new(frame.bytes(), &[token]) {
-        Ok(message) => message,
-        Err(error) => {
-            restore_transferred(graph, transit, id, capability_slot, token, original);
-            return Response::error(error);
-        }
-    };
-    let Some(queue) = channels.send_queue_mut(channel, side) else {
-        restore_transferred(graph, transit, id, capability_slot, token, original);
-        return Response::error(IpcError::InvalidOperation);
-    };
-    let wake = match ipc::send_atomic(queue, message, &mut CarryCapabilities) {
-        Ok(wake) => wake,
-        Err(error) => {
-            restore_transferred(graph, transit, id, capability_slot, token, original);
-            return Response::error(error);
-        }
-    };
-    *transfers += 1;
-    sel4::debug_println!(
-        "SLIME_GRAPH capability transferred task={} channel={channel} side={} kind={} rights={rights:#x}",
-        id.0,
-        receiving_side.name(),
-        moved.resource.kind(),
-    );
-    if let Some(wake) = wake {
-        deliver_wake(channels, parked, supervision_waits, wake);
-    }
-    Response::success(0, 0)
-}
-
-/// Put a capability back after a transfer that did not cross, at its original
-/// rights. The endpoint side is part of `original`, so rollback needs no
-/// channel-table mutation.
-fn restore_transferred(
-    graph: &mut GraphTables,
-    transit: &mut Transit,
-    id: TaskId,
-    slot: u32,
-    token: ipc::LogicalCap,
-    original: graph::Capability,
-) {
-    if transit.recall(token, id).is_none() {
-        sel4::debug_println!(
-            "SLIME_GRAPH FAIL capability lost task={} slot={slot} reason=transit-empty",
-            id.0,
-        );
-        return;
-    }
-    let restored = graph
-        .get_mut(id)
-        .is_some_and(|table| table.install(slot, original).is_ok());
-    if !restored {
-        sel4::debug_println!(
-            "SLIME_GRAPH FAIL capability lost task={} slot={slot} reason=install-refused",
-            id.0,
-        );
-    }
-}
-
-/// Structural validity of a transfer descriptor, independent of the capability
-/// it accompanies.
-///
-/// `kernel/src/protocol/capability_transfer_proto.rs::valid_transfer`, restated
-/// against this crate's rights vocabulary. The one difference is the rights
-/// bound: the kernel checks `rights_mask & !RIGHT_ALL == 0` against its own
-/// enumeration of every defined bit, which this crate does not have — it names
-/// only the bits it interprets. The per-kind check in [`valid_rights`] is
-/// stricter than `RIGHT_ALL` anyway, since it bounds the mask by what the
-/// *named object* can carry rather than by what any object could, so an
-/// undefined bit is refused there rather than admitted here — and refused with
-/// the same `ERR_BAD_CAP` the kernel answers for a mask its capability does not
-/// hold, so the difference is not observable.
-fn valid_transfer_descriptor(
-    descriptor: &slime_proto::capability_transfer::WireCapabilityTransfer,
-) -> bool {
-    use slime_proto::capability_transfer::{
-        CAPABILITY_TRANSFER_MAGIC, FORMAT_VERSION, KNOWN_FLAGS,
-    };
-
-    descriptor.magic == CAPABILITY_TRANSFER_MAGIC
-        && descriptor.version == FORMAT_VERSION
-        // A nonzero status marks a denial, which carries no capability and
-        // never reaches this operation.
-        && descriptor.status == 0
-        && descriptor.flags & !KNOWN_FLAGS == 0
-        && descriptor.rights_mask != 0
-        // A kind this contract does not define is a *malformed descriptor*, not
-        // a capability failure, and the difference is the answer the caller
-        // gets: `ERR_INVALID_ARG` here against `ERR_BAD_CAP` from
-        // `descriptor_names` below. `descriptor_names` would refuse it anyway —
-        // no resource arm matches an undefined code — so without this the
-        // refusal still happens but under the wrong error, diverging from
-        // `sys_cap_transfer` on exactly the path this milestone claims parity
-        // for.
-        && is_object_kind(descriptor.object_kind)
-}
-
-/// Whether this contract version defines `object_kind`.
-///
-/// `kernel/src/protocol/capability_transfer_proto.rs::is_object_kind`, restated.
-/// The transferable set is deliberately narrow: the objects a userspace broker
-/// legitimately hands to a participant.
-const fn is_object_kind(object_kind: u32) -> bool {
-    use slime_proto::capability_transfer::{
-        OBJECT_KIND_DIRECTORY, OBJECT_KIND_ENDPOINT, OBJECT_KIND_SHARED_BUFFER,
-        OBJECT_KIND_SHARED_BUFFER_LOAN, OBJECT_KIND_SUPERVISION,
-    };
-
-    matches!(
-        object_kind,
-        OBJECT_KIND_ENDPOINT
-            | OBJECT_KIND_SHARED_BUFFER
-            | OBJECT_KIND_SHARED_BUFFER_LOAN
-            | OBJECT_KIND_SUPERVISION
-            | OBJECT_KIND_DIRECTORY
-    )
-}
-
-/// Whether the descriptor's declared `object_kind` is the resource's real kind.
-///
-/// Rule 4 of the transfer contract: the peer decides what it received by
-/// reading this field, so a descriptor that could name a kind the capability is
-/// not would let a broker advertise authority the root never installed. An
-/// `object_kind` this contract does not define matches nothing.
-///
-/// The kinds deliberately do not cover every [`graph::Resource`]. An executable
-/// and a factory have no descriptor code, so neither can be moved over a
-/// channel at all — not because this refuses them by name, but because the
-/// contract has no way to describe one. That is `contracts/capability-transfer`
-/// stating which objects a userspace broker may legitimately hand to a
-/// participant, and it is the same set the retired kernel's `kind_code`
-/// enumerates.
-fn descriptor_names(object_kind: u32, resource: &graph::Resource) -> bool {
-    use slime_proto::capability_transfer::{
-        OBJECT_KIND_DIRECTORY, OBJECT_KIND_ENDPOINT, OBJECT_KIND_SHARED_BUFFER,
-        OBJECT_KIND_SHARED_BUFFER_LOAN, OBJECT_KIND_SUPERVISION,
-    };
-
-    match resource {
-        graph::Resource::Endpoint { .. } => object_kind == OBJECT_KIND_ENDPOINT,
-        graph::Resource::SharedBuffer { .. } => object_kind == OBJECT_KIND_SHARED_BUFFER,
-        graph::Resource::Loan { .. } => object_kind == OBJECT_KIND_SHARED_BUFFER_LOAN,
-        graph::Resource::Supervision { .. } => object_kind == OBJECT_KIND_SUPERVISION,
-        graph::Resource::Directory { .. } => object_kind == OBJECT_KIND_DIRECTORY,
-        graph::Resource::Executable { .. }
-        | graph::Resource::EndpointFactory
-        | graph::Resource::SharedBufferFactory
-        | graph::Resource::Block { .. }
-        // A notification names no generation object: the root creates it
-        // alongside the sources that signal it, so there is nothing for a
-        // declared object kind to match against (B46).
-        | graph::Resource::Notification { .. }
-        | graph::Resource::Input => false,
-    }
-}
-
 /// Return a dead task's own objects: its VSpace, image frames, CNode, and TCB.
 ///
+fn record_termination(
+    terminations: &mut supervision::Terminations,
+    graph: &GraphTables,
+    child: TaskId,
+    termination: supervision::Termination,
+) {
+    if terminations.record(child, termination) {
+        return;
+    }
+    let freed = supervision::sweep(terminations, graph);
+    if !terminations.record(child, termination) {
+        sel4::debug_println!(
+            "SLIME_GRAPH FAIL termination lost task={} reason=records-full",
+            child.0
+        );
+    } else {
+        sel4::debug_println!(
+            "SLIME_GRAPH supervision swept freed={freed} live={}",
+            terminations.len()
+        );
+    }
+}
+
+fn reclaim_dead_task(buffers: &mut SharedBufferTable, allocator: &mut ObjectAllocator, id: TaskId) {
+    let holder = HolderId(u64::from(id.0));
+    let charged = buffers.holder_buffers(holder)
+        + buffers.holder_mappings(holder)
+        + buffers.holder_loans(holder);
+    if charged != 0 {
+        let mut adapter = BufferAdapter::new(allocator);
+        match buffers.reclaim_holder(&mut adapter, holder) {
+            Ok(actions) => sel4::debug_println!(
+                "SLIME_GRAPH holder reclaimed task={} charges={charged} actions={}",
+                id.0,
+                actions.len()
+            ),
+            Err(error) => sel4::debug_println!(
+                "SLIME_GRAPH holder reclaim incomplete task={} class={}",
+                id.0,
+                buffer_error_class(error)
+            ),
+        }
+    }
+    if buffers.release_quota(holder) {
+        sel4::debug_println!(
+            "SLIME_GRAPH quota released task={} live={}",
+            id.0,
+            buffers.quota_count()
+        );
+    }
+}
+
 /// The half of teardown `reclaim_dead_task` does not do. That function settles
 /// what the task *held* — channels, buffers, loans, in-flight capabilities —
 /// and this returns what the task *is*. Both death paths need both: a task
@@ -5470,310 +4313,297 @@ fn reclaim_task_objects(
     }
 }
 
-/// Settle every channel a dying task held an end of, and answer whoever was
-/// blocked on it.
-///
-/// This is the half of peer death that a suspend alone does not do. Stopping
-/// the thread makes the task stop *producing*; it does not tell the task at the
-/// other end that nothing more is coming. A component parked in `recv` is
-/// blocked inside a call the root owes an answer to, so without this it waits
-/// for a message that can never arrive and the graph never drains.
-///
-/// The dying task's own parked reply is abandoned rather than answered: there
-/// is no one left to receive it, and its CSlot still has to come back.
-///
-/// The same argument applies to everything else the task held, which is why
-/// this also reclaims its shared buffers and its in-flight capabilities:
-///
-/// - **Buffers and loans.** `SharedBufferTable::reclaim_holder` settles every
-///   loan the task lent or received, tears down its mappings, and reclaims the
-///   regions it owned. Without it a dead lender's loan stays live and its
-///   receiver keeps a mapping of a region nothing can reclaim — the retained
-///   pages outlive the task that was charged for them.
-/// - **In-flight capabilities.** One parked between a send and a receive
-///   belongs to no table, so neither end's release reaches it.
-#[allow(clippy::too_many_arguments)]
-fn reclaim_dead_task(
-    channels: &mut ChannelTable,
-    parked: &mut ParkedReplies,
-    transit: &mut Transit,
-    graph: &GraphTables,
-    buffers: &mut SharedBufferTable,
+fn capability_kind(resource: &graph::Resource) -> u32 {
+    use slime_proto::capability_transfer::*;
+    match resource {
+        graph::Resource::SharedBuffer { .. } => OBJECT_KIND_SHARED_BUFFER,
+        graph::Resource::Loan { .. } => OBJECT_KIND_SHARED_BUFFER_LOAN,
+        graph::Resource::Supervision { .. } => OBJECT_KIND_SUPERVISION,
+        graph::Resource::Directory { .. } => OBJECT_KIND_DIRECTORY,
+        graph::Resource::NativeEndpoint => OBJECT_KIND_ENDPOINT,
+        _ => 0,
+    }
+}
+
+fn serve_capability_export(
+    generation: &Generation<'_>,
+    launched: &LaunchedInstances,
+    graph: &mut GraphTables,
     allocator: &mut ObjectAllocator,
-    supervision_waits: &mut supervision::SupervisionWaits,
-    id: TaskId,
-    settled: &mut usize,
-) {
-    parked.abandon(id);
-    channels.clear_waits(id);
-    // A dying task's own registrations, not the ones naming it: those are
-    // answered by `wake_supervisors` before this runs, and clearing them here
-    // would be clearing another task's wait set.
-    supervision_waits.clear(id);
-
-    let held = graph
-        .get(id)
-        .map_or(0, graph::CapabilityTable::endpoints_held);
-    let mut wakes = channel::DeathWakes::new();
-    channels.mark_dead(graph, id, &mut wakes);
-
-    let mut woken = 0;
-    for (_, wake) in wakes.drain() {
-        // A wake naming a task that is not parked is not an error: it was
-        // registered by a `wait` that has since been answered, and the
-        // registration outlived it. `deliver_wake` returns without doing
-        // anything in that case.
-        deliver_wake(channels, parked, supervision_waits, wake);
-        woken += 1;
-    }
-    if held != 0 {
-        *settled += held;
-        sel4::debug_println!(
-            "SLIME_GRAPH peer death task={} channels={held} woken={woken}",
-            id.0,
-        );
-    }
-
-    // After the wakes, not before: a wake can complete a parked `recv` that
-    // lands a capability, and reclaiming in-flight entries first would drop one
-    // the woken task was about to receive.
-    let stranded = transit.reclaim(graph, id);
-
-    // Settle everything the shared-buffer table charged this holder. Reported
-    // whenever it did anything, so the terminal accounting can be read against
-    // per-task lines rather than only as a total.
-    let holder = HolderId(u64::from(id.0));
-    let charged = buffers.holder_buffers(holder)
-        + buffers.holder_mappings(holder)
-        + buffers.holder_loans(holder);
-    if charged != 0 || stranded != 0 {
-        let mut adapter = BufferAdapter::new(allocator);
-        match buffers.reclaim_holder(&mut adapter, holder) {
-            Ok(actions) => sel4::debug_println!(
-                "SLIME_GRAPH holder reclaimed task={} charges={charged} actions={} stranded={stranded}",
-                id.0,
-                actions.len(),
-            ),
-            // Reported rather than fatal: the table keeps whatever it could not
-            // tear down as its own recorded state — an orphaned page stays
-            // named so it is never revoked while mapped — and the terminal
-            // marker's non-zero counts are what surface it.
-            Err(error) => sel4::debug_println!(
-                "SLIME_GRAPH holder reclaim incomplete task={} class={}",
-                id.0,
-                buffer_error_class(error),
-            ),
-        }
-    }
-    // The ceiling last, after every charge against it is settled: a quota
-    // dropped before `reclaim_holder` would leave the table charging a holder
-    // it can no longer bound. Nothing can be charged again once the task is
-    // gone, so this is the point at which the entry becomes unreachable.
-    //
-    // B24: `quotas` had no free path, and its key derives from a task id that
-    // never rewinds, so `MAX_CHARGE_HOLDERS` counted the holders a boot ever
-    // constructed rather than those live at once.
-    if buffers.release_quota(holder) {
-        sel4::debug_println!(
-            "SLIME_GRAPH quota released task={} live={}",
-            id.0,
-            buffers.quota_count(),
-        );
-    }
-}
-
-/// Carry a dequeued message's capabilities through unchanged.
-///
-/// The receive side's whole policy, because there is nothing for it to do: the
-/// values in a queued message are transit tokens, and turning one into a slot
-/// number in the receiver's table needs the receiver's table — which
-/// `receive_atomic` has no access to and should not. So the tokens ride out on
-/// the dequeued message and [`land_caps`] resolves them, after the dequeue has
-/// committed and before the reply names anything.
-///
-/// That still leaves `receive_atomic`'s guarantee intact. Its job here is the
-/// destination-capacity preflight: it refuses to hand over a message carrying
-/// more capabilities than the receiver has room for, leaving it queued. What it
-/// does not do is decide *where* they go.
-///
-/// The send side is [`DepartingCaps`], which does move things — that is the
-/// direction where a capability leaves a table.
-struct CarryCapabilities;
-
-impl ipc::CapabilityTransfer for CarryCapabilities {
-    type Error = IpcError;
-
-    fn transfer_atomic(
-        &mut self,
-        capabilities: &[Option<ipc::LogicalCap>; ipc::MAX_MESSAGE_CAPS],
-    ) -> Result<[Option<ipc::LogicalCap>; ipc::MAX_MESSAGE_CAPS], Self::Error> {
-        Ok(*capabilities)
-    }
-}
-
-/// Move the sender's capabilities into the transit table, all or none.
-///
-/// Runs inside `ipc::send_atomic`, between the queue preflight and the commit,
-/// which is the only place it can run and stay atomic with the enqueue. Doing
-/// the move earlier would strand a capability whenever the enqueue then failed
-/// — the sender's table would no longer hold it and no queue would carry its
-/// token — and doing it later would mean committing a message naming a
-/// transfer that had not happened.
-///
-/// The input slots are the *sender's* logical slot numbers, as its `send`
-/// staged them; the output is transit tokens. `receive_atomic` on the other end
-/// never sees a slot number from this table, which is why the two directions
-/// use different adapters.
-///
-/// Every check is inside `transfer_atomic` rather than in the caller, so a
-/// failure at the fourth capability rolls the first three back. A partial move
-/// is the one outcome the trait exists to exclude.
-struct DepartingCaps<'a> {
-    graph: &'a mut GraphTables,
-    transit: &'a mut Transit,
+    tasks: &TaskTable<MAX_TASKS>,
     sender: TaskId,
-    channel: ipc::ChannelKey,
-    receiving_side: graph::Side,
-    /// Every `(original slot, token)` this transfer parked. Recorded because
-    /// `send_atomic` can still fail after `transfer_atomic` returns.
-    departed: [Option<(ipc::LogicalCap, ipc::LogicalCap)>; ipc::MAX_MESSAGE_CAPS],
-    /// Why this transfer refused, if it did.
-    refusal: Option<IpcError>,
-}
+    words: &[sel4::Word; ipc::FAST_MESSAGE_REGISTERS],
+) -> Response {
+    let carrier = words[0] as u32;
+    let source_slot = (words[0] >> 32) as u32;
+    let expected_kind = words[1] as u32;
+    let retain = words[1] >> 32 != 0;
+    let rights = words[3];
+    let Some(sender_instance) = launched.instance_for_task(sender) else {
+        return Response::error(IpcError::BadCapability);
+    };
+    let Some(sender_task) = tasks.get(sender) else {
+        return Response::error(IpcError::BadCapability);
+    };
+    let Some(receiver) = unsafe { &*ptr::addr_of!(PEER_ENDPOINTS) }.receiver_for(
+        generation,
+        sender_instance,
+        carrier,
+        launched,
+    ) else {
+        return Response::error(IpcError::BadCapability);
+    };
 
-impl ipc::CapabilityTransfer for DepartingCaps<'_> {
-    type Error = IpcError;
-
-    fn transfer_atomic(
-        &mut self,
-        capabilities: &[Option<ipc::LogicalCap>; ipc::MAX_MESSAGE_CAPS],
-    ) -> Result<[Option<ipc::LogicalCap>; ipc::MAX_MESSAGE_CAPS], Self::Error> {
-        let mut tokens = [None; ipc::MAX_MESSAGE_CAPS];
-        for (index, slot) in capabilities
-            .iter()
-            .enumerate()
-            .filter_map(|(index, slot)| slot.map(|slot| (index, slot)))
+    let (capability, source_endpoint) = if expected_kind
+        == slime_proto::capability_transfer::OBJECT_KIND_ENDPOINT
+    {
+        let Some((endpoint, side, transferable)) = unsafe { &*ptr::addr_of!(PEER_ENDPOINTS) }
+            .endpoint_for(generation, sender_instance, source_slot)
+        else {
+            return Response::error(IpcError::BadCapability);
+        };
+        let declared = match side {
+            peer_endpoint::Side::Producer => RIGHT_SEND,
+            peer_endpoint::Side::Consumer => RIGHT_RECV,
+            peer_endpoint::Side::Both => RIGHT_SEND | RIGHT_RECV,
+        } | if transferable { RIGHT_TRANSFER } else { 0 };
+        if !transferable
+            || rights == 0
+            || rights & !(RIGHT_SEND | RIGHT_RECV) != 0
+            || rights & declared != rights
         {
-            // A slot named twice would be taken once and then fail to resolve,
-            // reading as an ordinary "no such capability" rather than as the
-            // duplicate it is. The retired kernel refuses the same case
-            // (`kernel/src/syscall/mod.rs::sys_send`).
-            if capabilities[..index].contains(&Some(slot)) {
-                self.recall_all();
-                self.refusal = Some(IpcError::BadCapability);
-                return Err(IpcError::BadCapability);
-            }
-            match self.depart_one(slot) {
-                Ok(token) => {
-                    self.departed[index] = Some((slot, token));
-                    tokens[index] = Some(token);
-                }
-                Err(error) => {
-                    self.recall_all();
-                    self.refusal = Some(error);
-                    return Err(error);
-                }
-            }
+            sel4::debug_println!(
+                "SLIME_GRAPH endpoint export rejected task={} source_slot={} carrier={} rights={rights:#x} declared={declared:#x} transferable={}",
+                sender.0,
+                source_slot,
+                carrier,
+                u8::from(transferable)
+            );
+            return Response::error(IpcError::BadCapability);
         }
-        Ok(tokens)
-    }
-}
-
-impl DepartingCaps<'_> {
-    /// Take one capability out of the sender's table and park it.
-    ///
-    /// The transferability test is on the resource *kind*: it decides whether
-    /// the root has a mechanism for the move at all, and today it has one only
-    /// for a loan. `RIGHT_TRANSFER` is checked too, but note what it is and is
-    /// not doing here — every loan capability is minted carrying it
-    /// (`serve_buffer_loan`), so on this path it never discriminates. The
-    /// generation's delegation statement is enforced one step earlier, at the
-    /// mint: a loan is refused outright over a channel the generation did not
-    /// mark `transferable`, so a capability that reaches this function is
-    /// already one the generation allowed to move. The bit is kept as a
-    /// standing precondition rather than removed, because a future kind minted
-    /// without it must not become movable by default.
-    fn depart_one(&mut self, slot: ipc::LogicalCap) -> Result<ipc::LogicalCap, IpcError> {
-        // A loan remains bound to its declared receiver. The send destination
-        // is now a channel end rather than one guessed task, so require that
-        // declared receiver to hold that end. A co-holder may dequeue the bytes,
-        // but cannot use a loan not naming it; the intended receiver remains
-        // authorized exactly as on x86.
-        if let Some(graph::Capability {
-            resource: graph::Resource::Loan { handle },
-            ..
-        }) = self
-            .graph
-            .get(self.sender)
-            .and_then(|table| table.get(slot))
+        (
+            graph::Capability {
+                resource: graph::Resource::NativeEndpoint,
+                rights,
+            },
+            Some(endpoint),
+        )
+    } else {
+        let Some(table) = graph.get_mut(sender) else {
+            return Response::error(IpcError::BadCapability);
+        };
+        let Some(source) = table.get(source_slot) else {
+            return Response::error(IpcError::BadCapability);
+        };
+        let kind = capability_kind(&source.resource);
+        if kind == 0
+            || kind != expected_kind
+            || !source.allows(RIGHT_TRANSFER)
+            || rights == 0
+            || rights & !source.rights != 0
+            || rights & !valid_rights(&source.resource) != 0
         {
-            let Ok(receiver) = u32::try_from(handle.receiver.0) else {
-                return Err(IpcError::UnsupportedCapabilityTransfer);
+            return Response::error(IpcError::BadCapability);
+        }
+        if !retain {
+            table.drop_slot(source_slot);
+        }
+        (
+            graph::Capability {
+                resource: source.resource,
+                rights,
+            },
+            None,
+        )
+    };
+
+    let exports = unsafe { &mut *ptr::addr_of_mut!(CAPABILITY_EXPORTS) };
+    let Some(slot) = exports.entries.iter_mut().find(|entry| entry.is_none()) else {
+        return Response::error(IpcError::DestinationSlotsExhausted);
+    };
+    if tasks.get(receiver).is_none() {
+        return Response::error(IpcError::BadCapability);
+    }
+    // A native Endpoint crosses as a real kernel capability: the root mints a
+    // ticket at the narrowed rights and places it in the sender's authority
+    // region, from where the sender's own IPC carries it. Every other kind is
+    // a root-owned logical capability with no kernel object the peer could
+    // hold, so it crosses as a table entry the receiver claims with
+    // `CapabilityImport`. The two are distinguished here and nowhere else.
+    let ticket = match source_endpoint {
+        Some(endpoint) => {
+            let cap_rights = match (rights & RIGHT_SEND != 0, rights & RIGHT_RECV != 0) {
+                (true, true) => sel4::CapRights::all(),
+                (true, false) => sel4::CapRightsBuilder::none()
+                    .write(true)
+                    .grant_reply(true)
+                    .build(),
+                (false, true) => sel4::CapRightsBuilder::none().read(true).build(),
+                (false, false) => return Response::error(IpcError::BadCapability),
             };
-            if !self
-                .graph
-                .get(TaskId(receiver))
-                .is_some_and(|table| table.reaches_endpoint(self.channel, self.receiving_side))
+            let ticket_slot = match allocator.reserve_slot::<sel4::cap_type::Endpoint>() {
+                Ok(ticket) => ticket,
+                Err(_) => return Response::error(IpcError::DestinationSlotsExhausted),
+            };
+            let ticket = sel4::init_thread::slot::CNODE
+                .cap()
+                .absolute_cptr(ticket_slot.cap());
+            if ticket
+                .mint(
+                    &sel4::init_thread::slot::CNODE.cap().absolute_cptr(endpoint),
+                    cap_rights.clone(),
+                    0,
+                )
+                .is_err()
             {
-                return Err(IpcError::UnsupportedCapabilityTransfer);
+                return Response::error(IpcError::BadCapability);
             }
-        }
-        // Both failures answer `BadCapability`, which is `ERR_BAD_CAP` — what
-        // `sys_send` answers for the same two cases, and what a component
-        // written against the retired kernel therefore tests for. They are also
-        // indistinguishable from each other, so a send cannot be used to probe
-        // which slots hold what.
-        let table = self
-            .graph
-            .get_mut(self.sender)
-            .ok_or(IpcError::BadCapability)?;
-        let capability = table.get(slot).ok_or(IpcError::BadCapability)?;
-        if !capability.resource.is_transferable() || !capability.allows(RIGHT_TRANSFER) {
-            return Err(IpcError::UnsupportedCapabilityTransfer);
-        }
-        // Removed before parking, so the capability is in exactly one place at
-        // every point: the sender's table, then the transit table, then the
-        // receiver's. `rollback` puts it back at the same slot on failure.
-        table.drop_slot(slot);
-        match self
-            .transit
-            .depart(capability, self.sender, self.channel, self.receiving_side)
-        {
-            Ok(token) => Ok(token),
-            Err(error) => {
-                let _ = table.install(slot, capability);
-                Err(error)
+            let sender_ticket_slot =
+                task::CHILD_SLOT_AUTHORITY_BASE + source_slot as sel4::CPtrBits;
+            if sender_task
+                .cnode
+                .absolute_cptr_from_bits_with_depth(sender_ticket_slot, sender_task.cnode_size_bits)
+                .copy(&ticket, cap_rights)
+                .is_err()
+            {
+                return Response::error(IpcError::BadCapability);
             }
+            Some(ticket_slot.cptr().bits())
         }
-    }
+        None => None,
+    };
+    let id = exports.next_id;
+    exports.next_id = exports.next_id.checked_add(1).unwrap_or(1);
+    *slot = Some(CapabilityExport {
+        id,
+        sender,
+        receiver,
+        capability,
+        ticket,
+        retain,
+        finalized: false,
+    });
+    exports.exported = exports.exported.saturating_add(1);
+    sel4::debug_println!(
+        "SLIME_GRAPH capability exported task={} id={} kind={} rights={rights:#x} retain={}",
+        sender.0,
+        id,
+        capability.resource.kind_name(),
+        u8::from(retain)
+    );
+    Response::success(i64::from(id), 0)
+}
 
-    /// Return every capability this transfer parked to the sender's table, at
-    /// the slot each one came from.
-    ///
-    /// The original slot, not a free one: the sender named those numbers in the
-    /// message it sent and will name them again if it retries. Handing back a
-    /// different slot would leave a component holding a capability at a number
-    /// it never learned.
-    ///
-    /// Idempotent, so the failure paths inside `transfer_atomic` and the
-    /// post-commit path in `serve_send` can both call it. Reinstalling cannot
-    /// collide: only this transfer emptied those slots, and nothing else ran in
-    /// between.
-    fn recall_all(&mut self) {
-        for (slot, token) in self.departed.iter_mut().filter_map(Option::take) {
-            let Some(capability) = self.transit.recall(token, self.sender) else {
-                continue;
-            };
-            if let Some(table) = self.graph.get_mut(self.sender) {
-                let _ = table.install(slot, capability);
-            }
+fn serve_capability_finalize(
+    sender: TaskId,
+    words: &[sel4::Word; ipc::FAST_MESSAGE_REGISTERS],
+) -> Response {
+    let id = words[0] as u32;
+    let exports = unsafe { &mut *ptr::addr_of_mut!(CAPABILITY_EXPORTS) };
+    let Some(export) = exports.get_mut(id) else {
+        return Response::success(0, 0);
+    };
+    if export.sender != sender {
+        return Response::error(IpcError::BadCapability);
+    }
+    if !export.finalized {
+        export.finalized = true;
+        exports.finalized = exports.finalized.saturating_add(1);
+    }
+    Response::success(0, 0)
+}
+
+fn serve_capability_import(
+    graph: &mut GraphTables,
+    receiver: TaskId,
+    words: &[sel4::Word; ipc::FAST_MESSAGE_REGISTERS],
+) -> Response {
+    let id = words[0] as u32;
+    let exports = unsafe { &mut *ptr::addr_of_mut!(CAPABILITY_EXPORTS) };
+    // Id zero means "the oldest finalized export addressed to me". A logical
+    // capability crosses with no kernel object, so its receiver has no ticket
+    // to name and the 64-byte descriptor has no field to carry an id in.
+    // Ordering makes the claim unambiguous anyway: exports are recorded in the
+    // order their senders finalized them, and a sender finalizes before its
+    // message is sent, so the Nth delegation a receiver observes on an
+    // endpoint is the Nth finalized export addressed to it.
+    let id = if id == 0 {
+        let Some(oldest) = exports
+            .entries
+            .iter()
+            .flatten()
+            .filter(|entry| entry.receiver == receiver && entry.finalized)
+            .map(|entry| entry.id)
+            .min()
+        else {
+            return Response::error(IpcError::BadCapability);
+        };
+        oldest
+    } else {
+        id
+    };
+    let Some(export) = exports.get_mut(id) else {
+        return Response::error(IpcError::BadCapability);
+    };
+    if export.receiver != receiver || !export.finalized {
+        return Response::error(IpcError::BadCapability);
+    }
+    let export = *export;
+    let _ = exports.remove(id);
+    let Some(table) = graph.get_mut(receiver) else {
+        return Response::error(IpcError::BadCapability);
+    };
+    let Some(slot) = table.free_slot_from(1) else {
+        return Response::error(IpcError::DestinationSlotsExhausted);
+    };
+    if table.install(slot, export.capability).is_err() {
+        return Response::error(IpcError::DestinationSlotsExhausted);
+    }
+    exports.imported = exports.imported.saturating_add(1);
+    sel4::debug_println!(
+        "SLIME_GRAPH capability imported task={} id={} kind={} rights={:#x} retain={}",
+        receiver.0,
+        id,
+        export.capability.resource.kind_name(),
+        export.capability.rights,
+        u8::from(export.retain)
+    );
+    Response::success(i64::from(slot), 0)
+}
+
+fn serve_capability_cancel(
+    graph: &mut GraphTables,
+    tasks: &TaskTable<MAX_TASKS>,
+    sender: TaskId,
+    words: &[sel4::Word; ipc::FAST_MESSAGE_REGISTERS],
+) -> Response {
+    let id = words[0] as u32;
+    let exports = unsafe { &mut *ptr::addr_of_mut!(CAPABILITY_EXPORTS) };
+    let Some(export) = exports.remove(id) else {
+        return Response::error(IpcError::BadCapability);
+    };
+    if export.sender != sender || export.finalized {
+        return Response::error(IpcError::BadCapability);
+    }
+    if let Some(receiver) = tasks.get(export.receiver) {
+        let _ = receiver
+            .cnode
+            .absolute_cptr_from_bits_with_depth(task::CHILD_SLOT_RECEIVE, receiver.cnode_size_bits)
+            .delete();
+    }
+    if !export.retain {
+        let Some(table) = graph.get_mut(sender) else {
+            return Response::error(IpcError::BadCapability);
+        };
+        let Some(slot) = table.free_slot_from(1) else {
+            return Response::error(IpcError::DestinationSlotsExhausted);
+        };
+        if table.install(slot, export.capability).is_err() {
+            return Response::error(IpcError::DestinationSlotsExhausted);
         }
     }
-
-    /// How many capabilities this transfer parked.
-    fn departed(&self) -> usize {
-        self.departed.iter().flatten().count()
-    }
+    exports.cancelled = exports.cancelled.saturating_add(1);
+    Response::success(0, 0)
 }
 
 /// Allocate one shared region for `holder` and admit it against the quota the
@@ -5862,10 +4692,11 @@ fn serve_buffer_create(
 /// from the spawn that minted it, which is the only thing that could know it.
 #[allow(clippy::too_many_arguments)]
 fn serve_buffer_loan(
+    generation: &Generation<'_>,
+    launched: &LaunchedInstances,
     buffers: &mut SharedBufferTable,
     allocator: &mut ObjectAllocator,
     graph: &mut GraphTables,
-    channels: &ChannelTable,
     id: TaskId,
     words: &[sel4::Word; ipc::FAST_MESSAGE_REGISTERS],
     served: &mut usize,
@@ -5874,7 +4705,11 @@ fn serve_buffer_loan(
     let buffer_slot = (words[0] & 0xffff_ffff) as u32;
     let receiver_slot = (words[0] >> 32) as u32;
     let offset = words[1] as usize;
-    let length = words[2] as usize;
+    // Bit 63 of the length word asks for a writable loan (B46). The length
+    // itself is bounded by the region, so the high bit is free; the table
+    // still refuses unless the lender holds `WRITE` on an unsealed region.
+    let writable = words[2] >> 63 != 0;
+    let length = (words[2] & !(1 << 63)) as usize;
 
     // Both slots resolve through the caller's own table. A component that holds
     // neither the buffer nor a channel to the receiver is refused identically
@@ -5887,75 +4722,58 @@ fn serve_buffer_loan(
     else {
         return Response::error(IpcError::BadCapability);
     };
-    // The receiver is named through a channel end, so a slot holding nothing
-    // and a slot holding real authority of another kind are refused
-    // identically: which one it was is not the caller's business, and
-    // distinguishing them would let a component map its own table by probing.
-    // One marker covers both for the same reason.
-    // `RIGHT_SEND` on the end, not merely possession of it. A loan exists to be
-    // transferred, and it reaches its receiver over this same channel — so a
-    // receive-only end names a peer this component could never deliver to, and
-    // minting against it would burn a `loan_count` on a loan nobody can
-    // collect. Resolved with the right the delivery will need, exactly as
-    // `resolve_channel` does for the send itself.
+    // A slot holding nothing and a slot holding real authority of another kind
+    // are refused identically: which one it was is not the caller's business,
+    // and distinguishing them would let a component map its own table by
+    // probing. One marker covers both for the same reason.
     //
     // **Two kinds resolve here**, and the difference is which question the
     // caller is answering.
     //
     // A `Supervision` handle names its subject outright: it was minted by the
     // spawn that created that task and names nothing else, ever. That is how
-    // the retired kernel does it (`sys_shared_buffer_loan`), and it is what
-    // `sample-lender` — unmodified — passes at `RECEIVER_SLOT`, so accepting it
-    // is what lets a component written against that ABI run here unchanged.
+    // the retired kernel does it, and it is what `sample-lender` — unmodified
+    // — passes at `RECEIVER_SLOT`.
     //
-    // A channel end names its peer. P5.3.2 admitted only this, because no spawn
-    // existed to mint a handle; it is kept because it is a real bound in its
-    // own right — a component can only loan to a task the generation gave it an
-    // edge to — and because `sel4-loan.zti`'s graph has no spawn in it.
+    // A **declared native endpoint** names its peer. The generation fixed both
+    // ends of that edge before either task ran, so the slot identifies exactly
+    // one counterpart and the caller cannot point it elsewhere. This is what
+    // breaks the stream plane's ordering cycle (B46): the fabric loans a ring
+    // to each participant while `fabric-publisher-b` loans its large sample
+    // back to the fabric, so requiring supervision in both directions would
+    // need each to be spawned before the other.
     //
     // Neither widens the other. A supervision handle is authority over a task
-    // the caller *created*; a channel end is authority over a task the
-    // generation *connected* it to. In both cases the receiver is reached
-    // through a capability rather than an ambient task id, which is what the
-    // exit condition asks for.
-    let resolved = graph.get(id).and_then(|table| {
+    // the caller *created*; an endpoint is authority over a task the
+    // generation *connected* it to. Both name the receiver through a
+    // capability rather than an ambient task id, which is what the exit
+    // condition asks for.
+    let by_supervision = graph.get(id).and_then(|table| {
         table
             .resolve(receiver_slot, RIGHT_SUPERVISE)
             .ok()
             .and_then(|capability| match capability.resource {
-                graph::Resource::Supervision { task } => Some((task, None)),
+                graph::Resource::Supervision { task } => Some(task),
                 _ => None,
             })
-            .or_else(|| {
-                let capability = table.resolve(receiver_slot, RIGHT_SEND).ok()?;
-                match capability.resource {
-                    graph::Resource::Endpoint { channel, side } => graph
-                        .unique_holder_of_endpoint_side(channel, side.opposite(), Some(id))
-                        .map(|task| (task, Some(channel))),
-                    _ => None,
-                }
-            })
     });
-    let Some((peer, edge)) = resolved else {
+    let resolved = by_supervision.or_else(|| {
+        let sender_instance = launched.instance_for_task(id)?;
+        unsafe { &*ptr::addr_of!(PEER_ENDPOINTS) }.receiver_for(
+            generation,
+            sender_instance,
+            receiver_slot,
+            launched,
+        )
+    });
+    let Some(peer) = resolved else {
         sel4::debug_println!(
-            "SLIME_GRAPH loan refused task={} slot={receiver_slot} class=absent-or-ambiguous",
-            id.0,
+            "SLIME_GRAPH loan refused task={} slot={receiver_slot} class=absent",
+            id.0
         );
         return Response::error(IpcError::BadCapability);
     };
     if peer == id {
-        return Response::error(IpcError::BadCapability);
-    }
-    // A channel-derived receiver is admitted only over a declared delegable
-    // edge. A supervision handle already names its task directly and needs no
-    // channel transferability statement.
-    if let Some(channel) = edge
-        && channels.transferable(channel) != Some(true)
-    {
-        sel4::debug_println!(
-            "SLIME_GRAPH loan refused task={} slot={buffer_slot} class=undelegated",
-            id.0,
-        );
         return Response::error(IpcError::BadCapability);
     }
     let receiver = HolderId(u64::from(peer.0));
@@ -5963,7 +4781,7 @@ fn serve_buffer_loan(
     // The table decides: it holds the region's rights, its sealed state, the
     // range, and the lender's `loan_count` ceiling. Nothing is re-checked here
     // that it already checks, so there is one place a loan can be refused.
-    let handle = match buffers.loan(lender, receiver, handle, offset, length) {
+    let handle = match buffers.loan(lender, receiver, handle, offset, length, writable) {
         Ok(handle) => handle,
         Err(error) => {
             sel4::debug_println!(
@@ -5985,7 +4803,9 @@ fn serve_buffer_loan(
                 slot,
                 graph::Capability {
                     resource: graph::Resource::Loan { handle },
-                    rights: RIGHT_BUFFER_MAP | RIGHT_TRANSFER,
+                    rights: RIGHT_BUFFER_MAP
+                        | RIGHT_TRANSFER
+                        | if writable { RIGHT_BUFFER_WRITE } else { 0 },
                 },
             )
             .ok()?;
@@ -6055,6 +4875,9 @@ fn serve_loan_lifecycle(
             buffer: buffer.id,
             epoch: buffers.epoch(),
             receiver: holder,
+            // A placeholder for the same reason as `receiver`: `revoke_loan`
+            // resolves the recorded loan by id, and the record owns both.
+            writable: false,
         }
     } else {
         let Some(graph::Capability {

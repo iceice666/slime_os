@@ -31,13 +31,24 @@
       transferable = false;
     };
     {
-      name = "init-endpoint-factory";
+      name = "crossing-carrier";
       rights = [
-        "endpointCreate";
+        "send";
+        "recv";
       ];
       source = "init";
-      target = "init";
-      transferable = false;
+      target = "crossing-peer";
+      transferable = true;
+    };
+    {
+      name = "crossing-gate";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "init";
+      target = "crossing-peer";
+      transferable = true;
     };
   ];
   health = {
@@ -56,8 +67,12 @@
           slot = 1;
         };
         {
-          grant = "init-endpoint-factory";
+          grant = "crossing-carrier";
           slot = 2;
+        };
+        {
+          grant = "crossing-gate";
+          slot = 3;
         };
       ];
       dependencies = [];
@@ -68,7 +83,16 @@
     };
     {
       autostart = true;
-      bindings = [];
+      bindings = [
+        {
+          grant = "crossing-carrier";
+          slot = 0;
+        };
+        {
+          grant = "crossing-gate";
+          slot = 1;
+        };
+      ];
       dependencies = [
         "init";
       ];
@@ -78,30 +102,7 @@
       owner = "init";
     };
   ];
-  mintedBindings = [
-    {
-      name = "crossing-peer-carrier";
-      owner = "init";
-      holder = "crossing-peer";
-      rights = [
-        "send";
-        "recv";
-      ];
-      slot = 0;
-      transferable = false;
-    };
-    {
-      name = "crossing-peer-gate";
-      owner = "init";
-      holder = "crossing-peer";
-      rights = [
-        "send";
-        "recv";
-      ];
-      slot = 1;
-      transferable = false;
-    };
-  ];
+  mintedBindings = [];
   interfaceSchemas = [];
   objects = [
     {

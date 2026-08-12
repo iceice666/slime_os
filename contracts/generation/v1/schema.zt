@@ -27,6 +27,26 @@ InstanceBinding :: type {
   slot : Int;
 };
 
+-- One statically-created seL4 Notification. `source` is the instance allowed
+-- to signal it and `target` is the instance that waits on it. A stream ring
+-- declares two: ready flows producer to consumer; credit flows consumer to
+-- producer.
+NotificationGrant :: type {
+  name : Text;
+  source : Text;
+  target : Text;
+};
+
+-- One holder's view of a NotificationGrant. Slots are relative to the native
+-- notification region (48..62), hence the closed 0..14 range validated by the
+-- generation builder. `role` is closed to `signal` or `wait`.
+NotificationBinding :: type {
+  grant : Text;
+  holder : Text;
+  slot : Int;
+  role : Text;
+};
+
 Instance :: type {
   name : Text;
   executable : Text;
@@ -223,6 +243,8 @@ GenerationManifest :: type {
   instances : List Instance;
   grants : List CapabilityGrant;
   mintedBindings : List MintedBinding;
+  notificationGrants? : List NotificationGrant;
+  notificationBindings? : List NotificationBinding;
   state : List StateBinding;
   -- Fallback health policy, used by a profile that declares no required set of
   -- its own.
@@ -236,6 +258,8 @@ GenerationManifest :: type {
 FromData @Object :: derive
 FromData @Executable :: derive
 FromData @InstanceBinding :: derive
+FromData @NotificationGrant :: derive
+FromData @NotificationBinding :: derive
 FromData @Instance :: derive
 FromData @CapabilityGrant :: derive
 FromData @MintedBinding :: derive
@@ -258,6 +282,8 @@ decodeManifest :: Data -> Validation DecodeIssue GenerationManifest
   Object = Object;
   Executable = Executable;
   InstanceBinding = InstanceBinding;
+  NotificationGrant = NotificationGrant;
+  NotificationBinding = NotificationBinding;
   Instance = Instance;
   SharedBufferBudgetEntry = SharedBufferBudgetEntry;
   FabricProfileInterposition = FabricProfileInterposition;

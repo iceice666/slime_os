@@ -54,15 +54,6 @@
       target = "sel4-directory-probe-idle";
       transferable = false;
     };
-    {
-      name = "init-endpoint-factory";
-      rights = [
-        "endpointCreate";
-      ];
-      source = "init";
-      target = "init";
-      transferable = false;
-    };
   ];
   health = {
     bootAttempts = 3;
@@ -74,10 +65,6 @@
     {
       autostart = true;
       bindings = [
-        {
-          grant = "init-endpoint-factory";
-          slot = 2;
-        };
         {
           grant = "init-sel4-directory-probe";
           slot = 1;
@@ -124,7 +111,7 @@
   ];
   mintedBindings = [
     {
-      name = "sel4-directory-probe-run-token";
+      name = "sel4-directory-probe-rpc";
       owner = "init";
       holder = "sel4-directory-probe";
       rights = [

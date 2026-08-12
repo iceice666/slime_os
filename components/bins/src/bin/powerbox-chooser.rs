@@ -2,10 +2,13 @@
 #![no_main]
 
 use slime_proto::{
+    capability_transfer::OBJECT_KIND_DIRECTORY,
     powerbox::{self, WirePowerboxReply, WirePowerboxRequest},
     valid_powerbox_request,
 };
-use slime_rt::{ERR_PEER_DEAD, ERR_WOULDBLOCK, InputKey, MAX_CAPS_PER_MSG, MAX_MSG};
+use slime_rt::{
+    CapabilityDisposition, ERR_PEER_DEAD, ERR_WOULDBLOCK, InputKey, MAX_CAPS_PER_MSG, MAX_MSG,
+};
 
 slime_rt::entry!(main);
 
@@ -25,7 +28,7 @@ fn main(_startup_arg: u32) {
         let mut received_caps = [0u64; MAX_CAPS_PER_MSG];
         let length = loop {
             match slime_rt::recv(RPC_SLOT, &mut message, &mut received_caps) {
-                ERR_WOULDBLOCK => slime_rt::wait(&[slime_rt::WaitSource::Endpoint(RPC_SLOT)]),
+                ERR_WOULDBLOCK => slime_rt::yield_now(),
                 ERR_PEER_DEAD => return,
                 result if result < 0 => slime_rt::exit(1),
                 result => break result as usize,
@@ -78,7 +81,7 @@ enum Gesture {
 fn wait_gesture() -> Gesture {
     loop {
         match slime_rt::input_read(INPUT_SLOT) {
-            Ok(None) => slime_rt::wait(&[slime_rt::WaitSource::Input]),
+            Ok(None) => slime_rt::yield_now(),
             Err(_) => slime_rt::exit(1),
             Ok(Some(event)) if !event.pressed => {}
             Ok(Some(event)) => match event.key {
@@ -167,14 +170,19 @@ fn reply(
 
 fn send_reply(reply: WirePowerboxReply, capability: Option<u32>) {
     let encoded = reply.encode();
-    let slots = capability.map_or([0; 1], |slot| [slot]);
-    let caps = if capability.is_some() {
-        &slots[..]
-    } else {
-        &slots[..0]
-    };
     loop {
-        match slime_rt::send(RPC_SLOT, &encoded, caps) {
+        let result = match capability {
+            Some(slot) => slime_rt::capability_delegate(
+                RPC_SLOT,
+                slot,
+                CapabilityDisposition::Move,
+                OBJECT_KIND_DIRECTORY,
+                u64::from(reply.granted_rights),
+                &encoded,
+            ),
+            None => slime_rt::send(RPC_SLOT, &encoded, &[]),
+        };
+        match result {
             ERR_WOULDBLOCK => slime_rt::yield_now(),
             ERR_PEER_DEAD => {
                 drop_capability(capability);

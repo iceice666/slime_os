@@ -198,10 +198,16 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"length=8192",
     ),
     (
-        # The capability moves with the descriptor. `caps=1` is the loan
-        # crossing; the 8192-byte payload does not.
-        "exactly one capability crossed with the descriptor",
-        r"SLIME_GRAPH sent task=\d+ channel=\d+ bytes=64 caps=1 queued=1",
+        # The descriptor carries exactly one exported loan capability. Matching
+        # native export/import IDs prove the one-cap maximum without a queue.
+        "exactly one loan capability was exported with the descriptor",
+        r"SLIME_GRAPH capability exported task=\d+ id=\d+ kind=loan "
+        r"rights=0x[0-9a-f]+ retain=0",
+    ),
+    (
+        "the receiver imported the exported loan capability",
+        r"SLIME_GRAPH capability imported task=\d+ id=\d+ kind=loan "
+        r"rights=0x[0-9a-f]+ retain=0",
     ),
     (
         "the receiver's clean exit was collected through its handle",
@@ -249,12 +255,17 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"SLIME_GRAPH tasks reclaimed live=0 slots=[1-9]\d*",
     ),
     (
-        # Peer death and quota reclamation, which is the half of P5.3's exit
-        # condition the transcript above does not cover. Every loan, mapping,
-        # region, frame alias, and in-flight capability is back.
+        # Peer lifecycle and quota reclamation remain structured userspace and
+        # supervision evidence; native capability accounting proves no export
+        # ticket was leaked after every buffer object was reclaimed.
         "every loan, mapping, and region was reclaimed",
         r"SLIME_GRAPH loans served=[1-9]\d* loans=0 mappings=0 regions=0 "
-        r"transit=0 orphans=0 aliases=0",
+        r"orphans=0 aliases=0",
+    ),
+    (
+        "every native capability export was finalized cleanly",
+        r"SLIME_GRAPH capabilities exports=[1-9]\d* imports=[1-9]\d* "
+        r"cancels=\d+ finalized=\d+ outstanding=0 tickets=0",
     ),
 )
 
@@ -475,7 +486,18 @@ def check_transcript(transcript: str) -> None:
     check_sample_transcript(transcript)
     check_transcript_matches_the_oracle()
     check_components_are_unmodified()
-
+    exports = re.findall(
+        r"SLIME_GRAPH capability exported task=\d+ id=(\d+) kind=loan "
+        r"rights=(0x[0-9a-f]+) retain=0",
+        transcript,
+    )
+    imports = re.findall(
+        r"SLIME_GRAPH capability imported task=\d+ id=(\d+) kind=loan "
+        r"rights=(0x[0-9a-f]+) retain=0",
+        transcript,
+    )
+    if len(exports) != 1 or exports != imports:
+        fail(f"loan export/import evidence was {exports!r}/{imports!r}, expected one exact pair")
 
 def check_sample_transcript(transcript: str) -> None:
     """The x86 gate's own ordered transcript, produced by the same binaries.

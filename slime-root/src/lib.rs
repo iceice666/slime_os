@@ -1,8 +1,8 @@
 //! `slime-root`'s mechanism surface, as a library.
 //!
 //! Every module here is bounded, and most are pure state machines over fixed
-//! arrays: capability tables, channel queues, the shared-buffer accounting, the
-//! transit table, supervision records, the timer scheduler. `main.rs` is the
+//! arrays: root-mediated capability tables, shared-buffer accounting,
+//! supervision records, and timer scheduling. `main.rs` is the
 //! seL4 root task that drives them — startup staging, the dispatch loop, and
 //! the seL4 object plumbing — and it is deliberately not part of this crate's
 //! testable surface.
@@ -27,8 +27,8 @@
 //! the shipped root rather than about a parallel implementation. Nothing is
 //! `cfg`-ed out for the host: the `sel4` crate builds for a host target given
 //! `SEL4_PREFIX`, so the modules that touch seL4 types — `ipc`, `task`,
-//! `fault`, `child_vspace`, `object_allocator`, `platform_timer`,
-//! `buffer_adapter`, `parked` — compile unchanged.
+//! `fault`, `child_vspace`, `object_allocator`, `platform_timer`, and
+//! `buffer_adapter` — compile unchanged.
 //!
 //! What the host cannot do is *invoke* seL4. No test here performs a syscall;
 //! they exercise the state machines, which is the whole of what they ever
@@ -48,7 +48,6 @@ extern crate alloc;
 
 pub mod boot_selector;
 pub mod buffer_adapter;
-pub mod channel;
 pub mod child_vspace;
 pub mod console;
 pub mod device;
@@ -61,7 +60,6 @@ pub mod ipc;
 pub mod launched;
 pub mod notification;
 pub mod object_allocator;
-pub mod parked;
 pub mod peer_endpoint;
 pub mod platform_timer;
 pub mod shared_buffer;
@@ -69,5 +67,4 @@ pub mod supervision;
 pub mod task;
 pub mod timer;
 pub mod transfer_window;
-pub mod transit;
 pub mod virtio_blk;

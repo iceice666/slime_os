@@ -244,15 +244,6 @@
       transferable = false;
     };
     {
-      name = "init-endpoint-factory";
-      rights = [
-        "endpointCreate";
-      ];
-      source = "init";
-      target = "init";
-      transferable = false;
-    };
-    {
       name = "init-shared-buffer-factory";
       rights = [
         "bufferCreate";
@@ -323,10 +314,6 @@
     {
       autostart = true;
       bindings = [
-        {
-          grant = "init-endpoint-factory";
-          slot = 7;
-        };
         {
           grant = "init-fabric-intruder";
           slot = 1;
@@ -541,16 +528,6 @@
       transferable = true;
     };
     {
-      name = "fabric-service-endpoint-factory";
-      owner = "init";
-      holder = "fabric-service";
-      rights = [
-        "endpointCreate";
-      ];
-      slot = 0;
-      transferable = false;
-    };
-    {
       name = "fabric-service-shared-buffer-factory";
       owner = "init";
       holder = "fabric-service";
@@ -591,6 +568,46 @@
       slot = 9;
       transferable = false;
     };
+  ];
+  notificationGrants = [
+    { name = "fabric-publisher-telemetry-ready"; source = "fabric-publisher"; target = "fabric-service"; };
+    { name = "fabric-publisher-telemetry-credit"; source = "fabric-service"; target = "fabric-publisher"; };
+    { name = "fabric-subscriber-telemetry-ready"; source = "fabric-service"; target = "fabric-subscriber"; };
+    { name = "fabric-subscriber-telemetry-credit"; source = "fabric-subscriber"; target = "fabric-service"; };
+    { name = "fabric-publisher-b-telemetry-ready"; source = "fabric-publisher-b"; target = "fabric-service"; };
+    { name = "fabric-publisher-b-telemetry-credit"; source = "fabric-service"; target = "fabric-publisher-b"; };
+    { name = "fabric-subscriber-b-telemetry-ready"; source = "fabric-service"; target = "fabric-subscriber-b"; };
+    { name = "fabric-subscriber-b-telemetry-credit"; source = "fabric-subscriber-b"; target = "fabric-service"; };
+    { name = "fabric-publisher-b-diagnostics-ready"; source = "fabric-publisher-b"; target = "fabric-service"; };
+    { name = "fabric-publisher-b-diagnostics-credit"; source = "fabric-service"; target = "fabric-publisher-b"; };
+    { name = "fabric-subscriber-b-diagnostics-ready"; source = "fabric-service"; target = "fabric-subscriber-b"; };
+    { name = "fabric-subscriber-b-diagnostics-credit"; source = "fabric-subscriber-b"; target = "fabric-service"; };
+  ];
+  notificationBindings = [
+    { grant = "fabric-publisher-telemetry-ready"; holder = "fabric-publisher"; slot = 0; role = "signal"; };
+    { grant = "fabric-publisher-telemetry-ready"; holder = "fabric-service"; slot = 0; role = "wait"; };
+    { grant = "fabric-publisher-telemetry-credit"; holder = "fabric-service"; slot = 1; role = "signal"; };
+    { grant = "fabric-publisher-telemetry-credit"; holder = "fabric-publisher"; slot = 1; role = "wait"; };
+    { grant = "fabric-subscriber-telemetry-ready"; holder = "fabric-service"; slot = 2; role = "signal"; };
+    { grant = "fabric-subscriber-telemetry-ready"; holder = "fabric-subscriber"; slot = 0; role = "wait"; };
+    { grant = "fabric-subscriber-telemetry-credit"; holder = "fabric-subscriber"; slot = 1; role = "signal"; };
+    { grant = "fabric-subscriber-telemetry-credit"; holder = "fabric-service"; slot = 3; role = "wait"; };
+    { grant = "fabric-publisher-b-telemetry-ready"; holder = "fabric-publisher-b"; slot = 0; role = "signal"; };
+    { grant = "fabric-publisher-b-telemetry-ready"; holder = "fabric-service"; slot = 4; role = "wait"; };
+    { grant = "fabric-publisher-b-telemetry-credit"; holder = "fabric-service"; slot = 5; role = "signal"; };
+    { grant = "fabric-publisher-b-telemetry-credit"; holder = "fabric-publisher-b"; slot = 1; role = "wait"; };
+    { grant = "fabric-subscriber-b-telemetry-ready"; holder = "fabric-service"; slot = 6; role = "signal"; };
+    { grant = "fabric-subscriber-b-telemetry-ready"; holder = "fabric-subscriber-b"; slot = 0; role = "wait"; };
+    { grant = "fabric-subscriber-b-telemetry-credit"; holder = "fabric-subscriber-b"; slot = 1; role = "signal"; };
+    { grant = "fabric-subscriber-b-telemetry-credit"; holder = "fabric-service"; slot = 7; role = "wait"; };
+    { grant = "fabric-publisher-b-diagnostics-ready"; holder = "fabric-publisher-b"; slot = 2; role = "signal"; };
+    { grant = "fabric-publisher-b-diagnostics-ready"; holder = "fabric-service"; slot = 8; role = "wait"; };
+    { grant = "fabric-publisher-b-diagnostics-credit"; holder = "fabric-service"; slot = 9; role = "signal"; };
+    { grant = "fabric-publisher-b-diagnostics-credit"; holder = "fabric-publisher-b"; slot = 3; role = "wait"; };
+    { grant = "fabric-subscriber-b-diagnostics-ready"; holder = "fabric-service"; slot = 10; role = "signal"; };
+    { grant = "fabric-subscriber-b-diagnostics-ready"; holder = "fabric-subscriber-b"; slot = 2; role = "wait"; };
+    { grant = "fabric-subscriber-b-diagnostics-credit"; holder = "fabric-subscriber-b"; slot = 3; role = "signal"; };
+    { grant = "fabric-subscriber-b-diagnostics-credit"; holder = "fabric-service"; slot = 11; role = "wait"; };
   ];
   interfaceSchemas = [
     "contracts/interface-schema/v1/interfaces/telemetry-stream.zti";

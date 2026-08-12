@@ -19,13 +19,11 @@ The fix reclaims records no live holder can name. This gate asserts:
 
 1. the configured loop is strictly greater than the current `MAX_RECORDS`;
 2. a handle held by init *across* the crossing still answers afterwards;
-3. a handle parked in `Transit` across the crossing is still collectable.
+3. a capability exported before the crossing remains importable afterwards.
 
-(3) is the one a predicate over live capability tables alone would break: a
-capability mid-transfer is held by no table by construction, so a sweep reading
-only `GraphTables` frees its record and the eventual receiver waits forever --
-B16 reintroduced by its own fix. Removing `Transit::holds_supervision` must fail
-this gate; that fault injection is recorded in the devlog entry.
+The third property is the native cutover's reservation invariant: while the
+authority is absent from component CSpaces, the export ticket keeps its exact
+kind and rights until import, cancellation, or sender-lifecycle finalization.
 
 # Why the loop child is a new binary
 
@@ -96,10 +94,10 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"\[init\] second supervision handle derived",
     ),
     (
-        # Parked before the loop and collected only after it. From the send
-        # until the matching recv the capability is held by no table at all.
-        "a supervision handle was parked in transit before the crossing",
-        r"\[init\] supervision handle parked in transit",
+        # Exported before the allocation crossing and imported only afterwards;
+        # matching root IDs prove authority remained reserved without Transit.
+        "a supervision capability was exported before the crossing",
+        r"\[init\] supervision capability exported before crossing",
     ),
     (
         "a supervision handle was retained across the crossing",
@@ -116,11 +114,14 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"\[init\] retained handle answered after crossing",
     ),
     (
-        # Fault injection #2 targets exactly this: drop the `Transit` half of
-        # the sweep predicate and this marker disappears while every marker
-        # above it still passes.
-        "a handle parked in transit across the crossing was still collectable",
-        r"\[init\] transit handle survived crossing",
+        # The eventual native import must still name live supervision authority.
+        "an exported supervision capability was still importable after crossing",
+        r"\[init\] imported supervision survived crossing",
+    ),
+    (
+        "the root recorded the supervision export/import pair",
+        r"SLIME_GRAPH capability imported task=\d+ id=\d+ kind=supervision "
+        r"rights=0x[0-9a-f]+ retain=0",
     ),
     (
         # B42: the handle is the identity, so its consumption has to be
@@ -134,20 +135,16 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"\[init\] supervision plane complete",
     ),
     (
-        # B24: every one of the 38 holders this plane constructs releases its
-        # generation-declared ceiling when its task dies. `quotas` is the
-        # shared-buffer table's own live count, so a `MAX_CHARGE_HOLDERS`
-        # (96) that measured holders a boot *ever* built rather than those live
-        # at once reads 38 here instead of 0 — fault-injected exactly that way.
-        #
-        # Asserted on this plane rather than a tenth image because it is
-        # already the deepest spawn/reap loop in the corpus, which is the shape
-        # the defect needs. Reaching the 96 bound itself is out of reach: root
-        # CSlots are deliberately never returned, so a boot exhausts them near
-        # 52 tasks. Zero-at-teardown is the observable the graph can carry.
+        # Every constructed holder releases its generation-declared buffer
+        # quota, independently of native capability export accounting.
         "every constructed holder released its declared quota",
-        r"SLIME_GRAPH loans served=\d+ loans=0 mappings=0 regions=0 transit=0 "
+        r"SLIME_GRAPH loans served=\d+ loans=0 mappings=0 regions=0 "
         r"orphans=0 aliases=0 quotas=0",
+    ),
+    (
+        "every supervision export was imported, cancelled, or finalized",
+        r"SLIME_GRAPH capabilities exports=[1-9]\d* imports=[1-9]\d* "
+        r"cancels=\d+ finalized=\d+ outstanding=0 tickets=0",
     ),
     (
         # The root's *own* accounting, and the numerically strongest evidence in
@@ -157,19 +154,10 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         # lifetime", and MAX_RECORDS is 32, so the pattern admits 33..=99 only --
         # a loop that silently stopped crossing the bound cannot match it.
         #
-        # `drops=0` because this plane never calls `cap_drop`: the loop's handles
-        # are consumed by collection and the transferred one by `cap_transfer`.
-        # `endpoints=1` is the single pair init mints for the transit arm, and it
-        # is B22's evidence -- a channel-per-child loop would read 34 here and
-        # would have hit `MAX_CHANNELS` instead.
-        #
-        # Terminal, and asserted last for a second reason: `MAX_GRAPH_ITERATIONS`
-        # bounds the root's dispatch loop, and a graph that reached it would
-        # drain incompletely and never print this line, so iteration exhaustion
-        # cannot pass as success.
+        # Terminal lifecycle accounting remains root-owned and exact. Endpoint
+        # and wait counts belonged to the retired logical IPC model.
         "the root's own accounting recorded more terminations than MAX_RECORDS",
-        r"SLIME_GRAPH spawns served=\d+ drops=0 endpoints=1 "
-        r"terminated=\d+ waits=0",
+        r"SLIME_GRAPH spawns served=\d+ drops=0 terminated=\d+",
     ),
 )
 
@@ -399,9 +387,21 @@ def check_transcript(transcript: str) -> None:
                 fail(f"marker out of order: {description} ({pattern})")
             fail(f"missing marker: {description} ({pattern})")
         position = match.end()
+    exports = re.findall(
+        r"SLIME_GRAPH capability exported task=\d+ id=(\d+) kind=supervision "
+        r"rights=(0x[0-9a-f]+) retain=0",
+        transcript,
+    )
+    imports = re.findall(
+        r"SLIME_GRAPH capability imported task=\d+ id=(\d+) kind=supervision "
+        r"rights=(0x[0-9a-f]+) retain=0",
+        transcript,
+    )
+    if len(exports) != 1 or exports != imports:
+        fail(f"supervision export/import evidence was {exports!r}/{imports!r}, expected one exact pair")
     bound, children = check_loop_crosses_current_bound()
     accounting = re.search(
-        r"SLIME_GRAPH spawns served=(\d+) drops=0 endpoints=1 terminated=(\d+) waits=0",
+        r"SLIME_GRAPH spawns served=(\d+) drops=0 terminated=(\d+)",
         transcript,
     )
     if accounting is None:
@@ -481,7 +481,8 @@ def main() -> None:
     print(
         "seL4 supervision plane check: a graph created more tasks over its lifetime "
         "than MAX_RECORDS holds at once, and still answered supervision_status for "
-        "every live handle -- including one parked in transit across the crossing"
+        "every live handle -- including one held by a native export ticket across "
+        "the crossing"
     )
 
 

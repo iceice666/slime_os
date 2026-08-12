@@ -1,8 +1,11 @@
 #![no_std]
 #![no_main]
 
-use slime_proto::fs::{self, WireFsReply, WireFsRequest};
-use slime_rt::{ERR_BAD_CAP, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
+use slime_proto::{
+    capability_transfer::OBJECT_KIND_DIRECTORY,
+    fs::{self, WireFsReply, WireFsRequest},
+};
+use slime_rt::{CapabilityDisposition, ERR_BAD_CAP, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
 
 slime_rt::entry!(main);
 
@@ -12,11 +15,18 @@ const PAYLOAD_HASH: [u8; 32] = [
     0x80, 0xe6, 0xbb, 0x6b, 0x33, 0x8c, 0x72, 0xd3, 0xdd, 0x0f, 0xdc, 0x6d, 0x94, 0x25, 0x70, 0x4b,
     0xa6, 0xa0, 0x3f, 0x8d, 0x0c, 0xd8, 0x19, 0x47, 0x0c, 0xf1, 0x04, 0xc6, 0x57, 0x2e, 0x53, 0xd6,
 ];
+const RIGHT_TRANSFER: u32 = 1 << 2;
+const RIGHT_DIRECTORY_WRITE: u32 = 1 << 20;
+const RIGHT_DIRECTORY_DERIVE: u32 = 1 << 22;
 const PAYLOAD_LEN: u32 = 30;
 const RIGHT_DIRECTORY_READ: u32 = 1 << 19;
 const RIGHT_DIRECTORY_LIST: u32 = 1 << 21;
 const ZERO_HASH: [u8; 32] = [0; 32];
-fn main(_startup_arg: u32) {
+fn main(startup_arg: u32) {
+    if startup_arg == 0 {
+        slime_rt::debug_write(b"[directory-probe] idle root copy\n");
+        slime_rt::exit(0);
+    }
     let denied = slime_rt::directory_derive(RPC_SLOT, b"docs", RIGHT_DIRECTORY_READ);
     if denied != Err(ERR_BAD_CAP) {
         fail();
@@ -124,10 +134,25 @@ fn request(op: u8, name: &[u8], payload_len: u32, hash: [u8; 32]) -> WireFsReque
 }
 
 fn call(request: WireFsRequest, directory_slot: u32) -> (WireFsReply, Option<u32>) {
+    let rights = match request.op {
+        fs::OP_LIST => RIGHT_DIRECTORY_LIST,
+        fs::OP_READ => RIGHT_DIRECTORY_READ,
+        fs::OP_WRITE => RIGHT_DIRECTORY_WRITE,
+        fs::OP_DERIVE => RIGHT_DIRECTORY_DERIVE,
+        _ => fail(),
+    };
+    let transfer_slot = slime_rt::directory_derive(directory_slot, b"", rights | RIGHT_TRANSFER)
+        .unwrap_or_else(|_| fail());
     let encoded = request.encode();
-    let grant = [directory_slot];
     loop {
-        match slime_rt::send(RPC_SLOT, &encoded, &grant) {
+        match slime_rt::capability_delegate(
+            RPC_SLOT,
+            transfer_slot,
+            CapabilityDisposition::Move,
+            OBJECT_KIND_DIRECTORY,
+            u64::from(rights),
+            &encoded,
+        ) {
             ERR_WOULDBLOCK => slime_rt::yield_now(),
             result if result < 0 => fail(),
             _ => break,
@@ -137,20 +162,10 @@ fn call(request: WireFsRequest, directory_slot: u32) -> (WireFsReply, Option<u32
     let mut caps = [0u64; MAX_CAPS_PER_MSG];
     loop {
         match slime_rt::recv(RPC_SLOT, &mut reply, &mut caps) {
-            ERR_WOULDBLOCK => slime_rt::wait(&[slime_rt::WaitSource::Endpoint(RPC_SLOT)]),
+            ERR_WOULDBLOCK => slime_rt::yield_now(),
             result if result < 0 => fail(),
             n => {
-                if caps[0] == 0 || caps[2..].iter().any(|slot| *slot != 0) {
-                    fail();
-                }
-                let returned_directory = caps[0] as u32;
-                if returned_directory != directory_slot {
-                    if slime_rt::cap_drop(returned_directory) != 0 {
-                        fail();
-                    }
-                    fail();
-                }
-                let derived = (caps[1] != 0).then_some(caps[1] as u32);
+                let derived = (caps[0] != 0).then_some(caps[0] as u32);
                 let decoded = match WireFsReply::decode(&reply[..n as usize]) {
                     Some(reply) => reply,
                     None => fail(),

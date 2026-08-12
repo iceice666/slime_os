@@ -25,36 +25,12 @@ use slime_proto::block::{self, WireBlockReply, WireBlockRequest};
 /// The block capability.
 ///
 /// Slot 1, not 0: this component is not the bootstrap one, so the root numbers
-/// its generation-declared runtime grants `1..=n` above its executables — and
-/// it has none, so the device is the first. A boot layout numbers only init's
-/// table. Both instances of this component hold it, which is why the run token
-/// below exists.
+/// its generation-declared runtime grants above its executables — of which it
+/// has none — and the device is the first non-startup slot.
 const BLOCK_SLOT: u32 = 1;
-/// The endpoint `init` grants only to the instance it spawns.
-///
-/// Slot 0, because `construct_child` installs a spawn grant list at `0..count`
-/// in the order requested — a different numbering from the generation's, and
-/// the reason these two constants are not adjacent.
-const RUN_TOKEN_SLOT: u32 = 0;
-/// A slot holding nothing, for the refusal arm: a `BlockTransact` naming a slot
-/// with no block capability must fail, which is the other half of "the
-/// capability is what authorizes".
-///
-/// The unconfigured instance's slot 0 is empty and the spawned one's holds an
-/// endpoint — neither is a block device, so the same number serves both.
-const EMPTY_SLOT: u32 = RUN_TOKEN_SLOT;
+/// A slot holding no block capability, for the refusal arm.
+const EMPTY_SLOT: u32 = 0;
 
-/// Whether this task is the one `init` spawned.
-///
-/// A receive on the run token: `ERR_BAD_CAP` means the slot holds nothing, so
-/// this is the root-launched copy. Any other answer — including
-/// `ERR_WOULDBLOCK`, since the token is a capability rather than a message —
-/// means the grant is present.
-fn spawned_instance() -> bool {
-    let mut bytes = [0u8; slime_rt::MAX_MSG];
-    let mut caps = [0u64; slime_rt::MAX_CAPS_PER_MSG];
-    slime_rt::recv(RUN_TOKEN_SLOT, &mut bytes, &mut caps) != slime_rt::ERR_BAD_CAP
-}
 const SECTOR_BYTES: usize = 512;
 
 /// What the fixture writes at sector 0, and what a read must return.
@@ -66,20 +42,11 @@ const SCRATCH_SIGNATURE: &[u8; 8] = b"SLIMEWR1";
 
 slime_rt::entry!(main);
 
-fn main(_startup_arg: u32) {
-    // The root launches every component the generation declares (P5.2), so this
-    // boot also starts one *unconfigured* instance that `init` never spawned.
-    // Both hold the block capability — it is granted to the component, not to a
-    // task — so the device cannot tell them apart, and the scenario would
-    // otherwise run twice and race on sector 1.
-    //
-    // What distinguishes them is a slot only the spawned copy is given.
-    // `init.rs::drive_storage_plane` hands the run token at `RUN_TOKEN_SLOT`;
-    // the root-launched instance has nothing there and answers `ERR_BAD_CAP`.
-    // The same authority probe `fabric-call-time` uses, for the same reason:
-    // neither an env flag nor the manifest layout distinguishes two tasks built
-    // from one image under one generation.
-    if !spawned_instance() {
+fn main(startup_arg: u32) {
+    // Spawned component bodies receive startup_arg=1; the root-autostart copy
+    // receives 0. This keeps the destructive storage scenario single-run
+    // without consuming an endpoint merely as a token.
+    if startup_arg == 0 {
         slime_rt::debug_write(b"[sel4-storage-probe] idle without a run token\n");
         slime_rt::exit(0);
     }

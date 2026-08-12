@@ -68,12 +68,14 @@
       transferable = false;
     };
     {
-      name = "init-endpoint-factory";
+      minted = true;
+      name = "generation-rpc";
       rights = [
-        "endpointCreate";
+        "send";
+        "recv";
       ];
-      source = "init";
-      target = "init";
+      source = "sel4-generation-client";
+      target = "sel4-generation-manager";
       transferable = false;
     };
   ];
@@ -87,10 +89,6 @@
     {
       autostart = true;
       bindings = [
-        {
-          grant = "init-endpoint-factory";
-          slot = 3;
-        };
         {
           grant = "init-sel4-generation-client";
           slot = 1;

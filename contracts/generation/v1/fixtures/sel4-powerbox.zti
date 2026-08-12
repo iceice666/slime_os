@@ -67,13 +67,15 @@
       transferable = false;
     };
     {
-      name = "init-endpoint-factory";
+      minted = true;
+      name = "powerbox-rpc";
       rights = [
-        "endpointCreate";
+        "send";
+        "recv";
       ];
-      source = "init";
-      target = "init";
-      transferable = false;
+      source = "powerbox-probe";
+      target = "powerbox-chooser";
+      transferable = true;
     };
   ];
   health = {
@@ -86,10 +88,6 @@
     {
       autostart = true;
       bindings = [
-        {
-          grant = "init-endpoint-factory";
-          slot = 3;
-        };
         {
           grant = "init-powerbox-chooser";
           slot = 1;

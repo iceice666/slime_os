@@ -40,11 +40,9 @@ use crate::object_allocator::{AllocError, ObjectAllocator, TaskArenaId};
 /// composition's own children — the fabric plus sixteen participants — because
 /// a spawned child is the only one holding a control endpoint init minted.
 ///
-/// Forty-eight, with headroom rather than exactly 37, on `channel::MAX_CHANNELS`
-/// and B28's shared rule: a bound raised to the first passing number moves again
-/// at the next graph, and exhaustion here is not a clean refusal — `serve_spawn`
-/// answers `DestinationSlotsExhausted` and the parent reports a spawn failure,
-/// which reads as a composition defect rather than an exhausted table.
+/// Forty-eight, with headroom rather than exactly today's graph size: a bound
+/// raised to the first passing number moves again at the next graph, while
+/// exhaustion reports `DestinationSlotsExhausted` as a composition defect.
 ///
 /// The cost is the per-task graph table this bounds alongside it:
 /// `GraphTables` holds `MAX_GRAPH_TASKS` (== this) tables of `MAX_TASK_CAPS`
@@ -52,10 +50,10 @@ use crate::object_allocator::{AllocError, ObjectAllocator, TaskArenaId};
 /// of `.bss`. Both tables live in `static`s for backlog B3's reason.
 pub const MAX_TASKS: usize = 48;
 
-/// Slots in a child CNode for the fixture paths: null, service endpoint, own
-/// TCB, fault handler, and the console endpoint at [`CHILD_SLOT_CONSOLE`].
-/// Six bits, since that slot sits above every grant-nameable one.
-pub const CHILD_CNODE_SIZE_BITS: usize = 6;
+/// Slots in a child CNode for fixed authority, declared native endpoints,
+/// notifications, transferable-authority mirrors, and the receive slot.
+/// Seven bits provide the required 128-slot CSpace.
+pub const CHILD_CNODE_SIZE_BITS: usize = 7;
 
 /// Child CSpace slot holding the badged root service endpoint.
 pub const CHILD_SLOT_SERVICE: sel4::CPtrBits = 1;
@@ -63,19 +61,31 @@ pub const CHILD_SLOT_SERVICE: sel4::CPtrBits = 1;
 pub const CHILD_SLOT_TCB: sel4::CPtrBits = 2;
 /// Child CSpace slot holding the task's badged fault-handler endpoint.
 pub const CHILD_SLOT_FAULT: sel4::CPtrBits = 3;
+/// Child CSpace slot holding the root capability for that CSpace.
+pub const CHILD_SLOT_CNODE: sel4::CPtrBits = 4;
 /// Child CSpace slot holding the badged console/debug endpoint (B41).
 ///
 /// Above every slot a generation grant can name: grant slots are the
 /// component's own numbering and start at 0, so a low fixed slot would collide
 /// with declared authority in every migrated fixture.
 pub const CHILD_SLOT_CONSOLE: sel4::CPtrBits = 32;
+/// First child CSpace slot holding a declared native endpoint.
+pub const CHILD_SLOT_ENDPOINT_BASE: sel4::CPtrBits = 33;
+/// First child CSpace slot holding a declared Notification capability.
+pub const CHILD_SLOT_NOTIFICATION_BASE: sel4::CPtrBits = 64;
+/// First child CSpace slot holding a badged logical-authority mirror.
+pub const CHILD_SLOT_AUTHORITY_BASE: sel4::CPtrBits = 95;
+/// Slot where native endpoint receive deposits its sole transferred capability.
+pub const CHILD_SLOT_RECEIVE: sel4::CPtrBits = 127;
+/// Number of slots in each declared native/mirror region.
+pub const CHILD_NATIVE_REGION_SLOTS: sel4::CPtrBits = 31;
 
 /// Destination slots in a child's CSpace, resolved from the admitted plan.
 ///
-/// The root installs three capabilities it owns rather than the child: the
-/// badged service endpoint, the child's own TCB when self-managed, and the
-/// badged fault endpoint. Their addresses are the generation's to declare, so
-/// this carries what the plan said rather than what the root assumed.
+/// The root installs four capabilities it owns rather than the child: the
+/// badged service endpoint, the child's own TCB and CNode when self-managed,
+/// and the badged fault endpoint. Their addresses are the generation's to
+/// declare, so this carries what the plan said rather than what the root assumed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ChildSlots {
     pub service: sel4::CPtrBits,
@@ -119,7 +129,13 @@ impl ChildSlots {
         if self.tcb == 0 || self.fault == 0 || self.console == 0 {
             return mismatch(0);
         }
-        let slots = [self.service, self.console, self.tcb, self.fault];
+        let slots = [
+            self.service,
+            self.console,
+            self.tcb,
+            self.fault,
+            CHILD_SLOT_CNODE,
+        ];
         for (index, slot) in slots.iter().enumerate() {
             if slots[index + 1..].contains(slot) {
                 return mismatch(*slot);
@@ -629,6 +645,16 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
                     false,
                     &mut ledger,
                 )?;
+                mint_child_slot(
+                    cnode,
+                    cnode_size_bits,
+                    CHILD_SLOT_CNODE,
+                    &root_cnode.absolute_cptr(cnode),
+                    sel4::CapRights::all(),
+                    0,
+                    false,
+                    &mut ledger,
+                )?;
                 #[cfg(slime_b40_mutate_wrong_type)]
                 {
                     // Wrong type: the plan binds a TCB here, so replace it
@@ -956,7 +982,7 @@ fn audit_child_cspace(
         let declared = slot == slots.service
             || slot == slots.console
             || slot == slots.fault
-            || (expect_tcb && slot == slots.tcb);
+            || (expect_tcb && (slot == slots.tcb || slot == CHILD_SLOT_CNODE));
         let cptr = cnode.absolute_cptr_from_bits_with_depth(slot, cnode_size_bits);
         // `Move` onto itself: `DeleteFirst` means occupied, `FailedLookup`
         // means empty. Any other answer is the slot not being addressable,
@@ -997,9 +1023,9 @@ struct InstallLedger {
 }
 
 /// Distinct capabilities the root installs into one child: service, console,
-/// fault, TCB. The input slot names the console's endpoint, so it is not a
-/// separate install.
-const MAX_CHILD_INSTALLS: usize = 4;
+/// fault, TCB, and the child's CNode root. The input slot names the console's
+/// endpoint, so it is not a separate install.
+const MAX_CHILD_INSTALLS: usize = 5;
 
 impl InstallLedger {
     /// Record one install, refusing a source/badge pair already present.

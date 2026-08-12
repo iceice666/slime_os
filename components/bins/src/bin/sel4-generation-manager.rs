@@ -31,12 +31,9 @@ use boot_contracts::object_store::{BlockIo, IoError};
 use slime_proto::block::{self, WireBlockReply, WireBlockRequest};
 use slime_proto::generation::{self, WireGenerationReply, WireGenerationRequest};
 
-/// The block capability the generation grants this component, and no other.
+/// The block capability the generation grants this component.
 const BLOCK_SLOT: u32 = 1;
-/// The client's RPC endpoint, and this component's only grant.
-///
-/// It doubles as the run token: the root launches every declared component, so
-/// an unconfigured copy of the manager starts too, and it holds nothing here.
+/// The preinstalled direct endpoint shared with the client.
 const CLIENT_SLOT: u32 = 0;
 
 const SECTOR_BYTES: usize = 512;
@@ -62,26 +59,11 @@ const STATUS_NO_PENDING: i32 = -3;
 
 slime_rt::entry!(main);
 
-fn main(_startup_arg: u32) {
-    // The authority probe, and the one message it may consume.
-    //
-    // Unlike the storage probes, the manager's run token is a *live* endpoint
-    // its peer sends real requests on — so a probing `recv` can dequeue the
-    // client's first request rather than finding the slot empty. That is
-    // exactly what happened the first time this plane ran: the client sent
-    // LIST, the manager's probe swallowed it, and both parked forever.
-    //
-    // So the probe keeps what it takes. `pending` carries a request the probe
-    // consumed into the serve loop below; `None` means the slot was empty,
-    // which is the ordinary case because the manager is spawned first.
-    let pending = match probe_client() {
-        Probe::Absent => {
-            slime_rt::debug_write(b"[sel4-generation-manager] idle without a client\n");
-            slime_rt::exit(0);
-        }
-        Probe::Empty => None,
-        Probe::Request(bytes, len) => Some((bytes, len)),
-    };
+fn main(startup_arg: u32) {
+    if startup_arg == 0 {
+        slime_rt::debug_write(b"[sel4-generation-manager] idle root copy\n");
+        slime_rt::exit(0);
+    }
 
     let mut io = BlockCapability;
     let Some(partition) = locate_partition(&mut io) else {
@@ -118,39 +100,22 @@ fn main(_startup_arg: u32) {
     // plane's subject is the authority split, not concurrency, and a second
     // client racing on the same BootState would make the sequence
     // nondeterministic without proving anything more.
-    let mut carried = pending;
     loop {
         let mut bytes = [0u8; slime_rt::MAX_MSG];
-        let received = match carried.take() {
-            // The request the probe consumed, served before anything new is
-            // dequeued so the client's order is preserved.
-            Some((probed, len)) => {
-                bytes = probed;
-                len
+        let mut caps = [0u64; slime_rt::MAX_CAPS_PER_MSG];
+        let received = slime_rt::recv(CLIENT_SLOT, &mut bytes, &mut caps);
+        match received {
+            slime_rt::ERR_WOULDBLOCK => {
+                slime_rt::yield_now();
+                continue;
             }
-            None => {
-                let mut caps = [0u64; slime_rt::MAX_CAPS_PER_MSG];
-                let received = slime_rt::recv(CLIENT_SLOT, &mut bytes, &mut caps);
-                match received {
-                    // Nothing queued. `wait` parks until the client sends or
-                    // dies — and a dead peer answers `ERR_PEER_DEAD` on the
-                    // re-poll, which is how this loop ends.
-                    slime_rt::ERR_WOULDBLOCK => {
-                        slime_rt::wait(&[slime_rt::WaitSource::Endpoint(CLIENT_SLOT)]);
-                        continue;
-                    }
-                    slime_rt::ERR_PEER_DEAD => break,
-                    result if result < 0 => fail(b"client recv"),
-                    _ => {}
-                }
-                // A client that attached capabilities is trying to hand the
-                // manager authority it did not ask for.
-                if caps.iter().any(|attached| *attached != 0) {
-                    fail(b"the client attached a capability");
-                }
-                received
-            }
-        };
+            slime_rt::ERR_PEER_DEAD => break,
+            result if result < 0 => fail(b"client recv"),
+            _ => {}
+        }
+        if caps.iter().any(|attached| *attached != 0) {
+            fail(b"the client attached a capability");
+        }
         let reply = serve(&mut io, &slots, &bytes[..received as usize]);
         let encoded = reply.encode();
         loop {
@@ -413,33 +378,6 @@ fn decode_block_reply(bytes: &[u8; block::REPLY_LEN]) -> WireBlockReply {
         status: -1,
         sectors_done: 0,
     })
-}
-
-/// What the authority probe found.
-enum Probe {
-    /// No capability in the slot: this is the root-launched copy.
-    Absent,
-    /// The endpoint is present and had nothing queued.
-    Empty,
-    /// The endpoint is present and the probe consumed a request, which the
-    /// serve loop must answer rather than discard.
-    Request([u8; slime_rt::MAX_MSG], i64),
-}
-
-fn probe_client() -> Probe {
-    let mut bytes = [0u8; slime_rt::MAX_MSG];
-    let mut caps = [0u64; slime_rt::MAX_CAPS_PER_MSG];
-    match slime_rt::recv(CLIENT_SLOT, &mut bytes, &mut caps) {
-        slime_rt::ERR_BAD_CAP => Probe::Absent,
-        slime_rt::ERR_WOULDBLOCK => Probe::Empty,
-        received if received < 0 => fail(b"client probe"),
-        received => {
-            if caps.iter().any(|attached| *attached != 0) {
-                fail(b"the client attached a capability");
-            }
-            Probe::Request(bytes, received)
-        }
-    }
 }
 
 fn identity_words(identity: [u8; 32]) -> [u64; 4] {

@@ -65,15 +65,6 @@
       transferable = false;
     };
     {
-      name = "init-endpoint-factory";
-      rights = [
-        "endpointCreate";
-      ];
-      source = "init";
-      target = "init";
-      transferable = false;
-    };
-    {
       name = "init-shared-buffer-factory";
       rights = [
         "bufferCreate";
@@ -96,10 +87,6 @@
     {
       autostart = true;
       bindings = [
-        {
-          grant = "init-endpoint-factory";
-          slot = 3;
-        };
         {
           grant = "init-sample-lender";
           slot = 1;

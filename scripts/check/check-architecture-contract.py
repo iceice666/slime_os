@@ -209,12 +209,12 @@ def target_manifest(name: str) -> dict:
 
 
 def object_payload(generation: bytes, object_id: str) -> bytes:
-    # Header offsets from `boot-contracts/src/generation.rs::decode`, which is
-    # the authority. These were 136 and 184, from the v4 header; v5 grew the
-    # plan sections and moved everything after the counts.
+    # Generated v5 header offsets. Keep these in lockstep with
+    # `scripts/lib/boot_contracts.py`; notification topology added two section
+    # offsets after minted bindings.
     object_count = struct.unpack_from("<I", generation, 112)[0]
-    object_offset = struct.unpack_from("<Q", generation, 192)[0]
-    string_offset = struct.unpack_from("<Q", generation, 344)[0]
+    object_offset = struct.unpack_from("<Q", generation, 200)[0]
+    string_offset = struct.unpack_from("<Q", generation, 368)[0]
     for index in range(object_count):
         name_offset, _kind, payload_offset, payload_len, _digest = GENERATION_OBJECT.unpack_from(
             generation, object_offset + index * GENERATION_OBJECT.size

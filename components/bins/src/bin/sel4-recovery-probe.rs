@@ -48,8 +48,6 @@ const BLOCK_SLOT: u32 = 1;
 /// A real second device capability, deliberately read-only. Its write path can
 /// reach the attached guard disk if authority is accidentally widened.
 const GUARD_BLOCK_SLOT: u32 = 2;
-/// The endpoint `init` grants only to the instance it spawns.
-const RUN_TOKEN_SLOT: u32 = 0;
 
 const SECTOR_BYTES: usize = 512;
 
@@ -66,8 +64,8 @@ const INDEX_BYTES_OFFSET: usize = 136;
 
 slime_rt::entry!(main);
 
-fn main(_startup_arg: u32) {
-    if !spawned_instance() {
+fn main(startup_arg: u32) {
+    if startup_arg == 0 {
         slime_rt::debug_write(b"[sel4-recovery-probe] idle without a run token\n");
         slime_rt::exit(0);
     }
@@ -404,12 +402,6 @@ fn decode_reply(bytes: &[u8; block::REPLY_LEN]) -> WireBlockReply {
         status: -1,
         sectors_done: 0,
     })
-}
-
-fn spawned_instance() -> bool {
-    let mut bytes = [0u8; slime_rt::MAX_MSG];
-    let mut caps = [0u64; slime_rt::MAX_CAPS_PER_MSG];
-    slime_rt::recv(RUN_TOKEN_SLOT, &mut bytes, &mut caps) != slime_rt::ERR_BAD_CAP
 }
 
 fn write_pair(prefix: &[u8], first: u64, middle: &[u8], second: u64) {

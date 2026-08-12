@@ -82,13 +82,15 @@
       transferable = true;
     };
     {
-      name = "init-endpoint-factory";
+      minted = true;
+      name = "filesystem-rpc";
       rights = [
-        "endpointCreate";
+        "send";
+        "recv";
       ];
-      source = "init";
-      target = "init";
-      transferable = false;
+      source = "directory-probe";
+      target = "sel4-filesystem-service";
+      transferable = true;
     };
   ];
   health = {
@@ -104,10 +106,6 @@
         {
           grant = "init-directory-probe";
           slot = 1;
-        };
-        {
-          grant = "init-endpoint-factory";
-          slot = 3;
         };
         {
           grant = "init-sel4-filesystem-service";

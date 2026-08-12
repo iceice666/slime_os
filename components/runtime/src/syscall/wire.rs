@@ -26,11 +26,15 @@ pub const MAX_DESCRIPTOR_LEN: usize = 0xffff;
 pub const MAX_DESCRIPTOR_CAPS: usize = super::MAX_CAPS_PER_MSG;
 
 /// Builds the transfer descriptor register: payload byte count, capability
-/// count, and which carrier holds them.
-pub const fn descriptor(len: usize, caps: usize, form: u64) -> u64 {
+/// count, which carrier holds them, and the sending thread's window index.
+///
+/// The thread index is invocation metadata, not authority. The root already
+/// authenticated the process from the endpoint badge and uses this field only
+/// to select one of the windows it mapped for that process (B47/B46).
+pub const fn descriptor(len: usize, caps: usize, form: u64, thread: usize) -> u64 {
     debug_assert!(len <= MAX_DESCRIPTOR_LEN);
     debug_assert!(caps <= MAX_DESCRIPTOR_CAPS);
-    (len as u64) | ((caps as u64) << 16) | (form << 24)
+    (len as u64) | ((caps as u64) << 16) | (form << 24) | ((thread as u64) << 32)
 }
 
 /// Payload byte count named by a transfer descriptor.
@@ -46,6 +50,12 @@ pub const fn descriptor_caps(descriptor: u64) -> usize {
 /// Payload carrier named by a transfer descriptor.
 pub const fn descriptor_form(descriptor: u64) -> u64 {
     (descriptor >> 24) & 0xff
+}
+
+#[cfg(test)]
+/// Thread index whose transfer window carries this frame.
+pub const fn descriptor_thread(descriptor: u64) -> usize {
+    (descriptor >> 32) as usize
 }
 
 /// True when `len` bytes and `caps` capabilities fit in the fast registers.
@@ -108,9 +118,10 @@ mod tests {
     #[test]
     fn descriptor_cap_bound_matches_transport_contract() {
         assert_eq!(MAX_DESCRIPTOR_CAPS, crate::MAX_CAPS_PER_MSG);
-        let encoded = descriptor(7, MAX_DESCRIPTOR_CAPS, FORM_WINDOW);
+        let encoded = descriptor(7, MAX_DESCRIPTOR_CAPS, FORM_WINDOW, 1);
         assert_eq!(descriptor_len(encoded), 7);
         assert_eq!(descriptor_caps(encoded), crate::MAX_CAPS_PER_MSG);
+        assert_eq!(descriptor_thread(encoded), 1);
     }
 
     #[test]

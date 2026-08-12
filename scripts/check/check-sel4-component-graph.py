@@ -3,19 +3,15 @@
 """P5.2 gate: a generation of native ELF component images boots its declared
 graph on seL4.
 
-Boots `build/slime-sel4-graph.elf` -- the image whose root task embeds the
-`aarch64-sel4-qemu-virt` generation -- and asserts ordered markers for each of
-P5.2's three required checks:
-
-1. a generation whose payloads are native ELF images launches its declared
-   components with their declared grants;
-2. the root service answers the operation surface those components actually
-   invoke, with the same errors and bounds as the legacy kernel;
-3. an unsupported operation returns its bounded Slime error rather than
-   faulting the caller.
+Boots `build/slime-sel4-graph.elf` and asserts that init launches its declared
+services with generation-derived native Endpoint capabilities, the services
+exercise their bounded operation surface, and their explicit userspace shutdown
+and supervision protocol completes before the graph is certified healthy. Raw
+Endpoint closure is deliberately not lifecycle evidence: the kernel object
+supplies rendezvous transport, not a service-termination protocol.
 
 Modelled on `check-sel4-root-boot.py`, which guards P5.1 against the other
-image. The two are separate artifacts on purpose: each gate boots the one it
+image. The images are separate artifacts on purpose: each gate boots the one it
 asserts about, so neither invalidates the other's evidence by being built last.
 """
 
@@ -42,16 +38,9 @@ BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
 BOOT_TIMEOUT_SECONDS = 120
 
 # The v4 generation carries five executable catalogue entries and five instance
-# declarations, but root owns and autostarts only init. Init then exercises its
-# explicit executable bindings by spawning console and spawn-service.
-#
-# All three complete. Init holds the *consumer* end of both declared channels
-# and exits when its launch sequence is done, so both services observe
-# `PeerDead` on their next receive and exit 0 -- which is exactly what
-# `console.rs` and `spawn-service.rs` are written to do. This gate previously
-# asserted `live=2`, from before a declared side could ever be abandoned: the
-# declaration outlived its holder, so the peer's exit was invisible and the two
-# services parked forever on channels with no other end (B46).
+# declarations, but root owns and autostarts only init. Init spawns console and
+# spawn-service, drives their scenario, explicitly shuts them down, and observes
+# their termination through supervision before completing itself.
 TERMINAL_MARKER = (
     r"SLIME_GRAPH HEALTHY generation=1 required=3 live=0 completed=3 failed=0"
 )
@@ -62,36 +51,54 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     ("all catalogue payloads are native ELF images", r"SLIME_ROOT graph admitted executables=5 instances=5 slimecm=0 elf=5 unrecognized=0"),
     ("only root-owned init was staged", r"SLIME_GRAPH staged task=0 instance=init executable=init grants=8 bindings=8 window=0x[0-9a-f]+ frames=[1-9]\d* tables=[1-9]\d* entry=0x[0-9a-f]+"),
     ("the executable catalogue remained available to spawn", r"SLIME_GRAPH staged instances=1 root_autostart=1 loadable_executables=5 slimecm=0 wrong_target=0 unrecognized=0"),
+    (
+        "console's native Endpoint was declared with the static direction",
+        r"SLIME_GRAPH endpoint grant=console-output producer_instance=0 consumer_instance=1",
+    ),
+    (
+        "spawn-service's native Endpoint was declared with the static direction",
+        r"SLIME_GRAPH endpoint grant=spawn-service-rpc producer_instance=0 consumer_instance=2",
+    ),
     ("only init was root-activated", r"SLIME_GRAPH activated instances=1"),
     # Init's window sits above its own image, so the address is a function of
     # how large `init.rs` compiles to and moves whenever its code changes. The
-    # property under test is that init bound a one-page window at all; the two
-    # child addresses below stay exact, because those images are not edited by
-    # work on init's composition.
+    # property under test is that init bound a one-page window at all.
     ("init bound its transfer window", r"SLIME_GRAPH window bound task=0 base=0x[0-9a-f]+ len=4096"),
     ("init began the declared graph", r"\[init\] launching component graph"),
     ("init authorized console through its executable binding", r"SLIME_GRAPH spawn authorized task=0 slot=1 component=console grants=1"),
+    (
+        "console received its installed native Endpoint capability",
+        r"SLIME_GRAPH native endpoint task=1 key=\d+ slot=33 side=consumer",
+    ),
     ("init spawned console as instance task 1", r"SLIME_GRAPH spawned task=0 child=1 component=console grants=1 channels=1 handle=\d+"),
     ("init authorized spawn-service through its executable binding", r"SLIME_GRAPH spawn authorized task=0 slot=5 component=spawn-service grants=5"),
+    (
+        "spawn-service received its installed native Endpoint capability",
+        r"SLIME_GRAPH native endpoint task=2 key=\d+ slot=33 side=consumer",
+    ),
     ("init spawned spawn-service as instance task 2", r"SLIME_GRAPH spawned task=0 child=2 component=spawn-service grants=5 channels=1 handle=\d+"),
     ("init completed the causal launch", r"\[init\] spawn graph launched"),
-    ("init completed cleanly", r"SLIME_GRAPH component exit task=0 status=0"),
-    # The base is whatever the image's footprint rounds up to, so it moves
-    # whenever component code changes size; what matters is that this task
-    # bound a window of the mapped length, at its own base rather than another
-    # task's. The distinctness is asserted below, after both are known.
     ("spawn-service bound its mapped window", r"SLIME_GRAPH window bound task=2 base=0x[0-9a-f]+ len=4096"),
     ("spawn-service reached its service loop", r"\[spawn-service\] ready"),
     ("spawn-service allocated against its quota", r"SLIME_GRAPH buffer created task=2 slot=\d+ id=\d+ pages=1 writable=1"),
     ("the shared-buffer lifecycle became live", r"\[spawn-service\] shared-buffer quota live"),
-    # Each service ran its whole scenario and then exited on `PeerDead`, which
-    # is what `spawn-service.rs` and `console.rs` do when a receive reports the
-    # other end is gone. Asserting the exit rather than a park is what makes
-    # peer-death propagation observable: before B46 a declared side outlived
-    # its holder, so init's exit was invisible and both parked forever.
-    ("spawn-service exited on peer death", r"SLIME_GRAPH component exit task=2 status=0"),
+    ("spawn-service received explicit shutdown", r"\[spawn-service\] shutdown received"),
+    ("spawn-service completed its protocol", r"\[spawn-service\] complete"),
+    ("spawn-service exited cleanly", r"SLIME_GRAPH component exit task=2 status=0"),
     ("console bound its mapped window", r"SLIME_GRAPH window bound task=1 base=0x[0-9a-f]+ len=4096"),
-    ("console exited on peer death", r"SLIME_GRAPH component exit task=1 status=0"),
+    ("console received explicit shutdown", r"\[console\] shutdown received"),
+    ("console completed its protocol", r"\[console\] complete"),
+    ("console exited cleanly", r"SLIME_GRAPH component exit task=1 status=0"),
+    (
+        "init observed both service terminations through supervision",
+        r"\[init\] component services completed",
+    ),
+    ("init completed cleanly", r"SLIME_GRAPH component exit task=0 status=0"),
+    ("every task arena was reclaimed", r"SLIME_GRAPH tasks reclaimed live=0 slots=[1-9]\d*"),
+    (
+        "no task-owned native authority or root export ticket leaked",
+        r"SLIME_GRAPH native task_caps=0 exports=0 tickets=0",
+    ),
     ("the supervisor certified the graph", TERMINAL_MARKER),
 )
 
@@ -412,10 +419,10 @@ def main() -> None:
     assert isinstance(profile, dict)
     check_transcript(boot(profile))
     print(
-        "seL4 component graph check: init launched the two required spawned instances; "
-        "spawn-service exercised its bounded operation surface; console and spawn-service "
-        "each ran their scenario and exited on peer death; the supervisor certified the "
-        "required graph"
+        "seL4 component graph check: init launched the two required services with "
+        "native Endpoint authority, the services exercised their bounded operation "
+        "surface and completed explicit supervised shutdown, and no task-owned "
+        "native/root resource leaked"
     )
 
 

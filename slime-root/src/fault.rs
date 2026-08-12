@@ -6,9 +6,11 @@
 //! and portable fault details: raw badges, CSpace slots, object addresses, and
 //! physical identifiers never cross this boundary.
 
-use crate::ipc::{Operation, SupervisionKey, TaskKey, WakeCause, WakeDecision};
+use crate::ipc::Operation;
 
 pub const MAX_SUPERVISED_TASKS: usize = 64;
+pub type TaskKey = u32;
+pub type SupervisionKey = u32;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FaultError {
@@ -294,7 +296,6 @@ struct SupervisedTask {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SupervisionTransition {
     pub event: LifecycleEvent,
-    pub wake: Option<WakeDecision>,
 }
 
 /// Fixed-capacity task supervision state. The task module registers logical
@@ -503,13 +504,9 @@ impl<const CAPACITY: usize> SupervisionTable<CAPACITY> {
             return Err(FaultError::AlreadyTerminated);
         }
         entry.state = TaskState::Terminated(termination);
-        let wake = entry.waiter.take().map(|waiter| WakeDecision {
-            task: waiter,
-            cause: WakeCause::Supervision(entry.supervision),
-        });
+        entry.waiter = None;
         Ok(SupervisionTransition {
             event: LifecycleEvent { task, kind },
-            wake,
         })
     }
 
@@ -570,18 +567,12 @@ mod tests {
     }
 
     #[test]
-    fn task_death_wakes_supervision_waiter_once() {
+    fn task_death_clears_obsolete_waiter_state() {
         let mut table = SupervisionTable::<1>::new();
         table.register(10, 100).unwrap();
         table.register_waiter(100, 77).unwrap();
         let transition = table.fault(10, FAULT).unwrap();
-        assert_eq!(
-            transition.wake,
-            Some(WakeDecision {
-                task: 77,
-                cause: WakeCause::Supervision(100),
-            })
-        );
+        assert_eq!(transition.event.task, 10);
         assert_eq!(table.fault(10, FAULT), Err(FaultError::AlreadyTerminated));
     }
 

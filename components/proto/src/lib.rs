@@ -116,6 +116,17 @@ pub fn valid_spawn_request(request: &spawn::WireSpawnRequest) -> bool {
             && request.grant_rights == 0
             && request.reserved.iter().all(|byte| *byte == 0);
     }
+    if request.flags == spawn::REQUEST_FLAG_SHUTDOWN {
+        return request.command_len == 0
+            && request.argument_count == 0
+            && request.environment_count == 0
+            && request.capability_roles == 0
+            && request.command.iter().all(|byte| *byte == 0)
+            && request.arguments.iter().all(|byte| *byte == 0)
+            && request.environment.iter().all(|byte| *byte == 0)
+            && request.grant_rights == 0
+            && request.reserved.iter().all(|byte| *byte == 0);
+    }
     request.flags == 0
         && request.command_len > 0
         && request.command_len as usize <= spawn::MAX_COMMAND_BYTES

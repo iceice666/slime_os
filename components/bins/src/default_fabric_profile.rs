@@ -23,6 +23,24 @@ pub const FABRIC_PARTICIPANTS: &[(&[u8], &str, &str, u32)] = &[
     (b"fabric-op-client", "navigation", "NavigationOperation", 3),
     (b"fabric-op-server", "navigation", "NavigationOperation", 4),
 ];
+pub type FabricNotificationBindingRow = (&'static [u8], &'static str, u32, u32, u32);
+pub const FABRIC_NOTIFICATION_BINDINGS: &[FabricNotificationBindingRow] = &[
+    (b"fabric-publisher", "telemetry", 1, 0, 1),
+    (b"fabric-subscriber", "telemetry", 2, 2, 3),
+];
+pub const FABRIC_PUBLISHER_B_DIAGNOSTICS_CREDIT_SLOT: u32 = 3;
+pub const FABRIC_PUBLISHER_B_DIAGNOSTICS_READY_SLOT: u32 = 2;
+pub const FABRIC_PUBLISHER_B_TELEMETRY_CREDIT_SLOT: u32 = 1;
+pub const FABRIC_PUBLISHER_B_TELEMETRY_READY_SLOT: u32 = 0;
+pub const FABRIC_PUBLISHER_TELEMETRY_CREDIT_SLOT: u32 = 1;
+pub const FABRIC_PUBLISHER_TELEMETRY_READY_SLOT: u32 = 0;
+pub const FABRIC_SUBSCRIBER_B_DIAGNOSTICS_CREDIT_SLOT: u32 = 3;
+pub const FABRIC_SUBSCRIBER_B_DIAGNOSTICS_READY_SLOT: u32 = 2;
+pub const FABRIC_SUBSCRIBER_B_TELEMETRY_CREDIT_SLOT: u32 = 1;
+pub const FABRIC_SUBSCRIBER_B_TELEMETRY_READY_SLOT: u32 = 0;
+pub const FABRIC_SUBSCRIBER_TELEMETRY_CREDIT_SLOT: u32 = 1;
+pub const FABRIC_SUBSCRIBER_TELEMETRY_READY_SLOT: u32 = 0;
+
 pub const FABRIC_HISTORY_DEPTHS: &[(&[u8], &str, u32)] = &[
     (b"fabric-publisher", "telemetry", 4),
     (b"fabric-subscriber", "telemetry", 8),
@@ -121,9 +139,11 @@ pub const FABRIC_OPERATION_CLIENTS: &[&[u8]] = &[
     b"fabric-op-time",
 ];
 pub const FABRIC_SUPERVISION: &[(&[u8], u32)] = &[
-    (b"fabric-subscriber", 4),
+    (b"fabric-publisher", 4),
+    (b"fabric-subscriber", 5),
 ];
 pub const FABRIC_SUBSCRIBERS: &[&[u8]] = &[
+    b"fabric-publisher",
     b"fabric-subscriber",
 ];
 #[allow(dead_code)]
@@ -153,7 +173,7 @@ pub const FABRIC_MAX_MAPPINGS: usize = 14;
 #[allow(dead_code)]
 pub const FABRIC_MAX_LOANS: usize = 14;
 pub const FABRIC_MAX_CAPABILITY_SLOTS: usize = 48;
-pub const FABRIC_REQUIRED_CAPABILITY_SLOTS: usize = 27;
+pub const FABRIC_REQUIRED_CAPABILITY_SLOTS: usize = 28;
 pub const FABRIC_FRAME_CAPACITY: usize = 32;
 pub const FABRIC_COPY_PAGES: usize = 2;
 /// No request/response route of this class exists in the resolved graph.

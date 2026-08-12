@@ -1,30 +1,20 @@
 #!/usr/bin/env python3
 
-"""P5.3.1 gate: two components exchange bounded messages over declared channels
-on seL4.
+"""P5.3.1 gate: two components rendezvous over a generation-declared native
+seL4 Endpoint.
 
 Boots `build/slime-sel4-channel.elf` -- the image whose root task embeds the
 channel-plane generation, `contracts/generation/v1/fixtures/sel4-channel.zti` --
-and asserts ordered markers for each of P5.3.1's required checks:
-
-1. every channel the generation's send/recv grants declare is materialized
-   before any component runs, with each end installed at the slot that end's
-   component addresses and with the rights that end actually holds;
-2. a component blocked in `recv` is parked in the kernel and woken by its
-   peer's send, receiving a payload too large for the fast message registers
-   through its transfer window;
-3. a bounded channel refuses a send past its depth, and a capability-carrying
-   send is refused outright, both as ordinary Slime errors with the caller
-   still running;
-4. a `wait` on a source that is already ready is answered rather than parked;
-5. every channel, held reply, and window is reclaimed when its components exit.
+and asserts ordered evidence that root installs the statically attenuated
+Endpoint capabilities before activation, the blocking send completes only
+after its receiver runs and accepts the exact payload, both components complete
+through an explicit userspace/supervision lifecycle, and every task-owned native
+capability and root export ticket is reclaimed.
 
 Modelled on `check-sel4-component-graph.py`, which guards P5.2 against a
-different image. The three seL4 images are separate artifacts on purpose: each
-gate boots the one it asserts about, so none invalidates another's evidence by
-being built last. They differ only in which generation the root task embeds --
-the root chooses its startup path by what the generation carries, not by a flag
-it was built with.
+different image. The seL4 images are separate artifacts on purpose: each gate
+boots the one it asserts about, so none invalidates another's evidence by being
+built last.
 """
 
 from __future__ import annotations
@@ -50,19 +40,14 @@ IMAGE_VARIANT = "channel"
 
 BOOT_TIMEOUT_SECONDS = 120
 
-# Depth of one directed logical channel, mirroring
-# `slime-root/src/ipc.rs::CHANNEL_CAPACITY` and `init.rs::CHANNEL_DEPTH`. The
-# queue-full arm asserts the exact count rather than "some refusal happened",
-# because a channel that refused early would also produce a refusal.
-CHANNEL_DEPTH = 16
-
-# The bytes `init` sends to `console`. Over the sixteen the two inline payload
-# registers carry, so the message must cross through the transfer window: a
-# shorter line would ride in the fast registers and leave the whole staging
-# path -- the root mapping a child's window frame at its scratch address --
-# unexercised while still producing a delivered message.
+# The bytes `init` sends to `console`, pinned so the transcript proves the
+# receiver observed the complete message rather than merely some successful
+# Endpoint rendezvous.
 PAYLOAD_BYTES = 42
-INLINE_BYTES = 16
+
+TERMINAL_MARKER = (
+    r"SLIME_GRAPH HEALTHY generation=1 required=2 live=0 completed=2 failed=0"
+)
 
 REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     (
@@ -70,191 +55,55 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"SLIME_ROOT generation admitted number=\d+ executables=2 instances=2 grants=2 ",
     ),
     (
-        "both payloads are native ELF and no legacy image was activated",
+        "both payloads are native ELF images",
         r"SLIME_ROOT graph admitted executables=2 instances=2 slimecm=0 elf=2 unrecognized=0",
     ),
-    ("console was staged", r"SLIME_GRAPH staged task=0 instance=console executable=console grants=1 "),
-    ("init was staged", r"SLIME_GRAPH staged task=1 instance=init executable=init grants=2 "),
     (
-        # Required check 1. The direction is the claim: the generation declares
-        # `dango-output` with `console` as the grant's target and `recv` as its
-        # right, so `console` is the consumer and `init` the producer.
-        # Asserting the producer and consumer task ids is what makes this a
-        # statement about direction rather than about a channel existing -- a
-        # graph materialized backwards would still report one channel, and
-        # would then deadlock with both ends waiting to receive.
-        "the declared channel was materialized with init producing to console",
-        r"SLIME_GRAPH channel grant=dango-output key=0 producer_instance=1 consumer_instance=0 queues=1",
+        "console made unrelated progress while init remained blocked",
+        r"\[console\] unrelated progress while sender blocked",
+    ),
+    ("init entered the blocking native send", r"\[init\] rendezvous send entering"),
+    (
+        "init observed rendezvous completion",
+        r"\[init\] rendezvous send completed",
     ),
     (
-        # A bidirectional grant whose two ends are the same component is a
-        # loopback: the task sends to itself and receives what it sent, so it is
-        # one queue, not two. Asserting `queues=1` here is what keeps that
-        # honest -- allocating a second queue nothing could name would report
-        # two and prove neither.
-        #
-        # The two-party bidirectional case (one channel, two directed queues,
-        # one slot number at each end) is implemented but not exercised by this
-        # graph; it arrives with the spawn-time capability distribution in
-        # P5.3.3, which is what gives a second component a channel to reply on.
-        "the bidirectional self-edge became one loopback queue",
-        r"SLIME_GRAPH channel grant=service-spawn key=1 producer_instance=1 consumer_instance=1 queues=1",
-    ),
-    # Both channels are materialized from the generation before any component
-    # launches, so every `channel grant=` marker precedes every `channel end=`
-    # one: an end is recorded where it is installed, which is per-task at
-    # staging time. These assertions are ordered, so they follow that split.
-    (
-        # Each end holds only what that end can do. `console` holds recv (0x2)
-        # at slot 0, the slot `console.rs` compiles against, and is asserted
-        # first because it is task 0 and stages first.
-        "console holds the receive end at slot 0",
-        r"SLIME_GRAPH channel end task=0 slot=0 key=0 side=consumer rights=0x2",
-    ),
-    (
-        "init holds the send end at its layout slot",
-        r"SLIME_GRAPH channel end task=1 slot=0 key=0 side=producer rights=0x1",
-    ),
-    (
-        "init holds both directions at one slot",
-        r"SLIME_GRAPH channel end task=1 slot=1 key=1 side=loopback rights=0x3",
-    ),
-    (
-        # Every declared channel placed, nothing left unplaced. A generation
-        # naming a channel the boot layout does not label would report it here
-        # rather than installing it at a guessed slot; this graph has none.
-        "every declared channel was placed before any component ran",
-        r"SLIME_GRAPH channels grants=2 channels=2 queues=2 slots=3 unplaced=0",
-    ),
-    ("both components were activated", r"SLIME_GRAPH activated instances=\d+"),
-    (
-        # Required check 2, first half. `console` reaches its `recv` on an
-        # empty queue, is told `ERR_WOULDBLOCK`, and parks in the `wait` it
-        # issues next: the root holds its reply authority there rather than
-        # answering, so the component is blocked in the kernel rather than
-        # spinning. This marker appearing *before* the send below is the whole
-        # claim -- a send that arrived first would be a fast-path enqueue onto a
-        # queue nobody was waiting on, and the wake path would never run.
-        #
-        # `reason=wait` rather than `reason=recv` since P5.5.1. The property is
-        # unchanged -- parked in the kernel, woken by the peer's send -- but the
-        # operation holding the reply moved, because `recv` is now non-blocking
-        # exactly as `kernel/src/ipc/mod.rs` makes it. Parking inside `recv`
-        # froze any component that sweeps several sources before parking, which
-        # is what the typed fabric first showed; see the P5.3.1 roadmap entry.
-        "console parked on an empty channel",
-        r"SLIME_GRAPH parked task=0 reason=wait",
-    ),
-    (
-        # Required check 2, second half. The payload exceeds the inline
-        # registers, so it crossed through the transfer window.
-        #
-        # `caps=0` is pinned rather than left open. P5.3.2 added capability
-        # transfer over `send`, so this marker gained a field; asserting it as
-        # zero keeps the line exact and additionally states that this slice's
-        # payload-carrying send moves no capability -- which the arm below,
-        # where one is refused, is the complement of.
-        "init sent a windowed payload carrying no capability to the parked receiver",
-        rf"SLIME_GRAPH sent task=1 channel=0 bytes={PAYLOAD_BYTES} caps=0 queued=1",
-    ),
-    ("init observed its own send succeed", r"\[init\] parked receiver sent"),
-    (
-        # Required check 3, first arm. This slice mediates no transferable
-        # logical resource -- loans are P5.3.2 -- so a send naming a capability
-        # is refused before the queue is touched.
-        "a capability-carrying send was refused",
-        r"SLIME_GRAPH capability transfer refused task=1 channel=0 caps=1",
-    ),
-    (
-        "the refusal reached the component as an ordinary Slime error",
-        r"\[init\] capability transfer denied",
-    ),
-    (
-        # Required check 3, second arm. Deterministic because the channel is a
-        # self-edge: nothing drains a queue whose only reader is the task
-        # filling it, so the refusal lands on exactly the depth-plus-first send.
-        "a full channel refused the send past its depth",
-        r"\[init\] queue full refused",
-    ),
-    (
-        # Required check 4. The queue filled above is non-empty, so the wait
-        # must be answered rather than parked; parking here would deadlock a
-        # single-threaded component against itself.
-        "a wait on a ready source was answered rather than parked",
-        r"\[init\] ready wait answered",
-    ),
-    (
-        "the filled channel drained back through recv",
-        r"\[init\] queue drained",
-    ),
-    (
-        # The bytes themselves, written by `console` to the serial port. This is
-        # the end-to-end claim: the exact payload init staged into its window
-        # came back out of console's.
-        "console printed the exact bytes it was sent",
+        "console printed the exact rendezvous payload",
         r"\[console\] channel plane carried this line",
     ),
+    ("console accepted the explicit close message", r"\[console\] channel close received"),
+    ("console completed its channel role", r"\[console\] channel plane complete"),
+    ("console exited cleanly", r"SLIME_GRAPH component exit task=1 status=0"),
     (
-        # Console loops back and blocks again on an empty channel, so its reply
-        # is owed at the moment its peer dies. This second park is what makes
-        # the death-wake arm below observable rather than vacuous.
-        "console parked again on an empty channel",
-        r"SLIME_GRAPH parked task=0 reason=wait",
+        "init observed console termination through supervision",
+        r"\[init\] channel receiver completed",
     ),
     ("init completed the scenario", r"\[init\] channel plane complete"),
-    ("init exited cleanly", r"SLIME_GRAPH component exit task=1 status=0"),
+    ("init exited cleanly", r"SLIME_GRAPH component exit task=0 status=0"),
     (
-        # Required check 5, first half. `woken=1` is the load-bearing number: it
-        # says a component blocked in a call was answered by its peer's death
-        # rather than left waiting for a message that can never arrive. Settling
-        # the channels without waking anyone would drain the graph just as well
-        # and say nothing about the component that was parked on it.
-        "init's death settled both channels and woke the parked receiver",
-        r"SLIME_GRAPH peer death task=1 channels=2 woken=1",
-    ),
-    ("console exited cleanly", r"SLIME_GRAPH component exit task=0 status=0"),
-    (
-        "the graph drained with every window and table reclaimed",
-        r"SLIME_GRAPH served live=0 unsupported=0 unimplemented=0 buffers=0 "
-        r"windows=0 tables=0",
+        "the graph drained its task and window tables",
+        r"SLIME_GRAPH served live=0 unsupported=0 unimplemented=0 buffers=0 windows=0 tables=0",
     ),
     (
-        # Required check 5, second half, and the terminal marker. `parked=0`
-        # means no component is still blocked on a reply the root owes it, and
-        # `queues=0` means no queue still believes it has a live peer -- either
-        # would be a graph that only appeared to drain. The send and receive
-        # counts are pinned exactly: one windowed message to console plus the
-        # depth-many that filled the self-edge, and the depth-many drained back.
-        "every channel and held reply was reclaimed",
-        rf"SLIME_GRAPH channels served sends={CHANNEL_DEPTH + 1} "
-        rf"receives={CHANNEL_DEPTH + 1} parks=2 settled=3 parked=0 queues=0 "
-        r"replies=\d+",
+        "every task arena and native capability was reclaimed",
+        r"SLIME_GRAPH tasks reclaimed live=0 slots=[1-9]\d*",
     ),
+    (
+        "no task-owned native authority or root export ticket leaked",
+        r"SLIME_GRAPH native task_caps=0 exports=0 tickets=0",
+    ),
+    ("the supervisor certified the completed graph", TERMINAL_MARKER),
 )
 
 FAILURE_MARKERS: tuple[str, ...] = (
     r"SLIME_ROOT FATAL .*",
     r"SLIME_GRAPH FAIL .*",
-    # The scenario's own assertions. Every one of these means a channel
-    # operation returned something other than what the plane promises, and the
-    # component says so rather than exiting quietly.
+    r"SLIME_GRAPH component exit .*status=-?[1-9]\d*",
     r"\[init\] channel plane fail: .*",
-    # A component that could not bind its transfer window would issue no
-    # windowed operation at all, and the graph would look quiet rather than
-    # broken.
     r"\[slime-rt\] transfer window bind failed",
     r"SLIME_GRAPH window bind refused",
-    # A park the root could not record leaves a caller blocked; it is answered
-    # with a bounded error, but it is never expected on this path.
-    r"SLIME_GRAPH park refused .*",
-    # A channel the generation declared that the root could not place. This
-    # graph declares none, so any occurrence means the fixture and the boot
-    # layout have drifted apart.
-    r"SLIME_GRAPH channel unplaced .*",
+    r"SLIME_GRAPH endpoint unplaced .*",
     r"SLIME_GRAPH service budget exhausted",
-    # seL4's own complaints. `read-only endpoint` in particular means a
-    # component cannot invoke the root at all, which is silent from the Slime
-    # side: the component simply never speaks.
     r"Attempted to invoke a read-only endpoint",
     r"seL4 called fail",
     r"Caught cap fault",
@@ -355,24 +204,6 @@ def check_manifest() -> None:
         )
 
 
-def check_payload_crosses_the_window() -> None:
-    """The payload the scenario sends must exceed the inline registers.
-
-    Asserted against the source rather than inferred from the transcript,
-    because a payload that shrank below the inline bound would still be
-    delivered and still print -- the gate would pass while the transfer-window
-    staging path it exists to cover went unexercised.
-    """
-    if PAYLOAD_BYTES <= INLINE_BYTES:
-        fail(
-            f"the scenario's payload is {PAYLOAD_BYTES} bytes, which rides in the "
-            f"{INLINE_BYTES} inline register bytes and never reaches the transfer window"
-        )
-    print(
-        f"payload: {PAYLOAD_BYTES} bytes exceeds the {INLINE_BYTES} inline bytes "
-        "and must cross the transfer window",
-        flush=True,
-    )
 
 
 def boot(profile: dict[str, object]) -> str:
@@ -453,34 +284,6 @@ def report_transcript(transcript: str) -> None:
         sys.stdout.flush()
 
 
-def check_queue_depth(transcript: str) -> None:
-    """The channel refused its send at exactly its declared depth.
-
-    The ordered markers assert that a refusal happened; this asserts it happened
-    in the right place. A channel that accepted one message and then refused
-    would satisfy `[init] queue full refused` just as well, and would be a
-    bounded channel of the wrong bound.
-    """
-    queued = re.findall(
-        r"SLIME_GRAPH sent task=1 channel=1 bytes=\d+ caps=0 queued=(\d+)", transcript
-    )
-    if not queued:
-        fail("the transcript records no sends on the bounded channel")
-    depth = max(int(value) for value in queued)
-    if depth != CHANNEL_DEPTH:
-        fail(
-            f"the bounded channel accepted {depth} messages, not its declared "
-            f"depth of {CHANNEL_DEPTH}"
-        )
-    if len(queued) != CHANNEL_DEPTH:
-        fail(
-            f"the bounded channel accepted {len(queued)} sends before refusing, "
-            f"not {CHANNEL_DEPTH}"
-        )
-    print(
-        f"bounded channel: accepted exactly {CHANNEL_DEPTH} messages and refused the next",
-        flush=True,
-    )
 
 
 def check_transcript(transcript: str) -> None:
@@ -498,7 +301,9 @@ def check_transcript(transcript: str) -> None:
                 fail(f"marker out of order: {description} ({pattern})")
             fail(f"missing marker: {description} ({pattern})")
         position = match.end()
-    check_queue_depth(transcript)
+    terminals = re.findall(TERMINAL_MARKER, transcript)
+    if len(terminals) != 1:
+        fail(f"expected exactly one healthy supervisor terminal, saw {len(terminals)}")
 
 
 def main() -> None:
@@ -518,15 +323,13 @@ def main() -> None:
     if not arguments.no_build:
         build_image()
     check_manifest()
-    check_payload_crosses_the_window()
     profile = pins["qemu_arm_virt"]
     assert isinstance(profile, dict)
     check_transcript(boot(profile))
     print(
-        "seL4 channel plane check: two components exchanged bounded messages over "
-        "declared channels, a parked receiver was woken by its peer's send, the "
-        "queue-full and capability-transfer refusals were observed, and every "
-        "channel, held reply, and window was reclaimed"
+        "seL4 channel plane check: the declared native Endpoint was installed with "
+        "static direction, its blocking rendezvous carried the exact payload, both "
+        "components completed explicitly, and no task-owned native/root resource leaked"
     )
 
 

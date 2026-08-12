@@ -121,6 +121,8 @@ from boot_contracts import (
     GENERATION_FAULT_POLICY,
     GENERATION_SPAWN_TEMPLATE,
     GENERATION_MINTED_BINDING,
+    GENERATION_NOTIFICATION_GRANT,
+    GENERATION_NOTIFICATION_BINDING,
     GENERATION_RESOURCE_QUOTA,
     GENERATION_VERSION,
     TARGET_PROFILES_BY_NAME,
@@ -147,6 +149,8 @@ from boot_contracts import (
     MAX_FAULT_POLICIES,
     MAX_SPAWN_TEMPLATES,
     MAX_MINTED_BINDINGS,
+    MAX_NOTIFICATION_GRANTS,
+    MAX_NOTIFICATION_BINDINGS,
     MAX_RESOURCE_QUOTAS,
     SHARED_BUFFER_BUDGET_ENTRY,
     SHARED_BUFFER_BUDGET_HEADER,
@@ -1125,15 +1129,22 @@ def resolve_fabric_profile(manifest: dict, interfaces: list, profile_name: str) 
                     "interposition": member["interposition"],
                 }
             )
-    subscriber_components = {
+    # Every ring participant, not only subscribers (B46). A v2 stream edge is a
+    # writable shared ring the fabric loans to its peer, and a loan names its
+    # receiver through a supervision capability -- so a publisher needs one for
+    # exactly the reason a subscriber does. Under v1 only subscribers received
+    # anything (samples were messages, and only the downstream sample hop was a
+    # loan), which is why this list used to be subscribers alone.
+    ring_components = {
         participant["component"]
         for participant in participants
-        if participant["direction"] == FABRIC_DIRECTION_SUBSCRIBE
+        if participant["direction"]
+        in (FABRIC_DIRECTION_PUBLISH, FABRIC_DIRECTION_SUBSCRIBE)
     }
-    subscribers = [component for component in stream_controls if component in subscriber_components]
+    ring_holders = [component for component in stream_controls if component in ring_components]
     supervision = [
         {"component": component, "slot": FABRIC_FIRST_CONTROL_SLOT + len(stream_controls) + index}
-        for index, component in enumerate(subscribers)
+        for index, component in enumerate(ring_holders)
     ]
     # C8.10: every plane coexists in one boot, so its control slots are summed
     # into one disjoint layout rather than overlaid. `max()` here would size the
@@ -1141,7 +1152,7 @@ def resolve_fabric_profile(manifest: dict, interfaces: list, profile_name: str) 
     # the mutually-exclusive assumption the milestone removes: two planes would
     # then be numbered from the same base and collide on the same slot.
     plane_control_counts = (
-        len(stream_controls) * 2 + len(subscribers),
+        len(stream_controls) * 2 + len(ring_holders),
         len(call_controls),
         len(operation_controls) + len(replacement_controls),
     )
@@ -1322,6 +1333,73 @@ def render_fabric_profile_rust(resolved: ResolvedFabricProfile) -> str:
         f"    (b{rust_string(row['component'])}, {rust_string(row['route'])}, {row['visibility']}),\n"
         for row in participants
     )
+    notification_grants = {grant["name"]: grant for grant in resolved.manifest.get("notificationGrants", [])}
+    notification_bindings = resolved.manifest.get("notificationBindings", [])
+    notification_by_holder = {
+        (binding["holder"], binding["grant"]): binding
+        for binding in notification_bindings
+    }
+    notification_rows_data = []
+    participant_rows_data = []
+    for participant in participants:
+        component = participant["component"]
+        route = participant["route"]
+        if participant["direction"] not in (FABRIC_DIRECTION_PUBLISH, FABRIC_DIRECTION_SUBSCRIBE):
+            continue
+        ready_name = f"{component}-{route}-ready"
+        credit_name = f"{component}-{route}-credit"
+        ready_grant = notification_grants.get(ready_name)
+        credit_grant = notification_grants.get(credit_name)
+        if ready_grant is None and credit_grant is None:
+            # A full-graph profile may provision stream roles over its control
+            # endpoints without driving samples. Such a profile declares no
+            # ready/credit Notifications, so it emits no notification row.
+            continue
+        if ready_grant is None or credit_grant is None:
+            fail(f"fabric notification bindings incomplete for {component}/{route}")
+        fabric_component = artifact["fabricComponent"]
+        ready = notification_by_holder.get((fabric_component, ready_name))
+        credit = notification_by_holder.get((fabric_component, credit_name))
+        participant_ready = notification_by_holder.get((component, ready_name))
+        participant_credit = notification_by_holder.get((component, credit_name))
+        if None in (ready, credit, participant_ready, participant_credit):
+            fail(f"fabric notification bindings missing for {component}/{route}")
+        notification_rows_data.append((component, route, participant["direction"], ready["slot"], credit["slot"]))
+        participant_rows_data.append((component, route, participant_ready["slot"], participant_credit["slot"]))
+    notification_rows = "".join(
+        f"    (b{rust_string(component)}, {rust_string(route)}, {direction}, {ready}, {credit}),\n"
+        for component, route, direction, ready, credit in notification_rows_data
+    )
+    # Slot constants come from the *manifest's* notification bindings, not
+    # from the resolved participant set. A component compiles against its own
+    # ring slots in every image, while a profile decides only which instances
+    # a boot activates -- so scoping these to the resolved participants would
+    # stop the component from compiling under any profile that prunes it,
+    # which is a build failure standing in for a boot-time absence the
+    # generation already expresses.
+    notification_slots: dict[str, int] = {}
+    for binding in notification_bindings:
+        grant = notification_grants.get(binding["grant"])
+        if grant is None:
+            fail(f"notification binding names unknown grant {binding['grant']}")
+        holder = binding["holder"]
+        if not binding["grant"].startswith(f"{holder}-"):
+            # The fabric's own half of each pair. Its slots are the broker's,
+            # published through `FABRIC_NOTIFICATIONS` rather than as
+            # per-participant constants.
+            continue
+        suffix = binding["grant"].removeprefix(f"{holder}-")
+        route, _, kind = suffix.rpartition("-")
+        if kind not in ("ready", "credit") or not route:
+            fail(f"notification grant {binding['grant']} does not name a route and kind")
+        name = f"{holder.removeprefix('fabric-')}_{route}_{kind}_slot".upper().replace("-", "_")
+        existing = notification_slots.setdefault(name, binding["slot"])
+        if existing != binding["slot"]:
+            fail(f"notification slot {name} declared twice with different slots")
+    notification_constants = "".join(
+        f"pub const FABRIC_{name}: u32 = {slot};\n"
+        for name, slot in sorted(notification_slots.items())
+    )
     interposition_rows = "".join(
         f"    (b{rust_string(row['component'])}, {rust_string(row['route'])}, &[{', '.join(f'b{rust_string(hop)} as &[u8]' for hop in row['interposition'])}]),\n"
         for row in participants if row["interposition"]
@@ -1376,6 +1454,10 @@ pub const FABRIC_SCHEMAS: &[(&str, &str, u64, u32, u32)] = &[\n{schema_rows}];
 #[allow(dead_code)]
 pub const FABRIC_ROUTES: &[(&str, &str, &str, u32)] = &[\n{route_rows}];
 pub const FABRIC_PARTICIPANTS: &[(&[u8], &str, &str, u32)] = &[\n{participant_rows}];
+pub type FabricNotificationBindingRow = (&'static [u8], &'static str, u32, u32, u32);
+pub const FABRIC_NOTIFICATION_BINDINGS: &[FabricNotificationBindingRow] = &[
+{notification_rows}];
+{notification_constants}
 pub const FABRIC_HISTORY_DEPTHS: &[(&[u8], &str, u32)] = &[\n{depth_rows}];
 pub type FabricQosRow = (&'static [u8], &'static str, u64, u64, u64, u32, u32, u8, u8, u8);
 pub const FABRIC_QOS: &[FabricQosRow] = &[\n{qos_rows}];
@@ -2225,14 +2307,11 @@ SERVICE_ROOT_DISPATCH = 1
 # noisy or faulting console client cannot consume the root's lifecycle
 # dispatcher or share its fault domain.
 SERVICE_CONSOLE = 2
-# The child CSpace slot the console endpoint is installed at. Fixed rather than
-# per-plane: `components/runtime` resolves it from a constant, exactly as it
-# does the root endpoint, and the checker pins both.
-#
-# Above every slot a generation grant can name, because grant slots are the
-# component's own numbering and start at 0. 32 is the first power of two clear
-# of the highest declared slot in any fixture (22), which keeps the CNode a
-# round six bits.
+# Native child CSpace ABI. Logical generation slots remain 0..31; static
+# endpoint/notification mirrors occupy disjoint 31-slot regions, authority
+# tokens occupy 95..126, and 127 is the receive path's fixed slot.
+CHILD_CNODE_SIZE_BITS = 7
+MAX_DECLARED_NATIVE_SLOT = 31
 CONSOLE_SERVICE_SLOT = 32
 KERNEL_OBJECT_CNODE = 1
 KERNEL_OBJECT_VSPACE = 2
@@ -2240,6 +2319,9 @@ KERNEL_OBJECT_TCB = 3
 KERNEL_OBJECT_FRAME = 4
 KERNEL_OBJECT_ENDPOINT = 5
 KERNEL_OBJECT_PAGE_TABLE = 6
+KERNEL_OBJECT_NOTIFICATION = 7
+NOTIFICATION_ROLE_SIGNAL = 1
+NOTIFICATION_ROLE_WAIT = 2
 CAP_RIGHT_ALL = (1 << 64) - 1
 
 
@@ -2290,9 +2372,9 @@ def build_sel4_plan(
         quota = process
         # Named once so the CSpace object and the quota's `cslot_count` cannot
         # disagree about how many slots the child has. Six bits, matching
-        # `slime-root`'s `task::CHILD_CNODE_SIZE_BITS`: the console endpoint
-        # sits at slot 32, above every slot a generation grant can name.
-        cnode_size_bits = 6
+        # `slime-root`'s `task::CHILD_CNODE_SIZE_BITS`: fixed declared slots
+        # end at 32 and the native mirrored regions fill the remaining CSpace.
+        cnode_size_bits = CHILD_CNODE_SIZE_BITS
         cspace = len(object_index)
         object_index[(name, "cspace")] = cspace
         kernel_records.extend(
@@ -2458,7 +2540,20 @@ def build_sel4_plan(
             "tcb": thread_total,
             # One IPC-buffer/window pair per thread, plus the image itself.
             "frame": thread_total + image_frame_count,
-            "endpoint": 2,
+            "endpoint": 2 + sum(
+                1
+                for grant, rights in zip(grants, grant_rights, strict=True)
+                if not grant.get("minted")
+                and rights & (RIGHT["send"] | RIGHT["recv"])
+                and grant["source"] == name
+            ),
+            # Each static notification object is owned once, by its declared
+            # signal source; wait holders receive capabilities to that object.
+            "notification": sum(
+                1
+                for grant in manifest.get("notificationGrants", [])
+                if grant["source"] == name
+            ),
         }
         quota_records.extend(
             GENERATION_RESOURCE_QUOTA.pack(
@@ -2467,11 +2562,8 @@ def build_sel4_plan(
                 process_objects["cnode"],
                 process_objects["tcb"],
                 process_objects["endpoint"],
-                0,
+                process_objects["notification"],
                 process_objects["frame"],
-                # The child's VSpace root, which the loop declares alongside
-                # the CNode. Counted here rather than left zero so admission
-                # has a class to refuse (B49).
                 process_objects["vspace"],
                 0,
                 0,
@@ -2628,6 +2720,61 @@ def build_sel4_plan(
             cap_records.extend(
                 GENERATION_CAP_BINDING.pack(source_process, bound["slot"], object_index[(grant["source"], "tcb")], rights, 0, grant_index, GRANT_POLICY_ONLY)
             )
+    notification_grant_records = bytearray()
+    notification_binding_records = bytearray()
+    notification_grants = sorted(manifest.get("notificationGrants", []), key=lambda grant: grant["name"])
+    notification_index = {grant["name"]: index for index, grant in enumerate(notification_grants)}
+    if len(notification_index) != len(notification_grants):
+        fail("notification grant names must be unique")
+    bindings_by_grant: dict[str, list[dict]] = {name: [] for name in notification_index}
+    seen_notification_slots: set[tuple[int, int]] = set()
+    for binding in manifest.get("notificationBindings", []):
+        grant = notification_index.get(binding["grant"])
+        holder = instance_index.get(binding["holder"])
+        role = {"signal": NOTIFICATION_ROLE_SIGNAL, "wait": NOTIFICATION_ROLE_WAIT}.get(binding["role"])
+        slot = binding["slot"]
+        if grant is None or holder is None or role is None:
+            fail("notification binding names unknown grant, holder, or role")
+        if not isinstance(slot, int) or isinstance(slot, bool) or not 0 <= slot < MAX_DECLARED_NATIVE_SLOT:
+            fail(f"notification binding {binding['grant']}: relative slot outside 0..30")
+        if (holder, slot) in seen_notification_slots:
+            fail(f"notification binding {binding['grant']}: duplicate holder slot")
+        seen_notification_slots.add((holder, slot))
+        bindings_by_grant[binding["grant"]].append(binding)
+        notification_binding_records.extend(
+            GENERATION_NOTIFICATION_BINDING.pack(grant, holder, slot, role, 0)
+        )
+    for grant in notification_grants:
+        source = instance_index.get(grant["source"])
+        target = instance_index.get(grant["target"])
+        if source is None or target is None or source == target:
+            fail(f"notification grant {grant['name']}: invalid endpoints")
+        bindings = bindings_by_grant[grant["name"]]
+        expected = {(source, "signal"), (target, "wait")}
+        actual = {(instance_index[binding["holder"]], binding["role"]) for binding in bindings}
+        if len(bindings) != 2 or actual != expected:
+            fail(f"notification grant {grant['name']}: requires source signal and target wait bindings")
+        object_ = len(object_index)
+        object_index[(grant["name"], "notification")] = object_
+        kernel_records.extend(
+            GENERATION_KERNEL_OBJECT.pack(
+                string_offset(f"{grant['name']}:notification"),
+                KERNEL_OBJECT_NOTIFICATION,
+                process_for_instance[grant["source"]],
+                4,
+                1,
+                PLAN_NONE,
+                0,
+            )
+        )
+        notification_grant_records.extend(
+            GENERATION_NOTIFICATION_GRANT.pack(
+                string_offset(grant["name"]), source, target, object_, 0
+            )
+        )
+    if len(notification_grants) > MAX_NOTIFICATION_GRANTS or len(manifest.get("notificationBindings", [])) > MAX_NOTIFICATION_BINDINGS:
+        fail("notification topology count exceeds bound")
+
     # Minted bindings: a capability the owner creates at runtime and hands to
     # an instance it owns at spawn. Sorted by name so the section is canonical,
     # and validated here so an unsatisfiable declaration fails before output.
@@ -2641,8 +2788,8 @@ def build_sel4_plan(
         if instances[holder]["owner"] != minted["owner"]:
             fail(f"minted binding {minted['name']}: holder is not owned by its minter")
         slot = minted["slot"]
-        if not isinstance(slot, int) or not 0 <= slot < 64:
-            fail(f"minted binding {minted['name']}: slot outside capability table")
+        if not isinstance(slot, int) or isinstance(slot, bool) or not 0 <= slot < 32:
+            fail(f"minted binding {minted['name']}: logical slot outside 0..31")
         if (holder, slot) in seen_holder_slots:
             fail(f"minted binding {minted['name']}: duplicate holder slot")
         seen_holder_slots.add((holder, slot))
@@ -2676,18 +2823,21 @@ def build_sel4_plan(
         len(spawn_records) // GENERATION_SPAWN_TEMPLATE.size,
         len(quota_records) // GENERATION_RESOURCE_QUOTA.size,
         len(minted_records) // GENERATION_MINTED_BINDING.size,
+        len(notification_grant_records) // GENERATION_NOTIFICATION_GRANT.size,
+        len(notification_binding_records) // GENERATION_NOTIFICATION_BINDING.size,
     )
     limits = (
         MAX_PROCESSES, MAX_THREADS, MAX_KERNEL_OBJECTS, MAX_MAPPINGS, MAX_CAP_BINDINGS,
         MAX_SERVICE_BINDINGS, MAX_SCHEDULES, MAX_FAULT_POLICIES, MAX_SPAWN_TEMPLATES,
-        MAX_RESOURCE_QUOTAS, MAX_MINTED_BINDINGS,
+        MAX_RESOURCE_QUOTAS, MAX_MINTED_BINDINGS, MAX_NOTIFICATION_GRANTS,
+        MAX_NOTIFICATION_BINDINGS,
     )
     if any(count > limit for count, limit in zip(counts, limits, strict=True)):
         fail("seL4 execution plan count exceeds bound")
     return (
         process_records, thread_records, kernel_records, mapping_records, cap_records,
         service_records, schedule_records, fault_records, spawn_records, quota_records,
-        minted_records, counts,
+        minted_records, notification_grant_records, notification_binding_records, counts,
     )
 
 
@@ -2859,8 +3009,12 @@ def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes |
         slots = [binding["slot"] for binding in declared]
         if len(set(names)) != len(names) or len(set(slots)) != len(slots):
             fail(f"instance {instance['name']}: duplicate binding grant or slot")
-        if any(not isinstance(slot, int) or not 0 <= slot < 64 for slot in slots):
-            fail(f"instance {instance['name']}: binding slot outside capability table")
+        if any(not isinstance(slot, int) or isinstance(slot, bool) or not 0 <= slot < 32 for slot in slots):
+            fail(f"instance {instance['name']}: logical binding slot outside 0..31")
+        for binding in declared:
+            grant = grants[grant_index[binding["grant"]]] if binding["grant"] in grant_index else None
+            if grant is not None and set(grant["rights"]) & {"send", "recv"} and binding["slot"] >= MAX_DECLARED_NATIVE_SLOT:
+                fail(f"instance {instance['name']}: endpoint-relative slot outside 0..30")
         expected = expected_bindings[instance["name"]]
         extra = set(names) - expected
         for name in extra:
@@ -2920,6 +3074,8 @@ def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes |
         spawn_template_records,
         resource_quota_records,
         minted_binding_records,
+        notification_grant_records,
+        notification_binding_records,
         plan_counts,
     ) = build_sel4_plan(
         manifest,
@@ -2947,6 +3103,8 @@ def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes |
             spawn_template_records,
             resource_quota_records,
             minted_binding_records,
+            notification_grant_records,
+            notification_binding_records,
         )
     )
     payload_start = (
@@ -3030,7 +3188,9 @@ def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes |
     spawn_template_offset = fault_policy_offset + len(fault_policy_records)
     resource_quota_offset = spawn_template_offset + len(spawn_template_records)
     minted_binding_offset = resource_quota_offset + len(resource_quota_records)
-    string_table_offset = minted_binding_offset + len(minted_binding_records)
+    notification_grant_offset = minted_binding_offset + len(minted_binding_records)
+    notification_binding_offset = notification_grant_offset + len(notification_grant_records)
+    string_table_offset = notification_binding_offset + len(notification_binding_records)
     actual_payload_offset = string_table_offset + len(strings)
     if actual_payload_offset != payload_start:
         fail("internal payload offset mismatch")
@@ -3046,6 +3206,7 @@ def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes |
         health_offset, process_offset, thread_offset, kernel_object_offset, mapping_offset,
         cap_binding_offset, service_binding_offset, schedule_offset, fault_policy_offset,
         spawn_template_offset, resource_quota_offset, minted_binding_offset,
+        notification_grant_offset, notification_binding_offset,
         string_table_offset, len(strings),
         actual_payload_offset, total_len,
     )
@@ -3055,7 +3216,7 @@ def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes |
         + thread_records + kernel_object_records + mapping_records + cap_binding_records
         + service_binding_records + schedule_records + fault_policy_records
         + spawn_template_records + resource_quota_records + minted_binding_records
-        + strings + blobs
+        + notification_grant_records + notification_binding_records + strings + blobs
     )
     generation[24:56] = generation_identity(generation)
     return bytes(generation)

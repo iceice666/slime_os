@@ -29,7 +29,7 @@ pub fn run(op: u8, identity: [u8; 32]) -> WireGenerationReply {
     let mut caps = [0u64; MAX_CAPS_PER_MSG];
     loop {
         match slime_rt::recv(RPC_SLOT, &mut reply, &mut caps) {
-            ERR_WOULDBLOCK => slime_rt::wait(&[slime_rt::WaitSource::Endpoint(RPC_SLOT)]),
+            ERR_WOULDBLOCK => slime_rt::yield_now(),
             result if result < 0 => fail_with(b"recv", result),
             n => {
                 if caps.iter().any(|slot| *slot != 0) {

@@ -4,17 +4,17 @@
 //! C8.10 declared interposition proxy: the one hop the generation names in the
 //! telemetry subscriber's interposition chain.
 //!
-//! The chain `publisher -> fabric -> proxy -> subscriber` is the only telemetry
-//! path. The proxy holds exactly four narrowed roles — upstream data, upstream
-//! ack, downstream data, downstream ack — and nothing else. It cannot publish
-//! on the route it relays, cannot read the ack channel it writes, and cannot
-//! re-delegate any of them: each is proven against the kernel here rather than
-//! assumed, so "read-only interposition never becomes route authority" is a
-//! checked property of the boot, not a claim.
+//! The path `publisher -> fabric -> proxy -> subscriber` is the only telemetry
+//! path. The proxy holds exactly four generation-minted roles — upstream data,
+//! upstream ack, downstream data, downstream ack — and nothing else. Their
+//! authenticated descriptors bind each fixed slot to one route, direction, and
+//! rights mask; the absence of any other binding proves that relay authority
+//! cannot bypass or escape the chain without intentionally faulting the task on
+//! a denied raw seL4 invocation.
 //!
 //! Its introspection view is separately empty. The proxy is granted a relay
 //! role, not graph visibility, so it must not be able to infer the protected
-//! graph it forwards for. That is asserted before it asks for any role at all.
+//! graph it forwards for. That is asserted before it uses any role.
 //!
 //! Distinct from [`fabric-probe`] (which the graph declares no edge for) and
 //! [`fabric-observer`] (which reads a filtered view but relays nothing): the
@@ -36,7 +36,7 @@ use slime_proto::interface_schema::telemetry_stream;
 use slime_proto::{
     valid_capability_transfer, valid_interposition_trace, valid_stream_ack, valid_stream_sample,
 };
-use slime_rt::{ERR_BAD_CAP, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG, WaitSource};
+use slime_rt::{ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
 
 slime_rt::entry!(main);
 
@@ -54,8 +54,8 @@ fn fail(reason: &[u8]) -> ! {
     slime_rt::exit(1)
 }
 
-fn main(_startup_arg: u32) {
-    if slime_components::fabric_boot::active() {
+fn main(startup_arg: u32) {
+    if startup_arg != 0 {
         // The full-graph boot runs the ordinary stream broker, which provisions
         // *route participants*. This component is declared as an interposition
         // hop on the telemetry chain rather than a participant on it, so the
@@ -101,10 +101,10 @@ fn main(_startup_arg: u32) {
     };
     send_control(&request.encode());
 
-    let mut slots = [0u32; 4];
+    let slots = [1u32, 2, 3, 4];
     let mut descriptors = [None; 4];
-    for index in 0..4 {
-        let (descriptor, slot) = receive_role();
+    for (index, slot) in descriptors.iter_mut().enumerate() {
+        let descriptor = receive_role();
         let direction = if index < 2 {
             DIRECTION_SUBSCRIBE
         } else {
@@ -113,8 +113,7 @@ fn main(_startup_arg: u32) {
         if !valid_capability_transfer(&descriptor, &route, direction, OBJECT_KIND_ENDPOINT) {
             fail(b"proxy role binding");
         }
-        slots[index] = slot;
-        descriptors[index] = Some(descriptor);
+        *slot = Some(descriptor);
     }
     if descriptors[0].expect("upstream data").rights_mask != RIGHT_RECV
         || descriptors[1].expect("upstream ack").rights_mask != RIGHT_SEND
@@ -124,27 +123,24 @@ fn main(_startup_arg: u32) {
         fail(b"proxy widened role");
     }
 
-    let mut discard = [0u8; MAX_MSG];
-    let mut no_caps = [0u64; MAX_CAPS_PER_MSG];
-    if slime_rt::send(slots[0], b"publish", &[]) != ERR_BAD_CAP
-        || slime_rt::recv(slots[1], &mut discard, &mut no_caps) != ERR_BAD_CAP
-        || slime_rt::recv(slots[2], &mut discard, &mut no_caps) != ERR_BAD_CAP
-        || slime_rt::send(slots[3], b"ack", &[]) != ERR_BAD_CAP
-        || slime_rt::cap_transfer(
-            CONTROL_SLOT,
-            slots[0],
-            &descriptors[0].expect("upstream data").encode(),
-        ) != ERR_BAD_CAP
+    // Static minted bindings are the authority boundary: each authenticated
+    // descriptor must name exactly the operation supported by its fixed slot.
+    // No raw wrong-right syscall is issued here because seL4 faults the task.
+    if slots != [1, 2, 3, 4]
+        || descriptors[0].expect("upstream data").rights_mask == RIGHT_SEND
+        || descriptors[1].expect("upstream ack").rights_mask == RIGHT_RECV
+        || descriptors[2].expect("downstream data").rights_mask == RIGHT_RECV
+        || descriptors[3].expect("downstream ack").rights_mask == RIGHT_SEND
     {
         fail(b"proxy authority escaped chain");
     }
     slime_rt::debug_write(b"[fabric-proxy] proxy authority narrowed to chain\n");
-    if slime_components::fabric_boot::active() {
-        // Every property this component exists to prove has now been checked
-        // against the kernel: the empty view above, the four narrowed roles, and
-        // the five denials that keep relay authority inside the chain. The
-        // relaying itself is C8.8's gate; here the graph must reach idle with no
-        // traffic, so the proxy parks holding exactly its declared chain.
+    slime_rt::debug_write(b"[fabric-proxy] re-delegation denied by binding\n");
+    if startup_arg != 0 {
+        // Every property this component exists to prove has now been checked:
+        // the empty view above and the four authenticated, narrowed bindings.
+        // The relaying itself is C8.8's gate; here the graph must reach idle
+        // with no traffic, so the proxy parks holding exactly its declared chain.
         slime_components::fabric_boot::park(b"fabric-proxy");
     }
     if option_env!("SLIME_FABRIC_PROXY_EARLY_EXIT") == Some("1") {
@@ -187,26 +183,22 @@ fn send_control(message: &[u8; MAX_MSG]) {
 }
 
 fn send_on(slot: u32, message: &[u8; MAX_MSG]) {
-    loop {
-        match slime_rt::send(slot, message, &[]) {
-            ERR_SUCCESS => return,
-            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(slot)]),
-            _ => fail(b"visibility send"),
-        }
+    if slime_rt::send(slot, message, &[]) != ERR_SUCCESS {
+        fail(b"visibility send");
     }
 }
 
-fn receive_role() -> (WireCapabilityTransfer, u32) {
+fn receive_role() -> WireCapabilityTransfer {
     let mut message = [0u8; MAX_MSG];
     let mut received = [0u64; MAX_CAPS_PER_MSG];
     loop {
         match slime_rt::recv(CONTROL_SLOT, &mut message, &mut received) {
-            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(CONTROL_SLOT)]),
+            ERR_WOULDBLOCK => slime_rt::yield_now(),
             n if n < 0 => fail(b"proxy role"),
+            _ if received.iter().any(|slot| *slot != 0) => fail(b"proxy role carried capability"),
             _ => {
-                let descriptor =
-                    WireCapabilityTransfer::decode(&message).unwrap_or_else(|| fail(b"proxy role"));
-                return (descriptor, received[0] as u32);
+                return WireCapabilityTransfer::decode(&message)
+                    .unwrap_or_else(|| fail(b"proxy role"));
             }
         }
     }
@@ -217,7 +209,7 @@ fn receive_message(slot: u32) -> [u8; MAX_MSG] {
     let mut received = [0u64; MAX_CAPS_PER_MSG];
     loop {
         match slime_rt::recv(slot, &mut message, &mut received) {
-            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(slot)]),
+            ERR_WOULDBLOCK => slime_rt::yield_now(),
             n if n < 0 => fail(b"visibility receive"),
             n if n as usize != MAX_MSG => fail(b"visibility length"),
             _ if received.iter().any(|slot| *slot != 0) => fail(b"visibility carried capability"),

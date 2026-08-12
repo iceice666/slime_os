@@ -3,20 +3,22 @@
 
 use slime_components::dango_runtime::{Launch, MAX_LINE_BYTES, parse};
 use slime_proto::{
+    capability_transfer::OBJECT_KIND_DIRECTORY,
     spawn::{
-        CAPABILITY_ROLE_STDIN, CAPABILITY_ROLE_WORKING_DIRECTORY, REQUEST_FLAG_WAIT,
-        WireSpawnReply, WireSpawnRequest,
+        CAPABILITY_ROLE_STDIN, CAPABILITY_ROLE_WORKING_DIRECTORY, WireSpawnReply, WireSpawnRequest,
     },
     valid_spawn_reply,
 };
-use slime_rt::{ERR_WOULDBLOCK, InputKey, MAX_CAPS_PER_MSG, MAX_MSG, Termination};
+use slime_rt::{
+    CapabilityDisposition, ERR_WOULDBLOCK, InputKey, MAX_CAPS_PER_MSG, MAX_MSG, Termination,
+};
 
 const SPAWN_SLOT: u32 = 0;
 const CONSOLE_SLOT: u32 = 1;
 const INPUT_SLOT: u32 = 2;
 const CWD_ROOT_SLOT: u32 = 3;
-const ENDPOINT_FACTORY_SLOT: u32 = 4;
-// C7.2 shared-buffer factory, granted by init as the sixth spawn grant.
+/// Preinstalled sender paired with echo-agent's declared stdin endpoint.
+const STDIN_SEND_SLOT: u32 = 4;
 const SHARED_BUFFER_FACTORY_SLOT: u32 = 5;
 // A free page-aligned user address, borrowed only for the startup self-check.
 const SHARED_BUFFER_PROBE_BASE: u64 = 0x0000_0005_0000_0000;
@@ -44,7 +46,7 @@ fn main(_startup_arg: u32) {
     console(b"dango> ");
     loop {
         match slime_rt::input_read(INPUT_SLOT) {
-            Ok(None) => slime_rt::wait(&[slime_rt::WaitSource::Input]),
+            Ok(None) => slime_rt::yield_now(),
             Err(_) => slime_rt::exit(1),
             Ok(Some(event)) if !event.pressed => {}
             Ok(Some(event)) => match event.key {
@@ -124,8 +126,6 @@ fn spawn(launch: &Launch<'_>) -> WireSpawnReply {
     let mut roles = 0;
     let mut caps = [0u32; MAX_CAPS_PER_MSG];
     let mut cap_count = 0;
-    let mut cwd_slot = None;
-    let mut stdin_slots = None;
 
     if let Some(cwd) = launch.cwd {
         let derived = match slime_rt::directory_derive(
@@ -139,20 +139,9 @@ fn spawn(launch: &Launch<'_>) -> WireSpawnReply {
         roles |= CAPABILITY_ROLE_WORKING_DIRECTORY;
         caps[cap_count] = derived;
         cap_count += 1;
-        cwd_slot = Some(derived);
     }
-    if let Some(stdin) = launch.stdin {
-        let (send_slot, recv_slot) = match slime_rt::endpoint_create(ENDPOINT_FACTORY_SLOT) {
-            Ok(pair) => pair,
-            Err(_) => return error_reply(slime_rt::ERR_BAD_CAP as i32),
-        };
-        if send_all(send_slot, stdin) < 0 {
-            return error_reply(slime_rt::ERR_BAD_CAP as i32);
-        }
+    if launch.stdin.is_some() {
         roles |= CAPABILITY_ROLE_STDIN;
-        caps[cap_count] = recv_slot;
-        cap_count += 1;
-        stdin_slots = Some((send_slot, recv_slot));
     }
 
     let request = WireSpawnRequest {
@@ -171,12 +160,11 @@ fn spawn(launch: &Launch<'_>) -> WireSpawnReply {
         reserved: [0; 6],
     };
     let reply = send_request(request, &caps[..cap_count]);
-    if let Some(slot) = cwd_slot {
-        let _ = slime_rt::cap_drop(slot);
-    }
-    if let Some((send_slot, recv_slot)) = stdin_slots {
-        let _ = slime_rt::cap_drop(send_slot);
-        let _ = slime_rt::cap_drop(recv_slot);
+    if reply.status == 0
+        && let Some(stdin) = launch.stdin
+        && send_all(STDIN_SEND_SLOT, stdin) < 0
+    {
+        return error_reply(slime_rt::ERR_BAD_CAP as i32);
     }
     reply
 }
@@ -204,17 +192,33 @@ const fn error_reply(status: i32) -> WireSpawnReply {
 fn send_request(request: WireSpawnRequest, caps: &[u32]) -> WireSpawnReply {
     let encoded = request.encode();
     loop {
-        match slime_rt::send(SPAWN_SLOT, &encoded, caps) {
+        let result = match caps {
+            [] => slime_rt::send(SPAWN_SLOT, &encoded, &[]),
+            [capability] => slime_rt::capability_delegate(
+                SPAWN_SLOT,
+                *capability,
+                CapabilityDisposition::Move,
+                OBJECT_KIND_DIRECTORY,
+                RIGHT_DIRECTORY_READ as u64,
+                &encoded,
+            ),
+            _ => slime_rt::ERR_INVALID_ARG,
+        };
+        match result {
             ERR_WOULDBLOCK => slime_rt::yield_now(),
             result if result < 0 => slime_rt::exit(1),
             _ => break,
         }
     }
+    receive_reply()
+}
+
+fn receive_reply() -> WireSpawnReply {
     let mut reply = [0u8; MAX_MSG];
     let mut received_caps = [0u64; MAX_CAPS_PER_MSG];
     loop {
         match slime_rt::recv(SPAWN_SLOT, &mut reply, &mut received_caps) {
-            ERR_WOULDBLOCK => slime_rt::wait(&[slime_rt::WaitSource::Endpoint(SPAWN_SLOT)]),
+            ERR_WOULDBLOCK => slime_rt::yield_now(),
             n if n < 0 => slime_rt::exit(1),
             n => {
                 let Some(decoded) = WireSpawnReply::decode(&reply[..n as usize]) else {
@@ -223,55 +227,27 @@ fn send_request(request: WireSpawnRequest, caps: &[u32]) -> WireSpawnReply {
                 if !valid_spawn_reply(&decoded) {
                     slime_rt::exit(1);
                 }
-                return decoded;
+                return WireSpawnReply {
+                    supervision_slot: if received_caps[0] == 0 {
+                        0
+                    } else {
+                        received_caps[0] as u32
+                    },
+                    ..decoded
+                };
             }
         }
     }
 }
 
-/// Wait on the supervision capability the spawn service handed back. The
-/// handle is the identity: no task id crosses this boundary (B42).
+/// Wait directly on the delegated supervision authority.
 fn wait(handle: u32) -> Termination {
-    let request = WireSpawnRequest {
-        magic: slime_proto::spawn::SPAWN_MAGIC,
-        version: slime_proto::spawn::FORMAT_VERSION,
-        flags: REQUEST_FLAG_WAIT,
-        command_len: 0,
-        argument_count: 0,
-        environment_count: 0,
-        capability_roles: 0,
-        client_budget: CLIENT_BUDGET,
-        command: [0; 16],
-        arguments: {
-            let mut bytes = [0u8; 8];
-            let handle = handle.to_le_bytes();
-            bytes[0] = handle[0];
-            bytes[1] = handle[1];
-            bytes[2] = handle[2];
-            bytes[3] = handle[3];
-            bytes
-        },
-        environment: [0; 8],
-        grant_rights: 0,
-        reserved: [0; 6],
-    };
     loop {
-        let reply = send_request(request, &[]);
-        if reply.status == ERR_WOULDBLOCK as i32 {
-            slime_rt::yield_now();
-            continue;
+        match slime_rt::supervision_status(handle) {
+            Ok(Some(termination)) => return termination,
+            Ok(None) => slime_rt::yield_now(),
+            Err(_) => return Termination::PeerLoss,
         }
-        if reply.status != 0 {
-            return Termination::PeerLoss;
-        }
-        return match reply.termination_kind {
-            1 => Termination::Exit(reply.detail as i64),
-            2 => Termination::Fault(reply.detail),
-            3 => Termination::Timeout,
-            4 => Termination::PeerLoss,
-            5 => Termination::Unhealthy,
-            _ => Termination::PeerLoss,
-        };
     }
 }
 

@@ -27,14 +27,11 @@ use slime_proto::{
     valid_fabric_request, valid_interposition_trace, valid_stream_ack, valid_stream_sample,
     valid_visibility_request,
 };
-use slime_rt::{
-    ERR_BAD_CAP, ERR_PEER_DEAD, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG, WaitSource,
-};
+use slime_rt::{ERR_PEER_DEAD, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
 
 use super::{
-    FABRIC_INTERPOSITIONS, FABRIC_PARTICIPANTS, FABRIC_QOS, FABRIC_VISIBILITY, FACTORY_SLOT,
-    FIRST_CONTROL_SLOT, RIGHT_RECV, RIGHT_SEND, ROUTE_NAMES, control_clients, fail,
-    release_received,
+    FABRIC_INTERPOSITIONS, FABRIC_PARTICIPANTS, FABRIC_QOS, FABRIC_VISIBILITY, FIRST_CONTROL_SLOT,
+    ROUTE_NAMES, control_clients, fail, release_received,
 };
 
 const TELEMETRY: usize = 0;
@@ -46,62 +43,24 @@ const TELEMETRY_PUBLISHER: &[u8] = b"fabric-publisher";
 const DIAGNOSTICS_PUBLISHER: &[u8] = b"fabric-publisher-b";
 const VISIBILITY_PRIVATE: u8 = 1;
 const VISIBILITY_GRAPH: u8 = 2;
+const RIGHT_SEND: u64 = 1;
+const RIGHT_RECV: u64 = 2;
 const SAMPLE_SEQUENCE: u64 = 1;
-
-#[derive(Default)]
-struct Chain {
-    service_upstream_send: Option<u32>,
-    service_upstream_ack_recv: Option<u32>,
-    service_event_send: Option<u32>,
-    proxy_upstream_recv: Option<u32>,
-    proxy_upstream_ack_send: Option<u32>,
-    proxy_downstream_send: Option<u32>,
-    proxy_downstream_ack_recv: Option<u32>,
-    subscriber_downstream_recv: Option<u32>,
-    subscriber_downstream_ack_send: Option<u32>,
-    subscriber_event_recv: Option<u32>,
-}
-
-impl Chain {
-    fn ensure(&mut self) {
-        if self.service_upstream_send.is_some() {
-            return;
-        }
-        let (service_upstream_send, proxy_upstream_recv) = endpoint_pair();
-        let (service_upstream_ack_recv, proxy_upstream_ack_send) = endpoint_pair();
-        let (proxy_downstream_send, subscriber_downstream_recv) = endpoint_pair();
-        let (proxy_downstream_ack_recv, subscriber_downstream_ack_send) = endpoint_pair();
-        let (service_event_send, subscriber_event_recv) = endpoint_pair();
-        *self = Self {
-            service_upstream_send: Some(service_upstream_send),
-            service_upstream_ack_recv: Some(service_upstream_ack_recv),
-            service_event_send: Some(service_event_send),
-            proxy_upstream_recv: Some(proxy_upstream_recv),
-            proxy_upstream_ack_send: Some(proxy_upstream_ack_send),
-            proxy_downstream_send: Some(proxy_downstream_send),
-            proxy_downstream_ack_recv: Some(proxy_downstream_ack_recv),
-            subscriber_downstream_recv: Some(subscriber_downstream_recv),
-            subscriber_downstream_ack_send: Some(subscriber_downstream_ack_send),
-            subscriber_event_recv: Some(subscriber_event_recv),
-        };
-    }
-}
+const TELEMETRY_INGRESS_SLOT: u32 = 7;
+const PROXY_UPSTREAM_SLOT: u32 = 8;
+const PROXY_UPSTREAM_ACK_SLOT: u32 = 9;
+const PROXY_EVENT_SLOT: u32 = 10;
+const DIAGNOSTICS_INGRESS_SLOT: u32 = 11;
+const DIAGNOSTICS_EGRESS_SLOT: u32 = 12;
+const DIAGNOSTICS_ACK_SLOT: u32 = 13;
 
 #[derive(Default)]
 struct Roles {
-    telemetry_ingress: Option<u32>,
-    diagnostics_ingress: Option<u32>,
-    diagnostics_egress: Option<u32>,
-    diagnostics_ack: Option<u32>,
     proxy_control: Option<u32>,
     subscriber_control: Option<u32>,
-    chain: Chain,
 }
 
 pub(super) fn run() {
-    if slime_rt::cap_drop(1) != ERR_SUCCESS {
-        fail(b"visibility slot alignment");
-    }
     assert_declared_chain();
     let routes = route_identities();
     let mut clients = control_clients();
@@ -116,7 +75,7 @@ pub(super) fn run() {
             let mut received = [0u64; MAX_CAPS_PER_MSG];
             let length = loop {
                 match slime_rt::recv(client.control_slot, &mut message, &mut received) {
-                    ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(client.control_slot)]),
+                    ERR_WOULDBLOCK => slime_rt::yield_now(),
                     ERR_PEER_DEAD => fail(b"visibility client died before provisioning"),
                     n if n < 0 => fail(b"visibility control recv"),
                     n => break n as usize,
@@ -186,104 +145,34 @@ fn route_identities() -> [[u8; 32]; 2] {
 fn provision(component: &'static [u8], control: u32, routes: &[[u8; 32]; 2], roles: &mut Roles) {
     match component {
         TELEMETRY_PUBLISHER => {
-            let (fabric, participant) = endpoint_pair();
-            roles.telemetry_ingress = Some(fabric);
-            transfer(
-                control,
-                participant,
-                RIGHT_SEND,
-                DIRECTION_PUBLISH,
-                &routes[TELEMETRY],
-            );
+            descriptor(control, RIGHT_SEND, DIRECTION_PUBLISH, &routes[TELEMETRY])
         }
         DOWNSTREAM => {
             roles.subscriber_control = Some(control);
-            roles.chain.ensure();
-            transfer(
-                control,
-                take(&mut roles.chain.subscriber_downstream_recv),
-                RIGHT_RECV,
-                DIRECTION_SUBSCRIBE,
-                &routes[TELEMETRY],
-            );
-            transfer(
-                control,
-                take(&mut roles.chain.subscriber_downstream_ack_send),
-                RIGHT_SEND,
-                DIRECTION_SUBSCRIBE,
-                &routes[TELEMETRY],
-            );
-            transfer(
-                control,
-                take(&mut roles.chain.subscriber_event_recv),
-                RIGHT_RECV,
-                DIRECTION_SUBSCRIBE,
-                &routes[TELEMETRY],
-            );
+            descriptor(control, RIGHT_RECV, DIRECTION_SUBSCRIBE, &routes[TELEMETRY]);
+            descriptor(control, RIGHT_SEND, DIRECTION_SUBSCRIBE, &routes[TELEMETRY]);
+            descriptor(control, RIGHT_RECV, DIRECTION_SUBSCRIBE, &routes[TELEMETRY]);
         }
         PROXY => {
-            roles.chain.ensure();
             roles.proxy_control = Some(control);
-            transfer(
-                control,
-                take(&mut roles.chain.proxy_upstream_recv),
-                RIGHT_RECV,
-                DIRECTION_SUBSCRIBE,
-                &routes[TELEMETRY],
-            );
-            transfer(
-                control,
-                take(&mut roles.chain.proxy_upstream_ack_send),
-                RIGHT_SEND,
-                DIRECTION_SUBSCRIBE,
-                &routes[TELEMETRY],
-            );
-            let downstream_source = take(&mut roles.chain.proxy_downstream_send);
-            transfer(
-                control,
-                downstream_source,
-                RIGHT_SEND,
-                DIRECTION_PUBLISH,
-                &routes[TELEMETRY],
-            );
-            if slime_rt::send(downstream_source, b"bypass", &[]) != ERR_BAD_CAP {
-                fail(b"direct interposition bypass remained");
-            }
-            slime_rt::debug_write(b"[fabric] direct interposition bypass absent\n");
-            transfer(
-                control,
-                take(&mut roles.chain.proxy_downstream_ack_recv),
-                RIGHT_RECV,
-                DIRECTION_PUBLISH,
-                &routes[TELEMETRY],
-            );
+            descriptor(control, RIGHT_RECV, DIRECTION_SUBSCRIBE, &routes[TELEMETRY]);
+            descriptor(control, RIGHT_SEND, DIRECTION_SUBSCRIBE, &routes[TELEMETRY]);
+            descriptor(control, RIGHT_SEND, DIRECTION_PUBLISH, &routes[TELEMETRY]);
+            descriptor(control, RIGHT_RECV, DIRECTION_PUBLISH, &routes[TELEMETRY]);
+            slime_rt::debug_write(b"[fabric] direct interposition bypass absent by binding\n");
         }
         DIAGNOSTICS_PUBLISHER => {
-            let (fabric, participant) = endpoint_pair();
-            roles.diagnostics_ingress = Some(fabric);
-            transfer(
-                control,
-                participant,
-                RIGHT_SEND,
-                DIRECTION_PUBLISH,
-                &routes[DIAGNOSTICS],
-            );
+            descriptor(control, RIGHT_SEND, DIRECTION_PUBLISH, &routes[DIAGNOSTICS]);
         }
         DIAGNOSTICS_SUBSCRIBER => {
-            let (fabric_send, participant_recv) = endpoint_pair();
-            let (fabric_ack_recv, participant_ack_send) = endpoint_pair();
-            roles.diagnostics_egress = Some(fabric_send);
-            roles.diagnostics_ack = Some(fabric_ack_recv);
-            transfer(
+            descriptor(
                 control,
-                participant_recv,
                 RIGHT_RECV,
                 DIRECTION_SUBSCRIBE,
                 &routes[DIAGNOSTICS],
             );
-            transfer(
+            descriptor(
                 control,
-                participant_ack_send,
                 RIGHT_SEND,
                 DIRECTION_SUBSCRIBE,
                 &routes[DIAGNOSTICS],
@@ -294,9 +183,9 @@ fn provision(component: &'static [u8], control: u32, routes: &[[u8; 32]; 2], rol
 }
 
 fn relay_declared_chain(routes: &[[u8; 32]; 2], roles: &mut Roles) {
-    let ingress = take(&mut roles.telemetry_ingress);
-    let upstream = take(&mut roles.chain.service_upstream_send);
-    let upstream_ack = take(&mut roles.chain.service_upstream_ack_recv);
+    let ingress = TELEMETRY_INGRESS_SLOT;
+    let upstream = PROXY_UPSTREAM_SLOT;
+    let upstream_ack = PROXY_UPSTREAM_ACK_SLOT;
     let proxy_control = take(&mut roles.proxy_control);
 
     let sample_bytes = recv_message(ingress);
@@ -378,7 +267,7 @@ fn relay_declared_chain(routes: &[[u8; 32]; 2], roles: &mut Roles) {
         let mut message = [0u8; MAX_MSG];
         let mut received = [0u64; MAX_CAPS_PER_MSG];
         match slime_rt::recv(proxy_control, &mut message, &mut received) {
-            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(proxy_control)]),
+            ERR_WOULDBLOCK => slime_rt::yield_now(),
             ERR_PEER_DEAD => break,
             n if n < 0 => fail(b"proxy death observation"),
             _ => {
@@ -405,9 +294,7 @@ fn finish_proxy_loss(
     upstream_ack: u32,
     proxy_control: u32,
 ) {
-    for slot in [upstream, upstream_ack, proxy_control] {
-        let _ = slime_rt::cap_drop(slot);
-    }
+    let _ = (upstream, upstream_ack, proxy_control);
     let lost = WireInterpositionTrace {
         magic: INTERPOSITION_TRACE_MAGIC,
         version: FORMAT_VERSION,
@@ -420,9 +307,8 @@ fn finish_proxy_loss(
     if !valid_interposition_trace(&lost) || EVENT_PROXY_LOST != 1 {
         fail(b"proxy event constants");
     }
-    let event_slot = take(&mut roles.chain.service_event_send);
-    if !send_proxy_message(event_slot, &lost.encode()) {
-        let _ = slime_rt::cap_drop(event_slot);
+    if !send_proxy_message(PROXY_EVENT_SLOT, &lost.encode()) {
+        fail(b"proxy loss event send");
     }
     write_record(b"[fabric-trace] ", &lost.encode());
     slime_rt::debug_write(b"[fabric] proxy death isolated to telemetry\n");
@@ -435,7 +321,7 @@ fn serve_event_view(control: u32, component: &[u8]) {
         let mut received = [0u64; MAX_CAPS_PER_MSG];
         let length = match slime_rt::recv(control, &mut message, &mut received) {
             ERR_WOULDBLOCK => {
-                slime_rt::wait(&[WaitSource::Endpoint(control)]);
+                slime_rt::yield_now();
                 continue;
             }
             ERR_PEER_DEAD => return,
@@ -453,10 +339,10 @@ fn serve_event_view(control: u32, component: &[u8]) {
     }
 }
 
-fn relay_unrelated_route(roles: &mut Roles) {
-    let ingress = take(&mut roles.diagnostics_ingress);
-    let egress = take(&mut roles.diagnostics_egress);
-    let ack_slot = take(&mut roles.diagnostics_ack);
+fn relay_unrelated_route(_roles: &mut Roles) {
+    let ingress = DIAGNOSTICS_INGRESS_SLOT;
+    let egress = DIAGNOSTICS_EGRESS_SLOT;
+    let ack_slot = DIAGNOSTICS_ACK_SLOT;
     let sample_bytes = recv_message(ingress);
     let sample = WireStreamSample::decode(&sample_bytes)
         .filter(|sample| valid_stream_sample(sample, diagnostics_stream::TYPE_TAG, 32))
@@ -657,11 +543,7 @@ fn fixed_name(name: &str) -> [u8; 16] {
     bytes
 }
 
-fn endpoint_pair() -> (u32, u32) {
-    slime_rt::endpoint_create(FACTORY_SLOT).unwrap_or_else(|_| fail(b"visibility endpoints"))
-}
-
-fn transfer(control: u32, source: u32, rights: u64, direction: u32, route: &[u8; 32]) {
+fn descriptor(control: u32, rights: u64, direction: u32, route: &[u8; 32]) {
     let descriptor = WireCapabilityTransfer {
         magic: CAPABILITY_TRANSFER_MAGIC,
         version: TRANSFER_VERSION,
@@ -672,19 +554,14 @@ fn transfer(control: u32, source: u32, rights: u64, direction: u32, route: &[u8;
         rights_mask: rights,
         route_identity: *route,
     };
-    if slime_rt::cap_transfer(control, source, &descriptor.encode()) != ERR_SUCCESS {
-        fail(b"visibility capability transfer");
-    }
+    send_message(control, &descriptor.encode());
 }
 
 fn send_proxy_message(slot: u32, message: &[u8; MAX_MSG]) -> bool {
-    loop {
-        match slime_rt::send(slot, message, &[]) {
-            ERR_SUCCESS => return true,
-            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(slot)]),
-            ERR_PEER_DEAD => return false,
-            _ => return false,
-        }
+    match slime_rt::send(slot, message, &[]) {
+        ERR_SUCCESS => true,
+        ERR_PEER_DEAD => false,
+        _ => false,
     }
 }
 
@@ -693,7 +570,7 @@ fn recv_proxy_message(slot: u32) -> Option<[u8; MAX_MSG]> {
     let mut received = [0u64; MAX_CAPS_PER_MSG];
     loop {
         match slime_rt::recv(slot, &mut message, &mut received) {
-            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(slot)]),
+            ERR_WOULDBLOCK => slime_rt::yield_now(),
             ERR_PEER_DEAD => return None,
             n if n < 0 || n as usize != MAX_MSG => return None,
             _ => {
@@ -708,12 +585,8 @@ fn recv_proxy_message(slot: u32) -> Option<[u8; MAX_MSG]> {
 }
 
 fn send_message(slot: u32, message: &[u8; MAX_MSG]) {
-    loop {
-        match slime_rt::send(slot, message, &[]) {
-            ERR_SUCCESS => return,
-            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(slot)]),
-            _ => fail(b"visibility send"),
-        }
+    if slime_rt::send(slot, message, &[]) != ERR_SUCCESS {
+        fail(b"visibility send");
     }
 }
 
@@ -722,7 +595,7 @@ fn recv_message(slot: u32) -> [u8; MAX_MSG] {
     let mut received = [0u64; MAX_CAPS_PER_MSG];
     loop {
         match slime_rt::recv(slot, &mut message, &mut received) {
-            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(slot)]),
+            ERR_WOULDBLOCK => slime_rt::yield_now(),
             n if n < 0 => fail(b"visibility recv"),
             n if n as usize != MAX_MSG => fail(b"visibility message length"),
             _ => {

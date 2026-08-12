@@ -248,7 +248,7 @@ pub fn fabric_graph_is_satisfiable(graph: &FabricGraph<'_>) -> Result<(), Genera
             crate::shared_buffer::MAX_MAPPINGS as u32,
             crate::shared_buffer::MAX_LOANS as u32,
             crate::ipc::MAX_MESSAGE_BYTES as u32,
-            crate::ipc::CHANNEL_CAPACITY as u32,
+            u32::MAX,
         )
         .map_err(|_| GenerationError::UnsatisfiableFabricGraph)?;
     // Every matched pair's offered QoS must satisfy the requested one
@@ -256,18 +256,10 @@ pub fn fabric_graph_is_satisfiable(graph: &FabricGraph<'_>) -> Result<(), Genera
     // this is the per-pair question, and the two are independent — a graph can
     // fit every ceiling and still promise a reader more than its writer offers.
     //
-    // Refused at admission rather than reported. C8.5 treats an incompatible
-    // pair as a runtime event a live fabric surfaces, which is why
-    // `boot_contracts` makes it a query rather than a decode error — but this
-    // root has no C8.5 plane to surface it on, so a graph it cannot honour
-    // fails closed instead of launching participants that will never match.
-    // When P5.4.5 brings the QoS plane, this becomes the wrong answer and
-    // moves; recorded here so that is a decision rather than a discovery.
-    //
-    // The structural siblings need no call: `FabricGraph::decode` already runs
-    // `validate_participants` and `validate_interposition`, so route-membership
-    // counts, chain termination, hop revisits, and self-bypass are enforced
-    // before this function is reached.
+    // Queue depth is deliberately not a root ceiling after B46. Buffered
+    // streams use the generation-provisioned v2 shared ring, while native
+    // Endpoint rendezvous has no root-owned queue. The graph may still declare
+    // its policy depth; only the component provisioning path must honour it.
     if graph.all_pairs_qos_compatible() {
         Ok(())
     } else {
@@ -658,7 +650,7 @@ fn admit_resource_quota(quota: &ResourceQuota<'_>) -> Result<(), GenerationError
         (
             "cslot",
             quota.cslot_count,
-            crate::graph::MAX_TASK_CAPS as u32,
+            (1u32 << crate::task::CHILD_CNODE_SIZE_BITS),
         ),
         // One TCB and one IPC-buffer frame per thread, bounded by what
         // the child VSpace maps buffer/window pairs for (B47). A plan
@@ -681,9 +673,14 @@ fn admit_resource_quota(quota: &ResourceQuota<'_>) -> Result<(), GenerationError
         // second would be a second address space, which is a second
         // process.
         ("vspace", quota.page_table_count, 1),
-        // The fault endpoint and the console endpoint. A third would
-        // be an endpoint the root never creates for a child.
-        ("endpoint", quota.endpoint_count, 2),
+        // Fault + console + one native endpoint per declared relative slot.
+        // The plan still bounds the total by the child CSpace capacity above;
+        // refusing at two would reject every process that has a real peer.
+        (
+            "endpoint",
+            quota.endpoint_count,
+            2 + crate::task::CHILD_NATIVE_REGION_SLOTS as u32,
+        ),
     ] {
         if declared > limit {
             return Err(GenerationError::QuotaExceedsCeiling {
@@ -724,7 +721,7 @@ mod tests {
             page_table_count: 1,
             mapping_count: 0,
             irq_count: 0,
-            cslot_count: 64,
+            cslot_count: 1u32 << crate::task::CHILD_CNODE_SIZE_BITS,
             untyped_bytes: 0,
             dynamic_reserve_bytes: 0,
             flags: 0,
@@ -757,7 +754,7 @@ mod tests {
         let cases: [(&str, fn(&mut ResourceQuota<'_>), u32, u32); 6] = [
             ("cnode", |q| q.cnode_count = 2, 2, 1),
             ("tcb", |q| q.tcb_count = 3, 3, 2),
-            ("endpoint", |q| q.endpoint_count = 3, 3, 2),
+            ("endpoint", |q| q.endpoint_count = 34, 34, 33),
             (
                 "frame",
                 |q| q.frame_count = (MAX_CHILD_THREADS + MAX_CHILD_IMAGE_PAGES + 1) as u32,
@@ -765,7 +762,7 @@ mod tests {
                 (MAX_CHILD_THREADS + MAX_CHILD_IMAGE_PAGES) as u32,
             ),
             ("vspace", |q| q.page_table_count = 2, 2, 1),
-            ("cslot", |q| q.cslot_count = 65, 65, 64),
+            ("cslot", |q| q.cslot_count = 129, 129, 128),
         ];
         for (class, mutate, declared, limit) in cases {
             let mut quota = single_threaded_quota();
@@ -1143,19 +1140,14 @@ mod tests {
     /// ceiling wired to the wrong constant is visible rather than masked by a
     /// sibling that happens to refuse.
     ///
-    /// Either refusal point counts. Some of these values are also structurally
-    /// impossible against the format's *own* maxima, so the decoder rejects
-    /// them before `validate_against` is reached — `ingress_sources` is one:
-    /// `MAX_WAIT_SOURCES + 1` exceeds the wire format's ceiling too. What must
-    /// hold is that no such graph reaches a running fabric, not which of the
-    /// two guards catches it, and asserting on the guard would make this test
-    /// fail if the format's maxima ever moved independently.
+    /// Queue depth is absent deliberately: after B46 it is a generation-owned
+    /// ring property, not a root queue ceiling.
     #[test]
     fn no_graph_exceeding_a_ceiling_is_admitted() {
         // (index into the limits block, a value past this root's ceiling)
         let over = [
             (1, crate::ipc::MAX_WAIT_SOURCES as u32 + 1),
-            (7, crate::ipc::CHANNEL_CAPACITY as u32 + 1),
+            // index 7 is queue depth: native Endpoint/ring provisioning owns it.
             (14, crate::shared_buffer::MAX_TOTAL_PAGES as u32 + 1),
             (15, crate::shared_buffer::MAX_SHARED_BUFFERS as u32 + 1),
             (16, crate::shared_buffer::MAX_MAPPINGS as u32 + 1),

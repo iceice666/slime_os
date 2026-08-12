@@ -108,16 +108,13 @@ fn call(request: WirePowerboxRequest) -> Response {
     let mut caps = [0u64; MAX_CAPS_PER_MSG];
     loop {
         match slime_rt::recv(RPC_SLOT, &mut message, &mut caps) {
-            ERR_WOULDBLOCK => slime_rt::wait(&[slime_rt::WaitSource::Endpoint(RPC_SLOT)]),
+            ERR_WOULDBLOCK => slime_rt::yield_now(),
             result if result < 0 => fail(),
             length => {
                 let reply = WirePowerboxReply::decode(&message[..length as usize])
                     .filter(valid_powerbox_reply)
                     .unwrap_or_else(|| fail());
-                let cap_count = caps.iter().filter(|slot| **slot != 0).count();
-                if cap_count > 1 || caps[1..].iter().any(|slot| *slot != 0) {
-                    fail();
-                }
+                let cap_count = usize::from(caps[0] != 0);
                 return Response {
                     reply,
                     capability: (caps[0] != 0).then_some(caps[0] as u32),

@@ -25,6 +25,7 @@ use boot_contracts::gpt::{self, GptError};
 use boot_contracts::object_store::{BlockIo, IoError, ObjectStore};
 use slime_proto::block::{self, WireBlockReply, WireBlockRequest};
 use slime_proto::{
+    capability_transfer::OBJECT_KIND_DIRECTORY,
     fs::{
         self, OFF_SNAPSHOT_COUNT, OFF_SNAPSHOT_ENTRY_HASH, OFF_SNAPSHOT_ENTRY_KIND,
         OFF_SNAPSHOT_ENTRY_NAME, OFF_SNAPSHOT_ENTRY_NAME_LEN, OFF_SNAPSHOT_ENTRY_OBJECT_TYPE,
@@ -34,7 +35,10 @@ use slime_proto::{
     },
     valid_fs_request,
 };
-use slime_rt::{ERR_PEER_DEAD, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_DIRECTORY_PATH, MAX_MSG};
+use slime_rt::{
+    CapabilityDisposition, ERR_PEER_DEAD, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_DIRECTORY_PATH,
+    MAX_MSG,
+};
 
 slime_rt::entry!(main);
 
@@ -87,13 +91,14 @@ fn main(_startup_arg: u32) {
         let mut message = [0u8; MAX_MSG];
         let mut received_caps = [0u64; MAX_CAPS_PER_MSG];
         match slime_rt::recv(RPC_SLOT, &mut message, &mut received_caps) {
-            ERR_WOULDBLOCK => slime_rt::wait(&[slime_rt::WaitSource::Endpoint(RPC_SLOT)]),
+            ERR_WOULDBLOCK => slime_rt::yield_now(),
             ERR_PEER_DEAD => slime_rt::exit(0),
             n if n < 0 => slime_rt::exit(1),
             n => {
-                let (reply, directory_cap, derived_cap) =
+                let (reply, received_directory, derived_cap) =
                     handle(&message[..n as usize], &received_caps);
-                send_reply(reply, directory_cap, derived_cap);
+                send_reply(reply, derived_cap);
+                drop_capability(received_directory);
             }
         }
     }
@@ -103,7 +108,7 @@ fn handle(
     message: &[u8],
     received_caps: &[u64; MAX_CAPS_PER_MSG],
 ) -> (WireFsReply, Option<u32>, Option<u32>) {
-    if received_caps[0] == 0 || received_caps[1..].iter().any(|slot| *slot != 0) {
+    if received_caps[0] == 0 {
         release_caps(received_caps);
         return (reply(-2, 0, 0, 0, ZERO_HASH), None, None);
     }
@@ -568,25 +573,40 @@ fn reply(
     }
 }
 
-fn send_reply(reply: WireFsReply, directory_cap: Option<u32>, derived_cap: Option<u32>) {
+fn send_reply(reply: WireFsReply, derived_cap: Option<u32>) {
     let encoded = reply.encode();
-    let mut caps = [0u32; 2];
-    let mut cap_count = 0;
-    if let Some(slot) = directory_cap {
-        caps[cap_count] = slot;
-        cap_count += 1;
-    }
-    if let Some(slot) = derived_cap {
-        caps[cap_count] = slot;
-        cap_count += 1;
-    }
     loop {
-        match slime_rt::send(RPC_SLOT, &encoded, &caps[..cap_count]) {
+        let result = match derived_cap {
+            Some(slot) => slime_rt::capability_delegate(
+                RPC_SLOT,
+                slot,
+                CapabilityDisposition::Move,
+                OBJECT_KIND_DIRECTORY,
+                u64::from(RIGHT_DIRECTORY_READ | RIGHT_DIRECTORY_LIST),
+                &encoded,
+            ),
+            None => slime_rt::send(RPC_SLOT, &encoded, &[]),
+        };
+        match result {
             ERR_WOULDBLOCK => slime_rt::yield_now(),
-            ERR_PEER_DEAD => slime_rt::exit(0),
-            result if result < 0 => slime_rt::exit(1),
+            ERR_PEER_DEAD => {
+                drop_capability(derived_cap);
+                slime_rt::exit(0);
+            }
+            result if result < 0 => {
+                drop_capability(derived_cap);
+                slime_rt::exit(1);
+            }
             _ => return,
         }
+    }
+}
+
+fn drop_capability(capability: Option<u32>) {
+    if let Some(slot) = capability
+        && slime_rt::cap_drop(slot) != 0
+    {
+        slime_rt::exit(1);
     }
 }
 

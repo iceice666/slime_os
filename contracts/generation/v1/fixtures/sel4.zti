@@ -165,7 +165,7 @@
         };
         {
           grant = "spawn-service-shared-buffer-factory";
-          slot = 37;
+          slot = 8;
         };
       ];
       dependencies = [];

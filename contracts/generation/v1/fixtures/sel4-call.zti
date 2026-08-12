@@ -179,15 +179,6 @@
       transferable = false;
     };
     {
-      name = "init-endpoint-factory";
-      rights = [
-        "endpointCreate";
-      ];
-      source = "init";
-      target = "init";
-      transferable = false;
-    };
-    {
       name = "init-shared-buffer-factory";
       rights = [
         "bufferCreate";
@@ -252,10 +243,6 @@
     {
       autostart = true;
       bindings = [
-        {
-          grant = "init-endpoint-factory";
-          slot = 6;
-        };
         {
           grant = "init-fabric-call-client";
           slot = 1;
@@ -520,16 +507,6 @@
       transferable = false;
     };
     {
-      name = "fabric-service-endpoint-factory";
-      owner = "init";
-      holder = "fabric-service";
-      rights = [
-        "endpointCreate";
-      ];
-      slot = 0;
-      transferable = false;
-    };
-    {
       name = "fabric-service-shared-buffer-factory";
       owner = "init";
       holder = "fabric-service";
@@ -537,6 +514,36 @@
         "bufferCreate";
       ];
       slot = 1;
+      transferable = false;
+    };
+    {
+      name = "fabric-service-call-client-supervision";
+      owner = "init";
+      holder = "fabric-service";
+      rights = [
+        "supervise";
+      ];
+      slot = 6;
+      transferable = false;
+    };
+    {
+      name = "fabric-service-call-client-b-supervision";
+      owner = "init";
+      holder = "fabric-service";
+      rights = [
+        "supervise";
+      ];
+      slot = 7;
+      transferable = false;
+    };
+    {
+      name = "fabric-service-call-server-supervision";
+      owner = "init";
+      holder = "fabric-service";
+      rights = [
+        "supervise";
+      ];
+      slot = 8;
       transferable = false;
     };
   ];

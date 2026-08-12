@@ -1,10 +1,5 @@
-use boot_contracts::fabric_graph::{
-    CONTRACT_KIND_CALL, DIRECTION_CLIENT, DIRECTION_SERVER, route_identity,
-};
-use slime_proto::capability_transfer::{
-    CAPABILITY_TRANSFER_MAGIC, FORMAT_VERSION as TRANSFER_VERSION, OBJECT_KIND_ENDPOINT,
-    OBJECT_KIND_SUPERVISION, WireCapabilityTransfer,
-};
+use boot_contracts::fabric_graph::{DIRECTION_CLIENT, DIRECTION_SERVER};
+use slime_proto::capability_transfer::OBJECT_KIND_SHARED_BUFFER_LOAN;
 use slime_proto::fabric_call::{
     CALL_MAGIC, FLAG_NON_IDEMPOTENT, FORMAT_VERSION, KIND_CANCEL, KIND_REPLY, KIND_REQUEST,
     KIND_TERMINAL, STATUS_CANCELLED, STATUS_DUPLICATE, STATUS_MALFORMED_REPLY, STATUS_PEER_DEAD,
@@ -22,14 +17,10 @@ mod fabric_profile {
 }
 use fabric_profile::*;
 use slime_rt::{
-    ERR_OUT_OF_MEMORY, ERR_PEER_DEAD, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG,
-    WaitSource,
+    CapabilityDisposition, ERR_OUT_OF_MEMORY, ERR_PEER_DEAD, ERR_SUCCESS, ERR_WOULDBLOCK,
+    MAX_CAPS_PER_MSG, MAX_MSG,
 };
 
-const ROUTE_NAME: &str = "parameters";
-const RIGHT_SEND: u64 = 1;
-const RIGHT_RECV: u64 = 2;
-const RIGHT_SUPERVISE: u64 = 1 << 18;
 const SESSION: u64 = 0x000e_0000_0000_0001;
 const MAX_CALLS: usize = FABRIC_MAX_IN_FLIGHT_CALLS;
 const RETRY_LIMIT: u8 = FABRIC_MAX_RETRIES;
@@ -44,23 +35,6 @@ const MAX_PENDING_TERMINALS: usize = MAX_PENDING_TERMINALS_PER_CLIENT * 2;
 /// call route, and a client replaced at runtime reuses its slot, so this bounds
 /// the park set rather than the number of components that ever hold a role.
 const CLIENTS: usize = 2;
-/// Live wake sources this broker parks on at peak: each of two clients through
-/// its control endpoint and its send capacity, plus the server endpoint, the
-/// capability-routed clock, and the server's supervision handle.
-///
-/// Taken from the generation rather than written here so the resolved profile and
-/// the array below cannot disagree. The generation rejects a partition above the
-/// kernel bound at build time; this ties that same number to the array that has
-/// to hold it, so growing the park set without re-resolving fails to compile.
-/// Falls back to the broker's own peak when the graph declares no call plane —
-/// a stream-only generation (P5.5.1's seL4 fabric) still compiles this module,
-/// and sizing an array to `WORKER_ABSENT` would try to allocate `usize::MAX`
-/// entries. The tie to the resolved profile is unchanged for every graph that
-/// does declare the plane, which is where drift can actually occur.
-const WAIT_SOURCES: usize = match fabric_worker_wait_sources("call") {
-    fabric_profile::WORKER_ABSENT => CLIENTS * 2 + 3,
-    declared => declared,
-};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Phase {
@@ -129,14 +103,11 @@ impl Call {
 }
 
 pub struct Broker {
-    endpoint_factory_slot: u32,
     buffer_factory_slot: u32,
-    client_control: [u32; 2],
-    server_control: u32,
-    time_control: u32,
-    supervision: [u32; 3],
     clients: [Option<u32>; CLIENTS],
     server_slot: Option<u32>,
+    time_control: u32,
+    supervision: [u32; 3],
     calls: [Call; MAX_CALLS],
     high_water: [u64; 2],
     next_server_request_id: u64,
@@ -147,22 +118,18 @@ pub struct Broker {
 
 impl Broker {
     pub const fn new(
-        endpoint_factory_slot: u32,
         buffer_factory_slot: u32,
-        client_control: [u32; 2],
-        server_control: u32,
+        clients: [u32; CLIENTS],
+        server_slot: u32,
         time_control: u32,
-        _legacy_server_supervision: u32,
+        supervision: [u32; 3],
     ) -> Self {
         Self {
-            endpoint_factory_slot,
             buffer_factory_slot,
-            client_control,
-            server_control,
+            clients: [Some(clients[0]), Some(clients[1])],
+            server_slot: Some(server_slot),
             time_control,
-            supervision: [0; 3],
-            clients: [None; CLIENTS],
-            server_slot: None,
+            supervision,
             calls: [Call::EMPTY; MAX_CALLS],
             high_water: [0; 2],
             next_server_request_id: 1,
@@ -173,8 +140,8 @@ impl Broker {
     }
 
     pub fn run(&mut self) {
-        self.provision();
-        slime_rt::debug_write(b"[fabric] call roles provisioned\n");
+        self.verify_graph();
+        slime_rt::debug_write(b"[fabric] call endpoints ready\n");
         loop {
             let mut progressed = false;
             for index in 0..self.clients.len() {
@@ -199,34 +166,7 @@ impl Broker {
             if progressed {
                 continue;
             }
-            let mut sources = [WaitSource::Endpoint(0); WAIT_SOURCES];
-            let mut count = 0;
-            for (client, slot) in self
-                .clients
-                .iter()
-                .enumerate()
-                .filter_map(|(client, slot)| slot.map(|slot| (client, slot)))
-            {
-                if self.can_receive_client(client) {
-                    sources[count] = WaitSource::Endpoint(slot);
-                    count += 1;
-                }
-                if self.has_pending_delivery(slot) {
-                    sources[count] = WaitSource::SendCapacity(slot);
-                    count += 1;
-                }
-            }
-            if let Some(slot) = self.server_slot {
-                sources[count] = WaitSource::Endpoint(slot);
-                count += 1;
-            }
-            if !self.time_closed {
-                sources[count] = WaitSource::Endpoint(self.time_control);
-                count += 1;
-            }
-            sources[count] = WaitSource::Supervision(self.supervision[2]);
-            count += 1;
-            slime_rt::wait(&sources[..count]);
+            slime_rt::yield_now();
         }
     }
 
@@ -239,30 +179,14 @@ impl Broker {
             < MAX_PENDING_TERMINALS_PER_CLIENT
     }
 
-    fn has_pending_delivery(&self, slot: u32) -> bool {
-        self.calls.iter().any(|call| {
-            call.client_slot == slot
-                && matches!(call.phase, Phase::ForwardingReply | Phase::PendingTerminal)
-        }) || self
-            .pending_terminals
-            .iter()
-            .flatten()
-            .any(|call| call.client_slot == slot)
-    }
-
-    fn provision(&mut self) {
-        let route = route_identity(
-            ROUTE_NAME,
-            &parameter_call::INTERFACE_IDENTITY,
-            CONTRACT_KIND_CALL,
-        );
+    fn verify_graph(&self) {
         let declared_clients: [&[u8]; CLIENTS] = [b"fabric-call-client", b"fabric-call-client-b"];
-        for (index, component) in declared_clients.iter().enumerate() {
+        for component in declared_clients {
             let expected = FABRIC_PARTICIPANTS
                 .iter()
                 .filter(|(name, route_name, interface, direction)| {
-                    *name == *component
-                        && *route_name == ROUTE_NAME
+                    *name == component
+                        && *route_name == "parameters"
                         && *interface == "ParameterCall"
                         && *direction == DIRECTION_CLIENT
                 })
@@ -270,27 +194,12 @@ impl Broker {
             if expected != 1 {
                 fail(b"call client graph declaration");
             }
-            consume_request(self.client_control[index]);
-            self.supervision[index] =
-                consume_supervision(self.client_control[index], &route, DIRECTION_CLIENT);
-            let (fabric_side, participant_side) =
-                slime_rt::endpoint_create(self.endpoint_factory_slot)
-                    .unwrap_or_else(|_| fail(b"client endpoint"));
-            transfer_role(
-                self.client_control[index],
-                participant_side,
-                &route,
-                DIRECTION_CLIENT,
-                RIGHT_SEND | RIGHT_RECV,
-            );
-            self.clients[index] = Some(fabric_side);
         }
-
         let servers = FABRIC_PARTICIPANTS
             .iter()
             .filter(|(name, route_name, interface, direction)| {
                 *name == b"fabric-call-server"
-                    && *route_name == ROUTE_NAME
+                    && *route_name == "parameters"
                     && *interface == "ParameterCall"
                     && *direction == DIRECTION_SERVER
             })
@@ -298,18 +207,6 @@ impl Broker {
         if servers != 1 {
             fail(b"call server graph declaration");
         }
-        consume_request(self.server_control);
-        self.supervision[2] = consume_supervision(self.server_control, &route, DIRECTION_SERVER);
-        let (fabric_side, participant_side) = slime_rt::endpoint_create(self.endpoint_factory_slot)
-            .unwrap_or_else(|_| fail(b"server endpoint"));
-        transfer_role(
-            self.server_control,
-            participant_side,
-            &route,
-            DIRECTION_SERVER,
-            RIGHT_SEND | RIGHT_RECV,
-        );
-        self.server_slot = Some(fabric_side);
     }
 
     fn pump_client(&mut self, client: usize) -> bool {
@@ -381,9 +278,7 @@ impl Broker {
             }
             Some(SAMPLE_DESCRIPTOR_MAGIC) => {
                 let loan_slot = caps[0] as u32;
-                for cap in caps.iter().skip(1).filter(|cap| **cap != 0) {
-                    let _ = slime_rt::cap_drop(*cap as u32);
-                }
+
                 let Some(descriptor) = WireSampleDescriptor::decode(&bytes[..length.min(MAX_MSG)])
                 else {
                     if loan_slot != 0 {
@@ -609,13 +504,21 @@ impl Broker {
                     self.supervision[2],
                     0,
                     descriptor.length,
+                    false,
                 ) {
                     Ok(loan) => loan,
                     Err(ERR_WOULDBLOCK) | Err(ERR_OUT_OF_MEMORY) => return,
                     Err(_) => fail(b"shared request loan"),
                 };
                 descriptor.loan_id = loan.id;
-                let sent = slime_rt::send(server, &descriptor.encode(), &[loan.slot]);
+                let sent = slime_rt::capability_delegate(
+                    server,
+                    loan.slot,
+                    CapabilityDisposition::Move,
+                    OBJECT_KIND_SHARED_BUFFER_LOAN,
+                    1 << 9,
+                    &descriptor.encode(),
+                );
                 if sent == ERR_SUCCESS {
                     next_payload = Payload::SharedOutstanding {
                         buffer_slot,
@@ -813,9 +716,7 @@ impl Broker {
             }
             Some(SAMPLE_DESCRIPTOR_MAGIC) => {
                 let loan_slot = caps[0] as u32;
-                for cap in caps.iter().skip(1).filter(|cap| **cap != 0) {
-                    let _ = slime_rt::cap_drop(*cap as u32);
-                }
+
                 let Some(descriptor) = WireSampleDescriptor::decode(&bytes[..length.min(MAX_MSG)])
                 else {
                     if loan_slot != 0 {
@@ -884,21 +785,33 @@ impl Broker {
     ) {
         let client = self.calls[index].client_slot;
         let supervision = self.supervision[self.calls[index].client_index as usize];
-        let loan =
-            match slime_rt::shared_buffer_loan(buffer_slot, supervision, 0, descriptor.length) {
-                Ok(loan) => loan,
-                Err(ERR_WOULDBLOCK) | Err(ERR_OUT_OF_MEMORY) => {
-                    self.calls[index].phase = Phase::ForwardingReply;
-                    self.calls[index].payload = Payload::SharedReply {
-                        buffer_slot,
-                        descriptor,
-                    };
-                    return;
-                }
-                Err(_) => fail(b"shared client loan"),
-            };
+        let loan = match slime_rt::shared_buffer_loan(
+            buffer_slot,
+            supervision,
+            0,
+            descriptor.length,
+            false,
+        ) {
+            Ok(loan) => loan,
+            Err(ERR_WOULDBLOCK) | Err(ERR_OUT_OF_MEMORY) => {
+                self.calls[index].phase = Phase::ForwardingReply;
+                self.calls[index].payload = Payload::SharedReply {
+                    buffer_slot,
+                    descriptor,
+                };
+                return;
+            }
+            Err(_) => fail(b"shared client loan"),
+        };
         descriptor.loan_id = loan.id;
-        match slime_rt::send(client, &descriptor.encode(), &[loan.slot]) {
+        match slime_rt::capability_delegate(
+            client,
+            loan.slot,
+            CapabilityDisposition::Move,
+            OBJECT_KIND_SHARED_BUFFER_LOAN,
+            1 << 9,
+            &descriptor.encode(),
+        ) {
             ERR_SUCCESS => {
                 let _ = slime_rt::shared_buffer_release(buffer_slot);
                 self.calls[index] = Call::EMPTY;
@@ -952,13 +865,21 @@ impl Broker {
                         supervision,
                         0,
                         descriptor.length,
+                        false,
                     ) {
                         Ok(loan) => loan,
                         Err(ERR_WOULDBLOCK) | Err(ERR_OUT_OF_MEMORY) => continue,
                         Err(_) => fail(b"shared client loan"),
                     };
                     descriptor.loan_id = loan.id;
-                    match slime_rt::send(call.client_slot, &descriptor.encode(), &[loan.slot]) {
+                    match slime_rt::capability_delegate(
+                        call.client_slot,
+                        loan.slot,
+                        CapabilityDisposition::Move,
+                        OBJECT_KIND_SHARED_BUFFER_LOAN,
+                        1 << 9,
+                        &descriptor.encode(),
+                    ) {
                         ERR_SUCCESS => {
                             let _ = slime_rt::shared_buffer_release(buffer_slot);
                             self.calls[index] = Call::EMPTY;
@@ -1119,51 +1040,6 @@ impl Broker {
     }
 }
 
-fn consume_supervision(control: u32, route: &[u8; 32], direction: u32) -> u32 {
-    let mut bytes = [0u8; MAX_MSG];
-    let mut caps = [0u64; MAX_CAPS_PER_MSG];
-    loop {
-        match slime_rt::recv(control, &mut bytes, &mut caps) {
-            // Park, not `yield_now`. A yield is `seL4_Yield`, which the root task
-            // never observes, so a broker waiting here for a handle that never
-            // arrives burned the root's iteration budget and the graph died with
-            // `graph iterations exhausted` naming no cause. Parking makes the same
-            // wait visible: the root records `parked task=N reason=wait` and its
-            // owed-reply accounting names the broker.
-            //
-            // `consume_request` in this same file already parks on this identical
-            // channel, and `operation_broker.rs::consume_supervision` parks too —
-            // this was the one arm that did not.
-            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(control)]),
-            value if value < 0 => fail(b"supervision receive"),
-            value => {
-                if value as usize != MAX_MSG || caps[0] == 0 {
-                    release_caps(&caps);
-                    fail(b"supervision shape");
-                }
-                let descriptor = WireCapabilityTransfer::decode(&bytes)
-                    .unwrap_or_else(|| fail(b"supervision decode"));
-                if descriptor.magic != CAPABILITY_TRANSFER_MAGIC
-                    || descriptor.version != TRANSFER_VERSION
-                    || descriptor.status != 0
-                    || descriptor.flags != 0
-                    || descriptor.object_kind != OBJECT_KIND_SUPERVISION
-                    || descriptor.direction != direction
-                    || descriptor.rights_mask != RIGHT_SUPERVISE
-                    || descriptor.route_identity != *route
-                {
-                    release_caps(&caps);
-                    fail(b"supervision authority");
-                }
-                for cap in caps.iter().skip(1).filter(|cap| **cap != 0) {
-                    let _ = slime_rt::cap_drop(*cap as u32);
-                }
-                return caps[0] as u32;
-            }
-        }
-    }
-}
-
 fn settle_outstanding_request(call: &mut Call) {
     let outstanding = match call.payload {
         Payload::SharedOutstanding {
@@ -1242,37 +1118,6 @@ fn relay_shared_payload(
     buffer.slot
 }
 
-fn consume_request(slot: u32) {
-    let mut bytes = [0u8; MAX_MSG];
-    let mut caps = [0u64; MAX_CAPS_PER_MSG];
-    loop {
-        match slime_rt::recv(slot, &mut bytes, &mut caps) {
-            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(slot)]),
-            value if value < 0 => fail(b"call role request"),
-            _ => {
-                release_caps(&caps);
-                return;
-            }
-        }
-    }
-}
-
-fn transfer_role(control: u32, capability: u32, route: &[u8; 32], direction: u32, rights: u64) {
-    let descriptor = WireCapabilityTransfer {
-        magic: CAPABILITY_TRANSFER_MAGIC,
-        version: TRANSFER_VERSION,
-        status: 0,
-        flags: 0,
-        object_kind: OBJECT_KIND_ENDPOINT,
-        direction,
-        rights_mask: rights,
-        route_identity: *route,
-    };
-    if slime_rt::cap_transfer(control, capability, &descriptor.encode()) != ERR_SUCCESS {
-        fail(b"call role transfer");
-    }
-}
-
 fn try_send_terminal(slot: u32, session: u64, request_id: u64, status: i32) -> i64 {
     let message = WireCallEnvelope {
         magic: CALL_MAGIC,
@@ -1305,10 +1150,3 @@ fn fail(reason: &[u8]) -> ! {
 const _: () = assert!(slime_proto::fabric_call::CALL_LEN == MAX_MSG);
 const _: () = assert!(slime_proto::fabric_call::CALL_TIME_LEN == MAX_MSG);
 const _: () = assert!(FLAG_NON_IDEMPOTENT == 1);
-// Two clients x (control endpoint + send capacity), plus server, clock, and the
-// server's supervision handle. Stated here as well as taken from the generation
-// so a park set that outgrows the declared peak fails at this assertion rather
-// than at a boot, and so the arithmetic behind the declared number is auditable
-// from the broker that has to satisfy it.
-const _: () = assert!(WAIT_SOURCES == CLIENTS * 2 + 3);
-const _: () = assert!(WAIT_SOURCES <= slime_rt::MAX_WAIT_SOURCES);

@@ -1,27 +1,23 @@
-//! Per-task transfer windows: the bounded regions oversized payloads cross in.
+//! Per-thread transfer windows: bounded regions oversized payloads cross in.
 //!
 //! The seL4 fast path carries four message registers. A Slime operation whose
-//! payload does not fit them — a `recv` buffer, a spawn's grant array, a wait
-//! source set — stages it in a page both ends can address instead of growing
-//! the message. That page is the task's *transfer window*.
+//! payload does not fit them stages it in a page both ends can address instead
+//! of growing the message. Each component thread owns one such page.
 //!
-//! `slime-root/src/child_vspace.rs` maps one granule for every child it builds,
-//! directly above the child's IPC buffer, and keeps the frame capability in root
-//! CSpace. The child declares it once at startup
-//! (`components/runtime/src/runtime.rs::start`), and this table records the
-//! declaration. Two properties follow, and both are why the window is root-mapped
-//! rather than child-allocated:
+//! `slime-root/src/child_vspace.rs` maps one granule per thread directly above
+//! that thread's IPC buffer and keeps an alias capability in root CSpace. The
+//! transfer descriptor carries the hardware thread index; the authenticated
+//! process badge plus that index selects the root-created `(task, thread)`
+//! entry.
 //!
-//! - a component the generation grants no `SharedBufferFactory` — `console` and
-//!   every spawned application — still has a window, so `recv` works without
-//!   handing it allocation authority it was never declared;
-//! - the root reads and writes the window through its own frame capability, never
-//!   through a child-supplied address, so a task cannot name a region it does not
-//!   own by lying about its base.
+//! The child never declares or reallocates this mapping. That matters twice:
+//! a component with no `SharedBufferFactory` still has a staging region, and
+//! the root never trusts a child-supplied address because it maps the exact
+//! frame it created for that process and thread.
 //!
-//! A task may bind only the window its own VSpace received, and only once. The
-//! binding is checked against what the loader mapped, not accepted on the
-//! caller's word.
+//! Thread identity here is routing metadata, not authority. The badge chooses
+//! the process; a forged or out-of-range thread index names no window and the
+//! request is refused.
 
 use crate::ipc::IpcError;
 use crate::task::TaskId;
@@ -31,16 +27,16 @@ use crate::task::TaskId;
 /// agreement seen from either end.
 pub const WINDOW_BYTES: usize = crate::child_vspace::GRANULE_SIZE;
 
-/// The slot value a child uses to name the root-mapped startup window rather
-/// than a shared buffer of its own. Slot 0 is null in every child CSpace, so it
-/// cannot collide with a granted capability. Mirrors
-/// `sel4_transport::STARTUP_WINDOW_SLOT`.
+/// Retired startup-bind slot, retained only by host regressions proving a
+/// child-supplied base could never select a different mapping.
+#[cfg(test)]
 pub const STARTUP_WINDOW_SLOT: u32 = 0;
 
-/// One task's declared window.
+/// One thread's declared window.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Window {
     pub task: TaskId,
+    pub thread: usize,
     /// Child virtual address of the window, as the loader mapped it.
     pub base: usize,
     pub len: usize,
@@ -62,11 +58,10 @@ pub struct Window {
     pub alias: sel4::cap::Granule,
 }
 
-/// Windows the root has mapped, and which of them their tasks have declared.
+/// Windows the root mapped for admitted component threads.
 ///
-/// An entry exists from the moment the loader maps the frame; `bind` only flips
-/// it to declared. So a bind naming a base the loader never mapped is refused
-/// with the record in hand, rather than trusted and discovered later.
+/// Entries are usable immediately because their addresses and capabilities
+/// come from root-side VSpace construction, not a child declaration.
 pub struct WindowTable<const CAPACITY: usize> {
     entries: [Option<(Window, bool)>; CAPACITY],
     len: usize,
@@ -88,52 +83,53 @@ impl<const CAPACITY: usize> WindowTable<CAPACITY> {
         self.len == 0
     }
 
-    /// Record the window the loader mapped for `task`. Called during task
-    /// construction, before the task runs.
+    /// Record the window the loader mapped for `task` and `thread`. Called
+    /// during task construction, before the task runs.
     ///
     /// `alias` is a second capability to the same frame; see [`Window::alias`]
-    /// for why staging needs one.
+    /// for why staging needs one. A declaration is immediately usable: the
+    /// address is not accepted from a child syscall, but comes from the VSpace
+    /// mapping the root itself just constructed (B46).
     pub fn declare(
         &mut self,
         task: TaskId,
+        thread: usize,
         base: usize,
         frame: sel4::cap::Granule,
         alias: sel4::cap::Granule,
     ) -> Result<(), IpcError> {
-        // Keyed by base, not by task: a multi-threaded process declares one
-        // window per thread, and the bases are distinct by construction (B47).
-        // Two declarations at the same base would be the actual conflict.
+        // Keyed by task and thread. Two declarations for the same thread are
+        // the conflict; different threads deliberately have distinct windows.
         if self
             .entries
             .iter()
             .flatten()
-            .any(|(w, _)| w.task == task && w.base == base)
+            .any(|(w, _)| w.task == task && w.thread == thread)
         {
             return Err(IpcError::WaiterConflict);
         }
         let Some(slot) = self.entries.iter_mut().find(|entry| entry.is_none()) else {
-            return Err(IpcError::WaitSetFull);
+            return Err(IpcError::DestinationSlotsExhausted);
         };
         *slot = Some((
             Window {
                 task,
+                thread,
                 base,
                 len: WINDOW_BYTES,
                 frame,
                 alias,
             },
-            false,
+            true,
         ));
         self.len += 1;
         Ok(())
     }
 
-    /// Bind `task`'s window in response to its startup declaration.
-    ///
-    /// Every argument is checked against the mapping the loader actually made:
-    /// the slot must be the startup-window slot, and the base and length must be
-    /// exactly what was mapped. A mismatch is `InvalidLength` — the task is
-    /// describing a region it does not have.
+    /// Retained only for host-side regression checks of the retired startup
+    /// bind contract. Product code declares windows from root-owned mappings
+    /// and never accepts a child-supplied base (B46).
+    #[cfg(test)]
     pub fn bind(
         &mut self,
         task: TaskId,
@@ -144,15 +140,9 @@ impl<const CAPACITY: usize> WindowTable<CAPACITY> {
         if slot != STARTUP_WINDOW_SLOT {
             return Err(IpcError::InvalidOperation);
         }
-        // A task with no window at all cannot bind one; that is a different
-        // refusal from naming a region it was not given.
         if !self.entries.iter().flatten().any(|(w, _)| w.task == task) {
             return Err(IpcError::InvalidOperation);
         }
-        // Matched on base as well as task: with several threads declaring
-        // windows, the caller's base is what says which thread is binding
-        // (B47). A base no thread was given is refused the same way an
-        // oversized length is — the caller named a region it does not have.
         let Some((window, bound)) = self
             .entries
             .iter_mut()
@@ -164,29 +154,27 @@ impl<const CAPACITY: usize> WindowTable<CAPACITY> {
         if window.len != len {
             return Err(IpcError::InvalidLength);
         }
-        // Rebinding would let a task point the root at a different region after
-        // the root had already accepted one, so the first binding is final.
-        if *bound {
-            return Err(IpcError::WaiterConflict);
+        if !*bound {
+            *bound = true;
         }
-        *bound = true;
         Ok(*window)
     }
 
-    /// The window `task` has bound, if it has bound one. Operations that stage
-    /// through the window resolve it here, so an unbound task's oversized
-    /// payload is refused rather than written somewhere.
-    pub fn bound(&self, task: TaskId) -> Option<Window> {
+    /// The window `task`'s descriptor names, if that thread was declared.
+    ///
+    /// Thread identity is not trusted as authority: the badge authenticates
+    /// `task`, and this index only chooses among that task's root-created
+    /// windows. An out-of-range or undeclared index resolves to none.
+    pub fn bound(&self, task: TaskId, thread: usize) -> Option<Window> {
         self.entries
             .iter()
             .flatten()
-            .find(|(w, bound)| *bound && w.task == task)
+            .find(|(w, bound)| *bound && w.task == task && w.thread == thread)
             .map(|(window, _)| *window)
     }
 
-    /// Drop a task's window as part of reclaiming it. The frame itself is
-    /// released by the task's cleanup record, which revokes the whole CSlot
-    /// range; this only forgets the binding.
+    /// Drop every window owned by a task as part of reclaiming it. The frames
+    /// themselves are released by the task cleanup record.
     pub fn release(&mut self, task: TaskId) -> bool {
         // Every window the task declared, not just the first: a multi-threaded
         // process has one per thread, and leaving the others behind would keep
@@ -222,8 +210,10 @@ pub const FORM_INLINE: u64 = 0;
 /// Payload bytes and capability slots ride in the bound transfer window.
 pub const FORM_WINDOW: u64 = 1;
 
-pub const fn descriptor(len: usize, caps: usize, form: u64) -> u64 {
-    (len as u64) | ((caps as u64) << 16) | (form << 24)
+/// Builds the transfer descriptor: length, capability count, carrier, and
+/// sending thread index.
+pub const fn descriptor(len: usize, caps: usize, form: u64, thread: usize) -> u64 {
+    (len as u64) | ((caps as u64) << 16) | (form << 24) | ((thread as u64) << 32)
 }
 
 pub const fn descriptor_len(descriptor: u64) -> usize {
@@ -236,6 +226,10 @@ pub const fn descriptor_caps(descriptor: u64) -> usize {
 
 pub const fn descriptor_form(descriptor: u64) -> u64 {
     (descriptor >> 24) & 0xff
+}
+
+pub const fn descriptor_thread(descriptor: u64) -> usize {
+    (descriptor >> 32) as usize
 }
 
 /// Byte offset of the capability vector in a frame whose payload is `len`
@@ -366,11 +360,6 @@ impl StagedFrame {
 
     pub const fn cap_count(&self) -> usize {
         self.cap_count
-    }
-
-    /// The descriptor a reply carrying this frame reports.
-    pub const fn reply_descriptor(&self) -> u64 {
-        descriptor(self.len, self.cap_count, FORM_WINDOW)
     }
 }
 
@@ -523,11 +512,9 @@ fn write_staged_region_in(
             core::ptr::copy_nonoverlapping(bytes.as_ptr(), base, bytes.len());
         }
     })?;
-    Ok(descriptor(bytes.len(), 0, FORM_WINDOW))
+    Ok(descriptor(bytes.len(), 0, FORM_WINDOW, window.thread))
 }
-
-/// Write a reply frame into a caller's window. The caller's `collect` reads it
-/// back at the descriptor [`StagedFrame::reply_descriptor`] reports.
+/// Write a reply frame into a caller's selected window.
 pub fn write_staged(
     window: Option<Window>,
     frame: &StagedFrame,
@@ -679,10 +666,11 @@ mod descriptor_tests {
 
     #[test]
     fn a_descriptor_round_trips_its_three_fields() {
-        let value = descriptor(64, 4, FORM_WINDOW);
+        let value = descriptor(64, 4, FORM_WINDOW, 1);
         assert_eq!(descriptor_len(value), 64);
         assert_eq!(descriptor_caps(value), 4);
         assert_eq!(descriptor_form(value), FORM_WINDOW);
+        assert_eq!(descriptor_thread(value), 1);
     }
 
     #[test]
@@ -716,23 +704,19 @@ mod tests {
 
     fn table() -> WindowTable<4> {
         let mut table = WindowTable::new();
-        table.declare(TaskId(0), BASE, frame(), alias()).unwrap();
+        table.declare(TaskId(0), 0, BASE, frame(), alias()).unwrap();
         table
     }
 
     #[test]
-    fn a_declared_window_binds_once_at_its_exact_mapping() {
+    fn a_declared_window_is_immediately_usable() {
         let mut table = table();
-        assert_eq!(table.bound(TaskId(0)), None, "unbound until declared");
-        let window = table
-            .bind(TaskId(0), STARTUP_WINDOW_SLOT, BASE, WINDOW_BYTES)
-            .unwrap();
+        let window = table.bound(TaskId(0), 0).unwrap();
         assert_eq!(window.base, BASE);
-        assert_eq!(table.bound(TaskId(0)), Some(window));
         assert_eq!(
             table.bind(TaskId(0), STARTUP_WINDOW_SLOT, BASE, WINDOW_BYTES),
-            Err(IpcError::WaiterConflict),
-            "the first binding is final"
+            Ok(window),
+            "the retired bind declaration cannot change root-owned geometry"
         );
     }
 
@@ -749,7 +733,7 @@ mod tests {
             Err(IpcError::InvalidLength),
             "nor claim more of it than was mapped"
         );
-        assert_eq!(table.bound(TaskId(0)), None, "a refused bind binds nothing");
+        assert!(table.bound(TaskId(0), 0).is_some());
     }
 
     #[test]
@@ -774,18 +758,15 @@ mod tests {
     fn windows_are_per_task_and_released_on_reclaim() {
         let mut table = table();
         table
-            .declare(TaskId(1), BASE + 0x8000, frame(), alias())
-            .unwrap();
-        table
-            .bind(TaskId(1), STARTUP_WINDOW_SLOT, BASE + 0x8000, WINDOW_BYTES)
+            .declare(TaskId(1), 0, BASE + 0x8000, frame(), alias())
             .unwrap();
         assert_eq!(table.len(), 2);
         // One task's binding says nothing about another's.
-        assert_eq!(table.bound(TaskId(0)), None);
-        assert!(table.bound(TaskId(1)).is_some());
+        assert_eq!(table.bound(TaskId(0), 0), Some(table.entries[0].unwrap().0));
+        assert!(table.bound(TaskId(1), 0).is_some());
 
         assert!(table.release(TaskId(1)));
-        assert_eq!(table.bound(TaskId(1)), None);
+        assert_eq!(table.bound(TaskId(1), 0), None);
         assert_eq!(table.len(), 1);
         assert!(
             !table.release(TaskId(1)),
@@ -797,7 +778,7 @@ mod tests {
     fn a_task_cannot_declare_two_windows_at_one_base() {
         let mut table = table();
         assert_eq!(
-            table.declare(TaskId(0), BASE, frame(), alias()),
+            table.declare(TaskId(0), 0, BASE, frame(), alias()),
             Err(IpcError::WaiterConflict),
             "the fixture already declared this task's window at BASE"
         );
@@ -805,24 +786,18 @@ mod tests {
 
     #[test]
     fn a_multi_threaded_task_declares_one_window_per_thread() {
-        // Each thread of a process stages through its own window, so a second
-        // declaration at a different base is the normal case, not a conflict
-        // (B47). Binding follows the base, which is what says which thread is
-        // asking.
         let mut table = table();
         table
-            .declare(TaskId(0), BASE + 0x8000, frame(), alias())
+            .declare(TaskId(0), 1, BASE + 0x8000, frame(), alias())
             .expect("a second thread's window is not a conflict");
-
-        table
-            .bind(TaskId(0), STARTUP_WINDOW_SLOT, BASE + 0x8000, WINDOW_BYTES)
-            .expect("the second thread binds its own window");
+        assert_eq!(table.bound(TaskId(0), 0).unwrap().base, BASE);
+        assert_eq!(table.bound(TaskId(0), 1).unwrap().base, BASE + 0x8000);
 
         // Releasing the task takes every thread's window with it, and the
         // table's count drops by both.
         let before = table.len();
         assert!(table.release(TaskId(0)));
         assert_eq!(before - table.len(), 2, "both windows were forgotten");
-        assert_eq!(table.bound(TaskId(0)), None);
+        assert_eq!(table.bound(TaskId(0), 0), None);
     }
 }

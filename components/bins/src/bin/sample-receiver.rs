@@ -12,7 +12,7 @@
 use slime_proto::interface_schema::telemetry_stream::TYPE_TAG;
 use slime_proto::sample_descriptor::{DESCRIPTOR_LEN, WireSampleDescriptor};
 use slime_proto::valid_sample_descriptor;
-use slime_rt::{ERR_BAD_CAP, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG, WaitSource};
+use slime_rt::{ERR_BAD_CAP, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
 
 slime_rt::entry!(main);
 
@@ -29,12 +29,16 @@ fn fail(reason: &[u8]) -> ! {
     slime_rt::exit(1)
 }
 
-fn main(_startup_arg: u32) {
+fn main(startup_arg: u32) {
+    if startup_arg == 0 && option_env!("SLIME_SEL4_SAMPLE_CHECK") == Some("1") {
+        slime_rt::debug_write(b"[sample-receiver] root-autostart probe skipped\n");
+        return;
+    }
     let mut message = [0u8; MAX_MSG];
     let mut received = [0u64; MAX_CAPS_PER_MSG];
     let length = loop {
         match slime_rt::recv(PEER_SLOT, &mut message, &mut received) {
-            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(PEER_SLOT)]),
+            ERR_WOULDBLOCK => slime_rt::yield_now(),
             // No channel at all, which is not a failure: the plane respawns
             // this component once, after the first copy exits, purely to show
             // the spawn budget released its dead. That retry is granted

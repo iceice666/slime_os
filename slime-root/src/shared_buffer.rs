@@ -169,6 +169,10 @@ pub struct LoanHandle {
     pub buffer: BufferId,
     pub epoch: GenerationEpoch,
     pub receiver: HolderId,
+    /// Whether [`SharedBufferTable::map_loan`] will install this range
+    /// writable. Decided by the lender at `loan` time and recorded with the
+    /// loan, so the handle cannot widen it.
+    pub writable: bool,
 }
 
 /// Root-owned frame anchors supplied after the allocator has created real seL4
@@ -475,6 +479,15 @@ struct Loan {
     receiver: HolderId,
     offset_pages: u16,
     page_count: u16,
+    /// Whether the receiver may map this range writable.
+    ///
+    /// A C7.6 sample loan is read-only: the receiver reads bytes the lender
+    /// already finished writing, and a sealed region cannot be written by
+    /// anyone. A B46 stream ring is the opposite case — two peers advance
+    /// disjoint header fields of one unsealed region — so the writability is
+    /// the lender's decision, recorded here, rather than a property of every
+    /// loan.
+    writable: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -642,11 +655,8 @@ impl SharedBufferTable {
     /// fired, and `MAX_CHARGE_HOLDERS` bounded the holders a boot could *ever*
     /// construct rather than those live at once.
     ///
-    /// Unlike [`crate::channel::sweep`] and [`crate::supervision::sweep`] this
-    /// is a direct release rather than a derived predicate, because a quota has
-    /// exactly one holder and that holder is a task: when the task is gone the
-    /// entry is unreachable, with no second place it could still be named from.
-    /// Channels and termination records both needed a sweep precisely because
+    /// Unlike [`crate::supervision::sweep`] this is a direct release rather
+    /// than a derived predicate, because a quota has exactly one holder.
     /// they can be named by a capability that outlives, or travels
     /// independently of, the task they concern. A quota cannot.
     ///
@@ -861,7 +871,11 @@ impl SharedBufferTable {
         self.execute_mapping(adapter, plan)
     }
 
-    /// Install a read-only mapping relative to one receiver-bound loan.
+    /// Install a mapping relative to one receiver-bound loan.
+    ///
+    /// The protection is the loan's, recorded when it was minted: a read-only
+    /// C7.6 sample loan maps read-only, and a writable B46 ring loan maps
+    /// read-write. The receiver cannot choose it, so it cannot widen it.
     #[allow(clippy::too_many_arguments)]
     pub fn map_loan<A: SharedBufferAdapter>(
         &mut self,
@@ -898,7 +912,11 @@ impl SharedBufferTable {
             base,
             absolute_offset_pages,
             page_count,
-            MappingRights::ReadOnly,
+            if loan.writable {
+                MappingRights::ReadWrite
+            } else {
+                MappingRights::ReadOnly
+            },
             Some(loan.id),
         )?;
         self.execute_mapping(adapter, plan)
@@ -1078,7 +1096,14 @@ impl SharedBufferTable {
         Ok(())
     }
 
-    /// Create one single-return loan over an exact sealed range.
+    /// Create one single-return loan over an exact range.
+    ///
+    /// `writable` decides what the receiver may map, and the lender must hold
+    /// the authority it hands on: a writable loan requires `WRITE` on the
+    /// lender's own handle and an unsealed region, because sealing is exactly
+    /// the act of giving up write authority. A read-only loan requires the
+    /// region be sealed, which is what makes a C7.6 sample's bytes stable for
+    /// the receiver that reads them.
     pub fn loan(
         &mut self,
         lender: HolderId,
@@ -1086,9 +1111,19 @@ impl SharedBufferTable {
         handle: BufferHandle,
         offset: usize,
         length: usize,
+        writable: bool,
     ) -> Result<LoanHandle, SharedBufferError> {
-        let (region, _) = self.authorize(lender, handle, BufferRights::LOAN)?;
-        if !region.sealed {
+        let required = if writable {
+            BufferRights(BufferRights::LOAN.0 | BufferRights::WRITE.0)
+        } else {
+            BufferRights::LOAN
+        };
+        let (region, _) = self.authorize(lender, handle, required)?;
+        if writable {
+            if region.sealed || !region.created_writable {
+                return Err(SharedBufferError::WriteDenied);
+            }
+        } else if !region.sealed {
             return Err(SharedBufferError::NotSealed);
         }
         let (offset_pages, page_count) =
@@ -1121,6 +1156,7 @@ impl SharedBufferTable {
             receiver,
             offset_pages: u16::try_from(offset_pages).map_err(|_| SharedBufferError::BadRange)?,
             page_count: u16::try_from(page_count).map_err(|_| SharedBufferError::BadRange)?,
+            writable,
         });
         self.next_loan_id = next_id;
         self.charge_positive(lender, 0, 0, 0, 1)?;
@@ -1129,6 +1165,7 @@ impl SharedBufferTable {
             buffer: handle.id,
             epoch: self.epoch,
             receiver,
+            writable,
         })
     }
 
@@ -2116,7 +2153,7 @@ mod tests {
         let mut adapter = RecordingAdapter::new();
         table.seal(&mut adapter, OWNER, handle).expect("seal");
         let loan = table
-            .loan(OWNER, RECEIVER, handle, 0, PAGE_SIZE * 2)
+            .loan(OWNER, RECEIVER, handle, 0, PAGE_SIZE * 2, false)
             .expect("loan");
         table.release(&mut adapter, OWNER, handle).expect("release");
         assert_eq!(table.total_pages(), 2);
@@ -2182,7 +2219,7 @@ mod tests {
         let mut adapter = RecordingAdapter::new();
         table.seal(&mut adapter, OWNER, handle).expect("seal");
         let loan = table
-            .loan(OWNER, RECEIVER, handle, 0, PAGE_SIZE)
+            .loan(OWNER, RECEIVER, handle, 0, PAGE_SIZE, false)
             .expect("loan");
         table
             .map_loan(
@@ -2492,7 +2529,7 @@ mod tests {
             .expect("create read-only");
         assert_eq!(handle.rights, BufferRights::MAP);
         assert_eq!(
-            table.loan(OWNER, RECEIVER, handle, 0, PAGE_SIZE),
+            table.loan(OWNER, RECEIVER, handle, 0, PAGE_SIZE, false),
             Err(SharedBufferError::RightsDenied)
         );
     }

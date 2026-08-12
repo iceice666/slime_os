@@ -50,7 +50,7 @@ use crate::child_vspace::ScratchPage;
 use crate::graph::{self, GraphTables};
 use crate::ipc::{self, IpcError, Response};
 use crate::task::{MAX_TASKS, TaskId};
-use crate::transfer_window::{self, Window, WindowTable};
+use crate::transfer_window::{self, Window, WindowTable, descriptor_thread};
 
 /// Stack for the console thread, in the root's own image so it is mapped
 /// before the thread runs.
@@ -84,7 +84,8 @@ impl Default for ConsoleStack {
 pub struct ConsoleContext {
     pub endpoint: sel4::cap::Endpoint,
     pub scratch: ScratchPage,
-    pub windows: *const WindowTable<MAX_TASKS>,
+    pub windows:
+        *const WindowTable<{ crate::task::MAX_TASKS * crate::child_vspace::MAX_CHILD_THREADS }>,
     /// This thread's own IPC buffer, named on every invocation rather than
     /// discovered through the crate's ambient slot.
     ///
@@ -210,9 +211,11 @@ pub unsafe fn serve(context: &ConsoleContext) -> ! {
         let Some((id, _)) = TaskId::from_badge(message.badge) else {
             continue;
         };
+        let thread = descriptor_thread(message.mrs[1]);
+        let window = windows.bound(id, thread);
         match message.kind {
             ipc::ConsoleKind::Write => write_payload(
-                windows.bound(id),
+                window,
                 &message.mrs[..message.len],
                 &context.scratch,
                 buffer,
@@ -225,7 +228,7 @@ pub unsafe fn serve(context: &ConsoleContext) -> ! {
                     graph,
                     namespaces,
                     scopes,
-                    windows.bound(id),
+                    window,
                     &context.scratch,
                     id,
                     &message.mrs[..message.len],
@@ -237,7 +240,7 @@ pub unsafe fn serve(context: &ConsoleContext) -> ! {
                     graph,
                     namespaces,
                     scopes,
-                    windows.bound(id),
+                    window,
                     &context.scratch,
                     id,
                     &message.mrs[..message.len],
@@ -248,7 +251,7 @@ pub unsafe fn serve(context: &ConsoleContext) -> ! {
                 pending = Some(serve_block_transact(
                     graph,
                     devices,
-                    windows.bound(id),
+                    window,
                     &context.scratch,
                     id,
                     &message.mrs[..message.len],

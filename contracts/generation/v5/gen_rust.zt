@@ -30,6 +30,8 @@ Format :: type {
   spawnTemplateLen : Int;
   resourceQuotaLen : Int;
   mintedBindingLen : Int;
+  notificationGrantLen : Int;
+  notificationBindingLen : Int;
   maxGenerationBytes : Int;
   maxObjects : Int;
   maxExecutables : Int;
@@ -50,6 +52,8 @@ Format :: type {
   maxSpawnTemplates : Int;
   maxResourceQuotas : Int;
   maxMintedBindings : Int;
+  maxNotificationGrants : Int;
+  maxNotificationBindings : Int;
   maxStringBytes : Int;
   maxStringTableBytes : Int;
   maxObjectPayloadBytes : Int;
@@ -73,6 +77,8 @@ Format :: type {
   spawnTemplateFields : List refl.SchemaField;
   resourceQuotaFields : List refl.SchemaField;
   mintedBindingFields : List refl.SchemaField;
+  notificationGrantFields : List refl.SchemaField;
+  notificationBindingFields : List refl.SchemaField;
   headerLayout : List w.WireField;
   objectLayout : List w.WireField;
   executableLayout : List w.WireField;
@@ -93,11 +99,13 @@ Format :: type {
   spawnTemplateLayout : List w.WireField;
   resourceQuotaLayout : List w.WireField;
   mintedBindingLayout : List w.WireField;
+  notificationGrantLayout : List w.WireField;
+  notificationBindingLayout : List w.WireField;
 };
 
 records :: Format -> List w.WireRecord
   = format => {
-    { pythonName = "GENERATION_HEADER"; constPrefix = "GENERATION_HEADER"; size = format.headerLen; trailingPadding = 136; fields = format.headerFields; layout = format.headerLayout; };
+    { pythonName = "GENERATION_HEADER"; constPrefix = "GENERATION_HEADER"; size = format.headerLen; trailingPadding = 112; fields = format.headerFields; layout = format.headerLayout; };
     { pythonName = "GENERATION_OBJECT"; constPrefix = "GENERATION_OBJECT"; size = format.objectLen; trailingPadding = 8; fields = format.objectFields; layout = format.objectLayout; };
     { pythonName = "GENERATION_EXECUTABLE"; constPrefix = "GENERATION_EXECUTABLE"; size = format.executableLen; trailingPadding = 16; fields = format.executableFields; layout = format.executableLayout; };
     { pythonName = "GENERATION_INSTANCE"; constPrefix = "GENERATION_INSTANCE"; size = format.instanceLen; trailingPadding = 8; fields = format.instanceFields; layout = format.instanceLayout; };
@@ -117,6 +125,8 @@ records :: Format -> List w.WireRecord
     { pythonName = "GENERATION_SPAWN_TEMPLATE"; constPrefix = "GENERATION_SPAWN_TEMPLATE"; size = format.spawnTemplateLen; trailingPadding = 0; fields = format.spawnTemplateFields; layout = format.spawnTemplateLayout; };
     { pythonName = "GENERATION_RESOURCE_QUOTA"; constPrefix = "GENERATION_RESOURCE_QUOTA"; size = format.resourceQuotaLen; trailingPadding = 0; fields = format.resourceQuotaFields; layout = format.resourceQuotaLayout; };
     { pythonName = "GENERATION_MINTED_BINDING"; constPrefix = "GENERATION_MINTED_BINDING"; size = format.mintedBindingLen; trailingPadding = 4; fields = format.mintedBindingFields; layout = format.mintedBindingLayout; };
+    { pythonName = "GENERATION_NOTIFICATION_GRANT"; constPrefix = "GENERATION_NOTIFICATION_GRANT"; size = format.notificationGrantLen; trailingPadding = 4; fields = format.notificationGrantFields; layout = format.notificationGrantLayout; };
+    { pythonName = "GENERATION_NOTIFICATION_BINDING"; constPrefix = "GENERATION_NOTIFICATION_BINDING"; size = format.notificationBindingLen; trailingPadding = 4; fields = format.notificationBindingFields; layout = format.notificationBindingLayout; };
   };
 
 pythonBindings :: Format -> Text
@@ -125,7 +135,7 @@ pythonBindings :: Format -> Text
     w.renderRecords (records format);
     "MAX_GENERATION_BYTES = "; n.toText format.maxGenerationBytes; "\n";
     "MAX_OBJECTS = "; n.toText format.maxObjects; "\n"; "MAX_EXECUTABLES = "; n.toText format.maxExecutables; "\n"; "MAX_INSTANCES = "; n.toText format.maxInstances; "\n"; "MAX_BINDINGS = "; n.toText format.maxBindings; "\n"; "MAX_GRANTS = "; n.toText format.maxGrants; "\n"; "MAX_STATES = "; n.toText format.maxStates; "\n"; "MAX_DEPENDENCIES = "; n.toText format.maxDependencies; "\n"; "MAX_HEALTH_INSTANCES = "; n.toText format.maxHealthInstances; "\n";
-    "MAX_PROCESSES = "; n.toText format.maxProcesses; "\n"; "MAX_THREADS = "; n.toText format.maxThreads; "\n"; "MAX_KERNEL_OBJECTS = "; n.toText format.maxKernelObjects; "\n"; "MAX_MAPPINGS = "; n.toText format.maxMappings; "\n"; "MAX_CAP_BINDINGS = "; n.toText format.maxCapBindings; "\n"; "MAX_SERVICE_BINDINGS = "; n.toText format.maxServiceBindings; "\n"; "MAX_SCHEDULES = "; n.toText format.maxSchedules; "\n"; "MAX_FAULT_POLICIES = "; n.toText format.maxFaultPolicies; "\n"; "MAX_SPAWN_TEMPLATES = "; n.toText format.maxSpawnTemplates; "\n"; "MAX_RESOURCE_QUOTAS = "; n.toText format.maxResourceQuotas; "\n"; "MAX_MINTED_BINDINGS = "; n.toText format.maxMintedBindings; "\n";
+    "MAX_PROCESSES = "; n.toText format.maxProcesses; "\n"; "MAX_THREADS = "; n.toText format.maxThreads; "\n"; "MAX_KERNEL_OBJECTS = "; n.toText format.maxKernelObjects; "\n"; "MAX_MAPPINGS = "; n.toText format.maxMappings; "\n"; "MAX_CAP_BINDINGS = "; n.toText format.maxCapBindings; "\n"; "MAX_SERVICE_BINDINGS = "; n.toText format.maxServiceBindings; "\n"; "MAX_SCHEDULES = "; n.toText format.maxSchedules; "\n"; "MAX_FAULT_POLICIES = "; n.toText format.maxFaultPolicies; "\n"; "MAX_SPAWN_TEMPLATES = "; n.toText format.maxSpawnTemplates; "\n"; "MAX_RESOURCE_QUOTAS = "; n.toText format.maxResourceQuotas; "\n"; "MAX_MINTED_BINDINGS = "; n.toText format.maxMintedBindings; "\n"; "MAX_NOTIFICATION_GRANTS = "; n.toText format.maxNotificationGrants; "\n"; "MAX_NOTIFICATION_BINDINGS = "; n.toText format.maxNotificationBindings; "\n";
     "MAX_STRING_BYTES = "; n.toText format.maxStringBytes; "\n"; "MAX_STRING_TABLE_BYTES = "; n.toText format.maxStringTableBytes; "\n"; "MAX_OBJECT_PAYLOAD_BYTES = "; n.toText format.maxObjectPayloadBytes; "\n";
   };
 
@@ -154,6 +164,8 @@ rustBindings :: Format -> Text
     r.usizeConst "SPAWN_TEMPLATE_LEN" format.spawnTemplateLen;
     r.usizeConst "RESOURCE_QUOTA_LEN" format.resourceQuotaLen;
     r.usizeConst "MINTED_BINDING_LEN" format.mintedBindingLen;
+    r.usizeConst "NOTIFICATION_GRANT_LEN" format.notificationGrantLen;
+    r.usizeConst "NOTIFICATION_BINDING_LEN" format.notificationBindingLen;
     r.usizeConst "MAX_GENERATION_BYTES" format.maxGenerationBytes;
     r.usizeConst "MAX_OBJECTS" format.maxObjects;
     r.usizeConst "MAX_EXECUTABLES" format.maxExecutables;
@@ -174,6 +186,8 @@ rustBindings :: Format -> Text
     r.usizeConst "MAX_SPAWN_TEMPLATES" format.maxSpawnTemplates;
     r.usizeConst "MAX_RESOURCE_QUOTAS" format.maxResourceQuotas;
     r.usizeConst "MAX_MINTED_BINDINGS" format.maxMintedBindings;
+    r.usizeConst "MAX_NOTIFICATION_GRANTS" format.maxNotificationGrants;
+    r.usizeConst "MAX_NOTIFICATION_BINDINGS" format.maxNotificationBindings;
     r.usizeConst "MAX_STRING_BYTES" format.maxStringBytes;
     r.usizeConst "MAX_STRING_TABLE_BYTES" format.maxStringTableBytes;
     r.usizeConst "MAX_OBJECT_PAYLOAD_BYTES" format.maxObjectPayloadBytes;

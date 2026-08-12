@@ -7,7 +7,7 @@ pub const MAGIC_V2: [u8; 8] = *b"SLIMEG2\0";
 pub const MAGIC: [u8; 8] = MAGIC_V5;
 include!("generated/generation.rs");
 
-const MAX_TASK_CAPS: usize = 64;
+const MAX_TASK_CAPS: usize = 128;
 const PLAN_NONE: usize = u32::MAX as usize;
 const GRANT_POLICY_ONLY: u32 = 1;
 /// A send/recv grant whose channel object its source mints at runtime.
@@ -20,6 +20,8 @@ const KERNEL_OBJECT_CNODE: u32 = 1;
 const KERNEL_OBJECT_TCB: u32 = 3;
 /// Kernel-object kind discriminant for an endpoint.
 const KERNEL_OBJECT_ENDPOINT: u32 = 5;
+/// Kernel-object kind discriminant for a notification.
+const KERNEL_OBJECT_NOTIFICATION: u32 = 7;
 /// Service discriminant for the root dispatch endpoint, matching
 /// `SERVICE_ROOT_DISPATCH` in `scripts/build/build-generation.py`.
 const SERVICE_ROOT_DISPATCH: u32 = 1;
@@ -404,6 +406,30 @@ pub struct MintedBinding<'a> {
     pub flags: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NotificationGrant<'a> {
+    pub name: &'a str,
+    pub source: usize,
+    pub target: usize,
+    pub object: usize,
+    pub flags: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotificationRole {
+    Signal,
+    Wait,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NotificationBinding {
+    pub grant: usize,
+    pub holder: usize,
+    pub slot: usize,
+    pub role: NotificationRole,
+    pub flags: u32,
+}
+
 pub struct Generation<'a> {
     bytes: &'a [u8],
     pub version: u32,
@@ -433,6 +459,8 @@ pub struct Generation<'a> {
     spawn_template_count: usize,
     resource_quota_count: usize,
     minted_binding_count: usize,
+    notification_grant_count: usize,
+    notification_binding_count: usize,
     object_offset: usize,
     executable_offset: usize,
     instance_offset: usize,
@@ -452,6 +480,8 @@ pub struct Generation<'a> {
     spawn_template_offset: usize,
     resource_quota_offset: usize,
     minted_binding_offset: usize,
+    notification_grant_offset: usize,
+    notification_binding_offset: usize,
     string_offset: usize,
     string_len: usize,
 }
@@ -479,12 +509,10 @@ impl<'a> Generation<'a> {
         if u64_at(bytes, 16)? != 0 {
             return Err(DecodeError::UnknownRequiredFlags);
         }
-        // The reserved word beside `minted_binding_count`, and the header's
-        // trailing pad. Both must be zero, so a future field cannot be smuggled
-        // past a decoder that predates it.
-        reserved_zero(bytes, 188, 192)?;
-        reserved_zero(bytes, 376, HEADER_LEN)?;
-        let total_len = u64_at(bytes, 368)? as usize;
+        // Reserved word after the notification counts and trailing header pad.
+        reserved_zero(bytes, 196, 200)?;
+        reserved_zero(bytes, 400, HEADER_LEN)?;
+        let total_len = u64_at(bytes, 392)? as usize;
         if total_len != bytes.len() || total_len > MAX_GENERATION_BYTES {
             return Err(DecodeError::BadBounds);
         }
@@ -543,32 +571,44 @@ impl<'a> Generation<'a> {
                 0,
                 MAX_MINTED_BINDINGS,
             )?,
-            object_offset: u64_at(bytes, 192)? as usize,
-            executable_offset: u64_at(bytes, 200)? as usize,
-            instance_offset: u64_at(bytes, 208)? as usize,
-            dependency_offset: u64_at(bytes, 216)? as usize,
-            binding_offset: u64_at(bytes, 224)? as usize,
-            grant_offset: u64_at(bytes, 232)? as usize,
-            state_offset: u64_at(bytes, 240)? as usize,
-            health_offset: u64_at(bytes, 248)? as usize,
-            process_offset: u64_at(bytes, 256)? as usize,
-            thread_offset: u64_at(bytes, 264)? as usize,
-            kernel_object_offset: u64_at(bytes, 272)? as usize,
-            mapping_offset: u64_at(bytes, 280)? as usize,
-            cap_binding_offset: u64_at(bytes, 288)? as usize,
-            service_binding_offset: u64_at(bytes, 296)? as usize,
-            schedule_offset: u64_at(bytes, 304)? as usize,
-            fault_policy_offset: u64_at(bytes, 312)? as usize,
-            spawn_template_offset: u64_at(bytes, 320)? as usize,
-            resource_quota_offset: u64_at(bytes, 328)? as usize,
-            minted_binding_offset: u64_at(bytes, 336)? as usize,
-            string_offset: u64_at(bytes, 344)? as usize,
-            string_len: u64_at(bytes, 352)? as usize,
+            notification_grant_count: bounded_count(
+                u32_at(bytes, 188)? as usize,
+                0,
+                MAX_NOTIFICATION_GRANTS,
+            )?,
+            notification_binding_count: bounded_count(
+                u32_at(bytes, 192)? as usize,
+                0,
+                MAX_NOTIFICATION_BINDINGS,
+            )?,
+            object_offset: u64_at(bytes, 200)? as usize,
+            executable_offset: u64_at(bytes, 208)? as usize,
+            instance_offset: u64_at(bytes, 216)? as usize,
+            dependency_offset: u64_at(bytes, 224)? as usize,
+            binding_offset: u64_at(bytes, 232)? as usize,
+            grant_offset: u64_at(bytes, 240)? as usize,
+            state_offset: u64_at(bytes, 248)? as usize,
+            health_offset: u64_at(bytes, 256)? as usize,
+            process_offset: u64_at(bytes, 264)? as usize,
+            thread_offset: u64_at(bytes, 272)? as usize,
+            kernel_object_offset: u64_at(bytes, 280)? as usize,
+            mapping_offset: u64_at(bytes, 288)? as usize,
+            cap_binding_offset: u64_at(bytes, 296)? as usize,
+            service_binding_offset: u64_at(bytes, 304)? as usize,
+            schedule_offset: u64_at(bytes, 312)? as usize,
+            fault_policy_offset: u64_at(bytes, 320)? as usize,
+            spawn_template_offset: u64_at(bytes, 328)? as usize,
+            resource_quota_offset: u64_at(bytes, 336)? as usize,
+            minted_binding_offset: u64_at(bytes, 344)? as usize,
+            notification_grant_offset: u64_at(bytes, 352)? as usize,
+            notification_binding_offset: u64_at(bytes, 360)? as usize,
+            string_offset: u64_at(bytes, 368)? as usize,
+            string_len: u64_at(bytes, 376)? as usize,
         };
         if generation.string_len > MAX_STRING_TABLE_BYTES {
             return Err(DecodeError::BadBounds);
         }
-        generation.validate_sections(u64_at(bytes, 360)? as usize)?;
+        generation.validate_sections(u64_at(bytes, 384)? as usize)?;
         let target = generation.string(u32_at(bytes, 96)? as usize)?;
         let boot_action = BootAction::parse(generation.string(u32_at(bytes, 100)? as usize)?)
             .ok_or(DecodeError::UnknownEnum)?;
@@ -577,7 +617,7 @@ impl<'a> Generation<'a> {
             boot_action,
             ..generation
         };
-        generation.validate(u64_at(bytes, 360)? as usize)?;
+        generation.validate(u64_at(bytes, 384)? as usize)?;
         Ok(generation)
     }
 
@@ -694,6 +734,18 @@ impl<'a> Generation<'a> {
             self.minted_binding_offset,
             self.minted_binding_count,
             MINTED_BINDING_LEN,
+            self.notification_grant_offset,
+        )?;
+        check_section(
+            self.notification_grant_offset,
+            self.notification_grant_count,
+            NOTIFICATION_GRANT_LEN,
+            self.notification_binding_offset,
+        )?;
+        check_section(
+            self.notification_binding_offset,
+            self.notification_binding_count,
+            NOTIFICATION_BINDING_LEN,
             self.string_offset,
         )?;
         if self.object_offset != HEADER_LEN
@@ -755,6 +807,12 @@ impl<'a> Generation<'a> {
     }
     pub const fn resource_quota_count(&self) -> usize {
         self.resource_quota_count
+    }
+    pub const fn notification_grant_count(&self) -> usize {
+        self.notification_grant_count
+    }
+    pub const fn notification_binding_count(&self) -> usize {
+        self.notification_binding_count
     }
     pub const fn bootstrap(&self) -> usize {
         self.bootstrap_instance
@@ -1364,6 +1422,39 @@ impl<'a> Generation<'a> {
     pub const fn minted_binding_count(&self) -> usize {
         self.minted_binding_count
     }
+    pub fn notification_grant(&self, index: usize) -> Result<NotificationGrant<'a>, DecodeError> {
+        if index >= self.notification_grant_count {
+            return Err(DecodeError::BadIndex);
+        }
+        let offset = self.notification_grant_offset + index * NOTIFICATION_GRANT_LEN;
+        reserved_zero(self.bytes, offset + 20, offset + NOTIFICATION_GRANT_LEN)?;
+        Ok(NotificationGrant {
+            name: self.string(u32_at(self.bytes, offset)? as usize)?,
+            source: u32_at(self.bytes, offset + 4)? as usize,
+            target: u32_at(self.bytes, offset + 8)? as usize,
+            object: u32_at(self.bytes, offset + 12)? as usize,
+            flags: u32_at(self.bytes, offset + 16)?,
+        })
+    }
+
+    pub fn notification_binding(&self, index: usize) -> Result<NotificationBinding, DecodeError> {
+        if index >= self.notification_binding_count {
+            return Err(DecodeError::BadIndex);
+        }
+        let offset = self.notification_binding_offset + index * NOTIFICATION_BINDING_LEN;
+        reserved_zero(self.bytes, offset + 20, offset + NOTIFICATION_BINDING_LEN)?;
+        Ok(NotificationBinding {
+            grant: u32_at(self.bytes, offset)? as usize,
+            holder: u32_at(self.bytes, offset + 4)? as usize,
+            slot: u32_at(self.bytes, offset + 8)? as usize,
+            role: match u32_at(self.bytes, offset + 12)? {
+                1 => NotificationRole::Signal,
+                2 => NotificationRole::Wait,
+                _ => return Err(DecodeError::UnknownEnum),
+            },
+            flags: u32_at(self.bytes, offset + 16)?,
+        })
+    }
 
     fn string(&self, offset: usize) -> Result<&'a str, DecodeError> {
         read_string(self.bytes, self.string_offset, self.string_len, offset)
@@ -1715,7 +1806,7 @@ impl<'a> Generation<'a> {
         for index in 0..self.kernel_object_count {
             let object = self.kernel_object_record(index)?;
             if object.owner_process >= self.process_count
-                || !matches!(object.kind, 1..=6)
+                || !matches!(object.kind, 1..=KERNEL_OBJECT_NOTIFICATION)
                 || object.count == 0
                 || object.flags != 0
                 || (object.source_object != PLAN_NONE && object.source_object >= self.object_count)
@@ -1891,6 +1982,60 @@ impl<'a> Generation<'a> {
                 }
             }
             previous_name = Some(minted.name);
+        }
+        // Native notifications are authenticated as named source-to-target
+        // relationships, with exactly one signal binding at the source and
+        // one wait binding at the target. The grant section is canonical by
+        // name; holder slots are unique within the separate native
+        // notification namespace.
+        let mut previous_notification = None;
+        for index in 0..self.notification_grant_count {
+            let grant = self.notification_grant(index)?;
+            if grant.source >= self.instance_count
+                || grant.target >= self.instance_count
+                || grant.source == grant.target
+                || grant.object >= self.kernel_object_count
+                || self.kernel_object_record(grant.object)?.kind != KERNEL_OBJECT_NOTIFICATION
+                || grant.flags != 0
+            {
+                return Err(DecodeError::BadBinding);
+            }
+            if previous_notification.is_some_and(|previous| previous >= grant.name) {
+                return Err(DecodeError::BadOrder);
+            }
+            let mut signal = 0;
+            let mut wait = 0;
+            for binding_index in 0..self.notification_binding_count {
+                let binding = self.notification_binding(binding_index)?;
+                if binding.grant != index {
+                    continue;
+                }
+                match (binding.holder, binding.role) {
+                    (holder, NotificationRole::Signal) if holder == grant.source => signal += 1,
+                    (holder, NotificationRole::Wait) if holder == grant.target => wait += 1,
+                    _ => return Err(DecodeError::BadBinding),
+                }
+            }
+            if signal != 1 || wait != 1 {
+                return Err(DecodeError::BadBinding);
+            }
+            previous_notification = Some(grant.name);
+        }
+        for index in 0..self.notification_binding_count {
+            let binding = self.notification_binding(index)?;
+            if binding.grant >= self.notification_grant_count
+                || binding.holder >= self.instance_count
+                || binding.slot >= 31
+                || binding.flags != 0
+            {
+                return Err(DecodeError::BadBinding);
+            }
+            for earlier in 0..index {
+                let other = self.notification_binding(earlier)?;
+                if other.holder == binding.holder && other.slot == binding.slot {
+                    return Err(DecodeError::BadBinding);
+                }
+            }
         }
         Ok(())
     }

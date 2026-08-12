@@ -36,8 +36,8 @@ fn fail(reason: &[u8]) -> ! {
     slime_rt::exit(1)
 }
 
-fn main(_startup_arg: u32) {
-    if slime_components::fabric_boot::active() {
+fn main(startup_arg: u32) {
+    if startup_arg != 0 {
         // In the full-graph boot the observer is a declared telemetry
         // subscriber, so it takes its narrowed data and ack capabilities and
         // parks. Its filtered *view* is C8.8's property to prove; what this gate

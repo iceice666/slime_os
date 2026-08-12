@@ -181,15 +181,16 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     ),
     ("init observed the loan refusal", r"\[init\] loan quota refused"),
     (
-        # The transfer. This is the mechanism P5.3.1 refused outright and this
-        # slice adds, and it is narrow by construction: a loan is the only
-        # resource kind the root will move.
-        #
-        # `side=` rather than `to=` since B25: an end may have co-holders, so
-        # the transfer binds to the receiving *side* of the channel and is
-        # collected by whichever holder dequeues the message.
-        "the loan capability moved to the receiving side",
-        r"SLIME_GRAPH capability transfer task=\d+ channel=\d+ side=\w+ caps=1",
+        # Native capability export is bounded to one capability and preserves
+        # the loan kind and attenuated rights in the export ticket.
+        "the loan capability was exported for exactly one receiver import",
+        r"SLIME_GRAPH capability exported task=\d+ id=\d+ kind=loan "
+        r"rights=0x[0-9a-f]+ retain=0",
+    ),
+    (
+        "the receiver imported the same native loan authority",
+        r"SLIME_GRAPH capability imported task=\d+ id=\d+ kind=loan "
+        r"rights=0x[0-9a-f]+ retain=0",
     ),
     ("init sent the descriptor", r"\[init\] loan transferred"),
     (
@@ -265,13 +266,10 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"\[console\] shared-buffer quota live",
     ),
     (
-        # One loan deliberately left between its send and a receive that never
-        # happens, so the root's transit reclamation is the only thing that can
-        # settle it. Without this the arm is uncovered and looks covered -- a
-        # fault injection with `transit.reclaim` removed still passed the gate
-        # before this was added.
-        "one loan was left in flight for the root to reclaim",
-        r"\[init\] loan stranded in flight",
+        # One export is deliberately left without an import. Root cancellation
+        # and finalization must reclaim its ticket when the sender exits.
+        "one export ticket was left for the root to reclaim",
+        r"\[init\] export ticket left for reclamation",
     ),
     ("init completed the scenario", r"\[init\] loan plane complete"),
     (
@@ -279,15 +277,16 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"SLIME_GRAPH served live=0 unsupported=0 unimplemented=0 ",
     ),
     (
-        # The terminal marker, and the reclamation claim. All six zeros are
-        # load-bearing: a loan whose lender died unsettled, a mapping a dead
-        # receiver still held, a region nothing reclaimed, a capability parked
-        # in flight that no task can name, a page the adapter failed to unmap,
-        # or a frame alias still holding a mapping the root believes exists
-        # would each be a graph that only appeared to drain.
-        "every loan, mapping, region, alias, and in-flight capability was reclaimed",
-        r"SLIME_GRAPH loans served=\d+ loans=0 mappings=0 regions=0 transit=0 "
+        # Native clean accounting distinguishes buffer ownership from exported
+        # capabilities: both must be empty after the graph drains.
+        "every loan, mapping, region, and alias was reclaimed",
+        r"SLIME_GRAPH loans served=\d+ loans=0 mappings=0 regions=0 "
         r"orphans=0 aliases=0",
+    ),
+    (
+        "every native capability export was imported, cancelled, or finalized",
+        r"SLIME_GRAPH capabilities exports=[1-9]\d* imports=[1-9]\d* "
+        r"cancels=\d+ finalized=\d+ outstanding=0 tickets=0",
     ),
 )
 
@@ -513,6 +512,18 @@ def check_transcript(transcript: str) -> None:
     check_declared_quotas(transcript)
     check_quota_classes(transcript)
     check_payload_crosses_the_message_bound()
+    exports = re.findall(
+        r"SLIME_GRAPH capability exported task=\d+ id=(\d+) kind=loan "
+        r"rights=(0x[0-9a-f]+) retain=0",
+        transcript,
+    )
+    imports = re.findall(
+        r"SLIME_GRAPH capability imported task=\d+ id=(\d+) kind=loan "
+        r"rights=(0x[0-9a-f]+) retain=0",
+        transcript,
+    )
+    if not exports or not imports or imports[0] != exports[0]:
+        fail(f"settled loan export/import evidence was {exports!r}/{imports!r}")
 
 
 

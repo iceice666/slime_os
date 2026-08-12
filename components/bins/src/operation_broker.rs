@@ -33,13 +33,7 @@
 //! traffic. Application goal policy and the ROS action state machine stay
 //! outside: `status` names transport outcomes only.
 
-use boot_contracts::fabric_graph::{
-    CONTRACT_KIND_OPERATION, DIRECTION_CLIENT, DIRECTION_SERVER, route_identity,
-};
-use slime_proto::capability_transfer::{
-    CAPABILITY_TRANSFER_MAGIC, FORMAT_VERSION as TRANSFER_VERSION, OBJECT_KIND_ENDPOINT,
-    OBJECT_KIND_SUPERVISION, WireCapabilityTransfer,
-};
+use boot_contracts::fabric_graph::{DIRECTION_CLIENT, DIRECTION_SERVER};
 use slime_proto::fabric_operation::{
     FORMAT_VERSION, KIND_ACCEPTED, KIND_CANCEL, KIND_FEEDBACK, KIND_GOAL, KIND_RESULT,
     KIND_RESULT_REQUEST, KIND_TERMINAL, OPERATION_MAGIC, STATUS_ACTIVE, STATUS_CANCEL_REQUESTED,
@@ -55,14 +49,11 @@ mod fabric_profile {
     include!(concat!(env!("OUT_DIR"), "/fabric_profile.rs"));
 }
 use fabric_profile::*;
-use slime_rt::{ERR_PEER_DEAD, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG, WaitSource};
+use slime_rt::{ERR_PEER_DEAD, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
 
 const ROUTE_NAME: &str = "navigation";
 const BACKUP_ROUTE_NAME: &str = "nav-backup";
 const INTERFACE_NAME: &str = "NavigationOperation";
-const RIGHT_SEND: u64 = 1;
-const RIGHT_RECV: u64 = 2;
-const RIGHT_SUPERVISE: u64 = 1 << 18;
 /// The session the fabric presents to the server. Distinct from every client
 /// session, so a client cannot forge a record that looks like it came from the
 /// transport itself.
@@ -173,14 +164,9 @@ struct PendingDelivery {
 }
 
 pub struct Broker {
-    endpoint_factory_slot: u32,
-    client_control: [u32; CLIENTS],
-    server_control: u32,
     replacement_control: u32,
+    replacement_supervision: u32,
     time_control: u32,
-    /// Supervision handles: one per client, then the server's. The server's is
-    /// how peer death is observed rather than merely inferred from a closed
-    /// channel.
     supervision: [u32; CLIENTS + 1],
     clients: [Option<u32>; CLIENTS],
     server_slot: Option<u32>,
@@ -189,9 +175,6 @@ pub struct Broker {
     operations: [Operation; MAX_OPERATIONS],
     retained: [Retained; MAX_RETAINED],
     pending_deliveries: [Option<PendingDelivery>; MAX_PENDING_DELIVERIES],
-    /// Per-client highest accepted operation id. A goal that does not advance it
-    /// is a duplicate or a replay, which is what stops a restarted participant
-    /// from re-running work.
     high_water: [u64; CLIENTS],
     client_sessions: [u64; CLIENTS],
     next_server_operation_id: u64,
@@ -199,35 +182,33 @@ pub struct Broker {
     next_pending_order: u64,
     now_ns: u64,
     time_closed: bool,
-    /// Set once the server is gone and every active operation has been settled,
-    /// so the run loop knows the plane is finished rather than merely quiet.
     server_settled: bool,
 }
 
 impl Broker {
     pub const fn new(
-        endpoint_factory_slot: u32,
-        client_control: [u32; CLIENTS],
-        server_control: u32,
+        clients: [u32; CLIENTS],
+        server_slot: u32,
         time_control: u32,
         replacement_control: u32,
+        backup_route_slot: u32,
+        supervision: [u32; CLIENTS + 1],
+        replacement_supervision: u32,
     ) -> Self {
         Self {
-            endpoint_factory_slot,
-            client_control,
-            server_control,
             replacement_control,
+            replacement_supervision,
             time_control,
-            supervision: [0; CLIENTS + 1],
-            clients: [None; CLIENTS],
+            supervision,
+            clients: [Some(clients[0]), Some(clients[1])],
             replacement_control_closed: false,
-            server_slot: None,
+            server_slot: Some(server_slot),
             operations: [Operation::EMPTY; MAX_OPERATIONS],
-            backup_route_slot: None,
+            backup_route_slot: Some(backup_route_slot),
             retained: [Retained::EMPTY; MAX_RETAINED],
             pending_deliveries: [None; MAX_PENDING_DELIVERIES],
             high_water: [0; CLIENTS],
-            client_sessions: [0; CLIENTS],
+            client_sessions: [client_session(0), client_session(1)],
             next_server_operation_id: 1,
             next_retained_age: 1,
             next_pending_order: 1,
@@ -238,8 +219,8 @@ impl Broker {
     }
 
     pub fn run(&mut self) {
-        self.provision();
-        slime_rt::debug_write(b"[fabric] operation roles provisioned\n");
+        self.verify_graph();
+        slime_rt::debug_write(b"[fabric] operation endpoints ready\n");
         loop {
             let mut progressed = self.pump_pending_deliveries();
             for index in 0..CLIENTS {
@@ -264,50 +245,7 @@ impl Broker {
             if progressed {
                 continue;
             }
-            // Park across every live source at once. A dead participant leaves
-            // its authenticated control endpoint open so init can attach a
-            // replacement and the broker can mint fresh route authority.
-            let mut sources = [WaitSource::Endpoint(0); slime_rt::MAX_WAIT_SOURCES];
-            let mut count = 0;
-            for client in 0..CLIENTS {
-                if let Some(slot) = self.clients[client] {
-                    if self.can_receive_client(client) {
-                        sources[count] = WaitSource::Endpoint(slot);
-                        count += 1;
-                    }
-                    if self.has_pending_delivery(slot) {
-                        sources[count] = WaitSource::SendCapacity(slot);
-                        count += 1;
-                    }
-                    sources[count] = WaitSource::Supervision(self.supervision[client]);
-                    count += 1;
-                } else if client == 1 && !self.replacement_control_closed {
-                    sources[count] = WaitSource::Endpoint(self.replacement_control);
-                    count += 1;
-                }
-            }
-            if let Some(slot) = self.server_slot {
-                sources[count] = WaitSource::Endpoint(slot);
-                count += 1;
-            }
-            if self.server_slot.is_none()
-                && let Some(slot) = self.backup_route_slot
-            {
-                sources[count] = WaitSource::Endpoint(slot);
-                count += 1;
-            }
-            if !self.time_closed {
-                sources[count] = WaitSource::Endpoint(self.time_control);
-                count += 1;
-            }
-            if self.server_slot.is_some() {
-                sources[count] = WaitSource::Supervision(self.supervision[CLIENTS]);
-                count += 1;
-            }
-            if count == 0 {
-                return;
-            }
-            slime_rt::wait(&sources[..count]);
+            slime_rt::yield_now();
         }
     }
 
@@ -388,73 +326,21 @@ impl Broker {
         true
     }
 
-    /// C8.7 provisioning: mint both halves of every declared operation edge and
-    /// move each participant its exact narrowed role.
-    ///
-    /// The fabric keeps the opposite half of every edge, which is what lets it
-    /// broker at all. Each role is verified against the generated participant
-    /// table first: a component the graph does not declare on this route with
-    /// this direction is refused before any endpoint exists.
-    fn provision(&mut self) {
-        let route = operation_route_identity(ROUTE_NAME);
-        let backup_route = operation_route_identity(BACKUP_ROUTE_NAME);
+    fn verify_graph(&self) {
         let declared_clients: [&[u8]; CLIENTS] = [b"fabric-op-client", b"fabric-op-client-b"];
-        for (index, component) in declared_clients.iter().enumerate() {
+        for component in declared_clients {
             if declared_edges(component, ROUTE_NAME, DIRECTION_CLIENT) != 1 {
                 fail(b"operation client graph declaration");
             }
-            consume_request(self.client_control[index]);
-            self.supervision[index] =
-                consume_supervision(self.client_control[index], &route, DIRECTION_CLIENT);
-            let (fabric_side, participant_side) =
-                slime_rt::endpoint_create(self.endpoint_factory_slot)
-                    .unwrap_or_else(|_| fail(b"client endpoint"));
-            transfer_role(
-                self.client_control[index],
-                participant_side,
-                &route,
-                DIRECTION_CLIENT,
-            );
-            if index == 0 {
-                if declared_edges(component, BACKUP_ROUTE_NAME, DIRECTION_CLIENT) != 1 {
-                    fail(b"backup operation graph declaration");
-                }
-                let (fabric_side, participant_side) =
-                    slime_rt::endpoint_create(self.endpoint_factory_slot)
-                        .unwrap_or_else(|_| fail(b"backup client endpoint"));
-                transfer_role(
-                    self.client_control[index],
-                    participant_side,
-                    &backup_route,
-                    DIRECTION_CLIENT,
-                );
-                self.backup_route_slot = Some(fabric_side);
-            }
-            self.client_sessions[index] = client_session(index);
-            self.clients[index] = Some(fabric_side);
         }
-
+        if declared_edges(b"fabric-op-client", BACKUP_ROUTE_NAME, DIRECTION_CLIENT) != 1 {
+            fail(b"backup operation graph declaration");
+        }
         if declared_edges(b"fabric-op-server", ROUTE_NAME, DIRECTION_SERVER) != 1 {
             fail(b"operation server graph declaration");
         }
-        consume_request(self.server_control);
-        self.supervision[CLIENTS] =
-            consume_supervision(self.server_control, &route, DIRECTION_SERVER);
-        let (fabric_side, participant_side) = slime_rt::endpoint_create(self.endpoint_factory_slot)
-            .unwrap_or_else(|_| fail(b"server endpoint"));
-        transfer_role(
-            self.server_control,
-            participant_side,
-            &route,
-            DIRECTION_SERVER,
-        );
-        self.server_slot = Some(fabric_side);
     }
 
-    /// Provision client B's replacement on a fresh authenticated control
-    /// channel. Init binds this channel to the replacement executable before
-    /// scheduling it; correlation high-water and retained-result state remain
-    /// keyed to the same client index and session.
     fn pump_replacement(&mut self, client: usize) -> bool {
         if client != 1 || self.replacement_control_closed || self.clients[client].is_some() {
             return false;
@@ -462,51 +348,9 @@ impl Broker {
         if declared_edges(b"fabric-op-client-b-restart", ROUTE_NAME, DIRECTION_CLIENT) != 1 {
             fail(b"replacement operation graph declaration");
         }
-        let control = self.replacement_control;
-        let mut bytes = [0u8; MAX_MSG];
-        let mut caps = [0u64; MAX_CAPS_PER_MSG];
-        let length = match slime_rt::recv(control, &mut bytes, &mut caps) {
-            ERR_WOULDBLOCK => return false,
-            ERR_PEER_DEAD => {
-                self.replacement_control_closed = true;
-                slime_rt::debug_write(b"[fabric] replacement control closed\n");
-                return true;
-            }
-            value if value < 0 => fail(b"replacement supervision receive error"),
-            value => value as usize,
-        };
-        let route = route_identity(
-            ROUTE_NAME,
-            &navigation_operation::INTERFACE_IDENTITY,
-            CONTRACT_KIND_OPERATION,
-        );
-        if length != MAX_MSG || caps[0] == 0 {
-            release_caps(&caps);
-            fail(b"replacement supervision shape");
-        }
-        let descriptor = WireCapabilityTransfer::decode(&bytes)
-            .unwrap_or_else(|| fail(b"replacement supervision decode"));
-        if descriptor.magic != CAPABILITY_TRANSFER_MAGIC
-            || descriptor.version != TRANSFER_VERSION
-            || descriptor.status != 0
-            || descriptor.flags != 0
-            || descriptor.object_kind != OBJECT_KIND_SUPERVISION
-            || descriptor.direction != DIRECTION_CLIENT
-            || descriptor.rights_mask != RIGHT_SUPERVISE
-            || descriptor.route_identity != route
-        {
-            release_caps(&caps);
-            fail(b"replacement supervision authority");
-        }
-        for cap in caps.iter().skip(1).filter(|cap| **cap != 0) {
-            let _ = slime_rt::cap_drop(*cap as u32);
-        }
-        self.supervision[client] = caps[0] as u32;
-        consume_request(control);
-        let (fabric_side, participant_side) = slime_rt::endpoint_create(self.endpoint_factory_slot)
-            .unwrap_or_else(|_| fail(b"replacement client endpoint"));
-        transfer_role(control, participant_side, &route, DIRECTION_CLIENT);
-        self.clients[client] = Some(fabric_side);
+        self.clients[client] = Some(self.replacement_control);
+        self.supervision[client] = self.replacement_supervision;
+        self.replacement_control_closed = true;
         slime_rt::debug_write(b"[fabric] operation participant restarted\n");
         true
     }
@@ -1286,93 +1130,11 @@ fn declared_edges(component: &[u8], route: &str, direction: u32) -> usize {
         .count()
 }
 
-fn operation_route_identity(route: &str) -> [u8; 32] {
-    route_identity(
-        route,
-        &navigation_operation::INTERFACE_IDENTITY,
-        CONTRACT_KIND_OPERATION,
-    )
-}
-
 /// Per-client session identity. Distinct per client and distinct from
 /// `SERVER_SESSION`, so no client can present another's session or the
 /// transport's.
-fn client_session(client: usize) -> u64 {
+const fn client_session(client: usize) -> u64 {
     0x00c2_0000_0000_0001 + client as u64 * 0x0001_0000_0000_0000
-}
-
-/// Await one provisioning request on a control endpoint. The request's contents
-/// grant nothing — the caller's identity is the endpoint it arrived on — so it
-/// is consumed and discarded.
-fn consume_request(slot: u32) {
-    let mut bytes = [0u8; MAX_MSG];
-    let mut caps = [0u64; MAX_CAPS_PER_MSG];
-    loop {
-        match slime_rt::recv(slot, &mut bytes, &mut caps) {
-            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(slot)]),
-            value if value < 0 => fail(b"operation role request"),
-            _ => {
-                release_caps(&caps);
-                return;
-            }
-        }
-    }
-}
-
-/// Take the supervision handle a participant sent for its own role, verifying
-/// the descriptor names exactly the (route, direction) edge being provisioned.
-fn consume_supervision(control: u32, route: &[u8; 32], direction: u32) -> u32 {
-    let mut bytes = [0u8; MAX_MSG];
-    let mut caps = [0u64; MAX_CAPS_PER_MSG];
-    loop {
-        match slime_rt::recv(control, &mut bytes, &mut caps) {
-            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(control)]),
-            value if value < 0 => fail(b"supervision receive"),
-            value => {
-                if value as usize != MAX_MSG || caps[0] == 0 {
-                    release_caps(&caps);
-                    fail(b"supervision shape");
-                }
-                let descriptor = WireCapabilityTransfer::decode(&bytes)
-                    .unwrap_or_else(|| fail(b"supervision decode"));
-                if descriptor.magic != CAPABILITY_TRANSFER_MAGIC
-                    || descriptor.version != TRANSFER_VERSION
-                    || descriptor.status != 0
-                    || descriptor.flags != 0
-                    || descriptor.object_kind != OBJECT_KIND_SUPERVISION
-                    || descriptor.direction != direction
-                    || descriptor.rights_mask != RIGHT_SUPERVISE
-                    || descriptor.route_identity != *route
-                {
-                    release_caps(&caps);
-                    fail(b"supervision authority");
-                }
-                for cap in caps.iter().skip(1).filter(|cap| **cap != 0) {
-                    let _ = slime_rt::cap_drop(*cap as u32);
-                }
-                return caps[0] as u32;
-            }
-        }
-    }
-}
-
-/// Move one participant its narrowed role. `RIGHT_TRANSFER` is omitted, so the
-/// kernel makes the role non-delegable at the moment of transfer rather than by
-/// convention afterwards.
-fn transfer_role(control: u32, capability: u32, route: &[u8; 32], direction: u32) {
-    let descriptor = WireCapabilityTransfer {
-        magic: CAPABILITY_TRANSFER_MAGIC,
-        version: TRANSFER_VERSION,
-        status: 0,
-        flags: 0,
-        object_kind: OBJECT_KIND_ENDPOINT,
-        direction,
-        rights_mask: RIGHT_SEND | RIGHT_RECV,
-        route_identity: *route,
-    };
-    if slime_rt::cap_transfer(control, capability, &descriptor.encode()) != ERR_SUCCESS {
-        fail(b"operation role transfer");
-    }
 }
 
 /// Drop any capability that arrived on a record with no business carrying one,
@@ -1407,22 +1169,3 @@ fn fail(reason: &[u8]) -> ! {
 
 const _: () = assert!(slime_proto::fabric_operation::OPERATION_LEN == MAX_MSG);
 const _: () = assert!(slime_proto::fabric_time::TIME_ADVANCE_LEN == MAX_MSG);
-// Before server death the backup route is intentionally excluded: it is only
-// exercised after that death, when the server endpoint and supervision sources
-// are gone. This keeps the real worst-case set within the syscall ABI bound.
-const _: () = assert!(CLIENTS * 3 + 3 <= slime_rt::MAX_WAIT_SOURCES);
-// The same peak the generation resolved for this worker. Binding the two makes a
-// park set that outgrows the declared partition a compile error rather than a
-// boot-time overflow: the resolver rejects a partition above the kernel bound,
-// and this is what keeps the broker honest about which partition it is.
-// A graph declaring no operation plane resolves `WORKER_ABSENT` and is exempt:
-// this module is compiled into every `fabric-service`, including one whose
-// generation declares only a stream route, and there is no declared partition
-// there to agree with. Every graph that does declare the plane is checked
-// exactly as before.
-const _: () = assert!(
-    matches!(
-        fabric_worker_wait_sources("operation"),
-        fabric_profile::WORKER_ABSENT
-    ) || fabric_worker_wait_sources("operation") == CLIENTS * 3 + 3
-);

@@ -37,12 +37,12 @@ chooser, and the user's gesture is the audit record.
 ## Design sketch
 
 The chooser is a system component holding directory authority the
-requesting component lacks. Protocol: the requester opens a channel to
-the chooser declaring what it wants (kind, rights, purpose string); the
+requesting component lacks. Protocol: the requester uses its declared direct
+endpoint to ask the chooser for an object (kind, rights, purpose string); the
 chooser renders the selection; the user's gesture mints a single-object
 capability — derived from the chooser's own grant, narrowed to exactly
-the selected object and the declared rights — transferred back along the
-channel. The requesting component ends up with a capability it could
+the selected object and the declared rights — delegated back with the typed
+reply. The requesting component ends up with a capability it could
 not have obtained from the manifest or any peer.
 
 The minted capability is a narrow-only derive, so the pattern fits the

@@ -4,10 +4,9 @@
 
 The x86 gate proves the bounded native-call semantics. This gate boots the
 `sel4-call` image and proves the same participants run unmodified after `init`
-mints private control pairs, spawns the graph, and transfers each participant's
-supervision handle to the broker over that participant's authenticated channel.
-The post-spawn introductions are the observable that closes B25 without changing
-endpoint grants from moves into ambiguous multi-holder copies.
+creates private native endpoints, spawns the graph, and exports each
+participant's attenuated supervision authority to the broker. Matching imports
+prove the authority landed in the intended receiver without widening.
 """
 
 from __future__ import annotations
@@ -50,12 +49,10 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
             r"SLIME_GRAPH spawned task=\d+ child=\d+ component=fabric-call-client-b ",
             r"SLIME_GRAPH spawned task=\d+ child=\d+ component=fabric-call-server ",
             r"\[init\] call participants spawned",
-            r"SLIME_GRAPH capability transferred task=\d+ channel=\d+ "
-            r"side=producer kind=supervision rights=0x40000",
-            r"SLIME_GRAPH capability transferred task=\d+ channel=\d+ "
-            r"side=producer kind=supervision rights=0x40000",
-            r"SLIME_GRAPH capability transferred task=\d+ channel=\d+ "
-            r"side=producer kind=supervision rights=0x40000",
+            r"SLIME_GRAPH capability exported task=\d+ id=\d+ kind=supervision "
+            r"rights=0x40000 retain=0",
+            r"SLIME_GRAPH capability imported task=\d+ id=\d+ kind=supervision "
+            r"rights=0x40000 retain=0",
             r"\[init\] call supervision delegated",
             r"SLIME_GRAPH spawned task=\d+ child=\d+ component=fabric-call-time ",
             r"\[fabric\] call roles provisioned",
@@ -111,9 +108,9 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
         ),
     ),
     (
-        "terminal backpressure",
+        "bounded native ring backpressure",
         (
-            r"\[fabric\] terminal delivery queued",
+            r"\[fabric\] terminal delivery ring backpressured",
             r"\[fabric-call-client-b\] terminal backpressure recovered",
         ),
     ),
@@ -156,7 +153,7 @@ FAILURE_MARKERS: tuple[str, ...] = (
     r"call route missing",
     r"SLIME_GRAPH spawn (?:failed|unwound|unwind incomplete) .*",
     r"SLIME_GRAPH channel (?:recall|rollback) failed .*",
-    r"SLIME_GRAPH capability transfer rolled back .*",
+    r"SLIME_GRAPH capability (?:export|import|cancel) (?:failed|refused) .*",
     r"<<seL4\(CPU 0\) \[decodeInvocation",
     r"Caught cap fault",
     r"Caught vm fault",
@@ -363,13 +360,18 @@ def check_task_lifecycle(transcript: str) -> None:
     if exits.get(parent) != [0]:
         fail(f"init task {parent} exit statuses were {exits.get(parent, [])}, expected [0]")
 
-    introductions = re.findall(
-        rf"SLIME_GRAPH capability transferred task={parent} channel=\d+ "
-        r"side=producer kind=supervision rights=0x40000",
+    exports = re.findall(
+        rf"SLIME_GRAPH capability exported task={parent} id=(\d+) kind=supervision "
+        r"rights=0x40000 retain=0",
         transcript,
     )
-    if len(introductions) != 3:
-        fail(f"parent delivered {len(introductions)} supervision introductions, expected 3")
+    imports = re.findall(
+        r"SLIME_GRAPH capability imported task=\d+ id=(\d+) kind=supervision "
+        r"rights=0x40000 retain=0",
+        transcript,
+    )
+    if len(exports) != 3 or sorted(exports) != sorted(imports):
+        fail(f"parent export/import ids were {exports!r}/{imports!r}, expected 3 matching introductions")
 
 
 def check_transcript(transcript: str) -> None:

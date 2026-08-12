@@ -3,7 +3,7 @@
 #[path = "../launch_context.rs"]
 mod launch_context;
 use slime_proto::spawn::{CAPABILITY_ROLE_STDIN, CAPABILITY_ROLE_WORKING_DIRECTORY};
-use slime_rt::{ERR_PEER_DEAD, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_DIRECTORY_PATH, MAX_MSG};
+use slime_rt::{ERR_PEER_DEAD, MAX_CAPS_PER_MSG, MAX_DIRECTORY_PATH, MAX_MSG};
 
 slime_rt::entry!(main);
 
@@ -26,18 +26,12 @@ fn main(_startup_arg: u32) {
     if context.capability_roles & CAPABILITY_ROLE_STDIN != 0 {
         let mut payload = [0u8; MAX_MSG];
         let mut caps = [0u64; MAX_CAPS_PER_MSG];
-        loop {
-            match slime_rt::recv(stdin_slot, &mut payload, &mut caps) {
-                ERR_WOULDBLOCK => slime_rt::wait(&[slime_rt::WaitSource::Endpoint(stdin_slot)]),
-                ERR_PEER_DEAD => slime_rt::exit(1),
-                n if n < 0 => slime_rt::exit(1),
-                n => {
-                    if &payload[..n as usize] != b"data" || caps.iter().any(|slot| *slot != 0) {
-                        slime_rt::exit(1);
-                    }
-                    break;
-                }
-            }
+        let n = slime_rt::recv_blocking(stdin_slot, &mut payload, &mut caps);
+        if n == ERR_PEER_DEAD || n < 0 {
+            slime_rt::exit(1);
+        }
+        if &payload[..n as usize] != b"data" || caps.iter().any(|slot| *slot != 0) {
+            slime_rt::exit(1);
         }
     }
     slime_rt::debug_write(b"[echo-agent] command=echo args=");

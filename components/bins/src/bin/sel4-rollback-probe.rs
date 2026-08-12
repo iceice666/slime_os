@@ -41,8 +41,6 @@ use slime_proto::block::{self, WireBlockReply, WireBlockRequest};
 
 /// The block capability, granted to this component by the generation.
 const BLOCK_SLOT: u32 = 1;
-/// The endpoint `init` grants only to the instance it spawns.
-const RUN_TOKEN_SLOT: u32 = 0;
 
 const SECTOR_BYTES: usize = 512;
 
@@ -64,8 +62,8 @@ const GENERATION_ROOT: [u8; 32] = [0x44; 32];
 
 slime_rt::entry!(main);
 
-fn main(_startup_arg: u32) {
-    if !spawned_instance() {
+fn main(startup_arg: u32) {
+    if startup_arg == 0 {
         slime_rt::debug_write(b"[sel4-rollback-probe] idle without a run token\n");
         slime_rt::exit(0);
     }
@@ -407,12 +405,6 @@ fn decode_reply(bytes: &[u8; block::REPLY_LEN]) -> WireBlockReply {
         status: -1,
         sectors_done: 0,
     })
-}
-
-fn spawned_instance() -> bool {
-    let mut bytes = [0u8; slime_rt::MAX_MSG];
-    let mut caps = [0u64; slime_rt::MAX_CAPS_PER_MSG];
-    slime_rt::recv(RUN_TOKEN_SLOT, &mut bytes, &mut caps) != slime_rt::ERR_BAD_CAP
 }
 
 fn slot_number(slot: Slot) -> u8 {

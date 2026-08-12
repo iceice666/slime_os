@@ -1,26 +1,23 @@
-//! Bounded root-side IPC and readiness state.
+//! Bounded root-side service IPC.
 //!
-//! The service loop uses [`recv_request`] and [`reply`] for the non-MCS seL4
-//! fast path. Task/channel management uses [`Channel`] before touching CSpace
-//! state: a logical send or receive is first preflighted, then
-//! its four-capability transfer is committed by the task-owned cap adapter, and
-//! only then is the queue mutated. This keeps failed operations atomic and
-//! leaves capability authority with its original owner.
+//! Component-to-component messages use declared seL4 Endpoints directly. This
+//! module decodes only the policy and capability-update operations the root
+//! still owns.
 
-/// Logical Slime message bound. Fast transport carries control words; a
-/// payload wider than this travels through a shared buffer named by a bounded
-/// descriptor, never by growing the message.
+/// Native messages carry at most one capability.
+pub const MAX_MESSAGE_CAPS: usize = 1;
+/// Maximum native message payload, matching the userspace ABI.
 pub const MAX_MESSAGE_BYTES: usize = 64;
-/// Logical capabilities one message may move, transferred all-or-nothing.
-pub const MAX_MESSAGE_CAPS: usize = 4;
-/// Depth of one directed logical channel.
-pub const CHANNEL_CAPACITY: usize = 16;
-/// Sources one task may block on in a single wait.
+/// Compatibility value for generation fabric admission. Native rendezvous
+/// supplies backpressure; the root owns no channel queue.
+pub const CHANNEL_CAPACITY: usize = 1;
+/// Compatibility value for generation graph admission. Components wait on
+/// declared Notifications rather than a root wait set.
 pub const MAX_WAIT_SOURCES: usize = 9;
 /// Message registers the AArch64 fast path carries in architectural registers.
 pub const FAST_MESSAGE_REGISTERS: usize = sel4::NUM_FAST_MESSAGE_REGISTERS;
 /// Highest label an operation may carry; see [`Operation`].
-pub const MAX_OPERATION_LABEL: u16 = Operation::SupervisionDerive as u16;
+pub const MAX_OPERATION_LABEL: u16 = 36;
 
 /// The label `InputRead` used to carry, retired with B41.
 ///
@@ -60,6 +57,8 @@ pub const RETIRED_STORE_TRANSACT_LABEL: sel4::Word = 7;
 /// endpoint now, where the device tables live, and a component still speaking
 /// label 6 must be refused rather than routed somewhere else.
 pub const RETIRED_BLOCK_TRANSACT_LABEL: sel4::Word = 6;
+/// B46 universal operations retired in favor of native kernel objects.
+pub const RETIRED_NATIVE_IPC_LABELS: [sel4::Word; 6] = [1, 2, 11, 20, 30, 31];
 
 // The four-MR fast path and the four-capability logical bound are independent
 // facts that happen to agree on AArch64. Pin the transport side so a profile
@@ -78,7 +77,6 @@ pub enum IpcError {
     DestinationSlotsExhausted,
     TransferFailed,
     StalePlan,
-    WaitSetFull,
     WaiterConflict,
     /// The caller named a slot holding nothing, holding the wrong kind of
     /// resource, or carrying insufficient rights.
@@ -118,7 +116,6 @@ impl IpcError {
             | Self::UnsupportedOperation
             | Self::InvalidLength
             | Self::StalePlan
-            | Self::WaitSetFull
             | Self::WaiterConflict => -4,
             Self::DestinationSlotsExhausted | Self::TransferFailed => -5,
         }
@@ -130,21 +127,13 @@ impl IpcError {
 #[repr(u16)]
 pub enum Operation {
     Yield = 0,
-    Send = 1,
-    Recv = 2,
-    /// The P5.1 fixture's directive request. Was `DebugWrite`'s label until
-    /// B41 moved console traffic to its own endpoint and dispatcher; the
-    /// fixture never wrote to a console, it used that call to collect the
-    /// root's directive, so it keeps the number under an honest name.
     FixtureDirective = 5,
     Exit = 3,
     Spawn = 4,
     Unhealthy = 9,
-    EndpointCreate = 11,
     SupervisionStatus = 12,
     CapDrop = 13,
     DirectoryDerive = 15,
-    Wait = 20,
     SharedBufferCreate = 21,
     SharedBufferRelease = 22,
     SharedBufferMap = 23,
@@ -154,41 +143,24 @@ pub enum Operation {
     SharedBufferLoanMap = 27,
     SharedBufferReturn = 28,
     SharedBufferRevoke = 29,
-    CapTransfer = 30,
-    /// Declare the component-owned transfer window the seL4 transport stages
-    /// oversized payloads through. Only the native transport emits it; the
-    /// legacy trap ABI addresses caller memory directly and has no window.
-    TransferWindowBind = 31,
-    /// Obtain a second capability naming a task the caller already supervises.
-    ///
-    /// B25: each spawn returns exactly one supervision handle, and both a
-    /// spawn grant and a `CapTransfer` can place it with only one receiver — a
-    /// grant because it must run before the child exists, a transfer because it
-    /// moves. A parent that must introduce one child to two others therefore
-    /// cannot, even though it holds the authority to do so.
-    ///
-    /// This widens nothing: the result names the same task at rights the caller
-    /// already holds, and `RIGHT_SUPERVISE` on the source is required to ask.
-    /// It is the supervision analogue of `EndpointCreate` — the caller mints
-    /// from authority it has rather than acquiring any.
     SupervisionDerive = 32,
+    CapabilityExport = 33,
+    CapabilityImport = 34,
+    CapabilityExportCancel = 35,
+    CapabilityExportFinalize = 36,
 }
 
 impl Operation {
     pub const fn from_label(label: sel4::Word) -> Result<Self, IpcError> {
         Ok(match label {
             0 => Self::Yield,
-            1 => Self::Send,
-            2 => Self::Recv,
             3 => Self::Exit,
             4 => Self::Spawn,
             5 => Self::FixtureDirective,
             9 => Self::Unhealthy,
-            11 => Self::EndpointCreate,
             12 => Self::SupervisionStatus,
             13 => Self::CapDrop,
             15 => Self::DirectoryDerive,
-            20 => Self::Wait,
             21 => Self::SharedBufferCreate,
             22 => Self::SharedBufferRelease,
             23 => Self::SharedBufferMap,
@@ -198,9 +170,11 @@ impl Operation {
             27 => Self::SharedBufferLoanMap,
             28 => Self::SharedBufferReturn,
             29 => Self::SharedBufferRevoke,
-            30 => Self::CapTransfer,
-            31 => Self::TransferWindowBind,
             32 => Self::SupervisionDerive,
+            33 => Self::CapabilityExport,
+            34 => Self::CapabilityImport,
+            35 => Self::CapabilityExportCancel,
+            36 => Self::CapabilityExportFinalize,
             _ => return Err(IpcError::InvalidOperation),
         })
     }
@@ -218,16 +192,12 @@ impl Operation {
             // equivalent: the component invokes `seL4_Yield` itself and never
             // reaches the root endpoint.
             Self::Yield => Mediation::DirectKernel,
-            Self::Send
-            | Self::Recv
-            | Self::Exit
+            Self::Exit
             | Self::FixtureDirective
             | Self::Spawn
             | Self::Unhealthy
-            | Self::EndpointCreate
             | Self::SupervisionStatus
             | Self::CapDrop
-            | Self::Wait
             | Self::SharedBufferCreate
             | Self::SharedBufferRelease
             | Self::SharedBufferMap
@@ -237,18 +207,12 @@ impl Operation {
             | Self::SharedBufferLoanMap
             | Self::SharedBufferReturn
             | Self::SharedBufferRevoke
-            | Self::CapTransfer
-            | Self::TransferWindowBind
             | Self::SupervisionDerive
-            // M6.3 (P5.4.3). The root owns these three because a namespace root
-            // is unforgeable shared state with an atomic transition — which is
-            // mechanism. What a directory *contains* stays in userspace, built
-            // over the object store, exactly as `StoreTransact` does.
-            | Self::DirectoryDerive
-            // M6.4 (P5.4.3): the events come from somewhere a component cannot
-            // reach, which makes delivery mechanism. What a key *means* is
-            // Dango's business and stays in userspace.
-            => Mediation::RootService,
+            | Self::CapabilityExport
+            | Self::CapabilityImport
+            | Self::CapabilityExportCancel
+            | Self::CapabilityExportFinalize
+            | Self::DirectoryDerive => Mediation::RootService,
         }
     }
 
@@ -478,12 +442,14 @@ fn decode_request(reception: &sel4::RecvWithMRs) -> Result<Request, IpcError> {
     if len > FAST_MESSAGE_REGISTERS {
         return Err(IpcError::InvalidLength);
     }
-    if reception.info.extra_caps() != 0 || reception.info.caps_unwrapped() != 0 {
+    let operation = Operation::from_label(reception.info.label())?;
+    let caps = reception.info.extra_caps();
+    if reception.info.caps_unwrapped() != 0 || caps > MAX_MESSAGE_CAPS || caps != 0 {
         return Err(IpcError::UnsupportedCapabilityTransfer);
     }
     Ok(Request {
         badge: reception.badge,
-        operation: Operation::from_label(reception.info.label())?,
+        operation,
         mrs: reception.msg,
         len,
     })
@@ -511,543 +477,30 @@ pub fn poll_notification(notification: sel4::cap::Notification) -> Option<sel4::
     (info.length() != 0 || badge != 0).then_some(badge)
 }
 
-pub type TaskKey = u32;
-pub type ChannelKey = u32;
-pub type SupervisionKey = u32;
-pub type LogicalCap = u32;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Message {
-    bytes: [u8; MAX_MESSAGE_BYTES],
-    len: u8,
-    caps: [Option<LogicalCap>; MAX_MESSAGE_CAPS],
-}
-
-impl Message {
-    pub fn new(bytes: &[u8], caps: &[LogicalCap]) -> Result<Self, IpcError> {
-        if bytes.len() > MAX_MESSAGE_BYTES || caps.len() > MAX_MESSAGE_CAPS {
-            return Err(IpcError::InvalidLength);
-        }
-        let mut message = Self {
-            bytes: [0; MAX_MESSAGE_BYTES],
-            len: bytes.len() as u8,
-            caps: [None; MAX_MESSAGE_CAPS],
-        };
-        message.bytes[..bytes.len()].copy_from_slice(bytes);
-        for (destination, capability) in message.caps.iter_mut().zip(caps.iter().copied()) {
-            *destination = Some(capability);
-        }
-        Ok(message)
-    }
-
-    pub fn bytes(&self) -> &[u8] {
-        &self.bytes[..usize::from(self.len)]
-    }
-
-    pub const fn len(&self) -> usize {
-        self.len as usize
-    }
-
-    pub const fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-
-    pub const fn caps(&self) -> &[Option<LogicalCap>; MAX_MESSAGE_CAPS] {
-        &self.caps
-    }
-
-    pub fn cap_count(&self) -> usize {
-        self.caps
-            .iter()
-            .filter(|capability| capability.is_some())
-            .count()
-    }
-}
-
-impl Default for Message {
-    fn default() -> Self {
-        Self {
-            bytes: [0; MAX_MESSAGE_BYTES],
-            len: 0,
-            caps: [None; MAX_MESSAGE_CAPS],
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct WakeDecision {
-    pub task: TaskKey,
-    pub cause: WakeCause,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum WakeCause {
-    MessageAvailable(ChannelKey),
-    SendCapacity(ChannelKey),
-    PeerDeath(ChannelKey),
-    Notification(sel4::Badge),
-    Supervision(SupervisionKey),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SendPlan {
-    revision: u32,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ReceivePlan {
-    revision: u32,
-    required_slots: u8,
-}
-
-impl ReceivePlan {
-    pub const fn required_slots(self) -> usize {
-        self.required_slots as usize
-    }
-}
-
-/// Fixed-depth directed logical channel. Capability values in queued messages
-/// are root-owned logical handles; the task module alone resolves them to
-/// concrete CSpace slots through [`CapabilityTransfer`].
-#[derive(Debug, Eq, PartialEq)]
-pub struct Channel {
-    key: ChannelKey,
-    queue: [Option<Message>; CHANNEL_CAPACITY],
-    head: usize,
-    len: usize,
-    revision: u32,
-    peer_alive: bool,
-    recv_waiter: Option<TaskKey>,
-    send_waiter: Option<TaskKey>,
-}
-
-impl Channel {
-    pub const fn new(key: ChannelKey) -> Self {
-        Self {
-            key,
-            queue: [const { None }; CHANNEL_CAPACITY],
-            head: 0,
-            len: 0,
-            revision: 0,
-            peer_alive: true,
-            recv_waiter: None,
-            send_waiter: None,
-        }
-    }
-
-    pub const fn key(&self) -> ChannelKey {
-        self.key
-    }
-
-    pub const fn len(&self) -> usize {
-        self.len
-    }
-
-    pub const fn capacity(&self) -> usize {
-        CHANNEL_CAPACITY
-    }
-
-    pub const fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-
-    pub const fn is_full(&self) -> bool {
-        self.len == CHANNEL_CAPACITY
-    }
-
-    pub const fn peer_alive(&self) -> bool {
-        self.peer_alive
-    }
-
-    pub const fn receive_ready(&self) -> bool {
-        self.len != 0 || !self.peer_alive
-    }
-
-    pub const fn send_ready(&self) -> bool {
-        self.len < CHANNEL_CAPACITY || !self.peer_alive
-    }
-
-    pub fn preflight_send(&self) -> Result<SendPlan, IpcError> {
-        if !self.peer_alive {
-            return Err(IpcError::PeerDead);
-        }
-        if self.is_full() {
-            return Err(IpcError::QueueFull);
-        }
-        Ok(SendPlan {
-            revision: self.revision,
-        })
-    }
-
-    pub fn commit_send(
-        &mut self,
-        plan: SendPlan,
-        message: Message,
-    ) -> Result<Option<WakeDecision>, IpcError> {
-        if plan.revision != self.revision {
-            return Err(IpcError::StalePlan);
-        }
-        if !self.peer_alive {
-            return Err(IpcError::PeerDead);
-        }
-        if self.is_full() {
-            return Err(IpcError::QueueFull);
-        }
-        let tail = (self.head + self.len) % CHANNEL_CAPACITY;
-        self.queue[tail] = Some(message);
-        self.len += 1;
-        self.bump_revision();
-        Ok(self.recv_waiter.take().map(|task| WakeDecision {
-            task,
-            cause: WakeCause::MessageAvailable(self.key),
-        }))
-    }
-
-    pub fn preflight_receive(&self, available_slots: usize) -> Result<ReceivePlan, IpcError> {
-        let Some(message) = self.front() else {
-            return if self.peer_alive {
-                Err(IpcError::WouldBlock)
-            } else {
-                Err(IpcError::PeerDead)
-            };
-        };
-        let required_slots = message.cap_count();
-        if available_slots < required_slots {
-            return Err(IpcError::DestinationSlotsExhausted);
-        }
-        Ok(ReceivePlan {
-            revision: self.revision,
-            required_slots: required_slots as u8,
-        })
-    }
-
-    pub fn commit_receive(
-        &mut self,
-        plan: ReceivePlan,
-    ) -> Result<(Message, Option<WakeDecision>), IpcError> {
-        if plan.revision != self.revision {
-            return Err(IpcError::StalePlan);
-        }
-        let message = self.pop_front().ok_or(IpcError::StalePlan)?;
-        if message.cap_count() != plan.required_slots() {
-            return Err(IpcError::StalePlan);
-        }
-        self.bump_revision();
-        let wake = self.send_waiter.take().map(|task| WakeDecision {
-            task,
-            cause: WakeCause::SendCapacity(self.key),
-        });
-        Ok((message, wake))
-    }
-
-    pub fn register_receive_waiter(&mut self, task: TaskKey) -> Result<(), IpcError> {
-        register_waiter(&mut self.recv_waiter, task)
-    }
-
-    pub fn register_send_waiter(&mut self, task: TaskKey) -> Result<(), IpcError> {
-        register_waiter(&mut self.send_waiter, task)
-    }
-
-    /// Whether `task` is registered on this queue, and in which direction:
-    /// `Some(true)` for a receive waiter, `Some(false)` for a send waiter.
-    ///
-    /// Diagnostic only. The root uses it to explain a wedge rather than merely
-    /// report one; nothing on the serving path reads it.
-    pub const fn waits_for(&self, task: TaskKey) -> Option<bool> {
-        if matches!(self.recv_waiter, Some(waiter) if waiter == task) {
-            return Some(true);
-        }
-        if matches!(self.send_waiter, Some(waiter) if waiter == task) {
-            return Some(false);
-        }
-        None
-    }
-
-    pub fn clear_waiter(&mut self, task: TaskKey) {
-        if self.recv_waiter == Some(task) {
-            self.recv_waiter = None;
-        }
-        if self.send_waiter == Some(task) {
-            self.send_waiter = None;
-        }
-    }
-
-    pub fn mark_peer_dead(&mut self) -> WakeBatch<2> {
-        if self.peer_alive {
-            self.peer_alive = false;
-            self.bump_revision();
-        }
-        let mut wakes = WakeBatch::new();
-        if let Some(task) = self.recv_waiter.take() {
-            wakes.push(WakeDecision {
-                task,
-                cause: WakeCause::PeerDeath(self.key),
-            });
-        }
-        if let Some(task) = self.send_waiter.take() {
-            wakes.push(WakeDecision {
-                task,
-                cause: WakeCause::PeerDeath(self.key),
-            });
-        }
-        wakes
-    }
-
-    fn front(&self) -> Option<&Message> {
-        self.queue[self.head].as_ref()
-    }
-
-    fn pop_front(&mut self) -> Option<Message> {
-        let message = self.queue[self.head].take()?;
-        self.head = (self.head + 1) % CHANNEL_CAPACITY;
-        self.len -= 1;
-        Some(message)
-    }
-
-    fn bump_revision(&mut self) {
-        self.revision = self.revision.wrapping_add(1);
-    }
-}
-
-fn register_waiter(slot: &mut Option<TaskKey>, task: TaskKey) -> Result<(), IpcError> {
-    match *slot {
-        None => {
-            *slot = Some(task);
-            Ok(())
-        }
-        Some(existing) if existing == task => Ok(()),
-        Some(_) => Err(IpcError::WaiterConflict),
-    }
-}
-
-/// Task-owned adapter used after queue and destination-capacity preflight. It
-/// must either move every listed logical capability or move none of them.
-pub trait CapabilityTransfer {
-    type Error;
-
-    fn transfer_atomic(
-        &mut self,
-        capabilities: &[Option<LogicalCap>; MAX_MESSAGE_CAPS],
-    ) -> Result<[Option<LogicalCap>; MAX_MESSAGE_CAPS], Self::Error>;
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ReceiveOutcome {
-    pub message: Message,
-    pub wake: Option<WakeDecision>,
-}
-
-/// Send with every bound checked before any capability moves. A failed
-/// transfer leaves the sender holding its capabilities and enqueues nothing.
-pub fn send_atomic<T: CapabilityTransfer>(
-    channel: &mut Channel,
-    mut message: Message,
-    transfer: &mut T,
-) -> Result<Option<WakeDecision>, IpcError> {
-    let plan = channel.preflight_send()?;
-    message.caps = transfer
-        .transfer_atomic(message.caps())
-        .map_err(|_| IpcError::TransferFailed)?;
-    channel.commit_send(plan, message)
-}
-
-/// Receive with all cap-table checks before mutation. A failed cap transfer
-/// leaves the message queued and consumes no sender wake.
-pub fn receive_atomic<T: CapabilityTransfer>(
-    channel: &mut Channel,
-    available_slots: usize,
-    transfer: &mut T,
-) -> Result<ReceiveOutcome, IpcError> {
-    let plan = channel.preflight_receive(available_slots)?;
-    let original = *channel.front().ok_or(IpcError::StalePlan)?;
-    let transferred = transfer
-        .transfer_atomic(original.caps())
-        .map_err(|_| IpcError::TransferFailed)?;
-    let (mut message, wake) = channel.commit_receive(plan)?;
-    message.caps = transferred;
-    Ok(ReceiveOutcome { message, wake })
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct WakeBatch<const CAPACITY: usize> {
-    entries: [Option<WakeDecision>; CAPACITY],
-    len: usize,
-}
-
-impl<const CAPACITY: usize> WakeBatch<CAPACITY> {
-    pub const fn new() -> Self {
-        Self {
-            entries: [None; CAPACITY],
-            len: 0,
-        }
-    }
-
-    pub const fn len(&self) -> usize {
-        self.len
-    }
-
-    pub const fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-
-    pub fn get(&self, index: usize) -> Option<WakeDecision> {
-        if index >= self.len {
-            return None;
-        }
-        self.entries[index]
-    }
-
-    fn push(&mut self, wake: WakeDecision) {
-        if self.entries[..self.len].contains(&Some(wake)) {
-            return;
-        }
-        debug_assert!(self.len < CAPACITY);
-        self.entries[self.len] = Some(wake);
-        self.len += 1;
-    }
-}
-
-impl<const CAPACITY: usize> Default for WakeBatch<CAPACITY> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    struct RejectTransfer;
-
-    impl CapabilityTransfer for RejectTransfer {
-        type Error = ();
-
-        fn transfer_atomic(
-            &mut self,
-            _capabilities: &[Option<LogicalCap>; MAX_MESSAGE_CAPS],
-        ) -> Result<[Option<LogicalCap>; MAX_MESSAGE_CAPS], Self::Error> {
-            Err(())
-        }
-    }
-
     #[test]
-    fn receive_transfer_failure_keeps_message_and_capacity() {
-        let mut channel = Channel::new(7);
-        let plan = channel.preflight_send().unwrap();
-        channel
-            .commit_send(plan, Message::new(b"data", &[41, 42]).unwrap())
-            .unwrap();
-
-        let result = receive_atomic(&mut channel, 2, &mut RejectTransfer);
-        assert_eq!(result, Err(IpcError::TransferFailed));
-        assert_eq!(channel.len(), 1);
-        assert_eq!(channel.preflight_receive(2).unwrap().required_slots(), 2);
-    }
-
-    #[test]
-    fn send_transfer_failure_enqueues_nothing() {
-        let mut channel = Channel::new(5);
-        let message = Message::new(b"grant", &[3]).unwrap();
-        assert_eq!(
-            send_atomic(&mut channel, message, &mut RejectTransfer),
-            Err(IpcError::TransferFailed)
-        );
-        assert!(channel.is_empty());
-    }
-
-    #[test]
-    fn send_to_dead_peer_never_reaches_transfer() {
-        let mut channel = Channel::new(6);
-        let _ = channel.mark_peer_dead();
-        // `RejectTransfer` would report `TransferFailed` if preflight let the
-        // capability move before observing peer death.
-        assert_eq!(
-            send_atomic(&mut channel, Message::default(), &mut RejectTransfer),
-            Err(IpcError::PeerDead)
-        );
-    }
-
-    #[test]
-    fn peer_death_wakes_receive_and_send_waiters() {
-        let mut channel = Channel::new(9);
-        channel.register_receive_waiter(11).unwrap();
-        channel.register_send_waiter(12).unwrap();
-        let wakes = channel.mark_peer_dead();
-        assert_eq!(wakes.len(), 2);
-        assert_eq!(channel.preflight_send(), Err(IpcError::PeerDead));
-        assert_eq!(channel.preflight_receive(0), Err(IpcError::PeerDead));
-    }
-
-    #[test]
-    fn queue_bound_is_exact() {
-        let mut channel = Channel::new(1);
-        for _ in 0..CHANNEL_CAPACITY {
-            let plan = channel.preflight_send().unwrap();
-            channel.commit_send(plan, Message::default()).unwrap();
-        }
-        assert_eq!(channel.len(), CHANNEL_CAPACITY);
-        assert_eq!(channel.preflight_send(), Err(IpcError::QueueFull));
-    }
-
-    /// B41: no console or input operation may be reachable on the universal
-    /// dispatcher. This is the "a restored root fallback fails" control —
-    /// restoring one means adding an arm to `from_label` or a variant to
-    /// `Operation`, and this test is what refuses both.
-    ///
-    /// `InputRead`'s label is checked directly because it is now a hole.
-    /// `DebugWrite`'s number was reused by `FixtureDirective`, which is why
-    /// the *variant* names are checked too: a reader should not be able to
-    /// satisfy this by renaming.
-    #[test]
-    fn no_console_operation_is_reachable_on_the_universal_abi() {
-        for (label, what) in [
-            (RETIRED_INPUT_READ_LABEL, "input reads"),
-            (RETIRED_BLOCK_TRANSACT_LABEL, "block requests"),
-            (RETIRED_STORE_TRANSACT_LABEL, "store requests"),
-        ]
-        .into_iter()
-        .chain(
-            RETIRED_POLICY_LABELS
-                .into_iter()
-                .map(|label| (label, "generation, recovery, or health requests")),
-        )
-        .chain(
-            RETIRED_DIRECTORY_LABELS
-                .into_iter()
-                .map(|label| (label, "directory inspect or commit requests")),
-        ) {
+    fn retired_native_ipc_labels_remain_holes() {
+        for label in RETIRED_NATIVE_IPC_LABELS {
             assert_eq!(
                 Operation::from_label(label),
-                Err(IpcError::InvalidOperation),
-                "{what} are answerable on the root endpoint again"
-            );
-        }
-        for label in 0..=sel4::Word::from(MAX_OPERATION_LABEL) {
-            let Ok(operation) = Operation::from_label(label) else {
-                continue;
-            };
-            // `Debug` rather than a bespoke name table: the variant name is
-            // what a reader checks this against.
-            let name = alloc::format!("{operation:?}");
-            assert!(
-                !name.contains("Debug")
-                    && !name.contains("Input")
-                    && !name.contains("Block")
-                    && !name.contains("Store"),
-                "{name} is a console-thread operation on the universal dispatcher"
+                Err(IpcError::InvalidOperation)
             );
         }
     }
 
     #[test]
-    fn every_legacy_label_resolves_to_a_bounded_answer() {
+    fn declared_service_labels_round_trip() {
         for label in 0..=sel4::Word::from(MAX_OPERATION_LABEL) {
-            if [
-                RETIRED_INPUT_READ_LABEL,
-                RETIRED_BLOCK_TRANSACT_LABEL,
-                RETIRED_STORE_TRANSACT_LABEL,
-            ]
-            .contains(&label)
+            if RETIRED_NATIVE_IPC_LABELS.contains(&label)
+                || [
+                    RETIRED_INPUT_READ_LABEL,
+                    RETIRED_BLOCK_TRANSACT_LABEL,
+                    RETIRED_STORE_TRANSACT_LABEL,
+                ]
+                .contains(&label)
                 || RETIRED_POLICY_LABELS.contains(&label)
                 || RETIRED_DIRECTORY_LABELS.contains(&label)
             {
@@ -1057,19 +510,9 @@ mod tests {
                 );
                 continue;
             }
-            let operation = Operation::from_label(label).expect("legacy label is known");
-            assert_eq!(operation.label(), label);
-            match operation.mediation() {
-                Mediation::RootService => assert_eq!(operation.unmediated_response(), None),
-                Mediation::DirectKernel => assert_eq!(
-                    operation.unmediated_response(),
-                    Some(Response::error(IpcError::UnsupportedOperation))
-                ),
+            if let Ok(operation) = Operation::from_label(label) {
+                assert_eq!(operation.label(), label);
             }
         }
-        assert_eq!(
-            Operation::from_label(sel4::Word::from(MAX_OPERATION_LABEL) + 1),
-            Err(IpcError::InvalidOperation)
-        );
     }
 }

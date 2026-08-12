@@ -17,13 +17,12 @@
 //! * a slot holding no input capability is refused, so reading keys is
 //!   authority rather than ambient.
 
-use slime_rt::{InputKey, MAX_CAPS_PER_MSG, MAX_MSG};
+use slime_rt::InputKey;
 
 /// The input capability the generation grants this component.
 const INPUT_SLOT: u32 = 1;
-/// The endpoint `init` grants only to the instance it spawns. Also the slot
-/// holding no input capability, for the refusal arm.
-const RUN_TOKEN_SLOT: u32 = 0;
+/// A slot holding no input capability, for the refusal arm.
+const EMPTY_SLOT: u32 = 0;
 
 /// What the plane's script types, in order. Kept in step with
 /// `slime-root/src/main.rs::input_script`.
@@ -31,8 +30,8 @@ const EXPECTED: &[u8] = b"ab c\n";
 
 slime_rt::entry!(main);
 
-fn main(_startup_arg: u32) {
-    if !spawned_instance() {
+fn main(startup_arg: u32) {
+    if startup_arg == 0 {
         slime_rt::debug_write(b"[sel4-input-probe] idle without a run token\n");
         slime_rt::exit(0);
     }
@@ -40,7 +39,7 @@ fn main(_startup_arg: u32) {
     // A slot with no input capability. Checked first, so a mechanism that
     // ignored the capability entirely could not pass the arms below by
     // accident.
-    if slime_rt::input_read(RUN_TOKEN_SLOT).is_ok() {
+    if slime_rt::input_read(EMPTY_SLOT).is_ok() {
         fail(b"an ungranted slot answered");
     }
     slime_rt::debug_write(b"[sel4-input-probe] ungranted slot refused\n");
@@ -84,12 +83,6 @@ fn main(_startup_arg: u32) {
     slime_rt::debug_write(b"[sel4-input-probe] exhausted script ends the reader\n");
 
     slime_rt::debug_write(b"[sel4-input-probe] input plane complete\n");
-}
-
-fn spawned_instance() -> bool {
-    let mut bytes = [0u8; MAX_MSG];
-    let mut caps = [0u64; MAX_CAPS_PER_MSG];
-    slime_rt::recv(RUN_TOKEN_SLOT, &mut bytes, &mut caps) != slime_rt::ERR_BAD_CAP
 }
 
 fn fail(reason: &[u8]) -> ! {

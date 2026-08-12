@@ -7,7 +7,7 @@
       name = "init";
       object = "sha256:init";
       role = "init";
-      spawnBudget = 0;
+      spawnBudget = 1;
     };
     {
       commandProfile = [];
@@ -30,14 +30,14 @@
       transferable = true;
     };
     {
-      name = "service-spawn";
+      name = "init-console";
       rights = [
-        "send";
-        "recv";
+        "exec";
+        "spawn";
       ];
       source = "init";
-      target = "init";
-      transferable = true;
+      target = "console";
+      transferable = false;
     };
   ];
   health = {
@@ -56,7 +56,7 @@
           slot = 0;
         };
         {
-          grant = "service-spawn";
+          grant = "init-console";
           slot = 1;
         };
       ];
@@ -80,7 +80,7 @@
       executable = "console";
       health = "required";
       name = "console";
-      owner = "root";
+      owner = "init";
     };
   ];
   mintedBindings = [];

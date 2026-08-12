@@ -39,13 +39,6 @@ use slime_proto::block::{self, WireBlockReply, WireBlockRequest};
 /// grants it to this component, and the root places it above the component's
 /// executables — of which it has none.
 const BLOCK_SLOT: u32 = 1;
-/// The endpoint `init` grants only to the instance it spawns.
-///
-/// The root launches every declared component (P5.2), so a second, unconfigured
-/// copy of this one also runs holding the same device capability. Authority
-/// cannot separate them — a generation grant names a component, not a task —
-/// so the spawned instance is the one holding this.
-const RUN_TOKEN_SLOT: u32 = 0;
 
 const SECTOR_BYTES: usize = 512;
 
@@ -62,8 +55,8 @@ const APPENDED_PAYLOAD: &[u8] = b"seL4 store plane appended object\n";
 
 slime_rt::entry!(main);
 
-fn main(_startup_arg: u32) {
-    if !spawned_instance() {
+fn main(startup_arg: u32) {
+    if startup_arg == 0 {
         slime_rt::debug_write(b"[sel4-store-probe] idle without a run token\n");
         slime_rt::exit(0);
     }
@@ -375,14 +368,6 @@ fn decode_reply(bytes: &[u8; block::REPLY_LEN]) -> WireBlockReply {
         status: -1,
         sectors_done: 0,
     })
-}
-
-/// Whether this task is the one `init` spawned. The same `ERR_BAD_CAP`
-/// authority probe `sel4-storage-probe` and `fabric-call-time` use.
-fn spawned_instance() -> bool {
-    let mut bytes = [0u8; slime_rt::MAX_MSG];
-    let mut caps = [0u64; slime_rt::MAX_CAPS_PER_MSG];
-    slime_rt::recv(RUN_TOKEN_SLOT, &mut bytes, &mut caps) != slime_rt::ERR_BAD_CAP
 }
 
 /// The payload the fixture seeds: a fixed-length record whose head is a known

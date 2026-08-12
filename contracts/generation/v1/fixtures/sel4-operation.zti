@@ -230,15 +230,6 @@
       transferable = false;
     };
     {
-      name = "init-endpoint-factory";
-      rights = [
-        "endpointCreate";
-      ];
-      source = "init";
-      target = "init";
-      transferable = false;
-    };
-    {
       name = "init-shared-buffer-factory";
       rights = [
         "bufferCreate";
@@ -314,10 +305,6 @@
     {
       autostart = true;
       bindings = [
-        {
-          grant = "init-endpoint-factory";
-          slot = 7;
-        };
         {
           grant = "init-fabric-op-client";
           slot = 1;
@@ -601,16 +588,6 @@
       transferable = false;
     };
     {
-      name = "fabric-service-endpoint-factory";
-      owner = "init";
-      holder = "fabric-service";
-      rights = [
-        "endpointCreate";
-      ];
-      slot = 0;
-      transferable = false;
-    };
-    {
       name = "fabric-service-shared-buffer-factory";
       owner = "init";
       holder = "fabric-service";
@@ -618,6 +595,68 @@
         "bufferCreate";
       ];
       slot = 1;
+      transferable = false;
+    };
+    {
+      name = "fabric-op-client-backup-fabric-service";
+      owner = "init";
+      holder = "fabric-service";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 7;
+      transferable = false;
+    };
+    {
+      name = "fabric-op-client-backup-fabric-op-client";
+      owner = "init";
+      holder = "fabric-op-client";
+      rights = [
+        "send";
+        "recv";
+      ];
+      slot = 3;
+      transferable = false;
+    };
+    {
+      name = "fabric-service-op-client-supervision";
+      owner = "init";
+      holder = "fabric-service";
+      rights = [
+        "supervise";
+      ];
+      slot = 8;
+      transferable = false;
+    };
+    {
+      name = "fabric-service-op-client-b-supervision";
+      owner = "init";
+      holder = "fabric-service";
+      rights = [
+        "supervise";
+      ];
+      slot = 9;
+      transferable = false;
+    };
+    {
+      name = "fabric-service-op-server-supervision";
+      owner = "init";
+      holder = "fabric-service";
+      rights = [
+        "supervise";
+      ];
+      slot = 10;
+      transferable = false;
+    };
+    {
+      name = "fabric-service-op-client-b-restart-supervision";
+      owner = "init";
+      holder = "fabric-service";
+      rights = [
+        "supervise";
+      ];
+      slot = 11;
       transferable = false;
     };
   ];

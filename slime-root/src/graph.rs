@@ -50,71 +50,6 @@ pub const MAX_TASK_CAPS: usize = 64;
 /// a `static` instead.
 pub const MAX_GRAPH_TASKS: usize = crate::task::MAX_TASKS;
 
-/// Which end of a logical channel a capability names.
-///
-/// The side lives in the *capability* rather than in the channel entry, and that
-/// placement is the whole point: it is what lets an endpoint grant be an
-/// ordinary copy. `ChannelTable` used to carry `producer`/`consumer` fields
-/// naming the holding tasks, and every queue lookup compared a `TaskId` against
-/// them — so a capability alone did not say which queue it reached, a second
-/// holder was unrepresentable, and handing an end to a child had to *move* the
-/// record. With the side carried here, two tasks may hold the same end and each
-/// resolves to the same queue, which is what the retired kernel gets for free by
-/// cloning an `Arc<Endpoint>` (`kernel/src/ipc/mod.rs::Clone for Endpoint`).
-///
-/// Closes backlog **B25**.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Side {
-    /// Sends on the forward queue, receives on the reverse.
-    Producer,
-    /// Sends on the reverse queue, receives on the forward.
-    Consumer,
-    /// Both ends at one slot, for a declared self-edge.
-    ///
-    /// Not a third end: it resolves to the forward queue in *both* directions,
-    /// which is what a task sending to itself must mean, and it is why
-    /// `ChannelTable::push` allocates a single queue for such a channel. Only
-    /// `materialize` ever creates one — a *minted* pair gets a real side per slot,
-    /// so its two halves are distinguishable and separately grantable.
-    Loopback,
-}
-
-impl Side {
-    /// The end facing this one across the channel.
-    ///
-    /// A loopback faces itself, which is what makes a self-edge deliver what it
-    /// sent.
-    pub const fn opposite(self) -> Self {
-        match self {
-            Self::Producer => Self::Consumer,
-            Self::Consumer => Self::Producer,
-            Self::Loopback => Self::Loopback,
-        }
-    }
-
-    /// Whether a capability naming `self` reaches `other`.
-    ///
-    /// A loopback names both real sides. A real side does not reach loopback:
-    /// loopback is a holder representation, not a third physical end.
-    pub const fn reaches(self, other: Self) -> bool {
-        matches!(
-            (self, other),
-            (Self::Producer, Self::Producer)
-                | (Self::Consumer, Self::Consumer)
-                | (Self::Loopback, _)
-        )
-    }
-
-    /// A short name for markers.
-    pub const fn name(self) -> &'static str {
-        match self {
-            Self::Producer => "producer",
-            Self::Consumer => "consumer",
-            Self::Loopback => "loopback",
-        }
-    }
-}
-
 /// What a logical slot resolves to.
 ///
 /// Deliberately not a seL4 capability: these are the objects `slime-root` owns
@@ -123,28 +58,6 @@ impl Side {
 pub enum Resource {
     /// An executable this task may spawn, named by generation executable index.
     Executable { executable: usize },
-    /// One end of a logical channel: which channel, and which end of it.
-    Endpoint { channel: u32, side: Side },
-    /// Authority to mint channel pairs.
-    EndpointFactory,
-    /// A seL4 Notification this task may wait on (B46).
-    ///
-    /// The kernel object the logical wait set is being replaced by. A
-    /// component that must park across several sources at once cannot do that
-    /// with Endpoints — seL4 receives on exactly one — so each source signals
-    /// a distinct badge bit into one Notification and the component waits
-    /// there. `bits` is the mask it may legitimately observe, so a badge
-    /// carrying anything else is a peer signalling something this component
-    /// was never told about.
-    ///
-    /// Held by the child directly: the whole point is that the wait does not
-    /// go through the root.
-    Notification {
-        /// Which notification object, in the root's own table.
-        notification: u32,
-        /// Badge bits this holder may observe.
-        bits: u64,
-    },
     /// Authority to allocate shared buffers.
     SharedBufferFactory,
     /// Authority over the block device (P5.4.2c).
@@ -165,6 +78,12 @@ pub enum Resource {
     },
     /// A supervision handle for a spawned child.
     Supervision { task: TaskId },
+    /// A native seL4 endpoint capability imported from a peer.
+    ///
+    /// The actual kernel capability lives in the importer's CSpace; this
+    /// logical record exists only so root-side accounting can name its kind and
+    /// rights without reintroducing a mediated message path.
+    NativeEndpoint,
     /// A shared buffer this task holds.
     ///
     /// The `BufferHandle` the table issues carries rights and a generation
@@ -406,12 +325,10 @@ impl Resource {
     pub const fn kind_name(self) -> &'static str {
         match self {
             Self::Executable { .. } => "executable",
-            Self::Endpoint { .. } => "endpoint",
-            Self::EndpointFactory => "endpoint-factory",
-            Self::Notification { .. } => "notification",
             Self::SharedBufferFactory => "shared-buffer-factory",
             Self::Block { .. } => "block",
             Self::Supervision { .. } => "supervision",
+            Self::NativeEndpoint => "endpoint",
             Self::SharedBuffer { .. } => "shared-buffer",
             Self::Loan { .. } => "loan",
             Self::Input => "input",
@@ -419,72 +336,9 @@ impl Resource {
         }
     }
 
-    /// Whether this cutover can move the resource between capability tables
-    /// **over a channel**, as a `send` attachment.
-    ///
-    /// Kind, not rights, is what decides *here*: this answers only whether the
-    /// root has a mechanism for the move, and today it has one only for a loan.
-    ///
-    /// Whether the generation *delegated* the move is a separate question,
-    /// answered at the mint rather than at the send — `main.rs::serve_buffer_loan`
-    /// refuses to create a loan over a channel the generation did not declare
-    /// `transferable`, so an undelegated edge carries nothing to test here.
-    ///
-    /// # Not the same question as a spawn grant
-    ///
-    /// P5.3.3 hands a child capabilities at construction, and those are of
-    /// every kind this returns `false` for — an endpoint end, a factory, a
-    /// supervision handle. That is not a contradiction, because the two are
-    /// authorized by different things and neither can stand in for the other:
-    ///
-    /// - a **spawn grant** is a derived copy the parent makes at the moment it
-    ///   constructs the child, bounded by `preflight_spawn_grants` to rights
-    ///   the parent already holds. The parent is the child's whole reason for
-    ///   existing, and the generation authorized the pair by granting the
-    ///   parent the executable. Nothing reaches a task the generation did not
-    ///   connect to the parent, because the child had no table to reach at all
-    ///   until the parent made one.
-    /// - a **send attachment** moves a capability to a task that already
-    ///   exists, chosen at runtime by whoever is at the other end of a channel.
-    ///   That is redistribution of a declared graph, which is why it is
-    ///   narrowed to the one kind whose handle names its own recipient.
-    ///
-    /// So this bound is about the *send* path specifically. Widening it to
-    /// endpoints would let a component pass its channel ends around at runtime;
-    /// spawn cannot, because a spawn grant's destination is a task that does
-    /// not exist yet.
+    /// Whether a root-mediated capability may cross a capability-update ticket.
     pub const fn is_transferable(&self) -> bool {
-        // A directory joins the loan since P5.4.3, and for the same reason the
-        // loan qualified: the move is checkable against the *recipient*.
-        //
-        // A loan's handle names the receiver it was minted for. A directory
-        // carries its own scope and rights, and the root narrows both on every
-        // derivation — so a view that arrives over a channel grants exactly
-        // what the sender held and no more, whoever the sender chose. That is
-        // what M6.3's filesystem service needs: a client hands the service its
-        // view with each request, precisely so the service acts with the
-        // *client's* authority rather than its own.
-        //
-        // An endpoint end joins them for M6.4 (P5.4.3), and the earlier
-        // reasoning here was wrong rather than merely narrow.
-        //
-        // The claim was that nothing bounds where an endpoint lands. But
-        // nothing bounds where a *loan* lands either — the handle names its
-        // receiver, and the send path checks it, which is a check rather than a
-        // property of the kind. What actually bounds every move on this path is
-        // the same thing: the sender must hold `RIGHT_TRANSFER` on the
-        // capability, which the generation grants or a parent narrows at spawn.
-        // The oracle's `sys_send` gates on exactly that bit and no kind
-        // predicate, and this port refusing endpoints meant a shell could not
-        // give a child its stdin.
-        //
-        // What still cannot move is an executable or a factory, and for a
-        // reason that is not a policy choice: `contracts/capability-transfer`
-        // defines no descriptor for either, so there is nothing to send.
-        matches!(
-            self,
-            Self::Loan { .. } | Self::Directory { .. } | Self::Endpoint { .. }
-        )
+        matches!(self, Self::Loan { .. } | Self::Directory { .. })
     }
 
     /// A short name for markers, so a refusal states which kind was named
@@ -492,12 +346,10 @@ impl Resource {
     pub const fn kind(&self) -> &'static str {
         match self {
             Self::Executable { .. } => "executable",
-            Self::Endpoint { .. } => "endpoint",
-            Self::EndpointFactory => "endpoint-factory",
-            Self::Notification { .. } => "notification",
             Self::SharedBufferFactory => "shared-buffer-factory",
             Self::Block { .. } => "block",
             Self::Supervision { .. } => "supervision",
+            Self::NativeEndpoint => "endpoint",
             Self::SharedBuffer { .. } => "shared-buffer",
             Self::Loan { .. } => "loan",
             Self::Directory { .. } => "directory",
@@ -611,55 +463,6 @@ impl CapabilityTable {
             .find(|index| self.slots[*index].is_none())
             .map(|index| index as u32)
     }
-
-    /// Whether this table names any end of `channel`, at any side.
-    ///
-    /// Side-agnostic on purpose: reclamation asks whether the channel is still
-    /// reachable at all, not from which direction.
-    pub fn names_endpoint(&self, channel: u32) -> bool {
-        self.slots.iter().flatten().any(|capability| {
-            matches!(capability.resource, Resource::Endpoint { channel: key, .. } if key == channel)
-        })
-    }
-
-    /// Whether this table holds a capability that reaches `side` of `channel`.
-    ///
-    /// See [`Side::reaches`]: a loopback slot satisfies a query for either real
-    /// side, because it names both ends.
-    pub fn reaches_endpoint(&self, channel: u32, side: Side) -> bool {
-        self.slots.iter().flatten().any(|capability| {
-            matches!(
-                capability.resource,
-                Resource::Endpoint { channel: key, side: held }
-                    if key == channel && held.reaches(side)
-            )
-        })
-    }
-
-    /// How many distinct channels this table names an end of.
-    ///
-    /// Feeds the `peer death task=N channels=M` marker, which counted
-    /// `ChannelTable` entries by holder before B25 removed the holder fields. A
-    /// task holding *both* ends of one channel — a minted pair it has not granted
-    /// away — counts once, matching what the old per-entry filter reported.
-    ///
-    /// Counts a key at the first slot naming it, so duplicates are skipped without
-    /// a set: quadratic over 64 slots on a death path, against one more fixed-size
-    /// bound to keep in step with `MAX_TASK_CAPS`.
-    pub fn endpoints_held(&self) -> usize {
-        let channel_at = |index: usize| match self.slots.get(index)?.as_ref()?.resource {
-            Resource::Endpoint { channel, .. } => Some(channel),
-            _ => None,
-        };
-        (0..MAX_TASK_CAPS)
-            .filter(|index| {
-                let Some(channel) = channel_at(*index) else {
-                    return false;
-                };
-                !(0..*index).any(|earlier| channel_at(earlier) == Some(channel))
-            })
-            .count()
-    }
 }
 
 impl Default for CapabilityTable {
@@ -696,7 +499,7 @@ impl GraphTables {
             return Err(IpcError::WaiterConflict);
         }
         let Some(slot) = self.tables.iter_mut().find(|entry| entry.is_none()) else {
-            return Err(IpcError::WaitSetFull);
+            return Err(IpcError::DestinationSlotsExhausted);
         };
         *slot = Some((task, CapabilityTable::new()));
         self.len += 1;
@@ -741,57 +544,6 @@ impl GraphTables {
         })
     }
 
-    /// Whether any live table holds an endpoint capability naming `channel`.
-    ///
-    /// The live half of the predicate [`crate::channel::sweep`] uses to decide
-    /// whether a channel entry can still be named. The sibling of
-    /// [`Self::holds_supervision`], and a scan for the same reason: a channel
-    /// end is placed at materialization, copied at spawn, moved by
-    /// `cap_transfer`, and dropped by `CapDrop` — four paths an index would
-    /// have to stay correct across.
-    ///
-    /// Bounded by `MAX_GRAPH_TASKS * MAX_TASK_CAPS`, and run only when
-    /// `ChannelTable` is full, so the cost is paid once per channel reclaimed
-    /// rather than per mint.
-    pub fn holds_endpoint(&self, channel: u32) -> bool {
-        self.tables
-            .iter()
-            .flatten()
-            .any(|(_, table)| table.names_endpoint(channel))
-    }
-
-    /// Whether any live table other than `except` reaches one particular side
-    /// of `channel`.
-    ///
-    /// The exclusion is what a death path needs: the dying task's table is
-    /// deliberately still installed while its queues and parked transfers are
-    /// reclaimed, so counting it would make every end look live until too late.
-    pub fn holds_endpoint_side(&self, channel: u32, side: Side, except: Option<TaskId>) -> bool {
-        self.tables
-            .iter()
-            .flatten()
-            .any(|(id, table)| Some(*id) != except && table.reaches_endpoint(channel, side))
-    }
-
-    /// The unique live task holding the requested side, excluding `except`.
-    ///
-    /// Used where the object being minted records a concrete task identity, as
-    /// a `LoanHandle` does. A shared channel end names a queue, not one of its
-    /// competing receivers, so ambiguity is refused rather than resolved by
-    /// table order.
-    pub fn unique_holder_of_endpoint_side(
-        &self,
-        channel: u32,
-        side: Side,
-        except: Option<TaskId>,
-    ) -> Option<TaskId> {
-        let mut holders = self.tables.iter().flatten().filter_map(|(id, table)| {
-            (Some(*id) != except && table.reaches_endpoint(channel, side)).then_some(*id)
-        });
-        let holder = holders.next()?;
-        holders.next().is_none().then_some(holder)
-    }
-
     /// Drop a task's whole table as part of reclaiming it.
     pub fn release(&mut self, task: TaskId) -> bool {
         let Some(slot) = self
@@ -814,20 +566,17 @@ impl Default for GraphTables {
 }
 #[cfg(test)]
 mod tests {
-    use super::{Capability, CapabilityTable, GraphTables, MAX_TASK_CAPS, Resource, Side};
+    use super::{Capability, CapabilityTable, GraphTables, MAX_TASK_CAPS, Resource};
     use crate::ipc::IpcError;
     use crate::task::TaskId;
 
-    const RIGHT_SEND: u64 = 1;
-    const RIGHT_RECV: u64 = 1 << 1;
+    const RIGHT_READ: u64 = 1;
+    const RIGHT_WRITE: u64 = 1 << 1;
     const RIGHT_EXEC: u64 = 1 << 3;
 
-    fn endpoint(rights: u64) -> Capability {
+    fn capability(rights: u64) -> Capability {
         Capability {
-            resource: Resource::Endpoint {
-                channel: 7,
-                side: Side::Producer,
-            },
+            resource: Resource::Block { device: 0 },
             rights,
         }
     }
@@ -835,11 +584,11 @@ mod tests {
     #[test]
     fn a_slot_resolves_only_with_the_rights_it_was_granted() {
         let mut table = CapabilityTable::new();
-        table.install(4, endpoint(RIGHT_SEND)).unwrap();
+        table.install(4, capability(RIGHT_READ)).unwrap();
 
-        assert!(table.resolve(4, RIGHT_SEND).is_ok());
+        assert!(table.resolve(4, RIGHT_READ).is_ok());
         assert_eq!(
-            table.resolve(4, RIGHT_SEND | RIGHT_RECV),
+            table.resolve(4, RIGHT_READ | RIGHT_WRITE),
             Err(IpcError::InvalidOperation),
             "a narrower grant cannot satisfy a wider requirement"
         );
@@ -848,11 +597,10 @@ mod tests {
     #[test]
     fn an_ungranted_slot_is_indistinguishable_from_an_underpowered_one() {
         let mut table = CapabilityTable::new();
-        table.install(4, endpoint(RIGHT_SEND)).unwrap();
-        // Both are the same error, so a component cannot probe the table to
-        // discover which slots exist.
+        table.install(4, capability(RIGHT_READ)).unwrap();
+        // Both are the same error, so a component cannot probe the table.
         assert_eq!(
-            table.resolve(9, RIGHT_SEND),
+            table.resolve(9, RIGHT_READ),
             table.resolve(4, RIGHT_EXEC),
             "an absent slot and an insufficient one report identically"
         );
@@ -861,21 +609,21 @@ mod tests {
     #[test]
     fn a_layout_cannot_fill_one_slot_twice() {
         let mut table = CapabilityTable::new();
-        table.install(2, endpoint(RIGHT_SEND)).unwrap();
+        table.install(2, capability(RIGHT_READ)).unwrap();
         assert_eq!(
-            table.install(2, endpoint(RIGHT_RECV)),
+            table.install(2, capability(RIGHT_WRITE)),
             Err(IpcError::WaiterConflict),
             "two grants at one slot is a layout defect, not a last-wins merge"
         );
         // The original grant is intact.
-        assert_eq!(table.get(2), Some(endpoint(RIGHT_SEND)));
+        assert_eq!(table.get(2), Some(capability(RIGHT_READ)));
     }
 
     #[test]
     fn a_slot_past_the_table_is_refused_rather_than_wrapping() {
         let mut table = CapabilityTable::new();
         assert_eq!(
-            table.install(MAX_TASK_CAPS as u32, endpoint(RIGHT_SEND)),
+            table.install(MAX_TASK_CAPS as u32, capability(RIGHT_READ)),
             Err(IpcError::InvalidOperation)
         );
         assert_eq!(table.get(MAX_TASK_CAPS as u32), None);
@@ -884,8 +632,8 @@ mod tests {
     #[test]
     fn dropping_a_slot_frees_it_for_runtime_minted_authority() {
         let mut table = CapabilityTable::new();
-        table.install(0, endpoint(RIGHT_SEND)).unwrap();
-        table.install(1, endpoint(RIGHT_SEND)).unwrap();
+        table.install(0, capability(RIGHT_READ)).unwrap();
+        table.install(1, capability(RIGHT_READ)).unwrap();
         assert_eq!(table.free_slot_from(0), Some(2));
 
         assert!(table.drop_slot(1));
@@ -900,13 +648,13 @@ mod tests {
         graph
             .create(TaskId(0))
             .unwrap()
-            .install(3, endpoint(RIGHT_SEND))
+            .install(3, capability(RIGHT_READ))
             .unwrap();
         graph.create(TaskId(1)).unwrap();
 
-        assert!(graph.get(TaskId(0)).unwrap().resolve(3, RIGHT_SEND).is_ok());
+        assert!(graph.get(TaskId(0)).unwrap().resolve(3, RIGHT_READ).is_ok());
         assert_eq!(
-            graph.get(TaskId(1)).unwrap().resolve(3, RIGHT_SEND),
+            graph.get(TaskId(1)).unwrap().resolve(3, RIGHT_READ),
             Err(IpcError::InvalidOperation),
             "slot 3 means nothing to a task that was not granted it"
         );
@@ -918,7 +666,7 @@ mod tests {
         graph
             .create(TaskId(0))
             .unwrap()
-            .install(3, endpoint(RIGHT_SEND))
+            .install(3, capability(RIGHT_READ))
             .unwrap();
         assert!(graph.release(TaskId(0)));
         assert!(graph.get(TaskId(0)).is_none());
