@@ -249,3 +249,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-10 | [B49: the stress graph found the ceiling admission was not checking](2026-08-10-b49-object-budget/index.md) | Defect | Verified | B49 |
 | 2026-08-10 | [B48: a busy thread declared below its peer does not starve it](2026-08-10-b48-per-thread-priority/index.md) | Change | Verified | B48, B47 |
 | 2026-08-12 | [B48 — defer AArch64 MCS until its proof is complete](2026-08-12-b48-mcs-assurance/index.md) | Decision | Proposed | B48 |
+| 2026-08-12 | [B46 — native endpoint framing must fail closed](2026-08-12-b46-native-endpoint-framing/index.md) | Defect | Verified | B46 |
