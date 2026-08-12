@@ -250,3 +250,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-10 | [B48: a busy thread declared below its peer does not starve it](2026-08-10-b48-per-thread-priority/index.md) | Change | Verified | B48, B47 |
 | 2026-08-12 | [B48 — defer AArch64 MCS until its proof is complete](2026-08-12-b48-mcs-assurance/index.md) | Decision | Proposed | B48 |
 | 2026-08-12 | [B46 — native endpoint framing must fail closed](2026-08-12-b46-native-endpoint-framing/index.md) | Defect | Verified | B46 |
+| 2026-08-12 | [B46's native IPC cutover, and the slot namespaces it exposed](2026-08-12-b46-native-ipc-cutover/index.md) | Change | Monitoring | B46, B50 |

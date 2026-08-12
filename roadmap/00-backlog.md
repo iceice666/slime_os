@@ -276,6 +276,71 @@ right order — they are what will show the cutover preserved backpressure,
 bounded queues, timeouts, peer death, and cap-transfer attenuation rather than
 merely compiling.
 
+**The deletion landed (2026-08-12), and the gates it was ordered before have
+not all come back.** `channel.rs`, `transit.rs`, and `parked.rs` are gone,
+along with `Send`, `Recv`, `Wait`, `EndpointCreate`, `CapTransfer`, and
+`TransferWindowBind`; every fabric component is rewritten against the v2 ring.
+`just sel4_channel_check` and `just sel4_crossing_check` pass on native
+Endpoint paths, and `just test_sel4_root` reports 118/118 with `lint_all` and
+`fmt_check_all` clean. The other five named gates do not pass yet, so this item
+stays open by its own exit condition.
+
+Four defects in the cutover were found by running it, each of which made the
+delegated-ring design unrunnable and none of which was the ring:
+
+- **The export id was written over the descriptor's `status`.** Bytes 8..12 of
+  a 64-byte `CapabilityTransfer` are the field every receiver reads to tell a
+  grant from a denial, so a successful delegation arrived looking refused. The
+  descriptor has no spare field, so the id stays off the wire entirely and a
+  receiver claims the oldest finalized export addressed to it.
+- **A logical capability could not be exported at all.** `serve_capability_export`
+  required a kernel endpoint for every export, so shared buffers, loans,
+  supervision handles, and directories were refused before any policy ran. The
+  ticket is optional now; a logical kind crosses as a table entry.
+- **A delegated buffer handle is unmappable by design.** `authorize` requires
+  `region.owner == holder`, so a peer handed a handle is refused when it maps.
+  A ring crosses as a *loan*, which is the primitive for exactly this — and
+  loans were read-only, so they now record their own writability: a v2 ring has
+  two peers advancing disjoint header fields of one unsealed region, while a
+  C7.6 sample loan stays read-only over a sealed one.
+- **An unsatisfiable spawn ordering.** The fabric loans a ring to each
+  participant, needing their supervision handles first, while
+  `fabric-publisher-b` loans its large sample back to the fabric, needing the
+  fabric's. A loan may now name its receiver through a declared endpoint as
+  well as a supervision handle; both are capabilities the generation fixed
+  before either task ran, so the receiver is still not an ambient task id.
+
+Two further defects were outside the fabric. A non-blocking receive that found
+nothing was identified by requiring a zero message label alongside zero words
+and zero capabilities, but seL4 leaves MR0 undisturbed when nothing arrives —
+so a stale label from the thread's previous message made an empty poll fail the
+shape check as a malformed 573-byte payload. And `FrameAliases::remove` dropped
+the alias record without emptying its CSlot while the slot pool hands released
+indices back for reuse, leaving a live capability where the allocator believed
+there was none.
+
+**Hand-numbered slots are the remaining defect class, and the count says so.**
+Every failure above the ring was a declared slot disagreeing with a hardcoded
+one: a probe endpoint on a minted factory's slot, supervision handles at 7/8
+against a profile numbering four, probes displaced twice, and a component
+`RING_SLOTS` constant against the depth the fabric actually formats. There are
+four distinct slot namespaces — fixture `bindings[]`/`mintedBindings[]`, the
+derived child CSpace regions, component-side constants, and root CSlots — and
+only the last two are machine-assigned. A structural hazard makes the first
+worse: endpoint and logical bindings share one declared-slot number space that
+the decoder refuses duplicates in, yet map to disjoint CSpace regions at
+runtime, so slot 1 as an endpoint and slot 1 as a factory collide at build time
+for no runtime reason. Auto-allocating the declared namespace and resolving
+component slots by role is tracked under B50, which already requires removing
+fixed-slot constants.
+
+**One blocker is open and is not fixture numbering.** `fabric-subscriber`'s ring
+loan is refused with `CNode Copy: Destination not empty` at a slot the pool
+reports as freshly issued — instrumented as 1485, 1493, 1501, monotonically
+increasing, so nothing is being reused. Some path installs a root capability
+without going through `SlotPool`, which is an allocator-integrity defect rather
+than a declaration one.
+
 **Exit condition:** `channel.rs`, `transit.rs`, `parked.rs`, `WaitSet`, and the
 migrated universal labels no longer exist. Backpressure, bounded queues,
 timeouts, peer death, cap-transfer attenuation, unrelated-route progress, and
@@ -332,6 +397,40 @@ first would mean rewriting the same 41 sites twice.
 
 Deleting the model while B46 holds it up would be removing the proof rather
 than the residue.
+
+**The `fixed-slot constants` clause is now scoped, and it is four namespaces
+rather than one (2026-08-12).** B46's cutover produced six consecutive
+slot-collision failures, and every one was a hand-written number disagreeing
+with another hand-written number. The clause covers:
+
+1. **Declared slots in fixtures** — `bindings[].slot` and
+   `mintedBindings[].slot`, hand-assigned per manifest across 25 fixtures. This
+   is the one to auto-allocate: make `slot` optional in
+   `contracts/generation/v1/schema.zt` and have `build-generation.py` assign it
+   deterministically per namespace, ordered by grant name.
+2. **Child CSpace regions** — endpoints at `33+n`, notifications at `64+n`,
+   authority mirrors at `95+n`. Already derived from (1); nothing to do.
+3. **Component-side constants** — `CONTROL_SLOT`, `FACTORY_SLOT`, and the
+   `RING_SLOTS` depth that B46 already replaced with a profile lookup. These
+   cannot simply become generated constants: one binary serves several
+   manifests, so `fabric-publisher` runs in the stream, QoS, visibility, and
+   boot graphs with different edge sets, and a name-sorted assignment would give
+   it a different number per plane. They must resolve by role, as
+   `supervision_slot_for(component)` and `FABRIC_FIRST_CONTROL_SLOT + index`
+   already do.
+4. **Root CSlots** — `ObjectAllocator::reserve_slot`. Already a bitmap
+   allocator, and the namespace B46 left one open defect in.
+
+A structural hazard belongs to (1) specifically: endpoint bindings and logical
+bindings share one declared-slot number space, which the decoder refuses
+duplicates in, yet they map to *disjoint* CSpace regions at runtime. So an
+endpoint at declared slot 1 and a factory at declared slot 1 are rejected as
+colliding despite landing at CSpace 34 and 1. That is authoring friction with no
+runtime meaning, and per-namespace assignment removes it.
+
+The frozen boot-layout fixtures that `just sel4_boot_layout_check` pins
+byte-for-byte must keep accepting explicit slots, so auto-allocation has to be
+opt-in per manifest rather than a global renumbering.
 
 **Exit condition:** Exact-source guards find no deleted model symbols or build
 flags; every surviving syscall is either a direct seL4 primitive or a narrowly
