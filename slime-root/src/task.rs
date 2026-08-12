@@ -25,7 +25,8 @@
 use sel4::{CapTypeForObjectOfFixedSize, CapTypeForObjectOfVariableSize};
 
 use crate::child_vspace::{
-    ChildImage, ChildVSpace, MAX_CHILD_THREADS, ScratchPage, VSpaceError, create_child_vspace,
+    ChildImage, ChildVSpace, MAX_CHILD_THREADS, ScratchPage, VSpaceError, admit_thread_count,
+    create_child_vspace,
 };
 use crate::generation::Authority;
 use crate::object_allocator::{AllocError, ObjectAllocator, TaskArenaId};
@@ -481,11 +482,14 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
         worker_priorities: [sel4::Word; MAX_CHILD_THREADS],
     ) -> Result<TaskId, TaskError> {
         admit_priority(priority)?;
+        admit_thread_count(threads)?;
         let Some(index) = self.tasks.iter().position(Option::is_none) else {
             return Err(TaskError::TableFull { limit: CAPACITY });
         };
         let id = TaskId(self.next_id);
-        let mut plan = image.vspace_arena_plan().map_err(VSpaceError::Image)?;
+        let mut plan = image
+            .vspace_arena_plan(threads)
+            .map_err(VSpaceError::Image)?;
         plan.add(sel4::cap_type::CNode::object_blueprint(cnode_size_bits))
             .ok_or(TaskError::Alloc(AllocError::UntypedExhausted {
                 size_bits: usize::BITS as usize,

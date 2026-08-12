@@ -137,3 +137,22 @@ while a genuine defect — two tasks sharing one base — would have passed them
 - `[INFERENCE]` The claim that a shared window would corrupt a concurrent
   `recv` is reasoning about the code path, not an observed failure; the
   observed failure for a shared *buffer* is the fault in the table above.
+
+## Corrections
+
+### 2026-08-12 — arena planning covers every thread pair
+
+The original change widened `create_child_vspace`'s mapped range to one IPC
+buffer/window pair per thread but left `ChildImage::vspace_arena_plan` sizing
+translation tables and frames for only one pair. A two-thread image ending just
+below a translation-table boundary could therefore require an object the task
+arena had not admitted and fail with `ArenaTooSmall`, depending on unrelated
+power-of-two rounding slack.
+
+The planner now takes the admitted thread count and shares the exact checked
+mapped-span calculation with the mapper. It accounts for `2 * threads` runtime
+frames and every translation table crossed by that range. A host regression
+places a second pair across the 2 MiB level-3 boundary that the old plan missed.
+Observed after the correction: `just test_sel4_root` passes 161/161; the seven
+named B47 QEMU gates pass, including `just sel4_sample_check`; `just
+sel4_gate_control_check` rejects 1,105 mutations.

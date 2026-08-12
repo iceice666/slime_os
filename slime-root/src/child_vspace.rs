@@ -168,16 +168,17 @@ impl<'a> ChildImage<'a> {
             .map(|symbol| (symbol.address(), symbol.size()))
     }
 
-    /// Pages the image itself occupies, excluding the IPC buffer page.
+    /// Pages the image itself occupies, excluding per-thread runtime pages.
     pub fn image_pages(&self) -> usize {
         self.footprint.len() / GRANULE_SIZE
     }
+
     /// Exact kernel-memory plan for the VSpace portion of this image.
-    pub fn vspace_arena_plan(&self) -> Result<ArenaPlan, ImageError> {
+    pub fn vspace_arena_plan(&self, threads: usize) -> Result<ArenaPlan, ImageError> {
+        let mapped = thread_mapped_span(&self.footprint, threads)?;
         let mut plan = ArenaPlan::new();
         plan.add(sel4::cap_type::VSpace::object_blueprint())
             .ok_or(ImageError::FootprintOutOfRange)?;
-        let mapped = self.footprint.start..(self.footprint.end + 2 * GRANULE_SIZE);
         for level in 1..sel4::vspace_levels::NUM_LEVELS {
             let span_bytes = 1usize << sel4::vspace_levels::span_bits(level);
             let coarse = coarsen(&mapped, span_bytes);
@@ -189,7 +190,7 @@ impl<'a> ChildImage<'a> {
                     .ok_or(ImageError::FootprintOutOfRange)?;
             }
         }
-        for _ in 0..(self.image_pages() + 2) {
+        for _ in 0..(self.image_pages() + 2 * threads) {
             plan.add(sel4::cap_type::Granule::object_blueprint())
                 .ok_or(ImageError::FootprintOutOfRange)?;
         }
@@ -366,15 +367,7 @@ pub fn create_child_vspace(
     asid_pool: sel4::cap::AsidPool,
     threads: usize,
 ) -> Result<ChildVSpace, VSpaceError> {
-    // A child always has a main thread, and the runtime declares storage for at
-    // most `MAX_CHILD_THREADS`. A plan asking for more is refused rather than
-    // truncated: the extra thread would run with no buffer mapped.
-    if threads == 0 || threads > MAX_CHILD_THREADS {
-        return Err(VSpaceError::ThreadCount {
-            requested: threads,
-            limit: MAX_CHILD_THREADS,
-        });
-    }
+    admit_thread_count(threads)?;
     let footprint = image.footprint();
     let vspace = allocator
         .allocate_fixed_in::<sel4::cap_type::VSpace>(arena)?
@@ -383,10 +376,11 @@ pub fn create_child_vspace(
         .asid_pool_assign(vspace)
         .map_err(VSpaceError::AsidAssign)?;
 
-    // The IPC buffer sits in the granule directly above the image, and the
-    // startup transfer window in the granule above that, so the translation
-    // tables must cover two pages more than the image footprint.
-    let mapped = footprint.start..(footprint.end + 2 * GRANULE_SIZE);
+    // Each thread owns an IPC buffer/window pair above the image, so the
+    // translation tables must cover every pair rather than only thread 0's.
+    // The arena planner uses this exact helper too: mapping a wider range than
+    // it plans would make construction depend on power-of-two arena slack.
+    let mapped = thread_mapped_span(&footprint, threads).map_err(VSpaceError::Image)?;
     let tables_mapped = map_intermediate_tables(allocator, arena, vspace, &mapped)?;
 
     let mut pages = [EMPTY_PAGE; MAX_CHILD_IMAGE_PAGES];
@@ -691,14 +685,32 @@ fn footprint(file: &ElfFile64<'_, Endianness>) -> Result<Range<usize>, ImageErro
 }
 
 fn validate_footprint_span(span: &Range<usize>) -> Result<(), ImageError> {
+    thread_mapped_span(span, 1).map(|_| ())
+}
+
+pub(crate) fn admit_thread_count(threads: usize) -> Result<(), VSpaceError> {
+    if threads == 0 || threads > MAX_CHILD_THREADS {
+        Err(VSpaceError::ThreadCount {
+            requested: threads,
+            limit: MAX_CHILD_THREADS,
+        })
+    } else {
+        Ok(())
+    }
+}
+
+fn thread_mapped_span(span: &Range<usize>, threads: usize) -> Result<Range<usize>, ImageError> {
+    let thread_bytes = threads
+        .checked_mul(2 * GRANULE_SIZE)
+        .ok_or(ImageError::FootprintOutOfRange)?;
     let mapped_end = span
         .end
-        .checked_add(2 * GRANULE_SIZE)
+        .checked_add(thread_bytes)
         .ok_or(ImageError::FootprintOutOfRange)?;
     if mapped_end > CHILD_ADDRESS_CEILING || span.start == 0 {
         Err(ImageError::FootprintOutOfRange)
     } else {
-        Ok(())
+        Ok(span.start..mapped_end)
     }
 }
 
@@ -769,7 +781,7 @@ mod tests {
 
     use super::{
         CHILD_ADDRESS_CEILING, FLAG_EXEC, FLAG_READ, FLAG_WRITE, GRANULE_SIZE, ImageError,
-        MAX_CHILD_IMAGE_PAGES, coarsen, reject_writable_executable, round_down,
+        MAX_CHILD_IMAGE_PAGES, coarsen, reject_writable_executable, round_down, thread_mapped_span,
         validate_footprint_span,
     };
 
@@ -812,6 +824,29 @@ mod tests {
             validate_footprint_span(&one_page_short),
             Err(ImageError::FootprintOutOfRange)
         );
+    }
+
+    #[test]
+    fn loader_headroom_covers_every_thread_pair() {
+        let two_thread_end = CHILD_ADDRESS_CEILING - 4 * GRANULE_SIZE;
+        assert!(thread_mapped_span(&(0x1000..two_thread_end), 2).is_ok());
+
+        let one_pair_short = CHILD_ADDRESS_CEILING - 3 * GRANULE_SIZE;
+        assert_eq!(
+            thread_mapped_span(&(0x1000..one_pair_short), 2),
+            Err(ImageError::FootprintOutOfRange)
+        );
+    }
+
+    #[test]
+    fn worker_pair_expands_translation_table_plan() {
+        let footprint = 0x1000..0x1fe000;
+        let table_span = 2 * 1024 * 1024;
+        let one_thread = thread_mapped_span(&footprint, 1).unwrap();
+        let two_threads = thread_mapped_span(&footprint, 2).unwrap();
+
+        assert_eq!(coarsen(&one_thread, table_span), 0..table_span);
+        assert_eq!(coarsen(&two_threads, table_span), 0..2 * table_span);
     }
 
     #[test]
