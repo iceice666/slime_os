@@ -2111,11 +2111,28 @@ fn launch_instance_graph(
         admission.unrecognized_images,
     );
 
-    let materialized =
-        match channel::materialize(generation, &launched_instances, channels, &mut graph) {
-            Ok(report) => report,
-            Err(error) => fatal!("SLIME_GRAPH FAIL channel materialization rejected: {error:?}"),
-        };
+    // One seL4 Endpoint per declared channel, created before the ends are
+    // placed so each install can put the native capability beside the logical
+    // one (B46). The cutover cannot land in a single commit -- 312 call sites
+    // across 41 component files -- so both exist and components move over one
+    // at a time.
+    let materialized = match channel::materialize(
+        generation,
+        &launched_instances,
+        channels,
+        &mut graph,
+        peers,
+        allocator,
+        &tasks,
+    ) {
+        Ok(report) => report,
+        Err(error) => fatal!("SLIME_GRAPH FAIL channel materialization rejected: {error:?}"),
+    };
+    sel4::debug_println!(
+        "SLIME_GRAPH peer endpoints created={} channels={}",
+        peers.len(),
+        materialized.channels,
+    );
     sel4::debug_println!(
         "SLIME_GRAPH channels grants={} channels={} queues={} slots={} unplaced={}",
         materialized.grants,
@@ -2123,27 +2140,6 @@ fn launch_instance_graph(
         materialized.queues,
         materialized.slots,
         materialized.unplaced,
-    );
-
-    // One seL4 Endpoint per declared channel (B46). The cutover from logical
-    // channels to kernel objects cannot land in a single commit -- 312 call
-    // sites across 41 component files -- so the objects are created now,
-    // paired with the channel each replaces, and components move onto them one
-    // at a time. Until a component does, its endpoint is unused: created,
-    // counted, and reachable through `for_channel`, which is what makes the
-    // migration a lookup rather than a second materialization pass.
-    let mut peer_endpoints = 0;
-    for key in channels.keys() {
-        match peers.create(allocator, key) {
-            Ok(_) => peer_endpoints += 1,
-            Err(error) => {
-                fatal!("SLIME_GRAPH FAIL peer endpoint creation rejected: {error:?}")
-            }
-        }
-    }
-    sel4::debug_println!(
-        "SLIME_GRAPH peer endpoints created={peer_endpoints} channels={}",
-        materialized.channels,
     );
 
     let bootstrap = launched_instances.task_for_instance(admission.bootstrap_instance);
@@ -4929,11 +4925,25 @@ fn serve_spawn(
             return Response::error(error);
         }
     };
+    // The spawned child's native endpoints go in beside its logical ends, from
+    // its own arena so they are reclaimed with it (B46).
+    let (child_arena, child_cnode, child_cnode_bits) = match tasks.get(child) {
+        Some(task) => (task.cleanup.arena, task.cnode, task.cnode_size_bits),
+        None => {
+            release_child(tasks, windows, graph, buffers, allocator, child);
+            return Response::error(IpcError::DestinationSlotsExhausted);
+        }
+    };
     let installed_channels = match channels.install_instance(
         generation,
         plan.instance,
         child,
         graph,
+        unsafe { &*ptr::addr_of!(PEER_ENDPOINTS) },
+        allocator,
+        child_arena,
+        child_cnode,
+        child_cnode_bits,
     ) {
         Ok(installed) => installed,
         Err(error) => {

@@ -375,12 +375,20 @@ impl ChannelTable {
 
     /// Install every pre-created channel end declared for an instance. The
     /// descriptor remains reusable for repeatable instance templates.
+    #[allow(clippy::too_many_arguments)]
     pub fn install_instance(
         &mut self,
         generation: &Generation<'_>,
         instance: usize,
         task: TaskId,
         graph: &mut GraphTables,
+        // B46's native endpoints, installed alongside. Everything from here
+        // down exists only for the cutover and goes with the logical channel.
+        natives: &crate::peer_endpoint::PeerEndpointTable,
+        allocator: &mut crate::object_allocator::ObjectAllocator,
+        arena: crate::object_allocator::TaskArenaId,
+        cnode: sel4::cap::CNode,
+        cnode_size_bits: usize,
     ) -> Result<usize, ChannelError> {
         let mut installed = 0;
         for index in 0..self.declared_len {
@@ -417,6 +425,31 @@ impl ChannelTable {
             );
             if let Some(entry) = self.declared[index].as_mut() {
                 entry.installed = Some(task);
+            }
+            // The native endpoint for this same channel, at its offset slot
+            // (B46). Installed beside the logical end rather than instead of
+            // it, so a component can be migrated on its own without its peers
+            // changing; one that has not migrated never looks at this slot.
+            //
+            // A failure here is reported and not fatal: the logical end is
+            // installed and working, and refusing the whole launch over an
+            // unused slot would make the migration's scaffolding able to break
+            // a graph that does not use it yet.
+            if let Some(native) = natives.install_for(
+                allocator,
+                arena,
+                endpoint.key,
+                endpoint.side.into(),
+                cnode,
+                cnode_size_bits,
+                slot as sel4::CPtrBits,
+            ) {
+                sel4::debug_println!(
+                    "SLIME_GRAPH native endpoint task={} key={} slot={native} side={}",
+                    task.0,
+                    endpoint.key,
+                    endpoint.side.name(),
+                );
             }
             installed += 1;
         }
@@ -645,11 +678,19 @@ impl Default for DeathWakes {
 /// Create every declared channel exactly once. Ends belonging to already
 /// launched instances are installed immediately; the rest remain as explicit
 /// descriptors until that declared instance is spawned.
+#[allow(clippy::too_many_arguments)]
 pub fn materialize(
     generation: &Generation<'_>,
     launched: &crate::launched::LaunchedInstances,
     channels: &mut ChannelTable,
     graph: &mut GraphTables,
+    // B46's native endpoints, installed beside each logical end.
+    natives: &mut crate::peer_endpoint::PeerEndpointTable,
+    allocator: &mut crate::object_allocator::ObjectAllocator,
+    // Where each launched task's arena and CSpace are. Read-only: the native
+    // install borrows the task's own arena so the capability is reclaimed with
+    // it, and its CNode and depth so the slot resolves where it should.
+    tasks: &crate::task::TaskTable<{ crate::task::MAX_TASKS }>,
 ) -> Result<Materialized, ChannelError> {
     let mut report = Materialized::default();
     for grant_index in 0..generation.grant_count() {
@@ -716,9 +757,42 @@ pub fn materialize(
         );
     }
 
+    // The kernel object per declared channel, created before any end is
+    // placed so the install below can put it beside the logical one. Collected
+    // into a fixed array first because `keys` borrows the table the creation
+    // loop does not touch, but the borrow checker cannot see that.
+    let mut keys = [0u32; MAX_CHANNELS];
+    let mut key_count = 0;
+    for key in channels.keys() {
+        keys[key_count] = key;
+        key_count += 1;
+    }
+    for key in keys.iter().take(key_count) {
+        natives
+            .create(allocator, *key)
+            .map_err(|_| ChannelError::TableFull)?;
+    }
+
     for launched in launched.iter() {
-        report.slots +=
-            channels.install_instance(generation, launched.instance, launched.task, graph)?;
+        // A task whose arena the caller cannot name gets its logical ends and
+        // no native ones: the migration's scaffolding must not decide whether
+        // a task launches.
+        let Some(task) = tasks.get(launched.task) else {
+            continue;
+        };
+        let (arena, cnode, cnode_size_bits) =
+            (task.cleanup.arena, task.cnode, task.cnode_size_bits);
+        report.slots += channels.install_instance(
+            generation,
+            launched.instance,
+            launched.task,
+            graph,
+            natives,
+            allocator,
+            arena,
+            cnode,
+            cnode_size_bits,
+        )?;
     }
     Ok(report)
 }

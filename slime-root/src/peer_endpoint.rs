@@ -250,6 +250,78 @@ impl PeerEndpointTable {
     }
 }
 
+impl From<crate::graph::Side> for Side {
+    /// The logical side a declaration names, as the native rights it implies.
+    ///
+    /// One-to-one, which is what makes the migration mechanical: a
+    /// declaration that said "may only send" already meant a capability
+    /// without receive, and the kernel is now the thing that enforces it.
+    fn from(side: crate::graph::Side) -> Self {
+        match side {
+            crate::graph::Side::Producer => Self::Producer,
+            crate::graph::Side::Consumer => Self::Consumer,
+            crate::graph::Side::Loopback => Self::Both,
+        }
+    }
+}
+
+impl PeerEndpointTable {
+    /// Install the endpoint standing in for `channel`, if one exists.
+    ///
+    /// Returns the slot it landed in, or `None` when there is no endpoint for
+    /// the channel or the install failed. The caller reports rather than
+    /// aborts: the logical end is already installed and working, so a graph
+    /// that does not use the native slot must not fail to launch over it.
+    #[allow(clippy::too_many_arguments)]
+    pub fn install_for(
+        &self,
+        allocator: &mut ObjectAllocator,
+        arena: TaskArenaId,
+        channel: u32,
+        side: Side,
+        cnode: sel4::cap::CNode,
+        cnode_size_bits: usize,
+        declared_slot: sel4::CPtrBits,
+    ) -> Option<sel4::CPtrBits> {
+        let endpoint = self.for_channel(channel)?;
+        self.install(
+            allocator,
+            arena,
+            endpoint,
+            side,
+            cnode,
+            cnode_size_bits,
+            declared_slot,
+        )
+        .ok()
+    }
+
+    /// Install one side's capability into a child's CSpace.
+    ///
+    /// Beside the logical end, not instead of it: both exist through the
+    /// cutover so a component can be migrated on its own without its peers
+    /// changing. A component that has not migrated never looks at this slot.
+    pub fn install(
+        &self,
+        allocator: &mut ObjectAllocator,
+        arena: TaskArenaId,
+        endpoint: u32,
+        side: Side,
+        cnode: sel4::cap::CNode,
+        cnode_size_bits: usize,
+        declared_slot: sel4::CPtrBits,
+    ) -> Result<sel4::CPtrBits, PeerEndpointError> {
+        let slot = Self::native_slot(declared_slot, cnode_size_bits)?;
+        let minted = self.mint_side(allocator, arena, endpoint, side)?;
+        let root_cnode = sel4::init_thread::slot::CNODE.cap();
+        cnode
+            .absolute_cptr_from_bits_with_depth(slot, cnode_size_bits)
+            .copy(&root_cnode.absolute_cptr(minted), side.rights())
+            .map_err(PeerEndpointError::Mint)?;
+        Ok(slot)
+    }
+}
+
 impl Default for PeerEndpointTable {
     fn default() -> Self {
         Self::new()

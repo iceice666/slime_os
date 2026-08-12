@@ -325,6 +325,12 @@ impl CleanupRecord {
 pub struct Task {
     pub id: TaskId,
     pub cnode: sel4::cap::CNode,
+    /// How large that CNode is, so a later install can address it.
+    ///
+    /// The plan's, not the compiled-in default: a CSpace is sized to the
+    /// authority its instance declares, and resolving a slot at the wrong
+    /// depth silently lands somewhere else.
+    pub cnode_size_bits: usize,
     pub tcb: sel4::cap::Tcb,
     /// Additional threads of this process, indexed by thread number; index 0
     /// is always `None` because that is `tcb` above (B47). Allocated from the
@@ -745,6 +751,7 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
 
         let cleanup = construction_record(id, arena, allocator.arena_slot_count(arena)?);
         self.tasks[index] = Some(Task {
+            cnode_size_bits,
             workers,
             id,
             cnode,
