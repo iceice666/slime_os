@@ -593,7 +593,7 @@ impl<'a> BufferAdapter<'a> {
     ) -> Result<(), BufferAdapterError> {
         // SAFETY: the root task is single-threaded and every `BufferAdapter`
         // is a short-lived local, so no two references to the registry exist at
-        // once. See `FRAME_ALIASES`.
+        // once.
         let registry = unsafe { &mut *core::ptr::addr_of_mut!(FRAME_ALIASES) };
         registry.record(frame, vspace, vaddr, alias)?;
         Ok(())
@@ -621,9 +621,25 @@ impl<'a> BufferAdapter<'a> {
                     .unwrap_or_else(|| frame_cap(frame))
                     .frame_unmap()
                     .map_err(|error| BufferAdapterError::Unmap { vaddr, error })?;
-                if alias.is_some() {
+                if let Some(alias) = alias {
+                    // Delete the alias capability and return its CSlot. The
+                    // registry record alone is not enough: `SlotPool::release`
+                    // hands an index back for reuse, so a record dropped
+                    // without emptying the slot leaves a live capability in a
+                    // slot the allocator believes is free — and the next
+                    // `reserve_slot` there is refused `DeleteFirst`
+                    // ("Destination not empty") when it tries to copy into it.
+                    //
+                    // Deleting an already-empty slot succeeds, so the batch
+                    // stays retryable exactly as `ReleaseFrame` does.
+                    let cptr = sel4::init_thread::slot::CNODE.cap().absolute_cptr(alias);
+                    cptr.delete().map_err(|error| BufferAdapterError::Release {
+                        slot: alias.bits() as usize,
+                        error,
+                    })?;
                     unsafe { &mut *core::ptr::addr_of_mut!(FRAME_ALIASES) }
                         .remove(frame, vspace, vaddr);
+                    self.allocator.release_slot(alias.bits() as usize);
                 }
                 self.unmapped += 1;
                 Ok(())

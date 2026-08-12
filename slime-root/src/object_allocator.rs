@@ -701,6 +701,17 @@ impl ObjectAllocator {
         self.slots.free()
     }
 
+    /// Return one root CSlot to the free bitmap.
+    ///
+    /// The caller must have emptied the slot first: the pool tracks
+    /// availability, not occupancy, so releasing a slot that still holds a
+    /// capability makes the next allocation of that index fail `DeleteFirst`.
+    /// Used by the shared-buffer adapter for frame aliases, which are the one
+    /// root capability minted outside the arena path.
+    pub fn release_slot(&mut self, slot: usize) -> bool {
+        self.slots.release(slot)
+    }
+
     pub fn arena_slot_count(&self, id: TaskArenaId) -> Result<usize, AllocError> {
         self.arenas
             .get(id.index())
