@@ -284,99 +284,6 @@ sel4_crossing_check`, `just sel4_stream_check`, `just sel4_qos_check`, `just
 sel4_call_check`, `just sel4_operation_check`, and `just
 sel4_visibility_check` on native Endpoint/Notification paths.
 
-### B48 — all child execution shares one fixed priority and no scheduling authority
-
-**Status:** Open. **Class:** Unmasked architectural debt. **Depends on:** B47.
-
-**Problem:** Every child uses `CHILD_PRIORITY = 254`, root runs above it, and
-`KernelIsMCS` is disabled. Generation policy cannot bound CPU budget or period,
-differentiate service priorities, donate scheduling context to passive servers,
-or bind timeout faults per thread.
-
-**Evidence:** `slime-root/src/task.rs` defines one child priority and
-`sel4/config/qemu-arm-virt.cmake` disables MCS. Generation v4 has no schedule
-record.
-
-**Fix:** First remove the all-services-one-priority fallback by applying v5's
-declared per-thread priorities. Then resolve the assurance gate and enable MCS,
-install per-thread scheduling contexts and timeout endpoints, and use scheduling
-context donation for passive RPC servers. If MCS cannot be admitted, explicitly
-defer only the MCS half with recorded assurance evidence; do not restore one
-maximal child priority.
-
-**Progress (2026-08-10): the priority half is done.** B48's fix names it
-first — "remove the all-services-one-priority fallback by applying v5's
-declared per-thread priorities" — and that fallback is gone.
-
-The v5 wire format has carried a `ScheduleRecord` with `priority`, `budget_us`,
-and `period_us` per thread since the cutover, and the decoder has read it the
-whole time. Nothing wrote one: the builder packed a constant 100 and
-`slime-root` ignored the record entirely, using its own compiled-in 254. Both
-halves are real now — `Instance.priority` is the manifest's side,
-`instance_priority` resolves it through process/thread/schedule, and both the
-boot-graph and spawn paths pass it to `tcb_set_sched_params`. It is per-thread
-rather than per-instance because the record already is, so a process with
-several threads can differentiate them.
-
-Bounded at 254 in the builder *and* in the root, refused rather than clamped:
-a child at or above the root cannot be preempted by the service loop, so every
-other child blocks behind it on a root that never answers. The builder catches
-a manifest and `task::admit_priority` catches a generation from elsewhere.
-
-Observed, not merely declared: `SLIME_GRAPH schedule` records what each
-instance got, and the QoS plane declares `fabric-intruder` at 100 and is
-observed running it there while its five peers run at 254. All 30 seL4 gates
-pass.
-
-**The MCS half is deferred, with the decision recorded** in
-`sel4/config/qemu-arm-virt.cmake` rather than left blank: seL4's
-functional-correctness proofs do not cover the MCS configuration on AArch64,
-and this repository's claim is upstream seL4 with its assurance intact.
-Turning it on would trade a verified kernel for a scheduling feature in a
-config file. What that costs is stated there — the kernel has no notion of
-budget or period, so those fields stay zero rather than carrying figures it
-cannot enforce.
-
-**The starvation clause is met, and did not need MCS (2026-08-10).** It was
-listed as MCS-dependent; it is not. Under a priority-only scheduler "one
-client cannot starve an unrelated higher-criticality service" reduces to
-preemption, which seL4 does without MCS — what MCS adds is *budget*
-enforcement, which is a different guarantee.
-
-Making it testable took two things. Priority is now per **thread**, not per
-instance: the `ScheduleRecord` has been per-thread since the v5 cutover, and
-reading one priority per instance flattened a distinction the format already
-made. `Instance.workerPriority` is the manifest side, `thread_priority`
-resolves it, and the root applies it to each worker TCB.
-
-And it needed B47's second thread, because the spinner has to be *concurrently
-runnable* with the thread it must not starve. A first attempt used
-`fabric-intruder`, already declared at 100 against peers at 254, and proved
-nothing — it is blocked on IPC for most of the plane and only reaches its
-scenario after the publisher has finished. That probe was reverted rather than
-kept.
-
-The control is direct. At `workerPriority = 254` the two threads round-robin
-and the console output interleaves mid-line
-(`main thread running[sample-worker] main thread done`); at 100 the worker
-never runs and the main thread completes cleanly. Same binary, one manifest
-field. `just sel4_sample_check` asserts the high-priority thread's completion
-*while* the worker spins 200M iterations without yielding — the positive form,
-since the low thread's silence alone would prove nothing.
-
-**What that leaves open.** Two exit clauses genuinely need MCS: budget and
-period as authenticated data, and timeout faults reaching a declared handler.
-Those are the item's remaining scope, and B48 stays open on them rather than
-being closed on the three-quarters that are done. The proof is also
-single-core; the platform is `-smp 1` and priority preemption on SMP is a
-different argument.
-
-**Exit condition:** Priority, budget, and period are authenticated generation
-data and observed in the running graph; one budget-exhausting client cannot
-starve an unrelated higher-criticality service; timeout faults reach the
-declared handler. `just sel4_qos_check`, the platform-timer assertions in `just
-sel4_root_boot_check`, and the full direct-IPC graph pass under the selected
-scheduling configuration, with a recorded MCS assurance decision.
 
 ### B50 — the logical capability and universal syscall compatibility model remains deletable residue
 
@@ -434,6 +341,38 @@ affected `just sel4_*_check` targets, `just sel4_gate_control_check`, `just
 fmt_check_all`, and `just lint_all` pass after the deletion.
 
 ## Resolved
+### B48 — all child execution shares one fixed priority and no scheduling authority
+
+**Status:** Resolved 2026-08-12 with the MCS-only clauses explicitly deferred.
+
+**Problem:** Every child used one fixed priority and the generation's schedule
+records did not affect running TCBs. MCS-only budget, period, passive-server
+donation, and timeout-fault features were also unavailable on the selected
+AArch64 kernel configuration.
+
+**Resolution.** Priority is authenticated per-thread generation data, bounded
+at 254 by both builder and root, and applied to boot and spawn TCBs. The sample
+plane runs a worker at priority 100 below its main thread and proves the main
+thread completes while the worker spins 200M iterations without yielding. The
+QoS graph also observes its declared priority split.
+
+The MCS half is explicitly deferred rather than silently claimed. Upstream
+`deps/sel4/CAVEATS.md` states that functional-correctness proofs for MCS on
+AArch64 are in progress. Enabling it would weaken this repository's assurance
+boundary, so `KernelIsMCS` stays off, `budget_us` and `period_us` stay zero, and
+timeout endpoints are not claimed. The decision and revisit condition are
+recorded in `devlog/2026-08-12-b48-mcs-assurance/`.
+
+**Observed exit.** `just sel4_qos_check`, `just sel4_sample_check`, and the
+platform-timer assertions in `just sel4_root_boot_check` pass under the selected
+priority-only scheduling configuration. `just devlog_check` passes with the
+assurance decision indexed. The deferred MCS clauses remain a named follow-up,
+not an unobserved completion claim.
+
+**Devlogs:** `devlog/2026-08-10-b48-declared-priority/`,
+`devlog/2026-08-10-b48-per-thread-priority/`, and
+`devlog/2026-08-12-b48-mcs-assurance/`.
+
 ### B49 — resource ceilings are reactive tables rather than an admitted object budget
 
 **Status:** Resolved 2026-08-10.
