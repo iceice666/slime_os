@@ -153,3 +153,17 @@ A latent instance of the same hazard was fixed on the way:
 `expect_terminal_parked` polled with `yield_now` against a broker offering with
 `seL4_NBSend`. Client A never reaches that step, so it moved nothing — but it is
 the fourth polling receive found in this one scenario file.
+
+**`Call`/`ReplyRecv` now exists and is wired.** `slime_rt::call` over
+`seL4_Call`, `slime_rt::reply` over `seL4_Reply`, with the terminal ack as the
+call site. It lands now rather than when it was first written and reverted,
+because this is the one place both alternatives are provably wrong rather than
+merely suspect — and unwired code is not deliverable.
+
+Marker count holds at 57: a deadlocking ack is replaced by a sound one, not a
+step forward. Client A still stops after taking terminal 8, which now means it
+waits in `Call` for the broker's reply. The broker answers from its client sweep
+and reaches that sweep every pass, so the next thing to check is whether the
+reply capability survives: both `recv` and `nb_recv` pass `()` as the reply
+authority, which under non-MCS is the thread's implicit reply capability. That
+assumption has not been verified against a `nb_recv` that took the message.

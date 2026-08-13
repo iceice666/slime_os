@@ -726,6 +726,21 @@ A latent instance of the same hazard was fixed on the way:
 with `seL4_NBSend`. Client A never reaches that step, so it changed nothing
 measurable, but it is the fourth polling receive found in this scenario file.
 
+**`Call`/`ReplyRecv` is in the runtime and wired (2026-08-13).**
+`slime_rt::call` over `seL4_Call` and `slime_rt::reply` over `seL4_Reply`, with
+the terminal ack as the call site — the one place where both alternatives are
+provably wrong rather than merely suspect. It lands now, rather than when it was
+first written and reverted, because it is load-bearing here.
+
+Marker count holds at 57, so it replaces a deadlocking ack with a sound one
+rather than advancing the plane. Client A still stops after taking terminal 8,
+which now means it is blocked in `Call` awaiting the broker's reply. The broker
+answers from its client sweep and reaches that sweep every pass, so the next
+question is whether the reply capability survives the path it takes: both
+`recv` and `nb_recv` pass `()` as the reply authority, which under the non-MCS
+configuration is the thread's implicit reply capability, and that is the
+assumption to check first.
+
 Three candidates were measured and reverted rather than argued away: ordering
 the offers by request id (a real correctness property, kept, but moves nothing
 alone and regresses with a `terminal mismatch` when applied without the rest);
