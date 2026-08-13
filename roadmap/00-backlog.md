@@ -872,6 +872,30 @@ forwarding, on the theory that the broker was blocked in `send` to a dead
 server, changes nothing — so it is blocked somewhere else, and that guard was
 reverted rather than kept unearned.
 
+**The block point is now exact: `pump_time`'s retry forward (2026-08-13).**
+Instrumenting each loop stage shows the broker entering `pump_time` after the
+server's exit and never reaching the next loop head. `pump_time`'s receive is
+non-blocking, so the block is the `forward` it calls on the retry path — a
+blocking `send` to a server that has exited, which a native Endpoint never
+reports.
+
+Three repairs were measured and all are wrong:
+
+- *Check the supervision handle before the send.* No change. The server is
+  still alive at the moment of the send — this plane's last request is what
+  makes it exit — so no check placed before the send can see it.
+- *Offer with `try_send` instead.* Ten stages down to **five**: forwards are
+  dropped whenever the server has not yet reached `recv`, which is most of the
+  time.
+- *Release the server on any timeout.* Already committed; it is what got the
+  plane to the peer-death arm, and does not address this.
+
+So the forward needs what the ack needed: a path that is neither lossy nor
+blocking. `slime_rt::call` now exists and has exactly that shape — the caller
+blocks on a reply that names it, and a server that exits mid-call leaves the
+kernel to fault the call rather than hanging it. That is the next thing to try,
+and it is the same conclusion the terminal ack reached independently.
+
 Three candidates were measured and reverted rather than argued away: ordering
 the offers by request id (a real correctness property, kept, but moves nothing
 alone and regresses with a `terminal mismatch` when applied without the rest);
