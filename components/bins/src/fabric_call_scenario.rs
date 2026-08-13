@@ -12,7 +12,16 @@ use slime_rt::{
 };
 const FACTORY_SLOT: u32 = 1;
 
-const FABRIC_SUPERVISION_SLOT: u32 = 2;
+/// The fabric, as this participant's loan receiver.
+///
+/// A loan names its receiver through a capability, and the broker is reachable
+/// here by the *declared control endpoint* rather than by a supervision handle:
+/// requiring supervision in this direction is an unbreakable spawn-ordering
+/// cycle, since the fabric must already exist to loan a ring back while a
+/// handle naming it cannot exist before it does. The generation fixes both ends
+/// of this endpoint before either task runs, so the receiver is still a
+/// capability fact and not an ambient task id.
+const FABRIC_RECEIVER_SLOT: u32 = 0;
 const PAGE: u64 = 4096;
 const BASE: u64 = 0x7100_0000;
 const CLIENT_PHASE_SLOT: u32 = 1;
@@ -104,7 +113,11 @@ pub fn run_server() {
     loop {
         let mut bytes = [0u8; MAX_MSG];
         let mut caps = [0u64; MAX_CAPS_PER_MSG];
-        let length = match slime_rt::recv(route, &mut bytes, &mut caps) {
+        // One endpoint, and nothing to do until it speaks: block in the kernel
+        // rather than poll. The broker forwards with a blocking `send`, which
+        // rendezvous only with a receiver already waiting, so a polling server
+        // and a blocking broker would never meet.
+        let length = match slime_rt::recv_blocking(route, &mut bytes, &mut caps) {
             ERR_WOULDBLOCK => {
                 slime_rt::yield_now();
                 continue;
@@ -154,7 +167,9 @@ pub fn run_server() {
                 }
             }
             SAMPLE_DESCRIPTOR_MAGIC => {
-                let loan_slot = caps[0] as u32;
+                // A delegated loan is a root-recorded export, not an in-message
+                // capability: only a native Endpoint travels inline.
+                let loan_slot = slime_rt::capability_import().unwrap_or(0);
                 let descriptor = WireSampleDescriptor::decode(&bytes)
                     .unwrap_or_else(|| fail(b"shared request decode"));
                 if loan_slot == 0
@@ -307,7 +322,7 @@ pub fn send_large_request(route: u32, request_id: u64) {
     if slime_rt::shared_buffer_seal(buffer.slot) != ERR_SUCCESS {
         fail(b"large seal")
     }
-    let loan = slime_rt::shared_buffer_loan(buffer.slot, FABRIC_SUPERVISION_SLOT, 0, PAGE, false)
+    let loan = slime_rt::shared_buffer_loan(buffer.slot, FABRIC_RECEIVER_SLOT, 0, PAGE, false)
         .unwrap_or_else(|_| fail(b"large loan"));
     let descriptor = WireSampleDescriptor {
         magic: SAMPLE_DESCRIPTOR_MAGIC,
@@ -345,7 +360,7 @@ fn send_large_reply(route: u32, request_id: u64) {
     if slime_rt::shared_buffer_seal(buffer.slot) != ERR_SUCCESS {
         fail(b"reply seal")
     }
-    let loan = slime_rt::shared_buffer_loan(buffer.slot, FABRIC_SUPERVISION_SLOT, 0, PAGE, false)
+    let loan = slime_rt::shared_buffer_loan(buffer.slot, FABRIC_RECEIVER_SLOT, 0, PAGE, false)
         .unwrap_or_else(|_| fail(b"reply loan"));
     let descriptor = WireSampleDescriptor {
         magic: SAMPLE_DESCRIPTOR_MAGIC,
@@ -404,11 +419,19 @@ fn verify_large(loan_slot: u32, descriptor: &WireSampleDescriptor) {
     }
 }
 
+/// Wait for one call record on `slot`, blocking until it arrives.
+///
+/// Blocking is load-bearing, not an optimisation. A native `send` blocks in the
+/// kernel until a receiver is ready, and a non-blocking `recv` only succeeds
+/// against a sender *already* blocked on the endpoint. A caller that polls
+/// while its peer blocks therefore never rendezvous with it: both sides wait
+/// forever. A participant awaiting a reply has nothing else to do, so it waits
+/// in the kernel where the sender can find it.
 pub fn recv_call(slot: u32) -> WireCallEnvelope {
     let mut bytes = [0u8; MAX_MSG];
     let mut caps = [0u64; MAX_CAPS_PER_MSG];
     loop {
-        match slime_rt::recv(slot, &mut bytes, &mut caps) {
+        match slime_rt::recv_blocking(slot, &mut bytes, &mut caps) {
             ERR_WOULDBLOCK => slime_rt::yield_now(),
             ERR_PEER_DEAD => fail(b"call peer died"),
             value if value < 0 => fail(b"call receive"),
@@ -423,16 +446,26 @@ pub fn recv_call(slot: u32) -> WireCallEnvelope {
     }
 }
 
+/// Wait for a large payload's descriptor and claim the loan it names.
+///
+/// The loan does not travel in the message. Only a native Endpoint crosses
+/// inline, so a delegated loan is a root-recorded export the receiver claims
+/// with `capability_import` -- `caps[0]` is always zero here, and reading it as
+/// the loan is what made every shared exchange fail its shape check.
 fn recv_descriptor(slot: u32) -> (WireSampleDescriptor, u32) {
     let mut bytes = [0u8; MAX_MSG];
     let mut caps = [0u64; MAX_CAPS_PER_MSG];
     loop {
-        match slime_rt::recv(slot, &mut bytes, &mut caps) {
+        match slime_rt::recv_blocking(slot, &mut bytes, &mut caps) {
             ERR_WOULDBLOCK => slime_rt::yield_now(),
             value if value < 0 => fail(b"descriptor receive"),
             value => {
-                if value as usize != MAX_MSG || caps[0] == 0 {
+                if value as usize != MAX_MSG {
                     fail(b"descriptor shape")
+                }
+                let loan_slot = slime_rt::capability_import().unwrap_or(0);
+                if loan_slot == 0 {
+                    fail(b"descriptor carried no loan")
                 }
                 let descriptor = WireSampleDescriptor::decode(&bytes)
                     .unwrap_or_else(|| fail(b"descriptor decode"));
@@ -444,7 +477,7 @@ fn recv_descriptor(slot: u32) -> (WireSampleDescriptor, u32) {
                 ) {
                     fail(b"descriptor invalid")
                 }
-                return (descriptor, caps[0] as u32);
+                return (descriptor, loan_slot);
             }
         }
     }

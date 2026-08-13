@@ -277,8 +277,10 @@ impl Broker {
                 }
             }
             Some(SAMPLE_DESCRIPTOR_MAGIC) => {
-                let loan_slot = caps[0] as u32;
-
+                // A delegated loan is a root-recorded export, not an in-message
+                // capability: only a native Endpoint travels inline, so
+                // `caps[0]` is always zero here.
+                let loan_slot = slime_rt::capability_import().unwrap_or(0);
                 let Some(descriptor) = WireSampleDescriptor::decode(&bytes[..length.min(MAX_MSG)])
                 else {
                     if loan_slot != 0 {
@@ -486,6 +488,21 @@ impl Broker {
             self.finish(index, STATUS_PEER_DEAD);
             return;
         };
+        // At most one request may be at the server at a time.
+        //
+        // The server handles one call to completion and answers with a blocking
+        // `send`. Forwarding a second request while the first is unanswered
+        // blocks this broker in `send` against a server already blocked sending
+        // its reply here: neither can move, and it is a deadlock rather than
+        // backpressure. A call left in `Phase::Forwarding` is retried by
+        // `pump_terminals` on a later pass, which is exactly the queue this
+        // needs -- the server's own reply is what frees the slot.
+        if self.calls.iter().enumerate().any(|(other, call)| {
+            other != index && matches!(call.phase, Phase::AwaitingReply | Phase::Cancelling)
+        }) {
+            self.calls[index].phase = Phase::Forwarding;
+            return;
+        }
         let call = self.calls[index];
         let mut next_payload = Payload::None;
         let result = match call.payload {
@@ -715,8 +732,8 @@ impl Broker {
                 }
             }
             Some(SAMPLE_DESCRIPTOR_MAGIC) => {
-                let loan_slot = caps[0] as u32;
-
+                // As above: the loan is claimed, never read out of the message.
+                let loan_slot = slime_rt::capability_import().unwrap_or(0);
                 let Some(descriptor) = WireSampleDescriptor::decode(&bytes[..length.min(MAX_MSG)])
                 else {
                     if loan_slot != 0 {
@@ -1020,6 +1037,21 @@ impl Broker {
                 continue;
             }
             progressed |= self.pump_terminal(index);
+        }
+        // Retry one call deferred because the server was already busy. The
+        // server is single-threaded and answers one request at a time, so this
+        // resumes exactly when its reply has freed the slot.
+        if !self
+            .calls
+            .iter()
+            .any(|call| matches!(call.phase, Phase::AwaitingReply | Phase::Cancelling))
+            && let Some(index) = self
+                .calls
+                .iter()
+                .position(|call| call.phase == Phase::Forwarding)
+        {
+            self.forward(index);
+            progressed = true;
         }
         progressed
     }
