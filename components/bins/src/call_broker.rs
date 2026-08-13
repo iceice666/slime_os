@@ -179,6 +179,7 @@ impl Broker {
             progressed |= self.pump_server();
             progressed |= self.pump_replies();
             progressed |= self.pump_time();
+            progressed |= self.reclaim_dead_clients();
             if self.calls.iter().all(|call| call.phase == Phase::Free)
                 && self.pending_terminals.iter().all(Option::is_none)
                 && self.server_slot.is_none()
@@ -214,7 +215,16 @@ impl Broker {
                 .iter()
                 .any(|call| call.phase == Phase::PendingTerminal)
                 || self.pending_terminals.iter().any(Option::is_some);
-            if owed || FABRIC_SERVICE_PARAMETERS_READY_SLOT == u32::MAX {
+            // A call at the server is also a reason not to park. The server
+            // signals before its reply, but it may exit instead of replying --
+            // this plane injects exactly that -- and a peer that has exited
+            // signals nothing. Parking then waits for a wake no one can send,
+            // while the supervision handle that reports the death is only read
+            // by a later sweep. Yielding keeps the sweeps coming.
+            if owed
+                || self.server_call.is_some()
+                || FABRIC_SERVICE_PARAMETERS_READY_SLOT == u32::MAX
+            {
                 slime_rt::yield_now();
                 continue;
             }
@@ -1276,6 +1286,43 @@ impl Broker {
                 self.calls[index] = Call::EMPTY;
             }
         }
+    }
+
+    /// Drop terminals owed to a client that has exited.
+    ///
+    /// A terminal is only retired when its client acks it, which is what makes
+    /// delivery a fact rather than a guess. A client that exits first can never
+    /// ack, so those records would be offered for ever and the broker would
+    /// outlive a finished graph. Supervision is the only thing that separates
+    /// "not reading yet" from "gone".
+    fn reclaim_dead_clients(&mut self) -> bool {
+        let mut progressed = false;
+        for client in 0..CLIENTS {
+            if matches!(
+                slime_rt::supervision_status(self.supervision[client]),
+                Ok(None)
+            ) {
+                continue;
+            }
+            for index in 0..self.calls.len() {
+                if self.calls[index].phase == Phase::PendingTerminal
+                    && self.calls[index].client_index as usize == client
+                {
+                    self.calls[index] = Call::EMPTY;
+                    progressed = true;
+                }
+            }
+            for slot in self.pending_terminals.iter_mut() {
+                if slot.is_some_and(|call| call.client_index as usize == client) {
+                    *slot = None;
+                    progressed = true;
+                }
+            }
+        }
+        if progressed {
+            slime_rt::debug_write(b"[fabric] terminal delivery abandoned\n");
+        }
+        progressed
     }
 
     fn reclaim_all(&mut self, status: i32) {

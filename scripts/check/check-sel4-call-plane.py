@@ -39,29 +39,33 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "the generation was admitted and the parent introduced every participant",
         (
-            r"SLIME_ROOT generation admitted number=18 executables=6 instances=6 grants=11 ",
+            r"SLIME_ROOT generation admitted number=18 executables=6 instances=6 grants=12 ",
             r"SLIME_ROOT fabric graph=admitted schemas=1 routes=1 participants=3 ",
             r"SLIME_GRAPH activated instances=\d+",
             r"\[init\] call control channels minted",
-            r"SLIME_GRAPH spawned task=\d+ child=\d+ component=fabric-service ",
-            r"\[init\] call fabric spawned",
+            # Participants precede the broker: it is granted a supervision
+            # handle naming each of them, and a handle cannot exist before its
+            # task. A native Endpoint reports no peer death, so those handles
+            # are the only way the broker observes a participant exit.
             r"SLIME_GRAPH spawned task=\d+ child=\d+ component=fabric-call-client ",
             r"SLIME_GRAPH spawned task=\d+ child=\d+ component=fabric-call-client-b ",
             r"SLIME_GRAPH spawned task=\d+ child=\d+ component=fabric-call-server ",
             r"\[init\] call participants spawned",
-            r"SLIME_GRAPH capability exported task=\d+ id=\d+ kind=supervision "
-            r"rights=0x40000 retain=0",
-            r"SLIME_GRAPH capability imported task=\d+ id=\d+ kind=supervision "
-            r"rights=0x40000 retain=0",
+            # The broker's four grants are the shared-buffer factory plus one
+            # supervision handle per participant. Delegation is now part of the
+            # spawn rather than a later export/import pair, so the grant count
+            # on this line *is* the evidence that supervision was handed over.
+            r"SLIME_GRAPH spawned task=\d+ child=\d+ component=fabric-service grants=4 ",
+            r"\[init\] call fabric spawned",
             r"\[init\] call supervision delegated",
             r"SLIME_GRAPH spawned task=\d+ child=\d+ component=fabric-call-time ",
-            r"\[fabric\] call roles provisioned",
+            r"\[fabric\] call endpoints ready",
         ),
     ),
     (
         "successful correlation",
         (
-            r"\[fabric\] call roles provisioned",
+            r"\[fabric\] call endpoints ready",
             r"\[fabric\] call forwarded",
             r"\[fabric-call-server\] non-idempotent execution once",
             r"\[fabric\] call reply correlated",
