@@ -771,15 +771,36 @@ at least three red plane gates (`sel4_input_check`, `sel4_spawn_check`,
 in a call site. It is exactly the "generic rights vocabulary where seL4 cap
 rights now apply" this item names.
 
-Deleting the nineteen grants and their bindings across the eleven fixtures was
-attempted and reverted, because the right is *also* a B10 boot-layout role:
-`scripts/build/boot_layout.py` maps `endpoint-factory` in ten frozen layout
-fixtures that `just sel4_boot_layout_check` pins byte-for-byte, and the builder
-fails `KeyError: 'endpoint-factory'` without it. So the deletion is
-fixtures + `boot_layout.py` + `BOOT_LAYOUT_ROLE_ENDPOINT_FACTORY` in
-`boot-contracts` + the generated constants + a `just sel4_boot_layout_bless`,
-in one change. That is a well-understood unit of work, not an open question —
-and it is worth doing early, because it unblocks several gates at once.
+**It is done (2026-08-13).** All nineteen grants and their bindings are gone
+from the eleven fixtures, along with the projection assertion in
+`check-boot-layout-resource.py` that required the role to be present. The
+boot-layout fixtures are re-blessed: 24 files, a net 29-line deletion, which is
+what removing a dead slot from a frozen transcription looks like. The
+`endpoint-factory` *layout role* stays: it is a numbered entry in a generated
+contract (`ROLE_ENDPOINT_FACTORY = 1`), so removing it renumbers every role
+after it across `boot_layout.py`, `boot-contracts`, and the generated bindings —
+a separate deletion with a much larger blast radius and no gate depending on it.
+
+`just contracts_check`, `just sel4_boot_layout_check`, `just test_sel4_root`,
+`just lint_all`, and `just fmt_check_all` pass, as do the six plane gates that
+were already green.
+
+**What it did *not* unblock, and why that was worth learning.** The three gates
+this was expected to fix now fail one layer deeper, on a *different*
+pre-existing cause: `spawn preflight … reason=declared-count requested=0
+bindings=0 minted=N`. Their fixtures declare minted bindings init must create
+and hand over, and post-cutover init mints nothing — the same shape
+`sel4-call.zti` had.
+
+Converting them is not mechanical, and `sel4-spawn.zti` shows why. Its seven
+minted bindings are orphans with no grant behind them at all, so declaring them
+as ordinary grants admits and boots the graph — and then `console` and `sysinfo`
+block forever waiting for a launch context, because `check-sel4-spawn-plane.py`
+asserts `grants=1` and six respectively at the *spawn marker*. That plane's
+claim is that a parent hands a child its capabilities at spawn; making them
+declared moves the same capabilities to the generation and quietly deletes the
+property under test. So the fix is init supplying them, not the fixture shedding
+them, and each plane needs that judgement made against what its gate asserts.
 
 **Exit condition:** Exact-source guards find no deleted model symbols or build
 flags; every surviving syscall is either a direct seL4 primitive or a narrowly
