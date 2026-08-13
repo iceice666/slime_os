@@ -194,8 +194,11 @@ fn visibility_main() {
     if !valid_interposition_trace(&trace) {
         fail(b"proxy trace");
     }
-    send_control(&trace.encode());
+    // Announced before the trace is sent, not after. Both hops of the relay are
+    // already done here, and the broker logs its own line on receiving this
+    // trace — so printing afterwards races the two and inverts them.
     slime_rt::debug_write(b"[fabric-intruder] declared relay complete; exiting\n");
+    send_control(&trace.encode());
 }
 
 fn send_control(message: &[u8; MAX_MSG]) {

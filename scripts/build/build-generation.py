@@ -1226,10 +1226,25 @@ def resolve_fabric_profile(manifest: dict, interfaces: list, profile_name: str) 
         if participant["direction"]
         in (FABRIC_DIRECTION_PUBLISH, FABRIC_DIRECTION_SUBSCRIBE)
     }
-    ring_holders = [component for component in stream_controls if component in ring_components]
+    # A declared interposition proxy needs one for the same reason a ring holder
+    # does. It holds no ring, but the fabric has to observe its *death*: a
+    # native Endpoint gives no peer-death signal, so a broker blocked on a hop
+    # through a dead proxy would wait forever. A supervision capability is the
+    # only thing in this model that answers "is that task gone", and the chain
+    # naming the proxy is a generation fact, so the handle is one too.
+    proxy_components = {
+        proxy
+        for participant in participants
+        for proxy in participant["interposition"]
+    }
+    holders = [
+        component
+        for component in stream_controls
+        if component in ring_components or component in proxy_components
+    ]
     supervision = [
         {"component": component, "slot": FABRIC_FIRST_CONTROL_SLOT + len(stream_controls) + index}
-        for index, component in enumerate(ring_holders)
+        for index, component in enumerate(holders)
     ]
     # C8.10: every plane coexists in one boot, so its control slots are summed
     # into one disjoint layout rather than overlaid. `max()` here would size the
@@ -1237,7 +1252,7 @@ def resolve_fabric_profile(manifest: dict, interfaces: list, profile_name: str) 
     # the mutually-exclusive assumption the milestone removes: two planes would
     # then be numbered from the same base and collide on the same slot.
     plane_control_counts = (
-        len(stream_controls) * 2 + len(ring_holders),
+        len(stream_controls) * 2 + len(holders),
         len(call_controls),
         len(operation_controls) + len(replacement_controls),
     )

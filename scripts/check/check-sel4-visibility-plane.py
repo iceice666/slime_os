@@ -47,7 +47,11 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "the generation was admitted with its declared interposition chain",
         (
-            r"SLIME_ROOT generation admitted number=21 executables=7 instances=7 grants=13 ",
+            # `grants=22`: the six exec grants, the fifteen route and control
+            # edges, and init's own buffer factory. Under the pre-B46 fixture
+            # the route edges were `mintedBindings` and did not count as grants
+            # at all, which is why this read 13.
+            r"SLIME_ROOT generation admitted number=21 executables=7 instances=7 grants=22 ",
             # `interpositions=1` is the declared chain surviving admission. A
             # profile whose chain was dropped would admit a graph with a direct
             # edge where the generation declared a proxy hop.
@@ -152,20 +156,30 @@ FAILURE_MARKERS: tuple[str, ...] = (
     r"unhandled",
 )
 
+# The native-IPC cutover (B46) replaced the single `channels=` count with the
+# two kinds a component is actually granted, so this pattern names them. A gate
+# still matching `channels=` silently never matches, which is how this one
+# stopped resolving init's task id and could not see its clean exit.
 SPAWN_PATTERN = re.compile(
     r"SLIME_GRAPH spawned task=(\d+) child=(\d+) component=([^ ]+) "
-    r"grants=(\d+) channels=(\d+) handle=(\d+)"
+    r"grants=(\d+) endpoints=(\d+) notifications=(\d+) handle=(\d+)"
 )
 EXIT_PATTERN = re.compile(r"SLIME_GRAPH component exit task=(\d+) status=(-?\d+)")
 VIEW_PATTERN = re.compile(r"\[fabric-view\] ([0-9a-f]+)")
 TRACE_PATTERN = re.compile(r"\[fabric-trace\] ([0-9a-f]+)")
+# Spawn order, not merely membership. Every participant the fabric is granted a
+# supervision handle for must exist before the fabric does, because a handle
+# cannot name a task that has not been created — so the service is spawned
+# last, after the four ring participants and the declared proxy. Under the
+# pre-B46 model the fabric minted its own route halves and needed no handle, so
+# it came first; this list is that inversion.
 EXPECTED_SPAWNED = (
-    "fabric-service",
     "fabric-publisher",
     "fabric-subscriber",
-    "fabric-intruder",
     "fabric-publisher-b",
     "fabric-subscriber-b",
+    "fabric-intruder",
+    "fabric-service",
 )
 # The oracle's own figures. Twelve serialized view records is what this graph's
 # three paging callers produce against their exact grants; two traces is one

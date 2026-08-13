@@ -192,6 +192,15 @@
   generation = 21;
   grants = [
     {
+      name = "fabric-service-shared-buffer-factory";
+      rights = [
+        "bufferCreate";
+      ];
+      source = "init";
+      target = "fabric-service";
+      transferable = false;
+    };
+    {
       name = "init-fabric-service";
       rights = [
         "exec";
@@ -450,6 +459,58 @@
     {
       autostart = true;
       bindings = [
+        {
+          grant = "fabric-service-shared-buffer-factory";
+          slot = 1;
+        };
+        {
+          grant = "fabric-publisher-control";
+          slot = 2;
+        };
+        {
+          grant = "fabric-subscriber-control";
+          slot = 3;
+        };
+        {
+          grant = "fabric-intruder-control";
+          slot = 4;
+        };
+        {
+          grant = "fabric-publisher-b-control";
+          slot = 5;
+        };
+        {
+          grant = "fabric-subscriber-b-control";
+          slot = 6;
+        };
+        {
+          grant = "visibility-telemetry-ingress";
+          slot = 12;
+        };
+        {
+          grant = "visibility-proxy-upstream";
+          slot = 13;
+        };
+        {
+          grant = "visibility-proxy-upstream-ack";
+          slot = 14;
+        };
+        {
+          grant = "visibility-proxy-event";
+          slot = 15;
+        };
+        {
+          grant = "visibility-diagnostics-ingress";
+          slot = 16;
+        };
+        {
+          grant = "visibility-diagnostics-egress";
+          slot = 17;
+        };
+        {
+          grant = "visibility-diagnostics-ack";
+          slot = 18;
+        };
       ];
       dependencies = [
         "init";
@@ -462,6 +523,14 @@
     {
       autostart = true;
       bindings = [
+        {
+          grant = "fabric-publisher-control";
+          slot = 0;
+        };
+        {
+          grant = "visibility-telemetry-ingress";
+          slot = 1;
+        };
       ];
       dependencies = [
         "init";
@@ -474,6 +543,14 @@
     {
       autostart = true;
       bindings = [
+        {
+          grant = "fabric-publisher-b-control";
+          slot = 0;
+        };
+        {
+          grant = "visibility-diagnostics-ingress";
+          slot = 2;
+        };
       ];
       dependencies = [
         "init";
@@ -486,6 +563,22 @@
     {
       autostart = true;
       bindings = [
+        {
+          grant = "fabric-subscriber-control";
+          slot = 0;
+        };
+        {
+          grant = "visibility-proxy-downstream";
+          slot = 1;
+        };
+        {
+          grant = "visibility-proxy-downstream-ack";
+          slot = 2;
+        };
+        {
+          grant = "visibility-proxy-event";
+          slot = 3;
+        };
       ];
       dependencies = [
         "init";
@@ -498,6 +591,18 @@
     {
       autostart = true;
       bindings = [
+        {
+          grant = "fabric-subscriber-b-control";
+          slot = 0;
+        };
+        {
+          grant = "visibility-diagnostics-egress";
+          slot = 1;
+        };
+        {
+          grant = "visibility-diagnostics-ack";
+          slot = 2;
+        };
       ];
       dependencies = [
         "init";
@@ -510,6 +615,26 @@
     {
       autostart = true;
       bindings = [
+        {
+          grant = "fabric-intruder-control";
+          slot = 0;
+        };
+        {
+          grant = "visibility-proxy-upstream";
+          slot = 1;
+        };
+        {
+          grant = "visibility-proxy-upstream-ack";
+          slot = 2;
+        };
+        {
+          grant = "visibility-proxy-downstream";
+          slot = 3;
+        };
+        {
+          grant = "visibility-proxy-downstream-ack";
+          slot = 4;
+        };
       ];
       dependencies = [
         "init";
@@ -522,237 +647,63 @@
   ];
   mintedBindings = [
     {
-      name = "fabric-service-shared-buffer-factory";
+      name = "fabric-intruder-supervision";
       owner = "init";
       holder = "fabric-service";
       rights = [
-        "bufferCreate";
+        "supervise";
       ];
-      slot = 1;
-      transferable = false;
-    };
-    {
-      name = "fabric-publisher-control-fabric-service";
-      owner = "init";
-      holder = "fabric-service";
-      rights = [ "send"; "recv"; ];
-      slot = 2;
-      transferable = false;
-    };
-    {
-      name = "fabric-subscriber-control-fabric-service";
-      owner = "init";
-      holder = "fabric-service";
-      rights = [ "send"; "recv"; ];
-      slot = 3;
-      transferable = false;
-    };
-    {
-      name = "fabric-intruder-control-fabric-service";
-      owner = "init";
-      holder = "fabric-service";
-      rights = [ "send"; "recv"; ];
-      slot = 4;
-      transferable = false;
-    };
-    {
-      name = "fabric-publisher-b-control-fabric-service";
-      owner = "init";
-      holder = "fabric-service";
-      rights = [ "send"; "recv"; ];
-      slot = 5;
-      transferable = false;
-    };
-    {
-      name = "fabric-subscriber-b-control-fabric-service";
-      owner = "init";
-      holder = "fabric-service";
-      rights = [ "send"; "recv"; ];
-      slot = 6;
-      transferable = false;
-    };
-    {
-      name = "visibility-telemetry-ingress-fabric-service";
-      owner = "init";
-      holder = "fabric-service";
-      rights = [ "recv"; ];
-      slot = 7;
-      transferable = false;
-    };
-    {
-      name = "visibility-proxy-upstream-fabric-service";
-      owner = "init";
-      holder = "fabric-service";
-      rights = [ "send"; ];
-      slot = 8;
-      transferable = false;
-    };
-    {
-      name = "visibility-proxy-upstream-ack-fabric-service";
-      owner = "init";
-      holder = "fabric-service";
-      rights = [ "recv"; ];
       slot = 9;
       transferable = false;
     };
     {
-      name = "visibility-proxy-event-fabric-service";
+      name = "fabric-publisher-supervision";
       owner = "init";
       holder = "fabric-service";
-      rights = [ "send"; ];
+      rights = [
+        "supervise";
+      ];
+      slot = 7;
+      transferable = false;
+    };
+    {
+      name = "fabric-subscriber-supervision";
+      owner = "init";
+      holder = "fabric-service";
+      rights = [
+        "supervise";
+      ];
+      slot = 8;
+      transferable = false;
+    };
+    {
+      name = "fabric-publisher-b-supervision";
+      owner = "init";
+      holder = "fabric-service";
+      rights = [
+        "supervise";
+      ];
       slot = 10;
       transferable = false;
     };
     {
-      name = "visibility-diagnostics-ingress-fabric-service";
+      name = "fabric-subscriber-b-supervision";
       owner = "init";
       holder = "fabric-service";
-      rights = [ "recv"; ];
+      rights = [
+        "supervise";
+      ];
       slot = 11;
       transferable = false;
     };
     {
-      name = "visibility-diagnostics-egress-fabric-service";
-      owner = "init";
-      holder = "fabric-service";
-      rights = [ "send"; ];
-      slot = 12;
-      transferable = false;
-    };
-    {
-      name = "visibility-diagnostics-ack-fabric-service";
-      owner = "init";
-      holder = "fabric-service";
-      rights = [ "recv"; ];
-      slot = 13;
-      transferable = false;
-    };
-    {
-      name = "fabric-publisher-control-fabric-publisher";
-      owner = "init";
-      holder = "fabric-publisher";
-      rights = [ "send"; "recv"; ];
-      slot = 0;
-      transferable = false;
-    };
-    {
-      name = "visibility-telemetry-ingress-fabric-publisher";
-      owner = "init";
-      holder = "fabric-publisher";
-      rights = [ "send"; ];
-      slot = 1;
-      transferable = false;
-    };
-    {
-      name = "fabric-subscriber-control-fabric-subscriber";
-      owner = "init";
-      holder = "fabric-subscriber";
-      rights = [ "send"; "recv"; ];
-      slot = 0;
-      transferable = false;
-    };
-    {
-      name = "visibility-proxy-downstream-fabric-subscriber";
-      owner = "init";
-      holder = "fabric-subscriber";
-      rights = [ "recv"; ];
-      slot = 1;
-      transferable = false;
-    };
-    {
-      name = "visibility-proxy-downstream-ack-fabric-subscriber";
-      owner = "init";
-      holder = "fabric-subscriber";
-      rights = [ "send"; ];
-      slot = 2;
-      transferable = false;
-    };
-    {
-      name = "visibility-proxy-event-fabric-subscriber";
-      owner = "init";
-      holder = "fabric-subscriber";
-      rights = [ "recv"; ];
-      slot = 3;
-      transferable = false;
-    };
-    {
-      name = "fabric-intruder-control-fabric-intruder";
-      owner = "init";
-      holder = "fabric-intruder";
-      rights = [ "send"; "recv"; ];
-      slot = 0;
-      transferable = false;
-    };
-    {
-      name = "visibility-proxy-upstream-fabric-intruder";
-      owner = "init";
-      holder = "fabric-intruder";
-      rights = [ "recv"; ];
-      slot = 1;
-      transferable = false;
-    };
-    {
-      name = "visibility-proxy-upstream-ack-fabric-intruder";
-      owner = "init";
-      holder = "fabric-intruder";
-      rights = [ "send"; ];
-      slot = 2;
-      transferable = false;
-    };
-    {
-      name = "visibility-proxy-downstream-fabric-intruder";
-      owner = "init";
-      holder = "fabric-intruder";
-      rights = [ "send"; ];
-      slot = 3;
-      transferable = false;
-    };
-    {
-      name = "visibility-proxy-downstream-ack-fabric-intruder";
-      owner = "init";
-      holder = "fabric-intruder";
-      rights = [ "recv"; ];
-      slot = 4;
-      transferable = false;
-    };
-    {
-      name = "fabric-publisher-b-control-fabric-publisher-b";
+      name = "fabric-publisher-b-shared-buffer-factory";
       owner = "init";
       holder = "fabric-publisher-b";
-      rights = [ "send"; "recv"; ];
-      slot = 0;
-      transferable = false;
-    };
-    {
-      name = "visibility-diagnostics-ingress-fabric-publisher-b";
-      owner = "init";
-      holder = "fabric-publisher-b";
-      rights = [ "send"; ];
+      rights = [
+        "bufferCreate";
+      ];
       slot = 1;
-      transferable = false;
-    };
-    {
-      name = "fabric-subscriber-b-control-fabric-subscriber-b";
-      owner = "init";
-      holder = "fabric-subscriber-b";
-      rights = [ "send"; "recv"; ];
-      slot = 0;
-      transferable = false;
-    };
-    {
-      name = "visibility-diagnostics-egress-fabric-subscriber-b";
-      owner = "init";
-      holder = "fabric-subscriber-b";
-      rights = [ "recv"; ];
-      slot = 1;
-      transferable = false;
-    };
-    {
-      name = "visibility-diagnostics-ack-fabric-subscriber-b";
-      owner = "init";
-      holder = "fabric-subscriber-b";
-      rights = [ "send"; ];
-      slot = 2;
       transferable = false;
     };
   ];

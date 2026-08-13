@@ -20,8 +20,11 @@
 use boot_contracts::fabric_graph::{CONTRACT_KIND_STREAM, DIRECTION_PUBLISH, route_identity};
 use slime_components::fabric_visibility::{ViewPage, request_page};
 use slime_proto::capability_transfer::{
-    FABRIC_REQUEST_MAGIC, FORMAT_VERSION, OBJECT_KIND_SHARED_BUFFER_LOAN, REQUEST_LEN,
-    WireCapabilityTransfer, WireFabricRequest,
+    FABRIC_REQUEST_MAGIC, FORMAT_VERSION, OBJECT_KIND_ENDPOINT, OBJECT_KIND_SHARED_BUFFER_LOAN,
+    REQUEST_LEN, WireCapabilityTransfer, WireFabricRequest,
+};
+use slime_proto::fabric_stream::{
+    FLAG_LAST, MAX_INLINE_BYTES as STREAM_MAX_INLINE_BYTES, STREAM_SAMPLE_MAGIC, WireStreamSample,
 };
 use slime_proto::interface_schema::telemetry_stream;
 use slime_proto::ring::{Ring, RingError};
@@ -40,6 +43,13 @@ const CONTROL_SLOT: u32 = 0;
 /// `recv` plus `transfer`. Exporting it is allowed; exporting it *wider* than
 /// the declaration is the subset test the root must refuse.
 const PROBE_SLOT: u32 = 1;
+
+/// The visibility plane's declared telemetry ingress edge, send-only.
+///
+/// A generation fact rather than a runtime grant: `sel4-visibility.zti` binds
+/// `visibility-telemetry-ingress` here, so the endpoint is installed before
+/// this component runs and the fabric's role reply only names it.
+const TELEMETRY_INGRESS_SLOT: u32 = 1;
 
 const RIGHT_SEND: u64 = 1;
 const RIGHT_RECV: u64 = 2;
@@ -226,6 +236,14 @@ fn visibility_main() {
     }
     slime_rt::debug_write(b"[fabric-publisher] graph view routes=2\n");
 
+    // The visibility plane's roles are *generation-declared endpoints*, not
+    // ring loans. The fabric answers a role request with a descriptor alone —
+    // there is no capability in the reply and nothing to import — because the
+    // edge this component publishes on was fixed before either task ran and is
+    // already installed in its CSpace. The descriptor still has to be checked:
+    // it is how the broker states which route the declared slot serves, and a
+    // reply naming another route or direction means the graph disagrees with
+    // the manifest.
     let route = route_identity(
         ROUTE_NAME,
         &telemetry_stream::INTERFACE_IDENTITY,
@@ -244,25 +262,75 @@ fn visibility_main() {
     if send_request(&request) != ERR_SUCCESS {
         fail(b"visibility role request");
     }
-    let (descriptor, ring_slot) = receive_role();
-    if descriptor.status != 0
-        || !valid_capability_transfer(
-            &descriptor,
-            &route,
-            DIRECTION_PUBLISH,
-            OBJECT_KIND_SHARED_BUFFER_LOAN,
-        )
+    let descriptor = receive_declared_role();
+    if descriptor.rights_mask != RIGHT_SEND
+        || !valid_capability_transfer(&descriptor, &route, DIRECTION_PUBLISH, OBJECT_KIND_ENDPOINT)
     {
         fail(b"visibility publish role");
     }
-    if slime_rt::shared_buffer_loan_map(ring_slot, RING_BASE, 0, RING_BYTES as u64) != ERR_SUCCESS {
-        fail(b"visibility publisher ring map");
+    // The declared ingress edge is send-only, so receiving on it must be
+    // refused. Asserted before the sample so a regression that widened the
+    // declaration fails here rather than passing silently.
+    let mut discard = [0u8; MAX_MSG];
+    let mut no_caps = [0u64; MAX_CAPS_PER_MSG];
+    if slime_rt::recv(TELEMETRY_INGRESS_SLOT, &mut discard, &mut no_caps) == ERR_SUCCESS {
+        fail(b"visibility publisher widened");
     }
-    let bytes = unsafe { core::slice::from_raw_parts_mut(RING_BASE as *mut u8, RING_BYTES) };
-    let mut ring = Ring::attach(bytes, telemetry_stream::TYPE_TAG, ring_slots(ROUTE_NAME))
-        .unwrap_or_else(|_| fail(b"visibility publisher ring attach"));
-    publish(&mut ring, &inline_payload(1), true);
+    if slime_rt::send(
+        TELEMETRY_INGRESS_SLOT,
+        &inline_sample(1, FLAG_LAST).encode(),
+        &[],
+    ) != ERR_SUCCESS
+    {
+        fail(b"visibility publish");
+    }
     slime_rt::debug_write(b"[fabric-publisher] interposed sample published\n");
+}
+
+/// One inline sample: the payload is a deterministic function of the sequence,
+/// so a subscriber can verify it received the exact sample the publisher sent
+/// rather than merely a well-formed one.
+fn inline_sample(sequence: u64, flags: u32) -> WireStreamSample {
+    let mut payload = [0u8; STREAM_MAX_INLINE_BYTES];
+    for (index, byte) in payload.iter_mut().enumerate() {
+        *byte = (sequence as u8).wrapping_add(index as u8);
+    }
+    WireStreamSample {
+        magic: STREAM_SAMPLE_MAGIC,
+        version: FORMAT_VERSION,
+        flags,
+        payload_len: STREAM_MAX_INLINE_BYTES as u32,
+        sequence,
+        type_identity: telemetry_stream::TYPE_TAG,
+        payload,
+    }
+}
+
+/// A role reply that carries no capability.
+///
+/// The visibility broker answers with the descriptor alone, so unlike
+/// [`receive_role`] there is nothing to import. QoS events share this control
+/// endpoint, so the record's own magic is what tells the two apart.
+fn receive_declared_role() -> WireCapabilityTransfer {
+    let mut message = [0u8; MAX_MSG];
+    let mut received = [0u64; MAX_CAPS_PER_MSG];
+    loop {
+        match slime_rt::recv(CONTROL_SLOT, &mut message, &mut received) {
+            ERR_WOULDBLOCK => slime_rt::yield_now(),
+            n if n < 0 => fail(b"visibility role reply"),
+            _ => {
+                let Some(descriptor) = WireCapabilityTransfer::decode(&message).filter(|record| {
+                    record.magic == slime_proto::capability_transfer::CAPABILITY_TRANSFER_MAGIC
+                }) else {
+                    continue;
+                };
+                if descriptor.status != 0 {
+                    fail(b"visibility publish role");
+                }
+                return descriptor;
+            }
+        }
+    }
 }
 
 fn inline_payload(sequence: u64) -> [u8; slime_proto::fabric_ring::MAX_INLINE_BYTES] {

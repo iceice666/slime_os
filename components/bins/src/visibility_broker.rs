@@ -30,8 +30,9 @@ use slime_proto::{
 use slime_rt::{ERR_PEER_DEAD, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
 
 use super::{
-    FABRIC_INTERPOSITIONS, FABRIC_PARTICIPANTS, FABRIC_QOS, FABRIC_VISIBILITY, FIRST_CONTROL_SLOT,
-    ROUTE_NAMES, control_clients, fail, release_received,
+    FABRIC_CLIENTS, FABRIC_INTERPOSITIONS, FABRIC_PARTICIPANTS, FABRIC_QOS, FABRIC_SUPERVISION,
+    FABRIC_VISIBILITY, FIRST_CONTROL_SLOT, ROUTE_NAMES, control_clients, fail, release_received,
+    supervision_slot_for,
 };
 
 const TELEMETRY: usize = 0;
@@ -46,13 +47,23 @@ const VISIBILITY_GRAPH: u8 = 2;
 const RIGHT_SEND: u64 = 1;
 const RIGHT_RECV: u64 = 2;
 const SAMPLE_SEQUENCE: u64 = 1;
-const TELEMETRY_INGRESS_SLOT: u32 = 7;
-const PROXY_UPSTREAM_SLOT: u32 = 8;
-const PROXY_UPSTREAM_ACK_SLOT: u32 = 9;
-const PROXY_EVENT_SLOT: u32 = 10;
-const DIAGNOSTICS_INGRESS_SLOT: u32 = 11;
-const DIAGNOSTICS_EGRESS_SLOT: u32 = 12;
-const DIAGNOSTICS_ACK_SLOT: u32 = 13;
+/// The broker's own declared route endpoints, which sit directly after the
+/// control endpoints and the supervision handles.
+///
+/// Derived rather than hardcoded: `FABRIC_CLIENTS` and `FABRIC_SUPERVISION`
+/// are generated from the resolved profile, so adding a participant renumbers
+/// these with the manifest instead of silently landing a route edge on a
+/// supervision handle. Same rule `supervision_slot_for` and
+/// `FABRIC_FIRST_CONTROL_SLOT + index` already follow.
+const FIRST_ROUTE_SLOT: u32 =
+    FIRST_CONTROL_SLOT + FABRIC_CLIENTS.len() as u32 + FABRIC_SUPERVISION.len() as u32;
+const TELEMETRY_INGRESS_SLOT: u32 = FIRST_ROUTE_SLOT;
+const PROXY_UPSTREAM_SLOT: u32 = FIRST_ROUTE_SLOT + 1;
+const PROXY_UPSTREAM_ACK_SLOT: u32 = FIRST_ROUTE_SLOT + 2;
+const PROXY_EVENT_SLOT: u32 = FIRST_ROUTE_SLOT + 3;
+const DIAGNOSTICS_INGRESS_SLOT: u32 = FIRST_ROUTE_SLOT + 4;
+const DIAGNOSTICS_EGRESS_SLOT: u32 = FIRST_ROUTE_SLOT + 5;
+const DIAGNOSTICS_ACK_SLOT: u32 = FIRST_ROUTE_SLOT + 6;
 
 #[derive(Default)]
 struct Roles {
@@ -155,11 +166,17 @@ fn provision(component: &'static [u8], control: u32, routes: &[[u8; 32]; 2], rol
         }
         PROXY => {
             roles.proxy_control = Some(control);
+            // Stated before the roles are handed out, not after. The claim is
+            // about the *bindings* — the broker holds the upstream half of the
+            // proxy's downstream edge and has no direct edge to the subscriber
+            // — so it is true the moment provisioning begins, and asserting it
+            // first keeps it ordered ahead of the proxy's own validation and
+            // of any relay that could otherwise mask a bypass.
+            slime_rt::debug_write(b"[fabric] direct interposition bypass absent by binding\n");
             descriptor(control, RIGHT_RECV, DIRECTION_SUBSCRIBE, &routes[TELEMETRY]);
             descriptor(control, RIGHT_SEND, DIRECTION_SUBSCRIBE, &routes[TELEMETRY]);
             descriptor(control, RIGHT_SEND, DIRECTION_PUBLISH, &routes[TELEMETRY]);
             descriptor(control, RIGHT_RECV, DIRECTION_PUBLISH, &routes[TELEMETRY]);
-            slime_rt::debug_write(b"[fabric] direct interposition bypass absent by binding\n");
         }
         DIAGNOSTICS_PUBLISHER => {
             descriptor(control, RIGHT_SEND, DIRECTION_PUBLISH, &routes[DIAGNOSTICS]);
@@ -263,19 +280,13 @@ fn relay_declared_chain(routes: &[[u8; 32]; 2], roles: &mut Roles) {
     write_record(b"[fabric-trace] ", &trace.encode());
     slime_rt::debug_write(b"[fabric] declared proxy relayed telemetry\n");
 
-    loop {
-        let mut message = [0u8; MAX_MSG];
-        let mut received = [0u64; MAX_CAPS_PER_MSG];
-        match slime_rt::recv(proxy_control, &mut message, &mut received) {
-            ERR_WOULDBLOCK => slime_rt::yield_now(),
-            ERR_PEER_DEAD => break,
-            n if n < 0 => fail(b"proxy death observation"),
-            _ => {
-                release_received(&received);
-                break;
-            }
-        }
-    }
+    // Wait for the proxy to actually be gone, through the supervision handle
+    // the generation granted for exactly this.
+    //
+    // Not by receiving on its control endpoint: a native seL4 Endpoint reports
+    // no peer death, so a dead proxy is indistinguishable from a silent one and
+    // this loop would never end.
+    await_exit(PROXY);
     finish_proxy_loss(
         routes,
         roles,
@@ -307,20 +318,33 @@ fn finish_proxy_loss(
     if !valid_interposition_trace(&lost) || EVENT_PROXY_LOST != 1 {
         fail(b"proxy event constants");
     }
+    // Recorded before the event is delivered. The proxy's death has already
+    // been observed through its supervision handle, and the subscriber logs its
+    // own two lines on receiving this event — so emitting afterwards races the
+    // two tasks and inverts the causal order the gate reads.
+    write_record(b"[fabric-trace] ", &lost.encode());
+    slime_rt::debug_write(b"[fabric] proxy death isolated to telemetry\n");
     if !send_proxy_message(PROXY_EVENT_SLOT, &lost.encode()) {
         fail(b"proxy loss event send");
     }
-    write_record(b"[fabric-trace] ", &lost.encode());
-    slime_rt::debug_write(b"[fabric] proxy death isolated to telemetry\n");
     serve_event_view(take(&mut roles.subscriber_control), DOWNSTREAM);
 }
 
+/// Answer the downstream subscriber's post-loss view requests until it exits.
+///
+/// Bounded by its supervision handle for the same reason the proxy wait is: a
+/// native Endpoint never reports `ERR_PEER_DEAD`, so a subscriber that has
+/// already exited would leave this loop spinning forever.
 fn serve_event_view(control: u32, component: &[u8]) {
+    let supervision = supervision_slot_for(component);
     loop {
         let mut message = [0u8; MAX_MSG];
         let mut received = [0u64; MAX_CAPS_PER_MSG];
         let length = match slime_rt::recv(control, &mut message, &mut received) {
             ERR_WOULDBLOCK => {
+                if !matches!(slime_rt::supervision_status(supervision), Ok(None)) {
+                    return;
+                }
                 slime_rt::yield_now();
                 continue;
             }
@@ -348,6 +372,10 @@ fn relay_unrelated_route(_roles: &mut Roles) {
         .filter(|sample| valid_stream_sample(sample, diagnostics_stream::TYPE_TAG, 32))
         .filter(|sample| sample.sequence == SAMPLE_SEQUENCE)
         .unwrap_or_else(|| fail(b"unrelated diagnostics sample"));
+    // Relay only once the publisher has finished. It prints its own line after
+    // sending, so relaying immediately would let this hop's downstream markers
+    // overtake the marker for the send that caused them.
+    await_exit(DIAGNOSTICS_PUBLISHER);
     send_message(egress, &sample_bytes);
     let ack_bytes = recv_message(ack_slot);
     let ack = WireStreamAck::decode(&ack_bytes)
@@ -355,7 +383,27 @@ fn relay_unrelated_route(_roles: &mut Roles) {
         .filter(|ack| ack.sequence == sample.sequence)
         .unwrap_or_else(|| fail(b"unrelated diagnostics ack"));
     let _ = ack;
+    // The broker's summary comes last, after the subscriber that observed the
+    // sample has run to completion. Both ends emit a line about this same round
+    // trip, and the ack alone does not order them: the subscriber prints after
+    // sending it, so without this wait the two race. Its supervision handle is
+    // the one deterministic answer to "has that task finished".
+    await_exit(DIAGNOSTICS_SUBSCRIBER);
     slime_rt::debug_write(b"[fabric] unrelated diagnostics route live after proxy death\n");
+}
+
+/// Block until `component` has terminated, via the supervision handle the
+/// generation granted the fabric for it.
+///
+/// The only way this model answers "is that task gone". A native seL4 Endpoint
+/// reports no peer death, so a dead peer is indistinguishable from a silent one
+/// on the endpoint alone. An error reading the handle means the handle itself
+/// is gone, which is that same answer.
+fn await_exit(component: &[u8]) {
+    let supervision = supervision_slot_for(component);
+    while let Ok(None) = slime_rt::supervision_status(supervision) {
+        slime_rt::yield_now();
+    }
 }
 
 fn send_view(control: u32, component: &[u8], cursor: u8, event_mask: u32) {
