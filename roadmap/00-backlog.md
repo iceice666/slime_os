@@ -760,6 +760,50 @@ is neither parked nor starved. The remaining suspect is the reply itself — a
 `seL4_Reply` issued after a `nb_recv` rather than a blocking `recv`, which is
 the one asymmetry not yet tested in isolation.
 
+That suspect is refuted too. Making the broker's client receive blocking —
+`recv_blocking` in place of `nb_recv`, so the reply follows a blocking receive —
+drops the plane from 57 markers to **3**: a multiplexer that blocks on one
+client cannot serve the others, which is the same lesson the rest of this
+cutover taught. `seL4_Reply` after a non-blocking receive is not the fault.
+
+Every hypothesis raised so far is now measured and refuted: the iteration
+budget, offer ordering, supervision polling, the notification park, reply
+authority, and the receive discipline under it. The ack demonstrably reaches the
+broker and demonstrably retires records; the 34th `Call` does not return. What
+has *not* been instrumented is the broker's side of that specific exchange —
+whether `pump_client` observes the 34th ack at all, as against observing it and
+failing to answer. That distinction is one marker inside the ack branch, and it
+is the next thing to place.
+
+**That observation was made, and it narrows the fault to the answer
+(2026-08-13).** A marker inside the ack branch shows the broker seeing **all 34
+acks**, including the one whose `Call` never returns. So the ack is delivered
+and the broker does reach its handler — the fault is in the reply, not the
+delivery.
+
+One ordering defect was found and fixed there: the branch retired the record
+before replying, putting `retire_terminal` and anything it logs between the
+receive and the answer. `seL4_Reply` sends to "the reply capability stored when
+the thread was last called", and `debug_write` is a root round trip, so an
+intervening log would consume it. Replying first is correct regardless of
+whether that window is currently reachable — and it is not the fault either:
+57 markers with the reordering, with and without the diagnostic present.
+
+**And that settled it the other way: the ack path is sound end to end.** A
+marker after the `Call` shows all **34 returning**, not 33 — the "34th hangs"
+reading was an artefact of the last marker being the last line before the root's
+fatal. Client A completes every ack and moves on, so nothing in the
+ack/reply/retire mechanism is at fault.
+
+What remains is arithmetic: 52 terminals are queued and 34 acked, so **18 are
+never taken** — and the plane stops with client A past its timeout loop. The
+budget is not the constraint either (262,144 iterations stop at the same 57
+markers, retested against this state). So a terminal client A still needs is
+being offered to a client that is no longer reading it, or is queued for a
+client index that does not match the reader. That is a question about *which*
+records exist and for whom, which the queue-minimum instrumentation can answer
+directly and which no further guess should precede.
+
 Three candidates were measured and reverted rather than argued away: ordering
 the offers by request id (a real correctness property, kept, but moves nothing
 alone and regresses with a `terminal mismatch` when applied without the rest);

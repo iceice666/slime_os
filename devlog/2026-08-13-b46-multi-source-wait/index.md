@@ -181,3 +181,43 @@ Established: the ack reaches the broker — it retires records and the queue's
 minimum advances — the reply path is structurally sound, and the broker is
 neither parked nor starved. The one asymmetry not yet tested in isolation is a
 `seL4_Reply` issued after a `nb_recv` rather than a blocking `recv`.
+
+That suspect is refuted too: making the broker's client receive blocking —
+`recv_blocking` in place of `nb_recv`, so the reply follows a blocking receive —
+drops the plane from 57 markers to **3**. A multiplexer that blocks on one
+client cannot serve the others, which is the lesson the rest of this cutover
+taught. `seL4_Reply` after a non-blocking receive is not the fault.
+
+Every hypothesis raised is now measured and refuted: the iteration budget, offer
+ordering, supervision polling, the notification park, reply authority, and the
+receive discipline under it. The ack demonstrably reaches the broker and
+demonstrably retires records; the 34th `Call` does not return.
+
+What has *not* been instrumented is the broker's side of that exchange —
+whether `pump_client` observes the 34th ack at all, as against observing it and
+failing to answer. One marker inside the ack branch separates those, and it is
+the next thing to place. Recording it rather than guessing again: six
+hypotheses have now been paid for with a boot cycle each, and the cheap
+observation was never made.
+
+**The observation was made, and it refuted my own framing.** A marker inside
+the broker's ack branch shows it seeing all 34 acks; a marker after the client's
+`Call` shows all 34 *returning*. The "34th hangs" reading was an artefact of the
+last marker being the last line before the root's fatal. The ack path —
+delivery, handling, reply, retirement — is sound end to end, and client A moves
+past its timeout loop.
+
+One real ordering defect was found there and fixed: the branch retired the
+record before replying, so `retire_terminal` and anything it logs sat between
+the receive and the answer. `seL4_Reply` uses the capability "stored when the
+thread was last called" and `debug_write` is a root round trip, so an
+intervening log would consume it. Correct regardless of reachability; not the
+fault.
+
+What remains is arithmetic rather than mechanism: 52 terminals queued, 34
+acked, **18 never taken**. The budget is not the constraint — 262,144 iterations
+stop at the same 57 markers, retested against this state. So a terminal client A
+needs is offered to a reader that has moved on, or queued under a client index
+the reader does not match. That is answerable directly from the queue-minimum
+instrumentation, and no further hypothesis should precede it: seven have now
+been paid for with a boot cycle each.
