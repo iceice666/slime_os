@@ -135,6 +135,21 @@ pub fn send(slot: u32, payload: &[u8], caps: &[u32]) -> i64 {
     transport::send(slot, payload, caps)
 }
 
+/// Sends `payload` over `slot` only if a receiver is already waiting, dropping
+/// it otherwise.
+///
+/// [`send`] blocks until a receiver arrives, which deadlocks any sender that
+/// must stay responsive — a broker pushing an *unsolicited* event to a peer
+/// that has moved on to reading its ring, for instance. The kernel's
+/// `seL4_NBSend` discards the message rather than blocking and reports nothing
+/// either way, so this is best-effort by construction and returns
+/// [`ERR_SUCCESS`] for "attempted". Correct only where the message is advisory
+/// and the protocol does not require it to arrive; a reply or a handshake step
+/// must still use [`send`].
+pub fn try_send(slot: u32, payload: &[u8], caps: &[u32]) -> i64 {
+    transport::try_send(slot, payload, caps)
+}
+
 /// Receives into `buf` (must be [`MAX_MSG`] bytes) and `cap_out` (must be
 /// [`MAX_CAPS_PER_MSG`] entries) from the endpoint in capability slot `slot`.
 /// A received kernel ticket lands in fixed CSpace slot 127, is authenticated

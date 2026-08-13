@@ -140,6 +140,35 @@ pub fn send(slot: u32, payload: &[u8], caps: &[u32]) -> i64 {
     })
 }
 
+/// Best-effort send: deliver only if a receiver is already blocked on the
+/// endpoint, otherwise discard. See [`crate::syscall::try_send`].
+pub fn try_send(slot: u32, payload: &[u8], caps: &[u32]) -> i64 {
+    if payload.len() > MAX_MSG || caps.len() > MAX_CAPS_PER_MSG {
+        return ERR_INVALID_ARG;
+    }
+    let endpoint = match native_endpoint(slot) {
+        Ok(endpoint) => endpoint,
+        Err(error) => return error,
+    };
+    let mut kernel_caps = [0u32; MAX_CAPS_PER_MSG];
+    for (destination, logical) in kernel_caps.iter_mut().zip(caps) {
+        *destination = match native_token(*logical) {
+            Ok(token) => token,
+            Err(error) => return error,
+        };
+    }
+    with_thread_buffer(|ipc_buffer| {
+        stage_native_message(ipc_buffer, payload, &kernel_caps[..caps.len()])?;
+        let info = MessageInfoBuilder::default()
+            .label(payload.len() as Word)
+            .length(payload.len().div_ceil(core::mem::size_of::<Word>()))
+            .extra_caps(caps.len())
+            .build();
+        endpoint.with(ipc_buffer).nb_send(info);
+        Ok(ERR_SUCCESS)
+    })
+}
+
 /// Non-blocking receive from a declared native seL4 Endpoint.
 pub fn recv(slot: u32, buf: &mut [u8; MAX_MSG], cap_out: &mut [u64; MAX_CAPS_PER_MSG]) -> i64 {
     receive_native(slot, buf, cap_out, false)
