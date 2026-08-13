@@ -135,6 +135,28 @@ pub fn send(slot: u32, payload: &[u8], caps: &[u32]) -> i64 {
     transport::send(slot, payload, caps)
 }
 
+/// Sends `payload` over `slot` and waits for the reply, as one `seL4_Call`.
+///
+/// The primitive B46 names for synchronous RPC. A `send` followed by a `recv`
+/// cannot substitute: `send` completes as soon as the peer receives, so the
+/// caller must race back to a receive, and a peer that answers first leaves the
+/// two never meeting. This blocks on the reply atomically and hands the callee
+/// authority naming *this* caller, so the answer cannot be taken by another
+/// peer on the same endpoint.
+///
+/// Use it where a bare send is either lossy or deadlock-prone: [`try_send`]
+/// cannot report delivery, and [`send`] blocks against a peer that may itself
+/// be sending.
+pub fn call(slot: u32, payload: &[u8], reply: &mut [u8; MAX_MSG]) -> i64 {
+    transport::call_endpoint(slot, payload, reply)
+}
+
+/// Answers the request this thread most recently received. Reaches that caller
+/// alone and cannot block: it is already waiting in [`call`].
+pub fn reply(payload: &[u8]) -> i64 {
+    transport::reply_to_caller(payload)
+}
+
 /// Sends `payload` over `slot` only if a receiver is already waiting, dropping
 /// it otherwise.
 ///

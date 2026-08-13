@@ -566,13 +566,21 @@ pub fn expect_terminal(slot: u32, session: u64, request_id: u64, status: i32) {
     {
         fail(b"terminal mismatch")
     }
-    // The ack must arrive: it is the only thing that retires the record, and
-    // `try_send` reports nothing, so a dropped ack leaves the broker re-offering
-    // a terminal this reader has already taken. Blocking is safe because the
-    // broker returns to receiving on every pass.
+    // Ack with `seL4_Call`, not a bare send. The ack is the only thing that
+    // retires the broker's record, so it must arrive -- which rules out
+    // `try_send`, whose drops cost this plane 38 markers. But a blocking send
+    // deadlocks: the broker may be mid-sweep offering the *next* terminal to
+    // this very client, so neither peer is receiving.
+    //
+    // `Call` is neither. It blocks on the broker's reply atomically and hands
+    // it authority naming this caller, so the answer cannot be taken by another
+    // peer and this caller cannot miss it.
     let mut ack = terminal;
     ack.kind = KIND_TERMINAL_ACK;
-    send_raw(slot, &ack.encode());
+    let mut answer = [0u8; MAX_MSG];
+    if slime_rt::call(slot, &ack.encode(), &mut answer) < 0 {
+        fail(b"terminal ack")
+    }
 }
 
 fn signal_client_phase(phase: u8) {

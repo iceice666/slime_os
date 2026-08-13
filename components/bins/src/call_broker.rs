@@ -303,6 +303,10 @@ impl Broker {
                 // is refused, without end.
                 if message.kind == KIND_TERMINAL_ACK {
                     self.retire_terminal(client, message.request_id);
+                    // The client acked with `seL4_Call` and is blocked on this
+                    // reply. It carries nothing beyond the echo: the ack's
+                    // arrival is the content, and answering releases the caller.
+                    let _ = slime_rt::reply(&message.encode());
                     return true;
                 }
                 if message.session == SESSION {

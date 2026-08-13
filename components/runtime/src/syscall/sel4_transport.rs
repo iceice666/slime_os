@@ -140,6 +140,60 @@ pub fn send(slot: u32, payload: &[u8], caps: &[u32]) -> i64 {
     })
 }
 
+/// Send one message and wait for its reply, as a single `seL4_Call`.
+///
+/// The primitive a synchronous exchange needs, and one that `send` followed by
+/// `recv` cannot substitute for. A plain `send` completes as soon as the peer
+/// receives, so the caller must then race back to a receive; if the peer
+/// answers first -- or is a multiplexer that swept past -- the two never meet.
+/// `seL4_Call` blocks the caller on the reply atomically and hands the callee a
+/// reply capability naming *this* caller, so the answer cannot be taken by
+/// another peer waiting on the same endpoint.
+///
+/// It is therefore neither lossy nor deadlock-prone where a bare send is one or
+/// the other: a return means the peer received the request and answered it.
+/// `reply` receives the answer and the returned length is the reply's.
+pub fn call_endpoint(slot: u32, payload: &[u8], reply: &mut [u8; MAX_MSG]) -> i64 {
+    if payload.len() > MAX_MSG {
+        return ERR_INVALID_ARG;
+    }
+    let endpoint = match native_endpoint(slot) {
+        Ok(endpoint) => endpoint,
+        Err(error) => return error,
+    };
+    with_thread_buffer(|ipc_buffer| {
+        stage_native_message(ipc_buffer, payload, &[])?;
+        let info = MessageInfoBuilder::default()
+            .label(payload.len() as Word)
+            .length(payload.len().div_ceil(core::mem::size_of::<Word>()))
+            .build();
+        let answer = endpoint.with(&mut *ipc_buffer).call(info);
+        collect_native_message(ipc_buffer, answer, reply)
+    })
+}
+
+/// Answer the request most recently taken by a receive on this thread.
+///
+/// Under the non-MCS configuration the kernel keeps one reply capability per
+/// receiving thread, so the authority is implicit: this answers whoever the
+/// last receive took a message from. That is one outstanding request per
+/// thread, which is the discipline these single-threaded components already
+/// have. It cannot block -- the caller is already waiting in `seL4_Call`.
+pub fn reply_to_caller(payload: &[u8]) -> i64 {
+    if payload.len() > MAX_MSG {
+        return ERR_INVALID_ARG;
+    }
+    with_thread_buffer(|ipc_buffer| {
+        stage_native_message(ipc_buffer, payload, &[])?;
+        let info = MessageInfoBuilder::default()
+            .label(payload.len() as Word)
+            .length(payload.len().div_ceil(core::mem::size_of::<Word>()))
+            .build();
+        sel4::reply(ipc_buffer, info);
+        Ok(ERR_SUCCESS)
+    })
+}
+
 /// Best-effort send: deliver only if a receiver is already blocked on the
 /// endpoint, otherwise discard. See [`crate::syscall::try_send`].
 pub fn try_send(slot: u32, payload: &[u8], caps: &[u32]) -> i64 {
