@@ -513,11 +513,18 @@ pub fn expect_reply(slot: u32, session: u64, request_id: u64, status: i32) -> Wi
     reply
 }
 
+/// Wait for a terminal the broker produces only after observing a peer's death.
+///
+/// Blocking, like every other receive here. The broker offers terminals with
+/// `seL4_NBSend`, which reaches only a peer already blocked on the endpoint, so
+/// a caller that polls and yields is never visible to it: two non-blocking
+/// peers never rendezvous however long either spins. The name refers to the
+/// *broker* parking on the supervision handle, not to this reader polling.
 pub fn expect_terminal_parked(slot: u32, session: u64, request_id: u64, status: i32) {
     let mut bytes = [0u8; MAX_MSG];
     let mut caps = [0u64; MAX_CAPS_PER_MSG];
     loop {
-        match slime_rt::recv(slot, &mut bytes, &mut caps) {
+        match slime_rt::recv_blocking(slot, &mut bytes, &mut caps) {
             ERR_WOULDBLOCK => slime_rt::yield_now(),
             ERR_PEER_DEAD => fail(b"terminal peer died"),
             value if value < 0 => fail(b"terminal receive"),
@@ -559,6 +566,10 @@ pub fn expect_terminal(slot: u32, session: u64, request_id: u64, status: i32) {
     {
         fail(b"terminal mismatch")
     }
+    // The ack must arrive: it is the only thing that retires the record, and
+    // `try_send` reports nothing, so a dropped ack leaves the broker re-offering
+    // a terminal this reader has already taken. Blocking is safe because the
+    // broker returns to receiving on every pass.
     let mut ack = terminal;
     ack.kind = KIND_TERMINAL_ACK;
     send_raw(slot, &ack.encode());
