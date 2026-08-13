@@ -623,6 +623,32 @@ The primitive is right for the correlated request/reply arms and wrong for this
 one, so it belongs to the redesign rather than ahead of it. Unwired code is not
 deliverable, hence the revert.
 
+**The circularity is now proven by construction, not argued (2026-08-13).**
+Three shapes were built and measured, and each fails for the same reason:
+
+- Queue the terminal and deliver it from the main loop with a blocking send —
+  the client is mid-burst, blocked in its own `send`, so the two wait on each
+  other.
+- Gate that delivery on a `client_quiet` flag set by a sweep that took no
+  request — the client cannot go quiet without receiving a terminal, and the
+  terminal cannot be delivered until it does. The flag never sets. Observed:
+  two of the burst's requests refused, then the plane stops.
+- Offer the terminal with `try_send` — it reports nothing, so the record is
+  either retired undelivered or never retired at all.
+
+Chunking the client's burst does not escape it either: with `MAX_CALLS = 4`, a
+chunk of six stalls on its third send, because refusal begins before the client
+has stopped offering. The scenario was written against logical channels, where a
+send buffered and returned; rendezvous does not buffer, so "send N, then read N"
+is not expressible for any N above the in-flight bound without the broker being
+able to wait on *both* directions at once.
+
+That is the Notification, and it is now a measured requirement rather than a
+design preference. The gate's own backpressure chain asserted a marker from the
+stream broker's ring path (`terminal delivery ring backpressured`) that no call
+emitter produces; it now asserts `terminal delivery queued`, which is the call
+broker's equivalent, so the chain can fail honestly once the mechanism lands.
+
 Three cheaper explanations were tested and refuted rather than argued away: both
 clients reach the barrier and block; the generation installs the edge
 symmetrically (`fabric-call-client` slot 4 / CSpace 37, `fabric-call-client-b`

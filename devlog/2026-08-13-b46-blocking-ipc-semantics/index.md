@@ -224,3 +224,26 @@ backpressure under test, and `Call` blocks on each answer — 24 sequential roun
 trips instead. The primitive is right for the correlated request/reply arms and
 wrong for this one, so it belongs to the redesign rather than ahead of it, and
 unwired code is not deliverable.
+
+**The multi-source wait is a measured requirement now.** Three broker shapes
+were built and run, and each fails identically:
+
+| Shape | Outcome |
+|---|---|
+| Queue the terminal, deliver from the main loop with a blocking send | Client is mid-burst, blocked in its own `send`; both wait on each other |
+| Gate that delivery on a `client_quiet` flag set by a sweep that took nothing | Client cannot go quiet without receiving a terminal, which cannot be delivered until it does — flag never sets; two requests refused, then the plane stops |
+| Offer with `try_send` | Reports nothing, so the record is retired undelivered or never retired |
+
+Chunking the client's burst does not escape it: with `MAX_CALLS = 4`, a chunk of
+six stalls on its third send, because refusal begins before the client has
+stopped offering. The scenario was written against logical channels, where a
+send buffered and returned. Rendezvous does not buffer, so "send N, then read N"
+is inexpressible for any N above the in-flight bound unless the broker can wait
+on both directions at once — which is the Notification, and which no arrangement
+of `send`/`try_send`/`recv` substitutes for.
+
+One honest gate defect fell out of this: the backpressure chain asserted
+`[fabric] terminal delivery ring backpressured`, which belongs to the *stream*
+broker's ring-publish path and no call emitter produces. It asserts
+`terminal delivery queued` now, so the chain can fail for a real reason once the
+mechanism lands.
