@@ -264,3 +264,30 @@ with the truncated-tail trap above, that is two distinct ways this gate can lie
 about a change. Every comparison here is now taken from at least two consecutive
 runs, and every transcript claim from the full QEMU capture rather than the
 gate's tail.
+
+**The blocker is fixed, and the metric that hid it was wrong.** Releasing the
+server when *its own* call times out advances the plane to
+`[fabric-call-server] injected peer death` — the peer-death arm, several stages
+past where it had been stopping — with three forwards instead of one.
+
+That change was rejected twice before, because raw marker count *falls* from 57
+to 55. Comparing distinct marker **sets** instead of totals shows why: the
+missing lines are repeated `terminal delivery queued` and `stale call rejected`
+from a broker spinning on work it could not progress. **A count that rewards
+spinning is the wrong measure**, and two reverts this session were made on it.
+
+`server_idle` became `server_call: Option<u64>` so the distinction is
+expressible: a boolean cannot tell a timeout on the call the server holds, which
+releases it, from a timeout on any other, which does not.
+
+Ten distinct stages now, stopping with the server exited and no
+`call peer death propagated`. Checking the supervision handle before forwarding
+— on the theory that the broker was blocked in `send` to a dead server — changes
+nothing, so it is blocked elsewhere; that guard was reverted rather than kept
+unearned.
+
+Three measurement traps are now known for this gate, all of which produced a
+wrong conclusion this session: the transcript tail is truncated; a run
+immediately after `git checkout` can report a stale build; and marker totals
+conflate progress with spinning. Comparisons need paired runs, full QEMU
+captures, and set-difference rather than counts.

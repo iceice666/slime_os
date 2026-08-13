@@ -850,6 +850,28 @@ followed by a gate run reported 19 markers where three consecutive clean runs
 report 57. That was a stale build, not variance. Every comparison in this
 investigation is now taken from at least two consecutive runs.
 
+**The blocker is fixed, and the metric that hid it was wrong (2026-08-13).**
+Releasing the server when *its own* call times out advances the plane to
+`[fabric-call-server] injected peer death` — the peer-death arm, several stages
+past where it had been stopping — with three forwards instead of one.
+
+That change was rejected twice before on raw marker count, which *falls* from 57
+to 55. Comparing the distinct marker **sets** rather than the totals shows why:
+the missing lines are repeated `terminal delivery queued` and `stale call
+rejected` from a broker spinning on work it could not progress. A count that
+rewards spinning is the wrong measure, and two earlier reverts this session were
+made on it.
+
+`server_idle` also became `server_call: Option<u64>` so the distinction is
+expressible at all: a bare boolean cannot tell a timeout on the call the server
+holds — which releases it — from a timeout on any other, which does not.
+
+The plane now reaches ten distinct stages and stops with the server exited and
+no `call peer death propagated`. Checking the supervision handle before
+forwarding, on the theory that the broker was blocked in `send` to a dead
+server, changes nothing — so it is blocked somewhere else, and that guard was
+reverted rather than kept unearned.
+
 Three candidates were measured and reverted rather than argued away: ordering
 the offers by request id (a real correctness property, kept, but moves nothing
 alone and regresses with a `terminal mismatch` when applied without the rest);
