@@ -499,8 +499,14 @@ impl Broker {
     /// Retire the terminal `client` acknowledged.
     ///
     /// Matching on the request id keeps the retirement exact: an ack settles
-    /// the one record it names, never a batch, so a client acknowledging out of
+    /// the record it names, never a batch, so a client acknowledging out of
     /// order or twice cannot drop a terminal it has not seen.
+    ///
+    /// Every match is retired rather than the first. A request id settles
+    /// exactly once, so duplicates are the same terminal recorded twice --
+    /// which happens when a call already holding a `PendingTerminal` is
+    /// finished again -- and leaving one behind blocks the client's queue
+    /// forever, since it will never ack an id it has already passed.
     fn retire_terminal(&mut self, client: usize, request_id: u64) {
         for index in 0..self.calls.len() {
             if self.calls[index].phase == Phase::PendingTerminal
@@ -508,7 +514,6 @@ impl Broker {
                 && self.calls[index].request_id == request_id
             {
                 self.calls[index] = Call::EMPTY;
-                return;
             }
         }
         for pending in &mut self.pending_terminals {
@@ -516,7 +521,6 @@ impl Broker {
                 call.client_index as usize == client && call.request_id == request_id
             }) {
                 *pending = None;
-                return;
             }
         }
     }
@@ -1144,7 +1148,6 @@ impl Broker {
         }
         lowest
     }
-
     fn pump_terminals(&mut self) -> bool {
         let mut progressed = false;
         // Offer only the lowest outstanding request id per client, across both
