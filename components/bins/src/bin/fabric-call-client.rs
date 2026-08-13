@@ -19,6 +19,8 @@ fn main(_startup_arg: u32) {
     if slime_components::fabric_boot::active() {
         slime_components::fabric_boot::park_only(b"fabric-call-client");
     }
+    // This binary's badge bit on the broker's wake notification.
+    scenario::set_wake_slot(scenario::FABRIC_CALL_CLIENT_SERVICE_PARAMETERS_READY_SLOT);
     let route = scenario::request_role(boot_contracts::fabric_graph::DIRECTION_CLIENT);
     let session = scenario::client_session(0);
 

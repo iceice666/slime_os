@@ -181,25 +181,26 @@ impl Broker {
             // blocked, which yielding does nothing to change. Two non-blocking
             // peers never rendezvous, so the broker has to wait in the kernel.
             //
-            // It waits on the server, which is the only peer that can owe it
-            // something it has not already asked for. This is not sufficient in
-            // general: a client that blocks in `send` *after* the sweep above
-            // has passed it is invisible until the next sweep, and if the
-            // broker is already parked on the server it will not run one. A
-            // client firing a burst while the server is mid-call wedges on
-            // exactly that window.
+            // Nothing moved, so every peer with something to say is blocked in
+            // `send` -- and `seL4_NBRecv` takes a message only from a sender
+            // already blocked, which yielding does nothing to change. The
+            // broker must wait, and it cannot wait on any one endpoint: a
+            // client that blocks after the sweep passed it would be invisible
+            // until the next sweep, and a broker parked on the server never
+            // runs one.
             //
-            // The real answer is a Notification the broker waits on with every
-            // peer badged into it, which is what the object exists for and what
-            // `fabric-service`'s stream side already uses; a single endpoint
-            // cannot express "wake me when any of these speak".
-            if !self.server_idle
-                && let Some(slot) = self.server_slot
-            {
-                self.block_on_server(slot);
+            // So it waits on the Notification every peer is badged into. A peer
+            // signals it *before* its blocking send, so the wake is already
+            // pending by the time the broker gets here and the next sweep finds
+            // that sender waiting. This is what a single Endpoint cannot
+            // express: "wake me when any of these speak".
+            // A graph that declares no wake object emits the constant as
+            // `u32::MAX`; there the broker falls back to yielding.
+            if FABRIC_SERVICE_PARAMETERS_READY_SLOT == u32::MAX {
+                slime_rt::yield_now();
                 continue;
             }
-            slime_rt::yield_now();
+            let _ = slime_rt::notification_wait(FABRIC_SERVICE_PARAMETERS_READY_SLOT);
         }
     }
 
@@ -702,27 +703,6 @@ impl Broker {
         }
         self.finish(index, STATUS_CANCELLED);
         slime_rt::debug_write(b"[fabric] call cancelled\n");
-    }
-
-    /// Wait in the kernel for the server's answer.
-    ///
-    /// Used only when nothing else can progress and a call is outstanding, so
-    /// the server's reply is the sole event that can move the plane. Its `send`
-    /// blocks until a receiver arrives; this is that receiver.
-    fn block_on_server(&mut self, slot: u32) {
-        let mut bytes = [0u8; MAX_MSG];
-        let mut caps = [0u64; MAX_CAPS_PER_MSG];
-        let length = match slime_rt::recv_blocking(slot, &mut bytes, &mut caps) {
-            ERR_WOULDBLOCK => return,
-            ERR_PEER_DEAD => {
-                self.server_slot = None;
-                self.reclaim_all(STATUS_PEER_DEAD);
-                return;
-            }
-            value if value < 0 => fail(b"server recv"),
-            value => value as usize,
-        };
-        self.handle_server_record(&bytes, &caps, length);
     }
 
     fn pump_server(&mut self) -> bool {

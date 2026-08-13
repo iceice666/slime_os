@@ -461,6 +461,16 @@
       transferable = false;
     };
   ];
+  notificationGrants = [
+    { name = "fabric-service-parameters-ready"; source = "fabric-call-client"; target = "fabric-service"; };
+  ];
+  notificationBindings = [
+    { grant = "fabric-service-parameters-ready"; holder = "fabric-call-client"; slot = 0; role = "signal"; };
+    { grant = "fabric-service-parameters-ready"; holder = "fabric-call-client-b"; slot = 1; role = "signal"; };
+    { grant = "fabric-service-parameters-ready"; holder = "fabric-call-server"; slot = 2; role = "signal"; };
+    { grant = "fabric-service-parameters-ready"; holder = "fabric-call-time"; slot = 3; role = "signal"; };
+    { grant = "fabric-service-parameters-ready"; holder = "fabric-service"; slot = 0; role = "wait"; };
+  ];
   interfaceSchemas = [
     "contracts/interface-schema/v1/interfaces/parameter-call.zti";
   ];

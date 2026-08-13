@@ -28,12 +28,17 @@ pub const FABRIC_NOTIFICATION_BINDINGS: &[FabricNotificationBindingRow] = &[
     (b"fabric-publisher", "telemetry", 1, 0, 1),
     (b"fabric-subscriber", "telemetry", 2, 2, 3),
 ];
+pub const FABRIC_CALL_CLIENT_B_SERVICE_PARAMETERS_READY_SLOT: u32 = 4294967295;
+pub const FABRIC_CALL_CLIENT_SERVICE_PARAMETERS_READY_SLOT: u32 = 4294967295;
+pub const FABRIC_CALL_SERVER_SERVICE_PARAMETERS_READY_SLOT: u32 = 4294967295;
+pub const FABRIC_CALL_TIME_SERVICE_PARAMETERS_READY_SLOT: u32 = 4294967295;
 pub const FABRIC_PUBLISHER_B_DIAGNOSTICS_CREDIT_SLOT: u32 = 3;
 pub const FABRIC_PUBLISHER_B_DIAGNOSTICS_READY_SLOT: u32 = 2;
 pub const FABRIC_PUBLISHER_B_TELEMETRY_CREDIT_SLOT: u32 = 1;
 pub const FABRIC_PUBLISHER_B_TELEMETRY_READY_SLOT: u32 = 0;
 pub const FABRIC_PUBLISHER_TELEMETRY_CREDIT_SLOT: u32 = 1;
 pub const FABRIC_PUBLISHER_TELEMETRY_READY_SLOT: u32 = 0;
+pub const FABRIC_SERVICE_PARAMETERS_READY_SLOT: u32 = 4294967295;
 pub const FABRIC_SUBSCRIBER_B_DIAGNOSTICS_CREDIT_SLOT: u32 = 3;
 pub const FABRIC_SUBSCRIBER_B_DIAGNOSTICS_READY_SLOT: u32 = 2;
 pub const FABRIC_SUBSCRIBER_B_TELEMETRY_CREDIT_SLOT: u32 = 1;
@@ -151,11 +156,11 @@ pub const FABRIC_SUPERVISION: &[(&[u8], u32)] = &[
 pub const FABRIC_MINTED_GRANTS: &[(&[u8], usize)] = &[
     (b"init", 2),
     (b"console", 0),
-    (b"dango", 4),
+    (b"dango", 3),
     (b"sysinfo", 0),
     (b"echo-agent", 0),
     (b"generation-manager", 2),
-    (b"spawn-service", 4),
+    (b"spawn-service", 3),
     (b"filesystem-service", 1),
     (b"generation-list", 0),
     (b"generation-inspect", 0),
@@ -163,9 +168,9 @@ pub const FABRIC_MINTED_GRANTS: &[(&[u8], usize)] = &[
     (b"generation-select", 0),
     (b"generation-rollback", 0),
     (b"powerbox-chooser", 2),
-    (b"fabric-service", 2),
-    (b"fabric-call-worker", 2),
-    (b"fabric-op-worker", 1),
+    (b"fabric-service", 1),
+    (b"fabric-call-worker", 1),
+    (b"fabric-op-worker", 0),
     (b"fabric-publisher", 0),
     (b"fabric-subscriber", 0),
     (b"fabric-call-client", 1),

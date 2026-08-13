@@ -1493,9 +1493,24 @@ def render_fabric_profile_rust(resolved: ResolvedFabricProfile) -> str:
             fail(f"notification binding names unknown grant {binding['grant']}")
         holder = binding["holder"]
         if not binding["grant"].startswith(f"{holder}-"):
-            # The fabric's own half of each pair. Its slots are the broker's,
-            # published through `FABRIC_NOTIFICATIONS` rather than as
-            # per-participant constants.
+            # A grant whose name does not begin with this holder is one it
+            # shares: either the fabric's own half of a per-participant pair
+            # (published through `FABRIC_NOTIFICATIONS`), or a wake object
+            # several peers signal and one waits on. The shared case still needs
+            # a constant per holder, because each holds it at its own slot --
+            # that slot is also its badge bit, so they are deliberately
+            # different numbers for the same object.
+            shared = [b for b in notification_bindings if b["grant"] == binding["grant"]]
+            if len(shared) <= 2:
+                continue
+            name = (
+                f"{holder.removeprefix('fabric-')}_{binding['grant'].removeprefix('fabric-')}_slot"
+                .upper()
+                .replace("-", "_")
+            )
+            existing = notification_slots.setdefault(name, binding["slot"])
+            if existing != binding["slot"]:
+                fail(f"notification slot {name} declared twice with different slots")
             continue
         suffix = binding["grant"].removeprefix(f"{holder}-")
         route, _, kind = suffix.rpartition("-")
@@ -1505,6 +1520,21 @@ def render_fabric_profile_rust(resolved: ResolvedFabricProfile) -> str:
         existing = notification_slots.setdefault(name, binding["slot"])
         if existing != binding["slot"]:
             fail(f"notification slot {name} declared twice with different slots")
+    # Every profile emits the call plane's wake slots, even where the manifest
+    # declares no such notification. The components that read them are compiled
+    # for every graph, so an absent constant is a *build* failure standing in
+    # for a boot-time absence the generation already expresses -- the same trap
+    # the fabric's control-slot constants hit. `SLOT_ABSENT` says "this graph
+    # has no wake object", which the holder checks rather than fails to link
+    # against.
+    for name in (
+        "SERVICE_PARAMETERS_READY_SLOT",
+        "CALL_CLIENT_SERVICE_PARAMETERS_READY_SLOT",
+        "CALL_CLIENT_B_SERVICE_PARAMETERS_READY_SLOT",
+        "CALL_SERVER_SERVICE_PARAMETERS_READY_SLOT",
+        "CALL_TIME_SERVICE_PARAMETERS_READY_SLOT",
+    ):
+        notification_slots.setdefault(name, 0xFFFF_FFFF)
     notification_constants = "".join(
         f"pub const FABRIC_{name}: u32 = {slot};\n"
         for name, slot in sorted(notification_slots.items())
@@ -2870,10 +2900,18 @@ def build_sel4_plan(
         if source is None or target is None or source == target:
             fail(f"notification grant {grant['name']}: invalid endpoints")
         bindings = bindings_by_grant[grant["name"]]
-        expected = {(source, "signal"), (target, "wait")}
-        actual = {(instance_index[binding["holder"]], binding["role"]) for binding in bindings}
-        if len(bindings) != 2 or actual != expected:
-            fail(f"notification grant {grant['name']}: requires source signal and target wait bindings")
+        # One waiter, and at least the declared source signalling it. Several
+        # signallers are the point of a Notification: a waiter blocked on one
+        # object learns which of them spoke from the badge, which is the only
+        # way a broker can wait on a whole peer set at once. `source` names the
+        # edge the grant is *for*; any additional signaller must still be a
+        # declared instance, and each gets its own badge bit from its slot.
+        waiters = [b for b in bindings if b["role"] == "wait"]
+        signals = [b for b in bindings if b["role"] == "signal"]
+        if len(waiters) != 1 or instance_index[waiters[0]["holder"]] != target:
+            fail(f"notification grant {grant['name']}: requires exactly one target wait binding")
+        if not signals or source not in {instance_index[b["holder"]] for b in signals}:
+            fail(f"notification grant {grant['name']}: requires a source signal binding")
         object_ = len(object_index)
         object_index[(grant["name"], "notification")] = object_
         kernel_records.extend(

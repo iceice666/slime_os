@@ -2003,6 +2003,15 @@ impl<'a> Generation<'a> {
             if previous_notification.is_some_and(|previous| previous >= grant.name) {
                 return Err(DecodeError::BadOrder);
             }
+            // A notification has exactly one waiter and at least one signaller,
+            // and the grant's `source` must be among the signallers -- that is
+            // the edge the grant names. Additional signallers are the object's
+            // reason to exist: a waiter blocked on one notification learns
+            // which peer spoke from the badge, which is the only way to wait on
+            // a whole peer set at once. Each signaller's declared slot is its
+            // badge bit, and the per-holder slot uniqueness checked below keeps
+            // those bits distinct.
+            let mut source_signals = false;
             let mut signal = 0;
             let mut wait = 0;
             for binding_index in 0..self.notification_binding_count {
@@ -2010,13 +2019,16 @@ impl<'a> Generation<'a> {
                 if binding.grant != index {
                     continue;
                 }
-                match (binding.holder, binding.role) {
-                    (holder, NotificationRole::Signal) if holder == grant.source => signal += 1,
-                    (holder, NotificationRole::Wait) if holder == grant.target => wait += 1,
-                    _ => return Err(DecodeError::BadBinding),
+                match binding.role {
+                    NotificationRole::Signal => {
+                        source_signals |= binding.holder == grant.source;
+                        signal += 1;
+                    }
+                    NotificationRole::Wait if binding.holder == grant.target => wait += 1,
+                    NotificationRole::Wait => return Err(DecodeError::BadBinding),
                 }
             }
-            if signal != 1 || wait != 1 {
+            if signal == 0 || !source_signals || wait != 1 {
                 return Err(DecodeError::BadBinding);
             }
             previous_notification = Some(grant.name);

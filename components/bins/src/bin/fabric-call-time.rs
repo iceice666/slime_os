@@ -16,6 +16,8 @@ fn main(_startup_arg: u32) {
     if slime_components::fabric_boot::active() {
         slime_components::fabric_boot::park_only(b"fabric-call-time");
     }
+    // This binary's badge bit on the broker's wake notification.
+    scenario::set_wake_slot(scenario::FABRIC_CALL_TIME_SERVICE_PARAMETERS_READY_SLOT);
     let mut phases = PhaseBuffer::new(None);
     phases.wait(1);
     scenario::send_time(0, 1_000_025);

@@ -10,6 +10,8 @@ use slime_proto::sample_descriptor::{
 use slime_rt::{
     CapabilityDisposition, ERR_PEER_DEAD, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG,
 };
+
+include!(concat!(env!("OUT_DIR"), "/fabric_profile.rs"));
 const FACTORY_SLOT: u32 = 1;
 
 /// The fabric, as this participant's loan receiver.
@@ -565,7 +567,51 @@ fn wait_client_phase(expected: u8) {
     }
 }
 
+/// This component's badge bit on the broker's wake notification.
+///
+/// Every peer holds the same Notification object at a different slot, because
+/// the slot *is* the badge: a broker woken by it can tell which peer spoke
+/// without asking. Each binary therefore has its own number, set once at
+/// startup from the generated profile rather than shared as a constant.
+///
+/// SAFETY: each component is single-threaded and sets this before any send.
+static mut WAKE_SLOT: u32 = 0;
+
+pub fn set_wake_slot(slot: u32) {
+    // SAFETY: single-threaded, and called once before any send.
+    unsafe { *core::ptr::addr_of_mut!(WAKE_SLOT) = slot };
+}
+
+/// The wake slot, or `None` where this graph declares no wake object. A
+/// component compiled for every profile must tolerate its absence, since the
+/// constant is emitted regardless (`u32::MAX` means "not in this graph").
+fn wake_slot() -> Option<u32> {
+    // SAFETY: single-threaded, as above.
+    let slot = unsafe { *core::ptr::addr_of!(WAKE_SLOT) };
+    (slot != u32::MAX).then_some(slot)
+}
+
+fn signal_wake() {
+    if let Some(slot) = wake_slot() {
+        let _ = slime_rt::notification_signal(slot);
+    }
+}
+
+/// Send one record to the broker, waking it first.
+///
+/// The signal goes *before* the send, and that order is the whole point: a
+/// native `send` blocks until the broker receives, so a broker parked waiting
+/// for something else would never learn this peer had spoken. Signalling first
+/// makes the wake already pending when the broker reaches its wait, so it
+/// returns immediately and sweeps its endpoints -- finding this sender blocked
+/// and ready to hand its message over.
+///
+/// A notification coalesces, so several peers signalling before the broker runs
+/// collapse to one wake carrying every badge bit. That is correct here: the
+/// wake means "at least one peer has something", and the sweep establishes
+/// which.
 fn send_raw(slot: u32, bytes: &[u8; MAX_MSG]) {
+    signal_wake();
     loop {
         match slime_rt::send(slot, bytes, &[]) {
             ERR_SUCCESS => return,
@@ -575,7 +621,11 @@ fn send_raw(slot: u32, bytes: &[u8; MAX_MSG]) {
     }
 }
 
+/// Delegate a loan to the broker, waking it first. Same ordering rule as
+/// [`send_raw`]: the wake must be pending before the blocking transfer, or a
+/// parked broker never learns this peer has spoken.
 fn send_with_cap(slot: u32, bytes: &[u8; MAX_MSG], cap: u32) {
+    signal_wake();
     loop {
         match slime_rt::capability_delegate(
             slot,
