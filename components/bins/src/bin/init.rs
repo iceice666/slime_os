@@ -659,19 +659,35 @@ fn launch_fabric_operations() {
     // Controls are generation-declared native Endpoints, installed by the
     // root into both halves before anything runs. Init mints nothing.
     slime_rt::debug_write(b"[init] operation control channels minted\n");
-    let service = slime_rt::spawn(FABRIC_SERVICE_SLOT, &[]).unwrap_or_else(|_| slime_rt::exit(1));
-    slime_rt::debug_write(b"[init] operation fabric spawned\n");
+    // The participants precede the broker because it is granted a supervision
+    // handle naming each of them, and a handle cannot exist before its task. A
+    // native Endpoint reports no peer death, so those handles are the only way
+    // the broker observes a participant exit rather than blocking on it.
     let client = slime_rt::spawn(FABRIC_OP_CLIENT_SLOT, &[]).unwrap_or_else(|_| slime_rt::exit(1));
     let client_b =
         slime_rt::spawn(FABRIC_OP_CLIENT_B_SLOT, &[]).unwrap_or_else(|_| slime_rt::exit(1));
     let server = slime_rt::spawn(FABRIC_OP_SERVER_SLOT, &[]).unwrap_or_else(|_| slime_rt::exit(1));
-    slime_rt::debug_write(b"[init] operation participants spawned\n");
-    // Every participant's identity reached the broker through the generation's
-    // own supervision bindings, placed by the root rather than delegated here.
-    slime_rt::debug_write(b"[init] operation supervision delegated\n");
     let replacement =
         slime_rt::spawn(FABRIC_OP_CLIENT_B_RESTART_SLOT, &[]).unwrap_or_else(|_| slime_rt::exit(1));
+    slime_rt::debug_write(b"[init] operation participants spawned\n");
     slime_rt::debug_write(b"[init] operation replacement introduced\n");
+    // What init still passes is exactly what the generation cannot place: the
+    // shared-buffer factory it holds, and one supervision handle per
+    // participant, which only exist once those tasks do. Matching is positional
+    // against ascending declared slot: factory at 1, then the handles.
+    let service = slime_rt::spawn(
+        FABRIC_SERVICE_SLOT,
+        &[
+            grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
+            grant(client.supervision_slot, RIGHT_SUPERVISE),
+            grant(client_b.supervision_slot, RIGHT_SUPERVISE),
+            grant(server.supervision_slot, RIGHT_SUPERVISE),
+            grant(replacement.supervision_slot, RIGHT_SUPERVISE),
+        ],
+    )
+    .unwrap_or_else(|_| slime_rt::exit(1));
+    slime_rt::debug_write(b"[init] operation fabric spawned\n");
+    slime_rt::debug_write(b"[init] operation supervision delegated\n");
     let time = slime_rt::spawn(FABRIC_OP_TIME_SLOT, &[]).unwrap_or_else(|_| slime_rt::exit(1));
     slime_rt::debug_write(b"[init] operation replacement released\n");
     wait_clean(&[
