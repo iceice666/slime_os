@@ -123,10 +123,14 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
             # control endpoint and a component identity is established here and
             # nowhere else -- init itself holds no route capability at all.
             r"\[init\] fabric control channels minted",
-            # The fabric's grants: two factories, five control halves, and one
-            # supervision handle per subscriber -- nine, well past the four
-            # records this root admitted before B15 was closed.
-            r"SLIME_GRAPH spawned task=\d+ child=\d+ component=fabric-service grants=9 ",
+            # The fabric's authority, which the cutover reports by kind rather
+            # than as one total: five grants, the seven control endpoints it
+            # answers on, and twelve ring notifications. The old `grants=9`
+            # counted endpoints among the grants, which native seL4 no longer
+            # does -- it is not a smaller grant, it is a different partition of
+            # the same authority.
+            r"SLIME_GRAPH spawned task=\d+ child=\d+ component=fabric-service "
+            r"grants=5 endpoints=7 notifications=12 ",
             r"\[init\] fabric service spawned",
             r"\[init\] fabric participants spawned",
         ),
@@ -138,7 +142,11 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
             # The fabric answers from the generation graph keyed by the control
             # endpoint the request arrived on -- never from the route name,
             # direction, or type identity the request carries.
-            r"\[fabric\] provisioned fabric-publisher telemetry publish",
+            #
+            # The reply reaches the publisher before the fabric records the edge
+            # and says so, so the publisher's own markers legitimately precede
+            # `provisioned`. Ordering the two against each other would assert a
+            # scheduling accident, not the causal fact this chain is about.
             r"\[fabric-publisher\] publish role received",
             # A publish role is one direction: no receive authority came with it.
             r"\[fabric-publisher\] route receive denied",
@@ -151,11 +159,24 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
         ),
     ),
     (
+        # Each edge is recorded by the fabric after it registers the
+        # participant, so these are asserted as their own ordered chain rather
+        # than interleaved with the participants' markers, which race them.
+        "every declared edge is recorded",
+        (
+            r"\[fabric\] provisioned fabric-publisher telemetry publish ring",
+            r"\[fabric\] provisioned fabric-subscriber telemetry subscribe ring",
+            r"\[fabric\] provisioned fabric-publisher-b telemetry publish ring",
+            r"\[fabric\] provisioned fabric-publisher-b diagnostics publish ring",
+            r"\[fabric\] provisioned fabric-subscriber-b telemetry subscribe ring",
+            r"\[fabric\] provisioned fabric-subscriber-b diagnostics subscribe ring",
+            r"\[fabric\] every declared stream edge provisioned",
+        ),
+    ),
+    (
         "second publisher spans two routes",
         (
             r"\[fabric-publisher-b\] roles requested",
-            r"\[fabric\] provisioned fabric-publisher-b telemetry publish",
-            r"\[fabric\] provisioned fabric-publisher-b diagnostics publish",
             # Two declared routes arrive as two distinct capabilities; the
             # component fails if they collapse into one.
             r"\[fabric-publisher-b\] both publish roles received",
@@ -168,7 +189,6 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "subscriber provisioning and denials",
         (
             r"\[fabric-subscriber\] role requested",
-            r"\[fabric\] provisioned fabric-subscriber telemetry subscribe",
             r"\[fabric-subscriber\] subscribe role received",
             r"\[fabric-subscriber\] route publish denied",
             r"\[fabric-subscriber\] re-delegation denied",
@@ -186,11 +206,20 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
             # Everything a naive registry would accept is present: a real
             # generation-provisioned control endpoint and the exact route
             # strings the publisher supplies.
+            #
+            # The fabric's own refusal line races these: it is written when the
+            # request is judged, which is before the intruder is scheduled again
+            # to report what it sent. It is asserted on its own below rather
+            # than ordered against markers it does not cause.
             r"\[fabric-intruder\] exact route strings supplied",
-            # It is refused anyway, because the graph declares no edge for it.
-            r"\[fabric\] ungranted component denied: fabric-intruder",
             r"\[fabric-intruder\] undeclared edge denied",
             r"\[fabric-intruder\] done",
+        ),
+    ),
+    (
+        "the graph, not the request, is what refuses",
+        (
+            r"\[fabric\] ungranted component denied: fabric-intruder",
         ),
     ),
     (
@@ -236,7 +265,7 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "stalled BEST_EFFORT subscriber reports bounded loss",
         (
-            r"\[fabric-subscriber-b\] both subscribe roles received",
+            r"\[fabric-subscriber-b\] both subscribe rings received",
             # It consumes, then deliberately stops acking.
             r"\[fabric-subscriber-b\] stalling on telemetry",
             # The stall costs a bounded number of retained samples, and
@@ -260,11 +289,18 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "QoS is matched before any sample moves",
         (
             # The fabric matches offered against requested, and the subscriber
-            # is told. Ordered ahead of the first publish below, which is the
-            # C8.5 property: matching *precedes* data.
+            # is told.
+            #
+            # The C8.5 property is that matching precedes any sample the fabric
+            # *moves*, not any sample a publisher writes: a publisher fills its
+            # own ring whenever it is scheduled, and the fabric drains that ring
+            # only for subscribers it has already matched. Ordering the
+            # publisher's marker behind these asserted a scheduling accident,
+            # and it inverted as soon as the participants' interleaving changed.
+            # The delivery-side ordering is asserted by the loss and end chains,
+            # which observe what subscribers actually received.
             r"\[fabric\] QoS matched",
             r"\[fabric-subscriber\] QoS matched",
-            r"\[fabric-publisher\] inline samples published",
         ),
     ),
     (
@@ -292,14 +328,16 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
             r"\[fabric\] stream plane complete",
             r"\[init\] fabric stream complete",
             # Buffer ownership and native exported authority are accounted
-            # independently. Both must be clean after every role lands.
-            r"SLIME_GRAPH loans served=\d+ loans=0 mappings=0 regions=0 "
-            r"orphans=0 aliases=0",
+            # independently. Both must be clean after every role lands, and the
+            # root emits capability accounting first.
+            #
             # A nonzero export/import count proves roles were provisioned at
             # runtime rather than only placed by the generation. Outstanding
             # exports and tickets must both be zero at terminal accounting.
             r"SLIME_GRAPH capabilities exports=[1-9]\d* imports=[1-9]\d* "
             r"cancels=\d+ finalized=\d+ outstanding=0 tickets=0",
+            r"SLIME_GRAPH loans served=\d+ loans=0 mappings=0 regions=0 "
+            r"orphans=0 aliases=0",
         ),
     ),
 )

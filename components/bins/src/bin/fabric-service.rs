@@ -73,8 +73,8 @@ use slime_proto::capability_transfer::{
 };
 use slime_proto::fabric_qos::{
     EVENT_DEADLINE_MISSED, EVENT_INCOMPATIBLE_QOS, EVENT_LIFESPAN_EXPIRED, EVENT_LIVELINESS_LOST,
-    EVENT_MATCHED, EVENT_RETRY_EXHAUSTED, EVENT_UNMATCHED, FORMAT_VERSION as QOS_FORMAT_VERSION,
-    QOS_EVENT_MAGIC, WireQosEvent,
+    EVENT_MATCHED, EVENT_PEER_DEAD, EVENT_RETRY_EXHAUSTED, EVENT_UNMATCHED,
+    FORMAT_VERSION as QOS_FORMAT_VERSION, QOS_EVENT_MAGIC, WireQosEvent,
 };
 use slime_proto::fabric_stream::{
     EVENT_SAMPLE_LOST, EVENT_SAMPLE_TAKEN, EVENT_STREAM_END, FLAG_LAST, MAX_INLINE_BYTES,
@@ -100,7 +100,13 @@ include!(concat!(env!("OUT_DIR"), "/fabric_profile.rs"));
 /// gets one page-backed v2 ring; the participant receives a narrowed copy over
 /// its already-installed direct control endpoint.
 const BUFFER_FACTORY_SLOT: u32 = 1;
-const TIME_SLOT: u32 = 9;
+/// The simulated clock's control endpoint, which sits immediately above the
+/// supervision handles rather than at a number written here. Those handles are
+/// themselves derived (`FIRST_CONTROL_SLOT + clients`), so a hardcoded 9 was a
+/// constant racing a computed range: adding a ring participant moved
+/// supervision onto it (B50/R2).
+const TIME_SLOT: u32 =
+    FABRIC_FIRST_CONTROL_SLOT + FABRIC_CLIENTS.len() as u32 + FABRIC_SUPERVISION.len() as u32;
 const FIRST_CONTROL_SLOT: u32 = FABRIC_FIRST_CONTROL_SLOT;
 
 const RIGHT_BUFFER_WRITE: Rights = 1 << 8;
@@ -199,7 +205,12 @@ struct Publisher {
     ready_slot: u32,
     credit_slot: u32,
     route: usize,
+    supervision_slot: u32,
     finished: bool,
+    /// Set when the publisher exited without ending its route. C8.5 requires
+    /// peer death to stay distinguishable from an orderly end, and a native
+    /// Endpoint reports neither: the supervision handle is the only observer.
+    died: bool,
     qos: TransportQos,
     last_assertion_ns: u64,
     retained: StreamHistory,
@@ -337,6 +348,19 @@ fn main(_startup_arg: u32) {
     slime_rt::debug_write(b"[fabric] every declared stream edge provisioned\n");
 
     broker(&type_tags, &mut publishers, &mut subscribers, &mut frames);
+    // Outlive every participant holding one of this component's rings. Exiting
+    // first reclaims the fabric's shared-buffer charges, and a loan mapping
+    // torn out from under a task still executing against it faults that task —
+    // observed as an execute fault at a null address in both subscribers, right
+    // after `holder reclaimed`. The supervision handles the generation granted
+    // for loan addressing answer "is that task gone", so they order the
+    // teardown too.
+    for (component, _) in FABRIC_SUPERVISION.iter() {
+        let supervision = supervision_slot_for(component);
+        while let Ok(None) = slime_rt::supervision_status(supervision) {
+            slime_rt::yield_now();
+        }
+    }
     slime_rt::debug_write(b"[fabric] stream plane complete\n");
 }
 
@@ -749,7 +773,9 @@ fn provision_edge(
                 ready_slot,
                 credit_slot,
                 route: route_index,
+                supervision_slot: supervision_slot_for(component),
                 finished: false,
+                died: false,
                 qos,
                 last_assertion_ns: 0,
                 retained: StreamHistory::new(qos.retained_depth.max(1) as usize)
@@ -850,10 +876,58 @@ fn broker(
             progressed |= pump_late_subscriber(&mut late_subscriber, now_ns, frames);
             late_replay_done = late_subscriber.is_none();
         }
-        for route in 0..ROUTE_COUNT {
-            if route_finished(route, publishers) {
-                for index in 0..subscribers.len() {
-                    progressed |= announce_end(index, route, type_tags, subscribers);
+        // A publisher that exits without ending its route leaves no trace on a
+        // native Endpoint: there is no ERR_PEER_DEAD to receive, and a silent
+        // peer is indistinguishable from a slow one. The supervision handle the
+        // generation granted is the only thing that reports the difference, so
+        // it is what C8.5's peer-death event is derived from -- observed once,
+        // and kept distinct from the orderly `finished` end.
+        for publisher in publishers.iter_mut().flatten() {
+            if publisher.finished || publisher.died {
+                continue;
+            }
+            // `Ok(None)` is "still running"; a terminated peer reports its
+            // termination kind, which is the observation this needs.
+            if matches!(
+                slime_rt::supervision_status(publisher.supervision_slot),
+                Ok(None)
+            ) {
+                continue;
+            }
+            let route = publisher.route;
+            for subscriber in subscribers
+                .iter()
+                .flatten()
+                .filter(|subscriber| subscriber.route == route)
+            {
+                let _ = send_qos_event(
+                    subscriber.control_slot,
+                    EVENT_PEER_DEAD,
+                    0,
+                    1,
+                    now_ns,
+                    type_tags[route],
+                );
+            }
+            slime_rt::debug_write(b"[fabric] QoS peer dead\n");
+            publisher.died = true;
+            publisher.finished = true;
+            progressed = true;
+        }
+        // Re-offer anything a busy subscriber was not blocked to receive, and
+        // hold the terminal event back until nothing is outstanding. Both use
+        // `seL4_NBSend` into the same endpoint, so a subscriber that blocks
+        // once takes whichever is offered first: announcing the end beside a
+        // pending QoS record would let the end win and retire the route with
+        // the condition never delivered.
+        let outstanding = flush_qos_events();
+        progressed |= outstanding;
+        if !qos_events_pending() {
+            for route in 0..ROUTE_COUNT {
+                if route_finished(route, publishers) {
+                    for index in 0..subscribers.len() {
+                        progressed |= announce_end(index, route, type_tags, subscribers);
+                    }
                 }
             }
         }
@@ -946,12 +1020,11 @@ fn pump_publisher(
         let sequence = WireSampleDescriptor::decode(&message)
             .map(|value| value.sequence)
             .unwrap_or(0);
-        if let Some(frame) = admit_shared(
-            &message,
-            type_tags[route],
-            (received[0] != 0).then_some(received[0] as u32),
-            frames,
-        ) {
+        // A delegated loan is a root-recorded export, not an in-message
+        // capability: only a native Endpoint travels in the message itself, so
+        // `received[0]` is empty here and the authority is claimed instead.
+        let loan_slot = slime_rt::capability_import().ok();
+        if let Some(frame) = admit_shared(&message, type_tags[route], loan_slot, frames) {
             frames[frame].admitted_ns = now_ns;
             publishers[index].as_mut().expect("publisher").finished |=
                 frames[frame].flags & FLAG_LAST != 0;
@@ -1388,6 +1461,15 @@ fn deliver(
     subscriber.history.pop();
     release_frame(frame, frames);
     subscriber.deadline_reported = false;
+    // A RELIABLE subscriber owes an acknowledgement for what it was sent, and
+    // this is where the sample becomes outstanding. Without it `in_flight` was
+    // only ever decremented, so it could not leave zero -- and every rule that
+    // reads it (retry accounting, retry exhaustion, and holding the terminal
+    // event back until the queue drains) was unreachable for that reason
+    // rather than because the condition did not hold.
+    if subscriber.qos.reliability as u32 == RELIABILITY_RELIABLE {
+        subscriber.in_flight = subscriber.in_flight.saturating_add(1);
+    }
     true
 }
 
@@ -1400,10 +1482,18 @@ fn drain_acks(
     let Some(subscriber) = subscribers[index].as_mut() else {
         return false;
     };
-    matches!(
+    // The credit notification is the subscriber saying it consumed what it was
+    // given, which is what retires the outstanding count. A signal is a level,
+    // not a tally -- it coalesces -- so this clears the balance rather than
+    // decrementing once per delivery.
+    if matches!(
         slime_rt::notification_poll(subscriber.credit_slot),
         Ok(Some(_))
-    )
+    ) {
+        subscriber.in_flight = 0;
+        return true;
+    }
+    false
 }
 
 /// Emit one terminal event for a finished route, once per subscriber.
@@ -1436,12 +1526,22 @@ fn announce_end(
         type_identity: type_tags[route],
         reserved: [0; 24],
     };
-    if slime_rt::send(subscriber.control_slot, &event.encode(), &[]) >= 0 {
-        subscriber.ended = true;
-        true
-    } else {
-        false
+    // Terminal information the subscriber genuinely waits for, so it is
+    // re-offered every pass rather than sent once: `seL4_NBSend` discards the
+    // message when the peer is not yet blocked on receive and reports nothing
+    // either way, so a single attempt would silently lose it. The route is
+    // retired only when the peer is gone, which is the one observation that
+    // means it can no longer be waiting. The broker's own loop supplies the
+    // retry, so this never spins.
+    let _ = slime_rt::try_send(subscriber.control_slot, &event.encode(), &[]);
+    if matches!(
+        slime_rt::supervision_status(subscriber.supervision_slot),
+        Ok(None)
+    ) {
+        return false;
     }
+    subscriber.ended = true;
+    true
 }
 
 /// Drop the durable-history references once the broker is finished. Retained
@@ -1729,16 +1829,20 @@ fn apply_time(
         }
         subscriber.in_flight = 0;
         subscriber.terminal = true;
-        if let Some(sequence) = exhausted
-            && send_qos_event(
-                subscriber.control_slot,
-                EVENT_RETRY_EXHAUSTED,
-                sequence,
-                subscriber.retry_count as u64,
-                *now_ns,
-                route_type_tag(subscriber.route),
-            )
-        {
+        // Retry exhaustion is a statement about the retries, not about a frame
+        // that happens to survive them: an earlier lifespan expiry can already
+        // have drained this queue, and reporting nothing then would make the
+        // condition invisible exactly when it was reached the hard way. The
+        // sequence is the last sample still queued if there is one, and zero
+        // when the queue is already empty.
+        if send_qos_event(
+            subscriber.control_slot,
+            EVENT_RETRY_EXHAUSTED,
+            exhausted.unwrap_or(0),
+            subscriber.retry_count as u64,
+            *now_ns,
+            route_type_tag(subscriber.route),
+        ) {
             slime_rt::debug_write(b"[fabric] QoS retry exhausted\n");
         }
     }
@@ -1826,11 +1930,77 @@ fn send_qos_event(
         type_identity,
         reserved: [0; 16],
     };
-    match slime_rt::send(slot, &record.encode(), &[]) {
+    // `seL4_NBSend` delivers only to a peer already blocked on the endpoint, so
+    // an event raised while the subscriber is busy elsewhere -- reading its
+    // ring, or waiting on its other route -- is discarded with nothing
+    // reported. These are not advisory: the plane's contract is that the
+    // subscriber observes each declared QoS condition, so a dropped one is a
+    // lost obligation rather than a skipped hint.
+    //
+    // Undelivered events are therefore retained and re-offered on every broker
+    // pass, the same way a terminal `STREAM_END` is. `true` still means "the
+    // subscriber has it", so each caller's marker still reports delivery rather
+    // than intent.
+    let encoded = record.encode();
+    match slime_rt::try_send(slot, &encoded, &[]) {
         ERR_SUCCESS => true,
-        ERR_WOULDBLOCK | ERR_PEER_DEAD => false,
+        ERR_WOULDBLOCK | ERR_PEER_DEAD => {
+            retain_qos_event(slot, encoded);
+            false
+        }
         _ => fail(b"QoS event"),
     }
+}
+
+/// One undelivered QoS record, held for the next broker pass.
+struct PendingQosEvent {
+    slot: u32,
+    record: [u8; MAX_MSG],
+    live: bool,
+}
+
+/// SAFETY: this component is single-threaded; every access below is on its one
+/// execution path and no reference outlives the statement that takes it.
+static mut PENDING_QOS: [PendingQosEvent; 8] = [const {
+    PendingQosEvent {
+        slot: 0,
+        record: [0; MAX_MSG],
+        live: false,
+    }
+}; 8];
+
+fn retain_qos_event(slot: u32, record: [u8; MAX_MSG]) {
+    // SAFETY: single-threaded, as above.
+    let pending = unsafe { &mut *core::ptr::addr_of_mut!(PENDING_QOS) };
+    let Some(free) = pending.iter_mut().find(|entry| !entry.live) else {
+        fail(b"undelivered QoS events exceeded their bound");
+    };
+    free.slot = slot;
+    free.record = record;
+    free.live = true;
+}
+
+/// Re-offer every retained QoS event. Returns whether any was taken, so the
+/// broker counts it as progress and does not park with work outstanding.
+fn flush_qos_events() -> bool {
+    // SAFETY: single-threaded, as above.
+    let pending = unsafe { &mut *core::ptr::addr_of_mut!(PENDING_QOS) };
+    let mut delivered = false;
+    for entry in pending.iter_mut().filter(|entry| entry.live) {
+        if slime_rt::try_send(entry.slot, &entry.record, &[]) == ERR_SUCCESS {
+            entry.live = false;
+            delivered = true;
+        }
+    }
+    delivered
+}
+
+/// Whether any QoS record is still waiting for its subscriber.
+fn qos_events_pending() -> bool {
+    // SAFETY: single-threaded, as above.
+    unsafe { &*core::ptr::addr_of!(PENDING_QOS) }
+        .iter()
+        .any(|entry| entry.live)
 }
 
 /// The supervision handle init granted the fabric for one subscriber. Init

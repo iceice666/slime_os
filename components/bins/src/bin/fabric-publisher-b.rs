@@ -26,8 +26,8 @@
 
 use boot_contracts::fabric_graph::{CONTRACT_KIND_STREAM, DIRECTION_PUBLISH, route_identity};
 use slime_proto::capability_transfer::{
-    FABRIC_REQUEST_MAGIC, FORMAT_VERSION, OBJECT_KIND_SHARED_BUFFER_LOAN, REQUEST_LEN,
-    WireCapabilityTransfer, WireFabricRequest,
+    FABRIC_REQUEST_MAGIC, FORMAT_VERSION, OBJECT_KIND_ENDPOINT, OBJECT_KIND_SHARED_BUFFER_LOAN,
+    REQUEST_LEN, WireCapabilityTransfer, WireFabricRequest,
 };
 use slime_proto::fabric_stream::{
     EVENT_SAMPLE_TAKEN, FLAG_LAST, MAX_INLINE_BYTES, STREAM_SAMPLE_MAGIC, WireStreamEvent,
@@ -41,7 +41,7 @@ use slime_proto::ring::{Ring, RingError};
 use slime_proto::sample_descriptor::{
     CAPABILITY_KIND_LOAN, SAMPLE_DESCRIPTOR_MAGIC, WireSampleDescriptor,
 };
-use slime_proto::valid_stream_event;
+use slime_proto::{valid_capability_transfer, valid_stream_event};
 use slime_rt::{CapabilityDisposition, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
 
 slime_rt::entry!(main);
@@ -63,6 +63,14 @@ const FABRIC_SLOT: u32 = 0;
 /// Generation-granted simulated monotonic-time input. This is a separate
 /// capability from both publish routes; possessing a route grants no clock.
 const TIME_SLOT: u32 = 3;
+
+/// The visibility plane's declared diagnostics ingress edge, send-only.
+///
+/// `sel4-visibility.zti` binds `visibility-diagnostics-ingress` here, after
+/// the control endpoint at 0 and the minted buffer factory at 1.
+const DIAGNOSTICS_INGRESS_SLOT: u32 = 2;
+
+const RIGHT_SEND: u64 = 1;
 
 const TELEMETRY_ROUTE: &str = "telemetry";
 const DIAGNOSTICS_ROUTE: &str = "diagnostics";
@@ -243,34 +251,63 @@ fn main(_startup_arg: u32) {
     slime_rt::debug_write(b"[fabric-publisher-b] done\n");
 }
 fn visibility_main() {
+    // The unrelated diagnostics route is a generation-declared endpoint, not a
+    // ring loan: the broker's reply names the edge this component already
+    // holds, so there is no capability in it and nothing to import.
+    let diagnostics = route_identity(
+        DIAGNOSTICS_ROUTE,
+        &diagnostics_stream::INTERFACE_IDENTITY,
+        CONTRACT_KIND_STREAM,
+    );
     if request_roles() != ERR_SUCCESS {
         fail(b"visibility request");
     }
-    let (descriptor, ring_slot) = receive_role();
-    if descriptor.status != 0 {
+    let descriptor = receive_declared_role();
+    if descriptor.rights_mask != RIGHT_SEND
+        || !valid_capability_transfer(
+            &descriptor,
+            &diagnostics,
+            DIRECTION_PUBLISH,
+            OBJECT_KIND_ENDPOINT,
+        )
+    {
         fail(b"visibility diagnostics role");
     }
-    if slime_rt::shared_buffer_loan_map(ring_slot, DIAGNOSTICS_RING_BASE, 0, RING_BYTES as u64)
-        != ERR_SUCCESS
+    if slime_rt::send(
+        DIAGNOSTICS_INGRESS_SLOT,
+        &inline_sample(diagnostics_stream::TYPE_TAG, 1, FLAG_LAST).encode(),
+        &[],
+    ) != ERR_SUCCESS
     {
-        fail(b"visibility diagnostics ring map");
+        fail(b"visibility diagnostics publish");
     }
-    let bytes =
-        unsafe { core::slice::from_raw_parts_mut(DIAGNOSTICS_RING_BASE as *mut u8, RING_BYTES) };
-    let mut ring = Ring::attach(
-        bytes,
-        diagnostics_stream::TYPE_TAG,
-        ring_slots(DIAGNOSTICS_ROUTE),
-    )
-    .unwrap_or_else(|_| fail(b"visibility diagnostics ring attach"));
-    ring_publish(
-        &mut ring,
-        &inline_sample(diagnostics_stream::TYPE_TAG, 1, FLAG_LAST).payload,
-        true,
-        FABRIC_PUBLISHER_B_DIAGNOSTICS_READY_SLOT,
-        FABRIC_PUBLISHER_B_DIAGNOSTICS_CREDIT_SLOT,
-    );
     slime_rt::debug_write(b"[fabric-publisher-b] unrelated diagnostics published\n");
+}
+
+/// A role reply that carries no capability.
+///
+/// The visibility broker answers with the descriptor alone, so unlike
+/// [`receive_role`] there is nothing to import.
+fn receive_declared_role() -> WireCapabilityTransfer {
+    let mut message = [0u8; MAX_MSG];
+    let mut received = [0u64; MAX_CAPS_PER_MSG];
+    loop {
+        match slime_rt::recv(CONTROL_SLOT, &mut message, &mut received) {
+            ERR_WOULDBLOCK => slime_rt::yield_now(),
+            n if n < 0 => fail(b"visibility role reply"),
+            _ => {
+                let Some(descriptor) = WireCapabilityTransfer::decode(&message).filter(|record| {
+                    record.magic == slime_proto::capability_transfer::CAPABILITY_TRANSFER_MAGIC
+                }) else {
+                    continue;
+                };
+                if descriptor.status != 0 {
+                    fail(b"visibility diagnostics role");
+                }
+                return descriptor;
+            }
+        }
+    }
 }
 
 /// Allocate, fill, seal, and loan one payload larger than the control bound,
@@ -348,7 +385,11 @@ fn publish_large(route_slot: u32, credit_slot: u32) {
     let mut credit = [0u8; MAX_MSG];
     let mut no_caps = [0u64; MAX_CAPS_PER_MSG];
     loop {
-        let length = match slime_rt::recv(credit_slot, &mut credit, &mut no_caps) {
+        // A blocking receive, because this loop has nothing else to do and the
+        // fabric is blocked sending the credit. Polling here made both sides
+        // wait on each other: the broker's `send` never found a receiver, so it
+        // could not return to the pass that would have satisfied this one.
+        let length = match slime_rt::recv_blocking(credit_slot, &mut credit, &mut no_caps) {
             ERR_WOULDBLOCK => {
                 slime_rt::yield_now();
                 continue;

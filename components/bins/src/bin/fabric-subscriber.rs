@@ -19,18 +19,22 @@
 use boot_contracts::fabric_graph::{CONTRACT_KIND_STREAM, DIRECTION_SUBSCRIBE, route_identity};
 use slime_components::fabric_visibility::{ViewPage, request_page};
 use slime_proto::capability_transfer::{
-    FABRIC_REQUEST_MAGIC, FORMAT_VERSION, OBJECT_KIND_SHARED_BUFFER_LOAN, REQUEST_LEN,
-    WireCapabilityTransfer, WireFabricRequest,
+    CAPABILITY_TRANSFER_MAGIC, FABRIC_REQUEST_MAGIC, FORMAT_VERSION, OBJECT_KIND_ENDPOINT,
+    OBJECT_KIND_SHARED_BUFFER_LOAN, REQUEST_LEN, WireCapabilityTransfer, WireFabricRequest,
 };
 use slime_proto::fabric_qos::{QOS_EVENT_MAGIC, WireQosEvent};
 use slime_proto::fabric_stream::{
-    EVENT_SAMPLE_LOST, EVENT_STREAM_END, STREAM_EVENT_MAGIC, WireStreamEvent,
+    EVENT_SAMPLE_LOST, EVENT_STREAM_END, MAX_INLINE_BYTES as STREAM_MAX_INLINE_BYTES,
+    STREAM_ACK_MAGIC, STREAM_EVENT_MAGIC, WireStreamAck, WireStreamEvent, WireStreamSample,
 };
-use slime_proto::fabric_visibility::{TRACE_PROXY_LOST, WireInterpositionTrace};
+use slime_proto::fabric_visibility::{EVENT_PROXY_LOST, TRACE_PROXY_LOST, WireInterpositionTrace};
 use slime_proto::interface_schema::telemetry_stream;
 use slime_proto::ring::Ring;
 use slime_proto::sample_descriptor::{SAMPLE_DESCRIPTOR_MAGIC, WireSampleDescriptor};
-use slime_proto::{valid_capability_transfer, valid_interposition_trace, valid_sample_descriptor};
+use slime_proto::{
+    valid_capability_transfer, valid_interposition_trace, valid_sample_descriptor,
+    valid_stream_sample,
+};
 use slime_rt::{ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
 slime_rt::entry!(main);
 
@@ -40,6 +44,16 @@ include!(concat!(env!("OUT_DIR"), "/fabric_profile.rs"));
 const CONTROL_SLOT: u32 = 0;
 
 const ROUTE_NAME: &str = "telemetry";
+
+/// The visibility plane's declared proxy-chain edges: telemetry data in, ack
+/// out, and route events in. Generation facts, installed before this component
+/// runs; the broker's role reply names them rather than carrying them.
+const PROXY_DATA_SLOT: u32 = 1;
+const PROXY_ACK_SLOT: u32 = 2;
+const PROXY_EVENT_SLOT: u32 = 3;
+
+const RIGHT_SEND: u64 = 1;
+const RIGHT_RECV: u64 = 2;
 
 const PAGE: u64 = 4096;
 const BASE: u64 = 0x0000_000E_0000_0000;
@@ -123,6 +137,37 @@ fn main(_startup_arg: u32) {
         fail(b"subscriber ring map");
     }
     slime_rt::debug_write(b"[fabric-subscriber] subscribe role received\n");
+    // A subscribe role is one direction, and the ring it names is a loan, not
+    // an endpoint. The denial below is asserted here, before the samples, so a
+    // regression that widened the role fails even with the happy path intact --
+    // the same rule the publisher asserts from the other side.
+    //
+    // Direction is not probed by asking again: the fabric answers each client
+    // exactly once and reads the request's `direction` only to discard it,
+    // keying authority off the control endpoint the request arrived on. A
+    // second request would never be read, so there is no request this
+    // component can phrase that yields the write side of its route. What the
+    // role does carry is checked instead: the graph's direction, and a loan
+    // that grants no send.
+    if descriptor.direction != DIRECTION_SUBSCRIBE {
+        fail(b"subscribe role names another direction");
+    }
+    if descriptor.rights_mask & RIGHT_SEND != 0 {
+        fail(b"subscribe role carries publish authority");
+    }
+    slime_rt::debug_write(b"[fabric-subscriber] route publish denied\n");
+    if slime_rt::capability_delegate(
+        CONTROL_SLOT,
+        ring_slot,
+        slime_rt::CapabilityDisposition::Retain,
+        OBJECT_KIND_SHARED_BUFFER_LOAN,
+        RIGHT_SEND,
+        &[0u8; 64],
+    ) == ERR_SUCCESS
+    {
+        fail(b"subscriber re-delegated its ring loan");
+    }
+    slime_rt::debug_write(b"[fabric-subscriber] re-delegation denied\n");
     consume(ring_slot);
     slime_rt::debug_write(b"[fabric-subscriber] done\n");
 }
@@ -147,18 +192,98 @@ fn visibility_main() {
         fail(b"private view bound");
     }
     slime_rt::debug_write(b"[fabric-subscriber] private view routes=1\n");
-    // Visibility's fixed direct slots are data=1, ack=2, event=3.
-    if receive_message(1).is_some() {
-        let _ = slime_rt::send(2, &[0u8; MAX_MSG], &[]);
+    // The proxy chain's three declared edges: data in, ack out, route events
+    // in. The broker answers each with a descriptor alone — the endpoints
+    // themselves are generation facts already installed in this CSpace — but
+    // the request is still required: it is what tells the broker this client
+    // is provisioned, and its loop serves every client in manifest order
+    // before relaying anything.
+    let route = route_identity(
+        ROUTE_NAME,
+        &telemetry_stream::INTERFACE_IDENTITY,
+        CONTRACT_KIND_STREAM,
+    );
+    let request = WireFabricRequest {
+        magic: FABRIC_REQUEST_MAGIC,
+        version: FORMAT_VERSION,
+        flags: 0,
+        direction: DIRECTION_SUBSCRIBE,
+        type_identity: telemetry_stream::TYPE_TAG,
+        route_name_len: ROUTE_NAME.len() as u32,
+        route_name: route_name_bytes(),
+        reserved: [0; 4],
+    };
+    if send_request(&request) != ERR_SUCCESS {
+        fail(b"visibility role request");
+    }
+    let mut descriptors = [None; 3];
+    for descriptor in &mut descriptors {
+        let record = receive_declared_role();
+        if !valid_capability_transfer(&record, &route, DIRECTION_SUBSCRIBE, OBJECT_KIND_ENDPOINT) {
+            fail(b"interposed subscriber role");
+        }
+        *descriptor = Some(record);
+    }
+    if descriptors[0].expect("data descriptor").rights_mask != RIGHT_RECV
+        || descriptors[1].expect("ack descriptor").rights_mask != RIGHT_SEND
+        || descriptors[2].expect("event descriptor").rights_mask != RIGHT_RECV
+    {
+        fail(b"interposed subscriber rights");
+    }
+    // Validate the relayed sample and answer with a real ack: the proxy
+    // correlates on sequence, so a zero-filled reply would be refused there
+    // rather than proving the chain carried this exact sample.
+    if let Some(sample_bytes) = receive_message(PROXY_DATA_SLOT) {
+        let sample = WireStreamSample::decode(&sample_bytes)
+            .filter(|sample| {
+                valid_stream_sample(sample, telemetry_stream::TYPE_TAG, STREAM_MAX_INLINE_BYTES)
+            })
+            .filter(|sample| sample.sequence == 1)
+            .unwrap_or_else(|| fail(b"interposed sample"));
+        let ack = WireStreamAck {
+            magic: STREAM_ACK_MAGIC,
+            version: FORMAT_VERSION,
+            flags: 0,
+            reserved0: 0,
+            sequence: sample.sequence,
+            type_identity: telemetry_stream::TYPE_TAG,
+            reserved: [0; 32],
+        };
+        if slime_rt::send(PROXY_ACK_SLOT, &ack.encode(), &[]) != ERR_SUCCESS {
+            fail(b"interposed ack");
+        }
         slime_rt::debug_write(b"[fabric-subscriber] sample arrived through proxy\n");
     }
-    let event_bytes = receive_message(3).unwrap_or_else(|| fail(b"proxy loss event peer"));
+    let event_bytes =
+        receive_message(PROXY_EVENT_SLOT).unwrap_or_else(|| fail(b"proxy loss event peer"));
     let event = WireInterpositionTrace::decode(&event_bytes)
         .filter(valid_interposition_trace)
         .filter(|event| event.event == TRACE_PROXY_LOST)
         .unwrap_or_else(|| fail(b"proxy loss event"));
     let _ = event;
     slime_rt::debug_write(b"[fabric-subscriber] proxy loss route event observed\n");
+    // Page the view again after the loss. The claim is not that an event
+    // arrived on a route endpoint but that the *graph* now reports it, which
+    // only re-reading it can show — and it is what `serve_event_view` on the
+    // broker side exists to answer.
+    let mut cursor = 0;
+    let mut event_seen = false;
+    loop {
+        match request_page(CONTROL_SLOT, cursor).unwrap_or_else(|_| fail(b"event graph view")) {
+            ViewPage::Route(record) => cursor = record.cursor,
+            ViewPage::Qos(record) => {
+                if record.event_mask != EVENT_PROXY_LOST {
+                    fail(b"proxy loss absent from graph view");
+                }
+                event_seen = true;
+                cursor = record.cursor;
+            }
+            ViewPage::End(_) => break,
+        }
+    }
+    if !event_seen {
+        fail(b"event graph view empty");
+    }
     slime_rt::debug_write(b"[fabric-subscriber] proxy loss visible in graph view\n");
 }
 fn receive_message(slot: u32) -> Option<[u8; MAX_MSG]> {
@@ -193,15 +318,24 @@ fn consume(_ring_slot: u32) {
                 return;
             }
         }
+        // The ring is drained, so this loop has nothing left to do but wait on
+        // the control endpoint -- and it must wait *there*, blocked. The fabric
+        // announces QoS and terminal events with `seL4_NBSend`, which delivers
+        // only to a receiver already blocked on the endpoint and discards
+        // otherwise. Polling here and sleeping on the ring notification instead
+        // would make this component permanently invisible to those sends.
         let mut message = [0u8; MAX_MSG];
         let mut received = [0u64; MAX_CAPS_PER_MSG];
-        let n = slime_rt::recv(CONTROL_SLOT, &mut message, &mut received);
+        let n = slime_rt::recv_blocking(CONTROL_SLOT, &mut message, &mut received);
         if n >= 0 && n as usize == MAX_MSG {
             let magic = u32::from_le_bytes(message[..4].try_into().expect("magic"));
             if magic == SAMPLE_DESCRIPTOR_MAGIC {
                 let descriptor =
                     WireSampleDescriptor::decode(&message).unwrap_or_else(|| fail(b"descriptor"));
-                let loan_slot = received[0] as u32;
+                // A delegated loan arrives as a root-recorded export, not in
+                // the message: only a native Endpoint travels inline, so
+                // `received[0]` is empty and the authority is claimed here.
+                let loan_slot = slime_rt::capability_import().unwrap_or(0);
                 if loan_slot == 0
                     || !valid_sample_descriptor(
                         &descriptor,
@@ -254,6 +388,34 @@ fn route_name_bytes() -> [u8; 32] {
 
 fn send_request(request: &WireFabricRequest) -> i64 {
     slime_rt::send(CONTROL_SLOT, &request.encode(), &[])
+}
+
+/// A role reply that carries no capability.
+///
+/// The visibility broker answers with the descriptor alone: the endpoint it
+/// names is a generation-declared edge already installed here, so unlike
+/// [`receive_role`] there is nothing to import. QoS events share this control
+/// endpoint, so the record's own magic is what tells the two apart.
+fn receive_declared_role() -> WireCapabilityTransfer {
+    let mut message = [0u8; MAX_MSG];
+    let mut received = [0u64; MAX_CAPS_PER_MSG];
+    loop {
+        match slime_rt::recv(CONTROL_SLOT, &mut message, &mut received) {
+            ERR_WOULDBLOCK => slime_rt::yield_now(),
+            n if n < 0 => fail(b"visibility role reply"),
+            _ => {
+                let Some(descriptor) = WireCapabilityTransfer::decode(&message)
+                    .filter(|record| record.magic == CAPABILITY_TRANSFER_MAGIC)
+                else {
+                    continue;
+                };
+                if descriptor.status != 0 {
+                    fail(b"interposed subscriber role");
+                }
+                return descriptor;
+            }
+        }
+    }
 }
 
 /// The typed role descriptor and the slot its shared ring landed in.

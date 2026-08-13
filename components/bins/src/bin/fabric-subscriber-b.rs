@@ -23,17 +23,20 @@
 
 use boot_contracts::fabric_graph::{CONTRACT_KIND_STREAM, DIRECTION_SUBSCRIBE, route_identity};
 use slime_proto::capability_transfer::{
-    FABRIC_REQUEST_MAGIC, FORMAT_VERSION, OBJECT_KIND_SHARED_BUFFER_LOAN, REQUEST_LEN,
-    WireCapabilityTransfer, WireFabricRequest,
+    FABRIC_REQUEST_MAGIC, FORMAT_VERSION, OBJECT_KIND_ENDPOINT, OBJECT_KIND_SHARED_BUFFER_LOAN,
+    REQUEST_LEN, WireCapabilityTransfer, WireFabricRequest,
 };
 use slime_proto::fabric_qos::{QOS_EVENT_MAGIC, WireQosEvent};
 use slime_proto::fabric_stream::{
-    EVENT_SAMPLE_LOST, EVENT_STREAM_END, MAX_INLINE_BYTES, STREAM_EVENT_MAGIC, WireStreamEvent,
+    EVENT_SAMPLE_LOST, EVENT_STREAM_END, MAX_INLINE_BYTES, STREAM_ACK_MAGIC, STREAM_EVENT_MAGIC,
+    WireStreamAck, WireStreamEvent, WireStreamSample,
 };
 use slime_proto::interface_schema::{diagnostics_stream, telemetry_stream};
 use slime_proto::ring::{Ring, RingError};
 use slime_proto::sample_descriptor::{SAMPLE_DESCRIPTOR_MAGIC, WireSampleDescriptor};
-use slime_proto::{valid_capability_transfer, valid_sample_descriptor, valid_stream_event};
+use slime_proto::{
+    valid_capability_transfer, valid_sample_descriptor, valid_stream_event, valid_stream_sample,
+};
 use slime_rt::{ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
 
 slime_rt::entry!(main);
@@ -44,6 +47,14 @@ const CONTROL_SLOT: u32 = 0;
 
 const TELEMETRY_ROUTE: &str = "telemetry";
 const DIAGNOSTICS_ROUTE: &str = "diagnostics";
+
+/// The visibility plane's declared diagnostics edges: egress in, ack out.
+/// Generation facts, installed before this component runs.
+const DIAGNOSTICS_EGRESS_SLOT: u32 = 1;
+const DIAGNOSTICS_ACK_SLOT: u32 = 2;
+
+const RIGHT_SEND: u64 = 1;
+const RIGHT_RECV: u64 = 2;
 
 const PAGE: u64 = 4096;
 const BASE: u64 = 0x0000_000F_0000_0000;
@@ -196,16 +207,19 @@ fn main(_startup_arg: u32) {
     slime_rt::debug_write(b"[fabric-subscriber-b] both subscribe rings received\n");
 
     slime_rt::debug_write(b"[fabric-subscriber-b] stalling on telemetry\n");
-    receive_large_sample(CONTROL_SLOT);
+    let early = receive_large_sample();
     if option_env!("SLIME_FABRIC_QOS_CHECK") == Some("1") {
         consume_diagnostics(&mut diagnostics_ring);
     } else {
         consume_diagnostics_stream(&mut diagnostics_ring);
     }
-    consume_telemetry(&mut telemetry_ring);
+    consume_telemetry(&mut telemetry_ring, early);
     slime_rt::debug_write(b"[fabric-subscriber-b] done\n");
 }
 fn visibility_main() {
+    // Two generation-declared edges: the diagnostics egress this component
+    // receives on, and the ack it answers with. The broker's replies name them
+    // rather than carrying them, so there is nothing to import.
     let route = route_identity(
         DIAGNOSTICS_ROUTE,
         &diagnostics_stream::INTERFACE_IDENTITY,
@@ -214,42 +228,96 @@ fn visibility_main() {
     if request_roles() != ERR_SUCCESS {
         fail(b"visibility request");
     }
-    let (descriptor, ring_slot) = receive_role();
-    if descriptor.status != 0
+    let data_descriptor = receive_declared_role();
+    let ack_descriptor = receive_declared_role();
+    if data_descriptor.rights_mask != RIGHT_RECV
+        || ack_descriptor.rights_mask != RIGHT_SEND
         || !valid_capability_transfer(
-            &descriptor,
+            &data_descriptor,
             &route,
             DIRECTION_SUBSCRIBE,
-            OBJECT_KIND_SHARED_BUFFER_LOAN,
+            OBJECT_KIND_ENDPOINT,
+        )
+        || !valid_capability_transfer(
+            &ack_descriptor,
+            &route,
+            DIRECTION_SUBSCRIBE,
+            OBJECT_KIND_ENDPOINT,
         )
     {
         fail(b"visibility diagnostics role");
     }
-    if slime_rt::shared_buffer_loan_map(ring_slot, DIAGNOSTICS_RING_BASE, 0, RING_BYTES as u64)
-        != ERR_SUCCESS
-    {
-        fail(b"visibility diagnostics ring map");
+    let mut message = [0u8; MAX_MSG];
+    let mut received = [0u64; MAX_CAPS_PER_MSG];
+    let length = loop {
+        match slime_rt::recv(DIAGNOSTICS_EGRESS_SLOT, &mut message, &mut received) {
+            ERR_WOULDBLOCK => slime_rt::yield_now(),
+            n if n < 0 => fail(b"visibility diagnostics receive"),
+            n => break n as usize,
+        }
+    };
+    if length != MAX_MSG || received.iter().any(|slot| *slot != 0) {
+        fail(b"visibility diagnostics framing");
     }
-    let bytes =
-        unsafe { core::slice::from_raw_parts_mut(DIAGNOSTICS_RING_BASE as *mut u8, RING_BYTES) };
-    let mut ring = Ring::attach(
-        bytes,
+    let sample = WireStreamSample::decode(&message)
+        .filter(|sample| {
+            valid_stream_sample(sample, diagnostics_stream::TYPE_TAG, MAX_INLINE_BYTES)
+        })
+        .filter(|sample| sample.sequence == 1)
+        .unwrap_or_else(|| fail(b"visibility diagnostics sample"));
+    ack(
+        DIAGNOSTICS_ACK_SLOT,
+        sample.sequence,
         diagnostics_stream::TYPE_TAG,
-        ring_slots(DIAGNOSTICS_ROUTE),
-    )
-    .unwrap_or_else(|_| fail(b"visibility diagnostics ring attach"));
+    );
+    slime_rt::debug_write(b"[fabric-subscriber-b] unrelated diagnostics live after proxy death\n");
+}
+
+/// A role reply that carries no capability.
+///
+/// The visibility broker answers with the descriptor alone, so unlike
+/// [`receive_role`] there is nothing to import.
+fn receive_declared_role() -> WireCapabilityTransfer {
+    let mut message = [0u8; MAX_MSG];
+    let mut received = [0u64; MAX_CAPS_PER_MSG];
     loop {
-        let _ = slime_rt::notification_poll(FABRIC_SUBSCRIBER_B_DIAGNOSTICS_READY_SLOT);
-        let mut payload = [0u8; MAX_INLINE_BYTES];
-        match ring.consume(&mut payload) {
-            Ok((length, _)) if length != 0 => break,
-            Ok(_) => fail(b"empty visibility sample"),
-            Err(RingError::Empty) => slime_rt::yield_now(),
-            Err(_) => fail(b"visibility diagnostics ring consume"),
+        match slime_rt::recv(CONTROL_SLOT, &mut message, &mut received) {
+            ERR_WOULDBLOCK => slime_rt::yield_now(),
+            n if n < 0 => fail(b"visibility role reply"),
+            _ => {
+                let Some(descriptor) = WireCapabilityTransfer::decode(&message).filter(|record| {
+                    record.magic == slime_proto::capability_transfer::CAPABILITY_TRANSFER_MAGIC
+                }) else {
+                    continue;
+                };
+                if descriptor.status != 0 {
+                    fail(b"visibility diagnostics role");
+                }
+                return descriptor;
+            }
         }
     }
-    let _ = slime_rt::notification_signal(FABRIC_SUBSCRIBER_B_DIAGNOSTICS_CREDIT_SLOT);
-    slime_rt::debug_write(b"[fabric-subscriber-b] unrelated diagnostics live after proxy death\n");
+}
+
+/// Acknowledge one sample on a declared ack edge.
+fn ack(ack_slot: u32, sequence: u64, type_identity: u64) {
+    let ack = WireStreamAck {
+        magic: STREAM_ACK_MAGIC,
+        version: FORMAT_VERSION,
+        flags: 0,
+        reserved0: 0,
+        sequence,
+        type_identity,
+        reserved: [0; 32],
+    };
+    let encoded = ack.encode();
+    loop {
+        match slime_rt::send(ack_slot, &encoded, &[]) {
+            ERR_SUCCESS => return,
+            ERR_WOULDBLOCK => slime_rt::yield_now(),
+            _ => fail(b"ack"),
+        }
+    }
 }
 
 fn consume_diagnostics_stream(ring: &mut Ring<'_>) {
@@ -271,22 +339,35 @@ fn consume_diagnostics_stream(ring: &mut Ring<'_>) {
                 Err(_) => fail(b"diagnostics ring consume"),
             }
         }
-        let mut message = [0u8; MAX_MSG];
-        let mut received = [0u64; MAX_CAPS_PER_MSG];
-        match slime_rt::recv(CONTROL_SLOT, &mut message, &mut received) {
-            ERR_WOULDBLOCK => {
-                slime_rt::yield_now();
-                continue;
-            }
-            n if n < 0 => fail(b"diagnostics control recv"),
-            _ => {}
-        }
+        // Nothing else to do this pass: the ring is drained, so block and
+        // become visible to the fabric's terminal `nb_send`.
+        let Some(message) = receive_for(diagnostics_stream::TYPE_TAG, false) else {
+            continue;
+        };
         let magic = u32::from_le_bytes(message[..4].try_into().expect("record prefix"));
         match magic {
             QOS_EVENT_MAGIC => {}
             STREAM_EVENT_MAGIC => {
                 let event =
                     WireStreamEvent::decode(&message).unwrap_or_else(|| fail(b"decode event"));
+                // Drain once more before judging the event. The ring and the
+                // control endpoint are independent channels: the fabric writes
+                // a sample into the ring and can emit END in the same pass, so
+                // a sample published just before it is still unread here. The
+                // ring is the record of what arrived, not the arrival order of
+                // these two.
+                loop {
+                    match ring.consume(&mut payload) {
+                        Ok((length, _last)) => {
+                            if length == 0 {
+                                fail(b"empty diagnostics sample");
+                            }
+                            sample_seen = true;
+                        }
+                        Err(RingError::Empty) => break,
+                        Err(_) => fail(b"diagnostics ring consume"),
+                    }
+                }
                 if !valid_stream_event(&event, diagnostics_stream::TYPE_TAG)
                     || event.event != EVENT_STREAM_END
                     || !sample_seen
@@ -301,23 +382,199 @@ fn consume_diagnostics_stream(ring: &mut Ring<'_>) {
     }
 }
 
-fn receive_large_sample(control_slot: u32) {
+/// One control endpoint serves both of this component's routes, and a receive
+/// is destructive: whichever loop is running takes the next record regardless
+/// of which route it belongs to. Every record on this endpoint — sample
+/// descriptor, stream event, QoS event — names its route in `type_identity`,
+/// so the endpoint is read in exactly one place and each record is filed under
+/// the route that owns it. A loop then waits on its own route's mailbox rather
+/// than on the endpoint, and cannot consume another route's terminal event.
+///
+/// The mailbox is a small FIFO, not a single slot. A route's records are a
+/// *sequence* the owning loop must see in full — the QoS plane reports deadline,
+/// liveliness, and retry-exhaustion as separate events, and all three can arrive
+/// while the other route's loop is running. Keeping only the newest would drop
+/// the earlier ones, which reads exactly like the fabric never sent them.
+///
+/// Eight deep: the QoS plane can report deadline, repeated liveliness loss,
+/// lifespan expiry, and retry exhaustion for one route before its owner is
+/// scheduled again, and the terminal event follows all of them.
+struct Pending {
+    type_identity: u64,
+    queue: [[u8; MAX_MSG]; 8],
+    head: usize,
+    len: usize,
+}
+
+impl Pending {
+    const fn new(type_identity: u64) -> Self {
+        Self {
+            type_identity,
+            queue: [[0; MAX_MSG]; 8],
+            head: 0,
+            len: 0,
+        }
+    }
+
+    fn push(&mut self, message: [u8; MAX_MSG]) {
+        // The fabric re-offers a record every broker pass until its owner takes
+        // it, so the same bytes legitimately arrive many times while that owner
+        // is busy on the other route. Queueing each copy would overflow on
+        // repetition rather than on real traffic, so an identical record
+        // already waiting is the one already waiting.
+        if (0..self.len)
+            .map(|offset| (self.head + offset) % self.queue.len())
+            .any(|index| self.queue[index] == message)
+        {
+            return;
+        }
+        if self.len == self.queue.len() {
+            fail(b"a route produced more records than its mailbox admits");
+        }
+        let tail = (self.head + self.len) % self.queue.len();
+        self.queue[tail] = message;
+        self.len += 1;
+    }
+
+    fn pop(&mut self) -> Option<[u8; MAX_MSG]> {
+        if self.len == 0 {
+            return None;
+        }
+        let message = self.queue[self.head];
+        self.head = (self.head + 1) % self.queue.len();
+        self.len -= 1;
+        Some(message)
+    }
+}
+
+/// The routes' mailboxes, in the order this component declares them.
+/// SAFETY: this component is single-threaded; every access is on its one
+/// execution path and no reference outlives the statement that takes it.
+static mut MAILBOXES: [Pending; 2] = [
+    Pending::new(telemetry_stream::TYPE_TAG),
+    Pending::new(diagnostics_stream::TYPE_TAG),
+];
+
+/// Read one record for `type_identity`, filing records for the other route.
+///
+/// `poll` selects how the endpoint is read when this route's mailbox is empty.
+/// A caller that must also make progress elsewhere — draining a ring, signalling
+/// credit — passes `true` and gets `None` when nothing has arrived. A caller
+/// with nothing left to do passes `false` and blocks.
+///
+/// Blocking is not merely an optimisation here. The fabric announces terminal
+/// events with `seL4_NBSend`, which delivers only to a receiver *already*
+/// blocked on the endpoint and discards otherwise. A reader that only ever
+/// polls can therefore spin forever beside a sender that is faithfully
+/// re-offering the record: two non-blocking peers never rendezvous. Once a
+/// loop has drained its ring it has nothing else to wait on, so it blocks and
+/// becomes visible to that send.
+fn receive_for(type_identity: u64, poll: bool) -> Option<[u8; MAX_MSG]> {
     loop {
+        // SAFETY: single-threaded; the borrow ends before the receive below.
+        let mailbox = unsafe { &mut *core::ptr::addr_of_mut!(MAILBOXES) }
+            .iter_mut()
+            .find(|pending| pending.type_identity == type_identity)
+            .unwrap_or_else(|| fail(b"record names an undeclared route"));
+        if let Some(message) = mailbox.pop() {
+            return Some(message);
+        }
+
         let mut message = [0u8; MAX_MSG];
         let mut received = [0u64; MAX_CAPS_PER_MSG];
-        let length = match slime_rt::recv(control_slot, &mut message, &mut received) {
-            ERR_WOULDBLOCK => {
-                slime_rt::yield_now();
-                continue;
-            }
-            n if n < 0 => fail(b"telemetry control recv"),
+        let outcome = if poll {
+            slime_rt::recv(CONTROL_SLOT, &mut message, &mut received)
+        } else {
+            slime_rt::recv_blocking(CONTROL_SLOT, &mut message, &mut received)
+        };
+        let length = match outcome {
+            ERR_WOULDBLOCK => return None,
+            n if n < 0 => fail(b"control recv"),
             n => n as usize,
         };
         if length != MAX_MSG {
-            fail(b"descriptor is not one control message");
+            fail(b"record is not one control message");
         }
+        let owner = record_route(&message);
+        if owner == type_identity {
+            return Some(message);
+        }
+        // SAFETY: single-threaded, as above.
+        unsafe { &mut *core::ptr::addr_of_mut!(MAILBOXES) }
+            .iter_mut()
+            .find(|pending| pending.type_identity == owner)
+            .unwrap_or_else(|| fail(b"record names an undeclared route"))
+            .push(message);
+    }
+}
+
+/// The route a control record belongs to, taken from the record itself.
+fn record_route(message: &[u8; MAX_MSG]) -> u64 {
+    let magic = u32::from_le_bytes(message[..4].try_into().expect("record prefix"));
+    match magic {
+        STREAM_EVENT_MAGIC => {
+            WireStreamEvent::decode(message)
+                .unwrap_or_else(|| fail(b"decode event"))
+                .type_identity
+        }
+        QOS_EVENT_MAGIC => {
+            WireQosEvent::decode(message)
+                .unwrap_or_else(|| fail(b"decode QoS event"))
+                .type_identity
+        }
+        SAMPLE_DESCRIPTOR_MAGIC => {
+            WireSampleDescriptor::decode(message)
+                .unwrap_or_else(|| fail(b"decode sample descriptor"))
+                .type_identity
+        }
+        _ => fail(b"ordinary sample used control endpoint"),
+    }
+}
+
+/// Loss the fabric reported while this component was stalled, which belongs to
+/// the telemetry reader that runs after the stall rather than to the stall.
+#[derive(Clone, Copy, Default)]
+struct EarlyLoss {
+    reports: u32,
+    total: u64,
+}
+
+/// Wait for this component's large telemetry sample, which arrives as a
+/// descriptor on the control endpoint naming a delegated loan.
+///
+/// The stall this creates is the very thing that makes the fabric drop
+/// telemetry, so the loss is reported *here*, to the loop that caused it,
+/// while the reader that must account for it has not started. Same route, so
+/// the mailbox cannot hold it for that reader: it is handed back instead.
+fn receive_large_sample() -> EarlyLoss {
+    let mut early = EarlyLoss::default();
+    loop {
+        // Ring drained; block so a terminal `nb_send` can find a receiver.
+        let Some(message) = receive_for(telemetry_stream::TYPE_TAG, false) else {
+            continue;
+        };
         let magic = u32::from_le_bytes(message[..4].try_into().expect("record prefix"));
-        if magic == QOS_EVENT_MAGIC || magic == STREAM_EVENT_MAGIC {
+        // A QoS event is advisory; loss is judged as a stream event below.
+        if magic == QOS_EVENT_MAGIC {
+            continue;
+        }
+        if magic == STREAM_EVENT_MAGIC {
+            let event = WireStreamEvent::decode(&message).unwrap_or_else(|| fail(b"decode event"));
+            if !valid_stream_event(&event, telemetry_stream::TYPE_TAG) {
+                fail(b"event failed validation");
+            }
+            if event.event != EVENT_SAMPLE_LOST {
+                fail(b"telemetry ended before its large sample");
+            }
+            if event.lost == 0 || event.sequence == 0 {
+                fail(b"loss event named no loss");
+            }
+            early.reports += 1;
+            early.total = early.total.saturating_add(event.lost);
+            if early.reports > MAX_LOSS_REPORTS || early.total > MAX_TOTAL_LOSS {
+                fail(b"loss reporting grew past its bound");
+            }
+            slime_rt::debug_write(b"[fabric-subscriber-b] bounded loss reported\n");
             continue;
         }
         if magic != SAMPLE_DESCRIPTOR_MAGIC {
@@ -325,7 +582,9 @@ fn receive_large_sample(control_slot: u32) {
         }
         let descriptor = WireSampleDescriptor::decode(&message)
             .unwrap_or_else(|| fail(b"decode sample descriptor"));
-        let loan_slot = received[0] as u32;
+        // A delegated loan arrives as a root-recorded export, not in the
+        // message: only a native Endpoint travels inline.
+        let loan_slot = slime_rt::capability_import().unwrap_or(0);
         if loan_slot == 0
             || !valid_sample_descriptor(
                 &descriptor,
@@ -353,20 +612,22 @@ fn receive_large_sample(control_slot: u32) {
             fail(b"return loan");
         }
         slime_rt::debug_write(b"[fabric-subscriber-b] shared sample verified\n");
-        return;
+        return early;
     }
 }
 
-/// Consume telemetry until `stop` is satisfied.
+/// Consume telemetry until the route ends.
 ///
 /// Loss is admissible throughout — this reader declares BEST_EFFORT — so it is
-/// counted and bounded rather than forbidden at any point. Returns the number
-/// of samples consumed.
-fn consume_telemetry(ring: &mut Ring<'_>) -> u32 {
+/// counted and bounded rather than forbidden at any point. `early` carries the
+/// loss already reported during the stall, which this reader must account for
+/// because it is the loss its own stall caused. Returns the number of samples
+/// consumed.
+fn consume_telemetry(ring: &mut Ring<'_>, early: EarlyLoss) -> u32 {
     let mut consumed = 0;
-    let mut observed_loss = false;
-    let mut reports = 0u32;
-    let mut total_lost = 0u64;
+    let mut observed_loss = early.reports != 0;
+    let mut reports = early.reports;
+    let mut total_lost = early.total;
     loop {
         let _ = slime_rt::notification_poll(FABRIC_SUBSCRIBER_B_TELEMETRY_READY_SLOT);
         let mut payload = [0u8; MAX_INLINE_BYTES];
@@ -384,16 +645,10 @@ fn consume_telemetry(ring: &mut Ring<'_>) -> u32 {
                 Err(_) => fail(b"telemetry ring consume"),
             }
         }
-        let mut message = [0u8; MAX_MSG];
-        let mut received = [0u64; MAX_CAPS_PER_MSG];
-        match slime_rt::recv(CONTROL_SLOT, &mut message, &mut received) {
-            ERR_WOULDBLOCK => {
-                slime_rt::yield_now();
-                continue;
-            }
-            n if n < 0 => fail(b"telemetry control recv"),
-            _ => {}
-        }
+        // Ring drained; block so a terminal `nb_send` can find a receiver.
+        let Some(message) = receive_for(telemetry_stream::TYPE_TAG, false) else {
+            continue;
+        };
         let magic = u32::from_le_bytes(message[..4].try_into().expect("record prefix"));
         match magic {
             QOS_EVENT_MAGIC => {
@@ -462,16 +717,11 @@ fn consume_diagnostics(ring: &mut Ring<'_>) {
                 Err(_) => fail(b"diagnostics ring consume"),
             }
         }
-        let mut message = [0u8; MAX_MSG];
-        let mut received = [0u64; MAX_CAPS_PER_MSG];
-        match slime_rt::recv(CONTROL_SLOT, &mut message, &mut received) {
-            ERR_WOULDBLOCK => {
-                slime_rt::yield_now();
-                continue;
-            }
-            n if n < 0 => fail(b"diagnostics control recv"),
-            _ => {}
-        }
+        // Nothing else to do this pass: the ring is drained, so block and
+        // become visible to the fabric's terminal `nb_send`.
+        let Some(message) = receive_for(diagnostics_stream::TYPE_TAG, false) else {
+            continue;
+        };
         let magic = u32::from_le_bytes(message[..4].try_into().expect("record prefix"));
         match magic {
             QOS_EVENT_MAGIC => {

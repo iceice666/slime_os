@@ -5,6 +5,28 @@ slime_rt::entry!(main);
 
 use slime_rt::{CapabilityDisposition, Rights, SpawnGrant};
 
+/// The resolved fabric profile for the graph this binary was built against.
+/// Init reads only `FABRIC_MINTED_GRANTS` from it: how many capabilities each
+/// child's manifest says its owner must supply at spawn. That count used to be
+/// a hardcoded list here, which was the stream graph's, so every other plane's
+/// spawn was refused for a count init had no way to know (B50/R2).
+#[allow(dead_code)]
+mod profile {
+    include!(concat!(env!("OUT_DIR"), "/fabric_profile.rs"));
+}
+
+/// How many capabilities `component`'s manifest says its owner must hand it at
+/// spawn. The root matches a spawn request positionally against the child's
+/// declarations in ascending destination-slot order and refuses any other
+/// count, so this is the one number init must agree with -- and it is read
+/// from the resolved profile rather than restated here per plane.
+fn declared_minted_grants(component: &[u8]) -> usize {
+    profile::FABRIC_MINTED_GRANTS
+        .iter()
+        .find(|(holder, _)| *holder == component)
+        .map_or(0, |(_, count)| *count)
+}
+
 const RIGHT_SEND: Rights = 1;
 const RIGHT_TRANSFER: Rights = 4;
 const RIGHT_BLOCK_READ: Rights = 1 << 10;
@@ -586,7 +608,21 @@ fn wait_clean(handles: &[u32]) {
             match slime_rt::supervision_status(*handle) {
                 Ok(None) => slime_rt::yield_now(),
                 Ok(Some(slime_rt::Termination::Exit(0))) => break,
-                _ => slime_rt::exit(1),
+                other => {
+                    slime_rt::debug_write(b"[init] unclean handle=");
+                    write_u32(*handle);
+                    slime_rt::debug_write(b" kind=");
+                    write_u32(match other {
+                        Ok(Some(slime_rt::Termination::Exit(_))) => 1,
+                        Ok(Some(slime_rt::Termination::Fault(_))) => 2,
+                        Ok(Some(slime_rt::Termination::Timeout)) => 3,
+                        Ok(Some(slime_rt::Termination::PeerLoss)) => 4,
+                        Ok(Some(slime_rt::Termination::Unhealthy)) => 5,
+                        _ => 9,
+                    });
+                    slime_rt::debug_write(b"\n");
+                    slime_rt::exit(1)
+                }
             }
         }
     }
@@ -1549,24 +1585,43 @@ fn launch_fabric_graph(plane: &[u8], service_spawned: &[u8]) {
     .unwrap_or_else(|_| slime_rt::exit(1));
     let subscriber_b =
         slime_rt::spawn(FABRIC_SUBSCRIBER_B_SLOT, &[]).unwrap_or_else(|_| slime_rt::exit(1));
+    // The declared interposition proxy precedes the fabric for the same reason
+    // every ring participant does: the fabric is granted a supervision handle
+    // naming it, and a handle cannot exist before its task. A native Endpoint
+    // reports no peer death, so this handle is the only way the broker can
+    // observe a hop through a dead proxy rather than blocking on it forever.
+    let intruder = slime_rt::spawn(FABRIC_INTRUDER_SLOT, &[]).unwrap_or_else(|_| slime_rt::exit(1));
     // What init still passes is exactly what the generation cannot place: the
     // shared-buffer factory it holds, and one supervision handle per ring
-    // participant, which only exist once those tasks do. Matching is
-    // positional against ascending declared slot: factory at 1, then the four
-    // handles at 7..10 in the order the profile numbers them.
+    // participant and declared proxy, which only exist once those tasks do.
+    // Matching is positional against ascending declared slot: factory at 1,
+    // plane declaring an interposition names the proxy among them. Which those
+    // are is a manifest fact, not a build flag: `FABRIC_MINTED_GRANTS` states
+    // how many capabilities this child's owner must supply, so the set is
+    // sliced to that count rather than selected by `SLIME_FABRIC_VISIBILITY_CHECK`.
+    let grants = [
+        grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
+        grant(publisher.supervision_slot, RIGHT_SUPERVISE),
+        grant(subscriber.supervision_slot, RIGHT_SUPERVISE),
+        grant(intruder.supervision_slot, RIGHT_SUPERVISE),
+        grant(publisher_b.supervision_slot, RIGHT_SUPERVISE),
+        grant(subscriber_b.supervision_slot, RIGHT_SUPERVISE),
+    ];
+    let without_proxy = [grants[0], grants[1], grants[2], grants[4], grants[5]];
+    let declared = declared_minted_grants(b"fabric-service");
     let service = slime_rt::spawn(
         FABRIC_SERVICE_SLOT,
-        &[
-            grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
-            grant(publisher.supervision_slot, RIGHT_SUPERVISE),
-            grant(subscriber.supervision_slot, RIGHT_SUPERVISE),
-            grant(publisher_b.supervision_slot, RIGHT_SUPERVISE),
-            grant(subscriber_b.supervision_slot, RIGHT_SUPERVISE),
-        ],
+        if declared == grants.len() {
+            &grants[..]
+        } else if declared == without_proxy.len() {
+            &without_proxy[..]
+        } else {
+            slime_rt::debug_write(b"[init] fabric-service grant count is not a declared shape\n");
+            slime_rt::exit(1)
+        },
     )
     .unwrap_or_else(|_| slime_rt::exit(1));
     plane_marker(plane, service_spawned);
-    let intruder = slime_rt::spawn(FABRIC_INTRUDER_SLOT, &[]).unwrap_or_else(|_| slime_rt::exit(1));
     plane_marker(plane, b" participants spawned\n");
     wait_clean(&[
         publisher.supervision_slot,

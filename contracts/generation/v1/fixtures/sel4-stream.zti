@@ -425,11 +425,9 @@
       bindings = [
         {
           grant = "fabric-publisher-control";
-          slot = 0;
         };
         {
           grant = "fabric-publisher-probe";
-          slot = 1;
         };
       ];
       dependencies = [
@@ -445,7 +443,6 @@
       bindings = [
         {
           grant = "fabric-publisher-b-control";
-          slot = 0;
         };
       ];
       dependencies = [
@@ -461,11 +458,9 @@
       bindings = [
         {
           grant = "fabric-subscriber-control";
-          slot = 0;
         };
         {
           grant = "fabric-subscriber-probe";
-          slot = 1;
         };
       ];
       dependencies = [
@@ -481,7 +476,6 @@
       bindings = [
         {
           grant = "fabric-subscriber-b-control";
-          slot = 0;
         };
       ];
       dependencies = [
@@ -497,7 +491,6 @@
       bindings = [
         {
           grant = "fabric-intruder-control";
-          slot = 0;
         };
       ];
       dependencies = [
