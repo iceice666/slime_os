@@ -741,6 +741,25 @@ question is whether the reply capability survives the path it takes: both
 configuration is the thread's implicit reply capability, and that is the
 assumption to check first.
 
+**Two more hypotheses refuted by measurement (2026-08-13).** Instrumenting the
+ack shows 34 round trips completing and the **34th hanging** — client A takes
+all four timeout terminals, acks three, and blocks in `Call` on the fourth.
+
+- *The broker parks on the notification with nothing owed, so the ack finds no
+  receiver.* Signalling the wake before the ack changed nothing, and replacing
+  the park with a bare `yield_now` — removing it entirely — also changed
+  nothing. Both stop at exactly 57 markers. The park is not the blocker.
+- *`seL4_Reply` answers the wrong caller.* The kernel headers say it uses "the
+  reply capability stored when the thread was **last called**", and the broker
+  receives on five endpoints per sweep — but the reply is issued with no
+  intervening receive, so the stored capability is still the ack's.
+
+What is established: the ack reaches the broker (it retires records and the
+queue's minimum advances), the reply path is structurally sound, and the broker
+is neither parked nor starved. The remaining suspect is the reply itself — a
+`seL4_Reply` issued after a `nb_recv` rather than a blocking `recv`, which is
+the one asymmetry not yet tested in isolation.
+
 Three candidates were measured and reverted rather than argued away: ordering
 the offers by request id (a real correctness property, kept, but moves nothing
 alone and regresses with a `terminal mismatch` when applied without the rest);

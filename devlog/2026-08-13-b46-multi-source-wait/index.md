@@ -167,3 +167,17 @@ and reaches that sweep every pass, so the next thing to check is whether the
 reply capability survives: both `recv` and `nb_recv` pass `()` as the reply
 authority, which under non-MCS is the thread's implicit reply capability. That
 assumption has not been verified against a `nb_recv` that took the message.
+
+**Two more hypotheses refuted.** Instrumenting the ack shows 34 round trips
+completing and the 34th hanging: client A takes all four timeout terminals, acks
+three, and blocks in `Call` on the fourth.
+
+| Hypothesis | Test | Result |
+|---|---|---|
+| The broker parks with nothing owed, so the ack finds no receiver | Signal the wake before the ack; then remove the park entirely, replacing `notification_wait` with `yield_now` | 57 markers both times — the park is not the blocker |
+| `seL4_Reply` answers the wrong caller | Kernel headers: it uses "the reply capability stored when the thread was last called", and the broker receives on five endpoints per sweep | The reply is issued with no intervening receive, so the stored capability is still the ack's |
+
+Established: the ack reaches the broker — it retires records and the queue's
+minimum advances — the reply path is structurally sound, and the broker is
+neither parked nor starved. The one asymmetry not yet tested in isolation is a
+`seL4_Reply` issued after a `nb_recv` rather than a blocking `recv`.
