@@ -166,6 +166,13 @@ struct PendingDelivery {
 pub struct Broker {
     replacement_control: u32,
     replacement_supervision: u32,
+    /// The server operation id the server is executing, if any.
+    ///
+    /// The server handles one goal to completion and answers with blocking
+    /// sends. Forwarding a second while the first is unanswered blocks this
+    /// broker in `send` against a server already blocked replying here:
+    /// neither can move, and it is a deadlock rather than backpressure.
+    server_operation: Option<u64>,
     time_control: u32,
     supervision: [u32; CLIENTS + 1],
     clients: [Option<u32>; CLIENTS],
@@ -198,6 +205,7 @@ impl Broker {
         Self {
             replacement_control,
             replacement_supervision,
+            server_operation: None,
             time_control,
             supervision,
             clients: [Some(clients[0]), Some(clients[1])],
@@ -227,7 +235,14 @@ impl Broker {
                 progressed |= self.observe_client_death(index);
             }
             for index in 0..CLIENTS {
-                if self.clients[index].is_some() && self.can_receive_client(index) {
+                // A goal is left unread on the endpoint while the server is
+                // busy. Taking it would force a choice between blocking on a
+                // peer that is blocked on us and refusing a goal the client is
+                // entitled to have served; leaving it costs a pass instead.
+                if self.clients[index].is_some()
+                    && self.can_receive_client(index)
+                    && self.server_operation.is_none()
+                {
                     progressed |= self.pump_client(index);
                 }
                 if index == 1 && self.clients[index].is_none() {
@@ -464,6 +479,11 @@ impl Broker {
             slime_rt::debug_write(b"[fabric] operation capacity exhausted\n");
             return;
         };
+        // At most one goal at the server. Its replies are blocking sends, so a
+        // second forward waits on a peer already waiting on us. Refusing with
+        // `STATUS_REJECTED` is the same bounded answer this path already gives
+        // when the endpoint is full, and no operation identity is consumed, so
+        // the caller may retry the same goal.
         let server_operation_id = self.next_server_operation_id;
         self.next_server_operation_id = self
             .next_server_operation_id
@@ -475,6 +495,7 @@ impl Broker {
         match slime_rt::send(server, &outward.encode(), &[]) {
             ERR_SUCCESS => {
                 self.high_water[client] = record.operation_id;
+                self.server_operation = Some(server_operation_id);
             }
             ERR_WOULDBLOCK => {
                 // No operation identity has been consumed yet, so the caller
@@ -843,6 +864,12 @@ impl Broker {
             return;
         }
         self.operations[index] = Operation::EMPTY;
+        // Every terminal path passes here, so this is where the server's slot is
+        // released: whatever ended the operation, the server owes nothing more
+        // on it and the next forward may go.
+        if self.server_operation == Some(operation.server_operation_id) {
+            self.server_operation = None;
+        }
         self.queue_terminal(
             operation.client_index as usize,
             operation.client_slot,
