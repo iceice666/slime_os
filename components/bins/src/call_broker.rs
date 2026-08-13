@@ -284,6 +284,16 @@ impl Broker {
                     );
                     return true;
                 }
+                // An acknowledgement settles a record; it never opens one, so
+                // it is handled before any rejection. It echoes the session of
+                // the terminal it acks, so an ack for a *stale-session*
+                // terminal would otherwise be refused as a stale call -- and
+                // that refusal queues another terminal, which is acked, which
+                // is refused, without end.
+                if message.kind == KIND_TERMINAL_ACK {
+                    self.retire_terminal(client, message.request_id);
+                    return true;
+                }
                 if message.session == SESSION {
                     self.reject_terminal(
                         client,
@@ -298,11 +308,6 @@ impl Broker {
                 match message.kind {
                     KIND_REQUEST => self.admit_inline(client, slot, message),
                     KIND_CANCEL => self.cancel(client, slot, message),
-                    // The client's word that it took a terminal. `seL4_NBSend`
-                    // reports nothing, so this is the only observation that
-                    // retires the record; without it the broker re-offers
-                    // forever and its queue fills.
-                    KIND_TERMINAL_ACK => self.retire_terminal(client, message.request_id),
                     _ => {
                         self.reject_terminal(
                             client,
