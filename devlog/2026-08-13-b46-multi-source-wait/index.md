@@ -242,3 +242,25 @@ separate conclusions this session were distorted by that — "34th ack hangs",
 "broker never reaches 500 spins", "broker never reaches 50 spins". Capturing
 the QEMU output directly costs 90 seconds and would have saved several boot
 cycles each time.
+
+**The blocker is `server_idle`, and the obvious repair makes it worse.**
+Client A's timeout arm sends ids 6–9 with payloads 106–109, which
+`handle_inline` deliberately answers with `None` — the server is *supposed*
+never to reply. But `server_idle` is cleared by forwarding and set only when the
+server sends something back, so a request it never answers leaves the flag false
+forever and every later forward is deferred behind it. The transcript confirms
+it: four forwards in the whole run, the last being id 10.
+
+Releasing the server when a call times out loses two markers — 57 to 55,
+reproducibly across paired runs. So the deferral is load-bearing elsewhere, and
+the real fix must separate "the server owes nothing on *this call*" from "the
+server is free". One boolean cannot express both, because it conflates a
+per-call obligation with a per-peer state.
+
+**A measurement hazard, recorded because it nearly corrupted the above.** A
+`git checkout` followed immediately by a gate run reported 19 markers where
+three consecutive clean runs report 57 — a stale build, not variance. Combined
+with the truncated-tail trap above, that is two distinct ways this gate can lie
+about a change. Every comparison here is now taken from at least two consecutive
+runs, and every transcript claim from the full QEMU capture rather than the
+gate's tail.

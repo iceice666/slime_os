@@ -831,6 +831,25 @@ peers are at the same request id on the same endpoint, sessions match
 advances. That is the whole remaining fault, and it is now stated in terms that
 can be checked directly rather than inferred.
 
+**The blocker is `server_idle`, and releasing it is not the fix (2026-08-13).**
+Client A's timeout arm sends ids 6–9 with payloads 106–109, which
+`handle_inline` deliberately returns `None` for — the server is *supposed* never
+to answer them. `server_idle` is cleared by forwarding and set only when the
+server sends something back, so a request it never answers leaves it false
+forever and every later forward is deferred behind it. The transcript agrees:
+four forwards total, the last being id 10.
+
+Releasing the server when a call times out is the obvious repair and it
+**loses** two markers, 57 to 55, reproducibly. So the deferral is load-bearing
+somewhere else, and the right fix has to distinguish "the server owes nothing on
+this call" from "the server is free" — which the current single flag cannot
+express, because it conflates a per-call obligation with a per-peer state.
+
+A measurement hazard worth recording alongside it: a `git checkout` immediately
+followed by a gate run reported 19 markers where three consecutive clean runs
+report 57. That was a stale build, not variance. Every comparison in this
+investigation is now taken from at least two consecutive runs.
+
 Three candidates were measured and reverted rather than argued away: ordering
 the offers by request id (a real correctness property, kept, but moves nothing
 alone and regresses with a `terminal mismatch` when applied without the rest);
