@@ -302,11 +302,14 @@ impl Broker {
                 // that refusal queues another terminal, which is acked, which
                 // is refused, without end.
                 if message.kind == KIND_TERMINAL_ACK {
-                    self.retire_terminal(client, message.request_id);
-                    // The client acked with `seL4_Call` and is blocked on this
-                    // reply. It carries nothing beyond the echo: the ack's
-                    // arrival is the content, and answering releases the caller.
+                    // Reply *first*, before anything else on this path. The
+                    // caller is blocked in `seL4_Call` and its reply capability
+                    // is the one "stored when the thread was last called" --
+                    // which any intervening IPC overwrites, including a
+                    // `debug_write`, since that is a root round trip. Retiring
+                    // the record does not need the caller waiting.
                     let _ = slime_rt::reply(&message.encode());
+                    self.retire_terminal(client, message.request_id);
                     return true;
                 }
                 if message.session == SESSION {
