@@ -721,8 +721,24 @@ impl ObjectAllocator {
             .ok_or(AllocError::UnknownArena(id))
     }
 
-    /// Revoke the retained arena cap before returning any task object slot to
-    /// the bitmap. If revoke fails, the arena remains live and no slot is reused.
+    /// Revoke the retained arena cap, empty every recorded CSlot, and only then
+    /// return those indices to the bitmap. If revoke fails, the arena remains
+    /// live and no slot is reused.
+    ///
+    /// The revoke alone is not sufficient. It drops what was *derived from the
+    /// arena's own untyped*, which covers every object retyped by
+    /// [`Self::allocate_in`]. But [`Self::reserve_slot_in`] charges a bare
+    /// CSlot to the arena for lifetime purposes while its occupant is minted
+    /// from an object the arena never owned — a globally allocated Endpoint or
+    /// Notification (`peer_endpoint`/`notification` `install_instance`). No
+    /// revoke of the arena parent can reach such a capability, so the slot
+    /// survives teardown still occupied. Releasing it hands the pool an index
+    /// the kernel still considers full, and the next `reserve_slot` there is
+    /// refused `DeleteFirst` even though the bitmap is correct about
+    /// availability — the pool tracks availability, never occupancy.
+    ///
+    /// Deleting is unconditional and idempotent: a slot the revoke already
+    /// emptied deletes successfully as a no-op.
     pub fn release_task_arena(&mut self, id: TaskArenaId) -> Result<usize, AllocError> {
         let arena = *self
             .arenas
@@ -730,16 +746,19 @@ impl ObjectAllocator {
             .and_then(Option::as_ref)
             .filter(|arena| arena.serial == id.serial && arena.active)
             .ok_or(AllocError::UnknownArena(id))?;
+        let root_cnode = sel4::init_thread::slot::CNODE.cap();
         let parent_slot = arena.parent.bits() as usize;
-        let cptr = sel4::init_thread::slot::CNODE
-            .cap()
-            .absolute_cptr(sel4::CPtr::from_bits(parent_slot as sel4::CPtrBits));
+        let cptr = root_cnode.absolute_cptr(sel4::CPtr::from_bits(parent_slot as sel4::CPtrBits));
         cptr.revoke().map_err(|error| AllocError::ArenaCleanup {
             slot: parent_slot,
             error,
         })?;
 
         for slot in arena.slots.iter().take(arena.slot_len).copied() {
+            root_cnode
+                .absolute_cptr(sel4::CPtr::from_bits(slot as sel4::CPtrBits))
+                .delete()
+                .map_err(|error| AllocError::ArenaCleanup { slot, error })?;
             self.slots.release(slot);
         }
         self.live_objects = self.live_objects.saturating_sub(arena.objects);
