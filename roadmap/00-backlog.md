@@ -804,6 +804,33 @@ client index that does not match the reader. That is a question about *which*
 records exist and for whom, which the queue-minimum instrumentation can answer
 directly and which no further guess should precede.
 
+**Three more measurements, and the loop is exonerated (2026-08-13).**
+
+- *The broker is starved of loop passes.* Refuted, and the earlier evidence for
+  it was an artefact: spin counters at 5, 10, 12, 14, 16, 20, and 25 all fire in
+  the **full** QEMU transcript. They appeared absent only because the gate's tail
+  truncates. The broker loops freely.
+- *Terminals are owed to an exited client.* Refuted by instrumenting the queue's
+  provenance: every pending record belongs to client **0**, which is still
+  running. Client B's records are all taken before it exits. A
+  `reclaim_dead_clients` pass keyed on the supervision handle was written for
+  this and never fired once — reverted, since a guard that no run reaches is not
+  earned. (It remains the right shape if a client ever *does* exit owing
+  terminals; `seL4_NBSend` cannot distinguish "busy" from "gone", so only
+  supervision can.)
+- *`inFlightCalls = 4` is too small for the scenario.* Refuted and instructive:
+  raising it to 8 *loses* the retry-exhaustion arm, because that bound is
+  precisely what makes request 10 exceed the in-flight limit. The constant is
+  load-bearing for the property under test, not incidental.
+
+The queue's contents are now known exactly: client 0 holds terminals 4–9 in
+`calls` and 10 in the overflow queue; client 1 holds ids 100–123 across both.
+Client A takes 4, 5, and 10, then waits for 6 while the broker offers 6. Both
+peers are at the same request id on the same endpoint, sessions match
+(`client_session` is the identical expression on both sides), and neither
+advances. That is the whole remaining fault, and it is now stated in terms that
+can be checked directly rather than inferred.
+
 Three candidates were measured and reverted rather than argued away: ordering
 the offers by request id (a real correctness property, kept, but moves nothing
 alone and regresses with a `terminal mismatch` when applied without the rest);

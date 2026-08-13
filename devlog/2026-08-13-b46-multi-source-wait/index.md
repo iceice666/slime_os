@@ -221,3 +221,24 @@ needs is offered to a reader that has moved on, or queued under a client index
 the reader does not match. That is answerable directly from the queue-minimum
 instrumentation, and no further hypothesis should precede it: seven have now
 been paid for with a boot cycle each.
+
+**Three more measurements, and the loop is exonerated.**
+
+| Hypothesis | Test | Result |
+|---|---|---|
+| The broker is starved of loop passes | Spin counters at 5, 10, 12, 14, 16, 20, 25 | All fire in the **full** transcript; they looked absent only because the gate truncates its tail. The broker loops freely |
+| Terminals are owed to an exited client | Instrument the queue's provenance | Every pending record belongs to client 0, still running; a `reclaim_dead_clients` guard never fired and was reverted |
+| `inFlightCalls = 4` is too small | Raise to 8 | *Loses* the retry-exhaustion arm — that bound is what makes request 10 exceed the limit. Load-bearing, not incidental |
+
+The queue is now known exactly: client 0 holds terminals 4–9 in `calls` and 10
+in the overflow queue; client 1 holds 100–123. Client A takes 4, 5, and 10, then
+waits for 6 while the broker offers 6 — same id, same endpoint, matching
+sessions (`client_session` is the identical expression on both sides) — and
+neither advances.
+
+Worth recording about method: two of these were refuted by *reading the full
+transcript instead of the gate's*. The gate truncates its tail, and three
+separate conclusions this session were distorted by that — "34th ack hangs",
+"broker never reaches 500 spins", "broker never reaches 50 spins". Capturing
+the QEMU output directly costs 90 seconds and would have saved several boot
+cycles each time.
