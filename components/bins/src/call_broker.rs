@@ -121,15 +121,22 @@ pub struct Broker {
     now_ns: u64,
     pending_terminals: [Option<Call>; MAX_PENDING_TERMINALS],
     time_closed: bool,
-    /// Whether the server is back in `recv` rather than executing a call.
+    /// The call the server is currently executing, if any.
     ///
     /// A native `send` blocks until the peer receives, and this server handles
-    /// one call to completion before returning to its endpoint. Sending to it
-    /// while it is mid-call blocks this broker against a peer that is itself
-    /// blocked sending its reply here, which is a deadlock rather than
-    /// backpressure. Cleared when a request is forwarded, set when its answer
-    /// arrives.
-    server_idle: bool,
+    /// one call to completion before returning to its endpoint. Forwarding a
+    /// second request while the first is unanswered blocks this broker against
+    /// a peer that is itself blocked sending its reply here, which is a
+    /// deadlock rather than backpressure.
+    ///
+    /// It names the call rather than being a bare "busy" flag, because those
+    /// are different facts: a bare flag cannot tell a timeout on the call the
+    /// server holds -- which releases it -- from a timeout on some other call,
+    /// which does not. This plane's timeout arm sends requests the server
+    /// deliberately never answers, so without that distinction the flag stays
+    /// set forever and every later forward is deferred behind a call that will
+    /// never complete.
+    server_call: Option<u64>,
 }
 
 impl Broker {
@@ -152,7 +159,7 @@ impl Broker {
             now_ns: 0,
             pending_terminals: [None; MAX_PENDING_TERMINALS],
             time_closed: false,
-            server_idle: true,
+            server_call: None,
         }
     }
 
@@ -610,7 +617,7 @@ impl Broker {
         // backpressure. A call left in `Phase::Forwarding` is retried by
         // `pump_terminals` on a later pass, which is exactly the queue this
         // needs -- the server's own reply is what frees the slot.
-        if !self.server_idle {
+        if self.server_call.is_some() {
             self.calls[index].phase = Phase::Forwarding;
             return;
         }
@@ -686,8 +693,10 @@ impl Broker {
                 };
                 self.calls[index].payload = next_payload;
                 // The server is now executing this call and will not receive
-                // again until it has answered.
-                self.server_idle = false;
+                // again until it has answered. Naming the call lets a
+                // timeout on *this* request release it, while a timeout on
+                // any other leaves it held.
+                self.server_call = Some(self.calls[index].server_request_id);
                 if was_cancelling {
                     slime_rt::debug_write(b"[fabric] call cancellation forwarded\n");
                 } else {
@@ -812,7 +821,7 @@ impl Broker {
     ) {
         // Anything received from the server means it finished a call and went
         // back to its endpoint, so it is reachable by a blocking send again.
-        self.server_idle = true;
+        self.server_call = None;
         let magic = (length >= 4).then(|| u32::from_le_bytes(bytes[..4].try_into().unwrap()));
         match magic {
             Some(CALL_MAGIC) => {
@@ -1088,6 +1097,10 @@ impl Broker {
                 } else {
                     STATUS_TIMEOUT
                 };
+                // A timeout on the call the server is executing releases it:
+                // the deadline says it owes nothing on that request any more.
+                // A timeout on any *other* call leaves it held, because the
+                // request it is actually working on is still outstanding.
                 self.finish(index, status);
                 if status == STATUS_CANCELLED {
                     slime_rt::debug_write(b"[fabric] call cancelled\n");
@@ -1202,7 +1215,7 @@ impl Broker {
         // payload when the reply lands, so a `Cancelling` call still holding a
         // staged message is one whose server has not answered yet.
         for index in 0..self.calls.len() {
-            if self.calls[index].phase != Phase::Cancelling || !self.server_idle {
+            if self.calls[index].phase != Phase::Cancelling || self.server_call.is_some() {
                 continue;
             }
             let (Payload::Inline(message) | Payload::CancellingShared { message, .. }) =
@@ -1241,7 +1254,7 @@ impl Broker {
         }
         // Retry one call deferred because the server was busy. Its reply is
         // what makes the server reachable again, so this resumes exactly then.
-        if self.server_idle
+        if self.server_call.is_none()
             && let Some(index) = self
                 .calls
                 .iter()
