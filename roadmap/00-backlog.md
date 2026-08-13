@@ -922,6 +922,24 @@ server must not exit while a request it has taken is unanswered, or the broker
 must not hold a forward it cannot retract. That is a scenario-and-broker change
 together, and it is the honest remaining scope of this gate.
 
+Two further repairs measured and reverted, both aimed at the same window:
+observing the server's death at the top of `pump_time` before its retry loop,
+and limiting the loop to one forward per pass so a timeout that releases
+`server_call` cannot be followed by a retry in the same iteration. Neither
+moves the stage count off 10, which means the block is not the *second* forward
+in a pass — it is the pass that forwards id 11 itself, and no reordering within
+`pump_time` can help because the server is alive when that send is issued and
+gone before it completes.
+
+That exhausts the repairs available above the transport. The send that hangs is
+correct by every local rule: the server is live, the endpoint is right, the
+message is well-formed, and `server_call` is clear. It hangs because
+`seL4_Send` has no way to fail when its receiver exits mid-rendezvous, and
+nothing in the non-MCS syscall surface expresses "send, but give up if the peer
+dies". Either the scenario must not model peer death as an exit while holding a
+taken request, or the plane needs an MCS kernel where a timeout can bound the
+send.
+
 Three candidates were measured and reverted rather than argued away: ordering
 the offers by request id (a real correctness property, kept, but moves nothing
 alone and regresses with a `terminal mismatch` when applied without the rest);

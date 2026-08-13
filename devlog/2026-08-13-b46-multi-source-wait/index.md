@@ -315,3 +315,24 @@ So the fix is protocol-shaped, not primitive-shaped: either the server must not
 exit while holding a request it has taken, or the broker must not hold a forward
 it cannot retract. That is a scenario-and-broker change together, and it is the
 honest remaining scope.
+
+**Two further repairs measured and reverted**, both aimed at the same window:
+observing the server's death at the top of `pump_time` before its retry loop,
+and limiting that loop to one forward per pass so a timeout releasing
+`server_call` cannot be followed by a retry in the same iteration. Neither moves
+the stage count off 10 — so the block is not the *second* forward in a pass. It
+is the pass that forwards id 11 itself, and no reordering within `pump_time`
+can help, because the server is alive when that send is issued and gone before
+it completes.
+
+That exhausts the repairs available above the transport. The send that hangs is
+correct by every local rule: the server is live, the endpoint is right, the
+message is well-formed, `server_call` is clear. It hangs because `seL4_Send`
+cannot fail when its receiver exits mid-rendezvous, and the non-MCS syscall
+surface has no way to say "send, but give up if the peer dies".
+
+So the plane needs one of: a scenario that does not model peer death as an exit
+while holding a taken request, or an MCS kernel where a timeout bounds the send.
+B48 already defers MCS on AArch64 because seL4's functional-correctness proofs
+do not cover it — which makes the scenario change the tractable one, and makes
+this a genuine constraint of the port rather than a defect in the broker.
