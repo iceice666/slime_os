@@ -1,11 +1,3 @@
-//! Shared participant behaviour for the C8.7 operation gate.
-//!
-//! Two clients and one server drive every required arm of the milestone over
-//! real syscalls: concurrent non-cross-correlated operations, unauthorized
-//! observation/retrieval/cancellation, duplicate goals, feedback after terminal
-//! state, duplicate results, a cancellation race, result expiry, participant
-//! restart, and peer death while a distinct operation route remains live.
-
 #![allow(dead_code)]
 
 use boot_contracts::fabric_graph::{DIRECTION_CLIENT, DIRECTION_SERVER};
@@ -20,6 +12,11 @@ const PHASE_SLOT: u32 = 1;
 const RESTART_START_SLOT: u32 = 2;
 const PHASE_TIME_SLOT: u32 = 2;
 const BACKUP_ROUTE_SLOT: u32 = 3;
+/// Client A's pairwise phase edge to the replacement client. The retired
+/// minted channel had A, B, and B's replacement on one object; native Endpoints
+/// are pairwise, so A's original-B edge stays at slot 1 and this second edge is
+/// installed at slot 4.
+const REPLACEMENT_PHASE_SLOT: u32 = 4;
 
 /// Goal payload values, which the server reads as its own policy input. The
 /// fabric never interprets these: goal policy is the application's.
@@ -98,7 +95,7 @@ pub fn run_client() {
 
     // Client B now runs its authority-denial and cancellation arms.
     signal_phase(1);
-    wait_phase(3);
+    wait_replacement_phase(3);
 
     // Result expiry, driven only by the explicit time capability. Operation 6
     // completes and is retained, then the clock passes its retention window.
@@ -124,8 +121,8 @@ pub fn run_client() {
     // Let client B arm a live operation first, so the server fault below lands
     // while B has real in-flight state on the same route. That is what makes B's
     // survival an observation rather than a race against broker shutdown.
-    signal_phase(5);
-    wait_phase(6);
+    signal_replacement_phase(5);
+    wait_replacement_phase(6);
 
     // Peer death settles the active operation and is distinct from a timeout.
     send(route, goal(session, 8, GOAL_KILLS_SERVER));
@@ -133,7 +130,7 @@ pub fn run_client() {
     // Client B's marker must land before A closes the backup route: closing it
     // lets the broker finish and exit, which marks B's primary route peer dead
     // even if B has not yet consumed its already queued terminal.
-    wait_phase(7);
+    wait_replacement_phase(7);
     slime_rt::debug_write(b"[fabric-op-client] peer death distinct\n");
     send_raw(backup_route, &[0xa7]);
     let mut probe = [0u8; MAX_MSG];
@@ -271,6 +268,7 @@ pub fn run_server() {
             }
             _ => fail(b"unknown server record"),
         }
+        send(route, server_idle(record));
     }
 }
 
@@ -424,6 +422,17 @@ fn result(request: WireOperationEnvelope, status: i32, value: u64) -> WireOperat
     )
 }
 
+fn server_idle(request: WireOperationEnvelope) -> WireOperationEnvelope {
+    envelope(
+        request.session,
+        request.operation_id,
+        KIND_SERVER_IDLE,
+        STATUS_SUCCESS,
+        0,
+        0,
+    )
+}
+
 pub fn send(slot: u32, record: WireOperationEnvelope) {
     send_raw(slot, &record.encode())
 }
@@ -542,6 +551,15 @@ pub fn signal_phase(phase: u8) {
         }
     }
 }
+fn signal_replacement_phase(phase: u8) {
+    loop {
+        match slime_rt::send(REPLACEMENT_PHASE_SLOT, &[phase], &[]) {
+            ERR_SUCCESS => return,
+            ERR_WOULDBLOCK => slime_rt::yield_now(),
+            _ => fail(b"replacement phase send"),
+        }
+    }
+}
 
 pub fn signal_time_phase(phase: u8) {
     loop {
@@ -562,6 +580,18 @@ pub fn wait_phase(expected: u8) {
             value if value < 0 => fail(b"phase receive"),
             1 if bytes[0] == expected => return,
             _ => fail(b"phase mismatch"),
+        }
+    }
+}
+fn wait_replacement_phase(expected: u8) {
+    let mut bytes = [0u8; MAX_MSG];
+    let mut caps = [0u64; MAX_CAPS_PER_MSG];
+    loop {
+        match slime_rt::recv(REPLACEMENT_PHASE_SLOT, &mut bytes, &mut caps) {
+            ERR_WOULDBLOCK => slime_rt::yield_now(),
+            value if value < 0 => fail(b"replacement phase receive"),
+            1 if bytes[0] == expected => return,
+            _ => fail(b"replacement phase mismatch"),
         }
     }
 }

@@ -4104,9 +4104,27 @@ fn serve_spawn(
         release_child(tasks, windows, graph, buffers, allocator, child);
         return Response::error(IpcError::BadCapability);
     }
+    let supervision_grants = plan
+        .granted
+        .iter()
+        .take(plan.count)
+        .flatten()
+        .filter(|(_, _, capability, _)| {
+            matches!(capability.resource, graph::Resource::Supervision { .. })
+        })
+        .count();
+    let buffer_factory_grants = plan
+        .granted
+        .iter()
+        .take(plan.count)
+        .flatten()
+        .filter(|(_, _, capability, _)| {
+            matches!(capability.resource, graph::Resource::SharedBufferFactory)
+        })
+        .count();
     *spawns += 1;
     sel4::debug_println!(
-        "SLIME_GRAPH spawned task={} child={} component={name} grants={} endpoints={copied} notifications={notification_copied} handle={handle}",
+        "SLIME_GRAPH spawned task={} child={} component={name} grants={} endpoints={copied} notifications={notification_copied} handle={handle} supervision_grants={supervision_grants} buffer_factory_grants={buffer_factory_grants}",
         id.0,
         child.0,
         plan.count,

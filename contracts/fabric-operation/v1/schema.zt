@@ -32,8 +32,9 @@ magic :: Int = 1381323091; -- `SOPR`
 
 -- Every leg of one operation. `goal` opens it, `accepted`/`rejected` answer the
 -- start call, `feedback` streams progress under the operation key, `result`
--- and `resultRequest` are the result call, `cancel` requests cancellation, and
--- `terminal` is the one transport outcome the client is owed.
+-- and `resultRequest` are the result call, `cancel` requests cancellation,
+-- `terminal` is the one transport outcome the client is owed, and
+-- `serverIdle` fences the final server record for one handled request.
 kindGoal :: Int = 1;
 kindAccepted :: Int = 2;
 kindFeedback :: Int = 3;
@@ -41,6 +42,7 @@ kindResult :: Int = 4;
 kindResultRequest :: Int = 5;
 kindCancel :: Int = 6;
 kindTerminal :: Int = 7;
+kindServerIdle :: Int = 8;
 
 -- Transport outcomes. `active` and `cancelRequested` are progress states an
 -- `accepted` record reports; the rest are terminal.
@@ -95,6 +97,7 @@ format ::= {
   kindResultRequest = kindResultRequest;
   kindCancel = kindCancel;
   kindTerminal = kindTerminal;
+  kindServerIdle = kindServerIdle;
   statusSuccess = statusSuccess;
   statusRejected = statusRejected;
   statusCancelled = statusCancelled;

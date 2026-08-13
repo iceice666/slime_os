@@ -648,7 +648,8 @@ pub fn valid_operation_envelope(
         return false;
     }
     // Only feedback is ordered within an operation; a sequence anywhere else is
-    // a field the sender had no business setting.
+    // a field the sender had no business setting. The server-idle fence carries
+    // no payload, but names the handled request so the broker can match it.
     if value.kind != KIND_FEEDBACK && value.sequence != 0 {
         return false;
     }
@@ -687,6 +688,7 @@ pub fn valid_operation_envelope(
                         | STATUS_RETRY_EXHAUSTED
                 )
         }
+        KIND_SERVER_IDLE => value.payload_len == 0 && value.status == STATUS_SUCCESS,
         _ => false,
     }
 }

@@ -36,10 +36,10 @@
 use boot_contracts::fabric_graph::{DIRECTION_CLIENT, DIRECTION_SERVER};
 use slime_proto::fabric_operation::{
     FORMAT_VERSION, KIND_ACCEPTED, KIND_CANCEL, KIND_FEEDBACK, KIND_GOAL, KIND_RESULT,
-    KIND_RESULT_REQUEST, KIND_TERMINAL, OPERATION_MAGIC, STATUS_ACTIVE, STATUS_CANCEL_REQUESTED,
-    STATUS_CANCELLED, STATUS_DUPLICATE, STATUS_EXPIRED, STATUS_MALFORMED, STATUS_PEER_DEAD,
-    STATUS_REJECTED, STATUS_RETRY_EXHAUSTED, STATUS_STALE, STATUS_SUCCESS, STATUS_TIMEOUT,
-    WireOperationEnvelope,
+    KIND_RESULT_REQUEST, KIND_SERVER_IDLE, KIND_TERMINAL, OPERATION_MAGIC, STATUS_ACTIVE,
+    STATUS_CANCEL_REQUESTED, STATUS_CANCELLED, STATUS_DUPLICATE, STATUS_EXPIRED, STATUS_MALFORMED,
+    STATUS_PEER_DEAD, STATUS_REJECTED, STATUS_RETRY_EXHAUSTED, STATUS_STALE, STATUS_SUCCESS,
+    STATUS_TIMEOUT, WireOperationEnvelope,
 };
 use slime_proto::fabric_time::WireTimeAdvance;
 use slime_proto::interface_schema::navigation_operation;
@@ -165,20 +165,17 @@ struct PendingDelivery {
 
 pub struct Broker {
     replacement_control: u32,
+    replacement_start: Option<u32>,
     replacement_supervision: u32,
-    /// The server operation id the server is executing, if any.
+    /// The server request whose final reply record has not yet been fenced.
     ///
-    /// The server handles one goal to completion and answers with blocking
-    /// sends. Forwarding a second while the first is unanswered blocks this
-    /// broker in `send` against a server already blocked replying here:
-    /// neither can move, and it is a deadlock rather than backpressure.
-    server_operation: Option<u64>,
-    /// Whether the server has nothing further to send.
-    ///
-    /// Set when a server receive finds the endpoint empty, cleared whenever a
-    /// goal is forwarded. A settled operation is not proof of silence: the
-    /// server may still be blocked sending a trailing record for it.
-    server_quiet: bool,
+    /// A native Endpoint permits two senders to block at once. Forwarding a
+    /// goal or cancel while the single-threaded server still owes a blocking
+    /// reply leaves broker and server blocked sending to each other. The server
+    /// therefore emits `KIND_SERVER_IDLE` after every handled request, and only
+    /// that matching record clears this guard. A logical operation may remain
+    /// active after the request is fenced.
+    server_request: Option<u64>,
     time_control: u32,
     supervision: [u32; CLIENTS + 1],
     clients: [Option<u32>; CLIENTS],
@@ -188,6 +185,8 @@ pub struct Broker {
     operations: [Operation; MAX_OPERATIONS],
     retained: [Retained; MAX_RETAINED],
     pending_deliveries: [Option<PendingDelivery>; MAX_PENDING_DELIVERIES],
+    /// One server-bound request per client taken while the server owes replies.
+    deferred_requests: [Option<WireOperationEnvelope>; CLIENTS],
     high_water: [u64; CLIENTS],
     client_sessions: [u64; CLIENTS],
     next_server_operation_id: u64,
@@ -204,15 +203,16 @@ impl Broker {
         server_slot: u32,
         time_control: u32,
         replacement_control: u32,
+        replacement_start: Option<u32>,
         backup_route_slot: u32,
         supervision: [u32; CLIENTS + 1],
         replacement_supervision: u32,
     ) -> Self {
         Self {
             replacement_control,
+            replacement_start,
             replacement_supervision,
-            server_operation: None,
-            server_quiet: true,
+            server_request: None,
             time_control,
             supervision,
             clients: [Some(clients[0]), Some(clients[1])],
@@ -222,6 +222,7 @@ impl Broker {
             backup_route_slot: Some(backup_route_slot),
             retained: [Retained::EMPTY; MAX_RETAINED],
             pending_deliveries: [None; MAX_PENDING_DELIVERIES],
+            deferred_requests: [None; CLIENTS],
             high_water: [0; CLIENTS],
             client_sessions: [client_session(0), client_session(1)],
             next_server_operation_id: 1,
@@ -241,27 +242,34 @@ impl Broker {
             for index in 0..CLIENTS {
                 progressed |= self.observe_client_death(index);
             }
+            let mut client_progress = false;
             for index in 0..CLIENTS {
-                // A goal is left unread on the endpoint while the server is
-                // busy. Taking it would force a choice between blocking on a
-                // peer that is blocked on us and refusing a goal the client is
-                // entitled to have served; leaving it costs a pass instead.
-                //
-                // `server_quiet` is checked as well as the slot, because a
-                // settled operation can still have records behind it -- a
-                // duplicate result, or feedback after the terminal. Those are
-                // blocking sends too, so a new goal may only go once the server
-                // has nothing left to say.
-                if self.clients[index].is_some()
-                    && self.can_receive_client(index)
-                    && self.server_operation.is_none()
-                    && self.server_quiet
+                if self.server_request.is_none()
+                    && let Some(record) = self.deferred_requests[index].take()
+                    && let Some(slot) = self.clients[index]
                 {
-                    progressed |= self.pump_client(index);
+                    self.dispatch_client(index, slot, record);
+                    client_progress = true;
+                }
+                if self.deferred_requests[index].is_none()
+                    && self.clients[index].is_some()
+                    && self.can_receive_client(index)
+                {
+                    client_progress |= self.pump_client(index);
                 }
                 if index == 1 && self.clients[index].is_none() {
-                    progressed |= self.pump_replacement(index);
+                    client_progress |= self.pump_replacement(index);
                 }
+            }
+            if client_progress {
+                // Restart the sweep before consuming a server reply. A client
+                // may send its next control record immediately after receiving
+                // the record this sweep produced -- notably a duplicate cancel
+                // after `STATUS_CANCEL_REQUESTED`. Consuming the server's result
+                // first would block delivering it to a client that is itself
+                // blocked sending that control record. The next sweep drains
+                // the client endpoint first, then the server can answer.
+                continue;
             }
             progressed |= self.observe_server_death();
             progressed |= self.pump_server();
@@ -307,6 +315,7 @@ impl Broker {
             .iter()
             .all(|operation| operation.phase == Phase::Free)
             && self.pending_deliveries.iter().all(Option::is_none)
+            && self.deferred_requests.iter().all(Option::is_none)
             && self.server_settled
             && self.backup_route_slot.is_none()
     }
@@ -380,6 +389,16 @@ impl Broker {
         self.clients[client] = Some(self.replacement_control);
         self.supervision[client] = self.replacement_supervision;
         self.replacement_control_closed = true;
+        // The operation plane supplies a generation-declared restart barrier.
+        // The full-boot worker has no such edge because its replacement parks;
+        // reaching replacement admission there is therefore a composition
+        // failure rather than permission to guess a slot in another CSpace.
+        let Some(start) = self.replacement_start else {
+            fail(b"replacement start absent")
+        };
+        if slime_rt::send(start, &[1], &[]) != ERR_SUCCESS {
+            fail(b"replacement start")
+        }
         slime_rt::debug_write(b"[fabric] operation participant restarted\n");
         true
     }
@@ -395,10 +414,7 @@ impl Broker {
             ERR_WOULDBLOCK => return false,
             ERR_PEER_DEAD => {
                 self.clients[client] = None;
-                self.reclaim_client(slot);
-                if slime_rt::cap_drop(slot) != ERR_SUCCESS {
-                    fail(b"client endpoint drop")
-                }
+                self.reclaim_client(client, slot);
                 return true;
             }
             value if value < 0 => fail(b"client recv"),
@@ -432,7 +448,15 @@ impl Broker {
             slime_rt::debug_write(b"[fabric] stale operation session rejected\n");
             return true;
         }
+        self.dispatch_client(client, slot, record);
+        true
+    }
+
+    fn dispatch_client(&mut self, client: usize, slot: u32, record: WireOperationEnvelope) {
         match record.kind {
+            KIND_GOAL if self.server_request.is_some() => {
+                self.deferred_requests[client] = Some(record);
+            }
             KIND_GOAL => self.start(client, slot, record),
             KIND_CANCEL => self.request_cancel(client, slot, record),
             KIND_RESULT_REQUEST => self.retrieve(client, slot, record),
@@ -447,7 +471,6 @@ impl Broker {
                 slime_rt::debug_write(b"[fabric] client role authority denied\n");
             }
         }
-        true
     }
 
     /// Admit one goal, or refuse it with the exact reason.
@@ -493,11 +516,8 @@ impl Broker {
             slime_rt::debug_write(b"[fabric] operation capacity exhausted\n");
             return;
         };
-        // At most one goal at the server. Its replies are blocking sends, so a
-        // second forward waits on a peer already waiting on us. Refusing with
-        // `STATUS_REJECTED` is the same bounded answer this path already gives
-        // when the endpoint is full, and no operation identity is consumed, so
-        // the caller may retry the same goal.
+        // No server request may still owe a reply record here. Logical
+        // operations can remain active after the server's explicit idle fence.
         let server_operation_id = self.next_server_operation_id;
         self.next_server_operation_id = self
             .next_server_operation_id
@@ -509,8 +529,7 @@ impl Broker {
         match slime_rt::send(server, &outward.encode(), &[]) {
             ERR_SUCCESS => {
                 self.high_water[client] = record.operation_id;
-                self.server_operation = Some(server_operation_id);
-                self.server_quiet = false;
+                self.server_request = Some(server_operation_id);
             }
             ERR_WOULDBLOCK => {
                 // No operation identity has been consumed yet, so the caller
@@ -573,6 +592,10 @@ impl Broker {
             self.answer(index, STATUS_CANCEL_REQUESTED);
             return;
         }
+        if self.server_request.is_some() {
+            self.deferred_requests[client] = Some(record);
+            return;
+        }
         let Some(server) = self.server_slot else {
             self.settle(index, STATUS_PEER_DEAD);
             return;
@@ -582,6 +605,7 @@ impl Broker {
         outward.operation_id = self.operations[index].server_operation_id;
         match slime_rt::send(server, &outward.encode(), &[]) {
             ERR_SUCCESS => {
+                self.server_request = Some(self.operations[index].server_operation_id);
                 self.operations[index].phase = Phase::CancelRequested;
                 self.answer(index, STATUS_CANCEL_REQUESTED);
                 slime_rt::debug_write(b"[fabric] operation cancel requested\n");
@@ -667,10 +691,7 @@ impl Broker {
         let mut bytes = [0u8; MAX_MSG];
         let mut caps = [0u64; MAX_CAPS_PER_MSG];
         let length = match slime_rt::recv(slot, &mut bytes, &mut caps) {
-            ERR_WOULDBLOCK => {
-                self.server_quiet = true;
-                return false;
-            }
+            ERR_WOULDBLOCK => return false,
             ERR_PEER_DEAD => {
                 self.server_slot = None;
                 self.settle_all(STATUS_PEER_DEAD);
@@ -684,9 +705,6 @@ impl Broker {
         let Some(record) = WireOperationEnvelope::decode(&bytes[..length.min(MAX_MSG)]) else {
             return true;
         };
-        // A server record that is malformed, or that claims a session other than
-        // the one the fabric handed it, settles the operation it named rather
-        // than reaching a client.
         if length != MAX_MSG
             || !slime_proto::valid_operation_envelope(&record, navigation_operation::TYPE_TAG)
             || record.session != SERVER_SESSION
@@ -694,6 +712,17 @@ impl Broker {
             if let Some(index) = self.find_server_operation(record.operation_id) {
                 self.settle(index, STATUS_MALFORMED);
                 slime_rt::debug_write(b"[fabric] malformed operation reply rejected\n");
+            }
+            return true;
+        }
+        // The fence follows the final record, which may already have settled
+        // and freed its operation. Match it against the outstanding request
+        // before looking for active operation state.
+        if record.kind == KIND_SERVER_IDLE {
+            if self.server_request == Some(record.operation_id) {
+                self.server_request = None;
+            } else {
+                slime_rt::debug_write(b"[fabric] stale operation server-idle rejected\n");
             }
             return true;
         }
@@ -882,12 +911,6 @@ impl Broker {
             return;
         }
         self.operations[index] = Operation::EMPTY;
-        // Every terminal path passes here, so this is where the server's slot is
-        // released: whatever ended the operation, the server owes nothing more
-        // on it and the next forward may go.
-        if self.server_operation == Some(operation.server_operation_id) {
-            self.server_operation = None;
-        }
         self.queue_terminal(
             operation.client_index as usize,
             operation.client_slot,
@@ -928,7 +951,7 @@ impl Broker {
                 ERR_WOULDBLOCK => {}
                 ERR_PEER_DEAD => {
                     self.clients[client] = None;
-                    self.reclaim_client(slot);
+                    self.reclaim_client(client, slot);
                     let _ = slime_rt::cap_drop(slot);
                     return false;
                 }
@@ -975,7 +998,7 @@ impl Broker {
                 ERR_PEER_DEAD => {
                     self.pending_deliveries[index] = None;
                     self.clients[client] = None;
-                    self.reclaim_client(value.slot);
+                    self.reclaim_client(client, value.slot);
                     let _ = slime_rt::cap_drop(value.slot);
                     progressed = true;
                 }
@@ -1061,10 +1084,17 @@ impl Broker {
             Ok(None) => false,
             Ok(Some(_)) => {
                 self.clients[client] = None;
-                self.reclaim_client(slot);
-                if slime_rt::cap_drop(slot) != ERR_SUCCESS {
-                    fail(b"client endpoint drop")
+                self.reclaim_client(client, slot);
+                // Client A alone owns the peer of the unrelated backup route.
+                // A native Endpoint never reports that peer's death, so its
+                // supervision transition is the authoritative close signal.
+                // The liveness exchange has completed before A exits.
+                if client == 0 {
+                    self.backup_route_slot = None;
                 }
+                // The endpoint itself is not dropped. `cap_drop` addresses the
+                // root's logical export table, and a generation-installed
+                // native Endpoint was never exported through it.
                 true
             }
             Err(_) => fail(b"client supervision"),
@@ -1106,21 +1136,19 @@ impl Broker {
     }
 
     fn drop_dead_client(&mut self, index: usize) {
-        let client_index = self.operations[index].client_index as usize;
-        let slot = self.operations[index].client_slot;
+        let operation = self.operations[index];
+        let client_index = operation.client_index as usize;
+        let slot = operation.client_slot;
         self.operations[index] = Operation::EMPTY;
         self.clients[client_index] = None;
-        self.reclaim_client(slot);
-        if slime_rt::cap_drop(slot) != ERR_SUCCESS {
-            fail(b"client endpoint drop")
-        }
+        self.reclaim_client(client_index, slot);
     }
 
     /// Release everything a departed client held. Active operations and queued
     /// endpoint-local terminals are unreachable after restart, but retained
     /// results stay keyed to the authenticated client index so the replacement
     /// can retrieve them through its fresh role.
-    fn reclaim_client(&mut self, slot: u32) {
+    fn reclaim_client(&mut self, client: usize, slot: u32) {
         for index in 0..self.operations.len() {
             if self.operations[index].phase != Phase::Free
                 && self.operations[index].client_slot == slot
@@ -1133,6 +1161,7 @@ impl Broker {
                 *pending = None;
             }
         }
+        self.deferred_requests[client] = None;
     }
 
     /// Settle every active operation with one status, then mark the server
@@ -1144,6 +1173,7 @@ impl Broker {
             self.settle(index, status);
         }
         self.server_settled = true;
+        self.server_request = None;
     }
 }
 

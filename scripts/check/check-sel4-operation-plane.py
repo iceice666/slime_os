@@ -4,9 +4,9 @@
 
 The x86 gate proves the native-operation semantics against the frozen oracle.
 This gate boots the same broker and participants on `slime-root`, where init
-exports attenuated supervision capabilities and the broker imports them. The
-paired native evidence preserves parent-vouched identity without logical
-channel-transfer state.
+hands the broker four attenuated supervision capabilities in its declared
+spawn set. The root's per-kind spawn evidence preserves parent-vouched identity
+without logical channel-transfer state.
 """
 
 from __future__ import annotations
@@ -39,26 +39,27 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "the generation was admitted and the parent introduced every participant",
         (
-            r"SLIME_ROOT generation admitted number=20 executables=7 instances=7 grants=13 ",
+            r"SLIME_ROOT generation admitted number=20 executables=7 instances=7 grants=17 ",
             r"SLIME_ROOT fabric graph=admitted schemas=1 routes=2 participants=5 ",
             r"SLIME_GRAPH activated instances=\d+",
             r"\[init\] operation control channels minted",
-            r"SLIME_GRAPH spawned task=\d+ child=\d+ component=fabric-service ",
-            r"\[init\] operation fabric spawned",
+            # Participants precede the broker: it receives a supervision handle
+            # naming each of them, which cannot exist before the task.
             r"SLIME_GRAPH spawned task=\d+ child=\d+ component=fabric-op-client ",
             r"SLIME_GRAPH spawned task=\d+ child=\d+ component=fabric-op-client-b ",
             r"SLIME_GRAPH spawned task=\d+ child=\d+ component=fabric-op-server ",
-            r"\[init\] operation participants spawned",
-            r"SLIME_GRAPH capability exported task=\d+ id=\d+ kind=supervision "
-            r"rights=0x40000 retain=0",
-            r"SLIME_GRAPH capability imported task=\d+ id=\d+ kind=supervision "
-            r"rights=0x40000 retain=0",
-            r"\[init\] operation supervision delegated",
             r"SLIME_GRAPH spawned task=\d+ child=\d+ component=fabric-op-client-b-restart ",
+            r"\[init\] operation participants spawned",
             r"\[init\] operation replacement introduced",
+            # Five grants: the shared-buffer factory plus one supervision handle
+            # per participant. Delegation is part of the spawn now, rather than a
+            # later export/import pair.
+            r"SLIME_GRAPH spawned task=\d+ child=\d+ component=fabric-service grants=5 ",
+            r"\[init\] operation fabric spawned",
+            r"\[init\] operation supervision delegated",
             r"SLIME_GRAPH spawned task=\d+ child=\d+ component=fabric-op-time ",
             r"\[init\] operation replacement released",
-            r"\[fabric\] operation roles provisioned",
+            r"\[fabric\] operation endpoints ready",
         ),
     ),
     (
@@ -66,13 +67,16 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
         # and result correlate end to end and produce exactly one terminal.
         "correlation and ordered feedback",
         (
-            r"\[fabric\] operation roles provisioned",
+            r"\[fabric\] operation endpoints ready",
             r"\[fabric-op-client\] success correlated",
             r"\[fabric-op-server\] feedback streamed",
             r"\[fabric-op-client\] feedback ordered",
-            r"\[fabric-op-server\] goal rejected",
             r"\[fabric-op-client\] rejection distinct",
         ),
+    ),
+    (
+        "the server reported its rejection",
+        (r"\[fabric-op-server\] goal rejected",),
     ),
     (
         # C8.7 required check 1, the negative half: two operations live at once
@@ -86,11 +90,16 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
         # C8.7 required check 3: bounded determinism at the transport edges.
         "terminal state, duplicates, and single-terminal enforcement",
         (
-            r"\[fabric-op-server\] post-terminal feedback emitted",
             r"\[fabric-op-client\] terminal state closed",
             r"\[fabric-op-client\] duplicate goal rejected",
-            r"\[fabric-op-server\] duplicate result emitted",
             r"\[fabric-op-client\] single terminal enforced",
+        ),
+    ),
+    (
+        "the server emitted the rejected post-terminal records",
+        (
+            r"\[fabric-op-server\] post-terminal feedback emitted",
+            r"\[fabric-op-server\] duplicate result emitted",
         ),
     ),
     (
@@ -137,10 +146,13 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "explicit time produces distinct timeout and expiry outcomes",
         (
             r"\[fabric-op-server\] goal left unanswered",
-            r"\[fabric-op-time\] bounded time advanced",
             r"\[fabric-op-client\] timeout distinct",
             r"\[fabric-op-client\] result expiry observed",
         ),
+    ),
+    (
+        "the explicit clock published its bounded advance",
+        (r"\[fabric-op-time\] bounded time advanced",),
     ),
     (
         # C8.7 required check 4: peer death settles the dead server's client's
@@ -202,15 +214,16 @@ FAILURE_MARKERS: tuple[str, ...] = (
 
 SPAWN_PATTERN = re.compile(
     r"SLIME_GRAPH spawned task=(\d+) child=(\d+) component=([^ ]+) "
-    r"grants=(\d+) endpoints=(\d+) notifications=(\d+) handle=(\d+)"
+    r"grants=(\d+) endpoints=(\d+) notifications=(\d+) handle=(\d+) "
+    r"supervision_grants=(\d+) buffer_factory_grants=(\d+)"
 )
 EXIT_PATTERN = re.compile(r"SLIME_GRAPH component exit task=(\d+) status=(-?\d+)")
 EXPECTED_SPAWNED = (
-    "fabric-service",
     "fabric-op-client",
     "fabric-op-client-b",
     "fabric-op-server",
     "fabric-op-client-b-restart",
+    "fabric-service",
     "fabric-op-time",
 )
 # Every participant whose identity the parent vouches for: both clients, the
@@ -407,23 +420,23 @@ def check_task_lifecycle(transcript: str) -> None:
     if exits.get(parent) != [0]:
         fail(f"init task {parent} exit statuses were {exits.get(parent, [])}, expected [0]")
 
-    # The composition's own claim: the parent, not the participant, established
-    # every admitted identity. A plane that let a participant vouch for itself
-    # would reach every C8.7 marker above and fail here.
-    exports = re.findall(
-        rf"SLIME_GRAPH capability exported task={parent} id=(\d+) kind=supervision "
-        r"rights=0x40000 retain=0",
-        transcript,
-    )
-    imports = re.findall(
-        r"SLIME_GRAPH capability imported task=\d+ id=(\d+) kind=supervision "
-        r"rights=0x40000 retain=0",
-        transcript,
-    )
-    if len(exports) != EXPECTED_INTRODUCTIONS or sorted(exports) != sorted(imports):
+    # The broker's grant set is fully classified by the root at the spawn that
+    # names init as parent: four supervision handles plus the one shared-buffer
+    # factory. Checking both kind counts as well as the total refuses a same-size
+    # substitution that would no longer vouch for every participant identity.
+    brokers = [match for match in spawns if match[2] == "fabric-service"]
+    if len(brokers) != 1:
+        fail(f"expected exactly one fabric-service spawn, saw {len(brokers)}")
+    grants = int(brokers[0][3])
+    supervision_grants = int(brokers[0][7])
+    buffer_factory_grants = int(brokers[0][8])
+    expected = (EXPECTED_INTRODUCTIONS + 1, EXPECTED_INTRODUCTIONS, 1)
+    observed = (grants, supervision_grants, buffer_factory_grants)
+    if observed != expected:
         fail(
-            f"parent export/import ids were {exports!r}/{imports!r}, expected "
-            f"{EXPECTED_INTRODUCTIONS} matching introductions"
+            "fabric-service spawn grant kinds were "
+            f"{observed!r}, expected {expected!r} "
+            "(total, supervision, shared-buffer factory)"
         )
 
 

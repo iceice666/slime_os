@@ -37,6 +37,7 @@ fn main(_startup_arg: u32) {
         SERVER_SLOT,
         TIME_SLOT,
         REPLACEMENT_SLOT,
+        None,
         BACKUP_ROUTE_SLOT,
         [
             CLIENT_A_SUPERVISION_SLOT,

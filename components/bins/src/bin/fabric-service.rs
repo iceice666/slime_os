@@ -112,6 +112,9 @@ const TIME_SLOT: u32 =
 /// no `ERR_PEER_DEAD` reaches a native Endpoint.
 const TIME_COMPONENT: &[u8] = b"fabric-publisher-b";
 const FIRST_CONTROL_SLOT: u32 = FABRIC_FIRST_CONTROL_SLOT;
+/// Operation-plane endpoint that releases the supervised replacement only
+/// after the broker has installed its fresh route and supervision identity.
+const OPERATION_REPLACEMENT_START_SLOT: u32 = 12;
 
 const RIGHT_BUFFER_WRITE: Rights = 1 << 8;
 const RIGHT_BUFFER_MAP: Rights = 1 << 9;
@@ -320,6 +323,7 @@ fn main(_startup_arg: u32) {
             controls.server,
             controls.time,
             6,
+            Some(OPERATION_REPLACEMENT_START_SLOT),
             7,
             [8, 9, 10],
             11,

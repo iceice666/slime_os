@@ -26,8 +26,8 @@ condition observable.
 
 ### B46 — logical ChannelTable, Transit, ParkedReplies, and WaitSet duplicate seL4 IPC
 
-**Status:** Open. **Class:** Unmasked architectural debt. **Depends on:**
-B39–B45.
+**Status:** Resolved 2026-08-13. **Class:** Unmasked architectural debt.
+**Depends on:** B39–B45.
 
 **Problem:** Slime channels are root-owned queues with userspace-managed
 blocking, wait sets, reply slots, peer death, and up-to-four-cap transit. Every
@@ -957,19 +957,27 @@ slot 1 / CSpace 34, both `send`+`recv`); and making a blocking receive refuse
 instead of reporting `ERR_WOULDBLOCK` did not move the stall, so receive-guard
 contention is not involved.
 
-`sel4-operation.zti` remains unconverted: twenty-three minted bindings across
-six holders, each of which has to be checked against what the component expects
-in the slot. Its shape is `sel4-call.zti`'s, so the conversion is now a known
-quantity rather than an open question.
+**The final plane now passes (2026-08-13).** `sel4-operation.zti`'s native
+control endpoints and phase barriers are ordinary declared grants; only the
+shared-buffer factory and four supervision handles remain minted. The broker
+waits on one multi-source Notification, retires mandatory deliveries only on a
+receiver acknowledgement, observes peer death through supervision, and admits
+one server-bound request at a time until the server's Zutai-defined
+`KIND_SERVER_IDLE` fence arrives. The explicit fence replaced an empty-receive
+heuristic that could not distinguish "no record" from "the single-threaded
+server is ready". The QEMU gate reaches 53 markers across all 15 causal chains;
+all six participant tasks and init exit cleanly.
 
-**Exit condition:** `channel.rs`, `transit.rs`, `parked.rs`, `WaitSet`, and the
-migrated universal labels no longer exist. Backpressure, bounded queues,
-timeouts, peer death, cap-transfer attenuation, unrelated-route progress, and
-buffered-stream recovery pass `just sel4_channel_check`, `just
-sel4_crossing_check`, `just sel4_stream_check`, `just sel4_qos_check`, `just
-sel4_call_check`, `just sel4_operation_check`, and `just
-sel4_visibility_check` on native Endpoint/Notification paths.
+**Exit condition observed (2026-08-13).** `channel.rs`, `transit.rs`,
+`parked.rs`, `WaitSet`, and the migrated universal labels no longer exist.
+Backpressure, bounded queues, timeouts, peer death, cap-transfer attenuation,
+unrelated-route progress, and buffered-stream recovery passed all seven named
+native Endpoint/Notification gates in one ordered run: `just
+sel4_channel_check`, `just sel4_crossing_check`, `just sel4_stream_check`,
+`just sel4_qos_check`, `just sel4_call_check`, `just sel4_operation_check`, and
+`just sel4_visibility_check`.
 
+Record: [`devlog/2026-08-13-b46-native-ipc-completion/`](../devlog/2026-08-13-b46-native-ipc-completion/index.md).
 
 ### B50 — the logical capability and universal syscall compatibility model remains deletable residue
 
