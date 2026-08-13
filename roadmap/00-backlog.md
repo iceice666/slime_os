@@ -334,12 +334,184 @@ for no runtime reason. Auto-allocating the declared namespace and resolving
 component slots by role is tracked under B50, which already requires removing
 fixed-slot constants.
 
-**One blocker is open and is not fixture numbering.** `fabric-subscriber`'s ring
-loan is refused with `CNode Copy: Destination not empty` at a slot the pool
-reports as freshly issued — instrumented as 1485, 1493, 1501, monotonically
-increasing, so nothing is being reused. Some path installs a root capability
-without going through `SlotPool`, which is an allocator-integrity defect rather
-than a declaration one.
+**That blocker is root-caused and fixed (2026-08-12).** `fabric-subscriber`'s
+ring loan was refused `CNode Copy: Destination not empty` at slot 1501, an index
+the pool reported as freshly issued. A full sweep of the pool's 3,141-slot range
+against real kernel occupancy found exactly one divergence — slot 1501, occupied
+while the bitmap called it free, and already so at the *first* alias reserve, so
+nothing was reused and the pool span was not overstated. The culprit is
+`release_task_arena`: it revoked the arena's parent untyped and returned every
+charged CSlot to the bitmap, which is only correct for slots holding objects
+retyped *from that untyped*. This cutover added a second kind — `reserve_slot_in`
+charges a bare CSlot to an arena while `peer_endpoint`/`notification`
+`install_instance` mint into it from a **globally** allocated Endpoint or
+Notification. No revoke of the arena parent reaches such a capability, so
+`fabric-intruder`'s teardown handed back slot 1501 still occupied. Deleting each
+recorded slot before releasing it restores `release_slot`'s documented
+precondition. `sel4_stream_check` now maps that loan and reaches its own scenario
+logic. See `devlog/2026-08-12-b46-arena-slot-occupancy/`.
+
+**`just sel4_visibility_check` passes (2026-08-12).** Three of the seven named
+gates are green now — channel, crossing, and visibility — and the third took
+four defects, the last of them architectural.
+
+Two were declarations. `sel4-visibility.zti` declared all 28 endpoint edges as
+`mintedBindings` while init, post-cutover, holds no route capability and mints
+nothing; they are ordinary `bindings` now, matching `sel4-stream.zti`, whose
+`mintedBindings` carries only what init genuinely creates at runtime. And the
+broker's route slots, hardcoded at 7..13, collided with the supervision handles
+the resolved profile places at `FIRST_CONTROL_SLOT + len(clients)`. The broker
+derives them now, which is R2's rule applied where the collision actually bit.
+
+The third was the five participants, the cutover's unconverted half. The
+pre-cutover broker moved a real capability per role with `cap_transfer`; the
+post-cutover one sends the descriptor alone, because each edge is a generation
+fact installed before any task runs. The components still called
+`capability_import()` on a reply carrying nothing. They take the declared
+endpoint now.
+
+**The fourth is the one worth keeping.** The broker detected the proxy's exit by
+waiting for `ERR_PEER_DEAD` on its control endpoint, and *that signal does not
+exist on a native Endpoint*: it is a logical-channel concept, and
+`sel4_transport::receive_native` cannot produce it, so a dead peer is
+indistinguishable from a silent one. This is a real consequence of the cutover
+and it will recur wherever a component waits on a peer that can exit. The answer
+is the one the model already has — a **supervision handle**, which is how
+`spawn-service` and `init::wait_clean` have always observed termination. The
+builder grants one for every declared interposition proxy now, not only ring
+holders, on the same reasoning the B46 comment already gives for publishers;
+init spawns the proxy before the fabric so the handle can exist; and the
+broker's waits go through one `await_exit`. Endpoints carry messages;
+supervision capabilities carry death. No new mechanism was needed.
+
+Two of the gate's own assertions were stale rather than unreachable, both from
+markers this cutover renamed: `SPAWN_PATTERN` still matched `channels=` where
+the root now emits `endpoints=` and `notifications=`, so it silently never
+matched and the gate could not resolve init's task id to see its clean exit; and
+`grants=13` predates the fixture declaring its route edges as grants. The same
+stale `channels=` pattern is present in eight other check scripts and will need
+the same correction as those planes are brought up.
+
+**A native `send` always blocks, and the fabric was written as though it might
+not (2026-08-12).** `sel4_transport::send` invokes `seL4_Send` and returns
+`ERR_SUCCESS` unconditionally, so it can never answer `ERR_WOULDBLOCK` — and
+every non-fatal `ERR_WOULDBLOCK` arm in `fabric-service` was unreachable code
+resting on a guarantee the transport does not give. The stream broker deadlocked
+on it three times over: pushing a QoS event to a subscriber that had moved on to
+reading its ring, announcing `STREAM_END` to one that had already exited, and
+finally on the reverse hazard — exiting first and reclaiming its shared-buffer
+charges out from under two participants still executing against the loan
+mappings, which faulted both on execute-at-null.
+
+`slime_rt::try_send` is the missing primitive: `seL4_NBSend`, which discards
+rather than blocks. It is best-effort by construction — the kernel reports
+nothing either way — so it is correct only for advisory traffic. QoS events take
+it outright; `STREAM_END` is re-offered every broker pass and the route retires
+when the peer takes it *or* is gone, because a terminal event a subscriber is
+genuinely waiting for cannot be dropped once. The teardown ordering is the same
+supervision-handle answer peer death needed.
+
+Two more shape errors surfaced behind those. A delegated capability is a
+**root-recorded export claimed with `capability_import`**, not an in-message
+capability: only a native Endpoint travels inline, so every `received[0]` read
+for a loan was reading zero — the broker, both subscribers. And
+`fabric-subscriber-b` multiplexes two routes over one control endpoint with two
+sequential readers, so a destructive receive let whichever loop was running
+consume the other route's terminal event. That last one first looked like a
+design flaw needing either separate endpoints per route or a fixture change;
+the wire settled it instead. Every record on that endpoint — stream event, QoS
+event, sample descriptor — already carries `type_identity`, and the broker
+already stamps each with its route's tag, so one reader owns the endpoint and
+files each record under the route it names. Nothing in any contract, fixture,
+or slot numbering changed.
+
+**Two non-blocking peers never rendezvous (2026-08-13).** Demultiplexing alone
+did not close the plane. `seL4_NBSend` delivers *only* to a receiver already
+blocked on the endpoint and discards otherwise, while both subscribers polled
+with a non-blocking `recv` and slept on a ring notification — so the fabric
+re-offered terminal events forever to a reader that was never once visible to
+the send. Each loop now blocks on the control endpoint once its ring is drained,
+which is precisely when it has nothing else to wait on. This is the hazard
+`try_send` carries by construction: it is correct only for traffic a peer is
+genuinely waiting on, and any future use must pair it with a blocked receiver
+or a supervision-handle fallback.
+
+Two regressions the cutover had silently dropped also had to be restored before
+the gate would pass honestly. `fabric-subscriber` no longer asserted *either* of
+its authority denials; probing by asking the fabric for the publish side proves
+nothing, because the request's `direction` is read only to be discarded and each
+client is answered exactly once, so the role descriptor's declared direction and
+its send-free rights mask are checked instead. And C8.5's `EVENT_PEER_DEAD`
+existed in the contract with nothing emitting it — a publisher that exits
+without `FLAG_LAST` leaves no trace on a native Endpoint — so it is now derived
+from the publisher's supervision handle, the same answer the visibility plane's
+peer-death gap needed.
+
+`just sel4_stream_check` **passes**: `57 markers observed across 14 causal
+chains`, with `QoS peer dead` observed and terminal accounting clean. Five of
+its stale assertions were corrected: `grants=9` predates the cutover's
+`grants=5 endpoints=7 notifications=12` split, three chains ordered participant
+markers against broker lines that race them, and the root emits capability
+accounting before loan accounting.
+
+**The last three gates are blocked on a fixture shape, not on slot allocation
+(2026-08-13).** `sel4_qos_check`, `sel4_call_check`, and `sel4_operation_check`
+all still fail at `spawn refused … ungranted`. With B50/R2's clause (3) landed,
+the count init offers is now the manifest's own, and the refusal is no longer
+init guessing: those three fixtures genuinely declare capabilities as
+`mintedBindings` that init must *create* and hand over, and nothing in
+`drive_stream_plane` creates them. `sel4-qos.zti` asks for three
+`fabric-publisher-probe-*` carriers where the working `sel4-stream.zti` declares
+one ordinary `fabric-publisher-probe` **grant** the root materializes;
+`sel4-call.zti` and `sel4-operation.zti` go further and still declare every
+control endpoint as minted, which is the pre-cutover shape B46 replaced
+everywhere else.
+
+`sel4-qos.zti` is now converted, and it admits, boots, and runs its whole graph:
+the three probe carriers became one ordinary `fabric-publisher-probe` grant, the
+clock became a `fabric-publisher-b-clock` grant between the publisher and the
+broker, and a `fabric-publisher-b-fabric-supervision` entry was deleted as dead
+— `fabric-publisher-b` names the fabric by its *control endpoint* for the
+upstream loan and holds no supervision handle, which its own source says. The
+plane also needed the four ring-holder supervision handles B46 requires (it
+declared only the two subscribers), quotas for `fabric-publisher` (it had none,
+so its ring mapping was refused) and a wider one for `fabric-publisher-b`, and
+the removal of `priority = 100` on `fabric-intruder`: under the cutover's
+blocking IPC a low-priority task that must speak before the broker can proceed
+simply starves. `just sel4_qos_check` went from 40 component markers to 79.
+
+Three real defects in `fabric-service` surfaced behind that, all of them
+cutover-era and none QoS-specific:
+
+- **`in_flight` was never incremented.** Its own doc calls it "samples sent but
+  not yet acked", but only decrements existed, so it could not leave zero — and
+  every rule reading it (reliable retry accounting, retry exhaustion, and
+  holding the terminal event until the queue drains) was unreachable code rather
+  than an unmet condition. `deliver` now counts a RELIABLE delivery out and
+  `drain_acks` clears the balance on the subscriber's credit signal, which is a
+  level rather than a tally.
+- **Retry exhaustion reported nothing when the queue was already drained.** An
+  earlier lifespan expiry empties the history, and the emission was gated on a
+  surviving frame — so the condition was invisible exactly when it was reached
+  the hard way. It is a statement about the retries, and now reports as one.
+- **QoS events were sent with `try_send` and dropped.** `seL4_NBSend` delivers
+  only to a peer already blocked on the endpoint, and these are not advisory:
+  the plane's contract is that the subscriber observes each declared condition.
+  Undelivered records are retained and re-offered each broker pass, and the
+  terminal event is held back while any is outstanding, since both race into the
+  same endpoint and the end would otherwise retire the route first.
+
+What remains is one assertion: `fabric-subscriber-b` observes liveliness but not
+deadline or retry exhaustion, which are raised while it is still blocked in
+`receive_large_sample` on its *other* route. Its demultiplexer files them
+correctly by `type_identity`, but the re-offer loop and the per-route mailbox
+interact badly — identical re-offers dedupe to one entry, so three distinct
+liveliness events and one repeated one are indistinguishable to the reader.
+That is the next thing to fix and it is component-side, not fixture-side.
+
+`sel4-call.zti` and `sel4-operation.zti` remain unconverted: between them they
+declare thirty-odd minted bindings across nine holders, and each conversion has
+to be checked against what the component actually expects in the slot.
 
 **Exit condition:** `channel.rs`, `transit.rs`, `parked.rs`, `WaitSet`, and the
 migrated universal labels no longer exist. Backpressure, bounded queues,
@@ -431,6 +603,39 @@ runtime meaning, and per-namespace assignment removes it.
 The frozen boot-layout fixtures that `just sel4_boot_layout_check` pins
 byte-for-byte must keep accepting explicit slots, so auto-allocation has to be
 opt-in per manifest rather than a global renumbering.
+
+**Clause (1) is done (2026-08-13).** `slot` is now optional on
+`InstanceBinding`, `MintedBinding`, and `NotificationBinding` in
+`contracts/generation/v1/schema.zt`, and `assign_declared_slots` in
+`build-generation.py` fills every omission at the one point the manifest is
+decoded, so every consumer downstream still sees a concrete number. Explicit
+slots are reserved *before* any assignment and never moved, which is what keeps
+auto-allocation opt-in per binding and leaves the byte-pinned boot-layout
+fixtures encoding exactly as before. Omitted slots take the lowest free number
+in grant-name order, so the result is a function of the manifest alone.
+
+The structural hazard this clause named is gone with it: capability bindings and
+minted bindings share one namespace per holder because both land in the child's
+capability table, while notification bindings get their own, so an endpoint at 0
+and a factory at 0 no longer collide over a number neither runtime region shares.
+
+Verified by removing seven hand-written slot numbers from `sel4-stream.zti` --
+every holder whose numbering was pure drift -- and observing a **byte-identical
+`build/slime-sel4-stream.elf`** (`md5 6eff83ca…`) with 44 explicit slots as with
+51. The builder reproduces the hand-written numbering exactly, and
+`just sel4_stream_check` passes either way.
+
+Clause (3) moved with it. Init's spawn-grant count came from a hardcoded list
+that was the stream graph's, so every other plane's spawn was refused with
+`declared-count requested=0` for a number init had no way to know. The builder
+now emits `FABRIC_MINTED_GRANTS` -- per instance, the total
+`preflight_spawn_grants` checks against, by one shared rule
+(`declared_spawn_grant_counts`) rather than a second implementation of the
+root's -- and init reads it. That also retired the
+`SLIME_FABRIC_VISIBILITY_CHECK` branch selecting the fabric's grant set: stream
+declares five and visibility six, and the same binary now picks by manifest
+rather than by build flag. A manifest declaring no fabric graph emits this one
+table too, so `init.rs` compiles against every graph.
 
 **Exit condition:** Exact-source guards find no deleted model symbols or build
 flags; every surviving syscall is either a direct seL4 primitive or a narrowly
