@@ -572,16 +572,31 @@ same shape and the same fix.
 
 The plane now runs correlated replies, rejection, duplicate suppression, shared
 payloads in both directions, cancellation, stale-session refusal, and
-malformed-reply detection. **It stalls next at the client-B handshake**, and the
-obvious explanations are ruled out by observation: both clients reach the
-barrier and block, the generation installs the edge symmetrically
-(`fabric-call-client` slot 4, `fabric-call-client-b` slot 1, both `send`+`recv`,
-CSpace 37 and 34 in the boot transcript), and a blocking `send` cannot be
-self-consumed because it completes only once a receiver takes it. Guard
-contention in `receive_native` was tested by making a blocking receive refuse
-rather than report `ERR_WOULDBLOCK`, and the stall did not move — so that is
-refuted too, and the next step is to instrument which side of the barrier is
-actually entered.
+malformed-reply detection.
+
+**What remains is one identified blocker, and it needs a Notification.**
+Instrumenting both sides of the client handshake showed it completing —
+`signal_client_b` returns, so client B received it — and the plane then stalls
+in B's 24-request backpressure burst. The broker waits on the server when
+nothing else has progressed, which is what unblocked the reply path, but that
+wait is not sufficient in general: a client that blocks in `send` *after* the
+broker's non-blocking sweep has passed it stays invisible until the next sweep,
+and a broker already parked on the server never runs one. B's burst lands in
+exactly that window.
+
+A single Endpoint cannot express "wake me when any of these speak", which is
+the whole reason `graph::Resource` gained a Notification variant during this
+cutover and what `fabric-service`'s stream side already uses. The call and
+operation brokers need the same treatment: every peer badged into one
+Notification the broker waits on. That is a design change rather than another
+blocking-semantics fix, and it is the honest remaining scope of these two gates.
+
+Three cheaper explanations were tested and refuted rather than argued away: both
+clients reach the barrier and block; the generation installs the edge
+symmetrically (`fabric-call-client` slot 4 / CSpace 37, `fabric-call-client-b`
+slot 1 / CSpace 34, both `send`+`recv`); and making a blocking receive refuse
+instead of reporting `ERR_WOULDBLOCK` did not move the stall, so receive-guard
+contention is not involved.
 
 `sel4-operation.zti` remains unconverted: twenty-three minted bindings across
 six holders, each of which has to be checked against what the component expects

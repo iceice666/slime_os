@@ -170,3 +170,22 @@ the barrier and block; the generation installs the edge symmetrically
 returns only once a receiver has taken it. Guard contention in `receive_native`
 was tested directly — making a blocking receive refuse instead of reporting
 `ERR_WOULDBLOCK` did not move the stall — and reverted as unverified.
+
+**The client-B handshake was not the stall either.** Instrumenting both sides
+showed `signal_client_b` *returning* — a blocking `send` completes only once a
+receiver takes it, so client B had the message. The plane stalls one step later,
+in B's 24-request backpressure burst.
+
+That exposes the limit of the fix above. The broker waits on the server when
+nothing else has progressed, and the justification given — "a client's request
+would be visible to the preceding non-blocking sweep" — is false. A client that
+blocks in `send` *after* the sweep has passed it is invisible until the next
+sweep, and a broker already parked on the server never runs one. The burst lands
+in exactly that window.
+
+A single Endpoint cannot express "wake me when any of these speak". That is the
+reason `graph::Resource` gained a Notification variant during this cutover, and
+what `fabric-service`'s stream side already uses. The call and operation brokers
+need every peer badged into one Notification they wait on — a design change, not
+another blocking-semantics fix, and the honest remaining scope of those two
+gates.
