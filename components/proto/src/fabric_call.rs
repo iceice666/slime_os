@@ -11,6 +11,7 @@ pub const KIND_REQUEST: u32 = 1;
 pub const KIND_REPLY: u32 = 2;
 pub const KIND_CANCEL: u32 = 3;
 pub const KIND_TERMINAL: u32 = 4;
+pub const KIND_TERMINAL_ACK: u32 = 5;
 pub const FLAG_NON_IDEMPOTENT: u32 = 1;
 pub const FLAG_SHARED_PAYLOAD: u32 = 2;
 pub const KNOWN_FLAGS: u32 = 3;

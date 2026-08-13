@@ -552,8 +552,9 @@ pub fn valid_call_envelope(value: &fabric_call::WireCallEnvelope, expected_type:
         || value.request_id == 0
         || value.type_identity == 0
         || value.type_identity != expected_type
-        || (value.kind != KIND_TERMINAL && value.payload_len as usize > INLINE_BYTES)
-        || (value.kind == KIND_TERMINAL && value.payload_len != 0)
+        || (!matches!(value.kind, KIND_TERMINAL | KIND_TERMINAL_ACK)
+            && value.payload_len as usize > INLINE_BYTES)
+        || (matches!(value.kind, KIND_TERMINAL | KIND_TERMINAL_ACK) && value.payload_len != 0)
         || value.payload[value.payload_len.min(value.payload.len() as u32) as usize..]
             .iter()
             .any(|byte| *byte != 0)
@@ -570,6 +571,25 @@ pub fn valid_call_envelope(value: &fabric_call::WireCallEnvelope, expected_type:
             value.flags == 0 && value.status == STATUS_CANCELLED && value.payload_len == 0
         }
         KIND_TERMINAL => {
+            value.flags == 0
+                && matches!(
+                    value.status,
+                    STATUS_SUCCESS
+                        | STATUS_REJECTED
+                        | STATUS_TIMEOUT
+                        | STATUS_CANCELLED
+                        | STATUS_RETRY_EXHAUSTED
+                        | STATUS_MALFORMED_REPLY
+                        | STATUS_PEER_DEAD
+                        | STATUS_DUPLICATE
+                        | STATUS_STALE
+                )
+                && value.payload_len == 0
+        }
+        // The client's word that it took a terminal, naming the request that
+        // terminal settled. It carries the settled status back so a broker
+        // cannot retire a record on an ack for some other outcome.
+        KIND_TERMINAL_ACK => {
             value.flags == 0
                 && matches!(
                     value.status,

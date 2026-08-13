@@ -21,6 +21,12 @@ kindRequest :: Int = 1;
 kindReply :: Int = 2;
 kindCancel :: Int = 3;
 kindTerminal :: Int = 4;
+-- Acknowledges a terminal, naming the request it settles. A broker offering a
+-- terminal over a native Endpoint cannot observe delivery -- `seL4_NBSend`
+-- reports nothing and a blocking send would deadlock against a client that is
+-- itself sending -- so the record is retired on the client's word, not the
+-- sender's guess.
+kindTerminalAck :: Int = 5;
 flagNonIdempotent :: Int = 1;
 flagSharedPayload :: Int = 2;
 knownFlags :: Int = 3;
@@ -87,6 +93,7 @@ format ::= {
   kindReply = kindReply;
   kindCancel = kindCancel;
   kindTerminal = kindTerminal;
+  kindTerminalAck = kindTerminalAck;
   flagNonIdempotent = flagNonIdempotent;
   flagSharedPayload = flagSharedPayload;
   knownFlags = knownFlags;

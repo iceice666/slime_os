@@ -2,9 +2,9 @@ use boot_contracts::fabric_graph::{DIRECTION_CLIENT, DIRECTION_SERVER};
 use slime_proto::capability_transfer::OBJECT_KIND_SHARED_BUFFER_LOAN;
 use slime_proto::fabric_call::{
     CALL_MAGIC, FLAG_NON_IDEMPOTENT, FORMAT_VERSION, KIND_CANCEL, KIND_REPLY, KIND_REQUEST,
-    KIND_TERMINAL, STATUS_CANCELLED, STATUS_DUPLICATE, STATUS_MALFORMED_REPLY, STATUS_PEER_DEAD,
-    STATUS_REJECTED, STATUS_RETRY_EXHAUSTED, STATUS_STALE, STATUS_TIMEOUT, WireCallEnvelope,
-    WireCallTimeAdvance,
+    KIND_TERMINAL, KIND_TERMINAL_ACK, STATUS_CANCELLED, STATUS_DUPLICATE, STATUS_MALFORMED_REPLY,
+    STATUS_PEER_DEAD, STATUS_REJECTED, STATUS_RETRY_EXHAUSTED, STATUS_STALE, STATUS_TIMEOUT,
+    WireCallEnvelope, WireCallTimeAdvance,
 };
 use slime_proto::interface_schema::parameter_call;
 use slime_proto::sample_descriptor::{
@@ -298,6 +298,11 @@ impl Broker {
                 match message.kind {
                     KIND_REQUEST => self.admit_inline(client, slot, message),
                     KIND_CANCEL => self.cancel(client, slot, message),
+                    // The client's word that it took a terminal. `seL4_NBSend`
+                    // reports nothing, so this is the only observation that
+                    // retires the record; without it the broker re-offers
+                    // forever and its queue fills.
+                    KIND_TERMINAL_ACK => self.retire_terminal(client, message.request_id),
                     _ => {
                         self.reject_terminal(
                             client,
@@ -479,6 +484,31 @@ impl Broker {
                 false
             }
             _ => fail(b"call terminal"),
+        }
+    }
+
+    /// Retire the terminal `client` acknowledged.
+    ///
+    /// Matching on the request id keeps the retirement exact: an ack settles
+    /// the one record it names, never a batch, so a client acknowledging out of
+    /// order or twice cannot drop a terminal it has not seen.
+    fn retire_terminal(&mut self, client: usize, request_id: u64) {
+        for index in 0..self.calls.len() {
+            if self.calls[index].phase == Phase::PendingTerminal
+                && self.calls[index].client_index as usize == client
+                && self.calls[index].request_id == request_id
+            {
+                self.calls[index] = Call::EMPTY;
+                return;
+            }
+        }
+        for pending in &mut self.pending_terminals {
+            if pending.is_some_and(|call| {
+                call.client_index as usize == client && call.request_id == request_id
+            }) {
+                *pending = None;
+                return;
+            }
         }
     }
 

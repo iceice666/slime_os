@@ -542,6 +542,13 @@ pub fn expect_terminal_parked(slot: u32, session: u64, request_id: u64, status: 
     }
 }
 
+/// Take one terminal and acknowledge it.
+///
+/// The ack is what lets the broker retire the record. It offers terminals with
+/// `seL4_NBSend`, which reports nothing -- a blocking send would deadlock
+/// against a client that is itself sending -- so the sender cannot observe
+/// delivery and must be told. Without this the broker re-offers forever and
+/// its queue fills at `MAX_PENDING_TERMINALS_PER_CLIENT`.
 pub fn expect_terminal(slot: u32, session: u64, request_id: u64, status: i32) {
     let terminal = recv_call(slot);
     if !slime_proto::valid_call_envelope(&terminal, parameter_call::TYPE_TAG)
@@ -552,6 +559,9 @@ pub fn expect_terminal(slot: u32, session: u64, request_id: u64, status: i32) {
     {
         fail(b"terminal mismatch")
     }
+    let mut ack = terminal;
+    ack.kind = KIND_TERMINAL_ACK;
+    send_raw(slot, &ack.encode());
 }
 
 fn signal_client_phase(phase: u8) {
