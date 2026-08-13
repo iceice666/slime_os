@@ -83,6 +83,12 @@ struct Call {
     deadline_ns: u64,
     next_retry_ns: u64,
     terminal_status: i32,
+    /// Whether this record's queued marker has been emitted.
+    ///
+    /// A terminal is re-offered every pass until its client takes it, and
+    /// each marker is a root round trip -- so this keeps the announcement
+    /// one per record rather than one per attempt.
+    offered: bool,
     payload: Payload,
 }
 
@@ -98,6 +104,7 @@ impl Call {
         deadline_ns: 0,
         next_retry_ns: 0,
         terminal_status: 0,
+        offered: false,
         payload: Payload::None,
     };
 }
@@ -431,6 +438,7 @@ impl Broker {
             deadline_ns: self.now_ns.saturating_add(DEADLINE_NS),
             next_retry_ns: self.now_ns,
             terminal_status: 0,
+            offered: false,
             payload,
         };
         self.forward(index);
@@ -455,6 +463,7 @@ impl Broker {
             deadline_ns: self.now_ns.saturating_add(DEADLINE_NS),
             next_retry_ns: 0,
             terminal_status: status,
+            offered: false,
             payload: Payload::None,
         };
         // Queue rather than hand over from inside the receive path: this
@@ -489,7 +498,16 @@ impl Broker {
                 true
             }
             ERR_WOULDBLOCK => {
-                slime_rt::debug_write(b"[fabric] terminal delivery queued\n");
+                // Once per record, not once per offer. A terminal is re-offered
+                // on every pass until its client takes it, and each
+                // `debug_write` is a root round trip -- so announcing each
+                // attempt spends the root's graph-iteration budget on a
+                // condition that has not changed, and starves the very
+                // exchange that would clear it.
+                if !self.calls[index].offered {
+                    self.calls[index].offered = true;
+                    slime_rt::debug_write(b"[fabric] terminal delivery queued\n");
+                }
                 false
             }
             _ => fail(b"call terminal"),
