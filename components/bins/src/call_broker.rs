@@ -524,10 +524,18 @@ impl Broker {
     fn pump_pending_terminals(&mut self) -> bool {
         let mut progressed = false;
         let mut dead_slot = None;
-        for pending in &mut self.pending_terminals {
-            let Some(call) = *pending else {
+        // Same ordering rule as `pump_terminals`: only the client's lowest
+        // outstanding id, so a later terminal cannot reach a client waiting on
+        // an earlier one.
+        let lowest = self.lowest_pending_terminal();
+        for index in 0..self.pending_terminals.len() {
+            let Some(call) = self.pending_terminals[index] else {
                 continue;
             };
+            if lowest[call.client_index as usize] != Some(call.request_id) {
+                continue;
+            }
+            let pending = &mut self.pending_terminals[index];
             match try_send_terminal(
                 call.client_slot,
                 call.client_session,
@@ -1114,13 +1122,50 @@ impl Broker {
         }
     }
 
+    /// The lowest outstanding terminal request id per client, across both the
+    /// in-`calls` records and the overflow queue.
+    ///
+    /// Both hold terminals for the same client, so taking a minimum within
+    /// each separately would still let the two offer different ids.
+    fn lowest_pending_terminal(&self) -> [Option<u64>; CLIENTS] {
+        let mut lowest: [Option<u64>; CLIENTS] = [None; CLIENTS];
+        let mut note = |client: usize, request_id: u64| {
+            if lowest[client].is_none_or(|current| request_id < current) {
+                lowest[client] = Some(request_id);
+            }
+        };
+        for call in self.calls.iter() {
+            if call.phase == Phase::PendingTerminal {
+                note(call.client_index as usize, call.request_id);
+            }
+        }
+        for call in self.pending_terminals.iter().flatten() {
+            note(call.client_index as usize, call.request_id);
+        }
+        lowest
+    }
+
     fn pump_terminals(&mut self) -> bool {
         let mut progressed = false;
-        for index in 0..self.calls.len() {
-            if self.calls[index].phase != Phase::PendingTerminal {
+        // Offer only the lowest outstanding request id per client, across both
+        // queues. A client reads terminals in the order it issued the requests
+        // and takes one per receive, so offering the whole set lets a later
+        // terminal reach a client waiting for an earlier one -- which it
+        // refuses as a mismatch, and which no re-offer can repair because the
+        // client never advances past the id it is waiting for.
+        let lowest = self.lowest_pending_terminal();
+        for (client, target) in lowest.into_iter().enumerate() {
+            let Some(target) = target else {
                 continue;
+            };
+            let next = self.calls.iter().position(|call| {
+                call.phase == Phase::PendingTerminal
+                    && call.client_index as usize == client
+                    && call.request_id == target
+            });
+            if let Some(index) = next {
+                progressed |= self.pump_terminal(index);
             }
-            progressed |= self.pump_terminal(index);
         }
         // Deliver a staged cancellation, but only once the server's reply to
         // the cancelled request has come back: until then it is executing that
