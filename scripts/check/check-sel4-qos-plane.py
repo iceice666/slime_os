@@ -43,7 +43,7 @@ FIXTURE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "sel4-qos.zti"
 IMAGE_VARIANT = "qos"
 SPAWN_PATTERN = re.compile(
     r"SLIME_GRAPH spawned task=(\d+) child=(\d+) component=([^ ]+) "
-    r"grants=(\d+) channels=(\d+) handle=(\d+)"
+    r"grants=(\d+) endpoints=(\d+) notifications=(\d+) handle=(\d+)"
 )
 EXIT_PATTERN = re.compile(r"SLIME_GRAPH component exit task=(\d+) status=(-?\d+)")
 EXPECTED_PARTICIPANTS = {
