@@ -142,6 +142,39 @@ pub const FABRIC_SUPERVISION: &[(&[u8], u32)] = &[
     (b"fabric-publisher", 4),
     (b"fabric-subscriber", 5),
 ];
+/// How many capabilities each child's owner must hand it at spawn: its minted
+/// bindings plus its non-endpoint, non-self-loop grant bindings. This is the
+/// total `preflight_spawn_grants` checks a request against, so it is the one
+/// number an owner must agree with. A child absent from this table is spawned
+/// with nothing.
+#[allow(dead_code)]
+pub const FABRIC_MINTED_GRANTS: &[(&[u8], usize)] = &[
+    (b"init", 2),
+    (b"console", 0),
+    (b"dango", 4),
+    (b"sysinfo", 0),
+    (b"echo-agent", 0),
+    (b"generation-manager", 2),
+    (b"spawn-service", 4),
+    (b"filesystem-service", 1),
+    (b"generation-list", 0),
+    (b"generation-inspect", 0),
+    (b"generation-stage", 0),
+    (b"generation-select", 0),
+    (b"generation-rollback", 0),
+    (b"powerbox-chooser", 2),
+    (b"fabric-service", 2),
+    (b"fabric-call-worker", 2),
+    (b"fabric-op-worker", 1),
+    (b"fabric-publisher", 0),
+    (b"fabric-subscriber", 0),
+    (b"fabric-call-client", 1),
+    (b"fabric-call-server", 1),
+    (b"fabric-call-time", 0),
+    (b"fabric-op-client", 0),
+    (b"fabric-op-server", 0),
+    (b"fabric-op-time", 0),
+];
 pub const FABRIC_SUBSCRIBERS: &[&[u8]] = &[
     b"fabric-publisher",
     b"fabric-subscriber",

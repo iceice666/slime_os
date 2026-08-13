@@ -22,9 +22,15 @@ Executable :: type {
   commandProfile : List Text;
 };
 
+-- One instance's view of a grant. `slot` is the destination capability slot in
+-- the holder's table. Omitting it asks the generation builder to assign one
+-- deterministically, ordered by grant name within this holder's namespace --
+-- which is what a manifest should do unless a frozen artifact pins the number.
+-- Explicit slots stay authoritative: the boot-layout fixtures are byte-pinned,
+-- so auto-allocation is opt-in per binding rather than a global renumbering.
 InstanceBinding :: type {
   grant : Text;
-  slot : Int;
+  slot? : Int;
 };
 
 -- One statically-created seL4 Notification. `source` is the instance allowed
@@ -39,11 +45,13 @@ NotificationGrant :: type {
 
 -- One holder's view of a NotificationGrant. Slots are relative to the native
 -- notification region (48..62), hence the closed 0..14 range validated by the
--- generation builder. `role` is closed to `signal` or `wait`.
+-- generation builder. `role` is closed to `signal` or `wait`. `slot` may be
+-- omitted to have the builder assign it within this holder's notification
+-- namespace, which is disjoint from its capability slots.
 NotificationBinding :: type {
   grant : Text;
   holder : Text;
-  slot : Int;
+  slot? : Int;
   role : Text;
 };
 
@@ -124,12 +132,13 @@ StateBinding :: type {
 -- endpoints; a channel endpoint minted after activation has no object to name,
 -- so it is declared here instead of degrading a grant to a rights assertion.
 -- Owner, holder, destination slot, and the exact rights ceiling are all fixed
--- before activation; only the object identity is deferred.
+-- before activation; only the object identity is deferred. `slot` may be
+-- omitted to have the builder assign it, on the same terms as InstanceBinding.
 MintedBinding :: type {
   name : Text;
   owner : Text;
   holder : Text;
-  slot : Int;
+  slot? : Int;
   rights : List Text;
   transferable : Bool;
 };

@@ -544,8 +544,93 @@ def load_manifest() -> dict:
         text=True,
         stdout=subprocess.PIPE,
     ).stdout
-    return json.loads(output)
+    return assign_declared_slots(json.loads(output))
 
+
+def assign_declared_slots(manifest: dict) -> dict:
+    """Fill in every omitted `slot`, deterministically and per namespace.
+
+    A manifest may omit `slot` on an instance binding, a minted binding, or a
+    notification binding; this assigns the lowest free number in that holder's
+    namespace, taking omitted entries in grant-name order so the result is a
+    function of the manifest alone. Explicit slots are never moved and are
+    reserved before any assignment, so a manifest that pins every number --
+    which the byte-frozen boot-layout fixtures do -- encodes exactly as before.
+
+    The namespaces are separate because the runtime regions are. Capability
+    bindings and minted bindings share one per holder, since both land in the
+    child's capability table and the decoder refuses a duplicate there.
+    Notification bindings are their own, relative to the native notification
+    region, so a notification at 0 and a capability at 0 do not collide.
+    """
+
+    def fill(entries: list, holder_of, limit: int) -> None:
+        taken: dict[str, set[int]] = {}
+        for entry in entries:
+            slot = entry.get("slot")
+            if slot is not None:
+                taken.setdefault(holder_of(entry), set()).add(slot)
+        pending = [entry for entry in entries if entry.get("slot") is None]
+        for entry in sorted(pending, key=lambda item: item.get("name") or item.get("grant") or ""):
+            holder = holder_of(entry)
+            used = taken.setdefault(holder, set())
+            slot = next((n for n in range(limit) if n not in used), None)
+            if slot is None:
+                fail(f"declared slots for {holder} exhaust the {limit}-slot namespace")
+            used.add(slot)
+            entry["slot"] = slot
+
+    for instance in manifest.get("instances", []):
+        # One namespace per holder, shared by both kinds, matching the decoder.
+        shared = list(instance.get("bindings", [])) + [
+            minted
+            for minted in manifest.get("mintedBindings", [])
+            if minted["holder"] == instance["name"]
+        ]
+        fill(shared, lambda _entry, name=instance["name"]: name, 32)
+    fill(
+        manifest.get("notificationBindings", []),
+        lambda entry: entry["holder"],
+        15,
+    )
+    return manifest
+
+
+def declared_spawn_grant_counts(manifest: dict) -> list[tuple[dict, int]]:
+    """Per instance, how many capabilities its owner must supply at spawn.
+
+    This is the total `preflight_spawn_grants` checks a request against: the
+    instance's `mintedBindings`, plus its grant-backed bindings that are neither
+    an endpoint half -- the root materializes a native Endpoint itself -- nor a
+    self-loop, which is authority the child holds in its own right. Neither
+    crosses the spawn boundary, so neither is counted.
+
+    One implementation, because an owner that disagrees with the root by one is
+    refused with no way to see why: init used to carry a hardcoded list, which
+    was the stream graph's, and every other plane's spawn failed for a count it
+    had no way to know (B50/R2).
+    """
+    grants_by_name = {grant["name"]: grant for grant in manifest.get("grants", [])}
+    counts = []
+    for instance in manifest.get("instances", []):
+        minted = sum(
+            1
+            for entry in manifest.get("mintedBindings", [])
+            if entry["holder"] == instance["name"]
+        )
+        supplied = sum(
+            1
+            for binding in instance.get("bindings", [])
+            for grant in [grants_by_name.get(binding["grant"])]
+            if grant is not None
+            and not set(grant.get("rights", [])) & {"send", "recv"}
+            and not (
+                grant.get("source") == instance["name"]
+                and grant.get("target") == instance["name"]
+            )
+        )
+        counts.append((instance, minted + supplied))
+    return counts
 
 def resolve_target_profile(target: object) -> TargetProfile:
     if not isinstance(target, str):
@@ -1259,6 +1344,15 @@ def resolve_fabric_profile(manifest: dict, interfaces: list, profile_name: str) 
             {"name": "operationReplacement", "controls": [{"component": component, "slot": FABRIC_FIRST_CONTROL_SLOT + len(operation_controls) + index} for index, component in enumerate(replacement_controls)]},
         ],
         "supervision": supervision,
+        # What the *owner* must hand each child at spawn (B50/R2), by the one
+        # rule in `declared_spawn_grant_counts`. Emitting it removes the last
+        # place a plane's grant set was hand-written: init carried one hardcoded
+        # list, which was the stream graph's, so every other plane's spawn was
+        # refused for a count init had no way to know.
+        "mintedGrants": [
+            {"holder": instance["name"], "count": count}
+            for instance, count in declared_spawn_grant_counts(manifest)
+        ],
     }
     quotas = validated_shared_buffer_quotas(manifest["sharedBufferBudget"])
     quota = quotas.get(graph["fabricComponent"])
@@ -1422,6 +1516,10 @@ def render_fabric_profile_rust(resolved: ResolvedFabricProfile) -> str:
     subscriber_rows = "".join(
         f"    b{rust_string(row['component'])},\n" for row in artifact["supervision"]
     )
+    minted_grant_rows = "".join(
+        f"    (b{rust_string(row['holder'])}, {row['count']}),\n"
+        for row in artifact["mintedGrants"]
+    )
     schema_rows = "".join(
         f"    ({rust_string(row['name'])}, {rust_string(row['identity'])}, 0x{row['typeTag']}, {row['contractKind']}, {row['maxEncodedBytes']}),\n"
         for row in artifact["schemas"]
@@ -1515,6 +1613,13 @@ pub const FABRIC_CLIENTS: &[&[u8]] = &[\n{controls('stream')}];
 pub const FABRIC_CALL_CLIENTS: &[&[u8]] = &[\n{controls('call')}];
 pub const FABRIC_OPERATION_CLIENTS: &[&[u8]] = &[\n{controls('operation')}];
 pub const FABRIC_SUPERVISION: &[(&[u8], u32)] = &[\n{supervision_rows}];
+/// How many capabilities each child's owner must hand it at spawn: its minted
+/// bindings plus its non-endpoint, non-self-loop grant bindings. This is the
+/// total `preflight_spawn_grants` checks a request against, so it is the one
+/// number an owner must agree with. A child absent from this table is spawned
+/// with nothing.
+#[allow(dead_code)]
+pub const FABRIC_MINTED_GRANTS: &[(&[u8], usize)] = &[\n{minted_grant_rows}];
 pub const FABRIC_SUBSCRIBERS: &[&[u8]] = &[\n{subscriber_rows}];
 #[allow(dead_code)]
 pub const FABRIC_MAX_ROUTES: usize = {limits['routes']};
@@ -3411,7 +3516,20 @@ def build_sel4_generation(output: Path, manifest: dict, target_profile: TargetPr
             render_fabric_profile_rust(resolved_profile), encoding="utf-8"
         )
     else:
-        profile_path.write_text("", encoding="utf-8")
+        # A graph with no fabric still has owners that spawn children, and init
+        # reads its declared spawn-grant counts from this profile. Emit that one
+        # table rather than nothing, so the same `init.rs` compiles against every
+        # manifest instead of the constant existing only where a fabric does.
+        profile_path.write_text(
+            "#[allow(dead_code)]\n"
+            "pub const FABRIC_MINTED_GRANTS: &[(&[u8], usize)] = &[\n"
+            + "".join(
+                f"    (b{json.dumps(instance['name'], ensure_ascii=True)}, {count}),\n"
+                for instance, count in declared_spawn_grant_counts(manifest)
+            )
+            + "];\n",
+            encoding="utf-8",
+        )
     # P5.3.1: the channel graph's `init` needs its scenario compiled in, and
     # `init.rs` selects that with `option_env!`. Set from the manifest being
     # built rather than inherited, so the flag and the graph cannot disagree;
