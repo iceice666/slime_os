@@ -561,11 +561,27 @@ returned through `?` with `RECEIVE_SLOT_LIVE` still set, so every later receive
 on that thread would answer `ERR_WOULDBLOCK` forever — a wedged caller reading
 as a silent peer.
 
-The plane now admits, spawns, and runs correlated replies, rejection, duplicate
-suppression, and shared payloads in both directions. It still stalls at
-cancellation, inside `pump_server`'s **non-blocking** receive, which by
-construction cannot block — so the remaining fault is in the receive path rather
-than the broker's own logic, and that is where the next investigation starts.
+The stall was the broker never blocking. `seL4_NBRecv` takes a message only from
+a sender *already blocked* on the endpoint, so a polling broker and a blocking
+server never rendezvous however long either spins — yielding changes neither
+side's state. When nothing has progressed and a call is outstanding, the
+server's answer is the only event that can move the plane, so the broker now
+waits for it in the kernel; everything else stays polled, because a multiplexer
+must not block on a peer that may be blocked on it. The phase barriers had the
+same shape and the same fix.
+
+The plane now runs correlated replies, rejection, duplicate suppression, shared
+payloads in both directions, cancellation, stale-session refusal, and
+malformed-reply detection. **It stalls next at the client-B handshake**, and the
+obvious explanations are ruled out by observation: both clients reach the
+barrier and block, the generation installs the edge symmetrically
+(`fabric-call-client` slot 4, `fabric-call-client-b` slot 1, both `send`+`recv`,
+CSpace 37 and 34 in the boot transcript), and a blocking `send` cannot be
+self-consumed because it completes only once a receiver takes it. Guard
+contention in `receive_native` was tested by making a blocking receive refuse
+rather than report `ERR_WOULDBLOCK`, and the stall did not move — so that is
+refuted too, and the next step is to instrument which side of the barrier is
+actually entered.
 
 `sel4-operation.zti` remains unconverted: twenty-three minted bindings across
 six holders, each of which has to be checked against what the component expects

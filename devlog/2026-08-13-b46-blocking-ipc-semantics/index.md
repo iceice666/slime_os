@@ -144,3 +144,29 @@ new transport does not answer.
   `just sel4_call_check`
 - Serial/debugger/model output: quoted inline above
 - Related roadmap item: `roadmap/00-backlog.md` B46
+
+## Corrections
+
+**The residual call-plane stall was not "inside a non-blocking receive that
+cannot block".** That reading of the stage trace was wrong: the broker was not
+blocked in `pump_server`, it was *looping past* it. `seL4_NBRecv` takes a
+message only from a sender already blocked on the endpoint, so a polling broker
+and a blocking server never rendezvous — the trace showed the last loop
+iteration before the plane went quiet, not a syscall that failed to return.
+
+The fix follows the same rule this entry states: when nothing has progressed
+and a call is outstanding, the server's answer is the only event that can move
+the plane, so the broker waits for it in the kernel. Everything else stays
+polled. `pump_server` and `block_on_server` share one record handler so the two
+disciplines cannot drift. The phase barriers had the same shape.
+
+With that, the call plane runs correlated replies, rejection, duplicate
+suppression, shared payloads both ways, cancellation, stale-session refusal, and
+malformed-reply detection. It stalls next at the client-B handshake. Three
+explanations are refuted by observation rather than argument: both clients reach
+the barrier and block; the generation installs the edge symmetrically
+(`fabric-call-client` slot 4 / CSpace 37, `fabric-call-client-b` slot 1 / CSpace
+34, both `send`+`recv`); and a blocking `send` cannot be self-consumed, since it
+returns only once a receiver has taken it. Guard contention in `receive_native`
+was tested directly — making a blocking receive refuse instead of reporting
+`ERR_WOULDBLOCK` did not move the stall — and reverted as unverified.
