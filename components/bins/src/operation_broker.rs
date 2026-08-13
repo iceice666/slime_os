@@ -173,6 +173,12 @@ pub struct Broker {
     /// broker in `send` against a server already blocked replying here:
     /// neither can move, and it is a deadlock rather than backpressure.
     server_operation: Option<u64>,
+    /// Whether the server has nothing further to send.
+    ///
+    /// Set when a server receive finds the endpoint empty, cleared whenever a
+    /// goal is forwarded. A settled operation is not proof of silence: the
+    /// server may still be blocked sending a trailing record for it.
+    server_quiet: bool,
     time_control: u32,
     supervision: [u32; CLIENTS + 1],
     clients: [Option<u32>; CLIENTS],
@@ -206,6 +212,7 @@ impl Broker {
             replacement_control,
             replacement_supervision,
             server_operation: None,
+            server_quiet: true,
             time_control,
             supervision,
             clients: [Some(clients[0]), Some(clients[1])],
@@ -239,9 +246,16 @@ impl Broker {
                 // busy. Taking it would force a choice between blocking on a
                 // peer that is blocked on us and refusing a goal the client is
                 // entitled to have served; leaving it costs a pass instead.
+                //
+                // `server_quiet` is checked as well as the slot, because a
+                // settled operation can still have records behind it -- a
+                // duplicate result, or feedback after the terminal. Those are
+                // blocking sends too, so a new goal may only go once the server
+                // has nothing left to say.
                 if self.clients[index].is_some()
                     && self.can_receive_client(index)
                     && self.server_operation.is_none()
+                    && self.server_quiet
                 {
                     progressed |= self.pump_client(index);
                 }
@@ -496,6 +510,7 @@ impl Broker {
             ERR_SUCCESS => {
                 self.high_water[client] = record.operation_id;
                 self.server_operation = Some(server_operation_id);
+                self.server_quiet = false;
             }
             ERR_WOULDBLOCK => {
                 // No operation identity has been consumed yet, so the caller
@@ -652,7 +667,10 @@ impl Broker {
         let mut bytes = [0u8; MAX_MSG];
         let mut caps = [0u64; MAX_CAPS_PER_MSG];
         let length = match slime_rt::recv(slot, &mut bytes, &mut caps) {
-            ERR_WOULDBLOCK => return false,
+            ERR_WOULDBLOCK => {
+                self.server_quiet = true;
+                return false;
+            }
             ERR_PEER_DEAD => {
                 self.server_slot = None;
                 self.settle_all(STATUS_PEER_DEAD);
