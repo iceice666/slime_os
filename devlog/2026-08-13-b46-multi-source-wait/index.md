@@ -93,3 +93,35 @@ admission.
 - Raw transcript: reproduce with `just sel4_call_check`
 - Serial/debugger/model output: quoted inline above
 - Related roadmap item: `roadmap/00-backlog.md` B46
+
+## Corrections
+
+**"Starved, not deadlocked" was wrong.** The plane emitted 138
+`terminal delivery queued` markers against the root's shared graph-iteration
+budget with only 14 broker passes inside it, which read as starvation. Two
+things followed from that reading and only one held up.
+
+The marker traffic was real and is fixed: `pump_terminal` announced every
+re-offer, and each `debug_write` is a root round trip, so a diagnostic was
+spending the budget on a condition that had not changed. It is one per record
+now, on an `offered` flag — 138 down to 52. Worth having regardless: a
+diagnostic must not be able to starve the thing it describes.
+
+The diagnosis itself was refuted by raising `MAX_GRAPH_ITERATIONS` from 32,768
+to 262,144. Eight times the budget, and the plane stops at exactly the same
+point with exactly 57 markers. It is a deadlock. Reverted, since a constant that
+changes nothing is not evidence.
+
+Two further candidates were measured and reverted for the same reason: polling
+`supervision_status` only while the server owes an answer (a root round trip on
+every pass, so it looked like a drain — no change), and ordering terminal offers
+by request id, which is a real correctness property and was kept, but moved
+nothing by itself.
+
+What did move: `retire_terminal` returned after its first match, so a request id
+recorded twice kept one copy forever — and a client never acks an id it has
+already passed, so that copy stayed the queue's minimum and blocked everything
+behind it. Instrumenting the minimum afterwards showed the mechanism working,
+advancing 5, 10, 6, 7, 8, 9 as acks arrived, before stopping with client A
+waiting on a terminal the broker still holds. That is where the next
+investigation starts, and it is a deadlock rather than a budget.

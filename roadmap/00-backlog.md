@@ -686,9 +686,28 @@ Three further defects fell out of running it:
   still sending. Four chunks of six preserve the property — six still exceeds
   the four calls admitted in flight — while letting the broker answer.
 
-`just sel4_call_check` still fails, now inside the backpressure burst rather
-than at admission. Ordering the offers by request id was measured and *not*
-kept: it gives no gain on its own and regresses with a `terminal mismatch`.
+**Client B's whole scenario now passes**, through backpressure recovery and
+"unrelated route intact". `just sel4_call_check` fails with client A waiting on
+a terminal the broker is holding, and that is a **deadlock, not a budget**:
+raising `MAX_GRAPH_ITERATIONS` from 32,768 to 262,144 stops the plane at exactly
+the same point with exactly 57 markers. The earlier "starved" reading is
+withdrawn.
+
+One real defect was found on the way there. `retire_terminal` returned after its
+first match, so a request id recorded twice kept one copy forever — and a client
+never acks an id it has already passed, so that copy stayed the queue's minimum
+and blocked every later terminal. With it fixed, instrumenting the minimum shows
+the mechanism working: it advances 5, 10, 6, 7, 8, 9 as acks arrive.
+
+Three candidates were measured and reverted rather than argued away: ordering
+the offers by request id (a real correctness property, kept, but moves nothing
+alone and regresses with a `terminal mismatch` when applied without the rest);
+polling `supervision_status` only while the server owes an answer (a root round
+trip per pass, so it looked like a drain — no change); and the iteration budget
+above. One measured change was kept for its own sake: `pump_terminal` announced
+every re-offer, and each `debug_write` is a root round trip, so the diagnostic
+was spending the graph's shared budget on an unchanged condition — 138 markers
+down to 52.
 
 Three cheaper explanations were tested and refuted rather than argued away: both
 clients reach the barrier and block; the generation installs the edge
