@@ -107,6 +107,10 @@ const BUFFER_FACTORY_SLOT: u32 = 1;
 /// supervision onto it (B50/R2).
 const TIME_SLOT: u32 =
     FABRIC_FIRST_CONTROL_SLOT + FABRIC_CLIENTS.len() as u32 + FABRIC_SUPERVISION.len() as u32;
+/// The component that owns the other end of `TIME_SLOT`. Named rather than
+/// numbered because its supervision handle is what reports the clock's exit:
+/// no `ERR_PEER_DEAD` reaches a native Endpoint.
+const TIME_COMPONENT: &[u8] = b"fabric-publisher-b";
 const FIRST_CONTROL_SLOT: u32 = FABRIC_FIRST_CONTROL_SLOT;
 
 const RIGHT_BUFFER_WRITE: Rights = 1 << 8;
@@ -902,6 +906,7 @@ fn broker(
             {
                 let _ = send_qos_event(
                     subscriber.control_slot,
+                    subscriber.supervision_slot,
                     EVENT_PEER_DEAD,
                     0,
                     1,
@@ -914,20 +919,13 @@ fn broker(
             publisher.finished = true;
             progressed = true;
         }
-        // Re-offer anything a busy subscriber was not blocked to receive, and
-        // hold the terminal event back until nothing is outstanding. Both use
-        // `seL4_NBSend` into the same endpoint, so a subscriber that blocks
-        // once takes whichever is offered first: announcing the end beside a
-        // pending QoS record would let the end win and retire the route with
-        // the condition never delivered.
-        let outstanding = flush_qos_events();
-        progressed |= outstanding;
-        if !qos_events_pending() {
-            for route in 0..ROUTE_COUNT {
-                if route_finished(route, publishers) {
-                    for index in 0..subscribers.len() {
-                        progressed |= announce_end(index, route, type_tags, subscribers);
-                    }
+        // Every QoS event is delivered by a blocking send at the moment it is
+        // raised, so nothing is outstanding here and the terminal event needs
+        // no interlock against a pending record.
+        for route in 0..ROUTE_COUNT {
+            if route_finished(route, publishers) {
+                for index in 0..subscribers.len() {
+                    progressed |= announce_end(index, route, type_tags, subscribers);
                 }
             }
         }
@@ -1385,6 +1383,7 @@ fn deliver(
         release_frame(expired.slot as usize, frames);
         return send_qos_event(
             control_slot,
+            subscriber.supervision_slot,
             EVENT_LIFESPAN_EXPIRED,
             entry.sequence,
             0,
@@ -1685,6 +1684,7 @@ fn refresh_matches(
             };
             if send_qos_event(
                 subscriber.control_slot,
+                subscriber.supervision_slot,
                 event,
                 0,
                 matched as u64,
@@ -1701,6 +1701,7 @@ fn refresh_matches(
         if incompatible != 0
             && send_qos_event(
                 subscriber.control_slot,
+                subscriber.supervision_slot,
                 EVENT_INCOMPATIBLE_QOS,
                 0,
                 incompatible as u64,
@@ -1740,6 +1741,19 @@ fn receive_time(pending_time: &mut Option<u64>, time_dead: &mut bool) {
     let mut caps = [0u64; MAX_CAPS_PER_MSG];
     let length = match slime_rt::recv(TIME_SLOT, &mut bytes, &mut caps) {
         ERR_WOULDBLOCK => {
+            // A native Endpoint has no `ERR_PEER_DEAD`: an exited clock is
+            // indistinguishable from a silent one, so a receive alone can never
+            // retire this input and the broker would run forever waiting for a
+            // time source that is gone. The clock peer's supervision handle is
+            // the observation that reports the difference, which is the same
+            // answer publisher death needed above.
+            if !matches!(
+                slime_rt::supervision_status(supervision_slot_for(TIME_COMPONENT)),
+                Ok(None)
+            ) {
+                update_time_liveness(pending_time, time_dead, TimeReceive::PeerDead);
+                return;
+            }
             update_time_liveness(pending_time, time_dead, TimeReceive::WouldBlock);
             return;
         }
@@ -1794,6 +1808,7 @@ fn apply_time(
             release_frame(expired.slot as usize, frames);
             if send_qos_event(
                 subscriber.control_slot,
+                subscriber.supervision_slot,
                 EVENT_LIFESPAN_EXPIRED,
                 expired.sequence,
                 0,
@@ -1837,6 +1852,7 @@ fn apply_time(
         // when the queue is already empty.
         if send_qos_event(
             subscriber.control_slot,
+            subscriber.supervision_slot,
             EVENT_RETRY_EXHAUSTED,
             exhausted.unwrap_or(0),
             subscriber.retry_count as u64,
@@ -1855,6 +1871,7 @@ fn apply_time(
             subscriber.deadline_reported = true;
             if send_qos_event(
                 subscriber.control_slot,
+                subscriber.supervision_slot,
                 EVENT_DEADLINE_MISSED,
                 0,
                 0,
@@ -1876,6 +1893,7 @@ fn apply_time(
                 subscriber.liveliness_reported = true;
                 if send_qos_event(
                     subscriber.control_slot,
+                    subscriber.supervision_slot,
                     EVENT_LIVELINESS_LOST,
                     0,
                     0,
@@ -1911,14 +1929,41 @@ fn route_type_tag(route: usize) -> u64 {
     }
 }
 
+/// Deliver one QoS event to a subscriber, blocking until it is taken.
+///
+/// A declared QoS condition is an obligation, not a hint: the plane's contract
+/// is that the subscriber observes each one. `seL4_NBSend` cannot carry an
+/// obligation — it delivers only to a peer *already* blocked on the endpoint,
+/// discards otherwise, and reports nothing either way, so `try_send` returns
+/// `ERR_SUCCESS` for "attempted" and the caller cannot tell a delivery from a
+/// drop. Retaining and re-offering was built on that distinction and could
+/// never fire.
+///
+/// A blocking send is the primitive that carries one, and it is what the
+/// `EVENT_SAMPLE_LOST` path above already uses on this same endpoint. It
+/// rendezvous safely because every reader on the other side returns to its
+/// control endpoint once its ring is drained, and a two-route reader files
+/// whichever record arrives under the route that record names.
+///
+/// The one case a blocking send cannot survive is a peer that will never
+/// receive again. A native Endpoint does not report that — there is no
+/// `ERR_PEER_DEAD` to read — so the subscriber's supervision handle is checked
+/// first, which is the same answer peer death needed everywhere else in this
+/// cutover. `false` therefore means "this subscriber is gone", not "try later".
 fn send_qos_event(
     slot: u32,
+    supervision_slot: u32,
     event: u32,
     sequence: u64,
     value: u64,
     timestamp_ns: u64,
     type_identity: u64,
 ) -> bool {
+    // `Ok(None)` is "still running". Anything else means the peer has
+    // terminated and no send to it can ever rendezvous.
+    if !matches!(slime_rt::supervision_status(supervision_slot), Ok(None)) {
+        return false;
+    }
     let record = WireQosEvent {
         magic: QOS_EVENT_MAGIC,
         version: QOS_FORMAT_VERSION,
@@ -1930,77 +1975,11 @@ fn send_qos_event(
         type_identity,
         reserved: [0; 16],
     };
-    // `seL4_NBSend` delivers only to a peer already blocked on the endpoint, so
-    // an event raised while the subscriber is busy elsewhere -- reading its
-    // ring, or waiting on its other route -- is discarded with nothing
-    // reported. These are not advisory: the plane's contract is that the
-    // subscriber observes each declared QoS condition, so a dropped one is a
-    // lost obligation rather than a skipped hint.
-    //
-    // Undelivered events are therefore retained and re-offered on every broker
-    // pass, the same way a terminal `STREAM_END` is. `true` still means "the
-    // subscriber has it", so each caller's marker still reports delivery rather
-    // than intent.
-    let encoded = record.encode();
-    match slime_rt::try_send(slot, &encoded, &[]) {
+    match slime_rt::send(slot, &record.encode(), &[]) {
         ERR_SUCCESS => true,
-        ERR_WOULDBLOCK | ERR_PEER_DEAD => {
-            retain_qos_event(slot, encoded);
-            false
-        }
+        ERR_PEER_DEAD => false,
         _ => fail(b"QoS event"),
     }
-}
-
-/// One undelivered QoS record, held for the next broker pass.
-struct PendingQosEvent {
-    slot: u32,
-    record: [u8; MAX_MSG],
-    live: bool,
-}
-
-/// SAFETY: this component is single-threaded; every access below is on its one
-/// execution path and no reference outlives the statement that takes it.
-static mut PENDING_QOS: [PendingQosEvent; 8] = [const {
-    PendingQosEvent {
-        slot: 0,
-        record: [0; MAX_MSG],
-        live: false,
-    }
-}; 8];
-
-fn retain_qos_event(slot: u32, record: [u8; MAX_MSG]) {
-    // SAFETY: single-threaded, as above.
-    let pending = unsafe { &mut *core::ptr::addr_of_mut!(PENDING_QOS) };
-    let Some(free) = pending.iter_mut().find(|entry| !entry.live) else {
-        fail(b"undelivered QoS events exceeded their bound");
-    };
-    free.slot = slot;
-    free.record = record;
-    free.live = true;
-}
-
-/// Re-offer every retained QoS event. Returns whether any was taken, so the
-/// broker counts it as progress and does not park with work outstanding.
-fn flush_qos_events() -> bool {
-    // SAFETY: single-threaded, as above.
-    let pending = unsafe { &mut *core::ptr::addr_of_mut!(PENDING_QOS) };
-    let mut delivered = false;
-    for entry in pending.iter_mut().filter(|entry| entry.live) {
-        if slime_rt::try_send(entry.slot, &entry.record, &[]) == ERR_SUCCESS {
-            entry.live = false;
-            delivered = true;
-        }
-    }
-    delivered
-}
-
-/// Whether any QoS record is still waiting for its subscriber.
-fn qos_events_pending() -> bool {
-    // SAFETY: single-threaded, as above.
-    unsafe { &*core::ptr::addr_of!(PENDING_QOS) }
-        .iter()
-        .any(|entry| entry.live)
 }
 
 /// The supervision handle init granted the fabric for one subscriber. Init
