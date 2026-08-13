@@ -1101,6 +1101,9 @@ impl Broker {
                 // the deadline says it owes nothing on that request any more.
                 // A timeout on any *other* call leaves it held, because the
                 // request it is actually working on is still outstanding.
+                if self.server_call == Some(self.calls[index].server_request_id) {
+                    self.server_call = None;
+                }
                 self.finish(index, status);
                 if status == STATUS_CANCELLED {
                     slime_rt::debug_write(b"[fabric] call cancelled\n");
