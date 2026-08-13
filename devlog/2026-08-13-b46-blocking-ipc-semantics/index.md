@@ -207,3 +207,20 @@ is ready, and receiver-confirmed retirement for terminals (an ack, or the
 these planes never adopted). The stream plane sidesteps the question: its
 terminal events are re-offered against a ring the subscriber drains, which is an
 independent liveness signal the call and operation planes do not have.
+
+**`Call`/`ReplyRecv` is missing from the runtime, and adding it is not the
+fix.** B46's stated fix begins "cut synchronous RPC to Endpoint
+`Call`/`ReplyRecv`", and `slime_rt` has no such primitive: `send`, `try_send`,
+`recv`, `recv_blocking`, and nothing issuing `seL4_Call`. Every synchronous
+exchange in the tree is a `send` followed by a separate `recv`, which is
+precisely the racy pair this entry keeps finding — `send` completes when the
+peer receives, so the caller must then get back to a receive before the answer
+arrives.
+
+It was implemented (`call_endpoint`, `recv_call`, `reply`) and reverted. Wiring
+it into client B's burst would change what that arm proves: the 24 requests are
+deliberately fired *before* any terminal is read, because fire-and-forget is the
+backpressure under test, and `Call` blocks on each answer — 24 sequential round
+trips instead. The primitive is right for the correlated request/reply arms and
+wrong for this one, so it belongs to the redesign rather than ahead of it, and
+unwired code is not deliverable.

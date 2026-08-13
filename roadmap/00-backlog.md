@@ -611,6 +611,18 @@ synchronous RPC and what these two planes never adopted. The stream plane avoids
 the question because its terminal events are re-offered against a ring the
 subscriber drains, giving an independent liveness signal these planes lack.
 
+**`Call`/`ReplyRecv` is genuinely missing from the runtime**, which is a real
+gap against this item's own stated fix: `slime_rt` has `send`, `try_send`,
+`recv`, and `recv_blocking`, and nothing that issues `seL4_Call`. It was written
+(`call_endpoint`, `recv_call`, `reply` over `seL4_Call`/`seL4_Reply`, compiling
+clean) and then reverted, because wiring it into client B's burst would change
+what that arm proves: the 24 requests are deliberately fired *before* any
+terminal is read — fire-and-forget is the backpressure being tested — and a
+`Call` blocks on each answer, turning the burst into 24 sequential round trips.
+The primitive is right for the correlated request/reply arms and wrong for this
+one, so it belongs to the redesign rather than ahead of it. Unwired code is not
+deliverable, hence the revert.
+
 Three cheaper explanations were tested and refuted rather than argued away: both
 clients reach the barrier and block; the generation installs the edge
 symmetrically (`fabric-call-client` slot 4 / CSpace 37, `fabric-call-client-b`
