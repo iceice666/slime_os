@@ -501,17 +501,76 @@ cutover-era and none QoS-specific:
   terminal event is held back while any is outstanding, since both race into the
   same endpoint and the end would otherwise retire the route first.
 
-What remains is one assertion: `fabric-subscriber-b` observes liveliness but not
-deadline or retry exhaustion, which are raised while it is still blocked in
-`receive_large_sample` on its *other* route. Its demultiplexer files them
-correctly by `type_identity`, but the re-offer loop and the per-route mailbox
-interact badly — identical re-offers dedupe to one entry, so three distinct
-liveliness events and one repeated one are indistinguishable to the reader.
-That is the next thing to fix and it is component-side, not fixture-side.
+**`just sel4_qos_check` passes (2026-08-13).** Five of the seven named gates are
+green: channel, crossing, stream, QoS, and visibility.
 
-`sel4-call.zti` and `sel4-operation.zti` remain unconverted: between them they
-declare thirty-odd minted bindings across nine holders, and each conversion has
-to be checked against what the component actually expects in the slot.
+The remaining assertion was not the mailbox. `send_qos_event` used `try_send`,
+and `seL4_NBSend` reports nothing either way — so the runtime answers
+`ERR_SUCCESS` for "attempted" and the `ERR_WOULDBLOCK` arm that retained a
+record for the next broker pass **could never run**. `flush_qos_events`,
+`retain_qos_event`, and `qos_events_pending` were dead code standing in for
+delivery that had already been dropped: the plane printed `QoS deadline missed`
+with nothing arriving at the subscriber. A declared QoS condition is an
+obligation, so it takes a blocking `send` — what the `EVENT_SAMPLE_LOST` path on
+that same endpoint already used — guarded by the peer's supervision handle,
+because a blocking send to a terminated task can never rendezvous and a native
+Endpoint reports no peer death. The retain machinery is deleted with it.
+
+The clock input needed the same answer: `time_dead` was set only by
+`ERR_PEER_DEAD`, which no native Endpoint produces, so the broker waited forever
+for a clock that had exited. It is derived from the clock peer's supervision
+handle now. **This is the third distinct place peer death has needed a
+supervision handle since the cutover** — publishers, proxies, and now the clock.
+Endpoints carry messages; supervision carries death.
+
+**`sel4-call.zti` is converted, and the plane runs most of its scenario.** The
+four control edges and two phase barriers are ordinary grants; `mintedBindings`
+carries only what init genuinely creates — the factories it holds and the three
+supervision handles that cannot exist before their tasks — so init spawns the
+participants first and hands the broker its declared set. A participant cannot
+hold a supervision handle naming itself, so the scenario names the fabric as its
+loan receiver through the declared control endpoint, which `serve_buffer_loan`
+already accepts and which breaks the same spawn-ordering cycle the stream plane
+hit.
+
+Four defects behind it, none fixture-side, and all four are the same class:
+**code written against `ERR_WOULDBLOCK` semantics that native IPC never
+produces.**
+
+- **Nine components parked on the wrong discriminator.** Every call and
+  operation participant parked when `startup_arg == 0`, meaning "the boot plane
+  gives me no work" — but the root delivers a nonzero boot action *only* to the
+  bootstrap instance, so all nine parked on their own planes too.
+  `fabric_boot::active()` is the discriminator the stream components already use
+  and says what is meant.
+- **A blocking forward deadlocked the broker.** Forwarding a second request
+  while the server was still blocked sending its first reply left both waiting
+  on each other. The server answers one call at a time, so `server_idle` now
+  tracks reachability and a deferred forward waits in `Phase::Forwarding` — the
+  retry path that phase already existed for. Cancellation is staged the same
+  way, since the server is executing the very call being cancelled.
+- **Two polling peers never rendezvous.** `recv_call` and the server loop polled
+  with `yield_now` while their peer blocked in `send`. Both block now: each has
+  nothing else to wait on, which is exactly when blocking is correct.
+- **A delegated loan was read out of the message.** Only a native Endpoint
+  travels inline, so every `caps[0]` read for a loan was reading zero — both
+  broker paths and both scenario paths. It is claimed with `capability_import`.
+
+One runtime defect surfaced alongside them: `receive_native`'s capability path
+returned through `?` with `RECEIVE_SLOT_LIVE` still set, so every later receive
+on that thread would answer `ERR_WOULDBLOCK` forever — a wedged caller reading
+as a silent peer.
+
+The plane now admits, spawns, and runs correlated replies, rejection, duplicate
+suppression, and shared payloads in both directions. It still stalls at
+cancellation, inside `pump_server`'s **non-blocking** receive, which by
+construction cannot block — so the remaining fault is in the receive path rather
+than the broker's own logic, and that is where the next investigation starts.
+
+`sel4-operation.zti` remains unconverted: twenty-three minted bindings across
+six holders, each of which has to be checked against what the component expects
+in the slot. Its shape is `sel4-call.zti`'s, so the conversion is now a known
+quantity rather than an open question.
 
 **Exit condition:** `channel.rs`, `transit.rs`, `parked.rs`, `WaitSet`, and the
 migrated universal labels no longer exist. Backpressure, bounded queues,

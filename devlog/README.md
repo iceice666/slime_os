@@ -254,3 +254,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-12 | [B46 — an arena returns a CSlot the kernel still finds occupied](2026-08-12-b46-arena-slot-occupancy/index.md) | Defect | Verified | B46, B50 |
 | 2026-08-13 | [R2 — the builder assigns declared slots, and init reads its grant count](2026-08-13-r2-declared-slot-allocation/index.md) | Change | Verified | B50, B46 |
 | 2026-08-13 | [The QoS plane's fixture cutover, and three dead counters behind it](2026-08-13-qos-plane-fixture-cutover/index.md) | Change | Monitoring | B46, B50 |
+| 2026-08-13 | [The cutover's real defect class: code written against `ERR_WOULDBLOCK`](2026-08-13-b46-blocking-ipc-semantics/index.md) | Defect | Fixed | B46 |
