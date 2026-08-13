@@ -291,3 +291,27 @@ wrong conclusion this session: the transcript tail is truncated; a run
 immediately after `git checkout` can report a stale build; and marker totals
 conflate progress with spinning. Comparisons need paired runs, full QEMU
 captures, and set-difference rather than counts.
+
+**Isolated to one send.** Instrumenting the forwarded request id shows the
+broker blocking on **id 11** — the request whose payload makes the server call
+`exit(0)`. The forward itself completes (`call forwarded` is emitted, so the
+server took the message); the server exits; the broker never reaches its next
+loop head. Per-stage markers place the block inside `pump_time`, the only stage
+after `pump_replies` (confirmed to complete), whose sole blocking operation is
+the `forward` on its retry path.
+
+The timeout release is confirmed load-bearing by the honest metric: **10 stages
+with it, 9 without**. Marker totals said the opposite.
+
+| Candidate | Result |
+|---|---|
+| `send` | Blocks against a peer that is exiting — current state |
+| `try_send` | Drops forwards whenever the server has not reached `recv`; 10 stages → 5 |
+| Liveness check before the send | No change; the server is alive at that instant |
+| `seL4_Call` | Does not model this protocol — the server replies asynchronously on its own endpoint, and some requests are answered by nothing |
+| Bounded send | Does not exist on non-MCS seL4 |
+
+So the fix is protocol-shaped, not primitive-shaped: either the server must not
+exit while holding a request it has taken, or the broker must not hold a forward
+it cannot retract. That is a scenario-and-broker change together, and it is the
+honest remaining scope.

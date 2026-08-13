@@ -896,6 +896,32 @@ blocks on a reply that names it, and a server that exits mid-call leaves the
 kernel to fault the call rather than hanging it. That is the next thing to try,
 and it is the same conclusion the terminal ack reached independently.
 
+**Isolated to one send, with a stage-count metric that survives scrutiny.**
+Instrumenting the forwarded request id shows the broker blocking on **id 11** —
+the request whose payload makes `fabric-call-server` call `exit(0)`. The forward
+itself *completes* (`call forwarded` is emitted, so the server took the
+message); the server then exits, and the broker never reaches its next loop
+head. Per-stage markers place the block inside `pump_time`, which is the only
+stage after `pump_replies` (confirmed to complete), and whose sole blocking
+operation is the `forward` on its retry path.
+
+The timeout release is confirmed load-bearing by the honest metric: **10 stages
+with it, 9 without**. Marker totals said the opposite, which is why they were
+abandoned.
+
+No available primitive fixes the retry forward. `send` blocks against a peer
+that is exiting; `try_send` drops forwards whenever the server has not yet
+reached `recv`, costing five stages; a liveness check before the send cannot
+help because the server is alive at that instant; and `seL4_Call` does not model
+this protocol, where the server replies asynchronously on its own endpoint and
+some requests are answered by nothing at all. Non-MCS seL4 offers no bounded
+send.
+
+So the remaining fix is protocol-shaped rather than primitive-shaped: either the
+server must not exit while a request it has taken is unanswered, or the broker
+must not hold a forward it cannot retract. That is a scenario-and-broker change
+together, and it is the honest remaining scope of this gate.
+
 Three candidates were measured and reverted rather than argued away: ordering
 the offers by request id (a real correctness property, kept, but moves nothing
 alone and regresses with a `terminal mismatch` when applied without the rest);
