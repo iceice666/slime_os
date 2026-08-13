@@ -83,24 +83,40 @@ pub fn run_client_b() {
     expect_terminal(route, 0x000e_0000_0000_0001, 23, STATUS_STALE);
     slime_rt::debug_write(b"[fabric-call-client-b] stale session observed\n");
     wait_client_phase(0);
-    for request_id in 100..124 {
-        send_call(
-            route,
-            envelope(
-                0x000e_0000_0000_0001,
-                request_id,
-                KIND_REQUEST,
-                0,
-                STATUS_SUCCESS,
-                request_id,
-            ),
-        );
-    }
-    for _ in 0..128 {
-        slime_rt::yield_now();
-    }
-    for request_id in 100..124 {
-        expect_terminal(route, 0x000e_0000_0000_0001, request_id, STATUS_STALE);
+    // Overrun the broker's in-flight bound, then drain what it queued.
+    //
+    // The burst is chunked rather than fired as one block of 24. Under the
+    // logical channels this scenario was written against, a send buffered and
+    // returned, so the client could offer everything and only then read. A
+    // native send rendezvous instead: it blocks until the broker receives, and
+    // the broker cannot hand a terminal to a client that is still sending --
+    // `seL4_NBSend` reaches only a peer already blocked on receive. A client
+    // that never pauses to read is therefore a client the broker can never
+    // answer, and its queue fills at `MAX_PENDING_TERMINALS_PER_CLIENT`.
+    //
+    // The property under test is unchanged and still exercised: each chunk is
+    // larger than the four calls the broker admits in flight, so every chunk
+    // drives it past its bound and every request comes back refused.
+    const BURST: u64 = 6;
+    const CHUNKS: u64 = 4;
+    for chunk in 0..CHUNKS {
+        let first = 100 + chunk * BURST;
+        for request_id in first..first + BURST {
+            send_call(
+                route,
+                envelope(
+                    0x000e_0000_0000_0001,
+                    request_id,
+                    KIND_REQUEST,
+                    0,
+                    STATUS_SUCCESS,
+                    request_id,
+                ),
+            );
+        }
+        for request_id in first..first + BURST {
+            expect_terminal(route, 0x000e_0000_0000_0001, request_id, STATUS_STALE);
+        }
     }
     slime_rt::debug_write(b"[fabric-call-client-b] terminal backpressure recovered\n");
     signal_client_phase(0);
