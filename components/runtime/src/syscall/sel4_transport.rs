@@ -230,18 +230,21 @@ fn receive_native(
             RECEIVE_SLOT_LIVE.store(false, Ordering::Release);
             return Ok(length);
         }
-        let destination_slot = (NATIVE_TRANSFER_ENDPOINT_BASE..NATIVE_ENDPOINT_BASE)
-            .find(|slot| {
-                let probe = cap::CNode::from_bits(CHILD_CNODE_SLOT as u64)
-                    .absolute_cptr_from_bits_with_depth(
-                        *slot as sel4::CPtrBits,
-                        CHILD_CNODE_SIZE_BITS,
-                    )
-                    .with(&mut *ipc_buffer);
-                let source = native_receive_slot();
-                probe.move_(&source).is_ok()
-            })
-            .ok_or(super::ERR_BAD_CAP)?;
+        // Every exit from here must clear `RECEIVE_SLOT_LIVE`: it is the
+        // single-entry guard on the one receive slot, and a path that returns
+        // while it is still set makes every later receive on this thread answer
+        // `ERR_WOULDBLOCK` forever.
+        let destination_slot = (NATIVE_TRANSFER_ENDPOINT_BASE..NATIVE_ENDPOINT_BASE).find(|slot| {
+            let probe = cap::CNode::from_bits(CHILD_CNODE_SLOT as u64)
+                .absolute_cptr_from_bits_with_depth(*slot as sel4::CPtrBits, CHILD_CNODE_SIZE_BITS)
+                .with(&mut *ipc_buffer);
+            let source = native_receive_slot();
+            probe.move_(&source).is_ok()
+        });
+        let Some(destination_slot) = destination_slot else {
+            RECEIVE_SLOT_LIVE.store(false, Ordering::Release);
+            return Err(super::ERR_BAD_CAP);
+        };
         RECEIVE_SLOT_LIVE.store(false, Ordering::Release);
         cap_out[0] = u64::from(DIRECT_ENDPOINT_HANDLE | destination_slot);
         sel4::debug_println!(
