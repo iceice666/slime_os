@@ -108,9 +108,14 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
         ),
     ),
     (
-        "bounded native ring backpressure",
+        # The call broker queues a terminal it cannot hand over yet and
+        # re-offers it, which is `terminal delivery queued`. The marker
+        # previously asserted here -- `terminal delivery ring backpressured` --
+        # belongs to the *stream* broker's ring publish path and is unreachable
+        # from this plane, so the chain could never match.
+        "bounded terminal backpressure",
         (
-            r"\[fabric\] terminal delivery ring backpressured",
+            r"\[fabric\] terminal delivery queued",
             r"\[fabric-call-client-b\] terminal backpressure recovered",
         ),
     ),
