@@ -176,11 +176,6 @@ impl Broker {
             if progressed {
                 continue;
             }
-            // Nothing moved, so every peer is either idle or blocked in `send`
-            // -- and `seL4_NBRecv` takes a message only from a sender already
-            // blocked, which yielding does nothing to change. Two non-blocking
-            // peers never rendezvous, so the broker has to wait in the kernel.
-            //
             // Nothing moved, so every peer with something to say is blocked in
             // `send` -- and `seL4_NBRecv` takes a message only from a sender
             // already blocked, which yielding does nothing to change. The
@@ -194,9 +189,18 @@ impl Broker {
             // pending by the time the broker gets here and the next sweep finds
             // that sender waiting. This is what a single Endpoint cannot
             // express: "wake me when any of these speak".
-            // A graph that declares no wake object emits the constant as
-            // `u32::MAX`; there the broker falls back to yielding.
-            if FABRIC_SERVICE_PARAMETERS_READY_SLOT == u32::MAX {
+            //
+            // Except while a terminal is owed. A client waiting for one is
+            // blocked in `recv` and will never signal, so the wake that would
+            // release this broker cannot arrive -- and the terminal it is
+            // holding is the very thing that would let the client run again.
+            // Re-offering is the only way out, so it yields instead.
+            let owed = self
+                .calls
+                .iter()
+                .any(|call| call.phase == Phase::PendingTerminal)
+                || self.pending_terminals.iter().any(Option::is_some);
+            if owed || FABRIC_SERVICE_PARAMETERS_READY_SLOT == u32::MAX {
                 slime_rt::yield_now();
                 continue;
             }
