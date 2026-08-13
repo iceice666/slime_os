@@ -263,6 +263,25 @@
       transferable = false;
     };
     {
+      name = "fabric-publisher-probe";
+      rights = [
+        "recv";
+      ];
+      source = "fabric-publisher";
+      target = "fabric-service";
+      transferable = true;
+    };
+    {
+      name = "fabric-publisher-b-clock";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "fabric-publisher-b";
+      target = "fabric-service";
+      transferable = false;
+    };
+    {
       name = "fabric-subscriber-control";
       rights = [
         "send";
@@ -372,6 +391,14 @@
           grant = "fabric-subscriber-control";
           slot = 3;
         };
+        {
+          grant = "fabric-publisher-probe";
+          slot = 12;
+        };
+        {
+          grant = "fabric-publisher-b-clock";
+          slot = 11;
+        };
       ];
       dependencies = [
         "init";
@@ -388,6 +415,9 @@
           grant = "fabric-publisher-control";
           slot = 0;
         };
+        {
+          grant = "fabric-publisher-probe";
+        };
       ];
       dependencies = [
         "init";
@@ -403,6 +433,10 @@
         {
           grant = "fabric-publisher-b-control";
           slot = 0;
+        };
+        {
+          grant = "fabric-publisher-b-clock";
+          slot = 3;
         };
       ];
       dependencies = [
@@ -458,33 +492,11 @@
       ];
       executable = "fabric-intruder";
       health = "optional";
-      priority = 100;
       name = "fabric-intruder";
       owner = "init";
     };
   ];
   mintedBindings = [
-    {
-      name = "fabric-publisher-b-clock";
-      owner = "init";
-      holder = "fabric-publisher-b";
-      rights = [
-        "send";
-        "recv";
-      ];
-      slot = 3;
-      transferable = false;
-    };
-    {
-      name = "fabric-publisher-b-fabric-supervision";
-      owner = "init";
-      holder = "fabric-publisher-b";
-      rights = [
-        "supervise";
-      ];
-      slot = 2;
-      transferable = false;
-    };
     {
       name = "fabric-publisher-b-shared-buffer-factory";
       owner = "init";
@@ -494,38 +506,6 @@
       ];
       slot = 1;
       transferable = false;
-    };
-    {
-      name = "fabric-publisher-probe-carrier-recv";
-      owner = "init";
-      holder = "fabric-publisher";
-      rights = [
-        "send";
-        "recv";
-      ];
-      slot = 3;
-      transferable = false;
-    };
-    {
-      name = "fabric-publisher-probe-carrier-send";
-      owner = "init";
-      holder = "fabric-publisher";
-      rights = [
-        "send";
-        "recv";
-      ];
-      slot = 2;
-      transferable = false;
-    };
-    {
-      name = "fabric-publisher-probe-narrowed";
-      owner = "init";
-      holder = "fabric-publisher";
-      rights = [
-        "send";
-      ];
-      slot = 1;
-      transferable = true;
     };
     {
       name = "fabric-service-shared-buffer-factory";
@@ -538,7 +518,7 @@
       transferable = false;
     };
     {
-      name = "fabric-service-subscriber-supervision";
+      name = "fabric-publisher-supervision";
       owner = "init";
       holder = "fabric-service";
       rights = [
@@ -548,7 +528,7 @@
       transferable = false;
     };
     {
-      name = "fabric-service-subscriber-b-supervision";
+      name = "fabric-subscriber-supervision";
       owner = "init";
       holder = "fabric-service";
       rights = [
@@ -558,14 +538,23 @@
       transferable = false;
     };
     {
-      name = "fabric-service-clock";
+      name = "fabric-publisher-b-supervision";
       owner = "init";
       holder = "fabric-service";
       rights = [
-        "send";
-        "recv";
+        "supervise";
       ];
       slot = 9;
+      transferable = false;
+    };
+    {
+      name = "fabric-subscriber-b-supervision";
+      owner = "init";
+      holder = "fabric-service";
+      rights = [
+        "supervise";
+      ];
+      slot = 10;
       transferable = false;
     };
   ];
@@ -674,11 +663,18 @@
       mappingCount = 14;
     };
     {
-      bufferCount = 1;
+      bufferCount = 0;
       bytePages = 4;
+      holder = "fabric-publisher";
+      loanCount = 0;
+      mappingCount = 4;
+    };
+    {
+      bufferCount = 1;
+      bytePages = 8;
       holder = "fabric-publisher-b";
       loanCount = 1;
-      mappingCount = 2;
+      mappingCount = 4;
     };
     {
       bufferCount = 0;
