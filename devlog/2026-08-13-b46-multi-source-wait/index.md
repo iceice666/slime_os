@@ -125,3 +125,31 @@ behind it. Instrumenting the minimum afterwards showed the mechanism working,
 advancing 5, 10, 6, 7, 8, 9 as acks arrived, before stopping with client A
 waiting on a terminal the broker still holds. That is where the next
 investigation starts, and it is a deadlock rather than a budget.
+
+**The deadlock is isolated, and it points back at `seL4_Call`.**
+Instrumenting the offer target shows the machinery working: ids 6, 7, 8, 9
+offered to client A in sequence, each advancing as its ack arrives, and the
+broker yielding 19 times without ever parking — so it re-offers continuously.
+Client A takes 6, 7, 8, then stops.
+
+The state it stops in is **client A blocked sending the ack for 8 while the
+broker is mid-sweep offering 9**. Neither is receiving. Both available shapes
+were measured:
+
+| Ack shape | Result |
+|---|---|
+| `try_send` | 57 markers → **19**; the ack is what retires a record, and `seL4_NBSend` reports nothing, so dropped acks leave the broker re-offering terminals already taken |
+| blocking `send` | current state; deadlocks against a broker mid-sweep |
+
+This is the same "two peers, opposite directions, one endpoint" shape the whole
+cutover kept producing, and it says the ack needs a path that is neither lossy
+nor blocking. That is `seL4_Call` — request and reply as one atomic operation,
+with a reply capability naming *this* caller — which is what B46's own fix text
+asks for and what the runtime still does not have. The primitive was written
+earlier this session and reverted as unwired; this is the call site that would
+wire it.
+
+A latent instance of the same hazard was fixed on the way:
+`expect_terminal_parked` polled with `yield_now` against a broker offering with
+`seL4_NBSend`. Client A never reaches that step, so it moved nothing — but it is
+the fourth polling receive found in this one scenario file.

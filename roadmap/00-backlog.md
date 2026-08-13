@@ -699,6 +699,33 @@ never acks an id it has already passed, so that copy stayed the queue's minimum
 and blocked every later terminal. With it fixed, instrumenting the minimum shows
 the mechanism working: it advances 5, 10, 6, 7, 8, 9 as acks arrive.
 
+**The deadlock is isolated to one interaction (2026-08-13).** Instrumenting the
+offer target shows the ordering rule working exactly as intended — ids 6, 7, 8,
+9 offered to client A's slot in sequence, each advancing as its ack arrives —
+and the broker yielding 19 times without ever parking, so it is re-offering
+continuously. Client A takes 6, 7, and 8, then stops.
+
+The remaining state is: **client A blocked sending the ack for 8, while the
+broker is mid-sweep offering 9.** Neither is receiving. Two shapes were measured
+and both are wrong:
+
+- Ack with `try_send` — 57 markers down to **19**. The ack is the only thing
+  that retires a record and `seL4_NBSend` reports nothing, so a dropped ack
+  leaves the broker re-offering a terminal the reader already took.
+- Ack with a blocking send — the current state, and where the deadlock is.
+
+That is the same "two peers, opposite directions, one endpoint" shape the rest
+of this cutover kept producing, and it says the ack needs a path that is neither
+lossy nor blocking. The obvious candidate is the one this item's own fix text
+names and the runtime still lacks: `seL4_Call`, where request and reply are one
+atomic operation and the reply capability names *this* caller, so the broker's
+answer cannot be taken by another peer and the caller cannot miss it.
+
+A latent instance of the same hazard was fixed on the way:
+`expect_terminal_parked` polled with `yield_now` against a broker that offers
+with `seL4_NBSend`. Client A never reaches that step, so it changed nothing
+measurable, but it is the fourth polling receive found in this scenario file.
+
 Three candidates were measured and reverted rather than argued away: ordering
 the offers by request id (a real correctness property, kept, but moves nothing
 alone and regresses with a `terminal mismatch` when applied without the rest);
