@@ -547,11 +547,17 @@ fn signal_client_phase(phase: u8) {
     }
 }
 
+/// Wait for a phase barrier, blocking until the peer signals it.
+///
+/// A barrier is the one thing this component is waiting on, and the signaller
+/// uses a blocking `send`. Polling here would leave both sides waiting: a
+/// non-blocking receive only takes from a sender already blocked, and the
+/// sender only unblocks once someone receives.
 fn wait_client_phase(expected: u8) {
     let mut bytes = [0u8; MAX_MSG];
     let mut caps = [0u64; MAX_CAPS_PER_MSG];
     loop {
-        match slime_rt::recv(CLIENT_PHASE_SLOT, &mut bytes, &mut caps) {
+        match slime_rt::recv_blocking(CLIENT_PHASE_SLOT, &mut bytes, &mut caps) {
             ERR_WOULDBLOCK => slime_rt::yield_now(),
             value if value < 0 => fail(b"client phase receive"),
             1 if bytes[0] == expected => return,

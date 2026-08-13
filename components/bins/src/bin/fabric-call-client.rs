@@ -124,7 +124,9 @@ fn wait_client_b(expected: u8) {
     let mut bytes = [0u8; slime_rt::MAX_MSG];
     let mut caps = [0u64; slime_rt::MAX_CAPS_PER_MSG];
     loop {
-        match slime_rt::recv(4, &mut bytes, &mut caps) {
+        // A barrier is all this loop waits on, and the signaller blocks in
+        // `send`: polling here would leave both sides waiting.
+        match slime_rt::recv_blocking(4, &mut bytes, &mut caps) {
             slime_rt::ERR_WOULDBLOCK => slime_rt::yield_now(),
             value if value < 0 => scenario::fail(b"client phase receive"),
             1 if bytes[0] == expected => return,

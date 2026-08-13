@@ -50,7 +50,9 @@ impl PhaseBuffer {
         let mut bytes = [0u8; MAX_MSG];
         let mut caps = [0u64; MAX_CAPS_PER_MSG];
         loop {
-            match slime_rt::recv(1, &mut bytes, &mut caps) {
+            // A barrier is all this component is waiting on, and the signaller
+            // blocks in `send`: polling here would leave both sides waiting.
+            match slime_rt::recv_blocking(1, &mut bytes, &mut caps) {
                 ERR_WOULDBLOCK => slime_rt::yield_now(),
                 ERR_PEER_DEAD => scenario::fail(b"time phase peer died"),
                 value if value < 0 => scenario::fail(b"time phase receive"),

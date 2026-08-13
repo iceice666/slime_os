@@ -176,6 +176,21 @@ impl Broker {
             if progressed {
                 continue;
             }
+            // Nothing moved, so every peer is either idle or blocked in `send`
+            // -- and `seL4_NBRecv` takes a message only from a sender already
+            // blocked, which yielding does nothing to change. Two non-blocking
+            // peers never rendezvous.
+            //
+            // If a call is outstanding, the server's answer is the only thing
+            // that can move the plane, so wait for it in the kernel where its
+            // blocking `send` can find a receiver. Anything else stays polled:
+            // the broker must not block on a peer that may be blocked on it.
+            if !self.server_idle
+                && let Some(slot) = self.server_slot
+            {
+                self.block_on_server(slot);
+                continue;
+            }
             slime_rt::yield_now();
         }
     }
@@ -681,6 +696,27 @@ impl Broker {
         slime_rt::debug_write(b"[fabric] call cancelled\n");
     }
 
+    /// Wait in the kernel for the server's answer.
+    ///
+    /// Used only when nothing else can progress and a call is outstanding, so
+    /// the server's reply is the sole event that can move the plane. Its `send`
+    /// blocks until a receiver arrives; this is that receiver.
+    fn block_on_server(&mut self, slot: u32) {
+        let mut bytes = [0u8; MAX_MSG];
+        let mut caps = [0u64; MAX_CAPS_PER_MSG];
+        let length = match slime_rt::recv_blocking(slot, &mut bytes, &mut caps) {
+            ERR_WOULDBLOCK => return,
+            ERR_PEER_DEAD => {
+                self.server_slot = None;
+                self.reclaim_all(STATUS_PEER_DEAD);
+                return;
+            }
+            value if value < 0 => fail(b"server recv"),
+            value => value as usize,
+        };
+        self.handle_server_record(&bytes, &caps, length);
+    }
+
     fn pump_server(&mut self) -> bool {
         let Some(slot) = self.server_slot else {
             return false;
@@ -697,13 +733,23 @@ impl Broker {
             value if value < 0 => fail(b"server recv"),
             value => value as usize,
         };
+        self.handle_server_record(&bytes, &caps, length);
+        true
+    }
+
+    fn handle_server_record(
+        &mut self,
+        bytes: &[u8; MAX_MSG],
+        caps: &[u64; MAX_CAPS_PER_MSG],
+        length: usize,
+    ) {
         // Anything received from the server means it finished a call and went
         // back to its endpoint, so it is reachable by a blocking send again.
         self.server_idle = true;
         let magic = (length >= 4).then(|| u32::from_le_bytes(bytes[..4].try_into().unwrap()));
         match magic {
             Some(CALL_MAGIC) => {
-                release_caps(&caps);
+                release_caps(caps);
                 let decoded = WireCallEnvelope::decode(&bytes[..length.min(MAX_MSG)]);
                 let Some(reply) = decoded.filter(|reply| {
                     length == MAX_MSG
@@ -717,11 +763,11 @@ impl Broker {
                         self.finish(index, STATUS_MALFORMED_REPLY);
                         slime_rt::debug_write(b"[fabric] malformed call reply rejected\n");
                     }
-                    return true;
+                    return;
                 };
                 let Some(index) = self.find_call(reply.request_id) else {
                     slime_rt::debug_write(b"[fabric] stale call reply rejected\n");
-                    return true;
+                    return;
                 };
                 let mut outward = reply;
                 settle_outstanding_request(&mut self.calls[index]);
@@ -748,14 +794,14 @@ impl Broker {
                     if loan_slot != 0 {
                         let _ = slime_rt::cap_drop(loan_slot);
                     }
-                    return true;
+                    return;
                 };
                 let Some(index) = self.find_call(descriptor.sequence) else {
                     if loan_slot != 0 {
                         let _ = slime_rt::shared_buffer_return(loan_slot);
                     }
                     slime_rt::debug_write(b"[fabric] stale call reply rejected\n");
-                    return true;
+                    return;
                 };
                 if length != MAX_MSG
                     || loan_slot == 0
@@ -770,14 +816,14 @@ impl Broker {
                         let _ = slime_rt::shared_buffer_return(loan_slot);
                     }
                     self.finish(index, STATUS_MALFORMED_REPLY);
-                    return true;
+                    return;
                 }
                 settle_outstanding_request(&mut self.calls[index]);
                 if self.calls[index].phase == Phase::Cancelling {
                     let _ = slime_rt::shared_buffer_return(loan_slot);
                     self.finish(index, STATUS_CANCELLED);
                     slime_rt::debug_write(b"[fabric] call cancelled\n");
-                    return true;
+                    return;
                 }
                 let mut outward = descriptor;
                 outward.sequence = self.calls[index].request_id;
@@ -785,9 +831,8 @@ impl Broker {
                     relay_shared_payload(self.buffer_factory_slot, loan_slot, &descriptor);
                 self.deliver_shared_reply(index, outward, buffer_slot);
             }
-            _ => release_caps(&caps),
+            _ => release_caps(caps),
         }
-        true
     }
 
     fn deliver_inline_reply(&mut self, index: usize, outward: WireCallEnvelope) {
