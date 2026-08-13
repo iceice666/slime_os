@@ -591,6 +591,26 @@ operation brokers need the same treatment: every peer badged into one
 Notification the broker waits on. That is a design change rather than another
 blocking-semantics fix, and it is the honest remaining scope of these two gates.
 
+**A second constraint, found by attempting the fix.** The exact deadlock is
+`reject_terminal` → `pump_terminal` → a blocking `send` to a client that is
+blocked sending its *next* request: both peers on one endpoint, in opposite
+directions. `MAX_CALLS` is 4 and client B fires 24, so the refusal path is
+reached by design — it is the arm the plane exists to prove.
+
+Making that send non-blocking does not work either, and the reason is
+structural: `seL4_NBSend` reports nothing, so the broker cannot tell delivery
+from a drop and must never retire a terminal on its own word — the same defect
+that made every QoS event vanish. Re-offering until taken needs a queue with no
+bound that the plane respects, since a terminal may only be retired when its
+client actually receives it.
+
+So the two brokers need *both* halves: a Notification to learn which peer is
+ready, and a receiver-confirmed retirement for terminals — a reply, an ack, or
+a `Call`/`ReplyRecv` pair, which is what B46's own text prescribes for
+synchronous RPC and what these two planes never adopted. The stream plane avoids
+the question because its terminal events are re-offered against a ring the
+subscriber drains, giving an independent liveness signal these planes lack.
+
 Three cheaper explanations were tested and refuted rather than argued away: both
 clients reach the barrier and block; the generation installs the edge
 symmetrically (`fabric-call-client` slot 4 / CSpace 37, `fabric-call-client-b`

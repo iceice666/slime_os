@@ -189,3 +189,21 @@ what `fabric-service`'s stream side already uses. The call and operation brokers
 need every peer badged into one Notification they wait on — a design change, not
 another blocking-semantics fix, and the honest remaining scope of those two
 gates.
+
+**The exact deadlock, and why a Notification alone is not enough.** Attempting
+the fix located it precisely: `reject_terminal` → `pump_terminal` → a blocking
+`send` to a client that is blocked sending its *next* request. Both peers on one
+endpoint, opposite directions. `MAX_CALLS` is 4 and client B fires 24, so the
+refusal path is reached by design — it is the arm the plane exists to prove.
+
+Making that send non-blocking fails for the reason this entry already
+establishes: `seL4_NBSend` reports nothing, so the broker cannot tell delivery
+from a drop and must never retire a terminal on its own word. Re-offering until
+taken needs a retirement signal that comes from the receiver.
+
+The two brokers therefore need both halves — a Notification to learn which peer
+is ready, and receiver-confirmed retirement for terminals (an ack, or the
+`Call`/`ReplyRecv` pair B46's own text prescribes for synchronous RPC and that
+these planes never adopted). The stream plane sidesteps the question: its
+terminal events are re-offered against a ring the subscriber drains, which is an
+independent liveness signal the call and operation planes do not have.
