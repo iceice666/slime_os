@@ -311,7 +311,6 @@ SEL4_CALL_LAYOUT = (
     (3, 'executable', 'fabric-call-server', 0x1000c),
     (4, 'executable', 'fabric-call-time', 0x10008),
     (5, 'executable', 'fabric-service', 0x1000c),
-    (6, 'endpoint-factory', None, 0x20000),
     (7, 'shared-buffer-factory', None, 0x1000000),
 )
 
@@ -338,7 +337,6 @@ SEL4_OPERATION_LAYOUT = (
     (4, 'executable', 'fabric-op-server', 0x1000c),
     (5, 'executable', 'fabric-op-time', 0x10008),
     (6, 'executable', 'fabric-service', 0x10008),
-    (7, 'endpoint-factory', None, 0x20000),
     (8, 'shared-buffer-factory', None, 0x1000000),
 )
 
@@ -360,7 +358,6 @@ SEL4_VISIBILITY_LAYOUT = (
     (4, 'executable', 'fabric-service', 0x10008),
     (5, 'executable', 'fabric-subscriber', 0x10008),
     (6, 'executable', 'fabric-subscriber-b', 0x10008),
-    (7, 'endpoint-factory', None, 0x20000),
     (8, 'shared-buffer-factory', None, 0x1000000),
 )
 
@@ -374,7 +371,6 @@ SEL4_QOS_LAYOUT = (
     (4, 'executable', 'fabric-service', 0x10008),
     (5, 'executable', 'fabric-subscriber', 0x10008),
     (6, 'executable', 'fabric-subscriber-b', 0x10008),
-    (7, 'endpoint-factory', None, 0x20000),
     (8, 'shared-buffer-factory', None, 0x1000000),
 )
 
@@ -404,7 +400,6 @@ SEL4_QOS_LAYOUT = (
 # transferable keeps the table one rule rather than a per-plane exception. The
 # fabric and its two workers stay `0x10008` -- their handles never move.
 SEL4_BOOT_LAYOUT = (
-    (0, 'endpoint-factory', None, 0x20000),
     (1, 'shared-buffer-factory', None, 0x1000000),
     (2, 'executable', 'fabric-service', 0x10008),
     (3, 'executable', 'fabric-call-worker', 0x10008),
@@ -425,7 +420,6 @@ SEL4_BOOT_LAYOUT = (
     (18, 'executable', 'fabric-op-server', 0x1000c),
     (19, 'executable', 'fabric-op-time', 0x1000c),
     (20, 'executable', 'fabric-op-client-b-restart', 0x1000c),
-    (21, 'endpoint-factory', None, 0x20000),
     (22, 'shared-buffer-factory', None, 0x1000000),
 )
 
@@ -439,7 +433,6 @@ SEL4_BOOT_LAYOUT = (
 # is the rule every other grant to a child follows.
 SEL4_STORAGE_LAYOUT = (
     (1, 'executable', 'sel4-storage-probe', 0x10008),
-    (2, 'endpoint-factory', None, 0x20000),
 )
 
 # Generation 24, the store plane. Same two rows as the storage plane and for the
@@ -447,7 +440,6 @@ SEL4_STORAGE_LAYOUT = (
 # it in the probe's own table rather than init's.
 SEL4_STORE_LAYOUT = (
     (1, 'executable', 'sel4-store-probe', 0x10008),
-    (2, 'endpoint-factory', None, 0x20000),
 )
 
 # Generation 30, the M6.4 dango plane. Init's factory plus the three
@@ -457,7 +449,6 @@ SEL4_DANGO_LAYOUT = (
     (1, 'executable', 'console', 0x10008),
     (2, 'executable', 'dango', 0x10008),
     (3, 'executable', 'spawn-service', 0x10008),
-    (4, 'endpoint-factory', None, 0x20000),
     (5, 'shared-buffer-factory', None, 0x1000000),
     (6, 'executable', 'sysinfo', 0x10008),
     (7, 'executable', 'echo-agent', 0x10008),
@@ -469,14 +460,12 @@ SEL4_DANGO_LAYOUT = (
 SEL4_FILESYSTEM_LAYOUT = (
     (1, 'executable', 'directory-probe', 0x10008),
     (2, 'executable', 'sel4-filesystem-service', 0x10008),
-    (3, 'endpoint-factory', None, 0x20000),
 )
 
 # Generation 33, the M6.7 transfer plane. Two rows; both device capabilities
 # are the probe's own declared grants.
 SEL4_TRANSFER_LAYOUT = (
     (1, 'executable', 'sel4-transfer-probe', 0x10008),
-    (2, 'endpoint-factory', None, 0x20000),
 )
 
 # Generation 32, the M6.6 powerbox plane. Init's factory and both executables;
@@ -484,14 +473,12 @@ SEL4_TRANSFER_LAYOUT = (
 SEL4_POWERBOX_LAYOUT = (
     (1, 'executable', 'powerbox-chooser', 0x10008),
     (2, 'executable', 'powerbox-probe', 0x10008),
-    (3, 'endpoint-factory', None, 0x20000),
 )
 
 # Generation 31, the input plane. Two rows; the input capability is granted to
 # the probe, so the root places it in the probe's own table.
 SEL4_INPUT_LAYOUT = (
     (1, 'executable', 'sel4-input-probe', 0x10008),
-    (2, 'endpoint-factory', None, 0x20000),
 )
 
 # Generation 28, the M6.3 directory plane. Two rows, and the directory
@@ -499,7 +486,6 @@ SEL4_INPUT_LAYOUT = (
 # it in the probe's own table.
 SEL4_DIRECTORY_LAYOUT = (
     (1, 'executable', 'sel4-directory-probe', 0x10008),
-    (2, 'endpoint-factory', None, 0x20000),
 )
 
 # Generation 27, the M6.5 generation-command plane. Three rows: init's factory
@@ -508,19 +494,16 @@ SEL4_DIRECTORY_LAYOUT = (
 SEL4_GENERATION_LAYOUT = (
     (1, 'executable', 'sel4-generation-client', 0x10008),
     (2, 'executable', 'sel4-generation-manager', 0x10008),
-    (3, 'endpoint-factory', None, 0x20000),
 )
 
 # Generation 26, the recovery plane.
 SEL4_RECOVERY_LAYOUT = (
     (1, 'executable', 'sel4-recovery-probe', 0x10008),
-    (2, 'endpoint-factory', None, 0x20000),
 )
 
 # Generation 25, the rollback plane. Same shape again.
 SEL4_ROLLBACK_LAYOUT = (
     (1, 'executable', 'sel4-rollback-probe', 0x10008),
-    (2, 'endpoint-factory', None, 0x20000),
 )
 
 
