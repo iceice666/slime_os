@@ -443,9 +443,12 @@ impl Broker {
             terminal_status: status,
             payload: Payload::None,
         };
+        // Queue rather than hand over from inside the receive path: this
+        // client is typically blocked in `send` on its next request, so a
+        // delivery attempt here would wait on a peer waiting on us.
         if let Some(index) = self.calls.iter().position(|call| call.phase == Phase::Free) {
             self.calls[index] = pending;
-            self.pump_terminal(index);
+            slime_rt::debug_write(b"[fabric] terminal delivery queued\n");
             return;
         }
         let Some(index) = self.pending_terminals.iter().position(Option::is_none) else {
@@ -1232,15 +1235,19 @@ fn relay_shared_payload(
     buffer.slot
 }
 
-/// Deliver one terminal record to a client, blocking until it is taken.
+/// Offer one terminal record to a client, without waiting for it to be taken.
 ///
-/// `try_send` cannot carry this: `seL4_NBSend` reports nothing either way, so
-/// the runtime answers `ERR_SUCCESS` for "attempted" and the caller would
-/// retire a record that was discarded. A terminal is the client's only notice
-/// that its call ended, so it must arrive.
+/// Blocking deadlocks here: the client this answers is typically blocked in
+/// `send` on its next request -- exceeding `MAX_CALLS` is exactly that shape --
+/// so a blocking send waits on a peer waiting on us. `seL4_NBSend` delivers
+/// only to a receiver already blocked on the endpoint, which is precisely "the
+/// client has stopped sending and come back to read", and discards otherwise.
 ///
-/// Blocking is safe here because a client with an outstanding call has nothing
-/// to do but wait for its answer, and does so in `recv`.
+/// It reports nothing either way, so this answers `ERR_WOULDBLOCK` rather than
+/// claiming a delivery it cannot observe, and the record stays queued to be
+/// re-offered. Repeating an offer is harmless: a terminal is idempotent, and
+/// the client reads each one exactly once because only one can be transferred
+/// per receive.
 fn try_send_terminal(slot: u32, session: u64, request_id: u64, status: i32) -> i64 {
     let message = WireCallEnvelope {
         magic: CALL_MAGIC,
@@ -1254,7 +1261,10 @@ fn try_send_terminal(slot: u32, session: u64, request_id: u64, status: i32) -> i
         payload_len: 0,
         payload: [0; 16],
     };
-    slime_rt::send(slot, &message.encode(), &[])
+    match slime_rt::try_send(slot, &message.encode(), &[]) {
+        ERR_SUCCESS => ERR_WOULDBLOCK,
+        other => other,
+    }
 }
 
 fn release_caps(caps: &[u64; MAX_CAPS_PER_MSG]) {
