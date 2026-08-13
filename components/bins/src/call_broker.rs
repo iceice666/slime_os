@@ -179,12 +179,20 @@ impl Broker {
             // Nothing moved, so every peer is either idle or blocked in `send`
             // -- and `seL4_NBRecv` takes a message only from a sender already
             // blocked, which yielding does nothing to change. Two non-blocking
-            // peers never rendezvous.
+            // peers never rendezvous, so the broker has to wait in the kernel.
             //
-            // If a call is outstanding, the server's answer is the only thing
-            // that can move the plane, so wait for it in the kernel where its
-            // blocking `send` can find a receiver. Anything else stays polled:
-            // the broker must not block on a peer that may be blocked on it.
+            // It waits on the server, which is the only peer that can owe it
+            // something it has not already asked for. This is not sufficient in
+            // general: a client that blocks in `send` *after* the sweep above
+            // has passed it is invisible until the next sweep, and if the
+            // broker is already parked on the server it will not run one. A
+            // client firing a burst while the server is mid-call wedges on
+            // exactly that window.
+            //
+            // The real answer is a Notification the broker waits on with every
+            // peer badged into it, which is what the object exists for and what
+            // `fabric-service`'s stream side already uses; a single endpoint
+            // cannot express "wake me when any of these speak".
             if !self.server_idle
                 && let Some(slot) = self.server_slot
             {

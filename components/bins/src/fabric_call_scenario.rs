@@ -80,7 +80,6 @@ pub fn run_client_b() {
     );
     expect_terminal(route, 0x000e_0000_0000_0001, 23, STATUS_STALE);
     slime_rt::debug_write(b"[fabric-call-client-b] stale session observed\n");
-
     wait_client_phase(0);
     for request_id in 100..124 {
         send_call(
