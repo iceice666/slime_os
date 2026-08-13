@@ -8,8 +8,12 @@ use slime_rt::{ERR_PEER_DEAD, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
 
 slime_rt::entry!(main);
 
-fn main(startup_arg: u32) {
-    if startup_arg == 0 {
+fn main(_startup_arg: u32) {
+    // The boot plane declares this component but gives it no work, and the
+    // discriminator is the build profile rather than a startup argument: the
+    // root delivers a nonzero action only to the bootstrap instance, so every
+    // participant on every plane read zero and parked.
+    if slime_components::fabric_boot::active() {
         slime_components::fabric_boot::park_only(b"fabric-call-time");
     }
     let mut phases = PhaseBuffer::new(None);
