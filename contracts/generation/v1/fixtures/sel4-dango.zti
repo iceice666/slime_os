@@ -121,7 +121,6 @@
       transferable = true;
     };
     {
-      minted = true;
       name = "dango-echo-stdin";
       rights = [
         "send";
@@ -132,7 +131,6 @@
       transferable = false;
     };
     {
-      minted = true;
       name = "spawn-service-sysinfo-context";
       rights = [
         "send";
@@ -143,7 +141,6 @@
       transferable = false;
     };
     {
-      minted = true;
       name = "spawn-service-echo-context";
       rights = [
         "send";
@@ -248,6 +245,14 @@
           grant = "spawn-service-shared-buffer-factory";
           slot = 1;
         };
+        {
+          grant = "spawn-service-sysinfo-context";
+          slot = 3;
+        };
+        {
+          grant = "spawn-service-echo-context";
+          slot = 6;
+        };
       ];
       dependencies = [
         "init";
@@ -272,6 +277,10 @@
           grant = "dango-d-shared-buffer-factory";
           slot = 5;
         };
+        {
+          grant = "dango-echo-stdin";
+          slot = 4;
+        };
       ];
       dependencies = [
         "init";
@@ -283,7 +292,12 @@
     };
     {
       autostart = true;
-      bindings = [];
+      bindings = [
+        {
+          grant = "spawn-service-sysinfo-context";
+          slot = 0;
+        };
+      ];
       dependencies = [];
       executable = "sysinfo";
       health = "optional";
@@ -292,7 +306,16 @@
     };
     {
       autostart = true;
-      bindings = [];
+      bindings = [
+        {
+          grant = "dango-echo-stdin";
+          slot = 2;
+        };
+        {
+          grant = "spawn-service-echo-context";
+          slot = 0;
+        };
+      ];
       dependencies = [];
       executable = "echo-agent";
       health = "optional";
@@ -320,66 +343,6 @@
         "directoryRead";
       ];
       slot = 1;
-      transferable = false;
-    };
-    {
-      name = "dango-echo-stdin-send";
-      owner = "spawn-service";
-      holder = "dango";
-      rights = [
-        "send";
-      ];
-      slot = 4;
-      transferable = false;
-    };
-    {
-      name = "echo-agent-stdin";
-      owner = "spawn-service";
-      holder = "echo-agent";
-      rights = [
-        "recv";
-      ];
-      slot = 2;
-      transferable = false;
-    };
-    {
-      name = "spawn-service-sysinfo-context-send";
-      owner = "spawn-service";
-      holder = "spawn-service";
-      rights = [
-        "send";
-      ];
-      slot = 3;
-      transferable = false;
-    };
-    {
-      name = "sysinfo-context-half";
-      owner = "spawn-service";
-      holder = "sysinfo";
-      rights = [
-        "recv";
-      ];
-      slot = 0;
-      transferable = false;
-    };
-    {
-      name = "spawn-service-echo-context-send";
-      owner = "spawn-service";
-      holder = "spawn-service";
-      rights = [
-        "send";
-      ];
-      slot = 6;
-      transferable = false;
-    };
-    {
-      name = "echo-agent-context-half";
-      owner = "spawn-service";
-      holder = "echo-agent";
-      rights = [
-        "recv";
-      ];
-      slot = 0;
       transferable = false;
     };
     {
