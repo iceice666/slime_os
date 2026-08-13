@@ -759,6 +759,28 @@ declares five and visibility six, and the same binary now picks by manifest
 rather than by build flag. A manifest declaring no fabric graph emits this one
 table too, so `init.rs` compiles against every graph.
 
+**A concrete deletion is identified and scoped: `endpointCreate`
+(2026-08-13).** The cutover removed the `EndpointCreate` operation, so the root
+has no resource to install for that right — but the grant survives in eleven
+fixtures, and `declared_resource` refuses it with `SLIME_GRAPH FAIL binding
+init-endpoint-factory names no installable resource`. It is the single cause of
+at least three red plane gates (`sel4_input_check`, `sel4_spawn_check`,
+`sel4_supervision_check`, all failing on that exact marker) and of
+`generation_check`'s `sel4_component_graph_check` arm. No component reads it:
+`ENDPOINT_FACTORY_SLOT` appears only in generated boot-layout constants, never
+in a call site. It is exactly the "generic rights vocabulary where seL4 cap
+rights now apply" this item names.
+
+Deleting the nineteen grants and their bindings across the eleven fixtures was
+attempted and reverted, because the right is *also* a B10 boot-layout role:
+`scripts/build/boot_layout.py` maps `endpoint-factory` in ten frozen layout
+fixtures that `just sel4_boot_layout_check` pins byte-for-byte, and the builder
+fails `KeyError: 'endpoint-factory'` without it. So the deletion is
+fixtures + `boot_layout.py` + `BOOT_LAYOUT_ROLE_ENDPOINT_FACTORY` in
+`boot-contracts` + the generated constants + a `just sel4_boot_layout_bless`,
+in one change. That is a well-understood unit of work, not an open question —
+and it is worth doing early, because it unblocks several gates at once.
+
 **Exit condition:** Exact-source guards find no deleted model symbols or build
 flags; every surviving syscall is either a direct seL4 primitive or a narrowly
 owned root mechanism with a declared v5 capability; every fixture uses v5.
