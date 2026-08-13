@@ -113,15 +113,6 @@
       target = "spawn-service";
       transferable = false;
     };
-    {
-      name = "init-endpoint-factory";
-      rights = [
-        "endpointCreate";
-      ];
-      source = "init";
-      target = "init";
-      transferable = false;
-    };
   ];
   health = {
     bootAttempts = 3;
@@ -135,10 +126,6 @@
     {
       autostart = true;
       bindings = [
-        {
-          grant = "init-endpoint-factory";
-          slot = 0;
-        };
         {
           grant = "init-console";
           slot = 1;
@@ -204,10 +191,6 @@
         {
           grant = "init-spawn-service-echo";
           slot = 2;
-        };
-        {
-          grant = "init-endpoint-factory";
-          slot = 3;
         };
         {
           grant = "spawn-service-shared-buffer-factory";

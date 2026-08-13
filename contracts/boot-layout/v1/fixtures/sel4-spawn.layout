@@ -1,5 +1,4 @@
-[layout] path=init slots=3 max=64
+[layout] path=init slots=2 max=64
 [layout] 1 executable console 0x10008
 [layout] 2 executable sysinfo 0x10008
-[layout] 3 endpoint-factory - 0x20000
 [layout] end

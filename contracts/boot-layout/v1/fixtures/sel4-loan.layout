@@ -1,7 +1,4 @@
-[layout] path=init slots=5 max=64
-[layout] 0 endpoint - 0x1
+[layout] path=init slots=2 max=64
 [layout] 1 executable sample-receiver 0x10008
 [layout] 2 shared-buffer-factory - 0x1000000
-[layout] 3 endpoint - 0x1
-[layout] 4 endpoint - 0x3
 [layout] end

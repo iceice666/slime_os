@@ -737,33 +737,6 @@
       transferable = true;
     };
     {
-      name = "dango-endpoint-factory";
-      rights = [
-        "endpointCreate";
-      ];
-      source = "init";
-      target = "dango";
-      transferable = false;
-    };
-    {
-      name = "spawn-service-endpoint-factory";
-      rights = [
-        "endpointCreate";
-      ];
-      source = "init";
-      target = "spawn-service";
-      transferable = false;
-    };
-    {
-      name = "endpoint-factory";
-      rights = [
-        "endpointCreate";
-      ];
-      source = "init";
-      target = "init";
-      transferable = false;
-    };
-    {
       name = "console-output";
       rights = [
         "send";
@@ -996,15 +969,6 @@
       transferable = false;
     };
     {
-      name = "fabric-endpoint-factory";
-      rights = [
-        "endpointCreate";
-      ];
-      source = "init";
-      target = "fabric-service";
-      transferable = false;
-    };
-    {
       name = "fabric-publisher-control";
       rights = [
         "send";
@@ -1202,24 +1166,6 @@
       transferable = false;
     };
     {
-      name = "fabric-call-worker-endpoint-factory";
-      rights = [
-        "endpointCreate";
-      ];
-      source = "init";
-      target = "fabric-call-worker";
-      transferable = false;
-    };
-    {
-      name = "fabric-op-worker-endpoint-factory";
-      rights = [
-        "endpointCreate";
-      ];
-      source = "init";
-      target = "fabric-op-worker";
-      transferable = false;
-    };
-    {
       name = "fabric-call-worker-shared-buffer-factory";
       rights = [
         "bufferCreate";
@@ -1273,10 +1219,6 @@
       autostart = true;
       bindings = [
         {
-          grant = "endpoint-factory";
-          slot = 3;
-        };
-        {
           grant = "fabric-call-worker-executable";
           slot = 1;
         };
@@ -1321,10 +1263,6 @@
         {
           grant = "dango-cwd-root";
           slot = 2;
-        };
-        {
-          grant = "dango-endpoint-factory";
-          slot = 3;
         };
         {
           grant = "dango-shared-buffer-factory";
@@ -1463,10 +1401,6 @@
         {
           grant = "spawn-service-echo";
           slot = 1;
-        };
-        {
-          grant = "spawn-service-endpoint-factory";
-          slot = 3;
         };
         {
           grant = "spawn-service-rpc";
@@ -1713,10 +1647,6 @@
           slot = 6;
         };
         {
-          grant = "fabric-endpoint-factory";
-          slot = 1;
-        };
-        {
           grant = "fabric-intruder-control";
           slot = 7;
         };
@@ -1785,10 +1715,6 @@
       autostart = true;
       bindings = [
         {
-          grant = "fabric-call-worker-endpoint-factory";
-          slot = 1;
-        };
-        {
           grant = "fabric-call-worker-shared-buffer-factory";
           slot = 2;
         };
@@ -1804,10 +1730,6 @@
     {
       autostart = true;
       bindings = [
-        {
-          grant = "fabric-op-worker-endpoint-factory";
-          slot = 1;
-        };
       ];
       dependencies = [
         "fabric-service";

@@ -617,15 +617,6 @@
       transferable = false;
     };
     {
-      name = "init-endpoint-factory";
-      rights = [
-        "endpointCreate";
-      ];
-      source = "init";
-      target = "init";
-      transferable = false;
-    };
-    {
       name = "init-shared-buffer-factory";
       rights = [
         "bufferCreate";
@@ -811,15 +802,6 @@
       transferable = false;
     };
     {
-      name = "fabric-service-endpoint-factory";
-      rights = [
-        "endpointCreate";
-      ];
-      source = "init";
-      target = "fabric-service";
-      transferable = false;
-    };
-    {
       name = "fabric-service-shared-buffer-factory";
       rights = [
         "bufferCreate";
@@ -858,10 +840,6 @@
     {
       autostart = true;
       bindings = [
-        {
-          grant = "init-endpoint-factory";
-          slot = 0;
-        };
         {
           grant = "init-fabric-call-client";
           slot = 12;
@@ -933,10 +911,6 @@
         {
           grant = "init-shared-buffer-factory";
           slot = 1;
-        };
-        {
-          grant = "fabric-service-endpoint-factory";
-          slot = 21;
         };
         {
           grant = "fabric-service-shared-buffer-factory";
@@ -1152,10 +1126,6 @@
     {
       autostart = true;
       bindings = [
-        {
-          grant = "fabric-service-endpoint-factory";
-          slot = 0;
-        };
         {
           grant = "fabric-service-shared-buffer-factory";
           slot = 1;
@@ -1548,16 +1518,6 @@
       transferable = false;
     };
     {
-      name = "fabric-call-worker-endpoint-factory";
-      owner = "fabric-service";
-      holder = "fabric-call-worker";
-      rights = [
-        "endpointCreate";
-      ];
-      slot = 0;
-      transferable = false;
-    };
-    {
       name = "fabric-call-worker-shared-buffer-factory";
       owner = "fabric-service";
       holder = "fabric-call-worker";
@@ -1609,16 +1569,6 @@
         "recv";
       ];
       slot = 5;
-      transferable = false;
-    };
-    {
-      name = "fabric-op-worker-endpoint-factory";
-      owner = "fabric-service";
-      holder = "fabric-op-worker";
-      rights = [
-        "endpointCreate";
-      ];
-      slot = 0;
       transferable = false;
     };
     {

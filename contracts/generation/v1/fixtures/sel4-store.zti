@@ -50,15 +50,6 @@
       target = "sel4-store-probe-idle";
       transferable = false;
     };
-    {
-      name = "init-endpoint-factory";
-      rights = [
-        "endpointCreate";
-      ];
-      source = "init";
-      target = "init";
-      transferable = false;
-    };
   ];
   health = {
     bootAttempts = 3;
@@ -70,10 +61,6 @@
     {
       autostart = true;
       bindings = [
-        {
-          grant = "init-endpoint-factory";
-          slot = 2;
-        };
         {
           grant = "init-sel4-store-probe";
           slot = 1;

@@ -47,15 +47,6 @@
       target = "sysinfo";
       transferable = false;
     };
-    {
-      name = "init-endpoint-factory";
-      rights = [
-        "endpointCreate";
-      ];
-      source = "init";
-      target = "init";
-      transferable = false;
-    };
   ];
   health = {
     bootAttempts = 3;
@@ -72,10 +63,6 @@
         {
           grant = "init-console";
           slot = 1;
-        };
-        {
-          grant = "init-endpoint-factory";
-          slot = 3;
         };
         {
           grant = "init-sysinfo";

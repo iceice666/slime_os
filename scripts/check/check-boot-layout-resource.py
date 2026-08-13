@@ -335,7 +335,6 @@ def check_bootstrap_binding_projection() -> None:
         "CONSOLE_OUTPUT_SLOT": bindings["console-output"],
         "SPAWN_SERVICE_SLOT": bindings["spawn-service"],
         "SERVICE_SPAWN_SLOT": bindings["service-spawn"],
-        "ENDPOINT_FACTORY_SLOT": roles["endpoint-factory"],
         "SHARED_BUFFER_FACTORY_SLOT": roles["shared-buffer-factory"],
     }
     for constant, slot in expected.items():
