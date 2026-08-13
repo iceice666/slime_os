@@ -649,6 +649,47 @@ stream broker's ring path (`terminal delivery ring backpressured`) that no call
 emitter produces; it now asserts `terminal delivery queued`, which is the call
 broker's equivalent, so the chain can fail honestly once the mechanism lands.
 
+**Both halves landed, and the plane went from 14 markers to 57 (2026-08-13).**
+
+*The multi-source wait.* One Notification, every call peer badged into it at
+its own slot, the broker holding the single wait capability — observed at
+CSpace 64–67 with one waiter. A peer signals *before* its blocking send, so the
+wake is already pending when the broker reaches its wait and the next sweep
+finds that sender blocked. Two one-signaller rules had to go, in
+`build-generation.py` and in `boot-contracts`: both required a notification
+grant to have exactly one signal and one wait binding, making a grant a *pair*
+and foreclosing the only arrangement that answers "wake me when any of these
+speak". The rule is now one waiter, at least one signaller, and the declared
+source among them; per-holder slot uniqueness already keeps the badges apart.
+
+*Receiver-confirmed retirement.* `KIND_TERMINAL_ACK` is in
+`contracts/fabric-call/v1/`, because a wire fact belongs in the contract. The
+client names the request it settled and echoes the status, so an ack cannot
+retire a record for another outcome, and matching on the id means an
+out-of-order or repeated ack cannot drop a terminal the client has not seen.
+Guessing was tried twice and *lost* ground both times — keyed on the client's
+next request, 25 markers down to 23; keyed on an `offered` flag, down to 19 —
+which is the third time in this cutover that inferring delivery from
+`seL4_NBSend` has failed.
+
+Three further defects fell out of running it:
+
+- **An ack for a stale-session terminal was refused as a stale call**, which
+  queued another terminal, which was acked, without end. An ack settles a record
+  and never opens one, so it is handled before the session guard.
+- **The broker parked on the wake while holding a terminal.** The client waiting
+  for it is in `recv` and never signals, so the wake could not arrive and the
+  terminal was the very thing that would let the client run. It yields instead
+  whenever a terminal is owed. This alone took the plane from 33 to 57.
+- **The burst had to be chunked.** Client B fired 24 requests before reading
+  any; a native send rendezvous, and the broker cannot answer a client that is
+  still sending. Four chunks of six preserve the property — six still exceeds
+  the four calls admitted in flight — while letting the broker answer.
+
+`just sel4_call_check` still fails, now inside the backpressure burst rather
+than at admission. Ordering the offers by request id was measured and *not*
+kept: it gives no gain on its own and regresses with a `terminal mismatch`.
+
 Three cheaper explanations were tested and refuted rather than argued away: both
 clients reach the barrier and block; the generation installs the edge
 symmetrically (`fabric-call-client` slot 4 / CSpace 37, `fabric-call-client-b`
