@@ -138,9 +138,12 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
             r"\[fabric-call-client-b\] unrelated route intact",
             r"\[fabric-call-server\] injected peer death",
             r"\[fabric\] call peer death propagated",
+            # The client learns of the death from the terminal the broker sends
+            # while reclaiming, so its observation necessarily precedes the
+            # broker finishing that reclamation.
+            r"\[fabric-call-client\] peer death distinct",
             r"\[fabric\] call state reclaimed",
             r"\[fabric\] call plane complete",
-            r"\[fabric-call-client\] peer death distinct",
             r"\[fabric-call-time\] bounded time completed",
             r"\[init\] call plane complete",
             r"SLIME_GRAPH component exit task=\d+ status=0",
@@ -178,11 +181,13 @@ SPAWN_PATTERN = re.compile(
     r"grants=(\d+) endpoints=(\d+) notifications=(\d+) handle=(\d+)"
 )
 EXIT_PATTERN = re.compile(r"SLIME_GRAPH component exit task=(\d+) status=(-?\d+)")
+# Participants precede the broker: it is granted a supervision handle naming
+# each of them, and a handle cannot exist before its task.
 EXPECTED_SPAWNED = (
-    "fabric-service",
     "fabric-call-client",
     "fabric-call-client-b",
     "fabric-call-server",
+    "fabric-service",
     "fabric-call-time",
 )
 
@@ -369,18 +374,18 @@ def check_task_lifecycle(transcript: str) -> None:
     if exits.get(parent) != [0]:
         fail(f"init task {parent} exit statuses were {exits.get(parent, [])}, expected [0]")
 
-    exports = re.findall(
-        rf"SLIME_GRAPH capability exported task={parent} id=(\d+) kind=supervision "
-        r"rights=0x40000 retain=0",
-        transcript,
-    )
-    imports = re.findall(
-        r"SLIME_GRAPH capability imported task=\d+ id=(\d+) kind=supervision "
-        r"rights=0x40000 retain=0",
-        transcript,
-    )
-    if len(exports) != 3 or sorted(exports) != sorted(imports):
-        fail(f"parent export/import ids were {exports!r}/{imports!r}, expected 3 matching introductions")
+    # Supervision is delegated as part of the broker's spawn rather than a
+    # later export/import pair, so the evidence is the grant count on that
+    # spawn: the shared-buffer factory plus one handle per participant.
+    broker = [match for match in spawns if match[2] == "fabric-service"]
+    if len(broker) != 1:
+        fail(f"expected exactly one fabric-service spawn, saw {len(broker)}")
+    grants = int(broker[0][3])
+    if grants != 4:
+        fail(
+            f"fabric-service was spawned with grants={grants}, expected 4 "
+            "(shared-buffer factory plus one supervision handle per participant)"
+        )
 
 
 def check_transcript(transcript: str) -> None:

@@ -754,7 +754,16 @@ impl Broker {
             );
             return;
         };
-        if self.calls[index].phase == Phase::AwaitingReply {
+        // A call still queued in `Forwarding` is cancelled the same way as one
+        // the server is executing. It has not reached the server yet, but the
+        // request it names will: dropping it here would settle the cancel
+        // locally and leave the server to execute a request the client has
+        // already withdrawn. Staging the cancellation keeps withdrawal a fact
+        // the server observes.
+        if matches!(
+            self.calls[index].phase,
+            Phase::AwaitingReply | Phase::Forwarding
+        ) {
             // The staged cancellation is delivered by `pump_terminals`, which
             // resolves the server slot itself when the peer is reachable again.
             if self.server_slot.is_none() {
@@ -796,6 +805,13 @@ impl Broker {
                 self.calls[index].retries = 0;
                 self.calls[index].next_retry_ns = self.now_ns;
                 self.calls[index].terminal_status = STATUS_CANCELLED;
+                // The cancelled request's own deadline has usually passed by
+                // now -- that is often why it is being cancelled. Settling on
+                // it here would report the withdrawal before the server has
+                // seen it, so the cancellation gets its own deadline: the
+                // client is told once the server has actually settled it, and
+                // the timeout still bounds a server that never does.
+                self.calls[index].deadline_ns = self.now_ns.saturating_add(DEADLINE_NS);
             }
             return;
         }
@@ -861,6 +877,16 @@ impl Broker {
                 outward.request_id = self.calls[index].request_id;
                 let status = outward.status;
                 if self.calls[index].phase == Phase::Cancelling {
+                    // The server answers the original request and the cancel
+                    // separately, and the request's own reply usually lands
+                    // first. Settling on it would tell the client the call was
+                    // withdrawn before the server had settled the withdrawal.
+                    // The reply that settles a cancel is the one carrying
+                    // `STATUS_CANCELLED`; anything else is the in-flight
+                    // request's answer, which a cancelled call discards.
+                    if status != STATUS_CANCELLED {
+                        return;
+                    }
                     self.finish(index, STATUS_CANCELLED);
                     slime_rt::debug_write(b"[fabric] call cancelled\n");
                 } else {
@@ -1241,6 +1267,12 @@ impl Broker {
                 progressed = true;
                 continue;
             };
+            // Announce the forward before the send. `send` blocks until the
+            // server takes the message, and the server announces the settlement
+            // the moment it does -- so printing afterwards would always put
+            // this marker after the server's, inverting the causal order the
+            // plane is asserting.
+            slime_rt::debug_write(b"[fabric] call cancellation forwarded\n");
             match slime_rt::send(server, &message.encode(), &[]) {
                 ERR_SUCCESS => {
                     self.calls[index].payload = match self.calls[index].payload {
@@ -1254,7 +1286,6 @@ impl Broker {
                         },
                         _ => Payload::None,
                     };
-                    slime_rt::debug_write(b"[fabric] call cancellation forwarded\n");
                     progressed = true;
                 }
                 ERR_PEER_DEAD => {

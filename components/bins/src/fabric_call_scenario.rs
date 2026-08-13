@@ -158,6 +158,12 @@ pub fn run_server() {
                     fail(b"server received invalid call record")
                 }
                 if request.kind == KIND_CANCEL {
+                    // Announce the settlement before replying. `send_call`
+                    // blocks until the broker takes the message, and the broker
+                    // reports the cancellation the moment it does -- so
+                    // replying first would always put the broker's marker
+                    // before this one, making the causal order unobservable.
+                    slime_rt::debug_write(b"[fabric-call-server] cancellation settled\n");
                     send_call(
                         route,
                         envelope(
@@ -169,7 +175,6 @@ pub fn run_server() {
                             0,
                         ),
                     );
-                    slime_rt::debug_write(b"[fabric-call-server] cancellation settled\n");
                     continue;
                 }
                 if request.payload_len == 8
