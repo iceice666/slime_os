@@ -114,6 +114,15 @@ pub struct Broker {
     now_ns: u64,
     pending_terminals: [Option<Call>; MAX_PENDING_TERMINALS],
     time_closed: bool,
+    /// Whether the server is back in `recv` rather than executing a call.
+    ///
+    /// A native `send` blocks until the peer receives, and this server handles
+    /// one call to completion before returning to its endpoint. Sending to it
+    /// while it is mid-call blocks this broker against a peer that is itself
+    /// blocked sending its reply here, which is a deadlock rather than
+    /// backpressure. Cleared when a request is forwarded, set when its answer
+    /// arrives.
+    server_idle: bool,
 }
 
 impl Broker {
@@ -136,6 +145,7 @@ impl Broker {
             now_ns: 0,
             pending_terminals: [None; MAX_PENDING_TERMINALS],
             time_closed: false,
+            server_idle: true,
         }
     }
 
@@ -497,9 +507,7 @@ impl Broker {
         // backpressure. A call left in `Phase::Forwarding` is retried by
         // `pump_terminals` on a later pass, which is exactly the queue this
         // needs -- the server's own reply is what frees the slot.
-        if self.calls.iter().enumerate().any(|(other, call)| {
-            other != index && matches!(call.phase, Phase::AwaitingReply | Phase::Cancelling)
-        }) {
+        if !self.server_idle {
             self.calls[index].phase = Phase::Forwarding;
             return;
         }
@@ -574,6 +582,9 @@ impl Broker {
                     Phase::AwaitingReply
                 };
                 self.calls[index].payload = next_payload;
+                // The server is now executing this call and will not receive
+                // again until it has answered.
+                self.server_idle = false;
                 if was_cancelling {
                     slime_rt::debug_write(b"[fabric] call cancellation forwarded\n");
                 } else {
@@ -622,10 +633,12 @@ impl Broker {
             return;
         };
         if self.calls[index].phase == Phase::AwaitingReply {
-            let Some(server) = self.server_slot else {
+            // The staged cancellation is delivered by `pump_terminals`, which
+            // resolves the server slot itself when the peer is reachable again.
+            if self.server_slot.is_none() {
                 self.finish(index, STATUS_PEER_DEAD);
                 return;
-            };
+            }
             let cancel = WireCallEnvelope {
                 magic: CALL_MAGIC,
                 version: FORMAT_VERSION,
@@ -638,36 +651,29 @@ impl Broker {
                 payload_len: 0,
                 payload: [0; 16],
             };
-            match slime_rt::send(server, &cancel.encode(), &[]) {
-                ERR_SUCCESS => {
-                    self.calls[index].phase = Phase::Cancelling;
-                    self.calls[index].retries = 0;
-                    self.calls[index].terminal_status = STATUS_CANCELLED;
-                    slime_rt::debug_write(b"[fabric] call cancellation forwarded\n");
-                }
-                ERR_WOULDBLOCK => {
-                    let outstanding = self.calls[index].payload;
-                    self.calls[index].phase = Phase::Cancelling;
-                    self.calls[index].payload = match outstanding {
-                        Payload::SharedOutstanding {
-                            buffer_slot,
-                            loan_id,
-                        } => Payload::CancellingShared {
-                            buffer_slot,
-                            loan_id,
-                            message: cancel,
-                        },
-                        _ => Payload::Inline(cancel),
-                    };
-                    self.calls[index].retries = 1;
-                    self.calls[index].next_retry_ns = self.now_ns.saturating_add(RETRY_INTERVAL_NS);
-                    self.calls[index].terminal_status = STATUS_CANCELLED;
-                }
-                ERR_PEER_DEAD => {
-                    self.server_slot = None;
-                    self.finish(index, STATUS_PEER_DEAD);
-                }
-                _ => fail(b"call cancel forward"),
+            // The server is single-threaded and this call is the one it is
+            // working on, so it is not in `recv`: a blocking send here would
+            // wait on a peer that is waiting on us. Stage the cancellation as
+            // the call's payload and let `pump_terminals` deliver it once the
+            // server comes back around, which is the same queue a deferred
+            // forward uses.
+            {
+                let outstanding = self.calls[index].payload;
+                self.calls[index].phase = Phase::Cancelling;
+                self.calls[index].payload = match outstanding {
+                    Payload::SharedOutstanding {
+                        buffer_slot,
+                        loan_id,
+                    } => Payload::CancellingShared {
+                        buffer_slot,
+                        loan_id,
+                        message: cancel,
+                    },
+                    _ => Payload::Inline(cancel),
+                };
+                self.calls[index].retries = 0;
+                self.calls[index].next_retry_ns = self.now_ns;
+                self.calls[index].terminal_status = STATUS_CANCELLED;
             }
             return;
         }
@@ -691,6 +697,9 @@ impl Broker {
             value if value < 0 => fail(b"server recv"),
             value => value as usize,
         };
+        // Anything received from the server means it finished a call and went
+        // back to its endpoint, so it is reachable by a blocking send again.
+        self.server_idle = true;
         let magic = (length >= 4).then(|| u32::from_le_bytes(bytes[..4].try_into().unwrap()));
         match magic {
             Some(CALL_MAGIC) => {
@@ -1038,13 +1047,53 @@ impl Broker {
             }
             progressed |= self.pump_terminal(index);
         }
-        // Retry one call deferred because the server was already busy. The
-        // server is single-threaded and answers one request at a time, so this
-        // resumes exactly when its reply has freed the slot.
-        if !self
-            .calls
-            .iter()
-            .any(|call| matches!(call.phase, Phase::AwaitingReply | Phase::Cancelling))
+        // Deliver a staged cancellation, but only once the server's reply to
+        // the cancelled request has come back: until then it is executing that
+        // call, not sitting in `recv`, and a blocking send would wait on a peer
+        // that is waiting on us. `settle_outstanding_request` clears the
+        // payload when the reply lands, so a `Cancelling` call still holding a
+        // staged message is one whose server has not answered yet.
+        for index in 0..self.calls.len() {
+            if self.calls[index].phase != Phase::Cancelling || !self.server_idle {
+                continue;
+            }
+            let (Payload::Inline(message) | Payload::CancellingShared { message, .. }) =
+                self.calls[index].payload
+            else {
+                continue;
+            };
+            let Some(server) = self.server_slot else {
+                self.finish(index, STATUS_PEER_DEAD);
+                progressed = true;
+                continue;
+            };
+            match slime_rt::send(server, &message.encode(), &[]) {
+                ERR_SUCCESS => {
+                    self.calls[index].payload = match self.calls[index].payload {
+                        Payload::CancellingShared {
+                            buffer_slot,
+                            loan_id,
+                            ..
+                        } => Payload::SharedOutstanding {
+                            buffer_slot,
+                            loan_id,
+                        },
+                        _ => Payload::None,
+                    };
+                    slime_rt::debug_write(b"[fabric] call cancellation forwarded\n");
+                    progressed = true;
+                }
+                ERR_PEER_DEAD => {
+                    self.server_slot = None;
+                    self.finish(index, STATUS_PEER_DEAD);
+                    progressed = true;
+                }
+                _ => fail(b"call cancel forward"),
+            }
+        }
+        // Retry one call deferred because the server was busy. Its reply is
+        // what makes the server reachable again, so this resumes exactly then.
+        if self.server_idle
             && let Some(index) = self
                 .calls
                 .iter()
@@ -1150,6 +1199,15 @@ fn relay_shared_payload(
     buffer.slot
 }
 
+/// Deliver one terminal record to a client, blocking until it is taken.
+///
+/// `try_send` cannot carry this: `seL4_NBSend` reports nothing either way, so
+/// the runtime answers `ERR_SUCCESS` for "attempted" and the caller would
+/// retire a record that was discarded. A terminal is the client's only notice
+/// that its call ended, so it must arrive.
+///
+/// Blocking is safe here because a client with an outstanding call has nothing
+/// to do but wait for its answer, and does so in `recv`.
 fn try_send_terminal(slot: u32, session: u64, request_id: u64, status: i32) -> i64 {
     let message = WireCallEnvelope {
         magic: CALL_MAGIC,
