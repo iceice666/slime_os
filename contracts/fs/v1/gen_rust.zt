@@ -220,4 +220,4 @@ render :: Protocol -> { rust : Text; python : Text; }
     then { rust = rustBindings protocol; python = pythonBindings protocol; }
     else { rust = "INVALID_FS_SCHEMA"; python = "INVALID_FS_SCHEMA"; };
 
-{ render = render; }
+{ render =; }

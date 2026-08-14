@@ -1,156 +1,188 @@
-# Slime OS syscall ABI
+# Slime OS component ABI
 
-The canonical semantic syscall surface is `kernel/src/syscall/mod.rs`; the
-userspace constants and wrappers in `components/runtime/src/syscall.rs` mirror
-it. Update this file in the same change that changes a syscall number,
-argument, return convention, or architecture-specific calling convention.
+The canonical surface is `components/runtime/src/syscall.rs` (the operations a
+component may name), `components/runtime/src/syscall/sel4_transport.rs` (how
+each one reaches the root), and `slime-root/src/main.rs`'s dispatcher plus
+`slime-root/src/ipc.rs` (what answers). Update this file in the same change that
+adds, deletes, or renumbers an operation label, changes an argument packing, or
+changes the reply convention.
 
-## Semantic syscall table
+There is no Slime kernel and no Slime trap vector. seL4 is the kernel; every
+Slime operation is either a native seL4 invocation or one bounded `seL4_Call` on
+a badged endpoint the generation granted. The retired custom kernel's
+trap-numbered surface (`int 0x80`, `SYS_*` 0–30, `SYS_ENDPOINT_CREATE`,
+`SYS_STORE_TRANSACT`, `SYS_GENERATION_TRANSACT`, `SYS_GENERATION_RECEIVE`,
+`SYS_RECOVERY_RECONSTRUCT`, `SYS_HEALTH_CONFIRM`, `SYS_WAIT`, `SYS_CAP_TRANSFER`)
+was deleted by B39–B50. The product ABI identity is `SLIME_AARCH64_SEL4_V1`
+(`contracts/target-profile/v1/schema.zt`); the three trap-based ABI numbers
+remain in that contract as unadmitted identities no image is built for.
 
-Arguments use the semantic names `a0` through `a4`; each architecture maps
-those positions to registers in its calling convention. Pointer arguments name
-userspace memory, and capability arguments name slots in the caller's
-capability table.
+## Two paths
 
-| Number | Constant | argc | Arguments and meaning | Success/error convention |
-| --- | --- | --- | --- | --- |
-| 0 | `SYS_YIELD` | 0 | Yield the current task to the scheduler. | Returns after the task is scheduled again; `rax` retains syscall number `0`, which is successful completion. |
-| 1 | `SYS_SEND` | 5 | `a0=endpoint_slot`, `a1=payload_ptr`, `a2=payload_len`, `a3=cap_slots_ptr`, `a4=cap_count`; send at most `MAX_MSG` bytes and move at most `MAX_CAPS_PER_MSG` transferable capabilities. | `0` on delivery; otherwise a negative error. A failed send leaves attached capabilities with the sender. |
-| 2 | `SYS_RECV` | 3 | `a0=endpoint_slot`, `a1=payload_out`, `a2=cap_slots_out`; receive one bounded message and its transferred capability slots. | Nonnegative payload byte count; otherwise a negative error. |
-| 3 | `SYS_EXIT` | 1 | `a0=status`; terminate the current task with an exit status. | Does not return. |
-| 4 | `SYS_SPAWN` | 3 | `a0=executable_slot`, `a1=grants_ptr`, `a2=grant_count`; start the executable with non-consuming, narrow capability grants. | Primary return is the nonnegative child task id and auxiliary return is the supervision capability slot; otherwise the primary return is a negative error. |
-| 5 | `SYS_DEBUG_WRITE` | 2 | `a0=bytes_ptr`, `a1=byte_len`; write mapped bytes to the kernel diagnostic outputs. | Nonnegative byte count written; otherwise a negative error. |
-| 6 | `SYS_BLOCK_TRANSACT` | 3 | `a0=block_slot`, `a1=request_ptr`, `a2=reply_out`; submit one fixed-size block-protocol request. | `0` means delivered; the block operation outcome is encoded in the reply buffer. A negative value is a syscall-level error. |
-| 7 | `SYS_STORE_TRANSACT` | 3 | `a0=store_slot`, `a1=request_ptr`, `a2=reply_out`; submit one fixed-size object-store request. | `0` means delivered; the store operation outcome is encoded in the reply buffer. A negative value is a syscall-level error. |
-| 8 | `SYS_HEALTH_CONFIRM` | 1 | `a0=generation_control_slot`; confirm the currently running pending generation. | `0` on confirmation; otherwise a negative error. |
-| 9 | `SYS_UNHEALTHY` | 0 | Terminate the current task with the unhealthy reason. | Does not return. |
-| 10 | `SYS_RECOVERY_RECONSTRUCT` | 3 | `a0=generation_control_slot`, `a1=block_slot`, `a2=flags`; scrub and reconstruct BootState on the authorized repair target. | `0` on reconstruction; otherwise a negative error. |
-| 11 | `SYS_ENDPOINT_CREATE` | 1 | `a0=factory_slot`; mint a bounded endpoint pair through an `EndpointFactory`. | Primary and auxiliary returns are the two nonnegative endpoint capability slots; otherwise the primary return is a negative error. |
-| 12 | `SYS_SUPERVISION_STATUS` | 1 | `a0=supervision_slot`; poll a child and consume the handle when a terminal result is returned. | `-3` means still live. Nonnegative primary values are typed statuses: `0` exit, `1` fault, `2` timeout, `3` peer loss, `4` unhealthy; auxiliary return carries exit status or fault detail where applicable. Other negative values are errors. |
-| 13 | `SYS_CAP_DROP` | 1 | `a0=capability_slot`; release the caller's capability. | `0` on release; otherwise a negative error. |
-| 14 | `SYS_DIRECTORY_INSPECT` | 4 | `a0=directory_slot`, `a1=required_rights`, `a2=root_out`, `a3=scope_out`; verify rights and return the immutable root plus bounded scope. | Nonnegative scope byte length; otherwise a negative error. |
-| 15 | `SYS_DIRECTORY_DERIVE` | 4 | `a0=directory_slot`, `a1=relative_path_ptr`, `a2=path_len`, `a3=rights`; derive a subdirectory-scoped, narrow-rights capability. | Nonnegative derived capability slot; otherwise a negative error. |
-| 16 | `SYS_DIRECTORY_COMMIT` | 3 | `a0=directory_slot`, `a1=expected_root_ptr`, `a2=new_root_ptr`; atomically replace the unscoped namespace root. | `0` on commit, `-3` when the expected root is stale, or another negative error. |
-| 17 | `SYS_INPUT_READ` | 1 | `a0=input_slot`; read one decoded keyboard event through explicit input authority. | Primary `0` with the encoded event in the auxiliary return, `-3` when no event is ready, or another negative error. |
-| 18 | `SYS_GENERATION_TRANSACT` | 3 | `a0=generation_control_slot`, `a1=request_ptr`, `a2=reply_out`; submit one fixed-size generation-management request. | `0` means delivered; the management outcome is encoded in the reply buffer. A negative value is a syscall-level error. |
-| 19 | `SYS_GENERATION_RECEIVE` | 2 | `a0=receiver_block_slot`, `a1=source_block_slot`; receive and validate a generation from an authorized transfer source. | `0` on completed receive; otherwise a negative error. |
-| 20 | `SYS_WAIT` | 2 | `a0=descriptors_ptr`, `a1=count`; park until one of up to `MAX_WAIT_SOURCES` endpoint, send-capacity, input, or supervision sources may be ready. | `0` after wake or immediate readiness; callers re-poll their sources. Malformed input returns a negative error. |
-| 21 | `SYS_SHARED_BUFFER_CREATE` | 3 | `a0=factory_slot`, `a1=pages`, `a2=writable`; allocate a quota-charged shared buffer. | Primary return is the nonnegative capability slot and auxiliary return is the kernel-assigned buffer identity; otherwise the primary return is a negative error. |
-| 22 | `SYS_SHARED_BUFFER_RELEASE` | 1 | `a0=buffer_slot`; release the holder's shared buffer and invalidate the capability. | `0` on release; otherwise a negative error. |
-| 23 | `SYS_SHARED_BUFFER_MAP` | 5 | `a0=buffer_slot`, `a1=virtual_base`, `a2=offset`, `a3=length`, `a4=writable`; map an exact page-aligned subrange. | `0` on mapping; otherwise a negative error. |
-| 24 | `SYS_SHARED_BUFFER_UNMAP` | 2 | `a0=buffer_or_loan_slot`, `a1=virtual_base`; remove the caller's exact mapping and return its mapping charge. | `0` on unmap; otherwise a negative error. |
-| 25 | `SYS_SHARED_BUFFER_SEAL` | 1 | `a0=buffer_slot`; irreversibly seal a buffer read-only and downgrade live writable mappings. | `0` on seal; otherwise a negative error. |
-| 26 | `SYS_SHARED_BUFFER_LOAN` | 4 | `a0=buffer_slot`, `a1=receiver_supervision_slot`, `a2=offset`, `a3=length`; create a receiver-bound, single-return loan of a sealed subrange. | Primary return is the nonnegative loan capability slot and auxiliary return is the kernel-assigned loan identity; otherwise the primary return is a negative error. |
-| 27 | `SYS_SHARED_BUFFER_LOAN_MAP` | 4 | `a0=loan_slot`, `a1=virtual_base`, `a2=offset`, `a3=length`; map a read-only subrange relative to the loan. | `0` on mapping; otherwise a negative error. |
-| 28 | `SYS_SHARED_BUFFER_RETURN` | 1 | `a0=loan_slot`; settle the receiver's loan once and invalidate its capability. | `0` on return; otherwise a negative error. |
-| 29 | `SYS_SHARED_BUFFER_REVOKE` | 2 | `a0=buffer_slot`, `a1=loan_id`; settle an outstanding loan as its lender. | `0` on revoke; otherwise a negative error. |
-| 30 | `SYS_CAP_TRANSFER` | 3 | `a0=endpoint_slot`, `a1=capability_slot`, `a2=descriptor_ptr`; consume one capability and move a descriptor-bound, narrow-rights copy to the endpoint peer. | `0` on delivery; otherwise a negative error and the source capability remains intact. |
+**Native.** Component-to-component traffic is direct seL4. `send`, `call`,
+`reply`, `try_send`, `recv`, `recv_blocking` invoke a declared Endpoint;
+`notification_signal`, `notification_wait`, `notification_poll` invoke a declared
+Notification. The root neither sees nor mediates these; backpressure, atomic
+call/reply pairing, and rendezvous are the kernel's. `yield_now` is
+`seL4_Yield`.
+
+**Root-served.** Everything the root owns as mechanism — lifecycle, spawn,
+supervision, the capability table, capability transfer, shared buffers,
+directories, input, blocks, debug output — crosses as `seL4_Call` with an
+operation *label* on one of two badged endpoints. The badge authenticates the
+caller; a component cannot forge or relabel another task's identity.
+
+| Endpoint | Child CSpace slot | Served by | Carries |
+| --- | --- | --- | --- |
+| Root service | 1 (`ROOT_SERVICE_SLOT`) | the graph dispatcher thread | lifecycle, spawn, supervision, capability table, capability transfer, shared buffer, directory derive |
+| Console service | 32 (`CONSOLE_SERVICE_SLOT`) | the console dispatcher thread (B41) | debug write, input read, block transact, directory inspect/commit |
+
+Two endpoints because one thread serves each: a slow disk or a noisy console
+must not queue behind lifecycle traffic, and a console defect must not share the
+system dispatcher's fault domain.
+
+## Root service operations
+
+Labels are the operation numbers. Operands are the fast message registers
+`MR0`–`MR3`; `slot_pair(a, b)` packs two 32-bit slots into one word and
+`slot_with_flag(slot, flag)` packs a slot with one boolean in bit 32
+(`components/runtime/src/syscall/wire.rs`).
+
+| Label | Operation | Operands | Result convention |
+| --- | --- | --- | --- |
+| 3 | `EXIT` | `MR0=status` | Does not return; the root suspends and reclaims the task. |
+| 4 | `SPAWN` | `MR0=executable_slot`, `MR1=transfer descriptor` over the grant array, `MR2`/`MR3` inline payload when it fits | Primary is the supervision capability slot; task identity is never returned. |
+| 5 | `DIRECTIVE` | `MR0=REQUEST_TAG`, `MR1` | Boot-fixture handshake only (`sel4_root_boot_check`); not part of the component ABI. |
+| 9 | `UNHEALTHY` | none | `0` after the boot selector records it; `-4` when no selector is configured, `-1` when the caller is not a required instance. |
+| 12 | `SUPERVISION STATUS` | `MR0=supervision_slot` | `-3` means still live. `0` exit, `1` fault; the auxiliary word carries the exit status or the fault reason code. Consumes the handle on a terminal answer. |
+| 13 | `CAP DROP` | `MR0=capability_slot` | `0` on release. Needs no right; an empty slot is `-1` so the answer cannot map the table. |
+| 15 | `DIRECTORY DERIVE` | `MR0=slot_pair(directory_slot, rights)`, `MR1=transfer descriptor` over the relative path | Derived capability slot, or a negative error. |
+| 21 | `SHARED BUFFER CREATE` | `MR0=slot_with_flag(factory_slot, writable)`, `MR1=pages` | Primary is the capability slot, auxiliary the kernel-assigned buffer identity. |
+| 22 | `SHARED BUFFER RELEASE` | `MR0=buffer_slot` | `0` on release. |
+| 23 | `SHARED BUFFER MAP` | `MR0=slot_with_flag(buffer_slot, writable)`, `MR1=base`, `MR2=offset`, `MR3=length` | `0` on mapping. |
+| 24 | `SHARED BUFFER UNMAP` | `MR0=buffer_or_loan_slot`, `MR1=base` | `0` on unmap; the mapping charge returns. |
+| 25 | `SHARED BUFFER SEAL` | `MR0=buffer_slot` | `0` on seal; live writable mappings are downgraded first. |
+| 26 | `SHARED BUFFER LOAN` | `MR0=slot_pair(buffer_slot, receiver_supervision_slot)`, `MR1=offset`, `MR2=length` with bit 63 requesting a writable loan | Primary is the loan capability slot, auxiliary the single-return loan identity. |
+| 27 | `SHARED BUFFER LOAN MAP` | `MR0=loan_slot`, `MR1=base`, `MR2=offset`, `MR3=length` | `0` on mapping, at the protection the loan was minted with. |
+| 28 | `SHARED BUFFER RETURN` | `MR0=loan_slot` | `0` on the one permitted return; a second is `-1`. |
+| 29 | `SHARED BUFFER REVOKE` | `MR0=buffer_slot`, `MR1=loan_id` | `0` on revoke as lender. |
+| 32 | `SUPERVISION DERIVE` | `MR0=supervision_slot` | A second handle naming the same task, at the source's own rights (B25). Non-consuming; requires `RIGHT_SUPERVISE`. |
+| 33 | `CAPABILITY EXPORT` | `MR0=slot_pair(endpoint_slot, capability_slot)`, `MR1=expected_kind` with the disposition in bit 32, `MR2=transfer descriptor` over the 64-byte typed descriptor, `MR3=rights_mask` | Export id, or a negative error. |
+| 34 | `CAPABILITY IMPORT` | `MR0=0` | The slot the claimed capability landed in. |
+| 35 | `CAPABILITY EXPORT CANCEL` | `MR0=export_id` | `0` on cancel; restores the source. |
+| 36 | `CAPABILITY EXPORT FINALIZE` | `MR0=export_id` | `0` once the receiver-bound export commits. |
+
+A label with no surviving mechanism is refused with `-4` and reported as
+`SLIME_GRAPH unsupported service`; the caller survives.
+
+## Console service operations
+
+| Label | Operation | Operands | Result convention |
+| --- | --- | --- | --- |
+| 0 | `WRITE` | `MR0`=transfer descriptor (or inline registers) over the bytes | Bytes written. One line is emitted as one uninterruptible unit (B18), bounded by `MAX_STAGED_ARRAY_BYTES` (1024) rather than by `MAX_MSG`. |
+| 1 | `INPUT READ` | `MR0=input_slot` | Primary `0` with the encoded event in the auxiliary word, `-3` when no event is ready. Requires `RIGHT_INPUT_READ`. |
+| 2 | `BLOCK TRANSACT` | `MR0=block_slot`, `MR1=transfer descriptor` over the 64-byte request | `0` means delivered; the block outcome is in the returned reply record. Sector payloads ride behind the record in the same window. |
+| 3 | `DIRECTORY INSPECT` | `MR0=slot_pair(directory_slot, required_rights)`, `MR1=reserved window descriptor` | Nonnegative scope byte length; the immutable root and scope return through the window. |
+| 4 | `DIRECTORY COMMIT` | `MR0=directory_slot`, `MR1=transfer descriptor` over expected‖new root | `0` on commit, `-3` when the expected root is stale. |
+
+Directory *derive* is deliberately on the root service instead: it is the only
+one of the three that writes the caller's capability table, which the graph
+dispatcher also writes, and two threads writing one task's table is a race.
+
+## Reply and transfer conventions
+
+A reply carries the logical `i64` result in `MR0` and a service-specific
+auxiliary value or transfer descriptor in `MR1`. A reply with no result register
+is malformed and is reported as `-4`, never as a silent success.
+
+At most four message registers cross in each direction. Payloads of at most 16
+bytes with no capability ride inline in `MR2`/`MR3` (`FORM_INLINE`); anything
+larger, and anything carrying capability slots, rides in the caller's
+root-mapped startup transfer window (`FORM_WINDOW`), described by a descriptor
+register packing payload length, capability count, carrier form, and the sending
+thread's window index. The thread index is invocation metadata, not authority:
+the root already authenticated the process from the badge and uses it only to
+select which of that process's windows to read. A payload that does not fit its
+window is refused, never truncated.
 
 ## Error model
 
-The syscall return is an `i64`. Negative values are errors; nonnegative values
-have the per-call meaning in the table.
+Negative results are errors; nonnegative results have the per-operation meaning
+above. The constants are `components/runtime/src/syscall.rs`; the root maps its
+own `IpcError` onto the same values in `slime-root/src/ipc.rs`.
 
 | Value | Constant | Meaning |
 | --- | --- | --- |
 | 0 | `ERR_SUCCESS` | Successful completion or delivery. |
-| -1 | `ERR_BAD_CAP` | Missing capability, wrong object kind, or insufficient rights. |
-| -2 | `ERR_PEER_DEAD` | The endpoint peer is dead. |
-| -3 | `ERR_WOULDBLOCK` | The operation is not ready without blocking, or an optimistic state check is stale. |
-| -4 | `ERR_INVALID_ARG` | An argument, mapped range, descriptor, request, or bounded count is invalid. |
+| -1 | `ERR_BAD_CAP` | Missing capability, wrong object kind, or insufficient rights — one code for all three so a probe cannot map its own table. Also answers a capability that will not move. |
+| -2 | `ERR_PEER_DEAD` | The peer is gone. |
+| -3 | `ERR_WOULDBLOCK` | Not ready without blocking, or a stale optimistic state check. |
+| -4 | `ERR_INVALID_ARG` | Bad argument, length, descriptor, request, or unsupported label. |
 | -5 | `ERR_OUT_OF_MEMORY` | A task, capability, frame, object, byte, mapping, loan, or declared quota bound is exhausted. |
 
-`SYS_SUPERVISION_STATUS` uses nonnegative primary returns as a typed termination
-status rather than plain success. `SYS_BLOCK_TRANSACT`, `SYS_STORE_TRANSACT`, and
-`SYS_GENERATION_TRANSACT` use `0` to mean that the request was delivered; the
-operation-specific result is inside the reply buffer.
+`SUPERVISION STATUS` uses nonnegative primaries as typed terminations rather
+than plain success. `BLOCK TRANSACT` uses `0` to mean delivered, with the device
+outcome inside the reply record.
 
-## x86-64 calling convention
+## Declared service admission
 
-The implemented x86-64 ABI enters through `int 0x80`. The kernel names vector
-`0x80` as `SYSCALL_VECTOR`, and installs its IDT gate with attributes `0xEE`, so
-ring 3 may invoke it.
+An operation label is not reachable merely because it exists. Each label maps to
+a service id (`service_for_root_label` in `slime-root/src/main.rs`), and the
+caller's generation must carry a service binding for that id at the endpoint's
+slot, or the request is refused with `-1` before any argument is read. The ids
+are generated from the generation contract
+(`boot-contracts/src/generated/generation.rs`): `1` lifecycle, `2` spawn,
+`3` supervision, `4` capability transfer, `5` shared buffer, `6` directory,
+`7` input, `8` block, `9` console. Lifecycle and console are required of every
+instance; spawn, supervision, and capability transfer are required of any
+instance holding a spawn budget or an executable grant; shared buffer is
+required of any instance with a budget entry.
 
-| Role | Register |
+## Child CSpace layout
+
+Slot numbers are fixed by `slime-root/src/task.rs` and mirrored by the runtime's
+transport. A component's generation grants number their own logical slots from
+0; those are indices into the regions below, not raw CPtrs.
+
+| Slot(s) | Contents |
 | --- | --- |
-| Syscall number | `rax` |
-| `a0` | `rdi` |
-| `a1` | `rsi` |
-| `a2` | `rdx` |
-| `a3` | `r10` |
-| `a4` | `r8` |
-| Primary return | `rax` |
-| Auxiliary return | `rdx` |
+| 0 | null |
+| 1 | badged root service endpoint |
+| 2 | the task's own TCB, when supervised |
+| 3 | badged fault-handler endpoint |
+| 4 | the CSpace's own root CNode |
+| 5–31 | received-endpoint handle region: a transferred Endpoint is relocated out of the receive slot into the first free slot here and named by its handle tag |
+| 32 | badged console/debug endpoint |
+| 33–63 | declared native Endpoints |
+| 64–94 | declared Notifications |
+| 95–125 | badged logical-authority mirrors |
+| 127 | receive slot for the single capability a native receive may carry |
 
-The auxiliary return is defined for `SYS_SPAWN`, `SYS_ENDPOINT_CREATE`,
-`SYS_SHARED_BUFFER_CREATE`, `SYS_SHARED_BUFFER_LOAN`,
-`SYS_SUPERVISION_STATUS`, and `SYS_INPUT_READ`. All general-purpose registers
-are saved by the trap stub and restored from the mutable trap frame. Registers
-not used for a return therefore retain their input values; in particular,
-`rcx` and `r11` are not implicit clobbers as they are for the x86-64 `syscall`
-instruction.
+## Bounds
 
-Architecture-neutral kernel code never reads these registers by name. It goes
-through the semantic accessors on the saved user frame — `syscall_number()`,
-`arg(0..=4)`, `set_return()`, `set_aux_return()` — which each architecture
-implements in its own `arch::<target>::trap`. That is what makes the table above
-one contract rather than an x86 description other targets must imitate.
+| Bound | Value | Owner |
+| --- | --- | --- |
+| Payload bytes per message | `MAX_MSG = 64` | `components/runtime/src/syscall.rs`, `slime-root/src/ipc.rs::MAX_MESSAGE_BYTES` |
+| Capabilities per message | `MAX_CAPS_PER_MSG = 1` | seL4 carries one per IPC |
+| Fast message registers | `FAST_REGISTERS = 4` | asserted equal to `sel4::NUM_FAST_MESSAGE_REGISTERS` |
+| Inline payload bytes | `INLINE_BYTES = 16` | `components/runtime/src/syscall/wire.rs` |
+| Staged array bytes | `MAX_STAGED_ARRAY_BYTES = 1024` | `slime-root/src/transfer_window.rs` |
+| Transfer window bytes | `MIN_TRANSFER_WINDOW = 4096` | root-mapped at thread construction |
+| Spawn grants per call | `MAX_SPAWN_GRANTS = 64` | matches the per-task capability capacity the root checks against |
 
-## AArch64 calling convention
+## Architecture
 
-The architecture-specific trap instruction is `svc #0`. P1 defined the
-register assignment and implemented it on the userspace side
-(`components/runtime/src/arch/aarch64.rs`) and in the kernel-side frame
-accessors (`kernel/src/arch/aarch64/trap.rs`). P2.2 installs the EL1 vector
-table, saves and restores the complete frame, and dispatches `svc #0` into the
-shared semantic syscall body. `just aarch64_trap_check` observes the mapping and
-mutable-frame round trip under `aarch64-qemu-virt`; general component launch and
-address-space switching remain P2.3.
+The product target is `aarch64` under seL4 (`sel4/config/qemu-arm-virt.cmake`).
+Register-level trap entry is seL4's own, not Slime's: components invoke through
+the `sel4` crate's `seL4_Call`/`seL4_Send`/`seL4_NBSend`/`seL4_Recv`/`seL4_Yield`
+wrappers and the per-thread IPC buffer, so Slime defines no calling convention
+of its own and no `arch::<target>::trap` frame accessors exist. AArch64 fault
+entry is decoded from seL4's fault messages by `slime-root/src/fault.rs` into the
+architecture-neutral fault vocabulary supervision reports.
 
-| Role | Register |
-| --- | --- |
-| Syscall number | `x8` |
-| `a0` | `x0` |
-| `a1` | `x1` |
-| `a2` | `x2` |
-| `a3` | `x3` |
-| `a4` | `x4` |
-| Primary return | `x0` |
-| Auxiliary return | `x1` |
-
-The saved frame holds `x0`–`x30`, `SP_EL0`, `ELR_EL1`, and `SPSR_EL1`. A task
-returns to `EL0t` with the `DAIF` interrupt masks clear, so the generic timer
-preempts it. The auxiliary return is defined for the same calls as on x86-64.
-
-The userspace wrapper treats a syscall as a compiler-visible memory boundary:
-the inline assembly is not `nomem`, so Rust cannot move memory accesses across
-the trap. `svc` may update condition flags; callers must not depend on NZCV
-across a syscall. ABI revision 1 requires the vector/context path to preserve
-all general-purpose registers except `x0` and, for calls with an auxiliary
-result, `x1`. P2.2 observes the complete exception-frame round trip for one
-bounded probe; P2.3 extends it to scheduled components. SIMD/FP state is not
-part of ABI revision 1, so components must not depend on preserving it until
-the AArch64 context-switch slice admits that state.
-
-## RV64 calling convention
-
-The architecture-specific trap instruction is `ecall`. RV64 is deferred until
-after the Raspberry Pi 5 demo stabilizes, so no `arch::riscv64` module exists.
-Register assignment, trap-entry state, return registers, and clobbers are not
-yet defined. The semantic syscall table and error model above are shared by
-contract; P3, the RV64 QEMU vertical slice, defines and implements the calling
-convention without changing those semantics.
-
-## Cross-architecture invariant
-
-Syscall numbers, error values, capability checks, message bounds, and transfer
-semantics are identical across calling conventions. Only the trap instruction
-and the mapping between semantic arguments or returns and architecture
-registers differ.
-
-The syscall *table* is also identical: no syscall appears, disappears, or
-changes meaning with the target. Where a target lacks a device the syscall
-reaches — a block transport, for instance — the call still exists and returns
-its ordinary absent-device error rather than vanishing from the surface.
-`just x86_portability_check` builds the architecture-neutral kernel for a second
-target to keep that true.
+Porting to another architecture therefore changes the seL4 configuration and the
+platform mechanisms (`slime-root/src/platform_timer.rs`, the device path), not
+this table: labels, operand packings, reply convention, error values, bounds, and
+rights checks are architecture-neutral by construction.
+`just x86_portability_check` scans the neutral Rust trees for x86-only tokens to
+keep that true; RV64 stays deferred until after the Raspberry Pi 5 demo.

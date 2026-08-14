@@ -69,4 +69,4 @@ render :: Format -> { rust : Text; }
       rust = "INVALID_COMPONENT_SCHEMA";
     };
 
-{ render = render; }
+{ render =; }

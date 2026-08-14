@@ -1,6 +1,9 @@
 // @generated from the canonical C8.9 resolved fabric profile; do not edit.
 #[allow(dead_code)]
+mod generated_fabric_profile {
 pub const FABRIC_PROFILE_NAME: &str = "default";
+#[allow(dead_code)]
+pub const GENERATION_BOOT_ACTION: &str = "product";
 #[allow(dead_code)]
 pub const FABRIC_SCHEMAS: &[(&str, &str, u64, u32, u32)] = &[
     ("ParameterCall", "8f23bd8cdf77d1ff3c62409514dbb9c2e0b66ef4707d81dbef0cb001301fb83f", 0xd7eabf1a3dd69200, 2, 40),
@@ -23,6 +26,29 @@ pub const FABRIC_PARTICIPANTS: &[(&[u8], &str, &str, u32)] = &[
     (b"fabric-op-client", "navigation", "NavigationOperation", 3),
     (b"fabric-op-server", "navigation", "NavigationOperation", 4),
 ];
+pub type FabricNotificationBindingRow = (&'static [u8], &'static str, u32, u32, u32);
+pub const FABRIC_NOTIFICATION_BINDINGS: &[FabricNotificationBindingRow] = &[
+    (b"fabric-publisher", "telemetry", 1, 0, 1),
+    (b"fabric-subscriber", "telemetry", 2, 2, 3),
+];
+pub const FABRIC_CALL_CLIENT_B_SERVICE_PARAMETERS_READY_SLOT: u32 = 4294967295;
+pub const FABRIC_CALL_CLIENT_SERVICE_PARAMETERS_READY_SLOT: u32 = 4294967295;
+pub const FABRIC_CALL_SERVER_SERVICE_PARAMETERS_READY_SLOT: u32 = 4294967295;
+pub const FABRIC_CALL_TIME_SERVICE_PARAMETERS_READY_SLOT: u32 = 4294967295;
+pub const FABRIC_PUBLISHER_B_DIAGNOSTICS_CREDIT_SLOT: u32 = 3;
+pub const FABRIC_PUBLISHER_B_DIAGNOSTICS_READY_SLOT: u32 = 2;
+pub const FABRIC_PUBLISHER_B_TELEMETRY_CREDIT_SLOT: u32 = 1;
+pub const FABRIC_PUBLISHER_B_TELEMETRY_READY_SLOT: u32 = 0;
+pub const FABRIC_PUBLISHER_TELEMETRY_CREDIT_SLOT: u32 = 1;
+pub const FABRIC_PUBLISHER_TELEMETRY_READY_SLOT: u32 = 0;
+pub const FABRIC_SERVICE_PARAMETERS_READY_SLOT: u32 = 4294967295;
+pub const FABRIC_SUBSCRIBER_B_DIAGNOSTICS_CREDIT_SLOT: u32 = 3;
+pub const FABRIC_SUBSCRIBER_B_DIAGNOSTICS_READY_SLOT: u32 = 2;
+pub const FABRIC_SUBSCRIBER_B_TELEMETRY_CREDIT_SLOT: u32 = 1;
+pub const FABRIC_SUBSCRIBER_B_TELEMETRY_READY_SLOT: u32 = 0;
+pub const FABRIC_SUBSCRIBER_TELEMETRY_CREDIT_SLOT: u32 = 1;
+pub const FABRIC_SUBSCRIBER_TELEMETRY_READY_SLOT: u32 = 0;
+
 pub const FABRIC_HISTORY_DEPTHS: &[(&[u8], &str, u32)] = &[
     (b"fabric-publisher", "telemetry", 4),
     (b"fabric-subscriber", "telemetry", 8),
@@ -61,12 +87,23 @@ pub const FABRIC_WORKERS: &[FabricWorkerRow] = &[
     ("call", &["parameters"], 7),
     ("operation", &["nav-backup", "navigation"], 9),
 ];
-/// The wake sources the generation declares one worker parks on at once.
+/// The wake sources the generation declares one worker parks on at once, or
+/// `WORKER_ABSENT` when this graph declares no route that worker carries.
 ///
 /// `const fn` so a broker can bind its own `SYS_WAIT` array to this number in a
 /// `const _: () = assert!(..)`. The declared peak and the array that has to hold
 /// it then cannot drift apart silently: a broker that grows its park set past
 /// what the generation resolved stops compiling instead of overflowing at boot.
+///
+/// Absent is a real answer rather than a panic, because a broker is a *module*
+/// of `fabric-service` and is therefore compiled into every graph, including
+/// ones that declare no route for it. A stream-only graph has no call or
+/// operation plane; panicking here would make such a graph fail to build over a
+/// constant nothing in it ever reads. The asserts that consume this admit
+/// `WORKER_ABSENT` and keep their exact check for every graph that does declare
+/// the plane, so the drift they exist to catch is still caught.
+#[allow(dead_code)]
+pub const WORKER_ABSENT: usize = usize::MAX;
 #[allow(dead_code)]
 pub const fn fabric_worker_wait_sources(name: &str) -> usize {
     let mut index = 0;
@@ -77,7 +114,7 @@ pub const fn fabric_worker_wait_sources(name: &str) -> usize {
         }
         index += 1;
     }
-    panic!("worker absent from the resolved profile")
+    WORKER_ABSENT
 }
 
 /// `str` equality usable in a `const fn`; `==` on `&str` is not yet const.
@@ -110,9 +147,44 @@ pub const FABRIC_OPERATION_CLIENTS: &[&[u8]] = &[
     b"fabric-op-time",
 ];
 pub const FABRIC_SUPERVISION: &[(&[u8], u32)] = &[
-    (b"fabric-subscriber", 4),
+    (b"fabric-publisher", 4),
+    (b"fabric-subscriber", 5),
+];
+/// How many capabilities each child's owner must hand it at spawn: its minted
+/// bindings plus its non-endpoint, non-self-loop grant bindings. This is the
+/// total `preflight_spawn_grants` checks a request against, so it is the one
+/// number an owner must agree with. A child absent from this table is spawned
+/// with nothing.
+#[allow(dead_code)]
+pub const FABRIC_MINTED_GRANTS: &[(&[u8], usize)] = &[
+    (b"init", 2),
+    (b"console", 0),
+    (b"dango", 3),
+    (b"sysinfo", 0),
+    (b"echo-agent", 0),
+    (b"generation-manager", 0),
+    (b"spawn-service", 3),
+    (b"filesystem-service", 0),
+    (b"generation-list", 0),
+    (b"generation-inspect", 0),
+    (b"generation-stage", 0),
+    (b"generation-select", 0),
+    (b"generation-rollback", 0),
+    (b"powerbox-chooser", 2),
+    (b"fabric-service", 1),
+    (b"fabric-call-worker", 1),
+    (b"fabric-op-worker", 0),
+    (b"fabric-publisher", 0),
+    (b"fabric-subscriber", 0),
+    (b"fabric-call-client", 1),
+    (b"fabric-call-server", 1),
+    (b"fabric-call-time", 0),
+    (b"fabric-op-client", 0),
+    (b"fabric-op-server", 0),
+    (b"fabric-op-time", 0),
 ];
 pub const FABRIC_SUBSCRIBERS: &[&[u8]] = &[
+    b"fabric-publisher",
     b"fabric-subscriber",
 ];
 #[allow(dead_code)]
@@ -142,9 +214,14 @@ pub const FABRIC_MAX_MAPPINGS: usize = 14;
 #[allow(dead_code)]
 pub const FABRIC_MAX_LOANS: usize = 14;
 pub const FABRIC_MAX_CAPABILITY_SLOTS: usize = 48;
-pub const FABRIC_REQUIRED_CAPABILITY_SLOTS: usize = 27;
+pub const FABRIC_REQUIRED_CAPABILITY_SLOTS: usize = 28;
 pub const FABRIC_FRAME_CAPACITY: usize = 32;
 pub const FABRIC_COPY_PAGES: usize = 2;
+/// No request/response route of this class exists in the resolved graph.
+pub const FABRIC_DEADLINE_ABSENT: u64 = u64::MAX;
 pub const FABRIC_CALL_DEADLINE_NS: u64 = 1000000;
 pub const FABRIC_OPERATION_DEADLINE_NS: u64 = 1000000;
 pub const FABRIC_FIRST_CONTROL_SLOT: u32 = 2;
+}
+#[allow(unused_imports)]
+pub use generated_fabric_profile::*;

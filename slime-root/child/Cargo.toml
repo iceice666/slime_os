@@ -1,0 +1,23 @@
+[package]
+name = "slime-root-child"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Built for `aarch64-sel4-minimal.json`, which is a different target from the
+# root task's `aarch64-sel4-roottask-minimal.json`, so this fixture is its own
+# workspace rather than a member of the Slime workspace.
+[workspace]
+
+[dependencies]
+sel4 = { path = "../../deps/rust-sel4/crates/sel4" }
+sel4-panicking-env = { path = "../../deps/rust-sel4/crates/sel4-panicking/env" }
+sel4-runtime-common = { path = "../../deps/rust-sel4/crates/sel4-runtime-common", features = [
+    "sel4",
+] }
+
+[profile.release]
+panic = "abort"
+
+[profile.dev]
+panic = "abort"

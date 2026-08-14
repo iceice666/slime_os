@@ -1,20 +1,18 @@
 """B10 boot capability layout resource.
 
 Encodes which capability slot of the bootstrap component holds which role,
-under which name, with which rights, for one generation number. Consumed by
-`kernel/src/runtime/bootstrap.rs`, which places each capability it mints at the
-slot this table names rather than at a literal index in kernel source.
+under which name, with which rights, for one generation number. The generation
+builder serializes the resource, component build scripts render matching Rust
+constants, and `slime-root` resolves the declared roles when launching init.
 
-The tables below were derived from the layouts the kernel resolved before this
-resource existed, captured as fixtures under
-`contracts/boot-layout/v1/fixtures/`. They are deliberately a transcription
-rather than a redesign: B10 removes the positional coupling without moving any
-slot, because six passing QEMU gates read the existing layout positionally and
-renumbering would rewrite their evidence rather than extend it.
+The retained fixtures freeze the layouts observed at the P5 product cutover.
+They are deliberately a transcription rather than a redesign: layout changes
+must remain reviewable slot-by-slot, and the seL4 boot-layout gate exercises
+every product plane.
 
-A layout entry names a *role*, not a concrete kernel object. Slot 9 is the
-storage capability; whether it resolves to a block device or an object store
-depends on PCI enumeration at boot and is not knowable here.
+A layout entry names a role, not a concrete mechanism object. Slot 9 is storage
+authority; whether it resolves to a block device or an object store depends on
+the admitted generation and discovered devices.
 """
 
 import struct
@@ -133,6 +131,30 @@ BASE_LAYOUT = (
     (58, 'endpoint-service', 'fabric-intruder-service', 0x7),
     (59, 'endpoint-service', 'fabric-publisher-b-service', 0x7),
     (60, 'endpoint-service', 'fabric-subscriber-b-service', 0x7),
+    # B16's supervision plane. Appended last, and deliberately: every profile
+    # that does not declare `supervision-child` drops this entry, and dropping
+    # the highest slot renumbers nothing, so the nine existing gates keep their
+    # slots byte-for-byte. Only `sel4-supervision.zti` declares it, and that
+    # profile prunes to 17 slots.
+    #
+    # `0x1000c`, not the usual `0x10008`: the extra `0x4` is `RIGHT_TRANSFER`,
+    # which is what makes the supervision handle this executable's spawns return
+    # movable. The layout and the fixture must agree bit for bit (B10), so the
+    # grant's `transferable = true` has to be matched here.
+    (61, 'executable', 'supervision-child', 0x1000c),
+    # B38 deliberate-fault executable. Only the reclamation fixture declares
+    # it, so every other layout prunes the row without renumbering survivors.
+    (63, 'executable', 'reclamation-fault', 0x10008),
+    # B22's channel-crossing plane, appended last on the same rule: only
+    # `sel4-crossing.zti` declares `crossing-peer`, every other profile drops
+    # this row, and dropping the highest slot renumbers nothing. That profile
+    # prunes to 16 slots — the role rows and channel halves belong to no
+    # component and are always kept, so this row lands renumbered at 15, which
+    # is the slot the gate's `spawn authorized` marker records.
+    #
+    # Together with B38's row this fills all `MAX_BOOT_LAYOUT_ENTRIES` (64).
+    # Further executable rows require raising the format ceiling deliberately.
+    (62, 'executable', 'crossing-peer', 0x10008),
 )
 
 # generation 2 (storage-write)
@@ -252,6 +274,238 @@ FABRIC_BOOT_LAYOUT = (
     (52, 'endpoint-service', 'fabric-op-client-b-restart-control-service', 0x7),
 )
 
+# The seL4 C8.6 call plane (P5.4.6). A fabric-only layout sharing nothing with
+# the base, so it replaces rather than overrides.
+#
+# Only init's *executables* and its shared-buffer factory are numbered here.
+# Every control channel is a generation-declared native Endpoint the root
+# installs into both declaring instances at the slot each binding names, so no
+# control passes through init and none occupies an init layout row.
+#
+# That was not always true, and the failure is worth keeping: when a declared
+# control was materialized onto the fabric's own channel cursor — which resumed
+# above everything staging installed — the fabric's ends came out at
+# `[0, 3, 4, 5, 6]` while the broker addressed them as
+# `FABRIC_FIRST_CONTROL_SLOT + index`. Per-binding declared slots removed the
+# hole. The grant names remain load-bearing for identity: `_control_sources`
+# derives `FABRIC_CALL_CLIENTS` — the table the broker authenticates a caller by
+# — from exactly those four names, in `FABRIC_CALL_CONTROL_GRANTS` order rather
+# than in the builder's `(name, source, target)` sort.
+#
+# Rights match what the root actually places, not what generation 17 declares.
+# The shared-buffer factory carries no `RIGHT_TRANSFER` (`0x4`) because `staging`
+# installs it at `RIGHT_BUFFER_CREATE` alone — every other seL4 plane fixture
+# records `0x1000000` for the same reason, and `bootstrap_role_slot` tests
+# containment rather than equality, so a too-permissive row would pass here and
+# then disagree with a blessed fixture.
+#
+# `0x1000c` marks every executable whose returned supervision handle init
+# delegates. The fabric handle is still passed to the client and server as the
+# shared-payload receiver identity. Init now also vouches for each call
+# participant by transferring its handle to the broker over that participant's
+# authenticated control channel. The clock handle remains local to init.
+SEL4_CALL_LAYOUT = (
+    (1, 'executable', 'fabric-call-client', 0x1000c),
+    (2, 'executable', 'fabric-call-client-b', 0x1000c),
+    (3, 'executable', 'fabric-call-server', 0x1000c),
+    (4, 'executable', 'fabric-call-time', 0x10008),
+    (5, 'executable', 'fabric-service', 0x1000c),
+    (7, 'shared-buffer-factory', None, 0x1000000),
+)
+
+
+# The seL4 C8.7 operation plane (P5.4.7), on `SEL4_CALL_LAYOUT`'s rule: init's
+# two factories and its executables, with every control channel minted at
+# runtime by `init.rs::drive_operation_plane` so the fabric's own slots come out
+# in spawn-grant order.
+#
+# Six executables rather than five: the operation graph declares a *replacement*
+# client-B, which is how C8.7's participant-restart arm is expressed. The broker
+# parks on the replacement's authenticated control while client B's slot is
+# vacant, so the replacement is a declared identity in the graph rather than a
+# second instance of client B.
+#
+# `0x1000c` on the four participants whose supervision handles init delegates to
+# the broker (both clients, the replacement, and the server). The fabric and the
+# clock stay `0x10008`: unlike the call plane, no participant here needs to name
+# the fabric as a loan receiver, so the fabric's own handle is never transferred.
+SEL4_OPERATION_LAYOUT = (
+    (1, 'executable', 'fabric-op-client', 0x1000c),
+    (2, 'executable', 'fabric-op-client-b', 0x1000c),
+    (3, 'executable', 'fabric-op-client-b-restart', 0x1000c),
+    (4, 'executable', 'fabric-op-server', 0x1000c),
+    (5, 'executable', 'fabric-op-time', 0x10008),
+    (6, 'executable', 'fabric-service', 0x10008),
+    (8, 'shared-buffer-factory', None, 0x1000000),
+)
+
+
+# The seL4 C8.8 visibility plane (P5.4.8), on `SEL4_CALL_LAYOUT`'s rule: init's
+# two factories and its executables, with every control channel minted at
+# runtime by `init.rs::drive_visibility_plane`.
+#
+# Six executables, and the same set the stream plane declares: the visibility
+# graph is the stream graph with a declared interposition chain, so
+# `fabric-intruder` is the proxy rather than an unauthorized probe. No
+# executable is transferable — the visibility broker mints every route half
+# itself and hands out narrowed non-delegable roles, so no supervision handle is
+# ever delegated.
+SEL4_VISIBILITY_LAYOUT = (
+    (1, 'executable', 'fabric-intruder', 0x10008),
+    (2, 'executable', 'fabric-publisher', 0x10008),
+    (3, 'executable', 'fabric-publisher-b', 0x10008),
+    (4, 'executable', 'fabric-service', 0x10008),
+    (5, 'executable', 'fabric-subscriber', 0x10008),
+    (6, 'executable', 'fabric-subscriber-b', 0x10008),
+    (8, 'shared-buffer-factory', None, 0x1000000),
+)
+
+# The seL4 QoS plane has the stream composition's init table. Its clock is a
+# runtime-minted capability routed through participant control channels, not a
+# bootstrap slot.
+SEL4_QOS_LAYOUT = (
+    (1, 'executable', 'fabric-intruder', 0x10008),
+    (2, 'executable', 'fabric-publisher', 0x10008),
+    (3, 'executable', 'fabric-publisher-b', 0x10008),
+    (4, 'executable', 'fabric-service', 0x10008),
+    (5, 'executable', 'fabric-subscriber', 0x10008),
+    (6, 'executable', 'fabric-subscriber-b', 0x10008),
+    (8, 'shared-buffer-factory', None, 0x1000000),
+)
+
+
+# The seL4 C8.10 full-graph boot (P5.4.9). Twenty-one rows: the shared-buffer
+# factory, the fabric, sixteen participants, two fabric-spawned workers, and the
+# operation clock. Every C8 role coexists in one generation, so the stream, call,
+# and operation planes occupy disjoint slots rather than aliasing a
+# profile-selected range.
+#
+# No control channel appears. Every one is a generation-declared native Endpoint
+# the root installs into both declaring instances at the slot each binding names,
+# so a control never passes through init and never occupies an init layout row.
+# The grant names stay load-bearing because `_control_sources` derives the
+# identity tables from them. So this table numbers what the *generation* places
+# in init, and the C8.10 property it carries is that all three planes'
+# executables coexist in disjoint slots with no profile-dependent rewrite --
+# which is the half a boot layout can state.
+#
+# One row differs from the x86 table. The shared-buffer factory carries no
+# `RIGHT_TRANSFER` (`0x4`), because `staging` installs it at `RIGHT_BUFFER_CREATE`
+# alone -- the same reason every other seL4 fixture records `0x1000000` where the
+# oracle records `0x1000004`. The oracle's endpoint-factory row has no
+# counterpart at all: that object kind was deleted with the custom kernel.
+#
+# `0x1000c` on all sixteen participants: init delegates the call and operation
+# participants' supervision handles to the fabric, and declaring the whole set
+# transferable keeps the table one rule rather than a per-plane exception. The
+# fabric and its two workers stay `0x10008` -- their handles never move.
+SEL4_BOOT_LAYOUT = (
+    (1, 'shared-buffer-factory', None, 0x1000000),
+    (2, 'executable', 'fabric-service', 0x10008),
+    (3, 'executable', 'fabric-call-worker', 0x10008),
+    (4, 'executable', 'fabric-op-worker', 0x10008),
+    (5, 'executable', 'fabric-publisher', 0x1000c),
+    (6, 'executable', 'fabric-subscriber', 0x1000c),
+    (7, 'executable', 'fabric-publisher-b', 0x1000c),
+    (8, 'executable', 'fabric-subscriber-b', 0x1000c),
+    (9, 'executable', 'fabric-observer', 0x1000c),
+    (10, 'executable', 'fabric-probe', 0x1000c),
+    (11, 'executable', 'fabric-proxy', 0x1000c),
+    (12, 'executable', 'fabric-call-client', 0x1000c),
+    (13, 'executable', 'fabric-call-client-b', 0x1000c),
+    (14, 'executable', 'fabric-call-server', 0x1000c),
+    (15, 'executable', 'fabric-call-time', 0x1000c),
+    (16, 'executable', 'fabric-op-client', 0x1000c),
+    (17, 'executable', 'fabric-op-client-b', 0x1000c),
+    (18, 'executable', 'fabric-op-server', 0x1000c),
+    (19, 'executable', 'fabric-op-time', 0x1000c),
+    (20, 'executable', 'fabric-op-client-b-restart', 0x1000c),
+    (22, 'shared-buffer-factory', None, 0x1000000),
+)
+
+# The seL4 M5 storage plane (P5.4.2c). Init's endpoint factory, the probe's
+# executable, and the block capability the probe holds.
+#
+# The block capability is *not* here, and that is the point: it is granted to
+# the probe rather than to init, so the root places it in the probe's own table
+# at its runtime cursor. A boot layout numbers the bootstrap component's slots;
+# a non-bootstrap component's are numbered `1..=n` above its executables, which
+# is the rule every other grant to a child follows.
+SEL4_STORAGE_LAYOUT = (
+    (1, 'executable', 'sel4-storage-probe', 0x10008),
+)
+
+# Generation 24, the store plane. Same two rows as the storage plane and for the
+# same reason: the block capability is granted to the probe, so the root places
+# it in the probe's own table rather than init's.
+SEL4_STORE_LAYOUT = (
+    (1, 'executable', 'sel4-store-probe', 0x10008),
+)
+
+# Generation 30, the M6.4 dango plane. Init's factory plus the three
+# executables it spawns; the spawn service's own executables are granted to it,
+# not to init, so they land in its table rather than here.
+SEL4_DANGO_LAYOUT = (
+    (1, 'executable', 'console', 0x10008),
+    (2, 'executable', 'dango', 0x10008),
+    (3, 'executable', 'spawn-service', 0x10008),
+    (5, 'shared-buffer-factory', None, 0x1000000),
+    (6, 'executable', 'sysinfo', 0x10008),
+    (7, 'executable', 'echo-agent', 0x10008),
+)
+
+# Generation 29, the M6.3 filesystem plane. Three rows: init's factory and both
+# executables. Neither the block capability nor the namespace views are here —
+# both are granted to the components that hold them.
+SEL4_FILESYSTEM_LAYOUT = (
+    (1, 'executable', 'directory-probe', 0x10008),
+    (2, 'executable', 'sel4-filesystem-service', 0x10008),
+)
+
+# Generation 33, the M6.7 transfer plane. Two rows; both device capabilities
+# are the probe's own declared grants.
+SEL4_TRANSFER_LAYOUT = (
+    (1, 'executable', 'sel4-transfer-probe', 0x10008),
+)
+
+# Generation 32, the M6.6 powerbox plane. Init's factory and both executables;
+# the chooser's input and directory views are its own declared grants.
+SEL4_POWERBOX_LAYOUT = (
+    (1, 'executable', 'powerbox-chooser', 0x10008),
+    (2, 'executable', 'powerbox-probe', 0x10008),
+)
+
+# Generation 31, the input plane. Two rows; the input capability is granted to
+# the probe, so the root places it in the probe's own table.
+SEL4_INPUT_LAYOUT = (
+    (1, 'executable', 'sel4-input-probe', 0x10008),
+)
+
+# Generation 28, the M6.3 directory plane. Two rows, and the directory
+# capability is not among them: it is granted to the probe, so the root places
+# it in the probe's own table.
+SEL4_DIRECTORY_LAYOUT = (
+    (1, 'executable', 'sel4-directory-probe', 0x10008),
+)
+
+# Generation 27, the M6.5 generation-command plane. Three rows: init's factory
+# plus both executables. The block capability is the manager's, so it is placed
+# in the manager's own table rather than here.
+SEL4_GENERATION_LAYOUT = (
+    (1, 'executable', 'sel4-generation-client', 0x10008),
+    (2, 'executable', 'sel4-generation-manager', 0x10008),
+)
+
+# Generation 26, the recovery plane.
+SEL4_RECOVERY_LAYOUT = (
+    (1, 'executable', 'sel4-recovery-probe', 0x10008),
+)
+
+# Generation 25, the rollback plane. Same shape again.
+SEL4_ROLLBACK_LAYOUT = (
+    (1, 'executable', 'sel4-rollback-probe', 0x10008),
+)
+
 
 # Per-generation overrides, applied over `BASE_LAYOUT` by slot. A generation
 # absent here resolves the base layout unchanged.
@@ -271,8 +525,29 @@ OVERRIDES = {
 }
 
 # Generation 17 is the C8.10 full-graph boot: a fabric-only layout sharing
-# nothing with the base, so it replaces rather than overrides.
-REPLACEMENTS = {17: FABRIC_BOOT_LAYOUT}
+# nothing with the base, so it replaces rather than overrides. Generation 18 is
+# the seL4 C8.6 call plane, 20 the seL4 C8.7 operation plane, and 21 the seL4
+# C8.8 visibility plane, and 22 the seL4 C8.10 full-graph boot, on the same
+# rule.
+REPLACEMENTS = {
+    17: FABRIC_BOOT_LAYOUT,
+    18: SEL4_CALL_LAYOUT,
+    19: SEL4_QOS_LAYOUT,
+    20: SEL4_OPERATION_LAYOUT,
+    21: SEL4_VISIBILITY_LAYOUT,
+    22: SEL4_BOOT_LAYOUT,
+    23: SEL4_STORAGE_LAYOUT,
+    24: SEL4_STORE_LAYOUT,
+    25: SEL4_ROLLBACK_LAYOUT,
+    26: SEL4_RECOVERY_LAYOUT,
+    27: SEL4_GENERATION_LAYOUT,
+    28: SEL4_DIRECTORY_LAYOUT,
+    29: SEL4_FILESYSTEM_LAYOUT,
+    30: SEL4_DANGO_LAYOUT,
+    31: SEL4_INPUT_LAYOUT,
+    32: SEL4_POWERBOX_LAYOUT,
+    33: SEL4_TRANSFER_LAYOUT,
+}
 
 
 def component_identity(name: str) -> bytes:
@@ -461,7 +736,7 @@ MAX_ROLE_REPEATS = 2
 
 
 def all_labels() -> list[tuple[str, str]]:
-    labels: dict[str, str] = {}
+    labels: dict[str, str] = {"spawn-service-rpc": "endpoint-client"}
     for number in sorted({1, *OVERRIDES, *REPLACEMENTS}):
         for _, role, label, _ in layout_for(number):
             if label is not None:
@@ -473,8 +748,13 @@ def rust_identifier(label: str) -> str:
     return label.replace("-", "_").upper() + "_SLOT"
 
 
-def render_rust(number: int, components: set[str] | None = None) -> str:
-    """The slot table for one generation, as a Rust constant per label.
+def render_rust(
+    number: int,
+    components: set[str] | None = None,
+    binding_slots: dict[str, int] | None = None,
+    role_bindings: dict[str, int] | None = None,
+) -> str:
+    """The slot table for one generation, including explicit init bindings.
 
     `init.rs` addresses slots by these names rather than by literal numbers, so
     the kernel that places a capability and the component that uses it read one
@@ -492,6 +772,8 @@ def render_rust(number: int, components: set[str] | None = None) -> str:
         for slot, _, label, _ in layout_for(number, components)
         if label is not None
     }
+    if binding_slots is not None:
+        declared.update(binding_slots)
     lines = [
         "// @generated from contracts/boot-layout/v1 by scripts/build/boot_layout.py;",
         "// do not edit. Regenerate through `just generation_check`.",
@@ -520,6 +802,9 @@ def render_rust(number: int, components: set[str] | None = None) -> str:
     for slot, role, label, _ in layout_for(number, components):
         if label is None:
             by_role.setdefault(role, []).append(slot)
+    if role_bindings is not None:
+        for role, slot in role_bindings.items():
+            by_role[role] = [slot]
     # A role can repeat: generation 4 declares an object store in both the
     # storage and filesystem slots. Every role therefore emits `_0`.._N` for a
     # fixed N in every generation, plus an unsuffixed alias for the first, so a

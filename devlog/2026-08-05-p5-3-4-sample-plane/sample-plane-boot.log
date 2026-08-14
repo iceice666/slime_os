@@ -1,0 +1,97 @@
+SLIME_ROOT generation admitted number=1 components=3 grants=4 health=3 kernel=1 bootstrap=1
+SLIME_ROOT authority manifest=[66, f7, ff, 38, 0b, 01, 7b, 19, 7b, a7, 18, f7, 3e, 16, 27, 39, 07, 38, 8f, 81, 2b, 5e, 25, ba, ba, f7, c2, fb, ce, b6, d2, 89]
+SLIME_ROOT graph admitted; legacy SLIMECM images not activated components=3 slimecm=0 elf=3 unrecognized=0
+SLIME_ROOT allocator slots=3468 untypeds=31 bytes=532162928
+SLIME_TIMER acquired irq=30 freq_hz=62500000
+SLIME_TIMER delivered badge=0x1 polls=3576
+SLIME_TIMER serviced events=1 programming=Disarm
+SLIME_TIMER advanced start=3487455 end=4171596 delta=684141
+SLIME_TIMER OK
+SLIME_GRAPH factory placed task=0 component=init slot=0 kind=endpoint-factory
+SLIME_GRAPH factory placed task=0 component=init slot=14 kind=shared-buffer-factory
+SLIME_GRAPH staged task=0 component=init grants=2 executables=2 window=0x237000 frames=56 tables=3 entry=0x2118a8
+SLIME_GRAPH staged task=1 component=sample-lender grants=1 executables=0 window=0x236000 frames=55 tables=3 entry=0x211690
+SLIME_GRAPH staged task=2 component=sample-receiver grants=1 executables=0 window=0x236000 frames=55 tables=3 entry=0x2115f0
+SLIME_GRAPH staged components=3 loadable=3 slimecm=0 wrong_target=0 unrecognized=0
+SLIME_GRAPH channels grants=0 channels=0 queues=0 slots=0 unplaced=0
+SLIME_GRAPH activated components=3
+SLIME_GRAPH quota task=0 component=init pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH quota task=1 component=sample-lender pages=4 buffers=1 mappings=2 loans=1
+SLIME_GRAPH quota task=2 component=sample-receiver pages=2 buffers=1 mappings=2 loans=1
+SLIME_GRAPH quotas declared=3 budgeted=2 holders=2
+SLIME_GRAPH window bound task=2 base=0x236000 len=4096
+[sample-receiver] fail: recv
+SLIME_GRAPH component exit task=2 status=1
+SLIME_GRAPH window bound task=1 base=0x236000 len=4096
+[sample-lender] factory is not a buffer
+SLIME_GRAPH buffer create refused task=1 class=ungranted
+[sample-lender] fail: create
+SLIME_GRAPH component exit task=1 status=1
+SLIME_GRAPH window bound task=0 base=0x237000 len=4096
+SLIME_GRAPH endpoint minted task=0 key=0 slots=1,2
+SLIME_GRAPH spawn authorized task=0 slot=16 component=sample-receiver grants=1
+SLIME_GRAPH quota task=3 component=sample-receiver pages=2 buffers=1 mappings=2 loans=1
+SLIME_GRAPH channel handed parent=0 child=3 key=0 slot=0
+SLIME_GRAPH spawned task=0 child=3 component=sample-receiver grants=1 channels=1 handle=2
+SLIME_GRAPH spawn authorized task=0 slot=15 component=sample-lender grants=3
+SLIME_GRAPH quota task=4 component=sample-lender pages=4 buffers=1 mappings=2 loans=1
+SLIME_GRAPH channel handed parent=0 child=4 key=0 slot=0
+SLIME_GRAPH spawned task=0 child=4 component=sample-lender grants=3 channels=1 handle=1
+SLIME_GRAPH spawn refused task=0 child=sample-receiver class=budget live=2 budget=2
+[init] spawn budget refused
+SLIME_GRAPH parked task=0 reason=wait
+SLIME_GRAPH window bound task=4 base=0x236000 len=4096
+[sample-lender] factory is not a buffer
+SLIME_GRAPH buffer created task=4 slot=3 id=1 pages=2 writable=1
+[sample-lender] buffer created
+[sample-lender] payload written
+SLIME_GRAPH loan refused task=4 slot=3 class=unsealed
+[sample-lender] unsealed loan denied
+SLIME_GRAPH buffer map refused task=4 slot=3 class=write
+[sample-lender] seal is irreversible
+SLIME_GRAPH loan created task=4 slot=4 id=1 to=3 offset=0 length=8192
+[sample-lender] loan created
+SLIME_GRAPH sent task=4 channel=0 bytes=64 caps=1 queued=1
+SLIME_GRAPH capability transfer task=4 channel=0 to=3 caps=1
+[sample-lender] descriptor sent
+SLIME_GRAPH parked task=4 channel=0 reason=recv
+SLIME_GRAPH window bound task=3 base=0x236000 len=4096
+SLIME_GRAPH received task=3 channel=0 bytes=64 caps=1
+[sample-receiver] descriptor received
+SLIME_GRAPH loan mapped refused task=3 slot=1 class=range
+[sample-receiver] malformed descriptor mapped nothing
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeARMFrameInvocation/1568 T0x807fdca400 "rootserver" @25fd9c]: ARMPageMap: Attempting to remap a frame that does not belong to the passed address space>>[0m
+SLIME_GRAPH frame aliased frame=945 vaddr=0xa00000000 live=1
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeARMFrameInvocation/1568 T0x807fdca400 "rootserver" @25fd9c]: ARMPageMap: Attempting to remap a frame that does not belong to the passed address space>>[0m
+SLIME_GRAPH frame aliased frame=946 vaddr=0xa00001000 live=2
+SLIME_GRAPH loan mapped task=3 slot=1 id=1
+[sample-receiver] loaned bytes mapped
+[sample-receiver] loan stays read-only
+[sample-receiver] payload verified
+SLIME_GRAPH loan returned task=3 slot=1 id=1
+[sample-receiver] loan returned once
+SLIME_GRAPH sent task=3 channel=0 bytes=7 caps=0 queued=1
+[sample-receiver] done
+SLIME_GRAPH component exit task=3 status=0
+SLIME_GRAPH supervision woken task=0 child=3
+SLIME_GRAPH peer death task=3 channels=1 woken=0
+SLIME_GRAPH supervision collected task=0 child=3 kind=0
+SLIME_GRAPH parked task=0 reason=wait
+[sample-lender] receiver settled
+[sample-lender] released
+[sample-lender] done
+SLIME_GRAPH component exit task=4 status=0
+SLIME_GRAPH supervision woken task=0 child=4
+SLIME_GRAPH peer death task=4 channels=1 woken=0
+SLIME_GRAPH supervision collected task=0 child=4 kind=0
+SLIME_GRAPH spawn authorized task=0 slot=16 component=sample-receiver grants=0
+SLIME_GRAPH quota task=5 component=sample-receiver pages=2 buffers=1 mappings=2 loans=1
+SLIME_GRAPH spawned task=0 child=5 component=sample-receiver grants=0 channels=0 handle=1
+[init] spawn budget recovered
+[init] sample plane complete
+SLIME_GRAPH component exit task=0 status=0
+SLIME_GRAPH window bound task=5 base=0x236000 len=4096
+[sample-receiver] fail: recv
+SLIME_GRAPH component exit task=5 status=1
+SLIME_GRAPH served live=0 unsupported=0 unimplemented=0 buffers=5 windows=0 tables=0
+SLIME_GRAPH tasks reclaimed live=0 slots=373

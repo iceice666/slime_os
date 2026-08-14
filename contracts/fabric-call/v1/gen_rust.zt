@@ -16,6 +16,7 @@ Protocol :: type {
   kindReply : Int;
   kindCancel : Int;
   kindTerminal : Int;
+  kindTerminalAck : Int;
   flagNonIdempotent : Int;
   flagSharedPayload : Int;
   knownFlags : Int;
@@ -76,6 +77,7 @@ rustBindings :: Protocol -> Text = protocol => w.join {
   "pub const KIND_REPLY: u32 = "; n.toText protocol.kindReply; ";\n";
   "pub const KIND_CANCEL: u32 = "; n.toText protocol.kindCancel; ";\n";
   "pub const KIND_TERMINAL: u32 = "; n.toText protocol.kindTerminal; ";\n";
+  "pub const KIND_TERMINAL_ACK: u32 = "; n.toText protocol.kindTerminalAck; ";\n";
   "pub const FLAG_NON_IDEMPOTENT: u32 = "; n.toText protocol.flagNonIdempotent; ";\n";
   "pub const FLAG_SHARED_PAYLOAD: u32 = "; n.toText protocol.flagSharedPayload; ";\n";
   "pub const KNOWN_FLAGS: u32 = "; n.toText protocol.knownFlags; ";\n";
@@ -104,4 +106,4 @@ valid :: Protocol -> Bool = protocol =>
   && wireBytes protocol.timeLayout == protocol.recordLen
   && protocol.inlineBytes == 8;
 render :: Protocol -> { rust : Text; } = protocol => if valid protocol then { rust = rustBindings protocol; } else { rust = "INVALID_FABRIC_CALL_SCHEMA"; };
-{ render = render; }
+{ render =; }

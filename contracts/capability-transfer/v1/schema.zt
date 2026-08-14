@@ -15,12 +15,12 @@
 -- narrow-on-transfer move: a holder with transfer authority moves a capability
 -- to a peer with rights narrowed to an exact mask, the source capability is
 -- consumed, and the destination receives no authority the descriptor does not
--- state. The kernel parses `status`, `flags`, `object_kind`, and `rights_mask`
+-- state. The root parses `status`, `flags`, `object_kind`, and `rights_mask`
 -- and enforces exactly them, so the bytes the peer reads and the rights the
 -- kernel installed are one decision rather than two. A denial reuses the same
 -- record with a nonzero `status`, a zero `rights_mask`, and no capability
 -- attached. `route_identity` and `direction` are the fabric's own role
--- binding, opaque to the kernel — the kernel knows nothing of routes.
+-- binding, opaque to the root — it knows nothing of routes.
 --
 -- Logical records and concrete packed little-endian layouts live together. The
 -- renderer reflects each record, checks field order against its layout, and
@@ -49,6 +49,11 @@ objectKindEndpoint :: Int = 1;
 objectKindSharedBuffer :: Int = 2;
 objectKindSharedBufferLoan :: Int = 3;
 objectKindSupervision :: Int = 4;
+-- M6.3 (P5.4.3): a scoped view of a filesystem namespace. Transferable because
+-- a filesystem client hands its view to the service with each request, and a
+-- powerbox hands a requester one narrowed view on selection; the root refuses
+-- to widen either, so the descriptor names authority the sender already holds.
+objectKindDirectory :: Int = 5;
 
 -- Transfer authority is omitted at the destination unless it was both held at
 -- the source and explicitly retained by this flag. A rights mask naming the
@@ -113,26 +118,27 @@ transferLayout :: List WireField = {
 };
 
 format ::= {
-  formatVersion = formatVersion;
-  requestLen = requestLen;
-  transferLen = transferLen;
-  maxRouteNameBytes = maxRouteNameBytes;
-  fabricRequestMagic = fabricRequestMagic;
-  capabilityTransferMagic = capabilityTransferMagic;
-  objectKindEndpoint = objectKindEndpoint;
-  objectKindSharedBuffer = objectKindSharedBuffer;
-  objectKindSharedBufferLoan = objectKindSharedBufferLoan;
-  objectKindSupervision = objectKindSupervision;
-  flagRetainTransfer = flagRetainTransfer;
-  knownFlags = knownFlags;
-  directionPublish = directionPublish;
-  directionSubscribe = directionSubscribe;
-  directionClient = directionClient;
-  directionServer = directionServer;
+  formatVersion =;
+  requestLen =;
+  transferLen =;
+  maxRouteNameBytes =;
+  fabricRequestMagic =;
+  capabilityTransferMagic =;
+  objectKindEndpoint =;
+  objectKindSharedBuffer =;
+  objectKindSharedBufferLoan =;
+  objectKindSupervision =;
+  objectKindDirectory =;
+  flagRetainTransfer =;
+  knownFlags =;
+  directionPublish =;
+  directionSubscribe =;
+  directionClient =;
+  directionServer =;
   requestFields = requestSchema.fields ?? {;};
   transferFields = transferSchema.fields ?? {;};
-  requestLayout = requestLayout;
-  transferLayout = transferLayout;
+  requestLayout =;
+  transferLayout =;
 };
 
 main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }

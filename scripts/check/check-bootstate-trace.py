@@ -35,26 +35,26 @@ import tempfile
 from pathlib import Path
 
 from boot_contracts import (
+    BOOTSTATE_SLOT_BYTES,
     BOOTSTATE_TRACE_MAX_LINE,
     BOOTSTATE_TRACE_PREFIX,
     BOOTSTATE_TRACE_VERSION,
-    BOOTSTORE_CAPACITY,
     sha256,
 )
-from harness import BOOT_TIMEOUT_SECONDS, RELEASE_KERNEL, ROOT, load_script, run_qemu
+from harness import ROOT, load_script
 from zutai_cli import STDLIB, binary
 
 MODEL_DIR = ROOT / "contracts" / "bootstate" / "model"
 TRACE_PREFIX = BOOTSTATE_TRACE_PREFIX
 TRACE_VERSION = BOOTSTATE_TRACE_VERSION
 MAX_LINE = BOOTSTATE_TRACE_MAX_LINE
-# One durable transition per boot, plus generous headroom, keeps the trace a
-# bounded artifact rather than a new unbounded boot dependency.
-MAX_TRACE_LINES_PER_BOOT = 4
+# Six live durable transitions plus bounded headroom for future pure-selection
+# records keep the serial artifact finite without freezing this exact scenario.
+MAX_TRACE_LINES_PER_BOOT = 8
 ORACLE_TIMEOUT_SECONDS = 300
 
 CHECK_GENERATION = load_script("check_generation", "check/check-generation.py")
-check_bootstore = CHECK_GENERATION.check_bootstore
+ROLLBACK = load_script("sel4_rollback_plane", "check/check-sel4-rollback-plane.py")
 
 ACTIONS = {
     "consume-attempt",
@@ -83,23 +83,7 @@ class TraceError(Exception):
     pass
 
 
-# A wedged guest (e.g. a stack overflow that triple-faults into a reboot loop)
-# would otherwise hang the check forever, since QEMU is only asked to exit on a
-# clean `isa-debug-exit`; `run_qemu` bounds every subprocess so a hang fails loud.
-def run(
-    arguments: list[str],
-    *,
-    environment: dict[str, str] | None = None,
-    allow_failure: bool = False,
-    timeout: int | None = BOOT_TIMEOUT_SECONDS,
-) -> str:
-    return run_qemu(
-        arguments,
-        environment=environment,
-        allow_failure=allow_failure,
-        timeout=timeout,
-        echo="on-error",
-    )
+
 
 
 def parse_hex32(field: str, value: str) -> bytes:
@@ -124,6 +108,8 @@ def parse_trace_line(line: str) -> dict:
         key, sep, value = token.partition("=")
         if not sep:
             raise TraceError(f"malformed field {token!r} in {line!r}")
+        if key in fields:
+            raise TraceError(f"duplicate field {key!r} in {line!r}")
         fields[key] = value
     required = {
         "action",
@@ -170,6 +156,7 @@ def parse_trace_line(line: str) -> dict:
         "generation_root": parse_hex32("generation_root", fields["generation_root"]),
         "state_root": parse_hex32("state_root", fields["state_root"]),
     }
+    record["raw"] = line
     return record
 
 
@@ -250,64 +237,6 @@ class Oracle:
         return reachable
 
 
-def retained_roots(store: dict) -> set[bytes]:
-    """Roots observable in the on-disk BootState record.
-
-    Running, rollback, staged, and additional persistent roots are kernel-only
-    manager state and cannot be reconstructed from this disk artifact; those
-    categories remain covered by the M5.6b model and kernel GC tests.
-    """
-    state = store["state"]
-    roots = {state["known_good"], state["generation_root"], state["state_root"]}
-    if state["pending"] is not None:
-        roots.add(state["pending"])
-    return roots
-
-
-def check_concrete(record: dict, store: dict) -> None:
-    """Bind the record's abstract roots to the on-disk BootState identities."""
-    state = store["state"]
-    valid_identities = {generation["identity"] for generation in store["generations"]}
-
-    if record["generation_root"] != state["generation_root"]:
-        raise TraceError("generation_root does not match the on-disk BootState")
-    if record["state_root"] != state["state_root"]:
-        raise TraceError("state_root does not match the on-disk BootState")
-
-    if record["action"] == "collect":
-        # The collected object is named by generation_root; a collection
-        # against any retained root is rejected.
-        raise TraceError("collect handled separately")
-
-    if record["action"] == "promotion":
-        # A promotion sets known-good to the previously running pending
-        # generation and clears pending. Any other valid directory identity is
-        # still the wrong generation.
-        if state["pending"] is None:
-            raise TraceError("promotion has no pending generation to promote")
-        if record["known_good"] != state["pending"]:
-            raise TraceError("promotion does not select the running pending generation")
-        if record["pending"] is not None:
-            raise TraceError("promotion does not clear pending")
-        if record["known_good"] not in valid_identities:
-            raise TraceError("promotion known-good is not a valid generation")
-        if record["attempts_after"] != 0:
-            raise TraceError("promotion must clear pending attempts")
-        if record["attempts_before"] != state["remaining_attempts"]:
-            raise TraceError("promotion attempts_before does not match pending state")
-    else:
-        if record["known_good"] != state["known_good"]:
-            raise TraceError("known_good does not match the on-disk BootState")
-        if record["pending"] != state["pending"]:
-            raise TraceError("pending does not match the on-disk BootState")
-
-
-def check_collect(candidate: bytes, store: dict) -> None:
-    """Reject collecting an object reachable from any retained root."""
-    if candidate in retained_roots(store):
-        raise TraceError("collection targets a retained root")
-
-
 def check_transition_shape(record: dict) -> None:
     action = record["action"]
     selected = record["selected_slot"]
@@ -315,19 +244,7 @@ def check_transition_shape(record: dict) -> None:
     sequence_before = record["sequence_before"]
     sequence_after = record["sequence_after"]
 
-    if action == "consume-attempt":
-        if target is None or target == selected:
-            raise TraceError(f"{action} must target the other BootState slot")
-        if sequence_after != sequence_before + 1:
-            raise TraceError(f"{action} must advance the durable sequence by one")
-    elif action == "promotion":
-        # Promotion traces are accepted only as adversarial checker inputs
-        # until the kernel has a real durable slot-write path for confirmation.
-        if target is None or target == selected:
-            raise TraceError(f"{action} must target the other BootState slot")
-        if sequence_after != sequence_before + 1:
-            raise TraceError(f"{action} must advance the durable sequence by one")
-    elif action in {"stage-pending", "rollback"}:
+    if action in {"consume-attempt", "promotion", "stage-pending", "rollback"}:
         if target is None or target == selected:
             raise TraceError(f"{action} must target the other BootState slot")
         if sequence_after != sequence_before + 1:
@@ -337,8 +254,6 @@ def check_transition_shape(record: dict) -> None:
             raise TraceError(f"{action} must not name a write target")
         if sequence_after != sequence_before:
             raise TraceError(f"{action} must not advance the durable sequence")
-
-
     elif action == "collect":
         if record["commit"] != "none" or target is not None:
             raise TraceError("collect checker records do not perform a BootState write")
@@ -346,10 +261,12 @@ def check_transition_shape(record: dict) -> None:
             raise TraceError("collect checker records must not change BootState sequence")
 
 
-def validate_record(record: dict, store: dict, oracle: Oracle) -> None:
+def validate_record(record: dict, oracle: Oracle, retained: set[bytes] | None = None) -> None:
     check_transition_shape(record)
     if record["action"] == "collect":
-        check_collect(record["generation_root"], store)
+        if retained is None:
+            raise TraceError("collect validation requires the retained-root set")
+        check_collect(record["generation_root"], retained)
         return
     if not oracle.reachable(
         record["action"],
@@ -357,10 +274,102 @@ def validate_record(record: dict, store: dict, oracle: Oracle) -> None:
         record["attempts_before"],
         record["attempts_after"],
     ):
-        raise TraceError(
-            f"{record['action']} post-state is not reachable in the model"
-        )
-    check_concrete(record, store)
+        raise TraceError(f"{record['action']} post-state is not reachable in the model")
+
+
+def select_state(states: list[dict]) -> dict:
+    if not states:
+        raise TraceError("neither durable BootState slot decodes")
+    highest = max(state["sequence"] for state in states)
+    newest = [state for state in states if state["sequence"] == highest]
+    if len(newest) == 2 and newest[0] != newest[1]:
+        raise TraceError("equal-sequence BootState slots conflict")
+    return newest[0]
+
+
+def selected_state(disk: Path) -> dict:
+    image = disk.read_bytes()
+    partition_first_lba = 40
+    states = []
+    for relative_lba in (1024, 1025):
+        start = (partition_first_lba + relative_lba) * 512
+        slot = image[start : start + BOOTSTATE_SLOT_BYTES]
+        try:
+            states.append(CHECK_GENERATION.decode_bootstate(slot))
+        except CHECK_GENERATION.CheckError:
+            pass
+    return select_state(states)
+
+
+def check_trace_chain(records: list[dict], final: dict, oracle: Oracle) -> None:
+    expected_actions = [
+        "stage-pending",
+        "consume-attempt",
+        "consume-attempt",
+        "consume-attempt",
+        "rollback",
+        "stage-pending",
+        "promotion",
+    ]
+    if [record["action"] for record in records] != expected_actions:
+        raise TraceError("live trace does not contain the complete rollback/promotion chain")
+    if [record["attempts_after"] for record in records] != [3, 2, 1, 0, 0, 3, 0]:
+        raise TraceError("live trace has the wrong durable attempt sequence")
+
+    for record in records:
+        validate_record(record, oracle)
+    for previous, current in zip(records, records[1:], strict=False):
+        if previous["sequence_after"] != current["sequence_before"]:
+            raise TraceError("trace sequences are not contiguous")
+        if previous["target_slot"] != current["selected_slot"]:
+            raise TraceError("trace slot selection does not follow the durable write")
+        if previous["attempts_after"] != current["attempts_before"]:
+            raise TraceError("trace attempt counts are not contiguous")
+
+    generation_root = records[0]["generation_root"]
+    state_root = records[0]["state_root"]
+    if any(record["generation_root"] != generation_root for record in records):
+        raise TraceError("generation root changed inside the transition chain")
+    if any(record["state_root"] != state_root for record in records):
+        raise TraceError("state root changed inside the transition chain")
+
+    first_stage, first_attempt, middle_attempt, last_attempt, rollback, second_stage, promotion = records
+    if first_stage["pending"] is None or first_stage["known_good"] == first_stage["pending"]:
+        raise TraceError("staging did not preserve distinct known-good and pending roots")
+    for record in (first_attempt, middle_attempt, last_attempt):
+        if record["known_good"] != first_stage["known_good"] or record["pending"] != first_stage["pending"]:
+            raise TraceError("attempt consumption changed a retained identity")
+    if rollback["known_good"] != first_stage["known_good"] or rollback["pending"] is not None:
+        raise TraceError("rollback did not restore the retained known-good root")
+    if second_stage["known_good"] != rollback["known_good"] or second_stage["pending"] != first_stage["pending"]:
+        raise TraceError("restaging changed the generation identities")
+    if promotion["known_good"] != second_stage["pending"] or promotion["pending"] is not None:
+        raise TraceError("promotion did not select and clear the running pending root")
+
+    for field in ("sequence", "known_good", "pending", "remaining_attempts", "generation_root", "state_root"):
+        trace_field = {
+            "sequence": "sequence_after",
+            "remaining_attempts": "attempts_after",
+        }.get(field, field)
+        if final[field] != promotion[trace_field]:
+            raise TraceError(f"final durable BootState disagrees with trace field {field}")
+
+
+def retained_roots(records: list[dict], final: dict) -> set[bytes]:
+    roots = {final["known_good"], final["generation_root"], final["state_root"]}
+    if final["pending"] is not None:
+        roots.add(final["pending"])
+    for record in records:
+        roots.add(record["known_good"])
+        roots.add(record["generation_root"])
+        roots.add(record["state_root"])
+        if record["pending"] is not None:
+            roots.add(record["pending"])
+    return roots
+
+def check_collect(candidate: bytes, roots: set[bytes]) -> None:
+    if candidate in roots:
+        raise TraceError("collection targets a retained root")
 
 
 def collect_traces(output: str) -> list[dict]:
@@ -372,68 +381,28 @@ def collect_traces(output: str) -> list[dict]:
     return records
 
 
-def bootstore_bytes(image: Path) -> bytes:
-    extracted = Path("/tmp/slime-os-trace-boot-store.bin")
-    extracted.unlink(missing_ok=True)
-    subprocess.run(
-        ["mcopy", "-o", "-i", str(image), "::/boot/boot-store.bin", str(extracted)],
-        check=True,
-    )
-    data = extracted.read_bytes()
-    if len(data) != BOOTSTORE_CAPACITY:
-        raise SystemExit("extracted boot store has unexpected size")
-    return data
-
-
-def run_scenario(image: Path) -> tuple[list[dict], dict]:
-    image.unlink(missing_ok=True)
-    # Boot the release kernel: the Justfile target builds `--release`, and the
-    # debug kernel's much larger stack frames overflow the boot stack.
-    kernel = RELEASE_KERNEL
-
-    environment = os.environ.copy()
-    # B11: this gate exercises verification scaffolding, so it selects the
-    # boot profile that declares it. The product profile declares none.
-    environment["SLIME_GENERATION_NUMBER"] = "99"
-    environment["SLIME_FABRIC_PROFILE"] = "test"
-    environment["SLIME_PENDING_GENERATION"] = "1"
-    environment["SLIME_PENDING_ATTEMPTS"] = "2"
-    run(
-        [
-            str(ROOT / "kernel" / "scripts" / "build-iso.sh"),
-            str(kernel),
-            str(image),
-            "64",
-        ],
-        environment=environment,
-    )
-
-    store = check_bootstore(bootstore_bytes(image))
-    all_records: list[dict] = []
-    for _ in range(3):
-        environment = os.environ.copy()
-        environment["SLIME_BOOT_IMAGE"] = str(image)
-        environment["SLIME_REUSE_BOOT_IMAGE"] = "1"
-        output = run(
-            [
-                str(ROOT / "kernel" / "scripts" / "run-kernel.sh"),
-                str(kernel),
-                "-display",
-                "none",
-            ],
-            environment=environment,
-            allow_failure=True,
-        )
-        records = collect_traces(output)
+def run_scenario() -> tuple[list[dict], dict]:
+    pins = ROLLBACK.load_pins()
+    profile = pins["qemu_arm_virt"]
+    if not isinstance(profile, dict):
+        raise TraceError("invalid seL4 QEMU profile")
+    ROLLBACK.build_image()
+    with tempfile.TemporaryDirectory() as directory:
+        disk = Path(directory) / "rollback-plane.img"
+        ROLLBACK.build_fixture(disk)
+        transcript = ROLLBACK.boot(profile, disk)
+        ROLLBACK.check_transcript(transcript)
+        ROLLBACK.check_slots_durable(disk, 40)
+        records = collect_traces(transcript)
         if not records:
-            raise SystemExit("a rollback boot emitted no BootState trace")
+            raise TraceError("the seL4 rollback plane emitted no BootState trace")
         if len(records) > MAX_TRACE_LINES_PER_BOOT:
-            raise SystemExit(
-                f"a boot emitted {len(records)} trace lines; bound is "
+            raise TraceError(
+                f"the seL4 rollback plane emitted {len(records)} trace lines; bound is "
                 f"{MAX_TRACE_LINES_PER_BOOT}"
             )
-        all_records.extend(records)
-    return all_records, store
+        final = selected_state(disk)
+    return records, final
 
 
 def assert_rejected(description: str, action) -> None:
@@ -444,104 +413,80 @@ def assert_rejected(description: str, action) -> None:
     raise SystemExit(f"validator accepted {description}; expected rejection")
 
 
+def malformed_trace_corpus(example: str) -> None:
+    mutations = (
+        ("missing field", example.replace(" action=stage-pending", "")),
+        ("duplicate field", example + " action=stage-pending"),
+        ("wrong version", example.replace(" v1 ", " v99 ", 1)),
+        ("oversized line", example + " " + "x" * MAX_LINE),
+    )
+    for description, line in mutations:
+        assert_rejected(description, lambda line=line: parse_trace_line(line))
+
+
 def main() -> None:
-    image = Path(sys.argv[1] if len(sys.argv) > 1 else "/tmp/slime-os-bootstate-trace.img")
     oracle = Oracle()
+    records, final = run_scenario()
+    check_trace_chain(records, final, oracle)
 
-    records, store = run_scenario(image)
-
-    # 1. Every rollback_check scenario trace is accepted by the models.
-    consume = [record for record in records if record["action"] == "consume-attempt"]
-    if len(consume) < 2:
-        raise SystemExit("expected at least two durable attempt decrements")
-    for record in records:
-        validate_record(record, store, oracle)
-
-    # 2. A trace that transfers control before the attempt decrement is durable
-    #    is rejected: the post-state (attempts unchanged) is unreachable.
-    stalled = dict(consume[0])
+    # An attempt that transfers before the decrement is durable is unreachable.
+    consume = next(record for record in records if record["action"] == "consume-attempt")
+    stalled = dict(consume)
     stalled["attempts_after"] = stalled["attempts_before"]
-    assert_rejected(
-        "an attempt that was not durably decremented",
-        lambda: validate_record(stalled, store, oracle),
-    )
+    assert_rejected("an undurable attempt decrement", lambda: validate_record(stalled, oracle))
 
-    # 3a. A promotion against the wrong known-good root is rejected.
-    wrong_promotion = dict(consume[0])
-    wrong_promotion["action"] = "promotion"
-
-    # Commit labels and durable sequences are part of the model-implementation
-    # boundary, not decorative metadata.
-    wrong_commit = dict(consume[0])
+    wrong_commit = dict(consume)
     wrong_commit["commit"] = "none"
-    assert_rejected(
-        "a consume-attempt with the wrong commit boundary",
-        lambda: validate_record(wrong_commit, store, oracle),
-    )
-    wrong_sequence = dict(consume[0])
+    assert_rejected("a wrong commit boundary", lambda: validate_record(wrong_commit, oracle))
+
+    wrong_sequence = dict(consume)
     wrong_sequence["sequence_after"] = wrong_sequence["sequence_before"]
+    assert_rejected("a repeated durable sequence", lambda: validate_record(wrong_sequence, oracle))
+
+    wrong_root = [dict(record) for record in records]
+    wrong_root[2]["state_root"] = sha256(b"wrong-state-root")
     assert_rejected(
-        "a durable transition that does not advance its sequence",
-        lambda: validate_record(wrong_sequence, store, oracle),
-    )
-    wrong_promotion["commit"] = "health-promotion"
-    wrong_promotion["attempts_after"] = 0
-    wrong_promotion["pending"] = None
-    wrong_promotion["known_good"] = sha256(b"not-a-real-generation")
-    assert_rejected(
-        "a promotion against the wrong known-good root",
-        lambda: validate_record(wrong_promotion, store, oracle),
-    )
-    wrong_promotion_attempts = dict(consume[0])
-    wrong_promotion_attempts["action"] = "promotion"
-    wrong_promotion_attempts["commit"] = "health-promotion"
-    wrong_promotion_attempts["attempts_before"] = 0
-    wrong_promotion_attempts["attempts_after"] = 0
-    wrong_promotion_attempts["known_good"] = store["state"]["pending"]
-    wrong_promotion_attempts["pending"] = None
-    assert_rejected(
-        "a promotion with an unrelated attempt count",
-        lambda: validate_record(wrong_promotion_attempts, store, oracle),
+        "a transition against the wrong state root",
+        lambda: check_trace_chain(wrong_root, final, oracle),
     )
 
-    # 3b. A promotion whose roots disagree with the on-disk BootState is
-    #     rejected even when the known-good identity itself is valid.
-    wrong_root_promotion = dict(consume[0])
-    wrong_root_promotion["action"] = "promotion"
-    wrong_root_promotion["commit"] = "health-promotion"
-    wrong_root_promotion["attempts_after"] = 0
-    wrong_root_promotion["pending"] = None
-    wrong_root_promotion["state_root"] = sha256(b"wrong-state-root")
+    wrong_promotion = [dict(record) for record in records]
+    wrong_promotion[-1]["known_good"] = sha256(b"not-the-running-generation")
     assert_rejected(
-        "a promotion against the wrong state root",
-        lambda: validate_record(wrong_root_promotion, store, oracle),
+        "promotion of the wrong generation",
+        lambda: check_trace_chain(wrong_promotion, final, oracle),
     )
 
-    # 4. Collection records use the normal validator dispatch. A retained root
-    # is rejected, while a genuinely unreachable object is accepted, proving
-    # the check is not vacuous.
-    collect = dict(consume[0])
-    collect["action"] = "collect"
-    collect["commit"] = "none"
-    collect["target_slot"] = None
-    collect["sequence_after"] = collect["sequence_before"]
-    collect["generation_root"] = store["state"]["known_good"]
-    assert_rejected(
-        "a collection of the known-good root",
-        lambda: validate_record(collect, store, oracle),
+    roots = retained_roots(records, final)
+    collect = dict(records[-1])
+    collect.update(
+        action="collect",
+        commit="none",
+        target_slot=None,
+        sequence_after=collect["sequence_before"],
     )
-    collect["generation_root"] = store["state"]["generation_root"]
+    for root in roots:
+        retained_collect = dict(collect, generation_root=root)
+        assert_rejected(
+            "collection of a retained root through trace dispatch",
+            lambda retained_collect=retained_collect: validate_record(
+                retained_collect, oracle, roots
+            ),
+        )
+    validate_record(dict(collect, generation_root=sha256(b"orphan-object")), oracle, roots)
+
+    conflict = dict(final)
+    conflict["known_good"] = sha256(b"conflicting-known-good")
     assert_rejected(
-        "a collection of the generation root",
-        lambda: validate_record(collect, store, oracle),
+        "equal-sequence divergent BootState slots",
+        lambda: select_state([final, conflict]),
     )
-    collect["generation_root"] = sha256(b"orphan-object")
-    validate_record(collect, store, oracle)
+    malformed_trace_corpus(records[0]["raw"])
 
     print(
-        f"bootstate trace check: {len(records)} durable transitions conform to "
-        "the M5.6a/M5.6b models; stalled-attempt, wrong-root promotion, and "
-        "retained-root collection rejected"
+        f"bootstate trace check: {len(records)} seL4 durable transitions conform "
+        "to the M5.6a/M5.6b model; malformed records, stalled attempt, wrong "
+        "commit/sequence/root/promotion, and retained-root collection rejected"
     )
 
 

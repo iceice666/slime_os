@@ -137,27 +137,27 @@ eventLayout :: List WireField = {
 };
 
 format ::= {
-  formatVersion = formatVersion;
-  sampleLen = sampleLen;
-  ackLen = ackLen;
-  eventLen = eventLen;
-  maxInlineBytes = maxInlineBytes;
-  streamSampleMagic = streamSampleMagic;
-  streamAckMagic = streamAckMagic;
-  streamEventMagic = streamEventMagic;
-  flagLast = flagLast;
-  knownSampleFlags = knownSampleFlags;
-  knownAckFlags = knownAckFlags;
-  knownEventFlags = knownEventFlags;
-  eventSampleLost = eventSampleLost;
-  eventStreamEnd = eventStreamEnd;
-  eventSampleTaken = eventSampleTaken;
+  formatVersion =;
+  sampleLen =;
+  ackLen =;
+  eventLen =;
+  maxInlineBytes =;
+  streamSampleMagic =;
+  streamAckMagic =;
+  streamEventMagic =;
+  flagLast =;
+  knownSampleFlags =;
+  knownAckFlags =;
+  knownEventFlags =;
+  eventSampleLost =;
+  eventStreamEnd =;
+  eventSampleTaken =;
   sampleFields = sampleSchema.fields ?? {;};
   ackFields = ackSchema.fields ?? {;};
   eventFields = eventSchema.fields ?? {;};
-  sampleLayout = sampleLayout;
-  ackLayout = ackLayout;
-  eventLayout = eventLayout;
+  sampleLayout =;
+  ackLayout =;
+  eventLayout =;
 };
 
 main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }

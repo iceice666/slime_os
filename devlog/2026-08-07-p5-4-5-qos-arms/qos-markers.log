@@ -1,0 +1,13 @@
+=== C8.5 markers the seL4 stream plane already emits ===
+(read from build/slime-sel4-stream.elf under the pinned QEMU line)
+
+[fabric] QoS matched            x5
+[fabric-subscriber] QoS matched x2
+[fabric-subscriber-b] bounded loss reported x3
+[fabric] QoS peer dead          x2
+
+=== fault injection ===
+'[fabric-subscriber] QoS matched' -> 'QoS Xatched':
+  QoS is matched before any sample moves: missing marker: \[fabric-subscriber\] QoS matched
+'[fabric] QoS peer dead' -> 'QoS Xeer dead':
+  peer death is a distinct structured event: missing marker: \[fabric\] QoS peer dead

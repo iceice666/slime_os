@@ -1,0 +1,11 @@
+=== reclamation, as emitted (build/slime-sel4.elf) ===
+SLIME_ROOT task reclaimed task=0 source=fabric-service slots=832..882
+SLIME_ROOT task reclaimed task=1 source=generation-manager slots=882..932
+SLIME_ROOT cleanup tasks=2 slots=100 live=0
+SLIME_ROOT READY tasks=2 grants=19 declared_grants=38 reclaimed_slots=100
+
+Two tasks, 50 slots each, contiguous and adjoining: 832..882..932.
+
+=== fault injection: revoke() returns slot_count() - 1 ===
+SLIME_ROOT READY tasks=2 grants=19 declared_grants=38 reclaimed_slots=98
+seL4 root boot check FAILED (exit 1)

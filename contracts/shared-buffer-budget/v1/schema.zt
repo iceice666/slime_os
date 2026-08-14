@@ -61,14 +61,14 @@ entryLayout :: List WireField = {
 };
 
 format ::= {
-  formatVersion = formatVersion;
-  headerBytes = headerBytes;
-  entryBytes = entryBytes;
-  maxHolders = maxHolders;
+  formatVersion =;
+  headerBytes =;
+  entryBytes =;
+  maxHolders =;
   headerFields = headerSchema.fields ?? {;};
   entryFields = entrySchema.fields ?? {;};
-  headerLayout = headerLayout;
-  entryLayout = entryLayout;
+  headerLayout =;
+  entryLayout =;
 };
 
 main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }

@@ -4,3 +4,9 @@
 [submodule "deps/dango"]
 	path = deps/dango
 	url = https://github.com/iceice666/dango.git
+[submodule "deps/sel4"]
+	path = deps/sel4
+	url = https://github.com/seL4/seL4.git
+[submodule "deps/rust-sel4"]
+	path = deps/rust-sel4
+	url = https://github.com/seL4/rust-sel4.git

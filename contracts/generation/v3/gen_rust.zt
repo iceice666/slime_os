@@ -96,4 +96,4 @@ render :: Format -> { python : Text; rust : Text; }
     then { python = pythonBindings format; rust = rustBindings format; }
     else { python = "INVALID_GENERATION_SCHEMA"; rust = "INVALID_GENERATION_SCHEMA"; };
 
-{ render = render; }
+{ render =; }

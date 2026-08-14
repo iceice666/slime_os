@@ -21,7 +21,6 @@ Profile :: type {
   pageProfile : Int;
   requiredFeatures : Int;
   elfMachine : Int;
-  relativeRelocation : Int;
   pageBytes : Int;
   kernelPreferredBaseText : Text;
   kernelLoadBaseText : Text;
@@ -85,7 +84,6 @@ profileRust :: Profile -> Text
     "        page_profile: "; n.toText profile.pageProfile; ",\n";
     "        required_features: "; n.toText profile.requiredFeatures; ",\n";
     "        elf_machine: "; n.toText profile.elfMachine; ",\n";
-    "        relative_relocation: "; n.toText profile.relativeRelocation; ",\n";
     "        page_bytes: "; n.toText profile.pageBytes; ",\n";
     "        kernel_preferred_base: "; profile.kernelPreferredBaseText; ",\n";
     "        kernel_load_base: "; profile.kernelLoadBaseText; ",\n";
@@ -132,7 +130,6 @@ profilePython :: Profile -> Text
     "        page_profile="; n.toText profile.pageProfile; ",\n";
     "        required_features="; n.toText profile.requiredFeatures; ",\n";
     "        elf_machine="; n.toText profile.elfMachine; ",\n";
-    "        relative_relocation="; n.toText profile.relativeRelocation; ",\n";
     "        page_bytes="; n.toText profile.pageBytes; ",\n";
     "        kernel_preferred_base="; profile.kernelPreferredBaseText; ",\n";
     "        kernel_load_base="; profile.kernelLoadBaseText; ",\n";
@@ -184,7 +181,6 @@ pythonBindings :: Format -> Text
     "    page_profile: int\n";
     "    required_features: int\n";
     "    elf_machine: int\n";
-    "    relative_relocation: int\n";
     "    page_bytes: int\n";
     "    kernel_preferred_base: int\n";
     "    kernel_load_base: int\n";
@@ -209,7 +205,6 @@ profileValid :: Profile -> Bool
       && positive profile.pageProfile
       && positive profile.requiredFeatures
       && positive profile.elfMachine
-      && positive profile.relativeRelocation
       && positive profile.pageBytes;
 
 profilesValid :: List Profile -> Bool
@@ -240,4 +235,4 @@ render :: Format -> { python : Text; rust : Text; }
     then { python = pythonBindings format; rust = rustBindings format; }
     else { python = "INVALID_TARGET_PROFILE_SCHEMA"; rust = "INVALID_TARGET_PROFILE_SCHEMA"; };
 
-{ render = render; }
+{ render =; }

@@ -1,0 +1,251 @@
+{
+  bootAction = "sample";
+  bootstrapInstance = "init";
+  executables = [
+    {
+      commandProfile = [];
+      name = "init";
+      object = "sha256:init";
+      role = "init";
+      spawnBudget = 2;
+    };
+    {
+      commandProfile = [];
+      name = "sample-lender";
+      object = "sha256:sample-lender";
+      role = "service";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [];
+      name = "sample-receiver";
+      object = "sha256:sample-receiver";
+      role = "service";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [];
+      name = "sample-worker";
+      object = "sha256:sample-worker";
+      role = "service";
+      spawnBudget = 0;
+    };
+  ];
+  formatVersion = 1;
+  generation = 1;
+  grants = [
+    {
+      name = "init-sample-lender";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "sample-lender";
+      transferable = false;
+    };
+    {
+      name = "init-sample-receiver";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "sample-receiver";
+      transferable = false;
+    };
+    {
+      name = "sample-worker-loopback";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "sample-worker";
+      target = "sample-worker";
+      transferable = false;
+    };
+    {
+      name = "init-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      rights = [
+        "bufferCreate";
+      ];
+      source = "init";
+      target = "init";
+      transferable = false;
+    };
+    {
+      name = "sample-plane-channel";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "sample-lender";
+      target = "sample-receiver";
+      transferable = true;
+    };
+    {
+      name = "sample-lender-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      rights = [
+        "bufferCreate";
+      ];
+      source = "init";
+      target = "sample-lender";
+      transferable = false;
+    };
+  ];
+  health = {
+    bootAttempts = 3;
+    requiredInstances = [
+      "init";
+      "sample-lender";
+      "sample-receiver";
+      "sample-worker";
+    ];
+  };
+  instances = [
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "init-sample-lender";
+          slot = 1;
+        };
+        {
+          grant = "init-sample-receiver";
+          slot = 2;
+        };
+        {
+          grant = "init-shared-buffer-factory";
+          slot = 4;
+        };
+      ];
+      dependencies = [];
+      executable = "init";
+      health = "required";
+      name = "init";
+      owner = "root";
+    };
+    {
+      autostart = false;
+      bindings = [
+        {
+          grant = "sample-lender-shared-buffer-factory";
+          slot = 1;
+        };
+        {
+          grant = "sample-plane-channel";
+          slot = 0;
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "sample-lender";
+      health = "required";
+      name = "sample-lender";
+      owner = "init";
+    };
+    {
+      autostart = false;
+      bindings = [
+        {
+          grant = "sample-plane-channel";
+          slot = 0;
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "sample-receiver";
+      health = "required";
+      name = "sample-receiver";
+      owner = "init";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "sample-worker-loopback";
+          slot = 0;
+        };
+      ];
+      dependencies = [];
+      executable = "sample-worker";
+      extraThreads = 1;
+      health = "required";
+      name = "sample-worker";
+      owner = "root";
+      workerPriority = 100;
+    };
+  ];
+  mintedBindings = [
+    {
+      name = "sample-lender-receiver-supervision";
+      capabilityKind = "supervision";
+      owner = "init";
+      holder = "sample-lender";
+      rights = [
+        "supervise";
+      ];
+      slot = 2;
+      transferable = false;
+    };
+  ];
+  interfaceSchemas = [];
+  objects = [
+    {
+      id = "sha256:init";
+      kind = "bootstrap";
+      size = 65536;
+    };
+    {
+      id = "sha256:sample-lender";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:sample-receiver";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:sample-worker";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "shared-buffer-budget";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "boot-layout";
+      kind = "resource";
+      size = 4096;
+    };
+  ];
+  sharedBufferBudget = [
+    {
+      bufferCount = 1;
+      bytePages = 4;
+      holder = "sample-lender";
+      loanCount = 1;
+      mappingCount = 2;
+    };
+    {
+      bufferCount = 1;
+      bytePages = 2;
+      holder = "sample-receiver";
+      loanCount = 1;
+      mappingCount = 2;
+    };
+  ];
+  state = [];
+  target = "aarch64-sel4-qemu-virt";
+}

@@ -6,7 +6,11 @@ These instructions apply to the entire repository.
 
 ## Project state
 
-Slime OS is a QEMU-verified Rust `no_std` kernel with a minimal userspace component graph. Treat Framework laptop bring-up, storage, rollbackable generations, native Dango, and daily-driver hardware support as unfinished unless code and tests prove otherwise.
+Slime OS is a QEMU-verified Rust `no_std` userspace graph on upstream seL4,
+with `slime-root` owning dynamic mechanism and generated Zutai contracts owning
+every persisted or cross-process format. Treat Framework laptop bring-up,
+physical NVMe qualification, rollbackable production generations, and
+daily-driver hardware support as unfinished unless code and tests prove otherwise.
 
 ## Code map: start here, do not broad-search
 
@@ -14,35 +18,34 @@ Route work by ownership before searching for a symbol. Read the named module roo
 
 ### Execution path
 
-1. `stage0/src/main.rs::boot` selects and verifies boot state, generation, release, and kernel image, builds the handoff, and jumps to the kernel. Pure boot-selection helpers live in `stage0/src/lib.rs`.
-2. `kernel/src/main.rs::kernel_main` initializes architecture, memory, devices, input, and time, then calls `kernel/src/runtime/bootstrap.rs::start`.
-3. `kernel/src/runtime/bootstrap.rs` decodes the selected generation, creates the initial capability graph, launches components, records component task ids, and decides the healthy/idle exit condition.
-4. Components enter through `components/bins/src/bin/*.rs`; their syscall surface is `components/runtime/src/syscall.rs`, whose authoritative kernel implementation is `kernel/src/syscall/mod.rs`.
+1. `scripts/build/build-sel4.py` pins and builds seL4, the root task, its child fixture, and the loader image.
+2. `slime-root/src/main.rs` admits the embedded generation, creates the initial capability graph, launches components, supervises faults, and owns bounded kernel-object allocation.
+3. Components enter through `components/bins/src/bin/*.rs`; their syscall surface is `components/runtime/src/syscall.rs`, with the native transport in `components/runtime/src/syscall/sel4_transport.rs` and authoritative operations in `slime-root/src/ipc.rs` plus the owning mechanism module.
 
 ### Task-to-file index
 
 | Change | Canonical starting point | Follow-on files |
 | --- | --- | --- |
-| Capability kinds, rights, tables, derivation | `kernel/src/capability/mod.rs` | `kernel/src/syscall/mod.rs`, generation grants in `kernel/src/runtime/bootstrap.rs` |
-| Channel IPC, message bounds, endpoint lifetime | `kernel/src/ipc/mod.rs` | `kernel/src/syscall/mod.rs::{sys_send,sys_recv}`, `components/runtime/src/syscall.rs` |
-| Tasks, spawn, scheduling, wait, termination, reclamation | `kernel/src/task/mod.rs` | `kernel/src/syscall/mod.rs`, `kernel/src/memory/address_space.rs` |
-| Syscall numbers, argument validation, rights gates | `kernel/src/syscall/mod.rs` | Mirror wrappers in `components/runtime/src/syscall.rs`; the kernel file is authoritative |
-| Physical/virtual memory and heap | `kernel/src/memory/mod.rs` | `kernel/src/memory/{pmm,vmm,heap,address_space}.rs` |
-| Shared-buffer allocation, mapping, loan, accounting | `kernel/src/memory/shared_buffer.rs` | handle kinds in `kernel/src/capability/mod.rs`, gates in `kernel/src/syscall/mod.rs` |
-| Boot graph and component launch grants | `kernel/src/runtime/bootstrap.rs` | generation lookup in `kernel/src/runtime/generation.rs`, manifest fixture below |
-| Generation decoding and identity | `boot-contracts/src/generation.rs` | kernel admission in `kernel/src/runtime/generation.rs` |
-| Generation construction and manifest contents | `scripts/build/build-generation.py` | `contracts/generation/v1/fixtures/valid.zti`, `components/bins/build.rs` |
-| Component image format/loading | `contracts/component/v1/schema.zt` | generated `components/proto/src/component.rs`, decoder `kernel/src/runtime/component.rs` |
+| Capability kinds, rights, derivation, transfer | `slime-root/src/generation.rs` | `slime-root/src/{graph,ipc}.rs`, generation grants in `contracts/generation/v1/fixtures/sel4-*.zti` |
+| Native endpoint IPC, message bounds, endpoint lifetime | `slime-root/src/peer_endpoint.rs` | `slime-root/src/{ipc,notification}.rs`, `components/runtime/src/syscall/sel4_transport.rs` |
+| Tasks, spawn, supervision, termination, reclamation | `slime-root/src/task.rs` | `slime-root/src/{main,child_vspace,fault,supervision}.rs` |
+| Syscall argument validation and rights gates | `slime-root/src/ipc.rs` | owner modules in `slime-root/src/`, wrappers in `components/runtime/src/syscall.rs` |
+| seL4 object allocation and VSpace construction | `slime-root/src/object_allocator.rs` | `slime-root/src/{child_vspace,buffer_adapter}.rs` |
+| Shared-buffer allocation, mapping, loan, accounting | `slime-root/src/shared_buffer.rs` | `slime-root/src/{buffer_adapter,transfer_window,ipc}.rs` |
+| Boot graph and component launch grants | `slime-root/src/main.rs` | generation decoding in `slime-root/src/generation.rs`, manifest fixtures below |
+| Generation decoding and identity | `boot-contracts/src/generation.rs` | admission in `slime-root/src/generation.rs` |
+| Generation construction and manifest contents | `scripts/build/build-generation.py` | `contracts/generation/v1/fixtures/sel4-*.zti`, `components/bins/build.rs` |
+| Component image format/loading | `contracts/component/v1/schema.zt` | generated `components/proto/src/component.rs`, decoder `boot-contracts/src/component_image.rs`, loader `slime-root/src/child_vspace.rs` |
 | Userspace component behavior | `components/bins/src/bin/<component>.rs` | shared helpers in `components/bins/src/*.rs`; binary list in `components/bins/Cargo.toml` |
-| Userspace syscall ABI | `components/runtime/src/syscall.rs` | exports in `components/runtime/src/lib.rs`, kernel implementation in `kernel/src/syscall/mod.rs` |
+| Userspace syscall ABI | `components/runtime/src/syscall.rs` | seL4 transport in `components/runtime/src/syscall/sel4_transport.rs`, root implementation in `slime-root/src/ipc.rs` |
 | IPC/service protocol semantics | `contracts/<protocol>/v1/schema.zt` | generated Rust in `components/proto/src/<protocol>.rs`; validators in `components/proto/src/lib.rs` |
 | Boot/persistence contract decoder | `boot-contracts/src/<contract>.rs` | generated constants/layouts in `boot-contracts/src/generated/` |
 | Fabric schemas, graph authority, stream framing | `contracts/interface-schema/v1/`, `contracts/fabric-graph/v1/`, `contracts/fabric-stream/v1/` | `boot-contracts/src/fabric_graph.rs`, `components/bins/src/bin/fabric-service.rs` |
-| Block/storage transport and services | `kernel/src/storage/mod.rs` | `kernel/src/storage/{block_device,block_service,object_store,store_service}.rs`; hardware in `kernel/src/drivers/{virtio_blk,nvme,dma}.rs` |
-| Generation management, rollback, recovery | `kernel/src/runtime/generation_manager.rs` | `kernel/src/runtime/generation_service.rs`, `kernel/src/storage/{transfer,recovery}.rs`, matching component binaries |
-| Architecture, traps, interrupts, platform boot | `kernel/src/arch/x86_64/mod.rs` | `kernel/src/arch/x86_64/{trap,interrupts,boot,platform,pci}.rs` |
+| Block/storage transport and services | `slime-root/src/{device,virtio_blk}.rs` | userspace services/probes in `components/bins/src/bin/sel4-*.rs` |
+| Generation management, rollback, recovery | `components/bins/src/bin/sel4-generation-manager.rs` | matching rollback/recovery/transfer components and root block mediation |
+| Architecture, traps, interrupts, platform boot | `sel4/config/qemu-arm-virt.cmake` | `slime-root/src/{fault,platform_timer}.rs`, `scripts/build/build-sel4.py` |
 | Host build/check orchestration | `Justfile` target | implementation in `scripts/{build,check,generate,lib}/` |
-| Kernel behavioral regression | `kernel/tests/<feature>.rs` | run the matching named `just *_check` or narrow Cargo/QEMU target |
+| Root behavioral regression | `slime-root/src/<module>.rs` tests | run `just test_sel4_root` and the matching `just sel4_*_check` |
 | Protocol validation regression | `components/proto/tests/<protocol>.rs` | generated protocol module and schema |
 
 ### Generated-code rule
@@ -51,29 +54,32 @@ Files beginning with `@generated` and files under `boot-contracts/src/generated/
 
 ### Navigation traps
 
-- `kernel/src/lib.rs` re-exports architecture, driver, protocol, runtime, storage, and support modules, so `crate::<name>` callsites often refer to implementations in those subdirectories rather than the crate root.
-- Kernel protocol modules in `kernel/src/protocol/` mostly adapt or re-export generated `slime-proto`; schema and generated bindings remain the source path for wire-layout changes.
-- A component's capability slot layout is established by grants in `kernel/src/runtime/bootstrap.rs` and `contracts/generation/v1/fixtures/valid.zti`, not by the component binary alone. Inspect all three before changing slot numbers or authority.
+- `slime-root/src/lib.rs` exposes the mechanism modules host tests compile; the product binary in `slime-root/src/main.rs` links those same modules.
+- A component's capability slot layout is established by grants in the matching `contracts/generation/v1/fixtures/sel4-*.zti` and generated boot-layout fixture, not by the component binary alone. Inspect all three before changing slot numbers or authority.
 - `scripts/check/` contains end-to-end QEMU assertions and expected serial markers; it is verification code, not the implementation of the behavior it checks.
 
 ## Commands
 
 Use the Justfile targets from the repository root:
 
-- `just run` — boot the current QEMU vertical slice.
-- `just test` — run kernel and integration tests under QEMU.
-- `just generation_check` — build and validate the deterministic generation binary.
+- `just run` — boot the current seL4 QEMU product image.
+- `just test` — run the root/product behavioral aggregate.
+- `just generation_check` — build and validate the deterministic seL4 generation.
 - `just contracts_check` — validate generation manifest contracts.
-- `just devlog_check` — validate devlog structure, front matter, and links.
-- `just fmt_check_all` — check Rust formatting for every workspace crate.
-- `just lint_all` — run clippy with warnings denied for every workspace crate (kernel, components, stage0, boot-contracts).
-- `just lint_pedantic` — advisory-only clippy pass (missing SAFETY comments, lossy casts); has known existing hits and is not a gate.
-- `just deny` — dependency advisories, bans, licenses, and source pinning (deny.toml).
+- `just sel4_root_boot_check` — root admission, allocator, timer, fault isolation, cleanup, and ready path.
+- `just sel4_boot_layout_check` — init's resolved capability layout on every seL4 plane, against frozen fixtures (B10). Bless with `just sel4_boot_layout_bless`.
+- `just sel4_qos_check` — C8.5's declared QoS policy on the `sel4-qos` plane.
+- `just sel4_gate_control_check` — prove every seL4 marker gate fails on missing, reordered, or explicit failure evidence.
+- `just devlog_check` — validate devlog structure, front matter, gates, and links.
+- `just fmt_check_all` — check Rust formatting for every surviving workspace crate.
+- `just lint_all` — run clippy with warnings denied for components, stage0, boot-contracts, and seL4 product crates.
+- `just deny` — dependency advisories, bans, licenses, and source pinning.
 - `just machete` — unused-dependency scan of workspace crates.
-- `just miri` — UB check of host-testable crates (boot-contracts, slime-proto).
+- `just miri` — UB check of host-testable crates.
 - `just test_host` — host-side unit tests for boot-contracts and slime-proto.
-- `just ruff` — Python lint for `scripts/` (ruff.toml).
-- `just typos` — spell-check sources and docs (_typos.toml).
+- `just test_sel4_root` — `slime-root`'s 112 host unit tests across 13 modules, with the count asserted (B23); requires the installed seL4 prefix.
+- `just ruff` — Python lint for `scripts/`.
+- `just typos` — spell-check sources and docs.
 
 ## Backlog before roadmap
 
@@ -89,7 +95,7 @@ Every entry is a folder `devlog/YYYY-MM-DD-short-topic/` holding a curated `inde
 
 - **Zutai is the only schema language.** Every serialized format that crosses a persistence, process, or boot boundary — on-disk formats, IPC/protocol messages, manifests, handoff structures — must be defined as a versioned Zutai schema under `contracts/` (`schema.zt`), with Rust/Python bindings generated from it (`scripts/generate/generate-*-bindings.py`, `just *_gen`). Do not introduce hand-written field offsets, ad-hoc `#[repr(C)]` wire structs, `struct.pack` layouts, or any other schema language (JSON Schema, protobuf, etc.) as the source of truth for a format. Purely in-memory types are exempt.
 - Prefer small, direct changes over new abstractions.
-- Keep the kernel policy-free; component policy belongs in userspace.
+- Keep mechanism in `slime-root`; component policy belongs in userspace components.
 - Preserve the capability/component/generation model. Do not add ambient authority, global executable paths, or implicit environment assumptions.
 - Do not treat framebuffer output alone as milestone completion.
 - Do not claim physical-machine support without an observed removable-media Framework boot that does not write internal NVMe.
@@ -97,8 +103,8 @@ Every entry is a folder `devlog/YYYY-MM-DD-short-topic/` holding a curated `inde
 
 ## Verification
 
-- For kernel or userspace behavior changes, run the narrowest QEMU path that exercises the changed behavior.
+- For root or userspace behavior changes, run the narrowest seL4 QEMU path that exercises the changed behavior.
 - For generation-format or builder changes, run `just contracts_check` and `just generation_check`.
-- For permanent Rust changes, run `just fmt_check_all` and `just lint_all` before finishing (or the narrower per-crate variants for scoped changes).
+- For permanent Rust changes, run `just fmt_check_all` and `just lint_all` before finishing.
 - Stage-0 denies `clippy::unwrap_used`, `clippy::expect_used`, `clippy::panic`, and `clippy::indexing_slicing` at the crate level; every fallible step there must return a `BootError`.
 - For documentation-only changes, state that no runtime tests were run.

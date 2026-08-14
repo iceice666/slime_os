@@ -108,12 +108,12 @@ stateLayout :: List WireField = {
 };
 
 format ::= {
-  formatVersion = formatVersion; headerBytes = headerBytes;
-  objectEntryBytes = objectEntryBytes; stateEntryBytes = stateEntryBytes;
-  maxTransferBytes = maxTransferBytes; objectFlagPayload = objectFlagPayload;
-  stateFlagTravel = stateFlagTravel; stateFlagReadOnly = stateFlagReadOnly;
+  formatVersion =; headerBytes =;
+  objectEntryBytes =; stateEntryBytes =;
+  maxTransferBytes =; objectFlagPayload =;
+  stateFlagTravel =; stateFlagReadOnly =;
   headerFields = transferHeaderSchema.fields ?? {;}; objectFields = transferObjectSchema.fields ?? {;}; stateFields = transferStateSchema.fields ?? {;};
-  headerLayout = headerLayout; objectLayout = objectLayout; stateLayout = stateLayout;
+  headerLayout =; objectLayout =; stateLayout =;
 };
 
 main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }

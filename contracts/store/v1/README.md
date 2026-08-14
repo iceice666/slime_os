@@ -1,19 +1,23 @@
 # Object store protocol format 1
 
-This directory defines the request/reply protocol between userspace
-components and the kernel object store service (M5.4). `schema.zt` is the
-normative layout; `gen_rust.zt` renders the shared no_std Rust bindings
-(`components/proto/src/store.rs`). Both userspace and the kernel consume that
-single module. Regenerate with `just store_gen` and validate freshness with
-`just contracts_check`.
+This directory defines the request/reply protocol for the userspace object
+store service (M5.4). `schema.zt` is the normative layout; `gen_rust.zt` renders
+the shared no_std Rust bindings (`components/proto/src/store.rs`). Regenerate
+with `just store_gen` and validate freshness with `just contracts_check`.
 
-The protocol transports operation envelopes only. Object payloads move
-through caller-supplied buffers the syscall gate validates per operation;
-the store format itself (superblocks, records, content hashes) lives in
-`kernel/src/storage/object_store.rs`, and partition selection is bounded by GPT
-validation in `kernel/src/storage/gpt.rs`. Authority is the `ObjectStore`
-capability: `RIGHT_STORE_READ` gates `OP_STAT`/`OP_GET`, `RIGHT_STORE_WRITE`
-gates `OP_PUT` (see `docs/capability-matrix.md`).
+The protocol transports operation envelopes only. The store format itself —
+superblocks, records, content hashes — lives in
+`boot-contracts/src/object_store.rs`, and partition selection is bounded by GPT
+validation in `boot-contracts/src/gpt.rs`. Both are host-testable and
+Miri-checkable, and both run inside the components that serve the protocol
+(`components/bins/src/bin/sel4-store-probe.rs`,
+`components/bins/src/bin/sel4-filesystem-service.rs`).
+
+Authority is the `Block` capability the generation grants that component:
+`RIGHT_BLOCK_READ` (bit 10) is required to read sectors and `RIGHT_BLOCK_WRITE`
+(bit 11) to append and flush them (see `docs/capability-matrix.md`). There is no
+`ObjectStore` object kind and no store syscall: a client that holds no block
+capability has no path to the device at all.
 
 ## Layout
 
@@ -81,7 +85,9 @@ are enforced before any capability or device contact.
 ## Validation
 
 `scripts/check/check-contracts.py` checks both schemas and verifies the generated
-bindings are fresh. `kernel/tests/object_store.rs` pins protocol and store-format
-acceptance/rejection classes; `just storage_store_check` exercises the
-complete QEMU path (GPT recovery, content-addressed retrieval, append/seal
-durability, and malformed-metadata rejection).
+bindings are fresh. `boot-contracts/src/object_store.rs` and
+`boot-contracts/src/store_disk.rs` pin the protocol and store-format
+acceptance/rejection classes as host tests under `just test_host`;
+`just sel4_store_check` exercises the complete QEMU path (GPT recovery,
+content-addressed retrieval, append/seal durability, and malformed-metadata
+rejection).

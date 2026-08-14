@@ -41,7 +41,7 @@ The near-term roadmap now centers on a concrete robotics acceptance test: Slime 
 
 ## Open risks and follow-ups
 
-- [ ] RP0 must pin the exact minimal DDS/RMW boundary: DDSI-RTPS version, XCDR representation, discovery mode, participants, locators, QoS subset, and whether the node code is Slime-native, source-compatible, or Linux-personality-backed.
+- [ ] RP0 must pin the exact minimal DDS/RMW boundary: DDSI-RTPS version, XCDR representation, discovery mode, participants, locators, QoS subset. The transport-family sub-question (Slime-native DDSI-RTPS vs. Zenoh vs. Linux-personality-backed) is resolved by [`devlog/2026-08-07-ros2-transport-zenoh-vs-dds/`](../2026-08-07-ros2-transport-zenoh-vs-dds/index.md): self-built DDSI-RTPS/XCDR as a native component. The remaining wire-level parameters stay open.
 - [ ] New `just rpi5_*` and `just rpi5_ros2_dds_*` target names are roadmap placeholders; they need implementation before any RP milestone can be claimed complete.
 - [ ] The current codebase still appears x86-64-first; P0/P1/P2/RP1/RP2 must establish target-qualified artifacts and AArch64 boot before the board demo is credible.
 - [ ] The roadmap now defines R0, but no DDSI-RTPS/XCDR runtime, ROS 2 runtime, or node API has been implemented by this decision.

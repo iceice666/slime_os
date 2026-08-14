@@ -11,6 +11,7 @@ pub const OBJECT_KIND_ENDPOINT: u32 = 1;
 pub const OBJECT_KIND_SHARED_BUFFER: u32 = 2;
 pub const OBJECT_KIND_SHARED_BUFFER_LOAN: u32 = 3;
 pub const OBJECT_KIND_SUPERVISION: u32 = 4;
+pub const OBJECT_KIND_DIRECTORY: u32 = 5;
 pub const FLAG_RETAIN_TRANSFER: u32 = 1;
 pub const KNOWN_FLAGS: u32 = 1;
 pub const DIRECTION_PUBLISH: u32 = 1;

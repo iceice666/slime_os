@@ -2,14 +2,16 @@
   formatVersion = "one";
   generation = 1;
   target = "x86_64-qemu-virtio";
-  kernelObject = "sha256:kernel";
-  bootstrapComponent = "init";
+  bootAction = "product";
+  bootstrapInstance = "init";
+  mintedBindings = [];
   objects = [];
-  components = [];
+  executables = [];
+  instances = [];
   grants = [];
   state = [];
   health = {
     bootAttempts = 3;
-    requiredComponents = [];
+    requiredInstances = [];
   };
 }

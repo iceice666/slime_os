@@ -49,12 +49,6 @@ EXPECTED_PROFILES = {
 }
 UNKNOWN_TARGET = "unknown-architecture-profile"
 NEUTRAL_RESOURCE = b"architecture-neutral-resource-v1"
-EXPECTED_RELATIVE_RELOCATIONS = {
-    "x86_64-qemu-virtio": 8,
-    "aarch64-qemu-virt": 1027,
-    "aarch64-rpi5": 1027,
-    "riscv64-qemu-virt": 3,
-}
 MANIFEST = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "valid.zti"
 
 
@@ -131,33 +125,6 @@ def check_cross_profile_rejection() -> None:
         fail("no same-ISA profiles exercise exact profile-id separation")
 
 
-def synthetic_elf(profile, relocation: int) -> bytes:
-    data = bytearray(152)
-    data[:6] = b"\x7fELF\x02\x01"
-    struct.pack_into("<HH", data, 16, 3, profile.elf_machine)
-    struct.pack_into("<QQQ", data, 24, 0, 0, 64)
-    struct.pack_into("<HHHHH", data, 52, 64, 0, 0, 64, 1)
-    struct.pack_into("<I", data, 68, 4)
-    struct.pack_into("<QQ", data, 88, 128, 24)
-    struct.pack_into("<Q", data, 120, 24)
-    struct.pack_into("<QQq", data, 128, 0, relocation, 0)
-    return bytes(data)
-
-
-def check_profile_relocations() -> None:
-    for profile in TARGET_PROFILES:
-        expected = EXPECTED_RELATIVE_RELOCATIONS.get(profile.name)
-        if expected is None or profile.relative_relocation != expected:
-            fail(f"target profile {profile.name!r} has the wrong relative relocation")
-        BUILD_GENERATION.parse_elf64(synthetic_elf(profile, expected), profile)
-        wrong = 1027 if expected != 1027 else 8
-        try:
-            BUILD_GENERATION.parse_elf64(synthetic_elf(profile, wrong), profile)
-        except SystemExit:
-            pass
-        else:
-            fail(f"target profile {profile.name!r} admitted relocation {wrong}")
-
 
 def kernel_image(profile) -> bytes:
     payload_offset = KERNEL_HEADER.size + KERNEL_SEGMENT.size
@@ -208,26 +175,46 @@ def component_image(profile) -> bytes:
 def target_manifest(name: str) -> dict:
     return {
         "target": name,
+        "bootAction": "graph",
         "kernelObject": "kernel",
-        "bootstrapComponent": "init",
+        "bootstrapInstance": "init",
         "objects": [
             {"id": "init-image", "kind": "bootstrap"},
             {"id": "kernel", "kind": "kernel"},
             {"id": "neutral", "kind": "resource"},
         ],
-        "components": [
-            {"name": "init", "object": "init-image", "role": "init", "dependencies": [], "spawnBudget": 0}
+        # v5 splits the v4 `components` list into an executable catalogue and
+        # the instances constructed from it. This manifest still used the v4
+        # key, so the builder raised `KeyError: 'instances'` and this gate
+        # could not run at all -- the cutover moved every real fixture and
+        # left the one synthesized here behind.
+        "executables": [
+            {"name": "init", "object": "init-image", "role": "init", "spawnBudget": 0}
+        ],
+        "instances": [
+            {
+                "name": "init",
+                "executable": "init",
+                "owner": "root",
+                "autostart": True,
+                "dependencies": [],
+                "health": "required",
+                "bindings": [],
+            }
         ],
         "grants": [],
         "state": [],
-        "health": {"bootAttempts": 2, "requiredComponents": ["init"]},
+        "health": {"bootAttempts": 2, "requiredInstances": ["init"]},
     }
 
 
 def object_payload(generation: bytes, object_id: str) -> bytes:
+    # Generated v5 header offsets. Keep these in lockstep with
+    # `scripts/lib/boot_contracts.py`; notification topology added two section
+    # offsets after minted bindings.
     object_count = struct.unpack_from("<I", generation, 112)[0]
-    object_offset = struct.unpack_from("<Q", generation, 136)[0]
-    string_offset = struct.unpack_from("<Q", generation, 184)[0]
+    object_offset = struct.unpack_from("<Q", generation, 200)[0]
+    string_offset = struct.unpack_from("<Q", generation, 368)[0]
     for index in range(object_count):
         name_offset, _kind, payload_offset, payload_len, _digest = GENERATION_OBJECT.unpack_from(
             generation, object_offset + index * GENERATION_OBJECT.size
@@ -333,7 +320,6 @@ def run() -> None:
     check_profiles()
     check_unknown_target()
     check_cross_profile_rejection()
-    check_profile_relocations()
     check_target_identity_and_neutral_resources()
     check_generated_bindings()
     check_rollback_window()

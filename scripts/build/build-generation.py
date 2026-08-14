@@ -5,9 +5,7 @@ import sys as _sys
 from pathlib import Path as _Path
 
 _sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "lib"))
-# This script's own directory, for sibling modules. Python only adds it
-# implicitly when the script is invoked by path from the directory holding it,
-# and `check-transfer.py` runs it from elsewhere.
+# This script's own directory, for sibling modules when imported by host checks.
 _sys.path.insert(0, str(_Path(__file__).resolve().parent))
 
 import copy
@@ -90,6 +88,9 @@ from boot_contracts import (
     MAX_FABRIC_GRAPH_ROUTES,
     MAX_FABRIC_GRAPH_SCHEMAS,
     COMPONENT_DEFAULT_STACK_BYTES,
+    COMPONENT_IMAGE_ELF_HEADER_LEN,
+    COMPONENT_IMAGE_ELF_MAGIC,
+    COMPONENT_IMAGE_ELF_VERSION,
     COMPONENT_IMAGE_HEADER,
     COMPONENT_IMAGE_KERNEL_ABI,
     COMPONENT_IMAGE_MAGIC,
@@ -100,41 +101,57 @@ from boot_contracts import (
     COMPONENT_SEGMENT_FLAG_EXEC,
     COMPONENT_SEGMENT_FLAG_WRITE,
     MAX_COMPONENT_IMAGE_BYTES,
-    GENERATION_COMPONENT,
+    GENERATION_BINDING,
     GENERATION_DEPENDENCY,
+    GENERATION_EXECUTABLE,
+    GENERATION_INSTANCE,
     GENERATION_GRANT,
     GENERATION_HEADER,
     GENERATION_HEALTH,
     GENERATION_MAGIC,
     GENERATION_OBJECT,
     GENERATION_STATE,
+    GENERATION_PROCESS,
+    GENERATION_THREAD,
+    GENERATION_KERNEL_OBJECT,
+    GENERATION_MAPPING,
+    GENERATION_CAP_BINDING,
+    GENERATION_SERVICE_BINDING,
+    GENERATION_SCHEDULE,
+    GENERATION_FAULT_POLICY,
+    GENERATION_SPAWN_TEMPLATE,
+    GENERATION_MINTED_BINDING,
+    GENERATION_NOTIFICATION_GRANT,
+    GENERATION_NOTIFICATION_BINDING,
+    GENERATION_RESOURCE_QUOTA,
     GENERATION_VERSION,
-    KERNEL_ABI_VERSION,
-    KERNEL_HEADER,
-    KERNEL_MAGIC,
-    KERNEL_RELOCATION,
-    KERNEL_SEGMENT,
-    KERNEL_VERSION,
     TARGET_PROFILES_BY_NAME,
     TargetProfile,
-    MAX_COMPONENTS,
+    MAX_BINDINGS,
     MAX_DEPENDENCIES,
+    MAX_EXECUTABLES,
+    MAX_INSTANCES,
     MAX_GENERATION_BYTES,
     MAX_GRANTS,
-    MAX_HEALTH_COMPONENTS,
-    MAX_KERNEL_IMAGE_BYTES,
-    MAX_KERNEL_RELOCATIONS,
-    MAX_KERNEL_SEGMENTS,
+    MAX_HEALTH_INSTANCES,
     MAX_OBJECT_PAYLOAD_BYTES,
-    MAX_RECOVERY_STATE_OBJECTS,
-    RECOVERY_INDEX_HEADER,
-    RECOVERY_INDEX_MAGIC,
-    RECOVERY_INDEX_VERSION,
-    RECOVERY_STATE_ENTRY,
     MAX_OBJECTS,
     MAX_STATES,
     MAX_STRING_BYTES,
     MAX_STRING_TABLE_BYTES,
+    MAX_PROCESSES,
+    MAX_THREADS,
+    MAX_KERNEL_OBJECTS,
+    MAX_MAPPINGS,
+    MAX_CAP_BINDINGS,
+    MAX_SERVICE_BINDINGS,
+    MAX_SCHEDULES,
+    MAX_FAULT_POLICIES,
+    MAX_SPAWN_TEMPLATES,
+    MAX_MINTED_BINDINGS,
+    MAX_NOTIFICATION_GRANTS,
+    MAX_NOTIFICATION_BINDINGS,
+    MAX_RESOURCE_QUOTAS,
     SHARED_BUFFER_BUDGET_ENTRY,
     SHARED_BUFFER_BUDGET_HEADER,
     SHARED_BUFFER_BUDGET_HEADER_BYTES,
@@ -149,8 +166,6 @@ from boot_contracts import (
     NORMALIZED_SCHEMAS_HEADER_BYTES,
     NORMALIZED_SCHEMAS_MAGIC,
     NORMALIZED_SCHEMAS_VERSION,
-    SEGMENT_EXEC,
-    SEGMENT_WRITE,
     bootstate_checksum,
     bootstore_checksum,
     generation_identity,
@@ -164,6 +179,169 @@ from zutai_cli import STDLIB, binary
 from harness import ROOT
 
 SOURCE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "valid.zti"
+# P5.2: the `aarch64-sel4-qemu-virt` graph is a sibling manifest rather than a
+# boot profile of `valid.zti`, because `resolve_boot_profile` narrows by
+# subtraction and naming a component in a new profile would drop it from
+# `default`, changing the frozen product generation. See `sel4.md` beside it.
+SEL4_SOURCE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "sel4.zti"
+SEL4_TARGET_PROFILE = "aarch64-sel4-qemu-virt"
+# Additional seL4 manifests carry distinct authenticated boot actions and
+# generation-derived component tables while sharing the same target profile.
+SEL4_MANIFESTS = {
+    "sel4": SEL4_SOURCE,
+    "sel4-channel": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-channel.zti",
+    "sel4-loan": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-loan.zti",
+    "sel4-spawn": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-spawn.zti",
+    "sel4-sample": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-sample.zti",
+    "sel4-stream": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-stream.zti",
+    "sel4-supervision": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-supervision.zti",
+    "sel4-reclamation": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-reclamation.zti",
+    "sel4-crossing": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-crossing.zti",
+    "sel4-call": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-call.zti",
+    "sel4-qos": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-qos.zti",
+    # 48 instances: the admitted ceiling, so the graph that boots is the
+    # largest one admission will accept (B49).
+    "sel4-stress": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-stress.zti",
+    "sel4-operation": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-operation.zti",
+    "sel4-visibility": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-visibility.zti",
+    "sel4-boot": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-boot.zti",
+    "sel4-storage": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-storage.zti",
+    "sel4-store": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-store.zti",
+    "sel4-rollback": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-rollback.zti",
+    "sel4-recovery": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-recovery.zti",
+    "sel4-generation": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-generation.zti",
+    "sel4-directory": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-directory.zti",
+    "sel4-filesystem": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-filesystem.zti",
+    "sel4-dango": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-dango.zti",
+    "sel4-input": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-input.zti",
+    "sel4-powerbox": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-powerbox.zti",
+    "sel4-transfer": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-transfer.zti",
+}
 COMPONENTS_TARGET_DIR = Path(
     os.environ.get("CARGO_TARGET_DIR") or ROOT / "target" / "components"
 )
@@ -187,7 +365,6 @@ RIGHT = {
     "healthConfirm": 1 << 14,
     "bootUpdate": 1 << 15,
     "spawn": 1 << 16,
-    "endpointCreate": 1 << 17,
     "supervise": 1 << 18,
     "directoryRead": 1 << 19,
     "directoryWrite": 1 << 20,
@@ -199,6 +376,67 @@ RIGHT = {
 }
 RIGHT_TRANSFER = 1 << 2
 RIGHT_ALL = RIGHT_TRANSFER | sum(RIGHT.values())
+
+CAPABILITY_KIND = {
+    "endpoint": 1,
+    "executable": 2,
+    "sharedBufferFactory": 3,
+    "block": 4,
+    "directory": 5,
+    "input": 6,
+    "supervision": 7,
+    "sharedBuffer": 8,
+    "loan": 9,
+}
+
+
+def validate_capability_rights(name: str, kind: str, rights: int) -> None:
+    masks = {
+        "endpoint": RIGHT["send"] | RIGHT["recv"] | RIGHT_TRANSFER,
+        "executable": RIGHT["exec"] | RIGHT["spawn"] | RIGHT_TRANSFER,
+        "sharedBufferFactory": RIGHT["bufferCreate"] | RIGHT_TRANSFER,
+        "block": RIGHT["blockRead"] | RIGHT["blockWrite"],
+        "directory": (
+            RIGHT["directoryRead"]
+            | RIGHT["directoryWrite"]
+            | RIGHT["directoryList"]
+            | RIGHT["directoryDerive"]
+            | RIGHT_TRANSFER
+        ),
+        "input": RIGHT["inputRead"],
+        "supervision": RIGHT["supervise"] | RIGHT_TRANSFER,
+        "sharedBuffer": (
+            RIGHT["bufferWrite"] | RIGHT["bufferMap"] | RIGHT["bufferLoan"] | RIGHT_TRANSFER
+        ),
+        "loan": RIGHT["bufferWrite"] | RIGHT["bufferMap"] | RIGHT_TRANSFER,
+    }
+    required = {
+        "endpoint": RIGHT["send"] | RIGHT["recv"],
+        "executable": RIGHT["exec"] | RIGHT["spawn"],
+        "sharedBufferFactory": RIGHT["bufferCreate"],
+        "block": RIGHT["blockRead"] | RIGHT["blockWrite"],
+        "directory": (
+            RIGHT["directoryRead"]
+            | RIGHT["directoryWrite"]
+            | RIGHT["directoryList"]
+            | RIGHT["directoryDerive"]
+        ),
+        "input": RIGHT["inputRead"],
+        "supervision": RIGHT["supervise"],
+        "sharedBuffer": RIGHT["bufferWrite"] | RIGHT["bufferMap"] | RIGHT["bufferLoan"],
+        "loan": RIGHT["bufferMap"],
+    }
+    mask = masks.get(kind)
+    if mask is None:
+        fail(f"{name}: unknown capability kind {kind!r}")
+    if rights == 0 or rights & ~mask or rights & required[kind] == 0:
+        fail(f"{name}: rights do not match capability kind {kind}")
+    if kind == "executable" and rights & (RIGHT["exec"] | RIGHT["spawn"]) != (
+        RIGHT["exec"] | RIGHT["spawn"]
+    ):
+        fail(f"{name}: executable capability requires exec and spawn")
+    if kind == "input" and rights != RIGHT["inputRead"]:
+        fail(f"{name}: input capability has an exact inputRead right")
 MAX_SPAWN_BUDGET = 32
 POLICY = {
     "immutable": 1,
@@ -334,19 +572,122 @@ def align_up(value: int, alignment: int) -> int:
     return (value + alignment - 1) & ~(alignment - 1)
 
 
+def manifest_source() -> Path:
+    """Which generation manifest this build encodes.
+
+    The target profile selects the family, so the target and the graph it
+    declares cannot be chosen independently and then disagree. Within the seL4
+    family `SLIME_SEL4_MANIFEST` names which graph, because P5.3.1 adds a second
+    one built for the same target; absent, it is the P5.2 graph, so every
+    existing caller keeps its behaviour without passing anything.
+    """
+    if os.environ.get("SLIME_TARGET_PROFILE") == SEL4_TARGET_PROFILE:
+        name = os.environ.get("SLIME_SEL4_MANIFEST", "sel4")
+        source = SEL4_MANIFESTS.get(name)
+        if source is None:
+            fail(f"unknown seL4 manifest {name!r}")
+        return source
+    return SOURCE
+
+
 def load_manifest() -> dict:
     environment = os.environ.copy()
     environment["ZUTAI_STDLIB_ROOT"] = str(STDLIB)
     output = subprocess.run(
-        [str(binary()), "json", str(SOURCE)],
+        [str(binary()), "json", str(manifest_source())],
         cwd=ROOT,
         env=environment,
         check=True,
         text=True,
         stdout=subprocess.PIPE,
     ).stdout
-    return json.loads(output)
+    return assign_declared_slots(json.loads(output))
 
+
+def assign_declared_slots(manifest: dict) -> dict:
+    """Fill in every omitted `slot`, deterministically and per namespace.
+
+    A manifest may omit `slot` on an instance binding, a minted binding, or a
+    notification binding; this assigns the lowest free number in that holder's
+    namespace, taking omitted entries in grant-name order so the result is a
+    function of the manifest alone. Explicit slots are never moved and are
+    reserved before any assignment, so a manifest that pins every number --
+    which the byte-frozen boot-layout fixtures do -- encodes exactly as before.
+
+    The namespaces are separate because the runtime regions are. Capability
+    bindings and minted bindings share one per holder, since both land in the
+    child's capability table and the decoder refuses a duplicate there.
+    Notification bindings are their own, relative to the native notification
+    region, so a notification at 0 and a capability at 0 do not collide.
+    """
+
+    def fill(entries: list, holder_of, limit: int) -> None:
+        taken: dict[str, set[int]] = {}
+        for entry in entries:
+            slot = entry.get("slot")
+            if slot is not None:
+                taken.setdefault(holder_of(entry), set()).add(slot)
+        pending = [entry for entry in entries if entry.get("slot") is None]
+        for entry in sorted(pending, key=lambda item: item.get("name") or item.get("grant") or ""):
+            holder = holder_of(entry)
+            used = taken.setdefault(holder, set())
+            slot = next((n for n in range(limit) if n not in used), None)
+            if slot is None:
+                fail(f"declared slots for {holder} exhaust the {limit}-slot namespace")
+            used.add(slot)
+            entry["slot"] = slot
+
+    for instance in manifest.get("instances", []):
+        # One namespace per holder, shared by both kinds, matching the decoder.
+        shared = list(instance.get("bindings", [])) + [
+            minted
+            for minted in manifest.get("mintedBindings", [])
+            if minted["holder"] == instance["name"]
+        ]
+        fill(shared, lambda _entry, name=instance["name"]: name, 32)
+    fill(
+        manifest.get("notificationBindings", []),
+        lambda entry: entry["holder"],
+        15,
+    )
+    return manifest
+
+
+def declared_spawn_grant_counts(manifest: dict) -> list[tuple[dict, int]]:
+    """Per instance, how many capabilities its owner must supply at spawn.
+
+    This is the total `preflight_spawn_grants` checks a request against: the
+    instance's `mintedBindings`, plus its grant-backed bindings that are neither
+    an endpoint half -- the root materializes a native Endpoint itself -- nor a
+    self-loop, which is authority the child holds in its own right. Neither
+    crosses the spawn boundary, so neither is counted.
+
+    One implementation, because an owner that disagrees with the root by one is
+    refused with no way to see why: init used to carry a hardcoded list, which
+    was the stream graph's, and every other plane's spawn failed for a count it
+    had no way to know (B50/R2).
+    """
+    grants_by_name = {grant["name"]: grant for grant in manifest.get("grants", [])}
+    counts = []
+    for instance in manifest.get("instances", []):
+        minted = sum(
+            1
+            for entry in manifest.get("mintedBindings", [])
+            if entry["holder"] == instance["name"]
+        )
+        supplied = sum(
+            1
+            for binding in instance.get("bindings", [])
+            for grant in [grants_by_name.get(binding["grant"])]
+            if grant is not None
+            and not set(grant.get("rights", [])) & {"send", "recv"}
+            and not (
+                grant.get("source") == instance["name"]
+                and grant.get("target") == instance["name"]
+            )
+        )
+        counts.append((instance, minted + supplied))
+    return counts
 
 def resolve_target_profile(target: object) -> TargetProfile:
     if not isinstance(target, str):
@@ -356,34 +697,9 @@ def resolve_target_profile(target: object) -> TargetProfile:
         fail(f"unknown target {target!r}; admitted targets: {', '.join(sorted(TARGET_PROFILES_BY_NAME))}")
     return profile
 
-def recovery_manifest(manifest: dict) -> dict:
-    recovery = copy.deepcopy(manifest)
-    recovery["objects"] = [
-        object_ for object_ in recovery["objects"] if object_["id"] in {manifest["kernelObject"], "sha256:init"}
-    ] + [
-        {"id": "sha256:recovery", "kind": "component", "size": 65536},
-        {"id": "recovery-index", "kind": "resource", "size": 4096},
-    ]
-    recovery["components"] = [
-        {"name": "init", "object": "sha256:init", "role": "init", "dependencies": [], "spawnBudget": 1, "commandProfile": []},
-        {"name": "recovery", "object": "sha256:recovery", "role": "service", "dependencies": ["init"], "spawnBudget": 0, "commandProfile": []},
-    ]
-    recovery["grants"] = [
-        {"name": "endpoint-factory", "source": "init", "target": "init", "rights": ["endpointCreate"], "transferable": False},
-        {"name": "recovery-control", "source": "init", "target": "recovery", "rights": ["bootUpdate"], "transferable": False},
-        {"name": "recovery-target", "source": "init", "target": "recovery", "rights": ["blockRead", "blockWrite"], "transferable": False},
-    ]
-    recovery["state"] = []
-    # Recovery boots two components with no data fabric; leaving the graph in
-    # would declare route authority for components that do not exist there.
-    recovery.pop("fabricGraph", None)
-    recovery["health"] = {"bootAttempts": 1, "requiredComponents": ["init", "recovery"]}
-    return recovery
 
 
-def binding_identity(name: str) -> bytes:
-    encoded = name.encode("utf-8")
-    return sha256(b"slime-state-binding-v1" + struct.pack("<H", len(encoded)) + encoded)
+
 
 
 def holder_identity(name: str) -> bytes:
@@ -590,40 +906,6 @@ def validate_fabric_qos(member: dict, limits: dict, label: str) -> None:
     if (member["liveliness"] == "manual") == (lease == 0):
         fail(f"fabric graph: {label} liveliness and lease disagree")
 
-def selected_profile_name() -> str:
-    """The boot profile this build resolves (B11).
-
-    One selector names both the component set and the interposition chains: a
-    profile entry declares which scaffolding the generation adds and which
-    `fabricGraph.profiles` entry supplies its interpositions. The legacy flags
-    keep resolving the profile they always did, so a gate that has not been
-    updated to name a profile explicitly still builds the graph it expects.
-    """
-    explicit = os.environ.get("SLIME_FABRIC_PROFILE") or None
-    visibility = os.environ.get("SLIME_FABRIC_VISIBILITY_CHECK") == "1"
-    boot = os.environ.get("SLIME_FABRIC_BOOT_CHECK") == "1"
-    legacy_modes = any(
-        os.environ.get(name) == "1"
-        for name in (
-            "SLIME_FABRIC_QOS_CHECK",
-            "SLIME_FABRIC_CALL_CHECK",
-            "SLIME_FABRIC_OPERATION_CHECK",
-        )
-    )
-    if visibility and boot:
-        fail("fabric graph: ambiguous selected profile")
-    legacy = (
-        UNIFIED_FABRIC_PROFILE
-        if boot
-        else VISIBILITY_FABRIC_PROFILE
-        if visibility
-        else TEST_BOOT_PROFILE
-        if legacy_modes
-        else None
-    )
-    if explicit is not None and legacy is not None and explicit != legacy:
-        fail("fabric graph: ambiguous selected profile")
-    return explicit or legacy or DEFAULT_FABRIC_PROFILE
 
 
 def declared_boot_profiles(manifest: dict) -> list[str]:
@@ -644,43 +926,32 @@ def boot_profile(manifest: dict, name: str) -> dict:
 
 
 def resolve_boot_profile(manifest: dict, name: str) -> dict:
-    """Narrow the manifest to the components one boot profile declares (B11).
-
-    The product profile names no scaffolding, so the generation it builds
-    declares only components the product needs; a test profile adds exactly the
-    probes and scenario doubles its gate family exercises.
-
-    A profile is closed over its component set rather than listing every
-    consequence: an object, grant, state binding, shared-buffer holder, route
-    participant, or interposition hop naming a component this profile does not
-    declare is dropped with it. Stating those separately would let the two
-    drift, and every one of them fails late inside `build_generation` with a
-    message naming the symptom rather than the cause.
-    """
+    """Narrow the manifest to the instances one boot profile declares."""
     profile = boot_profile(manifest, name)
-    scaffolding = profile["components"]
+    scaffolding = profile["instances"]
     if len(set(scaffolding)) != len(scaffolding):
-        fail(f"boot profile {name}: duplicate component")
-    declared = {component["name"] for component in manifest["components"]}
+        fail(f"boot profile {name}: duplicate instance")
+    declared = {instance["name"] for instance in manifest["instances"]}
     unknown = sorted(set(scaffolding) - declared)
     if unknown:
-        fail(f"boot profile {name}: undeclared component(s) {', '.join(unknown)}")
-    # Every component no profile names is product surface. Deriving the product
-    # set by subtraction rather than listing it means a component added to the
-    # manifest is a product component until some profile claims it, which fails
-    # towards declaring too much rather than silently dropping a real service.
+        fail(f"boot profile {name}: undeclared instance(s) {', '.join(unknown)}")
     scaffolding_everywhere = {
-        component
+        instance
         for entry in manifest.get("bootProfiles", [])
-        for component in entry["components"]
+        for instance in entry["instances"]
     }
     kept = (declared - scaffolding_everywhere) | set(scaffolding)
     resolved = copy.deepcopy(manifest)
     resolved.pop("bootProfiles", None)
-    resolved["components"] = [
-        component for component in manifest["components"] if component["name"] in kept
+    resolved["instances"] = [
+        instance for instance in manifest["instances"] if instance["name"] in kept
     ]
-    kept_objects = {component["object"] for component in resolved["components"]}
+    # Boot profiles select initial instances. The executable catalogue is
+    # independent and remains complete so an initial instance may spawn any
+    # executable its explicit exec grant authorizes.
+    used_executables = {executable["name"] for executable in manifest["executables"]}
+    resolved["executables"] = copy.deepcopy(manifest["executables"])
+    kept_objects = {executable["object"] for executable in resolved["executables"]}
     resolved["objects"] = [
         object_
         for object_ in manifest["objects"]
@@ -689,17 +960,23 @@ def resolve_boot_profile(manifest: dict, name: str) -> dict:
     resolved["grants"] = [
         grant
         for grant in manifest["grants"]
-        if grant["source"] in kept and grant["target"] in kept
+        if grant["source"] in kept
+        and (grant["target"] in kept or grant["target"] in used_executables)
     ]
+    retained_grants = {grant["name"] for grant in resolved["grants"]}
+    for instance in resolved["instances"]:
+        instance["bindings"] = [
+            binding for binding in instance["bindings"] if binding["grant"] in retained_grants
+        ]
     resolved["state"] = [binding for binding in manifest["state"] if binding["owner"] in kept]
     resolved["sharedBufferBudget"] = [
         entry for entry in manifest["sharedBufferBudget"] if entry["holder"] in kept
     ]
-    required = profile["requiredComponents"] or manifest["health"]["requiredComponents"]
+    required = profile["requiredInstances"] or manifest["health"]["requiredInstances"]
     missing = sorted(set(required) - kept)
     if missing:
-        fail(f"boot profile {name}: required component(s) {', '.join(missing)} not declared")
-    resolved["health"] = dict(manifest["health"], requiredComponents = list(required))
+        fail(f"boot profile {name}: required instance(s) {', '.join(missing)} not declared")
+    resolved["health"] = dict(manifest["health"], requiredInstances=list(required))
     graph = resolved.get("fabricGraph")
     if graph is not None:
         graph["profiles"] = [
@@ -837,6 +1114,61 @@ def build_normalized_schema_artifact(schemas: list) -> bytes:
     ) + records + payload
 
 
+def validate_route_worker_names() -> None:
+    """Every name in `FABRIC_ROUTE_WORKERS` is a route some manifest declares.
+
+    Checked against the **full catalogue** — the union of every route the
+    canonical x86 source declares — rather than against the graph being built.
+    Those are different questions, and conflating them is what makes the check
+    either useless or wrong:
+
+    * against the graph being built, a manifest declaring a subset of the
+      routes (P5.5.2's seL4 graph declares the two stream routes alone)
+      fails on a tuple that has no typo in it;
+    * without the check at all, a genuine misspelling in the tuple silently
+      drops a route from its worker, and the partition assertion below then
+      reports the route as uncovered rather than the worker as misspelled.
+
+    So the typo check reads the source of truth for what routes exist, and the
+    partition check reads the graph. A worker whose routes this graph does not
+    declare simply has no work here.
+    """
+    catalogue = {
+        route["name"]
+        for route in _canonical_manifest()["fabricGraph"]["routes"]
+    }
+    for worker_name, worker_routes in FABRIC_ROUTE_WORKERS:
+        unknown = [route for route in worker_routes if route not in catalogue]
+        if unknown:
+            fail(
+                f"fabric graph: worker {worker_name} names {unknown}, which no "
+                "declared route matches"
+            )
+
+
+def _canonical_manifest() -> dict:
+    """The x86 source manifest, which is the union of every declared route.
+
+    Decoded through the same Zutai binary every other manifest goes through,
+    rather than parsed here, so the catalogue this validates against is the one
+    the builder would actually encode.
+    """
+    environment = os.environ.copy()
+    environment["ZUTAI_STDLIB_ROOT"] = str(STDLIB)
+    try:
+        output = subprocess.run(
+            [str(binary()), "json", str(SOURCE)],
+            cwd=ROOT,
+            env=environment,
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError) as error:
+        fail(f"cannot read the canonical manifest {SOURCE}: {error}")
+    return json.loads(output)
+
+
 def resolve_fabric_profile(manifest: dict, interfaces: list, profile_name: str) -> ResolvedFabricProfile:
     """Resolve one named boot profile into everything downstream reads.
 
@@ -857,8 +1189,8 @@ def resolve_fabric_profile(manifest: dict, interfaces: list, profile_name: str) 
     else:
         fabric_profile_name = profile_name
     graph = resolve_fabric_graph(manifest["fabricGraph"], fabric_profile_name)
-    component_names = {component["name"] for component in manifest["components"]}
-    graph_bytes = build_fabric_graph(graph, component_names, interfaces)
+    executable_names = {executable["name"] for executable in manifest["executables"]}
+    graph_bytes = build_fabric_graph(graph, executable_names, interfaces)
     by_interface = {interface.name: interface for interface in interfaces}
     used_schemas = {route["interface"]: by_interface[route["interface"]] for route in graph["routes"]}
     schemas = sorted(used_schemas.values(), key=lambda interface: interface.identity)
@@ -908,15 +1240,37 @@ def resolve_fabric_profile(manifest: dict, interfaces: list, profile_name: str) 
                     "interposition": member["interposition"],
                 }
             )
-    subscriber_components = {
+    # Every ring participant, not only subscribers (B46). A v2 stream edge is a
+    # writable shared ring the fabric loans to its peer, and a loan names its
+    # receiver through a supervision capability -- so a publisher needs one for
+    # exactly the reason a subscriber does. Under v1 only subscribers received
+    # anything (samples were messages, and only the downstream sample hop was a
+    # loan), which is why this list used to be subscribers alone.
+    ring_components = {
         participant["component"]
         for participant in participants
-        if participant["direction"] == FABRIC_DIRECTION_SUBSCRIBE
+        if participant["direction"]
+        in (FABRIC_DIRECTION_PUBLISH, FABRIC_DIRECTION_SUBSCRIBE)
     }
-    subscribers = [component for component in stream_controls if component in subscriber_components]
+    # A declared interposition proxy needs one for the same reason a ring holder
+    # does. It holds no ring, but the fabric has to observe its *death*: a
+    # native Endpoint gives no peer-death signal, so a broker blocked on a hop
+    # through a dead proxy would wait forever. A supervision capability is the
+    # only thing in this model that answers "is that task gone", and the chain
+    # naming the proxy is a generation fact, so the handle is one too.
+    proxy_components = {
+        proxy
+        for participant in participants
+        for proxy in participant["interposition"]
+    }
+    holders = [
+        component
+        for component in stream_controls
+        if component in ring_components or component in proxy_components
+    ]
     supervision = [
         {"component": component, "slot": FABRIC_FIRST_CONTROL_SLOT + len(stream_controls) + index}
-        for index, component in enumerate(subscribers)
+        for index, component in enumerate(holders)
     ]
     # C8.10: every plane coexists in one boot, so its control slots are summed
     # into one disjoint layout rather than overlaid. `max()` here would size the
@@ -924,7 +1278,7 @@ def resolve_fabric_profile(manifest: dict, interfaces: list, profile_name: str) 
     # the mutually-exclusive assumption the milestone removes: two planes would
     # then be numbered from the same base and collide on the same slot.
     plane_control_counts = (
-        len(stream_controls) * 2 + len(subscribers),
+        len(stream_controls) * 2 + len(holders),
         len(call_controls),
         len(operation_controls) + len(replacement_controls),
     )
@@ -940,11 +1294,18 @@ def resolve_fabric_profile(manifest: dict, interfaces: list, profile_name: str) 
     # see `FABRIC_WORKER_WAIT_SHAPES` — because the stream broker's set scales
     # with the graph while the request/response brokers park across fixed slot
     # arrays of their own.
+    validate_route_worker_names()
     workers = []
     for worker_name, worker_routes in FABRIC_ROUTE_WORKERS:
-        unknown = [route for route in worker_routes if route not in declared_routes]
-        if unknown:
-            fail(f"fabric graph: worker {worker_name} names an undeclared route")
+        # A route this manifest does not declare is not this manifest's to
+        # partition. Every name in the tuple was already checked against the
+        # full route catalogue by `validate_route_worker_names` above, so what
+        # is filtered here is genuinely "not in this graph" rather than
+        # "misspelled" — which is the distinction the two checks exist to keep
+        # apart. P5.5.2's seL4 graph declares the two stream routes alone.
+        worker_routes = tuple(route for route in worker_routes if route in declared_routes)
+        if not worker_routes:
+            continue
         # A route whose every participant was scaffolding is absent from this
         # profile. Its worker still exists and still owns the routes that
         # remain; only a worker left with no route at all drops out, so the
@@ -1024,6 +1385,15 @@ def resolve_fabric_profile(manifest: dict, interfaces: list, profile_name: str) 
             {"name": "operationReplacement", "controls": [{"component": component, "slot": FABRIC_FIRST_CONTROL_SLOT + len(operation_controls) + index} for index, component in enumerate(replacement_controls)]},
         ],
         "supervision": supervision,
+        # What the *owner* must hand each child at spawn (B50/R2), by the one
+        # rule in `declared_spawn_grant_counts`. Emitting it removes the last
+        # place a plane's grant set was hand-written: init carried one hardcoded
+        # list, which was the stream graph's, so every other plane's spawn was
+        # refused for a count init had no way to know.
+        "mintedGrants": [
+            {"holder": instance["name"], "count": count}
+            for instance, count in declared_spawn_grant_counts(manifest)
+        ],
     }
     quotas = validated_shared_buffer_quotas(manifest["sharedBufferBudget"])
     quota = quotas.get(graph["fabricComponent"])
@@ -1077,7 +1447,9 @@ def _zti_value(value: object, indent: int = 0) -> str:
     fail(f"unsupported canonical profile value {type(value).__name__}")
 
 
-def render_fabric_profile_rust(resolved: ResolvedFabricProfile) -> str:
+def render_fabric_profile_rust(
+    resolved: ResolvedFabricProfile, boot_action: str = "product"
+) -> str:
     artifact = resolved.artifact
     limits = {entry["name"]: entry["value"] for entry in artifact["limits"]}
     participants = artifact["participants"]
@@ -1097,6 +1469,103 @@ def render_fabric_profile_rust(resolved: ResolvedFabricProfile) -> str:
     visibility_rows = "".join(
         f"    (b{rust_string(row['component'])}, {rust_string(row['route'])}, {row['visibility']}),\n"
         for row in participants
+    )
+    notification_grants = {grant["name"]: grant for grant in resolved.manifest.get("notificationGrants", [])}
+    notification_bindings = resolved.manifest.get("notificationBindings", [])
+    notification_by_holder = {
+        (binding["holder"], binding["grant"]): binding
+        for binding in notification_bindings
+    }
+    notification_rows_data = []
+    participant_rows_data = []
+    for participant in participants:
+        component = participant["component"]
+        route = participant["route"]
+        if participant["direction"] not in (FABRIC_DIRECTION_PUBLISH, FABRIC_DIRECTION_SUBSCRIBE):
+            continue
+        ready_name = f"{component}-{route}-ready"
+        credit_name = f"{component}-{route}-credit"
+        ready_grant = notification_grants.get(ready_name)
+        credit_grant = notification_grants.get(credit_name)
+        if ready_grant is None and credit_grant is None:
+            # A full-graph profile may provision stream roles over its control
+            # endpoints without driving samples. Such a profile declares no
+            # ready/credit Notifications, so it emits no notification row.
+            continue
+        if ready_grant is None or credit_grant is None:
+            fail(f"fabric notification bindings incomplete for {component}/{route}")
+        fabric_component = artifact["fabricComponent"]
+        ready = notification_by_holder.get((fabric_component, ready_name))
+        credit = notification_by_holder.get((fabric_component, credit_name))
+        participant_ready = notification_by_holder.get((component, ready_name))
+        participant_credit = notification_by_holder.get((component, credit_name))
+        if None in (ready, credit, participant_ready, participant_credit):
+            fail(f"fabric notification bindings missing for {component}/{route}")
+        notification_rows_data.append((component, route, participant["direction"], ready["slot"], credit["slot"]))
+        participant_rows_data.append((component, route, participant_ready["slot"], participant_credit["slot"]))
+    notification_rows = "".join(
+        f"    (b{rust_string(component)}, {rust_string(route)}, {direction}, {ready}, {credit}),\n"
+        for component, route, direction, ready, credit in notification_rows_data
+    )
+    # Slot constants come from the *manifest's* notification bindings, not
+    # from the resolved participant set. A component compiles against its own
+    # ring slots in every image, while a profile decides only which instances
+    # a boot activates -- so scoping these to the resolved participants would
+    # stop the component from compiling under any profile that prunes it,
+    # which is a build failure standing in for a boot-time absence the
+    # generation already expresses.
+    notification_slots: dict[str, int] = {}
+    for binding in notification_bindings:
+        grant = notification_grants.get(binding["grant"])
+        if grant is None:
+            fail(f"notification binding names unknown grant {binding['grant']}")
+        holder = binding["holder"]
+        if not binding["grant"].startswith(f"{holder}-"):
+            # A grant whose name does not begin with this holder is one it
+            # shares: either the fabric's own half of a per-participant pair
+            # (published through `FABRIC_NOTIFICATIONS`), or a wake object
+            # several peers signal and one waits on. The shared case still needs
+            # a constant per holder, because each holds it at its own slot --
+            # that slot is also its badge bit, so they are deliberately
+            # different numbers for the same object.
+            shared = [b for b in notification_bindings if b["grant"] == binding["grant"]]
+            if len(shared) <= 2:
+                continue
+            name = (
+                f"{holder.removeprefix('fabric-')}_{binding['grant'].removeprefix('fabric-')}_slot"
+                .upper()
+                .replace("-", "_")
+            )
+            existing = notification_slots.setdefault(name, binding["slot"])
+            if existing != binding["slot"]:
+                fail(f"notification slot {name} declared twice with different slots")
+            continue
+        suffix = binding["grant"].removeprefix(f"{holder}-")
+        route, _, kind = suffix.rpartition("-")
+        if kind not in ("ready", "credit") or not route:
+            fail(f"notification grant {binding['grant']} does not name a route and kind")
+        name = f"{holder.removeprefix('fabric-')}_{route}_{kind}_slot".upper().replace("-", "_")
+        existing = notification_slots.setdefault(name, binding["slot"])
+        if existing != binding["slot"]:
+            fail(f"notification slot {name} declared twice with different slots")
+    # Every profile emits the call plane's wake slots, even where the manifest
+    # declares no such notification. The components that read them are compiled
+    # for every graph, so an absent constant is a *build* failure standing in
+    # for a boot-time absence the generation already expresses -- the same trap
+    # the fabric's control-slot constants hit. `SLOT_ABSENT` says "this graph
+    # has no wake object", which the holder checks rather than fails to link
+    # against.
+    for name in (
+        "SERVICE_PARAMETERS_READY_SLOT",
+        "CALL_CLIENT_SERVICE_PARAMETERS_READY_SLOT",
+        "CALL_CLIENT_B_SERVICE_PARAMETERS_READY_SLOT",
+        "CALL_SERVER_SERVICE_PARAMETERS_READY_SLOT",
+        "CALL_TIME_SERVICE_PARAMETERS_READY_SLOT",
+    ):
+        notification_slots.setdefault(name, 0xFFFF_FFFF)
+    notification_constants = "".join(
+        f"pub const FABRIC_{name}: u32 = {slot};\n"
+        for name, slot in sorted(notification_slots.items())
     )
     interposition_rows = "".join(
         f"    (b{rust_string(row['component'])}, {rust_string(row['route'])}, &[{', '.join(f'b{rust_string(hop)} as &[u8]' for hop in row['interposition'])}]),\n"
@@ -1120,6 +1589,10 @@ def render_fabric_profile_rust(resolved: ResolvedFabricProfile) -> str:
     subscriber_rows = "".join(
         f"    b{rust_string(row['component'])},\n" for row in artifact["supervision"]
     )
+    minted_grant_rows = "".join(
+        f"    (b{rust_string(row['holder'])}, {row['count']}),\n"
+        for row in artifact["mintedGrants"]
+    )
     schema_rows = "".join(
         f"    ({rust_string(row['name'])}, {rust_string(row['identity'])}, 0x{row['typeTag']}, {row['contractKind']}, {row['maxEncodedBytes']}),\n"
         for row in artifact["schemas"]
@@ -1128,20 +1601,37 @@ def render_fabric_profile_rust(resolved: ResolvedFabricProfile) -> str:
         f"    ({rust_string(row['name'])}, {rust_string(row['interface'])}, {rust_string(row['identity'])}, {row['contractKind']}),\n"
         for row in artifact["routes"]
     )
+    deadline_absent = (1 << 64) - 1
+
     def deadline(route: str) -> int:
-        return min(
+        """The tightest deadline any request/response participant declares.
+
+        `FABRIC_DEADLINE_ABSENT`, not zero, denotes a graph with no such route.
+        Zero remains available as a real immediate deadline and cannot be
+        conflated with absence by generated consumers.
+        """
+        deadlines = [
             row["deadlineNs"]
             for row in participants
-            if row["route"] == route and row["direction"] in (FABRIC_DIRECTION_CLIENT, FABRIC_DIRECTION_SERVER)
-        )
+            if row["route"] == route
+            and row["direction"] in (FABRIC_DIRECTION_CLIENT, FABRIC_DIRECTION_SERVER)
+        ]
+        return min(deadlines, default=deadline_absent)
     return f'''// @generated from the canonical C8.9 resolved fabric profile; do not edit.
 #[allow(dead_code)]
+mod generated_fabric_profile {{
 pub const FABRIC_PROFILE_NAME: &str = {rust_string(artifact['name'])};
+#[allow(dead_code)]
+pub const GENERATION_BOOT_ACTION: &str = {rust_string(boot_action)};
 #[allow(dead_code)]
 pub const FABRIC_SCHEMAS: &[(&str, &str, u64, u32, u32)] = &[\n{schema_rows}];
 #[allow(dead_code)]
 pub const FABRIC_ROUTES: &[(&str, &str, &str, u32)] = &[\n{route_rows}];
 pub const FABRIC_PARTICIPANTS: &[(&[u8], &str, &str, u32)] = &[\n{participant_rows}];
+pub type FabricNotificationBindingRow = (&'static [u8], &'static str, u32, u32, u32);
+pub const FABRIC_NOTIFICATION_BINDINGS: &[FabricNotificationBindingRow] = &[
+{notification_rows}];
+{notification_constants}
 pub const FABRIC_HISTORY_DEPTHS: &[(&[u8], &str, u32)] = &[\n{depth_rows}];
 pub type FabricQosRow = (&'static [u8], &'static str, u64, u64, u64, u32, u32, u8, u8, u8);
 pub const FABRIC_QOS: &[FabricQosRow] = &[\n{qos_rows}];
@@ -1150,12 +1640,23 @@ pub type FabricInterpositionRow = (&'static [u8], &'static str, &'static [&'stat
 pub const FABRIC_INTERPOSITIONS: &[FabricInterpositionRow] = &[\n{interposition_rows}];
 pub type FabricWorkerRow = (&'static str, &'static [&'static str], usize);
 pub const FABRIC_WORKERS: &[FabricWorkerRow] = &[\n{worker_rows}];
-/// The wake sources the generation declares one worker parks on at once.
+/// The wake sources the generation declares one worker parks on at once, or
+/// `WORKER_ABSENT` when this graph declares no route that worker carries.
 ///
 /// `const fn` so a broker can bind its own `SYS_WAIT` array to this number in a
 /// `const _: () = assert!(..)`. The declared peak and the array that has to hold
 /// it then cannot drift apart silently: a broker that grows its park set past
 /// what the generation resolved stops compiling instead of overflowing at boot.
+///
+/// Absent is a real answer rather than a panic, because a broker is a *module*
+/// of `fabric-service` and is therefore compiled into every graph, including
+/// ones that declare no route for it. A stream-only graph has no call or
+/// operation plane; panicking here would make such a graph fail to build over a
+/// constant nothing in it ever reads. The asserts that consume this admit
+/// `WORKER_ABSENT` and keep their exact check for every graph that does declare
+/// the plane, so the drift they exist to catch is still caught.
+#[allow(dead_code)]
+pub const WORKER_ABSENT: usize = usize::MAX;
 #[allow(dead_code)]
 pub const fn fabric_worker_wait_sources(name: &str) -> usize {{
     let mut index = 0;
@@ -1166,7 +1667,7 @@ pub const fn fabric_worker_wait_sources(name: &str) -> usize {{
         }}
         index += 1;
     }}
-    panic!("worker absent from the resolved profile")
+    WORKER_ABSENT
 }}
 
 /// `str` equality usable in a `const fn`; `==` on `&str` is not yet const.
@@ -1188,6 +1689,13 @@ pub const FABRIC_CLIENTS: &[&[u8]] = &[\n{controls('stream')}];
 pub const FABRIC_CALL_CLIENTS: &[&[u8]] = &[\n{controls('call')}];
 pub const FABRIC_OPERATION_CLIENTS: &[&[u8]] = &[\n{controls('operation')}];
 pub const FABRIC_SUPERVISION: &[(&[u8], u32)] = &[\n{supervision_rows}];
+/// How many capabilities each child's owner must hand it at spawn: its minted
+/// bindings plus its non-endpoint, non-self-loop grant bindings. This is the
+/// total `preflight_spawn_grants` checks a request against, so it is the one
+/// number an owner must agree with. A child absent from this table is spawned
+/// with nothing.
+#[allow(dead_code)]
+pub const FABRIC_MINTED_GRANTS: &[(&[u8], usize)] = &[\n{minted_grant_rows}];
 pub const FABRIC_SUBSCRIBERS: &[&[u8]] = &[\n{subscriber_rows}];
 #[allow(dead_code)]
 pub const FABRIC_MAX_ROUTES: usize = {limits['routes']};
@@ -1219,9 +1727,14 @@ pub const FABRIC_MAX_CAPABILITY_SLOTS: usize = {limits['capabilitySlots']};
 pub const FABRIC_REQUIRED_CAPABILITY_SLOTS: usize = {artifact['requiredCapabilitySlots']};
 pub const FABRIC_FRAME_CAPACITY: usize = {artifact['frameCapacity']};
 pub const FABRIC_COPY_PAGES: usize = {artifact['copyPages']};
+/// No request/response route of this class exists in the resolved graph.
+pub const FABRIC_DEADLINE_ABSENT: u64 = u64::MAX;
 pub const FABRIC_CALL_DEADLINE_NS: u64 = {deadline('parameters')};
 pub const FABRIC_OPERATION_DEADLINE_NS: u64 = {deadline('navigation')};
 pub const FABRIC_FIRST_CONTROL_SLOT: u32 = {artifact['firstControlSlot']};
+}}
+#[allow(unused_imports)]
+pub use generated_fabric_profile::*;
 '''
 
 
@@ -1491,52 +2004,85 @@ def build_fabric_graph(graph: dict, component_names: set[str], interfaces: list)
     return header + schema_records + route_records + participant_records + hop_records
 
 
-def build_recovery_index(
-    target_generation: bytes,
-    generation_root: bytes,
-    accepted_release_sequence: int,
-    target_pci_bdf: int,
-    state_entries: list[tuple[str, bytes, int]],
-    state_first_lba: int,
-    state_last_lba: int,
-) -> bytes:
-    if len(state_entries) > MAX_RECOVERY_STATE_OBJECTS:
-        fail("recovery state closure exceeds bound")
-    entries = sorted(
-        ((binding_identity(name), identity, schema) for name, identity, schema in state_entries),
-        key=lambda entry: entry[0],
-    )
-    if any(identity == bytes(32) or schema <= 0 for _, identity, schema in entries):
-        fail("invalid recovery state entry")
-    encoded = b"".join(
-        RECOVERY_STATE_ENTRY.pack(binding, identity, schema, bytes(4))
-        for binding, identity, schema in entries
-    )
-    state_root = sha256(
-        b"".join(binding + identity + struct.pack("<I", schema) for binding, identity, schema in entries)
-    )
-    header = RECOVERY_INDEX_HEADER.pack(
-        RECOVERY_INDEX_MAGIC,
-        RECOVERY_INDEX_VERSION,
-        RECOVERY_INDEX_HEADER.size,
-        0,
-        target_generation,
-        generation_root,
-        state_root,
-        accepted_release_sequence,
-        target_pci_bdf,
-        len(entries),
-        RECOVERY_INDEX_HEADER.size + len(encoded),
-        state_first_lba,
-        state_last_lba,
-        bytes(4),
-    )
-    return header + encoded
-
-
 def component_target_dir(root: Path, target_profile: TargetProfile, name: str) -> Path:
     """Keep profiles sharing one Cargo target from reusing executable outputs."""
     return root / target_profile.name / name
+
+
+def component_executable(built: Path, name: str, target_profile: TargetProfile) -> Path:
+    """Where cargo wrote one component's executable.
+
+    The rust-sel4 target specifications set `"exe-suffix": ".elf"`, so a binary
+    named `init` is written as `init.elf`. Resolving it here rather than at each
+    call site keeps the suffix a property of the target, which is what it is.
+    """
+    if is_json_target(target_profile):
+        return built / f"{name}.elf"
+    return built / name
+
+
+def is_json_target(target_profile: TargetProfile) -> bool:
+    """Whether this profile's Cargo target is a JSON specification file.
+
+    A JSON target is not merely a different triple: cargo needs `-Z
+    json-target-spec`, has no prebuilt `core`/`alloc` so it needs `build-std`,
+    names its output directory by the file *stem* rather than the path, and is
+    not matched by the per-triple `rustflags` in `components/.cargo/config.toml`.
+    Each of those is handled below.
+    """
+    return target_profile.cargo_target.endswith(".json")
+
+
+def cargo_target_argument(target_profile: TargetProfile) -> str:
+    """What `--target` receives: an absolute path for a JSON spec, else the
+    triple verbatim."""
+    if is_json_target(target_profile):
+        return str(ROOT / target_profile.cargo_target)
+    return target_profile.cargo_target
+
+
+def cargo_target_directory_name(target_profile: TargetProfile) -> str:
+    """The directory cargo writes artifacts into.
+
+    For a JSON specification this is the file stem, not the path — the single
+    most common way a JSON target silently breaks a build script that assumed
+    the two were the same string.
+    """
+    if is_json_target(target_profile):
+        return Path(target_profile.cargo_target).stem
+    return target_profile.cargo_target
+
+
+def sel4_component_environment(environment: dict[str, str]) -> dict[str, str]:
+    """Add what a `slime-components` build for the seL4 profile needs.
+
+    `slime-rt`'s seL4 transport compiles against the installed libsel4, whose
+    bindings `sel4-sys` generates with bindgen at build time, so the prefix and
+    libclang must both be present and named. The toolchain is pinned by
+    `sel4/pins.toml` because `build-std` requires the matching `rust-src`.
+    Mirrors `scripts/build/build-sel4.py::cargo_environment`, which is the
+    working precedent for building against these pins.
+    """
+    pins_path = ROOT / "sel4" / "pins.toml"
+    if not pins_path.is_file():
+        fail(f"missing pin manifest: {pins_path.relative_to(ROOT)}")
+    import tomllib
+
+    pins = tomllib.loads(pins_path.read_text(encoding="utf-8"))
+    environment["RUSTUP_TOOLCHAIN"] = pins["rust_sel4"]["toolchain"]
+    prefix = ROOT / "build" / "sel4-prefix"
+    if not (prefix / "libsel4" / "include" / "kernel" / "gen_config.json").is_file():
+        fail(
+            f"no installed seL4 prefix at {prefix.relative_to(ROOT)}; "
+            "run `just sel4_qemu_image_check` first"
+        )
+    environment["SEL4_PREFIX"] = str(prefix)
+    if not environment.get("LIBCLANG_PATH"):
+        fail(
+            "LIBCLANG_PATH is unset, so bindgen cannot generate the libsel4 bindings; "
+            "enter the pinned shell with `nix develop` or export LIBCLANG_PATH"
+        )
+    return environment
 
 
 def build_rust_components(
@@ -1546,47 +2092,35 @@ def build_rust_components(
     recovery: bool = False,
     candidate_identity: bytes | None = None,
     components: set[str] | None = None,
+    binding_slots: dict[str, int] | None = None,
+    role_bindings: dict[str, int] | None = None,
 ) -> Path:
-    environment = os.environ.copy()
-    environment["SLIME_GENERATION_NUMBER"] = str(generation_number)
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if key != "SLIME_TRANSFER_ACTIVATE"
+        and not (
+            key.endswith("_CHECK")
+            and (key.startswith("SLIME_FABRIC_") or key.startswith("SLIME_SEL4_"))
+        )
+    }
+    if os.environ.get("SLIME_BOOT_SELECTION_FAIL") == "1":
+        environment["SLIME_BOOT_SELECTION_FAIL"] = "1"
+    else:
+        environment.pop("SLIME_BOOT_SELECTION_FAIL", None)
     environment["SLIME_DATA_FABRIC_PROFILE"] = str(profile_path)
-    # The components are compiled before the generation is assembled, so they
-    # cannot read the layout resource out of it. Emit the same table as Rust
-    # here and hand `build.rs` the path, the way the fabric profile already
-    # travels. Per generation number, so each component build addresses the
-    # slots its own generation declares, and narrowed to the selected boot
-    # profile's component set (B11) so `init.rs` reads the same slots the kernel
-    # will place.
+    # Components are compiled before the generation is assembled, so hand
+    # build.rs the manifest-derived Rust tables they need. Per-generation data
+    # selects behavior; inherited product flags must not change the image.
     layout_path = profile_path.parent / f"boot-layout-{generation_number}.rs"
     layout_path.write_text(
-        render_boot_layout_rust(generation_number, components), encoding="utf-8"
+        render_boot_layout_rust(generation_number, components, binding_slots, role_bindings),
+        encoding="utf-8",
     )
     environment["SLIME_BOOT_LAYOUT"] = str(layout_path)
     environment["SLIME_TARGET_PROFILE"] = target_profile.name
-    if candidate_identity is None and os.environ.get("SLIME_TRANSFER_RECEIVER") == "1":
-        environment["SLIME_TRANSFER_RECEIVER"] = "1"
-    else:
-        environment.pop("SLIME_TRANSFER_RECEIVER", None)
-    if candidate_identity is not None and os.environ.get("SLIME_TRANSFER_ACTIVATE") == "1":
-        environment["SLIME_TRANSFER_ACTIVATE"] = "1"
-    else:
-        environment.pop("SLIME_TRANSFER_ACTIVATE", None)
-    if environment.get("SLIME_FABRIC_QOS_CHECK") == "1":
-        environment["SLIME_FABRIC_QOS_CHECK"] = "1"
-    else:
-        environment.pop("SLIME_FABRIC_QOS_CHECK", None)
-    if environment.get("SLIME_FABRIC_CALL_CHECK") == "1":
-        environment["SLIME_FABRIC_CALL_CHECK"] = "1"
-    else:
-        environment.pop("SLIME_FABRIC_CALL_CHECK", None)
-    if environment.get("SLIME_FABRIC_OPERATION_CHECK") == "1":
-        environment["SLIME_FABRIC_OPERATION_CHECK"] = "1"
-    else:
-        environment.pop("SLIME_FABRIC_OPERATION_CHECK", None)
-    if environment.get("SLIME_FABRIC_VISIBILITY_CHECK") == "1":
-        environment["SLIME_FABRIC_VISIBILITY_CHECK"] = "1"
-    else:
-        environment.pop("SLIME_FABRIC_VISIBILITY_CHECK", None)
+    # Product graph selectors are deliberately absent: generated manifest data
+    # selects component behavior. Validation-only injection controls remain.
     if environment.get("SLIME_FABRIC_PROXY_EARLY_EXIT") == "1":
         environment["SLIME_FABRIC_PROXY_EARLY_EXIT"] = "1"
     else:
@@ -1595,8 +2129,13 @@ def build_rust_components(
         environment["SLIME_RECOVERY_IMAGE"] = "1"
     if environment.get("SLIME_GENERATION_CMD_CHECK") == "1" and candidate_identity is not None:
         environment["SLIME_GENERATION_CANDIDATE"] = candidate_identity.hex()
+    # Keep separate target directories for distinct manifests because their
+    # generated layout and profile inputs intentionally produce distinct images.
+    sel4_manifest = os.environ.get("SLIME_SEL4_MANIFEST")
     if recovery:
         target_name = "recovery"
+    elif sel4_manifest is not None and sel4_manifest != "sel4":
+        target_name = f"{sel4_manifest}-{generation_number}"
     elif candidate_identity is None and os.environ.get("SLIME_TRANSFER_RECEIVER") == "1":
         target_name = f"generation-{generation_number}-transfer-receiver"
     elif candidate_identity is not None and os.environ.get("SLIME_TRANSFER_ACTIVATE") == "1":
@@ -1605,16 +2144,138 @@ def build_rust_components(
         target_name = f"generation-{generation_number}"
     target_dir = component_target_dir(COMPONENTS_TARGET_DIR, target_profile, target_name)
     environment["CARGO_TARGET_DIR"] = str(target_dir)
+    command = [
+        "cargo",
+        "build",
+        "--release",
+        "--target",
+        cargo_target_argument(target_profile),
+        "-p",
+        "slime-components",
+    ]
+    if is_json_target(target_profile):
+        features = ["sel4"]
+        # The Dango command profile is generated from a manifest, and it must be
+        # *this* generation's: the profile's executable slots are spawn-grant
+        # positions, so a profile built from the oracle's manifest would name
+        # slots this generation never grants.
+        command_manifest = sel4_manifest or "sel4"
+        environment["SLIME_COMMAND_PROFILE_MANIFEST"] = f"{command_manifest}.zti"
+        # GPT validation and the object store come from `boot-contracts/gpt`,
+        # which needs an allocator. `extern crate alloc` in a dependency makes
+        # every binary in the crate require a `#[global_allocator]`, so the
+        # feature is enabled only for the build whose components declare a heap.
+        if components is not None and any(
+            name in components
+            for name in (
+                "sel4-store-probe",
+                "sel4-rollback-probe",
+                "sel4-recovery-probe",
+                "sel4-generation-manager",
+                "sel4-filesystem-service",
+                "sel4-transfer-probe",
+            )
+        ):
+            features.append("store")
+        command += ["--no-default-features", "--features", ",".join(features)]
+        # Build exactly the binaries this generation declares, rather than every
+        # binary in the crate. The fabric components are compiled against a
+        # generated C8 profile this target has no graph for, so building them
+        # would fail on constants that describe routes the generation does not
+        # declare. Naming the binaries keeps the build's contents equal to the
+        # manifest's, which is the same property the boot layout already has.
+        if components is None:
+            fail("seL4 component builds must name the components to build")
+        for component in sorted(components):
+            command += ["--bin", component]
+        command += [
+            "-Z",
+            "json-target-spec",
+            "-Z",
+            "build-std=core,alloc,compiler_builtins",
+            "-Z",
+            "build-std-features=compiler-builtins-mem",
+        ]
+        # `components/.cargo/config.toml` keys `rustflags` by triple, so a JSON
+        # target inherits none of them. Passing the determinism-relevant ones
+        # explicitly keeps the link reproducible instead of silently dropping
+        # them. `-T` and the load base are deliberately absent: a component here
+        # is an ordinary seL4 ELF task at its own link addresses.
+        environment["RUSTFLAGS"] = " ".join(
+            [
+                "-C link-arg=--build-id=none",
+                f"--remap-path-prefix={target_dir}=./target/components/{target_profile.name}/{target_name}",
+                f"--remap-path-prefix={ROOT}=.",
+            ]
+        )
+        environment = sel4_component_environment(environment)
+    else:
+        # B12: `components/.cargo/config.toml` carried a hardcoded
+        # `--remap-path-prefix` naming one developer's checkout. Any other
+        # checkout made it a no-op — or worse, when the stale literal was a
+        # *prefix* of the real path it rewrote the leading portion and left the
+        # remainder, mangling recorded paths instead of normalizing them.
+        #
+        # Appended through `--config` rather than `RUSTFLAGS`, which would
+        # *replace* the config's rustflags and silently drop the
+        # relocation-model, code-model, and link-arg settings the x86 link
+        # depends on. The JSON-target branch above can set `RUSTFLAGS` freely
+        # because a JSON target inherits none of those to begin with.
+        remap = f"--remap-path-prefix={ROOT}=."
+        command += [
+            "--config",
+            f'target.{target_profile.cargo_target}.rustflags=["{remap}"]',
+        ]
     subprocess.run(
-        ["cargo", "build", "--release", "--target", target_profile.cargo_target, "-p", "slime-components"],
+        command,
         cwd=ROOT / "components",
         env=environment,
         check=True,
     )
-    return target_dir / target_profile.cargo_target / "release"
+    return target_dir / cargo_target_directory_name(target_profile) / "release"
+
+
+def elf_component_image(name: str, elf: Path, stack_bytes: int, profile: TargetProfile) -> bytes:
+    """Wrap a native ELF in the target-qualification header (P5.2).
+
+    The seL4 profile carries the executable whole rather than re-basing it onto
+    a fixed component load base: `slime-root` loads it with a real ELF loader at
+    the addresses it links to. The header is byte-identical in layout to the
+    segment-carrying revision, so `boot_contracts::component_image::admit`
+    qualifies both by the same offsets and stage-0-style wrong-target rejection
+    still applies before any byte is mapped. `segment_count` is zero because the
+    body has no Slime segment table, and `entry_offset` is likewise zero: the
+    entry point lives in the ELF header, where the loader reads it.
+    """
+    data = elf.read_bytes()
+    if len(data) < 64 or data[:4] != b"\x7fELF" or data[4] != 2 or data[5] != 1:
+        fail(f"{name}: not a 64-bit little-endian ELF")
+    elf_type, machine = struct.unpack_from("<HH", data, 16)
+    if elf_type != 2 or machine != profile.elf_machine:
+        fail(f"{name}: not a static executable for target {profile.name}")
+    if len(data) > MAX_COMPONENT_IMAGE_BYTES:
+        fail(f"{name}: image exceeds the component image bound")
+    header = COMPONENT_IMAGE_HEADER.pack(
+        COMPONENT_IMAGE_ELF_MAGIC,
+        COMPONENT_IMAGE_ELF_VERSION,
+        COMPONENT_IMAGE_ELF_HEADER_LEN,
+        COMPONENT_IMAGE_KERNEL_ABI,
+        profile.architecture,
+        profile.abi,
+        profile.page_profile,
+        0,
+        0,
+        0,
+        stack_bytes,
+        profile.id,
+        profile.required_features,
+    )
+    return header + data
 
 
 def component_image(name: str, elf: Path, stack_bytes: int, profile: TargetProfile) -> bytes:
+    if is_json_target(profile):
+        return elf_component_image(name, elf, stack_bytes, profile)
     data = elf.read_bytes()
     if len(data) < 64 or data[:4] != b"\x7fELF" or data[4] != 2 or data[5] != 1:
         fail(f"{name}: not a 64-bit little-endian ELF")
@@ -1672,114 +2333,6 @@ def component_image(name: str, elf: Path, stack_bytes: int, profile: TargetProfi
     )
     return header + records + payload
 
-
-def parse_elf64(data: bytes, profile: TargetProfile) -> tuple[int, list[tuple[int, int, int, int, int]], list[tuple[int, int]]]:
-    if len(data) < 64 or data[:4] != b"\x7fELF" or data[4] != 2 or data[5] != 1:
-        fail("kernel: not a 64-bit little-endian ELF")
-    elf_type, machine = struct.unpack_from("<HH", data, 16)
-    if elf_type != 3 or machine != profile.elf_machine:
-        fail(f"kernel: expected PIE ELF for target {profile.name}")
-    entry, phoff, shoff = struct.unpack_from("<QQQ", data, 24)
-    _, phentsize, phnum, shentsize, shnum = struct.unpack_from("<HHHHH", data, 52)
-    segments: list[tuple[int, int, int, int, int]] = []
-    for index in range(phnum):
-        offset = phoff + index * phentsize
-        if offset + phentsize > len(data):
-            fail("kernel: truncated program header")
-        p_type, p_flags = struct.unpack_from("<II", data, offset)
-        p_offset, p_vaddr, _, p_filesz, p_memsz = struct.unpack_from("<QQQQQ", data, offset + 8)
-        if p_type == 1 and p_memsz:
-            segments.append((p_vaddr, p_offset, p_filesz, p_memsz, p_flags))
-    segments.sort()
-    relocations: list[tuple[int, int]] = []
-    for index in range(shnum):
-        offset = shoff + index * shentsize
-        if offset + shentsize > len(data):
-            fail("kernel: truncated section header")
-        sh_type = struct.unpack_from("<I", data, offset + 4)[0]
-        sh_offset, sh_size = struct.unpack_from("<QQ", data, offset + 24)
-        sh_entsize = struct.unpack_from("<Q", data, offset + 56)[0]
-        if sh_type != 4 or sh_size == 0:  # SHT_RELA
-            continue
-        if sh_entsize != 24 or sh_offset + sh_size > len(data):
-            fail("kernel: malformed RELA section")
-        for rela_offset in range(sh_offset, sh_offset + sh_size, sh_entsize):
-            target, info, addend = struct.unpack_from("<QQq", data, rela_offset)
-            if info & 0xFFFF_FFFF != profile.relative_relocation or info >> 32 != 0:
-                fail(f"kernel: unsupported relocation for target {profile.name}")
-            relocations.append((target, addend))
-    relocations.sort()
-    return entry, segments, relocations
-
-
-def kernel_image(path: Path, profile: TargetProfile) -> bytes:
-    data = path.read_bytes()
-    entry, segments, relocations = parse_elf64(data, profile)
-    if not 1 <= len(segments) <= MAX_KERNEL_SEGMENTS or len(relocations) > MAX_KERNEL_RELOCATIONS:
-        fail("kernel: segment or relocation count exceeds bound")
-    if not segments or segments[0][0] != profile.kernel_preferred_base or entry < profile.kernel_preferred_base:
-        fail("kernel: unexpected preferred base")
-    records = bytearray()
-    payload = bytearray()
-    previous_end = profile.kernel_preferred_base
-    entry_ok = False
-    writable: list[tuple[int, int]] = []
-    image_end = profile.kernel_preferred_base
-    table_bytes = KERNEL_HEADER.size + len(segments) * KERNEL_SEGMENT.size + len(relocations) * KERNEL_RELOCATION.size
-    payload_cursor = table_bytes
-    for vaddr, file_offset, file_len, mem_len, elf_flags in segments:
-        if vaddr % profile.page_bytes or vaddr < previous_end or file_len > mem_len or file_offset + file_len > len(data):
-            fail("kernel: invalid or overlapping segment")
-        flags = (SEGMENT_EXEC if elf_flags & 1 else 0) | (SEGMENT_WRITE if elf_flags & 2 else 0)
-        if flags == SEGMENT_EXEC | SEGMENT_WRITE:
-            fail("kernel: writable executable segment")
-        relative = vaddr - profile.kernel_preferred_base
-        entry_ok |= bool(flags & SEGMENT_EXEC and vaddr <= entry < vaddr + mem_len)
-        if flags & SEGMENT_WRITE:
-            writable.append((relative, relative + mem_len))
-        records += KERNEL_SEGMENT.pack(relative, mem_len, payload_cursor, file_len, flags, 0)
-        payload += data[file_offset : file_offset + file_len]
-        payload_cursor += file_len
-        previous_end = vaddr + mem_len
-        image_end = max(image_end, previous_end)
-    if not entry_ok or image_end - profile.kernel_preferred_base > MAX_KERNEL_IMAGE_BYTES:
-        fail("kernel: entry or image footprint invalid")
-    relocation_records = bytearray()
-    for target, addend in relocations:
-        if target < profile.kernel_preferred_base or target % 8:
-            fail("kernel: relocation target invalid")
-        relative = target - profile.kernel_preferred_base
-        if not any(start <= relative and relative + 8 <= end for start, end in writable):
-            fail("kernel: relocation target outside writable segment")
-        absolute_addend = addend if addend >= profile.kernel_preferred_base else (1 << 64) + addend
-        if not profile.kernel_preferred_base <= absolute_addend <= align_up(image_end, profile.page_bytes):
-            fail("kernel: relocation addend outside image")
-        signed_addend = absolute_addend - (1 << 64) if absolute_addend >= 1 << 63 else absolute_addend
-        relocation_records += KERNEL_RELOCATION.pack(relative, signed_addend)
-    image_len = table_bytes + len(payload)
-    if image_len > MAX_KERNEL_IMAGE_BYTES:
-        fail("kernel: image bytes exceed bound")
-    header = KERNEL_HEADER.pack(
-        KERNEL_MAGIC,
-        KERNEL_VERSION,
-        KERNEL_HEADER.size,
-        KERNEL_ABI_VERSION,
-        0,
-        profile.architecture,
-        profile.abi,
-        profile.page_profile,
-        profile.id,
-        profile.required_features,
-        profile.kernel_preferred_base,
-        entry - profile.kernel_preferred_base,
-        len(segments),
-        len(relocations),
-        table_bytes,
-        image_len,
-    )
-    return header + records + relocation_records + payload
-
-
 def validate_interface_schemas(entries: object) -> list:
     """Admit the manifest's declared interface set and return it compiled.
 
@@ -1802,165 +2355,1025 @@ def unique_sorted(items: list[dict], key: str, label: str) -> list[dict]:
     return sorted(items, key=lambda item: item[key])
 
 
-def validate_acyclic(components: list[dict]) -> None:
-    graph = {component["name"]: component["dependencies"] for component in components}
+def validate_acyclic(instances: list[dict]) -> None:
+    graph = {instance["name"]: instance["dependencies"] for instance in instances}
     for name, dependencies in graph.items():
         if name in dependencies or len(set(dependencies)) != len(dependencies):
-            fail(f"component {name}: invalid dependencies")
+            fail(f"instance {name}: invalid dependencies")
         for dependency in dependencies:
             if dependency not in graph:
-                fail(f"component {name}: missing dependency {dependency}")
+                fail(f"instance {name}: missing dependency {dependency}")
     active: set[str] = set()
     complete: set[str] = set()
+
     def visit(name: str) -> None:
-        if name in complete: return
-        if name in active: fail("component dependency cycle")
+        if name in complete:
+            return
+        if name in active:
+            fail("instance dependency cycle")
         active.add(name)
-        for dependency in graph[name]: visit(dependency)
-        active.remove(name); complete.add(name)
-    for name in graph: visit(name)
+        for dependency in graph[name]:
+            visit(dependency)
+        active.remove(name)
+        complete.add(name)
+
+    for name in graph:
+        visit(name)
+
+
+PLAN_NONE = 0xFFFFFFFF
+# One below the root task's own priority, matching `slime-root`'s
+# `task::CHILD_PRIORITY`. A child at or above the root cannot be preempted by
+# the service loop, so this is a ceiling as well as a default.
+DEFAULT_CHILD_PRIORITY = 254
+GRANT_POLICY_ONLY = 1
+# Grant flags. No bit is defined: `GRANT_MINTED` named a send/recv grant whose
+# object its source created at runtime, which the native cutover made
+# impossible — an endpoint is a generation-owned seL4 Endpoint the root
+# materializes — so B50 deleted the concept rather than leaving a flag nothing
+# can set.
+GRANT_FLAGS_NONE = 0
+# Endpoint and notification slots are relative to distinct 31-entry child
+# CSpace regions. The receiver slot occupies the last CSpace entry, so 31 is a
+# count, never a legal relative slot.
+MAX_DECLARED_NATIVE_SLOT = 31
+# Must match `slime-root::task::CHILD_CNODE_SIZE_BITS`; the admitted v5 quota
+# and the CNode object are derived from this one value.
+CHILD_CNODE_SIZE_BITS = 7
+SERVICE_LIFECYCLE = 1
+SERVICE_SPAWN = 2
+SERVICE_SUPERVISION = 3
+SERVICE_CAPABILITY_TRANSFER = 4
+SERVICE_SHARED_BUFFER = 5
+SERVICE_DIRECTORY = 6
+SERVICE_INPUT = 7
+SERVICE_BLOCK = 8
+SERVICE_CONSOLE = 9
+# Fixed userspace ABI slots. Several typed mechanisms share the root transport
+# endpoint at slot 1; the service discriminant states the authority carried.
+ROOT_SERVICE_SLOT = 1
+CONSOLE_SERVICE_SLOT = 32
+SERVICE_BY_CAPABILITY_KIND = {
+    "sharedBufferFactory": SERVICE_SHARED_BUFFER,
+    "sharedBuffer": SERVICE_SHARED_BUFFER,
+    "loan": SERVICE_SHARED_BUFFER,
+    "directory": SERVICE_DIRECTORY,
+    "input": SERVICE_INPUT,
+    "block": SERVICE_BLOCK,
+    "supervision": SERVICE_SUPERVISION,
+}
+KERNEL_OBJECT_CNODE = 1
+KERNEL_OBJECT_VSPACE = 2
+KERNEL_OBJECT_TCB = 3
+KERNEL_OBJECT_FRAME = 4
+KERNEL_OBJECT_ENDPOINT = 5
+KERNEL_OBJECT_PAGE_TABLE = 6
+KERNEL_OBJECT_NOTIFICATION = 7
+NOTIFICATION_ROLE_SIGNAL = 1
+NOTIFICATION_ROLE_WAIT = 2
+CAP_RIGHT_ALL = (1 << 64) - 1
+
+def declared_services(
+    instance: dict,
+    executable: dict,
+    grants_by_name: dict[str, dict],
+    minted_bindings: list[dict],
+    shared_buffer_holders: set[str],
+) -> set[int]:
+    services = {SERVICE_LIFECYCLE, SERVICE_CONSOLE}
+    if executable["role"] == "init" or executable["spawnBudget"] > 0:
+        # Spawn returns a supervision capability. A caller that can acquire
+        # one must also be allowed to release it, even when no endpoint or
+        # separately transferable grant happens to imply the table service.
+        services.update({SERVICE_SPAWN, SERVICE_SUPERVISION, SERVICE_CAPABILITY_TRANSFER})
+    if instance["name"] in shared_buffer_holders:
+        # A receiver may map and return a loan created by another process even
+        # though no persistent loan capability appears in its manifest. The
+        # authenticated per-holder budget is the declaration that authorizes
+        # that receiver-side shared-buffer mechanism.
+        services.add(SERVICE_SHARED_BUFFER)
+    capability_declarations = [
+        grants_by_name[binding["grant"]] for binding in instance["bindings"]
+    ] + [
+        minted
+        for minted in minted_bindings
+        if minted["holder"] == instance["name"]
+    ]
+    for declaration in capability_declarations:
+        service = SERVICE_BY_CAPABILITY_KIND.get(declaration["capabilityKind"])
+        if service is not None:
+            services.add(service)
+        if declaration["capabilityKind"] == "executable":
+            services.add(SERVICE_SPAWN)
+        # A declared endpoint is both the carrier used by capability delegation
+        # and the source of received capabilities that `cap_drop` releases. The
+        # transport therefore needs the narrow transfer service even when the
+        # endpoint itself is not re-delegatable.
+        if declaration["capabilityKind"] == "endpoint" or declaration["transferable"]:
+            services.add(SERVICE_CAPABILITY_TRANSFER)
+    return services
+
+
+def build_sel4_plan(
+    manifest: dict,
+    instances: list[dict],
+    grants: list[dict],
+    grant_rights: list[int],
+    instance_index: dict[str, int],
+    executable_index: dict[str, int],
+    string_offset,
+    # Pages each executable's image occupies, keyed by object id, so a
+    # process's declared frame count covers what the loader actually maps
+    # (B49).
+    image_pages: dict[str, int],
+) -> tuple[bytes, ...]:
+    """Materialize the required v5 process and authority plan.
+
+    The builder owns this expansion because it has the authenticated manifest
+    and the exact executable catalogue in hand. Counts and references are
+    checked here, before a byte is emitted; the decoder repeats the checks at
+    the trust boundary.
+    """
+    process_records = bytearray()
+    thread_records = bytearray()
+    kernel_records = bytearray()
+    mapping_records = bytearray()
+    cap_records = bytearray()
+    service_records = bytearray()
+    schedule_records = bytearray()
+    fault_records = bytearray()
+    spawn_records = bytearray()
+    quota_records = bytearray()
+    object_index: dict[tuple[str, str], int] = {}
+    grants_by_name = {grant["name"]: grant for grant in grants}
+    executables_by_name = {entry["name"]: entry for entry in manifest["executables"]}
+
+    # Every declared instance is a process in the plan. A child instance is
+    # constructed by its owner rather than by root, but its CSpace, VSpace,
+    # TCB, IPC buffer, fault endpoint, schedule, and quota are all fixed here:
+    # B39's whole point is that the generation proves the object plan before
+    # anything activates, and an owner-spawned process consumes kernel objects
+    # exactly as a root-autostart one does.
+    planned_instances = list(instances)
+    if not planned_instances or len(planned_instances) > MAX_PROCESSES:
+        fail("seL4 process plan count exceeds bound")
+
+    for process, instance in enumerate(planned_instances):
+        name = instance["name"]
+        quota = process
+        # Named once so the CSpace object and the quota's `cslot_count` cannot
+        # disagree about how many slots the child has. Six bits, matching
+        # `slime-root`'s `task::CHILD_CNODE_SIZE_BITS`: fixed declared slots
+        # end at 32 and the native mirrored regions fill the remaining CSpace.
+        cnode_size_bits = CHILD_CNODE_SIZE_BITS
+        cspace = len(object_index)
+        object_index[(name, "cspace")] = cspace
+        kernel_records.extend(
+            GENERATION_KERNEL_OBJECT.pack(
+                string_offset(f"{name}:cspace"),
+                KERNEL_OBJECT_CNODE,
+                process,
+                cnode_size_bits,
+                1,
+                PLAN_NONE,
+                0,
+            )
+        )
+        vspace = len(object_index)
+        object_index[(name, "vspace")] = vspace
+        kernel_records.extend(
+            GENERATION_KERNEL_OBJECT.pack(
+                string_offset(f"{name}:vspace"), KERNEL_OBJECT_VSPACE, process, 12, 1, PLAN_NONE, 0
+            )
+        )
+        tcb = len(object_index)
+        object_index[(name, "tcb")] = tcb
+        kernel_records.extend(
+            GENERATION_KERNEL_OBJECT.pack(
+                string_offset(f"{name}:tcb"), KERNEL_OBJECT_TCB, process, 11, 1, PLAN_NONE, 0
+            )
+        )
+        ipc = len(object_index)
+        object_index[(name, "ipc-buffer")] = ipc
+        kernel_records.extend(
+            GENERATION_KERNEL_OBJECT.pack(
+                string_offset(f"{name}:ipc-buffer"), KERNEL_OBJECT_FRAME, process, 12, 1, PLAN_NONE, 0
+            )
+        )
+        fault_endpoint = len(object_index)
+        object_index[(name, "fault-endpoint")] = fault_endpoint
+        kernel_records.extend(
+            GENERATION_KERNEL_OBJECT.pack(
+                string_offset(f"{name}:fault-endpoint"), KERNEL_OBJECT_ENDPOINT, process, 4, 1, PLAN_NONE, 0
+            )
+        )
+
+        # Indices into the thread, schedule, and fault tables. These used to be
+        # `= process`, which held only while every process had exactly one
+        # thread and all four tables grew in lockstep. Counting them lets a
+        # process declare more without the tables silently misaligning (B47).
+        thread = len(thread_records) // GENERATION_THREAD.size
+        schedule = len(schedule_records) // GENERATION_SCHEDULE.size
+        fault = len(fault_records) // GENERATION_FAULT_POLICY.size
+        thread_records.extend(
+            GENERATION_THREAD.pack(
+                string_offset(f"{name}:main"), process, tcb, schedule, fault, ipc, 0, 0, 0
+            )
+        )
+        process_records.extend(
+            GENERATION_PROCESS.pack(
+                string_offset(name), instance_index[name], cspace, vspace, thread, quota, 0
+            )
+        )
+        # Priority is the instance's to declare. Absent, it is the root's
+        # default: one below the root's own, so the service loop always
+        # preempts a runnable child.
+        #
+        # Bounded here as well as in the root, because a manifest is the wrong
+        # place to learn that a number was silently clamped. `budget_us` and
+        # `period_us` stay zero until MCS is admitted -- seL4 without it has no
+        # notion of either, and writing a figure the kernel cannot enforce
+        # would make the record say more than the system does.
+        priority = instance.get("priority", DEFAULT_CHILD_PRIORITY)
+        if not isinstance(priority, int) or isinstance(priority, bool):
+            fail(f"instance {name}: invalid priority")
+        if not 0 <= priority <= DEFAULT_CHILD_PRIORITY:
+            fail(
+                f"instance {name}: priority {priority} outside 0..={DEFAULT_CHILD_PRIORITY}; "
+                "a child at or above the root's priority can stall the service loop"
+            )
+        # A worker's priority is its own to declare, defaulting to its main
+        # thread's (B48). Declaring it *below* the main thread is the case that
+        # matters: it lets one component hold a busy thread without stalling
+        # its own IPC, which is what "a budget-exhausting client cannot starve
+        # an unrelated service" reduces to under a priority-only scheduler.
+        worker_priority = instance.get("workerPriority", priority)
+        if not isinstance(worker_priority, int) or isinstance(worker_priority, bool):
+            fail(f"instance {name}: invalid workerPriority")
+        if not 0 <= worker_priority <= DEFAULT_CHILD_PRIORITY:
+            fail(
+                f"instance {name}: workerPriority {worker_priority} outside "
+                f"0..={DEFAULT_CHILD_PRIORITY}"
+            )
+        schedule_records.extend(
+            GENERATION_SCHEDULE.pack(
+                string_offset(f"{name}:schedule"),
+                thread,
+                PLAN_NONE,
+                priority,
+                priority,
+                0,
+                0,
+                0,
+            )
+        )
+        fault_records.extend(
+            GENERATION_FAULT_POLICY.pack(
+                string_offset(f"{name}:fault"), thread, PLAN_NONE, fault_endpoint, process + 1, 1
+            )
+        )
+        console_endpoint = len(object_index)
+        object_index[(name, "console-endpoint")] = console_endpoint
+        kernel_records.extend(
+            GENERATION_KERNEL_OBJECT.pack(
+                string_offset(f"{name}:console-endpoint"), KERNEL_OBJECT_ENDPOINT, process, 4, 1, PLAN_NONE, 0
+            )
+        )
+        for service in sorted(
+            declared_services(
+                instance,
+                executables_by_name[instance["executable"]],
+                grants_by_name,
+                manifest.get("mintedBindings", []),
+                {entry["holder"] for entry in manifest.get("sharedBufferBudget", [])},
+            )
+        ):
+            if service == SERVICE_CONSOLE:
+                slot, endpoint = CONSOLE_SERVICE_SLOT, console_endpoint
+            else:
+                slot, endpoint = ROOT_SERVICE_SLOT, fault_endpoint
+            service_records.extend(
+                GENERATION_SERVICE_BINDING.pack(
+                    process, service, slot, endpoint, RIGHT["send"], process + 1, 0
+                )
+            )
+        cap_records.extend(
+            GENERATION_CAP_BINDING.pack(process, 2, tcb, CAP_RIGHT_ALL, 0, PLAN_NONE, 0)
+        )
+        cap_records.extend(
+            GENERATION_CAP_BINDING.pack(process, 3, fault_endpoint, 1, process + 1, PLAN_NONE, 0)
+        )
+        # Counted from the objects this loop just declared for the process,
+        # not guessed. The row used to be a literal `1, 1, 2, 0, 2, 4, 6, ...`
+        # that no builder derived and no root read; `frame_count=2` and
+        # `mapping_count=6` in particular described no plan (B49).
+        #
+        # One CNode, one VSpace, and two endpoints — the fault endpoint and the
+        # console endpoint — plus one TCB and one IPC-buffer frame *per thread*,
+        # which is what the loop below declares for the extra threads (B47).
+        # The image's own frames and page tables are not here: they are mapped
+        # by the root from its own untyped when it loads the ELF, so they
+        # belong to the root's accounting rather than the child's declared plan.
+        thread_total = 1 + instance.get("extraThreads", 0)
+        # The image's own frames, from the payload the loader will map. The
+        # root allocates one frame capability per page out of its own CSlots,
+        # so leaving them out understated a process's cost by an order of
+        # magnitude: the 48-instance stress plane declared 6 slots per instance
+        # and consumed 81 (B49).
+        executable_object = next(
+            (
+                e["object"]
+                for e in manifest["executables"]
+                if e["name"] == instance["executable"]
+            ),
+            None,
+        )
+        image_frame_count = image_pages.get(executable_object, 0)
+        process_objects = {
+            "cnode": 1,
+            "vspace": 1,
+            "tcb": thread_total,
+            # One IPC-buffer/window pair per thread, plus the image itself.
+            "frame": thread_total + image_frame_count,
+            "endpoint": 2 + sum(
+                1
+                for grant in grants
+                if grant["capabilityKind"] == "endpoint"
+                and grant["source"] == name
+            ),
+            # Each static notification object is owned once, by its declared
+            # signal source; wait holders receive capabilities to that object.
+            "notification": sum(
+                1
+                for grant in manifest.get("notificationGrants", [])
+                if grant["source"] == name
+            ),
+        }
+        quota_records.extend(
+            GENERATION_RESOURCE_QUOTA.pack(
+                string_offset(f"{name}:quota"),
+                process,
+                process_objects["cnode"],
+                process_objects["tcb"],
+                process_objects["endpoint"],
+                process_objects["notification"],
+                process_objects["frame"],
+                process_objects["vspace"],
+                0,
+                0,
+                # CSlots the child's own CNode holds, from the same size the
+                # CSpace object above was given.
+                1 << cnode_size_bits,
+                0,
+                0,
+                0,
+            )
+        )
+
+        # Extra threads, if the instance declares any (B47). Each gets its own
+        # TCB, IPC buffer, fault endpoint, fault policy, and schedule, and
+        # shares this process's CSpace and VSpace -- which is exactly what
+        # makes it a second *thread* rather than a second process.
+        #
+        # Appended after the main thread's records so the indices above stay
+        # the ones the process names, and counted from the tables themselves
+        # so a plan with several multi-threaded processes still lines up.
+        extra_threads = instance.get("extraThreads", 0)
+        if not isinstance(extra_threads, int) or isinstance(extra_threads, bool):
+            fail(f"instance {name}: invalid extraThreads")
+        if extra_threads < 0:
+            fail(f"instance {name}: extraThreads {extra_threads} is negative")
+        for extra in range(extra_threads):
+            label = f"{name}:thread{extra + 1}"
+            extra_tcb = len(object_index)
+            object_index[(name, f"tcb{extra + 1}")] = extra_tcb
+            kernel_records.extend(
+                GENERATION_KERNEL_OBJECT.pack(
+                    string_offset(f"{label}:tcb"), KERNEL_OBJECT_TCB, process, 11, 1, PLAN_NONE, 0
+                )
+            )
+            extra_ipc = len(object_index)
+            object_index[(name, f"ipc-buffer{extra + 1}")] = extra_ipc
+            kernel_records.extend(
+                GENERATION_KERNEL_OBJECT.pack(
+                    string_offset(f"{label}:ipc-buffer"),
+                    KERNEL_OBJECT_FRAME,
+                    process,
+                    12,
+                    1,
+                    PLAN_NONE,
+                    0,
+                )
+            )
+            extra_fault_endpoint = len(object_index)
+            object_index[(name, f"fault-endpoint{extra + 1}")] = extra_fault_endpoint
+            kernel_records.extend(
+                GENERATION_KERNEL_OBJECT.pack(
+                    string_offset(f"{label}:fault-endpoint"),
+                    KERNEL_OBJECT_ENDPOINT,
+                    process,
+                    4,
+                    1,
+                    PLAN_NONE,
+                    0,
+                )
+            )
+            extra_schedule = len(schedule_records) // GENERATION_SCHEDULE.size
+            schedule_records.extend(
+                GENERATION_SCHEDULE.pack(
+                    string_offset(f"{label}:schedule"),
+                    len(thread_records) // GENERATION_THREAD.size,
+                    PLAN_NONE,
+                    worker_priority,
+                    worker_priority,
+                    0,
+                    0,
+                    0,
+                )
+            )
+            extra_fault = len(fault_records) // GENERATION_FAULT_POLICY.size
+            fault_records.extend(
+                GENERATION_FAULT_POLICY.pack(
+                    string_offset(f"{label}:fault"),
+                    len(thread_records) // GENERATION_THREAD.size,
+                    PLAN_NONE,
+                    extra_fault_endpoint,
+                    process + 1,
+                    1,
+                )
+            )
+            thread_records.extend(
+                GENERATION_THREAD.pack(
+                    string_offset(label),
+                    process,
+                    extra_tcb,
+                    extra_schedule,
+                    extra_fault,
+                    extra_ipc,
+                    0,
+                    0,
+                    0,
+                )
+            )
+
+    process_for_instance = {
+        instance["name"]: index for index, instance in enumerate(planned_instances)
+    }
+    for grant_index, (grant, rights) in enumerate(zip(grants, grant_rights, strict=True)):
+        # A grant materializes in whichever instance declares a binding for it.
+        # An `exec` or channel grant is bound by its source; a delegated
+        # authority such as `bufferCreate` is bound only by its target, which is
+        # the instance that actually holds the capability.
+        holder = next(
+            (
+                name
+                for name in (grant["source"], grant["target"])
+                if name in instance_index
+                and any(
+                    binding["grant"] == grant["name"]
+                    for binding in instances[instance_index[name]]["bindings"]
+                )
+            ),
+            None,
+        )
+        if holder is None:
+            fail(f"authority-bearing grant {grant['name']} has no concrete binding")
+        source_process = process_for_instance[holder]
+        bound = next(
+            binding
+            for binding in instances[instance_index[holder]]["bindings"]
+            if binding["grant"] == grant["name"]
+        )
+        if grant["capabilityKind"] == "executable":
+            target = executable_index[grant["target"]]
+            spawn_records.extend(
+                GENERATION_SPAWN_TEMPLATE.pack(
+                    string_offset(grant["name"]), target, source_process, source_process, source_process, source_process, 1, 0
+                )
+            )
+            cap_records.extend(
+                GENERATION_CAP_BINDING.pack(source_process, bound["slot"], object_index[(grant["source"], "tcb")], rights, 0, grant_index, 0)
+            )
+        elif grant["capabilityKind"] == "endpoint":
+            endpoint = len(object_index)
+            object_index[(grant["name"], "endpoint")] = endpoint
+            kernel_records.extend(
+                GENERATION_KERNEL_OBJECT.pack(
+                    string_offset(f"{grant['name']}:endpoint"), KERNEL_OBJECT_ENDPOINT, source_process, 4, 1, PLAN_NONE, 0
+                )
+            )
+            cap_records.extend(
+                GENERATION_CAP_BINDING.pack(source_process, bound["slot"], endpoint, rights, 0, grant_index, 0)
+            )
+        else:
+            cap_records.extend(
+                GENERATION_CAP_BINDING.pack(source_process, bound["slot"], object_index[(grant["source"], "tcb")], rights, 0, grant_index, GRANT_POLICY_ONLY)
+            )
+    notification_grant_records = bytearray()
+    notification_binding_records = bytearray()
+    notification_grants = sorted(manifest.get("notificationGrants", []), key=lambda grant: grant["name"])
+    notification_index = {grant["name"]: index for index, grant in enumerate(notification_grants)}
+    if len(notification_index) != len(notification_grants):
+        fail("notification grant names must be unique")
+    bindings_by_grant: dict[str, list[dict]] = {name: [] for name in notification_index}
+    seen_notification_slots: set[tuple[int, int]] = set()
+    for binding in manifest.get("notificationBindings", []):
+        grant = notification_index.get(binding["grant"])
+        holder = instance_index.get(binding["holder"])
+        role = {"signal": NOTIFICATION_ROLE_SIGNAL, "wait": NOTIFICATION_ROLE_WAIT}.get(binding["role"])
+        slot = binding["slot"]
+        if grant is None or holder is None or role is None:
+            fail("notification binding names unknown grant, holder, or role")
+        if not isinstance(slot, int) or isinstance(slot, bool) or not 0 <= slot < MAX_DECLARED_NATIVE_SLOT:
+            fail(f"notification binding {binding['grant']}: relative slot outside 0..30")
+        if (holder, slot) in seen_notification_slots:
+            fail(f"notification binding {binding['grant']}: duplicate holder slot")
+        seen_notification_slots.add((holder, slot))
+        bindings_by_grant[binding["grant"]].append(binding)
+        notification_binding_records.extend(
+            GENERATION_NOTIFICATION_BINDING.pack(grant, holder, slot, role, 0)
+        )
+    for grant in notification_grants:
+        source = instance_index.get(grant["source"])
+        target = instance_index.get(grant["target"])
+        if source is None or target is None or source == target:
+            fail(f"notification grant {grant['name']}: invalid endpoints")
+        bindings = bindings_by_grant[grant["name"]]
+        # One waiter, and at least the declared source signalling it. Several
+        # signallers are the point of a Notification: a waiter blocked on one
+        # object learns which of them spoke from the badge, which is the only
+        # way a broker can wait on a whole peer set at once. `source` names the
+        # edge the grant is *for*; any additional signaller must still be a
+        # declared instance, and each gets its own badge bit from its slot.
+        waiters = [b for b in bindings if b["role"] == "wait"]
+        signals = [b for b in bindings if b["role"] == "signal"]
+        if len(waiters) != 1 or instance_index[waiters[0]["holder"]] != target:
+            fail(f"notification grant {grant['name']}: requires exactly one target wait binding")
+        if not signals or source not in {instance_index[b["holder"]] for b in signals}:
+            fail(f"notification grant {grant['name']}: requires a source signal binding")
+        object_ = len(object_index)
+        object_index[(grant["name"], "notification")] = object_
+        kernel_records.extend(
+            GENERATION_KERNEL_OBJECT.pack(
+                string_offset(f"{grant['name']}:notification"),
+                KERNEL_OBJECT_NOTIFICATION,
+                process_for_instance[grant["source"]],
+                4,
+                1,
+                PLAN_NONE,
+                0,
+            )
+        )
+        notification_grant_records.extend(
+            GENERATION_NOTIFICATION_GRANT.pack(
+                string_offset(grant["name"]), source, target, object_, 0
+            )
+        )
+    if len(notification_grants) > MAX_NOTIFICATION_GRANTS or len(manifest.get("notificationBindings", [])) > MAX_NOTIFICATION_BINDINGS:
+        fail("notification topology count exceeds bound")
+
+    # Minted bindings: a capability the owner creates at runtime and hands to
+    # an instance it owns at spawn. Sorted by name so the section is canonical,
+    # and validated here so an unsatisfiable declaration fails before output.
+    minted_records = bytearray()
+    seen_holder_slots: set[tuple[int, int]] = set()
+    for minted in sorted(manifest.get("mintedBindings", []), key=lambda entry: entry["name"]):
+        owner = instance_index.get(minted["owner"])
+        holder = instance_index.get(minted["holder"])
+        if owner is None or holder is None:
+            fail(f"minted binding {minted['name']}: unknown owner or holder")
+        if instances[holder]["owner"] != minted["owner"]:
+            fail(f"minted binding {minted['name']}: holder is not owned by its minter")
+        slot = minted["slot"]
+        if not isinstance(slot, int) or isinstance(slot, bool) or not 0 <= slot < 32:
+            fail(f"minted binding {minted['name']}: logical slot outside 0..31")
+        if (holder, slot) in seen_holder_slots:
+            fail(f"minted binding {minted['name']}: duplicate holder slot")
+        seen_holder_slots.add((holder, slot))
+        rights = RIGHT_TRANSFER if minted["transferable"] else 0
+        for right in minted["rights"]:
+            if right not in RIGHT:
+                fail(f"minted binding {minted['name']}: unknown right {right}")
+            rights |= RIGHT[right]
+        kind = minted["capabilityKind"]
+        validate_capability_rights(f"minted binding {minted['name']}", kind, rights)
+        minted_records.extend(
+            GENERATION_MINTED_BINDING.pack(
+                string_offset(minted["name"]),
+                owner,
+                holder,
+                slot,
+                rights,
+                0,
+                CAPABILITY_KIND[kind],
+            )
+        )
+
+
+    counts = (
+        len(process_records) // GENERATION_PROCESS.size,
+        len(thread_records) // GENERATION_THREAD.size,
+        len(kernel_records) // GENERATION_KERNEL_OBJECT.size,
+        len(mapping_records) // GENERATION_MAPPING.size,
+        len(cap_records) // GENERATION_CAP_BINDING.size,
+        len(service_records) // GENERATION_SERVICE_BINDING.size,
+        len(schedule_records) // GENERATION_SCHEDULE.size,
+        len(fault_records) // GENERATION_FAULT_POLICY.size,
+        len(spawn_records) // GENERATION_SPAWN_TEMPLATE.size,
+        len(quota_records) // GENERATION_RESOURCE_QUOTA.size,
+        len(minted_records) // GENERATION_MINTED_BINDING.size,
+        len(notification_grant_records) // GENERATION_NOTIFICATION_GRANT.size,
+        len(notification_binding_records) // GENERATION_NOTIFICATION_BINDING.size,
+    )
+    limits = (
+        MAX_PROCESSES, MAX_THREADS, MAX_KERNEL_OBJECTS, MAX_MAPPINGS, MAX_CAP_BINDINGS,
+        MAX_SERVICE_BINDINGS, MAX_SCHEDULES, MAX_FAULT_POLICIES, MAX_SPAWN_TEMPLATES,
+        MAX_RESOURCE_QUOTAS, MAX_MINTED_BINDINGS, MAX_NOTIFICATION_GRANTS,
+        MAX_NOTIFICATION_BINDINGS,
+    )
+    if any(count > limit for count, limit in zip(counts, limits, strict=True)):
+        fail("seL4 execution plan count exceeds bound")
+    return (
+        process_records, thread_records, kernel_records, mapping_records, cap_records,
+        service_records, schedule_records, fault_records, spawn_records, quota_records,
+        minted_records, notification_grant_records, notification_binding_records, counts,
+    )
+
+
+
+
+def layout_executables(manifest: dict) -> set[str]:
+    """Executables the initial graph addresses through its boot slot table."""
+    initial = {instance["name"] for instance in manifest["instances"]}
+    names = {instance["executable"] for instance in manifest["instances"]}
+    names.update(
+        grant["target"]
+        for grant in manifest["grants"]
+        if grant["source"] in initial and grant["capabilityKind"] == "executable"
+    )
+    return names
 
 
 def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes | None, number: int, profile: TargetProfile) -> bytes:
-    # The boot layout is per generation number, and two generations are built
-    # from one manifest. Encode it here, where the number is in hand, rather
-    # than into the shared `payloads` — sharing one layout across both would
-    # make generation 1 boot the policy generation's slot table, failing far
-    # from its cause.
-    #
-    # Narrowed to the components this manifest declares (B11). Taking the set
-    # from the manifest being encoded rather than from the profile means the
-    # layout cannot name a component the generation does not carry: the recovery
-    # manifest gets the recovery layout for the same reason, without a second
-    # selector saying so.
-    declared_components = {component["name"] for component in manifest["components"]}
+    declared_layout_executables = layout_executables(manifest)
     if "boot-layout" in {object_["id"] for object_ in manifest["objects"]}:
         payloads = dict(payloads)
-        payloads["boot-layout"] = build_boot_layout(number, fail, declared_components)
+        payloads["boot-layout"] = build_boot_layout(number, fail, declared_layout_executables)
     objects = unique_sorted(manifest["objects"], "id", "object ids")
-    components = unique_sorted(manifest["components"], "name", "component names")
+    executables = unique_sorted(manifest["executables"], "name", "executable names")
+
+    # Pages each executable's image occupies, read back from the payload the
+    # loader will actually map (B49). The root allocates one frame capability
+    # per page from its own CSlots, so a quota that omitted them understated a
+    # process's cost by an order of magnitude -- the 48-instance stress plane
+    # declared 6 slots per instance and consumed 81.
+    image_pages: dict[str, int] = {}
+    for object_id, payload in payloads.items():
+        if len(payload) < COMPONENT_IMAGE_HEADER.size:
+            continue
+        # The seL4 profile carries the whole ELF after the qualification
+        # header rather than a re-based segment table, so the pages come from
+        # that ELF's own program headers -- the same LOAD segments
+        # `child_vspace` will map.
+        if payload[:8] != COMPONENT_IMAGE_ELF_MAGIC:
+            continue
+        elf = payload[COMPONENT_IMAGE_ELF_HEADER_LEN:]
+        if len(elf) < 64 or elf[:4] != b"\x7fELF":
+            continue
+        phoff = struct.unpack_from("<Q", elf, 0x20)[0]
+        phentsize, phnum = struct.unpack_from("<HH", elf, 0x36)
+        pages = 0
+        for index in range(phnum):
+            at = phoff + index * phentsize
+            if at + 56 > len(elf):
+                fail(f"object {object_id}: truncated program header")
+            p_type = struct.unpack_from("<I", elf, at)[0]
+            if p_type != 1:
+                continue
+            memsz = struct.unpack_from("<Q", elf, at + 0x28)[0]
+            pages += -(-memsz // profile.page_bytes)
+        image_pages[object_id] = pages
+    instances = unique_sorted(manifest["instances"], "name", "instance names")
     grants = sorted(manifest["grants"], key=lambda grant: (grant["name"], grant["source"], grant["target"]))
     states = unique_sorted(manifest["state"], "name", "state names")
-    if len({(grant["name"], grant["source"], grant["target"]) for grant in grants}) != len(grants): fail("grant identities must be unique")
-    if not 1 <= len(objects) <= MAX_OBJECTS or not 1 <= len(components) <= MAX_COMPONENTS or len(grants) > MAX_GRANTS or len(states) > MAX_STATES:
+    if len({(grant["name"], grant["source"], grant["target"]) for grant in grants}) != len(grants):
+        fail("grant identities must be unique")
+    if not 1 <= len(objects) <= MAX_OBJECTS or not 1 <= len(executables) <= MAX_EXECUTABLES or not 1 <= len(instances) <= MAX_INSTANCES or len(grants) > MAX_GRANTS or len(states) > MAX_STATES:
         fail("manifest count exceeds bound")
-    validate_acyclic(components)
-    object_index = {obj["id"]: index for index, obj in enumerate(objects)}
-    component_index = {component["name"]: index for index, component in enumerate(components)}
+    validate_acyclic(instances)
+    object_index = {object_["id"]: index for index, object_ in enumerate(objects)}
+    executable_index = {executable["name"]: index for index, executable in enumerate(executables)}
+    instance_index = {instance["name"]: index for index, instance in enumerate(instances)}
+    grant_index = {grant["name"]: index for index, grant in enumerate(grants)}
+    if len(grant_index) != len(grants):
+        fail("grant names must be unique")
     if manifest["target"] != profile.name:
         fail(f"manifest target {manifest['target']!r} does not match resolved profile {profile.name!r}")
-    if object_index.get(manifest["kernelObject"]) is None or objects[object_index[manifest["kernelObject"]]]["kind"] != "kernel": fail("kernelObject must name kernel")
-    bootstrap = component_index.get(manifest["bootstrapComponent"])
-    if bootstrap is None or components[bootstrap]["role"] != "init": fail("bootstrapComponent must name init")
+    bootstrap = instance_index.get(manifest["bootstrapInstance"])
+    if bootstrap is None:
+        fail("bootstrapInstance must name an instance")
 
     strings = bytearray()
     offsets: dict[str, int] = {}
     def string_offset(value: str) -> int:
-        if value in offsets: return offsets[value]
+        if value in offsets:
+            return offsets[value]
         encoded = value.encode("utf-8")
-        if len(encoded) > MAX_STRING_BYTES: fail("string exceeds bound")
-        offset = len(strings); strings.extend(struct.pack("<H", len(encoded))); strings.extend(encoded); offsets[value] = offset
-        if len(strings) > MAX_STRING_TABLE_BYTES: fail("string table exceeds bound")
+        if len(encoded) > MAX_STRING_BYTES:
+            fail("string exceeds bound")
+        offset = len(strings)
+        strings.extend(struct.pack("<H", len(encoded)))
+        strings.extend(encoded)
+        offsets[value] = offset
+        if len(strings) > MAX_STRING_TABLE_BYTES:
+            fail("string table exceeds bound")
         return offset
 
     target_offset = string_offset(manifest["target"])
-    object_records = bytearray()
-    component_records = bytearray()
-    dependency_records = bytearray()
-    grant_records = bytearray()
-    state_records = bytearray()
-    health_records = bytearray()
-    blobs = bytearray()
-    payload_start = (
-        GENERATION_HEADER.size + len(objects) * GENERATION_OBJECT.size + len(components) * GENERATION_COMPONENT.size
-        + sum(len(component["dependencies"]) for component in components) * GENERATION_DEPENDENCY.size
-        + len(grants) * GENERATION_GRANT.size + len(states) * GENERATION_STATE.size
-        + len(manifest["health"]["requiredComponents"]) * GENERATION_HEALTH.size
-    )
-    # Strings are visited canonically before payload offsets are frozen.
-    for obj in objects: string_offset(obj["id"])
-    for component in components: string_offset(component["name"])
+    boot_action_offset = string_offset(manifest["bootAction"])
+    for object_ in objects: string_offset(object_["id"])
+    for executable in executables: string_offset(executable["name"])
+    for instance in instances: string_offset(instance["name"])
     for grant in grants: string_offset(grant["name"])
     for state in states: string_offset(state["name"])
-    payload_start += len(strings)
-    for obj in objects:
-        if obj["kind"] not in KIND: fail(f"unsupported object kind {obj['kind']}")
-        payload = payloads.get(obj["id"])
-        if payload is None: fail(f"missing payload for {obj['id']}")
-        if len(payload) > MAX_OBJECT_PAYLOAD_BYTES: fail(f"payload too large for {obj['id']}")
-        object_records += GENERATION_OBJECT.pack(string_offset(obj["id"]), KIND[obj["kind"]], payload_start + len(blobs), len(payload), sha256(payload))
-        blobs += payload
-    dependency_count = 0
-    for component in components:
-        obj = object_index.get(component["object"])
-        if obj is None: fail(f"component {component['name']}: missing object")
-        if component["role"] not in ROLE: fail("unsupported component role")
-        spawn_budget = component["spawnBudget"]
-        if not isinstance(spawn_budget, int) or not 0 <= spawn_budget <= MAX_SPAWN_BUDGET:
-            fail(f"component {component['name']}: invalid spawn budget")
-        dependencies = sorted(component["dependencies"])
-        start = dependency_count
-        for dependency in dependencies:
-            dependency_records += GENERATION_DEPENDENCY.pack(component_index[dependency])
-            dependency_count += 1
-        component_records += GENERATION_COMPONENT.pack(
-            string_offset(component["name"]), obj, ROLE[component["role"]], start,
-            len(dependencies), spawn_budget,
-        )
-    if dependency_count > MAX_DEPENDENCIES: fail("dependency count exceeds bound")
+
+    grant_rights: list[int] = []
     for grant in grants:
-        source = component_index.get(grant["source"])
-        target = component_index.get(grant["target"])
-        if source is None or target is None: fail(f"grant endpoint missing: {grant['name']}")
         rights = 0
         for right in grant["rights"]:
-            if right not in RIGHT: fail(f"unsupported right {right}")
+            if right not in RIGHT:
+                fail(f"unsupported right {right}")
             rights |= RIGHT[right]
-        transferable = int(bool(grant["transferable"])); rights |= RIGHT_TRANSFER if transferable else 0
-        if rights == 0 or rights & ~RIGHT_ALL: fail(f"invalid rights for {grant['name']}")
-        grant_records += GENERATION_GRANT.pack(string_offset(grant["name"]), source, target, rights, transferable)
-    for state in states:
-        owner = component_index.get(state["owner"])
-        if owner is None or state["schemaVersion"] <= 0 or state["policy"] not in POLICY: fail(f"invalid state {state['name']}")
-        state_records += GENERATION_STATE.pack(string_offset(state["name"]), owner, state["schemaVersion"], POLICY[state["policy"]])
+        transferable = int(bool(grant["transferable"]))
+        rights |= RIGHT_TRANSFER if transferable else 0
+        validate_capability_rights(f"grant {grant['name']}", grant["capabilityKind"], rights)
+        grant_rights.append(rights)
+
+    expected_bindings: dict[str, set[str]] = {name: set() for name in instance_index}
+    for grant, _rights in zip(grants, grant_rights, strict=True):
+        source = instance_index.get(grant["source"])
+        if source is None:
+            fail(f"grant source missing: {grant['name']}")
+        if grant["capabilityKind"] == "executable":
+            expected_bindings[grant["source"]].add(grant["name"])
+            if executable_index.get(grant["target"]) is None:
+                fail(f"executable grant target missing: {grant['name']}")
+        else:
+            target = instance_index.get(grant["target"])
+            if target is None:
+                fail(f"grant target missing: {grant['name']}")
+            # An endpoint's two ends are both declared, so the source binds it
+            # as well as the target. Every other kind lands only in its target.
+            if grant["capabilityKind"] == "endpoint":
+                expected_bindings[grant["source"]].add(grant["name"])
+            expected_bindings[grant["target"]].add(grant["name"])
+
+    dependency_records = bytearray()
+    binding_records = bytearray()
+    instance_rows: list[tuple] = []
+    dependency_count = 0
+    binding_count = 0
+    required_from_instances: set[str] = set()
+    for instance in instances:
+        executable = executable_index.get(instance["executable"])
+        if executable is None:
+            fail(f"instance {instance['name']}: missing executable")
+        owner = instance["owner"]
+        if owner == "root":
+            owner_kind, owner_index = 0, 0
+        else:
+            owner_kind, owner_index = 1, instance_index.get(owner, -1)
+            if owner_index < 0 or owner == instance["name"]:
+                fail(f"instance {instance['name']}: invalid owner")
+        autostart = instance["autostart"]
+        if not isinstance(autostart, bool):
+            fail(f"instance {instance['name']}: invalid autostart")
+        dependencies = sorted(instance["dependencies"])
+        if autostart:
+            for dependency in dependencies:
+                depended = instances[instance_index[dependency]]
+                if depended["owner"] == "root" and not depended["autostart"]:
+                    fail(f"instance {instance['name']}: autostart dependency is inactive")
+        dependency_start = dependency_count
+        for dependency in dependencies:
+            dependency_records += GENERATION_DEPENDENCY.pack(instance_index[dependency])
+            dependency_count += 1
+        declared = instance["bindings"]
+        names = [binding["grant"] for binding in declared]
+        slots = [binding["slot"] for binding in declared]
+        if len(set(names)) != len(names) or len(set(slots)) != len(slots):
+            fail(f"instance {instance['name']}: duplicate binding grant or slot")
+        if any(not isinstance(slot, int) or isinstance(slot, bool) or not 0 <= slot < 32 for slot in slots):
+            fail(f"instance {instance['name']}: logical binding slot outside 0..31")
+        for binding in declared:
+            grant = grants[grant_index[binding["grant"]]] if binding["grant"] in grant_index else None
+            if grant is not None and set(grant["rights"]) & {"send", "recv"} and binding["slot"] >= MAX_DECLARED_NATIVE_SLOT:
+                fail(f"instance {instance['name']}: endpoint-relative slot outside 0..30")
+        expected = expected_bindings[instance["name"]]
+        extra = set(names) - expected
+        for name in extra:
+            grant = grants[grant_index[name]] if name in grant_index else None
+            if grant is None or grant["source"] not in (instance["name"], owner):
+                fail(f"instance {instance['name']}: binding names unrelated grant")
+            rights = grant_rights[grant_index[name]]
+            delegated_to_instance = grant["target"] == instance["name"]
+            delegated_from_owner = grant["source"] == owner
+            delegated_to_owned_instance = any(
+                child["owner"] == instance["name"] and child["name"] == grant["target"]
+                for child in instances
+            )
+            delegated_to_owned_executable = grant["capabilityKind"] == "executable" and any(
+                child["owner"] == instance["name"] and child["executable"] == grant["target"]
+                for child in instances
+            )
+            if not delegated_from_owner and not delegated_to_instance and not delegated_to_owned_instance and not delegated_to_owned_executable:
+                fail(f"instance {instance['name']}: binding names unrelated grant")
+        if not expected.issubset(names):
+            fail(f"instance {instance['name']}: bindings do not close over related grants")
+        binding_start = binding_count
+        for binding in sorted(declared, key=lambda binding: binding["slot"]):
+            grant = grant_index.get(binding["grant"])
+            if grant is None:
+                fail(f"instance {instance['name']}: binding names unknown grant")
+            binding_records += GENERATION_BINDING.pack(grant, binding["slot"])
+            binding_count += 1
+        if instance["health"] not in ("required", "optional"):
+            fail(f"instance {instance['name']}: invalid health")
+        health = int(instance["health"] == "required")
+        if health:
+            required_from_instances.add(instance["name"])
+        instance_rows.append((string_offset(instance["name"]), executable, owner_kind, owner_index, int(autostart), dependency_start, len(dependencies), binding_start, len(declared), health))
+    if dependency_count > MAX_DEPENDENCIES or binding_count > MAX_BINDINGS:
+        fail("dependency or binding count exceeds bound")
+
     health = manifest["health"]
-    required = sorted(health["requiredComponents"])
-    if health["bootAttempts"] <= 0 or len(required) > MAX_HEALTH_COMPONENTS or len(set(required)) != len(required): fail("invalid health policy")
-    for component in required:
-        if component not in component_index: fail(f"missing health component {component}")
-        health_records += GENERATION_HEALTH.pack(component_index[component])
+    required = sorted(health["requiredInstances"])
+    if health["bootAttempts"] <= 0 or len(required) > MAX_HEALTH_INSTANCES or len(set(required)) != len(required) or set(required) != required_from_instances:
+        fail("invalid health policy")
+
+    object_records = bytearray()
+    executable_records = bytearray()
+    instance_records = bytearray()
+    grant_records = bytearray()
+    state_records = bytearray()
+    (
+        process_records,
+        thread_records,
+        kernel_object_records,
+        mapping_records,
+        cap_binding_records,
+        service_binding_records,
+        schedule_records,
+        fault_policy_records,
+        spawn_template_records,
+        resource_quota_records,
+        minted_binding_records,
+        notification_grant_records,
+        notification_binding_records,
+        plan_counts,
+    ) = build_sel4_plan(
+        manifest,
+        instances,
+        grants,
+        grant_rights,
+        instance_index,
+        executable_index,
+        string_offset,
+        image_pages,
+    )
+    health_records = bytearray()
+    blobs = bytearray()
+    plan_bytes = sum(
+        len(records)
+        for records in (
+            process_records,
+            thread_records,
+            kernel_object_records,
+            mapping_records,
+            cap_binding_records,
+            service_binding_records,
+            schedule_records,
+            fault_policy_records,
+            spawn_template_records,
+            resource_quota_records,
+            minted_binding_records,
+            notification_grant_records,
+            notification_binding_records,
+        )
+    )
+    payload_start = (
+        GENERATION_HEADER.size
+        + len(objects) * GENERATION_OBJECT.size
+        + len(executables) * GENERATION_EXECUTABLE.size
+        + len(instances) * GENERATION_INSTANCE.size
+        + len(dependency_records)
+        + len(binding_records)
+        + len(grants) * GENERATION_GRANT.size
+        + len(states) * GENERATION_STATE.size
+        + len(required) * GENERATION_HEALTH.size
+        + plan_bytes
+        + len(strings)
+    )
+    for object_ in objects:
+        if object_["kind"] not in KIND:
+            fail(f"unsupported object kind {object_['kind']}")
+        payload = payloads.get(object_["id"])
+        if payload is None or len(payload) > MAX_OBJECT_PAYLOAD_BYTES:
+            fail(f"missing or oversized payload for {object_['id']}")
+        object_records += GENERATION_OBJECT.pack(
+            string_offset(object_["id"]),
+            KIND[object_["kind"]],
+            payload_start + len(blobs),
+            len(payload),
+            sha256(payload),
+        )
+        blobs += payload
+    for executable in executables:
+        object_ = object_index.get(executable["object"])
+        if object_ is None or objects[object_]["kind"] not in ("bootstrap", "component"):
+            fail(f"executable {executable['name']}: invalid object")
+        if executable["role"] not in ROLE:
+            fail(f"executable {executable['name']}: unsupported role")
+        spawn_budget = executable["spawnBudget"]
+        if not isinstance(spawn_budget, int) or not 0 <= spawn_budget <= MAX_SPAWN_BUDGET:
+            fail(f"executable {executable['name']}: invalid spawn budget")
+        executable_records += GENERATION_EXECUTABLE.pack(
+            string_offset(executable["name"]), object_, ROLE[executable["role"]], spawn_budget
+        )
+    bootstrap_instance = instances[bootstrap]
+    bootstrap_executable = executables[executable_index[bootstrap_instance["executable"]]]
+    if bootstrap_instance["owner"] != "root" or not bootstrap_instance["autostart"] or bootstrap_executable["role"] != "init" or objects[object_index[bootstrap_executable["object"]]]["kind"] != "bootstrap":
+        fail("bootstrap instance must be root-owned autostart init/bootstrap")
+    for row in instance_rows: instance_records += GENERATION_INSTANCE.pack(*row)
+    for grant, rights in zip(grants, grant_rights, strict=True):
+        source = instance_index[grant["source"]]
+        target = executable_index[grant["target"]] if grant["capabilityKind"] == "executable" else instance_index[grant["target"]]
+        grant_records += GENERATION_GRANT.pack(
+            string_offset(grant["name"]),
+            source,
+            target,
+            rights,
+            int(bool(grant["transferable"])),
+            GRANT_FLAGS_NONE,
+            CAPABILITY_KIND[grant["capabilityKind"]],
+        )
+    for state in states:
+        owner = instance_index.get(state["owner"])
+        if owner is None or state["schemaVersion"] <= 0 or state["policy"] not in POLICY:
+            fail(f"invalid state {state['name']}")
+        state_records += GENERATION_STATE.pack(string_offset(state["name"]), owner, state["schemaVersion"], POLICY[state["policy"]])
+    for name in required: health_records += GENERATION_HEALTH.pack(instance_index[name])
 
     object_offset = GENERATION_HEADER.size
-    component_offset = object_offset + len(object_records)
-    dependency_offset = component_offset + len(component_records)
-    grant_offset = dependency_offset + len(dependency_records)
+    executable_offset = object_offset + len(object_records)
+    instance_offset = executable_offset + len(executable_records)
+    dependency_offset = instance_offset + len(instance_records)
+    binding_offset = dependency_offset + len(dependency_records)
+    grant_offset = binding_offset + len(binding_records)
     state_offset = grant_offset + len(grant_records)
     health_offset = state_offset + len(state_records)
-    string_table_offset = health_offset + len(health_records)
+    process_offset = health_offset + len(health_records)
+    thread_offset = process_offset + len(process_records)
+    kernel_object_offset = thread_offset + len(thread_records)
+    mapping_offset = kernel_object_offset + len(kernel_object_records)
+    cap_binding_offset = mapping_offset + len(mapping_records)
+    service_binding_offset = cap_binding_offset + len(cap_binding_records)
+    schedule_offset = service_binding_offset + len(service_binding_records)
+    fault_policy_offset = schedule_offset + len(schedule_records)
+    spawn_template_offset = fault_policy_offset + len(fault_policy_records)
+    resource_quota_offset = spawn_template_offset + len(spawn_template_records)
+    minted_binding_offset = resource_quota_offset + len(resource_quota_records)
+    notification_grant_offset = minted_binding_offset + len(minted_binding_records)
+    notification_binding_offset = notification_grant_offset + len(notification_grant_records)
+    string_table_offset = notification_binding_offset + len(notification_binding_records)
     actual_payload_offset = string_table_offset + len(strings)
-    if actual_payload_offset != payload_start: fail("internal payload offset mismatch")
+    if actual_payload_offset != payload_start:
+        fail("internal payload offset mismatch")
     total_len = actual_payload_offset + len(blobs)
-    if total_len > MAX_GENERATION_BYTES: fail("generation exceeds bound")
-    parent_bytes = parent or bytes(32)
+    if total_len > MAX_GENERATION_BYTES:
+        fail("generation exceeds bound")
     header = GENERATION_HEADER.pack(
-        GENERATION_MAGIC, GENERATION_VERSION, GENERATION_HEADER.size, 0, bytes(32), number, parent_bytes,
-        target_offset, object_index[manifest["kernelObject"]], bootstrap, health["bootAttempts"], len(objects), len(components),
-        dependency_count, len(grants), len(states), len(required), object_offset, component_offset, dependency_offset,
-        grant_offset, state_offset, health_offset, string_table_offset, len(strings), actual_payload_offset, total_len,
+        GENERATION_MAGIC, GENERATION_VERSION, GENERATION_HEADER.size, 0, bytes(32), number,
+        parent or bytes(32), target_offset, boot_action_offset, bootstrap, health["bootAttempts"], len(objects),
+        len(executables), len(instances), dependency_count, binding_count, len(grants),
+        len(states), len(required), *plan_counts, 0, object_offset, executable_offset,
+        instance_offset, dependency_offset, binding_offset, grant_offset, state_offset,
+        health_offset, process_offset, thread_offset, kernel_object_offset, mapping_offset,
+        cap_binding_offset, service_binding_offset, schedule_offset, fault_policy_offset,
+        spawn_template_offset, resource_quota_offset, minted_binding_offset,
+        notification_grant_offset, notification_binding_offset,
+        string_table_offset, len(strings),
+        actual_payload_offset, total_len,
     )
     generation = bytearray(
-        header
-        + object_records
-        + component_records
-        + dependency_records
-        + grant_records
-        + state_records
-        + health_records
-        + strings
-        + blobs
+        header + object_records + executable_records + instance_records + dependency_records
+        + binding_records + grant_records + state_records + health_records + process_records
+        + thread_records + kernel_object_records + mapping_records + cap_binding_records
+        + service_binding_records + schedule_records + fault_policy_records
+        + spawn_template_records + resource_quota_records + minted_binding_records
+        + notification_grant_records + notification_binding_records + strings + blobs
     )
-    identity = generation_identity(generation)
-    generation[24:56] = identity
+    generation[24:56] = generation_identity(generation)
     return bytes(generation)
 
 
@@ -1987,15 +3400,32 @@ def encode_bootstate(
     return bytes(slot)
 
 
+SELECTOR_GENERATION_BYTES = 8 * 1024 * 1024
+
+
 def build_bootstore(generations: list[bytes]) -> bytes:
+    if any(len(generation) > SELECTOR_GENERATION_BYTES for generation in generations):
+        fail(f"generation exceeds selector ceiling ({SELECTOR_GENERATION_BYTES} bytes)")
     release_sequences = [index + 1 for index in range(len(generations))]
     pending_sequence = os.environ.get("SLIME_PENDING_RELEASE_SEQUENCE")
     if pending_sequence is not None:
         release_sequences[-1] = int(pending_sequence)
+    boot_bundle_hex = os.environ.get("SLIME_BOOT_BUNDLE_IDENTITY")
+    try:
+        boot_bundle = bytes.fromhex(boot_bundle_hex) if boot_bundle_hex is not None else None
+    except ValueError:
+        fail("SLIME_BOOT_BUNDLE_IDENTITY must be a nonzero 32-byte hex digest")
+    if boot_bundle is not None and (len(boot_bundle) != 32 or boot_bundle == bytes(32)):
+        fail("SLIME_BOOT_BUNDLE_IDENTITY must be a nonzero 32-byte hex digest")
     entries = sorted(
-        ((generation[24:56], generation, build_release(generation, release_sequences[index])) for index, generation in enumerate(generations)),
-        key=lambda item: item[0],
+        (
+            generation[24:56],
+            generation,
+            build_release(generation, release_sequences[index], boot_bundle_identity=boot_bundle),
+        )
+        for index, generation in enumerate(generations)
     )
+    entries.sort(key=lambda item: item[0])
     generation_root = sha256(b"".join(identity for identity, _, _ in entries))
     known_good = generations[-1][24:56]
     pending = None
@@ -2071,130 +3501,164 @@ def build_bootstore(generations: list[bytes]) -> bytes:
 
 
 
-def main() -> None:
-    if len(sys.argv) != 3:
-        fail("usage: build-generation.py <kernel-elf> <output-dir>")
-    kernel = Path(sys.argv[1]).resolve()
-    output = Path(sys.argv[2]).resolve()
-    manifest = load_manifest()
-    # The manifest names the profile a generation is built for.
-    # `SLIME_TARGET_PROFILE` retargets it so one component graph can produce a
-    # generation for another admitted profile without a second source of truth.
-    # The override rewrites the manifest's own field rather than bypassing it,
-    # so every downstream target check — including the manifest/profile
-    # agreement assertion — still runs against one value. The name is resolved
-    # against the closed profile table, so an unknown or misspelled target fails
-    # here rather than producing an unqualified artifact.
-    requested_target = os.environ.get("SLIME_TARGET_PROFILE")
-    if requested_target:
-        manifest["target"] = requested_target
-    target_profile = resolve_target_profile(manifest.get("target"))
-    if manifest["formatVersion"] != 1:
-        fail("unsupported source formatVersion")
-    interfaces = validate_interface_schemas(manifest["interfaceSchemas"])
-    output.mkdir(parents=True, exist_ok=True)
-    resolved_profile = resolve_fabric_profile(manifest, interfaces, selected_profile_name())
-    # Everything below builds from the profile-resolved manifest (B11): the
-    # component set, and therefore the objects, grants, state bindings,
-    # shared-buffer holders, and health policy the generation declares, are
-    # whatever the selected profile resolved. The source manifest is the union
-    # of every profile and is never encoded.
-    manifest = resolved_profile.manifest
-    _, profile_rust_path, _ = write_resolved_profile(output, resolved_profile)
-    policy_number = int(os.environ.get("SLIME_GENERATION_NUMBER") or manifest["generation"])
-    # Generation 1 is the known-good baseline: its components must carry their own
-    # generation number (1) so the generation-manager runs the known-good path,
-    # not the pending/failing path baked for `policy_number`. Booting the two
-    # generations from one build (rollback/bootstate) otherwise makes the
-    # known-good recovery boot report the pending generation's unhealthy status.
-    # The transfer receiver is the exception: there generation 1 *is* the
-    # policy-numbered receiver generation, built with the receiver flag.
-    generation1_number = policy_number if os.environ.get("SLIME_TRANSFER_RECEIVER") == "1" else 1
-    profile_components = {component["name"] for component in manifest["components"]}
-    generation1_components = build_rust_components(
-        generation1_number,
-        profile_rust_path,
+def bootstrap_binding_projection(manifest: dict) -> tuple[dict[str, int], dict[str, int]]:
+    """Project explicit bootstrap bindings onto the compile-time slot API."""
+    bootstrap = manifest["bootstrapInstance"]
+    instance = next(item for item in manifest["instances"] if item["name"] == bootstrap)
+    grants_by_name = {grant["name"]: grant for grant in manifest["grants"]}
+    binding_slots: dict[str, int] = {}
+    role_bindings: dict[str, int] = {}
+    kind_roles = {
+        "sharedBufferFactory": "shared-buffer-factory",
+        "input": "input",
+    }
+    for binding in instance["bindings"]:
+        grant = grants_by_name[binding["grant"]]
+        if "exec" in grant["rights"]:
+            binding_slots[grant["target"]] = binding["slot"]
+        elif set(grant["rights"]) & {"send", "recv"}:
+            binding_slots[grant["name"]] = binding["slot"]
+        role = kind_roles.get(grant["capabilityKind"])
+        if role is not None:
+            role_bindings[role] = binding["slot"]
+    return binding_slots, role_bindings
+
+
+def build_sel4_generation(output: Path, manifest: dict, target_profile: TargetProfile) -> None:
+    """Build the `aarch64-sel4-qemu-virt` generation (P5.2).
+
+    This is the product generation path. seL4 is the kernel, so the generation
+    carries the pinned external-kernel identity required by the format but no
+    custom-kernel executable. Recovery, storage, and generation management run
+    as userspace planes selected by their manifests.
+
+    A fabric graph is conditional rather than absent: a graph that declares one
+    resolves the same authenticated profile the userspace fabric consumes.
+    """
+
+    # P5.5.2: a manifest that declares a fabric graph resolves it through the
+    # same function every x86 profile uses, so a seL4 route identity, QoS row,
+    # and control-slot base are folded from the same schemas and the same
+    # validation rather than from a second implementation. A manifest that
+    # declares none gets the empty profile the four earlier seL4 graphs get.
+    resolved_profile = None
+    profile_path = output / "sel4-fabric-profile.rs"
+    if manifest.get("fabricGraph"):
+        interfaces = validate_interface_schemas(manifest["interfaceSchemas"])
+        resolved_profile = resolve_fabric_profile(
+            manifest, interfaces, manifest["fabricGraph"]["profiles"][0]["name"]
+        )
+        profile_path.write_text(
+            render_fabric_profile_rust(resolved_profile, manifest["bootAction"]),
+            encoding="utf-8",
+        )
+    else:
+        # A graph with no fabric still has owners that spawn children, and init
+        # reads its declared spawn-grant counts from this profile. Emit that one
+        # table rather than nothing, so the same `init.rs` compiles against every
+        # manifest instead of the constant existing only where a fabric does.
+        profile_path.write_text(
+            "#[allow(dead_code)]\n"
+            + f"pub const GENERATION_BOOT_ACTION: &str = {json.dumps(manifest['bootAction'], ensure_ascii=True)};\n"
+            + "pub const FABRIC_MINTED_GRANTS: &[(&[u8], usize)] = &[\n"
+            + "".join(
+                f"    (b{json.dumps(instance['name'], ensure_ascii=True)}, {count}),\n"
+                for instance, count in declared_spawn_grant_counts(manifest)
+            )
+            + "];\n",
+            encoding="utf-8",
+        )
+    executable_names = {executable["name"] for executable in manifest["executables"]}
+    binding_slots, role_bindings = bootstrap_binding_projection(manifest)
+    built = build_rust_components(
+        manifest["generation"],
+        profile_path,
         target_profile,
         candidate_identity=None,
-        components=profile_components,
+        components=executable_names,
+        binding_slots=binding_slots,
+        role_bindings=role_bindings,
     )
-    payloads: dict[str, bytes] = {manifest["kernelObject"]: kernel_image(kernel, target_profile)}
-    object_by_id = {obj["id"]: obj for obj in manifest["objects"]}
-    if "shared-buffer-budget" in object_by_id:
+    payloads: dict[str, bytes] = {}
+    object_ids = {object_["id"] for object_ in manifest["objects"]}
+    # seL4 is external to the generation-v4 object closure; there is no
+    # kernel-object header field or synthetic marker payload.
+    # The authenticated C8.2 graph, byte-identical to what an x86 generation
+    # carries for the same declaration. `slime-root` does not read it — the
+    # fabric is userspace policy and the root knows nothing of routes — but it
+    # is part of the object closure the root re-checks, so a graph the builder
+    # resolved and then failed to carry would fail admission rather than boot
+    # with an unauthenticated one.
+    if resolved_profile is not None:
+        if "fabric-graph" not in object_ids:
+            fail("fabricGraph declared without a fabric-graph resource object")
+        payloads["fabric-graph"] = resolved_profile.graph_bytes
+    elif "fabric-graph" in object_ids:
+        fail("fabric-graph resource object declared without a fabricGraph")
+    if "shared-buffer-budget" in object_ids:
         payloads["shared-buffer-budget"] = build_shared_buffer_budget(
             manifest.get("sharedBufferBudget", [])
         )
-    if "fabric-graph" in object_by_id:
-        payloads["fabric-graph"] = resolved_profile.graph_bytes
-    elif manifest.get("fabricGraph") is not None:
-        fail("fabricGraph declared without a fabric-graph resource object")
-    for component in manifest["components"]:
-        stack = component.get("stackBytes", COMPONENT_DEFAULT_STACK_BYTES)
-        if not isinstance(stack, int) or stack <= 0 or stack % target_profile.page_bytes or stack > COMPONENT_MAX_STACK_BYTES:
-            fail(f"component {component['name']}: invalid stack")
-        if component["object"] not in object_by_id:
-            fail(f"component {component['name']}: missing object")
-        payloads[component["object"]] = component_image(
-            component["name"], generation1_components / component["name"], stack, target_profile
+    for executable in manifest["executables"]:
+        stack = executable.get("stackBytes", COMPONENT_DEFAULT_STACK_BYTES)
+        if (
+            not isinstance(stack, int)
+            or stack <= 0
+            or stack % target_profile.page_bytes
+            or stack > COMPONENT_MAX_STACK_BYTES
+        ):
+            fail(f"executable {executable['name']}: invalid stack")
+        if executable["object"] not in object_ids:
+            fail(f"executable {executable['name']}: missing object")
+        payloads[executable["object"]] = component_image(
+            executable["name"],
+            component_executable(built, executable["name"], target_profile),
+            stack,
+            target_profile,
         )
-    generation1 = build_generation(manifest, payloads, None, 1, target_profile)
-    generation2_components = build_rust_components(
-        policy_number,
-        profile_rust_path,
-        target_profile,
-        candidate_identity=generation1[24:56],
-        components=profile_components,
+
+    generation = build_generation(manifest, payloads, None, manifest["generation"], target_profile)
+    # Build the compatibility alias independently from the same resolved inputs.
+    # Determinism checks can then detect hidden mutable builder state instead of
+    # comparing a file copied from the bytes beside it.
+    generation_one = build_generation(
+        manifest, payloads, None, manifest["generation"], target_profile
     )
-    for component in manifest["components"]:
-        stack = component.get("stackBytes", COMPONENT_DEFAULT_STACK_BYTES)
-        if not isinstance(stack, int) or stack <= 0 or stack % target_profile.page_bytes or stack > COMPONENT_MAX_STACK_BYTES:
-            fail(f"component {component['name']}: invalid stack")
-        payloads[component["object"]] = component_image(
-            component["name"], generation2_components / component["name"], stack, target_profile
-        )
-    parent_override = os.environ.get("SLIME_GENERATION_PARENT")
-    generation2_parent = bytes.fromhex(parent_override) if parent_override else generation1[24:56]
-    generation2 = build_generation(manifest, payloads, generation2_parent, policy_number, target_profile)
-    recovery = recovery_manifest(manifest)
-    recovery_components = build_rust_components(
-        5,
-        profile_rust_path,
-        target_profile,
-        recovery=True,
-        components={component["name"] for component in recovery["components"]},
-    )
-    state_first_lba = int(os.environ.get("SLIME_RECOVERY_STATE_FIRST_LBA") or BOOTSTORE_CAPACITY // 512)
-    state_last_lba = int(os.environ.get("SLIME_RECOVERY_STATE_LAST_LBA") or state_first_lba + 127)
-    target_bdf = int(os.environ.get("SLIME_RECOVERY_TARGET_BDF") or "0x000018", 0)
-    state_entries: list[tuple[str, bytes, int]] = []
-    generation_root = sha256(b"".join(sorted((generation1[24:56], generation2[24:56]))))
-    recovery_payloads = {
-        manifest["kernelObject"]: payloads[manifest["kernelObject"]],
-        "sha256:init": component_image("init", recovery_components / "init", COMPONENT_DEFAULT_STACK_BYTES, target_profile),
-        "sha256:recovery": component_image("recovery", recovery_components / "recovery", COMPONENT_DEFAULT_STACK_BYTES, target_profile),
-        "recovery-index": build_recovery_index(
-            generation2[24:56],
-            generation_root,
-            2,
-            target_bdf,
-            state_entries,
-            state_first_lba,
-            state_last_lba,
-        ),
-    }
-    recovery_generation = build_generation(recovery, recovery_payloads, None, 5, target_profile)
-    recovery_bootstore = build_bootstore([recovery_generation])
-    bootstore = build_bootstore([generation1, generation2])
-    (output / "generation-1.bin").write_bytes(generation1)
-    (output / "generation-2.bin").write_bytes(generation2)
-    (output / "generation.bin").write_bytes(generation2)
+    bootstore = build_bootstore([generation])
+    (output / "generation.bin").write_bytes(generation)
+    (output / "generation-1.bin").write_bytes(generation_one)
     (output / "boot-store.bin").write_bytes(bootstore)
-    (output / "recovery-generation.bin").write_bytes(recovery_generation)
-    (output / "recovery-boot-store.bin").write_bytes(recovery_bootstore)
-    print(f"Built generation 1 {generation1[24:56].hex()}")
-    print(f"Built generation 2 {generation2[24:56].hex()} parent={generation1[24:56].hex()}")
+    print(f"Built seL4 generation {generation[24:56].hex()} target={target_profile.name}")
     print(f"Built boot-store.bin ({len(bootstore)} bytes)")
-    print(f"Built recovery generation {recovery_generation[24:56].hex()}")
+
+
+def main() -> None:
+    if len(sys.argv) != 2:
+        fail("usage: build-generation.py <output-dir>")
+    output = Path(sys.argv[1]).resolve()
+    manifest = load_manifest()
+    # The manifest names the profile a generation is built for. The optional
+    # override rewrites that declaration before the closed profile lookup, so
+    # downstream admission still sees one authoritative target value.
+    requested_target = os.environ.get("SLIME_TARGET_PROFILE")
+    if requested_target:
+        manifest["target"] = requested_target
+    requested_generation = os.environ.get("SLIME_GENERATION_NUMBER")
+    if requested_generation is not None:
+        try:
+            generation_number = int(requested_generation)
+        except ValueError:
+            fail("SLIME_GENERATION_NUMBER must be a positive integer")
+        if generation_number <= 0:
+            fail("SLIME_GENERATION_NUMBER must be a positive integer")
+        manifest["generation"] = generation_number
+    target_profile = resolve_target_profile(manifest.get("target"))
+    if manifest["formatVersion"] != 1:
+        fail("unsupported source formatVersion")
+    if target_profile.name != SEL4_TARGET_PROFILE:
+        fail("custom-kernel generation builds were retired with P5; select a seL4 manifest")
+    output.mkdir(parents=True, exist_ok=True)
+    build_sel4_generation(output, manifest, target_profile)
 
 
 if __name__ == "__main__":

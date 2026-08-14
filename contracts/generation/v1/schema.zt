@@ -12,27 +12,103 @@ Object :: type {
   size : Int;
 };
 
-Component :: type {
+Executable :: type {
   name : Text;
   object : Text;
   role : Text;
-  dependencies : List Text;
-  -- Optional per-component stack size in bytes for the component image
-  -- header (contracts/component/v1). Must be a positive page multiple
-  -- within the component format's stack bound; the builder substitutes its
-  -- default when absent.
+  -- Optional per-executable stack size in bytes for the component image.
   stackBytes? : Int;
-  -- Maximum simultaneous children this component may spawn. Zero disables
-  -- spawning; the bootstrap component receives the declared graph budget.
   spawnBudget : Int;
-  -- Command names this component may resolve through the spawn service.
   commandProfile : List Text;
+};
+
+-- One instance's view of a grant. `slot` is the destination capability slot in
+-- the holder's table. Omitting it asks the generation builder to assign one
+-- deterministically, ordered by grant name within this holder's namespace --
+-- which is what a manifest should do unless a frozen artifact pins the number.
+-- Explicit slots stay authoritative: the boot-layout fixtures are byte-pinned,
+-- so auto-allocation is opt-in per binding rather than a global renumbering.
+InstanceBinding :: type {
+  grant : Text;
+  slot? : Int;
+};
+
+-- One statically-created seL4 Notification. `source` is the instance allowed
+-- to signal it and `target` is the instance that waits on it. A stream ring
+-- declares two: ready flows producer to consumer; credit flows consumer to
+-- producer.
+NotificationGrant :: type {
+  name : Text;
+  source : Text;
+  target : Text;
+};
+
+-- One holder's view of a NotificationGrant. Slots are relative to the native
+-- notification region (48..62), hence the closed 0..14 range validated by the
+-- generation builder. `role` is closed to `signal` or `wait`. `slot` may be
+-- omitted to have the builder assign it within this holder's notification
+-- namespace, which is disjoint from its capability slots.
+NotificationBinding :: type {
+  grant : Text;
+  holder : Text;
+  slot? : Int;
+  role : Text;
+};
+
+Instance :: type {
+  name : Text;
+  executable : Text;
+  owner : Text;
+  autostart : Bool;
+  dependencies : List Text;
+  health : Text;
+  bindings : List InstanceBinding;
+  -- Scheduling priority for this instance's initial thread.
+  --
+  -- The v5 wire format has carried a `ScheduleRecord` with `priority`,
+  -- `budget_us`, and `period_us` per thread since the cutover, but nothing
+  -- declared one: the builder wrote a constant and the root ignored it,
+  -- running every child at one fixed number. This is the manifest's side of
+  -- that record.
+  --
+  -- Absent means the root's default, one below its own so the service loop
+  -- always preempts a runnable child. Bounded by that default rather than by
+  -- seL4's 255: a child at or above the root's priority can keep the service
+  -- loop from running and stall every other child behind it.
+  --
+  -- Budget and period stay undeclared until MCS is admitted; without it seL4
+  -- has no notion of either, and a number the kernel cannot enforce would be
+  -- authenticated fiction.
+  priority? : Int;
+  -- Extra threads in this instance's process, beyond its main one.
+  --
+  -- A process owns the CSpace and VSpace; a thread owns a TCB, an IPC buffer,
+  -- a fault policy, and a schedule. v5 has separated them since the cutover,
+  -- but the builder emitted exactly one thread per process and indexed the two
+  -- tables 1:1, so the split existed in the format and nowhere else (B47).
+  --
+  -- Each extra thread gets its own TCB, IPC buffer, fault policy, and
+  -- schedule, and shares the declaring instance's CSpace and VSpace — which is
+  -- the property that distinguishes a second thread from a second process.
+  extraThreads? : Int;
+  -- Scheduling priority for this instance's extra threads.
+  --
+  -- Defaults to `priority`, so a worker runs alongside its main thread unless
+  -- the manifest says otherwise. Declaring it lower is the case that matters:
+  -- a component can then hold a busy thread without stalling its own IPC, and
+  -- an unrelated higher-priority service keeps running (B48). The
+  -- `ScheduleRecord` has always been per-thread; this is the manifest side of
+  -- that.
+  --
+  -- Bounded like `priority`, and refused rather than clamped.
+  workerPriority? : Int;
 };
 
 CapabilityGrant :: type {
   name : Text;
   source : Text;
   target : Text;
+  capabilityKind : Text;
   rights : List Text;
   transferable : Bool;
 };
@@ -42,6 +118,23 @@ StateBinding :: type {
   owner : Text;
   schemaVersion : Int;
   policy : Text;
+};
+
+-- One capability an owner mints at runtime and hands to an instance it owns at
+-- spawn. A CapabilityGrant names a concrete authority edge between two declared
+-- endpoints; a channel endpoint minted after activation has no object to name,
+-- so it is declared here instead of degrading a grant to a rights assertion.
+-- Owner, holder, destination slot, and the exact rights ceiling are all fixed
+-- before activation; only the object identity is deferred. `slot` may be
+-- omitted to have the builder assign it, on the same terms as InstanceBinding.
+MintedBinding :: type {
+  name : Text;
+  owner : Text;
+  holder : Text;
+  capabilityKind : Text;
+  slot? : Int;
+  rights : List Text;
+  transferable : Bool;
 };
 
 -- Per-holder C7 shared-buffer quota carried by the authenticated generation.
@@ -68,25 +161,13 @@ FabricProfile :: type {
   interpositions : List FabricProfileInterposition;
 };
 
--- One named boot profile: which components the generation declares beyond the
+-- One named boot profile: which instances the generation declares beyond the
 -- product set, and which fabric interposition chains apply (B11).
---
--- `components` names verification scaffolding -- probes and scenario doubles --
--- that only a test profile declares. The product profile names none, so a
--- generation built for the product declares only components the product needs.
--- A profile is closed over its own scaffolding: every object, grant, state
--- binding, shared-buffer holder, fabric participant, and interposition hop that
--- names a component this profile does not declare is dropped with it, and
--- `health` is resolved per profile rather than shared.
---
--- `fabricProfile` names the `fabricGraph.profiles` entry this boot profile
--- resolves, so interposition selection stays where the fabric graph declares
--- it rather than being restated here.
 BootProfile :: type {
   name : Text;
   fabricProfile : Text;
-  components : List Text;
-  requiredComponents : List Text;
+  instances : List Text;
+  requiredInstances : List Text;
 };
 
 -- One participant's exact role on one fabric route (C8.2). `interposition` is
@@ -145,7 +226,7 @@ FabricGraph :: type {
 
 HealthPolicy :: type {
   bootAttempts : Int;
-  requiredComponents : List Text;
+  requiredInstances : List Text;
 };
 
 GenerationManifest :: type {
@@ -153,20 +234,24 @@ GenerationManifest :: type {
   generation : Int;
   target : Text;
   parent? : Int;
-  kernelObject : Text;
-  bootstrapComponent : Text;
+  -- Authenticated init composition selector. It travels in the v5 process
+  -- record and is passed to the bootstrap thread at activation; component
+  -- images never select a graph through build-time environment flags.
+  bootAction : Text;
+  bootstrapInstance : Text;
   interfaceSchemas : List Text;
   sharedBufferBudget : List SharedBufferBudgetEntry;
   objects : List Object;
-  components : List Component;
+  executables : List Executable;
+  instances : List Instance;
   grants : List CapabilityGrant;
+  mintedBindings : List MintedBinding;
+  notificationGrants? : List NotificationGrant;
+  notificationBindings? : List NotificationBinding;
   state : List StateBinding;
   -- Fallback health policy, used by a profile that declares no required set of
   -- its own.
   health : HealthPolicy;
-  -- Named boot profiles (B11). The builder resolves exactly one per build and
-  -- declares only the components that profile names, so verification
-  -- scaffolding never reaches the product generation.
   bootProfiles : List BootProfile;
   -- Optional C8.2 fabric graph. Absent means the generation declares no
   -- native data fabric; no component then receives any route authority.
@@ -174,8 +259,13 @@ GenerationManifest :: type {
 };
 
 FromData @Object :: derive
-FromData @Component :: derive
+FromData @Executable :: derive
+FromData @InstanceBinding :: derive
+FromData @NotificationGrant :: derive
+FromData @NotificationBinding :: derive
+FromData @Instance :: derive
 FromData @CapabilityGrant :: derive
+FromData @MintedBinding :: derive
 FromData @StateBinding :: derive
 FromData @HealthPolicy :: derive
 FromData @SharedBufferBudgetEntry :: derive
@@ -192,19 +282,24 @@ decodeManifest :: Data -> Validation DecodeIssue GenerationManifest
   = data => decode data;
 
 {
-  Object = Object;
-  Component = Component;
-  SharedBufferBudgetEntry = SharedBufferBudgetEntry;
-  FabricProfileInterposition = FabricProfileInterposition;
-  FabricProfile = FabricProfile;
-  CapabilityGrant = CapabilityGrant;
-  StateBinding = StateBinding;
-  HealthPolicy = HealthPolicy;
-  FabricParticipant = FabricParticipant;
-  FabricRoute = FabricRoute;
-  FabricLimits = FabricLimits;
-  FabricGraph = FabricGraph;
-  BootProfile = BootProfile;
-  GenerationManifest = GenerationManifest;
-  decodeManifest = decodeManifest;
+  Object =;
+  Executable =;
+  InstanceBinding =;
+  NotificationGrant =;
+  NotificationBinding =;
+  Instance =;
+  SharedBufferBudgetEntry =;
+  FabricProfileInterposition =;
+  FabricProfile =;
+  CapabilityGrant =;
+  MintedBinding =;
+  StateBinding =;
+  HealthPolicy =;
+  FabricParticipant =;
+  FabricRoute =;
+  FabricLimits =;
+  FabricGraph =;
+  BootProfile =;
+  GenerationManifest =;
+  decodeManifest =;
 }

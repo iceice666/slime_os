@@ -80,21 +80,21 @@ segmentLayout :: List WireField = {
 };
 
 imageFormat ::= {
-  formatVersion = formatVersion;
-  kernelAbiVersion = kernelAbiVersion;
-  headerLen = headerLen;
-  segmentLen = segmentLen;
-  maxSegments = maxSegments;
-  maxImageBytes = maxImageBytes;
-  maxStackBytes = maxStackBytes;
-  defaultStackBytes = defaultStackBytes;
-  segmentFlagWrite = segmentFlagWrite;
-  segmentFlagExec = segmentFlagExec;
-  imageMagic = imageMagic;
+  formatVersion =;
+  kernelAbiVersion =;
+  headerLen =;
+  segmentLen =;
+  maxSegments =;
+  maxImageBytes =;
+  maxStackBytes =;
+  defaultStackBytes =;
+  segmentFlagWrite =;
+  segmentFlagExec =;
+  imageMagic =;
   headerFields = headerSchema.fields ?? {;};
   segmentFields = segmentSchema.fields ?? {;};
-  headerLayout = headerLayout;
-  segmentLayout = segmentLayout;
+  headerLayout =;
+  segmentLayout =;
 };
 
 main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }

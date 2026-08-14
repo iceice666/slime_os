@@ -107,7 +107,7 @@ When `Status` changes, update the same entry's row in the index below; the check
 
 ## Checking
 
-`just devlog_check` (`scripts/check/check-devlog.py`) enforces everything above that is mechanically checkable: folder shape and naming, front-matter field set and order, `Kind`/`Status` vocabulary, `Roadmap` ids against real roadmap headings, `Gates` against real Justfile targets, required sections per kind and their order, sibling files linked from their entry, index/entry agreement on date and status, and every `devlog/...` path referenced anywhere in the repository resolving to a real file. It runs no guest code, so it is cheap enough to run on any documentation change.
+`just devlog_check` (`scripts/check/check-devlog.py`) enforces everything above that is mechanically checkable: folder shape and naming, front-matter field set and order, `Kind`/`Status` vocabulary, `Roadmap` ids against real roadmap headings, `Gates` against real Justfile targets, required sections per kind and their order, table rows whose cell count matches their header (an unescaped `|` inside a cell silently splits the row, so write `\|`), sibling files linked from their entry, index/entry agreement on date and status, and every `devlog/...` path referenced anywhere in the repository resolving to a real file. It runs no guest code, so it is cheap enough to run on any documentation change.
 
 ## Entries
 
@@ -162,3 +162,103 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-03 | [P2.1 — AArch64 firmware handoff, EL1 entry, and translation tables](2026-08-03-p2-1-aarch64-boot/index.md) | Change | Verified | P2.1, P2 |
 | 2026-08-03 | [RP1 — Target-qualified build and admission path](2026-08-03-rp1-target-qualified-artifacts/index.md) | Change | Verified | RP1 |
 | 2026-08-03 | [P2.2 — AArch64 exception vectors, fault decoding, and `svc` entry](2026-08-03-p2-2-aarch64-traps/index.md) | Change | Verified | P2.2, P2 |
+| 2026-08-03 | [P5.1 — Substituting seL4 for the custom microkernel](2026-08-03-p5-1-sel4-cutover/index.md) | Change | Verified | P5.1 |
+| 2026-08-04 | [P5.2 — Native component images on seL4](2026-08-04-p5-2-native-component-images/index.md) | Change | Verified | P5.2 |
+| 2026-08-04 | [P5.3.1 — The channel plane on seL4](2026-08-04-p5-3-1-channel-plane/index.md) | Change | Verified | P5.3.1, P5.3, P5.5, B12 |
+| 2026-08-04 | [P5.3.2 — The loan plane and generation-declared quotas on seL4](2026-08-04-p5-3-2-loan-plane/index.md) | Change | Verified | P5.3.2, B13 |
+| 2026-08-05 | [P5.3.3 — Child construction and supervision on seL4](2026-08-05-p5-3-3-spawn-plane/index.md) | Change | Verified | P5.3.3, B13, B10 |
+| 2026-08-05 | [P5.3.4 — The C7 sample plane composed on seL4](2026-08-05-p5-3-4-sample-plane/index.md) | Change | Verified | P5.3.4, P5.3, B14 |
+| 2026-08-05 | [P5.5.1 — Narrow-on-transfer provisioning on seL4](2026-08-05-p5-5-1-typed-fabric/index.md) | Change | Verified | P5.5.1, P5.5, B15, B17 |
+| 2026-08-05 | [P5.5.2 — The full stream plane, unmodified, on seL4](2026-08-05-p5-5-2-stream-plane/index.md) | Change | Verified | P5.5.2, P5.5, B17 |
+| 2026-08-06 | [B19 — the seL4 prefix pins bound the dev-shell derivation hash, not the toolchain](2026-08-06-b19-sel4-prefix-pin-shell-coupling/index.md) | Defect | Verified | B19 |
+| 2026-08-06 | [B20 — the prefix pin held for one platform at a time](2026-08-06-b20-cross-platform-kernel-identity/index.md) | Defect | Verified | B20, B19 |
+| 2026-08-06 | [B21 — the toolchain was pinned by name, so each host resolved a different binary](2026-08-06-b21-cross-toolchain-binary-selection/index.md) | Defect | Verified | B21, B20, B19 |
+| 2026-08-07 | [B16 — a supervision termination record was never reclaimed](2026-08-07-b16-supervision-records/index.md) | Defect | Verified | B16, B22, B23, P5.4 |
+| 2026-08-07 | [P5.4 — decomposed into an equivalence inventory before deletion](2026-08-07-p5-4-decomposition/index.md) | Decision | Proposed | P5.4, P5.4.1, B12, B16, B22, B23 |
+| 2026-08-07 | [P5.4.1 — the oracle equivalence inventory](2026-08-07-p5-4-1-oracle-inventory/index.md) | Audit | Verified | P5.4.1, P5.4, B22, B12, B23 |
+| 2026-08-07 | [B23 — `slime-root`'s unit tests were run by no gate](2026-08-07-b23-slime-root-host-tests/index.md) | Defect | Verified | B23, P5.4.1, P5.4 |
+| 2026-08-07 | [B24 — a shared-buffer quota was never released](2026-08-07-b24-shared-buffer-quotas/index.md) | Defect | Verified | B24, B22, B16, P5.4.1 |
+| 2026-08-07 | [ROS 2 transport: self-built DDSI-RTPS/XCDR vs Zenoh](2026-08-07-ros2-transport-zenoh-vs-dds/index.md) | Decision | Proposed | R0, R1, R2, C9, X1, P5 |
+| 2026-08-07 | [P5.4.4 — C8.2 aggregate fabric-graph admission on seL4](2026-08-07-p5-4-4-fabric-graph-admission/index.md) | Change | Verified | P5.4.4, P5.4, P5.4.1, C8.2 |
+| 2026-08-07 | [P5.4.10 (part) — the component-image segment corpus, made portable](2026-08-07-p5-4-10-segment-corpus/index.md) | Change | Verified | P5.4.10, P5.4, P5.4.1, P0 |
+| 2026-08-07 | [P5.4.10 (part) — per-pair QoS compatibility at admission](2026-08-07-p5-4-10-qos-pair-admission/index.md) | Change | Verified | P5.4.10, P5.4.4, P5.4, C8.2 |
+| 2026-08-07 | [P5.4.10 (part) — B10's boot layout, frozen on seL4](2026-08-07-p5-4-10-sel4-boot-layout/index.md) | Change | Verified | P5.4.10, P5.4, P5.4.1, B10 |
+| 2026-08-07 | [P5.4.10 (part) — two rows that need no seL4 gate](2026-08-07-p5-4-10-reclassified-rows/index.md) | Audit | Verified | P5.4.10, P5.4.1, C7.1, B11 |
+| 2026-08-07 | [P5.4.10 (part) — C8.4's structural arm: the shape the generation fixed](2026-08-07-p5-4-10-graph-shape/index.md) | Change | Verified | P5.4.10, P5.4, P5.4.1, C8.4 |
+| 2026-08-07 | [P5.4.10 (part) — B9's conservation, in the shape seL4 can hold it](2026-08-07-p5-4-10-slot-conservation/index.md) | Change | Verified | P5.4.10, P5.4, P5.4.1, B9 |
+| 2026-08-07 | [P5.4.10 — C8.1's tag collision and C8.3's graph provenance](2026-08-07-p5-4-10-collision-and-provenance/index.md) | Change | Verified | P5.4.10, P5.4, P5.4.1, C8.1, C8.3 |
+| 2026-08-07 | [P5.4.2 (part) — M5.4's superblock validator, made portable](2026-08-07-p5-4-2-store-superblock/index.md) | Change | Verified | P5.4.2, P5.4, P5.4.1, M5.4 |
+| 2026-08-07 | [P5.4.3 (part) — the transfer manifest decoder had no tests](2026-08-07-p5-4-3-transfer-manifest/index.md) | Change | Verified | P5.4.3, P5.4, P5.4.1 |
+| 2026-08-07 | [P5.4.2 (part) — the recovery index decoder had no tests](2026-08-07-p5-4-2-recovery-index/index.md) | Change | Verified | P5.4.2, P5.4, P5.4.1, M5.4 |
+| 2026-08-07 | [The release record and trust root had no tests](2026-08-07-release-trust-root-tests/index.md) | Change | Verified | P5.4.1, P5.4 |
+| 2026-08-07 | [B30 — `release_trust_check` was red, unregistered, and half-blind](2026-08-07-b30-release-trust-gate/index.md) | Defect | Verified | B30 |
+| 2026-08-07 | [The hash primitives everything trusts had no conformance tests](2026-08-07-hash-primitive-conformance/index.md) | Change | Verified | P5.4.1, P5.4 |
+| 2026-08-07 | [The seL4 gates had no negative control](2026-08-07-sel4-gate-negative-control/index.md) | Change | Verified | P5.4.1, P5.4 |
+| 2026-08-07 | [B12 — the component build's `--remap-path-prefix` named a path that does not exist](2026-08-07-b12-component-remap/index.md) | Defect | Verified | B12 |
+| 2026-08-07 | [B25 (part) — a second supervision handle for one task](2026-08-07-b25-supervision-derive/index.md) | Change | Verified | B25, P5.4.6, P5.4 |
+| 2026-08-07 | [P5.4.2 (part) — GPT redundancy and recovery precedence, made portable](2026-08-07-p5-4-2-gpt-validation/index.md) | Change | Verified | P5.4.2, P5.4, P5.4.1, M5.4 |
+| 2026-08-07 | [P5.4.2 (part) — the object store's crash consistency, made portable](2026-08-07-p5-4-2-object-store/index.md) | Change | Verified | P5.4.2, P5.4, P5.4.1, M5.4 |
+| 2026-08-07 | [B28 — the QoS plane needed more root iterations, not a bug fix](2026-08-07-b28-iteration-budget/index.md) | Defect | Verified | B28, P5.4.5 |
+| 2026-08-07 | [P5.4.5 (part) — C8.5's arms that already ran, now asserted](2026-08-07-p5-4-5-qos-arms/index.md) | Change | Verified | P5.4.5, P5.4, P5.4.1, C8.5 |
+| 2026-08-07 | [P5.4.6 (part) — the C8.6 call plane builds and boots; the broker's slot model does not fit](2026-08-07-p5-4-6-call-plane/index.md) | Change | Root-caused | P5.4.6, P5.4, P5.4.1, C8.6 |
+| 2026-08-07 | [P5.4.6 — the C8.6 call plane's real blocker is spawn-grant semantics, not slot numbering](2026-08-07-p5-4-6-call-spawn-semantics/index.md) | Defect | Root-caused | P5.4.6, B25, C8.6 |
+| 2026-08-07 | [B26 — the boot-layout dump reported the grant's rights, hiding a too-permissive layout row](2026-08-07-b26-layout-declared-rights/index.md) | Defect | Verified | B26, B10, P5.4.6 |
+| 2026-08-07 | [P5.4.5 (part) — a monotonic-time channel makes three C8.5 arms fire on seL4](2026-08-07-p5-4-5-qos-clock/index.md) | Change | Root-caused | P5.4.5, C8.5, B25 |
+| 2026-08-08 | [B25 and P5.4.6 — endpoint copies close the seL4 native-call plane](2026-08-08-b25-endpoint-copy-call-plane/index.md) | Defect | Verified | B25, P5.4.6, P5.4, C8.6 |
+| 2026-08-08 | [P5.4.7 — C8.7 bounded native operations on seL4](2026-08-08-p5-4-7-operation-plane/index.md) | Change | Verified | P5.4.7, P5.4, C8.7 |
+| 2026-08-08 | [P5.4.8 — C8.8 filtered introspection and declared interposition on seL4](2026-08-08-p5-4-8-visibility-plane/index.md) | Change | Verified | P5.4.8, P5.4, C8.8 |
+| 2026-08-08 | [P5.4.9 — C8.9 and C8.10 on seL4: the full C8 graph in one generation](2026-08-08-p5-4-9-full-graph-boot/index.md) | Change | Verified | P5.4.9, P5.4, C8.9, C8.10 |
+| 2026-08-08 | [P5.4.2a — a device resource substrate for `slime-root`](2026-08-08-p5-4-2a-device-substrate/index.md) | Change | Verified | P5.4.2, P5.4, M5.1 |
+| 2026-08-08 | [P5.4.2b — a virtio-blk transport for `slime-root`](2026-08-08-p5-4-2b-virtio-blk/index.md) | Change | Verified | P5.4.2, P5.4, M5.2, M5.3 |
+| 2026-08-08 | [P5.4.2c (part) — a userspace component reaches the disk](2026-08-08-p5-4-2c-storage-plane/index.md) | Change | Verified | P5.4.2, P5.4, M5.2, M5.3 |
+| 2026-08-08 | [P5.4.2c — M5.4's object store, moved to userspace](2026-08-08-p5-4-2c-object-store/index.md) | Change | Verified | P5.4.2, P5.4, M5.4 |
+| 2026-08-08 | [P5.4.2c — M5.6's rollback contract, in userspace](2026-08-08-p5-4-2c-rollback-plane/index.md) | Change | Verified | P5.4.2, P5.4, M5.6 |
+| 2026-08-08 | [P5.4.2c — M5.9's recovery reconstruction, in userspace](2026-08-08-p5-4-2c-recovery-plane/index.md) | Change | Verified | P5.4.2, P5.4, M5.9 |
+| 2026-08-08 | [P5.4.3 — M6.5's generation commands, in userspace](2026-08-08-p5-4-3-generation-plane/index.md) | Change | Verified | P5.4.3, P5.4, M6.5 |
+| 2026-08-08 | [P5.4.3 — M6.3's directory mechanism, in the root](2026-08-08-p5-4-3-directory-plane/index.md) | Change | Verified | P5.4.3, P5.4, M6.3 |
+| 2026-08-08 | [P5.4.3 — M6.3's filesystem service, and the oracle's client unmodified](2026-08-08-p5-4-3-filesystem-plane/index.md) | Change | Verified | P5.4.3, P5.4, M6.3 |
+| 2026-08-08 | [P5.4.3 — input mediation, and four defects a console session exposed](2026-08-08-p5-4-3-input-mediation/index.md) | Change | Verified | P5.4.3, P5.4, M6.4 |
+| 2026-08-08 | [P5.4.3 — M6.6's powerbox, and a placement order that is an ABI](2026-08-08-p5-4-3-powerbox-plane/index.md) | Change | Verified | P5.4.3, P5.4, M6.6 |
+| 2026-08-08 | [P5.4.3 — M6.4's Dango session, and slot layout as declared data](2026-08-08-p5-4-3-dango-plane/index.md) | Defect | Verified | P5.4.3, P5.4, M6.4 |
+| 2026-08-08 | [P5.4.3 — M6.7's generation transfer, and two devices in one granule](2026-08-08-p5-4-3-transfer-plane/index.md) | Change | Verified | P5.4.3, P5.4, M6.7 |
+| 2026-08-08 | [P5.4.final — auditing whether `kernel/` can be deleted](2026-08-08-p5-4-final-deletion-audit/index.md) | Audit | Verified | P5.4.final, P5.4 |
+| 2026-08-09 | [P5.4.final — retire the custom kernel](2026-08-09-p5-4-final-kernel-retirement/index.md) | Change | Verified | P5, P5.4, P5.4.final, B31 |
+| 2026-08-09 | [B32 — park scenario receivers on their endpoints](2026-08-09-b32-parked-scenario-receivers/index.md) | Defect | Verified | P5.4.6, P5.4.7, B32 |
+| 2026-08-09 | [B33 — seL4 kernel cutover review remediation](2026-08-09-b33-cutover-review-remediation/index.md) | Audit | Verified | P5.4.final, B33 |
+| 2026-08-09 | [B34–B38 — seL4 model-cutover audit](2026-08-09-b34-b38-sel4-model-audit/index.md) | Audit | Root-caused | P5.4.9, B34, B35, B36, B37, B38 |
+| 2026-08-10 | [B34–B38 — seL4 model cutover and lifecycle closure](2026-08-10-b34-b38-model-cutover/index.md) | Change | Verified | P5.4.9, B34, B35, B36, B37, B38 |
+| 2026-08-10 | [seL4 native-capability-model handoff](2026-08-10-sel4-native-model-handoff/index.md) | Decision | Proposed | P5, P5.4, P5.5, C8, B34, B35, B36, B37, B38 |
+| 2026-08-10 | [B39 — generation v5 header cutover: boot action, host checkers, fabric provenance](2026-08-10-b39-generation-v5-checker-cutover/index.md) | Defect | Verified | B39 |
+| 2026-08-10 | [B40 — child CSpaces sized and populated from the admitted plan](2026-08-10-b40-native-child-cspaces/index.md) | Change | Verified | B40 |
+| 2026-08-10 | [B41 prerequisite — the dango plane's declarations](2026-08-10-b41-dango-plane-declarations/index.md) | Defect | Verified | B41 |
+| 2026-08-10 | [Probe planes — the run token, the idle instance, and slot zero](2026-08-10-probe-plane-run-tokens/index.md) | Defect | Verified | B41 |
+| 2026-08-10 | [B41 — a console endpoint per process](2026-08-10-b41-console-endpoint/index.md) | Change | Verified | B41 |
+| 2026-08-10 | [B42 — the supervision handle becomes the lifecycle identity](2026-08-10-b42-lifecycle-identity/index.md) | Change | Verified | B42 |
+| 2026-08-10 | [B43 — a component's second block device was silently its first](2026-08-10-b43-block-device-renumbering/index.md) | Defect | Verified | B43 |
+| 2026-08-10 | [B43 — block requests answered where the devices live](2026-08-10-b43-block-service-endpoint/index.md) | Change | Verified | B43 |
+| 2026-08-10 | [B44 — the generation and recovery labels were never reachable](2026-08-10-b44-policy-labels-deleted/index.md) | Change | Verified | B44 |
+| 2026-08-10 | [B45 — directory inspect and commit move; derive cannot](2026-08-10-b45-directory-service-split/index.md) | Change | Verified | B45 |
+| 2026-08-10 | [B46 — four defect classes between the fabric planes and their scenarios](2026-08-10-b46-fabric-plane-admission/index.md) | Defect | Root-caused | B46 |
+| 2026-08-10 | [B46 — a declared grant and a minted one at the same slot](2026-08-10-b46-minted-control-channels/index.md) | Defect | Verified | B46 |
+| 2026-08-10 | [B51 — a collected instance is not a new one](2026-08-10-b51-respawn-provenance/index.md) | Defect | Verified | B51 |
+| 2026-08-10 | [Blessing the layouts found two controls that were not controlling](2026-08-10-boot-layout-and-gate-controls/index.md) | Defect | Verified | none |
+| 2026-08-10 | [B48 — the schedule record was there all along](2026-08-10-b48-declared-priority/index.md) | Change | Verified | B48 |
+| 2026-08-10 | [B47 — three assumptions kept the process/thread split notional](2026-08-10-b47-thread-plan/index.md) | Change | Verified | B47 |
+| 2026-08-10 | [B52 — the loan plane loaned to peers that never launched](2026-08-10-b52-loan-plane-peers/index.md) | Defect | Verified | B52 |
+| 2026-08-10 | [B41 — why the root cannot yet have a second dispatcher](2026-08-10-b41-second-dispatcher-blocker/index.md) | Audit | Verified | B41, B43, B44, B45 |
+| 2026-08-10 | [B47 runtime threads: a process runs two of them](2026-08-10-b47-runtime-threads/index.md) | Change | Verified | B47 |
+| 2026-08-10 | [B49: the stress graph found the ceiling admission was not checking](2026-08-10-b49-object-budget/index.md) | Defect | Verified | B49 |
+| 2026-08-10 | [B48: a busy thread declared below its peer does not starve it](2026-08-10-b48-per-thread-priority/index.md) | Change | Verified | B48, B47 |
+| 2026-08-12 | [B48 — defer AArch64 MCS until its proof is complete](2026-08-12-b48-mcs-assurance/index.md) | Decision | Proposed | B48 |
+| 2026-08-12 | [B46 — native endpoint framing must fail closed](2026-08-12-b46-native-endpoint-framing/index.md) | Defect | Verified | B46 |
+| 2026-08-12 | [B46's native IPC cutover, and the slot namespaces it exposed](2026-08-12-b46-native-ipc-cutover/index.md) | Change | Monitoring | B46, B50 |
+| 2026-08-12 | [B46 — an arena returns a CSlot the kernel still finds occupied](2026-08-12-b46-arena-slot-occupancy/index.md) | Defect | Verified | B46, B50 |
+| 2026-08-13 | [R2 — the builder assigns declared slots, and init reads its grant count](2026-08-13-r2-declared-slot-allocation/index.md) | Change | Verified | B50, B46 |
+| 2026-08-13 | [The QoS plane's fixture cutover, and three dead counters behind it](2026-08-13-qos-plane-fixture-cutover/index.md) | Change | Monitoring | B46, B50 |
+| 2026-08-13 | [The cutover's real defect class: code written against `ERR_WOULDBLOCK`](2026-08-13-b46-blocking-ipc-semantics/index.md) | Defect | Fixed | B46 |
+| 2026-08-13 | [B50 — deleting `endpointCreate`, and what it did not unblock](2026-08-13-b50-endpoint-create-deletion/index.md) | Change | Verified | B50, B46 |
+| 2026-08-13 | [B46 — the two mechanisms rendezvous IPC actually needs](2026-08-13-b46-multi-source-wait/index.md) | Change | Monitoring | B46 |
+| 2026-08-13 | [B46 — all seven fabric planes run on native seL4 IPC](2026-08-13-b46-native-ipc-completion/index.md) | Change | Verified | B46 |
+| 2026-08-14 | [B50 — a minted endpoint named an object nobody could create](2026-08-14-b50-minted-endpoint-deletion/index.md) | Change | Verified | B50, B46 |
+| 2026-08-14 | [B53, B54 — a line one byte past the message bound, and a component that never ends](2026-08-14-b53-b54-last-two-planes/index.md) | Defect | Verified | B53, B54 |
+| 2026-08-14 | [Zutai's field-pun shorthand, and why `schemaFields` cannot reach these contracts](2026-08-14-zutai-field-pun-adoption/index.md) | Change | Verified | none |

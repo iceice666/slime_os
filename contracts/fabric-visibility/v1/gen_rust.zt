@@ -100,4 +100,4 @@ valid :: Protocol -> Bool = protocol =>
   && protocol.routeNameBytes == 16;
 
 render :: Protocol -> { rust : Text; } = protocol => if valid protocol then { rust = rustBindings protocol; } else { rust = "INVALID_FABRIC_VISIBILITY_SCHEMA"; };
-{ render = render; }
+{ render =; }

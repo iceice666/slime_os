@@ -24,7 +24,7 @@ use slime_proto::capability_transfer::{
     FABRIC_REQUEST_MAGIC, FORMAT_VERSION, REQUEST_LEN, WireCapabilityTransfer, WireFabricRequest,
 };
 use slime_proto::interface_schema::telemetry_stream;
-use slime_rt::{ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG, WaitSource};
+use slime_rt::{ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
 
 slime_rt::entry!(main);
 
@@ -41,7 +41,7 @@ fn fail(reason: &[u8]) -> ! {
     slime_rt::exit(1)
 }
 
-fn main() {
+fn main(startup_arg: u32) {
     let mut route_name = [0u8; 32];
     route_name[..ROUTE_NAME.len()].copy_from_slice(ROUTE_NAME.as_bytes());
     let request = WireFabricRequest {
@@ -54,13 +54,8 @@ fn main() {
         route_name,
         reserved: [0; 4],
     };
-    let encoded = request.encode();
-    loop {
-        match slime_rt::send(CONTROL_SLOT, &encoded, &[]) {
-            ERR_SUCCESS => break,
-            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(CONTROL_SLOT)]),
-            _ => fail(b"request"),
-        }
+    if slime_rt::send(CONTROL_SLOT, &request.encode(), &[]) != ERR_SUCCESS {
+        fail(b"request");
     }
     slime_rt::debug_write(b"[fabric-probe] exact route strings supplied\n");
 
@@ -68,7 +63,7 @@ fn main() {
     let mut received = [0u64; MAX_CAPS_PER_MSG];
     loop {
         match slime_rt::recv(CONTROL_SLOT, &mut message, &mut received) {
-            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(CONTROL_SLOT)]),
+            ERR_WOULDBLOCK => slime_rt::yield_now(),
             n if n < 0 => fail(b"reply"),
             _ => break,
         }
@@ -89,7 +84,7 @@ fn main() {
     }
     slime_rt::debug_write(b"[fabric-probe] undeclared edge denied\n");
     slime_rt::debug_write(b"[fabric-probe] done\n");
-    if slime_components::fabric_boot::active() {
+    if startup_arg != 0 {
         // The denial above is this component's whole assertion, and it holds in
         // the full-graph boot exactly as it does alone: a real control endpoint
         // and the exact route strings still buy nothing. Park rather than exit,

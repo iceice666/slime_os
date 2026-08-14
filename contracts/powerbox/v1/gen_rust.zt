@@ -160,4 +160,4 @@ render :: Protocol -> { rust : Text; }
     then { rust = rustBindings protocol; }
     else { rust = "INVALID_POWERBOX_SCHEMA"; };
 
-{ render = render; }
+{ render =; }

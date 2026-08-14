@@ -6,7 +6,7 @@ mod command;
 
 slime_rt::entry!(main);
 
-fn main() {
+fn main(_startup_arg: u32) {
     let reply = command::run(
         slime_proto::generation::OP_ROLLBACK,
         command::zero_identity(),

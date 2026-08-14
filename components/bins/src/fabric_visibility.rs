@@ -12,7 +12,7 @@ use slime_proto::fabric_visibility::{
 use slime_proto::{
     valid_visibility_qos_record, valid_visibility_request, valid_visibility_route_record,
 };
-use slime_rt::{ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG, WaitSource};
+use slime_rt::{ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
@@ -44,7 +44,7 @@ pub fn request_page(control_slot: u32, cursor: u8) -> Result<ViewPage, Error> {
     let mut received = [0u64; MAX_CAPS_PER_MSG];
     let length = loop {
         match slime_rt::recv(control_slot, &mut message, &mut received) {
-            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(control_slot)]),
+            ERR_WOULDBLOCK => slime_rt::yield_now(),
             n if n < 0 => return Err(Error::Transport),
             n => break n as usize,
         }
@@ -79,13 +79,9 @@ pub fn request_page(control_slot: u32, cursor: u8) -> Result<ViewPage, Error> {
 }
 
 pub fn send(control_slot: u32, message: &[u8; RECORD_LEN]) -> Result<(), Error> {
-    loop {
-        match slime_rt::send(control_slot, message, &[]) {
-            ERR_SUCCESS => return Ok(()),
-            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(control_slot)]),
-            _ => return Err(Error::Transport),
-        }
-    }
+    (slime_rt::send(control_slot, message, &[]) == ERR_SUCCESS)
+        .then_some(())
+        .ok_or(Error::Transport)
 }
 
 const _: () = assert!(RECORD_LEN == MAX_MSG);

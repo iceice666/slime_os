@@ -11,6 +11,7 @@ pub const SLOT_A_LBA: u64 = 0;
 pub const SLOT_B_LBA: u64 = 1;
 pub const MAX_OBJECTS: usize = 64;
 pub const MAX_OBJECT_PAYLOAD: usize = 32768;
+pub const SECTOR_BYTES: usize = 512;
 pub const SUPERBLOCK_MAGIC_OFFSET: usize = 0;
 pub const SUPERBLOCK_FORMAT_VERSION_OFFSET: usize = 8;
 pub const SUPERBLOCK_HEADER_SIZE_OFFSET: usize = 12;

@@ -87,4 +87,4 @@ render :: Format -> { python : Text; rust : Text; }
   = format => if w.recordsValid (records format)
     then { python = pythonBindings format; rust = rustBindings format; }
     else { python = "INVALID_BOOT_LAYOUT_SCHEMA"; rust = "INVALID_BOOT_LAYOUT_SCHEMA"; };
-{ render = render; }
+{ render =; }

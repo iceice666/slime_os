@@ -1,0 +1,3 @@
+[layout] path=init slots=1 max=64
+[layout] 1 executable sel4-storage-probe 0x10008
+[layout] end

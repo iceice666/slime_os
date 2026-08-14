@@ -60,7 +60,7 @@ The importer produces the same C8 `InterfaceSchema` identity used by native comp
 
 1. R0 consumes C8's native fabric, the RP5 runtime/datagram envelope, and target-qualified AArch64/RPi5 artifacts. Its completion is part of the RPi5 demo path and is observed first under AArch64 QEMU, then under physical Raspberry Pi 5 through RP7.
 2. R1 broadens R0 into external topic wire compatibility after the local RPi5 DDS demo is stable unless explicitly reprioritized. It consumes H6 or a target-specific network service plus exact destination authority.
-3. R2 services/actions depend on R1 and consume C8 operations plus C9 lifecycle/time contracts where applicable.
+3. R2 services/actions depend on R1 and consume C8 operations plus C9 lifecycle/time contracts where applicable — ROS 2 managed-node (`change_state`/`get_state`) and parameter services are expected to map onto C8 `Call<Request, Reply>` routes backed by C9's lifecycle-transition and parameter-state schemas rather than a ROS-specific reimplementation; see [`devlog/2026-08-07-ros2-transport-zenoh-vs-dds/`](../devlog/2026-08-07-ros2-transport-zenoh-vs-dds/index.md).
 4. R3 existing workloads depend on R2 and on the selected local execution route. If X1 is used on Raspberry Pi 5, its loader, syscall-service mapping, and executable closure must be admitted for AArch64/RPi5 rather than inherited from x86-64.
 5. None of R0–R2 depends on compositor, audio, Wi-Fi, GPU, local Python, an on-device ROS build toolchain, or Framework daily-driver support.
 
@@ -69,6 +69,8 @@ The importer produces the same C8 `InterfaceSchema` identity used by native comp
 **Status:** Not started.
 
 **Depends on:** RP5 from [RPi5 ROS 2 demo](09-rpi5-ros2-demo.md#rp5--node-and-dds-transport-runtime-envelope), C8 stream/fabric mechanisms used behind the gateway/runtime, a bounded datagram or network service for the selected local transport, and target-qualified AArch64/RPi5 artifacts.
+
+DDSI-RTPS/XCDR was selected over a self-built bounded Zenoh subset and over running official Zenoh/`rmw_zenoh` under the X1 Linux personality; see [`devlog/2026-08-07-ros2-transport-zenoh-vs-dds/`](../devlog/2026-08-07-ros2-transport-zenoh-vs-dds/index.md) for the comparison and rationale.
 
 ### Deliverables
 

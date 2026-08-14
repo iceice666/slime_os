@@ -1,0 +1,30 @@
+Command: just sel4_gate_control_check
+Date: 2026-08-08
+Exit: 0
+
+Result:
+seL4 gate control check: 13 gates reject 610 mutated transcripts and layouts
+
+Before this slice the same command reported 12 gates and 535 mutations. The new
+gate contributes its own generated mutation set: for each of its 53 required
+markers a transcript with that marker deleted, plus the transposition and the
+appended-failure cases, all of which the gate must reject while accepting the
+synthetic baseline. Its pinned marker count in
+scripts/check/check-sel4-gate-controls.py is 53.
+
+Command: just sel4_boot_layout_check
+Date: 2026-08-08
+Exit: 0
+
+Result:
+sel4-operation: 8 slots match
+seL4 boot layout check: 10 plane layouts match their fixtures
+
+Note: `just sel4_boot_layout_bless` also rewrote three rows of the existing
+contracts/boot-layout/v1/fixtures/sel4-call.layout, from 0x10008 to 0x1000c on
+fabric-call-client, fabric-call-client-b, and fabric-call-server. That fixture
+was stale: B25 made those three executable grants `transferable = true` so init
+could delegate each participant's supervision handle to the broker, and the
+frozen table still recorded the pre-B25 rights. The layout gate had not been
+re-run after that fixture change. The observed boot now agrees with the
+declaration.

@@ -1,0 +1,72 @@
+schema = 1
+
+[sel4]
+repository = "https://github.com/seL4/seL4.git"
+release = "16.0.0"
+commit = "6e7c3b733d296cfd88d5fbf635c96e447a882374"
+
+[rust_sel4]
+repository = "https://github.com/seL4/rust-sel4.git"
+release = "v5.0.0"
+commit = "d441a880938209f661201704dfbee7b91c5aa905"
+toolchain = "nightly-2026-04-04"
+root_target = "deps/rust-sel4/support/targets/aarch64-sel4-roottask-minimal.json"
+root_target_sha256 = "84fcb8cd021b032041f1e2b0c4996cafc8d7aa0f7ba2ae56d5868a313c53956e"
+loader_target = "aarch64-unknown-none"
+
+[qemu_arm_virt]
+platform = "qemu-arm-virt"
+sel4_arch = "aarch64"
+hypervisor = true
+mcs = false
+nodes = 1
+verification_build = false
+debug_build = true
+printing = true
+machine = "virt,virtualization=on"
+cpu = "cortex-a53"
+cpus = 1
+memory_mib = 2048
+qemu_version = "11.0.1"
+# `slime-root`'s timer phase programs the EL1 physical timer directly from
+# EL0 (`slime-root/src/platform_timer.rs`); these grant PL0 access to the
+# physical counter/frequency and physical timer control/compare registers.
+export_pcnt_user = true
+export_ptmr_user = true
+
+# Hashes of the installed seL4 prefix, observed from `just sel4_qemu_image_check`.
+# The build pins the QEMU device-tree dump (`dtb-randomness=off`), maps the
+# source and build roots to fixed logical prefixes, drops the ambient dev
+# shell's compiler flags in favour of a fixed `-frandom-seed`, states its own
+# frame-pointer policy, and takes the cross toolchain by absolute store path.
+# So these depend on neither the shell that ran the build nor the platform it
+# ran on: adding a package to `flake.nix` changes that shell's derivation hash
+# and leaves these unchanged (B19), and `aarch64-darwin`, `aarch64-linux`, and
+# `x86_64-linux` produce a byte-identical `kernel.elf` (B20, B21).
+#
+# What they do still bind, beyond the pinned seL4 source and config: the
+# compiler *version*, and the build tooling this file does not pin — `cmake`,
+# `ninja`, and the host Python generators (`bitfield_gen.py`,
+# `invocation_header_gen.py`, `hardware_gen.py`, …) whose output is compiled into
+# `kernel.elf`. A `cmake` or `jinja2` bump in `flake.nix` can therefore move
+# `kernel_sha256` even though the compiler did not change, and the failure
+# message will still say "toolchain drift". Narrowing that is a separate change
+# to what this file pins.
+#
+# Observed on `aarch64-darwin`, `aarch64-linux`, and `x86_64-linux`, all with
+# GCC 15.2.0 from `pkgsCross.aarch64-multiplatform`. That attribute is a *cross*
+# `gcc-wrapper` on Darwin and `x86_64-linux` and a *native* one on
+# `aarch64-linux`; all three ship the same `nix-support/cc-cflags-before`, and
+# B20's claim that the native one "forces neither" frame-pointer flag was
+# wrong. What actually differed was binary selection: the native wrapper
+# exports no `aarch64-unknown-linux-gnu-`-prefixed `gcc`, so a bare prefix fell
+# through to the *unwrapped* compiler and a different `as`. `flake.nix` now
+# exports an absolute `CROSS_COMPILER_PREFIX`, so every host runs the same
+# driver and assembler (B21) — which is what makes this a toolchain gate rather
+# than a host gate.
+[observed_prefix]
+kernel_sha256 = "97dcb029127bcc0fac1fd6cc83950ba878040a773a380e2d000b0ebc20d875ce"
+kernel_config_sha256 = "e775930bb15fd6d484abcba19620479d997625be531bcb4a5d9c0ec8aed444c4"
+libsel4_config_sha256 = "ccd1c7f73790485f92fadaf954e71f3d68b80a664a96b402e33da5bb57a06825"
+dtb_sha256 = "2c9a92343b95448b8c63785adf728aa94eca4a70f9ff35b36b5a062800c040a8"
+platform_info_sha256 = "9a8eca4b07ddf06130d713ce4e4a7d52944955fc29fa826b5e28c9a318d65f6c"

@@ -97,12 +97,12 @@ bootStoreEntryLayout :: List WireField = {
 };
 
 format ::= {
-  formatVersion = formatVersion; slotBytes = slotBytes; slotCount = slotCount; requiredFlags = requiredFlags;
-  bootStoreVersion = bootStoreVersion; bootStoreHeaderLen = bootStoreHeaderLen; bootStoreEntryLen = bootStoreEntryLen;
-  bootStoreCapacity = bootStoreCapacity; bootStoreDirectoryOffset = bootStoreDirectoryOffset;
-  bootStoreReleasesOffset = bootStoreReleasesOffset; bootStoreGenerationsOffset = bootStoreGenerationsOffset;
+  formatVersion =; slotBytes =; slotCount =; requiredFlags =;
+  bootStoreVersion =; bootStoreHeaderLen =; bootStoreEntryLen =;
+  bootStoreCapacity =; bootStoreDirectoryOffset =;
+  bootStoreReleasesOffset =; bootStoreGenerationsOffset =;
   slotFields = bootStateSlotSchema.fields ?? {;}; headerFields = bootStoreHeaderSchema.fields ?? {;}; entryFields = bootStoreEntrySchema.fields ?? {;};
-  slotLayout = slotLayout; headerLayout = bootStoreHeaderLayout; entryLayout = bootStoreEntryLayout;
+  slotLayout =; headerLayout = bootStoreHeaderLayout; entryLayout = bootStoreEntryLayout;
 };
 
 main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }

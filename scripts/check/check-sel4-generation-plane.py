@@ -1,0 +1,438 @@
+#!/usr/bin/env python3
+
+"""P5.4.3 gate: M6.5's generation commands, in userspace (M6.5).
+
+Two components and one channel. The manager holds the plane's only block
+capability and is therefore the only thing that can touch BootState; the client
+holds one RPC endpoint and nothing else. That split IS the milestone: M6.5
+requires `BOOT_UPDATE` scoped by manifest to the management service, so a
+component that wants to inspect, stage, select, or roll back must ask.
+
+The client walks all five operations and their refusals, then tries a direct
+`BlockTransact` and is refused — not by a rights check, but because no slot it
+holds names a device. The gate additionally compares the disk image around the
+refused-stage arm: "fail before BootState changes" is a claim about bytes, and
+a component reporting a refusal it did not honour would pass the marker.
+"""
+
+from __future__ import annotations
+
+import argparse
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import threading
+import tomllib
+from pathlib import Path
+from typing import NoReturn
+
+ROOT = Path(__file__).resolve().parents[2]
+PINS_PATH = ROOT / "sel4" / "pins.toml"
+BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
+FIXTURE_SCRIPT = ROOT / "scripts" / "build" / "build-store-fixture.py"
+IMAGE = ROOT / "build" / "slime-sel4-generation.elf"
+FIXTURE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "sel4-generation.zti"
+BOOT_TIMEOUT_SECONDS = 240
+
+REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
+    (
+        # The client precedes the manager: the manager is granted a supervision
+        # handle naming it, and a handle cannot exist before its task. A native
+        # Endpoint reports no peer death, so that handle is the only way the
+        # manager learns its client is gone rather than merely quiet.
+        "init spawned the client",
+        r"\[init\] generation client spawned",
+    ),
+    (
+        "init spawned the manager",
+        r"\[init\] generation manager spawned",
+    ),
+    (
+        # The manager holds the only block capability, so it is the only
+        # component that could have written this root.
+        "the manager committed the known-good root",
+        r"\[sel4-generation-manager\] ready",
+    ),
+    (
+        "the client listed the known-good root through the service",
+        r"\[sel4-generation-client\] listed the known-good root",
+    ),
+    (
+        "inspecting a generation outside the closure was refused",
+        r"\[sel4-generation-client\] unknown generation refused",
+    ),
+    (
+        # M6.5: "fail before BootState changes on missing objects". The image
+        # comparison below is what proves the "before" part.
+        "staging a generation outside the closure was refused",
+        r"\[sel4-generation-client\] unknown stage refused",
+    ),
+    (
+        "the candidate was staged with attempts",
+        r"\[sel4-generation-manager\] stage seq=2 pending=1 attempts=2 release=1",
+    ),
+    (
+        "the client observed the stage",
+        r"\[sel4-generation-client\] staged the candidate",
+    ),
+    (
+        "rolling back returned the known-good root",
+        r"\[sel4-generation-manager\] rollback seq=3 pending=0 attempts=0 release=1",
+    ),
+    (
+        "the client observed the rollback",
+        r"\[sel4-generation-client\] rolled back to known-good",
+    ),
+    (
+        # Not silently successful: a client must be able to tell "nothing to do"
+        # from "done".
+        "rolling back with nothing staged was refused",
+        r"\[sel4-generation-client\] rollback with no pending refused",
+    ),
+    (
+        # Only the generation actually staged may be promoted, so a client
+        # cannot confirm the health of something else.
+        "promoting the wrong generation was refused",
+        r"\[sel4-generation-client\] wrong select refused",
+    ),
+    (
+        # Promotion advances the accepted release sequence.
+        "the staged generation was promoted",
+        r"\[sel4-generation-manager\] select seq=5 pending=0 attempts=0 release=2",
+    ),
+    (
+        "the client observed the promotion",
+        r"\[sel4-generation-client\] promoted the candidate",
+    ),
+    (
+        # The authority claim. The client knows the on-disk format perfectly
+        # well and still cannot write it, because it holds no device.
+        "the client cannot reach the device directly",
+        r"\[sel4-generation-client\] direct device access refused",
+    ),
+    (
+        "the client ran every arm and exited cleanly",
+        r"\[sel4-generation-client\] generation client complete",
+    ),
+    (
+        # The manager's loop ends on peer death, which only happens because
+        # init dropped its own copies of both queue ends.
+        "the manager observed the client close",
+        r"\[sel4-generation-manager\] client closed",
+    ),
+    (
+        "init observed both clean exits",
+        r"\[init\] generation plane complete",
+    ),
+)
+
+TERMINAL_MARKER = r"\[init\] generation plane complete"
+
+FAILURE_MARKERS: tuple[str, ...] = (
+    r"SLIME_ROOT FATAL",
+    r"SLIME_ROOT FAIL",
+    r"SLIME_GRAPH FAIL",
+    r"SLIME_GRAPH wedged waiter",
+    r"\[init\] generation plane fail: .*",
+    r"\[sel4-generation-manager\] fail: .*",
+    r"\[sel4-generation-client\] fail: .*",
+    r"SLIME_ROOT block bring-up failed",
+    r"Caught cap fault",
+    r"Caught vm fault",
+    r"Caught user exception",
+    r"panicked at ",
+    r"aborted at ",
+    r"\(aborted\)",
+)
+
+def fail(message: str) -> NoReturn:
+    raise SystemExit(f"seL4 generation plane check: {message}")
+
+
+def load_pins() -> dict[str, object]:
+    if not PINS_PATH.is_file():
+        fail(f"missing pin manifest: {PINS_PATH.relative_to(ROOT)}")
+    try:
+        pins = tomllib.loads(PINS_PATH.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError) as error:
+        fail(f"cannot parse {PINS_PATH.relative_to(ROOT)}: {error}")
+    if pins.get("schema") != 1:
+        fail("unsupported sel4/pins.toml schema (expected 1)")
+    if not isinstance(pins.get("qemu_arm_virt"), dict):
+        fail("sel4/pins.toml is missing [qemu_arm_virt]")
+    return pins
+
+
+def profile_text(profile: dict[str, object], key: str) -> str:
+    value = profile.get(key)
+    if not isinstance(value, str) or not value:
+        fail(f"sel4/pins.toml [qemu_arm_virt].{key} must be non-empty text")
+    return value
+
+
+def profile_integer(profile: dict[str, object], key: str) -> int:
+    value = profile.get(key)
+    if not isinstance(value, int) or isinstance(value, bool):
+        fail(f"sel4/pins.toml [qemu_arm_virt].{key} must be an integer")
+    return value
+
+
+def build_image() -> None:
+    command = [sys.executable, str(BUILD_SCRIPT), "--generation-plane"]
+    print(f"[build] {' '.join(command)}", flush=True)
+    try:
+        process = subprocess.run(command, cwd=ROOT, check=False)
+    except OSError as error:
+        fail(f"cannot run the seL4 image build: {error}")
+    if process.returncode != 0:
+        fail(f"seL4 image build failed with exit status {process.returncode}")
+
+
+def build_fixture(disk: Path) -> None:
+    """The store fixture, reused: the manager needs a validated GPT partition,
+    and the BootState slots live above the object store's record area in it."""
+    command = [sys.executable, str(FIXTURE_SCRIPT), str(disk), "happy"]
+    try:
+        process = subprocess.run(command, cwd=ROOT, check=False, capture_output=True)
+    except OSError as error:
+        fail(f"cannot build the store fixture: {error}")
+    if process.returncode != 0:
+        fail(f"store fixture build failed: {process.stderr.decode()}")
+
+
+def boot(profile: dict[str, object], disk: Path) -> str:
+    qemu = shutil.which("qemu-system-aarch64")
+    if qemu is None:
+        fail("qemu-system-aarch64 is not on PATH")
+    command = [
+        qemu,
+        "-machine",
+        profile_text(profile, "machine"),
+        "-cpu",
+        profile_text(profile, "cpu"),
+        "-smp",
+        str(profile_integer(profile, "cpus")),
+        "-m",
+        f"size={profile_integer(profile, 'memory_mib')}M",
+        "-nographic",
+        "-serial",
+        "mon:stdio",
+        "-kernel",
+        str(IMAGE),
+        "-drive",
+        f"if=none,id=slimedisk,format=raw,file={disk}",
+        "-device",
+        "virtio-blk-device,drive=slimedisk",
+    ]
+    print(f"[boot] {' '.join(command)}", flush=True)
+    failures = re.compile("|".join(FAILURE_MARKERS))
+    terminal = re.compile(TERMINAL_MARKER)
+    lines: list[str] = []
+    reached = False
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=ROOT,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+    except OSError as error:
+        fail(f"cannot run QEMU: {error}")
+    watchdog = threading.Timer(BOOT_TIMEOUT_SECONDS, process.kill)
+    watchdog.start()
+    try:
+        assert process.stdout is not None
+        # The two root-owned idle instances run concurrently with init and each
+        # concludes it holds no peer only after a bounded wait, so their lines
+        # can land before or after init's completion marker. Stop once every
+        # fact has been observed rather than at the terminal alone.
+        idle_seen = 0
+        for line in process.stdout:
+            lines.append(line.rstrip("\r\n"))
+            if failures.search(line):
+                break
+            idle_seen += int(
+                "[sel4-generation-manager] idle without a client" in line
+                or "[sel4-generation-client] idle without an endpoint" in line
+            )
+            reached |= terminal.search(line) is not None
+            if reached and idle_seen >= 2:
+                break
+    finally:
+        watchdog.cancel()
+        process.terminate()
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+    transcript = "\n".join(lines)
+    if not reached:
+        report_transcript(transcript)
+        fail(f"boot exceeded {BOOT_TIMEOUT_SECONDS}s without completing the plane")
+    return transcript
+
+
+def report_transcript(transcript: str) -> None:
+    tail = transcript.splitlines()[-40:]
+    if tail:
+        sys.stdout.write("--- serial transcript (tail) ---\n")
+        sys.stdout.write("\n".join(tail) + "\n")
+        sys.stdout.write("--- end transcript ---\n")
+        sys.stdout.flush()
+
+
+
+
+def check_transcript(transcript: str) -> None:
+    for pattern in FAILURE_MARKERS:
+        match = re.search(pattern, transcript)
+        if match is not None:
+            report_transcript(transcript)
+            fail(f"failure marker in serial transcript: {match.group(0)!r}")
+    position = 0
+    # Asserted by presence, not by position: each idle instance concludes it
+    # holds no peer only after a bounded wait, so its line lands wherever the
+    # scheduler puts it. Ordering it would assert a scheduling accident.
+    for label, marker in (
+        (
+            "the unconfigured manager parked without a client",
+            "[sel4-generation-manager] idle without a client",
+        ),
+        (
+            "the unconfigured client parked without an endpoint",
+            "[sel4-generation-client] idle without an endpoint",
+        ),
+    ):
+        if marker not in transcript:
+            report_transcript(transcript)
+            fail(f"missing marker: {label} ({marker})")
+    for label, pattern in REQUIRED_MARKERS:
+        match = re.compile(pattern).search(transcript, position)
+        if match is None:
+            report_transcript(transcript)
+            if re.search(pattern, transcript) is not None:
+                fail(f"marker out of order: {label} ({pattern})")
+            fail(f"missing marker: {label} ({pattern})")
+        position = match.end()
+    completions = transcript.count("[sel4-generation-client] generation client complete")
+    if completions != 1:
+        report_transcript(transcript)
+        fail(f"{completions} clients ran the scenario, expected 1")
+    # A refusal must report the exact sequence of the immediately preceding
+    # committed (or initial ready) state. Merely collecting refusal sequences
+    # cannot prove the root was left untouched.
+    events = [
+        (match.group("op"), int(match.group("seq")))
+        for match in re.finditer(
+            r"\[sel4-generation-manager\] "
+            r"(?P<op>stage|select|rollback|inspect-unknown|stage-refused|"
+            r"select-refused|rollback-nothing) seq=(?P<seq>\d+)",
+            transcript,
+        )
+    ]
+    refusal_names = {"inspect-unknown", "stage-refused", "select-refused", "rollback-nothing"}
+    commit_names = {"stage", "select", "rollback"}
+    refusals: list[tuple[str, int]] = []
+    commits: list[int] = []
+    # The fixture's admitted BootState starts at sequence 1; the first successful
+    # stage required above advances it to 2.
+    committed_sequence = 1
+    for operation, sequence in events:
+        if operation in commit_names:
+            committed_sequence = sequence
+            commits.append(sequence)
+        elif operation in refusal_names:
+            refusals.append((operation, sequence))
+            if sequence != committed_sequence:
+                fail(
+                    f"{operation} mutated BootState sequence from {committed_sequence} "
+                    f"to {sequence}"
+                )
+    expected_refusals = {"inspect-unknown", "stage-refused", "select-refused", "rollback-nothing"}
+    if {name for name, _ in refusals} != expected_refusals or len(refusals) != 4:
+        fail(f"refusal evidence was {refusals}, expected one of each {sorted(expected_refusals)}")
+    if commits != sorted(set(commits)):
+        fail(f"committed sequences are not strictly increasing: {commits}")
+    print(
+        f"transcript: {len(REQUIRED_MARKERS)} markers observed; the client drove "
+        f"five operations through the service, {len(refusals)} refusals left the "
+        f"root untouched, {len(commits)} commits advanced it strictly, and a "
+        "direct device request was refused",
+        flush=True,
+    )
+
+
+def check_only_state_slots(disk: Path, before: bytes, partition_first_lba: int) -> None:
+    """The manager wrote BootState and nothing else.
+
+    It holds `blockRead | blockWrite` over the whole device, so "it only touched
+    its own two sectors" is a property of the component rather than of the
+    capability — which is exactly why it is worth checking from outside.
+    """
+    after = disk.read_bytes()
+    slot_a = (partition_first_lba + 1024) * 512
+    slot_b = slot_a + 512
+    for name, start, end in (
+        ("the GPT and protective MBR", 0, partition_first_lba * 512),
+        ("the object store region", partition_first_lba * 512, slot_a),
+        ("the disk beyond the BootState slots", slot_b + 512, len(after)),
+    ):
+        if after[start:end] != before[start:end]:
+            fail(f"the generation service modified {name}")
+    if after[slot_a : slot_b + 512] == before[slot_a : slot_b + 512]:
+        fail("no BootState slot changed, so nothing was actually committed")
+    print(
+        "image: the service wrote its two BootState slots and left every other "
+        "sector byte-identical",
+        flush=True,
+    )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Boot the seL4 generation-plane image and assert M6.5 in userspace"
+    )
+    parser.add_argument(
+        "--no-build",
+        action="store_true",
+        help="boot the already-built image instead of rebuilding it first",
+    )
+    arguments = parser.parse_args()
+
+    if Path.cwd().resolve() != ROOT:
+        fail(f"run from repository root: {ROOT}")
+    if not FIXTURE.is_file():
+        fail(f"missing generation fixture {FIXTURE.relative_to(ROOT)}")
+    pins = load_pins()
+    if not arguments.no_build:
+        build_image()
+    if not IMAGE.is_file():
+        fail(f"missing packaged image {IMAGE.relative_to(ROOT)}")
+    profile = pins["qemu_arm_virt"]
+    assert isinstance(profile, dict)
+
+    with tempfile.TemporaryDirectory() as directory:
+        disk = Path(directory) / "generation-plane.img"
+        build_fixture(disk)
+        before = disk.read_bytes()
+        transcript = boot(profile, disk)
+        check_transcript(transcript)
+        check_only_state_slots(disk, before, 40)
+
+    print(
+        "seL4 generation plane check: an unprivileged client drove list, "
+        "inspect, stage, select, and rollback through a management service "
+        "holding the only block capability, every refusal left the root "
+        "untouched, and the client's own direct device request was refused "
+        "because no slot it holds names a device"
+    )
+
+
+if __name__ == "__main__":
+    main()

@@ -111,28 +111,28 @@ entryLayout :: List WireField = {
 };
 
 format ::= {
-  formatVersion = formatVersion;
-  headerBytes = headerBytes;
-  entryBytes = entryBytes;
-  maxEntries = maxEntries;
-  roleEndpointFactory = roleEndpointFactory;
-  roleSharedBufferFactory = roleSharedBufferFactory;
-  roleExecutable = roleExecutable;
-  roleEndpointClient = roleEndpointClient;
-  roleEndpointService = roleEndpointService;
-  roleObjectStore = roleObjectStore;
-  roleDirectoryRoot = roleDirectoryRoot;
-  roleInput = roleInput;
-  roleGenerationControl = roleGenerationControl;
-  roleStorageCapability = roleStorageCapability;
-  roleTransferReceiver = roleTransferReceiver;
-  roleTransferSource = roleTransferSource;
-  componentDomain = componentDomain;
-  channelDomain = channelDomain;
+  formatVersion =;
+  headerBytes =;
+  entryBytes =;
+  maxEntries =;
+  roleEndpointFactory =;
+  roleSharedBufferFactory =;
+  roleExecutable =;
+  roleEndpointClient =;
+  roleEndpointService =;
+  roleObjectStore =;
+  roleDirectoryRoot =;
+  roleInput =;
+  roleGenerationControl =;
+  roleStorageCapability =;
+  roleTransferReceiver =;
+  roleTransferSource =;
+  componentDomain =;
+  channelDomain =;
   headerFields = headerSchema.fields ?? {;};
   entryFields = entrySchema.fields ?? {;};
-  headerLayout = headerLayout;
-  entryLayout = entryLayout;
+  headerLayout =;
+  entryLayout =;
 };
 
 main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }

@@ -18,4 +18,4 @@ schemaFieldsValid :: List refl.SchemaField -> Bool
       field.type == "Int" && not field.optional && schemaFieldsValid rest;
   };
 
-{ join = join; schemaNames = schemaNames; schemaFieldsValid = schemaFieldsValid; }
+{ join =; schemaNames =; schemaFieldsValid =; }

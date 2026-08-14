@@ -20,6 +20,14 @@ slime-proto = { path = "../proto" }
 [features]
 default = ["component-runtime"]
 component-runtime = ["dep:slime-rt"]
+# GPT validation and the object store, which the seL4 store plane runs in
+# userspace (P5.4.2c). Off by default and enabled only for the store-plane
+# build: both need an allocator, and `extern crate alloc` in a dependency makes
+# *every* binary in this crate require a `#[global_allocator]` — including the
+# ones that never allocate. Only `sel4-store-probe` declares a heap.
+store = ["boot-contracts/gpt", "slime-rt/heap"]
+# Product components always use the native seL4 transport.
+sel4 = ["component-runtime"]
 
 [[bin]]
 name = "console"
@@ -39,21 +47,6 @@ test = false
 [[bin]]
 name = "echo-agent"
 path = "src/bin/echo-agent.rs"
-test = false
-
-[[bin]]
-name = "filesystem-service"
-path = "src/bin/filesystem-service.rs"
-test = false
-
-[[bin]]
-name = "generation-manager"
-path = "src/bin/generation-manager.rs"
-test = false
-
-[[bin]]
-name = "generation-list"
-path = "src/bin/generation-list.rs"
 test = false
 
 [[bin]]
@@ -94,6 +87,11 @@ test = false
 [[bin]]
 name = "sample-receiver"
 path = "src/bin/sample-receiver.rs"
+test = false
+
+[[bin]]
+name = "sample-worker"
+path = "src/bin/sample-worker.rs"
 test = false
 
 [[bin]]
@@ -192,11 +190,6 @@ path = "src/bin/init.rs"
 test = false
 
 [[bin]]
-name = "recovery"
-path = "src/bin/recovery.rs"
-test = false
-
-[[bin]]
 name = "spawn-service"
 path = "src/bin/spawn-service.rs"
 test = false
@@ -207,18 +200,98 @@ path = "src/bin/storage-fault-probe.rs"
 test = false
 
 [[bin]]
+name = "sel4-storage-probe"
+path = "src/bin/sel4-storage-probe.rs"
+test = false
+
+[[bin]]
+name = "sel4-store-probe"
+path = "src/bin/sel4-store-probe.rs"
+test = false
+# The only binary that needs GPT validation and the object store, and so the
+# only one that needs an allocator. `store` also switches the runtime's heap on
+# for every binary in the build, because `extern crate alloc` in the dependency
+# graph makes the `#[global_allocator]` symbol required crate-wide.
+required-features = ["store"]
+
+[[bin]]
+name = "sel4-filesystem-service"
+path = "src/bin/sel4-filesystem-service.rs"
+test = false
+# Opens the object store over a block capability, so it needs the same feature
+# the store plane does.
+required-features = ["store"]
+
+[[bin]]
+name = "sel4-transfer-probe"
+path = "src/bin/sel4-transfer-probe.rs"
+test = false
+# GPT validation, BootState, and the transfer manifest decoder, plus the
+# allocator they need.
+required-features = ["store"]
+
+[[bin]]
+name = "sel4-input-probe"
+path = "src/bin/sel4-input-probe.rs"
+test = false
+
+[[bin]]
+name = "sel4-directory-probe"
+path = "src/bin/sel4-directory-probe.rs"
+test = false
+
+[[bin]]
+name = "sel4-generation-manager"
+path = "src/bin/sel4-generation-manager.rs"
+test = false
+# Holds the plane's only block capability, so it needs the GPT and BootState
+# code and therefore the allocator.
+required-features = ["store"]
+
+[[bin]]
+name = "sel4-generation-client"
+path = "src/bin/sel4-generation-client.rs"
+test = false
+
+[[bin]]
+name = "sel4-recovery-probe"
+path = "src/bin/sel4-recovery-probe.rs"
+test = false
+# Same feature again: GPT validation, the object store, and the allocator all
+# three, since reconstruction verifies the state closure out of the store.
+required-features = ["store"]
+
+[[bin]]
+name = "sel4-rollback-probe"
+path = "src/bin/sel4-rollback-probe.rs"
+test = false
+# Same feature: it validates a GPT to locate its partition, and shares the
+# store plane's allocator for the same crate-wide reason.
+required-features = ["store"]
+
+[[bin]]
 name = "storage-probe"
 path = "src/bin/storage-probe.rs"
 test = false
 
 [[bin]]
-name = "storage-store-probe"
-path = "src/bin/storage-store-probe.rs"
+name = "storage-writer"
+path = "src/bin/storage-writer.rs"
 test = false
 
 [[bin]]
-name = "storage-writer"
-path = "src/bin/storage-writer.rs"
+name = "supervision-child"
+path = "src/bin/supervision-child.rs"
+test = false
+
+[[bin]]
+name = "reclamation-fault"
+path = "src/bin/reclamation-fault.rs"
+test = false
+
+[[bin]]
+name = "crossing-peer"
+path = "src/bin/crossing-peer.rs"
 test = false
 
 [[bin]]

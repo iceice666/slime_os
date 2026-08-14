@@ -32,7 +32,7 @@ layout :: List WireField = {
   { name = "type_identity"; width = 8; signed = false; byteArray = false; };
   { name = "reserved"; width = 16; signed = false; byteArray = true; };
 };
-format ::= { formatVersion = formatVersion; recordLen = recordLen; magic = magic; matched = matched; unmatched = unmatched; incompatible = incompatible; expired = expired; retryExhausted = retryExhausted; deadlineMissed = deadlineMissed; livelinessLost = livelinessLost; peerDead = peerDead; fields = schemaValue.fields ?? {;}; layout = layout; };
+format ::= { formatVersion =; recordLen =; magic =; matched =; unmatched =; incompatible =; expired =; retryExhausted =; deadlineMissed =; livelinessLost =; peerDead =; fields = schemaValue.fields ?? {;}; layout =; };
 main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }
   = caps => [ root := env.get caps.env "SLIME_FABRIC_QOS_BINDINGS_ROOT" ?? "."; bindings := gen.render format; path := t.join "" { root; "/components/proto/src/fabric_qos.rs"; }; fs.writeAll caps.write path bindings.rust ];
 main

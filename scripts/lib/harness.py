@@ -1,10 +1,8 @@
 """Hand-written host-side helpers shared by the check/build scripts.
 
-The wire-format constants live in the generated ``boot_contracts``/``fs_contracts``
-modules (source of truth: ``contracts/*/schema.zt``). This module is the home for
-the *host* constants and subprocess boilerplate those scripts otherwise copy: the
-repository root, the release-kernel path, the bounded-boot timeout, the sector
-size, the sibling-script loader, and the QEMU/tool run harness.
+The wire-format constants live in generated ``boot_contracts``/``fs_contracts``
+modules (source of truth: ``contracts/*/schema.zt``). This module holds the host
+constants and subprocess boilerplate shared by product build and check scripts.
 """
 
 from __future__ import annotations
@@ -15,7 +13,6 @@ import sys
 from pathlib import Path
 from types import ModuleType
 
-from boot_contracts import TARGET_PROFILES_BY_NAME
 
 # ``scripts/lib`` is two levels below the repository root.
 ROOT = Path(__file__).resolve().parents[2]
@@ -25,17 +22,6 @@ CHECK_SCRIPTS = SCRIPTS / "check"
 GENERATE_SCRIPTS = SCRIPTS / "generate"
 LIB_SCRIPTS = SCRIPTS / "lib"
 
-# The Justfile check targets build `--release`; the debug kernel's larger stack
-# frames overflow the boot stack, so every host check embeds the release binary.
-def release_kernel(profile_name: str = "x86_64-qemu-virtio") -> Path:
-    profile = TARGET_PROFILES_BY_NAME.get(profile_name)
-    if profile is None:
-        admitted = ", ".join(sorted(TARGET_PROFILES_BY_NAME))
-        raise ValueError(f"unknown target profile {profile_name!r}; admitted targets: {admitted}")
-    return ROOT / "target" / profile.cargo_target / "release" / "slime_os-kernel"
-
-
-RELEASE_KERNEL = release_kernel()
 
 # Bound each boot so a wedged guest (e.g. a stack-overflow reboot loop) fails
 # loudly instead of hanging the check forever.

@@ -18,6 +18,15 @@ pub const LEGACY_IMAGE_MAGIC_BYTES: [u8; 8] = LEGACY_IMAGE_MAGIC.to_le_bytes();
 pub const LEGACY_FORMAT_VERSION: u32 = 1;
 pub const LEGACY_HEADER_LEN: usize = 32;
 
+// The ELF-carrying revision (P5.2). Same header layout and offsets as the
+// segment-carrying revision above -- target qualification is read
+// identically -- but the body is a complete native ELF executable rather
+// than a segment table, and `segment_count` is always zero.
+pub const ELF_IMAGE_MAGIC: u64 = 4993721526752201811;
+pub const ELF_IMAGE_MAGIC_BYTES: [u8; 8] = ELF_IMAGE_MAGIC.to_le_bytes();
+pub const ELF_FORMAT_VERSION: u32 = 2;
+pub const ELF_HEADER_LEN: usize = 56;
+
 // Retained v1 header offsets. The first four fields (magic, format_version,
 // header_size, kernel_abi) are byte-identical to v2; v1 diverges from offset
 // 20 because it lacks the target-qualification fields. A v1 image is an

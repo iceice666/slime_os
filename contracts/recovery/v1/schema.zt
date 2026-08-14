@@ -65,14 +65,14 @@ stateLayout :: List WireField = {
 };
 
 format ::= {
-  formatVersion = formatVersion;
-  headerBytes = headerBytes;
-  stateEntryBytes = stateEntryBytes;
-  maxStateObjects = maxStateObjects;
+  formatVersion =;
+  headerBytes =;
+  stateEntryBytes =;
+  maxStateObjects =;
   headerFields = headerSchema.fields ?? {;};
   stateFields = stateSchema.fields ?? {;};
-  headerLayout = headerLayout;
-  stateLayout = stateLayout;
+  headerLayout =;
+  stateLayout =;
 };
 
 main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }

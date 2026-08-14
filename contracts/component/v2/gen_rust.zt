@@ -22,6 +22,9 @@ Format :: type {
   legacyMagic : Int;
   legacyFormatVersion : Int;
   legacyHeaderLen : Int;
+  elfMagic : Int;
+  elfFormatVersion : Int;
+  elfHeaderLen : Int;
   headerFields : List refl.SchemaField;
   segmentFields : List refl.SchemaField;
   headerLayout : List w.WireField;
@@ -50,6 +53,14 @@ rustBindings :: Format -> Text
     "pub const LEGACY_IMAGE_MAGIC_BYTES: [u8; 8] = LEGACY_IMAGE_MAGIC.to_le_bytes();\n";
     "pub const LEGACY_FORMAT_VERSION: u32 = "; n.toText format.legacyFormatVersion; ";\n";
     "pub const LEGACY_HEADER_LEN: usize = "; n.toText format.legacyHeaderLen; ";\n\n";
+    "// The ELF-carrying revision (P5.2). Same header layout and offsets as the\n";
+    "// segment-carrying revision above -- target qualification is read\n";
+    "// identically -- but the body is a complete native ELF executable rather\n";
+    "// than a segment table, and `segment_count` is always zero.\n";
+    "pub const ELF_IMAGE_MAGIC: u64 = "; n.toText format.elfMagic; ";\n";
+    "pub const ELF_IMAGE_MAGIC_BYTES: [u8; 8] = ELF_IMAGE_MAGIC.to_le_bytes();\n";
+    "pub const ELF_FORMAT_VERSION: u32 = "; n.toText format.elfFormatVersion; ";\n";
+    "pub const ELF_HEADER_LEN: usize = "; n.toText format.elfHeaderLen; ";\n\n";
     "// Retained v1 header offsets. The first four fields (magic, format_version,\n";
     "// header_size, kernel_abi) are byte-identical to v2; v1 diverges from offset\n";
     "// 20 because it lacks the target-qualification fields. A v1 image is an\n";
@@ -78,6 +89,9 @@ pythonRecords :: Format -> List p.WireRecord = format => {
 pythonBindings :: Format -> Text = format => p.join {
   "COMPONENT_IMAGE_MAGIC = b\"SLIMECM2\"\n";
   "COMPONENT_IMAGE_LEGACY_MAGIC = b\"SLIMECMP\"\n";
+  "COMPONENT_IMAGE_ELF_MAGIC = b\"SLIMECME\"\n";
+  "COMPONENT_IMAGE_ELF_VERSION = "; n.toText format.elfFormatVersion; "\n";
+  "COMPONENT_IMAGE_ELF_HEADER_LEN = "; n.toText format.elfHeaderLen; "\n";
   "COMPONENT_IMAGE_VERSION = "; n.toText format.formatVersion; "\n";
   "COMPONENT_IMAGE_LEGACY_VERSION = "; n.toText format.legacyFormatVersion; "\n";
   "COMPONENT_IMAGE_LEGACY_HEADER_LEN = "; n.toText format.legacyHeaderLen; "\n";
@@ -114,4 +128,4 @@ render :: Format -> { python : Text; rust : Text; }
       rust = "INVALID_COMPONENT_SCHEMA";
     };
 
-{ render = render; }
+{ render =; }

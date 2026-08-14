@@ -28,14 +28,14 @@ constructed, not assumed.
   (M5.2a, complete): IPC is schema-first, which is what makes "a pure
   function of its IPC inputs" a meaningful sentence.
 - The capability matrix (`../capability-matrix.md`) fixes the grammar
-  new object kinds must satisfy; rights are a flat `u32` with bits
-  15–31 free.
+  new object kinds must satisfy; rights are a flat `u64` with bits
+  26–63 free.
 - M5.3 (complete) already treats recorded IPC as replayable for driver
   fault injection — the special case that works without this amendment
   because the driver fixture avoids nondeterminism by construction.
-- Nothing in the kernel currently models clock or entropy as authority;
-  components read them without mediation. [INFERENCE: from the absence
-  of any clock/entropy row in the matrix.]
+- Nothing currently models clock or entropy as authority; components read
+  them without mediation. [INFERENCE: from the absence of any
+  clock/entropy row in the matrix.]
 
 ## Design sketch
 

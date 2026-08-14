@@ -1,25 +1,125 @@
 use crate::sha256::Sha256;
+use crate::shared_buffer_budget::{self, SharedBufferBudget};
 
-/// Format 3 magic (current). Grant rights are a 64-bit little-endian value.
+pub const MAGIC_V5: [u8; 8] = *b"SLIMEG5\0";
+pub const MAGIC_V4: [u8; 8] = *b"SLIMEG4\0";
 pub const MAGIC_V3: [u8; 8] = *b"SLIMEG3\0";
-/// Format 2 magic, retained for the bounded rollback window. Grant rights are
-/// a 32-bit value; decoding widens them to `u64` without changing meaning.
 pub const MAGIC_V2: [u8; 8] = *b"SLIMEG2\0";
-/// The magic emitted for newly built generations.
-pub const MAGIC: [u8; 8] = MAGIC_V3;
-/// Retained format-2 version number. `FORMAT_VERSION` (3) is the current one.
-pub const FORMAT_VERSION_V2: u32 = 2;
-const MAX_COMPONENTS_V2: usize = 32;
+pub const MAGIC: [u8; 8] = MAGIC_V5;
 include!("generated/generation.rs");
+
+const MAX_TASK_CAPS: usize = 128;
+const PLAN_NONE: usize = u32::MAX as usize;
+const GRANT_POLICY_ONLY: u32 = 1;
+/// Grant flags. No bit is defined: `GRANT_MINTED` named a send/recv grant whose
+/// object its source created at runtime, which the native cutover made
+/// impossible — an endpoint is a generation-owned seL4 Endpoint the root
+/// materializes and installs into both declared ends — so B50 deleted the
+/// concept rather than leaving a flag nothing can set. An unknown bit is still
+/// refused, so a producer that grew one fails admission.
+const GRANT_FLAGS_KNOWN: u32 = 0;
+
+/// Kernel-object kind discriminant for a CNode, matching `KERNEL_OBJECT_CNODE`
+/// in `scripts/build/build-generation.py`.
+const KERNEL_OBJECT_CNODE: u32 = 1;
+/// Kernel-object kind discriminant for a TCB.
+const KERNEL_OBJECT_TCB: u32 = 3;
+/// Kernel-object kind discriminant for an endpoint.
+const KERNEL_OBJECT_ENDPOINT: u32 = 5;
+/// Kernel-object kind discriminant for a notification.
+const KERNEL_OBJECT_NOTIFICATION: u32 = 7;
+const ROOT_SERVICE_SLOT: usize = 1;
+const CONSOLE_SERVICE_SLOT: usize = 32;
+const SERVICE_SEND_RIGHT: Rights = 1;
+
+fn service_for_capability(kind: CapabilityKind) -> Option<u32> {
+    match kind {
+        CapabilityKind::SharedBufferFactory
+        | CapabilityKind::SharedBuffer
+        | CapabilityKind::Loan => Some(SERVICE_SHARED_BUFFER),
+        CapabilityKind::Directory => Some(SERVICE_DIRECTORY),
+        CapabilityKind::Input => Some(SERVICE_INPUT),
+        CapabilityKind::Block => Some(SERVICE_BLOCK),
+        CapabilityKind::Supervision => Some(SERVICE_SUPERVISION),
+        CapabilityKind::Endpoint | CapabilityKind::Executable => None,
+    }
+}
+
 pub const KIND_KERNEL: u32 = 1;
 pub const KIND_BOOTSTRAP: u32 = 2;
 pub const KIND_COMPONENT: u32 = 3;
+
+/// Declared capability class. Rights remain the operation ceiling; the kind
+/// says what object or kernel capability those rights name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub enum CapabilityKind {
+    Endpoint = CAPABILITY_ENDPOINT,
+    Executable = CAPABILITY_EXECUTABLE,
+    SharedBufferFactory = CAPABILITY_SHARED_BUFFER_FACTORY,
+    Block = CAPABILITY_BLOCK,
+    Directory = CAPABILITY_DIRECTORY,
+    Input = CAPABILITY_INPUT,
+    Supervision = CAPABILITY_SUPERVISION,
+    SharedBuffer = CAPABILITY_SHARED_BUFFER,
+    Loan = CAPABILITY_LOAN,
+}
+
+impl CapabilityKind {
+    fn decode(value: u32) -> Result<Self, DecodeError> {
+        match value {
+            CAPABILITY_ENDPOINT => Ok(Self::Endpoint),
+            CAPABILITY_EXECUTABLE => Ok(Self::Executable),
+            CAPABILITY_SHARED_BUFFER_FACTORY => Ok(Self::SharedBufferFactory),
+            CAPABILITY_BLOCK => Ok(Self::Block),
+            CAPABILITY_DIRECTORY => Ok(Self::Directory),
+            CAPABILITY_INPUT => Ok(Self::Input),
+            CAPABILITY_SUPERVISION => Ok(Self::Supervision),
+            CAPABILITY_SHARED_BUFFER => Ok(Self::SharedBuffer),
+            CAPABILITY_LOAN => Ok(Self::Loan),
+            _ => Err(DecodeError::BadBounds),
+        }
+    }
+}
+
+fn capability_rights_valid(kind: CapabilityKind, rights: Rights) -> bool {
+    let allowed = match kind {
+        CapabilityKind::Endpoint => 0b11 | RIGHT_TRANSFER,
+        CapabilityKind::Executable => RIGHT_EXEC | RIGHT_SPAWN | RIGHT_TRANSFER,
+        CapabilityKind::SharedBufferFactory => (1 << 24) | RIGHT_TRANSFER,
+        CapabilityKind::Block => (1 << 10) | (1 << 11),
+        CapabilityKind::Directory => (1 << 19) | (1 << 20) | (1 << 21) | (1 << 22) | RIGHT_TRANSFER,
+        CapabilityKind::Input => 1 << 23,
+        CapabilityKind::Supervision => (1 << 18) | RIGHT_TRANSFER,
+        CapabilityKind::SharedBuffer => (1 << 8) | (1 << 9) | (1 << 25) | RIGHT_TRANSFER,
+        CapabilityKind::Loan => (1 << 8) | (1 << 9) | RIGHT_TRANSFER,
+    };
+    let required = match kind {
+        CapabilityKind::Endpoint => 0b11,
+        CapabilityKind::Executable => RIGHT_EXEC | RIGHT_SPAWN,
+        CapabilityKind::SharedBufferFactory => 1 << 24,
+        CapabilityKind::Block => (1 << 10) | (1 << 11),
+        CapabilityKind::Directory => (1 << 19) | (1 << 20) | (1 << 21) | (1 << 22),
+        CapabilityKind::Input => 1 << 23,
+        CapabilityKind::Supervision => 1 << 18,
+        CapabilityKind::SharedBuffer => (1 << 8) | (1 << 9) | (1 << 25),
+        CapabilityKind::Loan => 1 << 9,
+    };
+    rights != 0
+        && rights & !allowed == 0
+        && rights & required != 0
+        && (kind != CapabilityKind::Executable
+            || rights & (RIGHT_EXEC | RIGHT_SPAWN) == RIGHT_EXEC | RIGHT_SPAWN)
+        && (kind != CapabilityKind::Input || rights == 1 << 23)
+}
 pub const KIND_RESOURCE: u32 = 4;
 pub const ROLE_INIT: u32 = 1;
-/// A capability rights bitset. Flat `u64` as of generation format v3.
 pub type Rights = u64;
 pub const RIGHT_TRANSFER: Rights = 1 << 2;
-pub const RIGHT_ALL_V2: Rights = (1 << 24) - 1;
+pub const RIGHT_EXEC: Rights = 1 << 3;
+/// Authority to launch an instance from an executable. Always travels with
+/// [`RIGHT_EXEC`]: naming an image conveys nothing without it.
+pub const RIGHT_SPAWN: Rights = 1 << 16;
 pub const RIGHT_ALL: Rights = (1 << 26) - 1;
 pub const MAX_SPAWN_BUDGET: u16 = 32;
 pub const POLICY_IMMUTABLE: u32 = 1;
@@ -27,6 +127,80 @@ pub const POLICY_EPHEMERAL: u32 = 2;
 pub const POLICY_PRESERVE: u32 = 3;
 pub const POLICY_SNAPSHOT_BEFORE_UPGRADE: u32 = 4;
 pub const POLICY_DISCARD_ON_ROLLBACK: u32 = 5;
+/// Authenticated bootstrap composition selector.
+///
+/// The numeric ABI is passed in the bootstrap thread's first C parameter. It is
+/// deliberately independent of the source spelling so component images remain
+/// byte-identical across generation manifests.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BootAction {
+    Product = 1,
+    Boot = 2,
+    Call = 3,
+    Channel = 4,
+    Crossing = 5,
+    Dango = 6,
+    Directory = 7,
+    Filesystem = 8,
+    Generation = 9,
+    Input = 10,
+    Loan = 11,
+    Operation = 12,
+    Powerbox = 13,
+    Qos = 14,
+    Reclamation = 15,
+    Recovery = 16,
+    Rollback = 17,
+    Sample = 18,
+    Spawn = 19,
+    Storage = 20,
+    Store = 21,
+    Stream = 22,
+    Supervision = 23,
+    Transfer = 24,
+    Visibility = 25,
+    /// The 48-instance graph at the admitted ceiling (B49).
+    Stress = 26,
+}
+
+impl BootAction {
+    pub const fn id(self) -> u32 {
+        self as u32
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "product" => Self::Product,
+            "boot" => Self::Boot,
+            "call" => Self::Call,
+            "channel" => Self::Channel,
+            "crossing" => Self::Crossing,
+            "dango" => Self::Dango,
+            "directory" => Self::Directory,
+            "filesystem" => Self::Filesystem,
+            "generation" => Self::Generation,
+            "input" => Self::Input,
+            "loan" => Self::Loan,
+            "operation" => Self::Operation,
+            "powerbox" => Self::Powerbox,
+            "qos" => Self::Qos,
+            "stress" => Self::Stress,
+            "reclamation" => Self::Reclamation,
+            "recovery" => Self::Recovery,
+            "rollback" => Self::Rollback,
+            "sample" => Self::Sample,
+            "spawn" => Self::Spawn,
+            "storage" => Self::Storage,
+            "store" => Self::Store,
+            "stream" => Self::Stream,
+            "supervision" => Self::Supervision,
+            "transfer" => Self::Transfer,
+            "visibility" => Self::Visibility,
+            _ => return None,
+        })
+    }
+}
 
 const IDENTITY_OFFSET: usize = 24;
 const IDENTITY_END: usize = 56;
@@ -48,6 +222,8 @@ pub enum DecodeError {
     BadKernel,
     BadBootstrap,
     BadDependency,
+    BadBinding,
+    BadOwner,
     BadState,
     BadHealth,
     UnknownEnum,
@@ -63,22 +239,70 @@ pub struct Object<'a> {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct Component<'a> {
+pub struct Executable<'a> {
     pub name: &'a str,
     pub object: usize,
     pub role: u32,
     pub spawn_budget: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstanceOwner {
+    Root,
+    Instance(usize),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstanceHealth {
+    Optional,
+    Required,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Instance<'a> {
+    pub name: &'a str,
+    pub executable: usize,
+    pub owner: InstanceOwner,
+    pub autostart: bool,
+    pub health: InstanceHealth,
     dependency_start: usize,
     dependency_count: usize,
+    binding_start: usize,
+    binding_count: usize,
+}
+
+impl Instance<'_> {
+    pub const fn dependency_count(self) -> usize {
+        self.dependency_count
+    }
+    pub const fn binding_count(self) -> usize {
+        self.binding_count
+    }
+    pub const fn is_root_autostart(self) -> bool {
+        matches!(self.owner, InstanceOwner::Root) && self.autostart
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InstanceBinding {
+    pub grant: usize,
+    pub slot: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GrantEndpoint {
+    Executable(usize),
+    Instance(usize),
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct Grant<'a> {
     pub name: &'a str,
-    pub source: usize,
-    pub target: usize,
+    pub source: GrantEndpoint,
+    pub target: GrantEndpoint,
     pub rights: Rights,
     pub transferable: bool,
+    pub capability_kind: CapabilityKind,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -89,31 +313,254 @@ pub struct StateBinding<'a> {
     pub policy: u32,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct Process<'a> {
+    pub name: &'a str,
+    pub instance: usize,
+    pub cspace_object: usize,
+    pub vspace_object: usize,
+    pub main_thread: usize,
+    pub quota: usize,
+    pub flags: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Thread<'a> {
+    pub name: &'a str,
+    pub process: usize,
+    pub tcb_object: usize,
+    pub schedule: usize,
+    pub fault_policy: usize,
+    pub ipc_buffer_object: usize,
+    pub ipc_buffer_vaddr: u64,
+    pub entry: u64,
+    pub flags: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct KernelObject<'a> {
+    pub name: &'a str,
+    pub kind: u32,
+    pub owner_process: usize,
+    pub size_bits: u32,
+    pub count: u32,
+    pub source_object: usize,
+    pub flags: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Mapping {
+    pub process: usize,
+    pub object: usize,
+    pub virtual_address: u64,
+    pub page_count: u32,
+    pub rights: Rights,
+    pub attributes: u64,
+    pub source_object: usize,
+    pub flags: u32,
+}
+
+/// The slots a plan declares for a child's own TCB and fault endpoint. Either
+/// may be absent; the caller decides whether that is admissible for the path
+/// it is constructing.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct ChildSlotPlan {
+    pub service: Option<usize>,
+    pub console: Option<usize>,
+    pub tcb: Option<usize>,
+    pub fault: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct CapBinding {
+    pub process: usize,
+    pub slot: usize,
+    pub object: usize,
+    pub rights: Rights,
+    pub badge: u64,
+    pub grant: usize,
+    pub flags: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ServiceBinding {
+    pub process: usize,
+    pub service: u32,
+    pub slot: usize,
+    pub object: usize,
+    pub rights: Rights,
+    pub badge: u64,
+    pub flags: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Schedule<'a> {
+    pub name: &'a str,
+    pub thread: usize,
+    pub authority_process: usize,
+    pub priority: u32,
+    pub max_controlled_priority: u32,
+    pub budget_us: u64,
+    pub period_us: u64,
+    pub flags: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct FaultPolicy<'a> {
+    pub name: &'a str,
+    pub thread: usize,
+    pub handler_process: usize,
+    pub endpoint_object: usize,
+    pub badge: u64,
+    pub action: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SpawnTemplate<'a> {
+    pub name: &'a str,
+    pub executable: usize,
+    pub owner_process: usize,
+    pub quota: usize,
+    pub schedule: usize,
+    pub fault_policy: usize,
+    pub max_instances: u32,
+    pub flags: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ResourceQuota<'a> {
+    pub name: &'a str,
+    pub owner_process: usize,
+    pub cnode_count: u32,
+    pub tcb_count: u32,
+    pub endpoint_count: u32,
+    pub notification_count: u32,
+    pub frame_count: u32,
+    pub page_table_count: u32,
+    pub mapping_count: u32,
+    pub irq_count: u32,
+    pub cslot_count: u32,
+    pub untyped_bytes: u64,
+    pub dynamic_reserve_bytes: u64,
+    pub flags: u32,
+}
+
+/// A capability the generation authorizes one instance to hand another at
+/// spawn, whose concrete object the owner mints at runtime.
+///
+/// A static [`Grant`] names both endpoints and a concrete object; a channel
+/// endpoint minted after activation has no object to name, so the plan would
+/// otherwise have to either omit it — leaving the child's slot unaccounted —
+/// or degrade the grant to a bare rights assertion.
+///
+/// What this record fixes before activation: the minter, the holder, the
+/// destination slot, and an exact rights ceiling. A spawn is refused unless
+/// the caller *is* the declared minter, the destination is the declared slot
+/// rather than one the caller chose, and the transferred rights fall within
+/// both the ceiling and what the caller itself holds.
+///
+/// What it deliberately does **not** fix is object identity, which does not
+/// exist until the minter creates it. A minter can therefore satisfy a minted
+/// declaration with a capability of the right kind and rights but a different
+/// underlying object — a supervision handle naming another of its children, or
+/// a directory capability at a broader scope than intended. The declaration
+/// bounds *who may hand what class of authority to whom, and where it lands*;
+/// it is not an object binding. A relationship that must pin identity needs a
+/// [`Grant`] against a concrete object instead.
+///
+/// `transferable` is folded into [`Self::rights`] as `RIGHT_TRANSFER` rather
+/// than carried as a separate field, so the two cannot disagree — unlike
+/// [`Grant`], whose separate flag must be checked for coherence against its
+/// rights word.
+#[derive(Debug, Clone, Copy)]
+pub struct MintedBinding<'a> {
+    pub name: &'a str,
+    pub owner: usize,
+    pub holder: usize,
+    pub slot: usize,
+    pub rights: Rights,
+    pub capability_kind: CapabilityKind,
+    pub flags: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NotificationGrant<'a> {
+    pub name: &'a str,
+    pub source: usize,
+    pub target: usize,
+    pub object: usize,
+    pub flags: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotificationRole {
+    Signal,
+    Wait,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NotificationBinding {
+    pub grant: usize,
+    pub holder: usize,
+    pub slot: usize,
+    pub role: NotificationRole,
+    pub flags: u32,
+}
+
 pub struct Generation<'a> {
     bytes: &'a [u8],
-    /// Decoded format version: `FORMAT_VERSION` (3) or `FORMAT_VERSION_V2` (2).
-    /// Selects the capability-grant rights layout.
     pub version: u32,
     pub identity: [u8; 32],
     pub number: u64,
     pub parent: Option<[u8; 32]>,
     pub target: &'a str,
-    pub kernel_object: usize,
-    pub bootstrap: usize,
+    pub boot_action: BootAction,
+    pub bootstrap_instance: usize,
     pub boot_attempts: u32,
     object_count: usize,
-    component_count: usize,
+    executable_count: usize,
+    instance_count: usize,
     dependency_count: usize,
+    binding_count: usize,
     grant_count: usize,
     state_count: usize,
     health_count: usize,
+    process_count: usize,
+    thread_count: usize,
+    kernel_object_count: usize,
+    mapping_count: usize,
+    cap_binding_count: usize,
+    service_binding_count: usize,
+    schedule_count: usize,
+    fault_policy_count: usize,
+    spawn_template_count: usize,
+    resource_quota_count: usize,
+    minted_binding_count: usize,
+    notification_grant_count: usize,
+    notification_binding_count: usize,
     object_offset: usize,
-    component_offset: usize,
+    executable_offset: usize,
+    instance_offset: usize,
     dependency_offset: usize,
+    binding_offset: usize,
     grant_offset: usize,
     state_offset: usize,
     health_offset: usize,
+    process_offset: usize,
+    thread_offset: usize,
+    kernel_object_offset: usize,
+    mapping_offset: usize,
+    cap_binding_offset: usize,
+    service_binding_offset: usize,
+    schedule_offset: usize,
+    fault_policy_offset: usize,
+    spawn_template_offset: usize,
+    resource_quota_offset: usize,
+    minted_binding_offset: usize,
+    notification_grant_offset: usize,
+    notification_binding_offset: usize,
     string_offset: usize,
+    string_len: usize,
 }
 
 impl<'a> Generation<'a> {
@@ -121,22 +568,28 @@ impl<'a> Generation<'a> {
         if bytes.len() < HEADER_LEN {
             return Err(DecodeError::Truncated);
         }
-        let version = match (bytes[..8].try_into().unwrap(), u32_at(bytes, 8)?) {
-            (MAGIC_V3, FORMAT_VERSION) => FORMAT_VERSION,
-            (MAGIC_V2, FORMAT_VERSION_V2) => FORMAT_VERSION_V2,
-            (MAGIC_V3, _) | (MAGIC_V2, _) => return Err(DecodeError::UnsupportedVersion),
-            _ => return Err(DecodeError::BadMagic),
-        };
+        let magic: [u8; 8] = bytes[..8].try_into().unwrap();
+        let version = u32_at(bytes, 8)?;
+        if magic != MAGIC_V5 {
+            return if matches!(magic, MAGIC_V4 | MAGIC_V3 | MAGIC_V2) {
+                Err(DecodeError::UnsupportedVersion)
+            } else {
+                Err(DecodeError::BadMagic)
+            };
+        }
+        if version != FORMAT_VERSION {
+            return Err(DecodeError::UnsupportedVersion);
+        }
         if u32_at(bytes, 12)? as usize != HEADER_LEN {
             return Err(DecodeError::BadHeader);
         }
         if u64_at(bytes, 16)? != 0 {
             return Err(DecodeError::UnknownRequiredFlags);
         }
-        if bytes[216..HEADER_LEN].iter().any(|byte| *byte != 0) {
-            return Err(DecodeError::NonZeroReserved);
-        }
-        let total_len = u64_at(bytes, 208)? as usize;
+        // Reserved word after the notification counts and trailing header pad.
+        reserved_zero(bytes, 196, 200)?;
+        reserved_zero(bytes, 400, HEADER_LEN)?;
+        let total_len = u64_at(bytes, 392)? as usize;
         if total_len != bytes.len() || total_len > MAX_GENERATION_BYTES {
             return Err(DecodeError::BadBounds);
         }
@@ -145,99 +598,301 @@ impl<'a> Generation<'a> {
             return Err(DecodeError::BadIdentity);
         }
         let parent_bytes: [u8; 32] = bytes[64..96].try_into().unwrap();
-        let object_count = bounded_count(u32_at(bytes, 112)? as usize, 1, MAX_OBJECTS)?;
-        let component_limit = if version == FORMAT_VERSION_V2 {
-            MAX_COMPONENTS_V2
-        } else {
-            MAX_COMPONENTS
-        };
-        let component_count = bounded_count(u32_at(bytes, 116)? as usize, 1, component_limit)?;
-        let dependency_count = bounded_count(u32_at(bytes, 120)? as usize, 0, MAX_DEPENDENCIES)?;
-        let grant_count = bounded_count(u32_at(bytes, 124)? as usize, 0, MAX_GRANTS)?;
-        let state_count = bounded_count(u32_at(bytes, 128)? as usize, 0, MAX_STATES)?;
-        let health_count = bounded_count(u32_at(bytes, 132)? as usize, 0, MAX_HEALTH_COMPONENTS)?;
-        let object_offset = u64_at(bytes, 136)? as usize;
-        let component_offset = u64_at(bytes, 144)? as usize;
-        let dependency_offset = u64_at(bytes, 152)? as usize;
-        let grant_offset = u64_at(bytes, 160)? as usize;
-        let state_offset = u64_at(bytes, 168)? as usize;
-        let health_offset = u64_at(bytes, 176)? as usize;
-        let string_offset = u64_at(bytes, 184)? as usize;
-        let string_len = u64_at(bytes, 192)? as usize;
-        let payload_offset = u64_at(bytes, 200)? as usize;
-        if string_len > MAX_STRING_TABLE_BYTES {
-            return Err(DecodeError::BadBounds);
-        }
-        check_section(object_offset, object_count, OBJECT_LEN, component_offset)?;
-        check_section(
-            component_offset,
-            component_count,
-            COMPONENT_LEN,
-            dependency_offset,
-        )?;
-        check_section(
-            dependency_offset,
-            dependency_count,
-            DEPENDENCY_LEN,
-            grant_offset,
-        )?;
-        check_section(grant_offset, grant_count, GRANT_LEN, state_offset)?;
-        check_section(state_offset, state_count, STATE_LEN, health_offset)?;
-        check_section(health_offset, health_count, HEALTH_LEN, string_offset)?;
-        if object_offset != HEADER_LEN
-            || string_offset.checked_add(string_len) != Some(payload_offset)
-            || payload_offset > bytes.len()
-        {
-            return Err(DecodeError::BadBounds);
-        }
-        let target = read_string(
-            bytes,
-            string_offset,
-            string_len,
-            u32_at(bytes, 96)? as usize,
-        )?;
+
         let generation = Self {
             bytes,
             version,
             identity,
             number: u64_at(bytes, 56)?,
             parent: (parent_bytes != [0; 32]).then_some(parent_bytes),
-            target,
-            kernel_object: u32_at(bytes, 100)? as usize,
-            bootstrap: u32_at(bytes, 104)? as usize,
+            target: "",
+            boot_action: BootAction::Product,
+            bootstrap_instance: u32_at(bytes, 104)? as usize,
             boot_attempts: u32_at(bytes, 108)?,
-            object_count,
-            component_count,
-            dependency_count,
-            grant_count,
-            state_count,
-            health_count,
-            object_offset,
-            component_offset,
-            dependency_offset,
-            grant_offset,
-            state_offset,
-            health_offset,
-            string_offset,
+            object_count: bounded_count(u32_at(bytes, 112)? as usize, 1, MAX_OBJECTS)?,
+            executable_count: bounded_count(u32_at(bytes, 116)? as usize, 1, MAX_EXECUTABLES)?,
+            instance_count: bounded_count(u32_at(bytes, 120)? as usize, 1, MAX_INSTANCES)?,
+            dependency_count: bounded_count(u32_at(bytes, 124)? as usize, 0, MAX_DEPENDENCIES)?,
+            binding_count: bounded_count(u32_at(bytes, 128)? as usize, 0, MAX_BINDINGS)?,
+            grant_count: bounded_count(u32_at(bytes, 132)? as usize, 0, MAX_GRANTS)?,
+            state_count: bounded_count(u32_at(bytes, 136)? as usize, 0, MAX_STATES)?,
+            health_count: bounded_count(u32_at(bytes, 140)? as usize, 0, MAX_HEALTH_INSTANCES)?,
+            process_count: bounded_count(u32_at(bytes, 144)? as usize, 1, MAX_PROCESSES)?,
+            thread_count: bounded_count(u32_at(bytes, 148)? as usize, 1, MAX_THREADS)?,
+            kernel_object_count: bounded_count(
+                u32_at(bytes, 152)? as usize,
+                1,
+                MAX_KERNEL_OBJECTS,
+            )?,
+            mapping_count: bounded_count(u32_at(bytes, 156)? as usize, 0, MAX_MAPPINGS)?,
+            cap_binding_count: bounded_count(u32_at(bytes, 160)? as usize, 1, MAX_CAP_BINDINGS)?,
+            service_binding_count: bounded_count(
+                u32_at(bytes, 164)? as usize,
+                1,
+                MAX_SERVICE_BINDINGS,
+            )?,
+            schedule_count: bounded_count(u32_at(bytes, 168)? as usize, 1, MAX_SCHEDULES)?,
+            fault_policy_count: bounded_count(u32_at(bytes, 172)? as usize, 1, MAX_FAULT_POLICIES)?,
+            spawn_template_count: bounded_count(
+                u32_at(bytes, 176)? as usize,
+                0,
+                MAX_SPAWN_TEMPLATES,
+            )?,
+            resource_quota_count: bounded_count(
+                u32_at(bytes, 180)? as usize,
+                1,
+                MAX_RESOURCE_QUOTAS,
+            )?,
+            minted_binding_count: bounded_count(
+                u32_at(bytes, 184)? as usize,
+                0,
+                MAX_MINTED_BINDINGS,
+            )?,
+            notification_grant_count: bounded_count(
+                u32_at(bytes, 188)? as usize,
+                0,
+                MAX_NOTIFICATION_GRANTS,
+            )?,
+            notification_binding_count: bounded_count(
+                u32_at(bytes, 192)? as usize,
+                0,
+                MAX_NOTIFICATION_BINDINGS,
+            )?,
+            object_offset: u64_at(bytes, 200)? as usize,
+            executable_offset: u64_at(bytes, 208)? as usize,
+            instance_offset: u64_at(bytes, 216)? as usize,
+            dependency_offset: u64_at(bytes, 224)? as usize,
+            binding_offset: u64_at(bytes, 232)? as usize,
+            grant_offset: u64_at(bytes, 240)? as usize,
+            state_offset: u64_at(bytes, 248)? as usize,
+            health_offset: u64_at(bytes, 256)? as usize,
+            process_offset: u64_at(bytes, 264)? as usize,
+            thread_offset: u64_at(bytes, 272)? as usize,
+            kernel_object_offset: u64_at(bytes, 280)? as usize,
+            mapping_offset: u64_at(bytes, 288)? as usize,
+            cap_binding_offset: u64_at(bytes, 296)? as usize,
+            service_binding_offset: u64_at(bytes, 304)? as usize,
+            schedule_offset: u64_at(bytes, 312)? as usize,
+            fault_policy_offset: u64_at(bytes, 320)? as usize,
+            spawn_template_offset: u64_at(bytes, 328)? as usize,
+            resource_quota_offset: u64_at(bytes, 336)? as usize,
+            minted_binding_offset: u64_at(bytes, 344)? as usize,
+            notification_grant_offset: u64_at(bytes, 352)? as usize,
+            notification_binding_offset: u64_at(bytes, 360)? as usize,
+            string_offset: u64_at(bytes, 368)? as usize,
+            string_len: u64_at(bytes, 376)? as usize,
         };
-        generation.validate(payload_offset, string_len)?;
+        if generation.string_len > MAX_STRING_TABLE_BYTES {
+            return Err(DecodeError::BadBounds);
+        }
+        generation.validate_sections(u64_at(bytes, 384)? as usize)?;
+        let target = generation.string(u32_at(bytes, 96)? as usize)?;
+        let boot_action = BootAction::parse(generation.string(u32_at(bytes, 100)? as usize)?)
+            .ok_or(DecodeError::UnknownEnum)?;
+        let generation = Self {
+            target,
+            boot_action,
+            ..generation
+        };
+        generation.validate(u64_at(bytes, 384)? as usize)?;
         Ok(generation)
     }
 
-    pub fn object_count(&self) -> usize {
+    fn validate_sections(&self, payload_offset: usize) -> Result<(), DecodeError> {
+        check_section(
+            self.object_offset,
+            self.object_count,
+            OBJECT_LEN,
+            self.executable_offset,
+        )?;
+        check_section(
+            self.executable_offset,
+            self.executable_count,
+            EXECUTABLE_LEN,
+            self.instance_offset,
+        )?;
+        check_section(
+            self.instance_offset,
+            self.instance_count,
+            INSTANCE_LEN,
+            self.dependency_offset,
+        )?;
+        check_section(
+            self.dependency_offset,
+            self.dependency_count,
+            DEPENDENCY_LEN,
+            self.binding_offset,
+        )?;
+        check_section(
+            self.binding_offset,
+            self.binding_count,
+            BINDING_LEN,
+            self.grant_offset,
+        )?;
+        check_section(
+            self.grant_offset,
+            self.grant_count,
+            GRANT_LEN,
+            self.state_offset,
+        )?;
+        check_section(
+            self.state_offset,
+            self.state_count,
+            STATE_LEN,
+            self.health_offset,
+        )?;
+        check_section(
+            self.health_offset,
+            self.health_count,
+            HEALTH_LEN,
+            self.process_offset,
+        )?;
+        check_section(
+            self.process_offset,
+            self.process_count,
+            PROCESS_LEN,
+            self.thread_offset,
+        )?;
+        check_section(
+            self.thread_offset,
+            self.thread_count,
+            THREAD_LEN,
+            self.kernel_object_offset,
+        )?;
+        check_section(
+            self.kernel_object_offset,
+            self.kernel_object_count,
+            KERNEL_OBJECT_LEN,
+            self.mapping_offset,
+        )?;
+        check_section(
+            self.mapping_offset,
+            self.mapping_count,
+            MAPPING_LEN,
+            self.cap_binding_offset,
+        )?;
+        check_section(
+            self.cap_binding_offset,
+            self.cap_binding_count,
+            CAP_BINDING_LEN,
+            self.service_binding_offset,
+        )?;
+        check_section(
+            self.service_binding_offset,
+            self.service_binding_count,
+            SERVICE_BINDING_LEN,
+            self.schedule_offset,
+        )?;
+        check_section(
+            self.schedule_offset,
+            self.schedule_count,
+            SCHEDULE_LEN,
+            self.fault_policy_offset,
+        )?;
+        check_section(
+            self.fault_policy_offset,
+            self.fault_policy_count,
+            FAULT_POLICY_LEN,
+            self.spawn_template_offset,
+        )?;
+        check_section(
+            self.spawn_template_offset,
+            self.spawn_template_count,
+            SPAWN_TEMPLATE_LEN,
+            self.resource_quota_offset,
+        )?;
+        check_section(
+            self.resource_quota_offset,
+            self.resource_quota_count,
+            RESOURCE_QUOTA_LEN,
+            self.minted_binding_offset,
+        )?;
+        check_section(
+            self.minted_binding_offset,
+            self.minted_binding_count,
+            MINTED_BINDING_LEN,
+            self.notification_grant_offset,
+        )?;
+        check_section(
+            self.notification_grant_offset,
+            self.notification_grant_count,
+            NOTIFICATION_GRANT_LEN,
+            self.notification_binding_offset,
+        )?;
+        check_section(
+            self.notification_binding_offset,
+            self.notification_binding_count,
+            NOTIFICATION_BINDING_LEN,
+            self.string_offset,
+        )?;
+        if self.object_offset != HEADER_LEN
+            || self.string_offset.checked_add(self.string_len) != Some(payload_offset)
+            || payload_offset > self.bytes.len()
+        {
+            return Err(DecodeError::BadBounds);
+        }
+        Ok(())
+    }
+
+    pub const fn is_v5(&self) -> bool {
+        self.version == FORMAT_VERSION
+    }
+    pub const fn object_count(&self) -> usize {
         self.object_count
     }
-    pub fn component_count(&self) -> usize {
-        self.component_count
+    pub const fn executable_count(&self) -> usize {
+        self.executable_count
     }
-    pub fn grant_count(&self) -> usize {
+    pub const fn instance_count(&self) -> usize {
+        self.instance_count
+    }
+    pub const fn grant_count(&self) -> usize {
         self.grant_count
     }
-    pub fn state_count(&self) -> usize {
+    pub const fn state_count(&self) -> usize {
         self.state_count
     }
-    pub fn health_count(&self) -> usize {
+    pub const fn health_count(&self) -> usize {
         self.health_count
+    }
+    pub const fn process_count(&self) -> usize {
+        self.process_count
+    }
+    pub const fn thread_count(&self) -> usize {
+        self.thread_count
+    }
+    pub const fn kernel_object_count(&self) -> usize {
+        self.kernel_object_count
+    }
+    pub const fn mapping_count(&self) -> usize {
+        self.mapping_count
+    }
+    pub const fn cap_binding_count(&self) -> usize {
+        self.cap_binding_count
+    }
+    pub const fn service_binding_count(&self) -> usize {
+        self.service_binding_count
+    }
+    pub const fn schedule_count(&self) -> usize {
+        self.schedule_count
+    }
+    pub const fn fault_policy_count(&self) -> usize {
+        self.fault_policy_count
+    }
+    pub const fn spawn_template_count(&self) -> usize {
+        self.spawn_template_count
+    }
+    pub const fn resource_quota_count(&self) -> usize {
+        self.resource_quota_count
+    }
+    pub const fn notification_grant_count(&self) -> usize {
+        self.notification_grant_count
+    }
+    pub const fn notification_binding_count(&self) -> usize {
+        self.notification_binding_count
+    }
+    pub const fn bootstrap(&self) -> usize {
+        self.bootstrap_instance
     }
 
     pub fn object(&self, index: usize) -> Result<Object<'a>, DecodeError> {
@@ -245,92 +900,131 @@ impl<'a> Generation<'a> {
             return Err(DecodeError::BadIndex);
         }
         let offset = self.object_offset + index * OBJECT_LEN;
-        let id = self.string(u32_at(self.bytes, offset)? as usize)?;
-        let kind = u32_at(self.bytes, offset + 4)?;
+        reserved_zero(self.bytes, offset + 56, offset + OBJECT_LEN)?;
         let payload_offset = u64_at(self.bytes, offset + 8)? as usize;
         let payload_len = u64_at(self.bytes, offset + 16)? as usize;
-        let digest: [u8; 32] = self.bytes[offset + 24..offset + 56].try_into().unwrap();
-        if self.bytes[offset + 56..offset + OBJECT_LEN]
-            .iter()
-            .any(|byte| *byte != 0)
-        {
-            return Err(DecodeError::NonZeroReserved);
-        }
         if payload_len > MAX_OBJECT_PAYLOAD_BYTES {
             return Err(DecodeError::BadBounds);
         }
         let end = payload_offset
             .checked_add(payload_len)
             .ok_or(DecodeError::BadBounds)?;
-        let payload = self
-            .bytes
-            .get(payload_offset..end)
-            .ok_or(DecodeError::BadBounds)?;
         Ok(Object {
-            id,
-            kind,
-            digest,
-            bytes: payload,
+            id: self.string(u32_at(self.bytes, offset)? as usize)?,
+            kind: u32_at(self.bytes, offset + 4)?,
+            digest: self.bytes[offset + 24..offset + 56].try_into().unwrap(),
+            bytes: self
+                .bytes
+                .get(payload_offset..end)
+                .ok_or(DecodeError::BadBounds)?,
         })
     }
 
-    pub fn component(&self, index: usize) -> Result<Component<'a>, DecodeError> {
-        if index >= self.component_count {
+    pub fn executable(&self, index: usize) -> Result<Executable<'a>, DecodeError> {
+        if index >= self.executable_count {
             return Err(DecodeError::BadIndex);
         }
-        let offset = self.component_offset + index * COMPONENT_LEN;
-        if self.bytes[offset + 24..offset + COMPONENT_LEN]
-            .iter()
-            .any(|byte| *byte != 0)
-        {
-            return Err(DecodeError::NonZeroReserved);
-        }
-        Ok(Component {
+        let offset = self.executable_offset + index * EXECUTABLE_LEN;
+        reserved_zero(self.bytes, offset + 16, offset + EXECUTABLE_LEN)?;
+        Ok(Executable {
             name: self.string(u32_at(self.bytes, offset)? as usize)?,
             object: u32_at(self.bytes, offset + 4)? as usize,
             role: u32_at(self.bytes, offset + 8)?,
-            dependency_start: u32_at(self.bytes, offset + 12)? as usize,
-            dependency_count: u32_at(self.bytes, offset + 16)? as usize,
-            spawn_budget: u32_at(self.bytes, offset + 20)?
+            spawn_budget: u32_at(self.bytes, offset + 12)?
                 .try_into()
                 .map_err(|_| DecodeError::BadBounds)?,
         })
     }
 
-    pub fn component_named(&self, name: &str) -> Option<Component<'a>> {
-        (0..self.component_count).find_map(|index| {
-            self.component(index)
-                .ok()
-                .filter(|component| component.name == name)
-        })
+    pub fn executable_named(&self, name: &str) -> Option<Executable<'a>> {
+        (0..self.executable_count).find_map(|i| self.executable(i).ok().filter(|e| e.name == name))
     }
-
-    pub fn component_bytes(&self, name: &str) -> Option<&'a [u8]> {
-        let component = self.component_named(name)?;
-        self.object(component.object)
+    pub fn executable_bytes(&self, name: &str) -> Option<&'a [u8]> {
+        let executable = self.executable_named(name)?;
+        self.object(executable.object)
             .ok()
             .map(|object| object.bytes)
     }
 
-    pub fn dependency(
-        &self,
-        component: Component<'a>,
-        index: usize,
-    ) -> Result<Component<'a>, DecodeError> {
-        if index >= component.dependency_count {
+    pub fn instance(&self, index: usize) -> Result<Instance<'a>, DecodeError> {
+        if index >= self.instance_count {
             return Err(DecodeError::BadIndex);
         }
-        let absolute = component
+        let offset = self.instance_offset + index * INSTANCE_LEN;
+        reserved_zero(self.bytes, offset + 40, offset + INSTANCE_LEN)?;
+        let owner = match u32_at(self.bytes, offset + 8)? {
+            0 => {
+                if u32_at(self.bytes, offset + 12)? != 0 {
+                    return Err(DecodeError::BadOwner);
+                }
+                InstanceOwner::Root
+            }
+            1 => InstanceOwner::Instance(u32_at(self.bytes, offset + 12)? as usize),
+            _ => return Err(DecodeError::UnknownEnum),
+        };
+        Ok(Instance {
+            name: self.string(u32_at(self.bytes, offset)? as usize)?,
+            executable: u32_at(self.bytes, offset + 4)? as usize,
+            owner,
+            autostart: bool_at(self.bytes, offset + 16)?,
+            dependency_start: u32_at(self.bytes, offset + 20)? as usize,
+            dependency_count: u32_at(self.bytes, offset + 24)? as usize,
+            binding_start: u32_at(self.bytes, offset + 28)? as usize,
+            binding_count: u32_at(self.bytes, offset + 32)? as usize,
+            health: match u32_at(self.bytes, offset + 36)? {
+                0 => InstanceHealth::Optional,
+                1 => InstanceHealth::Required,
+                _ => return Err(DecodeError::UnknownEnum),
+            },
+        })
+    }
+    pub fn instance_named(&self, name: &str) -> Option<Instance<'a>> {
+        (0..self.instance_count).find_map(|i| self.instance(i).ok().filter(|v| v.name == name))
+    }
+    pub fn dependency(
+        &self,
+        instance: Instance<'a>,
+        index: usize,
+    ) -> Result<Instance<'a>, DecodeError> {
+        if index >= instance.dependency_count {
+            return Err(DecodeError::BadIndex);
+        }
+        let absolute = instance
             .dependency_start
             .checked_add(index)
             .ok_or(DecodeError::BadIndex)?;
         if absolute >= self.dependency_count {
             return Err(DecodeError::BadIndex);
         }
-        self.component(u32_at(
+        self.instance(u32_at(
             self.bytes,
             self.dependency_offset + absolute * DEPENDENCY_LEN,
         )? as usize)
+    }
+    pub fn binding(
+        &self,
+        instance: Instance<'a>,
+        index: usize,
+    ) -> Result<InstanceBinding, DecodeError> {
+        if index >= instance.binding_count {
+            return Err(DecodeError::BadIndex);
+        }
+        let absolute = instance
+            .binding_start
+            .checked_add(index)
+            .ok_or(DecodeError::BadIndex)?;
+        if absolute >= self.binding_count {
+            return Err(DecodeError::BadIndex);
+        }
+        let offset = self.binding_offset + absolute * BINDING_LEN;
+        Ok(InstanceBinding {
+            grant: u32_at(self.bytes, offset)? as usize,
+            slot: u32_at(self.bytes, offset + 4)? as usize,
+        })
+    }
+
+    pub const fn component_count(&self) -> usize {
+        0
     }
 
     pub fn grant(&self, index: usize) -> Result<Grant<'a>, DecodeError> {
@@ -338,62 +1032,43 @@ impl<'a> Generation<'a> {
             return Err(DecodeError::BadIndex);
         }
         let offset = self.grant_offset + index * GRANT_LEN;
-        // Grant record layout differs by format version: v3 carries a 64-bit
-        // rights field at +12 with `transferable` at +20; v2 carries a 32-bit
-        // rights field at +12 with `transferable` at +16. Both records are
-        // GRANT_LEN (32) bytes; the trailing bytes past `transferable` are
-        // reserved and must be zero.
-        let (rights, transferable_offset) = if self.version == FORMAT_VERSION_V2 {
-            (u64::from(u32_at(self.bytes, offset + 12)?), offset + 16)
-        } else {
-            (u64_at(self.bytes, offset + 12)?, offset + 20)
-        };
-        if self.bytes[transferable_offset + 4..offset + GRANT_LEN]
-            .iter()
-            .any(|byte| *byte != 0)
-        {
-            return Err(DecodeError::NonZeroReserved);
+        let rights = u64_at(self.bytes, offset + 12)?;
+        let flags = u32_at(self.bytes, offset + 24)?;
+        if flags & !GRANT_FLAGS_KNOWN != 0 {
+            return Err(DecodeError::UnknownRequiredFlags);
         }
+        let capability_kind = CapabilityKind::decode(u32_at(self.bytes, offset + 28)?)?;
         Ok(Grant {
             name: self.string(u32_at(self.bytes, offset)? as usize)?,
-            source: u32_at(self.bytes, offset + 4)? as usize,
-            target: u32_at(self.bytes, offset + 8)? as usize,
-            rights,
-            transferable: match u32_at(self.bytes, transferable_offset)? {
-                0 => false,
-                1 => true,
-                _ => return Err(DecodeError::UnknownEnum),
+            source: GrantEndpoint::Instance(u32_at(self.bytes, offset + 4)? as usize),
+            target: if capability_kind == CapabilityKind::Executable {
+                GrantEndpoint::Executable(u32_at(self.bytes, offset + 8)? as usize)
+            } else {
+                GrantEndpoint::Instance(u32_at(self.bytes, offset + 8)? as usize)
             },
+            rights,
+            transferable: bool_at(self.bytes, offset + 20)?,
+            capability_kind,
         })
     }
-
     pub fn grant_named(&self, name: &str) -> Option<Grant<'a>> {
-        (0..self.grant_count)
-            .find_map(|index| self.grant(index).ok().filter(|grant| grant.name == name))
+        (0..self.grant_count).find_map(|i| self.grant(i).ok().filter(|g| g.name == name))
     }
-
     pub fn authority_manifest_identity(&self) -> [u8; 32] {
         let mut hasher = Sha256::new();
         hasher.update(b"slime-authority-manifest-v1");
         for index in 0..self.grant_count {
-            let grant = self.grant(index).expect("validated generation grant");
-            let source = self
-                .component(grant.source)
-                .expect("validated grant source");
-            let target = self
-                .component(grant.target)
-                .expect("validated grant target");
+            let grant = self.grant(index).expect("validated grant");
             update_bounded_string(&mut hasher, grant.name);
-            update_bounded_string(&mut hasher, source.name);
-            update_bounded_string(&mut hasher, target.name);
-            // v2 releases hashed a 32-bit rights field; retain that width so a
-            // known-good v2 generation still matches its signed release during
-            // the rollback window. v3 hashes the full 64-bit rights value.
-            if self.version == FORMAT_VERSION_V2 {
-                hasher.update(&(grant.rights as u32).to_le_bytes());
-            } else {
-                hasher.update(&grant.rights.to_le_bytes());
-            }
+            let endpoint_name = |endpoint| match endpoint {
+                GrantEndpoint::Executable(i) => {
+                    self.executable(i).expect("validated executable").name
+                }
+                GrantEndpoint::Instance(i) => self.instance(i).expect("validated instance").name,
+            };
+            update_bounded_string(&mut hasher, endpoint_name(grant.source));
+            update_bounded_string(&mut hasher, endpoint_name(grant.target));
+            hasher.update(&grant.rights.to_le_bytes());
             hasher.update(&u32::from(grant.transferable).to_le_bytes());
         }
         hasher.finalize()
@@ -404,12 +1079,7 @@ impl<'a> Generation<'a> {
             return Err(DecodeError::BadIndex);
         }
         let offset = self.state_offset + index * STATE_LEN;
-        if self.bytes[offset + 16..offset + STATE_LEN]
-            .iter()
-            .any(|byte| *byte != 0)
-        {
-            return Err(DecodeError::NonZeroReserved);
-        }
+        reserved_zero(self.bytes, offset + 16, offset + STATE_LEN)?;
         Ok(StateBinding {
             name: self.string(u32_at(self.bytes, offset)? as usize)?,
             owner: u32_at(self.bytes, offset + 4)? as usize,
@@ -417,26 +1087,484 @@ impl<'a> Generation<'a> {
             policy: u32_at(self.bytes, offset + 12)?,
         })
     }
-
-    pub fn health_component(&self, index: usize) -> Result<Component<'a>, DecodeError> {
+    pub fn health_instance(&self, index: usize) -> Result<Instance<'a>, DecodeError> {
         if index >= self.health_count {
             return Err(DecodeError::BadIndex);
         }
-        self.component(u32_at(self.bytes, self.health_offset + index * HEALTH_LEN)? as usize)
+        self.instance(u32_at(self.bytes, self.health_offset + index * HEALTH_LEN)? as usize)
+    }
+
+    pub fn process(&self, index: usize) -> Result<Process<'a>, DecodeError> {
+        if index >= self.process_count {
+            return Err(DecodeError::BadIndex);
+        }
+        let offset = self.process_offset + index * PROCESS_LEN;
+        reserved_zero(self.bytes, offset + 28, offset + PROCESS_LEN)?;
+        Ok(Process {
+            name: self.string(u32_at(self.bytes, offset)? as usize)?,
+            instance: u32_at(self.bytes, offset + 4)? as usize,
+            cspace_object: u32_at(self.bytes, offset + 8)? as usize,
+            vspace_object: u32_at(self.bytes, offset + 12)? as usize,
+            main_thread: u32_at(self.bytes, offset + 16)? as usize,
+            quota: u32_at(self.bytes, offset + 20)? as usize,
+            flags: u32_at(self.bytes, offset + 24)?,
+        })
+    }
+    pub fn thread(&self, index: usize) -> Result<Thread<'a>, DecodeError> {
+        if index >= self.thread_count {
+            return Err(DecodeError::BadIndex);
+        }
+        let offset = self.thread_offset + index * THREAD_LEN;
+        reserved_zero(self.bytes, offset + 44, offset + THREAD_LEN)?;
+        Ok(Thread {
+            name: self.string(u32_at(self.bytes, offset)? as usize)?,
+            process: u32_at(self.bytes, offset + 4)? as usize,
+            tcb_object: u32_at(self.bytes, offset + 8)? as usize,
+            schedule: u32_at(self.bytes, offset + 12)? as usize,
+            fault_policy: u32_at(self.bytes, offset + 16)? as usize,
+            ipc_buffer_object: u32_at(self.bytes, offset + 20)? as usize,
+            ipc_buffer_vaddr: u64_at(self.bytes, offset + 24)?,
+            entry: u64_at(self.bytes, offset + 32)?,
+            flags: u32_at(self.bytes, offset + 40)?,
+        })
+    }
+    pub fn kernel_object_record(&self, index: usize) -> Result<KernelObject<'a>, DecodeError> {
+        if index >= self.kernel_object_count {
+            return Err(DecodeError::BadIndex);
+        }
+        let offset = self.kernel_object_offset + index * KERNEL_OBJECT_LEN;
+        reserved_zero(self.bytes, offset + 28, offset + KERNEL_OBJECT_LEN)?;
+        Ok(KernelObject {
+            name: self.string(u32_at(self.bytes, offset)? as usize)?,
+            kind: u32_at(self.bytes, offset + 4)?,
+            owner_process: u32_at(self.bytes, offset + 8)? as usize,
+            size_bits: u32_at(self.bytes, offset + 12)?,
+            count: u32_at(self.bytes, offset + 16)?,
+            source_object: u32_at(self.bytes, offset + 20)? as usize,
+            flags: u32_at(self.bytes, offset + 24)?,
+        })
+    }
+
+    /// CNode size in bits for the process owning `instance`, from the admitted
+    /// plan. This is the authority the generation declared the child's CSpace
+    /// must hold, so the root sizes the real CNode from it rather than from a
+    /// compiled-in constant.
+    ///
+    /// `None` when no process claims the instance, which is the fixture paths:
+    /// they construct tasks outside the plan and keep the minimum shell.
+    pub fn instance_cspace_size_bits(&self, instance: usize) -> Result<Option<u32>, DecodeError> {
+        for index in 0..self.process_count {
+            let process = self.process(index)?;
+            if process.instance != instance {
+                continue;
+            }
+            let object = self.kernel_object_record(process.cspace_object)?;
+            if object.kind != KERNEL_OBJECT_CNODE {
+                return Err(DecodeError::BadBinding);
+            }
+            return Ok(Some(object.size_bits));
+        }
+        Ok(None)
+    }
+
+    /// The scheduling priority the plan declares for an instance's initial
+    /// thread.
+    ///
+    /// `None` when no process claims the instance, which is the fixture paths:
+    /// they construct tasks outside the plan and take the root's default.
+    ///
+    /// Resolved through the plan rather than read off the instance, because
+    /// priority is a property of a *thread*: the record is already per-thread
+    /// so that a process with several can differentiate them, and reading it
+    /// from the instance would flatten that the first time one does.
+    pub fn instance_priority(&self, instance: usize) -> Result<Option<u32>, DecodeError> {
+        for index in 0..self.process_count {
+            let process = self.process(index)?;
+            if process.instance != instance {
+                continue;
+            }
+            // The process's *main* thread, not whichever thread happens to
+            // appear first in the table. They were the same while a process
+            // had exactly one thread; with B47's extra threads, scanning the
+            // thread table would return a priority belonging to some other
+            // thread of the same process, depending on record order.
+            let thread = self.thread(process.main_thread)?;
+            return Ok(Some(self.schedule(thread.schedule)?.priority));
+        }
+        Ok(None)
+    }
+
+    /// The priority the plan declares for thread `thread_index` of
+    /// `instance`, counting from zero for the main thread (B48).
+    ///
+    /// Per thread, not per instance: the `ScheduleRecord` is already
+    /// per-thread, so a process can run its worker below its main thread —
+    /// which is what lets one component hold a busy low-priority thread while
+    /// its own IPC stays responsive.
+    ///
+    /// `None` when no process claims the instance or it declares no such
+    /// thread.
+    pub fn thread_priority(
+        &self,
+        instance: usize,
+        thread_index: usize,
+    ) -> Result<Option<u32>, DecodeError> {
+        for index in 0..self.process_count {
+            let process = self.process(index)?;
+            if process.instance != instance {
+                continue;
+            }
+            // The main thread is whichever the process names; the rest follow
+            // in table order, which is the order the builder emits them and
+            // the order the root constructs them.
+            if thread_index == 0 {
+                let thread = self.thread(process.main_thread)?;
+                return Ok(Some(self.schedule(thread.schedule)?.priority));
+            }
+            let mut seen = 0;
+            for candidate in 0..self.thread_count {
+                let thread = self.thread(candidate)?;
+                if thread.process != index || candidate == process.main_thread {
+                    continue;
+                }
+                seen += 1;
+                if seen == thread_index {
+                    return Ok(Some(self.schedule(thread.schedule)?.priority));
+                }
+            }
+            return Ok(None);
+        }
+        Ok(None)
+    }
+
+    /// How many threads the plan declares for `instance` (B47).
+    ///
+    /// Counted from the thread table rather than read from a field, because
+    /// the thread records are what the root must construct: a count that
+    /// disagreed with them would build a TCB with no schedule or leave a
+    /// declared thread unbuilt.
+    ///
+    /// `None` when no process claims the instance.
+    pub fn instance_threads(&self, instance: usize) -> Result<Option<usize>, DecodeError> {
+        let mut found = None;
+        for index in 0..self.process_count {
+            let process = self.process(index)?;
+            if process.instance != instance {
+                continue;
+            }
+            let mut threads = 0;
+            for thread_index in 0..self.thread_count {
+                if self.thread(thread_index)?.process == index {
+                    threads += 1;
+                }
+            }
+            found = Some(threads);
+            break;
+        }
+        Ok(found)
+    }
+
+    /// The CSpace slots the plan declares for a child's own TCB and fault
+    /// endpoint. Classified by the bound object's kind rather than its name,
+    /// so a renamed object still resolves.
+    ///
+    /// `None` when no process claims the instance.
+    pub fn instance_child_slots(
+        &self,
+        instance: usize,
+    ) -> Result<Option<ChildSlotPlan>, DecodeError> {
+        let mut found = None;
+        for index in 0..self.process_count {
+            if self.process(index)?.instance == instance {
+                found = Some(index);
+                break;
+            }
+        }
+        let Some(process_index) = found else {
+            return Ok(None);
+        };
+        let (mut tcb, mut fault) = (None, None);
+        for index in 0..self.cap_binding_count {
+            let binding = self.cap_binding(index)?;
+            if binding.process != process_index {
+                continue;
+            }
+            // Only the process's own bindings name a slot the root installs.
+            // A grant-derived binding carries its grant index and is filled by
+            // whoever holds the authority, against a placeholder object whose
+            // kind says nothing about what lands there.
+            if binding.grant != PLAN_NONE {
+                continue;
+            }
+            let object = self.kernel_object_record(binding.object)?;
+            let target = match object.kind {
+                KERNEL_OBJECT_TCB => &mut tcb,
+                KERNEL_OBJECT_ENDPOINT => &mut fault,
+                _ => continue,
+            };
+            // Two bindings of one kind would leave the installed slot
+            // ambiguous, so the plan is refused rather than guessed at.
+            if target.is_some() {
+                return Err(DecodeError::BadBinding);
+            }
+            *target = Some(binding.slot);
+        }
+        // The root service endpoint is declared as a service binding rather
+        // than a cap binding, because it is the child's route to the root
+        // rather than an object the child owns.
+        let mut service = None;
+        for index in 0..self.service_binding_count {
+            let binding = self.service_binding(index)?;
+            if binding.process != process_index || binding.service != SERVICE_LIFECYCLE {
+                continue;
+            }
+            if service.is_some() {
+                return Err(DecodeError::BadBinding);
+            }
+            service = Some(binding.slot);
+        }
+        let mut console = None;
+        for index in 0..self.service_binding_count {
+            let binding = self.service_binding(index)?;
+            if binding.process != process_index || binding.service != SERVICE_CONSOLE {
+                continue;
+            }
+            if console.is_some() {
+                return Err(DecodeError::BadBinding);
+            }
+            // Write-only, enforced here as well as in the host twin: a console
+            // client that could receive would dequeue another process's output
+            // before the console dispatcher saw it.
+            if binding.rights & 0b10 != 0 {
+                return Err(DecodeError::BadBinding);
+            }
+            console = Some(binding.slot);
+        }
+        Ok(Some(ChildSlotPlan {
+            service,
+            console,
+            tcb,
+            fault,
+        }))
+    }
+    pub fn mapping(&self, index: usize) -> Result<Mapping, DecodeError> {
+        if index >= self.mapping_count {
+            return Err(DecodeError::BadIndex);
+        }
+        let offset = self.mapping_offset + index * MAPPING_LEN;
+        reserved_zero(self.bytes, offset + 44, offset + MAPPING_LEN)?;
+        Ok(Mapping {
+            process: u32_at(self.bytes, offset)? as usize,
+            object: u32_at(self.bytes, offset + 4)? as usize,
+            virtual_address: u64_at(self.bytes, offset + 8)?,
+            page_count: u32_at(self.bytes, offset + 16)?,
+            rights: u64_at(self.bytes, offset + 20)?,
+            attributes: u64_at(self.bytes, offset + 28)?,
+            source_object: u32_at(self.bytes, offset + 36)? as usize,
+            flags: u32_at(self.bytes, offset + 40)?,
+        })
+    }
+    pub fn cap_binding(&self, index: usize) -> Result<CapBinding, DecodeError> {
+        if index >= self.cap_binding_count {
+            return Err(DecodeError::BadIndex);
+        }
+        let offset = self.cap_binding_offset + index * CAP_BINDING_LEN;
+        reserved_zero(self.bytes, offset + 36, offset + CAP_BINDING_LEN)?;
+        Ok(CapBinding {
+            process: u32_at(self.bytes, offset)? as usize,
+            slot: u32_at(self.bytes, offset + 4)? as usize,
+            object: u32_at(self.bytes, offset + 8)? as usize,
+            rights: u64_at(self.bytes, offset + 12)?,
+            badge: u64_at(self.bytes, offset + 20)?,
+            grant: u32_at(self.bytes, offset + 28)? as usize,
+            flags: u32_at(self.bytes, offset + 32)?,
+        })
+    }
+    /// Whether `instance` is authorized to invoke one typed root mechanism.
+    ///
+    /// Service bindings that share child slot 1 are declarations, not extra
+    /// CSpace installs. The root uses this lookup after resolving the caller's
+    /// badged task, so holding lifecycle transport never grants another
+    /// mechanism implicitly.
+    pub fn instance_has_service(&self, instance: usize, service: u32) -> Result<bool, DecodeError> {
+        let mut process_index = None;
+        for index in 0..self.process_count {
+            if self.process(index)?.instance == instance {
+                if process_index.is_some() {
+                    return Err(DecodeError::BadBinding);
+                }
+                process_index = Some(index);
+            }
+        }
+        let Some(process_index) = process_index else {
+            return Ok(false);
+        };
+        for index in 0..self.service_binding_count {
+            let binding = self.service_binding(index)?;
+            if binding.process == process_index && binding.service == service {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+    pub fn service_binding(&self, index: usize) -> Result<ServiceBinding, DecodeError> {
+        if index >= self.service_binding_count {
+            return Err(DecodeError::BadIndex);
+        }
+        let offset = self.service_binding_offset + index * SERVICE_BINDING_LEN;
+        reserved_zero(self.bytes, offset + 36, offset + SERVICE_BINDING_LEN)?;
+        Ok(ServiceBinding {
+            process: u32_at(self.bytes, offset)? as usize,
+            service: u32_at(self.bytes, offset + 4)?,
+            slot: u32_at(self.bytes, offset + 8)? as usize,
+            object: u32_at(self.bytes, offset + 12)? as usize,
+            rights: u64_at(self.bytes, offset + 16)?,
+            badge: u64_at(self.bytes, offset + 24)?,
+            flags: u32_at(self.bytes, offset + 32)?,
+        })
+    }
+    pub fn schedule(&self, index: usize) -> Result<Schedule<'a>, DecodeError> {
+        if index >= self.schedule_count {
+            return Err(DecodeError::BadIndex);
+        }
+        let offset = self.schedule_offset + index * SCHEDULE_LEN;
+        reserved_zero(self.bytes, offset + 40, offset + SCHEDULE_LEN)?;
+        Ok(Schedule {
+            name: self.string(u32_at(self.bytes, offset)? as usize)?,
+            thread: u32_at(self.bytes, offset + 4)? as usize,
+            authority_process: u32_at(self.bytes, offset + 8)? as usize,
+            priority: u32_at(self.bytes, offset + 12)?,
+            max_controlled_priority: u32_at(self.bytes, offset + 16)?,
+            budget_us: u64_at(self.bytes, offset + 20)?,
+            period_us: u64_at(self.bytes, offset + 28)?,
+            flags: u32_at(self.bytes, offset + 36)?,
+        })
+    }
+    pub fn fault_policy(&self, index: usize) -> Result<FaultPolicy<'a>, DecodeError> {
+        if index >= self.fault_policy_count {
+            return Err(DecodeError::BadIndex);
+        }
+        let offset = self.fault_policy_offset + index * FAULT_POLICY_LEN;
+        reserved_zero(self.bytes, offset + 28, offset + FAULT_POLICY_LEN)?;
+        Ok(FaultPolicy {
+            name: self.string(u32_at(self.bytes, offset)? as usize)?,
+            thread: u32_at(self.bytes, offset + 4)? as usize,
+            handler_process: u32_at(self.bytes, offset + 8)? as usize,
+            endpoint_object: u32_at(self.bytes, offset + 12)? as usize,
+            badge: u64_at(self.bytes, offset + 16)?,
+            action: u32_at(self.bytes, offset + 24)?,
+        })
+    }
+    pub fn spawn_template(&self, index: usize) -> Result<SpawnTemplate<'a>, DecodeError> {
+        if index >= self.spawn_template_count {
+            return Err(DecodeError::BadIndex);
+        }
+        let offset = self.spawn_template_offset + index * SPAWN_TEMPLATE_LEN;
+        Ok(SpawnTemplate {
+            name: self.string(u32_at(self.bytes, offset)? as usize)?,
+            executable: u32_at(self.bytes, offset + 4)? as usize,
+            owner_process: u32_at(self.bytes, offset + 8)? as usize,
+            quota: u32_at(self.bytes, offset + 12)? as usize,
+            schedule: u32_at(self.bytes, offset + 16)? as usize,
+            fault_policy: u32_at(self.bytes, offset + 20)? as usize,
+            max_instances: u32_at(self.bytes, offset + 24)?,
+            flags: u32_at(self.bytes, offset + 28)?,
+        })
+    }
+    pub fn resource_quota(&self, index: usize) -> Result<ResourceQuota<'a>, DecodeError> {
+        if index >= self.resource_quota_count {
+            return Err(DecodeError::BadIndex);
+        }
+        let offset = self.resource_quota_offset + index * RESOURCE_QUOTA_LEN;
+        Ok(ResourceQuota {
+            name: self.string(u32_at(self.bytes, offset)? as usize)?,
+            owner_process: u32_at(self.bytes, offset + 4)? as usize,
+            cnode_count: u32_at(self.bytes, offset + 8)?,
+            tcb_count: u32_at(self.bytes, offset + 12)?,
+            endpoint_count: u32_at(self.bytes, offset + 16)?,
+            notification_count: u32_at(self.bytes, offset + 20)?,
+            frame_count: u32_at(self.bytes, offset + 24)?,
+            page_table_count: u32_at(self.bytes, offset + 28)?,
+            mapping_count: u32_at(self.bytes, offset + 32)?,
+            irq_count: u32_at(self.bytes, offset + 36)?,
+            cslot_count: u32_at(self.bytes, offset + 40)?,
+            untyped_bytes: u64_at(self.bytes, offset + 44)?,
+            dynamic_reserve_bytes: u64_at(self.bytes, offset + 52)?,
+            flags: u32_at(self.bytes, offset + 60)?,
+        })
+    }
+    /// One capability the generation authorizes `holder` to receive at spawn,
+    /// minted at runtime by `owner`. The edge is named and the rights ceiling
+    /// exact; only the object identity is deferred, because the endpoint does
+    /// not exist until its owner mints it.
+    pub fn minted_binding(&self, index: usize) -> Result<MintedBinding<'a>, DecodeError> {
+        if index >= self.minted_binding_count {
+            return Err(DecodeError::BadIndex);
+        }
+        let offset = self.minted_binding_offset + index * MINTED_BINDING_LEN;
+        Ok(MintedBinding {
+            name: self.string(u32_at(self.bytes, offset)? as usize)?,
+            owner: u32_at(self.bytes, offset + 4)? as usize,
+            holder: u32_at(self.bytes, offset + 8)? as usize,
+            slot: u32_at(self.bytes, offset + 12)? as usize,
+            rights: u64_at(self.bytes, offset + 16)?,
+            flags: u32_at(self.bytes, offset + 24)?,
+            capability_kind: CapabilityKind::decode(u32_at(self.bytes, offset + 28)?)?,
+        })
+    }
+
+    /// The minted binding authorizing `holder` to receive a capability at
+    pub fn minted_binding_for(&self, holder: usize, slot: usize) -> Option<MintedBinding<'a>> {
+        (0..self.minted_binding_count).find_map(|index| {
+            self.minted_binding(index)
+                .ok()
+                .filter(|binding| binding.holder == holder && binding.slot == slot)
+        })
+    }
+
+    pub const fn minted_binding_count(&self) -> usize {
+        self.minted_binding_count
+    }
+    pub fn notification_grant(&self, index: usize) -> Result<NotificationGrant<'a>, DecodeError> {
+        if index >= self.notification_grant_count {
+            return Err(DecodeError::BadIndex);
+        }
+        let offset = self.notification_grant_offset + index * NOTIFICATION_GRANT_LEN;
+        reserved_zero(self.bytes, offset + 20, offset + NOTIFICATION_GRANT_LEN)?;
+        Ok(NotificationGrant {
+            name: self.string(u32_at(self.bytes, offset)? as usize)?,
+            source: u32_at(self.bytes, offset + 4)? as usize,
+            target: u32_at(self.bytes, offset + 8)? as usize,
+            object: u32_at(self.bytes, offset + 12)? as usize,
+            flags: u32_at(self.bytes, offset + 16)?,
+        })
+    }
+
+    pub fn notification_binding(&self, index: usize) -> Result<NotificationBinding, DecodeError> {
+        if index >= self.notification_binding_count {
+            return Err(DecodeError::BadIndex);
+        }
+        let offset = self.notification_binding_offset + index * NOTIFICATION_BINDING_LEN;
+        reserved_zero(self.bytes, offset + 20, offset + NOTIFICATION_BINDING_LEN)?;
+        Ok(NotificationBinding {
+            grant: u32_at(self.bytes, offset)? as usize,
+            holder: u32_at(self.bytes, offset + 4)? as usize,
+            slot: u32_at(self.bytes, offset + 8)? as usize,
+            role: match u32_at(self.bytes, offset + 12)? {
+                1 => NotificationRole::Signal,
+                2 => NotificationRole::Wait,
+                _ => return Err(DecodeError::UnknownEnum),
+            },
+            flags: u32_at(self.bytes, offset + 16)?,
+        })
     }
 
     fn string(&self, offset: usize) -> Result<&'a str, DecodeError> {
-        let string_len = (u64_at(self.bytes, 200)? as usize)
-            .checked_sub(self.string_offset)
-            .ok_or(DecodeError::BadBounds)?;
-        read_string(self.bytes, self.string_offset, string_len, offset)
+        read_string(self.bytes, self.string_offset, self.string_len, offset)
     }
 
-    fn validate(&self, payload_offset: usize, _string_len: usize) -> Result<(), DecodeError> {
-        if self.kernel_object >= self.object_count || self.bootstrap >= self.component_count {
-            return Err(DecodeError::BadIndex);
-        }
-        let mut previous_id: Option<&str> = None;
+    fn validate(&self, payload_offset: usize) -> Result<(), DecodeError> {
+        let mut previous_id = None;
         let mut previous_payload_end = payload_offset;
         for index in 0..self.object_count {
             let object = self.object(index)?;
@@ -449,8 +1577,7 @@ impl<'a> Generation<'a> {
             if previous_id.is_some_and(|previous| previous >= object.id) {
                 return Err(DecodeError::BadOrder);
             }
-            let record = self.object_offset + index * OBJECT_LEN;
-            let start = u64_at(self.bytes, record + 8)? as usize;
+            let start = u64_at(self.bytes, self.object_offset + index * OBJECT_LEN + 8)? as usize;
             if start != previous_payload_end {
                 return Err(DecodeError::BadBounds);
             }
@@ -467,64 +1594,189 @@ impl<'a> Generation<'a> {
         if previous_payload_end != self.bytes.len() {
             return Err(DecodeError::BadBounds);
         }
-        if self.object(self.kernel_object)?.kind != KIND_KERNEL {
-            return Err(DecodeError::BadKernel);
+        if self.boot_attempts == 0 {
+            return Err(DecodeError::BadHealth);
         }
-        let mut previous_name: Option<&str> = None;
-        for index in 0..self.component_count {
-            let component = self.component(index)?;
-            if component.object >= self.object_count
-                || !matches!(component.role, 1..=4)
-                || component.spawn_budget > MAX_SPAWN_BUDGET
+        self.validate_catalogue()?;
+        self.validate_plan()
+    }
+
+    fn validate_catalogue(&self) -> Result<(), DecodeError> {
+        let mut previous_name = None;
+        for index in 0..self.executable_count {
+            let executable = self.executable(index)?;
+            if executable.object >= self.object_count
+                || !matches!(executable.role, 1..=4)
+                || executable.spawn_budget > MAX_SPAWN_BUDGET
             {
                 return Err(DecodeError::BadIndex);
             }
-            if previous_name.is_some_and(|previous| previous >= component.name) {
+            if previous_name.is_some_and(|previous| previous >= executable.name) {
                 return Err(DecodeError::BadOrder);
             }
-            if component
-                .dependency_start
-                .checked_add(component.dependency_count)
-                .is_none_or(|end| end > self.dependency_count)
+            previous_name = Some(executable.name);
+        }
+        previous_name = None;
+        let mut expected_dependency_start = 0;
+        let mut expected_binding_start = 0;
+        for index in 0..self.instance_count {
+            let instance = self.instance(index)?;
+            if instance.executable >= self.executable_count {
+                return Err(DecodeError::BadIndex);
+            }
+            if previous_name.is_some_and(|previous| previous >= instance.name) {
+                return Err(DecodeError::BadOrder);
+            }
+            if matches!(instance.owner, InstanceOwner::Instance(owner) if owner >= self.instance_count || owner == index)
             {
-                return Err(DecodeError::BadDependency);
+                return Err(DecodeError::BadOwner);
+            }
+            if instance.dependency_start != expected_dependency_start
+                || instance.binding_start != expected_binding_start
+                || instance
+                    .dependency_start
+                    .checked_add(instance.dependency_count)
+                    .is_none_or(|end| end > self.dependency_count)
+                || instance
+                    .binding_start
+                    .checked_add(instance.binding_count)
+                    .is_none_or(|end| end > self.binding_count)
+            {
+                return Err(DecodeError::BadBounds);
+            }
+            expected_dependency_start += instance.dependency_count;
+            expected_binding_start += instance.binding_count;
+            if instance.health == InstanceHealth::Required
+                && matches!(instance.owner, InstanceOwner::Instance(owner) if self.instance(owner)?.health != InstanceHealth::Required)
+            {
+                return Err(DecodeError::BadHealth);
             }
             let mut previous_dependency = None;
-            for dependency_index in 0..component.dependency_count {
-                let dependency = self.dependency(component, dependency_index)?;
-                let dep_index = self
-                    .component_index(dependency.name)
+            for at in 0..instance.dependency_count {
+                let dependency = self.dependency(instance, at)?;
+                let dependency_index = self
+                    .instance_index(dependency.name)
                     .ok_or(DecodeError::BadDependency)?;
-                if dep_index == index
-                    || previous_dependency.is_some_and(|previous| previous >= dep_index)
+                if dependency_index == index
+                    || previous_dependency.is_some_and(|previous| previous >= dependency_index)
                 {
                     return Err(DecodeError::BadDependency);
                 }
-                previous_dependency = Some(dep_index);
+                if instance.is_root_autostart() && !dependency.is_root_autostart() {
+                    return Err(DecodeError::BadDependency);
+                }
+                if instance.health == InstanceHealth::Required
+                    && dependency.health != InstanceHealth::Required
+                {
+                    return Err(DecodeError::BadHealth);
+                }
+                previous_dependency = Some(dependency_index);
             }
-            previous_name = Some(component.name);
+            let mut previous_slot = None;
+            for at in 0..instance.binding_count {
+                let binding = self.binding(instance, at)?;
+                if binding.grant >= self.grant_count
+                    || binding.slot >= MAX_TASK_CAPS
+                    || previous_slot.is_some_and(|previous| previous >= binding.slot)
+                {
+                    return Err(DecodeError::BadBinding);
+                }
+                if !self.grant_applies_to_instance(self.grant(binding.grant)?, index) {
+                    return Err(DecodeError::BadBinding);
+                }
+                previous_slot = Some(binding.slot);
+            }
+            for grant_index in 0..self.grant_count {
+                if self.grant_requires_instance_binding(self.grant(grant_index)?, index) {
+                    let mut found = 0;
+                    for at in 0..instance.binding_count {
+                        found += usize::from(self.binding(instance, at)?.grant == grant_index);
+                    }
+                    if found != 1 {
+                        return Err(DecodeError::BadBinding);
+                    }
+                }
+            }
+            previous_name = Some(instance.name);
         }
-        let bootstrap = self.component(self.bootstrap)?;
-        if bootstrap.role != ROLE_INIT || self.object(bootstrap.object)?.kind != KIND_BOOTSTRAP {
+        validate_acyclic(
+            self.instance_count,
+            |node, edge| {
+                let instance = self.instance(node)?;
+                if edge >= instance.dependency_count {
+                    return Ok(None);
+                }
+                let dependency = self.dependency(instance, edge)?;
+                self.instance_index(dependency.name)
+                    .map(Some)
+                    .ok_or(DecodeError::BadDependency)
+            },
+            DecodeError::BadDependency,
+        )?;
+        validate_acyclic(
+            self.instance_count,
+            |node, edge| {
+                if edge != 0 {
+                    return Ok(None);
+                }
+                Ok(match self.instance(node)?.owner {
+                    InstanceOwner::Root => None,
+                    InstanceOwner::Instance(owner) => Some(owner),
+                })
+            },
+            DecodeError::BadOwner,
+        )?;
+        for index in 0..self.instance_count {
+            let instance = self.instance(index)?;
+            if instance.autostart
+                && let InstanceOwner::Instance(owner) = instance.owner
+                && !self.instance(owner)?.autostart
+            {
+                return Err(DecodeError::BadOwner);
+            }
+        }
+        if expected_dependency_start != self.dependency_count
+            || expected_binding_start != self.binding_count
+        {
+            return Err(DecodeError::BadBounds);
+        }
+        if self.bootstrap_instance >= self.instance_count {
             return Err(DecodeError::BadBootstrap);
         }
-        let rights_mask = if self.version == FORMAT_VERSION_V2 {
-            RIGHT_ALL_V2
-        } else {
-            RIGHT_ALL
-        };
-        let mut previous_grant: Option<(&str, usize, usize)> = None;
+        let bootstrap = self.instance(self.bootstrap_instance)?;
+        let executable = self.executable(bootstrap.executable)?;
+        if !bootstrap.is_root_autostart()
+            || executable.role != ROLE_INIT
+            || self.object(executable.object)?.kind != KIND_BOOTSTRAP
+        {
+            return Err(DecodeError::BadBootstrap);
+        }
+        self.validate_grants_states_health()
+    }
+
+    fn validate_grants_states_health(&self) -> Result<(), DecodeError> {
+        let mut previous_grant = None;
         for index in 0..self.grant_count {
             let grant = self.grant(index)?;
-            if grant.source >= self.component_count
-                || grant.target >= self.component_count
+            let valid_endpoint = |endpoint| match endpoint {
+                GrantEndpoint::Executable(i) => i < self.executable_count,
+                GrantEndpoint::Instance(i) => i < self.instance_count,
+            };
+            if !valid_endpoint(grant.source)
+                || !valid_endpoint(grant.target)
+                || !matches!(grant.source, GrantEndpoint::Instance(_))
                 || grant.rights == 0
-                || grant.rights & !rights_mask != 0
+                || grant.rights & !RIGHT_ALL != 0
                 || (grant.rights & RIGHT_TRANSFER != 0) != grant.transferable
+                || !capability_rights_valid(grant.capability_kind, grant.rights)
             {
                 return Err(DecodeError::BadIndex);
             }
-            let key = (grant.name, grant.source, grant.target);
+            let key = (
+                grant.name,
+                endpoint_key(grant.source),
+                endpoint_key(grant.target),
+            );
             if previous_grant.is_some_and(|previous| previous >= key) {
                 return Err(DecodeError::BadOrder);
             }
@@ -533,7 +1785,7 @@ impl<'a> Generation<'a> {
         let mut previous_state = None;
         for index in 0..self.state_count {
             let state = self.state(index)?;
-            if state.owner >= self.component_count
+            if state.owner >= self.instance_count
                 || state.schema_version == 0
                 || !matches!(
                     state.policy,
@@ -551,36 +1803,569 @@ impl<'a> Generation<'a> {
             }
             previous_state = Some(state.name);
         }
-        if self.boot_attempts == 0 {
+        let mut previous_health = None;
+        let mut required = 0;
+        for index in 0..self.instance_count {
+            required += usize::from(self.instance(index)?.health == InstanceHealth::Required);
+        }
+        if required != self.health_count {
             return Err(DecodeError::BadHealth);
         }
-        let mut previous_health = None;
         for index in 0..self.health_count {
-            let component = self.health_component(index)?;
-            let component_index = self
-                .component_index(component.name)
+            let instance = self.health_instance(index)?;
+            let instance_index = self
+                .instance_index(instance.name)
                 .ok_or(DecodeError::BadHealth)?;
-            if previous_health.is_some_and(|previous| previous >= component_index) {
+            if instance.health != InstanceHealth::Required
+                || previous_health.is_some_and(|previous| previous >= instance_index)
+            {
                 return Err(DecodeError::BadHealth);
             }
-            previous_health = Some(component_index);
+            previous_health = Some(instance_index);
         }
         Ok(())
     }
 
-    fn component_index(&self, name: &str) -> Option<usize> {
-        (0..self.component_count).find(|index| {
-            self.component(*index)
-                .is_ok_and(|component| component.name == name)
-        })
+    fn validate_plan(&self) -> Result<(), DecodeError> {
+        // A quota is per *process*; a schedule and a fault policy are per
+        // *thread*. Those were the same count while every process had exactly
+        // one thread, and requiring them equal is what made the v5 split
+        // exist in the format and nowhere else (B47).
+        //
+        // Threads are still bounded: every process must have at least one, no
+        // thread may name a process that does not exist, and each schedule and
+        // fault policy is reached through the thread that names it — checked
+        // per record below.
+        if self.process_count > self.thread_count
+            || self.thread_count != self.schedule_count
+            || self.thread_count != self.fault_policy_count
+            || self.process_count != self.resource_quota_count
+        {
+            return Err(DecodeError::BadBounds);
+        }
+        let mut seen_instances = [false; MAX_INSTANCES];
+        for index in 0..self.process_count {
+            let process = self.process(index)?;
+            if process.instance >= self.instance_count
+                || process.cspace_object >= self.kernel_object_count
+                || process.vspace_object >= self.kernel_object_count
+                || process.main_thread >= self.thread_count
+                || process.quota >= self.resource_quota_count
+                || process.flags != 0
+                || seen_instances[process.instance]
+            {
+                return Err(DecodeError::BadIndex);
+            }
+            let instance = self.instance(process.instance)?;
+            if process.name != instance.name {
+                return Err(DecodeError::BadIndex);
+            }
+            seen_instances[process.instance] = true;
+            if self.kernel_object_record(process.cspace_object)?.kind != 1
+                || self.kernel_object_record(process.vspace_object)?.kind != 2
+            {
+                return Err(DecodeError::BadKernel);
+            }
+        }
+        if seen_instances
+            .iter()
+            .take(self.instance_count)
+            .any(|seen| !*seen)
+        {
+            return Err(DecodeError::BadIndex);
+        }
+        for index in 0..self.thread_count {
+            let thread = self.thread(index)?;
+            if thread.process >= self.process_count
+                || thread.tcb_object >= self.kernel_object_count
+                || thread.schedule >= self.schedule_count
+                || thread.fault_policy >= self.fault_policy_count
+                || thread.ipc_buffer_object >= self.kernel_object_count
+                || thread.flags != 0
+            {
+                return Err(DecodeError::BadIndex);
+            }
+            // Its objects are the right kinds, and it belongs to a process
+            // that agrees it exists. The check used to be
+            // `main_thread != index`, which required *every* thread to be its
+            // process's main one — the same one-thread-per-process assumption
+            // `validate_plan`'s count equality carried (B47).
+            if self.kernel_object_record(thread.tcb_object)?.kind != 3
+                || self.kernel_object_record(thread.ipc_buffer_object)?.kind != 4
+                || self.kernel_object_record(thread.tcb_object)?.owner_process != thread.process
+            {
+                return Err(DecodeError::BadKernel);
+            }
+        }
+        // Every process's declared main thread is a real thread of that
+        // process. Checked here rather than in the loop above, which walks
+        // threads and so cannot see a process whose `main_thread` names one
+        // belonging to someone else.
+        for index in 0..self.process_count {
+            let main = self.process(index)?.main_thread;
+            if main >= self.thread_count || self.thread(main)?.process != index {
+                return Err(DecodeError::BadKernel);
+            }
+        }
+        for index in 0..self.kernel_object_count {
+            let object = self.kernel_object_record(index)?;
+            if object.owner_process >= self.process_count
+                || !matches!(object.kind, 1..=KERNEL_OBJECT_NOTIFICATION)
+                || object.count == 0
+                || object.flags != 0
+                || (object.source_object != PLAN_NONE && object.source_object >= self.object_count)
+            {
+                return Err(DecodeError::BadKernel);
+            }
+        }
+        for index in 0..self.mapping_count {
+            let mapping = self.mapping(index)?;
+            if mapping.process >= self.process_count
+                || mapping.object >= self.kernel_object_count
+                || mapping.page_count == 0
+                || mapping.rights == 0
+                || mapping.rights & !RIGHT_ALL != 0
+                || mapping.flags != 0
+                || (mapping.source_object != PLAN_NONE
+                    && mapping.source_object >= self.object_count)
+            {
+                return Err(DecodeError::BadIndex);
+            }
+        }
+        let mut materialized = [0u8; MAX_GRANTS];
+        for index in 0..self.cap_binding_count {
+            let binding = self.cap_binding(index)?;
+            if binding.process >= self.process_count
+                || binding.slot >= MAX_TASK_CAPS
+                || binding.object >= self.kernel_object_count
+                || binding.rights == 0
+                || binding.flags & !GRANT_POLICY_ONLY != 0
+                || (binding.grant != PLAN_NONE && binding.grant >= self.grant_count)
+            {
+                return Err(DecodeError::BadBinding);
+            }
+            if binding.grant != PLAN_NONE {
+                if binding.flags & GRANT_POLICY_ONLY == 0 {
+                    materialized[binding.grant] = materialized[binding.grant].saturating_add(1);
+                }
+                let grant = self.grant(binding.grant)?;
+                if binding.rights != grant.rights {
+                    return Err(DecodeError::BadBinding);
+                }
+            }
+        }
+        for (index, count) in materialized.iter().enumerate().take(self.grant_count) {
+            let grant = self.grant(index)?;
+            // Every declared grant names a concrete object the plan carries a
+            // capability for. A `minted` grant used to be the exception —
+            // object identity deferred to a runtime minter — which the native
+            // cutover made impossible for the only kind that used it (B50).
+            let policy_only = (0..self.cap_binding_count).any(|binding| {
+                self.cap_binding(binding).is_ok_and(|binding| {
+                    binding.grant == index && binding.flags & GRANT_POLICY_ONLY != 0
+                })
+            });
+            if usize::from(*count) + usize::from(policy_only) != 1 {
+                return Err(DecodeError::BadBinding);
+            }
+            if policy_only
+                && matches!(
+                    grant.capability_kind,
+                    CapabilityKind::Executable | CapabilityKind::Endpoint
+                )
+            {
+                return Err(DecodeError::BadBinding);
+            }
+        }
+        let mut seen_services = [[false; 10]; MAX_PROCESSES];
+        for index in 0..self.service_binding_count {
+            let binding = self.service_binding(index)?;
+            let object_kind = if binding.object < self.kernel_object_count {
+                self.kernel_object_record(binding.object)?.kind
+            } else {
+                0
+            };
+            let known = matches!(
+                binding.service,
+                SERVICE_LIFECYCLE
+                    | SERVICE_SPAWN
+                    | SERVICE_SUPERVISION
+                    | SERVICE_CAPABILITY_TRANSFER
+                    | SERVICE_SHARED_BUFFER
+                    | SERVICE_DIRECTORY
+                    | SERVICE_INPUT
+                    | SERVICE_BLOCK
+                    | SERVICE_CONSOLE
+            );
+            let expected_slot = if binding.service == SERVICE_CONSOLE {
+                CONSOLE_SERVICE_SLOT
+            } else {
+                ROOT_SERVICE_SLOT
+            };
+            if binding.process >= self.process_count
+                || binding.slot != expected_slot
+                || object_kind != KERNEL_OBJECT_ENDPOINT
+                || binding.rights != SERVICE_SEND_RIGHT
+                || binding.badge == 0
+                || binding.flags != 0
+                || !known
+                || (known && seen_services[binding.process][binding.service as usize])
+            {
+                return Err(DecodeError::BadBinding);
+            }
+            seen_services[binding.process][binding.service as usize] = true;
+        }
+        for (process_index, seen) in seen_services.iter().enumerate().take(self.process_count) {
+            let process = self.process(process_index)?;
+            let instance = self.instance(process.instance)?;
+            let executable = self.executable(instance.executable)?;
+            let mut required = [false; 10];
+            required[SERVICE_LIFECYCLE as usize] = true;
+            required[SERVICE_CONSOLE as usize] = true;
+            let holder_identity = shared_buffer_budget::holder_identity(instance.name);
+            let budgeted_for_shared_buffer = (0..self.object_count).any(|object_index| {
+                self.object(object_index).is_ok_and(|object| {
+                    object.kind == KIND_RESOURCE
+                        && object.bytes.starts_with(&shared_buffer_budget::MAGIC)
+                        && SharedBufferBudget::decode(object.bytes)
+                            .ok()
+                            .and_then(|budget| budget.quota_for(&holder_identity))
+                            .is_some()
+                })
+            });
+            if budgeted_for_shared_buffer {
+                required[SERVICE_SHARED_BUFFER as usize] = true;
+            }
+            if executable.role == ROLE_INIT || executable.spawn_budget != 0 {
+                // Spawn returns a supervision capability, so declaring spawn
+                // also declares the narrow table service needed to drop it.
+                required[SERVICE_SPAWN as usize] = true;
+                required[SERVICE_SUPERVISION as usize] = true;
+                required[SERVICE_CAPABILITY_TRANSFER as usize] = true;
+            }
+            for binding_index in 0..instance.binding_count() {
+                let binding = self.binding(instance, binding_index)?;
+                let grant = self.grant(binding.grant)?;
+                if let Some(service) = service_for_capability(grant.capability_kind) {
+                    required[service as usize] = true;
+                }
+                if grant.capability_kind == CapabilityKind::Executable {
+                    required[SERVICE_SPAWN as usize] = true;
+                }
+                if grant.capability_kind == CapabilityKind::Endpoint || grant.transferable {
+                    required[SERVICE_CAPABILITY_TRANSFER as usize] = true;
+                }
+            }
+            for binding_index in 0..self.minted_binding_count {
+                let binding = self.minted_binding(binding_index)?;
+                if binding.holder != process.instance {
+                    continue;
+                }
+                if let Some(service) = service_for_capability(binding.capability_kind) {
+                    required[service as usize] = true;
+                }
+                if binding.capability_kind == CapabilityKind::Executable {
+                    required[SERVICE_SPAWN as usize] = true;
+                }
+                if binding.capability_kind == CapabilityKind::Endpoint
+                    || binding.rights & RIGHT_TRANSFER != 0
+                {
+                    required[SERVICE_CAPABILITY_TRANSFER as usize] = true;
+                }
+            }
+            if required != *seen {
+                return Err(DecodeError::BadBinding);
+            }
+        }
+        for index in 0..self.schedule_count {
+            let schedule = self.schedule(index)?;
+            if schedule.thread >= self.thread_count
+                || (schedule.authority_process != PLAN_NONE
+                    && schedule.authority_process >= self.process_count)
+                || schedule.priority > schedule.max_controlled_priority
+                || schedule.flags != 0
+                || self.thread(schedule.thread)?.schedule != index
+            {
+                return Err(DecodeError::BadIndex);
+            }
+        }
+        for index in 0..self.fault_policy_count {
+            let fault = self.fault_policy(index)?;
+            if fault.thread >= self.thread_count
+                || (fault.handler_process != PLAN_NONE
+                    && fault.handler_process >= self.process_count)
+                || fault.endpoint_object >= self.kernel_object_count
+                || fault.action == 0
+                || self.thread(fault.thread)?.fault_policy != index
+            {
+                return Err(DecodeError::BadIndex);
+            }
+        }
+        for index in 0..self.spawn_template_count {
+            let template = self.spawn_template(index)?;
+            if template.executable >= self.executable_count
+                || template.owner_process >= self.process_count
+                || template.quota >= self.resource_quota_count
+                || template.schedule >= self.schedule_count
+                || template.fault_policy >= self.fault_policy_count
+                || template.max_instances == 0
+                || template.flags != 0
+            {
+                return Err(DecodeError::BadIndex);
+            }
+        }
+        for index in 0..self.resource_quota_count {
+            let quota = self.resource_quota(index)?;
+            if quota.owner_process >= self.process_count
+                || self.process(quota.owner_process)?.quota != index
+                || quota.cnode_count == 0
+                || quota.tcb_count == 0
+                || quota.cslot_count == 0
+                || quota.flags != 0
+            {
+                return Err(DecodeError::BadIndex);
+            }
+        }
+        // Minted bindings. Each names a real owner/holder pair, a slot inside
+        // the holder's CSpace, and a nonzero rights ceiling within the
+        // vocabulary. The holder must be an instance the owner actually owns,
+        // so a minted capability cannot cross an ownership edge the graph does
+        // not declare, and no two may claim the same holder slot.
+        let mut previous_name = None;
+        for index in 0..self.minted_binding_count {
+            let minted = self.minted_binding(index)?;
+            // `exec` is admissible here: an owner may hand a child one of the
+            // executables it holds, and the child then spawns instances it
+            // owns from it. It still travels with `RIGHT_SPAWN`, exactly as a
+            // static exec grant does, so a minted executable cannot be
+            // launched by a holder the graph did not authorize to spawn.
+            if minted.owner >= self.instance_count
+                || minted.holder >= self.instance_count
+                || minted.slot >= MAX_TASK_CAPS
+                || minted.rights == 0
+                || minted.rights & !RIGHT_ALL != 0
+                || !capability_rights_valid(minted.capability_kind, minted.rights)
+                || minted.flags != 0
+            {
+                return Err(DecodeError::BadBinding);
+            }
+            if self.instance(minted.holder)?.owner != InstanceOwner::Instance(minted.owner) {
+                return Err(DecodeError::BadOwner);
+            }
+            if previous_name.is_some_and(|previous| previous >= minted.name) {
+                return Err(DecodeError::BadOrder);
+            }
+            // No two declarations may claim one holder slot — neither two
+            // minted bindings, nor a minted binding and one of the holder's
+            // own grant-backed bindings. A collision would leave the holder's
+            // slot naming two different capabilities, and would make the
+            // spawn-time ordering by destination slot ambiguous.
+            if (0..index).try_fold(false, |seen, earlier| {
+                let other = self.minted_binding(earlier)?;
+                Ok::<bool, DecodeError>(
+                    seen || (other.holder == minted.holder && other.slot == minted.slot),
+                )
+            })? {
+                return Err(DecodeError::BadBinding);
+            }
+            let holder = self.instance(minted.holder)?;
+            for at in 0..holder.binding_count() {
+                if self.binding(holder, at)?.slot == minted.slot {
+                    return Err(DecodeError::BadBinding);
+                }
+            }
+            previous_name = Some(minted.name);
+        }
+        // Native notifications are authenticated as named source-to-target
+        // relationships, with exactly one signal binding at the source and
+        // one wait binding at the target. The grant section is canonical by
+        // name; holder slots are unique within the separate native
+        // notification namespace.
+        let mut previous_notification = None;
+        for index in 0..self.notification_grant_count {
+            let grant = self.notification_grant(index)?;
+            if grant.source >= self.instance_count
+                || grant.target >= self.instance_count
+                || grant.source == grant.target
+                || grant.object >= self.kernel_object_count
+                || self.kernel_object_record(grant.object)?.kind != KERNEL_OBJECT_NOTIFICATION
+                || grant.flags != 0
+            {
+                return Err(DecodeError::BadBinding);
+            }
+            if previous_notification.is_some_and(|previous| previous >= grant.name) {
+                return Err(DecodeError::BadOrder);
+            }
+            // A notification has exactly one waiter and at least one signaller,
+            // and the grant's `source` must be among the signallers -- that is
+            // the edge the grant names. Additional signallers are the object's
+            // reason to exist: a waiter blocked on one notification learns
+            // which peer spoke from the badge, which is the only way to wait on
+            // a whole peer set at once. Each signaller's declared slot is its
+            // badge bit, and the per-holder slot uniqueness checked below keeps
+            // those bits distinct.
+            let mut source_signals = false;
+            let mut signal = 0;
+            let mut wait = 0;
+            for binding_index in 0..self.notification_binding_count {
+                let binding = self.notification_binding(binding_index)?;
+                if binding.grant != index {
+                    continue;
+                }
+                match binding.role {
+                    NotificationRole::Signal => {
+                        source_signals |= binding.holder == grant.source;
+                        signal += 1;
+                    }
+                    NotificationRole::Wait if binding.holder == grant.target => wait += 1,
+                    NotificationRole::Wait => return Err(DecodeError::BadBinding),
+                }
+            }
+            if signal == 0 || !source_signals || wait != 1 {
+                return Err(DecodeError::BadBinding);
+            }
+            previous_notification = Some(grant.name);
+        }
+        for index in 0..self.notification_binding_count {
+            let binding = self.notification_binding(index)?;
+            if binding.grant >= self.notification_grant_count
+                || binding.holder >= self.instance_count
+                || binding.slot >= 31
+                || binding.flags != 0
+            {
+                return Err(DecodeError::BadBinding);
+            }
+            for earlier in 0..index {
+                let other = self.notification_binding(earlier)?;
+                if other.holder == binding.holder && other.slot == binding.slot {
+                    return Err(DecodeError::BadBinding);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn grant_requires_instance_binding(&self, grant: Grant<'_>, instance: usize) -> bool {
+        match grant.capability_kind {
+            CapabilityKind::Executable => grant.source == GrantEndpoint::Instance(instance),
+            CapabilityKind::Endpoint => {
+                grant.source == GrantEndpoint::Instance(instance)
+                    || grant.target == GrantEndpoint::Instance(instance)
+            }
+            _ => grant.target == GrantEndpoint::Instance(instance),
+        }
+    }
+
+    pub fn grant_applies_to_instance(&self, grant: Grant<'_>, instance: usize) -> bool {
+        if self.grant_requires_instance_binding(grant, instance) {
+            return true;
+        }
+        let Ok(record) = self.instance(instance) else {
+            return false;
+        };
+        let child_copy = match record.owner {
+            InstanceOwner::Root => false,
+            InstanceOwner::Instance(owner) => {
+                grant.source == GrantEndpoint::Instance(owner)
+                    && match grant.capability_kind {
+                        CapabilityKind::Executable => (0..self.instance_count).any(|child| {
+                            self.instance(child).is_ok_and(|child_record| {
+                                child_record.owner == InstanceOwner::Instance(instance)
+                                    && grant.target
+                                        == GrantEndpoint::Executable(child_record.executable)
+                            })
+                        }),
+                        CapabilityKind::Endpoint => {
+                            grant.target == GrantEndpoint::Instance(instance)
+                        }
+                        _ => {
+                            grant.target == GrantEndpoint::Instance(instance)
+                                || grant.target == GrantEndpoint::Instance(owner)
+                        }
+                    }
+            }
+        };
+        child_copy
+            || (0..self.instance_count).any(|child| {
+                let Ok(child_record) = self.instance(child) else {
+                    return false;
+                };
+                child_record.owner == InstanceOwner::Instance(instance)
+                    && grant.source == GrantEndpoint::Instance(instance)
+                    && match grant.capability_kind {
+                        CapabilityKind::Executable => {
+                            grant.target == GrantEndpoint::Executable(child_record.executable)
+                        }
+                        _ => grant.target == GrantEndpoint::Instance(child),
+                    }
+            })
+    }
+
+    fn instance_index(&self, name: &str) -> Option<usize> {
+        (0..self.instance_count).find(|i| self.instance(*i).is_ok_and(|v| v.name == name))
     }
 }
 
+fn validate_acyclic<F>(
+    node_count: usize,
+    mut edge: F,
+    cycle_error: DecodeError,
+) -> Result<(), DecodeError>
+where
+    F: FnMut(usize, usize) -> Result<Option<usize>, DecodeError>,
+{
+    let mut colors = [0u8; MAX_INSTANCES];
+    let mut nodes = [0usize; MAX_INSTANCES];
+    let mut edges = [0usize; MAX_INSTANCES];
+    for root in 0..node_count {
+        if colors[root] != 0 {
+            continue;
+        }
+        let mut depth = 1;
+        nodes[0] = root;
+        colors[root] = 1;
+        while depth != 0 {
+            let frame = depth - 1;
+            let node = nodes[frame];
+            match edge(node, edges[frame])? {
+                Some(next) => {
+                    if next >= node_count {
+                        return Err(cycle_error);
+                    }
+                    edges[frame] += 1;
+                    match colors[next] {
+                        0 => {
+                            if depth >= node_count {
+                                return Err(cycle_error);
+                            }
+                            nodes[depth] = next;
+                            colors[next] = 1;
+                            depth += 1;
+                        }
+                        1 => return Err(cycle_error),
+                        _ => {}
+                    }
+                }
+                None => {
+                    colors[node] = 2;
+                    depth -= 1;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn endpoint_key(endpoint: GrantEndpoint) -> (u8, usize) {
+    match endpoint {
+        GrantEndpoint::Instance(i) => (0, i),
+        GrantEndpoint::Executable(i) => (1, i),
+    }
+}
 fn update_bounded_string(hasher: &mut Sha256, value: &str) {
     hasher.update(&(value.len() as u16).to_le_bytes());
     hasher.update(value.as_bytes());
 }
-
 pub fn generation_identity(bytes: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
     if bytes.len() < IDENTITY_END {
@@ -591,7 +2376,6 @@ pub fn generation_identity(bytes: &[u8]) -> [u8; 32] {
     hasher.update(&bytes[IDENTITY_END..]);
     hasher.finalize()
 }
-
 fn bounded_count(value: usize, min: usize, max: usize) -> Result<usize, DecodeError> {
     if (min..=max).contains(&value) {
         Ok(value)
@@ -599,7 +2383,6 @@ fn bounded_count(value: usize, min: usize, max: usize) -> Result<usize, DecodeEr
         Err(DecodeError::BadBounds)
     }
 }
-
 fn check_section(start: usize, count: usize, size: usize, next: usize) -> Result<(), DecodeError> {
     if start.checked_add(count.checked_mul(size).ok_or(DecodeError::BadBounds)?) == Some(next) {
         Ok(())
@@ -607,7 +2390,6 @@ fn check_section(start: usize, count: usize, size: usize, next: usize) -> Result
         Err(DecodeError::BadBounds)
     }
 }
-
 fn read_string(
     bytes: &[u8],
     base: usize,
@@ -633,7 +2415,25 @@ fn read_string(
     )
     .map_err(|_| DecodeError::BadUtf8)
 }
-
+fn reserved_zero(bytes: &[u8], start: usize, end: usize) -> Result<(), DecodeError> {
+    if bytes
+        .get(start..end)
+        .ok_or(DecodeError::Truncated)?
+        .iter()
+        .any(|byte| *byte != 0)
+    {
+        Err(DecodeError::NonZeroReserved)
+    } else {
+        Ok(())
+    }
+}
+fn bool_at(bytes: &[u8], offset: usize) -> Result<bool, DecodeError> {
+    match u32_at(bytes, offset)? {
+        0 => Ok(false),
+        1 => Ok(true),
+        _ => Err(DecodeError::UnknownEnum),
+    }
+}
 fn u16_at(bytes: &[u8], offset: usize) -> Result<u16, DecodeError> {
     Ok(u16::from_le_bytes(
         bytes
@@ -664,242 +2464,13 @@ fn u64_at(bytes: &[u8], offset: usize) -> Result<u64, DecodeError> {
 
 #[cfg(test)]
 mod tests {
-    extern crate alloc;
     use super::*;
 
-    /// Build a minimal valid generation with one self-grant, encoded in the
-    /// requested format version. v2 packs grant rights as 4 bytes at +12 with
-    /// `transferable` at +16; v3 packs rights as 8 bytes at +12 with
-    /// `transferable` at +20. Every other record is identical.
-    fn build(version: u32, rights: u64) -> alloc::vec::Vec<u8> {
-        let magic = if version == FORMAT_VERSION_V2 {
-            MAGIC_V2
-        } else {
-            MAGIC_V3
-        };
-        // String table: (u16 len, bytes) entries; offsets are relative.
-        let mut strings = alloc::vec::Vec::new();
-        let mut push_str = |s: &str| -> u32 {
-            let offset = strings.len() as u32;
-            strings.extend_from_slice(&(s.len() as u16).to_le_bytes());
-            strings.extend_from_slice(s.as_bytes());
-            offset
-        };
-        let target_off = push_str("t");
-        let obj_a_off = push_str("a");
-        let obj_b_off = push_str("b");
-        let init_off = push_str("init");
-        let grant_off = push_str("g");
-
-        let object_offset = HEADER_LEN;
-        let component_offset = object_offset + 2 * OBJECT_LEN;
-        let dependency_offset = component_offset + COMPONENT_LEN;
-        let grant_offset = dependency_offset;
-        let state_offset = grant_offset + GRANT_LEN;
-        let health_offset = state_offset;
-        let string_offset = health_offset;
-        let payload_offset = string_offset + strings.len();
-        let total_len = payload_offset + 2;
-
-        let kernel_digest = {
-            let mut h = Sha256::new();
-            h.update(b"K");
-            h.finalize()
-        };
-        let bootstrap_digest = {
-            let mut h = Sha256::new();
-            h.update(b"B");
-            h.finalize()
-        };
-
-        let mut bytes = alloc::vec![0u8; total_len];
-        bytes[..8].copy_from_slice(&magic);
-        bytes[8..12].copy_from_slice(&version.to_le_bytes());
-        bytes[12..16].copy_from_slice(&(HEADER_LEN as u32).to_le_bytes());
-        bytes[56..64].copy_from_slice(&1u64.to_le_bytes()); // generation_number
-        bytes[96..100].copy_from_slice(&target_off.to_le_bytes());
-        bytes[100..104].copy_from_slice(&0u32.to_le_bytes()); // kernel_object
-        bytes[104..108].copy_from_slice(&0u32.to_le_bytes()); // bootstrap_component
-        bytes[108..112].copy_from_slice(&1u32.to_le_bytes()); // boot_attempts
-        bytes[112..116].copy_from_slice(&2u32.to_le_bytes()); // object_count
-        bytes[116..120].copy_from_slice(&1u32.to_le_bytes()); // component_count
-        bytes[124..128].copy_from_slice(&1u32.to_le_bytes()); // grant_count
-        bytes[136..144].copy_from_slice(&(object_offset as u64).to_le_bytes());
-        bytes[144..152].copy_from_slice(&(component_offset as u64).to_le_bytes());
-        bytes[152..160].copy_from_slice(&(dependency_offset as u64).to_le_bytes());
-        bytes[160..168].copy_from_slice(&(grant_offset as u64).to_le_bytes());
-        bytes[168..176].copy_from_slice(&(state_offset as u64).to_le_bytes());
-        bytes[176..184].copy_from_slice(&(health_offset as u64).to_le_bytes());
-        bytes[184..192].copy_from_slice(&(string_offset as u64).to_le_bytes());
-        bytes[192..200].copy_from_slice(&(strings.len() as u64).to_le_bytes());
-        bytes[200..208].copy_from_slice(&(payload_offset as u64).to_le_bytes());
-        bytes[208..216].copy_from_slice(&(total_len as u64).to_le_bytes());
-
-        // Object 0 (id "a", kernel), object 1 (id "b", bootstrap).
-        let obj0 = object_offset;
-        bytes[obj0..obj0 + 4].copy_from_slice(&obj_a_off.to_le_bytes());
-        bytes[obj0 + 4..obj0 + 8].copy_from_slice(&KIND_KERNEL.to_le_bytes());
-        bytes[obj0 + 8..obj0 + 16].copy_from_slice(&(payload_offset as u64).to_le_bytes());
-        bytes[obj0 + 16..obj0 + 24].copy_from_slice(&1u64.to_le_bytes());
-        bytes[obj0 + 24..obj0 + 56].copy_from_slice(&kernel_digest);
-        let obj1 = object_offset + OBJECT_LEN;
-        bytes[obj1..obj1 + 4].copy_from_slice(&obj_b_off.to_le_bytes());
-        bytes[obj1 + 4..obj1 + 8].copy_from_slice(&KIND_BOOTSTRAP.to_le_bytes());
-        bytes[obj1 + 8..obj1 + 16].copy_from_slice(&((payload_offset + 1) as u64).to_le_bytes());
-        bytes[obj1 + 16..obj1 + 24].copy_from_slice(&1u64.to_le_bytes());
-        bytes[obj1 + 24..obj1 + 56].copy_from_slice(&bootstrap_digest);
-
-        // Component 0 ("init", object 1, role init).
-        let comp = component_offset;
-        bytes[comp..comp + 4].copy_from_slice(&init_off.to_le_bytes());
-        bytes[comp + 4..comp + 8].copy_from_slice(&1u32.to_le_bytes()); // object_index
-        bytes[comp + 8..comp + 12].copy_from_slice(&ROLE_INIT.to_le_bytes());
-
-        // Grant 0 ("g", self, rights).
-        let grant = grant_offset;
-        bytes[grant..grant + 4].copy_from_slice(&grant_off.to_le_bytes());
-        bytes[grant + 4..grant + 8].copy_from_slice(&0u32.to_le_bytes()); // source
-        bytes[grant + 8..grant + 12].copy_from_slice(&0u32.to_le_bytes()); // target
-        let transferable = u32::from(rights & RIGHT_TRANSFER != 0);
-        if version == FORMAT_VERSION_V2 {
-            bytes[grant + 12..grant + 16].copy_from_slice(&(rights as u32).to_le_bytes());
-            bytes[grant + 16..grant + 20].copy_from_slice(&transferable.to_le_bytes());
-        } else {
-            bytes[grant + 12..grant + 20].copy_from_slice(&rights.to_le_bytes());
-            bytes[grant + 20..grant + 24].copy_from_slice(&transferable.to_le_bytes());
-        }
-
-        // String table and payloads.
-        bytes[string_offset..string_offset + strings.len()].copy_from_slice(&strings);
-        bytes[payload_offset] = b'K';
-        bytes[payload_offset + 1] = b'B';
-
-        let identity = generation_identity(&bytes);
-        bytes[IDENTITY_OFFSET..IDENTITY_END].copy_from_slice(&identity);
-        bytes
-    }
-
     #[test]
-    fn v3_generation_decodes_with_u64_rights() {
-        let rights = RIGHT_ALL;
-        let bytes = build(FORMAT_VERSION, rights);
-        let generation = Generation::decode(&bytes).expect("v3 decodes");
-        assert_eq!(generation.version, FORMAT_VERSION);
-        assert_eq!(generation.grant(0).unwrap().rights, rights);
-    }
-
-    #[test]
-    fn retained_v2_generation_still_decodes() {
-        // v2 rights are 24-bit; widen to u64 without changing meaning.
-        let rights = RIGHT_TRANSFER | 1;
-        let bytes = build(FORMAT_VERSION_V2, rights);
-        let generation = Generation::decode(&bytes).expect("retained v2 decodes");
-        assert_eq!(generation.version, FORMAT_VERSION_V2);
-        assert_eq!(generation.grant(0).unwrap().rights, rights);
-        assert!(generation.grant(0).unwrap().transferable);
-    }
-
-    #[test]
-    fn retained_v2_keeps_its_component_ceiling() {
-        let mut bytes = build(FORMAT_VERSION_V2, RIGHT_TRANSFER | 1);
-        bytes[116..120].copy_from_slice(&33u32.to_le_bytes());
-        let identity = generation_identity(&bytes);
-        bytes[IDENTITY_OFFSET..IDENTITY_END].copy_from_slice(&identity);
-        assert!(matches!(
-            Generation::decode(&bytes),
-            Err(DecodeError::BadBounds)
-        ));
-    }
-
-    #[test]
-    fn retained_v2_rejects_v3_only_rights() {
-        let bytes = build(FORMAT_VERSION_V2, 1 << 24);
-        assert!(matches!(
-            Generation::decode(&bytes),
-            Err(DecodeError::BadIndex)
-        ));
-    }
-
-    /// The stage-0 admission chain a retained v2 generation actually traverses
-    /// on a rollback boot: the identity seal is verified, the kernel object is
-    /// located, and its own kernel image is what would be loaded.
-    ///
-    /// Each generation embeds the kernel it boots (`stage0::admit_generation_closure`
-    /// resolves `generation.kernel_object`), so a v2 rollback runs its v2-era
-    /// kernel rather than the current one. That is why the current tree's
-    /// v3-only rights cannot break the rollback window, and it is the property
-    /// worth pinning: an unmodified v2 artifact stays admissible end to end.
-    #[test]
-    fn retained_v2_generation_passes_stage0_admission() {
-        let bytes = build(FORMAT_VERSION_V2, RIGHT_TRANSFER | 1);
-
-        // Stage 0 verifies the recorded identity before decoding anything.
-        let identity = generation_identity(&bytes);
-        assert_eq!(&bytes[IDENTITY_OFFSET..IDENTITY_END], &identity[..]);
-
-        let generation = Generation::decode(&bytes).expect("retained v2 decodes");
-        assert_eq!(generation.version, FORMAT_VERSION_V2);
-
-        // The generation names its own kernel object, so rollback boots the
-        // kernel that shipped with it.
-        let kernel = generation
-            .object(generation.kernel_object)
-            .expect("kernel object present");
-        assert_eq!(kernel.kind, KIND_KERNEL);
-        assert!(!kernel.bytes.is_empty());
-
-        // A bootstrap component is present and reachable, so stage 0 has an
-        // init to launch.
-        let bootstrap = generation
-            .component(generation.bootstrap)
-            .expect("bootstrap component present");
-        assert_eq!(bootstrap.role, ROLE_INIT);
-
-        // Any byte flipped in a retained artifact fails the identity seal
-        // rather than being admitted.
-        let mut tampered = bytes.clone();
-        let last = tampered.len() - 1;
-        tampered[last] ^= 1;
-        assert_ne!(generation_identity(&tampered), identity);
-    }
-
-    /// A v2 generation's authority manifest keeps hashing rights at 32 bits, so
-    /// its signed release still matches during the rollback window. Widening to
-    /// `u64` in C7.1 must not have moved this value — if it had, every retained
-    /// v2 release would fail authorization and the rollback window would be
-    /// closed in practice while appearing open.
-    #[test]
-    fn retained_v2_authority_manifest_is_width_stable() {
-        let rights = RIGHT_TRANSFER | 1;
-        let v2_bytes = build(FORMAT_VERSION_V2, rights);
-        let v3_bytes = build(FORMAT_VERSION, rights);
-        let v2 = Generation::decode(&v2_bytes).expect("v2 decodes");
-        let v3 = Generation::decode(&v3_bytes).expect("v3 decodes");
-
-        // Same logical grant, different encoded widths: the hashes must differ,
-        // because each version hashes its own on-disk width. A v2 release is
-        // therefore only ever valid against a v2 generation.
-        assert_ne!(
-            v2.authority_manifest_identity(),
-            v3.authority_manifest_identity()
-        );
-
-        // And the v2 value is stable across decodes of the same bytes.
-        let again_bytes = build(FORMAT_VERSION_V2, rights);
-        let again = Generation::decode(&again_bytes).expect("v2 decodes");
-        assert_eq!(
-            v2.authority_manifest_identity(),
-            again.authority_manifest_identity()
-        );
-    }
-
-    #[test]
-    fn unsupported_version_fails_closed() {
-        let mut bytes = build(FORMAT_VERSION, RIGHT_ALL);
-        bytes[8..12].copy_from_slice(&(FORMAT_VERSION + 1).to_le_bytes());
-        // Re-seal identity so the version, not the hash, is what fails.
-        let identity = generation_identity(&bytes);
-        bytes[IDENTITY_OFFSET..IDENTITY_END].copy_from_slice(&identity);
+    fn rejects_v4_product_generations() {
+        let mut bytes = [0u8; HEADER_LEN];
+        bytes[..8].copy_from_slice(&MAGIC_V4);
+        bytes[8..12].copy_from_slice(&4u32.to_le_bytes());
         assert!(matches!(
             Generation::decode(&bytes),
             Err(DecodeError::UnsupportedVersion)
@@ -907,14 +2478,101 @@ mod tests {
     }
 
     #[test]
-    fn wrong_magic_fails_closed() {
-        let mut bytes = build(FORMAT_VERSION, RIGHT_ALL);
-        bytes[0] = b'X';
-        let identity = generation_identity(&bytes);
-        bytes[IDENTITY_OFFSET..IDENTITY_END].copy_from_slice(&identity);
-        assert!(matches!(
-            Generation::decode(&bytes),
-            Err(DecodeError::BadMagic)
+    fn capability_kinds_reject_rights_from_other_classes() {
+        assert!(capability_rights_valid(CapabilityKind::Endpoint, 0b11));
+        assert!(!capability_rights_valid(
+            CapabilityKind::Endpoint,
+            RIGHT_EXEC | RIGHT_SPAWN
         ));
+        assert!(capability_rights_valid(
+            CapabilityKind::Executable,
+            RIGHT_EXEC | RIGHT_SPAWN
+        ));
+        assert!(!capability_rights_valid(CapabilityKind::Input, 1 << 10));
+        assert!(!capability_rights_valid(CapabilityKind::Block, 1 << 23));
+    }
+
+    #[test]
+    fn dependency_cycle_reachable_beyond_probe_is_rejected() {
+        let edges = [Some(1usize), Some(2), Some(1)];
+        assert_eq!(
+            validate_acyclic(
+                edges.len(),
+                |node, edge| Ok((edge == 0).then_some(edges[node]).flatten()),
+                DecodeError::BadDependency
+            ),
+            Err(DecodeError::BadDependency)
+        );
+    }
+
+    #[test]
+    fn owner_cycle_reachable_beyond_probe_is_rejected() {
+        let owners = [Some(1usize), Some(2), Some(1)];
+        assert_eq!(
+            validate_acyclic(
+                owners.len(),
+                |node, edge| Ok((edge == 0).then_some(owners[node]).flatten()),
+                DecodeError::BadOwner
+            ),
+            Err(DecodeError::BadOwner)
+        );
+    }
+
+    /// `BootAction`'s numeric values are an ABI: the root passes one in the
+    /// bootstrap thread's first C parameter, and `init` matches on the same
+    /// numbers from its own table. Renumbering a variant here would silently
+    /// select a different graph in an image built before the change, so the
+    /// mapping is pinned rather than left to declaration order.
+    #[test]
+    fn boot_action_numbering_is_frozen() {
+        for (action, id) in [
+            (BootAction::Product, 1),
+            (BootAction::Boot, 2),
+            (BootAction::Call, 3),
+            (BootAction::Channel, 4),
+            (BootAction::Crossing, 5),
+            (BootAction::Dango, 6),
+            (BootAction::Directory, 7),
+            (BootAction::Filesystem, 8),
+            (BootAction::Generation, 9),
+            (BootAction::Input, 10),
+            (BootAction::Loan, 11),
+            (BootAction::Operation, 12),
+            (BootAction::Powerbox, 13),
+            (BootAction::Qos, 14),
+            (BootAction::Stress, 26),
+            (BootAction::Reclamation, 15),
+            (BootAction::Recovery, 16),
+            (BootAction::Rollback, 17),
+            (BootAction::Sample, 18),
+            (BootAction::Spawn, 19),
+            (BootAction::Storage, 20),
+            (BootAction::Store, 21),
+            (BootAction::Stream, 22),
+            (BootAction::Supervision, 23),
+            (BootAction::Transfer, 24),
+            (BootAction::Visibility, 25),
+        ] {
+            assert_eq!(action.id(), id, "{action:?} changed its ABI number");
+        }
+    }
+
+    /// Every spelling the source manifest may carry resolves, and nothing else
+    /// does. A manifest naming an action this decoder does not know must fail
+    /// admission rather than fall back to a default graph.
+    #[test]
+    fn every_declared_boot_action_spelling_resolves() {
+        for (spelling, expected) in [
+            ("product", BootAction::Product),
+            ("boot", BootAction::Boot),
+            ("qos", BootAction::Qos),
+            ("stress", BootAction::Stress),
+            ("visibility", BootAction::Visibility),
+        ] {
+            assert_eq!(BootAction::parse(spelling), Some(expected));
+        }
+        for unknown in ["", "Product", "prod", "unknown", "product "] {
+            assert_eq!(BootAction::parse(unknown), None, "{unknown:?} resolved");
+        }
     }
 }

@@ -1,0 +1,6 @@
+test generation::tests::retained_v2_keeps_its_component_ceiling ... ok
+test generation::tests::retained_v2_rejects_v3_only_rights ... ok
+test generation::tests::retained_v2_generation_still_decodes ... ok
+test generation::tests::retained_v2_generation_passes_stage0_admission ... ok
+test generation::tests::retained_v2_authority_manifest_is_width_stable ... ok
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 103 filtered out; finished in 0.00s

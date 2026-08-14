@@ -122,13 +122,13 @@ handoffLayout :: List WireField = {
 };
 
 format ::= {
-  handoffVersion = handoffVersion; handoffBytes = handoffBytes;
-  memoryEntryBytes = memoryEntryBytes; framebufferBytes = framebufferBytes;
-  memoryUsable = memoryUsable; memoryReserved = memoryReserved;
-  maxMemoryEntries = maxMemoryEntries;
+  handoffVersion =; handoffBytes =;
+  memoryEntryBytes =; framebufferBytes =;
+  memoryUsable =; memoryReserved =;
+  maxMemoryEntries =;
   handoffFields = handoffSchema.fields ?? {;}; memoryEntryFields = memoryEntrySchema.fields ?? {;};
   framebufferFields = framebufferSchema.fields ?? {;};
-  handoffLayout = handoffLayout; memoryEntryLayout = memoryEntryLayout; framebufferLayout = framebufferLayout;
+  handoffLayout =; memoryEntryLayout =; framebufferLayout =;
 };
 
 main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }

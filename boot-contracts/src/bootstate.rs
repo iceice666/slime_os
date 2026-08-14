@@ -165,6 +165,81 @@ impl BootState {
     }
 }
 
+/// Which of the two fixed slots a record came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Slot {
+    A,
+    B,
+}
+
+impl Slot {
+    /// The slot a commit must write.
+    ///
+    /// Older-slot-first is the whole redundancy argument: the selected root
+    /// stays intact until the new one is durable, so an interruption at any
+    /// point leaves at least one valid slot.
+    pub fn other(self) -> Slot {
+        match self {
+            Slot::A => Slot::B,
+            Slot::B => Slot::A,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SelectedBootState {
+    pub slot: Slot,
+    pub state: BootState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionError {
+    /// Both slots decode but disagree at the same sequence. Choosing either
+    /// would be a guess about which commit won.
+    ConflictingSlots,
+    /// Neither slot decodes. There is no root to boot.
+    NoValidBootState,
+}
+
+/// Select the live root from two slots.
+///
+/// The highest sequence wins; one damaged slot is tolerated, because that is
+/// what the second slot is for. Two valid slots at the same sequence that are
+/// not byte-identical is a hard reject rather than a coin flip.
+///
+/// Lives here rather than in `stage0` because it is not stage-0's rule: the
+/// generation-management component applies the same one, and `stage0` pulls in
+/// `uefi`, so a component could not have reached it there.
+pub fn select_bootstate(
+    a: &[u8; SLOT_BYTES],
+    b: &[u8; SLOT_BYTES],
+) -> Result<SelectedBootState, SelectionError> {
+    match (BootState::decode(a), BootState::decode(b)) {
+        (Ok(a), Ok(b)) if a.sequence > b.sequence => Ok(SelectedBootState {
+            slot: Slot::A,
+            state: a,
+        }),
+        (Ok(a), Ok(b)) if b.sequence > a.sequence => Ok(SelectedBootState {
+            slot: Slot::B,
+            state: b,
+        }),
+        (Ok(a), Ok(b)) if a == b => Ok(SelectedBootState {
+            slot: Slot::A,
+            state: a,
+        }),
+        (Ok(_), Ok(_)) => Err(SelectionError::ConflictingSlots),
+        (Ok(a), Err(_)) => Ok(SelectedBootState {
+            slot: Slot::A,
+            state: a,
+        }),
+        (Err(_), Ok(b)) => Ok(SelectedBootState {
+            slot: Slot::B,
+            state: b,
+        }),
+        (Err(_), Err(_)) => Err(SelectionError::NoValidBootState),
+    }
+}
+
 fn next_sequence(sequence: u64) -> Result<u64, BootTransitionError> {
     sequence
         .checked_add(1)
@@ -279,5 +354,92 @@ mod tests {
         assert_eq!(rolled_back.pending, None);
         assert_eq!(rolled_back.remaining_attempts, 0);
         assert_eq!(rolled_back.rollback_pending(), Ok(rolled_back));
+    }
+
+    /// Slot selection, which moved here from `stage0` so a component could
+    /// apply the same rule. It had no tests there.
+    mod selection {
+        use super::*;
+
+        fn slot(sequence: u64, known_good: [u8; 32]) -> [u8; SLOT_BYTES] {
+            BootState {
+                sequence,
+                known_good,
+                pending: None,
+                remaining_attempts: 0,
+                generation_root: GENERATION_ROOT,
+                state_root: empty_state_root(),
+                accepted_release_sequence: 0,
+            }
+            .encode()
+            .expect("encodable")
+        }
+
+        #[test]
+        fn the_highest_sequence_wins_from_either_slot() {
+            let low = slot(1, G1);
+            let high = slot(2, G2);
+            let selected = select_bootstate(&low, &high).expect("selectable");
+            assert_eq!(selected.slot, Slot::B, "the newer slot is selected");
+            assert_eq!(selected.state.sequence, 2);
+            let selected = select_bootstate(&high, &low).expect("selectable");
+            assert_eq!(selected.slot, Slot::A, "order does not decide it");
+            assert_eq!(selected.state.sequence, 2);
+        }
+
+        #[test]
+        fn one_damaged_slot_is_tolerated() {
+            let good = slot(3, G1);
+            let mut damaged = slot(2, G2);
+            damaged[CHECKSUM_OFFSET] ^= 0xff;
+            assert_eq!(
+                select_bootstate(&good, &damaged).expect("selectable").slot,
+                Slot::A,
+            );
+            assert_eq!(
+                select_bootstate(&damaged, &good).expect("selectable").slot,
+                Slot::B,
+                "a damaged newer slot does not outrank a valid older one",
+            );
+        }
+
+        #[test]
+        fn identical_slots_select_without_conflict() {
+            let both = slot(4, G1);
+            let selected = select_bootstate(&both, &both).expect("selectable");
+            assert_eq!(selected.slot, Slot::A);
+            assert_eq!(selected.state.sequence, 4);
+        }
+
+        #[test]
+        fn two_valid_slots_at_one_sequence_are_refused() {
+            // Same sequence, different content: two commits claim the same
+            // generation number, and picking either would be a guess.
+            assert_eq!(
+                select_bootstate(&slot(5, G1), &slot(5, G2)),
+                Err(SelectionError::ConflictingSlots),
+            );
+        }
+
+        #[test]
+        fn no_valid_slot_is_refused_rather_than_invented() {
+            let mut a = slot(6, G1);
+            let mut b = slot(7, G2);
+            a[0] ^= 0xff;
+            b[CHECKSUM_OFFSET] ^= 0xff;
+            assert_eq!(
+                select_bootstate(&a, &b),
+                Err(SelectionError::NoValidBootState),
+            );
+        }
+
+        #[test]
+        fn a_commit_targets_the_slot_that_was_not_selected() {
+            // Older-slot-first: the selected root must survive the write.
+            let selected = select_bootstate(&slot(8, G1), &slot(9, G2)).expect("selectable");
+            assert_eq!(selected.slot, Slot::B);
+            assert_eq!(selected.slot.other(), Slot::A);
+            assert_eq!(Slot::A.other(), Slot::B);
+        }
     }
 }

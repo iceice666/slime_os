@@ -36,4 +36,4 @@ render :: Format -> { python : Text; rust : Text; }
   = format => if r.schemaFieldsValid format.fields && format.maxLineBytes > 0
     then { python = pythonBindings format; rust = rustBindings format; }
     else { python = "INVALID_BOOTSTATE_TRACE_SCHEMA"; rust = "INVALID_BOOTSTATE_TRACE_SCHEMA"; };
-{ render = render; }
+{ render =; }

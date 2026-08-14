@@ -105,11 +105,11 @@ renderRecords :: List WireRecord -> Text
   };
 
 {
-  WireField = WireField;
-  WireRecord = WireRecord;
-  join = join;
-  recordsValid = recordsValid;
-  renderRecords = renderRecords;
-  fieldOffset = fieldOffset;
-  wireBytes = wireBytes;
+  WireField =;
+  WireRecord =;
+  join =;
+  recordsValid =;
+  renderRecords =;
+  fieldOffset =;
+  wireBytes =;
 }

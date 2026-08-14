@@ -1,0 +1,283 @@
+{
+  bootAction = "generation";
+  bootstrapInstance = "init";
+  executables = [
+    {
+      commandProfile = [];
+      name = "init";
+      object = "sha256:init";
+      role = "init";
+      spawnBudget = 2;
+    };
+    {
+      commandProfile = [];
+      name = "sel4-generation-manager";
+      object = "sha256:sel4-generation-manager";
+      role = "service";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [];
+      name = "sel4-generation-client";
+      object = "sha256:sel4-generation-client";
+      role = "application";
+      spawnBudget = 0;
+    };
+  ];
+  formatVersion = 1;
+  generation = 27;
+  grants = [
+    {
+      name = "init-sel4-generation-manager";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "sel4-generation-manager";
+      transferable = false;
+    };
+    {
+      name = "init-sel4-generation-client";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "sel4-generation-client";
+      transferable = false;
+    };
+    {
+      name = "generation-manager-device-idle";
+      capabilityKind = "block";
+      rights = [
+        "blockRead";
+        "blockWrite";
+      ];
+      source = "sel4-generation-manager-idle";
+      target = "sel4-generation-manager-idle";
+      transferable = false;
+    };
+    {
+      name = "generation-manager-device";
+      capabilityKind = "block";
+      rights = [
+        "blockRead";
+        "blockWrite";
+      ];
+      source = "sel4-generation-manager";
+      target = "sel4-generation-manager";
+      transferable = false;
+    };
+    {
+      name = "generation-rpc";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "sel4-generation-client";
+      target = "sel4-generation-manager";
+      transferable = false;
+    };
+    {
+      name = "generation-manager-run-token";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "init";
+      target = "sel4-generation-manager";
+      transferable = false;
+    };
+    {
+      name = "generation-client-run-token";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "init";
+      target = "sel4-generation-client";
+      transferable = false;
+    };
+    {
+      name = "generation-manager-idle-token";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "sel4-generation-manager-idle";
+      target = "sel4-generation-manager-idle";
+      transferable = false;
+    };
+    {
+      name = "generation-client-idle-token";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "sel4-generation-client-idle";
+      target = "sel4-generation-client-idle";
+      transferable = false;
+    };
+  ];
+  health = {
+    bootAttempts = 3;
+    requiredInstances = [
+      "init";
+    ];
+  };
+  instances = [
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "init-sel4-generation-client";
+          slot = 1;
+        };
+        {
+          grant = "init-sel4-generation-manager";
+          slot = 2;
+        };
+        {
+          grant = "generation-manager-run-token";
+          slot = 3;
+        };
+        {
+          grant = "generation-client-run-token";
+          slot = 4;
+        };
+      ];
+      dependencies = [];
+      executable = "init";
+      health = "required";
+      name = "init";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "generation-rpc";
+          slot = 0;
+        };
+        {
+          grant = "generation-manager-device";
+          slot = 1;
+        };
+        {
+          grant = "generation-manager-run-token";
+          slot = 2;
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "sel4-generation-manager";
+      health = "optional";
+      name = "sel4-generation-manager";
+      owner = "init";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "generation-rpc";
+          slot = 0;
+        };
+        {
+          grant = "generation-client-run-token";
+          slot = 1;
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "sel4-generation-client";
+      health = "optional";
+      name = "sel4-generation-client";
+      owner = "init";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "generation-client-idle-token";
+          slot = 1;
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "sel4-generation-client";
+      health = "optional";
+      name = "sel4-generation-client-idle";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "generation-manager-idle-token";
+          slot = 2;
+        };
+        {
+          grant = "generation-manager-device-idle";
+          slot = 1;
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "sel4-generation-manager";
+      health = "optional";
+      name = "sel4-generation-manager-idle";
+      owner = "root";
+    };
+  ];
+  mintedBindings = [
+    {
+      name = "generation-manager-client-supervision";
+      capabilityKind = "supervision";
+      owner = "init";
+      holder = "sel4-generation-manager";
+      rights = [
+        "supervise";
+      ];
+      slot = 3;
+      transferable = false;
+    };
+  ];
+  interfaceSchemas = [];
+  objects = [
+    {
+      id = "sha256:init";
+      kind = "bootstrap";
+      size = 65536;
+    };
+    {
+      id = "sha256:sel4-generation-manager";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:sel4-generation-client";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "boot-layout";
+      kind = "resource";
+      size = 4096;
+    };
+  ];
+  sharedBufferBudget = [];
+  state = [];
+  target = "aarch64-sel4-qemu-virt";
+}

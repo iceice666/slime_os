@@ -172,4 +172,4 @@ render :: Protocol -> { rust : Text; }
     then { rust = rustBindings protocol; }
     else { rust = "INVALID_GENERATION_MANAGEMENT_SCHEMA"; };
 
-{ render = render; }
+{ render =; }

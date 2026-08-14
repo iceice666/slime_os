@@ -24,6 +24,10 @@ slotBLba :: Int = 1;
 maxObjects :: Int = 64;
 -- Hard bound on one object's payload in bytes (64 sectors).
 maxObjectPayload :: Int = 32768;
+-- One logical sector. The superblock occupies exactly one, and every
+-- record header is sector-aligned, so a validator cannot check bounds
+-- without it.
+sectorBytes :: Int = 512;
 
 WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
 
@@ -81,12 +85,13 @@ recordLayout :: List WireField = {
 };
 
 format ::= {
-  formatVersion = formatVersion; superblockHeaderLen = superblockHeaderLen;
-  recordHeaderLen = recordHeaderLen; recordAreaStart = recordAreaStart;
-  slotALba = slotALba; slotBLba = slotBLba;
-  maxObjects = maxObjects; maxObjectPayload = maxObjectPayload;
+  formatVersion =; superblockHeaderLen =;
+  recordHeaderLen =; recordAreaStart =;
+  slotALba =; slotBLba =;
+  maxObjects =; maxObjectPayload =;
+  sectorBytes =;
   superblockFields = storeSuperblockSchema.fields ?? {;}; recordFields = storeRecordSchema.fields ?? {;};
-  superblockLayout = superblockLayout; recordLayout = recordLayout;
+  superblockLayout =; recordLayout =;
 };
 
 main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }

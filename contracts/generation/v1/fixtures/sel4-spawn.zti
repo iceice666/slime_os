@@ -1,0 +1,301 @@
+{
+  bootAction = "spawn";
+  bootstrapInstance = "init";
+  executables = [
+    {
+      commandProfile = [];
+      name = "init";
+      object = "sha256:init";
+      role = "init";
+      spawnBudget = 4;
+    };
+    {
+      commandProfile = [];
+      name = "console";
+      object = "sha256:console";
+      role = "service";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [];
+      name = "sysinfo";
+      object = "sha256:sysinfo";
+      role = "application";
+      spawnBudget = 0;
+    };
+  ];
+  formatVersion = 1;
+  generation = 1;
+  grants = [
+    {
+      name = "init-console";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "console";
+      transferable = false;
+    };
+    {
+      name = "init-sysinfo";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "sysinfo";
+      transferable = false;
+    };
+    {
+      name = "console-control";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "init";
+      target = "console";
+      transferable = false;
+    };
+    {
+      name = "sysinfo-context";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "init";
+      target = "sysinfo";
+      transferable = false;
+    };
+    {
+      name = "console-view";
+      capabilityKind = "directory";
+      rights = [
+        "directoryRead";
+      ];
+      source = "init";
+      target = "console";
+      transferable = true;
+    };
+    {
+      name = "sysinfo-view-1";
+      capabilityKind = "directory";
+      rights = [
+        "directoryRead";
+      ];
+      source = "init";
+      target = "sysinfo";
+      transferable = true;
+    };
+    {
+      name = "sysinfo-view-2";
+      capabilityKind = "directory";
+      rights = [
+        "directoryRead";
+      ];
+      source = "init";
+      target = "sysinfo";
+      transferable = true;
+    };
+    {
+      name = "sysinfo-view-3";
+      capabilityKind = "directory";
+      rights = [
+        "directoryRead";
+      ];
+      source = "init";
+      target = "sysinfo";
+      transferable = true;
+    };
+    {
+      name = "sysinfo-view-4";
+      capabilityKind = "directory";
+      rights = [
+        "directoryRead";
+      ];
+      source = "init";
+      target = "sysinfo";
+      transferable = true;
+    };
+    {
+      name = "sysinfo-view-5";
+      capabilityKind = "directory";
+      rights = [
+        "directoryRead";
+      ];
+      source = "init";
+      target = "sysinfo";
+      transferable = true;
+    };
+    {
+      name = "sysinfo-view-6";
+      capabilityKind = "directory";
+      rights = [
+        "directoryRead";
+      ];
+      source = "init";
+      target = "sysinfo";
+      transferable = true;
+    };
+  ];
+  health = {
+    bootAttempts = 3;
+    requiredInstances = [
+      "console";
+      "init";
+      "sysinfo";
+    ];
+  };
+  instances = [
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "init-console";
+          slot = 1;
+        };
+        {
+          grant = "init-sysinfo";
+          slot = 2;
+        };
+        {
+          grant = "console-control";
+          slot = 3;
+        };
+        {
+          grant = "sysinfo-context";
+          slot = 4;
+        };
+        {
+          grant = "console-view";
+          slot = 5;
+        };
+        {
+          grant = "sysinfo-view-1";
+          slot = 6;
+        };
+        {
+          grant = "sysinfo-view-2";
+          slot = 7;
+        };
+        {
+          grant = "sysinfo-view-3";
+          slot = 8;
+        };
+        {
+          grant = "sysinfo-view-4";
+          slot = 9;
+        };
+        {
+          grant = "sysinfo-view-5";
+          slot = 10;
+        };
+        {
+          grant = "sysinfo-view-6";
+          slot = 11;
+        };
+      ];
+      dependencies = [];
+      executable = "init";
+      health = "required";
+      name = "init";
+      owner = "root";
+    };
+    {
+      autostart = false;
+      bindings = [
+        {
+          grant = "console-control";
+          slot = 0;
+        };
+        {
+          grant = "console-view";
+          slot = 1;
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "console";
+      health = "required";
+      name = "console";
+      owner = "init";
+    };
+    {
+      autostart = false;
+      bindings = [
+        {
+          grant = "sysinfo-context";
+          slot = 0;
+        };
+        {
+          grant = "sysinfo-view-1";
+          slot = 1;
+        };
+        {
+          grant = "sysinfo-view-2";
+          slot = 2;
+        };
+        {
+          grant = "sysinfo-view-3";
+          slot = 3;
+        };
+        {
+          grant = "sysinfo-view-4";
+          slot = 4;
+        };
+        {
+          grant = "sysinfo-view-5";
+          slot = 5;
+        };
+        {
+          grant = "sysinfo-view-6";
+          slot = 6;
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "sysinfo";
+      health = "required";
+      name = "sysinfo";
+      owner = "init";
+    };
+  ];
+  mintedBindings = [];
+  interfaceSchemas = [];
+  objects = [
+    {
+      id = "sha256:init";
+      kind = "bootstrap";
+      size = 65536;
+    };
+    {
+      id = "sha256:console";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:sysinfo";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "shared-buffer-budget";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "boot-layout";
+      kind = "resource";
+      size = 4096;
+    };
+  ];
+  sharedBufferBudget = [];
+  state = [];
+  target = "aarch64-sel4-qemu-virt";
+}

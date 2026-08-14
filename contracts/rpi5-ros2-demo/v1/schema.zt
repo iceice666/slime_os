@@ -187,18 +187,18 @@ decodeDemoContract :: Data -> Validation DecodeIssue DemoContract
 = data => decode data;
 
 {
-  BoardProfile = BoardProfile;
-  RosProfile = RosProfile;
-  Locator = Locator;
-  DdsProfile = DdsProfile;
-  NodeProfile = NodeProfile;
-  MessageField = MessageField;
-  MessageType = MessageType;
-  Workload = Workload;
-  ResourceBounds = ResourceBounds;
-  CapabilityGrant = CapabilityGrant;
-  TraceContract = TraceContract;
-  OperatorMarkers = OperatorMarkers;
-  DemoContract = DemoContract;
-  decodeDemoContract = decodeDemoContract;
+  BoardProfile =;
+  RosProfile =;
+  Locator =;
+  DdsProfile =;
+  NodeProfile =;
+  MessageField =;
+  MessageType =;
+  Workload =;
+  ResourceBounds =;
+  CapabilityGrant =;
+  TraceContract =;
+  OperatorMarkers =;
+  DemoContract =;
+  decodeDemoContract =;
 }

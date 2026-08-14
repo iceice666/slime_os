@@ -85,23 +85,23 @@ replyLayout :: List WireField = {
 };
 
 format ::= {
-  formatVersion = formatVersion;
-  requestLen = requestLen;
-  replyLen = replyLen;
-  maxEntries = maxEntries;
-  opList = opList;
-  opInspect = opInspect;
-  opStage = opStage;
-  opSelect = opSelect;
-  opRollback = opRollback;
+  formatVersion =;
+  requestLen =;
+  replyLen =;
+  maxEntries =;
+  opList =;
+  opInspect =;
+  opStage =;
+  opSelect =;
+  opRollback =;
   requestFields = requestSchema.fields ?? {;};
   replyFields = replySchema.fields ?? {;};
-  replyFlagKnownGood = replyFlagKnownGood;
-  replyFlagPending = replyFlagPending;
-  replyFlagRunning = replyFlagRunning;
-  replyFlagStaged = replyFlagStaged;
-  requestLayout = requestLayout;
-  replyLayout = replyLayout;
+  replyFlagKnownGood =;
+  replyFlagPending =;
+  replyFlagRunning =;
+  replyFlagStaged =;
+  requestLayout =;
+  replyLayout =;
 };
 
 main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }

@@ -4,9 +4,9 @@
 Every variant shares one layout: a 2048-sector raw image with a protective
 MBR, primary and backup GPT copies, and a single Slime OS object-store
 partition (type GUID "SLIMEOSSTOREGPT!") at LBA 40..2014. The store carries
-genesis superblock slot B (sequence 1, empty), committed slot A (sequence 2,
-one seeded object), and the seeded record. Fault variants corrupt exactly one
-structure so the guest must recover or reject per the documented rules.
+genesis superblock slot B, committed slot A with one seeded object, and the
+seeded record. Fault variants corrupt exactly one structure so the guest must
+recover or reject per the documented rules.
 """
 
 from __future__ import annotations
@@ -61,6 +61,21 @@ from boot_contracts import (
     STORE_SUPERBLOCK_RECORD_AREA_START_OFFSET,
     STORE_SUPERBLOCK_SEQUENCE_OFFSET,
 )
+from recovery_index import binding_identity, build_recovery_index, sha256
+from boot_contracts import (
+    RELEASE_BYTES,
+    TRANSFER_HEADER,
+    TRANSFER_HEADER_BYTES,
+    TRANSFER_HEADER_HASH_END,
+    TRANSFER_HEADER_HASH_OFFSET,
+    TRANSFER_MAGIC,
+    TRANSFER_OBJECT,
+    TRANSFER_OBJECT_FLAG_PAYLOAD as OBJECT_FLAG_PAYLOAD,
+    TRANSFER_STATE,
+    TRANSFER_STATE_FLAG_READ_ONLY as STATE_FLAG_READ_ONLY,
+    TRANSFER_STATE_FLAG_TRAVEL as STATE_FLAG_TRAVEL,
+    TRANSFER_VERSION,
+)
 
 HEADER_SIZE = STORE_RECORD.size
 
@@ -73,7 +88,56 @@ VARIANTS = [
     "superblock-newest-damaged",
     "superblock-both-damaged",
     "interrupted-append",
+    # P5.4.2c's recovery plane: both BootState slots corrupt and a valid
+    # recovery index naming the seeded object as the state closure. The store
+    # itself is the happy one, because reconstruction must verify real objects.
+    "recovery",
+    # P5.4.2c's recovery layout plus a transfer manifest, for M6.7's source
+    # device. The receiver uses the `happy` variant: it needs a validated
+    # partition for its BootState slots and nothing else.
+    "transfer",
+    "boot-selection",
 ]
+
+# Fixture-only regions are fixed by the probes. They are not object-store
+# records and fixture images are immutable test inputs; keep them mutually
+# disjoint and within the partition while documenting that a writable consumer
+# must reserve them before appending through this synthetic layout.
+STATE_SLOT_A = 1024
+STATE_SLOT_B = 1025
+RECOVERY_INDEX_LBA = 1026
+RECOVERY_INDEX_SECTORS = 4
+TRANSFER_MANIFEST_LBA = 1030
+TRANSFER_MANIFEST_SECTORS = 16
+FIXTURE_REGIONS = (
+    (STATE_SLOT_A, STATE_SLOT_A + 1, "BootState A"),
+    (STATE_SLOT_B, STATE_SLOT_B + 1, "BootState B"),
+    (RECOVERY_INDEX_LBA, RECOVERY_INDEX_LBA + RECOVERY_INDEX_SECTORS, "recovery index"),
+    (TRANSFER_MANIFEST_LBA, TRANSFER_MANIFEST_LBA + TRANSFER_MANIFEST_SECTORS, "transfer manifest"),
+)
+for index, (start, end, name) in enumerate(FIXTURE_REGIONS):
+    if start < RECORD_AREA_START or end > PARTITION_SECTORS or start >= end:
+        raise RuntimeError(f"invalid fixture region: {name}")
+    for other_start, other_end, other_name in FIXTURE_REGIONS[:index]:
+        if start < other_end and other_start < end:
+            raise RuntimeError(f"overlapping fixture regions: {other_name} and {name}")
+
+SEEDED_APPEND_LBA = RECORD_AREA_START + SEEDED_RECORD_SECTORS
+if SEEDED_APPEND_LBA > min(start for start, _, _ in FIXTURE_REGIONS):
+    raise RuntimeError("seeded store records overlap fixture regions")
+RECOVERY_TARGET = bytes([0x55]) * 32
+RECOVERY_GENERATION_ROOT = bytes([0x66]) * 32
+RECOVERY_RELEASE_SEQUENCE = 3
+RECOVERY_BINDING = "recovered-state"
+RECOVERY_SCHEMA_VERSION = 1
+
+# M6.7: what the source transfer manifest carries.
+TRANSFER_GENERATION = bytes([0x77]) * 32
+TRANSFER_GENERATION_ROOT = bytes([0x88]) * 32
+TRANSFER_RELEASE_SEQUENCE = 5
+TRANSFER_OBJECT_TYPE = 1
+TRANSFER_PAYLOAD = b"Slime OS M6.7 transferred object\n"
+TRANSFER_STATE_BINDING = "transferred-state"
 
 
 def seeded_payload() -> bytes:
@@ -147,6 +211,134 @@ def place(image: bytearray, lba: int, data: bytes) -> None:
     image[lba * SECTOR : lba * SECTOR + len(data)] = data
 
 
+def recovery_index(state_object: bytes) -> bytes:
+    """A recovery index naming the store's seeded state object."""
+    return build_recovery_index(
+        RECOVERY_TARGET,
+        RECOVERY_GENERATION_ROOT,
+        RECOVERY_RELEASE_SEQUENCE,
+        0,
+        [(RECOVERY_BINDING, state_object, RECOVERY_SCHEMA_VERSION)],
+        STORE_FIRST + RECORD_AREA_START,
+        STORE_LAST,
+    )
+
+
+def transfer_manifest() -> bytes:
+    """A one-object, one-state transfer manifest.
+
+    Encoded here rather than by `build-transfer.py` because that script builds
+    from a *pair of real generations*, and this fixture needs only a
+    well-formed record for the seL4 plane to verify: the properties under test
+    are the self-excluding digest, the object closure's content hashes, and the
+    travel flags, none of which need a real generation behind them.
+    """
+    payload = TRANSFER_PAYLOAD
+    digest = sha256(payload)
+    state_root = sha256(b"transferred-state-root")
+    # `<32s32sIII4x`: binding, state root, schema version, policy, flags.
+    states = TRANSFER_STATE.pack(
+        binding_identity(TRANSFER_STATE_BINDING),
+        state_root,
+        1,
+        0,
+        STATE_FLAG_TRAVEL | STATE_FLAG_READ_ONLY,
+    )
+    release = bytes(RELEASE_BYTES)
+    metadata = b"sel4-transfer-fixture"
+    object_offset = TRANSFER_HEADER_BYTES
+    state_offset = object_offset + TRANSFER_OBJECT.size
+    release_offset = state_offset + len(states)
+    metadata_offset = release_offset + len(release)
+    payload_offset = metadata_offset + len(metadata)
+    total = payload_offset + len(payload)
+    # `<32sQQII8x`: digest, length, payload offset, kind, flags. The offset is
+    # absolute within the manifest, and must be nonzero exactly when the
+    # payload flag is set.
+    objects = TRANSFER_OBJECT.pack(
+        digest, len(payload), payload_offset, TRANSFER_OBJECT_TYPE, OBJECT_FLAG_PAYLOAD
+    )
+    # Field order is the generated layout's, read from
+    # `TRANSFER_HEADER_*_OFFSET` rather than guessed: magic, version, header
+    # size, required flags, generation, parent, source state root, authority
+    # manifest, release sequence, generation length, reserved, object count,
+    # state count, and then the six section offsets, the metadata length, the
+    # payload offset, the total length, a reserved tail, and the digest.
+    header = TRANSFER_HEADER.pack(
+        TRANSFER_MAGIC,
+        TRANSFER_VERSION,
+        TRANSFER_HEADER_BYTES,
+        0,
+        TRANSFER_GENERATION,
+        bytes(32),
+        state_root,
+        TRANSFER_GENERATION_ROOT,
+        TRANSFER_RELEASE_SEQUENCE,
+        0,
+        0,
+        1,
+        1,
+        object_offset,
+        state_offset,
+        release_offset,
+        metadata_offset,
+        len(metadata),
+        payload_offset,
+        total,
+        0,
+        bytes(32),
+    )
+    body = bytearray(header + objects + states + release + metadata + payload)
+    # The digest excludes its own field, which is why a tampered byte anywhere
+    # else is caught: hash the record with that window zeroed, then write it in.
+    hasher = hashlib.sha256()
+    hasher.update(bytes(body[:TRANSFER_HEADER_HASH_OFFSET]))
+    hasher.update(bytes(32))
+    hasher.update(bytes(body[TRANSFER_HEADER_HASH_END:]))
+    body[TRANSFER_HEADER_HASH_OFFSET:TRANSFER_HEADER_HASH_END] = hasher.digest()
+    return bytes(body)
+
+def boot_selection_image(bootstore: bytes) -> bytearray:
+    """Build a GPT disk whose store partition is exactly one boot-store image."""
+    partition_sectors = len(bootstore) // SECTOR
+    if len(bootstore) % SECTOR or partition_sectors == 0:
+        raise SystemExit("boot store must be non-empty and sector aligned")
+    capacity = STORE_FIRST + partition_sectors + 34
+    store_last = STORE_FIRST + partition_sectors - 1
+    last_usable = capacity - 34
+    backup_header_lba = capacity - 1
+    backup_entries_lba = backup_header_lba - (ENTRY_COUNT * ENTRY_SIZE) // SECTOR
+    if store_last > last_usable:
+        raise SystemExit("boot store exceeds selector disk geometry")
+
+    image = bytearray(capacity * SECTOR)
+    struct.pack_into("<B", image, 446 + 4, 0xEE)
+    struct.pack_into("<I", image, 446 + 8, 1)
+    struct.pack_into("<I", image, 446 + 12, min(capacity - 1, 0xFFFFFFFF))
+    struct.pack_into("<H", image, 510, 0xAA55)
+    entries = bytearray(ENTRY_COUNT * ENTRY_SIZE)
+    struct.pack_into("<16s", entries, 0, STORE_TYPE_GUID)
+    struct.pack_into("<16s", entries, 16, b"SLIMEOSBOOTSTORE")
+    struct.pack_into("<Q", entries, 32, STORE_FIRST)
+    struct.pack_into("<Q", entries, 40, store_last)
+    entries_crc = zlib.crc32(entries)
+
+    def header(current: int, backup: int, table_lba: int) -> bytes:
+        sector = bytearray(SECTOR)
+        struct.pack_into("<8sII", sector, 0, b"EFI PART", 0x00010000, 92)
+        struct.pack_into("<QQQQ", sector, 24, current, backup, FIRST_USABLE, last_usable)
+        struct.pack_into("<16sQIII", sector, 56, DISK_GUID, table_lba, ENTRY_COUNT, ENTRY_SIZE, entries_crc)
+        struct.pack_into("<I", sector, 16, zlib.crc32(bytes(sector[:92])))
+        return bytes(sector)
+
+    place(image, 1, header(1, backup_header_lba, PRIMARY_ENTRIES_LBA))
+    place(image, PRIMARY_ENTRIES_LBA, bytes(entries))
+    place(image, backup_entries_lba, bytes(entries))
+    place(image, backup_header_lba, header(backup_header_lba, 1, backup_entries_lba))
+    place(image, STORE_FIRST, bootstore)
+    return image
+
+
 def build(variant: str) -> bytearray:
     image = bytearray(CAPACITY * SECTOR)
 
@@ -170,15 +362,16 @@ def build(variant: str) -> bytearray:
     place(image, BACKUP_ENTRIES_LBA, entries)
     place(image, BACKUP_HEADER_LBA, backup)
 
-    # Object store genesis: slot B sequence 1 (empty), slot A sequence 2 with
-    # the seeded object committed; the record lives at record area start.
+    # Object store genesis: slot A commits the seeded object and leaves the
+    # append pointer at the first free record sector, before every fixture-only
+    # region asserted above.
     seeded = seeded_payload()
-    place(image, STORE_FIRST + 0, superblock(2, RECORD_AREA_START + SEEDED_RECORD_SECTORS, 1))
+    place(image, STORE_FIRST + 0, superblock(2, SEEDED_APPEND_LBA, 1))
     place(image, STORE_FIRST + 1, superblock(1, RECORD_AREA_START, 0))
     place(image, STORE_FIRST + RECORD_AREA_START, record(SEEDED_TYPE, seeded))
 
     if variant == "superblock-newest-damaged":
-        damaged = bytearray(superblock(2, RECORD_AREA_START + SEEDED_RECORD_SECTORS, 1))
+        damaged = bytearray(superblock(2, SEEDED_APPEND_LBA, 1))
         damaged[60] ^= 0xFF
         place(image, STORE_FIRST + 0, bytes(damaged))
     elif variant == "superblock-both-damaged":
@@ -193,7 +386,29 @@ def build(variant: str) -> bytearray:
         struct.pack_into("<8s", garbage, 0, RECORD_MAGIC)
         struct.pack_into("<I", garbage, 8, FORMAT_VERSION)
         struct.pack_into("<I", garbage, 24, 0xFFFF_FFFF)
-        place(image, STORE_FIRST + RECORD_AREA_START + SEEDED_RECORD_SECTORS, bytes(garbage))
+        place(image, STORE_FIRST + SEEDED_APPEND_LBA, bytes(garbage))
+
+    if variant == "recovery":
+        # Both BootState slots corrupt: not merely absent, but present-and-bad,
+        # so selection must refuse rather than treat the region as empty.
+        for slot in (STATE_SLOT_A, STATE_SLOT_B):
+            corrupt = bytearray(SECTOR)
+            corrupt[:8] = b"SLIMEBS\0"
+            corrupt[8:12] = struct.pack("<I", 1)
+            corrupt[64:96] = bytes([0xEE]) * 32
+            place(image, STORE_FIRST + slot, bytes(corrupt))
+        index = recovery_index(sha256(seeded))
+        if len(index) > RECOVERY_INDEX_SECTORS * SECTOR:
+            raise SystemExit("recovery index exceeds its reserved sectors")
+        padded = index + bytes(RECOVERY_INDEX_SECTORS * SECTOR - len(index))
+        place(image, STORE_FIRST + RECOVERY_INDEX_LBA, padded)
+
+    if variant == "transfer":
+        manifest = transfer_manifest()
+        if len(manifest) > TRANSFER_MANIFEST_SECTORS * SECTOR:
+            raise SystemExit("transfer manifest exceeds its reserved sectors")
+        padded = manifest + bytes(TRANSFER_MANIFEST_SECTORS * SECTOR - len(manifest))
+        place(image, STORE_FIRST + TRANSFER_MANIFEST_LBA, padded)
 
     return image
 
@@ -202,8 +417,16 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("image", type=Path)
     parser.add_argument("variant", choices=VARIANTS)
+    parser.add_argument("--boot-store", type=Path)
     arguments = parser.parse_args()
-    image = build(arguments.variant)
+    if arguments.variant == "boot-selection":
+        if arguments.boot_store is None:
+            raise SystemExit("boot-selection requires --boot-store")
+        image = boot_selection_image(arguments.boot_store.read_bytes())
+    else:
+        if arguments.boot_store is not None:
+            raise SystemExit("--boot-store is only valid with boot-selection")
+        image = build(arguments.variant)
     arguments.image.write_bytes(image)
     print(
         f"Built {arguments.image} variant={arguments.variant} "

@@ -13,6 +13,7 @@ pub const MAX_GRANTS: usize = 1;
 pub const MAX_COMMAND_BYTES: usize = 16;
 
 pub const REQUEST_FLAG_WAIT: u32 = 1;
+pub const REQUEST_FLAG_SHUTDOWN: u32 = 2;
 pub const CAPABILITY_ROLE_WORKING_DIRECTORY: u8 = 1;
 pub const CAPABILITY_ROLE_STDIN: u8 = 2;
 pub const CAPABILITY_ROLE_STDOUT: u8 = 4;
@@ -37,9 +38,8 @@ pub const OFF_REPLY_MAGIC: usize = 0;
 pub const OFF_REPLY_VERSION: usize = 4;
 pub const OFF_REPLY_STATUS: usize = 8;
 pub const OFF_REPLY_TERMINATION_KIND: usize = 12;
-pub const OFF_REPLY_TASK_ID: usize = 16;
-pub const OFF_REPLY_SUPERVISION_SLOT: usize = 24;
-pub const OFF_REPLY_DETAIL: usize = 28;
+pub const OFF_REPLY_SUPERVISION_SLOT: usize = 16;
+pub const OFF_REPLY_DETAIL: usize = 20;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WireSpawnRequest {
@@ -137,7 +137,6 @@ pub struct WireSpawnReply {
     pub version: u32,
     pub status: i32,
     pub termination_kind: u32,
-    pub task_id: u64,
     pub supervision_slot: u32,
     pub detail: u64,
 }
@@ -168,11 +167,6 @@ impl WireSpawnReply {
                     .try_into()
                     .expect("generated spawn layout"),
             ),
-            task_id: u64::from_le_bytes(
-                buf[OFF_REPLY_TASK_ID..OFF_REPLY_TASK_ID + 8]
-                    .try_into()
-                    .expect("generated spawn layout"),
-            ),
             supervision_slot: u32::from_le_bytes(
                 buf[OFF_REPLY_SUPERVISION_SLOT..OFF_REPLY_SUPERVISION_SLOT + 4]
                     .try_into()
@@ -193,7 +187,6 @@ impl WireSpawnReply {
         buf[OFF_REPLY_STATUS..OFF_REPLY_STATUS + 4].copy_from_slice(&self.status.to_le_bytes());
         buf[OFF_REPLY_TERMINATION_KIND..OFF_REPLY_TERMINATION_KIND + 4]
             .copy_from_slice(&self.termination_kind.to_le_bytes());
-        buf[OFF_REPLY_TASK_ID..OFF_REPLY_TASK_ID + 8].copy_from_slice(&self.task_id.to_le_bytes());
         buf[OFF_REPLY_SUPERVISION_SLOT..OFF_REPLY_SUPERVISION_SLOT + 4]
             .copy_from_slice(&self.supervision_slot.to_le_bytes());
         buf[OFF_REPLY_DETAIL..OFF_REPLY_DETAIL + 8].copy_from_slice(&self.detail.to_le_bytes());

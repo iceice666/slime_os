@@ -148,4 +148,4 @@ render :: Protocol -> { rust : Text; }
     then { rust = rustBindings protocol; }
     else { rust = "INVALID_SAMPLE_DESCRIPTOR_SCHEMA"; };
 
-{ render = render; }
+{ render =; }

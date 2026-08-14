@@ -1,6 +1,6 @@
 # Core runtime track
 
-**Status:** C7 and C8.1–C8.9 are complete under their named QEMU gates; the backlog is clear. C8.10 is in progress: its declared route-worker partition and wait-source bounds are gated, while the collision-free fabric-only bootstrap remains open on the kernel capability-table ceiling. The original C8.9 full-graph close was too broad for one reviewable slice and is now decomposed into C8.9–C8.15: typed profile closure, collision-free topology, deterministic time/traces, the authority matrix, concurrent resource ceilings, fault isolation, and the final aggregate gate. C9 remains blocked on the completed C8 parent plus P1; C10 may proceed independently.
+**Status:** C7 and C8.1–C8.9 are complete under their named QEMU gates. The backlog is clear: B46 replaced the logical channel mechanism these planes were gated on with native seL4 Endpoints, and all seven of its named plane gates — channel, crossing, stream, QoS, call, operation, visibility — pass on that path; B50 then deleted the logical capability and universal-syscall residue behind it. C8.10 is in progress: its declared route-worker partition and wait-source bounds are gated, while the collision-free fabric-only bootstrap remains open on the root capability-table ceiling. The original C8.9 full-graph close was too broad for one reviewable slice and is now decomposed into C8.9–C8.15: typed profile closure, collision-free topology, deterministic time/traces, the authority matrix, concurrent resource ceilings, and the graph-shape corpus.
 
 This track turns the existing bounded channels, capabilities, components, and generations into a native typed communication runtime. It is local-first: C7 and C8 require no network or physical driver, and they do not wait for unrelated display, audio, wireless, or GPU work.
 
@@ -1074,6 +1074,8 @@ byte-identical normalized schemas and semantic traces.
 This slice supplies the timing, execution, lifecycle, and observation contracts needed by robot and mixed interactive workloads. It does not promise hard real-time behavior from QEMU; deterministic state-machine checks precede measured latency evidence on a named physical target.
 
 **Depends on:** C8 and architecture-portability milestone P1. C9 defines architecture-neutral timer, wait-set, scheduling-class, lifecycle, and observation semantics; each admitted ISA supplies the privileged timer, interrupt, context-switch, and idle mechanisms behind P1's boundary.
+
+R2's ROS 2 managed-node and parameter-service compatibility is expected to be implemented as a profile over C9's lifecycle-transition and parameter-state schemas rather than a separate ROS-specific state machine; see [`devlog/2026-08-07-ros2-transport-zenoh-vs-dds/`](../devlog/2026-08-07-ros2-transport-zenoh-vs-dds/index.md).
 
 ### Deliverables
 

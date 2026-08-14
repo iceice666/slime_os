@@ -22,7 +22,7 @@ layout :: List WireField = {
   { name = "now_ns"; width = 8; signed = false; byteArray = false; };
   { name = "reserved"; width = 40; signed = false; byteArray = true; };
 };
-format ::= { formatVersion = formatVersion; recordLen = recordLen; magic = magic; fields = schemaValue.fields ?? {;}; layout = layout; };
+format ::= { formatVersion =; recordLen =; magic =; fields = schemaValue.fields ?? {;}; layout =; };
 main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }
   = caps => [ root := env.get caps.env "SLIME_FABRIC_TIME_BINDINGS_ROOT" ?? "."; bindings := gen.render format; path := t.join "" { root; "/components/proto/src/fabric_time.rs"; }; fs.writeAll caps.write path bindings.rust ];
 main

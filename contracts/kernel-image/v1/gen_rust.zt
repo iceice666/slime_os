@@ -50,4 +50,4 @@ render :: Format -> { python : Text; rust : Text; }
   = format => if w.recordsValid (records format)
     then { python = pythonBindings format; rust = rustBindings format; }
     else { python = "INVALID_KERNEL_IMAGE_SCHEMA"; rust = "INVALID_KERNEL_IMAGE_SCHEMA"; };
-{ render = render; }
+{ render =; }

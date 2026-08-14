@@ -6,3 +6,7 @@ target
 /.direnv
 /scripts/**/__pycache__/
 /contracts/bootstate/model/.trace-query-*/
+# Every seL4 product build output: the kernel build tree and install prefix,
+# the per-artifact cargo target dirs, the packaged image, and its identity
+# manifest all land under /build/.
+/build/

@@ -19,12 +19,45 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: nightly-2026-05-26
-          targets: x86_64-unknown-none,x86_64-unknown-uefi
+          targets: aarch64-unknown-uefi,x86_64-unknown-uefi
           components: clippy,rustfmt,rust-src
       - uses: Swatinem/rust-cache@v2
       - uses: extractions/setup-just@v2
       - run: just fmt_check_all
-      - run: just lint_all
+      # Host-capable cutover crates stay on the ordinary runner. The seL4
+      # target crates additionally run against the pinned product prefix below.
+      - run: just lint_stage0 lint_boot_contracts lint_components_host
+
+  sel4_builder:
+    name: Pinned seL4 lint and root tests
+    runs-on: [self-hosted, linux, sel4-builder]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: extractions/setup-just@v2
+      # The labelled builder is provisioned through this repository's pinned
+      # Nix shell; build the exact prefix/child artifacts before consuming them.
+      - run: nix develop --command just sel4_qemu_image_check
+      - run: nix develop --command just lint_sel4_root
+      - run: nix develop --command just test_sel4_root
+      - run: nix develop --command just release_trust_check
+      - run: nix develop --command just bootstate_trace_check
+
+  sel4_pins:
+    name: seL4 pins
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: extractions/setup-just@v2
+      # Static pin validation only: submodule commits and origins, the seL4
+      # release, both Rust toolchain pins, the root target spec bytes, and the
+      # qemu-arm-virt kernel configuration. `--skip-host-tools` drops the
+      # installed-rustup and QEMU-version assertions, which belong to the
+      # machine that actually builds and boots the image.
+      - run: python3 scripts/check/check-sel4-pins.py --skip-host-tools
 
   test_host:
     name: Host tests
@@ -36,7 +69,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: nightly-2026-05-26
-          targets: x86_64-unknown-none
           components: rust-src
       - uses: Swatinem/rust-cache@v2
       - uses: extractions/setup-just@v2
@@ -52,7 +84,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: nightly-2026-05-26
-          targets: x86_64-unknown-none
           components: miri,rust-src
       - uses: Swatinem/rust-cache@v2
       - uses: extractions/setup-just@v2
@@ -68,25 +99,32 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: nightly-2026-05-26
-          targets: x86_64-unknown-none
           components: rust-src
       - uses: Swatinem/rust-cache@v2
       - uses: extractions/setup-just@v2
       - run: just contracts_check
+      - run: just x86_portability_check
+      - run: just framework_safety_check
       - run: just devlog_check
+      # No build and no QEMU: it drives each seL4 gate's own marker table with
+      # transcripts that are wrong in one specific way, so it runs anywhere the
+      # checkers import.
+      - run: just sel4_gate_control_check
 
   deps:
     name: cargo-deny and machete
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-machete
-      - run: cargo-machete boot-contracts components kernel stage0
+      - run: cargo-machete boot-contracts components slime-root stage0
 
   scripts:
     name: ruff and typos

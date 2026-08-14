@@ -144,30 +144,30 @@ traceLayout :: List WireField = {
 };
 
 format ::= {
-  formatVersion = formatVersion;
-  recordLen = recordLen;
-  routeNameBytes = routeNameBytes;
-  visibilityRequestMagic = visibilityRequestMagic;
-  visibilityRouteMagic = visibilityRouteMagic;
-  visibilityQosMagic = visibilityQosMagic;
-  interpositionTraceMagic = interpositionTraceMagic;
-  statusRecord = statusRecord;
-  statusEnd = statusEnd;
-  knownRequestFlags = knownRequestFlags;
-  knownRouteFlags = knownRouteFlags;
-  knownQosFlags = knownQosFlags;
-  knownTraceFlags = knownTraceFlags;
-  traceRelayed = traceRelayed;
-  traceProxyLost = traceProxyLost;
-  eventProxyLost = eventProxyLost;
+  formatVersion =;
+  recordLen =;
+  routeNameBytes =;
+  visibilityRequestMagic =;
+  visibilityRouteMagic =;
+  visibilityQosMagic =;
+  interpositionTraceMagic =;
+  statusRecord =;
+  statusEnd =;
+  knownRequestFlags =;
+  knownRouteFlags =;
+  knownQosFlags =;
+  knownTraceFlags =;
+  traceRelayed =;
+  traceProxyLost =;
+  eventProxyLost =;
   requestFields = requestSchema.fields ?? {;};
   routeFields = routeSchema.fields ?? {;};
   qosFields = qosSchema.fields ?? {;};
   traceFields = traceSchema.fields ?? {;};
-  requestLayout = requestLayout;
-  routeLayout = routeLayout;
-  qosLayout = qosLayout;
-  traceLayout = traceLayout;
+  requestLayout =;
+  routeLayout =;
+  qosLayout =;
+  traceLayout =;
 };
 
 main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }

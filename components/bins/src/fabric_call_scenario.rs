@@ -1,33 +1,34 @@
 #![allow(dead_code)]
 
-use boot_contracts::fabric_graph::{
-    CONTRACT_KIND_CALL, DIRECTION_CLIENT, DIRECTION_SERVER, route_identity,
-};
-use slime_proto::capability_transfer::{
-    FABRIC_REQUEST_MAGIC, FORMAT_VERSION as TRANSFER_VERSION, OBJECT_KIND_ENDPOINT, REQUEST_LEN,
-    WireCapabilityTransfer, WireFabricRequest,
-};
+use boot_contracts::fabric_graph::{DIRECTION_CLIENT, DIRECTION_SERVER};
+use slime_proto::capability_transfer::OBJECT_KIND_SHARED_BUFFER_LOAN;
 use slime_proto::fabric_call::*;
 use slime_proto::interface_schema::parameter_call;
 use slime_proto::sample_descriptor::{
     CAPABILITY_KIND_LOAN, SAMPLE_DESCRIPTOR_MAGIC, WireSampleDescriptor,
 };
 use slime_rt::{
-    ERR_BAD_CAP, ERR_PEER_DEAD, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG, WaitSource,
+    CapabilityDisposition, ERR_PEER_DEAD, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG,
 };
 
-const CONTROL_SLOT: u32 = 0;
+include!(concat!(env!("OUT_DIR"), "/fabric_profile.rs"));
 const FACTORY_SLOT: u32 = 1;
-const FABRIC_SUPERVISION_SLOT: u32 = 2;
-const ROUTE_NAME: &str = "parameters";
-const RIGHT_SEND: u64 = 1;
-const RIGHT_RECV: u64 = 2;
+
+/// The fabric, as this participant's loan receiver.
+///
+/// A loan names its receiver through a capability, and the broker is reachable
+/// here by the *declared control endpoint* rather than by a supervision handle:
+/// requiring supervision in this direction is an unbreakable spawn-ordering
+/// cycle, since the fabric must already exist to loan a ring back while a
+/// handle naming it cannot exist before it does. The generation fixes both ends
+/// of this endpoint before either task runs, so the receiver is still a
+/// capability fact and not an ambient task id.
+const FABRIC_RECEIVER_SLOT: u32 = 0;
 const PAGE: u64 = 4096;
 const BASE: u64 = 0x7100_0000;
 const CLIENT_PHASE_SLOT: u32 = 1;
 
 pub fn run_client_b() {
-    boot_park(DIRECTION_CLIENT, b"fabric-call-client-b");
     let route = request_role(DIRECTION_CLIENT);
     let session = client_session(1);
     send_call(
@@ -81,26 +82,41 @@ pub fn run_client_b() {
     );
     expect_terminal(route, 0x000e_0000_0000_0001, 23, STATUS_STALE);
     slime_rt::debug_write(b"[fabric-call-client-b] stale session observed\n");
-
     wait_client_phase(0);
-    for request_id in 100..124 {
-        send_call(
-            route,
-            envelope(
-                0x000e_0000_0000_0001,
-                request_id,
-                KIND_REQUEST,
-                0,
-                STATUS_SUCCESS,
-                request_id,
-            ),
-        );
-    }
-    for _ in 0..128 {
-        slime_rt::yield_now();
-    }
-    for request_id in 100..124 {
-        expect_terminal(route, 0x000e_0000_0000_0001, request_id, STATUS_STALE);
+    // Overrun the broker's in-flight bound, then drain what it queued.
+    //
+    // The burst is chunked rather than fired as one block of 24. Under the
+    // logical channels this scenario was written against, a send buffered and
+    // returned, so the client could offer everything and only then read. A
+    // native send rendezvous instead: it blocks until the broker receives, and
+    // the broker cannot hand a terminal to a client that is still sending --
+    // `seL4_NBSend` reaches only a peer already blocked on receive. A client
+    // that never pauses to read is therefore a client the broker can never
+    // answer, and its queue fills at `MAX_PENDING_TERMINALS_PER_CLIENT`.
+    //
+    // The property under test is unchanged and still exercised: each chunk is
+    // larger than the four calls the broker admits in flight, so every chunk
+    // drives it past its bound and every request comes back refused.
+    const BURST: u64 = 6;
+    const CHUNKS: u64 = 4;
+    for chunk in 0..CHUNKS {
+        let first = 100 + chunk * BURST;
+        for request_id in first..first + BURST {
+            send_call(
+                route,
+                envelope(
+                    0x000e_0000_0000_0001,
+                    request_id,
+                    KIND_REQUEST,
+                    0,
+                    STATUS_SUCCESS,
+                    request_id,
+                ),
+            );
+        }
+        for request_id in first..first + BURST {
+            expect_terminal(route, 0x000e_0000_0000_0001, request_id, STATUS_STALE);
+        }
     }
     slime_rt::debug_write(b"[fabric-call-client-b] terminal backpressure recovered\n");
     signal_client_phase(0);
@@ -109,15 +125,18 @@ pub fn run_client_b() {
 }
 
 pub fn run_server() {
-    boot_park(DIRECTION_SERVER, b"fabric-call-server");
     let route = request_role(DIRECTION_SERVER);
     let mut executed_non_idempotent = false;
     loop {
         let mut bytes = [0u8; MAX_MSG];
         let mut caps = [0u64; MAX_CAPS_PER_MSG];
-        let length = match slime_rt::recv(route, &mut bytes, &mut caps) {
+        // One endpoint, and nothing to do until it speaks: block in the kernel
+        // rather than poll. The broker forwards with a blocking `send`, which
+        // rendezvous only with a receiver already waiting, so a polling server
+        // and a blocking broker would never meet.
+        let length = match slime_rt::recv_blocking(route, &mut bytes, &mut caps) {
             ERR_WOULDBLOCK => {
-                slime_rt::wait(&[WaitSource::Endpoint(route)]);
+                slime_rt::yield_now();
                 continue;
             }
             ERR_PEER_DEAD => return,
@@ -139,6 +158,12 @@ pub fn run_server() {
                     fail(b"server received invalid call record")
                 }
                 if request.kind == KIND_CANCEL {
+                    // Announce the settlement before replying. `send_call`
+                    // blocks until the broker takes the message, and the broker
+                    // reports the cancellation the moment it does -- so
+                    // replying first would always put the broker's marker
+                    // before this one, making the causal order unobservable.
+                    slime_rt::debug_write(b"[fabric-call-server] cancellation settled\n");
                     send_call(
                         route,
                         envelope(
@@ -150,7 +175,6 @@ pub fn run_server() {
                             0,
                         ),
                     );
-                    slime_rt::debug_write(b"[fabric-call-server] cancellation settled\n");
                     continue;
                 }
                 if request.payload_len == 8
@@ -165,7 +189,9 @@ pub fn run_server() {
                 }
             }
             SAMPLE_DESCRIPTOR_MAGIC => {
-                let loan_slot = caps[0] as u32;
+                // A delegated loan is a root-recorded export, not an in-message
+                // capability: only a native Endpoint travels inline.
+                let loan_slot = slime_rt::capability_import().unwrap_or(0);
                 let descriptor = WireSampleDescriptor::decode(&bytes)
                     .unwrap_or_else(|| fail(b"shared request decode"));
                 if loan_slot == 0
@@ -244,78 +270,17 @@ fn handle_inline(
     }
 }
 
-/// C8.10 full-graph boot arm: take the declared call role, then park forever.
-///
-/// A no-op outside the boot generation, so a caller writes `boot_park(..)` as
-/// the first line of its scenario. The boot gate asserts a provisioned graph at
-/// rest with no traffic; the call scenario's own correlation, duplicate,
-/// timeout, and peer-death arms stay `just fabric_call_check`'s to prove.
-pub fn boot_park(direction: u32, name: &'static [u8]) {
-    if !slime_components::fabric_boot::active() {
-        return;
+/// Full-graph boot copies hold their declared endpoint but do not drive the
+/// scenario transcript.
+pub fn boot_park(_direction: u32, name: &'static [u8]) {
+    if slime_components::fabric_boot::active() {
+        slime_components::fabric_boot::park(name)
     }
-    // `request_role` already verifies the descriptor names this exact
-    // (route, direction) edge and carries no more rights than declared, so the
-    // marker below reports a checked role rather than merely a received one.
-    let _route = request_role(direction);
-    slime_rt::debug_write(b"[");
-    slime_rt::debug_write(name);
-    slime_rt::debug_write(b"] boot role provisioned\n");
-    slime_components::fabric_boot::park(name)
 }
 
-pub fn request_role(direction: u32) -> u32 {
-    let route = route_identity(
-        ROUTE_NAME,
-        &parameter_call::INTERFACE_IDENTITY,
-        CONTRACT_KIND_CALL,
-    );
-    let mut route_name = [0u8; 32];
-    route_name[..ROUTE_NAME.len()].copy_from_slice(ROUTE_NAME.as_bytes());
-    let request = WireFabricRequest {
-        magic: FABRIC_REQUEST_MAGIC,
-        version: TRANSFER_VERSION,
-        flags: 0,
-        direction,
-        type_identity: parameter_call::TYPE_TAG,
-        route_name_len: ROUTE_NAME.len() as u32,
-        route_name,
-        reserved: [0; 4],
-    };
-    send_raw(CONTROL_SLOT, &request.encode());
-    let mut message = [0u8; MAX_MSG];
-    let mut caps = [0u64; MAX_CAPS_PER_MSG];
-    loop {
-        match slime_rt::recv(CONTROL_SLOT, &mut message, &mut caps) {
-            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(CONTROL_SLOT)]),
-            value if value < 0 => fail(b"role receive"),
-            value => {
-                if value as usize != MAX_MSG || caps[0] == 0 {
-                    fail(b"role shape")
-                }
-                let descriptor = WireCapabilityTransfer::decode(&message)
-                    .unwrap_or_else(|| fail(b"role decode"));
-                if !slime_proto::valid_capability_transfer(
-                    &descriptor,
-                    &route,
-                    direction,
-                    OBJECT_KIND_ENDPOINT,
-                ) || descriptor.rights_mask != RIGHT_SEND | RIGHT_RECV
-                {
-                    fail(b"role authority")
-                }
-                let slot = caps[0] as u32;
-                let mut discard = [0u8; MAX_MSG];
-                let mut no_caps = [0u64; MAX_CAPS_PER_MSG];
-                if slime_rt::recv(slot, &mut discard, &mut no_caps) == ERR_BAD_CAP
-                    || slime_rt::send(slot, b"probe", &[]) == ERR_BAD_CAP
-                {
-                    fail(b"call role missing one direction")
-                }
-                return slot;
-            }
-        }
-    }
+/// Every call participant receives its preinstalled route endpoint at slot 0.
+pub const fn request_role(_direction: u32) -> u32 {
+    0
 }
 
 pub fn client_session(index: usize) -> u64 {
@@ -379,7 +344,7 @@ pub fn send_large_request(route: u32, request_id: u64) {
     if slime_rt::shared_buffer_seal(buffer.slot) != ERR_SUCCESS {
         fail(b"large seal")
     }
-    let loan = slime_rt::shared_buffer_loan(buffer.slot, FABRIC_SUPERVISION_SLOT, 0, PAGE)
+    let loan = slime_rt::shared_buffer_loan(buffer.slot, FABRIC_RECEIVER_SLOT, 0, PAGE, false)
         .unwrap_or_else(|_| fail(b"large loan"));
     let descriptor = WireSampleDescriptor {
         magic: SAMPLE_DESCRIPTOR_MAGIC,
@@ -417,7 +382,7 @@ fn send_large_reply(route: u32, request_id: u64) {
     if slime_rt::shared_buffer_seal(buffer.slot) != ERR_SUCCESS {
         fail(b"reply seal")
     }
-    let loan = slime_rt::shared_buffer_loan(buffer.slot, FABRIC_SUPERVISION_SLOT, 0, PAGE)
+    let loan = slime_rt::shared_buffer_loan(buffer.slot, FABRIC_RECEIVER_SLOT, 0, PAGE, false)
         .unwrap_or_else(|_| fail(b"reply loan"));
     let descriptor = WireSampleDescriptor {
         magic: SAMPLE_DESCRIPTOR_MAGIC,
@@ -476,12 +441,20 @@ fn verify_large(loan_slot: u32, descriptor: &WireSampleDescriptor) {
     }
 }
 
+/// Wait for one call record on `slot`, blocking until it arrives.
+///
+/// Blocking is load-bearing, not an optimisation. A native `send` blocks in the
+/// kernel until a receiver is ready, and a non-blocking `recv` only succeeds
+/// against a sender *already* blocked on the endpoint. A caller that polls
+/// while its peer blocks therefore never rendezvous with it: both sides wait
+/// forever. A participant awaiting a reply has nothing else to do, so it waits
+/// in the kernel where the sender can find it.
 pub fn recv_call(slot: u32) -> WireCallEnvelope {
     let mut bytes = [0u8; MAX_MSG];
     let mut caps = [0u64; MAX_CAPS_PER_MSG];
     loop {
-        match slime_rt::recv(slot, &mut bytes, &mut caps) {
-            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(slot)]),
+        match slime_rt::recv_blocking(slot, &mut bytes, &mut caps) {
+            ERR_WOULDBLOCK => slime_rt::yield_now(),
             ERR_PEER_DEAD => fail(b"call peer died"),
             value if value < 0 => fail(b"call receive"),
             value => {
@@ -495,16 +468,26 @@ pub fn recv_call(slot: u32) -> WireCallEnvelope {
     }
 }
 
+/// Wait for a large payload's descriptor and claim the loan it names.
+///
+/// The loan does not travel in the message. Only a native Endpoint crosses
+/// inline, so a delegated loan is a root-recorded export the receiver claims
+/// with `capability_import` -- `caps[0]` is always zero here, and reading it as
+/// the loan is what made every shared exchange fail its shape check.
 fn recv_descriptor(slot: u32) -> (WireSampleDescriptor, u32) {
     let mut bytes = [0u8; MAX_MSG];
     let mut caps = [0u64; MAX_CAPS_PER_MSG];
     loop {
-        match slime_rt::recv(slot, &mut bytes, &mut caps) {
-            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(slot)]),
+        match slime_rt::recv_blocking(slot, &mut bytes, &mut caps) {
+            ERR_WOULDBLOCK => slime_rt::yield_now(),
             value if value < 0 => fail(b"descriptor receive"),
             value => {
-                if value as usize != MAX_MSG || caps[0] == 0 {
+                if value as usize != MAX_MSG {
                     fail(b"descriptor shape")
+                }
+                let loan_slot = slime_rt::capability_import().unwrap_or(0);
+                if loan_slot == 0 {
+                    fail(b"descriptor carried no loan")
                 }
                 let descriptor = WireSampleDescriptor::decode(&bytes)
                     .unwrap_or_else(|| fail(b"descriptor decode"));
@@ -516,7 +499,7 @@ fn recv_descriptor(slot: u32) -> (WireSampleDescriptor, u32) {
                 ) {
                     fail(b"descriptor invalid")
                 }
-                return (descriptor, caps[0] as u32);
+                return (descriptor, loan_slot);
             }
         }
     }
@@ -535,11 +518,18 @@ pub fn expect_reply(slot: u32, session: u64, request_id: u64, status: i32) -> Wi
     reply
 }
 
-pub fn expect_terminal_yielding(slot: u32, session: u64, request_id: u64, status: i32) {
+/// Wait for a terminal the broker produces only after observing a peer's death.
+///
+/// Blocking, like every other receive here. The broker offers terminals with
+/// `seL4_NBSend`, which reaches only a peer already blocked on the endpoint, so
+/// a caller that polls and yields is never visible to it: two non-blocking
+/// peers never rendezvous however long either spins. The name refers to the
+/// *broker* parking on the supervision handle, not to this reader polling.
+pub fn expect_terminal_parked(slot: u32, session: u64, request_id: u64, status: i32) {
     let mut bytes = [0u8; MAX_MSG];
     let mut caps = [0u64; MAX_CAPS_PER_MSG];
     loop {
-        match slime_rt::recv(slot, &mut bytes, &mut caps) {
+        match slime_rt::recv_blocking(slot, &mut bytes, &mut caps) {
             ERR_WOULDBLOCK => slime_rt::yield_now(),
             ERR_PEER_DEAD => fail(b"terminal peer died"),
             value if value < 0 => fail(b"terminal receive"),
@@ -564,6 +554,13 @@ pub fn expect_terminal_yielding(slot: u32, session: u64, request_id: u64, status
     }
 }
 
+/// Take one terminal and acknowledge it.
+///
+/// The ack is what lets the broker retire the record. It offers terminals with
+/// `seL4_NBSend`, which reports nothing -- a blocking send would deadlock
+/// against a client that is itself sending -- so the sender cannot observe
+/// delivery and must be told. Without this the broker re-offers forever and
+/// its queue fills at `MAX_PENDING_TERMINALS_PER_CLIENT`.
 pub fn expect_terminal(slot: u32, session: u64, request_id: u64, status: i32) {
     let terminal = recv_call(slot);
     if !slime_proto::valid_call_envelope(&terminal, parameter_call::TYPE_TAG)
@@ -573,6 +570,21 @@ pub fn expect_terminal(slot: u32, session: u64, request_id: u64, status: i32) {
         || terminal.status != status
     {
         fail(b"terminal mismatch")
+    }
+    // Ack with `seL4_Call`, not a bare send. The ack is the only thing that
+    // retires the broker's record, so it must arrive -- which rules out
+    // `try_send`, whose drops cost this plane 38 markers. But a blocking send
+    // deadlocks: the broker may be mid-sweep offering the *next* terminal to
+    // this very client, so neither peer is receiving.
+    //
+    // `Call` is neither. It blocks on the broker's reply atomically and hands
+    // it authority naming this caller, so the answer cannot be taken by another
+    // peer and this caller cannot miss it.
+    let mut ack = terminal;
+    ack.kind = KIND_TERMINAL_ACK;
+    let mut answer = [0u8; MAX_MSG];
+    if slime_rt::call(slot, &ack.encode(), &mut answer) < 0 {
+        fail(b"terminal ack")
     }
 }
 
@@ -586,12 +598,18 @@ fn signal_client_phase(phase: u8) {
     }
 }
 
+/// Wait for a phase barrier, blocking until the peer signals it.
+///
+/// A barrier is the one thing this component is waiting on, and the signaller
+/// uses a blocking `send`. Polling here would leave both sides waiting: a
+/// non-blocking receive only takes from a sender already blocked, and the
+/// sender only unblocks once someone receives.
 fn wait_client_phase(expected: u8) {
     let mut bytes = [0u8; MAX_MSG];
     let mut caps = [0u64; MAX_CAPS_PER_MSG];
     loop {
-        match slime_rt::recv(CLIENT_PHASE_SLOT, &mut bytes, &mut caps) {
-            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(CLIENT_PHASE_SLOT)]),
+        match slime_rt::recv_blocking(CLIENT_PHASE_SLOT, &mut bytes, &mut caps) {
+            ERR_WOULDBLOCK => slime_rt::yield_now(),
             value if value < 0 => fail(b"client phase receive"),
             1 if bytes[0] == expected => return,
             _ => fail(b"client phase mismatch"),
@@ -599,7 +617,51 @@ fn wait_client_phase(expected: u8) {
     }
 }
 
+/// This component's badge bit on the broker's wake notification.
+///
+/// Every peer holds the same Notification object at a different slot, because
+/// the slot *is* the badge: a broker woken by it can tell which peer spoke
+/// without asking. Each binary therefore has its own number, set once at
+/// startup from the generated profile rather than shared as a constant.
+///
+/// SAFETY: each component is single-threaded and sets this before any send.
+static mut WAKE_SLOT: u32 = 0;
+
+pub fn set_wake_slot(slot: u32) {
+    // SAFETY: single-threaded, and called once before any send.
+    unsafe { *core::ptr::addr_of_mut!(WAKE_SLOT) = slot };
+}
+
+/// The wake slot, or `None` where this graph declares no wake object. A
+/// component compiled for every profile must tolerate its absence, since the
+/// constant is emitted regardless (`u32::MAX` means "not in this graph").
+fn wake_slot() -> Option<u32> {
+    // SAFETY: single-threaded, as above.
+    let slot = unsafe { *core::ptr::addr_of!(WAKE_SLOT) };
+    (slot != u32::MAX).then_some(slot)
+}
+
+fn signal_wake() {
+    if let Some(slot) = wake_slot() {
+        let _ = slime_rt::notification_signal(slot);
+    }
+}
+
+/// Send one record to the broker, waking it first.
+///
+/// The signal goes *before* the send, and that order is the whole point: a
+/// native `send` blocks until the broker receives, so a broker parked waiting
+/// for something else would never learn this peer had spoken. Signalling first
+/// makes the wake already pending when the broker reaches its wait, so it
+/// returns immediately and sweeps its endpoints -- finding this sender blocked
+/// and ready to hand its message over.
+///
+/// A notification coalesces, so several peers signalling before the broker runs
+/// collapse to one wake carrying every badge bit. That is correct here: the
+/// wake means "at least one peer has something", and the sweep establishes
+/// which.
 fn send_raw(slot: u32, bytes: &[u8; MAX_MSG]) {
+    signal_wake();
     loop {
         match slime_rt::send(slot, bytes, &[]) {
             ERR_SUCCESS => return,
@@ -609,9 +671,20 @@ fn send_raw(slot: u32, bytes: &[u8; MAX_MSG]) {
     }
 }
 
+/// Delegate a loan to the broker, waking it first. Same ordering rule as
+/// [`send_raw`]: the wake must be pending before the blocking transfer, or a
+/// parked broker never learns this peer has spoken.
 fn send_with_cap(slot: u32, bytes: &[u8; MAX_MSG], cap: u32) {
+    signal_wake();
     loop {
-        match slime_rt::send(slot, bytes, &[cap]) {
+        match slime_rt::capability_delegate(
+            slot,
+            cap,
+            CapabilityDisposition::Move,
+            OBJECT_KIND_SHARED_BUFFER_LOAN,
+            1 << 9,
+            bytes,
+        ) {
             ERR_SUCCESS => return,
             ERR_WOULDBLOCK => slime_rt::yield_now(),
             _ => fail(b"call capability send"),
@@ -632,6 +705,5 @@ pub fn fail(reason: &[u8]) -> ! {
     slime_rt::exit(1)
 }
 
-const _: () = assert!(REQUEST_LEN == MAX_MSG);
 const _: () = assert!(CALL_LEN == MAX_MSG);
 const _: () = assert!(CALL_TIME_LEN == MAX_MSG);

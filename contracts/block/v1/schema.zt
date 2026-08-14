@@ -79,23 +79,23 @@ replyLayout :: List WireField = {
 };
 
 protocol ::= {
-  formatVersion = formatVersion;
-  requestLen = requestLen;
-  replyLen = replyLen;
-  blockMagic = blockMagic;
-  opRead = opRead;
-  opWrite = opWrite;
-  opFlush = opFlush;
-  flagInjectRequestFailure = flagInjectRequestFailure;
-  flagInjectTimeout = flagInjectTimeout;
-  flagInjectReset = flagInjectReset;
-  flagInjectFlushFailure = flagInjectFlushFailure;
-  flagInjectInterrupted = flagInjectInterrupted;
-  flagReplayLast = flagReplayLast;
+  formatVersion =;
+  requestLen =;
+  replyLen =;
+  blockMagic =;
+  opRead =;
+  opWrite =;
+  opFlush =;
+  flagInjectRequestFailure =;
+  flagInjectTimeout =;
+  flagInjectReset =;
+  flagInjectFlushFailure =;
+  flagInjectInterrupted =;
+  flagReplayLast =;
   requestFields = requestSchema.fields ?? {;};
   replyFields = replySchema.fields ?? {;};
-  requestLayout = requestLayout;
-  replyLayout = replyLayout;
+  requestLayout =;
+  replyLayout =;
 };
 
 main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }

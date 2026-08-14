@@ -1,0 +1,681 @@
+{
+  bootAction = "operation";
+  bootstrapInstance = "init";
+  executables = [
+    {
+      commandProfile = [];
+      name = "init";
+      object = "sha256:init";
+      role = "init";
+      spawnBudget = 6;
+    };
+    {
+      commandProfile = [];
+      name = "fabric-service";
+      object = "sha256:fabric-service";
+      role = "service";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [];
+      name = "fabric-op-client";
+      object = "sha256:fabric-op-client";
+      role = "application";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [];
+      name = "fabric-op-client-b";
+      object = "sha256:fabric-op-client-b";
+      role = "application";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [];
+      name = "fabric-op-client-b-restart";
+      object = "sha256:fabric-op-client-b-restart";
+      role = "application";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [];
+      name = "fabric-op-server";
+      object = "sha256:fabric-op-server";
+      role = "application";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [];
+      name = "fabric-op-time";
+      object = "sha256:fabric-op-time";
+      role = "service";
+      spawnBudget = 0;
+    };
+  ];
+  fabricGraph = {
+    fabricComponent = "fabric-service";
+    limits = {
+      bufferPages = 4;
+      buffers = 2;
+      capabilitySlots = 32;
+      clients = 4;
+      eventDepth = 8;
+      historyDepth = 4;
+      inFlightCalls = 0;
+      inFlightOperations = 4;
+      ingressSources = 5;
+      loans = 2;
+      mappings = 2;
+      publishers = 0;
+      queueDepth = 8;
+      retainedSamples = 4;
+      retries = 2;
+      routes = 2;
+      sampleBytes = 8192;
+      servers = 1;
+      subscribers = 0;
+    };
+    profiles = [
+      {
+        interpositions = [];
+        name = "sel4";
+      };
+    ];
+    routes = [
+      {
+        interface = "NavigationOperation";
+        name = "navigation";
+        participants = [
+          {
+            component = "fabric-op-client";
+            deadlineNs = 1000000;
+            direction = "client";
+            durability = "volatile";
+            historyDepth = 4;
+            interposition = [];
+            leaseNs = 0;
+            lifespanNs = 2000000;
+            liveliness = "automatic";
+            reliability = "reliable";
+            retainedDepth = 0;
+            visibility = "private";
+          };
+          {
+            component = "fabric-op-client-b";
+            deadlineNs = 1000000;
+            direction = "client";
+            durability = "volatile";
+            historyDepth = 4;
+            interposition = [];
+            leaseNs = 0;
+            lifespanNs = 2000000;
+            liveliness = "automatic";
+            reliability = "reliable";
+            retainedDepth = 0;
+            visibility = "private";
+          };
+          {
+            component = "fabric-op-client-b-restart";
+            deadlineNs = 1000000;
+            direction = "client";
+            durability = "volatile";
+            historyDepth = 4;
+            interposition = [];
+            leaseNs = 0;
+            lifespanNs = 2000000;
+            liveliness = "automatic";
+            reliability = "reliable";
+            retainedDepth = 0;
+            visibility = "private";
+          };
+          {
+            component = "fabric-op-server";
+            deadlineNs = 1000000;
+            direction = "server";
+            durability = "volatile";
+            historyDepth = 4;
+            interposition = [];
+            leaseNs = 5000000;
+            lifespanNs = 2000000;
+            liveliness = "manual";
+            reliability = "reliable";
+            retainedDepth = 0;
+            visibility = "private";
+          };
+        ];
+      };
+      {
+        interface = "NavigationOperation";
+        name = "nav-backup";
+        participants = [
+          {
+            component = "fabric-op-client";
+            deadlineNs = 1000000;
+            direction = "client";
+            durability = "volatile";
+            historyDepth = 4;
+            interposition = [];
+            leaseNs = 0;
+            lifespanNs = 2000000;
+            liveliness = "automatic";
+            reliability = "reliable";
+            retainedDepth = 0;
+            visibility = "private";
+          };
+        ];
+      };
+    ];
+  };
+  formatVersion = 1;
+  generation = 20;
+  grants = [
+    {
+      name = "init-fabric-service";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "fabric-service";
+      transferable = false;
+    };
+    {
+      name = "init-fabric-op-client";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "fabric-op-client";
+      transferable = true;
+    };
+    {
+      name = "init-fabric-op-client-b";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "fabric-op-client-b";
+      transferable = true;
+    };
+    {
+      name = "init-fabric-op-client-b-restart";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "fabric-op-client-b-restart";
+      transferable = true;
+    };
+    {
+      name = "init-fabric-op-server";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "fabric-op-server";
+      transferable = true;
+    };
+    {
+      name = "init-fabric-op-time";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "fabric-op-time";
+      transferable = false;
+    };
+    {
+      name = "init-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      rights = [
+        "bufferCreate";
+      ];
+      source = "init";
+      target = "init";
+      transferable = false;
+    };
+    {
+      name = "fabric-op-client-control";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "fabric-op-client";
+      target = "fabric-service";
+      transferable = false;
+    };
+    {
+      name = "fabric-op-client-b-control";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "fabric-op-client-b";
+      target = "fabric-service";
+      transferable = false;
+    };
+    {
+      name = "fabric-op-client-b-restart-control";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "fabric-op-client-b-restart";
+      target = "fabric-service";
+      transferable = false;
+    };
+    {
+      name = "fabric-op-server-control";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "fabric-op-server";
+      target = "fabric-service";
+      transferable = false;
+    };
+    {
+      name = "fabric-op-time-control";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "fabric-op-time";
+      target = "fabric-service";
+      transferable = false;
+    };
+    {
+      name = "fabric-op-phase-b";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "fabric-op-client";
+      target = "fabric-op-client-b";
+      transferable = false;
+    };
+    {
+      name = "fabric-op-phase-time";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "fabric-op-client";
+      target = "fabric-op-time";
+      transferable = false;
+    };
+    {
+      name = "fabric-op-phase-restart";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "fabric-op-client";
+      target = "fabric-op-client-b-restart";
+      transferable = false;
+    };
+    {
+      name = "fabric-op-restart-start";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "fabric-service";
+      target = "fabric-op-client-b-restart";
+      transferable = false;
+    };
+    {
+      name = "fabric-op-client-backup";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "fabric-op-client";
+      target = "fabric-service";
+      transferable = false;
+    };
+  ];
+  health = {
+    bootAttempts = 3;
+    requiredInstances = [
+      "fabric-service";
+      "init";
+    ];
+  };
+  instances = [
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "init-fabric-op-client";
+          slot = 1;
+        };
+        {
+          grant = "init-fabric-op-client-b";
+          slot = 2;
+        };
+        {
+          grant = "init-fabric-op-client-b-restart";
+          slot = 3;
+        };
+        {
+          grant = "init-fabric-op-server";
+          slot = 4;
+        };
+        {
+          grant = "init-fabric-op-time";
+          slot = 5;
+        };
+        {
+          grant = "init-fabric-service";
+          slot = 6;
+        };
+        {
+          grant = "init-shared-buffer-factory";
+          slot = 8;
+        };
+      ];
+      dependencies = [];
+      executable = "init";
+      health = "required";
+      name = "init";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "fabric-op-client-control";
+          slot = 2;
+        };
+        {
+          grant = "fabric-op-client-b-control";
+          slot = 3;
+        };
+        {
+          grant = "fabric-op-server-control";
+          slot = 4;
+        };
+        {
+          grant = "fabric-op-time-control";
+          slot = 5;
+        };
+        {
+          grant = "fabric-op-client-b-restart-control";
+          slot = 6;
+        };
+        {
+          grant = "fabric-op-client-backup";
+          slot = 7;
+        };
+        {
+          grant = "fabric-op-restart-start";
+          slot = 12;
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "fabric-service";
+      health = "required";
+      name = "fabric-service";
+      owner = "init";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "fabric-op-client-control";
+          slot = 0;
+        };
+        {
+          grant = "fabric-op-phase-b";
+          slot = 1;
+        };
+        {
+          grant = "fabric-op-phase-time";
+          slot = 2;
+        };
+        {
+          grant = "fabric-op-client-backup";
+          slot = 3;
+        };
+        {
+          grant = "fabric-op-phase-restart";
+          slot = 4;
+        };
+      ];
+      dependencies = [
+        "fabric-service";
+      ];
+      executable = "fabric-op-client";
+      health = "optional";
+      name = "fabric-op-client";
+      owner = "init";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "fabric-op-client-b-control";
+          slot = 0;
+        };
+        {
+          grant = "fabric-op-phase-b";
+          slot = 1;
+        };
+      ];
+      dependencies = [
+        "fabric-service";
+      ];
+      executable = "fabric-op-client-b";
+      health = "optional";
+      name = "fabric-op-client-b";
+      owner = "init";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "fabric-op-client-b-restart-control";
+          slot = 0;
+        };
+        {
+          grant = "fabric-op-phase-restart";
+          slot = 1;
+        };
+        {
+          grant = "fabric-op-restart-start";
+          slot = 2;
+        };
+      ];
+      dependencies = [
+        "fabric-service";
+      ];
+      executable = "fabric-op-client-b-restart";
+      health = "optional";
+      name = "fabric-op-client-b-restart";
+      owner = "init";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "fabric-op-server-control";
+          slot = 0;
+        };
+      ];
+      dependencies = [
+        "fabric-service";
+      ];
+      executable = "fabric-op-server";
+      health = "optional";
+      name = "fabric-op-server";
+      owner = "init";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "fabric-op-time-control";
+          slot = 0;
+        };
+        {
+          grant = "fabric-op-phase-time";
+          slot = 1;
+        };
+      ];
+      dependencies = [
+        "fabric-service";
+      ];
+      executable = "fabric-op-time";
+      health = "optional";
+      name = "fabric-op-time";
+      owner = "init";
+    };
+  ];
+  mintedBindings = [
+    {
+      name = "fabric-service-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      owner = "init";
+      holder = "fabric-service";
+      rights = [
+        "bufferCreate";
+      ];
+      slot = 1;
+      transferable = false;
+    };
+    {
+      name = "fabric-service-op-client-supervision";
+      capabilityKind = "supervision";
+      owner = "init";
+      holder = "fabric-service";
+      rights = [
+        "supervise";
+      ];
+      slot = 8;
+      transferable = false;
+    };
+    {
+      name = "fabric-service-op-client-b-supervision";
+      capabilityKind = "supervision";
+      owner = "init";
+      holder = "fabric-service";
+      rights = [
+        "supervise";
+      ];
+      slot = 9;
+      transferable = false;
+    };
+    {
+      name = "fabric-service-op-server-supervision";
+      capabilityKind = "supervision";
+      owner = "init";
+      holder = "fabric-service";
+      rights = [
+        "supervise";
+      ];
+      slot = 10;
+      transferable = false;
+    };
+    {
+      name = "fabric-service-op-client-b-restart-supervision";
+      capabilityKind = "supervision";
+      owner = "init";
+      holder = "fabric-service";
+      rights = [
+        "supervise";
+      ];
+      slot = 11;
+      transferable = false;
+    };
+  ];
+  interfaceSchemas = [
+    "contracts/interface-schema/v1/interfaces/navigation-operation.zti";
+  ];
+  objects = [
+    {
+      id = "sha256:init";
+      kind = "bootstrap";
+      size = 65536;
+    };
+    {
+      id = "sha256:fabric-service";
+      kind = "component";
+      size = 131072;
+    };
+    {
+      id = "sha256:fabric-op-client";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:fabric-op-client-b";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:fabric-op-client-b-restart";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:fabric-op-server";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:fabric-op-time";
+      kind = "component";
+      size = 32768;
+    };
+    {
+      id = "shared-buffer-budget";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "fabric-graph";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "boot-layout";
+      kind = "resource";
+      size = 4096;
+    };
+  ];
+  sharedBufferBudget = [
+    {
+      bufferCount = 2;
+      bytePages = 4;
+      holder = "fabric-service";
+      loanCount = 2;
+      mappingCount = 2;
+    };
+  ];
+  state = [];
+  target = "aarch64-sel4-qemu-virt";
+}

@@ -70,13 +70,13 @@ FromData @ResolvedDataFabricProfile :: derive
 decodeProfile :: Data -> Validation DecodeIssue ResolvedDataFabricProfile = data => decode data;
 
 {
-  ProfileLimit = ProfileLimit;
-  ProfileSchema = ProfileSchema;
-  ProfileRoute = ProfileRoute;
-  ProfileParticipant = ProfileParticipant;
-  ProfileControl = ProfileControl;
-  ProfilePlane = ProfilePlane;
-  ProfileWorker = ProfileWorker;
-  ResolvedDataFabricProfile = ResolvedDataFabricProfile;
-  decodeProfile = decodeProfile;
+  ProfileLimit =;
+  ProfileSchema =;
+  ProfileRoute =;
+  ProfileParticipant =;
+  ProfileControl =;
+  ProfilePlane =;
+  ProfileWorker =;
+  ResolvedDataFabricProfile =;
+  decodeProfile =;
 }

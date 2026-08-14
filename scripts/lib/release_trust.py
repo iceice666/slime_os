@@ -15,8 +15,8 @@ from boot_contracts import (
     RELEASE_HEADER_BYTES,
     RELEASE_HEADER_GENERATION_IDENTITY_END,
     RELEASE_HEADER_GENERATION_IDENTITY_OFFSET,
-    RELEASE_HEADER_KERNEL_IDENTITY_END,
-    RELEASE_HEADER_KERNEL_IDENTITY_OFFSET,
+    RELEASE_HEADER_BOOT_BUNDLE_IDENTITY_END,
+    RELEASE_HEADER_BOOT_BUNDLE_IDENTITY_OFFSET,
     RELEASE_HEADER_PARENT_IDENTITY_END,
     RELEASE_HEADER_PARENT_IDENTITY_OFFSET,
     RELEASE_HEADER_RELEASE_SEQUENCE_OFFSET,
@@ -30,6 +30,16 @@ from boot_contracts import (
     RELEASE_SIGNATURE_SIGNATURE_OFFSET,
     RELEASE_VERSION,
     SIGN_NAMESPACE,
+    GENERATION_EXECUTABLE,
+    GENERATION_GRANT,
+    GENERATION_HEADER_EXECUTABLE_COUNT_OFFSET,
+    GENERATION_HEADER_EXECUTABLE_OFFSET_OFFSET,
+    GENERATION_HEADER_GRANT_COUNT_OFFSET,
+    GENERATION_HEADER_GRANT_OFFSET_OFFSET,
+    GENERATION_HEADER_INSTANCE_COUNT_OFFSET,
+    GENERATION_HEADER_INSTANCE_OFFSET_OFFSET,
+    GENERATION_HEADER_STRING_OFFSET_OFFSET,
+    GENERATION_INSTANCE,
 )
 
 from harness import ROOT
@@ -109,64 +119,79 @@ def ssh_signature(path: Path, payload: bytes) -> bytes:
 
 
 def authority_manifest_identity(generation: bytes) -> bytes:
-    header = struct.Struct("<8sIIQ32sQ32sIIIIIIIIIIQQQQQQQQQQ40x")
-    component = struct.Struct("<IIIII12x")
     version = struct.unpack_from("<I", generation, 8)[0]
-    # Grant record layout and hashed rights width differ by format version:
-    # v3 carries a 64-bit rights field; v2 carried a 32-bit field. The retained
-    # v2 path keeps the original 32-bit hashing so a known-good v2 generation
-    # still matches its signed release during the rollback window.
-    if version <= 2:
-        grant = struct.Struct("<IIIII12x")
-        rights_pack = "<I"
+    if version >= 4:
+        executable_count = struct.unpack_from("<I", generation, GENERATION_HEADER_EXECUTABLE_COUNT_OFFSET)[0]
+        instance_count = struct.unpack_from("<I", generation, GENERATION_HEADER_INSTANCE_COUNT_OFFSET)[0]
+        grant_count = struct.unpack_from("<I", generation, GENERATION_HEADER_GRANT_COUNT_OFFSET)[0]
+        executable_offset = struct.unpack_from("<Q", generation, GENERATION_HEADER_EXECUTABLE_OFFSET_OFFSET)[0]
+        instance_offset = struct.unpack_from("<Q", generation, GENERATION_HEADER_INSTANCE_OFFSET_OFFSET)[0]
+        grant_offset = struct.unpack_from("<Q", generation, GENERATION_HEADER_GRANT_OFFSET_OFFSET)[0]
+        string_offset = struct.unpack_from("<Q", generation, GENERATION_HEADER_STRING_OFFSET_OFFSET)[0]
+        executable = GENERATION_EXECUTABLE
+        instance = GENERATION_INSTANCE
     else:
-        grant = struct.Struct("<IIIQI8x")
-        rights_pack = "<Q"
-    fields = header.unpack_from(generation)
-    component_count = fields[12]
-    grant_count = fields[14]
-    component_offset = fields[18]
-    grant_offset = fields[20]
-    string_offset = fields[23]
+        header = struct.Struct("<8sIIQ32sQ32sIIIIIIIIIIQQQQQQQQQQ40x")
+        component = struct.Struct("<IIIII12x")
+        fields = header.unpack_from(generation)
+        executable_count = fields[12]
+        instance_count = executable_count
+        grant_count = fields[14]
+        executable_offset = fields[18]
+        instance_offset = executable_offset
+        grant_offset = fields[20]
+        string_offset = fields[23]
+        executable = component
+        instance = component
 
     def text(offset: int) -> bytes:
         length = struct.unpack_from("<H", generation, string_offset + offset)[0]
         return generation[string_offset + offset + 2 : string_offset + offset + 2 + length]
 
-    component_names = []
-    for index in range(component_count):
-        name_offset = component.unpack_from(generation, component_offset + index * component.size)[0]
-        component_names.append(text(name_offset))
+    executable_names = [
+        text(executable.unpack_from(generation, executable_offset + index * executable.size)[0])
+        for index in range(executable_count)
+    ]
+    instance_names = [
+        text(instance.unpack_from(generation, instance_offset + index * instance.size)[0])
+        for index in range(instance_count)
+    ]
     hasher = hashlib.sha256()
     hasher.update(b"slime-authority-manifest-v1")
     for index in range(grant_count):
-        name_offset, source, target, rights, transferable = grant.unpack_from(
-            generation, grant_offset + index * grant.size
+        name_offset, source, target, rights, transferable, _flags, capability_kind = GENERATION_GRANT.unpack_from(
+            generation, grant_offset + index * GENERATION_GRANT.size
         )
-        for value in (text(name_offset), component_names[source], component_names[target]):
+        target_names = executable_names if version >= 5 and capability_kind == 2 else executable_names if version >= 4 and rights & (1 << 3) else instance_names
+        for value in (text(name_offset), instance_names[source], target_names[target]):
             hasher.update(struct.pack("<H", len(value)))
             hasher.update(value)
-        hasher.update(struct.pack(rights_pack, rights))
+        hasher.update(struct.pack("<I" if version <= 2 else "<Q", rights))
         hasher.update(struct.pack("<I", transferable))
     return hasher.digest()
 
 
-def generation_release_fields(generation: bytes) -> tuple[bytes, bytes, str, bytes, bytes]:
+def generation_release_fields(generation: bytes) -> tuple[bytes, bytes, str, bytes]:
     identity = generation[24:56]
     parent = generation[64:96]
     target_offset = struct.unpack_from("<I", generation, 96)[0]
-    kernel_index = struct.unpack_from("<I", generation, 100)[0]
-    object_offset = struct.unpack_from("<Q", generation, 136)[0]
-    string_offset = struct.unpack_from("<Q", generation, 184)[0]
+    string_offset = struct.unpack_from("<Q", generation, GENERATION_HEADER_STRING_OFFSET_OFFSET)[0]
     target_len = struct.unpack_from("<H", generation, string_offset + target_offset)[0]
     target = generation[string_offset + target_offset + 2 : string_offset + target_offset + 2 + target_len].decode()
-    object_record = object_offset + kernel_index * 64
-    kernel = generation[object_record + 24 : object_record + 56]
-    return identity, parent, target, kernel, authority_manifest_identity(generation)
+    return identity, parent, target, authority_manifest_identity(generation)
 
 
-def build_release(generation: bytes, sequence: int, key_paths: tuple[Path, ...] = KEY_PATHS) -> bytes:
-    identity, parent, target, kernel, authority = generation_release_fields(generation)
+def build_release(
+    generation: bytes,
+    sequence: int,
+    key_paths: tuple[Path, ...] = KEY_PATHS,
+    boot_bundle_identity: bytes | None = None,
+) -> bytes:
+    identity, parent, target, authority = generation_release_fields(generation)
+    if boot_bundle_identity is None:
+        boot_bundle_identity = sha256(b"slime-test-boot-bundle-v2")
+    if len(boot_bundle_identity) != 32 or boot_bundle_identity == bytes(32):
+        raise ValueError("boot bundle identity must be a nonzero SHA-256 digest")
     target_bytes = target.encode()
     if not 1 <= len(target_bytes) <= MAX_TARGET_BYTES or len(key_paths) > MAX_RELEASE_SIGNATURES:
         raise ValueError("release bound exceeded")
@@ -177,7 +202,7 @@ def build_release(generation: bytes, sequence: int, key_paths: tuple[Path, ...] 
     release[RELEASE_HEADER_PARENT_IDENTITY_OFFSET:RELEASE_HEADER_PARENT_IDENTITY_END] = parent
     struct.pack_into("<QII", release, RELEASE_HEADER_RELEASE_SEQUENCE_OFFSET, sequence, len(target_bytes), 1)
     release[RELEASE_HEADER_TARGET_OFFSET : RELEASE_HEADER_TARGET_OFFSET + len(target_bytes)] = target_bytes
-    release[RELEASE_HEADER_KERNEL_IDENTITY_OFFSET:RELEASE_HEADER_KERNEL_IDENTITY_END] = kernel
+    release[RELEASE_HEADER_BOOT_BUNDLE_IDENTITY_OFFSET:RELEASE_HEADER_BOOT_BUNDLE_IDENTITY_END] = boot_bundle_identity
     release[RELEASE_HEADER_AUTHORITY_MANIFEST_OFFSET:RELEASE_HEADER_AUTHORITY_MANIFEST_END] = authority
     struct.pack_into("<I", release, RELEASE_HEADER_SIGNATURE_COUNT_OFFSET, len(key_paths))
     payload = bytes(release[:RELEASE_HEADER_BYTES])

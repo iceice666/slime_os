@@ -25,9 +25,9 @@ needs it to state machine-checkable invariants.
 
 ## What exists today
 
-- The matrix defines object kinds, a flat `u32` rights space (bits 15–31
+- The matrix defines object kinds, a flat `u64` rights space (bits 26–63
   free), and the grammar rules every new object or right must satisfy.
-- Format v2 (M5.5, complete) fixes the 1:1 mapping between manifest
+- Generation format v5 fixes the 1:1 mapping between manifest
   rights strings and matrix rights bits — the model must check the
   mapping, not just the bits.
 - The methodology exists and is proven: `SelectableBootRootExists`,
@@ -47,7 +47,7 @@ grant set is a subset-closure of what the manifest declared.
 Mutations that must fail, per the register: removal of narrow-only on
 derive, and a transfer path that widens rights. A third candidate from
 the matrix itself: an object-kind/rights mismatch accepted by the
-format-v2 string mapping.
+format's string mapping.
 
 The open methodological risk is stated in the register: if the rights
 grammar changes faster than a model can track, the model becomes a
@@ -59,7 +59,7 @@ churn rate against the cost of keeping the model in lockstep.
 - Does the model cover only kernel-level operations, or also the
   bootstrap component's grant construction from the manifest (the
   userspace half of the authority path)?
-- How are free bits 15–31 handled — modeled as opaque, or must the model
+- How are free bits 26–63 handled — modeled as opaque, or must the model
   prove unused bits cannot acquire meaning by accident?
 - What is the promotion milestone that keeps model and implementation in
   lockstep — the same commit discipline M5.6 requires ("contract changes

@@ -38,7 +38,6 @@ fn reply_round_trips_and_short_messages_fail_closed() {
         version: FORMAT_VERSION,
         status: -1,
         termination_kind: 4,
-        task_id: 9,
         supervision_slot: 3,
         detail: 7,
     };

@@ -15,6 +15,8 @@ pub const CONSOLE_SLOT: u32 = 1;
 #[allow(dead_code)]
 pub const CONSOLE_OUTPUT_SLOT: u32 = 2;
 #[allow(dead_code)]
+pub const CROSSING_PEER_SLOT: u32 = SLOT_ABSENT;
+#[allow(dead_code)]
 pub const DANGO_SLOT: u32 = 3;
 #[allow(dead_code)]
 pub const DANGO_OUTPUT_SLOT: u32 = 4;
@@ -219,6 +221,8 @@ pub const POWERBOX_PROBE_SLOT: u32 = SLOT_ABSENT;
 #[allow(dead_code)]
 pub const POWERBOX_SERVICE_SLOT: u32 = 36;
 #[allow(dead_code)]
+pub const RECLAMATION_FAULT_SLOT: u32 = SLOT_ABSENT;
+#[allow(dead_code)]
 pub const SAMPLE_LENDER_SLOT: u32 = SLOT_ABSENT;
 #[allow(dead_code)]
 pub const SAMPLE_LENDER_SIDE_SLOT: u32 = SLOT_ABSENT;
@@ -227,9 +231,31 @@ pub const SAMPLE_RECEIVER_SLOT: u32 = SLOT_ABSENT;
 #[allow(dead_code)]
 pub const SAMPLE_RECEIVER_SIDE_SLOT: u32 = SLOT_ABSENT;
 #[allow(dead_code)]
+pub const SEL4_DIRECTORY_PROBE_SLOT: u32 = SLOT_ABSENT;
+#[allow(dead_code)]
+pub const SEL4_FILESYSTEM_SERVICE_SLOT: u32 = SLOT_ABSENT;
+#[allow(dead_code)]
+pub const SEL4_GENERATION_CLIENT_SLOT: u32 = SLOT_ABSENT;
+#[allow(dead_code)]
+pub const SEL4_GENERATION_MANAGER_SLOT: u32 = SLOT_ABSENT;
+#[allow(dead_code)]
+pub const SEL4_INPUT_PROBE_SLOT: u32 = SLOT_ABSENT;
+#[allow(dead_code)]
+pub const SEL4_RECOVERY_PROBE_SLOT: u32 = SLOT_ABSENT;
+#[allow(dead_code)]
+pub const SEL4_ROLLBACK_PROBE_SLOT: u32 = SLOT_ABSENT;
+#[allow(dead_code)]
+pub const SEL4_STORAGE_PROBE_SLOT: u32 = SLOT_ABSENT;
+#[allow(dead_code)]
+pub const SEL4_STORE_PROBE_SLOT: u32 = SLOT_ABSENT;
+#[allow(dead_code)]
+pub const SEL4_TRANSFER_PROBE_SLOT: u32 = SLOT_ABSENT;
+#[allow(dead_code)]
 pub const SERVICE_SPAWN_SLOT: u32 = 12;
 #[allow(dead_code)]
 pub const SPAWN_SERVICE_SLOT: u32 = 5;
+#[allow(dead_code)]
+pub const SPAWN_SERVICE_RPC_SLOT: u32 = SLOT_ABSENT;
 #[allow(dead_code)]
 pub const STORAGE_FAULT_PROBE_SLOT: u32 = SLOT_ABSENT;
 #[allow(dead_code)]
@@ -238,6 +264,8 @@ pub const STORAGE_PROBE_SLOT: u32 = SLOT_ABSENT;
 pub const STORAGE_STORE_PROBE_SLOT: u32 = SLOT_ABSENT;
 #[allow(dead_code)]
 pub const STORAGE_WRITER_SLOT: u32 = SLOT_ABSENT;
+#[allow(dead_code)]
+pub const SUPERVISION_CHILD_SLOT: u32 = SLOT_ABSENT;
 #[allow(dead_code)]
 pub const SYSINFO_SLOT: u32 = 6;
 

@@ -32,8 +32,9 @@ magic :: Int = 1381323091; -- `SOPR`
 
 -- Every leg of one operation. `goal` opens it, `accepted`/`rejected` answer the
 -- start call, `feedback` streams progress under the operation key, `result`
--- and `resultRequest` are the result call, `cancel` requests cancellation, and
--- `terminal` is the one transport outcome the client is owed.
+-- and `resultRequest` are the result call, `cancel` requests cancellation,
+-- `terminal` is the one transport outcome the client is owed, and
+-- `serverIdle` fences the final server record for one handled request.
 kindGoal :: Int = 1;
 kindAccepted :: Int = 2;
 kindFeedback :: Int = 3;
@@ -41,6 +42,7 @@ kindResult :: Int = 4;
 kindResultRequest :: Int = 5;
 kindCancel :: Int = 6;
 kindTerminal :: Int = 7;
+kindServerIdle :: Int = 8;
 
 -- Transport outcomes. `active` and `cancelRequested` are progress states an
 -- `accepted` record reports; the rest are terminal.
@@ -84,31 +86,32 @@ layout :: List WireField = {
   { name = "payload"; width = 16; signed = false; byteArray = true; };
 };
 format ::= {
-  formatVersion = formatVersion;
-  recordLen = recordLen;
-  inlineBytes = inlineBytes;
-  magic = magic;
-  kindGoal = kindGoal;
-  kindAccepted = kindAccepted;
-  kindFeedback = kindFeedback;
-  kindResult = kindResult;
-  kindResultRequest = kindResultRequest;
-  kindCancel = kindCancel;
-  kindTerminal = kindTerminal;
-  statusSuccess = statusSuccess;
-  statusRejected = statusRejected;
-  statusCancelled = statusCancelled;
-  statusExpired = statusExpired;
-  statusTimeout = statusTimeout;
-  statusPeerDead = statusPeerDead;
-  statusDuplicate = statusDuplicate;
-  statusStale = statusStale;
-  statusMalformed = statusMalformed;
-  statusRetryExhausted = statusRetryExhausted;
-  statusActive = statusActive;
-  statusCancelRequested = statusCancelRequested;
+  formatVersion =;
+  recordLen =;
+  inlineBytes =;
+  magic =;
+  kindGoal =;
+  kindAccepted =;
+  kindFeedback =;
+  kindResult =;
+  kindResultRequest =;
+  kindCancel =;
+  kindTerminal =;
+  kindServerIdle =;
+  statusSuccess =;
+  statusRejected =;
+  statusCancelled =;
+  statusExpired =;
+  statusTimeout =;
+  statusPeerDead =;
+  statusDuplicate =;
+  statusStale =;
+  statusMalformed =;
+  statusRetryExhausted =;
+  statusActive =;
+  statusCancelRequested =;
   fields = schemaValue.fields ?? {;};
-  layout = layout;
+  layout =;
 };
 main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }
   = caps => [

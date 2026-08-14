@@ -1,0 +1,11 @@
+[layout] path=init slots=9 max=64
+[layout] 1 executable console 0x10008
+[layout] 2 executable sysinfo 0x10008
+[layout] 5 directory - 0x80004
+[layout] 6 directory - 0x80004
+[layout] 7 directory - 0x80004
+[layout] 8 directory - 0x80004
+[layout] 9 directory - 0x80004
+[layout] 10 directory - 0x80004
+[layout] 11 directory - 0x80004
+[layout] end

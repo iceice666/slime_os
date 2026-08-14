@@ -18,19 +18,22 @@
 #![allow(dead_code)]
 
 use slime_proto::capability_transfer::{
-    FABRIC_REQUEST_MAGIC, FORMAT_VERSION, OBJECT_KIND_ENDPOINT, WireCapabilityTransfer,
+    FABRIC_REQUEST_MAGIC, FORMAT_VERSION, OBJECT_KIND_SHARED_BUFFER_LOAN, WireCapabilityTransfer,
     WireFabricRequest,
 };
 use slime_proto::valid_capability_transfer;
-use slime_rt::{ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG, WaitSource};
+use slime_rt::{ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
+mod generation_profile {
+    include!(concat!(env!("OUT_DIR"), "/fabric_profile.rs"));
+}
 
 /// Control endpoint to this participant's route worker. Init binds it to
 /// exactly one component at spawn, so it is also this participant's identity.
 const CONTROL_SLOT: u32 = 0;
 
-/// Whether this build is the full-graph boot generation.
+/// Whether the authenticated generation declares the full-graph boot action.
 pub fn active() -> bool {
-    option_env!("SLIME_FABRIC_BOOT_CHECK") == Some("1")
+    generation_profile::GENERATION_BOOT_ACTION == "boot"
 }
 
 fn fail(name: &[u8], reason: &[u8]) -> ! {
@@ -100,12 +103,8 @@ fn provision(name: &'static [u8], route_name: &str, type_tag: u64, direction: u3
         reserved: [0; 4],
     };
     let encoded = request.encode();
-    loop {
-        match slime_rt::send(CONTROL_SLOT, &encoded, &[]) {
-            ERR_SUCCESS => break,
-            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(CONTROL_SLOT)]),
-            _ => fail(name, b"boot role request"),
-        }
+    if slime_rt::send(CONTROL_SLOT, &encoded, &[]) != ERR_SUCCESS {
+        fail(name, b"boot role request");
     }
 }
 
@@ -116,10 +115,12 @@ fn accept_roles(name: &'static [u8], edges: &[([u8; 32], u32, usize)]) {
             if descriptor.status != 0 {
                 fail(name, b"declared participant was denied");
             }
-            // The descriptor is the kernel's own record of what it installed, so
-            // a role bound to another route or another direction shows up here
-            // rather than as traffic that silently crosses the wrong edge.
-            if !valid_capability_transfer(&descriptor, route, *direction, OBJECT_KIND_ENDPOINT) {
+            if !valid_capability_transfer(
+                &descriptor,
+                route,
+                *direction,
+                OBJECT_KIND_SHARED_BUFFER_LOAN,
+            ) {
                 fail(name, b"boot role binding");
             }
         }
@@ -142,7 +143,7 @@ pub fn park(name: &'static [u8]) -> ! {
     let mut received = [0u64; MAX_CAPS_PER_MSG];
     loop {
         match slime_rt::recv(CONTROL_SLOT, &mut message, &mut received) {
-            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(CONTROL_SLOT)]),
+            ERR_WOULDBLOCK => slime_rt::yield_now(),
             n if n < 0 => fail(name, b"boot idle control"),
             _ => {
                 for slot in received.iter().filter(|slot| **slot != 0) {
@@ -173,7 +174,7 @@ fn receive_role(name: &'static [u8]) -> WireCapabilityTransfer {
     let mut received = [0u64; MAX_CAPS_PER_MSG];
     loop {
         match slime_rt::recv(CONTROL_SLOT, &mut message, &mut received) {
-            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(CONTROL_SLOT)]),
+            ERR_WOULDBLOCK => slime_rt::yield_now(),
             n if n < 0 => fail(name, b"boot role reply"),
             _ => {
                 return WireCapabilityTransfer::decode(&message)

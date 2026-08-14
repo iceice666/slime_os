@@ -213,17 +213,17 @@
 
 ### M5.7 — Framework NVMe transport and safety promotion
 
-**Status:** Implementation complete; QEMU checks pass; required physical Framework evidence is pending. This is the only open M5 item.
+**Status:** Blocked. The custom-kernel/QEMU implementation was retired with P5; no seL4 NVMe transport or physical Framework evidence exists. This is the only open M5 item.
 
 **Depends on:** M5.1–M5.6c and M4 removable-media safety.
 
-**Delivered in implementation/QEMU:** Bounded controller and namespace discovery, queue setup, timeout/reset handling, and read-only I/O over the common block protocol. The removable image has no internal-NVMe write path.
+**Historical implementation:** The retired custom kernel carried bounded controller and namespace discovery, queue setup, timeout/reset handling, and read-only I/O over the common block protocol. That path was not part of the seL4 product cutover. Internal-NVMe writes remain unavailable.
 
-**Still required:** Observe and record a removable-media Framework boot of the storage-aware isolated slice without modifying internal NVMe. Destructive writes and interruption experiments may run only on a dedicated replaceable external test device.
+**Still required:** Implement the transport behind the seL4 userspace driver boundary, then observe and record a removable-media Framework boot of the storage-aware isolated slice without modifying internal NVMe. Destructive writes and interruption experiments may run only on a dedicated replaceable external test device.
 
 **Promotion gates before any internal NVMe write may be enabled:** deterministic bounds and malformed-command tests; DMA isolation suitable for the physical target; timeout/reset recovery; flush ordering and durable-write tests; interrupted metadata and generation-transition tests; malformed GPT/object-store/generation/BootState tests; an explicit write capability held only by the intended service; and an operator-visible distinction between removable test media and internal NVMe. Production IOMMU enforcement and internal-disk promotion remain a later hardware reliability gate.
 
-**Verification targets:** `just storage_nvme_read_check`; `just framework_safety_check`; plus the pending physical evidence record, which cannot be replaced by QEMU.
+**Verification targets:** `just storage_nvme_read_check` currently fails closed to make the missing seL4 NVMe path explicit; `just framework_safety_check` preserves the non-physical contract checks; physical evidence cannot be replaced by QEMU.
 
 **Exit condition:** A physical Framework runs the storage-aware isolated slice over the common protocol while internal NVMe writes remain disabled unless every physical promotion gate has been observed. No such physical success is claimed yet.
 

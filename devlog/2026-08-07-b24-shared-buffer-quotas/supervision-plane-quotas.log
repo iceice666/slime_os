@@ -1,0 +1,441 @@
+seL4 kernel loader | INFO   Starting loader
+seL4 kernel loader | DEBUG  Platform info: PlatformInfo {
+    memory: [
+        0x60000000..0x80000000,
+    ],
+    devices: [
+        0x0..0x8000000,
+        0x8001000..0x8010000,
+        0x8011000..0x8030000,
+        0x8031000..0x60000000,
+        0x80000000..0x10000000000,
+    ],
+}
+seL4 kernel loader | DEBUG  Loader footprint: 0x60280000..0x60354b48
+seL4 kernel loader | DEBUG  Payload info: ArchivedPayloadInfo {
+    kernel_entry: 0x8060000000,
+    user_image: ArchivedUserImageInfo {
+        ui_p_reg_start: 0x7fdd5000,
+        ui_p_reg_end: 0x80000000,
+        pv_offset: 0x7fbd5000,
+        v_entry: 0x250b44,
+    },
+    dtb: Some(
+        ArchivedDtbInfo {
+            addr_p: 0x7fdd3000,
+            size: 0x1e84,
+        },
+    ),
+}
+seL4 kernel loader | DEBUG  Payload regions:
+seL4 kernel loader | DEBUG      0x60000000 (filesz = 0x240000, memsz = 0x311a0)
+seL4 kernel loader | DEBUG      0x7fdd5000 (filesz = 0x6d654, memsz = 0x6d654)
+seL4 kernel loader | DEBUG      0x7fe43658 (filesz = 0x1bc408, memsz = 0x1a1f8)
+seL4 kernel loader | DEBUG      0x7fdd3000 (filesz = 0x1e84, memsz = 0x1e84)
+seL4 kernel loader | DEBUG  Copying payload data
+seL4 kernel loader | INFO   Entering kernel
+Bootstrapping kernel
+Warning: Could not infer GIC interrupt target ID, assuming 0.
+Available phys memory regions: 1
+  [60000000..80000000)
+Reserved virt address space regions: 3
+  [8060000000..8060240000)
+  [807fdd3000..807fdd4e84)
+  [807fdd5000..8080000000)
+Booting all finished, dropped to user space
+SLIME_ROOT generation admitted number=1 components=3 grants=3 health=3 kernel=1 bootstrap=1
+SLIME_ROOT authority manifest=[ea, 74, 2b, 46, 1a, f2, c7, 7c, 2d, 63, 6d, 92, 42, ae, 27, 13, 5a, 8d, 69, 02, cc, 99, 95, 48, 89, 55, ed, 55, 83, ee, c6, 48]
+SLIME_ROOT graph admitted; legacy SLIMECM images not activated components=3 slimecm=0 elf=3 unrecognized=0
+SLIME_ROOT allocator slots=3457 untypeds=28 bytes=532121968
+SLIME_TIMER acquired irq=30 freq_hz=62500000
+SLIME_TIMER delivered badge=0x1 polls=13037
+SLIME_TIMER serviced events=1 programming=Disarm
+SLIME_TIMER advanced start=963250 end=1676500 delta=713250
+SLIME_TIMER OK
+SLIME_GRAPH factory placed task=0 component=init slot=0 kind=endpoint-factory
+SLIME_GRAPH staged task=0 component=init grants=1 executables=2 window=0x237000 frames=56 tables=3 entry=0x211a98
+SLIME_GRAPH staged task=1 component=supervision-child grants=1 executables=0 window=0x235000 frames=54 tables=3 entry=0x2111c0
+SLIME_GRAPH staged task=2 component=sysinfo grants=1 executables=0 window=0x236000 frames=55 tables=3 entry=0x211490
+SLIME_GRAPH staged components=3 loadable=3 slimecm=0 wrong_target=0 unrecognized=0
+SLIME_GRAPH channels grants=0 channels=0 queues=0 slots=0 unplaced=0
+SLIME_GRAPH activated components=3
+SLIME_GRAPH quota task=0 component=init pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH quota task=1 component=supervision-child pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH quota task=2 component=sysinfo pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH quotas declared=3 budgeted=0 holders=0
+SLIME_GRAPH window bound task=2 base=0x236000 len=4096
+SLIME_GRAPH component exit task=2 status=1
+SLIME_GRAPH quota released task=2 live=2
+SLIME_GRAPH window bound task=1 base=0x235000 len=4096
+[supervision-child] ran
+SLIME_GRAPH component exit task=1 status=0
+SLIME_GRAPH quota released task=1 live=1
+SLIME_GRAPH window bound task=0 base=0x237000 len=4096
+SLIME_GRAPH endpoint minted task=0 key=0 slots=1,2
+SLIME_GRAPH spawn authorized task=0 slot=16 component=supervision-child grants=0
+SLIME_GRAPH quota task=3 component=supervision-child pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH spawned task=0 child=3 component=supervision-child grants=0 channels=0 handle=4
+SLIME_GRAPH parked task=0 reason=wait
+SLIME_GRAPH window bound task=3 base=0x235000 len=4096
+[supervision-child] ran
+SLIME_GRAPH component exit task=3 status=0
+SLIME_GRAPH supervision woken task=0 child=3
+SLIME_GRAPH quota released task=3 live=1
+SLIME_GRAPH capability transferred task=0 channel=0 to=0 kind=supervision rights=0x40000
+[init] supervision handle parked in transit
+SLIME_GRAPH spawn authorized task=0 slot=16 component=supervision-child grants=0
+SLIME_GRAPH quota task=4 component=supervision-child pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH spawned task=0 child=4 component=supervision-child grants=0 channels=0 handle=4
+SLIME_GRAPH parked task=0 reason=wait
+SLIME_GRAPH window bound task=4 base=0x235000 len=4096
+[supervision-child] ran
+SLIME_GRAPH component exit task=4 status=0
+SLIME_GRAPH supervision woken task=0 child=4
+SLIME_GRAPH quota released task=4 live=1
+[init] supervision handle retained
+SLIME_GRAPH spawn authorized task=0 slot=16 component=supervision-child grants=0
+SLIME_GRAPH quota task=5 component=supervision-child pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH spawned task=0 child=5 component=supervision-child grants=0 channels=0 handle=5
+SLIME_GRAPH parked task=0 reason=wait
+SLIME_GRAPH window bound task=5 base=0x235000 len=4096
+[supervision-child] ran
+SLIME_GRAPH component exit task=5 status=0
+SLIME_GRAPH supervision woken task=0 child=5
+SLIME_GRAPH quota released task=5 live=1
+SLIME_GRAPH supervision collected task=0 child=5 kind=0
+SLIME_GRAPH spawn authorized task=0 slot=16 component=supervision-child grants=0
+SLIME_GRAPH quota task=6 component=supervision-child pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH spawned task=0 child=6 component=supervision-child grants=0 channels=0 handle=5
+SLIME_GRAPH parked task=0 reason=wait
+SLIME_GRAPH window bound task=6 base=0x235000 len=4096
+[supervision-child] ran
+SLIME_GRAPH component exit task=6 status=0
+SLIME_GRAPH supervision woken task=0 child=6
+SLIME_GRAPH quota released task=6 live=1
+SLIME_GRAPH supervision collected task=0 child=6 kind=0
+SLIME_GRAPH spawn authorized task=0 slot=16 component=supervision-child grants=0
+SLIME_GRAPH quota task=7 component=supervision-child pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH spawned task=0 child=7 component=supervision-child grants=0 channels=0 handle=5
+SLIME_GRAPH parked task=0 reason=wait
+SLIME_GRAPH window bound task=7 base=0x235000 len=4096
+[supervision-child] ran
+SLIME_GRAPH component exit task=7 status=0
+SLIME_GRAPH supervision woken task=0 child=7
+SLIME_GRAPH quota released task=7 live=1
+SLIME_GRAPH supervision collected task=0 child=7 kind=0
+SLIME_GRAPH spawn authorized task=0 slot=16 component=supervision-child grants=0
+SLIME_GRAPH quota task=8 component=supervision-child pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH spawned task=0 child=8 component=supervision-child grants=0 channels=0 handle=5
+SLIME_GRAPH parked task=0 reason=wait
+SLIME_GRAPH window bound task=8 base=0x235000 len=4096
+[supervision-child] ran
+SLIME_GRAPH component exit task=8 status=0
+SLIME_GRAPH supervision woken task=0 child=8
+SLIME_GRAPH quota released task=8 live=1
+SLIME_GRAPH supervision collected task=0 child=8 kind=0
+SLIME_GRAPH spawn authorized task=0 slot=16 component=supervision-child grants=0
+SLIME_GRAPH quota task=9 component=supervision-child pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH spawned task=0 child=9 component=supervision-child grants=0 channels=0 handle=5
+SLIME_GRAPH parked task=0 reason=wait
+SLIME_GRAPH window bound task=9 base=0x235000 len=4096
+[supervision-child] ran
+SLIME_GRAPH component exit task=9 status=0
+SLIME_GRAPH supervision woken task=0 child=9
+SLIME_GRAPH quota released task=9 live=1
+SLIME_GRAPH supervision collected task=0 child=9 kind=0
+SLIME_GRAPH spawn authorized task=0 slot=16 component=supervision-child grants=0
+SLIME_GRAPH quota task=10 component=supervision-child pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH spawned task=0 child=10 component=supervision-child grants=0 channels=0 handle=5
+SLIME_GRAPH parked task=0 reason=wait
+SLIME_GRAPH window bound task=10 base=0x235000 len=4096
+[supervision-child] ran
+SLIME_GRAPH component exit task=10 status=0
+SLIME_GRAPH supervision woken task=0 child=10
+SLIME_GRAPH quota released task=10 live=1
+SLIME_GRAPH supervision collected task=0 child=10 kind=0
+SLIME_GRAPH spawn authorized task=0 slot=16 component=supervision-child grants=0
+SLIME_GRAPH quota task=11 component=supervision-child pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH spawned task=0 child=11 component=supervision-child grants=0 channels=0 handle=5
+SLIME_GRAPH parked task=0 reason=wait
+SLIME_GRAPH window bound task=11 base=0x235000 len=4096
+[supervision-child] ran
+SLIME_GRAPH component exit task=11 status=0
+SLIME_GRAPH supervision woken task=0 child=11
+SLIME_GRAPH quota released task=11 live=1
+SLIME_GRAPH supervision collected task=0 child=11 kind=0
+SLIME_GRAPH spawn authorized task=0 slot=16 component=supervision-child grants=0
+SLIME_GRAPH quota task=12 component=supervision-child pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH spawned task=0 child=12 component=supervision-child grants=0 channels=0 handle=5
+SLIME_GRAPH parked task=0 reason=wait
+SLIME_GRAPH window bound task=12 base=0x235000 len=4096
+[supervision-child] ran
+SLIME_GRAPH component exit task=12 status=0
+SLIME_GRAPH supervision woken task=0 child=12
+SLIME_GRAPH quota released task=12 live=1
+SLIME_GRAPH supervision collected task=0 child=12 kind=0
+SLIME_GRAPH spawn authorized task=0 slot=16 component=supervision-child grants=0
+SLIME_GRAPH quota task=13 component=supervision-child pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH spawned task=0 child=13 component=supervision-child grants=0 channels=0 handle=5
+SLIME_GRAPH parked task=0 reason=wait
+SLIME_GRAPH window bound task=13 base=0x235000 len=4096
+[supervision-child] ran
+SLIME_GRAPH component exit task=13 status=0
+SLIME_GRAPH supervision woken task=0 child=13
+SLIME_GRAPH quota released task=13 live=1
+SLIME_GRAPH supervision collected task=0 child=13 kind=0
+SLIME_GRAPH spawn authorized task=0 slot=16 component=supervision-child grants=0
+SLIME_GRAPH quota task=14 component=supervision-child pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH spawned task=0 child=14 component=supervision-child grants=0 channels=0 handle=5
+SLIME_GRAPH parked task=0 reason=wait
+SLIME_GRAPH window bound task=14 base=0x235000 len=4096
+[supervision-child] ran
+SLIME_GRAPH component exit task=14 status=0
+SLIME_GRAPH supervision woken task=0 child=14
+SLIME_GRAPH quota released task=14 live=1
+SLIME_GRAPH supervision collected task=0 child=14 kind=0
+SLIME_GRAPH spawn authorized task=0 slot=16 component=supervision-child grants=0
+SLIME_GRAPH quota task=15 component=supervision-child pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH spawned task=0 child=15 component=supervision-child grants=0 channels=0 handle=5
+SLIME_GRAPH parked task=0 reason=wait
+SLIME_GRAPH window bound task=15 base=0x235000 len=4096
+[supervision-child] ran
+SLIME_GRAPH component exit task=15 status=0
+SLIME_GRAPH supervision woken task=0 child=15
+SLIME_GRAPH quota released task=15 live=1
+SLIME_GRAPH supervision collected task=0 child=15 kind=0
+SLIME_GRAPH spawn authorized task=0 slot=16 component=supervision-child grants=0
+SLIME_GRAPH quota task=16 component=supervision-child pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH spawned task=0 child=16 component=supervision-child grants=0 channels=0 handle=5
+SLIME_GRAPH parked task=0 reason=wait
+SLIME_GRAPH window bound task=16 base=0x235000 len=4096
+[supervision-child] ran
+SLIME_GRAPH component exit task=16 status=0
+SLIME_GRAPH supervision woken task=0 child=16
+SLIME_GRAPH quota released task=16 live=1
+SLIME_GRAPH supervision collected task=0 child=16 kind=0
+SLIME_GRAPH spawn authorized task=0 slot=16 component=supervision-child grants=0
+SLIME_GRAPH quota task=17 component=supervision-child pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH spawned task=0 child=17 component=supervision-child grants=0 channels=0 handle=5
+SLIME_GRAPH parked task=0 reason=wait
+SLIME_GRAPH window bound task=17 base=0x235000 len=4096
+[supervision-child] ran
+SLIME_GRAPH component exit task=17 status=0
+SLIME_GRAPH supervision woken task=0 child=17
+SLIME_GRAPH quota released task=17 live=1
+SLIME_GRAPH supervision collected task=0 child=17 kind=0
+SLIME_GRAPH spawn authorized task=0 slot=16 component=supervision-child grants=0
+SLIME_GRAPH quota task=18 component=supervision-child pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH spawned task=0 child=18 component=supervision-child grants=0 channels=0 handle=5
+SLIME_GRAPH parked task=0 reason=wait
+SLIME_GRAPH window bound task=18 base=0x235000 len=4096
+[supervision-child] ran
+SLIME_GRAPH component exit task=18 status=0
+SLIME_GRAPH supervision woken task=0 child=18
+SLIME_GRAPH quota released task=18 live=1
+SLIME_GRAPH supervision collected task=0 child=18 kind=0
+SLIME_GRAPH spawn authorized task=0 slot=16 component=supervision-child grants=0
+SLIME_GRAPH quota task=19 component=supervision-child pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH spawned task=0 child=19 component=supervision-child grants=0 channels=0 handle=5
+SLIME_GRAPH parked task=0 reason=wait
+SLIME_GRAPH window bound task=19 base=0x235000 len=4096
+[supervision-child] ran
+SLIME_GRAPH component exit task=19 status=0
+SLIME_GRAPH supervision woken task=0 child=19
+SLIME_GRAPH quota released task=19 live=1
+SLIME_GRAPH supervision collected task=0 child=19 kind=0
+SLIME_GRAPH spawn authorized task=0 slot=16 component=supervision-child grants=0
+SLIME_GRAPH quota task=20 component=supervision-child pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH spawned task=0 child=20 component=supervision-child grants=0 channels=0 handle=5
+SLIME_GRAPH parked task=0 reason=wait
+SLIME_GRAPH window bound task=20 base=0x235000 len=4096
+[supervision-child] ran
+SLIME_GRAPH component exit task=20 status=0
+SLIME_GRAPH supervision woken task=0 child=20
+SLIME_GRAPH quota released task=20 live=1
+SLIME_GRAPH supervision collected task=0 child=20 kind=0
+SLIME_GRAPH spawn authorized task=0 slot=16 component=supervision-child grants=0
+SLIME_GRAPH quota task=21 component=supervision-child pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH spawned task=0 child=21 component=supervision-child grants=0 channels=0 handle=5
+SLIME_GRAPH parked task=0 reason=wait
+SLIME_GRAPH window bound task=21 base=0x235000 len=4096
+[supervision-child] ran
+SLIME_GRAPH component exit task=21 status=0
+SLIME_GRAPH supervision woken task=0 child=21
+SLIME_GRAPH quota released task=21 live=1
+SLIME_GRAPH supervision collected task=0 child=21 kind=0
+SLIME_GRAPH spawn authorized task=0 slot=16 component=supervision-child grants=0
+SLIME_GRAPH quota task=22 component=supervision-child pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH spawned task=0 child=22 component=supervision-child grants=0 channels=0 handle=5
+SLIME_GRAPH parked task=0 reason=wait
+SLIME_GRAPH window bound task=22 base=0x235000 len=4096
+[supervision-child] ran
+SLIME_GRAPH component exit task=22 status=0
+SLIME_GRAPH supervision woken task=0 child=22
+SLIME_GRAPH quota released task=22 live=1
+SLIME_GRAPH supervision collected task=0 child=22 kind=0
+SLIME_GRAPH spawn authorized task=0 slot=16 component=supervision-child grants=0
+SLIME_GRAPH quota task=23 component=supervision-child pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH spawned task=0 child=23 component=supervision-child grants=0 channels=0 handle=5
+SLIME_GRAPH parked task=0 reason=wait
+SLIME_GRAPH window bound task=23 base=0x235000 len=4096
+[supervision-child] ran
+SLIME_GRAPH component exit task=23 status=0
+SLIME_GRAPH supervision woken task=0 child=23
+SLIME_GRAPH quota released task=23 live=1
+SLIME_GRAPH supervision collected task=0 child=23 kind=0
+SLIME_GRAPH spawn authorized task=0 slot=16 component=supervision-child grants=0
+SLIME_GRAPH quota task=24 component=supervision-child pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH spawned task=0 child=24 component=supervision-child grants=0 channels=0 handle=5
+SLIME_GRAPH parked task=0 reason=wait
+SLIME_GRAPH window bound task=24 base=0x235000 len=4096
+[supervision-child] ran
+SLIME_GRAPH component exit task=24 status=0
+SLIME_GRAPH supervision woken task=0 child=24
+SLIME_GRAPH quota released task=24 live=1
+SLIME_GRAPH supervision collected task=0 child=24 kind=0
+SLIME_GRAPH spawn authorized task=0 slot=16 component=supervision-child grants=0
+SLIME_GRAPH quota task=25 component=supervision-child pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH spawned task=0 child=25 component=supervision-child grants=0 channels=0 handle=5
+SLIME_GRAPH parked task=0 reason=wait
+SLIME_GRAPH window bound task=25 base=0x235000 len=4096
+[supervision-child] ran
+SLIME_GRAPH component exit task=25 status=0
+SLIME_GRAPH supervision woken task=0 child=25
+SLIME_GRAPH quota released task=25 live=1
+SLIME_GRAPH supervision collected task=0 child=25 kind=0
+SLIME_GRAPH spawn authorized task=0 slot=16 component=supervision-child grants=0
+SLIME_GRAPH quota task=26 component=supervision-child pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH spawned task=0 child=26 component=supervision-child grants=0 channels=0 handle=5
+SLIME_GRAPH parked task=0 reason=wait
+SLIME_GRAPH window bound task=26 base=0x235000 len=4096
+[supervision-child] ran
+SLIME_GRAPH component exit task=26 status=0
+SLIME_GRAPH supervision woken task=0 child=26
+SLIME_GRAPH quota released task=26 live=1
+SLIME_GRAPH supervision collected task=0 child=26 kind=0
+SLIME_GRAPH spawn authorized task=0 slot=16 component=supervision-child grants=0
+SLIME_GRAPH quota task=27 component=supervision-child pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH spawned task=0 child=27 component=supervision-child grants=0 channels=0 handle=5
+SLIME_GRAPH parked task=0 reason=wait
+SLIME_GRAPH window bound task=27 base=0x235000 len=4096
+[supervision-child] ran
+SLIME_GRAPH component exit task=27 status=0
+SLIME_GRAPH supervision woken task=0 child=27
+SLIME_GRAPH quota released task=27 live=1
+SLIME_GRAPH supervision collected task=0 child=27 kind=0
+SLIME_GRAPH spawn authorized task=0 slot=16 component=supervision-child grants=0
+SLIME_GRAPH quota task=28 component=supervision-child pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH spawned task=0 child=28 component=supervision-child grants=0 channels=0 handle=5
+SLIME_GRAPH parked task=0 reason=wait
+SLIME_GRAPH window bound task=28 base=0x235000 len=4096
+[supervision-child] ran
+SLIME_GRAPH component exit task=28 status=0
+SLIME_GRAPH supervision woken task=0 child=28
+SLIME_GRAPH quota released task=28 live=1
+SLIME_GRAPH supervision collected task=0 child=28 kind=0
+SLIME_GRAPH spawn authorized task=0 slot=16 component=supervision-child grants=0
+SLIME_GRAPH quota task=29 component=supervision-child pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH spawned task=0 child=29 component=supervision-child grants=0 channels=0 handle=5
+SLIME_GRAPH parked task=0 reason=wait
+SLIME_GRAPH window bound task=29 base=0x235000 len=4096
+[supervision-child] ran
+SLIME_GRAPH component exit task=29 status=0
+SLIME_GRAPH supervision woken task=0 child=29
+SLIME_GRAPH quota released task=29 live=1
+SLIME_GRAPH supervision collected task=0 child=29 kind=0
+SLIME_GRAPH spawn authorized task=0 slot=16 component=supervision-child grants=0
+SLIME_GRAPH quota task=30 component=supervision-child pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH spawned task=0 child=30 component=supervision-child grants=0 channels=0 handle=5
+SLIME_GRAPH parked task=0 reason=wait
+SLIME_GRAPH window bound task=30 base=0x235000 len=4096
+[supervision-child] ran
+SLIME_GRAPH component exit task=30 status=0
+SLIME_GRAPH supervision woken task=0 child=30
+SLIME_GRAPH quota released task=30 live=1
+SLIME_GRAPH supervision collected task=0 child=30 kind=0
+SLIME_GRAPH spawn authorized task=0 slot=16 component=supervision-child grants=0
+SLIME_GRAPH quota task=31 component=supervision-child pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH spawned task=0 child=31 component=supervision-child grants=0 channels=0 handle=5
+SLIME_GRAPH parked task=0 reason=wait
+SLIME_GRAPH window bound task=31 base=0x235000 len=4096
+[supervision-child] ran
+SLIME_GRAPH component exit task=31 status=0
+SLIME_GRAPH supervision woken task=0 child=31
+SLIME_GRAPH quota released task=31 live=1
+SLIME_GRAPH supervision collected task=0 child=31 kind=0
+SLIME_GRAPH spawn authorized task=0 slot=16 component=supervision-child grants=0
+SLIME_GRAPH quota task=32 component=supervision-child pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH spawned task=0 child=32 component=supervision-child grants=0 channels=0 handle=5
+SLIME_GRAPH parked task=0 reason=wait
+SLIME_GRAPH window bound task=32 base=0x235000 len=4096
+[supervision-child] ran
+SLIME_GRAPH component exit task=32 status=0
+SLIME_GRAPH supervision woken task=0 child=32
+SLIME_GRAPH quota released task=32 live=1
+SLIME_GRAPH supervision collected task=0 child=32 kind=0
+SLIME_GRAPH spawn authorized task=0 slot=16 component=supervision-child grants=0
+SLIME_GRAPH quota task=33 component=supervision-child pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH spawned task=0 child=33 component=supervision-child grants=0 channels=0 handle=5
+SLIME_GRAPH parked task=0 reason=wait
+SLIME_GRAPH window bound task=33 base=0x235000 len=4096
+[supervision-child] ran
+SLIME_GRAPH component exit task=33 status=0
+SLIME_GRAPH supervision swept freed=30 live=3
+SLIME_GRAPH supervision woken task=0 child=33
+SLIME_GRAPH quota released task=33 live=1
+SLIME_GRAPH supervision collected task=0 child=33 kind=0
+SLIME_GRAPH spawn authorized task=0 slot=16 component=supervision-child grants=0
+SLIME_GRAPH quota task=34 component=supervision-child pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH spawned task=0 child=34 component=supervision-child grants=0 channels=0 handle=5
+SLIME_GRAPH parked task=0 reason=wait
+SLIME_GRAPH window bound task=34 base=0x235000 len=4096
+[supervision-child] ran
+SLIME_GRAPH component exit task=34 status=0
+SLIME_GRAPH supervision woken task=0 child=34
+SLIME_GRAPH quota released task=34 live=1
+SLIME_GRAPH supervision collected task=0 child=34 kind=0
+SLIME_GRAPH spawn authorized task=0 slot=16 component=supervision-child grants=0
+SLIME_GRAPH quota task=35 component=supervision-child pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH spawned task=0 child=35 component=supervision-child grants=0 channels=0 handle=5
+SLIME_GRAPH parked task=0 reason=wait
+SLIME_GRAPH window bound task=35 base=0x235000 len=4096
+[supervision-child] ran
+SLIME_GRAPH component exit task=35 status=0
+SLIME_GRAPH supervision woken task=0 child=35
+SLIME_GRAPH quota released task=35 live=1
+SLIME_GRAPH supervision collected task=0 child=35 kind=0
+SLIME_GRAPH spawn authorized task=0 slot=16 component=supervision-child grants=0
+SLIME_GRAPH quota task=36 component=supervision-child pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH spawned task=0 child=36 component=supervision-child grants=0 channels=0 handle=5
+SLIME_GRAPH parked task=0 reason=wait
+SLIME_GRAPH window bound task=36 base=0x235000 len=4096
+[supervision-child] ran
+SLIME_GRAPH component exit task=36 status=0
+SLIME_GRAPH supervision woken task=0 child=36
+SLIME_GRAPH quota released task=36 live=1
+SLIME_GRAPH supervision collected task=0 child=36 kind=0
+SLIME_GRAPH spawn authorized task=0 slot=16 component=supervision-child grants=0
+SLIME_GRAPH quota task=37 component=supervision-child pages=0 buffers=0 mappings=0 loans=0
+SLIME_GRAPH spawned task=0 child=37 component=supervision-child grants=0 channels=0 handle=5
+SLIME_GRAPH parked task=0 reason=wait
+SLIME_GRAPH window bound task=37 base=0x235000 len=4096
+[supervision-child] ran
+SLIME_GRAPH component exit task=37 status=0
+SLIME_GRAPH supervision woken task=0 child=37
+SLIME_GRAPH quota released task=37 live=1
+SLIME_GRAPH supervision collected task=0 child=37 kind=0
+[init] supervision lifetime bound crossed
+SLIME_GRAPH supervision collected task=0 child=4 kind=0
+[init] retained handle answered after crossing
+SLIME_GRAPH received task=0 channel=0 bytes=64 caps=1
+SLIME_GRAPH supervision collected task=0 child=3 kind=0
+[init] transit handle survived crossing
+[init] supervision plane complete
+SLIME_GRAPH component exit task=0 status=0
+SLIME_GRAPH peer death task=0 channels=1 woken=0
+SLIME_GRAPH quota released task=0 live=0
+SLIME_GRAPH served live=0 unsupported=0 unimplemented=0 buffers=0 windows=0 tables=0
+SLIME_GRAPH tasks reclaimed live=0 slots=2321
+SLIME_GRAPH channels served sends=0 receives=1 parks=35 settled=1 parked=0 queues=0 replies=37 minted=1
+SLIME_GRAPH loans served=0 loans=0 mappings=0 regions=0 transit=0 orphans=0 aliases=0 quotas=0
+SLIME_GRAPH spawns served=35 drops=0 endpoints=1 terminated=38 waits=0

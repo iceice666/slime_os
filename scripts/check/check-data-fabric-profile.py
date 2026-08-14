@@ -230,14 +230,27 @@ def worker_above_wait_bound(manifest: dict) -> None:
     crowd = 2
     for index in range(crowd):
         component = f"fabric-crowd-{index}"
-        manifest["components"].append(
+        # v5 splits `components` into the executable catalogue and the
+        # instances built from it. A synthetic participant needs both: the
+        # route names an instance, and an instance names an executable.
+        manifest["executables"].append(
             {
                 "name": component,
                 "object": "sha256:fabric-observer",
                 "role": "application",
-                "dependencies": ["fabric-service"],
                 "spawnBudget": 0,
                 "commandProfile": [],
+            }
+        )
+        manifest["instances"].append(
+            {
+                "name": component,
+                "executable": component,
+                "owner": "init",
+                "autostart": True,
+                "dependencies": ["fabric-service"],
+                "health": "optional",
+                "bindings": [],
             }
         )
         extra = dict(template)

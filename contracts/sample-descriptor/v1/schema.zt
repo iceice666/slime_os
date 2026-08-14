@@ -56,14 +56,14 @@ descriptorLayout :: List WireField = {
 };
 
 format ::= {
-  formatVersion = formatVersion;
-  descriptorLen = descriptorLen;
-  maxSampleBytes = maxSampleBytes;
-  capabilityKindLoan = capabilityKindLoan;
-  flagLast = flagLast;
-  knownFlags = knownFlags;
+  formatVersion =;
+  descriptorLen =;
+  maxSampleBytes =;
+  capabilityKindLoan =;
+  flagLast =;
+  knownFlags =;
   descriptorFields = descriptorSchema.fields ?? {;};
-  descriptorLayout = descriptorLayout;
+  descriptorLayout =;
 };
 
 main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }

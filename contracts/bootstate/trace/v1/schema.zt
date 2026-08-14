@@ -52,9 +52,9 @@ TraceRecord :: type {
 traceRecordSchema ::= schema TraceRecord;
 
 format ::= {
-  formatVersion = formatVersion;
-  maxLineBytes = maxLineBytes;
-  tracePrefix = tracePrefix;
+  formatVersion =;
+  maxLineBytes =;
+  tracePrefix =;
   fields = traceRecordSchema.fields ?? {;};
 };
 

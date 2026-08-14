@@ -25,24 +25,27 @@ mod call_broker;
 
 slime_rt::entry!(main);
 
-/// Endpoint factory, granted by the generation. The worker mints both halves of
-/// its route through it; no participant holds one.
-const FACTORY_SLOT: u32 = 0;
 /// Shared-buffer factory, backing the one copy a large call payload makes.
 const BUFFER_FACTORY_SLOT: u32 = 1;
-/// Control endpoints, in the order the fabric granted them: the two clients,
-/// the server, then the capability-routed clock. The slot a request arrives on
-/// *is* the caller's identity.
-const FIRST_CONTROL_SLOT: u32 = 2;
+const CLIENT_A_SLOT: u32 = 2;
+const CLIENT_B_SLOT: u32 = 3;
+const SERVER_SLOT: u32 = 4;
+const TIME_SLOT: u32 = 5;
+const CLIENT_A_SUPERVISION_SLOT: u32 = 6;
+const CLIENT_B_SUPERVISION_SLOT: u32 = 7;
+const SERVER_SUPERVISION_SLOT: u32 = 8;
 
-fn main() {
+fn main(_startup_arg: u32) {
     call_broker::Broker::new(
-        FACTORY_SLOT,
         BUFFER_FACTORY_SLOT,
-        [FIRST_CONTROL_SLOT, FIRST_CONTROL_SLOT + 1],
-        FIRST_CONTROL_SLOT + 2,
-        FIRST_CONTROL_SLOT + 3,
-        0,
+        [CLIENT_A_SLOT, CLIENT_B_SLOT],
+        SERVER_SLOT,
+        TIME_SLOT,
+        [
+            CLIENT_A_SUPERVISION_SLOT,
+            CLIENT_B_SUPERVISION_SLOT,
+            SERVER_SUPERVISION_SLOT,
+        ],
     )
     .run();
     slime_rt::debug_write(b"[fabric-call-worker] call plane complete\n");

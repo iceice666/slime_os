@@ -5,7 +5,7 @@ mod launch_context;
 
 slime_rt::entry!(main);
 
-fn main() {
+fn main(_startup_arg: u32) {
     let context = launch_context::receive();
     slime_rt::debug_write(b"[sysinfo] command=sysinfo args=");
     launch_context::debug_decimal(context.argument_count as usize);

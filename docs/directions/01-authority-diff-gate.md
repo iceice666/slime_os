@@ -24,11 +24,11 @@ to the object store" hides inside a model-or-prompt update.
 
 ## What exists today
 
-- M5.5 landed generation format v2 with machine-readable, 1:1 rights
-  strings; `just generation_check` and `just contracts_check` already
-  validate deterministic generation output and manifest contracts.
+- Generation format v5 carries machine-readable, 1:1 rights strings;
+  `just generation_check` and `just contracts_check` already validate
+  deterministic generation output and manifest contracts.
 - The rights vocabulary each grant string maps to is defined by
-  `../capability-matrix.md`; rights are a flat `u32` with bits 15–31 free.
+  `../capability-matrix.md`; rights are a flat `u64` with bits 26–63 free.
 - The widening/narrowing order the diff needs is exactly what
   [entry 24](24-rights-algebra-model.md) is modeling: derive narrows only,
   no transfer widens. The diff's definition of "grow" should reuse that

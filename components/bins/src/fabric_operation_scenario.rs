@@ -1,43 +1,22 @@
-//! Shared participant behaviour for the C8.7 operation gate.
-//!
-//! Two clients and one server drive every required arm of the milestone over
-//! real syscalls: concurrent non-cross-correlated operations, unauthorized
-//! observation/retrieval/cancellation, duplicate goals, feedback after terminal
-//! state, duplicate results, a cancellation race, result expiry, participant
-//! restart, and peer death while a distinct operation route remains live.
-
 #![allow(dead_code)]
 
-use boot_contracts::fabric_graph::{
-    CONTRACT_KIND_OPERATION, DIRECTION_CLIENT, DIRECTION_SERVER, route_identity,
-};
-use slime_proto::capability_transfer::{
-    FABRIC_REQUEST_MAGIC, FORMAT_VERSION as TRANSFER_VERSION, OBJECT_KIND_ENDPOINT, REQUEST_LEN,
-    WireCapabilityTransfer, WireFabricRequest,
-};
+use boot_contracts::fabric_graph::{DIRECTION_CLIENT, DIRECTION_SERVER};
 use slime_proto::fabric_operation::*;
 use slime_proto::fabric_time::{TIME_ADVANCE_LEN, TIME_ADVANCE_MAGIC, WireTimeAdvance};
 use slime_proto::interface_schema::navigation_operation;
-use slime_rt::{
-    ERR_BAD_CAP, ERR_PEER_DEAD, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG, WaitSource,
-};
+use slime_rt::{ERR_PEER_DEAD, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
 
-/// Slot layout every operation participant is spawned with. Slot 0 is always the
-/// fabric control endpoint; the phase channels exist only to order the
-/// transcript, and carry one byte each.
+/// Slot 0 is the participant's primary direct operation endpoint.
 const CONTROL_SLOT: u32 = 0;
-/// The private client-A/client-B coordination channel. Both hold it, so either
-/// may signal or wait. The restarted client receives this endpoint at slot 1.
 const PHASE_SLOT: u32 = 1;
 const RESTART_START_SLOT: u32 = 2;
-/// Client A's send half of the channel that releases the time service. Kept
-/// separate from the A/B channel so a phase meant for the clock can never be
-/// consumed by client B, which would deadlock both.
 const PHASE_TIME_SLOT: u32 = 2;
-const ROUTE_NAME: &str = "navigation";
-const BACKUP_ROUTE_NAME: &str = "nav-backup";
-const RIGHT_SEND: u64 = 1;
-const RIGHT_RECV: u64 = 2;
+const BACKUP_ROUTE_SLOT: u32 = 3;
+/// Client A's pairwise phase edge to the replacement client. The retired
+/// minted channel had A, B, and B's replacement on one object; native Endpoints
+/// are pairwise, so A's original-B edge stays at slot 1 and this second edge is
+/// installed at slot 4.
+const REPLACEMENT_PHASE_SLOT: u32 = 4;
 
 /// Goal payload values, which the server reads as its own policy input. The
 /// fabric never interprets these: goal policy is the application's.
@@ -53,10 +32,8 @@ const GOAL_KILLS_SERVER: u64 = 8;
 /// Client A: the correlation, feedback, result, retrieval, expiry, and
 /// peer-death arms.
 pub fn run_client() {
-    boot_park(DIRECTION_CLIENT, 2, b"fabric-op-client");
-    let roles = request_roles(DIRECTION_CLIENT, 2);
-    let route = roles[0];
-    let backup_route = roles[1];
+    let route = request_role(DIRECTION_CLIENT);
+    let backup_route = BACKUP_ROUTE_SLOT;
     let session = client_session(0);
 
     // Happy path: goal accepted, result delivered, exactly one terminal.
@@ -118,7 +95,7 @@ pub fn run_client() {
 
     // Client B now runs its authority-denial and cancellation arms.
     signal_phase(1);
-    wait_phase(3);
+    wait_replacement_phase(3);
 
     // Result expiry, driven only by the explicit time capability. Operation 6
     // completes and is retained, then the clock passes its retention window.
@@ -133,7 +110,7 @@ pub fn run_client() {
     send(route, goal(session, 7, GOAL_NEVER_ANSWERS));
     expect_accepted(route, session, 7, STATUS_ACTIVE);
     signal_time_phase(3);
-    expect_terminal_yielding(route, session, 7, STATUS_TIMEOUT);
+    expect_terminal_parked(route, session, 7, STATUS_TIMEOUT);
     slime_rt::debug_write(b"[fabric-op-client] timeout distinct\n");
     // The retained identity remains as a bounded tombstone, so expiry is
     // distinguishable from an unknown or unauthorized operation.
@@ -144,12 +121,16 @@ pub fn run_client() {
     // Let client B arm a live operation first, so the server fault below lands
     // while B has real in-flight state on the same route. That is what makes B's
     // survival an observation rather than a race against broker shutdown.
-    signal_phase(5);
-    wait_phase(6);
+    signal_replacement_phase(5);
+    wait_replacement_phase(6);
 
     // Peer death settles the active operation and is distinct from a timeout.
     send(route, goal(session, 8, GOAL_KILLS_SERVER));
-    expect_terminal_yielding(route, session, 8, STATUS_PEER_DEAD);
+    expect_terminal_parked(route, session, 8, STATUS_PEER_DEAD);
+    // Client B's marker must land before A closes the backup route: closing it
+    // lets the broker finish and exit, which marks B's primary route peer dead
+    // even if B has not yet consumed its already queued terminal.
+    wait_replacement_phase(7);
     slime_rt::debug_write(b"[fabric-op-client] peer death distinct\n");
     send_raw(backup_route, &[0xa7]);
     let mut probe = [0u8; MAX_MSG];
@@ -167,7 +148,6 @@ pub fn run_client() {
 /// Client B: the authority arms. Everything here is a denial that must hold even
 /// though B knows the exact operation identity A used.
 pub fn run_client_b() {
-    boot_park(DIRECTION_CLIENT, 1, b"fabric-op-client-b");
     let route = request_role(DIRECTION_CLIENT);
     let session = client_session(1);
 
@@ -247,15 +227,14 @@ pub fn run_client_b_restarted() {
     send(route, goal(session, 13, GOAL_NEVER_ANSWERS));
     expect_accepted(route, session, 13, STATUS_ACTIVE);
     signal_phase(6);
-    expect_terminal_yielding(route, session, 13, STATUS_PEER_DEAD);
-    signal_phase(7);
+    expect_terminal_parked(route, session, 13, STATUS_PEER_DEAD);
     slime_rt::debug_write(b"[fabric-op-client-b] concurrent peer fault isolated\n");
+    signal_phase(7);
 }
 
 /// The operation server. Its policy is deliberately trivial and lives entirely
 /// here: the fabric composes transport, the server decides outcomes.
 pub fn run_server() {
-    boot_park(DIRECTION_SERVER, 1, b"fabric-op-server");
     let route = request_role(DIRECTION_SERVER);
     let mut executed = [false; 16];
     loop {
@@ -263,7 +242,7 @@ pub fn run_server() {
         let mut caps = [0u64; MAX_CAPS_PER_MSG];
         let length = match slime_rt::recv(route, &mut bytes, &mut caps) {
             ERR_WOULDBLOCK => {
-                slime_rt::wait(&[WaitSource::Endpoint(route)]);
+                slime_rt::yield_now();
                 continue;
             }
             ERR_PEER_DEAD => return,
@@ -289,6 +268,7 @@ pub fn run_server() {
             }
             _ => fail(b"unknown server record"),
         }
+        send(route, server_idle(record));
     }
 }
 
@@ -349,97 +329,16 @@ fn handle_goal(route: u32, record: WireOperationEnvelope, executed: &mut [bool; 
     }
 }
 
-/// Ask the fabric for this component's declared role and verify what arrives.
-///
-/// The request's route name, direction, and type identity grant nothing: the
-/// fabric authenticates by the control endpoint and answers from the graph. What
-/// is checked here is the other half — that the capability received names
-/// exactly the edge this component was provisioned for, and carries both
-/// directions of its own role and nothing more.
-pub fn request_role(direction: u32) -> u32 {
-    request_roles(direction, 1)[0]
+/// Every operation participant receives its preinstalled primary route at slot
+/// 0. Client A additionally receives the unrelated backup route at slot 3.
+pub const fn request_role(_direction: u32) -> u32 {
+    CONTROL_SLOT
 }
 
-/// C8.10 full-graph boot arm: take the declared operation role, then park
-/// forever. See [`crate::fabric_call_scenario::boot_park`] — same contract, and
-/// `roles` is how many the graph declares for this participant (the primary
-/// client holds both `navigation` and `nav-backup`).
-pub fn boot_park(direction: u32, roles: usize, name: &'static [u8]) {
-    if !slime_components::fabric_boot::active() {
-        return;
+pub fn boot_park(_direction: u32, _roles: usize, name: &'static [u8]) {
+    if slime_components::fabric_boot::active() {
+        slime_components::fabric_boot::park(name)
     }
-    // As the call arm: `request_roles` validates each descriptor against the
-    // declared edge before this reports it.
-    let _roles = request_roles(direction, roles);
-    slime_rt::debug_write(b"[");
-    slime_rt::debug_write(name);
-    slime_rt::debug_write(b"] boot role provisioned\n");
-    slime_components::fabric_boot::park(name)
-}
-
-fn request_roles(direction: u32, count: usize) -> [u32; 2] {
-    let route = route_identity(
-        ROUTE_NAME,
-        &navigation_operation::INTERFACE_IDENTITY,
-        CONTRACT_KIND_OPERATION,
-    );
-    let backup_route = route_identity(
-        BACKUP_ROUTE_NAME,
-        &navigation_operation::INTERFACE_IDENTITY,
-        CONTRACT_KIND_OPERATION,
-    );
-    let mut route_name = [0u8; 32];
-    route_name[..ROUTE_NAME.len()].copy_from_slice(ROUTE_NAME.as_bytes());
-    let request = WireFabricRequest {
-        magic: FABRIC_REQUEST_MAGIC,
-        version: TRANSFER_VERSION,
-        flags: 0,
-        direction,
-        type_identity: navigation_operation::TYPE_TAG,
-        route_name_len: ROUTE_NAME.len() as u32,
-        route_name,
-        reserved: [0; 4],
-    };
-    send_raw(CONTROL_SLOT, &request.encode());
-    let mut roles = [0u32; 2];
-    for (index, role) in roles.iter_mut().enumerate().take(count) {
-        let expected_route = if index == 0 { &route } else { &backup_route };
-        let mut message = [0u8; MAX_MSG];
-        let mut caps = [0u64; MAX_CAPS_PER_MSG];
-        loop {
-            match slime_rt::recv(CONTROL_SLOT, &mut message, &mut caps) {
-                ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(CONTROL_SLOT)]),
-                value if value < 0 => fail(b"role receive"),
-                value => {
-                    if value as usize != MAX_MSG || caps[0] == 0 {
-                        fail(b"role shape")
-                    }
-                    let descriptor = WireCapabilityTransfer::decode(&message)
-                        .unwrap_or_else(|| fail(b"role decode"));
-                    if !slime_proto::valid_capability_transfer(
-                        &descriptor,
-                        expected_route,
-                        direction,
-                        OBJECT_KIND_ENDPOINT,
-                    ) || descriptor.rights_mask != RIGHT_SEND | RIGHT_RECV
-                    {
-                        fail(b"role authority")
-                    }
-                    let slot = caps[0] as u32;
-                    let mut discard = [0u8; MAX_MSG];
-                    let mut no_caps = [0u64; MAX_CAPS_PER_MSG];
-                    if slime_rt::recv(slot, &mut discard, &mut no_caps) == ERR_BAD_CAP
-                        || slime_rt::send(slot, b"probe", &[]) == ERR_BAD_CAP
-                    {
-                        fail(b"operation role missing one direction")
-                    }
-                    *role = slot;
-                    break;
-                }
-            }
-        }
-    }
-    roles
 }
 
 pub fn client_session(index: usize) -> u64 {
@@ -523,6 +422,17 @@ fn result(request: WireOperationEnvelope, status: i32, value: u64) -> WireOperat
     )
 }
 
+fn server_idle(request: WireOperationEnvelope) -> WireOperationEnvelope {
+    envelope(
+        request.session,
+        request.operation_id,
+        KIND_SERVER_IDLE,
+        STATUS_SUCCESS,
+        0,
+        0,
+    )
+}
+
 pub fn send(slot: u32, record: WireOperationEnvelope) {
     send_raw(slot, &record.encode())
 }
@@ -544,7 +454,7 @@ fn recv_record(slot: u32) -> WireOperationEnvelope {
     let mut caps = [0u64; MAX_CAPS_PER_MSG];
     loop {
         match slime_rt::recv(slot, &mut bytes, &mut caps) {
-            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(slot)]),
+            ERR_WOULDBLOCK => slime_rt::yield_now(),
             ERR_PEER_DEAD => fail(b"operation peer died"),
             value if value < 0 => fail(b"operation receive"),
             value => {
@@ -602,10 +512,9 @@ pub fn expect_terminal(slot: u32, session: u64, operation_id: u64, status: i32) 
     expect(slot, session, operation_id, KIND_TERMINAL, Some(status));
 }
 
-/// Await a terminal while yielding rather than parking. Used where the record is
-/// produced by another component's death, so there is no endpoint whose
-/// readiness would wake a parked receiver.
-pub fn expect_terminal_yielding(slot: u32, session: u64, operation_id: u64, status: i32) {
+/// Await a terminal while parking on the route endpoint. Peer-death settlement
+/// wakes the endpoint waiter before the broker publishes its terminal record.
+pub fn expect_terminal_parked(slot: u32, session: u64, operation_id: u64, status: i32) {
     let mut bytes = [0u8; MAX_MSG];
     let mut caps = [0u64; MAX_CAPS_PER_MSG];
     loop {
@@ -642,6 +551,15 @@ pub fn signal_phase(phase: u8) {
         }
     }
 }
+fn signal_replacement_phase(phase: u8) {
+    loop {
+        match slime_rt::send(REPLACEMENT_PHASE_SLOT, &[phase], &[]) {
+            ERR_SUCCESS => return,
+            ERR_WOULDBLOCK => slime_rt::yield_now(),
+            _ => fail(b"replacement phase send"),
+        }
+    }
+}
 
 pub fn signal_time_phase(phase: u8) {
     loop {
@@ -658,10 +576,22 @@ pub fn wait_phase(expected: u8) {
     let mut caps = [0u64; MAX_CAPS_PER_MSG];
     loop {
         match slime_rt::recv(PHASE_SLOT, &mut bytes, &mut caps) {
-            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(PHASE_SLOT)]),
+            ERR_WOULDBLOCK => slime_rt::yield_now(),
             value if value < 0 => fail(b"phase receive"),
             1 if bytes[0] == expected => return,
             _ => fail(b"phase mismatch"),
+        }
+    }
+}
+fn wait_replacement_phase(expected: u8) {
+    let mut bytes = [0u8; MAX_MSG];
+    let mut caps = [0u64; MAX_CAPS_PER_MSG];
+    loop {
+        match slime_rt::recv(REPLACEMENT_PHASE_SLOT, &mut bytes, &mut caps) {
+            ERR_WOULDBLOCK => slime_rt::yield_now(),
+            value if value < 0 => fail(b"replacement phase receive"),
+            1 if bytes[0] == expected => return,
+            _ => fail(b"replacement phase mismatch"),
         }
     }
 }
@@ -671,7 +601,8 @@ fn wait_restart_start() {
     let mut caps = [0u64; MAX_CAPS_PER_MSG];
     loop {
         match slime_rt::recv(RESTART_START_SLOT, &mut bytes, &mut caps) {
-            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(RESTART_START_SLOT)]),
+            ERR_WOULDBLOCK => slime_rt::yield_now(),
+            value if value < 0 => fail(b"restart start"),
             1 if bytes[0] == 1 => return,
             _ => fail(b"restart start"),
         }
@@ -701,6 +632,5 @@ pub fn fail(reason: &[u8]) -> ! {
     slime_rt::exit(1)
 }
 
-const _: () = assert!(REQUEST_LEN == MAX_MSG);
 const _: () = assert!(OPERATION_LEN == MAX_MSG);
 const _: () = assert!(TIME_ADVANCE_LEN == MAX_MSG);

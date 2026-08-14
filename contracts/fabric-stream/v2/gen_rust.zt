@@ -1,0 +1,194 @@
+-- Pure renderer for Slime OS fabric ring bindings (B46).
+--
+-- Structurally the same as v1's renderer -- reflect the schema, check field
+-- order against the declared layout, emit offsets and a codec -- because the
+-- checking is what makes a layout trustworthy and that does not change with
+-- the format. What changes is what is being described: a ring header and a
+-- slot in shared memory, rather than three messages on a channel.
+
+refl ::= import stdlib.reflect;
+n ::= import stdlib.num;
+t ::= import stdlib.text;
+w ::= import wire.rust;
+
+WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
+
+Protocol :: type {
+  formatVersion : Int;
+  ringHeaderLen : Int;
+  ringSlotLen : Int;
+  maxInlineBytes : Int;
+  minRingSlots : Int;
+  maxRingSlots : Int;
+  ringMagic : Int;
+  slotMagic : Int;
+  producerActive : Int;
+  producerFinished : Int;
+  producerDead : Int;
+  slotEmpty : Int;
+  slotClaimed : Int;
+  slotReady : Int;
+  badgeSampleReady : Int;
+  badgeCreditReturned : Int;
+  badgeProducerEnded : Int;
+  knownBadgeBits : Int;
+  flagLast : Int;
+  knownSlotFlags : Int;
+  headerFields : List refl.SchemaField;
+  slotFields : List refl.SchemaField;
+  headerLayout : List WireField;
+  slotLayout : List WireField;
+};
+
+layoutNames :: List WireField -> List Text
+  = fields => map _.name fields;
+
+validField :: WireField -> Bool
+  = field => if field.byteArray
+    then field.width > 0 && not field.signed
+    else w.validWidthSigned4 { name = field.name; width = field.width; signed = field.signed; };
+
+allValid :: List WireField -> Bool
+  = fields => match fields {
+    | {;} => true;
+    | { field; ...rest } => validField field && allValid rest;
+  };
+
+addWidth :: Int -> WireField -> Int
+  = total field => total + field.width;
+
+wireBytes :: List WireField -> Int
+  = fields => fold addWidth 0 fields;
+
+constName :: Text -> Text -> Text
+  = prefix name => w.join { "OFF_"; prefix; "_"; t.toUpper name; };
+
+offsetConsts :: Text -> Int -> List WireField -> Text
+  = prefix offset fields => match fields {
+    | {;} => "";
+    | { field; ...rest } => w.join {
+      "pub const "; constName prefix field.name; ": usize = "; n.toText offset; ";\n";
+      offsetConsts prefix (offset + field.width) rest;
+    };
+  };
+
+rustType :: WireField -> Text
+  = field => if field.byteArray
+    then w.join { "[u8; "; n.toText field.width; "]"; }
+    else w.rustType { name = field.name; width = field.width; signed = field.signed; };
+
+fieldDecls :: List WireField -> Text
+  = fields => match fields {
+    | {;} => "";
+    | { field; ...rest } => w.join {
+      "    pub "; field.name; ": "; rustType field; ",\n";
+      fieldDecls rest;
+    };
+  };
+
+decodeExpr :: Text -> WireField -> Text
+  = prefix field => if field.byteArray
+    then w.join {
+      "buf["; constName prefix field.name; ".."; constName prefix field.name; " + "; n.toText field.width;
+      "].try_into().expect(\"generated fabric-stream layout\")";
+    }
+    else if field.width == 1
+      then w.join { "buf["; constName prefix field.name; "]"; }
+      else w.join {
+        rustType field; "::from_le_bytes(buf["; constName prefix field.name; ".."; constName prefix field.name;
+        " + "; n.toText field.width; "].try_into().expect(\"generated fabric-stream layout\"))";
+      };
+
+decodeFields :: Text -> List WireField -> Text
+  = prefix fields => match fields {
+    | {;} => "";
+    | { field; ...rest } => w.join {
+      "            "; field.name; ": "; decodeExpr prefix field; ",\n";
+      decodeFields prefix rest;
+    };
+  };
+
+encodeField :: Text -> WireField -> Text
+  = prefix field => if field.byteArray
+    then w.join {
+      "        buf["; constName prefix field.name; ".."; constName prefix field.name; " + "; n.toText field.width;
+      "].copy_from_slice(&self."; field.name; ");\n";
+    }
+    else if field.width == 1
+      then w.join { "        buf["; constName prefix field.name; "] = self."; field.name; ";\n"; }
+      else w.join {
+        "        buf["; constName prefix field.name; ".."; constName prefix field.name; " + "; n.toText field.width;
+        "].copy_from_slice(&self."; field.name; ".to_le_bytes());\n";
+      };
+
+encodeFields :: Text -> List WireField -> Text
+  = prefix fields => match fields {
+    | {;} => "";
+    | { field; ...rest } => w.join { encodeField prefix field; encodeFields prefix rest; };
+  };
+
+wireStruct :: Text -> Text -> Text -> List WireField -> Text
+  = name prefix lengthName fields => w.join {
+    "#[derive(Debug, Clone, Copy, PartialEq, Eq)]\n";
+    "pub struct "; name; " {\n"; fieldDecls fields; "}\n\n";
+    "impl "; name; " {\n";
+    "    pub fn decode(buf: &[u8]) -> Option<Self> {\n";
+    "        if buf.len() < "; lengthName; " { return None; }\n";
+    "        Some(Self {\n"; decodeFields prefix fields; "        })\n";
+    "    }\n\n";
+    "    pub fn encode(self) -> [u8; "; lengthName; "] {\n";
+    "        let mut buf = [0u8; "; lengthName; "];\n"; encodeFields prefix fields; "        buf\n";
+    "    }\n";
+    "}\n";
+  };
+
+rustBindings :: Protocol -> Text
+  = protocol => w.join {
+    "// @generated by contracts/fabric-stream/v2/gen_rust.zt; do not edit.\n";
+    "// Source contract: contracts/fabric-stream/v2/schema.zt\n\n";
+    "pub const FORMAT_VERSION: u32 = "; n.toText protocol.formatVersion; ";\n";
+    "pub const RING_HEADER_LEN: usize = "; n.toText protocol.ringHeaderLen; ";\n";
+    "pub const RING_SLOT_LEN: usize = "; n.toText protocol.ringSlotLen; ";\n";
+    "pub const MAX_INLINE_BYTES: usize = "; n.toText protocol.maxInlineBytes; ";\n";
+    "pub const MIN_RING_SLOTS: usize = "; n.toText protocol.minRingSlots; ";\n";
+    "pub const MAX_RING_SLOTS: usize = "; n.toText protocol.maxRingSlots; ";\n";
+    "pub const RING_MAGIC: u32 = "; n.toText protocol.ringMagic; ";\n";
+    "pub const SLOT_MAGIC: u32 = "; n.toText protocol.slotMagic; ";\n";
+    "pub const PRODUCER_ACTIVE: u32 = "; n.toText protocol.producerActive; ";\n";
+    "pub const PRODUCER_FINISHED: u32 = "; n.toText protocol.producerFinished; ";\n";
+    "pub const PRODUCER_DEAD: u32 = "; n.toText protocol.producerDead; ";\n";
+    "pub const SLOT_EMPTY: u32 = "; n.toText protocol.slotEmpty; ";\n";
+    "pub const SLOT_CLAIMED: u32 = "; n.toText protocol.slotClaimed; ";\n";
+    "pub const SLOT_READY: u32 = "; n.toText protocol.slotReady; ";\n";
+    "pub const BADGE_SAMPLE_READY: u64 = "; n.toText protocol.badgeSampleReady; ";\n";
+    "pub const BADGE_CREDIT_RETURNED: u64 = "; n.toText protocol.badgeCreditReturned; ";\n";
+    "pub const BADGE_PRODUCER_ENDED: u64 = "; n.toText protocol.badgeProducerEnded; ";\n";
+    "pub const KNOWN_BADGE_BITS: u64 = "; n.toText protocol.knownBadgeBits; ";\n";
+    "pub const FLAG_LAST: u32 = "; n.toText protocol.flagLast; ";\n";
+    "pub const KNOWN_SLOT_FLAGS: u32 = "; n.toText protocol.knownSlotFlags; ";\n\n";
+    offsetConsts "HEADER" 0 protocol.headerLayout;
+    "\n";
+    wireStruct "WireRingHeader" "HEADER" "RING_HEADER_LEN" protocol.headerLayout;
+    "\n";
+    offsetConsts "SLOT" 0 protocol.slotLayout;
+    "\n";
+    wireStruct "WireRingSlot" "SLOT" "RING_SLOT_LEN" protocol.slotLayout;
+  };
+
+valid :: Protocol -> Bool
+  = protocol =>
+    w.schemaFieldsValid protocol.headerFields
+      && w.schemaFieldsValid protocol.slotFields
+      && w.schemaNames protocol.headerFields == layoutNames protocol.headerLayout
+      && w.schemaNames protocol.slotFields == layoutNames protocol.slotLayout
+      && allValid protocol.headerLayout
+      && allValid protocol.slotLayout
+      && wireBytes protocol.headerLayout <= protocol.ringHeaderLen
+      && wireBytes protocol.slotLayout <= protocol.ringSlotLen;
+
+render :: Protocol -> { rust : Text; }
+  = protocol => if valid protocol
+    then { rust = rustBindings protocol; }
+    else { rust = "INVALID_FABRIC_RING_SCHEMA"; };
+
+{ render =; }

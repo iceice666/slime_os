@@ -7,6 +7,7 @@ pub mod component;
 pub mod fabric_call;
 pub mod fabric_operation;
 pub mod fabric_qos;
+pub mod fabric_ring;
 pub mod fabric_stream;
 pub mod fabric_time;
 pub mod fabric_visibility;
@@ -14,6 +15,7 @@ pub mod fs;
 pub mod generation;
 pub mod interface_schema;
 pub mod powerbox;
+pub mod ring;
 pub mod sample_descriptor;
 pub mod spawn;
 pub mod store;
@@ -111,6 +113,17 @@ pub fn valid_spawn_request(request: &spawn::WireSpawnRequest) -> bool {
             && request.command.iter().all(|byte| *byte == 0)
             && request.environment.iter().all(|byte| *byte == 0)
             && u64::from_le_bytes(request.arguments) != 0
+            && request.grant_rights == 0
+            && request.reserved.iter().all(|byte| *byte == 0);
+    }
+    if request.flags == spawn::REQUEST_FLAG_SHUTDOWN {
+        return request.command_len == 0
+            && request.argument_count == 0
+            && request.environment_count == 0
+            && request.capability_roles == 0
+            && request.command.iter().all(|byte| *byte == 0)
+            && request.arguments.iter().all(|byte| *byte == 0)
+            && request.environment.iter().all(|byte| *byte == 0)
             && request.grant_rights == 0
             && request.reserved.iter().all(|byte| *byte == 0);
     }
@@ -399,6 +412,105 @@ pub fn valid_stream_event(event: &fabric_stream::WireStreamEvent, expected_type:
     }
 }
 
+/// Structural validity of a ring header (B46).
+///
+/// A ring is shared memory, so every field here was written by a peer this
+/// reader does not trust to be correct — a publisher with a wild pointer or a
+/// stale mapping produces bytes, not an error. The reader's own bound comes
+/// from `expected_slots`, which the fabric fixed at provisioning; a header
+/// claiming more is refused rather than believed, because believing it is how
+/// a reader walks off the end of its own mapping.
+pub fn valid_ring_header(
+    header: &fabric_ring::WireRingHeader,
+    expected_type: u64,
+    expected_slots: usize,
+) -> bool {
+    if header.magic != fabric_ring::RING_MAGIC || header.version != fabric_ring::FORMAT_VERSION {
+        return false;
+    }
+    if header.slot_len as usize != fabric_ring::RING_SLOT_LEN {
+        return false;
+    }
+    let slots = header.slot_count as usize;
+    if slots != expected_slots
+        || !(fabric_ring::MIN_RING_SLOTS..=fabric_ring::MAX_RING_SLOTS).contains(&slots)
+        || !slots.is_power_of_two()
+    {
+        return false;
+    }
+    // `head - tail` is the occupancy, so `tail` past `head` is not a full ring
+    // or an empty one — it is a header no correct writer produces, and a
+    // reader that subtracted anyway would get a huge count and try to consume
+    // it.
+    if header.tail > header.head || header.head - header.tail > slots as u64 {
+        return false;
+    }
+    if !matches!(
+        header.producer_state,
+        fabric_ring::PRODUCER_ACTIVE | fabric_ring::PRODUCER_FINISHED | fabric_ring::PRODUCER_DEAD
+    ) {
+        return false;
+    }
+    header.type_identity != 0
+        && header.type_identity == expected_type
+        && header.reserved.iter().all(|byte| *byte == 0)
+}
+
+/// Structural validity of one ring slot (B46).
+///
+/// `sequence` is absolute, and `expected_sequence` is the one this reader is
+/// owed. A slot carrying anything else is a wrap the reader fell behind on,
+/// not a sample it may consume — which is the distinction that lets a lagging
+/// subscriber count drops instead of silently reading stale bytes as new.
+///
+/// Only `SLOT_READY` is admissible. `SLOT_CLAIMED` means the publisher is
+/// mid-copy: refusing it is what makes a torn write unobservable rather than
+/// merely unlikely.
+pub fn valid_ring_slot(
+    slot: &fabric_ring::WireRingSlot,
+    expected_type: u64,
+    expected_sequence: u64,
+) -> bool {
+    if slot.magic != fabric_ring::SLOT_MAGIC || slot.state != fabric_ring::SLOT_READY {
+        return false;
+    }
+    if slot.flags & !fabric_ring::KNOWN_SLOT_FLAGS != 0 {
+        return false;
+    }
+    if slot.sequence == 0 || slot.sequence != expected_sequence {
+        return false;
+    }
+    if slot.type_identity == 0 || slot.type_identity != expected_type {
+        return false;
+    }
+    let length = slot.payload_len as usize;
+    if length == 0 || length > fabric_ring::MAX_INLINE_BYTES {
+        return false;
+    }
+    // As with v1's inline sample: padding past the declared length must be
+    // zero, so two byte-distinct slots cannot decode to the same payload.
+    slot.payload[length..].iter().all(|byte| *byte == 0)
+}
+
+/// Which slot a sequence occupies, given a validated `slot_count`.
+///
+/// Masking rather than a remainder, which is why the count is required to be a
+/// power of two. Callers must validate the header first: this cannot be
+/// checked here without making every read pay for it.
+pub fn ring_slot_index(sequence: u64, slot_count: usize) -> usize {
+    (sequence as usize) & (slot_count - 1)
+}
+
+/// Whether a badge word carries only bits this version defines (B46).
+///
+/// A notification word is OR-ed, so an unknown bit means a peer signalling
+/// something this reader cannot interpret. Refusing it is the same discipline
+/// as an unknown message label: the alternative is treating it as one of the
+/// bits that *is* known.
+pub fn valid_ring_badge(badge: u64) -> bool {
+    badge != 0 && badge & !fabric_ring::KNOWN_BADGE_BITS == 0
+}
+
 pub fn valid_time_advance(value: &fabric_time::WireTimeAdvance) -> bool {
     value.magic == fabric_time::TIME_ADVANCE_MAGIC
         && value.version == fabric_time::FORMAT_VERSION
@@ -440,8 +552,9 @@ pub fn valid_call_envelope(value: &fabric_call::WireCallEnvelope, expected_type:
         || value.request_id == 0
         || value.type_identity == 0
         || value.type_identity != expected_type
-        || (value.kind != KIND_TERMINAL && value.payload_len as usize > INLINE_BYTES)
-        || (value.kind == KIND_TERMINAL && value.payload_len != 0)
+        || (!matches!(value.kind, KIND_TERMINAL | KIND_TERMINAL_ACK)
+            && value.payload_len as usize > INLINE_BYTES)
+        || (matches!(value.kind, KIND_TERMINAL | KIND_TERMINAL_ACK) && value.payload_len != 0)
         || value.payload[value.payload_len.min(value.payload.len() as u32) as usize..]
             .iter()
             .any(|byte| *byte != 0)
@@ -458,6 +571,25 @@ pub fn valid_call_envelope(value: &fabric_call::WireCallEnvelope, expected_type:
             value.flags == 0 && value.status == STATUS_CANCELLED && value.payload_len == 0
         }
         KIND_TERMINAL => {
+            value.flags == 0
+                && matches!(
+                    value.status,
+                    STATUS_SUCCESS
+                        | STATUS_REJECTED
+                        | STATUS_TIMEOUT
+                        | STATUS_CANCELLED
+                        | STATUS_RETRY_EXHAUSTED
+                        | STATUS_MALFORMED_REPLY
+                        | STATUS_PEER_DEAD
+                        | STATUS_DUPLICATE
+                        | STATUS_STALE
+                )
+                && value.payload_len == 0
+        }
+        // The client's word that it took a terminal, naming the request that
+        // terminal settled. It carries the settled status back so a broker
+        // cannot retire a record on an ack for some other outcome.
+        KIND_TERMINAL_ACK => {
             value.flags == 0
                 && matches!(
                     value.status,
@@ -516,7 +648,8 @@ pub fn valid_operation_envelope(
         return false;
     }
     // Only feedback is ordered within an operation; a sequence anywhere else is
-    // a field the sender had no business setting.
+    // a field the sender had no business setting. The server-idle fence carries
+    // no payload, but names the handled request so the broker can match it.
     if value.kind != KIND_FEEDBACK && value.sequence != 0 {
         return false;
     }
@@ -555,6 +688,7 @@ pub fn valid_operation_envelope(
                         | STATUS_RETRY_EXHAUSTED
                 )
         }
+        KIND_SERVER_IDLE => value.payload_len == 0 && value.status == STATUS_SUCCESS,
         _ => false,
     }
 }

@@ -18,6 +18,7 @@ maxEnvironmentBytes :: Int = 7;
 maxGrants :: Int = 1;
 maxCommandBytes :: Int = 16;
 requestFlagWait :: Int = 1;
+requestFlagShutdown :: Int = 2;
 capabilityRoleWorkingDirectory :: Int = 1;
 capabilityRoleStdin :: Int = 2;
 capabilityRoleStdout :: Int = 4;
@@ -47,7 +48,6 @@ SpawnReply :: type {
   version : Int;
   status : Int;
   termination_kind : Int;
-  task_id : Int;
   supervision_slot : Int;
   detail : Int;
 };
@@ -76,31 +76,31 @@ replyLayout :: List WireField = {
   { name = "version"; width = 4; signed = false; byteArray = false; };
   { name = "status"; width = 4; signed = true; byteArray = false; };
   { name = "termination_kind"; width = 4; signed = false; byteArray = false; };
-  { name = "task_id"; width = 8; signed = false; byteArray = false; };
   { name = "supervision_slot"; width = 4; signed = false; byteArray = false; };
   { name = "detail"; width = 8; signed = false; byteArray = false; };
 };
 
 format ::= {
-  formatVersion = formatVersion;
-  requestLen = requestLen;
-  replyLen = replyLen;
-  maxArguments = maxArguments;
-  maxArgumentBytes = maxArgumentBytes;
-  maxEnvironment = maxEnvironment;
-  maxEnvironmentBytes = maxEnvironmentBytes;
-  maxGrants = maxGrants;
-  requestFlagWait = requestFlagWait;
-  maxCommandBytes = maxCommandBytes;
-  capabilityRoleWorkingDirectory = capabilityRoleWorkingDirectory;
-  capabilityRoleStdin = capabilityRoleStdin;
-  capabilityRoleStdout = capabilityRoleStdout;
-  capabilityRoleStderr = capabilityRoleStderr;
-  capabilityRoleGrant = capabilityRoleGrant;
+  formatVersion =;
+  requestLen =;
+  replyLen =;
+  maxArguments =;
+  maxArgumentBytes =;
+  maxEnvironment =;
+  maxEnvironmentBytes =;
+  maxGrants =;
+  requestFlagWait =;
+  requestFlagShutdown =;
+  maxCommandBytes =;
+  capabilityRoleWorkingDirectory =;
+  capabilityRoleStdin =;
+  capabilityRoleStdout =;
+  capabilityRoleStderr =;
+  capabilityRoleGrant =;
   requestFields = requestSchema.fields ?? {;};
   replyFields = replySchema.fields ?? {;};
-  requestLayout = requestLayout;
-  replyLayout = replyLayout;
+  requestLayout =;
+  replyLayout =;
 };
 
 main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }

@@ -1,0 +1,11 @@
+   Compiling slime-root v0.1.0 (/Users/iceice666/code/slime_os/slime-root)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.33s
+     Running unittests src/lib.rs (target/aarch64-apple-darwin/debug/deps/slime_root-287616b0a7ca0dc6)
+
+running 101 tests
+....................................................................................... 87/101
+..............
+test result: ok. 101 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+test_sel4_root: ran 101 tests, expected 102; a module lost or gained coverage (B23)
+error: recipe `test_sel4_root` failed with exit code 1

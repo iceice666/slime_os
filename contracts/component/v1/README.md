@@ -68,12 +68,13 @@ byte is mapped.
 
 ## Validation
 
-The kernel decoder (`kernel/src/runtime/component.rs`) rejects malformed images with
-a structured `ImageError`: `Truncated`, `BadMagic`, `UnsupportedVersion`,
+The decoder (`boot-contracts/src/component_image.rs`) rejects malformed images
+with a structured `ImageError`: `Truncated`, `BadMagic`, `UnsupportedVersion`,
 `AbiMismatch`, `BadSegmentCount`, `BadStack`, `BadFlags` (unknown bits or
 write+execute combined), `BadSegment` (misaligned, empty, `file_len >
 mem_len`, or unsorted/overlapping memory ranges), `BadFileRange`, `BadEntry`,
-and `ImageTooLarge`.
+and `ImageTooLarge`. `slime-root/src/child_vspace.rs` maps only images that
+decoded through it.
 
 Validation is eager: the generation decoder validates every object of kind
 `bootstrap` or `component` while decoding the generation, so a generation
@@ -83,8 +84,9 @@ generation-sourced executables. `scripts/check/check-generation.py` mirrors the
 same rules host-side so builder/kernel drift fails in `just
 generation_check` instead of at boot.
 
-`kernel/tests/component_image.rs` pins every acceptance and rejection class
-against the generated wire bindings.
+`boot-contracts/src/component_image.rs`'s own host tests pin every acceptance
+and rejection class against the generated wire bindings, under
+`just test_host`.
 
 ## Build pipeline
 

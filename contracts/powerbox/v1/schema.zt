@@ -71,17 +71,17 @@ replyLayout :: List WireField = {
 };
 
 format ::= {
-  formatVersion = formatVersion;
-  requestLen = requestLen;
-  replyLen = replyLen;
-  maxPurposeBytes = maxPurposeBytes;
-  objectKindFile = objectKindFile;
-  replyFlagSelected = replyFlagSelected;
-  replyFlagCancelled = replyFlagCancelled;
+  formatVersion =;
+  requestLen =;
+  replyLen =;
+  maxPurposeBytes =;
+  objectKindFile =;
+  replyFlagSelected =;
+  replyFlagCancelled =;
   requestFields = requestSchema.fields ?? {;};
   replyFields = replySchema.fields ?? {;};
-  requestLayout = requestLayout;
-  replyLayout = replyLayout;
+  requestLayout =;
+  replyLayout =;
 };
 
 main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }

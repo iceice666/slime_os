@@ -14,7 +14,7 @@ const RIGHT_TRANSFER: u32 = 1 << 2;
 const RIGHT_DIRECTORY_READ: u32 = 1 << 19;
 const RIGHT_DIRECTORY_WRITE: u32 = 1 << 20;
 
-fn main() {
+fn main(_startup_arg: u32) {
     let mut root = [0u8; 32];
     let mut scope = [0u8; slime_rt::MAX_DIRECTORY_PATH];
     if slime_rt::directory_inspect(RPC_SLOT, RIGHT_DIRECTORY_READ, &mut root, &mut scope)
@@ -108,20 +108,25 @@ fn call(request: WirePowerboxRequest) -> Response {
     let mut caps = [0u64; MAX_CAPS_PER_MSG];
     loop {
         match slime_rt::recv(RPC_SLOT, &mut message, &mut caps) {
-            ERR_WOULDBLOCK => slime_rt::wait(&[slime_rt::WaitSource::Endpoint(RPC_SLOT)]),
+            ERR_WOULDBLOCK => slime_rt::yield_now(),
             result if result < 0 => fail(),
             length => {
                 let reply = WirePowerboxReply::decode(&message[..length as usize])
                     .filter(valid_powerbox_reply)
                     .unwrap_or_else(|| fail());
-                let cap_count = caps.iter().filter(|slot| **slot != 0).count();
-                if cap_count > 1 || caps[1..].iter().any(|slot| *slot != 0) {
-                    fail();
-                }
+                // A directory is a root-owned logical capability with no kernel
+                // object, so it never travels inline: `caps[0]` is always zero
+                // here and the authority is a finalized export this component
+                // claims. Only a native Endpoint arrives in the message itself.
+                //
+                // Claimed on every reply, not only the granting one, because a
+                // denial or cancellation must be observed to carry nothing --
+                // which is exactly what the plane's two refusal arms assert.
+                let capability = slime_rt::capability_import().ok();
                 return Response {
                     reply,
-                    capability: (caps[0] != 0).then_some(caps[0] as u32),
-                    cap_count,
+                    cap_count: usize::from(capability.is_some()),
+                    capability,
                 };
             }
         }

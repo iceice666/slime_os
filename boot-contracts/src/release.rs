@@ -36,7 +36,7 @@ pub struct Release<'a> {
     pub sequence: u64,
     pub target: &'a str,
     pub trust_root_version: u32,
-    pub kernel: [u8; 32],
+    pub boot_bundle: [u8; 32],
     pub authority_manifest: [u8; 32],
     signature_count: usize,
 }
@@ -53,7 +53,7 @@ pub enum ReleaseError {
     WrongGeneration,
     WrongParent,
     WrongTarget,
-    WrongKernel,
+    WrongBootBundle,
     WrongAuthorityManifest,
     WrongTrustRoot,
     StaleSequence,
@@ -93,26 +93,32 @@ impl<'a> Release<'a> {
         if bytes[..8] != RELEASE_MAGIC {
             return Err(ReleaseError::BadMagic);
         }
-        if read_u32(bytes, 8) != RELEASE_VERSION
-            || read_u32(bytes, 12) as usize != RELEASE_HEADER_BYTES
+        let version = read_u32(bytes, RELEASE_HEADER_FORMAT_VERSION_OFFSET);
+        if version != RELEASE_VERSION
+            || read_u32(bytes, RELEASE_HEADER_HEADER_SIZE_OFFSET) as usize != RELEASE_HEADER_BYTES
         {
             return Err(ReleaseError::UnsupportedVersion);
         }
-        if read_u64(bytes, 16) != 0 {
+        if read_u64(bytes, RELEASE_HEADER_REQUIRED_FLAGS_OFFSET) != 0 {
             return Err(ReleaseError::UnknownRequiredFlags);
         }
-        let target_len = read_u32(bytes, 96) as usize;
+        let target_len = read_u32(bytes, RELEASE_HEADER_TARGET_LEN_OFFSET) as usize;
         if target_len == 0 || target_len > MAX_TARGET_BYTES {
             return Err(ReleaseError::BadBounds);
         }
-        let target_bytes = &bytes[104..104 + target_len];
+        let target_bytes =
+            &bytes[RELEASE_HEADER_TARGET_OFFSET..RELEASE_HEADER_TARGET_OFFSET + target_len];
         let target = str::from_utf8(target_bytes).map_err(|_| ReleaseError::BadTarget)?;
-        if bytes[104 + target_len..136].iter().any(|byte| *byte != 0) {
+        if bytes
+            [RELEASE_HEADER_TARGET_OFFSET + target_len..RELEASE_HEADER_BOOT_BUNDLE_IDENTITY_OFFSET]
+            .iter()
+            .any(|byte| *byte != 0)
+        {
             return Err(ReleaseError::NonZeroReserved);
         }
-        let signature_count = read_u32(bytes, 200) as usize;
+        let signature_count = read_u32(bytes, RELEASE_HEADER_SIGNATURE_COUNT_OFFSET) as usize;
         if signature_count > MAX_RELEASE_SIGNATURES
-            || bytes[204..RELEASE_HEADER_BYTES]
+            || bytes[RELEASE_HEADER_RESERVED_OFFSET..RELEASE_HEADER_BYTES]
                 .iter()
                 .any(|byte| *byte != 0)
             || bytes[RELEASE_HEADER_BYTES + signature_count * RELEASE_SIGNATURE_BYTES..]
@@ -121,16 +127,32 @@ impl<'a> Release<'a> {
         {
             return Err(ReleaseError::NonZeroReserved);
         }
-        let parent: [u8; 32] = bytes[56..88].try_into().unwrap();
+        let parent: [u8; 32] = bytes
+            [RELEASE_HEADER_PARENT_IDENTITY_OFFSET..RELEASE_HEADER_RELEASE_SEQUENCE_OFFSET]
+            .try_into()
+            .unwrap();
+        let boot_bundle: [u8; 32] = bytes
+            [RELEASE_HEADER_BOOT_BUNDLE_IDENTITY_OFFSET..RELEASE_HEADER_AUTHORITY_MANIFEST_OFFSET]
+            .try_into()
+            .unwrap();
+        if version == RELEASE_VERSION && boot_bundle == [0; 32] {
+            return Err(ReleaseError::WrongBootBundle);
+        }
         Ok(Self {
             bytes,
-            generation: bytes[24..56].try_into().unwrap(),
+            generation: bytes
+                [RELEASE_HEADER_GENERATION_IDENTITY_OFFSET..RELEASE_HEADER_PARENT_IDENTITY_OFFSET]
+                .try_into()
+                .unwrap(),
             parent: (parent != [0; 32]).then_some(parent),
-            sequence: read_u64(bytes, 88),
+            sequence: read_u64(bytes, RELEASE_HEADER_RELEASE_SEQUENCE_OFFSET),
             target,
-            trust_root_version: read_u32(bytes, 100),
-            kernel: bytes[136..168].try_into().unwrap(),
-            authority_manifest: bytes[168..200].try_into().unwrap(),
+            trust_root_version: read_u32(bytes, RELEASE_HEADER_TRUST_ROOT_VERSION_OFFSET),
+            boot_bundle,
+            authority_manifest: bytes
+                [RELEASE_HEADER_AUTHORITY_MANIFEST_OFFSET..RELEASE_HEADER_SIGNATURE_COUNT_OFFSET]
+                .try_into()
+                .unwrap(),
             signature_count,
         })
     }
@@ -154,16 +176,21 @@ impl<'a> Release<'a> {
         if self.target != generation.target {
             return Err(ReleaseError::WrongTarget);
         }
-        let kernel = generation
-            .object(generation.kernel_object)
-            .map_err(|_| ReleaseError::WrongKernel)?;
-        if self.kernel != kernel.digest {
-            return Err(ReleaseError::WrongKernel);
+        if !generation.is_v5() {
+            return Err(ReleaseError::WrongBootBundle);
         }
         if self.authority_manifest != generation.authority_manifest_identity() {
             return Err(ReleaseError::WrongAuthorityManifest);
         }
         self.verify_signatures(root)
+    }
+
+    #[cfg(feature = "release-crypto")]
+    pub fn verify_boot_bundle(&self, expected: &[u8; 32]) -> Result<(), ReleaseError> {
+        if self.boot_bundle != *expected {
+            return Err(ReleaseError::WrongBootBundle);
+        }
+        Ok(())
     }
 
     #[cfg(feature = "release-crypto")]
@@ -360,4 +387,254 @@ fn read_u32(bytes: &[u8], offset: usize) -> u32 {
 
 fn read_u64(bytes: &[u8], offset: usize) -> u64 {
     u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn root(threshold: u32, key_count: u32) -> TrustRoot {
+        let mut keys = [[0u8; 32]; MAX_TRUST_KEYS];
+        for (index, key) in keys.iter_mut().enumerate().take(key_count as usize) {
+            key.fill(index as u8 + 1);
+        }
+        TrustRoot {
+            version: 1,
+            threshold,
+            key_count,
+            keys,
+        }
+    }
+
+    /// One signed release naming a parent, a target, and a kernel digest. The
+    /// signature area stays zeroed: `decode` requires the tail past
+    /// `signature_count` entries to be zero, and a count of zero means all of
+    /// it. Signature *verification* is behind `release-crypto` and is not what
+    /// this corpus covers.
+    fn valid() -> [u8; RELEASE_BYTES] {
+        const TARGET: &[u8] = b"x86_64-qemu-virtio";
+        let mut bytes = [0u8; RELEASE_BYTES];
+        bytes[..8].copy_from_slice(&RELEASE_MAGIC);
+        bytes[8..12].copy_from_slice(&RELEASE_VERSION.to_le_bytes());
+        bytes[12..16].copy_from_slice(&(RELEASE_HEADER_BYTES as u32).to_le_bytes());
+        bytes[24..56].fill(0xC1);
+        bytes[56..88].fill(0xD2);
+        bytes[88..96].copy_from_slice(&42u64.to_le_bytes());
+        bytes[96..100].copy_from_slice(&(TARGET.len() as u32).to_le_bytes());
+        bytes[100..104].copy_from_slice(&1u32.to_le_bytes());
+        bytes[104..104 + TARGET.len()].copy_from_slice(TARGET);
+        bytes[136..168].fill(0xE3);
+        bytes[168..200].fill(0xF4);
+        bytes
+    }
+
+    /// Every field the decoder promises. Without this the refusal corpus below
+    /// could pass on a decoder that refuses everything.
+    #[test]
+    fn a_well_formed_release_decodes_with_every_field() {
+        let bytes = valid();
+        let release = Release::decode(&bytes).expect("valid release");
+        assert_eq!(release.generation, [0xC1; 32]);
+        assert_eq!(release.parent, Some([0xD2; 32]));
+        assert_eq!(release.sequence, 42);
+        assert_eq!(release.target, "x86_64-qemu-virtio");
+        assert_eq!(release.trust_root_version, 1);
+        assert_eq!(release.boot_bundle, [0xE3; 32]);
+        assert_eq!(release.authority_manifest, [0xF4; 32]);
+        assert_eq!(release.signed_payload().len(), RELEASE_HEADER_BYTES);
+    }
+
+    /// An all-zero parent is *absent*, not an ancestor whose identity is zero.
+    /// The rollback chain reads this to find the first release.
+    #[test]
+    fn a_zero_parent_decodes_as_absent() {
+        let mut bytes = valid();
+        bytes[56..88].fill(0);
+        assert_eq!(Release::decode(&bytes).expect("valid").parent, None);
+    }
+
+    /// The release is a fixed-size record, so anything else is refused on size
+    /// alone rather than read with a shifted layout.
+    #[test]
+    fn any_length_other_than_one_record_is_bad_size() {
+        let bytes = valid();
+        assert_eq!(
+            Release::decode(&bytes[..RELEASE_BYTES - 1]).err(),
+            Some(ReleaseError::BadSize)
+        );
+        let oversized = [0u8; RELEASE_BYTES + 1];
+        assert_eq!(
+            Release::decode(&oversized).err(),
+            Some(ReleaseError::BadSize)
+        );
+    }
+
+    #[test]
+    fn a_foreign_magic_is_refused_before_anything_else() {
+        let mut bytes = valid();
+        bytes[0] = b'X';
+        assert_eq!(Release::decode(&bytes).err(), Some(ReleaseError::BadMagic));
+    }
+
+    /// A future format is refused rather than read with this version's offsets,
+    /// and so is a header claiming a size this build did not compile.
+    #[test]
+    fn a_wrong_version_or_header_size_is_unsupported() {
+        for (offset, value) in [
+            (8usize, RELEASE_VERSION + 1),
+            (12, RELEASE_HEADER_BYTES as u32 + 8),
+        ] {
+            let mut bytes = valid();
+            bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+            assert_eq!(
+                Release::decode(&bytes).err(),
+                Some(ReleaseError::UnsupportedVersion),
+                "offset {offset}",
+            );
+        }
+    }
+
+    #[test]
+    fn release_v1_is_rejected_after_v2_cutover() {
+        let mut bytes = valid();
+        bytes[RELEASE_HEADER_FORMAT_VERSION_OFFSET..RELEASE_HEADER_FORMAT_VERSION_OFFSET + 4]
+            .copy_from_slice(&RELEASE_VERSION_V1.to_le_bytes());
+        assert_eq!(
+            Release::decode(&bytes).err(),
+            Some(ReleaseError::UnsupportedVersion)
+        );
+    }
+
+    /// A target is what binds a release to the hardware it may boot. An empty
+    /// one names nothing, and one past the field cannot be held.
+    #[test]
+    fn an_empty_or_oversized_target_is_out_of_bounds() {
+        for len in [0u32, MAX_TARGET_BYTES as u32 + 1] {
+            let mut bytes = valid();
+            bytes[96..100].copy_from_slice(&len.to_le_bytes());
+            assert_eq!(
+                Release::decode(&bytes).err(),
+                Some(ReleaseError::BadBounds),
+                "target_len {len}",
+            );
+        }
+    }
+
+    /// The target is compared as a string against the generation's own, so a
+    /// non-UTF-8 target is refused here rather than becoming a comparison that
+    /// can never match.
+    #[test]
+    fn a_non_utf8_target_is_refused() {
+        let mut bytes = valid();
+        bytes[96..100].copy_from_slice(&2u32.to_le_bytes());
+        bytes[104] = 0xFF;
+        bytes[105] = 0xFE;
+        bytes[106..136].fill(0);
+        assert_eq!(Release::decode(&bytes).err(), Some(ReleaseError::BadTarget));
+    }
+
+    /// Every reserved region is an extension point, and each is checked: the
+    /// slack after the target, the header tail, and the signature area past the
+    /// declared count. A producer that means something by those bytes must not
+    /// be silently accepted.
+    #[test]
+    fn a_nonzero_reserved_byte_is_refused_wherever_it_sits() {
+        let target_len = "x86_64-qemu-virtio".len();
+        for offset in [104 + target_len, 204, RELEASE_HEADER_BYTES] {
+            let mut bytes = valid();
+            bytes[offset] = 1;
+            assert_eq!(
+                Release::decode(&bytes).err(),
+                Some(ReleaseError::NonZeroReserved),
+                "reserved byte at {offset}",
+            );
+        }
+    }
+
+    #[test]
+    fn a_nonzero_required_flag_is_refused() {
+        let mut bytes = valid();
+        bytes[16] = 1;
+        assert_eq!(
+            Release::decode(&bytes).err(),
+            Some(ReleaseError::UnknownRequiredFlags)
+        );
+    }
+
+    /// More signatures than the record can hold is refused, and the count is
+    /// what decides how much of the signature area must be zero.
+    #[test]
+    fn more_signatures_than_the_record_holds_is_refused() {
+        let mut bytes = valid();
+        bytes[200..204].copy_from_slice(&(MAX_RELEASE_SIGNATURES as u32 + 1).to_le_bytes());
+        assert_eq!(
+            Release::decode(&bytes).err(),
+            Some(ReleaseError::NonZeroReserved)
+        );
+    }
+
+    /// A declared signature slot makes that slot's bytes legal, and the slack
+    /// after it still is not. This is the pair that shows `signature_count`
+    /// actually moves the boundary rather than being ignored.
+    #[test]
+    fn a_declared_signature_slot_admits_its_own_bytes_only() {
+        let mut bytes = valid();
+        bytes[200..204].copy_from_slice(&1u32.to_le_bytes());
+        bytes[RELEASE_HEADER_BYTES] = 0xAA;
+        Release::decode(&bytes).expect("one declared signature admits its bytes");
+
+        bytes[RELEASE_HEADER_BYTES + RELEASE_SIGNATURE_BYTES] = 0xBB;
+        assert_eq!(
+            Release::decode(&bytes).err(),
+            Some(ReleaseError::NonZeroReserved)
+        );
+    }
+
+    /// A quorum of zero would accept an unsigned release, and one above the key
+    /// count could never be met, so both are refused before any signature is
+    /// checked.
+    #[test]
+    fn a_trust_root_with_an_unmeetable_threshold_is_refused() {
+        assert_eq!(root(1, 2).validate(), Ok(()));
+        assert_eq!(root(2, 2).validate(), Ok(()));
+        assert_eq!(root(0, 2).validate(), Err(ReleaseError::BadBounds));
+        assert_eq!(root(3, 2).validate(), Err(ReleaseError::BadBounds));
+    }
+
+    /// A version of zero is not a version, and a root holding no keys cannot
+    /// authorise anything.
+    #[test]
+    fn a_trust_root_without_a_version_or_keys_is_refused() {
+        let mut zero_version = root(1, 2);
+        zero_version.version = 0;
+        assert_eq!(zero_version.validate(), Err(ReleaseError::BadBounds));
+
+        assert_eq!(root(1, 0).validate(), Err(ReleaseError::BadBounds));
+
+        let mut over = root(1, 2);
+        over.key_count = MAX_TRUST_KEYS as u32 + 1;
+        assert_eq!(over.validate(), Err(ReleaseError::BadBounds));
+    }
+
+    /// A duplicated key would let one signer satisfy a threshold of two, which
+    /// is the whole point of a quorum. A zero key is not a key.
+    #[test]
+    fn a_duplicate_or_zero_trust_key_is_refused() {
+        let mut duplicate = root(2, 2);
+        duplicate.keys[1] = duplicate.keys[0];
+        assert_eq!(duplicate.validate(), Err(ReleaseError::DuplicateKey));
+
+        let mut zeroed = root(2, 2);
+        zeroed.keys[1] = [0; 32];
+        assert_eq!(zeroed.validate(), Err(ReleaseError::DuplicateKey));
+    }
+
+    /// Key slots past `key_count` are reserved, so a key parked there cannot
+    /// quietly become live when the count later grows.
+    #[test]
+    fn a_key_past_the_declared_count_is_reserved_space() {
+        let mut trailing = root(1, 2);
+        trailing.keys[2].fill(0x99);
+        assert_eq!(trailing.validate(), Err(ReleaseError::NonZeroReserved));
+    }
 }

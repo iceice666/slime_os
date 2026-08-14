@@ -43,6 +43,27 @@ legacyMagic :: Int = 5786355061169409107;
 legacyFormatVersion :: Int = 1;
 legacyHeaderLen :: Int = 32;
 
+-- "SLIMECME" as a little-endian u64: the ELF-carrying revision (P5.2).
+--
+-- Same 56-byte header as `imageMagic`, so target qualification is read by the
+-- identical field offsets and one layout describes both. What differs is the
+-- payload: instead of a segment table plus re-based segment bytes, the body is
+-- a complete native ELF executable, and `segment_count` is therefore always
+-- zero. Under seL4 a component is an ordinary ELF task that `slime-root`'s
+-- loader maps at its own link addresses; re-basing it onto a fixed component
+-- load base would describe a layout nothing uses.
+--
+-- A distinct magic rather than a flag bit, for the same reason v2 took one from
+-- v1: which decoder owns the body is a decode-time fact, not a convention a
+-- reader has to infer from a field it might forget to check. A reader that does
+-- not know this magic rejects the image instead of parsing an ELF as a segment
+-- table.
+elfMagic :: Int = 4993721526752201811;
+-- Shares v2's format version and header length: the header contract is the
+-- same revision of the same contract, and only the payload encoding is new.
+elfFormatVersion :: Int = 2;
+elfHeaderLen :: Int = 56;
+
 WireField :: type { name : Text; width : Int; signed : Bool; };
 -- The Python renderer's field shape carries a `byteArray` flag the Rust one
 -- does not: there the magic is a fixed 8-byte tag rather than an integer.
@@ -127,26 +148,29 @@ pythonSegmentLayout :: List PythonWireField = {
 };
 
 imageFormat ::= {
-  formatVersion = formatVersion;
-  kernelAbiVersion = kernelAbiVersion;
-  headerLen = headerLen;
-  segmentLen = segmentLen;
-  maxSegments = maxSegments;
-  maxImageBytes = maxImageBytes;
-  maxStackBytes = maxStackBytes;
-  defaultStackBytes = defaultStackBytes;
-  segmentFlagWrite = segmentFlagWrite;
-  segmentFlagExec = segmentFlagExec;
-  imageMagic = imageMagic;
-  legacyMagic = legacyMagic;
-  legacyFormatVersion = legacyFormatVersion;
-  legacyHeaderLen = legacyHeaderLen;
+  formatVersion =;
+  kernelAbiVersion =;
+  headerLen =;
+  segmentLen =;
+  maxSegments =;
+  maxImageBytes =;
+  maxStackBytes =;
+  defaultStackBytes =;
+  segmentFlagWrite =;
+  segmentFlagExec =;
+  imageMagic =;
+  legacyMagic =;
+  legacyFormatVersion =;
+  legacyHeaderLen =;
+  elfMagic =;
+  elfFormatVersion =;
+  elfHeaderLen =;
   headerFields = headerSchema.fields ?? {;};
   segmentFields = segmentSchema.fields ?? {;};
-  headerLayout = headerLayout;
-  segmentLayout = segmentLayout;
-  pythonHeaderLayout = pythonHeaderLayout;
-  pythonSegmentLayout = pythonSegmentLayout;
+  headerLayout =;
+  segmentLayout =;
+  pythonHeaderLayout =;
+  pythonSegmentLayout =;
 };
 main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }
   = caps => [

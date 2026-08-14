@@ -1,0 +1,43 @@
+Command: just sel4_device_check
+Date: 2026-08-08
+Exit: 0
+
+Boot: build/slime-sel4-graph.elf on the pinned qemu-arm-virt profile, plus
+  -drive if=none,id=slimedisk,format=raw,file=<tmp>/device-plane.img
+  -device virtio-blk-device,drive=slimedisk
+
+Observed:
+SLIME_ROOT devices untypeds=35
+SLIME_ROOT virtio transport=0xa003e00 version=1 device=2 vendor=0x554d4551
+SLIME_ROOT virtio irq bound transport=0xa003e00 irq=79 badge=0x2
+SLIME_ROOT virtio probed granules=4 slots=32 found=1
+
+Terminal result:
+transcript: 3 markers observed; the root mapped 32 virtio-mmio register banks out of device untyped memory and identified the one attached block device by register read
+seL4 device plane check: the root retyped a granule out of BootInfo device untyped memory, mapped it non-cacheably into its own VSpace, and identified an attached virtio block device by reading its registers
+
+--------------------------------------------------------------------
+The negative half, same code, no disk
+--------------------------------------------------------------------
+
+Command: just sel4_root_boot_check
+Exit: 0
+
+Observed:
+SLIME_ROOT devices untypeds=35
+SLIME_ROOT virtio probed granules=4 slots=32 found=0
+
+The root gate asserts `found=0` rather than tolerating it. Together the two
+gates are what make the probe an observation: the same code must report nothing
+when nothing is attached and name the disk when one is. Either alone is
+satisfiable by a probe that returns a constant.
+
+Values read, and where they come from:
+- device=2   virtio device id for a block device
+- vendor=0x554d4551  "QEMU" little-endian
+- transport=0xa003e00  the highest of the platform's 32 declared transports;
+  QEMU attaches downward from the top, so a single -device lands there
+- irq=79  the DTB's `interrupts = <0x00 0x2f 0x01>` on virtio_mmio@a003e00:
+  SPI 47, which seL4 numbers from 32. Derived from the transport address by
+  the same arithmetic the device tree encodes, and only bound for a transport
+  that is actually attached.

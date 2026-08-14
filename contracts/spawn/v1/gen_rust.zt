@@ -18,6 +18,7 @@ Protocol :: type {
   maxGrants : Int;
   maxCommandBytes : Int;
   requestFlagWait : Int;
+  requestFlagShutdown : Int;
   capabilityRoleWorkingDirectory : Int;
   capabilityRoleStdin : Int;
   capabilityRoleStdout : Int;
@@ -146,6 +147,7 @@ rustBindings :: Protocol -> Text
     "pub const MAX_GRANTS: usize = "; n.toText protocol.maxGrants; ";\n";
     "pub const MAX_COMMAND_BYTES: usize = "; n.toText protocol.maxCommandBytes; ";\n\n";
     "pub const REQUEST_FLAG_WAIT: u32 = "; n.toText protocol.requestFlagWait; ";\n";
+    "pub const REQUEST_FLAG_SHUTDOWN: u32 = "; n.toText protocol.requestFlagShutdown; ";\n";
     "pub const CAPABILITY_ROLE_WORKING_DIRECTORY: u8 = "; n.toText protocol.capabilityRoleWorkingDirectory; ";\n";
     "pub const CAPABILITY_ROLE_STDIN: u8 = "; n.toText protocol.capabilityRoleStdin; ";\n";
     "pub const CAPABILITY_ROLE_STDOUT: u8 = "; n.toText protocol.capabilityRoleStdout; ";\n";
@@ -176,4 +178,4 @@ render :: Protocol -> { rust : Text; }
     then { rust = rustBindings protocol; }
     else { rust = "INVALID_SPAWN_SCHEMA"; };
 
-{ render = render; }
+{ render =; }

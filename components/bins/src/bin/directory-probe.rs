@@ -1,8 +1,11 @@
 #![no_std]
 #![no_main]
 
-use slime_proto::fs::{self, WireFsReply, WireFsRequest};
-use slime_rt::{ERR_BAD_CAP, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
+use slime_proto::{
+    capability_transfer::OBJECT_KIND_DIRECTORY,
+    fs::{self, WireFsReply, WireFsRequest},
+};
+use slime_rt::{CapabilityDisposition, ERR_BAD_CAP, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
 
 slime_rt::entry!(main);
 
@@ -12,11 +15,22 @@ const PAYLOAD_HASH: [u8; 32] = [
     0x80, 0xe6, 0xbb, 0x6b, 0x33, 0x8c, 0x72, 0xd3, 0xdd, 0x0f, 0xdc, 0x6d, 0x94, 0x25, 0x70, 0x4b,
     0xa6, 0xa0, 0x3f, 0x8d, 0x0c, 0xd8, 0x19, 0x47, 0x0c, 0xf1, 0x04, 0xc6, 0x57, 0x2e, 0x53, 0xd6,
 ];
+const RIGHT_TRANSFER: u32 = 1 << 2;
+const RIGHT_DIRECTORY_WRITE: u32 = 1 << 20;
+const RIGHT_DIRECTORY_DERIVE: u32 = 1 << 22;
 const PAYLOAD_LEN: u32 = 30;
 const RIGHT_DIRECTORY_READ: u32 = 1 << 19;
 const RIGHT_DIRECTORY_LIST: u32 = 1 << 21;
 const ZERO_HASH: [u8; 32] = [0; 32];
-fn main() {
+/// The oracle's own client, unmodified in the sense the gate checks: no
+/// compile-time product selector, no seL4 branch.
+///
+/// It used to park on `startup_arg == 0`, which the cutover made unreachable —
+/// the root delivers a nonzero boot action only to the bootstrap instance, so
+/// every other instance reads zero and this component always exited idle. The
+/// plane now declares one instance, spawned by init after the service is
+/// listening, so there is no second copy to tell apart.
+fn main(_startup_arg: u32) {
     let denied = slime_rt::directory_derive(RPC_SLOT, b"docs", RIGHT_DIRECTORY_READ);
     if denied != Err(ERR_BAD_CAP) {
         fail();
@@ -41,7 +55,6 @@ fn main() {
         fail();
     }
     slime_rt::debug_write(b"[directory-probe] interrupted transition preserved root\n");
-    slime_rt::debug_write(b"[directory-probe] scoped read ok\n");
 
     let (write, _) = call(
         request(fs::OP_WRITE, b"new.txt", PAYLOAD_LEN, PAYLOAD_HASH),
@@ -78,15 +91,21 @@ fn main() {
     if scoped_read.status != 0 || reply_hash(scoped_read) != PAYLOAD_HASH {
         fail();
     }
+    slime_rt::debug_write(b"[directory-probe] scoped read ok\n");
     let (outside_scope, _) = call(request(fs::OP_READ, b"new.txt", 0, [0; 32]), derived_slot);
     if outside_scope.status != -3 {
         fail();
     }
-    let (scoped_write, _) = call(
+    // The write is refused before it reaches the service: the scoped view
+    // carries no `directoryWrite`, so the root will not narrow a writable copy
+    // out of it to hand over. That is a stronger denial than the service's own
+    // `-2` — the request never crosses — and it is the mechanism's, not policy's.
+    if try_call(
         request(fs::OP_WRITE, b"blocked.txt", PAYLOAD_LEN, PAYLOAD_HASH),
         derived_slot,
-    );
-    if scoped_write.status != -2 {
+    )
+    .is_some_and(|(reply, _)| reply.status != -2)
+    {
         fail();
     }
     let _ = slime_rt::cap_drop(derived_slot);
@@ -124,10 +143,50 @@ fn request(op: u8, name: &[u8], payload_len: u32, hash: [u8; 32]) -> WireFsReque
 }
 
 fn call(request: WireFsRequest, directory_slot: u32) -> (WireFsReply, Option<u32>) {
+    try_call(request, directory_slot).unwrap_or_else(|| fail())
+}
+
+/// One request, or `None` when the mechanism refuses to hand the view over.
+///
+/// A request travels as a narrowed transferable copy of the caller's view, so a
+/// view carrying neither the operation's right nor `directoryDerive` cannot make
+/// that request at all — the denial happens in the root, before the service sees
+/// anything. That is a real answer for a boundary arm and a failure anywhere
+/// else, which is why the two spellings are separate.
+fn try_call(request: WireFsRequest, directory_slot: u32) -> Option<(WireFsReply, Option<u32>)> {
+    let rights = match request.op {
+        fs::OP_LIST => RIGHT_DIRECTORY_LIST,
+        fs::OP_READ => RIGHT_DIRECTORY_READ,
+        fs::OP_WRITE => RIGHT_DIRECTORY_WRITE,
+        // A derive hands the service the authority it must place *on the result*
+        // as well as the right to derive at all, and `transfer` besides: the
+        // service returns the narrowed view by delegating it back, which the
+        // root refuses from a view that cannot be transferred.
+        fs::OP_DERIVE => {
+            RIGHT_DIRECTORY_DERIVE | RIGHT_DIRECTORY_READ | RIGHT_DIRECTORY_LIST | RIGHT_TRANSFER
+        }
+        _ => fail(),
+    };
+    // The copy that crosses. Derived per request rather than reused, because a
+    // delegate is a `Move`: the caller keeps its own view and gives up only the
+    // copy. A source that cannot produce one — no `directoryDerive`, or not the
+    // right this operation needs — is the refusal this returns `None` for.
+    let transfer_slot = slime_rt::directory_derive(
+        directory_slot,
+        b"",
+        rights | RIGHT_TRANSFER | RIGHT_DIRECTORY_DERIVE,
+    )
+    .ok()?;
     let encoded = request.encode();
-    let grant = [directory_slot];
     loop {
-        match slime_rt::send(RPC_SLOT, &encoded, &grant) {
+        match slime_rt::capability_delegate(
+            RPC_SLOT,
+            transfer_slot,
+            CapabilityDisposition::Move,
+            OBJECT_KIND_DIRECTORY,
+            u64::from(rights),
+            &encoded,
+        ) {
             ERR_WOULDBLOCK => slime_rt::yield_now(),
             result if result < 0 => fail(),
             _ => break,
@@ -137,25 +196,19 @@ fn call(request: WireFsRequest, directory_slot: u32) -> (WireFsReply, Option<u32
     let mut caps = [0u64; MAX_CAPS_PER_MSG];
     loop {
         match slime_rt::recv(RPC_SLOT, &mut reply, &mut caps) {
-            ERR_WOULDBLOCK => slime_rt::wait(&[slime_rt::WaitSource::Endpoint(RPC_SLOT)]),
+            ERR_WOULDBLOCK => slime_rt::yield_now(),
             result if result < 0 => fail(),
             n => {
-                if caps[0] == 0 || caps[2..].iter().any(|slot| *slot != 0) {
-                    fail();
-                }
-                let returned_directory = caps[0] as u32;
-                if returned_directory != directory_slot {
-                    if slime_rt::cap_drop(returned_directory) != 0 {
-                        fail();
-                    }
-                    fail();
-                }
-                let derived = (caps[1] != 0).then_some(caps[1] as u32);
+                // A directory capability has no kernel object to travel in the
+                // message, so an export addressed here arrives alone and is
+                // claimed rather than read out of the received-capability
+                // array, which carries only native Endpoint handles (B46).
+                let derived = slime_rt::capability_import().ok();
                 let decoded = match WireFsReply::decode(&reply[..n as usize]) {
                     Some(reply) => reply,
                     None => fail(),
                 };
-                return (decoded, derived);
+                return Some((decoded, derived));
             }
         }
     }

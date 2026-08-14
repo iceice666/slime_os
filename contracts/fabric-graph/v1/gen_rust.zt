@@ -184,4 +184,4 @@ render :: Format -> { python : Text; rust : Text; }
   = format => if w.recordsValid (records format)
     then { python = pythonBindings format; rust = rustBindings format; }
     else { python = "INVALID_FABRIC_GRAPH_SCHEMA"; rust = "INVALID_FABRIC_GRAPH_SCHEMA"; };
-{ render = render; }
+{ render =; }

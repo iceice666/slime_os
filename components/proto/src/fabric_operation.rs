@@ -12,6 +12,7 @@ pub const KIND_RESULT: u32 = 4;
 pub const KIND_RESULT_REQUEST: u32 = 5;
 pub const KIND_CANCEL: u32 = 6;
 pub const KIND_TERMINAL: u32 = 7;
+pub const KIND_SERVER_IDLE: u32 = 8;
 pub const STATUS_SUCCESS: i32 = 0;
 pub const STATUS_REJECTED: i32 = 1;
 pub const STATUS_CANCELLED: i32 = 2;

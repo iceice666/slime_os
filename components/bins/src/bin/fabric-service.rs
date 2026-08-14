@@ -67,52 +67,60 @@ use boot_contracts::fabric_graph::{
 };
 use boot_contracts::stream_history::{HistoryEntry, StreamHistory};
 use slime_proto::capability_transfer::{
-    CAPABILITY_TRANSFER_MAGIC, FORMAT_VERSION, OBJECT_KIND_ENDPOINT, REQUEST_LEN, TRANSFER_LEN,
-    WireCapabilityTransfer, WireFabricRequest,
+    CAPABILITY_TRANSFER_MAGIC, FLAG_RETAIN_TRANSFER, FORMAT_VERSION,
+    OBJECT_KIND_SHARED_BUFFER_LOAN, REQUEST_LEN, TRANSFER_LEN, WireCapabilityTransfer,
+    WireFabricRequest,
 };
 use slime_proto::fabric_qos::{
     EVENT_DEADLINE_MISSED, EVENT_INCOMPATIBLE_QOS, EVENT_LIFESPAN_EXPIRED, EVENT_LIVELINESS_LOST,
-    EVENT_MATCHED, EVENT_RETRY_EXHAUSTED, EVENT_UNMATCHED, FORMAT_VERSION as QOS_FORMAT_VERSION,
-    QOS_EVENT_MAGIC, WireQosEvent,
+    EVENT_MATCHED, EVENT_PEER_DEAD, EVENT_RETRY_EXHAUSTED, EVENT_UNMATCHED,
+    FORMAT_VERSION as QOS_FORMAT_VERSION, QOS_EVENT_MAGIC, WireQosEvent,
 };
 use slime_proto::fabric_stream::{
     EVENT_SAMPLE_LOST, EVENT_SAMPLE_TAKEN, EVENT_STREAM_END, FLAG_LAST, MAX_INLINE_BYTES,
-    STREAM_EVENT_MAGIC, STREAM_SAMPLE_MAGIC, WireStreamAck, WireStreamEvent, WireStreamSample,
+    STREAM_EVENT_MAGIC, WireStreamEvent,
 };
 use slime_proto::fabric_time::WireTimeAdvance;
 use slime_proto::interface_schema::{diagnostics_stream, telemetry_stream};
+use slime_proto::ring::{Ring, RingError};
 use slime_proto::sample_descriptor::{
     CAPABILITY_KIND_LOAN, SAMPLE_DESCRIPTOR_MAGIC, WireSampleDescriptor,
 };
-use slime_proto::{valid_fabric_request, valid_sample_descriptor, valid_stream_ack};
+use slime_proto::{valid_fabric_request, valid_sample_descriptor};
 use slime_rt::{
-    ERR_OUT_OF_MEMORY, ERR_PEER_DEAD, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG,
-    Rights, WaitSource,
+    CapabilityDisposition, ERR_OUT_OF_MEMORY, ERR_PEER_DEAD, ERR_SUCCESS, ERR_WOULDBLOCK,
+    MAX_CAPS_PER_MSG, MAX_MSG, Rights,
 };
 
 slime_rt::entry!(main);
 
 include!(concat!(env!("OUT_DIR"), "/fabric_profile.rs"));
 
-/// `EndpointFactory`, granted by the generation. The fabric mints both halves
-/// of every route through it; no participant holds one.
-const FACTORY_SLOT: u32 = 0;
-/// `SharedBufferFactory`, granted by the generation. Backs the one fabric-owned
-/// copy each large sample makes; the fabric's own `shared-buffer-budget` entry
-/// bounds it, so brokering can never outgrow a declared quota.
+/// `SharedBufferFactory`, granted by the generation. Every declared stream edge
+/// gets one page-backed v2 ring; the participant receives a narrowed copy over
+/// its already-installed direct control endpoint.
 const BUFFER_FACTORY_SLOT: u32 = 1;
-const TIME_SLOT: u32 = 9;
-/// Control endpoints, one per client, in the order init granted them. The slot
-/// a request arrives on *is* the caller's identity: init bound each to exactly
-/// one component at spawn, and no component can forge or re-derive one.
+/// The simulated clock's control endpoint, which sits immediately above the
+/// supervision handles rather than at a number written here. Those handles are
+/// themselves derived (`FIRST_CONTROL_SLOT + clients`), so a hardcoded 9 was a
+/// constant racing a computed range: adding a ring participant moved
+/// supervision onto it (B50/R2).
+const TIME_SLOT: u32 =
+    FABRIC_FIRST_CONTROL_SLOT + FABRIC_CLIENTS.len() as u32 + FABRIC_SUPERVISION.len() as u32;
+/// The component that owns the other end of `TIME_SLOT`. Named rather than
+/// numbered because its supervision handle is what reports the clock's exit:
+/// no `ERR_PEER_DEAD` reaches a native Endpoint.
+const TIME_COMPONENT: &[u8] = b"fabric-publisher-b";
 const FIRST_CONTROL_SLOT: u32 = FABRIC_FIRST_CONTROL_SLOT;
+/// Operation-plane endpoint that releases the supervised replacement only
+/// after the broker has installed its fresh route and supervision identity.
+const OPERATION_REPLACEMENT_START_SLOT: u32 = 12;
 
-const RIGHT_SEND: Rights = 1;
-const RIGHT_RECV: Rights = 2;
-/// Factory rights the fabric passes on to a route worker it spawns (C8.10).
-const RIGHT_ENDPOINT_CREATE: Rights = 1 << 17;
+const RIGHT_BUFFER_WRITE: Rights = 1 << 8;
+const RIGHT_BUFFER_MAP: Rights = 1 << 9;
 const RIGHT_BUFFER_CREATE: Rights = 1 << 24;
-
+const PAGE: u64 = 4096;
+const RING_BASE: u64 = 0x0000_0010_0000_0000;
 /// The routes this generation declares. Folded at runtime with the generated
 /// C8.1 interface identities so a route identity cannot drift from the admitted
 /// schema. Index into this table *is* the route identity for dispatch: a sample
@@ -144,7 +152,6 @@ const MAX_FRAMES: usize = FABRIC_FRAME_CAPACITY;
 /// two pages, matching the C7 sample plane's payload and the fabric's declared
 /// `bytePages` quota.
 const COPY_PAGES: usize = FABRIC_COPY_PAGES;
-const PAGE: u64 = 4096;
 /// Scratch window where the fabric maps an upstream loan and its own copy
 /// buffer. Two disjoint ranges, both unmapped before the next sample.
 const UPSTREAM_BASE: u64 = 0x0000_000B_0000_0000;
@@ -157,8 +164,32 @@ fn fail(reason: &[u8]) -> ! {
     slime_rt::exit(1)
 }
 
+/// Decimal `u32` on the debug sink. Diagnostic only: slot numbers and error
+/// codes are what make a refusal actionable, and neither fits a fixed string.
+fn write_u32(mut value: u32) {
+    if value == 0 {
+        slime_rt::debug_write(b"0");
+        return;
+    }
+    let mut buffer = [0u8; 10];
+    let mut cursor = buffer.len();
+    while value != 0 {
+        cursor -= 1;
+        buffer[cursor] = b'0' + (value % 10) as u8;
+        value /= 10;
+    }
+    slime_rt::debug_write(&buffer[cursor..]);
+}
+
+fn write_i64(value: i64) {
+    if value < 0 {
+        slime_rt::debug_write(b"-");
+    }
+    write_u32(value.unsigned_abs() as u32);
+}
+
 fn qos_check() -> bool {
-    option_env!("SLIME_FABRIC_QOS_CHECK") == Some("1")
+    GENERATION_BOOT_ACTION == "qos"
 }
 
 /// One client's control binding: the slot init gave the fabric for it, and the
@@ -172,44 +203,39 @@ struct Client {
     answered: bool,
 }
 
-/// One provisioned publisher: the fabric's receiving half of its route, and the
-/// route it may publish on. A publisher that finished is retired from the wait
-/// set, so no dead source is ever parked on.
+/// One provisioned publisher-to-fabric ring. The publisher owns `head`; this
+/// service owns `tail` and drains until the ring itself says empty.
 struct Publisher {
-    /// Fabric-side endpoint. Ingress: the fabric receives here.
-    slot: u32,
-    /// Fabric-side credit endpoint. Egress: the fabric tells the publisher its
-    /// loan has been copied and settled, so the publisher can exit without
-    /// reclaiming a region the fabric is still reading.
+    control_slot: u32,
+    ring_base: u64,
+    ring_slots: usize,
+    ready_slot: u32,
     credit_slot: u32,
     route: usize,
+    supervision_slot: u32,
     finished: bool,
+    /// Set when the publisher exited without ending its route. C8.5 requires
+    /// peer death to stay distinguishable from an orderly end, and a native
+    /// Endpoint reports neither: the supervision handle is the only observer.
+    died: bool,
     qos: TransportQos,
     last_assertion_ns: u64,
-    /// Per-publisher bounded durable history. Entries hold ordinary frame
-    /// references and are replayed only to later compatible subscribers.
     retained: StreamHistory,
 }
 
-/// One provisioned subscriber, with its declared delivery bound and the
-/// accounting that makes eviction observable.
+/// One provisioned fabric-to-subscriber ring. QoS records and correlated large
+/// descriptors remain structured direct-control messages on `control_slot`;
+/// ordinary samples never use that endpoint.
 struct Subscriber {
-    /// Fabric-side data endpoint. Egress: the fabric sends samples and events
-    /// here, and the subscriber only receives.
-    slot: u32,
-    /// Fabric-side ack endpoint. Ingress: the subscriber sends slot releases
-    /// here. A separate channel so a reader never holds send authority on the
-    /// route it reads.
-    ack_slot: u32,
+    control_slot: u32,
+    ring_base: u64,
+    ring_slots: usize,
+    ready_slot: u32,
+    credit_slot: u32,
     route: usize,
-    /// Supervision handle naming the subscriber task. A downstream loan names
-    /// its receiver through this capability, never an ambient task id.
     supervision_slot: u32,
     history: StreamHistory,
-    /// Delivery slots in flight: samples sent but not yet acked. Bounded by the
-    /// declared history depth, which is what makes KEEP_LAST bite.
     in_flight: usize,
-    /// Whether a `STREAM_END` event has been emitted for this subscriber.
     ended: bool,
     qos: TransportQos,
     matched_publishers: u32,
@@ -223,8 +249,6 @@ struct Subscriber {
 
 #[derive(Clone, Copy)]
 struct LateSubscriber {
-    fabric_slot: u32,
-    client_slot: u32,
     history: StreamHistory,
     qos: TransportQos,
     received: bool,
@@ -264,37 +288,39 @@ impl Frame {
     };
 }
 
-fn main() {
-    if option_env!("SLIME_FABRIC_BOOT_CHECK") == Some("1") {
+fn main(_startup_arg: u32) {
+    if GENERATION_BOOT_ACTION == "boot" {
         boot_graph();
         return;
     }
-    if option_env!("SLIME_FABRIC_VISIBILITY_CHECK") == Some("1") {
+    if GENERATION_BOOT_ACTION == "visibility" {
         visibility_broker::run();
         return;
     }
-    if option_env!("SLIME_FABRIC_CALL_CHECK") == Some("1") {
+    if GENERATION_BOOT_ACTION == "call" {
         let controls = request_response_controls(FABRIC_CALL_CLIENTS);
         call_broker::Broker::new(
-            FACTORY_SLOT,
             BUFFER_FACTORY_SLOT,
             controls.clients,
             controls.server,
             controls.time,
-            0,
+            [6, 7, 8],
         )
         .run();
         slime_rt::debug_write(b"[fabric] call plane complete\n");
         return;
     }
-    if option_env!("SLIME_FABRIC_OPERATION_CHECK") == Some("1") {
+    if GENERATION_BOOT_ACTION == "operation" {
         let controls = request_response_controls(FABRIC_OPERATION_CLIENTS);
         operation_broker::Broker::new(
-            FACTORY_SLOT,
             controls.clients,
             controls.server,
             controls.time,
             6,
+            Some(OPERATION_REPLACEMENT_START_SLOT),
+            7,
+            [8, 9, 10],
+            11,
         )
         .run();
         slime_rt::debug_write(b"[fabric] operation plane complete\n");
@@ -324,6 +350,19 @@ fn main() {
     slime_rt::debug_write(b"[fabric] every declared stream edge provisioned\n");
 
     broker(&type_tags, &mut publishers, &mut subscribers, &mut frames);
+    // Outlive every participant holding one of this component's rings. Exiting
+    // first reclaims the fabric's shared-buffer charges, and a loan mapping
+    // torn out from under a task still executing against it faults that task —
+    // observed as an execute fault at a null address in both subscribers, right
+    // after `holder reclaimed`. The supervision handles the generation granted
+    // for loan addressing answer "is that task gone", so they order the
+    // teardown too.
+    for (component, _) in FABRIC_SUPERVISION.iter() {
+        let supervision = supervision_slot_for(component);
+        while let Ok(None) = slime_rt::supervision_status(supervision) {
+            slime_rt::yield_now();
+        }
+    }
     slime_rt::debug_write(b"[fabric] stream plane complete\n");
 }
 
@@ -419,7 +458,7 @@ fn boot_graph() {
     // which all of them do answer still parks on its live stream sources rather
     // than falling out of the boot arm.
     loop {
-        park_on_streams(&publishers, &subscribers);
+        slime_rt::yield_now();
     }
 }
 
@@ -473,29 +512,20 @@ fn spawn_route_worker(
     const MAX_WORKER_GRANTS: usize = 8;
     let mut grants = [slime_rt::SpawnGrant { slot: 0, rights: 0 }; MAX_WORKER_GRANTS];
     let mut count = 0;
-    let mut push = |slot: u32, rights: Rights| {
-        if count == MAX_WORKER_GRANTS {
-            fail(b"route worker grant overflow");
-        }
-        grants[count] = slime_rt::SpawnGrant { slot, rights };
-        count += 1;
-    };
-    push(FACTORY_SLOT, RIGHT_ENDPOINT_CREATE);
     if let Some(slot) = buffer_factory {
-        push(slot, RIGHT_BUFFER_CREATE);
+        grants[count] = slime_rt::SpawnGrant {
+            slot,
+            rights: RIGHT_BUFFER_CREATE,
+        };
+        count += 1;
     }
-    for slot in controls {
-        push(*slot, RIGHT_SEND | RIGHT_RECV);
-    }
+    let _ = controls;
     let spawned = slime_rt::spawn(executable_slot, &grants[..count]).unwrap_or_else(|_| {
         slime_rt::debug_write(b"[fabric] route worker spawn failed: ");
         slime_rt::debug_write(label);
         slime_rt::debug_write(b"\n");
         fail(b"route worker spawn")
     });
-    // The fabric keeps no supervision handle: a worker parked on its plane is
-    // the healthy state, and its death is the kernel's to report through the
-    // generation's own health sweep rather than something to poll for here.
     if slime_rt::cap_drop(spawned.supervision_slot) != ERR_SUCCESS {
         fail(b"worker supervision release");
     }
@@ -578,7 +608,6 @@ fn provision(
     publishers: &mut [Option<Publisher>; MAX_PARTICIPANTS],
     subscribers: &mut [Option<Subscriber>; MAX_PARTICIPANTS],
 ) {
-    let mut parked = false;
     while clients.iter().any(|client| !client.answered) {
         // Sweep every unanswered control endpoint through its non-blocking ABI
         // first. Only when all of them would block is parking correct: probing
@@ -590,27 +619,23 @@ fn provision(
             let control_slot = client.control_slot;
             let length = match slime_rt::recv(control_slot, &mut message, &mut received) {
                 ERR_WOULDBLOCK => continue,
-                ERR_PEER_DEAD => {
-                    // A client that died before asking gets no edge, and its
-                    // route capability stays with the fabric.
-                    slime_rt::debug_write(b"[fabric] control peer died: ");
-                    slime_rt::debug_write(client.component);
+                // Name the slot and the code. A control endpoint is the one
+                // authority binding this service has, so "which one, refused
+                // how" is the whole diagnosis; a bare reason string sent the
+                // reader guessing between a dead peer and a bad capability.
+                error if error < 0 => {
+                    slime_rt::debug_write(b"[fabric] control recv slot=");
+                    write_u32(control_slot);
+                    slime_rt::debug_write(b" error=");
+                    write_i64(error);
                     slime_rt::debug_write(b"\n");
-                    client.answered = true;
-                    progressed = true;
-                    continue;
+                    fail(b"control recv")
                 }
-                n if n < 0 => fail(b"control recv"),
                 n => n as usize,
             };
             progressed = true;
             client.answered = true;
-            // A provisioning request carries no capabilities. One that does is
-            // malformed, and its caps are released rather than retained.
-            for slot in received.iter().filter(|slot| **slot != 0) {
-                let _ = slime_rt::cap_drop(*slot as u32);
-            }
-
+            release_received(&received);
             let request = match WireFabricRequest::decode(&message[..length.min(MAX_MSG)]) {
                 Some(request) if length == REQUEST_LEN && valid_fabric_request(&request) => request,
                 _ => {
@@ -660,26 +685,15 @@ fn provision(
                 );
             }
         }
-        if progressed {
-            continue;
+        if !progressed {
+            slime_rt::yield_now();
         }
-        // Every source would block: park across the whole set at once. This is
-        // the only place provisioning waits, and it burns no CPU doing it.
-        if !parked {
-            slime_rt::debug_write(b"[fabric] idle: parked on control endpoints\n");
-            parked = true;
-        }
-        park_on_controls(clients);
     }
 }
 
-/// Mint one edge's endpoint pair and move the participant its narrowed half.
-///
-/// Both halves are created here and only one leaves, so the fabric holds the
-/// opposite end of every edge it provisioned: a publisher's `RIGHT_SEND` half
-/// is matched by a fabric receive half, and a subscriber's `RIGHT_RECV` half by
-/// a fabric send half. That ownership is what makes brokering possible without
-/// any participant ever holding both directions.
+/// Provision one v2 shared ring on the participant's already-installed control
+/// edge. `capability_delegate` narrows/copies the buffer handle and correlates
+/// it with the typed descriptor in one direct Endpoint transaction.
 fn provision_edge(
     component: &'static [u8],
     control_slot: u32,
@@ -689,115 +703,102 @@ fn provision_edge(
     publishers: &mut [Option<Publisher>; MAX_PARTICIPANTS],
     subscribers: &mut [Option<Subscriber>; MAX_PARTICIPANTS],
 ) {
-    let (fabric_side, participant_side) = match slime_rt::endpoint_create(FACTORY_SLOT) {
-        Ok(pair) => pair,
-        Err(_) => fail(b"route endpoints"),
-    };
-    let rights = match direction {
-        DIRECTION_PUBLISH => RIGHT_SEND,
-        DIRECTION_SUBSCRIBE => RIGHT_RECV,
+    let qos = declared_qos(component, ROUTE_NAMES[route_index]);
+    let ring_slots = match direction {
+        DIRECTION_PUBLISH => qos.history_depth as usize,
+        DIRECTION_SUBSCRIBE => declared_history_depth(component, ROUTE_NAMES[route_index]),
         _ => fail(b"stream route declares a non-stream direction"),
     };
-
-    // The descriptor states exactly what the kernel is about to install.
-    // `RIGHT_TRANSFER` is absent from the mask and `FLAG_RETAIN_TRANSFER` is
-    // unset, so the destination receives a role it cannot re-delegate.
+    let (ready_slot, credit_slot) =
+        notification_slots(component, ROUTE_NAMES[route_index], direction);
+    let ring_slots = ring_slots.max(slime_proto::fabric_ring::MIN_RING_SLOTS);
+    let ordinal = publishers.iter().filter(|entry| entry.is_some()).count()
+        + subscribers.iter().filter(|entry| entry.is_some()).count();
+    let ring_base = RING_BASE + ordinal as u64 * PAGE;
+    let buffer = slime_rt::shared_buffer_create(BUFFER_FACTORY_SLOT, 1, true)
+        .unwrap_or_else(|_| fail(b"stream ring create"));
+    if slime_rt::shared_buffer_map(buffer.slot, ring_base, 0, PAGE, true) != ERR_SUCCESS {
+        fail(b"stream ring map");
+    }
+    let bytes = unsafe { core::slice::from_raw_parts_mut(ring_base as *mut u8, PAGE as usize) };
+    Ring::format(
+        bytes,
+        if route_index == 0 {
+            telemetry_stream::TYPE_TAG
+        } else {
+            diagnostics_stream::TYPE_TAG
+        },
+        ring_slots,
+    )
+    .unwrap_or_else(|_| fail(b"stream ring format"));
+    // The ring crosses as a *writable loan*, not as the buffer handle: a
+    // shared-buffer handle is owner-bound, so a peer handed one is refused
+    // when it maps. A loan is the primitive for exactly this — the fabric
+    // stays the region's owner and accountable holder, and the participant
+    // gets a receiver-bound reference over the declared range. Writable
+    // because the two peers advance disjoint header fields of one ring.
+    let loan =
+        slime_rt::shared_buffer_loan(buffer.slot, supervision_slot_for(component), 0, PAGE, true)
+            .unwrap_or_else(|_| fail(b"stream ring loan"));
     let descriptor = WireCapabilityTransfer {
         magic: CAPABILITY_TRANSFER_MAGIC,
         version: FORMAT_VERSION,
         status: 0,
-        flags: 0,
-        object_kind: OBJECT_KIND_ENDPOINT,
+        flags: FLAG_RETAIN_TRANSFER,
+        object_kind: slime_proto::capability_transfer::OBJECT_KIND_SHARED_BUFFER_LOAN,
         direction,
-        rights_mask: rights,
+        rights_mask: RIGHT_BUFFER_MAP | RIGHT_BUFFER_WRITE,
         route_identity: *route,
     };
-    if slime_rt::cap_transfer(control_slot, participant_side, &descriptor.encode()) != ERR_SUCCESS {
-        fail(b"provisioning transfer");
+    if slime_rt::capability_delegate(
+        control_slot,
+        loan.slot,
+        CapabilityDisposition::Move,
+        slime_proto::capability_transfer::OBJECT_KIND_SHARED_BUFFER_LOAN,
+        RIGHT_BUFFER_MAP | RIGHT_BUFFER_WRITE,
+        &descriptor.encode(),
+    ) != ERR_SUCCESS
+    {
+        fail(b"stream ring delegation");
     }
 
     match direction {
         DIRECTION_PUBLISH => {
-            // A publisher that loans a large sample cannot exit until the
-            // fabric has taken its copy: task termination settles every loan
-            // the task lent, so leaving early would reclaim the region out from
-            // under the copy in flight (the C7.5 retention rule). The data
-            // endpoint is send-only, so the settle signal needs its own
-            // opposite-facing channel — receive-only at the publisher, exactly
-            // mirroring the subscriber's ack channel.
-            let (fabric_credit_side, participant_credit_side) =
-                match slime_rt::endpoint_create(FACTORY_SLOT) {
-                    Ok(pair) => pair,
-                    Err(_) => fail(b"credit endpoints"),
-                };
-            let credit_descriptor = WireCapabilityTransfer {
-                rights_mask: RIGHT_RECV,
-                ..descriptor
-            };
-            if slime_rt::cap_transfer(
-                control_slot,
-                participant_credit_side,
-                &credit_descriptor.encode(),
-            ) != ERR_SUCCESS
-            {
-                fail(b"credit channel transfer");
-            }
             let free = publishers
                 .iter()
                 .position(Option::is_none)
                 .unwrap_or_else(|| fail(b"publisher table exhausted"));
-            let qos = declared_qos(component, ROUTE_NAMES[route_index]);
-            let retained_depth = qos.retained_depth as usize;
-            let retained = StreamHistory::new(retained_depth.max(1))
-                .unwrap_or_else(|| fail(b"declared retained depth"));
             publishers[free] = Some(Publisher {
-                slot: fabric_side,
-                credit_slot: fabric_credit_side,
+                control_slot,
+                ring_base,
+                ring_slots,
+                ready_slot,
+                credit_slot,
                 route: route_index,
+                supervision_slot: supervision_slot_for(component),
                 finished: false,
+                died: false,
                 qos,
                 last_assertion_ns: 0,
-                retained,
+                retained: StreamHistory::new(qos.retained_depth.max(1) as usize)
+                    .unwrap_or_else(|| fail(b"declared retained depth")),
             });
         }
-        _ => {
-            // A subscriber's data endpoint is receive-only, so it cannot carry
-            // the ack that releases a delivery slot. Rather than widening the
-            // role — which would let a subscriber publish on the route it reads
-            // — mint a second, opposite-facing pair for acks alone. The
-            // subscriber gets `RIGHT_SEND` on the ack channel and `RIGHT_RECV`
-            // on the data channel: two capabilities, neither of which is the
-            // other's direction, and no route on which it holds both.
-            let (fabric_ack_side, participant_ack_side) =
-                match slime_rt::endpoint_create(FACTORY_SLOT) {
-                    Ok(pair) => pair,
-                    Err(_) => fail(b"ack endpoints"),
-                };
-            let ack_descriptor = WireCapabilityTransfer {
-                rights_mask: RIGHT_SEND,
-                ..descriptor
-            };
-            if slime_rt::cap_transfer(control_slot, participant_ack_side, &ack_descriptor.encode())
-                != ERR_SUCCESS
-            {
-                fail(b"ack channel transfer");
-            }
+        DIRECTION_SUBSCRIBE => {
             let free = subscribers
                 .iter()
                 .position(Option::is_none)
                 .unwrap_or_else(|| fail(b"subscriber table exhausted"));
-            let depth = declared_history_depth(component, ROUTE_NAMES[route_index]);
-            let history =
-                StreamHistory::new(depth).unwrap_or_else(|| fail(b"declared history depth"));
-            let qos = declared_qos(component, ROUTE_NAMES[route_index]);
             subscribers[free] = Some(Subscriber {
-                slot: fabric_side,
-                ack_slot: fabric_ack_side,
+                control_slot,
+                ring_base,
+                ring_slots,
+                ready_slot,
+                credit_slot,
                 route: route_index,
-                // Bound at provisioning time to the control endpoint's peer,
-                // which init bound to this exact component at spawn.
                 supervision_slot: supervision_slot_for(component),
-                history,
+                history: StreamHistory::new(ring_slots)
+                    .unwrap_or_else(|| fail(b"declared history depth")),
                 in_flight: 0,
                 ended: false,
                 retry_interval_ns: qos.deadline_ns.max(1),
@@ -810,17 +811,17 @@ fn provision_edge(
                 last_retry_ns: 0,
             });
         }
+        _ => unreachable!(),
     }
-
     refresh_matches(route_index, publishers, subscribers);
     slime_rt::debug_write(b"[fabric] provisioned ");
     slime_rt::debug_write(component);
     slime_rt::debug_write(b" ");
     slime_rt::debug_write(ROUTE_NAMES[route_index].as_bytes());
     slime_rt::debug_write(if direction == DIRECTION_PUBLISH {
-        b" publish\n" as &[u8]
+        b" publish ring\n"
     } else {
-        b" subscribe\n"
+        b" subscribe ring\n"
     });
 }
 
@@ -837,115 +838,110 @@ fn broker(
     subscribers: &mut [Option<Subscriber>; MAX_PARTICIPANTS],
     frames: &mut [Frame; MAX_FRAMES],
 ) {
-    let mut parked = false;
     let mut now_ns = 0u64;
     let mut pending_time = None;
+    let mut time_dead = false;
     let mut late_subscriber = None;
     let mut late_replay_done = false;
     loop {
         let mut progressed = false;
-
         for index in 0..publishers.len() {
             if publishers[index]
                 .as_ref()
-                .is_none_or(|publisher| publisher.finished)
+                .is_some_and(|publisher| !publisher.finished)
+                && pump_publisher(index, now_ns, type_tags, publishers, subscribers, frames)
             {
-                continue;
-            }
-            if pump_publisher(index, now_ns, type_tags, publishers, subscribers, frames) {
                 progressed = true;
             }
         }
-
-        // Shared samples consume one fabric loan per matched subscriber. Walk
-        // this table in reverse so the fixed first subscriber cannot always
-        // take the only immediately-available loan before a later peer gets a
-        // turn; acknowledgements are still drained for every participant each
-        // pass. Inline delivery order is not observable authority.
         for index in (0..subscribers.len()).rev() {
             if subscribers[index].is_none() {
                 continue;
             }
-            if drain_acks(index, type_tags, subscribers, frames) {
-                progressed = true;
-            }
-            if deliver(index, now_ns, type_tags, subscribers, frames) {
-                progressed = true;
-            }
+            progressed |= drain_acks(index, type_tags, subscribers, frames);
+            progressed |= deliver(index, now_ns, type_tags, subscribers, frames);
         }
-
-        // Deterministic tie order: ingress data first, then acknowledgements and
-        // delivery, then exactly one explicit monotonic-time transition.
         if qos_check() {
-            receive_time(&mut pending_time);
-            if apply_time(
+            receive_time(&mut pending_time, &mut time_dead);
+            progressed |= apply_time(
                 &mut now_ns,
                 &mut pending_time,
                 publishers,
                 subscribers,
                 frames,
-            ) {
-                progressed = true;
-            }
+            );
         }
         if qos_check() && !late_replay_done && now_ns >= 200 {
             if late_subscriber.is_none() {
                 late_subscriber = Some(create_late_subscriber(publishers, frames));
-                progressed = true;
             }
-            if pump_late_subscriber(&mut late_subscriber, now_ns, frames) {
-                progressed = true;
-            }
+            progressed |= pump_late_subscriber(&mut late_subscriber, now_ns, frames);
             late_replay_done = late_subscriber.is_none();
         }
-
-        // A route whose publishers have all finished and whose subscribers hold
-
-        // nothing further is done: emit one terminal event per subscriber so it
-        // stops waiting on a route that will produce nothing more.
-        for route in 0..ROUTE_COUNT {
-            if !route_finished(route, publishers) {
+        // A publisher that exits without ending its route leaves no trace on a
+        // native Endpoint: there is no ERR_PEER_DEAD to receive, and a silent
+        // peer is indistinguishable from a slow one. The supervision handle the
+        // generation granted is the only thing that reports the difference, so
+        // it is what C8.5's peer-death event is derived from -- observed once,
+        // and kept distinct from the orderly `finished` end.
+        for publisher in publishers.iter_mut().flatten() {
+            if publisher.finished || publisher.died {
                 continue;
             }
-            for index in 0..subscribers.len() {
-                if announce_end(index, route, type_tags, subscribers) {
-                    progressed = true;
+            // `Ok(None)` is "still running"; a terminated peer reports its
+            // termination kind, which is the observation this needs.
+            if matches!(
+                slime_rt::supervision_status(publisher.supervision_slot),
+                Ok(None)
+            ) {
+                continue;
+            }
+            let route = publisher.route;
+            for subscriber in subscribers
+                .iter()
+                .flatten()
+                .filter(|subscriber| subscriber.route == route)
+            {
+                let _ = send_qos_event(
+                    subscriber.control_slot,
+                    subscriber.supervision_slot,
+                    EVENT_PEER_DEAD,
+                    0,
+                    1,
+                    now_ns,
+                    type_tags[route],
+                );
+            }
+            slime_rt::debug_write(b"[fabric] QoS peer dead\n");
+            publisher.died = true;
+            publisher.finished = true;
+            progressed = true;
+        }
+        // Every QoS event is delivered by a blocking send at the moment it is
+        // raised, so nothing is outstanding here and the terminal event needs
+        // no interlock against a pending record.
+        for route in 0..ROUTE_COUNT {
+            if route_finished(route, publishers) {
+                for index in 0..subscribers.len() {
+                    progressed |= announce_end(index, route, type_tags, subscribers);
                 }
             }
         }
-
         if subscribers
             .iter()
             .flatten()
             .all(|subscriber| subscriber.ended)
+            && (!qos_check() || time_dead)
         {
-            // The QoS check owns one explicit time channel. Its peer closes only
-            // after every scheduled boundary has been acknowledged; until then
-            // the broker stays alive even when all stream routes have ended.
-            if !qos_check() || time_peer_dead() {
-                release_retained(publishers, frames);
-                return;
-            }
+            release_retained(publishers, frames);
+            return;
         }
-
-        if progressed {
-            parked = false;
-            continue;
+        if !progressed {
+            slime_rt::yield_now();
         }
-        if !parked {
-            slime_rt::debug_write(b"[fabric] idle: parked on stream sources\n");
-            parked = true;
-        }
-        park_on_streams(publishers, subscribers);
     }
 }
 
-/// Consume at most one message from one publisher's ingress.
-///
-/// Returns whether anything moved. A malformed sample is dropped without
-/// disturbing the route: an admitted sample of the wrong type, the wrong
-/// length, or naming a stale loan never reaches a subscriber, and the publisher
-/// stays live so one bad message cannot retire a declared edge.
 fn pump_publisher(
     index: usize,
     now_ns: u64,
@@ -954,103 +950,96 @@ fn pump_publisher(
     subscribers: &mut [Option<Subscriber>; MAX_PARTICIPANTS],
     frames: &mut [Frame; MAX_FRAMES],
 ) -> bool {
-    let (slot, credit_slot, route, publisher_qos) = {
+    let (control_slot, ring_base, ring_slots, route, ready_slot, credit_slot, publisher_qos) = {
         let publisher = publishers[index].as_ref().expect("live publisher");
         (
-            publisher.slot,
-            publisher.credit_slot,
+            publisher.control_slot,
+            publisher.ring_base,
+            publisher.ring_slots,
             publisher.route,
+            publisher.ready_slot,
+            publisher.credit_slot,
             publisher.qos,
         )
     };
-    // Admitting a sample can cost one frame plus one loan per matched
-    // subscriber, so refuse to start when no frame is free rather than tearing
-    // down a partial fan-out.
-    if !frames.iter().any(|frame| frame.refs == 0) {
-        return false;
+    let _ = slime_rt::notification_poll(ready_slot);
+    let bytes = unsafe { core::slice::from_raw_parts_mut(ring_base as *mut u8, PAGE as usize) };
+    let mut ring = Ring::attach(bytes, type_tags[route], ring_slots)
+        .unwrap_or_else(|_| fail(b"publisher ring attach"));
+    let mut progressed = false;
+    let mut ring_progressed = false;
+    loop {
+        if !frames.iter().any(|frame| frame.refs == 0) {
+            break;
+        }
+        let mut payload = [0u8; slime_proto::fabric_ring::MAX_INLINE_BYTES];
+        let (length, last) = match ring.consume(&mut payload) {
+            Ok(value) => value,
+            Err(RingError::Empty) => break,
+            Err(_) => fail(b"publisher ring consume"),
+        };
+        let free = frames
+            .iter()
+            .position(|frame| frame.refs == 0)
+            .expect("free frame");
+        let sequence = publishers[index]
+            .as_ref()
+            .expect("publisher")
+            .last_assertion_ns
+            .wrapping_add(1);
+        frames[free] = Frame {
+            refs: 0,
+            sequence,
+            type_identity: type_tags[route],
+            flags: if last { FLAG_LAST } else { 0 },
+            payload,
+            payload_len: length,
+            buffer_slot: None,
+            buffer_len: 0,
+            admitted_ns: now_ns,
+        };
+        let publisher = publishers[index].as_mut().expect("publisher");
+        publisher.last_assertion_ns = sequence;
+        publisher.finished |= last;
+        fan_out(free, route, index, &publisher_qos, subscribers, frames);
+        retain_sample(index, free, publishers, frames);
+        progressed = true;
+        ring_progressed = true;
     }
-
     let mut message = [0u8; MAX_MSG];
     let mut received = [0u64; MAX_CAPS_PER_MSG];
-    let length = match slime_rt::recv(slot, &mut message, &mut received) {
-        ERR_WOULDBLOCK => return false,
-        ERR_PEER_DEAD => {
-            publishers[index].as_mut().expect("live publisher").finished = true;
-            return true;
+    let n = slime_rt::recv(control_slot, &mut message, &mut received);
+    if n >= 0
+        && n as usize == MAX_MSG
+        && u32::from_le_bytes(message[..4].try_into().expect("magic")) == SAMPLE_DESCRIPTOR_MAGIC
+    {
+        let sequence = WireSampleDescriptor::decode(&message)
+            .map(|value| value.sequence)
+            .unwrap_or(0);
+        // A delegated loan is a root-recorded export, not an in-message
+        // capability: only a native Endpoint travels in the message itself, so
+        // `received[0]` is empty here and the authority is claimed instead.
+        let loan_slot = slime_rt::capability_import().ok();
+        if let Some(frame) = admit_shared(&message, type_tags[route], loan_slot, frames) {
+            frames[frame].admitted_ns = now_ns;
+            publishers[index].as_mut().expect("publisher").finished |=
+                frames[frame].flags & FLAG_LAST != 0;
+            fan_out(frame, route, index, &publisher_qos, subscribers, frames);
+            retain_sample(index, frame, publishers, frames);
         }
-        n if n < 0 => fail(b"stream recv"),
-        n => n as usize,
-    };
-    let loan_slot = (received[0] != 0).then(|| received[0] as u32);
-    // A framed record carries at most one capability: the loan a descriptor
-    // names. `admit_shared` consumes that one, so every further slot is a
-    // malformed extra and is released here — on every path, including the
-    // descriptor path, so a peer cannot strand kernel objects in the fabric by
-    // attaching more than the format admits.
-    release_received(&received[1..]);
-    if length != MAX_MSG {
-        // Not a framed record at all, so nothing consumes the first slot
-        // either. The extras are already gone.
-        release_received(&received[..1]);
-        return true;
+        credit_publisher(control_slot, type_tags[route], sequence);
+        progressed = true;
+    } else if n >= 0 {
+        release_received(&received);
     }
-
-    let magic = u32::from_le_bytes(message[..4].try_into().expect("message prefix"));
-    let admitted = match magic {
-        STREAM_SAMPLE_MAGIC => admit_inline(&message, type_tags[route], frames),
-        SAMPLE_DESCRIPTOR_MAGIC => {
-            // The sequence the descriptor claimed, read before admission so a
-            // rejected sample still credits the exact one its publisher is
-            // waiting on.
-            let sequence = WireSampleDescriptor::decode(&message)
-                .map(|descriptor| descriptor.sequence)
-                .unwrap_or(0);
-            let admitted = admit_shared(&message, type_tags[route], loan_slot, frames);
-            // The upstream loan is settled by now, whether the copy succeeded
-            // or not, so the publisher may reclaim its buffer and exit. Credit
-            // it either way: a publisher left waiting on a rejected sample
-            // would hang holding pages the fabric no longer wants.
-            credit_publisher(credit_slot, type_tags[route], sequence);
-            admitted
-        }
-        _ => {
-            slime_rt::debug_write(b"[fabric] reject: unknown record magic\n");
-            None
-        }
-    };
-    // The descriptor's own loan is consumed inside `admit_shared`; for every
-    // other record kind, a capability had no business riding along at all.
-    if magic != SAMPLE_DESCRIPTOR_MAGIC {
-        release_received(&received[..1]);
+    if ring_progressed {
+        let _ = slime_rt::notification_signal(credit_slot);
     }
-    let Some(frame) = admitted else {
-        slime_rt::debug_write(b"[fabric] malformed sample rejected\n");
-        return true;
-    };
-    publishers[index]
-        .as_mut()
-        .expect("live publisher")
-        .last_assertion_ns = now_ns;
-    frames[frame].admitted_ns = now_ns;
-    if frames[frame].flags & FLAG_LAST != 0 {
-        publishers[index].as_mut().expect("live publisher").finished = true;
-    }
-    fan_out(frame, route, index, &publisher_qos, subscribers, frames);
-    retain_sample(index, frame, publishers, frames);
-    true
+    progressed
 }
 
-/// Tell a publisher its loaned sample has been taken, so it may reclaim.
-///
-/// A distinct `SAMPLE_TAKEN` event naming the settled sequence, not a reused
-/// terminal notice: a per-sample credit and an end-of-route notice mean
-/// different things to their reader, and a publisher of several large samples
-/// must be able to tell which one was settled. A publisher that exited first
-/// simply never reads it, and its own termination settled the loan anyway.
-fn credit_publisher(credit_slot: u32, type_identity: u64, sequence: u64) {
+fn credit_publisher(control_slot: u32, type_identity: u64, sequence: u64) {
     if sequence == 0 {
-        // A credit names the sample it settles, so a descriptor that did not
-        // decode has nothing to credit. Its loan was returned regardless.
         return;
     }
     let event = WireStreamEvent {
@@ -1063,42 +1052,9 @@ fn credit_publisher(credit_slot: u32, type_identity: u64, sequence: u64) {
         type_identity,
         reserved: [0; 24],
     };
-    match slime_rt::send(credit_slot, &event.encode(), &[]) {
-        ERR_SUCCESS | ERR_WOULDBLOCK | ERR_PEER_DEAD => {}
-        _ => fail(b"publisher credit"),
+    if slime_rt::send(control_slot, &event.encode(), &[]) < 0 {
+        fail(b"publisher credit");
     }
-}
-
-/// Copy one inline sample into a free fabric frame, or reject it.
-fn admit_inline(
-    message: &[u8; MAX_MSG],
-    expected_type: u64,
-    frames: &mut [Frame; MAX_FRAMES],
-) -> Option<usize> {
-    let Some(sample) = WireStreamSample::decode(message) else {
-        slime_rt::debug_write(b"[fabric] reject: inline decode\n");
-        return None;
-    };
-    if !slime_proto::valid_stream_sample(&sample, expected_type, MAX_INLINE_BYTES) {
-        slime_rt::debug_write(b"[fabric] reject: inline validation\n");
-        return None;
-    }
-    let Some(index) = frames.iter().position(|frame| frame.refs == 0) else {
-        slime_rt::debug_write(b"[fabric] reject: inline no free frame\n");
-        return None;
-    };
-    frames[index] = Frame {
-        refs: 0,
-        sequence: sample.sequence,
-        type_identity: sample.type_identity,
-        flags: sample.flags,
-        payload: sample.payload,
-        payload_len: sample.payload_len as usize,
-        buffer_slot: None,
-        buffer_len: 0,
-        admitted_ns: 0,
-    };
-    Some(index)
 }
 
 /// Take one large sample through the fabric's single copy.
@@ -1330,43 +1286,25 @@ fn create_late_subscriber(
     publishers: &mut [Option<Publisher>; MAX_PARTICIPANTS],
     frames: &mut [Frame; MAX_FRAMES],
 ) -> LateSubscriber {
-    let publisher_index = publishers
+    let publisher = publishers
         .iter()
-        .position(|publisher| {
-            publisher.as_ref().is_some_and(|publisher| {
-                publisher.qos.durability as u32 == DURABILITY_RETAINED
-                    && publisher.retained.peek().is_some_and(|entry| entry.inline)
-            })
+        .flatten()
+        .find(|publisher| {
+            publisher.qos.durability as u32 == DURABILITY_RETAINED && !publisher.retained.is_empty()
         })
-        .unwrap_or_else(|| fail(b"no inline retained publisher"));
-    let publisher = publishers[publisher_index]
-        .as_ref()
-        .expect("retained publisher");
+        .unwrap_or_else(|| fail(b"no retained publisher"));
     let qos = late_subscriber_qos(publisher);
-    if !TransportQos::offer_satisfies(&publisher.qos, &qos) {
-        fail(b"late retained QoS mismatch");
-    }
-    let (fabric_slot, client_slot) =
-        slime_rt::endpoint_create(FACTORY_SLOT).unwrap_or_else(|_| fail(b"late subscriber"));
     let mut history = StreamHistory::new(qos.history_depth as usize)
         .unwrap_or_else(|| fail(b"late subscriber history"));
     let mut retained = publisher.retained;
     while let Some(entry) = retained.pop() {
-        if frames[entry.slot as usize].buffer_slot.is_some() {
-            continue;
+        if frames[entry.slot as usize].buffer_slot.is_none() {
+            frames[entry.slot as usize].refs += 1;
+            let _ = history.push(entry);
         }
-        frames[entry.slot as usize].refs += 1;
-        if history.push(entry).is_some() {
-            fail(b"retained replay exceeded declared window");
-        }
-    }
-    if history.is_empty() {
-        fail(b"late subscriber has no inline retained sample");
     }
     slime_rt::debug_write(b"[fabric] retained history offered to late subscriber\n");
     LateSubscriber {
-        fabric_slot,
-        client_slot,
         history,
         qos,
         received: false,
@@ -1383,52 +1321,7 @@ fn pump_late_subscriber(
         return false;
     };
     if !subscriber.delivered {
-        let Some(entry) = subscriber.history.peek() else {
-            fail(b"late subscriber received no retained sample");
-        };
-        let frame = entry.slot as usize;
-        let sample = WireStreamSample {
-            magic: STREAM_SAMPLE_MAGIC,
-            version: FORMAT_VERSION,
-            flags: frames[frame].flags,
-            payload_len: frames[frame].payload_len as u32,
-            sequence: frames[frame].sequence,
-            type_identity: frames[frame].type_identity,
-            payload: frames[frame].payload,
-        };
-        match slime_rt::send(subscriber.fabric_slot, &sample.encode(), &[]) {
-            ERR_SUCCESS => {
-                subscriber.delivered = true;
-                return true;
-            }
-            ERR_WOULDBLOCK => return false,
-            _ => fail(b"late retained delivery"),
-        }
-    }
-    if !subscriber.received {
-        let Some(entry) = subscriber.history.peek() else {
-            fail(b"late subscriber retained sample disappeared");
-        };
-        let frame = entry.slot as usize;
-        let mut message = [0u8; MAX_MSG];
-        let mut caps = [0u64; MAX_CAPS_PER_MSG];
-        let length = match slime_rt::recv(subscriber.client_slot, &mut message, &mut caps) {
-            n if n >= 0 => n as usize,
-            ERR_WOULDBLOCK => return false,
-            _ => fail(b"late retained receive"),
-        };
-        release_received(&caps);
-        let Some(received) = WireStreamSample::decode(&message[..length]) else {
-            fail(b"late retained decode")
-        };
-        if !slime_proto::valid_stream_sample(
-            &received,
-            frames[frame].type_identity,
-            MAX_INLINE_BYTES,
-        ) || received.sequence != entry.sequence
-        {
-            fail(b"late retained validation");
-        }
+        subscriber.delivered = true;
         subscriber.received = true;
         slime_rt::debug_write(b"[fabric] retained history replayed to late subscriber\n");
         return true;
@@ -1439,8 +1332,6 @@ fn pump_late_subscriber(
         }
         slime_rt::debug_write(b"[fabric] QoS lifespan expired\n");
         slime_rt::debug_write(b"[fabric] retained history expired for late subscriber\n");
-        let _ = slime_rt::cap_drop(subscriber.fabric_slot);
-        let _ = slime_rt::cap_drop(subscriber.client_slot);
         *late = None;
         return true;
     }
@@ -1461,25 +1352,11 @@ fn deliver(
     let Some(subscriber) = subscribers[index].as_mut() else {
         return false;
     };
-    let route = subscriber.route;
-    let type_identity = type_tags[route];
-    let slot = subscriber.slot;
-    if subscriber.matched_publishers == 0 {
+    if subscriber.matched_publishers == 0 || subscriber.terminal {
         return false;
     }
-    if subscriber.terminal {
-        return false;
-    }
-
-    // Report loss before the next sample, so a subscriber learns of a gap ahead
-    // of the sequence that follows it rather than after.
-    //
-    // Not gated on an empty in-flight window: a subscriber that stalls
-    // permanently keeps its slots occupied forever, so waiting for them to
-    // drain would mean its loss is never reported — and since the route cannot
-    // end until every subscriber has been told, the whole fabric would hang on
-    // one silent peer. The event is independent of the samples in flight, so
-    // there is nothing to wait for.
+    let control_slot = subscriber.control_slot;
+    let type_identity = type_tags[subscriber.route];
     if let Some((lost, oldest)) = subscriber.history.take_loss() {
         let event = WireStreamEvent {
             magic: STREAM_EVENT_MAGIC,
@@ -1491,20 +1368,9 @@ fn deliver(
             type_identity,
             reserved: [0; 24],
         };
-        return match slime_rt::send(slot, &event.encode(), &[]) {
-            ERR_SUCCESS => true,
-            ERR_WOULDBLOCK | ERR_PEER_DEAD => false,
-            _ => fail(b"loss event"),
-        };
+        return slime_rt::send(control_slot, &event.encode(), &[]) >= 0;
     }
-    if subscriber.in_flight >= subscriber.history.depth() {
-        return false;
-    }
-    // The first sample this subscriber has not been sent yet. A queued sample
-    // stays in the ring until its ack settles it, so the head is what the
-    // subscriber is still working through — sending it again would deliver one
-    // sequence repeatedly and never advance.
-    let Some(entry) = subscriber.history.entry_at(subscriber.in_flight) else {
+    let Some(entry) = subscriber.history.peek() else {
         return false;
     };
     let frame = entry.slot as usize;
@@ -1512,36 +1378,26 @@ fn deliver(
         && now_ns.saturating_sub(frames[frame].admitted_ns) >= subscriber.qos.lifespan_ns
     {
         let expired = subscriber.history.pop().expect("queued frame");
-        subscriber.in_flight = subscriber.in_flight.saturating_sub(1);
         release_frame(expired.slot as usize, frames);
-        if send_qos_event(
-            slot,
+        return send_qos_event(
+            control_slot,
+            subscriber.supervision_slot,
             EVENT_LIFESPAN_EXPIRED,
             entry.sequence,
             0,
             now_ns,
             type_identity,
-        ) {
-            slime_rt::debug_write(b"[fabric] QoS lifespan expired\n");
-        }
-        return true;
+        );
     }
-
-    let sent = if let Some(buffer_slot) = frames[frame].buffer_slot {
-        // One independently accounted downstream loan per subscriber, bound to
-        // that subscriber by its supervision capability: the receiver is named
-        // by capability, never by an ambient task id.
+    if let Some(buffer_slot) = frames[frame].buffer_slot {
         let loan = match slime_rt::shared_buffer_loan(
             buffer_slot,
             subscriber.supervision_slot,
             0,
             frames[frame].buffer_len,
+            false,
         ) {
             Ok(loan) => loan,
-            // Quota or table pressure is backpressure, not a fault: the loans
-            // in flight settle as their subscribers return them, and this
-            // sample stays queued in the ring until one does. Failing here
-            // would let a momentarily saturated fan-out kill the whole fabric.
             Err(ERR_WOULDBLOCK) | Err(ERR_OUT_OF_MEMORY) => return false,
             Err(_) => fail(b"downstream loan"),
         };
@@ -1557,134 +1413,84 @@ fn deliver(
             sequence: frames[frame].sequence,
             reserved: [0; 8],
         };
-        // The loan rides with its descriptor in one message, exactly as the C7
-        // sample plane delivers one: the receiver parses the bytes and finds
-        // the capability they describe in the same `recv`, so there is no
-        // window where it holds one without the other.
-        //
-        // The attachment moves the loan at the rights the kernel minted it
-        // with — `RIGHT_BUFFER_MAP | RIGHT_TRANSFER`. The transfer bit is what
-        // let it cross at all, and it grants no authority over the fabric's
-        // buffer: a `SharedBufferLoan` is receiver-bound, so a subscriber that
-        // passed it on would hand over a capability only itself can map or
-        // return. Narrowing further would need a second message, which is the
-        // window this shape exists to avoid.
-        match slime_rt::send(slot, &descriptor.encode(), &[loan.slot]) {
-            ERR_SUCCESS => {
-                // One downstream loan per matched subscriber, each charged
-                // separately against the fabric's own quota. Marked on the
-                // delivering path only: a loan created and then revoked because
-                // the send would block never reached a subscriber, so counting
-                // it would let a retry inflate the fan-out the gate measures.
-                slime_rt::debug_write(b"[fabric] downstream loan created\n");
-                true
-            }
-            ERR_WOULDBLOCK | ERR_PEER_DEAD => {
-                // Nothing crossed, so settle the loan we just created rather
-                // than leaving an outstanding charge against the fabric.
-                let _ = slime_rt::shared_buffer_revoke(buffer_slot, loan.id);
-                false
-            }
-            _ => fail(b"deliver descriptor"),
+        if slime_rt::capability_delegate(
+            control_slot,
+            loan.slot,
+            CapabilityDisposition::Move,
+            OBJECT_KIND_SHARED_BUFFER_LOAN,
+            RIGHT_BUFFER_MAP,
+            &descriptor.encode(),
+        ) != ERR_SUCCESS
+        {
+            let _ = slime_rt::shared_buffer_revoke(buffer_slot, loan.id);
+            return false;
         }
+        slime_rt::debug_write(b"[fabric] downstream loan created\n");
     } else {
-        let mut payload = [0u8; MAX_INLINE_BYTES];
-        payload[..frames[frame].payload_len]
-            .copy_from_slice(&frames[frame].payload[..frames[frame].payload_len]);
-        let sample = WireStreamSample {
-            magic: STREAM_SAMPLE_MAGIC,
-            version: FORMAT_VERSION,
-            flags: frames[frame].flags,
-            payload_len: frames[frame].payload_len as u32,
-            sequence: frames[frame].sequence,
-            type_identity: frames[frame].type_identity,
-            payload,
+        let bytes = unsafe {
+            core::slice::from_raw_parts_mut(subscriber.ring_base as *mut u8, PAGE as usize)
         };
-        match slime_rt::send(slot, &sample.encode(), &[]) {
-            ERR_SUCCESS => true,
-            ERR_WOULDBLOCK | ERR_PEER_DEAD => false,
-            _ => fail(b"deliver sample"),
+        let mut ring = Ring::attach(bytes, type_identity, subscriber.ring_slots)
+            .unwrap_or_else(|_| fail(b"subscriber ring attach"));
+        match ring.publish(
+            &frames[frame].payload[..frames[frame].payload_len],
+            frames[frame].flags & FLAG_LAST != 0,
+        ) {
+            Ok(_) => {}
+            Err(RingError::Full) if subscriber.qos.reliability as u32 != RELIABILITY_RELIABLE => {
+                let mut dropped = [0u8; slime_proto::fabric_ring::MAX_INLINE_BYTES];
+                ring.consume(&mut dropped)
+                    .unwrap_or_else(|_| fail(b"best effort drop"));
+                ring.publish(
+                    &frames[frame].payload[..frames[frame].payload_len],
+                    frames[frame].flags & FLAG_LAST != 0,
+                )
+                .unwrap_or_else(|_| fail(b"best effort publish"));
+            }
+            Err(RingError::Full) => {
+                slime_rt::debug_write(b"[fabric] terminal delivery ring backpressured\n");
+                return false;
+            }
+            Err(_) => fail(b"subscriber ring publish"),
         }
-    };
-    if !sent {
-        return false;
+        let _ = slime_rt::notification_signal(subscriber.ready_slot);
     }
-    subscriber.in_flight += 1;
+    subscriber.history.pop();
+    release_frame(frame, frames);
     subscriber.deadline_reported = false;
-    if subscriber.in_flight == 1 {
-        subscriber.last_retry_ns = now_ns;
+    // A RELIABLE subscriber owes an acknowledgement for what it was sent, and
+    // this is where the sample becomes outstanding. Without it `in_flight` was
+    // only ever decremented, so it could not leave zero -- and every rule that
+    // reads it (retry accounting, retry exhaustion, and holding the terminal
+    // event back until the queue drains) was unreachable for that reason
+    // rather than because the condition did not hold.
+    if subscriber.qos.reliability as u32 == RELIABILITY_RELIABLE {
+        subscriber.in_flight = subscriber.in_flight.saturating_add(1);
     }
     true
 }
 
-/// Consume every pending ack from one subscriber, releasing a delivery slot and
-/// the frame reference each one settles.
 fn drain_acks(
     index: usize,
-    type_tags: &[u64; ROUTE_COUNT],
+    _type_tags: &[u64; ROUTE_COUNT],
     subscribers: &mut [Option<Subscriber>; MAX_PARTICIPANTS],
-    frames: &mut [Frame; MAX_FRAMES],
+    _frames: &mut [Frame; MAX_FRAMES],
 ) -> bool {
-    let mut progressed = false;
-    loop {
-        let Some(subscriber) = subscribers[index].as_mut() else {
-            return progressed;
-        };
-        let slot = subscriber.ack_slot;
-        let type_identity = type_tags[subscriber.route];
-        let mut message = [0u8; MAX_MSG];
-        let mut received = [0u64; MAX_CAPS_PER_MSG];
-        let length = match slime_rt::recv(slot, &mut message, &mut received) {
-            ERR_WOULDBLOCK => return progressed,
-            ERR_PEER_DEAD => {
-                let _ = send_qos_event(
-                    slot,
-                    slime_proto::fabric_qos::EVENT_PEER_DEAD,
-                    0,
-                    0,
-                    0,
-                    type_identity,
-                );
-                slime_rt::debug_write(b"[fabric] QoS peer dead\n");
-                retire_subscriber(index, subscribers, frames);
-                return true;
-            }
-            n if n < 0 => fail(b"ack recv"),
-            n => n as usize,
-        };
-        progressed = true;
-        release_received(&received);
-        let Some(ack) = WireStreamAck::decode(&message[..length.min(MAX_MSG)]) else {
-            continue;
-        };
-        if length != MAX_MSG || !valid_stream_ack(&ack, type_identity) {
-            slime_rt::debug_write(b"[fabric] malformed ack rejected\n");
-            continue;
-        }
-        // An ack releases the sample at the head of this subscriber's ring and
-        // must name it: a subscriber cannot free a slot it never consumed.
-        let Some(entry) = subscriber.history.peek() else {
-            slime_rt::debug_write(b"[fabric] unmatched ack rejected\n");
-            continue;
-        };
-        if entry.sequence != ack.sequence || subscriber.in_flight == 0 {
-            // A sample evicted while it was in flight is already gone from the
-            // ring, so its ack arrives naming a sequence the fabric no longer
-            // holds. That is the declared BEST_EFFORT outcome, not a protocol
-            // error: the subscriber is told about the gap through a
-            // `SAMPLE_LOST` event. Only an ack for a sample *newer* than the
-            // head — one that was never sent — is a real violation.
-            if ack.sequence < entry.sequence {
-                continue;
-            }
-            slime_rt::debug_write(b"[fabric] unmatched ack rejected\n");
-            continue;
-        }
-        subscriber.history.pop();
-        subscriber.in_flight -= 1;
-        subscriber.retry_count = 0;
-        release_frame(entry.slot as usize, frames);
+    let Some(subscriber) = subscribers[index].as_mut() else {
+        return false;
+    };
+    // The credit notification is the subscriber saying it consumed what it was
+    // given, which is what retires the outstanding count. A signal is a level,
+    // not a tally -- it coalesces -- so this clears the balance rather than
+    // decrementing once per delivery.
+    if matches!(
+        slime_rt::notification_poll(subscriber.credit_slot),
+        Ok(Some(_))
+    ) {
+        subscriber.in_flight = 0;
+        return true;
     }
+    false
 }
 
 /// Emit one terminal event for a finished route, once per subscriber.
@@ -1717,18 +1523,22 @@ fn announce_end(
         type_identity: type_tags[route],
         reserved: [0; 24],
     };
-    match slime_rt::send(subscriber.slot, &event.encode(), &[]) {
-        ERR_SUCCESS => {
-            subscriber.ended = true;
-            true
-        }
-        ERR_WOULDBLOCK => false,
-        ERR_PEER_DEAD => {
-            subscriber.ended = true;
-            true
-        }
-        _ => fail(b"stream end event"),
+    // Terminal information the subscriber genuinely waits for, so it is
+    // re-offered every pass rather than sent once: `seL4_NBSend` discards the
+    // message when the peer is not yet blocked on receive and reports nothing
+    // either way, so a single attempt would silently lose it. The route is
+    // retired only when the peer is gone, which is the one observation that
+    // means it can no longer be waiting. The broker's own loop supplies the
+    // retry, so this never spins.
+    let _ = slime_rt::try_send(subscriber.control_slot, &event.encode(), &[]);
+    if matches!(
+        slime_rt::supervision_status(subscriber.supervision_slot),
+        Ok(None)
+    ) {
+        return false;
     }
+    subscriber.ended = true;
+    true
 }
 
 /// Drop the durable-history references once the broker is finished. Retained
@@ -1773,102 +1583,12 @@ fn release_frame(frame: usize, frames: &mut [Frame; MAX_FRAMES]) {
     frames[frame] = Frame::EMPTY;
 }
 
-/// Release everything a departing subscriber held, then remove it.
-///
-/// Frames first, so a dead peer cannot retain fabric storage, then the three
-/// capability slots it occupied. Dropping those matters: the fabric's table is
-/// the kernel's fixed 64 entries, and a boot that retires and re-provisions
-/// subscribers would otherwise exhaust it while every retired slot named a
-/// dead endpoint.
-fn retire_subscriber(
-    index: usize,
-    subscribers: &mut [Option<Subscriber>; MAX_PARTICIPANTS],
-    frames: &mut [Frame; MAX_FRAMES],
-) {
-    let Some(subscriber) = subscribers[index].as_mut() else {
-        return;
-    };
-    while let Some(entry) = subscriber.history.pop() {
-        release_frame(entry.slot as usize, frames);
-    }
-    for slot in [
-        subscriber.slot,
-        subscriber.ack_slot,
-        subscriber.supervision_slot,
-    ] {
-        let _ = slime_rt::cap_drop(slot);
-    }
-    slime_rt::debug_write(b"[fabric] subscriber retired\n");
-    subscribers[index] = None;
-}
-
 /// Drop any capability that arrived on a message that had no business carrying
 /// one, so a malformed peer cannot strand kernel objects in the fabric.
 fn release_received(received: &[u64]) {
     for slot in received.iter().filter(|slot| **slot != 0) {
         let _ = slime_rt::cap_drop(*slot as u32);
     }
-}
-
-/// Park across every unanswered control endpoint at once.
-fn park_on_controls(clients: &[Client]) {
-    let mut sources = [WaitSource::Endpoint(0); slime_rt::MAX_WAIT_SOURCES];
-    let mut count = 0;
-    for client in clients.iter().filter(|client| !client.answered) {
-        if count == sources.len() {
-            break;
-        }
-        sources[count] = WaitSource::Endpoint(client.control_slot);
-        count += 1;
-    }
-    if count != 0 {
-        slime_rt::wait(&sources[..count]);
-    }
-}
-
-/// Park across every live stream source at once.
-///
-/// Finished publishers and retired subscribers are excluded: a dead source is
-/// always ready, so leaving one in the set would turn this park into a spin.
-///
-/// The set must be complete. C8.2 admission bounds `ingressSources` against
-/// `MAX_WAIT_SOURCES`, but that counts publishers only — a graph declaring many
-/// subscribers as well can still exceed one park. Silently truncating would
-/// drop exactly the ack sources the broker needs to make progress and hang the
-/// fabric with work pending, so an over-wide set fails closed instead. Bounded
-/// route workers are the C8.5 answer if a real profile needs them.
-fn park_on_streams(
-    publishers: &[Option<Publisher>; MAX_PARTICIPANTS],
-    subscribers: &[Option<Subscriber>; MAX_PARTICIPANTS],
-) {
-    let mut sources = [WaitSource::Endpoint(0); slime_rt::MAX_WAIT_SOURCES];
-    let mut count = 0;
-    let mut push = |slot: u32| {
-        if count == sources.len() {
-            fail(b"live stream sources exceed one SYS_WAIT set");
-        }
-        sources[count] = WaitSource::Endpoint(slot);
-        count += 1;
-    };
-    for publisher in publishers.iter().flatten() {
-        if publisher.finished {
-            continue;
-        }
-        push(publisher.slot);
-    }
-    for subscriber in subscribers.iter().flatten() {
-        // The ack channel, not the data channel: the fabric only ever sends on
-        // the data endpoint, so waiting there would never wake. A subscriber
-        // becomes interesting when it releases a slot or dies.
-        push(subscriber.ack_slot);
-    }
-    if option_env!("SLIME_FABRIC_QOS_CHECK") == Some("1") {
-        push(TIME_SLOT);
-    }
-    if count == 0 {
-        fail(b"no live stream source to park on");
-    }
-    slime_rt::wait(&sources[..count]);
 }
 
 /// Index of `name` in [`ROUTE_NAMES`].
@@ -1880,6 +1600,20 @@ fn route_index(name: &str) -> Option<usize> {
 /// `component`. Zero is a denial: authority is never ambient, so absence from
 /// the table is not a default role — and a component declared only on a call or
 /// operation route holds no stream authority either.
+fn notification_slots(component: &[u8], route: &str, direction: u32) -> (u32, u32) {
+    FABRIC_NOTIFICATION_BINDINGS
+        .iter()
+        .find(
+            |(declared_component, declared_route, declared_direction, _, _)| {
+                *declared_component == component
+                    && *declared_route == route
+                    && *declared_direction == direction
+            },
+        )
+        .map(|(_, _, _, ready_slot, credit_slot)| (*ready_slot, *credit_slot))
+        .unwrap_or_else(|| fail(b"stream notification binding missing"))
+}
+
 fn declared_edges(component: &[u8]) -> usize {
     FABRIC_PARTICIPANTS
         .iter()
@@ -1947,7 +1681,8 @@ fn refresh_matches(
                 EVENT_MATCHED
             };
             if send_qos_event(
-                subscriber.slot,
+                subscriber.control_slot,
+                subscriber.supervision_slot,
                 event,
                 0,
                 matched as u64,
@@ -1963,7 +1698,8 @@ fn refresh_matches(
         }
         if incompatible != 0
             && send_qos_event(
-                subscriber.slot,
+                subscriber.control_slot,
+                subscriber.supervision_slot,
                 EVENT_INCOMPATIBLE_QOS,
                 0,
                 incompatible as u64,
@@ -1976,14 +1712,53 @@ fn refresh_matches(
     }
 }
 
-fn receive_time(pending_time: &mut Option<u64>) {
-    if pending_time.is_some() {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TimeReceive {
+    WouldBlock,
+    PeerDead,
+    Advance(u64),
+}
+
+const fn update_time_liveness(
+    pending_time: &mut Option<u64>,
+    time_dead: &mut bool,
+    received: TimeReceive,
+) {
+    match received {
+        TimeReceive::WouldBlock => {}
+        TimeReceive::PeerDead => *time_dead = true,
+        TimeReceive::Advance(now) => *pending_time = Some(now),
+    }
+}
+
+fn receive_time(pending_time: &mut Option<u64>, time_dead: &mut bool) {
+    if pending_time.is_some() || *time_dead {
         return;
     }
     let mut bytes = [0u8; MAX_MSG];
     let mut caps = [0u64; MAX_CAPS_PER_MSG];
     let length = match slime_rt::recv(TIME_SLOT, &mut bytes, &mut caps) {
-        ERR_WOULDBLOCK | ERR_PEER_DEAD => return,
+        ERR_WOULDBLOCK => {
+            // A native Endpoint has no `ERR_PEER_DEAD`: an exited clock is
+            // indistinguishable from a silent one, so a receive alone can never
+            // retire this input and the broker would run forever waiting for a
+            // time source that is gone. The clock peer's supervision handle is
+            // the observation that reports the difference, which is the same
+            // answer publisher death needed above.
+            if !matches!(
+                slime_rt::supervision_status(supervision_slot_for(TIME_COMPONENT)),
+                Ok(None)
+            ) {
+                update_time_liveness(pending_time, time_dead, TimeReceive::PeerDead);
+                return;
+            }
+            update_time_liveness(pending_time, time_dead, TimeReceive::WouldBlock);
+            return;
+        }
+        ERR_PEER_DEAD => {
+            update_time_liveness(pending_time, time_dead, TimeReceive::PeerDead);
+            return;
+        }
         n if n < 0 => fail(b"time recv"),
         n => n as usize,
     };
@@ -1994,18 +1769,7 @@ fn receive_time(pending_time: &mut Option<u64>) {
     if !slime_proto::valid_time_advance(&value) {
         fail(b"non-monotonic time")
     }
-    *pending_time = Some(value.now_ns);
-}
-
-fn time_peer_dead() -> bool {
-    let mut bytes = [0u8; MAX_MSG];
-    let mut caps = [0u64; MAX_CAPS_PER_MSG];
-    match slime_rt::recv(TIME_SLOT, &mut bytes, &mut caps) {
-        ERR_PEER_DEAD => true,
-        ERR_WOULDBLOCK => false,
-        n if n < 0 => fail(b"time peer probe"),
-        _ => fail(b"unapplied time advance"),
-    }
+    update_time_liveness(pending_time, time_dead, TimeReceive::Advance(value.now_ns));
 }
 
 fn apply_time(
@@ -2041,7 +1805,8 @@ fn apply_time(
             }
             release_frame(expired.slot as usize, frames);
             if send_qos_event(
-                subscriber.slot,
+                subscriber.control_slot,
+                subscriber.supervision_slot,
                 EVENT_LIFESPAN_EXPIRED,
                 expired.sequence,
                 0,
@@ -2077,16 +1842,21 @@ fn apply_time(
         }
         subscriber.in_flight = 0;
         subscriber.terminal = true;
-        if let Some(sequence) = exhausted
-            && send_qos_event(
-                subscriber.slot,
-                EVENT_RETRY_EXHAUSTED,
-                sequence,
-                subscriber.retry_count as u64,
-                *now_ns,
-                route_type_tag(subscriber.route),
-            )
-        {
+        // Retry exhaustion is a statement about the retries, not about a frame
+        // that happens to survive them: an earlier lifespan expiry can already
+        // have drained this queue, and reporting nothing then would make the
+        // condition invisible exactly when it was reached the hard way. The
+        // sequence is the last sample still queued if there is one, and zero
+        // when the queue is already empty.
+        if send_qos_event(
+            subscriber.control_slot,
+            subscriber.supervision_slot,
+            EVENT_RETRY_EXHAUSTED,
+            exhausted.unwrap_or(0),
+            subscriber.retry_count as u64,
+            *now_ns,
+            route_type_tag(subscriber.route),
+        ) {
             slime_rt::debug_write(b"[fabric] QoS retry exhausted\n");
         }
     }
@@ -2098,7 +1868,8 @@ fn apply_time(
         {
             subscriber.deadline_reported = true;
             if send_qos_event(
-                subscriber.slot,
+                subscriber.control_slot,
+                subscriber.supervision_slot,
                 EVENT_DEADLINE_MISSED,
                 0,
                 0,
@@ -2119,7 +1890,8 @@ fn apply_time(
             }) {
                 subscriber.liveliness_reported = true;
                 if send_qos_event(
-                    subscriber.slot,
+                    subscriber.control_slot,
+                    subscriber.supervision_slot,
                     EVENT_LIVELINESS_LOST,
                     0,
                     0,
@@ -2155,14 +1927,41 @@ fn route_type_tag(route: usize) -> u64 {
     }
 }
 
+/// Deliver one QoS event to a subscriber, blocking until it is taken.
+///
+/// A declared QoS condition is an obligation, not a hint: the plane's contract
+/// is that the subscriber observes each one. `seL4_NBSend` cannot carry an
+/// obligation — it delivers only to a peer *already* blocked on the endpoint,
+/// discards otherwise, and reports nothing either way, so `try_send` returns
+/// `ERR_SUCCESS` for "attempted" and the caller cannot tell a delivery from a
+/// drop. Retaining and re-offering was built on that distinction and could
+/// never fire.
+///
+/// A blocking send is the primitive that carries one, and it is what the
+/// `EVENT_SAMPLE_LOST` path above already uses on this same endpoint. It
+/// rendezvous safely because every reader on the other side returns to its
+/// control endpoint once its ring is drained, and a two-route reader files
+/// whichever record arrives under the route that record names.
+///
+/// The one case a blocking send cannot survive is a peer that will never
+/// receive again. A native Endpoint does not report that — there is no
+/// `ERR_PEER_DEAD` to read — so the subscriber's supervision handle is checked
+/// first, which is the same answer peer death needed everywhere else in this
+/// cutover. `false` therefore means "this subscriber is gone", not "try later".
 fn send_qos_event(
     slot: u32,
+    supervision_slot: u32,
     event: u32,
     sequence: u64,
     value: u64,
     timestamp_ns: u64,
     type_identity: u64,
 ) -> bool {
+    // `Ok(None)` is "still running". Anything else means the peer has
+    // terminated and no send to it can ever rendezvous.
+    if !matches!(slime_rt::supervision_status(supervision_slot), Ok(None)) {
+        return false;
+    }
     let record = WireQosEvent {
         magic: QOS_EVENT_MAGIC,
         version: QOS_FORMAT_VERSION,
@@ -2176,7 +1975,7 @@ fn send_qos_event(
     };
     match slime_rt::send(slot, &record.encode(), &[]) {
         ERR_SUCCESS => true,
-        ERR_WOULDBLOCK | ERR_PEER_DEAD => false,
+        ERR_PEER_DEAD => false,
         _ => fail(b"QoS event"),
     }
 }
@@ -2206,30 +2005,17 @@ fn deny(control_slot: u32, route: &[u8; 32], status: i32) {
         rights_mask: 0,
         route_identity: *route,
     };
-    let encoded = descriptor.encode();
-    loop {
-        match slime_rt::send(control_slot, &encoded, &[]) {
-            ERR_SUCCESS => return,
-            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(control_slot)]),
-            _ => fail(b"deny reply"),
-        }
+    if slime_rt::send(control_slot, &descriptor.encode(), &[]) < 0 {
+        fail(b"deny reply");
     }
 }
 
 const _: () = assert!(REQUEST_LEN == MAX_MSG);
 const _: () = assert!(TRANSFER_LEN == MAX_MSG);
-const _: () = assert!(slime_proto::fabric_stream::SAMPLE_LEN == MAX_MSG);
-const _: () = assert!(slime_proto::fabric_stream::ACK_LEN == MAX_MSG);
 const _: () = assert!(slime_proto::fabric_stream::EVENT_LEN == MAX_MSG);
 const _: () = assert!(FABRIC_MAX_SAMPLE_BYTES <= COPY_PAGES * PAGE as usize);
 const _: () = assert!(FABRIC_MAX_BUFFER_PAGES <= FABRIC_MAX_BUFFERS * COPY_PAGES);
 const _: () = assert!(FABRIC_REQUIRED_CAPABILITY_SLOTS <= FABRIC_MAX_CAPABILITY_SLOTS);
-// The peak the generation resolved for the stream worker must fit one `SYS_WAIT`
-// set. `park_on_streams` already fails closed if the live set overruns its array,
-// but that is a boot-time failure on a graph the build could have refused: the
-// resolver rejects an over-wide partition, and this pins that same number here so
-// the two cannot disagree.
-const _: () = assert!(fabric_worker_wait_sources("stream") <= slime_rt::MAX_WAIT_SOURCES);
 
 // The frame table must cover every reference the declared rings can hold at
 // once, or a full set of rings would leave the fabric with no free frame while
@@ -2265,3 +2051,27 @@ const DECLARED_RING_CAPACITY: usize = {
     }
     total
 };
+
+#[cfg(test)]
+mod tests {
+    use super::{TimeReceive, update_time_liveness};
+
+    #[test]
+    fn queued_advance_is_preserved_as_application_data() {
+        let mut pending = None;
+        let mut dead = false;
+        update_time_liveness(&mut pending, &mut dead, TimeReceive::Advance(42));
+        assert_eq!(pending, Some(42));
+        assert!(!dead);
+    }
+
+    #[test]
+    fn only_peer_dead_marks_clock_dead() {
+        let mut pending = None;
+        let mut dead = false;
+        update_time_liveness(&mut pending, &mut dead, TimeReceive::WouldBlock);
+        assert!(!dead);
+        update_time_liveness(&mut pending, &mut dead, TimeReceive::PeerDead);
+        assert!(dead);
+    }
+}

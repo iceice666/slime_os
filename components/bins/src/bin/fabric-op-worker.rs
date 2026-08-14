@@ -20,19 +20,31 @@ mod operation_broker;
 
 slime_rt::entry!(main);
 
-/// Endpoint factory, granted by the generation.
-const FACTORY_SLOT: u32 = 0;
-/// Control endpoints, in the order the fabric granted them: the two clients,
-/// the server, the clock, then client B's replacement channel.
-const FIRST_CONTROL_SLOT: u32 = 1;
+const CLIENT_A_SLOT: u32 = 2;
+const CLIENT_B_SLOT: u32 = 3;
+const SERVER_SLOT: u32 = 4;
+const TIME_SLOT: u32 = 5;
+const REPLACEMENT_SLOT: u32 = 6;
+const BACKUP_ROUTE_SLOT: u32 = 7;
+const CLIENT_A_SUPERVISION_SLOT: u32 = 8;
+const CLIENT_B_SUPERVISION_SLOT: u32 = 9;
+const SERVER_SUPERVISION_SLOT: u32 = 10;
+const REPLACEMENT_SUPERVISION_SLOT: u32 = 11;
 
-fn main() {
+fn main(_startup_arg: u32) {
     operation_broker::Broker::new(
-        FACTORY_SLOT,
-        [FIRST_CONTROL_SLOT, FIRST_CONTROL_SLOT + 1],
-        FIRST_CONTROL_SLOT + 2,
-        FIRST_CONTROL_SLOT + 3,
-        FIRST_CONTROL_SLOT + 4,
+        [CLIENT_A_SLOT, CLIENT_B_SLOT],
+        SERVER_SLOT,
+        TIME_SLOT,
+        REPLACEMENT_SLOT,
+        None,
+        BACKUP_ROUTE_SLOT,
+        [
+            CLIENT_A_SUPERVISION_SLOT,
+            CLIENT_B_SUPERVISION_SLOT,
+            SERVER_SUPERVISION_SLOT,
+        ],
+        REPLACEMENT_SUPERVISION_SLOT,
     )
     .run();
     slime_rt::debug_write(b"[fabric-op-worker] operation plane complete\n");

@@ -42,8 +42,8 @@ ever escape into an observable channel.
   where that tension is designed. [INFERENCE: neither entry mentions
   secrets.]
 - The capability matrix grammar (`../capability-matrix.md`) fixes what
-  a new object kind must satisfy; rights are a flat `u32` with bits
-  15-31 free.
+  a new object kind must satisfy; rights are a flat `u64` with bits
+  26–63 free.
 
 ## Design sketch
 

@@ -90,17 +90,17 @@ replyLayout :: List WireField = {
 };
 
 protocol ::= {
-  formatVersion = formatVersion;
-  requestLen = requestLen;
-  replyLen = replyLen;
-  storeMagic = storeMagic;
-  opStat = opStat;
-  opGet = opGet;
-  opPut = opPut;
+  formatVersion =;
+  requestLen =;
+  replyLen =;
+  storeMagic =;
+  opStat =;
+  opGet =;
+  opPut =;
   requestFields = requestSchema.fields ?? {;};
   replyFields = replySchema.fields ?? {;};
-  requestLayout = requestLayout;
-  replyLayout = replyLayout;
+  requestLayout =;
+  replyLayout =;
 };
 
 main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }

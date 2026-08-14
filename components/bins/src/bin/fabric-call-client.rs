@@ -11,11 +11,16 @@ use slime_proto::fabric_call::{
 
 slime_rt::entry!(main);
 
-fn main() {
-    scenario::boot_park(
-        boot_contracts::fabric_graph::DIRECTION_CLIENT,
-        b"fabric-call-client",
-    );
+fn main(_startup_arg: u32) {
+    // The boot plane declares this component but gives it no work, and the
+    // discriminator is the build profile rather than a startup argument: the
+    // root delivers a nonzero action only to the bootstrap instance, so every
+    // participant on every plane read zero and parked.
+    if slime_components::fabric_boot::active() {
+        slime_components::fabric_boot::park_only(b"fabric-call-client");
+    }
+    // This binary's badge bit on the broker's wake notification.
+    scenario::set_wake_slot(scenario::FABRIC_CALL_CLIENT_SERVICE_PARAMETERS_READY_SLOT);
     let route = scenario::request_role(boot_contracts::fabric_graph::DIRECTION_CLIENT);
     let session = scenario::client_session(0);
 
@@ -92,9 +97,9 @@ fn main() {
         route,
         scenario::envelope(session, 11, KIND_REQUEST, 0, STATUS_SUCCESS, 11),
     );
-    signal_phase(3);
-    scenario::expect_terminal_yielding(route, session, 11, STATUS_PEER_DEAD);
+    scenario::expect_terminal_parked(route, session, 11, STATUS_PEER_DEAD);
     slime_rt::debug_write(b"[fabric-call-client] peer death distinct\n");
+    signal_phase(3);
 }
 
 fn signal_phase(phase: u8) {
@@ -121,8 +126,10 @@ fn wait_client_b(expected: u8) {
     let mut bytes = [0u8; slime_rt::MAX_MSG];
     let mut caps = [0u64; slime_rt::MAX_CAPS_PER_MSG];
     loop {
-        match slime_rt::recv(4, &mut bytes, &mut caps) {
-            slime_rt::ERR_WOULDBLOCK => slime_rt::wait(&[slime_rt::WaitSource::Endpoint(4)]),
+        // A barrier is all this loop waits on, and the signaller blocks in
+        // `send`: polling here would leave both sides waiting.
+        match slime_rt::recv_blocking(4, &mut bytes, &mut caps) {
+            slime_rt::ERR_WOULDBLOCK => slime_rt::yield_now(),
             value if value < 0 => scenario::fail(b"client phase receive"),
             1 if bytes[0] == expected => return,
             _ => scenario::fail(b"client phase mismatch"),

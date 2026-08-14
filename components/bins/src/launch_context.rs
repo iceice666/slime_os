@@ -1,29 +1,22 @@
 use slime_proto::{spawn::WireSpawnRequest, valid_spawn_request};
-use slime_rt::{ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
+use slime_rt::{MAX_CAPS_PER_MSG, MAX_MSG};
 
 pub const CONTEXT_SLOT: u32 = 0;
 
 pub fn receive() -> WireSpawnRequest {
     let mut message = [0u8; MAX_MSG];
     let mut caps = [0u64; MAX_CAPS_PER_MSG];
-    loop {
-        match slime_rt::recv(CONTEXT_SLOT, &mut message, &mut caps) {
-            ERR_WOULDBLOCK => slime_rt::wait(&[slime_rt::WaitSource::Endpoint(CONTEXT_SLOT)]),
-            n if n < 0 => slime_rt::exit(1),
-            n => {
-                if caps.iter().any(|slot| *slot != 0) {
-                    slime_rt::exit(1);
-                }
-                let Some(request) = WireSpawnRequest::decode(&message[..n as usize]) else {
-                    slime_rt::exit(1)
-                };
-                if request.flags != 0 || !valid_spawn_request(&request) {
-                    slime_rt::exit(1);
-                }
-                return request;
-            }
-        }
+    let n = slime_rt::recv_blocking(CONTEXT_SLOT, &mut message, &mut caps);
+    if n < 0 || caps.iter().any(|slot| *slot != 0) {
+        slime_rt::exit(1);
     }
+    let Some(request) = WireSpawnRequest::decode(&message[..n as usize]) else {
+        slime_rt::exit(1)
+    };
+    if request.flags != 0 || !valid_spawn_request(&request) {
+        slime_rt::exit(1);
+    }
+    request
 }
 
 #[allow(dead_code)]

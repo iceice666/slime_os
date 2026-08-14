@@ -12,13 +12,13 @@ A milestone is complete only when its exit condition is observed. Compiled code,
 
 | Track | Status | Next open gate |
 | --- | --- | --- |
-| [Backlog](00-backlog.md) | B1–B11 resolved; no open defects recorded | Backlog is clear; preserve the regression baseline while advancing the RPi5 path |
-| [Foundations](01-foundations.md) | M1–M4 and M6 complete; M5 mechanisms complete except M5.7 physical Framework evidence | Preserve as regression history; do not block RPi5 work on Framework-only evidence unless storage safety is touched |
-| [Core runtime](02-core-runtime.md) | C7 and C8.1–C8.10 complete; C8.11–C8.15 and C10 are planned | For the demo, prioritize only the C8/C10 slices required by two ROS 2 nodes over minimal DDS/RTPS |
-| [RPi5 ROS 2 demo](09-rpi5-ros2-demo.md) | RP0 contract complete; RP1–RP8 planned | P1 architecture-boundary extraction is complete; begin RP1 target-qualified build/admission |
-| [Architecture portability](07-architecture-portability.md) | P0, P1, P2.1, and P2.2 complete; P2.3–P2.6 planned | Begin P2.3 AArch64 EL0 component execution and isolation; P2 and P4 remain on the demo critical path |
+| [Backlog](00-backlog.md) | B39–B54 resolved; **no open items** | None. Resolve or defer any newly found defect before opening a track gate |
+| [Foundations](01-foundations.md) | M1–M4 and M6 complete; M5 mechanisms complete except M5.7 physical Framework evidence | M5.7 requires observed removable-media Framework boot without internal-NVMe writes |
+| [Core runtime](02-core-runtime.md) | C7 and C8.1–C8.10 complete; B46's native-Endpoint cutover restored the stream, QoS, call, operation, and visibility gates on native IPC | C8.11+ decomposition work; no open backlog item blocks it |
+| [RPi5 ROS 2 demo](09-rpi5-ros2-demo.md) | RP0 and RP1 complete; RP2–RP8 planned | Rewrite RP2 around the seL4 product boundary before implementation; its current low-level deliverables describe the retired custom kernel |
+| [Architecture portability](07-architecture-portability.md) | P0, P1, P2.1, P2.2, and P5 complete; P2.3–P2.6 superseded by P5 | P4 physical Raspberry Pi 5 qualification is the next architecture evidence gate |
 | [ROS 2 compatibility](03-ros2-compatibility.md) | Not started | R0 minimal DDS/RTPS topic profile is first; broader external/multi-vendor compatibility follows after the RPi5 demo path |
-| [Platform hardware](04-platform-hardware.md) | Framework track deferred; H1 implementation complete but physical evidence pending | Do not advance Framework daily-driver hardware unless needed for shared mechanisms or evidence preservation |
+| [Platform hardware](04-platform-hardware.md) | Deferred; H1 is blocked and no current seL4 Framework inventory or physical evidence exists | H1 remains blocked until a seL4 Framework image and observed inventory/no-write record exist |
 | [Foreign workloads](05-foreign-workloads.md) | Deferred | Use only if the chosen ROS 2 node route requires a Linux userspace personality |
 | [Authority and trust](06-authority-trust.md) | Deferred | Resume after the demo unless a demo milestone needs a specific authority primitive |
 | [Native development](08-native-development.md) | Deferred | Resume after the demo; D2/D3 may be useful later for on-device ROS node builds |
@@ -43,7 +43,7 @@ The [backlog](00-backlog.md) still sits ahead of all lanes: resolve or explicitl
 
 ```mermaid
 flowchart TD
-    Backlog["Backlog clear"]
+    Backlog["Backlog: no open items"]
     Foundations["M1–M6 foundations\nexisting x86/QEMU evidence"]
     C7["C7 sample plane\ncomplete"]
     C8["C8.1–C8.10 fabric\ncomplete baseline"]
@@ -101,10 +101,10 @@ The demo is intentionally narrower than “full ROS 2 support”:
 
 Every track preserves these rules:
 
-1. The kernel owns privileged mechanisms only: scheduling, address spaces, memory objects, capability enforcement, IPC, interrupts, timers, and minimal platform control.
+1. Privileged mechanism only: seL4 owns scheduling, address spaces, memory objects, capability enforcement, IPC, interrupts, and timers; `slime-root` owns the dynamic mechanism above them — generation admission, task construction and reclamation, bounded object allocation, shared buffers, and fault supervision. Neither owns policy.
 2. Device, filesystem, generation, graph, discovery, QoS policy, health, activation, rollback, and ROS node policy live in userspace services.
 3. Authority is carried by explicit capabilities. There are no ambient executable paths, storage handles, working directories, streams, network destinations, discovery domains, or environment state.
-4. New kernel objects or rights update `../docs/capability-matrix.md` in the same change and ship with a real gate.
+4. New object kinds or rights update `../docs/capability-matrix.md`, and new or renumbered operations update `../docs/syscall-abi.md`, in the same change, and ship with a real gate.
 5. New IPC, ROS profile, demo trace, and persistent protocols are schema-first under `../contracts/`; generated or validated bindings cannot disagree on layout.
 6. Generation, storage, protocol, queue, retry, history, payload, and demo evidence data are deterministic, versioned, bounded, integrity checked, and rejected when malformed or unsupported.
 7. Activation never overwrites the running generation in place, and a failed pending generation cannot consume the last selectable boot root.

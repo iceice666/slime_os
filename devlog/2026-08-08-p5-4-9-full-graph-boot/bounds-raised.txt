@@ -1,0 +1,83 @@
+Two slime-root bounds raised for the C8.10 full-graph boot
+Date: 2026-08-08
+
+Both were sized against a single-plane graph and both are the same class as
+B28's MAX_GRAPH_ITERATIONS: a table sized to a workload rather than to an
+invariant. Neither is a capability-model change.
+
+--------------------------------------------------------------------
+1. channel::MAX_CHANNELS  32 -> 48
+--------------------------------------------------------------------
+
+Needed: 37 live at the peak.
+  16 participant control channels (init mints one per participant)
+   3 call role channels
+   4 operation role channels
+  14 stream role channels (two per stream edge: data + credit/ack, over
+     seven declared edges)
+
+The previous bound was `task::MAX_TASKS`, chosen in P5.5.2 on the reasoning
+that growth is driven by route roles rather than task pairs. That is right and
+still leaves the number wrong: a full graph running every plane at once needs
+more roles than a graph running one.
+
+Failure shape if left at 32: the fabric's 33rd endpoint_create is refused, and
+every participant downstream of it fails too, which reads as four broken
+components rather than one exhausted table. That is the same symptom P5.5.2
+recorded at 16.
+
+Cost: ~4.2 KiB per entry (two queues of CHANNEL_CAPACITY x MAX_MESSAGE_BYTES),
+so ~66 KiB of additional .bss.
+
+--------------------------------------------------------------------
+2. task::MAX_TASKS  32 -> 48
+--------------------------------------------------------------------
+
+Needed: 37 live tasks.
+
+This is the number the pre-slice analysis got wrong, and the reason is a real
+difference between the two roots rather than a miscount. The oracle boots 20
+tasks. On slime-root the same generation is 37:
+
+  20  the root launches every component the generation declares (P5.2)
++ 17  init spawns the fabric and all 16 participants again, because a spawned
+      child is the only one holding a control endpoint init minted
+= 37
+
+The 20 root-launched instances are the unconfigured copies every seL4 plane
+already carries; here there are twenty of them rather than five.
+
+Failure shape if left at 32: serve_spawn answers DestinationSlotsExhausted at
+the 13th participant and init reports a spawn failure — a composition defect,
+not an exhausted table.
+
+Cost: GraphTables holds MAX_GRAPH_TASKS (== MAX_TASKS) capability tables of
+MAX_TASK_CAPS entries, ~1.5 KiB each, so ~24 KiB of additional .bss.
+
+--------------------------------------------------------------------
+Why 48 and not 37
+--------------------------------------------------------------------
+
+B28's rule. A bound raised to the first passing number is a bound that moves
+again at the next graph, and neither of these fails cleanly — each produces a
+cascade that reads as a composition defect. 48 is one headroom step, and both
+tables live in statics for backlog B3's reason.
+
+--------------------------------------------------------------------
+Two gates caught the consequences, which is the point of having them
+--------------------------------------------------------------------
+
+just sel4_crossing_check:
+  "the crossing loop mints 33 pairs against MAX_CHANNELS=48; it must exceed the
+   bound or the gate proves nothing"
+  The gate reads BOTH constants from source and refuses pairs <= bound. Raising
+  MAX_CHANNELS alone would have left a gate that still passes while proving
+  nothing. CHANNEL_LOOP_PAIRS moved 33 -> 49.
+
+just sel4_root_boot_check:
+  "missing marker: ... slots=832..882"
+  Observed 839..889 and 889..939. The absolute base is wherever the allocator's
+  cursor stands once the root's static tables are placed, so larger tables moved
+  it by 7. The property — each range 50 wide, the second adjoining the first
+  exactly — is unchanged, and the pins were updated to the observed base with
+  that distinction recorded at the assertion.

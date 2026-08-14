@@ -79,7 +79,7 @@ generations :: List Generation = { #g1; #g2; };
 slotsOrder :: List Slot = { #a; #b; };
 policyOrder :: List Policy = { #immutable; #ephemeral; #preserve; #snapshotBeforeUpgrade; #discardOnRollback; };
 epochs :: List Int = l.range 0 (maxEpoch + 1);
-graphRoots :: List GraphRoot = l.flatten (l.map (\generation. l.map (\epoch. { generation = generation; epoch = epoch; }) epochs) generations);
+graphRoots :: List GraphRoot = l.flatten (l.map (\generation. l.map (\epoch. { generation =; epoch =; }) epochs) generations);
 persistentJournal :: StateObject = #persistentJournal;
 
 member :: <A> A -> List A -> Bool
@@ -129,12 +129,12 @@ rootGeneration :: GraphRoot -> Generation
 rootEpoch :: GraphRoot -> Int
   = root => root.epoch;
 graphRoot :: Generation -> Int -> GraphRoot
-  = generation epoch => { generation = generation; epoch = epoch; };
+  = generation epoch => { generation =; epoch =; };
 stateObject :: Policy -> GraphRoot -> StateObject
   = policy root => match policy {
-      | #immutable => #shared { policy = policy; };
-      | #preserve => #shared { policy = policy; };
-      | _ => #scoped { policy = policy; generation = root.generation; epoch = root.epoch; };
+      | #immutable => #shared { policy =; };
+      | #preserve => #shared { policy =; };
+      | _ => #scoped { policy =; generation = root.generation; epoch = root.epoch; };
     };
 canonicalBindings :: GraphRoot -> List StateObject
   = root => l.map (\policy. stateObject policy root) policyOrder;
@@ -204,11 +204,11 @@ bindingObjects :: GraphRoot -> List GraphBinding -> List StateObject
       | #none => l.empty ();
     };
 replaceOneBinding :: GraphRoot -> List StateObject -> GraphBinding -> GraphBinding
-  = root objects binding => if binding.root == root then { root = root; objects = objects; } else binding;
+  = root objects binding => if binding.root == root then { root =; objects =; } else binding;
 replaceBinding :: GraphRoot -> List StateObject -> List GraphBinding -> List GraphBinding
   = root objects bindings => l.map (replaceOneBinding root objects) bindings;
 initialGraphBinding :: GraphRoot -> GraphRoot -> GraphBinding
-  = initialRoot root => { root = root; objects = if root == initialRoot then canonicalBindings initialRoot else l.empty (); };
+  = initialRoot root => { root =; objects = if root == initialRoot then canonicalBindings initialRoot else l.empty (); };
 initialGraphBindings :: GraphRoot -> List GraphBinding
   = initialRoot => l.map (initialGraphBinding initialRoot) graphRoots;
 
@@ -274,11 +274,11 @@ retainedGenerations :: State -> List Generation
 retainedStateObjects :: State -> List StateObject
   = state => union state.persistentStateRoots (union (l.flatten (l.map (\root. bindingObjects root state.graphBindings) (retainedGraphRoots state))) (l.flatten (l.map (\root. intersect (canonicalBindings root) state.durableStateObjects) (stagedTransactionRoots state))));
 identityGeneration :: Generation -> Identity
-  = value => #generation { value = value; };
+  = value => #generation { value =; };
 identityGraphRoot :: GraphRoot -> Identity
-  = value => #graphRoot { value = value; };
+  = value => #graphRoot { value =; };
 identityStateObject :: StateObject -> Identity
-  = value => #stateObject { value = value; };
+  = value => #stateObject { value =; };
 identityGenerations :: List Generation -> List Identity
   = values => l.map identityGeneration values;
 identityGraphRoots :: List GraphRoot -> List Identity
@@ -354,7 +354,7 @@ initialState :: State = [
 ];
 
 transition :: Text -> State -> Transition
-  = action state => { action = action; state = state; };
+  = action state => { action =; state =; };
 one :: Text -> State -> List Transition
   = action state => l.singleton (transition action state);
 noneTransitions :: List Transition = l.empty ();
@@ -455,7 +455,7 @@ commitWrite :: State -> List Transition
               selected := selectedState state;
               committed := state.writeValue with { sequence = selected.sequence + 1; valid = true; };
               rollbackRoots := if state.writeKind == #promotion then union state.rollbackRoots (optionalToList selected.knownGoodRoot) else state.rollbackRoots;
-              if state.writeStage == #flushed && selectedSlotValue == otherSlot target then one "CommitWrite" (state with { slots = replaceSlot target committed state.slots; rollbackRoots = rollbackRoots; phase = phaseAfterCommit state.writeKind; running = if state.writeKind == #rollback then #none else state.running; runningRoot = if state.writeKind == #rollback then #none else state.runningRoot; runningPending = if state.writeKind == #promotion || state.writeKind == #rollback then false else state.runningPending; stagedCandidate = if state.writeKind == #stagePending then #none else state.stagedCandidate; stagedRoot = if state.writeKind == #stagePending then #none else state.stagedRoot; writeTarget = #none; writeValue = emptyRecord; writeKind = #none; writeStage = #idle; }) else noneTransitions
+              if state.writeStage == #flushed && selectedSlotValue == otherSlot target then one "CommitWrite" (state with { slots = replaceSlot target committed state.slots; rollbackRoots =; phase = phaseAfterCommit state.writeKind; running = if state.writeKind == #rollback then #none else state.running; runningRoot = if state.writeKind == #rollback then #none else state.runningRoot; runningPending = if state.writeKind == #promotion || state.writeKind == #rollback then false else state.runningPending; stagedCandidate = if state.writeKind == #stagePending then #none else state.stagedCandidate; stagedRoot = if state.writeKind == #stagePending then #none else state.stagedRoot; writeTarget = #none; writeValue = emptyRecord; writeKind = #none; writeStage = #idle; }) else noneTransitions
             ];
         };
     };
@@ -589,7 +589,7 @@ reachability :: List Reachability = {
 };
 
 bootStateModel :: Faults -> Model
-  = faults => { initial = { initialState; }; next = nextFor faults; safety = safety; reachability = reachability; };
+  = faults => { initial = { initialState; }; next = nextFor faults; safety =; reachability =; };
 noFaults :: Faults = { skipAttempt = false; omitPersistentRoot = false; mixedEpochSnapshot = false; };
 skipAttemptFaults :: Faults = { skipAttempt = true; omitPersistentRoot = false; mixedEpochSnapshot = false; };
 omittedRootFaults :: Faults = { skipAttempt = false; omitPersistentRoot = true; mixedEpochSnapshot = false; };
@@ -613,4 +613,4 @@ scenarios :: List Scenario = {
   { name = "mixed-epoch"; model = bootStateModel mixedEpochFaults; expect = #violates { property = "RetainedGraphsConsistent"; }; };
 };
 
-{ scenarios = scenarios; bootStateModel = bootStateModel; observedReached = observedReached; noFaults = noFaults; }
+{ scenarios =; bootStateModel =; observedReached =; noFaults =; }

@@ -2,7 +2,7 @@
 
 **Purpose:** Drive the near-term project toward one observed robotics workload: Slime OS running on a Raspberry Pi 5 with two local ROS 2 nodes exchanging bounded topic data through a minimal DDSI-RTPS/XCDR profile.
 
-**Status:** In progress — RP0 complete.
+**Status:** In progress — RP0 and RP1 complete.
 
 **Acceptance target:** A reproducible Raspberry Pi 5 boot runs a declared publisher node and subscriber node. The publisher emits a bounded ROS 2 topic stream through the admitted minimal DDS/RTPS profile, the subscriber observes the expected samples in order under the declared QoS/profile, and the run records image identity, board/firmware/media identity, generation/release identity, serial transcript, DDS/semantic trace, and every device/storage/datagram/network capability involved.
 

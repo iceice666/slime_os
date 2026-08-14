@@ -128,29 +128,29 @@ snapshotEntryLayout :: List WireField = {
 };
 
 format ::= {
-  formatVersion = formatVersion;
-  requestLen = requestLen;
-  replyLen = replyLen;
-  maxNameBytes = maxNameBytes;
-  maxEntries = maxEntries;
-  maxDepth = maxDepth;
-  maxPathBytes = maxPathBytes;
-  opList = opList;
-  opRead = opRead;
-  opWrite = opWrite;
-  opDerive = opDerive;
-  snapshotVersion = snapshotVersion;
-  snapshotHeaderLen = snapshotHeaderLen;
-  snapshotEntryLen = snapshotEntryLen;
-  snapshotObjectType = snapshotObjectType;
+  formatVersion =;
+  requestLen =;
+  replyLen =;
+  maxNameBytes =;
+  maxEntries =;
+  maxDepth =;
+  maxPathBytes =;
+  opList =;
+  opRead =;
+  opWrite =;
+  opDerive =;
+  snapshotVersion =;
+  snapshotHeaderLen =;
+  snapshotEntryLen =;
+  snapshotObjectType =;
   requestFields = requestSchema.fields ?? {;};
   replyFields = replySchema.fields ?? {;};
   snapshotHeaderFields = snapshotHeaderSchema.fields ?? {;};
   snapshotEntryFields = snapshotEntrySchema.fields ?? {;};
-  requestLayout = requestLayout;
-  replyLayout = replyLayout;
-  snapshotHeaderLayout = snapshotHeaderLayout;
-  snapshotEntryLayout = snapshotEntryLayout;
+  requestLayout =;
+  replyLayout =;
+  snapshotHeaderLayout =;
+  snapshotEntryLayout =;
 };
 
 main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }

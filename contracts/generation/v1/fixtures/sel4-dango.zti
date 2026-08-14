@@ -1,0 +1,480 @@
+{
+  bootAction = "dango";
+  bootstrapInstance = "init";
+  executables = [
+    {
+      commandProfile = [];
+      name = "init";
+      object = "sha256:init";
+      role = "init";
+      spawnBudget = 4;
+    };
+    {
+      commandProfile = [];
+      name = "spawn-service";
+      object = "sha256:spawn-service";
+      role = "service";
+      spawnBudget = 8;
+    };
+    {
+      commandProfile = [
+        "echo";
+        "sysinfo";
+      ];
+      name = "dango";
+      object = "sha256:dango";
+      role = "application";
+      spawnBudget = 8;
+    };
+    {
+      commandProfile = [];
+      name = "sysinfo";
+      object = "sha256:sysinfo";
+      role = "application";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [];
+      name = "echo-agent";
+      object = "sha256:echo-agent";
+      role = "application";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [];
+      name = "console";
+      object = "sha256:console";
+      role = "service";
+      spawnBudget = 0;
+    };
+  ];
+  formatVersion = 1;
+  generation = 30;
+  grants = [
+    {
+      name = "init-spawn-service";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "spawn-service";
+      transferable = false;
+    };
+    {
+      name = "init-dango";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "dango";
+      transferable = false;
+    };
+    {
+      name = "init-console";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "console";
+      transferable = false;
+    };
+    {
+      name = "spawn-service-sysinfo";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "sysinfo";
+      transferable = false;
+    };
+    {
+      name = "spawn-service-echo-agent";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "echo-agent";
+      transferable = false;
+    };
+    {
+      name = "dango-a-input";
+      capabilityKind = "input";
+      rights = [
+        "inputRead";
+      ];
+      source = "dango";
+      target = "dango";
+      transferable = false;
+    };
+    {
+      name = "dango-b-cwd-root";
+      capabilityKind = "directory";
+      rights = [
+        "directoryRead";
+        "directoryDerive";
+      ];
+      source = "dango";
+      target = "dango";
+      transferable = true;
+    };
+    {
+      name = "dango-echo-stdin";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "dango";
+      target = "echo-agent";
+      transferable = false;
+    };
+    {
+      name = "spawn-service-sysinfo-context";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "spawn-service";
+      target = "sysinfo";
+      transferable = false;
+    };
+    {
+      name = "spawn-service-echo-context";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "spawn-service";
+      target = "echo-agent";
+      transferable = false;
+    };
+    {
+      name = "dango-d-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      rights = [
+        "bufferCreate";
+      ];
+      source = "dango";
+      target = "dango";
+      transferable = false;
+    };
+    {
+      name = "dango-e-spawn-service-rpc";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "dango";
+      target = "spawn-service";
+      transferable = false;
+    };
+    {
+      name = "spawn-service-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      rights = [
+        "bufferCreate";
+      ];
+      source = "init";
+      target = "spawn-service";
+      transferable = false;
+    };
+    {
+      name = "init-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      rights = [
+        "bufferCreate";
+      ];
+      source = "init";
+      target = "init";
+      transferable = false;
+    };
+    {
+      name = "dango-console-rpc";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "dango";
+      target = "console";
+      transferable = false;
+    };
+    {
+      name = "console-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      rights = [
+        "bufferCreate";
+      ];
+      source = "init";
+      target = "console";
+      transferable = false;
+    };
+  ];
+  health = {
+    bootAttempts = 3;
+    requiredInstances = [
+      "init";
+    ];
+  };
+  instances = [
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "init-console";
+          slot = 1;
+        };
+        {
+          grant = "init-dango";
+          slot = 2;
+        };
+        {
+          grant = "init-shared-buffer-factory";
+          slot = 5;
+        };
+        {
+          grant = "init-spawn-service";
+          slot = 3;
+        };
+        {
+          grant = "spawn-service-sysinfo";
+          slot = 6;
+        };
+        {
+          grant = "spawn-service-echo-agent";
+          slot = 7;
+        };
+      ];
+      dependencies = [];
+      executable = "init";
+      health = "required";
+      name = "init";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "spawn-service-sysinfo";
+          slot = 4;
+        };
+        {
+          grant = "spawn-service-echo-agent";
+          slot = 5;
+        };
+        {
+          grant = "dango-e-spawn-service-rpc";
+          slot = 2;
+        };
+        {
+          grant = "spawn-service-shared-buffer-factory";
+          slot = 1;
+        };
+        {
+          grant = "spawn-service-sysinfo-context";
+          slot = 3;
+        };
+        {
+          grant = "spawn-service-echo-context";
+          slot = 6;
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "spawn-service";
+      health = "optional";
+      name = "spawn-service";
+      owner = "init";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "dango-e-spawn-service-rpc";
+          slot = 0;
+        };
+        {
+          grant = "dango-console-rpc";
+          slot = 1;
+        };
+        {
+          grant = "dango-a-input";
+          slot = 2;
+        };
+        {
+          grant = "dango-b-cwd-root";
+          slot = 3;
+        };
+        {
+          grant = "dango-d-shared-buffer-factory";
+          slot = 5;
+        };
+        {
+          grant = "dango-echo-stdin";
+          slot = 4;
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "dango";
+      health = "optional";
+      name = "dango";
+      owner = "init";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "spawn-service-sysinfo-context";
+          slot = 0;
+        };
+      ];
+      dependencies = [];
+      executable = "sysinfo";
+      health = "optional";
+      name = "sysinfo";
+      owner = "spawn-service";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "dango-echo-stdin";
+          slot = 2;
+        };
+        {
+          grant = "spawn-service-echo-context";
+          slot = 0;
+        };
+      ];
+      dependencies = [];
+      executable = "echo-agent";
+      health = "optional";
+      name = "echo-agent";
+      owner = "spawn-service";
+    };
+    {
+      autostart = false;
+      bindings = [
+        {
+          grant = "dango-console-rpc";
+          slot = 0;
+        };
+        {
+          grant = "console-buffer-factory";
+          slot = 1;
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "console";
+      health = "optional";
+      name = "console";
+      owner = "init";
+    };
+  ];
+  mintedBindings = [
+    {
+      name = "echo-agent-cwd";
+      capabilityKind = "directory";
+      owner = "spawn-service";
+      holder = "echo-agent";
+      rights = [
+        "directoryRead";
+      ];
+      slot = 1;
+      transferable = false;
+    };
+  ];
+  interfaceSchemas = [];
+  objects = [
+    {
+      id = "sha256:init";
+      kind = "bootstrap";
+      size = 65536;
+    };
+    {
+      id = "sha256:spawn-service";
+      kind = "component";
+      size = 131072;
+    };
+    {
+      id = "sha256:dango";
+      kind = "component";
+      size = 131072;
+    };
+    {
+      id = "sha256:sysinfo";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:echo-agent";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "sha256:console";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "boot-layout";
+      kind = "resource";
+      size = 4096;
+    };
+    {
+      id = "shared-buffer-budget";
+      kind = "resource";
+      size = 4096;
+    };
+  ];
+  sharedBufferBudget = [
+    {
+      bufferCount = 2;
+      bytePages = 8;
+      holder = "dango";
+      loanCount = 2;
+      mappingCount = 4;
+    };
+    {
+      bufferCount = 2;
+      bytePages = 8;
+      holder = "spawn-service";
+      loanCount = 2;
+      mappingCount = 4;
+    };
+    {
+      bufferCount = 2;
+      bytePages = 8;
+      holder = "console";
+      loanCount = 2;
+      mappingCount = 4;
+    };
+    {
+      bufferCount = 2;
+      bytePages = 8;
+      holder = "init";
+      loanCount = 2;
+      mappingCount = 4;
+    };
+  ];
+  state = [];
+  target = "aarch64-sel4-qemu-virt";
+}

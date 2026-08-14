@@ -82,14 +82,14 @@ relocationLayout :: List WireField = {
 };
 
 format ::= {
-  formatVersion = formatVersion; kernelAbiVersion = kernelAbiVersion;
-  headerLen = headerLen; segmentLen = segmentLen; relocationLen = relocationLen;
-  maxImageBytes = maxImageBytes; maxSegments = maxSegments; maxRelocations = maxRelocations;
-  preferredBaseText = preferredBaseText; loadBaseText = loadBaseText; segmentWrite = segmentWrite; segmentExec = segmentExec;
+  formatVersion =; kernelAbiVersion =;
+  headerLen =; segmentLen =; relocationLen =;
+  maxImageBytes =; maxSegments =; maxRelocations =;
+  preferredBaseText =; loadBaseText =; segmentWrite =; segmentExec =;
   headerFields = kernelImageHeaderSchema.fields ?? {;};
   segmentFields = kernelSegmentRecordSchema.fields ?? {;};
   relocationFields = kernelRelocationRecordSchema.fields ?? {;};
-  headerLayout = headerLayout; segmentLayout = segmentLayout; relocationLayout = relocationLayout;
+  headerLayout =; segmentLayout =; relocationLayout =;
 };
 main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }
   = caps => [

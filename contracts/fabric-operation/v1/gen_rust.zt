@@ -18,6 +18,7 @@ Protocol :: type {
   kindResultRequest : Int;
   kindCancel : Int;
   kindTerminal : Int;
+  kindServerIdle : Int;
   statusSuccess : Int;
   statusRejected : Int;
   statusCancelled : Int;
@@ -72,6 +73,7 @@ rustBindings :: Protocol -> Text = protocol => w.join {
   "pub const KIND_RESULT_REQUEST: u32 = "; n.toText protocol.kindResultRequest; ";\n";
   "pub const KIND_CANCEL: u32 = "; n.toText protocol.kindCancel; ";\n";
   "pub const KIND_TERMINAL: u32 = "; n.toText protocol.kindTerminal; ";\n";
+  "pub const KIND_SERVER_IDLE: u32 = "; n.toText protocol.kindServerIdle; ";\n";
   "pub const STATUS_SUCCESS: i32 = "; n.toText protocol.statusSuccess; ";\n";
   "pub const STATUS_REJECTED: i32 = "; n.toText protocol.statusRejected; ";\n";
   "pub const STATUS_CANCELLED: i32 = "; n.toText protocol.statusCancelled; ";\n";
@@ -94,4 +96,4 @@ valid :: Protocol -> Bool = protocol =>
   && wireBytes protocol.layout == protocol.recordLen
   && protocol.inlineBytes == 16;
 render :: Protocol -> { rust : Text; } = protocol => if valid protocol then { rust = rustBindings protocol; } else { rust = "INVALID_FABRIC_OPERATION_SCHEMA"; };
-{ render = render; }
+{ render =; }

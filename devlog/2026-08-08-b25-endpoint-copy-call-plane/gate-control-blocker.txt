@@ -1,0 +1,26 @@
+Command: just sel4_gate_control_check
+Date: 2026-08-08
+
+First observation, exit non-zero:
+seL4 gate control check: sel4_spawn_plane: declares 31 required markers, expected 32. A gate that lost a marker lost coverage; update the pin here only alongside the gate change that justifies it
+
+First interpretation (WRONG, retained deliberately):
+Recorded as pre-existing registry drift unrelated to B25, with the call gate
+exercised separately via check_gate(..., 50): baseline accepted, 71 generated
+mutations rejected.
+
+Correction:
+The drift was caused by this change. B25 deleted the root's
+`SLIME_GRAPH channel handed parent= child= key= slot=` marker along with the
+move semantics that emitted it, and the spawn gate's assertion that a child
+receives its end at *its own* slot 0 was deleted with it rather than replaced.
+That is exactly the lost coverage the pin exists to catch; the pin was right and
+the reading of it was wrong.
+
+Resolution:
+`construct_child` now emits one line per endpoint grant it installs,
+`SLIME_GRAPH channel copied parent= child= key= side= slot=`, and the spawn gate
+asserts `slot=0` for console again. The pinned count is unchanged at 32.
+
+Second observation, exit 0:
+seL4 gate control check: 12 gates reject 535 mutated transcripts and layouts

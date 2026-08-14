@@ -14,11 +14,13 @@
 //! generation, so this exercises `SYS_SHARED_BUFFER_*`, the rights gates, the
 //! loan receiver binding, and reclamation through real task termination.
 
+use slime_proto::capability_transfer::OBJECT_KIND_SHARED_BUFFER_LOAN;
 use slime_proto::interface_schema::telemetry_stream::TYPE_TAG;
 use slime_proto::sample_descriptor::{
     CAPABILITY_KIND_LOAN, FLAG_LAST, FORMAT_VERSION, SAMPLE_DESCRIPTOR_MAGIC, WireSampleDescriptor,
 };
-use slime_rt::{ERR_BAD_CAP, ERR_SUCCESS, MAX_MSG};
+use slime_rt::{CapabilityDisposition, ERR_BAD_CAP, ERR_SUCCESS, MAX_MSG};
+include!(concat!(env!("OUT_DIR"), "/fabric_profile.rs"));
 
 slime_rt::entry!(main);
 
@@ -42,7 +44,11 @@ fn fail(reason: &[u8]) -> ! {
     slime_rt::exit(1)
 }
 
-fn main() {
+/// The generation declares this instance `autostart = false`, so the only copy
+/// that runs is the one its owner spawned with the factory and supervision
+/// handle this scenario needs. See `sample-receiver.rs` for why the previous
+/// `startup_arg == 0` guard could not distinguish the two.
+fn main(_startup_arg: u32) {
     // A payload larger than the control-message bound is the whole point.
     if PAYLOAD_LEN <= MAX_MSG as u64 {
         fail(b"payload must exceed MAX_MSG");
@@ -79,7 +85,7 @@ fn main() {
     slime_rt::debug_write(b"[sample-lender] payload written\n");
 
     // A loan requires an irreversibly sealed source, so sealing must precede it.
-    if slime_rt::shared_buffer_loan(buffer.slot, RECEIVER_SLOT, 0, PAYLOAD_LEN).is_ok() {
+    if slime_rt::shared_buffer_loan(buffer.slot, RECEIVER_SLOT, 0, PAYLOAD_LEN, false).is_ok() {
         fail(b"unsealed region was loanable");
     }
     slime_rt::debug_write(b"[sample-lender] unsealed loan denied\n");
@@ -94,7 +100,8 @@ fn main() {
     }
     slime_rt::debug_write(b"[sample-lender] seal is irreversible\n");
 
-    let loan = match slime_rt::shared_buffer_loan(buffer.slot, RECEIVER_SLOT, 0, PAYLOAD_LEN) {
+    let loan = match slime_rt::shared_buffer_loan(buffer.slot, RECEIVER_SLOT, 0, PAYLOAD_LEN, false)
+    {
         Ok(loan) => loan,
         Err(_) => fail(b"loan"),
     };
@@ -114,7 +121,15 @@ fn main() {
         sequence: 1,
         reserved: [0; 8],
     };
-    if slime_rt::send(PEER_SLOT, &descriptor.encode(), &[loan.slot]) != ERR_SUCCESS {
+    if slime_rt::capability_delegate(
+        PEER_SLOT,
+        loan.slot,
+        CapabilityDisposition::Move,
+        OBJECT_KIND_SHARED_BUFFER_LOAN,
+        1 << 9,
+        &descriptor.encode(),
+    ) != ERR_SUCCESS
+    {
         fail(b"send descriptor");
     }
     slime_rt::debug_write(b"[sample-lender] descriptor sent\n");
@@ -129,9 +144,7 @@ fn main() {
     let mut no_caps = [0u64; slime_rt::MAX_CAPS_PER_MSG];
     loop {
         match slime_rt::recv(PEER_SLOT, &mut done, &mut no_caps) {
-            slime_rt::ERR_WOULDBLOCK => {
-                slime_rt::wait(&[slime_rt::WaitSource::Endpoint(PEER_SLOT)])
-            }
+            slime_rt::ERR_WOULDBLOCK => slime_rt::yield_now(),
             n if n < 0 => fail(b"await receiver"),
             _ => break,
         }

@@ -23,5 +23,12 @@ SECTIONS
     .data : { *(.data) *(.data.*) }
     . = ALIGN(4096);
     .bss : { *(.bss) *(.bss.*) *(COMMON) }
+    /* This script serves the retired bare-metal AArch64 target only. Native
+     * seL4 components use rust-lld's default layout, and `slime-rt` rounds its
+     * `_end` address up to the configured granule before locating the IPC
+     * buffer and startup transfer window. Keep `_end` page-aligned here for the
+     * legacy loader's fixed layout; it is not the seL4 invariant. */
+    . = ALIGN(4096);
+    _end = .;
     /DISCARD/ : { *(.note*) *(.comment) *(.eh_frame) *(.eh_frame_hdr) }
 }

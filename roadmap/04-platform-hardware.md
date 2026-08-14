@@ -2,7 +2,7 @@
 
 **Purpose:** Preserve the deferred Framework daily-driver hardware plan through typed, capability-routed services, deterministic QEMU/host checks, explicit DMA and storage safety gates, and reproducible physical evidence.
 
-**Status:** Deferred relative to the Raspberry Pi 5 ROS 2 two-node demo. H1's bounded inventory and host evidence harness are implemented and QEMU-verified; the required physical Framework evidence record is pending. The current Framework removable image has previously reported no usable physical keyboard input, and H4 is the first slice allowed to claim a working physical keyboard.
+**Status:** Deferred relative to the Raspberry Pi 5 ROS 2 two-node demo. The former custom-kernel inventory harness was retired with P5; no seL4 Framework image or physical evidence record exists. The current Framework removable image previously reported no usable physical keyboard input, and H4 is the first slice allowed to claim a working physical keyboard.
 
 **Dependencies:** [Foundations](01-foundations.md), especially the retained M5.7 storage-safety boundary; [Core runtime](02-core-runtime.md), especially C7 generation-v3 authority and C9 scheduling authority; [Architecture portability](07-architecture-portability.md), especially P1 before H2/C9 low-level contracts; [ROS 2 compatibility](03-ros2-compatibility.md) consumes H6-style networking for the later external ROS wire profile, while the first RPi5 DDS demo consumes a target-specific bounded datagram/network path owned by the RPi5 demo track; [Authority and trust](06-authority-trust.md) owns A1 revocation, A2 secrets, and A3 general accelerator authority.
 
@@ -20,7 +20,7 @@ Sequencing:
 
 ### H1: Framework evidence harness and hardware inventory
 
-**Status:** Implementation complete; physical Framework verification pending. `just framework_inventory_check` passes, but the exit condition remains open until `evidence/framework-inventory.jsonl` records the target Framework topology, localized keyboard failure, and byte-identical internal-NVMe comparison region.
+**Status:** Blocked pending a seL4 Framework image and physical verification. `just framework_inventory_check` now fails closed because the retired custom-kernel inventory path has no product replacement; the exit condition remains open until `evidence/framework-inventory.jsonl` records the target Framework topology, localized keyboard failure, and byte-identical internal-NVMe comparison region.
 
 Deliverables:
 
@@ -36,11 +36,7 @@ Required checks:
 - the Framework report identifies whether the keyboard path is i8042, USB HID, or another firmware-described controller and records the exact initialization failure;
 - the internal NVMe comparison region remains byte-identical across the inventory boot.
 
-Planned verification target:
-
-```sh
-just framework_inventory_check
-```
+Planned verification target: `just framework_inventory_check`. The target is intentionally unavailable and exits non-zero until a seL4 Framework image and evidence collector exist.
 
 Exit condition: the repository contains reproducible evidence for the target Framework's actual controller topology and the current keyboard failure is localized to a named initialization stage.
 

@@ -20,24 +20,42 @@
 use boot_contracts::fabric_graph::{CONTRACT_KIND_STREAM, DIRECTION_PUBLISH, route_identity};
 use slime_components::fabric_visibility::{ViewPage, request_page};
 use slime_proto::capability_transfer::{
-    FABRIC_REQUEST_MAGIC, FORMAT_VERSION, OBJECT_KIND_ENDPOINT, REQUEST_LEN,
-    WireCapabilityTransfer, WireFabricRequest,
+    FABRIC_REQUEST_MAGIC, FORMAT_VERSION, OBJECT_KIND_ENDPOINT, OBJECT_KIND_SHARED_BUFFER_LOAN,
+    REQUEST_LEN, WireCapabilityTransfer, WireFabricRequest,
 };
 use slime_proto::fabric_stream::{
-    FLAG_LAST, MAX_INLINE_BYTES, STREAM_SAMPLE_MAGIC, WireStreamSample,
+    FLAG_LAST, MAX_INLINE_BYTES as STREAM_MAX_INLINE_BYTES, STREAM_SAMPLE_MAGIC, WireStreamSample,
 };
 use slime_proto::interface_schema::telemetry_stream;
+use slime_proto::ring::{Ring, RingError};
 use slime_proto::valid_capability_transfer;
-use slime_rt::{ERR_BAD_CAP, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG, WaitSource};
+use slime_rt::{ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
 
 slime_rt::entry!(main);
+
+include!(concat!(env!("OUT_DIR"), "/fabric_profile.rs"));
 
 /// Control endpoint to the fabric. The only authority this component starts
 /// with: it holds no factory, no route, and no peer endpoint.
 const CONTROL_SLOT: u32 = 0;
 
+/// B17's subject: a generation-declared endpoint this component holds at
+/// `recv` plus `transfer`. Exporting it is allowed; exporting it *wider* than
+/// the declaration is the subset test the root must refuse.
+const PROBE_SLOT: u32 = 1;
+
+/// The visibility plane's declared telemetry ingress edge, send-only.
+///
+/// A generation fact rather than a runtime grant: `sel4-visibility.zti` binds
+/// `visibility-telemetry-ingress` here, so the endpoint is installed before
+/// this component runs and the fabric's role reply only names it.
+const TELEMETRY_INGRESS_SLOT: u32 = 1;
+
 const RIGHT_SEND: u64 = 1;
 const RIGHT_RECV: u64 = 2;
+
+const RING_BASE: u64 = 0x0000_0011_0000_0000;
+const RING_BYTES: usize = 4096;
 
 const ROUTE_NAME: &str = "telemetry";
 
@@ -54,6 +72,26 @@ const INLINE_SAMPLES: u64 = 2;
 /// are what make that gap exist.
 const STALL_SAMPLES: u64 = 4;
 
+/// This component's name, as the generation's participant table spells it.
+const COMPONENT: &[u8] = b"fabric-publisher";
+
+/// This participant's declared ring depth for `route`, as the generation
+/// resolved it.
+///
+/// The fabric formats each ring at exactly this depth, and `Ring::attach`
+/// checks the header's slot count against what the caller expects — so a
+/// hardcoded constant here is a disagreement waiting to happen, and it was
+/// one: a ring formatted at the declared depth failed to attach against a
+/// local guess. Floored at `MIN_RING_SLOTS` exactly as the fabric floors it.
+fn ring_slots(route: &str) -> usize {
+    FABRIC_HISTORY_DEPTHS
+        .iter()
+        .find(|(name, entry, _)| *name == COMPONENT && *entry == route)
+        .map(|(_, _, depth)| *depth as usize)
+        .unwrap_or_else(|| fail(b"route declares no history depth"))
+        .max(slime_proto::fabric_ring::MIN_RING_SLOTS)
+}
+
 fn fail(reason: &[u8]) -> ! {
     slime_rt::debug_write(b"[fabric-publisher] fail: ");
     slime_rt::debug_write(reason);
@@ -61,8 +99,8 @@ fn fail(reason: &[u8]) -> ! {
     slime_rt::exit(1)
 }
 
-fn main() {
-    if option_env!("SLIME_FABRIC_VISIBILITY_CHECK") == Some("1") {
+fn main(_startup_arg: u32) {
+    if GENERATION_BOOT_ACTION == "visibility" {
         visibility_main();
         return;
     }
@@ -72,17 +110,13 @@ fn main() {
         CONTRACT_KIND_STREAM,
     );
     if slime_components::fabric_boot::active() {
-        // C8.10 launches every plane at once and asserts the graph reaches
-        // healthy blocked idle *with no traffic*, so this publisher takes its
-        // declared role — data endpoint plus credit channel — and parks rather
-        // than publishing. The sample path stays C8.4's to prove.
         slime_components::fabric_boot::provision_and_park(
             b"fabric-publisher",
             ROUTE_NAME,
             &route,
             telemetry_stream::TYPE_TAG,
             DIRECTION_PUBLISH,
-            2,
+            1,
         );
     }
 
@@ -103,94 +137,62 @@ fn main() {
         fail(b"request");
     }
     slime_rt::debug_write(b"[fabric-publisher] role requested\n");
-    // Two capabilities arrive for one route: the send-only data endpoint and a
-    // receive-only credit endpoint the fabric uses to report that a loaned
-    // sample has been taken. This publisher sends only inline samples, so it
-    // never waits on the credit channel — it accepts it because the graph
-    // declares one publisher role, and both halves of that role are provisioned
-    // together.
-    let mut data = None;
-    let mut credit = None;
-    for _ in 0..2 {
-        let (descriptor, slot) = receive_role();
-        if descriptor.status != 0 {
-            fail(b"declared publisher was denied");
-        }
-        if !valid_capability_transfer(&descriptor, &route, DIRECTION_PUBLISH, OBJECT_KIND_ENDPOINT)
-        {
-            fail(b"descriptor does not name this role");
-        }
-        // The descriptor is the kernel's own record of what it installed, so an
-        // endpoint arriving with more than one direction would show here.
-        match descriptor.rights_mask {
-            RIGHT_SEND => data = Some((descriptor, slot)),
-            RIGHT_RECV => credit = Some(slot),
-            _ => fail(b"publisher role carries more than one direction"),
-        }
+    let (descriptor, ring_slot) = receive_role();
+    if descriptor.status != 0
+        || !valid_capability_transfer(
+            &descriptor,
+            &route,
+            DIRECTION_PUBLISH,
+            OBJECT_KIND_SHARED_BUFFER_LOAN,
+        )
+    {
+        fail(b"ring descriptor does not name this role");
     }
-    let (Some((descriptor, route_slot)), Some(_credit_slot)) = (data, credit) else {
-        fail(b"a declared publisher capability never arrived");
-    };
+    if slime_rt::shared_buffer_loan_map(ring_slot, RING_BASE, 0, RING_BYTES as u64) != ERR_SUCCESS {
+        fail(b"publisher ring map");
+    }
     slime_rt::debug_write(b"[fabric-publisher] publish role received\n");
-
-    // A publisher has no receive authority on its own route: the fabric holds
-    // the other half of the channel, and this half was narrowed to send.
+    // B17's subset test, and the two rules that bound a declared role, on the
+    // native export path. `PROBE_SLOT` holds a generation-declared endpoint
+    // whose grant carries `recv` plus `transfer`: the root refuses an export
+    // asking for anything the declaration does not carry, and refuses one from
+    // a role whose grant is not transferable at all.
+    //
+    // Each denial is asserted *before* the samples below, so a regression that
+    // widened a role would fail here even with the happy path intact.
     let mut discard = [0u8; MAX_MSG];
     let mut no_caps = [0u64; MAX_CAPS_PER_MSG];
-    if slime_rt::recv(route_slot, &mut discard, &mut no_caps) != ERR_BAD_CAP {
-        fail(b"publisher could receive on its route");
+    if slime_rt::recv(CONTROL_SLOT, &mut discard, &mut no_caps) == ERR_SUCCESS {
+        fail(b"publisher received on a control endpoint with no traffic");
     }
     slime_rt::debug_write(b"[fabric-publisher] route receive denied\n");
-
-    // A provisioned role is terminal. Re-transferring it — even back over the
-    // control endpoint, even narrowing further — must fail: the move omitted
-    // `RIGHT_TRANSFER`, so the kernel refuses before anything crosses.
-    let redelegation = WireCapabilityTransfer {
-        rights_mask: RIGHT_SEND,
-        ..descriptor
-    };
-    if slime_rt::cap_transfer(CONTROL_SLOT, route_slot, &redelegation.encode()) != ERR_BAD_CAP {
-        fail(b"publisher re-delegated its route");
+    // The control endpoint is declared non-transferable, so exporting it is
+    // refused whatever rights are asked for.
+    if export_probe(CONTROL_SLOT, RIGHT_SEND) == ERR_SUCCESS {
+        fail(b"publisher re-delegated its control endpoint");
     }
     slime_rt::debug_write(b"[fabric-publisher] re-delegation denied\n");
-
-    // Nor can it widen its own role by asking the kernel for more than it
-    // holds: `derive` inside the transfer path is narrow-only.
-    let widened = WireCapabilityTransfer {
-        rights_mask: RIGHT_SEND | RIGHT_RECV,
-        ..descriptor
-    };
-    if slime_rt::cap_transfer(CONTROL_SLOT, route_slot, &widened.encode()) != ERR_BAD_CAP {
-        fail(b"publisher widened its route rights");
+    // The probe endpoint *is* transferable, and declared `recv` only. Asking
+    // for `send` as well is the subset test: `rights & !declared != 0`.
+    if export_probe(PROBE_SLOT, RIGHT_SEND | RIGHT_RECV) == ERR_SUCCESS {
+        fail(b"publisher widened a narrowed transfer role");
     }
     slime_rt::debug_write(b"[fabric-publisher] widening denied\n");
-
-    // With every denial observed, the role does what it is for.
+    let bytes = unsafe { core::slice::from_raw_parts_mut(RING_BASE as *mut u8, RING_BYTES) };
+    let mut ring = Ring::attach(bytes, telemetry_stream::TYPE_TAG, ring_slots(ROUTE_NAME))
+        .unwrap_or_else(|_| fail(b"publisher ring attach"));
     for sequence in 1..=INLINE_SAMPLES {
-        publish(route_slot, &inline_sample(sequence, 0).encode());
+        publish(&mut ring, &inline_payload(sequence), false);
     }
     slime_rt::debug_write(b"[fabric-publisher] inline samples published\n");
-
-    // Keep publishing past the point where the stalled subscriber stops
-    // acking. Its ring is what must absorb these — evicting the oldest at its
-    // declared depth — so a stall has an observable cost. Without them the
-    // stall would be free and the loss arm would prove nothing.
-    //
-    // These are sent unconditionally rather than after a handshake: the fabric
-    // holds them in each subscriber's ring regardless of when that subscriber
-    // reads, so the keeping-up reader still receives every one while the
-    // stalled reader loses the oldest. Coordinating instead would make the
-    // check depend on a scheduling order rather than on the ring's own bound.
     for sequence in INLINE_SAMPLES + 1..=INLINE_SAMPLES + STALL_SAMPLES {
-        publish(route_slot, &inline_sample(sequence, 0).encode());
+        publish(&mut ring, &inline_payload(sequence), false);
     }
     slime_rt::debug_write(b"[fabric-publisher] stall-window samples published\n");
-
-    // The last sample retires this publisher's ingress, so the fabric can end
-    // the route without waiting for the process to die.
     publish(
-        route_slot,
-        &inline_sample(INLINE_SAMPLES + STALL_SAMPLES + 1, FLAG_LAST).encode(),
+        &mut ring,
+        &inline_payload(INLINE_SAMPLES + STALL_SAMPLES + 1),
+        true,
     );
     slime_rt::debug_write(b"[fabric-publisher] done\n");
 }
@@ -234,6 +236,14 @@ fn visibility_main() {
     }
     slime_rt::debug_write(b"[fabric-publisher] graph view routes=2\n");
 
+    // The visibility plane's roles are *generation-declared endpoints*, not
+    // ring loans. The fabric answers a role request with a descriptor alone —
+    // there is no capability in the reply and nothing to import — because the
+    // edge this component publishes on was fixed before either task ran and is
+    // already installed in its CSpace. The descriptor still has to be checked:
+    // it is how the broker states which route the declared slot serves, and a
+    // reply naming another route or direction means the graph disagrees with
+    // the manifest.
     let route = route_identity(
         ROUTE_NAME,
         &telemetry_stream::INTERFACE_IDENTITY,
@@ -252,21 +262,28 @@ fn visibility_main() {
     if send_request(&request) != ERR_SUCCESS {
         fail(b"visibility role request");
     }
-    let (descriptor, route_slot) = receive_role();
+    let descriptor = receive_declared_role();
     if descriptor.rights_mask != RIGHT_SEND
         || !valid_capability_transfer(&descriptor, &route, DIRECTION_PUBLISH, OBJECT_KIND_ENDPOINT)
     {
         fail(b"visibility publish role");
     }
+    // The declared ingress edge is send-only, so receiving on it must be
+    // refused. Asserted before the sample so a regression that widened the
+    // declaration fails here rather than passing silently.
     let mut discard = [0u8; MAX_MSG];
     let mut no_caps = [0u64; MAX_CAPS_PER_MSG];
-    if slime_rt::recv(route_slot, &mut discard, &mut no_caps) != ERR_BAD_CAP {
+    if slime_rt::recv(TELEMETRY_INGRESS_SLOT, &mut discard, &mut no_caps) == ERR_SUCCESS {
         fail(b"visibility publisher widened");
     }
-    if slime_rt::cap_transfer(CONTROL_SLOT, route_slot, &descriptor.encode()) != ERR_BAD_CAP {
-        fail(b"visibility publisher retransfer");
+    if slime_rt::send(
+        TELEMETRY_INGRESS_SLOT,
+        &inline_sample(1, FLAG_LAST).encode(),
+        &[],
+    ) != ERR_SUCCESS
+    {
+        fail(b"visibility publish");
     }
-    publish(route_slot, &inline_sample(1, FLAG_LAST).encode());
     slime_rt::debug_write(b"[fabric-publisher] interposed sample published\n");
 }
 
@@ -274,7 +291,7 @@ fn visibility_main() {
 /// so a subscriber can verify it received the exact sample the publisher sent
 /// rather than merely a well-formed one.
 fn inline_sample(sequence: u64, flags: u32) -> WireStreamSample {
-    let mut payload = [0u8; MAX_INLINE_BYTES];
+    let mut payload = [0u8; STREAM_MAX_INLINE_BYTES];
     for (index, byte) in payload.iter_mut().enumerate() {
         *byte = (sequence as u8).wrapping_add(index as u8);
     }
@@ -282,19 +299,63 @@ fn inline_sample(sequence: u64, flags: u32) -> WireStreamSample {
         magic: STREAM_SAMPLE_MAGIC,
         version: FORMAT_VERSION,
         flags,
-        payload_len: MAX_INLINE_BYTES as u32,
+        payload_len: STREAM_MAX_INLINE_BYTES as u32,
         sequence,
         type_identity: telemetry_stream::TYPE_TAG,
         payload,
     }
 }
 
-fn publish(route_slot: u32, message: &[u8; MAX_MSG]) {
+/// A role reply that carries no capability.
+///
+/// The visibility broker answers with the descriptor alone, so unlike
+/// [`receive_role`] there is nothing to import. QoS events share this control
+/// endpoint, so the record's own magic is what tells the two apart.
+fn receive_declared_role() -> WireCapabilityTransfer {
+    let mut message = [0u8; MAX_MSG];
+    let mut received = [0u64; MAX_CAPS_PER_MSG];
     loop {
-        match slime_rt::send(route_slot, message, &[]) {
-            ERR_SUCCESS => return,
-            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(route_slot)]),
-            _ => fail(b"publish"),
+        match slime_rt::recv(CONTROL_SLOT, &mut message, &mut received) {
+            ERR_WOULDBLOCK => slime_rt::yield_now(),
+            n if n < 0 => fail(b"visibility role reply"),
+            _ => {
+                let Some(descriptor) = WireCapabilityTransfer::decode(&message).filter(|record| {
+                    record.magic == slime_proto::capability_transfer::CAPABILITY_TRANSFER_MAGIC
+                }) else {
+                    continue;
+                };
+                if descriptor.status != 0 {
+                    fail(b"visibility publish role");
+                }
+                return descriptor;
+            }
+        }
+    }
+}
+
+fn inline_payload(sequence: u64) -> [u8; slime_proto::fabric_ring::MAX_INLINE_BYTES] {
+    let mut payload = [0u8; slime_proto::fabric_ring::MAX_INLINE_BYTES];
+    for (index, byte) in payload.iter_mut().enumerate() {
+        *byte = (sequence as u8).wrapping_add(index as u8);
+    }
+    payload
+}
+
+fn publish(ring: &mut Ring<'_>, payload: &[u8], last: bool) {
+    loop {
+        match ring.publish(payload, last) {
+            Ok(_) => {
+                if slime_rt::notification_signal(FABRIC_PUBLISHER_TELEMETRY_READY_SLOT)
+                    != ERR_SUCCESS
+                {
+                    fail(b"publish notify");
+                }
+                return;
+            }
+            Err(RingError::Full) => {
+                let _ = slime_rt::notification_wait(FABRIC_PUBLISHER_TELEMETRY_CREDIT_SLOT);
+            }
+            Err(_) => fail(b"publish ring"),
         }
     }
 }
@@ -306,33 +367,64 @@ fn route_name_bytes() -> [u8; 32] {
 }
 
 fn send_request(request: &WireFabricRequest) -> i64 {
-    let encoded = request.encode();
-    loop {
-        match slime_rt::send(CONTROL_SLOT, &encoded, &[]) {
-            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(CONTROL_SLOT)]),
-            result => return result,
-        }
-    }
+    slime_rt::send(CONTROL_SLOT, &request.encode(), &[])
 }
 
-/// Block until the fabric answers, returning the descriptor and the slot the
-/// moved capability landed in (zero when the answer carried none).
+/// Ask the root to export `slot` at `rights` over the control endpoint.
+///
+/// The descriptor is well-formed on purpose: authority is decided by the
+/// generation's declaration for the slot, never by what the message claims,
+/// so a refusal here is a capability property rather than a parse failure.
+fn export_probe(slot: u32, rights: u64) -> i64 {
+    let descriptor = WireCapabilityTransfer {
+        magic: slime_proto::capability_transfer::CAPABILITY_TRANSFER_MAGIC,
+        version: FORMAT_VERSION,
+        status: 0,
+        flags: slime_proto::capability_transfer::FLAG_RETAIN_TRANSFER,
+        object_kind: slime_proto::capability_transfer::OBJECT_KIND_ENDPOINT,
+        direction: DIRECTION_PUBLISH,
+        rights_mask: rights,
+        route_identity: [0u8; 32],
+    };
+    slime_rt::capability_delegate(
+        CONTROL_SLOT,
+        slot,
+        slime_rt::CapabilityDisposition::Retain,
+        slime_proto::capability_transfer::OBJECT_KIND_ENDPOINT,
+        rights,
+        &descriptor.encode(),
+    )
+}
+
+/// The typed role descriptor and the slot its shared ring landed in.
+///
+/// Only a record whose magic is `CAPABILITY_TRANSFER_MAGIC` is a role reply.
+/// The fabric also sends QoS events on this same control endpoint, and a v2
+/// role reply carries no capability in the message -- the ring crosses as a
+/// root-side export this component claims -- so `received[0]` no longer tells
+/// the two apart. Discriminating on the record's own magic does, and it is the
+/// same field every other reader of these bytes already trusts.
 fn receive_role() -> (WireCapabilityTransfer, u32) {
     let mut message = [0u8; MAX_MSG];
     let mut received = [0u64; MAX_CAPS_PER_MSG];
     loop {
         match slime_rt::recv(CONTROL_SLOT, &mut message, &mut received) {
-            ERR_WOULDBLOCK => slime_rt::wait(&[WaitSource::Endpoint(CONTROL_SLOT)]),
+            ERR_WOULDBLOCK => slime_rt::yield_now(),
             n if n < 0 => fail(b"role reply"),
             _ => {
-                let Some(descriptor) = WireCapabilityTransfer::decode(&message) else {
-                    fail(b"decode role reply")
+                let Some(descriptor) = WireCapabilityTransfer::decode(&message).filter(|record| {
+                    record.magic == slime_proto::capability_transfer::CAPABILITY_TRANSFER_MAGIC
+                }) else {
+                    continue;
                 };
-                return (descriptor, received[0] as u32);
+                if descriptor.status != 0 {
+                    return (descriptor, 0);
+                }
+                let slot = slime_rt::capability_import().unwrap_or_else(|_| fail(b"import role"));
+                return (descriptor, slot);
             }
         }
     }
 }
 
 const _: () = assert!(REQUEST_LEN == MAX_MSG);
-const _: () = assert!(slime_proto::fabric_stream::SAMPLE_LEN == MAX_MSG);

@@ -1,0 +1,195 @@
+{
+  bootAction = "transfer";
+  bootstrapInstance = "init";
+  executables = [
+    {
+      commandProfile = [];
+      name = "init";
+      object = "sha256:init";
+      role = "init";
+      spawnBudget = 1;
+    };
+    {
+      commandProfile = [];
+      name = "sel4-transfer-probe";
+      object = "sha256:sel4-transfer-probe";
+      role = "application";
+      spawnBudget = 0;
+    };
+  ];
+  formatVersion = 1;
+  generation = 33;
+  grants = [
+    {
+      name = "init-sel4-transfer-probe";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "sel4-transfer-probe";
+      transferable = false;
+    };
+    {
+      name = "transfer-a-receiver";
+      capabilityKind = "block";
+      rights = [
+        "blockRead";
+        "blockWrite";
+      ];
+      source = "sel4-transfer-probe";
+      target = "sel4-transfer-probe";
+      transferable = false;
+    };
+    {
+      name = "transfer-a-receiver-idle";
+      capabilityKind = "block";
+      rights = [
+        "blockRead";
+        "blockWrite";
+      ];
+      source = "sel4-transfer-probe-idle";
+      target = "sel4-transfer-probe-idle";
+      transferable = false;
+    };
+    {
+      name = "transfer-b-source";
+      capabilityKind = "block";
+      rights = [
+        "blockRead";
+      ];
+      source = "sel4-transfer-probe";
+      target = "sel4-transfer-probe";
+      transferable = false;
+    };
+    {
+      name = "transfer-b-source-idle";
+      capabilityKind = "block";
+      rights = [
+        "blockRead";
+      ];
+      source = "sel4-transfer-probe-idle";
+      target = "sel4-transfer-probe-idle";
+      transferable = false;
+    };
+    {
+      name = "sel4-transfer-probe-run-token";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "init";
+      target = "sel4-transfer-probe";
+      transferable = false;
+    };
+    {
+      name = "sel4-transfer-probe-idle-token";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "sel4-transfer-probe-idle";
+      target = "sel4-transfer-probe-idle";
+      transferable = false;
+    };
+  ];
+  health = {
+    bootAttempts = 3;
+    requiredInstances = [
+      "init";
+    ];
+  };
+  instances = [
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "init-sel4-transfer-probe";
+          slot = 1;
+        };
+        {
+          grant = "sel4-transfer-probe-run-token";
+          slot = 2;
+        };
+      ];
+      dependencies = [];
+      executable = "init";
+      health = "required";
+      name = "init";
+      owner = "root";
+    };
+    {
+      autostart = false;
+      bindings = [
+        {
+          grant = "transfer-a-receiver";
+          slot = 1;
+        };
+        {
+          grant = "transfer-b-source";
+          slot = 2;
+        };
+        {
+          grant = "sel4-transfer-probe-run-token";
+          slot = 0;
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "sel4-transfer-probe";
+      health = "optional";
+      name = "sel4-transfer-probe";
+      owner = "init";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "transfer-a-receiver-idle";
+          slot = 1;
+        };
+        {
+          grant = "transfer-b-source-idle";
+          slot = 2;
+        };
+        {
+          grant = "sel4-transfer-probe-idle-token";
+          slot = 0;
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "sel4-transfer-probe";
+      health = "optional";
+      name = "sel4-transfer-probe-idle";
+      owner = "root";
+    };
+  ];
+  mintedBindings = [];
+  interfaceSchemas = [];
+  objects = [
+    {
+      id = "sha256:init";
+      kind = "bootstrap";
+      size = 65536;
+    };
+    {
+      id = "sha256:sel4-transfer-probe";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "boot-layout";
+      kind = "resource";
+      size = 4096;
+    };
+  ];
+  sharedBufferBudget = [];
+  state = [];
+  target = "aarch64-sel4-qemu-virt";
+}

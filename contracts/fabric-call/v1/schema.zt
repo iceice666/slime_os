@@ -21,6 +21,12 @@ kindRequest :: Int = 1;
 kindReply :: Int = 2;
 kindCancel :: Int = 3;
 kindTerminal :: Int = 4;
+-- Acknowledges a terminal, naming the request it settles. A broker offering a
+-- terminal over a native Endpoint cannot observe delivery -- `seL4_NBSend`
+-- reports nothing and a blocking send would deadlock against a client that is
+-- itself sending -- so the record is retired on the client's word, not the
+-- sender's guess.
+kindTerminalAck :: Int = 5;
 flagNonIdempotent :: Int = 1;
 flagSharedPayload :: Int = 2;
 knownFlags :: Int = 3;
@@ -78,31 +84,32 @@ timeLayout :: List WireField = {
   { name = "reserved"; width = 40; signed = false; byteArray = true; };
 };
 format ::= {
-  formatVersion = formatVersion;
-  recordLen = recordLen;
-  inlineBytes = inlineBytes;
-  magic = magic;
-  timeMagic = timeMagic;
-  kindRequest = kindRequest;
-  kindReply = kindReply;
-  kindCancel = kindCancel;
-  kindTerminal = kindTerminal;
-  flagNonIdempotent = flagNonIdempotent;
-  flagSharedPayload = flagSharedPayload;
-  knownFlags = knownFlags;
-  statusSuccess = statusSuccess;
-  statusRejected = statusRejected;
-  statusTimeout = statusTimeout;
-  statusCancelled = statusCancelled;
-  statusRetryExhausted = statusRetryExhausted;
-  statusMalformedReply = statusMalformedReply;
-  statusPeerDead = statusPeerDead;
-  statusDuplicate = statusDuplicate;
-  statusStale = statusStale;
+  formatVersion =;
+  recordLen =;
+  inlineBytes =;
+  magic =;
+  timeMagic =;
+  kindRequest =;
+  kindReply =;
+  kindCancel =;
+  kindTerminal =;
+  kindTerminalAck =;
+  flagNonIdempotent =;
+  flagSharedPayload =;
+  knownFlags =;
+  statusSuccess =;
+  statusRejected =;
+  statusTimeout =;
+  statusCancelled =;
+  statusRetryExhausted =;
+  statusMalformedReply =;
+  statusPeerDead =;
+  statusDuplicate =;
+  statusStale =;
   fields = schemaValue.fields ?? {;};
-  layout = layout;
+  layout =;
   timeFields = timeSchemaValue.fields ?? {;};
-  timeLayout = timeLayout;
+  timeLayout =;
 };
 main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }
   = caps => [

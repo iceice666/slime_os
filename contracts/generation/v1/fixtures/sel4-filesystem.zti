@@ -1,0 +1,217 @@
+{
+  bootAction = "filesystem";
+  bootstrapInstance = "init";
+  executables = [
+    {
+      commandProfile = [];
+      name = "init";
+      object = "sha256:init";
+      role = "init";
+      spawnBudget = 2;
+    };
+    {
+      commandProfile = [];
+      name = "sel4-filesystem-service";
+      object = "sha256:sel4-filesystem-service";
+      role = "service";
+      spawnBudget = 0;
+    };
+    {
+      commandProfile = [];
+      name = "directory-probe";
+      object = "sha256:directory-probe";
+      role = "application";
+      spawnBudget = 0;
+    };
+  ];
+  formatVersion = 1;
+  generation = 29;
+  grants = [
+    {
+      name = "init-sel4-filesystem-service";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "sel4-filesystem-service";
+      transferable = false;
+    };
+    {
+      name = "init-directory-probe";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "directory-probe";
+      transferable = false;
+    };
+    {
+      name = "filesystem-service-a-namespace";
+      capabilityKind = "directory";
+      rights = [
+        "directoryRead";
+        "directoryWrite";
+        "directoryList";
+        "directoryDerive";
+      ];
+      source = "sel4-filesystem-service";
+      target = "sel4-filesystem-service";
+      transferable = false;
+    };
+    {
+      name = "filesystem-service-b-device";
+      capabilityKind = "block";
+      rights = [
+        "blockRead";
+        "blockWrite";
+      ];
+      source = "sel4-filesystem-service";
+      target = "sel4-filesystem-service";
+      transferable = false;
+    };
+    {
+      name = "directory-probe-namespace";
+      capabilityKind = "directory";
+      rights = [
+        "directoryRead";
+        "directoryWrite";
+        "directoryList";
+        "directoryDerive";
+      ];
+      source = "directory-probe";
+      target = "directory-probe";
+      transferable = true;
+    };
+    {
+      name = "filesystem-rpc";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "directory-probe";
+      target = "sel4-filesystem-service";
+      transferable = true;
+    };
+    {
+      name = "filesystem-service-ready";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "sel4-filesystem-service";
+      target = "init";
+      transferable = false;
+    };
+  ];
+  health = {
+    bootAttempts = 3;
+    requiredInstances = [
+      "init";
+    ];
+  };
+  instances = [
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "init-directory-probe";
+          slot = 1;
+        };
+        {
+          grant = "init-sel4-filesystem-service";
+          slot = 2;
+        };
+        {
+          grant = "filesystem-service-ready";
+          slot = 3;
+        };
+      ];
+      dependencies = [];
+      executable = "init";
+      health = "required";
+      name = "init";
+      owner = "root";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "filesystem-rpc";
+          slot = 0;
+        };
+        {
+          grant = "filesystem-service-a-namespace";
+          slot = 1;
+        };
+        {
+          grant = "filesystem-service-b-device";
+          slot = 2;
+        };
+        {
+          grant = "filesystem-service-ready";
+          slot = 3;
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "sel4-filesystem-service";
+      health = "optional";
+      name = "sel4-filesystem-service";
+      owner = "init";
+    };
+    {
+      autostart = false;
+      bindings = [
+        {
+          grant = "filesystem-rpc";
+          slot = 0;
+        };
+        {
+          grant = "directory-probe-namespace";
+          slot = 1;
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "directory-probe";
+      health = "optional";
+      name = "directory-probe";
+      owner = "init";
+    };
+  ];
+  mintedBindings = [];
+  interfaceSchemas = [];
+  objects = [
+    {
+      id = "sha256:init";
+      kind = "bootstrap";
+      size = 65536;
+    };
+    {
+      id = "sha256:sel4-filesystem-service";
+      kind = "component";
+      size = 131072;
+    };
+    {
+      id = "sha256:directory-probe";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "boot-layout";
+      kind = "resource";
+      size = 4096;
+    };
+  ];
+  sharedBufferBudget = [];
+  state = [];
+  target = "aarch64-sel4-qemu-virt";
+}

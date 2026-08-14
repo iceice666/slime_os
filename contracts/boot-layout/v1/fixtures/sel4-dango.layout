@@ -1,0 +1,8 @@
+[layout] path=init slots=6 max=64
+[layout] 1 executable console 0x10008
+[layout] 2 executable dango 0x10008
+[layout] 3 executable spawn-service 0x10008
+[layout] 5 shared-buffer-factory - 0x1000000
+[layout] 6 executable sysinfo 0x10008
+[layout] 7 executable echo-agent 0x10008
+[layout] end

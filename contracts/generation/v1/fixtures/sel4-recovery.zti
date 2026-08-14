@@ -1,0 +1,195 @@
+{
+  bootAction = "recovery";
+  bootstrapInstance = "init";
+  executables = [
+    {
+      commandProfile = [];
+      name = "init";
+      object = "sha256:init";
+      role = "init";
+      spawnBudget = 1;
+    };
+    {
+      commandProfile = [];
+      name = "sel4-recovery-probe";
+      object = "sha256:sel4-recovery-probe";
+      role = "application";
+      spawnBudget = 0;
+    };
+  ];
+  formatVersion = 1;
+  generation = 26;
+  grants = [
+    {
+      name = "init-sel4-recovery-probe";
+      capabilityKind = "executable";
+      rights = [
+        "exec";
+        "spawn";
+      ];
+      source = "init";
+      target = "sel4-recovery-probe";
+      transferable = false;
+    };
+    {
+      name = "recovery-a-primary-device";
+      capabilityKind = "block";
+      rights = [
+        "blockRead";
+        "blockWrite";
+      ];
+      source = "sel4-recovery-probe";
+      target = "sel4-recovery-probe";
+      transferable = false;
+    };
+    {
+      name = "recovery-a-primary-device-idle";
+      capabilityKind = "block";
+      rights = [
+        "blockRead";
+        "blockWrite";
+      ];
+      source = "sel4-recovery-probe-idle";
+      target = "sel4-recovery-probe-idle";
+      transferable = false;
+    };
+    {
+      name = "recovery-b-guard-device";
+      capabilityKind = "block";
+      rights = [
+        "blockRead";
+      ];
+      source = "sel4-recovery-probe";
+      target = "sel4-recovery-probe";
+      transferable = false;
+    };
+    {
+      name = "recovery-b-guard-device-idle";
+      capabilityKind = "block";
+      rights = [
+        "blockRead";
+      ];
+      source = "sel4-recovery-probe-idle";
+      target = "sel4-recovery-probe-idle";
+      transferable = false;
+    };
+    {
+      name = "sel4-recovery-probe-run-token";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "init";
+      target = "sel4-recovery-probe";
+      transferable = false;
+    };
+    {
+      name = "sel4-recovery-probe-idle-token";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "sel4-recovery-probe-idle";
+      target = "sel4-recovery-probe-idle";
+      transferable = false;
+    };
+  ];
+  health = {
+    bootAttempts = 3;
+    requiredInstances = [
+      "init";
+    ];
+  };
+  instances = [
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "init-sel4-recovery-probe";
+          slot = 1;
+        };
+        {
+          grant = "sel4-recovery-probe-run-token";
+          slot = 2;
+        };
+      ];
+      dependencies = [];
+      executable = "init";
+      health = "required";
+      name = "init";
+      owner = "root";
+    };
+    {
+      autostart = false;
+      bindings = [
+        {
+          grant = "recovery-a-primary-device";
+          slot = 1;
+        };
+        {
+          grant = "recovery-b-guard-device";
+          slot = 2;
+        };
+        {
+          grant = "sel4-recovery-probe-run-token";
+          slot = 0;
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "sel4-recovery-probe";
+      health = "optional";
+      name = "sel4-recovery-probe";
+      owner = "init";
+    };
+    {
+      autostart = true;
+      bindings = [
+        {
+          grant = "recovery-a-primary-device-idle";
+          slot = 1;
+        };
+        {
+          grant = "recovery-b-guard-device-idle";
+          slot = 2;
+        };
+        {
+          grant = "sel4-recovery-probe-idle-token";
+          slot = 0;
+        };
+      ];
+      dependencies = [
+        "init";
+      ];
+      executable = "sel4-recovery-probe";
+      health = "optional";
+      name = "sel4-recovery-probe-idle";
+      owner = "root";
+    };
+  ];
+  mintedBindings = [];
+  interfaceSchemas = [];
+  objects = [
+    {
+      id = "sha256:init";
+      kind = "bootstrap";
+      size = 65536;
+    };
+    {
+      id = "sha256:sel4-recovery-probe";
+      kind = "component";
+      size = 65536;
+    };
+    {
+      id = "boot-layout";
+      kind = "resource";
+      size = 4096;
+    };
+  ];
+  sharedBufferBudget = [];
+  state = [];
+  target = "aarch64-sel4-qemu-virt";
+}

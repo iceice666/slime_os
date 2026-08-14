@@ -1,79 +1,38 @@
+/// Cargo names a JSON target specification by its file stem, so this is what
+/// `TARGET` reads as for `aarch64-sel4-minimal.json`.
+const SEL4_TARGET: &str = "aarch64-sel4-minimal";
+
 fn main() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let target = std::env::var("TARGET").expect("TARGET");
+    // The seL4 target deliberately has no Slime linker script. A component
+    // there is an ordinary seL4 task loaded by `slime-root`'s ELF loader at
+    // whatever address it links to, not an image the retired kernel re-based
+    // onto a fixed component load base. `sel4-runtime-common` also expects the
+    // default layout — its `declare_stack!` and the `_end`-relative IPC buffer
+    // and transfer window all come from rust-lld's own script.
     let linker_script = match target.as_str() {
-        "x86_64-unknown-none" => "component.ld",
-        "aarch64-unknown-none" => "component-aarch64.ld",
+        "x86_64-unknown-none" => Some("component.ld"),
+        "aarch64-unknown-none" => Some("component-aarch64.ld"),
+        SEL4_TARGET => None,
         _ => panic!("unsupported component target {}", target),
     };
-    println!("cargo:rustc-link-arg=-T{manifest_dir}/../{linker_script}");
-    println!("cargo:rerun-if-changed={manifest_dir}/../{linker_script}");
+    if let Some(linker_script) = linker_script {
+        println!("cargo:rustc-link-arg=-T{manifest_dir}/../{linker_script}");
+        println!("cargo:rerun-if-changed={manifest_dir}/../{linker_script}");
+    }
     println!("cargo:rerun-if-env-changed=SLIME_TARGET_PROFILE");
     match std::env::var("SLIME_TARGET_PROFILE") {
         Ok(profile) => println!("cargo:rustc-env=SLIME_TARGET_PROFILE={profile}"),
-        Err(_) if target == "aarch64-unknown-none" => {
+        Err(_) if target == "aarch64-unknown-none" || target == SEL4_TARGET => {
             panic!("SLIME_TARGET_PROFILE is required for AArch64 component builds")
         }
         Err(_) => {}
     }
-    println!("cargo:rerun-if-env-changed=SLIME_GENERATION_NUMBER");
-    println!("cargo:rerun-if-env-changed=SLIME_RECOVERY_INTERRUPT");
-    println!("cargo:rerun-if-env-changed=SLIME_RECOVERY_IMAGE");
-    println!("cargo:rerun-if-env-changed=SLIME_DANGO_CHECK");
-    println!("cargo:rerun-if-env-changed=SLIME_GENERATION_CMD_CHECK");
-    println!("cargo:rerun-if-env-changed=SLIME_POWERBOX_CHECK");
-    println!("cargo:rerun-if-env-changed=SLIME_SAMPLE_PLANE_CHECK");
-    println!("cargo:rerun-if-env-changed=SLIME_FABRIC_AUTHORITY_CHECK");
-    println!("cargo:rerun-if-env-changed=SLIME_FABRIC_STREAM_CHECK");
-    println!("cargo:rerun-if-env-changed=SLIME_FABRIC_QOS_CHECK");
-    println!("cargo:rerun-if-env-changed=SLIME_FABRIC_CALL_CHECK");
-    println!("cargo:rerun-if-env-changed=SLIME_FABRIC_OPERATION_CHECK");
-    println!("cargo:rerun-if-env-changed=SLIME_FABRIC_VISIBILITY_CHECK");
-    println!("cargo:rerun-if-env-changed=SLIME_FABRIC_BOOT_CHECK");
-    println!("cargo:rerun-if-env-changed=SLIME_DATA_FABRIC_PROFILE");
     println!("cargo:rerun-if-env-changed=SLIME_BOOT_LAYOUT");
     println!("cargo:rerun-if-env-changed=SLIME_FABRIC_PROXY_EARLY_EXIT");
     println!("cargo:rerun-if-env-changed=SLIME_GENERATION_CANDIDATE");
     println!("cargo:rerun-if-env-changed=SLIME_GENERATION_CMD_SCENARIO");
-    if let Ok(number) = std::env::var("SLIME_GENERATION_NUMBER") {
-        println!("cargo:rustc-env=SLIME_GENERATION_NUMBER={number}");
-    }
-    if let Ok(value) = std::env::var("SLIME_RECOVERY_IMAGE") {
-        println!("cargo:rustc-env=SLIME_RECOVERY_IMAGE={value}");
-    }
-    if let Ok(value) = std::env::var("SLIME_RECOVERY_INTERRUPT") {
-        println!("cargo:rustc-env=SLIME_RECOVERY_INTERRUPT={value}");
-    }
-    if let Ok(value) = std::env::var("SLIME_DANGO_CHECK") {
-        println!("cargo:rustc-env=SLIME_DANGO_CHECK={value}");
-    }
-    if let Ok(value) = std::env::var("SLIME_GENERATION_CMD_CHECK") {
-        println!("cargo:rustc-env=SLIME_GENERATION_CMD_CHECK={value}");
-    }
-    if let Ok(value) = std::env::var("SLIME_POWERBOX_CHECK") {
-        println!("cargo:rustc-env=SLIME_POWERBOX_CHECK={value}");
-    }
-    if let Ok(value) = std::env::var("SLIME_SAMPLE_PLANE_CHECK") {
-        println!("cargo:rustc-env=SLIME_SAMPLE_PLANE_CHECK={value}");
-    }
-    if let Ok(value) = std::env::var("SLIME_FABRIC_AUTHORITY_CHECK") {
-        println!("cargo:rustc-env=SLIME_FABRIC_AUTHORITY_CHECK={value}");
-    }
-    if let Ok(value) = std::env::var("SLIME_FABRIC_STREAM_CHECK") {
-        println!("cargo:rustc-env=SLIME_FABRIC_STREAM_CHECK={value}");
-    }
-    if let Ok(value) = std::env::var("SLIME_FABRIC_QOS_CHECK") {
-        println!("cargo:rustc-env=SLIME_FABRIC_QOS_CHECK={value}");
-    }
-    if let Ok(value) = std::env::var("SLIME_FABRIC_CALL_CHECK") {
-        println!("cargo:rustc-env=SLIME_FABRIC_CALL_CHECK={value}");
-    }
-    if let Ok(value) = std::env::var("SLIME_FABRIC_VISIBILITY_CHECK") {
-        println!("cargo:rustc-env=SLIME_FABRIC_VISIBILITY_CHECK={value}");
-    }
-    if let Ok(value) = std::env::var("SLIME_FABRIC_BOOT_CHECK") {
-        println!("cargo:rustc-env=SLIME_FABRIC_BOOT_CHECK={value}");
-    }
     if let Ok(value) = std::env::var("SLIME_FABRIC_PROXY_EARLY_EXIT") {
         println!("cargo:rustc-env=SLIME_FABRIC_PROXY_EARLY_EXIT={value}");
     }
@@ -107,27 +66,89 @@ fn generate_boot_layout(manifest_dir: &str) {
 }
 
 fn generate_command_profile(manifest_dir: &str) {
-    let manifest_path =
-        std::path::Path::new(manifest_dir).join("../../contracts/generation/v1/fixtures/valid.zti");
+    println!("cargo:rerun-if-env-changed=SLIME_COMMAND_PROFILE_MANIFEST");
+    let manifest_name =
+        std::env::var("SLIME_COMMAND_PROFILE_MANIFEST").unwrap_or_else(|_| "valid.zti".to_string());
+    let manifest_path = std::path::Path::new(manifest_dir)
+        .join("../../contracts/generation/v1/fixtures")
+        .join(&manifest_name);
     println!("cargo:rerun-if-changed={}", manifest_path.display());
     let manifest = std::fs::read_to_string(&manifest_path).expect("read generation manifest");
-    let dango = component_block(&manifest, "dango").expect("dango component");
-    let profile = field_list(dango, "commandProfile").expect("dango command profile");
-    let client_budget = field_int(dango, "spawnBudget").expect("dango spawn budget");
-    let entries = profile
+    let Some(profile_owner) = command_profile_executable(&manifest) else {
+        let client_budget = executable_block(&manifest, "spawn-service")
+            .and_then(|service| field_int(service, "spawnBudget"))
+            .unwrap_or(0);
+        let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR"));
+        std::fs::write(
+            out.join("command_profile.rs"),
+            format!("pub const CLIENT_BUDGET: usize = {client_budget};\npub const RPC_SLOT: u32 = u32::MAX;\npub const SHARED_BUFFER_FACTORY_SLOT: u32 = u32::MAX;\npub const COMMAND_PROFILE: &[(&[u8], &[u8], u32)] = &[];\n"),
+        )
+        .expect("write service-only command profile");
+        return;
+    };
+    let profile = field_list(profile_owner, "commandProfile").expect("command profile");
+    let client_budget = field_int(profile_owner, "spawnBudget").expect("command spawn budget");
+    let profile_executable = field(profile_owner, "name").expect("command profile executable name");
+    let profile_instance =
+        instance_for_executable(&manifest, profile_executable).expect("command profile instance");
+    let profile_instance_name =
+        field(profile_instance, "name").expect("command profile instance name");
+    let targets = profile
         .iter()
         .map(|command| {
-            let target = if *command == "echo" {
+            if *command == "echo" {
                 "echo-agent"
             } else {
                 command
-            };
-            let slot = component_slot(&manifest, target).expect("profile executable component");
-            let block = component_block(&manifest, target).expect("profile executable component");
-            let object = field(block, "object").expect("component object");
+            }
+        })
+        .collect::<Vec<_>>();
+    let launcher = executable_launcher(&manifest, &targets).expect("command launcher instance");
+    // `spawn-service.rs` is the only consumer of this file and resolves both
+    // slots in its own CSpace, so they must come from whichever instance runs
+    // it. Where the spawn service owns the command profile that is the profile
+    // instance; where a client owns one, the spawn service is the launcher
+    // serving it. Deriving from the wrong side yields another instance's slot
+    // numbering, which agrees only while the two share one layout.
+    // Identify the consumer by the executable it runs, not by its role in the
+    // profile: `launcher` is whoever *sources* the executable grants, which may
+    // be the instance that spawned the service rather than the service itself.
+    let consumer = manifest
+        .split("\n    {\n")
+        .skip(1)
+        .find(|block| field(block, "executable") == Some("spawn-service"))
+        .and_then(|block| field(block, "name"))
+        .expect("spawn-service command-profile consumer");
+    let entries = profile
+        .iter()
+        .zip(targets.iter())
+        .map(|(command, target)| {
+            let grant =
+                executable_grant(&manifest, launcher, target).expect("profile executable grant");
+            // The consumer's binding, not the launcher's: `spawn-service.rs`
+            // resolves these in its own CSpace, and the instance that sources
+            // the grant may be whoever spawned it.
+            let slot = binding_slot(&manifest, consumer, grant)
+                .expect("consumer profile executable binding");
+            let block = executable_block(&manifest, target).expect("profile executable");
+            let object = field(block, "object").expect("executable object");
             (*command, object, slot)
         })
         .collect::<Vec<_>>();
+    let peer = if consumer == profile_instance_name {
+        launcher
+    } else {
+        profile_instance_name
+    };
+    // A runtime-minted channel declares the consumer's slot as a
+    // `mintedBindings` entry rather than a grant binding: the edge and slot are
+    // fixed, only the object waits for its minter. Either spelling answers the
+    // same question, so both are consulted.
+    let rpc_slot = related_binding_slot(&manifest, consumer, peer, &["send", "recv"])
+        .or_else(|| minted_binding_slot(&manifest, consumer, &["send", "recv"]))
+        .expect("command RPC binding");
+    let shared_buffer_factory_slot = binding_with_right_slot(&manifest, consumer, "bufferCreate")
+        .expect("command shared-buffer binding");
     let generated = entries
         .iter()
         .map(|(name, object, slot)| format!("    (b\"{name}\", b\"{object}\", {slot}),\n"))
@@ -136,7 +157,7 @@ fn generate_command_profile(manifest_dir: &str) {
     std::fs::write(
         out.join("command_profile.rs"),
         format!(
-            "pub const CLIENT_BUDGET: usize = {client_budget};\npub const COMMAND_PROFILE: &[(&[u8], &[u8], u32)] = &[\n{generated}];\n"
+            "pub const CLIENT_BUDGET: usize = {client_budget};\npub const RPC_SLOT: u32 = {rpc_slot};\npub const SHARED_BUFFER_FACTORY_SLOT: u32 = {shared_buffer_factory_slot};\npub const COMMAND_PROFILE: &[(&[u8], &[u8], u32)] = &[\n{generated}];\n"
         ),
     )
     .expect("write command profile");
@@ -175,29 +196,115 @@ fn generate_fabric_profile(manifest_dir: &str) {
     std::fs::write(out.join("fabric_profile.rs"), profile).expect("write fabric profile");
 }
 
-fn component_slot(manifest: &str, wanted: &str) -> Option<usize> {
-    let present = manifest
-        .split("    {")
-        .skip(1)
-        .filter(|block| field(block, "name").is_some() && field(block, "object").is_some())
-        .any(|block| field(block, "name") == Some(wanted));
-    if !present {
-        return None;
-    }
-    match wanted {
-        "sysinfo" => Some(1),
-        "echo-agent" => Some(2),
-        _ => None,
-    }
+fn executable_grant<'a>(manifest: &'a str, holder: &str, wanted: &str) -> Option<&'a str> {
+    manifest.split("\n    {\n").skip(1).find_map(|block| {
+        let name = field(block, "name")?;
+        let source = field(block, "source")?;
+        let target = field(block, "target")?;
+        let rights = field_list(block, "rights")?;
+        (source == holder && target == wanted && rights.contains(&"exec")).then_some(name)
+    })
 }
 
-fn component_block<'a>(manifest: &'a str, wanted: &str) -> Option<&'a str> {
+#[cfg(test)]
+fn executable_slot(manifest: &str, holder: &str, wanted: &str) -> Option<usize> {
+    binding_slot(
+        manifest,
+        holder,
+        executable_grant(manifest, holder, wanted)?,
+    )
+}
+
+fn binding_slot(manifest: &str, holder: &str, grant: &str) -> Option<usize> {
+    let instance = instance_block(manifest, holder)?;
+    instance.split("\n        {\n").skip(1).find_map(|block| {
+        (field(block, "grant")? == grant)
+            .then(|| field_int(block, "slot"))
+            .flatten()
+    })
+}
+
+fn instance_for_executable<'a>(manifest: &'a str, executable: &str) -> Option<&'a str> {
+    manifest.split("\n    {\n").skip(1).find(|block| {
+        field(block, "executable") == Some(executable) && field(block, "name").is_some()
+    })
+}
+
+fn executable_launcher<'a>(manifest: &'a str, targets: &[&str]) -> Option<&'a str> {
+    manifest.split("\n    {\n").skip(1).find_map(|block| {
+        let name = field(block, "name")?;
+        field(block, "executable")?;
+        targets
+            .iter()
+            .all(|target| executable_grant(manifest, name, target).is_some())
+            .then_some(name)
+    })
+}
+
+fn related_binding_slot(
+    manifest: &str,
+    holder: &str,
+    peer: &str,
+    rights: &[&str],
+) -> Option<usize> {
+    manifest.split("\n    {\n").skip(1).find_map(|block| {
+        let name = field(block, "name")?;
+        let source = field(block, "source")?;
+        let target = field(block, "target")?;
+        let declared = field_list(block, "rights")?;
+        ((source == holder && target == peer || source == peer && target == holder)
+            && rights.iter().all(|right| declared.contains(right)))
+        .then(|| binding_slot(manifest, holder, name))
+        .flatten()
+    })
+}
+
+/// The slot a `mintedBindings` entry declares for `holder`, for a capability
+/// carrying every one of `rights`. The object is created by the owner at
+/// runtime; the destination slot is fixed here.
+fn minted_binding_slot(manifest: &str, holder: &str, rights: &[&str]) -> Option<usize> {
+    let section = manifest.split("mintedBindings = [").nth(1)?;
+    let section = section.split("\n  ];").next()?;
+    section.split("\n    {\n").skip(1).find_map(|block| {
+        let declared = field_list(block, "rights")?;
+        (field(block, "holder")? == holder && rights.iter().all(|r| declared.contains(r)))
+            .then(|| field_int(block, "slot"))
+            .flatten()
+    })
+}
+
+fn binding_with_right_slot(manifest: &str, holder: &str, right: &str) -> Option<usize> {
+    manifest.split("\n    {\n").skip(1).find_map(|block| {
+        let name = field(block, "name")?;
+        field_list(block, "rights")?
+            .contains(&right)
+            .then(|| binding_slot(manifest, holder, name))
+            .flatten()
+    })
+}
+
+fn executable_block<'a>(manifest: &'a str, wanted: &str) -> Option<&'a str> {
     manifest
         .split("    {")
         .skip(1)
         .find(|block| field(block, "name") == Some(wanted) && field(block, "object").is_some())
 }
 
+fn command_profile_executable(manifest: &str) -> Option<&str> {
+    manifest.split("\n    {\n").skip(1).find(|block| {
+        field(block, "object").is_some()
+            && field_list(block, "commandProfile").is_some_and(|profile| !profile.is_empty())
+    })
+}
+
+fn instance_block<'a>(manifest: &'a str, wanted: &str) -> Option<&'a str> {
+    manifest.split("\n    {\n").skip(1).find(|block| {
+        field(block, "name") == Some(wanted)
+            && block
+                .lines()
+                .any(|line| line.trim_start().starts_with("executable = \""))
+    })
+}
 fn field<'a>(block: &'a str, key: &str) -> Option<&'a str> {
     let prefix = format!("{key} = \"");
     let value = block
@@ -221,8 +328,58 @@ fn field_int(block: &str, key: &str) -> Option<usize> {
 
 fn field_list<'a>(block: &'a str, key: &str) -> Option<Vec<&'a str>> {
     let prefix = format!("{key} = [");
-    let value = block
-        .lines()
-        .find(|line| line.trim_start().starts_with(&prefix))?;
+    let start = block.find(&prefix)? + prefix.len();
+    let value = block.get(start..)?.split_once("];")?.0;
     Some(value.split('"').skip(1).step_by(2).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::executable_slot;
+
+    #[test]
+    fn command_slots_follow_explicit_instance_bindings() {
+        let manifest = r#"
+    { name = "sysinfo"; object = "sha256:sysinfo"; }
+    { name = "echo-agent"; object = "sha256:echo"; }
+    {
+      name = "spawn-service";
+      executable = "spawn-service";
+      bindings = [
+        { grant = "z-sysinfo"; slot = 7; };
+        { grant = "a-echo"; slot = 3; };
+      ];
+    };
+    { name = "z-sysinfo"; source = "spawn-service"; target = "sysinfo"; rights = ["exec"; "spawn";]; };
+    { name = "a-echo"; source = "spawn-service"; target = "echo-agent"; rights = ["exec"; "spawn";]; };
+"#;
+        assert_eq!(
+            executable_slot(manifest, "spawn-service", "echo-agent"),
+            Some(3)
+        );
+        assert_eq!(
+            executable_slot(manifest, "spawn-service", "sysinfo"),
+            Some(7)
+        );
+    }
+
+    #[test]
+    fn grant_declaration_order_does_not_change_command_slots() {
+        let manifest = r#"
+    { name = "custom-command"; object = "sha256:custom"; }
+    {
+      name = "spawn-service";
+      executable = "spawn-service";
+      bindings = [
+        { grant = "b-command"; slot = 11; };
+      ];
+    };
+    { name = "b-command"; source = "spawn-service"; target = "custom-command"; rights = ["exec"; "spawn";]; };
+"#;
+        assert_eq!(
+            executable_slot(manifest, "spawn-service", "custom-command"),
+            Some(11)
+        );
+        assert_eq!(executable_slot(manifest, "spawn-service", "missing"), None);
+    }
 }
