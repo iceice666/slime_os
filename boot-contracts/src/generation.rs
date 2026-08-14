@@ -11,8 +11,13 @@ include!("generated/generation.rs");
 const MAX_TASK_CAPS: usize = 128;
 const PLAN_NONE: usize = u32::MAX as usize;
 const GRANT_POLICY_ONLY: u32 = 1;
-/// A send/recv grant whose channel object its source mints at runtime.
-const GRANT_MINTED: u32 = 1;
+/// Grant flags. No bit is defined: `GRANT_MINTED` named a send/recv grant whose
+/// object its source created at runtime, which the native cutover made
+/// impossible — an endpoint is a generation-owned seL4 Endpoint the root
+/// materializes and installs into both declared ends — so B50 deleted the
+/// concept rather than leaving a flag nothing can set. An unknown bit is still
+/// refused, so a producer that grew one fails admission.
+const GRANT_FLAGS_KNOWN: u32 = 0;
 
 /// Kernel-object kind discriminant for a CNode, matching `KERNEL_OBJECT_CNODE`
 /// in `scripts/build/build-generation.py`.
@@ -297,10 +302,6 @@ pub struct Grant<'a> {
     pub target: GrantEndpoint,
     pub rights: Rights,
     pub transferable: bool,
-    /// The channel object is created at runtime by `source` rather than
-    /// pre-created by the root at admission. The edge, its rights, and both
-    /// endpoints are still declared; only the object is deferred.
-    pub minted: bool,
     pub capability_kind: CapabilityKind,
 }
 
@@ -1033,7 +1034,7 @@ impl<'a> Generation<'a> {
         let offset = self.grant_offset + index * GRANT_LEN;
         let rights = u64_at(self.bytes, offset + 12)?;
         let flags = u32_at(self.bytes, offset + 24)?;
-        if flags & !GRANT_MINTED != 0 {
+        if flags & !GRANT_FLAGS_KNOWN != 0 {
             return Err(DecodeError::UnknownRequiredFlags);
         }
         let capability_kind = CapabilityKind::decode(u32_at(self.bytes, offset + 28)?)?;
@@ -1047,7 +1048,6 @@ impl<'a> Generation<'a> {
             },
             rights,
             transferable: bool_at(self.bytes, offset + 20)?,
-            minted: flags & GRANT_MINTED != 0,
             capability_kind,
         })
     }
@@ -1956,15 +1956,10 @@ impl<'a> Generation<'a> {
         }
         for (index, count) in materialized.iter().enumerate().take(self.grant_count) {
             let grant = self.grant(index)?;
-            // A minted grant's object does not exist at admission, so the plan
-            // carries no capability for it. Its two `MintedBinding` entries
-            // state where each end lands and under what ceiling instead.
-            if grant.minted {
-                if *count != 0 {
-                    return Err(DecodeError::BadBinding);
-                }
-                continue;
-            }
+            // Every declared grant names a concrete object the plan carries a
+            // capability for. A `minted` grant used to be the exception —
+            // object identity deferred to a runtime minter — which the native
+            // cutover made impossible for the only kind that used it (B50).
             let policy_only = (0..self.cap_binding_count).any(|binding| {
                 self.cap_binding(binding).is_ok_and(|binding| {
                     binding.grant == index && binding.flags & GRANT_POLICY_ONLY != 0
@@ -2251,12 +2246,6 @@ impl<'a> Generation<'a> {
     }
 
     fn grant_requires_instance_binding(&self, grant: Grant<'_>, instance: usize) -> bool {
-        // A minted grant's object is created at runtime, so neither endpoint
-        // holds a pre-created end to bind. Its `MintedBinding` entries state
-        // where each side lands.
-        if grant.minted {
-            return false;
-        }
         match grant.capability_kind {
             CapabilityKind::Executable => grant.source == GrantEndpoint::Instance(instance),
             CapabilityKind::Endpoint => {

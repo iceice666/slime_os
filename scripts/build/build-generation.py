@@ -2387,8 +2387,12 @@ PLAN_NONE = 0xFFFFFFFF
 # the service loop, so this is a ceiling as well as a default.
 DEFAULT_CHILD_PRIORITY = 254
 GRANT_POLICY_ONLY = 1
-# A send/recv grant whose channel object its source creates at runtime.
-GRANT_MINTED = 1
+# Grant flags. No bit is defined: `GRANT_MINTED` named a send/recv grant whose
+# object its source created at runtime, which the native cutover made
+# impossible — an endpoint is a generation-owned seL4 Endpoint the root
+# materializes — so B50 deleted the concept rather than leaving a flag nothing
+# can set.
+GRANT_FLAGS_NONE = 0
 # Endpoint and notification slots are relative to distinct 31-entry child
 # CSpace regions. The receiver slot occupies the last CSpace entry, so 31 is a
 # count, never a legal relative slot.
@@ -2694,8 +2698,7 @@ def build_sel4_plan(
             "endpoint": 2 + sum(
                 1
                 for grant in grants
-                if not grant.get("minted")
-                and grant["capabilityKind"] == "endpoint"
+                if grant["capabilityKind"] == "endpoint"
                 and grant["source"] == name
             ),
             # Each static notification object is owned once, by its declared
@@ -2833,11 +2836,6 @@ def build_sel4_plan(
             ),
             None,
         )
-        if grant.get("minted"):
-            # The object does not exist at admission, so there is no capability
-            # to place in the plan. The `mintedBindings` entries naming this
-            # edge's two slots are what the plan carries instead.
-            continue
         if holder is None:
             fail(f"authority-bearing grant {grant['name']} has no concrete binding")
         source_process = process_for_instance[holder]
@@ -3124,13 +3122,8 @@ def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes |
             target = instance_index.get(grant["target"])
             if target is None:
                 fail(f"grant target missing: {grant['name']}")
-            # A minted grant defers placement until its owner spawns the
-            # holder, but the native Endpoint object itself is still a
-            # generation-owned kernel object. `mintedBindings` state the
-            # child-side slot and ceiling; the root installs the declared
-            # endpoint there when the child is constructed.
-            if grant.get("minted"):
-                continue
+            # An endpoint's two ends are both declared, so the source binds it
+            # as well as the target. Every other kind lands only in its target.
             if grant["capabilityKind"] == "endpoint":
                 expected_bindings[grant["source"]].add(grant["name"])
             expected_bindings[grant["target"]].add(grant["name"])
@@ -3321,7 +3314,7 @@ def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes |
             target,
             rights,
             int(bool(grant["transferable"])),
-            GRANT_MINTED if grant.get("minted") else 0,
+            GRANT_FLAGS_NONE,
             CAPABILITY_KIND[grant["capabilityKind"]],
         )
     for state in states:

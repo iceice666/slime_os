@@ -238,7 +238,11 @@ def shared_buffer_holders(object_rows: list[tuple[str, int, bytes]]) -> set[byte
         previous = identity
     return holders
 GRANT_POLICY_ONLY = 1
-GRANT_MINTED = 1
+# Grant flags. No bit is defined: `GRANT_MINTED` named a send/recv grant whose
+# object its source created at runtime, which the native cutover made
+# impossible — an endpoint is a generation-owned seL4 Endpoint the root
+# materializes — so B50 deleted the concept. An unknown bit is still refused.
+GRANT_FLAGS_KNOWN = 0
 BOOT_ACTIONS = {
     "product", "boot", "call", "channel", "crossing", "dango", "directory",
     "filesystem", "generation", "input", "loan", "operation", "powerbox",
@@ -366,14 +370,14 @@ def check_generation(data: bytes, expected_identity: bytes | None = None) -> dic
     previous_grant = None
     for index in range(grants):
         name_offset, source, destination, rights, transferable, grant_flags, capability_kind = GENERATION_GRANT.unpack_from(data, grant_offset + index * GENERATION_GRANT.size)
-        require(grant_flags & ~GRANT_MINTED == 0, "UnknownGrantFlags")
+        require(grant_flags & ~GRANT_FLAGS_KNOWN == 0, "UnknownGrantFlags")
         name = read_string(data, strings_offset, strings_len, name_offset)
         key = (name, source, destination)
         require(previous_grant is None or key > previous_grant, "NonCanonicalGrants")
         require(source < instances and rights and not rights & ~RIGHT_ALL and transferable in (0, 1) and bool(rights & RIGHT_TRANSFER) == bool(transferable), "BadGrant")
         require(capability_rights_valid(capability_kind, rights), "BadGrantKind")
         require(destination < (executables if capability_kind == CAPABILITY_EXECUTABLE else instances), "BadGrant")
-        grant_rows.append((name, source, destination, rights, bool(grant_flags & GRANT_MINTED), capability_kind))
+        grant_rows.append((name, source, destination, rights, capability_kind))
         previous_grant = key
     previous_state = ""
     for index in range(states):
@@ -479,12 +483,12 @@ def check_generation(data: bytes, expected_identity: bytes | None = None) -> dic
             required_services.add(SERVICE_SHARED_BUFFER)
         for grant_index, _slot in binding_rows[instance[7] : instance[7] + instance[8]]:
             grant = grant_rows[grant_index]
-            service = SERVICE_BY_CAPABILITY_KIND.get(grant[5])
+            service = SERVICE_BY_CAPABILITY_KIND.get(grant[4])
             if service is not None:
                 required_services.add(service)
-            if grant[5] == CAPABILITY_EXECUTABLE:
+            if grant[4] == CAPABILITY_EXECUTABLE:
                 required_services.add(SERVICE_SPAWN)
-            if grant[5] == CAPABILITY_ENDPOINT or grant[3] & RIGHT_TRANSFER:
+            if grant[4] == CAPABILITY_ENDPOINT or grant[3] & RIGHT_TRANSFER:
                 required_services.add(SERVICE_CAPABILITY_TRANSFER)
         for minted_index in range(minted_bindings):
             record = minted_binding_offset + minted_index * GENERATION_MINTED_BINDING.size
@@ -508,16 +512,13 @@ def check_generation(data: bytes, expected_identity: bytes | None = None) -> dic
         require(own_slots[(process_index, 3)] != own_slots[(process_index, 5)], "BadCapBinding")
 
     for index, grant_row in enumerate(grant_rows):
-        # A minted grant's object does not exist at admission, so the plan
-        # carries no capability for it; its two minted bindings state where
-        # each end lands instead.
-        if grant_row[4]:
-            require(materialized[index] == 0, "UnmaterializedGrant")
-            continue
+        # Every declared grant names a concrete object the plan carries a
+        # capability for. A `minted` grant was the exception until B50 deleted
+        # it, object identity deferred to a runtime minter that no longer exists.
         policy_only = index in policy_only_grants
         require(materialized[index] + int(policy_only) == 1, "UnmaterializedGrant")
         if policy_only:
-            require(grant_row[5] not in (CAPABILITY_EXECUTABLE, CAPABILITY_ENDPOINT), "BadCapBinding")
+            require(grant_row[4] not in (CAPABILITY_EXECUTABLE, CAPABILITY_ENDPOINT), "BadCapBinding")
     for index in range(schedules):
         name_offset, thread, authority_process, priority, max_controlled_priority, budget_us, period_us, flags = GENERATION_SCHEDULE.unpack_from(data, schedule_offset + index * GENERATION_SCHEDULE.size)
         require(thread < threads and (authority_process == PLAN_NONE or authority_process < processes) and priority <= max_controlled_priority and flags == 0, "BadSchedule")
