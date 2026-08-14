@@ -258,3 +258,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-13 | [B50 — deleting `endpointCreate`, and what it did not unblock](2026-08-13-b50-endpoint-create-deletion/index.md) | Change | Verified | B50, B46 |
 | 2026-08-13 | [B46 — the two mechanisms rendezvous IPC actually needs](2026-08-13-b46-multi-source-wait/index.md) | Change | Monitoring | B46 |
 | 2026-08-13 | [B46 — all seven fabric planes run on native seL4 IPC](2026-08-13-b46-native-ipc-completion/index.md) | Change | Verified | B46 |
+| 2026-08-14 | [B50 — a minted endpoint named an object nobody could create](2026-08-14-b50-minted-endpoint-deletion/index.md) | Change | Verified | B50, B46 |

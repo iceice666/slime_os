@@ -16,14 +16,64 @@ at the bottom rather than deleting it.
 
 ## Open
 
-The native-capability-model cutover is tracked as ordered unmasked-debt work,
-not as a new roadmap track. B39 establishes the authenticated contract; B40
-establishes the CSpace substrate; B41–B45 remove the universal root dispatcher
-one service slice at a time; B46–B49 replace the remaining compatibility
-mechanism; and B50 deletes the dual-model residue. Each item is a clean cutover:
-its old ABI and fallback are removed in the same change that makes its exit
-condition observable.
+The native-capability-model cutover (B39–B50) is complete and every entry moved
+to the resolved log. What remains open are two defects the cutover's final
+fixture conversion *found* rather than caused: both were failing before it, and
+both now fail one layer deeper, with the layer above them fixed.
 
+### B53 — the dango session's scripted input loop ends the shell
+
+**Status:** Open. **Class:** Defect. **Depends on:** none.
+
+**Problem:** `just sel4_dango_check` reaches the `dango>` prompt and then `dango`
+exits 1 from its input loop (`components/bins/src/bin/dango.rs:53`, the `Err(_)`
+arm of `input_read`). The scenario never reaches a command line, so the plane's
+claim — a scripted console session launching commands through the spawn service —
+is unproven even though every mechanism beneath it is observed working.
+
+**Evidence:** B50's fixture conversion (2026-08-14) took this plane from *failing
+to admit* to booting the whole graph. The transcript shows `console`,
+`spawn-service`, and `dango` all constructed; `sysinfo` spawned through the
+command profile and running (`[sysinfo] spawned through profile`); the supervision
+handle crossing from service to client as a matched export/import pair
+(`capability exported task=2 id=1 kind=supervision` /
+`capability imported task=3 id=1`); and the prompt printed. Only then does the
+input read fail.
+
+**Fix:** Determine whether the scripted key source is exhausted, ungranted at the
+slot `dango` reads, or returning an error the loop should treat as end-of-script.
+The root's `input_script` is keyed by generation number, so a plane whose
+generation moved may be reading an empty script — which would make this a fixture
+or keying defect rather than a mechanism one.
+
+**Exit condition:** `just sel4_dango_check` passes, with the session reaching at
+least one command launch. `just fmt_check_all` and `just lint_all` pass.
+
+### B54 — the stress graph never reclaims to zero live tasks
+
+**Status:** Open. **Class:** Defect. **Depends on:** none.
+
+**Problem:** `just sel4_stress_check` boots the 23-instance graph, stages every
+declared instance, and then stops at `the graph never reclaimed to zero live
+tasks`. B49's claim is that the largest admissible graph stays bounded *and*
+tears down; the second half is unobserved.
+
+**Evidence:** Failing before B50's fixture conversion and after, but at different
+depths. At `9a5f044` it failed on a missing `SLIME_ROOT plan slots required=…
+available=…` marker — it never got as far as the budget check. It now reports
+`budget: the graph plans 3078 root CSlots of 3222 free` and
+`construction: all 23 declared instances were staged`, so admission and
+construction are green and the failure is in teardown.
+
+**Fix:** Establish which instances stay live. The plane declares no scenario —
+init has nothing to drive (B49) — so every instance is root-launched and should
+exit of its own accord; one that blocks on a declared endpoint nobody sends to
+would hold the graph open, which is the shape B46's cutover produced elsewhere.
+
+**Exit condition:** `just sel4_stress_check` passes. `just fmt_check_all` and
+`just lint_all` pass.
+
+## Resolved
 ### B46 — logical ChannelTable, Transit, ParkedReplies, and WaitSet duplicate seL4 IPC
 
 **Status:** Resolved 2026-08-13. **Class:** Unmasked architectural debt.
@@ -981,8 +1031,8 @@ Record: [`devlog/2026-08-13-b46-native-ipc-completion/`](../devlog/2026-08-13-b4
 
 ### B50 — the logical capability and universal syscall compatibility model remains deletable residue
 
-**Status:** Open. **Class:** Unmasked architectural debt. **Depends on:**
-B39–B49.
+**Status:** Resolved 2026-08-14. **Class:** Unmasked architectural debt.
+**Depends on:** B39–B49.
 
 **Problem:** Even after native replacements land, leaving `GraphTables` as an
 authority database, the universal `Operation` dispatcher, public task IDs,
@@ -1144,7 +1194,69 @@ owned root mechanism with a declared v5 capability; every fixture uses v5.
 affected `just sel4_*_check` targets, `just sel4_gate_control_check`, `just
 fmt_check_all`, and `just lint_all` pass after the deletion.
 
-## Resolved
+**It is done (2026-08-14).** The last clause was `mintedBindings` of kind
+`endpoint`, and the judgement each plane needed turned out to be one judgement:
+such a binding is *unsatisfiable*, not merely unused. The record defers object
+identity while fixing owner, holder, slot, and rights ceiling, which was right
+when a component could create a channel — and post-cutover an endpoint is a
+generation-owned seL4 Endpoint the root materializes into both declared ends, so
+no party can supply one. `preflight_spawn_grants` counted all 63 of them across
+eleven fixtures in the total a parent must satisfy, which is why ten gates
+refused every spawn.
+
+Six probe planes declare their run token as an ordinary grant with a loopback for
+the idle instance, so arrival rather than presence discriminates — their
+`startup_arg == 0` guard had been unreachable since the cutover, and every
+spawned probe took the idle path. The spawn plane keeps its claim by crossing
+six narrowed *transferable directory views* instead of endpoint halves: the gate
+asserts the grant count at the spawn marker, so the authority had to be something
+a parent both holds and may pass on. The generation and filesystem services learn
+a peer's death from a supervision handle or a declared close edge. `sel4-boot.zti`
+converted mechanically — its 41 bindings were the two ends of 16 control edges
+the manifest already named.
+
+With no fixture declaring one, `CapabilityGrant.minted` had no producer, so the
+field and `GRANT_MINTED` are deleted from the source schema, the builder, the
+decoder, and the independent checker. `flags` still refuses unknown bits.
+`channel_aliases` went with it: it existed only to publish `SERVICE_SPAWN_SLOT`,
+a generated constant no component reads.
+
+Two root defects surfaced, both pre-existing and both invisible until a plane
+exercised them. `preflight_spawn_grants` excluded self-loop grants from the count
+while `declarations_below` numbered them in the ordering, so any child holding
+both a self-loop capability and a minted binding was unspawnable — one shared
+`grant_crosses_spawn` now answers both questions. `supervision_derive` copied its
+source's rights, and a spawn returns `RIGHT_SUPERVISE` alone, so a derived handle
+could never be delegated; derivation is the "I intend to hand this on" operation
+and now adds `RIGHT_TRANSFER`.
+
+Three components still read a transferred capability out of the
+received-capability array, which since B46 carries only native Endpoint handles;
+they claim the export with `capability_import`. And the supervision plane's B25
+derive scenario — dropped silently during the cutover, leaving its gate asserting
+a marker no boot emitted — is restored, now proving a derived handle outlives both
+its task and the source handle it came from.
+
+**Twenty-four gates pass**, including all three exit-condition gates
+(`generation_check`, `sel4_gate_control_check`, `contracts_check`) and every
+affected plane gate. Ten went from admission-refused to green:
+`sel4_spawn_check`, `sel4_generation_check`, `sel4_filesystem_check`,
+`sel4_directory_check`, `sel4_input_check`, `sel4_storage_check`,
+`sel4_store_check`, `sel4_rollback_check`, `sel4_recovery_plane_check`,
+`sel4_transfer_check`; `sel4_supervision_check` went from a missing derive marker
+to green. `just fmt_check_all`, `just lint_all`, `just test_sel4_root`, and
+`just test_host` pass. See
+[the devlog entry](../devlog/2026-08-14-b50-minted-endpoint-deletion/index.md).
+
+**Two failures are outside this item and recorded rather than folded in.**
+`sel4_dango_check`'s fixture is converted and observed working — its control
+endpoints and the supervision handle cross correctly, `sysinfo` runs through the
+profile, the `dango>` prompt appears — and then `dango` exits 1 in its
+scripted-input loop, which is a separate defect. `sel4_stress_check` failed at
+HEAD before this change and still fails, now one layer deeper: the plan-budget
+marker it never reached is satisfied and it stops at `the graph never reclaimed to
+zero live tasks`.
+
 ### B48 — all child execution shares one fixed priority and no scheduling authority
 
 **Status:** Resolved 2026-08-12 with the MCS-only clauses explicitly deferred.
