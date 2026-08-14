@@ -11,8 +11,8 @@
     };
     {
       commandProfile = [];
-      name = "sample-worker";
-      object = "sha256:sample-worker";
+      name = "supervision-child";
+      object = "sha256:supervision-child";
       role = "service";
       spawnBudget = 0;
     };
@@ -63,7 +63,7 @@
       autostart = true;
       bindings = [];
       dependencies = [];
-      executable = "sample-worker";
+      executable = "supervision-child";
       health = "required";
       name = "stress-00";
       owner = "root";
@@ -72,7 +72,7 @@
       autostart = true;
       bindings = [];
       dependencies = [];
-      executable = "sample-worker";
+      executable = "supervision-child";
       health = "required";
       name = "stress-01";
       owner = "root";
@@ -81,7 +81,7 @@
       autostart = true;
       bindings = [];
       dependencies = [];
-      executable = "sample-worker";
+      executable = "supervision-child";
       health = "required";
       name = "stress-02";
       owner = "root";
@@ -90,7 +90,7 @@
       autostart = true;
       bindings = [];
       dependencies = [];
-      executable = "sample-worker";
+      executable = "supervision-child";
       health = "required";
       name = "stress-03";
       owner = "root";
@@ -99,7 +99,7 @@
       autostart = true;
       bindings = [];
       dependencies = [];
-      executable = "sample-worker";
+      executable = "supervision-child";
       health = "required";
       name = "stress-04";
       owner = "root";
@@ -108,7 +108,7 @@
       autostart = true;
       bindings = [];
       dependencies = [];
-      executable = "sample-worker";
+      executable = "supervision-child";
       health = "required";
       name = "stress-05";
       owner = "root";
@@ -117,7 +117,7 @@
       autostart = true;
       bindings = [];
       dependencies = [];
-      executable = "sample-worker";
+      executable = "supervision-child";
       health = "required";
       name = "stress-06";
       owner = "root";
@@ -126,7 +126,7 @@
       autostart = true;
       bindings = [];
       dependencies = [];
-      executable = "sample-worker";
+      executable = "supervision-child";
       health = "required";
       name = "stress-07";
       owner = "root";
@@ -135,7 +135,7 @@
       autostart = true;
       bindings = [];
       dependencies = [];
-      executable = "sample-worker";
+      executable = "supervision-child";
       health = "required";
       name = "stress-08";
       owner = "root";
@@ -144,7 +144,7 @@
       autostart = true;
       bindings = [];
       dependencies = [];
-      executable = "sample-worker";
+      executable = "supervision-child";
       health = "required";
       name = "stress-09";
       owner = "root";
@@ -153,7 +153,7 @@
       autostart = true;
       bindings = [];
       dependencies = [];
-      executable = "sample-worker";
+      executable = "supervision-child";
       health = "required";
       name = "stress-10";
       owner = "root";
@@ -162,7 +162,7 @@
       autostart = true;
       bindings = [];
       dependencies = [];
-      executable = "sample-worker";
+      executable = "supervision-child";
       health = "required";
       name = "stress-11";
       owner = "root";
@@ -171,7 +171,7 @@
       autostart = true;
       bindings = [];
       dependencies = [];
-      executable = "sample-worker";
+      executable = "supervision-child";
       health = "required";
       name = "stress-12";
       owner = "root";
@@ -180,7 +180,7 @@
       autostart = true;
       bindings = [];
       dependencies = [];
-      executable = "sample-worker";
+      executable = "supervision-child";
       health = "required";
       name = "stress-13";
       owner = "root";
@@ -189,7 +189,7 @@
       autostart = true;
       bindings = [];
       dependencies = [];
-      executable = "sample-worker";
+      executable = "supervision-child";
       health = "required";
       name = "stress-14";
       owner = "root";
@@ -198,7 +198,7 @@
       autostart = true;
       bindings = [];
       dependencies = [];
-      executable = "sample-worker";
+      executable = "supervision-child";
       health = "required";
       name = "stress-15";
       owner = "root";
@@ -207,7 +207,7 @@
       autostart = true;
       bindings = [];
       dependencies = [];
-      executable = "sample-worker";
+      executable = "supervision-child";
       health = "required";
       name = "stress-16";
       owner = "root";
@@ -216,7 +216,7 @@
       autostart = true;
       bindings = [];
       dependencies = [];
-      executable = "sample-worker";
+      executable = "supervision-child";
       health = "required";
       name = "stress-17";
       owner = "root";
@@ -225,7 +225,7 @@
       autostart = true;
       bindings = [];
       dependencies = [];
-      executable = "sample-worker";
+      executable = "supervision-child";
       health = "required";
       name = "stress-18";
       owner = "root";
@@ -234,7 +234,7 @@
       autostart = true;
       bindings = [];
       dependencies = [];
-      executable = "sample-worker";
+      executable = "supervision-child";
       health = "required";
       name = "stress-19";
       owner = "root";
@@ -243,7 +243,7 @@
       autostart = true;
       bindings = [];
       dependencies = [];
-      executable = "sample-worker";
+      executable = "supervision-child";
       health = "required";
       name = "stress-20";
       owner = "root";
@@ -252,7 +252,7 @@
       autostart = true;
       bindings = [];
       dependencies = [];
-      executable = "sample-worker";
+      executable = "supervision-child";
       health = "required";
       name = "stress-21";
       owner = "root";
@@ -267,7 +267,7 @@
       size = 65536;
     };
     {
-      id = "sha256:sample-worker";
+      id = "sha256:supervision-child";
       kind = "component";
       size = 65536;
     };

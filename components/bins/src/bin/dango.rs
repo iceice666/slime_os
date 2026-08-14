@@ -25,6 +25,21 @@ const SHARED_BUFFER_PROBE_BASE: u64 = 0x0000_0005_0000_0000;
 const RIGHT_TRANSFER: u32 = 4;
 const RIGHT_DIRECTORY_READ: u32 = 1 << 19;
 
+/// Fail with a named reason on serial.
+///
+/// Every exit site used to be a bare `slime_rt::exit(1)`, so a session that ran
+/// its command correctly and then stopped reported nothing about why — the plane
+/// failed with a transcript that showed only success. `debug_write` rather than
+/// `console`, deliberately: the console path is one of the things that can be
+/// broken, and a diagnostic that travels over the mechanism under test says
+/// nothing when that mechanism is the fault.
+fn fail(reason: &[u8]) -> ! {
+    slime_rt::debug_write(b"[dango] fail: ");
+    slime_rt::debug_write(reason);
+    slime_rt::debug_write(b"\n");
+    slime_rt::exit(1)
+}
+
 include!(concat!(env!("OUT_DIR"), "/dango_profile.rs"));
 mod generation_profile {
     include!(concat!(env!("OUT_DIR"), "/fabric_profile.rs"));
@@ -42,7 +57,7 @@ fn main(_startup_arg: u32) {
         SHARED_BUFFER_FACTORY_SLOT,
         SHARED_BUFFER_PROBE_BASE,
     ) {
-        slime_rt::exit(1);
+        fail(b"shared-buffer quota probe");
     }
     let mut line = [0u8; MAX_LINE_BYTES];
     let mut len = 0;
@@ -50,7 +65,7 @@ fn main(_startup_arg: u32) {
     loop {
         match slime_rt::input_read(INPUT_SLOT) {
             Ok(None) => slime_rt::yield_now(),
-            Err(_) => slime_rt::exit(1),
+            Err(_) => fail(b"input read"),
             Ok(Some(event)) if !event.pressed => {}
             Ok(Some(event)) => match event.key {
                 InputKey::Character(character) if character.is_ascii() && len < line.len() => {
@@ -86,6 +101,12 @@ fn main(_startup_arg: u32) {
                 }
                 InputKey::Escape => {
                     console(b"\n[dango] interactive session closed\n");
+                    // The session owns both edges, so it closes both. A native
+                    // Endpoint reports no peer death, so neither service can
+                    // infer the shell is gone — each blocks in `recv` forever
+                    // and holds the graph open (B53).
+                    shutdown_service();
+                    close_console();
                     return;
                 }
                 _ => {}
@@ -209,7 +230,7 @@ fn send_request(request: WireSpawnRequest, caps: &[u32]) -> WireSpawnReply {
         };
         match result {
             ERR_WOULDBLOCK => slime_rt::yield_now(),
-            result if result < 0 => slime_rt::exit(1),
+            result if result < 0 => fail(b"spawn request send"),
             _ => break,
         }
     }
@@ -222,13 +243,13 @@ fn receive_reply() -> WireSpawnReply {
     loop {
         match slime_rt::recv(SPAWN_SLOT, &mut reply, &mut received_caps) {
             ERR_WOULDBLOCK => slime_rt::yield_now(),
-            n if n < 0 => slime_rt::exit(1),
+            n if n < 0 => fail(b"spawn reply recv"),
             n => {
                 let Some(decoded) = WireSpawnReply::decode(&reply[..n as usize]) else {
-                    slime_rt::exit(1)
+                    fail(b"spawn reply decode")
                 };
                 if !valid_spawn_reply(&decoded) {
-                    slime_rt::exit(1);
+                    fail(b"spawn reply shape");
                 }
                 // A supervision handle has no kernel object to travel in the
                 // message, so an export addressed here arrives alone and is
@@ -254,11 +275,64 @@ fn wait(handle: u32) -> Termination {
     }
 }
 
+/// Write to the console, in message-sized chunks.
+///
+/// `MAX_LINE_BYTES` is 128 and `MAX_MSG` is 64, so a line long enough to fill
+/// half the input buffer cannot cross in one send: the transport refuses an
+/// oversized payload with `ERR_INVALID_ARG` before it reaches the kernel. The
+/// second scripted line is 65 bytes, which made the echo fail and ended the
+/// session one byte past the bound (B53). A buffer larger than one message must
+/// not assume one send.
 fn console(payload: &[u8]) {
+    for chunk in payload.chunks(MAX_MSG) {
+        loop {
+            match slime_rt::send(CONSOLE_SLOT, chunk, &[]) {
+                ERR_WOULDBLOCK => slime_rt::yield_now(),
+                result if result < 0 => fail(b"console send"),
+                _ => break,
+            }
+        }
+    }
+}
+
+/// Ask the spawn service to shut down, and wait for it to stop answering.
+///
+/// The protocol already carries `REQUEST_FLAG_SHUTDOWN`; nothing sent it, so the
+/// service blocked in `recv` for the rest of the boot. A native Endpoint reports
+/// no peer death, so the shell that owns the edge is the only party that can say
+/// the session is over.
+fn shutdown_service() {
+    let request = WireSpawnRequest {
+        magic: slime_proto::spawn::SPAWN_MAGIC,
+        version: slime_proto::spawn::FORMAT_VERSION,
+        flags: slime_proto::spawn::REQUEST_FLAG_SHUTDOWN,
+        command_len: 0,
+        argument_count: 0,
+        environment_count: 0,
+        capability_roles: 0,
+        client_budget: CLIENT_BUDGET,
+        command: [0; 16],
+        arguments: [0; 8],
+        environment: [0; 8],
+        grant_rights: 0,
+        reserved: [0; 6],
+    };
+    let encoded = request.encode();
     loop {
-        match slime_rt::send(CONSOLE_SLOT, payload, &[]) {
+        match slime_rt::send(SPAWN_SLOT, &encoded, &[]) {
             ERR_WOULDBLOCK => slime_rt::yield_now(),
-            result if result < 0 => slime_rt::exit(1),
+            result if result < 0 => fail(b"shutdown send"),
+            _ => return,
+        }
+    }
+}
+
+/// Close the console, which exits on this exact message.
+fn close_console() {
+    loop {
+        match slime_rt::send(CONSOLE_SLOT, b"SLIME.CONSOLE.CLOSE", &[]) {
+            ERR_WOULDBLOCK => slime_rt::yield_now(),
+            result if result < 0 => fail(b"console close"),
             _ => return,
         }
     }

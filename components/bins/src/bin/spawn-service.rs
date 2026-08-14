@@ -92,20 +92,32 @@ fn handle(
     received_caps: &[u64; MAX_CAPS_PER_MSG],
     live: &mut [Option<LiveChild>; CLIENT_BUDGET],
 ) -> (WireSpawnReply, Option<u32>) {
-    let response = handle_inner(message, received_caps, live);
+    // A working-directory capability has no kernel object to travel in the
+    // message, so its export arrives alone and is claimed here rather than read
+    // out of the received-capability array, which since B46 carries only native
+    // Endpoint handles. Claimed before validation so a refused request still
+    // releases the authority its client handed over.
+    let claimed = slime_rt::capability_import().ok();
+    let response = handle_inner(message, claimed, live);
     release_received_caps(received_caps);
+    if response.0.status != STATUS_OK
+        && let Some(slot) = claimed
+        && slime_rt::cap_drop(slot) != 0
+    {
+        slime_rt::exit(1);
+    }
     response
 }
 
 fn handle_inner(
     message: &[u8],
-    received_caps: &[u64; MAX_CAPS_PER_MSG],
+    claimed: Option<u32>,
     live: &mut [Option<LiveChild>; CLIENT_BUDGET],
 ) -> (WireSpawnReply, Option<u32>) {
     let Some(request) = WireSpawnRequest::decode(message) else {
         return (reply(STATUS_BAD_REQUEST, 0), None);
     };
-    if !valid_request(&request, received_caps) {
+    if !valid_request(&request, claimed) {
         return (reply(STATUS_BAD_REQUEST, 0), None);
     }
     if request.flags == REQUEST_FLAG_WAIT {
@@ -128,7 +140,7 @@ fn handle_inner(
     slime_rt::debug_write(b"[spawn-service] spawning child\n");
 
     let directory_grant = [SpawnGrant {
-        slot: received_caps[0] as u32,
+        slot: claimed.unwrap_or(0),
         rights: RIGHT_DIRECTORY_READ,
     }];
     let grants = if request.capability_roles & CAPABILITY_ROLE_WORKING_DIRECTORY != 0 {
@@ -176,21 +188,18 @@ fn release_received_caps(received_caps: &[u64; MAX_CAPS_PER_MSG]) {
     }
 }
 
-fn valid_request(request: &WireSpawnRequest, received_caps: &[u64; MAX_CAPS_PER_MSG]) -> bool {
+/// Structural validity, plus the rule that a declared role and a delivered
+/// capability must agree: a request claiming a working directory must have
+/// brought one, and a request claiming none must not.
+fn valid_request(request: &WireSpawnRequest, claimed: Option<u32>) -> bool {
     const SUPPORTED_ROLES: u8 = CAPABILITY_ROLE_WORKING_DIRECTORY | CAPABILITY_ROLE_STDIN;
-    let capability_count =
-        usize::from(request.capability_roles & CAPABILITY_ROLE_WORKING_DIRECTORY != 0);
+    let wants_directory = request.capability_roles & CAPABILITY_ROLE_WORKING_DIRECTORY != 0;
     valid_spawn_request(request)
         && request.client_budget as usize == CLIENT_BUDGET
         && request.capability_roles & !SUPPORTED_ROLES == 0
         && request.reserved.iter().all(|byte| *byte == 0)
         && request.grant_rights == 0
-        && received_caps[..capability_count]
-            .iter()
-            .all(|slot| *slot != 0)
-        && received_caps[capability_count..]
-            .iter()
-            .all(|slot| *slot == 0)
+        && wants_directory == claimed.is_some()
 }
 
 /// The supervision handle a wait request names. The client holds this

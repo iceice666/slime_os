@@ -16,42 +16,90 @@ at the bottom rather than deleting it.
 
 ## Open
 
-The native-capability-model cutover (B39–B50) is complete and every entry moved
-to the resolved log. What remains open are two defects the cutover's final
-fixture conversion *found* rather than caused: both were failing before it, and
-both now fail one layer deeper, with the layer above them fixed.
+None. The native-capability-model cutover (B39–B50) is complete, and the two
+defects its final fixture conversion exposed (B53, B54) are resolved. All 27
+verification gates pass.
 
-### B53 — the dango session's scripted input loop ends the shell
+## Resolved
+### B53 — dango echoed a line one byte past the message bound
 
-**Status:** Open. **Class:** Defect. **Depends on:** none.
+**Status:** Resolved 2026-08-14. **Class:** Defect. **Depends on:** none.
 
-**Problem:** `just sel4_dango_check` reaches the `dango>` prompt and then `dango`
-exits 1 from its input loop (`components/bins/src/bin/dango.rs:53`, the `Err(_)`
-arm of `input_read`). The scenario never reaches a command line, so the plane's
-claim — a scripted console session launching commands through the spawn service —
-is unproven even though every mechanism beneath it is observed working.
+**Problem:** `just sel4_dango_check` runs the first scripted command to
+completion and then `dango` exits 1, before the second script line is read. The
+plane's claim — a scripted session launching commands through the spawn service —
+is half proven: one command demonstrably works end to end, and the session does
+not continue.
 
-**Evidence:** B50's fixture conversion (2026-08-14) took this plane from *failing
-to admit* to booting the whole graph. The transcript shows `console`,
-`spawn-service`, and `dango` all constructed; `sysinfo` spawned through the
-command profile and running (`[sysinfo] spawned through profile`); the supervision
-handle crossing from service to client as a matched export/import pair
-(`capability exported task=2 id=1 kind=supervision` /
-`capability imported task=3 id=1`); and the prompt printed. Only then does the
-input read fail.
+**Evidence (2026-08-14).** B50's fixture conversion took this plane from *failing
+to admit* to running its whole first command, observed directly:
 
-**Fix:** Determine whether the scripted key source is exhausted, ungranted at the
-slot `dango` reads, or returning an error the loop should treat as end-of-script.
-The root's `input_script` is keyed by generation number, so a plane whose
-generation moved may be reading an empty script — which would make this a fixture
-or keying defect rather than a mechanism one.
+```
+dango> $(sysinfo)
+resolved:profile
+[spawn-service] request
+[spawn-service] spawning child
+SLIME_GRAPH capability exported task=2 id=1 kind=supervision rights=0x40000
+SLIME_GRAPH capability imported task=3 id=1 kind=supervision rights=0x40000
+SLIME_GRAPH supervision collected task=3 child=4 kind=0
+spawn-request:accepted
+result:exit:0
+SLIME_GRAPH component exit task=3 status=1
+```
 
-**Exit condition:** `just sel4_dango_check` passes, with the session reaching at
-least one command launch. `just fmt_check_all` and `just lint_all` pass.
+So the scripted key source, the command profile, the spawn RPC, the child launch,
+and the supervision handoff are all working: `sysinfo` ran and exited 0, and
+dango collected its outcome through an imported handle. `console` (task 1) is
+still alive at that point and never exits.
 
-### B54 — the stress graph never reclaims to zero live tasks
+**Ruled out.** The script is present and being read — `$(sysinfo)` is echoed
+character by character, so `input_script`'s generation-30 entry is found and
+`input_read` works. Both ends of `dango-console-rpc` are installed
+(`native endpoint task=1 slot=33`, `native endpoint task=3 slot=34`), and
+`console`'s binding at declared slot 0 pairs with dango's at slot 1. The console
+path itself is *not* the fault: the reprinted `dango> ` prompt reaches serial
+after dango exits, so the send that emitted it succeeded and `console` drained
+it. Making the spawn RPC transferable changes nothing, because the leg that
+would need it — the `with-cwd` line that delegates a derived view — is on a later
+script line the run never reaches; that change was measured and reverted rather
+than kept.
 
-**Status:** Open. **Class:** Defect. **Depends on:** none.
+**Root cause (2026-08-14).** `dango.rs` sized its line buffer
+(`MAX_LINE_BYTES = 128`) independently of the transport bound it echoes through
+(`MAX_MSG = 64`). The second scripted line is 65 characters, so
+`console(&line[..len])` was refused with `ERR_INVALID_ARG` before the kernel saw
+it, and the session ended one byte past the bound. A buffer larger than one
+message owns the chunking too; `console()` now writes in `MAX_MSG` chunks.
+
+Two further B46 residues sat behind it. `spawn-service` read the working-directory
+capability from `received_caps[0]`, which since the cutover carries only native
+Endpoint handles — every other kind arrives as an export the receiver claims — so
+the `with-cwd` leg was refused as a bad request; it now claims it with
+`capability_import`, and `valid_request` checks the declared role against what
+actually arrived. And nothing told either service the session was over: the spawn
+protocol has carried `REQUEST_FLAG_SHUTDOWN` all along and no one sent it, while
+`console` exits on a close message no one sent. A native Endpoint reports no peer
+death, so the shell that owns both edges now closes both.
+
+**What made it findable.** Three hypotheses were wrong — the input read, the
+script keying, and the spawn RPC's transferability — and each cost a build-and-boot
+to disprove. Every exit site in `dango.rs` was a bare `slime_rt::exit(1)`, so a
+session that ran its command correctly and then stopped produced a transcript
+showing only success. Naming each exit (`[dango] fail: <reason>`, over
+`debug_write` rather than `console`, since the console path was the fault) found
+the real call on the first run after it landed. The transferability change was
+measured and reverted: the leg needing it was on a line the run never reached.
+
+**Exit condition observed.** `just sel4_dango_check` passes: all four scripted
+lines run, `$(sysinfo)` and the `with-env`/`with-cwd`/`with-stdin` composition
+both complete, `$(inject)` is denied at resolution, `$(echo a b c)` is a parse
+error, and the session closes on the scripted escape. `just fmt_check_all`,
+`just lint_all`, `just test_sel4_root`, and `just test_host` pass. See
+[the devlog entry](../devlog/2026-08-14-b53-b54-last-two-planes/index.md).
+
+### B54 — the stress plane borrowed a component that never ends
+
+**Status:** Resolved 2026-08-14. **Class:** Defect. **Depends on:** none.
 
 **Problem:** `just sel4_stress_check` boots the 23-instance graph, stages every
 declared instance, and then stops at `the graph never reclaimed to zero live
@@ -65,15 +113,26 @@ available=…` marker — it never got as far as the budget check. It now report
 `construction: all 23 declared instances were staged`, so admission and
 construction are green and the failure is in teardown.
 
-**Fix:** Establish which instances stay live. The plane declares no scenario —
-init has nothing to drive (B49) — so every instance is root-launched and should
-exit of its own accord; one that blocks on a declared endpoint nobody sends to
-would hold the graph open, which is the shape B46's cutover produced elsewhere.
+**Root cause (2026-08-14).** All 21 stress instances ran `sample-worker`, which
+exists to prove B47's two-threads property: its main thread blocks in
+`recv_blocking` on a loopback endpoint and its *worker thread* is what sends.
+`sel4-stress.zti` declares neither `extraThreads` nor any binding, so there was no
+second thread to send and no endpoint installed — every instance parked on a
+receive with no possible sender, and the graph never drained. Observed as 21 ×
+`[sample-worker] main thread running` with no `component exit` for any of them.
 
-**Exit condition:** `just sel4_stress_check` passes. `just fmt_check_all` and
-`just lint_all` pass.
+B49's claim is the *number* of instances the root's CSpace admits, so the
+component only has to terminate. The 21 instances now run `supervision-child`,
+which exists to run and end. Declaring the extra thread and endpoint on all 21
+instead would add 21 TCBs, 21 IPC buffers, and 21 Endpoints to a plane whose whole
+point is to sit at the ceiling — changing what the gate measures to keep an
+accident.
 
-## Resolved
+**Exit condition observed.** `just sel4_stress_check` passes: 23 instances staged
+and the graph reclaimed to zero live tasks. `just fmt_check_all` and
+`just lint_all` pass. See
+[the devlog entry](../devlog/2026-08-14-b53-b54-last-two-planes/index.md).
+
 ### B46 — logical ChannelTable, Transit, ParkedReplies, and WaitSet duplicate seL4 IPC
 
 **Status:** Resolved 2026-08-13. **Class:** Unmasked architectural debt.

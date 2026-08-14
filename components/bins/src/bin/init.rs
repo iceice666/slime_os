@@ -1270,6 +1270,7 @@ fn drive_dango_plane() {
         &[grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE)],
     )
     .unwrap_or_else(|_| fail_plane(b"dango", b"spawn console"));
+    slime_rt::debug_write(b"[init] console spawned\n");
     // The spawn service receives its factory and the two executables it may
     // launch. Both executable grants are sourced by init, so init is the party
     // that must pass them; ascending declared slot is the order the root pairs
@@ -1283,8 +1284,10 @@ fn drive_dango_plane() {
         ],
     )
     .unwrap_or_else(|_| fail_plane(b"dango", b"spawn service"));
+    slime_rt::debug_write(b"[init] spawn service spawned\n");
     let dango =
         slime_rt::spawn(DANGO_SLOT, &[]).unwrap_or_else(|_| fail_plane(b"dango", b"spawn dango"));
+    slime_rt::debug_write(b"[init] dango spawned\n");
     wait_terminated(&[
         dango.supervision_slot,
         service.supervision_slot,
