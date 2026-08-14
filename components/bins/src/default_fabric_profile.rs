@@ -1,6 +1,9 @@
 // @generated from the canonical C8.9 resolved fabric profile; do not edit.
 #[allow(dead_code)]
+mod generated_fabric_profile {
 pub const FABRIC_PROFILE_NAME: &str = "default";
+#[allow(dead_code)]
+pub const GENERATION_BOOT_ACTION: &str = "product";
 #[allow(dead_code)]
 pub const FABRIC_SCHEMAS: &[(&str, &str, u64, u32, u32)] = &[
     ("ParameterCall", "8f23bd8cdf77d1ff3c62409514dbb9c2e0b66ef4707d81dbef0cb001301fb83f", 0xd7eabf1a3dd69200, 2, 40),
@@ -159,9 +162,9 @@ pub const FABRIC_MINTED_GRANTS: &[(&[u8], usize)] = &[
     (b"dango", 3),
     (b"sysinfo", 0),
     (b"echo-agent", 0),
-    (b"generation-manager", 2),
+    (b"generation-manager", 0),
     (b"spawn-service", 3),
-    (b"filesystem-service", 1),
+    (b"filesystem-service", 0),
     (b"generation-list", 0),
     (b"generation-inspect", 0),
     (b"generation-stage", 0),
@@ -219,3 +222,6 @@ pub const FABRIC_DEADLINE_ABSENT: u64 = u64::MAX;
 pub const FABRIC_CALL_DEADLINE_NS: u64 = 1000000;
 pub const FABRIC_OPERATION_DEADLINE_NS: u64 = 1000000;
 pub const FABRIC_FIRST_CONTROL_SLOT: u32 = 2;
+}
+#[allow(unused_imports)]
+pub use generated_fabric_profile::*;

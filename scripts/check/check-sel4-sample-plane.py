@@ -74,7 +74,25 @@ ORACLE_ONLY: dict[str, str] = {
     ),
 }
 
-# Frozen component transcript inherited at the P5 cutover.
+# Component transcript inherited at the P5 cutover, reordered once for native
+# rendezvous (B46).
+#
+# Every marker the retired kernel produced still appears, and every
+# denial-before-success pair the order exists to protect is intact: the unsealed
+# loan is refused before one is created, and the malformed descriptor maps
+# nothing before the real one maps. What moved is the *sender's* tail.
+#
+# On the retired kernel a send enqueued and returned, so the lender printed
+# `descriptor sent` immediately and the receiver's work followed. A native
+# seL4 send is a rendezvous: it completes only once the receiver has taken the
+# message, and the two run at equal priority on one core, so the receiver runs
+# to its own blocking point before the lender is scheduled again. The lender's
+# post-send markers therefore trail the receiver's, and `[sample-receiver] done`
+# lands last because the lender exits while the receiver is still finishing.
+#
+# This is the mechanism being correct, not the transcript drifting: a
+# `descriptor sent` that still printed before `descriptor received` would mean
+# the send had not actually rendezvoused with anything.
 SAMPLE_MARKERS: tuple[str, ...] = (
     "[sample-lender] factory is not a buffer",
     "[sample-lender] buffer created",
@@ -82,37 +100,34 @@ SAMPLE_MARKERS: tuple[str, ...] = (
     "[sample-lender] unsealed loan denied",
     "[sample-lender] seal is irreversible",
     "[sample-lender] loan created",
-    "[sample-lender] descriptor sent",
     "[sample-receiver] descriptor received",
     "[sample-receiver] malformed descriptor mapped nothing",
     "[sample-receiver] loaned bytes mapped",
     "[sample-receiver] loan stays read-only",
     "[sample-receiver] payload verified",
     "[sample-receiver] loan returned once",
-    "[sample-receiver] done",
+    "[sample-lender] descriptor sent",
     "[sample-lender] receiver settled",
     "[sample-lender] released",
     "[sample-lender] done",
+    "[sample-receiver] done",
 )
 
 REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     (
         "the sample generation was admitted",
-        r"SLIME_ROOT generation admitted number=\d+ executables=4 instances=4 grants=5 ",
+        r"SLIME_ROOT generation admitted number=\d+ executables=4 instances=4 grants=6 ",
     ),
     (
         "every payload is a native ELF image",
         r"SLIME_ROOT graph admitted executables=4 instances=4 slimecm=0 elf=4 unrecognized=0",
     ),
     (
-        # Both factories at the slots the boot layout names, which is what
-        # `init.rs`'s generated `ENDPOINT_FACTORY_SLOT` and
-        # `SHARED_BUFFER_FACTORY_SLOT` compile against (B10).
-        "init holds its endpoint factory at its layout slot",
-        r"SLIME_GRAPH factory placed task=\d+ component=init slot=3 "
-        r"kind=endpoint-factory",
-    ),
-    (
+        # One factory, at the slot the boot layout names, which is what
+        # `init.rs`'s generated `SHARED_BUFFER_FACTORY_SLOT` compiles against
+        # (B10). There is no endpoint factory to place: the cutover deleted
+        # `endpointCreate`, so an endpoint is a generation-declared seL4
+        # Endpoint the root materializes rather than a right init mints from.
         "init holds its shared-buffer factory at its layout slot",
         r"SLIME_GRAPH factory placed task=\d+ component=init slot=4 "
         r"kind=shared-buffer-factory",
@@ -132,23 +147,32 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"SLIME_GRAPH schedule instance=sample-worker thread=1 priority=100",
     ),
     (
-        "sample-worker's main thread ran",
-        r"\[sample-worker\] main thread running",
+        # The lender/receiver edge is a declared endpoint the root materializes
+        # from the manifest and installs into both instances before either runs.
+        # It used to be minted at runtime through an endpoint factory; that
+        # right no longer exists, so what the gate asserts is that both halves
+        # were installed rather than that init manufactured them.
+        "the peer channel was materialized from the generation",
+        r"SLIME_GRAPH endpoint grant=sample-plane-channel producer_instance=\d+ "
+        r"consumer_instance=\d+",
     ),
     (
-        # No declared channel edge: init mints the pair at runtime through the
-        # factory, because a `source == target` grant is a loopback and yields
-        # one slot rather than the two halves this composition needs.
-        "the peer channel was minted rather than declared",
-        r"SLIME_GRAPH endpoint minted task=\d+ key=\d+ slots=\d+,\d+",
+        "sample-worker's main thread ran",
+        r"\[sample-worker\] main thread running",
     ),
     (
         # Receiver first: the lender names its loan receiver through a
         # `RIGHT_SUPERVISE` handle, which cannot exist until the receiver does.
         # Spawn order is load-bearing here exactly as it is on x86.
+        #
+        # Zero grants, because everything this instance holds the generation
+        # declared: its half of the peer endpoint is installed by the root
+        # before it runs. Its parent hands it nothing, which is what makes the
+        # lender's two-grant spawn below the exact statement of what only a
+        # parent can supply.
         "the receiver was spawned first",
         r"SLIME_GRAPH spawn authorized task=\d+ slot=\d+ component=sample-receiver "
-        r"grants=1",
+        r"grants=0",
     ),
     (
         # A spawned child's shared-buffer ceiling comes from the generation's
@@ -165,9 +189,15 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"mappings=2 loans=1",
     ),
     (
-        "the lender was spawned with all three of its declared grants",
-        r"SLIME_GRAPH spawned task=\d+ child=\d+ component=sample-lender grants=3 "
-        r"channels=1 handle=\d+",
+        # Two, not three: the channel is now a declared endpoint the root
+        # installs on both sides, so what init still hands over is exactly what
+        # the generation cannot place — the lender's buffer factory and the
+        # receiver's supervision handle, which cannot exist until the receiver
+        # does. `supervision_grants=1 buffer_factory_grants=1` is the claim
+        # that both arrived, and it is what the loan below depends on.
+        "the lender was spawned with both capabilities only its parent holds",
+        r"SLIME_GRAPH spawned task=\d+ child=\d+ component=sample-lender grants=2 "
+        r"endpoints=1 notifications=0 handle=\d+ supervision_grants=1 buffer_factory_grants=1",
     ),
     (
         # B14's probe, superseded. Init's declared budget is two and both are
@@ -242,9 +272,8 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"\[sample-worker\] main thread done",
     ),
     (
-        "the graph drained with every window, table, and channel reclaimed",
-        r"SLIME_GRAPH served live=0 unsupported=0 unimplemented=0 "
-        r"buffers=[1-9]\d* windows=0 tables=0",
+        "the graph drained with every window and task-owned authority table reclaimed",
+        r"SLIME_GRAPH served live=0 unsupported=0 buffers=[1-9]\d* windows=0 tasks=0",
     ),
     (
         # Every task the graph created is out of the table, and its root CSlots
@@ -255,17 +284,21 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"SLIME_GRAPH tasks reclaimed live=0 slots=[1-9]\d*",
     ),
     (
-        # Peer lifecycle and quota reclamation remain structured userspace and
-        # supervision evidence; native capability accounting proves no export
-        # ticket was leaked after every buffer object was reclaimed.
-        "every loan, mapping, and region was reclaimed",
-        r"SLIME_GRAPH loans served=[1-9]\d* loans=0 mappings=0 regions=0 "
-        r"orphans=0 aliases=0",
-    ),
-    (
         "every native capability export was finalized cleanly",
         r"SLIME_GRAPH capabilities exports=[1-9]\d* imports=[1-9]\d* "
         r"cancels=\d+ finalized=\d+ outstanding=0 tickets=0",
+    ),
+    (
+        # Peer lifecycle and quota reclamation remain structured userspace and
+        # supervision evidence; native capability accounting proves no export
+        # ticket was leaked after every buffer object was reclaimed.
+        #
+        # Last, because it is the last line the root emits: this list is checked
+        # in order and its final entry is also the gate's terminal marker, so an
+        # entry placed after the true last line makes the boot look unfinished.
+        "every loan, mapping, and region was reclaimed",
+        r"SLIME_GRAPH loans served=[1-9]\d* loans=0 mappings=0 regions=0 "
+        r"orphans=0 quota=0",
     ),
 )
 
@@ -507,13 +540,20 @@ def check_sample_transcript(transcript: str) -> None:
     silently permits a denied operation fails here even if the happy path still
     completes.
     """
-    # The spawned pair starts here. Everything before this line belongs to the
-    # unconfigured instances the root launches, whose failures are expected and
-    # must not be read as this composition's.
-    start = transcript.find("SLIME_GRAPH endpoint minted")
+    # The spawned pair starts here.
+    #
+    # Anchored on the receiver's spawn rather than on a runtime channel mint:
+    # the peer edge is now a generation-declared endpoint the root materializes,
+    # so no component mints anything and the retired marker never appears. The
+    # anchor also no longer has to exclude unconfigured copies — both instances
+    # declare `autostart = false`, so the only copies that exist are the ones
+    # init spawned.
+    start = transcript.find(
+        "SLIME_GRAPH spawn authorized task=0 slot=2 component=sample-receiver"
+    )
     if start < 0:
         report_transcript(transcript)
-        fail("init never minted the peer channel, so no sample composition ran")
+        fail("init never spawned the receiver, so no sample composition ran")
     transcript = transcript[start:]
 
     # The x86 gate's own FORBIDDEN entries, applied to the composition alone.
@@ -565,14 +605,9 @@ def check_transcript_matches_the_oracle() -> None:
 # kernel's ABI runs here unchanged.
 UNMODIFIED_COMPONENTS = ("sample-lender", "sample-receiver")
 
-# Every compile-time scenario flag any seL4 gate sets. A sample component
-# branching on *any* of them would be tailoring itself to this cutover.
-SEL4_CHECK_FLAGS = (
-    "SLIME_SEL4_CHANNEL_CHECK",
-    "SLIME_SEL4_LOAN_CHECK",
-    "SLIME_SEL4_SPAWN_CHECK",
-    "SLIME_SEL4_SAMPLE_CHECK",
-)
+# Product graph selection is generation data. A sample component must not
+# introduce a private compile-time selector after that repository-wide cutover.
+FORBIDDEN_COMPONENT_SELECTORS = ("option_env!(", "cfg!(slime_")
 
 
 def check_components_are_unmodified() -> None:
@@ -588,16 +623,17 @@ def check_components_are_unmodified() -> None:
             text = source.read_text(encoding="utf-8")
         except OSError as error:
             fail(f"cannot read {source.relative_to(ROOT)}: {error}")
-        for flag in SEL4_CHECK_FLAGS:
-            if flag in text:
+        for selector in FORBIDDEN_COMPONENT_SELECTORS:
+            if selector in text:
                 fail(
-                    f"{source.relative_to(ROOT)} branches on {flag}; the "
-                    "milestone requires this component to run unmodified"
+                    f"{source.relative_to(ROOT)} branches on compile-time selector "
+                    f"{selector!r}; the milestone requires this component to run "
+                    "from generation data"
                 )
     print(
         "components: "
         + ", ".join(UNMODIFIED_COMPONENTS)
-        + " carry no seL4 branch and run as the x86 oracle builds them",
+        + " carry no compile-time product branch and run as the x86 oracle builds them",
         flush=True,
     )
 

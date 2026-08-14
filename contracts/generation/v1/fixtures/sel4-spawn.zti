@@ -29,6 +29,7 @@
   grants = [
     {
       name = "init-console";
+      capabilityKind = "executable";
       rights = [
         "exec";
         "spawn";
@@ -39,6 +40,7 @@
     };
     {
       name = "init-sysinfo";
+      capabilityKind = "executable";
       rights = [
         "exec";
         "spawn";
@@ -46,6 +48,98 @@
       source = "init";
       target = "sysinfo";
       transferable = false;
+    };
+    {
+      name = "console-control";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "init";
+      target = "console";
+      transferable = false;
+    };
+    {
+      name = "sysinfo-context";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "init";
+      target = "sysinfo";
+      transferable = false;
+    };
+    {
+      name = "console-view";
+      capabilityKind = "directory";
+      rights = [
+        "directoryRead";
+      ];
+      source = "init";
+      target = "console";
+      transferable = true;
+    };
+    {
+      name = "sysinfo-view-1";
+      capabilityKind = "directory";
+      rights = [
+        "directoryRead";
+      ];
+      source = "init";
+      target = "sysinfo";
+      transferable = true;
+    };
+    {
+      name = "sysinfo-view-2";
+      capabilityKind = "directory";
+      rights = [
+        "directoryRead";
+      ];
+      source = "init";
+      target = "sysinfo";
+      transferable = true;
+    };
+    {
+      name = "sysinfo-view-3";
+      capabilityKind = "directory";
+      rights = [
+        "directoryRead";
+      ];
+      source = "init";
+      target = "sysinfo";
+      transferable = true;
+    };
+    {
+      name = "sysinfo-view-4";
+      capabilityKind = "directory";
+      rights = [
+        "directoryRead";
+      ];
+      source = "init";
+      target = "sysinfo";
+      transferable = true;
+    };
+    {
+      name = "sysinfo-view-5";
+      capabilityKind = "directory";
+      rights = [
+        "directoryRead";
+      ];
+      source = "init";
+      target = "sysinfo";
+      transferable = true;
+    };
+    {
+      name = "sysinfo-view-6";
+      capabilityKind = "directory";
+      rights = [
+        "directoryRead";
+      ];
+      source = "init";
+      target = "sysinfo";
+      transferable = true;
     };
   ];
   health = {
@@ -68,6 +162,42 @@
           grant = "init-sysinfo";
           slot = 2;
         };
+        {
+          grant = "console-control";
+          slot = 3;
+        };
+        {
+          grant = "sysinfo-context";
+          slot = 4;
+        };
+        {
+          grant = "console-view";
+          slot = 5;
+        };
+        {
+          grant = "sysinfo-view-1";
+          slot = 6;
+        };
+        {
+          grant = "sysinfo-view-2";
+          slot = 7;
+        };
+        {
+          grant = "sysinfo-view-3";
+          slot = 8;
+        };
+        {
+          grant = "sysinfo-view-4";
+          slot = 9;
+        };
+        {
+          grant = "sysinfo-view-5";
+          slot = 10;
+        };
+        {
+          grant = "sysinfo-view-6";
+          slot = 11;
+        };
       ];
       dependencies = [];
       executable = "init";
@@ -76,8 +206,17 @@
       owner = "root";
     };
     {
-      autostart = true;
-      bindings = [];
+      autostart = false;
+      bindings = [
+        {
+          grant = "console-control";
+          slot = 0;
+        };
+        {
+          grant = "console-view";
+          slot = 1;
+        };
+      ];
       dependencies = [
         "init";
       ];
@@ -87,8 +226,37 @@
       owner = "init";
     };
     {
-      autostart = true;
-      bindings = [];
+      autostart = false;
+      bindings = [
+        {
+          grant = "sysinfo-context";
+          slot = 0;
+        };
+        {
+          grant = "sysinfo-view-1";
+          slot = 1;
+        };
+        {
+          grant = "sysinfo-view-2";
+          slot = 2;
+        };
+        {
+          grant = "sysinfo-view-3";
+          slot = 3;
+        };
+        {
+          grant = "sysinfo-view-4";
+          slot = 4;
+        };
+        {
+          grant = "sysinfo-view-5";
+          slot = 5;
+        };
+        {
+          grant = "sysinfo-view-6";
+          slot = 6;
+        };
+      ];
       dependencies = [
         "init";
       ];
@@ -98,85 +266,7 @@
       owner = "init";
     };
   ];
-  mintedBindings = [
-    {
-      name = "console-control";
-      owner = "init";
-      holder = "console";
-      rights = [
-        "send";
-        "recv";
-      ];
-      slot = 0;
-      transferable = false;
-    };
-    {
-      name = "sysinfo-context";
-      owner = "init";
-      holder = "sysinfo";
-      rights = [
-        "send";
-        "recv";
-      ];
-      slot = 0;
-      transferable = false;
-    };
-    {
-      name = "sysinfo-wide-1";
-      owner = "init";
-      holder = "sysinfo";
-      rights = [
-        "send";
-        "recv";
-      ];
-      slot = 1;
-      transferable = false;
-    };
-    {
-      name = "sysinfo-wide-2";
-      owner = "init";
-      holder = "sysinfo";
-      rights = [
-        "send";
-        "recv";
-      ];
-      slot = 2;
-      transferable = false;
-    };
-    {
-      name = "sysinfo-wide-3";
-      owner = "init";
-      holder = "sysinfo";
-      rights = [
-        "send";
-        "recv";
-      ];
-      slot = 3;
-      transferable = false;
-    };
-    {
-      name = "sysinfo-wide-4";
-      owner = "init";
-      holder = "sysinfo";
-      rights = [
-        "send";
-        "recv";
-      ];
-      slot = 4;
-      transferable = false;
-    };
-    {
-      name = "sysinfo-wide-5";
-      owner = "init";
-      holder = "sysinfo";
-      rights = [
-        "send";
-        "recv";
-      ];
-      slot = 5;
-      transferable = false;
-    };
-  ];
+  mintedBindings = [];
   interfaceSchemas = [];
   objects = [
     {

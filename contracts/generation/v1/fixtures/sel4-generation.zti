@@ -29,6 +29,7 @@
   grants = [
     {
       name = "init-sel4-generation-manager";
+      capabilityKind = "executable";
       rights = [
         "exec";
         "spawn";
@@ -39,6 +40,7 @@
     };
     {
       name = "init-sel4-generation-client";
+      capabilityKind = "executable";
       rights = [
         "exec";
         "spawn";
@@ -49,6 +51,7 @@
     };
     {
       name = "generation-manager-device-idle";
+      capabilityKind = "block";
       rights = [
         "blockRead";
         "blockWrite";
@@ -59,6 +62,7 @@
     };
     {
       name = "generation-manager-device";
+      capabilityKind = "block";
       rights = [
         "blockRead";
         "blockWrite";
@@ -68,14 +72,58 @@
       transferable = false;
     };
     {
-      minted = true;
       name = "generation-rpc";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
       ];
       source = "sel4-generation-client";
       target = "sel4-generation-manager";
+      transferable = false;
+    };
+    {
+      name = "generation-manager-run-token";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "init";
+      target = "sel4-generation-manager";
+      transferable = false;
+    };
+    {
+      name = "generation-client-run-token";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "init";
+      target = "sel4-generation-client";
+      transferable = false;
+    };
+    {
+      name = "generation-manager-idle-token";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "sel4-generation-manager-idle";
+      target = "sel4-generation-manager-idle";
+      transferable = false;
+    };
+    {
+      name = "generation-client-idle-token";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "sel4-generation-client-idle";
+      target = "sel4-generation-client-idle";
       transferable = false;
     };
   ];
@@ -97,6 +145,14 @@
           grant = "init-sel4-generation-manager";
           slot = 2;
         };
+        {
+          grant = "generation-manager-run-token";
+          slot = 3;
+        };
+        {
+          grant = "generation-client-run-token";
+          slot = 4;
+        };
       ];
       dependencies = [];
       executable = "init";
@@ -108,8 +164,16 @@
       autostart = true;
       bindings = [
         {
+          grant = "generation-rpc";
+          slot = 0;
+        };
+        {
           grant = "generation-manager-device";
           slot = 1;
+        };
+        {
+          grant = "generation-manager-run-token";
+          slot = 2;
         };
       ];
       dependencies = [
@@ -122,7 +186,16 @@
     };
     {
       autostart = true;
-      bindings = [];
+      bindings = [
+        {
+          grant = "generation-rpc";
+          slot = 0;
+        };
+        {
+          grant = "generation-client-run-token";
+          slot = 1;
+        };
+      ];
       dependencies = [
         "init";
       ];
@@ -133,7 +206,12 @@
     };
     {
       autostart = true;
-      bindings = [];
+      bindings = [
+        {
+          grant = "generation-client-idle-token";
+          slot = 1;
+        };
+      ];
       dependencies = [
         "init";
       ];
@@ -145,6 +223,10 @@
     {
       autostart = true;
       bindings = [
+        {
+          grant = "generation-manager-idle-token";
+          slot = 2;
+        };
         {
           grant = "generation-manager-device-idle";
           slot = 1;
@@ -161,25 +243,14 @@
   ];
   mintedBindings = [
     {
-      name = "generation-manager-rpc";
+      name = "generation-manager-client-supervision";
+      capabilityKind = "supervision";
       owner = "init";
       holder = "sel4-generation-manager";
       rights = [
-        "send";
-        "recv";
+        "supervise";
       ];
-      slot = 0;
-      transferable = false;
-    };
-    {
-      name = "generation-client-rpc";
-      owner = "init";
-      holder = "sel4-generation-client";
-      rights = [
-        "send";
-        "recv";
-      ];
-      slot = 0;
+      slot = 3;
       transferable = false;
     };
   ];

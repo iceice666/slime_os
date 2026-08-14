@@ -29,6 +29,7 @@ use crate::child_vspace::{
     create_child_vspace,
 };
 use crate::generation::Authority;
+use crate::graph::{AuthorityTable, CapabilityEntry};
 use crate::object_allocator::{AllocError, ObjectAllocator, TaskArenaId};
 
 /// Child tasks one generation may run.
@@ -44,10 +45,9 @@ use crate::object_allocator::{AllocError, ObjectAllocator, TaskArenaId};
 /// raised to the first passing number moves again at the next graph, while
 /// exhaustion reports `DestinationSlotsExhausted` as a composition defect.
 ///
-/// The cost is the per-task graph table this bounds alongside it:
-/// `GraphTables` holds `MAX_GRAPH_TASKS` (== this) tables of `MAX_TASK_CAPS`
-/// capabilities, about 1.5 KiB each, so the sixteen added entries cost ~24 KiB
-/// of `.bss`. Both tables live in `static`s for backlog B3's reason.
+/// Each entry owns its bounded logical authority table directly. Raising this
+/// bound therefore raises task objects and authority storage together; there
+/// is no second task-indexed authority database to exhaust or synchronize.
 pub const MAX_TASKS: usize = 48;
 
 /// Slots in a child CNode for fixed authority, declared native endpoints,
@@ -355,6 +355,9 @@ pub struct Task {
     pub workers: [Option<sel4::cap::Tcb>; MAX_CHILD_THREADS],
     pub vspace: ChildVSpace,
     pub authority: Authority,
+    /// Root-mediated authority held by this task. It is reclaimed atomically
+    /// with the task record and is never indexed by a second global table.
+    pub capabilities: AuthorityTable,
     pub supervision: Supervision,
     pub entry: u64,
     pub activated: bool,
@@ -445,6 +448,42 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
 
     pub fn get(&self, id: TaskId) -> Option<&Task> {
         self.tasks.iter().flatten().find(|task| task.id == id)
+    }
+
+    pub fn get_mut(&mut self, id: TaskId) -> Option<&mut Task> {
+        self.tasks.iter_mut().flatten().find(|task| task.id == id)
+    }
+
+    pub fn authority(&self, id: TaskId) -> Option<&AuthorityTable> {
+        self.get(id).map(|task| &task.capabilities)
+    }
+
+    pub fn authority_mut(&mut self, id: TaskId) -> Option<&mut AuthorityTable> {
+        self.get_mut(id).map(|task| &mut task.capabilities)
+    }
+
+    pub fn install_authority(
+        &mut self,
+        id: TaskId,
+        slot: u32,
+        capability: CapabilityEntry,
+    ) -> Result<(), crate::ipc::IpcError> {
+        self.authority_mut(id)
+            .ok_or(crate::ipc::IpcError::InvalidOperation)?
+            .install(slot, capability)
+    }
+
+    /// Whether any live task holds a supervision capability naming `subject`.
+    pub fn holds_supervision(&self, subject: TaskId) -> bool {
+        self.tasks().any(|task| {
+            task.capabilities.slots().any(|(_, capability)| {
+                matches!(
+                    capability,
+                    Some(CapabilityEntry::Supervision(capability))
+                        if capability.task == subject
+                )
+            })
+        })
     }
 
     pub fn tasks(&self) -> impl Iterator<Item = &Task> {
@@ -788,6 +827,7 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
             tcb,
             vspace,
             authority,
+            capabilities: AuthorityTable::new(),
             supervision,
             entry,
             activated: false,

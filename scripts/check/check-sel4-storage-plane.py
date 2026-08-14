@@ -57,13 +57,6 @@ SECTOR_BYTES = 512
 
 REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     (
-        # The unconfigured instance the root launches. Asserted rather than
-        # tolerated: if it ever stopped parking, the arms below could be its and
-        # the run-token discrimination would be silently broken.
-        "the unconfigured instance parked without a run token",
-        r"\[sel4-storage-probe\] idle without a run token",
-    ),
-    (
         # The spawned instance's own block capability, placed by the root above
         # the parent's grants. Before P5.4.2c a spawned child received only what
         # its parent handed it, so this line did not exist and the arms below
@@ -216,12 +209,18 @@ def boot(profile: dict[str, object], disk: Path) -> str:
     watchdog.start()
     try:
         assert process.stdout is not None
+        # The root-owned idle instance runs concurrently with init and reports
+        # holding no run token only after a bounded wait, so its line can land
+        # before or after init's completion marker. Stop once *both* facts have
+        # been observed rather than at the terminal alone.
+        idle_seen = False
         for line in process.stdout:
             lines.append(line.rstrip("\r\n"))
             if failures.search(line):
                 break
-            if terminal.search(line):
-                reached = True
+            idle_seen |= "[sel4-storage-probe] idle without a run token" in line
+            reached |= terminal.search(line) is not None
+            if reached and idle_seen:
                 break
     finally:
         watchdog.cancel()
@@ -262,6 +261,12 @@ def check_transcript(transcript: str) -> None:
                 fail(f"marker out of order: {label} ({pattern})")
             fail(f"missing marker: {label} ({pattern})")
         position = match.end()
+    # Asserted by presence, not by position: the idle instance concludes it
+    # holds no run token only after a bounded wait, so its line lands wherever
+    # the scheduler puts it. Ordering it would assert a scheduling accident.
+    if "[sel4-storage-probe] idle without a run token" not in transcript:
+        report_transcript(transcript)
+        fail("the unconfigured instance did not report parking without a run token")
     # Exactly one instance ran the scenario. Two would mean the run-token
     # discrimination failed and both copies raced on the scratch sector.
     completions = transcript.count("[sel4-storage-probe] storage plane complete")

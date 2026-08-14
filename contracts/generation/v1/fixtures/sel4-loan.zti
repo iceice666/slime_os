@@ -29,6 +29,7 @@
   grants = [
     {
       name = "init-sample-receiver";
+      capabilityKind = "executable";
       rights = [
         "exec";
         "spawn";
@@ -39,6 +40,7 @@
     };
     {
       name = "init-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
       rights = [
         "bufferCreate";
       ];
@@ -48,6 +50,7 @@
     };
     {
       name = "console-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
       rights = [
         "bufferCreate";
       ];
@@ -57,6 +60,7 @@
     };
     {
       name = "sample-receiver-side";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -67,6 +71,7 @@
     };
     {
       name = "dango-output";
+      capabilityKind = "endpoint";
       rights = [
         "recv";
       ];
@@ -76,6 +81,7 @@
     };
     {
       name = "powerbox-client";
+      capabilityKind = "endpoint";
       rights = [
         "recv";
       ];

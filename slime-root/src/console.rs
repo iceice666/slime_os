@@ -47,9 +47,8 @@ pub const RIGHT_BLOCK_READ: u64 = 1 << 10;
 pub const RIGHT_BLOCK_WRITE: u64 = 1 << 11;
 
 use crate::child_vspace::ScratchPage;
-use crate::graph::{self, GraphTables};
 use crate::ipc::{self, IpcError, Response};
-use crate::task::{MAX_TASKS, TaskId};
+use crate::task::{MAX_TASKS, TaskId, TaskTable};
 use crate::transfer_window::{self, Window, WindowTable, descriptor_thread};
 
 /// Stack for the console thread, in the root's own image so it is mapped
@@ -100,8 +99,8 @@ pub struct ConsoleContext {
     /// dispatcher: its cursor is per-task session state that nothing else
     /// touches, so relocating it removes the coupling instead of guarding it.
     pub input: *mut ScriptedInput,
-    /// The capability table, read to check the caller holds input authority.
-    pub graph: *const GraphTables,
+    /// Task records, read to resolve the caller's typed authority.
+    pub tasks: *const TaskTable<MAX_TASKS>,
     /// The block devices this thread drives (B43).
     ///
     /// Owned here rather than shared with the main dispatcher: whoever answers
@@ -113,15 +112,10 @@ pub struct ConsoleContext {
     /// The namespace roots (B45). Owned here because inspect and commit are
     /// the only writers and both live here.
     pub namespaces: *mut crate::directory::Namespaces,
-    /// The interned scopes, read-only here.
-    ///
-    /// `DirectoryDerive` stayed on the main dispatcher precisely because it is
-    /// the only writer of *both* this table and the caller's `GraphTables`
-    /// entry — and the main loop already writes that entry on `cap_drop` and
-    /// on a spawn's result. Two threads writing one task's capability table
-    /// is a data race, so derive did not move; a scope, once interned, is
-    /// never mutated or freed, so reading it from here is sound.
-    pub scopes: *const crate::graph::ScopeTable,
+    /// The interned scopes, read-only here. Directory derivation remains on the
+    /// owning dispatcher because it mutates both this service state and one
+    /// task's authority table.
+    pub scopes: *const crate::directory::ScopeTable,
 }
 
 /// The scripted key source, owned by this thread (B41).
@@ -186,7 +180,7 @@ pub unsafe fn serve(context: &ConsoleContext) -> ! {
     // SAFETY: the caller's contract; both outlive this thread, and the input
     // cursor is owned here rather than shared with the main dispatcher.
     let windows = unsafe { &*context.windows };
-    let graph = unsafe { &*context.graph };
+    let tasks = unsafe { &*context.tasks };
     let input = unsafe { &mut *context.input };
     let devices = unsafe { &mut *context.devices };
     let namespaces = unsafe { &mut *context.namespaces };
@@ -221,11 +215,11 @@ pub unsafe fn serve(context: &ConsoleContext) -> ! {
                 buffer,
             ),
             ipc::ConsoleKind::InputRead => {
-                pending = Some(serve_input_read(graph, input, id, &message.mrs));
+                pending = Some(serve_input_read(tasks, input, id, &message.mrs));
             }
             ipc::ConsoleKind::DirectoryInspect => {
                 pending = Some(crate::directory::serve_directory_inspect(
-                    graph,
+                    tasks,
                     namespaces,
                     scopes,
                     window,
@@ -237,7 +231,7 @@ pub unsafe fn serve(context: &ConsoleContext) -> ! {
             }
             ipc::ConsoleKind::DirectoryCommit => {
                 pending = Some(crate::directory::serve_directory_commit(
-                    graph,
+                    tasks,
                     namespaces,
                     scopes,
                     window,
@@ -249,7 +243,7 @@ pub unsafe fn serve(context: &ConsoleContext) -> ! {
             }
             ipc::ConsoleKind::BlockTransact => {
                 pending = Some(serve_block_transact(
-                    graph,
+                    tasks,
                     devices,
                     window,
                     &context.scratch,
@@ -322,19 +316,16 @@ const fn encode_key(byte: u8) -> u64 {
 /// The caller must hold an input capability at the slot it names — denial is a
 /// missing or wrong-kinded capability, checked against the graph table, not a
 /// policy the dispatcher applies.
-fn serve_input_read(
-    graph: &GraphTables,
+fn serve_input_read<const TASKS: usize>(
+    tasks: &TaskTable<TASKS>,
     input: &mut ScriptedInput,
     id: TaskId,
     words: &[sel4::Word],
 ) -> Response {
-    let Some(table) = graph.get(id) else {
+    let Some(table) = tasks.authority(id) else {
         return Response::error(IpcError::BadCapability);
     };
-    let Ok(capability) = table.resolve(words[0] as u32, RIGHT_INPUT_READ) else {
-        return Response::error(IpcError::BadCapability);
-    };
-    if !matches!(capability.resource, graph::Resource::Input) {
+    if table.resolve_input(words[0] as u32).is_err() {
         return Response::error(IpcError::BadCapability);
     }
     match input.next_event(id) {
@@ -347,7 +338,7 @@ fn serve_input_read(
 
 /// Answer `BlockTransact`: one sector-granular device request (B43).
 ///
-/// Serving this on the console thread rather than the universal dispatcher is
+/// Serving this on the console thread rather than the lifecycle dispatcher is
 /// the point — a block request is a *device* request, and a slow disk must not
 /// hold up lifecycle, supervision, or fabric traffic. The device tables came
 /// here with it, because authority over them is the thing that must not be
@@ -363,8 +354,8 @@ fn serve_input_read(
 /// no such ambient addressing here. `bytes_len` is the record plus sector
 /// representation in the reply this cutover answers with.
 #[allow(clippy::too_many_lines)]
-pub(crate) fn serve_block_transact(
-    graph: &GraphTables,
+pub(crate) fn serve_block_transact<const TASKS: usize>(
+    tasks: &TaskTable<TASKS>,
     devices: &mut crate::device::BlockDevices,
     window: Option<transfer_window::Window>,
     scratch: &ScratchPage,
@@ -380,16 +371,16 @@ pub(crate) fn serve_block_transact(
     let Some(slot) = words.first().map(|slot| *slot as u32) else {
         return Response::error(IpcError::InvalidLength);
     };
-    let Some(table) = graph.get(id) else {
+    let Some(table) = tasks.authority(id) else {
         return Response::error(IpcError::BadCapability);
     };
     let Some(capability) = table.get(slot) else {
         return Response::error(IpcError::BadCapability);
     };
-    let graph::Resource::Block { device: index } = capability.resource else {
+    let crate::graph::CapabilityEntry::Block(capability) = capability else {
         return Response::error(IpcError::BadCapability);
     };
-    let index = index as usize;
+    let index = capability.device as usize;
     // Which device: the capability's own index, placed by the generation. A
     // component holding the source cannot name the receiver, because the index
     // is in the capability rather than in the request.
@@ -421,7 +412,7 @@ pub(crate) fn serve_block_transact(
         OP_WRITE | OP_FLUSH => RIGHT_BLOCK_WRITE,
         _ => return Response::error(IpcError::InvalidLength),
     };
-    if capability.rights & required == 0 {
+    if !capability.rights.allows(required) {
         sel4::debug_println!(
             "SLIME_GRAPH block refused task={} op={} class=rights",
             id.0,

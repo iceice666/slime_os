@@ -26,6 +26,9 @@ const RIGHT_TRANSFER: u32 = 4;
 const RIGHT_DIRECTORY_READ: u32 = 1 << 19;
 
 include!(concat!(env!("OUT_DIR"), "/dango_profile.rs"));
+mod generation_profile {
+    include!(concat!(env!("OUT_DIR"), "/fabric_profile.rs"));
+}
 
 slime_rt::entry!(main);
 
@@ -53,25 +56,25 @@ fn main(_startup_arg: u32) {
                 InputKey::Character(character) if character.is_ascii() && len < line.len() => {
                     line[len] = character as u8;
                     len += 1;
-                    if option_env!("SLIME_DANGO_CHECK") != Some("1") {
+                    if generation_profile::GENERATION_BOOT_ACTION != "dango" {
                         console(&[character as u8]);
                     }
                 }
                 InputKey::Space if len < line.len() => {
                     line[len] = b' ';
                     len += 1;
-                    if option_env!("SLIME_DANGO_CHECK") != Some("1") {
+                    if generation_profile::GENERATION_BOOT_ACTION != "dango" {
                         console(b" ");
                     }
                 }
                 InputKey::Backspace if len > 0 => {
                     len -= 1;
-                    if option_env!("SLIME_DANGO_CHECK") != Some("1") {
+                    if generation_profile::GENERATION_BOOT_ACTION != "dango" {
                         console(b"\x08 \x08");
                     }
                 }
                 InputKey::Enter => {
-                    if option_env!("SLIME_DANGO_CHECK") == Some("1") {
+                    if generation_profile::GENERATION_BOOT_ACTION == "dango" {
                         console(&line[..len]);
                     }
                     console(b"\n");
@@ -227,12 +230,12 @@ fn receive_reply() -> WireSpawnReply {
                 if !valid_spawn_reply(&decoded) {
                     slime_rt::exit(1);
                 }
+                // A supervision handle has no kernel object to travel in the
+                // message, so an export addressed here arrives alone and is
+                // claimed rather than read out of the received-capability
+                // array, which carries only native Endpoint handles (B46).
                 return WireSpawnReply {
-                    supervision_slot: if received_caps[0] == 0 {
-                        0
-                    } else {
-                        received_caps[0] as u32
-                    },
+                    supervision_slot: slime_rt::capability_import().unwrap_or(0),
                     ..decoded
                 };
             }

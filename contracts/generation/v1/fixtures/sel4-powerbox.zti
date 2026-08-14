@@ -29,6 +29,7 @@
   grants = [
     {
       name = "init-powerbox-chooser";
+      capabilityKind = "executable";
       rights = [
         "exec";
         "spawn";
@@ -39,6 +40,7 @@
     };
     {
       name = "init-powerbox-probe";
+      capabilityKind = "executable";
       rights = [
         "exec";
         "spawn";
@@ -49,6 +51,7 @@
     };
     {
       name = "powerbox-a-root";
+      capabilityKind = "directory";
       rights = [
         "directoryRead";
         "directoryDerive";
@@ -59,6 +62,7 @@
     };
     {
       name = "powerbox-b-input";
+      capabilityKind = "input";
       rights = [
         "inputRead";
       ];
@@ -67,8 +71,8 @@
       transferable = false;
     };
     {
-      minted = true;
       name = "powerbox-rpc";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -114,6 +118,10 @@
           grant = "powerbox-b-input";
           slot = 2;
         };
+        {
+          grant = "powerbox-rpc";
+          slot = 0;
+        };
       ];
       dependencies = [
         "init";
@@ -125,7 +133,12 @@
     };
     {
       autostart = true;
-      bindings = [];
+      bindings = [
+        {
+          grant = "powerbox-rpc";
+          slot = 0;
+        };
+      ];
       dependencies = [
         "init";
       ];
@@ -135,30 +148,7 @@
       owner = "init";
     };
   ];
-  mintedBindings = [
-    {
-      name = "powerbox-chooser-rpc";
-      owner = "init";
-      holder = "powerbox-chooser";
-      rights = [
-        "send";
-        "recv";
-      ];
-      slot = 0;
-      transferable = false;
-    };
-    {
-      name = "powerbox-probe-rpc";
-      owner = "init";
-      holder = "powerbox-probe";
-      rights = [
-        "send";
-        "recv";
-      ];
-      slot = 0;
-      transferable = false;
-    };
-  ];
+  mintedBindings = [];
   interfaceSchemas = [];
   objects = [
     {

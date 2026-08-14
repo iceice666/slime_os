@@ -29,6 +29,7 @@ use slime_proto::{
     valid_capability_transfer, valid_interposition_trace, valid_stream_ack, valid_stream_sample,
 };
 use slime_rt::{ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
+include!(concat!(env!("OUT_DIR"), "/fabric_profile.rs"));
 
 slime_rt::entry!(main);
 
@@ -48,7 +49,7 @@ fn fail(reason: &[u8]) -> ! {
 }
 
 fn main(_startup_arg: u32) {
-    if option_env!("SLIME_FABRIC_VISIBILITY_CHECK") == Some("1") {
+    if GENERATION_BOOT_ACTION == "visibility" {
         visibility_main();
         return;
     }

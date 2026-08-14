@@ -37,10 +37,6 @@ BOOT_TIMEOUT_SECONDS = 180
 
 REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     (
-        "the unconfigured instance parked without a run token",
-        r"\[sel4-input-probe\] idle without a run token",
-    ),
-    (
         "the spawned instance received its declared input authority",
         r"SLIME_GRAPH declared placed task=\d+ child=\d+ slot=\d+ kind=input",
     ),
@@ -179,12 +175,19 @@ def boot(profile: dict[str, object]) -> str:
     watchdog.start()
     try:
         assert process.stdout is not None
+        # The root-owned idle instance runs concurrently with init and reports
+        # holding no run token only after a bounded wait, so its line can land
+        # before or after init's completion marker. Stop once *both* facts have
+        # been observed. A fixed line tail waited forever on a quiescent graph
+        # that had nothing else to print; this waits for evidence, not output.
+        idle_seen = False
         for line in process.stdout:
             lines.append(line.rstrip("\r\n"))
             if failures.search(line):
                 break
-            if terminal.search(line):
-                reached = True
+            idle_seen |= "[sel4-input-probe] idle without a run token" in line
+            reached |= terminal.search(line) is not None
+            if reached and idle_seen:
                 break
     finally:
         watchdog.cancel()
@@ -225,6 +228,18 @@ def check_transcript(transcript: str) -> None:
                 fail(f"marker out of order: {label} ({pattern})")
             fail(f"missing marker: {label} ({pattern})")
         position = match.end()
+    # Asserted by count, not by position.
+    #
+    # The plane declares this executable twice: the instance init spawns, and a
+    # root-owned idle one holding the same input authority with no session. The
+    # idle instance concludes it holds no run token only after a bounded wait,
+    # which is what distinguishes "nothing will ever arrive" from "the sender has
+    # not spoken yet" — so its marker lands wherever the scheduler puts it,
+    # including after the terminal line. Ordering it would be asserting a
+    # scheduling accident.
+    if "[sel4-input-probe] idle without a run token" not in transcript:
+        report_transcript(transcript)
+        fail("the unconfigured instance did not report parking without a run token")
     completions = transcript.count("[sel4-input-probe] input plane complete")
     if completions != 1:
         report_transcript(transcript)

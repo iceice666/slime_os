@@ -59,29 +59,26 @@ BOOT_TIMEOUT_SECONDS = 120
 REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     (
         "the spawn generation was admitted",
-        r"SLIME_ROOT generation admitted number=\d+ executables=3 instances=3 grants=3 ",
+        r"SLIME_ROOT generation admitted number=\d+ executables=3 instances=3 grants=11 ",
     ),
     (
         "every payload is a native ELF image",
         r"SLIME_ROOT graph admitted executables=3 instances=3 slimecm=0 elf=3 unrecognized=0",
     ),
     (
-        # B10: init's factory sits at the slot the boot layout names, not at a
-        # number the root invented. `init.rs` reads the same table through its
-        # generated `ENDPOINT_FACTORY_SLOT`, so the two readers agree by
-        # construction rather than by inspection.
-        "init's endpoint factory was placed at its layout slot",
-        r"SLIME_GRAPH factory placed task=\d+ component=init slot=3 "
-        r"kind=endpoint-factory",
+        # Init's executable authorities come from the generation-derived
+        # layout rather than a cursor. The exact declared slot numbers are
+        # private to that generated profile.
+        "init was staged holding both declared executables",
+        r"SLIME_GRAPH staged task=\d+ instance=init executable=init grants=11 bindings=11 ",
     ),
     (
-        # The layout names console at 1 and sysinfo at 4. A cursor would have
-        # numbered them 1 and 2, and `init.rs`'s `SYSINFO_SLOT` would then
-        # resolve to whatever else landed at 4 -- the positional coupling B10
-        # exists to remove, and it only became observable once init held an
-        # executable grant at all.
-        "init was staged holding both declared executables",
-        r"SLIME_GRAPH staged task=\d+ instance=init executable=init grants=3 bindings=3 ",
+        # The endpoints both children answer on are generation-declared seL4
+        # Endpoints the root materializes and installs into each end itself.
+        # A parent holds no endpoint half to hand over, so what crosses at
+        # spawn is transferable directory authority instead.
+        "the declared control endpoints were materialized by the root",
+        r"SLIME_GRAPH peer endpoints created=2 grants=2 installed=\d+",
     ),
     # -- required check: an ungranted or over-wide spawn is refused --
     (
@@ -89,18 +86,17 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"SLIME_GRAPH spawn refused task=\d+ slot=63 ungranted",
     ),
     (
-        # A slot holding real authority of another kind. Init genuinely holds
-        # its endpoint factory at the slot the fixture declares (3), so this is
-        # a check on kind rather than on possession.
-        "a factory slot cannot name an executable",
+        # A live non-executable capability slot must be refused identically to
+        # an empty one; the component cannot use spawn to probe capability
+        # kinds.
+        "a non-executable capability slot cannot name an executable",
         r"SLIME_GRAPH spawn refused task=\d+ slot=3 ungranted",
     ),
     ("both refusals reached the component", r"\[init\] ungranted executable refused"),
     (
         # The narrowing rule: a grant's rights must be a subset of what the
-        # parent holds. Init holds the factory with `endpointCreate` alone, so
-        # asking to hand on `bufferCreate` is asking the root to manufacture
-        # authority no generation declared.
+        # parent holds. Asking to add buffer creation authority is asking the
+        # root to manufacture authority no generation declared.
         "a spawn cannot widen its own grant",
         r"\[init\] widened grant refused",
     ),
@@ -113,26 +109,13 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     ),
     # -- required check: a child is constructed from a grant-resolved executable --
     (
-        "a channel pair was minted through the declared factory",
-        r"SLIME_GRAPH endpoint minted task=\d+ key=\d+ slots=\d+,\d+",
-    ),
-    (
         "console was authorized from its declared executable grant",
         r"SLIME_GRAPH spawn authorized task=\d+ slot=1 component=console grants=1",
     ),
     (
-        # The distribution step. The end is copied to the child at *the child's*
-        # slot 0, which is the only slot `console.rs` addresses -- and that
-        # component never learns the number, because the order of the parent's
-        # grant list is what fixes it. Since B25 the parent keeps its own slot,
-        # so this asserts placement rather than a move.
-        "console received its channel end at slot 0",
-        r"SLIME_GRAPH channel copied parent=\d+ child=\d+ key=\d+ side=\w+ slot=0",
-    ),
-    (
         "console was constructed with its declared capabilities",
         r"SLIME_GRAPH spawned task=\d+ child=\d+ component=console grants=1 "
-        r"channels=1 handle=\d+",
+        r"endpoints=1 notifications=0 handle=\d+ supervision_grants=0 buffer_factory_grants=0",
     ),
     ("the spawn reached the component", r"\[init\] console spawned"),
     (
@@ -143,10 +126,10 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     ),
     (
         # A spawn grant is a copy, matching the x86 oracle: the child receives
-        # the endpoint side and the parent can still resolve the original slot.
-        # The peer half working proves the pair itself was not disturbed.
-        "the granted end remained usable beside the child",
-        r"\[init\] granted channel end copied",
+        # a narrowed view and the parent can still resolve the slot it granted
+        # from.
+        "the granted view remained usable beside the child",
+        r"\[init\] granted view retained",
     ),
     # -- required check: termination observed through a supervision handle --
     (
@@ -158,9 +141,10 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         # (`transfer_window::read_staged_array`); a root that lost it refuses
         # the spawn outright and `init` never reaches this marker at all.
         #
-        # Six is B15's own exit-condition number and the size of this repo's
-        # largest real grant lists (`GENERATION_MANAGER_CAPS`, `dango_caps()`),
-        # so the arm is the oracle's shape rather than a synthetic width.
+        # Six is B15's own exit-condition number, so the arm is the oracle's
+        # shape rather than a synthetic width. The six capabilities are narrowed
+        # directory views, because an endpoint is a declared object the root
+        # installs itself and a parent has none to pass on.
         "sysinfo was authorized from its layout-named executable slot with six grants",
         r"SLIME_GRAPH spawn authorized task=\d+ slot=2 component=sysinfo grants=6",
     ),
@@ -169,44 +153,34 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         # the slots its numbering fixes. A root that admitted the wide array
         # but installed only the first four reaches the authorization marker
         # and fails in the component.
-        "all six grants were copied to the child",
+        "sysinfo received its six declared capabilities",
         r"SLIME_GRAPH spawned task=\d+ child=\d+ component=sysinfo grants=6 "
-        r"channels=6 handle=\d+",
+        r"endpoints=1 notifications=0 handle=\d+ supervision_grants=0 buffer_factory_grants=0",
     ),
     ("sysinfo was constructed", r"\[init\] sysinfo spawned"),
     (
-        # The parent directly reuses every source slot after spawn. Success or
-        # queue-full is accepted in the component; either means the slot still
-        # resolves, which is the B25 copy property.
-        "the parent reused all six copied ends",
+        # The parent re-resolves every source slot after spawn: a grant is a
+        # copy, so the view it granted from must still answer.
+        "the parent reused all six copied views",
         r"\[init\] six grants copied",
-    ),
-    (
-        # The launch context, sent down the half init kept. `sysinfo` is
-        # blocked in `recv` on the half it was granted.
-        "the launch context crossed the minted channel",
-        r"\[init\] launch context sent",
-    ),
-    (
-        # A parked wait. Deliberately *not* claimed as proof that the park was
-        # on a supervision source: `main.rs` emits this line for any parked
-        # wait, and the spawned console parks on an endpoint too. What proves
-        # the supervision park is `supervision woken` below, which no channel
-        # can produce. This marker's job is only to pin that a park happened
-        # before the wake rather than after it.
-        "a wait parked before the wake",
-        r"SLIME_GRAPH parked task=\d+ reason=wait",
     ),
     (
         # The unmodified binary ran and produced its own output, which is what
         # makes "constructed from a grant-resolved executable" a fact about a
-        # real component rather than about an empty task.
+        # real component rather than about an empty task. It can only run at all
+        # because the launch context reached it; that init sent one is asserted
+        # by presence below, since a `debug_write` is a root round trip and so
+        # orders against the child it just unblocked only by scheduling accident.
         "the unmodified child ran",
         r"\[sysinfo\] spawned through profile",
     ),
     (
-        "the child's death woke its parent",
-        r"SLIME_GRAPH supervision woken task=\d+ child=\d+",
+        # The child ended of its own accord. The cutover deleted `WaitSet` and
+        # its `parked … reason=wait` / `supervision woken` pair: a supervision
+        # handle is polled, so what remains observable is the exit the root
+        # recorded and the outcome the parent then collected through the handle.
+        "the child exited of its own accord",
+        r"SLIME_GRAPH component exit task=\d+ status=0",
     ),
     (
         # `kind=0` is a clean exit. The record outlives the task itself --
@@ -238,26 +212,13 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"SLIME_GRAPH component exit task=\d+ status=0",
     ),
     (
-        # End to end, not on the root's own bookkeeping: the unmodified
-        # `console.rs` `debug_write`s whatever arrives on its slot 0, so this
-        # line is the child *reading* the end it was handed. The `channel
-        # handed` marker above is the root saying it moved one; this is the
-        # child proving it landed somewhere it could use.
-        "the spawned console read the end it was handed",
-        r"\[console\] spawned child reached",
-    ),
-    (
-        # `waits=0` is the teardown property: nobody is still registered on a
-        # child's termination, which would be a wake that can never arrive.
         # `terminated` is deliberately non-zero -- one record per child that
         # ended, kept past reclamation by design -- so a zero there would mean
-        # the supervision path recorded nothing at all.
-        # `endpoints=7` is the two channels the scenario always minted plus the
-        # five B15's wide spawn needs: `preflight_spawn_grants` refuses a
-        # repeated slot and an endpoint grant is a move, so six distinct grants
-        # need six distinct ends and no channel can supply two.
-        "every spawn, drop, and wait was accounted for",
-        r"SLIME_GRAPH spawns served=2 drops=1 endpoints=7 terminated=[1-9]\d* waits=0",
+        # the supervision path recorded nothing at all. Two spawns and one drop
+        # is the scenario's exact shape: `console` and `sysinfo`, with the live
+        # handle dropped and the collected one consumed.
+        "every spawn and drop was accounted for",
+        r"SLIME_GRAPH spawns served=2 drops=1 terminated=[1-9]\d*",
     ),
 )
 
@@ -482,13 +443,24 @@ def check_transcript(transcript: str) -> None:
                 fail(f"marker out of order: {description} ({pattern})")
             fail(f"missing marker: {description} ({pattern})")
         position = match.end()
+    # Asserted by presence, not by position. Each of these is a `debug_write`,
+    # which is a root round trip: init emits it after unblocking a child that
+    # then runs concurrently, so ordering it against that child's own output
+    # would assert a scheduling accident rather than the handoff.
+    for description, marker in (
+        ("init sent the launch context down its declared endpoint", "[init] launch context sent"),
+        ("the spawned console read the endpoint it was given", "[console] spawned child reached"),
+    ):
+        if marker not in transcript:
+            report_transcript(transcript)
+            fail(f"missing marker: {description} ({marker})")
     check_spawned_children_are_unmodified()
 
 
-# Components this fixture spawns that carry no seL4 branch at all. The claim is
-# checked against the sources rather than inferred from the transcript: a
-# component that grew a `SLIME_SEL4_SPAWN_CHECK` arm would still produce every
-# marker above while quietly making the milestone's central claim false.
+# Product graph selection is authenticated generation data. A child rewritten
+# around a private compile-time scenario selector would violate this gate even
+# if it reproduced the same transcript.
+FORBIDDEN_COMPONENT_SELECTORS = ("option_env!(", "cfg!(slime_")
 UNMODIFIED_CHILDREN = ("console", "sysinfo")
 
 
@@ -501,9 +473,9 @@ def check_spawned_children_are_unmodified() -> None:
     x86 oracle runs -- a child rewritten to suit this root would look identical
     on serial. So the sources are read directly.
 
-    `console.rs` is allowed one guarded probe, which P5.3.2 added and which this
-    gate's generation does not set; what it may not have is a spawn-specific
-    branch.
+    Both sources must remain free of compile-time product selectors. Runtime
+    behavior may still inspect capabilities and generation-derived profile
+    data, which are the contracts this gate actually boots.
     """
     for name in UNMODIFIED_CHILDREN:
         source = ROOT / "components" / "bins" / "src" / "bin" / f"{name}.rs"
@@ -511,15 +483,17 @@ def check_spawned_children_are_unmodified() -> None:
             text = source.read_text(encoding="utf-8")
         except OSError as error:
             fail(f"cannot read {source.relative_to(ROOT)}: {error}")
-        if "SLIME_SEL4_SPAWN_CHECK" in text:
-            fail(
-                f"{source.relative_to(ROOT)} branches on the spawn check flag; "
-                "the milestone requires this component to run unmodified"
-            )
+        for selector in FORBIDDEN_COMPONENT_SELECTORS:
+            if selector in text:
+                fail(
+                    f"{source.relative_to(ROOT)} branches on compile-time selector "
+                    f"{selector!r}; the milestone requires this component to run "
+                    "from generation data"
+                )
     print(
         "components: "
         + ", ".join(UNMODIFIED_CHILDREN)
-        + " carry no spawn-check branch and run as the x86 oracle builds them",
+        + " carry no compile-time product branch and run as the x86 oracle builds them",
         flush=True,
     )
 

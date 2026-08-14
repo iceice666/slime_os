@@ -249,6 +249,30 @@ def check_transcript(transcript: str) -> None:
     if "[powerbox-probe] manifest directory absent" not in transcript:
         report_transcript(transcript)
         fail("the requester was not confirmed to hold no directory of its own")
+    # *Which* layer refused the derive, named rather than inferred.
+    #
+    # The probe requires exactly `ERR_BAD_CAP` from `directory_derive`, and two
+    # unrelated refusals both answer -1: the directory mechanism finding no
+    # capability at the slot, and the root's declared-service gate finding the
+    # instance never declared the directory mechanism at all. The probe cannot
+    # tell them apart — `IpcError::BadCapability` is one variant for all three
+    # capability failures by design, so a component cannot map its own table by
+    # watching which error a probe returns. The root's own marker can, so the
+    # gate reads it here.
+    #
+    # A requester holding one RPC endpoint declares no directory-kind
+    # capability, so its service set carries no directory mechanism and this is
+    # the refusal that fires. Label 15 is `directory_labels::DERIVE`. Asserting
+    # it keeps the arm from passing on an unrelated -1 — an absent transfer
+    # window, a malformed request — that would look identical to the probe.
+    if not re.search(
+        r"SLIME_GRAPH service refused task=\d+ label=15 class=undeclared", transcript
+    ):
+        report_transcript(transcript)
+        fail(
+            "the requester's derive attempt was not refused as an undeclared "
+            "directory mechanism; some other -1 satisfied the probe's assertion"
+        )
     completions = transcript.count("[powerbox-probe] done")
     if completions != 1:
         report_transcript(transcript)
@@ -259,16 +283,22 @@ def check_transcript(transcript: str) -> None:
     # carry a capability. A chooser that answered the widening request with a
     # mint, or minted on cancellation, shows more than one here; the probe's own
     # assertions could not distinguish "denied" from "granted and discarded".
-    transfers = re.findall(
-        r"SLIME_GRAPH capability transfer task=\d+ channel=\d+ side=\w+ caps=(\d+)",
+    #
+    # Counted at the *import*, which is where a directory now crosses. It is a
+    # root-owned logical capability with no kernel object, so it never rides in
+    # the message: the chooser exports and the probe claims. The retired
+    # `capability transfer … channel=N` marker named the logical channel table
+    # this cutover deleted, so a pattern still expecting it matches nothing —
+    # and a count of nothing is not evidence that nothing crossed.
+    imports = re.findall(
+        r"SLIME_GRAPH capability imported task=\d+ id=\d+ kind=(\w[\w-]*)",
         transcript,
     )
-    carried = [int(count) for count in transfers]
-    if sum(carried) != 1:
+    if imports != ["directory"]:
         report_transcript(transcript)
         fail(
-            f"{sum(carried)} capabilities crossed the powerbox channel, expected "
-            f"exactly 1; saw {carried}"
+            f"expected exactly one directory capability to cross the powerbox "
+            f"channel; saw {imports}"
         )
     # The provenance record's rights must be the ones the probe accepted, not a
     # wider set the chooser happened to hold.

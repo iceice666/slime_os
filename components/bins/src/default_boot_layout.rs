@@ -255,6 +255,8 @@ pub const SERVICE_SPAWN_SLOT: u32 = 12;
 #[allow(dead_code)]
 pub const SPAWN_SERVICE_SLOT: u32 = 5;
 #[allow(dead_code)]
+pub const SPAWN_SERVICE_RPC_SLOT: u32 = SLOT_ABSENT;
+#[allow(dead_code)]
 pub const STORAGE_FAULT_PROBE_SLOT: u32 = SLOT_ABSENT;
 #[allow(dead_code)]
 pub const STORAGE_PROBE_SLOT: u32 = SLOT_ABSENT;

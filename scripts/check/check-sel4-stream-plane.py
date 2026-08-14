@@ -337,7 +337,7 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
             r"SLIME_GRAPH capabilities exports=[1-9]\d* imports=[1-9]\d* "
             r"cancels=\d+ finalized=\d+ outstanding=0 tickets=0",
             r"SLIME_GRAPH loans served=\d+ loans=0 mappings=0 regions=0 "
-            r"orphans=0 aliases=0",
+            r"orphans=0 quota=0",
         ),
     ),
 )
@@ -645,18 +645,6 @@ def check_no_participant_failed(transcript: str) -> None:
     )
 
 
-# Derive every compile-time seL4 scenario flag from the builder's authoritative
-# manifest-to-flag table. A hand-maintained subset silently misses new planes.
-def sel4_check_flags() -> tuple[str, ...]:
-    source = ROOT / "scripts" / "build" / "build-generation.py"
-    try:
-        text = source.read_text(encoding="utf-8")
-    except OSError as error:
-        fail(f"cannot read {source.relative_to(ROOT)}: {error}")
-    flags = tuple(sorted(set(re.findall(r'"(SLIME_SEL4_[A-Z_]+_CHECK)"', text))))
-    if not flags:
-        fail(f"{source.relative_to(ROOT)} declares no seL4 scenario flags")
-    return flags
 
 # Every component this graph runs. All six, with no exceptions and no allowance
 # table -- which is the difference between this milestone and P5.5.1.
@@ -671,45 +659,32 @@ STREAM_COMPONENTS = (
 
 
 def check_components_are_unmodified() -> None:
-    """No stream participant carries a seL4 branch that changes what it does
-    on *this* plane.
+    """No stream participant carries a private compile-time graph selector.
 
-    P5.5.1's gate counted branches, because `fabric-subscriber` needed one to
-    run against a graph that declared no `>MAX_MSG` publisher. This graph
-    declares it, so the branch is gone and the weaker assertion goes with it:
-    every component here is the binary the x86 oracle builds.
-
-    That is the milestone's whole claim, and it is checked at the source rather
-    than inferred from the transcript -- a component could branch on a flag in
-    a way no marker reveals.
-
-    The sweep excludes `SLIME_SEL4_CALL_CHECK`. `fabric-service` reads it, but
-    not as a stream branch: it selects the *call* plane's broker, alongside the
-    oracle's own `SLIME_FABRIC_CALL_CHECK`, because `init.rs` composes those
-    two planes differently while the broker itself is identical. On the stream
-    plane that arm is not taken, so forbidding the flag here asserts something
-    about a different graph -- and would be satisfied by moving the branch
-    rather than by removing a difference.
+    The generation's authenticated boot action and resolved fabric profile are
+    the only product-graph selectors. Checking the selector syntax directly
+    remains meaningful after B50 deleted the builder's manifest-to-flag table;
+    deriving forbidden names from that deleted table would make the guard fail
+    for the success condition it is supposed to prove.
     """
+    forbidden = ("option_env!(\"SLIME_SEL4_", "cfg!(slime_")
     for name in STREAM_COMPONENTS:
         source = ROOT / "components" / "bins" / "src" / "bin" / name
         try:
             text = source.read_text(encoding="utf-8")
         except OSError as error:
             fail(f"cannot read {source.relative_to(ROOT)}: {error}")
-        for flag in sel4_check_flags():
-            if flag == "SLIME_SEL4_CALL_CHECK":
-                continue
-            if flag in text:
+        for selector in forbidden:
+            if selector in text:
                 fail(
-                    f"{source.relative_to(ROOT)} branches on {flag}; this "
-                    "milestone requires every stream participant to run as the "
-                    "x86 oracle builds it, with no seL4 branch"
+                    f"{source.relative_to(ROOT)} branches on private product "
+                    f"selector {selector!r}; graph selection must come from "
+                    "authenticated generation data"
                 )
     print(
         "components: "
         + ", ".join(name.removesuffix(".rs") for name in STREAM_COMPONENTS)
-        + " all run as the x86 oracle builds them, with no seL4 branch",
+        + " use no private compile-time product selector",
         flush=True,
     )
 

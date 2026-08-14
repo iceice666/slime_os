@@ -13,15 +13,14 @@ pub use sha256::sha256;
 pub use syscall::{
     BufferLoan, CapabilityDisposition, DIRECTORY_ROOT_BYTES, ERR_BAD_CAP, ERR_INVALID_ARG,
     ERR_OUT_OF_MEMORY, ERR_PEER_DEAD, ERR_SUCCESS, ERR_WOULDBLOCK, InputEvent, InputKey,
-    MAX_CAPS_PER_MSG, MAX_DIRECTORY_PATH, MAX_MSG, NATIVE_ENDPOINT_BASE, Rights, SharedBuffer,
-    SpawnGrant, Termination, block_transact, block_transact_sector, block_transact_write, call,
-    cap_drop, capability_delegate, capability_import, debug_write, directory_commit,
-    directory_derive, directory_inspect, exit, input_read, native_recv, native_send,
-    notification_poll, notification_signal, notification_wait, recv, recv_blocking, reply, send,
-    shared_buffer_create, shared_buffer_loan, shared_buffer_loan_map, shared_buffer_map,
-    shared_buffer_release, shared_buffer_return, shared_buffer_revoke, shared_buffer_seal,
-    shared_buffer_unmap, spawn, supervision_derive, supervision_status, try_send, unhealthy,
-    yield_now,
+    MAX_CAPS_PER_MSG, MAX_DIRECTORY_PATH, MAX_MSG, Rights, SharedBuffer, SpawnGrant, Termination,
+    block_transact, block_transact_sector, block_transact_write, call, cap_drop,
+    capability_delegate, capability_import, debug_write, directory_commit, directory_derive,
+    directory_inspect, exit, input_read, notification_poll, notification_signal, notification_wait,
+    recv, recv_blocking, reply, send, shared_buffer_create, shared_buffer_loan,
+    shared_buffer_loan_map, shared_buffer_map, shared_buffer_release, shared_buffer_return,
+    shared_buffer_revoke, shared_buffer_seal, shared_buffer_unmap, spawn, supervision_derive,
+    supervision_status, try_send, unhealthy, yield_now,
 };
 
 /// The CSpace slot holding this component's root service endpoint — its only

@@ -134,16 +134,109 @@ RIGHT_TRANSFER = 1 << 2
 RIGHT_EXEC = 1 << 3
 RIGHT_SPAWN = 1 << 16
 RIGHT_ALL = (1 << 26) - 1
+CAPABILITY_ENDPOINT = 1
+CAPABILITY_EXECUTABLE = 2
+CAPABILITY_SHARED_BUFFER_FACTORY = 3
+CAPABILITY_BLOCK = 4
+CAPABILITY_DIRECTORY = 5
+CAPABILITY_INPUT = 6
+CAPABILITY_SUPERVISION = 7
+CAPABILITY_SHARED_BUFFER = 8
+CAPABILITY_LOAN = 9
+
+
+def capability_rights_valid(kind: int, rights: int) -> bool:
+    allowed = {
+        CAPABILITY_ENDPOINT: 0b11 | RIGHT_TRANSFER,
+        CAPABILITY_EXECUTABLE: RIGHT_EXEC | RIGHT_SPAWN | RIGHT_TRANSFER,
+        CAPABILITY_SHARED_BUFFER_FACTORY: (1 << 24) | RIGHT_TRANSFER,
+        CAPABILITY_BLOCK: (1 << 10) | (1 << 11),
+        CAPABILITY_DIRECTORY: (1 << 19) | (1 << 20) | (1 << 21) | (1 << 22) | RIGHT_TRANSFER,
+        CAPABILITY_INPUT: 1 << 23,
+        CAPABILITY_SUPERVISION: (1 << 18) | RIGHT_TRANSFER,
+        CAPABILITY_SHARED_BUFFER: (1 << 8) | (1 << 9) | (1 << 25) | RIGHT_TRANSFER,
+        CAPABILITY_LOAN: (1 << 8) | (1 << 9) | RIGHT_TRANSFER,
+    }.get(kind)
+    required = {
+        CAPABILITY_ENDPOINT: 0b11,
+        CAPABILITY_EXECUTABLE: RIGHT_EXEC | RIGHT_SPAWN,
+        CAPABILITY_SHARED_BUFFER_FACTORY: 1 << 24,
+        CAPABILITY_BLOCK: (1 << 10) | (1 << 11),
+        CAPABILITY_DIRECTORY: (1 << 19) | (1 << 20) | (1 << 21) | (1 << 22),
+        CAPABILITY_INPUT: 1 << 23,
+        CAPABILITY_SUPERVISION: 1 << 18,
+        CAPABILITY_SHARED_BUFFER: (1 << 8) | (1 << 9) | (1 << 25),
+        CAPABILITY_LOAN: 1 << 9,
+    }.get(kind, 0)
+    return (
+        allowed is not None
+        and rights != 0
+        and not rights & ~allowed
+        and bool(rights & required)
+        and (kind != CAPABILITY_EXECUTABLE or rights & (RIGHT_EXEC | RIGHT_SPAWN) == RIGHT_EXEC | RIGHT_SPAWN)
+        and (kind != CAPABILITY_INPUT or rights == 1 << 23)
+    )
 MAX_SPAWN_BUDGET = 32
 PLAN_NONE = 0xFFFFFFFF
-# Service discriminant for the root dispatch endpoint, and the one slot every
-# component's runtime resolves it from.
-SERVICE_ROOT_DISPATCH = 1
+SERVICE_LIFECYCLE = 1
+SERVICE_SPAWN = 2
+SERVICE_SUPERVISION = 3
+SERVICE_CAPABILITY_TRANSFER = 4
+SERVICE_SHARED_BUFFER = 5
+SERVICE_DIRECTORY = 6
+SERVICE_INPUT = 7
+SERVICE_BLOCK = 8
+SERVICE_CONSOLE = 9
 ROOT_SERVICE_SLOT = 1
-# B41: the console/debug endpoint, and the one slot every component's runtime
-# resolves it from.
-SERVICE_CONSOLE = 2
 CONSOLE_SERVICE_SLOT = 32
+SERVICE_BY_CAPABILITY_KIND = {
+    CAPABILITY_SHARED_BUFFER_FACTORY: SERVICE_SHARED_BUFFER,
+    CAPABILITY_SHARED_BUFFER: SERVICE_SHARED_BUFFER,
+    CAPABILITY_LOAN: SERVICE_SHARED_BUFFER,
+    CAPABILITY_DIRECTORY: SERVICE_DIRECTORY,
+    CAPABILITY_INPUT: SERVICE_INPUT,
+    CAPABILITY_BLOCK: SERVICE_BLOCK,
+    CAPABILITY_SUPERVISION: SERVICE_SUPERVISION,
+}
+SHARED_BUFFER_BUDGET_MAGIC = b"SLIMESB\0"
+SHARED_BUFFER_BUDGET_HEADER = struct.Struct("<8sIIQII")
+SHARED_BUFFER_BUDGET_ENTRY = struct.Struct("<32sIIII")
+
+
+def shared_buffer_holders(object_rows: list[tuple[str, int, bytes]]) -> set[bytes]:
+    resources = [
+        blob
+        for _object_id, kind, blob in object_rows
+        if kind == 4 and blob[:8] == SHARED_BUFFER_BUDGET_MAGIC
+    ]
+    require(len(resources) <= 1, "BadSharedBufferBudget")
+    if not resources:
+        return set()
+    blob = resources[0]
+    require(len(blob) >= SHARED_BUFFER_BUDGET_HEADER.size, "BadSharedBufferBudget")
+    magic, version, header, required_flags, count, total_len = SHARED_BUFFER_BUDGET_HEADER.unpack_from(blob)
+    require(
+        magic == SHARED_BUFFER_BUDGET_MAGIC
+        and version == 1
+        and header == SHARED_BUFFER_BUDGET_HEADER.size
+        and required_flags == 0
+        and total_len == len(blob)
+        and total_len == header + count * SHARED_BUFFER_BUDGET_ENTRY.size,
+        "BadSharedBufferBudget",
+    )
+    holders: set[bytes] = set()
+    previous = bytes(32)
+    for index in range(count):
+        identity, _pages, _buffers, _mappings, _loans = SHARED_BUFFER_BUDGET_ENTRY.unpack_from(
+            blob, header + index * SHARED_BUFFER_BUDGET_ENTRY.size
+        )
+        require(
+            identity != bytes(32) and (index == 0 or identity > previous),
+            "BadSharedBufferBudget",
+        )
+        holders.add(identity)
+        previous = identity
+    return holders
 GRANT_POLICY_ONLY = 1
 GRANT_MINTED = 1
 BOOT_ACTIONS = {
@@ -163,18 +256,18 @@ def check_generation(data: bytes, expected_identity: bytes | None = None) -> dic
         objects, executables, instances, dependencies, bindings, grants, states, health,
         processes, threads, kernel_objects, mappings, cap_bindings, service_bindings,
         schedules, fault_policies, spawn_templates, resource_quotas,
-        minted_bindings, header_reserved,
+        minted_bindings, notification_grants, notification_bindings, header_reserved,
         object_offset, executable_offset, instance_offset, dependency_offset, binding_offset,
         grant_offset, state_offset, health_offset, process_offset, thread_offset,
         kernel_object_offset, mapping_offset, cap_binding_offset, service_binding_offset,
         schedule_offset, fault_policy_offset, spawn_template_offset, resource_quota_offset,
-        minted_binding_offset,
+        minted_binding_offset, notification_grant_offset, notification_binding_offset,
         strings_offset, strings_len, payload_offset, total_len,
     ) = fields
     require(magic == GENERATION_MAGIC, "BadGenerationMagic")
     require(version == GENERATION_VERSION and header == GENERATION_HEADER.size, "UnsupportedGenerationVersion")
     require(required_flags == 0 and header_reserved == 0, "UnknownGenerationFlags")
-    require(not any(data[376 : GENERATION_HEADER.size]), "UnknownGenerationFlags")
+    require(not any(data[400 : GENERATION_HEADER.size]), "UnknownGenerationFlags")
     require(total_len == len(data) and generation_identity(data) == identity, "BadGenerationHash")
     if expected_identity is not None:
         require(identity == expected_identity, "GenerationIdentityMismatch")
@@ -202,9 +295,11 @@ def check_generation(data: bytes, expected_identity: bytes | None = None) -> dic
     require(fault_policy_offset == schedule_offset + schedules * GENERATION_SCHEDULE.size, "BadGenerationBounds")
     require(spawn_template_offset == fault_policy_offset + fault_policies * GENERATION_FAULT_POLICY.size, "BadGenerationBounds")
     require(resource_quota_offset == spawn_template_offset + spawn_templates * GENERATION_SPAWN_TEMPLATE.size, "BadGenerationBounds")
-    require(minted_bindings <= MAX_MINTED_BINDINGS, "ExcessiveGenerationCount")
+    require(minted_bindings <= MAX_MINTED_BINDINGS and notification_grants <= MAX_NOTIFICATION_GRANTS and notification_bindings <= MAX_NOTIFICATION_BINDINGS, "ExcessiveGenerationCount")
     require(minted_binding_offset == resource_quota_offset + resource_quotas * GENERATION_RESOURCE_QUOTA.size, "BadGenerationBounds")
-    require(strings_offset == minted_binding_offset + minted_bindings * GENERATION_MINTED_BINDING.size, "BadGenerationBounds")
+    require(notification_grant_offset == minted_binding_offset + minted_bindings * GENERATION_MINTED_BINDING.size, "BadGenerationBounds")
+    require(notification_binding_offset == notification_grant_offset + notification_grants * GENERATION_NOTIFICATION_GRANT.size, "BadGenerationBounds")
+    require(strings_offset == notification_binding_offset + notification_bindings * GENERATION_NOTIFICATION_BINDING.size, "BadGenerationBounds")
     require(payload_offset == strings_offset + strings_len, "BadGenerationBounds")
     target = read_string(data, strings_offset, strings_len, target_offset)
     profile = TARGET_PROFILES_BY_NAME.get(target)
@@ -262,20 +357,24 @@ def check_generation(data: bytes, expected_identity: bytes | None = None) -> dic
         for grant, slot in binding_rows[row[7] : row[7] + row[8]]:
             require(grant < grants and slot < 64 and slot > previous_slot, "BadBinding")
             previous_slot = slot
+        require(
+            len({grant for grant, _slot in binding_rows[row[7] : row[7] + row[8]]})
+            == row[8],
+            "BadBinding",
+        )
     grant_rows = []
     previous_grant = None
     for index in range(grants):
-        name_offset, source, destination, rights, transferable, grant_flags = GENERATION_GRANT.unpack_from(data, grant_offset + index * GENERATION_GRANT.size)
+        name_offset, source, destination, rights, transferable, grant_flags, capability_kind = GENERATION_GRANT.unpack_from(data, grant_offset + index * GENERATION_GRANT.size)
         require(grant_flags & ~GRANT_MINTED == 0, "UnknownGrantFlags")
         name = read_string(data, strings_offset, strings_len, name_offset)
         key = (name, source, destination)
         require(previous_grant is None or key > previous_grant, "NonCanonicalGrants")
         require(source < instances and rights and not rights & ~RIGHT_ALL and transferable in (0, 1) and bool(rights & RIGHT_TRANSFER) == bool(transferable), "BadGrant")
-        require(destination < (executables if rights & RIGHT_EXEC else instances), "BadGrant")
-        grant_rows.append((name, source, destination, rights, bool(grant_flags & GRANT_MINTED)))
+        require(capability_rights_valid(capability_kind, rights), "BadGrantKind")
+        require(destination < (executables if capability_kind == CAPABILITY_EXECUTABLE else instances), "BadGrant")
+        grant_rows.append((name, source, destination, rights, bool(grant_flags & GRANT_MINTED), capability_kind))
         previous_grant = key
-    for row in instance_rows:
-        require(len({grant for grant, _ in binding_rows[row[7] : row[7] + row[8]]}) == row[8], "BadBinding")
     previous_state = ""
     for index in range(states):
         name_offset, owner, schema_version, policy = GENERATION_STATE.unpack_from(data, state_offset + index * GENERATION_STATE.size)
@@ -351,23 +450,55 @@ def check_generation(data: bytes, expected_identity: bytes | None = None) -> dic
         key = (process, kind)
         require(key not in own_slots, "BadCapBinding")
         own_slots[key] = slot
-    # Every component resolves the root endpoint from a compiled-in constant
-    # (`ROOT_SERVICE_SLOT` in components/runtime/src/syscall/sel4_transport.rs),
-    # so a plan declaring it anywhere else builds and admits cleanly and then
-    # produces children whose first syscall invokes an empty slot. Pinned here
-    # until the runtime reads the slot from the boot layout.
+    known_services = set(range(SERVICE_LIFECYCLE, SERVICE_CONSOLE + 1))
+    seen_services = [set() for _ in range(processes)]
     for index in range(service_bindings):
         process, service, slot, obj, rights, badge, flags = GENERATION_SERVICE_BINDING.unpack_from(data, service_binding_offset + index * GENERATION_SERVICE_BINDING.size)
-        if service == SERVICE_ROOT_DISPATCH:
-            require(slot == ROOT_SERVICE_SLOT, "BadServiceBinding")
-        elif service == SERVICE_CONSOLE:
-            # Same pin, same reason: the runtime resolves this from a constant.
-            require(slot == CONSOLE_SERVICE_SLOT, "BadServiceBinding")
-            # Write-only. Every process shares the console dispatcher, so a
-            # receiver could dequeue another's output before the console saw it.
-            require(rights & 0b10 == 0, "BadServiceBinding")
-        else:
-            require(False, "UnknownService")
+        expected_slot = CONSOLE_SERVICE_SLOT if service == SERVICE_CONSOLE else ROOT_SERVICE_SLOT
+        require(process < processes and service in known_services, "BadServiceBinding")
+        require(service not in seen_services[process], "BadServiceBinding")
+        require(slot == expected_slot and obj < kernel_objects and kernel_object_rows[obj]["kind"] == 5, "BadServiceBinding")
+        require(rights == 1 and badge != 0 and flags == 0, "BadServiceBinding")
+        seen_services[process].add(service)
+    budgeted_holders = shared_buffer_holders(object_rows)
+    for process_index, process in enumerate(process_rows):
+        instance = instance_rows[process["instance"]]
+        executable = executable_rows[instance[1]]
+        required_services = {SERVICE_LIFECYCLE, SERVICE_CONSOLE}
+        if executable[2] == 1 or executable[3] != 0:
+            required_services.update(
+                {SERVICE_SPAWN, SERVICE_SUPERVISION, SERVICE_CAPABILITY_TRANSFER}
+            )
+        instance_name = instance[0].encode("utf-8")
+        holder_identity = sha256(
+            b"slime-shared-buffer-holder-v1"
+            + struct.pack("<H", len(instance_name))
+            + instance_name
+        )
+        if holder_identity in budgeted_holders:
+            required_services.add(SERVICE_SHARED_BUFFER)
+        for grant_index, _slot in binding_rows[instance[7] : instance[7] + instance[8]]:
+            grant = grant_rows[grant_index]
+            service = SERVICE_BY_CAPABILITY_KIND.get(grant[5])
+            if service is not None:
+                required_services.add(service)
+            if grant[5] == CAPABILITY_EXECUTABLE:
+                required_services.add(SERVICE_SPAWN)
+            if grant[5] == CAPABILITY_ENDPOINT or grant[3] & RIGHT_TRANSFER:
+                required_services.add(SERVICE_CAPABILITY_TRANSFER)
+        for minted_index in range(minted_bindings):
+            record = minted_binding_offset + minted_index * GENERATION_MINTED_BINDING.size
+            _name, _owner, holder, _slot, rights, _flags, capability_kind = GENERATION_MINTED_BINDING.unpack_from(data, record)
+            if holder != process["instance"]:
+                continue
+            service = SERVICE_BY_CAPABILITY_KIND.get(capability_kind)
+            if service is not None:
+                required_services.add(service)
+            if capability_kind == CAPABILITY_EXECUTABLE:
+                required_services.add(SERVICE_SPAWN)
+            if capability_kind == CAPABILITY_ENDPOINT or rights & RIGHT_TRANSFER:
+                required_services.add(SERVICE_CAPABILITY_TRANSFER)
+        require(seen_services[process_index] == required_services, "BadServiceBinding")
 
     for process_index in range(processes):
         # Both are required: the root has nowhere to put the child's TCB or its
@@ -386,10 +517,7 @@ def check_generation(data: bytes, expected_identity: bytes | None = None) -> dic
         policy_only = index in policy_only_grants
         require(materialized[index] + int(policy_only) == 1, "UnmaterializedGrant")
         if policy_only:
-            require(grant_row[3] & (RIGHT_EXEC | 0b11) == 0, "BadCapBinding")
-    for index in range(service_bindings):
-        process, service, slot, obj, rights, badge, flags = GENERATION_SERVICE_BINDING.unpack_from(data, service_binding_offset + index * GENERATION_SERVICE_BINDING.size)
-        require(process < processes and slot < 64 and obj < kernel_objects and rights and flags == 0, "BadServiceBinding")
+            require(grant_row[5] not in (CAPABILITY_EXECUTABLE, CAPABILITY_ENDPOINT), "BadCapBinding")
     for index in range(schedules):
         name_offset, thread, authority_process, priority, max_controlled_priority, budget_us, period_us, flags = GENERATION_SCHEDULE.unpack_from(data, schedule_offset + index * GENERATION_SCHEDULE.size)
         require(thread < threads and (authority_process == PLAN_NONE or authority_process < processes) and priority <= max_controlled_priority and flags == 0, "BadSchedule")
@@ -409,17 +537,12 @@ def check_generation(data: bytes, expected_identity: bytes | None = None) -> dic
     seen_minted_slots: set[tuple[int, int]] = set()
     for index in range(minted_bindings):
         record = minted_binding_offset + index * GENERATION_MINTED_BINDING.size
-        name_offset, owner, holder, slot, rights, flags = GENERATION_MINTED_BINDING.unpack_from(data, record)
-        # The struct's `4x` pad discards the reserved tail, which the decoder
-        # requires to be zero. Assert it here so the two agree.
-        require(not any(data[record + 28 : record + GENERATION_MINTED_BINDING.size]), "BadMintedBinding")
+        name_offset, owner, holder, slot, rights, flags, capability_kind = GENERATION_MINTED_BINDING.unpack_from(data, record)
         name = read_string(data, strings_offset, strings_len, name_offset)
         require(name > previous_minted, "NonCanonicalMintedBindings")
         require(owner < instances and holder < instances and slot < 64 and flags == 0, "BadMintedBinding")
         require(rights and not rights & ~RIGHT_ALL, "BadMintedBinding")
-        # `exec` is admissible, paired with `spawn`, so a minted executable
-        # cannot be launched by a holder the graph did not authorize to spawn.
-        require(bool(rights & RIGHT_EXEC) == bool(rights & RIGHT_SPAWN), "BadMintedBinding")
+        require(capability_rights_valid(capability_kind, rights), "BadMintedBindingKind")
         # The holder must be owned by the minter, so a minted capability cannot
         # cross an ownership edge the instance graph does not declare.
         require(instance_rows[holder][2] == 1 and instance_rows[holder][3] == owner, "BadMintedBindingOwner")

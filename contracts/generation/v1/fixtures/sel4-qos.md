@@ -61,28 +61,25 @@ Every capability this plane needs is therefore a spawn grant, which is why
 backlog **B25** — the post-spawn introduction P5.4.6 is stuck on — does not block
 it.
 
-## Why the QoS flag is the oracle's own
+## Why the QoS behaviour is not a build flag
 
-`build-generation.py` maps this manifest to **two** flags:
-`SLIME_SEL4_STREAM_CHECK`, which selects `drive_stream_plane` in `init.rs`, and
-the oracle's `SLIME_FABRIC_QOS_CHECK`.
+It used to be. `build-generation.py` mapped this manifest to two compile-time
+selectors — one choosing init's plane driver, one selecting the QoS behaviour in
+`fabric-service`, `fabric-publisher-b`, and `fabric-subscriber-b` — and the
+cutover deleted both along with the other 41 `SLIME_*_CHECK` flags (B50).
 
-The second is deliberately not a seL4-only flag. `fabric-service`,
-`fabric-publisher-b`, and `fabric-subscriber-b` all read it to select their QoS
-behaviour, so a separate flag would have left them in stream mode while init
-built a clock they ignored — and would let the two planes' QoS logic diverge with
-nothing noticing. Reusing it keeps those three components byte-identical between
-the planes, which is what `check-sel4-stream-plane.py`'s unmodified-component
-assertion demands.
+The manifest is the selector now: the builder emits `GENERATION_BOOT_ACTION` from
+this fixture's `bootAction`, and each component reads it. That keeps the three
+components byte-identical across the stream and QoS planes — which is what
+`check-sel4-stream-plane.py`'s unmodified-component assertion demands — without a
+build flag able to disagree with the graph it was built for.
 
-`init.rs::qos_plane` requires **both** flags, and the x86 QoS branch in
-`init::main` requires the stream flag to be *absent*. Without that second guard
-the x86 branch claimed this plane and walked the x86 boot layout.
-
-Two manifests sharing one flag also exposed backlog **B27**: the flag table set
-and scrubbed in one pass, so the `sel4-qos` row popped the flag the `sel4-stream`
-row had just set. Fixed by collecting the selected manifest's flags before
-removing any.
+It also retires the two defects the flags carried. Backlog **B27** was a flag
+table that set and scrubbed in one pass, so the `sel4-qos` row popped the flag
+the `sel4-stream` row had just set; and the plane driver needed a second guard
+requiring the *absence* of a flag, because otherwise an unrelated branch claimed
+this plane and walked the wrong boot layout. Both are unreachable once one
+authenticated field decides.
 
 ## What still blocks it
 

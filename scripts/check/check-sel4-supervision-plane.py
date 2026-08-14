@@ -80,24 +80,18 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     (
         # B25: `supervision_derive` gives a parent a second handle naming a task
         # it already supervises. Before it, each spawn returned exactly one and
-        # neither a spawn grant nor a `cap_transfer` could place it twice — a
-        # grant because it must precede the child, a transfer because it moves.
-        # Init derives here while it still holds the source, queries the *derived*
-        # handle for the child's outcome, and then transfers the source, so the
-        # marker proves the copy carries real authority and leaves the original
-        # intact.
+        # neither a spawn grant nor an export could place it twice — a grant
+        # because it must precede the child, an export because it moves.
+        #
+        # Derived while the source is still held and before it is collected,
+        # since collection consumes the handle. Both copies then cross the
+        # allocation bound below.
         "the root recorded the derive",
         r"SLIME_GRAPH supervision derived task=\d+ child=\d+ slot=\d+",
     ),
     (
         "a second supervision handle was derived and carried real authority",
         r"\[init\] second supervision handle derived",
-    ),
-    (
-        # Exported before the allocation crossing and imported only afterwards;
-        # matching root IDs prove authority remained reserved without Transit.
-        "a supervision capability was exported before the crossing",
-        r"\[init\] supervision capability exported before crossing",
     ),
     (
         "a supervision handle was retained across the crossing",
@@ -114,14 +108,15 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"\[init\] retained handle answered after crossing",
     ),
     (
-        # The eventual native import must still name live supervision authority.
-        "an exported supervision capability was still importable after crossing",
-        r"\[init\] imported supervision survived crossing",
-    ),
-    (
-        "the root recorded the supervision export/import pair",
-        r"SLIME_GRAPH capability imported task=\d+ id=\d+ kind=supervision "
-        r"rights=0x[0-9a-f]+ retain=0",
+        # The derived copy, held across a boot's worth of allocation *and* past
+        # the collection of the handle it came from, still answers. That is the
+        # half a predicate over live tables alone would miss: the task is long
+        # gone and every other trace of it erased.
+        #
+        # Exporting it to *init itself* would not test this: a delegate is a
+        # rendezvous, and a self-loop endpoint has no distinct receiver.
+        "a derived supervision handle survived the crossing",
+        r"\[init\] derived supervision survived crossing",
     ),
     (
         # B42: the handle is the identity, so its consumption has to be
@@ -135,16 +130,21 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"\[init\] supervision plane complete",
     ),
     (
+        # No capability export survives unclaimed. This plane exports none: a
+        # supervision handle crosses as an export the *receiver* claims, and a
+        # delegate is a rendezvous, so init cannot export one to itself over a
+        # self-loop endpoint. What the crossing tests is the handle's survival,
+        # which the derived-handle arm above observes directly.
+        "no capability export was left outstanding",
+        r"SLIME_GRAPH capabilities exports=\d+ imports=\d+ "
+        r"cancels=\d+ finalized=\d+ outstanding=0 tickets=0",
+    ),
+    (
         # Every constructed holder releases its generation-declared buffer
         # quota, independently of native capability export accounting.
         "every constructed holder released its declared quota",
         r"SLIME_GRAPH loans served=\d+ loans=0 mappings=0 regions=0 "
-        r"orphans=0 aliases=0 quotas=0",
-    ),
-    (
-        "every supervision export was imported, cancelled, or finalized",
-        r"SLIME_GRAPH capabilities exports=[1-9]\d* imports=[1-9]\d* "
-        r"cancels=\d+ finalized=\d+ outstanding=0 tickets=0",
+        r"orphans=0 quota=0",
     ),
     (
         # The root's *own* accounting, and the numerically strongest evidence in
@@ -387,18 +387,25 @@ def check_transcript(transcript: str) -> None:
                 fail(f"marker out of order: {description} ({pattern})")
             fail(f"missing marker: {description} ({pattern})")
         position = match.end()
-    exports = re.findall(
-        r"SLIME_GRAPH capability exported task=\d+ id=(\d+) kind=supervision "
-        r"rights=(0x[0-9a-f]+) retain=0",
-        transcript,
+    # The root's own record of the derive, and that both handles named the same
+    # task. There is no export/import pair to check: a supervision capability
+    # crosses as an export the *receiver* claims, and a delegate is a
+    # rendezvous, so this plane's single component cannot export one to itself.
+    # What the crossing proves instead is that a derived handle outlives both
+    # its task and the source handle it came from.
+    derives = re.findall(
+        r"SLIME_GRAPH supervision derived task=(\d+) child=(\d+) slot=\d+", transcript
     )
-    imports = re.findall(
-        r"SLIME_GRAPH capability imported task=\d+ id=(\d+) kind=supervision "
-        r"rights=(0x[0-9a-f]+) retain=0",
-        transcript,
+    if len(derives) != 1:
+        fail(f"supervision derive evidence was {derives!r}, expected exactly one")
+    collected = re.findall(
+        r"SLIME_GRAPH supervision collected task=\d+ child=(\d+) kind=0", transcript
     )
-    if len(exports) != 1 or exports != imports:
-        fail(f"supervision export/import evidence was {exports!r}/{imports!r}, expected one exact pair")
+    if collected.count(derives[0][1]) != 2:
+        fail(
+            f"child {derives[0][1]} was collected {collected.count(derives[0][1])} "
+            "times, expected twice: once per handle naming it"
+        )
     bound, children = check_loop_crosses_current_bound()
     accounting = re.search(
         r"SLIME_GRAPH spawns served=(\d+) drops=0 terminated=(\d+)",
@@ -407,7 +414,12 @@ def check_transcript(transcript: str) -> None:
     if accounting is None:
         fail("missing supervision accounting values")
     spawns, terminated = (int(value) for value in accounting.groups())
-    expected_spawns = children + 2
+    # One retained child plus the loop. The retained one is spawned first, its
+    # handle derived from before collection, and both copies then cross the
+    # allocation bound — so the scenario needs exactly one task beyond the loop,
+    # not two: the second handle is a derivation, not a second child, which is
+    # the whole point of B25.
+    expected_spawns = children + 1
     # The root's termination counter covers the spawned scenario tasks plus
     # every *root*-launched instance. This fixture declares three instances but
     # only `init` is root-owned; the other two are init-spawned and so are
@@ -418,7 +430,7 @@ def check_transcript(transcript: str) -> None:
         fail(
             f"supervision accounting was spawns={spawns} terminated={terminated}, "
             f"expected spawns={expected_spawns} and terminated={expected_terminated} "
-            f"from {children} loop children, two retained tasks, and one "
+            f"from {children} loop children, one retained task, and one "
             "root-launched instance"
         )
     if terminated <= bound:

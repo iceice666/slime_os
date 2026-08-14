@@ -47,7 +47,7 @@ maxThreads :: Int = 48;
 maxKernelObjects :: Int = 4096;
 maxMappings :: Int = 4096;
 maxCapBindings :: Int = 4096;
-maxServiceBindings :: Int = 128;
+maxServiceBindings :: Int = 432;
 maxSchedules :: Int = 48;
 maxFaultPolicies :: Int = 48;
 maxSpawnTemplates :: Int = 48;
@@ -87,7 +87,7 @@ ExecutableRecord :: type { name_offset : Int; object_index : Int; role : Int; sp
 InstanceRecord :: type { name_offset : Int; executable_index : Int; owner_kind : Int; owner_index : Int; autostart : Int; dependency_start : Int; dependency_count : Int; binding_start : Int; binding_count : Int; health : Int; };
 DependencyRecord :: type { instance : Int; };
 BindingRecord :: type { grant : Int; slot : Int; };
-CapabilityGrantRecord :: type { name_offset : Int; source : Int; target : Int; rights : Int; transferable : Int; flags : Int; };
+CapabilityGrantRecord :: type { name_offset : Int; source : Int; target : Int; rights : Int; transferable : Int; flags : Int; capability_kind : Int; };
 StateBindingRecord :: type { name_offset : Int; owner : Int; schema_version : Int; policy : Int; };
 HealthRecord :: type { instance : Int; };
 ProcessRecord :: type { name_offset : Int; instance : Int; cspace_object : Int; vspace_object : Int; main_thread : Int; quota : Int; flags : Int; };
@@ -104,7 +104,7 @@ ResourceQuotaRecord :: type { name_offset : Int; owner_process : Int; cnode_coun
 -- concrete object its owner mints at runtime. The edge is named -- owner,
 -- holder, slot, and an exact rights ceiling -- so a minted capability is as
 -- authenticated as a static grant; only the object identity is deferred.
-MintedBindingRecord :: type { name_offset : Int; owner : Int; holder : Int; slot : Int; rights : Int; flags : Int; };
+MintedBindingRecord :: type { name_offset : Int; owner : Int; holder : Int; slot : Int; rights : Int; flags : Int; capability_kind : Int; };
 NotificationGrantRecord :: type { name_offset : Int; source : Int; target : Int; object : Int; flags : Int; };
 NotificationBindingRecord :: type { grant : Int; holder : Int; slot : Int; role : Int; flags : Int; };
 
@@ -146,7 +146,7 @@ executableLayout :: List WireField = { field "name_offset" 4 false; field "objec
 instanceLayout :: List WireField = { field "name_offset" 4 false; field "executable_index" 4 false; field "owner_kind" 4 false; field "owner_index" 4 false; field "autostart" 4 false; field "dependency_start" 4 false; field "dependency_count" 4 false; field "binding_start" 4 false; field "binding_count" 4 false; field "health" 4 false; };
 dependencyLayout :: List WireField = { field "instance" 4 false; };
 bindingLayout :: List WireField = { field "grant" 4 false; field "slot" 4 false; };
-grantLayout :: List WireField = { field "name_offset" 4 false; field "source" 4 false; field "target" 4 false; field "rights" 8 false; field "transferable" 4 false; field "flags" 4 false; };
+grantLayout :: List WireField = { field "name_offset" 4 false; field "source" 4 false; field "target" 4 false; field "rights" 8 false; field "transferable" 4 false; field "flags" 4 false; field "capability_kind" 4 false; };
 stateLayout :: List WireField = { field "name_offset" 4 false; field "owner" 4 false; field "schema_version" 4 false; field "policy" 4 false; };
 healthLayout :: List WireField = { field "instance" 4 false; };
 processLayout :: List WireField = { field "name_offset" 4 false; field "instance" 4 false; field "cspace_object" 4 false; field "vspace_object" 4 false; field "main_thread" 4 false; field "quota" 4 false; field "flags" 4 false; };
@@ -159,7 +159,7 @@ scheduleLayout :: List WireField = { field "name_offset" 4 false; field "thread"
 faultPolicyLayout :: List WireField = { field "name_offset" 4 false; field "thread" 4 false; field "handler_process" 4 false; field "endpoint_object" 4 false; field "badge" 8 false; field "action" 4 false; };
 spawnTemplateLayout :: List WireField = { field "name_offset" 4 false; field "executable" 4 false; field "owner_process" 4 false; field "quota" 4 false; field "schedule" 4 false; field "fault_policy" 4 false; field "max_instances" 4 false; field "flags" 4 false; };
 resourceQuotaLayout :: List WireField = { field "name_offset" 4 false; field "owner_process" 4 false; field "cnode_count" 4 false; field "tcb_count" 4 false; field "endpoint_count" 4 false; field "notification_count" 4 false; field "frame_count" 4 false; field "page_table_count" 4 false; field "mapping_count" 4 false; field "irq_count" 4 false; field "cslot_count" 4 false; field "untyped_bytes" 8 false; field "dynamic_reserve_bytes" 8 false; field "flags" 4 false; };
-mintedBindingLayout :: List WireField = { field "name_offset" 4 false; field "owner" 4 false; field "holder" 4 false; field "slot" 4 false; field "rights" 8 false; field "flags" 4 false; };
+mintedBindingLayout :: List WireField = { field "name_offset" 4 false; field "owner" 4 false; field "holder" 4 false; field "slot" 4 false; field "rights" 8 false; field "flags" 4 false; field "capability_kind" 4 false; };
 notificationGrantLayout :: List WireField = { field "name_offset" 4 false; field "source" 4 false; field "target" 4 false; field "object" 4 false; field "flags" 4 false; };
 notificationBindingLayout :: List WireField = { field "grant" 4 false; field "holder" 4 false; field "slot" 4 false; field "role" 4 false; field "flags" 4 false; };
 

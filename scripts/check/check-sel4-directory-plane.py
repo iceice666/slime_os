@@ -47,10 +47,6 @@ BOOT_TIMEOUT_SECONDS = 180
 
 REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     (
-        "the unconfigured instance parked without a run token",
-        r"\[sel4-directory-probe\] idle without a run token",
-    ),
-    (
         # The root places the declared view in the probe's own table, and
         # `construct_child` installs it again for the spawned copy.
         "the spawned instance received its declared directory authority",
@@ -229,12 +225,19 @@ def boot(profile: dict[str, object]) -> str:
     watchdog.start()
     try:
         assert process.stdout is not None
+        # The root-owned idle instance runs concurrently with init, so its line
+        # can land before or after init's completion marker. Stop once *both*
+        # facts have been observed rather than at the terminal alone; a fixed
+        # line tail waited forever on a quiescent graph with nothing left to
+        # print.
+        idle_seen = False
         for line in process.stdout:
             lines.append(line.rstrip("\r\n"))
             if failures.search(line):
                 break
-            if terminal.search(line):
-                reached = True
+            idle_seen |= "[sel4-directory-probe] idle without a run token" in line
+            reached |= terminal.search(line) is not None
+            if reached and idle_seen:
                 break
     finally:
         watchdog.cancel()
@@ -275,6 +278,12 @@ def check_transcript(transcript: str) -> None:
                 fail(f"marker out of order: {label} ({pattern})")
             fail(f"missing marker: {label} ({pattern})")
         position = match.end()
+    # Asserted by presence, not by position: the idle instance's line lands
+    # wherever the scheduler puts it, so ordering it would assert a scheduling
+    # accident rather than the discrimination itself.
+    if "[sel4-directory-probe] idle without a run token" not in transcript:
+        report_transcript(transcript)
+        fail("the unconfigured instance did not report parking without a run token")
     completions = transcript.count("[sel4-directory-probe] directory plane complete")
     if completions != 1:
         report_transcript(transcript)

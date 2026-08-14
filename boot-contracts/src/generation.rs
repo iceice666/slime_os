@@ -1,4 +1,5 @@
 use crate::sha256::Sha256;
+use crate::shared_buffer_budget::{self, SharedBufferBudget};
 
 pub const MAGIC_V5: [u8; 8] = *b"SLIMEG5\0";
 pub const MAGIC_V4: [u8; 8] = *b"SLIMEG4\0";
@@ -22,17 +23,90 @@ const KERNEL_OBJECT_TCB: u32 = 3;
 const KERNEL_OBJECT_ENDPOINT: u32 = 5;
 /// Kernel-object kind discriminant for a notification.
 const KERNEL_OBJECT_NOTIFICATION: u32 = 7;
-/// Service discriminant for the root dispatch endpoint, matching
-/// `SERVICE_ROOT_DISPATCH` in `scripts/build/build-generation.py`.
-const SERVICE_ROOT_DISPATCH: u32 = 1;
-/// Service discriminant for the console/debug endpoint (B41), which every
-/// process holds separately from the root dispatcher so console traffic
-/// neither consumes the lifecycle loop nor shares its fault domain.
-const SERVICE_CONSOLE: u32 = 2;
+const ROOT_SERVICE_SLOT: usize = 1;
+const CONSOLE_SERVICE_SLOT: usize = 32;
+const SERVICE_SEND_RIGHT: Rights = 1;
+
+fn service_for_capability(kind: CapabilityKind) -> Option<u32> {
+    match kind {
+        CapabilityKind::SharedBufferFactory
+        | CapabilityKind::SharedBuffer
+        | CapabilityKind::Loan => Some(SERVICE_SHARED_BUFFER),
+        CapabilityKind::Directory => Some(SERVICE_DIRECTORY),
+        CapabilityKind::Input => Some(SERVICE_INPUT),
+        CapabilityKind::Block => Some(SERVICE_BLOCK),
+        CapabilityKind::Supervision => Some(SERVICE_SUPERVISION),
+        CapabilityKind::Endpoint | CapabilityKind::Executable => None,
+    }
+}
 
 pub const KIND_KERNEL: u32 = 1;
 pub const KIND_BOOTSTRAP: u32 = 2;
 pub const KIND_COMPONENT: u32 = 3;
+
+/// Declared capability class. Rights remain the operation ceiling; the kind
+/// says what object or kernel capability those rights name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub enum CapabilityKind {
+    Endpoint = CAPABILITY_ENDPOINT,
+    Executable = CAPABILITY_EXECUTABLE,
+    SharedBufferFactory = CAPABILITY_SHARED_BUFFER_FACTORY,
+    Block = CAPABILITY_BLOCK,
+    Directory = CAPABILITY_DIRECTORY,
+    Input = CAPABILITY_INPUT,
+    Supervision = CAPABILITY_SUPERVISION,
+    SharedBuffer = CAPABILITY_SHARED_BUFFER,
+    Loan = CAPABILITY_LOAN,
+}
+
+impl CapabilityKind {
+    fn decode(value: u32) -> Result<Self, DecodeError> {
+        match value {
+            CAPABILITY_ENDPOINT => Ok(Self::Endpoint),
+            CAPABILITY_EXECUTABLE => Ok(Self::Executable),
+            CAPABILITY_SHARED_BUFFER_FACTORY => Ok(Self::SharedBufferFactory),
+            CAPABILITY_BLOCK => Ok(Self::Block),
+            CAPABILITY_DIRECTORY => Ok(Self::Directory),
+            CAPABILITY_INPUT => Ok(Self::Input),
+            CAPABILITY_SUPERVISION => Ok(Self::Supervision),
+            CAPABILITY_SHARED_BUFFER => Ok(Self::SharedBuffer),
+            CAPABILITY_LOAN => Ok(Self::Loan),
+            _ => Err(DecodeError::BadBounds),
+        }
+    }
+}
+
+fn capability_rights_valid(kind: CapabilityKind, rights: Rights) -> bool {
+    let allowed = match kind {
+        CapabilityKind::Endpoint => 0b11 | RIGHT_TRANSFER,
+        CapabilityKind::Executable => RIGHT_EXEC | RIGHT_SPAWN | RIGHT_TRANSFER,
+        CapabilityKind::SharedBufferFactory => (1 << 24) | RIGHT_TRANSFER,
+        CapabilityKind::Block => (1 << 10) | (1 << 11),
+        CapabilityKind::Directory => (1 << 19) | (1 << 20) | (1 << 21) | (1 << 22) | RIGHT_TRANSFER,
+        CapabilityKind::Input => 1 << 23,
+        CapabilityKind::Supervision => (1 << 18) | RIGHT_TRANSFER,
+        CapabilityKind::SharedBuffer => (1 << 8) | (1 << 9) | (1 << 25) | RIGHT_TRANSFER,
+        CapabilityKind::Loan => (1 << 8) | (1 << 9) | RIGHT_TRANSFER,
+    };
+    let required = match kind {
+        CapabilityKind::Endpoint => 0b11,
+        CapabilityKind::Executable => RIGHT_EXEC | RIGHT_SPAWN,
+        CapabilityKind::SharedBufferFactory => 1 << 24,
+        CapabilityKind::Block => (1 << 10) | (1 << 11),
+        CapabilityKind::Directory => (1 << 19) | (1 << 20) | (1 << 21) | (1 << 22),
+        CapabilityKind::Input => 1 << 23,
+        CapabilityKind::Supervision => 1 << 18,
+        CapabilityKind::SharedBuffer => (1 << 8) | (1 << 9) | (1 << 25),
+        CapabilityKind::Loan => 1 << 9,
+    };
+    rights != 0
+        && rights & !allowed == 0
+        && rights & required != 0
+        && (kind != CapabilityKind::Executable
+            || rights & (RIGHT_EXEC | RIGHT_SPAWN) == RIGHT_EXEC | RIGHT_SPAWN)
+        && (kind != CapabilityKind::Input || rights == 1 << 23)
+}
 pub const KIND_RESOURCE: u32 = 4;
 pub const ROLE_INIT: u32 = 1;
 pub type Rights = u64;
@@ -227,6 +301,7 @@ pub struct Grant<'a> {
     /// pre-created by the root at admission. The edge, its rights, and both
     /// endpoints are still declared; only the object is deferred.
     pub minted: bool,
+    pub capability_kind: CapabilityKind,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -403,6 +478,7 @@ pub struct MintedBinding<'a> {
     pub holder: usize,
     pub slot: usize,
     pub rights: Rights,
+    pub capability_kind: CapabilityKind,
     pub flags: u32,
 }
 
@@ -955,16 +1031,16 @@ impl<'a> Generation<'a> {
             return Err(DecodeError::BadIndex);
         }
         let offset = self.grant_offset + index * GRANT_LEN;
-        reserved_zero(self.bytes, offset + 28, offset + GRANT_LEN)?;
         let rights = u64_at(self.bytes, offset + 12)?;
         let flags = u32_at(self.bytes, offset + 24)?;
         if flags & !GRANT_MINTED != 0 {
             return Err(DecodeError::UnknownRequiredFlags);
         }
+        let capability_kind = CapabilityKind::decode(u32_at(self.bytes, offset + 28)?)?;
         Ok(Grant {
             name: self.string(u32_at(self.bytes, offset)? as usize)?,
             source: GrantEndpoint::Instance(u32_at(self.bytes, offset + 4)? as usize),
-            target: if rights & RIGHT_EXEC != 0 {
+            target: if capability_kind == CapabilityKind::Executable {
                 GrantEndpoint::Executable(u32_at(self.bytes, offset + 8)? as usize)
             } else {
                 GrantEndpoint::Instance(u32_at(self.bytes, offset + 8)? as usize)
@@ -972,6 +1048,7 @@ impl<'a> Generation<'a> {
             rights,
             transferable: bool_at(self.bytes, offset + 20)?,
             minted: flags & GRANT_MINTED != 0,
+            capability_kind,
         })
     }
     pub fn grant_named(&self, name: &str) -> Option<Grant<'a>> {
@@ -1238,7 +1315,7 @@ impl<'a> Generation<'a> {
         let mut service = None;
         for index in 0..self.service_binding_count {
             let binding = self.service_binding(index)?;
-            if binding.process != process_index || binding.service != SERVICE_ROOT_DISPATCH {
+            if binding.process != process_index || binding.service != SERVICE_LIFECYCLE {
                 continue;
             }
             if service.is_some() {
@@ -1302,6 +1379,33 @@ impl<'a> Generation<'a> {
             grant: u32_at(self.bytes, offset + 28)? as usize,
             flags: u32_at(self.bytes, offset + 32)?,
         })
+    }
+    /// Whether `instance` is authorized to invoke one typed root mechanism.
+    ///
+    /// Service bindings that share child slot 1 are declarations, not extra
+    /// CSpace installs. The root uses this lookup after resolving the caller's
+    /// badged task, so holding lifecycle transport never grants another
+    /// mechanism implicitly.
+    pub fn instance_has_service(&self, instance: usize, service: u32) -> Result<bool, DecodeError> {
+        let mut process_index = None;
+        for index in 0..self.process_count {
+            if self.process(index)?.instance == instance {
+                if process_index.is_some() {
+                    return Err(DecodeError::BadBinding);
+                }
+                process_index = Some(index);
+            }
+        }
+        let Some(process_index) = process_index else {
+            return Ok(false);
+        };
+        for index in 0..self.service_binding_count {
+            let binding = self.service_binding(index)?;
+            if binding.process == process_index && binding.service == service {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
     pub fn service_binding(&self, index: usize) -> Result<ServiceBinding, DecodeError> {
         if index >= self.service_binding_count {
@@ -1398,7 +1502,6 @@ impl<'a> Generation<'a> {
             return Err(DecodeError::BadIndex);
         }
         let offset = self.minted_binding_offset + index * MINTED_BINDING_LEN;
-        reserved_zero(self.bytes, offset + 24, offset + MINTED_BINDING_LEN)?;
         Ok(MintedBinding {
             name: self.string(u32_at(self.bytes, offset)? as usize)?,
             owner: u32_at(self.bytes, offset + 4)? as usize,
@@ -1406,11 +1509,11 @@ impl<'a> Generation<'a> {
             slot: u32_at(self.bytes, offset + 12)? as usize,
             rights: u64_at(self.bytes, offset + 16)?,
             flags: u32_at(self.bytes, offset + 24)?,
+            capability_kind: CapabilityKind::decode(u32_at(self.bytes, offset + 28)?)?,
         })
     }
 
     /// The minted binding authorizing `holder` to receive a capability at
-    /// `slot`, if the generation declares one.
     pub fn minted_binding_for(&self, holder: usize, slot: usize) -> Option<MintedBinding<'a>> {
         (0..self.minted_binding_count).find_map(|index| {
             self.minted_binding(index)
@@ -1665,6 +1768,7 @@ impl<'a> Generation<'a> {
                 || grant.rights == 0
                 || grant.rights & !RIGHT_ALL != 0
                 || (grant.rights & RIGHT_TRANSFER != 0) != grant.transferable
+                || !capability_rights_valid(grant.capability_kind, grant.rights)
             {
                 return Err(DecodeError::BadIndex);
             }
@@ -1869,18 +1973,112 @@ impl<'a> Generation<'a> {
             if usize::from(*count) + usize::from(policy_only) != 1 {
                 return Err(DecodeError::BadBinding);
             }
-            if policy_only && grant.rights & (RIGHT_EXEC | 0b11) != 0 {
+            if policy_only
+                && matches!(
+                    grant.capability_kind,
+                    CapabilityKind::Executable | CapabilityKind::Endpoint
+                )
+            {
                 return Err(DecodeError::BadBinding);
             }
         }
+        let mut seen_services = [[false; 10]; MAX_PROCESSES];
         for index in 0..self.service_binding_count {
             let binding = self.service_binding(index)?;
+            let object_kind = if binding.object < self.kernel_object_count {
+                self.kernel_object_record(binding.object)?.kind
+            } else {
+                0
+            };
+            let known = matches!(
+                binding.service,
+                SERVICE_LIFECYCLE
+                    | SERVICE_SPAWN
+                    | SERVICE_SUPERVISION
+                    | SERVICE_CAPABILITY_TRANSFER
+                    | SERVICE_SHARED_BUFFER
+                    | SERVICE_DIRECTORY
+                    | SERVICE_INPUT
+                    | SERVICE_BLOCK
+                    | SERVICE_CONSOLE
+            );
+            let expected_slot = if binding.service == SERVICE_CONSOLE {
+                CONSOLE_SERVICE_SLOT
+            } else {
+                ROOT_SERVICE_SLOT
+            };
             if binding.process >= self.process_count
-                || binding.slot >= MAX_TASK_CAPS
-                || binding.object >= self.kernel_object_count
-                || binding.rights == 0
+                || binding.slot != expected_slot
+                || object_kind != KERNEL_OBJECT_ENDPOINT
+                || binding.rights != SERVICE_SEND_RIGHT
+                || binding.badge == 0
                 || binding.flags != 0
+                || !known
+                || (known && seen_services[binding.process][binding.service as usize])
             {
+                return Err(DecodeError::BadBinding);
+            }
+            seen_services[binding.process][binding.service as usize] = true;
+        }
+        for (process_index, seen) in seen_services.iter().enumerate().take(self.process_count) {
+            let process = self.process(process_index)?;
+            let instance = self.instance(process.instance)?;
+            let executable = self.executable(instance.executable)?;
+            let mut required = [false; 10];
+            required[SERVICE_LIFECYCLE as usize] = true;
+            required[SERVICE_CONSOLE as usize] = true;
+            let holder_identity = shared_buffer_budget::holder_identity(instance.name);
+            let budgeted_for_shared_buffer = (0..self.object_count).any(|object_index| {
+                self.object(object_index).is_ok_and(|object| {
+                    object.kind == KIND_RESOURCE
+                        && object.bytes.starts_with(&shared_buffer_budget::MAGIC)
+                        && SharedBufferBudget::decode(object.bytes)
+                            .ok()
+                            .and_then(|budget| budget.quota_for(&holder_identity))
+                            .is_some()
+                })
+            });
+            if budgeted_for_shared_buffer {
+                required[SERVICE_SHARED_BUFFER as usize] = true;
+            }
+            if executable.role == ROLE_INIT || executable.spawn_budget != 0 {
+                // Spawn returns a supervision capability, so declaring spawn
+                // also declares the narrow table service needed to drop it.
+                required[SERVICE_SPAWN as usize] = true;
+                required[SERVICE_SUPERVISION as usize] = true;
+                required[SERVICE_CAPABILITY_TRANSFER as usize] = true;
+            }
+            for binding_index in 0..instance.binding_count() {
+                let binding = self.binding(instance, binding_index)?;
+                let grant = self.grant(binding.grant)?;
+                if let Some(service) = service_for_capability(grant.capability_kind) {
+                    required[service as usize] = true;
+                }
+                if grant.capability_kind == CapabilityKind::Executable {
+                    required[SERVICE_SPAWN as usize] = true;
+                }
+                if grant.capability_kind == CapabilityKind::Endpoint || grant.transferable {
+                    required[SERVICE_CAPABILITY_TRANSFER as usize] = true;
+                }
+            }
+            for binding_index in 0..self.minted_binding_count {
+                let binding = self.minted_binding(binding_index)?;
+                if binding.holder != process.instance {
+                    continue;
+                }
+                if let Some(service) = service_for_capability(binding.capability_kind) {
+                    required[service as usize] = true;
+                }
+                if binding.capability_kind == CapabilityKind::Executable {
+                    required[SERVICE_SPAWN as usize] = true;
+                }
+                if binding.capability_kind == CapabilityKind::Endpoint
+                    || binding.rights & RIGHT_TRANSFER != 0
+                {
+                    required[SERVICE_CAPABILITY_TRANSFER as usize] = true;
+                }
+            }
+            if required != *seen {
                 return Err(DecodeError::BadBinding);
             }
         }
@@ -1951,7 +2149,7 @@ impl<'a> Generation<'a> {
                 || minted.slot >= MAX_TASK_CAPS
                 || minted.rights == 0
                 || minted.rights & !RIGHT_ALL != 0
-                || (minted.rights & RIGHT_EXEC != 0) != (minted.rights & RIGHT_SPAWN != 0)
+                || !capability_rights_valid(minted.capability_kind, minted.rights)
                 || minted.flags != 0
             {
                 return Err(DecodeError::BadBinding);
@@ -2059,13 +2257,13 @@ impl<'a> Generation<'a> {
         if grant.minted {
             return false;
         }
-        if grant.rights & RIGHT_EXEC != 0 {
-            grant.source == GrantEndpoint::Instance(instance)
-        } else if grant.rights & 0b11 != 0 {
-            grant.source == GrantEndpoint::Instance(instance)
-                || grant.target == GrantEndpoint::Instance(instance)
-        } else {
-            grant.target == GrantEndpoint::Instance(instance)
+        match grant.capability_kind {
+            CapabilityKind::Executable => grant.source == GrantEndpoint::Instance(instance),
+            CapabilityKind::Endpoint => {
+                grant.source == GrantEndpoint::Instance(instance)
+                    || grant.target == GrantEndpoint::Instance(instance)
+            }
+            _ => grant.target == GrantEndpoint::Instance(instance),
         }
     }
 
@@ -2080,19 +2278,21 @@ impl<'a> Generation<'a> {
             InstanceOwner::Root => false,
             InstanceOwner::Instance(owner) => {
                 grant.source == GrantEndpoint::Instance(owner)
-                    && if grant.rights & RIGHT_EXEC != 0 {
-                        (0..self.instance_count).any(|child| {
+                    && match grant.capability_kind {
+                        CapabilityKind::Executable => (0..self.instance_count).any(|child| {
                             self.instance(child).is_ok_and(|child_record| {
                                 child_record.owner == InstanceOwner::Instance(instance)
                                     && grant.target
                                         == GrantEndpoint::Executable(child_record.executable)
                             })
-                        })
-                    } else if grant.rights & 0b11 == 0 {
-                        grant.target == GrantEndpoint::Instance(instance)
-                            || grant.target == GrantEndpoint::Instance(owner)
-                    } else {
-                        grant.target == GrantEndpoint::Instance(instance)
+                        }),
+                        CapabilityKind::Endpoint => {
+                            grant.target == GrantEndpoint::Instance(instance)
+                        }
+                        _ => {
+                            grant.target == GrantEndpoint::Instance(instance)
+                                || grant.target == GrantEndpoint::Instance(owner)
+                        }
                     }
             }
         };
@@ -2103,10 +2303,11 @@ impl<'a> Generation<'a> {
                 };
                 child_record.owner == InstanceOwner::Instance(instance)
                     && grant.source == GrantEndpoint::Instance(instance)
-                    && if grant.rights & RIGHT_EXEC != 0 {
-                        grant.target == GrantEndpoint::Executable(child_record.executable)
-                    } else {
-                        grant.target == GrantEndpoint::Instance(child)
+                    && match grant.capability_kind {
+                        CapabilityKind::Executable => {
+                            grant.target == GrantEndpoint::Executable(child_record.executable)
+                        }
+                        _ => grant.target == GrantEndpoint::Instance(child),
                     }
             })
     }
@@ -2285,6 +2486,21 @@ mod tests {
             Generation::decode(&bytes),
             Err(DecodeError::UnsupportedVersion)
         ));
+    }
+
+    #[test]
+    fn capability_kinds_reject_rights_from_other_classes() {
+        assert!(capability_rights_valid(CapabilityKind::Endpoint, 0b11));
+        assert!(!capability_rights_valid(
+            CapabilityKind::Endpoint,
+            RIGHT_EXEC | RIGHT_SPAWN
+        ));
+        assert!(capability_rights_valid(
+            CapabilityKind::Executable,
+            RIGHT_EXEC | RIGHT_SPAWN
+        ));
+        assert!(!capability_rights_valid(CapabilityKind::Input, 1 << 10));
+        assert!(!capability_rights_valid(CapabilityKind::Block, 1 << 23));
     }
 
     #[test]

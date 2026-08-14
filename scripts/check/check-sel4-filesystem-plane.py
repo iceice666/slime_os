@@ -45,15 +45,17 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"\[init\] filesystem service spawned",
     ),
     (
-        "init spawned the client",
-        r"\[init\] directory probe spawned",
-    ),
-    (
-        # The service opened the object store over its block capability. It
-        # prints this only after `open_store` succeeds, so a store it could not
-        # validate stops the plane here.
+        # The service opened the object store over its block capability, and
+        # says so on a declared edge to init as well as on serial. The client is
+        # not spawned until that announcement arrives: opening the store is
+        # hundreds of block round trips, and a request sent into that window got
+        # no reply and failed the client's own arm.
         "the service opened the store and is serving",
         r"\[filesystem\] ready",
+    ),
+    (
+        "init spawned the client once the service was ready",
+        r"\[init\] filesystem client spawned",
     ),
     (
         # An interrupted root transition: the service put a new snapshot object
@@ -280,22 +282,27 @@ def check_transcript(transcript: str) -> None:
     if denials < 1:
         report_transcript(transcript)
         fail("a derive without a directory capability was not denied")
-    # The client's directory view crossed to the service on every request. This
-    # is the property the new `objectKindDirectory` exists for, and a service
-    # that answered from its own authority instead would show none.
-    transfers = re.findall(
-        r"SLIME_GRAPH capability transfer task=\d+ channel=\d+ side=(\w+) caps=1", transcript
+    # The client's view reaching the service, in the root's own words. The
+    # cutover replaced the logical-channel `capability transfer … channel=…
+    # side=…` line with an export/import pair: a directory capability has no
+    # kernel object to travel in a message, so the sender exports and the
+    # receiver claims, and both halves are recorded.
+    exports = re.findall(
+        r"SLIME_GRAPH capability exported task=\d+ id=(\d+) kind=directory", transcript
     )
-    if transfers.count("producer") < 4 or transfers.count("consumer") < 4:
+    imports = re.findall(
+        r"SLIME_GRAPH capability imported task=\d+ id=(\d+) kind=directory", transcript
+    )
+    if len(exports) < 4 or exports != imports:
         fail(
             "the client's directory view did not reach the service on each "
-            f"request; observed {transfers}"
+            f"request; exported {exports}, imported {imports}"
         )
     print(
         f"transcript: {len(REQUIRED_MARKERS)} markers observed; the oracle's own "
         f"directory-probe drove read, interrupted-write, write, derive, and "
         f"boundary arms through the seL4 filesystem service, handing its view "
-        f"across {transfers.count('producer')} times",
+        f"across {len(exports)} times",
         flush=True,
     )
 

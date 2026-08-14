@@ -1,17 +1,15 @@
-//! The Slime operation API components program against.
+//! Narrow Slime service APIs exposed to components.
 //!
-//! Operation numbers, arguments, errors, bounds, and transfer semantics are
-//! defined once here. [`sel4_transport`] calls the badged root service endpoint
-//! in child CSpace slot 1: the operation number is the message label, at most
-//! four fast message registers cross in each direction, and larger payloads use
-//! the component's bound transfer window.
+//! Each root-served mechanism owns its message labels. [`sel4_transport`]
+//! carries those labels over the badged root endpoint in child CSpace slot 1;
+//! native endpoints and notifications remain direct seL4 capabilities.
 
 use sel4_transport as transport;
 
 mod sel4_transport;
 mod wire;
 
-pub use sel4_transport::{NATIVE_ENDPOINT_BASE, ROOT_SERVICE_SLOT};
+pub use sel4_transport::ROOT_SERVICE_SLOT;
 
 /// Record the root-mapped startup transfer window locally. The root created
 /// and authenticated this mapping while constructing the thread, so no syscall
@@ -23,32 +21,46 @@ pub(crate) fn bind_startup_window(base: usize) -> i64 {
 pub(crate) fn early_debug_write(bytes: &[u8]) {
     sel4_transport::early_debug_write(bytes)
 }
-const SYS_EXIT: u64 = 3;
-const SYS_SPAWN: u64 = 4;
-const SYS_UNHEALTHY: u64 = 9;
-const SYS_SUPERVISION_STATUS: u64 = 12;
-const SYS_CAP_DROP: u64 = 13;
-const SYS_DIRECTORY_DERIVE: u64 = 15;
+mod lifecycle_labels {
+    pub const EXIT: u64 = 3;
+    pub const UNHEALTHY: u64 = 9;
+}
 
-const SYS_SHARED_BUFFER_CREATE: u64 = 21;
-const SYS_SHARED_BUFFER_RELEASE: u64 = 22;
-const SYS_SHARED_BUFFER_MAP: u64 = 23;
-const SYS_SHARED_BUFFER_UNMAP: u64 = 24;
-const SYS_SHARED_BUFFER_SEAL: u64 = 25;
-const SYS_SHARED_BUFFER_LOAN: u64 = 26;
-const SYS_SHARED_BUFFER_LOAN_MAP: u64 = 27;
-const SYS_SHARED_BUFFER_RETURN: u64 = 28;
-const SYS_SHARED_BUFFER_REVOKE: u64 = 29;
-/// B25: derive a second supervision handle naming a task already supervised.
-const SYS_SUPERVISION_DERIVE: u64 = 32;
-/// Export a narrowed logical capability as a receiver-bound kernel ticket.
-const SYS_CAPABILITY_EXPORT: u64 = 33;
-/// Claim a receiver-bound export the root recorded, into a free slot.
-const SYS_CAPABILITY_IMPORT: u64 = 34;
-/// Cancel an export which did not reach its carrier and restore moved authority.
-const SYS_CAPABILITY_EXPORT_CANCEL: u64 = 35;
-/// Release the sender ticket after delivery while keeping the export importable.
-const SYS_CAPABILITY_EXPORT_FINALIZE: u64 = 36;
+mod spawn_labels {
+    pub const SPAWN: u64 = 4;
+}
+
+mod supervision_labels {
+    pub const STATUS: u64 = 12;
+    pub const DERIVE: u64 = 32;
+}
+
+mod capability_table_labels {
+    pub const DROP: u64 = 13;
+}
+
+mod directory_labels {
+    pub const DERIVE: u64 = 15;
+}
+
+mod shared_buffer_labels {
+    pub const CREATE: u64 = 21;
+    pub const RELEASE: u64 = 22;
+    pub const MAP: u64 = 23;
+    pub const UNMAP: u64 = 24;
+    pub const SEAL: u64 = 25;
+    pub const LOAN: u64 = 26;
+    pub const LOAN_MAP: u64 = 27;
+    pub const RETURN: u64 = 28;
+    pub const REVOKE: u64 = 29;
+}
+
+mod capability_transfer_labels {
+    pub const EXPORT: u64 = 33;
+    pub const IMPORT: u64 = 34;
+    pub const EXPORT_CANCEL: u64 = 35;
+    pub const EXPORT_FINALIZE: u64 = 36;
+}
 
 pub const ERR_SUCCESS: i64 = 0;
 pub const ERR_BAD_CAP: i64 = -1;
@@ -68,7 +80,7 @@ pub enum CapabilityDisposition {
 }
 
 /// Size of the root-mapped startup transfer window: enough for the largest
-/// single frame any operation stages.
+/// single service frame.
 pub(crate) const MIN_TRANSFER_WINDOW: usize = 4096;
 
 /// A capability rights bitset shared with generation format v3.
@@ -120,9 +132,8 @@ pub struct InputEvent {
     pub pressed: bool,
 }
 
-/// Relinquishes the CPU for the rest of this time slice. The only operation
-/// with no policy content, so the seL4 transport issues `seL4_Yield` directly
-/// rather than crossing the root service endpoint.
+/// Relinquishes the CPU for the rest of this time slice. This is direct
+/// `seL4_Yield`, not a root-service request.
 pub fn yield_now() {
     transport::yield_now();
 }
@@ -205,37 +216,14 @@ pub fn notification_poll(slot: u32) -> Result<Option<u64>, i64> {
     transport::notification_poll(slot)
 }
 
-/// Send over a channel's *native* seL4 Endpoint, with the root not in the path
-/// (B46).
-///
-/// The root installs one at `NATIVE_ENDPOINT_BASE + slot` for every declared
-/// channel, so `slot` is the same number the component's declaration names.
-/// Blocking: `seL4_Send` waits for a receiver, which is the backpressure the
-/// logical channel emulated with a bounded queue and a park.
-pub fn native_send(slot: u32, payload: &[u8]) -> i64 {
-    transport::native_send(slot, payload)
-}
-
-/// Receive from a channel's native seL4 Endpoint (B46).
-///
-/// Blocking, unlike [`recv`]: the kernel parks the caller until a sender
-/// arrives, so a component using this needs neither the poll/park split nor
-/// `wait`.
-pub fn native_recv(slot: u32, buf: &mut [u8]) -> i64 {
-    transport::native_recv(slot, buf)
-}
-
 pub fn exit(status: i64) -> ! {
     transport::exit(status)
 }
 
 /// Spawns the executable in `executable_slot`. Each grant is a non-consuming
 /// narrow copy; the source capability remains in the spawner. Success returns
-/// both the child task id and a supervision capability slot.
+/// only an opaque supervision capability slot; task identity stays root-local.
 pub fn spawn(executable_slot: u32, grants: &[SpawnGrant]) -> Result<Spawned, i64> {
-    // The root still answers with a result word and the supervision slot; the
-    // word is an error code or a success marker, never an identity the caller
-    // keeps (B42).
     let (result, supervision_slot) = transport::spawn(executable_slot, grants);
     if result < 0 {
         Err(result)

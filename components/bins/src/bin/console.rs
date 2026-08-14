@@ -2,6 +2,7 @@
 #![no_main]
 
 use slime_rt::{MAX_CAPS_PER_MSG, MAX_MSG};
+include!(concat!(env!("OUT_DIR"), "/fabric_profile.rs"));
 
 slime_rt::entry!(main);
 
@@ -22,7 +23,7 @@ const CLOSE: &[u8] = b"SLIME.CONSOLE.CLOSE";
 fn main(_startup_arg: u32) {
     let mut buf = [0u8; MAX_MSG];
     let mut caps = [0u64; MAX_CAPS_PER_MSG];
-    if option_env!("SLIME_SEL4_CHANNEL_CHECK") == Some("1") {
+    if GENERATION_BOOT_ACTION == "channel" {
         slime_rt::debug_write(b"[console] unrelated progress while sender blocked\n");
     }
     loop {
@@ -48,9 +49,8 @@ fn main(_startup_arg: u32) {
                 // startup probe performs, against its own declared quota. A
                 // ceiling that leaked across holders fails here.
                 //
-                // Guarded, because P5.3.1's gate asserts this component's
-                // output exactly and its generation declares it no quota.
-                if option_env!("SLIME_SEL4_LOAN_CHECK") == Some("1")
+                // The loan generation declares this holder's independent quota.
+                if GENERATION_BOOT_ACTION == "loan"
                     && !slime_components::shared_buffer_probe::probe_and_report(
                         b"[console]",
                         SHARED_BUFFER_FACTORY_SLOT,

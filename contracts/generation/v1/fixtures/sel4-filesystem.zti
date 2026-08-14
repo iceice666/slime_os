@@ -29,6 +29,7 @@
   grants = [
     {
       name = "init-sel4-filesystem-service";
+      capabilityKind = "executable";
       rights = [
         "exec";
         "spawn";
@@ -39,6 +40,7 @@
     };
     {
       name = "init-directory-probe";
+      capabilityKind = "executable";
       rights = [
         "exec";
         "spawn";
@@ -49,6 +51,7 @@
     };
     {
       name = "filesystem-service-a-namespace";
+      capabilityKind = "directory";
       rights = [
         "directoryRead";
         "directoryWrite";
@@ -61,6 +64,7 @@
     };
     {
       name = "filesystem-service-b-device";
+      capabilityKind = "block";
       rights = [
         "blockRead";
         "blockWrite";
@@ -71,6 +75,7 @@
     };
     {
       name = "directory-probe-namespace";
+      capabilityKind = "directory";
       rights = [
         "directoryRead";
         "directoryWrite";
@@ -82,8 +87,8 @@
       transferable = true;
     };
     {
-      minted = true;
       name = "filesystem-rpc";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -91,6 +96,17 @@
       source = "directory-probe";
       target = "sel4-filesystem-service";
       transferable = true;
+    };
+    {
+      name = "filesystem-service-ready";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "sel4-filesystem-service";
+      target = "init";
+      transferable = false;
     };
   ];
   health = {
@@ -111,6 +127,10 @@
           grant = "init-sel4-filesystem-service";
           slot = 2;
         };
+        {
+          grant = "filesystem-service-ready";
+          slot = 3;
+        };
       ];
       dependencies = [];
       executable = "init";
@@ -122,12 +142,20 @@
       autostart = true;
       bindings = [
         {
+          grant = "filesystem-rpc";
+          slot = 0;
+        };
+        {
           grant = "filesystem-service-a-namespace";
           slot = 1;
         };
         {
           grant = "filesystem-service-b-device";
           slot = 2;
+        };
+        {
+          grant = "filesystem-service-ready";
+          slot = 3;
         };
       ];
       dependencies = [
@@ -139,8 +167,12 @@
       owner = "init";
     };
     {
-      autostart = true;
+      autostart = false;
       bindings = [
+        {
+          grant = "filesystem-rpc";
+          slot = 0;
+        };
         {
           grant = "directory-probe-namespace";
           slot = 1;
@@ -155,30 +187,7 @@
       owner = "init";
     };
   ];
-  mintedBindings = [
-    {
-      name = "filesystem-service-rpc";
-      owner = "init";
-      holder = "sel4-filesystem-service";
-      rights = [
-        "send";
-        "recv";
-      ];
-      slot = 0;
-      transferable = false;
-    };
-    {
-      name = "directory-probe-rpc";
-      owner = "init";
-      holder = "directory-probe";
-      rights = [
-        "send";
-        "recv";
-      ];
-      slot = 0;
-      transferable = false;
-    };
-  ];
+  mintedBindings = [];
   interfaceSchemas = [];
   objects = [
     {

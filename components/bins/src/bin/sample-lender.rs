@@ -20,6 +20,7 @@ use slime_proto::sample_descriptor::{
     CAPABILITY_KIND_LOAN, FLAG_LAST, FORMAT_VERSION, SAMPLE_DESCRIPTOR_MAGIC, WireSampleDescriptor,
 };
 use slime_rt::{CapabilityDisposition, ERR_BAD_CAP, ERR_SUCCESS, MAX_MSG};
+include!(concat!(env!("OUT_DIR"), "/fabric_profile.rs"));
 
 slime_rt::entry!(main);
 
@@ -43,11 +44,11 @@ fn fail(reason: &[u8]) -> ! {
     slime_rt::exit(1)
 }
 
-fn main(startup_arg: u32) {
-    if startup_arg == 0 && option_env!("SLIME_SEL4_SAMPLE_CHECK") == Some("1") {
-        slime_rt::debug_write(b"[sample-lender] root-autostart probe skipped\n");
-        return;
-    }
+/// The generation declares this instance `autostart = false`, so the only copy
+/// that runs is the one its owner spawned with the factory and supervision
+/// handle this scenario needs. See `sample-receiver.rs` for why the previous
+/// `startup_arg == 0` guard could not distinguish the two.
+fn main(_startup_arg: u32) {
     // A payload larger than the control-message bound is the whole point.
     if PAYLOAD_LEN <= MAX_MSG as u64 {
         fail(b"payload must exceed MAX_MSG");

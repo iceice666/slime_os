@@ -35,6 +35,14 @@ use slime_proto::generation::{self, WireGenerationReply, WireGenerationRequest};
 const BLOCK_SLOT: u32 = 1;
 /// The preinstalled direct endpoint shared with the client.
 const CLIENT_SLOT: u32 = 0;
+/// The supervision handle naming the client, minted by init at spawn.
+///
+/// A native Endpoint reports no peer death — `ERR_PEER_DEAD` is a logical-channel
+/// answer the cutover deleted — so the loop below cannot learn its client is
+/// gone from the endpoint. Death travels on a supervision capability, which is
+/// why this handle is granted at all: it cannot exist before the task it names,
+/// so it is a `MintedBinding` rather than a static grant.
+const CLIENT_SUPERVISION_SLOT: u32 = 3;
 
 const SECTOR_BYTES: usize = 512;
 /// The BootState slots, partition-relative — the same layout the rollback and
@@ -59,9 +67,9 @@ const STATUS_NO_PENDING: i32 = -3;
 
 slime_rt::entry!(main);
 
-fn main(startup_arg: u32) {
-    if startup_arg == 0 {
-        slime_rt::debug_write(b"[sel4-generation-manager] idle root copy\n");
+fn main(_startup_arg: u32) {
+    if !spawned_instance() {
+        slime_rt::debug_write(b"[sel4-generation-manager] idle without a client\n");
         slime_rt::exit(0);
     }
 
@@ -106,10 +114,17 @@ fn main(startup_arg: u32) {
         let received = slime_rt::recv(CLIENT_SLOT, &mut bytes, &mut caps);
         match received {
             slime_rt::ERR_WOULDBLOCK => {
+                // No request pending. The client is either still working or
+                // gone; only its supervision handle can say which.
+                if matches!(
+                    slime_rt::supervision_status(CLIENT_SUPERVISION_SLOT),
+                    Ok(Some(_))
+                ) {
+                    break;
+                }
                 slime_rt::yield_now();
                 continue;
             }
-            slime_rt::ERR_PEER_DEAD => break,
             result if result < 0 => fail(b"client recv"),
             _ => {}
         }
@@ -121,7 +136,6 @@ fn main(startup_arg: u32) {
         loop {
             match slime_rt::send(CLIENT_SLOT, &encoded, &[]) {
                 slime_rt::ERR_WOULDBLOCK => slime_rt::yield_now(),
-                slime_rt::ERR_PEER_DEAD => break,
                 result if result < 0 => fail(b"client send"),
                 _ => break,
             }
@@ -469,4 +483,28 @@ fn fail(reason: &[u8]) -> ! {
     slime_rt::debug_write(reason);
     slime_rt::debug_write(b"\n");
     slime_rt::exit(1)
+}
+
+/// The RPC endpoint init's declared edge places, and the discriminator.
+///
+/// The plane declares this executable twice — the instance init spawns, and a
+/// root-owned `idle` one whose endpoint at this slot is a loopback nobody sends
+/// on. Both hold a real endpoint, so *arrival* separates them: the root delivers
+/// a nonzero boot action only to the bootstrap instance, so `startup_arg` cannot.
+const RUN_TOKEN_SLOT: u32 = 2;
+/// Yields given up before concluding no peer will speak. The idle instance
+/// always exhausts this bound, so it is a latency rather than a safety margin.
+const RUN_TOKEN_YIELDS: usize = 64;
+
+fn spawned_instance() -> bool {
+    let mut bytes = [0u8; slime_rt::MAX_MSG];
+    let mut caps = [0u64; slime_rt::MAX_CAPS_PER_MSG];
+    for _ in 0..RUN_TOKEN_YIELDS {
+        match slime_rt::recv(RUN_TOKEN_SLOT, &mut bytes, &mut caps) {
+            slime_rt::ERR_WOULDBLOCK => slime_rt::yield_now(),
+            result if result < 0 => return false,
+            _ => return true,
+        }
+    }
+    false
 }

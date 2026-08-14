@@ -46,6 +46,7 @@
   grants = [
     {
       name = "init-console";
+      capabilityKind = "executable";
       rights = [
         "exec";
         "spawn";
@@ -56,6 +57,7 @@
     };
     {
       name = "init-spawn-service";
+      capabilityKind = "executable";
       rights = [
         "exec";
         "spawn";
@@ -66,6 +68,7 @@
     };
     {
       name = "console-output";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -76,6 +79,7 @@
     };
     {
       name = "spawn-service-rpc";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -86,6 +90,7 @@
     };
     {
       name = "init-spawn-service-sysinfo";
+      capabilityKind = "executable";
       rights = [
         "exec";
         "spawn";
@@ -96,6 +101,7 @@
     };
     {
       name = "init-spawn-service-echo";
+      capabilityKind = "executable";
       rights = [
         "exec";
         "spawn";
@@ -106,6 +112,7 @@
     };
     {
       name = "spawn-service-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
       rights = [
         "bufferCreate";
       ];

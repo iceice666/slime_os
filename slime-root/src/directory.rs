@@ -1,19 +1,13 @@
-//! Directory namespaces and scopes, served off the universal dispatcher (B45).
+//! Directory namespace state and interned scopes (B45).
 //!
-//! A namespace root is unforgeable shared state with an atomic transition,
-//! which is why the root owns it at all: that is mechanism. What a directory
-//! *contains* stays in userspace, built over the object store.
-//!
-//! These three operations moved to the second dispatcher for the reason B43's
-//! block requests did — the tables they mutate are theirs, and a directory
-//! commit racing a lifecycle syscall on one queue makes each wait for the
-//! other for no reason. `Namespaces` and the scope table came with them, so
-//! the authority is not split across two threads.
+//! Namespace roots and scope interning are owned here. Callers resolve a
+//! task's typed directory authority through [`crate::task::TaskTable`]; this
+//! module keeps no second authority database.
 
 use crate::child_vspace::ScratchPage;
-use crate::graph::{self, GraphTables};
+use crate::graph::CapabilityEntry;
 use crate::ipc::{IpcError, Response};
-use crate::task::TaskId;
+use crate::task::{TaskId, TaskTable};
 use crate::transfer_window;
 use boot_contracts::generation::RIGHT_TRANSFER;
 
@@ -33,6 +27,131 @@ pub const RIGHT_DIRECTORY_DERIVE: u64 = 1 << 22;
 /// Every right a directory capability may carry, for bounding a derive request.
 pub const RIGHTS_DIRECTORY_ALL: u64 =
     RIGHT_DIRECTORY_READ | RIGHT_DIRECTORY_WRITE | RIGHT_DIRECTORY_LIST | RIGHT_DIRECTORY_DERIVE;
+
+/// A handle naming an interned relative directory path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScopeId(u16);
+
+pub const MAX_DIRECTORY_PATH: usize = 128;
+pub const MAX_DIRECTORY_DEPTH: usize = 8;
+pub const MAX_SCOPES: usize = 64;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DirectoryScope {
+    bytes: [u8; MAX_DIRECTORY_PATH],
+    len: u8,
+}
+
+impl DirectoryScope {
+    const fn root() -> Self {
+        Self {
+            bytes: [0; MAX_DIRECTORY_PATH],
+            len: 0,
+        }
+    }
+    fn path(&self) -> &[u8] {
+        &self.bytes[..self.len as usize]
+    }
+
+    fn derive(&self, relative: &[u8]) -> Option<Self> {
+        if !valid_directory_path(relative, true) {
+            return None;
+        }
+        let current = self.len as usize;
+        let separator = usize::from(current != 0 && !relative.is_empty());
+        let total = current
+            .checked_add(separator)?
+            .checked_add(relative.len())?;
+        if total > MAX_DIRECTORY_PATH {
+            return None;
+        }
+        let mut bytes = [0; MAX_DIRECTORY_PATH];
+        bytes[..current].copy_from_slice(&self.bytes[..current]);
+        if separator != 0 {
+            bytes[current] = b'/';
+        }
+        bytes[current + separator..total].copy_from_slice(relative);
+        if !valid_directory_path(&bytes[..total], true) {
+            return None;
+        }
+        Some(Self {
+            bytes,
+            len: total as u8,
+        })
+    }
+}
+
+/// Append-only scope interning owned by the directory service.
+pub struct ScopeTable {
+    paths: [DirectoryScope; MAX_SCOPES],
+    len: usize,
+}
+
+impl ScopeTable {
+    pub const ROOT: ScopeId = ScopeId(0);
+    pub const fn new() -> Self {
+        Self {
+            paths: [DirectoryScope::root(); MAX_SCOPES],
+            len: 1,
+        }
+    }
+    pub fn path(&self, id: ScopeId) -> &[u8] {
+        self.paths
+            .get(id.0 as usize)
+            .map_or(&[], DirectoryScope::path)
+    }
+    pub fn is_root(&self, id: ScopeId) -> bool {
+        id == Self::ROOT || self.path(id).is_empty()
+    }
+    pub fn derive(&mut self, base: ScopeId, relative: &[u8]) -> Option<ScopeId> {
+        let derived = self.paths.get(base.0 as usize)?.derive(relative)?;
+        if let Some(index) = self.paths[..self.len]
+            .iter()
+            .position(|scope| *scope == derived)
+        {
+            return Some(ScopeId(index as u16));
+        }
+        if self.len >= MAX_SCOPES {
+            return None;
+        }
+        let index = self.len;
+        self.paths[index] = derived;
+        self.len += 1;
+        Some(ScopeId(index as u16))
+    }
+}
+
+impl Default for ScopeTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub fn valid_directory_path(path: &[u8], allow_empty: bool) -> bool {
+    if path.is_empty() {
+        return allow_empty;
+    }
+    if path.len() > MAX_DIRECTORY_PATH || path[0] == b'/' || path[path.len() - 1] == b'/' {
+        return false;
+    }
+    let mut depth = 0;
+    for segment in path.split(|byte| *byte == b'/') {
+        if segment.is_empty()
+            || segment == b"."
+            || segment == b".."
+            || !segment
+                .iter()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'.' | b'_' | b'-'))
+        {
+            return false;
+        }
+        depth += 1;
+        if depth > MAX_DIRECTORY_DEPTH {
+            return false;
+        }
+    }
+    true
+}
 
 /// Answer one `BlockTransact` (P5.4.2c).
 ///
@@ -118,40 +237,34 @@ impl Namespaces {
 ///
 /// The reply is the 32-byte root followed by the scope path, written through
 /// the caller's transfer window because a scope can exceed a message.
-pub fn serve_directory_inspect(
-    graph: &GraphTables,
+pub fn serve_directory_inspect<const TASKS: usize>(
+    tasks: &TaskTable<TASKS>,
     namespaces: &Namespaces,
-    scopes: &graph::ScopeTable,
+    scopes: &ScopeTable,
     window: Option<transfer_window::Window>,
     scratch: &ScratchPage,
     id: TaskId,
     words: &[sel4::Word],
     buffer: &mut sel4::IpcBuffer,
 ) -> Response {
-    let Some(table) = graph.get(id) else {
+    let Some(table) = tasks.authority(id) else {
         return Response::error(IpcError::BadCapability);
     };
-    // `words[0]` packs the slot and the required rights, as `wire::slot_pair`
-    // encodes them: slot low, rights high. One word because the operation's
-    // argument list would otherwise exceed the fast registers.
     let slot = words[0] as u32;
     let required = words[0] >> 32;
-    // A zero request is not "no requirement": it is a caller that did not say
-    // what it needs, which the oracle refuses too.
     if required == 0 || required & !RIGHTS_DIRECTORY_ALL != 0 {
         return Response::error(IpcError::InvalidOperation);
     }
-    let Ok(capability) = table.resolve(slot, required) else {
+    let Ok(capability) = table.resolve_directory(slot, required) else {
         return Response::error(IpcError::BadCapability);
     };
-    let graph::Resource::Directory { namespace, scope } = capability.resource else {
-        return Response::error(IpcError::BadCapability);
-    };
+    let namespace = capability.namespace;
+    let scope = capability.scope;
     let Some(root) = namespaces.root(namespace) else {
         return Response::error(IpcError::BadCapability);
     };
     let path = scopes.path(scope);
-    let mut reply = [0u8; 32 + graph::MAX_DIRECTORY_PATH];
+    let mut reply = [0u8; 32 + MAX_DIRECTORY_PATH];
     reply[..32].copy_from_slice(&root);
     reply[32..32 + path.len()].copy_from_slice(path);
     let descriptor = match transfer_window::write_staged_region_with(
@@ -185,9 +298,9 @@ pub fn serve_directory_inspect(
 ///
 /// Non-consuming: the source capability stays exactly as it was, matching every
 /// other derive-copy in this crate since B25.
-pub fn serve_directory_derive(
-    graph: &mut GraphTables,
-    scopes: &mut graph::ScopeTable,
+pub fn serve_directory_derive<const TASKS: usize>(
+    tasks: &mut TaskTable<TASKS>,
+    scopes: &mut ScopeTable,
     window: Option<transfer_window::Window>,
     scratch: &ScratchPage,
     id: TaskId,
@@ -209,36 +322,28 @@ pub fn serve_directory_derive(
         Err(error) => return Response::error(error),
     };
     let staged = frame.bytes();
-    if staged.len() > graph::MAX_DIRECTORY_PATH {
+    if staged.len() > MAX_DIRECTORY_PATH {
         return Response::error(IpcError::InvalidLength);
     }
     let path_len = staged.len();
-    let mut path = [0u8; graph::MAX_DIRECTORY_PATH];
+    let mut path = [0u8; MAX_DIRECTORY_PATH];
     path[..path_len].copy_from_slice(staged);
-    let Some(table) = graph.get_mut(id) else {
+    let Some(table) = tasks.authority_mut(id) else {
         return Response::error(IpcError::BadCapability);
     };
     // Resolved on `RIGHT_DIRECTORY_DERIVE` alone: holding a view is not
     // authority to hand out narrower ones.
-    let Ok(source) = table.resolve(slot, RIGHT_DIRECTORY_DERIVE) else {
+    let Ok(source) = table.resolve_directory(slot, RIGHT_DIRECTORY_DERIVE) else {
         return Response::error(IpcError::BadCapability);
     };
-    let graph::Resource::Directory { namespace, scope } = source.resource else {
-        return Response::error(IpcError::BadCapability);
-    };
-    // No widening, and `RIGHT_TRANSFER` is not implied by the rest.
-    if rights & !source.rights != 0 {
+    if rights & !source.rights.bits() != 0 {
         return Response::error(IpcError::BadCapability);
     }
-    let Some(derived) = scopes.derive(scope, &path[..path_len]) else {
+    let Some(derived) = scopes.derive(source.scope, &path[..path_len]) else {
         return Response::error(IpcError::InvalidOperation);
     };
-    let capability = graph::Capability {
-        resource: graph::Resource::Directory {
-            namespace,
-            scope: derived,
-        },
-        rights,
+    let Some(capability) = CapabilityEntry::directory(source.namespace, derived, rights) else {
+        return Response::error(IpcError::BadCapability);
     };
     let Some(free) = table.free_slot_from(1) else {
         return Response::error(IpcError::DestinationSlotsExhausted);
@@ -247,8 +352,9 @@ pub fn serve_directory_derive(
         return Response::error(IpcError::DestinationSlotsExhausted);
     }
     sel4::debug_println!(
-        "SLIME_GRAPH directory derived task={} from={slot} to={free} namespace={namespace} scope={} rights={rights:#x}",
+        "SLIME_GRAPH directory derived task={} from={slot} to={free} namespace={} scope={} rights={rights:#x}",
         id.0,
+        source.namespace,
         DisplayPath(scopes.path(derived)),
     );
     Response::success(free as i64, 0)
@@ -266,10 +372,10 @@ pub fn serve_directory_derive(
 /// The staged payload is two 32-byte identities: the root the caller believes
 /// is live, and the one it built. A mismatch answers `WouldBlock`, which is the
 /// retry signal rather than a failure.
-pub fn serve_directory_commit(
-    graph: &GraphTables,
+pub fn serve_directory_commit<const TASKS: usize>(
+    tasks: &TaskTable<TASKS>,
     namespaces: &mut Namespaces,
-    scopes: &graph::ScopeTable,
+    scopes: &ScopeTable,
     window: Option<transfer_window::Window>,
     scratch: &ScratchPage,
     id: TaskId,
@@ -293,15 +399,14 @@ pub fn serve_directory_commit(
     let mut new = [0u8; 32];
     expected.copy_from_slice(&staged[..32]);
     new.copy_from_slice(&staged[32..64]);
-    let Some(table) = graph.get(id) else {
+    let Some(table) = tasks.authority(id) else {
         return Response::error(IpcError::BadCapability);
     };
-    let Ok(capability) = table.resolve(slot, RIGHT_DIRECTORY_WRITE) else {
+    let Ok(capability) = table.resolve_directory(slot, RIGHT_DIRECTORY_WRITE) else {
         return Response::error(IpcError::BadCapability);
     };
-    let graph::Resource::Directory { namespace, scope } = capability.resource else {
-        return Response::error(IpcError::BadCapability);
-    };
+    let namespace = capability.namespace;
+    let scope = capability.scope;
     if !scopes.is_root(scope) {
         sel4::debug_println!(
             "SLIME_GRAPH directory commit refused task={} slot={slot} namespace={namespace} reason=scoped scope={}",

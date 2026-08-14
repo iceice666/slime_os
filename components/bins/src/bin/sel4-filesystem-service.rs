@@ -51,6 +51,20 @@ const RPC_SLOT: u32 = 0;
 /// follows. The oracle holds a store *endpoint* at its equivalent slot; the
 /// store itself lives in this component.
 const BLOCK_SLOT: u32 = 2;
+/// The declared edge back to init, on which this service announces that its
+/// store is open. Init waits on it before spawning the client: opening the
+/// store is hundreds of block round trips, and a client that sent its first
+/// request into that window got no reply and failed its own arm.
+///
+/// A native Endpoint reports no peer death, so a readiness announcement is a
+/// message rather than something a peer can infer.
+const READY_SLOT: u32 = 3;
+/// A native Endpoint reports no peer death — `ERR_PEER_DEAD` is a
+/// logical-channel answer the cutover deleted — so the loop below cannot learn
+/// its client is gone from the endpoint. Init observes the client's exit through
+/// a supervision handle and closes this service on the same edge it announced
+/// readiness on, which is the only party that can: init spawned the client.
+const CLOSE: &[u8] = b"SLIME.FILESYSTEM.CLOSE";
 const SECTOR_BYTES: usize = 512;
 const MAX_OBJECT_PAYLOAD: u32 = 32 * 1024;
 const RIGHT_TRANSFER: u32 = 1 << 2;
@@ -86,17 +100,31 @@ fn main(_startup_arg: u32) {
         slime_rt::debug_write(b"[filesystem] fail: store open\n");
         slime_rt::exit(1);
     }
+    if slime_rt::send(READY_SLOT, b"ready", &[]) != slime_rt::ERR_SUCCESS {
+        slime_rt::debug_write(b"[filesystem] fail: ready announce\n");
+        slime_rt::exit(1);
+    }
     slime_rt::debug_write(b"[filesystem] ready\n");
     loop {
         let mut message = [0u8; MAX_MSG];
         let mut received_caps = [0u64; MAX_CAPS_PER_MSG];
+        match slime_rt::recv(READY_SLOT, &mut message, &mut received_caps) {
+            ERR_WOULDBLOCK => {}
+            n if n < 0 => slime_rt::exit(1),
+            n if message[..n as usize] == *CLOSE => slime_rt::exit(0),
+            _ => slime_rt::exit(1),
+        }
         match slime_rt::recv(RPC_SLOT, &mut message, &mut received_caps) {
             ERR_WOULDBLOCK => slime_rt::yield_now(),
-            ERR_PEER_DEAD => slime_rt::exit(0),
             n if n < 0 => slime_rt::exit(1),
             n => {
+                // A directory capability has no kernel object to travel in the
+                // message, so its export arrives alone and is claimed here
+                // rather than read out of the received-capability array. That
+                // array carries only native Endpoint handles now (B46).
+                let claimed = slime_rt::capability_import().ok();
                 let (reply, received_directory, derived_cap) =
-                    handle(&message[..n as usize], &received_caps);
+                    handle(&message[..n as usize], claimed);
                 send_reply(reply, derived_cap);
                 drop_capability(received_directory);
             }
@@ -104,15 +132,10 @@ fn main(_startup_arg: u32) {
     }
 }
 
-fn handle(
-    message: &[u8],
-    received_caps: &[u64; MAX_CAPS_PER_MSG],
-) -> (WireFsReply, Option<u32>, Option<u32>) {
-    if received_caps[0] == 0 {
-        release_caps(received_caps);
+fn handle(message: &[u8], claimed: Option<u32>) -> (WireFsReply, Option<u32>, Option<u32>) {
+    let Some(directory_slot) = claimed else {
         return (reply(-2, 0, 0, 0, ZERO_HASH), None, None);
-    }
-    let directory_slot = received_caps[0] as u32;
+    };
     let Some(request) = WireFsRequest::decode(message) else {
         return (reply(-1, 0, 0, 0, ZERO_HASH), Some(directory_slot), None);
     };
@@ -203,7 +226,10 @@ fn dispatch(
             match slime_rt::directory_derive(
                 directory_slot,
                 name,
-                RIGHT_DIRECTORY_READ | RIGHT_DIRECTORY_LIST | RIGHT_TRANSFER,
+                RIGHT_DIRECTORY_READ
+                    | RIGHT_DIRECTORY_LIST
+                    | RIGHT_DIRECTORY_DERIVE
+                    | RIGHT_TRANSFER,
             ) {
                 Ok(slot) => (reply(0, 0, 0, 0, ZERO_HASH), Some(slot)),
                 Err(_) => (reply(-2, 0, 0, 0, ZERO_HASH), None),
@@ -582,7 +608,23 @@ fn send_reply(reply: WireFsReply, derived_cap: Option<u32>) {
                 slot,
                 CapabilityDisposition::Move,
                 OBJECT_KIND_DIRECTORY,
-                u64::from(RIGHT_DIRECTORY_READ | RIGHT_DIRECTORY_LIST),
+                // `transfer` and `directoryDerive` travel with the view because
+                // a request *through* it is made by narrowing a transferable
+                // copy and delegating that: post-cutover a directory capability
+                // crosses as an export the receiver claims, so a view its holder
+                // cannot copy out of is one it could use exactly once.
+                //
+                // Scope, not rights, is what bounds it. The derived view names a
+                // subtree, and `directory_derive` composes scopes forward only —
+                // the boundary arms below observe exactly that: a name outside
+                // the subtree is refused, and a write is refused for want of
+                // `directoryWrite`, which this mask does not carry.
+                u64::from(
+                    RIGHT_DIRECTORY_READ
+                        | RIGHT_DIRECTORY_LIST
+                        | RIGHT_DIRECTORY_DERIVE
+                        | RIGHT_TRANSFER,
+                ),
                 &encoded,
             ),
             None => slime_rt::send(RPC_SLOT, &encoded, &[]),
@@ -607,13 +649,5 @@ fn drop_capability(capability: Option<u32>) {
         && slime_rt::cap_drop(slot) != 0
     {
         slime_rt::exit(1);
-    }
-}
-
-fn release_caps(caps: &[u64; MAX_CAPS_PER_MSG]) {
-    for slot in caps.iter().copied().filter(|slot| *slot != 0) {
-        if slime_rt::cap_drop(slot as u32) != 0 {
-            slime_rt::exit(1);
-        }
     }
 }

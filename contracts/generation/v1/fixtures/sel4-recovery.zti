@@ -22,6 +22,7 @@
   grants = [
     {
       name = "init-sel4-recovery-probe";
+      capabilityKind = "executable";
       rights = [
         "exec";
         "spawn";
@@ -32,6 +33,7 @@
     };
     {
       name = "recovery-a-primary-device";
+      capabilityKind = "block";
       rights = [
         "blockRead";
         "blockWrite";
@@ -42,6 +44,7 @@
     };
     {
       name = "recovery-a-primary-device-idle";
+      capabilityKind = "block";
       rights = [
         "blockRead";
         "blockWrite";
@@ -52,6 +55,7 @@
     };
     {
       name = "recovery-b-guard-device";
+      capabilityKind = "block";
       rights = [
         "blockRead";
       ];
@@ -61,8 +65,31 @@
     };
     {
       name = "recovery-b-guard-device-idle";
+      capabilityKind = "block";
       rights = [
         "blockRead";
+      ];
+      source = "sel4-recovery-probe-idle";
+      target = "sel4-recovery-probe-idle";
+      transferable = false;
+    };
+    {
+      name = "sel4-recovery-probe-run-token";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "init";
+      target = "sel4-recovery-probe";
+      transferable = false;
+    };
+    {
+      name = "sel4-recovery-probe-idle-token";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
       ];
       source = "sel4-recovery-probe-idle";
       target = "sel4-recovery-probe-idle";
@@ -83,6 +110,10 @@
           grant = "init-sel4-recovery-probe";
           slot = 1;
         };
+        {
+          grant = "sel4-recovery-probe-run-token";
+          slot = 2;
+        };
       ];
       dependencies = [];
       executable = "init";
@@ -91,7 +122,7 @@
       owner = "root";
     };
     {
-      autostart = true;
+      autostart = false;
       bindings = [
         {
           grant = "recovery-a-primary-device";
@@ -100,6 +131,10 @@
         {
           grant = "recovery-b-guard-device";
           slot = 2;
+        };
+        {
+          grant = "sel4-recovery-probe-run-token";
+          slot = 0;
         };
       ];
       dependencies = [
@@ -121,6 +156,10 @@
           grant = "recovery-b-guard-device-idle";
           slot = 2;
         };
+        {
+          grant = "sel4-recovery-probe-idle-token";
+          slot = 0;
+        };
       ];
       dependencies = [
         "init";
@@ -131,19 +170,7 @@
       owner = "root";
     };
   ];
-  mintedBindings = [
-    {
-      name = "sel4-recovery-probe-run-token";
-      owner = "init";
-      holder = "sel4-recovery-probe";
-      rights = [
-        "send";
-        "recv";
-      ];
-      slot = 0;
-      transferable = false;
-    };
-  ];
+  mintedBindings = [];
   interfaceSchemas = [];
   objects = [
     {

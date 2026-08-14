@@ -6,8 +6,6 @@
 //! and portable fault details: raw badges, CSpace slots, object addresses, and
 //! physical identifiers never cross this boundary.
 
-use crate::ipc::Operation;
-
 pub const MAX_SUPERVISED_TASKS: usize = 64;
 pub type TaskKey = u32;
 pub type SupervisionKey = u32;
@@ -269,8 +267,13 @@ pub enum TaskState {
 pub enum LifecycleEventKind {
     Started,
     Waiting,
-    IpcCompleted { operation: Operation, result: i64 },
-    Exited { status: i64 },
+    IpcCompleted {
+        service_label: sel4::Word,
+        result: i64,
+    },
+    Exited {
+        status: i64,
+    },
     Faulted(FaultRecord),
     TimedOut,
     PeerLost,
@@ -299,9 +302,9 @@ pub struct SupervisionTransition {
 }
 
 /// Fixed-capacity task supervision state. The task module registers logical
-/// task/supervision keys after allocating seL4 objects, feeds IPC completions
-/// from the root dispatcher, and feeds exits/faults from service and fault
-/// endpoints. Terminal transitions are single-assignment.
+/// task/supervision keys after allocating seL4 objects, feeds service-label
+/// completions from the root dispatcher, and feeds exits/faults from service
+/// and fault endpoints. Terminal transitions are single-assignment.
 #[derive(Debug, Eq, PartialEq)]
 pub struct SupervisionTable<const CAPACITY: usize = MAX_SUPERVISED_TASKS> {
     tasks: [Option<SupervisedTask>; CAPACITY],
@@ -421,7 +424,7 @@ impl<const CAPACITY: usize> SupervisionTable<CAPACITY> {
     pub fn ipc_completed(
         &mut self,
         task: TaskKey,
-        operation: Operation,
+        service_label: sel4::Word,
         result: i64,
     ) -> Result<LifecycleEvent, FaultError> {
         let entry = self.task_mut(task)?;
@@ -431,7 +434,10 @@ impl<const CAPACITY: usize> SupervisionTable<CAPACITY> {
         entry.state = TaskState::Running;
         Ok(LifecycleEvent {
             task,
-            kind: LifecycleEventKind::IpcCompleted { operation, result },
+            kind: LifecycleEventKind::IpcCompleted {
+                service_label,
+                result,
+            },
         })
     }
 
@@ -552,14 +558,12 @@ mod tests {
         let mut table = SupervisionTable::<2>::new();
         table.register(10, 100).unwrap();
         table.register(11, 101).unwrap();
-        let ipc = table
-            .ipc_completed(10, Operation::FixtureDirective, 0)
-            .unwrap();
+        let ipc = table.ipc_completed(10, 5, 0).unwrap();
         let fault = table.fault(11, FAULT).unwrap().event;
         assert_eq!(
             ipc.kind,
             LifecycleEventKind::IpcCompleted {
-                operation: Operation::FixtureDirective,
+                service_label: 5,
                 result: 0,
             }
         );

@@ -38,20 +38,16 @@ BOOT_TIMEOUT_SECONDS = 240
 
 REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     (
-        "the unconfigured manager parked without a client",
-        r"\[sel4-generation-manager\] idle without a client",
-    ),
-    (
-        "the unconfigured client parked without an endpoint",
-        r"\[sel4-generation-client\] idle without an endpoint",
+        # The client precedes the manager: the manager is granted a supervision
+        # handle naming it, and a handle cannot exist before its task. A native
+        # Endpoint reports no peer death, so that handle is the only way the
+        # manager learns its client is gone rather than merely quiet.
+        "init spawned the client",
+        r"\[init\] generation client spawned",
     ),
     (
         "init spawned the manager",
         r"\[init\] generation manager spawned",
-    ),
-    (
-        "init spawned the client",
-        r"\[init\] generation client spawned",
     ),
     (
         # The manager holds the only block capability, so it is the only
@@ -251,12 +247,21 @@ def boot(profile: dict[str, object], disk: Path) -> str:
     watchdog.start()
     try:
         assert process.stdout is not None
+        # The two root-owned idle instances run concurrently with init and each
+        # concludes it holds no peer only after a bounded wait, so their lines
+        # can land before or after init's completion marker. Stop once every
+        # fact has been observed rather than at the terminal alone.
+        idle_seen = 0
         for line in process.stdout:
             lines.append(line.rstrip("\r\n"))
             if failures.search(line):
                 break
-            if terminal.search(line):
-                reached = True
+            idle_seen += int(
+                "[sel4-generation-manager] idle without a client" in line
+                or "[sel4-generation-client] idle without an endpoint" in line
+            )
+            reached |= terminal.search(line) is not None
+            if reached and idle_seen >= 2:
                 break
     finally:
         watchdog.cancel()
@@ -291,6 +296,22 @@ def check_transcript(transcript: str) -> None:
             report_transcript(transcript)
             fail(f"failure marker in serial transcript: {match.group(0)!r}")
     position = 0
+    # Asserted by presence, not by position: each idle instance concludes it
+    # holds no peer only after a bounded wait, so its line lands wherever the
+    # scheduler puts it. Ordering it would assert a scheduling accident.
+    for label, marker in (
+        (
+            "the unconfigured manager parked without a client",
+            "[sel4-generation-manager] idle without a client",
+        ),
+        (
+            "the unconfigured client parked without an endpoint",
+            "[sel4-generation-client] idle without an endpoint",
+        ),
+    ):
+        if marker not in transcript:
+            report_transcript(transcript)
+            fail(f"missing marker: {label} ({marker})")
     for label, pattern in REQUIRED_MARKERS:
         match = re.compile(pattern).search(transcript, position)
         if match is None:

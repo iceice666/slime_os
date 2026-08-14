@@ -698,6 +698,7 @@
   grants = [
     {
       name = "spawn-service-rpc";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -708,6 +709,7 @@
     };
     {
       name = "spawn-service-sysinfo";
+      capabilityKind = "executable";
       rights = [
         "exec";
         "spawn";
@@ -718,6 +720,7 @@
     };
     {
       name = "spawn-service-echo";
+      capabilityKind = "executable";
       rights = [
         "exec";
         "spawn";
@@ -728,6 +731,7 @@
     };
     {
       name = "dango-cwd-root";
+      capabilityKind = "directory";
       rights = [
         "directoryRead";
         "directoryDerive";
@@ -738,6 +742,7 @@
     };
     {
       name = "console-output";
+      capabilityKind = "endpoint";
       rights = [
         "send";
       ];
@@ -747,6 +752,7 @@
     };
     {
       name = "console-input";
+      capabilityKind = "input";
       rights = [
         "inputRead";
       ];
@@ -756,6 +762,7 @@
     };
     {
       name = "block-read";
+      capabilityKind = "block";
       rights = [
         "blockRead";
       ];
@@ -765,6 +772,7 @@
     };
     {
       name = "block-write-check";
+      capabilityKind = "block";
       rights = [
         "blockRead";
         "blockWrite";
@@ -775,6 +783,7 @@
     };
     {
       name = "block-fault-check";
+      capabilityKind = "block";
       rights = [
         "blockRead";
         "blockWrite";
@@ -784,26 +793,8 @@
       transferable = false;
     };
     {
-      name = "store-access";
-      rights = [
-        "storeRead";
-        "storeWrite";
-      ];
-      source = "init";
-      target = "storage-store-probe";
-      transferable = false;
-    };
-    {
-      name = "health-confirmation";
-      rights = [
-        "healthConfirm";
-      ];
-      source = "init";
-      target = "generation-manager";
-      transferable = false;
-    };
-    {
       name = "generation-management-rpc";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -814,6 +805,7 @@
     };
     {
       name = "generation-management-rpc-generation-inspect";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -824,6 +816,7 @@
     };
     {
       name = "generation-management-rpc-generation-stage";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -834,6 +827,7 @@
     };
     {
       name = "generation-management-rpc-generation-select";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -844,6 +838,7 @@
     };
     {
       name = "generation-management-rpc-generation-rollback";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -853,16 +848,8 @@
       transferable = false;
     };
     {
-      name = "generation-boot-update";
-      rights = [
-        "bootUpdate";
-      ];
-      source = "init";
-      target = "generation-manager";
-      transferable = false;
-    };
-    {
       name = "filesystem-rpc";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -872,17 +859,8 @@
       transferable = false;
     };
     {
-      name = "filesystem-store";
-      rights = [
-        "storeRead";
-        "storeWrite";
-      ];
-      source = "init";
-      target = "filesystem-service";
-      transferable = false;
-    };
-    {
       name = "filesystem-root";
+      capabilityKind = "directory";
       rights = [
         "directoryRead";
         "directoryWrite";
@@ -895,6 +873,7 @@
     };
     {
       name = "powerbox-rpc";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -905,6 +884,7 @@
     };
     {
       name = "powerbox-root";
+      capabilityKind = "directory";
       rights = [
         "directoryRead";
         "directoryDerive";
@@ -915,6 +895,7 @@
     };
     {
       name = "powerbox-input";
+      capabilityKind = "input";
       rights = [
         "inputRead";
       ];
@@ -924,6 +905,7 @@
     };
     {
       name = "dango-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
       rights = [
         "bufferCreate";
       ];
@@ -933,6 +915,7 @@
     };
     {
       name = "spawn-service-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
       rights = [
         "bufferCreate";
       ];
@@ -942,6 +925,7 @@
     };
     {
       name = "sample-lender-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
       rights = [
         "bufferCreate";
       ];
@@ -951,6 +935,7 @@
     };
     {
       name = "sample-plane-channel";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -961,6 +946,7 @@
     };
     {
       name = "sample-plane-receiver-supervision";
+      capabilityKind = "supervision";
       rights = [
         "supervise";
       ];
@@ -970,6 +956,7 @@
     };
     {
       name = "fabric-publisher-control";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -980,6 +967,7 @@
     };
     {
       name = "fabric-subscriber-control";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -990,6 +978,7 @@
     };
     {
       name = "fabric-intruder-control";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -1000,16 +989,18 @@
     };
     {
       name = "fabric-publisher-b-control";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
       ];
       source = "fabric-publisher-b";
       target = "fabric-service";
-      transferable = false;
+      transferable = true;
     };
     {
       name = "fabric-subscriber-b-control";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -1020,6 +1011,7 @@
     };
     {
       name = "fabric-clock-control";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -1030,6 +1022,7 @@
     };
     {
       name = "fabric-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
       rights = [
         "bufferCreate";
       ];
@@ -1039,6 +1032,7 @@
     };
     {
       name = "fabric-call-client-control";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -1049,6 +1043,7 @@
     };
     {
       name = "fabric-call-client-b-control";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -1059,6 +1054,7 @@
     };
     {
       name = "fabric-call-server-control";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -1069,6 +1065,7 @@
     };
     {
       name = "fabric-call-client-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
       rights = [
         "bufferCreate";
       ];
@@ -1078,6 +1075,7 @@
     };
     {
       name = "fabric-call-server-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
       rights = [
         "bufferCreate";
       ];
@@ -1087,6 +1085,7 @@
     };
     {
       name = "fabric-call-time-control";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -1097,6 +1096,7 @@
     };
     {
       name = "fabric-op-client-control";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -1107,6 +1107,7 @@
     };
     {
       name = "fabric-op-client-b-control";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -1117,6 +1118,7 @@
     };
     {
       name = "fabric-op-client-b-restart-control";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -1127,6 +1129,7 @@
     };
     {
       name = "fabric-op-server-control";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -1137,6 +1140,7 @@
     };
     {
       name = "fabric-op-time-control";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -1147,6 +1151,7 @@
     };
     {
       name = "fabric-call-worker-executable";
+      capabilityKind = "executable";
       rights = [
         "exec";
         "spawn";
@@ -1157,6 +1162,7 @@
     };
     {
       name = "fabric-op-worker-executable";
+      capabilityKind = "executable";
       rights = [
         "exec";
         "spawn";
@@ -1167,6 +1173,7 @@
     };
     {
       name = "fabric-call-worker-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
       rights = [
         "bufferCreate";
       ];
@@ -1176,6 +1183,7 @@
     };
     {
       name = "fabric-probe-control";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -1186,6 +1194,7 @@
     };
     {
       name = "fabric-proxy-control";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -1196,6 +1205,7 @@
     };
     {
       name = "fabric-observer-control";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";

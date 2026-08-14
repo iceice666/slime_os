@@ -57,13 +57,6 @@ OLDER_OBJECTS = 0
 
 REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     (
-        # The root-launched copy of the component parks. Both instances hold the
-        # block capability — a generation grant names a component, not a task —
-        # so without this the arms below could be the wrong instance's.
-        "the unconfigured instance parked without a run token",
-        r"\[sel4-store-probe\] idle without a run token",
-    ),
-    (
         "the spawned instance received its declared device authority",
         r"SLIME_GRAPH declared placed task=\d+ child=\d+ slot=\d+ kind=block",
     ),
@@ -209,7 +202,9 @@ def build_fixture(disk: Path, variant: str) -> None:
         fail(f"store fixture build failed for {variant}: {process.stderr.decode()}")
 
 
-def boot(profile: dict[str, object], disk: Path, terminal: str) -> str:
+def boot(
+    profile: dict[str, object], disk: Path, terminal: str, *, await_idle: bool = False
+) -> str:
     qemu = shutil.which("qemu-system-aarch64")
     if qemu is None:
         fail("qemu-system-aarch64 is not on PATH")
@@ -254,12 +249,20 @@ def boot(profile: dict[str, object], disk: Path, terminal: str) -> str:
     watchdog.start()
     try:
         assert process.stdout is not None
+        # The root-owned idle instance runs concurrently with init and reports
+        # holding no run token only after a bounded wait, so its line can land
+        # before or after the stop marker. A caller whose scenario runs the whole
+        # plane waits for both facts; the fallback and refusal scenarios stop at
+        # an intermediate marker on purpose, and reading past it would run into
+        # a failure the fixture is designed to produce.
+        idle_seen = not await_idle
         for line in process.stdout:
             lines.append(line.rstrip("\r\n"))
             if failures.search(line):
                 break
-            if stop.search(line):
-                reached = True
+            idle_seen |= "[sel4-store-probe] idle without a run token" in line
+            reached |= stop.search(line) is not None
+            if reached and idle_seen:
                 break
     finally:
         watchdog.cancel()
@@ -304,6 +307,12 @@ def check_happy(transcript: str) -> None:
                 fail(f"marker out of order: {label} ({pattern})")
             fail(f"missing marker: {label} ({pattern})")
         position = match.end()
+    # Asserted by presence, not by position: the idle instance concludes it
+    # holds no run token only after a bounded wait, so its line lands wherever
+    # the scheduler puts it. Ordering it would assert a scheduling accident.
+    if "[sel4-store-probe] idle without a run token" not in transcript:
+        report_transcript(transcript)
+        fail("the unconfigured instance did not report parking without a run token")
     # Exactly one instance ran the scenario. Two would race on the append.
     completions = transcript.count("[sel4-store-probe] store plane complete")
     if completions != 1:
@@ -455,7 +464,7 @@ def main() -> None:
         disk = Path(directory) / "store-happy.img"
         build_fixture(disk, "happy")
         before = disk.read_bytes()
-        transcript = boot(profile, disk, TERMINAL_MARKER)
+        transcript = boot(profile, disk, TERMINAL_MARKER, await_idle=True)
         check_happy(transcript)
         check_seeded_untouched(disk, before)
 
@@ -479,7 +488,7 @@ def main() -> None:
         # excludes it, so the index must not carry it.
         interrupted = Path(directory) / "store-interrupted.img"
         build_fixture(interrupted, "interrupted-append")
-        transcript = boot(profile, interrupted, TERMINAL_MARKER)
+        transcript = boot(profile, interrupted, TERMINAL_MARKER, await_idle=True)
         check_happy(transcript)
         print(
             "interrupted-append: an uncommitted record past the committed append "

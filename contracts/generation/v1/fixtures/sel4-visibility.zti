@@ -193,6 +193,7 @@
   grants = [
     {
       name = "fabric-service-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
       rights = [
         "bufferCreate";
       ];
@@ -202,6 +203,7 @@
     };
     {
       name = "init-fabric-service";
+      capabilityKind = "executable";
       rights = [
         "exec";
         "spawn";
@@ -212,6 +214,7 @@
     };
     {
       name = "init-fabric-publisher";
+      capabilityKind = "executable";
       rights = [
         "exec";
         "spawn";
@@ -222,6 +225,7 @@
     };
     {
       name = "init-fabric-publisher-b";
+      capabilityKind = "executable";
       rights = [
         "exec";
         "spawn";
@@ -232,6 +236,7 @@
     };
     {
       name = "init-fabric-subscriber";
+      capabilityKind = "executable";
       rights = [
         "exec";
         "spawn";
@@ -242,6 +247,7 @@
     };
     {
       name = "init-fabric-subscriber-b";
+      capabilityKind = "executable";
       rights = [
         "exec";
         "spawn";
@@ -252,6 +258,7 @@
     };
     {
       name = "init-fabric-intruder";
+      capabilityKind = "executable";
       rights = [
         "exec";
         "spawn";
@@ -262,6 +269,7 @@
     };
     {
       name = "visibility-telemetry-ingress";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -272,6 +280,7 @@
     };
     {
       name = "visibility-proxy-upstream";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -282,6 +291,7 @@
     };
     {
       name = "visibility-proxy-upstream-ack";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -292,6 +302,7 @@
     };
     {
       name = "visibility-proxy-downstream";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -302,6 +313,7 @@
     };
     {
       name = "visibility-proxy-downstream-ack";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -312,6 +324,7 @@
     };
     {
       name = "visibility-proxy-event";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -322,6 +335,7 @@
     };
     {
       name = "visibility-diagnostics-ingress";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -332,6 +346,7 @@
     };
     {
       name = "visibility-diagnostics-egress";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -342,6 +357,7 @@
     };
     {
       name = "visibility-diagnostics-ack";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -352,6 +368,7 @@
     };
     {
       name = "init-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
       rights = [
         "bufferCreate";
       ];
@@ -361,6 +378,7 @@
     };
     {
       name = "fabric-publisher-control";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -371,6 +389,7 @@
     };
     {
       name = "fabric-subscriber-control";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -381,6 +400,7 @@
     };
     {
       name = "fabric-intruder-control";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -391,16 +411,18 @@
     };
     {
       name = "fabric-publisher-b-control";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
       ];
       source = "fabric-publisher-b";
       target = "fabric-service";
-      transferable = false;
+      transferable = true;
     };
     {
       name = "fabric-subscriber-b-control";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -648,6 +670,7 @@
   mintedBindings = [
     {
       name = "fabric-intruder-supervision";
+      capabilityKind = "supervision";
       owner = "init";
       holder = "fabric-service";
       rights = [
@@ -658,6 +681,7 @@
     };
     {
       name = "fabric-publisher-supervision";
+      capabilityKind = "supervision";
       owner = "init";
       holder = "fabric-service";
       rights = [
@@ -668,6 +692,7 @@
     };
     {
       name = "fabric-subscriber-supervision";
+      capabilityKind = "supervision";
       owner = "init";
       holder = "fabric-service";
       rights = [
@@ -678,6 +703,7 @@
     };
     {
       name = "fabric-publisher-b-supervision";
+      capabilityKind = "supervision";
       owner = "init";
       holder = "fabric-service";
       rights = [
@@ -688,6 +714,7 @@
     };
     {
       name = "fabric-subscriber-b-supervision";
+      capabilityKind = "supervision";
       owner = "init";
       holder = "fabric-service";
       rights = [
@@ -698,6 +725,7 @@
     };
     {
       name = "fabric-publisher-b-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
       owner = "init";
       holder = "fabric-publisher-b";
       rights = [

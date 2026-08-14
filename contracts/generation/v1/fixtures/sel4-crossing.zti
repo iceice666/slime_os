@@ -22,6 +22,7 @@
   grants = [
     {
       name = "init-crossing-peer";
+      capabilityKind = "executable";
       rights = [
         "exec";
         "spawn";
@@ -32,6 +33,7 @@
     };
     {
       name = "crossing-carrier";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -42,6 +44,7 @@
     };
     {
       name = "crossing-gate";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";

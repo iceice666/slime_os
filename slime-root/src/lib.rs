@@ -1,8 +1,8 @@
 //! `slime-root`'s mechanism surface, as a library.
 //!
 //! Every module here is bounded, and most are pure state machines over fixed
-//! arrays: root-mediated capability tables, shared-buffer accounting,
-//! supervision records, and timer scheduling. `main.rs` is the
+//! arrays: task-owned typed authority, shared-buffer accounting, supervision
+//! records, and timer scheduling. `main.rs` is the
 //! seL4 root task that drives them — startup staging, the dispatch loop, and
 //! the seL4 object plumbing — and it is deliberately not part of this crate's
 //! testable surface.

@@ -53,6 +53,7 @@
   grants = [
     {
       name = "init-spawn-service";
+      capabilityKind = "executable";
       rights = [
         "exec";
         "spawn";
@@ -63,6 +64,7 @@
     };
     {
       name = "init-dango";
+      capabilityKind = "executable";
       rights = [
         "exec";
         "spawn";
@@ -73,6 +75,7 @@
     };
     {
       name = "init-console";
+      capabilityKind = "executable";
       rights = [
         "exec";
         "spawn";
@@ -83,6 +86,7 @@
     };
     {
       name = "spawn-service-sysinfo";
+      capabilityKind = "executable";
       rights = [
         "exec";
         "spawn";
@@ -93,6 +97,7 @@
     };
     {
       name = "spawn-service-echo-agent";
+      capabilityKind = "executable";
       rights = [
         "exec";
         "spawn";
@@ -103,6 +108,7 @@
     };
     {
       name = "dango-a-input";
+      capabilityKind = "input";
       rights = [
         "inputRead";
       ];
@@ -112,6 +118,7 @@
     };
     {
       name = "dango-b-cwd-root";
+      capabilityKind = "directory";
       rights = [
         "directoryRead";
         "directoryDerive";
@@ -122,6 +129,7 @@
     };
     {
       name = "dango-echo-stdin";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -132,6 +140,7 @@
     };
     {
       name = "spawn-service-sysinfo-context";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -142,6 +151,7 @@
     };
     {
       name = "spawn-service-echo-context";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -152,6 +162,7 @@
     };
     {
       name = "dango-d-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
       rights = [
         "bufferCreate";
       ];
@@ -160,8 +171,8 @@
       transferable = false;
     };
     {
-      minted = true;
       name = "dango-e-spawn-service-rpc";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -172,6 +183,7 @@
     };
     {
       name = "spawn-service-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
       rights = [
         "bufferCreate";
       ];
@@ -181,11 +193,33 @@
     };
     {
       name = "init-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
       rights = [
         "bufferCreate";
       ];
       source = "init";
       target = "init";
+      transferable = false;
+    };
+    {
+      name = "dango-console-rpc";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "dango";
+      target = "console";
+      transferable = false;
+    };
+    {
+      name = "console-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
+      rights = [
+        "bufferCreate";
+      ];
+      source = "init";
+      target = "console";
       transferable = false;
     };
   ];
@@ -242,6 +276,10 @@
           slot = 5;
         };
         {
+          grant = "dango-e-spawn-service-rpc";
+          slot = 2;
+        };
+        {
           grant = "spawn-service-shared-buffer-factory";
           slot = 1;
         };
@@ -265,6 +303,14 @@
     {
       autostart = true;
       bindings = [
+        {
+          grant = "dango-e-spawn-service-rpc";
+          slot = 0;
+        };
+        {
+          grant = "dango-console-rpc";
+          slot = 1;
+        };
         {
           grant = "dango-a-input";
           slot = 2;
@@ -323,8 +369,17 @@
       owner = "spawn-service";
     };
     {
-      autostart = true;
-      bindings = [];
+      autostart = false;
+      bindings = [
+        {
+          grant = "dango-console-rpc";
+          slot = 0;
+        };
+        {
+          grant = "console-buffer-factory";
+          slot = 1;
+        };
+      ];
       dependencies = [
         "init";
       ];
@@ -337,63 +392,11 @@
   mintedBindings = [
     {
       name = "echo-agent-cwd";
+      capabilityKind = "directory";
       owner = "spawn-service";
       holder = "echo-agent";
       rights = [
         "directoryRead";
-      ];
-      slot = 1;
-      transferable = false;
-    };
-    {
-      name = "dango-spawn-rpc-half";
-      owner = "init";
-      holder = "dango";
-      rights = [
-        "send";
-        "recv";
-      ];
-      slot = 0;
-      transferable = false;
-    };
-    {
-      name = "spawn-service-rpc-half";
-      owner = "init";
-      holder = "spawn-service";
-      rights = [
-        "send";
-        "recv";
-      ];
-      slot = 2;
-      transferable = false;
-    };
-    {
-      name = "console-rpc-half";
-      owner = "init";
-      holder = "console";
-      rights = [
-        "send";
-        "recv";
-      ];
-      slot = 0;
-      transferable = false;
-    };
-    {
-      name = "console-buffer-factory";
-      owner = "init";
-      holder = "console";
-      rights = [
-        "bufferCreate";
-      ];
-      slot = 1;
-      transferable = false;
-    };
-    {
-      name = "dango-console-half";
-      owner = "init";
-      holder = "dango";
-      rights = [
-        "send";
       ];
       slot = 1;
       transferable = false;

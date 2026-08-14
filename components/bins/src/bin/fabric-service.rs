@@ -189,7 +189,7 @@ fn write_i64(value: i64) {
 }
 
 fn qos_check() -> bool {
-    option_env!("SLIME_FABRIC_QOS_CHECK") == Some("1")
+    GENERATION_BOOT_ACTION == "qos"
 }
 
 /// One client's control binding: the slot init gave the fabric for it, and the
@@ -289,21 +289,15 @@ impl Frame {
 }
 
 fn main(_startup_arg: u32) {
-    if option_env!("SLIME_FABRIC_BOOT_CHECK") == Some("1") {
+    if GENERATION_BOOT_ACTION == "boot" {
         boot_graph();
         return;
     }
-    if option_env!("SLIME_FABRIC_VISIBILITY_CHECK") == Some("1") {
+    if GENERATION_BOOT_ACTION == "visibility" {
         visibility_broker::run();
         return;
     }
-    // P5.4.6 sets its own flag rather than reusing the oracle's, because
-    // `init.rs` composes the two planes differently — see the branch in
-    // `init::main`. The *broker* is the same code either way, which is the
-    // property the seL4 gate exists to demonstrate, so both flags select it.
-    if option_env!("SLIME_FABRIC_CALL_CHECK") == Some("1")
-        || option_env!("SLIME_SEL4_CALL_CHECK") == Some("1")
-    {
+    if GENERATION_BOOT_ACTION == "call" {
         let controls = request_response_controls(FABRIC_CALL_CLIENTS);
         call_broker::Broker::new(
             BUFFER_FACTORY_SLOT,
@@ -316,7 +310,7 @@ fn main(_startup_arg: u32) {
         slime_rt::debug_write(b"[fabric] call plane complete\n");
         return;
     }
-    if option_env!("SLIME_FABRIC_OPERATION_CHECK") == Some("1") {
+    if GENERATION_BOOT_ACTION == "operation" {
         let controls = request_response_controls(FABRIC_OPERATION_CLIENTS);
         operation_broker::Broker::new(
             controls.clients,

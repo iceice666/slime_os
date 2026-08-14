@@ -26,8 +26,19 @@ use slime_rt::{DIRECTORY_ROOT_BYTES, MAX_DIRECTORY_PATH};
 /// Slot 1: the component declares no executables, so its first runtime grant
 /// lands above them exactly as the storage planes' block capability does.
 const ROOT_DIRECTORY_SLOT: u32 = 1;
-/// The endpoint `init` grants only to the instance it spawns.
+/// The run token: init's declared edge to the instance that runs the scenario.
+///
+/// This is also the discriminator. The plane declares this executable twice —
+/// the instance init spawns, and a root-owned `idle` instance holding the same
+/// directory authority over a loopback endpoint nobody ever sends on. Both
+/// hold a real endpoint here, so the token's *arrival* rather than its presence
+/// separates them: the root delivers a nonzero boot action only to the
+/// bootstrap instance, so `startup_arg` cannot.
 const RUN_TOKEN_SLOT: u32 = 0;
+/// Yields given up before concluding no run token will arrive. The idle
+/// instance always exhausts this bound, so it is a latency rather than a
+/// safety margin.
+const RUN_TOKEN_YIELDS: usize = 64;
 
 const RIGHT_DIRECTORY_READ: u32 = 1 << 19;
 const RIGHT_DIRECTORY_WRITE: u32 = 1 << 20;
@@ -230,7 +241,14 @@ fn derive(slot: u32, relative: &[u8], rights: u32) -> u32 {
 fn spawned_instance() -> bool {
     let mut bytes = [0u8; slime_rt::MAX_MSG];
     let mut caps = [0u64; slime_rt::MAX_CAPS_PER_MSG];
-    slime_rt::recv(RUN_TOKEN_SLOT, &mut bytes, &mut caps) != slime_rt::ERR_BAD_CAP
+    for _ in 0..RUN_TOKEN_YIELDS {
+        match slime_rt::recv(RUN_TOKEN_SLOT, &mut bytes, &mut caps) {
+            slime_rt::ERR_WOULDBLOCK => slime_rt::yield_now(),
+            result if result < 0 => return false,
+            _ => return true,
+        }
+    }
+    false
 }
 
 fn fail(reason: &[u8]) -> ! {

@@ -20,7 +20,7 @@ rather than preferred.
 
 ### `init` — the parent
 
-Holds two `exec | spawn` grants and one `endpointCreate` grant. `spawnBudget`
+Holds two `exec | spawn` grants. `spawnBudget`
 stays at 4, as `sel4-spawn.zti` uses: the budget bounds children *live at once*
 through `TaskTable::live_children`, which is derived from the table rather than
 from a counter, so a loop that spawns and reaps sequentially never approaches it
@@ -79,11 +79,12 @@ working as intended.
 
 ## Why the graph declares no channel edge
 
-Like `sel4-spawn.zti`, and for the same reason: init mints what it needs at
-runtime through the declared endpoint factory. Here it needs exactly one pair,
-and it holds **both** ends — it moves the handle to itself and collects it after
-the loop. That is deliberate rather than a shortcut: `cap_transfer` needs a peer
-that collects a capability, and every unmodified component either ignores the
-capability array or never receives at all, so a second component would have to
-be written for the purpose. Init as its own peer keeps the in-flight window open
-across the loop without inventing a binary whose only job is to wait.
+Like `sel4-spawn.zti`, and for the same reason: this plane's subject is what a
+parent hands over at spawn, not what the generation pre-wires. Here it needs
+exactly one edge, and init holds **both** ends — it moves the handle to itself
+and collects it after the loop. That is deliberate rather than a shortcut: the
+capability-transfer path needs a peer that collects a capability, and every
+unmodified component either ignores the capability array or never receives at
+all, so a second component would have to be written for the purpose. Init as its
+own peer keeps the in-flight window open across the loop without inventing a
+binary whose only job is to wait.

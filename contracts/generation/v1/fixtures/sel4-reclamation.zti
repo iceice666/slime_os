@@ -29,6 +29,7 @@
   grants = [
     {
       name = "init-supervision-child";
+      capabilityKind = "executable";
       rights = [
         "exec";
         "spawn";
@@ -39,6 +40,7 @@
     };
     {
       name = "init-reclamation-fault";
+      capabilityKind = "executable";
       rights = [
         "exec";
         "spawn";

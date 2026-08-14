@@ -22,6 +22,7 @@
   grants = [
     {
       name = "init-sel4-input-probe";
+      capabilityKind = "executable";
       rights = [
         "exec";
         "spawn";
@@ -32,6 +33,7 @@
     };
     {
       name = "input-probe-source";
+      capabilityKind = "input";
       rights = [
         "inputRead";
       ];
@@ -41,8 +43,31 @@
     };
     {
       name = "input-probe-idle-source";
+      capabilityKind = "input";
       rights = [
         "inputRead";
+      ];
+      source = "sel4-input-probe-idle";
+      target = "sel4-input-probe-idle";
+      transferable = false;
+    };
+    {
+      name = "sel4-input-probe-run-token";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "init";
+      target = "sel4-input-probe";
+      transferable = false;
+    };
+    {
+      name = "sel4-input-probe-idle-token";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
       ];
       source = "sel4-input-probe-idle";
       target = "sel4-input-probe-idle";
@@ -63,6 +88,10 @@
           grant = "init-sel4-input-probe";
           slot = 1;
         };
+        {
+          grant = "sel4-input-probe-run-token";
+          slot = 2;
+        };
       ];
       dependencies = [];
       executable = "init";
@@ -71,11 +100,15 @@
       owner = "root";
     };
     {
-      autostart = true;
+      autostart = false;
       bindings = [
         {
           grant = "input-probe-source";
           slot = 1;
+        };
+        {
+          grant = "sel4-input-probe-run-token";
+          slot = 0;
         };
       ];
       dependencies = [
@@ -93,6 +126,10 @@
           grant = "input-probe-idle-source";
           slot = 1;
         };
+        {
+          grant = "sel4-input-probe-idle-token";
+          slot = 0;
+        };
       ];
       dependencies = [
         "init";
@@ -103,19 +140,7 @@
       owner = "root";
     };
   ];
-  mintedBindings = [
-    {
-      name = "sel4-input-probe-run-token";
-      owner = "init";
-      holder = "sel4-input-probe";
-      rights = [
-        "send";
-        "recv";
-      ];
-      slot = 0;
-      transferable = false;
-    };
-  ];
+  mintedBindings = [];
   interfaceSchemas = [];
   objects = [
     {

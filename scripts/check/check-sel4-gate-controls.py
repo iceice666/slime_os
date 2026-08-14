@@ -50,37 +50,56 @@ from sel4_gate_markers import chains_from_gate, match_marker_contract  # noqa: E
 # gets *weaker*: deleting a marker from a gate's table would otherwise just make
 # this control report a smaller number and still pass. Raising a count here is a
 # deliberate act that shows up in review; silently losing coverage is not.
+#
+# B46 deliberately shortened the channel and call contracts when the logical
+# ChannelTable/WaitSet paths disappeared. The replacement contracts assert the
+# native endpoint lifecycle instead; their lower counts are therefore pinned
+# here rather than mistaken for accidental coverage loss. The larger counts on
+# the other affected gates pin the additional native-authority evidence added
+# during the same cutover.
+#
+# B50's minted-endpoint deletion lowers ten gates. Every one of them asserted at
+# least one marker the cutover left with no subject: an `endpoint minted` /
+# `channel copied` pair no operation produces, a `capability transfer …
+# channel=… side=…` line replaced by an export/import pair, a `parked …
+# reason=wait` / `supervision woken` pair `WaitSet` used to emit, or an
+# `idle root copy` a `startup_arg` discriminator the root no longer feeds.
+#
+# None of the compositions lost coverage. The spawn plane's wide array is now
+# six narrowed directory views instead of six endpoint halves, and its grant
+# counts are still pinned at the spawn marker; the supervision plane's B25
+# derive scenario is restored and its two-collections-per-child check is
+# stronger than the export/import pair it replaced; each probe plane's
+# `idle without a run token` line moved from an ordered marker to a presence
+# assertion, because the idle instance concludes it holds no peer only after a
+# bounded wait and so lands wherever the scheduler puts it.
 GATES: tuple[tuple[str, str, int], ...] = (
-    ("sel4_channel_plane", "check/check-sel4-channel-plane.py", 27),
-    ("sel4_component_graph", "check/check-sel4-component-graph.py", 22),
+    ("sel4_channel_plane", "check/check-sel4-channel-plane.py", 16),
+    ("sel4_component_graph", "check/check-sel4-component-graph.py", 30),
     ("sel4_crossing_plane", "check/check-sel4-crossing-plane.py", 10),
-    ("sel4_loan_plane", "check/check-sel4-loan-plane.py", 44),
+    ("sel4_loan_plane", "check/check-sel4-loan-plane.py", 46),
     ("sel4_device_plane", "check/check-sel4-device-plane.py", 7),
     ("sel4_root_boot", "check/check-sel4-root-boot.py", 43),
-    # 24 since B46-B48: the sample plane also proves a process runs two
-    # threads, that a busy thread declared below its peer does not starve it,
-    # and that those threads exchange one message over their native seL4
-    # endpoint without root channel mediation.
-    ("sel4_sample_plane", "check/check-sel4-sample-plane.py", 24),
-    ("sel4_spawn_plane", "check/check-sel4-spawn-plane.py", 32),
+    ("sel4_sample_plane", "check/check-sel4-sample-plane.py", 25),
+    ("sel4_spawn_plane", "check/check-sel4-spawn-plane.py", 27),
     ("sel4_supervision_plane", "check/check-sel4-supervision-plane.py", 12),
-    ("sel4_stream_plane", "check/check-sel4-stream-plane.py", 55),
+    ("sel4_stream_plane", "check/check-sel4-stream-plane.py", 57),
     ("sel4_qos_plane", "check/check-sel4-qos-plane.py", 14),
-    ("sel4_call_plane", "check/check-sel4-call-plane.py", 50),
+    ("sel4_call_plane", "check/check-sel4-call-plane.py", 47),
     ("sel4_operation_plane", "check/check-sel4-operation-plane.py", 53),
     ("sel4_visibility_plane", "check/check-sel4-visibility-plane.py", 25),
     ("sel4_boot_plane", "check/check-sel4-boot-plane.py", 46),
-    ("sel4_storage_plane", "check/check-sel4-storage-plane.py", 10),
-    ("sel4_store_plane", "check/check-sel4-store-plane.py", 15),
-    ("sel4_rollback_plane", "check/check-sel4-rollback-plane.py", 17),
-    ("sel4_recovery_plane", "check/check-sel4-recovery-plane.py", 12),
-    ("sel4_generation_plane", "check/check-sel4-generation-plane.py", 20),
-    ("sel4_directory_plane", "check/check-sel4-directory-plane.py", 17),
+    ("sel4_storage_plane", "check/check-sel4-storage-plane.py", 9),
+    ("sel4_store_plane", "check/check-sel4-store-plane.py", 14),
+    ("sel4_rollback_plane", "check/check-sel4-rollback-plane.py", 16),
+    ("sel4_recovery_plane", "check/check-sel4-recovery-plane.py", 11),
+    ("sel4_generation_plane", "check/check-sel4-generation-plane.py", 18),
+    ("sel4_directory_plane", "check/check-sel4-directory-plane.py", 16),
     ("sel4_filesystem_plane", "check/check-sel4-filesystem-plane.py", 11),
-    ("sel4_input_plane", "check/check-sel4-input-plane.py", 8),
+    ("sel4_input_plane", "check/check-sel4-input-plane.py", 7),
     ("sel4_powerbox_plane", "check/check-sel4-powerbox-plane.py", 11),
     ("sel4_dango_plane", "check/check-sel4-dango-plane.py", 13),
-    ("sel4_transfer_plane", "check/check-sel4-transfer-plane.py", 12),
+    ("sel4_transfer_plane", "check/check-sel4-transfer-plane.py", 11),
 )
 
 
@@ -170,11 +189,15 @@ def boot_plane_transcript(gate, marker_transcript: str) -> str:
     service_line = next(
         (line for line in lines if "component=fabric-service " in line), None
     )
-    call_line = next((line for line in lines if "component=fabric-call-worker " in line), None)
-    op_line = next((line for line in lines if "component=fabric-op-worker " in line), None)
+    call_line = next(
+        (line for line in lines if "component=fabric-call-worker " in line), None
+    )
+    op_line = next(
+        (line for line in lines if "component=fabric-op-worker " in line), None
+    )
     init_spawns = [
         f"SLIME_GRAPH spawned task=100 child={201 + index} component={component} "
-        "grants=1 channels=1 handle=1"
+        "grants=1 endpoints=1 notifications=0 handle=1"
         for index, component in enumerate(gate.EXPECTED_INIT_CHILDREN)
     ]
     expanded: list[str] = []
@@ -184,12 +207,12 @@ def boot_plane_transcript(gate, marker_transcript: str) -> str:
         elif line == call_line:
             expanded.append(
                 "SLIME_GRAPH spawned task=204 child=301 component=fabric-call-worker "
-                "grants=1 channels=1 handle=1"
+                "grants=1 endpoints=1 notifications=0 handle=1"
             )
         elif line == op_line:
             expanded.append(
                 "SLIME_GRAPH spawned task=204 child=302 component=fabric-op-worker "
-                "grants=1 channels=1 handle=1"
+                "grants=1 endpoints=1 notifications=0 handle=1"
             )
         else:
             expanded.append(line)

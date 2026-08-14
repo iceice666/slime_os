@@ -736,7 +736,7 @@ MAX_ROLE_REPEATS = 2
 
 
 def all_labels() -> list[tuple[str, str]]:
-    labels: dict[str, str] = {}
+    labels: dict[str, str] = {"spawn-service-rpc": "endpoint-client"}
     for number in sorted({1, *OVERRIDES, *REPLACEMENTS}):
         for _, role, label, _ in layout_for(number):
             if label is not None:

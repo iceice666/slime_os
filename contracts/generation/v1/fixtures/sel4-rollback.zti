@@ -22,6 +22,7 @@
   grants = [
     {
       name = "init-sel4-rollback-probe";
+      capabilityKind = "executable";
       rights = [
         "exec";
         "spawn";
@@ -32,6 +33,7 @@
     };
     {
       name = "rollback-probe-device";
+      capabilityKind = "block";
       rights = [
         "blockRead";
         "blockWrite";
@@ -42,9 +44,32 @@
     };
     {
       name = "rollback-probe-device-idle";
+      capabilityKind = "block";
       rights = [
         "blockRead";
         "blockWrite";
+      ];
+      source = "sel4-rollback-probe-idle";
+      target = "sel4-rollback-probe-idle";
+      transferable = false;
+    };
+    {
+      name = "sel4-rollback-probe-run-token";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "init";
+      target = "sel4-rollback-probe";
+      transferable = false;
+    };
+    {
+      name = "sel4-rollback-probe-idle-token";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
       ];
       source = "sel4-rollback-probe-idle";
       target = "sel4-rollback-probe-idle";
@@ -65,6 +90,10 @@
           grant = "init-sel4-rollback-probe";
           slot = 1;
         };
+        {
+          grant = "sel4-rollback-probe-run-token";
+          slot = 2;
+        };
       ];
       dependencies = [];
       executable = "init";
@@ -73,11 +102,15 @@
       owner = "root";
     };
     {
-      autostart = true;
+      autostart = false;
       bindings = [
         {
           grant = "rollback-probe-device";
           slot = 1;
+        };
+        {
+          grant = "sel4-rollback-probe-run-token";
+          slot = 0;
         };
       ];
       dependencies = [
@@ -95,6 +128,10 @@
           grant = "rollback-probe-device-idle";
           slot = 1;
         };
+        {
+          grant = "sel4-rollback-probe-idle-token";
+          slot = 0;
+        };
       ];
       dependencies = [
         "init";
@@ -105,19 +142,7 @@
       owner = "root";
     };
   ];
-  mintedBindings = [
-    {
-      name = "sel4-rollback-probe-run-token";
-      owner = "init";
-      holder = "sel4-rollback-probe";
-      rights = [
-        "send";
-        "recv";
-      ];
-      slot = 0;
-      transferable = false;
-    };
-  ];
+  mintedBindings = [];
   interfaceSchemas = [];
   objects = [
     {

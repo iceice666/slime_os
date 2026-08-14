@@ -40,10 +40,9 @@ const STATUS_NO_PENDING: i32 = -3;
 
 slime_rt::entry!(main);
 
-fn main(startup_arg: u32) {
-    // Root-autostart copies are discovery-only; init-spawned bodies run.
-    if startup_arg == 0 {
-        slime_rt::debug_write(b"[sel4-generation-client] idle root copy\n");
+fn main(_startup_arg: u32) {
+    if !spawned_instance() {
+        slime_rt::debug_write(b"[sel4-generation-client] idle without an endpoint\n");
         slime_rt::exit(0);
     }
 
@@ -208,4 +207,28 @@ fn fail(reason: &[u8]) -> ! {
     slime_rt::debug_write(reason);
     slime_rt::debug_write(b"\n");
     slime_rt::exit(1)
+}
+
+/// The RPC endpoint init's declared edge places, and the discriminator.
+///
+/// The plane declares this executable twice — the instance init spawns, and a
+/// root-owned `idle` one whose endpoint at this slot is a loopback nobody sends
+/// on. Both hold a real endpoint, so *arrival* separates them: the root delivers
+/// a nonzero boot action only to the bootstrap instance, so `startup_arg` cannot.
+const RUN_TOKEN_SLOT: u32 = 1;
+/// Yields given up before concluding no peer will speak. The idle instance
+/// always exhausts this bound, so it is a latency rather than a safety margin.
+const RUN_TOKEN_YIELDS: usize = 64;
+
+fn spawned_instance() -> bool {
+    let mut bytes = [0u8; slime_rt::MAX_MSG];
+    let mut caps = [0u64; slime_rt::MAX_CAPS_PER_MSG];
+    for _ in 0..RUN_TOKEN_YIELDS {
+        match slime_rt::recv(RUN_TOKEN_SLOT, &mut bytes, &mut caps) {
+            slime_rt::ERR_WOULDBLOCK => slime_rt::yield_now(),
+            result if result < 0 => return false,
+            _ => return true,
+        }
+    }
+    false
 }

@@ -87,7 +87,7 @@ fn fail(reason: &[u8]) -> ! {
 }
 
 fn main(_startup_arg: u32) {
-    if option_env!("SLIME_FABRIC_VISIBILITY_CHECK") == Some("1") {
+    if GENERATION_BOOT_ACTION == "visibility" {
         visibility_main();
         return;
     }

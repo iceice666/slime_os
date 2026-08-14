@@ -129,7 +129,7 @@ fn fail(reason: &[u8]) -> ! {
 }
 
 fn main(_startup_arg: u32) {
-    if option_env!("SLIME_FABRIC_VISIBILITY_CHECK") == Some("1") {
+    if GENERATION_BOOT_ACTION == "visibility" {
         visibility_main();
         return;
     }
@@ -224,7 +224,7 @@ fn main(_startup_arg: u32) {
 
     publish_large(CONTROL_SLOT, CONTROL_SLOT);
     slime_rt::debug_write(b"[fabric-publisher-b] large sample published\n");
-    if option_env!("SLIME_FABRIC_QOS_CHECK") == Some("1") {
+    if GENERATION_BOOT_ACTION == "qos" {
         for now_ns in [50u64, 100, 200, 300, 400, 500, 600] {
             advance_time(now_ns);
             await_time_credit(now_ns);

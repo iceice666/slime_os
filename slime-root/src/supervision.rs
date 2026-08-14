@@ -113,12 +113,15 @@ impl Default for Terminations {
     }
 }
 
-/// Reclaim every record no live logical supervision handle can still observe.
-pub fn sweep(terminations: &mut Terminations, graph: &crate::graph::GraphTables) -> usize {
+/// Reclaim every record no live task-owned supervision capability can observe.
+pub fn sweep<const TASKS: usize>(
+    terminations: &mut Terminations,
+    tasks: &crate::task::TaskTable<TASKS>,
+) -> usize {
     let mut freed = 0;
     for entry in terminations.entries.iter_mut() {
         let Some((task, _)) = *entry else { continue };
-        if graph.holds_supervision(task) {
+        if tasks.holds_supervision(task) {
             continue;
         }
         *entry = None;
@@ -149,8 +152,8 @@ mod tests {
     fn records_without_a_live_handle_are_swept() {
         let mut records = Terminations::new();
         assert!(records.record(TaskId(7), Termination::Fault(9)));
-        let graph = crate::graph::GraphTables::new();
-        assert_eq!(super::sweep(&mut records, &graph), 1);
+        let tasks = crate::task::TaskTable::<1>::new();
+        assert_eq!(super::sweep(&mut records, &tasks), 1);
         assert!(records.is_empty());
     }
 }

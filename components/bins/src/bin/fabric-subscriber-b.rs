@@ -108,7 +108,7 @@ fn fail(reason: &[u8]) -> ! {
 }
 
 fn main(_startup_arg: u32) {
-    if option_env!("SLIME_FABRIC_VISIBILITY_CHECK") == Some("1") {
+    if GENERATION_BOOT_ACTION == "visibility" {
         visibility_main();
         return;
     }
@@ -208,7 +208,7 @@ fn main(_startup_arg: u32) {
 
     slime_rt::debug_write(b"[fabric-subscriber-b] stalling on telemetry\n");
     let early = receive_large_sample();
-    if option_env!("SLIME_FABRIC_QOS_CHECK") == Some("1") {
+    if GENERATION_BOOT_ACTION == "qos" {
         consume_diagnostics(&mut diagnostics_ring);
     } else {
         consume_diagnostics_stream(&mut diagnostics_ring);

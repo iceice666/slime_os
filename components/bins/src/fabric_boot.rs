@@ -23,14 +23,17 @@ use slime_proto::capability_transfer::{
 };
 use slime_proto::valid_capability_transfer;
 use slime_rt::{ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
+mod generation_profile {
+    include!(concat!(env!("OUT_DIR"), "/fabric_profile.rs"));
+}
 
 /// Control endpoint to this participant's route worker. Init binds it to
 /// exactly one component at spawn, so it is also this participant's identity.
 const CONTROL_SLOT: u32 = 0;
 
-/// Whether this build is the full-graph boot generation.
+/// Whether the authenticated generation declares the full-graph boot action.
 pub fn active() -> bool {
-    option_env!("SLIME_FABRIC_BOOT_CHECK") == Some("1")
+    generation_profile::GENERATION_BOOT_ACTION == "boot"
 }
 
 fn fail(name: &[u8], reason: &[u8]) -> ! {

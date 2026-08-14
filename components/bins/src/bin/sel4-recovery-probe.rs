@@ -64,8 +64,8 @@ const INDEX_BYTES_OFFSET: usize = 136;
 
 slime_rt::entry!(main);
 
-fn main(startup_arg: u32) {
-    if startup_arg == 0 {
+fn main(_startup_arg: u32) {
+    if !spawned_instance() {
         slime_rt::debug_write(b"[sel4-recovery-probe] idle without a run token\n");
         slime_rt::exit(0);
     }
@@ -453,4 +453,31 @@ fn fail(reason: &[u8]) -> ! {
     slime_rt::debug_write(reason);
     slime_rt::debug_write(b"\n");
     slime_rt::exit(1)
+}
+
+/// The run token: init's declared edge to the instance that runs the scenario.
+///
+/// This is also the discriminator. The plane declares this executable twice —
+/// the instance init spawns, and a root-owned `idle` instance holding the same
+/// authority over a loopback endpoint nobody ever sends on. Both hold a real
+/// endpoint here, so the token's *arrival* rather than its presence separates
+/// them: the root delivers a nonzero boot action only to the bootstrap
+/// instance, so `startup_arg` cannot.
+const RUN_TOKEN_SLOT: u32 = 0;
+/// Yields given up before concluding no run token will arrive. The idle
+/// instance always exhausts this bound, so it is a latency rather than a
+/// safety margin.
+const RUN_TOKEN_YIELDS: usize = 64;
+
+fn spawned_instance() -> bool {
+    let mut bytes = [0u8; slime_rt::MAX_MSG];
+    let mut caps = [0u64; slime_rt::MAX_CAPS_PER_MSG];
+    for _ in 0..RUN_TOKEN_YIELDS {
+        match slime_rt::recv(RUN_TOKEN_SLOT, &mut bytes, &mut caps) {
+            slime_rt::ERR_WOULDBLOCK => slime_rt::yield_now(),
+            result if result < 0 => return false,
+            _ => return true,
+        }
+    }
+    false
 }

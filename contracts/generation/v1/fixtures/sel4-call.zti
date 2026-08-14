@@ -130,6 +130,7 @@
   grants = [
     {
       name = "init-fabric-service";
+      capabilityKind = "executable";
       rights = [
         "exec";
         "spawn";
@@ -140,6 +141,7 @@
     };
     {
       name = "init-fabric-call-client";
+      capabilityKind = "executable";
       rights = [
         "exec";
         "spawn";
@@ -150,6 +152,7 @@
     };
     {
       name = "init-fabric-call-client-b";
+      capabilityKind = "executable";
       rights = [
         "exec";
         "spawn";
@@ -160,6 +163,7 @@
     };
     {
       name = "init-fabric-call-server";
+      capabilityKind = "executable";
       rights = [
         "exec";
         "spawn";
@@ -170,6 +174,7 @@
     };
     {
       name = "init-fabric-call-time";
+      capabilityKind = "executable";
       rights = [
         "exec";
         "spawn";
@@ -180,6 +185,7 @@
     };
     {
       name = "init-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
       rights = [
         "bufferCreate";
       ];
@@ -189,36 +195,40 @@
     };
     {
       name = "fabric-call-client-control";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
       ];
       source = "fabric-call-client";
       target = "fabric-service";
-      transferable = false;
+      transferable = true;
     };
     {
       name = "fabric-call-client-b-control";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
       ];
       source = "fabric-call-client-b";
       target = "fabric-service";
-      transferable = false;
+      transferable = true;
     };
     {
       name = "fabric-call-server-control";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
       ];
       source = "fabric-call-server";
       target = "fabric-service";
-      transferable = false;
+      transferable = true;
     };
     {
       name = "fabric-call-time-control";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -229,6 +239,7 @@
     };
     {
       name = "fabric-call-client-time-phase";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -239,6 +250,7 @@
     };
     {
       name = "fabric-call-client-b-phase";
+      capabilityKind = "endpoint";
       rights = [
         "send";
         "recv";
@@ -402,6 +414,7 @@
   mintedBindings = [
     {
       name = "fabric-call-client-factory";
+      capabilityKind = "sharedBufferFactory";
       owner = "init";
       holder = "fabric-call-client";
       rights = [
@@ -412,6 +425,7 @@
     };
     {
       name = "fabric-call-server-factory";
+      capabilityKind = "sharedBufferFactory";
       owner = "init";
       holder = "fabric-call-server";
       rights = [
@@ -422,6 +436,7 @@
     };
     {
       name = "fabric-service-shared-buffer-factory";
+      capabilityKind = "sharedBufferFactory";
       owner = "init";
       holder = "fabric-service";
       rights = [
@@ -432,6 +447,7 @@
     };
     {
       name = "fabric-service-call-client-supervision";
+      capabilityKind = "supervision";
       owner = "init";
       holder = "fabric-service";
       rights = [
@@ -442,6 +458,7 @@
     };
     {
       name = "fabric-service-call-client-b-supervision";
+      capabilityKind = "supervision";
       owner = "init";
       holder = "fabric-service";
       rights = [
@@ -452,6 +469,7 @@
     };
     {
       name = "fabric-service-call-server-supervision";
+      capabilityKind = "supervision";
       owner = "init";
       holder = "fabric-service";
       rights = [

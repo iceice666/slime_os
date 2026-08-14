@@ -114,11 +114,19 @@ fn call(request: WirePowerboxRequest) -> Response {
                 let reply = WirePowerboxReply::decode(&message[..length as usize])
                     .filter(valid_powerbox_reply)
                     .unwrap_or_else(|| fail());
-                let cap_count = usize::from(caps[0] != 0);
+                // A directory is a root-owned logical capability with no kernel
+                // object, so it never travels inline: `caps[0]` is always zero
+                // here and the authority is a finalized export this component
+                // claims. Only a native Endpoint arrives in the message itself.
+                //
+                // Claimed on every reply, not only the granting one, because a
+                // denial or cancellation must be observed to carry nothing --
+                // which is exactly what the plane's two refusal arms assert.
+                let capability = slime_rt::capability_import().ok();
                 return Response {
                     reply,
-                    capability: (caps[0] != 0).then_some(caps[0] as u32),
-                    cap_count,
+                    cap_count: usize::from(capability.is_some()),
+                    capability,
                 };
             }
         }

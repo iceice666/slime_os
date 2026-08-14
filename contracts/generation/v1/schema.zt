@@ -108,6 +108,7 @@ CapabilityGrant :: type {
   name : Text;
   source : Text;
   target : Text;
+  capabilityKind : Text;
   rights : List Text;
   transferable : Bool;
   -- A send/recv grant normally materializes one pre-created channel whose two
@@ -138,6 +139,7 @@ MintedBinding :: type {
   name : Text;
   owner : Text;
   holder : Text;
+  capabilityKind : Text;
   slot? : Int;
   rights : List Text;
   transferable : Bool;

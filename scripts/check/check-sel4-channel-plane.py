@@ -81,8 +81,8 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     ("init completed the scenario", r"\[init\] channel plane complete"),
     ("init exited cleanly", r"SLIME_GRAPH component exit task=0 status=0"),
     (
-        "the graph drained its task and window tables",
-        r"SLIME_GRAPH served live=0 unsupported=0 unimplemented=0 buffers=0 windows=0 tables=0",
+        "the graph drained its task-owned authority and window tables",
+        r"SLIME_GRAPH served live=0 unsupported=0 buffers=0 windows=0 tasks=0",
     ),
     (
         "every task arena and native capability was reclaimed",

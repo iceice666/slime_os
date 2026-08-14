@@ -4,7 +4,7 @@ use crate::generation::{RIGHT_RECV, RIGHT_SEND};
 use crate::launched::LaunchedInstances;
 use crate::object_allocator::{AllocError, ObjectAllocator, TaskArenaId};
 use crate::task::{MAX_TASKS, TaskId, TaskTable};
-use boot_contracts::generation::{Generation, GrantEndpoint, RIGHT_TRANSFER};
+use boot_contracts::generation::{CapabilityKind, Generation, GrantEndpoint, RIGHT_TRANSFER};
 
 pub const MAX_PEER_ENDPOINTS: usize = 48;
 pub const NATIVE_ENDPOINT_BASE: sel4::CPtrBits = crate::task::CHILD_SLOT_ENDPOINT_BASE;
@@ -152,7 +152,7 @@ impl PeerEndpointTable {
             let grant = generation
                 .grant(grant_index)
                 .map_err(|_| PeerEndpointError::Unknown)?;
-            if grant.minted || grant.rights & (RIGHT_SEND | RIGHT_RECV) == 0 {
+            if grant.capability_kind != CapabilityKind::Endpoint {
                 continue;
             }
             let (GrantEndpoint::Instance(source), GrantEndpoint::Instance(target)) =
@@ -279,7 +279,7 @@ impl PeerEndpointTable {
         sender_instance: usize,
         declared_slot: u32,
         launched: &LaunchedInstances,
-    ) -> Option<TaskId> {
+    ) -> Option<(TaskId, bool)> {
         let instance = generation.instance(sender_instance).ok()?;
         let binding = (0..instance.binding_count())
             .filter_map(|i| generation.binding(instance, i).ok())
@@ -296,7 +296,10 @@ impl PeerEndpointTable {
         } else {
             return None;
         };
-        launched.task_for_instance(receiver)
+        Some((
+            launched.task_for_instance(receiver)?,
+            entry.rights & RIGHT_TRANSFER != 0,
+        ))
     }
 }
 impl Default for PeerEndpointTable {

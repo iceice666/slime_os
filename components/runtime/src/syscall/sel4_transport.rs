@@ -1,29 +1,15 @@
-//! Native seL4 transport for the Slime operation API.
+//! Native seL4 transport for narrow Slime services.
 //!
-//! Every policy-bearing operation is a `seL4_Call` on the badged root service
-//! endpoint the generation installed at child CSpace slot
-//! [`ROOT_SERVICE_SLOT`]. That endpoint is the component's *only* root
-//! authority: this module never names another capability, never consults
-//! `BootInfo`, and holds no init-thread CNode, VSpace, or TCB capability, so a
-//! component cannot address a slot its generation did not declare.
+//! Root-served mechanisms issue `seL4_Call` on the badged root endpoint in
+//! child CSpace slot [`ROOT_SERVICE_SLOT`]. Each mechanism supplies its own
+//! label; native endpoints and notifications bypass this endpoint entirely.
 //!
-//! The wire form is deliberately narrow (see [`super::wire`]):
+//! At most [`wire::FAST_REGISTERS`] message registers cross in each direction.
+//! Larger payloads use the startup transfer window and are refused rather than
+//! truncated when they exceed it. Replies put the logical result in `MR0` and
+//! a service-specific auxiliary value or descriptor in `MR1`.
 //!
-//! - the message label is the Slime operation number,
-//! - at most [`wire::FAST_REGISTERS`] fast message registers cross in each
-//!   direction — `MR0` carries the operand(s), `MR1` a second operand or a
-//!   transfer descriptor, `MR2`/`MR3` further operands or an inline payload,
-//! - a reply puts the logical result in `MR0` — the same named `ERR_*` values
-//!   the trap ABI returns — and its auxiliary value, or reply descriptor, in
-//!   `MR1`.
-//!
-//! Payloads that do not fit the inline registers travel through the startup
-//! transfer window bound once before component code runs. Nothing is ever
-//! truncated to fit — an operation whose frame exceeds the window fails with
-//! [`ERR_INVALID_ARG`] and transfers nothing.
-//!
-//! `yield_now` carries no policy, so it maps straight onto `seL4_Yield` instead
-//! of crossing the endpoint.
+//! `yield_now` carries no policy, so it maps directly to `seL4_Yield`.
 
 use core::ptr;
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -38,13 +24,9 @@ use super::wire::{
 };
 use super::{
     CapabilityDisposition, ERR_INVALID_ARG, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG,
-    MAX_DIRECTORY_PATH, MAX_MSG, MIN_TRANSFER_WINDOW, SYS_CAP_DROP, SYS_CAPABILITY_EXPORT,
-    SYS_CAPABILITY_EXPORT_CANCEL, SYS_CAPABILITY_EXPORT_FINALIZE, SYS_CAPABILITY_IMPORT,
-    SYS_DIRECTORY_DERIVE, SYS_EXIT, SYS_SHARED_BUFFER_CREATE, SYS_SHARED_BUFFER_LOAN,
-    SYS_SHARED_BUFFER_LOAN_MAP, SYS_SHARED_BUFFER_MAP, SYS_SHARED_BUFFER_RELEASE,
-    SYS_SHARED_BUFFER_RETURN, SYS_SHARED_BUFFER_REVOKE, SYS_SHARED_BUFFER_SEAL,
-    SYS_SHARED_BUFFER_UNMAP, SYS_SPAWN, SYS_SUPERVISION_DERIVE, SYS_SUPERVISION_STATUS,
-    SYS_UNHEALTHY, SpawnGrant,
+    MAX_DIRECTORY_PATH, MAX_MSG, MIN_TRANSFER_WINDOW, SpawnGrant, capability_table_labels,
+    capability_transfer_labels, directory_labels, lifecycle_labels, shared_buffer_labels,
+    spawn_labels, supervision_labels,
 };
 
 /// The child CSpace slot holding the badged root service endpoint. Slot 0 is
@@ -85,9 +67,14 @@ fn root_service() -> cap::Endpoint {
 }
 
 /// Fixed child-CNode regions shared with `slime-root`'s native-capability ABI.
-pub const NATIVE_ENDPOINT_BASE: u32 = 33;
+const NATIVE_ENDPOINT_BASE: u32 = 33;
 const NATIVE_TRANSFER_ENDPOINT_BASE: u32 = 5;
-const DIRECT_ENDPOINT_HANDLE: u32 = 1 << 31;
+/// Marks a received Endpoint handle. The decoded slot is accepted only inside
+/// the dedicated transfer region, so callers cannot turn an arbitrary CPtr
+/// into endpoint authority by setting the tag.
+const TRANSFERRED_ENDPOINT_HANDLE_TAG: u32 = 1 << 31;
+const TRANSFERRED_ENDPOINT_HANDLE_BASE: u32 = NATIVE_TRANSFER_ENDPOINT_BASE;
+const TRANSFERRED_ENDPOINT_HANDLE_LIMIT: u32 = NATIVE_ENDPOINT_BASE;
 const NATIVE_NOTIFICATION_BASE: u32 = 64;
 const NATIVE_TOKEN_BASE: u32 = 95;
 const NATIVE_REGION_SLOTS: u32 = 31;
@@ -95,15 +82,17 @@ const NATIVE_RECEIVE_SLOT: u32 = 127;
 const CHILD_CNODE_SLOT: u32 = 4;
 const CHILD_CNODE_SIZE_BITS: usize = 7;
 fn native_endpoint(slot: u32) -> Result<cap::Endpoint, i64> {
-    if slot & DIRECT_ENDPOINT_HANDLE != 0 {
-        return Ok(cap::Endpoint::from_bits(u64::from(
-            slot & !DIRECT_ENDPOINT_HANDLE,
-        )));
+    let absolute = if slot & TRANSFERRED_ENDPOINT_HANDLE_TAG != 0 {
+        let transferred = slot & !TRANSFERRED_ENDPOINT_HANDLE_TAG;
+        (TRANSFERRED_ENDPOINT_HANDLE_BASE..TRANSFERRED_ENDPOINT_HANDLE_LIMIT)
+            .contains(&transferred)
+            .then_some(transferred)
+    } else {
+        NATIVE_ENDPOINT_BASE
+            .checked_add(slot)
+            .filter(|_| slot < NATIVE_REGION_SLOTS)
     }
-    let absolute = NATIVE_ENDPOINT_BASE
-        .checked_add(slot)
-        .filter(|_| slot < NATIVE_REGION_SLOTS)
-        .ok_or(ERR_INVALID_ARG)?;
+    .ok_or(ERR_INVALID_ARG)?;
     Ok(cap::Endpoint::from_bits(absolute as u64))
 }
 
@@ -300,39 +289,12 @@ fn receive_native(
             return Err(super::ERR_BAD_CAP);
         };
         RECEIVE_SLOT_LIVE.store(false, Ordering::Release);
-        cap_out[0] = u64::from(DIRECT_ENDPOINT_HANDLE | destination_slot);
+        cap_out[0] = u64::from(TRANSFERRED_ENDPOINT_HANDLE_TAG | destination_slot);
         sel4::debug_println!(
             "SLIME_GRAPH capability imported task=1 id=1 kind=endpoint rights=0x1 retain=1"
         );
         Ok(length)
     })
-}
-
-/// Compatibility names used by the B48 two-thread rendezvous probe.
-pub fn native_send(slot: u32, payload: &[u8]) -> i64 {
-    send(slot, payload, &[])
-}
-
-pub fn native_recv(slot: u32, buf: &mut [u8]) -> i64 {
-    let Some(target) = buf.get_mut(..MAX_MSG.min(buf.len())) else {
-        return ERR_INVALID_ARG;
-    };
-    let mut message = [0u8; MAX_MSG];
-    let mut caps = [0u64; MAX_CAPS_PER_MSG];
-    let result = recv_blocking(slot, &mut message, &mut caps);
-    if result < 0 {
-        return result;
-    }
-    let length = result as usize;
-    if length > target.len() {
-        return ERR_INVALID_ARG;
-    }
-    if caps[0] != 0 {
-        let _ = cap_drop(caps[0] as u32);
-        return ERR_INVALID_ARG;
-    }
-    target[..length].copy_from_slice(&message[..length]);
-    result
 }
 
 fn with_thread_buffer(f: impl FnOnce(&mut sel4::IpcBuffer) -> Result<i64, i64>) -> i64 {
@@ -711,7 +673,7 @@ fn native_notification(slot: u32) -> Result<cap::Notification, i64> {
 }
 
 pub fn exit(status: i64) -> ! {
-    let _ = call(SYS_EXIT, &[status as Word]);
+    let _ = call(lifecycle_labels::EXIT, &[status as Word]);
     loop {
         core::hint::spin_loop();
     }
@@ -737,7 +699,7 @@ pub fn spawn(executable_slot: u32, grants: &[SpawnGrant]) -> (i64, u64) {
         Err(error) => return (error, 0),
     };
     let (operands, used) = payload_operands(executable_slot as u64, transfer, bytes);
-    pair_of(SYS_SPAWN, &operands[..used])
+    pair_of(spawn_labels::SPAWN, &operands[..used])
 }
 
 /// Export one logical capability as a receiver-bound kernel ticket, then carry
@@ -774,7 +736,7 @@ pub fn capability_delegate(
     };
     let metadata = u64::from(expected_kind) | (disposition_word << 32);
     let (export_id_result, _) = pair_of(
-        SYS_CAPABILITY_EXPORT,
+        capability_transfer_labels::EXPORT,
         &[
             slot_pair(endpoint_slot, capability_slot) as Word,
             metadata as Word,
@@ -799,9 +761,13 @@ pub fn capability_delegate(
     // reads to tell a grant from a denial, so a successful delegation arrived
     // looking refused.
     let endpoint_kind = expected_kind == 1;
-    let ticket_slot = match NATIVE_TOKEN_BASE.checked_add(capability_slot) {
-        Some(slot) if capability_slot < NATIVE_REGION_SLOTS => slot,
-        _ => return ERR_INVALID_ARG,
+    let ticket_slot = if endpoint_kind {
+        match NATIVE_TOKEN_BASE.checked_add(capability_slot) {
+            Some(slot) if capability_slot < NATIVE_REGION_SLOTS => slot,
+            _ => return ERR_INVALID_ARG,
+        }
+    } else {
+        0
     };
     if !endpoint_kind {
         // Finalize first. A logical export is claimed by `capability_import`,
@@ -810,9 +776,15 @@ pub fn capability_delegate(
         // refused. An endpoint export has no such race -- its authority is the
         // ticket in the message -- so it keeps the cancel-on-failure order
         // below.
-        let finalized = result_of(SYS_CAPABILITY_EXPORT_FINALIZE, &[export_id as Word]);
+        let finalized = result_of(
+            capability_transfer_labels::EXPORT_FINALIZE,
+            &[export_id as Word],
+        );
         if finalized != ERR_SUCCESS {
-            let _ = result_of(SYS_CAPABILITY_EXPORT_CANCEL, &[export_id as Word]);
+            let _ = result_of(
+                capability_transfer_labels::EXPORT_CANCEL,
+                &[export_id as Word],
+            );
             return finalized;
         }
     }
@@ -826,14 +798,20 @@ pub fn capability_delegate(
         return sent;
     }
     if sent != ERR_SUCCESS {
-        let cancelled = result_of(SYS_CAPABILITY_EXPORT_CANCEL, &[export_id as Word]);
+        let cancelled = result_of(
+            capability_transfer_labels::EXPORT_CANCEL,
+            &[export_id as Word],
+        );
         return if cancelled == ERR_SUCCESS {
             sent
         } else {
             cancelled
         };
     }
-    result_of(SYS_CAPABILITY_EXPORT_FINALIZE, &[export_id as Word])
+    result_of(
+        capability_transfer_labels::EXPORT_FINALIZE,
+        &[export_id as Word],
+    )
 }
 
 /// Claim the oldest root-side export addressed to this component, installing
@@ -844,7 +822,7 @@ pub fn capability_delegate(
 /// capability with no kernel object the peer could hold, so the descriptor
 /// arrives alone and this is how the authority behind it is taken up.
 pub fn capability_import() -> Result<u32, i64> {
-    let slot = result_of(SYS_CAPABILITY_IMPORT, &[0]);
+    let slot = result_of(capability_transfer_labels::IMPORT, &[0]);
     if slot < 0 {
         return Err(slot);
     }
@@ -853,7 +831,7 @@ pub fn capability_import() -> Result<u32, i64> {
 
 pub fn shared_buffer_create(factory_slot: u32, pages: usize, writable: bool) -> (i64, u64) {
     pair_of(
-        SYS_SHARED_BUFFER_CREATE,
+        shared_buffer_labels::CREATE,
         &[
             slot_with_flag(factory_slot, writable) as Word,
             pages as Word,
@@ -862,12 +840,12 @@ pub fn shared_buffer_create(factory_slot: u32, pages: usize, writable: bool) -> 
 }
 
 pub fn shared_buffer_release(slot: u32) -> i64 {
-    result_of(SYS_SHARED_BUFFER_RELEASE, &[slot as Word])
+    result_of(shared_buffer_labels::RELEASE, &[slot as Word])
 }
 
 pub fn shared_buffer_map(slot: u32, base: u64, offset: u64, length: u64, writable: bool) -> i64 {
     result_of(
-        SYS_SHARED_BUFFER_MAP,
+        shared_buffer_labels::MAP,
         &[
             slot_with_flag(slot, writable) as Word,
             base as Word,
@@ -878,11 +856,11 @@ pub fn shared_buffer_map(slot: u32, base: u64, offset: u64, length: u64, writabl
 }
 
 pub fn shared_buffer_unmap(slot: u32, base: u64) -> i64 {
-    result_of(SYS_SHARED_BUFFER_UNMAP, &[slot as Word, base as Word])
+    result_of(shared_buffer_labels::UNMAP, &[slot as Word, base as Word])
 }
 
 pub fn shared_buffer_seal(slot: u32) -> i64 {
-    result_of(SYS_SHARED_BUFFER_SEAL, &[slot as Word])
+    result_of(shared_buffer_labels::SEAL, &[slot as Word])
 }
 
 pub fn shared_buffer_loan(
@@ -897,7 +875,7 @@ pub fn shared_buffer_loan(
     // the lender holds write authority on an unsealed region.
     let length = if writable { length | (1 << 63) } else { length };
     pair_of(
-        SYS_SHARED_BUFFER_LOAN,
+        shared_buffer_labels::LOAN,
         &[
             slot_pair(buffer_slot, receiver_slot) as Word,
             offset as Word,
@@ -908,7 +886,7 @@ pub fn shared_buffer_loan(
 
 pub fn shared_buffer_loan_map(loan_slot: u32, base: u64, offset: u64, length: u64) -> i64 {
     result_of(
-        SYS_SHARED_BUFFER_LOAN_MAP,
+        shared_buffer_labels::LOAN_MAP,
         &[
             loan_slot as Word,
             base as Word,
@@ -919,26 +897,45 @@ pub fn shared_buffer_loan_map(loan_slot: u32, base: u64, offset: u64, length: u6
 }
 
 pub fn shared_buffer_return(loan_slot: u32) -> i64 {
-    result_of(SYS_SHARED_BUFFER_RETURN, &[loan_slot as Word])
+    result_of(shared_buffer_labels::RETURN, &[loan_slot as Word])
 }
 
 pub fn shared_buffer_revoke(buffer_slot: u32, loan_id: u64) -> i64 {
     result_of(
-        SYS_SHARED_BUFFER_REVOKE,
+        shared_buffer_labels::REVOKE,
         &[buffer_slot as Word, loan_id as Word],
     )
 }
 
 pub fn supervision_status(slot: u32) -> (i64, u64) {
-    pair_of(SYS_SUPERVISION_STATUS, &[slot as Word])
+    pair_of(supervision_labels::STATUS, &[slot as Word])
 }
 
 pub fn supervision_derive(slot: u32) -> (i64, u64) {
-    pair_of(SYS_SUPERVISION_DERIVE, &[slot as Word])
+    pair_of(supervision_labels::DERIVE, &[slot as Word])
 }
 
 pub fn cap_drop(slot: u32) -> i64 {
-    result_of(SYS_CAP_DROP, &[slot as Word])
+    if slot & TRANSFERRED_ENDPOINT_HANDLE_TAG != 0 {
+        let transferred = slot & !TRANSFERRED_ENDPOINT_HANDLE_TAG;
+        if !(TRANSFERRED_ENDPOINT_HANDLE_BASE..TRANSFERRED_ENDPOINT_HANDLE_LIMIT)
+            .contains(&transferred)
+        {
+            return ERR_INVALID_ARG;
+        }
+        return with_thread_buffer(|ipc_buffer| {
+            cap::CNode::from_bits(CHILD_CNODE_SLOT as u64)
+                .absolute_cptr_from_bits_with_depth(
+                    transferred as sel4::CPtrBits,
+                    CHILD_CNODE_SIZE_BITS,
+                )
+                .with(&mut *ipc_buffer)
+                .delete()
+                .map(|()| ERR_SUCCESS)
+                .map_err(|_| super::ERR_BAD_CAP)
+        });
+    }
+    result_of(capability_table_labels::DROP, &[slot as Word])
 }
 
 pub fn directory_inspect(
@@ -989,7 +986,7 @@ pub fn directory_derive(slot: u32, relative: &[u8], rights: u32) -> i64 {
         Err(error) => return error,
     };
     let (operands, used) = payload_operands(slot_pair(slot, rights), transfer, relative);
-    result_of(SYS_DIRECTORY_DERIVE, &operands[..used])
+    result_of(directory_labels::DERIVE, &operands[..used])
 }
 
 pub fn directory_commit(slot: u32, expected: &[u8; 32], new: &[u8; 32]) -> i64 {
@@ -1159,10 +1156,9 @@ pub fn block_transact_write(
 }
 
 pub fn unhealthy() -> ! {
-    let _ = call(SYS_UNHEALTHY, &[]);
-    // `Unhealthy` is not implemented by every root revision. Falling back to
-    // the universally supported exit path prevents an unsupported reply from
-    // turning a failed component into a permanently running spinner.
+    let _ = call(lifecycle_labels::UNHEALTHY, &[]);
+    // Exit after recording the unhealthy transition so this diverging API
+    // cannot leave the component running if the lifecycle reply returns.
     exit(1)
 }
 

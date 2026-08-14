@@ -144,13 +144,14 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         # of naming a receiver badly are asserted, not just the way that works.
         # An empty slot and a slot holding real authority of the wrong kind are
         # both refused; the second is the sharper one, since it is the buffer's
-        # own slot -- authority this component genuinely holds.
+        # own slot -- authority this component genuinely holds. Both now share
+        # the root's exact `absent` class: neither resolves to a receiver.
         "an empty slot cannot name a receiver",
-        r"SLIME_GRAPH loan refused task=\d+ slot=\d+ class=absent-or-ambiguous",
+        r"SLIME_GRAPH loan refused task=\d+ slot=\d+ class=absent",
     ),
     (
         "a slot holding the wrong kind cannot name a receiver",
-        r"SLIME_GRAPH loan refused task=\d+ slot=\d+ class=absent-or-ambiguous",
+        r"SLIME_GRAPH loan refused task=\d+ slot=\d+ class=absent",
     ),
     ("init observed both refusals", r"\[init\] unnamed receiver denied"),
     (
@@ -191,12 +192,6 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         "the receiver imported the same native loan authority",
         r"SLIME_GRAPH capability imported task=\d+ id=\d+ kind=loan "
         r"rights=0x[0-9a-f]+ retain=0",
-    ),
-    ("init sent the descriptor", r"\[init\] loan transferred"),
-    (
-        # A move, not a copy: the sender can no longer name what it sent.
-        "the sender can no longer name the transferred loan",
-        r"\[init\] transferred loan released by sender",
     ),
     (
         "the receiver received the descriptor and the loan",
@@ -245,6 +240,12 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         "a returned loan cannot be returned again",
         r"\[sample-receiver\] loan returned once",
     ),
+    ("init sent the descriptor", r"\[init\] loan transferred"),
+    (
+        # A move, not a copy: the sender can no longer name what it sent.
+        "the sender can no longer name the transferred loan",
+        r"\[init\] transferred loan released by sender",
+    ),
     ("init observed the settlement", r"\[init\] receiver settled"),
     (
         # C7.5 retention, from the other side: the creator could not reclaim
@@ -274,19 +275,19 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     ("init completed the scenario", r"\[init\] loan plane complete"),
     (
         "the graph drained with every window and table reclaimed",
-        r"SLIME_GRAPH served live=0 unsupported=0 unimplemented=0 ",
+        r"SLIME_GRAPH served live=0 unsupported=0 buffers=\d+ windows=0 tasks=0",
+    ),
+    (
+        "every native capability export was imported, cancelled, or finalized",
+        r"SLIME_GRAPH capabilities exports=[1-9]\d* imports=[1-9]\d* "
+        r"cancels=\d+ finalized=\d+ outstanding=0 tickets=0",
     ),
     (
         # Native clean accounting distinguishes buffer ownership from exported
         # capabilities: both must be empty after the graph drains.
         "every loan, mapping, region, and alias was reclaimed",
         r"SLIME_GRAPH loans served=\d+ loans=0 mappings=0 regions=0 "
-        r"orphans=0 aliases=0",
-    ),
-    (
-        "every native capability export was imported, cancelled, or finalized",
-        r"SLIME_GRAPH capabilities exports=[1-9]\d* imports=[1-9]\d* "
-        r"cancels=\d+ finalized=\d+ outstanding=0 tickets=0",
+        r"orphans=0 quota=0",
     ),
 )
 

@@ -185,11 +185,8 @@ SOURCE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "valid.zti"
 # `default`, changing the frozen product generation. See `sel4.md` beside it.
 SEL4_SOURCE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "sel4.zti"
 SEL4_TARGET_PROFILE = "aarch64-sel4-qemu-virt"
-# P5.3.1: a second seL4 graph, for the channel plane. It cannot be folded into
-# `sel4.zti` because `init.rs` selects its scenario with `option_env!`, which is
-# resolved at compile time -- one component build cannot serve two gates. Keyed
-# by name rather than by target, because both graphs are built for the same
-# target profile and it is the *graph* that differs. See `sel4-channel.md`.
+# Additional seL4 manifests carry distinct authenticated boot actions and
+# generation-derived component tables while sharing the same target profile.
 SEL4_MANIFESTS = {
     "sel4": SEL4_SOURCE,
     "sel4-channel": ROOT
@@ -368,7 +365,6 @@ RIGHT = {
     "healthConfirm": 1 << 14,
     "bootUpdate": 1 << 15,
     "spawn": 1 << 16,
-    "endpointCreate": 1 << 17,
     "supervise": 1 << 18,
     "directoryRead": 1 << 19,
     "directoryWrite": 1 << 20,
@@ -380,6 +376,67 @@ RIGHT = {
 }
 RIGHT_TRANSFER = 1 << 2
 RIGHT_ALL = RIGHT_TRANSFER | sum(RIGHT.values())
+
+CAPABILITY_KIND = {
+    "endpoint": 1,
+    "executable": 2,
+    "sharedBufferFactory": 3,
+    "block": 4,
+    "directory": 5,
+    "input": 6,
+    "supervision": 7,
+    "sharedBuffer": 8,
+    "loan": 9,
+}
+
+
+def validate_capability_rights(name: str, kind: str, rights: int) -> None:
+    masks = {
+        "endpoint": RIGHT["send"] | RIGHT["recv"] | RIGHT_TRANSFER,
+        "executable": RIGHT["exec"] | RIGHT["spawn"] | RIGHT_TRANSFER,
+        "sharedBufferFactory": RIGHT["bufferCreate"] | RIGHT_TRANSFER,
+        "block": RIGHT["blockRead"] | RIGHT["blockWrite"],
+        "directory": (
+            RIGHT["directoryRead"]
+            | RIGHT["directoryWrite"]
+            | RIGHT["directoryList"]
+            | RIGHT["directoryDerive"]
+            | RIGHT_TRANSFER
+        ),
+        "input": RIGHT["inputRead"],
+        "supervision": RIGHT["supervise"] | RIGHT_TRANSFER,
+        "sharedBuffer": (
+            RIGHT["bufferWrite"] | RIGHT["bufferMap"] | RIGHT["bufferLoan"] | RIGHT_TRANSFER
+        ),
+        "loan": RIGHT["bufferWrite"] | RIGHT["bufferMap"] | RIGHT_TRANSFER,
+    }
+    required = {
+        "endpoint": RIGHT["send"] | RIGHT["recv"],
+        "executable": RIGHT["exec"] | RIGHT["spawn"],
+        "sharedBufferFactory": RIGHT["bufferCreate"],
+        "block": RIGHT["blockRead"] | RIGHT["blockWrite"],
+        "directory": (
+            RIGHT["directoryRead"]
+            | RIGHT["directoryWrite"]
+            | RIGHT["directoryList"]
+            | RIGHT["directoryDerive"]
+        ),
+        "input": RIGHT["inputRead"],
+        "supervision": RIGHT["supervise"],
+        "sharedBuffer": RIGHT["bufferWrite"] | RIGHT["bufferMap"] | RIGHT["bufferLoan"],
+        "loan": RIGHT["bufferMap"],
+    }
+    mask = masks.get(kind)
+    if mask is None:
+        fail(f"{name}: unknown capability kind {kind!r}")
+    if rights == 0 or rights & ~mask or rights & required[kind] == 0:
+        fail(f"{name}: rights do not match capability kind {kind}")
+    if kind == "executable" and rights & (RIGHT["exec"] | RIGHT["spawn"]) != (
+        RIGHT["exec"] | RIGHT["spawn"]
+    ):
+        fail(f"{name}: executable capability requires exec and spawn")
+    if kind == "input" and rights != RIGHT["inputRead"]:
+        fail(f"{name}: input capability has an exact inputRead right")
 MAX_SPAWN_BUDGET = 32
 POLICY = {
     "immutable": 1,
@@ -642,6 +699,9 @@ def resolve_target_profile(target: object) -> TargetProfile:
 
 
 
+
+
+
 def holder_identity(name: str) -> bytes:
     """Stable per-holder identity, matching `boot_contracts::shared_buffer_budget`."""
     encoded = name.encode("utf-8")
@@ -846,40 +906,6 @@ def validate_fabric_qos(member: dict, limits: dict, label: str) -> None:
     if (member["liveliness"] == "manual") == (lease == 0):
         fail(f"fabric graph: {label} liveliness and lease disagree")
 
-def selected_profile_name() -> str:
-    """The boot profile this build resolves (B11).
-
-    One selector names both the component set and the interposition chains: a
-    profile entry declares which scaffolding the generation adds and which
-    `fabricGraph.profiles` entry supplies its interpositions. The legacy flags
-    keep resolving the profile they always did, so a gate that has not been
-    updated to name a profile explicitly still builds the graph it expects.
-    """
-    explicit = os.environ.get("SLIME_FABRIC_PROFILE") or None
-    visibility = os.environ.get("SLIME_FABRIC_VISIBILITY_CHECK") == "1"
-    boot = os.environ.get("SLIME_FABRIC_BOOT_CHECK") == "1"
-    legacy_modes = any(
-        os.environ.get(name) == "1"
-        for name in (
-            "SLIME_FABRIC_QOS_CHECK",
-            "SLIME_FABRIC_CALL_CHECK",
-            "SLIME_FABRIC_OPERATION_CHECK",
-        )
-    )
-    if visibility and boot:
-        fail("fabric graph: ambiguous selected profile")
-    legacy = (
-        UNIFIED_FABRIC_PROFILE
-        if boot
-        else VISIBILITY_FABRIC_PROFILE
-        if visibility
-        else TEST_BOOT_PROFILE
-        if legacy_modes
-        else None
-    )
-    if explicit is not None and legacy is not None and explicit != legacy:
-        fail("fabric graph: ambiguous selected profile")
-    return explicit or legacy or DEFAULT_FABRIC_PROFILE
 
 
 def declared_boot_profiles(manifest: dict) -> list[str]:
@@ -1421,7 +1447,9 @@ def _zti_value(value: object, indent: int = 0) -> str:
     fail(f"unsupported canonical profile value {type(value).__name__}")
 
 
-def render_fabric_profile_rust(resolved: ResolvedFabricProfile) -> str:
+def render_fabric_profile_rust(
+    resolved: ResolvedFabricProfile, boot_action: str = "product"
+) -> str:
     artifact = resolved.artifact
     limits = {entry["name"]: entry["value"] for entry in artifact["limits"]}
     participants = artifact["participants"]
@@ -1591,7 +1619,10 @@ def render_fabric_profile_rust(resolved: ResolvedFabricProfile) -> str:
         return min(deadlines, default=deadline_absent)
     return f'''// @generated from the canonical C8.9 resolved fabric profile; do not edit.
 #[allow(dead_code)]
+mod generated_fabric_profile {{
 pub const FABRIC_PROFILE_NAME: &str = {rust_string(artifact['name'])};
+#[allow(dead_code)]
+pub const GENERATION_BOOT_ACTION: &str = {rust_string(boot_action)};
 #[allow(dead_code)]
 pub const FABRIC_SCHEMAS: &[(&str, &str, u64, u32, u32)] = &[\n{schema_rows}];
 #[allow(dead_code)]
@@ -1701,6 +1732,9 @@ pub const FABRIC_DEADLINE_ABSENT: u64 = u64::MAX;
 pub const FABRIC_CALL_DEADLINE_NS: u64 = {deadline('parameters')};
 pub const FABRIC_OPERATION_DEADLINE_NS: u64 = {deadline('navigation')};
 pub const FABRIC_FIRST_CONTROL_SLOT: u32 = {artifact['firstControlSlot']};
+}}
+#[allow(unused_imports)]
+pub use generated_fabric_profile::*;
 '''
 
 
@@ -2061,20 +2095,23 @@ def build_rust_components(
     binding_slots: dict[str, int] | None = None,
     role_bindings: dict[str, int] | None = None,
 ) -> Path:
-    environment = os.environ.copy()
-    environment["SLIME_GENERATION_NUMBER"] = str(generation_number)
-    if environment.get("SLIME_BOOT_SELECTION_FAIL") == "1":
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if key != "SLIME_TRANSFER_ACTIVATE"
+        and not (
+            key.endswith("_CHECK")
+            and (key.startswith("SLIME_FABRIC_") or key.startswith("SLIME_SEL4_"))
+        )
+    }
+    if os.environ.get("SLIME_BOOT_SELECTION_FAIL") == "1":
         environment["SLIME_BOOT_SELECTION_FAIL"] = "1"
     else:
         environment.pop("SLIME_BOOT_SELECTION_FAIL", None)
     environment["SLIME_DATA_FABRIC_PROFILE"] = str(profile_path)
-    # The components are compiled before the generation is assembled, so they
-    # cannot read the layout resource out of it. Emit the same table as Rust
-    # here and hand `build.rs` the path, the way the fabric profile already
-    # travels. Per generation number, so each component build addresses the
-    # slots its own generation declares, and narrowed to the selected boot
-    # profile's component set (B11) so `init.rs` reads the same slots the kernel
-    # will place.
+    # Components are compiled before the generation is assembled, so hand
+    # build.rs the manifest-derived Rust tables they need. Per-generation data
+    # selects behavior; inherited product flags must not change the image.
     layout_path = profile_path.parent / f"boot-layout-{generation_number}.rs"
     layout_path.write_text(
         render_boot_layout_rust(generation_number, components, binding_slots, role_bindings),
@@ -2082,119 +2119,18 @@ def build_rust_components(
     )
     environment["SLIME_BOOT_LAYOUT"] = str(layout_path)
     environment["SLIME_TARGET_PROFILE"] = target_profile.name
-    if candidate_identity is not None and os.environ.get("SLIME_TRANSFER_ACTIVATE") == "1":
-        environment["SLIME_TRANSFER_ACTIVATE"] = "1"
-    else:
-        environment.pop("SLIME_TRANSFER_ACTIVATE", None)
-    if environment.get("SLIME_FABRIC_QOS_CHECK") == "1":
-        environment["SLIME_FABRIC_QOS_CHECK"] = "1"
-    else:
-        environment.pop("SLIME_FABRIC_QOS_CHECK", None)
-    if environment.get("SLIME_FABRIC_CALL_CHECK") == "1":
-        environment["SLIME_FABRIC_CALL_CHECK"] = "1"
-    else:
-        environment.pop("SLIME_FABRIC_CALL_CHECK", None)
-    if environment.get("SLIME_FABRIC_OPERATION_CHECK") == "1":
-        environment["SLIME_FABRIC_OPERATION_CHECK"] = "1"
-    else:
-        environment.pop("SLIME_FABRIC_OPERATION_CHECK", None)
-    if environment.get("SLIME_FABRIC_VISIBILITY_CHECK") == "1":
-        environment["SLIME_FABRIC_VISIBILITY_CHECK"] = "1"
-    else:
-        environment.pop("SLIME_FABRIC_VISIBILITY_CHECK", None)
+    # Product graph selectors are deliberately absent: generated manifest data
+    # selects component behavior. Validation-only injection controls remain.
     if environment.get("SLIME_FABRIC_PROXY_EARLY_EXIT") == "1":
         environment["SLIME_FABRIC_PROXY_EARLY_EXIT"] = "1"
     else:
         environment.pop("SLIME_FABRIC_PROXY_EARLY_EXIT", None)
-    # P5.3.1. Set by `build_sel4_generation` for the channel graph and popped
-    # for every other build, so which scenario `init.rs` compiles in is decided
-    # by the manifest being built rather than by whatever is in the caller's
-    # shell. Scrubbed here for the same reason every flag above is: an inherited
-    # value would silently change a different generation's components.
-    if environment.get("SLIME_SEL4_CHANNEL_CHECK") == "1":
-        environment["SLIME_SEL4_CHANNEL_CHECK"] = "1"
-    else:
-        environment.pop("SLIME_SEL4_CHANNEL_CHECK", None)
-    # P5.3.2, on the same rule as the flag above.
-    if environment.get("SLIME_SEL4_LOAN_CHECK") == "1":
-        environment["SLIME_SEL4_LOAN_CHECK"] = "1"
-    else:
-        environment.pop("SLIME_SEL4_LOAN_CHECK", None)
-    # P5.3.3, on the same rule again.
-    if environment.get("SLIME_SEL4_SPAWN_CHECK") == "1":
-        environment["SLIME_SEL4_SPAWN_CHECK"] = "1"
-    else:
-        environment.pop("SLIME_SEL4_SPAWN_CHECK", None)
-    # P5.3.4, likewise.
-    if environment.get("SLIME_SEL4_SAMPLE_CHECK") == "1":
-        environment["SLIME_SEL4_SAMPLE_CHECK"] = "1"
-    else:
-        environment.pop("SLIME_SEL4_SAMPLE_CHECK", None)
-    # P5.5.2, likewise.
-    if environment.get("SLIME_SEL4_STREAM_CHECK") == "1":
-        environment["SLIME_SEL4_STREAM_CHECK"] = "1"
-    else:
-        environment.pop("SLIME_SEL4_STREAM_CHECK", None)
-    # B16's supervision plane, likewise.
-    if environment.get("SLIME_SEL4_SUPERVISION_CHECK") == "1":
-        environment["SLIME_SEL4_SUPERVISION_CHECK"] = "1"
-    else:
-        environment.pop("SLIME_SEL4_SUPERVISION_CHECK", None)
-    # B38 task-arena and root-CSlot reclamation plane.
-    if environment.get("SLIME_SEL4_RECLAMATION_CHECK") == "1":
-        environment["SLIME_SEL4_RECLAMATION_CHECK"] = "1"
-    else:
-        environment.pop("SLIME_SEL4_RECLAMATION_CHECK", None)
-    # B22's channel-crossing plane, likewise.
-    if environment.get("SLIME_SEL4_CROSSING_CHECK") == "1":
-        environment["SLIME_SEL4_CROSSING_CHECK"] = "1"
-    else:
-        environment.pop("SLIME_SEL4_CROSSING_CHECK", None)
-    # P5.4.6's call plane, likewise. Its own flag rather than the oracle's
-    # `SLIME_FABRIC_CALL_CHECK`: the two planes share the broker but not init's
-    # composition, so one flag would make the seL4 generation walk the x86
-    # boot layout.
-    if environment.get("SLIME_SEL4_CALL_CHECK") == "1":
-        environment["SLIME_SEL4_CALL_CHECK"] = "1"
-    else:
-        environment.pop("SLIME_SEL4_CALL_CHECK", None)
-    # P5.4.7's operation plane. Two flags, on the QoS row's rule: the seL4 flag
-    # selects init's composition while the oracle's `SLIME_FABRIC_OPERATION_CHECK`
-    # keeps `fabric-service` and the five participants byte-identical with the
-    # x86 plane. `init.rs` requires the seL4 flag to be absent before it takes
-    # the oracle branch, so generation 20 cannot walk generation 15's layout.
-    if environment.get("SLIME_SEL4_OPERATION_CHECK") == "1":
-        environment["SLIME_SEL4_OPERATION_CHECK"] = "1"
-    else:
-        environment.pop("SLIME_SEL4_OPERATION_CHECK", None)
-    # P5.4.8's visibility plane, on the operation row's rule: the seL4 flag
-    # composes the plane while the oracle's `SLIME_FABRIC_VISIBILITY_CHECK`
-    # selects the unmodified visibility broker and the five participants.
-    if environment.get("SLIME_SEL4_VISIBILITY_CHECK") == "1":
-        environment["SLIME_SEL4_VISIBILITY_CHECK"] = "1"
-    else:
-        environment.pop("SLIME_SEL4_VISIBILITY_CHECK", None)
-    # P5.4.9's full-graph boot, on the same rule. Its oracle counterpart is
-    # `SLIME_FABRIC_BOOT_CHECK`, which every participant reads through
-    # `fabric_boot::active`.
-    if environment.get("SLIME_SEL4_BOOT_CHECK") == "1":
-        environment["SLIME_SEL4_BOOT_CHECK"] = "1"
-    else:
-        environment.pop("SLIME_SEL4_BOOT_CHECK", None)
-    # P5.4.2c's storage plane, on the same rule.
-    if environment.get("SLIME_SEL4_STORAGE_CHECK") == "1":
-        environment["SLIME_SEL4_STORAGE_CHECK"] = "1"
-    else:
-        environment.pop("SLIME_SEL4_STORAGE_CHECK", None)
     if recovery:
         environment["SLIME_RECOVERY_IMAGE"] = "1"
     if environment.get("SLIME_GENERATION_CMD_CHECK") == "1" and candidate_identity is not None:
         environment["SLIME_GENERATION_CANDIDATE"] = candidate_identity.hex()
-    # P5.3.1: the two seL4 graphs are both generation 1, so keying only on the
-    # number would give them one Cargo target directory — and since they differ
-    # by a compile-time `option_env!` in `init.rs` rather than by any input
-    # Cargo tracks, the second build would silently reuse the first's `init.elf`
-    # and boot the wrong scenario.
+    # Keep separate target directories for distinct manifests because their
+    # generated layout and profile inputs intentionally produce distinct images.
     sel4_manifest = os.environ.get("SLIME_SEL4_MANIFEST")
     if recovery:
         target_name = "recovery"
@@ -2268,6 +2204,7 @@ def build_rust_components(
         environment["RUSTFLAGS"] = " ".join(
             [
                 "-C link-arg=--build-id=none",
+                f"--remap-path-prefix={target_dir}=./target/components/{target_profile.name}/{target_name}",
                 f"--remap-path-prefix={ROOT}=.",
             ]
         )
@@ -2452,17 +2389,35 @@ DEFAULT_CHILD_PRIORITY = 254
 GRANT_POLICY_ONLY = 1
 # A send/recv grant whose channel object its source creates at runtime.
 GRANT_MINTED = 1
-SERVICE_ROOT_DISPATCH = 1
-# B41: console and debug traffic gets its own endpoint object per process, so a
-# noisy or faulting console client cannot consume the root's lifecycle
-# dispatcher or share its fault domain.
-SERVICE_CONSOLE = 2
-# Native child CSpace ABI. Logical generation slots remain 0..31; static
-# endpoint/notification mirrors occupy disjoint 31-slot regions, authority
-# tokens occupy 95..126, and 127 is the receive path's fixed slot.
-CHILD_CNODE_SIZE_BITS = 7
+# Endpoint and notification slots are relative to distinct 31-entry child
+# CSpace regions. The receiver slot occupies the last CSpace entry, so 31 is a
+# count, never a legal relative slot.
 MAX_DECLARED_NATIVE_SLOT = 31
+# Must match `slime-root::task::CHILD_CNODE_SIZE_BITS`; the admitted v5 quota
+# and the CNode object are derived from this one value.
+CHILD_CNODE_SIZE_BITS = 7
+SERVICE_LIFECYCLE = 1
+SERVICE_SPAWN = 2
+SERVICE_SUPERVISION = 3
+SERVICE_CAPABILITY_TRANSFER = 4
+SERVICE_SHARED_BUFFER = 5
+SERVICE_DIRECTORY = 6
+SERVICE_INPUT = 7
+SERVICE_BLOCK = 8
+SERVICE_CONSOLE = 9
+# Fixed userspace ABI slots. Several typed mechanisms share the root transport
+# endpoint at slot 1; the service discriminant states the authority carried.
+ROOT_SERVICE_SLOT = 1
 CONSOLE_SERVICE_SLOT = 32
+SERVICE_BY_CAPABILITY_KIND = {
+    "sharedBufferFactory": SERVICE_SHARED_BUFFER,
+    "sharedBuffer": SERVICE_SHARED_BUFFER,
+    "loan": SERVICE_SHARED_BUFFER,
+    "directory": SERVICE_DIRECTORY,
+    "input": SERVICE_INPUT,
+    "block": SERVICE_BLOCK,
+    "supervision": SERVICE_SUPERVISION,
+}
 KERNEL_OBJECT_CNODE = 1
 KERNEL_OBJECT_VSPACE = 2
 KERNEL_OBJECT_TCB = 3
@@ -2473,6 +2428,46 @@ KERNEL_OBJECT_NOTIFICATION = 7
 NOTIFICATION_ROLE_SIGNAL = 1
 NOTIFICATION_ROLE_WAIT = 2
 CAP_RIGHT_ALL = (1 << 64) - 1
+
+def declared_services(
+    instance: dict,
+    executable: dict,
+    grants_by_name: dict[str, dict],
+    minted_bindings: list[dict],
+    shared_buffer_holders: set[str],
+) -> set[int]:
+    services = {SERVICE_LIFECYCLE, SERVICE_CONSOLE}
+    if executable["role"] == "init" or executable["spawnBudget"] > 0:
+        # Spawn returns a supervision capability. A caller that can acquire
+        # one must also be allowed to release it, even when no endpoint or
+        # separately transferable grant happens to imply the table service.
+        services.update({SERVICE_SPAWN, SERVICE_SUPERVISION, SERVICE_CAPABILITY_TRANSFER})
+    if instance["name"] in shared_buffer_holders:
+        # A receiver may map and return a loan created by another process even
+        # though no persistent loan capability appears in its manifest. The
+        # authenticated per-holder budget is the declaration that authorizes
+        # that receiver-side shared-buffer mechanism.
+        services.add(SERVICE_SHARED_BUFFER)
+    capability_declarations = [
+        grants_by_name[binding["grant"]] for binding in instance["bindings"]
+    ] + [
+        minted
+        for minted in minted_bindings
+        if minted["holder"] == instance["name"]
+    ]
+    for declaration in capability_declarations:
+        service = SERVICE_BY_CAPABILITY_KIND.get(declaration["capabilityKind"])
+        if service is not None:
+            services.add(service)
+        if declaration["capabilityKind"] == "executable":
+            services.add(SERVICE_SPAWN)
+        # A declared endpoint is both the carrier used by capability delegation
+        # and the source of received capabilities that `cap_drop` releases. The
+        # transport therefore needs the narrow transfer service even when the
+        # endpoint itself is not re-delegatable.
+        if declaration["capabilityKind"] == "endpoint" or declaration["transferable"]:
+            services.add(SERVICE_CAPABILITY_TRANSFER)
+    return services
 
 
 def build_sel4_plan(
@@ -2506,6 +2501,8 @@ def build_sel4_plan(
     spawn_records = bytearray()
     quota_records = bytearray()
     object_index: dict[tuple[str, str], int] = {}
+    grants_by_name = {grant["name"]: grant for grant in grants}
+    executables_by_name = {entry["name"]: entry for entry in manifest["executables"]}
 
     # Every declared instance is a process in the plan. A child instance is
     # constructed by its owner rather than by root, but its CSpace, VSpace,
@@ -2638,20 +2635,24 @@ def build_sel4_plan(
                 string_offset(f"{name}:console-endpoint"), KERNEL_OBJECT_ENDPOINT, process, 4, 1, PLAN_NONE, 0
             )
         )
-        service_records.extend(
-            GENERATION_SERVICE_BINDING.pack(
-                process, SERVICE_ROOT_DISPATCH, 1, fault_endpoint, 1, process + 1, 0
+        for service in sorted(
+            declared_services(
+                instance,
+                executables_by_name[instance["executable"]],
+                grants_by_name,
+                manifest.get("mintedBindings", []),
+                {entry["holder"] for entry in manifest.get("sharedBufferBudget", [])},
             )
-        )
-        # Write-only: a console client must never be able to receive on this
-        # endpoint. Every process shares the console dispatcher, so a receiver
-        # could dequeue another process's output before the console saw it —
-        # the same confinement the root endpoint needs, for the same reason.
-        service_records.extend(
-            GENERATION_SERVICE_BINDING.pack(
-                process, SERVICE_CONSOLE, CONSOLE_SERVICE_SLOT, console_endpoint, 1, process + 1, 0
+        ):
+            if service == SERVICE_CONSOLE:
+                slot, endpoint = CONSOLE_SERVICE_SLOT, console_endpoint
+            else:
+                slot, endpoint = ROOT_SERVICE_SLOT, fault_endpoint
+            service_records.extend(
+                GENERATION_SERVICE_BINDING.pack(
+                    process, service, slot, endpoint, RIGHT["send"], process + 1, 0
+                )
             )
-        )
         cap_records.extend(
             GENERATION_CAP_BINDING.pack(process, 2, tcb, CAP_RIGHT_ALL, 0, PLAN_NONE, 0)
         )
@@ -2692,9 +2693,9 @@ def build_sel4_plan(
             "frame": thread_total + image_frame_count,
             "endpoint": 2 + sum(
                 1
-                for grant, rights in zip(grants, grant_rights, strict=True)
+                for grant in grants
                 if not grant.get("minted")
-                and rights & (RIGHT["send"] | RIGHT["recv"])
+                and grant["capabilityKind"] == "endpoint"
                 and grant["source"] == name
             ),
             # Each static notification object is owned once, by its declared
@@ -2845,7 +2846,7 @@ def build_sel4_plan(
             for binding in instances[instance_index[holder]]["bindings"]
             if binding["grant"] == grant["name"]
         )
-        if rights & RIGHT["exec"]:
+        if grant["capabilityKind"] == "executable":
             target = executable_index[grant["target"]]
             spawn_records.extend(
                 GENERATION_SPAWN_TEMPLATE.pack(
@@ -2855,7 +2856,7 @@ def build_sel4_plan(
             cap_records.extend(
                 GENERATION_CAP_BINDING.pack(source_process, bound["slot"], object_index[(grant["source"], "tcb")], rights, 0, grant_index, 0)
             )
-        elif rights & (RIGHT["send"] | RIGHT["recv"]):
+        elif grant["capabilityKind"] == "endpoint":
             endpoint = len(object_index)
             object_index[(grant["name"], "endpoint")] = endpoint
             kernel_records.extend(
@@ -2956,15 +2957,17 @@ def build_sel4_plan(
             if right not in RIGHT:
                 fail(f"minted binding {minted['name']}: unknown right {right}")
             rights |= RIGHT[right]
-        # `exec` is admissible, paired with `spawn`: an owner may hand a child
-        # an executable it holds, and the child spawns instances it owns.
-        if rights == 0 or rights & ~RIGHT_ALL:
-            fail(f"minted binding {minted['name']}: invalid rights")
-        if bool(rights & RIGHT["exec"]) != bool(rights & RIGHT["spawn"]):
-            fail(f"minted binding {minted['name']}: exec must travel with spawn")
+        kind = minted["capabilityKind"]
+        validate_capability_rights(f"minted binding {minted['name']}", kind, rights)
         minted_records.extend(
             GENERATION_MINTED_BINDING.pack(
-                string_offset(minted["name"]), owner, holder, slot, rights, 0
+                string_offset(minted["name"]),
+                owner,
+                holder,
+                slot,
+                rights,
+                0,
+                CAPABILITY_KIND[kind],
             )
         )
 
@@ -3008,7 +3011,7 @@ def layout_executables(manifest: dict) -> set[str]:
     names.update(
         grant["target"]
         for grant in manifest["grants"]
-        if grant["source"] in initial and "exec" in grant["rights"]
+        if grant["source"] in initial and grant["capabilityKind"] == "executable"
     )
     return names
 
@@ -3105,16 +3108,15 @@ def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes |
             rights |= RIGHT[right]
         transferable = int(bool(grant["transferable"]))
         rights |= RIGHT_TRANSFER if transferable else 0
-        if rights == 0 or rights & ~RIGHT_ALL:
-            fail(f"invalid rights for {grant['name']}")
+        validate_capability_rights(f"grant {grant['name']}", grant["capabilityKind"], rights)
         grant_rights.append(rights)
 
     expected_bindings: dict[str, set[str]] = {name: set() for name in instance_index}
-    for grant, rights in zip(grants, grant_rights, strict=True):
+    for grant, _rights in zip(grants, grant_rights, strict=True):
         source = instance_index.get(grant["source"])
         if source is None:
             fail(f"grant source missing: {grant['name']}")
-        if rights & RIGHT["exec"]:
+        if grant["capabilityKind"] == "executable":
             expected_bindings[grant["source"]].add(grant["name"])
             if executable_index.get(grant["target"]) is None:
                 fail(f"executable grant target missing: {grant['name']}")
@@ -3122,13 +3124,14 @@ def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes |
             target = instance_index.get(grant["target"])
             if target is None:
                 fail(f"grant target missing: {grant['name']}")
-            # A minted grant declares the edge but not its object: the source
-            # creates the channel at runtime and hands the far half over at
-            # spawn, so neither endpoint has a pre-created end to bind. Each
-            # side's actual slot is stated by a `mintedBindings` entry.
+            # A minted grant defers placement until its owner spawns the
+            # holder, but the native Endpoint object itself is still a
+            # generation-owned kernel object. `mintedBindings` state the
+            # child-side slot and ceiling; the root installs the declared
+            # endpoint there when the child is constructed.
             if grant.get("minted"):
                 continue
-            if rights & (RIGHT["send"] | RIGHT["recv"]):
+            if grant["capabilityKind"] == "endpoint":
                 expected_bindings[grant["source"]].add(grant["name"])
             expected_bindings[grant["target"]].add(grant["name"])
 
@@ -3186,7 +3189,7 @@ def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes |
                 child["owner"] == instance["name"] and child["name"] == grant["target"]
                 for child in instances
             )
-            delegated_to_owned_executable = bool(rights & RIGHT["exec"]) and any(
+            delegated_to_owned_executable = grant["capabilityKind"] == "executable" and any(
                 child["owner"] == instance["name"] and child["executable"] == grant["target"]
                 for child in instances
             )
@@ -3311,7 +3314,7 @@ def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes |
     for row in instance_rows: instance_records += GENERATION_INSTANCE.pack(*row)
     for grant, rights in zip(grants, grant_rights, strict=True):
         source = instance_index[grant["source"]]
-        target = executable_index[grant["target"]] if rights & RIGHT["exec"] else instance_index[grant["target"]]
+        target = executable_index[grant["target"]] if grant["capabilityKind"] == "executable" else instance_index[grant["target"]]
         grant_records += GENERATION_GRANT.pack(
             string_offset(grant["name"]),
             source,
@@ -3319,6 +3322,7 @@ def build_generation(manifest: dict, payloads: dict[str, bytes], parent: bytes |
             rights,
             int(bool(grant["transferable"])),
             GRANT_MINTED if grant.get("minted") else 0,
+            CAPABILITY_KIND[grant["capabilityKind"]],
         )
     for state in states:
         owner = instance_index.get(state["owner"])
@@ -3511,10 +3515,9 @@ def bootstrap_binding_projection(manifest: dict) -> tuple[dict[str, int], dict[s
     grants_by_name = {grant["name"]: grant for grant in manifest["grants"]}
     binding_slots: dict[str, int] = {}
     role_bindings: dict[str, int] = {}
-    right_roles = {
-        "endpointCreate": "endpoint-factory",
-        "bufferCreate": "shared-buffer-factory",
-        "inputRead": "input",
+    kind_roles = {
+        "sharedBufferFactory": "shared-buffer-factory",
+        "input": "input",
     }
     for binding in instance["bindings"]:
         grant = grants_by_name[binding["grant"]]
@@ -3522,13 +3525,9 @@ def bootstrap_binding_projection(manifest: dict) -> tuple[dict[str, int], dict[s
             binding_slots[grant["target"]] = binding["slot"]
         elif set(grant["rights"]) & {"send", "recv"}:
             binding_slots[grant["name"]] = binding["slot"]
-        for right, role in right_roles.items():
-            if right in grant["rights"]:
-                role_bindings[role] = binding["slot"]
-    channel_aliases = {"spawn-service-rpc": "service-spawn"}
-    for source, alias in channel_aliases.items():
-        if source in binding_slots:
-            binding_slots[alias] = binding_slots[source]
+        role = kind_roles.get(grant["capabilityKind"])
+        if role is not None:
+            role_bindings[role] = binding["slot"]
     return binding_slots, role_bindings
 
 
@@ -3540,19 +3539,10 @@ def build_sel4_generation(output: Path, manifest: dict, target_profile: TargetPr
     custom-kernel executable. Recovery, storage, and generation management run
     as userspace planes selected by their manifests.
 
-    A fabric graph is *conditional* rather than absent (P5.5.2). Four of the
-    five seL4 manifests declare none, and for those the C8 resolution has
-    nothing to resolve — that was true of every seL4 manifest until the stream
-    plane arrived. `sel4-stream.zti` declares one, because `fabric-service`
-    reads its route table, participant list, and control-slot base out of the
-    generated profile at compile time: a graph it cannot resolve is a component
-    that does not build, not one that runs without routes.
-
-    What is shared is what matters: the same `build_generation` encoder, the
-    same boot-layout resource, the same shared-buffer budget encoding, and the
-    same digest-authenticated object closure. The generation this writes is a
-    generation in exactly the sense every other one is.
+    A fabric graph is conditional rather than absent: a graph that declares one
+    resolves the same authenticated profile the userspace fabric consumes.
     """
+
     # P5.5.2: a manifest that declares a fabric graph resolves it through the
     # same function every x86 profile uses, so a seL4 route identity, QoS row,
     # and control-slot base are folded from the same schemas and the same
@@ -3566,7 +3556,8 @@ def build_sel4_generation(output: Path, manifest: dict, target_profile: TargetPr
             manifest, interfaces, manifest["fabricGraph"]["profiles"][0]["name"]
         )
         profile_path.write_text(
-            render_fabric_profile_rust(resolved_profile), encoding="utf-8"
+            render_fabric_profile_rust(resolved_profile, manifest["bootAction"]),
+            encoding="utf-8",
         )
     else:
         # A graph with no fabric still has owners that spawn children, and init
@@ -3575,7 +3566,8 @@ def build_sel4_generation(output: Path, manifest: dict, target_profile: TargetPr
         # manifest instead of the constant existing only where a fabric does.
         profile_path.write_text(
             "#[allow(dead_code)]\n"
-            "pub const FABRIC_MINTED_GRANTS: &[(&[u8], usize)] = &[\n"
+            + f"pub const GENERATION_BOOT_ACTION: &str = {json.dumps(manifest['bootAction'], ensure_ascii=True)};\n"
+            + "pub const FABRIC_MINTED_GRANTS: &[(&[u8], usize)] = &[\n"
             + "".join(
                 f"    (b{json.dumps(instance['name'], ensure_ascii=True)}, {count}),\n"
                 for instance, count in declared_spawn_grant_counts(manifest)
@@ -3583,99 +3575,6 @@ def build_sel4_generation(output: Path, manifest: dict, target_profile: TargetPr
             + "];\n",
             encoding="utf-8",
         )
-    # P5.3.1: the channel graph's `init` needs its scenario compiled in, and
-    # `init.rs` selects that with `option_env!`. Set from the manifest being
-    # built rather than inherited, so the flag and the graph cannot disagree;
-    # `build_rust_components` pops it for every other build.
-    selected = os.environ.get("SLIME_SEL4_MANIFEST")
-    #
-    # A manifest may name more than one flag. P5.4.5's QoS plane is the stream
-    # driver plus a clock, so it sets `SLIME_SEL4_STREAM_CHECK` — which selects
-    # that driver in `init.rs` — *and* the oracle's own
-    # `SLIME_FABRIC_QOS_CHECK`, which is what `fabric-service`,
-    # `fabric-publisher-b`, and `fabric-subscriber-b` read to select their QoS
-    # behaviour. Reusing the oracle's flag is what keeps those three components
-    # byte-identical between the two seL4 planes; `init.rs::qos_plane` requires
-    # both, so the x86 QoS generation cannot walk this composition.
-    wanted: set[str] = set()
-    declared: set[str] = set()
-    for manifest_name, flags in (
-        ("sel4-channel", ("SLIME_SEL4_CHANNEL_CHECK",)),
-        ("sel4-loan", ("SLIME_SEL4_LOAN_CHECK",)),
-        ("sel4-spawn", ("SLIME_SEL4_SPAWN_CHECK",)),
-        ("sel4-sample", ("SLIME_SEL4_SAMPLE_CHECK",)),
-        ("sel4-stream", ("SLIME_SEL4_STREAM_CHECK",)),
-        ("sel4-qos", ("SLIME_SEL4_STREAM_CHECK", "SLIME_FABRIC_QOS_CHECK")),
-        ("sel4-stress", ()),
-        ("sel4-supervision", ("SLIME_SEL4_SUPERVISION_CHECK",)),
-        ("sel4-reclamation", ("SLIME_SEL4_RECLAMATION_CHECK",)),
-        ("sel4-crossing", ("SLIME_SEL4_CROSSING_CHECK",)),
-        # P5.4.6: its own flag rather than the oracle's
-        # `SLIME_FABRIC_CALL_CHECK`. The call *broker* is the same code on both
-        # planes — `fabric-service` selects it on either flag, which is what
-        # keeps them from diverging — but init's composition differs, because
-        # this plane mints its control channels instead of reading them from
-        # the base boot layout. Sharing one flag made generation 18 walk
-        # generation 14's layout.
-        ("sel4-call", ("SLIME_SEL4_CALL_CHECK",)),
-        # P5.4.7: the seL4 flag composes the plane in `init.rs`, and the
-        # oracle's flag selects the unmodified operation broker and
-        # participants — the property this gate exists to demonstrate.
-        (
-            "sel4-operation",
-            ("SLIME_SEL4_OPERATION_CHECK", "SLIME_FABRIC_OPERATION_CHECK"),
-        ),
-        # P5.4.8, on the operation row's rule.
-        (
-            "sel4-visibility",
-            ("SLIME_SEL4_VISIBILITY_CHECK", "SLIME_FABRIC_VISIBILITY_CHECK"),
-        ),
-        # P5.4.9, on the same rule. Every participant's full-graph behaviour is
-        # selected by the oracle's `SLIME_FABRIC_BOOT_CHECK` through
-        # `fabric_boot::active`; only init's composition is seL4's.
-        ("sel4-boot", ("SLIME_SEL4_BOOT_CHECK", "SLIME_FABRIC_BOOT_CHECK")),
-        # P5.4.2c: its own flag, and no oracle counterpart. The x86 storage
-        # probe reads through `buffer_phys`, an ambient pointer the retired
-        # kernel dereferences; the seL4 payload crosses in the transfer window,
-        # so the two components do not share a body.
-        ("sel4-storage", ("SLIME_SEL4_STORAGE_CHECK",)),
-        # P5.4.2c's second half, and likewise no oracle counterpart: M5.4 policy
-        # runs in userspace here, where the oracle keeps it in `store_service`.
-        ("sel4-store", ("SLIME_SEL4_STORE_CHECK",)),
-        # M5.6, likewise userspace: the transition model is `boot_contracts`.
-        ("sel4-rollback", ("SLIME_SEL4_ROLLBACK_CHECK",)),
-        # M5.9, likewise.
-        ("sel4-recovery", ("SLIME_SEL4_RECOVERY_PLANE_CHECK",)),
-        # M6.5, P5.4.3: the generation service moves to userspace too.
-        ("sel4-generation", ("SLIME_SEL4_GENERATION_CHECK",)),
-        # M6.3: the directory capability mechanism the root now owns.
-        ("sel4-directory", ("SLIME_SEL4_DIRECTORY_CHECK",)),
-        # M6.3's other half: the filesystem service over that mechanism.
-        ("sel4-filesystem", ("SLIME_SEL4_FILESYSTEM_CHECK",)),
-        # M6.4: a Dango session over the scripted key source.
-        ("sel4-dango", ("SLIME_SEL4_DANGO_CHECK",)),
-        # The input mechanism M6.4 sits on, gated on its own.
-        ("sel4-input", ("SLIME_SEL4_INPUT_CHECK",)),
-        # M6.6: a chooser handing one narrowed view to a requester.
-        ("sel4-powerbox", ("SLIME_SEL4_POWERBOX_CHECK",)),
-        # M6.7: a generation crossing a persistence boundary.
-        ("sel4-transfer", ("SLIME_SEL4_TRANSFER_CHECK",)),
-    ):
-        # Set-then-scrub in one pass would let a later row pop a flag an earlier
-        # row set: `sel4-qos` and `sel4-stream` share
-        # `SLIME_SEL4_STREAM_CHECK`, so iterating the table and popping for
-        # every non-selected manifest cleared the stream plane's own flag. The
-        # selected manifest's flags are collected first and every other flag in
-        # the table is removed, so a flag two manifests share survives for the
-        # one that asked for it.
-        if selected == manifest_name:
-            wanted.update(flags)
-        declared.update(flags)
-    for flag in declared:
-        if flag in wanted:
-            os.environ[flag] = "1"
-        else:
-            os.environ.pop(flag, None)
     executable_names = {executable["name"] for executable in manifest["executables"]}
     binding_slots, role_bindings = bootstrap_binding_projection(manifest)
     built = build_rust_components(

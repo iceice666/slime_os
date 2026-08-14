@@ -34,13 +34,11 @@ const SLOT_SERVICE: sel4::CPtrBits = 1;
 /// This task's own TCB, present only when the root supervises it as
 /// self-managed. `slime-root/src/task.rs::CHILD_SLOT_TCB`.
 const SLOT_TCB: sel4::CPtrBits = 2;
-
-/// `slime-root/src/ipc.rs::Operation::FixtureDirective`.
+/// Fixture directive label owned by the root behavioral harness.
 const OP_FIXTURE_DIRECTIVE: sel4::Word = 5;
-/// `slime-root/src/ipc.rs::Operation::Exit`.
+/// Lifecycle exit label owned by the root task mechanism.
 const OP_EXIT: sel4::Word = 3;
-/// `slime-root/src/ipc.rs::Operation::SharedBufferMap`, reused as this
-/// fixture's shared-buffer report.
+/// Shared-buffer map label, reused as this fixture's shared-buffer report.
 const OP_SHARED_BUFFER_REPORT: sel4::Word = 23;
 
 /// Fixture request tag, `b"SLIMEREQ"` big-endian, so the root can tell this

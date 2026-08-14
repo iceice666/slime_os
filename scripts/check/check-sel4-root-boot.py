@@ -37,8 +37,8 @@ BOOT_TIMEOUT_SECONDS = 120
 #
 # Numeric fields (badges, slot ranges, counts, fault status words) vary per
 # build and are matched loosely. What is pinned is the ordering, the task and
-# role identities, the operation number, the exit status, the fault kind, and
-# the terminal `live=0`.
+# role identities, the typed service label, the exit status, the fault kind,
+# and the terminal `live=0`.
 REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     (
         "allocator admitted nonzero kernel resources",
@@ -92,17 +92,17 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         r"SLIME_ROOT virtio probed granules=4 slots=32 found=0",
     ),
     ("generation admitted", r"SLIME_ROOT generation admitted number=\d+"),
-    # The default seL4 fixture now embeds the same synthetic v4 generation as
-    # every other seL4 build variant. Its small launch catalogue has no fabric
-    # graph; the standalone native child exercise below remains independent.
+    # The default seL4 fixture embeds the same synthetic v5 generation as every
+    # other seL4 build variant. Its small launch catalogue has no fabric graph;
+    # the standalone native child exercise below remains independent.
     (
-        "the v4 fixture declares no fabric graph",
+        "the v5 fixture declares no fabric graph",
         r"SLIME_ROOT fabric graph=absent schemas=0 routes=0 "
         r"participants=0 interpositions=0",
     ),
     ("authority manifest reported", r"SLIME_ROOT authority manifest=\["),
     (
-        "the v4 executable catalogue is admitted",
+        "the v5 executable catalogue is admitted",
         r"SLIME_ROOT graph admitted executables=5 instances=5 "
         r"slimecm=0 elf=5 unrecognized=0",
     ),
@@ -137,11 +137,11 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     ("clean-exit child issued a request", r"SLIME_CHILD request op=5 tag=0x534c494d45524551"),
     (
         "root served the clean-exit request",
-        r"SLIME_ROOT request badge=\S+ task=0 operation=5 directive=0",
+        r"SLIME_ROOT request badge=\S+ task=0 service_label=5 directive=0",
     ),
     (
         "root replied to the clean-exit child",
-        r"SLIME_ROOT child request served task=0 role=clean-exit operation=5 result=0",
+        r"SLIME_ROOT child request served task=0 role=clean-exit service_label=5 result=0",
     ),
     # The exact bytes, pinned literally: this is the assertion that a real
     # frame — not a separately zeroed page — is shared with the child.
@@ -178,7 +178,7 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     ),
     (
         "root served the fault-directive request",
-        r"SLIME_ROOT request badge=\S+ task=1 operation=5 directive=1",
+        r"SLIME_ROOT request badge=\S+ task=1 service_label=5 directive=1",
     ),
     ("child requested a fault", r"SLIME_CHILD fault requested addr=0x0"),
     (

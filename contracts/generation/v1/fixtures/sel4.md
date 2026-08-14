@@ -27,9 +27,12 @@ narrower generation rather than adding a mode to the first.
 
 `slime-root` mediates the task, IPC, supervision, and shared-buffer planes. It
 deliberately does **not** own the storage, directory, input,
-generation-management, or recovery planes — `slime-root/src/ipc.rs`'s
-`Operation::mediation` answers `Mediation::Unavailable` for each, with the
-comment that they *"have no seL4 mechanism owner in this cutover"*.
+generation-management, or recovery planes: the cutover deleted the universal
+operation dispatcher, so what a root mechanism answers is now a *declared
+service* per instance (`Generation::instance_has_service`), and no service
+discriminant exists for those planes on this graph. A request naming one is
+refused as `class=undeclared` rather than routed to a handler that does not
+exist.
 
 A component invoking one of those cannot run here yet, so declaring it would
 promise authority the root cannot honour. These five are exactly the components

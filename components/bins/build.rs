@@ -29,156 +29,10 @@ fn main() {
         }
         Err(_) => {}
     }
-    println!("cargo:rerun-if-env-changed=SLIME_GENERATION_NUMBER");
-    println!("cargo:rerun-if-env-changed=SLIME_RECOVERY_INTERRUPT");
-    println!("cargo:rerun-if-env-changed=SLIME_RECOVERY_IMAGE");
-    println!("cargo:rerun-if-env-changed=SLIME_DANGO_CHECK");
-    println!("cargo:rerun-if-env-changed=SLIME_GENERATION_CMD_CHECK");
-    println!("cargo:rerun-if-env-changed=SLIME_POWERBOX_CHECK");
-    println!("cargo:rerun-if-env-changed=SLIME_SAMPLE_PLANE_CHECK");
-    println!("cargo:rerun-if-env-changed=SLIME_SEL4_CHANNEL_CHECK");
-    println!("cargo:rerun-if-env-changed=SLIME_SEL4_LOAN_CHECK");
-    println!("cargo:rerun-if-env-changed=SLIME_SEL4_SPAWN_CHECK");
-    println!("cargo:rerun-if-env-changed=SLIME_SEL4_SAMPLE_CHECK");
-    println!("cargo:rerun-if-env-changed=SLIME_SEL4_STREAM_CHECK");
-    println!("cargo:rerun-if-env-changed=SLIME_SEL4_SUPERVISION_CHECK");
-    println!("cargo:rerun-if-env-changed=SLIME_SEL4_RECLAMATION_CHECK");
-    println!("cargo:rerun-if-env-changed=SLIME_SEL4_CROSSING_CHECK");
-    println!("cargo:rerun-if-env-changed=SLIME_SEL4_CALL_CHECK");
-    println!("cargo:rerun-if-env-changed=SLIME_SEL4_OPERATION_CHECK");
-    println!("cargo:rerun-if-env-changed=SLIME_SEL4_VISIBILITY_CHECK");
-    println!("cargo:rerun-if-env-changed=SLIME_SEL4_BOOT_CHECK");
-    println!("cargo:rerun-if-env-changed=SLIME_SEL4_STORAGE_CHECK");
-    println!("cargo:rerun-if-env-changed=SLIME_SEL4_STORE_CHECK");
-    println!("cargo:rerun-if-env-changed=SLIME_SEL4_ROLLBACK_CHECK");
-    println!("cargo:rerun-if-env-changed=SLIME_SEL4_RECOVERY_PLANE_CHECK");
-    println!("cargo:rerun-if-env-changed=SLIME_SEL4_GENERATION_CHECK");
-    println!("cargo:rerun-if-env-changed=SLIME_SEL4_DIRECTORY_CHECK");
-    println!("cargo:rerun-if-env-changed=SLIME_SEL4_FILESYSTEM_CHECK");
-    println!("cargo:rerun-if-env-changed=SLIME_SEL4_DANGO_CHECK");
-    println!("cargo:rerun-if-env-changed=SLIME_SEL4_INPUT_CHECK");
-    println!("cargo:rerun-if-env-changed=SLIME_SEL4_POWERBOX_CHECK");
-    println!("cargo:rerun-if-env-changed=SLIME_SEL4_TRANSFER_CHECK");
-    println!("cargo:rerun-if-env-changed=SLIME_FABRIC_AUTHORITY_CHECK");
-    println!("cargo:rerun-if-env-changed=SLIME_FABRIC_STREAM_CHECK");
-    println!("cargo:rerun-if-env-changed=SLIME_FABRIC_QOS_CHECK");
-    println!("cargo:rerun-if-env-changed=SLIME_FABRIC_CALL_CHECK");
-    println!("cargo:rerun-if-env-changed=SLIME_FABRIC_OPERATION_CHECK");
-    println!("cargo:rerun-if-env-changed=SLIME_FABRIC_VISIBILITY_CHECK");
-    println!("cargo:rerun-if-env-changed=SLIME_FABRIC_BOOT_CHECK");
-    println!("cargo:rerun-if-env-changed=SLIME_DATA_FABRIC_PROFILE");
     println!("cargo:rerun-if-env-changed=SLIME_BOOT_LAYOUT");
     println!("cargo:rerun-if-env-changed=SLIME_FABRIC_PROXY_EARLY_EXIT");
     println!("cargo:rerun-if-env-changed=SLIME_GENERATION_CANDIDATE");
     println!("cargo:rerun-if-env-changed=SLIME_GENERATION_CMD_SCENARIO");
-    if let Ok(number) = std::env::var("SLIME_GENERATION_NUMBER") {
-        println!("cargo:rustc-env=SLIME_GENERATION_NUMBER={number}");
-    }
-    if let Ok(value) = std::env::var("SLIME_RECOVERY_IMAGE") {
-        println!("cargo:rustc-env=SLIME_RECOVERY_IMAGE={value}");
-    }
-    if let Ok(value) = std::env::var("SLIME_RECOVERY_INTERRUPT") {
-        println!("cargo:rustc-env=SLIME_RECOVERY_INTERRUPT={value}");
-    }
-    if let Ok(value) = std::env::var("SLIME_DANGO_CHECK") {
-        println!("cargo:rustc-env=SLIME_DANGO_CHECK={value}");
-    }
-    if let Ok(value) = std::env::var("SLIME_GENERATION_CMD_CHECK") {
-        println!("cargo:rustc-env=SLIME_GENERATION_CMD_CHECK={value}");
-    }
-    if let Ok(value) = std::env::var("SLIME_POWERBOX_CHECK") {
-        println!("cargo:rustc-env=SLIME_POWERBOX_CHECK={value}");
-    }
-    if let Ok(value) = std::env::var("SLIME_SAMPLE_PLANE_CHECK") {
-        println!("cargo:rustc-env=SLIME_SAMPLE_PLANE_CHECK={value}");
-    }
-    if let Ok(value) = std::env::var("SLIME_SEL4_CHANNEL_CHECK") {
-        println!("cargo:rustc-env=SLIME_SEL4_CHANNEL_CHECK={value}");
-    }
-    if let Ok(value) = std::env::var("SLIME_SEL4_LOAN_CHECK") {
-        println!("cargo:rustc-env=SLIME_SEL4_LOAN_CHECK={value}");
-    }
-    if let Ok(value) = std::env::var("SLIME_SEL4_SPAWN_CHECK") {
-        println!("cargo:rustc-env=SLIME_SEL4_SPAWN_CHECK={value}");
-    }
-    if let Ok(value) = std::env::var("SLIME_SEL4_SAMPLE_CHECK") {
-        println!("cargo:rustc-env=SLIME_SEL4_SAMPLE_CHECK={value}");
-    }
-    if let Ok(value) = std::env::var("SLIME_SEL4_STREAM_CHECK") {
-        println!("cargo:rustc-env=SLIME_SEL4_STREAM_CHECK={value}");
-    }
-    if let Ok(value) = std::env::var("SLIME_SEL4_SUPERVISION_CHECK") {
-        println!("cargo:rustc-env=SLIME_SEL4_SUPERVISION_CHECK={value}");
-    }
-    if let Ok(value) = std::env::var("SLIME_SEL4_RECLAMATION_CHECK") {
-        println!("cargo:rustc-env=SLIME_SEL4_RECLAMATION_CHECK={value}");
-    }
-    if let Ok(value) = std::env::var("SLIME_SEL4_CROSSING_CHECK") {
-        println!("cargo:rustc-env=SLIME_SEL4_CROSSING_CHECK={value}");
-    }
-    if let Ok(value) = std::env::var("SLIME_SEL4_CALL_CHECK") {
-        println!("cargo:rustc-env=SLIME_SEL4_CALL_CHECK={value}");
-    }
-    if let Ok(value) = std::env::var("SLIME_SEL4_OPERATION_CHECK") {
-        println!("cargo:rustc-env=SLIME_SEL4_OPERATION_CHECK={value}");
-    }
-    if let Ok(value) = std::env::var("SLIME_SEL4_VISIBILITY_CHECK") {
-        println!("cargo:rustc-env=SLIME_SEL4_VISIBILITY_CHECK={value}");
-    }
-    if let Ok(value) = std::env::var("SLIME_SEL4_BOOT_CHECK") {
-        println!("cargo:rustc-env=SLIME_SEL4_BOOT_CHECK={value}");
-    }
-    if let Ok(value) = std::env::var("SLIME_SEL4_STORAGE_CHECK") {
-        println!("cargo:rustc-env=SLIME_SEL4_STORAGE_CHECK={value}");
-    }
-    if let Ok(value) = std::env::var("SLIME_SEL4_STORE_CHECK") {
-        println!("cargo:rustc-env=SLIME_SEL4_STORE_CHECK={value}");
-    }
-    if let Ok(value) = std::env::var("SLIME_SEL4_ROLLBACK_CHECK") {
-        println!("cargo:rustc-env=SLIME_SEL4_ROLLBACK_CHECK={value}");
-    }
-    if let Ok(value) = std::env::var("SLIME_SEL4_RECOVERY_PLANE_CHECK") {
-        println!("cargo:rustc-env=SLIME_SEL4_RECOVERY_PLANE_CHECK={value}");
-    }
-    if let Ok(value) = std::env::var("SLIME_SEL4_GENERATION_CHECK") {
-        println!("cargo:rustc-env=SLIME_SEL4_GENERATION_CHECK={value}");
-    }
-    if let Ok(value) = std::env::var("SLIME_SEL4_DIRECTORY_CHECK") {
-        println!("cargo:rustc-env=SLIME_SEL4_DIRECTORY_CHECK={value}");
-    }
-    if let Ok(value) = std::env::var("SLIME_SEL4_FILESYSTEM_CHECK") {
-        println!("cargo:rustc-env=SLIME_SEL4_FILESYSTEM_CHECK={value}");
-    }
-    if let Ok(value) = std::env::var("SLIME_SEL4_DANGO_CHECK") {
-        println!("cargo:rustc-env=SLIME_SEL4_DANGO_CHECK={value}");
-    }
-    if let Ok(value) = std::env::var("SLIME_SEL4_INPUT_CHECK") {
-        println!("cargo:rustc-env=SLIME_SEL4_INPUT_CHECK={value}");
-    }
-    if let Ok(value) = std::env::var("SLIME_SEL4_POWERBOX_CHECK") {
-        println!("cargo:rustc-env=SLIME_SEL4_POWERBOX_CHECK={value}");
-    }
-    if let Ok(value) = std::env::var("SLIME_SEL4_TRANSFER_CHECK") {
-        println!("cargo:rustc-env=SLIME_SEL4_TRANSFER_CHECK={value}");
-    }
-    if let Ok(value) = std::env::var("SLIME_FABRIC_AUTHORITY_CHECK") {
-        println!("cargo:rustc-env=SLIME_FABRIC_AUTHORITY_CHECK={value}");
-    }
-    if let Ok(value) = std::env::var("SLIME_FABRIC_STREAM_CHECK") {
-        println!("cargo:rustc-env=SLIME_FABRIC_STREAM_CHECK={value}");
-    }
-    if let Ok(value) = std::env::var("SLIME_FABRIC_QOS_CHECK") {
-        println!("cargo:rustc-env=SLIME_FABRIC_QOS_CHECK={value}");
-    }
-    if let Ok(value) = std::env::var("SLIME_FABRIC_CALL_CHECK") {
-        println!("cargo:rustc-env=SLIME_FABRIC_CALL_CHECK={value}");
-    }
-    if let Ok(value) = std::env::var("SLIME_FABRIC_VISIBILITY_CHECK") {
-        println!("cargo:rustc-env=SLIME_FABRIC_VISIBILITY_CHECK={value}");
-    }
-    if let Ok(value) = std::env::var("SLIME_FABRIC_BOOT_CHECK") {
-        println!("cargo:rustc-env=SLIME_FABRIC_BOOT_CHECK={value}");
-    }
     if let Ok(value) = std::env::var("SLIME_FABRIC_PROXY_EARLY_EXIT") {
         println!("cargo:rustc-env=SLIME_FABRIC_PROXY_EARLY_EXIT={value}");
     }
@@ -264,7 +118,7 @@ fn generate_command_profile(manifest_dir: &str) {
         .skip(1)
         .find(|block| field(block, "executable") == Some("spawn-service"))
         .and_then(|block| field(block, "name"))
-        .unwrap_or(profile_instance_name);
+        .expect("spawn-service command-profile consumer");
     let entries = profile
         .iter()
         .zip(targets.iter())
@@ -275,8 +129,7 @@ fn generate_command_profile(manifest_dir: &str) {
             // resolves these in its own CSpace, and the instance that sources
             // the grant may be whoever spawned it.
             let slot = binding_slot(&manifest, consumer, grant)
-                .or_else(|| binding_slot(&manifest, launcher, grant))
-                .expect("profile executable binding");
+                .expect("consumer profile executable binding");
             let block = executable_block(&manifest, target).expect("profile executable");
             let object = field(block, "object").expect("executable object");
             (*command, object, slot)
@@ -521,7 +374,6 @@ mod tests {
         { grant = "b-command"; slot = 11; };
       ];
     };
-    { name = "a-factory"; source = "spawn-service"; target = "spawn-service"; rights = ["endpointCreate";]; };
     { name = "b-command"; source = "spawn-service"; target = "custom-command"; rights = ["exec"; "spawn";]; };
 "#;
         assert_eq!(
