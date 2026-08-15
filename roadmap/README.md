@@ -12,7 +12,7 @@ A milestone is complete only when its exit condition is observed. Compiled code,
 
 | Track | Status | Next open gate |
 | --- | --- | --- |
-| [Backlog](00-backlog.md) | B39–B54 resolved; **no open items** | None. Resolve or defer any newly found defect before opening a track gate |
+| [Backlog](00-backlog.md) | B39–B54 resolved; **B55 open** | B55: the full-graph boot plane refuses its own first spawn, so C8.10's exit condition is unobserved on the current tree |
 | [Foundations](01-foundations.md) | M1–M4 and M6 complete; M5 mechanisms complete except M5.7 physical Framework evidence | M5.7 requires observed removable-media Framework boot without internal-NVMe writes |
 | [Core runtime](02-core-runtime.md) | C7 and C8.1–C8.10 complete; B46's native-Endpoint cutover restored the stream, QoS, call, operation, and visibility gates on native IPC | C8.11+ decomposition work; no open backlog item blocks it |
 | [RPi5 ROS 2 demo](09-rpi5-ros2-demo.md) | RP0 and RP1 complete; RP2–RP8 planned | Rewrite RP2 around the seL4 product boundary before implementation; its current low-level deliverables describe the retired custom kernel |

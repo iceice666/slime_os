@@ -16,9 +16,49 @@ at the bottom rather than deleting it.
 
 ## Open
 
-None. The native-capability-model cutover (B39–B50) is complete, and the two
-defects its final fixture conversion exposed (B53, B54) are resolved. All 27
-verification gates pass.
+### B55 — the full-graph boot plane refuses its own first spawn
+
+**Status:** Open, found 2026-08-15. **Class:** Regression of a claimed exit
+condition. **Depends on:** none.
+
+**Problem:** `just sel4_boot_check` stops at
+`SLIME_GRAPH spawn refused task=0 slot=2 ungranted`, before any fabric role is
+provisioned. C8.10's exit condition — one generation booting every C8 role
+simultaneously — is therefore unobserved on the current tree, and the roadmap
+records that gate as complete.
+
+**Evidence (2026-08-15).** Observed on unmodified `master` at `84c75f5`, so it
+is not caused by the C8.11 work that found it: the same failure reproduces with
+every C8.11 change stashed. The decisive marker pair is
+
+```
+SLIME_GRAPH spawn preflight count task-instance=19 child=16 requested=0 parent=1 minted=5 respawn=false
+SLIME_GRAPH spawn refused task=0 slot=2 ungranted
+```
+
+`preflight_spawn_grants` (`slime-root/src/main.rs:3406`) requires
+`count == parent_supplied + minted_count` unless this is a respawn requesting
+nothing. Init asks for zero grants while `sel4-boot.zti` declares six for
+`fabric-service` — one crossing grant and five minted bindings — so the root
+refuses the graph's very first spawn. Every later marker the gate asserts is
+unreachable, which is why the failure presents as a missing composition rather
+than a bad grant.
+
+**Ruled out.** Not a marker-table staleness problem: the gate stops on a
+*failure* marker the root emitted, not on an absent one. Not the C8.11 sink
+either — `sel4_call_check`, `sel4_operation_check`, `sel4_stream_check`, and
+`sel4_qos_check` all pass with the trace emission live, and those exercise the
+same three brokers.
+
+**Proposed fix:** reconcile init's `fabric_boot` spawn-request construction with
+`FABRIC_MINTED_GRANTS` for the `boot` action, so the count it sends is the count
+the generation declares. The two numbers are already generated from one profile,
+so the disagreement is in which of them init reads, not in the declaration.
+
+**Exit condition:** `just sel4_boot_check` passes: every declared C8 role is
+spawned, all twenty instances reach healthy blocked idle, and the supervisor
+emits its `live == idle` terminal.
+
 
 ## Resolved
 ### B53 — dango echoed a line one byte past the message bound
