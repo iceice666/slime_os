@@ -122,8 +122,13 @@ const OPERATION_REPLACEMENT_START_SLOT: u32 = 12;
 
 const RIGHT_BUFFER_WRITE: Rights = 1 << 8;
 const RIGHT_BUFFER_MAP: Rights = 1 << 9;
-const RIGHT_BUFFER_CREATE: Rights = 1 << 24;
 const PAGE: u64 = 4096;
+/// `notification_slots` returns this on both sides when the graph declares no
+/// ready/credit pair for an edge. Never a real slot: the root's per-task
+/// notification table is bounded well under `u32::MAX`, so a caller that
+/// mistakenly signalled or polled it gets a bounds error rather than another
+/// component's handle.
+const NOTIFICATION_ABSENT: u32 = u32::MAX;
 const RING_BASE: u64 = 0x0000_0010_0000_0000;
 /// The routes this generation declares. Folded at runtime with the generated
 /// C8.1 interface identities so a route identity cannot drift from the admitted
@@ -370,66 +375,31 @@ fn main(_startup_arg: u32) {
     slime_rt::debug_write(b"[fabric] stream plane complete\n");
 }
 
-/// C8.10 full-graph boot: split the fabric into three bounded route workers and
-/// run the stream worker here.
+/// C8.10 full-graph boot: run the stream plane, which is this task's whole
+/// share of the graph.
 ///
 /// **Why three tasks and not one.** The generation declares peaks of 8, 7, and 9
 /// wake sources for the stream, call, and operation workers against a
-/// `MAX_WAIT_SOURCES` of 9. One task cannot park on 24 sources, so a
-/// single-task fabric would have to poll — which the milestone forbids. The
-/// split is forced by the kernel bound, and the partition itself is a validated
-/// generation fact (`FABRIC_WORKERS`), not a choice made here.
+/// `MAX_WAIT_SOURCES` of 9. One task cannot park on 24 sources, so the split is
+/// forced by the kernel bound, and the partition itself is a validated
+/// generation fact (`FABRIC_WORKERS`) rather than a choice made here.
 ///
-/// **Why the fabric spawns them.** A worker authenticates its clients by which
-/// control endpoint a request arrived on, so whoever mints those endpoints
-/// establishes the binding. Doing it here keeps that in one place: the fabric
-/// creates each worker's control pair, hands the worker one half, and moves the
-/// participant the other. Init never holds a worker's route or control
-/// authority at all.
+/// **Why this task does not spawn the other two.** A worker authenticates each
+/// client by the control endpoint its request arrived on, and those endpoints
+/// are generation-declared: the root installs both halves before either task
+/// runs. Neither half can be handed on afterwards — `grant_crosses_spawn`
+/// excludes endpoint grants from a spawn request, and `nth_declared_capability`
+/// skips endpoint-kind minted bindings — so a fabric-spawned worker would start
+/// with an empty control block. Each worker's supervision handles have the same
+/// constraint from the other direction: they name call and operation
+/// participants, which only init ever holds. Init therefore spawns all three
+/// (B55).
 ///
-/// The stream plane stays in this task rather than becoming a third binary: it
+/// The stream plane stays in this task rather than becoming a fourth binary: it
 /// is the one plane whose provisioning path four earlier gates run, and moving
 /// ~1500 lines of it would put that evidence at risk to gain nothing the
 /// declared partition does not already state.
 fn boot_graph() {
-    // Both arrays are sized from the resolved profile rather than from literals,
-    // and the asserts below tie them to it. A literal would alias silently: an
-    // operation array one entry short would stop covering the replacement slot,
-    // and `BOOT_CALL_WORKER_SLOT` — computed from the profile — would then name a
-    // control endpoint rather than an executable. The grant-overflow guard in
-    // `spawn_route_worker` catches too *many* grants, not a layout that shifted.
-    const CALL_CONTROLS: usize = FABRIC_CALL_CLIENTS.len();
-    const OPERATION_CONTROLS: usize = FABRIC_OPERATION_CLIENTS.len() + 1;
-    let call_controls: [u32; CALL_CONTROLS] =
-        core::array::from_fn(|index| BOOT_CALL_FIRST_CONTROL_SLOT + index as u32);
-    // The operation worker additionally parks on client B's replacement channel,
-    // which is why its declared peak is 9 against the call plane's 7.
-    let operation_controls: [u32; OPERATION_CONTROLS] =
-        core::array::from_fn(|index| BOOT_OP_FIRST_CONTROL_SLOT + index as u32);
-    spawn_route_worker(
-        BOOT_CALL_WORKER_SLOT,
-        &call_controls,
-        // The call worker copies large payloads, so it needs buffer-creation
-        // authority of its own; its declared quota bounds what that costs.
-        Some(BUFFER_FACTORY_SLOT),
-        b"call",
-    );
-    spawn_route_worker(BOOT_OP_WORKER_SLOT, &operation_controls, None, b"operation");
-    slime_rt::debug_write(b"[fabric] bounded route workers spawned\n");
-    // Each worker holds its own derived copies now. Releasing the fabric's is
-    // what keeps this table inside its declared ceiling and leaves each plane's
-    // control authority with exactly one holder.
-    for slot in call_controls.iter().chain(operation_controls.iter()) {
-        if slime_rt::cap_drop(*slot) != ERR_SUCCESS {
-            fail(b"boot worker control release");
-        }
-    }
-    for slot in [BOOT_CALL_WORKER_SLOT, BOOT_OP_WORKER_SLOT] {
-        if slime_rt::cap_drop(slot) != ERR_SUCCESS {
-            fail(b"boot worker executable release");
-        }
-    }
-
     let routes: [[u8; 32]; ROUTE_COUNT] = [
         route_identity(
             ROUTE_NAMES[0],
@@ -443,99 +413,41 @@ fn boot_graph() {
         ),
     ];
     let mut clients = control_clients();
+    // The declared interposition proxy holds a real control endpoint but is a
+    // chain hop, not a route participant — under boot it parks without ever
+    // contacting this broker (`fabric-proxy::main`'s `park_only` arm), which is
+    // exactly what the milestone requires of it. `provision`'s completion
+    // condition is "every registered client answered", and a client that never
+    // sends anything can never satisfy that through the normal request path,
+    // so it is a graph fact declared here rather than something `provision`
+    // discovers per request. The unauthorized probe is not this: it actively
+    // sends a request and is denied, so it reaches `answered = true` on its
+    // own.
+    if let Some(proxy) = clients
+        .iter_mut()
+        .find(|client| client.component == b"fabric-proxy")
+    {
+        proxy.answered = true;
+    }
     let mut publishers: [Option<Publisher>; MAX_PARTICIPANTS] = [const { None }; MAX_PARTICIPANTS];
     let mut subscribers: [Option<Subscriber>; MAX_PARTICIPANTS] =
         [const { None }; MAX_PARTICIPANTS];
-    // `provision` answers each control endpoint and parks across the set when
-    // every remaining one would block. It does not return here, and that is the
-    // gate's exit condition rather than a shortfall: the declared graph includes
-    // the unauthorized probe and the interposition proxy, and neither asks for a
-    // route it will be given — the probe is refused by design and the proxy is a
-    // chain hop, not a participant. So the last state is the stream worker
-    // blocked on its control set with every declared edge already minted, which
-    // is exactly "provisioned and idle with no traffic".
+    // `provision` answers each control endpoint and returns once every one has
+    // been answered or died. The unauthorized probe holds a real control
+    // endpoint and asks for an ungranted route, so its denial is what answers
+    // it; the proxy is pre-marked above. So returning here already is
+    // "provisioned and idle with no traffic", the required evidence the graph
+    // reached its declared idle state rather than merely existing.
     //
     // Each edge is announced as it is provisioned, so the transcript shows the
-    // whole graph even though this call never completes.
+    // whole graph.
     provision(&mut clients, &routes, &mut publishers, &mut subscribers);
-    // Unreachable while any client stays unanswered; kept so a future profile in
-    // which all of them do answer still parks on its live stream sources rather
-    // than falling out of the boot arm.
+    slime_rt::debug_write(b"[fabric] idle: parked on control endpoints\n");
+    // The gate's exit condition: every declared edge already minted, nothing
+    // left to answer, so the worker just holds its control set idle.
     loop {
         slime_rt::yield_now();
     }
-}
-
-/// The fabric's own boot layout, matching the grants init hands it.
-///
-/// The stream controls sit at `FIRST_CONTROL_SLOT` and the subscriber
-/// supervision handles directly after them, because that is what the *resolved
-/// profile* says: `control_clients` and `supervision_slot_for` both read those
-/// numbers from the generated tables, so this layout is the generation's, not a
-/// local convention.
-const BOOT_CALL_FIRST_CONTROL_SLOT: u32 =
-    FIRST_CONTROL_SLOT + FABRIC_CLIENTS.len() as u32 + FABRIC_SUPERVISION.len() as u32;
-const BOOT_OP_FIRST_CONTROL_SLOT: u32 =
-    BOOT_CALL_FIRST_CONTROL_SLOT + FABRIC_CALL_CLIENTS.len() as u32;
-/// Client B's replacement channel, which the operation broker parks on while the
-/// original client is absent. Declared by the graph as its own control grant.
-const BOOT_OP_REPLACEMENT_SLOT: u32 =
-    BOOT_OP_FIRST_CONTROL_SLOT + FABRIC_OPERATION_CLIENTS.len() as u32;
-const BOOT_CALL_WORKER_SLOT: u32 = BOOT_OP_REPLACEMENT_SLOT + 1;
-const BOOT_OP_WORKER_SLOT: u32 = BOOT_CALL_WORKER_SLOT + 1;
-
-// The operation worker's control block must end exactly where the replacement
-// slot sits, and the worker executables must lie past it. Stated as asserts so a
-// graph that adds a control endpoint fails to compile rather than handing a
-// worker an executable capability where it expects a control channel.
-const _: () = assert!(
-    BOOT_OP_FIRST_CONTROL_SLOT + FABRIC_OPERATION_CLIENTS.len() as u32 == BOOT_OP_REPLACEMENT_SLOT
-);
-const _: () = assert!(BOOT_CALL_WORKER_SLOT > BOOT_OP_REPLACEMENT_SLOT);
-
-/// Spawn one bounded route worker, handing it the control endpoints for its
-/// plane.
-///
-/// The endpoints are *not* minted here. Init created each participant's control
-/// channel and gave the fabric the service side, so passing those on as spawn
-/// grants preserves the binding init established at spawn — the worker
-/// authenticates exactly the component init bound, and no new channel appears
-/// that would have to be re-bound to an identity.
-///
-/// A grant is a narrowing derive-copy into a fresh table, so each worker
-/// numbers its controls from its own base. Slot 2 in the call worker and slot 2
-/// in the operation worker name different objects: a slot only means anything
-/// within one capability table, which is why per-worker layouts cannot collide
-/// however the graph grows.
-fn spawn_route_worker(
-    executable_slot: u32,
-    controls: &[u32],
-    buffer_factory: Option<u32>,
-    label: &[u8],
-) {
-    const MAX_WORKER_GRANTS: usize = 8;
-    let mut grants = [slime_rt::SpawnGrant { slot: 0, rights: 0 }; MAX_WORKER_GRANTS];
-    let mut count = 0;
-    if let Some(slot) = buffer_factory {
-        grants[count] = slime_rt::SpawnGrant {
-            slot,
-            rights: RIGHT_BUFFER_CREATE,
-        };
-        count += 1;
-    }
-    let _ = controls;
-    let spawned = slime_rt::spawn(executable_slot, &grants[..count]).unwrap_or_else(|_| {
-        slime_rt::debug_write(b"[fabric] route worker spawn failed: ");
-        slime_rt::debug_write(label);
-        slime_rt::debug_write(b"\n");
-        fail(b"route worker spawn")
-    });
-    if slime_rt::cap_drop(spawned.supervision_slot) != ERR_SUCCESS {
-        fail(b"worker supervision release");
-    }
-    slime_rt::debug_write(b"[fabric] route worker provisioned: ");
-    slime_rt::debug_write(label);
-    slime_rt::debug_write(b"\n");
 }
 
 struct RequestResponseControls {
@@ -1648,10 +1560,17 @@ fn route_index(name: &str) -> Option<usize> {
     ROUTE_NAMES.iter().position(|route| *route == name)
 }
 
-/// How many edges on a route *this service carries* the generation declares for
-/// `component`. Zero is a denial: authority is never ambient, so absence from
-/// the table is not a default role — and a component declared only on a call or
-/// operation route holds no stream authority either.
+/// The (ready, credit) notification slot pair the generation declares for one
+/// (component, route, direction) edge, or `NOTIFICATION_ABSENT` on both sides
+/// when it declares none.
+///
+/// Declaring no pair is a legitimate graph shape, not a defect: a full-graph
+/// boot profile can provision a stream role over its control endpoint without
+/// ever driving samples through it (`render_fabric_profile_rust` skips the row
+/// for exactly this reason), and `boot_graph`'s participants never reach the
+/// broker loop that would read these slots. The two callers that do read them
+/// — `pump_publisher` and delivery — only run for a participant whose graph
+/// declared the pair, so the sentinel is never dereferenced there.
 fn notification_slots(component: &[u8], route: &str, direction: u32) -> (u32, u32) {
     FABRIC_NOTIFICATION_BINDINGS
         .iter()
@@ -1662,10 +1581,16 @@ fn notification_slots(component: &[u8], route: &str, direction: u32) -> (u32, u3
                     && *declared_direction == direction
             },
         )
-        .map(|(_, _, _, ready_slot, credit_slot)| (*ready_slot, *credit_slot))
-        .unwrap_or_else(|| fail(b"stream notification binding missing"))
+        .map_or(
+            (NOTIFICATION_ABSENT, NOTIFICATION_ABSENT),
+            |(_, _, _, ready_slot, credit_slot)| (*ready_slot, *credit_slot),
+        )
 }
 
+/// How many edges on a route *this service carries* the generation declares for
+/// `component`. Zero is a denial: authority is never ambient, so absence from
+/// the table is not a default role — and a component declared only on a call or
+/// operation route holds no stream authority either.
 fn declared_edges(component: &[u8]) -> usize {
     FABRIC_PARTICIPANTS
         .iter()

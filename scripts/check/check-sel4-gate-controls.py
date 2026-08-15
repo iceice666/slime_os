@@ -96,7 +96,15 @@ GATES: tuple[tuple[str, str, int], ...] = (
     ("sel4_call_plane", "check/check-sel4-call-plane.py", 47),
     ("sel4_operation_plane", "check/check-sel4-operation-plane.py", 53),
     ("sel4_visibility_plane", "check/check-sel4-visibility-plane.py", 25),
-    ("sel4_boot_plane", "check/check-sel4-boot-plane.py", 46),
+    # B55: the full-graph boot restoration moved the seven racy cross-task
+    # stream markers (a broker per-edge print racing a participant's own
+    # summary print differently for one-route vs two-route participants) out
+    # of CHAINS and into `EXPECTED_ROLE_HOLDERS`/`EXPECTED_PROVISIONED_EDGES`,
+    # order-independent membership checks exactly like the pre-existing
+    # `EXPECTED_IDLE_WITHOUT_ROLE`. Real coverage did not shrink: every one of
+    # those markers is still required by `check_composition`, just no longer
+    # asserted as a fixed scheduling interleaving that was never true.
+    ("sel4_boot_plane", "check/check-sel4-boot-plane.py", 30),
     ("sel4_storage_plane", "check/check-sel4-storage-plane.py", 9),
     ("sel4_store_plane", "check/check-sel4-store-plane.py", 14),
     ("sel4_rollback_plane", "check/check-sel4-rollback-plane.py", 16),
@@ -207,43 +215,66 @@ def transcript_for(gate) -> str:
 
 
 def boot_plane_transcript(gate, marker_transcript: str) -> str:
-    """Add the structural composition evidence required by the boot-plane gate."""
+    """Add the structural composition evidence required by the boot-plane gate.
+
+    Init is the sole spawning parent (B55): the stream broker and both bounded
+    route workers are among its nineteen children, not spawned by a second
+    parent. The chain still names three positions in that one sequence —
+    `fabric-service`, `fabric-call-worker`, `fabric-op-worker` — each preceded
+    by every sibling init spawns before it, so the synthesis slices
+    `EXPECTED_INIT_CHILDREN` at those same two names and drops each slice in
+    at its own chain-required line rather than bundling all nineteen at the
+    first one.
+    """
     lines = marker_transcript.splitlines()
-    service_line = next(
-        (line for line in lines if "component=fabric-service " in line), None
-    )
-    call_line = next(
-        (line for line in lines if "component=fabric-call-worker " in line), None
-    )
-    op_line = next(
-        (line for line in lines if "component=fabric-op-worker " in line), None
-    )
-    init_spawns = [
-        f"SLIME_GRAPH spawned task=100 child={201 + index} component={component} "
-        "grants=1 endpoints=1 notifications=0 handle=1"
-        for index, component in enumerate(gate.EXPECTED_INIT_CHILDREN)
-    ]
+    children = list(gate.EXPECTED_INIT_CHILDREN)
+    service_at = children.index("fabric-service")
+    call_worker_at = children.index("fabric-call-worker")
+    slices = {
+        "component=fabric-service ": children[: service_at + 1],
+        "component=fabric-call-worker ": children[service_at + 1 : call_worker_at + 1],
+        "component=fabric-op-worker ": children[call_worker_at + 1 :],
+    }
+
+    def spawn_line(index: int, component: str) -> str:
+        return (
+            f"SLIME_GRAPH spawned task=0 child={201 + index} component={component} "
+            "grants=1 endpoints=1 notifications=0 handle=1"
+        )
+
     expanded: list[str] = []
+    cursor = 0
     for line in lines:
-        if service_line is not None and line == service_line:
-            expanded.extend(init_spawns)
-        elif line == call_line:
-            expanded.append(
-                "SLIME_GRAPH spawned task=204 child=301 component=fabric-call-worker "
-                "grants=1 endpoints=1 notifications=0 handle=1"
-            )
-        elif line == op_line:
-            expanded.append(
-                "SLIME_GRAPH spawned task=204 child=302 component=fabric-op-worker "
-                "grants=1 endpoints=1 notifications=0 handle=1"
-            )
-        else:
+        needle = next((key for key in slices if key in line), None)
+        if needle is None:
             expanded.append(line)
+            continue
+        for component in slices[needle]:
+            expanded.append(spawn_line(cursor, component))
+            cursor += 1
+    # Only components the gate's *own, unmutated* CHAINS declaration does not
+    # already require an idle-without-role line for: chain 4/5 name nine of
+    # the ten in causal order (readiness before each participant's own
+    # marker). Derived from `gate.CHAINS` rather than from `lines` — `lines`
+    # is this call's possibly-*mutated* transcript, and computing the filter
+    # from it would silently re-add whichever marker the deletion mutation
+    # below just removed, defeating the very test that removal drives. Only
+    # `fabric-proxy` is absent from every chain.
+    chain_literals = {
+        literal_for(pattern) for _, chain in chains_from_gate(gate) for pattern in chain
+    }
+    extra_idle = [
+        component
+        for component in gate.EXPECTED_IDLE_WITHOUT_ROLE
+        if f"[{component}] boot idle without a role" not in chain_literals
+    ]
     expanded.extend(
         [
             "[layout] path=init slots=1 max=64",
             "[layout] 1 endpoint control",
-            *(f"[{component}] boot idle without a role" for component in gate.EXPECTED_IDLE_WITHOUT_ROLE),
+            *(f"[{component}] boot role provisioned" for component in gate.EXPECTED_ROLE_HOLDERS),
+            *gate.EXPECTED_PROVISIONED_EDGES,
+            *(f"[{component}] boot idle without a role" for component in extra_idle),
             # `check_transcript` requires exactly one healthy-supervisor
             # terminal, but `TERMINAL_MARKER` is not in `REQUIRED_MARKERS`, so
             # the marker synthesis never produces one. Instantiated from the

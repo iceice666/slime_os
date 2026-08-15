@@ -41,7 +41,7 @@ fn fail(reason: &[u8]) -> ! {
     slime_rt::exit(1)
 }
 
-fn main(startup_arg: u32) {
+fn main(_startup_arg: u32) {
     let mut route_name = [0u8; 32];
     route_name[..ROUTE_NAME.len()].copy_from_slice(ROUTE_NAME.as_bytes());
     let request = WireFabricRequest {
@@ -84,7 +84,7 @@ fn main(startup_arg: u32) {
     }
     slime_rt::debug_write(b"[fabric-probe] undeclared edge denied\n");
     slime_rt::debug_write(b"[fabric-probe] done\n");
-    if startup_arg != 0 {
+    if slime_components::fabric_boot::active() {
         // The denial above is this component's whole assertion, and it holds in
         // the full-graph boot exactly as it does alone: a real control endpoint
         // and the exact route strings still buy nothing. Park rather than exit,

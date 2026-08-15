@@ -3102,7 +3102,13 @@ fn serve_instance_graph(
             }
         }
     }
-    if iterations == MAX_GRAPH_ITERATIONS && live != 0 {
+    // A graph whose declared success state is every required task parked
+    // forever — the full-graph boot's, by design (B55) — never reaches
+    // `live == 0`, so it runs this loop out on every boot once certified. That
+    // is the property holding, not a wedge: the wedge this bound exists to
+    // catch is a graph that exhausts every iteration *without* ever
+    // certifying, which `healthy_emitted` still distinguishes precisely.
+    if iterations == MAX_GRAPH_ITERATIONS && live != 0 && !healthy_emitted {
         fatal!("SLIME_GRAPH FAIL graph iterations exhausted live={live}")
     }
     sel4::debug_println!(

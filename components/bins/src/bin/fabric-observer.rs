@@ -36,12 +36,16 @@ fn fail(reason: &[u8]) -> ! {
     slime_rt::exit(1)
 }
 
-fn main(startup_arg: u32) {
-    if startup_arg != 0 {
+fn main(_startup_arg: u32) {
+    if slime_components::fabric_boot::active() {
         // In the full-graph boot the observer is a declared telemetry
-        // subscriber, so it takes its narrowed data and ack capabilities and
-        // parks. Its filtered *view* is C8.8's property to prove; what this gate
-        // needs from it is that it exists as its own task with its own grants.
+        // subscriber, so it takes its narrowed ring capability and parks. One
+        // role: a v2 ring loan carries data and credit in one shared region, so
+        // provisioning an edge is one `capability_delegate`, matching every
+        // other single-route stream participant (`fabric-publisher`,
+        // `fabric-subscriber`). Its filtered *view* is C8.8's property to
+        // prove; what this gate needs from it is that it exists as its own
+        // task with its own grants.
         slime_components::fabric_boot::provision_and_park(
             b"fabric-observer",
             "telemetry",
@@ -52,7 +56,7 @@ fn main(startup_arg: u32) {
             ),
             telemetry_stream::TYPE_TAG,
             boot_contracts::fabric_graph::DIRECTION_SUBSCRIBE,
-            2,
+            1,
         );
     }
     // Page the whole cursor. The view is bounded by the generation's declared

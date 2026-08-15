@@ -54,8 +54,8 @@ fn fail(reason: &[u8]) -> ! {
     slime_rt::exit(1)
 }
 
-fn main(startup_arg: u32) {
-    if startup_arg != 0 {
+fn main(_startup_arg: u32) {
+    if slime_components::fabric_boot::active() {
         // The full-graph boot runs the ordinary stream broker, which provisions
         // *route participants*. This component is declared as an interposition
         // hop on the telemetry chain rather than a participant on it, so the
@@ -136,7 +136,7 @@ fn main(startup_arg: u32) {
     }
     slime_rt::debug_write(b"[fabric-proxy] proxy authority narrowed to chain\n");
     slime_rt::debug_write(b"[fabric-proxy] re-delegation denied by binding\n");
-    if startup_arg != 0 {
+    if slime_components::fabric_boot::active() {
         // Every property this component exists to prove has now been checked:
         // the empty view above and the four authenticated, narrowed bindings.
         // The relaying itself is C8.8's gate; here the graph must reach idle

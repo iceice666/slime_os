@@ -12,9 +12,9 @@ A milestone is complete only when its exit condition is observed. Compiled code,
 
 | Track | Status | Next open gate |
 | --- | --- | --- |
-| [Backlog](00-backlog.md) | B39–B54 resolved; **B55 open** | B55: the full-graph boot plane refuses its own first spawn, so C8.10's exit condition is unobserved on the current tree |
+| [Backlog](00-backlog.md) | B1–B55 resolved; backlog clear | none open |
 | [Foundations](01-foundations.md) | M1–M4 and M6 complete; M5 mechanisms complete except M5.7 physical Framework evidence | M5.7 requires observed removable-media Framework boot without internal-NVMe writes |
-| [Core runtime](02-core-runtime.md) | C7 and C8.1–C8.11 complete; C8.11 adds the bounded deterministic semantic trace over the three timed workers | C8.12, blocked on backlog B55: C8.10's full-graph gate fails on the current tree |
+| [Core runtime](02-core-runtime.md) | C7 and C8.1–C8.11 complete; C8.10's full-graph gate now passes on the seL4 product path (B55, 2026-08-15) | C8.12: the complete matching, visibility, and denial matrix |
 | [RPi5 ROS 2 demo](09-rpi5-ros2-demo.md) | RP0 and RP1 complete; RP2–RP8 planned | Rewrite RP2 around the seL4 product boundary before implementation; its current low-level deliverables describe the retired custom kernel |
 | [Architecture portability](07-architecture-portability.md) | P0, P1, P2.1, P2.2, and P5 complete; P2.3–P2.6 superseded by P5 | P4 physical Raspberry Pi 5 qualification is the next architecture evidence gate |
 | [ROS 2 compatibility](03-ros2-compatibility.md) | Not started | R0 minimal DDS/RTPS topic profile is first; broader external/multi-vendor compatibility follows after the RPi5 demo path |

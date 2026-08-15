@@ -1,6 +1,6 @@
 # Core runtime track
 
-**Status:** C7 and C8.1–C8.11 are complete under their named QEMU gates. C8.11 adds the bounded, deterministic semantic-trace stream, gated by `just data_fabric_trace_check`. The backlog is not clear: **B55** is open — `just sel4_boot_check` fails on the current tree, so C8.10's exit condition is unobserved and C8.12, which depends on it, should not open until that is resolved. B46 replaced the logical channel mechanism these planes were gated on with native seL4 Endpoints, and all seven of its named plane gates — channel, crossing, stream, QoS, call, operation, visibility — pass on that path; B50 then deleted the logical capability and universal-syscall residue behind it. C8.10 is in progress: its declared route-worker partition and wait-source bounds are gated, while the collision-free fabric-only bootstrap remains open on the root capability-table ceiling. The original C8.9 full-graph close was too broad for one reviewable slice and is now decomposed into C8.9–C8.15: typed profile closure, collision-free topology, deterministic time/traces, the authority matrix, concurrent resource ceilings, and the graph-shape corpus.
+**Status:** C7 and C8.1–C8.11 are complete under their named QEMU gates. C8.11 adds the bounded, deterministic semantic-trace stream, gated by `just data_fabric_trace_check`. The backlog is clear: B55, the full-graph boot plane's spawn-grant, worker-topology, and marker-ordering defects, is resolved and `just sel4_boot_check` passes, so C8.10's exit condition is now observed on the seL4 product path. B46 replaced the logical channel mechanism these planes were gated on with native seL4 Endpoints, and all seven of its named plane gates — channel, crossing, stream, QoS, call, operation, visibility — pass on that path; B50 then deleted the logical capability and universal-syscall residue behind it. C8.12 is the next open milestone: the complete matching, visibility, and denial matrix across the full graph.
 
 This track turns the existing bounded channels, capabilities, components, and generations into a native typed communication runtime. It is local-first: C7 and C8 require no network or physical driver, and they do not wait for unrelated display, audio, wireless, or GPU work.
 
@@ -804,15 +804,25 @@ data_fabric_profile_check`: plane control slots are summed into one disjoint
 layout rather than overlaid, the bounded route-worker partition is a declared
 generation fact validated for coverage and overlap, and each worker's peak
 `SYS_WAIT` set is checked against the kernel bound. The bootstrap replacement is
-gated by `just data_fabric_boot_check`: one generation launches every C8 role at
-once through a fabric-only layout measuring an observed 53 of `MAX_CAPS = 64`,
-reached by an early return in `launch_init` mirroring `launch_recovery_init`, and
-all 20 roles reach healthy blocked idle. The three declared workers are live —
-`fabric-service` carries the stream routes and spawns `fabric-call-worker` and
-`fabric-op-worker` — and the probe, proxy, and introspection roles are three
-distinct component identities. The superseded `fabric-intruder` is retired from
-this boot profile but still serves `just fabric_visibility_check`; deleting it is
-deferred to that gate rather than taken here.
+gated by `just data_fabric_boot_check` (`just sel4_boot_check`): one generation
+launches every C8 role at once on the seL4 product path, through a 21-slot
+collision-free init layout, and all 20 declared instances reach healthy
+blocked idle. Init spawns all nineteen children itself, including both bounded
+route workers — `fabric-service` carries the stream routes, and
+`fabric-call-worker`/`fabric-op-worker` are init's own children rather than the
+broker's, because a worker's control endpoints are generation-declared native
+Endpoints the root installs before any task runs, and its participants'
+supervision handles name tasks only `init` holds (B55). The probe, proxy, and
+introspection roles are three distinct component identities. The superseded
+`fabric-intruder` is retired from this boot profile but still serves `just
+fabric_visibility_check`; deleting it is deferred to that gate rather than
+taken here.
+
+The x86 oracle's own version of this milestone — a fabric-only layout
+measuring 53 of `MAX_CAPS = 64`, reached by an early return in `launch_init`
+mirroring `launch_recovery_init` — described the retired custom kernel and does
+not apply to the seL4 product path; that evidence is historical, following the
+precedent P2.2 set.
 
 **Depends on:** C8.9.
 

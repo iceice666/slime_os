@@ -485,51 +485,142 @@ fn main(startup_arg: u32) {
     slime_rt::exit(0);
 }
 
-/// Participants in the exact order the kernel laid them out. Index into this
-/// table drives every slot below, so a participant added or removed moves one
-/// entry rather than a scattering of constants.
-const BOOT_PARTICIPANTS: usize = 16;
-const BOOT_FIRST_EXECUTABLE_SLOT: u32 = 5;
-
-const fn boot_executable_slot(participant: usize) -> u32 {
-    BOOT_FIRST_EXECUTABLE_SLOT + participant as u32
-}
-
 /// Drive the P5.4.9 full-graph boot: every C8 role in one generation.
 ///
 /// Only reachable for the authenticated `boot` action declared by
 /// `contracts/generation/v1/fixtures/sel4-boot.zti`. Every participant reads
 /// the same generation-derived action from its generated profile.
 ///
-/// **What differs from `launch_fabric_boot`, and why.** The oracle's boot layout
-/// numbers both halves of all sixteen control channels, because its kernel
-/// materializes a declared channel into the bootstrap component's layout slots.
-/// Here every control is a generation-declared native seL4 Endpoint the root
-/// installs into both declaring instances before anything runs, so init holds no
-/// route capability and places nothing: `SEL4_BOOT_LAYOUT` numbers only the
-/// twenty-one things the *generation* places.
+/// **Every control endpoint is placed by the generation, not by init.** Each is
+/// a declared native seL4 Endpoint whose two halves the root installs into the
+/// instances that declared them, before either runs. Init holds no route
+/// capability and mints nothing, so `SEL4_BOOT_LAYOUT` numbers only the
+/// twenty-one things the generation places. That is also what binds a control
+/// endpoint to one component identity: a worker answers "which component is
+/// asking" from the endpoint a request arrived on, and no party can forge,
+/// share, or re-derive one.
 ///
-/// Everything else is the oracle's composition, in its order: subscribers first
-/// so the fabric can be granted their supervision handles, the fabric next with
-/// the two worker executables it spawns itself, then the remaining participants,
-/// then one yield so every role request is enqueued before any supervision
-/// descriptor follows it on the same channel.
+/// **Init spawns all nineteen, including both route workers.** A supervision
+/// handle cannot exist before its subject task, and a minted binding is only
+/// satisfiable by the instance that owns it — `preflight_spawn_grants` refuses
+/// `declared.owner != caller_instance`. The workers need handles naming call and
+/// operation participants, and only init ever holds those, so only init can
+/// spawn the workers. Having `fabric-service` spawn them (as the retired
+/// custom-kernel graph did) left both workers with no control endpoints and no
+/// handles, because neither an endpoint grant nor an endpoint-kind minted
+/// binding can cross a spawn boundary (B55).
+///
+/// **Spawn order is load-bearing.** Every task whose supervision handle appears
+/// in a later grant vector must already exist, so the six stream-ring and proxy
+/// identities precede `fabric-service`, and the seven call and operation
+/// identities precede their workers.
 ///
 /// Init does not exit. The gate's exit condition is the whole graph at healthy
 /// blocked idle, so init parks on the fabric's handle — a component terminating
 /// here is a failure, not something to wait for.
 fn drive_boot_plane() -> ! {
-    let fabric =
-        slime_rt::spawn(FABRIC_SERVICE_SLOT, &[]).unwrap_or_else(|_| fail_boot(b"spawn fabric"));
-    for participant in 0..BOOT_PARTICIPANTS {
-        slime_rt::spawn(boot_executable_slot(participant), &[])
-            .unwrap_or_else(|_| fail_boot(b"spawn participant"));
-    }
+    // Every control endpoint below is a generation-declared native seL4
+    // Endpoint the root installed into both declaring instances before this
+    // task, or any child it spawns, ran at all. Init places nothing.
+    slime_rt::debug_write(b"[init] fabric boot control channels minted\n");
+    // The stream broker's loan receivers, in the order the resolved profile
+    // numbers them at slots 9..14. `FABRIC_SUPERVISION` derives that order, and
+    // the fixture's minted bindings must agree row for row.
+    let publisher = spawn_boot(FABRIC_PUBLISHER_SLOT);
+    let subscriber = spawn_boot(FABRIC_SUBSCRIBER_SLOT);
+    let publisher_b = spawn_boot(FABRIC_PUBLISHER_B_SLOT);
+    let subscriber_b = spawn_boot(FABRIC_SUBSCRIBER_B_SLOT);
+    let observer = spawn_boot(FABRIC_OBSERVER_SLOT);
+    let proxy = spawn_boot(FABRIC_PROXY_SLOT);
+    // Holds a real control endpoint and is granted no edge; its denial is the
+    // plane's authority evidence, so it needs no handle from anyone.
+    spawn_boot(FABRIC_PROBE_SLOT);
+    slime_rt::debug_write(b"[init] fabric boot stream participants spawned\n");
+
+    // Matched positionally against the child's declarations in ascending
+    // destination-slot order: the factory at 1, then the six handles at 9..14.
+    let fabric = spawn_boot_with(
+        FABRIC_SERVICE_SLOT,
+        &[
+            grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
+            grant(publisher, RIGHT_SUPERVISE),
+            grant(subscriber, RIGHT_SUPERVISE),
+            grant(publisher_b, RIGHT_SUPERVISE),
+            grant(subscriber_b, RIGHT_SUPERVISE),
+            grant(observer, RIGHT_SUPERVISE),
+            grant(proxy, RIGHT_SUPERVISE),
+        ],
+    );
+    slime_rt::debug_write(b"[init] fabric boot stream broker spawned\n");
+
+    let call_client = spawn_boot(FABRIC_CALL_CLIENT_SLOT);
+    let call_client_b = spawn_boot(FABRIC_CALL_CLIENT_B_SLOT);
+    let call_server = spawn_boot(FABRIC_CALL_SERVER_SLOT);
+    // The clock asks for nothing and is named by no handle: the worker observes
+    // its exit through the control endpoint's own peer state.
+    spawn_boot(FABRIC_CALL_TIME_SLOT);
+    // The call worker copies large payloads, so it holds buffer-creation
+    // authority of its own, bounded by its declared quota.
+    spawn_boot_with(
+        FABRIC_CALL_WORKER_SLOT,
+        &[
+            grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
+            grant(call_client, RIGHT_SUPERVISE),
+            grant(call_client_b, RIGHT_SUPERVISE),
+            grant(call_server, RIGHT_SUPERVISE),
+        ],
+    );
+    slime_rt::debug_write(b"[init] fabric boot call plane spawned\n");
+
+    let op_client = spawn_boot(FABRIC_OP_CLIENT_SLOT);
+    let op_client_b = spawn_boot(FABRIC_OP_CLIENT_B_SLOT);
+    let op_server = spawn_boot(FABRIC_OP_SERVER_SLOT);
+    spawn_boot(FABRIC_OP_TIME_SLOT);
+    let op_restart = spawn_boot(FABRIC_OP_CLIENT_B_RESTART_SLOT);
+    spawn_boot_with(
+        FABRIC_OP_WORKER_SLOT,
+        &[
+            grant(op_client, RIGHT_SUPERVISE),
+            grant(op_client_b, RIGHT_SUPERVISE),
+            grant(op_server, RIGHT_SUPERVISE),
+            grant(op_restart, RIGHT_SUPERVISE),
+        ],
+    );
+    slime_rt::debug_write(b"[init] fabric boot operation plane spawned\n");
     slime_rt::debug_write(b"[init] fabric boot graph spawned with static endpoints\n");
     loop {
-        match slime_rt::supervision_status(fabric.supervision_slot) {
+        match slime_rt::supervision_status(fabric) {
             Ok(None) => slime_rt::yield_now(),
             _ => fail_boot(b"fabric left healthy idle"),
+        }
+    }
+}
+
+/// Spawn one boot participant that its manifest grants nothing, returning the
+/// supervision handle init keeps.
+fn spawn_boot(executable_slot: u32) -> u32 {
+    spawn_boot_with(executable_slot, &[])
+}
+
+/// Spawn one boot participant with the exact grant vector its manifest declares.
+///
+/// The count must equal what `preflight_spawn_grants` derives from the
+/// generation — the child's minted bindings plus its spawn-crossing grant
+/// bindings — or the root refuses the spawn with nothing constructed. Both
+/// numbers come from the same manifest, so a disagreement is a fixture defect
+/// rather than something to reconcile here.
+fn spawn_boot_with(executable_slot: u32, grants: &[SpawnGrant]) -> u32 {
+    match slime_rt::spawn(executable_slot, grants) {
+        Ok(spawned) => spawned.supervision_slot,
+        Err(error) => {
+            slime_rt::debug_write(b"[init] fabric boot spawn failed slot=");
+            write_u32(executable_slot);
+            slime_rt::debug_write(b" grants=");
+            write_u32(grants.len() as u32);
+            slime_rt::debug_write(b" error=");
+            write_i64(error);
+            slime_rt::debug_write(b"\n");
+            fail_boot(b"spawn participant")
         }
     }
 }

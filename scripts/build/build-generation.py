@@ -1059,7 +1059,9 @@ def declared_fabric_profiles(manifest: dict) -> list[str]:
     return [profile["name"] for profile in graph.get("profiles", [])]
 
 
-def _control_sources(manifest: dict, grant_names: tuple[str, ...]) -> list[str]:
+def _control_sources(
+    manifest: dict, grant_names: tuple[str, ...], holder: str = "fabric-service"
+) -> list[str]:
     """The components holding each named control grant, in declared order.
 
     B11: a grant whose source the selected boot profile does not declare is
@@ -1069,6 +1071,16 @@ def _control_sources(manifest: dict, grant_names: tuple[str, ...]) -> list[str]:
     as it did before — which is what keeps the C8.3-C8.8 gates reading a
     control endpoint where they expect one. A grant that *is* declared must
     still be exactly right.
+
+    `holder` is the component the plane's controls terminate at. It is
+    `fabric-service` for every single-plane profile, where one broker owns
+    every route. The full-graph boot declares a bounded route worker per plane
+    (C8.10), and a worker authenticates a client by the control endpoint the
+    request arrived on — so those controls must terminate at the worker itself.
+    A worker cannot be handed one afterwards: `grant_crosses_spawn` excludes
+    endpoint grants from a spawn request and `nth_declared_capability` skips
+    endpoint-kind minted bindings, so the generation is the only party that can
+    place it (B55).
     """
     controls_by_name = [
         grant
@@ -1083,7 +1095,7 @@ def _control_sources(manifest: dict, grant_names: tuple[str, ...]) -> list[str]:
         grant = grants.get(name)
         if grant is None:
             continue
-        if grant["target"] != "fabric-service" or grant["rights"] != ["send", "recv"]:
+        if grant["target"] != holder or grant["rights"] != ["send", "recv"]:
             fail(f"fabric graph: invalid control grant {name}")
         controls.append(grant["source"])
     if len(set(controls)) != len(controls):
@@ -1250,9 +1262,27 @@ def resolve_fabric_profile(manifest: dict, interfaces: list, profile_name: str) 
         if fabric_profile_name == UNIFIED_FABRIC_PROFILE
         else FABRIC_STREAM_CONTROL_GRANTS,
     )
-    call_controls = _control_sources(manifest, FABRIC_CALL_CONTROL_GRANTS)
-    operation_controls = _control_sources(manifest, FABRIC_OPERATION_CONTROL_GRANTS)
-    replacement_controls = _control_sources(manifest, FABRIC_OPERATION_REPLACEMENT_GRANTS)
+    # C8.10's bounded route workers own their own planes' controls, so under the
+    # full-graph profile these terminate at the worker rather than at the stream
+    # broker. Every single-plane profile has no worker instance at all and keeps
+    # `fabric-service`, which is what leaves the C8.6/C8.7 gates byte-identical.
+    call_holder = (
+        "fabric-call-worker"
+        if fabric_profile_name == UNIFIED_FABRIC_PROFILE
+        else "fabric-service"
+    )
+    operation_holder = (
+        "fabric-op-worker"
+        if fabric_profile_name == UNIFIED_FABRIC_PROFILE
+        else "fabric-service"
+    )
+    call_controls = _control_sources(manifest, FABRIC_CALL_CONTROL_GRANTS, call_holder)
+    operation_controls = _control_sources(
+        manifest, FABRIC_OPERATION_CONTROL_GRANTS, operation_holder
+    )
+    replacement_controls = _control_sources(
+        manifest, FABRIC_OPERATION_REPLACEMENT_GRANTS, operation_holder
+    )
     participants = []
     for _route_identity, route in route_rows:
         interface = by_interface[route["interface"]]

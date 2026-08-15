@@ -18,8 +18,8 @@
 #![allow(dead_code)]
 
 use slime_proto::capability_transfer::{
-    FABRIC_REQUEST_MAGIC, FORMAT_VERSION, OBJECT_KIND_SHARED_BUFFER_LOAN, WireCapabilityTransfer,
-    WireFabricRequest,
+    CAPABILITY_TRANSFER_MAGIC, FABRIC_REQUEST_MAGIC, FORMAT_VERSION,
+    OBJECT_KIND_SHARED_BUFFER_LOAN, WireCapabilityTransfer, WireFabricRequest,
 };
 use slime_proto::valid_capability_transfer;
 use slime_rt::{ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
@@ -48,11 +48,13 @@ fn fail(name: &[u8], reason: &[u8]) -> ! {
 /// Ask for this participant's declared role, verify every capability the worker
 /// moves back, and park.
 ///
-/// `roles` is how many narrowed capabilities the graph declares for this edge —
-/// two for a stream participant (data plus its opposite-facing credit or ack
-/// channel), one for a call or operation participant. Receiving a different
-/// number is a provisioning defect, so the count is asserted rather than
-/// drained: the worker and the participant must agree from the same graph.
+/// `roles` is how many narrowed capabilities the graph declares for this edge:
+/// one for every C8.10 boot participant this module serves. A v2 shared ring
+/// carries a route's data and credit in one region, so one edge is one
+/// `capability_delegate` on the worker side regardless of direction — every
+/// caller passes `1`. Receiving a different number is a provisioning defect,
+/// so the count is asserted rather than drained: the worker and the
+/// participant must agree from the same graph.
 pub fn provision_and_park(
     name: &'static [u8],
     route_name: &str,
@@ -169,6 +171,20 @@ pub fn park_only(name: &'static [u8]) -> ! {
     park(name)
 }
 
+/// Read the next role-grant reply on the control endpoint, skipping anything
+/// else.
+///
+/// A worker's control endpoint carries more than role grants: provisioning one
+/// edge can immediately satisfy a match and emit a QoS event on this same
+/// endpoint (`fabric-service::refresh_matches`), interleaved with this
+/// component's own remaining role-grant replies. `WireCapabilityTransfer::decode`
+/// performs no magic check of its own — it is a fixed-offset reader, not a
+/// discriminated union — so a caller that decoded every message unconditionally
+/// would misread a same-sized QoS or stream event as a capability transfer with
+/// garbage `status`/`route_identity`. Filed here rather than in `decode` because
+/// every *other* reader of these bytes (the fabric replying to a bad request,
+/// `deny`'s caller) already knows the message is this format from context; this
+/// is the one path sharing an endpoint with more than one record kind.
 fn receive_role(name: &'static [u8]) -> WireCapabilityTransfer {
     let mut message = [0u8; MAX_MSG];
     let mut received = [0u64; MAX_CAPS_PER_MSG];
@@ -177,8 +193,17 @@ fn receive_role(name: &'static [u8]) -> WireCapabilityTransfer {
             ERR_WOULDBLOCK => slime_rt::yield_now(),
             n if n < 0 => fail(name, b"boot role reply"),
             _ => {
-                return WireCapabilityTransfer::decode(&message)
+                let descriptor = WireCapabilityTransfer::decode(&message)
                     .unwrap_or_else(|| fail(name, b"boot role decode"));
+                if descriptor.magic == CAPABILITY_TRANSFER_MAGIC {
+                    return descriptor;
+                }
+                // Not a role reply. No other record kind carries a capability,
+                // so nothing here is ever exported — but drop defensively rather
+                // than assume, exactly as `park`'s drain does.
+                for slot in received.iter().filter(|slot| **slot != 0) {
+                    let _ = slime_rt::cap_drop(*slot as u32);
+                }
             }
         }
     }

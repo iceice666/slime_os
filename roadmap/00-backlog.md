@@ -16,51 +16,113 @@ at the bottom rather than deleting it.
 
 ## Open
 
-### B55 — the full-graph boot plane refuses its own first spawn
-
-**Status:** Open, found 2026-08-15. **Class:** Regression of a claimed exit
-condition. **Depends on:** none.
-
-**Problem:** `just sel4_boot_check` stops at
-`SLIME_GRAPH spawn refused task=0 slot=2 ungranted`, before any fabric role is
-provisioned. C8.10's exit condition — one generation booting every C8 role
-simultaneously — is therefore unobserved on the current tree, and the roadmap
-records that gate as complete.
-
-**Evidence (2026-08-15).** Observed on unmodified `master` at `84c75f5`, so it
-is not caused by the C8.11 work that found it: the same failure reproduces with
-every C8.11 change stashed. The decisive marker pair is
-
-```
-SLIME_GRAPH spawn preflight count task-instance=19 child=16 requested=0 parent=1 minted=5 respawn=false
-SLIME_GRAPH spawn refused task=0 slot=2 ungranted
-```
-
-`preflight_spawn_grants` (`slime-root/src/main.rs:3406`) requires
-`count == parent_supplied + minted_count` unless this is a respawn requesting
-nothing. Init asks for zero grants while `sel4-boot.zti` declares six for
-`fabric-service` — one crossing grant and five minted bindings — so the root
-refuses the graph's very first spawn. Every later marker the gate asserts is
-unreachable, which is why the failure presents as a missing composition rather
-than a bad grant.
-
-**Ruled out.** Not a marker-table staleness problem: the gate stops on a
-*failure* marker the root emitted, not on an absent one. Not the C8.11 sink
-either — `sel4_call_check`, `sel4_operation_check`, `sel4_stream_check`, and
-`sel4_qos_check` all pass with the trace emission live, and those exercise the
-same three brokers.
-
-**Proposed fix:** reconcile init's `fabric_boot` spawn-request construction with
-`FABRIC_MINTED_GRANTS` for the `boot` action, so the count it sends is the count
-the generation declares. The two numbers are already generated from one profile,
-so the disagreement is in which of them init reads, not in the declaration.
-
-**Exit condition:** `just sel4_boot_check` passes: every declared C8 role is
-spawned, all twenty instances reach healthy blocked idle, and the supervisor
-emits its `live == idle` terminal.
-
+(none)
 
 ## Resolved
+### B55 — the full-graph boot plane refused its own first spawn, then five more defects behind it
+
+**Status:** Resolved 2026-08-15. **Class:** Regression of a claimed exit
+condition. **Depends on:** none.
+
+**Problem:** `just sel4_boot_check` stopped at
+`SLIME_GRAPH spawn refused task=0 slot=2 ungranted`, before any fabric role was
+provisioned. C8.10's exit condition — one generation booting every C8 role
+simultaneously — was therefore unobserved on the tree the roadmap recorded that
+gate as complete against.
+
+**Root cause.** The native-seL4-IPC cutover (`c8fc792`) rewrote `init.rs`'s
+full-graph launcher for the new capability model but left it spawning every
+child with an empty grant vector (`&[]`), and left `fabric-service` spawning
+the two bounded route workers itself — a shape the new model cannot express:
+a worker's control endpoints are generation-declared native Endpoints the root
+installs before any task runs, so a fabric-spawned worker starts with an empty
+control block, and the worker's participant-supervision handles name tasks
+only `init` ever holds. Six more defects were latent behind that first one,
+each masking the next and none previously exercised because the gate never
+advanced far enough to reach them:
+
+1. `sel4-boot.zti`'s minted supervision table still had 3 rows
+   (`fabric-service-supervision-{0,1,2}`) after B46 widened the derivation
+   rule to one row per ring participant plus declared proxy (6 rows), shifting
+   every call/op slot above it by 3.
+2. `fabric_boot::receive_role` decoded any message on the control endpoint as a
+   capability transfer with no magic check; a QoS `EVENT_MATCHED` record
+   interleaved by `refresh_matches` between a two-route subscriber's own
+   replies was misread as a denial.
+3. `fabric-observer`/`fabric-probe`/`fabric-proxy` selected their boot arm on
+   `startup_arg != 0`, but `construct_child` (`slime-root/src/main.rs`) always
+   passes a spawned child `0` by design — only the root-launched bootstrap
+   instance carries the boot-action argument. The three fell through to their
+   standalone-plane logic every boot, undetected because the graph never
+   reached them before defect 1 stopped it.
+4. `fabric-service::notification_slots` failed hard when a participant's
+   (route, direction) pair had no declared ready/credit Notification, even
+   though the profile resolver's own comment documents that a boot-mode role
+   provisioned without ever driving samples legitimately declares none.
+5. `fabric-service::boot_graph`'s provisioning sweep required every registered
+   stream client to answer before returning, but the declared interposition
+   proxy holds a real control endpoint and, under boot, parks without ever
+   contacting the broker — so the sweep never completed and the worker's own
+   idle marker never printed.
+6. `slime-root`'s dispatch loop declared any run that exhausted
+   `MAX_GRAPH_ITERATIONS` with a live task a wedge (`fatal!`), which is correct
+   for every other plane's exit-based graph but wrong for this one: its
+   declared success state is every required task parked forever, so it always
+   eventually exhausts the bound after certifying healthy.
+7. `fabric-observer` requested 2 narrowed capabilities per edge;
+   `provision_edge` only ever delegates 1 (a v2 ring loan carries data and
+   credit in one region), so its second `receive_role` blocked forever.
+
+A structural mismatch in `check-sel4-boot-plane.py` itself compounded these:
+`boot()` stopped reading at the first `SLIME_GRAPH healthy` line, but that
+record fires the instant every declared task *exists*, in the same dispatch
+loop that also services every task's own provisioning IPC — causally *before*
+the twenty instances' own request/reply traffic, not after. The gate could
+never have observed its own required markers even once every code defect
+above was fixed.
+
+**Fix.**
+- `drive_boot_plane` (`init.rs`) now spawns all nineteen children itself,
+  including both route workers, each with the exact grant vector its fixture
+  declares; `fabric-service` no longer spawns anything.
+- `sel4-boot.zti`'s call/op control grants target their worker directly
+  (`_control_sources` in `scripts/build/build-generation.py` gained a `holder`
+  parameter), the minted-binding table now has one row per real handle (14,
+  not 6, with the two stale worker-executable mints removed since both
+  workers are ordinary grant-bound spawns now), and the missing `nav-backup`
+  grant was added.
+- `receive_role` checks `CAPABILITY_TRANSFER_MAGIC` and drains anything else.
+- The three components read `fabric_boot::active()` instead of `startup_arg`.
+- `notification_slots` returns a `NOTIFICATION_ABSENT` sentinel instead of
+  failing when a pair is legitimately undeclared.
+- `boot_graph` pre-marks the declared proxy answered before the provisioning
+  sweep, since it is graph-declared silence rather than a per-request
+  discovery.
+- The `MAX_GRAPH_ITERATIONS` fatal is now also gated on `!healthy_emitted`.
+- `fabric-observer` requests 1 role, matching every other single-route stream
+  participant.
+- `check-sel4-boot-plane.py`'s `boot()` reads through a quiet settling period
+  after the healthy record instead of stopping at it; its `CHAINS`,
+  `EXPECTED_INIT_CHILDREN`, `EXPECTED_ROLES`, and `EXPECTED_IDLE_WITHOUT_ROLE`
+  now match the restored one-spawning-parent composition, and the five racy
+  cross-task stream markers moved to order-independent membership checks
+  (`EXPECTED_ROLE_HOLDERS`/`EXPECTED_PROVISIONED_EDGES`) rather than asserting
+  one specific scheduling interleaving as a causal chain.
+`check-sel4-gate-controls.py`'s boot-plane-specific transcript synthesis and
+pinned marker count were updated to match.
+
+**Exit condition (observed):** `just sel4_boot_check` passes — 30 markers
+across 5 causal chains, init's 21-slot layout, 19 composition tasks reaching 5
+checked roles plus 10 declared role-less idles, none exited, stable across
+repeated boots. `just sel4_boot_layout_check` (24 plane layouts, including
+the unchanged 21-slot boot layout), `just sel4_gate_control_check` (28 gates
+reject 1082 mutations), `just contracts_check`, `just generation_check`,
+`just sel4_root_boot_check`, `sel4_stream_check`, `sel4_qos_check`,
+`sel4_call_check`, `sel4_operation_check`, `sel4_visibility_check`,
+`just test_sel4_root`, `just fmt_check_all`, `just lint_all`, `just ruff`, and
+`just typos` all pass with the same tree.
+
+
 ### B53 — dango echoed a line one byte past the message bound
 
 **Status:** Resolved 2026-08-14. **Class:** Defect. **Depends on:** none.
