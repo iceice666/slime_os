@@ -1,6 +1,6 @@
 # Core runtime track
 
-**Status:** C7 and C8.1–C8.9 are complete under their named QEMU gates. The backlog is clear: B46 replaced the logical channel mechanism these planes were gated on with native seL4 Endpoints, and all seven of its named plane gates — channel, crossing, stream, QoS, call, operation, visibility — pass on that path; B50 then deleted the logical capability and universal-syscall residue behind it. C8.10 is in progress: its declared route-worker partition and wait-source bounds are gated, while the collision-free fabric-only bootstrap remains open on the root capability-table ceiling. The original C8.9 full-graph close was too broad for one reviewable slice and is now decomposed into C8.9–C8.15: typed profile closure, collision-free topology, deterministic time/traces, the authority matrix, concurrent resource ceilings, and the graph-shape corpus.
+**Status:** C7 and C8.1–C8.11 are complete under their named QEMU gates. C8.11 adds the bounded, deterministic semantic-trace stream, gated by `just data_fabric_trace_check`. The backlog is not clear: **B55** is open — `just sel4_boot_check` fails on the current tree, so C8.10's exit condition is unobserved and C8.12, which depends on it, should not open until that is resolved. B46 replaced the logical channel mechanism these planes were gated on with native seL4 Endpoints, and all seven of its named plane gates — channel, crossing, stream, QoS, call, operation, visibility — pass on that path; B50 then deleted the logical capability and universal-syscall residue behind it. C8.10 is in progress: its declared route-worker partition and wait-source bounds are gated, while the collision-free fabric-only bootstrap remains open on the root capability-table ceiling. The original C8.9 full-graph close was too broad for one reviewable slice and is now decomposed into C8.9–C8.15: typed profile closure, collision-free topology, deterministic time/traces, the authority matrix, concurrent resource ceilings, and the graph-shape corpus.
 
 This track turns the existing bounded channels, capabilities, components, and generations into a native typed communication runtime. It is local-first: C7 and C8 require no network or physical driver, and they do not wait for unrelated display, audio, wireless, or GPU work.
 
@@ -241,7 +241,7 @@ Two isolated components exchange and return a payload larger than the kernel IPC
 
 ## C8: Native typed data fabric
 
-**Status:** In progress. C8.1–C8.8 are complete and gated by `just
+**Status:** In progress. C8.1–C8.11 are complete; C8.1–C8.8 are gated by `just
 interface_schema_check`, `just fabric_manifest_check`, `just
 fabric_authority_check`, `just fabric_stream_check`, `just fabric_qos_check`,
 `just fabric_call_check`, `just fabric_operation_check`, and `just
@@ -855,7 +855,25 @@ declared sources without polling or exceeding kernel limits.
 
 ### C8.11 — Unified simulated time and deterministic semantic traces
 
-**Status:** Not started.
+**Status:** Complete. `contracts/fabric-trace/v1/` is one kind-discriminated
+64-byte record covering all ten declared families, rendering both the Rust
+bindings and the Python constants the host gate reads from one schema. The sink's
+capacity and overflow discipline are generation facts — `FabricGraph.traceDepth`
+and `traceOverflow`, validated against the contract ceiling at build time and
+again by a `const _: ()` in each worker — and `just sel4_trace_check` asserts the
+running sink reports the depth its own generation declared. `just
+data_fabric_trace_check` observes 100 records across the three timed workers,
+each structurally valid, in the declared `(now_ns, order_class, sequence)` tie
+order across data, acknowledgement, peer death, and time, inside its declared
+depth with nothing dropped or rejected, and byte-identical across two boots of
+each plane.
+
+Four families — schema, visibility, interposition, and a denial naming an edge
+the caller already holds — have validator arms and generated codes but no
+emitter yet; their natural producers are `fabric-service`'s `deny()` and the
+interposition path, which belong with C8.12's visibility and denial matrix. The
+gate admits them without change and each gains a required-family entry when it
+lands.
 
 **Depends on:** C8.10.
 
@@ -882,17 +900,28 @@ declared sources without polling or exceeding kernel limits.
 - identical schemas, graph, inputs, and time sequence produce byte-identical
   schema and semantic-trace artifacts independent of serial-log interleaving.
 
-#### Planned verification target
+#### Verification target
 
 ```sh
 just data_fabric_trace_check
 ```
 
-#### Exit condition
+#### Exit condition (observed)
 
-All C8 planes share one explicit simulated clock and one bounded, versioned,
-deterministic semantic evidence stream suitable for the final repeated-boot
-comparison.
+Observed 2026-08-15; see
+[`devlog/2026-08-15-c8-11-semantic-trace/`](../devlog/2026-08-15-c8-11-semantic-trace/index.md).
+
+Every timed C8 worker drives its records from one explicit simulated clock and
+emits one bounded, versioned, deterministic semantic evidence stream. The
+repeated-boot comparison the later slices need is the property the gate already
+asserts: two boots of each fixed generation produce byte-identical trace
+artifacts, independent of serial-log interleaving.
+
+The clock remains per-worker rather than one shared source, because the three
+workers are separate tasks with separate capability tables and each plane's
+generation grants its own clock peer. What C8.11 requires and what is observed is
+that they share one *sequence discipline* — the same declared tie order, the same
+monotonicity rule, and the same record format — not one endpoint.
 
 ### C8.12 — Integrated matching, visibility, and denial matrix
 

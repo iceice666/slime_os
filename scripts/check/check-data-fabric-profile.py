@@ -24,6 +24,11 @@ from boot_contracts import (
     NORMALIZED_SCHEMAS_MAGIC,
     NORMALIZED_SCHEMAS_VERSION,
 )
+from fabric_trace_contract import (
+    FABRIC_TRACE_MAX_DEPTH,
+    FABRIC_TRACE_OVERFLOW_SATURATE,
+    FABRIC_TRACE_TERMINAL_RESERVE,
+)
 from harness import ROOT, load_script
 
 builder = load_script("build_generation_profile", "build/build-generation.py")
@@ -284,6 +289,29 @@ def frame_layout_too_small(manifest: dict) -> None:
     manifest["fabricGraph"]["limits"]["historyDepth"] = 16
 
 
+def trace_depth_above_ceiling(manifest: dict) -> None:
+    manifest["fabricGraph"]["traceDepth"] = FABRIC_TRACE_MAX_DEPTH + 1
+
+
+def trace_depth_below_reservation(manifest: dict) -> None:
+    """A sink whose whole depth is the terminal reservation records nothing.
+
+    The reservation exists so a full sink can still say the trace ended. A depth
+    at or below it leaves no slot for ordinary evidence, so such a generation
+    declares a sink that cannot hold a single event — a build failure, not a
+    boot-time surprise.
+    """
+    manifest["fabricGraph"]["traceDepth"] = FABRIC_TRACE_TERMINAL_RESERVE
+
+
+def trace_overflow_unknown(manifest: dict) -> None:
+    manifest["fabricGraph"]["traceOverflow"] = "dropOldest"
+
+
+def trace_depth_not_an_integer(manifest: dict) -> None:
+    manifest["fabricGraph"]["traceDepth"] = "16"
+
+
 for label, mutate in (
     ("duplicate profile", duplicate_profile),
     ("unknown profile target", unknown_profile_target),
@@ -298,6 +326,10 @@ for label, mutate in (
     ("route worker above wait bound", worker_above_wait_bound),
     ("fixed-shape worker above wait bound", worker_shape_above_wait_bound),
     ("frame layout above generated table", frame_layout_too_small),
+    ("trace depth above contract ceiling", trace_depth_above_ceiling),
+    ("trace depth below terminal reservation", trace_depth_below_reservation),
+    ("unknown trace overflow discipline", trace_overflow_unknown),
+    ("non-integer trace depth", trace_depth_not_an_integer),
 ):
     rejected(label, mutate)
 
@@ -323,6 +355,47 @@ for label, mutate in (
         builder.MAX_FABRIC_GRAPH_INGRESS_SOURCES = ceiling
         builder.FABRIC_WORKER_WAIT_SHAPES.clear()
         builder.FABRIC_WORKER_WAIT_SHAPES.update(shapes)
+
+# Same discipline for the trace-sink ceiling: neutralizing it must make the very
+# manifest that was refused resolve cleanly. Without this, a depth mutator that
+# happened to trip some earlier guard would keep the case green after the ceiling
+# it names was deleted.
+for label, mutate in (
+    ("trace depth above contract ceiling", trace_depth_above_ceiling),
+    ("trace depth below terminal reservation", trace_depth_below_reservation),
+):
+    ceiling = builder.FABRIC_TRACE_MAX_DEPTH
+    reserve = builder.FABRIC_TRACE_TERMINAL_RESERVE
+    probe = copy.deepcopy(MANIFEST)
+    mutate(probe)
+    builder.FABRIC_TRACE_MAX_DEPTH = 1 << 30
+    builder.FABRIC_TRACE_TERMINAL_RESERVE = 0
+    try:
+        builder.resolve_fabric_profile(probe, INTERFACES, "default")
+    except SystemExit as error:
+        fail(f"{label} is rejected by {error!s}, not by the trace-sink bound it names")
+    finally:
+        builder.FABRIC_TRACE_MAX_DEPTH = ceiling
+        builder.FABRIC_TRACE_TERMINAL_RESERVE = reserve
+
+# The resolved profile must actually carry the sink the graph declared, and the
+# Rust a component compiles must state the same two numbers. A bound validated at
+# build time but absent from the artifact would leave every worker sizing its sink
+# from a default nothing checked.
+if first.artifact["traceDepth"] != MANIFEST["fabricGraph"]["traceDepth"]:
+    fail("resolved profile dropped the declared trace-sink depth")
+if first.artifact["traceOverflow"] != FABRIC_TRACE_OVERFLOW_SATURATE:
+    fail("resolved profile did not map the declared overflow discipline")
+profile_rust = builder.render_fabric_profile_rust(first)
+# The whole declaration, not the name and the value independently: `= 1;` occurs
+# for several unrelated slot constants, so checking the two substrings separately
+# would pass even if the overflow constant rendered a different number entirely.
+for name, kind, value in (
+    ("FABRIC_TRACE_DEPTH", "usize", first.artifact["traceDepth"]),
+    ("FABRIC_TRACE_OVERFLOW", "u32", first.artifact["traceOverflow"]),
+):
+    if f"pub const {name}: {kind} = {value};" not in profile_rust:
+        fail(f"Rust profile does not declare {name} as {value}")
 
 rejected("unknown profile", lambda _manifest: None, profile="missing")
 

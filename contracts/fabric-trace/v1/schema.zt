@@ -1,0 +1,182 @@
+-- Slime OS bounded semantic-trace record, version 1 (C8.11).
+--
+-- One fixed 64-byte record carries every trace family the fabric emits:
+-- schema admission, route provisioning, QoS policy, call, operation,
+-- visibility, interposition, denial, fault, and resource high-water evidence.
+-- A single kind-discriminated record rather than ten layouts, for two reasons
+-- the sink forces. The sink is a bounded array of equal-width slots, so ten
+-- layouts would size every slot to the widest of them anyway; and the declared
+-- total order compares `now_ns` and `order_class` across families, which needs
+-- those fields at one fixed offset rather than ten.
+--
+-- Nothing here names a task, an address, a capability, or a scheduler
+-- observation. `route_identity` is the C8.2 folded route identity, which is
+-- already the graph's own name for an edge; `correlation` is the request or
+-- sample correlation the plane assigned. A reader that wants to know *which
+-- task* emitted a record cannot learn it from these bytes, which is the point:
+-- a trace that carried task ids would not be comparable across boots.
+--
+-- `order_class` is the declared tie order. Two records bearing equal `now_ns`
+-- are emitted in ascending `order_class`, and within one class in ascending
+-- `sequence`. The four classes are the four things a worker can observe at one
+-- simulated instant: data, an acknowledgement, a peer death, and the clock
+-- itself. Time sorts last because a time advance closes an instant rather than
+-- occurring within it.
+
+env ::= import stdlib.env;
+fs ::= import stdlib.fs;
+gen ::= import "gen_rust.zt";
+t ::= import stdlib.text;
+
+formatVersion :: Int = 1;
+recordLen :: Int = 64;
+magic :: Int = 1163084372; -- `TRCT`
+
+-- Trace families. Each names one evidence class C8.11 requires; a record whose
+-- `kind` is outside this set is rejected rather than skipped, so a future
+-- family cannot be silently dropped by an older reader.
+kindSchema :: Int = 1;
+kindRoute :: Int = 2;
+kindQos :: Int = 3;
+kindCall :: Int = 4;
+kindOperation :: Int = 5;
+kindVisibility :: Int = 6;
+kindInterposition :: Int = 7;
+kindDenial :: Int = 8;
+kindFault :: Int = 9;
+kindResource :: Int = 10;
+maxKind :: Int = 10;
+
+-- Which count a `resource` record carries. C8.11 records resource *high-water*
+-- evidence, and a bare number is not evidence unless the reader knows what was
+-- counted -- so the `event` field on a resource record names the counter rather
+-- than being reused as a QoS event code. `sinkDropped` is the sink reporting on
+-- itself; the rest are the bounded tables a worker holds.
+resourceFrames :: Int = 1;
+resourceOperations :: Int = 2;
+resourceCalls :: Int = 3;
+resourceSinkDropped :: Int = 4;
+resourceComplete :: Int = 5;
+maxResourceCounter :: Int = 5;
+
+-- The declared total tie order across everything observable at one instant.
+orderData :: Int = 1;
+orderAck :: Int = 2;
+orderPeerDeath :: Int = 3;
+orderTime :: Int = 4;
+maxOrderClass :: Int = 4;
+
+-- `terminal` marks a record the sink must never drop: the mandatory
+-- end-of-stream evidence a reader needs to distinguish a completed trace from
+-- a truncated one. `dropped` marks the single saturation record that reports
+-- how many records a full sink refused, so loss is counted rather than silent.
+flagTerminal :: Int = 1;
+flagDropped :: Int = 2;
+knownFlags :: Int = 3;
+
+-- Overflow discipline a generation may declare. `saturate` refuses further
+-- ordinary records once the sink is full and counts them, then reports the
+-- count in one record flagged `dropped`.
+--
+-- Only one discipline, deliberately. Evicting the *oldest* record to make room
+-- was the obvious alternative and is worse here: the earliest records are the
+-- schema-admission and route-provisioning evidence a reader needs to interpret
+-- everything after them, so evicting them to admit later traffic destroys the
+-- more valuable half of the trace. A second code would also be a wire value no
+-- component implements, which is a format promising behaviour that does not
+-- exist. A future discipline gets a value and an implementation together.
+overflowSaturate :: Int = 1;
+maxOverflow :: Int = 1;
+
+-- Structural ceiling on the sink capacity a generation may declare, and the
+-- slots held back for mandatory terminal records. The reservation is part of
+-- the format rather than a component's choice: a sink that could spend its
+-- last slot on ordinary evidence would have nowhere to write the record that
+-- says the trace ended.
+maxTraceDepth :: Int = 64;
+terminalReserve :: Int = 2;
+
+WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
+
+TraceRecord :: type {
+  magic : Int;
+  version : Int;
+  kind : Int;
+  flags : Int;
+  route_identity : Int;
+  correlation : Int;
+  sequence : Int;
+  now_ns : Int;
+  status : Int;
+  event : Int;
+  high_water : Int;
+  order_class : Int;
+  reserved : Int;
+};
+
+schemaValue ::= schema TraceRecord;
+
+layout :: List WireField = {
+  { name = "magic"; width = 4; signed = false; byteArray = false; };
+  { name = "version"; width = 4; signed = false; byteArray = false; };
+  { name = "kind"; width = 4; signed = false; byteArray = false; };
+  { name = "flags"; width = 4; signed = false; byteArray = false; };
+  { name = "route_identity"; width = 8; signed = false; byteArray = false; };
+  { name = "correlation"; width = 8; signed = false; byteArray = false; };
+  { name = "sequence"; width = 8; signed = false; byteArray = false; };
+  { name = "now_ns"; width = 8; signed = false; byteArray = false; };
+  { name = "status"; width = 4; signed = true; byteArray = false; };
+  { name = "event"; width = 4; signed = false; byteArray = false; };
+  { name = "high_water"; width = 4; signed = false; byteArray = false; };
+  { name = "order_class"; width = 1; signed = false; byteArray = false; };
+  { name = "reserved"; width = 3; signed = false; byteArray = true; };
+};
+
+format ::= {
+  formatVersion =;
+  recordLen =;
+  magic =;
+  kindSchema =;
+  kindRoute =;
+  kindQos =;
+  kindCall =;
+  kindOperation =;
+  kindVisibility =;
+  kindInterposition =;
+  kindDenial =;
+  kindFault =;
+  kindResource =;
+  maxKind =;
+  resourceFrames =;
+  resourceOperations =;
+  resourceCalls =;
+  resourceSinkDropped =;
+  resourceComplete =;
+  maxResourceCounter =;
+  orderData =;
+  orderAck =;
+  orderPeerDeath =;
+  orderTime =;
+  maxOrderClass =;
+  flagTerminal =;
+  flagDropped =;
+  knownFlags =;
+  overflowSaturate =;
+  maxOverflow =;
+  maxTraceDepth =;
+  terminalReserve =;
+  fields = schemaValue.fields ?? {;};
+  layout =;
+};
+
+main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }
+  = caps => [
+    root := env.get caps.env "SLIME_FABRIC_TRACE_BINDINGS_ROOT" ?? ".";
+    bindings := gen.render format;
+    rustPath := t.join "" { root; "/components/proto/src/fabric_trace.rs"; };
+    pythonPath := t.join "" { root; "/scripts/lib/fabric_trace_contract.py"; };
+    fs.writeAll caps.write rustPath bindings.rust;
+    fs.writeAll caps.write pythonPath bindings.python
+  ];
+
+main

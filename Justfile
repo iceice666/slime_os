@@ -317,6 +317,18 @@ sel4_qos_check: sel4_pin_check
     python3 scripts/check/check-sel4-qos-plane.py
 
 
+# C8.11: boot the QoS plane and assert its bounded semantic trace -- every
+# record structurally valid, the declared total tie order across data,
+# acknowledgement, peer death, and time, the sink inside its declared depth
+# with nothing dropped or rejected, one terminal record, and byte-identical
+# artifacts across two boots of one fixed generation.
+#
+# It reuses `sel4-qos` deliberately: that is the only plane whose generation
+# grants a clock, so it is the only one where all four order classes can occur.
+# A dedicated fixture would assert the same property about the same worker.
+sel4_trace_check: sel4_pin_check
+    python3 scripts/check/check-sel4-trace-plane.py
+
 # Prove the seL4 plane gates fail when their evidence is absent. This drives
 # each gate's own marker table with a deleted marker, a transposition, and an
 # appended failure marker. Needs no build and no QEMU: it asserts that the
@@ -404,6 +416,10 @@ fabric_stream_gen:
 # B46: regenerate the v2 shared-ring bindings from their contract.
 fabric_ring_gen:
     python3 scripts/generate/generate-fabric-ring-bindings.py
+
+# C8.11: regenerate the bounded semantic-trace bindings from their contract.
+fabric_trace_gen:
+    python3 scripts/generate/generate-fabric-trace-bindings.py
 
 # Regenerate the fabric-graph resource bindings (C8.2); part of the boot set.
 fabric_graph_gen: boot_gen
@@ -534,6 +550,12 @@ data_fabric_profile_check: contracts_check
     python3 scripts/check/check-data-fabric-profile.py
 
 data_fabric_boot_check: sel4_boot_check
+
+# C8.11's roadmap-named gate. Both halves: the contract and its declared sink
+# bounds are validated on the host, and the emitted trace is observed on the
+# plane that actually advances a clock.
+data_fabric_trace_check: contracts_check sel4_trace_check
+    python3 scripts/generate/generate-fabric-trace-bindings.py --check
 
 sample_descriptor_check: contracts_check sel4_sample_check
 

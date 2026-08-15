@@ -49,6 +49,12 @@ ResolvedDataFabricProfile :: type {
   copyPages : Int;
   frameCapacity : Int;
   requiredCapabilitySlots : Int;
+  -- C8.11's bounded semantic-trace sink, resolved from the graph: how many
+  -- records one worker's sink holds, and the overflow code it applies when
+  -- full. Dedicated fields rather than `limits` entries because the overflow
+  -- discipline is a vocabulary selector, not a ceiling.
+  traceDepth : Int;
+  traceOverflow : Int;
   limits : List ProfileLimit;
   schemas : List ProfileSchema;
   routes : List ProfileRoute;

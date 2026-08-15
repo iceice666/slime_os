@@ -60,6 +60,10 @@ mod call_broker;
 mod operation_broker;
 #[path = "../visibility_broker.rs"]
 mod visibility_broker;
+// C8.11's trace emitter. Included by path like the brokers: this binary is the
+// stream worker, and it holds its own sink.
+#[path = "../fabric_trace_log.rs"]
+mod trace_log;
 
 use boot_contracts::fabric_graph::{
     CONTRACT_KIND_STREAM, DIRECTION_PUBLISH, DIRECTION_SUBSCRIBE, DURABILITY_RETAINED,
@@ -843,6 +847,38 @@ fn broker(
     let mut time_dead = false;
     let mut late_subscriber = None;
     let mut late_replay_done = false;
+    // C8.11: this worker's bounded semantic trace. Accumulated and flushed once
+    // at the end, so the serial order is the declared order rather than however
+    // the three workers happened to interleave.
+    let mut trace = trace_log::Trace::new(FABRIC_TRACE_DEPTH);
+    // The most frames this run ever held at once. Sampled per sweep, because the
+    // count that matters is an occupancy: reading it after `release_retained` has
+    // drained every frame reports the residue of teardown, which on a clean
+    // shutdown is structurally near zero and would leave a frame-accounting
+    // regression invisible to the repeated-boot comparison.
+    let mut peak_frames = 0u32;
+    let route_words = [
+        trace_log::route_word(&route_identity(
+            ROUTE_NAMES[0],
+            &telemetry_stream::INTERFACE_IDENTITY,
+            CONTRACT_KIND_STREAM,
+        )),
+        trace_log::route_word(&route_identity(
+            ROUTE_NAMES[1],
+            &diagnostics_stream::INTERFACE_IDENTITY,
+            CONTRACT_KIND_STREAM,
+        )),
+    ];
+    for word in route_words {
+        let _ = trace.edge(
+            slime_proto::fabric_trace::KIND_ROUTE,
+            slime_proto::fabric_trace::ORDER_DATA,
+            word,
+            0,
+            0,
+            0,
+        );
+    }
     loop {
         let mut progressed = false;
         for index in 0..publishers.len() {
@@ -863,6 +899,11 @@ fn broker(
         }
         if qos_check() {
             receive_time(&mut pending_time, &mut time_dead);
+            // The advance closes the previous instant, so it is recorded before
+            // the expiries `apply_time` triggers within the new one.
+            if let Some(next) = pending_time {
+                let _ = trace.advance(next);
+            }
             progressed |= apply_time(
                 &mut now_ns,
                 &mut pending_time,
@@ -912,6 +953,7 @@ fn broker(
                     type_tags[route],
                 );
             }
+            let _ = trace.peer_death(route_words[route]);
             slime_rt::debug_write(b"[fabric] QoS peer dead\n");
             publisher.died = true;
             publisher.finished = true;
@@ -927,6 +969,10 @@ fn broker(
                 }
             }
         }
+        let live_frames = frames.iter().filter(|frame| frame.refs > 0).count() as u32;
+        if live_frames > peak_frames {
+            peak_frames = live_frames;
+        }
         if subscribers
             .iter()
             .flatten()
@@ -934,6 +980,12 @@ fn broker(
             && (!qos_check() || time_dead)
         {
             release_retained(publishers, frames);
+            // Resource evidence before the terminal: the high-water frame
+            // occupancy is a bounded count of what this run actually needed,
+            // which is what the repeated-boot comparison reads.
+            let _ = trace.resource(slime_proto::fabric_trace::RESOURCE_FRAMES, peak_frames);
+            let _ = trace.terminal();
+            trace.flush(b"stream");
             return;
         }
         if !progressed {
@@ -2075,3 +2127,17 @@ mod tests {
         assert!(dead);
     }
 }
+
+/// The one overflow discipline implemented. Asserted rather than branched on: a
+/// generation declaring anything else names behaviour no worker has, and
+/// discovering that at boot would be worse than not compiling.
+const _: () = assert!(FABRIC_TRACE_OVERFLOW == slime_proto::fabric_trace::OVERFLOW_SATURATE);
+/// And the declared depth must fit the sink the contract sizes.
+///
+/// `const _: ()` rather than relying on `TraceSink::with_const_capacity`'s own
+/// assert: that constructor is a `const fn` reached from `fn main`, and a
+/// `const fn` called at runtime evaluates at runtime -- so its assert would be a
+/// boot panic inside a `no_std` component rather than the build failure it
+/// claims to be. These items are evaluated at compile time unconditionally.
+const _: () = assert!(FABRIC_TRACE_DEPTH <= slime_proto::fabric_trace::MAX_TRACE_DEPTH);
+const _: () = assert!(FABRIC_TRACE_DEPTH > slime_proto::fabric_trace::TERMINAL_RESERVE);

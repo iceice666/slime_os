@@ -262,3 +262,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-14 | [B50 — a minted endpoint named an object nobody could create](2026-08-14-b50-minted-endpoint-deletion/index.md) | Change | Verified | B50, B46 |
 | 2026-08-14 | [B53, B54 — a line one byte past the message bound, and a component that never ends](2026-08-14-b53-b54-last-two-planes/index.md) | Defect | Verified | B53, B54 |
 | 2026-08-14 | [Zutai's field-pun shorthand, and why `schemaFields` cannot reach these contracts](2026-08-14-zutai-field-pun-adoption/index.md) | Change | Verified | none |
+| 2026-08-15 | [C8.11 — a deterministic trace, and the five ways a silent record hides](2026-08-15-c8-11-semantic-trace/index.md) | Change | Verified | C8.11, B55 |

@@ -217,9 +217,19 @@ FabricLimits :: type {
   buffers : Int;
 };
 
+-- `traceDepth` and `traceOverflow` fix the C8.11 bounded semantic-trace sink:
+-- how many records one worker's sink holds, and what it does when full. They
+-- are graph facts rather than component choices because the deterministic
+-- evidence stream is only comparable across boots if every worker in the graph
+-- agrees on the sink's capacity and its overflow discipline. `traceOverflow` is
+-- `saturate`, the one discipline `contracts/fabric-trace/v1/` defines: a full
+-- sink refuses further ordinary records and counts them, so loss is reported
+-- rather than silent.
 FabricGraph :: type {
   fabricComponent : Text;
   limits : FabricLimits;
+  traceDepth : Int;
+  traceOverflow : Text;
   routes : List FabricRoute;
   profiles : List FabricProfile;
 };

@@ -165,6 +165,8 @@
         ];
       };
     ];
+    traceDepth = 64;
+    traceOverflow = "saturate";
   };
   formatVersion = 1;
   generation = 20;

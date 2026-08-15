@@ -217,6 +217,11 @@ pub const FABRIC_MAX_CAPABILITY_SLOTS: usize = 48;
 pub const FABRIC_REQUIRED_CAPABILITY_SLOTS: usize = 28;
 pub const FABRIC_FRAME_CAPACITY: usize = 32;
 pub const FABRIC_COPY_PAGES: usize = 2;
+/// C8.11: the declared depth of one worker's bounded semantic-trace sink, and
+/// the overflow code it applies when that depth is reached. A worker sizes its
+/// sink array from this constant, so the generation and the array cannot drift.
+pub const FABRIC_TRACE_DEPTH: usize = 16;
+pub const FABRIC_TRACE_OVERFLOW: u32 = 1;
 /// No request/response route of this class exists in the resolved graph.
 pub const FABRIC_DEADLINE_ABSENT: u64 = u64::MAX;
 pub const FABRIC_CALL_DEADLINE_NS: u64 = 1000000;

@@ -85,6 +85,14 @@ GATES: tuple[tuple[str, str, int], ...] = (
     ("sel4_supervision_plane", "check/check-sel4-supervision-plane.py", 12),
     ("sel4_stream_plane", "check/check-sel4-stream-plane.py", 57),
     ("sel4_qos_plane", "check/check-sel4-qos-plane.py", 14),
+    # C8.11. Six rather than seven: the peer-death chain dropped its trailing
+    # "and then a clock advance" marker when the gate grew from one plane to all
+    # three. That marker asserted a *scenario* shape -- on the call plane the
+    # death is at the final instant and nothing follows it -- while the
+    # arrangement of records within an instant is checked structurally by the
+    # gate's own `check_order` on every plane. Coverage went up, not down: the
+    # gate now reads three workers instead of one.
+    ("sel4_trace_plane", "check/check-sel4-trace-plane.py", 6),
     ("sel4_call_plane", "check/check-sel4-call-plane.py", 47),
     ("sel4_operation_plane", "check/check-sel4-operation-plane.py", 53),
     ("sel4_visibility_plane", "check/check-sel4-visibility-plane.py", 25),
@@ -121,6 +129,21 @@ def literal_for(pattern: str) -> str:
     text = text.replace("^", "").replace("$", "")
     text = text.replace("-?", "-")
     # Character classes and repetitions, narrowest first.
+    #
+    # Bounded repetition over the two digit classes the marker tables use, plus a
+    # single literal character. It comes before the open-ended forms because
+    # `[0-9a-f]+` would otherwise consume the class before its count was seen,
+    # leaving a stray `{16}` no instantiation satisfies. Escaped shorthands such
+    # as `\d{4}` are deliberately not handled: no marker table uses one, and the
+    # round-trip check below fails loudly rather than silently if one appears.
+    def repeat(match: re.Match[str]) -> str:
+        return match.group(1) * int(match.group(2))
+
+    text = re.sub(r"\[0-9a-f\]\{(\d+)\}", lambda m: "a" * int(m.group(1)), text)
+    text = re.sub(r"\[0-9\]\{(\d+)\}", lambda m: "7" * int(m.group(1)), text)
+    text = re.sub(r"(\w)\{(\d+)\}", repeat, text)
+    # Lowercase-with-hyphen words: worker and family names in the trace tables.
+    text = re.sub(r"\[a-z-\]\+", "stream", text)
     text = re.sub(r"\[0-9a-fx\]\+", "0x10", text)
     text = re.sub(r"\[0-9a-f\]\+", "abc123", text)
     text = re.sub(r"\[\^ \]\+", "value", text)

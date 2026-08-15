@@ -1,0 +1,261 @@
+-- Pure renderer for Slime OS bounded semantic-trace bindings (C8.11).
+--
+-- The record mechanics mirror the fabric-time and fabric-stream renderers:
+-- reflect the schema, check field order against the declared layout, and emit
+-- offset constants plus one packed little-endian struct. The vocabulary
+-- constants come through `wire.rust`'s shared emitters rather than inlined
+-- `n.toText` calls, so the kind, order-class, flag, and bound constants render
+-- the same way every other schema-owned scalar in this repository does.
+
+refl ::= import stdlib.reflect;
+n ::= import stdlib.num;
+t ::= import stdlib.text;
+w ::= import wire.rust;
+
+WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
+
+Protocol :: type {
+  formatVersion : Int;
+  recordLen : Int;
+  magic : Int;
+  kindSchema : Int;
+  kindRoute : Int;
+  kindQos : Int;
+  kindCall : Int;
+  kindOperation : Int;
+  kindVisibility : Int;
+  kindInterposition : Int;
+  kindDenial : Int;
+  kindFault : Int;
+  kindResource : Int;
+  maxKind : Int;
+  resourceFrames : Int;
+  resourceOperations : Int;
+  resourceCalls : Int;
+  resourceSinkDropped : Int;
+  resourceComplete : Int;
+  maxResourceCounter : Int;
+  orderData : Int;
+  orderAck : Int;
+  orderPeerDeath : Int;
+  orderTime : Int;
+  maxOrderClass : Int;
+  flagTerminal : Int;
+  flagDropped : Int;
+  knownFlags : Int;
+  overflowSaturate : Int;
+  maxOverflow : Int;
+  maxTraceDepth : Int;
+  terminalReserve : Int;
+  fields : List refl.SchemaField;
+  layout : List WireField;
+};
+
+layoutNames :: List WireField -> List Text
+  = fields => map _.name fields;
+
+validField :: WireField -> Bool
+  = field => if field.byteArray
+    then field.width > 0 && not field.signed
+    else w.validWidthSigned4 { name = field.name; width = field.width; signed = field.signed; };
+
+allValid :: List WireField -> Bool
+  = fields => match fields {
+    | {;} => true;
+    | { field; ...rest } => validField field && allValid rest;
+  };
+
+addWidth :: Int -> WireField -> Int
+  = total field => total + field.width;
+
+wireBytes :: List WireField -> Int
+  = fields => fold addWidth 0 fields;
+
+constName :: Text -> Text -> Text
+  = prefix name => w.join { "OFF_"; prefix; "_"; t.toUpper name; };
+
+offsetConsts :: Text -> Int -> List WireField -> Text
+  = prefix offset fields => match fields {
+    | {;} => "";
+    | { field; ...rest } => w.join {
+      "pub const "; constName prefix field.name; ": usize = "; n.toText offset; ";\n";
+      offsetConsts prefix (offset + field.width) rest;
+    };
+  };
+
+rustType :: WireField -> Text
+  = field => if field.byteArray
+    then w.join { "[u8; "; n.toText field.width; "]"; }
+    else w.rustType { name = field.name; width = field.width; signed = field.signed; };
+
+fieldDecls :: List WireField -> Text
+  = fields => match fields {
+    | {;} => "";
+    | { field; ...rest } => w.join {
+      "    pub "; field.name; ": "; rustType field; ",\n";
+      fieldDecls rest;
+    };
+  };
+
+decodeExpr :: Text -> WireField -> Text
+  = prefix field => if field.byteArray
+    then w.join {
+      "buf["; constName prefix field.name; ".."; constName prefix field.name; " + "; n.toText field.width;
+      "].try_into().expect(\"generated fabric-trace layout\")";
+    }
+    else if field.width == 1
+      then w.join { "buf["; constName prefix field.name; "]"; }
+      else w.join {
+        rustType field; "::from_le_bytes(buf["; constName prefix field.name; ".."; constName prefix field.name;
+        " + "; n.toText field.width; "].try_into().expect(\"generated fabric-trace layout\"))";
+      };
+
+decodeFields :: Text -> List WireField -> Text
+  = prefix fields => match fields {
+    | {;} => "";
+    | { field; ...rest } => w.join {
+      "            "; field.name; ": "; decodeExpr prefix field; ",\n";
+      decodeFields prefix rest;
+    };
+  };
+
+encodeField :: Text -> WireField -> Text
+  = prefix field => if field.byteArray
+    then w.join {
+      "        buf["; constName prefix field.name; ".."; constName prefix field.name; " + "; n.toText field.width;
+      "].copy_from_slice(&self."; field.name; ");\n";
+    }
+    else if field.width == 1
+      then w.join { "        buf["; constName prefix field.name; "] = self."; field.name; ";\n"; }
+      else w.join {
+        "        buf["; constName prefix field.name; ".."; constName prefix field.name; " + "; n.toText field.width;
+        "].copy_from_slice(&self."; field.name; ".to_le_bytes());\n";
+      };
+
+encodeFields :: Text -> List WireField -> Text
+  = prefix fields => match fields {
+    | {;} => "";
+    | { field; ...rest } => w.join { encodeField prefix field; encodeFields prefix rest; };
+  };
+
+wireStruct :: Text -> Text -> Text -> List WireField -> Text
+  = name prefix lengthName fields => w.join {
+    "#[derive(Debug, Clone, Copy, PartialEq, Eq)]\n";
+    "pub struct "; name; " {\n"; fieldDecls fields; "}\n\n";
+    "impl "; name; " {\n";
+    "    pub fn decode(buf: &[u8]) -> Option<Self> {\n";
+    "        if buf.len() < "; lengthName; " {\n";
+    "            return None;\n";
+    "        }\n";
+    "        Some(Self {\n"; decodeFields prefix fields; "        })\n";
+    "    }\n\n";
+    "    pub fn encode(self) -> [u8; "; lengthName; "] {\n";
+    "        let mut buf = [0u8; "; lengthName; "];\n"; encodeFields prefix fields; "        buf\n";
+    "    }\n";
+    "}\n";
+  };
+
+rustBindings :: Protocol -> Text
+  = p => w.join {
+    "// @generated by contracts/fabric-trace/v1/gen_rust.zt; do not edit.\n";
+    "// Source contract: contracts/fabric-trace/v1/schema.zt\n\n";
+    w.u32Const "FORMAT_VERSION" p.formatVersion;
+    w.u32Const "TRACE_MAGIC" p.magic;
+    w.usizeConst "TRACE_RECORD_LEN" p.recordLen;
+    "\n";
+    "/// Trace families. One record layout carries all of them; `kind` selects\n";
+    "/// which evidence class a record belongs to.\n";
+    w.u32Const "KIND_SCHEMA" p.kindSchema;
+    w.u32Const "KIND_ROUTE" p.kindRoute;
+    w.u32Const "KIND_QOS" p.kindQos;
+    w.u32Const "KIND_CALL" p.kindCall;
+    w.u32Const "KIND_OPERATION" p.kindOperation;
+    w.u32Const "KIND_VISIBILITY" p.kindVisibility;
+    w.u32Const "KIND_INTERPOSITION" p.kindInterposition;
+    w.u32Const "KIND_DENIAL" p.kindDenial;
+    w.u32Const "KIND_FAULT" p.kindFault;
+    w.u32Const "KIND_RESOURCE" p.kindResource;
+    w.u32Const "MAX_KIND" p.maxKind;
+    "\n";
+    "/// Which count a `resource` record carries. A bare number is not evidence\n";
+    "/// unless the reader knows what was counted.\n";
+    w.u32Const "RESOURCE_FRAMES" p.resourceFrames;
+    w.u32Const "RESOURCE_OPERATIONS" p.resourceOperations;
+    w.u32Const "RESOURCE_CALLS" p.resourceCalls;
+    w.u32Const "RESOURCE_SINK_DROPPED" p.resourceSinkDropped;
+    w.u32Const "RESOURCE_COMPLETE" p.resourceComplete;
+    w.u32Const "MAX_RESOURCE_COUNTER" p.maxResourceCounter;
+    "\n";
+    "/// The declared total tie order at one simulated instant: data, then\n";
+    "/// acknowledgement, then peer death, then the clock advance that closes it.\n";
+    w.u32Const "ORDER_DATA" p.orderData;
+    w.u32Const "ORDER_ACK" p.orderAck;
+    w.u32Const "ORDER_PEER_DEATH" p.orderPeerDeath;
+    w.u32Const "ORDER_TIME" p.orderTime;
+    w.u32Const "MAX_ORDER_CLASS" p.maxOrderClass;
+    "\n";
+    w.u32Const "FLAG_TERMINAL" p.flagTerminal;
+    w.u32Const "FLAG_DROPPED" p.flagDropped;
+    w.u32Const "KNOWN_FLAGS" p.knownFlags;
+    "\n";
+    "/// Sink overflow discipline, fixed by the generation profile.\n";
+    w.u32Const "OVERFLOW_SATURATE" p.overflowSaturate;
+    w.u32Const "MAX_OVERFLOW" p.maxOverflow;
+    "\n";
+    "/// Structural ceiling on a declared sink capacity, and the slots held\n";
+    "/// back so a saturated sink can still record that the trace ended.\n";
+    w.usizeConst "MAX_TRACE_DEPTH" p.maxTraceDepth;
+    w.usizeConst "TERMINAL_RESERVE" p.terminalReserve;
+    "\n";
+    offsetConsts "TRACE" 0 p.layout;
+    "\n";
+    wireStruct "WireTraceRecord" "TRACE" "TRACE_RECORD_LEN" p.layout;
+  };
+
+-- The sink reservation must fit inside the structural ceiling and still leave
+-- room for ordinary evidence; a format whose reserve consumed its own depth
+-- would admit no record at all.
+boundsValid :: Protocol -> Bool
+  = p => p.terminalReserve > 0
+    && p.maxTraceDepth > p.terminalReserve
+    && p.maxKind == p.kindResource
+    && p.maxOrderClass == p.orderTime
+    && p.knownFlags == p.flagTerminal + p.flagDropped
+    && p.maxOverflow == p.overflowSaturate
+    && p.maxResourceCounter == p.resourceComplete;
+
+valid :: Protocol -> Bool
+  = p => w.schemaFieldsValid p.fields
+    && w.schemaNames p.fields == layoutNames p.layout
+    && allValid p.layout
+    && wireBytes p.layout == p.recordLen
+    && boundsValid p;
+
+-- The host-side gate validates declared sink bounds against the same ceilings
+-- the components compile against, so both languages read them from here rather
+-- than restating them. A Python constant that drifted from the Rust one would
+-- make the gate check a bound no component enforces.
+pythonBindings :: Protocol -> Text
+  = p => w.join {
+    "# @generated by contracts/fabric-trace/v1/gen_rust.zt; do not edit.\n";
+    "# Source contract: contracts/fabric-trace/v1/schema.zt\n\n";
+    "FABRIC_TRACE_FORMAT_VERSION = "; n.toText p.formatVersion; "\n";
+    "FABRIC_TRACE_RECORD_LEN = "; n.toText p.recordLen; "\n";
+    "FABRIC_TRACE_MAX_DEPTH = "; n.toText p.maxTraceDepth; "\n";
+    "FABRIC_TRACE_TERMINAL_RESERVE = "; n.toText p.terminalReserve; "\n";
+    "FABRIC_TRACE_OVERFLOW_SATURATE = "; n.toText p.overflowSaturate; "\n";
+    "FABRIC_TRACE_MAX_KIND = "; n.toText p.maxKind; "\n";
+    "FABRIC_TRACE_MAX_ORDER_CLASS = "; n.toText p.maxOrderClass; "\n";
+    "FABRIC_TRACE_ORDER_DATA = "; n.toText p.orderData; "\n";
+    "FABRIC_TRACE_ORDER_ACK = "; n.toText p.orderAck; "\n";
+    "FABRIC_TRACE_ORDER_PEER_DEATH = "; n.toText p.orderPeerDeath; "\n";
+    "FABRIC_TRACE_ORDER_TIME = "; n.toText p.orderTime; "\n";
+    "FABRIC_TRACE_RESOURCE_COMPLETE = "; n.toText p.resourceComplete; "\n";
+  };
+
+render :: Protocol -> { rust : Text; python : Text; }
+  = p => if valid p
+    then { rust = rustBindings p; python = pythonBindings p; }
+    else { rust = "INVALID_FABRIC_TRACE_SCHEMA"; python = "INVALID_FABRIC_TRACE_SCHEMA"; };
+
+{ render =; }

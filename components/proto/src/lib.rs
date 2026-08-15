@@ -10,6 +10,7 @@ pub mod fabric_qos;
 pub mod fabric_ring;
 pub mod fabric_stream;
 pub mod fabric_time;
+pub mod fabric_trace;
 pub mod fabric_visibility;
 pub mod fs;
 pub mod generation;
@@ -19,6 +20,7 @@ pub mod ring;
 pub mod sample_descriptor;
 pub mod spawn;
 pub mod store;
+pub mod trace_sink;
 
 pub fn valid_fs_request(request: &fs::WireFsRequest) -> bool {
     let name_len = request.name_len as usize;
@@ -691,4 +693,141 @@ pub fn valid_operation_envelope(
         KIND_SERVER_IDLE => value.payload_len == 0 && value.status == STATUS_SUCCESS,
         _ => false,
     }
+}
+
+/// Structural validity of one C8.11 semantic-trace record.
+///
+/// The record is the deterministic evidence stream the repeated-boot comparison
+/// reads, so "structural" is stricter here than on a transport envelope: a
+/// field that means nothing for a family must be zero in that family rather
+/// than merely ignored. A trace whose unused fields carried whatever the
+/// emitter happened to hold would not be byte-comparable across two runs of
+/// the same inputs, which is the whole property C8.11 claims.
+///
+/// What is deliberately *not* checked here is anything requiring live state:
+/// whether a route identity is admitted, whether a correlation is outstanding,
+/// or whether the clock actually reached `now_ns`. Those belong to the emitting
+/// worker, which holds the graph. This rejects bytes that are not a well-formed
+/// record of any family.
+pub fn valid_trace_record(value: &fabric_trace::WireTraceRecord) -> bool {
+    use fabric_trace::*;
+    if value.magic != TRACE_MAGIC
+        || value.version != FORMAT_VERSION
+        || value.kind == 0
+        || value.kind > MAX_KIND
+        || value.flags & !KNOWN_FLAGS != 0
+        || value.order_class == 0
+        || u32::from(value.order_class) > MAX_ORDER_CLASS
+        || value.reserved.iter().any(|byte| *byte != 0)
+    {
+        return false;
+    }
+    // The two flags answer different questions and cannot both be true: a
+    // saturation report is not the record that ends the stream.
+    if value.flags == KNOWN_FLAGS {
+        return false;
+    }
+    // A saturation report counts refused records; that count is what makes the
+    // loss observable rather than silent, so zero would defeat the record.
+    if value.flags & FLAG_DROPPED != 0 && value.high_water == 0 {
+        return false;
+    }
+    // The time class closes an instant rather than occurring within it, so a
+    // record claiming it must name neither an edge nor a correlation: it is not
+    // an event *on* anything. Equivalently, an edge-bearing record can never
+    // sort after everything at its own instant, which is what makes the tie
+    // order meaningful. Two families may close an instant — the clock advance
+    // itself, and the sink's own accounting at that boundary.
+    let time_class = u32::from(value.order_class) == ORDER_TIME;
+    if time_class && (value.route_identity != 0 || value.correlation != 0) {
+        return false;
+    }
+    if time_class && !matches!(value.kind, KIND_QOS | KIND_RESOURCE) {
+        return false;
+    }
+    match value.kind {
+        // Schema admission is a per-generation fact: it names no route edge, no
+        // correlation, and no outcome, only the sequence it was admitted in.
+        KIND_SCHEMA => {
+            value.route_identity == 0
+                && value.correlation == 0
+                && value.status == 0
+                && value.event == 0
+        }
+        // Route provisioning names its edge and reports no correlation.
+        KIND_ROUTE => value.route_identity != 0 && value.correlation == 0 && value.event == 0,
+        // A QoS record is either the clock advance that closes an instant or a
+        // policy event on a declared edge. The two are told apart by the edge,
+        // not by the order class: an advance names no edge, and a policy event
+        // always does. Deriving it from the fields rather than the class keeps
+        // the class free to be checked independently above.
+        KIND_QOS => {
+            if value.route_identity == 0 {
+                // A clock advance. It carries the emitting worker's sequence like
+                // any other record -- that is the sort's tie-break key, and two
+                // records closing one instant must not share it -- but it names
+                // no correlation, no outcome, and no event, because it is not an
+                // event on anything.
+                u32::from(value.order_class) == ORDER_TIME
+                    && value.correlation == 0
+                    && value.status == 0
+                    && value.event == 0
+            } else {
+                u32::from(value.order_class) != ORDER_TIME && value.event != 0
+            }
+        }
+        // Request/response families correlate a request with its outcome, so
+        // both the edge and the correlation are load-bearing.
+        KIND_CALL | KIND_OPERATION => value.route_identity != 0 && value.correlation != 0,
+        // Visibility and interposition are graph-shaped: an edge, no outcome
+        // code, and an event naming what was observed or traversed.
+        KIND_VISIBILITY | KIND_INTERPOSITION => {
+            value.route_identity != 0 && value.correlation == 0 && value.event != 0
+        }
+        // A denial is a refusal, and it names nothing.
+        //
+        // Enforced by the format rather than left to each call site. A refusal
+        // that carried the route identity would confirm to the caller that the
+        // edge exists — the protected graph metadata the refusal is there to
+        // withhold — and one that echoed the caller's correlation would
+        // republish an identity the broker just rejected, which on a shared
+        // route may belong to a different client. What a denial carries is the
+        // fact that something was refused, and the status saying what kind of
+        // refusal it was.
+        KIND_DENIAL => {
+            value.route_identity == 0
+                && value.correlation == 0
+                && value.event == 0
+                && value.status < 0
+        }
+        // A fault is attributed to an edge and reports a failure status.
+        KIND_FAULT => value.route_identity != 0 && value.status < 0,
+        // A resource record is a count, not an event on an edge, and its
+        // `event` names *which* count. A bare number with no counter identity
+        // is not evidence: a reader could not tell frames from operations, and
+        // two runs reporting different counters would compare as equal.
+        KIND_RESOURCE => {
+            value.route_identity == 0
+                && value.correlation == 0
+                && value.status == 0
+                && value.event != 0
+                && value.event <= MAX_RESOURCE_COUNTER
+        }
+        _ => false,
+    }
+}
+
+/// Whether `later` may follow `earlier` under C8.11's declared total order.
+///
+/// The rule is lexicographic on `(now_ns, order_class, sequence)`. It is a
+/// separate function from [`valid_trace_record`] because ordering is a property
+/// of a *pair* of records: a reader validates each record on arrival and the
+/// order as it walks the sink, and a sink that mixed the two checks could not
+/// report which of them a bad trace violated.
+pub fn trace_records_ordered(
+    earlier: &fabric_trace::WireTraceRecord,
+    later: &fabric_trace::WireTraceRecord,
+) -> bool {
+    (earlier.now_ns, earlier.order_class, earlier.sequence)
+        <= (later.now_ns, later.order_class, later.sequence)
 }

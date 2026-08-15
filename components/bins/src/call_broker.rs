@@ -15,6 +15,13 @@ use slime_proto::sample_descriptor::{
 mod fabric_profile {
     include!(concat!(env!("OUT_DIR"), "/fabric_profile.rs"));
 }
+
+// The trace emitter is included once per *binary*, by the binary, because
+// `fabric-service` includes both brokers and a file may be a module only once
+// in a crate. `use super::trace_log` reaches whichever include its host
+// provided; each worker binary is its own task, so each gets its own sink --
+// which is what the format wants: one bounded trace per worker.
+use super::trace_log;
 use fabric_profile::*;
 use slime_rt::{
     CapabilityDisposition, ERR_OUT_OF_MEMORY, ERR_PEER_DEAD, ERR_SUCCESS, ERR_WOULDBLOCK,
@@ -35,6 +42,10 @@ const MAX_PENDING_TERMINALS: usize = MAX_PENDING_TERMINALS_PER_CLIENT * 2;
 /// call route, and a client replaced at runtime reuses its slot, so this bounds
 /// the park set rather than the number of components that ever hold a role.
 const CLIENTS: usize = 2;
+/// The one route this broker carries, as the graph names it. The literal was
+/// already spelled twice in `verify_graph`; naming it once keeps the identity
+/// the trace folds and the declaration it checks from drifting apart.
+const ROUTE_NAME: &str = "parameters";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Phase {
@@ -117,6 +128,15 @@ pub struct Broker {
     supervision: [u32; 3],
     calls: [Call; MAX_CALLS],
     high_water: [u64; 2],
+    /// The most calls this broker has ever held live at once.
+    ///
+    /// C8.11 records resource *high-water* evidence, which is a fact about the
+    /// run rather than about the table: reporting `MAX_CALLS` would emit the
+    /// same number for every boot and every graph, so a real occupancy
+    /// regression would leave the artifact unchanged. Distinct from the
+    /// `high_water` above, which is a per-client request-id watermark used for
+    /// duplicate suppression and is not an occupancy at all.
+    peak_calls: u32,
     next_server_request_id: u64,
     now_ns: u64,
     pending_terminals: [Option<Call>; MAX_PENDING_TERMINALS],
@@ -137,6 +157,18 @@ pub struct Broker {
     /// set forever and every later forward is deferred behind a call that will
     /// never complete.
     server_call: Option<u64>,
+    /// C8.11's bounded semantic trace for this worker.
+    ///
+    /// Accumulated rather than written as it happens: a `debug_write` is a root
+    /// round trip, so emitting inline would put the trace on the traffic's
+    /// critical path and interleave this worker's records with the other two
+    /// workers' in scheduling order. Flushed once at `run`'s exit, the serial
+    /// order is the declared order instead.
+    trace: trace_log::Trace,
+    /// The `parameters` route identity, folded once at construction. Records
+    /// name the edge by this identity rather than by a slot or a component
+    /// name, so the artifact is comparable across boots.
+    route: u64,
 }
 
 impl Broker {
@@ -155,16 +187,57 @@ impl Broker {
             supervision,
             calls: [Call::EMPTY; MAX_CALLS],
             high_water: [0; 2],
+            peak_calls: 0,
             next_server_request_id: 1,
             now_ns: 0,
             pending_terminals: [None; MAX_PENDING_TERMINALS],
             time_closed: false,
             server_call: None,
+            trace: trace_log::Trace::new(FABRIC_TRACE_DEPTH),
+            // Folded in `run` rather than here: `route_identity` hashes, which
+            // is not a const operation, and zero is not a valid route identity
+            // so an unfolded broker cannot emit an edge record by accident.
+            route: 0,
+        }
+    }
+
+    /// Record the live-call occupancy if this sweep set a new peak.
+    ///
+    /// Sampled once per sweep rather than at each claim site: a sweep can admit
+    /// and settle several calls, and the number worth reporting is how many were
+    /// live at once, which is only observable between sweeps.
+    fn sample_peak(&mut self) {
+        let live = self
+            .calls
+            .iter()
+            .filter(|call| call.phase != Phase::Free)
+            .count() as u32;
+        if live > self.peak_calls {
+            self.peak_calls = live;
         }
     }
 
     pub fn run(&mut self) {
         self.verify_graph();
+        // The route identity is the graph's own name for this edge, folded from
+        // the same three inputs the generation folds. Recorded once here so the
+        // trace names the admitted edge and not a local label.
+        self.route = trace_log::route_word(&boot_contracts::fabric_graph::route_identity(
+            ROUTE_NAME,
+            &parameter_call::INTERFACE_IDENTITY,
+            boot_contracts::fabric_graph::CONTRACT_KIND_CALL,
+        ));
+        // C8.11 route evidence: the worker holds the edge the graph declared.
+        // Emitted before any traffic so a reader can interpret every later
+        // record against a route it has already seen provisioned.
+        let _ = self.trace.edge(
+            slime_proto::fabric_trace::KIND_ROUTE,
+            slime_proto::fabric_trace::ORDER_DATA,
+            self.route,
+            0,
+            0,
+            0,
+        );
         slime_rt::debug_write(b"[fabric] call endpoints ready\n");
         loop {
             let mut progressed = false;
@@ -180,11 +253,23 @@ impl Broker {
             progressed |= self.pump_replies();
             progressed |= self.pump_time();
             progressed |= self.reclaim_dead_clients();
+            self.sample_peak();
             if self.calls.iter().all(|call| call.phase == Phase::Free)
                 && self.pending_terminals.iter().all(Option::is_none)
                 && self.server_slot.is_none()
                 && self.time_closed
             {
+                // The sink's mandatory terminal: a reader that sees this knows
+                // the trace is complete rather than truncated by a wedge.
+                // Resource evidence before the terminal: the most calls this run
+                // ever held live at once. The table's *capacity* would be the
+                // same number in every boot and every graph, so it would carry
+                // no evidence: an occupancy regression would not change it.
+                let _ = self
+                    .trace
+                    .resource(slime_proto::fabric_trace::RESOURCE_CALLS, self.peak_calls);
+                let _ = self.trace.terminal();
+                self.trace.flush(b"call");
                 slime_rt::debug_write(b"[fabric] call state reclaimed\n");
                 return;
             }
@@ -248,7 +333,7 @@ impl Broker {
                 .iter()
                 .filter(|(name, route_name, interface, direction)| {
                     *name == component
-                        && *route_name == "parameters"
+                        && *route_name == ROUTE_NAME
                         && *interface == "ParameterCall"
                         && *direction == DIRECTION_CLIENT
                 })
@@ -261,7 +346,7 @@ impl Broker {
             .iter()
             .filter(|(name, route_name, interface, direction)| {
                 *name == b"fabric-call-server"
-                    && *route_name == "parameters"
+                    && *route_name == ROUTE_NAME
                     && *interface == "ParameterCall"
                     && *direction == DIRECTION_SERVER
             })
@@ -327,6 +412,16 @@ impl Broker {
                     // the record does not need the caller waiting.
                     let _ = slime_rt::reply(&message.encode());
                     self.retire_terminal(client, message.request_id);
+                    // An acknowledgement settles a record rather than opening
+                    // one, which is why it sorts after data at the same instant.
+                    let _ = self.trace.edge(
+                        slime_proto::fabric_trace::KIND_CALL,
+                        slime_proto::fabric_trace::ORDER_ACK,
+                        self.route,
+                        message.request_id,
+                        0,
+                        slime_proto::fabric_qos::EVENT_MATCHED,
+                    );
                     return true;
                 }
                 if message.session == SESSION {
@@ -427,21 +522,34 @@ impl Broker {
     }
 
     fn admit(&mut self, client: usize, slot: u32, session: u64, request_id: u64, payload: Payload) {
+        // The trace records the *outcome* of admission, never the attempt.
+        //
+        // Tracing at dispatch entry -- where an earlier revision did it -- wrote
+        // a matched data record naming a client-supplied `request_id` before any
+        // of the three refusals below had run. This plane's own scenario fires
+        // twenty-four requests bearing a foreign session, every one of them
+        // refused, so the artifact reported refused traffic as accepted and
+        // republished correlations the broker had rejected. A denial is recorded
+        // as a denial: negative status, and no route identity, because a refusal
+        // must not confirm which edge the caller was probing.
         if session != client_session(client) {
             settle_payload(payload);
             self.reject_terminal(client, slot, session, request_id, STATUS_STALE);
+            self.trace_denial(STATUS_STALE);
             slime_rt::debug_write(b"[fabric] stale call rejected\n");
             return;
         }
         if request_id <= self.high_water[client] {
             settle_payload(payload);
             self.reject_terminal(client, slot, session, request_id, STATUS_DUPLICATE);
+            self.trace_denial(STATUS_DUPLICATE);
             slime_rt::debug_write(b"[fabric] duplicate call rejected\n");
             return;
         }
         let Some(index) = self.calls.iter().position(|call| call.phase == Phase::Free) else {
             settle_payload(payload);
             self.reject_terminal(client, slot, session, request_id, STATUS_RETRY_EXHAUSTED);
+            self.trace_denial(STATUS_RETRY_EXHAUSTED);
             slime_rt::debug_write(b"[fabric] call retry exhausted\n");
             return;
         };
@@ -465,7 +573,66 @@ impl Broker {
             offered: false,
             payload,
         };
+        // Admitted: now the correlation names a record this broker owns.
+        let _ = self.trace.edge(
+            slime_proto::fabric_trace::KIND_CALL,
+            slime_proto::fabric_trace::ORDER_DATA,
+            self.route,
+            server_request_id,
+            0,
+            slime_proto::fabric_qos::EVENT_MATCHED,
+        );
         self.forward(index);
+    }
+
+    /// Retire the server: record its death once, settle every call it owed, and
+    /// let the loop reach its exit.
+    ///
+    /// Four paths learn the server is gone -- the supervision handle, and an
+    /// `ERR_PEER_DEAD` from a forward, a reply read, or a terminal send -- and
+    /// they race. Wiring the consequences to the supervision arm alone made them
+    /// depend on which observation won: `observe_server_death` returns early
+    /// once `server_slot` is `None`, so an endpoint error that cleared the slot
+    /// first permanently suppressed the arm that set `time_closed`. Since the
+    /// exit predicate is the sole flush site, the worker then never flushed and
+    /// its whole trace was silently lost.
+    ///
+    /// What this does *not* do is close the clock. `time_closed` stops
+    /// `pump_time` consuming further advances, and an `ERR_PEER_DEAD` from the
+    /// server's route endpoint is not evidence that the clock component has gone:
+    /// they are separate declared instances. Closing it here would cut the run
+    /// short by however many advances were still to come, and which observation
+    /// won that race would then change the artifact between two boots. Only the
+    /// supervision arm and an `ERR_PEER_DEAD` from the clock endpoint itself
+    /// close it.
+    ///
+    /// Idempotent: the second observation of one death does nothing.
+    fn retire_server(&mut self) {
+        if self.server_slot.is_none() {
+            return;
+        }
+        self.server_slot = None;
+        // Peer death sorts after data and acknowledgement at the same instant:
+        // everything already in flight was observable before the peer went away.
+        let _ = self.trace.peer_death(self.route);
+        self.reclaim_all(STATUS_PEER_DEAD);
+    }
+
+    /// Record one refusal.
+    ///
+    /// Carries the refusal status and no route identity or correlation. A denial
+    /// that named the edge would confirm to a caller that the edge exists, which
+    /// is the metadata the refusal exists to withhold; a denial that echoed the
+    /// caller's correlation would republish an identity the broker just refused.
+    fn trace_denial(&mut self, status: i32) {
+        let _ = self.trace.edge(
+            slime_proto::fabric_trace::KIND_DENIAL,
+            slime_proto::fabric_trace::ORDER_DATA,
+            0,
+            0,
+            denial_status(status),
+            0,
+        );
     }
 
     fn reject_terminal(
@@ -731,7 +898,7 @@ impl Broker {
                 }
             }
             ERR_PEER_DEAD => {
-                self.server_slot = None;
+                self.retire_server();
                 self.finish(index, STATUS_PEER_DEAD);
             }
             _ => fail(b"call forward"),
@@ -828,8 +995,7 @@ impl Broker {
         let length = match slime_rt::recv(slot, &mut bytes, &mut caps) {
             ERR_WOULDBLOCK => return false,
             ERR_PEER_DEAD => {
-                self.server_slot = None;
-                self.reclaim_all(STATUS_PEER_DEAD);
+                self.retire_server();
                 return true;
             }
             value if value < 0 => fail(b"server recv"),
@@ -1122,6 +1288,10 @@ impl Broker {
         {
             fail(b"invalid call time");
         }
+        // The advance closes the previous instant, so it is recorded before any
+        // deadline it triggers: the trace's tie order puts time last at the
+        // instant it ends, and the expiries below belong to the new one.
+        let _ = self.trace.advance(value.now_ns);
         self.now_ns = value.now_ns;
         for index in 0..self.calls.len() {
             if self.calls[index].phase == Phase::Free {
@@ -1140,7 +1310,23 @@ impl Broker {
                 if self.server_call == Some(self.calls[index].server_request_id) {
                     self.server_call = None;
                 }
+                // Read the correlation *before* `finish`: it clears the record
+                // to `Call::EMPTY` on the delivered and peer-dead paths, so
+                // reading afterwards yields zero on the common path and the
+                // real id only when the terminal had to be queued -- making the
+                // traced correlation depend on transient endpoint capacity.
+                let correlation = self.calls[index].server_request_id;
                 self.finish(index, status);
+                // A deadline transition is a QoS policy event on this edge, at
+                // the instant the clock just reached.
+                let _ = self.trace.edge(
+                    slime_proto::fabric_trace::KIND_QOS,
+                    slime_proto::fabric_trace::ORDER_DATA,
+                    self.route,
+                    correlation,
+                    status,
+                    slime_proto::fabric_qos::EVENT_DEADLINE_MISSED,
+                );
                 if status == STATUS_CANCELLED {
                     slime_rt::debug_write(b"[fabric] call cancelled\n");
                 } else {
@@ -1158,17 +1344,26 @@ impl Broker {
         true
     }
 
+    /// Observe the server's termination through its supervision handle.
+    ///
+    /// Deliberately *not* guarded on `server_slot.is_some()`. An `ERR_PEER_DEAD`
+    /// from the route endpoint clears the slot first about as often as not, and
+    /// the old guard then suppressed this arm permanently -- which mattered
+    /// because this is the only place that closes the clock, and the exit
+    /// predicate waits on it. `time_closed` short-circuits the body, so the
+    /// supervision handle is read once per death rather than every sweep.
     fn observe_server_death(&mut self) -> bool {
-        if self.server_slot.is_none() {
+        if self.time_closed {
             return false;
         }
         match slime_rt::supervision_status(self.supervision[2]) {
             Ok(None) => false,
             Ok(Some(_)) => {
-                self.server_slot = None;
-                self.reclaim_all(STATUS_PEER_DEAD);
-                slime_rt::debug_write(b"[fabric] call peer death propagated\n");
+                self.retire_server();
+                // The server's task hosts this plane's clock, so its confirmed
+                // termination is what says no further advance can arrive.
                 self.time_closed = true;
+                slime_rt::debug_write(b"[fabric] call peer death propagated\n");
                 true
             }
             Err(_) => fail(b"server supervision"),
@@ -1289,7 +1484,7 @@ impl Broker {
                     progressed = true;
                 }
                 ERR_PEER_DEAD => {
-                    self.server_slot = None;
+                    self.retire_server();
                     self.finish(index, STATUS_PEER_DEAD);
                     progressed = true;
                 }
@@ -1489,3 +1684,34 @@ fn fail(reason: &[u8]) -> ! {
 const _: () = assert!(slime_proto::fabric_call::CALL_LEN == MAX_MSG);
 const _: () = assert!(slime_proto::fabric_call::CALL_TIME_LEN == MAX_MSG);
 const _: () = assert!(FLAG_NON_IDEMPOTENT == 1);
+
+/// The one overflow discipline implemented. Asserted rather than branched on: a
+/// generation declaring anything else names behaviour no worker has, and
+/// discovering that at boot would be worse than not compiling.
+const _: () = assert!(FABRIC_TRACE_OVERFLOW == slime_proto::fabric_trace::OVERFLOW_SATURATE);
+/// And the declared depth must fit the sink the contract sizes.
+///
+/// `const _: ()` rather than relying on `TraceSink::with_const_capacity`'s own
+/// assert: that constructor is a `const fn` reached from `fn main`, and a
+/// `const fn` called at runtime evaluates at runtime -- so its assert would be a
+/// boot panic inside a `no_std` component rather than the build failure it
+/// claims to be. These items are evaluated at compile time unconditionally.
+const _: () = assert!(FABRIC_TRACE_DEPTH <= slime_proto::fabric_trace::MAX_TRACE_DEPTH);
+const _: () = assert!(FABRIC_TRACE_DEPTH > slime_proto::fabric_trace::TERMINAL_RESERVE);
+
+/// A refusal status, as a failure code the trace's denial family admits.
+///
+/// The per-plane `STATUS_*` refusal codes are positive protocol enumerators, so
+/// a denial record has to carry the negation. `-status.abs()` is wrong twice
+/// over: it yields `0` for a zero input, which `valid_trace_record` refuses --
+/// silently dropping the denial -- and `i32::MIN.abs()` overflows. Mapping
+/// through `-1` for anything that is not a nameable positive refusal keeps every
+/// denial a valid record, which is the property that makes a refused request
+/// visible in the artifact at all.
+fn denial_status(status: i32) -> i32 {
+    match status {
+        0 => -1,
+        value if value > 0 => value.checked_neg().unwrap_or(-1),
+        value => value,
+    }
+}

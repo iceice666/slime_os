@@ -172,6 +172,11 @@ from boot_contracts import (
     sha256,
 )
 from boot_layout import build_boot_layout, render_rust as render_boot_layout_rust
+from fabric_trace_contract import (
+    FABRIC_TRACE_MAX_DEPTH,
+    FABRIC_TRACE_OVERFLOW_SATURATE,
+    FABRIC_TRACE_TERMINAL_RESERVE,
+)
 from interface_schema import InterfaceSchemaError, admit_interfaces, resolve_interface_paths
 from release_trust import RELEASE_BYTES, build_release
 from zutai_cli import STDLIB, binary
@@ -865,6 +870,36 @@ FABRIC_LIMIT_CEILINGS = {
     "loans": FABRIC_GRAPH_KERNEL_LOANS,
 }
 
+# C8.11 trace-sink overflow vocabulary, mapped to the schema-owned codes the
+# components compile against.
+FABRIC_TRACE_OVERFLOW = {
+    "saturate": FABRIC_TRACE_OVERFLOW_SATURATE,
+}
+
+
+def validate_fabric_trace_sink(graph: dict) -> None:
+    """Check the declared semantic-trace sink against its contract ceiling.
+
+    The sink has to hold ordinary evidence *and* the mandatory terminal records
+    that distinguish a completed trace from a truncated one, so a depth at or
+    below the reservation is rejected: such a sink could never emit a record at
+    all. The overflow discipline is a closed vocabulary rather than a free
+    string, because a worker selects a code path from it.
+    """
+    depth = graph.get("traceDepth")
+    if not isinstance(depth, int) or isinstance(depth, bool):
+        fail("fabric graph: traceDepth must be an integer")
+    if depth > FABRIC_TRACE_MAX_DEPTH:
+        fail(f"fabric graph: traceDepth exceeds the contract ceiling {FABRIC_TRACE_MAX_DEPTH}")
+    if depth <= FABRIC_TRACE_TERMINAL_RESERVE:
+        fail(
+            "fabric graph: traceDepth must exceed the terminal reservation "
+            f"{FABRIC_TRACE_TERMINAL_RESERVE}"
+        )
+    overflow = graph.get("traceOverflow")
+    if overflow not in FABRIC_TRACE_OVERFLOW:
+        fail(f"fabric graph: unsupported traceOverflow {overflow!r}")
+
 
 def validate_fabric_qos(member: dict, limits: dict, label: str) -> None:
     """Apply the same QoS truth table `fabric_graph::validate_qos` enforces.
@@ -1350,6 +1385,10 @@ def resolve_fabric_profile(manifest: dict, interfaces: list, profile_name: str) 
         "copyPages": FABRIC_COPY_PAGES,
         "frameCapacity": FABRIC_FRAME_CAPACITY,
         "requiredCapabilitySlots": required_capability_slots,
+        # C8.11: the sink's capacity and overflow code, resolved once here so
+        # every worker in the graph compiles against the same two numbers.
+        "traceDepth": graph["traceDepth"],
+        "traceOverflow": FABRIC_TRACE_OVERFLOW[graph["traceOverflow"]],
         "limits": [{"name": key, "value": graph["limits"][key]} for key in FABRIC_LIMIT_KEYS],
         "schemas": [
             {
@@ -1727,6 +1766,11 @@ pub const FABRIC_MAX_CAPABILITY_SLOTS: usize = {limits['capabilitySlots']};
 pub const FABRIC_REQUIRED_CAPABILITY_SLOTS: usize = {artifact['requiredCapabilitySlots']};
 pub const FABRIC_FRAME_CAPACITY: usize = {artifact['frameCapacity']};
 pub const FABRIC_COPY_PAGES: usize = {artifact['copyPages']};
+/// C8.11: the declared depth of one worker's bounded semantic-trace sink, and
+/// the overflow code it applies when that depth is reached. A worker sizes its
+/// sink array from this constant, so the generation and the array cannot drift.
+pub const FABRIC_TRACE_DEPTH: usize = {artifact['traceDepth']};
+pub const FABRIC_TRACE_OVERFLOW: u32 = {artifact['traceOverflow']};
 /// No request/response route of this class exists in the resolved graph.
 pub const FABRIC_DEADLINE_ABSENT: u64 = u64::MAX;
 pub const FABRIC_CALL_DEADLINE_NS: u64 = {deadline('parameters')};
@@ -1810,6 +1854,13 @@ def build_fabric_graph(graph: dict, component_names: set[str], interfaces: list)
         if ceiling is not None and value > ceiling:
             fail(f"fabric graph: limit {key} exceeds the contract ceiling {ceiling}")
         limit_values.append(value)
+
+    # C8.11: the trace sink's capacity and overflow discipline are graph facts,
+    # checked here against the schema-owned ceiling for the same reason every
+    # limit above is: a component compiles its sink array from this number, so
+    # an over-declared depth would be a build that emits an image whose worker
+    # cannot hold its own declared sink.
+    validate_fabric_trace_sink(graph)
 
     routes = graph["routes"]
     if len(routes) > MAX_FABRIC_GRAPH_ROUTES:

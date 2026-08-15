@@ -18,6 +18,13 @@
 #[path = "../operation_broker.rs"]
 mod operation_broker;
 
+// The trace emitter, included here rather than by the broker: a file may be a
+// module only once per crate, and `fabric-service` includes both brokers. Each
+// binary that hosts a broker therefore owns the include, and the broker reaches
+// it through `super`.
+#[path = "../fabric_trace_log.rs"]
+mod trace_log;
+
 slime_rt::entry!(main);
 
 const CLIENT_A_SLOT: u32 = 2;
