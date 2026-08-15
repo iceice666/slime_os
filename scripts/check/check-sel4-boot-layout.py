@@ -84,6 +84,10 @@ PLANES: tuple[tuple[str, str, str], ...] = (
     # P5.4.8, on the same rule. Six executables, the stream set with
     # `fabric-intruder` as the declared proxy rather than an unauthorized probe.
     ("sel4-visibility", "--visibility-plane", "slime-sel4-visibility.elf"),
+    # C8.12. Nine rows: init's eight child executables plus its own buffer
+    # factory, in one disjoint layout. The ungranted probe and the declared
+    # proxy are distinct rows, which is the half of C8.12 a layout can state.
+    ("sel4-matrix", "--matrix-plane", "slime-sel4-matrix.elf"),
     # P5.4.9. Twenty-one rows: every C8 role's executable in disjoint slots,
     # which is the half of C8.10 a boot layout can state.
     ("sel4-boot", "--boot-plane", "slime-sel4-boot.elf"),

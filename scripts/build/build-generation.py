@@ -280,6 +280,22 @@ SEL4_MANIFESTS = {
     / "v1"
     / "fixtures"
     / "sel4-boot.zti",
+    "sel4-matrix": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-matrix.zti",
+    # C8.12's negative arm: the matrix graph with one `telemetry-alt` publisher
+    # weakened to BEST_EFFORT against its RELIABLE subscriber. The builder emits
+    # it — pairwise QoS is not a shape property — and `slime-root` refuses it at
+    # admission, which is where that rule lives.
+    "sel4-matrix-unsatisfiable": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-matrix-unsatisfiable.zti",
     "sel4-storage": ROOT
     / "contracts"
     / "generation"
@@ -457,6 +473,12 @@ DEFAULT_FABRIC_PROFILE = "default"
 TEST_BOOT_PROFILE = "test"
 VISIBILITY_FABRIC_PROFILE = "visibility"
 UNIFIED_FABRIC_PROFILE = "unified"
+# C8.12's matching, visibility, and denial matrix. Its own profile name for the
+# same reason `unified` is: the stream plane's supervision slots are numbered
+# `FIRST_CONTROL_SLOT + len(controls) + index`, so a plane that adds a control
+# renumbers every handle after it. Keeping the matrix's roster separate leaves
+# every earlier plane's layout byte-for-byte unchanged.
+MATRIX_FABRIC_PROFILE = "matrix"
 FABRIC_FIRST_CONTROL_SLOT = 2
 FABRIC_COPY_PAGES = 2
 FABRIC_FRAME_CAPACITY = 32
@@ -492,6 +514,22 @@ FABRIC_BOOT_STREAM_CONTROL_GRANTS = (
     "fabric-probe-control",
     "fabric-proxy-control",
 )
+# C8.12's matrix plane. One compatible pair per declared route, the ungranted
+# probe, and the declared interposition proxy — every identity distinct, so a
+# denial can never be confused for a role granted elsewhere.
+#
+# `fabric-probe` is present deliberately: the denial under test is "no declared
+# edge", not "no channel", so it must hold a real control endpoint before it can
+# be refused on the graph rather than by the kernel.
+FABRIC_MATRIX_STREAM_CONTROL_GRANTS = (
+    "fabric-publisher-control",
+    "fabric-subscriber-control",
+    "fabric-publisher-b-control",
+    "fabric-subscriber-b-control",
+    "fabric-observer-control",
+    "fabric-probe-control",
+    "fabric-proxy-control",
+)
 FABRIC_CALL_CONTROL_GRANTS = (
     "fabric-call-client-control",
     "fabric-call-client-b-control",
@@ -505,12 +543,21 @@ FABRIC_OPERATION_CONTROL_GRANTS = (
     "fabric-op-time-control",
 )
 FABRIC_OPERATION_REPLACEMENT_GRANTS = ("fabric-op-client-b-restart-control",)
+# Routes a sibling seL4 manifest declares that the canonical x86 source does
+# not. Named here rather than discovered by decoding every fixture, so a
+# misspelling in a manifest is a build failure rather than a route silently
+# absent from every worker's partition.
+FABRIC_EXTRA_ROUTE_CATALOGUE = ("telemetry-alt",)
 # C8.10 bounded route workers: whole routes, partitioned so no worker's live
 # wake sources exceed one `SYS_WAIT` set. Declared here rather than inferred so
 # the partition is a generation fact the resolver validates, not a runtime
 # heuristic that could silently drift past the kernel bound.
 FABRIC_ROUTE_WORKERS = (
-    ("stream", ("telemetry", "diagnostics")),
+    # `telemetry-alt` is C8.12's alternate-name route: the same interface under
+    # a second name, which the identity fold makes a distinct route rather than
+    # an alias. It belongs to the stream worker because it *is* a stream route;
+    # the matrix graph budgets its ingress alongside the other two.
+    ("stream", ("telemetry", "telemetry-alt", "diagnostics")),
     ("call", ("parameters",)),
     ("operation", ("navigation", "nav-backup")),
 )
@@ -1161,17 +1208,17 @@ def build_normalized_schema_artifact(schemas: list) -> bytes:
     ) + records + payload
 
 
-def validate_route_worker_names() -> None:
+def validate_route_worker_names(declared_routes: set[str]) -> None:
     """Every name in `FABRIC_ROUTE_WORKERS` is a route some manifest declares.
 
-    Checked against the **full catalogue** — the union of every route the
-    canonical x86 source declares — rather than against the graph being built.
-    Those are different questions, and conflating them is what makes the check
-    either useless or wrong:
+    Checked against the **full catalogue** — every route name any manifest in
+    this repository declares — rather than against the graph being built. Those
+    are different questions, and conflating them is what makes the check either
+    useless or wrong:
 
     * against the graph being built, a manifest declaring a subset of the
-      routes (P5.5.2's seL4 graph declares the two stream routes alone)
-      fails on a tuple that has no typo in it;
+      routes (P5.5.2's seL4 graph declares the two stream routes alone) fails
+      on a tuple that has no typo in it;
     * without the check at all, a genuine misspelling in the tuple silently
       drops a route from its worker, and the partition assertion below then
       reports the route as uncovered rather than the worker as misspelled.
@@ -1179,11 +1226,24 @@ def validate_route_worker_names() -> None:
     So the typo check reads the source of truth for what routes exist, and the
     partition check reads the graph. A worker whose routes this graph does not
     declare simply has no work here.
+
+    The catalogue is the canonical x86 manifest's routes plus
+    `FABRIC_EXTRA_ROUTE_CATALOGUE`, for routes a sibling seL4 manifest declares
+    and the x86 source does not. Reading every manifest instead would make one
+    build decode twenty-odd fixtures to answer a question about a constant, and
+    would silently accept a typo the moment some fixture happened to contain it.
     """
     catalogue = {
         route["name"]
         for route in _canonical_manifest()["fabricGraph"]["routes"]
-    }
+    } | set(FABRIC_EXTRA_ROUTE_CATALOGUE)
+    unknown_declared = sorted(declared_routes - catalogue)
+    if unknown_declared:
+        fail(
+            f"fabric graph: this manifest declares route(s) {unknown_declared}, "
+            "which the route catalogue does not name; add them to "
+            "FABRIC_EXTRA_ROUTE_CATALOGUE and to a route worker"
+        )
     for worker_name, worker_routes in FABRIC_ROUTE_WORKERS:
         unknown = [route for route in worker_routes if route not in catalogue]
         if unknown:
@@ -1252,16 +1312,18 @@ def resolve_fabric_profile(manifest: dict, interfaces: list, profile_name: str) 
         )
         for route in graph["routes"]
     )
-    # The full-graph boot profile declares its own stream plane; every other
-    # profile keeps the exact control layout its gate already grants. A source
-    # this profile does not declare drops out of the list rather than failing,
-    # so the product profile resolves the same plane with fewer participants.
-    stream_controls = _control_sources(
-        manifest,
-        FABRIC_BOOT_STREAM_CONTROL_GRANTS
-        if fabric_profile_name == UNIFIED_FABRIC_PROFILE
-        else FABRIC_STREAM_CONTROL_GRANTS,
-    )
+    # The full-graph boot and matrix profiles declare their own stream planes;
+    # every other profile keeps the exact control layout its gate already
+    # grants. A source this profile does not declare drops out of the list
+    # rather than failing, so the product profile resolves the same plane with
+    # fewer participants.
+    if fabric_profile_name == UNIFIED_FABRIC_PROFILE:
+        stream_control_grants = FABRIC_BOOT_STREAM_CONTROL_GRANTS
+    elif fabric_profile_name == MATRIX_FABRIC_PROFILE:
+        stream_control_grants = FABRIC_MATRIX_STREAM_CONTROL_GRANTS
+    else:
+        stream_control_grants = FABRIC_STREAM_CONTROL_GRANTS
+    stream_controls = _control_sources(manifest, stream_control_grants)
     # C8.10's bounded route workers own their own planes' controls, so under the
     # full-graph profile these terminate at the worker rather than at the stream
     # broker. Every single-plane profile has no worker instance at all and keeps
@@ -1328,10 +1390,31 @@ def resolve_fabric_profile(manifest: dict, interfaces: list, profile_name: str) 
         for participant in participants
         for proxy in participant["interposition"]
     }
+    # C8.12's ungranted probe needs one for a third reason, and only on the
+    # matrix plane. It holds no ring and interposes on nothing, so neither rule
+    # above names it — but the matrix broker's dispatch loop has to know when it
+    # has stopped asking, and a native Endpoint reports no peer death. Without a
+    # handle the loop would poll a silent endpoint forever, unable to tell a
+    # refused caller that has exited from one that is merely slow.
+    #
+    # Scoped to this profile because a handle is a slot: granting one everywhere
+    # would renumber every earlier plane's supervision table. It grants the
+    # probe nothing either way — the *fabric* holds the handle, not the probe.
+    denied_components = (
+        {
+            component
+            for component in stream_controls
+            if component not in ring_components and component not in proxy_components
+        }
+        if fabric_profile_name == MATRIX_FABRIC_PROFILE
+        else set()
+    )
     holders = [
         component
         for component in stream_controls
-        if component in ring_components or component in proxy_components
+        if component in ring_components
+        or component in proxy_components
+        or component in denied_components
     ]
     supervision = [
         {"component": component, "slot": FABRIC_FIRST_CONTROL_SLOT + len(stream_controls) + index}
@@ -1359,7 +1442,7 @@ def resolve_fabric_profile(manifest: dict, interfaces: list, profile_name: str) 
     # see `FABRIC_WORKER_WAIT_SHAPES` — because the stream broker's set scales
     # with the graph while the request/response brokers park across fixed slot
     # arrays of their own.
-    validate_route_worker_names()
+    validate_route_worker_names(declared_routes)
     workers = []
     for worker_name, worker_routes in FABRIC_ROUTE_WORKERS:
         # A route this manifest does not declare is not this manifest's to
@@ -1617,19 +1700,28 @@ def render_fabric_profile_rust(
         existing = notification_slots.setdefault(name, binding["slot"])
         if existing != binding["slot"]:
             fail(f"notification slot {name} declared twice with different slots")
-    # Every profile emits the call plane's wake slots, even where the manifest
-    # declares no such notification. The components that read them are compiled
-    # for every graph, so an absent constant is a *build* failure standing in
-    # for a boot-time absence the generation already expresses -- the same trap
-    # the fabric's control-slot constants hit. `SLOT_ABSENT` says "this graph
-    # has no wake object", which the holder checks rather than fails to link
-    # against.
+    # Every profile emits these wake slots, even where the manifest declares no
+    # such notification. The components that read them are compiled for every
+    # graph, so an absent constant is a *build* failure standing in for a
+    # boot-time absence the generation already expresses -- the same trap the
+    # fabric's control-slot constants hit. `SLOT_ABSENT` says "this graph has no
+    # wake object", which the holder checks rather than fails to link against.
+    #
+    # The stream entries join the call plane's for C8.12, whose graph moves
+    # `fabric-subscriber-b` and `fabric-publisher-b` onto the alternate-name
+    # telemetry route. Both components still compile their `telemetry` arm in
+    # every image, so the constants must exist even where that graph declares
+    # the edge under a different route name.
     for name in (
         "SERVICE_PARAMETERS_READY_SLOT",
         "CALL_CLIENT_SERVICE_PARAMETERS_READY_SLOT",
         "CALL_CLIENT_B_SERVICE_PARAMETERS_READY_SLOT",
         "CALL_SERVER_SERVICE_PARAMETERS_READY_SLOT",
         "CALL_TIME_SERVICE_PARAMETERS_READY_SLOT",
+        "PUBLISHER_B_TELEMETRY_READY_SLOT",
+        "PUBLISHER_B_TELEMETRY_CREDIT_SLOT",
+        "SUBSCRIBER_B_TELEMETRY_READY_SLOT",
+        "SUBSCRIBER_B_TELEMETRY_CREDIT_SLOT",
     ):
         notification_slots.setdefault(name, 0xFFFF_FFFF)
     notification_constants = "".join(

@@ -68,6 +68,10 @@ fn main(_startup_arg: u32) {
         // reaches blocked idle. It asks for nothing, so it must receive nothing.
         slime_components::fabric_boot::park_only(b"fabric-proxy");
     }
+    if slime_components::fabric_matrix::active() {
+        matrix_main();
+        return;
+    }
     let ViewPage::End(end) =
         request_page(CONTROL_SLOT, 0).unwrap_or_else(|_| fail(b"empty visibility view"))
     else {
@@ -176,6 +180,54 @@ fn main(_startup_arg: u32) {
     }
     send_control(&trace.encode());
     slime_rt::debug_write(b"[fabric-proxy] declared relay complete; exiting\n");
+}
+
+/// C8.12: the declared interposition hop, and the proof it is the only path.
+///
+/// The graph names this component on the telemetry subscriber's chain and
+/// declares it no participant edge, so its introspection view is empty and its
+/// only authority is the four narrowed relay endpoints the generation
+/// installed. It re-validates each rights mask from its own side: the broker
+/// asserting the chain is not the same as the proxy holding only the chain.
+fn matrix_main() {
+    use slime_components::fabric_matrix::{Outcome, request_role};
+
+    // A hop is not a participant. Asking for a role on the route it relays must
+    // be refused, or "the proxy holds only its declared chain roles" would be a
+    // claim about a component that could have asked for more.
+    match request_role(ROUTE_NAME, telemetry_stream::TYPE_TAG, DIRECTION_SUBSCRIBE) {
+        Ok(Outcome::Denied(_)) => {
+            slime_rt::debug_write(b"[fabric-proxy] matrix chain hop holds no participant edge\n");
+        }
+        Ok(Outcome::Role(_)) => fail(b"the declared hop was granted a participant role"),
+        Err(_) => fail(b"matrix proxy role request"),
+    }
+
+    // The four relay endpoints are generation-declared and already installed.
+    // Their slots are the manifest's, so what remains to check is that each
+    // still carries only the one direction the chain needs.
+    let sample_bytes = receive_message(1);
+    let sample = WireStreamSample::decode(&sample_bytes)
+        .filter(|sample| valid_stream_sample(sample, telemetry_stream::TYPE_TAG, 32))
+        .filter(|sample| sample.sequence == 1)
+        .unwrap_or_else(|| fail(b"matrix proxy sample"));
+    // Downstream data is send-only: receiving on it must be refused before the
+    // relay, so a widened declaration fails here rather than behind a hop that
+    // worked anyway.
+    let mut discard = [0u8; MAX_MSG];
+    let mut no_caps = [0u64; MAX_CAPS_PER_MSG];
+    if slime_rt::recv(3, &mut discard, &mut no_caps) == ERR_SUCCESS {
+        fail(b"matrix proxy downstream widened");
+    }
+    send_on(3, &sample_bytes);
+
+    let ack_bytes = receive_message(4);
+    let _ack = WireStreamAck::decode(&ack_bytes)
+        .filter(|ack| valid_stream_ack(ack, telemetry_stream::TYPE_TAG))
+        .filter(|ack| ack.sequence == sample.sequence)
+        .unwrap_or_else(|| fail(b"matrix proxy ack"));
+    send_on(2, &ack_bytes);
+    slime_rt::debug_write(b"[fabric-proxy] matrix relay complete; exiting\n");
 }
 
 fn send_control(message: &[u8; MAX_MSG]) {

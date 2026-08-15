@@ -25,8 +25,18 @@ pub const RESOURCE_FRAMES: u32 = 1;
 pub const RESOURCE_OPERATIONS: u32 = 2;
 pub const RESOURCE_CALLS: u32 = 3;
 pub const RESOURCE_SINK_DROPPED: u32 = 4;
-pub const RESOURCE_COMPLETE: u32 = 5;
-pub const MAX_RESOURCE_COUNTER: u32 = 5;
+pub const RESOURCE_ROLES: u32 = 5;
+pub const RESOURCE_COMPLETE: u32 = 6;
+pub const MAX_RESOURCE_COUNTER: u32 = 6;
+
+/// What a `visibility` or `interposition` record's `event` names. Both
+/// families are graph-shaped -- an edge, no outcome, and an event saying
+/// what was observed or traversed over it -- so the event is the only
+/// field carrying meaning, and a bare nonzero number would not be
+/// evidence.
+pub const GRAPH_VIEW_ANSWERED: u32 = 1;
+pub const GRAPH_HOP_TRAVERSED: u32 = 2;
+pub const MAX_GRAPH_EVENT: u32 = 2;
 
 /// The declared total tie order at one simulated instant: data, then
 /// acknowledgement, then peer death, then the clock advance that closes it.

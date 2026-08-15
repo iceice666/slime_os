@@ -59,6 +59,10 @@ fn main(_startup_arg: u32) {
             1,
         );
     }
+    if slime_components::fabric_matrix::active() {
+        matrix_main();
+        return;
+    }
     // Page the whole cursor. The view is bounded by the generation's declared
     // visibility policy, so exhausting it is a finite walk rather than a poll.
     let mut cursor = 0;
@@ -97,5 +101,55 @@ fn main(_startup_arg: u32) {
     }
     slime_rt::debug_write(b"[fabric-observer] filtered view routes=1\n");
     slime_rt::debug_write(b"[fabric-observer] view granted no route authority\n");
+    slime_rt::debug_write(b"[fabric-observer] done\n");
+}
+
+/// C8.12: read-only visibility, and the proof it is not a path to authority.
+///
+/// The matrix graph declares this component a `diagnostics` subscriber under a
+/// *private* visibility grant and nothing on either telemetry route. So its
+/// filtered view must contain exactly one route — `diagnostics` — and asking
+/// for a role on a route it can neither see nor participate in must be refused.
+///
+/// Both halves are needed. A view showing every route would make the filter a
+/// pass-through; a view showing one route while a role request on another
+/// succeeded would make the filter cosmetic.
+fn matrix_main() {
+    use slime_components::fabric_matrix::{Outcome, request_role};
+
+    let mut cursor = 0;
+    let mut routes = 0;
+    loop {
+        match request_page(CONTROL_SLOT, cursor).unwrap_or_else(|_| fail(b"matrix filtered view")) {
+            ViewPage::Route(record) => {
+                if &record.route_name[..record.route_name_len as usize] != b"diagnostics" {
+                    fail(b"filtered view exposed an ungranted route");
+                }
+                routes += 1;
+                cursor = record.cursor;
+            }
+            ViewPage::Qos(record) => cursor = record.cursor,
+            ViewPage::End(_) => break,
+        }
+    }
+    if routes != 1 {
+        fail(b"matrix filtered view bound");
+    }
+    slime_rt::debug_write(b"[fabric-observer] matrix filtered view routes=1\n");
+
+    // Holding a view of one route is not authority over another. Asked under
+    // the exact strings a real participant uses, so the refusal is a capability
+    // property rather than a parse failure.
+    match request_role(
+        "telemetry",
+        telemetry_stream::TYPE_TAG,
+        boot_contracts::fabric_graph::DIRECTION_SUBSCRIBE,
+    ) {
+        Ok(Outcome::Denied(_)) => {
+            slime_rt::debug_write(b"[fabric-observer] matrix view granted no route authority\n");
+        }
+        Ok(Outcome::Role(_)) => fail(b"a filtered view yielded route authority"),
+        Err(_) => fail(b"matrix observer role request"),
+    }
     slime_rt::debug_write(b"[fabric-observer] done\n");
 }

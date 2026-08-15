@@ -506,6 +506,28 @@ SEL4_ROLLBACK_LAYOUT = (
     (1, 'executable', 'sel4-rollback-probe', 0x10008),
 )
 
+# Generations 34 and 35, the C8.12 matrix plane and its incompatible-QoS
+# sibling. Eight executables — every C8.12 identity distinct, including the
+# ungranted probe and the declared proxy — plus init's own buffer factory,
+# which the fabric holder needs a copy of.
+#
+# The two share one layout because they are the same composition: the sibling
+# differs only in one participant's declared reliability, which changes what
+# admission decides rather than which slots init holds. Its image never reaches
+# this table at runtime — the root refuses the generation first — but the
+# resolver still resolves it, so it must be declared here rather than absent.
+SEL4_MATRIX_LAYOUT = (
+    (1, 'executable', 'fabric-observer', 0x10008),
+    (2, 'executable', 'fabric-probe', 0x10008),
+    (3, 'executable', 'fabric-proxy', 0x10008),
+    (4, 'executable', 'fabric-publisher', 0x10008),
+    (5, 'executable', 'fabric-publisher-b', 0x10008),
+    (6, 'executable', 'fabric-service', 0x10008),
+    (7, 'executable', 'fabric-subscriber', 0x10008),
+    (8, 'executable', 'fabric-subscriber-b', 0x10008),
+    (10, 'shared-buffer-factory', None, 0x1000000),
+)
+
 
 # Per-generation overrides, applied over `BASE_LAYOUT` by slot. A generation
 # absent here resolves the base layout unchanged.
@@ -547,6 +569,8 @@ REPLACEMENTS = {
     31: SEL4_INPUT_LAYOUT,
     32: SEL4_POWERBOX_LAYOUT,
     33: SEL4_TRANSFER_LAYOUT,
+    34: SEL4_MATRIX_LAYOUT,
+    35: SEL4_MATRIX_LAYOUT,
 }
 
 

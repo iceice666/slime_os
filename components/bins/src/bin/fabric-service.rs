@@ -56,6 +56,8 @@
 #[path = "../call_broker.rs"]
 mod call_broker;
 
+#[path = "../matrix_broker.rs"]
+mod matrix_broker;
 #[path = "../operation_broker.rs"]
 mod operation_broker;
 #[path = "../visibility_broker.rs"]
@@ -304,6 +306,10 @@ fn main(_startup_arg: u32) {
     }
     if GENERATION_BOOT_ACTION == "visibility" {
         visibility_broker::run();
+        return;
+    }
+    if GENERATION_BOOT_ACTION == "matrix" {
+        matrix_broker::run();
         return;
     }
     if GENERATION_BOOT_ACTION == "call" {

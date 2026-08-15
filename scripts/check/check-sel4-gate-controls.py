@@ -96,6 +96,7 @@ GATES: tuple[tuple[str, str, int], ...] = (
     ("sel4_call_plane", "check/check-sel4-call-plane.py", 47),
     ("sel4_operation_plane", "check/check-sel4-operation-plane.py", 53),
     ("sel4_visibility_plane", "check/check-sel4-visibility-plane.py", 25),
+    ("sel4_matrix_plane", "check/check-sel4-matrix-plane.py", 24),
     # B55: the full-graph boot restoration moved the seven racy cross-task
     # stream markers (a broker per-edge print racing a participant's own
     # summary print differently for one-route vs two-route participants) out

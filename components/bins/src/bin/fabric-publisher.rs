@@ -104,6 +104,10 @@ fn main(_startup_arg: u32) {
         visibility_main();
         return;
     }
+    if slime_components::fabric_matrix::active() {
+        matrix_main();
+        return;
+    }
     let route = route_identity(
         ROUTE_NAME,
         &telemetry_stream::INTERFACE_IDENTITY,
@@ -195,6 +199,60 @@ fn main(_startup_arg: u32) {
         true,
     );
     slime_rt::debug_write(b"[fabric-publisher] done\n");
+}
+
+/// C8.12: the exactly-compatible tuple on the `telemetry` route.
+///
+/// This component is the plane's positive control. It asks under exactly the
+/// (route name, type tag, direction) the graph declares for it and must receive
+/// a role — so if the matrix refused everything, the plane would fail here
+/// rather than pass on an absence of denials.
+///
+/// Its sample then travels the declared interposition chain. It sends on its
+/// ingress edge and never to the subscriber, which it holds no edge to.
+fn matrix_main() {
+    use slime_components::fabric_matrix::{Outcome, request_role};
+
+    let route = route_identity(
+        ROUTE_NAME,
+        &telemetry_stream::INTERFACE_IDENTITY,
+        CONTRACT_KIND_STREAM,
+    );
+    match request_role(ROUTE_NAME, telemetry_stream::TYPE_TAG, DIRECTION_PUBLISH) {
+        Ok(Outcome::Role(descriptor)) => {
+            if descriptor.rights_mask != RIGHT_SEND
+                || !valid_capability_transfer(
+                    &descriptor,
+                    &route,
+                    DIRECTION_PUBLISH,
+                    OBJECT_KIND_ENDPOINT,
+                )
+            {
+                fail(b"matrix publish role");
+            }
+        }
+        Ok(Outcome::Denied(_)) => fail(b"the exact compatible tuple was denied"),
+        Err(_) => fail(b"matrix role request"),
+    }
+    slime_rt::debug_write(b"[fabric-publisher] matrix exact tuple matched\n");
+
+    // The declared ingress edge is send-only. Asserted before the sample, so a
+    // regression that widened the declaration fails here rather than passing
+    // behind a successful publish.
+    let mut discard = [0u8; MAX_MSG];
+    let mut no_caps = [0u64; MAX_CAPS_PER_MSG];
+    if slime_rt::recv(TELEMETRY_INGRESS_SLOT, &mut discard, &mut no_caps) == ERR_SUCCESS {
+        fail(b"matrix publisher widened");
+    }
+    if slime_rt::send(
+        TELEMETRY_INGRESS_SLOT,
+        &inline_sample(1, FLAG_LAST).encode(),
+        &[],
+    ) != ERR_SUCCESS
+    {
+        fail(b"matrix publish");
+    }
+    slime_rt::debug_write(b"[fabric-publisher] matrix sample published\n");
 }
 fn visibility_main() {
     let mut cursor = 0;

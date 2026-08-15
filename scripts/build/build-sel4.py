@@ -57,6 +57,10 @@ OPERATION_IMAGE = BUILD_ROOT / "slime-sel4-operation.elf"
 OPERATION_MANIFEST = BUILD_ROOT / "slime-sel4-operation.identity.json"
 VISIBILITY_IMAGE = BUILD_ROOT / "slime-sel4-visibility.elf"
 VISIBILITY_MANIFEST = BUILD_ROOT / "slime-sel4-visibility.identity.json"
+MATRIX_IMAGE = BUILD_ROOT / "slime-sel4-matrix.elf"
+MATRIX_MANIFEST = BUILD_ROOT / "slime-sel4-matrix.identity.json"
+MATRIX_UNSATISFIABLE_IMAGE = BUILD_ROOT / "slime-sel4-matrix-unsatisfiable.elf"
+MATRIX_UNSATISFIABLE_MANIFEST = BUILD_ROOT / "slime-sel4-matrix-unsatisfiable.identity.json"
 BOOT_IMAGE = BUILD_ROOT / "slime-sel4-boot.elf"
 BOOT_MANIFEST = BUILD_ROOT / "slime-sel4-boot.identity.json"
 STORAGE_IMAGE = BUILD_ROOT / "slime-sel4-storage.elf"
@@ -112,6 +116,8 @@ QOS_VARIANT = "qos"
 STRESS_VARIANT = "stress"
 OPERATION_VARIANT = "operation"
 VISIBILITY_VARIANT = "visibility"
+MATRIX_VARIANT = "matrix"
+MATRIX_UNSATISFIABLE_VARIANT = "matrix-unsatisfiable"
 BOOT_VARIANT = "boot"
 STORAGE_VARIANT = "storage"
 STORE_VARIANT = "store"
@@ -140,6 +146,8 @@ VARIANT_MANIFESTS = {
     STRESS_VARIANT: "sel4-stress",
     OPERATION_VARIANT: "sel4-operation",
     VISIBILITY_VARIANT: "sel4-visibility",
+    MATRIX_VARIANT: "sel4-matrix",
+    MATRIX_UNSATISFIABLE_VARIANT: "sel4-matrix-unsatisfiable",
     BOOT_VARIANT: "sel4-boot",
     STORAGE_VARIANT: "sel4-storage",
     STORE_VARIANT: "sel4-store",
@@ -170,6 +178,8 @@ VARIANT_TARGET_DIRS = {
     STRESS_VARIANT: "root-stress",
     OPERATION_VARIANT: "root-operation",
     VISIBILITY_VARIANT: "root-visibility",
+    MATRIX_VARIANT: "root-matrix",
+    MATRIX_UNSATISFIABLE_VARIANT: "root-matrix-unsatisfiable",
     BOOT_VARIANT: "root-boot",
     STORAGE_VARIANT: "root-storage",
     STORE_VARIANT: "root-store",
@@ -200,6 +210,11 @@ VARIANT_IMAGES = {
     STRESS_VARIANT: (STRESS_IMAGE, STRESS_MANIFEST),
     OPERATION_VARIANT: (OPERATION_IMAGE, OPERATION_MANIFEST),
     VISIBILITY_VARIANT: (VISIBILITY_IMAGE, VISIBILITY_MANIFEST),
+    MATRIX_VARIANT: (MATRIX_IMAGE, MATRIX_MANIFEST),
+    MATRIX_UNSATISFIABLE_VARIANT: (
+        MATRIX_UNSATISFIABLE_IMAGE,
+        MATRIX_UNSATISFIABLE_MANIFEST,
+    ),
     BOOT_VARIANT: (BOOT_IMAGE, BOOT_MANIFEST),
     STORAGE_VARIANT: (STORAGE_IMAGE, STORAGE_MANIFEST),
     STORE_VARIANT: (STORE_IMAGE, STORE_MANIFEST),
@@ -1089,6 +1104,22 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--matrix-plane",
+        action="store_true",
+        help=(
+            "embed the matching, visibility, and denial matrix generation "
+            "(C8.12), writing a separate image"
+        ),
+    )
+    parser.add_argument(
+        "--matrix-unsatisfiable-plane",
+        action="store_true",
+        help=(
+            "embed C8.12's negative arm: the matrix graph with one incompatible "
+            "QoS pair, which admission must refuse"
+        ),
+    )
+    parser.add_argument(
         "--boot-plane",
         action="store_true",
         help=(
@@ -1211,6 +1242,8 @@ def main() -> None:
             (STRESS_VARIANT, arguments.stress_plane),
             (OPERATION_VARIANT, arguments.operation_plane),
             (VISIBILITY_VARIANT, arguments.visibility_plane),
+            (MATRIX_VARIANT, arguments.matrix_plane),
+            (MATRIX_UNSATISFIABLE_VARIANT, arguments.matrix_unsatisfiable_plane),
             (BOOT_VARIANT, arguments.boot_plane),
             (STORAGE_VARIANT, arguments.storage_plane),
             (STORE_VARIANT, arguments.store_plane),

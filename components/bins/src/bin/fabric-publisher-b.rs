@@ -74,6 +74,9 @@ const RIGHT_SEND: u64 = 1;
 
 const TELEMETRY_ROUTE: &str = "telemetry";
 const DIAGNOSTICS_ROUTE: &str = "diagnostics";
+/// C8.12's alternate name over `TelemetryStream`. A distinct route from
+/// `TELEMETRY_ROUTE`, because route authority folds the name into the identity.
+const MATRIX_ALT_ROUTE: &str = "telemetry-alt";
 
 const PAGE: u64 = 4096;
 /// Pages the publisher allocates and loans whole.
@@ -131,6 +134,10 @@ fn fail(reason: &[u8]) -> ! {
 fn main(_startup_arg: u32) {
     if GENERATION_BOOT_ACTION == "visibility" {
         visibility_main();
+        return;
+    }
+    if slime_components::fabric_matrix::active() {
+        matrix_main();
         return;
     }
     // A payload larger than the control-message bound is the whole point of
@@ -282,6 +289,80 @@ fn visibility_main() {
         fail(b"visibility diagnostics publish");
     }
     slime_rt::debug_write(b"[fabric-publisher-b] unrelated diagnostics published\n");
+}
+
+/// C8.12: the alternate-name route, and the two mismatches it makes visible.
+///
+/// This component publishes on `telemetry-alt` — the same `TelemetryStream`
+/// interface `fabric-publisher` uses under a different name. Because route
+/// authority folds the name into the identity, the two are distinct routes, and
+/// this component holds an edge on exactly one of them.
+///
+/// Three requests, in the order a reader needs them:
+///
+/// 1. `telemetry` under the right type — the *other* route's name, which this
+///    component holds no edge on. Refused, and the refusal names nothing, so it
+///    cannot be used to discover whether that route exists.
+/// 2. `telemetry-alt` under the *diagnostics* type tag — the right name under a
+///    conflicting type. A different identity, therefore a different route, not
+///    a badly typed request against a known one. Refused.
+/// 3. `telemetry-alt` under its own type — the exact compatible tuple. Matched.
+///
+/// Asking for the denials first is deliberate: a broker that granted the role
+/// before checking would pass the third request whatever the first two did.
+fn matrix_main() {
+    use slime_components::fabric_matrix::{Outcome, request_role};
+
+    match request_role(
+        TELEMETRY_ROUTE,
+        telemetry_stream::TYPE_TAG,
+        DIRECTION_PUBLISH,
+    ) {
+        Ok(Outcome::Denied(_)) => {
+            slime_rt::debug_write(b"[fabric-publisher-b] alternate name denied\n");
+        }
+        Ok(Outcome::Role(_)) => fail(b"a route this component holds no edge on was granted"),
+        Err(_) => fail(b"matrix alternate-name request"),
+    }
+
+    match request_role(
+        MATRIX_ALT_ROUTE,
+        diagnostics_stream::TYPE_TAG,
+        DIRECTION_PUBLISH,
+    ) {
+        Ok(Outcome::Denied(_)) => {
+            slime_rt::debug_write(b"[fabric-publisher-b] conflicting type denied\n");
+        }
+        Ok(Outcome::Role(_)) => fail(b"a conflicting interface aliased to a declared route"),
+        Err(_) => fail(b"matrix conflicting-type request"),
+    }
+
+    let alt = route_identity(
+        MATRIX_ALT_ROUTE,
+        &telemetry_stream::INTERFACE_IDENTITY,
+        CONTRACT_KIND_STREAM,
+    );
+    match request_role(
+        MATRIX_ALT_ROUTE,
+        telemetry_stream::TYPE_TAG,
+        DIRECTION_PUBLISH,
+    ) {
+        Ok(Outcome::Role(descriptor)) => {
+            if descriptor.rights_mask != RIGHT_SEND
+                || !valid_capability_transfer(
+                    &descriptor,
+                    &alt,
+                    DIRECTION_PUBLISH,
+                    OBJECT_KIND_ENDPOINT,
+                )
+            {
+                fail(b"matrix alternate-route role");
+            }
+        }
+        Ok(Outcome::Denied(_)) => fail(b"the exact compatible tuple was denied"),
+        Err(_) => fail(b"matrix alternate-route request"),
+    }
+    slime_rt::debug_write(b"[fabric-publisher-b] matrix alternate route matched\n");
 }
 
 /// A role reply that carries no capability.

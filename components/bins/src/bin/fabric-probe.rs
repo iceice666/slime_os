@@ -33,6 +33,7 @@ const CONTROL_SLOT: u32 = 0;
 /// Byte-for-byte the publisher's ask, including the direction it wants.
 const ROUTE_NAME: &str = "telemetry";
 const DIRECTION_PUBLISH: u32 = 1;
+const DIRECTION_SUBSCRIBE: u32 = 2;
 
 fn fail(reason: &[u8]) -> ! {
     slime_rt::debug_write(b"[fabric-probe] fail: ");
@@ -42,6 +43,10 @@ fn fail(reason: &[u8]) -> ! {
 }
 
 fn main(_startup_arg: u32) {
+    if slime_components::fabric_matrix::active() {
+        matrix_main();
+        return;
+    }
     let mut route_name = [0u8; 32];
     route_name[..ROUTE_NAME.len()].copy_from_slice(ROUTE_NAME.as_bytes());
     let request = WireFabricRequest {
@@ -93,6 +98,79 @@ fn main(_startup_arg: u32) {
         // launched.
         slime_components::fabric_boot::park(b"fabric-probe");
     }
+}
+
+/// C8.12: the ungranted probe against every verb it can reach.
+///
+/// It holds one real control endpoint to the matrix broker and no participant
+/// edge at all, so each attempt is refused on the *graph* rather than for want
+/// of a channel. Two denial classes, both graph-independent:
+///
+/// * **Refused by the broker.** Every request over the control endpoint it does
+///   hold — create/discover/publish/subscribe under the exact strings a real
+///   participant supplies. `fabric_matrix` checks each refusal carries no
+///   rights, no capability, and no route identity.
+/// * **Refused by the kernel.** Call, serve, operate, cancel, and retrieve
+///   target the call and operation planes, which this component holds no
+///   endpoint to. The kernel refuses the unheld slot outright — a denial by
+///   construction rather than by broker policy, and one that carries no
+///   metadata because there is no broker to answer.
+fn matrix_main() {
+    use slime_components::fabric_matrix::{Outcome, request_role};
+    use slime_proto::interface_schema::{diagnostics_stream, telemetry_stream};
+
+    // Every route/direction/type tuple this graph declares, asked under the
+    // exact strings its real participants use. `discover` and `create` are the
+    // same request shape: this protocol has no verb a caller can name that the
+    // broker does not answer from the graph.
+    let attempts: [(&str, u64, u32); 4] = [
+        ("telemetry", telemetry_stream::TYPE_TAG, DIRECTION_PUBLISH),
+        ("telemetry", telemetry_stream::TYPE_TAG, DIRECTION_SUBSCRIBE),
+        (
+            "telemetry-alt",
+            telemetry_stream::TYPE_TAG,
+            DIRECTION_PUBLISH,
+        ),
+        (
+            "diagnostics",
+            diagnostics_stream::TYPE_TAG,
+            DIRECTION_SUBSCRIBE,
+        ),
+    ];
+    let mut denied = 0;
+    for (route, type_tag, direction) in attempts {
+        match request_role(route, type_tag, direction) {
+            Ok(Outcome::Denied(_)) => denied += 1,
+            Ok(Outcome::Role(_)) => fail(b"ungranted component was authorized"),
+            Err(slime_components::fabric_matrix::Error::LeakyDenial) => {
+                fail(b"denial carried authority or route metadata")
+            }
+            Err(_) => fail(b"matrix probe request"),
+        }
+    }
+    if denied != attempts.len() {
+        fail(b"not every ungranted attempt was refused");
+    }
+    slime_rt::debug_write(b"[fabric-probe] matrix refused every declared route\n");
+
+    // The call and operation planes, which this component holds no endpoint to.
+    //
+    // Not attempted here, and that is the point rather than an omission. A raw
+    // invocation on a slot holding no capability is not an error return in this
+    // model — seL4 faults the task, exactly as `fabric-proxy` documents for its
+    // own wrong-right case — so "the syscall was refused" would be a crash,
+    // not evidence.
+    //
+    // What is observable is that this component's whole authority is the one
+    // control endpoint it just spent on four refusals. Call, serve, operate,
+    // cancel, and retrieve all reach their planes through an endpoint, and
+    // there is no second endpoint here to reach them with. The broker asserts
+    // that count against the generation's own tables at startup
+    // (`[fabric] matrix probe holds only its control endpoint`), which is the
+    // half of the claim a component cannot make about itself: this task can say
+    // what it did not receive, only the graph can say what it was never given.
+    slime_rt::debug_write(b"[fabric-probe] matrix reached every plane it holds an endpoint to\n");
+    slime_rt::debug_write(b"[fabric-probe] done\n");
 }
 
 const _: () = assert!(REQUEST_LEN == MAX_MSG);

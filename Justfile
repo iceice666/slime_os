@@ -190,6 +190,17 @@ sel4_operation_check: sel4_pin_check
 sel4_visibility_check: sel4_pin_check
     python3 scripts/check/check-sel4-visibility-plane.py
 
+# C8.12: build the matrix image, boot it, and require the whole matching,
+# visibility, and denial matrix at once — only the exact compatible tuple
+# matched, alternate names and conflicting types kept distinct, every
+# unauthorized operation refused with zero rights and no route identity, a
+# filtered view that yields no route authority, and the declared proxy as the
+# only telemetry path. Then boots the sibling generation carrying one
+# incompatible QoS pair and requires admission to refuse it before any
+# component launches.
+sel4_matrix_check: sel4_pin_check
+    python3 scripts/check/check-sel4-matrix-plane.py
+
 # P5.4.9 and C8.10: build the full-graph image, boot it, and require every C8
 # role to launch at once in one collision-free layout — the stream, call, and
 # operation planes in disjoint slots, the fabric split into three bounded route
@@ -550,6 +561,9 @@ data_fabric_profile_check: contracts_check
     python3 scripts/check/check-data-fabric-profile.py
 
 data_fabric_boot_check: sel4_boot_check
+
+# C8.12's roadmap-named gate.
+data_fabric_matrix_check: sel4_matrix_check
 
 # C8.11's roadmap-named gate. Both halves: the contract and its declared sink
 # bounds are validated on the host, and the emitted trace is observed on the

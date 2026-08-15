@@ -47,6 +47,9 @@ const CONTROL_SLOT: u32 = 0;
 
 const TELEMETRY_ROUTE: &str = "telemetry";
 const DIAGNOSTICS_ROUTE: &str = "diagnostics";
+/// C8.12's alternate name over `TelemetryStream`. A distinct route from
+/// `TELEMETRY_ROUTE`, because route authority folds the name into the identity.
+const MATRIX_ALT_ROUTE: &str = "telemetry-alt";
 
 /// The visibility plane's declared diagnostics edges: egress in, ack out.
 /// Generation facts, installed before this component runs.
@@ -110,6 +113,10 @@ fn fail(reason: &[u8]) -> ! {
 fn main(_startup_arg: u32) {
     if GENERATION_BOOT_ACTION == "visibility" {
         visibility_main();
+        return;
+    }
+    if slime_components::fabric_matrix::active() {
+        matrix_main();
         return;
     }
     let telemetry_route = route_identity(
@@ -271,6 +278,56 @@ fn visibility_main() {
         diagnostics_stream::TYPE_TAG,
     );
     slime_rt::debug_write(b"[fabric-subscriber-b] unrelated diagnostics live after proxy death\n");
+}
+
+/// C8.12: the alternate-name route's subscriber.
+///
+/// It holds edges on `telemetry-alt` and `diagnostics` and none on `telemetry`.
+/// Asking under the name it does not hold is refused; asking under its own is
+/// matched — which is the same distinction `fabric-publisher-b` proves from the
+/// publishing side, and both are needed: a broker keyed on direction alone
+/// would pass one and fail the other.
+fn matrix_main() {
+    use slime_components::fabric_matrix::{Outcome, request_role};
+
+    match request_role(
+        TELEMETRY_ROUTE,
+        telemetry_stream::TYPE_TAG,
+        DIRECTION_SUBSCRIBE,
+    ) {
+        Ok(Outcome::Denied(_)) => {
+            slime_rt::debug_write(b"[fabric-subscriber-b] alternate name denied\n");
+        }
+        Ok(Outcome::Role(_)) => fail(b"a route this component holds no edge on was granted"),
+        Err(_) => fail(b"matrix alternate-name request"),
+    }
+
+    let alt = route_identity(
+        MATRIX_ALT_ROUTE,
+        &telemetry_stream::INTERFACE_IDENTITY,
+        CONTRACT_KIND_STREAM,
+    );
+    match request_role(
+        MATRIX_ALT_ROUTE,
+        telemetry_stream::TYPE_TAG,
+        DIRECTION_SUBSCRIBE,
+    ) {
+        Ok(Outcome::Role(descriptor)) => {
+            if descriptor.rights_mask != RIGHT_RECV
+                || !valid_capability_transfer(
+                    &descriptor,
+                    &alt,
+                    DIRECTION_SUBSCRIBE,
+                    OBJECT_KIND_ENDPOINT,
+                )
+            {
+                fail(b"matrix alternate-route role");
+            }
+        }
+        Ok(Outcome::Denied(_)) => fail(b"the exact compatible tuple was denied"),
+        Err(_) => fail(b"matrix alternate-route request"),
+    }
+    slime_rt::debug_write(b"[fabric-subscriber-b] matrix alternate route matched\n");
 }
 
 /// A role reply that carries no capability.

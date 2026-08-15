@@ -91,6 +91,10 @@ fn main(_startup_arg: u32) {
         visibility_main();
         return;
     }
+    if slime_components::fabric_matrix::active() {
+        matrix_main();
+        return;
+    }
     let route = route_identity(
         ROUTE_NAME,
         &telemetry_stream::INTERFACE_IDENTITY,
@@ -170,6 +174,61 @@ fn main(_startup_arg: u32) {
     slime_rt::debug_write(b"[fabric-subscriber] re-delegation denied\n");
     consume(ring_slot);
     slime_rt::debug_write(b"[fabric-subscriber] done\n");
+}
+
+/// C8.12: the interposed subscriber, and the plane's proof that a filtered
+/// view is not a path to route authority.
+///
+/// Its telemetry arrives only over the proxy's downstream edge — it holds no
+/// edge to the publisher and the broker holds none to it — so a sample landing
+/// here is a sample that traversed the declared chain.
+fn matrix_main() {
+    use slime_components::fabric_matrix::{Outcome, request_role};
+
+    let route = route_identity(
+        ROUTE_NAME,
+        &telemetry_stream::INTERFACE_IDENTITY,
+        CONTRACT_KIND_STREAM,
+    );
+    match request_role(ROUTE_NAME, telemetry_stream::TYPE_TAG, DIRECTION_SUBSCRIBE) {
+        Ok(Outcome::Role(descriptor)) => {
+            if descriptor.rights_mask != RIGHT_RECV
+                || !valid_capability_transfer(
+                    &descriptor,
+                    &route,
+                    DIRECTION_SUBSCRIBE,
+                    OBJECT_KIND_ENDPOINT,
+                )
+            {
+                fail(b"matrix subscribe role");
+            }
+        }
+        Ok(Outcome::Denied(_)) => fail(b"the exact compatible tuple was denied"),
+        Err(_) => fail(b"matrix role request"),
+    }
+    slime_rt::debug_write(b"[fabric-subscriber] matrix exact tuple matched\n");
+
+    let sample_bytes =
+        receive_message(PROXY_DATA_SLOT).unwrap_or_else(|| fail(b"matrix interposed sample peer"));
+    let sample = WireStreamSample::decode(&sample_bytes)
+        .filter(|sample| {
+            valid_stream_sample(sample, telemetry_stream::TYPE_TAG, STREAM_MAX_INLINE_BYTES)
+        })
+        .filter(|sample| sample.sequence == 1)
+        .unwrap_or_else(|| fail(b"matrix interposed sample"));
+    let ack = WireStreamAck {
+        magic: STREAM_ACK_MAGIC,
+        version: FORMAT_VERSION,
+        flags: 0,
+        reserved0: 0,
+        sequence: sample.sequence,
+        type_identity: telemetry_stream::TYPE_TAG,
+        reserved: [0; 32],
+    };
+    if slime_rt::send(PROXY_ACK_SLOT, &ack.encode(), &[]) != ERR_SUCCESS {
+        fail(b"matrix interposed ack");
+    }
+    slime_rt::debug_write(b"[fabric-subscriber] matrix sample arrived through proxy\n");
 }
 fn visibility_main() {
     let mut cursor = 0;

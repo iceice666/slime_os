@@ -56,8 +56,20 @@ resourceFrames :: Int = 1;
 resourceOperations :: Int = 2;
 resourceCalls :: Int = 3;
 resourceSinkDropped :: Int = 4;
-resourceComplete :: Int = 5;
-maxResourceCounter :: Int = 5;
+resourceRoles :: Int = 5;
+resourceComplete :: Int = 6;
+maxResourceCounter :: Int = 6;
+
+-- What a `visibility` or `interposition` record's `event` names. Both families
+-- are graph-shaped -- an edge, no outcome code, and an event saying what was
+-- observed or traversed over it -- so the event is the only field carrying
+-- meaning and it is schema-owned for the same reason the resource counters
+-- above are: a bare nonzero number is not evidence unless the reader knows
+-- what it names, and two runs reporting different events would otherwise
+-- compare as equal.
+graphViewAnswered :: Int = 1;
+graphHopTraversed :: Int = 2;
+maxGraphEvent :: Int = 2;
 
 -- The declared total tie order across everything observable at one instant.
 orderData :: Int = 1;
@@ -151,8 +163,12 @@ format ::= {
   resourceOperations =;
   resourceCalls =;
   resourceSinkDropped =;
+  resourceRoles =;
   resourceComplete =;
   maxResourceCounter =;
+  graphViewAnswered =;
+  graphHopTraversed =;
+  maxGraphEvent =;
   orderData =;
   orderAck =;
   orderPeerDeath =;

@@ -1,6 +1,6 @@
 # Core runtime track
 
-**Status:** C7 and C8.1–C8.11 are complete under their named QEMU gates. C8.11 adds the bounded, deterministic semantic-trace stream, gated by `just data_fabric_trace_check`. The backlog is clear: B55, the full-graph boot plane's spawn-grant, worker-topology, and marker-ordering defects, is resolved and `just sel4_boot_check` passes, so C8.10's exit condition is now observed on the seL4 product path. B46 replaced the logical channel mechanism these planes were gated on with native seL4 Endpoints, and all seven of its named plane gates — channel, crossing, stream, QoS, call, operation, visibility — pass on that path; B50 then deleted the logical capability and universal-syscall residue behind it. C8.12 is the next open milestone: the complete matching, visibility, and denial matrix across the full graph.
+**Status:** C7 and C8.1–C8.12 are complete under their named QEMU gates. C8.12 adds the integrated matching, visibility, and denial matrix, gated by `just data_fabric_matrix_check`. The backlog is clear: B55, the full-graph boot plane's spawn-grant, worker-topology, and marker-ordering defects, is resolved and `just sel4_boot_check` passes, so C8.10's exit condition is now observed on the seL4 product path. B46 replaced the logical channel mechanism these planes were gated on with native seL4 Endpoints, and all seven of its named plane gates — channel, crossing, stream, QoS, call, operation, visibility — pass on that path; B50 then deleted the logical capability and universal-syscall residue behind it. C8.13 is the next open milestone: concurrent cross-plane traffic and resource ceilings.
 
 This track turns the existing bounded channels, capabilities, components, and generations into a native typed communication runtime. It is local-first: C7 and C8 require no network or physical driver, and they do not wait for unrelated display, audio, wireless, or GPU work.
 
@@ -935,7 +935,26 @@ monotonicity rule, and the same record format — not one endpoint.
 
 ### C8.12 — Integrated matching, visibility, and denial matrix
 
-**Status:** Not started.
+**Status:** Complete. `sel4-matrix.zti` (generation 34, boot action `matrix`)
+declares three routes — `telemetry` and `telemetry-alt` share `TelemetryStream`
+under alternate names, `diagnostics` is `DiagnosticsStream` — across seven
+distinct identities: two exact-tuple publishers/subscribers, the alternate-name
+pair that also probes a name mismatch and a conflicting-type mismatch before
+matching, the ungranted probe with a real control endpoint and zero declared
+edges, the declared interposition proxy, and the read-only filtered-visibility
+observer. `matrix_broker.rs` answers every request from the caller's control
+endpoint and the graph alone, in one non-blocking dispatch loop that interleaves
+role provisioning with the declared-chain relay rather than running them as two
+phases. The incompatible-QoS half of the matrix is proven at admission: a
+sibling generation (35) declares one offered/requested pair `all_pairs_qos_
+compatible` refuses, and `just sel4_matrix_check` boots it and asserts
+`slime-root` refuses the generation before any component launches — the
+stronger property C8.2's own exit condition already claims, since
+`EVENT_INCOMPATIBLE_QOS` is unreachable on any generation admission would
+accept. The four C8.11 trace families left without an emitter — `schema`,
+`visibility`, `interposition`, `denial` — all emit here, alongside a `route`
+record per declared route and a `resourceRoles` counter for the exact-tuple
+grants this plane hands out.
 
 **Depends on:** C8.10 and C8.11.
 
@@ -963,13 +982,16 @@ monotonicity rule, and the same record format — not one endpoint.
 - the proxy holds only its declared chain roles, the direct bypass is absent,
   and read-only visibility never becomes a path to route authority.
 
-#### Planned verification target
+#### Verification target
 
 ```sh
 just data_fabric_matrix_check
 ```
 
-#### Exit condition
+#### Exit condition (observed)
+
+Observed 2026-08-15; see
+[`devlog/2026-08-15-c8-12-matrix/`](../devlog/2026-08-15-c8-12-matrix/index.md).
 
 The simultaneous graph matches only exact authorized contracts; mismatched and
 ungranted callers acquire neither route authority nor protected visibility, and

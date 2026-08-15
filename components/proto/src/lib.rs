@@ -781,8 +781,16 @@ pub fn valid_trace_record(value: &fabric_trace::WireTraceRecord) -> bool {
         KIND_CALL | KIND_OPERATION => value.route_identity != 0 && value.correlation != 0,
         // Visibility and interposition are graph-shaped: an edge, no outcome
         // code, and an event naming what was observed or traversed.
+        //
+        // The event is bounded, for the same reason a resource counter is: it
+        // is the only field on these families carrying meaning, so a number
+        // outside the declared vocabulary is not evidence a reader can compare
+        // across runs.
         KIND_VISIBILITY | KIND_INTERPOSITION => {
-            value.route_identity != 0 && value.correlation == 0 && value.event != 0
+            value.route_identity != 0
+                && value.correlation == 0
+                && value.event != 0
+                && value.event <= fabric_trace::MAX_GRAPH_EVENT
         }
         // A denial is a refusal, and it names nothing.
         //

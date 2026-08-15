@@ -33,8 +33,12 @@ Protocol :: type {
   resourceOperations : Int;
   resourceCalls : Int;
   resourceSinkDropped : Int;
+  resourceRoles : Int;
   resourceComplete : Int;
   maxResourceCounter : Int;
+  graphViewAnswered : Int;
+  graphHopTraversed : Int;
+  maxGraphEvent : Int;
   orderData : Int;
   orderAck : Int;
   orderPeerDeath : Int;
@@ -183,8 +187,18 @@ rustBindings :: Protocol -> Text
     w.u32Const "RESOURCE_OPERATIONS" p.resourceOperations;
     w.u32Const "RESOURCE_CALLS" p.resourceCalls;
     w.u32Const "RESOURCE_SINK_DROPPED" p.resourceSinkDropped;
+    w.u32Const "RESOURCE_ROLES" p.resourceRoles;
     w.u32Const "RESOURCE_COMPLETE" p.resourceComplete;
     w.u32Const "MAX_RESOURCE_COUNTER" p.maxResourceCounter;
+    "\n";
+    "/// What a `visibility` or `interposition` record's `event` names. Both\n";
+    "/// families are graph-shaped -- an edge, no outcome, and an event saying\n";
+    "/// what was observed or traversed over it -- so the event is the only\n";
+    "/// field carrying meaning, and a bare nonzero number would not be\n";
+    "/// evidence.\n";
+    w.u32Const "GRAPH_VIEW_ANSWERED" p.graphViewAnswered;
+    w.u32Const "GRAPH_HOP_TRAVERSED" p.graphHopTraversed;
+    w.u32Const "MAX_GRAPH_EVENT" p.maxGraphEvent;
     "\n";
     "/// The declared total tie order at one simulated instant: data, then\n";
     "/// acknowledgement, then peer death, then the clock advance that closes it.\n";
@@ -222,7 +236,8 @@ boundsValid :: Protocol -> Bool
     && p.maxOrderClass == p.orderTime
     && p.knownFlags == p.flagTerminal + p.flagDropped
     && p.maxOverflow == p.overflowSaturate
-    && p.maxResourceCounter == p.resourceComplete;
+    && p.maxResourceCounter == p.resourceComplete
+    && p.maxGraphEvent == p.graphHopTraversed;
 
 valid :: Protocol -> Bool
   = p => w.schemaFieldsValid p.fields

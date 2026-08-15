@@ -176,6 +176,8 @@ mod boot_action {
     pub const VISIBILITY: u32 = 25;
     /// The 48-instance ceiling graph (B49).
     pub const STRESS: u32 = 26;
+    /// C8.12's matching, visibility, and denial matrix.
+    pub const MATRIX: u32 = 27;
 
     // The table above is a hand copy of the contract's numbering, and the two
     // are an ABI: the root passes one of these words to this thread and this
@@ -209,6 +211,7 @@ mod boot_action {
     const _: () = assert!(TRANSFER == BootAction::Transfer.id());
     const _: () = assert!(VISIBILITY == BootAction::Visibility.id());
     const _: () = assert!(STRESS == BootAction::Stress.id());
+    const _: () = assert!(MATRIX == BootAction::Matrix.id());
 }
 
 /// Compose the graph the generation selected.
@@ -277,6 +280,11 @@ fn compose_declared_graph(startup_arg: u32) {
         action::VISIBILITY => {
             drive_visibility_plane();
             slime_rt::debug_write(b"[init] visibility plane complete\n");
+            slime_rt::exit(0)
+        }
+        action::MATRIX => {
+            drive_matrix_plane();
+            slime_rt::debug_write(b"[init] matrix plane complete\n");
             slime_rt::exit(0)
         }
         action::STORAGE => {
@@ -1316,6 +1324,81 @@ fn drive_operation_plane() {
 ///   reads in the order the broker will answer them.
 fn drive_visibility_plane() {
     launch_fabric_graph(b"visibility", b" fabric spawned\n");
+}
+
+/// Drive the C8.12 matrix plane: matching, filtered visibility, and denial
+/// exercised together against one graph.
+///
+/// Only reachable for the authenticated `matrix` action declared by
+/// `contracts/generation/v1/fixtures/sel4-matrix.zti`.
+///
+/// The composition is `launch_fabric_graph`'s, with three differences the
+/// milestone forces rather than choices made here:
+///
+/// * **Seven participants, not five.** The ungranted probe, the declared
+///   interposition proxy, and the read-only observer are three distinct task
+///   identities with non-overlapping grants, so a denial can never be confused
+///   for a role the graph granted somewhere else. `fabric-intruder`, which
+///   carried all three roles at once behind an env switch, is absent.
+/// * **The probe holds a real control endpoint.** The denial under test is "no
+///   declared edge", not "no channel": a component refused for lack of a
+///   channel would prove nothing about the graph.
+/// * **One supervision handle per ring participant and the proxy.** The broker
+///   needs the proxy's to observe a hop through a dead one — a native Endpoint
+///   reports no peer death — and each ring holder's to name a loan receiver.
+///   The probe gets none: it asks for nothing the broker must reclaim.
+fn drive_matrix_plane() {
+    plane_marker(b"matrix", b" control channels minted\n");
+    let publisher = spawn_boot(FABRIC_PUBLISHER_SLOT);
+    let subscriber = spawn_boot(FABRIC_SUBSCRIBER_SLOT);
+    let publisher_b = spawn_boot_with(
+        FABRIC_PUBLISHER_B_SLOT,
+        &[grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE)],
+    );
+    let subscriber_b = spawn_boot(FABRIC_SUBSCRIBER_B_SLOT);
+    let observer = spawn_boot(FABRIC_OBSERVER_SLOT);
+    let proxy = spawn_boot(FABRIC_PROXY_SLOT);
+    let probe = spawn_boot(FABRIC_PROBE_SLOT);
+    plane_marker(b"matrix", b" participants spawned\n");
+
+    // Positional against the child's ascending declared slot, exactly as every
+    // other fabric plane: the factory first, then one supervision handle per
+    // holder in the order `FABRIC_SUPERVISION` lists them. `FABRIC_MINTED_GRANTS`
+    // states how many the generation expects, so a composition that drifted from
+    // the fixture is refused at spawn rather than mis-bound.
+    //
+    // The probe's handle is in the vector even though it holds no edge. The
+    // broker's dispatch loop needs it to know the refused caller has stopped
+    // asking — a native Endpoint reports no peer death — and it grants the probe
+    // nothing: the fabric holds the handle, not the probe.
+    let grants = [
+        grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
+        grant(publisher, RIGHT_SUPERVISE),
+        grant(subscriber, RIGHT_SUPERVISE),
+        grant(publisher_b, RIGHT_SUPERVISE),
+        grant(subscriber_b, RIGHT_SUPERVISE),
+        grant(observer, RIGHT_SUPERVISE),
+        grant(probe, RIGHT_SUPERVISE),
+        grant(proxy, RIGHT_SUPERVISE),
+    ];
+    let declared = declared_minted_grants(b"fabric-service");
+    if declared != grants.len() {
+        slime_rt::debug_write(b"[init] matrix plane fail: fabric-service grant count\n");
+        slime_rt::exit(1);
+    }
+    let service = spawn_boot_with(FABRIC_SERVICE_SLOT, &grants);
+    plane_marker(b"matrix", b" fabric spawned\n");
+
+    wait_clean(&[
+        publisher,
+        subscriber,
+        publisher_b,
+        subscriber_b,
+        observer,
+        proxy,
+        probe,
+        service,
+    ]);
 }
 
 /// Drive the P5.4.3 powerbox plane (M6.6): a chooser holding directory

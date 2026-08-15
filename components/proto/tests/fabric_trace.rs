@@ -362,9 +362,42 @@ fn a_resource_record_must_name_which_count_it_carries() {
         fabric_trace::RESOURCE_OPERATIONS,
         fabric_trace::RESOURCE_CALLS,
         fabric_trace::RESOURCE_SINK_DROPPED,
+        fabric_trace::RESOURCE_ROLES,
         fabric_trace::RESOURCE_COMPLETE,
     ] {
         record.event = counter;
         assert!(valid_trace_record(&record), "counter {counter} refused");
+    }
+}
+
+#[test]
+fn a_graph_record_must_name_a_declared_event() {
+    // Visibility and interposition are graph-shaped: an edge, no outcome, and
+    // an event naming what was observed or traversed. A bare nonzero number
+    // is not evidence unless it is drawn from the declared vocabulary, the
+    // same reason a resource counter is bounded.
+    let mut record = WireTraceRecord {
+        kind: KIND_VISIBILITY,
+        correlation: 0,
+        event: fabric_trace::GRAPH_VIEW_ANSWERED,
+        ..call()
+    };
+    assert!(valid_trace_record(&record));
+    record.event = 0;
+    assert!(!valid_trace_record(&record));
+    record.event = fabric_trace::MAX_GRAPH_EVENT + 1;
+    assert!(!valid_trace_record(&record));
+    for (kind, event) in [
+        (KIND_VISIBILITY, fabric_trace::GRAPH_VIEW_ANSWERED),
+        (KIND_VISIBILITY, fabric_trace::GRAPH_HOP_TRAVERSED),
+        (KIND_INTERPOSITION, fabric_trace::GRAPH_VIEW_ANSWERED),
+        (KIND_INTERPOSITION, fabric_trace::GRAPH_HOP_TRAVERSED),
+    ] {
+        record.kind = kind;
+        record.event = event;
+        assert!(
+            valid_trace_record(&record),
+            "kind {kind} event {event} refused"
+        );
     }
 }

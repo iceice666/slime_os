@@ -162,6 +162,8 @@ pub enum BootAction {
     Visibility = 25,
     /// The 48-instance graph at the admitted ceiling (B49).
     Stress = 26,
+    /// C8.12's matching, visibility, and denial matrix.
+    Matrix = 27,
 }
 
 impl BootAction {
@@ -197,6 +199,7 @@ impl BootAction {
             "supervision" => Self::Supervision,
             "transfer" => Self::Transfer,
             "visibility" => Self::Visibility,
+            "matrix" => Self::Matrix,
             _ => return None,
         })
     }
@@ -2552,6 +2555,7 @@ mod tests {
             (BootAction::Supervision, 23),
             (BootAction::Transfer, 24),
             (BootAction::Visibility, 25),
+            (BootAction::Matrix, 27),
         ] {
             assert_eq!(action.id(), id, "{action:?} changed its ABI number");
         }
@@ -2568,6 +2572,7 @@ mod tests {
             ("qos", BootAction::Qos),
             ("stress", BootAction::Stress),
             ("visibility", BootAction::Visibility),
+            ("matrix", BootAction::Matrix),
         ] {
             assert_eq!(BootAction::parse(spelling), Some(expected));
         }

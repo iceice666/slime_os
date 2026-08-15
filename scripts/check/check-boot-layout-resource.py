@@ -51,6 +51,7 @@ SEL4_RESOLVER_STEMS = {
     "sel4-call",
     "sel4-operation",
     "sel4-visibility",
+    "sel4-matrix",
     "sel4-boot",
     "sel4-storage",
     "sel4-store",

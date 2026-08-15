@@ -264,3 +264,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-14 | [Zutai's field-pun shorthand, and why `schemaFields` cannot reach these contracts](2026-08-14-zutai-field-pun-adoption/index.md) | Change | Verified | none |
 | 2026-08-15 | [C8.11 — a deterministic trace, and the five ways a silent record hides](2026-08-15-c8-11-semantic-trace/index.md) | Change | Verified | C8.11, B55 |
 | 2026-08-15 | [B55 — the full-graph boot plane refused its own first spawn, then six more defects behind it](2026-08-15-b55-full-graph-boot-restoration/index.md) | Defect | Verified | C8.10, B55 |
+| 2026-08-15 | [C8.12 — one graph, every mismatch, and the two mutual waits it took to serve it](2026-08-15-c8-12-matrix/index.md) | Change | Verified | C8.12 |
