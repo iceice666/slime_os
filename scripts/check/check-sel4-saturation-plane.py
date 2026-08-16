@@ -151,15 +151,29 @@ SPAWN_PATTERN = re.compile(
 EXIT_PATTERN = re.compile(r"SLIME_GRAPH component exit task=(\d+) status=(-?\d+)")
 COMPONENT_FAILURE = re.compile(r"\[fabric[^\]]*\] fail: .*")
 
+# Same family set as the traffic gate: this plane runs the identical `"traffic"`
+# action, so every emitter there reports here too.
+TRACE_FAMILIES = (
+    "stream",
+    "call",
+    "operation",
+    "publisher",
+    "publisher-b",
+    "subscriber",
+    "subscriber-b",
+)
+# Longest first, so `publisher` cannot match inside `publisher-b`.
+_FAMILY_ALTERNATION = "|".join(sorted(TRACE_FAMILIES, key=len, reverse=True))
+
 TRACE_PATTERN = re.compile(
-    r"\[trace\] (?P<family>stream|call|operation) kind=(?P<kind>\w+) "
+    rf"\[trace\] (?P<family>{_FAMILY_ALTERNATION}) kind=(?P<kind>\w+) "
     r"order=(?P<order>[\w-]+) now=(?P<now>\d+) route=(?P<route>[0-9a-f]{16}) "
     r"correlation=(?P<correlation>\d+) sequence=(?P<sequence>\d+) "
     r"status=(?P<status>-?\d+) event=(?P<event>\d+) high_water=(?P<high_water>\d+)"
     r"(?P<terminal> terminal)?"
 )
 SUMMARY_PATTERN = re.compile(
-    r"\[trace\] (?P<family>stream|call|operation) complete "
+    rf"\[trace\] (?P<family>{_FAMILY_ALTERNATION}) complete "
     r"capacity=(?P<capacity>\d+) records=(?P<records>\d+) "
     r"dropped=(?P<dropped>\d+) rejected=(?P<rejected>\d+)"
 )
@@ -214,6 +228,22 @@ EXPECTED_RESOURCES: dict[str, tuple[tuple[int, str, int], ...]] = {
         (FABRIC_TRACE_RESOURCE_OPERATIONS, "operations", 2),
         (FABRIC_TRACE_RESOURCE_RETAINED, "retained", 2),
     ),
+    # C8.13.2: the four stream participants report their own mapping occupancy
+    # under the traffic action, which this plane also runs, so none may regress
+    # here either.
+    "publisher": ((FABRIC_TRACE_RESOURCE_MAPPING, "mapping", 2),),
+    "publisher-b": ((FABRIC_TRACE_RESOURCE_MAPPING, "mapping", 2),),
+    "subscriber": ((FABRIC_TRACE_RESOURCE_MAPPING, "mapping", 2),),
+    "subscriber-b": ((FABRIC_TRACE_RESOURCE_MAPPING, "mapping", 2),),
+}
+
+# C8.13.2: the exact count each participant must report; see the traffic gate
+# for why the value is pinned rather than merely required nonzero.
+PARTICIPANT_MAPPINGS: dict[str, int] = {
+    "publisher": 1,
+    "publisher-b": 2,
+    "subscriber": 1,
+    "subscriber-b": 2,
 }
 
 # The three ceilings this fixture deliberately tightens or confirms already
@@ -508,11 +538,14 @@ def check_concurrency(transcript: str) -> None:
 
 def check_resources(transcript: str) -> None:
     """Every declared resource ceiling emits bounded peak(+baseline) evidence,
-    on all three planes, through a sink that dropped and rejected nothing --
-    identical to `check-sel4-traffic-plane.py`'s assertion, unregressed by the
-    tightened ceilings."""
+    on all three broker planes and the four instrumented participants, through a
+    sink that dropped and rejected nothing -- identical to
+    `check-sel4-traffic-plane.py`'s assertion, unregressed by the tightened
+    ceilings."""
     head = composition(transcript)
-    records_by_family: dict[str, list[dict[str, str]]] = {"stream": [], "call": [], "operation": []}
+    records_by_family: dict[str, list[dict[str, str]]] = {
+        family: [] for family in TRACE_FAMILIES
+    }
     for match in TRACE_PATTERN.finditer(head):
         record = match.groupdict()
         records_by_family[record["family"]].append(record)
@@ -551,24 +584,26 @@ def check_resources(transcript: str) -> None:
                         f"its own peak {observed[0]}"
                     )
             elif expected_count == 2 and name == "mapping":
-                # C8.13.1: constant by design, and asserted nonzero, exactly as
-                # the traffic gate does. Both halves are needed: without the
-                # nonzero check a query that regressed to answering all zeros
-                # would satisfy `0 == 0` and pass here vacuously, and this
-                # plane runs the same stream worker under the same `"traffic"`
-                # boot action, so it has the same standing to falsify that.
+                # C8.13.1/C8.13.2: constant by design and asserted nonzero,
+                # exactly as the traffic gate does. Both halves are needed:
+                # without the nonzero check a query that regressed to answering
+                # all zeros would satisfy `0 == 0` and pass vacuously, and this
+                # plane runs the same emitters under the same `"traffic"` boot
+                # action, so it has the same standing to falsify that. For the
+                # four participants the equality is structural -- one read
+                # recorded twice -- so the pin below is what constrains them.
                 if observed[1] != observed[0]:
                     report_transcript(transcript)
                     fail(
-                        f"the {family} worker's {name!r} baseline {observed[1]} differs from "
+                        f"the {family} holder's {name!r} baseline {observed[1]} differs from "
                         f"its peak {observed[0]}; a provisioned mapping is not released "
-                        "while the broker lives"
+                        "while its holder lives"
                     )
                 if observed[0] == 0:
                     report_transcript(transcript)
                     fail(
-                        f"the {family} worker reported no {name!r} occupancy at all; the "
-                        "self-scoped query answered zero where the graph provisions rings"
+                        f"the {family} holder reported no {name!r} occupancy at all; the "
+                        "self-scoped query answered zero where the graph provisions regions"
                     )
             elif expected_count == 2 and name == "loan":
                 # C8.13.1: nonzero peak, baseline bounded by it rather than
@@ -594,6 +629,15 @@ def check_resources(transcript: str) -> None:
                     f"the {family} worker's {name!r} baseline was {observed[1]}, "
                     "expected 0 once every holder released"
                 )
+            # C8.13.2: pinned per participant, as in the traffic gate.
+            if name == "mapping" and family in PARTICIPANT_MAPPINGS:
+                expected_mapping = PARTICIPANT_MAPPINGS[family]
+                if observed[0] != expected_mapping:
+                    report_transcript(transcript)
+                    fail(
+                        f"the {family} participant reported {observed[0]} mapping(s), "
+                        f"expected exactly {expected_mapping}"
+                    )
         if by_event:
             report_transcript(transcript)
             fail(f"the {family} worker emitted undeclared resource events: {sorted(by_event)}")

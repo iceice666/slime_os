@@ -83,30 +83,41 @@ maxKind :: Int = 10;
 -- returned success or a fresh handle and never a live occupancy, so a worker
 -- could report a provisioning-time constant but not evidence.
 --
--- They follow the held-and-released convention with different expected
--- shapes, and each shape is the assertion. A stream participant's ring is
--- mapped once when its role is provisioned and stays mapped while the broker
--- lives, so `resourceMapping`'s baseline equals its peak -- measured across a
--- whole traffic boot as a flat 6 -- and a baseline that had drained instead
--- would mean a mapping was lost. `resourceLoan` is the traffic-varying half:
--- it rises as receivers take loans and returns to zero as each settles
--- (measured 0 to 5 and back). A counter whose value cannot move is still
--- evidence when *not moving* is the invariant; it is not evidence when the
--- number is merely a capacity every boot would report identically.
+-- They follow the held-and-released convention with different expected shapes,
+-- and each shape is the assertion. A region is mapped when a role is
+-- provisioned and stays mapped while its holder lives, so `resourceMapping`'s
+-- baseline equals its peak, and a baseline that had drained instead would mean
+-- a mapping was lost. `resourceLoan` is the traffic-varying half: it rises as
+-- receivers take loans and returns to zero as each settles (measured 0 to 5 and
+-- back). A counter whose value cannot move is still evidence when *not moving*
+-- is the invariant; it is not evidence when the number is merely a capacity
+-- every boot would report identically.
 --
--- `resourceEvent` remains a declared code with no emitter: the operation
--- worker's pending client-delivery table depends on `ERR_WOULDBLOCK` from a
--- blocking `seL4_Send` that cannot report it, so its peak is a structural
--- zero under every schedule rather than under this one. A capability-slot
--- ceiling has no signal at all yet -- nothing tracks a live child's CNode
--- occupancy, so no query could return it.
+-- Two kinds of holder report `resourceMapping`, and the difference is worth
+-- stating because it decides what the equality proves. A broker has a sweep
+-- loop: it samples per sweep and reads a genuine post-drain baseline, so both
+-- halves are measured (the stream broker, a flat 6 across a whole boot). A
+-- scripted participant has no loop: it reads its occupancy once, at the end,
+-- and records that number twice, because serial writes must stay off the path
+-- of the traffic they describe. Its pair is therefore identical by
+-- construction, and what carries the evidence is the value -- the count of
+-- regions its role was provisioned, 1 or 2 for the four stream participants,
+-- which a reader checks against the graph rather than against a drain. Such a
+-- holder's transient peaks go unreported by design: a receiver mapping an
+-- arriving loan, or a lender holding a copy it lent, is released before the
+-- report.
 --
--- Which worker emits which counter is bounded by trace-sink capacity, not by
--- interest. The call worker holds the same loan and mapping state, and does
--- not report either: its sink spends all 62 of its ordinary records on
--- evidence C8.4-C8.13 already verify, reporting both counters there would
--- cost four more (a peak and a baseline each), and `maxTraceDepth` below is a
--- page-sized ceiling rather than a fixture value.
+-- Which holder emits which counter is bounded by trace-sink capacity and by
+-- whether the holder has anything to report, not by interest. Three of the
+-- eight holders the traffic graph declares report nothing, each for a distinct
+-- reason: the call worker holds the same loan and mapping state but spends all
+-- 62 of its ordinary records on evidence C8.4-C8.13 already verify, and
+-- reporting both counters there would cost four more (a peak and a baseline
+-- each) against a `maxTraceDepth` that is a page-sized ceiling rather than a
+-- fixture value; the call client's own charge lives and dies inside one helper,
+-- so it holds nothing at any point it could report and its pair could only be
+-- a measured zero; and the call server ends by exiting mid-loop on an injected
+-- peer death, so it never reaches a flush.
 --
 -- Emission of these counters is per-plane, not unconditional per worker: a
 -- worker records one only when its own generation drives the traffic that

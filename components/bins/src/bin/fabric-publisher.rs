@@ -31,6 +31,16 @@ use slime_proto::ring::{Ring, RingError};
 use slime_proto::valid_capability_transfer;
 use slime_rt::{ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
 
+// C8.13.2: this participant's own shared-buffer occupancy evidence. Both files
+// are included here rather than reached through `slime_components` because a
+// file may be a module only once per crate, which is the same rule
+// `fabric-call-worker` follows for the trace sink it hosts.
+#[path = "../fabric_trace_log.rs"]
+mod trace_log;
+
+#[path = "../fabric_occupancy_trace.rs"]
+mod occupancy_trace;
+
 slime_rt::entry!(main);
 
 include!(concat!(env!("OUT_DIR"), "/fabric_profile.rs"));
@@ -198,6 +208,12 @@ fn main(_startup_arg: u32) {
         &inline_payload(INLINE_SAMPLES + STALL_SAMPLES + 1),
         true,
     );
+    // C8.13.2: gated to the traffic plane, so the standalone stream/QoS
+    // fixtures — whose declared `traceDepth` is sized for the records C8.11
+    // already emits — never receive these and never drop one.
+    if GENERATION_BOOT_ACTION == "traffic" {
+        occupancy_trace::report(b"publisher", FABRIC_TRACE_DEPTH);
+    }
     slime_rt::debug_write(b"[fabric-publisher] done\n");
 }
 

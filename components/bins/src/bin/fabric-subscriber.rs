@@ -36,6 +36,15 @@ use slime_proto::{
     valid_stream_sample,
 };
 use slime_rt::{ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
+// C8.13.2: this participant's own shared-buffer occupancy evidence. Included
+// here rather than through `slime_components` because a file may be a module
+// only once per crate.
+#[path = "../fabric_trace_log.rs"]
+mod trace_log;
+
+#[path = "../fabric_occupancy_trace.rs"]
+mod occupancy_trace;
+
 slime_rt::entry!(main);
 
 include!(concat!(env!("OUT_DIR"), "/fabric_profile.rs"));
@@ -173,6 +182,11 @@ fn main(_startup_arg: u32) {
     }
     slime_rt::debug_write(b"[fabric-subscriber] re-delegation denied\n");
     consume(ring_slot);
+    // C8.13.2: gated to the traffic plane, so the standalone fixtures' fixed
+    // `traceDepth` never has to carry these records.
+    if GENERATION_BOOT_ACTION == "traffic" {
+        occupancy_trace::report(b"subscriber", FABRIC_TRACE_DEPTH);
+    }
     slime_rt::debug_write(b"[fabric-subscriber] done\n");
 }
 

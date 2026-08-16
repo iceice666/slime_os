@@ -134,15 +134,35 @@ SPAWN_PATTERN = re.compile(
 EXIT_PATTERN = re.compile(r"SLIME_GRAPH component exit task=(\d+) status=(-?\d+)")
 COMPONENT_FAILURE = re.compile(r"\[fabric[^\]]*\] fail: .*")
 
+# The trace families this plane admits. The three brokers report their own
+# plane's evidence; C8.13.2 adds the four stream participants, which report
+# only their own shared-buffer occupancy. A family absent from this alternation
+# is not a parse error -- its records are silently unmatched -- which is why
+# `check_resources` also asserts every declared family was seen.
+TRACE_FAMILIES = (
+    "stream",
+    "call",
+    "operation",
+    "publisher",
+    "publisher-b",
+    "subscriber",
+    "subscriber-b",
+)
+# Sorted longest-first. Not required for correctness -- Python's `re`
+# backtracks, so `publisher` failing on `-b kind=` retries `publisher-b` and the
+# record still matches -- but it keeps the alternation independent of engine
+# semantics rather than resting on that behaviour.
+_FAMILY_ALTERNATION = "|".join(sorted(TRACE_FAMILIES, key=len, reverse=True))
+
 TRACE_PATTERN = re.compile(
-    r"\[trace\] (?P<family>stream|call|operation) kind=(?P<kind>\w+) "
+    rf"\[trace\] (?P<family>{_FAMILY_ALTERNATION}) kind=(?P<kind>\w+) "
     r"order=(?P<order>[\w-]+) now=(?P<now>\d+) route=(?P<route>[0-9a-f]{16}) "
     r"correlation=(?P<correlation>\d+) sequence=(?P<sequence>\d+) "
     r"status=(?P<status>-?\d+) event=(?P<event>\d+) high_water=(?P<high_water>\d+)"
     r"(?P<terminal> terminal)?"
 )
 SUMMARY_PATTERN = re.compile(
-    r"\[trace\] (?P<family>stream|call|operation) complete "
+    rf"\[trace\] (?P<family>{_FAMILY_ALTERNATION}) complete "
     r"capacity=(?P<capacity>\d+) records=(?P<records>\d+) "
     r"dropped=(?P<dropped>\d+) rejected=(?P<rejected>\d+)"
 )
@@ -230,6 +250,43 @@ EXPECTED_RESOURCES: dict[str, tuple[tuple[int, str, int], ...]] = {
         (FABRIC_TRACE_RESOURCE_OPERATIONS, "operations", 2),
         (FABRIC_TRACE_RESOURCE_RETAINED, "retained", 2),
     ),
+    # C8.13.2: the four stream participants report only their own mapping
+    # occupancy, read back through C8.13.1's self-scoped query. Each is a
+    # *constant* at the point it reports, and the exact value is asserted below
+    # rather than merely being nonzero: a participant maps one region per
+    # declared route when the role is provisioned and holds it until it exits,
+    # so these numbers are the graph's own shape. No `loan` record is declared
+    # for them: three of the four never lend at all, and `fabric-publisher-b`'s
+    # single lend (`fabric-publisher-b.rs:444`, charged to the lender, which is
+    # why the fixture gives it `loanCount = 1`) is settled and released before
+    # it reports -- so a loan pair here could only be a measured `[0, 0]`.
+    "publisher": ((FABRIC_TRACE_RESOURCE_MAPPING, "mapping", 2),),
+    "publisher-b": ((FABRIC_TRACE_RESOURCE_MAPPING, "mapping", 2),),
+    "subscriber": ((FABRIC_TRACE_RESOURCE_MAPPING, "mapping", 2),),
+    "subscriber-b": ((FABRIC_TRACE_RESOURCE_MAPPING, "mapping", 2),),
+}
+
+# C8.13.2: the exact mapping count each participant must report, measured at
+# the point each one reports it. Pinned rather than asserted merely nonzero
+# because each is the number of regions the graph provisions for that role, so
+# a change is a graph change: one ring for a single-route participant, two for
+# a two-route one.
+#
+# Each is the steady-state count, not a value held throughout the run. Three of
+# the four transiently hold more, and the pinned number deliberately excludes
+# those peaks: both subscribers map an arriving loan and unmap it again
+# (`map_loan` charges the receiver's mapping counter), and `publisher-b`
+# creates, maps, seals, and lends a copy for its >MAX_MSG sample -- measured at
+# 3 mappings while that loan was live -- then unmaps and releases it once the
+# fabric settles (`fabric-publisher-b.rs:515-520`), so it reports its two rings.
+# Only `publisher` never moves. A participant emits once, at the end, because
+# `fabric_trace_log`'s contract keeps serial writes off the traffic path, so the
+# number it can honestly report is the one it holds then.
+PARTICIPANT_MAPPINGS: dict[str, int] = {
+    "publisher": 1,
+    "publisher-b": 2,
+    "subscriber": 1,
+    "subscriber-b": 2,
 }
 
 
@@ -508,9 +565,12 @@ def check_concurrency(transcript: str) -> None:
 
 def check_resources(transcript: str) -> None:
     """Every declared resource ceiling emits bounded peak(+baseline) evidence,
-    on all three planes, through a sink that dropped and rejected nothing."""
+    on all three broker planes and the four instrumented participants, through
+    a sink that dropped and rejected nothing."""
     head = composition(transcript)
-    records_by_family: dict[str, list[dict[str, str]]] = {"stream": [], "call": [], "operation": []}
+    records_by_family: dict[str, list[dict[str, str]]] = {
+        family: [] for family in TRACE_FAMILIES
+    }
     for match in TRACE_PATTERN.finditer(head):
         record = match.groupdict()
         records_by_family[record["family"]].append(record)
@@ -556,28 +616,34 @@ def check_resources(transcript: str) -> None:
                         f"its own peak {observed[0]}"
                     )
             elif expected_count == 2 and name == "mapping":
-                # C8.13.1: asserted *constant*, not drained, and that is the
-                # assertion rather than a weakening of one. A stream
-                # participant's ring is mapped once when its role is
-                # provisioned and stays mapped as long as the broker lives, so
-                # this counter's baseline equalling its peak is what "no ring
-                # was mapped or unmapped outside provisioning" looks like --
-                # measured as a flat 6 across repeated boots. A baseline that
-                # had drained to zero here would mean the broker lost a mapping
-                # it still needs. The traffic-varying half of this holder's
-                # occupancy is `loan` below, which does drain.
+                # C8.13.1/C8.13.2: asserted *constant*, not drained, and that is
+                # the assertion rather than a weakening of one. A region is
+                # mapped when a role is provisioned and stays mapped while its
+                # holder lives, so this counter's baseline equalling its peak is
+                # what "no region was mapped or unmapped outside provisioning"
+                # looks like -- measured as a flat 6 for the stream broker and
+                # 1/1/2/2 for the four participants. A baseline that had drained
+                # to zero would mean the holder lost a mapping it still needs.
+                #
+                # Five families reach this branch and they earn it differently.
+                # `stream` samples per sweep and takes a genuine post-drain
+                # baseline, so both halves are measured. A participant reads once
+                # and records twice, so its equality is structural -- see the
+                # C8.13.2 pin below, which is what actually constrains those
+                # four. The traffic-varying half of the broker's own occupancy is
+                # `loan` below, which does drain.
                 if observed[1] != observed[0]:
                     report_transcript(transcript)
                     fail(
-                        f"the {family} worker's {name!r} baseline {observed[1]} differs from "
+                        f"the {family} holder's {name!r} baseline {observed[1]} differs from "
                         f"its peak {observed[0]}; a provisioned mapping is not released "
-                        "while the broker lives"
+                        "while its holder lives"
                     )
                 if observed[0] == 0:
                     report_transcript(transcript)
                     fail(
-                        f"the {family} worker reported no {name!r} occupancy at all; the "
-                        "self-scoped query answered zero where the graph provisions rings"
+                        f"the {family} holder reported no {name!r} occupancy at all; the "
+                        "self-scoped query answered zero where the graph provisions regions"
                     )
             elif expected_count == 2 and name == "loan":
                 # C8.13.1: the traffic-varying half, so the peak is asserted
@@ -617,6 +683,24 @@ def check_resources(transcript: str) -> None:
                     f"the {family} worker's {name!r} baseline was {observed[1]}, "
                     "expected 0 once every holder released"
                 )
+            # C8.13.2: a participant's mapping count is the graph's own shape,
+            # and this pin is the whole assertion for these four families. Not
+            # a layer on top of the generic `mapping` branch above: a
+            # participant reads its occupancy once and records it twice, so that
+            # branch's `baseline == peak` is structural here and cannot fail --
+            # unlike `fabric-service`, which samples per sweep and takes a
+            # genuine post-drain baseline. Only that branch's `peak != 0` and
+            # this exact value do real work, which is why the value is pinned
+            # rather than left as "some nonzero constant".
+            if name == "mapping" and family in PARTICIPANT_MAPPINGS:
+                expected_mapping = PARTICIPANT_MAPPINGS[family]
+                if observed[0] != expected_mapping:
+                    report_transcript(transcript)
+                    fail(
+                        f"the {family} participant reported {observed[0]} mapping(s), "
+                        f"expected exactly {expected_mapping} -- one region per declared "
+                        "route"
+                    )
         if by_event:
             report_transcript(transcript)
             fail(f"the {family} worker emitted undeclared resource events: {sorted(by_event)}")

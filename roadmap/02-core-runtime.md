@@ -1016,8 +1016,9 @@ bounded peak(+baseline) evidence through the C8.11 trace sink: frames, shared
 buffers, retries (now from both the call and the stream worker, where it was
 call-only before), in-flight calls, in-flight operations, retained operation
 results, the stream plane's per-subscriber outstanding-delivery count and
-KEEP_LAST backlog occupancy, and -- added by C8.13.1 -- the stream broker's
-own root-accounted shared-buffer mapping and loan occupancy. Separately,
+KEEP_LAST backlog occupancy, and -- added by C8.13.1 and extended by C8.13.2 --
+root-accounted shared-buffer mapping and loan occupancy, reported by the stream
+broker and by four of the graph's declared participant holders. Separately,
 `just sel4_saturation_check`
 (`just data_fabric_saturation_check`) proves 3 of the 11 classes -- in-flight
 calls, in-flight operations, retained operation results -- are driven to
@@ -1181,36 +1182,69 @@ headroom this slice could not create.
 
 ### C8.13.2 -- Full shared-buffer occupancy coverage across all declared holders
 
-**Status:** Not started.
+**Status:** Complete for the four holders that have occupancy to report; the
+other three are recorded as measured walls rather than pending work. `just
+sel4_traffic_check` and `just sel4_saturation_check` observe
+`fabric-publisher`, `fabric-subscriber`, `fabric-subscriber-b`, and
+`fabric-publisher-b` each reporting its own `resourceMapping` occupancy through
+C8.13.1's self-scoped query, at 1, 1, 2, and 2 regions -- one per declared
+route -- with each value pinned by the gate rather than merely required nonzero,
+so a role that gained or lost a provisioned region fails.
 
-**Depends on:** C8.13.1.
+Direct measurement redefined the remaining scope, and the exit condition below
+is amended rather than treated as met. Probing each holder's charges on a
+traffic boot found that three of the eight cannot produce this evidence, each
+for a different reason:
 
-Seven of the traffic fixture's 8 declared `sharedBufferBudget` holders remain,
-in two different classes. Six -- `fabric-publisher`, `fabric-publisher-b`,
-`fabric-subscriber`, `fabric-subscriber-b`, `fabric-call-client`,
-`fabric-call-server` -- are ordinary participant components with no trace
-machinery at all today: no `Trace::new`, no declared `traceDepth`, no emission
-path. This is comparable in scope to giving six more binaries their own C8.11
-instrumentation. The seventh, `fabric-call-worker`, already owns a sink and is
-a harder case: C8.13.1 measured it at `call complete capacity=64 records=63`,
-every ordinary slot spent, so covering it needs trace-sink headroom that does
-not exist under the schema's page-sized `maxTraceDepth = 64` -- either by
-retiring call-plane evidence C8.4-C8.13 already verify, or by reconsidering
-that ceiling, both of which C8.13.1 declined as disproportionate.
+- `fabric-call-client` holds nothing at any point it could report. It does
+  consume its declared quota, but only inside one helper:
+  `scenario::send_large_request` creates, maps, seals, and lends a page — a
+  charge measured at 1 page, 1 buffer, 1 mapping — then unmaps and releases it
+  before returning (`fabric_call_scenario.rs:362-363`). Sampled after
+  `send_large_request`, after `expect_large_reply`, and at the end of its
+  script, its four counts were all zero every time, so a pair emitted from this
+  component could only be a measured `[0, 0]` — the degenerate evidence the
+  trace schema rules out. Reporting its transient peak would need a sample
+  inside the shared helper, which four other binaries also include.
+- `fabric-call-server` cannot reach a flush. It ends by calling
+  `slime_rt::exit(0)` mid-loop on the injected peer-death request
+  (`fabric_call_scenario.rs:185`), so `run_server` never returns and no
+  end-of-`main` emission is reachable. Its charges are also transient, peaking
+  at one page, buffer, and mapping inside a single exchange.
+- `fabric-call-worker` has no trace-sink headroom, unchanged from C8.13.1: its
+  62 ordinary records are fully spent, and reporting both counters would cost
+  four more against a `maxTraceDepth` that is a page-sized schema ceiling, not
+  a fixture value.
+
+A second measured fact shaped what the four report. Their mapping counts are
+steady states, not invariants held throughout: both subscribers map an arriving
+loan and unmap it again, and `fabric-publisher-b` transiently holds a third
+mapping plus a lender loan charge for the copy it lends, releasing all of it
+before it reports. Those peaks are unreported by design -- a scripted
+participant has no sweep loop to sample from, and emits once at the end because
+serial writes must stay off the path of the traffic they describe. See
+`devlog/2026-08-16-c8-13-2-participant-occupancy/index.md`.
 
 #### Deliverables
 
-- trace infrastructure (sink, declared `traceDepth`, emission path) for each
-  of the six uninstrumented holders;
-- trace-sink headroom for `fabric-call-worker`, or an explicit decision that
-  its occupancy stays unreported and why;
-- each reports its own mapping/loan/buffer occupancy through C8.13.1's query
-  syscall.
+- trace infrastructure (sink, declared `traceDepth`, emission path) for the four
+  uninstrumented holders that hold occupancy: `fabric-publisher`,
+  `fabric-subscriber`, `fabric-subscriber-b`, `fabric-publisher-b`. Shared as
+  `components/bins/src/fabric_occupancy_trace.rs`, since a participant needs the
+  identical three records where a broker needs a sweep loop;
+- an explicit, measured decision for each holder that stays unreported --
+  `fabric-call-client`, `fabric-call-server`, `fabric-call-worker` -- recorded
+  above and in `contracts/fabric-trace/v1/schema.zt`;
+- each instrumented holder reports its own mapping occupancy through C8.13.1's
+  query syscall, with its exact count pinned by the gate.
 
 #### Required checks
 
-- the same shape as C8.13.1's, exercised for all 8 declared holders
-  together, with no holder's declared `traceDepth` regressing another's.
+- the same shape as C8.13.1's, exercised for every holder that reports, with no
+  holder's declared `traceDepth` regressing another's -- each participant's sink
+  carries 3 records against a graph-wide `traceDepth` of 64, and every emission
+  is gated on the traffic action so the standalone C8.4-C8.9 fixtures are
+  untouched.
 
 #### Verification target
 
@@ -1220,8 +1254,12 @@ just sel4_traffic_check
 
 #### Exit condition
 
-All 8 of the traffic fixture's declared shared-buffer holders report real,
-bounded mapping/loan/buffer occupancy evidence.
+Five of the traffic fixture's 8 declared shared-buffer holders report real,
+bounded occupancy evidence: the stream broker's mapping and loan counts from
+C8.13.1, and the four participants' own pinned mapping counts. The other three
+are measured walls rather than gaps -- one charges nothing, one cannot reach a
+flush, one has no sink headroom -- each recorded with the evidence above rather
+than left as pending coverage.
 
 ### C8.13.3 -- Live per-child capability-slot occupancy
 
