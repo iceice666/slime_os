@@ -80,9 +80,9 @@ maxKind :: Int = 10;
 -- worker's pending client-delivery table, bounded by `eventDepth`) and
 -- `resourceLoan` (the call worker's outstanding shared-buffer loan count, a
 -- strict subset of `resourceBuffers`) both have a real, distinct signal to
--- sample, but `resourceEvent`'s table never holds anything under the
 -- declared traffic schedule (a structural zero, the same "cannot move"
--- problem that already excludes `resourceRetries` from the stream worker)
+-- problem the stream worker's own `resourceRetries` record used to have
+-- before the QoS-timed clock edge was wired into the traffic partition)
 -- and `resourceLoan`'s worker has no `traceDepth` headroom left under the
 -- schema's absolute `maxTraceDepth` ceiling. `resourceMapping` and a
 -- capability-slot ceiling have no signal at all yet: nothing in the current
@@ -95,12 +95,10 @@ maxKind :: Int = 10;
 -- Emission of these counters is per-plane, not unconditional per worker: a
 -- worker records one only when its own generation drives the traffic that
 -- makes the counter meaningful and declares enough `traceDepth` to carry it.
--- The stream worker, for one, records `resourceBuffers`, `resourceQueue`, and
--- `resourceHistory` only under the concurrent-traffic action and never
--- `resourceRetries` at all (`Subscriber::retry_count` advances only under the
--- QoS-timed action this one does not drive) -- absence from a given trace is
--- silence about a ceiling that plane's own scenario does not exercise, not a
--- validator refusal.
+-- The stream worker, for one, records `resourceBuffers`, `resourceQueue`,
+-- `resourceHistory`, and `resourceRetries` only under the concurrent-traffic
+-- action -- absence from a given trace is silence about a ceiling that
+-- plane's own scenario does not exercise, not a validator refusal.
 resourceFrames :: Int = 1;
 resourceOperations :: Int = 2;
 resourceCalls :: Int = 3;

@@ -36,10 +36,13 @@ catches a component's own `fail()` writing `[fabric*] fail: ...`, and
 (a spawn/capability refusal, a kernel fault) that a tightened *graph-level*
 quota rather than one worker's own runtime table would produce.
 
-Not attempted: `mappings`, `loans`, `bufferPages`/`buffers` (graph-wide and
-per-holder `sharedBufferBudget` quotas), `retries`, `eventDepth`, and a live
-capability-slot ceiling. See the roadmap's C8.13 section for why each remains
-open.
+Not driven to an exact declared bound: `mappings`, `loans`,
+`bufferPages`/`buffers` (graph-wide and per-holder `sharedBufferBudget`
+quotas), `retries` (real evidence now, inherited from the traffic plane's own
+QoS-timed clock, but not asserted equal to the fixture's declared `retries`
+ceiling the way the three `SATURATED_CEILINGS` entries are), `eventDepth`,
+and a live capability-slot ceiling. See the roadmap's C8.13 section for why
+each remains open.
 """
 
 from __future__ import annotations
@@ -114,7 +117,7 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "the generation was admitted with its declared partition",
         (
             r"SLIME_ROOT generation admitted number=39 executables=20 instances=20 "
-            r"grants=44 health=20 bootstrap=1",
+            r"grants=45 health=20 bootstrap=1",
             r"SLIME_ROOT fabric graph=admitted schemas=4 routes=5 participants=15 "
             r"interpositions=1",
         ),
@@ -194,6 +197,7 @@ EXPECTED_RESOURCES: dict[str, tuple[tuple[int, str, int], ...]] = {
         (FABRIC_TRACE_RESOURCE_BUFFERS, "buffers", 2),
         (FABRIC_TRACE_RESOURCE_QUEUE, "queue", 2),
         (FABRIC_TRACE_RESOURCE_HISTORY, "history", 2),
+        (FABRIC_TRACE_RESOURCE_RETRIES, "retries", 1),
     ),
     "call": (
         (FABRIC_TRACE_RESOURCE_CALLS, "calls", 2),

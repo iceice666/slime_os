@@ -23,10 +23,12 @@ under one fixed schedule instead:
   `visibility` and `matrix` actions, not this one) and so are asserted
   healthy-idle instead.
 
-The QoS-timed stream arms are deliberately absent here: they are C8.5's own
-plane, and the retry/deadline evidence this milestone asks for comes from the
-call and operation clocks, which run their timed scenarios unconditionally
-rather than behind an action check.
+The QoS-timed stream arm now runs here too: `fabric-publisher-b`'s simulated
+clock edge (`fabric-publisher-b-clock`, wired into this partition alongside
+the C8.10 grants) drives real RELIABLE retry accounting and exhaustion on the
+telemetry route concurrently with the call and operation planes' own
+unconditional clocks -- the retry/deadline evidence this milestone asks for
+comes from all three now, not just the latter two.
 """
 
 from __future__ import annotations
@@ -98,7 +100,7 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "the generation was admitted with its declared partition",
         (
             r"SLIME_ROOT generation admitted number=36 executables=20 instances=20 "
-            r"grants=44 health=20 bootstrap=1",
+            r"grants=45 health=20 bootstrap=1",
             r"SLIME_ROOT fabric graph=admitted schemas=4 routes=5 participants=15 "
             r"interpositions=1",
         ),
@@ -196,7 +198,8 @@ EXPECTED_PARKED = frozenset({"fabric-observer", "fabric-proxy"})
 #   clients always drain feedback/results before the broker's `send` would
 #   ever return `ERR_WOULDBLOCK`, so the table never holds anything and the
 #   peak is a structural zero every boot -- the same "evidence that cannot
-#   change" reason the stream worker records no retries.
+#   change" reason previously excluded the stream worker's own retries record
+#   before the QoS-timed clock was wired into this partition.
 # - `resourceMapping` and the capability-slot ceiling have no traffic-varying
 #   signal at all in the current component-side syscall surface: every
 #   mapping any of the three workers holds is either fixed at provisioning
@@ -210,11 +213,10 @@ EXPECTED_RESOURCES: dict[str, tuple[tuple[int, str, int], ...]] = {
         (FABRIC_TRACE_RESOURCE_BUFFERS, "buffers", 2),
         (FABRIC_TRACE_RESOURCE_QUEUE, "queue", 2),
         (FABRIC_TRACE_RESOURCE_HISTORY, "history", 2),
-        # No retries entry: `Subscriber::retry_count` is written only inside
-        # `apply_time`, which `qos_check()` gates to `GENERATION_BOOT_ACTION ==
-        # "qos"` alone (`fabric-service.rs`). Under `"traffic"` it never
-        # advances, so a stream retries record would be evidence that cannot
-        # change -- see the C8.13 devlog entry's open risks.
+        # Cumulative rather than held-and-released -- one peak record, no
+        # baseline -- now that the QoS-timed clock edge drives
+        # `Subscriber::retry_count` under `"traffic"` too.
+        (FABRIC_TRACE_RESOURCE_RETRIES, "retries", 1),
     ),
     "call": (
         (FABRIC_TRACE_RESOURCE_CALLS, "calls", 2),

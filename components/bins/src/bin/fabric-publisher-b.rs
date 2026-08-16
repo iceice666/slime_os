@@ -231,7 +231,7 @@ fn main(_startup_arg: u32) {
 
     publish_large(CONTROL_SLOT, CONTROL_SLOT);
     slime_rt::debug_write(b"[fabric-publisher-b] large sample published\n");
-    if GENERATION_BOOT_ACTION == "qos" {
+    if GENERATION_BOOT_ACTION == "qos" || GENERATION_BOOT_ACTION == "traffic" {
         for now_ns in [50u64, 100, 200, 300, 400, 500, 600] {
             advance_time(now_ns);
             await_time_credit(now_ns);

@@ -268,3 +268,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-15 | [C8.13 — concurrent cross-plane traffic, nine gaps C8.10's parked boot never exercised, and an honestly partial exit](2026-08-15-c8-13-traffic/index.md) | Change | Verified | C8.13 |
 | 2026-08-16 | [C8.13 — two more resource classes, and why the other two real signals still can't ship](2026-08-16-c8-13-queue-history-evidence/index.md) | Change | Verified | C8.13 |
 | 2026-08-16 | [C8.13 — a saturation fixture, and which declared ceilings a manifest field can actually prove](2026-08-16-c8-13-saturation-ceilings/index.md) | Change | Verified | C8.13 |
+| 2026-08-16 | [C8.13 — the QoS-timed clock wiring the last pass reverted, done in one coordinated change](2026-08-16-c8-13-qos-timed-traffic/index.md) | Change | Verified | C8.13 |

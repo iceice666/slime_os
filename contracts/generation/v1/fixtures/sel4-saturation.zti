@@ -681,6 +681,17 @@
       transferable = true;
     };
     {
+      name = "fabric-publisher-b-clock";
+      capabilityKind = "endpoint";
+      rights = [
+        "send";
+        "recv";
+      ];
+      source = "fabric-publisher-b";
+      target = "fabric-service";
+      transferable = false;
+    };
+    {
       name = "fabric-subscriber-b-control";
       capabilityKind = "endpoint";
       rights = [
@@ -1362,6 +1373,10 @@
           grant = "fabric-publisher-b-control";
           slot = 0;
         };
+        {
+          grant = "fabric-publisher-b-clock";
+          slot = 3;
+        };
       ];
       dependencies = [
         "init";
@@ -1405,6 +1420,10 @@
         {
           grant = "fabric-service-shared-buffer-factory";
           slot = 1;
+        };
+        {
+          grant = "fabric-publisher-b-clock";
+          slot = 15;
         };
       ];
       dependencies = [

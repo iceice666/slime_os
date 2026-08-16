@@ -200,7 +200,7 @@ fn write_i64(value: i64) {
 }
 
 fn qos_check() -> bool {
-    GENERATION_BOOT_ACTION == "qos"
+    GENERATION_BOOT_ACTION == "qos" || GENERATION_BOOT_ACTION == "traffic"
 }
 
 /// One client's control binding: the slot init gave the fabric for it, and the
@@ -851,14 +851,15 @@ fn broker(
     // teardown, which on a clean shutdown is structurally near zero and would
     // leave a regression invisible to the repeated-boot comparison.
     //
-    // No retry counter: `Subscriber::retry_count` is written only inside
-    // `apply_time`, which `qos_check()` gates to `GENERATION_BOOT_ACTION ==
-    // "qos"` alone. Every other action -- including `"traffic"` -- never
-    // advances it, so a retries record here would be evidence that cannot
-    // change: a resource ceiling this stream worker cannot yet drive under
-    // real concurrent traffic, not one it drove and found idle.
+    // `Subscriber::retry_count` now advances under `"traffic"` too, since
+    // `qos_check()` gates `apply_time` on `"qos" || "traffic"` and the
+    // traffic partition's own `fabric-publisher-b-clock` edge drives it.
+    // Cumulative rather than held-and-released -- a retry count never
+    // returns to a meaningful "zero" -- so it carries only the peak, the
+    // same convention `call_broker.rs`'s `peak_retries` already uses.
     let mut peak_frames = 0u32;
     let mut peak_buffers = 0u32;
+    let mut peak_retries = 0u32;
     // Per-subscriber outstanding-delivery (RELIABLE, delivered-but-unacked)
     // and KEEP_LAST backlog occupancy, summed across every provisioned
     // subscriber the same way `peak_frames`/`peak_buffers` sum across every
@@ -1008,6 +1009,15 @@ fn broker(
         if live_history > peak_history {
             peak_history = live_history;
         }
+        let live_retries = subscribers
+            .iter()
+            .flatten()
+            .map(|subscriber| subscriber.retry_count)
+            .max()
+            .unwrap_or(0);
+        if live_retries > peak_retries {
+            peak_retries = live_retries;
+        }
         if subscribers
             .iter()
             .flatten()
@@ -1032,6 +1042,7 @@ fn broker(
                 let _ = trace.resource(slime_proto::fabric_trace::RESOURCE_BUFFERS, peak_buffers);
                 let _ = trace.resource(slime_proto::fabric_trace::RESOURCE_QUEUE, peak_queue);
                 let _ = trace.resource(slime_proto::fabric_trace::RESOURCE_HISTORY, peak_history);
+                let _ = trace.resource(slime_proto::fabric_trace::RESOURCE_RETRIES, peak_retries);
             }
             let baseline_frames = frames.iter().filter(|frame| frame.refs > 0).count() as u32;
             let _ = trace.resource(slime_proto::fabric_trace::RESOURCE_FRAMES, baseline_frames);

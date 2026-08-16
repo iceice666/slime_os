@@ -1005,44 +1005,43 @@ boots a new `"traffic"` action reusing C8.10's exact three-worker partition
 plus the additional grants real traffic needs) and requires the stream, call,
 and operation planes to complete their own bounded C8.4-C8.9 scenarios
 concurrently, observably interleaved rather than three sequential phases.
-Eight of the eleven declared resource classes emit bounded peak(+baseline)
-evidence through the C8.11 trace sink: frames, shared buffers, retries,
-in-flight calls, in-flight operations, retained operation results, and —
-added after the milestone's first partial-exit pass — the stream plane's
-per-subscriber outstanding-delivery count and KEEP_LAST backlog occupancy.
-Getting this far required fixing nine latent gaps C8.10's parked boot plane
-never exercised, plus (for the two added counters) confirming by direct
-measurement that a third candidate (the operation plane's pending-delivery
-count) reports a structural zero under this fixed schedule and a fourth (the
-call plane's outstanding loan count) has no trace-sink headroom left under
-the schema's absolute 64-record ceiling — see
-`devlog/2026-08-15-c8-13-traffic/index.md` and
-`devlog/2026-08-16-c8-13-queue-history-evidence/index.md`.
-
-Not yet done, and explicitly out of scope for this pass: the operation
-plane's pending-delivery count, the call plane's outstanding-loan count,
-shared-buffer mapping/loan/buffer occupancy across 8 holders, retries, and a
-live capability-slot ceiling (8 of the 11 declared classes' *evidence*
-remains partial; separately, `just sel4_saturation_check`
-(`just data_fabric_saturation_check`) now proves 3 of the 11 classes --
-in-flight calls, in-flight operations, retained operation results -- are
-driven to their exact declared bound rather than merely observed under it,
-via a second fixture, `sel4-saturation.zti`, that is `sel4-traffic.zti` with
+The QoS-timed stream arm now runs as part of that same concurrent schedule
+rather than only in `sel4-qos.zti`'s standalone plane: `fabric-publisher-b`'s
+simulated clock edge is wired into the traffic partition (one more declared
+grant plus two bindings, at the exact slots each side's own generation-derived
+layout computes), driving real RELIABLE retry accounting and exhaustion on
+the telemetry route concurrently with the call and operation planes' own
+unconditional clocks. Eight of the eleven declared resource classes emit
+bounded peak(+baseline) evidence through the C8.11 trace sink: frames, shared
+buffers, retries (now from both the call and the stream worker, where it was
+call-only before), in-flight calls, in-flight operations, retained operation
+results, and the stream plane's per-subscriber outstanding-delivery count and
+KEEP_LAST backlog occupancy. Separately, `just sel4_saturation_check`
+(`just data_fabric_saturation_check`) proves 3 of the 11 classes -- in-flight
+calls, in-flight operations, retained operation results -- are driven to
+their exact declared bound rather than merely observed under it, via a
+second fixture, `sel4-saturation.zti`, that is `sel4-traffic.zti` with
 `inFlightOperations` tightened to the scenario's own peak and nothing else
-changed). Direct code reading of `boot-contracts/src/fabric_graph.rs`
-established that three more declared fields (`queueDepth`, `historyDepth`
-graph-wide, `capabilitySlots`) are never checked against real usage at all --
-tightening them would test nothing, and making them meaningful is a
-mechanism change, not a fixture change. Also out of scope: QoS-timed stream
-traffic running concurrently with call/operation (dropped after its
-clock-grant wiring proved to need its own multi-step discovery spanning
-`build-generation.py`'s stream-control-grant resolution and a
-per-component-hardcoded slot number, and because C8.5's own gate already
-proves the timed scenario in isolation). Each remains a real gap against
-this milestone's exit condition below, not a redefinition of it. See
-`devlog/2026-08-15-c8-13-traffic/index.md`,
-`devlog/2026-08-16-c8-13-queue-history-evidence/index.md`, and
-`devlog/2026-08-16-c8-13-saturation-ceilings/index.md`.
+changed (kept in lockstep with every `sel4-traffic.zti` addition, including
+the clock wiring).
+
+Not yet done: the operation plane's pending-delivery count and the call
+plane's outstanding-loan count (both have a real, distinct signal but are
+blocked -- a structural zero under this schedule, and no trace-sink headroom,
+respectively); shared-buffer mapping/loan/buffer occupancy across 8 holders
+(no live-occupancy signal observable component-side); and a live
+capability-slot ceiling (same reason). Direct code reading of
+`boot-contracts/src/fabric_graph.rs` established that three more declared
+fields (`queueDepth`, `historyDepth` graph-wide, `capabilitySlots`) are never
+checked against real usage at all -- tightening them would test nothing, and
+making them meaningful is a mechanism change, not a fixture change. The
+saturation gate does not yet drive retries, event depth, or any shared-buffer
+quota to an exact bound the way it does the three classes above. Each
+remains a real gap against this milestone's exit condition below, not a
+redefinition of it. See `devlog/2026-08-15-c8-13-traffic/index.md`,
+`devlog/2026-08-16-c8-13-queue-history-evidence/index.md`,
+`devlog/2026-08-16-c8-13-saturation-ceilings/index.md`, and
+`devlog/2026-08-16-c8-13-qos-timed-traffic/index.md`.
 
 **Depends on:** C8.11 and C8.12.
 
