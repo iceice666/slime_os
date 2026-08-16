@@ -1025,23 +1025,45 @@ second fixture, `sel4-saturation.zti`, that is `sel4-traffic.zti` with
 changed (kept in lockstep with every `sel4-traffic.zti` addition, including
 the clock wiring).
 
-Not yet done: the operation plane's pending-delivery count and the call
-plane's outstanding-loan count (both have a real, distinct signal but are
-blocked -- a structural zero under this schedule, and no trace-sink headroom,
-respectively); shared-buffer mapping/loan/buffer occupancy across 8 holders
-(no live-occupancy signal observable component-side); and a live
-capability-slot ceiling (same reason). Direct code reading of
-`boot-contracts/src/fabric_graph.rs` established that three more declared
-fields (`queueDepth`, `historyDepth` graph-wide, `capabilitySlots`) are never
-checked against real usage at all -- tightening them would test nothing, and
-making them meaningful is a mechanism change, not a fixture change. The
-saturation gate does not yet drive retries, event depth, or any shared-buffer
-quota to an exact bound the way it does the three classes above. Each
-remains a real gap against this milestone's exit condition below, not a
-redefinition of it. See `devlog/2026-08-15-c8-13-traffic/index.md`,
+Not yet done: the operation plane's pending-delivery count (`resourceEvent`)
+is not a scheduling gap -- tracing `queue_delivery`'s `slime_rt::send` down
+through the transport wrapper to seL4's blocking `Cap::send` (which returns
+`()`) shows the `ERR_WOULDBLOCK`/`ERR_PEER_DEAD` arms it depends on are
+unreachable under any schedule, since the underlying primitive cannot signal
+either outcome; making it real needs the call plane's own `try_send` +
+explicit-ack pattern ported into the operation wire protocol, declined as a
+disproportionate regression risk to the verified operation plane for one
+counter. The call plane's outstanding-loan count (`resourceLoan`) has a real
+signal but zero room: its worker's 62 ordinary trace-sink slots
+(`traceDepth=64` minus the schema's `TERMINAL_RESERVE=2`) are already fully
+spent on existing verified evidence, and `MAX_TRACE_DEPTH=64` is a
+page-sized (64 x 64-byte records) schema ceiling the C8.11 conformance suite
+already defends against being raised, not a fixture value. Neither was
+attempted; see `devlog/2026-08-16-c8-13-resource-event-loan-walls/index.md`.
+Shared-buffer mapping/loan/buffer occupancy across 8 holders and a live
+capability-slot ceiling are broken out below as C8.13.1-C8.13.3: the root
+already tracks the per-holder shared-buffer counts C8.13.1/.2 need
+(`SharedBufferTable::holder_pages`/`holder_buffers`/`holder_mappings`/
+`holder_loans`), so those two are a query syscall plus, for full 8-holder
+coverage, new participant-side trace instrumentation; the live
+capability-slot count C8.13.3 needs has no existing tracking of any kind.
+Direct code reading of `boot-contracts/src/fabric_graph.rs` established that
+two declared fields (`queueDepth` and `capabilitySlots`) are never checked
+against real usage at all -- tightening them would test nothing, and making
+them meaningful is a mechanism change, not a fixture change. Graph-wide
+`historyDepth` was initially grouped with them but that was wrong:
+`validate_against` (line 710-712) rejects any participant whose declared
+per-route history depth exceeds it, and the bounded value sizes the real
+ring `resourceHistory` already reports on. The saturation gate does not yet
+drive retries, event depth, or any shared-buffer quota to an exact bound the
+way it does the three classes above. Each remains a real gap against this
+milestone's exit condition below, not a redefinition of it. See
+`devlog/2026-08-15-c8-13-traffic/index.md`,
 `devlog/2026-08-16-c8-13-queue-history-evidence/index.md`,
-`devlog/2026-08-16-c8-13-saturation-ceilings/index.md`, and
-`devlog/2026-08-16-c8-13-qos-timed-traffic/index.md`.
+`devlog/2026-08-16-c8-13-saturation-ceilings/index.md`,
+`devlog/2026-08-16-c8-13-qos-timed-traffic/index.md`,
+`devlog/2026-08-16-c8-13-resource-event-loan-walls/index.md`, and
+`devlog/2026-08-16-c8-13-declared-fields-audit/index.md`.
 
 **Depends on:** C8.11 and C8.12.
 
@@ -1081,6 +1103,129 @@ just data_fabric_traffic_check
 All C8 transport classes carry concurrent bounded traffic through one fabric
 while every declared resource stays inside its manifest ceiling and returns to
 its declared baseline.
+
+### C8.13.1 -- Self-reported shared-buffer occupancy evidence (narrow)
+
+**Status:** Not started.
+
+**Depends on:** C8.13.
+
+`SharedBufferTable` (`slime-root/src/shared_buffer.rs`) already computes
+live per-holder `holder_pages`/`holder_buffers`/`holder_mappings`/
+`holder_loans` from its existing `Charge` accounting; nothing exposes them to
+userspace. This slice is additive only: a new read-only label alongside
+`shared_buffer_labels::{CREATE,RELEASE,MAP,...}` and a client wrapper, no
+change to any existing dispatch arm.
+
+#### Deliverables
+
+- a self-scoped, read-only shared-buffer query syscall returning the
+  caller's own live page/buffer/mapping/loan counts, denied the same way an
+  undeclared holder is already denied every other shared-buffer operation;
+- a `resourceMapping` trace code declared in
+  `contracts/fabric-trace/v1/schema.zt`, following the existing peak+baseline
+  held-and-released convention;
+- `fabric-service` and `fabric-call-worker` -- the two of the traffic
+  fixture's 8 declared `sharedBufferBudget` holders that already own a trace
+  sink -- sample and emit their own occupancy under the traffic action.
+
+#### Required checks
+
+- the query syscall returns exactly the querying holder's own counts and
+  cannot name another holder;
+- `resourceMapping` peak+baseline records follow the schema's declared
+  convention without regressing the standalone C8.4-C8.9 fixtures' fixed
+  `traceDepth`.
+
+#### Verification target
+
+```sh
+just sel4_traffic_check
+just data_fabric_traffic_check
+```
+
+#### Exit condition
+
+The two broker holders with existing trace infrastructure report real,
+traffic-varying mapping/loan/buffer occupancy for themselves. Explicitly
+scoped as 2 of the traffic fixture's 8 declared holders, not full coverage --
+C8.13.2 extends coverage to the rest.
+
+### C8.13.2 -- Full shared-buffer occupancy coverage across all declared holders
+
+**Status:** Not started.
+
+**Depends on:** C8.13.1.
+
+Six of the traffic fixture's 8 declared `sharedBufferBudget` holders --
+`fabric-publisher`, `fabric-publisher-b`, `fabric-subscriber`,
+`fabric-subscriber-b`, `fabric-call-client`, `fabric-call-server` -- are
+ordinary participant components with no trace machinery at all today: no
+`Trace::new`, no declared `traceDepth`, no emission path. This is
+comparable in scope to giving six more binaries their own C8.11 instrumentation.
+
+#### Deliverables
+
+- trace infrastructure (sink, declared `traceDepth`, emission path) for each
+  of the six uninstrumented holders;
+- each reports its own mapping/loan/buffer occupancy through C8.13.1's query
+  syscall.
+
+#### Required checks
+
+- the same shape as C8.13.1's, exercised for all 8 declared holders
+  together, with no holder's declared `traceDepth` regressing another's.
+
+#### Verification target
+
+```sh
+just sel4_traffic_check
+```
+
+#### Exit condition
+
+All 8 of the traffic fixture's declared shared-buffer holders report real,
+bounded mapping/loan/buffer occupancy evidence.
+
+### C8.13.3 -- Live per-child capability-slot occupancy
+
+**Status:** Not started.
+
+**Depends on:** none. An independent root mechanism, not gated by C8.13.1/.2.
+
+`object_allocator.rs`'s `ArenaRecord` tracks what the root allocated for a
+task's arena, not how many of a live child's own CNode slots are populated --
+and capability transfers and mints after spawn (fabric delegation, for
+instance) are not accounted anywhere today. seL4 has no native "CNode
+occupancy" query, so this is a new bookkeeping mechanism, not a query added
+over existing state the way C8.13.1 is.
+
+#### Deliverables
+
+- a root-side mechanism tracking, per child CNode, how many declared slots
+  are populated across its lifetime, including post-spawn transfers and
+  mints, not just the initial grant vector;
+- a self-scoped query surface exposing that live count to the holder itself,
+  mirroring C8.13.1's discipline;
+- a resource trace code and emission wired the same way as C8.13.1/.2 once
+  the mechanism exists.
+
+#### Required checks
+
+- the live count matches the CNode's real occupancy after grants, mints,
+  transfers, and revocations;
+- a holder cannot query another's occupancy.
+
+#### Verification target
+
+TBD -- a new mechanism with no existing gate to extend.
+
+#### Exit condition
+
+At least one holder's declared `capabilitySlots` ceiling is checked against
+a live, root-tracked occupancy rather than compared only to a fixed global
+`LIMIT_*` constant at decode time.
+
 
 ### C8.14 — Degradation and fault isolation
 

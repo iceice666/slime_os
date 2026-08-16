@@ -95,3 +95,7 @@ see *Open risks*.
 - Raw transcript: none captured separately.
 - Serial output: `just sel4_saturation_check`'s own transcript (reproducible by running the gate).
 - Related roadmap item: [C8.13](../../roadmap/02-core-runtime.md#c813--concurrent-cross-plane-traffic-and-resource-ceilings).
+
+## Corrections
+
+- **2026-08-16** (`devlog/2026-08-16-c8-13-declared-fields-audit/index.md`): *Open risks and follow-ups*' third bullet grouped `historyDepth` (graph-wide) with `queueDepth` and `capabilitySlots` as having "no runtime consumer that checks them against real usage at all." That is wrong for `historyDepth`: `FabricGraph::validate_against` (`boot-contracts/src/fabric_graph.rs:710-712`) rejects any participant whose declared `qos.history_depth` exceeds the graph-wide `limits.history_depth`, a real per-participant cross-check `queueDepth` and `capabilitySlots` genuinely lack (`TransportQos` has no `queue_depth` field at all, and no per-participant field is ever compared against `limits.capability_slots`). The bounded value that check admits then sizes real runtime state (`StreamHistory::new(qos.history_depth)` in `fabric-service.rs`), and its live occupancy is exactly what `resourceHistory` (added the same day) already evidences. `queueDepth` and `capabilitySlots` remain accurately described as unconsumed.
