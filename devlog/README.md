@@ -273,3 +273,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-16 | [C8.13 — `historyDepth` was wrongly grouped as unconsumed; `queueDepth` and `capabilitySlots` genuinely are](2026-08-16-c8-13-declared-fields-audit/index.md) | Audit | Root-caused | C8.13 |
 | 2026-08-16 | [C8.13.1 — a self-scoped occupancy query, and the counter that could not move](2026-08-16-c8-13-1-shared-buffer-occupancy/index.md) | Change | Verified | C8.13.1, C8.13 |
 | 2026-08-16 | [C8.13.2 — four participants report their own occupancy; three measurably cannot](2026-08-16-c8-13-2-participant-occupancy/index.md) | Change | Verified | C8.13.2, C8.13 |
+| 2026-08-16 | [Post-seL4 documentation reconciliation, and RP2 rescoped to what seL4 does not already supply](2026-08-16-post-sel4-doc-reconciliation/index.md) | Decision | Proposed | RP2, RP3, C8.2, C7.7, M5.1, M5.4, M5.6, P5 |

@@ -15,7 +15,7 @@ A milestone is complete only when its exit condition is observed. Compiled code,
 | [Backlog](00-backlog.md) | B1–B55 resolved; backlog clear | none open |
 | [Foundations](01-foundations.md) | M1–M4 and M6 complete; M5 mechanisms complete except M5.7 physical Framework evidence | M5.7 requires observed removable-media Framework boot without internal-NVMe writes |
 | [Core runtime](02-core-runtime.md) | C7 and C8.1–C8.12 complete; C8.13 concurrent cross-plane traffic in progress (stream+call+operation run concurrently with 10 of 11 declared resource classes evidenced, 2026-08-16; C8.13.1 landed the self-scoped shared-buffer occupancy query and C8.13.2 extended mapping/loan evidence to 5 of the 8 declared holders, the other 3 recorded as measured walls) | C8.13 remaining: `resourceEvent`, timed-QoS stream concurrency, saturation testing; C8.13.3 live capability-slot occupancy |
-| [RPi5 ROS 2 demo](09-rpi5-ros2-demo.md) | RP0 and RP1 complete; RP2–RP8 planned | Rewrite RP2 around the seL4 product boundary before implementation; its current low-level deliverables describe the retired custom kernel |
+| [RPi5 ROS 2 demo](09-rpi5-ros2-demo.md) | RP0 and RP1 complete; RP2 rewritten around the seL4 product boundary (2026-08-16) and largely satisfied by P5, owing only a demo-scoped replay plus AArch64 rollback and wrong-target arms; RP3–RP8 planned | RP2's rollback and wrong-target arms on an AArch64 generation pair |
 | [Architecture portability](07-architecture-portability.md) | P0, P1, P2.1, P2.2, and P5 complete; P2.3–P2.6 superseded by P5 | P4 physical Raspberry Pi 5 qualification is the next architecture evidence gate |
 | [ROS 2 compatibility](03-ros2-compatibility.md) | Not started | R0 minimal DDS/RTPS topic profile is first; broader external/multi-vendor compatibility follows after the RPi5 demo path |
 | [Platform hardware](04-platform-hardware.md) | Deferred; H1 is blocked and no current seL4 Framework inventory or physical evidence exists | H1 remains blocked until a seL4 Framework image and observed inventory/no-write record exist |
@@ -29,8 +29,8 @@ The active lane is now the [RPi5 ROS 2 demo track](09-rpi5-ros2-demo.md). Work s
 
 1. **Target contract:** pin the exact Raspberry Pi 5 board/firmware/media path, ROS 2 distribution, node API subset, message type, and observed success transcript.
 2. **Target-qualified artifacts:** make the generation, release, kernel image, and component images reject wrong-architecture binaries before mapping executable bytes.
-3. **AArch64 QEMU boot:** establish the EL1/EL0, MMU, exception, timer, interrupt, UART, syscall, and component-launch path under `aarch64-qemu-virt`.
-4. **Raspberry Pi 5 physical boot:** bring up serial logging, device-tree discovery, interrupt/timer path, and a no-ambient-storage removable-media boot on the named board.
+3. **AArch64 QEMU boot:** already established by P5 on `aarch64-sel4-qemu-virt`, where seL4 owns EL1/EL0 transitions, the MMU, exceptions, timers, interrupts, and UART. What remains demo-scoped is one generation exercising the component-launch and data path together, plus rollback and wrong-target rejection on that profile.
+4. **Raspberry Pi 5 physical boot:** build the `bcm2712` seL4 kernel/loader from the existing pins and platform config, bring up serial logging, the interrupt/timer path, and a no-ambient-storage removable-media boot on the named board.
 5. **Two-component data path on Arm:** run two isolated components exchanging a bounded C7/C8 sample on AArch64 and then on the Pi.
 6. **Node and DDS transport envelope:** provide only the allocator, startup, clock/timer, executor, bounded datagram/network path, and packaging surface needed by the pinned ROS 2 DDS profile.
 7. **Minimal DDS/RTPS topic profile:** implement the fixed participant/writer/reader, XCDR1, RTPS DATA, bounded discovery, and QoS subset for two nodes without introducing ambient DDS discovery, POSIX paths, or wildcard network authority.
@@ -46,16 +46,17 @@ flowchart TD
     Backlog["Backlog: no open items"]
     Foundations["M1–M6 foundations\nexisting x86/QEMU evidence"]
     C7["C7 sample plane\ncomplete"]
-    C8["C8.1–C8.10 fabric\ncomplete baseline"]
+    C8["C8.1–C8.12 fabric\ncomplete; C8.13 open"]
     P0["P0 target/artifact contracts"]
     P1["P1 x86 boundary extraction"]
-    P2["P2.1–P2.6 AArch64 QEMU\nvertical slice"]
+    P2["P2.1–P2.2 AArch64\nhistorical; P2.3–P2.6 superseded"]
+    P5["P5 seL4 substitution\ncomplete; product path"]
     P4["P4 Raspberry Pi 5 qualification"]
     C10["C10 private component memory"]
     R0["R0 minimal DDS/RTPS topic profile"]
     RP0["RP0 demo contract"]
     RP1["RP1 target-qualified build path"]
-    RP2["RP2 AArch64 QEMU boot"]
+    RP2["RP2 AArch64 QEMU product slice"]
     RP3["RP3 Raspberry Pi 5 serial boot"]
     RP4["RP4 Arm component data path"]
     RP5["RP5 node + DDS transport envelope"]
@@ -70,12 +71,13 @@ flowchart TD
 
     Backlog --> Foundations
     Foundations --> C7 --> C8
-    Foundations --> P0 --> P1 --> P2 --> P4
+    Foundations --> P0 --> P1 --> P5 --> P4
+    P1 --> P2
     C8 --> RP0
     P0 --> RP1
     P1 --> RP1
     RP0 --> RP1 --> RP2 --> RP3 --> RP4 --> RP5 --> RP6 --> RP7 --> RP8
-    P2 --> RP2
+    P5 --> RP2
     P4 --> RP3
     C7 --> RP4
     C8 --> RP4

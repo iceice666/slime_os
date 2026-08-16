@@ -93,37 +93,63 @@ just rpi5_artifact_check
 
 Every executable byte in the future demo generation is admitted for one exact AArch64/Raspberry Pi 5 profile, and wrong-target artifacts fail closed before execution.
 
-## RP2 — AArch64 QEMU kernel and component vertical slice
+## RP2 — AArch64 QEMU product vertical slice
 
-**Status:** Not started.
+**Status:** Largely satisfied by P5, pending an explicit demo-scoped replay. The
+product already boots `aarch64-sel4-qemu-virt`: seL4 owns exception vectors,
+context and address-space switching, translation tables, TLB maintenance,
+interrupt masking, idle/wake, GICv2/GICv3, the generic timer, and PL011 serial,
+and `just sel4_root_boot_check` observes EL0 components, fault isolation, timer
+delivery, and resource reclamation on that profile. What RP2 still owes the demo
+is the rollback arm and the wrong-target rejection arm on an AArch64 generation
+pair, neither of which any current gate exercises.
 
-**Depends on:** RP1 and P2.
+**Depends on:** RP1 and P5. P2's custom-kernel bring-up deliverables are
+superseded: seL4 supplies that mechanism, so re-deriving it is explicitly out of
+scope.
 
 ### Deliverables
 
-- boot the verified generation path on `aarch64-qemu-virt` with EL1 kernel and EL0 components;
-- implement or connect AArch64 exception vectors, `svc` syscalls, context switching, address-space switching, 4 KiB translation tables, TLB maintenance, interrupt masking, idle/wake behavior, GICv3, generic timer, PL011 serial, and QEMU exit;
-- launch at least two target-qualified components and exercise IPC, faults, wait/wake, timer preemption, supervision, and rollback semantics;
-- replay the C7 sample-plane exchange and the C8 route provisioning/data path required by RP4/RP6;
-- produce normalized semantic events comparable to x86 without requiring byte-identical register or physical-address traces.
+- confirm the verified-generation path on `aarch64-sel4-qemu-virt` as the demo's
+  architecture baseline, citing the existing product gates rather than
+  re-implementing privileged mechanism;
+- replay the C7 sample-plane exchange and the C8 route provisioning/data path
+  required by RP4/RP6 under one demo-scoped generation rather than across
+  separate plane fixtures;
+- prove rollback on an AArch64 generation pair: a failing pending AArch64
+  generation returns to a verified AArch64 known-good root;
+- prove target qualification rejects a wrong-architecture artifact from that
+  same admission path before any executable byte is mapped;
+- produce normalized semantic events comparable across runs without requiring
+  byte-identical register or physical-address traces.
 
 ### Required checks
 
-- the AArch64 QEMU profile launches isolated EL0 components from a verified generation;
-- invalid instruction, data abort, permission fault, malformed user pointer, and component crash report or terminate the responsible component without corrupting another component or the kernel;
-- endpoint wake, timer wake, supervision wake, and idle exit do not busy-poll or lose wakeups;
-- two components exchange and return a payload larger than the control-message bound with the same quota and reclamation semantics as x86;
-- a failing pending AArch64 generation rolls back to a verified AArch64 known-good generation, while x86 artifacts are rejected as wrong-target.
+- the product profile launches isolated EL0 components from a verified generation
+  (already observed by `just sel4_root_boot_check` and
+  `just sel4_component_graph_check`);
+- data abort, permission fault, malformed user pointer, and component crash
+  report or terminate the responsible component without corrupting another
+  component, the root, or the kernel;
+- endpoint wake, timer wake, and supervision wake do not busy-poll or lose
+  wakeups;
+- two components exchange and return a payload larger than the control-message
+  bound with the declared quota and reclamation semantics;
+- a failing pending AArch64 generation rolls back to a verified AArch64
+  known-good generation, while a wrong-target artifact is rejected before
+  mapping.
 
 ### Planned verification target
 
 ```sh
-just aarch64_qemu_check
+just rpi5_arm_slice_check
 ```
 
 ### Exit condition
 
-The AArch64 QEMU profile runs the architecture-neutral Slime component model and data path needed by the demo with the same authority, lifecycle, and rollback semantics as the existing x86 baseline.
+One demo-scoped AArch64 generation runs the Slime component model and data path
+the demo needs, and its rollback and wrong-target rejection arms are observed on
+that same profile rather than inherited from retired x86 evidence.
 
 ## RP3 — Raspberry Pi 5 serial boot and minimum board services
 
@@ -133,17 +159,33 @@ The AArch64 QEMU profile runs the architecture-neutral Slime component model and
 
 ### Deliverables
 
-- select and document the Raspberry Pi 5 firmware/boot handoff path, kernel load address rules, device-tree source, serial console, and removable media image format;
-- parse the board device tree with strict bounds and identify memory regions, reserved regions, UART, GIC, generic timer, mailbox/power/reset interfaces if used, and any storage or network/datagram path used by the demo;
-- bring up early serial diagnostics, exception reporting, MMU mappings, timer interrupts, idle/wake, and shutdown/reboot or operator-visible stop behavior on physical hardware;
-- preserve the no-ambient-storage boundary: the first board demos boot from reproducible removable media and do not claim unqualified writes to other devices;
-- record board revision, firmware version, image identity, generation identity, serial output, and device-tree identity.
+- build a `bcm2712` seL4 kernel and loader image from the existing pins, using the
+  already-present `sel4/config/bcm2712-rpi5.cmake` platform configuration that no
+  build path currently selects, and pin its artifact digests the way
+  `qemu-arm-virt` is pinned;
+- select and document the Raspberry Pi 5 firmware/boot handoff path, image load
+  address rules, device-tree source, serial console, and removable media image
+  format;
+- identify the board's memory regions, reserved regions, UART, GIC, generic
+  timer, and any storage or datagram path the demo uses, taking them from seL4's
+  bootinfo and its platform configuration rather than re-deriving a device-tree
+  parser in the root;
+- bring up early serial diagnostics through the root, exception reporting via
+  seL4's fault messages, timer interrupts, and an operator-visible stop behavior
+  on physical hardware;
+- preserve the no-ambient-storage boundary: the first board demos boot from
+  reproducible removable media and do not claim unqualified writes to other
+  devices;
+- record board revision, firmware version, image identity, generation identity,
+  serial output, and the resolved platform/device identity.
 
 ### Required checks
 
-- wrong board revision, missing required device-tree nodes, unsupported page/interrupt/timer profile, or incompatible firmware handoff fails with bounded diagnostics;
-- timer interrupts and serial logging continue after entering the normal scheduler path;
-- a faulting early component or malformed user pointer is reported on serial without wedging the board;
+- wrong board revision, an unsupported page/interrupt/timer profile, or an
+  incompatible firmware handoff fails with bounded diagnostics rather than a hang;
+- timer interrupts and serial logging continue after the root activates the
+  component graph;
+- a faulting early component is reported on serial without wedging the board;
 - pre/post storage evidence shows no write to any device not explicitly granted by the demo image;
 - QEMU AArch64 success is cited only as inherited architecture evidence and not as physical board completion.
 
