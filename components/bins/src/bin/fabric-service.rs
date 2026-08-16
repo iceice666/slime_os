@@ -859,6 +859,16 @@ fn broker(
     // real concurrent traffic, not one it drove and found idle.
     let mut peak_frames = 0u32;
     let mut peak_buffers = 0u32;
+    // Per-subscriber outstanding-delivery (RELIABLE, delivered-but-unacked)
+    // and KEEP_LAST backlog occupancy, summed across every provisioned
+    // subscriber the same way `peak_frames`/`peak_buffers` sum across every
+    // frame. The two tables are disjoint at every sweep: `deliver` pops an
+    // entry off `history` in the same step that grows `in_flight` (a sample
+    // becomes outstanding only once it leaves the backlog), so summing both
+    // is a non-double-counted occupancy rather than two overlapping views of
+    // one queue.
+    let mut peak_queue = 0u32;
+    let mut peak_history = 0u32;
     let route_words = [
         trace_log::route_word(&route_identity(
             ROUTE_NAMES[0],
@@ -982,6 +992,22 @@ fn broker(
         if live_buffers > peak_buffers {
             peak_buffers = live_buffers;
         }
+        let live_queue = subscribers
+            .iter()
+            .flatten()
+            .map(|subscriber| subscriber.in_flight as u32)
+            .sum();
+        if live_queue > peak_queue {
+            peak_queue = live_queue;
+        }
+        let live_history = subscribers
+            .iter()
+            .flatten()
+            .map(|subscriber| subscriber.history.len() as u32)
+            .sum();
+        if live_history > peak_history {
+            peak_history = live_history;
+        }
         if subscribers
             .iter()
             .flatten()
@@ -1004,6 +1030,8 @@ fn broker(
             // asks for this evidence.
             if GENERATION_BOOT_ACTION == "traffic" {
                 let _ = trace.resource(slime_proto::fabric_trace::RESOURCE_BUFFERS, peak_buffers);
+                let _ = trace.resource(slime_proto::fabric_trace::RESOURCE_QUEUE, peak_queue);
+                let _ = trace.resource(slime_proto::fabric_trace::RESOURCE_HISTORY, peak_history);
             }
             let baseline_frames = frames.iter().filter(|frame| frame.refs > 0).count() as u32;
             let _ = trace.resource(slime_proto::fabric_trace::RESOURCE_FRAMES, baseline_frames);
@@ -1015,6 +1043,21 @@ fn broker(
                 let _ = trace.resource(
                     slime_proto::fabric_trace::RESOURCE_BUFFERS,
                     baseline_buffers,
+                );
+                let baseline_queue = subscribers
+                    .iter()
+                    .flatten()
+                    .map(|subscriber| subscriber.in_flight as u32)
+                    .sum();
+                let _ = trace.resource(slime_proto::fabric_trace::RESOURCE_QUEUE, baseline_queue);
+                let baseline_history = subscribers
+                    .iter()
+                    .flatten()
+                    .map(|subscriber| subscriber.history.len() as u32)
+                    .sum();
+                let _ = trace.resource(
+                    slime_proto::fabric_trace::RESOURCE_HISTORY,
+                    baseline_history,
                 );
             }
             let _ = trace.terminal();

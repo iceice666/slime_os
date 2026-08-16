@@ -1004,21 +1004,37 @@ boots a new `"traffic"` action reusing C8.10's exact three-worker partition
 (`sel4-traffic.zti` is `sel4-boot.zti` with `bootAction`/`generation` changed
 plus the additional grants real traffic needs) and requires the stream, call,
 and operation planes to complete their own bounded C8.4-C8.9 scenarios
-concurrently, observably interleaved rather than three sequential phases. Six
-of the eleven declared resource classes emit bounded peak(+baseline) evidence
-through the C8.11 trace sink: frames, shared buffers, retries, in-flight
-calls, in-flight operations, and retained operation results. Getting this far
-required fixing nine latent gaps C8.10's parked boot plane never exercised —
-see `devlog/2026-08-15-c8-13-traffic/index.md`.
+concurrently, observably interleaved rather than three sequential phases.
+Eight of the eleven declared resource classes emit bounded peak(+baseline)
+evidence through the C8.11 trace sink: frames, shared buffers, retries,
+in-flight calls, in-flight operations, retained operation results, and —
+added after the milestone's first partial-exit pass — the stream plane's
+per-subscriber outstanding-delivery count and KEEP_LAST backlog occupancy.
+Getting this far required fixing nine latent gaps C8.10's parked boot plane
+never exercised, plus (for the two added counters) confirming by direct
+measurement that a third candidate (the operation plane's pending-delivery
+count) reports a structural zero under this fixed schedule and a fourth (the
+call plane's outstanding loan count) has no trace-sink headroom left under
+the schema's absolute 64-record ceiling — see
+`devlog/2026-08-15-c8-13-traffic/index.md` and
+`devlog/2026-08-16-c8-13-queue-history-evidence/index.md`.
 
-Not yet done, and explicitly out of scope for this pass: queue/history/event/
-mapping/loan/capability-slot resource evidence (5 of the 11 declared classes);
-QoS-timed stream traffic running concurrently with call/operation (dropped
-after its clock-grant wiring proved to need its own multi-step discovery, and
-because C8.5's own gate already proves the timed scenario in isolation); and a
+Not yet done, and explicitly out of scope for this pass: the operation
+plane's pending-delivery count, the call plane's outstanding-loan count,
+shared-buffer mapping/loan-mapping occupancy, and a live capability-slot
+ceiling (4 of the 11 declared classes). Two of the four have a real signal to
+sample but are blocked for a concrete reason rather than an unimplemented
+mechanism: the operation plane's pending-delivery count is a structural zero
+under this fixed schedule, and the call plane's outstanding-loan count has no
+trace-sink headroom left under the schema's absolute 64-record ceiling. The
+other two (mapping, capability-slot) have no traffic-varying signal at all in
+the current component-side syscall surface. Also out of scope: QoS-timed
+stream traffic running concurrently with call/operation (dropped after its
+clock-grant wiring proved to need its own multi-step discovery, and because
+C8.5's own gate already proves the timed scenario in isolation); and a
 saturation/stress scenario that deliberately drives every ceiling to its
-manifest bound at once. Each remains a real gap against this milestone's
-exit condition below, not a redefinition of it.
+manifest bound at once. Each remains a real gap against this milestone's exit
+condition below, not a redefinition of it.
 
 **Depends on:** C8.11 and C8.12.
 

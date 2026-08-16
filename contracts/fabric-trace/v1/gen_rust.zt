@@ -37,6 +37,10 @@ Protocol :: type {
   resourceBuffers : Int;
   resourceRetries : Int;
   resourceRetained : Int;
+  resourceQueue : Int;
+  resourceHistory : Int;
+  resourceEvent : Int;
+  resourceLoan : Int;
   resourceComplete : Int;
   maxResourceCounter : Int;
   graphViewAnswered : Int;
@@ -194,6 +198,10 @@ rustBindings :: Protocol -> Text
     w.u32Const "RESOURCE_BUFFERS" p.resourceBuffers;
     w.u32Const "RESOURCE_RETRIES" p.resourceRetries;
     w.u32Const "RESOURCE_RETAINED" p.resourceRetained;
+    w.u32Const "RESOURCE_QUEUE" p.resourceQueue;
+    w.u32Const "RESOURCE_HISTORY" p.resourceHistory;
+    w.u32Const "RESOURCE_EVENT" p.resourceEvent;
+    w.u32Const "RESOURCE_LOAN" p.resourceLoan;
     w.u32Const "RESOURCE_COMPLETE" p.resourceComplete;
     w.u32Const "MAX_RESOURCE_COUNTER" p.maxResourceCounter;
     "\n";
@@ -279,6 +287,10 @@ pythonBindings :: Protocol -> Text
     "FABRIC_TRACE_RESOURCE_BUFFERS = "; n.toText p.resourceBuffers; "\n";
     "FABRIC_TRACE_RESOURCE_RETRIES = "; n.toText p.resourceRetries; "\n";
     "FABRIC_TRACE_RESOURCE_RETAINED = "; n.toText p.resourceRetained; "\n";
+    "FABRIC_TRACE_RESOURCE_QUEUE = "; n.toText p.resourceQueue; "\n";
+    "FABRIC_TRACE_RESOURCE_HISTORY = "; n.toText p.resourceHistory; "\n";
+    "FABRIC_TRACE_RESOURCE_EVENT = "; n.toText p.resourceEvent; "\n";
+    "FABRIC_TRACE_RESOURCE_LOAN = "; n.toText p.resourceLoan; "\n";
     "FABRIC_TRACE_RESOURCE_COMPLETE = "; n.toText p.resourceComplete; "\n";
     "FABRIC_TRACE_MAX_RESOURCE_COUNTER = "; n.toText p.maxResourceCounter; "\n";
   };

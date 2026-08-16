@@ -66,15 +66,41 @@ maxKind :: Int = 10;
 -- `now_ns`/`sequence`) is what tells the two apart without adding a bit whose
 -- only job would be restating that order.
 --
--- Emission of these three counters is per-plane, not unconditional per
--- worker: a worker records one only when its own generation drives the
--- traffic that makes the counter meaningful and declares enough `traceDepth`
--- to carry it. The stream worker, for one, records `resourceBuffers` only
--- under the concurrent-traffic action and never `resourceRetries` at all
--- (`Subscriber::retry_count` advances only under the QoS-timed action this
--- one does not drive) -- absence from a given trace is silence about a
--- ceiling that plane's own scenario does not exercise, not a validator
--- refusal.
+-- `resourceQueue` and `resourceHistory` extend the same held-and-released
+-- convention to two more bounded tables the stream worker holds: the
+-- per-subscriber outstanding-delivery count (`resourceQueue`, bounded in
+-- practice by the subscriber's own ring/history capacity and QoS retry
+-- policy -- nothing currently enforces the graph-wide `queueDepth` field
+-- against it) and KEEP_LAST backlog occupancy (`resourceHistory`, bounded by
+-- each participant's declared `historyDepth`).
+--
+-- `resourceEvent` and `resourceLoan` are declared codes with no emitter yet;
+-- `resourceMapping` and a capability-slot ceiling are not declared at all.
+-- Each is held back for a different reason. `resourceEvent` (the operation
+-- worker's pending client-delivery table, bounded by `eventDepth`) and
+-- `resourceLoan` (the call worker's outstanding shared-buffer loan count, a
+-- strict subset of `resourceBuffers`) both have a real, distinct signal to
+-- sample, but `resourceEvent`'s table never holds anything under the
+-- declared traffic schedule (a structural zero, the same "cannot move"
+-- problem that already excludes `resourceRetries` from the stream worker)
+-- and `resourceLoan`'s worker has no `traceDepth` headroom left under the
+-- schema's absolute `maxTraceDepth` ceiling. `resourceMapping` and a
+-- capability-slot ceiling have no signal at all yet: nothing in the current
+-- component-side syscall surface (`shared_buffer_map`/`shared_buffer_loan`/
+-- ... return only success or a fresh handle, never a live occupancy) lets a
+-- worker observe either as a traffic-varying occupancy rather than a fixed,
+-- provisioning-time constant, and reporting a number that cannot move is not
+-- evidence -- so no code is minted for either until one exists to carry.
+--
+-- Emission of these counters is per-plane, not unconditional per worker: a
+-- worker records one only when its own generation drives the traffic that
+-- makes the counter meaningful and declares enough `traceDepth` to carry it.
+-- The stream worker, for one, records `resourceBuffers`, `resourceQueue`, and
+-- `resourceHistory` only under the concurrent-traffic action and never
+-- `resourceRetries` at all (`Subscriber::retry_count` advances only under the
+-- QoS-timed action this one does not drive) -- absence from a given trace is
+-- silence about a ceiling that plane's own scenario does not exercise, not a
+-- validator refusal.
 resourceFrames :: Int = 1;
 resourceOperations :: Int = 2;
 resourceCalls :: Int = 3;
@@ -83,8 +109,12 @@ resourceRoles :: Int = 5;
 resourceBuffers :: Int = 6;
 resourceRetries :: Int = 7;
 resourceRetained :: Int = 8;
-resourceComplete :: Int = 9;
-maxResourceCounter :: Int = 9;
+resourceQueue :: Int = 9;
+resourceHistory :: Int = 10;
+resourceEvent :: Int = 11;
+resourceLoan :: Int = 12;
+resourceComplete :: Int = 13;
+maxResourceCounter :: Int = 13;
 
 -- What a `visibility` or `interposition` record's `event` names. Both families
 -- are graph-shaped -- an edge, no outcome code, and an event saying what was
@@ -193,6 +223,10 @@ format ::= {
   resourceBuffers =;
   resourceRetries =;
   resourceRetained =;
+  resourceQueue =;
+  resourceHistory =;
+  resourceEvent =;
+  resourceLoan =;
   resourceComplete =;
   maxResourceCounter =;
   graphViewAnswered =;

@@ -50,7 +50,9 @@ from fabric_trace_contract import (  # noqa: E402
     FABRIC_TRACE_RESOURCE_CALLS,
     FABRIC_TRACE_RESOURCE_COMPLETE,
     FABRIC_TRACE_RESOURCE_FRAMES,
+    FABRIC_TRACE_RESOURCE_HISTORY,
     FABRIC_TRACE_RESOURCE_OPERATIONS,
+    FABRIC_TRACE_RESOURCE_QUEUE,
     FABRIC_TRACE_RESOURCE_RETAINED,
     FABRIC_TRACE_RESOURCE_RETRIES,
 )
@@ -174,13 +176,40 @@ EXPECTED_PARKED = frozenset({"fabric-observer", "fabric-proxy"})
 # (`contracts/fabric-trace/v1/schema.zt`): `(event, name, baselines)`, where
 # `baselines` is how many times the counter is recorded after its peak. A
 # held-and-released counter (frames, buffers, calls, operations, retained
-# results) reports peak then baseline; a cumulative one (retries) reports only
-# its peak, since a retry count never returns to a meaningful "zero" a reader
-# should expect.
+# results, queue, history) reports peak then baseline; a cumulative one
+# (retries) reports only its peak, since a retry count never returns to a
+# meaningful "zero" a reader should expect.
+#
+# `resourceMapping`, `resourceLoan`, `resourceEvent`, and a live
+# capability-slot ceiling remain outside this dict, each for a distinct
+# reason none of them share with the counters above:
+#
+# - `resourceLoan` has a real, distinct signal in the call worker
+#   (outstanding `SharedOutstanding`/`CancellingShared` loans, a strict
+#   subset of `resourceBuffers`), but the call plane's own `sel4-traffic.zti`
+#   scenario already fills 63 of its trace sink's 64 declared slots -- the
+#   schema's absolute `maxTraceDepth` ceiling, not a fixture choice that can
+#   be raised -- leaving no room for the two more records emitting it would
+#   add.
+# - `resourceEvent` has a real signal too (the operation worker's
+#   `pending_deliveries` table), but under this fixed traffic schedule both
+#   clients always drain feedback/results before the broker's `send` would
+#   ever return `ERR_WOULDBLOCK`, so the table never holds anything and the
+#   peak is a structural zero every boot -- the same "evidence that cannot
+#   change" reason the stream worker records no retries.
+# - `resourceMapping` and the capability-slot ceiling have no traffic-varying
+#   signal at all in the current component-side syscall surface: every
+#   mapping any of the three workers holds is either fixed at provisioning
+#   time (the stream plane's per-participant ring, mapped once and never
+#   unmapped) or mapped and unmapped again within one synchronous call before
+#   the next trace sample (the call plane's payload relay), and no syscall
+#   anywhere returns a live CSlot occupancy to the calling component.
 EXPECTED_RESOURCES: dict[str, tuple[tuple[int, str, int], ...]] = {
     "stream": (
         (FABRIC_TRACE_RESOURCE_FRAMES, "frames", 2),
         (FABRIC_TRACE_RESOURCE_BUFFERS, "buffers", 2),
+        (FABRIC_TRACE_RESOURCE_QUEUE, "queue", 2),
+        (FABRIC_TRACE_RESOURCE_HISTORY, "history", 2),
         # No retries entry: `Subscriber::retry_count` is written only inside
         # `apply_time`, which `qos_check()` gates to `GENERATION_BOOT_ACTION ==
         # "qos"` alone (`fabric-service.rs`). Under `"traffic"` it never
