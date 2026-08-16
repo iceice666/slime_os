@@ -146,6 +146,16 @@ Semantics not visible in the table:
   seven `bufferCreate` grants. The grant authorizes the operation and the budget
   bounds it: a component with a grant but no budget entry still allocates
   nothing, and a budget entry without a grant authorizes nothing.
+- `SHARED BUFFER OCCUPANCY` (label 30, C8.13.1) is the one shared-buffer
+  operation gated by no rights bit, so no row above can express it. It is
+  read-only and reports only the caller's own four live charges, and the holder
+  it reports on is the endpoint badge the root already authenticated — the
+  request carries no holder argument, so there is nothing to forge and no other
+  holder it can name. Its gate is the budget declaration itself: a holder whose
+  quota is the deny-by-default one is refused, which is why the answer is not
+  four zeros. Requiring a `SharedBufferFactory` instead would couple a
+  self-query to mint authority and deny a loan receiver that legitimately holds
+  mappings but was never granted a factory.
 - A C7.6 sample descriptor is a userspace control message
   (`sample-descriptor/v1`), not a root object: it references an exact
   transferred `Loan` by its unforgeable identity plus a page-aligned

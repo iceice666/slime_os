@@ -110,6 +110,30 @@ impl HolderQuota {
     };
 }
 
+/// One holder's live shared-buffer charges, read as a single observation.
+///
+/// Distinct from [`HolderQuota`] and deliberately not comparable to it: a
+/// quota is the ceiling a generation declared, this is what is charged against
+/// it right now. Reporting occupancy through the quota type would invite
+/// treating an absent holder's zeros as a ceiling, which is the confusion
+/// [`HolderQuota::DENY`] exists to prevent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HolderOccupancy {
+    pub pages: u32,
+    pub buffers: u32,
+    pub mappings: u32,
+    pub loans: u32,
+}
+
+impl HolderOccupancy {
+    pub const EMPTY: Self = Self {
+        pages: 0,
+        buffers: 0,
+        mappings: 0,
+        loans: 0,
+    };
+}
+
 /// Rights that a holder may exercise through a particular buffer handle.
 /// `READ` is implicit in `MAP`; write and loan authority remain separately
 /// narrowable generation rights.
@@ -616,6 +640,27 @@ impl SharedBufferTable {
 
     pub fn holder_loans(&self, holder: HolderId) -> u32 {
         self.charge(holder).map_or(0, |charge| charge.loans)
+    }
+
+    /// Every live charge held by one holder, in one lookup.
+    ///
+    /// The four accessors above each scan `charges` independently, so a caller
+    /// wanting all four — which is what the self-scoped occupancy query
+    /// answers — would walk the table four times and could observe four
+    /// different instants if anything mutated between them. This reads the one
+    /// entry once, so the four counts are a single consistent observation.
+    ///
+    /// An unrecognized holder reads as all zeros, exactly as each accessor
+    /// does: no charge is not an error. Whether a holder is *permitted* to hold
+    /// anything is [`SharedBufferTable::quota`]'s answer, not this one.
+    pub fn holder_occupancy(&self, holder: HolderId) -> HolderOccupancy {
+        self.charge(holder)
+            .map_or(HolderOccupancy::EMPTY, |charge| HolderOccupancy {
+                pages: charge.pages,
+                buffers: charge.buffers,
+                mappings: charge.mappings,
+                loans: charge.loans,
+            })
     }
 
     pub fn mapping(&self, index: usize) -> Option<MappingRecord> {
@@ -2409,6 +2454,65 @@ mod tests {
         );
         table.declare_quota(OWNER, QUOTA).expect("declare");
         table.create(OWNER, anchors(10, 1), true).expect("create");
+    }
+
+    /// C8.13.1: the occupancy query is scoped to one holder by the table, not
+    /// by a caller argument. A second holder charging the same table changes
+    /// nothing the first one reads, which is what makes "cannot name another
+    /// holder" a property of the mechanism rather than of a check.
+    #[test]
+    fn holder_occupancy_reports_only_its_own_charges() {
+        let mut table = table();
+        assert_eq!(table.holder_occupancy(OWNER), HolderOccupancy::EMPTY);
+
+        let handle = table.create(OWNER, anchors(10, 2), true).expect("create");
+        let mut adapter = RecordingAdapter::new();
+        table
+            .map(
+                &mut adapter,
+                OWNER,
+                handle,
+                VSpaceCap(40),
+                0x20_000,
+                0,
+                PAGE_SIZE * 2,
+                MappingRights::ReadWrite,
+            )
+            .expect("map");
+
+        let owner = table.holder_occupancy(OWNER);
+        assert_eq!(owner.pages, 2);
+        assert_eq!(owner.buffers, 1);
+        assert_eq!(owner.mappings, 1);
+        assert_eq!(owner.loans, 0);
+        // The other declared holder charged nothing, so it reads empty even
+        // though the table is not.
+        assert_eq!(table.holder_occupancy(RECEIVER), HolderOccupancy::EMPTY);
+
+        // The four packed fields agree with the four independent accessors,
+        // so the single-lookup read cannot drift from them.
+        assert_eq!(owner.pages, table.holder_pages(OWNER));
+        assert_eq!(owner.buffers, table.holder_buffers(OWNER));
+        assert_eq!(owner.mappings, table.holder_mappings(OWNER));
+        assert_eq!(owner.loans, table.holder_loans(OWNER));
+    }
+
+    /// C8.13.1: occupancy and authority are different questions. A holder the
+    /// generation never declared reads as empty — it genuinely holds nothing —
+    /// while its *quota* is `DENY`, which is what the query's dispatch arm
+    /// refuses on. Answering the query from the counts alone would make an
+    /// undeclared holder indistinguishable from a declared idle one, which is
+    /// exactly the conflation `HolderQuota::DENY` exists to prevent.
+    #[test]
+    fn undeclared_holder_reads_empty_but_is_denied_by_quota() {
+        const UNDECLARED: HolderId = HolderId(99);
+        let table = table();
+        assert_eq!(table.holder_occupancy(UNDECLARED), HolderOccupancy::EMPTY);
+        assert_eq!(table.quota(UNDECLARED), HolderQuota::DENY);
+        // A declared holder that has charged nothing reads identically, so the
+        // refusal cannot be derived from the counts.
+        assert_eq!(table.holder_occupancy(OWNER), HolderOccupancy::EMPTY);
+        assert_ne!(table.quota(OWNER), HolderQuota::DENY);
     }
 
     /// Finding 2: one frame cap must not anchor two live regions, even across

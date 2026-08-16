@@ -1011,12 +1011,14 @@ simulated clock edge is wired into the traffic partition (one more declared
 grant plus two bindings, at the exact slots each side's own generation-derived
 layout computes), driving real RELIABLE retry accounting and exhaustion on
 the telemetry route concurrently with the call and operation planes' own
-unconditional clocks. Eight of the eleven declared resource classes emit
+unconditional clocks. Ten of the eleven declared resource classes emit
 bounded peak(+baseline) evidence through the C8.11 trace sink: frames, shared
 buffers, retries (now from both the call and the stream worker, where it was
 call-only before), in-flight calls, in-flight operations, retained operation
-results, and the stream plane's per-subscriber outstanding-delivery count and
-KEEP_LAST backlog occupancy. Separately, `just sel4_saturation_check`
+results, the stream plane's per-subscriber outstanding-delivery count and
+KEEP_LAST backlog occupancy, and -- added by C8.13.1 -- the stream broker's
+own root-accounted shared-buffer mapping and loan occupancy. Separately,
+`just sel4_saturation_check`
 (`just data_fabric_saturation_check`) proves 3 of the 11 classes -- in-flight
 calls, in-flight operations, retained operation results -- are driven to
 their exact declared bound rather than merely observed under it, via a
@@ -1034,12 +1036,15 @@ either outcome; making it real needs the call plane's own `try_send` +
 explicit-ack pattern ported into the operation wire protocol, declined as a
 disproportionate regression risk to the verified operation plane for one
 counter. The call plane's outstanding-loan count (`resourceLoan`) has a real
-signal but zero room: its worker's 62 ordinary trace-sink slots
+signal but zero room in *that* worker: its 62 ordinary trace-sink slots
 (`traceDepth=64` minus the schema's `TERMINAL_RESERVE=2`) are already fully
 spent on existing verified evidence, and `MAX_TRACE_DEPTH=64` is a
 page-sized (64 x 64-byte records) schema ceiling the C8.11 conformance suite
-already defends against being raised, not a fixture value. Neither was
-attempted; see `devlog/2026-08-16-c8-13-resource-event-loan-walls/index.md`.
+already defends against being raised, not a fixture value. C8.13.1 therefore
+emits `resourceLoan` from the *stream* broker, which holds real ring loans and
+has ample sink headroom, so the class is now evidenced even though the call
+worker still cannot carry it; see
+`devlog/2026-08-16-c8-13-resource-event-loan-walls/index.md`.
 Shared-buffer mapping/loan/buffer occupancy across 8 holders and a live
 capability-slot ceiling are broken out below as C8.13.1-C8.13.3: the root
 already tracks the per-holder shared-buffer counts C8.13.1/.2 need
@@ -1106,16 +1111,35 @@ its declared baseline.
 
 ### C8.13.1 -- Self-reported shared-buffer occupancy evidence (narrow)
 
-**Status:** Not started.
+**Status:** Complete for the stream broker; `fabric-call-worker` deferred to
+C8.13.2 on measured trace-sink saturation. `just sel4_traffic_check` and `just
+sel4_saturation_check` observe `SHARED BUFFER OCCUPANCY` (label 30) answering
+`fabric-service`'s own live charges, reported as `resourceMapping` (constant 6,
+asserted constant and nonzero) and `resourceLoan` (peak 5, drained baseline,
+asserted nonzero peak and bounded baseline). Two of this slice's premises did
+not survive measurement, and the exit condition below is amended rather than
+treated as met. First, `fabric-call-worker` cannot emit: its sink holds 62
+ordinary records plus its terminal against the schema's page-sized
+`maxTraceDepth = 64`, measured as `call complete capacity=64 records=63`, so
+the four records both counters need would be dropped -- the same wall
+`resourceLoan` hit in C8.13 above, and the reason C8.13.2 now owns it.
+Second, `resourceMapping` alone is not traffic-varying: an instrumented boot
+read this holder's charges as pages 8/8, buffers 7/7, mappings 6/6, loans 0/5,
+so the mapping count is fixed at provisioning and `resourceLoan` -- declared
+since C8.13 with no emitter -- carries the varying half. The mapping record is
+kept because a constant is the invariant there: a boot where it moved would
+mean a ring was mapped or unmapped outside provisioning. See
+`devlog/2026-08-16-c8-13-1-shared-buffer-occupancy/index.md`.
 
 **Depends on:** C8.13.
 
 `SharedBufferTable` (`slime-root/src/shared_buffer.rs`) already computes
 live per-holder `holder_pages`/`holder_buffers`/`holder_mappings`/
 `holder_loans` from its existing `Charge` accounting; nothing exposes them to
-userspace. This slice is additive only: a new read-only label alongside
-`shared_buffer_labels::{CREATE,RELEASE,MAP,...}` and a client wrapper, no
-change to any existing dispatch arm.
+userspace. The query itself was additive as described -- a new read-only label
+alongside `shared_buffer_labels::{CREATE,RELEASE,MAP,...}` plus a client
+wrapper, no change to any existing dispatch arm -- but "additive only" did not
+hold for the emission half, which the sink ceiling bounds.
 
 #### Deliverables
 
@@ -1125,9 +1149,11 @@ change to any existing dispatch arm.
 - a `resourceMapping` trace code declared in
   `contracts/fabric-trace/v1/schema.zt`, following the existing peak+baseline
   held-and-released convention;
-- `fabric-service` and `fabric-call-worker` -- the two of the traffic
-  fixture's 8 declared `sharedBufferBudget` holders that already own a trace
-  sink -- sample and emit their own occupancy under the traffic action.
+- `fabric-service` samples and emits its own occupancy under the traffic
+  action. `fabric-call-worker` -- the other of the traffic fixture's 8 declared
+  `sharedBufferBudget` holders owning a trace sink -- is deferred to C8.13.2:
+  its sink has zero ordinary slots free, which is a capacity wall rather than a
+  scoping choice.
 
 #### Required checks
 
@@ -1146,10 +1172,12 @@ just data_fabric_traffic_check
 
 #### Exit condition
 
-The two broker holders with existing trace infrastructure report real,
-traffic-varying mapping/loan/buffer occupancy for themselves. Explicitly
-scoped as 2 of the traffic fixture's 8 declared holders, not full coverage --
-C8.13.2 extends coverage to the rest.
+One of the two broker holders with existing trace infrastructure reports real
+mapping and loan occupancy for itself: the loan count traffic-varying, the
+mapping count constant-by-invariant. Explicitly scoped as 1 of the traffic
+fixture's 8 declared holders, not full coverage -- C8.13.2 extends coverage to
+the remaining seven, including `fabric-call-worker`, which needs trace-sink
+headroom this slice could not create.
 
 ### C8.13.2 -- Full shared-buffer occupancy coverage across all declared holders
 
@@ -1157,17 +1185,25 @@ C8.13.2 extends coverage to the rest.
 
 **Depends on:** C8.13.1.
 
-Six of the traffic fixture's 8 declared `sharedBufferBudget` holders --
-`fabric-publisher`, `fabric-publisher-b`, `fabric-subscriber`,
-`fabric-subscriber-b`, `fabric-call-client`, `fabric-call-server` -- are
-ordinary participant components with no trace machinery at all today: no
-`Trace::new`, no declared `traceDepth`, no emission path. This is
-comparable in scope to giving six more binaries their own C8.11 instrumentation.
+Seven of the traffic fixture's 8 declared `sharedBufferBudget` holders remain,
+in two different classes. Six -- `fabric-publisher`, `fabric-publisher-b`,
+`fabric-subscriber`, `fabric-subscriber-b`, `fabric-call-client`,
+`fabric-call-server` -- are ordinary participant components with no trace
+machinery at all today: no `Trace::new`, no declared `traceDepth`, no emission
+path. This is comparable in scope to giving six more binaries their own C8.11
+instrumentation. The seventh, `fabric-call-worker`, already owns a sink and is
+a harder case: C8.13.1 measured it at `call complete capacity=64 records=63`,
+every ordinary slot spent, so covering it needs trace-sink headroom that does
+not exist under the schema's page-sized `maxTraceDepth = 64` -- either by
+retiring call-plane evidence C8.4-C8.13 already verify, or by reconsidering
+that ceiling, both of which C8.13.1 declined as disproportionate.
 
 #### Deliverables
 
 - trace infrastructure (sink, declared `traceDepth`, emission path) for each
   of the six uninstrumented holders;
+- trace-sink headroom for `fabric-call-worker`, or an explicit decision that
+  its occupancy stays unreported and why;
 - each reports its own mapping/loan/buffer occupancy through C8.13.1's query
   syscall.
 

@@ -74,23 +74,39 @@ maxKind :: Int = 10;
 -- against it) and KEEP_LAST backlog occupancy (`resourceHistory`, bounded by
 -- each participant's declared `historyDepth`).
 --
--- `resourceEvent` and `resourceLoan` are declared codes with no emitter yet;
--- `resourceMapping` and a capability-slot ceiling are not declared at all.
--- Each is held back for a different reason. `resourceEvent` (the operation
--- worker's pending client-delivery table, bounded by `eventDepth`) and
--- `resourceLoan` (the call worker's outstanding shared-buffer loan count, a
--- strict subset of `resourceBuffers`) both have a real, distinct signal to
--- declared traffic schedule (a structural zero, the same "cannot move"
--- problem the stream worker's own `resourceRetries` record used to have
--- before the QoS-timed clock edge was wired into the traffic partition)
--- and `resourceLoan`'s worker has no `traceDepth` headroom left under the
--- schema's absolute `maxTraceDepth` ceiling. `resourceMapping` and a
--- capability-slot ceiling have no signal at all yet: nothing in the current
--- component-side syscall surface (`shared_buffer_map`/`shared_buffer_loan`/
--- ... return only success or a fresh handle, never a live occupancy) lets a
--- worker observe either as a traffic-varying occupancy rather than a fixed,
--- provisioning-time constant, and reporting a number that cannot move is not
--- evidence -- so no code is minted for either until one exists to carry.
+-- `resourceMapping` and `resourceLoan` are the shared-buffer *occupancy* a
+-- holder reports about itself: its own live charges as the root's
+-- `SharedBufferTable` accounts them, rather than as the worker counts its own
+-- frames. The two disagreeing is the accounting regression they exist to
+-- catch. Both became expressible only once a self-scoped query existed to
+-- observe them: until then every component-side shared-buffer operation
+-- returned success or a fresh handle and never a live occupancy, so a worker
+-- could report a provisioning-time constant but not evidence.
+--
+-- They follow the held-and-released convention with different expected
+-- shapes, and each shape is the assertion. A stream participant's ring is
+-- mapped once when its role is provisioned and stays mapped while the broker
+-- lives, so `resourceMapping`'s baseline equals its peak -- measured across a
+-- whole traffic boot as a flat 6 -- and a baseline that had drained instead
+-- would mean a mapping was lost. `resourceLoan` is the traffic-varying half:
+-- it rises as receivers take loans and returns to zero as each settles
+-- (measured 0 to 5 and back). A counter whose value cannot move is still
+-- evidence when *not moving* is the invariant; it is not evidence when the
+-- number is merely a capacity every boot would report identically.
+--
+-- `resourceEvent` remains a declared code with no emitter: the operation
+-- worker's pending client-delivery table depends on `ERR_WOULDBLOCK` from a
+-- blocking `seL4_Send` that cannot report it, so its peak is a structural
+-- zero under every schedule rather than under this one. A capability-slot
+-- ceiling has no signal at all yet -- nothing tracks a live child's CNode
+-- occupancy, so no query could return it.
+--
+-- Which worker emits which counter is bounded by trace-sink capacity, not by
+-- interest. The call worker holds the same loan and mapping state, and does
+-- not report either: its sink spends all 62 of its ordinary records on
+-- evidence C8.4-C8.13 already verify, reporting both counters there would
+-- cost four more (a peak and a baseline each), and `maxTraceDepth` below is a
+-- page-sized ceiling rather than a fixture value.
 --
 -- Emission of these counters is per-plane, not unconditional per worker: a
 -- worker records one only when its own generation drives the traffic that
@@ -111,8 +127,9 @@ resourceQueue :: Int = 9;
 resourceHistory :: Int = 10;
 resourceEvent :: Int = 11;
 resourceLoan :: Int = 12;
-resourceComplete :: Int = 13;
-maxResourceCounter :: Int = 13;
+resourceMapping :: Int = 13;
+resourceComplete :: Int = 14;
+maxResourceCounter :: Int = 14;
 
 -- What a `visibility` or `interposition` record's `event` names. Both families
 -- are graph-shaped -- an edge, no outcome code, and an event saying what was
@@ -225,6 +242,7 @@ format ::= {
   resourceHistory =;
   resourceEvent =;
   resourceLoan =;
+  resourceMapping =;
   resourceComplete =;
   maxResourceCounter =;
   graphViewAnswered =;

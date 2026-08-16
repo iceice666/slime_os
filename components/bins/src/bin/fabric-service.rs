@@ -870,6 +870,40 @@ fn broker(
     // one queue.
     let mut peak_queue = 0u32;
     let mut peak_history = 0u32;
+    // C8.13.1: this broker's own live shared-buffer occupancy, as the root's
+    // `SharedBufferTable` accounts it -- not as this worker counts its own
+    // frames. The distinction is the point: `peak_buffers` above is what the
+    // broker believes it holds, while these are what the mechanism enforcing
+    // the quota says it holds, so the two disagreeing is exactly the
+    // accounting regression this evidence exists to catch.
+    //
+    // Two counters rather than one, because they behave differently and only
+    // one of them moves. This loop samples exactly the two it emits: mappings
+    // and loans. A separate one-off instrumented boot, whose probe is not part
+    // of this code, additionally read this holder's pages and buffers to
+    // establish which of the four were worth reporting -- pages 8/8 and
+    // buffers 7/7 never moved, mappings 6/6 never moved, loans ran 0 to 5 and
+    // back. Mappings are kept anyway because a constant is the invariant here;
+    // pages and buffers are not sampled at all, since a ring's page and buffer
+    // charge is fixed at provisioning and duplicates what `peak_buffers`
+    // above already tracks from the worker's own side.
+    //
+    // The mapping count is still recorded, and deliberately: a *constant* is
+    // what it should be here, so a boot where it moved would mean a ring was
+    // mapped or unmapped outside provisioning. It is reported as peak and
+    // baseline like every other held-and-released counter, but its baseline
+    // equals its peak rather than zero, which the gate asserts as such rather
+    // than pretending it drains. The loan count carries the traffic-varying
+    // half this milestone's exit condition asks for.
+    let mut peak_mapping = 0u32;
+    let mut peak_loans = 0u32;
+    // Stops querying after the first refusal. A holder the generation's
+    // `sharedBufferBudget` does not declare is denied every sweep, and the
+    // root names each refusal on serial -- so retrying would flood the
+    // transcript the gates read with one line per sweep. One attempt is
+    // enough to learn the answer, and it cannot change mid-run: the quota is
+    // generation-declared, not acquired.
+    let mut occupancy_available = GENERATION_BOOT_ACTION == "traffic";
     let route_words = [
         trace_log::route_word(&route_identity(
             ROUTE_NAMES[0],
@@ -1018,6 +1052,40 @@ fn broker(
         if live_retries > peak_retries {
             peak_retries = live_retries;
         }
+        // Gated to the traffic plane, so a standalone fixture pays no root
+        // round trip for evidence it never reports. A refusal is evidence's
+        // absence, not a fault: it latches the query off and leaves the peak at
+        // zero rather than failing a broker over a counter.
+        //
+        // Also gated on `progressed`, which keeps the number of root calls
+        // proportional to the traffic brokered rather than to how many times
+        // this loop spins waiting on a peer. The root's dispatcher spends one
+        // `MAX_GRAPH_ITERATIONS` iteration per root-served request, and this
+        // sweep already spends some on idle spins -- `supervision_status` is a
+        // root call and the publisher-death sweep and `receive_time`'s
+        // would-block path both issue it while nothing is moving. Those are
+        // bounded by peer count and retire per publisher; an ungated occupancy
+        // query would instead scale with spin count, which is unbounded. This
+        // gating reduces that pressure rather than eliminating it.
+        //
+        // Nothing is lost: every mutation of this holder's mapping or loan
+        // charge runs under a path that sets `progressed` -- ring provisioning
+        // happens before this loop, and `admit_shared`, `release_frame`, and
+        // `deliver`'s downstream loan all sit on progressing paths. A refused
+        // loan changes no charge, so the peak is unaffected by it.
+        if occupancy_available && progressed {
+            match slime_rt::shared_buffer_occupancy() {
+                Ok(occupancy) => {
+                    if occupancy.mappings > peak_mapping {
+                        peak_mapping = occupancy.mappings;
+                    }
+                    if occupancy.loans > peak_loans {
+                        peak_loans = occupancy.loans;
+                    }
+                }
+                Err(_) => occupancy_available = false,
+            }
+        }
         if subscribers
             .iter()
             .flatten()
@@ -1025,6 +1093,19 @@ fn broker(
             && (!qos_check() || time_dead)
         {
             release_retained(publishers, frames);
+            // The post-drain occupancy, read once, before any record is
+            // written. One observation decides both of this counter's records:
+            // if it refuses, neither the peak nor the baseline is emitted, so
+            // the gate sees a wholly absent pair rather than a lone peak whose
+            // missing baseline it would report as a record-count error naming
+            // the wrong cause. Reading it here rather than between the two
+            // emissions is what makes that both-or-neither rather than
+            // two independent conditions that can disagree.
+            let settled_occupancy = if occupancy_available {
+                slime_rt::shared_buffer_occupancy().ok()
+            } else {
+                None
+            };
             // Resource evidence before the terminal. The frame counter carries
             // two records: the historical peak this run reached, and — read
             // after `release_retained` drains every reference — the count
@@ -1043,6 +1124,14 @@ fn broker(
                 let _ = trace.resource(slime_proto::fabric_trace::RESOURCE_QUEUE, peak_queue);
                 let _ = trace.resource(slime_proto::fabric_trace::RESOURCE_HISTORY, peak_history);
                 let _ = trace.resource(slime_proto::fabric_trace::RESOURCE_RETRIES, peak_retries);
+                // Both records of each pair are gated on the same single
+                // observation taken above, so a pair is either wholly present
+                // or wholly absent.
+                if settled_occupancy.is_some() {
+                    let _ =
+                        trace.resource(slime_proto::fabric_trace::RESOURCE_MAPPING, peak_mapping);
+                    let _ = trace.resource(slime_proto::fabric_trace::RESOURCE_LOAN, peak_loans);
+                }
             }
             let baseline_frames = frames.iter().filter(|frame| frame.refs > 0).count() as u32;
             let _ = trace.resource(slime_proto::fabric_trace::RESOURCE_FRAMES, baseline_frames);
@@ -1070,6 +1159,19 @@ fn broker(
                     slime_proto::fabric_trace::RESOURCE_HISTORY,
                     baseline_history,
                 );
+                // The baseline is the root's own accounting once the scenario
+                // drained, from the single read taken before any emission. The
+                // mapping count is expected to still equal its peak -- a
+                // provisioned ring is not released while the broker lives --
+                // while the loan count is expected to have drained.
+                if let Some(occupancy) = settled_occupancy {
+                    let _ = trace.resource(
+                        slime_proto::fabric_trace::RESOURCE_MAPPING,
+                        occupancy.mappings,
+                    );
+                    let _ =
+                        trace.resource(slime_proto::fabric_trace::RESOURCE_LOAN, occupancy.loans);
+                }
             }
             let _ = trace.terminal();
             trace.flush(b"stream");

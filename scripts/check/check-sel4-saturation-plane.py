@@ -67,6 +67,8 @@ from fabric_trace_contract import (  # noqa: E402
     FABRIC_TRACE_RESOURCE_COMPLETE,
     FABRIC_TRACE_RESOURCE_FRAMES,
     FABRIC_TRACE_RESOURCE_HISTORY,
+    FABRIC_TRACE_RESOURCE_LOAN,
+    FABRIC_TRACE_RESOURCE_MAPPING,
     FABRIC_TRACE_RESOURCE_OPERATIONS,
     FABRIC_TRACE_RESOURCE_QUEUE,
     FABRIC_TRACE_RESOURCE_RETAINED,
@@ -198,6 +200,10 @@ EXPECTED_RESOURCES: dict[str, tuple[tuple[int, str, int], ...]] = {
         (FABRIC_TRACE_RESOURCE_QUEUE, "queue", 2),
         (FABRIC_TRACE_RESOURCE_HISTORY, "history", 2),
         (FABRIC_TRACE_RESOURCE_RETRIES, "retries", 1),
+        # C8.13.1: emitted by the stream worker under the traffic action, which
+        # this plane also runs, so neither may regress here either.
+        (FABRIC_TRACE_RESOURCE_MAPPING, "mapping", 2),
+        (FABRIC_TRACE_RESOURCE_LOAN, "loan", 2),
     ),
     "call": (
         (FABRIC_TRACE_RESOURCE_CALLS, "calls", 2),
@@ -538,6 +544,44 @@ def check_resources(transcript: str) -> None:
                     f"record(s) (event={event}), expected {expected_count}"
                 )
             if expected_count == 2 and name == "retained":
+                if observed[1] > observed[0]:
+                    report_transcript(transcript)
+                    fail(
+                        f"the {family} worker's {name!r} baseline {observed[1]} exceeded "
+                        f"its own peak {observed[0]}"
+                    )
+            elif expected_count == 2 and name == "mapping":
+                # C8.13.1: constant by design, and asserted nonzero, exactly as
+                # the traffic gate does. Both halves are needed: without the
+                # nonzero check a query that regressed to answering all zeros
+                # would satisfy `0 == 0` and pass here vacuously, and this
+                # plane runs the same stream worker under the same `"traffic"`
+                # boot action, so it has the same standing to falsify that.
+                if observed[1] != observed[0]:
+                    report_transcript(transcript)
+                    fail(
+                        f"the {family} worker's {name!r} baseline {observed[1]} differs from "
+                        f"its peak {observed[0]}; a provisioned mapping is not released "
+                        "while the broker lives"
+                    )
+                if observed[0] == 0:
+                    report_transcript(transcript)
+                    fail(
+                        f"the {family} worker reported no {name!r} occupancy at all; the "
+                        "self-scoped query answered zero where the graph provisions rings"
+                    )
+            elif expected_count == 2 and name == "loan":
+                # C8.13.1: nonzero peak, baseline bounded by it rather than
+                # asserted zero -- see the traffic gate for why a ring loan's
+                # settlement depends on receiver teardown this loop does not
+                # order.
+                if observed[0] == 0:
+                    report_transcript(transcript)
+                    fail(
+                        f"the {family} worker's {name!r} peak was 0; this holder lends a "
+                        "ring to every provisioned participant, so a zero peak means the "
+                        "occupancy query or the loan path regressed"
+                    )
                 if observed[1] > observed[0]:
                     report_transcript(transcript)
                     fail(

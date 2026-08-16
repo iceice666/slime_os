@@ -907,6 +907,15 @@ pub fn shared_buffer_revoke(buffer_slot: u32, loan_id: u64) -> i64 {
     )
 }
 
+/// Query this component's own live shared-buffer charges.
+///
+/// Carries one zero operand word the root ignores, the same shape
+/// `capability_import` uses: the holder is the badge the root already
+/// authenticated, so there is no slot or identity to name.
+pub fn shared_buffer_occupancy() -> (i64, u64) {
+    pair_of(shared_buffer_labels::OCCUPANCY, &[0])
+}
+
 pub fn supervision_status(slot: u32) -> (i64, u64) {
     pair_of(supervision_labels::STATUS, &[slot as Word])
 }

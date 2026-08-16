@@ -66,6 +66,7 @@ Labels are the operation numbers. Operands are the fast message registers
 | 27 | `SHARED BUFFER LOAN MAP` | `MR0=loan_slot`, `MR1=base`, `MR2=offset`, `MR3=length` | `0` on mapping, at the protection the loan was minted with. |
 | 28 | `SHARED BUFFER RETURN` | `MR0=loan_slot` | `0` on the one permitted return; a second is `-1`. |
 | 29 | `SHARED BUFFER REVOKE` | `MR0=buffer_slot`, `MR1=loan_id` | `0` on revoke as lender. |
+| 30 | `SHARED BUFFER OCCUPANCY` | `MR0=0` | Primary `0`; the auxiliary word packs the caller's own live `pages`, `buffers`, `mappings`, `loans` as four 16-bit fields from the low bits up. Read-only and self-scoped: the holder is the badge, so no holder can be named and the operand word is ignored. A holder the generation's `sharedBufferBudget` does not declare is `-1`. |
 | 32 | `SUPERVISION DERIVE` | `MR0=supervision_slot` | A second handle naming the same task, at the source's own rights (B25). Non-consuming; requires `RIGHT_SUPERVISE`. |
 | 33 | `CAPABILITY EXPORT` | `MR0=slot_pair(endpoint_slot, capability_slot)`, `MR1=expected_kind` with the disposition in bit 32, `MR2=transfer descriptor` over the 64-byte typed descriptor, `MR3=rights_mask` | Export id, or a negative error. |
 | 34 | `CAPABILITY IMPORT` | `MR0=0` | The slot the claimed capability landed in. |

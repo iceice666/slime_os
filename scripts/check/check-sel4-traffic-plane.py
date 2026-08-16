@@ -53,6 +53,8 @@ from fabric_trace_contract import (  # noqa: E402
     FABRIC_TRACE_RESOURCE_COMPLETE,
     FABRIC_TRACE_RESOURCE_FRAMES,
     FABRIC_TRACE_RESOURCE_HISTORY,
+    FABRIC_TRACE_RESOURCE_LOAN,
+    FABRIC_TRACE_RESOURCE_MAPPING,
     FABRIC_TRACE_RESOURCE_OPERATIONS,
     FABRIC_TRACE_RESOURCE_QUEUE,
     FABRIC_TRACE_RESOURCE_RETAINED,
@@ -182,31 +184,24 @@ EXPECTED_PARKED = frozenset({"fabric-observer", "fabric-proxy"})
 # (retries) reports only its peak, since a retry count never returns to a
 # meaningful "zero" a reader should expect.
 #
-# `resourceMapping`, `resourceLoan`, `resourceEvent`, and a live
-# capability-slot ceiling remain outside this dict, each for a distinct
-# reason none of them share with the counters above:
+# `resourceEvent` and a live capability-slot ceiling remain outside this dict:
 #
-# - `resourceLoan` has a real, distinct signal in the call worker
-#   (outstanding `SharedOutstanding`/`CancellingShared` loans, a strict
-#   subset of `resourceBuffers`), but the call plane's own `sel4-traffic.zti`
-#   scenario already fills 63 of its trace sink's 64 declared slots -- the
-#   schema's absolute `maxTraceDepth` ceiling, not a fixture choice that can
-#   be raised -- leaving no room for the two more records emitting it would
-#   add.
-# - `resourceEvent` has a real signal too (the operation worker's
-#   `pending_deliveries` table), but under this fixed traffic schedule both
-#   clients always drain feedback/results before the broker's `send` would
-#   ever return `ERR_WOULDBLOCK`, so the table never holds anything and the
-#   peak is a structural zero every boot -- the same "evidence that cannot
-#   change" reason previously excluded the stream worker's own retries record
-#   before the QoS-timed clock was wired into this partition.
-# - `resourceMapping` and the capability-slot ceiling have no traffic-varying
-#   signal at all in the current component-side syscall surface: every
-#   mapping any of the three workers holds is either fixed at provisioning
-#   time (the stream plane's per-participant ring, mapped once and never
-#   unmapped) or mapped and unmapped again within one synchronous call before
-#   the next trace sample (the call plane's payload relay), and no syscall
-#   anywhere returns a live CSlot occupancy to the calling component.
+# - `resourceEvent` has a real table behind it (the operation worker's
+#   `pending_deliveries`) but no reachable signal: `queue_delivery` queues only
+#   on `ERR_WOULDBLOCK` from `slime_rt::send`, which resolves to seL4's
+#   blocking `Cap::send` and cannot return it, so the peak is a structural zero
+#   under every schedule rather than under this one.
+# - The capability-slot ceiling has no signal at all: nothing in the root
+#   tracks a live child's own CNode occupancy, so no query could return it.
+#
+# C8.13.1's `mapping`/`loan` occupancy is reported by the stream worker alone,
+# and that is a sink-capacity bound rather than a scoping choice: the call
+# worker holds the same loan and mapping state, but its own scenario already
+# fills 63 of its sink's 64 declared slots -- 62 ordinary records plus the
+# terminal, against `maxTraceDepth = 64` and `terminalReserve = 2`, so zero
+# ordinary slots remain. That ceiling is the schema's absolute page-sized bound
+# rather than a fixture value that can be raised, and reporting both counters
+# there costs four records (a peak and a baseline each), not one.
 EXPECTED_RESOURCES: dict[str, tuple[tuple[int, str, int], ...]] = {
     "stream": (
         (FABRIC_TRACE_RESOURCE_FRAMES, "frames", 2),
@@ -217,6 +212,14 @@ EXPECTED_RESOURCES: dict[str, tuple[tuple[int, str, int], ...]] = {
         # baseline -- now that the QoS-timed clock edge drives
         # `Subscriber::retry_count` under `"traffic"` too.
         (FABRIC_TRACE_RESOURCE_RETRIES, "retries", 1),
+        # C8.13.1: the root's own per-holder charges for this broker, read back
+        # through the self-scoped occupancy query rather than counted from the
+        # worker's own frames -- so the two disagreeing is the accounting
+        # regression these records exist to catch. `mapping` is asserted
+        # constant and `loan` drained; see `check_resources` for why each shape
+        # is the assertion rather than a weakening of one.
+        (FABRIC_TRACE_RESOURCE_MAPPING, "mapping", 2),
+        (FABRIC_TRACE_RESOURCE_LOAN, "loan", 2),
     ),
     "call": (
         (FABRIC_TRACE_RESOURCE_CALLS, "calls", 2),
@@ -546,6 +549,62 @@ def check_resources(transcript: str) -> None:
                 # can still hold one when the plane closes. Bounded by the peak
                 # is still a real assertion: a baseline that exceeded the run's
                 # own historical high-water mark would be incoherent evidence.
+                if observed[1] > observed[0]:
+                    report_transcript(transcript)
+                    fail(
+                        f"the {family} worker's {name!r} baseline {observed[1]} exceeded "
+                        f"its own peak {observed[0]}"
+                    )
+            elif expected_count == 2 and name == "mapping":
+                # C8.13.1: asserted *constant*, not drained, and that is the
+                # assertion rather than a weakening of one. A stream
+                # participant's ring is mapped once when its role is
+                # provisioned and stays mapped as long as the broker lives, so
+                # this counter's baseline equalling its peak is what "no ring
+                # was mapped or unmapped outside provisioning" looks like --
+                # measured as a flat 6 across repeated boots. A baseline that
+                # had drained to zero here would mean the broker lost a mapping
+                # it still needs. The traffic-varying half of this holder's
+                # occupancy is `loan` below, which does drain.
+                if observed[1] != observed[0]:
+                    report_transcript(transcript)
+                    fail(
+                        f"the {family} worker's {name!r} baseline {observed[1]} differs from "
+                        f"its peak {observed[0]}; a provisioned mapping is not released "
+                        "while the broker lives"
+                    )
+                if observed[0] == 0:
+                    report_transcript(transcript)
+                    fail(
+                        f"the {family} worker reported no {name!r} occupancy at all; the "
+                        "self-scoped query answered zero where the graph provisions rings"
+                    )
+            elif expected_count == 2 and name == "loan":
+                # C8.13.1: the traffic-varying half, so the peak is asserted
+                # nonzero -- a run that stopped minting downstream loans would
+                # otherwise report a flat zero pair and pass every other check
+                # here, which is exactly the degenerate evidence this counter
+                # exists to rule out. Measured 5 at peak across repeated boots.
+                if observed[0] == 0:
+                    report_transcript(transcript)
+                    fail(
+                        f"the {family} worker's {name!r} peak was 0; this holder lends a "
+                        "ring to every provisioned participant, so a zero peak means the "
+                        "occupancy query or the loan path regressed"
+                    )
+                # Bounded by the peak rather than asserted zero. A ring loan is
+                # settled when the root reclaims its *receiver*, and this loop's
+                # exit condition proves the death of the two subscribers and the
+                # clock peer but never inspects `fabric-publisher`'s liveness --
+                # `publisher.finished` is set from `FLAG_LAST` on its last
+                # sample, strictly before its exit. Observed 0 on five
+                # consecutive boots, but that is scheduling margin (the broker
+                # still owes the clock peer several round trips while the
+                # publisher returns), not an invariant the code states. Asserting
+                # 0 would make this gate fail with an occupancy message about a
+                # task-teardown race; `baseline <= peak` is the claim the code
+                # actually guarantees, the same treatment `retained` gets above
+                # and for the same reason.
                 if observed[1] > observed[0]:
                     report_transcript(transcript)
                     fail(

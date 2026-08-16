@@ -41,6 +41,7 @@ Protocol :: type {
   resourceHistory : Int;
   resourceEvent : Int;
   resourceLoan : Int;
+  resourceMapping : Int;
   resourceComplete : Int;
   maxResourceCounter : Int;
   graphViewAnswered : Int;
@@ -202,6 +203,7 @@ rustBindings :: Protocol -> Text
     w.u32Const "RESOURCE_HISTORY" p.resourceHistory;
     w.u32Const "RESOURCE_EVENT" p.resourceEvent;
     w.u32Const "RESOURCE_LOAN" p.resourceLoan;
+    w.u32Const "RESOURCE_MAPPING" p.resourceMapping;
     w.u32Const "RESOURCE_COMPLETE" p.resourceComplete;
     w.u32Const "MAX_RESOURCE_COUNTER" p.maxResourceCounter;
     "\n";
@@ -291,6 +293,7 @@ pythonBindings :: Protocol -> Text
     "FABRIC_TRACE_RESOURCE_HISTORY = "; n.toText p.resourceHistory; "\n";
     "FABRIC_TRACE_RESOURCE_EVENT = "; n.toText p.resourceEvent; "\n";
     "FABRIC_TRACE_RESOURCE_LOAN = "; n.toText p.resourceLoan; "\n";
+    "FABRIC_TRACE_RESOURCE_MAPPING = "; n.toText p.resourceMapping; "\n";
     "FABRIC_TRACE_RESOURCE_COMPLETE = "; n.toText p.resourceComplete; "\n";
     "FABRIC_TRACE_MAX_RESOURCE_COUNTER = "; n.toText p.maxResourceCounter; "\n";
   };

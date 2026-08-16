@@ -53,6 +53,8 @@ mod shared_buffer_labels {
     pub const LOAN_MAP: u64 = 27;
     pub const RETURN: u64 = 28;
     pub const REVOKE: u64 = 29;
+    /// Read-only: this component's own live page/buffer/mapping/loan charges.
+    pub const OCCUPANCY: u64 = 30;
 }
 
 mod capability_transfer_labels {
@@ -374,6 +376,43 @@ pub fn shared_buffer_return(loan_slot: u32) -> i64 {
 /// the loan's assigned identity.
 pub fn shared_buffer_revoke(buffer_slot: u32, loan_id: u64) -> i64 {
     transport::shared_buffer_revoke(buffer_slot, loan_id)
+}
+
+/// Four live charges the root's shared-buffer table holds against this
+/// component: retained pages, allocated buffers, exact mappings, and
+/// outstanding loans it has lent (C8.13.1). Each is bounded by the matching
+/// field of the holder's declared `sharedBufferBudget` entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BufferOccupancy {
+    pub pages: u32,
+    pub buffers: u32,
+    pub mappings: u32,
+    pub loans: u32,
+}
+
+/// Read-only: how many pages, buffers, mappings, and loans this component
+/// currently holds charged against its declared `sharedBufferBudget` entry.
+///
+/// Self-scoped with no argument to scope it. The root derives the holder from
+/// the endpoint badge it already authenticated, so a caller can neither name
+/// another holder nor learn anything about one — the same reason the other
+/// shared-buffer operations take no holder either. A component the
+/// generation's budget does not name is denied outright rather than answered
+/// with zeros: holding nothing and being permitted nothing are different
+/// facts, and only the second is authority.
+pub fn shared_buffer_occupancy() -> Result<BufferOccupancy, i64> {
+    let (result, packed) = transport::shared_buffer_occupancy();
+    if result < 0 {
+        return Err(result);
+    }
+    // Shifts mirror `pack_occupancy` in `slime-root/src/main.rs`.
+    let field = |shift: u32| ((packed >> shift) & 0xffff) as u32;
+    Ok(BufferOccupancy {
+        pages: field(0),
+        buffers: field(16),
+        mappings: field(32),
+        loans: field(48),
+    })
 }
 
 /// Query a child supervision handle. `Ok(None)` means the child is live; a

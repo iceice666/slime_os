@@ -104,6 +104,10 @@ mod shared_buffer_labels {
     pub const LOAN_MAP: sel4::Word = 27;
     pub const RETURN: sel4::Word = 28;
     pub const REVOKE: sel4::Word = 29;
+    /// Read-only: the caller's own live page/buffer/mapping/loan charges.
+    /// Self-scoped by construction -- the holder is derived from the badge, so
+    /// the request carries no holder argument to forge.
+    pub const OCCUPANCY: sel4::Word = 30;
 }
 
 mod capability_transfer_labels {
@@ -2456,7 +2460,8 @@ const fn service_for_root_label(label: sel4::Word) -> Option<u32> {
         | shared_buffer_labels::LOAN
         | shared_buffer_labels::LOAN_MAP
         | shared_buffer_labels::RETURN
-        | shared_buffer_labels::REVOKE => Some(SERVICE_SHARED_BUFFER),
+        | shared_buffer_labels::REVOKE
+        | shared_buffer_labels::OCCUPANCY => Some(SERVICE_SHARED_BUFFER),
         directory_labels::DERIVE => Some(SERVICE_DIRECTORY),
         _ => None,
     }
@@ -3020,6 +3025,41 @@ fn serve_instance_graph(
                     &words,
                     &mut loans_served,
                 );
+                ipc::reply(response);
+            }
+            // C8.13.1: the caller's own live shared-buffer occupancy.
+            //
+            // Read-only, and self-scoped by construction rather than by a
+            // check: `holder` is derived from `id`, which the endpoint badge
+            // authenticated, exactly as `CREATE` above derives it. The request
+            // carries no holder argument, so there is nothing for a caller to
+            // forge and no other holder it can name -- the same reason
+            // `serve_buffer_lifecycle` needs no "is this yours" test.
+            //
+            // An undeclared holder is denied the way every other
+            // shared-buffer operation already denies it: through the
+            // table-held quota, which answers `HolderQuota::DENY` for a holder
+            // the generation's `sharedBufferBudget` does not name. A zero
+            // ceiling is refused rather than answered with four zeros,
+            // because "you hold nothing" and "you may hold nothing" are
+            // different facts and only the second is authority.
+            shared_buffer_labels::OCCUPANCY => {
+                let holder = HolderId(u64::from(id.0));
+                let quota = buffers.quota(holder);
+                let response = if quota == HolderQuota::DENY {
+                    sel4::debug_println!(
+                        "SLIME_GRAPH buffer occupancy refused task={} class=ungranted",
+                        id.0
+                    );
+                    Response::error(IpcError::BadCapability)
+                } else {
+                    // No marker and no `buffers_served` bump: this is a
+                    // read-only query a broker issues once per sweep, so a
+                    // line per answer would flood serial and drown the markers
+                    // gates read, and counting it would inflate a mutation
+                    // count other planes assert against.
+                    Response::success(0, pack_occupancy(buffers.holder_occupancy(holder)))
+                };
                 ipc::reply(response);
             }
             _ => {
@@ -4933,6 +4973,39 @@ const fn buffer_error_status(error: shared_buffer::SharedBufferError) -> IpcErro
         Error::BadSize | Error::BadRange | Error::BadFrameAnchors => IpcError::InvalidLength,
         _ => IpcError::TransferFailed,
     }
+}
+
+/// Width of each packed occupancy field in the reply's auxiliary word.
+const OCCUPANCY_FIELD_BITS: u32 = 16;
+
+/// Pack one holder's four live shared-buffer charges into the reply's single
+/// auxiliary word: pages, buffers, mappings, loans, from the low 16 bits up.
+///
+/// Four counts in one word rather than four registers, because the reply
+/// convention gives an operation exactly one auxiliary value
+/// (`docs/syscall-abi.md`), and a transfer-window frame for sixteen bytes
+/// would make a pure query the only read-only operation that needs a bound
+/// window. Sixteen bits each is not a truncation risk: every count is bounded
+/// by a table ceiling far below `u16::MAX` -- `MAX_TOTAL_PAGES` is 256,
+/// `MAX_SHARED_BUFFERS` 32, `MAX_MAPPINGS` and `MAX_LOANS` 64 -- and a
+/// holder's own declared quota is narrower still. The saturating branch below
+/// is therefore unreachable today, and is written out rather than left to
+/// `as u16` so the packing stays total if a ceiling is ever raised.
+const fn pack_occupancy(occupancy: shared_buffer::HolderOccupancy) -> sel4::Word {
+    const fn field(count: u32) -> sel4::Word {
+        // `as u16` would wrap rather than saturate, which is the one behaviour
+        // a bounded count must not have: a wrapped 65_536 reads as 0, turning
+        // a ceiling breach into an empty holder.
+        if count > u16::MAX as u32 {
+            u16::MAX as sel4::Word
+        } else {
+            count as sel4::Word
+        }
+    }
+    field(occupancy.pages)
+        | field(occupancy.buffers) << OCCUPANCY_FIELD_BITS
+        | field(occupancy.mappings) << (OCCUPANCY_FIELD_BITS * 2)
+        | field(occupancy.loans) << (OCCUPANCY_FIELD_BITS * 3)
 }
 
 /// Answer map/unmap/seal/release for a region the caller already holds.

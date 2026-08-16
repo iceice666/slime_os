@@ -370,6 +370,7 @@ fn a_resource_record_must_name_which_count_it_carries() {
         fabric_trace::RESOURCE_HISTORY,
         fabric_trace::RESOURCE_EVENT,
         fabric_trace::RESOURCE_LOAN,
+        fabric_trace::RESOURCE_MAPPING,
         fabric_trace::RESOURCE_COMPLETE,
     ] {
         record.event = counter;
