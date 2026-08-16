@@ -105,6 +105,10 @@ GATES: tuple[tuple[str, str, int], ...] = (
     # instead, on B55's rule: a chain that pinned a scheduling accident would
     # be a flaky gate, not a stronger one.
     ("sel4_traffic_plane", "check/check-sel4-traffic-plane.py", 10),
+    # C8.13's saturation fixture reuses the traffic plane's exact `CHAINS`
+    # shape (declared ceilings tightened, not the admitted structure), so it
+    # is pinned at the same count.
+    ("sel4_saturation_plane", "check/check-sel4-saturation-plane.py", 10),
     # B55: the full-graph boot restoration moved the seven racy cross-task
     # stream markers (a broker per-edge print racing a participant's own
     # summary print differently for one-route vs two-route participants) out

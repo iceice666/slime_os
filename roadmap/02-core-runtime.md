@@ -1021,20 +1021,28 @@ the schema's absolute 64-record ceiling — see
 
 Not yet done, and explicitly out of scope for this pass: the operation
 plane's pending-delivery count, the call plane's outstanding-loan count,
-shared-buffer mapping/loan-mapping occupancy, and a live capability-slot
-ceiling (4 of the 11 declared classes). Two of the four have a real signal to
-sample but are blocked for a concrete reason rather than an unimplemented
-mechanism: the operation plane's pending-delivery count is a structural zero
-under this fixed schedule, and the call plane's outstanding-loan count has no
-trace-sink headroom left under the schema's absolute 64-record ceiling. The
-other two (mapping, capability-slot) have no traffic-varying signal at all in
-the current component-side syscall surface. Also out of scope: QoS-timed
-stream traffic running concurrently with call/operation (dropped after its
-clock-grant wiring proved to need its own multi-step discovery, and because
-C8.5's own gate already proves the timed scenario in isolation); and a
-saturation/stress scenario that deliberately drives every ceiling to its
-manifest bound at once. Each remains a real gap against this milestone's exit
-condition below, not a redefinition of it.
+shared-buffer mapping/loan/buffer occupancy across 8 holders, retries, and a
+live capability-slot ceiling (8 of the 11 declared classes' *evidence*
+remains partial; separately, `just sel4_saturation_check`
+(`just data_fabric_saturation_check`) now proves 3 of the 11 classes --
+in-flight calls, in-flight operations, retained operation results -- are
+driven to their exact declared bound rather than merely observed under it,
+via a second fixture, `sel4-saturation.zti`, that is `sel4-traffic.zti` with
+`inFlightOperations` tightened to the scenario's own peak and nothing else
+changed). Direct code reading of `boot-contracts/src/fabric_graph.rs`
+established that three more declared fields (`queueDepth`, `historyDepth`
+graph-wide, `capabilitySlots`) are never checked against real usage at all --
+tightening them would test nothing, and making them meaningful is a
+mechanism change, not a fixture change. Also out of scope: QoS-timed stream
+traffic running concurrently with call/operation (dropped after its
+clock-grant wiring proved to need its own multi-step discovery spanning
+`build-generation.py`'s stream-control-grant resolution and a
+per-component-hardcoded slot number, and because C8.5's own gate already
+proves the timed scenario in isolation). Each remains a real gap against
+this milestone's exit condition below, not a redefinition of it. See
+`devlog/2026-08-15-c8-13-traffic/index.md`,
+`devlog/2026-08-16-c8-13-queue-history-evidence/index.md`, and
+`devlog/2026-08-16-c8-13-saturation-ceilings/index.md`.
 
 **Depends on:** C8.11 and C8.12.
 
