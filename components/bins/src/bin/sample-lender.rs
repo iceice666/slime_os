@@ -4,15 +4,16 @@
 //! C7.7 sample-plane lender, driven entirely through the real syscall ABI.
 //!
 //! Allocates a quota-charged shared buffer, fills it with a payload larger than
-//! the kernel message bound, seals it irreversibly, loans the exact sealed
+//! the control-message bound, seals it irreversibly, loans the exact sealed
 //! region to a receiver named by a `RIGHT_SUPERVISE` capability, and sends only
-//! the 64-byte sample descriptor over an IPC channel. The payload itself never
-//! enters the kernel queue.
+//! the 64-byte sample descriptor over an endpoint. The payload itself never
+//! crosses as message bytes.
 //!
-//! Unlike the in-harness `kernel/tests/sample_plane.rs` composition, both peers
-//! here are separately spawned components holding capabilities granted by the
-//! generation, so this exercises `SYS_SHARED_BUFFER_*`, the rights gates, the
-//! loan receiver binding, and reclamation through real task termination.
+//! Unlike the retired in-harness `kernel/tests/sample_plane.rs` composition, both
+//! peers here are separately spawned components holding capabilities granted by
+//! the generation, so this exercises the root's shared-buffer operations, the
+//! rights gates, the loan receiver binding, and reclamation through real task
+//! termination.
 
 use slime_proto::capability_transfer::OBJECT_KIND_SHARED_BUFFER_LOAN;
 use slime_proto::interface_schema::telemetry_stream::TYPE_TAG;

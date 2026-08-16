@@ -679,9 +679,9 @@ pub fn exit(status: i64) -> ! {
     }
 }
 
-/// Largest grant count a spawn call can carry: matches the kernel's per-task
-/// capability capacity (`kernel/src/capability/mod.rs::MAX_CAPS`), the real
-/// bound a spawn's grant array is checked against server-side.
+/// Largest grant count a spawn call can carry: matches the root's per-task
+/// capability capacity (`slime_root::graph::MAX_TASK_CAPS`), the real bound a
+/// spawn's grant array is checked against server-side.
 const MAX_SPAWN_GRANTS: usize = 64;
 
 pub fn spawn(executable_slot: u32, grants: &[SpawnGrant]) -> (i64, u64) {

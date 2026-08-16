@@ -38,12 +38,13 @@ const RIGHT_INPUT_READ: u64 = 1 << 23;
 
 /// Authority to read sectors, held on a `Block` (P5.4.2c). Numbered as
 /// `blockRead` in the generation's own rights table
-/// (`scripts/build/build-generation.py`), which is the same numbering
-/// `kernel/src/capability/mod.rs` uses.
+/// (`scripts/build/build-generation.py`, validated against
+/// `contracts/generation/v1/schema.zt`); see `docs/capability-matrix.md` for the
+/// full bit assignment.
 pub const RIGHT_BLOCK_READ: u64 = 1 << 10;
-/// Authority to write sectors and to flush. One bit for both, matching the
-/// oracle: a caller that may change what is on the device may also ask for it
-/// to be made durable, and a flush without writes is a no-op.
+/// Authority to write sectors and to flush. One bit for both, deliberately: a
+/// caller that may change what is on the device may also ask for it to be made
+/// durable, and a flush without writes is a no-op.
 pub const RIGHT_BLOCK_WRITE: u64 = 1 << 11;
 
 use crate::child_vspace::ScratchPage;

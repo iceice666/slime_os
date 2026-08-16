@@ -1121,8 +1121,8 @@ const RIGHT_BUFFER_WRITE: u64 = 1 << 8;
 /// image is not authority to start it: `preflight_spawn_grants` requires both.
 const RIGHT_SPAWN: u64 = 1 << 16;
 
-/// Authority to observe a spawned child's termination. The right the handle a
-/// spawn returns carries, matching `kernel/src/capability/mod.rs`.
+/// Authority to observe a spawned child's termination: the right the handle a
+/// spawn returns carries. See `docs/capability-matrix.md`.
 const RIGHT_SUPERVISE: u64 = 1 << 18;
 
 /// Authority to allocate a shared buffer, held on a `SharedBufferFactory`.
@@ -4946,8 +4946,8 @@ const fn buffer_error_class(error: shared_buffer::SharedBufferError) -> &'static
 /// The Slime status a shared-buffer failure answers with.
 ///
 /// Every exhausted ceiling is `ERR_OUT_OF_MEMORY` and every authority failure
-/// is `ERR_BAD_CAP`, matching `kernel/src/syscall/mod.rs::shared_buffer_error_code`
-/// so a component sees one ABI whichever kernel is under it.
+/// is `ERR_BAD_CAP`, so a component sees one stable status vocabulary
+/// regardless of which ceiling or gate refused it.
 const fn buffer_error_status(error: shared_buffer::SharedBufferError) -> IpcError {
     use shared_buffer::SharedBufferError as Error;
     match error {

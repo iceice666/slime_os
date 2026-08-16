@@ -16,10 +16,11 @@ use boot_contracts::target_profile::TargetProfile;
 pub const MAX_ADMITTED_EXECUTABLES: usize = 48;
 pub const MAX_ADMITTED_INSTANCES: usize = 48;
 
-/// Logical IPC rights, numbered as in `kernel/src/capability/mod.rs`. The
-/// generation format owns `RIGHT_TRANSFER`; the send/receive bits it shares
-/// with the kernel are restated here because `slime-root` maps them onto seL4
-/// endpoint rights.
+/// Logical IPC rights, numbered by the generation contract
+/// (`contracts/generation/v1/schema.zt`, rendered by
+/// `scripts/build/build-generation.py`). The generation format owns
+/// `RIGHT_TRANSFER`; the send/receive bits are restated here because
+/// `slime-root` maps them onto seL4 endpoint rights.
 pub const RIGHT_SEND: Rights = 1;
 pub const RIGHT_RECV: Rights = 1 << 1;
 /// Authority to execute an object: what makes a grant name a spawnable

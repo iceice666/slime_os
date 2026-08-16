@@ -6,22 +6,27 @@ level and inside a record, so a fixture cannot explain itself.
 
 ## Why a sibling fixture, not a boot profile in `valid.zti`
 
-`valid.zti` describes the graph the retired custom kernel boots. Its
-`bootProfiles` mechanism resolves a component set by **subtraction** —
-`resolve_boot_profile` in `scripts/build/build-generation.py` computes
+`valid.zti` describes the graph the retired custom kernel booted, and it remains
+the frozen regression manifest: `components/bins/build.rs` and
+`scripts/lib/interface_schema.py` still read it for build-time command and
+fabric profiles. Its `bootProfiles` mechanism resolves a component set by
+**subtraction** — `resolve_boot_profile` in `scripts/build/build-generation.py`
+computes
 
 ```python
 kept = (declared - scaffolding_everywhere) | set(scaffolding)
 ```
 
 so every component no profile claims is product surface. Naming a component in a
-new profile there would *remove* it from `default`, changing the frozen 45-slot
-product generation that `just product_boot_check` and the nineteen
-`just boot_layout_check` fixture pairs guard as the regression oracle.
+new profile there would *remove* it from `default`, changing the frozen product
+generation that `just product_boot_check` and the 25 `just boot_layout_check`
+plane layouts guard as the regression oracle.
 
 A separate manifest leaves `valid.zti` byte-for-byte untouched. The precedent is
 `recovery_manifest()` in the same builder, which likewise derives a second,
-narrower generation rather than adding a mode to the first.
+narrower generation rather than adding a mode to the first. Every seL4 plane
+fixture in this directory follows the same rule, which is why they are per-scenario
+siblings rather than profiles of one graph.
 
 ## Why these five components
 

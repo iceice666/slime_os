@@ -29,9 +29,10 @@ pythonBindings :: Format -> Text = format => w.join {
 };
 
 -- Schema-owned scalars + layout-derived offsets shared with
--- boot-contracts/src/bootstate.rs and the boot-store decoders in stage0 and
--- the kernel. The transition/encode/decode machinery stays hand-written in
--- those modules; every layout constant comes from this contract.
+-- boot-contracts/src/bootstate.rs and the boot-store decoders in stage0 and the
+-- userspace generation-management components. The transition/encode/decode
+-- machinery stays hand-written in those modules; every layout constant comes
+-- from this contract.
 checksumOffset :: Format -> Int = format => w.fieldOffset "checksum" 0 format.slotLayout;
 
 rustOffsets :: Text -> Int -> List w.WireField -> Text

@@ -74,12 +74,10 @@ pub enum FaultKind {
 impl FaultKind {
     /// The code a supervising parent reads back through `supervision_status`.
     ///
-    /// Spelled out rather than derived from the discriminant, for the reason
-    /// `kernel/src/syscall/mod.rs::reason_code` spells its own out: this is a
-    /// wire value a component compares against, so it must not move when a
-    /// variant is added or reordered. The kind only — never the address or
-    /// syndrome, which are the child's memory layout and are not its parent's
-    /// business.
+    /// Spelled out rather than derived from the discriminant: this is a wire
+    /// value a component compares against, so it must not move when a variant is
+    /// added or reordered. The kind only — never the address or syndrome, which
+    /// are the child's memory layout and are not its parent's business.
     pub const fn reason_code(&self) -> u64 {
         match self {
             Self::Capability { .. } => 1,

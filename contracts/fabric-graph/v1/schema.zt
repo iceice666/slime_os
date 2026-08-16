@@ -52,18 +52,20 @@ limitInFlight :: Int = 32;
 limitCapabilitySlots :: Int = 64;
 limitBuffers :: Int = 32;
 
--- The inline control-message bound. Pinned to the kernel's `ipc::MAX_MSG` and
--- to `contracts/sample-descriptor/v1` `descriptorLen`; a sample larger than
--- this must travel as a C7 shared-buffer loan, so a graph admitting one needs
--- a page budget. `kernel/src/runtime/generation.rs` asserts the agreement at
--- compile time, so this value cannot drift from the kernel's.
+-- The inline control-message bound. Pinned to `slime-root/src/ipc.rs`'s
+-- `MAX_MESSAGE_BYTES` and to `contracts/sample-descriptor/v1` `descriptorLen`; a
+-- sample larger than this must travel as a C7 shared-buffer loan, so a graph
+-- admitting one needs a page budget. `slime_root::generation::
+-- fabric_graph_is_satisfiable` re-checks the agreement at admission, so a graph
+-- that drifts from the root's bound is refused at boot rather than accepted.
 controlMessageBytes :: Int = 64;
 channelQueueDepth :: Int = 16;
 
--- Kernel shared-buffer table ceilings, pinned so the builder can reject an
+-- Root shared-buffer table ceilings, pinned so the builder can reject an
 -- over-declared page, mapping, or loan budget instead of emitting a graph the
--- kernel decoder refuses at boot. `kernel/src/runtime/generation.rs` asserts
--- the agreement at compile time, so these cannot drift from the kernel's.
+-- root refuses at boot. They mirror `slime-root/src/shared_buffer.rs`'s
+-- `MAX_TOTAL_PAGES`/`MAX_SHARED_BUFFERS`/`MAX_MAPPINGS`/`MAX_LOANS`, which
+-- `fabric_graph_is_satisfiable` passes to `FabricGraph::validate_against`.
 kernelTotalPages :: Int = 256;
 kernelSharedBuffers :: Int = 32;
 kernelMappings :: Int = 64;

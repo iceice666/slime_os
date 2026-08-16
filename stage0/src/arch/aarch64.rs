@@ -55,9 +55,11 @@ const MAIR_ATTR_DEVICE: u64 = 0x00;
 /// `MAIR_EL1`: index 0 normal write-back, index 1 device-nGnRnE.
 ///
 /// This register is the authority for what a descriptor's `AttrIndx` field
-/// means. `kernel/src/arch/aarch64/paging.rs` selects the same indices and must
-/// stay in step: a descriptor names an index, not an attribute, so an
-/// inversion silently maps MMIO as cacheable.
+/// means: a descriptor names an index, not an attribute, so an inversion
+/// silently maps MMIO as cacheable. These tables cover only stage-0's own
+/// pre-handoff mappings; once control transfers, the kernel installs its own
+/// `MAIR_EL1` and translation tables, so nothing downstream inherits these
+/// indices.
 const MAIR_VALUE: u64 = MAIR_ATTR_NORMAL | (MAIR_ATTR_DEVICE << 8);
 
 /// Flags for a normal writable kernel data mapping.

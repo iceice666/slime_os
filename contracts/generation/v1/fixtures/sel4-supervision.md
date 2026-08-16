@@ -40,10 +40,11 @@ supervision-record lifetime. With this child, the only dynamic endpoint is the
 carrier used to export and later import the held supervision capability.
 
 The cost is stated plainly: this weakens the "no new component binary" property
-the other planes have. It does not touch the frozen oracle, which is `kernel/`
-rather than `components/`, but it does mean `contracts_check` and
-`generation_check` carry a real duty here — they are what confirms a bin unused
-by the oracle perturbed neither contract validation nor generation identity.
+the other planes have. When it was written the frozen oracle was `kernel/` rather
+than `components/`, so adding a bin there touched nothing the oracle read; that
+kernel is now deleted, and the duty it named remains — `contracts_check` and
+`generation_check` are what confirm this bin perturbs neither contract validation
+nor any other fixture's generation identity.
 
 ### `sysinfo` — declared, unmodified, and not the subject
 

@@ -81,7 +81,7 @@
 
 **Required checks:** Reject missing, widened, duplicate, stale, out-of-range, and wrong-kind capabilities; prevent reclaim of in-flight DMA buffers; reject malformed PCI metadata without hanging.
 
-**Verification target:** `just storage_cap_check` (`kernel/tests/storage_capability.rs`).
+**Verification target:** `just storage_cap_check`, which now resolves to `just sel4_storage_check sel4_generation_check sel4_transfer_check`. The original `kernel/tests/storage_capability.rs` was deleted with the custom kernel; the rights-gated device path is observed on the seL4 planes instead.
 
 **Exit condition:** An isolated driver receives only explicitly granted generic resources, and an unprivileged component cannot acquire device rights.
 
@@ -133,7 +133,7 @@
 
 **Depends on:** M5.3.
 
-**Delivered:** Protective MBR and redundant GPT validation; capability-selected partitions; bounded versioned immutable object records addressed by content; append/seal commits; and redundant checksummed superblocks preserving an older valid root. QEMU evidence covers retrieval, durable append, damaged-newest-root fallback, conflicting GPT copies, and no-valid-superblock rejection. GPT recovery and interruption boundaries are additionally pinned by `kernel/tests/object_store.rs`; firmware may repair a primary GPT before QEMU guest code sees it, so that recovery remains unit-test evidence rather than QEMU evidence.
+**Delivered:** Protective MBR and redundant GPT validation; capability-selected partitions; bounded versioned immutable object records addressed by content; append/seal commits; and redundant checksummed superblocks preserving an older valid root. QEMU evidence covers retrieval, durable append, damaged-newest-root fallback, conflicting GPT copies, and no-valid-superblock rejection. GPT recovery and interruption boundaries are additionally pinned by `boot-contracts/src/gpt.rs`'s and `boot-contracts/src/object_store.rs`'s host tests under `just test_host` — P5.4.2 lifted them out of the deleted `kernel/tests/object_store.rs`, where they were reachable only through `just test`; firmware may repair a primary GPT before QEMU guest code sees it, so that recovery remains unit-test evidence rather than QEMU evidence.
 
 **Required checks:** Validate GPT bounds and CRCs; resolve copy damage without accepting conflicting valid copies; prevent malformed metadata from causing out-of-bounds I/O; verify complete payload hashes before use; preserve the previous root at every append/commit interruption; reject overlap, overflow, truncation, bad hashes, conflicting identities, and unsupported versions.
 
@@ -193,7 +193,7 @@
 
 **Required checks:** Inject interruption before pending metadata, during either slot write, after pending commit, after attempt commit/before transfer, during promotion, rollback update, state snapshot, and GC. Every reboot selects either pending with the correct reduced attempt count or verified known-good, never zero roots. Distinguish component exit, fault, timeout, peer loss, and explicit unhealthy status; deny health confirmation to unprivileged components.
 
-**Verification target:** `just rollback_check` (including the observed `2 → 1 → 0` failing-pending sequence); state and GC behavior is exercised by `kernel/tests/generation_manager.rs`.
+**Verification target:** `just rollback_check` (including the observed `2 → 1 → 0` failing-pending sequence), which now resolves to `just sel4_rollback_check`; state and GC behavior is exercised by the same plane, since `kernel/tests/generation_manager.rs` was deleted with the custom kernel.
 
 **Exit condition:** A failing pending generation automatically returns to verified known-good with persistent state and roots matching declared policy.
 

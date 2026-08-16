@@ -4,11 +4,11 @@
 
 This track turns the existing bounded channels, capabilities, components, and generations into a native typed communication runtime. It is local-first: C7 and C8 require no network or physical driver, and they do not wait for unrelated display, audio, wireless, or GPU work.
 
-ROS 2 compatibility in [`03-ros2-compatibility.md`](03-ros2-compatibility.md) is a userspace profile over this runtime. The kernel never learns nodes, topics, services, actions, graph discovery, message types, or transport QoS policy.
+ROS 2 compatibility in [`03-ros2-compatibility.md`](03-ros2-compatibility.md) is a userspace profile over this runtime. Neither seL4 nor `slime-root` learns nodes, topics, services, actions, graph discovery, message types, or transport QoS policy.
 
 ## Boundaries
 
-- Kernel IPC remains a small control plane. The current 64-byte message bound is not enlarged for sensor or image data.
+- Root-mediated IPC remains a small control plane. The current 64-byte message bound (`slime-root/src/ipc.rs::MAX_MESSAGE_BYTES`) is not enlarged for sensor or image data.
 - Bulk samples live in bounded shared buffers referenced by typed control messages.
 - Component working memory is task-private and non-transferable. Shared buffers carry samples *between* components; they are not a general allocator, and neither mechanism may be reinterpreted as the other.
 - Topic names and types are userspace metadata. Authority is carried by SEND/RECV endpoint capabilities minted or distributed by the declared fabric service.
@@ -16,7 +16,7 @@ ROS 2 compatibility in [`03-ros2-compatibility.md`](03-ros2-compatibility.md) is
 - `TransportQoS` controls message delivery. `SchedulingClass` controls CPU ordering. They are separate contracts and namespaces.
 - Slime capability transfer is native-only. A protocol gateway may retain and proxy a capability but may never serialize a kernel capability as application data.
 - Capability, IPC, shared-sample, schema, QoS, lifecycle, and scheduling-policy semantics are architecture-neutral. Trap registers, syscall entry, context switching, page tables, interrupt controllers, and timer mechanisms belong to [`07-architecture-portability.md`](07-architecture-portability.md).
-- C7 and B2 continue on the x86-64 reference path. New low-level work must not add uncontained x86 assumptions outside the architecture/platform boundary that P1 will enforce.
+- C7 and B2 are observed on the `aarch64-sel4-qemu-virt` product path; the x86-64 reference path they were first built on was retired with P5. New low-level work must not add uncontained architecture assumptions outside the boundary P1 enforces.
 
 ## Sequencing
 
@@ -214,7 +214,7 @@ A receiver validates a bounded versioned descriptor, maps only the exact loaned 
 
 ### C7.7 — Sample-plane integration and isolation
 
-**Status:** Complete. `kernel/tests/sample_plane.rs` composes the C7.2 factory allocation, C7.3 per-holder quotas, C7.4 mapping/sealing, C7.5 loan/return lifecycle, and the C7.6 sample descriptor into two holders that exchange a `>MAX_MSG` payload: only the 64-byte descriptor crosses a real IPC channel while the receiver reconstructs the full two-page payload from the quota-charged sealed loaned buffer through exact read-only page-table translations. A malformed (stale-identity) descriptor delivered over the channel is rejected by validation and by the loan-aware map path before any mapping or allocation, leaving the loan intact. Every quota class (byte-pages, buffer-count, mapping-count, loan-count) fails with `QuotaExceeded` at ceiling+1 without disturbing an unrelated owner's buffer, mapping, or channel; and a retained v2 known-good generation decodes byte-identically before and after a full sample-plane exchange. That gate composes `u64` owner ids; since 2026-07-26 (backlog B5) it is paired with `just sample_plane_live_check`, where two separately spawned components — holding only generation-granted capabilities — run the same exchange through the real `SYS_SHARED_BUFFER_*` syscalls, with the loan receiver named by a `RIGHT_SUPERVISE` capability and six denial arms asserted in order. The retained-v2 arm is a decode probe rather than a boot, which is the correct scope: no v2 artifact exists to boot, and a v2 rollback would run its own embedded kernel (backlog B6, resolved). Verified under `just sample_plane_check` (5 QEMU cases) and `just sample_plane_live_check`, with `just test`, `just fmt_check`, and `just lint` clean.
+**Status:** Complete. The composition was originally `kernel/tests/sample_plane.rs`, which is deleted; P5.3.4 re-observed it on the product path as `just sel4_sample_check`, where two separately spawned components hold generation-granted capabilities rather than being composed in-harness. It joins the C7.2 factory allocation, C7.3 per-holder quotas, C7.4 mapping/sealing, C7.5 loan/return lifecycle, and the C7.6 sample descriptor into two holders that exchange a `>MAX_MESSAGE_BYTES` payload: only the 64-byte descriptor crosses a real endpoint while the receiver reconstructs the full two-page payload from the quota-charged sealed loaned buffer through exact read-only translations. A malformed (stale-identity) descriptor is rejected by validation and by the loan-aware map path before any mapping or allocation, leaving the loan intact. Every quota class (byte-pages, buffer-count, mapping-count, loan-count) fails at ceiling+1 without disturbing an unrelated holder.
 
 **Depends on:** C7.1–C7.6.
 
@@ -358,12 +358,17 @@ chains, and every per-graph resource ceiling. Route authority is the fold of
 (route name, full interface identity, contract kind); participant authority
 additionally folds in component identity and direction, so a name, a type, or
 a graph observation grants nothing. A present graph is validated
-deterministically at generation decode against the kernel's own
-`MAX_WAIT_SOURCES`/`MAX_CAPS`/`MAX_TOTAL_PAGES`/`MAX_MAPPINGS`/`MAX_LOANS`/
-`MAX_MSG` before any component launches, and the host builder enforces the same
-rule set so a malformed graph fails the build rather than the boot; the
-contract's copies of the kernel bounds are pinned by `const _: () = assert!` in
-`kernel/src/runtime/generation.rs`. `just fabric_manifest_check` passes: a
+deterministically at generation decode against the root's own
+`MAX_WAIT_SOURCES`/`MAX_TASK_CAPS`/`MAX_TOTAL_PAGES`/`MAX_SHARED_BUFFERS`/
+`MAX_MAPPINGS`/`MAX_LOANS`/`MAX_MESSAGE_BYTES` before any component launches, and
+the host builder enforces the same rule set so a malformed graph fails the build
+rather than the boot. The compile-time `const _: () = assert!` pinning in
+`kernel/src/runtime/generation.rs` died with that kernel; on the product path the
+agreement is re-checked at admission by
+`slime_root::generation::fabric_graph_is_satisfiable`, which passes
+`slime-root/src/shared_buffer.rs`'s and `ipc.rs`'s live constants to
+`FabricGraph::validate_against`, so a drifting graph is refused at boot.
+`just fabric_manifest_check` passes: a
 deterministic 896-byte resource with 2 schemas, 2 routes, 4 participants, and
 one interposition hop, a 35-case negative corpus each rejected by its intended
 check, 18 `boot-contracts` decoder tests, and 4 QEMU tests against the booted

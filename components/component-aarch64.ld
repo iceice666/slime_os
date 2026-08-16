@@ -1,10 +1,12 @@
 /* Slime OS component link script (contracts/component/v2).
  *
- * Every component links at the kernel's component load base (ENTRY_VA in
- * kernel/src/task/mod.rs); each component runs in its own address space, so
- * one fixed base serves all of them and no relocation or PIC is ever needed.
- * The image converter in scripts/build/build-generation.py re-bases segments to
- * offsets relative to this base and asserts the base matches.
+ * Every component links at the fixed component load base declared by its target
+ * profile (`componentBase` in contracts/target-profile/v1); each component runs
+ * in its own address space, so one fixed base serves all of them and no
+ * relocation or PIC is ever needed. The image converter in
+ * scripts/build/build-generation.py re-bases segments to offsets relative to this
+ * base and asserts the base matches. The seL4 product profile uses no linker
+ * script at all: it carries a whole ELF loaded at its own link addresses.
  *
  * --build-id=none (passed by the builder) keeps the link deterministic:
  * identical input objects produce byte-identical ELFs.

@@ -1,16 +1,28 @@
 # Component image format 1
 
-This directory defines the executable encoding for Slime OS components.
-`schema.zt` is the normative layout; `gen_rust.zt` renders the shared Rust
-bindings (`components/proto/src/component.rs`). Regenerate with `just
-component_gen` and validate freshness with `just contracts_check`.
+This directory defines format 1, the original executable encoding for Slime OS
+components. It is **retained, not current**: format 2
+(`../v2/schema.zt`) supersedes it and is what
+`just component_gen` renders into `components/proto/src/component.rs`. A format-1
+image is not an architecture-neutral image missing some fields — it is an
+`x86_64-qemu-virtio` image whose target was implied by the only builder that
+could produce it, and decoders give it exactly that meaning for the bounded
+rollback window. `schema.zt` here remains the normative layout for those
+retained bytes and is still validated by `just contracts_check`.
 
-A component image is the only executable encoding the kernel accepts. Images
-are produced on the host from a statically linked ELF intermediate and carried
-as generation objects of kind `bootstrap` or `component`. ELF never reaches
-the kernel: it is build-time scaffolding that keeps the full toolchain
-(compiler, linker, DWARF debug info, `addr2line`/`gdb` symbolization) on the
-host where it belongs.
+Format 2 keeps every segment rule below unchanged and adds the
+target-qualification header fields (`architecture`, `abi`, `page_profile`,
+`required_features`). The seL4 product path uses format 2's ELF-carrying
+revision (`SLIMECME`), where the same 56-byte qualification header wraps a
+complete native ELF that `slime-root/src/child_vspace.rs` loads at its own link
+addresses; the segment table below is not used there.
+
+A component image is the only executable encoding admitted as a generation
+object of kind `bootstrap` or `component`. Under format 1 and format 2's
+segment revision, ELF is build-time scaffolding only: it keeps the full
+toolchain (compiler, linker, DWARF debug info, `addr2line`/`gdb`
+symbolization) on the host where it belongs. Format 2's ELF revision carries
+the executable whole instead, because `slime-root` has a real ELF loader.
 
 ## Layering
 
@@ -26,11 +38,11 @@ traditionally conflate are kept in separate layers:
   each segment goes, what rights its pages get, where execution starts, and
   how much stack the task needs.
 
-Linking is fully static and resolved at build time. Every component links at
-the kernel's component base VA (`ENTRY_VA`, `0x400000`); each component runs
-in its own address space, so a single fixed base serves all components and
-there are no relocations, no PIC requirement, and no load-time fixups. The
-kernel loader is: validate header, copy bytes, map pages, jump.
+Linking is fully static and resolved at build time. Under format 1 every
+component links at the fixed component base VA (`0x400000`); each component runs
+in its own address space, so a single fixed base serves all components and there
+are no relocations, no PIC requirement, and no load-time fixups. The loader is:
+validate header, copy bytes, map pages, jump.
 
 ## Layout
 
@@ -81,8 +93,8 @@ Validation is eager: the generation decoder validates every object of kind
 that decodes at boot never contains a malformed executable. Spawn re-decodes
 through the same function and therefore cannot fail on format grounds for
 generation-sourced executables. `scripts/check/check-generation.py` mirrors the
-same rules host-side so builder/kernel drift fails in `just
-generation_check` instead of at boot.
+same rules host-side so builder/decoder drift fails in `just generation_check`
+instead of at boot.
 
 `boot-contracts/src/component_image.rs`'s own host tests pin every acceptance
 and rejection class against the generated wire bindings, under
@@ -93,17 +105,24 @@ and rejection class against the generated wire bindings, under
 `scripts/build/build-generation.py` builds each component as:
 
 1. `cargo build --release -p slime-components` from `components/` uses the root
-   workspace while applying the component-specific Cargo target configuration;
-   it compiles every component (Rust `no_std`, target `x86_64-unknown-none`) and links it via
-   `components/component.ld` at the fixed base VA (`--build-id=none`,
+   workspace while applying the component-specific Cargo target configuration.
+   The Cargo target comes from the generation's target profile
+   (`contracts/target-profile/v1`): the seL4 product profile builds for the
+   `aarch64-sel4-minimal` JSON target with no linker script, while the
+   segment-table profiles build for `x86_64-unknown-none` or
+   `aarch64-unknown-none` and link via `components/component.ld` or
+   `components/component-aarch64.ld` at the fixed base VA (`--build-id=none`,
    `-z max-page-size=4096`, `relocation-model=static`; see
    `components/.cargo/config.toml` and `components/bins/build.rs`) — this
    step is the only language-specific one; step 2 onward accepts any static
    ELF built this way;
-2. the converter reads the ELF program headers with Python stdlib only,
-   maps `PT_LOAD` segments to image segments (ELF `PF_X`/`PF_W` to the
-   image flags), asserts the same rules the kernel validates, and emits the
-   image;
+2. for a segment-table profile the converter reads the ELF program headers with
+   Python stdlib only, maps `PT_LOAD` segments to image segments (ELF
+   `PF_X`/`PF_W` to the image flags), asserts the same rules the decoder
+   validates, and emits the image. For the seL4 profile
+   `elf_component_image` instead wraps the whole ELF in the same 56-byte
+   qualification header with `segment_count` and `entry_offset` zero, because the
+   loader reads the entry point from the ELF header;
 3. the image becomes the generation object payload, hashed by the existing
    `SLIMEGEN` path.
 

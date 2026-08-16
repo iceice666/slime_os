@@ -14,8 +14,8 @@ use crate::task::TaskId;
 pub const MAX_RECORDS: usize = crate::task::MAX_TASKS;
 
 /// How a child ended. The discriminants are the wire values
-/// `components/runtime/src/syscall.rs::supervision_status` decodes, and match
-/// `kernel/src/syscall/mod.rs::sys_supervision_status`'s.
+/// `components/runtime/src/syscall.rs::supervision_status` decodes; see
+/// `docs/syscall-abi.md`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Termination {
     /// Called `exit` with this status.
