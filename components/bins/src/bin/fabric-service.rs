@@ -304,6 +304,10 @@ fn main(_startup_arg: u32) {
         boot_graph();
         return;
     }
+    if GENERATION_BOOT_ACTION == "traffic" {
+        traffic_graph();
+        return;
+    }
     if GENERATION_BOOT_ACTION == "visibility" {
         visibility_broker::run();
         return;
@@ -454,6 +458,78 @@ fn boot_graph() {
     loop {
         slime_rt::yield_now();
     }
+}
+
+/// Drive the C8.13 concurrent traffic plane's stream class: the identical
+/// declared partition [`boot_graph`] proves collision-free, now carrying real
+/// stream traffic instead of parking.
+///
+/// Only reachable for the authenticated `traffic` action declared by
+/// `contracts/generation/v1/fixtures/sel4-traffic.zti`, which is `sel4-boot.zti`
+/// with `bootAction` and `generation` changed plus the additional grants real
+/// traffic needs (§ the fixture's own history).
+///
+/// **Why not the default composition below.** That composition assumes every
+/// declared route participant answers `provision` through the normal request
+/// path. The declared interposition proxy is real here too -- a chain hop, not
+/// a route participant -- and under `"traffic"` it still parks without ever
+/// contacting this broker (`fabric-proxy::main`'s `full_graph_active` arm), so
+/// it needs the identical pre-mark [`boot_graph`] applies.
+///
+/// **Why not `boot_graph` itself.** Its whole point is provisioning without
+/// traffic: it returns as soon as every edge is handed out and never touches
+/// `broker`, then parks forever. This calls `broker` for the real relay loop
+/// and then waits for every participant's task to end -- the same completion
+/// the default composition uses -- rather than looping.
+fn traffic_graph() {
+    let routes: [[u8; 32]; ROUTE_COUNT] = [
+        route_identity(
+            ROUTE_NAMES[0],
+            &telemetry_stream::INTERFACE_IDENTITY,
+            CONTRACT_KIND_STREAM,
+        ),
+        route_identity(
+            ROUTE_NAMES[1],
+            &diagnostics_stream::INTERFACE_IDENTITY,
+            CONTRACT_KIND_STREAM,
+        ),
+    ];
+    let type_tags: [u64; ROUTE_COUNT] = [telemetry_stream::TYPE_TAG, diagnostics_stream::TYPE_TAG];
+    let mut clients = control_clients();
+    // Neither the proxy nor the observer ever contacts this broker under
+    // `"traffic"` (`fabric_boot::full_graph_active` parks both without
+    // requesting a role -- see `fabric-observer::main` for why the observer
+    // cannot request its declared subscription here the way `boot_graph`'s
+    // parked copy safely does), so both are pre-marked the same way
+    // `boot_graph` pre-marks the proxy alone.
+    for client in clients.iter_mut().filter(|client| {
+        client.component == b"fabric-proxy" || client.component == b"fabric-observer"
+    }) {
+        client.answered = true;
+    }
+    let mut publishers: [Option<Publisher>; MAX_PARTICIPANTS] = [const { None }; MAX_PARTICIPANTS];
+    let mut subscribers: [Option<Subscriber>; MAX_PARTICIPANTS] =
+        [const { None }; MAX_PARTICIPANTS];
+    let mut frames = [Frame::EMPTY; MAX_FRAMES];
+
+    provision(&mut clients, &routes, &mut publishers, &mut subscribers);
+    slime_rt::debug_write(b"[fabric] traffic: every declared stream edge provisioned\n");
+
+    broker(&type_tags, &mut publishers, &mut subscribers, &mut frames);
+    // Neither the proxy nor the observer ever contacts this broker under
+    // `"traffic"` (both parked above without requesting a role), so neither
+    // dies either; waiting on either here would hang forever on a task the
+    // milestone requires to stay parked.
+    for (component, _) in FABRIC_SUPERVISION.iter() {
+        if *component == b"fabric-proxy" || *component == b"fabric-observer" {
+            continue;
+        }
+        let supervision = supervision_slot_for(component);
+        while let Ok(None) = slime_rt::supervision_status(supervision) {
+            slime_rt::yield_now();
+        }
+    }
+    slime_rt::debug_write(b"[fabric] traffic stream plane complete\n");
 }
 
 struct RequestResponseControls {
@@ -769,12 +845,20 @@ fn broker(
     // at the end, so the serial order is the declared order rather than however
     // the three workers happened to interleave.
     let mut trace = trace_log::Trace::new(FABRIC_TRACE_DEPTH);
-    // The most frames this run ever held at once. Sampled per sweep, because the
-    // count that matters is an occupancy: reading it after `release_retained` has
-    // drained every frame reports the residue of teardown, which on a clean
-    // shutdown is structurally near zero and would leave a frame-accounting
-    // regression invisible to the repeated-boot comparison.
+    // The most frames and buffer-backed frames this run ever held. Sampled per
+    // sweep, because the count that matters is an occupancy: reading it after
+    // `release_retained` has drained every frame reports the residue of
+    // teardown, which on a clean shutdown is structurally near zero and would
+    // leave a regression invisible to the repeated-boot comparison.
+    //
+    // No retry counter: `Subscriber::retry_count` is written only inside
+    // `apply_time`, which `qos_check()` gates to `GENERATION_BOOT_ACTION ==
+    // "qos"` alone. Every other action -- including `"traffic"` -- never
+    // advances it, so a retries record here would be evidence that cannot
+    // change: a resource ceiling this stream worker cannot yet drive under
+    // real concurrent traffic, not one it drove and found idle.
     let mut peak_frames = 0u32;
+    let mut peak_buffers = 0u32;
     let route_words = [
         trace_log::route_word(&route_identity(
             ROUTE_NAMES[0],
@@ -891,6 +975,13 @@ fn broker(
         if live_frames > peak_frames {
             peak_frames = live_frames;
         }
+        let live_buffers = frames
+            .iter()
+            .filter(|frame| frame.refs > 0 && frame.buffer_slot.is_some())
+            .count() as u32;
+        if live_buffers > peak_buffers {
+            peak_buffers = live_buffers;
+        }
         if subscribers
             .iter()
             .flatten()
@@ -898,10 +989,34 @@ fn broker(
             && (!qos_check() || time_dead)
         {
             release_retained(publishers, frames);
-            // Resource evidence before the terminal: the high-water frame
-            // occupancy is a bounded count of what this run actually needed,
-            // which is what the repeated-boot comparison reads.
+            // Resource evidence before the terminal. The frame counter carries
+            // two records: the historical peak this run reached, and — read
+            // after `release_retained` drains every reference — the count
+            // actually held once the scenario ended. The two are always
+            // distinguishable by the worker's own advancing clock/sequence, so
+            // no separate baseline code is needed.
             let _ = trace.resource(slime_proto::fabric_trace::RESOURCE_FRAMES, peak_frames);
+            // C8.13's buffer evidence is gated to the concurrent traffic plane
+            // alone: every standalone stream/QoS fixture predates it and
+            // declares just enough `traceDepth` for the records C8.11 already
+            // emits, so adding this unconditionally would silently drop
+            // records on every one of them rather than on the one plane that
+            // asks for this evidence.
+            if GENERATION_BOOT_ACTION == "traffic" {
+                let _ = trace.resource(slime_proto::fabric_trace::RESOURCE_BUFFERS, peak_buffers);
+            }
+            let baseline_frames = frames.iter().filter(|frame| frame.refs > 0).count() as u32;
+            let _ = trace.resource(slime_proto::fabric_trace::RESOURCE_FRAMES, baseline_frames);
+            if GENERATION_BOOT_ACTION == "traffic" {
+                let baseline_buffers = frames
+                    .iter()
+                    .filter(|frame| frame.refs > 0 && frame.buffer_slot.is_some())
+                    .count() as u32;
+                let _ = trace.resource(
+                    slime_proto::fabric_trace::RESOURCE_BUFFERS,
+                    baseline_buffers,
+                );
+            }
             let _ = trace.terminal();
             trace.flush(b"stream");
             return;

@@ -1,13 +1,25 @@
 //! C8.10 full-graph boot arm: what a declared fabric participant does when one
-//! generation launches the whole graph at once.
+//! generation launches the whole graph at once, and -- for the two structural
+//! roles with no traffic class of their own -- what it does under C8.13's
+//! concurrent traffic action too.
 //!
-//! The full-graph gate asserts that every declared role is *provisioned* and
-//! that the graph then reaches healthy blocked idle **with no traffic**. So a
-//! participant here asks for its declared role, proves the capability it
-//! received is the narrowed one the graph named, and parks. It publishes
-//! nothing, acks nothing, and calls nothing: any sample would make the boot's
-//! idle condition depend on a data path C8.4-C8.8 already own, and a
-//! regression there would surface as a failure of this gate instead of theirs.
+//! **Under `"boot"`**, the full-graph gate asserts that every declared role is
+//! *provisioned* and that the graph then reaches healthy blocked idle **with
+//! no traffic**. So a participant here asks for its declared role, proves the
+//! capability it received is the narrowed one the graph named, and parks. It
+//! publishes nothing, acks nothing, and calls nothing: any sample would make
+//! the boot's idle condition depend on a data path C8.4-C8.8 already own, and
+//! a regression there would surface as a failure of this gate instead of
+//! theirs.
+//!
+//! **Under `"traffic"`**, every real route/call/operation participant drives
+//! its own scenario directly rather than through this module (`active()`
+//! reads `"boot"` alone). Only the declared interposition proxy and the
+//! filtered-view observer still route through here, via
+//! [`full_graph_active`]: neither has a traffic class C8.13 exercises, and the
+//! plain stream broker's delivery loop has no notion of a subscriber that will
+//! never consume again, so parking without a role (`park_only`) is what keeps
+//! either from permanently blocking it.
 //!
 //! Each participant keeps its own identity and its own generation-provisioned
 //! control endpoint. This module removes the per-scenario traffic, never the
@@ -34,6 +46,20 @@ const CONTROL_SLOT: u32 = 0;
 /// Whether the authenticated generation declares the full-graph boot action.
 pub fn active() -> bool {
     generation_profile::GENERATION_BOOT_ACTION == "boot"
+}
+
+/// Whether the authenticated generation declares either full-graph
+/// composition: C8.10's parked boot action, or C8.13's concurrent traffic
+/// action, which reuses the identical partition to run real transport
+/// instead. Distinct from [`active`]: a route/call/operation participant asks
+/// for real traffic under `"traffic"` and only parks under `"boot"`, but the
+/// two C8.10-only structural roles this module also serves through
+/// `park_only` -- the declared interposition proxy and the filtered-view
+/// observer -- have no traffic class of their own under either action. Their
+/// real behavior is C8.8's and C8.12's to exercise, under the `visibility`
+/// and `matrix` actions respectively, so both actions here still park them.
+pub fn full_graph_active() -> bool {
+    active() || generation_profile::GENERATION_BOOT_ACTION == "traffic"
 }
 
 fn fail(name: &[u8], reason: &[u8]) -> ! {

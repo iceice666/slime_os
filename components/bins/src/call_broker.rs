@@ -81,6 +81,23 @@ enum Payload {
     },
 }
 
+impl Payload {
+    /// The shared-buffer capability this payload is currently holding, if any.
+    ///
+    /// Every variant that names a `buffer_slot` is a live loan against the
+    /// fabric's declared buffer/mapping/loan quota; `None`, `Inline`, and
+    /// `InlineReply` hold nothing beyond the call record itself.
+    fn buffer_slot(&self) -> Option<u32> {
+        match self {
+            Payload::Shared { buffer_slot, .. }
+            | Payload::SharedOutstanding { buffer_slot, .. }
+            | Payload::CancellingShared { buffer_slot, .. }
+            | Payload::SharedReply { buffer_slot, .. } => Some(*buffer_slot),
+            Payload::None | Payload::Inline(_) | Payload::InlineReply(_) => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct Call {
     phase: Phase,
@@ -137,6 +154,15 @@ pub struct Broker {
     /// `high_water` above, which is a per-client request-id watermark used for
     /// duplicate suppression and is not an occupancy at all.
     peak_calls: u32,
+    /// The most calls this run ever held a shared-buffer-backed payload at
+    /// once. Distinct from `peak_calls`: a call can be `Phase::Forwarding`
+    /// with an inline payload and never touch this count at all.
+    peak_buffers: u32,
+    /// The most retry attempts any single call reached. Cumulative rather than
+    /// an occupancy — a retry count never decreases within a call's life — so
+    /// unlike the two counters above it carries no baseline record: there is
+    /// no "back to zero" a retry ceiling reports.
+    peak_retries: u32,
     next_server_request_id: u64,
     now_ns: u64,
     pending_terminals: [Option<Call>; MAX_PENDING_TERMINALS],
@@ -188,6 +214,8 @@ impl Broker {
             calls: [Call::EMPTY; MAX_CALLS],
             high_water: [0; 2],
             peak_calls: 0,
+            peak_buffers: 0,
+            peak_retries: 0,
             next_server_request_id: 1,
             now_ns: 0,
             pending_terminals: [None; MAX_PENDING_TERMINALS],
@@ -201,7 +229,8 @@ impl Broker {
         }
     }
 
-    /// Record the live-call occupancy if this sweep set a new peak.
+    /// Record the live-call, live-buffer, and retry-ceiling occupancy if this
+    /// sweep set a new peak.
     ///
     /// Sampled once per sweep rather than at each claim site: a sweep can admit
     /// and settle several calls, and the number worth reporting is how many were
@@ -214,6 +243,24 @@ impl Broker {
             .count() as u32;
         if live > self.peak_calls {
             self.peak_calls = live;
+        }
+        let buffers = self
+            .calls
+            .iter()
+            .filter(|call| call.phase != Phase::Free && call.payload.buffer_slot().is_some())
+            .count() as u32;
+        if buffers > self.peak_buffers {
+            self.peak_buffers = buffers;
+        }
+        let retries = self
+            .calls
+            .iter()
+            .filter(|call| call.phase != Phase::Free)
+            .map(|call| call.retries as u32)
+            .max()
+            .unwrap_or(0);
+        if retries > self.peak_retries {
+            self.peak_retries = retries;
         }
     }
 
@@ -261,13 +308,32 @@ impl Broker {
             {
                 // The sink's mandatory terminal: a reader that sees this knows
                 // the trace is complete rather than truncated by a wedge.
-                // Resource evidence before the terminal: the most calls this run
-                // ever held live at once. The table's *capacity* would be the
-                // same number in every boot and every graph, so it would carry
-                // no evidence: an occupancy regression would not change it.
+                // Resource evidence before the terminal: the most calls and
+                // shared buffers this run ever held live at once, each paired
+                // with the count held right here — which the loop's own exit
+                // condition already establishes is zero, since every call is
+                // `Phase::Free`. The table's *capacity* would be the same
+                // number in every boot and every graph, so it would carry no
+                // evidence: an occupancy regression would not change it.
+                // Retries are cumulative rather than held-and-released, so they
+                // carry only the one high-water record.
                 let _ = self
                     .trace
                     .resource(slime_proto::fabric_trace::RESOURCE_CALLS, self.peak_calls);
+                let _ = self.trace.resource(
+                    slime_proto::fabric_trace::RESOURCE_BUFFERS,
+                    self.peak_buffers,
+                );
+                let _ = self.trace.resource(
+                    slime_proto::fabric_trace::RESOURCE_RETRIES,
+                    self.peak_retries,
+                );
+                let _ = self
+                    .trace
+                    .resource(slime_proto::fabric_trace::RESOURCE_CALLS, 0);
+                let _ = self
+                    .trace
+                    .resource(slime_proto::fabric_trace::RESOURCE_BUFFERS, 0);
                 let _ = self.trace.terminal();
                 self.trace.flush(b"call");
                 slime_rt::debug_write(b"[fabric] call state reclaimed\n");

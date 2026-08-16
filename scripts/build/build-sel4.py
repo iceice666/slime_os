@@ -63,6 +63,8 @@ MATRIX_UNSATISFIABLE_IMAGE = BUILD_ROOT / "slime-sel4-matrix-unsatisfiable.elf"
 MATRIX_UNSATISFIABLE_MANIFEST = BUILD_ROOT / "slime-sel4-matrix-unsatisfiable.identity.json"
 BOOT_IMAGE = BUILD_ROOT / "slime-sel4-boot.elf"
 BOOT_MANIFEST = BUILD_ROOT / "slime-sel4-boot.identity.json"
+TRAFFIC_IMAGE = BUILD_ROOT / "slime-sel4-traffic.elf"
+TRAFFIC_MANIFEST = BUILD_ROOT / "slime-sel4-traffic.identity.json"
 STORAGE_IMAGE = BUILD_ROOT / "slime-sel4-storage.elf"
 STORAGE_MANIFEST = BUILD_ROOT / "slime-sel4-storage.identity.json"
 STORE_IMAGE = BUILD_ROOT / "slime-sel4-store.elf"
@@ -119,6 +121,7 @@ VISIBILITY_VARIANT = "visibility"
 MATRIX_VARIANT = "matrix"
 MATRIX_UNSATISFIABLE_VARIANT = "matrix-unsatisfiable"
 BOOT_VARIANT = "boot"
+TRAFFIC_VARIANT = "traffic"
 STORAGE_VARIANT = "storage"
 STORE_VARIANT = "store"
 ROLLBACK_VARIANT = "rollback"
@@ -149,6 +152,7 @@ VARIANT_MANIFESTS = {
     MATRIX_VARIANT: "sel4-matrix",
     MATRIX_UNSATISFIABLE_VARIANT: "sel4-matrix-unsatisfiable",
     BOOT_VARIANT: "sel4-boot",
+    TRAFFIC_VARIANT: "sel4-traffic",
     STORAGE_VARIANT: "sel4-storage",
     STORE_VARIANT: "sel4-store",
     ROLLBACK_VARIANT: "sel4-rollback",
@@ -181,6 +185,7 @@ VARIANT_TARGET_DIRS = {
     MATRIX_VARIANT: "root-matrix",
     MATRIX_UNSATISFIABLE_VARIANT: "root-matrix-unsatisfiable",
     BOOT_VARIANT: "root-boot",
+    TRAFFIC_VARIANT: "root-traffic",
     STORAGE_VARIANT: "root-storage",
     STORE_VARIANT: "root-store",
     ROLLBACK_VARIANT: "root-rollback",
@@ -216,6 +221,7 @@ VARIANT_IMAGES = {
         MATRIX_UNSATISFIABLE_MANIFEST,
     ),
     BOOT_VARIANT: (BOOT_IMAGE, BOOT_MANIFEST),
+    TRAFFIC_VARIANT: (TRAFFIC_IMAGE, TRAFFIC_MANIFEST),
     STORAGE_VARIANT: (STORAGE_IMAGE, STORAGE_MANIFEST),
     STORE_VARIANT: (STORE_IMAGE, STORE_MANIFEST),
     ROLLBACK_VARIANT: (ROLLBACK_IMAGE, ROLLBACK_MANIFEST),
@@ -1128,6 +1134,15 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--traffic-plane",
+        action="store_true",
+        help=(
+            "embed the concurrent cross-plane traffic generation (C8.13): the "
+            "C8.10 three-worker layout driving real stream, call, and operation "
+            "traffic together, writing a separate image"
+        ),
+    )
+    parser.add_argument(
         "--storage-plane",
         action="store_true",
         help=(
@@ -1245,6 +1260,7 @@ def main() -> None:
             (MATRIX_VARIANT, arguments.matrix_plane),
             (MATRIX_UNSATISFIABLE_VARIANT, arguments.matrix_unsatisfiable_plane),
             (BOOT_VARIANT, arguments.boot_plane),
+            (TRAFFIC_VARIANT, arguments.traffic_plane),
             (STORAGE_VARIANT, arguments.storage_plane),
             (STORE_VARIANT, arguments.store_plane),
             (ROLLBACK_VARIANT, arguments.rollback_plane),

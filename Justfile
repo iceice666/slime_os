@@ -201,6 +201,13 @@ sel4_visibility_check: sel4_pin_check
 sel4_matrix_check: sel4_pin_check
     python3 scripts/check/check-sel4-matrix-plane.py
 
+# C8.13: build the traffic-plane image -- the identical C8.10 collision-free
+# partition, carrying real stream, call, and operation traffic concurrently
+# instead of parking -- boot it, and require every declared resource ceiling
+# to emit bounded high-water evidence with nothing dropped or rejected.
+sel4_traffic_check: sel4_pin_check
+    python3 scripts/check/check-sel4-traffic-plane.py
+
 # P5.4.9 and C8.10: build the full-graph image, boot it, and require every C8
 # role to launch at once in one collision-free layout — the stream, call, and
 # operation planes in disjoint slots, the fabric split into three bounded route
@@ -564,6 +571,9 @@ data_fabric_boot_check: sel4_boot_check
 
 # C8.12's roadmap-named gate.
 data_fabric_matrix_check: sel4_matrix_check
+
+# C8.13's roadmap-named gate.
+data_fabric_traffic_check: sel4_traffic_check
 
 # C8.11's roadmap-named gate. Both halves: the contract and its declared sink
 # bounds are validated on the host, and the emitted trace is observed on the

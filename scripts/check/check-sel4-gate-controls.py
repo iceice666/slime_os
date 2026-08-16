@@ -97,6 +97,14 @@ GATES: tuple[tuple[str, str, int], ...] = (
     ("sel4_operation_plane", "check/check-sel4-operation-plane.py", 53),
     ("sel4_visibility_plane", "check/check-sel4-visibility-plane.py", 25),
     ("sel4_matrix_plane", "check/check-sel4-matrix-plane.py", 24),
+    # C8.13: three chains -- admission, init's single-threaded spawn order, and
+    # the close -- deliberately short. Everything a genuinely concurrent
+    # schedule cannot guarantee an order for (per-plane traffic markers,
+    # resource evidence, which of three workers settles first) is checked as
+    # membership by `check_resources`/`check_concurrency`/`check_task_lifecycle`
+    # instead, on B55's rule: a chain that pinned a scheduling accident would
+    # be a flaky gate, not a stronger one.
+    ("sel4_traffic_plane", "check/check-sel4-traffic-plane.py", 10),
     # B55: the full-graph boot restoration moved the seven racy cross-task
     # stream markers (a broker per-edge print racing a participant's own
     # summary print differently for one-route vs two-route participants) out

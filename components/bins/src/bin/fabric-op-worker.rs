@@ -37,6 +37,11 @@ const CLIENT_A_SUPERVISION_SLOT: u32 = 8;
 const CLIENT_B_SUPERVISION_SLOT: u32 = 9;
 const SERVER_SUPERVISION_SLOT: u32 = 10;
 const REPLACEMENT_SUPERVISION_SLOT: u32 = 11;
+/// C8.13: the concurrent traffic plane drives the real restart scenario, so
+/// this worker needs the release-barrier endpoint the standalone C8.7 plane
+/// declares. The boot-parked plane never reached `pump_replacement`'s
+/// admission arm (client B parks rather than exiting), so it never needed one.
+const RESTART_START_SLOT: u32 = 12;
 
 fn main(_startup_arg: u32) {
     operation_broker::Broker::new(
@@ -44,7 +49,7 @@ fn main(_startup_arg: u32) {
         SERVER_SLOT,
         TIME_SLOT,
         REPLACEMENT_SLOT,
-        None,
+        Some(RESTART_START_SLOT),
         BACKUP_ROUTE_SLOT,
         [
             CLIENT_A_SUPERVISION_SLOT,

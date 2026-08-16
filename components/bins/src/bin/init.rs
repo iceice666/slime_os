@@ -178,6 +178,8 @@ mod boot_action {
     pub const STRESS: u32 = 26;
     /// C8.12's matching, visibility, and denial matrix.
     pub const MATRIX: u32 = 27;
+    /// C8.13's concurrent cross-plane traffic and resource ceilings.
+    pub const TRAFFIC: u32 = 28;
 
     // The table above is a hand copy of the contract's numbering, and the two
     // are an ABI: the root passes one of these words to this thread and this
@@ -212,6 +214,7 @@ mod boot_action {
     const _: () = assert!(VISIBILITY == BootAction::Visibility.id());
     const _: () = assert!(STRESS == BootAction::Stress.id());
     const _: () = assert!(MATRIX == BootAction::Matrix.id());
+    const _: () = assert!(TRAFFIC == BootAction::Traffic.id());
 }
 
 /// Compose the graph the generation selected.
@@ -287,6 +290,7 @@ fn compose_declared_graph(startup_arg: u32) {
             slime_rt::debug_write(b"[init] matrix plane complete\n");
             slime_rt::exit(0)
         }
+        action::TRAFFIC => drive_traffic_plane(),
         action::STORAGE => {
             drive_storage_plane();
             slime_rt::debug_write(b"[init] storage plane complete\n");
@@ -602,6 +606,139 @@ fn drive_boot_plane() -> ! {
             _ => fail_boot(b"fabric left healthy idle"),
         }
     }
+}
+
+/// Drive the C8.13 concurrent traffic plane: the C8.10 three-worker layout,
+/// spawned exactly as `drive_boot_plane` spawns it, driving every non-parked
+/// worker's real scenario at once instead of parking.
+///
+/// Only reachable for the authenticated `traffic` action declared by
+/// `contracts/generation/v1/fixtures/sel4-traffic.zti`, which is
+/// `sel4-boot.zti` with `bootAction`/`generation` changed plus the additional
+/// grants real traffic needs that the parked boot scenario never exercised:
+/// call-plane phase-barrier edges, an operation-plane restart-release edge,
+/// three shared-buffer factories, and `transferable = true` on the call
+/// control grants (a downstream loan crosses authority, so delegating one
+/// needs the right the parked scenario never asked for). The milestone's
+/// requirement is that the *same* declared partition C8.10 already proved
+/// collision-free now carries real call and operation traffic concurrently
+/// with *untimed* stream traffic (`fabric_boot::active()` reading `"traffic"`
+/// differently than `"boot"` is what makes every participant but the observer
+/// and proxy run its real per-plane scenario instead of
+/// `provision_and_park`/`park_only`) under one fixed schedule. QoS-timed
+/// stream traffic is deliberately absent: `fabric-service::qos_check` stays
+/// `"qos"`-only, because timing it here needs its own generation-level
+/// clock-grant wiring this milestone does not yet do -- see the C8.13 devlog
+/// entry's open risks.
+///
+/// **Why `wait_clean` and not `drive_boot_plane`'s infinite idle loop.** The
+/// boot plane's participants never produce traffic, so its brokers never
+/// reach their own `finished()` and the plane is a permanent snapshot a gate
+/// inspects from outside. Here every participant runs its real scenario to
+/// completion, so every worker's own `run()` returns and every handle below
+/// is expected to settle clean -- the ordinary completion path every other
+/// concurrent plane in this file uses.
+fn drive_traffic_plane() -> ! {
+    slime_rt::debug_write(b"[init] traffic control channels minted\n");
+    let publisher = spawn_boot(FABRIC_PUBLISHER_SLOT);
+    let subscriber = spawn_boot(FABRIC_SUBSCRIBER_SLOT);
+    let publisher_b = spawn_boot_with(
+        FABRIC_PUBLISHER_B_SLOT,
+        &[grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE)],
+    );
+    let subscriber_b = spawn_boot(FABRIC_SUBSCRIBER_B_SLOT);
+    let observer = spawn_boot(FABRIC_OBSERVER_SLOT);
+    let proxy = spawn_boot(FABRIC_PROXY_SLOT);
+    let probe = spawn_boot(FABRIC_PROBE_SLOT);
+    slime_rt::debug_write(b"[init] traffic stream participants spawned\n");
+
+    let fabric = spawn_boot_with(
+        FABRIC_SERVICE_SLOT,
+        &[
+            grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
+            grant(publisher, RIGHT_SUPERVISE),
+            grant(subscriber, RIGHT_SUPERVISE),
+            grant(publisher_b, RIGHT_SUPERVISE),
+            grant(subscriber_b, RIGHT_SUPERVISE),
+            grant(observer, RIGHT_SUPERVISE),
+            grant(proxy, RIGHT_SUPERVISE),
+        ],
+    );
+    slime_rt::debug_write(b"[init] traffic stream broker spawned\n");
+
+    let call_client = spawn_boot_with(
+        FABRIC_CALL_CLIENT_SLOT,
+        &[grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE)],
+    );
+    let call_client_b = spawn_boot(FABRIC_CALL_CLIENT_B_SLOT);
+    let call_server = spawn_boot_with(
+        FABRIC_CALL_SERVER_SLOT,
+        &[grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE)],
+    );
+    let call_time = spawn_boot(FABRIC_CALL_TIME_SLOT);
+    let call_worker = spawn_boot_with(
+        FABRIC_CALL_WORKER_SLOT,
+        &[
+            grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
+            grant(call_client, RIGHT_SUPERVISE),
+            grant(call_client_b, RIGHT_SUPERVISE),
+            grant(call_server, RIGHT_SUPERVISE),
+        ],
+    );
+    slime_rt::debug_write(b"[init] traffic call plane spawned\n");
+
+    let op_client = spawn_boot(FABRIC_OP_CLIENT_SLOT);
+    let op_client_b = spawn_boot(FABRIC_OP_CLIENT_B_SLOT);
+    let op_server = spawn_boot(FABRIC_OP_SERVER_SLOT);
+    let op_time = spawn_boot(FABRIC_OP_TIME_SLOT);
+    let op_restart = spawn_boot(FABRIC_OP_CLIENT_B_RESTART_SLOT);
+    let op_worker = spawn_boot_with(
+        FABRIC_OP_WORKER_SLOT,
+        &[
+            grant(op_client, RIGHT_SUPERVISE),
+            grant(op_client_b, RIGHT_SUPERVISE),
+            grant(op_server, RIGHT_SUPERVISE),
+            grant(op_restart, RIGHT_SUPERVISE),
+        ],
+    );
+    slime_rt::debug_write(b"[init] traffic operation plane spawned\n");
+    slime_rt::debug_write(b"[init] traffic graph spawned with static endpoints\n");
+
+    // Neither the proxy nor the observer ever contacts the stream broker under
+    // `"traffic"` (`fabric_boot::full_graph_active` parks both without
+    // requesting a role -- see `fabric-observer::main` and
+    // `fabric-service::traffic_graph` for why the observer cannot join real
+    // delivery here the way `boot_graph`'s permanently parked copy safely
+    // does), so both are the spawned tasks this plane does not wait to exit --
+    // each is expected to still be healthy-idle once everything else has
+    // settled.
+    wait_clean(&[
+        publisher,
+        subscriber,
+        publisher_b,
+        subscriber_b,
+        probe,
+        fabric,
+        call_client,
+        call_client_b,
+        call_server,
+        call_time,
+        call_worker,
+        op_client,
+        op_client_b,
+        op_server,
+        op_time,
+        op_restart,
+        op_worker,
+    ]);
+    for parked in [proxy, observer] {
+        match slime_rt::supervision_status(parked) {
+            Ok(None) => {}
+            _ => fail_boot(b"parked participant left healthy idle"),
+        }
+    }
+    slime_rt::debug_write(b"[init] traffic plane reclaimed\n");
+    slime_rt::exit(0)
 }
 
 /// Spawn one boot participant that its manifest grants nothing, returning the

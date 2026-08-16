@@ -363,6 +363,9 @@ fn a_resource_record_must_name_which_count_it_carries() {
         fabric_trace::RESOURCE_CALLS,
         fabric_trace::RESOURCE_SINK_DROPPED,
         fabric_trace::RESOURCE_ROLES,
+        fabric_trace::RESOURCE_BUFFERS,
+        fabric_trace::RESOURCE_RETRIES,
+        fabric_trace::RESOURCE_RETAINED,
         fabric_trace::RESOURCE_COMPLETE,
     ] {
         record.event = counter;

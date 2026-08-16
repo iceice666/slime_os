@@ -265,3 +265,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-15 | [C8.11 — a deterministic trace, and the five ways a silent record hides](2026-08-15-c8-11-semantic-trace/index.md) | Change | Verified | C8.11, B55 |
 | 2026-08-15 | [B55 — the full-graph boot plane refused its own first spawn, then six more defects behind it](2026-08-15-b55-full-graph-boot-restoration/index.md) | Defect | Verified | C8.10, B55 |
 | 2026-08-15 | [C8.12 — one graph, every mismatch, and the two mutual waits it took to serve it](2026-08-15-c8-12-matrix/index.md) | Change | Verified | C8.12 |
+| 2026-08-15 | [C8.13 — concurrent cross-plane traffic, nine gaps C8.10's parked boot never exercised, and an honestly partial exit](2026-08-15-c8-13-traffic/index.md) | Change | Verified | C8.13 |

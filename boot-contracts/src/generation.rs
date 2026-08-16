@@ -164,6 +164,8 @@ pub enum BootAction {
     Stress = 26,
     /// C8.12's matching, visibility, and denial matrix.
     Matrix = 27,
+    /// C8.13's concurrent cross-plane traffic and resource ceilings.
+    Traffic = 28,
 }
 
 impl BootAction {
@@ -200,6 +202,7 @@ impl BootAction {
             "transfer" => Self::Transfer,
             "visibility" => Self::Visibility,
             "matrix" => Self::Matrix,
+            "traffic" => Self::Traffic,
             _ => return None,
         })
     }
@@ -2556,6 +2559,7 @@ mod tests {
             (BootAction::Transfer, 24),
             (BootAction::Visibility, 25),
             (BootAction::Matrix, 27),
+            (BootAction::Traffic, 28),
         ] {
             assert_eq!(action.id(), id, "{action:?} changed its ABI number");
         }

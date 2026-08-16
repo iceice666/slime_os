@@ -55,7 +55,7 @@ fn fail(reason: &[u8]) -> ! {
 }
 
 fn main(_startup_arg: u32) {
-    if slime_components::fabric_boot::active() {
+    if slime_components::fabric_boot::full_graph_active() {
         // The full-graph boot runs the ordinary stream broker, which provisions
         // *route participants*. This component is declared as an interposition
         // hop on the telemetry chain rather than a participant on it, so the

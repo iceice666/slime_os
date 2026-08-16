@@ -14,7 +14,7 @@ A milestone is complete only when its exit condition is observed. Compiled code,
 | --- | --- | --- |
 | [Backlog](00-backlog.md) | B1–B55 resolved; backlog clear | none open |
 | [Foundations](01-foundations.md) | M1–M4 and M6 complete; M5 mechanisms complete except M5.7 physical Framework evidence | M5.7 requires observed removable-media Framework boot without internal-NVMe writes |
-| [Core runtime](02-core-runtime.md) | C7 and C8.1–C8.12 complete; C8.12's matching, visibility, and denial matrix now passes on the seL4 product path (2026-08-15) | C8.13: concurrent cross-plane traffic and resource ceilings |
+| [Core runtime](02-core-runtime.md) | C7 and C8.1–C8.12 complete; C8.13 concurrent cross-plane traffic in progress (stream+call+operation run concurrently with 6 of 11 declared resource classes evidenced, 2026-08-15) | C8.13 remaining: queue/history/event/mapping/loan/capability resource evidence, timed-QoS stream concurrency, saturation testing |
 | [RPi5 ROS 2 demo](09-rpi5-ros2-demo.md) | RP0 and RP1 complete; RP2–RP8 planned | Rewrite RP2 around the seL4 product boundary before implementation; its current low-level deliverables describe the retired custom kernel |
 | [Architecture portability](07-architecture-portability.md) | P0, P1, P2.1, P2.2, and P5 complete; P2.3–P2.6 superseded by P5 | P4 physical Raspberry Pi 5 qualification is the next architecture evidence gate |
 | [ROS 2 compatibility](03-ros2-compatibility.md) | Not started | R0 minimal DDS/RTPS topic profile is first; broader external/multi-vendor compatibility follows after the RPi5 demo path |

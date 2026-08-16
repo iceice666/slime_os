@@ -43,7 +43,9 @@ fn main(_startup_arg: u32) {
         // role: a v2 ring loan carries data and credit in one shared region, so
         // provisioning an edge is one `capability_delegate`, matching every
         // other single-route stream participant (`fabric-publisher`,
-        // `fabric-subscriber`). Its filtered *view* is C8.8's property to
+        // `fabric-subscriber`). Safe because `boot_graph` never calls `broker`:
+        // nothing ever tries to deliver a real sample to this permanently
+        // parked subscription. Its filtered *view* is C8.8's property to
         // prove; what this gate needs from it is that it exists as its own
         // task with its own grants.
         slime_components::fabric_boot::provision_and_park(
@@ -58,6 +60,19 @@ fn main(_startup_arg: u32) {
             boot_contracts::fabric_graph::DIRECTION_SUBSCRIBE,
             1,
         );
+    }
+    if slime_components::fabric_boot::full_graph_active() {
+        // C8.13's concurrent traffic plane calls `broker` for a real relay
+        // loop, unlike `boot_graph`. A subscription that never drains would
+        // wedge it forever: `deliver` retries a *blocking* send to whichever
+        // control endpoint a matched subscriber's role names, with no notion
+        // of "this peer will never consume again", so requesting the role at
+        // all here would eventually block the broker delivering this
+        // component's queued sample and starve every other subscriber behind
+        // it. Parking without asking is exactly the declared interposition
+        // proxy's treatment, and `traffic_graph` pre-marks this component
+        // answered the same way it does the proxy.
+        slime_components::fabric_boot::park_only(b"fabric-observer");
     }
     if slime_components::fabric_matrix::active() {
         matrix_main();

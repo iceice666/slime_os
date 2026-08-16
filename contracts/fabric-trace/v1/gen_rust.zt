@@ -34,6 +34,9 @@ Protocol :: type {
   resourceCalls : Int;
   resourceSinkDropped : Int;
   resourceRoles : Int;
+  resourceBuffers : Int;
+  resourceRetries : Int;
+  resourceRetained : Int;
   resourceComplete : Int;
   maxResourceCounter : Int;
   graphViewAnswered : Int;
@@ -188,6 +191,9 @@ rustBindings :: Protocol -> Text
     w.u32Const "RESOURCE_CALLS" p.resourceCalls;
     w.u32Const "RESOURCE_SINK_DROPPED" p.resourceSinkDropped;
     w.u32Const "RESOURCE_ROLES" p.resourceRoles;
+    w.u32Const "RESOURCE_BUFFERS" p.resourceBuffers;
+    w.u32Const "RESOURCE_RETRIES" p.resourceRetries;
+    w.u32Const "RESOURCE_RETAINED" p.resourceRetained;
     w.u32Const "RESOURCE_COMPLETE" p.resourceComplete;
     w.u32Const "MAX_RESOURCE_COUNTER" p.maxResourceCounter;
     "\n";
@@ -265,7 +271,16 @@ pythonBindings :: Protocol -> Text
     "FABRIC_TRACE_ORDER_ACK = "; n.toText p.orderAck; "\n";
     "FABRIC_TRACE_ORDER_PEER_DEATH = "; n.toText p.orderPeerDeath; "\n";
     "FABRIC_TRACE_ORDER_TIME = "; n.toText p.orderTime; "\n";
+    "FABRIC_TRACE_RESOURCE_FRAMES = "; n.toText p.resourceFrames; "\n";
+    "FABRIC_TRACE_RESOURCE_OPERATIONS = "; n.toText p.resourceOperations; "\n";
+    "FABRIC_TRACE_RESOURCE_CALLS = "; n.toText p.resourceCalls; "\n";
+    "FABRIC_TRACE_RESOURCE_SINK_DROPPED = "; n.toText p.resourceSinkDropped; "\n";
+    "FABRIC_TRACE_RESOURCE_ROLES = "; n.toText p.resourceRoles; "\n";
+    "FABRIC_TRACE_RESOURCE_BUFFERS = "; n.toText p.resourceBuffers; "\n";
+    "FABRIC_TRACE_RESOURCE_RETRIES = "; n.toText p.resourceRetries; "\n";
+    "FABRIC_TRACE_RESOURCE_RETAINED = "; n.toText p.resourceRetained; "\n";
     "FABRIC_TRACE_RESOURCE_COMPLETE = "; n.toText p.resourceComplete; "\n";
+    "FABRIC_TRACE_MAX_RESOURCE_COUNTER = "; n.toText p.maxResourceCounter; "\n";
   };
 
 render :: Protocol -> { rust : Text; python : Text; }

@@ -241,8 +241,8 @@ Two isolated components exchange and return a payload larger than the kernel IPC
 
 ## C8: Native typed data fabric
 
-**Status:** In progress. C8.1–C8.11 are complete; C8.1–C8.8 are gated by `just
-interface_schema_check`, `just fabric_manifest_check`, `just
+**Status:** In progress. C8.1–C8.12 are complete; C8.13 is in progress. C8.1–C8.8
+are gated by `just interface_schema_check`, `just fabric_manifest_check`, `just
 fabric_authority_check`, `just fabric_stream_check`, `just fabric_qos_check`,
 `just fabric_call_check`, `just fabric_operation_check`, and `just
 fabric_visibility_check`. The former single C8.9 integration slice is
@@ -999,7 +999,26 @@ declared interposition remains the only route path.
 
 ### C8.13 — Concurrent cross-plane traffic and resource ceilings
 
-**Status:** Not started.
+**Status:** In progress. `just sel4_traffic_check` (`just data_fabric_traffic_check`)
+boots a new `"traffic"` action reusing C8.10's exact three-worker partition
+(`sel4-traffic.zti` is `sel4-boot.zti` with `bootAction`/`generation` changed
+plus the additional grants real traffic needs) and requires the stream, call,
+and operation planes to complete their own bounded C8.4-C8.9 scenarios
+concurrently, observably interleaved rather than three sequential phases. Six
+of the eleven declared resource classes emit bounded peak(+baseline) evidence
+through the C8.11 trace sink: frames, shared buffers, retries, in-flight
+calls, in-flight operations, and retained operation results. Getting this far
+required fixing nine latent gaps C8.10's parked boot plane never exercised —
+see `devlog/2026-08-15-c8-13-traffic/index.md`.
+
+Not yet done, and explicitly out of scope for this pass: queue/history/event/
+mapping/loan/capability-slot resource evidence (5 of the 11 declared classes);
+QoS-timed stream traffic running concurrently with call/operation (dropped
+after its clock-grant wiring proved to need its own multi-step discovery, and
+because C8.5's own gate already proves the timed scenario in isolation); and a
+saturation/stress scenario that deliberately drives every ceiling to its
+manifest bound at once. Each remains a real gap against this milestone's
+exit condition below, not a redefinition of it.
 
 **Depends on:** C8.11 and C8.12.
 

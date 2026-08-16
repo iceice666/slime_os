@@ -209,6 +209,9 @@ pub struct Broker {
     /// unchanged. Distinct from `high_water` above, which is a per-client
     /// operation-id watermark for duplicate suppression.
     peak_operations: u32,
+    /// The most terminal results this broker has ever retained live at once,
+    /// awaiting retrieval or expiry.
+    peak_retained: u32,
     client_sessions: [u64; CLIENTS],
     next_server_operation_id: u64,
     next_retained_age: u64,
@@ -253,6 +256,7 @@ impl Broker {
             deferred_requests: [None; CLIENTS],
             high_water: [0; CLIENTS],
             peak_operations: 0,
+            peak_retained: 0,
             client_sessions: [client_session(0), client_session(1)],
             next_server_operation_id: 1,
             next_retained_age: 1,
@@ -302,7 +306,8 @@ impl Broker {
         );
     }
 
-    /// Record the live-operation occupancy if this sweep set a new peak.
+    /// Record the live-operation and retained-result occupancy if this sweep
+    /// set a new peak.
     ///
     /// Sampled between sweeps rather than at each claim site: a sweep can start
     /// and settle several operations, and what is worth reporting is how many
@@ -315,6 +320,10 @@ impl Broker {
             .count() as u32;
         if live > self.peak_operations {
             self.peak_operations = live;
+        }
+        let retained = self.retained.iter().filter(|entry| entry.live).count() as u32;
+        if retained > self.peak_retained {
+            self.peak_retained = retained;
         }
     }
 
@@ -380,13 +389,31 @@ impl Broker {
             progressed |= self.pump_backup_route();
             progressed |= self.pump_time();
             if self.finished() {
-                // The most operations this run ever held live at once. The
-                // table's capacity would be the same number in every boot, so it
-                // would carry no evidence at all.
+                // The most operations this run ever held live at once, paired
+                // with the count held right here -- which `finished` already
+                // establishes is zero, since every operation is `Phase::Free`.
+                // The table's *capacity* would be the same number in every
+                // boot, so it would carry no evidence at all.
                 let _ = self.trace.resource(
                     slime_proto::fabric_trace::RESOURCE_OPERATIONS,
                     self.peak_operations,
                 );
+                let _ = self
+                    .trace
+                    .resource(slime_proto::fabric_trace::RESOURCE_OPERATIONS, 0);
+                // Retained results are the one table `finished` does not
+                // require empty: an unclaimed result stays live until it
+                // expires even after every client is gone, since expiry -- not
+                // client presence -- is what ends its retrievability window. So
+                // the baseline here is read fresh rather than assumed zero.
+                let _ = self.trace.resource(
+                    slime_proto::fabric_trace::RESOURCE_RETAINED,
+                    self.peak_retained,
+                );
+                let live_retained = self.retained.iter().filter(|entry| entry.live).count() as u32;
+                let _ = self
+                    .trace
+                    .resource(slime_proto::fabric_trace::RESOURCE_RETAINED, live_retained);
                 let _ = self.trace.terminal();
                 self.trace.flush(b"operation");
                 slime_rt::debug_write(b"[fabric] operation state reclaimed\n");
@@ -502,10 +529,14 @@ impl Broker {
         self.clients[client] = Some(self.replacement_control);
         self.supervision[client] = self.replacement_supervision;
         self.replacement_control_closed = true;
-        // The operation plane supplies a generation-declared restart barrier.
-        // The full-boot worker has no such edge because its replacement parks;
-        // reaching replacement admission there is therefore a composition
-        // failure rather than permission to guess a slot in another CSpace.
+        // Every caller of `Broker::new` declares this barrier now: the
+        // standalone C8.7 plane names it directly, and C8.13's worker names
+        // its own copy (`fabric-op-worker::RESTART_START_SLOT`) since it drives
+        // the same restart scenario for real. `None` stays representable only
+        // because the boot-parked plane's replacement never exits and so never
+        // reaches this arm; reaching it with no barrier declared would be a
+        // composition failure, not permission to guess a slot in another
+        // CSpace.
         let Some(start) = self.replacement_start else {
             fail(b"replacement start absent")
         };

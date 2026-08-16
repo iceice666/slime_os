@@ -280,6 +280,12 @@ SEL4_MANIFESTS = {
     / "v1"
     / "fixtures"
     / "sel4-boot.zti",
+    "sel4-traffic": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-traffic.zti",
     "sel4-matrix": ROOT
     / "contracts"
     / "generation"

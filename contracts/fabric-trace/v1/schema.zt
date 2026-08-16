@@ -52,13 +52,39 @@ maxKind :: Int = 10;
 -- counted -- so the `event` field on a resource record names the counter rather
 -- than being reused as a QoS event code. `sinkDropped` is the sink reporting on
 -- itself; the rest are the bounded tables a worker holds.
+--
+-- C8.13 records each of `resourceBuffers`, `resourceRetries`, and
+-- `resourceRetained` *twice* per worker under its own code where the counted
+-- table is held-and-released (buffers, retained results): once as the
+-- historical peak, taken while traffic runs, and again -- always later, since
+-- a worker's own clock only advances -- as the value observed once the
+-- scenario has drained, right before the terminal record. `resourceRetries`
+-- is cumulative rather than held-and-released and carries only the peak. Two
+-- records under one counter rather than a distinct baseline code, because the
+-- fact a reader needs is "this counter, then and now", and the total order
+-- the format already guarantees (a worker's own records are non-decreasing in
+-- `now_ns`/`sequence`) is what tells the two apart without adding a bit whose
+-- only job would be restating that order.
+--
+-- Emission of these three counters is per-plane, not unconditional per
+-- worker: a worker records one only when its own generation drives the
+-- traffic that makes the counter meaningful and declares enough `traceDepth`
+-- to carry it. The stream worker, for one, records `resourceBuffers` only
+-- under the concurrent-traffic action and never `resourceRetries` at all
+-- (`Subscriber::retry_count` advances only under the QoS-timed action this
+-- one does not drive) -- absence from a given trace is silence about a
+-- ceiling that plane's own scenario does not exercise, not a validator
+-- refusal.
 resourceFrames :: Int = 1;
 resourceOperations :: Int = 2;
 resourceCalls :: Int = 3;
 resourceSinkDropped :: Int = 4;
 resourceRoles :: Int = 5;
-resourceComplete :: Int = 6;
-maxResourceCounter :: Int = 6;
+resourceBuffers :: Int = 6;
+resourceRetries :: Int = 7;
+resourceRetained :: Int = 8;
+resourceComplete :: Int = 9;
+maxResourceCounter :: Int = 9;
 
 -- What a `visibility` or `interposition` record's `event` names. Both families
 -- are graph-shaped -- an edge, no outcome code, and an event saying what was
@@ -164,6 +190,9 @@ format ::= {
   resourceCalls =;
   resourceSinkDropped =;
   resourceRoles =;
+  resourceBuffers =;
+  resourceRetries =;
+  resourceRetained =;
   resourceComplete =;
   maxResourceCounter =;
   graphViewAnswered =;
