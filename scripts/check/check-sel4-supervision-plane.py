@@ -66,7 +66,9 @@ IMAGE_VARIANT = "supervision"
 
 BOOT_TIMEOUT_SECONDS = 180
 MAX_TASKS_SOURCE = ROOT / "slime-root" / "src" / "task.rs"
-INIT_SOURCE = ROOT / "components" / "bins" / "src" / "bin" / "init.rs"
+# B65: the supervision plane's launcher and its bound moved out of init.rs into
+# their own module, so this reads the module that now declares the constant.
+INIT_SOURCE = ROOT / "components" / "bins" / "src" / "supervision_plane.rs"
 
 REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
     (

@@ -16,57 +16,92 @@ at the bottom rather than deleting it.
 
 ## Open
 
-_Opened 2026-08-17 by a structural audit of the whole tree at `35a95b2`, run
-after B56 closed the backlog and the C8 track closed. Every gate was believed
-green; the audit looked for architectural debt rather than failing checks. Seven
-read-only scouts partitioned the tree by ownership and every load-bearing
-measurement was then re-verified directly — three scout claims were rejected on
-measurement and are recorded in the devlog rather than opened here. Evidence:
-`devlog/2026-08-17-structural-audit/`. B67 was found afterwards, while running
-B57's own verification sweep, and had been red before either fix._
+(none)
 
-_B57 and B58 were the two real defects with wrong observable semantics, and B67 —
-found while running B57's verification sweep — was a pair of negative controls
-that could not fail. B59, the highest-leverage structural item, is resolved too:
-the syscall ABI is now one contract. B66, B60, B64, B62, B61, and B63 followed. All
-eleven are in the resolved log below. B65 remains._
+_The 2026-08-17 structural audit opened B57–B67 against a tree whose every gate
+was believed green. All eleven are resolved below. Two were real defects with
+wrong observable semantics (B57's rights mask, B58's hand-copied offsets); B67 was
+a pair of negative controls that could not fail, found while verifying B57; the
+rest was architectural debt that compounded per milestone. Evidence:
+`devlog/2026-08-17-structural-audit/` and the seven entries that follow it._
 
-### B65 — 41 of 52 component binaries exist to drive one gate each
-
-**Status:** Open. **Class:** Unmasked debt (per-gate accretion). **Depends on:**
-none.
-
-**Problem:** `components/bins/Cargo.toml` declares 52 `[[bin]]` targets. About
-11 ship in a real generation (`console`, `dango`, `echo-agent`,
-`powerbox-chooser`, `init`, `spawn-service`, `sel4-filesystem-service`,
-`sel4-generation-manager`, `sel4-generation-client`, `sysinfo`,
-`fabric-service`); the remaining ~41 exist to satisfy one plane gate each. The
-call plane alone owns six (`fabric-call-{client,client-b,client-b-restart,server,time,worker}`)
-and the operation plane six more.
-
-**Evidence (2026-08-17).** The reuse pattern is already understood and applied
-inconsistently: C8.12's matrix plane reused `fabric-publisher`/`fabric-subscriber`
-through a `matrix_main()` branch (`components/bins/src/bin/fabric-publisher.rs:118-121`)
-rather than adding binaries, while the call and operation planes each added a
-full set. Every fixture binary is a `no_std`/`no_main` target carrying its own
-link script, boot-layout slot expectations, and Cargo block.
-
-`init.rs` shows the same accretion at the dispatch level: 2295 lines, of which
-21 `drive_*_plane` launchers are 874 lines (38%), selected by a hand-written
-`match startup_arg` (`:229-395`) that every new plane must edit.
-
-**Proposed fix:** Collapse the call/operation client-server-time-worker families
-into parameterized participants selecting their role from the generation's boot
-action, as `fabric-publisher` already does; move `drive_*_plane` into
-`components/bins/src/planes/` modules, one per plane family, leaving `init.rs`
-as the dispatch table plus shared helpers.
-
-**Exit condition:** The call and operation planes are driven by at most three
-binaries between them; no `drive_*_plane` body remains in `init.rs`; every plane
-gate that used the collapsed binaries passes unchanged, and `just
-sel4_boot_layout_check`, `just fmt_check_all`, and `just lint_all` pass.
+_Three items closed narrower than the audit proposed, and each says so in its own
+entry rather than in a summary: B61 left `serve_instance_graph` untestable pending
+a seL4 object-invocation seam, B63 left marker expectations as Python literals
+rather than blessable fixtures, and B65 left the 52-binary fixture population
+alone. Two derivations B60 named remain in Python. Those are the follow-ups a
+future audit should start from._
 
 ## Resolved
+### B65 — `init.rs` held 21 plane launchers in one file; four moved out and the binary collapse did not
+
+**Status:** Resolved 2026-08-17. **Class:** Unmasked debt (per-gate accretion).
+**Depends on:** none.
+
+**Problem, as opened:** 52 `[[bin]]` targets of which ~41 exist to drive one gate
+each, and `init.rs` at 2286 lines with 21 `drive_*_plane` launchers making up 895
+of them (39%), dispatched by a hand-written `match startup_arg`. Every plane's
+edit shared one file with every other plane's.
+
+**What landed: the module split, partially.** Four launchers moved into their own
+`#[path]`-included modules, the same mechanism `fabric_call_scenario.rs` and
+`launch_context.rs` already use:
+
+| Module | Lines | Plane |
+|---|---|---|
+| `loan_plane.rs` | 346 | B49/B13 shared-buffer loan and quota ceilings |
+| `spawn_plane.rs` | 187 | P5.3.3 userspace spawn and supervised collection |
+| `supervision_plane.rs` | 86 | P5.3.3/B16 handles, records, reclamation |
+| `crossing_plane.rs` | 84 | B22 endpoint authority across a spawn boundary |
+
+`init.rs` is **1644 lines from 2286** — 642 removed, the four largest
+self-contained launchers among them. 17 launchers remain.
+
+**A coupling the audit did not mention, found by doing it.** Init's slot numbers
+arrive by `include!` of a *generated per-generation* boot layout into `init.rs`'s
+own scope. There is no path that names that layout independently of the binary it
+was generated for, so every extracted module reaches back through `super::` for
+its slots and rights — 11 names for the spawn plane, 6 for the loan plane. That is
+inherent to the layout being per-generation, not a symptom of a bad split, and it
+is documented at the top of each module.
+
+Two helpers turned out to be shared rather than plane-private and were published
+back (`spawn_or_fail`, `PEER_PARK_YIELDS`) — caught by the compiler, which is why
+the extraction was done one module at a time with a build between each.
+
+**A gate read a moved constant.** `check-sel4-supervision-plane.py` derived its
+bound by grepping `init.rs` for `SUPERVISION_LOOP_CHILDREN`, which moved. It now
+reads `supervision_plane.rs`. Nothing else was affected:
+`check-sel4-reclamation-plane.py` greps for `RECLAMATION_LOOP_CHILDREN`, whose
+plane was not extracted, and it passes.
+
+**Exit condition (observed):** `init.rs` is 1644 lines from 2286; four plane
+launchers own their own modules. `just sel4_loan_check`, `sel4_spawn_check`,
+`sel4_crossing_check`, `sel4_supervision_check`, `sel4_boot_check`,
+`sel4_sample_check`, `sel4_channel_check`, `sel4_reclamation_check`, `just
+fmt_check_all`, `just lint_all`, and `just ruff` all pass.
+
+**Not closed by this item.**
+
+*The remaining 17 launchers stay in `init.rs`.* Most are small — 10 are under 60
+lines and four are 3-line wrappers around `launch_fabric_graph` — so extracting
+them buys little and each costs its own `super::` import block. The four that
+moved were the ones where a whole plane's logic was genuinely separable.
+
+*The binary collapse did not happen: still 52 `[[bin]]` targets.* The audit
+proposed collapsing the call and operation fixture families (12 binaries) into
+parameterized participants selecting a role from the boot action. Each of those
+binaries is a distinct *task in a generation* — named in `.zti` fixtures, granted
+specific capabilities at declared slots, and asserted by name in plane gates'
+marker chains. Collapsing them means rewriting six fixtures' executable and grant
+tables, the boot-layout slot assignments those tables produce, and every gate
+marker naming a component — for a saving in Cargo targets, not in logic, since the
+per-role scenario code already lives in shared `fabric_call_scenario.rs` and
+`fabric_operation_scenario.rs` modules. That is a large, high-risk change to the
+authority-declaring layer to reduce a build-target count, and B60 has just made
+those fixtures' slot assignments a checked invariant. Deferred deliberately; it
+wants its own entry with the fixture and gate work costed.
+
 ### B63 — the plane gates reimplemented helpers a shared library should own
 
 **Status:** Resolved 2026-08-17. **Class:** Unmasked debt (verification-code
