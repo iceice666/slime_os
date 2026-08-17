@@ -69,6 +69,8 @@ Use the Justfile targets from the repository root:
 - `just sel4_root_boot_check` — root admission, allocator, timer, fault isolation, cleanup, and ready path.
 - `just sel4_boot_layout_check` — init's resolved capability layout on every seL4 plane, against frozen fixtures (B10). Bless with `just sel4_boot_layout_bless`.
 - `just sel4_qos_check` — C8.5's declared QoS policy on the `sel4-qos` plane.
+- `just sel4_fault_check` — C8.14's degradation and fault-isolation envelope on the `sel4-fault` plane, whose interposition hop is compiled to die.
+- `just sel4_fabric_aggregate_check` — C8.15's parent close: both aggregate schedules booted twice over one composition, with byte-identical semantic traces.
 - `just sel4_gate_control_check` — prove every seL4 marker gate fails on missing, reordered, or explicit failure evidence.
 - `just devlog_check` — validate devlog structure, front matter, gates, and links.
 - `just fmt_check_all` — check Rust formatting for every surviving workspace crate.

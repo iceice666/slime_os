@@ -12,9 +12,9 @@ A milestone is complete only when its exit condition is observed. Compiled code,
 
 | Track | Status | Next open gate |
 | --- | --- | --- |
-| [Backlog](00-backlog.md) | B1–B55 resolved; backlog clear | none open |
+| [Backlog](00-backlog.md) | B1–B56 resolved; backlog clear | none open |
 | [Foundations](01-foundations.md) | M1–M4 and M6 complete; M5 mechanisms complete except M5.7 physical Framework evidence | M5.7 requires observed removable-media Framework boot without internal-NVMe writes |
-| [Core runtime](02-core-runtime.md) | C7 and C8.1–C8.12 complete; C8.13 concurrent cross-plane traffic in progress (stream+call+operation run concurrently with 10 of 11 declared resource classes evidenced, 2026-08-16; C8.13.1 landed the self-scoped shared-buffer occupancy query and C8.13.2 extended mapping/loan evidence to 5 of the 8 declared holders, the other 3 recorded as measured walls) | C8.13 remaining: `resourceEvent`, timed-QoS stream concurrency, saturation testing; C8.13.3 live capability-slot occupancy |
+| [Core runtime](02-core-runtime.md) | C7 and all of C8 (C8.1–C8.15) complete; the C8 track closed 2026-08-17 with C8.14's fault-isolation envelope and C8.15's aggregate determinism gate (280 byte-identical trace records across four boots) | C9 robot runtime authority, then C10 private component memory |
 | [RPi5 ROS 2 demo](09-rpi5-ros2-demo.md) | RP0 and RP1 complete; RP2 rewritten around the seL4 product boundary (2026-08-16) and largely satisfied by P5, owing only a demo-scoped replay plus AArch64 rollback and wrong-target arms; RP3–RP8 planned | RP2's rollback and wrong-target arms on an AArch64 generation pair |
 | [Architecture portability](07-architecture-portability.md) | P0, P1, P2.1, P2.2, and P5 complete; P2.3–P2.6 superseded by P5 | P4 physical Raspberry Pi 5 qualification is the next architecture evidence gate |
 | [ROS 2 compatibility](03-ros2-compatibility.md) | Not started | R0 minimal DDS/RTPS topic profile is first; broader external/multi-vendor compatibility follows after the RPi5 demo path |
@@ -46,7 +46,7 @@ flowchart TD
     Backlog["Backlog: no open items"]
     Foundations["M1–M6 foundations\nexisting x86/QEMU evidence"]
     C7["C7 sample plane\ncomplete"]
-    C8["C8.1–C8.12 fabric\ncomplete; C8.13 open"]
+    C8["C8.1–C8.15 fabric\ncomplete"]
     P0["P0 target/artifact contracts"]
     P1["P1 x86 boundary extraction"]
     P2["P2.1–P2.2 AArch64\nhistorical; P2.3–P2.6 superseded"]

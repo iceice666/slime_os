@@ -276,3 +276,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-16 | [Post-seL4 documentation reconciliation, and RP2 rescoped to what seL4 does not already supply](2026-08-16-post-sel4-doc-reconciliation/index.md) | Decision | Proposed | RP2, RP3, C8.2, C7.7, M5.1, M5.4, M5.6, P5 |
 | 2026-08-17 | [C8.13.3 — the one declared ceiling with no signal, and the two slot spaces it turned out to have](2026-08-17-c8-13-3-capability-slot-occupancy/index.md) | Change | Verified | C8.13.3, C8.13 |
 | 2026-08-17 | [C8.14 — the fault envelope was already being driven; nothing asserted it](2026-08-17-c8-14-fault-isolation/index.md) | Change | Verified | C8.14, C8.13 |
+| 2026-08-17 | [C8.15 — the C8 parent close, and the C8.9 gate the audit found red](2026-08-17-c8-15-fabric-aggregate/index.md) | Change | Verified | C8.15, C8.9, C8 |

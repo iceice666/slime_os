@@ -1,6 +1,6 @@
 # Core runtime track
 
-**Status:** C7 and C8.1–C8.12 are complete under their named QEMU gates. C8.12 adds the integrated matching, visibility, and denial matrix, gated by `just data_fabric_matrix_check`. The backlog is clear: B55, the full-graph boot plane's spawn-grant, worker-topology, and marker-ordering defects, is resolved and `just sel4_boot_check` passes, so C8.10's exit condition is now observed on the seL4 product path. B46 replaced the logical channel mechanism these planes were gated on with native seL4 Endpoints, and all seven of its named plane gates — channel, crossing, stream, QoS, call, operation, visibility — pass on that path; B50 then deleted the logical capability and universal-syscall residue behind it. C8.13 is the next open milestone: concurrent cross-plane traffic and resource ceilings.
+**Status:** C7 and all of C8 (C8.1–C8.15) are complete under their named QEMU gates. The C8 track closed on 2026-08-17: C8.13's concurrent cross-plane traffic and resource ceilings (with C8.13.1–C8.13.3), C8.14's degradation and fault-isolation envelope, and C8.15's aggregate determinism gate, which boots both aggregate schedules twice over one declared composition and compares 280 byte-identical semantic-trace records. The backlog is clear: B55's full-graph boot defects and B56's unpassable C8.9 profile check are both resolved. B46 replaced the logical channel mechanism these planes were gated on with native seL4 Endpoints, and all seven of its named plane gates — channel, crossing, stream, QoS, call, operation, visibility — pass on that path; B50 then deleted the logical capability and universal-syscall residue behind it. C9 (robot runtime authority) and C10 (bounded private component memory) are the track's remaining open milestones.
 
 This track turns the existing bounded channels, capabilities, components, and generations into a native typed communication runtime. It is local-first: C7 and C8 require no network or physical driver, and they do not wait for unrelated display, audio, wireless, or GPU work.
 
@@ -241,14 +241,28 @@ Two isolated components exchange and return a payload larger than the kernel IPC
 
 ## C8: Native typed data fabric
 
-**Status:** In progress. C8.1–C8.12 are complete; C8.13 is in progress. C8.1–C8.8
-are gated by `just interface_schema_check`, `just fabric_manifest_check`, `just
-fabric_authority_check`, `just fabric_stream_check`, `just fabric_qos_check`,
-`just fabric_call_check`, `just fabric_operation_check`, and `just
-fabric_visibility_check`. The former single C8.9 integration slice is
-decomposed into C8.9–C8.15 so profile authority, topology, deterministic
-tracing, denial, resource ceilings, fault isolation, and the parent close each
-own one reviewable gate.
+**Status:** Complete. C8.1–C8.15 are all complete under their named QEMU gates.
+C8.1–C8.8 are gated by `just interface_schema_check`, `just
+fabric_manifest_check`, `just fabric_authority_check`, `just
+fabric_stream_check`, `just fabric_qos_check`, `just fabric_call_check`, `just
+fabric_operation_check`, and `just fabric_visibility_check`; C8.9–C8.12 by `just
+data_fabric_profile_check`, `just sel4_boot_check`, `just
+data_fabric_trace_check`, and `just data_fabric_matrix_check`; and the closing
+three by `just data_fabric_traffic_check` plus `just
+data_fabric_saturation_check` (C8.13, with C8.13.1–C8.13.3), `just
+data_fabric_fault_check` (C8.14), and `just data_fabric_check` (C8.15). The
+former single C8.9 integration slice was decomposed into C8.9–C8.15 so profile
+authority, topology, deterministic tracing, denial, resource ceilings, fault
+isolation, and the parent close each own one reviewable gate.
+
+Three of the closing slices found that the honest scope was narrower or
+differently shaped than their text assumed, and each is recorded that way rather
+than claimed: C8.13's `resourceEvent` and the call worker's `resourceLoan` are
+structural walls, C8.13.3's `capabilitySlots` turned out to bound a different
+slot space than the census first counted, and C8.14 turned out to be an
+assertion milestone over machinery C8.4–C8.9 had already built and driven. The
+C8.15 audit also reopened and closed C8.9: backlog **B56** records that `just
+data_fabric_profile_check` had been red since B55 on a check that could not pass.
 
 **Depends on:** C7's bounded sample plane and backlog item **B2** (scheduler
 `Blocked` state / `SYS_WAIT` wait-set). Both are complete. C8 remains
@@ -1438,7 +1452,39 @@ path either would take.
 
 ### C8.15 — Full-graph determinism and parent close
 
-**Status:** Not started.
+**Status:** Complete. `just sel4_fabric_aggregate_check` (`just
+data_fabric_check`) boots both aggregate schedules twice each — four boots over
+one declared composition — requires each to satisfy its own plane gate on both
+runs, and compares their `[trace]` records verbatim: 140 records per boot, 280
+byte-identical in total.
+
+The aggregate is a *pair of schedules over one graph* rather than a new fixture.
+`sel4-fault.zti` is `sel4-traffic.zti` with `generation` changed and nothing
+else, and the fault variant differs only in that its declared interposition hop
+is compiled to die, so the normal and fault schedules are observed on the same
+declared composition rather than assembled from unrelated profile boots — which
+is what this milestone's third deliverable asks for.
+
+Determinism is compared over the C8.11 trace records alone, and that scoping is
+the assertion rather than a weakening of it: those records carry simulated time,
+and the schema forbids task ids and addresses in them, so byte equality is a
+claim about the schedule instead of about how the transcript was captured.
+Serial markers are deliberately excluded because several legitimately vary — a
+broker's per-edge print races a participant's own summary print, which is why
+the plane gates check those as membership rather than as order. The record count
+is additionally pinned: without it a regression that stopped every worker
+emitting would produce two identical empty transcripts and pass the comparison.
+
+Each plane's own gate is invoked in-process against each boot rather than
+re-implemented, so the aggregate cannot drift from what the narrow gates
+require, and no boot is spent twice.
+
+The audit deliverable found one real defect, recorded as backlog **B56**:
+`just data_fabric_profile_check` had been red since B55 because it swept the
+reference manifest's `unified` profile through a resolver whose per-plane
+control-grant holder that manifest structurally cannot satisfy. C8.9's exit
+condition was therefore unobserved on the tree the roadmap recorded it against.
+Fixed and closed.
 
 **Depends on:** C8.9–C8.14.
 
@@ -1467,20 +1513,30 @@ path either would take.
   path;
 - all C8.1–C8.14 regression gates remain clean.
 
-#### Planned verification target
+#### Verification target
 
 ```sh
+just sel4_fabric_aggregate_check
 just data_fabric_check
 ```
 
-#### Exit condition
+#### Exit condition (observed)
 
-A generation-declared graph of isolated native publishers, subscribers, service
-clients/servers, operation participants, introspection clients, and declared
-proxies exchanges bounded typed data under explicit QoS and graph grants;
-denied and incompatible edges are neither usable nor visible, every resource
-and fault path stays bounded and isolated, and identical inputs produce
-byte-identical normalized schemas and semantic traces.
+Observed 2026-08-17. A generation-declared graph of isolated native publishers,
+subscribers, service clients/servers, operation participants, introspection
+clients, and declared proxies exchanges bounded typed data under explicit QoS
+and graph grants; denied and incompatible edges are neither usable nor visible,
+every resource and fault path stays bounded and isolated, and identical inputs
+produce byte-identical semantic traces.
+
+Two limits are recorded rather than claimed. Normalized *schema* artifacts are
+compared for determinism by `just generation_check` and
+`just data_fabric_profile_check` on the host rather than across these boots, so
+the byte-comparison here is over semantic traces alone. And the aggregate boots
+two schedules; the denial, stall, and malformed-input schedules the first
+deliverable names are carried inside those two rather than run as separate
+arms — every one is driven and asserted by `sel4_fault_check`, which this gate
+runs against both of its boots.
 
 ## C9: Robot runtime authority
 
