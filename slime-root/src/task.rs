@@ -107,6 +107,39 @@ impl ChildSlots {
         fault: CHILD_SLOT_FAULT,
     };
 
+    /// Whether the plan declares `slot` occupied for a child with this
+    /// supervision. The single source for "is this slot ours": the construction
+    /// audit walks it, and B40's negative mutations pick their victim slot
+    /// through it so a mutation cannot accidentally name a declared slot and
+    /// assert nothing (B67).
+    ///
+    /// `CHILD_SLOT_CNODE` is declared only for a self-managed child, matching
+    /// the audit: an externally supervised child holds neither its own TCB nor
+    /// its CNode root.
+    pub fn declares(self, slot: sel4::CPtrBits, expect_tcb: bool) -> bool {
+        slot == self.service
+            || slot == self.console
+            || slot == self.fault
+            || (expect_tcb && (slot == self.tcb || slot == CHILD_SLOT_CNODE))
+    }
+
+    /// The lowest slot above null the plan leaves empty, or `None` when the
+    /// CSpace is fully declared. B40's `extra` and `wrong_slot` mutations both
+    /// need an undeclared slot: `extra` to occupy one, `wrong_slot` to divert a
+    /// declared capability into one. Slot 0 is excluded deliberately — the audit
+    /// does require it empty, but occupying a child's null slot perturbs the
+    /// null-capability invariant as well as the layout, which would leave the
+    /// refusal ambiguous about which property caught it.
+    #[cfg(any(slime_b40_mutate_extra, slime_b40_mutate_wrong_slot))]
+    pub fn first_undeclared(
+        self,
+        cnode_size_bits: usize,
+        expect_tcb: bool,
+    ) -> Option<sel4::CPtrBits> {
+        (1..(1u64 << cnode_size_bits) as sel4::CPtrBits)
+            .find(|slot| !self.declares(*slot, expect_tcb))
+    }
+
     /// Refuse a layout the child could not actually use.
     ///
     /// Every component resolves the root endpoint from a compiled-in constant
@@ -671,9 +704,21 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
                 cnode,
                 cnode_size_bits,
                 {
+                    // Wrong slot: install a declared capability somewhere the
+                    // plan leaves empty. B67: this used to be `fault + 1`, which
+                    // is `CHILD_SLOT_CNODE` under the default layout — already
+                    // occupied, so the mint failed with `DeleteFirst` during
+                    // construction and the audit never ran. Asking for the first
+                    // undeclared slot keeps the perturbation a *layout* error,
+                    // which is what this arm exists to have refused.
                     #[cfg(slime_b40_mutate_wrong_slot)]
                     {
-                        child_slots.fault.wrapping_add(1) % (1 << cnode_size_bits)
+                        child_slots
+                            .first_undeclared(
+                                cnode_size_bits,
+                                supervision == Supervision::SelfManaged,
+                            )
+                            .unwrap_or(child_slots.fault)
                     }
                     #[cfg(not(slime_b40_mutate_wrong_slot))]
                     {
@@ -1046,7 +1091,9 @@ fn audit_child_cspace(
     // Negative-mutation probes for `just sel4_capability_layout_check`. Each
     // perturbs the constructed CSpace in one of the ways B40 names, so the
     // audit's refusal is observed rather than assumed. None is compiled into
-    // the product image.
+    // the product image. Every arm that needs an "undeclared" slot asks
+    // `ChildSlots::first_undeclared` rather than restating the declared set,
+    // which is what B67 fixed.
     #[cfg(slime_b40_mutate_missing)]
     {
         // Missing: delete a capability the plan declared.
@@ -1057,10 +1104,8 @@ fn audit_child_cspace(
     #[cfg(slime_b40_mutate_extra)]
     {
         // Extra: install a capability into a slot the plan left empty.
-        let free = (0..(1u64 << cnode_size_bits) as sel4::CPtrBits)
-            .find(|slot| {
-                *slot != slots.service && *slot != slots.fault && *slot != slots.tcb && *slot != 0
-            })
+        let free = slots
+            .first_undeclared(cnode_size_bits, expect_tcb)
             .unwrap_or(0);
         let _ = cnode
             .absolute_cptr_from_bits_with_depth(free, cnode_size_bits)
@@ -1072,10 +1117,7 @@ fn audit_child_cspace(
 
     for slot in 0..(1u64 << cnode_size_bits) {
         let slot = slot as sel4::CPtrBits;
-        let declared = slot == slots.service
-            || slot == slots.console
-            || slot == slots.fault
-            || (expect_tcb && (slot == slots.tcb || slot == CHILD_SLOT_CNODE));
+        let declared = slots.declares(slot, expect_tcb);
         let cptr = cnode.absolute_cptr_from_bits_with_depth(slot, cnode_size_bits);
         // `Move` onto itself: `DeleteFirst` means occupied, `FailedLookup`
         // means empty. Any other answer is the slot not being addressable,
