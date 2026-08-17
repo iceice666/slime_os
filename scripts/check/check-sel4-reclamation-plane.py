@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """B38 gate: exceed old task CSlot/untyped lifetime watermarks with bounded live use."""
 from __future__ import annotations
-import hashlib
 import json
 import re
 import shutil
@@ -10,6 +9,10 @@ import sys
 import threading
 import tomllib
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+
+from harness import sha256_file  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 IMAGE = ROOT / "build" / "slime-sel4-reclamation.elf"
@@ -23,13 +26,6 @@ TIMEOUT = 180
 def fail(message: str) -> None:
     raise SystemExit(f"seL4 reclamation plane check: {message}")
 
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        while chunk := handle.read(1024 * 1024):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 def boot(profile: dict[str, object]) -> str:
     qemu = shutil.which("qemu-system-aarch64")
@@ -79,7 +75,7 @@ def main() -> None:
     if identity.get("variant") != "reclamation":
         fail(f"wrong image variant {identity.get('variant')!r}")
     image = identity.get("image")
-    if not isinstance(image, dict) or image.get("sha256") != sha256_file(IMAGE):
+    if not isinstance(image, dict) or image.get("sha256") != sha256_file(IMAGE, fail):
         fail("packaged image digest does not match identity manifest")
     pins = tomllib.loads(PINS.read_text(encoding="utf-8"))
     profile = pins.get("qemu_arm_virt")

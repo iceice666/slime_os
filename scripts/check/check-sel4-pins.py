@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import re
 import shutil
 import subprocess
+import sys
 import tomllib
 from pathlib import Path
 from typing import NoReturn
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+
+from harness import sha256_file  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
@@ -130,17 +134,6 @@ def normalized_repository(value: str) -> str:
     if normalized.startswith("git@github.com:"):
         normalized = "https://github.com/" + normalized.removeprefix("git@github.com:")
     return normalized
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    try:
-        with path.open("rb") as handle:
-            while chunk := handle.read(1024 * 1024):
-                digest.update(chunk)
-    except OSError as error:
-        fail(f"cannot hash {path.relative_to(ROOT)}: {error}")
-    return digest.hexdigest()
 
 
 def require_sha256(value: str, description: str) -> str:
@@ -312,7 +305,7 @@ def check_toolchain_and_targets(pins: dict[str, object]) -> None:
     expected_target_hash = require_sha256(
         text(rust_sel4, "root_target_sha256", "rust_sel4"), "root target"
     )
-    actual_target_hash = sha256_file(root_target)
+    actual_target_hash = sha256_file(root_target, fail)
     if actual_target_hash != expected_target_hash:
         fail(
             f"{root_target.relative_to(ROOT)} SHA-256 is {actual_target_hash}, "
@@ -444,7 +437,7 @@ def check_prefix(pins: dict[str, object]) -> None:
     for key, path in files.items():
         require_file(path, f"installed seL4 prefix artifact ({key})")
         expected = require_sha256(text(observed, key, "observed_prefix"), key)
-        actual = sha256_file(path)
+        actual = sha256_file(path, fail)
         if actual != expected:
             fail(
                 f"{path.relative_to(ROOT)} SHA-256 is {actual}, expected {expected}; "

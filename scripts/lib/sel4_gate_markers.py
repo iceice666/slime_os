@@ -11,16 +11,29 @@ Reject = Callable[[str], NoReturn]
 
 
 def chains_from_gate(gate: object) -> tuple[Chain, ...]:
-    """Return a gate's declaration without flattening causal chains."""
+    """Return a gate's declaration without flattening causal chains.
+
+    A gate may also declare `EXPECTED_UNORDERED`: markers it requires but whose
+    position is not causally ordered against its chains — an independent task's
+    completion, typically. Those are appended as their own pseudo-chain so the
+    meta-gate's coverage count still sees them. Without this, moving a racy
+    marker out of a causal chain reads as *lost* coverage rather than as the same
+    coverage asserted correctly (B63).
+    """
     chains = getattr(gate, "CHAINS", None)
     if chains is not None:
-        return tuple((label, tuple(patterns)) for label, patterns in chains)
-    markers = getattr(gate, "REQUIRED_MARKERS", None)
-    if markers is None:
-        markers = getattr(gate, "MARKERS", None)
-    if markers is None:
-        raise AttributeError("gate declares neither CHAINS, REQUIRED_MARKERS, nor MARKERS")
-    return (("required marker sequence", tuple(pattern for _, pattern in markers)),)
+        declared = [(label, tuple(patterns)) for label, patterns in chains]
+    else:
+        markers = getattr(gate, "REQUIRED_MARKERS", None)
+        if markers is None:
+            markers = getattr(gate, "MARKERS", None)
+        if markers is None:
+            raise AttributeError("gate declares neither CHAINS, REQUIRED_MARKERS, nor MARKERS")
+        declared = [("required marker sequence", tuple(pattern for _, pattern in markers))]
+    unordered = tuple(getattr(gate, "EXPECTED_UNORDERED", ()))
+    if unordered:
+        declared.append(("order-independent markers", unordered))
+    return tuple(declared)
 
 
 def marker_count(chains: Sequence[Chain]) -> int:

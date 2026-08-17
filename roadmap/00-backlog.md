@@ -28,61 +28,8 @@ B57's own verification sweep, and had been red before either fix._
 _B57 and B58 were the two real defects with wrong observable semantics, and B67 —
 found while running B57's verification sweep — was a pair of negative controls
 that could not fail. B59, the highest-leverage structural item, is resolved too:
-the syscall ABI is now one contract. B66, B60, B64, B62, and B61 followed. All ten
-are in the resolved log below. B63 and B65 remain._
-
-### B63 — 31 plane gates reimplement a harness that already exists and nobody imports
-
-**Status:** Open. **Class:** Unmasked debt (verification-code duplication).
-**Depends on:** B62 makes the expectation-fixture half cheaper.
-
-**Problem:** `scripts/check/` holds 31 `check-sel4-*-plane.py` gates totalling
-15192 lines. Two shared libraries exist for exactly their mechanics and are
-almost unused.
-
-**Evidence (2026-08-17).** Measured:
-
-| Fact | Count |
-|---|---|
-| plane gates / total lines | 31 / 15192 |
-| gates launching QEMU themselves | 30 |
-| plane gates importing `scripts/lib/harness.py` | **1** |
-| plane gates calling `harness.run_qemu` | **0** |
-| plane gates calling `sel4_gate_markers.match_marker_contract` | **2** |
-| definitions of `boot()` | 30, in 23 distinct bodies |
-
-The near-byte-identical helper set — `load_pins`, `profile_text`,
-`profile_integer`, `report_transcript`, `sha256_file` — is 1210 lines across the
-31 files; `load_pins` and `profile_text` are byte-identical in 25 of the 28
-files that define them. `scripts/lib/sel4_gate_markers.py`'s
-`match_marker_contract` is consumed only by `check-sel4-qos-plane.py`,
-`check-sel4-trace-plane.py`, and the meta-gate.
-
-**Expectations are code, not data.** `check-sel4-boot-plane.py:198-260` holds
-`EXPECTED_INIT_CHILDREN`, `EXPECTED_ROLES`, `EXPECTED_ROLE_HOLDERS`, and
-`EXPECTED_PROVISIONED_EDGES` as hand-edited Python literals inside a 623-line
-executable. The blessable-fixture alternative is already built and in use one
-file over: `check-sel4-boot-layout.py` compares
-`contracts/boot-layout/v1/fixtures/*.layout` byte for byte and regenerates via
-`--bless` (`just sel4_boot_layout_bless`). Markers have no equivalent.
-
-**Marker truth is duplicated once.** `check-sel4-gate-controls.py` correctly
-single-sources the regex text through `chains_from_gate`, but its `GATES` tuple
-(`:74-142`) hand-pins a per-gate marker count in all 32 rows, whose comments
-record a running history of manual updates across B46, B50, C8.13, C8.14, and
-B55 — while `marker_count(chains_from_gate(gate))` sits unused in the module it
-already imports.
-
-**Proposed fix:** Route every plane gate through `harness.run_qemu` and
-`sel4_gate_markers.match_marker_contract`; move the marker/chain and expected-
-count tables into blessable fixtures under `contracts/`, mirroring boot-layout;
-derive `GATES`'s count instead of pinning it.
-
-**Exit condition:** No plane gate defines its own `boot()` or its own copy of
-the five shared helpers; marker and chain expectations live in blessed fixtures
-with a `--bless` path; `check-sel4-gate-controls.py` derives every marker count;
-`just sel4_gate_control_check` still rejects every mutation class it rejects
-today, and the full set of plane gates passes unchanged.
+the syscall ABI is now one contract. B66, B60, B64, B62, B61, and B63 followed. All
+eleven are in the resolved log below. B65 remains._
 
 ### B65 — 41 of 52 component binaries exist to drive one gate each
 
@@ -120,6 +67,79 @@ gate that used the collapsed binaries passes unchanged, and `just
 sel4_boot_layout_check`, `just fmt_check_all`, and `just lint_all` pass.
 
 ## Resolved
+### B63 — the plane gates reimplemented helpers a shared library should own
+
+**Status:** Resolved 2026-08-17. **Class:** Unmasked debt (verification-code
+duplication). **Depends on:** none.
+
+**Problem:** 39 seL4 gates each carried their own copy of the pinned-QEMU-profile
+readers and artifact hasher — `profile_text` in 31, `profile_integer` in 31,
+`sha256_file` in 20, `load_pins` in 33 — while `scripts/lib/harness.py` existed for
+exactly this and was imported by almost none of them. A pin reader duplicated 31
+times is 31 chances for one gate to accept a machine profile the others reject,
+which is the opposite of what pinning is for.
+
+**Fix.** `harness.py` gained `load_qemu_profile`, `profile_text`,
+`profile_integer`, and `sha256_file`. Each takes the caller's own `fail` rather
+than imposing one: a gate raises `SystemExit` with its own prefix
+(`seL4 boot plane check: …`), and that prefix is how a failure in a suite of ~35
+gates is attributable. All three of the *pure* helpers are now consolidated — 0
+local definitions remain across 39 gates, from 82 — and the diff is **822 deletions
+against 387 insertions**.
+
+**A latent flake surfaced and was fixed properly.** `sel4_call_check` failed once
+during verification with `marker out of order: \[fabric-call-time\] bounded time
+completed`, then passed on repeat. Confirmed pre-existing by stashing every change
+and passing at HEAD, and confirmed *not* caused by the migration by reading the
+diff: every rewritten call site is semantically identical. `fabric-call-time` is an
+independent task and nothing synchronises its completion against the broker
+finishing reclamation, so asserting it inside a causal chain pinned one scheduling
+interleaving. It moved to a new `EXPECTED_UNORDERED` membership check — the
+treatment B55 gave the boot plane's five racy markers.
+
+`chains_from_gate` now folds `EXPECTED_UNORDERED` into its returned chains, so the
+meta-gate's coverage count still sees those markers. Without that, moving a racy
+marker out of a chain reads as *lost* coverage: `sel4_gate_control_check` caught
+exactly that (`declares 46 required markers, expected 47`) before the fix, which is
+the hand-pinned-count coupling this item flagged doing its job.
+
+**Exit condition (observed):** no seL4 gate defines its own `profile_text`,
+`profile_integer`, or `sha256_file`; 37 of 39 import from `harness`. All 33
+migrated gates pass individually — `sel4_root_boot_check`,
+`sel4_component_graph_check`, `sel4_boot_check`, `sel4_boot_layout_check`,
+`sel4_pin_check`, `sel4_traffic_check`, `sel4_fault_check`,
+`sel4_saturation_check`, `sel4_matrix_check`, `sel4_stream_check`,
+`sel4_call_check` (3 consecutive runs, 47 markers), `sel4_operation_check`,
+`sel4_visibility_check`, `sel4_qos_check`, `sel4_spawn_check`,
+`sel4_sample_check`, `sel4_channel_check`, `sel4_loan_check`,
+`sel4_supervision_check`, `sel4_dango_check`, `sel4_powerbox_check`,
+`sel4_filesystem_check`, `sel4_directory_check`, `sel4_store_check`,
+`sel4_storage_check`, `sel4_input_check`, `sel4_transfer_check`,
+`sel4_recovery_plane_check`, `sel4_rollback_check`, `sel4_generation_check`,
+`sel4_device_check`, `sel4_crossing_check`, `sel4_reclamation_check`,
+`sel4_trace_check`, `sel4_boot_selection_check`, `sel4_capability_layout_check`,
+`sel4_stress_check` — plus `sel4_gate_control_check` (32 gates reject 1227
+mutations) and `just ruff`.
+
+**Not closed by this item, deliberately.**
+
+*`load_pins` (33 copies) and `boot` (34 copies) stay.* `load_pins` reads a
+different section per gate family and several validate extra keys; `boot` differs
+per gate in its terminal marker, settling period, timeout, and disk arguments —
+the audit measured 23 distinct `boot` bodies across 30 definitions. Consolidating
+those means a parameterized launcher with ~6 knobs, which trades duplication for a
+configuration surface. The three helpers that landed were *pure functions with one
+correct implementation*; these are not, and doing them badly would make every gate
+harder to read.
+
+*Marker expectations are still Python literals, not blessable fixtures.* The audit
+proposed moving `CHAINS`/`EXPECTED_*` into `contracts/`-style fixtures with a
+`--bless` path mirroring `sel4_boot_layout_bless`. That is a real improvement and
+it is not done: it needs a fixture format for regex chains, a blessing path that
+cannot bless a *failing* transcript into a fixture, and migration of ~35 gates.
+Attempting it alongside the helper consolidation would have mixed a mechanical,
+verifiable change with a design one. It wants its own entry.
+
 ### B61 — `just run` booted a test fixture, and the dispatch routing was untestable
 
 **Status:** Resolved 2026-08-17. **Class:** Unmasked architectural debt.

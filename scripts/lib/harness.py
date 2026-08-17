@@ -7,11 +7,15 @@ constants and subprocess boilerplate shared by product build and check scripts.
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import subprocess
 import sys
+import tomllib
+from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
+from typing import NoReturn
 
 
 # ``scripts/lib`` is two levels below the repository root.
@@ -84,3 +88,72 @@ def run_qemu(
     if failed:
         raise SystemExit(process.returncode)
     return process.stdout
+
+
+# The pinned QEMU machine profile every seL4 plane gate boots against. Before
+# B63 each gate carried its own `load_pins`/`profile_text`/`profile_integer` —
+# 33, 31, and 31 copies, differing only in the wording of their refusals. A pin
+# reader duplicated 33 times is 33 chances for one gate to accept a profile the
+# others reject, which is the opposite of what pinning is for.
+#
+# `fail` is passed in rather than imported: each gate raises `SystemExit` with
+# its own prefix (`seL4 boot plane check: …`), and that prefix is how a failure
+# in a suite of 30-odd gates is attributable. These helpers borrow it instead of
+# imposing one.
+QEMU_PROFILE_SECTION = "qemu_arm_virt"
+
+
+def load_qemu_profile(
+    fail: Callable[[str], NoReturn], pins_path: Path | None = None
+) -> dict[str, object]:
+    """The `[qemu_arm_virt]` table of `sel4/pins.toml`.
+
+    Refuses a missing file or a missing section rather than returning an empty
+    mapping: a gate that read no profile would boot QEMU with defaults and still
+    claim it had honoured the pins.
+    """
+    path = pins_path or ROOT / "sel4" / "pins.toml"
+    if not path.is_file():
+        fail(f"missing pin manifest: {path.relative_to(ROOT)}")
+    try:
+        pins = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError) as error:
+        fail(f"cannot parse {path.relative_to(ROOT)}: {error}")
+    profile = pins.get(QEMU_PROFILE_SECTION)
+    if not isinstance(profile, dict):
+        fail(f"{path.relative_to(ROOT)} declares no [{QEMU_PROFILE_SECTION}] profile")
+    return profile
+
+
+def profile_text(
+    profile: dict[str, object], key: str, fail: Callable[[str], NoReturn]
+) -> str:
+    value = profile.get(key)
+    if not isinstance(value, str) or not value:
+        fail(f"sel4/pins.toml [{QEMU_PROFILE_SECTION}].{key} must be non-empty text")
+    return value
+
+
+def profile_integer(
+    profile: dict[str, object], key: str, fail: Callable[[str], NoReturn]
+) -> int:
+    value = profile.get(key)
+    if not isinstance(value, int) or isinstance(value, bool):
+        fail(f"sel4/pins.toml [{QEMU_PROFILE_SECTION}].{key} must be an integer")
+    return value
+
+
+def sha256_file(path: Path, fail: Callable[[str], NoReturn]) -> str:
+    """A built artifact's digest, refused rather than defaulted when absent.
+
+    Gates compare this against the identity manifest the build wrote, so a
+    missing file must fail here instead of producing a digest of nothing that
+    then mismatches with a confusing message.
+    """
+    if not path.is_file():
+        fail(f"missing artifact: {path}")
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()

@@ -12,7 +12,6 @@ prove the authority landed in the intended receiver without widening.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import re
 import shutil
@@ -22,6 +21,10 @@ import threading
 import tomllib
 from pathlib import Path
 from typing import NoReturn
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+
+from harness import profile_text, profile_integer, sha256_file  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
@@ -144,7 +147,6 @@ CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
             r"\[fabric-call-client\] peer death distinct",
             r"\[fabric\] call state reclaimed",
             r"\[fabric\] call plane complete",
-            r"\[fabric-call-time\] bounded time completed",
             r"\[init\] call plane complete",
             r"SLIME_GRAPH component exit task=\d+ status=0",
         ),
@@ -192,6 +194,18 @@ EXPECTED_SPAWNED = (
 )
 
 
+# Markers that must appear but whose position is not causally ordered against
+# the broker's own sequence. `fabric-call-time` is an independent task driving
+# the bounded-time arm; nothing synchronises its completion with the broker
+# finishing reclamation, so asserting it inside the causal chain pins one
+# scheduling interleaving. Observed failing that way: `marker out of order:
+# \[fabric-call-time\] bounded time completed`, on a run that was otherwise
+# clean and which passed on repeat. Same treatment B55 gave the boot plane's
+# five racy cross-task markers.
+EXPECTED_UNORDERED: tuple[str, ...] = (
+    r"\[fabric-call-time\] bounded time completed",
+)
+
 def fail(message: str) -> NoReturn:
     raise SystemExit(f"seL4 call plane check: {message}")
 
@@ -208,31 +222,6 @@ def load_pins() -> dict[str, object]:
     if not isinstance(pins.get("qemu_arm_virt"), dict):
         fail("sel4/pins.toml is missing [qemu_arm_virt]")
     return pins
-
-
-def profile_text(profile: dict[str, object], key: str) -> str:
-    value = profile.get(key)
-    if not isinstance(value, str) or not value:
-        fail(f"sel4/pins.toml [qemu_arm_virt].{key} must be non-empty text")
-    return value
-
-
-def profile_integer(profile: dict[str, object], key: str) -> int:
-    value = profile.get(key)
-    if not isinstance(value, int) or isinstance(value, bool):
-        fail(f"sel4/pins.toml [qemu_arm_virt].{key} must be an integer")
-    return value
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    try:
-        with path.open("rb") as handle:
-            while chunk := handle.read(1024 * 1024):
-                digest.update(chunk)
-    except OSError as error:
-        fail(f"cannot hash {path.relative_to(ROOT)}: {error}")
-    return digest.hexdigest()
 
 
 def build_image() -> None:
@@ -269,7 +258,7 @@ def check_manifest() -> None:
         fail("identity manifest does not record the packaged image digest")
     if not IMAGE.is_file():
         fail(f"missing packaged image {IMAGE.relative_to(ROOT)}")
-    actual = sha256_file(IMAGE)
+    actual = sha256_file(IMAGE, fail)
     if actual != image["sha256"]:
         fail(
             f"{IMAGE.relative_to(ROOT)} SHA-256 is {actual}, but the identity manifest "
@@ -285,13 +274,13 @@ def boot(profile: dict[str, object]) -> str:
     command = [
         qemu,
         "-machine",
-        profile_text(profile, "machine"),
+        profile_text(profile, "machine", fail),
         "-cpu",
-        profile_text(profile, "cpu"),
+        profile_text(profile, "cpu", fail),
         "-smp",
-        str(profile_integer(profile, "cpus")),
+        str(profile_integer(profile, "cpus", fail)),
         "-m",
-        f"size={profile_integer(profile, 'memory_mib')}M",
+        f"size={profile_integer(profile, 'memory_mib', fail)}M",
         "-nographic",
         "-serial",
         "mon:stdio",
@@ -404,12 +393,18 @@ def check_transcript(transcript: str) -> None:
                     fail(f"{label}: marker out of order: {pattern}")
                 fail(f"{label}: missing marker: {pattern}")
             position = match.end()
+    for pattern in EXPECTED_UNORDERED:
+        if re.search(pattern, transcript) is None:
+            report_transcript(transcript)
+            fail(f"missing unordered marker: {pattern}")
     if transcript.count("[fabric-call-server] non-idempotent execution once") != 1:
         fail("non-idempotent request did not execute exactly once")
     check_task_lifecycle(transcript)
     print(
-        f"transcript: {sum(len(chain) for _, chain in CHAINS)} markers observed "
-        f"across {len(CHAINS)} causal chains; five spawned tasks and init exited cleanly",
+        f"transcript: {sum(len(chain) for _, chain in CHAINS) + len(EXPECTED_UNORDERED)} "
+        f"markers observed across {len(CHAINS)} causal chains plus "
+        f"{len(EXPECTED_UNORDERED)} order-independent; five spawned tasks and init "
+        "exited cleanly",
         flush=True,
     )
 

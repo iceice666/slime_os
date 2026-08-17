@@ -42,7 +42,6 @@ built last.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import re
 import shutil
@@ -52,6 +51,10 @@ import threading
 import tomllib
 from pathlib import Path
 from typing import NoReturn
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+
+from harness import profile_text, profile_integer, sha256_file  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PINS_PATH = ROOT / "sel4" / "pins.toml"
@@ -223,31 +226,6 @@ def load_pins() -> dict[str, object]:
     return pins
 
 
-def profile_text(profile: dict[str, object], key: str) -> str:
-    value = profile.get(key)
-    if not isinstance(value, str) or not value:
-        fail(f"sel4/pins.toml [qemu_arm_virt].{key} must be non-empty text")
-    return value
-
-
-def profile_integer(profile: dict[str, object], key: str) -> int:
-    value = profile.get(key)
-    if not isinstance(value, int) or isinstance(value, bool):
-        fail(f"sel4/pins.toml [qemu_arm_virt].{key} must be an integer")
-    return value
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    try:
-        with path.open("rb") as handle:
-            while chunk := handle.read(1024 * 1024):
-                digest.update(chunk)
-    except OSError as error:
-        fail(f"cannot hash {path.relative_to(ROOT)}: {error}")
-    return digest.hexdigest()
-
-
 def build_image() -> None:
     command = [sys.executable, str(BUILD_SCRIPT), "--supervision-plane"]
     print(f"[build] {' '.join(command)}", flush=True)
@@ -286,7 +264,7 @@ def check_manifest() -> None:
         fail("identity manifest does not record the packaged image digest")
     if not IMAGE.is_file():
         fail(f"missing packaged image {IMAGE.relative_to(ROOT)}")
-    actual = sha256_file(IMAGE)
+    actual = sha256_file(IMAGE, fail)
     if actual != image["sha256"]:
         fail(
             f"{IMAGE.relative_to(ROOT)} SHA-256 is {actual}, but the identity manifest "
@@ -308,13 +286,13 @@ def boot(profile: dict[str, object]) -> str:
     command = [
         qemu,
         "-machine",
-        profile_text(profile, "machine"),
+        profile_text(profile, "machine", fail),
         "-cpu",
-        profile_text(profile, "cpu"),
+        profile_text(profile, "cpu", fail),
         "-smp",
-        str(profile_integer(profile, "cpus")),
+        str(profile_integer(profile, "cpus", fail)),
         "-m",
-        f"size={profile_integer(profile, 'memory_mib')}M",
+        f"size={profile_integer(profile, 'memory_mib', fail)}M",
         "-nographic",
         "-serial",
         "mon:stdio",
