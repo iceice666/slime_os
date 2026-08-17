@@ -12,9 +12,10 @@ A milestone is complete only when its exit condition is observed. Compiled code,
 
 | Track | Status | Next open gate |
 | --- | --- | --- |
-| [Backlog](00-backlog.md) | B1–B68 resolved; backlog clear (the 2026-08-17 structural audit's twelve items closed the same day) | none open; B61/B63/B65 each record a deliberately deferred half a future audit should start from |
+| [Backlog](00-backlog.md) | B1–B69 resolved; **B70 open** (component definitions and slot/route bindings are compile-time-coupled to one crate's private manifest parser) | B70, whose planned resolution is CP0–CP2 in the [Component platform track](10-component-platform.md); B61/B63/B65 each record a deliberately deferred half a future audit should start from |
 | [Foundations](01-foundations.md) | M1–M4 and M6 complete; M5 mechanisms complete except M5.7 physical Framework evidence | M5.7 requires observed removable-media Framework boot without internal-NVMe writes |
 | [Core runtime](02-core-runtime.md) | C7 and all of C8 (C8.1–C8.15) complete; the C8 track closed 2026-08-17 with C8.14's fault-isolation envelope and C8.15's aggregate determinism gate (280 trace records across four boots, compared per worker and record kind after B68 found the flat comparison was asserting one scheduling interleaving) | C9 robot runtime authority, then C10 private component memory |
+| [Component platform](10-component-platform.md) | Not started | CP0 (component-spec model) and CP2 (runtime binding resolution) have no dependencies and can start immediately |
 | [RPi5 ROS 2 demo](09-rpi5-ros2-demo.md) | RP0 and RP1 complete; RP2 rewritten around the seL4 product boundary (2026-08-16) and largely satisfied by P5, owing only a demo-scoped replay plus AArch64 rollback and wrong-target arms; RP3–RP8 planned | RP2's rollback and wrong-target arms on an AArch64 generation pair |
 | [Architecture portability](07-architecture-portability.md) | P0, P1, P2.1, P2.2, and P5 complete; P2.3–P2.6 superseded by P5 | P4 physical Raspberry Pi 5 qualification is the next architecture evidence gate |
 | [ROS 2 compatibility](03-ros2-compatibility.md) | Not started | R0 minimal Zenoh topic profile is first; broader external compatibility follows after the RPi5 demo path. The transport family is generation data, so it can be replaced without a new contract format |
@@ -31,7 +32,7 @@ The active lane is now the [RPi5 ROS 2 demo track](09-rpi5-ros2-demo.md). Work s
 2. **Target-qualified artifacts:** make the generation, release, kernel image, and component images reject wrong-architecture binaries before mapping executable bytes.
 3. **AArch64 QEMU boot:** already established by P5 on `aarch64-sel4-qemu-virt`, where seL4 owns EL1/EL0 transitions, the MMU, exceptions, timers, interrupts, and UART. What remains demo-scoped is one generation exercising the component-launch and data path together, plus rollback and wrong-target rejection on that profile.
 4. **Raspberry Pi 5 physical boot:** build the `bcm2712` seL4 kernel/loader from the existing pins and platform config, bring up serial logging, the interrupt/timer path, and a no-ambient-storage removable-media boot on the named board.
-5. **Two-component data path on Arm:** run two isolated components exchanging a bounded C7/C8 sample on AArch64 and then on the Pi.
+5. **Two-component data path on Arm:** run two isolated components — authored and built entirely outside this repository against the [Component platform track](10-component-platform.md)'s CP5 out-of-tree SDK — exchanging a bounded C7/C8 sample on AArch64 and then on the Pi.
 6. **Node and transport envelope:** provide only the allocator, startup, clock/timer, executor, bounded stream/network path, and packaging surface needed by the pinned ROS 2 transport profile.
 7. **Minimal transport topic profile:** implement the fixed session, publisher/subscriber, key expression, classic CDR payload, message attachment, static declaration, and QoS subset for two nodes without introducing ambient discovery, a router, POSIX paths, or wildcard network authority.
 8. **Observed demo:** record the Raspberry Pi 5 run where one node publishes middleware-backed topic data and the other receives it, with bounded semantic/wire evidence and failure markers.
@@ -43,7 +44,7 @@ The [backlog](00-backlog.md) still sits ahead of all lanes: resolve or explicitl
 
 ```mermaid
 flowchart TD
-    Backlog["Backlog: B1–B68 resolved\nno open items"]
+    Backlog["Backlog: B1–B69 resolved\nB70 open"]
     Foundations["M1–M6 foundations\nexisting x86/QEMU evidence"]
     C7["C7 sample plane\ncomplete"]
     C8["C8.1–C8.15 fabric\ncomplete"]
@@ -53,6 +54,12 @@ flowchart TD
     P5["P5 seL4 substitution\ncomplete; product path"]
     P4["P4 Raspberry Pi 5 qualification"]
     C10["C10 private component memory"]
+    CP0["CP0 component-spec/v1"]
+    CP1["CP1 system-spec/v1 + generation derivation"]
+    CP2["CP2 runtime binding resolution"]
+    CP3["CP3 crate-per-component SDK"]
+    CP4["CP4 external artifact admission"]
+    CP5["CP5 out-of-tree proof"]
     R0["R0 minimal Zenoh topic profile"]
     RP0["RP0 demo contract"]
     RP1["RP1 target-qualified build path"]
@@ -81,6 +88,16 @@ flowchart TD
     P4 --> RP3
     C7 --> RP4
     C8 --> RP4
+    Backlog --> CP0
+    Backlog --> CP2
+    CP0 --> CP1
+    CP2 --> CP3
+    CP0 --> CP4
+    CP2 --> CP4
+    CP3 --> CP4
+    CP3 --> CP5
+    CP4 --> CP5
+    CP5 --> RP4
     C10 --> RP5
     R0 --> RP6
     X1 -.->|only if chosen| RP6

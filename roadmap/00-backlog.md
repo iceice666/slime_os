@@ -24,7 +24,64 @@ full and says why.
 
 ## Open
 
-(none)
+### B70 — component definitions and slot/route bindings are compile-time-coupled to one crate's private manifest parser, blocking out-of-tree components
+
+**Problem:** Slime OS has no component-level specification independent of the
+generation manifest. `contracts/generation/v1/schema.zt`'s
+`Executable`/`Instance`/`Object` records, hand-authored in
+`contracts/generation/v1/fixtures/*.zti`, are the sole existing definition of
+"what a component is." Every one of `components/bins`'s 52 `[[bin]]` entries
+(`components/bins/Cargo.toml`, `autobins = false`) compiles against four files
+`components/bins/build.rs` privately generates into `OUT_DIR` by string-parsing
+that manifest, through three generator functions (`generate_boot_layout` at
+lines 57–66, `generate_command_profile` at lines 68–175 emitting both
+`command_profile.rs` and `dango_profile.rs`, `generate_fabric_profile` at lines
+177–197), and 17 component source files `include!` the results at 19 sites —
+confirmed at `components/bins/src/bin/spawn-service.rs:32`, `init.rs:37,118`,
+and `fabric-publisher.rs:50`, plus `call_broker.rs`, `fabric_boot.rs`,
+`fabric_call_scenario.rs`, `fabric_matrix.rs`, `operation_broker.rs`,
+`console.rs`, `dango.rs` (two sites), `fabric-intruder.rs`,
+`fabric-publisher-b.rs`, `fabric-subscriber.rs`, `fabric-subscriber-b.rs`,
+`fabric-service.rs`, `sample-lender.rs`, `sample-receiver.rs`. A component's
+CSpace/notification slot numbers are therefore baked into its own compiled
+source rather than resolved at runtime, so no component can build unless it is
+a `[[bin]]` inside this exact crate whose `build.rs` ran against this exact
+manifest. `scripts/build/build-generation.py`'s `build_rust_components()`
+confirms this at the build-pipeline level: it invokes exactly one command,
+`cargo build --release --target <profile> -p slime-components --bin <name>
+--bin <name> ...` (lines 2413–2461), with no parameter accepting a component
+ELF built anywhere else. `contracts/component/v2/schema.zt`'s `ImageHeader`
+carries only target-qualification fields (`magic`, `architecture`, `abi`,
+`page_profile`, `required_features`, a segment table) and no identity, purpose,
+capability, or interface metadata, so there is also no schema-level notion of a
+component's contract independent of its binary bytes. This compounds under
+every new component (each addition edits the same shared crate and re-triggers
+the same private parser) and makes out-of-tree component development
+architecturally impossible today, not merely unconfigured.
+
+**Evidence:** Session investigation, 2026-08-17, grounded directly against
+`components/bins/Cargo.toml`, `components/bins/build.rs:57–197`,
+`scripts/build/build-generation.py:2413–2461`,
+`contracts/component/v2/schema.zt`, and the 19 `include!` call sites above
+(three spot-verified directly by line number: `spawn-service.rs:32`,
+`init.rs:37,118`, `fabric-publisher.rs:50`).
+
+**Proposed fix:** introduce `contracts/component-spec/v1` and
+`contracts/system-spec/v1` as the single formal source of truth for a
+component's identity, capability, interface, dependency, lifecycle, and runtime
+requirements; derive `contracts/generation/v1` manifests from them instead of
+hand-authoring both; move component slot/route resolution from
+`build.rs`-private compile-time constants to a runtime-queryable root-served
+operation. See the [Component platform track](10-component-platform.md),
+milestones CP0–CP2.
+
+**Exit condition:** `contracts/component-spec/v1` and
+`contracts/system-spec/v1` exist and are validated by `just contracts_check`;
+`contracts/generation/v1/fixtures/valid.zti` and at least one `sel4-*.zti` are
+generated from `system-spec`/`component-spec` sources rather than hand-authored
+independently; no component source file `include!`s a `build.rs`-private,
+manifest-derived constant table; `just contracts_check`, `just
+generation_check`, and the full seL4 gate suite pass unchanged.
 
 ## Deferred follow-ups
 
@@ -34,7 +91,7 @@ successor closes it.
 
 - B61 left `serve_instance_graph` untestable pending a seL4 object-invocation seam.
 - B63 left marker expectations as Python literals rather than blessable fixtures.
-- B65 left the 52-binary fixture population uncollapsed.
+- B65 left the 52-binary fixture population uncollapsed; CP3 in the [Component platform track](10-component-platform.md) is the planned resolution.
 - B60 left two authority-derivation steps in Python rather than schema-declared.
 
 Evidence for all four: [`devlog/2026-08-17-structural-audit/`](../devlog/2026-08-17-structural-audit/index.md).

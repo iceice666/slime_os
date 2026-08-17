@@ -205,11 +205,12 @@ A named Raspberry Pi 5 boots a verified Slime generation from reproducible media
 
 **Status:** Not started.
 
-**Depends on:** RP2, RP3, C7, and the C8 stream/fabric slices consumed by the transport runtime.
+**Depends on:** RP2, RP3, C7, the C8 stream/fabric slices consumed by the transport runtime, and [CP5](10-component-platform.md#cp5--out-of-tree-component-development-proof) from the Component platform track.
 
 ### Deliverables
 
 - run two isolated AArch64 components that exchange bounded typed data through the same C7/C8 path the ROS nodes will use behind their publisher/subscriber roles;
+- author and build both components entirely outside this repository, through CP5's out-of-tree component SDK path, rather than as `components/bins` in-tree binaries; this requirement is scoped to RP4's two components only and does not extend to RP6's ROS 2 node components;
 - exercise inline samples and, if the demo message can exceed the IPC control bound, a shared-buffer-backed sample descriptor;
 - prove endpoint, buffer, mapping, loan, event, and queue accounting on Arm rather than inheriting x86-only evidence;
 - record the same scenario under `aarch64-qemu-virt` and on Raspberry Pi 5, with physical traces labeled separately;
@@ -220,7 +221,8 @@ A named Raspberry Pi 5 boots a verified Slime generation from reproducible media
 - the publisher component cannot receive or re-delegate subscriber authority, and the subscriber cannot publish unless explicitly granted;
 - malformed descriptors, wrong type tags, quota exhaustion, peer death, and route denial fail closed and reclaim resources;
 - the Raspberry Pi 5 run observes the same semantic data-transfer records as the AArch64 QEMU run, excluding architecture-specific register and address detail;
-- the board remains responsive after the exchange and emits an operator-visible completion marker.
+- the board remains responsive after the exchange and emits an operator-visible completion marker;
+- CP5's own required checks pass for these two components specifically: their build uses only the published/vendored SDK with no path reference into this repository's `components/` directory, and removing their out-of-tree checkout and rebuilding from in-tree fallback components still passes every other check in this list.
 
 ### Planned verification target
 
@@ -230,7 +232,7 @@ just rpi5_data_path_check
 
 ### Exit condition
 
-Before the transport and ROS layers are introduced, two isolated components exchange the demo-shaped bounded data path on AArch64 QEMU and on Raspberry Pi 5 with explicit route authority and resource reclamation.
+Before the transport and ROS layers are introduced, two isolated components — authored and built entirely outside this repository against the CP5 component SDK — exchange the demo-shaped bounded data path on AArch64 QEMU and on Raspberry Pi 5 with explicit route authority and resource reclamation.
 
 ## RP5 — Node and transport runtime envelope
 
