@@ -491,47 +491,31 @@ FABRIC_STREAM_CONTROL_GRANTS = (
     "fabric-publisher-b-control",
     "fabric-subscriber-b-control",
 )
-# C8.10's full-graph boot stream plane, declared in full rather than derived
-# from the tuple above.
+# The single-broker default above is the fallback for a profile that declares no
+# `streamControls` of its own. B60 moved the per-profile lists into the fixtures:
+# `sel4-boot`/`sel4-traffic`/`sel4-fault`/`sel4-saturation` (C8.10's full-graph
+# boot) and `sel4-matrix`/`sel4-matrix-unsatisfiable` (C8.12) each declare their
+# seven-entry plane, where this builder previously selected one of two identical
+# tuples by comparing the profile's *name*.
 #
-# Two things change together here. The unauthorized probe, the declared
-# interposition proxy, and the filtered-introspection client join as three
-# distinct component identities; `fabric-intruder` — which carried all three
-# roles at once behind an env switch — drops out, so the new boot path is free
-# of it without disturbing `fabric_visibility_check`, whose markers and source
-# assertions still name it.
+# Two properties those declarations carry, which is why they are declared in full
+# per profile rather than derived from the default:
 #
-# Declared *per profile* because the stream plane's supervision slots are
-# numbered `FIRST_CONTROL_SLOT + len(controls) + index`. Lengthening one shared
-# list would renumber the subscriber supervision handles that the C8.3-C8.8
-# gates' `launch_fabric_graph` grants positionally, and each of those gates
-# would then read a control endpoint where it expects a supervision handle.
-# Every earlier profile keeps its layout byte-for-byte.
-FABRIC_BOOT_STREAM_CONTROL_GRANTS = (
-    "fabric-publisher-control",
-    "fabric-subscriber-control",
-    "fabric-publisher-b-control",
-    "fabric-subscriber-b-control",
-    "fabric-observer-control",
-    "fabric-probe-control",
-    "fabric-proxy-control",
-)
-# C8.12's matrix plane. One compatible pair per declared route, the ungranted
-# probe, and the declared interposition proxy — every identity distinct, so a
-# denial can never be confused for a role granted elsewhere.
+# * The full-graph boot names the unauthorized probe, the declared interposition
+#   proxy, and the filtered-introspection client as three distinct component
+#   identities. `fabric-intruder` — which carried all three roles at once behind
+#   an env switch — drops out, leaving `fabric_visibility_check`'s markers and
+#   source assertions, which still name it, undisturbed.
+# * The stream plane's supervision slots are numbered
+#   `FIRST_CONTROL_SLOT + len(controls) + index`. Lengthening one shared list
+#   would renumber the subscriber supervision handles that the C8.3-C8.8 gates'
+#   `launch_fabric_graph` grants positionally, and each of those gates would then
+#   read a control endpoint where it expects a supervision handle. Every earlier
+#   profile keeps its layout byte-for-byte by declaring nothing.
 #
-# `fabric-probe` is present deliberately: the denial under test is "no declared
-# edge", not "no channel", so it must hold a real control endpoint before it can
-# be refused on the graph rather than by the kernel.
-FABRIC_MATRIX_STREAM_CONTROL_GRANTS = (
-    "fabric-publisher-control",
-    "fabric-subscriber-control",
-    "fabric-publisher-b-control",
-    "fabric-subscriber-b-control",
-    "fabric-observer-control",
-    "fabric-probe-control",
-    "fabric-proxy-control",
-)
+# C8.12's matrix plane declares `fabric-probe` deliberately: the denial under
+# test is "no declared edge", not "no channel", so it must hold a real control
+# endpoint before it can be refused on the graph rather than by the kernel.
 FABRIC_CALL_CONTROL_GRANTS = (
     "fabric-call-client-control",
     "fabric-call-client-b-control",
@@ -1110,9 +1094,10 @@ def declared_fabric_profiles(manifest: dict) -> list[str]:
 
 
 def _control_sources(
-    manifest: dict, grant_names: tuple[str, ...], holder: str = "fabric-service"
-) -> list[str]:
-    """The components holding each named control grant, in declared order.
+    manifest: dict, grant_names: tuple[str, ...]
+) -> tuple[list[str], str | None]:
+    """The components holding each named control grant, in declared order, and
+    the component those controls terminate at.
 
     B11: a grant whose source the selected boot profile does not declare is
     absent rather than invalid, so the list shortens for a profile that drops
@@ -1122,15 +1107,23 @@ def _control_sources(
     control endpoint where they expect one. A grant that *is* declared must
     still be exactly right.
 
-    `holder` is the component the plane's controls terminate at. It is
-    `fabric-service` for every single-plane profile, where one broker owns
-    every route. The full-graph boot declares a bounded route worker per plane
-    (C8.10), and a worker authenticates a client by the control endpoint the
-    request arrived on — so those controls must terminate at the worker itself.
-    A worker cannot be handed one afterwards: `grant_crosses_spawn` excludes
-    endpoint grants from a spawn request and `nth_declared_capability` skips
-    endpoint-kind minted bindings, so the generation is the only party that can
-    place it (B55).
+    B60: the holder is *read from the manifest* rather than chosen here. It used
+    to be a Python string comparison on the profile name — `fabric-call-worker`
+    under the full-graph profile, `fabric-service` otherwise — which made this
+    builder the authority on where a plane's authority terminates while the
+    fixture merely had to agree. The real invariant is that every control in one
+    plane terminates at the *same* component, whichever it is; that is checked
+    here, and the answer comes from the grants.
+
+    Why the answer differs per profile at all: a bounded route worker (C8.10)
+    authenticates a client by the control endpoint the request arrived on, so
+    those controls must terminate at the worker itself, and a worker cannot be
+    handed one afterwards — `grant_crosses_spawn` excludes endpoint grants from a
+    spawn request and `nth_declared_capability` skips endpoint-kind minted
+    bindings, so the generation is the only party that can place it (B55). Every
+    single-plane profile declares no worker instance and terminates at
+    `fabric-service`. One manifest carries one grant list, which is why a
+    manifest declaring both kinds of profile cannot satisfy both rules (B56).
     """
     controls_by_name = [
         grant
@@ -1141,16 +1134,105 @@ def _control_sources(
     if len(grants) != len(controls_by_name):
         fail("fabric graph: duplicate control grant name")
     controls = []
+    holder: str | None = None
     for name in grant_names:
         grant = grants.get(name)
         if grant is None:
             continue
-        if grant["target"] != holder or grant["rights"] != ["send", "recv"]:
-            fail(f"fabric graph: invalid control grant {name}")
+        if grant["rights"] != ["send", "recv"]:
+            fail(f"fabric graph: control grant {name} must carry send and recv")
+        if holder is None:
+            holder = grant["target"]
+        elif grant["target"] != holder:
+            fail(
+                f"fabric graph: control grant {name} terminates at "
+                f"{grant['target']} but its plane terminates at {holder}; a "
+                "worker authenticates a client by the endpoint it arrived on, so "
+                "one plane's controls cannot be split across holders"
+            )
         controls.append(grant["source"])
     if len(set(controls)) != len(controls):
         fail("fabric graph: duplicate control source")
-    return controls
+    return controls, holder
+
+
+def _assert_declared_control_slots(
+    manifest: dict, planes: list[dict], plane_grants: dict[str, tuple[str, ...]]
+) -> None:
+    """Refuse a manifest whose pinned control slots disagree with the order the
+    brokers compile against.
+
+    A control slot has two independent sources. The fixture pins an integer per
+    binding (`{ grant = "fabric-call-client-control"; slot = 2; }`), while
+    `fabric-service.rs` and the route workers recompute it at runtime as
+    `FABRIC_FIRST_CONTROL_SLOT + position(component)` over the ordered array this
+    builder emits. The two must land on identical numbers, and before B60 nothing
+    but a comment said so — which is the mechanism B55 hit from the other side,
+    where a stale supervision-row count shifted every call/op slot above it and
+    only a full boot exposed it.
+
+    Only the *holder's* binding is checked. An endpoint grant installs both ends,
+    so it has two bindings: the client's, numbered in the client's own small
+    namespace (slot 0 for its single control), and the holder's, which is the
+    indexed table the broker walks. Comparing the client's would compare two
+    unrelated numberings.
+
+    And only a holder that owns *one* plane is checked. Each plane is numbered
+    from `FABRIC_FIRST_CONTROL_SLOT` independently, because C8.10's bounded route
+    workers are separate tasks with separate capability tables — slot 2 in the
+    call worker and slot 2 in the operation worker name different objects. A
+    holder owning several planes therefore cannot satisfy every plane's numbering
+    at once, and `valid.zti`'s reference `fabric-service` is exactly that: one
+    broker holding stream, call, and operation controls in one table, where the
+    planes must be laid out consecutively rather than each from slot 2. Asserting
+    the per-plane rule against it would demand a contradiction — the same shape of
+    mistake B56 found in a gate that swept every profile through a rule only some
+    could satisfy.
+
+    Checked here rather than in a gate script because a divergence makes the
+    generation wrong, not merely unproven: the build should not emit it.
+    """
+    # A plane's controls are emitted in the order of its grant-name tuple, so the
+    # nth control's slot is the nth declared grant's. Rebuild that association by
+    # position: `planes` carries components, and `_control_sources` dropped any
+    # grant this profile does not declare, so re-filtering the same tuples the
+    # same way recovers which grant produced which slot.
+    derived: dict[tuple[str, str], int] = {}
+    planes_per_holder: dict[str, set[str]] = {}
+    grants = {grant["name"]: grant for grant in manifest["grants"]}
+    for plane in planes:
+        tuples = plane_grants.get(plane["name"], ())
+        declared = [name for name in tuples if name in grants]
+        if len(declared) != len(plane["controls"]):
+            # The plane's tuple and its resolved controls disagree in length,
+            # which means the two are no longer the same filter. Refusing beats
+            # silently checking a shifted pairing.
+            fail(
+                f"fabric graph: plane {plane['name']} resolved "
+                f"{len(plane['controls'])} controls from {len(declared)} declared "
+                "grants; the control-slot cross-check cannot pair them"
+            )
+        for name, control in zip(declared, plane["controls"], strict=True):
+            holder = grants[name]["target"]
+            derived[(holder, name)] = control["slot"]
+            # `operationReplacement` is numbered as a continuation of
+            # `operation`, not as a plane of its own, so the two do not count as
+            # separate planes against one holder.
+            family = "operation" if plane["name"] == "operationReplacement" else plane["name"]
+            planes_per_holder.setdefault(holder, set()).add(family)
+    for instance in manifest["instances"]:
+        for binding in instance.get("bindings", []):
+            expected = derived.get((instance["name"], binding["grant"]))
+            if expected is None or expected == binding["slot"]:
+                continue
+            if len(planes_per_holder.get(instance["name"], ())) != 1:
+                continue
+            fail(
+                f"fabric graph: {instance['name']}'s binding for "
+                f"{binding['grant']} pins slot {binding['slot']} but the plane "
+                f"derives {expected}; the fixture and the broker's "
+                "FABRIC_FIRST_CONTROL_SLOT + index must agree"
+            )
 
 
 def resolve_fabric_graph(graph: dict, profile_name: str) -> dict:
@@ -1298,6 +1380,17 @@ def resolve_fabric_profile(manifest: dict, interfaces: list, profile_name: str) 
         fabric_profile_name = manifest["fabricGraph"]["profiles"][0]["name"]
     else:
         fabric_profile_name = profile_name
+    # The record itself, captured before `resolve_fabric_graph` drops the
+    # `profiles` list: B60 reads this profile's declared stream control plane
+    # from it rather than inferring one from its name.
+    fabric_profile = next(
+        (
+            profile
+            for profile in manifest["fabricGraph"].get("profiles", [])
+            if profile.get("name") == fabric_profile_name
+        ),
+        {},
+    )
     graph = resolve_fabric_graph(manifest["fabricGraph"], fabric_profile_name)
     executable_names = {executable["name"] for executable in manifest["executables"]}
     graph_bytes = build_fabric_graph(graph, executable_names, interfaces)
@@ -1315,39 +1408,41 @@ def resolve_fabric_profile(manifest: dict, interfaces: list, profile_name: str) 
         )
         for route in graph["routes"]
     )
-    # The full-graph boot and matrix profiles declare their own stream planes;
-    # every other profile keeps the exact control layout its gate already
-    # grants. A source this profile does not declare drops out of the list
-    # rather than failing, so the product profile resolves the same plane with
-    # fewer participants.
-    if fabric_profile_name == UNIFIED_FABRIC_PROFILE:
-        stream_control_grants = FABRIC_BOOT_STREAM_CONTROL_GRANTS
-    elif fabric_profile_name == MATRIX_FABRIC_PROFILE:
-        stream_control_grants = FABRIC_MATRIX_STREAM_CONTROL_GRANTS
-    else:
-        stream_control_grants = FABRIC_STREAM_CONTROL_GRANTS
-    stream_controls = _control_sources(manifest, stream_control_grants)
-    # C8.10's bounded route workers own their own planes' controls, so under the
-    # full-graph profile these terminate at the worker rather than at the stream
-    # broker. Every single-plane profile has no worker instance at all and keeps
-    # `fabric-service`, which is what leaves the C8.6/C8.7 gates byte-identical.
-    call_holder = (
-        "fabric-call-worker"
-        if fabric_profile_name == UNIFIED_FABRIC_PROFILE
-        else "fabric-service"
+    # B60: which grants form the stream control plane is the *profile's* to
+    # declare. This used to be a Python comparison on the profile name, which
+    # made the builder the authority on a plane's membership while the manifest
+    # merely had to agree — and order is authority-bearing here, since a broker
+    # resolves a client's slot as `FIRST_CONTROL_SLOT + position`.
+    #
+    # A profile declaring no list keeps the single-broker default: every earlier
+    # gate's plane stays byte-identical, and a source the profile does not declare
+    # drops out rather than failing, so the product profile resolves the same
+    # plane with fewer participants.
+    declared_stream_controls = tuple(fabric_profile.get("streamControls", ()))
+    stream_control_grants = declared_stream_controls or FABRIC_STREAM_CONTROL_GRANTS
+    stream_controls, _stream_holder = _control_sources(manifest, stream_control_grants)
+    # B60: the holder each plane terminates at is the manifest's to declare, and
+    # `_control_sources` reads it from the grants rather than this builder
+    # choosing it by profile name. The operation plane's two grant families must
+    # still land on one holder — they share one worker's control table — so that
+    # is checked here rather than assumed.
+    call_controls, _call_holder = _control_sources(manifest, FABRIC_CALL_CONTROL_GRANTS)
+    operation_controls, operation_holder = _control_sources(
+        manifest, FABRIC_OPERATION_CONTROL_GRANTS
     )
-    operation_holder = (
-        "fabric-op-worker"
-        if fabric_profile_name == UNIFIED_FABRIC_PROFILE
-        else "fabric-service"
+    replacement_controls, replacement_holder = _control_sources(
+        manifest, FABRIC_OPERATION_REPLACEMENT_GRANTS
     )
-    call_controls = _control_sources(manifest, FABRIC_CALL_CONTROL_GRANTS, call_holder)
-    operation_controls = _control_sources(
-        manifest, FABRIC_OPERATION_CONTROL_GRANTS, operation_holder
-    )
-    replacement_controls = _control_sources(
-        manifest, FABRIC_OPERATION_REPLACEMENT_GRANTS, operation_holder
-    )
+    if (
+        operation_holder is not None
+        and replacement_holder is not None
+        and operation_holder != replacement_holder
+    ):
+        fail(
+            f"fabric graph: operation controls terminate at {operation_holder} but "
+            f"their replacement controls terminate at {replacement_holder}; both "
+            "are one worker's control table"
+        )
     participants = []
     for _route_identity, route in route_rows:
         interface = by_interface[route["interface"]]
@@ -1553,6 +1648,16 @@ def resolve_fabric_profile(manifest: dict, interfaces: list, profile_name: str) 
             for instance, count in declared_spawn_grant_counts(manifest)
         ],
     }
+    _assert_declared_control_slots(
+        manifest,
+        artifact["planes"],
+        {
+            "stream": stream_control_grants,
+            "call": FABRIC_CALL_CONTROL_GRANTS,
+            "operation": FABRIC_OPERATION_CONTROL_GRANTS,
+            "operationReplacement": FABRIC_OPERATION_REPLACEMENT_GRANTS,
+        },
+    )
     quotas = validated_shared_buffer_quotas(manifest["sharedBufferBudget"])
     quota = quotas.get(graph["fabricComponent"])
     if quota is None:

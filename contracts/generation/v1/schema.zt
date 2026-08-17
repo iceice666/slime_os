@@ -156,9 +156,23 @@ FabricProfileInterposition :: type {
   chain : List Text;
 };
 
+-- A named full-graph profile.
+--
+-- `streamControls` is the ordered stream control-grant list this profile's
+-- broker indexes. Order is authority-bearing: a broker resolves a client's
+-- control slot as `FABRIC_FIRST_CONTROL_SLOT + position`, so reordering this
+-- list renumbers real capability slots. It is declared here rather than
+-- selected by the builder from the profile's *name* (B60) — a Python string
+-- comparison on `"unified"`/`"matrix"` made the builder the authority on which
+-- grants form a control plane while the manifest merely had to agree.
+--
+-- Empty means "this profile does not declare its own stream plane", and the
+-- builder falls back to the single-broker default. The call and operation
+-- planes need no equivalent: their grant sets do not vary by profile.
 FabricProfile :: type {
   name : Text;
   interpositions : List FabricProfileInterposition;
+  streamControls : List Text;
 };
 
 -- One named boot profile: which instances the generation declares beyond the

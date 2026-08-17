@@ -28,72 +28,8 @@ B57's own verification sweep, and had been red before either fix._
 _B57 and B58 were the two real defects with wrong observable semantics, and B67 —
 found while running B57's verification sweep — was a pair of negative controls
 that could not fail. B59, the highest-leverage structural item, is resolved too:
-the syscall ABI is now one contract. B66 followed from it. All six are in the
-resolved log below. B60–B65 remain._
-
-### B60 — authority-derivation policy lives in the builder, and one slot number has two independent sources
-
-**Status:** Open. **Class:** Unmasked architectural debt (B55's mechanism, not
-yet closed). **Depends on:** B62 makes the full fix cheaper; the assertion half
-is independent.
-
-**Problem:** `contracts/generation/v1/schema.zt` declares data *shape* only.
-Which grants constitute a control plane, which component a plane's controls
-terminate at, how the supervision table is derived, and how a notification slot
-is named all live in `build-generation.py` functions that no schema constrains.
-B55's root cause was exactly this: a fixture froze 3 supervision rows while the
-Python derivation rule computed 6, and only a full boot could detect the
-disagreement.
-
-**Evidence (2026-08-17).**
-
-- `_control_sources` (`build-generation.py:1127-1170`) hardcodes which grant
-  names count as control and which `rights` shape is legal.
-- The control holder is chosen by string comparison:
-  `"fabric-call-worker" if fabric_profile_name == UNIFIED_FABRIC_PROFILE else "fabric-service"`
-  (`:1352-1365`) — the exact rule B56 had to exclude from its sweep because one
-  manifest cannot satisfy both spellings.
-- Supervision-table membership (ring participants ∪ declared proxy ∪
-  matrix-denied probe) is a Python set comprehension (`:1394-1436`), not a
-  schema field.
-- Notification slot names are derived by string surgery — `removeprefix`,
-  `rpartition` (`:1705-1721`) — over a grant-naming convention the schema does
-  not encode.
-- `FABRIC_CALL_CONTROL_GRANTS` and its siblings (`:551-570`) are Python tuples
-  that define by construction which grants are "controls" for a plane.
-
-**The two-source slot number.** Traced `fabric-call-worker`'s control slots end
-to end:
-
-1. `contracts/generation/v1/fixtures/sel4-boot.zti:1036-1050` pins them as
-   hand-typed integers (`slot = 2, 3, 4, 5`).
-2. `build-generation.py` reads those grants back in `FABRIC_CALL_CONTROL_GRANTS`
-   tuple order and emits an ordered Rust array carrying no slot number at all
-   (`:1868`).
-3. `components/bins/src/bin/fabric-service.rs:553-555` recomputes the number at
-   runtime as `FABRIC_FIRST_CONTROL_SLOT + position(component)`.
-
-The fixture's literals and the runtime's derived indices must land on identical
-numbers. The only thing asserting they do is the comment at
-`build-generation.py:1417-1423`.
-
-**Proposed fix, in two independently landable halves:**
-
-- *Preventive half (do first).* Add a build-time assertion that every pinned
-  control-grant slot in a fixture equals the position the Rust profile will
-  derive for it, so a B55-class divergence fails the build instead of the boot.
-- *Structural half.* Promote the derivation rules into the schema: a
-  `controlPlane` record naming `{grantNames, holder}` per profile, and a
-  `supervisionRule` enumerant the fixture declares. `_control_sources`, the
-  `FABRIC_*_CONTROL_GRANTS` tuples, and the ring/proxy/denied set logic become
-  schema-driven lookups.
-
-**Exit condition:** A fixture whose pinned control slots disagree with the
-derived profile order fails `just generation_check` with a named error, observed
-by deliberately perturbing one slot; no control-plane membership, holder
-selection, or supervision-row rule is decided by a Python string comparison;
-`just contracts_check`, `just generation_check`, `just sel4_boot_check`,
-`just data_fabric_profile_check`, and `just sel4_boot_layout_check` pass.
+the syscall ABI is now one contract. B66 and B60 followed from it. All seven are
+in the resolved log below. B61–B65 remain._
 
 ### B61 — `just run` boots a test fixture, and the product dispatch path is untestable
 
@@ -339,6 +275,83 @@ gate that used the collapsed binaries passes unchanged, and `just
 sel4_boot_layout_check`, `just fmt_check_all`, and `just lint_all` pass.
 
 ## Resolved
+### B60 — authority-derivation policy lived in the builder, and one slot number had two independent sources
+
+**Status:** Resolved 2026-08-17. **Class:** Unmasked architectural debt (B55's
+mechanism). **Depends on:** none.
+
+**Problem:** `contracts/generation/v1/schema.zt` declared data *shape* only.
+Which grants constitute a control plane, and which component a plane's controls
+terminate at, lived in `build-generation.py` functions that no schema
+constrained. Separately, one control slot had two independent sources: the
+fixture pinned an integer per binding while the broker recomputed it at runtime
+as `FABRIC_FIRST_CONTROL_SLOT + position(component)`, and the only thing
+asserting they agreed was a comment. B55's root cause was exactly this shape — a
+fixture froze 3 supervision rows while the Python rule computed 6, and only a
+full boot could detect it.
+
+**Fix, in three parts.**
+
+*The cross-check (preventive).* `_assert_declared_control_slots` refuses a
+manifest whose pinned control slots disagree with the order the brokers compile
+against, at build time. Two scoping rules were established by measurement rather
+than assumed:
+
+- Only the **holder's** binding is compared. An endpoint grant installs both
+  ends, so it has two bindings: the client's, numbered in the client's own small
+  namespace (slot 0 for its single control), and the holder's, which is the
+  indexed table the broker walks. Comparing the client's compares two unrelated
+  numberings — the first draft did, and reported `pins slot 0 but call derives 2`.
+- Only a holder owning **one** plane is compared. Each plane numbers from
+  `FABRIC_FIRST_CONTROL_SLOT` independently, because C8.10's route workers are
+  separate tasks with separate tables — slot 2 in the call worker and slot 2 in
+  the operation worker name different objects. `valid.zti`'s reference
+  `fabric-service` holds stream, call, and operation controls in *one* table, so
+  it must lay the planes out consecutively and cannot satisfy the per-plane rule.
+  Asserting it against that manifest demanded a contradiction — the same mistake
+  B56 found in a gate that swept every profile through a rule only some could
+  satisfy. Caught before landing, by running `data_fabric_profile_check`.
+
+*The holder.* `_control_sources` now **reads** the holder from the grants and
+checks that every control in one plane terminates at the same component, instead
+of selecting it with `"fabric-call-worker" if fabric_profile_name == UNIFIED_…
+else "fabric-service"`. The operation plane's two grant families are additionally
+checked to land on one holder, since they share one worker's control table.
+
+*The membership.* `FabricProfile` gained `streamControls`, an ordered list the
+profile declares. `FABRIC_BOOT_STREAM_CONTROL_GRANTS` and
+`FABRIC_MATRIX_STREAM_CONTROL_GRANTS` — two byte-identical Python tuples the
+builder chose between by comparing the profile's *name* — are deleted; the six
+profile-bearing fixtures declare their own seven-entry plane, and a profile
+declaring none keeps the single-broker default so every earlier gate's layout
+stays byte-for-byte. Order is authority-bearing (a broker resolves a slot as
+`FIRST_CONTROL_SLOT + position`), which is now stated at the schema field.
+
+**Regression guard, and proof it bites.** Perturbing `sel4-boot.zti`'s
+`fabric-op-time-control` from slot 5 to 9 and building fails with
+`fabric-op-worker's binding for fabric-op-time-control pins slot 9 but the plane
+derives 5; the fixture and the broker's FABRIC_FIRST_CONTROL_SLOT + index must
+agree`. Reverted. A B55-class divergence now fails the build rather than the boot.
+
+**Exit condition (observed):** a fixture whose pinned control slots disagree with
+the derived order fails the build with a named error, observed by perturbing one
+slot; no control-plane membership or holder selection is decided by a Python
+string comparison; the resolved profile is byte-identical, so this is a pure
+refactor. `just contracts_check` (31 manifests), `just generation_check` (two
+isolated builds byte-identical), `just data_fabric_profile_check`, `just
+sel4_boot_layout_check` (25 plane layouts), `just sel4_boot_check`,
+`sel4_matrix_check`, `sel4_traffic_check`, `sel4_fault_check`,
+`sel4_stream_check`, `sel4_visibility_check`, `sel4_call_check`,
+`sel4_operation_check`, `just ruff`, and `just fmt_check_all` all pass.
+
+**Not closed by this item.** Two derivations named in the audit remain in Python:
+supervision-table membership (the ring ∪ proxy ∪ matrix-denied-probe set
+comprehension) and notification-slot naming by `removeprefix`/`rpartition` string
+surgery. Both are now guarded from the *slot* direction — a divergence between a
+derived row and a pinned one fails the build — but neither rule is schema-declared.
+They are narrower than the two this item fixed and want their own entry if they
+bite again.
+
 ### B66 — `ipc.rs` carried two retired-mechanism constants, one of them load-bearing
 
 **Status:** Resolved 2026-08-17. **Class:** Unmasked debt (B46 residue).

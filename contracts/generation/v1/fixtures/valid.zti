@@ -422,6 +422,7 @@
       {
         interpositions = [];
         name = "default";
+        streamControls = [];
       };
       {
         interpositions = [
@@ -434,6 +435,7 @@
           };
         ];
         name = "visibility";
+        streamControls = [];
       };
       {
         interpositions = [
@@ -446,6 +448,15 @@
           };
         ];
         name = "unified";
+        streamControls = [
+          "fabric-publisher-control";
+          "fabric-subscriber-control";
+          "fabric-publisher-b-control";
+          "fabric-subscriber-b-control";
+          "fabric-observer-control";
+          "fabric-probe-control";
+          "fabric-proxy-control";
+        ];
       };
     ];
     routes = [
