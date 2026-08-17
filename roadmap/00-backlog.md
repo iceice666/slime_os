@@ -34,6 +34,46 @@ derivations B60 named remain in Python. Those are the follow-ups a future audit
 should start from._
 
 ## Resolved
+### B69 — RP1's artifact gate never ran, and hid three admission defects
+
+**Status:** Resolved 2026-08-17. **Class:** Defect (a claimed-green gate could
+not reach its assertions, over a missing admission check). **Depends on:** none.
+
+**Problem, as opened:** `just rpi5_artifact_check` died with
+`KeyError: 'instances'` at `scripts/build/build-generation.py:3275`, reached from
+`check-rpi5-artifacts.py` `retarget_generation`. Reproduced with that file
+stashed back to its committed state, so it predated the format-2 contract work
+that found it. RP1's devlog entry lists the gate as directly observed and
+passing; that evidence was stale.
+
+**What it turned out to be: four layers, each hidden by the one before.**
+
+| Layer | Defect | Fix |
+|---|---|---|
+| 1 | `closure_manifest()` still spoke generation v4: one `components` list, `bootstrapComponent`, `health.requiredComponents`. v5 splits these into an executable catalogue plus instances. | Emit `executables` + `instances`, `bootstrapInstance`, `requiredInstances`. |
+| 2 | The manifest named `bootAction: "graph"`, which is not in `check-generation.py`'s closed `BOOT_ACTIONS`. Every negative case failed as `UnknownBootAction` before reaching the mismatch it tested. | Name the admitted `"product"` action. |
+| 3 | `check_generation` applied `owner_index != index` unconditionally, but `build-generation.py` encodes a root-owned instance as `(owner_kind=0, owner_index=0)`. Any root-owned instance at index 0 was rejected as `BadInstanceOwner`. | Scope the self-ownership check to `owner_kind == 1`; require `owner_index == 0` otherwise. |
+| 4 | **`check_generation` never validated the kernel object image.** Every component image was checked against the resolved target profile; the kernel was not. A generation carrying a wrong-architecture kernel was admitted. | Call the existing `check_kernel_image` for `kind == 1` objects in the object-table walk. |
+
+**Why layer 3 stayed hidden.** Instances are name-sorted, and every committed
+fixture has an instance whose name sorts before `init` (`fabric-call-client` in
+`sel4-boot.zti`, `fabric-intruder` in `sel4-qos.zti`), so `init` never landed at
+index 0. Only a synthesized four-instance closure put it there.
+
+**Why layer 4 is the real finding.** `KernelTargetProfileMismatch` existed in
+`check_kernel_image` and nothing on the admission path called it. RP1's stated
+purpose is rejecting wrong-architecture kernels and components before mapping
+bytes; the component half worked, the kernel half was unreachable. The gate that
+would have caught it was itself broken by layer 1, which is why a
+`KeyError` traceback was worth chasing to the bottom rather than patching at the
+surface.
+
+**Exit condition (observed):** `just rpi5_artifact_check` passes, reporting
+`RPi5 target-qualified executable closure and artifacts passed`, with the
+wrong-target kernel and per-component substitutions now actually rejected.
+`just generation_check`, `just contracts_check`, and `just ruff` pass, so the
+added kernel-image admission check does not regress the real generations.
+
 ### B68 — the determinism gate compared one scheduling interleaving
 
 **Status:** Resolved 2026-08-17. **Class:** Defect (a gate asserting determinism

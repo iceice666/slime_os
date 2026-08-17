@@ -2,9 +2,9 @@
 
 This directory is the canonical plan for Slime OS. The near-term product goal is now a concrete robotics demonstration:
 
-> **Boot Slime OS on a Raspberry Pi 5 and run two local ROS 2 nodes that exchange bounded topic data through a minimal DDSI-RTPS/XCDR profile.**
+> **Boot Slime OS on a Raspberry Pi 5 and run two local ROS 2 nodes that exchange bounded topic data through a minimal bounded Zenoh profile with classic CDR payloads.**
 
-Everything below is ordered around that acceptance test. Completed x86-64/QEMU work remains valuable regression evidence, but it is no longer the product-leading path. Framework daily-driver work, broad external ROS compatibility beyond the minimum DDS/RTPS topic path, RV64, foreign workloads, and distributed authority are deferred unless they directly de-risk the Raspberry Pi 5 ROS 2 two-node demo.
+Everything below is ordered around that acceptance test. Completed x86-64/QEMU work remains valuable regression evidence, but it is no longer the product-leading path. Framework daily-driver work, broad external ROS compatibility beyond the minimum topic path, RV64, foreign workloads, and distributed authority are deferred unless they directly de-risk the Raspberry Pi 5 ROS 2 two-node demo.
 
 A milestone is complete only when its exit condition is observed. Compiled code, a framebuffer demo, a passing host unit test, or an x86-only QEMU run cannot close a Raspberry Pi 5 milestone.
 
@@ -17,7 +17,7 @@ A milestone is complete only when its exit condition is observed. Compiled code,
 | [Core runtime](02-core-runtime.md) | C7 and all of C8 (C8.1–C8.15) complete; the C8 track closed 2026-08-17 with C8.14's fault-isolation envelope and C8.15's aggregate determinism gate (280 trace records across four boots, compared per worker and record kind after B68 found the flat comparison was asserting one scheduling interleaving) | C9 robot runtime authority, then C10 private component memory |
 | [RPi5 ROS 2 demo](09-rpi5-ros2-demo.md) | RP0 and RP1 complete; RP2 rewritten around the seL4 product boundary (2026-08-16) and largely satisfied by P5, owing only a demo-scoped replay plus AArch64 rollback and wrong-target arms; RP3–RP8 planned | RP2's rollback and wrong-target arms on an AArch64 generation pair |
 | [Architecture portability](07-architecture-portability.md) | P0, P1, P2.1, P2.2, and P5 complete; P2.3–P2.6 superseded by P5 | P4 physical Raspberry Pi 5 qualification is the next architecture evidence gate |
-| [ROS 2 compatibility](03-ros2-compatibility.md) | Not started | R0 minimal DDS/RTPS topic profile is first; broader external/multi-vendor compatibility follows after the RPi5 demo path |
+| [ROS 2 compatibility](03-ros2-compatibility.md) | Not started | R0 minimal Zenoh topic profile is first; broader external compatibility follows after the RPi5 demo path. The transport family is generation data, so it can be replaced without a new contract format |
 | [Platform hardware](04-platform-hardware.md) | Deferred; H1 is blocked and no current seL4 Framework inventory or physical evidence exists | H1 remains blocked until a seL4 Framework image and observed inventory/no-write record exist |
 | [Foreign workloads](05-foreign-workloads.md) | Deferred | Use only if the chosen ROS 2 node route requires a Linux userspace personality |
 | [Authority and trust](06-authority-trust.md) | Deferred | Resume after the demo unless a demo milestone needs a specific authority primitive |
@@ -32,9 +32,9 @@ The active lane is now the [RPi5 ROS 2 demo track](09-rpi5-ros2-demo.md). Work s
 3. **AArch64 QEMU boot:** already established by P5 on `aarch64-sel4-qemu-virt`, where seL4 owns EL1/EL0 transitions, the MMU, exceptions, timers, interrupts, and UART. What remains demo-scoped is one generation exercising the component-launch and data path together, plus rollback and wrong-target rejection on that profile.
 4. **Raspberry Pi 5 physical boot:** build the `bcm2712` seL4 kernel/loader from the existing pins and platform config, bring up serial logging, the interrupt/timer path, and a no-ambient-storage removable-media boot on the named board.
 5. **Two-component data path on Arm:** run two isolated components exchanging a bounded C7/C8 sample on AArch64 and then on the Pi.
-6. **Node and DDS transport envelope:** provide only the allocator, startup, clock/timer, executor, bounded datagram/network path, and packaging surface needed by the pinned ROS 2 DDS profile.
-7. **Minimal DDS/RTPS topic profile:** implement the fixed participant/writer/reader, XCDR1, RTPS DATA, bounded discovery, and QoS subset for two nodes without introducing ambient DDS discovery, POSIX paths, or wildcard network authority.
-8. **Observed demo:** record the Raspberry Pi 5 run where one node publishes DDS-backed topic data and the other receives it, with bounded semantic/RTPS evidence and failure markers.
+6. **Node and transport envelope:** provide only the allocator, startup, clock/timer, executor, bounded stream/network path, and packaging surface needed by the pinned ROS 2 transport profile.
+7. **Minimal transport topic profile:** implement the fixed session, publisher/subscriber, key expression, classic CDR payload, message attachment, static declaration, and QoS subset for two nodes without introducing ambient discovery, a router, POSIX paths, or wildcard network authority.
+8. **Observed demo:** record the Raspberry Pi 5 run where one node publishes middleware-backed topic data and the other receives it, with bounded semantic/wire evidence and failure markers.
 9. **Hardening:** repeat the run, inject denial/restart/resource cases, and make the narrow RPi5 gates stable before resuming broader tracks.
 
 The [backlog](00-backlog.md) still sits ahead of all lanes: resolve or explicitly defer open defects before opening a new roadmap gate. A green verification suite is a precondition for milestone work, not a milestone itself.
@@ -53,14 +53,14 @@ flowchart TD
     P5["P5 seL4 substitution\ncomplete; product path"]
     P4["P4 Raspberry Pi 5 qualification"]
     C10["C10 private component memory"]
-    R0["R0 minimal DDS/RTPS topic profile"]
+    R0["R0 minimal Zenoh topic profile"]
     RP0["RP0 demo contract"]
     RP1["RP1 target-qualified build path"]
     RP2["RP2 AArch64 QEMU product slice"]
     RP3["RP3 Raspberry Pi 5 serial boot"]
     RP4["RP4 Arm component data path"]
-    RP5["RP5 node + DDS transport envelope"]
-    RP6["RP6 minimal DDS/RTPS nodes"]
+    RP5["RP5 node + transport envelope"]
+    RP6["RP6 minimal Zenoh nodes"]
     RP7["RP7 observed RPi5 data demo"]
     RP8["RP8 repeatability and fault envelope"]
     R1["R1 broader ROS 2 topic wire profile"]
@@ -93,10 +93,11 @@ flowchart TD
 
 The demo is intentionally narrower than “full ROS 2 support”:
 
-- It proves **two local Slime-hosted ROS 2 nodes** on Raspberry Pi 5 exchanging one or more bounded topic samples through the admitted minimal DDSI-RTPS/XCDR profile.
-- The selected route must be generation-declared, target-qualified, and DDS-backed. Native C8 fabric may back internal delivery, but the demo cannot be claimed from a local-only ROS-like API that skips DDS/RTPS entirely.
-- It does **not** require arbitrary DDS discovery, unrestricted LAN communication, multiple middleware vendors, services/actions, unmodified desktop ROS packages, Python, Gazebo, compositor support, Wi-Fi, GPU acceleration, or Framework hardware support.
-- It does not put ROS or DDS concepts in the kernel. Nodes, topics, participants, writers/readers, executors, QoS policy, and graph metadata remain userspace contracts over capabilities, C8 routes, and exact datagram/network grants.
+- It proves **two local Slime-hosted ROS 2 nodes** on Raspberry Pi 5 exchanging one or more bounded topic samples through the admitted minimal bounded Zenoh profile.
+- The selected route must be generation-declared, target-qualified, and carried by a real ROS 2 middleware wire protocol. Native C8 fabric may back internal delivery, but the demo cannot be claimed from a local-only ROS-like API that skips the middleware wire entirely.
+- The transport family is replaceable generation data rather than an architectural commitment: `contracts/rpi5-ros2-demo/v2` names it through a closed discriminator plus one optional profile per admitted family.
+- It does **not** require arbitrary middleware discovery, a Zenoh router, gossip or multicast scouting, liveliness tokens, unrestricted LAN communication, multiple middleware vendors, services/actions, unmodified desktop ROS packages, Python, Gazebo, compositor support, Wi-Fi, GPU acceleration, or Framework hardware support.
+- It does not put ROS or middleware concepts in the kernel. Nodes, topics, sessions, publishers/subscribers, executors, QoS policy, and graph metadata remain userspace contracts over capabilities, C8 routes, and exact stream/network grants.
 - A Raspberry Pi 5 run must be physical evidence for the named board; `aarch64-qemu-virt` evidence is necessary regression coverage but cannot replace it.
 
 ## Architectural invariants
@@ -120,7 +121,7 @@ Every track preserves these rules:
 
 ### RPi5 ROS 2 two-node demo release
 
-Requires RP0–RP8. The release must boot a target-qualified Slime OS generation from reproducible Raspberry Pi 5 media, run two local ROS 2 nodes under the selected generation-declared minimal DDS/RTPS route, move bounded DDS topic data from publisher to subscriber, emit deterministic semantic and RTPS evidence of the exchange, and preserve the capability/component/generation invariants above. QEMU evidence and host checks support the claim but do not replace the physical board run.
+Requires RP0–RP8. The release must boot a target-qualified Slime OS generation from reproducible Raspberry Pi 5 media, run two local ROS 2 nodes under the selected generation-declared transport route, move bounded topic data from publisher to subscriber, emit deterministic semantic and wire evidence of the exchange, and preserve the capability/component/generation invariants above. QEMU evidence and host checks support the claim but do not replace the physical board run.
 
 ### AArch64 native architecture release
 
@@ -128,7 +129,7 @@ Requires P0, P1, and P2. It is a prerequisite for the RPi5 demo path but is not 
 
 ### ROS-interoperable external wire release
 
-Requires the minimal RPi5 DDS demo path to be stable unless explicitly reprioritized, then R1 and R2 with their deterministic peer fixtures. R0 proves the minimum DDS/RTPS topic path; R1/R2 broaden it to external peers, more vendors, services, and actions.
+Requires the minimal RPi5 demo path to be stable unless explicitly reprioritized, then R1 and R2 with their deterministic peer fixtures. R0 proves the minimum topic path; R1/R2 broaden it to external `rmw_zenoh` peers, services, and actions.
 
 ### Framework daily-driver release
 

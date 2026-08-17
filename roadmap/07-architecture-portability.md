@@ -2122,7 +2122,7 @@ and `kernel/` plus its legacy-only gates are removed in one reviewable change.
 
 Cortex-M, RV32 microcontrollers, and other systems without the admitted MMU and user/supervisor isolation baseline do not run a weakened form of this kernel. They are external devices reached through bounded userspace services.
 
-A later companion profile may admit micro-ROS/XRCE-DDS or a smaller Zutai protocol over an exact serial, CAN, USB, or network capability. That profile must declare peer identity, types, directions, payload size, frequency, queue depth, timeout, reset behavior, and actuator authority. Disconnect, malformed traffic, reboot, and resource exhaustion become structured C8/C9 events; the companion never receives ambient graph, network, storage, or device authority.
+A later companion profile may admit micro-ROS/XRCE-DDS, `zenoh-pico`, or a smaller Zutai protocol over an exact serial, CAN, USB, or network capability. `zenoh-pico` is a candidate *here* and not as a Slime component: its C toolchain, `z_malloc`/`z_realloc`/`z_free` requirement, and BSD-socket-shaped port API are properties of the microcontroller it runs on rather than obligations on Slime, and the demo's Zenoh transport is what it would peer with. That profile must declare peer identity, types, directions, payload size, frequency, queue depth, timeout, reset behavior, and actuator authority. Disconnect, malformed traffic, reboot, and resource exhaustion become structured C8/C9 events; the companion never receives ambient graph, network, storage, or device authority.
 
 ## Verification policy
 

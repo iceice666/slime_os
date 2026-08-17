@@ -4,7 +4,7 @@
 
 **Status:** Deferred relative to the Raspberry Pi 5 ROS 2 two-node demo. The former custom-kernel inventory harness was retired with P5; no seL4 Framework image or physical evidence record exists. The current Framework removable image previously reported no usable physical keyboard input, and H4 is the first slice allowed to claim a working physical keyboard.
 
-**Dependencies:** [Foundations](01-foundations.md), especially the retained M5.7 storage-safety boundary; [Core runtime](02-core-runtime.md), especially C7 generation-v3 authority and C9 scheduling authority; [Architecture portability](07-architecture-portability.md), especially P1 before H2/C9 low-level contracts; [ROS 2 compatibility](03-ros2-compatibility.md) consumes H6-style networking for the later external ROS wire profile, while the first RPi5 DDS demo consumes a target-specific bounded datagram/network path owned by the RPi5 demo track; [Authority and trust](06-authority-trust.md) owns A1 revocation, A2 secrets, and A3 general accelerator authority.
+**Dependencies:** [Foundations](01-foundations.md), especially the retained M5.7 storage-safety boundary; [Core runtime](02-core-runtime.md), especially C7 generation-v3 authority and C9 scheduling authority; [Architecture portability](07-architecture-portability.md), especially P1 before H2/C9 low-level contracts; [ROS 2 compatibility](03-ros2-compatibility.md) consumes H6-style networking for the later external ROS wire profile, while the first RPi5 demo consumes a target-specific bounded stream/network path declared in the [RPi5 demo track](09-rpi5-ros2-demo.md) rather than H6 itself.
 
 The Hardware track promotes hardware in two distinct steps: deterministic mechanism and fault handling under QEMU first, then an observed Framework run with the exact generation-declared device grant. A QEMU pass never substitutes for physical evidence. DMA-capable physical drivers remain trusted and read-only until H4 installs IOMMU containment; internal NVMe writes remain disabled until H7 completes every promotion gate.
 
@@ -163,7 +163,7 @@ Exit condition: Slime OS has a capability-selected disposable physical storage t
 
 **Status:** Not started.
 
-H6 enables the later broader [ROS R1](03-ros2-compatibility.md#r1-broader-ros-2-topic-wire-profile). It is not the owner of the first [R0](03-ros2-compatibility.md#r0-minimal-raspberry-pi-5-ddsrtps-ros-2-topic-profile) demo path: that path still needs bounded DDSI-RTPS datagram/network authority, but the target-specific minimum lives in the RPi5 demo track rather than the deferred Framework hardware track. H6's deterministic virtio-net backend remains the x86-64 reference QEMU profile for later external peer interoperability. A later AArch64/RPi5 network replay reuses the ROS wire corpus but does not retroactively turn this Framework hardware track into generic ARM support.
+H6 enables the later broader [ROS R1](03-ros2-compatibility.md#r1-broader-ros-2-topic-wire-profile). It is not the owner of the first [R0](03-ros2-compatibility.md#r0-minimal-raspberry-pi-5-zenoh-ros-2-topic-profile) demo path: that path still needs bounded stream/datagram authority, but the target-specific minimum lives in the RPi5 demo track rather than the deferred Framework hardware track. H6's deterministic virtio-net backend remains the x86-64 reference QEMU profile for later external ROS wire work.
 
 Deliverables:
 
@@ -180,7 +180,7 @@ Required checks:
 - the manifest and authority-diff tooling enumerate every reachable destination;
 - QEMU transfers deterministic data to an allowed endpoint while a simultaneous denied endpoint receives no packet;
 - the Framework obtains a lease/address through USB Ethernet and reaches one declared endpoint after link unplug/replug and after a driver restart.
-- after R1/R2 deterministic container conformance passes, a dedicated wired Framework ↔ 64-bit Raspberry Pi 4/5 fixture runs the same pinned Jazzy probes under Fast DDS and Cyclone DDS separately, records packet capture and link/peer restart behavior, and preserves Framework storage integrity; this supplements but never replaces the R1/R2 QEMU gates and proves the Pi only as an external peer, not as a Slime-supported board.
+- after R1/R2 deterministic container conformance passes, a dedicated wired Framework ↔ 64-bit Raspberry Pi 4/5 fixture runs the same pinned upstream probes under the admitted `rmw_zenoh` peer build, records packet capture and link/peer restart behavior, and preserves Framework storage integrity; this supplements but never replaces the R1/R2 QEMU gates and proves the Pi only as an external peer, not as a Slime-supported board.
 
 Planned verification target:
 
