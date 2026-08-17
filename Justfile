@@ -376,10 +376,18 @@ sel4_trace_check: sel4_pin_check
 sel4_gate_control_check:
     python3 scripts/check/check-sel4-gate-controls.py
 
+# Build the product component-graph image. This is the composition `init`
+# launches in a real generation; the default `fixture` variant embeds the same
+# generation but compiles the root's two-fixture proof path instead of the
+# generation-graph launcher, so it is a verification artifact rather than the
+# product (B61).
+sel4_product_image: sel4_pin_check
+    python3 scripts/build/build-sel4.py --component-graph --skip-pin-check
+
 # Run the seL4 product image interactively on the pinned QEMU machine.
-run: sel4_qemu_image_check
+run: sel4_product_image
     qemu-system-aarch64 -machine virt,virtualization=on -cpu cortex-a53 -smp 1 \
-        -m size=2048M -nographic -serial mon:stdio -kernel build/slime-sel4.elf
+        -m size=2048M -nographic -serial mon:stdio -kernel build/slime-sel4-graph.elf
 
 run_release: run
 
@@ -784,7 +792,7 @@ test_sel4_root:
         echo "test_sel4_root: no installed seL4 prefix at $prefix; run 'just sel4_qemu_image_check' first" >&2
         exit 1
     fi
-    expected=118
+    expected=121
     # Pinned rather than ambient, on `lint_sel4_root`'s rule: this build
     # consumes the installed seL4 prefix, so it must use the toolchain that
     # prefix was produced against. `rust-toolchain.toml`'s default is a
@@ -819,7 +827,7 @@ test_sel4_root:
         echo "test_sel4_root: the run did not report $expected passed and 0 failed" >&2
         exit 1
     fi
-    echo "slime-root host tests: $actual/$expected across 14 modules"
+    echo "slime-root host tests: $actual/$expected across 15 modules"
 
 # Python lint for the host-side build/check/generate scripts. Config in ruff.toml.
 ruff:

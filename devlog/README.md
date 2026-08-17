@@ -284,3 +284,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-17 | [B60 — two scoping mistakes on the way to asserting one slot number](2026-08-17-b60-control-plane-authority/index.md) | Change | Verified | B60, B55, B56 |
 | 2026-08-17 | [B64 — the rollback answer was already in the code; four of the five "dead" schemas were live](2026-08-17-b64-format-coexistence/index.md) | Change | Verified | B64, B50 |
 | 2026-08-17 | [B62 — the proposed fix was impossible, so the delta moved to the layer that already had one](2026-08-17-b62-fixture-deltas/index.md) | Change | Verified | B62, B55 |
+| 2026-08-17 | [B61 — `just run` was booting a verification fixture, and one half of the fix needs a seam that does not exist](2026-08-17-b61-product-image-and-dispatch/index.md) | Change | Verified | B61, B23, B46 |

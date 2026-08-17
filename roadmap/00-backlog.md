@@ -28,72 +28,8 @@ B57's own verification sweep, and had been red before either fix._
 _B57 and B58 were the two real defects with wrong observable semantics, and B67 —
 found while running B57's verification sweep — was a pair of negative controls
 that could not fail. B59, the highest-leverage structural item, is resolved too:
-the syscall ABI is now one contract. B66, B60, B64, and B62 followed. All nine are
-in the resolved log below. B61, B63, and B65 remain._
-
-### B61 — `just run` boots a test fixture, and the product dispatch path is untestable
-
-**Status:** Open. **Class:** Unmasked architectural debt. **Depends on:** none.
-
-**Problem:** `slime-root/src/main.rs` carries two generations of boot mechanism,
-and the *default* build selects the older test-only one. Neither dispatch loop
-is reachable from any host test.
-
-**Evidence (2026-08-17).** Traced the default build end to end:
-`just run` → `sel4_qemu_image_check` → `build-sel4.py` with no plane flag →
-`variant = FIXTURE_VARIANT` (`build-sel4.py:1336`) → `SLIME_ROOT_FIXTURE=1`
-(`:835-836`) → `slime-root/build.rs:28-30` sets `cfg(slime_root_fixture)` →
-`main.rs:751`'s `#[cfg(not(slime_root_fixture))]` excludes the product
-`launch_instance_graph` branch from the image entirely.
-`check-sel4-root-boot.py:95-116` confirms the intent: it asserts
-`SLIME_ROOT native fixture staged task=0 role=clean-exit` and
-`fabric graph=absent`.
-
-The legacy path is a second, independent recv/decode/label-match/reply loop
-parallel to the product `serve_instance_graph`. Measured per function:
-
-```
-serve                          5337-5400   64 lines
-serve_request                  5403-5505  103
-serve_fault                    5507-5579   73
-stop                           5581-5590   10
-report                         5594-5625   32
-classify_probe                 5650-5668   19
-resume_past_probe              5684-5704   21
-setup_shared_region            5713-5745   33
-write_pattern_through_scratch  5752-5772   21
-read_word_through_scratch      5775-5791   17
-report_buffer_phase            5800-5864   65
-                                    total 458 lines
-```
-
-`slime-root/src/lib.rs` exposes 22 modules to `just test_sel4_root` and states
-that `main.rs` "is deliberately not part of this crate's testable surface." So
-both dispatch loops, the spawn-grant preflight, the capability-transfer
-handlers, the buffer/loan lifecycle handlers, and the healthy/wedge decision —
-all of `main.rs`'s 5864 lines — are reachable only through a booted QEMU image.
-
-**Not a dispatch-loop defect.** The product loop itself was checked and is
-coherent: `service_for_root_label` (`main.rs:2460-2472`) is a label→service
-lookup over `boot_contracts`-derived constants, and the healthy/wedge decision
-(`:3213-3265`) counts generation-declared required instances without naming any
-plane. The debt is the undead second loop and the missing test seam, not
-plane-special-casing.
-
-**Proposed fix:** Move the product dispatch — `serve_instance_graph`, the
-service handlers, the spawn preflight, the healthy/wedge accounting — into
-`lib.rs` modules so `just test_sel4_root` can exercise them, leaving `main.rs`
-as boot sequencing plus the seL4-specific glue that genuinely cannot run on
-host. Then decide the fixture path's fate: it has its own gate
-(`sel4_root_boot_check`), but being the *default* variant means `just run` does
-not boot the product, which should change regardless.
-
-**Exit condition:** `just run` boots a product generation graph, not the
-two-fixture proof; the product dispatch loop and at least the spawn-preflight
-and healthy/wedge decisions have host unit tests counted by `just
-test_sel4_root`; `just sel4_root_boot_check` still passes for the fixture plane
-it guards; `just sel4_boot_check`, `just fmt_check_all`, and `just lint_all`
-pass.
+the syscall ABI is now one contract. B66, B60, B64, B62, and B61 followed. All ten
+are in the resolved log below. B63 and B65 remain._
 
 ### B63 — 31 plane gates reimplement a harness that already exists and nobody imports
 
@@ -184,6 +120,61 @@ gate that used the collapsed binaries passes unchanged, and `just
 sel4_boot_layout_check`, `just fmt_check_all`, and `just lint_all` pass.
 
 ## Resolved
+### B61 — `just run` booted a test fixture, and the dispatch routing was untestable
+
+**Status:** Resolved 2026-08-17. **Class:** Unmasked architectural debt.
+**Depends on:** none.
+
+**Problem, in two parts.** `just run` — documented as "the seL4 product image" —
+built the default `fixture` variant, whose `SLIME_ROOT_FIXTURE=1` compiles out the
+product `launch_instance_graph` branch entirely (`main.rs`'s
+`#[cfg(not(slime_root_fixture))]`). So the command a developer runs to see the
+system booted a two-fixture verification proof, not a component graph. Separately,
+`slime-root/src/lib.rs` states that `main.rs` "is deliberately not part of this
+crate's testable surface", which left every line of the 5864-line binary —
+including the label→service dispatch routing — reachable only through a booted
+QEMU image.
+
+**Fix.**
+
+*`just run`.* A new `sel4_product_image` target builds the `--component-graph`
+variant, and `run` boots `build/slime-sel4-graph.elf`. That composition is what
+`init` launches in a real generation and has its own gate
+(`sel4_component_graph_check`). Verified directly: the product image emits zero
+`native fixture` markers, where the old target's image is built around them.
+
+*The dispatch routing.* `service_for_root_label` moved from the binary into
+`slime-root/src/ipc.rs`. It belongs there on its own terms — `ipc.rs` bounds a
+request's *shape* and this assigns its *meaning* — and it is a pure total function
+over two generated tables, so being in the binary cost testability for nothing.
+Three host tests came with it: every one of the 23 declared labels routes to its
+owning mechanism; the retired B46 label gaps plus out-of-table values are refused
+rather than falling through to a nearby mechanism; and the fixture directive is
+not a component service. `test_sel4_root`'s pinned count rose 118 → 121 across 15
+modules, deliberately, per B23's rule.
+
+**Regression guard, and proof it bites.** Mis-routing `directory_labels::DERIVE`
+to `SERVICE_SPAWN` aborts the suite (`panic = "abort"`). Reverted. Before this,
+that mistake was observable only as a component's request being refused on a real
+plane.
+
+**Exit condition (observed):** `just run` boots a product component graph — no
+fixture markers — and `just sel4_component_graph_check` passes on the same image;
+the dispatch routing has host tests counted by `just test_sel4_root` (121/121).
+`just sel4_boot_check`, `just sel4_spawn_check`, `just sel4_root_boot_check` (the
+fixture plane it still guards), `just fmt_check_all`, and `just lint_all` pass.
+
+**Not closed by this item.** The audit's larger ask — move `serve_instance_graph`,
+the service handlers, the spawn preflight, and the healthy/wedge accounting into
+`lib.rs` — is not done. Those take `sel4::cap::*` handles, a live `ObjectAllocator`,
+and an IPC buffer; testing them on host needs a fault-injection seam for seL4
+object invocation, which is a mechanism this repository does not have and which is
+substantially larger than B61's other half. What landed is the routing decision,
+which was the part that needed no such seam. `main.rs` is still 5786 lines, and the
+legacy two-fixture dispatch stack (458 lines, measured) still ships in the default
+variant — it has its own gate, so it is verification code that now correctly is
+not what `just run` builds.
+
 ### B62 — the `.zti` fixtures were copy-paste: three 1882-line files differed by one field
 
 **Status:** Resolved 2026-08-17. **Class:** Unmasked architectural debt (B55's

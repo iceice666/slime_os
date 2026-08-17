@@ -21,6 +21,54 @@ pub use slime_proto::syscall_abi::{
 /// one declaration, and `build-generation.py` emits the same value as
 /// `FABRIC_MAX_INGRESS_SOURCES` for the workers to size themselves against.
 pub use boot_contracts::fabric_graph::MAX_INGRESS_SOURCES as MAX_WAIT_SOURCES;
+
+/// Which root mechanism owns `label`, or `None` when no surviving mechanism
+/// does.
+///
+/// The envelope decode below bounds a request's *shape*; this assigns its
+/// *meaning*. Both belong to this module, and B61 moved this here from the
+/// binary: it is a pure total function over two generated tables — the operation
+/// labels and the service kinds — so leaving it in `main.rs` made it unreachable
+/// from `just test_sel4_root` for no benefit.
+///
+/// A label with no surviving mechanism is refused rather than defaulted. B46
+/// deleted the logical channel, wait-set, and endpoint-create operations, and a
+/// component image built before that cutover still invokes their labels; each
+/// must answer `UnsupportedOperation`, never fall through to a mechanism that now
+/// happens to occupy a nearby number.
+pub const fn service_for_root_label(label: sel4::Word) -> Option<u32> {
+    use boot_contracts::generation::{
+        SERVICE_CAPABILITY_TRANSFER, SERVICE_DIRECTORY, SERVICE_LIFECYCLE, SERVICE_SHARED_BUFFER,
+        SERVICE_SPAWN, SERVICE_SUPERVISION,
+    };
+    use slime_proto::syscall_abi::{
+        capability_table_labels, capability_transfer_labels, directory_labels, lifecycle_labels,
+        shared_buffer_labels, spawn_labels, supervision_labels,
+    };
+    match label {
+        lifecycle_labels::EXIT | lifecycle_labels::UNHEALTHY => Some(SERVICE_LIFECYCLE),
+        spawn_labels::SPAWN => Some(SERVICE_SPAWN),
+        supervision_labels::STATUS | supervision_labels::DERIVE => Some(SERVICE_SUPERVISION),
+        capability_table_labels::DROP
+        | capability_table_labels::OCCUPANCY
+        | capability_transfer_labels::EXPORT
+        | capability_transfer_labels::IMPORT
+        | capability_transfer_labels::EXPORT_CANCEL
+        | capability_transfer_labels::EXPORT_FINALIZE => Some(SERVICE_CAPABILITY_TRANSFER),
+        shared_buffer_labels::CREATE
+        | shared_buffer_labels::RELEASE
+        | shared_buffer_labels::MAP
+        | shared_buffer_labels::UNMAP
+        | shared_buffer_labels::SEAL
+        | shared_buffer_labels::LOAN
+        | shared_buffer_labels::LOAN_MAP
+        | shared_buffer_labels::RETURN
+        | shared_buffer_labels::REVOKE
+        | shared_buffer_labels::OCCUPANCY => Some(SERVICE_SHARED_BUFFER),
+        directory_labels::DERIVE => Some(SERVICE_DIRECTORY),
+        _ => None,
+    }
+}
 /// Message registers the AArch64 fast path carries in architectural registers.
 pub const FAST_MESSAGE_REGISTERS: usize = sel4::NUM_FAST_MESSAGE_REGISTERS;
 
@@ -329,4 +377,118 @@ pub fn reply(response: Response) {
 pub fn poll_notification(notification: sel4::cap::Notification) -> Option<sel4::Badge> {
     let (info, badge) = notification.poll();
     (info.length() != 0 || badge != 0).then_some(badge)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use boot_contracts::generation::{
+        SERVICE_CAPABILITY_TRANSFER, SERVICE_DIRECTORY, SERVICE_LIFECYCLE, SERVICE_SHARED_BUFFER,
+        SERVICE_SPAWN, SERVICE_SUPERVISION,
+    };
+    use slime_proto::syscall_abi::{
+        capability_table_labels, capability_transfer_labels, directory_labels, lifecycle_labels,
+        shared_buffer_labels, spawn_labels, supervision_labels,
+    };
+
+    /// Every declared operation routes to the mechanism that owns it. B61 moved
+    /// this out of the binary so the routing is checkable without a boot; before
+    /// that, a label mapped to the wrong service was observable only as a
+    /// component's request being refused on a real plane.
+    #[test]
+    fn every_declared_label_routes_to_its_owning_service() {
+        for (label, service) in [
+            (lifecycle_labels::EXIT, SERVICE_LIFECYCLE),
+            (lifecycle_labels::UNHEALTHY, SERVICE_LIFECYCLE),
+            (spawn_labels::SPAWN, SERVICE_SPAWN),
+            (supervision_labels::STATUS, SERVICE_SUPERVISION),
+            (supervision_labels::DERIVE, SERVICE_SUPERVISION),
+            (capability_table_labels::DROP, SERVICE_CAPABILITY_TRANSFER),
+            (
+                capability_table_labels::OCCUPANCY,
+                SERVICE_CAPABILITY_TRANSFER,
+            ),
+            (
+                capability_transfer_labels::EXPORT,
+                SERVICE_CAPABILITY_TRANSFER,
+            ),
+            (
+                capability_transfer_labels::IMPORT,
+                SERVICE_CAPABILITY_TRANSFER,
+            ),
+            (
+                capability_transfer_labels::EXPORT_CANCEL,
+                SERVICE_CAPABILITY_TRANSFER,
+            ),
+            (
+                capability_transfer_labels::EXPORT_FINALIZE,
+                SERVICE_CAPABILITY_TRANSFER,
+            ),
+            (shared_buffer_labels::CREATE, SERVICE_SHARED_BUFFER),
+            (shared_buffer_labels::RELEASE, SERVICE_SHARED_BUFFER),
+            (shared_buffer_labels::MAP, SERVICE_SHARED_BUFFER),
+            (shared_buffer_labels::UNMAP, SERVICE_SHARED_BUFFER),
+            (shared_buffer_labels::SEAL, SERVICE_SHARED_BUFFER),
+            (shared_buffer_labels::LOAN, SERVICE_SHARED_BUFFER),
+            (shared_buffer_labels::LOAN_MAP, SERVICE_SHARED_BUFFER),
+            (shared_buffer_labels::RETURN, SERVICE_SHARED_BUFFER),
+            (shared_buffer_labels::REVOKE, SERVICE_SHARED_BUFFER),
+            (shared_buffer_labels::OCCUPANCY, SERVICE_SHARED_BUFFER),
+            (directory_labels::DERIVE, SERVICE_DIRECTORY),
+        ] {
+            assert_eq!(
+                service_for_root_label(label),
+                Some(service),
+                "label {label} routed to the wrong mechanism"
+            );
+        }
+    }
+
+    /// B46 deleted the logical channel, wait-set, and endpoint-create operations
+    /// and their labels were not reused. A component image built before that
+    /// cutover still invokes them, so each must be refused rather than falling
+    /// through to whichever mechanism now sits at a nearby number — a
+    /// re-meaning would hand an old caller authority it never asked for.
+    #[test]
+    fn retired_and_unknown_labels_are_refused() {
+        // The gaps `contracts/syscall-abi/v1/schema.zt` documents as retired,
+        // plus the fixture label (not part of the component ABI) and values
+        // outside the table entirely.
+        for label in [
+            0,
+            1,
+            2,
+            6,
+            7,
+            8,
+            10,
+            11,
+            14,
+            16,
+            17,
+            18,
+            19,
+            20,
+            37,
+            64,
+            sel4::Word::MAX,
+        ] {
+            assert_eq!(
+                service_for_root_label(label),
+                None,
+                "retired or unknown label {label} was routed to a mechanism"
+            );
+        }
+    }
+
+    /// The fixture directive shares the root endpoint but is not a component
+    /// operation: it is the two-fixture boot proof's handshake. Routing it to a
+    /// mechanism would expose it to any component that guessed the label.
+    #[test]
+    fn the_fixture_directive_is_not_a_component_service() {
+        assert_eq!(
+            service_for_root_label(slime_proto::syscall_abi::fixture_labels::DIRECTIVE),
+            None
+        );
+    }
 }

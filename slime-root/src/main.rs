@@ -40,8 +40,7 @@ use core::ptr;
 
 use boot_contracts::generation::{
     CapabilityKind, Generation, Grant, GrantEndpoint, Instance, InstanceHealth, InstanceOwner,
-    KIND_RESOURCE, MintedBinding, SERVICE_CAPABILITY_TRANSFER, SERVICE_DIRECTORY,
-    SERVICE_LIFECYCLE, SERVICE_SHARED_BUFFER, SERVICE_SPAWN, SERVICE_SUPERVISION,
+    KIND_RESOURCE, MintedBinding,
 };
 use boot_contracts::shared_buffer_budget::{self as budget_magic, SharedBufferBudget};
 use sel4_root_task::root_task;
@@ -2394,31 +2393,6 @@ fn declared_quota(budget: Option<&SharedBufferBudget<'_>>, component: &str) -> H
 /// the same way B28 was: 2048 exhausted with the session still parked.
 const MAX_GRAPH_ITERATIONS: usize = 32768;
 
-const fn service_for_root_label(label: sel4::Word) -> Option<u32> {
-    match label {
-        lifecycle_labels::EXIT | lifecycle_labels::UNHEALTHY => Some(SERVICE_LIFECYCLE),
-        spawn_labels::SPAWN => Some(SERVICE_SPAWN),
-        supervision_labels::STATUS | supervision_labels::DERIVE => Some(SERVICE_SUPERVISION),
-        capability_table_labels::DROP
-        | capability_table_labels::OCCUPANCY
-        | capability_transfer_labels::EXPORT
-        | capability_transfer_labels::IMPORT
-        | capability_transfer_labels::EXPORT_CANCEL
-        | capability_transfer_labels::EXPORT_FINALIZE => Some(SERVICE_CAPABILITY_TRANSFER),
-        shared_buffer_labels::CREATE
-        | shared_buffer_labels::RELEASE
-        | shared_buffer_labels::MAP
-        | shared_buffer_labels::UNMAP
-        | shared_buffer_labels::SEAL
-        | shared_buffer_labels::LOAN
-        | shared_buffer_labels::LOAN_MAP
-        | shared_buffer_labels::RETURN
-        | shared_buffer_labels::REVOKE
-        | shared_buffer_labels::OCCUPANCY => Some(SERVICE_SHARED_BUFFER),
-        directory_labels::DERIVE => Some(SERVICE_DIRECTORY),
-        _ => None,
-    }
-}
 /// Serve the declared root mechanisms used by the component graph.
 ///
 /// The IPC layer bounds the raw envelope; this dispatcher assigns meaning only
@@ -2567,7 +2541,7 @@ fn serve_instance_graph(
             ipc::reply(Response::error(IpcError::BadCapability));
             continue;
         };
-        let Some(required_service) = service_for_root_label(request.label) else {
+        let Some(required_service) = ipc::service_for_root_label(request.label) else {
             sel4::debug_println!(
                 "SLIME_GRAPH unsupported service task={} label={} result={} caller_survives=1",
                 id.0,
