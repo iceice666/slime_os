@@ -39,7 +39,7 @@ fault-injection seam this repository does not have.
 | Risk | Guard | Failure signal |
 |---|---|---|
 | A label routes to the wrong mechanism | `just test_sel4_root` → `every_declared_label_routes_to_its_owning_service` | `label N routed to the wrong mechanism` |
-| A retired B46 label is re-meaned, handing an old caller authority it never asked for | `retired_and_unknown_labels_are_refused` | `retired or unknown label N was routed to a mechanism` |
+| A retired B46 label is given a new meaning, handing an old caller authority it never asked for | `retired_and_unknown_labels_are_refused` | `retired or unknown label N was routed to a mechanism` |
 | The fixture handshake becomes reachable by any component that guesses its label | `the_fixture_directive_is_not_a_component_service` | Assertion failure |
 | A module silently loses host coverage | `just test_sel4_root`'s pinned count | `ran N tests, expected 121` |
 | `just run` reverts to a verification variant | `just sel4_component_graph_check` boots the same image the target builds | Its own marker chain fails |
