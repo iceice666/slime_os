@@ -16,7 +16,513 @@ at the bottom rather than deleting it.
 
 ## Open
 
-(none)
+_Opened 2026-08-17 by a structural audit of the whole tree at `35a95b2`, run
+after B56 closed the backlog and the C8 track closed. Every gate was green; the
+audit looked for architectural debt rather than failing checks. Seven read-only
+scouts partitioned the tree by ownership and every load-bearing measurement was
+then re-verified directly — three scout claims were rejected on measurement and
+are recorded in the devlog rather than opened here. Evidence:
+`devlog/2026-08-17-structural-audit/`._
+
+_Two items are real defects with wrong observable semantics (B57, B58); eight
+are structural debt that compounds per milestone (B59–B66). B57 and B58 are
+small and independent. B59 is the highest-leverage item: it subsumes B57 and
+removes the coupling B60 and B66 also pay for._
+
+### B57 — `RIGHT_ALL` has two definitions, and the wider one admits an undefined rights bit
+
+**Status:** Open. **Class:** Defect (admission accepts what no contract
+defines). **Depends on:** none; subsumed by B59 if B59 lands first.
+
+**Problem:** The set of valid capability rights is computed two different ways.
+`scripts/build/build-generation.py:390-417` builds it as an enumerated union
+over the 24 named rights plus `RIGHT_TRANSFER`; `boot-contracts/src/generation.rs:123`
+and `scripts/check/check-generation.py:136` build it as a *bit-width* mask
+`(1 << 26) - 1`. The two disagree by exactly one bit, and the wider spelling is
+the one used for admission.
+
+**Evidence (2026-08-17).** Computed both spellings from source:
+
+```
+python  RIGHT_TRANSFER | sum(RIGHT.values()) = 0x3fdffff
+rust    (1 << 26) - 1                        = 0x3ffffff
+bits set in rust but not python: [17]
+```
+
+Bit 17 sits in the hole `build-generation.py` leaves between `spawn = 1 << 16`
+and `supervise = 1 << 18`. It has no name in any table and no use anywhere:
+`grep "1 << 17"` over `slime-root`, `components`, `boot-contracts`, and
+`scripts` returns nothing.
+
+Because admission masks with the bit-width spelling, a grant carrying bit 17
+passes every rights check that exists:
+`boot-contracts/src/generation.rs:1775` (`grant.rights & !RIGHT_ALL != 0`),
+`:1933` (mappings), `:2152` (minted bindings), and the oracle's matching
+`check-generation.py:377`, `:426`, `:545`.
+
+**Scope of the hole.** The builder itself cannot emit bit 17: both dynamic
+rights lookups (`build-generation.py:3148`, `:3297`) reject an unknown right by
+name, and `validate_capability_rights` (`:432-470`) additionally masks per
+capability kind. So no `.zti` fixture can produce this today — the defect is
+that *admission* does not enforce what the *builder* does, which is precisely
+the asymmetry B40's mutation series exists to close, for a bit B40 never
+enumerated.
+
+**Proposed fix:** One definition, and an enumerated union rather than a bit
+width. Declare the rights vocabulary in `contracts/generation/v1/schema.zt`,
+generate it into `boot-contracts/src/generated/generation.rs`, and derive
+`RIGHT_ALL` from the generated enumeration in both the root and the oracle.
+Mark bit 17 reserved and rejected rather than silently in range.
+
+**Exit condition:** `RIGHT_ALL` has exactly one definition, computed as a union
+of named rights, consumed by `boot-contracts` and `check-generation.py` alike; a
+new B40 mutation that sets bit 17 on one grant is refused by root admission and
+observed being refused by `just sel4_capability_layout_check`; `just
+contracts_check`, `just generation_check`, and `just test_host` pass.
+
+### B58 — `check-architecture-contract.py` hand-copies three generated header offsets
+
+**Status:** Open. **Class:** Unmasked debt (Zutai-rule violation with a known
+prior drift). **Depends on:** none.
+
+**Problem:** `scripts/check/check-architecture-contract.py:213-217` reads the v5
+generation header with three literal byte offsets — `112`, `200`, `368` — under
+a comment that admits the coupling and admits it has already drifted once:
+"Generated v5 header offsets. Keep these in lockstep with
+`scripts/lib/boot_contracts.py`; notification topology added two section
+offsets after minted bindings."
+
+**Evidence (2026-08-17).** All three literals already have generated names in
+`scripts/lib/boot_contracts.py`, which is stamped `# @generated from boot
+contract schemas; do not edit`, and which this very file already imports with
+`from boot_contracts import *`:
+
+```
+112 = GENERATION_HEADER_OBJECT_COUNT_OFFSET
+200 = GENERATION_HEADER_OBJECT_OFFSET_OFFSET
+368 = GENERATION_HEADER_STRING_OFFSET_OFFSET
+```
+
+No literal lacks a generated name, so this is a genuine violation of the
+repository's Zutai rule rather than a layout Zutai cannot own.
+
+**Why it matters beyond style:** the next header field addition shifts these
+offsets. The check would then read a wrong-but-decodable location and report a
+wrong answer rather than failing, which is the failure mode the generated
+constants exist to prevent.
+
+**Proposed fix:** Replace the three literals with the imported
+`GENERATION_HEADER_*_OFFSET` names and delete the lockstep comment.
+
+**Exit condition:** No numeric header offset remains in
+`check-architecture-contract.py`; `just architecture_contract_check` and `just
+generation_check` pass.
+
+### B59 — the syscall ABI has no single source: 97 rights declarations, two label tables, three error tables
+
+**Status:** Open. **Class:** Unmasked architectural debt. **Depends on:** none.
+**Subsumes:** B57.
+
+**Problem:** Three number tables that cross the root/userspace process boundary
+are hand-authored in one place and manually re-typed in others, with nothing
+forcing agreement. `docs/capability-matrix.md` states "Rights numbering is
+generated-contract truth, not prose"; that sentence is false today.
+
+**Evidence (2026-08-17).** Counted mechanically over `slime-root/src`,
+`boot-contracts/src`, and `components`:
+
+| Table | Distinct names | Declaration sites | Agree today |
+|---|---|---|---|
+| `RIGHT_*` | 23 | **97** | all but `RIGHT_ALL` (B57) |
+| syscall labels | 22 | 2 full `mod *_labels` copies + docs | yes |
+| `ERR_*` | 5 | 2 code copies + docs | yes |
+
+The rights sites span `slime-root/src/{graph,generation,console,directory,main}.rs`,
+`boot-contracts/src/generation.rs`, and roughly fourteen userspace components
+(`components/bins/src/bin/{spawn-service,dango,powerbox-chooser,powerbox-probe,directory-probe,fabric-proxy,fabric-subscriber-b,fabric-publisher-b,fabric-service}.rs`,
+`components/bins/src/matrix_broker.rs`, `components/proto/tests/powerbox.rs`,
+among others). The label tables are `slime-root/src/main.rs:71-122` and
+`components/runtime/src/syscall.rs:24-62`, restated a third time as prose in
+`docs/syscall-abi.md`. The error table is `components/runtime/src/syscall.rs:79-84`
+and `slime-root/src/ipc.rs:66-84`, restated in the same doc.
+
+`boot-contracts/src/generated/generation.rs` — the actual generated output —
+contains only `FORMAT_VERSION`. Not one rights bit or label is generated.
+
+**This class has already caused a defect.** `slime-root/src/console.rs:292-299`
+records a past numbering disagreement between the two crates that produced
+silently garbled keystrokes: no compile error, only a runtime misdecode.
+
+**A fourth table with the same shape:** the 16-byte spawn-grant record is
+defined as `GRANT_RECORD_BYTES = 16` in
+`components/runtime/src/syscall/sel4_transport.rs:55` and again as
+`SPAWN_GRANT_RECORD_BYTES = 16` in `slime-root/src/main.rs:3339`, whose doc
+comment reads "Matches `components/runtime/src/syscall/sel4_transport.rs::GRANT_RECORD_BYTES`."
+A comment is the entire enforcement mechanism for a record layout crossing the
+syscall boundary. (`SpawnGrant`'s `#[repr(C)]` at `syscall.rs:93-96` is *not*
+the wire layout — `sel4_transport.rs:687-696` encodes the record field by field
+— so the struct attribute is not the defect; the duplicated constant is.)
+
+**Proposed fix:** Declare the syscall ABI as a contract:
+`contracts/syscall-abi/v1/schema.zt` owning the operation-label table, the error
+table, the rights vocabulary, and the spawn-grant record layout. Generate one
+Rust module consumed by both `slime-root` and `components/runtime`; delete every
+downstream re-declaration; generate `docs/syscall-abi.md`'s and
+`docs/capability-matrix.md`'s tables from the same source so `AGENTS.md`
+invariant 4's manual doc coupling disappears rather than being restated.
+
+**Exit condition:** Each of the four tables has exactly one definition, and it
+is generated; `grep "const RIGHT_"` outside the generated module returns
+nothing; the label and error tables exist once; `docs/syscall-abi.md`'s and
+`docs/capability-matrix.md`'s tables are generated artifacts; `just
+contracts_check`, `just generation_check`, `just sel4_root_boot_check`, `just
+sel4_boot_check`, `just test_sel4_root`, `just test_host`, `just fmt_check_all`,
+and `just lint_all` pass.
+
+### B60 — authority-derivation policy lives in the builder, and one slot number has two independent sources
+
+**Status:** Open. **Class:** Unmasked architectural debt (B55's mechanism, not
+yet closed). **Depends on:** B62 makes the full fix cheaper; the assertion half
+is independent.
+
+**Problem:** `contracts/generation/v1/schema.zt` declares data *shape* only.
+Which grants constitute a control plane, which component a plane's controls
+terminate at, how the supervision table is derived, and how a notification slot
+is named all live in `build-generation.py` functions that no schema constrains.
+B55's root cause was exactly this: a fixture froze 3 supervision rows while the
+Python derivation rule computed 6, and only a full boot could detect the
+disagreement.
+
+**Evidence (2026-08-17).**
+
+- `_control_sources` (`build-generation.py:1127-1170`) hardcodes which grant
+  names count as control and which `rights` shape is legal.
+- The control holder is chosen by string comparison:
+  `"fabric-call-worker" if fabric_profile_name == UNIFIED_FABRIC_PROFILE else "fabric-service"`
+  (`:1352-1365`) — the exact rule B56 had to exclude from its sweep because one
+  manifest cannot satisfy both spellings.
+- Supervision-table membership (ring participants ∪ declared proxy ∪
+  matrix-denied probe) is a Python set comprehension (`:1394-1436`), not a
+  schema field.
+- Notification slot names are derived by string surgery — `removeprefix`,
+  `rpartition` (`:1705-1721`) — over a grant-naming convention the schema does
+  not encode.
+- `FABRIC_CALL_CONTROL_GRANTS` and its siblings (`:551-570`) are Python tuples
+  that define by construction which grants are "controls" for a plane.
+
+**The two-source slot number.** Traced `fabric-call-worker`'s control slots end
+to end:
+
+1. `contracts/generation/v1/fixtures/sel4-boot.zti:1036-1050` pins them as
+   hand-typed integers (`slot = 2, 3, 4, 5`).
+2. `build-generation.py` reads those grants back in `FABRIC_CALL_CONTROL_GRANTS`
+   tuple order and emits an ordered Rust array carrying no slot number at all
+   (`:1868`).
+3. `components/bins/src/bin/fabric-service.rs:553-555` recomputes the number at
+   runtime as `FABRIC_FIRST_CONTROL_SLOT + position(component)`.
+
+The fixture's literals and the runtime's derived indices must land on identical
+numbers. The only thing asserting they do is the comment at
+`build-generation.py:1417-1423`.
+
+**Proposed fix, in two independently landable halves:**
+
+- *Preventive half (do first).* Add a build-time assertion that every pinned
+  control-grant slot in a fixture equals the position the Rust profile will
+  derive for it, so a B55-class divergence fails the build instead of the boot.
+- *Structural half.* Promote the derivation rules into the schema: a
+  `controlPlane` record naming `{grantNames, holder}` per profile, and a
+  `supervisionRule` enumerant the fixture declares. `_control_sources`, the
+  `FABRIC_*_CONTROL_GRANTS` tuples, and the ring/proxy/denied set logic become
+  schema-driven lookups.
+
+**Exit condition:** A fixture whose pinned control slots disagree with the
+derived profile order fails `just generation_check` with a named error, observed
+by deliberately perturbing one slot; no control-plane membership, holder
+selection, or supervision-row rule is decided by a Python string comparison;
+`just contracts_check`, `just generation_check`, `just sel4_boot_check`,
+`just data_fabric_profile_check`, and `just sel4_boot_layout_check` pass.
+
+### B61 — `just run` boots a test fixture, and the product dispatch path is untestable
+
+**Status:** Open. **Class:** Unmasked architectural debt. **Depends on:** none.
+
+**Problem:** `slime-root/src/main.rs` carries two generations of boot mechanism,
+and the *default* build selects the older test-only one. Neither dispatch loop
+is reachable from any host test.
+
+**Evidence (2026-08-17).** Traced the default build end to end:
+`just run` → `sel4_qemu_image_check` → `build-sel4.py` with no plane flag →
+`variant = FIXTURE_VARIANT` (`build-sel4.py:1336`) → `SLIME_ROOT_FIXTURE=1`
+(`:835-836`) → `slime-root/build.rs:28-30` sets `cfg(slime_root_fixture)` →
+`main.rs:751`'s `#[cfg(not(slime_root_fixture))]` excludes the product
+`launch_instance_graph` branch from the image entirely.
+`check-sel4-root-boot.py:95-116` confirms the intent: it asserts
+`SLIME_ROOT native fixture staged task=0 role=clean-exit` and
+`fabric graph=absent`.
+
+The legacy path is a second, independent recv/decode/label-match/reply loop
+parallel to the product `serve_instance_graph`. Measured per function:
+
+```
+serve                          5337-5400   64 lines
+serve_request                  5403-5505  103
+serve_fault                    5507-5579   73
+stop                           5581-5590   10
+report                         5594-5625   32
+classify_probe                 5650-5668   19
+resume_past_probe              5684-5704   21
+setup_shared_region            5713-5745   33
+write_pattern_through_scratch  5752-5772   21
+read_word_through_scratch      5775-5791   17
+report_buffer_phase            5800-5864   65
+                                    total 458 lines
+```
+
+`slime-root/src/lib.rs` exposes 22 modules to `just test_sel4_root` and states
+that `main.rs` "is deliberately not part of this crate's testable surface." So
+both dispatch loops, the spawn-grant preflight, the capability-transfer
+handlers, the buffer/loan lifecycle handlers, and the healthy/wedge decision —
+all of `main.rs`'s 5864 lines — are reachable only through a booted QEMU image.
+
+**Not a dispatch-loop defect.** The product loop itself was checked and is
+coherent: `service_for_root_label` (`main.rs:2460-2472`) is a label→service
+lookup over `boot_contracts`-derived constants, and the healthy/wedge decision
+(`:3213-3265`) counts generation-declared required instances without naming any
+plane. The debt is the undead second loop and the missing test seam, not
+plane-special-casing.
+
+**Proposed fix:** Move the product dispatch — `serve_instance_graph`, the
+service handlers, the spawn preflight, the healthy/wedge accounting — into
+`lib.rs` modules so `just test_sel4_root` can exercise them, leaving `main.rs`
+as boot sequencing plus the seL4-specific glue that genuinely cannot run on
+host. Then decide the fixture path's fate: it has its own gate
+(`sel4_root_boot_check`), but being the *default* variant means `just run` does
+not boot the product, which should change regardless.
+
+**Exit condition:** `just run` boots a product generation graph, not the
+two-fixture proof; the product dispatch loop and at least the spawn-preflight
+and healthy/wedge decisions have host unit tests counted by `just
+test_sel4_root`; `just sel4_root_boot_check` still passes for the fixture plane
+it guards; `just sel4_boot_check`, `just fmt_check_all`, and `just lint_all`
+pass.
+
+### B62 — the `.zti` fixtures are copy-paste: three 1882-line files differ by one line
+
+**Status:** Open. **Class:** Unmasked architectural debt (B55's staleness
+mechanism). **Depends on:** none.
+
+**Problem:** `contracts/generation/v1/schema.zt` has no `import`, `include`, or
+`inherit` construct, so every plane fixture is a full standalone copy that must
+be hand-renumbered. There are 30 `sel4-*.zti` fixtures totalling 16978 lines.
+
+**Evidence (2026-08-17).** Pairwise line similarity over all 435 fixture pairs;
+nine exceed 85%:
+
+```
+99.9%  sel4-fault.zti (1882)      vs sel4-traffic.zti (1882)
+99.9%  sel4-saturation.zti (1882) vs sel4-traffic.zti (1882)
+99.9%  sel4-fault.zti (1882)      vs sel4-saturation.zti (1882)
+99.8%  sel4-matrix-unsatisfiable.zti (1069) vs sel4-matrix.zti (1069)
+94.4%  sel4-boot.zti (1709)       vs sel4-traffic.zti (1882)
+88.3%  sel4-qos.zti (718)         vs sel4-stream.zti (714)
+86.7%  sel4-reclamation.zti (128) vs sel4-supervision.zti (135)
+```
+
+`diff sel4-traffic.zti sel4-fault.zti` is one hunk: `generation = 36` versus
+`generation = 40`. Two 1882-line files differing by a single integer.
+`check-sel4-fault-plane.py`'s own docstring already says the image is
+"`sel4-traffic.zti` with `generation` changed and nothing else."
+
+**The correct pattern already exists in the repository:**
+`scripts/build/boot_layout.py:188-262` composes `BASE_LAYOUT` with numbered
+`OVERRIDE_N` tuples precisely to avoid renumbering by hand. That mechanism is
+absent one level up, at the manifest.
+
+**Why this is B55's mechanism:** B55's first defect was a fixture holding 3
+supervision rows after the derivation rule moved to 6. A base manifest with a
+declared delta cannot hold a stale copy of a table it does not restate.
+
+**Proposed fix:** Add base-plus-delta composition at the `.zti` level, so a
+plane fixture declares only its difference from a shared base. The three
+1882-line traffic/fault/saturation fixtures should collapse to one base plus
+three short overrides, and `sel4-matrix-unsatisfiable` to one override over
+`sel4-matrix`.
+
+**Exit condition:** No two `sel4-*.zti` fixtures exceed 90% line similarity; the
+traffic/fault/saturation trio is one base plus deltas; every affected plane gate
+(`just sel4_traffic_check`, `sel4_fault_check`, `sel4_saturation_check`,
+`sel4_matrix_check`, `sel4_boot_check`) passes with byte-identical rebuilt
+generations, and `just contracts_check` and `just generation_check` pass.
+
+### B63 — 31 plane gates reimplement a harness that already exists and nobody imports
+
+**Status:** Open. **Class:** Unmasked debt (verification-code duplication).
+**Depends on:** B62 makes the expectation-fixture half cheaper.
+
+**Problem:** `scripts/check/` holds 31 `check-sel4-*-plane.py` gates totalling
+15192 lines. Two shared libraries exist for exactly their mechanics and are
+almost unused.
+
+**Evidence (2026-08-17).** Measured:
+
+| Fact | Count |
+|---|---|
+| plane gates / total lines | 31 / 15192 |
+| gates launching QEMU themselves | 30 |
+| plane gates importing `scripts/lib/harness.py` | **1** |
+| plane gates calling `harness.run_qemu` | **0** |
+| plane gates calling `sel4_gate_markers.match_marker_contract` | **2** |
+| definitions of `boot()` | 30, in 23 distinct bodies |
+
+The near-byte-identical helper set — `load_pins`, `profile_text`,
+`profile_integer`, `report_transcript`, `sha256_file` — is 1210 lines across the
+31 files; `load_pins` and `profile_text` are byte-identical in 25 of the 28
+files that define them. `scripts/lib/sel4_gate_markers.py`'s
+`match_marker_contract` is consumed only by `check-sel4-qos-plane.py`,
+`check-sel4-trace-plane.py`, and the meta-gate.
+
+**Expectations are code, not data.** `check-sel4-boot-plane.py:198-260` holds
+`EXPECTED_INIT_CHILDREN`, `EXPECTED_ROLES`, `EXPECTED_ROLE_HOLDERS`, and
+`EXPECTED_PROVISIONED_EDGES` as hand-edited Python literals inside a 623-line
+executable. The blessable-fixture alternative is already built and in use one
+file over: `check-sel4-boot-layout.py` compares
+`contracts/boot-layout/v1/fixtures/*.layout` byte for byte and regenerates via
+`--bless` (`just sel4_boot_layout_bless`). Markers have no equivalent.
+
+**Marker truth is duplicated once.** `check-sel4-gate-controls.py` correctly
+single-sources the regex text through `chains_from_gate`, but its `GATES` tuple
+(`:74-142`) hand-pins a per-gate marker count in all 32 rows, whose comments
+record a running history of manual updates across B46, B50, C8.13, C8.14, and
+B55 — while `marker_count(chains_from_gate(gate))` sits unused in the module it
+already imports.
+
+**Proposed fix:** Route every plane gate through `harness.run_qemu` and
+`sel4_gate_markers.match_marker_contract`; move the marker/chain and expected-
+count tables into blessable fixtures under `contracts/`, mirroring boot-layout;
+derive `GATES`'s count instead of pinning it.
+
+**Exit condition:** No plane gate defines its own `boot()` or its own copy of
+the five shared helpers; marker and chain expectations live in blessed fixtures
+with a `--bless` path; `check-sel4-gate-controls.py` derives every marker count;
+`just sel4_gate_control_check` still rejects every mutation class it rejects
+today, and the full set of plane gates passes unchanged.
+
+### B64 — no generation-format version can coexist with another, and five schema trees are dead
+
+**Status:** Open. **Class:** Unmasked architectural debt (bears on roadmap
+invariant 7). **Depends on:** none.
+
+**Problem:** Generation admission is an equality test against one pinned
+version, while the rollback and recovery components exist to boot an *older*
+selectable generation. The two cannot both be true across a format bump, and
+which one gives is written down nowhere.
+
+**Evidence (2026-08-17).** `boot-contracts/src/generation.rs:586` is
+`if version != FORMAT_VERSION`, with `FORMAT_VERSION = 5` in the generated
+`boot-contracts/src/generated/generation.rs:4`; the oracle matches at
+`check-generation.py:272` (`UnsupportedGenerationVersion`). The format has been
+bumped four times: `contracts/generation/` holds `v1` through `v5`.
+`scripts/generate/generate-boot-bindings.py:22` wires only `generation/v5`.
+
+So a BootState slot holding a pre-bump generation becomes undecodable the moment
+the next version's root ships — while `roadmap/README.md` invariant 7 requires
+that activation never overwrite the running generation and that a failed pending
+generation cannot consume the last selectable boot root.
+
+**Dead trees found alongside it.** `contracts/generation/{v2,v3,v4}`,
+`contracts/component/v1`, and `contracts/kernel-image/v1` are each a complete
+schema (several with `gen_rust.zt`) that no generator or code path reads.
+Generators wire only `generation/v5`, `component/v2`, and `kernel-image/v2`. The
+only surviving references are prose: a sentence in `check-generation-v5.py:6`
+and a comment in `components/component.ld:1`.
+
+**Proposed fix:** Decide and record which is true, then enforce it.
+Either (a) make header decoding dispatch over a small registry of still-
+supported `formatVersion`s generated from the surviving `vN` schemas, so
+rollback across a bump is real; or (b) state explicitly that a format bump is
+not rollback-safe and add a migration step at activation that refuses to leave
+an undecodable generation as the last selectable root. Delete the five dead
+schema trees, or wire the ones (a) needs.
+
+**Exit condition:** A documented, gated answer for booting a generation written
+by a previous `formatVersion`, exercised by `just sel4_rollback_check` or
+`sel4_recovery_plane_check` against a deliberately older-format slot; no schema
+tree remains that no generator reads; `just contracts_check` and `just
+generation_check` pass.
+
+### B65 — 41 of 52 component binaries exist to drive one gate each
+
+**Status:** Open. **Class:** Unmasked debt (per-gate accretion). **Depends on:**
+none.
+
+**Problem:** `components/bins/Cargo.toml` declares 52 `[[bin]]` targets. About
+11 ship in a real generation (`console`, `dango`, `echo-agent`,
+`powerbox-chooser`, `init`, `spawn-service`, `sel4-filesystem-service`,
+`sel4-generation-manager`, `sel4-generation-client`, `sysinfo`,
+`fabric-service`); the remaining ~41 exist to satisfy one plane gate each. The
+call plane alone owns six (`fabric-call-{client,client-b,client-b-restart,server,time,worker}`)
+and the operation plane six more.
+
+**Evidence (2026-08-17).** The reuse pattern is already understood and applied
+inconsistently: C8.12's matrix plane reused `fabric-publisher`/`fabric-subscriber`
+through a `matrix_main()` branch (`components/bins/src/bin/fabric-publisher.rs:118-121`)
+rather than adding binaries, while the call and operation planes each added a
+full set. Every fixture binary is a `no_std`/`no_main` target carrying its own
+link script, boot-layout slot expectations, and Cargo block.
+
+`init.rs` shows the same accretion at the dispatch level: 2295 lines, of which
+21 `drive_*_plane` launchers are 874 lines (38%), selected by a hand-written
+`match startup_arg` (`:229-395`) that every new plane must edit.
+
+**Proposed fix:** Collapse the call/operation client-server-time-worker families
+into parameterized participants selecting their role from the generation's boot
+action, as `fabric-publisher` already does; move `drive_*_plane` into
+`components/bins/src/planes/` modules, one per plane family, leaving `init.rs`
+as the dispatch table plus shared helpers.
+
+**Exit condition:** The call and operation planes are driven by at most three
+binaries between them; no `drive_*_plane` body remains in `init.rs`; every plane
+gate that used the collapsed binaries passes unchanged, and `just
+sel4_boot_layout_check`, `just fmt_check_all`, and `just lint_all` pass.
+
+### B66 — `ipc.rs` carries two retired-mechanism constants, one of them load-bearing
+
+**Status:** Open. **Class:** Unmasked debt (B46 residue). **Depends on:** none;
+the ceiling's proper home is B59's contract.
+
+**Problem:** `slime-root/src/ipc.rs` declares two constants describing a root
+wait-set mechanism B46 deleted. One is dead; the other is live and feeds
+generation admission while its own comment calls it a compatibility value.
+
+**Evidence (2026-08-17).**
+
+- `CHANNEL_CAPACITY = 1` (`ipc.rs:13`) — "Compatibility value for generation
+  fabric admission. Native rendezvous supplies backpressure; the root owns no
+  channel queue." Zero call sites repo-wide.
+- `MAX_WAIT_SOURCES = 9` (`ipc.rs:16`) — "Compatibility value for generation
+  graph admission. Components wait on declared Notifications rather than a root
+  wait set." Live: `slime-root/src/generation.rs:245` passes it as the
+  wait-source ceiling to `FabricGraph::validate_against`, and `:1162` uses it to
+  build a test bound.
+
+Meanwhile `build-generation.py:1503` independently computes a per-worker
+`waitSources` count, and `:1840` emits a `fabric_worker_wait_sources` accessor —
+so the ceiling and the demand it bounds are derived on opposite sides of the
+build with no shared declaration. Three components document their own position
+against the number in prose (`fabric-op-worker.rs:7`, `fabric-call-worker.rs:8`,
+`fabric-service.rs:393`).
+
+**Proposed fix:** Delete `CHANNEL_CAPACITY`. Move the wait-source ceiling out of
+`ipc.rs` — a module whose stated job is the bounded IPC envelope — into the
+contract that declares the rest of the admission ceilings, so the builder's
+computed demand and the root's admitted bound come from one place.
+
+**Exit condition:** `CHANNEL_CAPACITY` no longer exists; the wait-source ceiling
+has one declaration consumed by both the builder and root admission; `just
+test_sel4_root`, `just sel4_boot_check`, `just generation_check`, and `just
+contracts_check` pass.
+
 
 ## Resolved
 ### B56 — `data_fabric_profile_check` asserted a contradiction and had been red since B55

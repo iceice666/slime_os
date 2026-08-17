@@ -277,3 +277,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-17 | [C8.13.3 — the one declared ceiling with no signal, and the two slot spaces it turned out to have](2026-08-17-c8-13-3-capability-slot-occupancy/index.md) | Change | Verified | C8.13.3, C8.13 |
 | 2026-08-17 | [C8.14 — the fault envelope was already being driven; nothing asserted it](2026-08-17-c8-14-fault-isolation/index.md) | Change | Verified | C8.14, C8.13 |
 | 2026-08-17 | [C8.15 — the C8 parent close, and the C8.9 gate the audit found red](2026-08-17-c8-15-fabric-aggregate/index.md) | Change | Verified | C8.15, C8.9, C8 |
+| 2026-08-17 | [A structural audit of the green tree: two defects, eight debts, three rejected claims](2026-08-17-structural-audit/index.md) | Audit | Root-caused | B57, B58, B59, B60, B61, B62, B63, B64, B65, B66, B40, B46, B55, B56 |
