@@ -150,5 +150,7 @@ Documentation-only roadmap edits do not run runtime tests; their verification is
 - Update the owning track file, not this index, for detailed deliverables and checks.
 - Update this index when track status, dependency edges, or release composition changes.
 - Preserve completed evidence; do not rewrite an observed check as a future intention.
+- When a milestone turns Complete, replace its specification body with the outcome: `**Status:**`, one `**Delivered:**` sentence, one `**Exit condition (observed):**` sentence, a `**Gates:**` line naming the exact Justfile targets, and an `**Evidence:**` link to the devlog entry. Delete the `Deliverables`, `Required checks`, and `Verification target` sections — they described work that is now done, and `01-foundations.md` is the reference for the resulting shape.
+- `Preserve completed evidence` is satisfied by a reachable devlog link, not by retaining the specification prose in this directory. A completed milestone whose evidence is only readable here has not been recorded properly.
 - Move exploratory work from `../docs/directions/` only after it has dependencies, bounded deliverables, required checks, and an observable exit condition here.
 - Never mark a milestone complete from implementation status alone when its exit condition requires QEMU or physical evidence.
