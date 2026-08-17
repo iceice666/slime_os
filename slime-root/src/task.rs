@@ -394,15 +394,15 @@ impl Task {
         }
     }
 
-    /// Re-count this task's child CSpace and adopt the answer (C8.13.3).
+    /// Count this task's physical child-CNode occupancy (C8.13.3).
     ///
-    /// Taken on demand rather than maintained, because the child mutates its
-    /// own CSpace on paths the root never sees. The cost is one kernel call
-    /// per slot, so callers take it when a component asks, not per dispatch.
-    pub fn recount_cspace(&mut self) -> Result<u32, crate::cspace::CSpaceError> {
-        let populated = crate::cspace::census(self.cnode, self.cnode_size_bits)?;
-        self.cspace.observed(populated);
-        Ok(populated)
+    /// Taken on demand and never stored, because the child mutates its own
+    /// CSpace on paths the root never sees — the receiving runtime moves a
+    /// transferred Endpoint out of `CHILD_SLOT_RECEIVE` itself — so a cached
+    /// copy could only be stale. The cost is one kernel call per slot, so
+    /// callers take it when a component asks, not per dispatch.
+    pub fn recount_cspace(&self) -> Result<u32, crate::cspace::CSpaceError> {
+        crate::cspace::census(self.cnode, self.cnode_size_bits)
     }
 
     /// Slots populated in the space `capabilitySlots` bounds, live and at this
@@ -763,8 +763,7 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
             //
             // This catches an install that silently landed elsewhere — a wrong
             // depth, a stale constant, a plan naming a slot outside the CNode.
-            // Its count is also the ledger's kernel-observed seed (C8.13.3).
-            let populated = audit_child_cspace(cnode, cnode_size_bits, child_slots, supervision)?;
+            audit_child_cspace(cnode, cnode_size_bits, child_slots, supervision)?;
             // Type is not an occupancy question, so it is probed separately.
             audit_child_types(cnode, cnode_size_bits, child_slots, supervision)?;
 
@@ -853,10 +852,10 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
                     .map_err(TaskError::WriteRegisters)?;
                 *slot = Some(worker_tcb);
             }
-            Ok((vspace, cnode, tcb, entry, workers, populated))
+            Ok((vspace, cnode, tcb, entry, workers))
         })();
 
-        let (vspace, cnode, tcb, entry, workers, populated) = match construction {
+        let (vspace, cnode, tcb, entry, workers) = match construction {
             Ok(task) => task,
             Err(error) => {
                 let cleanup =
@@ -876,7 +875,7 @@ impl<const CAPACITY: usize> TaskTable<CAPACITY> {
             vspace,
             authority,
             capabilities: AuthorityTable::new(),
-            cspace: CSpaceLedger::seeded(populated),
+            cspace: CSpaceLedger::EMPTY,
             supervision,
             entry,
             activated: false,
@@ -1025,8 +1024,7 @@ fn audit_child_types(
     Ok(())
 }
 
-/// Compare a constructed child CSpace to the slots the plan declared, and
-/// report how many slots the kernel said were occupied.
+/// Compare a constructed child CSpace to the slots the plan declared.
 ///
 /// Occupancy is probed with `seL4_CNode_Move` onto the slot itself: the kernel
 /// refuses a move whose destination is occupied and refuses one whose source
@@ -1034,16 +1032,16 @@ fn audit_child_types(
 /// occupancy question with no scratch slot and no risk of destroying the
 /// capability under audit.
 ///
-/// The count is the audit's own by-product rather than a second walk: it has
-/// already asked the kernel about every slot, and C8.13.3's ledger needs a
-/// starting value that came from the kernel rather than from counting the
-/// installs the loop above intended to make.
+/// `crate::cspace::census` uses the identical probe to answer C8.13.3's live
+/// occupancy query. This one additionally requires each slot's occupancy to
+/// match what the plan declared, which is why it is a separate walk rather than
+/// a caller of that one.
 fn audit_child_cspace(
     cnode: sel4::cap::CNode,
     cnode_size_bits: usize,
     slots: ChildSlots,
     supervision: Supervision,
-) -> Result<u32, TaskError> {
+) -> Result<(), TaskError> {
     let expect_tcb = supervision == Supervision::SelfManaged;
     // Negative-mutation probes for `just sel4_capability_layout_check`. Each
     // perturbs the constructed CSpace in one of the ways B40 names, so the
@@ -1072,7 +1070,6 @@ fn audit_child_cspace(
             );
     }
 
-    let mut populated = 0;
     for slot in 0..(1u64 << cnode_size_bits) {
         let slot = slot as sel4::CPtrBits;
         let declared = slot == slots.service
@@ -1096,11 +1093,8 @@ fn audit_child_cspace(
         if occupied != declared {
             return Err(TaskError::CSpaceMismatch { slot, occupied });
         }
-        if occupied {
-            populated += 1;
-        }
     }
-    Ok(populated)
+    Ok(())
 }
 
 /// A source capability's address: root CNode, index, and resolution depth.

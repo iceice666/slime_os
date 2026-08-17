@@ -102,6 +102,11 @@ FAILURE_MARKERS: tuple[str, ...] = (
     r"SLIME_GRAPH capability (?:export|import|cancel) (?:failed|refused) .*",
     r"SLIME_GRAPH buffer create refused .*",
     r"SLIME_GRAPH loan refused .*",
+    # C8.13.3: the root reports rather than refuses on an occupancy breach, so
+    # these keep the report guarded rather than left as prose.
+    r"SLIME_GRAPH cspace occupancy over-ceiling .*",
+    r"SLIME_GRAPH cspace occupancy over-capacity .*",
+    r"SLIME_GRAPH cspace occupancy refused .*",
     r"<<seL4\(CPU 0\) \[decode(?!CNodeInvocation/107\b)",
     r"Caught cap fault",
     r"Caught vm fault",

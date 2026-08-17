@@ -4091,10 +4091,11 @@ fn serve_spawn(
             return Response::error(IpcError::BadCapability);
         }
     };
-    // C8.13.3: both installs wrote real slots in the child's own CNode, so the
-    // child's ledger owns them. Credited rather than re-counted: a census here
-    // would cost 128 kernel calls on the spawn path for a number the installer
-    // just returned, and the next query re-observes it anyway.
+    // C8.13.3: both installs filled slots the generation declared, in the
+    // component's own logical numbering, so they belong to the child's
+    // declared-space count -- the space `capabilitySlots` budgets. Credited
+    // rather than observed because every install into that space is a root
+    // operation, so the count is complete without asking the kernel.
     if let Some(child_task) = tasks.get_mut(child) {
         child_task
             .cspace

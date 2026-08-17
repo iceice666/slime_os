@@ -85,6 +85,13 @@ FAILURE_MARKERS: tuple[str, ...] = (
     r"SLIME_GRAPH capability (?:export|import|cancel) (?:failed|refused) .*",
     r"SLIME_GRAPH buffer create refused .*",
     r"SLIME_GRAPH loan refused .*",
+    # C8.13.3: the root reports rather than refuses when a holder's occupancy
+    # passes a bound, so without these the reports are unguarded prose. A
+    # `capabilitySlots` breach is a real graph defect and an over-capacity
+    # census answer is impossible, so either appearing is a failure.
+    r"SLIME_GRAPH cspace occupancy over-ceiling .*",
+    r"SLIME_GRAPH cspace occupancy over-capacity .*",
+    r"SLIME_GRAPH cspace occupancy refused .*",
     r"<<seL4\(CPU 0\) \[decode(?!CNodeInvocation/107\b)",
     r"Caught cap fault",
     r"Caught vm fault",
@@ -244,13 +251,14 @@ EXPECTED_RESOURCES: dict[str, tuple[tuple[int, str, int], ...]] = {
         # is the assertion rather than a weakening of one.
         (FABRIC_TRACE_RESOURCE_MAPPING, "mapping", 2),
         (FABRIC_TRACE_RESOURCE_LOAN, "loan", 2),
-        # C8.13.3: this broker's own live child-CSpace occupancy, from the same
-        # kind of self-scoped query. Held-and-released in shape but expected
-        # constant, like `mapping` and for the same reason -- a control
-        # endpoint or ring installed at provisioning is not released while its
-        # holder lives. Its peak is additionally checked against the fixture's
-        # own declared `capabilitySlots` in `check_resources`, which is the
-        # assertion C8.13.3's exit condition names.
+        # C8.13.3: this broker's occupancy in the space `capabilitySlots` bounds
+        # -- its declared logical slots, read through the same kind of
+        # self-scoped query. Genuinely held and released, unlike `mapping`:
+        # measured at peak 35 against a live 29, because the broker releases the
+        # supervision handles it no longer waits on. So it takes `loan`'s
+        # bounded-by-peak shape, and its peak is additionally checked against the
+        # fixture's own declared `capabilitySlots` further down `check_resources`,
+        # which is the assertion C8.13.3's exit condition names.
         (FABRIC_TRACE_RESOURCE_CAPABILITY_SLOTS, "capability-slots", 2),
     ),
     "call": (

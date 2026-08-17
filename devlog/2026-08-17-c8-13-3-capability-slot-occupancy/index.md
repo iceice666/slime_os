@@ -45,13 +45,19 @@ count, and the broker takes exactly one query at drain. That also removed a real
 cost: this is the one root operation whose price is O(CNode size), and it was
 being paid on every progressing sweep of the single-threaded dispatch loop.
 
+A third simplification followed from the split. Only declared space is
+*retained*: the root can account for it because every install into it is a root
+operation. Physical occupancy is never stored, because a stored copy could only
+be stale — the child fills physical slots the root does not mediate — so every
+read takes a fresh census and nothing caches the answer.
+
 ## Changes
 
 | Area | Change | Restored invariant |
 |---|---|---|
-| `slime-root/src/cspace.rs` | New module: `CSpaceLedger` with a peak per space, `census`, `breaches_ceiling`, `capacity_of` | A live count exists at all, and each space's peak is raised only by its own kind of evidence |
+| `slime-root/src/cspace.rs` | New module: `CSpaceLedger` (declared installs plus a high-water mark), `census`, `breaches_ceiling`, `capacity_of` | A live count exists at all, and only the space the root can account for is retained |
 | `slime-root/src/graph.rs` | `AuthorityTable` tracks its own high-water mark | The table half of declared space peaks where it mutates, not where it is read |
-| `slime-root/src/task.rs` | `Task.cspace`; `recount_cspace`; `declared_slots_occupied` returning live and peak; `audit_child_cspace` returns its observed count | The ledger's physical seed is a measurement the construction audit already took |
+| `slime-root/src/task.rs` | `Task.cspace`; `recount_cspace` (a fresh census, never cached); `declared_slots_occupied` returning live and peak | A physical count is only ever answered from the kernel, since a stored copy could only be stale |
 | `slime-root/src/main.rs` | Label 31, its dispatch arm, `pack_slot_occupancy`, and declared-space credits at the boot-time notification install | Self-scoped by construction: the CSpace counted is the badge's |
 | `slime-root/src/peer_endpoint.rs` | `materialize` credits each holder's declared installs per instance | A holder's declared count includes the native endpoints its generation named |
 | `slime-root/src/generation.rs` | `Admission.fabric_capability_slots`, from the graph's own declared limit | The ceiling is decoded once at admission, not per request |
@@ -62,21 +68,20 @@ being paid on every progressing sweep of the single-threaded dispatch loop.
 | `scripts/lib/fabric_graph_limits.py` | `declared_limits(fixture)`, shared by both gates | One parser for one grammar, rather than two copies to diverge |
 | `check-sel4-{traffic,saturation}-plane.py` | Held-and-released pair shape, plus the peak checked against the fixture's own `capabilitySlots` | The exit condition, with the bound read from the fixture so loosening it moves the assertion |
 | `docs/syscall-abi.md`, `docs/capability-matrix.md` | Label 31's operands/result, both slot spaces, and why it is gated by neither a rights bit nor a table | Roadmap invariant 4 |
-| `Justfile`, `AGENTS.md` | Pinned root test count 114 → 120, 13 → 14 modules | B23's asserted count matches the new module's tests |
+| `Justfile`, `AGENTS.md` | Pinned root test count 114 → 118, 13 → 14 modules | B23's asserted count matches the new module's tests |
 
 ## Regression guards
 
 | Risk | Guard | Failure signal |
 |---|---|---|
+| A holder's occupancy passes a declared bound and is only reported, not caught | `just sel4_traffic_check`, `just sel4_saturation_check` | `SLIME_GRAPH cspace occupancy over-ceiling` / `over-capacity` / `refused` are `FAILURE_MARKERS` |
 | The query regresses to answering zero | `just sel4_traffic_check` | `'capability-slots' peak was 0` |
 | Real declared occupancy passes the declared ceiling | `just sel4_traffic_check` | `occupies N declared capability slots, exceeding the 48 its generation declares` |
 | The pair becomes incoherent evidence | `just sel4_traffic_check` | `baseline N exceeded its own peak M` |
 | The fixture is loosened to hide a breach | either gate | The bound is read from `fabricGraph.limits`, so loosening moves the assertion with it |
 | The new records overflow the broker's sink | `just sel4_traffic_check` | `dropped=N` in the `stream complete` line |
 | A standalone C8.4–C8.9 fixture receives traffic-only records | `just sel4_stream_check`, `sel4_qos_check`, `sel4_call_check`, `sel4_operation_check` | `dropped=N`, or a plane failing its own marker set |
-| A space's peak starts accepting the wrong kind of evidence | `just test_sel4_root` | `each_space_peaks_only_on_its_own_evidence` |
-| A release silently lowers the high-water mark | `just test_sel4_root` | `releasing_lowers_the_live_count_but_not_the_peak` |
-| A census clobbers the credited count | `just test_sel4_root` | `the_two_spaces_do_not_overwrite_each_other` |
+| The declared peak stops being a high-water mark | `just test_sel4_root` | `the_peak_is_a_high_water_mark_over_credits` |
 | A credit wraps instead of saturating | `just test_sel4_root` | `credits_saturate_rather_than_wrap` |
 | An absent or zero-declared ceiling is treated as a ceiling of zero | `just test_sel4_root` | `a_zero_ceiling_is_never_treated_as_a_ceiling` |
 
@@ -89,8 +94,8 @@ being paid on every progressing sweep of the single-threaded dispatch loop.
 | Intermediate boot, before the two-space split | Physical census read 25; the number that revealed the ceiling was being compared across spaces, since 25 physical slots and 48 declared slots are unrelated quantities | Direct; the measurement that redirected the slice |
 | Intermediate boot, per-sweep sampling | `peak 33 / baseline 29` — the measurement that disproved "declared slots are held for the holder's life" and moved the counter to `resourceLoan`'s shape | Direct |
 | `just sel4_saturation_check` | Passes | Direct |
-| `just test_sel4_root` | 120/120 across 14 modules | Direct |
-| `just lint_sel4_root`, `just fmt_check_all`, `just ruff`, `just data_fabric_trace_check`, `just devlog_check` | All pass | Direct |
+| `just test_sel4_root` | 118/118 across 14 modules | Direct |
+| `just lint_all`, `just fmt_check_all`, `just ruff`, `just typos`, `just test_host`, `just contracts_check`, `just generation_check`, `just data_fabric_trace_check`, `just sel4_gate_control_check` (31 gates reject 1194 mutations), `just devlog_check` | All pass | Direct |
 
 ## Decisions
 
@@ -111,11 +116,14 @@ being paid on every progressing sweep of the single-threaded dispatch loop.
 - Rejected alternative: per-sweep sampling in the broker, which both understated
   the peak and paid 128 kernel calls per sweep for the privilege.
 
-- Decision: physical space is censused, declared space is credited.
+- Decision: physical space is censused on every read and never retained;
+  declared space is credited and retained.
 - Rationale: declared installs are root-mediated end to end, so a credit is
-  complete. Physical occupancy is not — the receiving runtime moves a
-  transferred Endpoint out of `CHILD_SLOT_RECEIVE` itself — so an accumulated
-  physical count would understate every holder that has accepted a transfer.
+  complete, and retaining it is what lets the root hold a high-water mark no
+  reader could observe. Physical occupancy is not root-mediated — the receiving
+  runtime moves a transferred Endpoint out of `CHILD_SLOT_RECEIVE` itself — so an
+  accumulated physical count would understate every holder that has accepted a
+  transfer, and a stored one could only be stale.
 - Rejected alternative: report `AuthorityTable::len()` alone, which is one line
   and wrong twice over: a logical entry is not a physical install, and
   `serve_capability_import` populates the table without touching the CNode.
@@ -159,10 +167,11 @@ being paid on every progressing sweep of the single-threaded dispatch loop.
       checked but not saturated. Driving it to its exact bound would need a
       fixture that tightens `capabilitySlots` the way `sel4-saturation.zti`
       tightens `inFlightOperations`.
-- [ ] The declared peak sums two independently tracked halves, so it can name a
-      total neither half held simultaneously. That is the conservative direction
-      for a ceiling report, and both halves stay bounded, but it is an
-      over-approximation rather than an exact simultaneous maximum.
+- [ ] The declared peak sums two independently tracked halves — the root's own
+      installs and the task's authority table — so it can name a total neither
+      half held simultaneously. That is the conservative direction for a ceiling
+      report, and both halves stay bounded, but it is an over-approximation
+      rather than an exact simultaneous maximum.
 - [ ] `queueDepth` remains the one declared field with no live check at all;
       `2026-08-16-c8-13-declared-fields-audit` records why.
 
