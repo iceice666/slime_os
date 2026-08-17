@@ -43,6 +43,10 @@ use slime_proto::sample_descriptor::{
 };
 use slime_proto::{valid_capability_transfer, valid_stream_event};
 use slime_rt::{CapabilityDisposition, ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
+// B59: the capability-rights vocabulary is generated from
+// `contracts/generation/v5/schema.zt`; these were local copies of the same
+// bit numbering.
+use boot_contracts::generation::RIGHT_SEND;
 
 // C8.13.2: this participant's own shared-buffer occupancy evidence. Included
 // here rather than through `slime_components` because a file may be a module
@@ -78,8 +82,6 @@ const TIME_SLOT: u32 = 3;
 /// `sel4-visibility.zti` binds `visibility-diagnostics-ingress` here, after
 /// the control endpoint at 0 and the minted buffer factory at 1.
 const DIAGNOSTICS_INGRESS_SLOT: u32 = 2;
-
-const RIGHT_SEND: u64 = 1;
 
 const TELEMETRY_ROUTE: &str = "telemetry";
 const DIAGNOSTICS_ROUTE: &str = "diagnostics";

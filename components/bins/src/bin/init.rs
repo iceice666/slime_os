@@ -4,6 +4,15 @@
 slime_rt::entry!(main);
 
 use slime_rt::{CapabilityDisposition, Rights, SpawnGrant};
+// B59: the capability-rights vocabulary is generated from
+// `contracts/generation/v5/schema.zt`; these were local copies of the same
+// bit numbering.
+use boot_contracts::generation::{
+    RIGHT_BLOCK_READ, RIGHT_BLOCK_WRITE, RIGHT_BOOT_UPDATE, RIGHT_BUFFER_CREATE,
+    RIGHT_DIRECTORY_DERIVE, RIGHT_DIRECTORY_LIST, RIGHT_DIRECTORY_READ, RIGHT_DIRECTORY_WRITE,
+    RIGHT_EXEC, RIGHT_HEALTH_CONFIRM, RIGHT_INPUT_READ, RIGHT_SEND, RIGHT_SPAWN, RIGHT_STORE_READ,
+    RIGHT_STORE_WRITE, RIGHT_SUPERVISE, RIGHT_TRANSFER,
+};
 
 /// The resolved fabric profile for the graph this binary was built against.
 /// Init reads only `FABRIC_MINTED_GRANTS` from it: how many capabilities each
@@ -26,24 +35,6 @@ fn declared_minted_grants(component: &[u8]) -> usize {
         .find(|(holder, _)| *holder == component)
         .map_or(0, |(_, count)| *count)
 }
-
-const RIGHT_SEND: Rights = 1;
-const RIGHT_TRANSFER: Rights = 4;
-const RIGHT_BLOCK_READ: Rights = 1 << 10;
-const RIGHT_BLOCK_WRITE: Rights = 1 << 11;
-const RIGHT_STORE_READ: Rights = 1 << 12;
-const RIGHT_STORE_WRITE: Rights = 1 << 13;
-const RIGHT_HEALTH_CONFIRM: Rights = 1 << 14;
-const RIGHT_BOOT_UPDATE: Rights = 1 << 15;
-const RIGHT_EXEC: Rights = 1 << 3;
-const RIGHT_SPAWN: Rights = 1 << 16;
-const RIGHT_DIRECTORY_READ: Rights = 1 << 19;
-const RIGHT_DIRECTORY_WRITE: Rights = 1 << 20;
-const RIGHT_DIRECTORY_LIST: Rights = 1 << 21;
-const RIGHT_DIRECTORY_DERIVE: Rights = 1 << 22;
-const RIGHT_INPUT_READ: Rights = 1 << 23;
-const RIGHT_BUFFER_CREATE: Rights = 1 << 24;
-const RIGHT_SUPERVISE: Rights = 1 << 18;
 
 // Manifest-derived bootstrap slot order is emitted by the host builder.
 const CONSOLE_CAPS: [SpawnGrant; 0] = [];

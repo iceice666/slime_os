@@ -34,6 +34,10 @@ use super::{
     FABRIC_VISIBILITY, FIRST_CONTROL_SLOT, ROUTE_NAMES, control_clients, fail, release_received,
     supervision_slot_for,
 };
+// B59: the capability-rights vocabulary is generated from
+// `contracts/generation/v5/schema.zt`; these were local copies of the same
+// bit numbering.
+use boot_contracts::generation::{RIGHT_RECV, RIGHT_SEND};
 
 const TELEMETRY: usize = 0;
 const DIAGNOSTICS: usize = 1;
@@ -44,8 +48,6 @@ const TELEMETRY_PUBLISHER: &[u8] = b"fabric-publisher";
 const DIAGNOSTICS_PUBLISHER: &[u8] = b"fabric-publisher-b";
 const VISIBILITY_PRIVATE: u8 = 1;
 const VISIBILITY_GRAPH: u8 = 2;
-const RIGHT_SEND: u64 = 1;
-const RIGHT_RECV: u64 = 2;
 const SAMPLE_SEQUENCE: u64 = 1;
 /// The broker's own declared route endpoints, which sit directly after the
 /// control endpoints and the supervision handles.

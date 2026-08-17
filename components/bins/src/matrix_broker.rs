@@ -51,6 +51,10 @@ use super::{
     FABRIC_INTERPOSITIONS, FABRIC_TRACE_DEPTH, FABRIC_VISIBILITY, control_clients, fail,
     release_received,
 };
+// B59: the capability-rights vocabulary is generated from
+// `contracts/generation/v5/schema.zt`; these were local copies of the same
+// bit numbering.
+use boot_contracts::generation::{RIGHT_RECV, RIGHT_SEND};
 
 /// The declared proxy on the telemetry subscriber's interposition chain.
 const PROXY: &[u8] = b"fabric-proxy";
@@ -63,8 +67,6 @@ const OBSERVER: &[u8] = b"fabric-observer";
 
 const VISIBILITY_PRIVATE: u8 = 1;
 const VISIBILITY_GRAPH: u8 = 2;
-const RIGHT_SEND: u64 = 1;
-const RIGHT_RECV: u64 = 2;
 
 /// Refusal codes. Distinct so the transcript shows *which* mismatch refused an
 /// edge: a caller the graph declares nothing for, a caller asking under a route

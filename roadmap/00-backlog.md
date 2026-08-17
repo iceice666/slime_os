@@ -27,71 +27,9 @@ B57's own verification sweep, and had been red before either fix._
 
 _B57 and B58 were the two real defects with wrong observable semantics, and B67 —
 found while running B57's verification sweep — was a pair of negative controls
-that could not fail. All three are resolved below. B59–B66 are structural debt
-that compounds per milestone. B59 is the highest-leverage remaining item: it
-subsumes what B57 fixed for one table and removes the coupling B60 and B66 also
-pay for._
-
-### B59 — the syscall ABI has no single source: 97 rights declarations, two label tables, three error tables
-
-**Status:** Open. **Class:** Unmasked architectural debt. **Depends on:** none.
-**Subsumes:** B57.
-
-**Problem:** Three number tables that cross the root/userspace process boundary
-are hand-authored in one place and manually re-typed in others, with nothing
-forcing agreement. `docs/capability-matrix.md` states "Rights numbering is
-generated-contract truth, not prose"; that sentence is false today.
-
-**Evidence (2026-08-17).** Counted mechanically over `slime-root/src`,
-`boot-contracts/src`, and `components`:
-
-| Table | Distinct names | Declaration sites | Agree today |
-|---|---|---|---|
-| `RIGHT_*` | 23 | **97** | all but `RIGHT_ALL` (B57) |
-| syscall labels | 22 | 2 full `mod *_labels` copies + docs | yes |
-| `ERR_*` | 5 | 2 code copies + docs | yes |
-
-The rights sites span `slime-root/src/{graph,generation,console,directory,main}.rs`,
-`boot-contracts/src/generation.rs`, and roughly fourteen userspace components
-(`components/bins/src/bin/{spawn-service,dango,powerbox-chooser,powerbox-probe,directory-probe,fabric-proxy,fabric-subscriber-b,fabric-publisher-b,fabric-service}.rs`,
-`components/bins/src/matrix_broker.rs`, `components/proto/tests/powerbox.rs`,
-among others). The label tables are `slime-root/src/main.rs:71-122` and
-`components/runtime/src/syscall.rs:24-62`, restated a third time as prose in
-`docs/syscall-abi.md`. The error table is `components/runtime/src/syscall.rs:79-84`
-and `slime-root/src/ipc.rs:66-84`, restated in the same doc.
-
-`boot-contracts/src/generated/generation.rs` — the actual generated output —
-contains only `FORMAT_VERSION`. Not one rights bit or label is generated.
-
-**This class has already caused a defect.** `slime-root/src/console.rs:292-299`
-records a past numbering disagreement between the two crates that produced
-silently garbled keystrokes: no compile error, only a runtime misdecode.
-
-**A fourth table with the same shape:** the 16-byte spawn-grant record is
-defined as `GRANT_RECORD_BYTES = 16` in
-`components/runtime/src/syscall/sel4_transport.rs:55` and again as
-`SPAWN_GRANT_RECORD_BYTES = 16` in `slime-root/src/main.rs:3339`, whose doc
-comment reads "Matches `components/runtime/src/syscall/sel4_transport.rs::GRANT_RECORD_BYTES`."
-A comment is the entire enforcement mechanism for a record layout crossing the
-syscall boundary. (`SpawnGrant`'s `#[repr(C)]` at `syscall.rs:93-96` is *not*
-the wire layout — `sel4_transport.rs:687-696` encodes the record field by field
-— so the struct attribute is not the defect; the duplicated constant is.)
-
-**Proposed fix:** Declare the syscall ABI as a contract:
-`contracts/syscall-abi/v1/schema.zt` owning the operation-label table, the error
-table, the rights vocabulary, and the spawn-grant record layout. Generate one
-Rust module consumed by both `slime-root` and `components/runtime`; delete every
-downstream re-declaration; generate `docs/syscall-abi.md`'s and
-`docs/capability-matrix.md`'s tables from the same source so `AGENTS.md`
-invariant 4's manual doc coupling disappears rather than being restated.
-
-**Exit condition:** Each of the four tables has exactly one definition, and it
-is generated; `grep "const RIGHT_"` outside the generated module returns
-nothing; the label and error tables exist once; `docs/syscall-abi.md`'s and
-`docs/capability-matrix.md`'s tables are generated artifacts; `just
-contracts_check`, `just generation_check`, `just sel4_root_boot_check`, `just
-sel4_boot_check`, `just test_sel4_root`, `just test_host`, `just fmt_check_all`,
-and `just lint_all` pass.
+that could not fail. B59, the highest-leverage structural item, is resolved too:
+the syscall ABI is now one contract. B66 followed from it. All six are in the
+resolved log below. B60–B65 remain._
 
 ### B60 — authority-derivation policy lives in the builder, and one slot number has two independent sources
 
@@ -400,45 +338,151 @@ binaries between them; no `drive_*_plane` body remains in `init.rs`; every plane
 gate that used the collapsed binaries passes unchanged, and `just
 sel4_boot_layout_check`, `just fmt_check_all`, and `just lint_all` pass.
 
-### B66 — `ipc.rs` carries two retired-mechanism constants, one of them load-bearing
+## Resolved
+### B66 — `ipc.rs` carried two retired-mechanism constants, one of them load-bearing
 
-**Status:** Open. **Class:** Unmasked debt (B46 residue). **Depends on:** none;
-the ceiling's proper home is B59's contract.
+**Status:** Resolved 2026-08-17. **Class:** Unmasked debt (B46 residue).
+**Depends on:** none.
 
-**Problem:** `slime-root/src/ipc.rs` declares two constants describing a root
-wait-set mechanism B46 deleted. One is dead; the other is live and feeds
-generation admission while its own comment calls it a compatibility value.
+**Problem:** `slime-root/src/ipc.rs` declared two constants describing a root
+wait-set mechanism B46 deleted. One was dead; the other was live, fed generation
+admission, and duplicated a ceiling another contract already declared.
 
 **Evidence (2026-08-17).**
 
-- `CHANNEL_CAPACITY = 1` (`ipc.rs:13`) — "Compatibility value for generation
-  fabric admission. Native rendezvous supplies backpressure; the root owns no
-  channel queue." Zero call sites repo-wide.
-- `MAX_WAIT_SOURCES = 9` (`ipc.rs:16`) — "Compatibility value for generation
-  graph admission. Components wait on declared Notifications rather than a root
-  wait set." Live: `slime-root/src/generation.rs:245` passes it as the
-  wait-source ceiling to `FabricGraph::validate_against`, and `:1162` uses it to
-  build a test bound.
+- `CHANNEL_CAPACITY = 1` — "Compatibility value for generation fabric
+  admission. Native rendezvous supplies backpressure; the root owns no channel
+  queue." Zero call sites repo-wide.
+- `MAX_WAIT_SOURCES = 9` — "Compatibility value for generation graph
+  admission." Live: `slime-root/src/generation.rs:245` passed it as the
+  wait-source ceiling to `FabricGraph::validate_against`.
 
-Meanwhile `build-generation.py:1503` independently computes a per-worker
-`waitSources` count, and `:1840` emits a `fabric_worker_wait_sources` accessor —
-so the ceiling and the demand it bounds are derived on opposite sides of the
-build with no shared declaration. Three components document their own position
-against the number in prose (`fabric-op-worker.rs:7`, `fabric-call-worker.rs:8`,
-`fabric-service.rs:393`).
+**Root cause.** The number was already declared, once, in the contract that owns
+it: `contracts/fabric-graph/v1/schema.zt`'s `maxIngressSources = 9`, generated
+into `boot_contracts::fabric_graph::MAX_INGRESS_SOURCES`. `build-generation.py`
+was already importing that generated constant to bound each worker's computed
+demand. So `ipc.rs`'s copy was a third spelling of a value the builder and the
+contract already agreed on — and it sat in a module whose stated job is the
+bounded IPC envelope, which has nothing to do with fabric wake sources.
 
-**Proposed fix:** Delete `CHANNEL_CAPACITY`. Move the wait-source ceiling out of
-`ipc.rs` — a module whose stated job is the bounded IPC envelope — into the
-contract that declares the rest of the admission ceilings, so the builder's
-computed demand and the root's admitted bound come from one place.
+**Fix.** `CHANNEL_CAPACITY` deleted (landed with B59, which rewrote the same
+block). `MAX_WAIT_SOURCES` is now a re-export of
+`boot_contracts::fabric_graph::MAX_INGRESS_SOURCES`, so admission reads the one
+declaration; the alias is kept because the root's admission call site reads more
+clearly in terms of the ceiling it is enforcing.
 
-**Exit condition:** `CHANNEL_CAPACITY` no longer exists; the wait-source ceiling
-has one declaration consumed by both the builder and root admission; `just
-test_sel4_root`, `just sel4_boot_check`, `just generation_check`, and `just
-contracts_check` pass.
+**Stale naming corrected alongside it.** Nine comments, error messages, and a
+schema note described this ceiling as "one `SYS_WAIT` set" — a syscall the seL4
+cutover deleted. `SYS_WAIT` no longer exists, so the wording named a mechanism a
+reader cannot find, in `build-generation.py`, `check-fabric-manifest.py`,
+`check-data-fabric-profile.py`, `contracts/data-fabric-profile/v1/schema.zt`, and
+the generated `default_fabric_profile.rs` (fixed at its generator and
+regenerated). The builder's refusal now reports the actual numbers:
+`worker <name> needs <n> wake sources, above the declared ceiling of <max>`. The
+one surviving mention is a deliberate historical note in
+`contracts/fabric-graph/v1/schema.zt` recording that the name predates the
+cutover.
 
+**Exit condition (observed):** `CHANNEL_CAPACITY` no longer exists; the
+wait-source ceiling has exactly one declaration
+(`contracts/fabric-graph/v1/schema.zt`, generated to one constant) consumed by
+both the builder and root admission. `just test_sel4_root` (118/118), `just
+data_fabric_profile_check`, `just generation_check`, `just contracts_check`,
+`just sel4_boot_check`, `just ruff`, `just fmt_check_all`, and `just lint_all`
+pass.
 
-## Resolved
+### B59 — the syscall ABI had no single source: 97 rights declarations, two label tables, three error tables
+
+**Status:** Resolved 2026-08-17. **Class:** Unmasked architectural debt.
+**Depends on:** none. **Subsumed:** B57's remaining duplication.
+
+**Problem:** Four number tables crossing the root/userspace process boundary
+were hand-authored in one place and manually re-typed in others, with nothing
+forcing agreement. `docs/capability-matrix.md` claimed "Rights numbering is
+generated-contract truth, not prose"; that sentence was false.
+
+**Evidence (2026-08-17).** Counted mechanically before the fix:
+
+| Table | Names | Declaration sites |
+|---|---|---|
+| `RIGHT_*` | 23 | **97**, across root, `boot-contracts`, and ~14 userspace components |
+| operation labels | 22 | 2 full `mod *_labels` copies plus prose in `docs/syscall-abi.md` |
+| `ERR_*` | 5 | 2 code copies plus the same doc |
+| spawn-grant record | 1 | `GRANT_RECORD_BYTES` and `SPAWN_GRANT_RECORD_BYTES`, joined by a doc comment reading "Matches ..." |
+
+**This class had already caused a defect.** `slime-root/src/console.rs:292-299`
+records a numbering disagreement between the two crates that produced silently
+garbled keystrokes — no compile error, only a runtime misdecode.
+
+**Fix.** A new contract, `contracts/syscall-abi/v1`, declares the operation
+labels, status codes, message bounds, and the spawn-grant record layout, and
+generates `components/proto/src/syscall_abi.rs`. Both crates consume that one
+module: `components/runtime/src/syscall.rs` re-exports it, and `slime-root`
+imports the same label modules and status codes (`ipc::slime_status` now returns
+the generated `ERR_*`). `slime-rt` gained a `slime-proto` dependency to reach it,
+which is acyclic — `slime-proto` is `no_std` with no dependencies of its own.
+
+Rights were consolidated onto B57's generated vocabulary rather than duplicated
+into the new contract: 69 `u64`/`Rights` declarations became imports from
+`boot_contracts::generation`, and the 23 `u32` declarations in the powerbox/fs
+components — whose protocols carry a 32-bit rights field — became narrowing
+aliases (`RIGHT_X as u32`) over the same generated constants.
+
+The census afterwards: **97 hand-written sites became 1**, and that one is
+`RIGHT_BUFFER_ALL = u64::MAX` in `slime-root/src/main.rs`, a "no ceiling"
+sentinel rather than a named right.
+
+Two doc claims were corrected instead of left aspirational.
+`docs/capability-matrix.md`'s provenance paragraph now describes what is actually
+generated and distinguishes the vocabulary (one source) from enforcement
+(deliberately several predicates over it). `roadmap/README.md`'s invariant 4 now
+states that both couplings are gated rather than trusted.
+
+`components/runtime`'s `SpawnGrant` lost its `#[repr(C)]`: it is an in-memory
+type, and the transport encodes it field by field into the generated record
+offsets. The attribute suggested its field order was the ABI when the generated
+offsets are.
+
+**Regression guards.** `components/proto/tests/syscall_abi.rs` pins all 23
+labels, the 6 status codes, the record layout, and the message bounds, and
+asserts no two operations share a label and that only `ERR_SUCCESS` is
+non-negative. Sharing one module stops *drift*; the freeze test stops a silent
+*renumbering*, which would invalidate every component image built against an
+earlier generation. The contract's own validator additionally rejects a duplicate
+label, a duplicate status code, an operation in an undeclared service, and a
+grant record whose fields do not exactly fill it.
+
+`docs/syscall-abi.md`'s operation table is *verified* rather than generated: its
+rows carry operand layouts and result conventions the ABI declaration does not
+model, so generating it would have deleted real documentation. `just
+contracts_check` now fails when the doc omits a declared label or documents one
+the contract does not declare.
+
+**Both guards were verified to bite.** Renumbering `EXIT` from 3 to 7 in the
+contract and regenerating makes `operation_labels_are_frozen` abort. Changing the
+doc's label 32 row to 99 makes the doc check fail with
+`syscall-abi.md does not document declared operations: 32 (\`DERIVE\`)`. Both
+mutations were reverted.
+
+**Exit condition (observed):** each of the four tables has exactly one
+definition, and it is generated; `grep "const RIGHT_"` outside
+`boot-contracts/src/generated/` returns only narrowing aliases and the
+`u64::MAX` sentinel; the label and error tables exist once. `just
+contracts_check` (including the new syscall-ABI check: "documents all 23 declared
+operations"), `just generation_check` (two isolated builds byte-identical), `just
+test_host` (12 suites), `just test_sel4_root` (118/118), `just
+architecture_contract_check`, `just sel4_root_boot_check`, `just sel4_boot_check`
+(30 markers, 5 chains, 21 slots, 19 tasks), `just sel4_boot_layout_check`, `just
+sel4_gate_control_check`, `just sel4_capability_layout_check`, `just
+sel4_dango_check`, `sel4_powerbox_check`, `sel4_filesystem_check`,
+`sel4_directory_check`, `sel4_visibility_check`, `sel4_matrix_check`,
+`sel4_stream_check`, `sel4_spawn_check`, `just fmt_check_all`, `just lint_all`,
+and `just ruff` all pass.
+
+**Partly closed here:** B66's dead `CHANNEL_CAPACITY` was deleted in the same
+edit, since it sat in the `ipc.rs` block whose message bounds moved to the
+contract. B66's live half — the wait-source ceiling — remains open.
+
 ### B67 — two negative controls picked declared slots, so neither could fail
 
 **Status:** Resolved 2026-08-17. **Class:** Gate defect (negative controls that

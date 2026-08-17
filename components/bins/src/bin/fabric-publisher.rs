@@ -30,6 +30,10 @@ use slime_proto::interface_schema::telemetry_stream;
 use slime_proto::ring::{Ring, RingError};
 use slime_proto::valid_capability_transfer;
 use slime_rt::{ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
+// B59: the capability-rights vocabulary is generated from
+// `contracts/generation/v5/schema.zt`; these were local copies of the same
+// bit numbering.
+use boot_contracts::generation::{RIGHT_RECV, RIGHT_SEND};
 
 // C8.13.2: this participant's own shared-buffer occupancy evidence. Both files
 // are included here rather than reached through `slime_components` because a
@@ -60,9 +64,6 @@ const PROBE_SLOT: u32 = 1;
 /// `visibility-telemetry-ingress` here, so the endpoint is installed before
 /// this component runs and the fabric's role reply only names it.
 const TELEMETRY_INGRESS_SLOT: u32 = 1;
-
-const RIGHT_SEND: u64 = 1;
-const RIGHT_RECV: u64 = 2;
 
 const RING_BASE: u64 = 0x0000_0011_0000_0000;
 const RING_BYTES: usize = 4096;

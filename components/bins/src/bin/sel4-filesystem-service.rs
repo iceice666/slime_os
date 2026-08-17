@@ -40,6 +40,16 @@ use slime_rt::{
     MAX_MSG,
 };
 
+// B59: rights bit numbering is generated from
+// `contracts/generation/v5/schema.zt`. The fs protocol carries a 32-bit rights
+// field, so the generated `u64` constants are narrowed here rather than
+// re-spelled as separate `u32` literals.
+const RIGHT_TRANSFER: u32 = boot_contracts::generation::RIGHT_TRANSFER as u32;
+const RIGHT_DIRECTORY_READ: u32 = boot_contracts::generation::RIGHT_DIRECTORY_READ as u32;
+const RIGHT_DIRECTORY_WRITE: u32 = boot_contracts::generation::RIGHT_DIRECTORY_WRITE as u32;
+const RIGHT_DIRECTORY_LIST: u32 = boot_contracts::generation::RIGHT_DIRECTORY_LIST as u32;
+const RIGHT_DIRECTORY_DERIVE: u32 = boot_contracts::generation::RIGHT_DIRECTORY_DERIVE as u32;
+
 slime_rt::entry!(main);
 
 const RPC_SLOT: u32 = 0;
@@ -67,11 +77,6 @@ const READY_SLOT: u32 = 3;
 const CLOSE: &[u8] = b"SLIME.FILESYSTEM.CLOSE";
 const SECTOR_BYTES: usize = 512;
 const MAX_OBJECT_PAYLOAD: u32 = 32 * 1024;
-const RIGHT_TRANSFER: u32 = 1 << 2;
-const RIGHT_DIRECTORY_READ: u32 = 1 << 19;
-const RIGHT_DIRECTORY_WRITE: u32 = 1 << 20;
-const RIGHT_DIRECTORY_LIST: u32 = 1 << 21;
-const RIGHT_DIRECTORY_DERIVE: u32 = 1 << 22;
 const ZERO_HASH: [u8; 32] = [0; 32];
 
 #[derive(Clone, Copy)]

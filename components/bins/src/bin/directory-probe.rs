@@ -6,6 +6,15 @@ use slime_proto::{
     fs::{self, WireFsReply, WireFsRequest},
 };
 use slime_rt::{CapabilityDisposition, ERR_BAD_CAP, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
+// B59: rights bit numbering is generated from
+// `contracts/generation/v5/schema.zt`. The powerbox/fs protocols carry a
+// 32-bit rights field, so the generated `u64` constants are narrowed at the
+// declaration rather than re-spelled as separate `u32` literals.
+const RIGHT_TRANSFER: u32 = boot_contracts::generation::RIGHT_TRANSFER as u32;
+const RIGHT_DIRECTORY_WRITE: u32 = boot_contracts::generation::RIGHT_DIRECTORY_WRITE as u32;
+const RIGHT_DIRECTORY_DERIVE: u32 = boot_contracts::generation::RIGHT_DIRECTORY_DERIVE as u32;
+const RIGHT_DIRECTORY_READ: u32 = boot_contracts::generation::RIGHT_DIRECTORY_READ as u32;
+const RIGHT_DIRECTORY_LIST: u32 = boot_contracts::generation::RIGHT_DIRECTORY_LIST as u32;
 
 slime_rt::entry!(main);
 
@@ -15,12 +24,7 @@ const PAYLOAD_HASH: [u8; 32] = [
     0x80, 0xe6, 0xbb, 0x6b, 0x33, 0x8c, 0x72, 0xd3, 0xdd, 0x0f, 0xdc, 0x6d, 0x94, 0x25, 0x70, 0x4b,
     0xa6, 0xa0, 0x3f, 0x8d, 0x0c, 0xd8, 0x19, 0x47, 0x0c, 0xf1, 0x04, 0xc6, 0x57, 0x2e, 0x53, 0xd6,
 ];
-const RIGHT_TRANSFER: u32 = 1 << 2;
-const RIGHT_DIRECTORY_WRITE: u32 = 1 << 20;
-const RIGHT_DIRECTORY_DERIVE: u32 = 1 << 22;
 const PAYLOAD_LEN: u32 = 30;
-const RIGHT_DIRECTORY_READ: u32 = 1 << 19;
-const RIGHT_DIRECTORY_LIST: u32 = 1 << 21;
 const ZERO_HASH: [u8; 32] = [0; 32];
 /// The oracle's own client, unmodified in the sense the gate checks: no
 /// compile-time product selector, no seL4 branch.

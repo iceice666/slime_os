@@ -4,12 +4,20 @@ The canonical object-by-rights surface, the rules for extending it, and the
 planned-but-undecided authority horizon. Update this file in the same change
 that adds an object kind or right; a row without a gate is a bug, not a plan.
 
-Authority lives in three places and they must agree: the declared kinds and
-rights in `boot-contracts/src/generation.rs` (validated against
-`contracts/generation/v1/schema.zt`), the rights types the root enforces in
-`slime-root/src/graph.rs`, and the operations that check them in
-`slime-root/src/main.rs`'s dispatcher and the owning mechanism module. Rights
-numbering is generated-contract truth, not prose.
+Rights numbering is generated-contract truth, not prose. The vocabulary — every
+named right and its bit — is declared once in
+`contracts/generation/v5/schema.zt` and generated into
+`boot-contracts/src/generated/generation.rs`, which every consumer imports.
+`RIGHT_ALL` is the union of those named bits rather than a bit-width mask, so a
+gap in the numbering is refused rather than admitted (B57). Before B59 this
+paragraph was aspirational: 23 rights names were hand-declared across 97 sites
+in the root, `boot-contracts`, and roughly fourteen userspace components.
+
+What still lives in more than one place, by design, is *enforcement*: the rights
+types the root builds from those bits in `slime-root/src/graph.rs`, and the
+operations that check them in `slime-root/src/main.rs`'s dispatcher and the
+owning mechanism module. Those are predicates over one vocabulary, not copies of
+it.
 
 ## Grammar
 

@@ -10,13 +10,18 @@ use slime_rt::{
     CapabilityDisposition, ERR_PEER_DEAD, ERR_WOULDBLOCK, InputKey, MAX_CAPS_PER_MSG, MAX_MSG,
 };
 
+// B59: rights bit numbering is generated from
+// `contracts/generation/v5/schema.zt`. The powerbox protocol carries a 32-bit
+// rights field, so the generated `u64` constants are narrowed here rather than
+// re-spelled as separate `u32` literals.
+const RIGHT_TRANSFER: u32 = boot_contracts::generation::RIGHT_TRANSFER as u32;
+const RIGHT_DIRECTORY_READ: u32 = boot_contracts::generation::RIGHT_DIRECTORY_READ as u32;
+
 slime_rt::entry!(main);
 
 const RPC_SLOT: u32 = 0;
 const DIRECTORY_SLOT: u32 = 1;
 const INPUT_SLOT: u32 = 2;
-const RIGHT_TRANSFER: u32 = 1 << 2;
-const RIGHT_DIRECTORY_READ: u32 = 1 << 19;
 const ALLOWED_FILE_RIGHTS: u32 = RIGHT_DIRECTORY_READ | RIGHT_TRANSFER;
 const SELECTED_PATH: &[u8] = b"note";
 

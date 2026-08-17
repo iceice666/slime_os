@@ -206,7 +206,7 @@ def capability_layout_too_small(manifest: dict) -> None:
 
 
 def worker_above_wait_bound(manifest: dict) -> None:
-    """Crowd one worker's routes past a single `SYS_WAIT` set.
+    """Crowd one worker's routes past its wake-source ceiling.
 
     C8.10 partitions the graph so every worker can block on all of its live
     sources at once. Adding subscribers to a route the stream worker already
@@ -440,7 +440,7 @@ for profile in SINGLE_BROKER_PROFILES:
         fail(f"resolved artifact lost its selected profile name: {profile}")
     for worker in resolved.artifact["workers"]:
         if worker["waitSources"] > builder.MAX_FABRIC_GRAPH_INGRESS_SOURCES:
-            fail(f"profile {profile} worker {worker['name']} exceeds one SYS_WAIT set")
+            fail(f"profile {profile} worker {worker['name']} exceeds its wake-source ceiling")
 
 # The Rust decoder is the second reader of the schema artifact. Run its tests
 # so a layout or rule drift between the builder and decoder fails this gate.

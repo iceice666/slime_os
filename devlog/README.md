@@ -280,3 +280,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-17 | [A structural audit of the green tree: two defects, eight debts, three rejected claims](2026-08-17-structural-audit/index.md) | Audit | Root-caused | B57, B58, B59, B60, B61, B62, B63, B64, B65, B66, B40, B46, B55, B56 |
 | 2026-08-17 | [B57, B58 — a rights mask that admitted a bit nobody named, and the gate that found a third defect](2026-08-17-b57-b58-rights-vocabulary/index.md) | Defect | Verified | B57, B58, B59, B67, B40 |
 | 2026-08-17 | [B67 — two negative controls aimed at a slot the audit declares, and the second one hid behind the first](2026-08-17-b67-blind-negative-controls/index.md) | Defect | Verified | B67, B40, B57 |
+| 2026-08-17 | [B59, B66 — one contract for the syscall ABI, and 97 rights declarations becoming one](2026-08-17-b59-b66-syscall-abi-contract/index.md) | Change | Verified | B59, B66, B57, B46 |

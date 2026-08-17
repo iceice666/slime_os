@@ -4,16 +4,23 @@
 //! module decodes only the bounded wire envelope received by root services;
 //! each service owns the meaning of its request labels.
 
-/// Native messages carry at most one capability.
-pub const MAX_MESSAGE_CAPS: usize = 1;
-/// Maximum native message payload, matching the userspace ABI.
-pub const MAX_MESSAGE_BYTES: usize = 64;
-/// Compatibility value for generation fabric admission. Native rendezvous
-/// supplies backpressure; the root owns no channel queue.
-pub const CHANNEL_CAPACITY: usize = 1;
-/// Compatibility value for generation graph admission. Components wait on
-/// declared Notifications rather than a root wait set.
-pub const MAX_WAIT_SOURCES: usize = 9;
+/// Native messages carry at most one capability, and at most this many payload
+/// bytes. Both are generated from `contracts/syscall-abi/v1/schema.zt`, so the
+/// bound the root enforces is the one `components/runtime` encodes against
+/// (B59).
+pub use slime_proto::syscall_abi::{
+    MAX_CAPS_PER_MSG as MAX_MESSAGE_CAPS, MAX_MSG as MAX_MESSAGE_BYTES,
+};
+
+/// The wake sources one fabric participant may register, re-exported from the
+/// contract that declares it (B66).
+///
+/// This was a local `= 9` in this module, described as a "compatibility value"
+/// for a root wait set B46 deleted — a number `ipc.rs` had no business owning,
+/// duplicating `fabric_graph`'s own `maxIngressSources`. Admission now reads the
+/// one declaration, and `build-generation.py` emits the same value as
+/// `FABRIC_MAX_INGRESS_SOURCES` for the workers to size themselves against.
+pub use boot_contracts::fabric_graph::MAX_INGRESS_SOURCES as MAX_WAIT_SOURCES;
 /// Message registers the AArch64 fast path carries in architectural registers.
 pub const FAST_MESSAGE_REGISTERS: usize = sel4::NUM_FAST_MESSAGE_REGISTERS;
 
@@ -57,24 +64,32 @@ pub enum IpcError {
 
 impl IpcError {
     /// Slime-visible status returned in reply MR0 by the root service loop.
+    ///
+    /// The codes are generated from `contracts/syscall-abi/v1/schema.zt` and are
+    /// the same constants `components/runtime` tests against (B59). The mapping
+    /// is deliberately many-to-one: a component learns the failure class, not
+    /// which internal predicate rejected it.
     pub const fn slime_status(self) -> i64 {
+        use slime_proto::syscall_abi::{
+            ERR_BAD_CAP, ERR_INVALID_ARG, ERR_OUT_OF_MEMORY, ERR_PEER_DEAD, ERR_WOULDBLOCK,
+        };
         match self {
-            Self::BadCapability => -1,
-            Self::PeerDead => -2,
-            Self::QueueFull | Self::WouldBlock => -3,
+            Self::BadCapability => ERR_BAD_CAP,
+            Self::PeerDead => ERR_PEER_DEAD,
+            Self::QueueFull | Self::WouldBlock => ERR_WOULDBLOCK,
             // `ERR_BAD_CAP`, with the other capability failures: `sys_send`
             // answers that for a capability it will not move, and a component
             // written against the retired kernel tests for it. It stays a
             // distinct variant because the root's own marker distinguishes an
             // unmovable capability from an absent one, which is a diagnosis a
             // component is deliberately not given.
-            Self::UnsupportedCapabilityTransfer => -1,
+            Self::UnsupportedCapabilityTransfer => ERR_BAD_CAP,
             Self::InvalidOperation
             | Self::UnsupportedOperation
             | Self::InvalidLength
             | Self::StalePlan
-            | Self::WaiterConflict => -4,
-            Self::DestinationSlotsExhausted | Self::TransferFailed => -5,
+            | Self::WaiterConflict => ERR_INVALID_ARG,
+            Self::DestinationSlotsExhausted | Self::TransferFailed => ERR_OUT_OF_MEMORY,
         }
     }
 }

@@ -12,20 +12,13 @@ use boot_contracts::generation::{
     KIND_RESOURCE, RIGHT_TRANSFER, ResourceQuota, Rights,
 };
 use boot_contracts::target_profile::TargetProfile;
+// B59: the capability-rights vocabulary is generated from
+// `contracts/generation/v5/schema.zt`; these were local copies of the same
+// bit numbering.
+use boot_contracts::generation::{RIGHT_RECV, RIGHT_SEND};
 
 pub const MAX_ADMITTED_EXECUTABLES: usize = 48;
 pub const MAX_ADMITTED_INSTANCES: usize = 48;
-
-/// Logical IPC rights, numbered by the generation contract
-/// (`contracts/generation/v1/schema.zt`, rendered by
-/// `scripts/build/build-generation.py`). The generation format owns
-/// `RIGHT_TRANSFER`; the send/receive bits are restated here because
-/// `slime-root` maps them onto seL4 endpoint rights.
-pub const RIGHT_SEND: Rights = 1;
-pub const RIGHT_RECV: Rights = 1 << 1;
-/// Authority to execute an object: what makes a grant name a spawnable
-/// executable rather than a channel or a factory.
-pub const RIGHT_EXEC: Rights = 1 << 3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GenerationError {

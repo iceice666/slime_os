@@ -28,6 +28,10 @@ use super::{
     capability_transfer_labels, directory_labels, lifecycle_labels, shared_buffer_labels,
     spawn_labels, supervision_labels,
 };
+/// Bytes of a spawn grant record in the transfer window: slot word, then rights
+/// word. Generated from `contracts/syscall-abi/v1`; the root decodes the same
+/// constants rather than a doc comment claiming to match them (B59).
+use slime_proto::syscall_abi::{GRANT_RECORD_BYTES, GRANT_RIGHTS_OFFSET, GRANT_SLOT_OFFSET};
 
 /// The child CSpace slot holding the badged root service endpoint. Slot 0 is
 /// null and every other slot belongs to the generation's declared grants; this
@@ -49,10 +53,6 @@ const CONSOLE_LABEL_INPUT_READ: u64 = 1;
 const CONSOLE_LABEL_BLOCK_TRANSACT: u64 = 2;
 const CONSOLE_LABEL_DIRECTORY_INSPECT: u64 = 3;
 const CONSOLE_LABEL_DIRECTORY_COMMIT: u64 = 4;
-
-/// Bytes of a spawn grant record in the transfer window: slot word, then rights
-/// word.
-const GRANT_RECORD_BYTES: usize = 16;
 
 /// Bytes of the immutable directory root in an inspect reply frame.
 const DIRECTORY_ROOT_BYTES: usize = 32;
@@ -690,8 +690,10 @@ pub fn spawn(executable_slot: u32, grants: &[SpawnGrant]) -> (i64, u64) {
         return (ERR_INVALID_ARG, 0);
     };
     for (record, grant) in frame.chunks_exact_mut(GRANT_RECORD_BYTES).zip(grants) {
-        record[..8].copy_from_slice(&u64::from(grant.slot).to_le_bytes());
-        record[8..].copy_from_slice(&grant.rights.to_le_bytes());
+        record[GRANT_SLOT_OFFSET..GRANT_SLOT_OFFSET + 8]
+            .copy_from_slice(&u64::from(grant.slot).to_le_bytes());
+        record[GRANT_RIGHTS_OFFSET..GRANT_RIGHTS_OFFSET + 8]
+            .copy_from_slice(&grant.rights.to_le_bytes());
     }
     let bytes = &encoded[..grants.len() * GRANT_RECORD_BYTES];
     let transfer = match stage(bytes, &[]) {

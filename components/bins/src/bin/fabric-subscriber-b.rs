@@ -38,6 +38,10 @@ use slime_proto::{
     valid_capability_transfer, valid_sample_descriptor, valid_stream_event, valid_stream_sample,
 };
 use slime_rt::{ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
+// B59: the capability-rights vocabulary is generated from
+// `contracts/generation/v5/schema.zt`; these were local copies of the same
+// bit numbering.
+use boot_contracts::generation::{RIGHT_RECV, RIGHT_SEND};
 
 // C8.13.2: this participant's own shared-buffer occupancy evidence. Included
 // here rather than through `slime_components` because a file may be a module
@@ -64,9 +68,6 @@ const MATRIX_ALT_ROUTE: &str = "telemetry-alt";
 /// Generation facts, installed before this component runs.
 const DIAGNOSTICS_EGRESS_SLOT: u32 = 1;
 const DIAGNOSTICS_ACK_SLOT: u32 = 2;
-
-const RIGHT_SEND: u64 = 1;
-const RIGHT_RECV: u64 = 2;
 
 const PAGE: u64 = 4096;
 const BASE: u64 = 0x0000_000F_0000_0000;

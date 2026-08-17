@@ -32,25 +32,14 @@
 //! mapping; a second claimed root-image page costs one page and removes the
 //! hazard entirely.
 
-/// Authority to read decoded key events, matching the generation's
-/// `inputRead` right.
-const RIGHT_INPUT_READ: u64 = 1 << 23;
-
-/// Authority to read sectors, held on a `Block` (P5.4.2c). Numbered as
-/// `blockRead` in the generation's own rights table
-/// (`scripts/build/build-generation.py`, validated against
-/// `contracts/generation/v1/schema.zt`); see `docs/capability-matrix.md` for the
-/// full bit assignment.
-pub const RIGHT_BLOCK_READ: u64 = 1 << 10;
-/// Authority to write sectors and to flush. One bit for both, deliberately: a
-/// caller that may change what is on the device may also ask for it to be made
-/// durable, and a flush without writes is a no-op.
-pub const RIGHT_BLOCK_WRITE: u64 = 1 << 11;
-
 use crate::child_vspace::ScratchPage;
 use crate::ipc::{self, IpcError, Response};
 use crate::task::{MAX_TASKS, TaskId, TaskTable};
 use crate::transfer_window::{self, Window, WindowTable, descriptor_thread};
+// B59: the capability-rights vocabulary is generated from
+// `contracts/generation/v5/schema.zt`; these were local copies of the same
+// bit numbering.
+use boot_contracts::generation::{RIGHT_BLOCK_READ, RIGHT_BLOCK_WRITE};
 
 /// Stack for the console thread, in the root's own image so it is mapped
 /// before the thread runs.

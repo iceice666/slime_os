@@ -37,6 +37,10 @@ use slime_proto::{
     valid_capability_transfer, valid_interposition_trace, valid_stream_ack, valid_stream_sample,
 };
 use slime_rt::{ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
+// B59: the capability-rights vocabulary is generated from
+// `contracts/generation/v5/schema.zt`; these were local copies of the same
+// bit numbering.
+use boot_contracts::generation::{RIGHT_RECV, RIGHT_SEND};
 
 slime_rt::entry!(main);
 
@@ -44,8 +48,6 @@ const CONTROL_SLOT: u32 = 0;
 
 const ROUTE_NAME: &str = "telemetry";
 const DIRECTION_PUBLISH: u32 = 1;
-const RIGHT_SEND: u64 = 1;
-const RIGHT_RECV: u64 = 2;
 
 fn fail(reason: &[u8]) -> ! {
     slime_rt::debug_write(b"[fabric-proxy] fail: ");

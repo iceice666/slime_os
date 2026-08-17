@@ -36,6 +36,10 @@ use slime_proto::{
     valid_stream_sample,
 };
 use slime_rt::{ERR_SUCCESS, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
+// B59: the capability-rights vocabulary is generated from
+// `contracts/generation/v5/schema.zt`; these were local copies of the same
+// bit numbering.
+use boot_contracts::generation::{RIGHT_RECV, RIGHT_SEND};
 // C8.13.2: this participant's own shared-buffer occupancy evidence. Included
 // here rather than through `slime_components` because a file may be a module
 // only once per crate.
@@ -60,9 +64,6 @@ const ROUTE_NAME: &str = "telemetry";
 const PROXY_DATA_SLOT: u32 = 1;
 const PROXY_ACK_SLOT: u32 = 2;
 const PROXY_EVENT_SLOT: u32 = 3;
-
-const RIGHT_SEND: u64 = 1;
-const RIGHT_RECV: u64 = 2;
 
 const PAGE: u64 = 4096;
 const BASE: u64 = 0x0000_000E_0000_0000;

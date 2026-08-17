@@ -551,7 +551,8 @@ FABRIC_OPERATION_REPLACEMENT_GRANTS = ("fabric-op-client-b-restart-control",)
 # absent from every worker's partition.
 FABRIC_EXTRA_ROUTE_CATALOGUE = ("telemetry-alt",)
 # C8.10 bounded route workers: whole routes, partitioned so no worker's live
-# wake sources exceed one `SYS_WAIT` set. Declared here rather than inferred so
+# wake sources exceed the declared ingress ceiling. Declared here rather than
+# inferred so
 # the partition is a generation fact the resolver validates, not a runtime
 # heuristic that could silently drift past the kernel bound.
 FABRIC_ROUTE_WORKERS = (
@@ -563,7 +564,7 @@ FABRIC_ROUTE_WORKERS = (
     ("call", ("parameters",)),
     ("operation", ("navigation", "nav-backup")),
 )
-# How each worker shape's peak `SYS_WAIT` set is established.
+# How each worker shape's peak wake-source count is established.
 #
 # Counting one source per participant edge is right for the stream shape and
 # wrong for the request/response ones, because the two brokers park differently.
@@ -1479,7 +1480,10 @@ def resolve_fabric_profile(manifest: dict, interfaces: list, profile_name: str) 
         else:
             sources = shape["peak"]
         if sources > MAX_FABRIC_GRAPH_INGRESS_SOURCES:
-            fail(f"fabric graph: worker {worker_name} exceeds one SYS_WAIT set")
+            fail(
+                f"fabric graph: worker {worker_name} needs {sources} wake sources, "
+                f"above the declared ceiling of {MAX_FABRIC_GRAPH_INGRESS_SOURCES}"
+            )
         workers.append(
             {
                 "name": worker_name,
@@ -1741,7 +1745,7 @@ def render_fabric_profile_rust(
     # C8.10 bounded route workers. One row per worker: the routes it carries and
     # the number of live wake sources it must hold at once. The fabric parks on
     # exactly this set, so the generation — not a runtime heuristic — decides how
-    # the graph is partitioned across `SYS_WAIT` sets.
+    # the graph is partitioned across per-worker wake-source sets.
     worker_rows = "".join(
         f"    ({rust_string(row['name'])}, &[{', '.join(rust_string(route) for route in row['routes'])}], {row['waitSources']}),\n"
         for row in artifact["workers"]
@@ -1806,7 +1810,7 @@ pub const FABRIC_WORKERS: &[FabricWorkerRow] = &[\n{worker_rows}];
 /// The wake sources the generation declares one worker parks on at once, or
 /// `WORKER_ABSENT` when this graph declares no route that worker carries.
 ///
-/// `const fn` so a broker can bind its own `SYS_WAIT` array to this number in a
+/// `const fn` so a broker can bind its own notification array to this number in a
 /// `const _: () = assert!(..)`. The declared peak and the array that has to hold
 /// it then cannot drift apart silently: a broker that grows its park set past
 /// what the generation resolved stops compiling instead of overflowing at boot.

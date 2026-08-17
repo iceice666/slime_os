@@ -30,9 +30,16 @@ participantEntryBytes :: Int = 128;
 interpositionEntryBytes :: Int = 40;
 
 -- Admitted-set ceilings. `maxSchemas` matches the C8.1 admitted interface set.
--- `maxIngressSources` matches the kernel's `SYS_WAIT` source bound. C8.7 uses
--- the ninth source for the replacement-authenticated operation participant;
--- a fabric that cannot register every live wake source would have to poll.
+--
+-- `maxIngressSources` is the wake sources one fabric participant may register.
+-- C8.7 uses the ninth for the replacement-authenticated operation participant;
+-- a fabric that cannot register every live wake source would have to poll. It is
+-- the single declaration of that ceiling: `slime-root`'s admission imports it
+-- through `boot_contracts::fabric_graph::MAX_INGRESS_SOURCES`, and
+-- `build-generation.py` emits the same value as `FABRIC_MAX_INGRESS_SOURCES` for
+-- the workers to size themselves against (B66). The name predates the seL4
+-- cutover, when it matched the retired kernel's `SYS_WAIT` source bound; the
+-- number is now a property of this fabric rather than of any kernel call.
 maxSchemas :: Int = 64;
 maxRoutes :: Int = 32;
 maxParticipants :: Int = 32;

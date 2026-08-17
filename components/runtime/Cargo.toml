@@ -22,6 +22,12 @@ heap = []
 sel4 = { path = "../../deps/rust-sel4/crates/sel4" }
 sel4-panicking-env = { path = "../../deps/rust-sel4/crates/sel4-panicking/env" }
 sel4-runtime-common = { path = "../../deps/rust-sel4/crates/sel4-runtime-common" }
+# B59: the root-service operation labels, status codes, and spawn-grant record
+# layout are generated from `contracts/syscall-abi/v1` into `slime-proto`, and
+# `slime-root` consumes the same module. Before this the two crates each
+# hand-authored the tables; `slime-root/src/console.rs` records a numbering
+# disagreement between them that produced silently garbled keystrokes.
+slime-proto = { path = "../proto" }
 
 [lints]
 workspace = true

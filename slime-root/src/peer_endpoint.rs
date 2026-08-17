@@ -1,10 +1,11 @@
 //! Generation-owned native seL4 Endpoint provisioning.
 
-use crate::generation::{RIGHT_RECV, RIGHT_SEND};
 use crate::launched::LaunchedInstances;
 use crate::object_allocator::{AllocError, ObjectAllocator, TaskArenaId};
 use crate::task::{MAX_TASKS, TaskId, TaskTable};
-use boot_contracts::generation::{CapabilityKind, Generation, GrantEndpoint, RIGHT_TRANSFER};
+use boot_contracts::generation::{
+    CapabilityKind, Generation, GrantEndpoint, RIGHT_RECV, RIGHT_SEND, RIGHT_TRANSFER,
+};
 
 pub const MAX_PEER_ENDPOINTS: usize = 48;
 pub const NATIVE_ENDPOINT_BASE: sel4::CPtrBits = crate::task::CHILD_SLOT_ENDPOINT_BASE;

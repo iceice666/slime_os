@@ -20,6 +20,7 @@ pub mod ring;
 pub mod sample_descriptor;
 pub mod spawn;
 pub mod store;
+pub mod syscall_abi;
 pub mod trace_sink;
 
 pub fn valid_fs_request(request: &fs::WireFsRequest) -> bool {

@@ -10,19 +10,12 @@ use crate::ipc::{IpcError, Response};
 use crate::task::{TaskId, TaskTable};
 use crate::transfer_window;
 use boot_contracts::generation::RIGHT_TRANSFER;
-
-/// Authority over a `Directory` (M6.3, P5.4.3), numbered as the oracle's
-/// `capability::RIGHT_DIRECTORY_*` and as `directoryRead` and friends in the
-/// generation's rights table.
-///
-/// Four independent bits rather than a read/write pair: listing a directory and
-/// resolving one name in it are different authorities, and derivation is a
-/// third — a component may be allowed to *use* a scope without being allowed to
-/// hand out narrower views of it.
-pub const RIGHT_DIRECTORY_READ: u64 = 1 << 19;
-pub const RIGHT_DIRECTORY_WRITE: u64 = 1 << 20;
-pub const RIGHT_DIRECTORY_LIST: u64 = 1 << 21;
-pub const RIGHT_DIRECTORY_DERIVE: u64 = 1 << 22;
+// B59: the capability-rights vocabulary is generated from
+// `contracts/generation/v5/schema.zt`; these were local copies of the same
+// bit numbering.
+use boot_contracts::generation::{
+    RIGHT_DIRECTORY_DERIVE, RIGHT_DIRECTORY_LIST, RIGHT_DIRECTORY_READ, RIGHT_DIRECTORY_WRITE,
+};
 
 /// Every right a directory capability may carry, for bounding a derive request.
 pub const RIGHTS_DIRECTORY_ALL: u64 =

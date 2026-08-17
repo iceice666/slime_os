@@ -21,60 +21,18 @@ pub(crate) fn bind_startup_window(base: usize) -> i64 {
 pub(crate) fn early_debug_write(bytes: &[u8]) {
     sel4_transport::early_debug_write(bytes)
 }
-mod lifecycle_labels {
-    pub const EXIT: u64 = 3;
-    pub const UNHEALTHY: u64 = 9;
-}
-
-mod spawn_labels {
-    pub const SPAWN: u64 = 4;
-}
-
-mod supervision_labels {
-    pub const STATUS: u64 = 12;
-    pub const DERIVE: u64 = 32;
-}
-
-mod capability_table_labels {
-    pub const DROP: u64 = 13;
-    /// Read-only: this component's own live child-CNode slot occupancy.
-    pub const OCCUPANCY: u64 = 31;
-}
-
-mod directory_labels {
-    pub const DERIVE: u64 = 15;
-}
-
-mod shared_buffer_labels {
-    pub const CREATE: u64 = 21;
-    pub const RELEASE: u64 = 22;
-    pub const MAP: u64 = 23;
-    pub const UNMAP: u64 = 24;
-    pub const SEAL: u64 = 25;
-    pub const LOAN: u64 = 26;
-    pub const LOAN_MAP: u64 = 27;
-    pub const RETURN: u64 = 28;
-    pub const REVOKE: u64 = 29;
-    /// Read-only: this component's own live page/buffer/mapping/loan charges.
-    pub const OCCUPANCY: u64 = 30;
-}
-
-mod capability_transfer_labels {
-    pub const EXPORT: u64 = 33;
-    pub const IMPORT: u64 = 34;
-    pub const EXPORT_CANCEL: u64 = 35;
-    pub const EXPORT_FINALIZE: u64 = 36;
-}
-
-pub const ERR_SUCCESS: i64 = 0;
-pub const ERR_BAD_CAP: i64 = -1;
-pub const ERR_PEER_DEAD: i64 = -2;
-pub const ERR_WOULDBLOCK: i64 = -3;
-pub const ERR_INVALID_ARG: i64 = -4;
-pub const ERR_OUT_OF_MEMORY: i64 = -5;
-
-pub const MAX_MSG: usize = 64;
-pub const MAX_CAPS_PER_MSG: usize = 1;
+// B59: the operation labels, status codes, and message bounds are generated
+// from `contracts/syscall-abi/v1/schema.zt`. `slime-root` consumes the same
+// module, so a renumbering cannot desync the two crates -- which it has done
+// before, silently garbling keystrokes (see `slime-root/src/console.rs`).
+pub use slime_proto::syscall_abi::{
+    ERR_BAD_CAP, ERR_INVALID_ARG, ERR_OUT_OF_MEMORY, ERR_PEER_DEAD, ERR_SUCCESS, ERR_WOULDBLOCK,
+    MAX_CAPS_PER_MSG, MAX_MSG,
+};
+use slime_proto::syscall_abi::{
+    capability_table_labels, capability_transfer_labels, directory_labels, lifecycle_labels,
+    shared_buffer_labels, spawn_labels, supervision_labels,
+};
 
 /// Whether delegation consumes the source logical capability or retains it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -87,10 +45,18 @@ pub enum CapabilityDisposition {
 /// single service frame.
 pub(crate) const MIN_TRANSFER_WINDOW: usize = 4096;
 
-/// A capability rights bitset shared with generation format v3.
+/// A capability rights bitset. The vocabulary and bit numbering are generated
+/// from `contracts/generation/v5/schema.zt`; see `boot_contracts::generation`
+/// for the named `RIGHT_*` constants (B57).
 pub type Rights = u64;
 
-#[repr(C)]
+/// One grant a spawner delegates to its child, in memory.
+///
+/// Not a wire type: [`sel4_transport::spawn`] encodes each grant field by field
+/// into a `GRANT_RECORD_BYTES` record staged in the transfer window, and the
+/// root decodes the same offsets from `syscall_abi`. This carried `#[repr(C)]`
+/// before B59, which suggested its field order was the ABI when the generated
+/// record offsets are.
 #[derive(Clone, Copy)]
 pub struct SpawnGrant {
     pub slot: u32,

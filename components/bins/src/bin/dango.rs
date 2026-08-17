@@ -13,6 +13,13 @@ use slime_rt::{
     CapabilityDisposition, ERR_WOULDBLOCK, InputKey, MAX_CAPS_PER_MSG, MAX_MSG, Termination,
 };
 
+// B59: rights bit numbering is generated from
+// `contracts/generation/v5/schema.zt`. The powerbox/fs protocols carry a
+// 32-bit rights field, so the generated `u64` constants are narrowed here
+// rather than re-spelled as separate `u32` literals.
+const RIGHT_TRANSFER: u32 = boot_contracts::generation::RIGHT_TRANSFER as u32;
+const RIGHT_DIRECTORY_READ: u32 = boot_contracts::generation::RIGHT_DIRECTORY_READ as u32;
+
 const SPAWN_SLOT: u32 = 0;
 const CONSOLE_SLOT: u32 = 1;
 const INPUT_SLOT: u32 = 2;
@@ -22,8 +29,6 @@ const STDIN_SEND_SLOT: u32 = 4;
 const SHARED_BUFFER_FACTORY_SLOT: u32 = 5;
 // A free page-aligned user address, borrowed only for the startup self-check.
 const SHARED_BUFFER_PROBE_BASE: u64 = 0x0000_0005_0000_0000;
-const RIGHT_TRANSFER: u32 = 4;
-const RIGHT_DIRECTORY_READ: u32 = 1 << 19;
 
 /// Fail with a named reason on serial.
 ///

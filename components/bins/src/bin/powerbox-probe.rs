@@ -6,13 +6,17 @@ use slime_proto::{
     valid_powerbox_reply,
 };
 use slime_rt::{ERR_BAD_CAP, ERR_WOULDBLOCK, MAX_CAPS_PER_MSG, MAX_MSG};
+// B59: rights bit numbering is generated from
+// `contracts/generation/v5/schema.zt`. The powerbox/fs protocols carry a
+// 32-bit rights field, so the generated `u64` constants are narrowed at the
+// declaration rather than re-spelled as separate `u32` literals.
+const RIGHT_TRANSFER: u32 = boot_contracts::generation::RIGHT_TRANSFER as u32;
+const RIGHT_DIRECTORY_READ: u32 = boot_contracts::generation::RIGHT_DIRECTORY_READ as u32;
+const RIGHT_DIRECTORY_WRITE: u32 = boot_contracts::generation::RIGHT_DIRECTORY_WRITE as u32;
 
 slime_rt::entry!(main);
 
 const RPC_SLOT: u32 = 0;
-const RIGHT_TRANSFER: u32 = 1 << 2;
-const RIGHT_DIRECTORY_READ: u32 = 1 << 19;
-const RIGHT_DIRECTORY_WRITE: u32 = 1 << 20;
 
 fn main(_startup_arg: u32) {
     let mut root = [0u8; 32];

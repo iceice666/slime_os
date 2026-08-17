@@ -437,6 +437,12 @@ store_gen:
 spawn_gen:
     python3 scripts/generate/generate-spawn-bindings.py
 
+# Regenerate the root-service syscall ABI bindings and doc tables (B59). One
+# declaration feeds `slime-root`, `components/runtime`, and `docs/syscall-abi.md`,
+# so a renumbered operation cannot leave any of the three disagreeing.
+syscall_abi_gen:
+    python3 scripts/generate/generate-syscall-abi-bindings.py
+
 # Regenerate the sample-descriptor protocol bindings (C7.6).
 sample_descriptor_gen:
     python3 scripts/generate/generate-sample-descriptor-bindings.py
@@ -524,6 +530,11 @@ contracts_check: bootstate_model_check
     # that has drifted from its schema is a hand-written wire format wearing a
     # `@generated` header.
     python3 scripts/generate/generate-fabric-ring-bindings.py --check
+    # B59: the root-service ABI is one contract consumed by `slime-root` and
+    # `components/runtime`, and `docs/syscall-abi.md` must document every label
+    # it declares. Before this the two crates and the doc each held their own
+    # copy of the table.
+    python3 scripts/generate/generate-syscall-abi-bindings.py --check
 
 # P0 target-profile and executable-artifact contract matrix.
 architecture_contract_check: contracts_check

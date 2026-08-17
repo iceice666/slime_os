@@ -718,6 +718,9 @@ dependencies = [
 [[package]]
 name = "slime-proto"
 version = "0.1.0"
+dependencies = [
+ "boot-contracts",
+]
 
 [[package]]
 name = "slime-root"
@@ -737,6 +740,7 @@ dependencies = [
  "sel4",
  "sel4-panicking-env",
  "sel4-runtime-common",
+ "slime-proto",
 ]
 
 [[package]]

@@ -3,7 +3,11 @@ use slime_proto::{
     valid_powerbox_reply, valid_powerbox_request,
 };
 
-const RIGHT_DIRECTORY_READ: u32 = 1 << 19;
+// B59: rights bit numbering is generated from
+// `contracts/generation/v5/schema.zt`. The powerbox protocol carries a 32-bit
+// rights field, so the generated `u64` constant is narrowed here rather than
+// re-spelled as a separate `u32` literal.
+const RIGHT_DIRECTORY_READ: u32 = boot_contracts::generation::RIGHT_DIRECTORY_READ as u32;
 
 fn request() -> WirePowerboxRequest {
     let purpose = b"Open selected note";

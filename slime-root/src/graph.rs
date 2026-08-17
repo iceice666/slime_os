@@ -8,27 +8,18 @@ use crate::directory::ScopeId;
 use crate::ipc::IpcError;
 use crate::shared_buffer::{BufferHandle, LoanHandle};
 use crate::task::TaskId;
+// B59: the capability-rights vocabulary is generated from
+// `contracts/generation/v5/schema.zt`; these were local copies of the same
+// bit numbering.
+use boot_contracts::generation::{
+    RIGHT_BLOCK_READ, RIGHT_BLOCK_WRITE, RIGHT_BUFFER_CREATE, RIGHT_BUFFER_LOAN, RIGHT_BUFFER_MAP,
+    RIGHT_BUFFER_WRITE, RIGHT_DIRECTORY_DERIVE, RIGHT_DIRECTORY_LIST, RIGHT_DIRECTORY_READ,
+    RIGHT_DIRECTORY_WRITE, RIGHT_EXEC, RIGHT_INPUT_READ, RIGHT_RECV, RIGHT_SEND, RIGHT_SPAWN,
+    RIGHT_SUPERVISE, RIGHT_TRANSFER,
+};
 
 /// Logical capability slots one task may hold.
 pub const MAX_TASK_CAPS: usize = 64;
-
-const RIGHT_TRANSFER: u64 = 1 << 2;
-const RIGHT_EXEC: u64 = 1 << 3;
-const RIGHT_BUFFER_WRITE: u64 = 1 << 8;
-const RIGHT_BUFFER_MAP: u64 = 1 << 9;
-const RIGHT_BLOCK_READ: u64 = 1 << 10;
-const RIGHT_BLOCK_WRITE: u64 = 1 << 11;
-const RIGHT_SEND: u64 = 1;
-const RIGHT_RECV: u64 = 1 << 1;
-const RIGHT_SPAWN: u64 = 1 << 16;
-const RIGHT_SUPERVISE: u64 = 1 << 18;
-const RIGHT_DIRECTORY_READ: u64 = 1 << 19;
-const RIGHT_DIRECTORY_WRITE: u64 = 1 << 20;
-const RIGHT_DIRECTORY_LIST: u64 = 1 << 21;
-const RIGHT_DIRECTORY_DERIVE: u64 = 1 << 22;
-const RIGHT_INPUT_READ: u64 = 1 << 23;
-const RIGHT_BUFFER_CREATE: u64 = 1 << 24;
-const RIGHT_BUFFER_LOAN: u64 = 1 << 25;
 
 macro_rules! rights_type {
     ($name:ident, $valid:expr) => {

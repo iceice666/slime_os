@@ -90,7 +90,7 @@ pub const FABRIC_WORKERS: &[FabricWorkerRow] = &[
 /// The wake sources the generation declares one worker parks on at once, or
 /// `WORKER_ABSENT` when this graph declares no route that worker carries.
 ///
-/// `const fn` so a broker can bind its own `SYS_WAIT` array to this number in a
+/// `const fn` so a broker can bind its own notification array to this number in a
 /// `const _: () = assert!(..)`. The declared peak and the array that has to hold
 /// it then cannot drift apart silently: a broker that grows its park set past
 /// what the generation resolved stops compiling instead of overflowing at boot.

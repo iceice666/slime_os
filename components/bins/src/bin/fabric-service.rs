@@ -95,8 +95,12 @@ use slime_proto::sample_descriptor::{
 use slime_proto::{valid_fabric_request, valid_sample_descriptor};
 use slime_rt::{
     CapabilityDisposition, ERR_OUT_OF_MEMORY, ERR_PEER_DEAD, ERR_SUCCESS, ERR_WOULDBLOCK,
-    MAX_CAPS_PER_MSG, MAX_MSG, Rights,
+    MAX_CAPS_PER_MSG, MAX_MSG,
 };
+// B59: the capability-rights vocabulary is generated from
+// `contracts/generation/v5/schema.zt`; these were local copies of the same
+// bit numbering.
+use boot_contracts::generation::{RIGHT_BUFFER_MAP, RIGHT_BUFFER_WRITE};
 
 slime_rt::entry!(main);
 
@@ -122,8 +126,6 @@ const FIRST_CONTROL_SLOT: u32 = FABRIC_FIRST_CONTROL_SLOT;
 /// after the broker has installed its fresh route and supervision identity.
 const OPERATION_REPLACEMENT_START_SLOT: u32 = 12;
 
-const RIGHT_BUFFER_WRITE: Rights = 1 << 8;
-const RIGHT_BUFFER_MAP: Rights = 1 << 9;
 const PAGE: u64 = 4096;
 /// `notification_slots` returns this on both sides when the graph declares no
 /// ready/credit pair for an edge. Never a real slot: the root's per-task

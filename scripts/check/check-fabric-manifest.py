@@ -135,7 +135,7 @@ declared = [GRAPH["limits"][key] for key in builder.FABRIC_LIMIT_KEYS]
 if list(limits) != declared:
     fail("built graph limits do not match the manifest")
 if limits[1] > MAX_FABRIC_GRAPH_INGRESS_SOURCES:
-    fail("built graph declares more ingress sources than SYS_WAIT admits")
+    fail("built graph declares more ingress sources than the ceiling admits")
 
 # --- tables ------------------------------------------------------------------
 
@@ -400,7 +400,7 @@ for label, mutation in (
     ("page budget above the kernel ceiling", page_budget_above_kernel_ceiling),
     ("mapping budget above the kernel ceiling", mapping_budget_above_kernel_ceiling),
     ("loan budget above the kernel ceiling", loan_budget_above_kernel_ceiling),
-    ("ingress limit above the SYS_WAIT bound", ingress_limit_above_wait_bound),
+    ("ingress limit above the declared bound", ingress_limit_above_wait_bound),
     ("route budget below the route table", route_budget_below_table),
     ("direction budget below live demand", direction_budget_below_demand),
     ("ingress budget below live demand", ingress_budget_below_demand),

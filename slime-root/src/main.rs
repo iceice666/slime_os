@@ -46,13 +46,13 @@ use boot_contracts::generation::{
 use boot_contracts::shared_buffer_budget::{self as budget_magic, SharedBufferBudget};
 use sel4_root_task::root_task;
 
-use boot_contracts::generation::RIGHT_TRANSFER;
+use boot_contracts::generation::{RIGHT_EXEC, RIGHT_RECV, RIGHT_SEND, RIGHT_TRANSFER};
 use buffer_adapter::BufferAdapter;
 use child_vspace::{ChildImage, GRANULE_SIZE, ScratchPage};
 use device::{BlockDevices, MAX_BLOCK_DEVICES};
 use event::TaskEpoch;
 use fault::{LifecycleEventKind, SupervisionTable};
-use generation::{Admission, Authority, RIGHT_EXEC, RIGHT_RECV, RIGHT_SEND, bound_authority};
+use generation::{Admission, Authority, bound_authority};
 use ipc::{IpcError, Response, poll_notification};
 use launched::LaunchedInstances;
 use object_allocator::ObjectAllocator;
@@ -68,60 +68,23 @@ use transfer_window::{WindowTable, descriptor_thread};
 /// One staged transfer window per admitted component thread.
 const MAX_WINDOW_ENTRIES: usize = MAX_TASKS * child_vspace::MAX_CHILD_THREADS;
 
-mod fixture_labels {
-    pub const DIRECTIVE: sel4::Word = 5;
-}
-
-mod lifecycle_labels {
-    pub const EXIT: sel4::Word = 3;
-    pub const UNHEALTHY: sel4::Word = 9;
-}
-
-mod spawn_labels {
-    pub const SPAWN: sel4::Word = 4;
-}
-
-mod supervision_labels {
-    pub const STATUS: sel4::Word = 12;
-    pub const DERIVE: sel4::Word = 32;
-}
-
-mod capability_table_labels {
-    pub const DROP: sel4::Word = 13;
-    /// Read-only: the caller's own live child-CNode slot occupancy (C8.13.3).
-    ///
-    /// Self-scoped by construction, exactly as `SHARED BUFFER OCCUPANCY` is --
-    /// the CSpace counted is the one belonging to the badge the root
-    /// authenticated, so the request carries no task argument to forge.
-    pub const OCCUPANCY: sel4::Word = 31;
-}
-
-mod directory_labels {
-    pub const DERIVE: sel4::Word = 15;
-}
-
-mod shared_buffer_labels {
-    pub const CREATE: sel4::Word = 21;
-    pub const RELEASE: sel4::Word = 22;
-    pub const MAP: sel4::Word = 23;
-    pub const UNMAP: sel4::Word = 24;
-    pub const SEAL: sel4::Word = 25;
-    pub const LOAN: sel4::Word = 26;
-    pub const LOAN_MAP: sel4::Word = 27;
-    pub const RETURN: sel4::Word = 28;
-    pub const REVOKE: sel4::Word = 29;
-    /// Read-only: the caller's own live page/buffer/mapping/loan charges.
-    /// Self-scoped by construction -- the holder is derived from the badge, so
-    /// the request carries no holder argument to forge.
-    pub const OCCUPANCY: sel4::Word = 30;
-}
-
-mod capability_transfer_labels {
-    pub const EXPORT: sel4::Word = 33;
-    pub const IMPORT: sel4::Word = 34;
-    pub const EXPORT_CANCEL: sel4::Word = 35;
-    pub const EXPORT_FINALIZE: sel4::Word = 36;
-}
+// B59: the operation labels are generated from
+// `contracts/syscall-abi/v1/schema.zt` and shared with `components/runtime`, so
+// the dispatcher and the userspace wrapper cannot disagree about what a label
+// means. `sel4::Word` is `u64` on every admitted target profile, so the
+// generated `u64` constants are the dispatcher's own type.
+//
+// Two operations' self-scoping is a property of the root's implementation
+// rather than of the ABI, so it stays documented here:
+// - `capability_table_labels::OCCUPANCY` (C8.13.3) counts the CSpace belonging
+//   to the badge the root authenticated, so the request carries no task
+//   argument to forge.
+// - `shared_buffer_labels::OCCUPANCY` derives its holder from the badge for the
+//   same reason.
+use slime_proto::syscall_abi::{
+    capability_table_labels, capability_transfer_labels, directory_labels, fixture_labels,
+    lifecycle_labels, shared_buffer_labels, spawn_labels, supervision_labels,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BufferLifecycleRequest {
@@ -1112,32 +1075,6 @@ fn main(bootinfo: &sel4::BootInfoPtr) -> ! {
 /// the quota it charged; this slot's rights only say the task holds it at all,
 /// so the buffer plane's own checks stay the single place rights are decided.
 const RIGHT_BUFFER_ALL: u64 = u64::MAX;
-
-/// Authority to map a loaned range. The rights a loan capability carries, and
-/// the pair the retired kernel's `sys_shared_buffer_loan` installs on the
-/// handle it returns.
-const RIGHT_BUFFER_MAP: u64 = 1 << 9;
-
-/// Authority to map a loaned range writable (B46). A read-only C7.6 sample
-/// loan never carries it; a stream ring loan does, because two peers advance
-/// disjoint header fields of one region.
-const RIGHT_BUFFER_WRITE: u64 = 1 << 8;
-
-/// Authority to run an executable, held alongside `RIGHT_EXEC`. Holding an
-/// image is not authority to start it: `preflight_spawn_grants` requires both.
-const RIGHT_SPAWN: u64 = 1 << 16;
-
-/// Authority to observe a spawned child's termination: the right the handle a
-/// spawn returns carries. See `docs/capability-matrix.md`.
-const RIGHT_SUPERVISE: u64 = 1 << 18;
-
-/// Authority to allocate a shared buffer, held on a `SharedBufferFactory`.
-/// Independent of the holder's quota by design: the grant authorizes the
-/// operation and the budget bounds it (B13).
-const RIGHT_BUFFER_CREATE: u64 = 1 << 24;
-
-/// Authority to read one decoded key event, held on an `Input` (M6.4).
-const RIGHT_INPUT_READ: u64 = 1 << 23;
 
 /// Largest component ELF the loader will copy through [`ElfScratch`]. Generous
 /// against the five components this profile declares (the largest is ~44 KiB)
@@ -3335,8 +3272,19 @@ fn serve_instance_graph(
 /// Bytes one encoded spawn-grant record occupies in the caller's transfer
 /// window: a slot word, then a rights word.
 ///
-/// Matches `components/runtime/src/syscall/sel4_transport.rs::GRANT_RECORD_BYTES`.
-const SPAWN_GRANT_RECORD_BYTES: usize = 16;
+/// Generated from `contracts/syscall-abi/v1/schema.zt` and shared with
+/// `components/runtime`'s encoder. Before B59 this was a second `16` here whose
+/// doc comment claimed to match the transport's — a comment was the whole
+/// enforcement mechanism for a record layout crossing the syscall boundary.
+use slime_proto::syscall_abi::{
+    GRANT_RECORD_BYTES as SPAWN_GRANT_RECORD_BYTES, GRANT_RIGHTS_OFFSET, GRANT_SLOT_OFFSET,
+};
+// B59: the capability-rights vocabulary is generated from
+// `contracts/generation/v5/schema.zt`; these were local copies of the same
+// bit numbering.
+use boot_contracts::generation::{
+    RIGHT_BUFFER_CREATE, RIGHT_BUFFER_MAP, RIGHT_BUFFER_WRITE, RIGHT_SPAWN, RIGHT_SUPERVISE,
+};
 
 /// Grants one spawn call may carry. **B15 is closed here.**
 ///
@@ -3573,12 +3521,12 @@ fn preflight_spawn_grants(
         .zip(records.chunks_exact(SPAWN_GRANT_RECORD_BYTES))
     {
         let slot = u64::from_le_bytes(
-            record[..8]
+            record[GRANT_SLOT_OFFSET..GRANT_SLOT_OFFSET + 8]
                 .try_into()
                 .map_err(|_| IpcError::InvalidLength)?,
         );
         let rights = u64::from_le_bytes(
-            record[8..]
+            record[GRANT_RIGHTS_OFFSET..GRANT_RIGHTS_OFFSET + 8]
                 .try_into()
                 .map_err(|_| IpcError::InvalidLength)?,
         );

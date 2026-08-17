@@ -1,0 +1,137 @@
+-- Slime OS root-service syscall ABI, version 1.
+--
+-- Every value here crosses the process boundary between a component and
+-- `slime-root`: the operation label a component puts in the IPC message label
+-- register, the status code the root returns in reply MR0, and the byte layout
+-- of a spawn-grant record staged through the transfer window.
+--
+-- Before B59 each of these tables was hand-authored in
+-- `components/runtime/src/syscall.rs`, re-typed in `slime-root/src/main.rs` and
+-- `slime-root/src/ipc.rs`, and restated a third time as prose in
+-- `docs/syscall-abi.md`, with nothing forcing the copies to agree. That is not
+-- hypothetical: `slime-root/src/console.rs` records a numbering disagreement
+-- between the two crates that produced silently garbled keystrokes -- no compile
+-- error, only a runtime misdecode. This contract is the single source, and both
+-- crates consume the bindings generated from it.
+--
+-- Numbers are frozen. A component image built against one generation invokes the
+-- same label a later root must still answer, so labels are pinned individually
+-- rather than derived from declaration order, and gaps are left where retired
+-- operations used to live rather than being compacted.
+
+env ::= import stdlib.env;
+fs ::= import stdlib.fs;
+gen ::= import "gen_rust.zt";
+t ::= import stdlib.text;
+
+formatVersion :: Int = 1;
+
+-- One root-served operation. `service` names the mechanism module that owns it
+-- in the root; the generated bindings group constants by that service so the
+-- userspace wrapper and the root dispatcher address the same namespaces they do
+-- today (`lifecycle_labels::EXIT`, `shared_buffer_labels::CREATE`, ...).
+Operation :: type { service : Text; name : Text; label : Int; };
+
+operation :: Text -> Text -> Int -> Operation
+  = service name label => { service = service; name = name; label = label; };
+
+-- Labels 1, 2, 6, 7, 8, 10, 11, 14, and 16-20 are retired: B46's native-IPC
+-- cutover deleted the logical channel, wait-set, and endpoint-create operations
+-- that held them. The gaps stay so a component image built before the cutover
+-- cannot have a surviving label silently re-mean something else.
+operations :: List Operation = {
+  operation "lifecycle" "EXIT" 3;
+  operation "lifecycle" "UNHEALTHY" 9;
+  operation "spawn" "SPAWN" 4;
+  operation "fixture" "DIRECTIVE" 5;
+  operation "supervision" "STATUS" 12;
+  operation "supervision" "DERIVE" 32;
+  operation "capabilityTable" "DROP" 13;
+  operation "capabilityTable" "OCCUPANCY" 31;
+  operation "directory" "DERIVE" 15;
+  operation "sharedBuffer" "CREATE" 21;
+  operation "sharedBuffer" "RELEASE" 22;
+  operation "sharedBuffer" "MAP" 23;
+  operation "sharedBuffer" "UNMAP" 24;
+  operation "sharedBuffer" "SEAL" 25;
+  operation "sharedBuffer" "LOAN" 26;
+  operation "sharedBuffer" "LOAN_MAP" 27;
+  operation "sharedBuffer" "RETURN" 28;
+  operation "sharedBuffer" "REVOKE" 29;
+  operation "sharedBuffer" "OCCUPANCY" 30;
+  operation "capabilityTransfer" "EXPORT" 33;
+  operation "capabilityTransfer" "IMPORT" 34;
+  operation "capabilityTransfer" "EXPORT_CANCEL" 35;
+  operation "capabilityTransfer" "EXPORT_FINALIZE" 36;
+};
+
+-- The service namespaces, in the order the generated bindings emit them.
+-- Declared rather than derived from `operations` so adding an operation cannot
+-- silently reorder the emitted modules and churn the generated file.
+--
+-- `module` is the Rust module name both crates already spell out
+-- (`lifecycle_labels::EXIT`). It is declared beside `name` rather than derived
+-- from it: `capabilityTable` -> `capability_table` is a transform with no
+-- inverse the renderer can check, so a renaming bug would be silent.
+Service :: type { name : Text; module : Text; };
+
+service :: Text -> Text -> Service = name module => { name = name; module = module; };
+
+services :: List Service = {
+  service "fixture" "fixture_labels";
+  service "lifecycle" "lifecycle_labels";
+  service "spawn" "spawn_labels";
+  service "supervision" "supervision_labels";
+  service "capabilityTable" "capability_table_labels";
+  service "directory" "directory_labels";
+  service "sharedBuffer" "shared_buffer_labels";
+  service "capabilityTransfer" "capability_transfer_labels";
+};
+
+-- The status a root service returns in reply MR0. Deliberately coarse: a
+-- component learns that its request failed and in which class, not which
+-- internal predicate rejected it. Several distinct root-side conditions
+-- therefore share a code, and that collapsing is a decision this contract
+-- records rather than a coincidence of the mapping.
+Status :: type { name : Text; code : Int; };
+
+status :: Text -> Int -> Status = name code => { name = name; code = code; };
+
+statuses :: List Status = {
+  status "SUCCESS" 0;
+  status "BAD_CAP" 1;
+  status "PEER_DEAD" 2;
+  status "WOULDBLOCK" 3;
+  status "INVALID_ARG" 4;
+  status "OUT_OF_MEMORY" 5;
+};
+
+-- Bounds of the root-service message envelope. `MAX_MSG` is the payload a
+-- single request may carry; `MAX_CAPS_PER_MSG` is the native capability count a
+-- message may transfer.
+maxMessageBytes :: Int = 64;
+maxMessageCaps :: Int = 1;
+
+-- A spawn-grant record as staged in the transfer window: the child slot the
+-- grant addresses, then its rights mask. Both are 8 bytes little-endian, so a
+-- record is 16. This layout was previously the constant `GRANT_RECORD_BYTES` in
+-- the userspace transport and `SPAWN_GRANT_RECORD_BYTES` in the root, kept in
+-- agreement by a doc comment reading "Matches ...".
+grantRecordBytes :: Int = 16;
+grantSlotOffset :: Int = 0;
+grantRightsOffset :: Int = 8;
+
+abi ::= {
+  formatVersion =; operations =; services =; statuses =;
+  maxMessageBytes =; maxMessageCaps =;
+  grantRecordBytes =; grantSlotOffset =; grantRightsOffset =;
+};
+
+main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }
+  = caps => [
+    root := env.get caps.env "SLIME_SYSCALL_ABI_BINDINGS_ROOT" ?? ".";
+    bindings := gen.render abi;
+    fs.writeAll caps.write (t.join "" { root; "/syscall_abi.rs"; }) bindings.rust;
+    fs.writeAll caps.write (t.join "" { root; "/syscall-abi.md"; }) bindings.markdown
+  ];
+main

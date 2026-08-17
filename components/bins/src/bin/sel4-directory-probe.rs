@@ -20,6 +20,15 @@
 //! neither holder controls, which on seL4 is the root task.
 
 use slime_rt::{DIRECTORY_ROOT_BYTES, MAX_DIRECTORY_PATH};
+// B59: rights bit numbering is generated from
+// `contracts/generation/v5/schema.zt`. The powerbox/fs protocols carry a
+// 32-bit rights field, so the generated `u64` constants are narrowed at the
+// declaration rather than re-spelled as separate `u32` literals.
+const RIGHT_DIRECTORY_READ: u32 = boot_contracts::generation::RIGHT_DIRECTORY_READ as u32;
+const RIGHT_DIRECTORY_WRITE: u32 = boot_contracts::generation::RIGHT_DIRECTORY_WRITE as u32;
+const RIGHT_DIRECTORY_LIST: u32 = boot_contracts::generation::RIGHT_DIRECTORY_LIST as u32;
+const RIGHT_DIRECTORY_DERIVE: u32 = boot_contracts::generation::RIGHT_DIRECTORY_DERIVE as u32;
+const RIGHT_TRANSFER: u32 = boot_contracts::generation::RIGHT_TRANSFER as u32;
 
 /// The unscoped directory capability the generation grants this component.
 ///
@@ -40,11 +49,6 @@ const RUN_TOKEN_SLOT: u32 = 0;
 /// safety margin.
 const RUN_TOKEN_YIELDS: usize = 64;
 
-const RIGHT_DIRECTORY_READ: u32 = 1 << 19;
-const RIGHT_DIRECTORY_WRITE: u32 = 1 << 20;
-const RIGHT_DIRECTORY_LIST: u32 = 1 << 21;
-const RIGHT_DIRECTORY_DERIVE: u32 = 1 << 22;
-const RIGHT_TRANSFER: u32 = 1 << 2;
 const RIGHTS_ALL: u32 =
     RIGHT_DIRECTORY_READ | RIGHT_DIRECTORY_WRITE | RIGHT_DIRECTORY_LIST | RIGHT_DIRECTORY_DERIVE;
 

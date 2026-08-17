@@ -13,6 +13,10 @@ use slime_rt::{
     CapabilityDisposition, ERR_BAD_CAP, ERR_INVALID_ARG, ERR_OUT_OF_MEMORY, ERR_WOULDBLOCK,
     MAX_CAPS_PER_MSG, MAX_MSG, SpawnGrant, Termination,
 };
+// B59: the capability-rights vocabulary is generated from
+// `contracts/generation/v5/schema.zt`; these were local copies of the same
+// bit numbering.
+use boot_contracts::generation::{RIGHT_DIRECTORY_READ, RIGHT_SUPERVISE};
 
 slime_rt::entry!(main);
 
@@ -20,8 +24,6 @@ const STATUS_OK: i32 = 0;
 const STATUS_BAD_REQUEST: i32 = ERR_INVALID_ARG as i32;
 const STATUS_NOT_ALLOWED: i32 = ERR_BAD_CAP as i32;
 const STATUS_BUDGET_EXHAUSTED: i32 = ERR_OUT_OF_MEMORY as i32;
-const RIGHT_DIRECTORY_READ: u64 = 1 << 19;
-const RIGHT_SUPERVISE: u64 = 1 << 18;
 const SYSINFO_CONTEXT_SLOT: u32 = 3;
 const ECHO_CONTEXT_SLOT: u32 = 6;
 // A free page-aligned user address, borrowed only for the startup self-check.

@@ -8,5 +8,11 @@ rust-version = "1.96"
 [lib]
 doctest = false
 
+# B59: the powerbox protocol test asserts against the generated rights
+# vocabulary rather than a hand-typed bit. Test-only, so the library keeps its
+# zero-dependency shape and `slime-rt` can depend on it without pulling this in.
+[dev-dependencies]
+boot-contracts = { path = "../../boot-contracts" }
+
 [lints]
 workspace = true
