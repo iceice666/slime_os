@@ -36,6 +36,16 @@ comparisons into the manifest and the schema.
 | `build-generation.py` | `FABRIC_BOOT_STREAM_CONTROL_GRANTS` and `FABRIC_MATRIX_STREAM_CONTROL_GRANTS` deleted — two byte-identical tuples selected by profile name; their rationale kept as comments on the surviving default | The builder is no longer the authority on plane membership |
 | 7 `.zti` fixtures | The six profile-bearing ones declare their seven-entry stream plane; `valid.zti`'s three profiles declare theirs | A profile declaring none keeps the single-broker default byte-for-byte |
 
+## Regression guards
+
+| Risk | Guard | Failure signal |
+|---|---|---|
+| A fixture's pinned control slot drifts from the order the broker indexes (B55's mechanism) | `just contracts_check`, `just generation_check` — the build itself refuses it | `<holder>'s binding for <grant> pins slot N but the plane derives M` |
+| One plane's controls are split across two holders, so a worker cannot authenticate a client by the endpoint it arrived on | `_control_sources` holder check, run by every build | `control grant <name> terminates at X but its plane terminates at Y` |
+| The operation plane's two grant families land on different holders while sharing one table | same, checked explicitly after resolution | `operation controls terminate at X but their replacement controls terminate at Y` |
+| A profile's declared `streamControls` and its resolved controls stop being the same filter, so the cross-check silently compares a shifted pairing | `_assert_declared_control_slots` length check | `plane <name> resolved N controls from M declared grants; the control-slot cross-check cannot pair them` |
+| Moving plane membership into the schema changes a resolved layout | `just data_fabric_profile_check` byte-compares the checked-in profile; `just sel4_boot_layout_check` compares 25 plane layouts | Stale-profile failure, or a layout fixture mismatch |
+
 ## Verification
 
 | Command/scenario | Result | Evidence class |
