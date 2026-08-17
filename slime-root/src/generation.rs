@@ -299,6 +299,7 @@ fn fabric_graph_admission(
         routes: graph.route_count(),
         participants: graph.participant_count(),
         interpositions: graph.interposition_count(),
+        capability_slots: graph.limits().capability_slots,
     }))
 }
 
@@ -388,6 +389,8 @@ struct FabricShape {
     routes: usize,
     participants: usize,
     interpositions: usize,
+    /// The graph's declared per-child capability-slot ceiling (C8.13.3).
+    capability_slots: u32,
 }
 
 /// Locate the fabric-graph resource object, if the generation declares one.
@@ -429,6 +432,14 @@ pub struct Admission {
     pub fabric_routes: usize,
     pub fabric_participants: usize,
     pub fabric_interpositions: usize,
+    /// The declared `capabilitySlots` ceiling, or 0 when this generation
+    /// declares no fabric graph (C8.13.3).
+    ///
+    /// Zero always means "no ceiling to report against". A graph that declares
+    /// the field may itself declare zero — the decoder bounds it only from
+    /// above — so `crate::cspace::breaches_ceiling` treats both cases alike
+    /// rather than distinguishing an absent graph from a permissive one.
+    pub fabric_capability_slots: u32,
 }
 
 impl Admission {
@@ -537,6 +548,7 @@ impl Admission {
             fabric_routes: fabric.map_or(0, |shape| shape.routes),
             fabric_participants: fabric.map_or(0, |shape| shape.participants),
             fabric_interpositions: fabric.map_or(0, |shape| shape.interpositions),
+            fabric_capability_slots: fabric.map_or(0, |shape| shape.capability_slots),
         })
     }
 

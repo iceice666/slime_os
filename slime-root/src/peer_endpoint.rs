@@ -145,7 +145,7 @@ impl PeerEndpointTable {
         generation: &Generation<'_>,
         launched: &LaunchedInstances,
         allocator: &mut ObjectAllocator,
-        tasks: &TaskTable<MAX_TASKS>,
+        tasks: &mut TaskTable<MAX_TASKS>,
     ) -> Result<ProvisionReport, PeerEndpointError> {
         let mut report = ProvisionReport::default();
         for grant_index in 0..generation.grant_count() {
@@ -191,18 +191,28 @@ impl PeerEndpointTable {
             );
         }
         for launched in launched.iter() {
-            let task = tasks
-                .get(launched.task)
-                .ok_or(PeerEndpointError::UnlaunchedInstance)?;
-            report.installed += self.install_instance(
+            let (arena, cnode, cnode_size_bits) = {
+                let task = tasks
+                    .get(launched.task)
+                    .ok_or(PeerEndpointError::UnlaunchedInstance)?;
+                (task.cleanup.arena, task.cnode, task.cnode_size_bits)
+            };
+            let installed = self.install_instance(
                 generation,
                 launched.instance,
                 launched.task,
                 allocator,
-                task.cleanup.arena,
-                task.cnode,
-                task.cnode_size_bits,
+                arena,
+                cnode,
+                cnode_size_bits,
             )?;
+            report.installed += installed;
+            // C8.13.3: each install filled a slot the generation declared, so
+            // it belongs to the holder's declared-space count -- the space
+            // `capabilitySlots` budgets.
+            if let Some(task) = tasks.get_mut(launched.task) {
+                task.cspace.installed(installed as u32);
+            }
         }
         Ok(report)
     }

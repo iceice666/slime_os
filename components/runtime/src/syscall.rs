@@ -37,6 +37,8 @@ mod supervision_labels {
 
 mod capability_table_labels {
     pub const DROP: u64 = 13;
+    /// Read-only: this component's own live child-CNode slot occupancy.
+    pub const OCCUPANCY: u64 = 31;
 }
 
 mod directory_labels {
@@ -412,6 +414,58 @@ pub fn shared_buffer_occupancy() -> Result<BufferOccupancy, i64> {
         buffers: field(16),
         mappings: field(32),
         loans: field(48),
+    })
+}
+
+/// This component's own child-CSpace occupancy (C8.13.3), in both spaces its
+/// slots are counted in.
+///
+/// `declared` and `declared_peak` are the space the generation budgets as
+/// `capabilitySlots`: this component's own logical slot numbering from 0, the
+/// numbering its grants and bindings use. `populated` is the physical CNode the
+/// root built for it, where a logical index resolves to a fixed higher address.
+/// The two are separate because their bounds are: comparing either to the
+/// other's ceiling would compare unrelated quantities.
+///
+/// `declared_peak` is the root's own high-water mark, not the highest value this
+/// component happened to observe. Declared occupancy moves on every install,
+/// drop, transfer, and retirement — all root operations — so sampling twice
+/// would report the higher of two snapshots rather than the run's maximum.
+///
+/// Every field is a property of this component's own CSpace. The generation's
+/// declared `capabilitySlots` ceiling is deliberately absent: it is a
+/// graph-wide limit, so reporting it here would turn a self-scoped query into a
+/// disclosure of graph shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SlotOccupancy {
+    pub declared: u32,
+    pub declared_peak: u32,
+    pub populated: u32,
+}
+
+/// Read-only: how many capability slots this component's own CSpace holds.
+///
+/// Self-scoped with no argument to scope it, exactly as
+/// [`shared_buffer_occupancy`] is: the CSpace counted is the one belonging to
+/// the endpoint badge the root already authenticated, so a caller can neither
+/// name another task nor learn anything about one.
+///
+/// `populated` is a fresh census: the root asks the kernel about every slot,
+/// which is what makes the count include capabilities this component installed
+/// itself — a received Endpoint moved out of the receive slot has no root-side
+/// record at all. `declared` is root-credited, because every install into that
+/// space goes through a root operation.
+pub fn capability_slot_occupancy() -> Result<SlotOccupancy, i64> {
+    let (result, packed) = transport::capability_slot_occupancy();
+    if result < 0 {
+        return Err(result);
+    }
+    // Shifts mirror `pack_slot_occupancy` in `slime-root/src/main.rs`.
+    let field = |shift: u32| ((packed >> shift) & 0xffff) as u32;
+    Ok(SlotOccupancy {
+        declared: field(0),
+        declared_peak: field(16),
+        populated: field(32),
     })
 }
 

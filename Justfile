@@ -753,7 +753,7 @@ test_sel4_root:
         echo "test_sel4_root: no installed seL4 prefix at $prefix; run 'just sel4_qemu_image_check' first" >&2
         exit 1
     fi
-    expected=114
+    expected=120
     # Pinned rather than ambient, on `lint_sel4_root`'s rule: this build
     # consumes the installed seL4 prefix, so it must use the toolchain that
     # prefix was produced against. `rust-toolchain.toml`'s default is a
@@ -788,7 +788,7 @@ test_sel4_root:
         echo "test_sel4_root: the run did not report $expected passed and 0 failed" >&2
         exit 1
     fi
-    echo "slime-root host tests: $actual/$expected across 13 modules"
+    echo "slime-root host tests: $actual/$expected across 14 modules"
 
 # Python lint for the host-side build/check/generate scripts. Config in ruff.toml.
 ruff:

@@ -47,9 +47,11 @@ from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
+from fabric_graph_limits import declared_limits  # noqa: E402
 from fabric_trace_contract import (  # noqa: E402
     FABRIC_TRACE_RESOURCE_BUFFERS,
     FABRIC_TRACE_RESOURCE_CALLS,
+    FABRIC_TRACE_RESOURCE_CAPABILITY_SLOTS,
     FABRIC_TRACE_RESOURCE_COMPLETE,
     FABRIC_TRACE_RESOURCE_FRAMES,
     FABRIC_TRACE_RESOURCE_HISTORY,
@@ -204,15 +206,17 @@ EXPECTED_PARKED = frozenset({"fabric-observer", "fabric-proxy"})
 # (retries) reports only its peak, since a retry count never returns to a
 # meaningful "zero" a reader should expect.
 #
-# `resourceEvent` and a live capability-slot ceiling remain outside this dict:
+# `resourceEvent` alone remains outside this dict: it has a real table behind
+# it (the operation worker's `pending_deliveries`) but no reachable signal.
+# `queue_delivery` queues only on `ERR_WOULDBLOCK` from `slime_rt::send`, which
+# resolves to seL4's blocking `Cap::send` and cannot return it, so the peak is
+# a structural zero under every schedule rather than under this one.
 #
-# - `resourceEvent` has a real table behind it (the operation worker's
-#   `pending_deliveries`) but no reachable signal: `queue_delivery` queues only
-#   on `ERR_WOULDBLOCK` from `slime_rt::send`, which resolves to seL4's
-#   blocking `Cap::send` and cannot return it, so the peak is a structural zero
-#   under every schedule rather than under this one.
-# - The capability-slot ceiling has no signal at all: nothing in the root
-#   tracks a live child's own CNode occupancy, so no query could return it.
+# C8.13.3 closed the other gap that used to stand here. The capability-slot
+# ceiling now has a signal: the root takes a live census of a child's own CNode
+# when that child asks (`capability_table_labels::OCCUPANCY`), so `capabilitySlots`
+# is checked against a real occupancy rather than only against a fixed
+# `LIMIT_*` constant at decode time.
 #
 # C8.13.1's `mapping`/`loan` occupancy is reported by the stream worker alone,
 # and that is a sink-capacity bound rather than a scoping choice: the call
@@ -240,6 +244,14 @@ EXPECTED_RESOURCES: dict[str, tuple[tuple[int, str, int], ...]] = {
         # is the assertion rather than a weakening of one.
         (FABRIC_TRACE_RESOURCE_MAPPING, "mapping", 2),
         (FABRIC_TRACE_RESOURCE_LOAN, "loan", 2),
+        # C8.13.3: this broker's own live child-CSpace occupancy, from the same
+        # kind of self-scoped query. Held-and-released in shape but expected
+        # constant, like `mapping` and for the same reason -- a control
+        # endpoint or ring installed at provisioning is not released while its
+        # holder lives. Its peak is additionally checked against the fixture's
+        # own declared `capabilitySlots` in `check_resources`, which is the
+        # assertion C8.13.3's exit condition names.
+        (FABRIC_TRACE_RESOURCE_CAPABILITY_SLOTS, "capability-slots", 2),
     ),
     "call": (
         (FABRIC_TRACE_RESOURCE_CALLS, "calls", 2),
@@ -568,6 +580,10 @@ def check_resources(transcript: str) -> None:
     on all three broker planes and the four instrumented participants, through
     a sink that dropped and rejected nothing."""
     head = composition(transcript)
+    # Read once. The fixture is a file on disk and the ceiling is a constant
+    # for the whole run, so parsing it per record would re-read it dozens of
+    # times for the same answer.
+    limits = declared_limits(FIXTURE)
     records_by_family: dict[str, list[dict[str, str]]] = {
         family: [] for family in TRACE_FAMILIES
     }
@@ -632,6 +648,12 @@ def check_resources(transcript: str) -> None:
                 # C8.13.2 pin below, which is what actually constrains those
                 # four. The traffic-varying half of the broker's own occupancy is
                 # `loan` below, which does drain.
+                #
+                # `capability-slots` is deliberately *not* in this branch, and
+                # measurement is why: it was observed at peak 33 and baseline
+                # 29, because the broker drops supervision handles it no longer
+                # waits on. Declared slots are genuinely held and released, so
+                # they take the bounded-by-peak assertion `loan` takes.
                 if observed[1] != observed[0]:
                     report_transcript(transcript)
                     fail(
@@ -677,6 +699,30 @@ def check_resources(transcript: str) -> None:
                         f"the {family} worker's {name!r} baseline {observed[1]} exceeded "
                         f"its own peak {observed[0]}"
                     )
+            elif expected_count == 2 and name == "capability-slots":
+                # C8.13.3: genuinely held and released, measured at peak 33 and
+                # baseline 29 on this plane. The broker installs a control
+                # endpoint per participant plus its own factories, then drops
+                # the supervision handles it no longer waits on, so the count
+                # rises and partially drains -- unlike `mapping`, whose regions
+                # stay provisioned. Bounded by the peak rather than asserted
+                # equal or asserted zero: neither is what the code guarantees,
+                # and a baseline above the run's own high-water mark would be
+                # incoherent evidence. The peak is separately checked against
+                # the fixture's declared `capabilitySlots` below.
+                if observed[0] == 0:
+                    report_transcript(transcript)
+                    fail(
+                        f"the {family} holder's {name!r} peak was 0; this broker holds a "
+                        "control endpoint per participant, so a zero peak means the query "
+                        "or the credit path regressed"
+                    )
+                if observed[1] > observed[0]:
+                    report_transcript(transcript)
+                    fail(
+                        f"the {family} holder's {name!r} baseline {observed[1]} exceeded "
+                        f"its own peak {observed[0]}"
+                    )
             elif expected_count == 2 and observed[1] != 0:
                 report_transcript(transcript)
                 fail(
@@ -700,6 +746,41 @@ def check_resources(transcript: str) -> None:
                         f"the {family} participant reported {observed[0]} mapping(s), "
                         f"expected exactly {expected_mapping} -- one region per declared "
                         "route"
+                    )
+            # C8.13.3: the exit condition itself. The occupancy the root reports
+            # is checked against the ceiling *this fixture declares*, read from
+            # its own `fabricGraph.limits` block rather than restated here, so
+            # loosening the fixture cannot silently loosen the check. Before
+            # this slice `capabilitySlots` was only ever compared to a fixed
+            # `LIMIT_CAPABILITY_SLOTS` constant at decode time; nothing ever
+            # compared it to a live holder.
+            #
+            # The reported number is the holder's occupancy in *declared* space
+            # -- its own logical slot numbering from 0, which is the space the
+            # builder budgets as `FABRIC_FIRST_CONTROL_SLOT + control endpoints
+            # + buffers` and `fabric_graph_is_satisfiable` validates against
+            # `graph::MAX_TASK_CAPS`. Deliberately not the physical CNode count,
+            # which the root also reports but which this ceiling does not bound:
+            # a logical index of 3 lives at physical slot 36, so comparing the
+            # physical count here would fail a holder whose declared budget is
+            # satisfied.
+            if name == "capability-slots":
+                ceiling = limits.get("capabilitySlots")
+                if ceiling is None:
+                    fail("the fixture declares no 'capabilitySlots' limit")
+                if observed[0] == 0:
+                    report_transcript(transcript)
+                    fail(
+                        f"the {family} holder reported 0 occupied declared slots; this broker "
+                        "holds a control endpoint per participant plus its own factories, so "
+                        "a zero means the query or the credit path regressed"
+                    )
+                if observed[0] > ceiling:
+                    report_transcript(transcript)
+                    fail(
+                        f"the {family} holder occupies {observed[0]} declared capability "
+                        f"slots, exceeding the {ceiling} its generation declares as "
+                        "'capabilitySlots'"
                     )
         if by_event:
             report_transcript(transcript)

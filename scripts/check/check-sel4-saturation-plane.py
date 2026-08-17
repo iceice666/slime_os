@@ -41,8 +41,11 @@ Not driven to an exact declared bound: `mappings`, `loans`,
 quotas), `retries` (real evidence now, inherited from the traffic plane's own
 QoS-timed clock, but not asserted equal to the fixture's declared `retries`
 ceiling the way the three `SATURATED_CEILINGS` entries are), `eventDepth`,
-and a live capability-slot ceiling. See the roadmap's C8.13 section for why
-each remains open.
+and `capabilitySlots`. The last of those is no longer *unmeasured* -- C8.13.3
+added the root-side census and this gate checks the broker's live occupancy
+against the declared ceiling -- it is simply well under it, which is a
+property of the graph rather than of the fixture. See the roadmap's C8.13
+section for why each remains open.
 """
 
 from __future__ import annotations
@@ -61,9 +64,11 @@ from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
+from fabric_graph_limits import declared_limits  # noqa: E402
 from fabric_trace_contract import (  # noqa: E402
     FABRIC_TRACE_RESOURCE_BUFFERS,
     FABRIC_TRACE_RESOURCE_CALLS,
+    FABRIC_TRACE_RESOURCE_CAPABILITY_SLOTS,
     FABRIC_TRACE_RESOURCE_COMPLETE,
     FABRIC_TRACE_RESOURCE_FRAMES,
     FABRIC_TRACE_RESOURCE_HISTORY,
@@ -218,6 +223,11 @@ EXPECTED_RESOURCES: dict[str, tuple[tuple[int, str, int], ...]] = {
         # this plane also runs, so neither may regress here either.
         (FABRIC_TRACE_RESOURCE_MAPPING, "mapping", 2),
         (FABRIC_TRACE_RESOURCE_LOAN, "loan", 2),
+        # C8.13.3: the broker's own live child-CSpace occupancy, likewise
+        # emitted under the traffic action this plane runs. Checked against
+        # this fixture's own declared `capabilitySlots`, which the tightened
+        # ceilings leave unchanged at 48.
+        (FABRIC_TRACE_RESOURCE_CAPABILITY_SLOTS, "capability-slots", 2),
     ),
     "call": (
         (FABRIC_TRACE_RESOURCE_CALLS, "calls", 2),
@@ -260,16 +270,6 @@ SATURATED_CEILINGS: tuple[tuple[str, int, str, str], ...] = (
     ("operation", FABRIC_TRACE_RESOURCE_OPERATIONS, "in-flight operations", "inFlightOperations"),
     ("operation", FABRIC_TRACE_RESOURCE_RETAINED, "retained results", "retainedSamples"),
 )
-
-LIMIT_FIELD_PATTERN = re.compile(r"^\s*(\w+) = (\d+);\s*$", re.MULTILINE)
-
-
-def declared_limits() -> dict[str, int]:
-    """The fixture's own `fabricGraph.limits` block, as declared integers."""
-    text = FIXTURE.read_text(encoding="utf-8")
-    start = text.index("limits = {")
-    end = text.index("\n    };", start)
-    return {name: int(value) for name, value in LIMIT_FIELD_PATTERN.findall(text[start:end])}
 
 
 def fail(message: str) -> NoReturn:
@@ -543,6 +543,8 @@ def check_resources(transcript: str) -> None:
     `check-sel4-traffic-plane.py`'s assertion, unregressed by the tightened
     ceilings."""
     head = composition(transcript)
+    # Read once; the ceiling is constant for the whole run.
+    limits = declared_limits(FIXTURE)
     records_by_family: dict[str, list[dict[str, str]]] = {
         family: [] for family in TRACE_FAMILIES
     }
@@ -592,6 +594,10 @@ def check_resources(transcript: str) -> None:
                 # action, so it has the same standing to falsify that. For the
                 # four participants the equality is structural -- one read
                 # recorded twice -- so the pin below is what constrains them.
+                #
+                # `capability-slots` is deliberately not in this branch: it is
+                # genuinely held and released, so it takes `loan`'s
+                # bounded-by-peak shape below.
                 if observed[1] != observed[0]:
                     report_transcript(transcript)
                     fail(
@@ -623,6 +629,23 @@ def check_resources(transcript: str) -> None:
                         f"the {family} worker's {name!r} baseline {observed[1]} exceeded "
                         f"its own peak {observed[0]}"
                     )
+            elif expected_count == 2 and name == "capability-slots":
+                # C8.13.3: held and released, as in the traffic gate -- the
+                # broker drops the supervision handles it no longer waits on, so
+                # the count rises and partially drains rather than staying flat.
+                if observed[0] == 0:
+                    report_transcript(transcript)
+                    fail(
+                        f"the {family} holder's {name!r} peak was 0; this broker holds a "
+                        "control endpoint per participant, so a zero peak means the query "
+                        "or the credit path regressed"
+                    )
+                if observed[1] > observed[0]:
+                    report_transcript(transcript)
+                    fail(
+                        f"the {family} holder's {name!r} baseline {observed[1]} exceeded "
+                        f"its own peak {observed[0]}"
+                    )
             elif expected_count == 2 and observed[1] != 0:
                 report_transcript(transcript)
                 fail(
@@ -637,6 +660,30 @@ def check_resources(transcript: str) -> None:
                     fail(
                         f"the {family} participant reported {observed[0]} mapping(s), "
                         f"expected exactly {expected_mapping}"
+                    )
+            # C8.13.3: declared-space occupancy against this fixture's own
+            # declared ceiling, as in the traffic gate -- not the physical CNode
+            # count, which the same reply also carries but which this ceiling
+            # does not bound. `capabilitySlots` is one of the limits this fixture
+            # leaves at the traffic plane's value, so the check is that
+            # tightening elsewhere did not push real occupancy over a bound that
+            # did not move.
+            if name == "capability-slots":
+                ceiling = limits.get("capabilitySlots")
+                if ceiling is None:
+                    fail("the fixture declares no 'capabilitySlots' limit")
+                if observed[0] == 0:
+                    report_transcript(transcript)
+                    fail(
+                        f"the {family} holder reported 0 occupied declared slots; this broker "
+                        "holds a control endpoint per participant plus its own factories"
+                    )
+                if observed[0] > ceiling:
+                    report_transcript(transcript)
+                    fail(
+                        f"the {family} holder occupies {observed[0]} declared capability "
+                        f"slots, exceeding the {ceiling} its generation declares as "
+                        "'capabilitySlots'"
                     )
         if by_event:
             report_transcript(transcript)
@@ -674,7 +721,7 @@ def check_saturation(transcript: str) -> None:
     fixture's own declared bound, not comfortably under it -- the property
     that distinguishes a saturation fixture from a smaller traffic fixture."""
     head = composition(transcript)
-    limits = declared_limits()
+    limits = declared_limits(FIXTURE)
     peaks: dict[tuple[str, int], int] = {}
     for match in TRACE_PATTERN.finditer(head):
         record = match.groupdict()

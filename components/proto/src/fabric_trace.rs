@@ -34,8 +34,9 @@ pub const RESOURCE_HISTORY: u32 = 10;
 pub const RESOURCE_EVENT: u32 = 11;
 pub const RESOURCE_LOAN: u32 = 12;
 pub const RESOURCE_MAPPING: u32 = 13;
-pub const RESOURCE_COMPLETE: u32 = 14;
-pub const MAX_RESOURCE_COUNTER: u32 = 14;
+pub const RESOURCE_CAPABILITY_SLOTS: u32 = 14;
+pub const RESOURCE_COMPLETE: u32 = 15;
+pub const MAX_RESOURCE_COUNTER: u32 = 15;
 
 /// What a `visibility` or `interposition` record's `event` names. Both
 /// families are graph-shaped -- an edge, no outcome, and an event saying

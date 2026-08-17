@@ -924,6 +924,14 @@ pub fn supervision_derive(slot: u32) -> (i64, u64) {
     pair_of(supervision_labels::DERIVE, &[slot as Word])
 }
 
+/// Query this component's own live child-CSpace slot occupancy (C8.13.3).
+///
+/// Same shape as `shared_buffer_occupancy` above and for the same reason: the
+/// CSpace counted is the badge's, so there is nothing to name.
+pub fn capability_slot_occupancy() -> (i64, u64) {
+    pair_of(capability_table_labels::OCCUPANCY, &[0])
+}
+
 pub fn cap_drop(slot: u32) -> i64 {
     if slot & TRANSFERRED_ENDPOINT_HANDLE_TAG != 0 {
         let transferred = slot & !TRANSFERRED_ENDPOINT_HANDLE_TAG;

@@ -1051,30 +1051,33 @@ emits `resourceLoan` from the *stream* broker, which holds real ring loans and
 has ample sink headroom, so the class is now evidenced even though the call
 worker still cannot carry it; see
 `devlog/2026-08-16-c8-13-resource-event-loan-walls/index.md`.
-Shared-buffer mapping/loan/buffer occupancy across 8 holders and a live
-capability-slot ceiling are broken out below as C8.13.1-C8.13.3: the root
-already tracks the per-holder shared-buffer counts C8.13.1/.2 need
+Shared-buffer mapping/loan/buffer occupancy across 8 holders is broken out as
+C8.13.1-C8.13.2 below; C8.13.3 closed the capability-slot gap. The root already
+tracked the per-holder shared-buffer counts C8.13.1/.2 need
 (`SharedBufferTable::holder_pages`/`holder_buffers`/`holder_mappings`/
-`holder_loans`), so those two are a query syscall plus, for full 8-holder
-coverage, new participant-side trace instrumentation; the live
-capability-slot count C8.13.3 needs has no existing tracking of any kind.
+`holder_loans`), so those two were a query syscall plus participant-side trace
+instrumentation; the capability-slot count C8.13.3 needed had no existing
+tracking of any kind, and is now a new root mechanism (`slime-root/src/cspace.rs`)
+reporting occupancy in both slot spaces a child's slots are counted in.
 Direct code reading of `boot-contracts/src/fabric_graph.rs` established that
-two declared fields (`queueDepth` and `capabilitySlots`) are never checked
-against real usage at all -- tightening them would test nothing, and making
-them meaningful is a mechanism change, not a fixture change. Graph-wide
-`historyDepth` was initially grouped with them but that was wrong:
-`validate_against` (line 710-712) rejects any participant whose declared
-per-route history depth exceeds it, and the bounded value sizes the real
-ring `resourceHistory` already reports on. The saturation gate does not yet
-drive retries, event depth, or any shared-buffer quota to an exact bound the
-way it does the three classes above. Each remains a real gap against this
-milestone's exit condition below, not a redefinition of it. See
+two declared fields (`queueDepth` and `capabilitySlots`) were never checked
+against real usage at all -- tightening them would have tested nothing, and
+making them meaningful was a mechanism change rather than a fixture change.
+C8.13.3 supplied that mechanism for `capabilitySlots`; `queueDepth` remains
+unconsumed. Graph-wide `historyDepth` was initially grouped with them but that
+was wrong: `validate_against` (line 710-712) rejects any participant whose
+declared per-route history depth exceeds it, and the bounded value sizes the
+real ring `resourceHistory` already reports on. The saturation gate does not yet
+drive retries, event depth, capability slots, or any shared-buffer quota to an
+exact bound the way it does the three classes above. Each remains a real gap
+against this milestone's exit condition below, not a redefinition of it. See
 `devlog/2026-08-15-c8-13-traffic/index.md`,
 `devlog/2026-08-16-c8-13-queue-history-evidence/index.md`,
 `devlog/2026-08-16-c8-13-saturation-ceilings/index.md`,
 `devlog/2026-08-16-c8-13-qos-timed-traffic/index.md`,
-`devlog/2026-08-16-c8-13-resource-event-loan-walls/index.md`, and
-`devlog/2026-08-16-c8-13-declared-fields-audit/index.md`.
+`devlog/2026-08-16-c8-13-resource-event-loan-walls/index.md`,
+`devlog/2026-08-16-c8-13-declared-fields-audit/index.md`, and
+`devlog/2026-08-17-c8-13-3-capability-slot-occupancy/index.md`.
 
 **Depends on:** C8.11 and C8.12.
 
@@ -1268,42 +1271,84 @@ than left as pending coverage.
 
 ### C8.13.3 -- Live per-child capability-slot occupancy
 
-**Status:** Not started.
+**Status:** Complete. `just sel4_traffic_check` and `just
+sel4_saturation_check` observe `resourceCapabilitySlots` (constant 14) from the
+stream broker -- declared peak 35, live baseline 29 -- with the peak checked
+against the `capabilitySlots = 48` the fixture itself declares, read from its
+own `fabricGraph.limits` block rather than restated in the gate. Label 31,
+`CAPABILITY SLOT OCCUPANCY`, answers a holder's own counts self-scoped by badge.
+
+Two of this slice's premises did not survive measurement, and both were
+category errors rather than tuning:
+
+- **A child's slots live in two spaces.** The first implementation censused the
+  physical child CNode (128 fixed addresses) and compared that to
+  `capabilitySlots`. But that field bounds the *component's own logical
+  numbering from 0*: `build-generation.py` derives its required value as
+  `FABRIC_FIRST_CONTROL_SLOT + control endpoints + buffers`, and
+  `fabric_graph_is_satisfiable` validates it against `graph::MAX_TASK_CAPS`
+  (64), not against the CNode -- a logical index of 3 lives at physical slot 36.
+  Comparing the physical count to that ceiling would have failed a holder whose
+  declared budget was satisfied, and passed only because the observed 25 sat
+  under 48 by coincidence. The reply now carries both counts and each is
+  checked against its own bound: declared occupancy against `capabilitySlots`,
+  physical occupancy against the CNode's capacity.
+- **The peak is the root's to track.** Declared occupancy moves on every
+  install, drop, transfer, and retirement, all of them root operations, so a
+  component sampling twice reports the higher of two snapshots rather than the
+  run's high-water mark. That is load-bearing here: this plane's count genuinely
+  rises and falls, measured at peak 33 then 35 against a baseline of 29, because
+  the broker drops the supervision handles it no longer waits on. The root
+  maintains the mark across every mutation; the broker takes one query at drain.
+  That also removed the only O(CNode size) root operation from every progressing
+  sweep of the single-threaded dispatch loop.
+
+Declared space is credited (every install into it is a root operation) while
+physical space is censused, because the receiving runtime moves a transferred
+Endpoint out of `CHILD_SLOT_RECEIVE` itself and the root mediates neither step.
+See
+[`devlog/2026-08-17-c8-13-3-capability-slot-occupancy/`](../devlog/2026-08-17-c8-13-3-capability-slot-occupancy/index.md).
 
 **Depends on:** none. An independent root mechanism, not gated by C8.13.1/.2.
 
 `object_allocator.rs`'s `ArenaRecord` tracks what the root allocated for a
-task's arena, not how many of a live child's own CNode slots are populated --
-and capability transfers and mints after spawn (fabric delegation, for
-instance) are not accounted anywhere today. seL4 has no native "CNode
-occupancy" query, so this is a new bookkeeping mechanism, not a query added
-over existing state the way C8.13.1 is.
+task's arena, not how many of a live child's own slots are populated -- and
+capability transfers and mints after spawn (fabric delegation, for instance)
+were not accounted anywhere. seL4 has no native "CNode occupancy" query, so this
+is a new bookkeeping mechanism, not a query added over existing state the way
+C8.13.1 is.
 
 #### Deliverables
 
-- a root-side mechanism tracking, per child CNode, how many declared slots
-  are populated across its lifetime, including post-spawn transfers and
-  mints, not just the initial grant vector;
-- a self-scoped query surface exposing that live count to the holder itself,
-  mirroring C8.13.1's discipline;
-- a resource trace code and emission wired the same way as C8.13.1/.2 once
-  the mechanism exists.
+- a root-side mechanism tracking, per child, how many declared slots are
+  populated across its lifetime, including post-spawn transfers and mints, not
+  just the initial grant vector, with a high-water mark maintained where each
+  half mutates rather than sampled when read;
+- a self-scoped query surface exposing those counts to the holder itself,
+  mirroring C8.13.1's discipline, and disclosing no generation-wide graph fact;
+- a resource trace code and emission wired the same way as C8.13.1/.2.
 
 #### Required checks
 
-- the live count matches the CNode's real occupancy after grants, mints,
-  transfers, and revocations;
+- the reported counts match real occupancy after grants, mints, transfers, and
+  revocations, each against the bound that governs its own slot space;
 - a holder cannot query another's occupancy.
 
 #### Verification target
 
-TBD -- a new mechanism with no existing gate to extend.
+```sh
+just sel4_traffic_check
+just sel4_saturation_check
+```
 
-#### Exit condition
+#### Exit condition (observed)
 
-At least one holder's declared `capabilitySlots` ceiling is checked against
-a live, root-tracked occupancy rather than compared only to a fixed global
-`LIMIT_*` constant at decode time.
+Observed 2026-08-17. One holder's declared `capabilitySlots` ceiling is checked
+against a live, root-tracked occupancy rather than compared only to a fixed
+global `LIMIT_*` constant at decode time. Scoped to the stream broker: the four
+instrumented participants have sink headroom and could report the same counter,
+and the peak sits under the declared ceiling rather than at it, so the bound is
+checked but not saturated.
 
 
 ### C8.14 — Degradation and fault isolation

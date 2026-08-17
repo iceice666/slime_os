@@ -31,9 +31,9 @@
 #[cfg(slime_boot_selector)]
 use slime_root::boot_selector;
 use slime_root::{
-    buffer_adapter, child_vspace, console, device, directory, event, fault, generation, graph, ipc,
-    launched, notification, object_allocator, peer_endpoint, platform_timer, shared_buffer,
-    supervision, task, timer, transfer_window, virtio_blk,
+    buffer_adapter, child_vspace, console, cspace, device, directory, event, fault, generation,
+    graph, ipc, launched, notification, object_allocator, peer_endpoint, platform_timer,
+    shared_buffer, supervision, task, timer, transfer_window, virtio_blk,
 };
 
 use core::ptr;
@@ -88,6 +88,12 @@ mod supervision_labels {
 
 mod capability_table_labels {
     pub const DROP: sel4::Word = 13;
+    /// Read-only: the caller's own live child-CNode slot occupancy (C8.13.3).
+    ///
+    /// Self-scoped by construction, exactly as `SHARED BUFFER OCCUPANCY` is --
+    /// the CSpace counted is the one belonging to the badge the root
+    /// authenticated, so the request carries no task argument to forge.
+    pub const OCCUPANCY: sel4::Word = 31;
 }
 
 mod directory_labels {
@@ -2166,10 +2172,11 @@ fn launch_instance_graph(
         admission.wrong_target_images,
         admission.unrecognized_images,
     );
-    let materialized = match peers.materialize(generation, &launched_instances, allocator, &tasks) {
-        Ok(report) => report,
-        Err(error) => fatal!("SLIME_GRAPH FAIL endpoint materialization rejected: {error:?}"),
-    };
+    let materialized =
+        match peers.materialize(generation, &launched_instances, allocator, &mut tasks) {
+            Ok(report) => report,
+            Err(error) => fatal!("SLIME_GRAPH FAIL endpoint materialization rejected: {error:?}"),
+        };
     sel4::debug_println!(
         "SLIME_GRAPH peer endpoints created={} grants={} installed={}",
         peers.len(),
@@ -2201,6 +2208,13 @@ fn launch_instance_graph(
             Err(error) => fatal!("SLIME_GRAPH FAIL notification install rejected: {error:?}"),
         };
         notification_report.bindings += installed;
+        // C8.13.3: each install filled a slot the generation declared, so it
+        // belongs to the holder's declared-space count -- the space
+        // `capabilitySlots` budgets. Credited rather than censused because
+        // every install here is the root's own.
+        if let Some(task) = tasks.get_mut(launched.task) {
+            task.cspace.installed(installed as u32);
+        }
     }
     sel4::debug_println!(
         "SLIME_GRAPH notifications created={} bindings={}",
@@ -2360,6 +2374,7 @@ fn launch_instance_graph(
         &mut buffers,
         allocator,
         scratch,
+        admission.fabric_capability_slots,
         &mut scopes,
         #[cfg(slime_boot_selector)]
         block_devices,
@@ -2448,6 +2463,7 @@ const fn service_for_root_label(label: sel4::Word) -> Option<u32> {
         spawn_labels::SPAWN => Some(SERVICE_SPAWN),
         supervision_labels::STATUS | supervision_labels::DERIVE => Some(SERVICE_SUPERVISION),
         capability_table_labels::DROP
+        | capability_table_labels::OCCUPANCY
         | capability_transfer_labels::EXPORT
         | capability_transfer_labels::IMPORT
         | capability_transfer_labels::EXPORT_CANCEL
@@ -2481,6 +2497,11 @@ fn serve_instance_graph(
     buffers: &mut SharedBufferTable,
     allocator: &mut ObjectAllocator,
     scratch: &ScratchPage,
+    // The fabric graph's declared `capabilitySlots` ceiling, or 0 when this
+    // generation declares no graph (C8.13.3). Passed in rather than re-decoded
+    // per request: the graph object is admission's, and the dispatch loop
+    // needs one number from it.
+    fabric_capability_slots: u32,
     // The block devices, needed here only by the selector variant's promotion
     // path. Component block traffic reaches the console thread, which owns
     // the tables (B43), so the service loop no longer touches them.
@@ -2762,6 +2783,97 @@ fn serve_instance_graph(
                 } else {
                     Response::error(IpcError::BadCapability)
                 });
+            }
+            // C8.13.3: the caller's own live child-CSpace occupancy, in both
+            // spaces its slots are counted in.
+            //
+            // `declared` is the space `capabilitySlots` bounds: the component's
+            // own logical numbering from 0, which the builder budgets as
+            // `FABRIC_FIRST_CONTROL_SLOT + control endpoints + buffers` and
+            // which `fabric_graph_is_satisfiable` validates against
+            // `graph::MAX_TASK_CAPS`. It is credited, because every install
+            // into it is a root operation.
+            //
+            // `populated` is the physical CNode, whose bound is its own
+            // capacity. It is a census rather than a counter, because a
+            // component moves capabilities inside its own CSpace on paths the
+            // root never sees -- `receive_native` moves a transferred Endpoint
+            // out of the receive slot into the transfer region -- so a count
+            // the root merely accumulated would be a count of what the root
+            // did, not of what the CNode holds.
+            //
+            // The two are reported separately and each is checked against its
+            // own bound. A logical index of 3 lives at physical slot 36, so
+            // comparing either count to the other's ceiling would compare
+            // quantities from different spaces.
+            //
+            // Self-scoped exactly as `SHARED BUFFER OCCUPANCY` is: the CSpace
+            // counted belongs to `id`, which the badge authenticated, and the
+            // operand word is ignored. There is no task argument to forge.
+            //
+            // The reply carries only facts about that CSpace and deliberately
+            // not the graph's declared `capabilitySlots`. That limit is
+            // generation-wide rather than per-holder, so shipping it would
+            // disclose a graph fact to every caller of a self-scoped query,
+            // including a component the graph grants nothing. The root keeps it
+            // and reports a breach on serial instead; the gates read the
+            // ceiling from the fixture, which is also what keeps the two from
+            // disagreeing.
+            capability_table_labels::OCCUPANCY => {
+                let ceiling = fabric_capability_slots;
+                let response = match tasks.get_mut(id) {
+                    Some(task) => {
+                        let capacity = cspace::capacity_of(task.cnode_size_bits);
+                        match task.recount_cspace() {
+                            Ok(populated) => {
+                                // The peak is the root's, not a caller's: every
+                                // install and release into declared space is a
+                                // root operation, so between any two queries
+                                // the count moves where only the root can see
+                                // it. A component sampling twice would report
+                                // the higher of two snapshots rather than the
+                                // run's high-water mark.
+                                let (declared, declared_peak) = task.declared_slots_occupied();
+                                // A breach is reported, not refused: the slots
+                                // are already installed, and the root refusing
+                                // to say so would hide the one fact the
+                                // declaration exists to surface. Reported on
+                                // the peak, since a ceiling a run passed
+                                // through and came back under was still passed.
+                                if cspace::breaches_ceiling(declared_peak, ceiling) {
+                                    sel4::debug_println!(
+                                        "SLIME_GRAPH cspace occupancy over-ceiling task={} declared_live={declared} declared_peak={declared_peak} declared_ceiling={ceiling}",
+                                        id.0
+                                    );
+                                }
+                                // The physical count has its own bound, and
+                                // breaching it would mean the census found
+                                // more slots full than the CNode has -- an
+                                // impossibility worth naming rather than
+                                // silently reporting.
+                                if populated > capacity {
+                                    sel4::debug_println!(
+                                        "SLIME_GRAPH cspace occupancy over-capacity task={} populated={populated} capacity={capacity}",
+                                        id.0
+                                    );
+                                }
+                                Response::success(
+                                    0,
+                                    pack_slot_occupancy(declared, declared_peak, populated),
+                                )
+                            }
+                            Err(error) => {
+                                sel4::debug_println!(
+                                    "SLIME_GRAPH cspace occupancy refused task={} error={error:?}",
+                                    id.0
+                                );
+                                Response::error(IpcError::BadCapability)
+                            }
+                        }
+                    }
+                    None => Response::error(IpcError::BadCapability),
+                };
+                ipc::reply(response);
             }
             capability_transfer_labels::EXPORT => {
                 ipc::reply(serve_capability_export(
@@ -3979,6 +4091,15 @@ fn serve_spawn(
             return Response::error(IpcError::BadCapability);
         }
     };
+    // C8.13.3: both installs wrote real slots in the child's own CNode, so the
+    // child's ledger owns them. Credited rather than re-counted: a census here
+    // would cost 128 kernel calls on the spawn path for a number the installer
+    // just returned, and the next query re-observes it anyway.
+    if let Some(child_task) = tasks.get_mut(child) {
+        child_task
+            .cspace
+            .installed((copied + notification_copied) as u32);
+    }
 
     // The parent's handle, installed before the child runs. A child that exited
     // before its parent held a handle would leave the parent waiting on a task
@@ -4357,6 +4478,13 @@ fn serve_capability_export(
                 allocator.release_slot(ticket_slot.cptr().bits() as usize);
                 return Response::error(IpcError::BadCapability);
             }
+            // C8.13.3: deliberately *not* credited to declared space. The
+            // mirror occupies a physical slot in `CHILD_SLOT_AUTHORITY_BASE`'s
+            // region, but it mirrors a declared slot the generation already
+            // budgeted -- `sender_ticket_slot` is derived from `source_slot`
+            // itself -- so crediting it would double-count one declared
+            // capability. The physical census sees it, which is the count whose
+            // bound it actually consumes.
             (Some(ticket_slot.cptr().bits()), Some(sender_ticket_slot))
         }
         None => (None, None),
@@ -4424,6 +4552,9 @@ fn cleanup_export_ticket(
     if let Some(slot) = export.sender_ticket_slot
         && let Some(task) = tasks.get(export.sender)
     {
+        // Not credited against declared space: the mirror this deletes was
+        // never credited to it either (see `serve_capability_export`). The
+        // physical census picks the change up on the next query.
         let _ = task
             .cnode
             .absolute_cptr_from_bits_with_depth(slot, task.cnode_size_bits)
@@ -4992,20 +5123,56 @@ const OCCUPANCY_FIELD_BITS: u32 = 16;
 /// is therefore unreachable today, and is written out rather than left to
 /// `as u16` so the packing stays total if a ceiling is ever raised.
 const fn pack_occupancy(occupancy: shared_buffer::HolderOccupancy) -> sel4::Word {
-    const fn field(count: u32) -> sel4::Word {
-        // `as u16` would wrap rather than saturate, which is the one behaviour
-        // a bounded count must not have: a wrapped 65_536 reads as 0, turning
-        // a ceiling breach into an empty holder.
-        if count > u16::MAX as u32 {
-            u16::MAX as sel4::Word
-        } else {
-            count as sel4::Word
-        }
+    occupancy_field(occupancy.pages)
+        | occupancy_field(occupancy.buffers) << OCCUPANCY_FIELD_BITS
+        | occupancy_field(occupancy.mappings) << (OCCUPANCY_FIELD_BITS * 2)
+        | occupancy_field(occupancy.loans) << (OCCUPANCY_FIELD_BITS * 3)
+}
+
+/// Saturate one count into a 16-bit packed field.
+///
+/// Shared by both occupancy packers, and saturating rather than `as u16` for
+/// the same reason: a wrapped 65_536 reads as 0, which turns a ceiling breach
+/// into an empty holder — the one answer a bounded count must never give.
+const fn occupancy_field(count: u32) -> sel4::Word {
+    if count > u16::MAX as u32 {
+        u16::MAX as sel4::Word
+    } else {
+        count as sel4::Word
     }
-    field(occupancy.pages)
-        | field(occupancy.buffers) << OCCUPANCY_FIELD_BITS
-        | field(occupancy.mappings) << (OCCUPANCY_FIELD_BITS * 2)
-        | field(occupancy.loans) << (OCCUPANCY_FIELD_BITS * 3)
+}
+
+/// Pack one child's CSpace occupancy into the reply's auxiliary word
+/// (C8.13.3): declared-space live count, declared-space peak, and physical
+/// occupancy, from the low 16 bits up.
+///
+/// Three fields in one word rather than three registers, because the reply
+/// convention gives an operation exactly one auxiliary value
+/// (`docs/syscall-abi.md`).
+///
+/// The peak is root-tracked rather than left to the caller: declared occupancy
+/// moves on every install, drop, transfer, and retirement, all of them root
+/// operations, so a component sampling twice would report the higher of two
+/// snapshots rather than the run's high-water mark.
+///
+/// The physical count rides along because it is a count in a *different* space
+/// with a different bound — `capabilitySlots` budgets the declared numbering,
+/// the CNode's capacity bounds the physical one — and a logical index of 3 lives
+/// at physical slot 36, so neither can stand in for the other. The CNode's
+/// capacity itself is not shipped: it is a compile-time constant of this root
+/// (`CHILD_CNODE_SIZE_BITS`), not a per-holder fact.
+///
+/// The graph's declared `capabilitySlots` is deliberately not a field either.
+/// It is a generation-wide limit rather than a property of this CSpace, so
+/// including it would make a self-scoped query disclose a graph fact to callers
+/// the graph grants nothing. The root keeps it for `breaches_ceiling`.
+///
+/// All three are far below `u16::MAX`: this root builds a 128-slot child CNode
+/// and `graph::MAX_TASK_CAPS` is 64.
+const fn pack_slot_occupancy(declared: u32, declared_peak: u32, populated: u32) -> sel4::Word {
+    occupancy_field(declared)
+        | occupancy_field(declared_peak) << OCCUPANCY_FIELD_BITS
+        | occupancy_field(populated) << (OCCUPANCY_FIELD_BITS * 2)
 }
 
 /// Answer map/unmap/seal/release for a region the caller already holds.

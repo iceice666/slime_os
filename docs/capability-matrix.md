@@ -156,6 +156,38 @@ Semantics not visible in the table:
   four zeros. Requiring a `SharedBufferFactory` instead would couple a
   self-query to mint authority and deny a loan receiver that legitimately holds
   mappings but was never granted a factory.
+- `CAPABILITY SLOT OCCUPANCY` (label 31, C8.13.3) is likewise gated by no
+  rights bit, and by no table either. It reports how many slots the caller's
+  own CSpace holds, and the CSpace it counts is the one belonging to the badge
+  the root authenticated, so there is no task argument to forge and no other
+  CSpace it can reach. Nothing above can express it because there is nothing to
+  authorize: the answer describes only the caller's own CSpace, and knowing how
+  full that CSpace is grants no access to anything in it. The root answers
+  because it is the only party that can: a `RootOnly` task holds no capability
+  to its own CNode at all — `CHILD_SLOT_CNODE` is installed only under
+  `Supervision::SelfManaged` (`slime-root/src/task.rs`) — so for most components
+  this is not a convenience over self-probing, it is the only way to learn the
+  number.
+- The reply reports occupancy twice, because a child's slots are counted by two
+  different bounds. `declared` is the component's own logical slot numbering
+  from 0 — the space `capabilitySlots` budgets, which the builder derives as
+  `FABRIC_FIRST_CONTROL_SLOT + control endpoints + buffers` and which
+  `fabric_graph_is_satisfiable` validates against `graph::MAX_TASK_CAPS`.
+  `populated` and `capacity` are the physical CNode, where logical index 3
+  resolves to slot 36. Comparing either count to the other's ceiling would
+  compare unrelated quantities, so each is checked against its own.
+  `declared` is credited (every install into it is a root operation) while
+  `populated` is a *census*: a component fills physical slots the root never
+  mediates, since the receiving runtime moves a transferred Endpoint out of the
+  receive slot itself, so an accumulated count would understate every holder
+  that has accepted a transfer.
+- The reply deliberately omits the generation's declared `capabilitySlots`. That
+  limit is graph-wide rather than a property of the caller's CSpace, and
+  `SERVICE_CAPABILITY_TRANSFER` is required of any instance holding an
+  `Endpoint` or transferable grant — which in the fabric fixtures includes the
+  ungranted `fabric-probe` intruder. Shipping it would have handed a graph fact
+  to a component the graph grants nothing, for no caller that reads it. The root
+  keeps the ceiling and reports a breach on serial instead.
 - A C7.6 sample descriptor is a userspace control message
   (`sample-descriptor/v1`), not a root object: it references an exact
   transferred `Loan` by its unforgeable identity plus a page-aligned

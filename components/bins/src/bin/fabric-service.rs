@@ -897,6 +897,19 @@ fn broker(
     // half this milestone's exit condition asks for.
     let mut peak_mapping = 0u32;
     let mut peak_loans = 0u32;
+    // C8.13.3: the broker's own occupancy in the space `capabilitySlots`
+    // bounds -- its declared logical slots, not the physical CNode, since the
+    // ceiling this evidence is checked against budgets the former.
+    //
+    // No sampling loop, because the peak is not this component's to observe:
+    // declared occupancy moves on every install, drop, transfer, and
+    // retirement, all of them root operations, so the root tracks the
+    // high-water mark and hands it back with the live count. Sampling here
+    // would report the higher of whichever snapshots happened to be taken --
+    // and each snapshot costs the root a probe per CNode slot on the same
+    // single-threaded dispatch loop that serves every other task's spawn,
+    // fault, and buffer traffic. One query, at drain, answers both records.
+    let slots_available = GENERATION_BOOT_ACTION == "traffic";
     // Stops querying after the first refusal. A holder the generation's
     // `sharedBufferBudget` does not declare is denied every sweep, and the
     // root names each refusal on serial -- so retrying would flood the
@@ -1106,6 +1119,13 @@ fn broker(
             } else {
                 None
             };
+            // C8.13.3's settled read, on the same both-or-neither discipline:
+            // one observation decides both records of the pair.
+            let settled_slots = if slots_available {
+                slime_rt::capability_slot_occupancy().ok()
+            } else {
+                None
+            };
             // Resource evidence before the terminal. The frame counter carries
             // two records: the historical peak this run reached, and — read
             // after `release_retained` drains every reference — the count
@@ -1131,6 +1151,16 @@ fn broker(
                     let _ =
                         trace.resource(slime_proto::fabric_trace::RESOURCE_MAPPING, peak_mapping);
                     let _ = trace.resource(slime_proto::fabric_trace::RESOURCE_LOAN, peak_loans);
+                }
+                if let Some(slots) = settled_slots {
+                    // The root's own high-water mark over declared space, from
+                    // the same single observation the baseline below uses. It
+                    // is a peak the root maintained across every mutation, not
+                    // the largest number this component managed to sample.
+                    let _ = trace.resource(
+                        slime_proto::fabric_trace::RESOURCE_CAPABILITY_SLOTS,
+                        slots.declared_peak,
+                    );
                 }
             }
             let baseline_frames = frames.iter().filter(|frame| frame.refs > 0).count() as u32;
@@ -1171,6 +1201,22 @@ fn broker(
                     );
                     let _ =
                         trace.resource(slime_proto::fabric_trace::RESOURCE_LOAN, occupancy.loans);
+                }
+                // C8.13.3's second record: the occupancy still held once the
+                // scenario drained. Expected to equal the peak, because a
+                // control endpoint or ring installed at provisioning is not
+                // released while its holder lives -- the same invariant
+                // `resourceMapping` above carries, and a baseline that had
+                // drained would mean this broker lost authority it still
+                // needs. Two records, not three: the declared ceiling is a
+                // generation fact the gate reads from the fixture, so
+                // shipping it as a trace record would only let the two
+                // disagree.
+                if let Some(slots) = settled_slots {
+                    let _ = trace.resource(
+                        slime_proto::fabric_trace::RESOURCE_CAPABILITY_SLOTS,
+                        slots.declared,
+                    );
                 }
             }
             let _ = trace.terminal();

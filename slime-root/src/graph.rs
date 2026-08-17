@@ -362,6 +362,15 @@ impl CapabilityEntry {
 pub struct AuthorityTable {
     slots: [Option<CapabilityEntry>; MAX_TASK_CAPS],
     len: usize,
+    /// The most entries this table ever held (C8.13.3).
+    ///
+    /// Tracked here rather than derived at read time because a table this size
+    /// is mutated on many paths between any two reads — every install, drop,
+    /// transfer, and retirement — so a sample taken when a component asks
+    /// cannot see the run's real maximum. It is a count of *this* half of
+    /// declared-space occupancy; `crate::cspace::CSpaceLedger` folds it in with
+    /// the natively installed half.
+    peak: usize,
 }
 
 impl AuthorityTable {
@@ -369,6 +378,7 @@ impl AuthorityTable {
         Self {
             slots: [None; MAX_TASK_CAPS],
             len: 0,
+            peak: 0,
         }
     }
 
@@ -377,6 +387,11 @@ impl AuthorityTable {
     }
     pub const fn is_empty(&self) -> bool {
         self.len == 0
+    }
+
+    /// The most entries this table ever held.
+    pub const fn peak(&self) -> usize {
+        self.peak
     }
 
     pub fn slots(&self) -> impl Iterator<Item = (u32, Option<&CapabilityEntry>)> {
@@ -395,6 +410,9 @@ impl AuthorityTable {
         }
         *entry = Some(capability);
         self.len += 1;
+        if self.len > self.peak {
+            self.peak = self.len;
+        }
         Ok(())
     }
 

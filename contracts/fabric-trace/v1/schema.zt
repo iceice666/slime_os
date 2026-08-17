@@ -126,6 +126,27 @@ maxKind :: Int = 10;
 -- `resourceHistory`, and `resourceRetries` only under the concurrent-traffic
 -- action -- absence from a given trace is silence about a ceiling that
 -- plane's own scenario does not exercise, not a validator refusal.
+--
+-- `resourceCapabilitySlots` is the same discipline applied to the one declared
+-- ceiling that had no signal of any kind: `capabilitySlots`. Until C8.13.3
+-- nothing in the root tracked a live child's slot occupancy, so the field was
+-- only ever compared to a fixed global constant at decode time, and no query
+-- could have returned it.
+--
+-- What this counter carries is occupancy in the space that ceiling actually
+-- bounds: the holder's own logical slot numbering from 0, which the generation
+-- builder budgets as `FABRIC_FIRST_CONTROL_SLOT + control endpoints + buffers`.
+-- The root reports the physical child-CNode count alongside it, and that number
+-- is deliberately *not* what lands here: a logical index of 3 lives at physical
+-- slot 36, so a reader comparing the physical count to `capabilitySlots` would
+-- be comparing quantities from different spaces.
+--
+-- Its pair is peak then live, and unlike `resourceMapping` it genuinely drains:
+-- measured at peak 33 and baseline 29 on the traffic plane, because the broker
+-- installs a control endpoint per participant plus its own factories and then
+-- drops the supervision handles it no longer waits on. So it carries
+-- `resourceLoan`'s held-and-released shape rather than `resourceMapping`'s
+-- constant one -- a nonzero peak with a baseline bounded by it.
 resourceFrames :: Int = 1;
 resourceOperations :: Int = 2;
 resourceCalls :: Int = 3;
@@ -139,8 +160,9 @@ resourceHistory :: Int = 10;
 resourceEvent :: Int = 11;
 resourceLoan :: Int = 12;
 resourceMapping :: Int = 13;
-resourceComplete :: Int = 14;
-maxResourceCounter :: Int = 14;
+resourceCapabilitySlots :: Int = 14;
+resourceComplete :: Int = 15;
+maxResourceCounter :: Int = 15;
 
 -- What a `visibility` or `interposition` record's `event` names. Both families
 -- are graph-shaped -- an edge, no outcome code, and an event saying what was
@@ -254,6 +276,7 @@ format ::= {
   resourceEvent =;
   resourceLoan =;
   resourceMapping =;
+  resourceCapabilitySlots =;
   resourceComplete =;
   maxResourceCounter =;
   graphViewAnswered =;
