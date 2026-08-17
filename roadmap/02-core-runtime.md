@@ -29,7 +29,25 @@ ROS 2 compatibility in [`03-ros2-compatibility.md`](03-ros2-compatibility.md) is
 
 ## C7: Bounded resource and shared-sample plane
 
-**Status:** Complete. Decomposed into C7.1–C7.7 so each slice introduces one primary state surface and owns an independently reviewable QEMU check, mirroring the M5/M6 sub-slice convention. Every gate passes, including the full-graph boot checks. The 2026-07-26 audit reopened this gate on three findings, all now resolved: C7.5's boot wedge (backlog B3), the dormant live-path shared-buffer plane (backlog B4), and the absence of any syscall-level or real-component evidence (backlog B5). A built generation carries a digest-authenticated `shared-buffer-budget/v1` resource; `bootstrap` mints a `SharedBufferFactory` and validates its generation grants; `dango` and `spawn-service` boot with distinct non-`DENY` quotas; and `sample-lender`/`sample-receiver` move a `>MAX_MSG` payload through the real `SYS_SHARED_BUFFER_*` syscalls under `just sample_plane_live_check`. Residual debt is narrow and recorded rather than open: `SYS_SHARED_BUFFER_REVOKE` has no live caller, and the two insert-failure rollback paths are uncovered. Evidence: `devlog/2026-07-26-c7-audit/`, `devlog/2026-07-26-b3-shared-buffer-table-stack-overflow/`, `devlog/2026-07-26-b4-live-shared-buffer-budget/`, `devlog/2026-07-26-b5-live-sample-plane/`.
+**Status:** Complete.
+**Delivered:** Decomposed into C7.1–C7.7 (v3 generation format, factory-gated
+shared buffers, generation-declared per-holder quotas, map/unmap/seal,
+loan/return with fault reclamation, a versioned sample descriptor, and
+two-component integration), mirroring the M5/M6 sub-slice convention. The
+2026-07-26 audit reopened this gate on three findings, all resolved: C7.5's
+boot wedge (backlog B3), the dormant live-path shared-buffer plane (backlog
+B4), and the absence of syscall-level or real-component evidence (backlog
+B5). A built generation now carries a digest-authenticated
+[`shared-buffer-budget/v1`](../contracts/shared-buffer-budget/v1/) resource; `bootstrap` mints a `SharedBufferFactory`
+and validates its generation grants; `dango` and `spawn-service` boot with
+distinct non-`DENY` quotas; `sample-lender`/`sample-receiver` move a
+`>MAX_MSG` payload through the real `SYS_SHARED_BUFFER_*` syscalls.
+**Exit condition (observed):** Every C7 gate passes, including the
+full-graph boot checks. Residual debt is narrow and recorded rather than
+open: `SYS_SHARED_BUFFER_REVOKE` has no live caller, and the two
+insert-failure rollback paths are uncovered.
+**Gates:** `just sample_plane_check`, `just sample_plane_live_check`, `just generation_check`, `just contracts_check`
+**Evidence:** [`devlog/2026-07-26-c7-audit/`](../devlog/2026-07-26-c7-audit/index.md), [`devlog/2026-07-26-b3-shared-buffer-table-stack-overflow/`](../devlog/2026-07-26-b3-shared-buffer-table-stack-overflow/index.md), [`devlog/2026-07-26-b4-live-shared-buffer-budget/`](../devlog/2026-07-26-b4-live-shared-buffer-budget/index.md), [`devlog/2026-07-26-b5-live-sample-plane/`](../devlog/2026-07-26-b5-live-sample-plane/index.md)
 
 **Depends on:** the M6 endpoint factory, spawn accounting, supervision, and generation machinery.
 
@@ -37,232 +55,185 @@ ROS 2 compatibility in [`03-ros2-compatibility.md`](03-ros2-compatibility.md) is
 
 ### C7.1 — Generation format v3 and u64 rights
 
-**Status:** Complete, with one correction outstanding (2026-07-26 audit). Generation format v3 with `u64` rights is built and byte-identical across two builds; retained v2 generations still decode, keep their signed release authorized (the authority hash stays 32-bit for v2 — pinned by `retained_v2_authority_manifest_is_width_stable`), and pass the stage-0 admission chain (`retained_v2_generation_passes_stage0_admission`). The original "and boots" wording was scoped to admission rather than a completed boot: no v2 artifact exists to boot, and each generation embeds the kernel it runs, so a v2 rollback executes its own v2-era kernel (backlog B6, resolved). The `RIGHT_MAP` rename reached the host vocabulary too: the manifest key is `bufferMap` (backlog B7, resolved). Verified under `just generation_check`, `just contracts_check` (including the boot-contracts v2/v3 decode and admission tests), `just test`, and `just transfer_check`.
+**Status:** Complete.
+**Delivered:** Generation format v3 with `u64` rights, built byte-identical
+across two builds; retained v2 generations still decode, keep their signed
+release authorized, and pass the stage-0 admission chain. The grandfathered
+`RIGHT_MAP` name was replaced with the object-specific `bufferMap` manifest
+key (backlog B7, resolved).
+**Exit condition (observed):** A v3 generation built from normalized input
+is byte-identical across two builds, boots the existing vertical slice with
+`u64` rights, and a retained v2 known-good artifact still decodes, keeps its
+signed release authorized, and passes the stage-0 admission chain; an
+unsupported version and an unknown rights bit both fail closed. The v2 arm
+is proven to admission, not to a completed boot: no v2 artifact exists to
+boot, because the builder has only ever emitted v3 and each generation
+embeds the kernel it runs, so a v2 rollback would execute its own v2-era
+kernel rather than this tree's (backlog B6, resolved with that scope
+recorded).
+**Gates:** `just generation_check`, `just contracts_check`, `just test`, `just transfer_check`
+**Evidence:** [`devlog/2026-07-24-c7-1-generation-v3-u64-rights/`](../devlog/2026-07-24-c7-1-generation-v3-u64-rights/index.md), [`devlog/2026-07-26-b6-retained-v2-rollback-scope/`](../devlog/2026-07-26-b6-retained-v2-rollback-scope/index.md), [`devlog/2026-07-26-b7-b8-budget-hygiene/`](../devlog/2026-07-26-b7-b8-budget-hygiene/index.md)
 
 **Depends on:** M6.1 generation format v2 and the capability/rights foundation.
 
-### Deliverables
-
-- introduce deterministic generation format v3 with `u64` rights; retain decoding of known-good v2 generations for the bounded rollback window rather than changing v2 meanings;
-- migrate manifest rights strings deterministically and reject unknown or meaningless v3 rights bits;
-- replace the grandfathered generic `RIGHT_MAP` name with an object-specific shared-buffer map right when the v3 mapping lands.
-
-### Required checks
-
-- two builds from identical normalized v3 input are byte-identical, retained v2 known-good artifacts still boot during the rollback window, and unsupported versions fail closed;
-- unknown or object-meaningless v3 rights bits are rejected at decode and at `CapabilityTable::insert`;
-- the renamed shared-buffer map right gates exactly the buffer map operation and no other object.
-
-### Verification target
-
-```sh
-just generation_check
-just contracts_check
-```
-
-### Exit condition
-
-A v3 generation built from normalized input is byte-identical across two builds, boots the existing vertical slice with `u64` rights, and a retained v2 known-good artifact still decodes, keeps its signed release authorized, and passes the stage-0 admission chain; an unsupported version and an unknown rights bit both fail closed. The v2 arm is proven to admission, not to a completed boot: no v2 artifact exists to boot, because the builder has only ever emitted v3 and each generation embeds the kernel it runs, so a v2 rollback would execute its own v2-era kernel rather than this tree's (backlog B6, resolved with that scope recorded).
-
 ### C7.2 — Shared-buffer authority and factory allocation
 
-**Status:** Complete. A distinct `SharedBufferFactory` kernel object gates `SYS_SHARED_BUFFER_CREATE`/`SYS_SHARED_BUFFER_RELEASE` behind `RIGHT_BUFFER_CREATE`; buffers carry a kernel-assigned unforgeable identity and only narrow-only `RIGHT_BUFFER_WRITE`/`RIGHT_BUFFER_MAP`/`RIGHT_TRANSFER`. Allocation is bounded by fixed global ceilings (`MAX_SHARED_BUFFERS`=32, `MAX_TOTAL_PAGES`=256, `MAX_BUFFER_PAGES`=64) checked before any frame is pulled, returning structured `SharedBufferError`; DMA and shared-sample authority remain distinct capability kinds. As of 2026-07-26 (backlog B4) the factory is minted on the live boot path and granted through the generation to `dango` and `spawn-service`, both of which allocate and release through the real syscalls at startup. Both syscalls are additionally driven by real components under `just sample_plane_live_check` (B5), including the denial arm where a factory capability is named where a buffer is expected; the create-insert-failure rollback remains uncovered. Verified under `just shared_buffer_factory_check` (8 QEMU cases), with `just test`, `just spawn_service_check`, `just contracts_check`, `just generation_check`, `just fmt_check`, `just lint`, and `just framework_safety_check` clean.
+**Status:** Complete.
+**Delivered:** A distinct `SharedBufferFactory` kernel object gates
+`SYS_SHARED_BUFFER_CREATE`/`SYS_SHARED_BUFFER_RELEASE` behind
+`RIGHT_BUFFER_CREATE`; buffers carry a kernel-assigned unforgeable identity
+and only narrow-only `RIGHT_BUFFER_WRITE`/`RIGHT_BUFFER_MAP`/`RIGHT_TRANSFER`.
+Allocation is bounded by fixed global ceilings (`MAX_SHARED_BUFFERS`=32,
+`MAX_TOTAL_PAGES`=256, `MAX_BUFFER_PAGES`=64), returning structured
+`SharedBufferError`. The factory is minted on the live boot path and granted
+to `dango` and `spawn-service`, both of which allocate and release through
+the real syscalls at startup (backlog B4).
+**Exit condition (observed):** A factory-authorized holder creates and
+releases a kernel-identified shared buffer within fixed global bounds; an
+unauthorized component is denied, exhaustion is structured and isolated, and
+no derivation or transfer widens authority. The create-insert-failure
+rollback path remains uncovered.
+**Gates:** `just shared_buffer_factory_check`, `just sample_plane_live_check`
+**Evidence:** [`devlog/2026-07-24-c7-2-shared-buffer-factory/`](../devlog/2026-07-24-c7-2-shared-buffer-factory/index.md), [`devlog/2026-07-26-b4-live-shared-buffer-budget/`](../devlog/2026-07-26-b4-live-shared-buffer-budget/index.md), [`devlog/2026-07-26-b5-live-sample-plane/`](../devlog/2026-07-26-b5-live-sample-plane/index.md)
 
 **Depends on:** C7.1 v3 rights and the M6.1 factory-capability pattern.
 
-### Deliverables
-
-- add a distinct `SharedBufferFactory` kernel object and formalize the existing `SharedBuffer` object with object-specific create, map, write, and transfer authority;
-- expose bounded create and release operations behind a named factory capability, with fixed kernel-wide byte and object ceilings returning structured exhaustion;
-- keep buffer identity kernel-created and unforgeable; derivation and transfer may only narrow rights, and release invalidates the releasing holder's capability;
-- keep DMA buffers and ordinary shared samples as distinct authority even if later slices reuse memory-accounting machinery.
-
-### Required checks
-
-- a component without the factory capability cannot allocate a shared buffer;
-- allocation cannot exceed fixed kernel byte or object bounds and exhaustion does not disturb an unrelated holder;
-- deriving or transferring a buffer checks `RIGHT_TRANSFER`, never widens rights, and cannot invent a buffer identity;
-- DMA authority and shared-sample authority remain distinct capability kinds.
-
-### Verification target
-
-```sh
-just shared_buffer_factory_check
-```
-
-### Exit condition
-
-A factory-authorized holder creates and releases a kernel-identified shared buffer within fixed global bounds; an unauthorized component is denied, exhaustion is structured and isolated, and no derivation or transfer widens authority.
-
 ### C7.3 — Generation quotas and supervision accounting
 
-**Status:** Complete. A versioned Zutai shared-buffer budget contract (`contracts/shared-buffer-budget/v1/`) is stored as a generation `KIND_RESOURCE` object, authenticated through the generation's existing per-object digest table; it declares per-holder `byte_pages`, `buffer_count`, `mapping_count`, and `loan_count` quotas. A present budget is validated deterministically at generation decode and rejects missing, malformed, unsorted/duplicate, or per-holder-impossible limits before any component launches (the validator bounds each holder and, since backlog B8, also sums holders so a validating budget can be honoured with every holder at its ceiling at once). `SharedBufferTable::create` charges each allocation to the creating supervision-subtree owner against its `HolderQuota` (deny-by-default when absent), enforced before the global ceiling and side-effect-free on rejection; `reclaim_owner` returns every unloaned page and charge on release, peer death, supervised restart, and revocation (via `task::terminate`) without disturbing another subtree. The live boot path declares a real budget as of 2026-07-26 (backlog B4): the built generation carries one digest-authenticated budget object, `dango` and `spawn-service` boot with distinct non-`DENY` quotas, and each proves its own with a create/map/write/seal/release self-check at startup. Verified under `just shared_buffer_accounting_check` (8 QEMU cases, including `booted_generation_declares_distinct_holder_budgets`) plus `just contracts_check`, `just generation_check`, `just test`, `just spawn_service_check`, `just fmt_check`, `just lint`, and `just framework_safety_check` clean. See `devlog/2026-07-24-c7-3-shared-buffer-accounting/` and `devlog/2026-07-26-b4-live-shared-buffer-budget/`.
+**Status:** Complete.
+**Delivered:** A versioned Zutai shared-buffer budget contract
+([`contracts/shared-buffer-budget/v1/`](../contracts/shared-buffer-budget/v1/)) is stored as a generation
+`KIND_RESOURCE` object declaring per-holder `byte_pages`, `buffer_count`,
+`mapping_count`, and `loan_count` quotas, validated deterministically at
+generation decode (bounding each holder and, since backlog B8, summing
+holders so a validating budget can be honoured with every holder at its
+ceiling at once). `SharedBufferTable::create` charges each allocation to the
+creating supervision-subtree owner; `reclaim_owner` returns every unloaned
+page and charge on release, peer death, supervised restart, and revocation.
+The live boot path declares a real budget (backlog B4): `dango` and
+`spawn-service` boot with distinct non-`DENY` quotas.
+**Exit condition (observed):** Two holders receive distinct
+generation-declared budgets; one reaches byte or buffer-count exhaustion
+without affecting the other, and termination of its supervision subtree
+returns every unloaned page and charge.
+**Gates:** `just shared_buffer_accounting_check`, `just contracts_check`, `just generation_check`
+**Evidence:** [`devlog/2026-07-24-c7-3-shared-buffer-accounting/`](../devlog/2026-07-24-c7-3-shared-buffer-accounting/index.md), [`devlog/2026-07-26-b4-live-shared-buffer-budget/`](../devlog/2026-07-26-b4-live-shared-buffer-budget/index.md)
 
 **Depends on:** C7.2 factory allocation; M6.1 supervision and per-spawner accounting.
 
-### Deliverables
-
-- define a versioned Zutai shared-buffer budget contract stored as a generation resource object, with per-holder byte, buffer-count, mapping-count, and outstanding-loan quotas; generation v3 references and authenticates the resource through its existing object table rather than adding ad-hoc record fields;
-- validate every budget deterministically before component launch and reject missing, malformed, overflowing, or globally impossible limits;
-- charge allocated pages and resource counters to the creating supervision subtree rather than to an ambient global owner;
-- reclaim unloaned buffers and charges after explicit release, peer death, supervised restart, or explicit revocation; C7.5 extends the rule to outstanding loans.
-
-### Required checks
-
-- a holder cannot exceed its manifest byte or buffer-count quota even while another holder remains below its own quota;
-- malformed or impossible generation budgets fail before allocation or component launch;
-- peer death, supervised restart, and revocation reclaim every unloaned page and charge in the affected subtree without changing another subtree's account;
-- mapping-count and outstanding-loan quotas are present and bounded before the operations that consume them land.
-
-### Verification target
-
-```sh
-just shared_buffer_accounting_check
-```
-
-### Exit condition
-
-Two holders receive distinct generation-declared budgets; one reaches byte or buffer-count exhaustion without affecting the other, and termination of its supervision subtree returns every unloaned page and charge.
-
 ### C7.4 — Mapping and read-only sealing
 
-**Status:** Complete (mechanism), with a coverage caveat from the 2026-07-26 audit. Shared buffers now expose bounded `SYS_SHARED_BUFFER_MAP`/`SYS_SHARED_BUFFER_UNMAP`/`SYS_SHARED_BUFFER_SEAL`. Mapping installs only page-aligned, non-executable, exact-frame user PTEs for the named buffer capability, gated by `RIGHT_BUFFER_MAP` (writable additionally by `RIGHT_BUFFER_WRITE`) and charged one unit against the holder's `mapping_count` quota under `MAX_MAPPINGS`=64; offset/length/base are range- and overflow-checked and confined to the user half before any page-table change, and a partial map is fully rolled back. Sealing is an irreversible Arc-shared read-only transition that downgrades every live writable PTE before publishing the seal; a created-read-only or sealed region can never obtain a writable mapping. Unmap, release, and supervision-subtree reclamation remove the exact PTEs before returning frames, without disturbing an unrelated mapping. All three syscalls are driven at the syscall boundary by real components under `just sample_plane_live_check` (B5), which asserts that a writable mapping cannot be obtained after sealing. Verified under `just shared_buffer_mapping_check` (8 QEMU cases), with `just test`, `just shared_buffer_accounting_check`, `just shared_buffer_factory_check`, `just contracts_check`, `just generation_check`, `just fmt_check`, `just lint`, and `just framework_safety_check` clean.
+**Status:** Complete (mechanism), with a coverage caveat from the
+2026-07-26 audit.
+**Delivered:** Bounded `SYS_SHARED_BUFFER_MAP`/`SYS_SHARED_BUFFER_UNMAP`/
+`SYS_SHARED_BUFFER_SEAL`. Mapping installs only page-aligned, non-executable,
+exact-frame user PTEs, gated by `RIGHT_BUFFER_MAP` and charged against the
+holder's `mapping_count` quota (`MAX_MAPPINGS`=64); offset/length/base are
+range- and overflow-checked, and a partial map is fully rolled back. Sealing
+is an irreversible Arc-shared read-only transition that downgrades every
+live writable PTE before publishing the seal.
+**Exit condition (observed):** A holder maps only an in-bounds region
+charged to its manifest quota, seals the buffer read-only, and cannot
+recover write access; malformed ranges and lifecycle misuse fail before
+page-table changes. All three syscalls are driven at the syscall boundary
+by real components under `just sample_plane_live_check` (B5), which asserts
+a writable mapping cannot be obtained after sealing.
+**Gates:** `just shared_buffer_mapping_check`, `just sample_plane_live_check`
+**Evidence:** [`devlog/2026-07-24-c7-4-shared-buffer-mapping/`](../devlog/2026-07-24-c7-4-shared-buffer-mapping/index.md), [`devlog/2026-07-26-b5-live-sample-plane/`](../devlog/2026-07-26-b5-live-sample-plane/index.md)
 
 **Depends on:** C7.2 shared-buffer objects and C7.3 accounting.
 
-### Deliverables
-
-- expose bounded map and unmap operations charged against the holder's mapping-count quota;
-- validate offset and length before page-table changes, map only pages belonging to the exact buffer capability, and require object-specific map/write rights;
-- make sealing an irreversible transition to read-only: existing writable mappings are removed or downgraded before the seal succeeds, and no later operation restores write access;
-- reclaim mappings and mapping charges on unmap, release, peer death, supervised restart, or revocation.
-
-### Required checks
-
-- a holder cannot map outside the granted buffer, overflow offset/length arithmetic, exceed its mapping quota, or widen read-only access to writable;
-- sealing fails safely or removes every writable mapping before publishing the sealed state;
-- map-after-seal can produce only read-only access, and use-after-unmap or use-after-release fails with a structured error;
-- mapping cleanup in one supervision subtree does not disturb an unrelated mapping.
-
-### Verification target
-
-```sh
-just shared_buffer_mapping_check
-```
-
-### Exit condition
-
-A holder maps only an in-bounds region charged to its manifest quota, seals the buffer read-only, and cannot recover write access; malformed ranges and lifecycle misuse fail before page-table changes.
-
 ### C7.5 — Loan/return lifecycle and fault reclamation
 
-**Status:** Complete (mechanism); its boot regression is fixed. C7.5 originally wedged every full-graph boot — a 10520-byte `SharedBufferTable` published through a `LazyLock` was first constructed on a 32 KiB unguarded task kernel stack inside `task::terminate`, overflowing it silently so the ready queue never drained to `on_idle`. Fixed 2026-07-26 by const-initializing the table into `.bss` (backlog B3, resolved; `devlog/2026-07-26-b3-shared-buffer-table-stack-overflow/`). Bounded loan/return over an exact sealed subrange lands as `SYS_SHARED_BUFFER_LOAN`/`SYS_SHARED_BUFFER_LOAN_MAP`/`SYS_SHARED_BUFFER_RETURN`/`SYS_SHARED_BUFFER_REVOKE` behind the new object-specific `RIGHT_BUFFER_LOAN` (bit 25) and a receiver-bound `SharedBufferLoan` kernel object. A loan requires an irreversibly sealed source region, names its receiver through a `RIGHT_SUPERVISE` capability (never an ambient task id), charges one unit against the lender's `loan_count` quota under `MAX_LOANS`=64, and carries a kernel-assigned unforgeable single-return identity. `release_by` retains the creator's pages and buffer charge while any loan is outstanding; the final settle finalizes the region. `map_loan` confines the receiver to the loaned subrange and is always read-only; duplicate, stale, and wrong-buffer returns fail closed without changing accounting. `reclaim_owner` settles every loan naming a dying task as lender or receiver. All four syscalls are driven by real components under `just sample_plane_live_check` (B5): a loan is refused over an unsealed region, confined to its subrange, kept read-only, and returned exactly once. Verified under `just shared_buffer_loan_check` (7 QEMU cases) plus, after the fix, `just transfer_check`, `just spawn_service_check`, and `just dango_check` — the full-graph boot gates that were not run for this slice, which is how the regression shipped.
+**Status:** Complete (mechanism); its boot regression is fixed.
+**Delivered:** Bounded loan/return over an exact sealed subrange as
+`SYS_SHARED_BUFFER_LOAN`/`SYS_SHARED_BUFFER_LOAN_MAP`/
+`SYS_SHARED_BUFFER_RETURN`/`SYS_SHARED_BUFFER_REVOKE` behind
+`RIGHT_BUFFER_LOAN` and a receiver-bound `SharedBufferLoan` kernel object. A
+loan requires an irreversibly sealed source region, names its receiver
+through a `RIGHT_SUPERVISE` capability, charges against the lender's
+`loan_count` quota, and carries an unforgeable single-return identity.
+`reclaim_owner` settles every loan naming a dying task as lender or
+receiver. C7.5 originally wedged every full-graph boot: a 10520-byte
+`SharedBufferTable` published through a `LazyLock` was first constructed on
+a 32 KiB unguarded task kernel stack inside `task::terminate`, overflowing
+it silently. Fixed by const-initializing the table into `.bss` (backlog B3,
+resolved).
+**Exit condition (observed):** A lender loans one sealed region and cannot
+reclaim its pages until the receiver returns it; duplicate, stale, and
+wrong-buffer returns fail closed, while peer death deterministically settles
+the loan and restores every charge. All four syscalls are driven by real
+components under `just sample_plane_live_check` (B5).
+**Gates:** `just shared_buffer_loan_check`, `just transfer_check`, `just spawn_service_check`, `just dango_check`
+**Evidence:** [`devlog/2026-07-25-c7-5-shared-buffer-loan/`](../devlog/2026-07-25-c7-5-shared-buffer-loan/index.md), [`devlog/2026-07-26-b3-shared-buffer-table-stack-overflow/`](../devlog/2026-07-26-b3-shared-buffer-table-stack-overflow/index.md)
 
 **Depends on:** C7.3 accounting and C7.4 sealed mappings.
 
-### Deliverables
-
-- expose bounded loan and return operations for an exact sealed buffer region, charged against the lender's outstanding-loan quota;
-- retain pages and accounting while any valid loan is outstanding even if the creator releases its local capability;
-- make each loan identity unforgeable and single-return, with receiver authority restricted to the loaned region and granted rights;
-- settle or revoke loans and reclaim unreachable mappings, pages, and charges on receiver death, lender death, supervised restart, or explicit revocation.
-
-### Required checks
-
-- the creator cannot reclaim pages while a valid loan is outstanding and cannot exceed its outstanding-loan quota;
-- stale loans, duplicate returns, wrong-buffer returns, and use-after-return fail with structured errors without changing accounting;
-- receiver mappings cannot escape the loaned region or become writable after a read-only loan;
-- every peer-death, restart, and revocation path returns the loan and resource counters to their pre-loan values.
-
-### Verification target
-
-```sh
-just shared_buffer_loan_check
-```
-
-### Exit condition
-
-A lender loans one sealed region and cannot reclaim its pages until the receiver returns it; duplicate, stale, and wrong-buffer returns fail closed, while peer death deterministically settles the loan and restores every charge.
-
 ### C7.6 — Versioned sample descriptor
 
-**Status:** Complete. A versioned Zutai sample-descriptor contract (`contracts/sample-descriptor/v1/`) renders byte-identical `slime-proto` bindings (`WireSampleDescriptor`) whose fixed control message is exactly the channel bound (`DESCRIPTOR_LEN == MAX_MSG == 64`), referencing a transferred `SharedBufferLoan` by capability kind, unforgeable loan identity, page-aligned offset/length, type identity, sequence, and known flags. `valid_sample_descriptor` rejects bad magic/version, wrong capability kind, unknown flag bits, dirty reserved bytes, zero/mismatched loan and type identities, non-power-of-two page size, checked-add offset/length overflow, zero or misaligned length, and length beyond `MAX_SAMPLE_BYTES` before any mapping or allocation; the kernel `map_loan` independently re-validates loan identity, receiver binding, bounds, and read-only mapping. A payload larger than `MAX_MSG` (8192 bytes) traverses descriptor plus shared buffer without widening `MAX_MSG` or copying payload bytes through the kernel queue. Verified under `just sample_descriptor_check` (4 QEMU cases), `just contracts_check` (byte-identical bindings), and the full gate stack.
+**Status:** Complete.
+**Delivered:** A versioned Zutai sample-descriptor contract
+([`contracts/sample-descriptor/v1/`](../contracts/sample-descriptor/v1/)) renders byte-identical `slime-proto`
+bindings (`WireSampleDescriptor`) whose fixed control message is exactly the
+channel bound (`DESCRIPTOR_LEN == MAX_MSG == 64`), referencing a transferred
+`SharedBufferLoan` by capability kind, unforgeable loan identity,
+page-aligned offset/length, type identity, sequence, and known flags.
+`valid_sample_descriptor` rejects malformed descriptors before any mapping
+or allocation; the kernel `map_loan` independently re-validates loan
+identity, receiver binding, bounds, and read-only mapping.
+**Exit condition (observed):** A receiver validates a bounded versioned
+descriptor, maps only the exact loaned bytes, and observes a payload larger
+than the control-message bound (`MAX_MSG` = 8192 bytes) without widening
+`MAX_MSG` or copying payload bytes through the kernel queue; every malformed
+descriptor fails before mapping or allocation.
+**Gates:** `just sample_descriptor_check`, `just contracts_check`
+**Evidence:** [`devlog/2026-07-25-c7-6-sample-descriptor/`](../devlog/2026-07-25-c7-6-sample-descriptor/index.md)
 
 **Depends on:** C7.4 sealed mappings and C7.5 loan/return lifecycle.
 
-### Deliverables
-
-- define a versioned Zutai sample-descriptor contract that fits the existing channel control-message bound and references an exact transferred shared-buffer capability, offset, length, type identity, sequence, and declared flags;
-- validate version, flags, capability kind, loan identity, offset, length, and type identity before mapping or allocating receiver state;
-- send descriptor control data through ordinary channels while payload bytes remain in the shared buffer, without increasing `MAX_MSG` or copying payload bytes through the kernel queue.
-
-### Required checks
-
-- byte-identical bindings round-trip every admitted descriptor and reject unsupported versions or unknown flags;
-- overflowed offset/length, stale loan identity, wrong capability kind, and mismatched type identity fail before mapping or allocation;
-- a payload larger than the kernel message bound traverses descriptor plus shared buffer without increasing `MAX_MSG` or copying payload bytes through the kernel queue.
-
-### Verification target
-
-```sh
-just sample_descriptor_check
-```
-
-### Exit condition
-
-A receiver validates a bounded versioned descriptor, maps only the exact loaned bytes, and observes a payload larger than the control-message bound; every malformed descriptor fails before mapping or allocation.
-
 ### C7.7 — Sample-plane integration and isolation
 
-**Status:** Complete. The composition was originally `kernel/tests/sample_plane.rs`, which is deleted; P5.3.4 re-observed it on the product path as `just sel4_sample_check`, where two separately spawned components hold generation-granted capabilities rather than being composed in-harness. It joins the C7.2 factory allocation, C7.3 per-holder quotas, C7.4 mapping/sealing, C7.5 loan/return lifecycle, and the C7.6 sample descriptor into two holders that exchange a `>MAX_MESSAGE_BYTES` payload: only the 64-byte descriptor crosses a real endpoint while the receiver reconstructs the full two-page payload from the quota-charged sealed loaned buffer through exact read-only translations. A malformed (stale-identity) descriptor is rejected by validation and by the loan-aware map path before any mapping or allocation, leaving the loan intact. Every quota class (byte-pages, buffer-count, mapping-count, loan-count) fails at ceiling+1 without disturbing an unrelated holder.
+**Status:** Complete.
+**Delivered:** The composition was originally `kernel/tests/sample_plane.rs`,
+which is deleted; P5.3.4 re-observed it on the product path as
+`just sel4_sample_check`, where two separately spawned components hold
+generation-granted capabilities rather than being composed in-harness. It
+joins the C7.2 factory allocation, C7.3 per-holder quotas, C7.4
+mapping/sealing, C7.5 loan/return lifecycle, and the C7.6 sample descriptor
+into two holders that exchange a `>MAX_MESSAGE_BYTES` payload: only the
+64-byte descriptor crosses a real endpoint while the receiver reconstructs
+the full two-page payload from the quota-charged sealed loaned buffer
+through exact read-only translations.
+**Exit condition (observed):** Two isolated components exchange and return
+a payload larger than the kernel IPC message bound through a quota-charged
+shared buffer; malformed descriptors, every quota class (byte-pages,
+buffer-count, mapping-count, loan-count), and peer death remain bounded,
+reclaim all resources, and do not disturb an unrelated channel or the
+retained v2 known-good boot path.
+**Gates:** `just sample_plane_check`
+**Evidence:** [`devlog/2026-07-25-c7-7-sample-plane-integration/`](../devlog/2026-07-25-c7-7-sample-plane-integration/index.md)
 
 **Depends on:** C7.1–C7.6.
 
-### Deliverables
-
-- compose the factory, quotas, mapping, sealing, loan lifecycle, and descriptor into two isolated components that exchange and return a payload larger than the kernel IPC message bound;
-- prove malformed descriptors, every quota class, and peer death remain bounded and reclaim all resources without disturbing an unrelated channel or the retained v2 known-good boot path.
-
-### Required checks
-
-- two isolated components exchange and return a payload larger than `MAX_MSG` through a quota-charged shared buffer;
-- malformed descriptors, byte/buffer/mapping/loan quota exhaustion, and peer death remain bounded, reclaim all resources, and do not disturb an unrelated channel;
-- the retained v2 known-good boot path is unaffected by the sample-plane exercise.
-
-### Verification target
-
-```sh
-just sample_plane_check
-```
-
-### Exit condition
-
-Two isolated components exchange and return a payload larger than the kernel IPC message bound through a quota-charged shared buffer; malformed descriptors, every quota class, and peer death remain bounded, reclaim all resources, and do not disturb an unrelated channel or the retained v2 known-good boot path.
-
 ## C8: Native typed data fabric
 
-**Status:** Complete. C8.1–C8.15 are all complete under their named QEMU gates.
-C8.1–C8.8 are gated by `just interface_schema_check`, `just
-fabric_manifest_check`, `just fabric_authority_check`, `just
-fabric_stream_check`, `just fabric_qos_check`, `just fabric_call_check`, `just
-fabric_operation_check`, and `just fabric_visibility_check`; C8.9–C8.12 by `just
-data_fabric_profile_check`, `just sel4_boot_check`, `just
-data_fabric_trace_check`, and `just data_fabric_matrix_check`; and the closing
-three by `just data_fabric_traffic_check` plus `just
-data_fabric_saturation_check` (C8.13, with C8.13.1–C8.13.3), `just
-data_fabric_fault_check` (C8.14), and `just data_fabric_check` (C8.15). The
-former single C8.9 integration slice was decomposed into C8.9–C8.15 so profile
-authority, topology, deterministic tracing, denial, resource ceilings, fault
-isolation, and the parent close each own one reviewable gate.
-
-Three of the closing slices found that the honest scope was narrower or
-differently shaped than their text assumed, and each is recorded that way rather
-than claimed: C8.13's `resourceEvent` and the call worker's `resourceLoan` are
-structural walls, C8.13.3's `capabilitySlots` turned out to bound a different
-slot space than the census first counted, and C8.14 turned out to be an
-assertion milestone over machinery C8.4–C8.9 had already built and driven. The
-C8.15 audit also reopened and closed C8.9: backlog **B56** records that `just
-data_fabric_profile_check` had been red since B55 on a check that could not pass.
+**Status:** Complete.
+**Delivered:** C8.1–C8.15, decomposed from a former single C8.9 integration
+slice into C8.9–C8.15 so profile authority, topology, deterministic tracing,
+denial, resource ceilings, fault isolation, and the parent close each own one
+reviewable gate.
+**Exit condition (observed):** All fifteen sub-milestones pass their named
+QEMU gates. Three of the closing slices found the honest scope narrower or
+differently shaped than their text assumed, and each is recorded that way
+rather than claimed: C8.13's `resourceEvent` and the call worker's
+`resourceLoan` are structural walls, C8.13.3's `capabilitySlots` turned out
+to bound a different slot space than the census first counted, and C8.14
+turned out to be an assertion milestone over machinery C8.4–C8.9 had already
+built and driven. The C8.15 audit also reopened and closed C8.9: backlog B56
+records that `just data_fabric_profile_check` had been red since B55 on a
+check that could not pass.
+**Gates:** see each C8.x sub-milestone below; the closing aggregate is `just data_fabric_check`
+**Evidence:** [`devlog/2026-08-17-c8-15-fabric-aggregate/`](../devlog/2026-08-17-c8-15-fabric-aggregate/index.md), [`devlog/2026-08-17-structural-audit/`](../devlog/2026-08-17-structural-audit/index.md)
 
 **Depends on:** C7's bounded sample plane and backlog item **B2** (scheduler
 `Blocked` state / `SYS_WAIT` wait-set). Both are complete. C8 remains
@@ -322,1239 +293,465 @@ portability work continues.
 
 ### C8.1 — Deterministic interface schemas and native bindings
 
-**Status:** Complete. `just interface_schema_check` and the live sample-plane gate pass with one deterministic normal form, full identity, generated local tag, and native binding set; malformed, unsupported, over-bound, duplicate, and forced-collision inputs fail before output.
-
-#### Deliverables
-
-- define a bounded versioned Zutai normal form for native interface schemas and
-  derive the authoritative `InterfaceSchema` identity from the exact normalized
-  bytes with a domain-separated SHA-256 digest;
-- generate or deterministically validate Rust bindings and embedded identities
-  for `Stream<T>`, `Call<Request, Reply>`, and
-  `Operation<Goal, Feedback, Result>`;
-- define the generation-local 64-bit type-tag derivation used by the retained
-  C7 sample descriptor and reject any collision between distinct admitted full
-  identities before building the generation;
-- bound schema depth, fields, names, sequences, encoded size, generated output,
-  and the total admitted schema set before allocation.
-
-#### Required checks
-
-- equivalent schema input produces byte-identical normalized bytes, full
-  identity, type tag, and generated bindings across two runs;
-- field order, width, signedness, bounds, nesting, or contract kind changes the
-  full identity, while source formatting and declaration order that normalize
-  equivalently do not;
-- malformed, unsupported, over-bound, duplicate, and forced type-tag-collision
-  inputs fail before emitting bindings or a generation artifact.
-
-#### Planned verification target
-
-```sh
-just interface_schema_check
-```
-
-#### Exit condition
-
-Equivalent bounded Zutai interfaces produce one byte-identical normal form,
-full identity, generation-local tag, and native binding set; conflicting
-layouts cannot reuse an admitted identity or tag.
+**Status:** Complete.
+**Delivered:** A bounded versioned Zutai normal form for native interface
+schemas, with the authoritative `InterfaceSchema` identity derived from the
+exact normalized bytes as a domain-separated SHA-256 digest, generated Rust
+bindings and embedded identities for `Stream<T>`, `Call<Request, Reply>`,
+and `Operation<Goal, Feedback, Result>`, and a generation-local 64-bit
+type-tag derivation consumed by the retained C7 sample descriptor.
+**Exit condition (observed):** `just interface_schema_check` and the live
+sample-plane gate pass with one deterministic normal form, full identity,
+generated local tag, and native binding set; malformed, unsupported,
+over-bound, duplicate, and forced-collision inputs fail before output.
+**Gates:** `just interface_schema_check`
+**Evidence:** [`devlog/2026-07-27-c8-1-interface-schemas/`](../devlog/2026-07-27-c8-1-interface-schemas/index.md)
 
 ### C8.2 — Generation graph, QoS, and aggregate admission
 
-**Status:** Complete. A versioned Zutai fabric-graph contract
-(`contracts/fabric-graph/v1/`) is stored as a generation `KIND_RESOURCE`
-object, authenticated through the generation's existing per-object digest
-table. It fixes the admitted schema set (full C8.1 identities, collision-checked
-generation-local tags, contract kinds, encoded bounds), the route table, the
-participant table with exact `TransportQoS`, visibility, and interposition
-chains, and every per-graph resource ceiling. Route authority is the fold of
-(route name, full interface identity, contract kind); participant authority
-additionally folds in component identity and direction, so a name, a type, or
-a graph observation grants nothing. A present graph is validated
-deterministically at generation decode against the root's own
-`MAX_WAIT_SOURCES`/`MAX_TASK_CAPS`/`MAX_TOTAL_PAGES`/`MAX_SHARED_BUFFERS`/
-`MAX_MAPPINGS`/`MAX_LOANS`/`MAX_MESSAGE_BYTES` before any component launches, and
-the host builder enforces the same rule set so a malformed graph fails the build
-rather than the boot. The compile-time `const _: () = assert!` pinning in
-`kernel/src/runtime/generation.rs` died with that kernel; on the product path the
-agreement is re-checked at admission by
-`slime_root::generation::fabric_graph_is_satisfiable`, which passes
-`slime-root/src/shared_buffer.rs`'s and `ipc.rs`'s live constants to
-`FabricGraph::validate_against`, so a drifting graph is refused at boot.
-`just fabric_manifest_check` passes: a
-deterministic 896-byte resource with 2 schemas, 2 routes, 4 participants, and
-one interposition hop, a 35-case negative corpus each rejected by its intended
-check, 18 `boot-contracts` decoder tests, and 4 QEMU tests against the booted
+**Status:** Complete.
+**Delivered:** A versioned Zutai fabric-graph contract
+([`contracts/fabric-graph/v1/`](../contracts/fabric-graph/v1/)) stored as a generation `KIND_RESOURCE` object
+fixing the admitted schema set, route table, participant table with exact
+`TransportQoS`/visibility/interposition chains, and every per-graph resource
+ceiling. Route authority is the fold of (route name, full interface
+identity, contract kind); participant authority additionally folds in
+component identity and direction. The agreement between declared limits and
+the root's live constants is re-checked at admission by
+`slime_root::generation::fabric_graph_is_satisfiable`, so a drifting graph
+is refused at boot rather than only at build.
+**Exit condition (observed):** One authenticated generation resource
+deterministically fixes every native interface, graph edge, direction, QoS
+policy, visibility grant, interposition hop, and resource ceiling;
+malformed, unauthorized, or globally impossible graphs fail before component
+launch. `just fabric_manifest_check` passes: a deterministic 896-byte
+resource with 2 schemas, 2 routes, 4 participants, and one interposition
+hop, a 35-case negative corpus each rejected by its intended check, 18
+`boot-contracts` decoder tests, and 4 QEMU tests against the booted
 generation.
+**Gates:** `just fabric_manifest_check`
+**Evidence:** [`devlog/2026-07-27-c8-2-fabric-graph-admission/`](../devlog/2026-07-27-c8-2-fabric-graph-admission/index.md)
 
 **Depends on:** C8.1.
 
-#### Deliverables
-
-- define a versioned Zutai fabric-graph resource containing admitted schemas,
-  exact endpoint grants, route name, full schema identity, contract kind,
-  direction, offered/requested `TransportQoS`, graph visibility, optional
-  interposition chain, and component identity;
-- define `TransportQoS` with bounded KEEP_LAST depth, RELIABLE or BEST_EFFORT
-  delivery, VOLATILE or bounded retained durability, deadline, lifespan,
-  liveliness kind, and lease duration;
-- make route count, live ingress sources, publisher/subscriber/client/server
-  count, sample bytes, queue/history/event depth, retained samples, retries,
-  in-flight calls/operations, shared-buffer pages, mappings, and loans explicit
-  generation limits;
-- validate per-entry and aggregate memory, capability-slot, wait-source, buffer,
-  and loan requirements before any fabric or client component launches;
-- derive route authority from the exact tuple of route name, full interface
-  identity, contract kind, component identity, and direction. A name, type
-  string, or graph observation grants nothing.
-
-#### Required checks
-
-- identical normalized graph input produces a byte-identical authenticated
-  resource object across two builds;
-- missing references, duplicate grants, impossible aggregate limits, cycles or
-  bypasses in an interposition chain, unsupported QoS, and more than eight live
-  fabric ingress sources fail before launch;
-- alternate names with the same type and conflicting types with the same name
-  remain distinct authority and matching domains;
-- offered/requested compatibility is a fixed truth table with no implicit
-  defaults or ROS/DDS policy leaking into the native contract.
-
-#### Planned verification target
-
-```sh
-just fabric_manifest_check
-```
-
-#### Exit condition
-
-One authenticated generation resource deterministically fixes every native
-interface, graph edge, direction, QoS policy, visibility grant, interposition
-hop, and resource ceiling; malformed, unauthorized, or globally impossible
-graphs fail before component launch.
-
 ### C8.3 — Attenuated endpoint provisioning and control plane
 
-**Status:** Complete. A versioned Zutai capability-transfer contract
-(`contracts/capability-transfer/v1/`) defines the provisioning request and the
-descriptor that accompanies one bounded move. The kernel's only new C8
-mechanism, `SYS_CAP_TRANSFER` (30), requires `RIGHT_TRANSFER` at the source,
-rejects any mask outside the source rights or the object's meaningful rights,
-requires the descriptor's declared object kind to be the moved capability's
-real kind, consumes the source, and restores it at full rights on a failed
-send; `RIGHT_TRANSFER` is dropped at the destination unless
-`FLAG_RETAIN_TRANSFER` is set, so a provisioned role is non-delegable by
-default. The kernel gained no knowledge of routes, schemas, or graph roles —
-`route_identity` and `direction` ride in the descriptor as bytes it never
-interprets. A userspace `fabric-service` owns both halves of the declared
-telemetry route, hands `fabric-publisher` `RIGHT_SEND` only and
-`fabric-subscriber` `RIGHT_RECV` only, and authenticates each client by the
-generation-provisioned control endpoint its request arrived on rather than the
-route name, direction, or type identity the request carries. It sweeps every
-control endpoint through the non-blocking ABI and parks in `SYS_WAIT` across
-the whole set. `just fabric_authority_check` passes: 7 kernel rights-algebra
-tests plus a live boot in which each participant observes its own denials —
-no opposite-direction authority, no re-delegation, no widening — before
-publishing, and `fabric-intruder`, holding a real control endpoint and
-supplying byte-identical route strings, receives a denial with no capability
-attached. The service provisions one round and exits by design; C8.4 makes its
-loop unbounded when it gains sample brokering. See
-`devlog/2026-07-27-c8-3-fabric-authority/`.
+**Status:** Complete.
+**Delivered:** A versioned Zutai capability-transfer contract
+([`contracts/capability-transfer/v1/`](../contracts/capability-transfer/v1/)) and the kernel's only new C8
+mechanism, `SYS_CAP_TRANSFER` (30), which requires `RIGHT_TRANSFER` at the
+source, rejects any mask outside the source or object-meaningful rights,
+consumes the source, and restores it at full rights on a failed send;
+`RIGHT_TRANSFER` is dropped at the destination unless
+`FLAG_RETAIN_TRANSFER` is set. A userspace `fabric-service` owns both halves
+of the declared route, authenticating each client by the
+generation-provisioned control endpoint its request arrived on rather than
+route name, direction, or type identity.
+**Exit condition (observed):** The live fabric derives exact non-widening,
+non-transferable route endpoints from the authenticated generation graph;
+on a real boot the publisher holds `RIGHT_SEND` only and the subscriber
+`RIGHT_RECV` only, and `fabric-intruder` — holding a real
+generation-provisioned control endpoint and supplying byte-identical route
+strings — receives a denial carrying no capability. The "consumes no CPU
+through a poll/yield loop" arm is proven by a source lint (the gate rejects
+any fabric component containing `yield_now` or lacking a `SYS_WAIT` park), a
+necessary condition rather than a direct measurement.
+**Gates:** `just fabric_authority_check`
+**Evidence:** [`devlog/2026-07-27-c8-3-fabric-authority/`](../devlog/2026-07-27-c8-3-fabric-authority/index.md)
 
 **Depends on:** C8.2.
 
-#### Deliverables
-
-- define a versioned Zutai capability-transfer descriptor and implement a
-  bounded move operation whose destination rights are an exact subset of the
-  source rights and object-specific rights mask;
-- require transfer authority at the source, consume the moved source
-  capability, and omit transfer authority at the destination unless it was
-  both held and explicitly retained;
-- implement a long-lived userspace fabric service that consumes the generation
-  graph, endpoint factory, participant supervision capabilities, shared-buffer
-  budget/factory, and explicit time input;
-- create route data, acknowledgement/event, call, and operation endpoints and
-  hand each participant only its exact non-transferable route role;
-- authenticate a client by its generation-provisioned control endpoint rather
-  than a caller-supplied component name, route name, or type identity.
-
-#### Required checks
-
-- a publisher receives no route receive authority, a subscriber receives no
-  route publish authority, and neither can retransfer its endpoint or create an
-  undeclared edge;
-- masked transfer cannot widen rights, change object identity, retain an
-  unauthorized transfer bit, duplicate a moved capability, or disturb an
-  unrelated capability;
-- an ungranted component cannot register, request, discover, or receive a
-  protected endpoint even when it supplies the exact route and schema strings;
-- the idle service parks through `SYS_WAIT`, wakes on every admitted source or
-  peer death, and consumes no CPU through a poll/yield loop.
-
-#### Verification target
-
-```sh
-just fabric_authority_check
-```
-
-#### Exit condition
-
-The live fabric derives exact non-widening, non-transferable route endpoints
-from the authenticated generation graph; possession of names or generic
-channel authority cannot mint, widen, or delegate a graph edge. Observed: on a
-real boot the publisher holds `RIGHT_SEND` only and the subscriber
-`RIGHT_RECV` only, neither can re-delegate or widen its role, and
-`fabric-intruder` — holding a real generation-provisioned control endpoint and
-supplying byte-identical route name, direction, and type identity — receives a
-denial carrying no capability. The "consumes no CPU through a poll/yield loop"
-arm is proven by the service's sweep-then-park loop plus a source lint, not by
-a measurement: the gate rejects any fabric component containing `yield_now` or
-lacking a `SYS_WAIT` park, which is a necessary condition rather than a proof
-(see the devlog entry's open risks).
-
 ### C8.4 — Bounded many-to-many streams
 
-**Status:** Complete. A versioned Zutai fabric-stream contract
-(`contracts/fabric-stream/v1/`) defines the three fixed 64-byte records a
-bounded stream moves: an inline `StreamSample`, a `StreamAck` that releases one
-delivery slot, and a `StreamEvent` carrying `SAMPLE_LOST`/`STREAM_END`. The
-userspace `fabric-service` provisions every declared stream edge and then
-brokers it: matching is the route index its ingress endpoint belongs to, so a
-sample never reaches a route it did not arrive on. A payload within the control
-bound rides inline; a payload larger than `MAX_MSG` arrives as a C7.6 descriptor
-over a receiver-bound loan, which the fabric maps read-only, copies once into a
-fabric-owned sealed buffer, and re-loans per matched subscriber — one publisher
-sample is one copy and one independently accounted loan per subscriber.
-Delivery is bounded by each subscriber's declared KEEP_LAST depth
-(`boot_contracts::stream_history`): admitting past the depth evicts the exact
-oldest sequence, counts the loss, and reports it when delivery resumes, so a
-stalled BEST_EFFORT reader costs a fixed number of entries and never a retry.
-A subscriber releases slots over a second, opposite-facing ack endpoint rather
-than a widened role, so it still holds no publish authority on the route it
-reads. `just fabric_stream_check` passes: two publishers and two subscribers
-exchange inline and `>MAX_MSG` samples across two declared routes, the stalled
-reader observes bounded loss while its unrelated route is undisturbed, and one
-large sample is measured at exactly one fabric copy and two downstream loans;
-plus 6 kernel tests against the booted graph. See
-`devlog/2026-07-28-c8-4-bounded-streams/`.
+**Status:** Complete.
+**Delivered:** A versioned Zutai fabric-stream contract
+([`contracts/fabric-stream/v1/`](../contracts/fabric-stream/v1/)) defining the three fixed 64-byte records a
+bounded stream moves (`StreamSample`, `StreamAck`, `StreamEvent`). The
+userspace `fabric-service` brokers each route by ingress-endpoint identity;
+a payload larger than `MAX_MSG` arrives as a C7.6 descriptor over a
+receiver-bound loan, copied once into a fabric-owned sealed buffer and
+re-loaned per matched subscriber. Delivery is bounded by each subscriber's
+declared KEEP_LAST depth, evicting the exact oldest sequence past depth and
+reporting the loss on resume.
+**Exit condition (observed):** A generation-declared many-to-many stream
+moves bounded typed inline and shared samples under exact route authority;
+KEEP_LAST and BEST_EFFORT behavior is deterministic, and a stalled or
+faulting participant cannot grow or disturb unrelated state. On a real boot
+two publishers and two subscribers exchange both sample forms over
+`telemetry` while `diagnostics` carries an unrelated stream through the same
+service; one `>MAX_MSG` sample is counted at exactly one fabric copy and one
+quota-charged receiver-bound loan per subscriber. The eviction rule is
+pinned by host unit tests because a transcript can show samples arrived but
+not which one was dropped; a participant fault beyond a deliberate stall is
+C8.9's composition.
+**Gates:** `just fabric_stream_check`
+**Evidence:** [`devlog/2026-07-28-c8-4-bounded-streams/`](../devlog/2026-07-28-c8-4-bounded-streams/index.md)
 
 **Depends on:** C8.3.
-
-#### Deliverables
-
-- implement bounded many-to-many `Stream<T>` matching on exact route name, full
-  interface identity, and compatible requested/offered QoS;
-- carry control-bound samples inline over ordinary channels and payloads larger
-  than `MAX_MSG` through validated C7 sample descriptors and receiver-bound
-  shared-buffer loans;
-- copy each admitted large publisher sample at most once into a fabric-owned
-  sealed buffer, then create an independently accounted downstream loan for
-  each matched subscriber;
-- implement deterministic KEEP_LAST eviction and BEST_EFFORT delivery with
-  bounded queues, loss accounting, and event delivery;
-- reclaim inline queue entries, fabric buffers, mappings, downstream loans, and
-  event slots on normal return, unmatch, participant death, or route teardown.
-
-#### Required checks
-
-- two publishers and two subscribers exchange both inline and `>MAX_MSG`
-  samples without a participant obtaining authority over another route;
-- KEEP_LAST evicts the exact oldest sequence at the declared depth and a
-  BEST_EFFORT stalled subscriber reports bounded loss without retry growth;
-- one large sample incurs one fabric payload copy and one quota-charged
-  receiver-bound loan per subscriber; every return and peer-death path settles
-  all charges;
-- malformed descriptors, wrong tags, stale loans, sequence misuse, queue
-  exhaustion, and one participant fault do not disturb an unrelated stream.
-
-#### Verification target
-
-```sh
-just fabric_stream_check
-```
-
-#### Exit condition
-
-A generation-declared many-to-many stream moves bounded typed inline and shared
-samples under exact route authority; KEEP_LAST and BEST_EFFORT behavior is
-deterministic, and a stalled or faulting participant cannot grow or disturb
-unrelated state. Observed: on a real boot two publishers and two subscribers
-exchange both sample forms over `telemetry` while `diagnostics` carries an
-unrelated stream through the same service; the declared depth evicts the exact
-oldest sequence; the stalled BEST_EFFORT reader is told what it lost within a
-bound its publishers fix, retries nothing, and leaves the other route
-untouched; and the one `>MAX_MSG` sample is counted at one fabric copy and one
-quota-charged receiver-bound loan per subscriber. The eviction rule itself is
-pinned by host unit tests, because a transcript can show that samples arrived
-but not which one was dropped. The malformed-descriptor and queue-exhaustion
-arms are proven as rejection paths the gate forbids on a clean run rather than
-as injected faults; a participant fault beyond a deliberate stall is C8.9's
-composition.
 
 ### C8.5 — Reliable, retained, and timed QoS
 
 **Status:** Complete.
+**Delivered:** A bounded credit/acknowledgement protocol so RELIABLE
+delivery never busy-retries a full channel and BEST_EFFORT never acquires
+retry state; unacknowledged and durability history retained within fixed
+sample, byte, buffer, loan, retry, and event ceilings; deadline, lifespan,
+liveliness, and lease transitions driven only from the explicit monotonic-
+time capability with deterministic tie ordering.
+**Exit condition (observed):** Compatible endpoints exchange data under
+bounded RELIABLE/BEST_EFFORT, VOLATILE/retained, deadline, lifespan, and
+liveliness semantics without busy-polling or unbounded history; every
+terminal or degradation condition has a distinct deterministic event.
+**Gates:** `just fabric_qos_check`
+**Evidence:** [`devlog/2026-07-28-c8-5-fabric-qos/`](../devlog/2026-07-28-c8-5-fabric-qos/index.md)
 
 **Depends on:** C8.4.
-
-#### Deliverables
-
-- implement a bounded credit/acknowledgement protocol so RELIABLE delivery never
-  busy-retries a full channel and BEST_EFFORT never acquires retry state;
-- retain unacknowledged and durability history within fixed sample, byte,
-  buffer, loan, retry, and event ceilings;
-- implement offered/requested QoS matching, matched/unmatched notifications,
-  incompatible-QoS events, fixed retry exhaustion, and bounded retained replay;
-- drive deadline, lifespan, liveliness, and lease transitions only from the
-  explicit monotonic-time capability and preserve deterministic tie ordering
-  when data, acknowledgement, peer-death, and time events coincide;
-- keep loss, expiry, retry exhaustion, deadline miss, liveliness loss,
-  incompatible QoS, and peer death as distinct structured events.
-
-#### Required checks
-
-- RELIABLE delivery advances only with declared credit, retains no more than
-  its fixed history, and ends at success, expiry, peer death, or fixed retry
-  exhaustion without a yield/poll loop;
-- BEST_EFFORT reports loss at zero credit without allocating retry/history
-  state, while bounded retained durability replays only the declared live
-  history;
-- deterministic simulated time distinguishes deadline, lifespan, liveliness,
-  and lease boundaries including equal-timestamp tie cases;
-- a stalled subscriber cannot grow publisher, fabric, shared-buffer, loan, or
-  event memory beyond generation bounds.
-
-#### Planned verification target
-
-```sh
-just fabric_qos_check
-```
-
-#### Exit condition
-
-Compatible endpoints exchange data under bounded RELIABLE/BEST_EFFORT,
-VOLATILE/retained, deadline, lifespan, and liveliness semantics without
-busy-polling or unbounded history; every terminal or degradation condition has
-a distinct deterministic event.
 
 ### C8.6 — Bounded native calls
 
 **Status:** Complete.
+**Delivered:** `Call<Request, Reply>` endpoint matching with
+generation/session-qualified request identities and a fixed in-flight table
+per route, client, and server; inline and shared-sample requests/replies
+under distinct client and server authority; one terminal result per
+request with bounded cancellation, timeout, and duplicate/stale rejection.
+**Exit condition (observed):** Generation-authorized clients and servers
+exchange bounded typed requests and replies with exact correlation and one
+terminal result; duplicate, timeout, cancellation, rejection, and
+peer-fault paths remain isolated and fully reclaimed.
+**Gates:** `just fabric_call_check`
+**Evidence:** [`devlog/2026-07-28-c8-6-bounded-native-calls/`](../devlog/2026-07-28-c8-6-bounded-native-calls/index.md)
 
 **Depends on:** C8.3 and C8.5's event/time semantics.
-
-#### Deliverables
-
-- implement `Call<Request, Reply>` endpoint matching and generation/session-
-  qualified request identities with a fixed in-flight table per route, client,
-  and server;
-- route inline and shared-sample requests/replies under distinct client and
-  server authority, preserving the C7 receiver binding on every large payload;
-- implement one terminal result per request, bounded cancellation and timeout,
-  duplicate/stale request and reply rejection, server rejection, and peer-death
-  propagation;
-- prevent a duplicate or stale request from re-executing a declared
-  non-idempotent operation and reclaim every correlation, buffer, loan, retry,
-  and event entry on all terminal paths.
-
-#### Required checks
-
-- concurrent clients receive only their correlated replies and cannot answer,
-  cancel, or observe another client's request;
-- duplicate/stale request and reply identities fail deterministically, and a
-  non-idempotent server sees one execution;
-- success, server rejection, timeout, cancellation, retry exhaustion, malformed
-  reply, and peer death remain distinct;
-- server or client death reclaims all in-flight state without terminating the
-  fabric or an unrelated call route.
-
-#### Planned verification target
-
-```sh
-just fabric_call_check
-```
-
-#### Exit condition
-
-Generation-authorized clients and servers exchange bounded typed requests and
-replies with exact correlation and one terminal result; duplicate, timeout,
-cancellation, rejection, and peer-fault paths remain isolated and fully
-reclaimed.
 
 ### C8.7 — Native operations
 
 **Status:** Complete.
+**Delivered:** `Operation<Goal, Feedback, Result>` composed from a bounded
+start-goal call, operation-keyed feedback stream, result call, and
+cancellation request, with generation/session-qualified operation
+identities and bounds on active operations, feedback depth/bytes,
+cancellation state, terminal and retained results, retries, and events.
+**Exit condition (observed):** Authorized components start, observe,
+cancel, and retrieve bounded native operations with exact correlation and
+authority; transport outcomes remain deterministic while application and
+ROS goal policy stay outside the fabric.
+**Gates:** `just fabric_operation_check`
+**Evidence:** [`devlog/2026-07-29-c8-7-native-operations/`](../devlog/2026-07-29-c8-7-native-operations/index.md)
 
 **Depends on:** C8.4 and C8.6.
-
-#### Deliverables
-
-- compose `Operation<Goal, Feedback, Result>` from a bounded start-goal call,
-  operation-keyed feedback stream, result call, and cancellation request;
-- assign generation/session-qualified operation identities and bound active
-  operations, feedback depth/bytes, cancellation state, terminal results,
-  retained results, retries, and events before admission;
-- route each goal, feedback sample, result, and cancellation only to holders of
-  the exact operation-role capability;
-- define transport-level accepted/rejected, active, cancel-requested, terminal,
-  expired, and peer-lost outcomes without embedding application goal policy or
-  the ROS action state machine in the fabric.
-
-#### Required checks
-
-- two concurrent operations cannot cross-correlate feedback, result, or cancel
-  authority;
-- unauthorized observation, result retrieval, and cancellation fail even when
-  the caller knows the operation identity;
-- duplicate goals, feedback after terminal state, duplicate results,
-  cancellation races, result expiry, and participant restart are deterministic
-  and bounded;
-- peer death settles every active operation and leaves unrelated stream, call,
-  and operation routes live.
-
-#### Planned verification target
-
-```sh
-just fabric_operation_check
-```
-
-#### Exit condition
-
-Authorized components start, observe, cancel, and retrieve bounded native
-operations with exact correlation and authority; transport outcomes remain
-deterministic while application and ROS goal policy stay outside the fabric.
 
 ### C8.8 — Filtered introspection and declared interposition
 
 **Status:** Complete.
+**Delivered:** A read-only graph introspection service filtered to the
+caller's exact generation-declared visibility grants, reporting only
+admitted route/schema/contract-kind/match/QoS/event metadata and never a
+capability; every recorder, replay membrane, or protocol gateway compiled
+into an explicit acyclic route chain whose proxy receives only its
+narrowed declared capabilities, with direct bypass endpoints omitted when
+interposition is declared.
+**Exit condition (observed):** Read-only graph views reveal exactly the
+caller's visibility grant, and every declared interposer occupies the only
+authorized route path with no ambient discovery, bypass, or widened proxy
+authority.
+**Gates:** `just fabric_visibility_check`
+**Evidence:** [`devlog/2026-07-30-c8-8-filtered-introspection-interposition/`](../devlog/2026-07-30-c8-8-filtered-introspection-interposition/index.md)
 
 **Depends on:** C8.3, C8.4, and C8.6.
-
-#### Deliverables
-
-- expose graph introspection through a read-only service whose bounded result is
-  filtered to the caller's exact generation-declared visibility grants;
-- report only admitted route, schema identity, contract kind, match, QoS, and
-  event metadata; never return a capability or make an observed name/type into
-  authority;
-- compile each recorder, replay membrane, or protocol gateway into an explicit
-  acyclic route chain whose proxy receives only the narrowed upstream receive,
-  downstream send, acknowledgement/event, and visibility capabilities it
-  requires;
-- omit every direct bypass endpoint when interposition is declared and isolate
-  proxy failure to the affected route chain.
-
-#### Required checks
-
-- two callers with different visibility grants receive different bounded graph
-  views, and an ungranted caller cannot infer the protected route through
-  counts, names, types, match events, or error detail;
-- a proxy can relay only its declared route/direction and cannot publish,
-  subscribe, call, serve, inspect, or retransfer outside that chain;
-- publisher and subscriber cannot bypass a declared proxy, while proxy death
-  emits a route event without terminating unrelated routes or the fabric;
-- a fixed graph and request order produces byte-identical introspection and
-  interposition trace records.
-
-#### Planned verification target
-
-```sh
-just fabric_visibility_check
-```
-
-#### Exit condition
-
-Read-only graph views reveal exactly the caller's visibility grant, and every
-declared interposer occupies the only authorized route path with no ambient
-discovery, bypass, or widened proxy authority.
 
 ### C8.9 — Typed full-profile and resource-bound closure
 
 **Status:** Complete.
+**Delivered:** The generation profile and shared-buffer-budget fields
+formalized in the generation schema; one named full-graph profile resolved
+once, deriving both authenticated graph bytes and the userspace build
+profile from that resolved value; every fabric limit consumed by later
+slices (queue depth, sample bytes, buffers, mappings, loans, capability
+slots) emitted and checked for mutual satisfiability before launch.
+**Exit condition (observed):** One typed generation source deterministically
+fixes the full fabric profile, normalized schemas, runtime tables, and
+satisfiable resource ceilings; host, kernel, and userspace cannot select or
+interpret different graph authority.
+**Gates:** `just data_fabric_profile_check`
+**Evidence:** [`devlog/2026-07-30-c8-9-integration-decomposition/`](../devlog/2026-07-30-c8-9-integration-decomposition/index.md), [`devlog/2026-07-30-c8-9-typed-fabric-profile/`](../devlog/2026-07-30-c8-9-typed-fabric-profile/index.md)
 
 **Depends on:** C8.2, C8.7, and C8.8. C8.7 is named explicitly because
 `inFlightOperations`, `retainedSamples`, and `eventDepth` are graph limits its
 broker consumes, so operation ceilings cannot be proven satisfiable without it.
 
-#### Deliverables
-
-- formalize the existing generation profile and shared-buffer-budget fields in
-  the generation schema instead of accepting load-bearing undeclared fields;
-- resolve one named full-graph profile once and derive both authenticated graph
-  bytes and the userspace build profile from that resolved value, with no
-  independent text/indentation interpretation of route authority;
-- emit every fabric limit consumed by later slices, including queue depth,
-  sample bytes, buffers, mappings, loans, and capability slots, and reject a
-  graph whose declared limits cannot be satisfied by its fabric-holder quota,
-  kernel channel bound, or generated capability layout;
-- preserve admitted normalized interface bytes in deterministic schema-identity
-  order as the schema artifact consumed by the final corpus.
-
-#### Required checks
-
-- malformed, duplicate, unknown, or ambiguous profile records fail before an
-  artifact is built;
-- Python graph encoding and Rust userspace profile generation consume one
-  canonical resolved graph and produce matching route, participant, QoS,
-  visibility, interposition, and limit tables;
-- queue, shared-buffer, mapping, loan, and capability declarations that are
-  individually legal but mutually unsatisfiable are rejected before launch;
-- the same source produces byte-identical resolved graph and normalized schema
-  artifacts.
-
-#### Planned verification target
-
-```sh
-just data_fabric_profile_check
-```
-
-#### Exit condition
-
-One typed generation source deterministically fixes the full fabric profile,
-normalized schemas, runtime tables, and satisfiable resource ceilings; host,
-kernel, and userspace cannot select or interpret different graph authority.
-
 ### C8.10 — Collision-free full-graph bootstrap and bounded route workers
 
-**Status:** Complete. The declarative half is gated by `just
-data_fabric_profile_check`: plane control slots are summed into one disjoint
-layout rather than overlaid, the bounded route-worker partition is a declared
-generation fact validated for coverage and overlap, and each worker's peak
-`SYS_WAIT` set is checked against the kernel bound. The bootstrap replacement is
-gated by `just data_fabric_boot_check` (`just sel4_boot_check`): one generation
-launches every C8 role at once on the seL4 product path, through a 21-slot
-collision-free init layout, and all 20 declared instances reach healthy
-blocked idle. Init spawns all nineteen children itself, including both bounded
-route workers — `fabric-service` carries the stream routes, and
-`fabric-call-worker`/`fabric-op-worker` are init's own children rather than the
-broker's, because a worker's control endpoints are generation-declared native
-Endpoints the root installs before any task runs, and its participants'
-supervision handles name tasks only `init` holds (B55). The probe, proxy, and
-introspection roles are three distinct component identities. The superseded
-`fabric-intruder` is retired from this boot profile but still serves `just
-fabric_visibility_check`; deleting it is deferred to that gate rather than
-taken here.
-
-The x86 oracle's own version of this milestone — a fabric-only layout
-measuring 53 of `MAX_CAPS = 64`, reached by an early return in `launch_init`
-mirroring `launch_recovery_init` — described the retired custom kernel and does
-not apply to the seL4 product path; that evidence is historical, following the
-precedent P2.2 set.
-
-**Depends on:** C8.9.
-
-#### Deliverables
-
-- replace the mutually exclusive stream, call, operation, and visibility slot
-  overlays with one collision-free fabric-only bootstrap layout under the
-  kernel capability-table ceiling;
-- launch distinct stream participants, call participants, operation
-  participants, an unauthorized probe, a filtered-introspection client, and a
-  declared interposition proxy in one generation;
-- split the fabric into generation-declared bounded route workers or an
-  equivalent scheduler shape so every worker registers all live wake sources
-  within `SYS_WAIT` limits and never polls;
-- bind every control, supervision, time, and route role to one exact component
-  identity and release bootstrap-only capabilities immediately after spawn.
-
-#### Required checks
-
-- all declared participants launch and provision concurrently without a reused
-  executable, control endpoint, service endpoint, or child slot;
-- the bootstrap and every worker stay within their declared capability and wait
-  source ceilings at peak provisioning;
-- the proxy, unauthorized probe, and introspection client are distinct tasks
-  with non-overlapping grants;
-- the fully provisioned graph reaches healthy blocked idle with no traffic,
-  polling, ambient lookup, or profile-dependent slot rewrite.
-
-#### Planned verification target
-
-```sh
-just data_fabric_boot_check
-```
-
-#### Exit condition
-
-One generation boots every C8 role simultaneously through collision-free,
-bounded capability layouts, and each route worker can block on all of its
-declared sources without polling or exceeding kernel limits.
+**Status:** Complete.
+**Delivered:** One collision-free fabric-only bootstrap layout launches all
+declared C8 roles — stream, call, and operation participants, an unauthorized
+probe, a filtered-introspection client, and a declared interposition proxy —
+in one generation on the seL4 product path, through a 21-slot collision-free
+init layout. Init spawns all nineteen children itself, including both bounded
+route workers, because a worker's control endpoints are generation-declared
+native Endpoints the root installs before any task runs, and its
+participants' supervision handles name tasks only `init` holds (B55).
+**Exit condition (observed):** One generation boots every C8 role
+simultaneously through collision-free, bounded capability layouts, and each
+route worker can block on all of its declared sources without polling or
+exceeding kernel limits. The x86 oracle's own earlier version of this
+milestone (a 53-of-64 `MAX_CAPS` layout reached by an early return in
+`launch_init`) described the retired custom kernel and does not apply to the
+seL4 product path — that evidence is historical, following the precedent
+P2.2 set.
+**Gates:** `just data_fabric_profile_check`, `just data_fabric_boot_check`,
+`just sel4_boot_check`
+**Evidence:**
+[`devlog/2026-07-30-c8-10-route-worker-partition/`](../devlog/2026-07-30-c8-10-route-worker-partition/index.md),
+[`devlog/2026-07-31-c8-10-full-graph-boot/`](../devlog/2026-07-31-c8-10-full-graph-boot/index.md),
+[`devlog/2026-08-15-b55-full-graph-boot-restoration/`](../devlog/2026-08-15-b55-full-graph-boot-restoration/index.md)
 
 ### C8.11 — Unified simulated time and deterministic semantic traces
 
-**Status:** Complete. `contracts/fabric-trace/v1/` is one kind-discriminated
-64-byte record covering all ten declared families, rendering both the Rust
-bindings and the Python constants the host gate reads from one schema. The sink's
-capacity and overflow discipline are generation facts — `FabricGraph.traceDepth`
-and `traceOverflow`, validated against the contract ceiling at build time and
-again by a `const _: ()` in each worker — and `just sel4_trace_check` asserts the
-running sink reports the depth its own generation declared. `just
-data_fabric_trace_check` observes 100 records across the three timed workers,
-each structurally valid, in the declared `(now_ns, order_class, sequence)` tie
-order across data, acknowledgement, peer death, and time, inside its declared
-depth with nothing dropped or rejected, and byte-identical across two boots of
-each plane.
-
-Four families — schema, visibility, interposition, and a denial naming an edge
-the caller already holds — have validator arms and generated codes but no
-emitter yet; their natural producers are `fabric-service`'s `deny()` and the
-interposition path, which belong with C8.12's visibility and denial matrix. The
-gate admits them without change and each gains a required-family entry when it
-lands.
-
-**Depends on:** C8.10.
-
-#### Deliverables
-
-- define a versioned Zutai semantic-trace contract for bounded schema, route,
-  QoS, call, operation, visibility, interposition, denial, fault, and resource
-  records, with generated native bindings and validators;
-- route one phase-driven simulated-time sequence to all timed fabric workers and
-  define a total tie order across data, acknowledgement, peer death, and time;
-- record only bounded semantic fields — route/grant identity, correlation,
-  sequence, status/event, simulated time, and resource high-water counts — with
-  no task ids, addresses, capabilities, or scheduler-dependent prose;
-- provide a bounded trace sink whose capacity and overflow behavior are fixed by
-  the generation profile.
-
-#### Required checks
-
-- every trace family round-trips byte-identically and rejects malformed,
-  over-bound, reserved-bit, and unknown-kind records;
-- two workers receiving equal-time data, acknowledgement, fault, and clock
-  inputs emit the declared deterministic order;
-- a full trace sink neither grows nor silently drops mandatory terminal records;
-- identical schemas, graph, inputs, and time sequence produce byte-identical
-  schema and semantic-trace artifacts independent of serial-log interleaving.
-
-#### Verification target
-
-```sh
-just data_fabric_trace_check
-```
-
-#### Exit condition (observed)
-
-Observed 2026-08-15; see
-[`devlog/2026-08-15-c8-11-semantic-trace/`](../devlog/2026-08-15-c8-11-semantic-trace/index.md).
-
-Every timed C8 worker drives its records from one explicit simulated clock and
-emits one bounded, versioned, deterministic semantic evidence stream. The
-repeated-boot comparison the later slices need is the property the gate already
-asserts: two boots of each fixed generation produce byte-identical trace
-artifacts, independent of serial-log interleaving.
-
-The clock remains per-worker rather than one shared source, because the three
-workers are separate tasks with separate capability tables and each plane's
-generation grants its own clock peer. What C8.11 requires and what is observed is
-that they share one *sequence discipline* — the same declared tie order, the same
-monotonicity rule, and the same record format — not one endpoint.
+**Status:** Complete.
+**Delivered:** [`contracts/fabric-trace/v1/`](../contracts/fabric-trace/v1/) defines one kind-discriminated
+64-byte record covering all ten declared trace families, with sink capacity
+and overflow fixed as generation facts (`FabricGraph.traceDepth`/
+`traceOverflow`). `just data_fabric_trace_check` observes 100 records across
+three timed workers in the declared tie order, inside declared depth with
+nothing dropped or rejected, byte-identical across two boots of each plane.
+**Exit condition (observed):** Every timed C8 worker drives its records from
+one explicit simulated clock and emits one bounded, versioned, deterministic
+semantic evidence stream; two boots of each fixed generation produce
+byte-identical trace artifacts independent of serial-log interleaving. The
+clock stays per-worker rather than one shared source — the three workers are
+separate tasks with separate capability tables — and what is required and
+observed is that they share one *sequence discipline*, not one endpoint.
+Four families (schema, visibility, interposition, and a denial naming an
+edge the caller already holds) had validator arms and generated codes but no
+emitter yet at this point; their emitters land with C8.12.
+**Gates:** `just data_fabric_trace_check`, `just sel4_trace_check`
+**Evidence:**
+[`devlog/2026-08-15-c8-11-semantic-trace/`](../devlog/2026-08-15-c8-11-semantic-trace/index.md)
 
 ### C8.12 — Integrated matching, visibility, and denial matrix
 
-**Status:** Complete. `sel4-matrix.zti` (generation 34, boot action `matrix`)
-declares three routes — `telemetry` and `telemetry-alt` share `TelemetryStream`
-under alternate names, `diagnostics` is `DiagnosticsStream` — across seven
-distinct identities: two exact-tuple publishers/subscribers, the alternate-name
-pair that also probes a name mismatch and a conflicting-type mismatch before
-matching, the ungranted probe with a real control endpoint and zero declared
-edges, the declared interposition proxy, and the read-only filtered-visibility
-observer. `matrix_broker.rs` answers every request from the caller's control
-endpoint and the graph alone, in one non-blocking dispatch loop that interleaves
-role provisioning with the declared-chain relay rather than running them as two
-phases. The incompatible-QoS half of the matrix is proven at admission: a
-sibling generation (35) declares one offered/requested pair `all_pairs_qos_
-compatible` refuses, and `just sel4_matrix_check` boots it and asserts
-`slime-root` refuses the generation before any component launches — the
-stronger property C8.2's own exit condition already claims, since
-`EVENT_INCOMPATIBLE_QOS` is unreachable on any generation admission would
-accept. The four C8.11 trace families left without an emitter — `schema`,
-`visibility`, `interposition`, `denial` — all emit here, alongside a `route`
-record per declared route and a `resourceRoles` counter for the exact-tuple
-grants this plane hands out.
-
-**Depends on:** C8.10 and C8.11.
-
-#### Deliverables
-
-- add generation-declared compatible and incompatible endpoint pairs covering
-  exact name, full interface identity, contract kind, and offered/requested QoS;
-- add alternate-name/same-type and same-name/conflicting-type cases that remain
-  distinct in matching, route authority, and filtered visibility;
-- make one ungranted probe attempt create, discover, publish, subscribe, call,
-  serve, operate, cancel, retrieve, and inspect operations without receiving a
-  capability or protected metadata;
-- run filtered introspection and the declared interposition chain concurrently
-  with ordinary stream traffic, using the distinct proxy identity from C8.10.
-
-#### Required checks
-
-- only the exact compatible tuple matches and receives a role; every mismatch
-  emits its declared non-match or incompatible-QoS event without authority;
-- alternate names and conflicting types never alias in route identity, graph
-  views, events, or endpoint provisioning;
-- every unauthorized operation returns a graph-independent denial with zero
-  rights, zero capabilities, and no protected names, identities, counts, or
-  event detail;
-- the proxy holds only its declared chain roles, the direct bypass is absent,
-  and read-only visibility never becomes a path to route authority.
-
-#### Verification target
-
-```sh
-just data_fabric_matrix_check
-```
-
-#### Exit condition (observed)
-
-Observed 2026-08-15; see
-[`devlog/2026-08-15-c8-12-matrix/`](../devlog/2026-08-15-c8-12-matrix/index.md).
-
-The simultaneous graph matches only exact authorized contracts; mismatched and
-ungranted callers acquire neither route authority nor protected visibility, and
-declared interposition remains the only route path.
+**Status:** Complete.
+**Delivered:** `sel4-matrix.zti` (generation 34) declares three routes across
+seven distinct identities — exact-tuple pairs, an alternate-name pair that
+also probes a name mismatch and a conflicting-type mismatch, an ungranted
+probe, the declared interposition proxy, and a read-only filtered-visibility
+observer. The incompatible-QoS half is proven at admission: a sibling
+generation (35) declares an incompatible offered/requested pair and
+`slime-root` refuses the generation before any component launches. The four
+C8.11 trace families left without an emitter (schema, visibility,
+interposition, denial) all emit here.
+**Exit condition (observed):** The simultaneous graph matches only exact
+authorized contracts; mismatched and ungranted callers acquire neither route
+authority nor protected visibility, and declared interposition remains the
+only route path.
+**Gates:** `just data_fabric_matrix_check`, `just sel4_matrix_check`
+**Evidence:**
+[`devlog/2026-08-15-c8-12-matrix/`](../devlog/2026-08-15-c8-12-matrix/index.md)
 
 ### C8.13 — Concurrent cross-plane traffic and resource ceilings
 
 **Status:** Complete, with two measured walls recorded rather than claimed
-closed. All eleven declared resource classes now emit bounded peak(+baseline)
-evidence: C8.13.3 supplied `capabilitySlots`, the eleventh and the last that had
-no signal of any kind. `resourceEvent` is the one class with no emitter, and that
-is a proven wall rather than a gap -- the `ERR_WOULDBLOCK` it depends on is
-unreachable through a blocking `seL4_Send`, root-caused in
-`devlog/2026-08-16-c8-13-resource-event-loan-walls/index.md`. The saturation gate
-drives three classes to their exact declared bound and observes the rest under
-theirs, which is the second wall: an exact-bound arm for retries, event depth,
-capability slots, or a shared-buffer quota would need a fixture tightening each,
-and is recorded below as remaining work rather than as met.
-
-`just sel4_traffic_check` (`just data_fabric_traffic_check`)
-boots a new `"traffic"` action reusing C8.10's exact three-worker partition
-(`sel4-traffic.zti` is `sel4-boot.zti` with `bootAction`/`generation` changed
-plus the additional grants real traffic needs) and requires the stream, call,
-and operation planes to complete their own bounded C8.4-C8.9 scenarios
-concurrently, observably interleaved rather than three sequential phases.
-The QoS-timed stream arm now runs as part of that same concurrent schedule
-rather than only in `sel4-qos.zti`'s standalone plane: `fabric-publisher-b`'s
-simulated clock edge is wired into the traffic partition (one more declared
-grant plus two bindings, at the exact slots each side's own generation-derived
-layout computes), driving real RELIABLE retry accounting and exhaustion on
-the telemetry route concurrently with the call and operation planes' own
-unconditional clocks. Ten of the eleven declared resource classes emit
-bounded peak(+baseline) evidence through the C8.11 trace sink: frames, shared
-buffers, retries (now from both the call and the stream worker, where it was
-call-only before), in-flight calls, in-flight operations, retained operation
-results, the stream plane's per-subscriber outstanding-delivery count and
-KEEP_LAST backlog occupancy, and -- added by C8.13.1 and extended by C8.13.2 --
-root-accounted shared-buffer mapping and loan occupancy, reported by the stream
-broker and by four of the graph's declared participant holders. Separately,
-`just sel4_saturation_check`
-(`just data_fabric_saturation_check`) proves 3 of the 11 classes -- in-flight
-calls, in-flight operations, retained operation results -- are driven to
-their exact declared bound rather than merely observed under it, via a
-second fixture, `sel4-saturation.zti`, that is `sel4-traffic.zti` with
-`inFlightOperations` tightened to the scenario's own peak and nothing else
-changed (kept in lockstep with every `sel4-traffic.zti` addition, including
-the clock wiring).
-
-Not yet done: the operation plane's pending-delivery count (`resourceEvent`)
-is not a scheduling gap -- tracing `queue_delivery`'s `slime_rt::send` down
-through the transport wrapper to seL4's blocking `Cap::send` (which returns
-`()`) shows the `ERR_WOULDBLOCK`/`ERR_PEER_DEAD` arms it depends on are
-unreachable under any schedule, since the underlying primitive cannot signal
-either outcome; making it real needs the call plane's own `try_send` +
-explicit-ack pattern ported into the operation wire protocol, declined as a
-disproportionate regression risk to the verified operation plane for one
-counter. The call plane's outstanding-loan count (`resourceLoan`) has a real
-signal but zero room in *that* worker: its 62 ordinary trace-sink slots
-(`traceDepth=64` minus the schema's `TERMINAL_RESERVE=2`) are already fully
-spent on existing verified evidence, and `MAX_TRACE_DEPTH=64` is a
-page-sized (64 x 64-byte records) schema ceiling the C8.11 conformance suite
-already defends against being raised, not a fixture value. C8.13.1 therefore
-emits `resourceLoan` from the *stream* broker, which holds real ring loans and
-has ample sink headroom, so the class is now evidenced even though the call
-worker still cannot carry it; see
-`devlog/2026-08-16-c8-13-resource-event-loan-walls/index.md`.
-Shared-buffer mapping/loan/buffer occupancy across 8 holders is broken out as
-C8.13.1-C8.13.2 below; C8.13.3 closed the capability-slot gap. The root already
-tracked the per-holder shared-buffer counts C8.13.1/.2 need
-(`SharedBufferTable::holder_pages`/`holder_buffers`/`holder_mappings`/
-`holder_loans`), so those two were a query syscall plus participant-side trace
-instrumentation; the capability-slot count C8.13.3 needed had no existing
-tracking of any kind, and is now a new root mechanism (`slime-root/src/cspace.rs`)
-reporting occupancy in both slot spaces a child's slots are counted in.
-Direct code reading of `boot-contracts/src/fabric_graph.rs` established that
-two declared fields (`queueDepth` and `capabilitySlots`) were never checked
-against real usage at all -- tightening them would have tested nothing, and
-making them meaningful was a mechanism change rather than a fixture change.
-C8.13.3 supplied that mechanism for `capabilitySlots`; `queueDepth` remains
-unconsumed. Graph-wide `historyDepth` was initially grouped with them but that
-was wrong: `validate_against` (line 710-712) rejects any participant whose
-declared per-route history depth exceeds it, and the bounded value sizes the
-real ring `resourceHistory` already reports on. The saturation gate does not yet
-drive retries, event depth, capability slots, or any shared-buffer quota to an
-exact bound the way it does the three classes above. Each remains a real gap
-against this milestone's exit condition below, not a redefinition of it. See
-`devlog/2026-08-15-c8-13-traffic/index.md`,
-`devlog/2026-08-16-c8-13-queue-history-evidence/index.md`,
-`devlog/2026-08-16-c8-13-saturation-ceilings/index.md`,
-`devlog/2026-08-16-c8-13-qos-timed-traffic/index.md`,
-`devlog/2026-08-16-c8-13-resource-event-loan-walls/index.md`,
-`devlog/2026-08-16-c8-13-declared-fields-audit/index.md`, and
-`devlog/2026-08-17-c8-13-3-capability-slot-occupancy/index.md`.
-
-**Depends on:** C8.11 and C8.12.
-
-#### Deliverables
-
-- run inline and shared streams, KEEP_LAST, BEST_EFFORT, RELIABLE, retained and
-  timed QoS, calls, and operations concurrently under one fixed input schedule;
-- account and emit bounded high-water and baseline records for every route,
-  queue, history, retry, retained sample, event, in-flight call/operation,
-  shared buffer, mapping, loan, and capability ceiling;
-- keep the fabric holder's declared shared-buffer quota sufficient for
-  simultaneous stream copies, downstream loans, and shared call/operation
-  payloads;
-- reclaim every correlation, retained result, frame, buffer, mapping, loan, and
-  endpoint on ordinary terminal paths.
-
-#### Required checks
-
-- each declared resource reaches an observable bounded high-water mark without
-  exceeding its manifest ceiling and returns to its declared post-scenario
-  baseline;
-- one large stream sample still incurs one fabric copy and one receiver-bound
-  loan per matched subscriber while shared call and operation payloads coexist;
-- concurrent traffic on one route class never consumes another class's declared
-  queue, history, in-flight, retained, buffer, mapping, or loan allowance;
-- saturating every declared ceiling at once neither exceeds a manifest bound nor
-  deadlocks a route worker.
-
-#### Verification target
-
-```sh
-just data_fabric_traffic_check
-just data_fabric_saturation_check
-```
-
-#### Exit condition (observed)
-
-Observed 2026-08-17. All C8 transport classes carry concurrent bounded traffic
-through one fabric while every declared resource stays inside its manifest
-ceiling and returns to its declared baseline.
-
-Two arms are narrower than the text and recorded above rather than claimed:
-`resourceEvent` has no emitter because the signal it needs is unreachable
-through a blocking `seL4_Send`, and only three of the eleven classes are driven
-to their exact declared bound rather than observed under it.
+closed.
+**Delivered:** `just sel4_traffic_check` (`just data_fabric_traffic_check`)
+boots a `"traffic"` action reusing C8.10's exact three-worker partition and
+requires the stream, call, and operation planes to run their own bounded
+C8.4-C8.9 scenarios concurrently, observably interleaved, including the
+QoS-timed stream arm's real RELIABLE retry accounting under concurrent load.
+All eleven declared resource classes now emit bounded peak(+baseline)
+evidence — C8.13.3 supplied the last, `capabilitySlots`.
+**Exit condition (observed):** All C8 transport classes carry concurrent
+bounded traffic through one fabric while every declared resource stays
+inside its manifest ceiling and returns to its declared baseline. Two arms
+are narrower than the deliverable text and recorded rather than claimed:
+`resourceEvent` has no emitter — a proven wall, not a gap, since the
+`ERR_WOULDBLOCK` it depends on is unreachable through a blocking
+`seL4_Send`; and `just sel4_saturation_check` drives only 3 of the 11
+declared classes (in-flight calls, in-flight operations, retained operation
+results) to their exact declared bound, leaving the rest merely observed
+under theirs as remaining work. `resourceLoan` is emitted by the stream
+broker rather than the call worker, whose trace sink has zero headroom (62
+of 64 records already spent on existing verified evidence). Two declared
+fields (`queueDepth` and `capabilitySlots`) were found never checked against
+real usage at all; C8.13.3 supplied the mechanism for `capabilitySlots`,
+`queueDepth` remains unconsumed.
+**Gates:** `just data_fabric_traffic_check`, `just data_fabric_saturation_check`
+**Evidence:**
+[`devlog/2026-08-15-c8-13-traffic/`](../devlog/2026-08-15-c8-13-traffic/index.md),
+[`devlog/2026-08-16-c8-13-queue-history-evidence/`](../devlog/2026-08-16-c8-13-queue-history-evidence/index.md),
+[`devlog/2026-08-16-c8-13-saturation-ceilings/`](../devlog/2026-08-16-c8-13-saturation-ceilings/index.md),
+[`devlog/2026-08-16-c8-13-qos-timed-traffic/`](../devlog/2026-08-16-c8-13-qos-timed-traffic/index.md),
+[`devlog/2026-08-16-c8-13-resource-event-loan-walls/`](../devlog/2026-08-16-c8-13-resource-event-loan-walls/index.md),
+[`devlog/2026-08-16-c8-13-declared-fields-audit/`](../devlog/2026-08-16-c8-13-declared-fields-audit/index.md),
+[`devlog/2026-08-17-c8-13-3-capability-slot-occupancy/`](../devlog/2026-08-17-c8-13-3-capability-slot-occupancy/index.md)
 
 ### C8.13.1 -- Self-reported shared-buffer occupancy evidence (narrow)
 
 **Status:** Complete for the stream broker; `fabric-call-worker` deferred to
-C8.13.2 on measured trace-sink saturation. `just sel4_traffic_check` and `just
-sel4_saturation_check` observe `SHARED BUFFER OCCUPANCY` (label 30) answering
-`fabric-service`'s own live charges, reported as `resourceMapping` (constant 6,
-asserted constant and nonzero) and `resourceLoan` (peak 5, drained baseline,
-asserted nonzero peak and bounded baseline). Two of this slice's premises did
-not survive measurement, and the exit condition below is amended rather than
-treated as met. First, `fabric-call-worker` cannot emit: its sink holds 62
-ordinary records plus its terminal against the schema's page-sized
-`maxTraceDepth = 64`, measured as `call complete capacity=64 records=63`, so
-the four records both counters need would be dropped -- the same wall
-`resourceLoan` hit in C8.13 above, and the reason C8.13.2 now owns it.
-Second, `resourceMapping` alone is not traffic-varying: an instrumented boot
-read this holder's charges as pages 8/8, buffers 7/7, mappings 6/6, loans 0/5,
-so the mapping count is fixed at provisioning and `resourceLoan` -- declared
-since C8.13 with no emitter -- carries the varying half. The mapping record is
-kept because a constant is the invariant there: a boot where it moved would
-mean a ring was mapped or unmapped outside provisioning. See
-`devlog/2026-08-16-c8-13-1-shared-buffer-occupancy/index.md`.
+C8.13.2 on measured trace-sink saturation.
+**Delivered:** A self-scoped, read-only shared-buffer query syscall returning
+the caller's own live page/buffer/mapping/loan counts, and a
+`resourceMapping` trace code following the existing peak+baseline
+held-and-released convention; `fabric-service` samples and emits its own
+occupancy under the traffic action.
+**Exit condition (observed):** One of the two broker holders with existing
+trace infrastructure reports real mapping and loan occupancy for itself: the
+loan count traffic-varying, the mapping count constant-by-invariant.
+Explicitly scoped as 1 of the traffic fixture's 8 declared holders, not full
+coverage. Two premises did not survive measurement: `fabric-call-worker`
+cannot emit — its sink holds 62 ordinary records plus its terminal against
+the schema's page-sized `maxTraceDepth = 64` (measured `capacity=64
+records=63`), the same wall `resourceLoan` hit in C8.13, deferred to
+C8.13.2; and `resourceMapping` alone is not traffic-varying — an
+instrumented boot read pages 8/8, buffers 7/7, mappings 6/6, loans 0/5, so
+the mapping count is fixed at provisioning and `resourceLoan` carries the
+varying half. `just sel4_traffic_check` and `just sel4_saturation_check`
+observe `SHARED BUFFER OCCUPANCY` (label 30) answering `fabric-service`'s
+own live charges: `resourceMapping` (constant 6, asserted nonzero) and
+`resourceLoan` (peak 5, drained baseline, asserted nonzero peak and bounded
+baseline).
+**Gates:** `just sel4_traffic_check`, `just data_fabric_traffic_check`
+**Evidence:** [`devlog/2026-08-16-c8-13-1-shared-buffer-occupancy/`](../devlog/2026-08-16-c8-13-1-shared-buffer-occupancy/index.md)
 
 **Depends on:** C8.13.
-
-`SharedBufferTable` (`slime-root/src/shared_buffer.rs`) already computes
-live per-holder `holder_pages`/`holder_buffers`/`holder_mappings`/
-`holder_loans` from its existing `Charge` accounting; nothing exposes them to
-userspace. The query itself was additive as described -- a new read-only label
-alongside `shared_buffer_labels::{CREATE,RELEASE,MAP,...}` plus a client
-wrapper, no change to any existing dispatch arm -- but "additive only" did not
-hold for the emission half, which the sink ceiling bounds.
-
-#### Deliverables
-
-- a self-scoped, read-only shared-buffer query syscall returning the
-  caller's own live page/buffer/mapping/loan counts, denied the same way an
-  undeclared holder is already denied every other shared-buffer operation;
-- a `resourceMapping` trace code declared in
-  `contracts/fabric-trace/v1/schema.zt`, following the existing peak+baseline
-  held-and-released convention;
-- `fabric-service` samples and emits its own occupancy under the traffic
-  action. `fabric-call-worker` -- the other of the traffic fixture's 8 declared
-  `sharedBufferBudget` holders owning a trace sink -- is deferred to C8.13.2:
-  its sink has zero ordinary slots free, which is a capacity wall rather than a
-  scoping choice.
-
-#### Required checks
-
-- the query syscall returns exactly the querying holder's own counts and
-  cannot name another holder;
-- `resourceMapping` peak+baseline records follow the schema's declared
-  convention without regressing the standalone C8.4-C8.9 fixtures' fixed
-  `traceDepth`.
-
-#### Verification target
-
-```sh
-just sel4_traffic_check
-just data_fabric_traffic_check
-```
-
-#### Exit condition
-
-One of the two broker holders with existing trace infrastructure reports real
-mapping and loan occupancy for itself: the loan count traffic-varying, the
-mapping count constant-by-invariant. Explicitly scoped as 1 of the traffic
-fixture's 8 declared holders, not full coverage -- C8.13.2 extends coverage to
-the remaining seven, including `fabric-call-worker`, which needs trace-sink
-headroom this slice could not create.
 
 ### C8.13.2 -- Full shared-buffer occupancy coverage across all declared holders
 
 **Status:** Complete for the four holders that have occupancy to report; the
-other three are recorded as measured walls rather than pending work. `just
-sel4_traffic_check` and `just sel4_saturation_check` observe
-`fabric-publisher`, `fabric-subscriber`, `fabric-subscriber-b`, and
-`fabric-publisher-b` each reporting its own `resourceMapping` occupancy through
-C8.13.1's self-scoped query, at 1, 1, 2, and 2 regions -- one per declared
-route -- with each value pinned by the gate rather than merely required nonzero,
-so a role that gained or lost a provisioned region fails.
-
-Direct measurement redefined the remaining scope, and the exit condition below
-is amended rather than treated as met. Probing each holder's charges on a
-traffic boot found that three of the eight cannot produce this evidence, each
-for a different reason:
-
-- `fabric-call-client` holds nothing at any point it could report. It does
-  consume its declared quota, but only inside one helper:
-  `scenario::send_large_request` creates, maps, seals, and lends a page — a
-  charge measured at 1 page, 1 buffer, 1 mapping — then unmaps and releases it
-  before returning (`fabric_call_scenario.rs:362-363`). Sampled after
-  `send_large_request`, after `expect_large_reply`, and at the end of its
-  script, its four counts were all zero every time, so a pair emitted from this
-  component could only be a measured `[0, 0]` — the degenerate evidence the
-  trace schema rules out. Reporting its transient peak would need a sample
-  inside the shared helper, which four other binaries also include.
-- `fabric-call-server` cannot reach a flush. It ends by calling
-  `slime_rt::exit(0)` mid-loop on the injected peer-death request
-  (`fabric_call_scenario.rs:185`), so `run_server` never returns and no
-  end-of-`main` emission is reachable. Its charges are also transient, peaking
-  at one page, buffer, and mapping inside a single exchange.
-- `fabric-call-worker` has no trace-sink headroom, unchanged from C8.13.1: its
-  62 ordinary records are fully spent, and reporting both counters would cost
-  four more against a `maxTraceDepth` that is a page-sized schema ceiling, not
-  a fixture value.
-
-A second measured fact shaped what the four report. Their mapping counts are
-steady states, not invariants held throughout: both subscribers map an arriving
-loan and unmap it again, and `fabric-publisher-b` transiently holds a third
-mapping plus a lender loan charge for the copy it lends, releasing all of it
-before it reports. Those peaks are unreported by design -- a scripted
-participant has no sweep loop to sample from, and emits once at the end because
-serial writes must stay off the path of the traffic they describe. See
-`devlog/2026-08-16-c8-13-2-participant-occupancy/index.md`.
-
-#### Deliverables
-
-- trace infrastructure (sink, declared `traceDepth`, emission path) for the four
-  uninstrumented holders that hold occupancy: `fabric-publisher`,
-  `fabric-subscriber`, `fabric-subscriber-b`, `fabric-publisher-b`. Shared as
-  `components/bins/src/fabric_occupancy_trace.rs`, since a participant needs the
-  identical three records where a broker needs a sweep loop;
-- an explicit, measured decision for each holder that stays unreported --
-  `fabric-call-client`, `fabric-call-server`, `fabric-call-worker` -- recorded
-  above and in `contracts/fabric-trace/v1/schema.zt`;
-- each instrumented holder reports its own mapping occupancy through C8.13.1's
-  query syscall, with its exact count pinned by the gate.
-
-#### Required checks
-
-- the same shape as C8.13.1's, exercised for every holder that reports, with no
-  holder's declared `traceDepth` regressing another's -- each participant's sink
-  carries 3 records against a graph-wide `traceDepth` of 64, and every emission
-  is gated on the traffic action so the standalone C8.4-C8.9 fixtures are
-  untouched.
-
-#### Verification target
-
-```sh
-just sel4_traffic_check
-```
-
-#### Exit condition
-
-Five of the traffic fixture's 8 declared shared-buffer holders report real,
-bounded occupancy evidence: the stream broker's mapping and loan counts from
-C8.13.1, and the four participants' own pinned mapping counts. The other three
-are measured walls rather than gaps -- one charges nothing, one cannot reach a
-flush, one has no sink headroom -- each recorded with the evidence above rather
-than left as pending coverage.
-
-### C8.13.3 -- Live per-child capability-slot occupancy
-
-**Status:** Complete. `just sel4_traffic_check` and `just
-sel4_saturation_check` observe `resourceCapabilitySlots` (constant 14) from the
-stream broker -- declared peak 35, live baseline 29 -- with the peak checked
-against the `capabilitySlots = 48` the fixture itself declares, read from its
-own `fabricGraph.limits` block rather than restated in the gate. Label 31,
-`CAPABILITY SLOT OCCUPANCY`, answers a holder's own counts self-scoped by badge.
-
-Two of this slice's premises did not survive measurement, and both were
-category errors rather than tuning:
-
-- **A child's slots live in two spaces.** The first implementation censused the
-  physical child CNode (128 fixed addresses) and compared that to
-  `capabilitySlots`. But that field bounds the *component's own logical
-  numbering from 0*: `build-generation.py` derives its required value as
-  `FABRIC_FIRST_CONTROL_SLOT + control endpoints + buffers`, and
-  `fabric_graph_is_satisfiable` validates it against `graph::MAX_TASK_CAPS`
-  (64), not against the CNode -- a logical index of 3 lives at physical slot 36.
-  Comparing the physical count to that ceiling would have failed a holder whose
-  declared budget was satisfied, and passed only because the observed 25 sat
-  under 48 by coincidence. The reply now carries both counts and each is
-  checked against its own bound: declared occupancy against `capabilitySlots`,
-  physical occupancy against the CNode's capacity.
-- **The peak is the root's to track.** Declared occupancy moves on every
-  install, drop, transfer, and retirement, all of them root operations, so a
-  component sampling twice reports the higher of two snapshots rather than the
-  run's high-water mark. That is load-bearing here: this plane's count genuinely
-  rises and falls, measured at peak 33 then 35 against a baseline of 29, because
-  the broker drops the supervision handles it no longer waits on. The root
-  maintains the mark across every mutation; the broker takes one query at drain.
-  That also removed the only O(CNode size) root operation from every progressing
-  sweep of the single-threaded dispatch loop.
-
-Declared space is credited (every install into it is a root operation) while
-physical space is censused, because the receiving runtime moves a transferred
-Endpoint out of `CHILD_SLOT_RECEIVE` itself and the root mediates neither step.
-See
-[`devlog/2026-08-17-c8-13-3-capability-slot-occupancy/`](../devlog/2026-08-17-c8-13-3-capability-slot-occupancy/index.md).
-
-**Depends on:** none. An independent root mechanism, not gated by C8.13.1/.2.
-
-`object_allocator.rs`'s `ArenaRecord` tracks what the root allocated for a
-task's arena, not how many of a live child's own slots are populated -- and
-capability transfers and mints after spawn (fabric delegation, for instance)
-were not accounted anywhere. seL4 has no native "CNode occupancy" query, so this
-is a new bookkeeping mechanism, not a query added over existing state the way
-C8.13.1 is.
-
-#### Deliverables
-
-- a root-side mechanism tracking, per child, how many declared slots are
-  populated across its lifetime, including post-spawn transfers and mints, not
-  just the initial grant vector, with a high-water mark maintained where each
-  half mutates rather than sampled when read;
-- a self-scoped query surface exposing those counts to the holder itself,
-  mirroring C8.13.1's discipline, and disclosing no generation-wide graph fact;
-- a resource trace code and emission wired the same way as C8.13.1/.2.
-
-#### Required checks
-
-- the reported counts match real occupancy after grants, mints, transfers, and
-  revocations, each against the bound that governs its own slot space;
-- a holder cannot query another's occupancy.
-
-#### Verification target
-
-```sh
-just sel4_traffic_check
-just sel4_saturation_check
-```
-
-#### Exit condition (observed)
-
-Observed 2026-08-17. One holder's declared `capabilitySlots` ceiling is checked
-against a live, root-tracked occupancy rather than compared only to a fixed
-global `LIMIT_*` constant at decode time. Scoped to the stream broker: the four
-instrumented participants have sink headroom and could report the same counter,
-and the peak sits under the declared ceiling rather than at it, so the bound is
-checked but not saturated.
-
-
-### C8.14 — Degradation and fault isolation
-
-**Status:** Complete. `just sel4_fault_check` (`just data_fabric_fault_check`)
-observes 4 distinct denial codes, 3 distinct QoS degradations, 3 peer-death
-faults across all three planes, 8 isolation markers, and the injected
-interposition-hop death, on a graph whose seven trace sinks stay
-`dropped=0 rejected=0` and whose resource counters all return to baseline.
-
-This milestone read as eleven paths to build and turned out to be an assertion
-milestone: measurement found **ten of the eleven already driven** by C8.13's
-concurrent graph, through the scripted scenarios `fabric_call_scenario` and
-`fabric_operation_scenario` already contained, with none of it checked. A
-pre-gate traffic boot emitted 6 `kind=denial` records, 3 `kind=fault`
-peer-death records, QoS records for timeout and retained-result expiry, and
-component markers for rejection, malformed reply, retry exhaustion,
-cancellation, duplicate, stale session, unauthorized cancel, unauthorized
-retrieval, and forged transport record — and neither
-`check-sel4-traffic-plane.py` nor its saturation sibling mentions
-`kind=denial`, `kind=fault`, or peer death anywhere. So the gate requires that
-vocabulary rather than inventing a second scenario for it.
-
-The one path that could not be scripted is a declared interposition hop dying:
-a proxy that relays correctly cannot also be absent, and under this action the
-hop parks forever (`fabric_boot::park_only` is `-> !`). `sel4-fault.zti` is
-`sel4-traffic.zti` with `generation` changed and nothing else; the plane differs
-by *build*, compiled with the proxy early-death injection, which is the only
-reason it needs its own image. `init` waits on the hop rather than checking it
-idle under that build, so the graph observes the departure rather than
-tolerating a task it stopped tracking.
-
-Distinctness is asserted as disjointness of codes within a family rather than as
-presence: a broker collapsing two conditions onto one status would still emit
-both records and pass a presence check, while a reader holding only the
-transcript could no longer tell a duplicate from a stale session. See
-[`devlog/2026-08-17-c8-14-fault-isolation/`](../devlog/2026-08-17-c8-14-fault-isolation/index.md).
+other three are recorded as measured walls rather than pending work.
+**Delivered:** Trace infrastructure (sink, declared `traceDepth`, emission
+path) for the four uninstrumented holders that hold occupancy:
+`fabric-publisher`, `fabric-subscriber`, `fabric-subscriber-b`,
+`fabric-publisher-b`, each reporting its own `resourceMapping` occupancy
+through C8.13.1's self-scoped query.
+**Exit condition (observed):** Five of the traffic fixture's 8 declared
+shared-buffer holders report real, bounded occupancy evidence: the stream
+broker's mapping and loan counts from C8.13.1, and the four participants'
+own pinned mapping counts (1, 1, 2, and 2 regions — one per declared route —
+each value pinned by the gate, not merely required nonzero). The other three
+are measured walls rather than gaps, each for a different reason:
+`fabric-call-client` holds nothing at any sampled point (its only charge is
+transient, inside one helper that unmaps and releases before returning, so a
+report could only be the degenerate `[0, 0]` the trace schema rules out);
+`fabric-call-server` cannot reach a flush (it exits mid-loop via
+`slime_rt::exit(0)` on the injected peer-death request, so `run_server`
+never returns); `fabric-call-worker` has no trace-sink headroom, unchanged
+from C8.13.1. The four reporting holders' mapping counts are steady states
+sampled at end-of-script, not invariants held throughout — both subscribers
+map and unmap a loan, and `fabric-publisher-b` transiently holds a third
+mapping it releases before reporting — because a scripted participant has no
+sweep loop to sample from mid-run.
+**Gates:** `just sel4_traffic_check`
+**Evidence:** [`devlog/2026-08-16-c8-13-2-participant-occupancy/`](../devlog/2026-08-16-c8-13-2-participant-occupancy/index.md)
 
 **Depends on:** C8.13.
 
-#### Deliverables
+### C8.13.3 -- Live per-child capability-slot occupancy
 
-- exercise stalled, malformed, denied, retry-exhausted, cancelled, rejected,
-  expired, timed-out, participant-death, server-death, and proxy-death paths
-  against the concurrent graph;
-- keep every unaffected stream, call, and operation route observably
-  progressing during and after each injected fault;
-- settle every in-flight correlation, retained result, loan, mapping, buffer,
-  endpoint, and route-worker capability on peer-loss and terminal fault paths;
-- keep each degradation and terminal condition a distinct semantic record.
+**Status:** Complete.
+**Delivered:** A root-side mechanism tracking, per child, how many declared
+slots are populated across its lifetime (including post-spawn transfers and
+mints), with a high-water mark maintained where each half mutates rather
+than sampled when read, exposed through a self-scoped query surface
+mirroring C8.13.1's discipline.
+**Exit condition (observed):** One holder's declared `capabilitySlots`
+ceiling is checked against a live, root-tracked occupancy rather than
+compared only to a fixed global `LIMIT_*` constant at decode time. `just
+sel4_traffic_check` and `just sel4_saturation_check` observe
+`resourceCapabilitySlots` (constant 14) from the stream broker — declared
+peak 35, live baseline 29 — checked against the `capabilitySlots = 48` the
+fixture declares. Scoped to the stream broker: the four instrumented
+participants have sink headroom and could report the same counter, and the
+peak sits under the declared ceiling rather than at it, so the bound is
+checked but not saturated. Two premises did not survive measurement, both
+category errors rather than tuning: a child's slots live in two spaces
+(declared logical numbering from 0, validated against `MAX_TASK_CAPS`, vs.
+the physical CNode — comparing physical occupancy to the declared ceiling
+would have failed a satisfied holder and passed only by coincidence; the
+reply now carries both counts checked against their own bounds); and the
+peak is the root's to track, not sampled twice by the component, since
+declared occupancy genuinely rises and falls (measured peak 33 then 35
+against baseline 29) as the broker drops supervision handles it no longer
+waits on.
+**Gates:** `just sel4_traffic_check`, `just sel4_saturation_check`
+**Evidence:** [`devlog/2026-08-17-c8-13-3-capability-slot-occupancy/`](../devlog/2026-08-17-c8-13-3-capability-slot-occupancy/index.md)
 
-#### Required checks
+**Depends on:** none. An independent root mechanism, not gated by C8.13.1/.2.
 
-- a stalled subscriber, backpressured call client, full operation table, or
-  faulting proxy cannot starve or terminate another stream, call, operation,
-  the fabric service, or the kernel;
-- deadline, lifespan, liveliness loss, incompatible QoS, loss, expiry, retry
-  exhaustion, timeout, cancellation, rejection, malformed input, and peer death
-  remain distinct semantic records;
-- every fault path returns each declared resource to its baseline without
-  leaking a capability, loan, mapping, buffer, or correlation entry;
-- no injected fault leaves a route worker parked on a dead source, polling, or
-  waiting without a bound.
+### C8.14 — Degradation and fault isolation
 
-#### Verification target
+**Status:** Complete.
+**Delivered:** Every degradation and fault path — stalled, malformed,
+denied, retry-exhausted, cancelled, rejected, expired, timed-out,
+participant-death, server-death, and declared-interposition-hop-death —
+exercised against the concurrent graph, with each condition kept a distinct
+semantic record and every in-flight correlation, retained result, loan,
+mapping, buffer, endpoint, and route-worker capability settled on peer-loss
+and terminal fault paths. This milestone read as eleven paths to build and
+turned out to be an assertion milestone: measurement found ten of the eleven
+already driven by C8.13's concurrent graph through its existing scripted
+scenarios, with none of it previously checked; only the declared
+interposition hop dying required new injection (a proxy that relays
+correctly cannot also be absent, so a dedicated `sel4-fault.zti` build —
+`sel4-traffic.zti` with the proxy compiled to die — is required).
+**Exit condition (observed):** `just sel4_fault_check` (`just
+data_fabric_fault_check`) observes 4 distinct denial codes, 3 distinct QoS
+degradations, 3 peer-death faults across all three planes, 8 isolation
+markers, and the injected interposition-hop death, on a graph whose seven
+trace sinks stay `dropped=0 rejected=0` and whose resource counters all
+return to baseline; every declared degradation and fault path stays bounded,
+distinguishable, and fully reclaimed. Distinctness is asserted as
+disjointness of codes within a family rather than as presence. Two arms are
+narrower than the deliverable text and recorded rather than claimed: the
+stream broker reports no `kind=qos` degradation of its own on this plane, so
+the QoS-distinctness assertion covers only the call and operation planes;
+and the hop death is the only *injected* fault — a stalled subscriber and a
+faulting (rather than exiting) participant remain unexercised as injections,
+though the scripted peer deaths cover the settlement path either would take.
+**Gates:** `just sel4_fault_check`, `just data_fabric_fault_check`
+**Evidence:** [`devlog/2026-08-17-c8-14-fault-isolation/`](../devlog/2026-08-17-c8-14-fault-isolation/index.md)
 
-```sh
-just sel4_fault_check
-just data_fabric_fault_check
-```
-
-#### Exit condition (observed)
-
-Observed 2026-08-17. Every declared degradation and fault path stays bounded,
-distinguishable, and fully reclaimed, and neither the injected
-interposition-hop death nor either scripted peer death disrupts an unrelated
-route class, the fabric service, or the kernel.
-
-Two arms are narrower than the deliverable text and recorded rather than
-claimed. The stream broker reports no `kind=qos` degradation of its own on this
-plane — its deadline, liveliness, sample-loss, and incompatible-QoS events go to
-subscribers rather than its own sink — so the QoS-distinctness assertion covers
-the call and operation planes. And the hop death is the only *injected* fault; a
-stalled subscriber and a faulting rather than exiting participant remain
-unexercised as injections, though the scripted peer deaths cover the settlement
-path either would take.
+**Depends on:** C8.13.
 
 ### C8.15 — Full-graph determinism and parent close
 
-**Status:** Complete. `just sel4_fabric_aggregate_check` (`just
-data_fabric_check`) boots both aggregate schedules twice each — four boots over
-one declared composition — requires each to satisfy its own plane gate on both
-runs, and compares their `[trace]` records verbatim: 140 records per boot, 280
-byte-identical in total.
-
-The aggregate is a *pair of schedules over one graph* rather than a new fixture.
-`sel4-fault.zti` is `sel4-traffic.zti` with `generation` changed and nothing
-else, and the fault variant differs only in that its declared interposition hop
-is compiled to die, so the normal and fault schedules are observed on the same
-declared composition rather than assembled from unrelated profile boots — which
-is what this milestone's third deliverable asks for.
-
-Determinism is compared over the C8.11 trace records alone, and that scoping is
-the assertion rather than a weakening of it: those records carry simulated time,
-and the schema forbids task ids and addresses in them, so byte equality is a
-claim about the schedule instead of about how the transcript was captured.
-Serial markers are deliberately excluded because several legitimately vary — a
-broker's per-edge print races a participant's own summary print, which is why
-the plane gates check those as membership rather than as order. The record count
-is additionally pinned: without it a regression that stopped every worker
-emitting would produce two identical empty transcripts and pass the comparison.
-
-Each plane's own gate is invoked in-process against each boot rather than
-re-implemented, so the aggregate cannot drift from what the narrow gates
-require, and no boot is spent twice.
-
-The audit deliverable found one real defect, recorded as backlog **B56**:
-`just data_fabric_profile_check` had been red since B55 because it swept the
-reference manifest's `unified` profile through a resolver whose per-plane
-control-grant holder that manifest structurally cannot satisfy. C8.9's exit
-condition was therefore unobserved on the tree the roadmap recorded it against.
-Fixed and closed.
+**Status:** Complete.
+**Delivered:** The final generation-declared graph and fixed normal, denial,
+stall, malformed-input, and peer/proxy-fault schedules composed from the
+preceding slices as a *pair of schedules over one graph* rather than a new
+fixture (`sel4-fault.zti` is `sel4-traffic.zti` with `generation` changed
+and the interposition hop compiled to die); one aggregate QEMU gate invoking
+each plane's own gate in-process against each boot, so the aggregate cannot
+drift from what the narrow gates require. The audit deliverable found one
+real defect, recorded as backlog B56: `just data_fabric_profile_check` had
+been red since B55 because it swept the reference manifest's `unified`
+profile through a resolver whose per-plane control-grant holder that
+manifest structurally cannot satisfy — C8.9's exit condition was therefore
+unobserved on the tree the roadmap recorded it against. Fixed and closed.
+**Exit condition (observed):** `just sel4_fabric_aggregate_check` (`just
+data_fabric_check`) boots both aggregate schedules twice each — four boots
+over one declared composition — and compares their `[trace]` records
+verbatim: 140 records per boot, 280 byte-identical in total. A
+generation-declared graph of isolated native publishers, subscribers,
+service clients/servers, operation participants, introspection clients, and
+declared proxies exchanges bounded typed data under explicit QoS and graph
+grants; denied and incompatible edges are neither usable nor visible, every
+resource and fault path stays bounded and isolated, and identical inputs
+produce byte-identical semantic traces. Determinism is compared over the
+C8.11 trace records alone (which carry simulated time and forbid task ids or
+addresses), not serial markers, which several legitimately race; the record
+count is pinned so a regression that silenced every worker could not pass as
+two identical empty transcripts. Two limits are recorded rather than
+claimed: normalized schema artifacts are compared for determinism by `just
+generation_check`/`just data_fabric_profile_check` on the host, not across
+these boots, so the byte-comparison here is over semantic traces alone; and
+the denial, stall, and malformed-input schedules are carried inside the two
+aggregate boots rather than run as separate arms, each driven and asserted
+by `sel4_fault_check`.
+**Gates:** `just sel4_fabric_aggregate_check`, `just data_fabric_check`
+**Evidence:** [`devlog/2026-08-17-c8-15-fabric-aggregate/`](../devlog/2026-08-17-c8-15-fabric-aggregate/index.md), [`devlog/2026-08-17-b68-aggregate-trace-determinism/`](../devlog/2026-08-17-b68-aggregate-trace-determinism/index.md)
 
 **Depends on:** C8.9–C8.14.
-
-#### Deliverables
-
-- compose the final generation-declared graph and fixed normal, denial, stall,
-  malformed-input, and peer/proxy-fault schedules from the preceding slices;
-- run the identical graph, input, and simulated-time sequence repeatedly and
-  compare normalized schema artifacts and bounded semantic traces byte for
-  byte;
-- retain the narrow C8.9–C8.14 gates and add one aggregate QEMU gate that
-  exercises the complete parent exit condition without relying on separate
-  profile boots;
-- audit the final authority, resource, and fault corpus against every C8
-  deliverable before closing the parent milestone.
-
-#### Required checks
-
-- repeated normal runs produce byte-identical schema and semantic-trace
-  artifacts with exact record counts and declared causal order;
-- every fault variant terminates within its bound, records the expected
-  distinct outcome, restores resource baselines, and preserves unrelated route
-  completion markers in the same boot;
-- no legacy mutually exclusive profile, slot overlay, alternate graph parser,
-  prose-only deterministic claim, or unbounded state remains in the aggregate
-  path;
-- all C8.1–C8.14 regression gates remain clean.
-
-#### Verification target
-
-```sh
-just sel4_fabric_aggregate_check
-just data_fabric_check
-```
-
-#### Exit condition (observed)
-
-Observed 2026-08-17. A generation-declared graph of isolated native publishers,
-subscribers, service clients/servers, operation participants, introspection
-clients, and declared proxies exchanges bounded typed data under explicit QoS
-and graph grants; denied and incompatible edges are neither usable nor visible,
-every resource and fault path stays bounded and isolated, and identical inputs
-produce byte-identical semantic traces.
-
-Two limits are recorded rather than claimed. Normalized *schema* artifacts are
-compared for determinism by `just generation_check` and
-`just data_fabric_profile_check` on the host rather than across these boots, so
-the byte-comparison here is over semantic traces alone. And the aggregate boots
-two schedules; the denial, stall, and malformed-input schedules the first
-deliverable names are carried inside those two rather than run as separate
-arms — every one is driven and asserted by `sel4_fault_check`, which this gate
-runs against both of its boots.
 
 ## C9: Robot runtime authority
 
