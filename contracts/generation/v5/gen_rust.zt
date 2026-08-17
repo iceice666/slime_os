@@ -7,6 +7,34 @@ refl ::= import stdlib.reflect;
 n ::= import stdlib.num;
 w ::= import wire.python;
 r ::= import wire.rust;
+l ::= import stdlib.list;
+
+-- One named capability-rights bit. Mirrors the schema's `RightBit` so the
+-- renderer can emit both the individual `RIGHT_*` constants and their union
+-- without either side restating a bit position. `manifest` is the `.zti` grant
+-- spelling, empty for rights a manifest cannot name directly.
+RightBit :: type { name : Text; bit : Int; manifest : Text; };
+
+-- `RIGHT_ALL` as the union of the declared bits. A bit-width mask would admit
+-- the gaps in the numbering (B57); a fold over the vocabulary cannot. Bits are
+-- distinct by construction, so summing `2^bit` is exactly their bitwise union.
+rightValue :: RightBit -> Int = bit => n.pow 2 bit.bit;
+
+rightsMask :: List RightBit -> Int
+  = bits => l.sum (map rightValue bits);
+
+manifestNamed :: RightBit -> Bool = bit => bit.manifest != "";
+
+pythonRightConst :: RightBit -> Text
+  = bit => w.join { "GENERATION_RIGHT_"; bit.name; " = "; n.toText (rightValue bit); "\n"; };
+
+-- The builder resolves a `.zti` grant's rights by manifest spelling, so that
+-- table is generated here rather than retyped in Python.
+pythonManifestRight :: RightBit -> Text
+  = bit => w.join { "    \""; bit.manifest; "\": "; n.toText (rightValue bit); ",\n"; };
+
+rustRightConst :: RightBit -> Text
+  = bit => r.u64Const (r.join { "RIGHT_"; bit.name; }) (rightValue bit);
 
 Format :: type {
   formatVersion : Int;
@@ -101,6 +129,7 @@ Format :: type {
   mintedBindingLayout : List w.WireField;
   notificationGrantLayout : List w.WireField;
   notificationBindingLayout : List w.WireField;
+  rightBits : List RightBit;
 };
 
 records :: Format -> List w.WireRecord
@@ -139,6 +168,11 @@ pythonBindings :: Format -> Text
     "MAX_STRING_BYTES = "; n.toText format.maxStringBytes; "\n"; "MAX_STRING_TABLE_BYTES = "; n.toText format.maxStringTableBytes; "\n"; "MAX_OBJECT_PAYLOAD_BYTES = "; n.toText format.maxObjectPayloadBytes; "\n";
     "GENERATION_CAPABILITY_ENDPOINT = 1\n"; "GENERATION_CAPABILITY_EXECUTABLE = 2\n"; "GENERATION_CAPABILITY_SHARED_BUFFER_FACTORY = 3\n"; "GENERATION_CAPABILITY_BLOCK = 4\n"; "GENERATION_CAPABILITY_DIRECTORY = 5\n"; "GENERATION_CAPABILITY_INPUT = 6\n"; "GENERATION_CAPABILITY_SUPERVISION = 7\n"; "GENERATION_CAPABILITY_SHARED_BUFFER = 8\n"; "GENERATION_CAPABILITY_LOAN = 9\n";
     "GENERATION_SERVICE_LIFECYCLE = 1\n"; "GENERATION_SERVICE_SPAWN = 2\n"; "GENERATION_SERVICE_SUPERVISION = 3\n"; "GENERATION_SERVICE_CAPABILITY_TRANSFER = 4\n"; "GENERATION_SERVICE_SHARED_BUFFER = 5\n"; "GENERATION_SERVICE_DIRECTORY = 6\n"; "GENERATION_SERVICE_INPUT = 7\n"; "GENERATION_SERVICE_BLOCK = 8\n"; "GENERATION_SERVICE_CONSOLE = 9\n";
+    w.join (map pythonRightConst format.rightBits);
+    "GENERATION_RIGHT_ALL = "; n.toText (rightsMask format.rightBits); "\n";
+    "GENERATION_RIGHT_BY_MANIFEST_NAME = {\n";
+    w.join (map pythonManifestRight (filter manifestNamed format.rightBits));
+    "}\n";
   };
 
 rustBindings :: Format -> Text
@@ -211,6 +245,8 @@ rustBindings :: Format -> Text
     r.u32Const "SERVICE_INPUT" 7;
     r.u32Const "SERVICE_BLOCK" 8;
     r.u32Const "SERVICE_CONSOLE" 9;
+    r.join (map rustRightConst format.rightBits);
+    r.u64Const "RIGHT_ALL" (rightsMask format.rightBits);
   };
 
 render :: Format -> { python : Text; rust : Text; }

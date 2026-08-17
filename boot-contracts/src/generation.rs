@@ -84,43 +84,55 @@ impl CapabilityKind {
 
 fn capability_rights_valid(kind: CapabilityKind, rights: Rights) -> bool {
     let allowed = match kind {
-        CapabilityKind::Endpoint => 0b11 | RIGHT_TRANSFER,
+        CapabilityKind::Endpoint => RIGHT_SEND | RIGHT_RECV | RIGHT_TRANSFER,
         CapabilityKind::Executable => RIGHT_EXEC | RIGHT_SPAWN | RIGHT_TRANSFER,
-        CapabilityKind::SharedBufferFactory => (1 << 24) | RIGHT_TRANSFER,
-        CapabilityKind::Block => (1 << 10) | (1 << 11),
-        CapabilityKind::Directory => (1 << 19) | (1 << 20) | (1 << 21) | (1 << 22) | RIGHT_TRANSFER,
-        CapabilityKind::Input => 1 << 23,
-        CapabilityKind::Supervision => (1 << 18) | RIGHT_TRANSFER,
-        CapabilityKind::SharedBuffer => (1 << 8) | (1 << 9) | (1 << 25) | RIGHT_TRANSFER,
-        CapabilityKind::Loan => (1 << 8) | (1 << 9) | RIGHT_TRANSFER,
+        CapabilityKind::SharedBufferFactory => RIGHT_BUFFER_CREATE | RIGHT_TRANSFER,
+        CapabilityKind::Block => RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE,
+        CapabilityKind::Directory => {
+            RIGHT_DIRECTORY_READ
+                | RIGHT_DIRECTORY_WRITE
+                | RIGHT_DIRECTORY_LIST
+                | RIGHT_DIRECTORY_DERIVE
+                | RIGHT_TRANSFER
+        }
+        CapabilityKind::Input => RIGHT_INPUT_READ,
+        CapabilityKind::Supervision => RIGHT_SUPERVISE | RIGHT_TRANSFER,
+        CapabilityKind::SharedBuffer => {
+            RIGHT_BUFFER_WRITE | RIGHT_BUFFER_MAP | RIGHT_BUFFER_LOAN | RIGHT_TRANSFER
+        }
+        CapabilityKind::Loan => RIGHT_BUFFER_WRITE | RIGHT_BUFFER_MAP | RIGHT_TRANSFER,
     };
     let required = match kind {
-        CapabilityKind::Endpoint => 0b11,
+        CapabilityKind::Endpoint => RIGHT_SEND | RIGHT_RECV,
         CapabilityKind::Executable => RIGHT_EXEC | RIGHT_SPAWN,
-        CapabilityKind::SharedBufferFactory => 1 << 24,
-        CapabilityKind::Block => (1 << 10) | (1 << 11),
-        CapabilityKind::Directory => (1 << 19) | (1 << 20) | (1 << 21) | (1 << 22),
-        CapabilityKind::Input => 1 << 23,
-        CapabilityKind::Supervision => 1 << 18,
-        CapabilityKind::SharedBuffer => (1 << 8) | (1 << 9) | (1 << 25),
-        CapabilityKind::Loan => 1 << 9,
+        CapabilityKind::SharedBufferFactory => RIGHT_BUFFER_CREATE,
+        CapabilityKind::Block => RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE,
+        CapabilityKind::Directory => {
+            RIGHT_DIRECTORY_READ
+                | RIGHT_DIRECTORY_WRITE
+                | RIGHT_DIRECTORY_LIST
+                | RIGHT_DIRECTORY_DERIVE
+        }
+        CapabilityKind::Input => RIGHT_INPUT_READ,
+        CapabilityKind::Supervision => RIGHT_SUPERVISE,
+        CapabilityKind::SharedBuffer => RIGHT_BUFFER_WRITE | RIGHT_BUFFER_MAP | RIGHT_BUFFER_LOAN,
+        CapabilityKind::Loan => RIGHT_BUFFER_MAP,
     };
     rights != 0
         && rights & !allowed == 0
         && rights & required != 0
         && (kind != CapabilityKind::Executable
             || rights & (RIGHT_EXEC | RIGHT_SPAWN) == RIGHT_EXEC | RIGHT_SPAWN)
-        && (kind != CapabilityKind::Input || rights == 1 << 23)
+        && (kind != CapabilityKind::Input || rights == RIGHT_INPUT_READ)
 }
 pub const KIND_RESOURCE: u32 = 4;
 pub const ROLE_INIT: u32 = 1;
+/// Rights are a bitmask over the vocabulary declared in
+/// `contracts/generation/v5/schema.zt` and generated into `generated/generation.rs`,
+/// which `include!` brings into this module. `RIGHT_ALL` is the union of those
+/// named bits, so an undefined position such as bit 17 is refused rather than
+/// admitted by a bit-width mask (B57).
 pub type Rights = u64;
-pub const RIGHT_TRANSFER: Rights = 1 << 2;
-pub const RIGHT_EXEC: Rights = 1 << 3;
-/// Authority to launch an instance from an executable. Always travels with
-/// [`RIGHT_EXEC`]: naming an image conveys nothing without it.
-pub const RIGHT_SPAWN: Rights = 1 << 16;
-pub const RIGHT_ALL: Rights = (1 << 26) - 1;
 pub const MAX_SPAWN_BUDGET: u16 = 32;
 pub const POLICY_IMMUTABLE: u32 = 1;
 pub const POLICY_EPHEMERAL: u32 = 2;
@@ -2496,6 +2508,64 @@ mod tests {
         ));
         assert!(!capability_rights_valid(CapabilityKind::Input, 1 << 10));
         assert!(!capability_rights_valid(CapabilityKind::Block, 1 << 23));
+    }
+
+    /// B57: `RIGHT_ALL` is the union of the *named* rights, not a bit-width
+    /// mask. Bit 17 is a gap in the numbering — nothing names it and nothing
+    /// uses it — so `(1 << 26) - 1` would admit a grant carrying authority no
+    /// contract defines. Every validator that masks with `!RIGHT_ALL` inherits
+    /// this, so pinning the mask is what keeps the hole closed.
+    #[test]
+    fn right_all_is_a_union_of_named_bits_and_excludes_the_gap_at_17() {
+        let named = [
+            RIGHT_SEND,
+            RIGHT_RECV,
+            RIGHT_TRANSFER,
+            RIGHT_EXEC,
+            RIGHT_MAP_MMIO,
+            RIGHT_DMA_PIN,
+            RIGHT_DMA_RELEASE,
+            RIGHT_IRQ_ACK,
+            RIGHT_BUFFER_WRITE,
+            RIGHT_BUFFER_MAP,
+            RIGHT_BLOCK_READ,
+            RIGHT_BLOCK_WRITE,
+            RIGHT_STORE_READ,
+            RIGHT_STORE_WRITE,
+            RIGHT_HEALTH_CONFIRM,
+            RIGHT_BOOT_UPDATE,
+            RIGHT_SPAWN,
+            RIGHT_SUPERVISE,
+            RIGHT_DIRECTORY_READ,
+            RIGHT_DIRECTORY_WRITE,
+            RIGHT_DIRECTORY_LIST,
+            RIGHT_DIRECTORY_DERIVE,
+            RIGHT_INPUT_READ,
+            RIGHT_BUFFER_CREATE,
+            RIGHT_BUFFER_LOAN,
+        ];
+        let union = named
+            .iter()
+            .fold(0, |accumulator, right| accumulator | right);
+        assert_eq!(union, RIGHT_ALL);
+        assert_eq!(RIGHT_ALL & (1 << 17), 0);
+        assert_ne!(RIGHT_ALL, (1 << 26) - 1);
+        // The mask is what every grant, mapping, and minted-binding check
+        // applies, so an undefined bit must survive none of them.
+        assert_ne!((RIGHT_SEND | RIGHT_RECV | 1 << 17) & !RIGHT_ALL, 0);
+        for kind in [
+            CapabilityKind::Endpoint,
+            CapabilityKind::Executable,
+            CapabilityKind::SharedBufferFactory,
+            CapabilityKind::Block,
+            CapabilityKind::Directory,
+            CapabilityKind::Input,
+            CapabilityKind::Supervision,
+            CapabilityKind::SharedBuffer,
+            CapabilityKind::Loan,
+        ] {
+            assert!(!capability_rights_valid(kind, 1 << 17));
+        }
     }
 
     #[test]

@@ -130,10 +130,15 @@ def check_component_image(blob: bytes, profile, name: str) -> None:
 
 
 
-RIGHT_TRANSFER = 1 << 2
-RIGHT_EXEC = 1 << 3
-RIGHT_SPAWN = 1 << 16
-RIGHT_ALL = (1 << 26) - 1
+# Rights numbering is generated-contract truth: these alias the
+# `GENERATION_RIGHT_*` constants `boot_contracts` emits from
+# `contracts/generation/v5/schema.zt`. `RIGHT_ALL` is the union of the named
+# bits, not a bit-width mask, so an undefined position such as bit 17 is
+# rejected here rather than admitted (B57).
+RIGHT_TRANSFER = GENERATION_RIGHT_TRANSFER
+RIGHT_EXEC = GENERATION_RIGHT_EXEC
+RIGHT_SPAWN = GENERATION_RIGHT_SPAWN
+RIGHT_ALL = GENERATION_RIGHT_ALL
 CAPABILITY_ENDPOINT = 1
 CAPABILITY_EXECUTABLE = 2
 CAPABILITY_SHARED_BUFFER_FACTORY = 3

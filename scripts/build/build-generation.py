@@ -110,6 +110,9 @@ from boot_contracts import (
     GENERATION_HEALTH,
     GENERATION_MAGIC,
     GENERATION_OBJECT,
+    GENERATION_RIGHT_ALL,
+    GENERATION_RIGHT_BY_MANIFEST_NAME,
+    GENERATION_RIGHT_TRANSFER,
     GENERATION_STATE,
     GENERATION_PROCESS,
     GENERATION_THREAD,
@@ -387,34 +390,15 @@ COMPONENTS_TARGET_DIR = Path(
 PAGE_SIZE = 4096
 KIND = {"kernel": 1, "bootstrap": 2, "component": 3, "resource": 4}
 ROLE = {"init": 1, "service": 2, "driver": 3, "application": 4}
-RIGHT = {
-    "send": 1 << 0,
-    "recv": 1 << 1,
-    "exec": 1 << 3,
-    "mapMmio": 1 << 4,
-    "dmaPin": 1 << 5,
-    "dmaRelease": 1 << 6,
-    "irqAck": 1 << 7,
-    "bufferWrite": 1 << 8,
-    "bufferMap": 1 << 9,
-    "blockRead": 1 << 10,
-    "blockWrite": 1 << 11,
-    "storeRead": 1 << 12,
-    "storeWrite": 1 << 13,
-    "healthConfirm": 1 << 14,
-    "bootUpdate": 1 << 15,
-    "spawn": 1 << 16,
-    "supervise": 1 << 18,
-    "directoryRead": 1 << 19,
-    "directoryWrite": 1 << 20,
-    "directoryList": 1 << 21,
-    "directoryDerive": 1 << 22,
-    "inputRead": 1 << 23,
-    "bufferCreate": 1 << 24,
-    "bufferLoan": 1 << 25,
-}
-RIGHT_TRANSFER = 1 << 2
-RIGHT_ALL = RIGHT_TRANSFER | sum(RIGHT.values())
+# Rights numbering is generated-contract truth. Both the manifest-spelling table
+# and `RIGHT_ALL` come from `contracts/generation/v5/schema.zt` via
+# `boot_contracts`, so the builder, the root, and the oracle cannot disagree
+# about which bit a right is or which bits exist. `RIGHT_ALL` is the union of
+# the named bits rather than a bit-width mask, which is what closes B57's hole
+# at bit 17.
+RIGHT = GENERATION_RIGHT_BY_MANIFEST_NAME
+RIGHT_TRANSFER = GENERATION_RIGHT_TRANSFER
+RIGHT_ALL = GENERATION_RIGHT_ALL
 
 CAPABILITY_KIND = {
     "endpoint": 1,

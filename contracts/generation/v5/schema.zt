@@ -59,6 +59,51 @@ maxStringBytes :: Int = 255;
 maxStringTableBytes :: Int = 65536;
 maxObjectPayloadBytes :: Int = 8388608;
 
+-- The capability-rights vocabulary. Every valid right is named here exactly
+-- once, and `RIGHT_ALL` is rendered as the union of these bits rather than as a
+-- bit-width mask: a width mask admits the gaps in the numbering, and bit 17 is
+-- such a gap (B57). Bit positions are an ABI -- a component compiled against an
+-- older generation names the same bit -- so they are pinned individually rather
+-- than derived from declaration order.
+--
+-- `manifest` is the spelling a `.zti` grant writes; `name` is the constant
+-- suffix both bindings emit. Declaring both here is what keeps the builder's
+-- name-to-bit table and the root's constants from being two hand-synchronized
+-- copies. `TRANSFER` carries no manifest spelling: a grant declares it through
+-- `transferable`, not by naming a right.
+RightBit :: type { name : Text; bit : Int; manifest : Text; };
+
+right :: Text -> Int -> Text -> RightBit
+  = name bit manifest => { name = name; bit = bit; manifest = manifest; };
+
+rightBits :: List RightBit = {
+  right "SEND" 0 "send";
+  right "RECV" 1 "recv";
+  right "TRANSFER" 2 "";
+  right "EXEC" 3 "exec";
+  right "MAP_MMIO" 4 "mapMmio";
+  right "DMA_PIN" 5 "dmaPin";
+  right "DMA_RELEASE" 6 "dmaRelease";
+  right "IRQ_ACK" 7 "irqAck";
+  right "BUFFER_WRITE" 8 "bufferWrite";
+  right "BUFFER_MAP" 9 "bufferMap";
+  right "BLOCK_READ" 10 "blockRead";
+  right "BLOCK_WRITE" 11 "blockWrite";
+  right "STORE_READ" 12 "storeRead";
+  right "STORE_WRITE" 13 "storeWrite";
+  right "HEALTH_CONFIRM" 14 "healthConfirm";
+  right "BOOT_UPDATE" 15 "bootUpdate";
+  right "SPAWN" 16 "spawn";
+  right "SUPERVISE" 18 "supervise";
+  right "DIRECTORY_READ" 19 "directoryRead";
+  right "DIRECTORY_WRITE" 20 "directoryWrite";
+  right "DIRECTORY_LIST" 21 "directoryList";
+  right "DIRECTORY_DERIVE" 22 "directoryDerive";
+  right "INPUT_READ" 23 "inputRead";
+  right "BUFFER_CREATE" 24 "bufferCreate";
+  right "BUFFER_LOAN" 25 "bufferLoan";
+};
+
 WireField :: type { name : Text; width : Int; signed : Bool; byteArray : Bool; };
 
 GenerationHeader :: type {
@@ -168,6 +213,7 @@ format ::= {
   maxGenerationBytes =; maxObjects =; maxExecutables =; maxInstances =; maxBindings =; maxGrants =; maxStates =; maxDependencies =; maxHealthInstances =; maxProcesses =; maxThreads =; maxKernelObjects =; maxMappings =; maxCapBindings =; maxServiceBindings =; maxSchedules =; maxFaultPolicies =; maxSpawnTemplates =; maxResourceQuotas =; maxMintedBindings =; maxNotificationGrants =; maxNotificationBindings =; maxStringBytes =; maxStringTableBytes =; maxObjectPayloadBytes =;
   headerFields =; objectFields =; executableFields =; instanceFields =; dependencyFields =; bindingFields =; grantFields =; stateFields =; healthFields =; processFields =; threadFields =; kernelObjectFields =; mappingFields =; capBindingFields =; serviceBindingFields =; scheduleFields =; faultPolicyFields =; spawnTemplateFields =; resourceQuotaFields =; mintedBindingFields =; notificationGrantFields =; notificationBindingFields =;
   headerLayout =; objectLayout =; executableLayout =; instanceLayout =; dependencyLayout =; bindingLayout =; grantLayout =; stateLayout =; healthLayout =; processLayout =; threadLayout =; kernelObjectLayout =; mappingLayout =; capBindingLayout =; serviceBindingLayout =; scheduleLayout =; faultPolicyLayout =; spawnTemplateLayout =; resourceQuotaLayout =; mintedBindingLayout =; notificationGrantLayout =; notificationBindingLayout =;
+  rightBits =;
 };
 
 main :: { write : FsWrite; env : Env; } -> Unit ! { * fs.WholeWriteEffects; * env.GetEffects; }
