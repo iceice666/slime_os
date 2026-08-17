@@ -25,59 +25,12 @@ measurement and are recorded in the devlog rather than opened here. Evidence:
 `devlog/2026-08-17-structural-audit/`. B67 was found afterwards, while running
 B57's own verification sweep, and had been red before either fix._
 
-_B57 and B58 were the two real defects with wrong observable semantics; both are
-resolved below. B59–B66 are structural debt that compounds per milestone, and
-B67 is a gate that cannot fail. B59 is the highest-leverage remaining item: it
+_B57 and B58 were the two real defects with wrong observable semantics, and B67 —
+found while running B57's verification sweep — was a pair of negative controls
+that could not fail. All three are resolved below. B59–B66 are structural debt
+that compounds per milestone. B59 is the highest-leverage remaining item: it
 subsumes what B57 fixed for one table and removes the coupling B60 and B66 also
 pay for._
-
-### B67 — the capability-layout gate's `extra` mutation lands in a declared slot, so it cannot fail
-
-**Status:** Open. **Class:** Gate defect (a negative control that proves
-nothing). **Depends on:** none.
-
-**Problem:** `just sel4_capability_layout_check` fails with `the audit accepted a
-mutated CSpace: a capability was installed into an undeclared slot
-(--cfg slime_b40_mutate_extra)`. The gate's purpose is to prove
-`audit_child_cspace` refuses each of B40's six perturbations; one of the six has
-never been a perturbation at all.
-
-**Evidence (2026-08-17).** Found while running B57's verification sweep.
-Reproduced with the tree at `beff860` — before B57 and B58 landed — by stashing
-every working change, so no work in this session caused it. The other five
-mutations are refused; only `extra` reaches the terminal marker.
-
-**Root cause.** The mutation picks its victim slot by excluding the ones it
-believes are declared (`slime-root/src/task.rs:1060-1064`):
-
-```rust
-let free = (0..(1u64 << cnode_size_bits) as sel4::CPtrBits)
-    .find(|slot| {
-        *slot != slots.service && *slot != slots.fault && *slot != slots.tcb && *slot != 0
-    })
-```
-
-That excludes `{0, 1, 2, 3}` — but the audit's own declared set
-(`task.rs:1075-1078`) is `{service 1, console 32, fault 3, tcb 2,
-CHILD_SLOT_CNODE 4}`. So `find` returns slot **4**, which is
-`CHILD_SLOT_CNODE` (`task.rs:66`) and is *declared*. The copy therefore lands in
-a slot the audit expects to be occupied, and the audit correctly does not flag
-it. The mutation never creates an undeclared occupancy, so this arm asserts
-nothing and would not notice a real audit regression.
-
-`console` is also missing from the exclusion list; at slot 32 it happens not to
-be selected first, so it is a latent second instance of the same omission rather
-than an active one.
-
-**Proposed fix:** Derive the mutation's exclusion set from the audit's declared
-predicate rather than restating a subset of it, so the two cannot disagree — the
-same single-source principle B57 applied to the rights vocabulary. A slot the
-audit declares must never be selectable as the "undeclared" victim.
-
-**Exit condition:** `just sel4_capability_layout_check` passes with all six
-mutations refused; the `extra` arm is observed selecting a slot the audit does
-not declare; deliberately weakening `audit_child_cspace`'s undeclared-slot check
-makes the `extra` arm fail, proving the arm now has teeth.
 
 ### B59 — the syscall ABI has no single source: 97 rights declarations, two label tables, three error tables
 
@@ -486,6 +439,78 @@ contracts_check` pass.
 
 
 ## Resolved
+### B67 — two negative controls picked declared slots, so neither could fail
+
+**Status:** Resolved 2026-08-17. **Class:** Gate defect (negative controls that
+proved nothing). **Depends on:** none.
+
+**Problem:** `just sel4_capability_layout_check` failed with `the audit accepted a
+mutated CSpace: a capability was installed into an undeclared slot
+(--cfg slime_b40_mutate_extra)`. The gate exists to prove `audit_child_cspace`
+refuses each of B40's six perturbations. Two of the six were not perturbing what
+they claimed.
+
+**Evidence (2026-08-17).** Found while running B57's verification sweep, and
+reproduced at `beff860` — before B57 and B58 landed — by stashing every working
+change, so nothing in that session caused it.
+
+**Root cause, defect 1 (`extra`).** The mutation chose its victim slot by
+restating a subset of the predicate it was trying to violate
+(`slime-root/src/task.rs:1060-1064`): it excluded `{0, service, fault, tcb}` =
+`{0, 1, 2, 3}`, while the audit's declared set (`:1075-1078`) is
+`{service 1, tcb 2, fault 3, CHILD_SLOT_CNODE 4, console 32}`. `find` therefore
+returned slot **4** — `CHILD_SLOT_CNODE`, which the audit *declares* — so the copy
+landed where occupancy was expected and the audit correctly stayed silent. The arm
+never created an undeclared occupancy. `console` was missing from the exclusion
+list too, latent only because 4 was selected first.
+
+**Root cause, defect 2 (`wrong_slot`), found behind the first.** Fixing `extra`
+advanced the gate to the next arm, which then failed differently: not accepted,
+but `the mutation was not refused as a CSpace mismatch`. Booting it directly
+showed why:
+
+```
+SLIME_ROOT FATAL SLIME_GRAPH FAIL instance init construction failed:
+  Mint { slot: 4, error: DeleteFirst }
+```
+
+`wrong_slot` diverted the fault capability to `fault.wrapping_add(1)` = slot 4 =
+`CHILD_SLOT_CNODE`, which is already occupied. The mint failed during
+*construction*, so the audit never ran, and the refusal the gate observed came
+from the wrong mechanism. Same root cause as defect 1 — slot arithmetic that does
+not consult the declared set — reached only once the first was fixed.
+
+**Fix.** `ChildSlots` now owns the predicate. `declares(slot, expect_tcb)` is the
+single source for "the plan declares this slot", and `first_undeclared(...)`
+returns the lowest slot above null it leaves empty. The audit walk, the `extra`
+arm, and the `wrong_slot` arm all go through them, so a mutation cannot name a
+declared slot. Slot 0 is excluded from `first_undeclared` deliberately and the
+reason is recorded at the definition: the audit does require it empty, but
+occupying a child's null slot perturbs the null-capability invariant as well as
+the layout, which would leave the refusal ambiguous about which property caught it.
+
+**Regression guard, and proof it bites.** The arms were verified non-vacuous by
+weakening the audit and observing the gate fail, rather than by trusting that it
+passes:
+
+- Making the audit ignore undeclared occupancy (`if occupied && !declared`) →
+  `extra` reported accepted.
+- Blinding the audit at exactly the slot both arms target →
+  `extra` reported accepted again. `extra` and `wrong_slot` share that victim
+  slot, so a single blind spot fails the earlier arm first; both therefore
+  demonstrably depend on the check.
+- Making the audit ignore a declared slot left empty (`if !occupied && declared`)
+  → `missing` reported accepted, confirming that half of the predicate is load
+  bearing for its own arm.
+
+Every weakening was reverted and the gate re-run clean.
+
+**Exit condition (observed):** `just sel4_capability_layout_check` passes — "all 6
+negative mutations refused", each named individually. `just test_sel4_root`
+(118/118), `just sel4_boot_check` (30 markers, 5 chains, 21 slots, 19 tasks),
+`just sel4_boot_layout_check` (25 plane layouts), `just sel4_root_boot_check`,
+`just fmt_check_all`, and `just lint_all` pass on the same tree.
+
 ### B57 — `RIGHT_ALL` had two definitions, and the wider one admitted an undefined rights bit
 
 **Status:** Resolved 2026-08-17. **Class:** Defect (admission accepted what no
