@@ -283,3 +283,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-17 | [B59, B66 — one contract for the syscall ABI, and 97 rights declarations becoming one](2026-08-17-b59-b66-syscall-abi-contract/index.md) | Change | Verified | B59, B66, B57, B46 |
 | 2026-08-17 | [B60 — two scoping mistakes on the way to asserting one slot number](2026-08-17-b60-control-plane-authority/index.md) | Change | Verified | B60, B55, B56 |
 | 2026-08-17 | [B64 — the rollback answer was already in the code; four of the five "dead" schemas were live](2026-08-17-b64-format-coexistence/index.md) | Change | Verified | B64, B50 |
+| 2026-08-17 | [B62 — the proposed fix was impossible, so the delta moved to the layer that already had one](2026-08-17-b62-fixture-deltas/index.md) | Change | Verified | B62, B55 |

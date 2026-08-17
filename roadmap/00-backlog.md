@@ -28,8 +28,8 @@ B57's own verification sweep, and had been red before either fix._
 _B57 and B58 were the two real defects with wrong observable semantics, and B67 —
 found while running B57's verification sweep — was a pair of negative controls
 that could not fail. B59, the highest-leverage structural item, is resolved too:
-the syscall ABI is now one contract. B66, B60, and B64 followed. All eight are in
-the resolved log below. B61, B62, B63, and B65 remain._
+the syscall ABI is now one contract. B66, B60, B64, and B62 followed. All nine are
+in the resolved log below. B61, B63, and B65 remain._
 
 ### B61 — `just run` boots a test fixture, and the product dispatch path is untestable
 
@@ -94,54 +94,6 @@ and healthy/wedge decisions have host unit tests counted by `just
 test_sel4_root`; `just sel4_root_boot_check` still passes for the fixture plane
 it guards; `just sel4_boot_check`, `just fmt_check_all`, and `just lint_all`
 pass.
-
-### B62 — the `.zti` fixtures are copy-paste: three 1882-line files differ by one line
-
-**Status:** Open. **Class:** Unmasked architectural debt (B55's staleness
-mechanism). **Depends on:** none.
-
-**Problem:** `contracts/generation/v1/schema.zt` has no `import`, `include`, or
-`inherit` construct, so every plane fixture is a full standalone copy that must
-be hand-renumbered. There are 30 `sel4-*.zti` fixtures totalling 16978 lines.
-
-**Evidence (2026-08-17).** Pairwise line similarity over all 435 fixture pairs;
-nine exceed 85%:
-
-```
-99.9%  sel4-fault.zti (1882)      vs sel4-traffic.zti (1882)
-99.9%  sel4-saturation.zti (1882) vs sel4-traffic.zti (1882)
-99.9%  sel4-fault.zti (1882)      vs sel4-saturation.zti (1882)
-99.8%  sel4-matrix-unsatisfiable.zti (1069) vs sel4-matrix.zti (1069)
-94.4%  sel4-boot.zti (1709)       vs sel4-traffic.zti (1882)
-88.3%  sel4-qos.zti (718)         vs sel4-stream.zti (714)
-86.7%  sel4-reclamation.zti (128) vs sel4-supervision.zti (135)
-```
-
-`diff sel4-traffic.zti sel4-fault.zti` is one hunk: `generation = 36` versus
-`generation = 40`. Two 1882-line files differing by a single integer.
-`check-sel4-fault-plane.py`'s own docstring already says the image is
-"`sel4-traffic.zti` with `generation` changed and nothing else."
-
-**The correct pattern already exists in the repository:**
-`scripts/build/boot_layout.py:188-262` composes `BASE_LAYOUT` with numbered
-`OVERRIDE_N` tuples precisely to avoid renumbering by hand. That mechanism is
-absent one level up, at the manifest.
-
-**Why this is B55's mechanism:** B55's first defect was a fixture holding 3
-supervision rows after the derivation rule moved to 6. A base manifest with a
-declared delta cannot hold a stale copy of a table it does not restate.
-
-**Proposed fix:** Add base-plus-delta composition at the `.zti` level, so a
-plane fixture declares only its difference from a shared base. The three
-1882-line traffic/fault/saturation fixtures should collapse to one base plus
-three short overrides, and `sel4-matrix-unsatisfiable` to one override over
-`sel4-matrix`.
-
-**Exit condition:** No two `sel4-*.zti` fixtures exceed 90% line similarity; the
-traffic/fault/saturation trio is one base plus deltas; every affected plane gate
-(`just sel4_traffic_check`, `sel4_fault_check`, `sel4_saturation_check`,
-`sel4_matrix_check`, `sel4_boot_check`) passes with byte-identical rebuilt
-generations, and `just contracts_check` and `just generation_check` pass.
 
 ### B63 — 31 plane gates reimplement a harness that already exists and nobody imports
 
@@ -232,6 +184,69 @@ gate that used the collapsed binaries passes unchanged, and `just
 sel4_boot_layout_check`, `just fmt_check_all`, and `just lint_all` pass.
 
 ## Resolved
+### B62 — the `.zti` fixtures were copy-paste: three 1882-line files differed by one field
+
+**Status:** Resolved 2026-08-17. **Class:** Unmasked architectural debt (B55's
+staleness mechanism). **Depends on:** none.
+
+**Problem:** 30 `sel4-*.zti` fixtures totalling 16978 lines, with nine pairs over
+85% identical and three at 99.9%. `diff sel4-traffic.zti sel4-fault.zti` was one
+hunk. Every plane addition was a full-file copy and hand-renumber, which is
+exactly how B55's first defect happened — a fixture froze a table it restated
+after the derivation rule moved.
+
+**The proposed fix was impossible as written.** The audit proposed adding
+base-plus-delta composition at the `.zti` level. `deps/zutai/docs/language-manual.md:93`
+is explicit: "`.zti` is immediate mode: inert serialized data. It has no imports,
+functions, conditionals, arithmetic, name resolution, type computation, or
+evaluation." A probe confirmed it — `import` in a `.zti` file is a syntax error.
+The documented pattern is inert `.zti` data plus a typed `.zt` transformation,
+and these fixtures *are* the inert data.
+
+**Fix.** The delta moved to the layer that already had one. `build-sel4.py`
+already supplied per-variant build environment (`SLIME_FABRIC_PROXY_EARLY_EXIT`
+for the fault plane) and the builder already accepted `SLIME_GENERATION_NUMBER`.
+That mechanism is now declarative: `VARIANT_GENERATION_DELTAS` states what
+distinguishes a variant sharing another's manifest, and the builder gained two
+narrow overrides — `SLIME_FABRIC_LIMIT_OVERRIDE` (one declared fabric limit) and
+`SLIME_FABRIC_QOS_OVERRIDE` (one participant's QoS field, addressed by
+route:component:field). Both validate against what the manifest already declares,
+so neither can introduce a field the schema does not know.
+
+Three fixtures deleted:
+
+| Deleted | Shares | Declared delta |
+|---|---|---|
+| `sel4-fault.zti` (1882 lines) | `sel4-traffic.zti` | `generation = 40` |
+| `sel4-saturation.zti` (1882) | `sel4-traffic.zti` | `generation = 39`, `inFlightOperations = 2` |
+| `sel4-matrix-unsatisfiable.zti` (1069) | `sel4-matrix.zti` | `generation = 35`, one participant's `reliability = bestEffort` |
+
+**A gate had to change with it, and keep its property.** `check-sel4-saturation-plane.py`
+deliberately reads the *fixture's* declared ceilings rather than restating them,
+so that loosening the fixture moves the assertion with it. Pointing it at the
+shared fixture would have made it assert against traffic's headroom — it failed
+exactly that way first (`peak was 2, expected exactly 4`). It now reads the
+override out of `build-sel4.py`'s own `VARIANT_GENERATION_DELTAS`, so the number
+the image was built with and the number the gate asserts against have one source.
+`declared_limits` gained an `overrides` parameter that refuses an override naming
+an undeclared limit.
+
+**Exit condition (observed):** 27 fixtures, 12172 lines — 3728 lines and 3 files
+removed; pairs over 85% identical fell from 9 to 3, and over 90% from 3 to 1.
+`just contracts_check`, `just generation_check` (two isolated builds
+byte-identical), `just data_fabric_profile_check`, `just sel4_traffic_check`,
+`sel4_fault_check`, `sel4_saturation_check` (all three ceilings still land exactly
+at their declared bounds), `sel4_matrix_check` (both arms, including the
+incompatible-QoS refusal at admission), `just sel4_fabric_aggregate_check`, `just
+sel4_boot_layout_check`, `just sel4_gate_control_check`, and `just ruff` all pass.
+
+**The one remaining >90% pair is not a delta.** `sel4-boot.zti` vs
+`sel4-traffic.zti` is 94.4% similar but differs across 203 lines — grants,
+bindings, shared-buffer budgets, trace depth, and `bootAction`. That is two
+compositions that happen to share most of a component set, not one composition
+with a variant, so collapsing it would mean expressing a different graph as an
+override list. Left alone deliberately.
+
 ### B64 — the format-coexistence answer existed in code but was written down nowhere, and one retained schema was unguarded
 
 **Status:** Resolved 2026-08-17. **Class:** Unmasked architectural debt (bears on

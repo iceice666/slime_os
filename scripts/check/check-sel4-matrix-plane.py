@@ -60,7 +60,7 @@ BOOT_TIMEOUT_SECONDS = 240
 # `slime-root` must refuse before any component launches.
 UNSATISFIABLE_IMAGE = ROOT / "build" / "slime-sel4-matrix-unsatisfiable.elf"
 UNSATISFIABLE_FIXTURE = (
-    ROOT / "contracts" / "generation" / "v1" / "fixtures" / "sel4-matrix-unsatisfiable.zti"
+    ROOT / "contracts" / "generation" / "v1" / "fixtures" / "sel4-matrix.zti"
 )
 # The root's own refusal marker for a graph it cannot satisfy.
 UNSATISFIABLE_REFUSAL = r"SLIME_ROOT FATAL generation admission rejected: UnsatisfiableFabricGraph"
@@ -684,7 +684,7 @@ def check_incompatible_qos_fails_closed(profile: dict[str, object]) -> None:
     can observe it — and observing it is what distinguishes "the root refuses
     this" from "nothing ever built it".
 
-    `sel4-matrix-unsatisfiable.zti` is `sel4-matrix.zti` with one
+    B62: the unsatisfiable arm shares `sel4-matrix.zti`, with one
     `telemetry-alt` publisher weakened from RELIABLE to BEST_EFFORT, leaving its
     RELIABLE subscriber promised delivery its writer never offers. So what is
     refused is this plane's own graph rather than a hand-written stand-in.

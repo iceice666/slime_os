@@ -86,7 +86,7 @@ PINS_PATH = ROOT / "sel4" / "pins.toml"
 IMAGE = ROOT / "build" / "slime-sel4-fault.elf"
 MANIFEST = ROOT / "build" / "slime-sel4-fault.identity.json"
 BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
-FIXTURE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "sel4-fault.zti"
+FIXTURE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "sel4-traffic.zti"
 IMAGE_VARIANT = "fault"
 BOOT_TIMEOUT_SECONDS = 240
 
@@ -122,10 +122,14 @@ FAILURE_MARKERS: tuple[str, ...] = (
 # about `drive_traffic_plane` rather than a scheduling accident -- unlike
 # everything each worker does with them afterward, which three concurrent
 # brokers race over and this gate deliberately does not order. Identical to
-# `check-sel4-traffic-plane.py`'s chain except the admitted generation number:
-# `sel4-fault.zti` is `sel4-traffic.zti` with `generation` changed and nothing
-# else, so every other admitted count matches. What differs is the *build*: this
-# variant is compiled with the proxy early-death injection enabled.
+# `check-sel4-traffic-plane.py`'s chain except the admitted generation number.
+#
+# B62: this plane shares `sel4-traffic.zti`. It was a full 1882-line copy
+# differing only in `generation`, which `build-sel4.py` now supplies as a
+# declared per-variant delta, so every other admitted count matches by
+# construction rather than by two fixtures happening to agree. What differs is
+# the *build*: this variant is compiled with the proxy early-death injection
+# enabled.
 CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "the generation was admitted with its declared partition",

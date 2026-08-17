@@ -15,7 +15,7 @@ milestone by asserting the two things no single-plane gate can:
 2. **One aggregate path.** Both required schedules -- the normal concurrent one
    and the fault one -- are exercised over the *same* declared composition, so
    the parent exit condition is observed on one graph rather than assembled from
-   separate profile boots. `sel4-fault.zti` is `sel4-traffic.zti` with
+   separate profile boots. The fault variant shares `sel4-traffic.zti` with
    `generation` changed and nothing else; the fault variant differs only in that
    its interposition hop is compiled to die. That is what makes the pair an
    aggregate rather than two unrelated planes.

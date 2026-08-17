@@ -156,11 +156,11 @@ VARIANT_MANIFESTS = {
     OPERATION_VARIANT: "sel4-operation",
     VISIBILITY_VARIANT: "sel4-visibility",
     MATRIX_VARIANT: "sel4-matrix",
-    MATRIX_UNSATISFIABLE_VARIANT: "sel4-matrix-unsatisfiable",
+    MATRIX_UNSATISFIABLE_VARIANT: "sel4-matrix",
     BOOT_VARIANT: "sel4-boot",
     TRAFFIC_VARIANT: "sel4-traffic",
-    SATURATION_VARIANT: "sel4-saturation",
-    FAULT_VARIANT: "sel4-fault",
+    SATURATION_VARIANT: "sel4-traffic",
+    FAULT_VARIANT: "sel4-traffic",
     STORAGE_VARIANT: "sel4-storage",
     STORE_VARIANT: "sel4-store",
     ROLLBACK_VARIANT: "sel4-rollback",
@@ -173,6 +173,33 @@ VARIANT_MANIFESTS = {
     POWERBOX_VARIANT: "sel4-powerbox",
     TRANSFER_VARIANT: "sel4-transfer",
     BOOT_SELECTION_VARIANT: "sel4",
+}
+# B62: what distinguishes a variant that shares another's manifest.
+#
+# `traffic`, `fault`, and `saturation` are one composition; each was a full
+# 1882-line copy of the same fixture differing only in these fields. The
+# generation number must differ so the three images have distinct identities —
+# `generation_check` builds each twice and compares bytes, so two variants
+# resolving to one identity would make that assertion vacuous. Saturation
+# additionally narrows one declared limit, which is the ceiling its gate drives
+# traffic against.
+#
+# The numbers are the ones the deleted fixtures declared, so every plane's
+# generation identity is unchanged by the collapse.
+VARIANT_GENERATION_DELTAS = {
+    SATURATION_VARIANT: {
+        "SLIME_GENERATION_NUMBER": "39",
+        "SLIME_FABRIC_LIMIT_OVERRIDE": "inFlightOperations=2",
+    },
+    FAULT_VARIANT: {"SLIME_GENERATION_NUMBER": "40"},
+    # C8.12's negative control: one participant's reliability flipped so the
+    # pair becomes incompatible and admission must refuse the graph. That one
+    # field is the whole test, so it is a declared delta rather than a
+    # 1069-line second copy of the matrix fixture.
+    MATRIX_UNSATISFIABLE_VARIANT: {
+        "SLIME_GENERATION_NUMBER": "35",
+        "SLIME_FABRIC_QOS_OVERRIDE": "telemetry-alt:fabric-publisher-b:reliability:bestEffort",
+    },
 }
 VARIANT_TARGET_DIRS = {
     FIXTURE_VARIANT: "root",
@@ -819,6 +846,17 @@ def build_application(
     else:
         manifest = VARIANT_MANIFESTS.get(variant, "sel4")
         generation_environment = None
+        # B62: `traffic`, `fault`, and `saturation` share one manifest. They were
+        # three 1882-line fixtures differing in exactly two fields, and a full
+        # copy per variant is how a fixture goes stale against a rule it restates
+        # (B55). `.zti` is immediate mode by design and cannot compose, so the
+        # delta is declared here. Each variant still gets its own generation
+        # number, which is what keeps their identities — and therefore their
+        # images — distinct.
+        variant_delta = VARIANT_GENERATION_DELTAS.get(variant)
+        if variant_delta:
+            generation_environment = dict(os.environ)
+            generation_environment.update(variant_delta)
         if variant == FAULT_VARIANT:
             # C8.14: the one fault this plane must *inject* rather than script.
             # Every other degradation path -- rejection, malformed reply,
@@ -827,7 +865,7 @@ def build_application(
             # traffic action's own participants. A declared interposition hop
             # dying is the one condition no participant can ask for, because a
             # proxy that relays correctly cannot also be absent.
-            generation_environment = dict(os.environ)
+            generation_environment = generation_environment or dict(os.environ)
             generation_environment["SLIME_FABRIC_PROXY_EARLY_EXIT"] = "1"
         root_environment["SLIME_GENERATION"] = str(
             build_sel4_generation(manifest, environment=generation_environment).resolve()

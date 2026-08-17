@@ -5,7 +5,7 @@
 `just sel4_traffic_check` proves the stream, call, and operation planes carry
 real concurrent traffic with generous headroom against every declared
 ceiling. This gate boots the identical `"traffic"` action and component
-behavior against a second fixture (`sel4-saturation.zti` is `sel4-traffic.zti`
+behavior against a narrowed ceiling (B62: this plane shares `sel4-traffic.zti`
 with `inFlightOperations` tightened from 4 to 2 and the generation number
 changed; nothing else differs) and additionally requires three of the
 declared resource classes to land *exactly* at their fixture's own bound
@@ -22,7 +22,7 @@ rather than comfortably under it:
 
 `check_saturation` reads each declared ceiling back out of the fixture itself
 rather than restating the numbers, so a future edit that loosens
-`sel4-saturation.zti` back toward the traffic fixture's headroom fails this
+the declared `inFlightOperations` override back toward the traffic headroom fails this
 gate instead of silently passing it.
 
 Everything `check-sel4-traffic-plane.py` already asserts -- interleaving,
@@ -65,6 +65,7 @@ from typing import NoReturn
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
 from fabric_graph_limits import declared_limits  # noqa: E402
+from harness import load_script  # noqa: E402
 from fabric_trace_contract import (  # noqa: E402
     FABRIC_TRACE_RESOURCE_BUFFERS,
     FABRIC_TRACE_RESOURCE_CALLS,
@@ -85,9 +86,26 @@ PINS_PATH = ROOT / "sel4" / "pins.toml"
 IMAGE = ROOT / "build" / "slime-sel4-saturation.elf"
 MANIFEST = ROOT / "build" / "slime-sel4-saturation.identity.json"
 BUILD_SCRIPT = ROOT / "scripts" / "build" / "build-sel4.py"
-FIXTURE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "sel4-saturation.zti"
+FIXTURE = ROOT / "contracts" / "generation" / "v1" / "fixtures" / "sel4-traffic.zti"
 IMAGE_VARIANT = "saturation"
 BOOT_TIMEOUT_SECONDS = 240
+
+# B62: the ceilings this variant narrows, read from the build's own declaration
+# rather than restated here. `build-sel4.py` supplies them to the generation
+# builder as `SLIME_FABRIC_LIMIT_OVERRIDE`, so the number the image was built
+# with and the number this gate asserts against cannot drift — which is the
+# property the deleted `sel4-saturation.zti` provided by being a whole second
+# copy of the traffic fixture.
+def _variant_limit_overrides() -> dict[str, int]:
+    builder = load_script("saturation_sel4_build", "build/build-sel4.py")
+    declared = builder.VARIANT_GENERATION_DELTAS.get(IMAGE_VARIANT, {})
+    spec = declared.get("SLIME_FABRIC_LIMIT_OVERRIDE")
+    if not spec:
+        fail(f"the {IMAGE_VARIANT} variant declares no fabric-limit override")
+    name, _, raw = spec.partition("=")
+    if not name or not raw.isdigit():
+        fail(f"malformed fabric-limit override {spec!r}")
+    return {name: int(raw)}
 
 INIT_COMPLETE = r"\[init\] traffic plane reclaimed"
 TERMINAL_MARKER = r"SLIME_GRAPH component exit task=(\d+) status=(-?\d+)"
@@ -122,7 +140,7 @@ FAILURE_MARKERS: tuple[str, ...] = (
 # everything each worker does with them afterward, which three concurrent
 # brokers race over and this gate deliberately does not order. Identical to
 # `check-sel4-traffic-plane.py`'s chain except the admitted generation number:
-# `sel4-saturation.zti` is `sel4-traffic.zti` with its resource ceilings
+# B62: this plane shares `sel4-traffic.zti`, with its resource ceilings
 # tightened, not its structure changed, so every other admitted count matches.
 CHAINS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
@@ -549,7 +567,7 @@ def check_resources(transcript: str) -> None:
     ceilings."""
     head = composition(transcript)
     # Read once; the ceiling is constant for the whole run.
-    limits = declared_limits(FIXTURE)
+    limits = declared_limits(FIXTURE, _variant_limit_overrides())
     records_by_family: dict[str, list[dict[str, str]]] = {
         family: [] for family in TRACE_FAMILIES
     }
@@ -726,7 +744,7 @@ def check_saturation(transcript: str) -> None:
     fixture's own declared bound, not comfortably under it -- the property
     that distinguishes a saturation fixture from a smaller traffic fixture."""
     head = composition(transcript)
-    limits = declared_limits(FIXTURE)
+    limits = declared_limits(FIXTURE, _variant_limit_overrides())
     peaks: dict[tuple[str, int], int] = {}
     for match in TRACE_PATTERN.finditer(head):
         record = match.groupdict()

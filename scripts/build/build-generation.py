@@ -289,34 +289,18 @@ SEL4_MANIFESTS = {
     / "v1"
     / "fixtures"
     / "sel4-traffic.zti",
-    "sel4-saturation": ROOT
-    / "contracts"
-    / "generation"
-    / "v1"
-    / "fixtures"
-    / "sel4-saturation.zti",
-    "sel4-fault": ROOT
-    / "contracts"
-    / "generation"
-    / "v1"
-    / "fixtures"
-    / "sel4-fault.zti",
     "sel4-matrix": ROOT
     / "contracts"
     / "generation"
     / "v1"
     / "fixtures"
     / "sel4-matrix.zti",
-    # C8.12's negative arm: the matrix graph with one `telemetry-alt` publisher
-    # weakened to BEST_EFFORT against its RELIABLE subscriber. The builder emits
-    # it — pairwise QoS is not a shape property — and `slime-root` refuses it at
-    # admission, which is where that rule lives.
-    "sel4-matrix-unsatisfiable": ROOT
-    / "contracts"
-    / "generation"
-    / "v1"
-    / "fixtures"
-    / "sel4-matrix-unsatisfiable.zti",
+    # C8.12's negative arm shares this manifest (B62): one `telemetry-alt`
+    # publisher is weakened to BEST_EFFORT against its RELIABLE subscriber
+    # through a declared per-variant QoS override, rather than by a second
+    # 1069-line copy. The builder emits the incompatible graph — pairwise QoS is
+    # not a shape property — and `slime-root` refuses it at admission, which is
+    # where that rule lives.
     "sel4-storage": ROOT
     / "contracts"
     / "generation"
@@ -3936,6 +3920,70 @@ def main() -> None:
         if generation_number <= 0:
             fail("SLIME_GENERATION_NUMBER must be a positive integer")
         manifest["generation"] = generation_number
+    # B62: one declared fabric limit, overridden per build variant.
+    #
+    # `sel4-traffic`, `sel4-fault`, and `sel4-saturation` were three 1882-line
+    # fixtures differing in exactly two fields: the generation number (already
+    # overridable above) and, for saturation, `inFlightOperations`. Copying an
+    # entire manifest to change one integer is how a fixture goes stale against a
+    # derivation rule it restates but no longer matches, which is B55's first
+    # defect. `.zti` is immediate mode by design — no imports, no composition —
+    # so the delta is expressed here rather than in the data.
+    #
+    # Deliberately narrow: one declared limit by name, validated against the
+    # limits the manifest already declares, so this cannot introduce a limit the
+    # schema does not know or silently create a graph field.
+    requested_limit = os.environ.get("SLIME_FABRIC_LIMIT_OVERRIDE")
+    if requested_limit:
+        name, _, raw = requested_limit.partition("=")
+        if not _ or not name:
+            fail("SLIME_FABRIC_LIMIT_OVERRIDE must be <limit>=<value>")
+        limits = manifest.get("fabricGraph", {}).get("limits")
+        if not isinstance(limits, dict) or name not in limits:
+            fail(f"SLIME_FABRIC_LIMIT_OVERRIDE names undeclared limit {name!r}")
+        try:
+            value = int(raw)
+        except ValueError:
+            fail("SLIME_FABRIC_LIMIT_OVERRIDE value must be an integer")
+        if value <= 0:
+            fail("SLIME_FABRIC_LIMIT_OVERRIDE value must be positive")
+        limits[name] = value
+    # B62: one declared participant QoS field, overridden per build variant.
+    #
+    # `sel4-matrix-unsatisfiable` was a 1069-line copy of `sel4-matrix` flipping
+    # exactly one participant's `reliability` so admission must refuse the
+    # resulting incompatible pair. The negative control is that single field, so
+    # the copy carried 1068 lines of agreement that nothing checked stayed in
+    # agreement.
+    #
+    # Addressed by route, component, and field so it cannot silently retarget:
+    # every part must resolve against what the manifest already declares.
+    requested_qos = os.environ.get("SLIME_FABRIC_QOS_OVERRIDE")
+    if requested_qos:
+        parts = requested_qos.split(":")
+        if len(parts) != 4 or not all(parts):
+            fail("SLIME_FABRIC_QOS_OVERRIDE must be <route>:<component>:<field>:<value>")
+        route_name, component, field, value = parts
+        routes = [
+            route
+            for route in manifest.get("fabricGraph", {}).get("routes", [])
+            if route.get("name") == route_name
+        ]
+        if len(routes) != 1:
+            fail(f"SLIME_FABRIC_QOS_OVERRIDE names undeclared route {route_name!r}")
+        members = [
+            member
+            for member in routes[0]["participants"]
+            if member.get("component") == component
+        ]
+        if len(members) != 1:
+            fail(
+                f"SLIME_FABRIC_QOS_OVERRIDE names {component!r}, which is not a "
+                f"unique participant of {route_name!r}"
+            )
+        if field not in members[0]:
+            fail(f"SLIME_FABRIC_QOS_OVERRIDE names undeclared field {field!r}")
+        members[0][field] = value
     target_profile = resolve_target_profile(manifest.get("target"))
     if manifest["formatVersion"] != 1:
         fail("unsupported source formatVersion")

@@ -422,7 +422,8 @@ if visibility.artifact["name"] != "visibility":
 # which is why its grants target `fabric-service`.
 #
 # The real full-graph fixtures (`sel4-boot.zti`, `sel4-traffic.zti`,
-# `sel4-fault.zti`, `sel4-saturation.zti`) declare `unified` *alone* and target
+# and the traffic composition the fault/saturation variants share) declare
+# `unified` *alone* and target
 # the workers, so they resolve it correctly -- and `just sel4_boot_check`,
 # `sel4_traffic_check`, `sel4_fault_check`, and `sel4_saturation_check` all boot
 # it, which is stronger evidence than resolving it here would be. Sweeping it
