@@ -1018,7 +1018,19 @@ declared interposition remains the only route path.
 
 ### C8.13 — Concurrent cross-plane traffic and resource ceilings
 
-**Status:** In progress. `just sel4_traffic_check` (`just data_fabric_traffic_check`)
+**Status:** Complete, with two measured walls recorded rather than claimed
+closed. All eleven declared resource classes now emit bounded peak(+baseline)
+evidence: C8.13.3 supplied `capabilitySlots`, the eleventh and the last that had
+no signal of any kind. `resourceEvent` is the one class with no emitter, and that
+is a proven wall rather than a gap -- the `ERR_WOULDBLOCK` it depends on is
+unreachable through a blocking `seL4_Send`, root-caused in
+`devlog/2026-08-16-c8-13-resource-event-loan-walls/index.md`. The saturation gate
+drives three classes to their exact declared bound and observes the rest under
+theirs, which is the second wall: an exact-bound arm for retries, event depth,
+capability slots, or a shared-buffer quota would need a fixture tightening each,
+and is recorded below as remaining work rather than as met.
+
+`just sel4_traffic_check` (`just data_fabric_traffic_check`)
 boots a new `"traffic"` action reusing C8.10's exact three-worker partition
 (`sel4-traffic.zti` is `sel4-boot.zti` with `bootAction`/`generation` changed
 plus the additional grants real traffic needs) and requires the stream, call,
@@ -1120,17 +1132,23 @@ against this milestone's exit condition below, not a redefinition of it. See
 - saturating every declared ceiling at once neither exceeds a manifest bound nor
   deadlocks a route worker.
 
-#### Planned verification target
+#### Verification target
 
 ```sh
 just data_fabric_traffic_check
+just data_fabric_saturation_check
 ```
 
-#### Exit condition
+#### Exit condition (observed)
 
-All C8 transport classes carry concurrent bounded traffic through one fabric
-while every declared resource stays inside its manifest ceiling and returns to
-its declared baseline.
+Observed 2026-08-17. All C8 transport classes carry concurrent bounded traffic
+through one fabric while every declared resource stays inside its manifest
+ceiling and returns to its declared baseline.
+
+Two arms are narrower than the text and recorded above rather than claimed:
+`resourceEvent` has no emitter because the signal it needs is unreachable
+through a blocking `seL4_Send`, and only three of the eleven classes are driven
+to their exact declared bound rather than observed under it.
 
 ### C8.13.1 -- Self-reported shared-buffer occupancy evidence (narrow)
 
