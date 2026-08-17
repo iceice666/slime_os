@@ -326,6 +326,13 @@ def check_generation(data: bytes, expected_identity: bytes | None = None) -> dic
         require(offset == previous_payload and offset + length <= len(data), "BadObjectBounds")
         blob = data[offset : offset + length]
         require(sha256(blob) == digest, "BadObjectHash")
+        # B69: every component image is checked against the resolved target
+        # profile below, but the kernel object never was, so a generation
+        # carrying a wrong-architecture kernel was admitted. `check_kernel_image`
+        # already produces `KernelTargetProfileMismatch`; nothing called it from
+        # the admission path.
+        if kind == 1:
+            check_kernel_image(blob, profile)
         object_rows.append((object_id, kind, blob))
         previous_id, previous_payload = object_id, offset + length
     require(previous_payload == len(data), "TrailingGenerationBytes")
@@ -346,7 +353,19 @@ def check_generation(data: bytes, expected_identity: bytes | None = None) -> dic
         name = read_string(data, strings_offset, strings_len, row[0])
         _, executable, owner_kind, owner_index, autostart, dependency_start, dependency_count, binding_start, binding_count, required = row
         require(name > previous_name and executable < executables, "BadInstance")
-        require(owner_kind in (0, 1) and (owner_kind == 0 or owner_index < instances) and owner_index != index, "BadInstanceOwner")
+        # B69: `owner_index` only names an instance when `owner_kind` is 1. A
+        # root-owned instance is encoded `(0, 0)` by `build-generation.py`, so
+        # applying `owner_index != index` to it rejects any root-owned instance
+        # that happens to land at index 0 -- instances are name-sorted, and every
+        # committed fixture has a name sorting before `init`, so the flaw stayed
+        # hidden until a synthesized closure put `init` first. The
+        # self-ownership check belongs to the branch where the field means
+        # something.
+        require(owner_kind in (0, 1), "BadInstanceOwner")
+        if owner_kind == 1:
+            require(owner_index < instances and owner_index != index, "BadInstanceOwner")
+        else:
+            require(owner_index == 0, "BadInstanceOwner")
         require(autostart in (0, 1) and required in (0, 1), "BadInstance")
         require(dependency_start + dependency_count <= dependencies and binding_start + binding_count <= bindings, "BadInstanceBounds")
         instance_rows.append((name, executable, owner_kind, owner_index, autostart, dependency_start, dependency_count, binding_start, binding_count, required))
