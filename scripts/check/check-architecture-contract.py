@@ -19,6 +19,9 @@ from boot_contracts import (
     COMPONENT_IMAGE_SEGMENT,
     COMPONENT_IMAGE_VERSION,
     COMPONENT_SEGMENT_FLAG_EXEC,
+    GENERATION_HEADER_OBJECT_COUNT_OFFSET,
+    GENERATION_HEADER_OBJECT_OFFSET_OFFSET,
+    GENERATION_HEADER_STRING_OFFSET_OFFSET,
     GENERATION_OBJECT,
     KERNEL_ABI_VERSION,
     KERNEL_HEADER,
@@ -209,12 +212,15 @@ def target_manifest(name: str) -> dict:
 
 
 def object_payload(generation: bytes, object_id: str) -> bytes:
-    # Generated v5 header offsets. Keep these in lockstep with
-    # `scripts/lib/boot_contracts.py`; notification topology added two section
-    # offsets after minted bindings.
-    object_count = struct.unpack_from("<I", generation, 112)[0]
-    object_offset = struct.unpack_from("<Q", generation, 200)[0]
-    string_offset = struct.unpack_from("<Q", generation, 368)[0]
+    object_count = struct.unpack_from(
+        "<I", generation, GENERATION_HEADER_OBJECT_COUNT_OFFSET
+    )[0]
+    object_offset = struct.unpack_from(
+        "<Q", generation, GENERATION_HEADER_OBJECT_OFFSET_OFFSET
+    )[0]
+    string_offset = struct.unpack_from(
+        "<Q", generation, GENERATION_HEADER_STRING_OFFSET_OFFSET
+    )[0]
     for index in range(object_count):
         name_offset, _kind, payload_offset, payload_len, _digest = GENERATION_OBJECT.unpack_from(
             generation, object_offset + index * GENERATION_OBJECT.size
