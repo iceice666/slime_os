@@ -28,8 +28,8 @@ B57's own verification sweep, and had been red before either fix._
 _B57 and B58 were the two real defects with wrong observable semantics, and B67 —
 found while running B57's verification sweep — was a pair of negative controls
 that could not fail. B59, the highest-leverage structural item, is resolved too:
-the syscall ABI is now one contract. B66 and B60 followed from it. All seven are
-in the resolved log below. B61–B65 remain._
+the syscall ABI is now one contract. B66, B60, and B64 followed. All eight are in
+the resolved log below. B61, B62, B63, and B65 remain._
 
 ### B61 — `just run` boots a test fixture, and the product dispatch path is untestable
 
@@ -196,49 +196,6 @@ with a `--bless` path; `check-sel4-gate-controls.py` derives every marker count;
 `just sel4_gate_control_check` still rejects every mutation class it rejects
 today, and the full set of plane gates passes unchanged.
 
-### B64 — no generation-format version can coexist with another, and five schema trees are dead
-
-**Status:** Open. **Class:** Unmasked architectural debt (bears on roadmap
-invariant 7). **Depends on:** none.
-
-**Problem:** Generation admission is an equality test against one pinned
-version, while the rollback and recovery components exist to boot an *older*
-selectable generation. The two cannot both be true across a format bump, and
-which one gives is written down nowhere.
-
-**Evidence (2026-08-17).** `boot-contracts/src/generation.rs:586` is
-`if version != FORMAT_VERSION`, with `FORMAT_VERSION = 5` in the generated
-`boot-contracts/src/generated/generation.rs:4`; the oracle matches at
-`check-generation.py:272` (`UnsupportedGenerationVersion`). The format has been
-bumped four times: `contracts/generation/` holds `v1` through `v5`.
-`scripts/generate/generate-boot-bindings.py:22` wires only `generation/v5`.
-
-So a BootState slot holding a pre-bump generation becomes undecodable the moment
-the next version's root ships — while `roadmap/README.md` invariant 7 requires
-that activation never overwrite the running generation and that a failed pending
-generation cannot consume the last selectable boot root.
-
-**Dead trees found alongside it.** `contracts/generation/{v2,v3,v4}`,
-`contracts/component/v1`, and `contracts/kernel-image/v1` are each a complete
-schema (several with `gen_rust.zt`) that no generator or code path reads.
-Generators wire only `generation/v5`, `component/v2`, and `kernel-image/v2`. The
-only surviving references are prose: a sentence in `check-generation-v5.py:6`
-and a comment in `components/component.ld:1`.
-
-**Proposed fix:** Decide and record which is true, then enforce it.
-Either (a) make header decoding dispatch over a small registry of still-
-supported `formatVersion`s generated from the surviving `vN` schemas, so
-rollback across a bump is real; or (b) state explicitly that a format bump is
-not rollback-safe and add a migration step at activation that refuses to leave
-an undecodable generation as the last selectable root. Delete the five dead
-schema trees, or wire the ones (a) needs.
-
-**Exit condition:** A documented, gated answer for booting a generation written
-by a previous `formatVersion`, exercised by `just sel4_rollback_check` or
-`sel4_recovery_plane_check` against a deliberately older-format slot; no schema
-tree remains that no generator reads; `just contracts_check` and `just
-generation_check` pass.
-
 ### B65 — 41 of 52 component binaries exist to drive one gate each
 
 **Status:** Open. **Class:** Unmasked debt (per-gate accretion). **Depends on:**
@@ -275,6 +232,78 @@ gate that used the collapsed binaries passes unchanged, and `just
 sel4_boot_layout_check`, `just fmt_check_all`, and `just lint_all` pass.
 
 ## Resolved
+### B64 — the format-coexistence answer existed in code but was written down nowhere, and one retained schema was unguarded
+
+**Status:** Resolved 2026-08-17. **Class:** Unmasked architectural debt (bears on
+roadmap invariant 7). **Depends on:** none.
+
+**Problem as opened:** generation admission is an equality test against one
+pinned version, while the rollback and recovery components exist to boot an
+*older* selectable generation. The audit judged the two irreconcilable and
+additionally reported five dead schema trees.
+
+**Both halves of that were partly wrong, and checking is what showed it.**
+
+*The trees are not dead.* `scripts/check/check-contracts.py` type-checks
+`contracts/generation/v2` and `v3` (and runs their `check-invalid-layout.zt`
+negative controls, asserting a wire-layout mismatch is rejected),
+`contracts/component/v1` at `:125-126`, and `contracts/kernel-image/v1` in the
+same sweep. Four of the five are live gate inputs. `check-generation-v5.py`
+states the policy the audit missed: the v4 generator "is still on disk because
+the format's history is part of the contract"; what must not survive is a
+*producer*. Deleting them would have removed real negative controls.
+
+Only `contracts/generation/v4` was genuinely untouched by any gate — the one
+retained version that could have stopped parsing with nothing noticing. It is now
+in the `check-contracts.py` sweep, and all three retained versions type-check.
+
+*The answer already existed in `slime-root`.* Two mechanisms, neither documented:
+`Generation::decode` (`boot-contracts/src/generation.rs:591-600`) refuses a
+v2/v3/v4 magic with `UnsupportedVersion` and a foreign one with `BadMagic` — a
+deliberate distinction between "an older Slime generation" and "not one". And
+`boot_selector::select` (`:144-165`) consumes the pending attempt and commits the
+BootState *before* reading or decoding the candidate's bytes, so an undecodable
+pending generation exhausts its declared attempts and falls back to known-good
+rather than retrying forever or taking the last selectable root with it.
+
+So the repository had already chosen option (b) — format bumps are not
+rollback-compatible by *migration*, they are rollback-*safe* by refusal. The
+defect was that this was inferable only by reading two files, and no gate
+observed it.
+
+**Fix.** `roadmap/README.md`'s invariant 7 now states the rule, names both
+mechanisms, and points at the gate. `just sel4_boot_selection_check` gained an arm
+that stamps a pending generation's header to the v4 magic and version, gives it
+one declared attempt, and requires the root to refuse it (`SLIME_ROOT FATAL boot
+selection rejected: Generation`) and the next boot to already be known-good, with
+only BootState sectors touched. `boot_refused` was added because the existing
+`boot` helper treats any root fatal as a failed run — correct for every arm whose
+candidate is supposed to start, wrong for one whose candidate cannot be decoded.
+
+**Why this arm is not redundant with the existing rollback arm.** That one proves
+retry exhaustion for a candidate that *runs* and reports itself unhealthy. An
+undecodable candidate never runs, so it can never report anything; the protection
+has to come from the selector spending the attempt first, which nothing exercised.
+
+**Regression guard, and proof it bites.** Neutralizing the restamp so the pending
+generation stays decodable fails the arm: the candidate boots, fails at runtime,
+and the transcript shows `SLIME_GRAPH FAIL required instance init exit status=1`
+instead of the refusal. Reverted. Neutralizing only the magic still passes,
+because the version word alone is sufficient to refuse — worth knowing, and why
+the arm stamps both.
+
+**Exit condition (observed):** the format-coexistence rule is documented as an
+architectural invariant with its mechanisms named; a pending generation in a
+superseded wire format is observed being refused without consuming the known-good
+root, on a real boot; no retained schema version is unguarded. `just
+sel4_boot_selection_check`, `just contracts_check` (now including
+`generation/v4`), and `just ruff` pass.
+
+**Correction to the audit.** The structural audit's B64 entry claimed five dead
+schema trees on the evidence of a `grep` for generator references. That evidence
+was insufficient: it did not check `check-contracts.py`, which consumes four of
+them as gate inputs. Recorded here rather than silently narrowed.
+
 ### B60 — authority-derivation policy lived in the builder, and one slot number had two independent sources
 
 **Status:** Resolved 2026-08-17. **Class:** Unmasked architectural debt (B55's

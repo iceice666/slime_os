@@ -54,6 +54,33 @@ def build_generation(output: Path, number: int, bundle: str, *, failing: bool = 
     return generation
 
 
+def restamp_wire_version(source: Path, destination: Path, magic: bytes, version: int) -> Path:
+    """A generation whose *wire* header names a superseded format.
+
+    B64: the repository retains `contracts/generation/v{2,3,4}` because the
+    format's history is part of the contract, and `Generation::decode` refuses a
+    v2/v3/v4 magic with `UnsupportedVersion` rather than `BadMagic` — a
+    deliberate distinction between "an older Slime generation" and "not one".
+    What no gate covered is the *consequence* for rollback: roadmap invariant 7
+    requires that a failed pending generation cannot consume the last selectable
+    boot root, and an undecodable pending generation is the sharpest case of a
+    failed one. It never runs, so it cannot report itself unhealthy.
+
+    Rewriting the header is the whole fixture: the selector reads the magic and
+    version word before anything else, so the rest of the bytes are irrelevant to
+    the refusal under test. The identity is recomputed by the caller's store
+    builder, so this stays a well-formed store entry containing a generation the
+    running root cannot decode.
+    """
+    blob = bytearray(source.read_bytes())
+    if len(blob) < 12:
+        fail("generation too short to restamp")
+    blob[:8] = magic
+    blob[8:12] = version.to_bytes(4, "little")
+    destination.write_bytes(bytes(blob))
+    return destination
+
+
 def make_store(paths: list[Path], bundle: str, attempts: int) -> bytes:
     spec = importlib.util.spec_from_file_location("slime_build_generation", GENERATOR)
     if spec is None or spec.loader is None:
@@ -156,6 +183,61 @@ def boot(disk: Path, terminal: str) -> str:
     return transcript
 
 
+def boot_refused(disk: Path, refusal: str) -> str:
+    """Boot once where a root *fatal* is the expected outcome.
+
+    `boot` treats any `SLIME_ROOT FATAL` as a failed run, which is right for
+    every arm whose candidate is supposed to start. B64's stale-format candidate
+    cannot be decoded, so the correct observable is the refusal itself; reusing
+    `boot` would report "did not reach" for a transcript that contains exactly
+    what the arm requires.
+    """
+    qemu = shutil.which("qemu-system-aarch64")
+    if qemu is None:
+        fail("qemu-system-aarch64 is not on PATH")
+    profile = qemu_profile()
+    command = [
+        qemu,
+        "-machine", str(profile["machine"]),
+        "-cpu", str(profile["cpu"]),
+        "-smp", str(profile["cpus"]),
+        "-m", f"size={profile['memory_mib']}M",
+        "-nographic", "-serial", "mon:stdio", "-kernel", str(IMAGE),
+        "-drive", f"if=none,id=slimedisk,format=raw,file={disk}",
+        "-device", "virtio-blk-device,drive=slimedisk",
+    ]
+    process = subprocess.Popen(
+        command, cwd=ROOT, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT, text=True, bufsize=1,
+    )
+    timer = threading.Timer(TIMEOUT, process.kill)
+    timer.start()
+    lines: list[str] = []
+    reached = False
+    try:
+        assert process.stdout is not None
+        for line in process.stdout:
+            lines.append(line.rstrip())
+            if refusal in line:
+                reached = True
+                break
+            if "panicked at" in line:
+                break
+    finally:
+        timer.cancel()
+        process.terminate()
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+    transcript = "\n".join(lines)
+    if not reached:
+        sys.stderr.write("\n".join(lines[-50:]) + "\n")
+        fail(f"boot did not refuse with {refusal}")
+    return transcript
+
+
 def expect(transcript: str, number: int, pending: int, attempts: int) -> None:
     pattern = rf"SLIME_BOOT selected .* number={number} pending={pending} attempts={attempts}"
     if re.search(pattern, transcript) is None:
@@ -203,6 +285,36 @@ def main() -> None:
         if rollback.read_bytes() != fallback:
             fail("known-good fallback boot mutated disk")
 
+        # B64: a pending generation the running root cannot decode. It never
+        # runs, so it can never report itself unhealthy — the arm above proves
+        # retry exhaustion for a generation that *does* run and fails, and this
+        # one proves the same protection for one that cannot start. The attempt
+        # is spent before the bytes are decoded (`boot_selector::select` consumes
+        # it, commits the state, and only then reads the entry), which is what
+        # bounds an undecodable candidate to its declared attempts instead of
+        # letting it retry forever or take the known-good root with it.
+        stale = restamp_wire_version(
+            failing, work / "stale-generation.bin", b"SLIMEG4\0", 4
+        )
+        stale_disk = work / "stale.img"
+        make_disk(stale_disk, make_store([known_good, stale], bundle, 1))
+        stale_initial = stale_disk.read_bytes()
+        # One declared attempt, so the pending candidate is refused and the very
+        # next boot must already be the known-good root. The refusal is a root
+        # fatal rather than a `SLIME_BOOT` record: the selector cannot report
+        # which generation it selected when it could not decode one.
+        stale_first = boot_refused(stale_disk, "boot selection rejected")
+        if "SLIME_BOOT selected" in stale_first:
+            fail("an undecodable pending generation was selected as if valid")
+        stale_after = stale_disk.read_bytes()
+        only_slots(stale_initial, stale_after)
+        stale_fallback = boot(stale_disk, "SLIME_BOOT selected")
+        expect(stale_fallback, 1, 0, 0)
+        if "number=99" in stale_fallback:
+            fail("the undecodable pending generation survived into the fallback boot")
+        settled = stale_disk.read_bytes()
+        only_slots(stale_after, settled)
+
         promotion = work / "promotion.img"
         make_disk(promotion, make_store([known_good, healthy], bundle, 2))
         before = promotion.read_bytes()
@@ -227,7 +339,9 @@ def main() -> None:
 
     print(
         "seL4 boot selection check: attempts persisted across fresh QEMU processes, "
-        "exhaustion rolled back, health promoted, and only BootState sectors changed"
+        "exhaustion rolled back, a pending generation in a superseded wire format "
+        "was refused without consuming the known-good root, health promoted, and "
+        "only BootState sectors changed"
     )
 
 

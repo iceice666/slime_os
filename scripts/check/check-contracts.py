@@ -28,8 +28,14 @@ GENERATION_MANAGEMENT_BINDING_GENERATOR = ROOT / "scripts" / "generate" / "gener
 POWERBOX_CONTRACT = ROOT / "contracts" / "powerbox" / "v1"
 POWERBOX_BINDING_GENERATOR = ROOT / "scripts" / "generate" / "generate-powerbox-bindings.py"
 BOOT_BINDING_GENERATOR = ROOT / "scripts" / "generate" / "generate-boot-bindings.py"
+# Retained wire-format history. Nothing generates from these — `boot_gen` wires
+# only v5 — but the format's history is part of the contract (see
+# `check-generation-v5.py`), so they are type-checked rather than left to rot.
+# B64: v4 was the one retained version no gate touched, so it could have stopped
+# parsing without anything noticing.
 GENERATION_V2_CONTRACT = ROOT / "contracts" / "generation" / "v2"
 GENERATION_V3_CONTRACT = ROOT / "contracts" / "generation" / "v3"
+GENERATION_V4_CONTRACT = ROOT / "contracts" / "generation" / "v4"
 KERNEL_IMAGE_CONTRACT = ROOT / "contracts" / "kernel-image" / "v1"
 KERNEL_IMAGE_V2_CONTRACT = ROOT / "contracts" / "kernel-image" / "v2"
 TARGET_PROFILE_CONTRACT = ROOT / "contracts" / "target-profile" / "v1"
@@ -254,6 +260,7 @@ subprocess.run(
 for contract in (
     GENERATION_V2_CONTRACT,
     GENERATION_V3_CONTRACT,
+    GENERATION_V4_CONTRACT,
     KERNEL_IMAGE_CONTRACT,
     KERNEL_IMAGE_V2_CONTRACT,
     COMPONENT_V2_CONTRACT,
