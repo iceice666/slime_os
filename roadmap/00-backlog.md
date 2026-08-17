@@ -19,6 +19,57 @@ at the bottom rather than deleting it.
 (none)
 
 ## Resolved
+### B56 — `data_fabric_profile_check` asserted a contradiction and had been red since B55
+
+**Status:** Resolved 2026-08-17. **Class:** Gate defect (a check that could not
+pass). **Depends on:** none.
+
+**Problem:** `just data_fabric_profile_check` failed with `fabric graph: invalid
+control grant fabric-call-client-control`. C8.9's exit condition was therefore
+unobserved, and had been since B55 landed — the failure reproduces at `ea40190`
+and at every commit back to `e2f4833`, so no work in this session caused it.
+
+**Evidence (2026-08-17).** Found while running the full C8 regression suite for
+C8.15's parent close. Resolving each declared profile of the reference manifest
+individually isolated it precisely:
+
+```
+default      OK
+visibility   OK
+unified      FAIL: fabric graph: invalid control grant fabric-call-client-control
+```
+
+**Root cause.** B55 (`e2f4833`) gave each plane's control grants a *per-plane
+holder*: under the `unified` profile they must terminate at
+`fabric-call-worker`/`fabric-op-worker`, because a bounded route worker
+authenticates a client by the control endpoint the request arrived on and
+`grant_crosses_spawn` forbids handing a worker that endpoint afterwards. Every
+other profile declares no worker instance and its controls terminate at
+`fabric-service`.
+
+A manifest carries exactly one grant list. So a manifest declaring both kinds of
+profile cannot satisfy both rules, and `valid.zti` is exactly that: it declares
+`default`, `visibility`, and `unified`, with its nine control grants targeting
+`fabric-service`. Retargeting them to the workers was measured and reverted — it
+simply moves the failure to `default` and `visibility`.
+
+The defect was therefore in the gate, not the fixture: `check-data-fabric-profile.py`
+swept *every* declared profile through `resolve_fabric_profile`, which asks the
+reference manifest for single-broker profiles to also resolve a worker-holder
+profile. That is a contradiction, not a property. The real full-graph fixtures
+(`sel4-boot.zti`, `sel4-traffic.zti`, `sel4-fault.zti`, `sel4-saturation.zti`)
+declare `unified` *alone* and target the workers, so they resolve it correctly.
+
+**Fix.** The sweep now resolves the single-broker profiles and states why
+`unified` is excluded, with the exclusion guarded: a manifest that declared no
+single-broker profile at all fails rather than silently checking nothing.
+`unified` keeps stronger coverage than resolution anyway — four gates boot it.
+
+**Exit condition (observed):** `just data_fabric_profile_check` passes. `just
+sel4_boot_check`, `sel4_traffic_check`, `sel4_fault_check`,
+`sel4_saturation_check`, `sel4_fabric_aggregate_check`, `just contracts_check`,
+`just generation_check`, `just ruff`, and `just typos` all pass on the same tree.
+
 ### B55 — the full-graph boot plane refused its own first spawn, then five more defects behind it
 
 **Status:** Resolved 2026-08-15. **Class:** Regression of a claimed exit

@@ -409,7 +409,32 @@ if visibility.artifact["name"] != "visibility":
 # An unresolvable profile is a latent boot failure rather than dead text: it stays
 # green until the generation that selects it is written, which is exactly when a
 # stale interposition chain or dropped participant is most expensive to find.
-for profile in builder.declared_fabric_profiles(MANIFEST):
+#
+# `unified` is excluded, and the exclusion is a structural fact rather than a
+# waiver. B55 gave each plane's control grants a per-plane holder: under
+# `unified` they must terminate at `fabric-call-worker`/`fabric-op-worker`,
+# because a bounded route worker authenticates a client by the control endpoint
+# the request arrived on and no one can hand a worker that endpoint afterwards.
+# Every other profile has no worker instance at all and its controls terminate
+# at `fabric-service`. A manifest carries *one* grant list, so a manifest
+# declaring both kinds of profile cannot satisfy both rules -- and `valid.zti`
+# is precisely that: the reference manifest for the single-broker profiles,
+# which is why its grants target `fabric-service`.
+#
+# The real full-graph fixtures (`sel4-boot.zti`, `sel4-traffic.zti`,
+# `sel4-fault.zti`, `sel4-saturation.zti`) declare `unified` *alone* and target
+# the workers, so they resolve it correctly -- and `just sel4_boot_check`,
+# `sel4_traffic_check`, `sel4_fault_check`, and `sel4_saturation_check` all boot
+# it, which is stronger evidence than resolving it here would be. Sweeping it
+# out of this reference manifest asserts a contradiction, not a property.
+SINGLE_BROKER_PROFILES = tuple(
+    profile
+    for profile in builder.declared_fabric_profiles(MANIFEST)
+    if profile != builder.UNIFIED_FABRIC_PROFILE
+)
+if not SINGLE_BROKER_PROFILES:
+    fail("the reference manifest declares no single-broker fabric profile to resolve")
+for profile in SINGLE_BROKER_PROFILES:
     resolved = builder.resolve_fabric_profile(MANIFEST, INTERFACES, profile)
     if resolved.artifact["name"] != profile:
         fail(f"resolved artifact lost its selected profile name: {profile}")
