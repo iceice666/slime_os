@@ -17,106 +17,67 @@ at the bottom rather than deleting it.
 ## Open
 
 _Opened 2026-08-17 by a structural audit of the whole tree at `35a95b2`, run
-after B56 closed the backlog and the C8 track closed. Every gate was green; the
-audit looked for architectural debt rather than failing checks. Seven read-only
-scouts partitioned the tree by ownership and every load-bearing measurement was
-then re-verified directly — three scout claims were rejected on measurement and
-are recorded in the devlog rather than opened here. Evidence:
-`devlog/2026-08-17-structural-audit/`._
+after B56 closed the backlog and the C8 track closed. Every gate was believed
+green; the audit looked for architectural debt rather than failing checks. Seven
+read-only scouts partitioned the tree by ownership and every load-bearing
+measurement was then re-verified directly — three scout claims were rejected on
+measurement and are recorded in the devlog rather than opened here. Evidence:
+`devlog/2026-08-17-structural-audit/`. B67 was found afterwards, while running
+B57's own verification sweep, and had been red before either fix._
 
-_Two items are real defects with wrong observable semantics (B57, B58); eight
-are structural debt that compounds per milestone (B59–B66). B57 and B58 are
-small and independent. B59 is the highest-leverage item: it subsumes B57 and
-removes the coupling B60 and B66 also pay for._
+_B57 and B58 were the two real defects with wrong observable semantics; both are
+resolved below. B59–B66 are structural debt that compounds per milestone, and
+B67 is a gate that cannot fail. B59 is the highest-leverage remaining item: it
+subsumes what B57 fixed for one table and removes the coupling B60 and B66 also
+pay for._
 
-### B57 — `RIGHT_ALL` has two definitions, and the wider one admits an undefined rights bit
+### B67 — the capability-layout gate's `extra` mutation lands in a declared slot, so it cannot fail
 
-**Status:** Open. **Class:** Defect (admission accepts what no contract
-defines). **Depends on:** none; subsumed by B59 if B59 lands first.
+**Status:** Open. **Class:** Gate defect (a negative control that proves
+nothing). **Depends on:** none.
 
-**Problem:** The set of valid capability rights is computed two different ways.
-`scripts/build/build-generation.py:390-417` builds it as an enumerated union
-over the 24 named rights plus `RIGHT_TRANSFER`; `boot-contracts/src/generation.rs:123`
-and `scripts/check/check-generation.py:136` build it as a *bit-width* mask
-`(1 << 26) - 1`. The two disagree by exactly one bit, and the wider spelling is
-the one used for admission.
+**Problem:** `just sel4_capability_layout_check` fails with `the audit accepted a
+mutated CSpace: a capability was installed into an undeclared slot
+(--cfg slime_b40_mutate_extra)`. The gate's purpose is to prove
+`audit_child_cspace` refuses each of B40's six perturbations; one of the six has
+never been a perturbation at all.
 
-**Evidence (2026-08-17).** Computed both spellings from source:
+**Evidence (2026-08-17).** Found while running B57's verification sweep.
+Reproduced with the tree at `beff860` — before B57 and B58 landed — by stashing
+every working change, so no work in this session caused it. The other five
+mutations are refused; only `extra` reaches the terminal marker.
 
-```
-python  RIGHT_TRANSFER | sum(RIGHT.values()) = 0x3fdffff
-rust    (1 << 26) - 1                        = 0x3ffffff
-bits set in rust but not python: [17]
-```
+**Root cause.** The mutation picks its victim slot by excluding the ones it
+believes are declared (`slime-root/src/task.rs:1060-1064`):
 
-Bit 17 sits in the hole `build-generation.py` leaves between `spawn = 1 << 16`
-and `supervise = 1 << 18`. It has no name in any table and no use anywhere:
-`grep "1 << 17"` over `slime-root`, `components`, `boot-contracts`, and
-`scripts` returns nothing.
-
-Because admission masks with the bit-width spelling, a grant carrying bit 17
-passes every rights check that exists:
-`boot-contracts/src/generation.rs:1775` (`grant.rights & !RIGHT_ALL != 0`),
-`:1933` (mappings), `:2152` (minted bindings), and the oracle's matching
-`check-generation.py:377`, `:426`, `:545`.
-
-**Scope of the hole.** The builder itself cannot emit bit 17: both dynamic
-rights lookups (`build-generation.py:3148`, `:3297`) reject an unknown right by
-name, and `validate_capability_rights` (`:432-470`) additionally masks per
-capability kind. So no `.zti` fixture can produce this today — the defect is
-that *admission* does not enforce what the *builder* does, which is precisely
-the asymmetry B40's mutation series exists to close, for a bit B40 never
-enumerated.
-
-**Proposed fix:** One definition, and an enumerated union rather than a bit
-width. Declare the rights vocabulary in `contracts/generation/v1/schema.zt`,
-generate it into `boot-contracts/src/generated/generation.rs`, and derive
-`RIGHT_ALL` from the generated enumeration in both the root and the oracle.
-Mark bit 17 reserved and rejected rather than silently in range.
-
-**Exit condition:** `RIGHT_ALL` has exactly one definition, computed as a union
-of named rights, consumed by `boot-contracts` and `check-generation.py` alike; a
-new B40 mutation that sets bit 17 on one grant is refused by root admission and
-observed being refused by `just sel4_capability_layout_check`; `just
-contracts_check`, `just generation_check`, and `just test_host` pass.
-
-### B58 — `check-architecture-contract.py` hand-copies three generated header offsets
-
-**Status:** Open. **Class:** Unmasked debt (Zutai-rule violation with a known
-prior drift). **Depends on:** none.
-
-**Problem:** `scripts/check/check-architecture-contract.py:213-217` reads the v5
-generation header with three literal byte offsets — `112`, `200`, `368` — under
-a comment that admits the coupling and admits it has already drifted once:
-"Generated v5 header offsets. Keep these in lockstep with
-`scripts/lib/boot_contracts.py`; notification topology added two section
-offsets after minted bindings."
-
-**Evidence (2026-08-17).** All three literals already have generated names in
-`scripts/lib/boot_contracts.py`, which is stamped `# @generated from boot
-contract schemas; do not edit`, and which this very file already imports with
-`from boot_contracts import *`:
-
-```
-112 = GENERATION_HEADER_OBJECT_COUNT_OFFSET
-200 = GENERATION_HEADER_OBJECT_OFFSET_OFFSET
-368 = GENERATION_HEADER_STRING_OFFSET_OFFSET
+```rust
+let free = (0..(1u64 << cnode_size_bits) as sel4::CPtrBits)
+    .find(|slot| {
+        *slot != slots.service && *slot != slots.fault && *slot != slots.tcb && *slot != 0
+    })
 ```
 
-No literal lacks a generated name, so this is a genuine violation of the
-repository's Zutai rule rather than a layout Zutai cannot own.
+That excludes `{0, 1, 2, 3}` — but the audit's own declared set
+(`task.rs:1075-1078`) is `{service 1, console 32, fault 3, tcb 2,
+CHILD_SLOT_CNODE 4}`. So `find` returns slot **4**, which is
+`CHILD_SLOT_CNODE` (`task.rs:66`) and is *declared*. The copy therefore lands in
+a slot the audit expects to be occupied, and the audit correctly does not flag
+it. The mutation never creates an undeclared occupancy, so this arm asserts
+nothing and would not notice a real audit regression.
 
-**Why it matters beyond style:** the next header field addition shifts these
-offsets. The check would then read a wrong-but-decodable location and report a
-wrong answer rather than failing, which is the failure mode the generated
-constants exist to prevent.
+`console` is also missing from the exclusion list; at slot 32 it happens not to
+be selected first, so it is a latent second instance of the same omission rather
+than an active one.
 
-**Proposed fix:** Replace the three literals with the imported
-`GENERATION_HEADER_*_OFFSET` names and delete the lockstep comment.
+**Proposed fix:** Derive the mutation's exclusion set from the audit's declared
+predicate rather than restating a subset of it, so the two cannot disagree — the
+same single-source principle B57 applied to the rights vocabulary. A slot the
+audit declares must never be selectable as the "undeclared" victim.
 
-**Exit condition:** No numeric header offset remains in
-`check-architecture-contract.py`; `just architecture_contract_check` and `just
-generation_check` pass.
+**Exit condition:** `just sel4_capability_layout_check` passes with all six
+mutations refused; the `extra` arm is observed selecting a slot the audit does
+not declare; deliberately weakening `audit_child_cspace`'s undeclared-slot check
+makes the `extra` arm fail, proving the arm now has teeth.
 
 ### B59 — the syscall ABI has no single source: 97 rights declarations, two label tables, three error tables
 
@@ -525,6 +486,118 @@ contracts_check` pass.
 
 
 ## Resolved
+### B57 — `RIGHT_ALL` had two definitions, and the wider one admitted an undefined rights bit
+
+**Status:** Resolved 2026-08-17. **Class:** Defect (admission accepted what no
+contract defined). **Depends on:** none.
+
+**Problem:** The set of valid capability rights was computed two ways. The
+builder built it as an enumerated union over the 24 named rights plus
+`RIGHT_TRANSFER`; `boot-contracts/src/generation.rs` and
+`scripts/check/check-generation.py` built it as a bit-width mask
+`(1 << 26) - 1`. The two disagreed by exactly one bit, and the wider spelling
+was the one used for admission.
+
+**Evidence (2026-08-17).** Computed both spellings from source:
+
+```
+python  RIGHT_TRANSFER | sum(RIGHT.values()) = 0x3fdffff
+rust    (1 << 26) - 1                        = 0x3ffffff
+bits set in rust but not python: [17]
+```
+
+Bit 17 is the hole the builder's table left between `spawn = 1 << 16` and
+`supervise = 1 << 18`. It had no name in any table and no use anywhere. Because
+admission masked with the bit-width spelling, a grant carrying bit 17 passed
+every rights check that existed: the `& !RIGHT_ALL` tests for grants, mappings,
+and minted bindings in `boot-contracts/src/generation.rs`, and the oracle's
+matching checks in `check-generation.py`.
+
+**Root cause.** A bit-width mask is not the same predicate as a vocabulary. The
+rights numbering is not dense — it reserves gaps — so `(1 << 26) - 1` asserts
+"below the highest bit" where the intended claim was "one of the rights a
+contract names." `docs/capability-matrix.md` already claimed rights numbering was
+"generated-contract truth"; nothing was generated, so the two spellings drifted
+with no compiler or gate able to notice.
+
+**Scope, measured.** The builder could not emit bit 17: both dynamic rights
+lookups reject an unknown right by name, and `validate_capability_rights` masks
+per capability kind. So no `.zti` fixture could produce it. The defect was that
+*admission* did not enforce what the *builder* did — the asymmetry B40's mutation
+series exists to close, for a bit B40 never enumerated.
+
+**Fix.** The rights vocabulary is now declared once, in
+`contracts/generation/v5/schema.zt`, as a list of `{name, bit, manifest}`
+records. `gen_rust.zt` renders from it: the individual `RIGHT_*` constants, the
+`GENERATION_RIGHT_BY_MANIFEST_NAME` table the builder resolves `.zti` grant
+spellings through, and `RIGHT_ALL` as a fold over the declared bits rather than a
+width mask. Three restatements were deleted in favour of the generated names:
+`boot-contracts/src/generation.rs`'s hand-written `RIGHT_TRANSFER`/`RIGHT_EXEC`/
+`RIGHT_SPAWN`/`RIGHT_ALL` (its `capability_rights_valid` masks now read
+`RIGHT_BUFFER_MAP` rather than `1 << 9`), `build-generation.py`'s 24-entry
+`RIGHT` dict, and `check-generation.py`'s four constants.
+
+`RIGHT_ALL` is now `66977791` (`0x3fdffff`) on both sides, and bit 17 is refused
+by every validator that masks with it.
+
+**Regression guard.** `right_all_is_a_union_of_named_bits_and_excludes_the_gap_at_17`
+in `boot-contracts/src/generation.rs` recomputes the union from the 25 generated
+constants, asserts it equals `RIGHT_ALL`, asserts bit 17 is clear, asserts
+`RIGHT_ALL != (1 << 26) - 1`, and asserts all nine capability kinds reject a
+lone bit 17. The guard was verified to bite: rewriting the generated `RIGHT_ALL`
+back to `67108863` makes it fail (`panic = "abort"`, so the harness aborts),
+and restoring the generated value makes it pass.
+
+**Exit condition (observed):** `RIGHT_ALL` has one definition, computed as a
+union of named rights, consumed by `boot-contracts` and `check-generation.py`
+alike; `just test_host` (207 + 20 + 19 …), `just test_sel4_root` (118/118),
+`just contracts_check` (31 seL4 manifests encode SLIMEG5 v5), `just
+generation_check` (two isolated builds byte-identical), `just
+architecture_contract_check`, `just sel4_root_boot_check`, `just sel4_boot_check`
+(30 markers, 5 chains, 21 slots, 19 tasks), `just ruff`, `just typos`, `just
+fmt_check_all`, and `just lint_all` all pass.
+
+**Not closed by this item.** B59 remains open: the syscall label table, the
+error table, and the spawn-grant record are still hand-synchronized, and 97
+`RIGHT_*` declaration sites outside `boot-contracts` still restate bits the
+schema now owns. B57 fixed the *predicate* that admitted an undefined bit; B59 is
+the remaining duplication.
+
+### B58 — `check-architecture-contract.py` hand-copied three generated header offsets
+
+**Status:** Resolved 2026-08-17. **Class:** Unmasked debt (Zutai-rule violation
+with a known prior drift). **Depends on:** none.
+
+**Problem:** `object_payload` read the v5 generation header with three literal
+byte offsets — `112`, `200`, `368` — under a comment that admitted the coupling
+and admitted it had already drifted once: "Generated v5 header offsets. Keep
+these in lockstep with `scripts/lib/boot_contracts.py`; notification topology
+added two section offsets after minted bindings."
+
+**Evidence (2026-08-17).** All three literals already had generated names in
+`scripts/lib/boot_contracts.py`, which is stamped `@generated`, and which the
+file already imported from:
+
+```
+112 = GENERATION_HEADER_OBJECT_COUNT_OFFSET
+200 = GENERATION_HEADER_OBJECT_OFFSET_OFFSET
+368 = GENERATION_HEADER_STRING_OFFSET_OFFSET
+```
+
+No literal lacked a generated name, so this was a genuine violation rather than
+a layout Zutai cannot own. The failure mode it invited is worse than a crash: the
+next header field addition shifts these offsets, and the check would read a
+wrong-but-decodable location and report a wrong answer.
+
+**Fix.** The three literals now read through the generated names, which were
+added to the file's existing explicit `from boot_contracts import (...)` list.
+The lockstep comment is gone, because there is no longer a second copy to keep in
+step.
+
+**Exit condition (observed):** No numeric header offset remains in
+`check-architecture-contract.py`; `just architecture_contract_check` passes
+(including its 181 boot-contracts unit tests), and `just ruff` passes.
+
 ### B56 — `data_fabric_profile_check` asserted a contradiction and had been red since B55
 
 **Status:** Resolved 2026-08-17. **Class:** Gate defect (a check that could not

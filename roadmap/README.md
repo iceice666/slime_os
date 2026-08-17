@@ -12,7 +12,7 @@ A milestone is complete only when its exit condition is observed. Compiled code,
 
 | Track | Status | Next open gate |
 | --- | --- | --- |
-| [Backlog](00-backlog.md) | B1–B56 resolved; B57–B66 opened 2026-08-17 by a structural audit | B57 duplicate `RIGHT_ALL` admits an undefined rights bit; B59 single-source syscall ABI is the highest-leverage item |
+| [Backlog](00-backlog.md) | B1–B58 resolved; B59–B67 open (structural audit 2026-08-17, plus B67 found during B57's sweep) | B67 the capability-layout gate's `extra` mutation cannot fail; then B59 single-source syscall ABI |
 | [Foundations](01-foundations.md) | M1–M4 and M6 complete; M5 mechanisms complete except M5.7 physical Framework evidence | M5.7 requires observed removable-media Framework boot without internal-NVMe writes |
 | [Core runtime](02-core-runtime.md) | C7 and all of C8 (C8.1–C8.15) complete; the C8 track closed 2026-08-17 with C8.14's fault-isolation envelope and C8.15's aggregate determinism gate (280 byte-identical trace records across four boots) | C9 robot runtime authority, then C10 private component memory |
 | [RPi5 ROS 2 demo](09-rpi5-ros2-demo.md) | RP0 and RP1 complete; RP2 rewritten around the seL4 product boundary (2026-08-16) and largely satisfied by P5, owing only a demo-scoped replay plus AArch64 rollback and wrong-target arms; RP3–RP8 planned | RP2's rollback and wrong-target arms on an AArch64 generation pair |
@@ -43,7 +43,7 @@ The [backlog](00-backlog.md) still sits ahead of all lanes: resolve or explicitl
 
 ```mermaid
 flowchart TD
-    Backlog["Backlog: B57–B66 open\nstructural debt + 2 defects"]
+    Backlog["Backlog: B59–B67 open\nstructural debt + 1 blind gate"]
     Foundations["M1–M6 foundations\nexisting x86/QEMU evidence"]
     C7["C7 sample plane\ncomplete"]
     C8["C8.1–C8.15 fabric\ncomplete"]
