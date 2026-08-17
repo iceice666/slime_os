@@ -19,8 +19,12 @@ rela = "rela"
 hda = "hda"
 # ACPI OEM table id fixture, deliberately 8 bytes
 inventry = "inventry"
-# Common hex byte in fixtures
+# Common hex bytes in fixtures. `daa` occurs inside the upstream
+# `sensor_msgs/msg/PointCloud2` RIHS01 digest the RPi5 contract gate validates
+# its type-hash implementation against; the digest is copied from `ros2/rcl` and
+# cannot be reworded.
 ba = "ba"
+daa = "daa"
 # "mis" prefix in identifiers
 mis = "mis"
 ot = "ot"

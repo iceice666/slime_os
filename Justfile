@@ -516,11 +516,20 @@ recovery_check: sel4_recovery_plane_check
 devlog_check:
     python3 scripts/check/check-devlog.py
 
-# RP0: exact Raspberry Pi 5 board/firmware/media and ROS 2 Jazzy DDSI-RTPS
-# Profile 0 acceptance fixture; closed identifiers, finite resources, explicit
-# authority, trace ordering, and distinct operator failure markers.
+# RP0 format 1 (historical): exact Raspberry Pi 5 board/firmware/media and
+# ROS 2 Jazzy DDSI-RTPS Profile 0 acceptance fixture. Retained as the record of
+# what RP0/RP1 originally admitted; format 2 is the live contract.
 rpi5_ros2_demo_contract_check:
     python3 scripts/check/check-rpi5-ros2-demo-contract.py
+
+# RP0 format 2 (live): the same board/firmware/media contract with the transport
+# family carried as data rather than frozen into the schema, selecting ROS 2
+# Kilted over a bounded Zenoh Profile 0. Every wire constant -- the RIHS01 type
+# hash, the data key expression, the per-sample CDR bytes, the 33-byte
+# attachment -- is derived and compared rather than transcribed, and the hash
+# implementation is itself validated against an upstream `ros2/rcl` fixture.
+rpi5_ros2_demo_contract_v2_check:
+    python3 scripts/check/check-rpi5-ros2-demo-contract-v2.py
 
 # Validate the pinned generation manifest schema and fixtures.
 contracts_check: bootstate_model_check
@@ -548,7 +557,10 @@ contracts_check: bootstate_model_check
 architecture_contract_check: contracts_check
     python3 scripts/check/check-architecture-contract.py
 
-rpi5_artifact_check: architecture_contract_check rpi5_ros2_demo_contract_check
+# RP1 derives the demo's executable closure from the live format-2 contract, so
+# it depends on that gate. Format 1's gate stays in the chain because RP0/RP1's
+# recorded exit conditions were observed against it.
+rpi5_artifact_check: architecture_contract_check rpi5_ros2_demo_contract_check rpi5_ros2_demo_contract_v2_check
     python3 scripts/check/check-rpi5-artifacts.py
 
 # Historical architecture gate backed by a real neutral-source boundary scan.

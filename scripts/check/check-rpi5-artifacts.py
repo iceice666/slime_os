@@ -35,13 +35,16 @@ CHECK_GENERATION = load_script("rpi5_artifact_generation_check", "check/check-ge
 ARCHITECTURE_CONTRACT = load_script(
     "rpi5_artifact_architecture_contract", "check/check-architecture-contract.py"
 )
-DEMO_FIXTURE = ROOT / "contracts" / "rpi5-ros2-demo" / "v1" / "fixtures" / "valid.zti"
+# The RP0 contract that names the demo's executable roles. Format 2 carries the
+# transport family as data, so the runtime's name follows the selected transport
+# (`ros.transportRuntime`) rather than a transport-specific field.
+DEMO_FIXTURE = ROOT / "contracts" / "rpi5-ros2-demo" / "v2" / "fixtures" / "valid.zti"
 RPI5_PROFILE_NAME = "aarch64-rpi5"
 QEMU_PROFILE_NAME = "aarch64-qemu-virt"
 X86_PROFILE_NAME = "x86_64-qemu-virtio"
 NEUTRAL_RESOURCE = b"rpi5-architecture-neutral-resource-v1"
 NODE_COMPONENTS = ("ros2-demo-publisher", "ros2-demo-subscriber")
-DDS_COMPONENT = "slime-dds-profile-0"
+TRANSPORT_COMPONENT = "slime-zenoh-profile-0"
 
 
 def fail(message: str) -> None:
@@ -76,57 +79,102 @@ def project_fixture() -> dict:
 def demo_artifact_names(fixture: dict) -> tuple[str, str, str]:
     try:
         target = fixture["targetProfile"]
-        dds = fixture["ros"]["ddsRuntime"]
+        transport_runtime = fixture["ros"]["transportRuntime"]
         publisher = fixture["workload"]["publisher"]["component"]
         subscriber = fixture["workload"]["subscriber"]["component"]
     except (KeyError, TypeError) as error:
         fail(f"RP0 fixture omitted executable closure metadata: {error}")
     if target != RPI5_PROFILE_NAME:
         fail(f"RP0 fixture target {target!r} is not {RPI5_PROFILE_NAME!r}")
-    names = (dds, publisher, subscriber)
-    if names != (DDS_COMPONENT, *NODE_COMPONENTS) or len(set(names)) != len(names):
-        fail("RP0 fixture DDS/node executable names drifted")
+    names = (transport_runtime, publisher, subscriber)
+    if names != (TRANSPORT_COMPONENT, *NODE_COMPONENTS) or len(set(names)) != len(names):
+        fail("RP0 fixture transport/node executable names drifted")
     return names
 
 
 def closure_manifest(profile_name: str, executable_names: tuple[str, ...]) -> dict:
+    # B69: generation v5 splits v4's single `components` list into an executable
+    # catalogue and the instances constructed from it, and renames
+    # `bootstrapComponent`/`health.requiredComponents` to their instance
+    # spellings. This manifest still used the v4 vocabulary, so
+    # `build_generation` raised `KeyError: 'instances'` and the gate could not
+    # reach a single assertion. `check-architecture-contract.py` was already
+    # fixed for the same cutover and carries the same note; this synthesized
+    # manifest was left behind.
     objects = [
         {"id": "init-image", "kind": "bootstrap"},
         {"id": "kernel", "kind": "kernel"},
         {"id": "neutral", "kind": "resource"},
     ]
-    components = [
+    executables = [
+        {"name": "init", "object": "init-image", "role": "init", "spawnBudget": 0}
+    ]
+    instances = [
         {
             "name": "init",
-            "object": "init-image",
-            "role": "init",
+            "executable": "init",
+            "owner": "root",
+            "autostart": True,
             "dependencies": [],
-            "spawnBudget": 0,
+            "health": "required",
+            "bindings": [],
         }
     ]
     for name in executable_names:
         object_id = f"image:{name}"
         objects.append({"id": object_id, "kind": "component"})
-        components.append(
+        executables.append(
             {
                 "name": name,
                 "object": object_id,
-                "role": "service" if name == DDS_COMPONENT else "application",
-                "dependencies": [],
+                "role": "service" if name == TRANSPORT_COMPONENT else "application",
                 "spawnBudget": 0,
+            }
+        )
+        # Owned by `init`, not by root. Two reasons, and the second is a latent
+        # validator bug this manifest is the first to expose:
+        #
+        # 1. It is the real topology. Root owns the bootstrap instance; every
+        #    other component is spawned by it.
+        # 2. `check-generation.py` encodes a root-owned instance as
+        #    `(owner_kind=0, owner_index=0)` and then requires
+        #    `owner_index != index` unconditionally, so a root-owned instance
+        #    landing at index 0 is rejected as `BadInstanceOwner` even though
+        #    `owner_index` is meaningless when `owner_kind` is 0. Instances are
+        #    sorted by name, and every real fixture has a name sorting before
+        #    `init` (`fabric-call-client`, `fabric-intruder`, ...), so `init` is
+        #    never at index 0 there and the flaw stays hidden. Here `init` would
+        #    be index 0. Recorded as part of B69 rather than worked around
+        #    silently.
+        instances.append(
+            {
+                "name": name,
+                "executable": name,
+                "owner": "init",
+                "autostart": True,
+                "dependencies": [],
+                "health": "required",
+                "bindings": [],
             }
         )
     return {
         "target": profile_name,
+        # `check-generation.py`'s `BOOT_ACTIONS` is a closed set; this
+        # synthesized closure is an ordinary product generation, so it must name
+        # that action rather than invent one. Naming an unregistered action makes
+        # every negative case below fail as `UnknownBootAction` before it can
+        # reach the target-profile mismatch it is testing for.
+        "bootAction": "product",
         "kernelObject": "kernel",
-        "bootstrapComponent": "init",
+        "bootstrapInstance": "init",
         "objects": objects,
-        "components": components,
+        "executables": executables,
+        "instances": instances,
         "grants": [],
         "state": [],
         "health": {
             "bootAttempts": 2,
-            "requiredComponents": ["init", *executable_names],
+            "requiredInstances": ["init", *executable_names],
         },
     }
 
