@@ -16,21 +16,61 @@ at the bottom rather than deleting it.
 
 ## Open
 
-(none)
+_The 2026-08-17 structural audit's eleven items (B57–B67) are all resolved below.
+B68 was found afterwards, by the final full-suite sweep, and reproduces on a clean
+tree at `a5160f3`._
 
-_The 2026-08-17 structural audit opened B57–B67 against a tree whose every gate
-was believed green. All eleven are resolved below. Two were real defects with
-wrong observable semantics (B57's rights mask, B58's hand-copied offsets); B67 was
-a pair of negative controls that could not fail, found while verifying B57; the
-rest was architectural debt that compounded per milestone. Evidence:
-`devlog/2026-08-17-structural-audit/` and the seven entries that follow it._
+### B68 — `sel4_fabric_aggregate_check` fails about one run in four, and determinism is its whole claim
 
-_Three items closed narrower than the audit proposed, and each says so in its own
-entry rather than in a summary: B61 left `serve_instance_graph` untestable pending
-a seL4 object-invocation seam, B63 left marker expectations as Python literals
-rather than blessable fixtures, and B65 left the 52-binary fixture population
-alone. Two derivations B60 named remain in Python. Those are the follow-ups a
-future audit should start from._
+**Status:** Open. **Class:** Defect (a gate that asserts determinism is itself
+nondeterministic). **Depends on:** none.
+
+**Problem:** `just sel4_fabric_aggregate_check` intermittently fails with
+
+```
+normal concurrent schedule: trace record 12 differs between boots -- the semantic
+trace depends on scheduling, so it cannot serve as a comparison baseline.
+  first:  [trace] subscriber-b kind=resource order=data … event=13 high_water=2
+  second: [trace] operation   kind=route    order=data … route=9011f5515bf9f4fe
+```
+
+C8.15's exit condition is that two boots of one composition produce
+byte-identical semantic traces (280 records across four boots). A gate that
+proves determinism and is itself flaky does not prove it — and on a passing run it
+reports success for a property it did not establish.
+
+**Evidence (2026-08-17).** Found by the final sweep after the audit's items
+landed. Reproduced on a **clean tree at `a5160f3`** with every working change
+stashed: 3 of 4 consecutive runs passed, one failed as above. With the session's
+changes present it also passed 2 of 2 on retry, so this is not a regression from
+any of B57–B67 — the failing record is a fabric trace ordering, and nothing in
+those items touched trace emission.
+
+**What the diff says.** The two boots disagree at record 12 about *which
+participant emitted next*: a `subscriber-b` resource record versus an `operation`
+route record. Both are legitimate records; they are interleaved differently. So
+the trace is deterministic *per participant* but the aggregate merge order across
+concurrently-running participants is not — which is exactly what the gate compares.
+
+**Proposed fix:** Establish which ordering C8.15 actually claims. Either the
+aggregate trace must be totally ordered by construction — a sequence the sink
+assigns, so a merge cannot reorder it — or the comparison must be per-participant
+subsequences rather than one flat record list. The second is the smaller change and
+matches what B55 did for racy cross-task markers: compare what is causally ordered,
+not one interleaving. Do not "fix" this by retrying the boot.
+
+**Exit condition:** `just sel4_fabric_aggregate_check` passes 10 consecutive runs;
+the comparison it performs is documented as either a construction-ordered total
+sequence or explicitly per-participant; deliberately perturbing one participant's
+emitted records still fails the gate, so the weaker comparison did not become a
+vacuous one.
+
+_Three audit items closed narrower than proposed, and each says so in its own entry
+rather than in a summary: B61 left `serve_instance_graph` untestable pending a seL4
+object-invocation seam, B63 left marker expectations as Python literals rather than
+blessable fixtures, and B65 left the 52-binary fixture population alone. Two
+derivations B60 named remain in Python. Those are the follow-ups a future audit
+should start from._
 
 ## Resolved
 ### B65 — `init.rs` held 21 plane launchers in one file; four moved out and the binary collapse did not
