@@ -12,9 +12,9 @@ A milestone is complete only when its exit condition is observed. Compiled code,
 
 | Track | Status | Next open gate |
 | --- | --- | --- |
-| [Backlog](00-backlog.md) | B1–B67 resolved (the 2026-08-17 structural audit's eleven items closed the same day); B68 opened by the closing sweep | B68 `sel4_fabric_aggregate_check` fails ~1 run in 4, and determinism is its whole claim |
+| [Backlog](00-backlog.md) | B1–B68 resolved; backlog clear (the 2026-08-17 structural audit's twelve items closed the same day) | none open; B61/B63/B65 each record a deliberately deferred half a future audit should start from |
 | [Foundations](01-foundations.md) | M1–M4 and M6 complete; M5 mechanisms complete except M5.7 physical Framework evidence | M5.7 requires observed removable-media Framework boot without internal-NVMe writes |
-| [Core runtime](02-core-runtime.md) | C7 and all of C8 (C8.1–C8.15) complete; the C8 track closed 2026-08-17 with C8.14's fault-isolation envelope and C8.15's aggregate determinism gate. **C8.15's claim is now in question:** its gate fails about one run in four (B68), so the byte-identical-trace property is not currently established | B68, then C9 robot runtime authority and C10 private component memory |
+| [Core runtime](02-core-runtime.md) | C7 and all of C8 (C8.1–C8.15) complete; the C8 track closed 2026-08-17 with C8.14's fault-isolation envelope and C8.15's aggregate determinism gate (280 trace records across four boots, compared per worker and record kind after B68 found the flat comparison was asserting one scheduling interleaving) | C9 robot runtime authority, then C10 private component memory |
 | [RPi5 ROS 2 demo](09-rpi5-ros2-demo.md) | RP0 and RP1 complete; RP2 rewritten around the seL4 product boundary (2026-08-16) and largely satisfied by P5, owing only a demo-scoped replay plus AArch64 rollback and wrong-target arms; RP3–RP8 planned | RP2's rollback and wrong-target arms on an AArch64 generation pair |
 | [Architecture portability](07-architecture-portability.md) | P0, P1, P2.1, P2.2, and P5 complete; P2.3–P2.6 superseded by P5 | P4 physical Raspberry Pi 5 qualification is the next architecture evidence gate |
 | [ROS 2 compatibility](03-ros2-compatibility.md) | Not started | R0 minimal DDS/RTPS topic profile is first; broader external/multi-vendor compatibility follows after the RPi5 demo path |
@@ -43,7 +43,7 @@ The [backlog](00-backlog.md) still sits ahead of all lanes: resolve or explicitl
 
 ```mermaid
 flowchart TD
-    Backlog["Backlog: B68 open\naggregate trace determinism"]
+    Backlog["Backlog: B1–B68 resolved\nno open items"]
     Foundations["M1–M6 foundations\nexisting x86/QEMU evidence"]
     C7["C7 sample plane\ncomplete"]
     C8["C8.1–C8.15 fabric\ncomplete"]

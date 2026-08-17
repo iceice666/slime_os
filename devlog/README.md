@@ -287,3 +287,4 @@ When `Status` changes, update the same entry's row in the index below; the check
 | 2026-08-17 | [B61 — `just run` was booting a verification fixture, and one half of the fix needs a seam that does not exist](2026-08-17-b61-product-image-and-dispatch/index.md) | Change | Verified | B61, B23, B46 |
 | 2026-08-17 | [B63 — 82 copies of three pure functions, and the flake that surfaced while verifying them](2026-08-17-b63-gate-helper-consolidation/index.md) | Change | Verified | B63, B55 |
 | 2026-08-17 | [B65 — four plane launchers moved out of init.rs, and why the binary collapse should not happen yet](2026-08-17-b65-plane-modules/index.md) | Change | Verified | B65, B60 |
+| 2026-08-17 | [B68 — the determinism gate was comparing one scheduling interleaving, and grouping by worker was not enough](2026-08-17-b68-aggregate-trace-determinism/index.md) | Defect | Verified | B68, C8.15, B55 |

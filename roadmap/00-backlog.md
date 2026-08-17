@@ -16,63 +16,75 @@ at the bottom rather than deleting it.
 
 ## Open
 
-_The 2026-08-17 structural audit's eleven items (B57–B67) are all resolved below.
-B68 was found afterwards, by the final full-suite sweep, and reproduces on a clean
-tree at `a5160f3`._
+(none)
 
-### B68 — `sel4_fabric_aggregate_check` fails about one run in four, and determinism is its whole claim
+_The 2026-08-17 structural audit opened B57–B67 against a tree whose every gate was
+believed green, and its closing full-suite sweep opened B68. All twelve are resolved
+below. Two were real defects with wrong observable semantics (B57's rights mask,
+B58's hand-copied offsets), two were gates that could not fail or could not pass
+(B67, B68), and the rest was architectural debt that compounded per milestone.
+Evidence: `devlog/2026-08-17-structural-audit/` and the eight entries that follow
+it._
 
-**Status:** Open. **Class:** Defect (a gate that asserts determinism is itself
-nondeterministic). **Depends on:** none.
-
-**Problem:** `just sel4_fabric_aggregate_check` intermittently fails with
-
-```
-normal concurrent schedule: trace record 12 differs between boots -- the semantic
-trace depends on scheduling, so it cannot serve as a comparison baseline.
-  first:  [trace] subscriber-b kind=resource order=data … event=13 high_water=2
-  second: [trace] operation   kind=route    order=data … route=9011f5515bf9f4fe
-```
-
-C8.15's exit condition is that two boots of one composition produce
-byte-identical semantic traces (280 records across four boots). A gate that
-proves determinism and is itself flaky does not prove it — and on a passing run it
-reports success for a property it did not establish.
-
-**Evidence (2026-08-17).** Found by the final sweep after the audit's items
-landed. Reproduced on a **clean tree at `a5160f3`** with every working change
-stashed: 3 of 4 consecutive runs passed, one failed as above. With the session's
-changes present it also passed 2 of 2 on retry, so this is not a regression from
-any of B57–B67 — the failing record is a fabric trace ordering, and nothing in
-those items touched trace emission.
-
-**What the diff says.** The two boots disagree at record 12 about *which
-participant emitted next*: a `subscriber-b` resource record versus an `operation`
-route record. Both are legitimate records; they are interleaved differently. So
-the trace is deterministic *per participant* but the aggregate merge order across
-concurrently-running participants is not — which is exactly what the gate compares.
-
-**Proposed fix:** Establish which ordering C8.15 actually claims. Either the
-aggregate trace must be totally ordered by construction — a sequence the sink
-assigns, so a merge cannot reorder it — or the comparison must be per-participant
-subsequences rather than one flat record list. The second is the smaller change and
-matches what B55 did for racy cross-task markers: compare what is causally ordered,
-not one interleaving. Do not "fix" this by retrying the boot.
-
-**Exit condition:** `just sel4_fabric_aggregate_check` passes 10 consecutive runs;
-the comparison it performs is documented as either a construction-ordered total
-sequence or explicitly per-participant; deliberately perturbing one participant's
-emitted records still fails the gate, so the weaker comparison did not become a
-vacuous one.
-
-_Three audit items closed narrower than proposed, and each says so in its own entry
-rather than in a summary: B61 left `serve_instance_graph` untestable pending a seL4
-object-invocation seam, B63 left marker expectations as Python literals rather than
-blessable fixtures, and B65 left the 52-binary fixture population alone. Two
+_Three items closed narrower than the audit proposed, and each says so in its own
+entry rather than in a summary: B61 left `serve_instance_graph` untestable pending a
+seL4 object-invocation seam, B63 left marker expectations as Python literals rather
+than blessable fixtures, and B65 left the 52-binary fixture population alone. Two
 derivations B60 named remain in Python. Those are the follow-ups a future audit
 should start from._
 
 ## Resolved
+### B68 — the determinism gate compared one scheduling interleaving
+
+**Status:** Resolved 2026-08-17. **Class:** Defect (a gate asserting determinism
+was itself nondeterministic). **Depends on:** none.
+
+**Problem:** `just sel4_fabric_aggregate_check` failed about one run in four with
+`trace record 12 differs between boots -- the semantic trace depends on scheduling,
+so it cannot serve as a comparison baseline`. C8.15's exit condition is that two
+boots of one composition produce byte-identical semantic traces, so a gate that
+proves determinism and is itself flaky does not prove it — and on a passing run it
+reported success for a property it had not established.
+
+**Evidence (2026-08-17).** Found by the closing sweep after the audit's eleven
+items landed, and reproduced on a **clean tree at `a5160f3`** with every working
+change stashed: 3 of 4 consecutive runs passed. Not a regression from B57–B67, none
+of which touched trace emission.
+
+**Root cause, in two layers.** The comparison zipped the flat record list
+positionally, which asserts one *interleaving* of concurrent activity rather than
+the trace's determinism. The first failure was two boots disagreeing about which
+worker emitted next — a `subscriber-b` resource record against an `operation` route
+record, both legitimate.
+
+Grouping by worker was not sufficient, which a second failure showed after the
+first fix: a record's `[trace]` prefix names its *sink*, and one sink aggregates
+several record kinds. `stream`'s record 2 came out `kind=fault order=peer-death` on
+one boot and `kind=qos order=time` on the other, both at `sequence=2` — two
+independent activities racing into one sink. The determinism C8.15 claims is
+per-worker *per-kind*; which kind reaches a shared sink first is scheduling.
+
+**Fix.** `records_by_participant` groups by `(worker, kind)` and compares each
+group's sequence. The total record count stays pinned at 280, the worker/kind *set*
+must match between boots — otherwise a boot that dropped a whole activity would
+pass by comparing what remained — and each group's length must match before its
+contents are compared. Terminal `[trace] X complete` records carry no `kind=` and
+group under a `complete` pseudo-kind rather than being rejected; that case was
+found by the fix failing 10/10 until it was handled.
+
+**Regression guard, and proof it is not vacuous.** A weaker comparison risks
+passing everything, so it was verified against a real divergence: perturbing one
+field of one record in the second boot fails with `call's call record 1 differs
+between boots -- a worker's own per-kind sequence must not depend on scheduling`.
+Reverted.
+
+**Exit condition (observed):** `just sel4_fabric_aggregate_check` passes **10
+consecutive runs** (from 3/4 and then 0/10 mid-fix), still comparing all 280
+records across both schedules; the comparison is documented as per-worker-per-kind
+at its definition; a perturbed record still fails the gate. `just
+sel4_gate_control_check` (32 gates reject 1227 mutations), `just ruff`, and `just
+typos` pass.
+
 ### B65 — `init.rs` held 21 plane launchers in one file; four moved out and the binary collapse did not
 
 **Status:** Resolved 2026-08-17. **Class:** Unmasked debt (per-gate accretion).

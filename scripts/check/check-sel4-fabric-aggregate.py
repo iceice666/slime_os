@@ -224,12 +224,57 @@ def boot(profile: dict[str, object], image: str, attempt: int) -> str:
     return transcript
 
 
+TRACE_PARTICIPANT = re.compile(r"\[trace\] (\S+) kind=(\S+) ")
+# A worker's closing record: `[trace] publisher complete capacity=… records=…`.
+# It carries no `kind=`, and there is exactly one per worker, so it groups under
+# its own pseudo-kind rather than being rejected.
+TRACE_TERMINAL = re.compile(r"\[trace\] (\S+) complete ")
+
+
 def trace_records(transcript: str) -> list[str]:
     return TRACE_LINE.findall(transcript)
 
 
+def records_by_participant(records: list[str]) -> dict[tuple[str, str], list[str]]:
+    """Group a boot's trace records by emitting worker *and* record kind.
+
+    B68: comparing the flat record list positionally asserts one *interleaving*
+    of concurrent activity, not the trace's determinism. Observed failing about
+    one run in four with two boots disagreeing at record 12 about which worker
+    emitted next — a `subscriber-b` resource record against an `operation` route
+    record, both legitimate.
+
+    Grouping by worker alone is not enough, which a second failure showed: a
+    worker's `[trace]` prefix names its *sink*, and one sink aggregates several
+    kinds. `stream`'s record 2 came out `kind=fault order=peer-death` on one boot
+    and `kind=qos order=time` on the other, both at `sequence=2` — two independent
+    activities racing into one sink. What C8.15 claims, and what this compares, is
+    that each (worker, kind) sequence is identical; which kind reaches the sink
+    first is scheduling.
+    """
+    grouped: dict[tuple[str, str], list[str]] = {}
+    for record in records:
+        match = TRACE_PARTICIPANT.match(record)
+        if match is not None:
+            key = (match.group(1), match.group(2))
+        else:
+            terminal = TRACE_TERMINAL.match(record)
+            if terminal is None:
+                fail(f"trace record names no worker and kind: {record}")
+            key = (terminal.group(1), "complete")
+        grouped.setdefault(key, []).append(record)
+    return grouped
+
+
 def check_determinism(label: str, first: str, second: str) -> int:
-    """The plane's semantic trace is byte-identical across two boots."""
+    """Every participant's semantic trace is byte-identical across two boots.
+
+    Per participant rather than across the merged list (B68), for the reason
+    `records_by_participant` documents. The total count is still pinned, so a
+    plane that stopped emitting cannot compare equal to itself, and the
+    participant *set* must match too — otherwise a boot that dropped a whole
+    participant would pass by comparing the ones that remain.
+    """
     left = trace_records(first)
     right = trace_records(second)
     if not left:
@@ -245,13 +290,32 @@ def check_determinism(label: str, first: str, second: str) -> int:
             f"{label}: the second boot emitted {len(right)} trace records, expected "
             f"{EXPECTED_TRACE_RECORDS}"
         )
-    for index, (a, b) in enumerate(zip(left, right, strict=True)):
-        if a != b:
+    left_by = records_by_participant(left)
+    right_by = records_by_participant(right)
+    if set(left_by) != set(right_by):
+        only_first = sorted(set(left_by) - set(right_by))
+        only_second = sorted(set(right_by) - set(left_by))
+        fail(
+            f"{label}: the two boots emitted traces for different participants -- "
+            f"only in the first: {only_first or 'none'}; only in the second: "
+            f"{only_second or 'none'}"
+        )
+    for participant in sorted(left_by):
+        mine, theirs = left_by[participant], right_by[participant]
+        if len(mine) != len(theirs):
             fail(
-                f"{label}: trace record {index} differs between boots -- the semantic "
-                f"trace depends on scheduling, so it cannot serve as a comparison "
-                f"baseline.\n  first:  {a}\n  second: {b}"
+                f"{label}: {participant[0]}/{participant[1]} emitted {len(mine)} records in the "
+                f"first boot "
+                f"and {len(theirs)} in the second; its own sequence is not scheduling "
+                "dependent, so a differing count is a real divergence"
             )
+        for index, (a, b) in enumerate(zip(mine, theirs, strict=True)):
+            if a != b:
+                fail(
+                    f"{label}: {participant[0]}'s {participant[1]} record {index} differs between "
+                    f"boots -- a worker's own per-kind sequence must not depend on "
+                    f"scheduling.\n  first:  {a}\n  second: {b}"
+                )
     return len(left)
 
 
