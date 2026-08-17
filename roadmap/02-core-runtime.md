@@ -1353,7 +1353,39 @@ checked but not saturated.
 
 ### C8.14 — Degradation and fault isolation
 
-**Status:** Not started.
+**Status:** Complete. `just sel4_fault_check` (`just data_fabric_fault_check`)
+observes 4 distinct denial codes, 3 distinct QoS degradations, 3 peer-death
+faults across all three planes, 8 isolation markers, and the injected
+interposition-hop death, on a graph whose seven trace sinks stay
+`dropped=0 rejected=0` and whose resource counters all return to baseline.
+
+This milestone read as eleven paths to build and turned out to be an assertion
+milestone: measurement found **ten of the eleven already driven** by C8.13's
+concurrent graph, through the scripted scenarios `fabric_call_scenario` and
+`fabric_operation_scenario` already contained, with none of it checked. A
+pre-gate traffic boot emitted 6 `kind=denial` records, 3 `kind=fault`
+peer-death records, QoS records for timeout and retained-result expiry, and
+component markers for rejection, malformed reply, retry exhaustion,
+cancellation, duplicate, stale session, unauthorized cancel, unauthorized
+retrieval, and forged transport record — and neither
+`check-sel4-traffic-plane.py` nor its saturation sibling mentions
+`kind=denial`, `kind=fault`, or peer death anywhere. So the gate requires that
+vocabulary rather than inventing a second scenario for it.
+
+The one path that could not be scripted is a declared interposition hop dying:
+a proxy that relays correctly cannot also be absent, and under this action the
+hop parks forever (`fabric_boot::park_only` is `-> !`). `sel4-fault.zti` is
+`sel4-traffic.zti` with `generation` changed and nothing else; the plane differs
+by *build*, compiled with the proxy early-death injection, which is the only
+reason it needs its own image. `init` waits on the hop rather than checking it
+idle under that build, so the graph observes the departure rather than
+tolerating a task it stopped tracking.
+
+Distinctness is asserted as disjointness of codes within a family rather than as
+presence: a broker collapsing two conditions onto one status would still emit
+both records and pass a presence check, while a reader holding only the
+transcript could no longer tell a duplicate from a stale session. See
+[`devlog/2026-08-17-c8-14-fault-isolation/`](../devlog/2026-08-17-c8-14-fault-isolation/index.md).
 
 **Depends on:** C8.13.
 
@@ -1381,17 +1413,28 @@ checked but not saturated.
 - no injected fault leaves a route worker parked on a dead source, polling, or
   waiting without a bound.
 
-#### Planned verification target
+#### Verification target
 
 ```sh
+just sel4_fault_check
 just data_fabric_fault_check
 ```
 
-#### Exit condition
+#### Exit condition (observed)
 
-Every declared degradation and fault path stays bounded, distinguishable, and
-fully reclaimed, and no participant or proxy failure disrupts an unrelated route
-class, the fabric service, or the kernel.
+Observed 2026-08-17. Every declared degradation and fault path stays bounded,
+distinguishable, and fully reclaimed, and neither the injected
+interposition-hop death nor either scripted peer death disrupts an unrelated
+route class, the fabric service, or the kernel.
+
+Two arms are narrower than the deliverable text and recorded rather than
+claimed. The stream broker reports no `kind=qos` degradation of its own on this
+plane — its deadline, liveliness, sample-loss, and incompatible-QoS events go to
+subscribers rather than its own sink — so the QoS-distinctness assertion covers
+the call and operation planes. And the hop death is the only *injected* fault; a
+stalled subscriber and a faulting rather than exiting participant remain
+unexercised as injections, though the scripted peer deaths cover the settlement
+path either would take.
 
 ### C8.15 — Full-graph determinism and parent close
 

@@ -216,6 +216,13 @@ sel4_traffic_check: sel4_pin_check
 sel4_saturation_check: sel4_pin_check
     python3 scripts/check/check-sel4-saturation-plane.py
 
+# C8.14: boot the identical concurrent traffic graph with the declared
+# interposition hop injected to die, and require every degradation and terminal
+# condition to stay bounded, distinguishable, and fully reclaimed — while every
+# unaffected stream, call, and operation route completes anyway.
+sel4_fault_check: sel4_pin_check
+    python3 scripts/check/check-sel4-fault-plane.py
+
 # P5.4.9 and C8.10: build the full-graph image, boot it, and require every C8
 # role to launch at once in one collision-free layout — the stream, call, and
 # operation planes in disjoint slots, the fabric split into three bounded route
@@ -585,6 +592,9 @@ data_fabric_traffic_check: sel4_traffic_check
 
 # C8.13's roadmap-named gate for the saturation half.
 data_fabric_saturation_check: sel4_saturation_check
+
+# C8.14's roadmap-named gate.
+data_fabric_fault_check: sel4_fault_check
 
 # C8.11's roadmap-named gate. Both halves: the contract and its declared sink
 # bounds are validated on the host, and the emitted trace is observed on the

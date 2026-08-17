@@ -292,6 +292,12 @@ SEL4_MANIFESTS = {
     / "v1"
     / "fixtures"
     / "sel4-saturation.zti",
+    "sel4-fault": ROOT
+    / "contracts"
+    / "generation"
+    / "v1"
+    / "fixtures"
+    / "sel4-fault.zti",
     "sel4-matrix": ROOT
     / "contracts"
     / "generation"

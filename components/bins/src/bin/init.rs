@@ -712,6 +712,15 @@ fn drive_traffic_plane() -> ! {
     // does), so both are the spawned tasks this plane does not wait to exit --
     // each is expected to still be healthy-idle once everything else has
     // settled.
+    //
+    // C8.14 inverts that for the proxy alone. Its fault plane is this same
+    // composition built with the interposition hop compiled to exit instead of
+    // park, because a hop dying is the one degradation no participant can
+    // script for itself. So on that build the hop is *waited on* rather than
+    // checked idle: an injected departure is a declared clean exit, and
+    // requiring it here is what proves the graph observed the hop leave rather
+    // than merely tolerating a task it stopped tracking.
+    const PROXY_DIES: bool = option_env!("SLIME_FABRIC_PROXY_EARLY_EXIT").is_some();
     wait_clean(&[
         publisher,
         subscriber,
@@ -731,12 +740,12 @@ fn drive_traffic_plane() -> ! {
         op_restart,
         op_worker,
     ]);
-    for parked in [proxy, observer] {
-        match slime_rt::supervision_status(parked) {
-            Ok(None) => {}
-            _ => fail_boot(b"parked participant left healthy idle"),
-        }
+    if PROXY_DIES {
+        wait_clean(&[proxy]);
+    } else {
+        expect_parked(proxy);
     }
+    expect_parked(observer);
     slime_rt::debug_write(b"[init] traffic plane reclaimed\n");
     slime_rt::exit(0)
 }
@@ -775,6 +784,18 @@ fn fail_boot(reason: &[u8]) -> ! {
     slime_rt::debug_write(reason);
     slime_rt::debug_write(b"\n");
     slime_rt::exit(1)
+}
+
+/// Require one spawned task to still be healthy-idle, never having exited.
+///
+/// The complement of [`wait_clean`], for a structural role a plane declares but
+/// drives no traffic through: its correct outcome is blocked idle, so an exit of
+/// any status is the failure.
+fn expect_parked(handle: u32) {
+    match slime_rt::supervision_status(handle) {
+        Ok(None) => {}
+        _ => fail_boot(b"parked participant left healthy idle"),
+    }
 }
 fn wait_clean(handles: &[u32]) {
     for handle in handles {

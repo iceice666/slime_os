@@ -109,6 +109,12 @@ GATES: tuple[tuple[str, str, int], ...] = (
     # shape (declared ceilings tightened, not the admitted structure), so it
     # is pinned at the same count.
     ("sel4_saturation_plane", "check/check-sel4-saturation-plane.py", 10),
+    # C8.14's fault fixture likewise reuses the traffic plane's exact `CHAINS`
+    # shape -- it is the same graph with the interposition hop compiled to die,
+    # not a restructured composition -- so it is pinned at the same count. Its
+    # fault-specific tables are asserted outside `CHAINS`, since a concurrent
+    # schedule fixes no order among them.
+    ("sel4_fault_plane", "check/check-sel4-fault-plane.py", 10),
     # B55: the full-graph boot restoration moved the seven racy cross-task
     # stream markers (a broker per-edge print racing a participant's own
     # summary print differently for one-route vs two-route participants) out

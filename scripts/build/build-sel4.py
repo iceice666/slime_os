@@ -67,6 +67,8 @@ TRAFFIC_IMAGE = BUILD_ROOT / "slime-sel4-traffic.elf"
 TRAFFIC_MANIFEST = BUILD_ROOT / "slime-sel4-traffic.identity.json"
 SATURATION_IMAGE = BUILD_ROOT / "slime-sel4-saturation.elf"
 SATURATION_MANIFEST = BUILD_ROOT / "slime-sel4-saturation.identity.json"
+FAULT_IMAGE = BUILD_ROOT / "slime-sel4-fault.elf"
+FAULT_MANIFEST = BUILD_ROOT / "slime-sel4-fault.identity.json"
 STORAGE_IMAGE = BUILD_ROOT / "slime-sel4-storage.elf"
 STORAGE_MANIFEST = BUILD_ROOT / "slime-sel4-storage.identity.json"
 STORE_IMAGE = BUILD_ROOT / "slime-sel4-store.elf"
@@ -125,6 +127,7 @@ MATRIX_UNSATISFIABLE_VARIANT = "matrix-unsatisfiable"
 BOOT_VARIANT = "boot"
 TRAFFIC_VARIANT = "traffic"
 SATURATION_VARIANT = "saturation"
+FAULT_VARIANT = "fault"
 STORAGE_VARIANT = "storage"
 STORE_VARIANT = "store"
 ROLLBACK_VARIANT = "rollback"
@@ -157,6 +160,7 @@ VARIANT_MANIFESTS = {
     BOOT_VARIANT: "sel4-boot",
     TRAFFIC_VARIANT: "sel4-traffic",
     SATURATION_VARIANT: "sel4-saturation",
+    FAULT_VARIANT: "sel4-fault",
     STORAGE_VARIANT: "sel4-storage",
     STORE_VARIANT: "sel4-store",
     ROLLBACK_VARIANT: "sel4-rollback",
@@ -191,6 +195,7 @@ VARIANT_TARGET_DIRS = {
     BOOT_VARIANT: "root-boot",
     TRAFFIC_VARIANT: "root-traffic",
     SATURATION_VARIANT: "root-saturation",
+    FAULT_VARIANT: "root-fault",
     STORAGE_VARIANT: "root-storage",
     STORE_VARIANT: "root-store",
     ROLLBACK_VARIANT: "root-rollback",
@@ -228,6 +233,7 @@ VARIANT_IMAGES = {
     BOOT_VARIANT: (BOOT_IMAGE, BOOT_MANIFEST),
     TRAFFIC_VARIANT: (TRAFFIC_IMAGE, TRAFFIC_MANIFEST),
     SATURATION_VARIANT: (SATURATION_IMAGE, SATURATION_MANIFEST),
+    FAULT_VARIANT: (FAULT_IMAGE, FAULT_MANIFEST),
     STORAGE_VARIANT: (STORAGE_IMAGE, STORAGE_MANIFEST),
     STORE_VARIANT: (STORE_IMAGE, STORE_MANIFEST),
     ROLLBACK_VARIANT: (ROLLBACK_IMAGE, ROLLBACK_MANIFEST),
@@ -756,12 +762,21 @@ def configure_and_install_sel4() -> None:
     )
 
 
-def build_sel4_generation(manifest: str = "sel4", *, output_name: str | None = None) -> Path:
-    """Build one aarch64-sel4 generation and return its generation bytes."""
+def build_sel4_generation(
+    manifest: str = "sel4",
+    *,
+    output_name: str | None = None,
+    environment: dict[str, str] | None = None,
+) -> Path:
+    """Build one aarch64-sel4 generation and return its generation bytes.
+
+    `environment` overrides the ambient one, which C8.14's fault plane uses to
+    enable the proxy early-death injection for its variant alone.
+    """
     name = output_name or ("sel4-generation" if manifest == "sel4" else f"{manifest}-generation")
     output = BUILD_ROOT / name
     output.mkdir(parents=True, exist_ok=True)
-    environment = dict(os.environ)
+    environment = dict(environment if environment is not None else os.environ)
     environment["SLIME_TARGET_PROFILE"] = "aarch64-sel4-qemu-virt"
     environment["SLIME_SEL4_MANIFEST"] = manifest
     run(
@@ -803,7 +818,20 @@ def build_application(
         root_environment["SLIME_BOOT_BUNDLE_IDENTITY"] = bundle_identity
     else:
         manifest = VARIANT_MANIFESTS.get(variant, "sel4")
-        root_environment["SLIME_GENERATION"] = str(build_sel4_generation(manifest).resolve())
+        generation_environment = None
+        if variant == FAULT_VARIANT:
+            # C8.14: the one fault this plane must *inject* rather than script.
+            # Every other degradation path -- rejection, malformed reply,
+            # timeout, cancellation, retry exhaustion, duplicate, stale,
+            # expiry, and both scripted peer deaths -- is already driven by the
+            # traffic action's own participants. A declared interposition hop
+            # dying is the one condition no participant can ask for, because a
+            # proxy that relays correctly cannot also be absent.
+            generation_environment = dict(os.environ)
+            generation_environment["SLIME_FABRIC_PROXY_EARLY_EXIT"] = "1"
+        root_environment["SLIME_GENERATION"] = str(
+            build_sel4_generation(manifest, environment=generation_environment).resolve()
+        )
         if variant == FIXTURE_VARIANT:
             root_environment["SLIME_ROOT_FIXTURE"] = "1"
     if variant == RECLAMATION_VARIANT:
@@ -1159,6 +1187,15 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--fault-plane",
+        action="store_true",
+        help=(
+            "embed the degradation and fault-isolation generation (C8.14): the "
+            "identical traffic-action scenario, built with the proxy "
+            "early-death injection enabled, writing a separate image"
+        ),
+    )
+    parser.add_argument(
         "--storage-plane",
         action="store_true",
         help=(
@@ -1278,6 +1315,7 @@ def main() -> None:
             (BOOT_VARIANT, arguments.boot_plane),
             (TRAFFIC_VARIANT, arguments.traffic_plane),
             (SATURATION_VARIANT, arguments.saturation_plane),
+            (FAULT_VARIANT, arguments.fault_plane),
             (STORAGE_VARIANT, arguments.storage_plane),
             (STORE_VARIANT, arguments.store_plane),
             (ROLLBACK_VARIANT, arguments.rollback_plane),

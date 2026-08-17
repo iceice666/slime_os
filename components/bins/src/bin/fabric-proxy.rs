@@ -55,6 +55,25 @@ fn fail(reason: &[u8]) -> ! {
 }
 
 fn main(_startup_arg: u32) {
+    // C8.14: the declared interposition hop dies instead of parking.
+    //
+    // Injected here rather than at the relay path below because under the
+    // full-graph and traffic actions this component never reaches that path:
+    // `park_only` is `-> !`. A hop that exits before the graph settles is the
+    // one degradation condition no participant can script for itself, since a
+    // proxy that relays correctly cannot also be absent. Every other
+    // degradation path this milestone names is already driven by the traffic
+    // action's own participants.
+    //
+    // The exit status is 0: this is a declared, injected departure rather than
+    // a failure, and the graph must observe an unrelated hop leaving without
+    // any route class noticing.
+    if option_env!("SLIME_FABRIC_PROXY_EARLY_EXIT") == Some("1")
+        && slime_components::fabric_boot::full_graph_active()
+    {
+        slime_rt::debug_write(b"[fabric-proxy] injected early proxy death\n");
+        return;
+    }
     if slime_components::fabric_boot::full_graph_active() {
         // The full-graph boot runs the ordinary stream broker, which provisions
         // *route participants*. This component is declared as an interposition
