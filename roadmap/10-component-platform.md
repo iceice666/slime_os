@@ -2,7 +2,7 @@
 
 **Purpose:** Give "component" and "system" a formal, versioned specification independent of any one generation manifest, so `contracts/generation/v1` fixtures are generated from that specification instead of hand-authored in parallel with it, and prove that a component can be authored, built, and admitted into a Slime OS generation entirely from outside this repository. This track is the repository-side implementation of the Component Model described in `spec/requirement-document-v0.6.md` §2.1 and the Canonical IR / Component CLI phases of `spec/platform-development-plan-v0.6.md`, scoped to what this repository's existing seL4 product path needs rather than the full platform that document describes.
 
-**Status:** CP0 complete; CP1–CP5 not started.
+**Status:** CP0 and CP1 complete; CP2–CP5 not started.
 
 **Closes:** Backlog item **B70**, whose problem statement is the compile-time coupling this track removes (CP0–CP2).
 
@@ -39,34 +39,15 @@
 
 ## CP1 — System specification model and generation derivation
 
-**Status:** Not started.
+**Status:** Complete.
 
-**Depends on:** CP0.
+**Delivered:** `contracts/system-spec/v1` declares a composition — its components, authority edges, notifications, fabric graph, and boot profiles — and `scripts/generate/generate-generation-from-spec.py` derives a `contracts/generation/v1` manifest's `executables`, `instances`, `objects`, `sharedBufferBudget`, and `health.requiredInstances` from it plus the CP0 component corpus. Reaching byte equivalence required sorting `declared_spawn_grant_counts`, whose raw-manifest-order output reached `init`'s compiled `FABRIC_MINTED_GRANTS` and so made instance order change a component ELF.
 
-### Deliverables
+**Exit condition (observed):** `contracts/generation/v1/fixtures/valid.zti` and `sel4-channel.zti` are generator output, regenerate byte-identically under `--check`, and reproduce the frozen pre-CP1 baselines; building `sel4-channel` from the derived fixture yields byte-identical `generation.bin` and `boot-store.bin`, and `sel4_channel_check`, `sel4_component_graph_check`, `sel4_boot_check`, `sel4_generation_check`, `sel4_dango_check`, and `sel4_boot_layout_check` (25 plane layouts) all pass on QEMU.
 
-- add `contracts/system-spec/v1/schema.zt` defining a `SystemSpec` record per `spec/requirement-document-v0.6.md` §4.2: `components : List Text` (referencing `component-spec` identities), component relationships (reusing `contracts/generation/v1/schema.zt`'s existing `FabricRoute`/`FabricParticipant` shape rather than a second graph representation), `interfaces`, `dependencies`, `configuration`, a `targetRequirement` reference into `contracts/target-profile/v1`, `runtimeRequirement`, `deploymentConstraint`, and `acceptanceCriteria`;
-- write a host-side generator (`scripts/generate/generate-generation-from-spec.py`, alongside the existing `scripts/generate/` family) that produces a `contracts/generation/v1` `GenerationManifest`'s `executables`, `instances`, `objects`, `grants`, and `fabricGraph` sections from a `system-spec` record plus its referenced `component-spec` records, so those sections are generated output rather than independently hand-authored `.zti` text;
-- re-derive `contracts/generation/v1/fixtures/valid.zti` and the smallest `sel4-*.zti` fixture from a hand-written `system-spec`/`component-spec` source, diffing the generator's output against the previously committed fixture and reconciling any divergence by fixing the schema or generator, never by special-casing the fixture;
-- extend `just contracts_check` with `component-spec`/`system-spec` validation alongside the existing `--check` drift gates, and add a derivation-drift check analogous to the existing `scripts/generate/*.py --check` pattern: regenerating a `.zti` from its `system-spec` source must byte-match the committed fixture.
+**Gates:** `just system_spec_check`, `just contracts_check`, `just generation_check`, `just sel4_boot_check`, `just sel4_generation_check`.
 
-### Required checks
-
-- a `system-spec` referencing an undeclared `component-spec` identity, an interface neither component provides nor requires, or a target profile `contracts/target-profile/v1` does not name is rejected before generation;
-- the derived `valid.zti` and the chosen `sel4-*.zti` are byte-identical to the previously hand-authored fixtures, or the divergence is a deliberate, recorded fixture update in the same change;
-- `just generation_check` and `just contracts_check` pass unchanged in observed behavior after the derivation is wired in.
-
-### Planned verification target
-
-```sh
-just system_spec_check
-```
-
-(plus existing `just contracts_check`, `just generation_check`)
-
-### Exit condition
-
-`contracts/generation/v1/fixtures/valid.zti` and the smallest `sel4-*.zti` are generated artifacts derived from `component-spec`/`system-spec` sources rather than independently hand-authored text. Converting the remaining `sel4-*.zti` fixtures is deferred follow-on work, not required by this exit condition.
+**Evidence:** [`devlog/2026-08-18-cp1-generation-derivation/`](../devlog/2026-08-18-cp1-generation-derivation/index.md)
 
 ## CP2 — Runtime-resolved component binding
 

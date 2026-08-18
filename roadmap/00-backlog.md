@@ -95,6 +95,19 @@ established that two declared components — `generation-list` and
 `provider = "undeclared"` and pinned by the gate.
 **Evidence:** [`devlog/2026-08-18-cp0-component-spec-model/`](../devlog/2026-08-18-cp0-component-spec-model/index.md)
 
+**Progress (2026-08-18, CP1):** the second clause is closed.
+`contracts/generation/v1/fixtures/valid.zti` and `sel4-channel.zti` are now
+generated from `contracts/system-spec/v1` sources plus the component corpus,
+regenerate byte-identically under `just system_spec_check`, and produce
+byte-identical `generation.bin`/`boot-store.bin` against the frozen pre-CP1
+baselines. What remains of B70 is its third clause alone: component sources
+still `include!` `build.rs`-private, manifest-derived constant tables, which is
+CP2's runtime binding resolution. Deriving the fixtures also exposed a latent
+order-dependency — `declared_spawn_grant_counts` fed `init`'s compiled
+`FABRIC_MINTED_GRANTS` in raw manifest order, so instance order changed a
+component ELF — now fixed by sorting.
+**Evidence:** [`devlog/2026-08-18-cp1-generation-derivation/`](../devlog/2026-08-18-cp1-generation-derivation/index.md)
+
 ## Deferred follow-ups
 
 Real, unclosed follow-up work surfaced by resolved entries, not new backlog
