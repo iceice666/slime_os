@@ -10,7 +10,7 @@
 
 use super::{
     CONSOLE_SLOT, RIGHT_DIRECTORY_READ, RIGHT_DIRECTORY_WRITE, RIGHT_EXEC, RIGHT_SPAWN,
-    RIGHT_TRANSFER, SYSINFO_SLOT, SpawnGrant, grant, wait_clean, write_i64, write_u32,
+    RIGHT_TRANSFER, SYSINFO_SLOT, grant, wait_clean,
 };
 
 fn fail_spawn(reason: &[u8]) -> ! {
@@ -171,17 +171,4 @@ fn launch_context() -> [u8; slime_proto::spawn::REQUEST_LEN] {
         reserved: [0u8; 6],
     }
     .encode()
-}
-pub fn spawn_or_fail(executable_slot: u32, grants: &[SpawnGrant]) {
-    let spawned = slime_rt::spawn(executable_slot, grants).unwrap_or_else(|error| {
-        slime_rt::debug_write(b"[init] spawn failed slot=");
-        write_u32(executable_slot);
-        slime_rt::debug_write(b" error=");
-        write_i64(error);
-        slime_rt::debug_write(b"\n");
-        slime_rt::exit(1)
-    });
-    if slime_rt::cap_drop(spawned.supervision_slot) < 0 {
-        slime_rt::exit(1);
-    }
 }

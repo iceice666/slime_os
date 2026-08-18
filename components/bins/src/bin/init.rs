@@ -8,7 +8,7 @@ mod loan_plane;
 use loan_plane::{PEER_PARK_YIELDS, drive_loan_plane};
 #[path = "../spawn_plane.rs"]
 mod spawn_plane;
-use spawn_plane::{drive_spawn_plane, spawn_or_fail};
+use spawn_plane::drive_spawn_plane;
 #[path = "../crossing_plane.rs"]
 mod crossing_plane;
 use crossing_plane::drive_crossing_plane;
@@ -21,10 +21,8 @@ use slime_rt::{Rights, SpawnGrant};
 // `contracts/generation/v5/schema.zt`; these were local copies of the same
 // bit numbering.
 use boot_contracts::generation::{
-    RIGHT_BLOCK_READ, RIGHT_BLOCK_WRITE, RIGHT_BOOT_UPDATE, RIGHT_BUFFER_CREATE,
-    RIGHT_DIRECTORY_DERIVE, RIGHT_DIRECTORY_LIST, RIGHT_DIRECTORY_READ, RIGHT_DIRECTORY_WRITE,
-    RIGHT_EXEC, RIGHT_HEALTH_CONFIRM, RIGHT_INPUT_READ, RIGHT_SEND, RIGHT_SPAWN, RIGHT_STORE_READ,
-    RIGHT_STORE_WRITE, RIGHT_SUPERVISE, RIGHT_TRANSFER,
+    RIGHT_BUFFER_CREATE, RIGHT_DIRECTORY_READ, RIGHT_DIRECTORY_WRITE, RIGHT_EXEC, RIGHT_SEND,
+    RIGHT_SPAWN, RIGHT_SUPERVISE, RIGHT_TRANSFER,
 };
 
 /// The resolved fabric profile for the graph this binary was built against.
@@ -51,61 +49,24 @@ fn declared_minted_grants(component: &[u8]) -> usize {
 
 // Manifest-derived bootstrap slot order is emitted by the host builder.
 const CONSOLE_CAPS: [SpawnGrant; 0] = [];
-const STORAGE_PROBE_READ_CAPS: [SpawnGrant; 1] = [grant(STORAGE_CAPABILITY_SLOT, RIGHT_BLOCK_READ)];
-const STORAGE_PROBE_WRITE_CAPS: [SpawnGrant; 1] = [grant(
-    STORAGE_CAPABILITY_SLOT,
-    RIGHT_BLOCK_READ | RIGHT_BLOCK_WRITE,
-)];
-const STORAGE_PROBE_STORE_CAPS: [SpawnGrant; 1] = [grant(
-    OBJECT_STORE_SLOT_0,
-    RIGHT_STORE_READ | RIGHT_STORE_WRITE,
-)];
-const GENERATION_MANAGER_CAPS: [SpawnGrant; 1] = [grant(
-    GENERATION_CONTROL_SLOT,
-    RIGHT_HEALTH_CONFIRM | RIGHT_BOOT_UPDATE,
-)];
-
-fn dango_caps() -> [SpawnGrant; 4] {
-    [
-        grant(INPUT_SLOT, RIGHT_INPUT_READ),
-        grant(
-            DIRECTORY_SLOT,
-            RIGHT_DIRECTORY_READ | RIGHT_DIRECTORY_DERIVE | RIGHT_TRANSFER,
-        ),
-        grant(resolve_buffer_factory(), RIGHT_BUFFER_CREATE),
-        grant(DANGO_OUTPUT_SLOT, RIGHT_TRANSFER),
-    ]
-}
 
 fn spawn_service_caps() -> [SpawnGrant; 3] {
+    // The two executables spawn-service may launch, and the factory it allocates
+    // from. Ascending declared slot is the order the root matches against, so
+    // this list's order is load-bearing while the numbers in it are not (CP2/B70).
     [
-        grant(SYSINFO_SLOT, RIGHT_EXEC | RIGHT_SPAWN),
-        grant(ECHO_AGENT_SLOT, RIGHT_EXEC | RIGHT_SPAWN),
+        grant(
+            resolve_executable(b"executable:sysinfo"),
+            RIGHT_EXEC | RIGHT_SPAWN,
+        ),
+        grant(
+            resolve_executable(b"executable:echo-agent"),
+            RIGHT_EXEC | RIGHT_SPAWN,
+        ),
         grant(resolve_buffer_factory(), RIGHT_BUFFER_CREATE),
     ]
 }
 
-fn filesystem_caps() -> [SpawnGrant; 1] {
-    [grant(
-        OBJECT_STORE_SLOT,
-        RIGHT_STORE_READ | RIGHT_STORE_WRITE,
-    )]
-}
-
-const DIRECTORY_PROBE_CAPS: [SpawnGrant; 1] = [grant(
-    DIRECTORY_SLOT,
-    RIGHT_TRANSFER
-        | RIGHT_DIRECTORY_READ
-        | RIGHT_DIRECTORY_WRITE
-        | RIGHT_DIRECTORY_LIST
-        | RIGHT_DIRECTORY_DERIVE,
-)];
-
-const GENERATION_LIST_CAPS: [SpawnGrant; 0] = [];
-const GENERATION_INSPECT_CAPS: [SpawnGrant; 0] = [];
-const GENERATION_STAGE_CAPS: [SpawnGrant; 0] = [];
-const GENERATION_SELECT_CAPS: [SpawnGrant; 0] = [];
-const GENERATION_ROLLBACK_CAPS: [SpawnGrant; 0] = [];
 // Init's slot numbers come from the generation's boot layout, emitted by
 // `scripts/build/boot_layout.py` into `OUT_DIR` at component build time. The
 // kernel places each capability at the slot the same layout names, so the
@@ -121,33 +82,16 @@ const fn grant(slot: u32, rights: Rights) -> SpawnGrant {
     SpawnGrant { slot, rights }
 }
 
-#[derive(Clone, Copy)]
-enum StorageProbe {
-    Store,
-    Writer,
-    Fault,
-    Reader,
-}
-
-fn storage_probe() -> (u32, StorageProbe) {
-    if STORAGE_WRITER_SLOT != SLOT_ABSENT {
-        (STORAGE_WRITER_SLOT, StorageProbe::Writer)
-    } else if STORAGE_FAULT_PROBE_SLOT != SLOT_ABSENT {
-        (STORAGE_FAULT_PROBE_SLOT, StorageProbe::Fault)
-    } else if STORAGE_STORE_PROBE_SLOT != SLOT_ABSENT {
-        (STORAGE_STORE_PROBE_SLOT, StorageProbe::Store)
-    } else {
-        (STORAGE_PROBE_SLOT, StorageProbe::Reader)
-    }
-}
-
-fn storage_caps(probe: StorageProbe) -> &'static [SpawnGrant] {
-    match probe {
-        StorageProbe::Store => &STORAGE_PROBE_STORE_CAPS,
-        StorageProbe::Writer | StorageProbe::Fault => &STORAGE_PROBE_WRITE_CAPS,
-        StorageProbe::Reader => &STORAGE_PROBE_READ_CAPS,
-    }
-}
+// The x86 storage-probe selection cascade and the generation-command caps tables
+// were deleted here (B70). Every executable they named -- `storage-writer`,
+// `storage-fault-probe`, `storage-store-probe`, `storage-probe`,
+// `filesystem-service`, and the five `generation-*` commands -- is declared by
+// none of the 28 seL4 manifests, so each constant resolved `SLOT_ABSENT` and
+// every branch testing it was unreachable on this kernel. The seL4 planes reach
+// the same behavior through their own `bootAction`: `drive_storage_plane`,
+// `drive_store_plane`, `drive_filesystem_plane`, and `drive_generation_plane`
+// name `sel4-storage-probe`, `sel4-store-probe`, `sel4-filesystem-service`, and
+// `sel4-generation-client`/`-manager`, which the fixtures do declare.
 
 /// The authenticated boot action, as the root delivers it in this thread's
 /// first C parameter. The numbering is `boot_contracts::generation::BootAction`
@@ -409,109 +353,54 @@ fn main(startup_arg: u32) {
     compose_declared_graph(startup_arg);
     slime_rt::debug_write(b"[init] launching component graph\n");
 
-    if FILESYSTEM_SERVICE_SLOT != SLOT_ABSENT && DIRECTORY_PROBE_SLOT != SLOT_ABSENT {
-        spawn_or_fail(FILESYSTEM_SERVICE_SLOT, &filesystem_caps());
-        spawn_or_fail(
-            resolve_executable(b"executable:directory-probe"),
-            &DIRECTORY_PROBE_CAPS,
-        );
-    }
-    let mut component_console = None;
-    let mut component_spawn_service = None;
-    let mut component_dango = None;
-    let generation_command_plane = GENERATION_LIST_SLOT != SLOT_ABSENT;
-    if !generation_command_plane {
-        // Resolved through the root rather than from the compiled table
-        // (CP2/B70). This became correct only once B71 was fixed: the
-        // boot-layout resource the query reads is now derived from the same
-        // `InstanceBinding` records the root places from, so it answers 5 for
-        // `spawn-service` where the old static table said 4 and this migration
-        // spawned into an empty slot.
-        let console_executable =
-            slime_rt::resolve_binding(b"executable:console").unwrap_or_else(|_| slime_rt::exit(1));
-        component_console = Some(
-            slime_rt::spawn(console_executable, &CONSOLE_CAPS)
-                .unwrap_or_else(|_| slime_rt::exit(1))
-                .supervision_slot,
-        );
-        if DANGO_SLOT != SLOT_ABSENT {
-            let dango_executable = slime_rt::resolve_binding(b"executable:dango")
-                .unwrap_or_else(|_| slime_rt::exit(1));
-            component_dango = Some(
-                slime_rt::spawn(dango_executable, &dango_caps())
-                    .unwrap_or_else(|_| slime_rt::exit(1))
-                    .supervision_slot,
-            );
-        }
-        let spawn_service_executable = slime_rt::resolve_binding(b"executable:spawn-service")
-            .unwrap_or_else(|_| slime_rt::exit(1));
-        component_spawn_service = Some(
-            slime_rt::spawn(spawn_service_executable, &spawn_service_caps())
-                .unwrap_or_else(|_| slime_rt::exit(1))
-                .supervision_slot,
-        );
-        let (storage_slot, storage_probe) = storage_probe();
-        if storage_slot != SLOT_ABSENT {
-            spawn_optional_storage(storage_slot, storage_caps(storage_probe));
-        }
-    }
-    if !generation_command_plane && GENERATION_MANAGER_SLOT != SLOT_ABSENT {
-        spawn_or_fail(GENERATION_MANAGER_SLOT, &GENERATION_MANAGER_CAPS);
-    }
-    if generation_command_plane {
-        let negative_scenario = matches!(
-            option_env!("SLIME_GENERATION_CMD_SCENARIO"),
-            Some("bad-closure" | "bad-release")
-        );
-        spawn_or_fail(GENERATION_MANAGER_SLOT, &GENERATION_MANAGER_CAPS);
-        spawn_and_wait(GENERATION_LIST_SLOT, &GENERATION_LIST_CAPS);
-        if !negative_scenario {
-            spawn_and_wait(GENERATION_INSPECT_SLOT, &GENERATION_INSPECT_CAPS);
-        }
-        spawn_and_wait(GENERATION_STAGE_SLOT, &GENERATION_STAGE_CAPS);
-        if negative_scenario {
-            slime_rt::debug_write(b"[init] negative generation scenario complete\n");
-            slime_rt::exit(0);
-        }
-        spawn_and_wait(GENERATION_SELECT_SLOT, &GENERATION_SELECT_CAPS);
-        spawn_and_wait(GENERATION_ROLLBACK_SLOT, &GENERATION_ROLLBACK_CAPS);
-    }
+    // The product graph the seL4 `product` generation declares: console,
+    // spawn-service, and the two executables spawn-service may launch. Both are
+    // resolved through the root rather than compiled in (CP2/B70), correct only
+    // since B71 made the boot-layout resource derive from the same
+    // `InstanceBinding` records the root places from.
+    //
+    // The filesystem, storage, and generation-command branches that stood here
+    // were deleted with the constants they tested: `sel4.zti` is the only
+    // generation reaching this body, and it declares `console`, `spawn-service`,
+    // `sysinfo`, `echo-agent`, and `init` -- nothing else. Every branch was
+    // therefore dead on this kernel, and the seL4 planes that do exercise those
+    // components reach them through their own `bootAction` instead.
+    let console_executable =
+        slime_rt::resolve_binding(b"executable:console").unwrap_or_else(|_| slime_rt::exit(1));
+    let component_console = slime_rt::spawn(console_executable, &CONSOLE_CAPS)
+        .unwrap_or_else(|_| slime_rt::exit(1))
+        .supervision_slot;
+    let spawn_service_executable = slime_rt::resolve_binding(b"executable:spawn-service")
+        .unwrap_or_else(|_| slime_rt::exit(1));
+    let component_spawn_service = slime_rt::spawn(spawn_service_executable, &spawn_service_caps())
+        .unwrap_or_else(|_| slime_rt::exit(1))
+        .supervision_slot;
 
-    if let Some(handle) = component_dango {
-        wait_terminated(&[handle]);
+    let shutdown = slime_proto::spawn::WireSpawnRequest {
+        magic: slime_proto::spawn::SPAWN_MAGIC,
+        version: slime_proto::spawn::FORMAT_VERSION,
+        flags: slime_proto::spawn::REQUEST_FLAG_SHUTDOWN,
+        command_len: 0,
+        argument_count: 0,
+        environment_count: 0,
+        capability_roles: 0,
+        client_budget: 0,
+        command: [0; 16],
+        arguments: [0; 8],
+        environment: [0; 8],
+        grant_rights: 0,
+        reserved: [0; 6],
+    };
+    if slime_rt::send(resolve_spawn_service_rpc(), &shutdown.encode(), &[]) != slime_rt::ERR_SUCCESS
+    {
+        slime_rt::exit(1);
     }
-    if let Some(handle) = component_spawn_service {
-        let shutdown = slime_proto::spawn::WireSpawnRequest {
-            magic: slime_proto::spawn::SPAWN_MAGIC,
-            version: slime_proto::spawn::FORMAT_VERSION,
-            flags: slime_proto::spawn::REQUEST_FLAG_SHUTDOWN,
-            command_len: 0,
-            argument_count: 0,
-            environment_count: 0,
-            capability_roles: 0,
-            client_budget: 0,
-            command: [0; 16],
-            arguments: [0; 8],
-            environment: [0; 8],
-            grant_rights: 0,
-            reserved: [0; 6],
-        };
-        if slime_rt::send(SPAWN_SERVICE_RPC_SLOT, &shutdown.encode(), &[]) != slime_rt::ERR_SUCCESS
-        {
-            slime_rt::exit(1);
-        }
-        wait_clean(&[handle]);
+    wait_clean(&[component_spawn_service]);
+    if slime_rt::send(console_send_slot(), b"SLIME.CONSOLE.CLOSE", &[]) != slime_rt::ERR_SUCCESS {
+        slime_rt::exit(1);
     }
-    if let Some(handle) = component_console {
-        if slime_rt::send(console_send_slot(), b"SLIME.CONSOLE.CLOSE", &[]) != slime_rt::ERR_SUCCESS
-        {
-            slime_rt::exit(1);
-        }
-        wait_clean(&[handle]);
-    }
-    if component_spawn_service.is_some() || component_console.is_some() {
-        slime_rt::debug_write(b"[init] component services completed\n");
-    }
+    wait_clean(&[component_console]);
+    slime_rt::debug_write(b"[init] component services completed\n");
     slime_rt::debug_write(b"[init] spawn graph launched\n");
     slime_rt::exit(0);
 }
@@ -777,6 +666,16 @@ fn drive_traffic_plane() -> ! {
 /// composition does not have — so it exits rather than falling back to a guess.
 fn resolve_executable(name: &[u8]) -> u32 {
     slime_rt::resolve_binding(name).unwrap_or_else(|_| slime_rt::exit(1))
+}
+
+/// Init's request endpoint to `spawn-service`, resolved by grant name.
+///
+/// A plain grant lookup: `spawn-service-rpc` is an ordinary endpoint binding in
+/// init's own list, so no prefix is needed and the root answers only from that
+/// list. This replaces `SPAWN_SERVICE_RPC_SLOT`, the last compiled slot in the
+/// product graph's shutdown path (CP2/B70).
+fn resolve_spawn_service_rpc() -> u32 {
+    slime_rt::resolve_binding(b"spawn-service-rpc").unwrap_or_else(|_| slime_rt::exit(1))
 }
 
 /// Init's shared-buffer factory slot, resolved through the root by capability
@@ -1606,7 +1505,7 @@ fn drive_reclamation_plane() {
         fail_reclamation(b"lifetime loop incomplete");
     }
     slime_rt::debug_write(b"[init] reclamation lifetime bound crossed\n");
-    let fault = slime_rt::spawn(RECLAMATION_FAULT_SLOT, &[])
+    let fault = slime_rt::spawn(resolve_executable(b"executable:reclamation-fault"), &[])
         .unwrap_or_else(|_| fail_reclamation(b"fault child spawn"));
     loop {
         match slime_rt::supervision_status(fault.supervision_slot) {
@@ -1726,48 +1625,6 @@ fn plane_marker(plane: &[u8], suffix: &[u8]) {
     slime_rt::debug_write(b"[init] ");
     slime_rt::debug_write(plane);
     slime_rt::debug_write(suffix);
-}
-
-fn spawn_optional_storage(executable_slot: u32, grants: &[SpawnGrant]) {
-    match slime_rt::spawn(executable_slot, grants) {
-        Ok(spawned) => {
-            if slime_rt::cap_drop(spawned.supervision_slot) < 0 {
-                slime_rt::exit(1);
-            }
-        }
-        // No block device attached: the storage slot holds an ObjectStore
-        // fallback, so the BLOCK_READ derive is rejected. Treat this as the
-        // absent-storage case and continue launching the rest of the graph.
-        Err(slime_rt::ERR_BAD_CAP) => {
-            slime_rt::debug_write(b"[init] storage-probe skipped: no block device\n");
-        }
-        Err(error) => {
-            slime_rt::debug_write(b"[init] spawn failed slot=");
-            write_u32(executable_slot);
-            slime_rt::debug_write(b" error=");
-            write_i64(error);
-            slime_rt::debug_write(b"\n");
-            slime_rt::exit(1);
-        }
-    }
-}
-
-fn spawn_and_wait(executable_slot: u32, grants: &[SpawnGrant]) {
-    let spawned = slime_rt::spawn(executable_slot, grants).unwrap_or_else(|error| {
-        slime_rt::debug_write(b"[init] spawn failed slot=");
-        write_u32(executable_slot);
-        slime_rt::debug_write(b" error=");
-        write_i64(error);
-        slime_rt::debug_write(b"\n");
-        slime_rt::exit(1)
-    });
-    loop {
-        match slime_rt::supervision_status(spawned.supervision_slot) {
-            Ok(None) => slime_rt::yield_now(),
-            Ok(Some(slime_rt::Termination::Exit(0))) => return,
-            _ => slime_rt::exit(1),
-        }
-    }
 }
 
 fn write_i64(value: i64) {
