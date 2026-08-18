@@ -72,7 +72,7 @@ fn dango_caps() -> [SpawnGrant; 4] {
             DIRECTORY_SLOT,
             RIGHT_DIRECTORY_READ | RIGHT_DIRECTORY_DERIVE | RIGHT_TRANSFER,
         ),
-        grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
+        grant(resolve_buffer_factory(), RIGHT_BUFFER_CREATE),
         grant(DANGO_OUTPUT_SLOT, RIGHT_TRANSFER),
     ]
 }
@@ -81,7 +81,7 @@ fn spawn_service_caps() -> [SpawnGrant; 3] {
     [
         grant(SYSINFO_SLOT, RIGHT_EXEC | RIGHT_SPAWN),
         grant(ECHO_AGENT_SLOT, RIGHT_EXEC | RIGHT_SPAWN),
-        grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
+        grant(resolve_buffer_factory(), RIGHT_BUFFER_CREATE),
     ]
 }
 
@@ -779,6 +779,25 @@ fn resolve_executable(name: &[u8]) -> u32 {
     slime_rt::resolve_binding(name).unwrap_or_else(|_| slime_rt::exit(1))
 }
 
+/// Init's shared-buffer factory slot, resolved through the root by capability
+/// role rather than compiled in.
+///
+/// `kind:sharedBufferFactory+bufferCreate` asks by what the capability *is*, and
+/// the root refuses an ambiguous answer, so this is only usable where the
+/// generation grants init exactly one factory. That is every plane but the
+/// full-graph `boot` and `traffic` compositions, which hold two — those keep the
+/// generated constant, because which of the two to delegate is a graph-shape
+/// question this axis cannot answer.
+///
+/// Deliberately not "the factory granted to me": that spelling looked like the
+/// general rule and is not. Under the product graph init holds one factory whose
+/// grant target is `spawn-service`, not itself, so a target test resolves nothing
+/// exactly where this is needed most.
+fn resolve_buffer_factory() -> u32 {
+    slime_rt::resolve_binding(b"kind:sharedBufferFactory+bufferCreate")
+        .unwrap_or_else(|_| slime_rt::exit(1))
+}
+
 /// Spawn one boot participant that its manifest grants nothing, returning the
 /// supervision handle init keeps.
 fn spawn_boot(executable: &[u8]) -> u32 {
@@ -922,7 +941,7 @@ fn launch_fabric_operations() {
     let service = slime_rt::spawn(
         resolve_executable(b"executable:fabric-service"),
         &[
-            grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
+            grant(resolve_buffer_factory(), RIGHT_BUFFER_CREATE),
             grant(client.supervision_slot, RIGHT_SUPERVISE),
             grant(client_b.supervision_slot, RIGHT_SUPERVISE),
             grant(server.supervision_slot, RIGHT_SUPERVISE),
@@ -958,14 +977,14 @@ fn launch_fabric_calls() {
     // on it forever.
     let client = slime_rt::spawn(
         resolve_executable(b"executable:fabric-call-client"),
-        &[grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE)],
+        &[grant(resolve_buffer_factory(), RIGHT_BUFFER_CREATE)],
     )
     .unwrap_or_else(|_| slime_rt::exit(1));
     let client_b = slime_rt::spawn(resolve_executable(b"executable:fabric-call-client-b"), &[])
         .unwrap_or_else(|_| slime_rt::exit(1));
     let server = slime_rt::spawn(
         resolve_executable(b"executable:fabric-call-server"),
-        &[grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE)],
+        &[grant(resolve_buffer_factory(), RIGHT_BUFFER_CREATE)],
     )
     .unwrap_or_else(|_| slime_rt::exit(1));
     slime_rt::debug_write(b"[init] call participants spawned\n");
@@ -976,7 +995,7 @@ fn launch_fabric_calls() {
     let service = slime_rt::spawn(
         resolve_executable(b"executable:fabric-service"),
         &[
-            grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
+            grant(resolve_buffer_factory(), RIGHT_BUFFER_CREATE),
             grant(client.supervision_slot, RIGHT_SUPERVISE),
             grant(client_b.supervision_slot, RIGHT_SUPERVISE),
             grant(server.supervision_slot, RIGHT_SUPERVISE),
@@ -1095,7 +1114,7 @@ fn drive_sample_plane() {
     let lender = slime_rt::spawn(
         resolve_executable(b"executable:sample-lender"),
         &[
-            grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
+            grant(resolve_buffer_factory(), RIGHT_BUFFER_CREATE),
             grant(receiver.supervision_slot, RIGHT_SUPERVISE),
         ],
     )
@@ -1273,7 +1292,7 @@ fn drive_matrix_plane() {
     let subscriber = spawn_boot(b"executable:fabric-subscriber");
     let publisher_b = spawn_boot_with(
         b"executable:fabric-publisher-b",
-        &[grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE)],
+        &[grant(resolve_buffer_factory(), RIGHT_BUFFER_CREATE)],
     );
     let subscriber_b = spawn_boot(b"executable:fabric-subscriber-b");
     let observer = spawn_boot(b"executable:fabric-observer");
@@ -1292,7 +1311,7 @@ fn drive_matrix_plane() {
     // asking — a native Endpoint reports no peer death — and it grants the probe
     // nothing: the fabric holds the handle, not the probe.
     let grants = [
-        grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
+        grant(resolve_buffer_factory(), RIGHT_BUFFER_CREATE),
         grant(publisher, RIGHT_SUPERVISE),
         grant(subscriber, RIGHT_SUPERVISE),
         grant(publisher_b, RIGHT_SUPERVISE),
@@ -1369,7 +1388,7 @@ fn drive_dango_plane() {
     let dango_slot = layout_executable(b"executable:dango", b"dango");
     let console = slime_rt::spawn(
         console_slot,
-        &[grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE)],
+        &[grant(resolve_buffer_factory(), RIGHT_BUFFER_CREATE)],
     )
     .unwrap_or_else(|_| fail_plane(b"dango", b"spawn console"));
     slime_rt::debug_write(b"[init] console spawned\n");
@@ -1380,7 +1399,7 @@ fn drive_dango_plane() {
     let service = slime_rt::spawn(
         service_slot,
         &[
-            grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
+            grant(resolve_buffer_factory(), RIGHT_BUFFER_CREATE),
             grant(6, RIGHT_EXEC | RIGHT_SPAWN),
             grant(7, RIGHT_EXEC | RIGHT_SPAWN),
         ],
@@ -1628,7 +1647,7 @@ fn launch_fabric_graph(plane: &[u8], service_spawned: &[u8]) {
         .unwrap_or_else(|_| slime_rt::exit(1));
     let publisher_b = slime_rt::spawn(
         resolve_executable(b"executable:fabric-publisher-b"),
-        &[grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE)],
+        &[grant(resolve_buffer_factory(), RIGHT_BUFFER_CREATE)],
     )
     .unwrap_or_else(|_| slime_rt::exit(1));
     let subscriber_b = slime_rt::spawn(resolve_executable(b"executable:fabric-subscriber-b"), &[])
@@ -1649,7 +1668,7 @@ fn launch_fabric_graph(plane: &[u8], service_spawned: &[u8]) {
     // how many capabilities this child's owner must supply, so the set is
     // sliced to that generated count.
     let grants = [
-        grant(SHARED_BUFFER_FACTORY_SLOT, RIGHT_BUFFER_CREATE),
+        grant(resolve_buffer_factory(), RIGHT_BUFFER_CREATE),
         grant(publisher.supervision_slot, RIGHT_SUPERVISE),
         grant(subscriber.supervision_slot, RIGHT_SUPERVISE),
         grant(intruder.supervision_slot, RIGHT_SUPERVISE),
