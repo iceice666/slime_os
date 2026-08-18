@@ -157,10 +157,23 @@ to which factory capability was handed over. Those sites are therefore a naming
 gap, closable by giving the two grants distinguishable names in the fixtures,
 rather than an authority distinction needing new mechanism.
 
-B70's remaining surface is those 43 constant uses, `spawn-service`'s RPC endpoint
-and command-executable table, and `fabric_profile`'s 64 constants. Most of the 43
-sit in `const` grant tables that cannot call a syscall without becoming
-functions; nine name executables no seL4 fixture declares, on retired x86 paths. All three share one shape: each needs a
+**Progress (2026-08-18, factory close-out):** the 7 two-factory sites resolve
+`init-shared-buffer-factory` by grant name, so `SHARED_BUFFER_FACTORY_SLOT` is
+gone from `init.rs` entirely — 20 sites closed, 13 by capability role and 7 by
+name. No fixture change was needed after all: the two grants already carry
+distinct, stable names, and `traffic`/`fault`/`saturation` share one manifest, so
+reading the fixtures replaced the "give them distinguishable names" step the note
+above proposed.
+
+B70's remaining surface in `init.rs` is 33 boot-layout constant uses across 26
+constants, which classify as: 22 in live code, 8 as `!= SLOT_ABSENT` presence
+guards asking "does this composition declare X at all", and 3 inside `const`
+grant tables that cannot call a syscall without becoming functions. The presence
+guards are a distinct problem from slot resolution — a query answers *where*, not
+*whether* — and nine of the live-code names belong to retired x86 paths no seL4
+fixture declares. Beyond `init.rs`: `spawn-service`'s RPC endpoint and
+command-executable table, and `fabric_profile`'s 64 constants, 46 of which are
+graph facts rather than slots. All three share one shape: each needs a
 binding to carry a stable logical role a component can name across
 generations, and 46 of `fabric_profile`'s 64 constants are graph facts (route
 tables, QoS depths, trace depth) rather than slots at all, so a slot query is
