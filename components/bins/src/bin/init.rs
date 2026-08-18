@@ -972,16 +972,45 @@ fn drive_channel_plane() {
 
 /// The channel init uses for console output in the active generation.
 ///
-/// Product generations name it `console-output`; the standalone channel and
-/// loan planes retain the older `dango-output` edge. Both values come from the
-/// manifest-derived boot layout, so choosing by authenticated boot action
-/// preserves one binary across the graphs without a build flag.
+/// Product generations name it `console-output`; the standalone channel and loan
+/// planes retain the older `dango-output` edge. CP2 resolves whichever the active
+/// generation declares by asking the root, rather than choosing between two
+/// compile-time constants on the authenticated boot action.
+///
+/// That branch is what the milestone removes. `DANGO_OUTPUT_SLOT` and
+/// `CONSOLE_OUTPUT_SLOT` were both baked into this image from one manifest's
+/// layout, so the binary carried every graph's numbering and selected among them
+/// at runtime anyway — the coupling B70 names, one step removed. Asking by name
+/// answers the same question without the image knowing either number.
 fn console_send_slot() -> u32 {
-    if matches!(profile::GENERATION_BOOT_ACTION, "channel" | "loan") {
-        DANGO_OUTPUT_SLOT
-    } else {
-        CONSOLE_OUTPUT_SLOT
+    // The two names the generations that reach this code give one edge:
+    // `console-output` under the product graph, `dango-output` under the channel
+    // and loan planes. Verified against the fixtures rather than assumed — a
+    // third spelling, `dango-console-rpc`, was listed here and was dead code: the
+    // dango plane binds that name to `console`, not to `init`, and binds `init`
+    // no console edge at all, so this function is never reached there.
+    //
+    // No generation binds both, so this is a disjoint lookup rather than a
+    // precedence rule.
+    //
+    // A pair of names is still a manifest fact in this source, and a smaller one
+    // than the slot numbers it replaces: the numbers differed per generation and
+    // had to be selected by boot action, while a name is stable across every
+    // generation declaring that edge. Giving the edge one name across the
+    // fixtures is a fixture change that would delete the list.
+    //
+    // The root answers only from this instance's own binding list, so a name this
+    // generation does not give `init` is refused rather than resolved from the
+    // shared boot layout. An earlier root did consult that layout, which declares
+    // every plane's edges, and this call site is where it went wrong: `init`
+    // asked, received another plane's edge, and sent into an endpoint nobody was
+    // waiting on.
+    for name in [b"console-output".as_slice(), b"dango-output".as_slice()] {
+        if let Ok(slot) = slime_rt::resolve_binding(name) {
+            return slot;
+        }
     }
+    fail(b"no console output binding in this generation")
 }
 
 fn fail(reason: &[u8]) -> ! {

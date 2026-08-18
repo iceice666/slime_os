@@ -1008,6 +1008,24 @@ pub fn directory_derive(slot: u32, relative: &[u8], rights: u32) -> i64 {
     result_of(directory_labels::DERIVE, &operands[..used])
 }
 
+/// CP2: ask the root which of this component's own slots holds `name`.
+///
+/// The name travels through the transfer window like every other variable-length
+/// operand, and the reply is the slot. Bounded by `MAX_MSG` because a name
+/// arrives in one request: a longer name is a different name, so it is refused
+/// here rather than truncated into one that might resolve.
+pub fn resolve_binding(name: &[u8]) -> i64 {
+    if name.is_empty() || name.len() > MAX_MSG {
+        return ERR_INVALID_ARG;
+    }
+    let transfer = match stage(name, &[]) {
+        Ok(transfer) => transfer,
+        Err(error) => return error,
+    };
+    let (operands, used) = payload_operands(0, transfer, name);
+    result_of(capability_table_labels::RESOLVE_BINDING, &operands[..used])
+}
+
 pub fn directory_commit(slot: u32, expected: &[u8; 32], new: &[u8; 32]) -> i64 {
     let mut frame = [0u8; 64];
     frame[..32].copy_from_slice(expected);

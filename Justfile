@@ -615,6 +615,17 @@ system_spec_check: component_spec_check
     python3 scripts/check/check-system-spec.py
     python3 scripts/generate/generate-generation-from-spec.py --check
 
+# CP2's runtime binding resolution: a component asks the root which of its own
+# slots holds a named binding instead of compiling the number in.
+#
+# The planes are the gate. `sel4_channel_check` asserts the denial arm from both
+# the root's line and the component's, and `sel4_loan_check` plus
+# `sel4_component_graph_check` boot components that resolve real bindings and
+# would fail the rendezvous on a wrong answer. `test_sel4_root` covers the
+# name-admissibility guards without a boot.
+runtime_binding_resolution_check: test_sel4_root sel4_gate_control_check sel4_channel_check sel4_loan_check sel4_component_graph_check
+    @echo "runtime binding resolution: the root resolved named bindings for their own instances, refused an ungranted name, and every migrated plane kept its observed behavior"
+
 fabric_manifest_check: contracts_check sel4_stream_check
     python3 scripts/check/check-fabric-manifest.py
 
@@ -817,7 +828,7 @@ test_sel4_root:
         echo "test_sel4_root: no installed seL4 prefix at $prefix; run 'just sel4_qemu_image_check' first" >&2
         exit 1
     fi
-    expected=121
+    expected=123
     # Pinned rather than ambient, on `lint_sel4_root`'s rule: this build
     # consumes the installed seL4 prefix, so it must use the toolchain that
     # prefix was produced against. `rust-toolchain.toml`'s default is a

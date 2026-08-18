@@ -89,6 +89,16 @@ Rights are a flat `u64`. `RIGHT_ALL = (1 << 26) - 1`, so bits 26–63 are free.
 | SharedBuffer | BUFFER_LOAN (25) | `SHARED BUFFER LOAN` mints an exact loan for a named receiver; `SHARED BUFFER REVOKE` settles it as lender | same | gated (C7.5) |
 | Loan | BUFFER_MAP (9) / BUFFER_WRITE (8) | receiver-bound `SHARED BUFFER LOAN MAP` within the loaned subrange at the loan's own protection; `SHARED BUFFER RETURN` settles it once | root-created by `SHARED BUFFER LOAN`; delivered to the named receiver only | gated (C7.5) |
 
+`CAPABILITY RESOLVE BINDING` (label 37) appears in no row above, and its absence
+is the statement: it is gated by *nothing*, because it grants nothing. It answers
+which of the caller's own slots holds a binding the caller's own instance
+declares, resolved from that instance's binding list and from no other — the same
+self-scoping the two `OCCUPANCY` operations use. A name the instance does not
+bind is refused rather than answered, so the reply is a fact the component
+already knew at compile time and could not otherwise learn at runtime. Requiring
+a right to ask would mean minting a capability whose only power is to read one's
+own layout (CP2).
+
 Bits 4–7 and 12–15 are unassigned. The retired custom kernel spent them on
 `PciFunction`, `DmaMemory`, `Irq`, `ObjectStore`, and `GenerationControl` object
 kinds; those kinds and their syscalls were deleted with that kernel. Their

@@ -74,7 +74,12 @@ from sel4_gate_markers import chains_from_gate, match_marker_contract  # noqa: E
 # assertion, because the idle instance concludes it holds no peer only after a
 # bounded wait and so lands wherever the scheduler puts it.
 GATES: tuple[tuple[str, str, int], ...] = (
-    ("sel4_channel_plane", "check/check-sel4-channel-plane.py", 16),
+    # 16 -> 18 for CP2's two runtime-binding markers: the root's own
+    # `SLIME_GRAPH binding unresolved` line and console's `ungranted binding
+    # denied`. The pin exists to make a marker-count change deliberate, and this
+    # one is: the channel plane now also guards that a component cannot resolve a
+    # binding its instance was never granted.
+    ("sel4_channel_plane", "check/check-sel4-channel-plane.py", 18),
     ("sel4_component_graph", "check/check-sel4-component-graph.py", 30),
     ("sel4_crossing_plane", "check/check-sel4-crossing-plane.py", 10),
     ("sel4_loan_plane", "check/check-sel4-loan-plane.py", 46),

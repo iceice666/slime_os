@@ -502,6 +502,24 @@ pub fn directory_derive(slot: u32, relative: &[u8], rights: u32) -> Result<u32, 
     }
 }
 
+/// Which of this component's own capability slots holds the binding `name`.
+///
+/// CP2's replacement for compiling slot numbers in from a `build.rs`-generated
+/// constant table. A component asks the root at startup instead of being built
+/// against one manifest by one crate's private parser (B70).
+///
+/// Self-scoped: the request carries no task identity, so a component can resolve
+/// its own bindings and only its own. A name this component's instance does not
+/// bind is an error, never another instance's slot.
+pub fn resolve_binding(name: &[u8]) -> Result<u32, i64> {
+    let result = transport::resolve_binding(name);
+    if result < 0 {
+        Err(result)
+    } else {
+        Ok(result as u32)
+    }
+}
+
 /// Atomically swaps a directory namespace root after the new snapshot object
 /// has been committed. A stale expected root returns `ERR_WOULDBLOCK`.
 pub fn directory_commit(slot: u32, expected: &[u8; 32], new: &[u8; 32]) -> i64 {

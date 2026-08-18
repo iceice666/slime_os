@@ -2786,6 +2786,67 @@ fn serve_instance_graph(
                 };
                 ipc::reply(response);
             }
+            // CP2: which of the caller's own slots holds a named binding.
+            //
+            // Self-scoped exactly as the two `OCCUPANCY` operations are. The
+            // request carries a binding *name* and no task argument, and the
+            // instance resolved is the one the badge authenticated, so there is
+            // no caller identity to forge. A name the caller's instance does not
+            // bind answers `InvalidOperation` and never another instance's slot,
+            // which is what makes this answerable for every component: a
+            // component learns its own layout, which it already knew at compile
+            // time, and nothing else.
+            //
+            // A task with no instance index — the fixture child — has no
+            // manifest bindings at all, so it is refused rather than resolved
+            // against instance 0.
+            capability_table_labels::RESOLVE_BINDING => {
+                let response = match words.get(1).copied() {
+                    // Refused on the descriptor's own length, before the window is
+                    // mapped and copied. `resolve_binding_slot` bounds the name
+                    // too, but that is after a page map/copy/unmap cycle sized by
+                    // the window rather than by the 64-byte name: an operation any
+                    // component may invoke should not let a request the root will
+                    // reject cost more than one the root will answer.
+                    Some(transfer)
+                        if transfer_window::descriptor_len(transfer) > ipc::MAX_BINDING_NAME =>
+                    {
+                        Response::error(IpcError::InvalidLength)
+                    }
+                    Some(transfer) => {
+                        match transfer_window::read_staged_array(
+                            windows.bound(id, descriptor_thread(transfer)),
+                            transfer,
+                            &words,
+                            scratch,
+                        ) {
+                            Ok(frame) => {
+                                let name = frame.bytes();
+                                // `instance` is the one the dispatch loop already
+                                // authenticated for the service-authority check,
+                                // not a second derivation from `tasks`. The two
+                                // agree today, but they are cleared in different
+                                // order during reclamation, so reading the fact
+                                // twice is a divergence waiting to happen.
+                                match ipc::resolve_binding_slot(generation, instance, name) {
+                                    Some(slot) => Response::success(slot as i64, 0),
+                                    None => {
+                                        sel4::debug_println!(
+                                            "SLIME_GRAPH binding unresolved task={} instance={instance} len={}",
+                                            id.0,
+                                            name.len()
+                                        );
+                                        Response::error(IpcError::InvalidOperation)
+                                    }
+                                }
+                            }
+                            Err(error) => Response::error(error),
+                        }
+                    }
+                    None => Response::error(IpcError::InvalidLength),
+                };
+                ipc::reply(response);
+            }
             capability_transfer_labels::EXPORT => {
                 ipc::reply(serve_capability_export(
                     generation, launched, allocator, tasks, id, &words,

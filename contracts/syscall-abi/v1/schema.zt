@@ -63,6 +63,15 @@ operations :: List Operation = {
   operation "capabilityTransfer" "IMPORT" 34;
   operation "capabilityTransfer" "EXPORT_CANCEL" 35;
   operation "capabilityTransfer" "EXPORT_FINALIZE" 36;
+  -- CP2's runtime binding resolution. A component asks the root which slot of
+  -- its own CSpace holds a named binding, instead of compiling the number in
+  -- from a `build.rs`-generated constant table (B70).
+  --
+  -- Self-scoped by badge on the same terms as the two `OCCUPANCY` operations:
+  -- the request carries a binding *name* and no task argument, so there is no
+  -- caller identity to forge. A name the caller was not granted answers
+  -- `INVALID_ARG`, never another instance's slot.
+  operation "capabilityTable" "RESOLVE_BINDING" 37;
 };
 
 -- The service namespaces, in the order the generated bindings emit them.

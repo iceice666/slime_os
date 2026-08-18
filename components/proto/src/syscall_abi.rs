@@ -30,6 +30,7 @@ pub mod supervision_labels {
 pub mod capability_table_labels {
     pub const DROP: u64 = 13;
     pub const OCCUPANCY: u64 = 31;
+    pub const RESOLVE_BINDING: u64 = 37;
 }
 
 pub mod directory_labels {

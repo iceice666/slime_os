@@ -65,6 +65,19 @@ REQUIRED_MARKERS: tuple[tuple[str, str], ...] = (
         "console made unrelated progress while init remained blocked",
         r"\[console\] unrelated progress while sender blocked",
     ),
+    # CP2: the runtime binding query's denial arm, asserted from the root's own
+    # line as well as the component's, so a component that simply never asked
+    # could not satisfy it. The grant arm is proved by `init` resolving the
+    # channel edge it sends on below — a wrong answer there is a failed
+    # rendezvous, not a passing boot.
+    (
+        "a binding this instance was not granted was refused rather than answered",
+        r"SLIME_GRAPH binding unresolved task=1 instance=0 len=26",
+    ),
+    (
+        "console observed that denial as a denial",
+        r"\[console\] ungranted binding denied",
+    ),
     ("init entered the blocking native send", r"\[init\] rendezvous send entering"),
     (
         "init observed rendezvous completion",

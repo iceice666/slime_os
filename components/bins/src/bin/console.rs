@@ -11,13 +11,21 @@ const QUOTA_PROBE_BASE: u64 = 0x0000_0006_0000_0000;
 
 /// The shared-buffer factory this component is granted, when it is granted one.
 ///
-/// Slot 0 is the channel end every `console` addresses, and a root-launched
-/// component's runtime-numbered slots start above its executables — of which
-/// this component has none — so a `bufferCreate` grant lands at 1. Named here
-/// rather than passed as a literal so the coupling is visible: B13 made the
-/// grant load-bearing, and before that this slot resolved to nothing and the
-/// quota alone admitted the allocation.
-const SHARED_BUFFER_FACTORY_SLOT: u32 = 1;
+/// Resolved through the root rather than compiled in (CP2). This was
+/// `const SHARED_BUFFER_FACTORY_SLOT: u32 = 1`, reasoned out in a comment from
+/// "slot 0 is the channel end and a root-launched component's runtime-numbered
+/// slots start above its executables" — correct for the manifests that existed,
+/// and exactly the coupling B70 names: a number that is a property of one
+/// generation, restated in this component's own source.
+///
+/// `None` is a real answer, not a failure: under the channel plane this component
+/// is granted no factory at all, and the caller already had to handle not being a
+/// holder. Returning `None` rather than a plausible default is the point — a
+/// default would resolve to *some* slot and hide a generation that stopped
+/// granting the authority.
+fn shared_buffer_factory_slot() -> Option<u32> {
+    slime_rt::resolve_binding(b"console-shared-buffer-factory").ok()
+}
 const CLOSE: &[u8] = b"SLIME.CONSOLE.CLOSE";
 
 fn main(_startup_arg: u32) {
@@ -25,6 +33,47 @@ fn main(_startup_arg: u32) {
     let mut caps = [0u64; MAX_CAPS_PER_MSG];
     if GENERATION_BOOT_ACTION == "channel" {
         slime_rt::debug_write(b"[console] unrelated progress while sender blocked\n");
+    }
+    // CP2's runtime binding resolution, proved on the planes this component
+    // already boots rather than in a component written to prove it.
+    //
+    // Only the *denial* arm is asserted here, and that is the honest scope. The
+    // grant arm needs a name this instance binds, but the name differs per plane
+    // — `console-output` under the product graph, `dango-output` under the
+    // channel and loan planes, `dango-console-rpc` under the dango plane — and
+    // enumerating them here would put a list of manifest facts back into this
+    // component's source, which is exactly the coupling B70 names. Two earlier
+    // versions did precisely that and each failed on the first plane it had not
+    // enumerated.
+    //
+    // The grant arm is proved where the name is a legitimate local fact instead:
+    // `shared_buffer_factory_slot()` below resolves this component's own factory
+    // grant on the loan plane, and `init`'s `console_send_slot()` resolves the
+    // channel edge it binds. Both run on real boots.
+    //
+    // `init-shared-buffer-factory` is a real grant held by `init` in the planes
+    // that declare it, so asking for it here is a component asking about
+    // authority it was not granted — the case that must never resolve. A root
+    // that answered from the shared boot layout instead of this instance's own
+    // binding list would leak it, which is what an earlier root did.
+    //
+    // The exact status is asserted, not merely "an error". `is_err()` alone would
+    // also accept `ERR_BAD_CAP` from the service-authority gate or a window
+    // failure, so a regression that broke label 37's routing entirely would make
+    // this component print `denied` and pass. `ERR_INVALID_ARG` is what the
+    // not-bound answer returns specifically.
+    match slime_rt::resolve_binding(b"init-shared-buffer-factory") {
+        Err(slime_rt::ERR_INVALID_ARG) => {
+            slime_rt::debug_write(b"[console] ungranted binding denied\n");
+        }
+        Err(_) => {
+            slime_rt::debug_write(b"[console] ungranted binding refused for the wrong reason\n");
+            slime_rt::exit(1);
+        }
+        Ok(_) => {
+            slime_rt::debug_write(b"[console] ungranted binding leaked a slot\n");
+            slime_rt::exit(1);
+        }
     }
     loop {
         let n = slime_rt::recv_blocking(0, &mut buf, &mut caps);
@@ -49,15 +98,25 @@ fn main(_startup_arg: u32) {
                 // startup probe performs, against its own declared quota. A
                 // ceiling that leaked across holders fails here.
                 //
-                // The loan generation declares this holder's independent quota.
-                if GENERATION_BOOT_ACTION == "loan"
-                    && !slime_components::shared_buffer_probe::probe_and_report(
+                // The loan generation declares this holder's independent quota,
+                // and CP2 resolves the slot it lands in at runtime. A generation
+                // that declares the boot action but grants no factory is a
+                // contradiction worth failing on rather than probing slot 1 and
+                // hoping.
+                if GENERATION_BOOT_ACTION == "loan" {
+                    let Some(factory) = shared_buffer_factory_slot() else {
+                        slime_rt::debug_write(
+                            b"[console] loan plane declares no shared-buffer factory binding\n",
+                        );
+                        slime_rt::exit(1);
+                    };
+                    if !slime_components::shared_buffer_probe::probe_and_report(
                         b"[console]",
-                        SHARED_BUFFER_FACTORY_SLOT,
+                        factory,
                         QUOTA_PROBE_BASE,
-                    )
-                {
-                    slime_rt::exit(1);
+                    ) {
+                        slime_rt::exit(1);
+                    }
                 }
             }
         }
