@@ -136,3 +136,40 @@ lower items of which three were applied.
 - Predecessor milestones: [`devlog/2026-08-18-cp0-component-spec-model/`](../2026-08-18-cp0-component-spec-model/index.md), [`devlog/2026-08-18-cp1-generation-derivation/`](../2026-08-18-cp1-generation-derivation/index.md)
 - Related roadmap item: [CP2 in the component platform track](../../roadmap/10-component-platform.md)
 - Backlog item this bears on: [B70](../../roadmap/00-backlog.md)
+
+## Corrections
+
+**2026-08-18 — the "blocked" claim in *Summary*, *Decisions*, and *Open risks*
+was wrong.** This entry's frozen body records that serving boot-layout slots
+"needs a boot-layout format change, which is not a root change", and lists the 17
+remaining `include!` sites as blocked on it. That is not true, and the body is
+left as written because the reasoning that produced it is the useful part.
+
+What was actually wrong: the fallback had no namespace. Two revisions were tried
+and both failed on real boots — first serving the layout to any caller, then
+restricting it to the bootstrap instance. Both failed for the same reason, which
+is not instance scoping at all: the layout and the grant list use overlapping
+names for *different things*. `console` is a layout executable at slot 1 while
+`init-console` is a grant at that same slot; `console-output` is a grant under the
+product graph and absent from the channel plane's layout. A flat lookup therefore
+answered a channel question with an executable slot, and `init` sent into an
+endpoint nobody was waiting on — a hang rather than a visible error, twice.
+
+The fix needed no contract change. The caller now states which table it means:
+`executable:` and `channel:` address the two identity domains
+`contracts/boot-layout/v1` already declares to keep a component and a channel
+sharing a name distinct. An unprefixed name is a grant and can never reach the
+layout, so no layout entry can shadow a grant. `init` resolves four layout-only
+executable slots at runtime across the channel and dango planes.
+
+Verified: `just runtime_binding_resolution_check`, `just test`,
+`just sel4_channel_check`, `just sel4_dango_check`, `just sel4_loan_check`,
+`just sel4_boot_check`, `just sel4_spawn_check`, `just sel4_component_graph_check`,
+`just fmt_check_all`, `just lint_all`. `test_sel4_root` is 124/124 — the new
+`layout_namespaces_are_distinct_domains` test asserts the two domains differ,
+which is the property the prefix relies on.
+
+Still remaining, and genuinely not blocked: the `fabric_profile` sites. 46 of
+their 64 constants are graph facts rather than slots, so a slot-resolution query
+is the wrong instrument; those components should read the authenticated
+`fabric-graph` resource object instead.

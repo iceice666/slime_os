@@ -51,32 +51,40 @@
 
 ## CP2 — Runtime-resolved component binding
 
-**Status:** Mechanism complete and gated; the 19-site migration is partial (2 of 19) and blocked on a contract change named below.
+**Status:** Mechanism complete and gated, answering both grant bindings and boot-layout roles; the site-by-site migration is partial.
 
 **Depends on:** Cleared or explicitly deferred backlog. Independent of CP0/CP1.
 
 **Delivered (2026-08-18):** `contracts/syscall-abi/v1` declares
-`CAPABILITY RESOLVE BINDING` (label 37); the root answers it from the calling
+`CAPABILITY RESOLVE BINDING` (label 37). The root answers it from the calling
 instance's *own* `InstanceBinding` list, scoped by the badge it authenticated,
-with the name bounded and UTF-8-validated before any table walk; `slime-rt`
-exposes `resolve_binding`; `docs/syscall-abi.md` and `docs/capability-matrix.md`
-document it per invariant 4; `just runtime_binding_resolution_check` guards it.
-`console` and `init` resolve real bindings at runtime, and 14 QEMU plane gates
-pass unchanged.
+with the name bounded and UTF-8-validated before any table walk. A prefixed name
+— `executable:` or `channel:` — additionally reaches
+`contracts/boot-layout/v1`'s resource object for the bootstrap instance, so the
+61 slots that are layout roles rather than manifest grants are runtime-resolvable
+too. `slime-rt` exposes `resolve_binding`; `docs/syscall-abi.md` and
+`docs/capability-matrix.md` document it per invariant 4;
+`just runtime_binding_resolution_check` guards it.
 
-**Blocked (the honest reason the other 17 sites remain):** the query answers
-*manifest grant* bindings, which is what an instance's binding list contains.
-`init`'s 61 slots are not that — they come from `contracts/boot-layout/v1`'s
-resource object, which is one table describing the bootstrap component's CSpace
-(`path=init`), keyed by role and identity hash rather than by instance. A
-fallback to that table was written and proved unsound on a real boot: the layout
-declares every plane's edges, so it answered names the caller had never bound,
-and `init` sent into an endpoint nobody was waiting on. Serving those slots
-safely needs the layout to record which instance each entry belongs to, which is
-a `contracts/boot-layout/v1` format change rather than a root change. The
-`fabric_profile` sites are a second, distinct case: 46 of its 64 constants are
-graph facts (route tables, QoS depths, trace depth), not slots, so a
-slot-resolution query is the wrong instrument for them.
+**Correction (same day):** an earlier revision of this entry recorded the layout
+half as *blocked* on a `contracts/boot-layout/v1` format change. That was wrong,
+and the error is worth keeping because two unsound attempts preceded the fix. An
+unprefixed fallback to the layout was written twice — once for any caller, once
+restricted to the bootstrap instance — and both failed on real boots, because the
+layout and the grant list use overlapping names for different things: `console` is
+a layout executable at slot 1 while `init-console` is a grant at the same slot,
+and `console-output` is a grant under one generation and absent from the layout
+under another. A flat lookup therefore answered a channel question with an
+executable slot and `init` sent into an endpoint nobody was waiting on. The fix
+needed no format change: the caller states which table it means, using the two
+identity domains the contract already declares to keep a component and a channel
+sharing a name apart. An unprefixed name is a grant and can never reach the
+layout, so no layout entry can shadow a grant.
+
+**Remaining:** the `fabric_profile` sites are a distinct case — 46 of its 64
+constants are graph facts (route tables, QoS depths, trace depth) rather than
+slots, so a slot-resolution query is the wrong instrument and those components
+should read the authenticated `fabric-graph` resource instead.
 
 ### Deliverables
 

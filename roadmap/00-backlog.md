@@ -111,13 +111,17 @@ component ELF — now fixed by sorting.
 **Progress (2026-08-18, CP2):** the third clause is partially closed. A root-served
 `CAPABILITY RESOLVE BINDING` operation now answers which of a component's own slots
 holds a named binding, scoped to the calling instance's own binding list and
-refusing a name it did not bind; `console` and `init` use it on real boots. What is
-*not* closed is the clause's own wording: 17 of 19 `include!` sites remain, because
-`init`'s 61 slots come from `contracts/boot-layout/v1`'s resource object rather than
-from manifest grants, and that table describes one CSpace without recording which
-instance each entry belongs to. A fallback to it was written and proved unsound on a
-real boot — it answered names the caller had never bound. B70 therefore stays open,
-and the unblocking step is a boot-layout format revision.
+refusing a name it did not bind; `console` and `init` use it on real boots. A prefixed name — `executable:`
+or `channel:` — additionally reaches `contracts/boot-layout/v1`'s resource object for
+the bootstrap instance, so the 61 slots that are layout roles rather than manifest
+grants resolve at runtime too; `init` uses that on the channel and dango planes.
+Getting there took two unsound attempts: an unprefixed fallback answered a channel
+question with an executable slot, because the layout and the grant list use
+overlapping names for different things, and `init` sent into an endpoint nobody was
+waiting on. The namespace prefix uses the two identity domains the contract already
+declares, so no format change was needed and no layout entry can shadow a grant.
+B70 stays open for the `fabric_profile` sites alone, where 46 of 64 constants are
+graph facts rather than slots and a slot query is the wrong instrument.
 **Evidence:** [`devlog/2026-08-18-cp2-runtime-binding-query/`](../devlog/2026-08-18-cp2-runtime-binding-query/index.md)
 
 ## Deferred follow-ups
